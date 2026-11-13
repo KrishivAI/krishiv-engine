@@ -15,6 +15,26 @@
     "rows": 300,
     "sha256": "735b86b6b8958cf8c55958d1ead270e8306f7f0f02161df12a69c1b7c01c6fd3"
   },
+  "nested": {
+    "rows": 300,
+    "sha256": "ebd3b8a928dbbcb3bc35d44496f1ae4d6a48f96f9994086ec575528075327982"
+  },
+  "nested_millis": {
+    "rows": 300,
+    "sha256": "2247be6d387fc50bea32a4522816cecbd4c404188ef40acadde8e42d1402f5ce"
+  },
+  "nested_nodict": {
+    "rows": 300,
+    "sha256": "ebd3b8a928dbbcb3bc35d44496f1ae4d6a48f96f9994086ec575528075327982"
+  },
+  "nested_small_groups": {
+    "rows": 300,
+    "sha256": "ebd3b8a928dbbcb3bc35d44496f1ae4d6a48f96f9994086ec575528075327982"
+  },
+  "nested_v2": {
+    "rows": 300,
+    "sha256": "ebd3b8a928dbbcb3bc35d44496f1ae4d6a48f96f9994086ec575528075327982"
+  },
   "none": {
     "rows": 300,
     "sha256": "bf1809884d22550f8d784dce81de8b0778fdbcd93b900f97e96ac27f7c5971c3"

@@ -23,7 +23,7 @@ Paths are relative to this crate.
 - `src/parser/types.rs` type strings (`parse_data_type`, `parse_table_schema`, `parse_ddl_type`)
 - `src/ast.rs` spanned AST; `src/error.rs` parser errors with Spark classes
 - `src/validate/mod.rs` checks Spark's `AstBuilder` makes after parsing (`literal.rs`, `types.rs`, `interval.rs`; `pipe.rs`, `sample.rs`, `relation.rs`, `transform.rs` for the query-syntax tail)
-- `src/lower.rs` AST to unresolved `krishiv_plan::Plan`; `src/redact.rs` `redact_sql` to `RedactedSql`
+- `src/lower.rs` AST to unresolved `krishiv_plan::Plan` (`lower/pipe.rs`: pipe operators; `DISTRIBUTE BY`/`CLUSTER BY` lower to `PlanNode::Repartition`, `CLUSTER BY` adds a local ascending sort); `src/redact.rs` `redact_sql` to `RedactedSql`
 - `src/lower/identified.rs` `lower_identified`: the session's substituted `IDENTIFIER(..)` names (by span) mark their columns `ColumnRef::by_identifier`, so a select item of one is named as Spark names the clause
 - `src/summary.rs` `sanitize_query_text` (every literal `?`, comments dropped) and `query_summary` (`SELECT orders customers`): the telemetry forms of query text, from lexer tokens
 - `src/classify.rs` statement classifier (`classify` → `StatementClass`, `explain_kind`, `statement_queries`, `statement_targets`: the privileges a statement needs on what it writes, creates or drops); goldens `tests/fixtures/statement-classes.tsv` (`tests/classify.rs`), corpus goldens in `krishiv-testkit` `tests/statement_classes.rs`
@@ -47,10 +47,12 @@ Paths are relative to this crate.
 - Type errors follow ANTLR's prediction: a complex type whose `<...>` fails falls back to the bare
   type when that reads on (error at the `<`; after `::` the statement is re-parsed with the bare
   type when the complex one fails later); optional type parts are taken only when complete.
-- Spark 4.2's query-syntax tail parses into the tree and lowers to `KRISHIV_UNSUPPORTED_FEATURE`: pipe operators
-  (`SetExprKind::Pipe`: input plus a flat `PipeOp` list; pipes bind below set operators), `COLLATE`, `TABLESAMPLE`,
-  `NEAREST BY`, `TABLE(...)` arguments, `IDENTIFIER(...)` (names, function names, identifier literals unless
-  `legacy_identifier_clause`), variant paths and `TRANSFORM`. Their `AstBuilder` errors are in `validate/`.
+- Spark 4.2's query-syntax tail parses into the tree; their `AstBuilder` errors are in `validate/`. Pipe operators
+  (`SetExprKind::Pipe`: input plus a flat `PipeOp` list; pipes bind below set operators; `lower/pipe.rs`) lower,
+  each behind a `PipeOperator` boundary. `TABLESAMPLE` lowers for `n ROWS` and for fractions that keep every row or
+  none; other fractions and `SYSTEM` are `KRISHIV_UNSUPPORTED_FEATURE`, as are `COLLATE`, `NEAREST BY`, `TABLE(...)` arguments,
+  `IDENTIFIER(...)` (names, function names, identifier literals unless `legacy_identifier_clause`), variant paths
+  and `TRANSFORM`.
 - `FROM ... SELECT ...` stores its `FROM` once (`FromStatement`); never copy subtrees per use.
 - Ambiguities ANTLR resolves by prediction are decided deterministically; every decision is checked
   against a real Spark run (`tests/fixtures/spark-4.2.0/sql-parse-probe.json`,
@@ -83,3 +85,7 @@ Paths are relative to this crate.
 `--test ddl_commands_parse`) · parse rate:
 `cargo xtask golden --engine sql-parse` · fuzz: `cd fuzz && cargo +nightly fuzz run sql_parse`
 · bench: `cargo bench -p krishiv-sql --bench parse` / `--bench lower`
+
+## Split modules (T193)
+Files split to stay under 2,000 lines; the parent file keeps the types and the entry points.
+- `ast/` `ddl_nodes.rs` (DDL, SHOW/DESCRIBE, cache and DML nodes, the `impl Expr` helpers), `query_nodes.rs` (query and expression nodes; scripting nodes stay in `ast.rs`), both re-exported from `ast.rs`; `parser/` `query.rs`, `create.rs`, `commands.rs`, `errors.rs` (`impl Parser` by topic), `ddl/data.rs` (INSERT, DELETE, UPDATE, MERGE); `lower/relations.rs` (select list, GROUP BY, FROM); `tests/partN.rs`.

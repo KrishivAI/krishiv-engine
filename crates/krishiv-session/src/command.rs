@@ -34,7 +34,7 @@ use krishiv_plan::analyzer::{
     FunctionLookup, SqlFunction, SqlParam, TableColumn, VariableValue, variable_name,
 };
 use krishiv_plan::{
-    Expr as PlanExpr, ExprNode, Literal, LogicalPlan, Origin, PlanNode, SourceId, SubqueryKind,
+    Expr as PlanExpr, ExprNode, Literal, LogicalPlan, Origin, PlanNode, SubqueryKind,
 };
 use krishiv_sql::ast::{
     Cache, CacheKind, ColumnDef, ColumnName, CreateFunction, CreateView, DataTypeSpec, DdlName,
@@ -44,9 +44,7 @@ use krishiv_sql::ast::{
 };
 use krishiv_types::DataType;
 
-pub(crate) use crate::arrow_values::{
-    arrow_field_value, arrow_krishiv_type, arrow_value, declared_value,
-};
+pub(crate) use crate::arrow_values::{arrow_field_value, arrow_value, declared_value};
 use crate::catalog::{CATALOG, NAMESPACE, TempTable};
 use crate::catalog::{is_global_key, is_reserved_view_name, reserved_temp_view_name};
 use crate::column::Column;
@@ -80,18 +78,7 @@ impl Session {
         match &s.kind {
             SetKind::All => {
                 // Every explicitly set key (the frame sorts by key).
-                let config = self.state.conf.snapshot();
-                let mut rows: Vec<(String, String)> = config
-                    .explicit_registered()
-                    .into_iter()
-                    .map(|(key, value)| (key.to_owned(), value))
-                    .collect();
-                rows.extend(
-                    config
-                        .explicit_unregistered()
-                        .into_iter()
-                        .map(|(key, value)| (key.to_owned(), value.to_owned())),
-                );
+                let rows = self.state.conf.explicit_entries();
                 self.string_frame(
                     &["key", "value"],
                     rows.into_iter()
@@ -202,13 +189,13 @@ impl Session {
                     .get(&krishiv_common::config::SQL_DEFAULT_PATH)
                     .map(ToString::to_string)
                     .unwrap_or_default();
-                let namespace = self.state.catalog.current_namespace();
+                let current = self.state.catalog.current_position();
                 let live = self
                     .state
                     .catalog
                     .stored_path()
                     .unwrap_or_else(|| crate::sql_path::default_entries(&default_conf));
-                let entries = crate::sql_path::expand(elements, &live, &default_conf, &namespace)?;
+                let entries = crate::sql_path::expand(elements, &live, &default_conf, &current)?;
                 self.state.catalog.set_path(entries);
                 self.empty_frame().await
             }
@@ -241,8 +228,13 @@ impl Session {
     /// reserved snapshot prefix `` `__krishiv_snapshot_` `` or the cache
     /// prefix `` `__krishiv_cache_` `` (in any letter case), which queries
     /// cannot spell either.
-    pub(crate) async fn exec_create_view(&self, v: &CreateView) -> Result<DataFrame, KrishivError> {
-        self.create_temp_view(v, false).await
+    pub(crate) async fn exec_create_view(
+        &self,
+        v: &CreateView,
+        original: &str,
+        ids: &[Span],
+    ) -> Result<DataFrame, KrishivError> {
+        self.create_temp_view(v, false, ids, Some(original)).await
     }
 
     /// `CREATE [OR REPLACE] [GLOBAL] TEMPORARY VIEW`: a global view lives in `global_temp`.
@@ -250,6 +242,8 @@ impl Session {
         &self,
         v: &CreateView,
         global: bool,
+        ids: &[Span],
+        original: Option<&str>,
     ) -> Result<DataFrame, KrishivError> {
         let key = if global {
             crate::catalog::global_key(&v.name.value)
@@ -286,7 +280,8 @@ impl Session {
             }
             .into());
         }
-        let plan = krishiv_sql::lower(&v.query, self.next_source_id()).map_err(|e| e.error)?;
+        let plan = krishiv_sql::lower_identified(&v.query, self.next_source_id(), false, ids)
+            .map_err(|e| e.error)?;
         crate::catalog::check_view_cycle(
             &self.state.catalog,
             &key,
@@ -296,12 +291,12 @@ impl Session {
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
         let case_sensitive = env.analysis.conf.case_sensitive;
         let analysis = df.analyzed_in(env).await?;
-        let output: Vec<String> = analysis
-            .analyzed
-            .output
-            .iter()
-            .map(|c| c.name.clone())
-            .collect();
+        let output: Vec<String> =
+            crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?
+                .output
+                .iter()
+                .map(|c| c.name.clone())
+                .collect();
         let mut columns: Vec<TableColumn> = analysis
             .analyzed
             .output
@@ -342,12 +337,38 @@ impl Session {
         // Spark 4.2 and as [`unique_columns`](crate::session) reports it
         // for writes).
         unique_view_columns(&columns, case_sensitive)?;
+        // A comment in the column list replaces the one of the column under it; a column listed without one
+        // keeps it (Spark's view alias carries `explicitMetadata` only for a written comment,
+        // `column-comments/probe5.out`).
+        let plan = if v.columns.iter().any(|c| c.comment.is_some()) {
+            let names: Vec<String> = v.columns.iter().map(|c| c.name.value.clone()).collect();
+            let exprs = v
+                .columns
+                .iter()
+                .map(|c| {
+                    let comment = c.comment.clone().map(Some);
+                    crate::view_schema::read_column(&c.name.value, None, comment, &c.name.value)
+                })
+                .collect();
+            let input = crate::view_schema::rename_by_position(
+                Arc::clone(&df.plan),
+                &v.name.value,
+                names,
+                krishiv_plan::Origin::UNKNOWN,
+            );
+            Arc::new(LogicalPlan::new(PlanNode::Project { input, exprs }))
+        } else {
+            Arc::clone(&df.plan)
+        };
         self.state.catalog.put(
             &key,
             TempTable::View {
-                plan: Arc::clone(&df.plan),
+                plan,
                 columns,
                 pins: Vec::new(),
+                text: original
+                    .and_then(|o| o.get(v.query.span.start..v.query.span.end))
+                    .map(str::to_owned),
             },
         );
         self.state.cache.invalidate_table(&v.name.value);
@@ -356,8 +377,11 @@ impl Session {
 
     /// Runs `DROP VIEW [IF EXISTS] name` over the temporary views,
     /// returning an empty frame as in Spark.
-    pub(crate) async fn exec_drop_view(&self, v: &DropView) -> Result<DataFrame, KrishivError> {
-        let env = self.query_env();
+    pub(crate) async fn exec_drop_view(
+        &self,
+        v: &DropView,
+        env: &crate::session::QueryEnv,
+    ) -> Result<DataFrame, KrishivError> {
         if !is_global_key(&v.name.value)
             && self
                 .state
@@ -367,7 +391,7 @@ impl Session {
             self.state.catalog.drop_table(&v.name.value);
             self.state.cache.invalidate_table(&v.name.value);
         } else {
-            self.drop_bare_stored_view(&v.name.value, v.if_exists)?;
+            self.drop_bare_stored_view(&v.name.value, v.if_exists, env)?;
         }
         self.empty_frame().await
     }
@@ -390,7 +414,7 @@ impl Session {
                 if self.state.catalog.exists(only, case_sensitive) {
                     return Some(only.clone());
                 }
-                let namespace = self.state.catalog.current_namespace();
+                let namespace = self.stored_namespace().ok()?;
                 store
                     .table(&namespace, &fold(only))
                     .map(|_| format!("{namespace}.{}", fold(only)))
@@ -405,7 +429,7 @@ impl Session {
                 // The cache records a view by the last part of the name it was read by.
                 Some(name.clone())
             }
-            [namespace, name] => store
+            [namespace, name] if self.stored_namespace().is_ok() => store
                 .table(&fold(namespace), &fold(name))
                 .map(|_| format!("{}.{}", fold(namespace), fold(name))),
             _ => None,
@@ -424,6 +448,7 @@ impl Session {
         &self,
         c: &Cache,
         original: &str,
+        ids: &[Span],
     ) -> Result<DataFrame, KrishivError> {
         match &c.kind {
             CacheKind::Clear => {
@@ -444,7 +469,14 @@ impl Session {
                     return Err(table_not_found(&parts));
                 }
             }
-            CacheKind::Cache { name, query, .. } => {
+            CacheKind::Cache {
+                name,
+                query,
+                options,
+                ..
+            } => {
+                // The options are never resolved: a `secret(..)` value would be kept as its text.
+                crate::access::refuse_secret_options(options, original)?;
                 let Some(parts) = ddl_table_parts(name) else {
                     return Err(KrishivUnsupportedFeature {
                         feature: "CACHE TABLE with a dynamic table name".to_owned(),
@@ -457,11 +489,14 @@ impl Session {
                         return Err(table_not_found(&parts));
                     };
                     let body = original.get(q.span.start..q.span.end).unwrap_or_default();
-                    let create = format!(
-                        "CREATE TEMPORARY VIEW `{}` AS {body}",
-                        view.replace('`', "``")
-                    );
-                    Box::pin(self.sql_here(&create)).await?;
+                    let prefix = format!("CREATE TEMPORARY VIEW `{}` AS ", view.replace('`', "``"));
+                    // The body's substituted `IDENTIFIER(..)` names, at their place in `create`.
+                    let spans = crate::identifier_clause::spans_within(ids, q.span)
+                        .into_iter()
+                        .map(|s| Span::new(s.start + prefix.len(), s.end + prefix.len()))
+                        .collect();
+                    let create = format!("{prefix}{body}");
+                    Box::pin(self.sql_here_spanned(&create, spans)).await?;
                 }
                 // The relation is cached by reading it once: `LAZY` is the same here, since a
                 // snapshot is taken the first time anything reads it either way.
@@ -850,6 +885,7 @@ impl Session {
         &self,
         f: &CreateFunction,
         redacted: &RedactedSql,
+        ids: &[krishiv_sql::ast::Span],
     ) -> Result<DataFrame, KrishivError> {
         if let Some(language) = &f.characteristics.language
             && !language.value.eq_ignore_ascii_case("SQL")
@@ -867,13 +903,26 @@ impl Session {
             (None, part)
         } else {
             let (namespace, part) = self.stored_function_name(&f.name.parts)?;
+            // Spark gives a SQL function its schema's default collation (`ApplyDefaultCollation`).
+            self.refuse_collated_namespace(&crate::table_commands::TableName {
+                namespace: namespace.clone(),
+                name: part.value.clone(),
+                written: String::new(),
+                bare: false,
+            })?;
             (Some(namespace), part)
         };
         let name = part.value.to_lowercase();
         let conf = self.query_env().analysis.conf;
         let case_sensitive = conf.case_sensitive;
         let source = self.next_source_id();
-        let mut entry = self.declare(f, &name, source, case_sensitive, conf.ansi, redacted)?;
+        let declared = crate::sql_functions::Declared {
+            source,
+            case_sensitive,
+            ansi: conf.ansi,
+            ids,
+        };
+        let mut entry = self.declare(f, &name, &declared, redacted)?;
         let reads = self.reads_data(&entry.def);
         if reads && f.characteristics.data_access == Some(SqlDataAccess::ContainsSql) {
             return Err(InvalidSqlFunctionDataAccess {}.into());
@@ -889,7 +938,7 @@ impl Session {
                 ..(*entry.def).clone()
             });
             return self
-                .create_stored_function(f, namespace, part, entry, redacted)
+                .create_stored_function(f, (namespace, part), entry, redacted, ids)
                 .await;
         }
         // A built-in or a registered UDF of the name is not ours to replace
@@ -937,6 +986,7 @@ impl Session {
             env.sql_functions = Arc::clone(&candidate);
             env.functions_version = krishiv_plan::analyzer::FunctionRegistry::version(&*candidate);
             let output = self.probe(&entry.def, &[], env, redacted).await?;
+            crate::sql_functions::check_return_names(f, &part.value, ids)?;
             let mut entry = entry.clone();
             if entry.def.returns.is_none() {
                 let def = SqlFunction {
@@ -962,11 +1012,15 @@ impl Session {
         &self,
         f: &CreateFunction,
         name: &str,
-        source: krishiv_plan::SourceId,
-        case_sensitive: bool,
-        ansi: bool,
+        declared: &crate::sql_functions::Declared<'_>,
         redacted: &RedactedSql,
     ) -> Result<Entry, KrishivError> {
+        let crate::sql_functions::Declared {
+            source,
+            case_sensitive,
+            ansi,
+            ids,
+        } = *declared;
         let fold = |n: &str| {
             if case_sensitive {
                 n.to_owned()
@@ -1064,25 +1118,33 @@ impl Session {
             Some(FunctionReturnsKind::Type(t)) => Some(data_type(t)?),
             _ => None,
         };
-        let body = match (&f.body.kind, returned.is_some()) {
-            (FunctionBodyKind::Expr(_), true) => {
-                return Err(UserDefinedFunctionsSqlTableUdfBodyMustBeAQuery {
-                    name: name.to_owned(),
-                }
-                .into());
-            }
-            (FunctionBodyKind::Expr(e), false) => {
-                krishiv_sql::lower_expression(e, source).map_err(lower_err)?
-            }
-            // A function's query body is a scalar subquery: for a scalar
-            // function its value, for a table function its rows.
-            (FunctionBodyKind::Query(q), _) => {
-                let plan = krishiv_sql::lower(q, source).map_err(lower_err)?;
+        // A function's query body is a scalar subquery: for a scalar function its value, for a
+        // table function its rows. `RETURN (query)` is a query to Spark's grammar (its `query`
+        // takes brackets), which the parser reads as an expression.
+        let query = match &f.body.kind {
+            FunctionBodyKind::Query(q) => Some(&**q),
+            other if returned.is_some() => crate::sql_functions::bracketed_query(other),
+            _ => None,
+        };
+        let body = match (&f.body.kind, query) {
+            (_, Some(q)) => {
+                // Its `IDENTIFIER(..)` columns are named as in a query (`c1.c2`).
+                let plan =
+                    krishiv_sql::lower_identified(q, source, false, ids).map_err(lower_err)?;
                 PlanExpr::new(ExprNode::Subquery {
                     kind: SubqueryKind::Scalar,
                     plan: Arc::clone(plan.root()),
                 })
                 .with_origin(origin(source, f.body.span))
+            }
+            (FunctionBodyKind::Expr(_), None) if returned.is_some() => {
+                return Err(UserDefinedFunctionsSqlTableUdfBodyMustBeAQuery {
+                    name: name.to_owned(),
+                }
+                .into());
+            }
+            (FunctionBodyKind::Expr(e), None) => {
+                krishiv_sql::lower_expression(e, source).map_err(lower_err)?
             }
             _ => return Err(unsupported("this kind of function body")),
         };
@@ -1173,8 +1235,8 @@ impl Session {
         parts: &'a [Ident],
     ) -> Result<(String, &'a Ident), KrishivError> {
         let (namespace, part) = match parts {
-            [part] => (self.state.catalog.current_namespace(), part),
-            [ns, part] => (ns.value.clone(), part),
+            [part] => (self.stored_namespace()?, part),
+            [ns, part] => (self.function_namespace(&ns.value)?, part),
             [catalog, ns, part] if catalog.value.eq_ignore_ascii_case(crate::catalog::CATALOG) => {
                 (ns.value.clone(), part)
             }
@@ -1314,10 +1376,10 @@ impl Session {
     async fn create_stored_function(
         &self,
         f: &CreateFunction,
-        namespace: &str,
-        part: &Ident,
+        (namespace, part): (&str, &Ident),
         entry: Entry,
         redacted: &RedactedSql,
+        ids: &[krishiv_sql::ast::Span],
     ) -> Result<DataFrame, KrishivError> {
         let store = &self.state.catalog.store;
         let qualified = [
@@ -1325,6 +1387,10 @@ impl Session {
             namespace.to_owned(),
             part.value.clone(),
         ];
+        // Spark names the missing columns before a reference to the session's objects (its
+        // analysis sees them; the probe below cannot, so a body that also fails analysis is
+        // refused here first).
+        crate::sql_functions::check_return_names(f, &part.value, ids)?;
         // A stored function may not depend on an object of the session; Spark
         // names the function by namespace and name, and the object by kind.
         let object = format!("`{namespace}`.{}", quote(&entry.def.name));
@@ -1462,14 +1528,26 @@ impl Session {
     ) -> Result<DataFrame, KrishivError> {
         match &s.kind {
             krishiv_sql::ast::ShowKind::CurrentNamespace { .. } => {
-                self.string_frame(
-                    &["catalog", "namespace"],
-                    vec![vec![
+                // `system` has no namespace: after `USE system` the row says so rather than
+                // naming the default database of another catalog.
+                let row = if crate::system::is_system(&self.state.catalog.current_catalog()) {
+                    vec![Some(crate::system::SYSTEM.to_owned()), Some(String::new())]
+                } else {
+                    vec![
                         Some(CATALOG.to_owned()),
                         Some(self.state.catalog.current_namespace()),
-                    ]],
-                )
-                .await
+                    ]
+                };
+                self.string_frame(&["catalog", "namespace"], vec![row])
+                    .await
+            }
+            krishiv_sql::ast::ShowKind::Catalogs { pattern, .. } => {
+                let rows = [CATALOG, crate::system::SYSTEM]
+                    .into_iter()
+                    .filter(|n| crate::introspection::keep(pattern.as_ref(), n))
+                    .map(|n| vec![Some(n.to_owned())])
+                    .collect();
+                self.ordered_frame(&["catalog"], &[], rows).await
             }
             _ => self.exec_show_catalog(s, original).await,
         }
@@ -1705,16 +1783,7 @@ impl Session {
         &self,
         sql: &str,
     ) -> Result<Arc<crate::dataframe::Analysis>, KrishivError> {
-        let env = self.query_env();
-        let redacted = krishiv_sql::redact_sql(sql);
-        let query = krishiv_sql::parse_query(sql, &env.parser).map_err(|e| {
-            crate::session::sql_context(e.error, &redacted, e.span.start, e.span.end)
-        })?;
-        let plan = krishiv_sql::lower(&query, SourceId(0)).map_err(|e| {
-            crate::session::sql_context(e.error, &redacted, e.span.start, e.span.end)
-        })?;
-        let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
-        df.analyzed_in_with_text(env, Some(&redacted)).await
+        self.analyze_variable_query_in(sql, self.query_env()).await
     }
 
     /// Runs analyzed `analysis` (from [`Self::analyze_variable_query`])
@@ -1731,27 +1800,6 @@ impl Session {
             out.push(batch?);
         }
         Ok(out)
-    }
-
-    /// As [`Self::run_analyzed_variable_query`], but stops reading at the first row beyond
-    /// `max_rows` and returns `None`: a caller that holds the rows never holds more.
-    pub(crate) async fn run_analyzed_variable_query_capped(
-        &self,
-        analysis: &Arc<crate::dataframe::Analysis>,
-        max_rows: usize,
-    ) -> Result<Option<Vec<RecordBatch>>, KrishivError> {
-        let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
-        let mut stream = self.run(&physical, &analysis.env).await?;
-        let (mut out, mut rows) = (Vec::new(), 0_usize);
-        while let Some(batch) = stream.next().await {
-            let batch = batch?;
-            rows = rows.saturating_add(batch.num_rows());
-            if rows > max_rows {
-                return Ok(None);
-            }
-            out.push(batch);
-        }
-        Ok(Some(out))
     }
 
     /// The value of `sql` (a synthesized one-row `SELECT`): its single
@@ -1936,359 +1984,4 @@ pub(crate) fn contains_subquery(e: &Expr) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::HashSet;
-
-    use futures::executor::block_on;
-    use krishiv_plan::SourceId;
-
-    use super::*;
-
-    /// The SQL source ids of the nodes of the stored view `name`.
-    fn view_sources(session: &Session, name: &str) -> HashSet<SourceId> {
-        let entry = session.state.catalog.get(name, false).unwrap();
-        let crate::catalog::TempTable::View { plan, .. } = &*entry else {
-            panic!("{name} is not a view");
-        };
-        let mut ids = HashSet::new();
-        let mut stack = vec![Arc::clone(plan)];
-        while let Some(plan) = stack.pop() {
-            if let Some((source, _)) = plan.origin.sql {
-                ids.insert(source);
-            }
-            plan.for_each_child(&mut |child| stack.push(Arc::clone(child)));
-            plan.for_each_expr(&mut |expr| {
-                if let krishiv_plan::ExprNode::Subquery { plan, .. } = &expr.node {
-                    stack.push(Arc::clone(plan));
-                }
-            });
-        }
-        ids
-    }
-
-    #[test]
-    fn views_lower_with_their_own_source_id() {
-        // Every created view lowers with a source id of its own, so errors
-        // raised while expanding a view point into the view's text, not the
-        // outer statement's (`SourceId(0)`).
-        let session = Session::new().unwrap();
-        block_on(session.sql("CREATE TEMP VIEW v AS SELECT 1 AS a")).unwrap();
-        block_on(session.sql("CREATE TEMP VIEW w AS SELECT 2 AS b")).unwrap();
-        let (v, w) = (view_sources(&session, "v"), view_sources(&session, "w"));
-        assert!(!v.is_empty() && !w.is_empty());
-        assert!(!v.contains(&SourceId(0)), "{v:?}");
-        assert!(!w.contains(&SourceId(0)), "{w:?}");
-        assert!(v.is_disjoint(&w), "{v:?} vs {w:?}");
-    }
-
-    /// A window over `bound` as its frame start, for the expression walks.
-    fn window_with(bound: Expr) -> krishiv_sql::ast::WindowRef {
-        use krishiv_sql::ast::{
-            FrameBound, FrameBoundKind, FrameUnits, Span, WindowFrame, WindowRef, WindowSpec,
-        };
-        WindowRef::Spec(Box::new(WindowSpec {
-            partitioning: None,
-            partition_by: Vec::new(),
-            order_by: Vec::new(),
-            frame: Some(WindowFrame {
-                units: FrameUnits::Rows,
-                start: FrameBound {
-                    kind: FrameBoundKind::Preceding(bound),
-                    span: Span::default(),
-                },
-                end: None,
-                span: Span::default(),
-            }),
-            span: Span::default(),
-        }))
-    }
-
-    /// A `f(1)` call over `window`, for the expression walks.
-    fn function_over(window: krishiv_sql::ast::WindowRef) -> Expr {
-        use krishiv_sql::ast::{Function, FunctionArg, Ident, ObjectName, Span};
-        let ident = |value: &str| Ident {
-            value: value.to_owned(),
-            quoted: false,
-            span: Span::default(),
-        };
-        Expr {
-            kind: ExprKind::Function(Box::new(Function {
-                name: ObjectName {
-                    parts: vec![ident("f")],
-                    span: Span::default(),
-                },
-                quantifier: None,
-                args: vec![FunctionArg {
-                    name: None,
-                    expr: named_expr("1"),
-                    span: Span::default(),
-                }],
-                within_group: Vec::new(),
-                filter: None,
-                null_treatment: None,
-                over: Some(window),
-                dynamic_name: None,
-                span: Span::default(),
-            })),
-            span: Span::default(),
-        }
-    }
-
-    /// Parses `sql` as a named expression, for the expression walks.
-    fn named_expr(sql: &str) -> Expr {
-        let options = krishiv_sql::ParserOptions::default();
-        krishiv_sql::parse_named_expression(sql, &options)
-            .unwrap()
-            .expr
-    }
-
-    /// Variable names: shapes, quoting and normalization.
-    #[test]
-    fn variable_names_quote_and_normalize() {
-        use krishiv_sql::ast::{Ident, Span};
-        let name = |parts: &[&str]| ObjectName {
-            parts: parts
-                .iter()
-                .map(|p| Ident {
-                    value: (*p).to_owned(),
-                    quoted: false,
-                    span: Span::default(),
-                })
-                .collect(),
-            span: Span::default(),
-        };
-        assert_eq!(variable_key(&name(&["var1"])), Some("var1".to_owned()));
-        assert_eq!(
-            variable_key(&name(&["SESSION", "Var1"])),
-            Some("var1".to_owned())
-        );
-        assert_eq!(
-            variable_key(&name(&["system", "SESSION", "vAr1"])),
-            Some("var1".to_owned())
-        );
-        assert_eq!(variable_key(&name(&["ses", "var1"])), None);
-        assert_eq!(variable_key(&name(&["a", "b", "c", "d"])), None);
-        assert_eq!(variable_key(&name(&[])), None);
-        assert_eq!(quote_name(&name(&["vAr1"])), "`vAr1`");
-        assert_eq!(quote_name(&name(&["s", "v"])), "`s`.`v`");
-        assert_eq!(quote_normalized("var1"), "`system`.`session`.`var1`");
-    }
-
-    /// The parts of a plain `SET` assignment shaped like a variable.
-    #[test]
-    fn assign_variable_parts_shapes() {
-        use krishiv_sql::ast::Span;
-        let parts = |key: &str, quoted: bool| {
-            let sql = if quoted {
-                format!("SET `{key}` = 1")
-            } else {
-                format!("SET {key} = 1")
-            };
-            let text = krishiv_sql::redact_sql(&sql);
-            let span = Span::new(4, 4 + key.len() + usize::from(quoted) * 2);
-            assign_variable_parts(key, span, &text)
-        };
-        assert_eq!(parts("var1", false), Some(vec!["var1".to_owned()]));
-        assert_eq!(
-            parts("SESSION.var1", false),
-            Some(vec!["SESSION".to_owned(), "var1".to_owned()])
-        );
-        assert_eq!(
-            parts("system.session.var1", false).map(|p| p.len()),
-            Some(3)
-        );
-        assert_eq!(parts("x.var1", false), None);
-        assert_eq!(parts("x.session.var1", false), None);
-        assert_eq!(parts("", false), None);
-        // Backquoted, the same dots are one part.
-        assert_eq!(parts("x.var1", true), Some(vec!["x.var1".to_owned()]));
-        // A backquoted key is one part, whatever dots it holds.
-        assert_eq!(
-            parts("session.var1", true),
-            Some(vec!["session.var1".to_owned()])
-        );
-    }
-
-    /// Duplicate targets report the first repeat, lower-cased and quoted.
-    #[test]
-    fn duplicate_targets_reports_first_repeat() {
-        assert!(duplicate_targets(&["a".to_owned(), "b".to_owned()]).is_ok());
-        let e = duplicate_targets(&["a".to_owned(), "B".to_owned(), "a".to_owned()]).unwrap_err();
-        assert_eq!(e.error_class(), ErrorClass::DuplicateAssignments);
-        assert_eq!(e.message_parameters(), &[("nameList", "`a`".to_owned())]);
-    }
-
-    /// `padded_select` pads the gap so an expression keeps its offset.
-    #[test]
-    fn padded_select_aligns_slices() {
-        assert_eq!(padded_select("SELECT ", "1", 7, ""), "SELECT 1");
-        assert_eq!(
-            padded_select("SELECT CAST(", "1", 45, " AS INT)"),
-            format!("SELECT CAST({}1 AS INT)", " ".repeat(45 - 12))
-        );
-        // Before the prefix: no padding, no panic.
-        assert_eq!(padded_select("SELECT CAST(", "1", 2, ")"), "SELECT CAST(1)");
-    }
-
-    /// The `DEFAULT` walks: a bare `DEFAULT`, one nested in an
-    /// expression, and subqueries.
-    #[test]
-    fn default_and_subquery_walks() {
-        assert!(is_bare_default(&named_expr("DEFAULT")));
-        assert!(is_bare_default(&named_expr("(DEFAULT)")));
-        assert!(is_bare_default(&named_expr("default")));
-        assert!(!is_bare_default(&named_expr("`default`")));
-        assert!(!is_bare_default(&named_expr("session.default")));
-        assert!(!is_bare_default(&named_expr("'Hello' || DEFAULT")));
-        for sql in [
-            "DEFAULT",
-            "(DEFAULT)",
-            "'Hello' || DEFAULT",
-            "CASE WHEN TRUE THEN DEFAULT ELSE 1 END",
-            "CAST(DEFAULT AS INT)",
-            "upper(DEFAULT)",
-        ] {
-            assert!(contains_default(&named_expr(sql)), "{sql}");
-        }
-        for sql in ["1", "default2", "session.default", "(SELECT 1)"] {
-            assert!(!contains_default(&named_expr(sql)), "{sql}");
-        }
-        // Through a window: the function, its filter, the ordering and
-        // the frame all count.
-        assert!(contains_default(&named_expr(
-            "sum(x) OVER (ORDER BY DEFAULT)"
-        )));
-        assert!(contains_default(&function_over(window_with(named_expr(
-            "DEFAULT"
-        )))));
-        assert!(!contains_default(&function_over(window_with(named_expr(
-            "1"
-        )))));
-        for sql in [
-            "(SELECT 1)",
-            "1 + (SELECT 1)",
-            "x IN (SELECT 1)",
-            "EXISTS (SELECT 1)",
-        ] {
-            assert!(contains_subquery(&named_expr(sql)), "{sql}");
-        }
-        for sql in ["1", "DEFAULT", "'Hello' || DEFAULT"] {
-            assert!(!contains_subquery(&named_expr(sql)), "{sql}");
-        }
-        // A subquery through a window frame counts too.
-        assert!(contains_subquery(&function_over(window_with(named_expr(
-            "(SELECT 1)"
-        )))));
-        assert!(!contains_subquery(&function_over(window_with(named_expr(
-            "1"
-        )))));
-    }
-
-    /// Execution errors from variable evaluation gain Spark's contexts.
-    #[test]
-    fn map_variable_error_attaches_contexts() {
-        use krishiv_common::error::{CastInvalidInput, CastOverflow};
-        use krishiv_sql::ast::Span;
-        let text = krishiv_sql::redact_sql("DECLARE OR REPLACE VARIABLE var1 INT DEFAULT 'hello'");
-        let command = Span::new(0, text.as_str().len());
-        let expr = Span::new(45, 52);
-        let at = |span: Span| {
-            ErrorQueryContext::sql(
-                text.fragment(span.start..span.end),
-                span.start,
-                span.end.saturating_sub(1),
-            )
-        };
-        // A malformed assignment cast reports the command ...
-        let e = map_variable_error(
-            CastInvalidInput {
-                expression: "'hello'".to_owned(),
-                source_type: "\"STRING\"".to_owned(),
-                target_type: "\"INT\"".to_owned(),
-            }
-            .into(),
-            &text,
-            command,
-            expr,
-        );
-        assert_eq!(e.error_class(), ErrorClass::CastInvalidInput);
-        assert_eq!(e.query_contexts(), &[at(command)]);
-        // ... while an overflow keeps no context and anything else
-        // reports the expression.
-        let e = map_variable_error(
-            CastOverflow {
-                value: "1".to_owned(),
-                source_type: "\"INT\"".to_owned(),
-                target_type: "\"INT\"".to_owned(),
-            }
-            .into(),
-            &text,
-            command,
-            expr,
-        );
-        assert!(e.query_contexts().is_empty());
-        let e = map_variable_error(
-            VariableNotFound {
-                variable_name: "v".to_owned(),
-            }
-            .into(),
-            &text,
-            command,
-            expr,
-        );
-        assert_eq!(e.query_contexts(), &[at(expr)]);
-        // An error that already has a context keeps it.
-        let e = map_variable_error(
-            KrishivError::from(VariableNotFound {
-                variable_name: "v".to_owned(),
-            })
-            .with_query_context(at(command)),
-            &text,
-            command,
-            expr,
-        );
-        assert_eq!(e.query_contexts(), &[at(command)]);
-        // `SET`, `DROP` and row forms resolve variables the same way.
-        let name = |parts: &[&str]| ObjectName {
-            parts: parts
-                .iter()
-                .map(|p| krishiv_sql::ast::Ident {
-                    value: (*p).to_owned(),
-                    quoted: false,
-                    span: Span::default(),
-                })
-                .collect(),
-            span: Span::new(28, 32),
-        };
-        let e = unresolved_variable(&name(&["builtin", "var1"]), RESOLVE_SEARCH_PATH, &text);
-        assert_eq!(e.error_class(), ErrorClass::UnresolvedVariable);
-        assert_eq!(
-            e.query_contexts(),
-            &[ErrorQueryContext::sql("var1", 28, 31)]
-        );
-    }
-
-    /// One-row expressions evaluate; anything else is an internal error.
-    #[test]
-    fn eval_variable_value_needs_one_row_one_column() {
-        let session = Session::new().unwrap();
-        let text = krishiv_common::redact::RedactedSql::opaque("SELECT 1");
-        let span = krishiv_sql::ast::Span::new(0, 8);
-        let eval = |sql: &str| block_on(session.eval_variable_value(sql, &text, span, span));
-        assert_eq!(
-            eval("SELECT 7").unwrap(),
-            (DataType::Integer, Literal::Integer(7))
-        );
-        for sql in [
-            "SELECT 1 UNION ALL SELECT 2",
-            "SELECT 1 LIMIT 0",
-            "SELECT 1, 2",
-        ] {
-            assert_eq!(
-                eval(sql).unwrap_err().error_class(),
-                ErrorClass::InternalError,
-                "{sql}"
-            );
-        }
-    }
-}
+mod tests;

@@ -31,6 +31,7 @@ pub(crate) struct QueryStart {
     cache_misses: u64,
     bytes_read: u64,
     bytes_written: u64,
+    files_written: u64,
 }
 
 impl QueryStart {
@@ -45,6 +46,7 @@ impl QueryStart {
             cache_misses: IoCounters::get(&totals.cache_misses),
             bytes_read: IoCounters::get(&own.bytes_read),
             bytes_written: IoCounters::get(&own.bytes_written),
+            files_written: IoCounters::get(&own.files_written),
         }
     }
 
@@ -63,6 +65,9 @@ impl QueryStart {
     ) {
         let stored = query.error();
         let (status, error_class) = Status::from_error(error.or(stored.as_ref()));
+        if let Some(e) = error.or(stored.as_ref()) {
+            state.queries.note_error(log_id, e);
+        }
         let metrics = query.metrics();
         let wall = metrics.wall_time;
         // A zero wall time means the query never finished (a cancelled
@@ -110,6 +115,38 @@ impl QueryStart {
                             .saturating_sub(self.bytes_written),
                     )
                     .unwrap_or(i64::MAX),
+                    files_read: metrics
+                        .operators
+                        .values()
+                        .filter(|e| {
+                            e.role == krishiv_exec::OperatorRole::Source && e.name.ends_with("Scan")
+                        })
+                        .flat_map(|e| e.extra.iter())
+                        .filter(|(n, _)| n == "scan_files")
+                        .map(|(_, m)| match m {
+                            krishiv_exec::Metric::Count(n) => i64::try_from(*n).unwrap_or(i64::MAX),
+                            _ => 0,
+                        })
+                        .fold(0, i64::saturating_add),
+                    files_written: i64::try_from(
+                        IoCounters::get(&self.io.counters().files_written)
+                            .saturating_sub(self.files_written),
+                    )
+                    .unwrap_or(i64::MAX),
+                    rows_read: metrics
+                        .operators
+                        .values()
+                        .filter(|e| {
+                            e.role == krishiv_exec::OperatorRole::Source && e.name.ends_with("Scan")
+                        })
+                        .map(|e| i64::try_from(e.metrics.rows_out).unwrap_or(i64::MAX))
+                        .fold(0, i64::saturating_add),
+                    rows_written: metrics
+                        .operators
+                        .values()
+                        .filter(|e| e.name == "FileWrite")
+                        .map(|e| i64::try_from(e.metrics.rows_in).unwrap_or(i64::MAX))
+                        .fold(0, i64::saturating_add),
                     workload_class: query.class().as_str(),
                     cpu_ns: i64::try_from(metrics.drivers.busy.as_nanos()).unwrap_or(i64::MAX),
                     spill_bytes: metrics
@@ -233,17 +270,7 @@ pub(crate) struct QueuedRow<'a> {
 impl Drop for QueuedRow<'_> {
     fn drop(&mut self) {
         if self.open {
-            self.state.queries.finish(
-                self.id,
-                &crate::system::Finished {
-                    state: "cancelled",
-                    wall_ns: 0,
-                    peak_memory_bytes: 0,
-                    error_class: None,
-                    operators: Vec::new(),
-                    totals: None,
-                },
-            );
+            self.state.queries.close_unrun(self.id, "cancelled", None);
         }
     }
 }
@@ -371,17 +398,9 @@ impl Admitted {
     }
 
     fn close(&self, state: &'static str, error_class: Option<&str>) {
-        self.state.queries.finish(
-            &self.log_id,
-            &crate::system::Finished {
-                state,
-                wall_ns: 0,
-                peak_memory_bytes: 0,
-                error_class,
-                operators: Vec::new(),
-                totals: None,
-            },
-        );
+        self.state
+            .queries
+            .close_unrun(&self.log_id, state, error_class);
     }
 }
 

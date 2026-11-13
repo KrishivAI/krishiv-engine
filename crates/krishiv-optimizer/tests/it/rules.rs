@@ -134,11 +134,25 @@ const CASES: &[(&str, &str)] = &[
     ),
     // Filters into each input of a union, rewritten onto its columns; a
     // branch whose literal makes the filter false keeps only `false`.
-    // A constant `false` that tidying folds into a filter frees a column of a
-    // shared scan: prune and tidy repeat until the plan is a fixed point.
+    // A constant `false` over an inner-join tree filters an input with no
+    // inputs of its own (the scan of t that the other branch shares), where
+    // pushdown cannot move it, so the plan is a fixed point. (Before, it
+    // filtered the shifted aggregate, tidying pushed it into the join below,
+    // freed `b` of the shared scan, and prune and tidy repeated.)
     (
         "tidy_frees_columns_fixed_point",
         "SELECT * FROM (SELECT x1.c0 AS c0 FROM (SELECT x3.d AS c0, count(*) AS c1 FROM t AS x2 JOIN u AS x3 ON x2.c = x3.a CROSS JOIN (SELECT x5.a AS c0, count(*) AS c1 FROM t AS x5 WHERE (NOT (x5.b <= 'z') AND (x5.c <> 2 AND x5.b <> x5.b)) GROUP BY x5.a) AS x4 WHERE (x2.c IN (-2, -2) AND x2.c = 3) GROUP BY x3.d) AS x1 WHERE NOT (NOT (x1.c1 IS NULL))) ORDER BY c0 LIMIT 4",
+    ),
+    // A join tree whose inputs all have plans under them (aggregates): a
+    // condition that folds to `false` filters the first, and pushdown carries
+    // it to that aggregate's scan, where the next optimization leaves it.
+    (
+        "false_over_aggregate_inputs",
+        "SELECT x.a FROM (SELECT a, count(*) AS n FROM t WHERE b > 'm' GROUP BY a) AS x JOIN (SELECT d, count(*) AS m FROM u GROUP BY d) AS y ON x.n IS NULL",
+    ),
+    (
+        "false_over_aggregate_inputs_nested",
+        "SELECT x.a FROM (SELECT a, max(b) AS mb FROM t GROUP BY a) AS x JOIN (SELECT a FROM t WHERE b > 'm' GROUP BY a) AS y ON x.a = y.a JOIN (SELECT d, count(*) AS n FROM u GROUP BY d) AS z ON z.n IS NULL",
     ),
     (
         "push_union",
@@ -251,6 +265,94 @@ const CASES: &[(&str, &str)] = &[
     (
         "push_correlated_join",
         "SELECT t.a FROM t JOIN u ON t.a = u.a WHERE t.c > (SELECT count(*) FROM u u2 WHERE u2.d = t.b AND u2.a = u.a)",
+    ),
+    // Inferred join filters (T072b unit 3; Spark 4.2 plans in
+    // tests/fixtures/spark-4.2.0/inferred-join-filters.json).
+    (
+        "infer_inner_literal",
+        "SELECT t.a FROM t JOIN u ON t.a = u.a WHERE u.a = 5",
+    ),
+    (
+        "infer_inner_range_and_in",
+        "SELECT t.a FROM t JOIN u ON t.a = u.a WHERE t.a > 3 AND t.a <= 9 AND u.a IN (4, 5, 6)",
+    ),
+    (
+        // The inner join's key `u.a` is nullable: its inferred `isnotnull`
+        // above the outer join makes it an inner join (no row is lost: a
+        // NULL `u.a` never matches `t2.a`).
+        "infer_outer_to_inner_by_inferred_key",
+        "SELECT t.a FROM t LEFT JOIN u ON t.a = u.a JOIN t t2 ON u.a = t2.a",
+    ),
+    (
+        // Each branch of the union gets the key's filter; a second run finds
+        // it in every branch (`held` over a positional union).
+        "infer_into_union_branches",
+        "SELECT x.a FROM (SELECT a FROM t UNION ALL SELECT a FROM u) x JOIN t t2 ON x.a = t2.a WHERE t2.a = 3",
+    ),
+    (
+        // Through a grouped aggregate's key (pushdown moves the filter below
+        // it; a second run finds it there).
+        "infer_through_aggregate_key",
+        "SELECT g.a FROM (SELECT a, count(*) AS n FROM t GROUP BY a) g JOIN u ON g.a = u.a WHERE u.a < 4",
+    ),
+    (
+        "infer_through_two_joins",
+        "SELECT t.a FROM t JOIN u ON t.a = u.a JOIN t t2 ON u.a = t2.a WHERE t2.a = 7",
+    ),
+    (
+        // Two instances of `t` (a `Shift` each) need different filters:
+        // the first gets `a = 7` through `t.a = u.a` and `c = 2` through
+        // `t.c = t2.c`, the second only `c = 2`, never `a = 7` (round-2
+        // review M2: a `shift`/`unshift` sign error would cross them).
+        "infer_self_join_different_filters",
+        "SELECT t.a FROM t JOIN u ON t.a = u.a JOIN t t2 ON t.c = t2.c WHERE u.a = 7 AND t2.c = 2",
+    ),
+    (
+        // A `NOT IN` subquery is a null-aware anti join: no `=` key, so
+        // nothing is added to its right side (an `isnotnull` there would
+        // change rows); the inner join's key still gets its filters.
+        "infer_not_in_beside_inferred_key",
+        "SELECT t.a FROM t JOIN u ON t.a = u.a WHERE u.a = 5 AND t.a NOT IN (SELECT a FROM u)",
+    ),
+    (
+        "infer_left_outer_preserved_side_kept",
+        "SELECT t.a FROM t LEFT JOIN (SELECT a FROM u WHERE a = 5) v ON t.a = v.a",
+    ),
+    (
+        "infer_left_outer_to_null_side",
+        "SELECT t.a FROM t LEFT JOIN u ON t.a = u.a WHERE t.a = 5",
+    ),
+    (
+        "infer_right_outer_to_null_side",
+        "SELECT u.a FROM t RIGHT JOIN u ON t.a = u.a WHERE u.a = 5",
+    ),
+    (
+        "infer_left_semi_both",
+        "SELECT a FROM t LEFT SEMI JOIN u ON t.a = u.a AND u.a < 3",
+    ),
+    (
+        "infer_left_anti_right_only",
+        "SELECT a FROM t LEFT ANTI JOIN (SELECT a FROM u WHERE a = 5) v ON t.a = v.a WHERE t.a > 1",
+    ),
+    (
+        "infer_full_outer_none",
+        "SELECT x.a FROM (SELECT a FROM t WHERE a = 5) x FULL JOIN u ON x.a = u.a",
+    ),
+    (
+        "infer_null_safe_key",
+        "SELECT t.a FROM t JOIN u ON t.a <=> u.a WHERE u.a = 5",
+    ),
+    (
+        "infer_cast_key_no_move",
+        "SELECT t.a FROM t JOIN u ON CAST(t.a AS STRING) = u.d WHERE u.d = '5'",
+    ),
+    (
+        "infer_no_substitution",
+        "SELECT t.a FROM t JOIN u ON t.a = u.a WHERE u.a + 1 > 5 AND (u.a = 1 OR u.a = 2)",
+    ),
+    (
+        "infer_string_key",
+        "SELECT t.a FROM t JOIN u ON t.b = u.d WHERE u.d = 'x'",
     ),
     // Restricting an aggregate to the keys its join can match.
     (
@@ -510,6 +612,25 @@ const CASES: &[(&str, &str)] = &[
     (
         "expand_duplicate_sets",
         "SELECT a, sum(c) FROM t GROUP BY GROUPING SETS ((a), (a))",
+    ),
+    // `DISTRIBUTE BY`: filters move below it, columns it reads stay under a
+    // `count(*)`, and an outer one directly over another drops the inner one
+    // (Spark's `CollapseRepartition`), unless a local sort sits between them.
+    (
+        "repartition_filter_below",
+        "SELECT * FROM (SELECT a, b FROM t DISTRIBUTE BY CAST(b AS INT)) WHERE a > 1",
+    ),
+    (
+        "repartition_kept_under_count",
+        "SELECT count(*) FROM (SELECT a FROM t DISTRIBUTE BY a + 1)",
+    ),
+    (
+        "repartition_collapse",
+        "SELECT * FROM (SELECT a, b FROM t DISTRIBUTE BY CAST(b AS INT)) DISTRIBUTE BY a",
+    ),
+    (
+        "repartition_sort_keeps_both",
+        "SELECT * FROM (SELECT a, b FROM t DISTRIBUTE BY CAST(b AS INT) SORT BY a) DISTRIBUTE BY a",
     ),
 ];
 

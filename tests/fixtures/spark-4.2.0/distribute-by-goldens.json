@@ -1,0 +1,2196 @@
+{
+ "format_version": 1,
+ "spark_version": "4.2.0",
+ "generator": "tests/scripts/gen_distribute_by_goldens.py",
+ "views": {
+  "t": "SELECT * FROM VALUES ('1'), ('2'), ('x') AS t(x)",
+  "u": "SELECT * FROM VALUES (1), (2) AS u(k)",
+  "ok": "SELECT * FROM VALUES ('1'), ('2') AS ok(x)",
+  "n": "SELECT * FROM VALUES (0, 'abc'), (1, 'def') AS n(x, y)"
+ },
+ "cases": [
+  {
+   "sql": "SELECT x FROM t DISTRIBUTE BY x + 'a'",
+   "conf": {},
+   "error": {
+    "class": "DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE",
+    "sqlstate": "42K09",
+    "message": "[DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE] Cannot resolve \"(x + a)\" due to data type mismatch: the binary operator requires the input type (\"NUMERIC\" or \"INTERVAL DAY TO SECOND\" or \"INTERVAL YEAR TO MONTH\" or \"INTERVAL\"), not \"STRING\". SQLSTATE: 42K09; line 1 pos 30;\n'RepartitionByExpression [(x#6 + a)]\n+- Project [x#6]\n   +- SubqueryAlias t\n      +- View (`t`, [x#6])\n         +- Project [cast(x#5 as string) AS x#6]\n            +- Project [x#5]\n               +- SubqueryAlias t\n                  +- LocalRelation [x#5]\n",
+    "context": {
+     "fragment": "x + 'a'",
+     "start": 30,
+     "stop": 36
+    }
+   }
+  },
+  {
+   "sql": "SELECT x FROM t CLUSTER BY x + 'a'",
+   "conf": {},
+   "error": {
+    "class": "DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE",
+    "sqlstate": "42K09",
+    "message": "[DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE] Cannot resolve \"(x + a)\" due to data type mismatch: the binary operator requires the input type (\"NUMERIC\" or \"INTERVAL DAY TO SECOND\" or \"INTERVAL YEAR TO MONTH\" or \"INTERVAL\"), not \"STRING\". SQLSTATE: 42K09; line 1 pos 27;\n'Sort [('x + a) ASC NULLS FIRST], false\n+- 'RepartitionByExpression [(x#8 + a)]\n   +- Project [x#8]\n      +- SubqueryAlias t\n         +- View (`t`, [x#8])\n            +- Project [cast(x#7 as string) AS x#8]\n               +- Project [x#7]\n                  +- SubqueryAlias t\n                     +- LocalRelation [x#7]\n",
+    "context": {
+     "fragment": "x + 'a'",
+     "start": 27,
+     "stop": 33
+    }
+   }
+  },
+  {
+   "sql": "SELECT x FROM t DISTRIBUTE BY x + 'a' SORT BY x",
+   "conf": {},
+   "error": {
+    "class": "DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE",
+    "sqlstate": "42K09",
+    "message": "[DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE] Cannot resolve \"(x + a)\" due to data type mismatch: the binary operator requires the input type (\"NUMERIC\" or \"INTERVAL DAY TO SECOND\" or \"INTERVAL YEAR TO MONTH\" or \"INTERVAL\"), not \"STRING\". SQLSTATE: 42K09; line 1 pos 30;\n'Sort ['x ASC NULLS FIRST], false\n+- 'RepartitionByExpression [(x#10 + a)]\n   +- Project [x#10]\n      +- SubqueryAlias t\n         +- View (`t`, [x#10])\n            +- Project [cast(x#9 as string) AS x#10]\n               +- Project [x#9]\n                  +- SubqueryAlias t\n                     +- LocalRelation [x#9]\n",
+    "context": {
+     "fragment": "x + 'a'",
+     "start": 30,
+     "stop": 36
+    }
+   }
+  },
+  {
+   "sql": "SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)",
+   "conf": {},
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 31) ==\nSELECT x FROM t DISTRIBUTE BY CAST(x AS INT)\n                              ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 30,
+     "stop": 43
+    }
+   }
+  },
+  {
+   "sql": "SELECT x FROM t CLUSTER BY CAST(x AS INT)",
+   "conf": {},
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 28) ==\nSELECT x FROM t CLUSTER BY CAST(x AS INT)\n                           ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 27,
+     "stop": 40
+    }
+   }
+  },
+  {
+   "sql": "SELECT x FROM t DISTRIBUTE BY CAST(x AS INT) SORT BY x",
+   "conf": {},
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 31) ==\nSELECT x FROM t DISTRIBUTE BY CAST(x AS INT) SORT BY x\n                              ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 30,
+     "stop": 43
+    }
+   }
+  },
+  {
+   "sql": "SELECT x FROM ok DISTRIBUTE BY CAST(x AS INT)",
+   "conf": {},
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT count(*) FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT))",
+   "conf": {},
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 53) ==\n... (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT))\n                                   ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 52,
+     "stop": 65
+    }
+   }
+  },
+  {
+   "sql": "SELECT 1 FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT))",
+   "conf": {},
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 46) ==\n... (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT))\n                                   ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 45,
+     "stop": 58
+    }
+   }
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) WHERE x <> 'x'",
+   "conf": {},
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) WHERE rand() < 2 AND x <> 'x'",
+   "conf": {},
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) DISTRIBUTE BY x",
+   "conf": {},
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY x) DISTRIBUTE BY CAST(x AS INT)",
+   "conf": {},
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 63) ==\n... DISTRIBUTE BY x) DISTRIBUTE BY CAST(x AS INT)\n                                   ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 62,
+     "stop": 75
+    }
+   }
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) CLUSTER BY x",
+   "conf": {},
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t ORDER BY x) DISTRIBUTE BY CAST(x AS INT)",
+   "conf": {},
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 58) ==\n...ROM t ORDER BY x) DISTRIBUTE BY CAST(x AS INT)\n                                   ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 57,
+     "stop": 70
+    }
+   }
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) ORDER BY x",
+   "conf": {},
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 46) ==\n... (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) ORDER BY x\n                                   ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 45,
+     "stop": 58
+    }
+   }
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT) SORT BY x) DISTRIBUTE BY x",
+   "conf": {},
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 46) ==\n... (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT) SORT BY x) DISTRIBUTE BY x\n                                   ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 45,
+     "stop": 58
+    }
+   }
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) LIMIT 1",
+   "conf": {},
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 46) ==\n... (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) LIMIT 1\n                                   ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 45,
+     "stop": 58
+    }
+   }
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) LIMIT 0",
+   "conf": {},
+   "rows": []
+  },
+  {
+   "sql": "SELECT x, count(*) FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) GROUP BY x",
+   "conf": {},
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 56) ==\n... (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) GROUP BY x\n                                   ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 55,
+     "stop": 68
+    }
+   }
+  },
+  {
+   "sql": "SELECT count(*) FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) a JOIN u ON a.x = u.k",
+   "conf": {},
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 53) ==\n... (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) a JOIN u ON a.x = u.k\n                                   ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 52,
+     "stop": 65
+    }
+   }
+  },
+  {
+   "sql": "SELECT u.k FROM u JOIN (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) a ON a.x = u.k",
+   "conf": {},
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 55) ==\n... (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) a ON a.x = u.k\n                                   ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 54,
+     "stop": 67
+    }
+   }
+  },
+  {
+   "sql": "SELECT x, count(*) FROM t GROUP BY x DISTRIBUTE BY CAST(x AS INT)",
+   "conf": {},
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 52) ==\n...FROM t GROUP BY x DISTRIBUTE BY CAST(x AS INT)\n                                   ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 51,
+     "stop": 64
+    }
+   }
+  },
+  {
+   "sql": "SELECT x FROM t DISTRIBUTE BY 1",
+   "conf": {},
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT x FROM t DISTRIBUTE BY CAST('a' AS INT)",
+   "conf": {},
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'a' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 31) ==\nSELECT x FROM t DISTRIBUTE BY CAST('a' AS INT)\n                              ^^^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST('a' AS INT)",
+     "start": 30,
+     "stop": 45
+    }
+   }
+  },
+  {
+   "sql": "SELECT x FROM t WHERE false DISTRIBUTE BY CAST('a' AS INT)",
+   "conf": {},
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'a' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 43) ==\n...ROM t WHERE false DISTRIBUTE BY CAST('a' AS INT)\n                                   ^^^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST('a' AS INT)",
+     "start": 42,
+     "stop": 57
+    }
+   }
+  },
+  {
+   "sql": "SELECT x FROM t DISTRIBUTE BY rand()",
+   "conf": {},
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT) + rand()) WHERE x <> 'x'",
+   "conf": {},
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT x FROM t DISTRIBUTE BY CASE WHEN x = 'x' THEN 0 ELSE CAST(x AS INT) END",
+   "conf": {},
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT x FROM t DISTRIBUTE BY 1 / 0",
+   "conf": {},
+   "error": {
+    "class": "DIVIDE_BY_ZERO",
+    "sqlstate": "22012",
+    "message": "[DIVIDE_BY_ZERO] Division by zero. Use `try_divide` to tolerate divisor being 0 and return NULL instead. If necessary set \"spark.sql.ansi.enabled\" to \"false\" to bypass this error. SQLSTATE: 22012\n== SQL (line 1, position 31) ==\nSELECT x FROM t DISTRIBUTE BY 1 / 0\n                              ^^^^^\n",
+    "context": {
+     "fragment": "1 / 0",
+     "start": 30,
+     "stop": 34
+    }
+   }
+  },
+  {
+   "sql": "SELECT x FROM t WHERE false DISTRIBUTE BY CAST(x AS INT)",
+   "conf": {},
+   "rows": []
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t WHERE false DISTRIBUTE BY CAST(x AS INT)) a",
+   "conf": {},
+   "rows": []
+  },
+  {
+   "sql": "SELECT 'x' AS x DISTRIBUTE BY CAST(x AS INT)",
+   "conf": {},
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 31) ==\nSELECT 'x' AS x DISTRIBUTE BY CAST(x AS INT)\n                              ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 30,
+     "stop": 43
+    }
+   }
+  },
+  {
+   "sql": "SELECT * FROM (SELECT 'x' AS x DISTRIBUTE BY CAST(x AS INT))",
+   "conf": {},
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 46) ==\n... (SELECT 'x' AS x DISTRIBUTE BY CAST(x AS INT))\n                                   ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 45,
+     "stop": 58
+    }
+   }
+  },
+  {
+   "sql": "SELECT * FROM VALUES ('x') AS v(x) DISTRIBUTE BY CAST(x AS INT)",
+   "conf": {},
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 50) ==\n...UES ('x') AS v(x) DISTRIBUTE BY CAST(x AS INT)\n                                   ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 49,
+     "stop": 62
+    }
+   }
+  },
+  {
+   "sql": "SELECT CAST(x AS INT) FROM t",
+   "conf": {},
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 8) ==\nSELECT CAST(x AS INT) FROM t\n       ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 7,
+     "stop": 20
+    }
+   }
+  },
+  {
+   "sql": "SELECT x FROM n DISTRIBUTE BY x + 'a'",
+   "conf": {},
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'a' of the type \"STRING\" cannot be cast to \"BIGINT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 31) ==\nSELECT x FROM n DISTRIBUTE BY x + 'a'\n                              ^^^^^^^\n",
+    "context": {
+     "fragment": "x + 'a'",
+     "start": 30,
+     "stop": 36
+    }
+   }
+  },
+  {
+   "sql": "SELECT count(*) FROM (SELECT x FROM n DISTRIBUTE BY x + 'a')",
+   "conf": {},
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'a' of the type \"STRING\" cannot be cast to \"BIGINT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 53) ==\n... (SELECT x FROM n DISTRIBUTE BY x + 'a')\n                                   ^^^^^^^\n",
+    "context": {
+     "fragment": "x + 'a'",
+     "start": 52,
+     "stop": 58
+    }
+   }
+  },
+  {
+   "sql": "SELECT k FROM u WHERE EXISTS (SELECT 1 FROM n WHERE n.x = u.k DISTRIBUTE BY n.x)",
+   "conf": {},
+   "rows": [
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT k FROM u WHERE k IN (SELECT x FROM n WHERE n.x = u.k DISTRIBUTE BY x)",
+   "conf": {},
+   "rows": [
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT k, (SELECT max(x) FROM n WHERE n.x = u.k DISTRIBUTE BY 1) FROM u",
+   "conf": {},
+   "rows": [
+    [
+     "1",
+     "1"
+    ],
+    [
+     "2",
+     null
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT k FROM u WHERE EXISTS (SELECT 1 FROM t WHERE t.x = CAST(u.k AS STRING) DISTRIBUTE BY CAST(t.x AS INT))",
+   "conf": {},
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 93) ==\n...ST(u.k AS STRING) DISTRIBUTE BY CAST(t.x AS INT))\n                                   ^^^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(t.x AS INT)",
+     "start": 92,
+     "stop": 107
+    }
+   }
+  },
+  {
+   "sql": "SELECT k, (SELECT max(x) FROM t WHERE t.x = CAST(u.k AS STRING) DISTRIBUTE BY CAST(t.x AS INT)) FROM u",
+   "conf": {},
+   "error": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "sqlstate": "42703",
+    "message": "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name `t`.`x` cannot be resolved. Did you mean one of the following? [`max(x)`]. SQLSTATE: 42703; line 1 pos 83;\n'Project [k#152, unresolvedalias(scalar-subquery#150 [])]\n:  +- 'RepartitionByExpression [cast('t.x as int)]\n:     +- Aggregate [max(x#154) AS max(x)#156]\n:        +- Filter (x#154 = cast(outer(k#152) as string))\n:           +- SubqueryAlias t\n:              +- View (`t`, [x#154])\n:                 +- Project [cast(x#153 as string) AS x#154]\n:                    +- Project [x#153]\n:                       +- SubqueryAlias t\n:                          +- LocalRelation [x#153]\n+- SubqueryAlias u\n   +- View (`u`, [k#152])\n      +- Project [cast(k#151 as int) AS k#152]\n         +- Project [k#151]\n            +- SubqueryAlias u\n               +- LocalRelation [k#151]\n",
+    "context": {
+     "fragment": "t.x",
+     "start": 83,
+     "stop": 85
+    }
+   }
+  },
+  {
+   "sql": "SELECT k FROM u WHERE EXISTS (SELECT 1 FROM n WHERE n.x = u.k DISTRIBUTE BY u.k)",
+   "conf": {},
+   "error": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.CORRELATED_REFERENCE",
+    "sqlstate": "0A000",
+    "message": "[UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.CORRELATED_REFERENCE] Unsupported subquery expression: Expressions referencing the outer query are not supported outside of WHERE/HAVING clauses: \"k\". SQLSTATE: 0A000; line 1 pos 62;\nProject [k#159]\n+- Filter exists#157 [k#159 && k#159]\n   :  +- RepartitionByExpression [outer(k#159)]\n   :     +- Project [1 AS 1#164]\n   :        +- Filter (x#162 = outer(k#159))\n   :           +- SubqueryAlias n\n   :              +- View (`n`, [x#162, y#163])\n   :                 +- Project [cast(x#160 as int) AS x#162, cast(y#161 as string) AS y#163]\n   :                    +- Project [x#160, y#161]\n   :                       +- SubqueryAlias n\n   :                          +- LocalRelation [x#160, y#161]\n   +- SubqueryAlias u\n      +- View (`u`, [k#159])\n         +- Project [cast(k#158 as int) AS k#159]\n            +- Project [k#158]\n               +- SubqueryAlias u\n                  +- LocalRelation [k#158]\n",
+    "context": {
+     "fragment": "DISTRIBUTE BY u.k",
+     "start": 62,
+     "stop": 78
+    }
+   }
+  },
+  {
+   "sql": "SELECT y, count(*) AS c FROM n GROUP BY y DISTRIBUTE BY y SORT BY c",
+   "conf": {},
+   "rows": [
+    [
+     "abc",
+     "1"
+    ],
+    [
+     "def",
+     "1"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT y, count(*) AS c FROM n GROUP BY y DISTRIBUTE BY y SORT BY max(x)",
+   "conf": {},
+   "error": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "sqlstate": "42703",
+    "message": "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name `x` cannot be resolved. Did you mean one of the following? [`c`, `n`.`y`]. SQLSTATE: 42703; line 1 pos 70;\n'Sort ['max('x) ASC NULLS FIRST], false\n+- RepartitionByExpression [y#177]\n   +- Aggregate [y#177], [y#177, count(1) AS c#173L]\n      +- SubqueryAlias n\n         +- View (`n`, [x#176, y#177])\n            +- Project [cast(x#174 as int) AS x#176, cast(y#175 as string) AS y#177]\n               +- Project [x#174, y#175]\n                  +- SubqueryAlias n\n                     +- LocalRelation [x#174, y#175]\n",
+    "context": {
+     "fragment": "x",
+     "start": 70,
+     "stop": 70
+    }
+   }
+  },
+  {
+   "sql": "SELECT count(*) AS c FROM n GROUP BY y DISTRIBUTE BY c SORT BY y",
+   "conf": {},
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT y, count(*) AS c FROM n GROUP BY y HAVING count(*) > 0 DISTRIBUTE BY y SORT BY max(x)",
+   "conf": {},
+   "error": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "sqlstate": "42703",
+    "message": "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name `x` cannot be resolved. Did you mean one of the following? [`c`, `n`.`y`]. SQLSTATE: 42703; line 1 pos 90;\n'Sort ['max('x) ASC NULLS FIRST], false\n+- RepartitionByExpression [y#191]\n   +- Filter (c#187L > cast(0 as bigint))\n      +- Aggregate [y#191], [y#191, count(1) AS c#187L]\n         +- SubqueryAlias n\n            +- View (`n`, [x#190, y#191])\n               +- Project [cast(x#188 as int) AS x#190, cast(y#189 as string) AS y#191]\n                  +- Project [x#188, y#189]\n                     +- SubqueryAlias n\n                        +- LocalRelation [x#188, y#189]\n",
+    "context": {
+     "fragment": "x",
+     "start": 90,
+     "stop": 90
+    }
+   }
+  },
+  {
+   "sql": "SELECT k, (SELECT count(*) FROM n WHERE n.x = u.k DISTRIBUTE BY 1) FROM u",
+   "conf": {},
+   "rows": [
+    [
+     "1",
+     "1"
+    ],
+    [
+     "2",
+     "0"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT count(*) FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT))",
+   "conf": {},
+   "explain": true,
+   "optimized_plan": [
+    "Aggregate [count(1) AS count(1)#216L]",
+    "+- Project",
+    "   +- RepartitionByExpression [cast(x#214 as int)]",
+    "      +- LocalRelation [x#214]"
+   ]
+  },
+  {
+   "sql": "SELECT 1 FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT))",
+   "conf": {},
+   "explain": true,
+   "optimized_plan": [
+    "Project [1 AS 1#225]",
+    "+- RepartitionByExpression [cast(x#224 as int)]",
+    "   +- LocalRelation [x#224]"
+   ]
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) WHERE x <> 'x'",
+   "conf": {},
+   "explain": true,
+   "optimized_plan": [
+    "RepartitionByExpression [cast(x#231 as int)]",
+    "+- LocalRelation [x#231]"
+   ]
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) DISTRIBUTE BY x",
+   "conf": {},
+   "explain": true,
+   "optimized_plan": [
+    "RepartitionByExpression [x#237]",
+    "+- LocalRelation [x#237]"
+   ]
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY x) DISTRIBUTE BY CAST(x AS INT)",
+   "conf": {},
+   "explain": true,
+   "optimized_plan": [
+    "RepartitionByExpression [cast(x#243 as int)]",
+    "+- LocalRelation [x#243]"
+   ]
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) LIMIT 1",
+   "conf": {},
+   "explain": true,
+   "optimized_plan": [
+    "GlobalLimit 1",
+    "+- LocalLimit 1",
+    "   +- RepartitionByExpression [cast(x#249 as int)]",
+    "      +- LocalRelation [x#249]"
+   ]
+  },
+  {
+   "sql": "SELECT x FROM t DISTRIBUTE BY 1",
+   "conf": {},
+   "explain": true,
+   "optimized_plan": [
+    "RepartitionByExpression [1], 1",
+    "+- LocalRelation [x#255]"
+   ]
+  },
+  {
+   "sql": "SELECT x FROM t WHERE false DISTRIBUTE BY CAST(x AS INT)",
+   "conf": {},
+   "explain": true,
+   "optimized_plan": [
+    "RepartitionByExpression [cast(x#261 as int)]",
+    "+- LocalRelation <empty>, [x#261]"
+   ]
+  },
+  {
+   "sql": "SELECT x FROM t CLUSTER BY CAST(x AS INT)",
+   "conf": {},
+   "explain": true,
+   "optimized_plan": [
+    "Sort [cast(x#267 as int) ASC NULLS FIRST], false",
+    "+- RepartitionByExpression [cast(x#267 as int)]",
+    "   +- LocalRelation [x#267]"
+   ]
+  },
+  {
+   "sql": "SELECT x FROM t DISTRIBUTE BY x + 'a'",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT x FROM t CLUSTER BY x + 'a'",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT x FROM t DISTRIBUTE BY x + 'a' SORT BY x",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT x FROM t CLUSTER BY CAST(x AS INT)",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT x FROM t DISTRIBUTE BY CAST(x AS INT) SORT BY x",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT x FROM ok DISTRIBUTE BY CAST(x AS INT)",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT count(*) FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT))",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "3"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT 1 FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT))",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "1"
+    ],
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) WHERE x <> 'x'",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) WHERE rand() < 2 AND x <> 'x'",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) DISTRIBUTE BY x",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY x) DISTRIBUTE BY CAST(x AS INT)",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) CLUSTER BY x",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t ORDER BY x) DISTRIBUTE BY CAST(x AS INT)",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) ORDER BY x",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT) SORT BY x) DISTRIBUTE BY x",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) LIMIT 1",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) LIMIT 0",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": []
+  },
+  {
+   "sql": "SELECT x, count(*) FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) GROUP BY x",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1",
+     "1"
+    ],
+    [
+     "2",
+     "1"
+    ],
+    [
+     "x",
+     "1"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT count(*) FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) a JOIN u ON a.x = u.k",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "2"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT u.k FROM u JOIN (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) a ON a.x = u.k",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT x, count(*) FROM t GROUP BY x DISTRIBUTE BY CAST(x AS INT)",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1",
+     "1"
+    ],
+    [
+     "2",
+     "1"
+    ],
+    [
+     "x",
+     "1"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT x FROM t DISTRIBUTE BY 1",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT x FROM t DISTRIBUTE BY CAST('a' AS INT)",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT x FROM t WHERE false DISTRIBUTE BY CAST('a' AS INT)",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": []
+  },
+  {
+   "sql": "SELECT x FROM t DISTRIBUTE BY rand()",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT) + rand()) WHERE x <> 'x'",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT x FROM t DISTRIBUTE BY CASE WHEN x = 'x' THEN 0 ELSE CAST(x AS INT) END",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT x FROM t DISTRIBUTE BY 1 / 0",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT x FROM t WHERE false DISTRIBUTE BY CAST(x AS INT)",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": []
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t WHERE false DISTRIBUTE BY CAST(x AS INT)) a",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": []
+  },
+  {
+   "sql": "SELECT 'x' AS x DISTRIBUTE BY CAST(x AS INT)",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT * FROM (SELECT 'x' AS x DISTRIBUTE BY CAST(x AS INT))",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT * FROM VALUES ('x') AS v(x) DISTRIBUTE BY CAST(x AS INT)",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT CAST(x AS INT) FROM t",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     null
+    ],
+    [
+     "1"
+    ],
+    [
+     "2"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT x FROM n DISTRIBUTE BY x + 'a'",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "0"
+    ],
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT count(*) FROM (SELECT x FROM n DISTRIBUTE BY x + 'a')",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "2"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT k FROM u WHERE EXISTS (SELECT 1 FROM n WHERE n.x = u.k DISTRIBUTE BY n.x)",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT k FROM u WHERE k IN (SELECT x FROM n WHERE n.x = u.k DISTRIBUTE BY x)",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT k, (SELECT max(x) FROM n WHERE n.x = u.k DISTRIBUTE BY 1) FROM u",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1",
+     "1"
+    ],
+    [
+     "2",
+     null
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT k FROM u WHERE EXISTS (SELECT 1 FROM t WHERE t.x = CAST(u.k AS STRING) DISTRIBUTE BY CAST(t.x AS INT))",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT k, (SELECT max(x) FROM t WHERE t.x = CAST(u.k AS STRING) DISTRIBUTE BY CAST(t.x AS INT)) FROM u",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "error": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "sqlstate": "42703",
+    "message": "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name `t`.`x` cannot be resolved. Did you mean one of the following? [`max(x)`]. SQLSTATE: 42703; line 1 pos 83;\n'Project [k#417, unresolvedalias(scalar-subquery#415 [])]\n:  +- 'RepartitionByExpression [cast('t.x as int)]\n:     +- Aggregate [max(x#419) AS max(x)#421]\n:        +- Filter (x#419 = cast(outer(k#417) as string))\n:           +- SubqueryAlias t\n:              +- View (`t`, [x#419])\n:                 +- Project [cast(x#418 as string) AS x#419]\n:                    +- Project [x#418]\n:                       +- SubqueryAlias t\n:                          +- LocalRelation [x#418]\n+- SubqueryAlias u\n   +- View (`u`, [k#417])\n      +- Project [cast(k#416 as int) AS k#417]\n         +- Project [k#416]\n            +- SubqueryAlias u\n               +- LocalRelation [k#416]\n",
+    "context": {
+     "fragment": "t.x",
+     "start": 83,
+     "stop": 85
+    }
+   }
+  },
+  {
+   "sql": "SELECT k FROM u WHERE EXISTS (SELECT 1 FROM n WHERE n.x = u.k DISTRIBUTE BY u.k)",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "error": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.CORRELATED_REFERENCE",
+    "sqlstate": "0A000",
+    "message": "[UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.CORRELATED_REFERENCE] Unsupported subquery expression: Expressions referencing the outer query are not supported outside of WHERE/HAVING clauses: \"k\". SQLSTATE: 0A000; line 1 pos 62;\nProject [k#424]\n+- Filter exists#422 [k#424 && k#424]\n   :  +- RepartitionByExpression [outer(k#424)]\n   :     +- Project [1 AS 1#429]\n   :        +- Filter (x#427 = outer(k#424))\n   :           +- SubqueryAlias n\n   :              +- View (`n`, [x#427, y#428])\n   :                 +- Project [cast(x#425 as int) AS x#427, cast(y#426 as string) AS y#428]\n   :                    +- Project [x#425, y#426]\n   :                       +- SubqueryAlias n\n   :                          +- LocalRelation [x#425, y#426]\n   +- SubqueryAlias u\n      +- View (`u`, [k#424])\n         +- Project [cast(k#423 as int) AS k#424]\n            +- Project [k#423]\n               +- SubqueryAlias u\n                  +- LocalRelation [k#423]\n",
+    "context": {
+     "fragment": "DISTRIBUTE BY u.k",
+     "start": 62,
+     "stop": 78
+    }
+   }
+  },
+  {
+   "sql": "SELECT y, count(*) AS c FROM n GROUP BY y DISTRIBUTE BY y SORT BY c",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "abc",
+     "1"
+    ],
+    [
+     "def",
+     "1"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT y, count(*) AS c FROM n GROUP BY y DISTRIBUTE BY y SORT BY max(x)",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "error": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "sqlstate": "42703",
+    "message": "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name `x` cannot be resolved. Did you mean one of the following? [`c`, `n`.`y`]. SQLSTATE: 42703; line 1 pos 70;\n'Sort ['max('x) ASC NULLS FIRST], false\n+- RepartitionByExpression [y#442]\n   +- Aggregate [y#442], [y#442, count(1) AS c#438L]\n      +- SubqueryAlias n\n         +- View (`n`, [x#441, y#442])\n            +- Project [cast(x#439 as int) AS x#441, cast(y#440 as string) AS y#442]\n               +- Project [x#439, y#440]\n                  +- SubqueryAlias n\n                     +- LocalRelation [x#439, y#440]\n",
+    "context": {
+     "fragment": "x",
+     "start": 70,
+     "stop": 70
+    }
+   }
+  },
+  {
+   "sql": "SELECT count(*) AS c FROM n GROUP BY y DISTRIBUTE BY c SORT BY y",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT y, count(*) AS c FROM n GROUP BY y HAVING count(*) > 0 DISTRIBUTE BY y SORT BY max(x)",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "error": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "sqlstate": "42703",
+    "message": "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name `x` cannot be resolved. Did you mean one of the following? [`c`, `n`.`y`]. SQLSTATE: 42703; line 1 pos 90;\n'Sort ['max('x) ASC NULLS FIRST], false\n+- RepartitionByExpression [y#456]\n   +- Filter (c#452L > cast(0 as bigint))\n      +- Aggregate [y#456], [y#456, count(1) AS c#452L]\n         +- SubqueryAlias n\n            +- View (`n`, [x#455, y#456])\n               +- Project [cast(x#453 as int) AS x#455, cast(y#454 as string) AS y#456]\n                  +- Project [x#453, y#454]\n                     +- SubqueryAlias n\n                        +- LocalRelation [x#453, y#454]\n",
+    "context": {
+     "fragment": "x",
+     "start": 90,
+     "stop": 90
+    }
+   }
+  },
+  {
+   "sql": "SELECT k, (SELECT count(*) FROM n WHERE n.x = u.k DISTRIBUTE BY 1) FROM u",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "rows": [
+    [
+     "1",
+     "1"
+    ],
+    [
+     "2",
+     "0"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT x FROM t DISTRIBUTE BY x + 'a'",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE",
+    "sqlstate": "42K09",
+    "message": "[DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE] Cannot resolve \"(x + a)\" due to data type mismatch: the binary operator requires the input type (\"NUMERIC\" or \"INTERVAL DAY TO SECOND\" or \"INTERVAL YEAR TO MONTH\" or \"INTERVAL\"), not \"STRING\". SQLSTATE: 42K09; line 1 pos 30;\n'RepartitionByExpression [(x#475 + a)]\n+- Project [x#475]\n   +- SubqueryAlias t\n      +- View (`t`, [x#475])\n         +- Project [cast(x#474 as string) AS x#475]\n            +- Project [x#474]\n               +- SubqueryAlias t\n                  +- LocalRelation [x#474]\n",
+    "context": {
+     "fragment": "x + 'a'",
+     "start": 30,
+     "stop": 36
+    }
+   }
+  },
+  {
+   "sql": "SELECT x FROM t CLUSTER BY x + 'a'",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE",
+    "sqlstate": "42K09",
+    "message": "[DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE] Cannot resolve \"(x + a)\" due to data type mismatch: the binary operator requires the input type (\"NUMERIC\" or \"INTERVAL DAY TO SECOND\" or \"INTERVAL YEAR TO MONTH\" or \"INTERVAL\"), not \"STRING\". SQLSTATE: 42K09; line 1 pos 27;\n'Sort [('x + a) ASC NULLS FIRST], false\n+- 'RepartitionByExpression [(x#477 + a)]\n   +- Project [x#477]\n      +- SubqueryAlias t\n         +- View (`t`, [x#477])\n            +- Project [cast(x#476 as string) AS x#477]\n               +- Project [x#476]\n                  +- SubqueryAlias t\n                     +- LocalRelation [x#476]\n",
+    "context": {
+     "fragment": "x + 'a'",
+     "start": 27,
+     "stop": 33
+    }
+   }
+  },
+  {
+   "sql": "SELECT x FROM t DISTRIBUTE BY x + 'a' SORT BY x",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE",
+    "sqlstate": "42K09",
+    "message": "[DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE] Cannot resolve \"(x + a)\" due to data type mismatch: the binary operator requires the input type (\"NUMERIC\" or \"INTERVAL DAY TO SECOND\" or \"INTERVAL YEAR TO MONTH\" or \"INTERVAL\"), not \"STRING\". SQLSTATE: 42K09; line 1 pos 30;\n'Sort ['x ASC NULLS FIRST], false\n+- 'RepartitionByExpression [(x#479 + a)]\n   +- Project [x#479]\n      +- SubqueryAlias t\n         +- View (`t`, [x#479])\n            +- Project [cast(x#478 as string) AS x#479]\n               +- Project [x#478]\n                  +- SubqueryAlias t\n                     +- LocalRelation [x#478]\n",
+    "context": {
+     "fragment": "x + 'a'",
+     "start": 30,
+     "stop": 36
+    }
+   }
+  },
+  {
+   "sql": "SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 31) ==\nSELECT x FROM t DISTRIBUTE BY CAST(x AS INT)\n                              ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 30,
+     "stop": 43
+    }
+   }
+  },
+  {
+   "sql": "SELECT x FROM t CLUSTER BY CAST(x AS INT)",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 28) ==\nSELECT x FROM t CLUSTER BY CAST(x AS INT)\n                           ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 27,
+     "stop": 40
+    }
+   }
+  },
+  {
+   "sql": "SELECT x FROM t DISTRIBUTE BY CAST(x AS INT) SORT BY x",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 31) ==\nSELECT x FROM t DISTRIBUTE BY CAST(x AS INT) SORT BY x\n                              ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 30,
+     "stop": 43
+    }
+   }
+  },
+  {
+   "sql": "SELECT x FROM ok DISTRIBUTE BY CAST(x AS INT)",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT count(*) FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT))",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 53) ==\n... (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT))\n                                   ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 52,
+     "stop": 65
+    }
+   }
+  },
+  {
+   "sql": "SELECT 1 FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT))",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 46) ==\n... (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT))\n                                   ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 45,
+     "stop": 58
+    }
+   }
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) WHERE x <> 'x'",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) WHERE rand() < 2 AND x <> 'x'",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) DISTRIBUTE BY x",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY x) DISTRIBUTE BY CAST(x AS INT)",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 63) ==\n... DISTRIBUTE BY x) DISTRIBUTE BY CAST(x AS INT)\n                                   ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 62,
+     "stop": 75
+    }
+   }
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) CLUSTER BY x",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t ORDER BY x) DISTRIBUTE BY CAST(x AS INT)",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 58) ==\n...ROM t ORDER BY x) DISTRIBUTE BY CAST(x AS INT)\n                                   ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 57,
+     "stop": 70
+    }
+   }
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) ORDER BY x",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 46) ==\n... (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) ORDER BY x\n                                   ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 45,
+     "stop": 58
+    }
+   }
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT) SORT BY x) DISTRIBUTE BY x",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 46) ==\n... (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT) SORT BY x) DISTRIBUTE BY x\n                                   ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 45,
+     "stop": 58
+    }
+   }
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) LIMIT 1",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 46) ==\n... (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) LIMIT 1\n                                   ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 45,
+     "stop": 58
+    }
+   }
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) LIMIT 0",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "rows": []
+  },
+  {
+   "sql": "SELECT x, count(*) FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) GROUP BY x",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 56) ==\n... (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) GROUP BY x\n                                   ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 55,
+     "stop": 68
+    }
+   }
+  },
+  {
+   "sql": "SELECT count(*) FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) a JOIN u ON a.x = u.k",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 53) ==\n... (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) a JOIN u ON a.x = u.k\n                                   ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 52,
+     "stop": 65
+    }
+   }
+  },
+  {
+   "sql": "SELECT u.k FROM u JOIN (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) a ON a.x = u.k",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 55) ==\n... (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) a ON a.x = u.k\n                                   ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 54,
+     "stop": 67
+    }
+   }
+  },
+  {
+   "sql": "SELECT x, count(*) FROM t GROUP BY x DISTRIBUTE BY CAST(x AS INT)",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 52) ==\n...FROM t GROUP BY x DISTRIBUTE BY CAST(x AS INT)\n                                   ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 51,
+     "stop": 64
+    }
+   }
+  },
+  {
+   "sql": "SELECT x FROM t DISTRIBUTE BY 1",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT x FROM t DISTRIBUTE BY CAST('a' AS INT)",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'a' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 31) ==\nSELECT x FROM t DISTRIBUTE BY CAST('a' AS INT)\n                              ^^^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST('a' AS INT)",
+     "start": 30,
+     "stop": 45
+    }
+   }
+  },
+  {
+   "sql": "SELECT x FROM t WHERE false DISTRIBUTE BY CAST('a' AS INT)",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'a' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 43) ==\n...ROM t WHERE false DISTRIBUTE BY CAST('a' AS INT)\n                                   ^^^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST('a' AS INT)",
+     "start": 42,
+     "stop": 57
+    }
+   }
+  },
+  {
+   "sql": "SELECT x FROM t DISTRIBUTE BY rand()",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT) + rand()) WHERE x <> 'x'",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT x FROM t DISTRIBUTE BY CASE WHEN x = 'x' THEN 0 ELSE CAST(x AS INT) END",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "x"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT x FROM t DISTRIBUTE BY 1 / 0",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "DIVIDE_BY_ZERO",
+    "sqlstate": "22012",
+    "message": "[DIVIDE_BY_ZERO] Division by zero. Use `try_divide` to tolerate divisor being 0 and return NULL instead. If necessary set \"spark.sql.ansi.enabled\" to \"false\" to bypass this error. SQLSTATE: 22012\n== SQL (line 1, position 31) ==\nSELECT x FROM t DISTRIBUTE BY 1 / 0\n                              ^^^^^\n",
+    "context": {
+     "fragment": "1 / 0",
+     "start": 30,
+     "stop": 34
+    }
+   }
+  },
+  {
+   "sql": "SELECT x FROM t WHERE false DISTRIBUTE BY CAST(x AS INT)",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "rows": []
+  },
+  {
+   "sql": "SELECT * FROM (SELECT x FROM t WHERE false DISTRIBUTE BY CAST(x AS INT)) a",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "rows": []
+  },
+  {
+   "sql": "SELECT 'x' AS x DISTRIBUTE BY CAST(x AS INT)",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 31) ==\nSELECT 'x' AS x DISTRIBUTE BY CAST(x AS INT)\n                              ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 30,
+     "stop": 43
+    }
+   }
+  },
+  {
+   "sql": "SELECT * FROM (SELECT 'x' AS x DISTRIBUTE BY CAST(x AS INT))",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 46) ==\n... (SELECT 'x' AS x DISTRIBUTE BY CAST(x AS INT))\n                                   ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 45,
+     "stop": 58
+    }
+   }
+  },
+  {
+   "sql": "SELECT * FROM VALUES ('x') AS v(x) DISTRIBUTE BY CAST(x AS INT)",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 50) ==\n...UES ('x') AS v(x) DISTRIBUTE BY CAST(x AS INT)\n                                   ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 49,
+     "stop": 62
+    }
+   }
+  },
+  {
+   "sql": "SELECT CAST(x AS INT) FROM t",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 8) ==\nSELECT CAST(x AS INT) FROM t\n       ^^^^^^^^^^^^^^\n",
+    "context": {
+     "fragment": "CAST(x AS INT)",
+     "start": 7,
+     "stop": 20
+    }
+   }
+  },
+  {
+   "sql": "SELECT x FROM n DISTRIBUTE BY x + 'a'",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'a' of the type \"STRING\" cannot be cast to \"BIGINT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 31) ==\nSELECT x FROM n DISTRIBUTE BY x + 'a'\n                              ^^^^^^^\n",
+    "context": {
+     "fragment": "x + 'a'",
+     "start": 30,
+     "stop": 36
+    }
+   }
+  },
+  {
+   "sql": "SELECT count(*) FROM (SELECT x FROM n DISTRIBUTE BY x + 'a')",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": "[CAST_INVALID_INPUT] The value 'a' of the type \"STRING\" cannot be cast to \"BIGINT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018\n== SQL (line 1, position 53) ==\n... (SELECT x FROM n DISTRIBUTE BY x + 'a')\n                                   ^^^^^^^\n",
+    "context": {
+     "fragment": "x + 'a'",
+     "start": 52,
+     "stop": 58
+    }
+   }
+  },
+  {
+   "sql": "SELECT k FROM u WHERE EXISTS (SELECT 1 FROM n WHERE n.x = u.k DISTRIBUTE BY n.x)",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT k FROM u WHERE k IN (SELECT x FROM n WHERE n.x = u.k DISTRIBUTE BY x)",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT k, (SELECT max(x) FROM n WHERE n.x = u.k DISTRIBUTE BY 1) FROM u",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "rows": [
+    [
+     "1",
+     "1"
+    ],
+    [
+     "2",
+     null
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT k FROM u WHERE EXISTS (SELECT 1 FROM t WHERE t.x = CAST(u.k AS STRING) DISTRIBUTE BY CAST(t.x AS INT))",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "CAST_INVALID_INPUT",
+    "sqlstate": "22018",
+    "message": ": java.util.concurrent.ExecutionException: org.apache.spark.SparkNumberFormatException: [CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to \"INT\" because it is malformed. Correct the value as per the syntax, or change its target type. Use `try_cast` to tolerate malformed input and return NULL instead. SQLSTATE: 22018",
+    "wrapped": true
+   }
+  },
+  {
+   "sql": "SELECT k, (SELECT max(x) FROM t WHERE t.x = CAST(u.k AS STRING) DISTRIBUTE BY CAST(t.x AS INT)) FROM u",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "sqlstate": "42703",
+    "message": "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name `t`.`x` cannot be resolved. Did you mean one of the following? [`max(x)`]. SQLSTATE: 42703; line 1 pos 83;\n'Project [k#617, unresolvedalias(scalar-subquery#615 [])]\n:  +- 'RepartitionByExpression [cast('t.x as int)]\n:     +- Aggregate [max(x#619) AS max(x)#621]\n:        +- Filter (x#619 = cast(outer(k#617) as string))\n:           +- SubqueryAlias t\n:              +- View (`t`, [x#619])\n:                 +- Project [cast(x#618 as string) AS x#619]\n:                    +- Project [x#618]\n:                       +- SubqueryAlias t\n:                          +- LocalRelation [x#618]\n+- SubqueryAlias u\n   +- View (`u`, [k#617])\n      +- Project [cast(k#616 as int) AS k#617]\n         +- Project [k#616]\n            +- SubqueryAlias u\n               +- LocalRelation [k#616]\n",
+    "context": {
+     "fragment": "t.x",
+     "start": 83,
+     "stop": 85
+    }
+   }
+  },
+  {
+   "sql": "SELECT k FROM u WHERE EXISTS (SELECT 1 FROM n WHERE n.x = u.k DISTRIBUTE BY u.k)",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.CORRELATED_REFERENCE",
+    "sqlstate": "0A000",
+    "message": "[UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.CORRELATED_REFERENCE] Unsupported subquery expression: Expressions referencing the outer query are not supported outside of WHERE/HAVING clauses: \"k\". SQLSTATE: 0A000; line 1 pos 62;\nProject [k#624]\n+- Filter exists#622 [k#624 && k#624]\n   :  +- RepartitionByExpression [outer(k#624)]\n   :     +- Project [1 AS 1#629]\n   :        +- Filter (x#627 = outer(k#624))\n   :           +- SubqueryAlias n\n   :              +- View (`n`, [x#627, y#628])\n   :                 +- Project [cast(x#625 as int) AS x#627, cast(y#626 as string) AS y#628]\n   :                    +- Project [x#625, y#626]\n   :                       +- SubqueryAlias n\n   :                          +- LocalRelation [x#625, y#626]\n   +- SubqueryAlias u\n      +- View (`u`, [k#624])\n         +- Project [cast(k#623 as int) AS k#624]\n            +- Project [k#623]\n               +- SubqueryAlias u\n                  +- LocalRelation [k#623]\n",
+    "context": {
+     "fragment": "DISTRIBUTE BY u.k",
+     "start": 62,
+     "stop": 78
+    }
+   }
+  },
+  {
+   "sql": "SELECT y, count(*) AS c FROM n GROUP BY y DISTRIBUTE BY y SORT BY c",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "rows": [
+    [
+     "abc",
+     "1"
+    ],
+    [
+     "def",
+     "1"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT y, count(*) AS c FROM n GROUP BY y DISTRIBUTE BY y SORT BY max(x)",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "sqlstate": "42703",
+    "message": "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name `x` cannot be resolved. Did you mean one of the following? [`c`, `n`.`y`]. SQLSTATE: 42703; line 1 pos 70;\n'Sort ['max('x) ASC NULLS FIRST], false\n+- RepartitionByExpression [y#642]\n   +- Aggregate [y#642], [y#642, count(1) AS c#638L]\n      +- SubqueryAlias n\n         +- View (`n`, [x#641, y#642])\n            +- Project [cast(x#639 as int) AS x#641, cast(y#640 as string) AS y#642]\n               +- Project [x#639, y#640]\n                  +- SubqueryAlias n\n                     +- LocalRelation [x#639, y#640]\n",
+    "context": {
+     "fragment": "x",
+     "start": 70,
+     "stop": 70
+    }
+   }
+  },
+  {
+   "sql": "SELECT count(*) AS c FROM n GROUP BY y DISTRIBUTE BY c SORT BY y",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "sql": "SELECT y, count(*) AS c FROM n GROUP BY y HAVING count(*) > 0 DISTRIBUTE BY y SORT BY max(x)",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "error": {
+    "class": "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "sqlstate": "42703",
+    "message": "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name `x` cannot be resolved. Did you mean one of the following? [`c`, `n`.`y`]. SQLSTATE: 42703; line 1 pos 90;\n'Sort ['max('x) ASC NULLS FIRST], false\n+- RepartitionByExpression [y#656]\n   +- Filter (c#652L > cast(0 as bigint))\n      +- Aggregate [y#656], [y#656, count(1) AS c#652L]\n         +- SubqueryAlias n\n            +- View (`n`, [x#655, y#656])\n               +- Project [cast(x#653 as int) AS x#655, cast(y#654 as string) AS y#656]\n                  +- Project [x#653, y#654]\n                     +- SubqueryAlias n\n                        +- LocalRelation [x#653, y#654]\n",
+    "context": {
+     "fragment": "x",
+     "start": 90,
+     "stop": 90
+    }
+   }
+  },
+  {
+   "sql": "SELECT k, (SELECT count(*) FROM n WHERE n.x = u.k DISTRIBUTE BY 1) FROM u",
+   "conf": {
+    "spark.sql.adaptive.enabled": "false"
+   },
+   "rows": [
+    [
+     "1",
+     "1"
+    ],
+    [
+     "2",
+     "0"
+    ]
+   ]
+  }
+ ]
+}

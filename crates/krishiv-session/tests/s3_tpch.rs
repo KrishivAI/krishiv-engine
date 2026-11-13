@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! TPC-H read from S3 (P2-T084 acceptance): the tables of a local TPC-H
-//! Parquet directory are uploaded to an S3-compatible emulator and the same
-//! queries run over the local files and over `s3a://`; the answers must be
-//! equal.
+//! TPC-H read from S3 (P2-T084 acceptance): the eight tables of a local
+//! TPC-H Parquet directory are uploaded to an S3-compatible emulator and the
+//! 22 queries (`bench/queries/tpch`) run over the local files and over
+//! `s3a://`; the answers must be equal.
 //!
 //! Runs only with an emulator and data (otherwise it returns at once):
 //! `KRISHIV_TEST_S3_ENDPOINT=http://127.0.0.1:9000` (MinIO, credentials
@@ -15,22 +15,26 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use arrow_array::RecordBatch;
+use arrow_select::concat::concat_batches;
 use bytes::Bytes;
 use futures::executor::block_on;
 use krishiv_common::config::Config;
 use krishiv_io::{IoConfig, IoScheduler, StoreRegistry, register};
 use krishiv_session::Session;
 
-const QUERIES: [&str; 3] = [
-    "SELECT count(*) FROM lineitem",
-    "SELECT l_returnflag, l_linestatus, sum(l_quantity), sum(l_extendedprice), \
-     sum(l_extendedprice * (1 - l_discount)), count(*) \
-     FROM lineitem WHERE l_shipdate <= DATE '1998-09-02' \
-     GROUP BY l_returnflag, l_linestatus ORDER BY l_returnflag, l_linestatus",
-    "SELECT sum(l_extendedprice * l_discount) FROM lineitem \
-     WHERE l_shipdate >= DATE '1994-01-01' AND l_shipdate < DATE '1995-01-01' \
-     AND l_discount BETWEEN 0.05 AND 0.07 AND l_quantity < 24",
+const TABLES: [&str; 8] = [
+    "customer", "lineitem", "nation", "orders", "part", "partsupp", "region", "supplier",
 ];
+
+/// The text of TPC-H query `q`.
+fn query(q: usize) -> String {
+    let path = format!(
+        "{}/../../bench/queries/tpch/q{q:02}.sql",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    std::fs::read_to_string(path).unwrap()
+}
 
 /// The Parquet files of `table` under `dir`: `<table>.parquet`, or the part
 /// files of `<table>/`.
@@ -50,14 +54,13 @@ fn table_files(dir: &Path, table: &str) -> Vec<PathBuf> {
     parts
 }
 
-/// The result's batches as text (their `Debug` form is deterministic).
-fn rows(s: &Session, sql: &str) -> Vec<String> {
+/// The result as one batch (so batch boundaries do not matter); `None` for
+/// no batch.
+fn rows(s: &Session, sql: &str) -> Option<RecordBatch> {
     let df = block_on(s.sql(sql)).unwrap();
-    block_on(df.collect())
-        .unwrap()
-        .iter()
-        .map(|b| format!("{b:?}"))
-        .collect()
+    let batches = block_on(df.collect()).unwrap();
+    let first = batches.first()?;
+    Some(concat_batches(&first.schema(), &batches).unwrap())
 }
 
 #[test]
@@ -93,7 +96,7 @@ fn tpch_over_s3_equals_tpch_over_local_files() {
         .build()
         .unwrap();
     let mut urls: Vec<(String, Vec<String>)> = Vec::new();
-    for table in ["lineitem"] {
+    for table in TABLES {
         let files = table_files(&dir, table);
         assert!(
             !files.is_empty(),
@@ -110,27 +113,30 @@ fn tpch_over_s3_equals_tpch_over_local_files() {
         }
         urls.push((table.to_owned(), remote));
     }
-    let s = Session::new().unwrap();
+    // The same names over S3 in one session and over the files in another.
+    let (remote, local) = (Session::new().unwrap(), Session::new().unwrap());
     for (k, v) in pairs {
-        s.conf().set(k, v).unwrap();
+        remote.conf().set(k, v).unwrap();
     }
-    // `lineitem` over S3; `lineitem_local` over the files.
-    for (table, remote) in &urls {
-        let r: Vec<&str> = remote.iter().map(String::as_str).collect();
-        block_on(s.read().parquet(r).create_or_replace_temp_view(table)).unwrap();
-        let local = table_files(&dir, table);
-        let l: Vec<&str> = local.iter().map(|p| p.to_str().unwrap()).collect();
-        block_on(
-            s.read()
-                .parquet(l)
-                .create_or_replace_temp_view(&format!("{table}_local")),
-        )
-        .unwrap();
+    for (table, urls) in &urls {
+        let r: Vec<&str> = urls.iter().map(String::as_str).collect();
+        block_on(remote.read().parquet(r).create_or_replace_temp_view(table)).unwrap();
+        let files = table_files(&dir, table);
+        let l: Vec<&str> = files.iter().map(|p| p.to_str().unwrap()).collect();
+        block_on(local.read().parquet(l).create_or_replace_temp_view(table)).unwrap();
     }
-    for sql in QUERIES {
-        let over_s3 = rows(&s, sql);
-        let over_files = rows(&s, &sql.replace("lineitem", "lineitem_local"));
-        assert!(!over_s3.is_empty(), "{sql}");
-        assert_eq!(over_s3, over_files, "{sql}");
+    for q in 1..=22 {
+        let sql = query(q);
+        let over_s3 = rows(&remote, &sql).unwrap_or_else(|| panic!("q{q:02}: no batch"));
+        assert!(over_s3.num_rows() > 0, "q{q:02} returned no rows");
+        // Compared as values: a batch's `Debug` text shows only the first
+        // and last rows of a long column.
+        let over_files = rows(&local, &sql).unwrap_or_else(|| panic!("q{q:02}: no local batch"));
+        assert!(
+            over_s3 == over_files,
+            "q{q:02}: {} rows over S3, {} over the files differ",
+            over_s3.num_rows(),
+            over_files.num_rows()
+        );
     }
 }

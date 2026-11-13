@@ -236,28 +236,67 @@ fn aes_key_marks(sql: &str, code: &[&Token], marks: &mut Vec<Mark>) {
 }
 
 /// `SET key = value` with a sensitive key: the value (raw text to the end
-/// of the statement) is a secret.
+/// of the statement) is a secret. Every `;`-separated statement is read on
+/// its own, so `SET a = 1; SET password = x` hides the second value too.
 fn set_value(sql: &str, code: &[&Token], marks: &mut Vec<Mark>) {
+    // A secret value is redacted to the end of the text (fail-safe).
+    let end = code
+        .iter()
+        .rposition(|t| t.kind != TokenKind::Sym(Sym::Semi))
+        .map_or(sql.len(), |j| code[j].span.end);
+    for stmt in code.split(|t| t.kind == TokenKind::Sym(Sym::Semi)) {
+        set_statement(sql, stmt, end, marks);
+    }
+}
+
+/// One statement's `SET key = value` (see [`set_value`]).
+fn set_statement(sql: &str, code: &[&Token], end: usize, marks: &mut Vec<Mark>) {
     let Some(first) = code.first() else {
         return;
     };
     if first.kind != TokenKind::Word || !is_keyword(first.span.text(sql), "SET") {
         return;
     }
-    let Some(eq) = code.iter().position(|t| t.kind == TokenKind::Sym(Sym::Eq)) else {
-        return;
+    // The key and its `=` belong to the first statement: a later statement's
+    // `=` (`SET password x; SELECT 1 = 1`) must not move the value range.
+    let stmt = code
+        .iter()
+        .position(|t| t.kind == TokenKind::Sym(Sym::Semi))
+        .unwrap_or(code.len());
+    let eq = code[..stmt]
+        .iter()
+        .position(|t| t.kind == TokenKind::Sym(Sym::Eq));
+    // Without `=` (`SET password x`) the value starts where a complete key
+    // ends; Spark reads the text as a key lookup, but it is still logged. An
+    // `=` after such a point belongs to the value (`SET password abc==`), so
+    // the bare reading wins whenever it starts before the `=`.
+    let bare = |upto: usize| {
+        let mut key = String::new();
+        for i in 1..upto {
+            if value_starts(code, i, &key) {
+                return Some((i - 1, i));
+            }
+            key.push_str(&key_text(sql, code[i])[0]);
+        }
+        None
+    };
+    let (eq, key_end) = match eq {
+        Some(e) => bare(e).unwrap_or((e, e)),
+        None => bare(stmt).unwrap_or((code.len(), stmt)),
     };
     let mut key: [String; 4] = Default::default();
-    for t in &code[1..eq] {
+    for t in &code[1..key_end.min(stmt)] {
         for (k, part) in key.iter_mut().zip(key_text(sql, t)) {
             k.push_str(&part);
         }
     }
-    let end = code
-        .iter()
-        .rposition(|t| t.kind != TokenKind::Sym(Sym::Semi))
-        .map_or(sql.len(), |j| code[j].span.end);
-    let start = code.get(eq + 1).map_or(end, |t| t.span.start);
+    // A statement that ends at the `=` (`SET password = ;x`) has its value in
+    // the next statement's text: start right after the `=`.
+    let start = code
+        .get(eq + 1)
+        .map(|t| t.span.start)
+        .or_else(|| code.get(eq).map(|t| t.span.end))
+        .unwrap_or(end);
     if sensitive(&key[..]) && start < end {
         marks.push(Mark::Secret(start..end));
     }
@@ -380,5 +419,27 @@ fn url_marks(sql: &str, t: &Token, marks: &mut Vec<Mark>) {
             }
         };
         at += len;
+    }
+}
+
+#[cfg(test)]
+mod bare_value_tests {
+    use super::redact_sql;
+
+    #[test]
+    fn a_bare_value_containing_equals_is_hidden() {
+        for sql in [
+            "SET password Canary7f3a9c=",
+            "SET password abc==",
+            "SET password abc=def",
+            "SET spark.hadoop.fs.s3a.secret.key AbC123/xyz=",
+        ] {
+            let out = redact_sql(sql);
+            let out = out.as_str();
+            assert!(
+                !out.contains("Canary7f3a9c") && !out.contains("abc") && !out.contains("AbC123"),
+                "{sql} -> {out}"
+            );
+        }
     }
 }

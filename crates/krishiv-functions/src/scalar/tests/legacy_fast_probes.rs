@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// Generated from a Spark 4.2.0 run (spark.sql.legacy.timeParserPolicy=LEGACY): from_json/to_json,
+// @generated from a Spark 4.2.0 run (spark.sql.legacy.timeParserPolicy=LEGACY): from_json/to_json,
 // the lenient fallback on. PARSE_TS: (session zone, text, pattern or None, micros); PARSE_DATE: (text, pattern, days);
 // FORMAT_TS: (session zone, micros, pattern, text); FORMAT_DATE: (days, pattern, text).
 pub(crate) const PARSE_TS: &[(&str, &str, Option<&str>, Option<i64>)] = &[

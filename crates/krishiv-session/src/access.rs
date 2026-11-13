@@ -21,7 +21,7 @@ use krishiv_plan::analyzer::{
     AccessDecision, AccessPolicy, BoxFuture, PolicyVersion, Principal, Privilege, Securable,
     SecurableUse, TableIdent, authorize, insufficient_permissions, namespace_parts, table_ident,
 };
-use krishiv_sql::ast::{DdlName, ExprKind, Literal, Statement};
+use krishiv_sql::ast::{DdlName, ExprKind, Literal, Statement, TableOption};
 use krishiv_sql::{
     ExplainKind, StatementClass, Target, TargetObject, parse_multipart_identifier,
     statement_targets,
@@ -255,7 +255,12 @@ impl Session {
                 }
             }
             if let Some((namespace, name)) = &read.view {
-                let parts = [namespace.clone(), name.clone()];
+                // A stored view belongs to the session catalog, whatever catalog is current.
+                let parts = [
+                    crate::catalog::CATALOG.to_owned(),
+                    namespace.clone(),
+                    name.clone(),
+                ];
                 let view =
                     table_ident(catalogs, &parts).ok_or_else(|| unplaceable("an empty name"))?;
                 securables.push(Securable::View(view.clone()));
@@ -288,7 +293,11 @@ impl Session {
         name: &str,
         env: &QueryEnv,
     ) -> Result<(), KrishivError> {
-        let parts = [namespace.to_owned(), name.to_owned()];
+        let parts = [
+            crate::catalog::CATALOG.to_owned(),
+            namespace.to_owned(),
+            name.to_owned(),
+        ];
         let ident = table_ident(&*env.analysis.catalogs, &parts)
             .ok_or_else(|| unplaceable("an empty name"))?;
         let r = authorize(
@@ -301,6 +310,24 @@ impl Session {
         audit(self, StatementClass::Read, r)
     }
 
+    /// `parts` (a name written in a statement's target), with a bare temporary relation placed in the session
+    /// catalog's current namespace: a temporary relation resolves before any catalog, `system` included.
+    fn temp_first(&self, parts: Vec<String>, env: &QueryEnv) -> Vec<String> {
+        match parts.as_slice() {
+            [name]
+                if crate::system::is_system(&self.state.catalog.current_catalog())
+                    && self.is_temp_name(name, env) =>
+            {
+                vec![
+                    crate::catalog::CATALOG.to_owned(),
+                    self.state.catalog.current_namespace(),
+                    name.clone(),
+                ]
+            }
+            _ => parts,
+        }
+    }
+
     /// The securables `object` stands for: as written, then folded.
     fn securables_of(
         &self,
@@ -311,7 +338,18 @@ impl Session {
         let fold = !env.analysis.conf.case_sensitive;
         let parts = |name: &DdlName| ddl_parts(name, env);
         let table = |parts: &[String]| {
-            table_ident(catalogs, parts).ok_or_else(|| unplaceable("an empty name"))
+            let ident = table_ident(catalogs, parts).ok_or_else(|| unplaceable("an empty name"))?;
+            // `global_temp.x` belongs to the session catalog's registry, whatever catalog is current.
+            Ok::<TableIdent, KrishivError>(
+                if parts.len() == 2 && parts[0].eq_ignore_ascii_case(GLOBAL_TEMP) {
+                    TableIdent {
+                        catalog: crate::catalog::CATALOG.to_owned(),
+                        ..ident
+                    }
+                } else {
+                    ident
+                },
+            )
         };
         let current_catalog = || catalogs.current_catalog().to_owned();
         let tables = |ident: TableIdent, view: bool| {
@@ -346,7 +384,7 @@ impl Session {
             out
         };
         Ok(match object {
-            TargetObject::Table(name) => tables(table(&parts(name)?)?, false),
+            TargetObject::Table(name) => tables(table(&self.temp_first(parts(name)?, env))?, false),
             TargetObject::TableIn {
                 table: t,
                 namespace,
@@ -355,14 +393,14 @@ impl Session {
                 p.extend(parts(t)?.pop());
                 tables(table(&p)?, false)
             }
-            TargetObject::View(name) => tables(table(&parts(name)?)?, true),
+            TargetObject::View(name) => tables(table(&self.temp_first(parts(name)?, env))?, true),
             TargetObject::GlobalTempView(name) => {
                 let name = parts(name)?
                     .pop()
                     .ok_or_else(|| unplaceable("an empty name"))?;
                 tables(
                     TableIdent {
-                        catalog: current_catalog(),
+                        catalog: crate::catalog::CATALOG.to_owned(),
                         namespace: vec![GLOBAL_TEMP.to_owned()],
                         name,
                     },
@@ -404,9 +442,30 @@ impl Session {
                 )
             }
             TargetObject::GlobalTempNamespace => {
-                namespaces(vec![current_catalog(), GLOBAL_TEMP.to_owned()])
+                // The `global_temp` registry belongs to the session catalog, whatever catalog is current.
+                namespaces(vec![
+                    crate::catalog::CATALOG.to_owned(),
+                    GLOBAL_TEMP.to_owned(),
+                ])
             }
-            TargetObject::Namespace(name) => namespaces(namespace_parts(catalogs, &parts(name)?)),
+            TargetObject::Namespace(name) => {
+                let written = parts(name)?;
+                // `SHOW TABLES IN system` lists the system catalog (the introspection handler reads the
+                // argument that way), so it is checked as the catalog, as `USE system; SHOW TABLES` is.
+                if crate::system::is_system(written.last().map_or("", String::as_str))
+                    && (written.len() == 1
+                        || (written.len() == 2
+                            && written[0].eq_ignore_ascii_case(crate::catalog::CATALOG)))
+                {
+                    return Ok(namespaces(vec![crate::system::SYSTEM.to_owned()]));
+                }
+                let mut p = namespace_parts(catalogs, &written);
+                // The `global_temp` registry belongs to the session catalog, whatever catalog is current.
+                if p.len() == 2 && p[1].eq_ignore_ascii_case(GLOBAL_TEMP) {
+                    p[0] = crate::catalog::CATALOG.to_owned();
+                }
+                namespaces(p)
+            }
             TargetObject::ParentOfNamespace(name) => {
                 let mut p = namespace_parts(catalogs, &parts(name)?);
                 if p.len() > 1 {
@@ -755,4 +814,69 @@ fn reject_system_namespace(statement: &Statement) -> Result<(), KrishivError> {
         }
         _ => Ok(()),
     }
+}
+
+/// Table options are stored as text and never resolved, so a `secret('scope', 'key')` value would
+/// be kept as that literal text; it is refused as it is for `writeTo` (use a read or write option). The
+/// options are returned when none is a secret.
+pub(crate) fn refuse_secret_options<'a>(
+    options: &'a [TableOption],
+    original: &str,
+) -> Result<&'a [TableOption], KrishivError> {
+    let is_secret = |o: &TableOption| {
+        o.value.as_ref().is_some_and(|v| {
+            original
+                .get(v.span.start..v.span.end)
+                .is_some_and(calls_secret)
+        })
+    };
+    if options.iter().any(is_secret) {
+        return Err(KrishivUnsupportedFeature {
+            feature: "secret table options".to_owned(),
+        }
+        .into());
+    }
+    Ok(options)
+}
+
+/// Whether expression text `t` calls `secret` anywhere: the name bare, back-quoted or double-quoted, in any case
+/// (`IDENTIFIER('secret')` was already replaced by a back-quoted name, `Session::sql`), followed by `(`, inside parentheses, casts or other calls too. It reads the
+/// parser's own tokens, so string literals are skipped and comments between the name and `(` are trivia, as in the
+/// parser; anything else that looks like a call counts (the check fails closed: a double-quoted `"secret"` counts
+/// whether or not `spark.sql.ansi.doubleQuotedIdentifiers` makes it a name).
+fn calls_secret(t: &str) -> bool {
+    use krishiv_sql::lexer::{Sym, TokenKind, tokenize};
+    let tokens: Vec<_> = tokenize(t)
+        .into_iter()
+        .filter(|k| !k.kind.is_trivia())
+        .collect();
+    let text = |i: usize| {
+        t.get(tokens[i].span.start..tokens[i].span.end)
+            .unwrap_or("")
+    };
+    // The text between the quotes of a quoted token, with doubled quotes read as one.
+    let unquoted = |i: usize, quote: char| -> Option<String> {
+        let raw = text(i);
+        let inner = raw.strip_prefix(quote)?.strip_suffix(quote)?;
+        Some(inner.replace(&format!("{quote}{quote}"), &quote.to_string()))
+    };
+    let names_secret = |i: usize| -> bool {
+        let Some(k) = tokens.get(i) else { return false };
+        match k.kind {
+            TokenKind::Word => text(i).eq_ignore_ascii_case("secret"),
+            TokenKind::QuotedIdent => {
+                unquoted(i, '`').is_some_and(|n| n.eq_ignore_ascii_case("secret"))
+            }
+            TokenKind::DoubleQuoted => {
+                unquoted(i, '"').is_some_and(|n| n.eq_ignore_ascii_case("secret"))
+            }
+            _ => false,
+        }
+    };
+    (0..tokens.len()).any(|i| {
+        names_secret(i)
+            && tokens
+                .get(i + 1)
+                .is_some_and(|k| k.kind == TokenKind::Sym(Sym::LParen))
+    })
 }

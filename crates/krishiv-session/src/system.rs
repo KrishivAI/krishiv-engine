@@ -30,6 +30,7 @@ use krishiv_plan::analyzer::{
 };
 
 use crate::history::QueryHistory;
+use crate::session::Session;
 use krishiv_types::DataType;
 use krishiv_types::batch::Batch;
 
@@ -52,6 +53,11 @@ const TABLES: [&str; 6] = [
     "queries",
 ];
 
+/// The names of the tables of the catalog.
+pub(crate) fn table_names() -> &'static [&'static str] {
+    &TABLES
+}
+
 /// Whether `name` is the reserved catalog name, in any letter case.
 pub(crate) fn is_system(name: &str) -> bool {
     name.eq_ignore_ascii_case(SYSTEM)
@@ -60,6 +66,33 @@ pub(crate) fn is_system(name: &str) -> bool {
 /// Whether a scan of `name` reads a system table: `system.<table>`.
 pub(crate) fn is_system_table(name: &[String]) -> bool {
     matches!(name, [catalog, table] if is_system(catalog) && table_known(table))
+}
+
+/// Whether `plan` reads only system tables: every leaf a scan of a system table (at least one),
+/// and no one-row relation (inline `VALUES`), range, generator or recursion that makes rows of
+/// its own. Admission is skipped only for such a plan; anything else, such as
+/// `system.queries CROSS JOIN range(..)`, is admitted as usual (fail closed).
+pub(crate) fn plan_reads_only_system(plan: &krishiv_exec::physical::PhysicalPlan) -> bool {
+    use krishiv_exec::physical::PhysNode;
+    let mut stack: Vec<&PhysNode> = plan.roots().collect();
+    let mut system_scan = false;
+    while let Some(node) = stack.pop() {
+        match node {
+            PhysNode::Scan(scan) => match &scan.scan.source {
+                krishiv_plan::ReadSource::Table { name, .. } if is_system_table(name) => {
+                    system_scan = true;
+                }
+                _ => return false,
+            },
+            PhysNode::OneRow
+            | PhysNode::Range(_)
+            | PhysNode::Generate { .. }
+            | PhysNode::UnionLoop { .. }
+            | PhysNode::LoopRef { .. } => return false,
+            other => stack.extend(other.children()),
+        }
+    }
+    system_scan
 }
 
 fn table_known(table: &str) -> bool {
@@ -214,6 +247,7 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("query_text", Text, true),
             ("query_text_truncated", Flag, false),
             ("submitted_at", Time, false),
+            ("started_at", Time, true),
             ("ended_at", Time, true),
             ("wall_ns", Long, true),
             ("peak_memory_bytes", Long, true),
@@ -222,12 +256,20 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("cpu_ns", Long, true),
             ("rows_produced", Long, true),
             ("bytes_read", Long, true),
+            ("rows_read", Long, true),
+            ("rows_written", Long, true),
+            ("files_read", Long, true),
+            ("files_written", Long, true),
+            ("result_cache_hit", Flag, false),
             ("bytes_written", Long, true),
             ("spill_bytes", Long, true),
             ("spill_files", Long, true),
             ("pipelines", Long, true),
             ("workers", Long, true),
             ("cancel_reason", Text, true),
+            ("sqlstate", Text, true),
+            ("error_message", Text, true),
+            ("partial", Flag, false),
         ],
         _ => return None,
     })
@@ -568,6 +610,10 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
                 .with_timezone("UTC"),
             ),
             Arc::new(
+                TimestampMicrosecondArray::from_iter(rows.iter().map(|r| micros(r.started_ms)))
+                    .with_timezone("UTC"),
+            ),
+            Arc::new(
                 TimestampMicrosecondArray::from_iter(rows.iter().map(|r| micros(r.ended_ms)))
                     .with_timezone("UTC"),
             ),
@@ -578,12 +624,29 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             long(rows.iter().map(|r| r.cpu_ns)),
             long(rows.iter().map(|r| r.rows_produced)),
             long(rows.iter().map(|r| r.bytes_read)),
+            long(rows.iter().map(|r| r.rows_read)),
+            long(rows.iter().map(|r| r.rows_written)),
+            long(rows.iter().map(|r| r.files_read)),
+            long(rows.iter().map(|r| r.files_written)),
+            Arc::new(BooleanArray::from_iter(
+                rows.iter().map(|r| Some(r.result_cache_hit)),
+            )),
             long(rows.iter().map(|r| r.bytes_written)),
             long(rows.iter().map(|r| r.spill_bytes)),
             long(rows.iter().map(|r| r.spill_files)),
             long(rows.iter().map(|r| r.pipelines)),
             long(rows.iter().map(|r| r.workers)),
             text(rows.iter().map(|r| r.cancel_reason)),
+            // The class's SQLSTATE (Spark's registry); NULL for a class the registry lacks.
+            text(rows.iter().map(|r| {
+                r.error_class
+                    .as_deref()
+                    .and_then(krishiv_common::error::ErrorClass::from_name)
+                    .and_then(krishiv_common::error::ErrorClass::sql_state)
+            })),
+            text(rows.iter().map(|r| r.error_message.as_deref())),
+            // One process, one worker: every row is whole (design §2.7 for the merged rows).
+            Arc::new(BooleanArray::from_iter(rows.iter().map(|_| Some(false)))),
         ];
     }
     let rows = capability_rows();
@@ -715,10 +778,6 @@ pub(crate) const MAX_TAGS: usize = 32;
 pub(crate) const MAX_TAG_KEY: usize = 128;
 pub(crate) const MAX_TAG_VALUE: usize = 256;
 
-/// Most bytes of a statement `system.queries` keeps
-/// (`query_text_truncated` says when it cut).
-const TEXT_BYTES: usize = 4096;
-
 /// One query of `system.queries`.
 #[derive(Debug, Clone)]
 pub(crate) struct QueryRow {
@@ -734,10 +793,26 @@ pub(crate) struct QueryRow {
     pub(crate) text: Option<String>,
     pub(crate) truncated: bool,
     pub(crate) submitted_ms: i64,
+    /// When admission let the query run (`None` while queued, or for a row that never ran).
+    pub(crate) started_ms: Option<i64>,
+    /// When it was submitted on the monotonic clock: a queued query's wait
+    /// does not move with the system clock.
+    pub(crate) submitted_at: std::time::Instant,
     pub(crate) ended_ms: Option<i64>,
+    /// `system.queries.wall_ns`: for a query that ran, its execution time (from the start of its run, after
+    /// admission, to its end), so a queued wait is not in it; for one that never ran (refused, cancelled while
+    /// queued, or ended before its run) the time since it was submitted, its wait included; 0 for a statement
+    /// refused before it was admitted and for a result-cache replay. `ended_at - submitted_at` is the
+    /// submit-to-end time of a query that reached admission (a statement refused earlier misses its parse and
+    /// analysis there).
     pub(crate) wall_ns: Option<i64>,
     pub(crate) peak_memory_bytes: Option<i64>,
     pub(crate) error_class: Option<String>,
+    /// The failure's message, cut and masked like the text.
+    pub(crate) error_message: Option<String>,
+    /// The text policy the query started under: its error message is cut and masked by it, whatever the
+    /// session's policy is by the time it fails.
+    pub(crate) policy: TextPolicy,
     /// The operators it ran (a finished query only); shared, so a copy of
     /// the history doesn't copy them.
     pub(crate) operators: Arc<[OperatorRow]>,
@@ -746,6 +821,16 @@ pub(crate) struct QueryRow {
     pub(crate) cpu_ns: Option<i64>,
     pub(crate) rows_produced: Option<i64>,
     pub(crate) bytes_read: Option<i64>,
+    /// Rows the scan operators produced.
+    pub(crate) rows_read: Option<i64>,
+    /// Rows the file write sinks took.
+    pub(crate) rows_written: Option<i64>,
+    /// Files its scans opened.
+    pub(crate) files_read: Option<i64>,
+    /// Data files the query wrote to completion.
+    pub(crate) files_written: Option<i64>,
+    /// Answered from the result cache, with no execution.
+    pub(crate) result_cache_hit: bool,
     pub(crate) bytes_written: Option<i64>,
     pub(crate) spill_bytes: Option<i64>,
     pub(crate) spill_files: Option<i64>,
@@ -859,6 +944,14 @@ pub(crate) struct Totals {
     pub(crate) rows_produced: Option<i64>,
     /// The query's own I/O since it started (its I/O context; design P2-E1 R3).
     pub(crate) bytes_read: i64,
+    /// Rows the scans of the plan produced (not a breaker's output side).
+    pub(crate) rows_read: i64,
+    /// Rows the file write sinks of the plan took.
+    pub(crate) rows_written: i64,
+    /// Files its scans opened.
+    pub(crate) files_read: i64,
+    /// Files the query's writers completed.
+    pub(crate) files_written: i64,
     pub(crate) bytes_written: i64,
     pub(crate) spill_bytes: i64,
     pub(crate) spill_files: i64,
@@ -952,6 +1045,7 @@ impl QueryLog {
     /// A row for a query that starts now, named `id`.
     fn row(
         &self,
+        policy: TextPolicy,
         id: String,
         ms: i64,
         text: Option<&str>,
@@ -959,13 +1053,9 @@ impl QueryLog {
     ) -> QueryRow {
         let (text, truncated) = match text {
             None => (None, false),
-            Some(t) if t.len() <= TEXT_BYTES => (Some(t.to_owned()), false),
             Some(t) => {
-                let mut end = TEXT_BYTES;
-                while !t.is_char_boundary(end) {
-                    end -= 1;
-                }
-                (Some(t[..end].to_owned()), true)
+                let (shown, cut) = policy.apply(t);
+                (Some(shown), cut)
             }
         };
         QueryRow {
@@ -979,15 +1069,24 @@ impl QueryLog {
             text,
             truncated,
             submitted_ms: ms,
+            started_ms: None,
+            submitted_at: std::time::Instant::now(),
             ended_ms: None,
             wall_ns: None,
             peak_memory_bytes: None,
             error_class: None,
+            error_message: None,
+            policy,
             operators: Arc::default(),
             workload_class: None,
             cpu_ns: None,
             rows_produced: None,
             bytes_read: None,
+            rows_read: None,
+            rows_written: None,
+            files_read: None,
+            files_written: None,
+            result_cache_hit: false,
             bytes_written: None,
             spill_bytes: None,
             spill_files: None,
@@ -1000,7 +1099,7 @@ impl QueryLog {
     /// A running row named `id` (tests of the history).
     #[cfg(test)]
     pub(crate) fn snapshot_row_for_tests(&self, id: &str) -> QueryRow {
-        self.row(id.to_owned(), 0, None, None)
+        self.row(TextPolicy::default(), id.to_owned(), 0, None, None)
     }
 
     /// The session's operation ids.
@@ -1011,7 +1110,7 @@ impl QueryLog {
     /// Records a query that started now under a minted id and returns it.
     #[cfg(test)]
     pub(crate) fn begin(&self, text: Option<&str>, class: Option<&'static str>) -> String {
-        self.record(text, class, None)
+        self.record(TextPolicy::default(), text, class, None)
     }
 
     /// Records a query that started now, named `operation` when the caller
@@ -1023,16 +1122,17 @@ impl QueryLog {
     /// this session runs under the same operation id.
     pub(crate) fn begin_as(
         &self,
+        policy: TextPolicy,
         text: Option<&str>,
         class: Option<&'static str>,
         operation: Option<&crate::QueryId>,
     ) -> Result<String, KrishivError> {
         let Some(operation) = operation else {
-            return Ok(self.record(text, class, None));
+            return Ok(self.record(policy, text, class, None));
         };
         let id = operation.as_str().to_owned();
         self.history
-            .push_given(self.row(id.clone(), now_ms(), text, class))?;
+            .push_given(self.row(policy, id.clone(), now_ms(), text, class))?;
         Ok(id)
     }
 
@@ -1040,13 +1140,15 @@ impl QueryLog {
     /// refused, or answered from the result cache).
     fn record(
         &self,
+        policy: TextPolicy,
         text: Option<&str>,
         class: Option<&'static str>,
         operation: Option<&crate::QueryId>,
     ) -> String {
         let ms = now_ms();
         let id = operation.map_or_else(|| self.history.mint(ms), |o| o.as_str().to_owned());
-        self.history.push(self.row(id.clone(), ms, text, class));
+        self.history
+            .push(self.row(policy, id.clone(), ms, text, class));
         id
     }
 
@@ -1054,13 +1156,28 @@ impl QueryLog {
     /// admission): `denied`, `cancelled` or `failed` by its class.
     pub(crate) fn record_failed_row(&self, id: &str, error: &KrishivError) {
         let class = error.error_class().name();
+        let state = outcome_state(class);
+        self.note_error(id, error);
+        self.close_unrun(id, state, (state != "cancelled").then_some(class));
+    }
+
+    /// Closes the live row `id` of a query that never ran (refused, cancelled while queued,
+    /// or ended before its run): its wall time is the time since it was submitted, so the
+    /// queue time is not lost.
+    pub(crate) fn close_unrun(&self, id: &str, state: &'static str, error_class: Option<&str>) {
+        let waited = self
+            .history
+            .submitted_at(&self.session_id, id)
+            .map_or(0, |at| {
+                i64::try_from(at.elapsed().as_nanos()).unwrap_or(i64::MAX)
+            });
         self.finish(
             id,
             &Finished {
-                state: outcome_state(class),
-                wall_ns: 0,
+                state,
+                wall_ns: waited,
                 peak_memory_bytes: 0,
-                error_class: (outcome_state(class) != "cancelled").then_some(class),
+                error_class,
                 operators: Vec::new(),
                 totals: None,
             },
@@ -1074,6 +1191,13 @@ impl QueryLog {
             .update(&self.session_id, id, |row| row.state = state);
     }
 
+    /// Stamps the start of live row `id`: admission let it run.
+    pub(crate) fn mark_started(&self, id: &str) {
+        self.history.update(&self.session_id, id, |row| {
+            row.started_ms = Some(now_ms());
+        });
+    }
+
     /// The session's tags now.
     pub(crate) fn tags_now(&self) -> Vec<(String, String)> {
         self.tags()
@@ -1083,11 +1207,14 @@ impl QueryLog {
     /// session's current tags and trace id) that took no execution.
     pub(crate) fn record_replayed(
         &self,
+        policy: TextPolicy,
         text: Option<&str>,
         class: Option<&'static str>,
         operation: Option<&crate::QueryId>,
     ) -> String {
-        let id = self.record(text, class, operation);
+        let id = self.record(policy, text, class, operation);
+        self.history
+            .update(&self.session_id, &id, |row| row.result_cache_hit = true);
         self.finish(
             &id,
             &Finished {
@@ -1107,12 +1234,13 @@ impl QueryLog {
     /// cancellation `cancelled`. Returns the row's id.
     pub(crate) fn record_refused(
         &self,
+        policy: TextPolicy,
         text: Option<&str>,
         class: Option<&'static str>,
         error: &KrishivError,
         operation: Option<&crate::QueryId>,
     ) -> String {
-        let id = self.record(text, class, operation);
+        let id = self.record(policy, text, class, operation);
         let class = error.error_class().name();
         let state = outcome_state(class);
         self.finish(
@@ -1126,6 +1254,7 @@ impl QueryLog {
                 totals: None,
             },
         );
+        self.note_error(&id, error);
         id
     }
 
@@ -1135,9 +1264,24 @@ impl QueryLog {
     pub(crate) fn fail(&self, id: &str, error: &KrishivError) {
         let class = error.error_class().name();
         let state = outcome_state(class);
+        self.note_error(id, error);
         self.history.update(&self.session_id, id, |row| {
             row.state = state;
             row.error_class = (state != "cancelled").then(|| class.to_owned());
+        });
+    }
+
+    /// Records the message of `error` on the row `id`: the client form (operator-only parameters
+    /// redacted, no cause), cut and masked by the text policy (a cancellation has none).
+    pub(crate) fn note_error(&self, id: &str, error: &KrishivError) {
+        if outcome_state(error.error_class().name()) == "cancelled" {
+            return;
+        }
+        let client = error.for_client();
+        let message = client.error().to_string();
+        let parameters = client.error().message_parameters();
+        self.history.update(&self.session_id, id, |row| {
+            row.error_message = Some(row.policy.apply_message_with(&message, parameters));
         });
     }
 
@@ -1162,7 +1306,7 @@ impl QueryLog {
 }
 
 /// The state a failed query shows for its error class.
-fn outcome_state(class: &str) -> &'static str {
+pub(crate) fn outcome_state(class: &str) -> &'static str {
     match class {
         "KRISHIV_INSUFFICIENT_PERMISSIONS" => "denied",
         "OPERATION_CANCELED" | "KRISHIV_QUERY_TIMEOUT" | "KRISHIV_QUERY_KILLED" => "cancelled",
@@ -1216,13 +1360,23 @@ pub(crate) fn provider(
 pub(crate) struct SystemCatalog {
     /// The query's `MONITOR` decision, made when a per-principal table loads.
     monitor: Arc<Monitor>,
+    /// The session catalog of the query, asked first for a bare name: a temporary table or view of the
+    /// session wins over a system table of the same name, as it does over any table.
+    temps: Option<Arc<crate::catalog::QueryCatalog>>,
 }
 
 impl SystemCatalog {
+    /// This catalog, with the session's temporary relations in front of it.
+    pub(crate) fn with_temps(mut self, session: Arc<crate::catalog::QueryCatalog>) -> Self {
+        self.temps = Some(session);
+        self
+    }
+
     /// The `system` catalog of the query that reads `sources`.
     pub(crate) fn of(sources: &Sources) -> Self {
         Self {
             monitor: Arc::clone(&sources.monitor),
+            temps: None,
         }
     }
 }
@@ -1239,10 +1393,26 @@ impl Catalog for SystemCatalog {
     fn load_table<'a>(
         &'a self,
         id: &'a TableIdent,
-        _: Option<TableVersion>,
-        _: NameForm,
+        version: Option<TableVersion>,
+        form: NameForm,
     ) -> BoxFuture<'a, Result<Option<TableMeta>, KrishivError>> {
         Box::pin(async move {
+            if id.namespace.is_empty()
+                && !form.qualified
+                && let Some(temps) = &self.temps
+            {
+                let only_temporary = NameForm {
+                    temporary_only: true,
+                    ..form
+                };
+                if let Some(found) = temps.load_table(id, version, only_temporary).await? {
+                    return Ok(Some(found));
+                }
+                // The path names no schema with tables: a bare name is a temporary relation or nothing.
+                if form.temporary_only {
+                    return Ok(None);
+                }
+            }
             // Two-part names only: `system.<table>`, with no namespace.
             if !id.namespace.is_empty() {
                 return Ok(None);
@@ -1263,14 +1433,293 @@ impl Catalog for SystemCatalog {
                 version: None,
                 kind: TableKind::Table,
                 file_metadata: Default::default(),
+                column_comments: Default::default(),
             }))
         })
+    }
+}
+
+impl QueryRow {
+    /// What the row holds on the heap, about: its strings, tags and
+    /// operators, plus the struct. Counted for the history's byte bound, so
+    /// an estimate that is stable for a given row is all it needs.
+    pub(crate) fn heap_bytes(&self) -> usize {
+        let opt = |s: &Option<String>| s.as_ref().map_or(0, String::len);
+        let operators: usize = self
+            .operators
+            .iter()
+            .map(|o| {
+                std::mem::size_of::<OperatorRow>()
+                    + o.query_id.len()
+                    + o.name.len()
+                    + o.pipelines.len() * 4
+                    + o.extra
+                        .iter()
+                        .map(|(k, v)| size_of::<(String, String)>() + k.len() + v.len())
+                        .sum::<usize>()
+            })
+            .sum();
+        std::mem::size_of::<Self>()
+            + self.id.len()
+            + self.session_id.len()
+            + self.principal.len()
+            + self
+                .tags
+                .iter()
+                .map(|(k, v)| size_of::<(String, String)>() + k.len() + v.len())
+                .sum::<usize>()
+            + opt(&self.trace_id)
+            + opt(&self.text)
+            + opt(&self.error_class)
+            + opt(&self.error_message)
+            + operators
+    }
+}
+
+impl crate::table_commands::TableName {
+    /// The name as an authorization statement writes it: ``spark_catalog`.`ns`.`name` ``. A `TableName` is always
+    /// in the session catalog, whatever catalog is current.
+    pub(crate) fn quoted_in_session_catalog(&self) -> String {
+        format!(
+            "`{}`.`{}`.`{}`",
+            crate::catalog::CATALOG,
+            self.namespace.replace('`', "``"),
+            self.name.replace('`', "``")
+        )
+    }
+}
+
+/// Resolution of bare names while the current catalog is `system`, which holds no stored objects:
+/// a bare name must not fall through to `spark_catalog.default`, which authorization did not check.
+impl Session {
+    /// The namespace a bare name of a stored object resolves in, refused under `system`.
+    pub(crate) fn stored_namespace(&self) -> Result<String, KrishivError> {
+        let (catalog, namespace) = self.state.catalog.position_pair();
+        if is_system(&catalog) {
+            return Err(krishiv_common::error::SchemaNotFound {
+                schema_name: format!("`{catalog}`"),
+            }
+            .into());
+        }
+        Ok(namespace)
+    }
+
+    /// The permit of a query that reads only `system.*` (never queued behind the load it
+    /// inspects): it starts at once, so its row has a start time.
+    pub(crate) fn exempt_permit(&self, log_id: &str) -> crate::admission::Permit {
+        self.state.queries.mark_started(log_id);
+        crate::admission::Permit::unlimited()
+    }
+
+    /// Whether `parts`, the name after `USE NAMESPACE|DATABASE|SCHEMA`, is a namespace of the current `system`
+    /// catalog (which has none): any name while it is current, except one qualified with the session catalog.
+    pub(crate) fn names_a_system_namespace(&self, parts: &[String]) -> bool {
+        is_system(&self.state.catalog.current_catalog())
+            && !(parts.len() == 2 && parts[0].eq_ignore_ascii_case(crate::catalog::CATALOG))
+    }
+
+    /// A namespace named on its own (`SHOW TABLES IN ns`, `DESCRIBE SCHEMA ns`): `system` itself stays
+    /// nameable (it lists the system tables), any other is refused under `system`.
+    pub(crate) fn namespace_arg(&self, ns: &str) -> Result<String, KrishivError> {
+        if is_system(ns) || ns.eq_ignore_ascii_case(crate::catalog::GLOBAL_NAMESPACE) {
+            return Ok(ns.to_owned());
+        }
+        self.function_namespace(ns)
+    }
+
+    /// The namespace `ns` of a stored object (a function, a namespace named on its own): refused under `system`, which has none.
+    pub(crate) fn function_namespace(&self, ns: &str) -> Result<String, KrishivError> {
+        if is_system(&self.state.catalog.current_catalog()) {
+            return Err(krishiv_common::error::SchemaNotFound {
+                schema_name: format!("`system`.`{ns}`"),
+            }
+            .into());
+        }
+        Ok(ns.to_owned())
+    }
+
+    /// Whether `name` (bare, as written) is a temporary view or table of the session, which
+    /// resolves before any catalog.
+    pub(crate) fn is_temp_name(&self, name: &str, env: &crate::session::QueryEnv) -> bool {
+        !crate::catalog::is_global_key(name)
+            && self
+                .state
+                .catalog
+                .exists(name, env.analysis.conf.case_sensitive)
+    }
+
+    /// The namespace `parts` (a table or view name as written) resolve in: the current one, and a
+    /// bare name is `TABLE_OR_VIEW_NOT_FOUND` under `system`.
+    pub(crate) fn namespace_for(
+        &self,
+        parts: &[String],
+        env: &crate::session::QueryEnv,
+    ) -> Result<String, KrishivError> {
+        self.namespace_with(parts, env, true)
+    }
+
+    /// [`namespace_for`](Self::namespace_for) for the target a writer creates or appends to: a stored table,
+    /// so a temporary relation of the same bare name is no exemption under `system`.
+    pub(crate) fn namespace_for_stored(
+        &self,
+        parts: &[String],
+        env: &crate::session::QueryEnv,
+    ) -> Result<String, KrishivError> {
+        self.namespace_with(parts, env, false)
+    }
+
+    fn namespace_with(
+        &self,
+        parts: &[String],
+        env: &crate::session::QueryEnv,
+        temp_exempt: bool,
+    ) -> Result<String, KrishivError> {
+        // A bare name is the session's temporary view or nothing; a two-part name is a namespace of the
+        // CURRENT catalog, and `system` has none.
+        let global =
+            parts.len() == 2 && parts[0].eq_ignore_ascii_case(crate::catalog::GLOBAL_NAMESPACE);
+        if !global
+            && (parts.len() == 2
+                || (parts.len() == 1 && !(temp_exempt && self.is_temp_name(&parts[0], env))))
+            && env.catalog.in_system()
+        {
+            return Err(krishiv_common::error::TableOrViewNotFound {
+                relation_name: format!("`{}`", parts.join("`.`")),
+                search_path: crate::catalog::search_path(),
+            }
+            .into());
+        }
+        Ok(env.catalog.namespace().join("."))
+    }
+
+    /// The namespace a bare name of a stored object resolves in, from the query's own catalog snapshot
+    /// (the one the statement was authorized in), refused under `system`.
+    pub(crate) fn stored_namespace_in(
+        &self,
+        env: &crate::session::QueryEnv,
+    ) -> Result<String, KrishivError> {
+        if env.catalog.in_system() {
+            return Err(krishiv_common::error::SchemaNotFound {
+                schema_name: format!("`{SYSTEM}`"),
+            }
+            .into());
+        }
+        Ok(env.catalog.namespace().join("."))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_error_message_is_masked_by_quotes_not_by_sql_tokens() {
+        let mask = TextPolicy {
+            max_bytes: 4096,
+            mask: true,
+        };
+        let keep = TextPolicy {
+            max_bytes: 4096,
+            mask: false,
+        };
+        let m = "The value 'abc' of the type \"STRING\" can't be cast -- see 'x'";
+        assert_eq!(
+            mask.apply_message(m),
+            "The value '?' of the type \"STRING\" can't be cast -- see '?'"
+        );
+        assert_eq!(keep.apply_message(m), m);
+        // An unclosed quote hides nothing after it.
+        assert_eq!(mask.apply_message("it's fine"), "it's fine");
+    }
+
+    #[test]
+    fn a_backquoted_value_is_masked_but_a_backquoted_name_stays() {
+        let mask = TextPolicy {
+            max_bytes: 4096,
+            mask: true,
+        };
+        let got = mask.apply_message(
+            "The variant value `\"secret_canary\"` cannot be cast; table `db`.`t_1` is missing.",
+        );
+        assert!(!got.contains("secret_canary"), "{got}");
+        assert!(got.contains("`db`.`t_1`"), "{got}");
+    }
+
+    #[test]
+    fn an_embedded_backquote_does_not_end_a_masked_value() {
+        let mask = TextPolicy {
+            max_bytes: 4096,
+            mask: true,
+        };
+        let got =
+            mask.apply_message("The variant value `\"x`secret_canary\"` cannot be cast to `INT`.");
+        assert!(!got.contains("secret_canary"), "{got}");
+        assert!(got.contains("`INT`"), "{got}");
+    }
+
+    #[test]
+    fn a_backquote_before_whitespace_inside_a_masked_value_does_not_end_it() {
+        let mask = TextPolicy {
+            max_bytes: 4096,
+            mask: true,
+        };
+        let got =
+            mask.apply_message("The variant value `\"x` secret_canary\"` cannot be cast to `INT`.");
+        assert_eq!(got, "The variant value `?` cannot be cast to `INT`.");
+        // An escaped double quote in the rendered value does not close its JSON string.
+        let got = mask
+            .apply_message("The variant value `\"x\\\"` secret_canary\"` cannot be cast to `INT`.");
+        assert_eq!(got, "The variant value `?` cannot be cast to `INT`.");
+    }
+
+    #[test]
+    fn a_raw_value_parameter_is_masked_and_a_long_value_is_linear() {
+        let mask = TextPolicy {
+            max_bytes: 4096,
+            mask: true,
+        };
+        let got = mask.apply_message_with(
+            "Malformed records: {\"a\":\"secret_canary\", in parsing.",
+            &[("badRecord", "{\"a\":\"secret_canary\",".to_owned())],
+        );
+        assert_eq!(got, "Malformed records: ? in parsing.");
+        // 40,000 backquote-space pairs inside one open JSON string: one pass, not a rescan per backquote.
+        let long = format!("The value `\"{}` cannot be cast.", "x` ".repeat(40_000));
+        let started = std::time::Instant::now();
+        let got = mask.apply_message(&long);
+        assert!(started.elapsed() < std::time::Duration::from_secs(20));
+        assert!(!got.contains("x` x`"));
+    }
+
+    #[test]
+    fn scientific_notation_and_other_bare_numbers_are_masked_in_a_message() {
+        let mask = TextPolicy {
+            max_bytes: 4096,
+            mask: true,
+        };
+        let got = mask.apply_message(
+            "The value 1e400 and 1.5E-3 and 7e+2 and v2 and 42P01x cannot be cast. SQLSTATE: 22003",
+        );
+        assert_eq!(
+            got,
+            "The value ? and ? and ? and v2 and 42P01x cannot be cast. SQLSTATE: 22003"
+        );
+    }
+
+    #[test]
+    fn an_escaped_quote_does_not_end_a_masked_value() {
+        let mask = TextPolicy {
+            max_bytes: 4096,
+            mask: true,
+        };
+        let m = "The value 'x\\' secret_canary' of the type \"STRING\" cannot be cast.";
+        let got = mask.apply_message(m);
+        assert!(!got.contains("secret_canary"), "{got}");
+        assert_eq!(
+            mask.apply_message("a 'b\\\\' then 'c' end"),
+            "a '?' then '?' end"
+        );
+    }
 
     #[test]
     fn capabilities_has_one_row_per_fact() {
@@ -1357,13 +1806,35 @@ mod tests {
         let log = QueryLog::default();
         log.set_trace_id(Some("trace".to_owned()));
         assert!(log.try_set_tag("team", "etl"));
-        let id = log.record_replayed(Some("SELECT 1"), Some("READ"), None);
+        let id = log.record_replayed(TextPolicy::default(), Some("SELECT 1"), Some("READ"), None);
         let row = &log.snapshot(false)[0];
         assert_eq!(row.id, id);
         assert_eq!(row.state, "finished");
         assert_eq!(row.statement_class, Some("READ"));
         assert_eq!(row.tags, [("team".to_owned(), "etl".to_owned())]);
         assert_eq!(row.error_class, None);
+    }
+
+    #[test]
+    fn an_error_is_masked_by_the_policy_the_query_started_under() {
+        let log = QueryLog::default();
+        let mask = TextPolicy {
+            mask: true,
+            ..TextPolicy::default()
+        };
+        let id = log.begin_as(mask, Some("SELECT 'a'"), None, None).unwrap();
+        // Another statement of the session runs under `keep` before this one fails.
+        let _ = log.begin_as(TextPolicy::default(), Some("SELECT 'b'"), None, None);
+        log.note_error(
+            &id,
+            &KrishivError::from(InternalError {
+                message: "bad value 'secret'".to_owned(),
+            }),
+        );
+        let rows = log.snapshot(false);
+        let row = rows.iter().find(|r| r.id == id).unwrap();
+        let message = row.error_message.clone().unwrap();
+        assert!(!message.contains("secret"), "{message}");
     }
 
     #[test]
@@ -1519,3 +1990,8 @@ mod tests {
         assert!(!is_system_table(&["system".to_owned()]));
     }
 }
+
+mod text;
+pub(crate) use text::TextPolicy;
+#[cfg(test)]
+use text::*;

@@ -2,7 +2,6 @@
 //! A bottom-up rewrite over every relation of a plan, subquery plans
 //! included, that rewrites a shared subtree once.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
@@ -17,13 +16,13 @@ pub(crate) type Step<'a> =
 pub(crate) struct Rewriter {
     /// Original → rewritten; the original is kept alive so its address
     /// stays unique.
-    done: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, Arc<LogicalPlan>)>,
+    done: crate::expr::AddrMap<LogicalPlan, (Arc<LogicalPlan>, Arc<LogicalPlan>)>,
 }
 
 impl Rewriter {
     pub(crate) fn new() -> Self {
         Self {
-            done: HashMap::new(),
+            done: Default::default(),
         }
     }
 
@@ -100,6 +99,7 @@ pub(crate) fn with_input(node: &Arc<LogicalPlan>, input: Arc<LogicalPlan>) -> Ar
         | PlanNode::WithCte { input: slot, .. }
         | PlanNode::Shift { input: slot, .. }
         | PlanNode::JoinHint { input: slot, .. }
+        | PlanNode::Repartition { input: slot, .. }
         | PlanNode::Window { input: slot, .. }
         | PlanNode::Generate { input: slot, .. }
         | PlanNode::ReplicateRows { input: slot, .. } => *slot = input,

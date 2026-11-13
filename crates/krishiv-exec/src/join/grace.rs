@@ -26,10 +26,10 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::UInt64Type;
 use arrow_array::{ArrayRef, UInt32Array};
 use arrow_schema::SchemaRef;
-use krishiv_common::error::KrishivJoinPartitionTooLarge;
+use krishiv_common::error::{KrishivError, KrishivJoinPartitionTooLarge};
 use krishiv_memory::{
-    ConsumerHandle, ConsumerId, MemoryError, Reservation, SpillError, SpillFile, SpillReader,
-    SpillScope, SpillWriter,
+    ConsumerHandle, ConsumerId, MemoryError, Reservation, Seat, SeatState, SpillError, SpillFile,
+    SpillReader, SpillScope, SpillWriter,
 };
 use krishiv_types::batch::Batch;
 
@@ -173,6 +173,11 @@ pub(crate) async fn spill_parts(
         return Ok((0, 0));
     }
     topup.shrink_to_credit(topup.size());
+    // From here until the freed credit is back in the pool, the rows count
+    // as about to be released, so another driver's round that cannot spill
+    // waits for them instead of failing. No arbitration inside: the
+    // transfers and the writes are sync, the blocking job ends on its own.
+    let _writing = ctx.consumer().consumer().spilling();
     let mut jobs = Vec::new();
     let mut freed = 0;
     let own = ctx.consumer().id();
@@ -364,6 +369,13 @@ pub(crate) struct Grace {
     /// In-memory level-0 partitions whose build rows a right join still
     /// has to emit by their marks (filled on first use).
     emit: Option<Vec<usize>>,
+    /// Level-0 partitions of a finished build still being written to disk
+    /// (`build::IdleBuild`): their files land in `build` when the write
+    /// ends, so level 0 is not queued before.
+    pub(crate) writing: usize,
+    /// A write of a finished build's partition failed or was cancelled:
+    /// its rows are lost, so no driver claims anything (the query fails).
+    pub(crate) lost: Option<KrishivError>,
 }
 
 impl Grace {
@@ -379,6 +391,8 @@ impl Grace {
             exclusive: None,
             keep_unprobed: false,
             emit: None,
+            writing: 0,
+            lost: None,
         }
     }
 
@@ -396,7 +410,10 @@ impl Grace {
 
     /// What a driver holding no task does next.
     fn next(&mut self) -> Next {
-        if self.exclusive.is_some() {
+        if let Some(e) = &self.lost {
+            return Next::Lost(e.clone());
+        }
+        if self.exclusive.is_some() || (!self.started && self.writing > 0) {
             return Next::Wait;
         }
         match self.pop() {
@@ -439,6 +456,8 @@ enum Next {
     Wait,
     /// Every partition is joined or being joined.
     Done,
+    /// A partition's build rows were lost ([`Grace::lost`]).
+    Lost(KrishivError),
 }
 
 /// A partition being joined by one driver.
@@ -454,6 +473,24 @@ struct Active {
     /// Every probe row is joined: a right join emits the build rows by
     /// their marks, from this row on.
     emit: Option<u32>,
+    /// Holding in [`TABLE_COHORT`] while the table lives: the table frees
+    /// its memory on its own once the partition's probe rows are joined,
+    /// so another task's round that finds nothing to spill waits for it
+    /// instead of failing. Last, so it goes idle after the memory above is
+    /// released.
+    _seat: Option<Seat>,
+}
+
+/// The cohort of a query's grace joins loading or holding a partition
+/// table ([`Loading`], [`Active`]).
+const TABLE_COHORT: &str = "grace join tables";
+
+/// A seat of this driver's consumer holding in [`TABLE_COHORT`] (`None`
+/// outside a query).
+fn holding_seat(ctx: &TaskContext) -> Option<Seat> {
+    let mut seat = ctx.consumer().consumer().join_cohort(TABLE_COHORT)?;
+    seat.set(SeatState::Holding);
+    Some(seat)
 }
 
 /// What a [`Claim`] holds in [`Grace`].
@@ -492,7 +529,7 @@ impl Claim {
 
 impl Drop for Claim {
     fn drop(&mut self) {
-        if let Some(built) = self.build.built.get() {
+        if let Some(built) = self.build.built() {
             {
                 let mut g = lock(&built.grace);
                 match self.hold {
@@ -848,8 +885,7 @@ pub(crate) async fn step(
     ctx: &TaskContext,
 ) -> Result<FlushOutput> {
     let built = build
-        .built
-        .get()
+        .built()
         .ok_or_else(|| internal("hash join probed before its build".to_owned()))?;
     let limit = ctx.query().config().batch_size.max(1);
     let partition = ctx.partition();
@@ -885,9 +921,7 @@ pub(crate) async fn step(
             let (out, done) =
                 super::probe::emit_build(shared, hashing.rows(), &a.table, from, limit)?;
             if done {
-                st.active = None;
-                st.slot = None;
-                ctx.consumer().consumer().release_credit();
+                end_partition(st, ctx);
             }
             return Ok(out.map_or(FlushOutput::Continue, FlushOutput::Batch));
         }
@@ -903,19 +937,14 @@ pub(crate) async fn step(
             Some(b) => {
                 let tables = Tables::Single(&a.table);
                 let detailed = ctx.query().config().detailed_metrics;
-                a.cursor = Some(Cursor::new(shared, hashing, b, &tables, detailed)?.0);
+                a.cursor = Some(Cursor::new(shared, hashing, b, None, &tables, detailed)?.0);
             }
             None if shared.join_type.builds_preserved() => {
                 // Every probe row of the partition is joined: emit its
                 // build rows by their marks next.
                 a.emit = Some(0);
             }
-            None => {
-                st.active = None;
-                st.slot = None;
-                // The headroom parked for reading the probe rows.
-                ctx.consumer().consumer().release_credit();
-            }
+            None => end_partition(st, ctx),
         }
         return Ok(FlushOutput::Continue);
     }
@@ -944,6 +973,7 @@ pub(crate) async fn step(
                         st.task = Some((Loading::new(task, false, ctx), held));
                     }
                     Next::Done => return Ok(FlushOutput::Done),
+                    Next::Lost(e) => return Err(e),
                     Next::Wait => {}
                 }
             }
@@ -971,7 +1001,7 @@ pub(crate) async fn step(
     let Some((loading, held)) = st.task.take() else {
         return Err(internal("grace join claimed no task".to_owned()));
     };
-    let (loading, loaded) = load(shared, hashing, loading, ctx).await?;
+    let (mut loading, loaded) = load(shared, hashing, loading, ctx).await?;
     match loaded {
         Loaded::Need(bytes) => {
             st.task = Some((loading, held));
@@ -991,8 +1021,12 @@ pub(crate) async fn step(
         }
         Loaded::TooLarge => {
             let arbitrated = loading.arbitrate;
+            // The rows go back, then the credit, then the seat goes idle
+            // (waking the rounds waiting for it).
+            let seat = loading.seat.take();
             let task = loading.into_task();
             ctx.consumer().consumer().release_credit();
+            drop(seat);
             st.slot = None;
             if !arbitrated {
                 let me = ctx.consumer().id();
@@ -1039,6 +1073,16 @@ pub(crate) async fn step(
             Ok(FlushOutput::Continue)
         }
     }
+}
+
+/// The partition being joined is done: the headroom parked for reading its
+/// probe rows goes back, then the table, then its seat goes idle (waking
+/// the rounds waiting for it).
+fn end_partition(st: &mut Flush, ctx: &TaskContext) {
+    let active = st.active.take();
+    ctx.consumer().consumer().release_credit();
+    drop(active);
+    st.slot = None;
 }
 
 async fn next_probe(a: &mut Active, ctx: &TaskContext) -> Result<Option<Batch>> {
@@ -1119,6 +1163,19 @@ struct Loading {
     /// The arbitrator refused an estimate of the rest: ask for what is
     /// missing now only from then on.
     estimate_refused: bool,
+    /// Holding in [`TABLE_COHORT`] from its creation: the load ends in a
+    /// table, which [`Active`] keeps with this seat, or gives every row back
+    /// ([`Loaded::TooLarge`]). A first load asks for no memory in a round of
+    /// its own. A load retried alone holds while it waits for the task's
+    /// other partitions too, then asks rounds (while its driver waits in one,
+    /// arbitration does not wait for it). Measured in `two_grace_joins_*` at
+    /// 1.5 MiB: no seat on alone loads, 41 of 80 runs failed; a seat from
+    /// the slot's claim, 13 of 80; from creation, 2 of 144. The cost (ADR
+    /// 0007 update 2026-11-08, item 6): a round of another driver of the
+    /// same task, which the waiting load waits for, waits up to
+    /// `abortReleaseTimeout` before it fails. Last, so it goes idle after
+    /// the memory above is released.
+    seat: Option<Seat>,
 }
 
 /// A `NeedMemory` a loading step returned.
@@ -1156,6 +1213,7 @@ impl Loading {
             asked: None,
             arbitrate,
             estimate_refused: false,
+            seat: holding_seat(ctx),
         }
     }
 
@@ -1182,6 +1240,7 @@ impl Loading {
             reader: None,
             cursor: None,
             emit: None,
+            _seat: self.seat,
         }
     }
 
@@ -1529,12 +1588,12 @@ mod loom_model {
     fn a_waiting_driver_claims_the_split_task() {
         model(|| {
             let build = BuildGlobal::with_grace(Grace::new(PARTITIONS));
-            let built = build.built.get().unwrap();
+            let built = build.built().unwrap();
             let held = Claim::new(&build, &mut lock(&built.grace), Hold::Task);
             let splitter = {
                 let build = Arc::clone(&build);
                 thread::spawn(move || {
-                    let built = build.built.get().unwrap();
+                    let built = build.built().unwrap();
                     lock(&built.grace).queue.push(task());
                     drop(held);
                 })
@@ -1545,6 +1604,7 @@ mod loom_model {
                     Next::Task(_) => break true,
                     Next::Done => break false,
                     Next::Wait => {}
+                    Next::Lost(e) => panic!("the build rows were lost: {e}"),
                 }
                 block_on(changed);
             };
@@ -1560,7 +1620,7 @@ mod loom_model {
     fn working_alone_waits_for_partitions_and_blocks_claims() {
         model(|| {
             let build = BuildGlobal::with_grace(Grace::new(PARTITIONS));
-            let built = build.built.get().unwrap();
+            let built = build.built().unwrap();
             let (slot, alone) = {
                 let mut g = lock(&built.grace);
                 g.queue.push(task());
@@ -1592,602 +1652,4 @@ mod loom_model {
     clippy::disallowed_methods,
     reason = "test-only temp-dir cleanup; never runs on a compute worker"
 )]
-mod tests {
-    use arrow_array::{Int64Array, RecordBatch, StringArray};
-    use arrow_schema::{DataType, Field, Schema};
-    use krishiv_memory::{
-        MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillOwner, TreePool,
-    };
-
-    use super::*;
-    use crate::{ExecConfig, ExecutorConfig, OperatorId, QueryContext, QueryId, TokioExecutor};
-    use crate::{WorkloadClass, context::TaskContext};
-
-    /// A spill directory under the system temp dir, removed when dropped.
-    struct TempDir(std::path::PathBuf);
-
-    impl TempDir {
-        fn new(name: &str) -> Self {
-            let name = format!("krishiv-{name}-{}", std::process::id());
-            Self(std::env::temp_dir().join(name))
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    /// Coalescing is size-tiered: a merged chunk is not copied again by the
-    /// next run of small chunks (merging all chunks every 16 pushes was
-    /// quadratic), the chunk count stays bounded, and no row is lost.
-    #[test]
-    fn coalescing_does_not_recopy_merged_chunks() {
-        let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
-        let id = pool.register("coalesce", None);
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("k", DataType::Int64, false),
-            Field::new("s", DataType::Utf8, false),
-        ]));
-        let chunk = |i: i64| {
-            let k = Int64Array::from_iter_values(i * 300..(i + 1) * 300);
-            let s = StringArray::from_iter_values((0..300).map(|j| format!("row-{i}-{j}")));
-            Batch::new(
-                RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(k), Arc::new(s)]).unwrap(),
-            )
-        };
-        let mut parts = vec![Part::with_memory(krishiv_memory::Reservation::new(
-            Arc::clone(&pool),
-            id,
-        ))];
-        let push = |parts: &mut Vec<Part>, i: i64| {
-            let c = chunk(i);
-            reserve_chunks(parts, &[(0, c.clone())]).unwrap();
-            parts[0].chunks.push(c);
-            parts[0].coalesce(&schema).unwrap()
-        };
-        let sizes: usize = (0..16)
-            .map(|i| chunk(i).data().get_array_memory_size())
-            .sum();
-        let mut merged_run = 0;
-        for i in 0..16 {
-            merged_run = push(&mut parts, i);
-        }
-        assert_eq!(parts[0].chunks.len(), 1, "16 small chunks merge");
-        // It reports the run it merged: the 16 chunks' bytes.
-        assert_eq!(merged_run, sizes);
-        let merged = Arc::clone(parts[0].chunks[0].data().column(0));
-        for i in 16..31 {
-            assert_eq!(push(&mut parts, i), 0, "no merge below the fan-out");
-        }
-        assert_eq!(parts[0].chunks.len(), 16);
-        let first = parts[0].chunks[0].data().column(0);
-        assert!(
-            Arc::ptr_eq(first, &merged),
-            "the merged chunk was copied again"
-        );
-        let mut most = 0;
-        for i in 31..1024 {
-            push(&mut parts, i);
-            most = most.max(parts[0].chunks.len());
-        }
-        assert!(most < 3 * 16, "{most} chunks held");
-        assert_eq!(parts[0].mem_rows(), 1024 * 300);
-        let mut keys: Vec<i64> = parts[0]
-            .chunks
-            .iter()
-            .flat_map(|c| {
-                let k = c
-                    .data()
-                    .column(0)
-                    .as_primitive::<arrow_array::types::Int64Type>();
-                k.values().to_vec()
-            })
-            .collect();
-        keys.sort_unstable();
-        assert!(
-            keys.into_iter().eq(0..1024 * 300),
-            "rows lost or duplicated"
-        );
-        drop(parts);
-        assert_eq!(pool.reserved(), 0);
-    }
-
-    /// Probe rows deferred in many small chunks are coalesced, spilled in
-    /// slices, and read back by the grace phase with exactly the headroom
-    /// [`load`] reserves: with the pool otherwise full, no read reaches it.
-    /// (The headroom used to be twice the largest chunk *before*
-    /// coalescing, which a coalesced chunk's slices outgrow: a read then
-    /// drew from a pool that other drivers kept full.)
-    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-    async fn spilled_probe_rows_read_back_within_the_load_headroom() {
-        const LIMIT: usize = 64 << 20;
-        let root = TreePool::new(&MemoryConfig {
-            limit: Some(LIMIT),
-            quantum: 1,
-            spill_scratch_reserve: 0,
-            resident_guard: true,
-            ..MemoryConfig::default()
-        });
-        let query = QueryContext::new(
-            QueryId(1),
-            WorkloadClass::Interactive,
-            ExecConfig::default(),
-            root.child("q", None),
-        );
-        let exec = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
-        let ctx = TaskContext::new(query, exec, SpillOwner::new(), OperatorId(1), "probe");
-        let dir = TempDir::new("grace-headroom");
-        let manager = SpillManager::open(&SpillConfig {
-            dir: dir.0.clone(),
-            ..SpillConfig::default()
-        })
-        .unwrap();
-        let scope = manager.scope().unwrap();
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("k", DataType::Int64, false),
-            Field::new("s", DataType::Utf8, false),
-        ]));
-        let chunk = |i: i64| {
-            let k = Int64Array::from_iter_values(i * 300..(i + 1) * 300);
-            let s = StringArray::from_iter_values((0..300).map(|j| format!("row-{i}-{j}")));
-            Batch::new(
-                RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(k), Arc::new(s)]).unwrap(),
-            )
-        };
-        let mut parts = vec![Part::with_memory(ctx.consumer().reservation())];
-        let mut largest_chunk = 0;
-        for i in 0..64 {
-            let c = chunk(i);
-            largest_chunk = largest_chunk.max(c.data().get_array_memory_size());
-            reserve_chunks(&mut parts, &[(0, c.clone())]).unwrap();
-            parts[0].chunks.push(c);
-            parts[0].coalesce(&schema).unwrap();
-        }
-        assert!(parts[0].chunks.len() < 16, "coalesced");
-        spill_parts(&mut parts, &[0], &schema, &scope, &ctx, false)
-            .await
-            .unwrap();
-        let headroom = parts[0].read_headroom();
-        assert!(headroom > 2 * largest_chunk, "the old estimate fell short");
-
-        // The pool is full but for the headroom, lent as credit as `load` does.
-        let mut lent = ctx.consumer().reservation();
-        lent.try_grow(headroom).unwrap();
-        lent.shrink_to_credit(headroom);
-        let other: Arc<dyn MemoryPool> = root.child("other", None);
-        let id = other.register("filler", None);
-        let mut filler = krishiv_memory::Reservation::new(Arc::clone(&other), id);
-        filler.try_grow(LIMIT - root.reserved()).unwrap();
-        let mut rows = 0;
-        for file in &parts[0].files {
-            for b in file.reader(ctx.consumer().reservation()).unwrap() {
-                rows += b.unwrap().num_rows();
-            }
-        }
-        assert_eq!(rows, 64 * 300);
-        ctx.consumer().consumer().release_credit();
-        drop((filler, parts));
-        assert_eq!(root.reserved(), 0);
-    }
-
-    /// A reversal whose probe rows (read back from spill files) do not fit
-    /// the pool's free memory declines, and hands the task back intact.
-    #[tokio::test]
-    async fn a_probe_side_that_does_not_fit_declines_the_reversal() {
-        const LIMIT: usize = 64 << 20;
-        let root = TreePool::new(&MemoryConfig {
-            limit: Some(LIMIT),
-            quantum: 1,
-            spill_scratch_reserve: 0,
-            resident_guard: true,
-            ..MemoryConfig::default()
-        });
-        let query = QueryContext::new(
-            QueryId(1),
-            WorkloadClass::Interactive,
-            ExecConfig::default(),
-            root.child("q", None),
-        );
-        let exec = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
-        let ctx = TaskContext::new(query, exec, SpillOwner::new(), OperatorId(1), "probe");
-        let dir = TempDir::new("grace-reverse-decline");
-        let manager = SpillManager::open(&SpillConfig {
-            dir: dir.0.clone(),
-            ..SpillConfig::default()
-        })
-        .unwrap();
-        let scope = manager.scope().unwrap();
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("k", DataType::Int64, false),
-            Field::new("s", DataType::Utf8, false),
-        ]));
-        let join = super::super::HashJoin::try_new(super::super::JoinSpec {
-            join_type: super::super::JoinType::LeftSemi,
-            probe_schema: Arc::clone(&schema),
-            build_schema: Arc::clone(&schema),
-            probe_keys: vec![0],
-            build_keys: vec![0],
-            null_safe: vec![false],
-            filter: None,
-            single_match: false,
-            spill: Some(scope.clone()),
-        })
-        .unwrap();
-        let shared = &join.0;
-        let hashing = shared.hashing(&ExecConfig::default());
-        let k = Int64Array::from_iter_values(0..3000);
-        let v = StringArray::from_iter_values((0..3000).map(|j| format!("row-{j}")));
-        let batch = Batch::new(
-            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(k), Arc::new(v)]).unwrap(),
-        );
-        let mut parts = vec![Part::with_memory(ctx.consumer().reservation())];
-        reserve_chunks(&mut parts, &[(0, batch.clone())]).unwrap();
-        parts[0].chunks.push(batch);
-        spill_parts(&mut parts, &[0], &schema, &scope, &ctx, false)
-            .await
-            .unwrap();
-        let files = parts[0].files.len();
-        assert!(files > 0 && parts[0].chunks.is_empty());
-        let task = Task {
-            depth: 0,
-            no_shrink: false,
-            build: Part::default(),
-            probe: parts.remove(0),
-        };
-        // Frame headroom lent as `reverse` does; nothing else is free.
-        let headroom = task.probe.read_headroom();
-        let mut lent = ctx.consumer().reservation();
-        lent.try_grow(headroom).unwrap();
-        lent.shrink_to_credit(headroom);
-        let other: Arc<dyn MemoryPool> = root.child("other", None);
-        let id = other.register("filler", None);
-        let mut filler = krishiv_memory::Reservation::new(Arc::clone(&other), id);
-        filler.try_grow(LIMIT - root.reserved()).unwrap();
-        let handle = Arc::clone(ctx.consumer().consumer());
-        let Ok(Reversed::Declined(task)) = reverse_blocking(
-            shared,
-            &hashing,
-            task,
-            &handle,
-            ctx.query(),
-            ctx.partition(),
-        ) else {
-            panic!("the probe rows cannot fit");
-        };
-        assert_eq!(task.probe.files.len(), files, "nothing was consumed");
-        assert_eq!(task.probe.rows, 3000);
-        // With room, the same task joins: a semi join with no build rows
-        // emits nothing, and the probe files are gone with the task.
-        drop(filler);
-        let Ok(Reversed::Joined(out)) = reverse_blocking(
-            shared,
-            &hashing,
-            task,
-            &handle,
-            ctx.query(),
-            ctx.partition(),
-        ) else {
-            panic!("the probe rows fit now");
-        };
-        assert!(out.is_none());
-        ctx.consumer().consumer().release_credit();
-        assert_eq!(root.reserved(), 0);
-        assert_eq!(manager.used_bytes(), 0);
-    }
-
-    /// A reversed semi join with a residual condition decodes the build
-    /// columns in the arena's payload format: payload rows when
-    /// `krishiv.exec.join.rowLayout` is on (it read the arrow-row payload,
-    /// empty in that layout, and panicked decoding it), arrow rows
-    /// otherwise. Both give the same rows.
-    #[tokio::test]
-    async fn a_reversal_with_a_condition_decodes_the_build_rows_of_either_layout() {
-        use arrow_array::BooleanArray;
-        use arrow_array::types::Int64Type;
-
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("k", DataType::Int64, false),
-            Field::new("v", DataType::Int64, false),
-        ]));
-        let batch = |k: Vec<i64>, v: Vec<i64>| {
-            Batch::new(
-                RecordBatch::try_new(
-                    Arc::clone(&schema),
-                    vec![Arc::new(Int64Array::from(k)), Arc::new(Int64Array::from(v))],
-                )
-                .unwrap(),
-            )
-        };
-        // probe.k = build.k AND build.v > probe.v
-        let filter: Arc<dyn crate::Predicate> = Arc::new(crate::FnPredicate(|b: &RecordBatch| {
-            let probe = b.column(1).as_primitive::<Int64Type>();
-            let build = b.column(3).as_primitive::<Int64Type>();
-            Ok(probe
-                .iter()
-                .zip(build.iter())
-                .map(|(p, b)| Some(b? > p?))
-                .collect::<BooleanArray>())
-        }));
-        for row_layout in [false, true] {
-            let root = TreePool::new(&MemoryConfig::default());
-            let config = ExecConfig {
-                join_row_layout: row_layout,
-                ..ExecConfig::default()
-            };
-            let query = QueryContext::new(
-                QueryId(1),
-                WorkloadClass::Interactive,
-                config.clone(),
-                root.child("q", None),
-            );
-            let exec = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
-            let ctx = TaskContext::new(query, exec, SpillOwner::new(), OperatorId(1), "probe");
-            let join = super::super::HashJoin::try_new(super::super::JoinSpec {
-                join_type: super::super::JoinType::LeftSemi,
-                probe_schema: Arc::clone(&schema),
-                build_schema: Arc::clone(&schema),
-                probe_keys: vec![0],
-                build_keys: vec![0],
-                null_safe: vec![false],
-                filter: Some(Arc::clone(&filter)),
-                single_match: false,
-                spill: None,
-            })
-            .unwrap();
-            let shared = &join.0;
-            let hashing = shared.hashing(&config);
-            assert_eq!(hashing.rows(), row_layout);
-
-            // Probe rows k = v = 0..100; build rows k = 0..100 with v = k + 1
-            // for odd k and v = k for even k: odd probe rows match.
-            let probe = batch((0..100).collect(), (0..100).collect());
-            let build = batch((0..100).collect(), (0..100).map(|k| k + (k % 2)).collect());
-            let key_cols = vec![Arc::clone(build.data().column(0))];
-            let keys = shared.keys.encode(&key_cols, &hashing).unwrap();
-            let columns = build.data().columns();
-            let payload = match (shared.row_payload(hashing.rows()), &shared.payload) {
-                (Some(layout), _) => {
-                    super::super::build::Payload::Rows(layout.encode(columns).unwrap())
-                }
-                (None, Some((conv, _))) => {
-                    super::super::build::Payload::Arrow(conv.convert_columns(columns).unwrap())
-                }
-                (None, None) => panic!("the condition reads build columns"),
-            };
-            let all: Vec<usize> = (0..100).collect();
-            let chunk = super::super::build::arena_chunk(
-                shared,
-                &hashing,
-                &keys,
-                keys.hashes(),
-                Some(&payload),
-                build.weights(),
-                &all,
-            )
-            .unwrap();
-            let mut build_part = vec![Part::with_memory(ctx.consumer().reservation())];
-            reserve_chunks(&mut build_part, &[(0, chunk.clone())]).unwrap();
-            build_part[0].chunks.push(chunk);
-            let mut probe_part = vec![Part::with_memory(ctx.consumer().reservation())];
-            reserve_chunks(&mut probe_part, &[(0, probe.clone())]).unwrap();
-            probe_part[0].chunks.push(probe);
-            let task = Task {
-                depth: 0,
-                no_shrink: false,
-                build: build_part.remove(0),
-                probe: probe_part.remove(0),
-            };
-            let handle = Arc::clone(ctx.consumer().consumer());
-            let Ok(Reversed::Joined(Some(out))) = reverse_blocking(
-                shared,
-                &hashing,
-                task,
-                &handle,
-                ctx.query(),
-                ctx.partition(),
-            ) else {
-                panic!("the reversal joins (row layout {row_layout})");
-            };
-            let mut got = out
-                .data()
-                .column(0)
-                .as_primitive::<Int64Type>()
-                .values()
-                .to_vec();
-            got.sort_unstable();
-            let want: Vec<i64> = (0..100).filter(|k| k % 2 == 1).collect();
-            assert_eq!(got, want, "row layout {row_layout}");
-            drop(out);
-            assert_eq!(root.reserved(), 0);
-        }
-    }
-
-    /// A spill whose rows and the pool's free memory cannot fund its
-    /// writer's scratch is declined: nothing is written or lost, no credit
-    /// is left behind, and the query does not fail.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-    async fn an_unfundable_spill_is_declined() {
-        const LIMIT: usize = 4 << 20;
-        let root = TreePool::new(&MemoryConfig {
-            limit: Some(LIMIT),
-            quantum: 1,
-            spill_scratch_reserve: 0,
-            resident_guard: true,
-            ..MemoryConfig::default()
-        });
-        let query = QueryContext::new(
-            QueryId(1),
-            WorkloadClass::Interactive,
-            ExecConfig::default(),
-            root.child("q", None),
-        );
-        let exec = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
-        let ctx = TaskContext::new(query, exec, SpillOwner::new(), OperatorId(1), "probe");
-        let dir = TempDir::new("grace-decline");
-        let manager = SpillManager::open(&SpillConfig {
-            dir: dir.0.clone(),
-            ..SpillConfig::default()
-        })
-        .unwrap();
-        let scope = manager.scope().unwrap();
-        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
-        let small = Batch::new(
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![Arc::new(Int64Array::from_iter_values(0..100))],
-            )
-            .unwrap(),
-        );
-        let mut parts = vec![Part::with_memory(ctx.consumer().reservation())];
-        reserve_chunks(&mut parts, &[(0, small.clone())]).unwrap();
-        parts[0].chunks.push(small);
-        let held = parts[0].bytes();
-        let other: Arc<dyn MemoryPool> = root.child("other", None);
-        let id = other.register("filler", None);
-        let mut filler = krishiv_memory::Reservation::new(Arc::clone(&other), id);
-        filler.try_grow(LIMIT - root.reserved()).unwrap();
-        let out = spill_parts(&mut parts, &[0], &schema, &scope, &ctx, false).await;
-        assert_eq!(out.unwrap(), (0, 0));
-        assert_eq!((parts[0].chunks.len(), parts[0].bytes()), (1, held));
-        assert!(parts[0].files.is_empty());
-        assert_eq!(ctx.consumer().consumer().credit(), 0);
-        // With room for the scratch, the same spill goes ahead.
-        drop(filler);
-        let (freed, written) = spill_parts(&mut parts, &[0], &schema, &scope, &ctx, false)
-            .await
-            .unwrap();
-        assert_eq!((freed, parts[0].files.len()), (held, 1));
-        assert!(written > 0);
-        assert_eq!(ctx.consumer().consumer().credit(), 0);
-        drop(parts);
-        assert_eq!(root.reserved(), 0);
-    }
-
-    /// With the pool's spill-scratch floor, a spill of a pool that ordinary
-    /// reservations filled is funded from the floor instead of declined,
-    /// and the floor is free again afterwards.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-    async fn the_scratch_floor_funds_a_spill_of_a_full_pool() {
-        const LIMIT: usize = 4 << 20;
-        let root = TreePool::new(&MemoryConfig {
-            limit: Some(LIMIT),
-            quantum: 1,
-            spill_scratch_reserve: SPILL_SCRATCH,
-            resident_guard: true,
-            ..MemoryConfig::default()
-        });
-        let query = QueryContext::new(
-            QueryId(1),
-            WorkloadClass::Interactive,
-            ExecConfig::default(),
-            root.child("q", None),
-        );
-        let exec = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
-        let ctx = TaskContext::new(query, exec, SpillOwner::new(), OperatorId(1), "probe");
-        let dir = TempDir::new("grace-floor");
-        let manager = SpillManager::open(&SpillConfig {
-            dir: dir.0.clone(),
-            ..SpillConfig::default()
-        })
-        .unwrap();
-        let scope = manager.scope().unwrap();
-        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
-        let small = Batch::new(
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![Arc::new(Int64Array::from_iter_values(0..100))],
-            )
-            .unwrap(),
-        );
-        let mut parts = vec![Part::with_memory(ctx.consumer().reservation())];
-        reserve_chunks(&mut parts, &[(0, small.clone())]).unwrap();
-        parts[0].chunks.push(small);
-        let held = parts[0].bytes();
-        let other: Arc<dyn MemoryPool> = root.child("other", None);
-        let id = other.register("filler", None);
-        let mut filler = krishiv_memory::Reservation::new(Arc::clone(&other), id);
-        filler
-            .try_grow(LIMIT - SPILL_SCRATCH - root.reserved())
-            .unwrap();
-        assert!(filler.try_grow(1).is_err(), "full for ordinary memory");
-        let (freed, written) = spill_parts(&mut parts, &[0], &schema, &scope, &ctx, false)
-            .await
-            .unwrap();
-        assert_eq!((freed, parts[0].files.len()), (held, 1));
-        assert!(written > 0);
-        assert_eq!(ctx.consumer().consumer().credit(), 0);
-        assert_eq!(root.reserved(), filler.size(), "the floor is free again");
-        drop((parts, filler));
-        assert_eq!(root.reserved(), 0);
-    }
-
-    /// An alone load asks for an estimate of the whole rest of the
-    /// partition only until the arbitrator refuses it once; then for the
-    /// bytes missing now, and a refused exact ask gives up.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-    async fn a_refused_estimate_is_not_asked_again() {
-        let root = TreePool::new(&MemoryConfig {
-            limit: Some(64 << 20),
-            quantum: 1,
-            ..MemoryConfig::default()
-        });
-        let query = QueryContext::new(
-            QueryId(1),
-            WorkloadClass::Interactive,
-            ExecConfig::default(),
-            root.child("q", None),
-        );
-        let exec = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
-        let ctx = TaskContext::new(query, exec, SpillOwner::new(), OperatorId(1), "probe");
-        let dir = TempDir::new("grace-estimate");
-        let manager = SpillManager::open(&SpillConfig {
-            dir: dir.0.clone(),
-            ..SpillConfig::default()
-        })
-        .unwrap();
-        let scope = manager.scope().unwrap();
-        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
-        let rows = Batch::new(
-            RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![Arc::new(Int64Array::from_iter_values(0..10_000))],
-            )
-            .unwrap(),
-        );
-        let mut parts = vec![Part::with_memory(ctx.consumer().reservation())];
-        reserve_chunks(&mut parts, &[(0, rows.clone())]).unwrap();
-        parts[0].chunks.push(rows.clone());
-        spill_parts(&mut parts, &[0], &schema, &scope, &ctx, true)
-            .await
-            .unwrap();
-        let task = Task {
-            depth: 0,
-            no_shrink: false,
-            build: parts.pop().unwrap(),
-            probe: Part::default(),
-        };
-        let mut loading = Loading::new(task, true, &ctx);
-        // Some rows read: the estimate covers the other 9,000 too.
-        loading.memory.try_grow(8_000).unwrap();
-        loading.chunks.push(rows.slice(0, 1_000).unwrap());
-        let estimate = loading.ask(100, 0);
-        assert!(estimate > 9_000 * 8, "{estimate}");
-        assert!(loading.check_grant(estimate).is_none(), "granted");
-        assert_eq!(loading.ask(100, 0), estimate, "asked again after a grant");
-        assert!(matches!(loading.check_grant(0), Some(Loaded::Need(100))));
-        assert!(matches!(loading.check_grant(0), Some(Loaded::TooLarge)));
-        assert_eq!(loading.ask(100, 0), 100, "never the estimate again");
-        assert!(loading.check_grant(100).is_none());
-        drop(loading);
-        ctx.consumer().consumer().release_credit();
-    }
-
-    /// A spill picks at least `SPILL_MIN` bytes when it can, never a part
-    /// without rows in memory.
-    #[test]
-    fn spills_write_at_least_the_scratch_they_need() {
-        assert!(choose(&[Part::default()], 0, 1).is_empty());
-    }
-}
+mod tests;

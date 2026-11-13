@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use krishiv_optimizer::{
-    AttrStats, ColumnStats, Options, PlanStats, StatSource, Statistics, TableStats, estimated_rows,
+    AttrStats, ColumnStats, PlanStats, StatSource, Statistics, TableStats, estimated_rows,
     optimize_with, optimize_with_options,
 };
 use krishiv_plan::analyzer::{AnalysisContext, MemoryCatalog, TableColumn};
@@ -286,10 +286,7 @@ fn an_equality_outside_the_range_estimates_no_rows_and_removes_nothing() {
     let off = optimize_with_options(
         &plan,
         &stats,
-        &Options {
-            stats_propagation: false,
-            ..Options::default()
-        },
+        &support::options(|o| o.stats_propagation = false),
     )
     .unwrap();
     let text = on.root().to_string();
@@ -458,6 +455,68 @@ fn an_inner_join_narrows_its_keys_and_scales_the_other_columns() {
     close(e.col("x").ndv, 320.0, "x");
     close(e.col("v").ndv, 20.0, "v");
     assert_eq!(e.col("v").max, Some(19.0), "other ranges stay");
+}
+
+#[test]
+fn a_composite_key_join_is_a_foreign_key_into_the_side_with_fewer_key_tuples() {
+    let e = join("SELECT * FROM t JOIN u ON t.a = u.k AND t.b = u.v");
+    // Independent keys would give 200,000 / (100 * 20) = 100 rows. The key
+    // tuples are min(100 * 10 capped at 1,000, 40 * 20 capped at 200) = 200:
+    // 200,000 / 200 = 1,000 rows.
+    close(e.rows(), 1000.0, "rows");
+}
+
+#[test]
+fn a_filtered_key_side_keeps_its_fraction_of_a_composite_join() {
+    let whole = join("SELECT * FROM t JOIN u ON t.a = u.k AND t.b = u.v").rows();
+    let filtered =
+        join("SELECT * FROM t JOIN (SELECT * FROM u WHERE v < 5) u ON t.a = u.k AND t.b = u.v")
+            .rows();
+    // The key tuples are those of the unfiltered side: the filter's fraction is not cancelled
+    // (it was when the cap was the filtered rows: the estimate stayed at every row of `t`).
+    assert!(
+        filtered < whole,
+        "filtered {filtered} must be below the whole {whole}"
+    );
+}
+
+#[test]
+fn a_column_in_two_key_equalities_gets_no_composite_factor() {
+    // `t.a` appears twice: the equalities narrow one after the other, the composite rule is off.
+    let shared = join("SELECT * FROM t JOIN u ON t.a = u.k AND t.a = u.v").rows();
+    let composite = join("SELECT * FROM t JOIN u ON t.a = u.k AND t.b = u.v").rows();
+    assert!(
+        shared < composite,
+        "shared {shared} vs composite {composite}"
+    );
+}
+
+#[test]
+fn a_composite_key_over_a_computed_column_gets_no_composite_factor() {
+    // `abs(t.b)` has no known distinct count: the tuple count is unknown, so the independent
+    // product stays, well below the 1,000 rows the composite rule gives for the plain columns.
+    let e =
+        join("SELECT * FROM t JOIN (SELECT k, abs(v) AS v FROM u) u ON t.a = u.k AND t.b = u.v");
+    assert!(e.rows() < 1000.0, "rows {}", e.rows());
+}
+
+#[test]
+fn a_filter_on_a_non_key_column_does_not_inflate_the_composite_key_domain() {
+    let whole = join("SELECT * FROM t JOIN u ON t.a = u.k AND t.b = u.v").rows();
+    let filtered =
+        join("SELECT * FROM (SELECT * FROM t WHERE x < 50) t JOIN u ON t.a = u.k AND t.b = u.v")
+            .rows();
+    // The filter keeps a third of `t` (the default selectivity for the range): the join keeps
+    // the same third, not less (the key domain is not multiplied by the fraction a second time).
+    close(filtered, whole / 3.0, "filtered");
+}
+
+#[test]
+fn a_composite_outer_join_keeps_the_unmatched_fraction() {
+    // Only inner joins take the composite rule: an outer join still finds rows of `t` without a
+    // match (TPC-DS q78's anti join collapsed to one row when it did not).
+    let e = join("SELECT * FROM t LEFT JOIN u ON t.a = u.k AND t.b = u.v");
+    assert!(e.col("v").null_frac > 0.0, "{}", e.col("v").null_frac);
 }
 
 #[test]
@@ -951,4 +1010,110 @@ mod ranges {
             prop_assert!(est.rows >= 0.0 && est.rows <= values.len() as f64 + 1e-9);
         }
     }
+}
+
+/// `col = <one value>` (study 26, E10): an aggregate output's distinct count
+/// is only the guess (its rows), and compared with an uncorrelated scalar
+/// subquery it is read as the rows, so about one row stays, not the
+/// default fifth (TPC-H q15's `total_revenue = (SELECT max(..))`). An
+/// expression that reads a column, and a literal (T166 section 2), keep the
+/// default over the guessed count.
+#[test]
+fn an_unknown_count_compared_with_one_value_keeps_about_one_row() {
+    // Ten groups: `m`'s count is the guess, 10.
+    let over = |pred: &str| {
+        filter(&format!(
+            "SELECT * FROM (SELECT b, sum(a) AS m FROM t GROUP BY b) g WHERE {pred}"
+        ))
+    };
+    let one = over("m = (SELECT max(a) FROM t)");
+    close(one.rows(), 1.0, "a scalar subquery");
+    assert_eq!(one.col("m").ndv, 1.0, "one value left");
+    assert_eq!(one.col("m").null_frac, 0.0, "= leaves no NULL");
+    // `a` is 10% NULL: `<=>` keeps those rows, which a NULL result matches.
+    let safe = filter("SELECT a FROM t WHERE a <=> (SELECT max(b) FROM t)");
+    assert!(safe.col("a").null_frac > 0.0, "<=> keeps the NULL rows");
+    close(
+        over("m <=> (SELECT max(a) FROM t)").rows(),
+        1.0,
+        "null-safe",
+    );
+    close(over("m = b + 1").rows(), 2.0, "an expression over a column");
+    close(over("m = 5").rows(), 2.0, "a literal over a guessed count");
+    // A known count divides as before.
+    close(
+        over("b = (SELECT max(b) FROM t)").rows(),
+        1.0,
+        "a known count",
+    );
+}
+
+/// `col IN (<one value>, ...)` (E10's follow-up, review item 5): a list
+/// whose elements are each one value (literals or uncorrelated subqueries)
+/// with at least one subquery keeps `k` of a guessed count's rows, as
+/// `col = <one value>` keeps one. A literal-only list and a list with an
+/// expression over a column keep the default over the guessed count.
+#[test]
+fn an_unknown_count_in_a_list_of_one_values_keeps_k_rows() {
+    // Ten groups: `m`'s count is the guess, 10; the default keeps 2.
+    let over = |pred: &str| {
+        filter(&format!(
+            "SELECT * FROM (SELECT b, sum(a) AS m FROM t GROUP BY b) g WHERE {pred}"
+        ))
+    };
+    let three =
+        over("m IN ((SELECT max(a) FROM t), (SELECT min(a) FROM t), (SELECT max(b) FROM t))");
+    close(three.rows(), 3.0, "three subqueries");
+    assert_eq!(three.col("m").ndv, 3.0, "three values left");
+    assert_eq!(three.col("m").null_frac, 0.0, "IN leaves no NULL");
+    close(
+        over("m IN (5, 6, (SELECT max(a) FROM t))").rows(),
+        3.0,
+        "literals and a subquery",
+    );
+    close(
+        over("m IN (5, 6, 7)").rows(),
+        2.0,
+        "literals over a guessed count",
+    );
+    close(
+        over("m IN (b + 1, 6, (SELECT max(a) FROM t))").rows(),
+        2.0,
+        "an expression over a column",
+    );
+    // A repeated literal is one value: `k` is 2.
+    let two = over("m IN (5L, 5L, (SELECT max(a) FROM t))");
+    close(two.rows(), 2.0, "a repeated literal");
+    assert_eq!(two.col("m").ndv, 2.0, "two values left");
+    // A known count divides by the distinct values too and keeps at most `k`.
+    let known = over("b IN (1, 1, (SELECT max(b) FROM t))");
+    close(known.rows(), 2.0, "a known count");
+    assert_eq!(known.col("b").ndv, 2.0, "two values left of a known count");
+}
+
+/// A filter over a projection that names one column twice narrows both
+/// names: `c1 > 49` over `a AS c0, a AS c1` leaves `c0` the same range as
+/// `c1` (#692 review), and `c0 = c1` keeps every non-NULL row.
+#[test]
+fn a_filter_narrows_every_rename_of_its_column() {
+    let over_project = |p: &LogicalPlan| matches!(&p.node, PlanNode::Filter { input, .. } if matches!(input.node, PlanNode::SubqueryAlias { .. }));
+    let e = Estimated::of(
+        "SELECT * FROM (SELECT a AS c0, a AS c1 FROM t) q WHERE c1 > 49",
+        over_project,
+    );
+    let (c0, c1) = (e.col("c0"), e.col("c1"));
+    assert_eq!((c1.min, c1.max), (Some(49.0), Some(99.0)));
+    assert_eq!((c0.min, c0.max), (c1.min, c1.max));
+    let all = Estimated::of("SELECT * FROM (SELECT a AS c0, a AS c1 FROM t) q", |p| {
+        matches!(p.node, PlanNode::Project { .. })
+    });
+    let e = Estimated::of(
+        "SELECT * FROM (SELECT a AS c0, a AS c1 FROM t) q WHERE c0 = c1",
+        over_project,
+    );
+    close(
+        e.rows(),
+        all.rows() * (1.0 - all.col("c0").null_frac),
+        "c0 = c1",
+    );
 }

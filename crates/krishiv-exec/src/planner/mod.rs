@@ -27,6 +27,7 @@
 
 mod aggregate;
 mod build;
+mod build_project;
 pub(crate) mod eval;
 mod explain;
 mod file_table;
@@ -35,8 +36,10 @@ mod late_fetch;
 mod ndv_sample;
 pub(crate) mod nodes;
 mod orient;
+mod probe_select;
 mod properties;
 pub(crate) mod pushdown;
+mod python_udf;
 mod runtime_filter;
 pub(crate) mod subquery;
 mod table;
@@ -53,7 +56,7 @@ pub use build::DefaultPlanner;
 pub(crate) use build::concat_schemas;
 pub use explain::ExplainNode;
 pub use file_table::FileTable;
-pub use ndv_sample::SampleOptions;
+pub use ndv_sample::{SampleOptions, SampleOutcome, SampleResult};
 pub use table::{
     MemoryTable, MemoryTables, ProviderStatistics, TableProvider, TableProviderResolver,
 };

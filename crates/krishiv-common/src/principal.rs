@@ -45,6 +45,20 @@ impl Principal {
         }
     }
 
+    /// The principal of a context nobody has set one on: it has no name, and
+    /// [`Self::is_unset`] says so. Nothing may be resolved or authorized for it
+    /// (an I/O context that was never told who it acts for fails closed).
+    #[must_use]
+    pub fn unset() -> Self {
+        Self::new("", PrincipalKind::User)
+    }
+
+    /// Whether this is [`Self::unset`] (or any principal without a name).
+    #[must_use]
+    pub fn is_unset(&self) -> bool {
+        self.name.is_empty()
+    }
+
     /// The embedded default: the local OS user.
     #[must_use]
     pub fn local_user() -> Self {
@@ -71,11 +85,13 @@ impl Principal {
         let mut groups = self.groups.clone();
         groups.sort();
         groups.dedup();
+        // A missing tenant is `-`, never a quoted empty name: `Some("")` is a tenant of its own.
+        let tenant = self
+            .tenant
+            .as_ref()
+            .map_or_else(|| "-".to_owned(), |t| quoted(std::slice::from_ref(t)));
         format!(
-            "{kind}:{}/{}{}",
-            quoted(std::slice::from_ref(
-                &self.tenant.clone().unwrap_or_default()
-            )),
+            "{kind}:{tenant}/{}{}",
             quoted(std::slice::from_ref(&self.name)),
             if groups.is_empty() {
                 String::new()
@@ -83,5 +99,36 @@ impl Principal {
                 format!("[{}]", quoted(&groups))
             }
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_tenant_and_an_empty_tenant_have_different_ids() {
+        let none = Principal::new("a", PrincipalKind::User);
+        let mut empty = none.clone();
+        empty.tenant = Some(String::new());
+        assert_eq!(none.id(), "user:-/`a`");
+        assert_eq!(empty.id(), "user:``/`a`");
+        assert_ne!(none.id(), empty.id());
+    }
+
+    #[test]
+    fn ids_do_not_collide_across_separators() {
+        let mut a = Principal::new("x/`y`", PrincipalKind::User);
+        a.tenant = Some("t".to_owned());
+        let mut b = Principal::new("y", PrincipalKind::User);
+        b.tenant = Some("t/`x".to_owned());
+        assert_ne!(a.id(), b.id());
+    }
+
+    #[test]
+    fn the_unset_principal_is_recognised() {
+        assert!(Principal::unset().is_unset());
+        assert!(!Principal::local_user().is_unset());
+        assert!(!Principal::new("a", PrincipalKind::Service).is_unset());
     }
 }

@@ -136,8 +136,8 @@ pub(crate) fn statement(mut s: &Statement, sql: &str, opts: ParserOptions) -> R 
                         reserved_namespace_properties(properties, a.span)?;
                     }
                     // Schema-level collations are off in Spark 4.2
-                    // (`spark.sql.schemaLevelCollations.enabled`).
-                    AlterNamespaceAction::DefaultCollation(_) => {
+                    // (`spark.sql.collation.schemaLevel.enabled`).
+                    AlterNamespaceAction::DefaultCollation(_) if !opts.schema_level_collations => {
                         return Err(at(UnsupportedFeatureSchemaLevelCollations {}, a.span));
                     }
                     _ => {}
@@ -459,7 +459,7 @@ impl Checker<'_> {
             ));
         }
         self.property_list(&n.properties, true, n.span)?;
-        // Spark 4.2 then refuses `DEFAULT COLLATION` unless `spark.sql.schemaLevelCollations.enabled`;
+        // Spark 4.2 then refuses `DEFAULT COLLATION` unless `spark.sql.collation.schemaLevel.enabled`;
         // its golden suite runs with it on, and Krishiv accepts the clause (not checked here).
         reserved_namespace_properties(&n.properties, n.span)
     }
@@ -731,18 +731,27 @@ impl Checker<'_> {
                 self.property_list(keys, false, a.span)?;
                 self.option_values(keys)
             }
-            AlterTableAction::AddPartition { parts, .. } => parts
-                .iter()
-                .try_for_each(|p| self.partition_values(Some(&p.spec))),
-            AlterTableAction::DropPartition { specs, .. } => specs
-                .iter()
-                .try_for_each(|s| self.partition_values(Some(s))),
+            AlterTableAction::AddPartition { parts, .. } => {
+                parts
+                    .iter()
+                    .try_for_each(|p| self.partition_values(Some(&p.spec)))?;
+                parts.iter().try_for_each(|p| non_optional(&p.spec))
+            }
+            AlterTableAction::DropPartition { specs, .. } => {
+                specs
+                    .iter()
+                    .try_for_each(|s| self.partition_values(Some(s)))?;
+                specs.iter().try_for_each(non_optional)
+            }
             AlterTableAction::RenamePartition { from, to, .. } => {
                 self.partition_values(Some(from))?;
-                self.partition_values(Some(to))
+                non_optional(from)?;
+                self.partition_values(Some(to))?;
+                non_optional(to)
             }
             AlterTableAction::SetPartitionLocation { partition, .. } => {
-                self.partition_values(Some(partition))
+                self.partition_values(Some(partition))?;
+                non_optional(partition)
             }
             AlterTableAction::SetLocation(_)
             | AlterTableAction::SetComment(_)
@@ -1838,6 +1847,25 @@ fn property_list_span(sql: &str, first: Span, last: Span) -> Span {
         .filter(|t| paren(t, Sym::RParen))
         .map_or(last.end, |t| last.end + t.span.end);
     Span::new(start, end)
+}
+
+/// Spark's `visitNonOptionalPartitionSpec` (`ALTER TABLE` ADD, DROP, RENAME and SET LOCATION of a partition):
+/// a key without a value is `INVALID_SQL_SYNTAX.EMPTY_PARTITION_VALUE`, the first in the spec map's order.
+fn non_optional(spec: &PartitionSpec) -> R {
+    let keys: Vec<&str> = spec.parts.iter().map(|p| p.key.value.as_str()).collect();
+    match keys::to_map_order(&keys).into_iter().find(|k| {
+        spec.parts
+            .iter()
+            .any(|p| p.key.value == *k && p.value.is_none())
+    }) {
+        Some(key) => Err(at(
+            InvalidSqlSyntaxEmptyPartitionValue {
+                part_key: quote(key),
+            },
+            spec.span,
+        )),
+        None => Ok(()),
+    }
 }
 
 fn quote(name: &str) -> String {

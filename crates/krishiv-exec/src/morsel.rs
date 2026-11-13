@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Morsel dispatch (HyPer-style), the finalize countdown and the flush
-//! barrier.
+//! Morsel dispatch (HyPer-style), the finalize countdown, the flush
+//! barrier and the deterministic fan-in's baton.
 
-use crate::sync::{AtomicUsize, Event, Ordering};
+use std::sync::Arc;
+
+use crate::sync::{AtomicUsize, Event, Mutex, Ordering, lock};
 
 /// Hands out morsel indices `0..len` to drivers, each exactly once: one
 /// atomic increment per claim, so drivers balance load by pulling. Seeded,
@@ -50,6 +52,76 @@ impl MorselCursor {
             return None;
         }
         Some((i as u64, self.order.as_ref().map_or(i, |o| o[i])))
+    }
+}
+
+impl MorselCursor {
+    /// The `j`-th claim of lane `lane` out of `lanes` (T094 G1, logical
+    /// partitions): the lane owns the claim ordinals `lane, lane + lanes,
+    /// lane + 2 * lanes, ...`, so which morsels a lane reads never depends on
+    /// which thread ran first. The caller keeps `j` (its own counter); no
+    /// shared state is touched. `None` once the lane's ordinals pass `len`
+    /// (or `lanes` is zero).
+    pub fn claim_strided(&self, lane: usize, lanes: usize, j: usize) -> Option<(u64, usize)> {
+        let i = j.checked_mul(lanes)?.checked_add(lane)?;
+        if lanes == 0 || lane >= lanes || i >= self.len {
+            return None;
+        }
+        Some((i as u64, self.order.as_ref().map_or(i, |o| o[i])))
+    }
+}
+
+impl MorselCursor {
+    /// The next claim of a driver: from the shared sequence, or, for a
+    /// logical-partition driver (`lane` is `(lane, lanes)`, see
+    /// [`claim_strided`](Self::claim_strided)), from its own lane, with `taken`
+    /// counting the claims it made.
+    pub fn claim_for(
+        &self,
+        lane: Option<(usize, usize)>,
+        taken: &mut usize,
+    ) -> Option<(u64, usize)> {
+        let Some((lane, lanes)) = lane else {
+            return self.claim_ordered();
+        };
+        let got = self.claim_strided(lane, lanes, *taken)?;
+        *taken += 1;
+        Some(got)
+    }
+}
+
+/// The combine order of the logical-partition drivers of one pipeline
+/// (T094 G1): lane `k` may combine its sink state only after lanes `0..k` have.
+#[derive(Debug)]
+pub(crate) struct CombineOrder {
+    next: AtomicUsize,
+    event: Event,
+}
+
+impl CombineOrder {
+    pub(crate) fn new() -> Self {
+        Self {
+            next: AtomicUsize::new(0),
+            event: Event::default(),
+        }
+    }
+
+    /// Completes once every lane below `lane` has combined or left.
+    pub(crate) async fn wait(&self, lane: usize) {
+        loop {
+            let listener = self.event.listen();
+            if self.next.load(Ordering::Acquire) >= lane {
+                return;
+            }
+            listener.await;
+        }
+    }
+
+    /// `lane` combined, failed or was aborted: the next lane may go. Lanes
+    /// call this in order, so the counter only ever steps by one.
+    pub(crate) fn pass(&self, lane: usize) {
+        self.next.fetch_max(lane + 1, Ordering::AcqRel);
+        self.event.notify();
     }
 }
 
@@ -116,10 +188,137 @@ impl Barrier {
     pub(crate) async fn wait(&self) {
         loop {
             let listener = self.event.listen();
-            if self.left.load(Ordering::Acquire) == 0 {
+            if self.is_open() {
                 return;
             }
             listener.await;
         }
+    }
+
+    /// Whether every driver has arrived.
+    pub(crate) fn is_open(&self) -> bool {
+        self.left.load(Ordering::Acquire) == 0
+    }
+}
+
+/// The turn of the members of a fan-in whose shared operators need a flush,
+/// under `krishiv.deterministicOrder` (one driver per member): only the
+/// member holding the baton runs, so the rows reach the shared operators in
+/// one order on every run. Member 0 starts with it. A member keeps it until
+/// it waits at a flush barrier that is still closed ([`pass`](Self::pass))
+/// or ends ([`leave`](Self::leave)); the baton then goes to the next member
+/// after it, in member order, that has not ended and is not waiting at a
+/// closed barrier. Every arrival at a barrier happens under the baton, so
+/// which barriers are open when it moves is the same on every run, and so
+/// is the whole schedule.
+///
+/// A member gives the baton up only between operators, never inside an
+/// operator's flush, so no member waits for work another member holds (a
+/// grace join's claimed partition) while the holder waits for it.
+#[derive(Debug)]
+pub(crate) struct Baton {
+    state: Mutex<BatonState>,
+    event: Event,
+}
+
+#[derive(Debug)]
+struct BatonState {
+    holder: Option<usize>,
+    ended: Vec<bool>,
+    /// Per member: the closed barrier it waits at, if any.
+    blocked: Vec<Option<Arc<Barrier>>>,
+    /// Every member left waits at a closed barrier: nobody can run.
+    stuck: bool,
+}
+
+impl Baton {
+    /// A baton for `members` members, held by member 0.
+    pub(crate) fn new(members: usize) -> Self {
+        Self {
+            state: Mutex::new(BatonState {
+                holder: (members > 0).then_some(0),
+                ended: vec![false; members],
+                blocked: vec![None; members],
+                stuck: false,
+            }),
+            event: Event::default(),
+        }
+    }
+
+    /// Completes once `member` holds the baton: `true`, or `false` when no
+    /// member can ever run again (every member left waits at a closed
+    /// barrier).
+    pub(crate) async fn acquire(&self, member: usize) -> bool {
+        loop {
+            let listener = self.event.listen();
+            {
+                let s = lock(&self.state);
+                if s.holder == Some(member) {
+                    return true;
+                }
+                if s.stuck {
+                    return false;
+                }
+            }
+            listener.await;
+        }
+    }
+
+    /// `member`, holding the baton, waits at `barrier`, which is closed:
+    /// the baton moves on, and the member is skipped until `barrier` has
+    /// opened (it gets the baton again in its turn after that). A member
+    /// that does not hold the baton changes nothing.
+    pub(crate) fn pass(&self, member: usize, barrier: Arc<Barrier>) {
+        {
+            let mut s = lock(&self.state);
+            if s.holder != Some(member) {
+                return;
+            }
+            if let Some(b) = s.blocked.get_mut(member) {
+                *b = Some(barrier);
+            }
+            s.hand_on(member);
+        }
+        self.event.notify();
+    }
+
+    /// `member` ended (or failed, or was aborted): it never runs again, and
+    /// if it holds the baton, the baton moves on.
+    pub(crate) fn leave(&self, member: usize) {
+        {
+            let mut s = lock(&self.state);
+            if let Some(e) = s.ended.get_mut(member) {
+                *e = true;
+            }
+            if s.holder != Some(member) {
+                return;
+            }
+            s.hand_on(member);
+        }
+        self.event.notify();
+    }
+}
+
+impl BatonState {
+    /// Gives the baton to the first member after `from`, in member order,
+    /// that can run.
+    fn hand_on(&mut self, from: usize) {
+        let n = self.ended.len();
+        self.holder = None;
+        let mut waiting = false;
+        for d in 1..=n {
+            let j = (from + d) % n;
+            if self.ended[j] {
+                continue;
+            }
+            if self.blocked[j].as_ref().is_some_and(|b| !b.is_open()) {
+                waiting = true;
+                continue;
+            }
+            self.blocked[j] = None;
+            self.holder = Some(j);
+            return;
+        }
+        self.stuck = waiting;
     }
 }

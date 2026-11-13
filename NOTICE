@@ -29,6 +29,24 @@ Apache Spark
   file keeps its license header). The Rust types in crates/krishiv-connect/src/proto/
   and the descriptor set under crates/krishiv-connect/tests/fixtures/ are generated
   from them by tools/connect-protogen.
+  python/krishiv/_udf/{conversion,pandas_types,pandas_utils,typehints,loose_version}.py:
+  copies of PySpark v4.2.0's python/pyspark/sql/conversion.py, sql/pandas/types.py,
+  sql/pandas/utils.py, sql/pandas/typehints.py and loose_version.py (Apache-2.0), changed
+  only in their imports; each keeps its license header. Ported (same code shape, edited):
+  python/krishiv/_udf/worker.py (from pyspark/worker.py, pyspark/util.py and
+  sql/pandas/serializers.py), python/krishiv/sql/udf.py (from sql/udf.py) and
+  python/krishiv/sql/pandas/functions.py (from sql/pandas/functions.py).
+  python/tests/pyspark_udf/: adapted copies of PySpark v4.2.0's sql/tests/test_udf.py,
+  sql/tests/pandas/test_pandas_udf_scalar.py, sql/tests/arrow/test_arrow_python_udf.py, the four
+  sql/tests/coercion/test_{python,pandas}_udf_{input,return}_type.py harnesses, testing/goldenutils.py
+  and the coercion golden CSVs (Apache-2.0; the CSVs unmodified, the code changed in its imports and
+  where adapt.py says).
+  crates/krishiv-functions/vendored/spark-function-docs.jsonl: the ExpressionInfo text
+  (usage, examples, since) of Spark 4.2.0's built-in functions, as dumped from a Spark 4.2.0
+  session by tests/scripts/gen_function_docs.py; the pages under docs/reference/sql/ are
+  derived from it.
+  crates/krishiv-types/vendored/srs_registry.csv, the SRS registry copied from Spark 4.2.0
+  and generated from PROJ 9.8.1 data.
 
 --------------------------------------------------------------------------------
 (Further entries: DataFusion, Feldera and others, if code is copied. Currently

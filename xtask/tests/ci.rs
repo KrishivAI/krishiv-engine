@@ -97,6 +97,11 @@ fn allowlist_matches_expected_paths() {
     assert!(is_size_excluded(
         "python/krishiv/sql/_generated_functions.py"
     ));
+    // PySpark's vendored conversion modules are excluded; Krishiv's own `_udf` modules count.
+    assert!(is_size_excluded("python/krishiv/_udf/conversion.py"));
+    assert!(is_size_excluded("python/krishiv/_udf/typehints.py"));
+    assert!(!is_size_excluded("python/krishiv/_udf/worker.py"));
+    assert!(!is_size_excluded("python/krishiv/_udf/types.py"));
     assert!(is_size_excluded(
         "python/krishiv/sql/_generated_functions.pyi"
     ));

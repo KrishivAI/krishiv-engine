@@ -76,6 +76,14 @@ pub(crate) struct SqlFunctions {
 }
 
 impl SqlFunctions {
+    /// Functions starting from this session's current map; later changes
+    /// to either do not reach the other (the map is replaced, never edited).
+    pub(crate) fn copy(&self) -> Self {
+        Self {
+            map: RwLock::new(self.snapshot()),
+        }
+    }
+
     /// The current map; what a query reads throughout.
     pub(crate) fn snapshot(&self) -> Arc<FunctionMap> {
         Arc::clone(&self.map.read().unwrap_or_else(PoisonError::into_inner))
@@ -121,6 +129,8 @@ pub(crate) struct QueryFunctions {
     map: Arc<FunctionMap>,
     catalog: Arc<SessionCatalog>,
     case_sensitive: bool,
+    /// The current catalog is `system` (which has no namespaces): a two-part call is no stored function.
+    in_system: bool,
     /// The functions stored in the catalog's namespaces, as of the start of
     /// the query, and the namespace a bare name resolves in.
     stored: Arc<StoredFunctions>,
@@ -154,7 +164,9 @@ impl QueryFunctions {
     ) -> Self {
         let stored = catalog.store.functions();
         let path = catalog.sql_path("");
+        let in_system = crate::system::is_system(&catalog.current_catalog());
         Self {
+            in_system,
             path,
             base,
             map,
@@ -165,6 +177,12 @@ impl QueryFunctions {
             expanded: Mutex::new(HashMap::new()),
             reads: Mutex::new((Vec::new(), None)),
         }
+    }
+
+    /// This registry as the query snapshot saw the current catalog (`system` or not).
+    pub(crate) fn in_system(mut self, in_system: bool) -> Self {
+        self.in_system = in_system;
+        self
     }
 
     /// This registry resolving bare names through `path`.
@@ -242,6 +260,7 @@ impl QueryFunctions {
                     // A body reads a view as written; schema binding modes
                     // apply to the views a query reads itself.
                     binding_enabled: false,
+                    in_system: self.in_system,
                     path: if def.path.is_empty() {
                         self.path.clone()
                     } else {
@@ -339,6 +358,20 @@ impl QueryFunctions {
                     let ExprNode::Function(call) = &e.node else {
                         return Ok(e);
                     };
+                    // A call written `ns.f()` inside a stored body is the defining catalog's, whatever
+                    // catalog is current when the body is expanded.
+                    if self.in_system
+                        && let [q] = call.qualifier.as_slice()
+                        && !q.eq_ignore_ascii_case("session")
+                        && !q.eq_ignore_ascii_case("system")
+                        && !q.eq_ignore_ascii_case("builtin")
+                    {
+                        let mut call = call.clone();
+                        call.qualifier = vec![crate::catalog::CATALOG.to_owned(), q.clone()];
+                        let mut next = (*e).clone();
+                        next.node = ExprNode::Function(call);
+                        return Ok(Arc::new(next));
+                    }
                     // Canonical operators and built-ins stay bare; anything
                     // else, session UDFs included, is a user function.
                     let builtin = ["system".to_owned(), "builtin".to_owned(), call.name.clone()];
@@ -411,6 +444,9 @@ impl QueryFunctions {
                         // A view whose path holds no catalog schema keeps the
                         // call bare, unresolved, not the view's namespace.
                         None if temporary_visible => return Ok(e),
+                        None if self.in_system => {
+                            vec![crate::catalog::CATALOG.to_owned(), namespace.to_owned()]
+                        }
                         None => vec![namespace.to_owned()],
                     };
                     let mut next = (*e).clone();
@@ -457,7 +493,7 @@ impl FunctionRegistry for QueryFunctions {
             }),
             [q, f] if q == "session" => temporary(f),
             [s, q, f] if s == "system" && q == "session" => temporary(f),
-            [_, f] => stored(&ns(0), f),
+            [_, f] if !self.in_system => stored(&ns(0), f),
             [c, _, f] if c == crate::catalog::CATALOG => stored(&ns(1), f),
             _ => None,
         };
@@ -680,4 +716,153 @@ mod tests {
         assert!(r.source_text(SourceId(7)).is_some());
         assert!(r.source_text(SourceId(8)).is_none());
     }
+}
+
+/// Spark's `SQL_TABLE_UDF_MISSING_COLUMN_NAMES` (`CreateSQLFunctionCommand`, checked after the
+/// body analyzed): a table function without a column list (`RETURNS TABLE`) takes its columns'
+/// names from the body. Spark checks the parsed body only: a bare `SELECT` (a `Project`) may not
+/// hold an item it would name itself (`x + 1`, `IDENTIFIER('x')`, `m['k']`); any other shape
+/// (`ORDER BY`, `LIMIT`, `GROUP BY`, `DISTINCT`, `WITH`, `WINDOW`, `QUALIFY`, a hint, a set
+/// operation) is not checked and names its columns as a query does. A pipe is checked at its last
+/// operator: `|> SELECT` and `|> EXTEND` are `Project`s too. `name` is the function's name as
+/// written (Spark keeps its case there). `ids` are the spans of the names the
+/// session substituted for `IDENTIFIER(..)` clauses, which Spark reads as unnamed expressions.
+pub(crate) fn check_return_names(
+    f: &krishiv_sql::ast::CreateFunction,
+    name: &str,
+    ids: &[krishiv_sql::ast::Span],
+) -> Result<(), KrishivError> {
+    use krishiv_sql::ast::{FunctionBodyKind, FunctionReturnsKind};
+    let without_columns = matches!(
+        f.returns.as_ref().map(|r| &r.kind),
+        Some(FunctionReturnsKind::Table(None))
+    );
+    let query = match &f.body.kind {
+        FunctionBodyKind::Query(q) => Some(&**q),
+        other => bracketed_query(other),
+    };
+    match query {
+        Some(q) if without_columns && lacks_column_names(q, ids) => Err(
+            krishiv_common::error::UserDefinedFunctionsSqlTableUdfMissingColumnNames {
+                function_name: format!("`{}`", name.replace('`', "``")),
+            }
+            .into(),
+        ),
+        _ => Ok(()),
+    }
+}
+
+/// Whether `q` parses to Spark's `Project` with an `UnresolvedAlias` item (see
+/// [`check_return_names`]).
+fn lacks_column_names(q: &krishiv_sql::ast::Query, ids: &[krishiv_sql::ast::Span]) -> bool {
+    use krishiv_sql::ast::{PipeOpKind, SetExprKind};
+    // Each of these wraps the `Project` in another node (`Sort`, `Limit`, `WithCTE`, ...).
+    let organized = q.with.is_some()
+        || !q.order_by.is_empty()
+        || !q.cluster_by.is_empty()
+        || !q.distribute_by.is_empty()
+        || !q.sort_by.is_empty()
+        || !q.windows.is_empty()
+        || q.limit.is_some()
+        || q.offset.is_some();
+    if organized {
+        return false;
+    }
+    match &q.body.kind {
+        SetExprKind::Select(s) => {
+            // A hint is an `UnresolvedHint` over the `Project`.
+            let projected = s.hints.is_empty()
+                && s.group_by.is_none()
+                && s.having.is_none()
+                && s.windows.is_empty()
+                && s.qualify.is_none()
+                && !matches!(
+                    s.quantifier,
+                    Some(krishiv_sql::ast::SetQuantifier::Distinct)
+                );
+            projected && unnamed_item(&s.projection, ids)
+        }
+        // `(query)` is the query; `FROM t SELECT ...` with one body is that body over `t`.
+        SetExprKind::Query(inner) => lacks_column_names(inner, ids),
+        SetExprKind::FromStatement(from) => match &from.bodies[..] {
+            [body] => lacks_column_names(body, ids),
+            _ => false,
+        },
+        SetExprKind::Pipe(pipe) => match pipe.ops.last().map(|op| &op.kind) {
+            Some(PipeOpKind::Select(s)) => {
+                s.hints.is_empty()
+                    && s.group_by.is_none()
+                    && s.windows.is_empty()
+                    && !matches!(
+                        s.quantifier,
+                        Some(krishiv_sql::ast::SetQuantifier::Distinct)
+                    )
+                    && unnamed_item(&s.projection, ids)
+            }
+            Some(PipeOpKind::Extend(items)) => unnamed_item(items, ids),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Whether an item of `items` has no alias and is not a named expression.
+fn unnamed_item(items: &[krishiv_sql::ast::SelectItem], ids: &[krishiv_sql::ast::Span]) -> bool {
+    items
+        .iter()
+        .any(|item| item.alias.is_none() && !named(&item.expr, ids))
+}
+
+/// Whether Spark's parser makes `e` a named expression (an attribute or a star), which a
+/// `Project` keeps as it is, rather than wrapping it in an `UnresolvedAlias`.
+fn named(e: &krishiv_sql::ast::Expr, ids: &[krishiv_sql::ast::Span]) -> bool {
+    use krishiv_sql::ast::ExprKind;
+    match &e.kind {
+        ExprKind::Wildcard { .. } => true,
+        _ => attribute(e, ids),
+    }
+}
+
+/// Whether `e` is an `UnresolvedAttribute`: a column, in brackets or with fields taken
+/// (`(c1).c2`), but not a name substituted for an `IDENTIFIER(..)` clause, which Spark parses as
+/// an expression (`IDENTIFIER('c1').c2` is a field of one).
+fn attribute(e: &krishiv_sql::ast::Expr, ids: &[krishiv_sql::ast::Span]) -> bool {
+    use krishiv_sql::ast::ExprKind;
+    match &e.kind {
+        // `Span`'s `==` ignores positions: compare the offsets (as `lower_identified` does).
+        ExprKind::Column(_) => !ids
+            .iter()
+            .any(|s| s.start == e.span.start && s.end <= e.span.end),
+        ExprKind::Nested(inner) | ExprKind::Field(inner, _) => attribute(inner, ids),
+        _ => false,
+    }
+}
+
+/// The query of a function body written `RETURN (query)`, which the parser reads as a scalar
+/// subquery expression; Spark's grammar reads it as the query (in brackets, as many as written).
+pub(crate) fn bracketed_query(
+    body: &krishiv_sql::ast::FunctionBodyKind,
+) -> Option<&krishiv_sql::ast::Query> {
+    use krishiv_sql::ast::{ExprKind, FunctionBodyKind};
+    let FunctionBodyKind::Expr(e) = body else {
+        return None;
+    };
+    let mut e: &krishiv_sql::ast::Expr = e;
+    loop {
+        match &e.kind {
+            ExprKind::Nested(inner) => e = inner,
+            ExprKind::Subquery(q) => return Some(q),
+            _ => return None,
+        }
+    }
+}
+
+/// What `CREATE FUNCTION`'s `declare` lowers a function's defaults and body with.
+#[derive(Clone, Copy)]
+pub(crate) struct Declared<'a> {
+    pub(crate) source: krishiv_plan::SourceId,
+    pub(crate) case_sensitive: bool,
+    pub(crate) ansi: bool,
+    /// The spans of the names substituted for `IDENTIFIER(..)` clauses in the statement.
+    pub(crate) ids: &'a [krishiv_sql::ast::Span],
 }

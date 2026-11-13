@@ -1,7 +1,7 @@
 # krishiv-cli
 
 **Layer:** L7 (may depend only on crates in L7 or lower; `cargo xtask layering`).  
-`krishiv sql` (P2-T092): `-e`/`-f`/stdin, `-o table|csv|json`, `--conf`, `--table name=path`, `--timing`; exit 0 ok, 1 query/I/O error, 2 usage. REPL polish is P2-T132.
+`krishiv sql` (P2-T092): `-e`/`-f`/stdin, `-o table|csv|json`, `--conf`, `--table name=path`, `--timing`; exit 0 ok, 1 query/I/O error, 2 usage. The REPL on a terminal is a `reedline` editor (`src/editor.rs`: Tab menu from `complete.rs`, history, multi-line statements); piped stdin uses the plain loop (P2-T132).
 
 ## Purpose
 The `krishiv` binary: sql, server, coordinator, worker, mcp, ui, doctor, migrate subcommands.
@@ -10,6 +10,7 @@ The `krishiv` binary: sql, server, coordinator, worker, mcp, ui, doctor, migrate
 Paths are relative to this crate.
 - `src/main.rs` subcommand dispatch and the allocator/memory hook set-up
 - `src/sql.rs` the `krishiv sql` subcommand: input (`-e`, `-f`, stdin), output (`-o`), `--conf`, `--table`, `--timing`, `--agent`, `--max-rows`, `--max-seconds`
+- `src/check_compat/` (P3-T029) `krishiv check-compat <paths>`: `mod.rs` args, file walk, exit codes (0 none, 1 findings, 2 read errors), JSON/text report; `scan.rs` SQL / Python / notebook-cell scanners; `alternatives.json` workarounds for not-yet functions (names only supported functions; a unit test checks), `functions.json` the function matrix (generated from the SQL reference pages by `tests/scripts/gen_compat_matrix.py`); corpus `tests/check_compat_corpus/` (`handwritten/` with a hand-checked `expected.json`, `supported_only/` must give no findings, `generated/` from `tests/scripts/gen_check_compat_corpus.py`); JSON report is `{schema_version, files_scanned, findings, errors}`
 - `src/repl.rs` the interactive loop (no `-e`/`-f` on a terminal): `.timer`, `.format`, `.complete`, `.history`, history persistence
 - `src/complete.rs` completion sources (keywords, function registry, session catalog, config registry)
 - `src/highlight.rs` ANSI highlighting of statements

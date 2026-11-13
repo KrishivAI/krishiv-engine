@@ -34,6 +34,20 @@ const EXCLUDED_PREFIXES: &[&str] = &[
     ".github/ci-fixtures/",
     // The Python wrappers generated from the function registry (`.py` and `.pyi`).
     "python/krishiv/sql/_generated_functions.",
+    // PySpark 4.2.0's conversion modules, vendored unchanged but for their imports (P2-T059 unit
+    // 2c, NOTICE; ruff and ty skip them too). Krishiv's own `_udf` modules (`worker.py`,
+    // `types.py`, `__init__.py`) count.
+    "python/krishiv/_udf/conversion.py",
+    "python/krishiv/_udf/loose_version.py",
+    "python/krishiv/_udf/pandas_types.py",
+    "python/krishiv/_udf/pandas_utils.py",
+    "python/krishiv/_udf/typehints.py",
+    // The API reference pages written by `cargo xtask docs-sql | docs-python | docs-rust` and the
+    // configuration page of `docs-config`; a nightly job diffs them against the generators.
+    "docs/reference/sql/",
+    "docs/reference/python/",
+    "docs/reference/rust/",
+    "docs/reference/config/index.md",
 ];
 /// Suffixes of machine-written files. Kept specific: a loose suffix such as
 /// `.out` or `.map` would also exclude hand-written files.

@@ -15,7 +15,11 @@ use super::DataFrame;
 use crate::session::RecordBatchStream;
 
 impl DataFrame {
-    pub(super) async fn execute_stream_here(&self) -> Result<RecordBatchStream, KrishivError> {
+    /// The result stream; with `edge`, on the carriers a caller reads (`carrier.rs`), else on the engine's own.
+    pub(super) async fn execute_stream_here(
+        &self,
+        edge: bool,
+    ) -> Result<RecordBatchStream, KrishivError> {
         use tracing::Instrument as _;
         let span = self.span();
         async {
@@ -24,7 +28,10 @@ impl DataFrame {
             // Before the query is analyzed, so an invalidation that runs while it executes keeps
             // its rows out of the result cache.
             let generation = self.session.state.runtime.results.generation();
-            let a = self.action_analysis().await?;
+            let a = self
+                .action_analysis()
+                .instrument(tracing::info_span!("krishiv.analyze"))
+                .await?;
             // The reads were authorized by the analysis: a hit serves only what this principal's
             // own run of the query would return.
             // A frame that asked for a relation cache (`cache()`, `persist()`) runs the query: its
@@ -50,17 +57,32 @@ impl DataFrame {
                 // A hit is a request answered, so it has its row in `system.queries` too; it is not a
                 // physical execution, so the metrics registry does not count it.
                 let id = self.session.state.queries.record_replayed(
+                    crate::system::TextPolicy::from_config(&a.env.config),
                     a.env.text.as_deref(),
                     a.env.statement_class,
                     self.session.operation_id(),
                 );
                 *a.env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
-                return Ok(crate::carrier::client_stream(crate::result_cache::replay(
-                    batches,
-                )));
+                let replayed = crate::result_cache::replay(batches);
+                return Ok(if edge {
+                    crate::carrier::client_stream(replayed)
+                } else {
+                    replayed
+                });
             }
-            let (physical, fill) = self.physical_cached(&a).await?;
-            let stream = self.session.run(&physical, &a.env).await?;
+            let (physical, fill) = self
+                .physical_cached(&a)
+                .instrument(tracing::info_span!("krishiv.plan"))
+                .await?;
+            // The execution span stays open while the rows are produced and read: it closes when
+            // the result stream is dropped, not when `run` returns the stream.
+            let exec = tracing::info_span!("krishiv.execute");
+            let stream = self
+                .session
+                .run(&physical, &a.env)
+                .instrument(exec.clone())
+                .await?;
+            let stream = crate::telemetry::hold_span(stream, exec);
             let stream = fill.fill(stream, &self.session.state.cache);
             let stream = match result {
                 Some((settings, key)) => crate::result_cache::fill(
@@ -72,7 +94,11 @@ impl DataFrame {
                 ),
                 None => stream,
             };
-            Ok(crate::carrier::client_stream(stream))
+            Ok(if edge {
+                crate::carrier::client_stream(stream)
+            } else {
+                stream
+            })
         }
         .instrument(span.clone())
         .await
@@ -81,11 +107,10 @@ impl DataFrame {
 
     /// The span of one action: the statement's, or the engine's alone.
     fn span(&self) -> tracing::Span {
-        let session_id = &self.session.state.session_id;
-        self.trace.as_ref().map_or_else(
-            || crate::telemetry::plain_span(session_id),
-            |t| t.span(session_id),
-        )
+        let who = crate::telemetry::Who::of(&self.session.state);
+        self.trace
+            .as_ref()
+            .map_or_else(|| crate::telemetry::plain_span(&who), |t| t.span(&who))
     }
 
     /// `self` with the statement's trace.

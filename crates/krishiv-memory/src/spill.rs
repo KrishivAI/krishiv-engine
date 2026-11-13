@@ -62,6 +62,16 @@ pub trait Spillable: Send + Sync {
     fn last_resort(&self) -> bool {
         false
     }
+    /// Whether this consumer holds a finished output no reader has started
+    /// on for a while (a hash join build waiting for its probe): spilling
+    /// it costs one write and one read, where a running consumer that
+    /// spills its own state under the pressure it causes may write the same
+    /// rows several times. Such consumers of the requester's query are asked
+    /// before the requester's driver spills its own consumers
+    /// ([`SpillOwner::reserve`]), and before any other victim in a round.
+    fn idle(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Default)]
@@ -422,9 +432,11 @@ impl SpillOwner {
 
     /// Reserves `bytes` for consumer `id` of `pool` the cooperative way:
     /// 1. the fast path;
-    /// 2. **self-spill**: flag this driver's own consumers (largest
+    /// 2. idle outputs of the same query ([`Spillable::idle`],
+    ///    [`MemoryPool::spill_idle`]), retry;
+    /// 3. **self-spill**: flag this driver's own consumers (largest
     ///    spillable first) to cover the shortfall, run `service`, retry;
-    /// 3. arbitration ([`MemoryPool::reserve`]), running `service` whenever
+    /// 4. arbitration ([`MemoryPool::reserve`]), running `service` whenever
     ///    another round asks one of this driver's consumers to spill.
     ///
     /// `service` spills every own consumer whose request flag is set and
@@ -447,6 +459,33 @@ impl SpillOwner {
             .await
     }
 
+    /// Awaits `work` while servicing this driver's own consumers whenever
+    /// another round asks them to spill (as a waiting driver must, ADR 0007).
+    async fn await_serving<T, W, F, Fut>(&self, work: W, service: &mut F) -> T
+    where
+        W: Future<Output = T>,
+        F: FnMut() -> Fut,
+        Fut: Future<Output = ()>,
+    {
+        let mut work = std::pin::pin!(work);
+        loop {
+            let mut requested = self.requested.listen();
+            if self.pending() {
+                service().await;
+            }
+            let done = poll_fn(|cx| {
+                if let Poll::Ready(r) = work.as_mut().poll(cx) {
+                    return Poll::Ready(Some(r));
+                }
+                Pin::new(&mut requested).poll(cx).map(|()| None)
+            })
+            .await;
+            if let Some(r) = done {
+                return r;
+            }
+        }
+    }
+
     async fn reserve_with<F, Fut>(
         &self,
         pool: &dyn MemoryPool,
@@ -464,6 +503,20 @@ impl SpillOwner {
             Err(MemoryError::Exhausted { available, .. }) => bytes.saturating_sub(available),
             Err(e) => return Err(e),
         };
+        // An idle finished output of the same query goes first: see
+        // `Spillable::idle`.
+        let mut shortfall = shortfall;
+        if self
+            .await_serving(pool.spill_idle(id, shortfall), &mut service)
+            .await
+            > 0
+        {
+            shortfall = match pool.try_reserve(id, bytes) {
+                Ok(()) => return Ok(()),
+                Err(MemoryError::Exhausted { available, .. }) => bytes.saturating_sub(available),
+                Err(e) => return Err(e),
+            };
+        }
         let mut own = self.live_signals();
         own.sort_by_key(|s| std::cmp::Reverse(s.spillable_bytes()));
         let mut remaining = shortfall;

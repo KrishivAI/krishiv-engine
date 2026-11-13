@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+//! Tests for the typed configuration registry: keys, defaults, parsing, aliases and the snapshot.
 use std::collections::BTreeSet;
 use std::time::Duration;
 
@@ -243,7 +244,7 @@ fn ndv_sampling_entries_parse_and_default() {
         (
             Some(true),
             Some(131_072),
-            Some(std::time::Duration::from_secs(2))
+            Some(std::time::Duration::from_secs(5))
         )
     );
     c.set("krishiv.optimizer.ndvSampling.enabled", "false")
@@ -473,6 +474,18 @@ fn the_broadcast_threshold_defaults_to_10_mib_under_both_keys() {
 #[test]
 fn spark_aliases_map_to_krishiv_keys() {
     let mut c = Config::new();
+    assert_eq!(
+        LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION.key,
+        "krishiv.sql.legacy.skipTypeValidationOnAlterPartition"
+    );
+    assert_eq!(
+        lookup("spark.sql.legacy.skipTypeValidationOnAlterPartition").map(|e| e.key),
+        Some(LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION.key)
+    );
+    assert_eq!(
+        c.get(&LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION),
+        Some(&ConfigValue::Bool(false))
+    );
     assert_eq!(c.set("spark.sql.ansi.enabled", "false").unwrap(), None);
     assert_eq!(c.get(&ANSI_ENABLED), Some(&ConfigValue::Bool(false)));
     assert_eq!(
@@ -486,6 +499,30 @@ fn spark_aliases_map_to_krishiv_keys() {
     assert_eq!(
         lookup("krishiv.sql.ansi.enabled").map(|e| e.key),
         Some(ANSI_ENABLED.key)
+    );
+    assert_eq!(
+        lookup("spark.sql.collation.schemaLevel.enabled").map(|e| e.key),
+        Some(SCHEMA_LEVEL_COLLATIONS_ENABLED.key)
+    );
+}
+
+/// Schema-level collations: off by default (Spark 4.2), a boolean.
+#[test]
+fn schema_level_collations_default_off_and_parse() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&SCHEMA_LEVEL_COLLATIONS_ENABLED),
+        Some(&ConfigValue::Bool(false))
+    );
+    c.set("spark.sql.collation.schemaLevel.enabled", "true")
+        .unwrap();
+    assert_eq!(
+        c.get(&SCHEMA_LEVEL_COLLATIONS_ENABLED),
+        Some(&ConfigValue::Bool(true))
+    );
+    assert!(
+        c.set("krishiv.sql.collation.schemaLevel.enabled", "maybe")
+            .is_err()
     );
 }
 
@@ -806,6 +843,22 @@ fn join_enumerator_entries_default_and_parse() {
 }
 
 #[test]
+fn the_w1_rule_keys_default_off_and_are_user_settable() {
+    let mut c = Config::new();
+    for (key, entry) in [
+        ("krishiv.optimizer.subqueryAsWindow", &SUBQUERY_AS_WINDOW),
+        (
+            "krishiv.optimizer.shareRepeatedSubtrees",
+            &SHARE_REPEATED_SUBTREES,
+        ),
+    ] {
+        assert_eq!(c.get(entry).and_then(ConfigValue::as_bool), Some(false));
+        c.set(key, "true").unwrap();
+        assert_eq!(c.get(entry).and_then(ConfigValue::as_bool), Some(true));
+    }
+}
+
+#[test]
 fn eager_aggregation_defaults_on_and_parses() {
     let mut c = Config::new();
     assert_eq!(
@@ -1011,6 +1064,53 @@ fn plan_round_trip_is_off_by_default_and_parses() {
 }
 
 #[test]
+fn python_udf_entries_parse_and_default() {
+    assert_eq!(
+        ARROW_MAX_RECORDS_PER_BATCH.key,
+        "krishiv.sql.execution.arrow.maxRecordsPerBatch"
+    );
+    assert_eq!(
+        PYTHON_UDF_ARROW_ENABLED.key,
+        "krishiv.sql.execution.pythonUDF.arrow.enabled"
+    );
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&ARROW_MAX_RECORDS_PER_BATCH)
+            .and_then(ConfigValue::as_int),
+        Some(10_000)
+    );
+    assert_eq!(
+        c.get(&PYTHON_UDF_ARROW_ENABLED)
+            .and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        c.get(&PYTHON_UDF_THREADS).and_then(ConfigValue::as_int),
+        Some(0)
+    );
+    c.set("spark.sql.execution.arrow.maxRecordsPerBatch", "-1")
+        .unwrap();
+    c.set("spark.sql.execution.pythonUDF.arrow.enabled", "false")
+        .unwrap();
+    c.set("krishiv.python.udf.threads", "8").unwrap();
+    assert_eq!(
+        c.get(&ARROW_MAX_RECORDS_PER_BATCH)
+            .and_then(ConfigValue::as_int),
+        Some(-1)
+    );
+    assert_eq!(
+        c.get(&PYTHON_UDF_ARROW_ENABLED)
+            .and_then(ConfigValue::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        c.get(&PYTHON_UDF_THREADS).and_then(ConfigValue::as_int),
+        Some(8)
+    );
+    assert!(c.set("krishiv.python.udf.threads", "many").is_err());
+}
+
+#[test]
 fn engine_runtime_entries_parse_and_default() {
     let mut c = Config::new();
     assert_eq!(c.get(&SESSION_MEMORY_LIMIT), None);
@@ -1034,6 +1134,30 @@ fn engine_runtime_entries_parse_and_default() {
     assert!(c.set("krishiv.system.queries.capacity", "0").is_err());
     assert_eq!(SESSION_MEMORY_LIMIT.scope, Scope::Session);
     assert_eq!(SYSTEM_QUERIES_CAPACITY.scope, Scope::Cluster);
+}
+
+#[test]
+fn binary_output_style_parses_and_has_no_default() {
+    let mut c = Config::new();
+    assert_eq!(c.get(&BINARY_OUTPUT_STYLE), None);
+    c.set("spark.sql.binaryOutputStyle", "hex_discrete")
+        .unwrap();
+    assert_eq!(
+        c.get(&BINARY_OUTPUT_STYLE).and_then(ConfigValue::as_str),
+        Some("HEX_DISCRETE")
+    );
+    c.set("spark.sql.binaryOutputStyle", "utf-8").unwrap();
+    assert_eq!(
+        c.get(&BINARY_OUTPUT_STYLE).and_then(ConfigValue::as_str),
+        Some("UTF-8")
+    );
+    assert!(c.set("spark.sql.binaryOutputStyle", "ROT13").is_err());
+    // The Krishiv key names the same entry.
+    c.set("krishiv.sql.binaryOutputStyle", "Base64").unwrap();
+    assert_eq!(
+        c.get(&BINARY_OUTPUT_STYLE).and_then(ConfigValue::as_str),
+        Some("BASE64")
+    );
 }
 
 #[test]
@@ -1069,4 +1193,91 @@ fn ui_enabled_defaults_on_and_parses() {
     );
     assert!(c.set("krishiv.ui.enabled", "maybe").is_err());
     assert_eq!(UI_ENABLED.scope, Scope::Cluster);
+}
+
+#[test]
+fn system_query_text_entries_parse_and_default() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&SYSTEM_QUERY_TEXT_MAX_BYTES)
+            .and_then(ConfigValue::as_int),
+        Some(4096)
+    );
+    assert_eq!(
+        c.get(&SYSTEM_QUERY_TEXT_LITERALS)
+            .and_then(ConfigValue::as_str),
+        Some("keep")
+    );
+    c.set("krishiv.system.queryText.maxBytes", "64").unwrap();
+    c.set("krishiv.system.queryText.literals", "mask").unwrap();
+    assert_eq!(
+        c.get(&SYSTEM_QUERY_TEXT_MAX_BYTES)
+            .and_then(ConfigValue::as_int),
+        Some(64)
+    );
+    assert!(c.set("krishiv.system.queryText.maxBytes", "0").is_err());
+    assert!(c.set("krishiv.system.queryText.literals", "hide").is_err());
+    assert_eq!(SYSTEM_QUERY_TEXT_MAX_BYTES.scope, Scope::Session);
+}
+
+#[test]
+fn build_side_projection_defaults_on_and_parses_booleans() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        c.get(&EXEC_JOIN_BUILD_PROJECTION)
+            .and_then(ConfigValue::as_bool)
+    };
+    assert_eq!(get(&c), Some(true));
+    c.set("krishiv.exec.join.buildProjection", "false").unwrap();
+    assert_eq!(get(&c), Some(false));
+    assert!(
+        c.set("krishiv.exec.join.buildProjection", "sometimes")
+            .is_err()
+    );
+}
+
+#[test]
+fn direct_agg_keys_default_on_and_parse_booleans() {
+    let mut c = Config::new();
+    let get = |c: &Config| c.get(&EXEC_AGG_DIRECT_KEYS).and_then(ConfigValue::as_bool);
+    assert_eq!(get(&c), Some(true));
+    c.set("krishiv.exec.agg.directKeys", "false").unwrap();
+    assert_eq!(get(&c), Some(false));
+    assert!(c.set("krishiv.exec.agg.directKeys", "sometimes").is_err());
+}
+
+#[test]
+fn join_idle_spill_after_parses_and_defaults() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        c.get(&EXEC_JOIN_IDLE_SPILL_AFTER)
+            .and_then(ConfigValue::as_duration)
+    };
+    assert_eq!(get(&c), Some(Duration::from_secs(1)));
+    c.set("krishiv.exec.join.idleSpillAfter", "250ms").unwrap();
+    assert_eq!(get(&c), Some(Duration::from_millis(250)));
+    c.set("krishiv.exec.join.idleSpillAfter", "0s").unwrap();
+    assert_eq!(get(&c), Some(Duration::ZERO));
+    assert!(c.set("krishiv.exec.join.idleSpillAfter", "soon").is_err());
+}
+
+#[test]
+fn fuse_probe_select_defaults_on_and_parses() {
+    let mut config = Config::new();
+    assert_eq!(
+        config.get(&EXEC_JOIN_FUSE_PROBE_SELECT),
+        Some(&ConfigValue::Bool(true))
+    );
+    assert!(
+        config
+            .set("krishiv.exec.join.fuseProbeSelect", "maybe")
+            .is_err()
+    );
+    config
+        .set("krishiv.exec.join.fuseProbeSelect", "false")
+        .unwrap();
+    assert_eq!(
+        config.get(&EXEC_JOIN_FUSE_PROBE_SELECT),
+        Some(&ConfigValue::Bool(false))
+    );
 }

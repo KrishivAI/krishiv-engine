@@ -10,29 +10,200 @@
 //! same declared type. The declared type follows an attribute through a bare-column alias
 //! ([`Resolver::carry_declared`]) and a second instance of a relation (`Resolver::shifted`).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::AnalysisError;
 use super::catalog::FunctionLookup;
 use super::exprs::Bound;
 use super::resolve::{Attr, Rel, Resolver};
-use crate::{BoundColumn, Expr, ExprNode, Literal, Origin, ResolvedExpr, ResolvedFunction};
+use crate::{AttrId, BoundColumn, Expr, ExprNode, Literal, Origin, ResolvedExpr, ResolvedFunction};
 use krishiv_types::DataType;
 
 /// The most spaces a comparison literal is padded with during analysis; a wider pad is an `rpad` call.
 const MAX_LITERAL_PADDING: i32 = 1 << 16;
 
-/// `n` of a declared `char(n)`; `None` for `varchar(n)`, nested types and other strings.
+/// `n` of a declared `char(n)` (a collation may follow: `char(2) collate UTF8_LCASE`); `None` for `varchar(n)`,
+/// nested types and other strings.
 pub(super) fn char_length(declared: &str) -> Option<i32> {
-    declared
-        .strip_prefix("char(")?
-        .strip_suffix(')')?
-        .trim()
-        .parse()
-        .ok()
+    leaf_length(&declared.trim().to_ascii_lowercase(), "char(")
+}
+
+/// `n` of a lowercased leaf `<prefix>n)`, alone or followed by ` collate <name>` (Spark's catalog string of a
+/// collated `CHAR`/`VARCHAR`, `char(2) collate UTF8_BINARY`); `None` for anything else.
+fn leaf_length(lower: &str, prefix: &str) -> Option<i32> {
+    let (inner, rest) = lower.strip_prefix(prefix)?.split_once(')')?;
+    let rest = rest.trim();
+    if !rest.is_empty() {
+        let name = rest.strip_prefix("collate")?;
+        // One collation name (possibly qualified or quoted) and nothing after it.
+        if !name.starts_with(char::is_whitespace)
+            || name.trim().is_empty()
+            || top_level(name.trim()).any(|(_, c)| c.is_whitespace())
+        {
+            return None;
+        }
+    }
+    inner.trim().parse::<i32>().ok().filter(|n| *n >= 0)
+}
+
+/// A column's declared type as far as `CHAR` / `VARCHAR` matter, read from its catalog string
+/// (`array<struct<x:char(2)>>`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeclaredType {
+    /// `char(n)`.
+    Char(i32),
+    /// `varchar(n)`.
+    Varchar(i32),
+    /// `struct<...>`: the fields in order.
+    Struct(Vec<DeclaredType>),
+    /// `array<...>`.
+    Array(Box<DeclaredType>),
+    /// `map<key, value>`.
+    Map(Box<DeclaredType>, Box<DeclaredType>),
+    /// Anything else: no field of it is limited.
+    Other,
+}
+
+impl DeclaredType {
+    /// Reads a catalog string; a part it cannot follow is [`DeclaredType::Other`].
+    #[must_use]
+    pub fn parse(declared: &str) -> Self {
+        let d = declared.trim();
+        let lower = d.to_ascii_lowercase();
+        if let Some(n) = leaf_length(&lower, "char(") {
+            return Self::Char(n);
+        }
+        if let Some(n) = leaf_length(&lower, "varchar(") {
+            return Self::Varchar(n);
+        }
+        let inner = |prefix: &str| {
+            lower
+                .starts_with(prefix)
+                .then(|| d.get(prefix.len()..d.len().checked_sub(1)?))
+                .flatten()
+                .filter(|_| d.ends_with('>'))
+        };
+        if let Some(body) = inner("array<") {
+            return Self::Array(Box::new(Self::parse(body)));
+        }
+        if let Some(body) = inner("map<")
+            && let [k, v] = split_top(body, ',').as_slice()
+        {
+            return Self::Map(Box::new(Self::parse(k)), Box::new(Self::parse(v)));
+        }
+        if let Some(body) = inner("struct<") {
+            let fields = split_top(body, ',')
+                .into_iter()
+                .map(|f| {
+                    // The type follows the field name's `:` (outside a backquoted name), up to the field's
+                    // `NOT NULL` or `COMMENT`.
+                    top_level(f)
+                        .find(|&(_, c)| c == ':')
+                        .map_or(Self::Other, |(i, _)| Self::parse(field_type(&f[i + 1..])))
+                })
+                .collect();
+            return Self::Struct(fields);
+        }
+        Self::Other
+    }
+
+    /// Whether a `CHAR` or `VARCHAR` limit applies somewhere in the type.
+    #[must_use]
+    pub fn is_limited(&self) -> bool {
+        match self {
+            Self::Char(_) | Self::Varchar(_) => true,
+            Self::Struct(f) => f.iter().any(Self::is_limited),
+            Self::Array(e) => e.is_limited(),
+            Self::Map(k, v) => k.is_limited() || v.is_limited(),
+            Self::Other => false,
+        }
+    }
+
+    /// Whether a `CHAR` applies somewhere in the type, the only limit a read pads for.
+    fn has_char(&self) -> bool {
+        match self {
+            Self::Char(_) => true,
+            Self::Struct(f) => f.iter().any(Self::has_char),
+            Self::Array(e) => e.has_char(),
+            Self::Map(k, v) => k.has_char() || v.has_char(),
+            Self::Varchar(_) | Self::Other => false,
+        }
+    }
+}
+
+/// A struct field's type without the modifiers after it (`char(2) not null comment 'c'` is `char(2)`): the
+/// text up to the first space outside `<...>`, `(...)` and quotes. Only types that are [`DeclaredType::Other`]
+/// anyway (`interval day to second`) hold such a space.
+fn field_type(s: &str) -> &str {
+    let s = s.trim_start();
+    top_level(s)
+        .find(|&(_, c)| c.is_whitespace())
+        .map_or(s, |(i, _)| &s[..i])
+}
+
+/// `s` split at each `sep` outside `<...>`, `(...)` and quotes.
+fn split_top(s: &str, sep: char) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0;
+    for (i, c) in top_level(s) {
+        if c == sep {
+            parts.push(&s[start..i]);
+            start = i + c.len_utf8();
+        }
+    }
+    parts.push(&s[start..]);
+    parts
+}
+
+/// The characters of `s` outside `<...>` and `(...)` and outside quoted text: a `'...'` or `"..."` string (a
+/// backslash escapes the next character, as in a catalog string's `COMMENT`) and a `` `...` `` name (a doubled
+/// backquote stays inside it). The brackets themselves are not yielded.
+fn top_level(s: &str) -> impl Iterator<Item = (usize, char)> + '_ {
+    let mut depth = 0_i32;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    let mut chars = s.char_indices().peekable();
+    std::iter::from_fn(move || {
+        while let Some((i, c)) = chars.next() {
+            if let Some(q) = quote {
+                if escaped {
+                    escaped = false;
+                } else if c == '\\' && q != '`' {
+                    escaped = true;
+                } else if c == q {
+                    if q == '`' && chars.peek().is_some_and(|&(_, n)| n == '`') {
+                        chars.next();
+                    } else {
+                        quote = None;
+                    }
+                }
+                continue;
+            }
+            match c {
+                '\'' | '"' | '`' => quote = Some(c),
+                '<' | '(' => depth += 1,
+                '>' | ')' => depth -= 1,
+                _ if depth == 0 => return Some((i, c)),
+                _ => {}
+            }
+        }
+        None
+    })
 }
 
 impl Resolver<'_> {
+    /// The field metadata the analyzer keeps per attribute (the declared `CHAR`/`VARCHAR` type, the column
+    /// comment) passes from `from` to `to`, a new attribute standing for the same column.
+    pub(super) fn carry_column_meta(&mut self, from: AttrId, to: AttrId) {
+        if let Some(d) = self.declared.get(&from).cloned() {
+            self.declared.insert(to, d);
+        }
+        if let Some(t) = self.comments.get(&from).cloned() {
+            self.comments.insert(to, t);
+        }
+    }
+
     /// `rel`, a scan, read through `rpad(c, n, ' ')` for each of its `char(n)` columns; `rel` itself when it has
     /// none, when `spark.sql.legacy.charVarcharAsString` is on (the padding rule is off) or when the registry has
     /// no `rpad`.
@@ -44,26 +215,13 @@ impl Resolver<'_> {
         if self.ctx.conf.char_varchar_as_string {
             return Ok(rel);
         }
-        // Spark pads `CHAR` inside arrays, maps and structs on read too; that is not implemented, so a scan of
-        // such a column is refused rather than returning unpadded values.
-        let nested = rel.out.iter().any(|a| {
-            self.declared.get(&a.col.id).is_some_and(|d| {
-                char_length(d).is_none() && d.replace("varchar(", "").contains("char(")
-            })
-        });
-        if nested {
-            return Err(super::bind::unsupported(
-                "reads of nested CHAR columns",
-                origin,
-            ));
-        }
-        let padded: Vec<(usize, i32)> = rel
+        let padded: Vec<(usize, DeclaredType)> = rel
             .out
             .iter()
             .enumerate()
             .filter_map(|(i, a)| {
-                let n = char_length(self.declared.get(&a.col.id)?)?;
-                Some((i, n))
+                let d = DeclaredType::parse(self.declared.get(&a.col.id)?);
+                d.has_char().then_some((i, d))
             })
             .collect();
         if padded.is_empty() {
@@ -78,27 +236,29 @@ impl Resolver<'_> {
         let mut exprs = Vec::with_capacity(rel.out.len());
         let mut out: Vec<Attr> = Vec::with_capacity(rel.out.len());
         for (i, a) in rel.out.iter().enumerate() {
-            let Some(&(_, n)) = padded.iter().find(|(p, _)| *p == i) else {
+            let Some((_, declared)) = padded.iter().find(|(p, _)| *p == i) else {
                 exprs.push(super::ops::col_expr(&a.col, Origin::UNKNOWN));
                 out.push(a.clone());
                 continue;
             };
-            let Some(call) = self.read_pad_call(
-                super::ops::col_expr(&a.col, Origin::UNKNOWN),
-                n,
-                a.col.nullable,
-            ) else {
-                return Ok(rel);
+            let read = super::ops::col_expr(&a.col, Origin::UNKNOWN);
+            let call = match self.read_pad(read, declared, &a.col.data_type, a.col.nullable) {
+                Ok(Some(call)) => call,
+                Ok(None) => return Ok(rel),
+                Err(()) => {
+                    return Err(super::bind::unsupported(
+                        "reads of a CHAR column whose declared type does not match the schema",
+                        origin,
+                    ));
+                }
             };
             let col = BoundColumn {
                 id: self.fresh(),
                 name: a.col.name.clone(),
-                data_type: DataType::String,
+                data_type: a.col.data_type.clone(),
                 nullable: a.col.nullable,
             };
-            if let Some(declared) = self.declared.get(&a.col.id).cloned() {
-                self.declared.insert(col.id, declared);
-            }
+            self.carry_column_meta(a.col.id, col.id);
             exprs.push(Arc::new(Expr::new(ExprNode::Resolved(
                 ResolvedExpr::Alias {
                     expr: call,
@@ -133,6 +293,20 @@ fn bare_column(e: &Expr, internal_cast: bool) -> Option<&BoundColumn> {
                 _ => None,
             }
         }
+        _ => None,
+    }
+}
+
+/// The column whose comment `e` keeps: a bare column, or, when `internal_cast`, the engine's cast of one (a
+/// permanent view's read projection: Spark gives that alias the view's stored field metadata, which holds the
+/// comment the column had when the view was stored). A cast the query wrote keeps none, as in Spark.
+fn commented_column(e: &Expr, internal_cast: bool) -> Option<&BoundColumn> {
+    match &e.node {
+        ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c),
+        ExprNode::Cast { expr, .. } if internal_cast => match &expr.node {
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -175,10 +349,155 @@ fn read_padded_column(e: &Expr) -> Option<(&BoundColumn, i32)> {
     }
 }
 
+/// The arguments of a registry call of `name` with `arity` arguments.
+fn registry_call<'e>(e: &'e Expr, name: &str, arity: usize) -> Option<&'e [Arc<Expr>]> {
+    let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node else {
+        return None;
+    };
+    (matches!(f.id, crate::FunctionId::Registry { .. })
+        && f.id.name() == name
+        && f.args.len() == arity)
+        .then_some(f.args.as_slice())
+}
+
+/// The column under the read-side padding `e` (`Resolver::read_pad`'s shape): followed down the one path that
+/// padding builds (a call's value argument, a field's base), so the walk is linear in the depth.
+fn first_column(e: &Expr) -> Option<&BoundColumn> {
+    let mut e = e;
+    loop {
+        e = match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => return Some(c),
+            ExprNode::Resolved(ResolvedExpr::Function(f)) => {
+                let named_struct = matches!(f.id, crate::FunctionId::Registry { .. })
+                    && f.id.name() == "named_struct";
+                // `named_struct(name, value, ..)`: the first value; any other call: its first argument.
+                f.args.get(usize::from(named_struct))?
+            }
+            ExprNode::Resolved(ResolvedExpr::Field { base, .. }) => base,
+            _ => return None,
+        };
+    }
+}
+
+/// The column `c` of a stored plan's read-side padding of a nested `CHAR` (`transform`, `named_struct`,
+/// `map_from_arrays` around `rpad`, as `Resolver::read_pad` builds it for `c`'s declared type), matched whole.
+fn nested_padded_column<'e>(
+    e: &'e Expr,
+    declared: &HashMap<AttrId, Arc<str>>,
+) -> Option<&'e BoundColumn> {
+    let c = first_column(e)?;
+    let d = DeclaredType::parse(declared.get(&c.id)?);
+    let is_c =
+        |x: &Expr| matches!(&x.node, ExprNode::Resolved(ResolvedExpr::Column(k)) if k.id == c.id);
+    (!matches!(d, DeclaredType::Char(_)) && d.has_char() && pads_as(e, &is_c, &d)).then_some(c)
+}
+
+/// Whether `e` is the read-side padding of a value `base` matches, declared `d` (module docs of
+/// `Resolver::read_pad`); a part without a `CHAR` is the value itself.
+fn pads_as(e: &Expr, base: &dyn Fn(&Expr) -> bool, d: &DeclaredType) -> bool {
+    if !d.has_char() {
+        return base(e);
+    }
+    match d {
+        DeclaredType::Char(n) => {
+            let Some([arg, len, blank]) = registry_call(e, "rpad", 3) else {
+                return false;
+            };
+            let Some([chars, m]) = registry_call(len, "greatest", 2) else {
+                return false;
+            };
+            let Some([counted]) = registry_call(chars, "char_length", 1) else {
+                return false;
+            };
+            base(arg)
+                && base(counted)
+                && matches!(&m.node, ExprNode::Literal(Literal::Integer(m)) if m == n)
+                && matches!(&blank.node, ExprNode::Literal(Literal::String(b)) if b == " ")
+        }
+        DeclaredType::Struct(fields) => {
+            // `if(isnull(x), NULL, named_struct(..))` over a nullable struct, else the `named_struct`.
+            let built = match &e.node {
+                ExprNode::Resolved(ResolvedExpr::Function(f))
+                    if f.id == crate::FunctionId::Builtin(crate::Builtin::When) =>
+                {
+                    let [test, null, built] = f.args.as_slice() else {
+                        return false;
+                    };
+                    let tested = registry_call(test, "isnull", 1)
+                        .is_some_and(|a| matches!(a, [x] if base(x)));
+                    if !tested || !matches!(&null.node, ExprNode::Literal(Literal::Null(_))) {
+                        return false;
+                    }
+                    built
+                }
+                _ => e,
+            };
+            let Some(args) = registry_call(built, "named_struct", fields.len() * 2) else {
+                return false;
+            };
+            fields.iter().enumerate().all(|(i, d)| {
+                let field = |x: &Expr| {
+                    matches!(&x.node, ExprNode::Resolved(ResolvedExpr::Field { base: b, ordinal, .. })
+                        if *ordinal == i && base(b))
+                };
+                matches!(&args[2 * i].node, ExprNode::Literal(Literal::String(_)))
+                    && pads_as(&args[2 * i + 1], &field, d)
+            })
+        }
+        DeclaredType::Array(el) => {
+            let Some([arr, lambda]) = registry_call(e, "transform", 2) else {
+                return false;
+            };
+            let ExprNode::Lambda { params, body } = &lambda.node else {
+                return false;
+            };
+            let [v] = params.as_slice() else {
+                return false;
+            };
+            let var = |x: &Expr| matches!(&x.node, ExprNode::Resolved(ResolvedExpr::LambdaVar(k)) if k.id == v.id);
+            base(arr) && pads_as(body, &var, el)
+        }
+        DeclaredType::Map(k, v) => {
+            let Some([keys, values]) = registry_call(e, "map_from_arrays", 2) else {
+                return false;
+            };
+            let of = |name: &'static str| {
+                move |x: &Expr| {
+                    registry_call(x, name, 1).is_some_and(|a| matches!(a, [m] if base(m)))
+                }
+            };
+            let array = |d: &DeclaredType| DeclaredType::Array(Box::new(d.clone()));
+            pads_as(keys, &of("map_keys"), &array(k))
+                && pads_as(values, &of("map_values"), &array(v))
+        }
+        DeclaredType::Varchar(_) | DeclaredType::Other => false,
+    }
+}
+
 /// `x AS name` where `x` is a cast the engine built in ANSI mode before analysis.
 fn is_internal_cast_alias(e: &Expr) -> bool {
     matches!(&e.node, ExprNode::Alias { expr, .. }
-        if matches!(expr.node, ExprNode::Cast { mode: crate::CastMode::Ansi, .. }))
+        if matches!(&unstored(expr).node, ExprNode::Cast { mode: crate::CastMode::Ansi, .. }))
+}
+
+/// `e` without the [`ExprNode::StoredField`] of a view's read projection.
+fn unstored(e: &Expr) -> &Expr {
+    match &e.node {
+        ExprNode::StoredField { expr, .. } => expr,
+        _ => e,
+    }
+}
+
+/// The comment a view stored for the column `written` aliases (`Some(None)`: it stored none), if `written` is an
+/// item of a view's read projection.
+fn stored_comment(written: Option<&Expr>) -> Option<Option<&str>> {
+    match &written?.node {
+        ExprNode::Alias { expr, .. } => match &expr.node {
+            ExprNode::StoredField { comment, .. } => Some(comment.as_deref()),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// The declared length `n` of a bare `char(n)` attribute operand; `None` for any other operand (an expression,
@@ -249,8 +568,19 @@ impl Resolver<'_> {
 
     /// `rpad(arg, len, ' ')`.
     fn rpad_to(&self, arg: Arc<Expr>, len: Arc<Expr>, nullable: bool) -> Option<Arc<Expr>> {
+        self.rpad_typed(arg, len, DataType::String, nullable)
+    }
+
+    /// `rpad(arg, len, ' ')` of type `ty`, the type of `arg` (a collated string keeps its collation).
+    fn rpad_typed(
+        &self,
+        arg: Arc<Expr>,
+        len: Arc<Expr>,
+        ty: DataType,
+        nullable: bool,
+    ) -> Option<Arc<Expr>> {
         let blank = Arc::new(Expr::literal(Literal::String(" ".to_owned())));
-        self.named_call("rpad", vec![arg, len, blank], DataType::String, nullable)
+        self.named_call("rpad", vec![arg, len, blank], ty, nullable)
     }
 
     /// `rpad(arg, n, ' ')` (it cuts a longer value to `n`, as Spark's comparison padding does).
@@ -259,7 +589,13 @@ impl Resolver<'_> {
     }
 
     /// The read-side form: `rpad(arg, greatest(char_length(arg), n), ' ')` pads and never cuts.
-    fn read_pad_call(&self, arg: Arc<Expr>, n: i32, nullable: bool) -> Option<Arc<Expr>> {
+    fn read_pad_call(
+        &self,
+        arg: Arc<Expr>,
+        n: i32,
+        ty: &DataType,
+        nullable: bool,
+    ) -> Option<Arc<Expr>> {
         let chars = self.named_call(
             "char_length",
             vec![Arc::clone(&arg)],
@@ -272,7 +608,146 @@ impl Resolver<'_> {
             DataType::Integer,
             false,
         )?;
-        self.rpad_to(arg, len, nullable)
+        self.rpad_typed(arg, len, ty.clone(), nullable)
+    }
+
+    /// `if(cond, a, b)`: the resolved form is the `When` operator, not a registry call.
+    fn when_call(&self, args: Vec<Arc<Expr>>, data_type: DataType) -> Arc<Expr> {
+        Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+            ResolvedFunction {
+                id: crate::FunctionId::Builtin(crate::Builtin::When),
+                kind: crate::FunctionKind::Scalar,
+                args,
+                distinct: false,
+                filter: None,
+                within_group: Vec::new(),
+                data_type,
+                nullable: true,
+                deterministic: true,
+            },
+        ))))
+    }
+
+    /// `arg` read as Spark's `processStringForCharVarchar` with only `readSidePadding` set: each `CHAR` in it pads
+    /// and a `VARCHAR` does not. `Ok(None)` when the registry lacks a function, `Err` when `declared` does not
+    /// follow `ty`.
+    fn read_pad(
+        &mut self,
+        arg: Arc<Expr>,
+        declared: &DeclaredType,
+        ty: &DataType,
+        nullable: bool,
+    ) -> Result<Option<Arc<Expr>>, ()> {
+        Ok(match (declared, ty) {
+            (DeclaredType::Char(n), t) if t.is_string_type() => {
+                self.read_pad_call(arg, *n, t, nullable)
+            }
+            (DeclaredType::Struct(fields), DataType::Struct(st))
+                if fields.len() == st.fields().len() =>
+            {
+                let mut args = Vec::with_capacity(fields.len() * 2);
+                for (ordinal, (d, f)) in fields.iter().zip(st.fields().iter()).enumerate() {
+                    let field_nullable = f.nullable() || nullable;
+                    let read = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Field {
+                        base: Arc::clone(&arg),
+                        ordinal,
+                        name: f.name().to_owned(),
+                        data_type: f.data_type().clone(),
+                        nullable: field_nullable,
+                    })));
+                    let value = if d.has_char() {
+                        match self.read_pad(read, d, f.data_type(), field_nullable)? {
+                            Some(v) => v,
+                            None => return Ok(None),
+                        }
+                    } else {
+                        read
+                    };
+                    args.push(Arc::new(Expr::literal(Literal::String(
+                        f.name().to_owned(),
+                    ))));
+                    args.push(value);
+                }
+                let built = self.named_call("named_struct", args, ty.clone(), false);
+                match built {
+                    Some(s) if nullable => {
+                        let test = self.named_call("isnull", vec![arg], DataType::Boolean, false);
+                        let null = Arc::new(Expr::literal(Literal::Null(Some(ty.clone()))));
+                        test.map(|t| self.when_call(vec![t, null, s], ty.clone()))
+                    }
+                    other => other,
+                }
+            }
+            (DeclaredType::Array(e), DataType::Array(a)) => {
+                self.read_pad_array(arg, e, a.element_type(), a.contains_null(), ty, nullable)?
+            }
+            (DeclaredType::Map(k, v), DataType::Map(m)) => {
+                let (key_ty, value_ty) = (m.key_type().clone(), m.value_type().clone());
+                let contains_null = m.value_contains_null();
+                let array = |e: &DataType, n: bool| {
+                    DataType::Array(krishiv_types::ArrayType::new(e.clone(), n).into())
+                };
+                let keys_ty = array(&key_ty, false);
+                let values_ty = array(&value_ty, contains_null);
+                let keys = self.named_call(
+                    "map_keys",
+                    vec![Arc::clone(&arg)],
+                    keys_ty.clone(),
+                    nullable,
+                );
+                let values = self.named_call("map_values", vec![arg], values_ty.clone(), nullable);
+                let (Some(keys), Some(values)) = (keys, values) else {
+                    return Ok(None);
+                };
+                let keys = if k.has_char() {
+                    self.read_pad_array(keys, k, &key_ty, false, &keys_ty, nullable)?
+                } else {
+                    Some(keys)
+                };
+                let values = if v.has_char() {
+                    self.read_pad_array(values, v, &value_ty, contains_null, &values_ty, nullable)?
+                } else {
+                    Some(values)
+                };
+                let (Some(keys), Some(values)) = (keys, values) else {
+                    return Ok(None);
+                };
+                self.named_call("map_from_arrays", vec![keys, values], ty.clone(), nullable)
+            }
+            _ => return Err(()),
+        })
+    }
+
+    /// `transform(arr, x -> <x read as declared>)`.
+    fn read_pad_array(
+        &mut self,
+        arr: Arc<Expr>,
+        declared: &DeclaredType,
+        element: &DataType,
+        contains_null: bool,
+        ty: &DataType,
+        nullable: bool,
+    ) -> Result<Option<Arc<Expr>>, ()> {
+        if !declared.has_char() {
+            return Ok(Some(arr));
+        }
+        let var = BoundColumn {
+            id: self.fresh(),
+            name: "x".to_owned(),
+            data_type: element.clone(),
+            nullable: contains_null,
+        };
+        let read = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::LambdaVar(
+            var.clone(),
+        ))));
+        let Some(body) = self.read_pad(read, declared, element, contains_null)? else {
+            return Ok(None);
+        };
+        let lambda = Arc::new(Expr::new(ExprNode::Lambda {
+            params: vec![var],
+            body,
+        }));
+        Ok(self.named_call("transform", vec![arr, lambda], ty.clone(), nullable))
     }
 
     /// The declared type follows `c AS x` (Spark keeps the field metadata through an alias of a bare column).
@@ -322,17 +797,46 @@ impl Resolver<'_> {
     /// [`Self::carry_declared`] for one item, `written` its form before resolution when known. The select list
     /// calls it as each item is bound, so a later item that reads the alias (a lateral column alias) sees it.
     pub(super) fn carry_declared_item(&mut self, b: &Bound, written: Option<&Expr>) {
-        if self.declared.is_empty() {
-            return;
-        }
         let internal_cast = written.is_some_and(is_internal_cast_alias);
         // An item already resolved comes from a stored analyzed plan (a DataFrame's temporary view): its
         // read-side padding call stands for the padded column.
         let stored = written.is_some_and(|w| matches!(w.node, ExprNode::Resolved(_)));
+        // A view's read projection gives each column the metadata the view stored (Spark's `explicitMetadata`):
+        // its comment, or none, whatever the column under it has.
+        if let (Some(stored), ExprNode::Resolved(ResolvedExpr::Alias { output, .. })) =
+            (stored_comment(written), &b.expr.node)
+        {
+            match stored {
+                Some(t) => {
+                    self.comments.insert(output.id, Arc::from(t));
+                }
+                None => {
+                    self.comments.remove(&output.id);
+                }
+            }
+        // A column comment follows the same alias of a bare column (Spark's `Alias` keeps a named child's
+        // metadata; any other expression starts without it), and a stored plan's padded `CHAR` column.
+        } else if !self.comments.is_empty()
+            && let ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) = &b.expr.node
+            && let Some(c) = commented_column(expr, internal_cast)
+                .or_else(|| read_padded_column(expr).filter(|_| stored).map(|(c, _)| c))
+            && let Some(t) = self.comments.get(&c.id).cloned()
+        {
+            self.comments.insert(output.id, t);
+        }
+        if self.declared.is_empty() {
+            return;
+        }
         if let ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) = &b.expr.node
             && let Some(c) = bare_column(expr, internal_cast).or_else(|| {
-                let (c, n) = read_padded_column(expr).filter(|_| stored)?;
-                (self.declared.get(&c.id).and_then(|d| char_length(d)) == Some(n)).then_some(c)
+                if !stored {
+                    return None;
+                }
+                if let Some((c, n)) = read_padded_column(expr) {
+                    return (self.declared.get(&c.id).and_then(|d| char_length(d)) == Some(n))
+                        .then_some(c);
+                }
+                nested_padded_column(expr, &self.declared)
             })
             && let Some(d) = self.declared.get(&c.id).cloned()
         {
@@ -340,20 +844,154 @@ impl Resolver<'_> {
         }
     }
 
-    /// `c IN (...)` over a bare `char(n)` column: Spark pads the column and the literals to a common width
-    /// (`ApplyCharTypePadding`), which is not implemented yet, so it is refused rather than answered with
-    /// unpadded literals (that matches no row).
-    pub(super) fn refuse_char_in(
+    /// Spark's `ApplyCharTypePadding` for `c IN (...)`, `kids` being the value and then the list; `None` when
+    /// nothing pads.
+    ///
+    /// Over a bare `char(n)` value and a list of constants, the value and the literals pad to the longest of `n`
+    /// and the literals, a value already that long staying as it is. Over a list of bare attributes, all of them
+    /// `char`, each pads to the longest declared length. Any other list is left alone. The operands as Spark shows
+    /// them (`shown`) are kept, so names do not change.
+    ///
+    /// A `NULL` in the list turns all of that off, and so does a constant that is not a string (a real Spark 4.2.0
+    /// run: `c IN ('a', NULL)` matches no padded `'a'`, and `c IN (1)` casts `c`).
+    pub(super) fn pad_char_in(&self, kids: &[Bound]) -> Result<Option<Vec<Bound>>, AnalysisError> {
+        if self.ctx.conf.char_varchar_as_string || self.declared.is_empty() {
+            return Ok(None);
+        }
+        let Some((value, list)) = kids.split_first() else {
+            return Ok(None);
+        };
+        if list.is_empty() {
+            return Ok(None);
+        }
+        let Some(n) = bare_char(&self.declared, value) else {
+            return Ok(None);
+        };
+        // A list of `char` attributes: each pads to the longest.
+        let lengths: Option<Vec<i32>> = list.iter().map(|k| bare_char(&self.declared, k)).collect();
+        if let Some(lengths) = lengths {
+            let target = lengths.iter().copied().fold(n, i32::max);
+            let mut out = Vec::with_capacity(kids.len());
+            for (k, len) in kids.iter().zip(std::iter::once(n).chain(lengths)) {
+                out.push(if len < target {
+                    match self.pad_operand(k, target) {
+                        Some(p) => p,
+                        None => return Ok(None),
+                    }
+                } else {
+                    k.clone()
+                });
+            }
+            return Ok(Some(out));
+        }
+        // Spark's run (4.2.0): a `NULL` anywhere in the list leaves everything unpadded.
+        let mut widths = Vec::with_capacity(list.len());
+        for k in list {
+            let Some(s) = self.constant_string(k)? else {
+                return Ok(None);
+            };
+            widths.push(i32::try_from(s.chars().count()).ok());
+        }
+        let mut target = n;
+        for w in &widths {
+            let Some(l) = w else { return Ok(None) };
+            target = target.max(*l);
+        }
+        let mut out = Vec::with_capacity(kids.len());
+        out.push(if n < target {
+            match self.pad_operand(value, target) {
+                Some(p) => p,
+                None => return Ok(None),
+            }
+        } else {
+            value.clone()
+        });
+        for (k, w) in list.iter().zip(&widths) {
+            out.push(match w {
+                Some(l) if *l < target => match self.pad_string_literal(k, target) {
+                    Some(p) => p,
+                    None => return Ok(None),
+                },
+                _ => k.clone(),
+            });
+        }
+        Ok(Some(out))
+    }
+
+    /// The text of the constant string `k` (a literal, or a call that folds to one); `None` for a `NULL`, another
+    /// type or a constant the analyzer cannot fold.
+    fn constant_string(&self, k: &Bound) -> Result<Option<String>, AnalysisError> {
+        if let Some(s) = string_literal(k) {
+            return Ok(Some(s.to_owned()));
+        }
+        if k.ty.data_type != Some(DataType::String) {
+            return Ok(None);
+        }
+        Ok(match self.fold(&k.expr, self.ctx.conf.ansi) {
+            Some(krishiv_functions::signature::Constant::String(s)) => Some(s),
+            _ => None,
+        })
+    }
+
+    /// `k` through `rpad(k, to, ' ')`, still shown as it was written.
+    fn pad_operand(&self, k: &Bound, to: i32) -> Option<Bound> {
+        let e = self.rpad_call(Arc::clone(&k.expr), to, k.ty.nullable)?;
+        Some(Bound {
+            expr: e,
+            shown: Some(k.shown()),
+            ..k.clone()
+        })
+    }
+
+    /// The string literal `k` padded to `to`, still shown as it was written; a constant that is no literal goes
+    /// through `rpad`. A wide declaration (`CHAR(2147483647)`) would build a huge literal while analyzing even an
+    /// empty table: past `MAX_LITERAL_PADDING` the literal pads at run time instead (same value, `rpad`).
+    fn pad_string_literal(&self, k: &Bound, to: i32) -> Option<Bound> {
+        let Some(text) = string_literal(k) else {
+            return self.pad_operand(k, to);
+        };
+        let width = i32::try_from(text.chars().count()).ok()?;
+        if to.saturating_sub(width) > MAX_LITERAL_PADDING {
+            return self.pad_operand(k, to);
+        }
+        let padded = format!("{text}{}", " ".repeat(usize::try_from(to - width).ok()?));
+        Some(Bound {
+            expr: Arc::new(Expr::literal(Literal::String(padded)).with_origin(k.expr.origin)),
+            shown: Some(k.shown()),
+            ..k.clone()
+        })
+    }
+
+    /// `ApplyCharTypePadding` also pads a comparison of two nested columns whose `CHAR` lengths differ, field by
+    /// field. That is not implemented, so such a comparison is refused rather than answered unpadded.
+    pub(super) fn refuse_nested_char_comparison(
         &self,
         kids: &[Bound],
         origin: Origin,
     ) -> Result<(), AnalysisError> {
-        if !self.ctx.conf.char_varchar_as_string
-            && kids
-                .first()
-                .is_some_and(|k| bare_char(&self.declared, k).is_some())
-        {
-            return Err(super::bind::unsupported("IN over a CHAR column", origin));
+        if self.ctx.conf.char_varchar_as_string || self.declared.is_empty() {
+            return Ok(());
+        }
+        // The lengths are compared, not the catalog strings: struct field names do not change the padding.
+        let nested = |b: &Bound| -> Option<DeclaredType> {
+            if b.shown.is_some() {
+                return None;
+            }
+            match &b.expr.node {
+                ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) => {
+                    let d = self.declared.get(&c.id)?;
+                    let parsed = DeclaredType::parse(d);
+                    (char_length(d).is_none() && parsed.has_char()).then_some(parsed)
+                }
+                _ => None,
+            }
+        };
+        let types: Vec<DeclaredType> = kids.iter().filter_map(nested).collect();
+        if types.len() == kids.len() && types.windows(2).any(|w| w[0] != w[1]) {
+            return Err(super::bind::unsupported(
+                "comparisons of nested CHAR columns of different lengths",
+                origin,
+            ));
         }
         Ok(())
     }
@@ -367,29 +1005,8 @@ impl Resolver<'_> {
             return None;
         }
         let [a, b] = kids else { return None };
-        let pad = |k: &Bound, to: i32| -> Option<Bound> {
-            let e = self.rpad_call(Arc::clone(&k.expr), to, k.ty.nullable)?;
-            Some(Bound {
-                expr: e,
-                shown: Some(k.shown()),
-                ..k.clone()
-            })
-        };
-        let literal = |k: &Bound, to: i32| -> Option<Bound> {
-            let text = string_literal(k)?;
-            let width = i32::try_from(text.chars().count()).ok()?;
-            // A wide declaration (`CHAR(2147483647)`) would build a huge literal while analyzing even an empty
-            // table: past `MAX_LITERAL_PADDING` the literal pads at run time instead (same value, `rpad`).
-            if to.saturating_sub(width) > MAX_LITERAL_PADDING {
-                return pad(k, to);
-            }
-            let padded = format!("{text}{}", " ".repeat(usize::try_from(to - width).ok()?));
-            Some(Bound {
-                expr: Arc::new(Expr::literal(Literal::String(padded)).with_origin(k.expr.origin)),
-                shown: Some(k.shown()),
-                ..k.clone()
-            })
-        };
+        let pad = |k: &Bound, to: i32| self.pad_operand(k, to);
+        let literal = |k: &Bound, to: i32| self.pad_string_literal(k, to);
         let length = |s: &str| i32::try_from(s.chars().count()).ok();
         match (bare_char(&self.declared, a), bare_char(&self.declared, b)) {
             (Some(la), Some(lb)) if la < lb => Some(vec![pad(a, lb)?, b.clone()]),
@@ -412,5 +1029,76 @@ impl Resolver<'_> {
             }
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod declared_tests {
+    use super::DeclaredType;
+
+    #[test]
+    fn field_modifiers_quotes_and_names_keep_the_limits() {
+        let t = DeclaredType::parse(
+            "struct<x: char(2) not null comment 'a,b (c) <d>', `y:z`: varchar(3) comment 'it\\'s', w: int>",
+        );
+        let DeclaredType::Struct(f) = &t else {
+            panic!("{t:?}")
+        };
+        assert_eq!(f.len(), 3, "{f:?}");
+        assert!(matches!(f[0], DeclaredType::Char(2)), "{f:?}");
+        assert!(matches!(f[1], DeclaredType::Varchar(3)), "{f:?}");
+        assert!(matches!(f[2], DeclaredType::Other), "{f:?}");
+        let n = DeclaredType::parse("array<struct<a: struct<`b``c`: char(1) comment ')'>>>");
+        assert!(n.is_limited(), "{n:?}");
+        assert!(matches!(
+            DeclaredType::parse("struct<i: interval day to second>"),
+            DeclaredType::Struct(ref f) if matches!(f.as_slice(), [DeclaredType::Other])
+        ));
+    }
+
+    /// A collation after the length keeps the limit (Spark 4.2 catalog strings, `char(2) collate UTF8_BINARY`).
+    #[test]
+    fn a_collated_char_or_varchar_keeps_its_limit() {
+        assert_eq!(
+            DeclaredType::parse("char(2) collate UTF8_BINARY"),
+            DeclaredType::Char(2)
+        );
+        assert_eq!(
+            DeclaredType::parse("VARCHAR(3) COLLATE UTF8_LCASE"),
+            DeclaredType::Varchar(3)
+        );
+        assert_eq!(super::char_length("char(4) collate UNICODE_CI"), Some(4));
+        assert_eq!(super::char_length("varchar(4) collate UNICODE_CI"), None);
+        assert_eq!(
+            DeclaredType::parse("array<char(2) collate UTF8_BINARY>"),
+            DeclaredType::Array(Box::new(DeclaredType::Char(2)))
+        );
+        assert_eq!(
+            DeclaredType::parse("map<varchar(1) collate UTF8_LCASE,char(2) collate UNICODE>"),
+            DeclaredType::Map(
+                Box::new(DeclaredType::Varchar(1)),
+                Box::new(DeclaredType::Char(2))
+            )
+        );
+        assert_eq!(
+            DeclaredType::parse("struct<x:varchar(2) collate UTF8_LCASE>"),
+            DeclaredType::Struct(vec![DeclaredType::Varchar(2)])
+        );
+        for not_a_leaf in [
+            "char(2) collate",
+            "char(2) collated x",
+            "char(2) collate a b",
+            "char(2)x",
+        ] {
+            assert_eq!(
+                DeclaredType::parse(not_a_leaf),
+                DeclaredType::Other,
+                "{not_a_leaf}"
+            );
+        }
+        assert!(matches!(
+            DeclaredType::parse("struct<i: interval day to second>"),
+            DeclaredType::Struct(ref f) if matches!(f.as_slice(), [DeclaredType::Other])
+        ));
     }
 }

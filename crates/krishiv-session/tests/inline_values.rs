@@ -587,3 +587,22 @@ fn golden_views_over_values_read_back() {
         &[&["1"], &["1"], &["1"]],
     );
 }
+
+/// A cell naming a column of an enclosing query cannot be evaluated (Spark `outer(t.id)`).
+#[test]
+fn an_inline_table_cell_reading_an_outer_column_cannot_be_evaluated() {
+    let s = session();
+    block_on(s.sql("CREATE TEMPORARY VIEW t AS SELECT 0 AS id")).unwrap();
+    let e = fails(
+        &s,
+        "SELECT (WITH cte(foo) AS (VALUES(id)) SELECT (SELECT foo FROM cte)) FROM t",
+    );
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::InvalidInlineTableCannotEvaluateExpressionInInlineTable
+    );
+    assert_eq!(
+        e.message_parameters(),
+        [("expr", "\"outer(t.id)\"".to_owned())]
+    );
+}

@@ -41,6 +41,19 @@ impl Reservation {
         }
     }
 
+    /// A reservation of `bytes` the pool already counts for consumer `id`.
+    pub(crate) fn holding(pool: Arc<dyn MemoryPool>, id: ConsumerId, bytes: usize) -> Self {
+        Self {
+            pool,
+            id,
+            bytes,
+            handle: None,
+            to_credit: false,
+            scratch: false,
+            unguarded: false,
+        }
+    }
+
     pub(crate) fn with_handle(handle: Arc<ConsumerHandle>) -> Self {
         Self {
             pool: Arc::clone(handle.pool()),
@@ -212,8 +225,11 @@ impl Reservation {
                 h.add_credit(bytes);
             }
             Some(h) => {
-                self.pool.release(self.id, bytes);
+                // Subtract before the pool frees the bytes: another consumer
+                // may reserve them at once, and the shared peak must not
+                // count both holders.
                 h.shrank(bytes);
+                self.pool.release(self.id, bytes);
             }
             None => self.pool.release(self.id, bytes),
         }

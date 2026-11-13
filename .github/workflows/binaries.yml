@@ -6,8 +6,8 @@ name: Binaries
 # in .cargo/config.toml, so development, tests, regular CI and the benchmark
 # jobs keep the default target. The binary checks the CPU on start, before its
 # constructors (krishiv_alloc), and names the missing feature and the compat
-# binary (krishiv_common::cpu). Nothing is
-# published here.
+# binary (krishiv_common::cpu). The macOS arm64 binary (Apple silicon, no CPU level to choose) is built
+# natively. Nothing is published here.
 #
 # Runs when this file or the start-up CPU check changes, by hand, and from other
 # workflows.
@@ -77,11 +77,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: $/.github/actions/setup-rust
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: ${{ matrix.artifact }}
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - uses: $/.github/actions/setup-mold
       - name: Build
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
@@ -141,11 +141,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: $/.github/actions/setup-rust
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: krishiv-linux-aarch64
-      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      - uses: $/.github/actions/setup-mold
       - name: Build
         env:
           RUSTFLAGS: -C target-cpu=neoverse-n1
@@ -161,4 +161,39 @@ jobs:
         with:
           name: krishiv-linux-aarch64
           path: out/krishiv-linux-aarch64
+          if-no-files-found: error
+
+  cli-macos-arm64:
+    needs: nightly-green
+    if: ${{ !cancelled() && (needs.nightly-green.result == 'success' || needs.nightly-green.result == 'skipped') }}
+    name: cli (krishiv-macos-arm64)
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      ARTIFACT: krishiv-macos-arm64
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: krishiv-macos-arm64
+      - name: Build
+        run: |
+          cargo build --profile dist --locked -p krishiv-cli
+          mkdir -p out
+          cp target/dist/krishiv "out/$ARTIFACT"
+      - name: Smoke test
+        run: |
+          "out/$ARTIFACT" --version
+          "out/$ARTIFACT" sql -e "SELECT 1"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: krishiv-macos-arm64
+          path: out/krishiv-macos-arm64
           if-no-files-found: error

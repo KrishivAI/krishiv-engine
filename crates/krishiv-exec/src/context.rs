@@ -53,6 +53,9 @@ pub struct ExecConfig {
     /// Grouped aggregations with fixed-width keys use row-layout,
     /// radix-partitioned tables (`krishiv.exec.agg.rowLayout`; P2-T159).
     pub agg_row_layout: bool,
+    /// Thread-local row tables find the groups of a batch with one-byte keys
+    /// by direct addressing (`krishiv.exec.agg.directKeys`; study 32 D1).
+    pub agg_direct_keys: bool,
     /// Collect the costlier metrics of a detailed profile (`EXPLAIN
     /// ANALYZE`): per-lookup hash-table probe lengths. The always-on
     /// counters do not depend on it.
@@ -73,11 +76,21 @@ pub struct ExecConfig {
     /// (`krishiv.exec.join.sharedBroadcastBytes`; `None`: no cap beyond the
     /// query's memory). A build past it falls back to one per task.
     pub shared_broadcast_bytes: Option<usize>,
+    /// How long a finished hash join build waits for its probe before the
+    /// arbitrator asks it to spill ahead of running consumers
+    /// (`krishiv.exec.join.idleSpillAfter`).
+    pub join_idle_spill_after: Duration,
     /// Every pipeline runs on one driver, so the order of merges and of the
-    /// output rows does not depend on how the drivers interleave
-    /// (`krishiv.deterministicOrder`).
+    /// output rows does not depend on how the drivers interleave, and the key
+    /// hashes take a fixed seed (a constant unless
+    /// `krishiv.exec.seed` names one) (`krishiv.deterministicOrder`).
     pub deterministic_order: bool,
 }
+
+/// The key-hash seed of `krishiv.deterministicOrder` when `krishiv.exec.seed`
+/// is not set: any fixed value; it is never observable (Spark's observable
+/// hash is Murmur3, in the kernels).
+pub(crate) const DETERMINISTIC_SEED: u64 = 0x6b72_6973_6869_7601;
 
 impl Default for ExecConfig {
     fn default() -> Self {
@@ -89,12 +102,14 @@ impl Default for ExecConfig {
             fail_on_stall: false,
             seed: None,
             agg_row_layout: true,
+            agg_direct_keys: true,
             detailed_metrics: false,
             join_row_layout: true,
             join_radix_bits: 3,
             sort_hash_buckets: true,
             join_merge_buffer_bytes: 0,
             shared_broadcast_bytes: None,
+            join_idle_spill_after: Duration::from_secs(1),
             deterministic_order: false,
         }
     }
@@ -111,6 +126,10 @@ impl ExecConfig {
             .unwrap_or(DEFAULT_BATCH_SIZE);
         let agg_row_layout = config
             .get(&EXEC_AGG_ROW_LAYOUT)
+            .and_then(krishiv_common::config::ConfigValue::as_bool)
+            .unwrap_or(true);
+        let agg_direct_keys = config
+            .get(&krishiv_common::config::EXEC_AGG_DIRECT_KEYS)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
             .unwrap_or(true);
         let join_row_layout = config
@@ -136,24 +155,35 @@ impl ExecConfig {
             .and_then(krishiv_common::config::ConfigValue::as_size)
             .and_then(|n| usize::try_from(n).ok())
             .filter(|n| *n > 0);
-        let seed = config
-            .get(&EXEC_SEED)
-            .and_then(krishiv_common::config::ConfigValue::as_int)
-            .map(i64::cast_unsigned);
+        let join_idle_spill_after = config
+            .get(&krishiv_common::config::EXEC_JOIN_IDLE_SPILL_AFTER)
+            .and_then(krishiv_common::config::ConfigValue::as_duration)
+            .unwrap_or(Duration::from_secs(1));
         let deterministic_order = config
             .get(&krishiv_common::config::DETERMINISTIC_ORDER)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
             .unwrap_or(false);
+        // Under `krishiv.deterministicOrder` the key hashes are seeded too
+        // (`krishiv.exec.seed` when set, else a fixed seed): spill partitions
+        // follow the seeded hash, so a random seed per query would order the
+        // groups of a spilled aggregation differently on every run.
+        let seed = config
+            .get(&EXEC_SEED)
+            .and_then(krishiv_common::config::ConfigValue::as_int)
+            .map(i64::cast_unsigned)
+            .or(deterministic_order.then_some(DETERMINISTIC_SEED));
         Self {
             batch_size,
             seed,
             deterministic_order,
             sort_hash_buckets,
             agg_row_layout,
+            agg_direct_keys,
             join_row_layout,
             join_radix_bits,
             join_merge_buffer_bytes,
             shared_broadcast_bytes,
+            join_idle_spill_after,
             ..Self::default()
         }
     }
@@ -396,6 +426,9 @@ impl QueryContext {
             let om = &mut m.operators.entry(*id).or_default().metrics;
             om.spill_files = stats.files();
             om.spill_write_bytes = stats.bytes();
+            // The drivers' peaks fall at different moments, so their sum can
+            // pass the query limit; the shared stats saw them together.
+            om.peak_reserved = stats.peak_held() as u64;
         }
         m.memory = QueryMemory {
             limit: self.pool.effective_limit().map(|l| l as u64),
@@ -439,13 +472,15 @@ impl QueryContext {
     }
 
     /// Records one driver of pipeline `pipeline`: it ran from `started`
-    /// to `ended` (offsets) on `threads`.
+    /// to `ended` (offsets) on `threads`, its longest poll `max_slice`, with
+    /// `stalls` polls over the stall threshold.
     pub(crate) fn record_driver(
         &self,
         pipeline: u32,
         started: Duration,
         ended: Duration,
         threads: &[u64],
+        (max_slice, stalls): (Duration, u64),
     ) {
         let count = {
             let mut all = lock(&self.threads);
@@ -460,6 +495,8 @@ impl QueryContext {
                 threads: 0,
                 started,
                 ended,
+                max_slice,
+                stalls,
             });
             // The set only grows, but a driver that read it earlier may
             // merge later: keep the larger count.
@@ -488,9 +525,17 @@ pub struct TaskContext {
     second_dependency: Option<GlobalState>,
     /// The driver's scheduler-assigned globally unique partition id within
     /// its pipeline group (Spark's partition index for the partition the
-    /// driver computes): stateful functions own one value stream per
-    /// partition. The first driver of a group reads partition 0.
+    /// driver computes). Stateful functions own one value stream per
+    /// partition: a batch's split tag (`Batch::split`, a scan split such as
+    /// a range slice) takes precedence, so a row draws from its split's
+    /// stream whichever driver read it; this id is the fallback for untagged
+    /// batches. The first driver of a group reads partition 0.
     partition: u32,
+    /// `(lane, lanes)` of a logical-partition driver (T094 G1), else `None`.
+    lane: Option<(usize, usize)>,
+    /// The first partition id of the driver's pipeline-group member (the
+    /// offset of a `UNION ALL` child).
+    partition_base: u32,
 }
 
 impl fmt::Debug for TaskContext {
@@ -521,7 +566,23 @@ impl TaskContext {
             dependency: None,
             second_dependency: None,
             partition: 0,
+            lane: None,
+            partition_base: 0,
         }
+    }
+
+    /// The same context for the driver of lane `lane` out of `lanes`.
+    #[must_use]
+    pub(crate) fn with_lane(mut self, lane: Option<(usize, usize)>) -> Self {
+        self.lane = lane;
+        self
+    }
+
+    /// `(lane, lanes)` when this driver is one of the logical partitions of
+    /// `krishiv.deterministicOrder` (T094 G1): a source then claims only the
+    /// morsels dealt to its lane ([`MorselCursor::claim_strided`](crate::MorselCursor::claim_strided)).
+    pub fn lane(&self) -> Option<(usize, usize)> {
+        self.lane
     }
 
     /// The same context for the driver `partition` (its scheduler-assigned
@@ -530,6 +591,18 @@ impl TaskContext {
     pub(crate) fn with_partition(mut self, partition: u32) -> Self {
         self.partition = partition;
         self
+    }
+
+    #[must_use]
+    pub(crate) fn with_partition_base(mut self, base: u32) -> Self {
+        self.partition_base = base;
+        self
+    }
+
+    /// The first partition id of this driver's pipeline-group member: the
+    /// partition a split-numbered source adds its split index to.
+    pub fn partition_base(&self) -> u32 {
+        self.partition_base
     }
 
     /// The driver's scheduler-assigned partition id (set when the driver is
@@ -570,6 +643,18 @@ impl TaskContext {
     /// The executor.
     pub fn executor(&self) -> &Arc<dyn Executor> {
         &self.executor
+    }
+
+    /// The driver count a source cuts its morsels for. Under `krishiv.deterministicOrder` it is
+    /// a constant (the logical partitions), never the executor's thread count: which rows a
+    /// morsel holds decides the result's bytes, and must not follow the machine (T094 G1).
+    #[must_use]
+    pub fn layout_parallelism(&self) -> usize {
+        if self.query.config().deterministic_order {
+            crate::runner::DETERMINISTIC_LOGICAL_PARTITIONS
+        } else {
+            self.executor.parallelism()
+        }
     }
 
     /// Runs non-yielding work over ~1 ms on the bounded blocking pool and
@@ -617,12 +702,15 @@ impl TaskContext {
 
     /// A further consumer of this operator that never spills, for memory kept
     /// apart from the driver's consumer: grant credit is per consumer, so two
-    /// merges on one would take each other's.
+    /// merges on one would take each other's. It registers with a signal of
+    /// the driver's owner that is dropped at once (no spillable bytes), so
+    /// arbitration knows which driver it belongs to.
     pub(crate) fn register_plain_consumer(&self, name: &str) -> Arc<ConsumerHandle> {
+        let signal = self.owner.signal();
         ConsumerHandle::register_counted(
             Arc::clone(self.query.pool()),
             name,
-            None,
+            Some(signal as Arc<dyn krishiv_memory::Spillable>),
             self.query.spill_stats(self.op),
         )
     }

@@ -8,7 +8,9 @@ use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::Poll;
+use tracing::Instrument as _;
 
+pub(crate) use crate::run_site::sql_context;
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use futures::StreamExt;
@@ -36,7 +38,7 @@ use krishiv_plan::analyzer::QueryContext as PlanQueryContext;
 use krishiv_plan::analyzer::{
     AccessPolicy, AllowAll, AnalysisContext, AnalysisError, AnalyzedPlan, Analyzer as _,
     BuiltinTableFunctions, DefaultAnalyzer, FunctionRegistry, Principal, Privilege, ResolutionConf,
-    Securable, SparkProfile, TableColumn, authorize,
+    Securable, SparkProfile, authorize,
 };
 use krishiv_plan::{LogicalPlan, Plan, PlanId, PlanNode, ReadSource, SourceId};
 use krishiv_sql::ast::Statement;
@@ -142,6 +144,12 @@ pub(crate) struct SessionState {
     /// The session's registered UDFs, shared with the registry above and
     /// the workers running its plans.
     udfs: Arc<UdfLibrary>,
+    /// The session's Python UDFs (P2-T059), shared with the registry above:
+    /// plans name them by name and version only.
+    pub(crate) python_udfs: Arc<crate::python_udfs::PythonUdfLibrary>,
+    /// The runtime that evaluates them in this process (set by the Python
+    /// facade); without one a plan calling a Python UDF fails to run.
+    pub(crate) python_runtime: Mutex<Option<Arc<dyn krishiv_exec::python_eval::UdfRuntime>>>,
     /// The SQL-bodied functions the session defines.
     pub(crate) sql_functions: SqlFunctions,
     /// The process-wide part of the engine this session runs on.
@@ -152,7 +160,7 @@ pub(crate) struct SessionState {
     closed: AtomicBool,
     /// The session's memory pool: the runtime's root, or a pool of its own
     /// under the root (`krishiv.session.memoryLimit`).
-    memory: Arc<dyn MemoryPool>,
+    pub(crate) memory: Arc<dyn MemoryPool>,
     /// Whether a store creates objects only if absent (the commit log's
     /// probe), by store id; per session, never process-wide.
     commit_log_probes: Mutex<HashMap<String, bool>>,
@@ -160,7 +168,7 @@ pub(crate) struct SessionState {
     /// The session's content-addressed relations: every memory table's
     /// batches as Arrow IPC, so workers resolve a batch range through it
     /// instead of reading rows from the plan.
-    relations: Arc<RelationStore>,
+    pub(crate) relations: Arc<RelationStore>,
     cwd: String,
     planner: Arc<dyn PhysicalPlanner>,
     plan_ids: AtomicI64,
@@ -478,7 +486,7 @@ impl Session {
                 let seq = session.state.statements.fetch_add(1, Ordering::Relaxed);
                 use tracing::Instrument as _;
                 let trace = crate::telemetry::QueryTrace::of(seq, &text);
-                let span = trace.prepare_span(&session.state.session_id);
+                let span = trace.prepare_span(&crate::telemetry::Who::of(&session.state));
                 session
                     .sql_here_marked(&text, marker)
                     .instrument(span)
@@ -494,6 +502,7 @@ impl Session {
             && row.lock().unwrap_or_else(PoisonError::into_inner).is_none()
         {
             self.state.queries.record_refused(
+                crate::system::TextPolicy::from_config(&self.state.conf.snapshot()),
                 Some(krishiv_sql::redact_sql(query).as_str()),
                 None,
                 error,
@@ -515,24 +524,46 @@ impl Session {
         }
     }
 
-    pub(crate) async fn sql_here(&self, query: &str) -> Result<DataFrame, KrishivError> {
-        self.sql_here_marked(query, Arc::default()).await
+    /// Runs `query` on the calling task as `sql` would, for text the session built from a
+    /// statement it already substituted (`CACHE TABLE t AS query`): `spans` are the substituted
+    /// names in `query`, kept while substituting again leaves the text as it is.
+    pub(crate) async fn sql_here_spanned(
+        &self,
+        query: &str,
+        spans: Vec<krishiv_sql::ast::Span>,
+    ) -> Result<DataFrame, KrishivError> {
+        // Boxed: one more nested future level overflows the compiler's query depth in the binaries.
+        Box::pin(self.sql_here_inner(query, Arc::default(), spans)).await
     }
 
-    /// [`Self::sql_here`], with `row` as the statement's slot for the id of the `system.queries`
-    /// row a query of it began.
+    /// Runs `query` on the calling task as `sql` would, with `row` as the statement's slot for
+    /// the id of the `system.queries` row a query of it began.
     pub(crate) async fn sql_here_marked(
         &self,
         query: &str,
         row: Arc<std::sync::Mutex<Option<String>>>,
     ) -> Result<DataFrame, KrishivError> {
+        // Boxed: one more nested future level overflows the compiler's query depth in the binaries.
+        Box::pin(self.sql_here_inner(query, row, Vec::new())).await
+    }
+
+    async fn sql_here_inner(
+        &self,
+        query: &str,
+        row: Arc<std::sync::Mutex<Option<String>>>,
+        spans: Vec<krishiv_sql::ast::Span>,
+    ) -> Result<DataFrame, KrishivError> {
         let mut env = self.query_env();
         env.row = row;
+        let written = query;
         let query = self.substituted(query);
         let query: &str = &query;
         // `IDENTIFIER(expr)` names are evaluated first: parsing, access checks and the run see them.
         let resolved = self.identifier_clauses_into(query, &mut env).await?;
         let named_by_clause = matches!(resolved, std::borrow::Cow::Owned(_));
+        if !spans.is_empty() && !named_by_clause && query == written {
+            env.identifier_spans = spans.into();
+        }
         let query: &str = &resolved;
         let redacted = krishiv_sql::redact_sql(query);
         let statement = krishiv_sql::parse_statement(query, &env.parser)
@@ -566,7 +597,10 @@ impl Session {
         query: &str,
         redacted: &RedactedSql,
     ) -> Result<DataFrame, KrishivError> {
-        crate::collation_defaults::refuse_unhonoured(&statement)?;
+        crate::collation_defaults::refuse_unhonoured(
+            &statement,
+            self.parser_options().schema_level_collations,
+        )?;
         match statement {
             Statement::Query(q) => {
                 let plan = self.lower_identified(&q, &env, redacted)?;
@@ -577,9 +611,14 @@ impl Session {
             Statement::Explain(e) => self.explain_statement(&e, env, redacted).await,
             Statement::Set(s) => self.exec_set(&s, redacted).await,
             Statement::Reset(r) => self.exec_reset(&r).await,
-            Statement::CreateView(v) => self.exec_create_view(&v).await,
-            Statement::DropView(v) => self.exec_drop_view(&v).await,
-            Statement::Cache(c) => Box::pin(self.exec_cache(&c, query)).await,
+            Statement::CreateView(v) => {
+                self.exec_create_view(&v, query, &env.identifier_spans)
+                    .await
+            }
+            Statement::DropView(v) => self.exec_drop_view(&v, &env).await,
+            Statement::Cache(c) => {
+                Box::pin(self.exec_cache(&c, query, &env.identifier_spans)).await
+            }
             Statement::Refresh(r) => self.exec_refresh(&r).await,
             Statement::DeclareVariable(v) => self.exec_declare(&v, query, redacted).await,
             Statement::SetVariable(v) => self.exec_set_variable(&v, query, redacted).await,
@@ -587,9 +626,14 @@ impl Session {
             Statement::ExecuteImmediate(e) => {
                 Box::pin(self.exec_execute_immediate(&e, query, redacted, 0)).await
             }
-            Statement::CreateFunction(f) => self.exec_create_function(&f, redacted).await,
+            Statement::CreateFunction(f) => {
+                self.exec_create_function(&f, redacted, &env.identifier_spans)
+                    .await
+            }
             Statement::DropFunction(f) => self.exec_drop_function(&f).await,
-            Statement::CreateTable(t) => Box::pin(self.exec_create_table(&t, query)).await,
+            Statement::CreateTable(t) => {
+                Box::pin(self.exec_create_table(&t, query, &env.identifier_spans)).await
+            }
             Statement::CreateTableLike(t) => Box::pin(self.exec_create_table_like(&t, query)).await,
             Statement::DropTable(d) => self.exec_drop_table(&d).await,
             Statement::CreateNamespace(n) => self.exec_create_namespace(&n, query).await,
@@ -598,12 +642,22 @@ impl Session {
             Statement::Repair(r) => self.exec_repair(&r).await,
             Statement::Use(u) => self.exec_use(&u).await,
             Statement::Show(s) => Box::pin(self.exec_show(&s, query)).await,
-            Statement::Describe(d) => Box::pin(self.exec_describe(&d, query)).await,
-            Statement::CreatePermanentView(v) => self.exec_create_permanent_view(&v, query).await,
+            Statement::Describe(d) => {
+                Box::pin(self.exec_describe(&d, query, &env.identifier_spans)).await
+            }
+            Statement::CreatePermanentView(v) => {
+                let ids = (&*env.identifier_spans, &*env.identifier_written);
+                self.exec_create_permanent_view(&v, query, ids).await
+            }
             Statement::DropPermanentView(d) => self.exec_drop_permanent_view(&d).await,
-            Statement::AlterView(a) => self.exec_alter_view(&a, query).await,
+            Statement::AlterView(a) => {
+                let ids = (&*env.identifier_spans, &*env.identifier_written);
+                self.exec_alter_view(&a, query, ids).await
+            }
             Statement::AlterTable(a) => Box::pin(self.exec_alter_table(&a, query)).await,
-            Statement::Insert(i) => Box::pin(self.exec_insert(&i, query)).await,
+            Statement::Insert(i) => {
+                Box::pin(self.exec_insert(&i, query, &env.identifier_spans)).await
+            }
             Statement::Truncate(t) => self.exec_truncate(&t).await,
             Statement::Script(c) => {
                 let off =
@@ -819,36 +873,7 @@ impl Session {
         if is_reserved_view_name(name) {
             return Err(reserved_temp_view_name(name));
         }
-        let columns = schema
-            .fields()
-            .iter()
-            .map(|f| {
-                Ok(TableColumn::new(
-                    f.name().clone(),
-                    DataType::from_arrow_field(f)?,
-                    f.is_nullable(),
-                ))
-            })
-            .collect::<Result<Vec<_>, KrishivError>>()?;
-        if let Some(b) = batches.iter().find(|b| b.schema() != schema) {
-            return Err(internal(format!(
-                "a batch of schema {} for a table of schema {schema}",
-                b.schema()
-            )));
-        }
-        let schema = crate::carrier::canonical_schema(schema);
-        let batches = batches
-            .into_iter()
-            .map(|b| crate::carrier::recarried(&b, &schema).map(Batch::new))
-            .collect::<Result<Vec<Batch>, KrishivError>>()?;
-        // The batches as content-addressed IPC in the session's store: the
-        // table's scans split into batch ranges that workers resolve
-        // through it. The table holds the lease but not the batches, so
-        // they live once, memory-accounted; the lease releases the entry
-        // when the table is dropped or replaced.
-        let rows: u64 = batches.iter().map(|b| b.num_rows() as u64).sum();
-        let lease = self.state.relations.insert(&schema, &batches)?;
-        let table = krishiv_exec::planner::MemoryTable::from_lease(schema, rows, lease);
+        let (columns, table) = self.memory_table(schema, batches)?;
         self.state.catalog.put(
             name,
             TempTable::Memory {
@@ -1040,6 +1065,40 @@ impl Session {
         DataFrame::new(self.clone(), Arc::clone(plan.root()))
     }
 
+    /// As [`Self::from_plan`], with per-statement options, as
+    /// [`Self::sql_with`] takes them for SQL: an operation id names the
+    /// queries the DataFrame's actions run (Spark Connect's `ExecutePlan`
+    /// `operation_id`) and is held while the DataFrame or a result stream of
+    /// it is alive; a deadline limits each of them.
+    ///
+    /// ```
+    /// use krishiv_plan::{LogicalPlan, Plan};
+    /// use krishiv_session::QueryOptions;
+    /// # let session = krishiv_session::Session::new()?;
+    /// let plan = Plan::try_new(LogicalPlan::table(["t"]))?;
+    /// let id = "00112233-4455-6677-8899-aabbccddeeff";
+    /// let df = session.from_plan_with(&plan, QueryOptions::new().operation_id(id))?;
+    /// // The id is taken while `df` lives.
+    /// assert!(session.from_plan_with(&plan, QueryOptions::new().operation_id(id)).is_err());
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// `INVALID_HANDLE.SESSION_CLOSED` on a closed session; for the
+    /// operation id, the errors of [`Self::sql_with`] (`INVALID_HANDLE.FORMAT`,
+    /// `OPERATION_ALREADY_EXISTS`, `OPERATION_ABANDONED`).
+    #[cfg(feature = "unstable-ir")]
+    pub fn from_plan_with(
+        &self,
+        plan: &Plan,
+        options: crate::QueryOptions,
+    ) -> Result<DataFrame, KrishivError> {
+        Ok(DataFrame::new(
+            self.with_options(options)?,
+            Arc::clone(plan.root()),
+        ))
+    }
+
     /// Runs `work` on the session's executor, so that it finds the
     /// runtime its I/O needs whatever runtime (if any) polls the caller;
     /// dropping the returned future aborts the work.
@@ -1073,6 +1132,10 @@ impl Session {
     /// The block-cache scope of this session's stores: its principal. The session's storage
     /// credentials come from its own configuration, so one principal's queries may share blocks
     /// and no other principal's may (E15).
+    ///
+    /// The session's own `fs.*` credentials are not part of the scope: `SET` of them keeps it
+    /// (store ids change, by their `#cfg:` hash), so blocks cached under the old credentials may
+    /// stay readable with the new ones. Swap storage credentials with a new session.
     pub(crate) fn credential_scope(&self) -> krishiv_io::CacheScope {
         krishiv_io::CacheScope::Principal(self.state.principal.id())
     }
@@ -1120,7 +1183,18 @@ impl Session {
         let scans = FileScans {
             io: io.clone(),
             config: Arc::clone(&config),
-            slots: u64::try_from(self.state.runtime.executor.parallelism().max(1)).unwrap_or(1),
+            // File partitions are cut for this many slots. Under `krishiv.deterministicOrder` it
+            // is a constant, never the machine's thread count: a morsel never spans a partition,
+            // so the partitions decide which rows a lane reads (T094 G1).
+            slots: if config
+                .get(&krishiv_common::config::DETERMINISTIC_ORDER)
+                .and_then(krishiv_common::config::ConfigValue::as_bool)
+                .unwrap_or(false)
+            {
+                16
+            } else {
+                u64::try_from(self.state.runtime.executor.parallelism().max(1)).unwrap_or(1)
+            },
             runtime: self.state.runtime.executor.io_handle().clone(),
         };
         let catalog = Arc::new(QueryCatalog::new(
@@ -1178,7 +1252,8 @@ impl Session {
                     },
                 }),
             )
-            .with_path(catalog.sql_path_snapshot()),
+            .with_path(catalog.sql_path_snapshot())
+            .in_system(catalog.in_system()),
         );
         let functions: Arc<dyn FunctionRegistry> = Arc::clone(&sql_functions) as _;
         let functions_version = functions.version();
@@ -1208,9 +1283,11 @@ impl Session {
             variables_version: variables.version,
             policy_version: self.state.policy.version().0,
             text: None,
+            redacted: None,
             statement_class: None,
             row: Arc::default(),
             identifier_spans: Arc::default(),
+            identifier_written: Arc::default(),
             cache_generation,
             cache_cap,
             sql_functions,
@@ -1245,6 +1322,7 @@ impl Session {
                     .unwrap_or_else(|| self.state.catalog.current_namespace()),
                 path: env.catalog.sql_path_snapshot(),
                 binding_enabled: crate::view_schema::binding_enabled(&env.config),
+                in_system: env.catalog.in_system(),
                 qualify: Some(&|e, namespace, path| {
                     env.sql_functions
                         .qualify_calls(e, namespace, path, self.state.profile, true)
@@ -1260,9 +1338,9 @@ impl Session {
         }
         // (Boxed: `analyze_in` runs on the deepest stacks, where the size of its
         // future counts.)
-        let synced = Box::pin(self.check_stored_views(&expansion.stored_reads, env)).await?;
-        let plan = expansion.plan;
-        let plan = Plan::try_new(plan)?;
+        let (synced, renames) =
+            Box::pin(self.check_stored_views(&expansion.stored_reads, env)).await?;
+        let plan = Plan::try_new(crate::view_schema::apply_renames(&expansion.plan, &renames))?;
         // The bodies of the functions the plan calls read views the same way:
         // the policy is asked about them before the analysis' own result (or
         // a failure inside a view's text) is shown. One boxed future for both
@@ -1330,8 +1408,7 @@ impl Session {
     }
 
     /// The schema binding of each stored view `reads` inlined (`view_schema`): its query analyzed alone, inner
-    /// views first. Returns the evolved entries to store once the whole query analyzed. A query that does not
-    /// analyze alone is left to the analysis of the whole query, which reports it as it would without views.
+    /// views first. Returns the evolved entries to store once the whole query analyzed, and the renames of reads.
     ///
     /// # Errors
     /// What [`crate::view_schema::check_read`] raises.
@@ -1339,29 +1416,28 @@ impl Session {
         &self,
         reads: &[crate::view_schema::StoredRead],
         env: &QueryEnv,
-    ) -> Result<Vec<(Arc<crate::store::CatalogTable>, crate::store::CatalogTable)>, KrishivError>
-    {
+    ) -> Result<crate::view_schema::StoredViewChecks, KrishivError> {
         let compensation = crate::view_schema::compensation(&env.config);
         let mut synced = Vec::new();
+        let mut renames = Vec::new();
         for read in reads {
-            // A view whose query does not analyze is left to the outer query, which raises that error itself;
-            // the views after it still get their checks.
-            let Ok(plan) = Plan::try_new(Arc::clone(&read.query)) else {
+            // A view whose query does not analyze alone is left to the outer query.
+            let Ok(plan) = Plan::try_new(crate::view_schema::apply_renames(&read.query, &renames))
+            else {
                 continue;
             };
             let Ok(analyzed) = DefaultAnalyzer.analyze(&plan, &env.analysis).await else {
                 continue;
             };
-            if let Some(changed) = crate::view_schema::check_read(
-                read,
-                &analyzed,
-                env.analysis.conf.case_sensitive,
-                compensation,
-            )? {
+            let case_sensitive = env.analysis.conf.case_sensitive;
+            let check =
+                crate::view_schema::check_read(read, &analyzed, case_sensitive, compensation)?;
+            if let Some(changed) = check.changed {
                 synced.push((Arc::clone(&read.entry), changed));
             }
+            renames.extend(check.rename);
         }
-        Ok(synced)
+        Ok((synced, renames))
     }
 
     /// The physical plan of `analyzed`, once the files it scans are
@@ -1441,10 +1517,18 @@ impl Session {
             .with_user(self.state.principal.name.as_str())
             .with_udfs(Arc::clone(&self.state.udfs));
         let physical = self.state.planner.plan(&optimized, &cx)?;
+        // The admission request's estimate, only for a controller that reads it.
+        if self.state.admission.uses_estimate() {
+            env.catalog.set_estimate(crate::explain::estimate_of(
+                &optimized,
+                &physical,
+                &env.catalog,
+            ));
+        }
         // Spark logs what analysis and planning ignore (hints) as
         // warnings; `DataFrame::warnings` returns them too.
         for w in analyzed.warnings.iter().chain(physical.warnings()) {
-            tracing::warn!(target: "krishiv::session", "{w}");
+            tracing::warn!(target: "krishiv::session::warnings", "{w}");
         }
         Ok((optimized, physical, steps))
     }
@@ -1498,7 +1582,7 @@ impl Session {
         let (stream, query, _) = self
             .run_on_query_logged(physical, worker, env, detailed, None)
             .await?;
-        Ok((stream, query))
+        Ok((crate::run_site::resolve_sites(stream, env), query))
     }
 
     /// Asks the admission controller for a permit for the query whose
@@ -1506,12 +1590,21 @@ impl Session {
     /// leaves the row `running`; one that waits shows it `queued`. A refusal
     /// closes the row as failed with the controller's error class, and a
     /// caller that drops the query while it is queued closes it `cancelled`.
-    async fn admit(&self, log_id: &str) -> Result<crate::admission::Permit, KrishivError> {
+    async fn admit(
+        &self,
+        log_id: &str,
+        env: &QueryEnv,
+        exempt: bool,
+    ) -> Result<crate::admission::Permit, KrishivError> {
+        // A query that reads only `system.*` is never queued behind the load it inspects.
+        if exempt {
+            return Ok(self.exempt_permit(log_id));
+        }
         let request = QueryRequest {
             principal: Arc::clone(&self.state.principal),
             tags: self.state.queries.tags_now(),
             class: WorkloadClass::Interactive,
-            estimate: None,
+            estimate: env.catalog.estimate(),
         };
         let controller = Arc::clone(&self.state.admission);
         let mut admit = std::pin::pin!(controller.admit(&request));
@@ -1533,7 +1626,10 @@ impl Session {
         };
         queued.open = false;
         match admitted {
-            Ok(permit) => Ok(permit),
+            Ok(permit) => {
+                self.state.queries.mark_started(log_id);
+                Ok(permit)
+            }
             Err(error) => {
                 self.state.queries.record_failed_row(log_id, &error);
                 Err(error)
@@ -1544,14 +1640,20 @@ impl Session {
     /// Begins the `system.queries` row of a query and waits for its admission permit. A caller
     /// that is about to change something (a write replacing files) takes the permit first and
     /// passes it on, so a refused or cancelled query has changed nothing.
-    pub(crate) async fn admit_query(&self, env: &QueryEnv) -> Result<Admitted, KrishivError> {
+    pub(crate) async fn admit_query(
+        &self,
+        env: &QueryEnv,
+        exempt: bool,
+    ) -> Result<Admitted, KrishivError> {
+        // The policy of the query's own configuration snapshot, passed to its row (no shared slot).
         let log_id = self.state.queries.begin_as(
+            crate::system::TextPolicy::from_config(&env.config),
             env.text.as_deref(),
             env.statement_class,
             self.operation_id(),
         )?;
         *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
-        let permit = self.admit(&log_id).await?;
+        let permit = self.admit(&log_id, env, exempt).await?;
         Ok(Admitted::new(Arc::clone(&self.state), log_id, permit))
     }
 
@@ -1572,7 +1674,10 @@ impl Session {
         // `system.memory.query_id` joins `system.queries.query_id`.
         let (log_id, permit) = match admitted {
             Some(admitted) => admitted.into_parts(),
-            None => self.admit_query(env).await?.into_parts(),
+            None => self
+                .admit_query(env, env.catalog.reads_only_system(physical))
+                .await?
+                .into_parts(),
         };
         let id = QueryId(self.state.runtime.reserve(
             self.state.number,
@@ -1633,18 +1738,23 @@ impl Session {
                 let (done_tx, done_rx) = tokio::sync::oneshot::channel::<bool>();
                 pending.1 = Some(done_rx);
                 let abandoned = Arc::clone(&query);
-                drop(self.state.runtime.executor.spawn(
-                    WorkloadClass::Interactive,
-                    Box::pin(async move {
-                        let result = submit.await;
-                        let started = result.is_ok();
-                        if let Err(Ok(stream)) = stream_tx.send(result) {
-                            abandoned.cancel();
-                            drop(stream);
-                        }
-                        let _ = done_tx.send(started);
-                    }),
-                ));
+                drop(
+                    self.state.runtime.executor.spawn(
+                        WorkloadClass::Interactive,
+                        Box::pin(
+                            async move {
+                                let result = submit.await;
+                                let started = result.is_ok();
+                                if let Err(Ok(stream)) = stream_tx.send(result) {
+                                    abandoned.cancel();
+                                    drop(stream);
+                                }
+                                let _ = done_tx.send(started);
+                            }
+                            .instrument(tracing::Span::current()),
+                        ),
+                    ),
+                );
                 stream_rx
                     .await
                     .unwrap_or_else(|_| Err(internal("a query ended during its setup".to_owned())))
@@ -1691,670 +1801,13 @@ impl Session {
 }
 
 impl Session {
-    /// The directory a write of `text` goes to, as it physically is (links in
-    /// its existing part resolved): the policy is asked about the directory
-    /// that is written, never about a name that a link sends elsewhere.
-    /// Cloud stores are built from the query snapshot with the write's
-    /// per-relation `fs.*` options overriding it (Spark's per-relation Hadoop
-    /// configuration).
-    pub(crate) fn locate_write_path(
-        &self,
-        text: &str,
-        options: &BTreeMap<String, OptionValue>,
-        env: &QueryEnv,
-    ) -> Result<krishiv_exec::files::LocatedPath, KrishivError> {
-        let stores = self.scoped_stores(&env.config);
-        let at = ObjectPaths::new(
-            StoreId::new(LOCAL_STORE),
-            self.state.cwd.clone(),
-            Arc::clone(&self.state.io),
-            stores,
-        )
-        .locate_with_options(text, options)?;
-        crate::access::physical(at)
-    }
-
-    /// Before anything is written or replaced (an overwrite deletes first):
-    /// `Modify` and `Create` on the path, both whether or not it exists, so a
-    /// denial never tells whether it does.
-    pub(crate) async fn authorize_write_path(
-        &self,
-        at: &krishiv_exec::files::LocatedPath,
-        options: &BTreeMap<String, OptionValue>,
-    ) -> Result<(), KrishivError> {
-        // The encoder resolves secret options (`encryptionKey`) for this principal: USAGE first.
-        let r = krishiv_plan::analyzer::authorize_secret_refs(
-            &*self.state.policy,
-            &self.state.principal,
-            options.values(),
-        )
-        .await;
-        crate::access::audit(self, StatementClass::Write, r)?;
-        let securable = Securable::Path(OptionValue::from_user("path", at.display.clone()));
-        for privilege in [Privilege::Modify, Privilege::Create] {
-            let r = authorize(
-                &*self.state.policy,
-                &self.state.principal,
-                &securable,
-                privilege,
-            )
-            .await;
-            crate::access::audit(self, StatementClass::Write, r)?;
-        }
-        Ok(())
-    }
-
-    /// The file format named `format`, which must be one the engine writes:
-    /// the Spark file sources it does not write fail with
-    /// `KRISHIV_UNSUPPORTED_FEATURE`.
-    pub(crate) fn writable_format(
-        &self,
-        format: &str,
-    ) -> Result<Arc<dyn krishiv_io::FileFormat>, KrishivError> {
-        match self.state.runtime.formats.get(format) {
-            Ok(found) => Ok(found),
-            Err(e) => {
-                if is_spark_file_source(format) {
-                    return Err(KrishivUnsupportedFeature {
-                        feature: format!("writing the {format} format"),
-                    }
-                    .into());
-                }
-                Err(e)
-            }
-        }
-    }
-
-    /// What a write of `schema` in `format` with `options` would refuse before it
-    /// touches anything: a format the engine does not write, duplicate output
-    /// columns, options the format rejects. `saveAsTable` in overwrite mode asks
-    /// this before it drops the old table.
-    pub(crate) fn check_write_ready(
-        &self,
-        format: &str,
-        options: &BTreeMap<String, OptionValue>,
-        schema: &SchemaRef,
-        env: &QueryEnv,
-    ) -> Result<(), KrishivError> {
-        unique_columns(schema, env.analysis.conf.case_sensitive)?;
-        let format = self.writable_format(format)?;
-        let (parsed, _) = format.options().parse(options, &env.config)?;
-        // The framework options the format schema skips (`maxRecordsPerFile`).
-        max_records_per_file(options, format.name())?;
-        // What the writer would refuse once it exists (a Parquet codec that is not one, a CSV
-        // option combination, a schema the format cannot hold): the same check `write` makes.
-        format
-            .check_write(schema, &parsed)
-            .map_err(|e| e.into_error("the table"))?;
-        Ok(())
-    }
-
-    /// Writes the result of `physical` to the directory `path` in
-    /// `format` with `mode` (`df.write`): the files under their final
-    /// names, then the directory's commit (`_SUCCESS`, the removal of
-    /// orphaned attempt files, and the removal of what an overwrite
-    /// replaces). A failed or cancelled write deletes its files and leaves
-    /// the directory as it was. The plan carries the write as data; the
-    /// commit runs from the plan's result rows (one per file: `path`,
-    /// `size`, `rows`). Returns the directories below `path` that hold the
-    /// committed files (`col=value/...` of a partitioned write, in their
-    /// escaped form; empty for an unpartitioned one or when nothing was
-    /// written).
-    pub(crate) async fn write_files(
-        &self,
-        physical: PhysicalPlan,
-        env: &QueryEnv,
-        target: WriteTarget,
-        types: &[DataType],
-        pre: &mut Option<Admitted>,
-        dry: bool,
-    ) -> Result<Vec<String>, KrishivError> {
-        let WriteTarget {
-            format,
-            mode,
-            path,
-            options,
-            partition_by,
-        } = target;
-        let mode = SaveMode::parse(&mode)?;
-        unique_columns(physical.schema(), env.analysis.conf.case_sensitive)?;
-        let format = self.writable_format(&format)?;
-        let (parsed, _) = format.options().parse(&options, &env.config)?;
-        let Some(text) = path.as_plain() else {
-            return Err(KrishivUnsupportedFeature {
-                feature: "write paths with credentials".to_owned(),
-            }
-            .into());
-        };
-        let schema = Arc::clone(physical.schema());
-        // The analyzer's types where the plan's Arrow types don't say them.
-        let column_types: BTreeMap<usize, DataType> = schema
-            .fields()
-            .iter()
-            .zip(types)
-            .enumerate()
-            .filter(|(_, (f, t))| {
-                t.to_arrow_field_with_storage(f.name(), f.data_type().clone(), f.is_nullable())
-                    .is_ok_and(|tagged| !tagged.metadata().is_empty())
-            })
-            .map(|(i, (_, t))| (i, t.clone()))
-            .collect();
-        let partitions =
-            resolve_partitions(&schema, &partition_by, env.analysis.conf.case_sensitive)?;
-        if !partitions.is_empty() && partitions.len() == schema.fields().len() {
-            return Err(AllPartitionColumnsNotAllowed {}.into());
-        }
-        let dynamic =
-            !partitions.is_empty() && partition_overwrite_is_dynamic(&env.config, &options)?;
-        let max_records = max_records_per_file(&options, format.name())?;
-        let at = self.locate_write_path(text, &options, env)?;
-        // The query's own context: its counters are the write's bytes.
-        let io = env.io.clone();
-        self.authorize_write_path(&at, &options).await?;
-        // A link swapped into the checked path since fails the write
-        // before anything is replaced, and again before the commit deletes
-        // what an overwrite replaces.
-        crate::access::still_physical(self, &at)?;
-        // Checked only (`dry`): nothing is admitted or replaced.
-        if dry {
-            return Ok(Vec::new());
-        }
-        // The admission permit before anything is replaced: `DirectoryWrite::begin` deletes what
-        // an overwrite replaces, which a refused or cancelled query must not have done.
-        // Admitted by the caller already (it changed something before this write), else here.
-        let mut admitted = Some(match pre.take() {
-            Some(admitted) => admitted,
-            None => self.admit_query(env).await?,
-        });
-        let written = async {
-            let job = job_uuid();
-            // Every name of the write is resolved relative to the directory
-            // opened here, never through a link (P2-T199). The registration
-            // lives until the write is over.
-            let (store, _registration) = self.anchor_local_write(&at, &job)?;
-            let Some(write) = DirectoryWrite::begin(
-                &io,
-                store.clone(),
-                at.path.clone(),
-                mode,
-                job.clone(),
-                dynamic,
-            )
-            .await?
-            .map(|w| w.partitioned(!partitions.is_empty())) else {
-                // `ignore` found the path: nothing is written.
-                return Ok(Vec::new());
-            };
-            // Boxed: the statement futures are on the recursion of nested
-            // scripts, so a larger write future would overflow their stack.
-            let write = if Box::pin(uses_commit_log(
-                &env.config,
-                &self.state.commit_log_probes,
-                &io,
-                &store,
-                &at,
-                &job,
-            ))
-            .await?
-            {
-                Box::pin(write.logged(&io)).await?
-            } else {
-                write
-            };
-            let plan = physical.into_write(WritePlan {
-                format: format.name().to_owned(),
-                options: options.clone(),
-                store: store.key().to_owned(),
-                dir: at.path.as_ref().to_owned(),
-                job_uuid: job,
-                max_records_per_file: max_records,
-                target_file_bytes: 0,
-                partition_by: partitions.iter().map(|(i, _)| *i).collect(),
-                column_types,
-            })?;
-            let worker = self.worker(env);
-            let (mut rows, _, row_id) = self
-                .run_on_query_logged(&plan, worker, env, false, admitted.take())
-                .await?;
-            let mut batches = Vec::new();
-            while let Some(batch) = rows.next().await {
-                batches.push(batch?);
-            }
-            drop(rows);
-            let files = committed_files(&batches)?;
-            // The query's stream has ended and its `system.queries` row says `finished`: a failure
-            // of the steps that follow is the write's outcome, so the row is corrected.
-            let after_run = async {
-                if let Err(denied) = crate::access::still_physical(self, &at) {
-                    // The files the query wrote are under the anchor: remove
-                    // them (best effort) before refusing.
-                    for f in &files {
-                        drop(io.delete(&store, &f.path).await);
-                    }
-                    return Err(denied);
-                }
-                write
-                    .commit(&io, format.as_ref(), schema, &parsed, files.clone())
-                    .await
-            }
-            .await;
-            let committed = match after_run {
-                Ok(committed) => committed,
-                Err(error) => {
-                    self.state.queries.fail(&row_id, &error);
-                    return Err(error);
-                }
-            };
-            // The engine's own write may have replaced a cached path: entries
-            // reading files are dropped, so the next action lists them again.
-            // (An external change drops nothing and stays invisible.)
-            self.refresh_files();
-            // A write by path into a table's directory changes what the table reads.
-            if let Some(local) = at.display.strip_prefix("file:") {
-                self.state
-                    .runtime
-                    .results
-                    .invalidate_path(std::path::Path::new(local));
-            }
-            let mut dirs = std::collections::BTreeSet::new();
-            for f in &committed {
-                let below: Vec<String> = f
-                    .path
-                    .prefix_match(&at.path)
-                    .map(|parts| parts.map(|p| p.as_ref().to_owned()).collect())
-                    .unwrap_or_default();
-                if let Some((_, leaf)) = below.split_last()
-                    && !leaf.is_empty()
-                {
-                    dirs.insert(leaf.join("/"));
-                }
-            }
-            Ok(dirs.into_iter().collect())
-        }
-        .await;
-        // A statement that ended before its query ran (an `ignore` that found its path, or an
-        // error in the preparation) settles its row with that outcome.
-        if let Some(unrun) = admitted.take() {
-            match &written {
-                Ok(_) => unrun.finish_ok(),
-                Err(error) => unrun.fail(error),
-            }
-        }
-        // A store error after the anchor is open may be a link swapped into
-        // the path: the audited denial is what the caller sees then.
-        if written.is_err()
-            && let Err(denied) = crate::access::still_physical(self, &at)
-            && denied.error_class().name() == "KRISHIV_INSUFFICIENT_PERMISSIONS"
-        {
-            return Err(denied);
-        }
-        written
-    }
-
-    /// The store a directory write at `at` goes through: for a local path
-    /// on Unix a [`krishiv_io::BeneathStore`] anchored at the deepest
-    /// existing directory above the target, registered for this write only
-    /// (messages and `EXPLAIN` still name `file`); otherwise the plain
-    /// store of `at`.
-    fn anchor_local_write(
-        &self,
-        at: &krishiv_exec::files::LocatedPath,
-        job: &str,
-    ) -> Result<(StoreId, Option<StoreRegistration>), KrishivError> {
-        #[cfg(unix)]
-        if let Some(local) = at.display.strip_prefix("file:") {
-            match krishiv_io::BeneathStore::anchor(std::path::Path::new(local)) {
-                Ok(anchored) => {
-                    let id = at.store.private_to(job);
-                    self.state
-                        .io
-                        .register_store(id.clone(), Arc::new(anchored) as Arc<dyn ObjectStore>);
-                    let registration = StoreRegistration {
-                        io: Arc::clone(&self.state.io),
-                        id: id.clone(),
-                    };
-                    return Ok((id, Some(registration)));
-                }
-                Err(krishiv_io::AnchorError::Swapped(_)) => {
-                    // A link or file where a directory was checked: the
-                    // audited denial if the path now resolves elsewhere.
-                    crate::access::still_physical(self, at)?;
-                    return Err(anchor_failed(
-                        at,
-                        "a component of the path is not a directory",
-                    ));
-                }
-                Err(krishiv_io::AnchorError::UnsupportedName(name)) => {
-                    return Err(KrishivUnsupportedFeature {
-                        feature: format!(
-                            "writing below the directory {name:?} (a name with non-ASCII or \
-                             reserved characters above the target)"
-                        ),
-                    }
-                    .into());
-                }
-                Err(krishiv_io::AnchorError::Io(e)) => {
-                    return Err(anchor_failed(at, &e.to_string()));
-                }
-            }
-        }
-        let _ = job;
-        Ok((at.store.clone(), None))
-    }
-}
-
-/// Whether the write overwrites dynamically: the `partitionOverwriteMode`
-/// write option (any case), else `spark.sql.sources.partitionOverwriteMode`,
-/// is `DYNAMIC`.
-///
-/// # Errors
-/// `KRISHIV_INVALID_FORMAT_OPTION_VALUE` for an option value other than
-/// `STATIC` or `DYNAMIC`.
-fn partition_overwrite_is_dynamic(
-    config: &Config,
-    options: &BTreeMap<String, OptionValue>,
-) -> Result<bool, KrishivError> {
-    let from_option = options
-        .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("partitionOverwriteMode"));
-    if let Some((key, value)) = from_option {
-        let text = value.as_plain().unwrap_or("<secret>");
-        return match text.to_ascii_uppercase().as_str() {
-            "DYNAMIC" => Ok(true),
-            "STATIC" => Ok(false),
-            _ => Err(krishiv_common::error::KrishivInvalidFormatOptionValue {
-                value: format!("'{text}'"),
-                option: format!("\"{key}\""),
-                format: "\"partitioned write\"".to_owned(),
-                reason: "expected STATIC or DYNAMIC".to_owned(),
-            }
-            .into()),
-        };
-    }
-    Ok(config
-        .get(&PARTITION_OVERWRITE_MODE)
-        .and_then(ConfigValue::as_str)
-        == Some("DYNAMIC"))
-}
-
-/// Whether this write goes through the commit log:
-/// `krishiv.sql.files.commitProtocol` `LOG`, or `AUTO` where the store
-/// creates objects only if absent (probed once per write; a store that
-/// fails the probe falls back to the plain commit with a warning).
-async fn uses_commit_log(
-    config: &Config,
-    probes: &Mutex<HashMap<String, bool>>,
-    io: &krishiv_io::IoContext,
-    store: &StoreId,
-    at: &krishiv_exec::files::LocatedPath,
-    job: &str,
-) -> Result<bool, KrishivError> {
-    let protocol = config
-        .get(&krishiv_common::config::FILES_COMMIT_PROTOCOL)
-        .and_then(ConfigValue::as_str)
-        .map(str::to_ascii_uppercase);
-    let log = krishiv_io::commit_log::CommitLog::new(
-        io,
-        store.clone(),
-        at.path.clone(),
-        at.display.clone(),
-    );
-    // A directory that already has a log stays logged whatever the setting says: readers apply the
-    // log, so a write that skipped it would succeed and stay invisible.
-    if log.exists().await? {
-        return Ok(true);
-    }
-    // A partition directory (`name=value`) below a logged root cannot be committed on its own: the
-    // root's readers would never see its files, and a log of its own would shadow the root's. The
-    // write goes through the root. The ancestors are probed through the store as the path names
-    // it (`at.store`), not the one anchored at the target, which cannot see above it; the root
-    // may be the store's own root (an empty path).
-    let mut parts: Vec<String> = at.path.parts().map(|p| p.as_ref().to_owned()).collect();
-    while parts
-        .last()
-        .is_some_and(|name| name.split_once('=').is_some_and(|(k, _)| !k.is_empty()))
-    {
-        parts.pop();
-        let parent = krishiv_io::commit_log::CommitLog::new(
-            io,
-            at.store.clone(),
-            object_store::path::Path::from_iter(parts.iter().map(String::as_str)),
-            at.display.clone(),
-        );
-        if parent.exists().await? {
-            return Err(krishiv_common::error::KrishivUnsupportedFeature {
-                feature: format!(
-                    "a write into a partition directory below a directory with a commit log ({}): write through the directory that has the log",
-                    at.display
-                ),
-            }
-            .into());
-        }
-    }
-    if protocol.as_deref() == Some("NONE") {
-        return Ok(false);
-    }
-    let known = probes
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .get(at.store.key())
-        .copied();
-    let supported = match known {
-        Some(supported) => supported,
-        None => {
-            let supported = log.supports_put_if_absent(job).await?;
-            probes
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .insert(at.store.key().to_owned(), supported);
-            supported
-        }
-    };
-    if !supported {
-        if protocol.as_deref() == Some("LOG") {
-            return Err(krishiv_common::error::KrishivUnsupportedFeature {
-                feature: format!(
-                    "the commit log on a store without put-if-absent ({})",
-                    at.display
-                ),
-            }
-            .into());
-        }
-        tracing::warn!(
-            path = %at.display,
-            "the store does not create objects only if absent: writing without the commit log"
-        );
-    }
-    Ok(supported)
-}
-
-/// The `maxRecordsPerFile` write option (`FILE_SOURCE_OPTIONS`), case
-/// insensitive; 0 (unlimited) when unset.
-fn max_records_per_file(
-    options: &BTreeMap<String, OptionValue>,
-    format: &str,
-) -> Result<u64, KrishivError> {
-    let Some((key, value)) = options
-        .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("maxRecordsPerFile"))
-    else {
-        return Ok(0);
-    };
-    let Some(raw) = value.as_plain() else {
-        return Err(krishiv_common::error::KrishivInvalidFormatOptionValue {
-            value: "<secret>".to_owned(),
-            option: format!("\"{key}\""),
-            format: format!("\"{format}\""),
-            reason: "a secret is not allowed here".to_owned(),
-        }
-        .into());
-    };
-    raw.trim().parse::<u64>().map_err(|_| {
-        krishiv_common::error::KrishivInvalidFormatOptionValue {
-            value: format!("'{raw}'"),
-            option: format!("\"{key}\""),
-            format: format!("\"{format}\""),
-            reason: "expected an integer in 0..=18446744073709551615".to_owned(),
-        }
-        .into()
-    })
-}
-
-/// A write directory that could not be opened, as the path-based store
-/// reports it (`KRISHIV_OBJECT_STORE_REQUEST_FAILED`).
-fn anchor_failed(at: &krishiv_exec::files::LocatedPath, reason: &str) -> KrishivError {
-    krishiv_common::error::KrishivObjectStoreRequestFailed {
-        path: at.display.clone(),
-        attempts: "1".to_owned(),
-        reason: reason.to_owned(),
-    }
-    .into()
-}
-
-/// Removes a write's private store registration when the write is over.
-struct StoreRegistration {
-    io: Arc<IoScheduler>,
-    id: StoreId,
-}
-
-impl Drop for StoreRegistration {
-    fn drop(&mut self) {
-        self.io.unregister_store(&self.id);
-    }
-}
-
-/// The commit's files from the write plan's result rows (one per file:
-/// `path`, `size`, `rows`).
-fn committed_files(
-    batches: &[RecordBatch],
-) -> Result<Vec<krishiv_io::WrittenFileInfo>, KrishivError> {
-    use arrow_array::Int64Array;
-    use arrow_array::StringViewArray;
-    use krishiv_io::{FileStatistics, Precision};
-    let mut out = Vec::new();
-    for batch in batches {
-        if batch.num_columns() != 3 {
-            return Err(internal(
-                "a write result without path, size and rows".to_owned(),
-            ));
-        }
-        let path = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<StringViewArray>()
-            .ok_or_else(|| internal("a write result whose path is not a string".to_owned()))?;
-        let size = batch
-            .column(1)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .ok_or_else(|| internal("a write result whose size is not an integer".to_owned()))?;
-        let rows = batch
-            .column(2)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .ok_or_else(|| internal("a write result whose rows are not an integer".to_owned()))?;
-        for i in 0..batch.num_rows() {
-            let size = u64::try_from(size.value(i))
-                .map_err(|_| internal(format!("a written file of {} bytes", size.value(i))))?;
-            let rows = u64::try_from(rows.value(i))
-                .map_err(|_| internal(format!("a written file of {} rows", rows.value(i))))?;
-            out.push(krishiv_io::WrittenFileInfo {
-                // As the writer made it (`Path::parse`: the escaped directory names stay as text), so it names
-                // the key a listing returns; `Path::from` would encode the `%` of `%2F` a second time.
-                path: object_store::path::Path::parse(path.value(i))
-                    .map_err(|e| internal(format!("a written file with an invalid path ({e})")))?,
-                size,
-                rows,
-                statistics: FileStatistics::with_rows(Precision::Exact(rows)),
-            });
-        }
-    }
-    Ok(out)
-}
-
-/// The `partitionBy` columns as `(index, name)` pairs in `partitionBy`
-/// order.
-///
-/// # Errors
-/// `COLUMN_ALREADY_EXISTS` for a repeated name (checked first);
-/// `PARTITION_COLUMN_NOT_FOUND_IN_SCHEMA` for a name the schema has no
-/// column for.
-fn resolve_partitions(
-    schema: &SchemaRef,
-    partition_by: &[String],
-    case_sensitive: bool,
-) -> Result<Vec<(usize, String)>, KrishivError> {
-    // Spark rejects a repeated partition column before it looks any up
-    // (`PartitioningUtils.validatePartitionColumn`); distinct names then
-    // match distinct columns.
-    check_column_name_duplication(partition_by.iter().map(String::as_str), case_sensitive)?;
-    let mut out = Vec::new();
-    for name in partition_by {
-        let mut matches = schema.fields().iter().enumerate().filter(|(_, f)| {
-            if case_sensitive {
-                f.name() == name
-            } else {
-                f.name().eq_ignore_ascii_case(name)
-            }
-        });
-        let Some((index, field)) = matches.next() else {
-            return Err(PartitionColumnNotFoundInSchema {
-                column: format!("`{}`", name.replace('`', "``")),
-                schema: schema_simple_string(schema),
-            }
-            .into());
-        };
-        if matches.next().is_some() {
-            return Err(internal(format!(
-                "partition column `{name}` matches several columns"
-            )));
-        }
-        // Checked here so that nothing is started for a column type that
-        // has no partition path text.
-        krishiv_io::check_partition_column(field.name(), field.data_type())?;
-        out.push((index, field.name().clone()));
-    }
-    Ok(out)
-}
-
-/// `schema` as Spark prints one (`struct<id:int,...>`).
-fn schema_simple_string(schema: &SchemaRef) -> String {
-    let fields: Vec<String> = schema
-        .fields()
-        .iter()
-        .map(|f| {
-            let ty = DataType::from_arrow(f.data_type())
-                .map(|t| t.simple_string())
-                .unwrap_or_else(|_| f.data_type().to_string());
-            format!("{}:{ty}", f.name())
-        })
-        .collect();
-    format!("struct<{}>", fields.join(","))
-}
-
-impl Session {
-    /// `path` in the qualified form reads and writes use (`file:/a/b`),
-    /// which the access policy is asked about.
-    pub(crate) fn qualify_path(&self, path: &str) -> Result<String, KrishivError> {
-        // No store is built here: cloud paths qualify through their canonical
-        // display (as reads qualify them), local paths through `LocalPaths`.
-        if let Ok(url) = parse_object_url(path) {
-            return Ok(url.display);
-        }
-        Ok(
-            LocalPaths::new(StoreId::new(LOCAL_STORE), self.state.cwd.clone())
-                .locate(path)?
-                .display,
-        )
-    }
-
     /// What a query's plans are instantiated with in this process: the
     /// query's tables, its UDFs, and its spill scope under the session's
     /// spill directory (created at instantiation). Writes build their sink
     /// from the plan with the query's I/O context, formats and configuration;
     /// batch splits resolve through the session's relation store.
     fn worker(&self, env: &QueryEnv) -> WorkerContext {
-        WorkerContext::new(
+        let worker = WorkerContext::new(
             Arc::clone(&env.catalog) as Arc<dyn krishiv_exec::planner::TableProviderResolver>
         )
         .with_udfs(Arc::clone(&self.state.udfs))
@@ -2364,264 +1817,9 @@ impl Session {
         }))
         .with_io(env.io.clone())
         .with_formats(Arc::clone(&self.state.runtime.formats))
-        .with_config(Arc::clone(&env.config))
+        .with_config(Arc::clone(&env.config));
+        self.with_python_runtime(worker)
     }
-}
-
-/// The spill scope of one query: its own directory under the runtime's
-/// spill directory (opened from the runtime's configuration by the first
-/// query that spills; `krishiv.spill.*` are runtime keys, so every session
-/// shares one directory and one `krishiv.spill.maxBytes`), removed when the
-/// query's operators and streams are dropped (cancellation included).
-struct QuerySpill {
-    state: Arc<SessionState>,
-}
-
-impl fmt::Debug for QuerySpill {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("QuerySpill").finish_non_exhaustive()
-    }
-}
-
-impl SpillScopes for QuerySpill {
-    fn scope(&self) -> krishiv_exec::Result<SpillScope> {
-        let mut slot = self
-            .state
-            .runtime
-            .spill
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if slot.is_none() {
-            let manager = SpillManager::open(&SpillConfig::from_config(&self.state.runtime.config))
-                .map_err(|e| internal(format!("cannot set up the spill directory: {e}")))?;
-            *slot = Some(manager);
-        }
-        slot.as_ref().map_or_else(
-            || Err(internal("the spill directory is not open".to_owned())),
-            |m| {
-                m.scope().map_err(|e| {
-                    internal(format!("cannot create the query's spill directory: {e}"))
-                })
-            },
-        )
-    }
-}
-
-/// Spark's `COLUMN_ALREADY_EXISTS` for a written schema with a repeated
-/// name (`check_column_name_duplication`).
-fn unique_columns(schema: &SchemaRef, case_sensitive: bool) -> Result<(), KrishivError> {
-    check_column_name_duplication(
-        schema.fields().iter().map(|f| f.name().as_str()),
-        case_sensitive,
-    )
-}
-
-/// Where and how `df.write` writes.
-pub(crate) struct WriteTarget {
-    pub(crate) format: String,
-    pub(crate) mode: String,
-    pub(crate) path: OptionValue,
-    pub(crate) options: BTreeMap<String, OptionValue>,
-    pub(crate) partition_by: Vec<String>,
-}
-
-/// A fresh job id naming a write's files (`part-00000-<id>-c000...`), in
-/// UUID form. Its bits come from the standard library's per-process
-/// random hash keys, a clock reading and a counter, so two writes never
-/// share one, within or across processes.
-fn job_uuid() -> String {
-    use std::hash::{BuildHasher, Hasher};
-    static WRITES: AtomicU64 = AtomicU64::new(0);
-    let n = WRITES.fetch_add(1, Ordering::Relaxed);
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos());
-    let half = |salt: u64| {
-        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-        h.write_u64(salt);
-        h.write_u64(n);
-        h.write_u128(nanos);
-        h.write_u32(std::process::id());
-        h.finish()
-    };
-    let (hi, lo) = (half(1), half(2));
-    // Version 4, RFC 4122 variant.
-    let hi = (hi & !0xF000) | 0x4000;
-    let lo = (lo & !(0xC << 60)) | (0x8 << 60);
-    format!(
-        "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
-        hi >> 32,
-        (hi >> 16) & 0xFFFF,
-        hi & 0xFFFF,
-        lo >> 48,
-        lo & 0xFFFF_FFFF_FFFF
-    )
-}
-
-/// The parser's configs (`ParserOptions::from_conf` reads these).
-const PARSER_KEYS: [&str; 14] = [
-    "spark.sql.ansi.enabled",
-    "spark.sql.ansi.enforceReservedKeywords",
-    "spark.sql.ansi.doubleQuotedIdentifiers",
-    "spark.sql.legacy.setopsPrecedence.enabled",
-    "spark.sql.parser.escapedStringLiterals",
-    "spark.sql.legacy.bangEqualsNot",
-    "spark.sql.legacy.identifierClause",
-    "spark.sql.legacy.consecutiveStringLiterals.enabled",
-    "spark.sql.sources.bucketing.maxBuckets",
-    "spark.sql.parser.singleCharacterPipeOperator.enabled",
-    "spark.sql.legacy.viewSchemaBindingMode",
-    "spark.sql.caseSensitive",
-    "spark.sql.parser.quotedRegexColumnNames",
-    "spark.sql.legacy.parser.havingWithoutGroupByAsWhere",
-];
-
-/// `KRISHIV_UNSUPPORTED_FEATURE` for a statement `Session::sql` cannot run yet.
-pub(crate) fn unsupported_statement(what: &str) -> KrishivError {
-    KrishivUnsupportedFeature {
-        feature: format!("{what} in sessions"),
-    }
-    .into()
-}
-
-/// An empty redaction, for analyses with no SQL text (DataFrame errors
-/// carry a DataFrame context, which needs no text).
-fn empty_redacted() -> RedactedSql {
-    RedactedSql::opaque("")
-}
-
-/// `error` with the SQL span `start..end` of `text` attached as its
-/// query context (`stop` is inclusive, as Spark reports it).
-pub(crate) fn sql_context(
-    error: KrishivError,
-    text: &RedactedSql,
-    start: usize,
-    end: usize,
-) -> KrishivError {
-    error.with_query_context(ErrorQueryContext::sql(
-        text.fragment(start..end),
-        start,
-        end.saturating_sub(1),
-    ))
-}
-
-/// An analysis error with its query context attached: the SQL span of
-/// `text`, or the DataFrame operation that raised it. With no text, a
-/// SQL span has no fragment to attach, so only DataFrame contexts cross.
-fn attach_analysis(e: AnalysisError, text: Option<&RedactedSql>) -> KrishivError {
-    let empty;
-    let redacted = match text {
-        Some(t) => t,
-        None => {
-            empty = empty_redacted();
-            &empty
-        }
-    };
-    match e.query_context(redacted) {
-        Some(PlanQueryContext::Sql {
-            start,
-            stop,
-            fragment,
-        }) if text.is_some() => e
-            .error
-            .with_query_context(ErrorQueryContext::sql(fragment, start, stop)),
-        Some(PlanQueryContext::DataFrame { .. }) => {
-            e.error.with_query_context(ErrorQueryContext::dataframe())
-        }
-        // A DataFrame action with no origin (e.g. an unbound `col("x")`):
-        // the error still arose from a DataFrame operation.
-        None if text.is_none() => e.error.with_query_context(ErrorQueryContext::dataframe()),
-        _ => e.error,
-    }
-}
-
-/// The parser options `config` sets.
-fn parser_options(config: &Config) -> ParserOptions {
-    let values = conf_values(config, &PARSER_KEYS);
-    ParserOptions::from_conf(|k| values.get(k).map(String::as_str))
-}
-
-/// The values of `keys` that are set or have a default.
-fn conf_values<'k>(config: &Config, keys: &[&'k str]) -> BTreeMap<&'k str, String> {
-    keys.iter()
-        .filter_map(|k| conf::get(config, k).map(|v| (*k, v)))
-        .collect()
-}
-
-/// The analysis inputs of one query and the versions they were taken at.
-#[derive(Clone)]
-pub(crate) struct QueryEnv {
-    pub(crate) config: Arc<Config>,
-    /// The query's I/O context: every read, scan and write of the query goes
-    /// through it, so its counters are the query's own.
-    pub(crate) io: krishiv_io::IoContext,
-    pub(crate) parser: ParserOptions,
-    pub(crate) analysis: AnalysisContext,
-    pub(crate) catalog: Arc<QueryCatalog>,
-    pub(crate) conf_version: u64,
-    pub(crate) catalog_epoch: u64,
-    /// The variable version the query's snapshot was taken at: a cached
-    /// resolved plan is reused only while it is unchanged.
-    pub(crate) variables_version: u64,
-    /// The cache's invalidation generation before the query was analyzed.
-    pub(crate) cache_generation: u64,
-    /// `krishiv.cache.maxBytes` of the query's configuration snapshot.
-    pub(crate) cache_cap: usize,
-    /// The registry in `analysis`, as itself: the function map the query
-    /// reads and the texts of function bodies.
-    pub(crate) sql_functions: Arc<QueryFunctions>,
-    /// [`FunctionRegistry::version`] of `analysis.functions`.
-    pub(crate) functions_version: u64,
-    /// The access policy's version when the query started: an analysis made under another one
-    /// is not reused, since its reads were authorized under the old rules.
-    pub(crate) policy_version: u64,
-    /// The statement as the session may show it (redacted), for
-    /// `system.queries`; `None` for a query no SQL text started.
-    pub(crate) text: Option<Arc<str>>,
-    /// The statement's class (`StatementClass::name`), for `system.queries`.
-    pub(crate) statement_class: Option<&'static str>,
-    /// The id of the `system.queries` row the statement's latest query began, if any: `sql`
-    /// records a refusal only for a statement that never got a row, and a write corrects its row
-    /// when a step after its run fails. Statement-local, so another statement of the same
-    /// session cannot set or clear it.
-    pub(crate) row: Arc<std::sync::Mutex<Option<String>>>,
-    /// The spans of the names substituted for `IDENTIFIER(..)` clauses (`lower_identified`).
-    pub(crate) identifier_spans: Arc<[krishiv_sql::ast::Span]>,
-}
-
-/// A batch query's result rows: insert-only, so a weight other than 1 is a
-/// broken invariant, never dropped silently.
-fn into_record_batch(batch: Batch) -> Result<RecordBatch, KrishivError> {
-    match batch.into_parts() {
-        (data, Weights::Const(1)) => Ok(data),
-        _ => Err(internal("a batch query produced weighted rows".to_owned())),
-    }
-}
-
-pub(crate) fn internal(message: String) -> KrishivError {
-    InternalError { message }.into()
-}
-
-/// The `path` option values of `paths`, typed (a URL's credentials stay
-/// secret).
-pub(crate) fn typed_paths<S: AsRef<str>>(paths: impl IntoIterator<Item = S>) -> Vec<OptionValue> {
-    paths
-        .into_iter()
-        .map(|p| OptionValue::from_user("path", p.as_ref()))
-        .collect()
-}
-
-/// A read by path of `format`.
-pub(crate) fn read_files(
-    format: &str,
-    paths: Vec<OptionValue>,
-    options: BTreeMap<String, OptionValue>,
-) -> LogicalPlan {
-    LogicalPlan::new(PlanNode::Read(ReadSource::Files {
-        format: format.to_owned(),
-        paths,
-        options,
-    }))
 }
 
 /// Aborts a task when dropped.
@@ -2634,148 +1832,15 @@ impl Drop for AbortOnDrop {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{committed_files, max_records_per_file};
-    use std::collections::BTreeMap;
-    use std::sync::Arc;
+mod tests;
 
-    use arrow_array::{Int32Array, Int64Array, RecordBatch, StringViewArray};
-    use arrow_schema::{DataType, Field, Schema};
-    use krishiv_common::secret::OptionValue;
+mod env;
+pub(crate) use env::*;
 
-    fn options(pairs: &[(&str, &str)]) -> BTreeMap<String, OptionValue> {
-        pairs
-            .iter()
-            .map(|(k, v)| ((*k).to_owned(), OptionValue::from_user(k, *v)))
-            .collect()
-    }
+mod spill;
+pub(crate) use spill::*;
 
-    /// The access policy is asked about the qualified path: a cloud URL
-    /// keeps its canonical form (no store is built), a local path gets the
-    /// `file:` form.
-    #[test]
-    fn qualify_path_keeps_cloud_urls_and_qualifies_local_paths() {
-        let session = super::Session::new().unwrap();
-        assert_eq!(
-            session.qualify_path("s3a://bucket/k").unwrap(),
-            "s3a://bucket/k"
-        );
-        assert_eq!(session.qualify_path("/a/b").unwrap(), "file:/a/b");
-    }
+mod writes;
+use writes::*;
 
-    #[test]
-    fn max_records_per_file_reads_the_write_option() {
-        assert_eq!(
-            max_records_per_file(&BTreeMap::new(), "parquet").unwrap(),
-            0
-        );
-        assert_eq!(
-            max_records_per_file(&options(&[("maxRecordsPerFile", "10")]), "parquet").unwrap(),
-            10
-        );
-        assert_eq!(
-            max_records_per_file(&options(&[("MAXRECORDSPERFILE", " 7 ")]), "parquet").unwrap(),
-            7
-        );
-        let e =
-            max_records_per_file(&options(&[("maxRecordsPerFile", "ten")]), "parquet").unwrap_err();
-        assert_eq!(
-            e.error_class().name(),
-            "KRISHIV_INVALID_FORMAT_OPTION_VALUE"
-        );
-        let secret = BTreeMap::from([(
-            "maxRecordsPerFile".to_owned(),
-            OptionValue::reference("s", "k"),
-        )]);
-        let e = max_records_per_file(&secret, "parquet").unwrap_err();
-        assert_eq!(
-            e.error_class().name(),
-            "KRISHIV_INVALID_FORMAT_OPTION_VALUE"
-        );
-    }
-
-    fn result_batch(paths: &[&str], sizes: &[i64], rows: &[i64]) -> RecordBatch {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("path", DataType::Utf8View, false),
-            Field::new("size", DataType::Int64, false),
-            Field::new("rows", DataType::Int64, false),
-        ]));
-        RecordBatch::try_new(
-            schema,
-            vec![
-                Arc::new(StringViewArray::from_iter_values(paths.iter().copied())),
-                Arc::new(Int64Array::from(sizes.to_vec())),
-                Arc::new(Int64Array::from(rows.to_vec())),
-            ],
-        )
-        .unwrap()
-    }
-
-    #[test]
-    fn committed_files_reads_path_size_and_rows() {
-        let batch = result_batch(&["a/p", "a/q"], &[10, 20], &[1, 2]);
-        let files = committed_files(std::slice::from_ref(&batch)).unwrap();
-        assert_eq!(files.len(), 2);
-        assert_eq!(files[0].path.as_ref(), "a/p");
-        assert_eq!((files[0].size, files[0].rows), (10, 1));
-        assert_eq!((files[1].size, files[1].rows), (20, 2));
-        assert!(committed_files(&[]).unwrap().is_empty());
-    }
-
-    #[test]
-    fn committed_files_refuses_a_malformed_result() {
-        let batch = result_batch(&["a/p"], &[10], &[1]);
-        // Fewer columns.
-        let narrow = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new(
-                "path",
-                DataType::Utf8View,
-                false,
-            )])),
-            vec![Arc::clone(batch.column(0))],
-        )
-        .unwrap();
-        assert!(
-            committed_files(std::slice::from_ref(&narrow))
-                .unwrap_err()
-                .to_string()
-                .contains("path, size and rows")
-        );
-        // A path that is not a string.
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("path", DataType::Int32, false),
-            Field::new("size", DataType::Int64, false),
-            Field::new("rows", DataType::Int64, false),
-        ]));
-        let bad = RecordBatch::try_new(
-            schema,
-            vec![
-                Arc::new(Int32Array::from(vec![1])),
-                Arc::new(Int64Array::from(vec![10])),
-                Arc::new(Int64Array::from(vec![1])),
-            ],
-        )
-        .unwrap();
-        assert!(
-            committed_files(std::slice::from_ref(&bad))
-                .unwrap_err()
-                .to_string()
-                .contains("not a string")
-        );
-        // Negative sizes and rows.
-        let bad = result_batch(&["a/p"], &[-1], &[1]);
-        assert!(
-            committed_files(std::slice::from_ref(&bad))
-                .unwrap_err()
-                .to_string()
-                .contains("bytes")
-        );
-        let bad = result_batch(&["a/p"], &[10], &[-1]);
-        assert!(
-            committed_files(std::slice::from_ref(&bad))
-                .unwrap_err()
-                .to_string()
-                .contains("rows")
-        );
-    }
-}
+mod ops;

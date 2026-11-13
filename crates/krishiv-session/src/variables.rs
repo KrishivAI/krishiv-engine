@@ -51,6 +51,16 @@ pub(crate) struct SessionVariables {
 }
 
 impl SessionVariables {
+    /// Variables holding this session's names, types and values; later
+    /// changes to either do not reach the other.
+    pub(crate) fn copy(&self) -> Self {
+        let map = self.map.read().unwrap_or_else(PoisonError::into_inner);
+        Self {
+            map: RwLock::new(map.clone()),
+            version: AtomicU64::new(self.version.load(Ordering::Acquire)),
+        }
+    }
+
     /// The snapshot one query resolves, with the version it was taken at.
     /// The bump happens under the write lock, so a snapshot never pairs
     /// newer contents with an older version (only the reverse, which

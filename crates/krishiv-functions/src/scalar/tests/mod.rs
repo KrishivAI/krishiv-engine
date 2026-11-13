@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+//! Tests for the scalar function kernels: names and aliases, string, date and boolean families.
 
 use std::sync::Arc;
 
@@ -619,6 +620,7 @@ mod text;
 mod url;
 mod variant;
 mod vector;
+mod xml_binary;
 
 #[test]
 fn session_user_and_local_clock() {

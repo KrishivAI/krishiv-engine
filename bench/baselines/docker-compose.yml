@@ -5,11 +5,13 @@
 #   docker compose -f bench/baselines/docker-compose.yml stop                # stop (agents: never `down`)
 # Host ports (chosen to avoid existing containers): spark-connect 15002, spark UI 14040,
 # minio 19100 (S3) / 19101 (console), kafka 19092.
+# Spark memory: SPARK_DRIVER_MEMORY (default 8g) and SPARK_MEM_LIMIT (container cap, default 12g); the TPC-H
+# baseline on the benchmarks page runs with SPARK_DRIVER_MEMORY=20g SPARK_MEM_LIMIT=28g (Krishiv's engine memory and scope).
 name: krishiv-bench
 
 services:
   spark:
-    image: apache/spark:4.2.0@sha256:fc64959c04bd87b0ac686be9aaa9008b69cdb1afc695400528279c8b01f43d89   # newest published 4.2.x on Docker Hub as of 2026-10 (4.2.1 not published)
+    image: ${SPARK_IMAGE:-apache/spark:4.2.0@sha256:fc64959c04bd87b0ac686be9aaa9008b69cdb1afc695400528279c8b01f43d89}   # default: newest published 4.2.x (4.2.1 not published as of 2026-10); override with SPARK_IMAGE, pinned by digest
     container_name: krishiv-bench-spark
     user: root
     entrypoint: []
@@ -19,7 +21,7 @@ services:
       - --master
       - local[*]
       - --driver-memory
-      - 8g
+      - ${SPARK_DRIVER_MEMORY:-8g}
       - --conf
       - spark.sql.shuffle.partitions=24
       - --conf
@@ -34,7 +36,7 @@ services:
     volumes:
       - ${KRISHIV_DATA:-${HOME}/krishiv-data}:/data:ro
       - spark-tmp:/tmp/spark
-    mem_limit: 12g
+    mem_limit: ${SPARK_MEM_LIMIT:-12g}
     healthcheck:
       test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/15002'"]
       interval: 5s
@@ -43,7 +45,14 @@ services:
       start_period: 10s
 
   minio:
-    image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e   # RELEASE.2025-09-07 (Docker Hub no longer lists RELEASE tags)
+    # Docker Hub no longer serves minio/minio (pull access denied), so MinIO comes from Chainguard, pinned by digest
+    # (RELEASE.2026-11-09, entrypoint /usr/bin/minio). The image runs as uid 65532 by default; `user: root` keeps an
+    # existing `minio-data` volume (written as root by the old image) readable and writable. The image has bash but
+    # no curl, so there is no exec health check here: probe http://127.0.0.1:19100/minio/health/live from the host.
+    # If the digest ever stops pulling (Chainguard keeps only recent builds free), re-pin with
+    # `docker pull cgr.dev/chainguard/minio:latest` and `docker image inspect --format '{{index .RepoDigests 0}}'`.
+    image: cgr.dev/chainguard/minio@sha256:fb893e36fc369d41e92f678b17ec27378fa5bf0576aeef7ac15460c13629ab5a
+    user: root
     container_name: krishiv-bench-minio
     command: server /data --console-address ":9001"
     environment:

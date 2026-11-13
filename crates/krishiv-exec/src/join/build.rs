@@ -3,23 +3,27 @@
 //! chunks, spills whole partitions on request, and at `finalize` indexes the
 //! partitions still in memory.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, Weak};
 
 use arrow_array::{ArrayRef, Int64Array, LargeBinaryArray, UInt64Array};
 use arrow_row::Rows;
 use futures::future::BoxFuture;
 use krishiv_common::error::KrishivError;
 use krishiv_io::{DisabledReason, FilterId, FilterSnapshot, KeyFilterBuilder};
-use krishiv_memory::{Reservation, SpillSignal};
+use krishiv_memory::{ConsumerHandle, Reservation, SpillFile, SpillScope, SpillSignal};
 use krishiv_types::batch::{Batch, Weights};
 
-use super::grace::{Grace, Part, choose, reserve_chunks, spill_parts};
+use super::grace::{
+    Grace, Part, SPILL_MIN, SPILL_SCRATCH, choose, reserve_chunks, spill_parts, write_sliced,
+};
 use super::keys::{Encoded, Hashing, any_invalid};
 use super::table::{JoinTable, RowArena, key_bytes};
 use super::{Counter, FilterPublisher, JoinType, Shared, record, unsupported};
-use crate::context::TaskContext;
-use crate::error::{Result, internal};
+use crate::context::{QueryContext, TaskContext};
+use crate::error::{Result, cancelled, internal};
+use crate::executor::{Executor, run_blocking};
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus};
+use crate::output_spill::{OutputSpill, SpillUnread};
 use crate::rows::Hll;
 use crate::sync::{Event, Mutex, lock};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -40,7 +44,11 @@ pub(crate) struct BuildGlobal {
     /// A build key was NULL (null-aware anti).
     pub(crate) null_key: AtomicBool,
     collect: Mutex<Collect>,
-    pub(crate) built: OnceLock<Built>,
+    /// The finalized build, once a probe driver read it ([`Self::built`]).
+    built: OnceLock<Built>,
+    /// Between `finalize` and the first read: the finalized build, its
+    /// tables spillable (see [`IdleBuild`]).
+    idle: Mutex<Option<Arc<IdleBuild>>>,
     /// Runtime filter partials merged so far, and the memory they hold.
     runtime: Mutex<Partials>,
     /// The runtime filters and where they are published, abandoned if the
@@ -89,11 +97,242 @@ pub(crate) struct Built {
     pub(crate) tables: Vec<Option<JoinTable>>,
     /// Level-0 partitions with build rows on disk (bit per partition).
     pub(crate) spilled: u64,
-    /// The spilled partitions' work, shared by the probe drivers' flush.
-    pub(crate) grace: Mutex<Grace>,
-    /// Notified whenever a driver's claim on `grace` ends.
-    pub(crate) grace_changed: Event,
+    /// The spilled partitions' work, shared by the probe drivers' flush
+    /// (and by a write of an idle build's partition still in progress).
+    pub(crate) grace: Arc<Mutex<Grace>>,
+    /// Notified whenever a driver's claim on `grace` ends, or a write of an
+    /// idle build's partition does.
+    pub(crate) grace_changed: Arc<Event>,
     _memory: Vec<Reservation>,
+}
+
+impl BuildGlobal {
+    /// The finalized build, `None` before `finalize`. The first call after
+    /// it ends the build's idle window: from then on its tables stay in
+    /// memory, since probe drivers hold references to them (a write already
+    /// in progress goes on, and level 0 of the grace phase waits for it).
+    pub(crate) fn built(&self) -> Option<&Built> {
+        if let Some(b) = self.built.get() {
+            return Some(b);
+        }
+        // Under the lock, so a second reader waits for the first one's seal
+        // instead of finding neither the idle build nor the built one.
+        let mut idle = lock(&self.idle);
+        if self.built.get().is_none()
+            && let Some(built) = idle.take().and_then(|i| i.seal())
+        {
+            let _ = self.built.set(built);
+        }
+        drop(idle);
+        self.built.get()
+    }
+}
+
+/// A finalized build no probe driver has read yet. Its probe may start
+/// long after it (a scan waiting for a runtime filter whose producer is a
+/// long aggregate, study 30): until then the tables belong to no running
+/// driver, so they are an [`OutputSpill`] of their own. A spill request
+/// writes whole partitions, largest first, to the files the grace phase
+/// reads (the arena batch is what a build-phase spill writes, so the
+/// reload is the usual one) and marks them spilled; the probe defers their
+/// rows as for any spilled partition. The hook is [idle](OutputSpill::set_idle)
+/// while the build waits, so the arbitrator asks it before a running
+/// consumer spills its own state.
+struct IdleBuild {
+    state: Mutex<IdleState>,
+    hook: Arc<OutputSpill>,
+    consumer: Arc<ConsumerHandle>,
+    shared: Arc<Shared>,
+    hashing: Hashing,
+    scope: SpillScope,
+    query: Arc<QueryContext>,
+    executor: Arc<dyn Executor>,
+    grace: Arc<Mutex<Grace>>,
+    grace_changed: Arc<Event>,
+}
+
+impl std::fmt::Debug for IdleBuild {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // No lock: a `Debug` may run where the state's lock is held.
+        f.debug_struct("IdleBuild")
+            .field(
+                "spillable",
+                &krishiv_memory::Spillable::spillable_bytes(&*self.hook),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+struct IdleState {
+    /// `None` once sealed.
+    built: Option<Built>,
+    /// Per level-0 partition: the memory of its table (rows and index), on
+    /// the hook's consumer.
+    memory: Vec<Vec<Reservation>>,
+}
+
+fn held(memory: &[Reservation]) -> usize {
+    memory.iter().map(Reservation::size).sum()
+}
+
+impl IdleBuild {
+    /// Ends the idle window: the build as the probe reads it.
+    fn seal(&self) -> Option<Built> {
+        let mut st = lock(&self.state);
+        let mut built = st.built.take()?;
+        for m in &mut st.memory {
+            built._memory.append(m);
+        }
+        drop(st);
+        self.hook.set_idle(false);
+        self.hook.set_spillable_bytes(0);
+        Some(built)
+    }
+}
+
+/// A write of an idle build's partitions in progress: when it ends, however
+/// it ends, the grace phase stops waiting for it; ended any other way than
+/// by [`landed`](Self::landed), the partitions' rows are lost.
+struct Writing {
+    grace: Arc<Mutex<Grace>>,
+    changed: Arc<Event>,
+    parts: usize,
+    landed: bool,
+}
+
+impl Writing {
+    fn landed(mut self, files: Vec<(usize, SpillFile, u64)>) {
+        let mut g = lock(&self.grace);
+        for (p, file, rows) in files {
+            if let Some(part) = g.build.get_mut(p) {
+                part.files.push(file);
+                part.rows = rows;
+            }
+        }
+        self.landed = true;
+    }
+}
+
+impl Drop for Writing {
+    fn drop(&mut self) {
+        let mut g = lock(&self.grace);
+        g.writing = g.writing.saturating_sub(self.parts);
+        if !self.landed && g.lost.is_none() {
+            g.lost = Some(cancelled());
+        }
+        drop(g);
+        self.changed.notify();
+    }
+}
+
+impl SpillUnread for IdleBuild {
+    fn spill_unread(self: Arc<Self>, target: usize) -> BoxFuture<'static, Result<usize>> {
+        Box::pin(async move {
+            // The writers' scratch the tables cannot fund comes from the
+            // pool now, or the spill frees nothing.
+            let mut topup = self.consumer.reservation().for_spill_scratch();
+            let (jobs, freed) = {
+                let mut st = lock(&self.state);
+                let IdleState { built, memory } = &mut *st;
+                let Some(built) = built.as_mut() else {
+                    return Ok(0);
+                };
+                let mut order: Vec<usize> = (0..built.tables.len())
+                    .filter(|&p| built.tables[p].is_some() && memory.get(p).is_some())
+                    .collect();
+                order.sort_by_key(|&p| std::cmp::Reverse(held(&memory[p])));
+                // One partition covers the request: the smallest that does,
+                // so a small request writes no more than it needs.
+                let want = target.max(SPILL_MIN);
+                if let Some(i) = order.iter().rposition(|&p| held(&memory[p]) >= want) {
+                    order.swap(0, i);
+                }
+                let mut freed = 0usize;
+                let chosen: Vec<usize> = order
+                    .into_iter()
+                    .take_while(|&p| {
+                        let more = freed < target.max(SPILL_MIN);
+                        if more {
+                            freed = freed.saturating_add(held(&memory[p]));
+                        }
+                        more
+                    })
+                    .collect();
+                if chosen.is_empty() || topup.try_grow(SPILL_SCRATCH.saturating_sub(freed)).is_err()
+                {
+                    return Ok(0);
+                }
+                topup.shrink_to_credit(topup.size());
+                let mut jobs = Vec::with_capacity(chosen.len());
+                for p in chosen {
+                    let Some(table) = built.tables[p].take() else {
+                        continue;
+                    };
+                    built.spilled |= 1 << p;
+                    // The bytes become the writers' scratch, as our grant
+                    // credit (all on the hook's consumer).
+                    for mut m in std::mem::take(&mut memory[p]) {
+                        let bytes = m.size();
+                        m.shrink_to_credit(bytes);
+                    }
+                    let scratch = self
+                        .consumer
+                        .reservation()
+                        .releasing_to_credit()
+                        .for_spill_scratch();
+                    jobs.push((p, table, scratch));
+                }
+                lock(&self.grace).writing += jobs.len();
+                let left: usize = memory.iter().map(|m| held(m)).sum();
+                self.hook.set_spillable_bytes(left);
+                (jobs, freed)
+            };
+            let writing = Writing {
+                grace: Arc::clone(&self.grace),
+                changed: Arc::clone(&self.grace_changed),
+                parts: jobs.len(),
+                landed: false,
+            };
+            // Until the credit is back in the pool the rows count as about
+            // to be released (another driver's round waits for them).
+            let spilling = self.consumer.spilling();
+            let scope = self.scope.clone();
+            let schema = Arc::clone(self.shared.arena_schema(&self.hashing));
+            let in_flight = self.query.blocking_started();
+            let written = run_blocking(&*self.executor, move || {
+                let mut files = Vec::with_capacity(jobs.len());
+                for (p, table, scratch) in jobs {
+                    let rows = table.arena().len() as u64;
+                    let mut w = scope.writer(Arc::clone(&schema), scratch)?;
+                    write_sliced(&mut w, table.arena().batch())?;
+                    drop(table);
+                    files.push((p, w.finish()?, rows));
+                }
+                // The guard travels with the result (see `run_blocking`).
+                Ok((files, in_flight))
+            })
+            .await;
+            // Credit the writers did not take returns to the pool.
+            self.consumer.release_credit();
+            drop(spilling);
+            let (files, _in_flight) = match written {
+                Ok(w) => w,
+                Err(e) => {
+                    lock(&self.grace).lost = Some(e.clone());
+                    drop(writing);
+                    return Err(e);
+                }
+            };
+            let n = &self.shared.counters;
+            n.add(Counter::IdleSpills, files.len() as u64);
+            n.add(
+                Counter::IdleSpilledBytes,
+                files.iter().map(|(_, f, _)| f.bytes()).sum(),
+            );
+            writing.landed(files);
+            Ok(freed)
+        })
+    }
 }
 
 struct BuildLocal {
@@ -486,6 +725,7 @@ impl BuildGlobal {
             null_key: AtomicBool::new(false),
             collect: Mutex::new(Collect::default()),
             built: OnceLock::new(),
+            idle: Mutex::new(None),
             runtime: Mutex::new(Partials::default()),
             filters: Vec::new(),
             publisher: None,
@@ -493,8 +733,8 @@ impl BuildGlobal {
         let _ = g.built.set(Built {
             tables: Vec::new(),
             spilled: 0,
-            grace: Mutex::new(grace),
-            grace_changed: Event::default(),
+            grace: Arc::new(Mutex::new(grace)),
+            grace_changed: Arc::new(Event::default()),
             _memory: Vec::new(),
         });
         Arc::new(g)
@@ -518,6 +758,11 @@ impl Sink for BuildSink {
             .collect()
     }
 
+    /// Partitions absorb in `combine`, which runs in lane order.
+    fn lane_safe(&self) -> bool {
+        true
+    }
+
     fn global_state(&self, ctx: &TaskContext) -> Result<GlobalState> {
         let hashing = self.0.hashing(ctx.query().config());
         let fanout = hashing.fanout0();
@@ -533,6 +778,7 @@ impl Sink for BuildSink {
                 ..Collect::default()
             }),
             built: OnceLock::new(),
+            idle: Mutex::new(None),
             runtime: Mutex::new(Partials {
                 builders: partials(&self.0),
                 memory: Vec::new(),
@@ -919,6 +1165,19 @@ impl Sink for BuildSink {
             // The sketches sized the indexes; their memory goes back.
             c.sketches = None;
             c.sketch_memory.clear();
+            // With a spill scope, the tables in memory stay spillable until
+            // a probe driver reads them (`IdleBuild`): their memory is kept
+            // per partition.
+            let idle = s.spill.clone().filter(|_| all.iter().any(Option::is_some));
+            let mut tables_memory: Vec<Vec<Reservation>> =
+                (0..g.hashing.fanout0()).map(|_| Vec::new()).collect();
+            if idle.is_some() {
+                for (p, t) in all.iter().enumerate() {
+                    if let (Some(t), Some(m)) = (t, tables_memory.get_mut(p)) {
+                        m.push(index.split(t.index_memory().min(index.size())));
+                    }
+                }
+            }
             let mut memory = vec![index, filter_memory];
             let mut grace = Grace::new(g.hashing.fanout0());
             grace.keep_unprobed = s.join_type.keeps_null_build_keys();
@@ -928,7 +1187,10 @@ impl Sink for BuildSink {
                         .counters
                         .add(Counter::SteadyReservedBytes, part.bytes() as u64);
                 }
-                memory.append(&mut part.memory);
+                match tables_memory.get_mut(p) {
+                    Some(m) if idle.is_some() && all[p].is_some() => m.append(&mut part.memory),
+                    _ => memory.append(&mut part.memory),
+                }
                 if spilled & (1 << p) != 0 {
                     grace.build[p].files = std::mem::take(&mut part.files);
                     grace.build[p].rows = part.rows;
@@ -939,15 +1201,49 @@ impl Sink for BuildSink {
             n.add(Counter::SpilledPartitions, u64::from(spilled.count_ones()));
             n.add(Counter::BuildSpillBytes, c.file_bytes);
             n.add(Counter::FinalizeNs, nanos(started.elapsed()));
-            g.built
-                .set(Built {
-                    tables: all,
-                    spilled,
-                    grace: Mutex::new(grace),
-                    grace_changed: Event::default(),
-                    _memory: memory,
-                })
-                .map_err(|_| internal("hash join build finalized twice".to_owned()))
+            let built = Built {
+                tables: all,
+                spilled,
+                grace: Arc::new(Mutex::new(grace)),
+                grace_changed: Arc::new(Event::default()),
+                _memory: memory,
+            };
+            drop(c);
+            if g.built.get().is_some() || lock(&g.idle).is_some() {
+                return Err(internal("hash join build finalized twice".to_owned()));
+            }
+            let Some(scope) = idle else {
+                return g
+                    .built
+                    .set(built)
+                    .map_err(|_| internal("hash join build finalized twice".to_owned()));
+            };
+            let (hook, consumer) = OutputSpill::register(ctx, "HashJoinBuild tables");
+            for r in tables_memory.iter_mut().flatten() {
+                r.transfer_to(&consumer).map_err(KrishivError::from)?;
+            }
+            let bytes = tables_memory.iter().map(|m| held(m)).sum();
+            let out = Arc::new(IdleBuild {
+                grace: Arc::clone(&built.grace),
+                grace_changed: Arc::clone(&built.grace_changed),
+                state: Mutex::new(IdleState {
+                    built: Some(built),
+                    memory: tables_memory,
+                }),
+                hook: Arc::clone(&hook),
+                consumer,
+                shared: Arc::clone(&self.0),
+                hashing: g.hashing.clone(),
+                scope,
+                query: Arc::clone(ctx.query()),
+                executor: Arc::clone(ctx.executor()),
+            });
+            let weak: Weak<dyn SpillUnread> = Arc::downgrade(&out) as Weak<IdleBuild>;
+            hook.attach(weak);
+            hook.set_spillable_bytes(bytes);
+            hook.set_idle(true);
+            *lock(&g.idle) = Some(out);
+            Ok(())
         })
     }
 
@@ -1001,9 +1297,34 @@ mod tests {
     use krishiv_io::{ColumnPath, FilterId, FilterSnapshot, KeyFilterOptions, RuntimeFilter};
     use krishiv_memory::{MemoryConfig, MemoryPool, Reservation, TreePool};
 
-    use super::{Partials, publish};
+    use super::{Partials, Writing, publish};
+    use crate::join::grace::Grace;
     use crate::join::{FilterPublisher, JoinRuntimeFilter};
+    use crate::sync::{Event, Mutex, lock};
     use crate::values::{LocalValues, Producer};
+
+    /// A write of an idle build's partitions that ends any other way than
+    /// with its files (cancelled with its query) leaves the grace phase
+    /// failed, never short of rows; one that lands hands over its files.
+    #[test]
+    fn an_unfinished_write_of_an_idle_build_loses_its_partitions() {
+        let grace = Arc::new(Mutex::new(Grace::new(2)));
+        let changed = Arc::new(Event::default());
+        let writing = |parts| Writing {
+            grace: Arc::clone(&grace),
+            changed: Arc::clone(&changed),
+            parts,
+            landed: false,
+        };
+        lock(&grace).writing = 2;
+        writing(1).landed(Vec::new());
+        assert_eq!(lock(&grace).writing, 1);
+        assert!(lock(&grace).lost.is_none());
+        drop(writing(1));
+        let g = lock(&grace);
+        assert_eq!(g.writing, 0);
+        assert!(g.lost.is_some(), "the rows were lost");
+    }
 
     fn reservation(limit: usize) -> Reservation {
         let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig {

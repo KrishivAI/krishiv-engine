@@ -13,6 +13,8 @@ Paths are relative to this crate.
 - `src/errors.rs` `block_on` (GIL released) and the `KrishivError` to `krishiv.errors` mapping
 - `src/stream.rs` PyCapsule Arrow bridge; `src/stream/ffi.rs` pyo3-free C-level bridge code
 - `src/stream/tests.rs` bridge tests (the Miri target)
+- `src/udf.rs` the UDF pool's process state, the exit hook and `AnonymousPythonUdf` (an unregistered DataFrame-side `udf(...)`, its wrapper in a process-wide table under a top-bit version); `src/udf/pool.rs` pinned pool threads (each takes the `threading.settrace`/`setprofile` hooks set before the pool started, as a `threading.Thread` does: coverage and debuggers see UDF code); `src/udf/interrupt.rs` the cancel interrupt (CPython 3.11 rules: never `SetAsyncExc(id, NULL)`, never inside importlib); `src/udf/runtime.rs` the `UdfRuntime` (registered and process-wide wrappers, per-query runner conf read through `_native._udf_runner_conf()`)
+- Python side (`python/krishiv`): `_udf/worker.py` the eval-type wrappers (`wrapper(*pa.Array) -> pa.Array`), `_udf/{conversion,pandas_types,pandas_utils,typehints,loose_version}.py` PySpark 4.2.0 vendored unchanged but for imports (NOTICE; ruff format/lint and ty skip them), `sql/udf.py` `UserDefinedFunction`/`UDFRegistration`, `sql/pandas/functions.py` `pandas_udf`/`arrow_udf`
 
 ## Extension points
 - New DataFrame or Column method: a pyo3 handle method delegating to `krishiv-session`; the PySpark-shaped surface is in `python/krishiv/sql`.

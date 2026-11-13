@@ -15,8 +15,8 @@ use krishiv_exec::aggregate::{
 use krishiv_exec::physical::{
     AggregatePlan, ExchangeFilterPlan, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme,
     JoinDistribution, JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan,
-    ProjectItemPlan, Residual, ScanFilter, ScanNode, ScanRuntimeFilter, SortMergeJoinPlan,
-    SubqueryPlan, SubqueryValueKind, WritePlan,
+    ProbeSelect, ProjectItemPlan, Residual, ScanFilter, ScanNode, ScanRuntimeFilter,
+    SortMergeJoinPlan, SubqueryPlan, SubqueryValueKind, WritePlan,
 };
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::window::{FrameBound, FrameUnits, RankLike, WindowFunction, WindowFunctionPlan};
@@ -161,6 +161,7 @@ fn env(env: &ExprEnv) -> pb::ExprEnv {
         legacy_java_charsets: env.legacy_java_charsets.then_some(true),
         legacy_coding_error_action: env.legacy_coding_error_action.then_some(true),
         legacy_time_parser: env.legacy_time_parser.then_some(true),
+        binary_output_style: env.binary_output_style.as_deref().map(str::to_owned),
     }
 }
 
@@ -315,6 +316,23 @@ impl Encoder {
                 layout: layout(l),
                 count: self.expr(count)?,
                 subqueries: self.subqueries(subqueries)?,
+            }),
+            PhysNode::PythonEval {
+                input,
+                layout: l,
+                calls,
+            } => Kind::PythonEval(pb::PythonEvalNode {
+                input: self.node_index(input)?,
+                layout: layout(l),
+                calls: calls
+                    .iter()
+                    .map(|c| {
+                        Ok(pb::PythonCall {
+                            call: self.expr(&c.call)?,
+                            output: c.output.0,
+                        })
+                    })
+                    .collect::<Result<_>>()?,
             }),
             PhysNode::Generate {
                 input,
@@ -493,6 +511,59 @@ impl Encoder {
             distribution: distribution(join.distribution) as i32,
             single_match: join.single_match,
             distinct_build: join.distinct_build,
+            select: join
+                .select
+                .as_ref()
+                .map(|sel| self.probe_select(sel))
+                .transpose()?,
+        })
+    }
+
+    fn probe_select(&mut self, select: &ProbeSelect) -> Result<pb::ProbeSelect> {
+        // The decoder reads an empty column list as no list, and refuses a
+        // selection that selects nothing; the planner writes neither (a
+        // probe has key columns), so the encoder refuses both too.
+        if select.columns.as_ref().is_some_and(Vec::is_empty) {
+            return Err(CodecError::Unsupported(
+                "a probe selection with an empty column list".to_owned(),
+            ));
+        }
+        if select.filter.is_none() && select.row_stage.is_none() {
+            return Err(CodecError::Unsupported(
+                "a probe selection that selects nothing".to_owned(),
+            ));
+        }
+        Ok(pb::ProbeSelect {
+            filter: select
+                .filter
+                .as_ref()
+                .map(|f| {
+                    Ok::<_, CodecError>(pb::ProbeFilter {
+                        layout: layout(&f.layout),
+                        predicate: self.expr(&f.predicate)?,
+                    })
+                })
+                .transpose()?,
+            row_stage: select.row_stage.as_ref().map(|r| pb::ProbeRowStage {
+                scan: r.scan.0,
+                columns: r
+                    .columns
+                    .iter()
+                    .map(|c| pb::ProbeFilterColumn {
+                        id: c.id.0,
+                        column: c.column as u64,
+                    })
+                    .collect(),
+            }),
+            columns: select
+                .columns
+                .iter()
+                .flatten()
+                .map(|c| pb::ProbeColumn {
+                    index: c.index as u64,
+                    name: c.name.clone(),
+                })
+                .collect(),
         })
     }
 
@@ -635,6 +706,17 @@ impl Encoder {
                     output: Some(bound_column(output, &self.nested)?),
                 })
             }
+            ExprNode::Resolved(ResolvedExpr::EvalMode {
+                ansi,
+                expr,
+                data_type,
+                nullable,
+            }) => Kind::EvalMode(pb::EvalModeExpr {
+                expr: self.child(expr),
+                ansi: *ansi,
+                data_type: Some(spark_type(data_type, &self.nested)?),
+                nullable: *nullable,
+            }),
             ExprNode::Resolved(ResolvedExpr::Field {
                 base,
                 ordinal,
@@ -671,6 +753,17 @@ impl Encoder {
             FunctionId::Udf { name, version } => pb::function::Id::Udf(pb::UdfFunction {
                 name: name.clone(),
                 version: u64::from(*version),
+            }),
+            FunctionId::PythonUdf {
+                name,
+                version,
+                eval_type,
+                thread_safe,
+            } => pb::function::Id::PythonUdf(pb::PythonUdfFunction {
+                name: name.clone(),
+                version: u64::from(*version),
+                eval_type: eval_type.code(),
+                thread_safe: *thread_safe,
             }),
             _ => return Err(unresolved("a function identity this version does not know")),
         };
@@ -1101,6 +1194,12 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
         AggregateFunction::CovarPop => (pb::AggregateFunction::CovarPop, false),
         AggregateFunction::AnyValue { ignore_nulls } => {
             (pb::AggregateFunction::AnyValue, *ignore_nulls)
+        }
+        // `min`/`max` of a collated string have no wire form yet: the plan stays on one node.
+        AggregateFunction::MaxByKeyFirst | AggregateFunction::MinByKeyFirst => {
+            return Err(CodecError::Unsupported(
+                "min/max of a collated string".to_owned(),
+            ));
         }
         AggregateFunction::MaxBy => (pb::AggregateFunction::MaxBy, false),
         AggregateFunction::MinBy => (pb::AggregateFunction::MinBy, false),

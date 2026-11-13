@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Internal type representations (layer L1, ADR 0009).
+//! Internal type representations.
 //!
 //! [`DataType`] models Spark SQL data types with Spark's renderings
 //! (`simpleString`, `catalogString`, `sql`, `typeName`, `json`), maps them to and from
@@ -10,6 +10,7 @@
 
 pub mod arrow;
 pub mod batch;
+pub mod calendar;
 mod collation;
 mod data_type;
 mod ddl;
@@ -19,6 +20,7 @@ pub mod interval;
 pub mod interval_parse;
 mod json;
 mod nested;
+mod srs;
 pub mod variant;
 
 pub use collation::{CatalogEntry, Collation, CollationFamily};

@@ -15,7 +15,7 @@ use arrow_array::{
 };
 use krishiv_kernels::hash::routing::{
     FOLD_INIT, KEY_GROUPS, NULL_HASH, fold_column, hash_columns, key_group, key_group_range,
-    partition_of, radix, xxh64, xxh64_fixed,
+    partition_of, radix, routable, xxh64, xxh64_fixed,
 };
 use proptest::prelude::*;
 
@@ -197,6 +197,90 @@ fn unsupported_types_and_bad_lengths_are_errors() {
     let two = Int32Array::from(vec![1, 2]);
     assert!(hash_columns(&[ints.as_ref(), &two], &mut out).is_err());
     assert!(hash_columns(&[], &mut out).is_ok() && out.is_empty());
+}
+
+/// `routable` says yes exactly for the types `hash_columns` hashes, so a
+/// planner that checks it never routes a key the hash then refuses.
+#[test]
+fn routable_matches_what_hash_columns_hashes() {
+    use arrow_schema::{DataType as D, Field, Fields, IntervalUnit, TimeUnit};
+    let item = Arc::new(Field::new("item", D::Int32, true));
+    let entries = Arc::new(Field::new(
+        "entries",
+        D::Struct(Fields::from(vec![
+            Field::new("key", D::Int32, false),
+            Field::new("value", D::Int32, true),
+        ])),
+        false,
+    ));
+    let types = [
+        D::Null,
+        D::Boolean,
+        D::Int8,
+        D::Int16,
+        D::Int32,
+        D::Int64,
+        D::UInt8,
+        D::UInt16,
+        D::UInt32,
+        D::UInt64,
+        D::Float32,
+        D::Float64,
+        D::Date32,
+        D::Date64,
+        D::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+        D::Timestamp(TimeUnit::Nanosecond, None),
+        D::Duration(TimeUnit::Second),
+        D::Interval(IntervalUnit::YearMonth),
+        D::Interval(IntervalUnit::DayTime),
+        D::Interval(IntervalUnit::MonthDayNano),
+        D::Time32(TimeUnit::Second),
+        D::Time32(TimeUnit::Millisecond),
+        D::Time64(TimeUnit::Microsecond),
+        D::Time64(TimeUnit::Nanosecond),
+        D::Float16,
+        D::Decimal32(9, 2),
+        D::Decimal64(18, 2),
+        D::Decimal128(38, 10),
+        D::Decimal256(76, 10),
+        D::Utf8,
+        D::LargeUtf8,
+        D::Utf8View,
+        D::Binary,
+        D::LargeBinary,
+        D::BinaryView,
+        D::FixedSizeBinary(4),
+        D::List(Arc::clone(&item)),
+        D::LargeList(Arc::clone(&item)),
+        D::FixedSizeList(Arc::clone(&item), 2),
+        D::ListView(Arc::clone(&item)),
+        D::LargeListView(Arc::clone(&item)),
+        D::Struct(Fields::from(vec![Field::new("a", D::Int32, true)])),
+        D::Map(entries, false),
+    ];
+    let mut out = Vec::new();
+    for t in &types {
+        let column = arrow_array::new_null_array(t, 3);
+        assert_eq!(
+            routable(t),
+            hash_columns(&[column.as_ref()], &mut out).is_ok(),
+            "{t}"
+        );
+    }
+    let list = D::List(item);
+    for (values, want) in [
+        (D::Utf8, true),
+        (D::Decimal256(76, 0), false),
+        (list, false),
+    ] {
+        let dict = D::Dictionary(Box::new(D::Int32), Box::new(values.clone()));
+        assert_eq!(routable(&dict), want, "{dict}");
+        assert_eq!(routable(&dict), routable(&values));
+    }
+    // A dictionary with values hashes exactly when its value type routes.
+    let dict: DictionaryArray<Int32Type> = vec!["a", "b", "a"].into_iter().collect();
+    assert!(routable(dict.data_type()));
+    assert!(hash_columns(&[&dict], &mut out).is_ok());
 }
 
 /// A dictionary without values (all rows NULL) hashes as NULLs.
@@ -430,4 +514,70 @@ fn every_fixed_width_type_hashes_its_own_bytes() {
     let fixed =
         FixedSizeBinaryArray::try_from_iter(le(8).into_iter()).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(h_of(&[&fixed]), want(&le(8)));
+}
+
+/// The seeded XXH64 entry points (HyperLogLog++ hashes with seed 42) agree with the Spark-pinned
+/// `xxhash64` kernel, which hashes a column's values with the same seed (mutation run 42472191782
+/// missed every constant replacement of the three).
+#[test]
+fn the_seeded_xxh64_entry_points_agree_with_the_xxhash64_kernel() {
+    use krishiv_kernels::hash::routing::{xxh64_seed, xxh64_seed_int, xxh64_seed_long};
+    let ints = Int32Array::from(vec![0, 1, -1, 123_456, i32::MIN, i32::MAX]);
+    let longs = Int64Array::from(vec![0, 1, -1, 1 << 40, i64::MIN, i64::MAX]);
+    let binaries = BinaryArray::from_vec(vec![
+        b"",
+        b"a",
+        b"abcd",
+        b"a longer value than 32 bytes, for sure",
+    ]);
+    let by_kernel = |a: &ArrayRef| {
+        krishiv_kernels::hash::xxhash64(&[a.as_ref()], a.len())
+            .unwrap()
+            .values()
+            .to_vec()
+    };
+    // Spark 4.2.0 `xxhash64(cast(v as int))`, `(.. as bigint)` and `(cast('..' as binary))`.
+    let spark_ints = [
+        3_614_696_996_920_510_707_i64,
+        -6_698_625_589_789_238_999,
+        2_017_008_487_422_258_757,
+        8_591_465_006_815_244_696,
+        2_073_849_959_933_241_805,
+        1_508_894_993_788_531_228,
+    ];
+    let spark_longs = [
+        -5_252_525_462_095_825_812_i64,
+        -7_001_672_635_703_045_582,
+        3_858_142_552_250_413_010,
+        1_821_704_621_099_523_357,
+        -8_619_748_838_626_508_300,
+        -3_246_596_055_638_297_850,
+    ];
+    let spark_bins = [
+        -7_444_071_767_201_028_348_i64,
+        -8_582_455_328_737_087_284,
+        -6_810_745_876_291_105_281,
+        4_412_266_579_188_277_622,
+    ];
+    for (v, want) in ints.values().iter().zip(spark_ints) {
+        assert_eq!(xxh64_seed_int(*v, 42), want, "spark int {v}");
+    }
+    for (v, want) in longs.values().iter().zip(spark_longs) {
+        assert_eq!(xxh64_seed_long(*v, 42), want, "spark long {v}");
+    }
+    for (i, want) in spark_bins.into_iter().enumerate() {
+        assert_eq!(xxh64_seed(binaries.value(i), 42), want, "spark binary {i}");
+    }
+    let ia: ArrayRef = Arc::new(ints.clone());
+    for (got, want) in ints.values().iter().zip(by_kernel(&ia)) {
+        assert_eq!(xxh64_seed_int(*got, 42), want, "int {got}");
+    }
+    let la: ArrayRef = Arc::new(longs.clone());
+    for (got, want) in longs.values().iter().zip(by_kernel(&la)) {
+        assert_eq!(xxh64_seed_long(*got, 42), want, "long {got}");
+    }
+    let ba: ArrayRef = Arc::new(binaries.clone());
+    for (i, want) in by_kernel(&ba).into_iter().enumerate() {
+        assert_eq!(xxh64_seed(binaries.value(i), 42), want, "binary {i}");
+    }
 }
