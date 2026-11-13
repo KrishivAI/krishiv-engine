@@ -34,7 +34,9 @@ pub struct SandboxSpec {
     /// the socket rule still apply, so a forked process still cannot execute other programs or connect out.
     pub allow_fork: bool,
     /// The server's pid. The trampoline exits if its parent is no longer this process when it starts (the
-    /// server died before the parent-death signal was armed).
+    /// server died before the parent-death signal was armed). The signal itself follows the thread that
+    /// started the trampoline (see [`crate::enter_and_exec`]), so the pool starts workers from one long-lived
+    /// thread.
     pub parent_pid: Option<u32>,
 }
 
@@ -215,6 +217,18 @@ impl SandboxSpec {
         if spec.private_dir.as_os_str().is_empty() {
             return Err(SandboxError::BadSpec("no --dir".to_owned()));
         }
+        // A relative path would resolve against the private directory or a cleared PATH.
+        for (flag, path) in [
+            ("--interpreter", &spec.interpreter),
+            ("--dir", &spec.private_dir),
+        ] {
+            if !path.is_absolute() {
+                return Err(SandboxError::BadSpec(format!(
+                    "{flag} {} is not an absolute path",
+                    path.display()
+                )));
+            }
+        }
         Ok(spec)
     }
 }
@@ -310,6 +324,9 @@ mod tests {
                 Ok(spec) => panic!("{case:?} decoded to {spec:?}"),
             }
         }
+        let relative =
+            SandboxSpec::from_args(["--interpreter", "python3", "--dir", "/d"].map(OsString::from));
+        assert!(matches!(relative, Err(SandboxError::BadSpec(m)) if m.contains("absolute")));
         let no_dir = SandboxSpec::from_args(["--interpreter", "/p"].map(OsString::from));
         assert!(matches!(no_dir, Err(SandboxError::BadSpec(m)) if m.contains("--dir")));
     }

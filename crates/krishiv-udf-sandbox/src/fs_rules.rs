@@ -111,9 +111,19 @@ pub(crate) fn restrict(spec: &SandboxSpec) -> Result<(), SandboxError> {
 /// The program interpreter (`PT_INTERP`) of an ELF64 executable, if it names one. A static or non-ELF
 /// interpreter has none.
 pub(crate) fn elf_loader(executable: &Path) -> Option<PathBuf> {
-    let bytes = std::fs::read(executable).ok()?;
-    pt_interp(&bytes)
+    use std::io::Read;
+    // The ELF header, the program headers and the `PT_INTERP` string sit at the start of the file (offset
+    // 0x318 on today's toolchains); the first 64 KiB holds them without reading a whole interpreter.
+    let mut head = Vec::new();
+    std::fs::File::open(executable)
+        .ok()?
+        .take(HEAD_BYTES)
+        .read_to_end(&mut head)
+        .ok()?;
+    pt_interp(&head)
 }
+
+const HEAD_BYTES: u64 = 64 * 1024;
 
 fn pt_interp(elf: &[u8]) -> Option<PathBuf> {
     // e_ident: magic, ELFCLASS64 (2), ELFDATA2LSB (1).

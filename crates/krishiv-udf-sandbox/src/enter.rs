@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Entering the sandbox, then `exec` of the interpreter (note §4.2, the order at its end).
 //!
-//! 1. parent-death signal, then the check that the parent is still the server;
+//! 1. a new session (`setsid`), so the worker has no controlling terminal and gets no terminal signals sent
+//!    to the server's process group; the parent-death signal, then the check that the parent is still the
+//!    server;
 //! 2. `PR_SET_NO_NEW_PRIVS` and the rlimits;
 //! 3. Landlock;
 //! 4. seccomp, last, because it forbids what the earlier steps need;
@@ -43,9 +45,12 @@ pub(crate) fn enter_and_exec(spec: &SandboxSpec) -> SandboxError {
     }
 }
 
-/// Confines the calling thread as `enter_and_exec` does, without the `exec` (see `crate::confine`).
+/// Confines the calling thread as `enter_and_exec` does, without the `exec` (see
+/// `crate::confine_current_thread`).
 pub(crate) fn confine(spec: &SandboxSpec) -> Result<(), SandboxError> {
     probe::probe().require(spec)?;
+    rustix::process::setsid()
+        .map_err(|e| SandboxError::unavailable(format!("setsid failed: {e}")))?;
     rustix::process::set_parent_process_death_signal(Some(Signal::KILL))
         .map_err(|e| SandboxError::unavailable(format!("PR_SET_PDEATHSIG failed: {e}")))?;
     if let Some(expected) = spec.parent_pid {

@@ -4,15 +4,22 @@
 //! A default-allow **denylist**: CPython, numpy and pandas need too many system calls for a reviewed
 //! allowlist, and Landlock covers the file side regardless. Two filters, because one seccompiler filter has a
 //! single match action:
-//! - `EPERM` for the denied calls: every `socket()` (or every non-TCP one with a port allowlist), process
-//!   creation other than threads, tracing and other processes' memory, `io_uring`, `bpf`, `perf_event_open`,
-//!   mounts and namespaces, keyrings, `userfaultfd`, kernel modules and `kexec`, `open_by_handle_at`, and
-//!   signals to any other process;
+//! - (x86_64 only, installed first) `ENOSYS` for every x32 system call: the kernel reports them with the
+//!   x86_64 architecture and bit 30 set in the number, so a denylist keyed on plain numbers would match none
+//!   of them on a kernel with x32 enabled;
+//! - `EPERM` for the denied calls: every `socket()` (or, with a port allowlist, everything but plain TCP
+//!   streams over IPv4/IPv6: MPTCP and SCTP sockets bypass Landlock's TCP rules), process creation other than
+//!   threads, tracing and other processes' memory, `io_uring`, `bpf`, `perf_event_open`, mounts and
+//!   namespaces, keyrings, `userfaultfd`, kernel modules and `kexec`, `open_by_handle_at`, path `truncate`
+//!   (Landlock restricts it only from ABI 3), terminal input injection (`TIOCSTI`, `TIOCLINUX`), signals to
+//!   any other process, and changing any other process's limits, priority, scheduling, CPU affinity, I/O
+//!   priority or memory placement (the kernel allows all of these between processes of one uid, and
+//!   Landlock has no hook for them);
 //! - `ENOSYS` for `clone3`, whose flags live in memory a filter cannot read, so glibc falls back to `clone`,
-//!   whose flags the first filter checks.
+//!   whose flags the `EPERM` filter checks.
 //!
 //! When several filters match, the kernel applies the most restrictive action, so a call one filter allows
-//! and the other refuses is refused.
+//! and another refuses is refused.
 
 use std::collections::BTreeMap;
 
@@ -32,9 +39,12 @@ pub(crate) struct FilterSpec<'a> {
     pub(crate) allow_fork: bool,
 }
 
-/// The two BPF programs, in the order they are installed.
+/// The BPF programs, in the order they are installed.
 pub(crate) fn programs(spec: &FilterSpec<'_>) -> Result<Vec<BpfProgram>, SandboxError> {
     let arch = target_arch()?;
+    let mut programs = Vec::with_capacity(3);
+    #[cfg(target_arch = "x86_64")]
+    programs.push(no_x32());
     let deny = filter(
         deny_rules(spec)?,
         SeccompAction::Errno(errno(libc::EPERM)),
@@ -43,7 +53,36 @@ pub(crate) fn programs(spec: &FilterSpec<'_>) -> Result<Vec<BpfProgram>, Sandbox
     let mut no_clone3 = BTreeMap::new();
     no_clone3.insert(libc::SYS_clone3, Vec::new());
     let nosys = filter(no_clone3, SeccompAction::Errno(errno(libc::ENOSYS)), arch)?;
-    Ok(vec![deny, nosys])
+    programs.push(deny);
+    programs.push(nosys);
+    Ok(programs)
+}
+
+/// Bit 30 of an x86_64 system call number marks the x32 ABI (`__X32_SYSCALL_BIT`).
+#[cfg(target_arch = "x86_64")]
+const X32_SYSCALL_BIT: u32 = 0x4000_0000;
+
+/// A hand-built filter (seccompiler has no x32 check): load the system call number; if it has the x32 bit,
+/// return `ENOSYS`, otherwise allow. Other architectures (i386 through `int 0x80`) are killed by the
+/// seccompiler filters' own architecture check, so this one needs none.
+#[cfg(target_arch = "x86_64")]
+fn no_x32() -> BpfProgram {
+    use seccompiler::sock_filter;
+    // Classic BPF opcodes (linux/bpf_common.h) and seccomp return values (linux/seccomp.h): kernel ABI.
+    const LD_W_ABS: u16 = 0x20; // BPF_LD (0x00) | BPF_W (0x00) | BPF_ABS (0x20)
+    const JMP_JGE_K: u16 = 0x35; // BPF_JMP (0x05) | BPF_JGE (0x30) | BPF_K (0x00)
+    const RET_K: u16 = 0x06; // BPF_RET | BPF_K
+    const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
+    const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
+    // `struct seccomp_data` starts with `int nr`.
+    const NR_OFFSET: u32 = 0;
+    let insn = |code, jt, jf, k| sock_filter { code, jt, jf, k };
+    vec![
+        insn(LD_W_ABS, 0, 0, NR_OFFSET),
+        insn(JMP_JGE_K, 0, 1, X32_SYSCALL_BIT),
+        insn(RET_K, 0, 0, SECCOMP_RET_ERRNO | errno(libc::ENOSYS)),
+        insn(RET_K, 0, 0, SECCOMP_RET_ALLOW),
+    ]
 }
 
 fn errno(e: i32) -> u32 {
@@ -94,6 +133,35 @@ fn other_pid(own_pid: u32) -> Result<Vec<SeccompRule>, SandboxError> {
     )?])?])
 }
 
+/// A rule matching when argument `arg` (a pid) is neither 0 (the caller) nor the worker's own pid. A call
+/// naming one of the worker's other threads by tid is refused too; numpy and OpenBLAS pass 0.
+fn neither_self_nor_zero(arg: u8, own_pid: u32) -> Result<SeccompRule, SandboxError> {
+    rule(vec![
+        condition(arg, SeccompCmpArgLen::Dword, SeccompCmpOp::Ne, 0)?,
+        condition(
+            arg,
+            SeccompCmpArgLen::Dword,
+            SeccompCmpOp::Ne,
+            u64::from(own_pid),
+        )?,
+    ])
+}
+
+/// `setpriority(which, who, ..)` and `ioprio_set(which, who, ..)`: allowed only for one process
+/// (`which == process_kind`) that is the worker itself; a process group or a user (every process of the uid,
+/// the server included) is refused.
+fn self_only_who(process_kind: u64, own_pid: u32) -> Result<Vec<SeccompRule>, SandboxError> {
+    Ok(vec![
+        rule(vec![condition(
+            0,
+            SeccompCmpArgLen::Dword,
+            SeccompCmpOp::Ne,
+            process_kind,
+        )?])?,
+        neither_self_nor_zero(1, own_pid)?,
+    ])
+}
+
 /// System calls denied unconditionally (an empty rule list matches every call).
 const ALWAYS_DENIED: &[i64] = &[
     libc::SYS_ptrace,
@@ -122,7 +190,17 @@ const ALWAYS_DENIED: &[i64] = &[
     libc::SYS_open_by_handle_at,
     libc::SYS_tkill,
     libc::SYS_pidfd_send_signal,
+    // Path truncation: Landlock restricts it only from ABI 3 (Linux 6.2). `ftruncate` of a file the worker
+    // opened for writing (only in its private directory) still works.
+    libc::SYS_truncate,
 ];
+
+/// `PRIO_PROCESS` (`setpriority`) and `IOPRIO_WHO_PROCESS` (`ioprio_set`).
+const PRIO_PROCESS: u64 = 0;
+const IOPRIO_WHO_PROCESS: u64 = 1;
+/// `TIOCSTI` and `TIOCLINUX` (asm-generic ioctls, the same on x86_64 and aarch64): pushing input into, or
+/// controlling, a terminal the worker inherited.
+const TERMINAL_INJECTION: [u64; 2] = [0x5412, 0x541C];
 
 fn deny_rules(spec: &FilterSpec<'_>) -> Result<BTreeMap<i64, Vec<SeccompRule>>, SandboxError> {
     let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
@@ -134,6 +212,42 @@ fn deny_rules(spec: &FilterSpec<'_>) -> Result<BTreeMap<i64, Vec<SeccompRule>>, 
     rules.insert(libc::SYS_tgkill, other_pid(spec.own_pid)?);
     rules.insert(libc::SYS_rt_sigqueueinfo, other_pid(spec.own_pid)?);
     rules.insert(libc::SYS_rt_tgsigqueueinfo, other_pid(spec.own_pid)?);
+
+    // Other processes' limits, priority, scheduling and memory: the kernel allows these between processes of
+    // one uid (a worker could set the server's RLIMIT_CPU to one second), so only the worker itself (pid 0 or
+    // its own pid) may be named.
+    for call in [
+        libc::SYS_prlimit64,
+        libc::SYS_sched_setaffinity,
+        libc::SYS_sched_setscheduler,
+        libc::SYS_sched_setparam,
+        libc::SYS_sched_setattr,
+        libc::SYS_migrate_pages,
+    ] {
+        rules.insert(call, vec![neither_self_nor_zero(0, spec.own_pid)?]);
+    }
+    rules.insert(
+        libc::SYS_setpriority,
+        self_only_who(PRIO_PROCESS, spec.own_pid)?,
+    );
+    rules.insert(
+        libc::SYS_ioprio_set,
+        self_only_who(IOPRIO_WHO_PROCESS, spec.own_pid)?,
+    );
+    rules.insert(
+        libc::SYS_ioctl,
+        TERMINAL_INJECTION
+            .iter()
+            .map(|&request| {
+                rule(vec![condition(
+                    1,
+                    SeccompCmpArgLen::Dword,
+                    SeccompCmpOp::Eq,
+                    request,
+                )?])
+            })
+            .collect::<Result<_, _>>()?,
+    );
 
     // Process creation: threads only, unless an administrator allowed fork.
     if !spec.allow_fork {
@@ -165,8 +279,14 @@ fn deny_rules(spec: &FilterSpec<'_>) -> Result<BTreeMap<i64, Vec<SeccompRule>>, 
                 condition(0, dword.clone(), SeccompCmpOp::Ne, af(libc::AF_INET))?,
                 condition(0, dword.clone(), SeccompCmpOp::Ne, af(libc::AF_INET6))?,
             ])?;
+            // Landlock's TCP rules check only plain TCP sockets, so the protocol must be 0 (the default, TCP
+            // for a stream) or IPPROTO_TCP: MPTCP (262), SCTP (132) and others would connect anywhere.
+            let not_tcp = rule(vec![
+                condition(2, dword.clone(), SeccompCmpOp::Ne, 0)?,
+                condition(2, dword.clone(), SeccompCmpOp::Ne, af(libc::IPPROTO_TCP))?,
+            ])?;
             // `type` carries SOCK_NONBLOCK/SOCK_CLOEXEC in its high bits; the low four are the socket type.
-            let mut socket_rules = vec![not_inet];
+            let mut socket_rules = vec![not_inet, not_tcp];
             for kind in [
                 libc::SOCK_DGRAM,
                 libc::SOCK_RAW,
@@ -210,8 +330,46 @@ mod tests {
                 network,
                 allow_fork,
             })?;
-            assert_eq!(progs.len(), 2);
+            let expected = if cfg!(target_arch = "x86_64") { 3 } else { 2 };
+            assert_eq!(progs.len(), expected);
             assert!(progs.iter().all(|p| !p.is_empty()));
+        }
+        Ok(())
+    }
+
+    /// The x32 filter is installed first and refuses exactly the numbers with bit 30 set.
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn x32_calls_are_refused_first() -> Result<(), SandboxError> {
+        let progs = programs(&FilterSpec {
+            own_pid: 1,
+            network: &Network::Denied,
+            allow_fork: false,
+        })?;
+        assert_eq!(progs.first(), Some(&no_x32()));
+        let x32 = no_x32();
+        assert_eq!(x32.len(), 4);
+        assert_eq!(x32[1].k, X32_SYSCALL_BIT);
+        assert_eq!(x32[2].k & 0xffff, 38, "ENOSYS");
+        Ok(())
+    }
+
+    #[test]
+    fn other_processes_cannot_be_reconfigured() -> Result<(), SandboxError> {
+        let rules = deny_rules(&FilterSpec {
+            own_pid: 7,
+            network: &Network::Denied,
+            allow_fork: true,
+        })?;
+        for call in [
+            libc::SYS_prlimit64,
+            libc::SYS_setpriority,
+            libc::SYS_sched_setaffinity,
+            libc::SYS_ioprio_set,
+            libc::SYS_truncate,
+            libc::SYS_ioctl,
+        ] {
+            assert!(rules.contains_key(&call), "{call}");
         }
         Ok(())
     }

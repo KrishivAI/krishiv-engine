@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use krishiv_udf_sandbox::{
-    EXIT_SANDBOX_FAILED, Network, SandboxSpec, confine, probe, trampoline_main,
+    EXIT_SANDBOX_FAILED, Network, SandboxSpec, confine_current_thread, probe, trampoline_main,
 };
 
 /// Set in the child: the trampoline arguments, joined with [`SEP`].
@@ -67,7 +67,7 @@ fn rust_side_checks(args: impl Iterator<Item = OsString>) {
         Ok(spec) => spec,
         Err(e) => return println!("\nR:confine:{e}"),
     };
-    if let Err(e) = confine(&spec) {
+    if let Err(e) = confine_current_thread(&spec) {
         return println!("\nR:confine:{e}");
     }
     println!("\nR:confine:ok");
@@ -135,7 +135,7 @@ struct Dirs {
     _root: tempfile::TempDir,
     private: PathBuf,
     readable: PathBuf,
-    secret: PathBuf,
+    outside: PathBuf,
 }
 
 fn dirs() -> Dirs {
@@ -149,12 +149,12 @@ fn dirs() -> Dirs {
     };
     let private = mk("private");
     let readable = mk("readable");
-    let secret = mk("secret");
+    let outside = mk("outside");
     Dirs {
         _root: root,
         private,
         readable,
-        secret,
+        outside,
     }
 }
 
@@ -261,18 +261,18 @@ fn udf_cannot_read_outside_allowed_roots() {
     let code = format!(
         r#"
 check("passwd", lambda: open("/etc/passwd").read())
-check("secret", lambda: open({secret:?}).read())
+check("outside", lambda: open({outside:?}).read())
 check("home", lambda: os.listdir({home:?}))
 check("readable", lambda: open({readable:?}).read())
 check("stdlib", lambda: __import__("json").dumps([__import__("decimal").Decimal("1.5")], default=str))
 "#,
-        secret = d.secret.join("file.txt"),
+        outside = d.outside.join("file.txt"),
         readable = d.readable.join("file.txt"),
     );
     let o = run(&d, &code, |_| {});
     assert_eq!(o.exit, Some(0), "stderr: {}", o.stderr);
     assert_eq!(o.get("passwd"), EACCES);
-    assert_eq!(o.get("secret"), EACCES);
+    assert_eq!(o.get("outside"), EACCES);
     assert_eq!(o.get("home"), EACCES);
     assert_eq!(o.get("readable"), "ok");
     assert_eq!(o.get("stdlib"), "ok");
@@ -441,6 +441,10 @@ check("other_port", lambda: socket.create_connection(("127.0.0.1", {closed_port}
 check("bind", lambda: socket.socket().bind(("127.0.0.1", 0)))
 check("udp", lambda: socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
 check("unix", lambda: socket.socket(socket.AF_UNIX))
+# Landlock's TCP rules do not apply to MPTCP or SCTP stream sockets, so seccomp refuses those protocols.
+check("mptcp", lambda: socket.socket(socket.AF_INET, socket.SOCK_STREAM, 262))
+check("sctp", lambda: socket.socket(socket.AF_INET, socket.SOCK_STREAM, 132))
+check("tcp_protocol", lambda: socket.socket(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP).close())
 "#
     );
     let o = run(&d, &code, |spec| {
@@ -461,6 +465,9 @@ check("unix", lambda: socket.socket(socket.AF_UNIX))
     assert_eq!(o.get("bind"), EACCES);
     assert_eq!(o.get("udp"), EPERM);
     assert_eq!(o.get("unix"), EPERM);
+    assert_eq!(o.get("mptcp"), EPERM);
+    assert_eq!(o.get("sctp"), EPERM);
+    assert_eq!(o.get("tcp_protocol"), "ok");
 }
 
 #[test]
@@ -569,4 +576,81 @@ fn confine_without_exec_with_a_tcp_allowlist() {
         ],
     );
     assert_eq!(o.get("tcp"), "err:13", "stderr: {}", o.stderr);
+}
+
+/// A same-uid sibling process (as the server is) cannot be reconfigured: its limits, priority and CPU
+/// affinity stay as they were. The worker can still change its own.
+#[test]
+fn udf_cannot_touch_other_processes() {
+    let mut sibling = Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .unwrap_or_else(|e| panic!("spawning sleep: {e}"));
+    let pid = sibling.id();
+    let limits_before = std::fs::read_to_string(format!("/proc/{pid}/limits")).unwrap_or_default();
+    let d = dirs();
+    let code = format!(
+        r#"
+import resource
+check("prlimit_other", lambda: resource.prlimit({pid}, resource.RLIMIT_CPU, (1, 1)))
+check("setpriority_other", lambda: os.setpriority(os.PRIO_PROCESS, {pid}, 19))
+check("setpriority_user", lambda: os.setpriority(os.PRIO_USER, 0, 19))
+check("setpriority_group", lambda: os.setpriority(os.PRIO_PGRP, 0, 19))
+check("affinity_other", lambda: os.sched_setaffinity({pid}, {{0}}))
+check("prlimit_self", lambda: resource.setrlimit(resource.RLIMIT_CORE, (0, 0)))
+check("setpriority_self", lambda: os.setpriority(os.PRIO_PROCESS, 0, 5))
+check("affinity_self", lambda: os.sched_setaffinity(0, os.sched_getaffinity(0)))
+"#
+    );
+    let o = run(&d, &code, |_| {});
+    let limits_after = std::fs::read_to_string(format!("/proc/{pid}/limits")).unwrap_or_default();
+    let _ = sibling.kill();
+    let _ = sibling.wait();
+    for name in [
+        "prlimit_other",
+        "setpriority_other",
+        "setpriority_user",
+        "setpriority_group",
+        "affinity_other",
+    ] {
+        assert_eq!(o.get(name), EPERM, "{name}; stderr: {}", o.stderr);
+    }
+    for name in ["prlimit_self", "setpriority_self", "affinity_self"] {
+        assert_eq!(o.get(name), "ok", "{name}; stderr: {}", o.stderr);
+    }
+    assert_eq!(limits_before, limits_after);
+}
+
+/// x32 system calls, path truncation and terminal input injection are refused; the worker runs in a session
+/// of its own.
+#[test]
+fn x32_truncate_terminal_and_session() {
+    let d = dirs();
+    let code = format!(
+        r#"
+import ctypes, fcntl, termios
+libc = ctypes.CDLL(None, use_errno=True)
+def x32_getpid():
+    if libc.syscall(0x40000000 | 39) == -1:
+        raise OSError(ctypes.get_errno(), "x32")
+check("x32", x32_getpid)
+check("truncate_path", lambda: os.truncate({readable:?}, 0))
+check("truncate_private", lambda: os.truncate({private:?}, 0))
+def ftruncate_private():
+    with open({private:?}, "r+b") as f:
+        os.ftruncate(f.fileno(), 1)
+check("ftruncate_private", ftruncate_private)
+check("tiocsti", lambda: fcntl.ioctl(0, termios.TIOCSTI, b"x"))
+check("own_session", lambda: None if os.getsid(0) == os.getpid() else 1/0)
+"#,
+        readable = d.readable.join("file.txt"),
+        private = d.private.join("file.txt"),
+    );
+    let o = run(&d, &code, |_| {});
+    assert_eq!(o.get("x32"), "OSError:38", "ENOSYS; stderr: {}", o.stderr);
+    assert_eq!(o.get("truncate_path"), EPERM);
+    assert_eq!(o.get("truncate_private"), EPERM);
+    assert_eq!(o.get("ftruncate_private"), "ok");
+    assert_eq!(o.get("tiocsti"), EPERM);
+    assert_eq!(o.get("own_session"), "ok");
 }

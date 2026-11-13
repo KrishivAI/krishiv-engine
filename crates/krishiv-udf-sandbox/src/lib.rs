@@ -9,9 +9,10 @@
 //!   TCP only to listed ports, signals and abstract sockets scoped to the worker;
 //! - **seccomp**: no `socket()` (the worker uses only the descriptors the server hands it), no `fork` or
 //!   `vfork` and no `clone` without `CLONE_THREAD`, no tracing, mounts, namespaces, keyrings, BPF or kernel
-//!   modules, no signals to other processes;
+//!   modules, no signals to other processes and no changes to their limits, priority or scheduling, no path
+//!   `truncate`, no terminal input injection, and no x32 system calls;
 //! - **rlimits**: address space, file size, open files, no core files, optional CPU seconds;
-//! - a parent-death signal, so a worker never outlives the server.
+//! - a session of its own (`setsid`) and a parent-death signal, so a worker never outlives the server.
 //!
 //! The server starts its own executable as a **trampoline** (a hidden subcommand that calls
 //! [`trampoline_main`] with [`SandboxSpec::to_args`]); the trampoline confines itself and `exec`s the
@@ -54,6 +55,10 @@ pub const EXIT_SANDBOX_FAILED: u8 = 125;
 ///
 /// Returns only on failure: on success the process is the confined interpreter. Call it only in a process
 /// that exists to become the worker; it restricts the calling thread for good.
+///
+/// The parent-death signal it arms is sent when the **thread** that started this process exits, not when the
+/// server does: the pool must start workers from one long-lived thread, never from a pooled or blocking-task
+/// thread that may be retired while its workers run.
 #[cfg(target_os = "linux")]
 pub fn enter_and_exec(spec: &SandboxSpec) -> SandboxError {
     enter::enter_and_exec(spec)
@@ -63,14 +68,14 @@ pub fn enter_and_exec(spec: &SandboxSpec) -> SandboxError {
 ///
 /// Landlock, seccomp and `PR_SET_NO_NEW_PRIVS` bind the calling thread and whatever it later starts or
 /// executes; threads that already exist stay unconfined. So it confines a whole process only when called
-/// before any other thread starts. [`enter_and_exec`] is this followed by `exec`; the tests use `confine`
-/// directly to check the layers from Rust in a process that then exits normally.
+/// before any other thread starts, and never in the server. [`enter_and_exec`] is this followed by `exec`;
+/// the tests use it directly to check the layers from Rust in a process that then exits normally.
 ///
 /// # Errors
 /// [`SandboxError::Unavailable`] when a layer is missing or cannot be applied. Layers applied before the
 /// failure stay applied.
 #[cfg(target_os = "linux")]
-pub fn confine(spec: &SandboxSpec) -> Result<(), SandboxError> {
+pub fn confine_current_thread(spec: &SandboxSpec) -> Result<(), SandboxError> {
     enter::confine(spec)
 }
 
@@ -79,7 +84,7 @@ pub fn confine(spec: &SandboxSpec) -> Result<(), SandboxError> {
 /// # Errors
 /// The sandbox needs Linux, so on this platform it always fails with `KRISHIV_UDF_SANDBOX_UNAVAILABLE`.
 #[cfg(not(target_os = "linux"))]
-pub fn confine(_spec: &SandboxSpec) -> Result<(), SandboxError> {
+pub fn confine_current_thread(_spec: &SandboxSpec) -> Result<(), SandboxError> {
     Err(SandboxError::Unavailable {
         reason: "the UDF sandbox needs Linux".to_owned(),
     })
