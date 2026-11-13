@@ -1164,7 +1164,8 @@ Functionality for statistic functions (`DataFrameStatFunctions`).
 def storageLevel(self) -> StorageLevel
 ```
 
-This frame's storage level (all false when uncached).
+This frame's effective storage level (all false when uncached): what the session
+registered, which is not always what this frame asked for.
 
 ### `subtract`
 

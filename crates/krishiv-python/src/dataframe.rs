@@ -313,6 +313,20 @@ impl PyDataFrame {
         block_on(py, async move { df.is_cached().await })
     }
 
+    /// The effective storage level of this frame's plan: `(use_disk, use_memory, use_off_heap,
+    /// deserialized, replication)`, all false and 1 when it is not cached.
+    fn storage_level(&self, py: Python<'_>) -> PyResult<(bool, bool, bool, bool, i32)> {
+        let df = self.inner.clone();
+        let level = block_on(py, async move { df.storage_level().await })?;
+        Ok((
+            level.use_disk,
+            level.use_memory,
+            level.use_off_heap,
+            level.deserialized,
+            level.replication,
+        ))
+    }
+
     fn alias(&self, alias: &str) -> Self {
         self.derive(self.inner.alias(alias))
     }
