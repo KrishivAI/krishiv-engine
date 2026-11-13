@@ -326,6 +326,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &BUCKETING_MAX_BUCKETS,
     ),
     (
+        "krishiv.connect.artifacts.maxTotalBytes",
+        &CONNECT_ARTIFACTS_MAX_TOTAL_BYTES,
+    ),
+    (
         "krishiv.connect.execute.detachedTimeout",
         &CONNECT_EXECUTE_DETACHED_TIMEOUT,
     ),

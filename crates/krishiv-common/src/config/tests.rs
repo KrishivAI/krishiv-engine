@@ -1512,6 +1512,7 @@ fn connect_artifact_quotas_parse_and_default() {
     for e in [
         &CONNECT_ARTIFACTS_MAX_BYTES,
         &CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES,
+        &CONNECT_ARTIFACTS_MAX_TOTAL_BYTES,
     ] {
         assert_eq!(e.settable_by, SettableBy::Startup, "{}", e.key);
         assert!(e.spark_alias.is_none(), "{}", e.key);
