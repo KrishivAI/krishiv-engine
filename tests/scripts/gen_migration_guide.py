@@ -106,8 +106,7 @@ def render() -> str:
         "",
         "## Where it runs",
         "",
-        "Krishiv has three deployment modes: embedded (in your Python process, as above), single-node and "
-        "distributed.",
+        "Krishiv has three deployment modes: embedded (in your Python process, as above), single-node and distributed.",
         "Single-node is one `krishiv server` process that PySpark and other clients reach over Spark Connect; "
         "see [Deployment](deploy.md).",
         "",
