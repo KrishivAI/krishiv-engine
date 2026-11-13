@@ -77,7 +77,9 @@ pub struct RelationCallSpec {
     pub input_types: Vec<Vec<DataType>>,
     /// The names of the columns of each side's frames, as
     /// [`Self::input_types`] orders them: what an empty side's DataFrame is
-    /// built from.
+    /// built from. Names need not be unique: a column key is also a data
+    /// column (`groupBy("a")` gives `a, a, b`), so a runtime splits the
+    /// columns by [`Self::key_count`], never by name.
     pub input_names: Vec<Vec<String>>,
     /// The grouping keys (0 for a map kind and an aggregate's arguments):
     /// the leading columns of every side's frames. With [`Self::arity`]
