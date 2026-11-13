@@ -452,6 +452,16 @@ impl RelationCache {
         state.entries.get(key).map(|e| e.tier.provider())
     }
 
+    /// Whether the hidden table `name` is a snapshot in a spill file (a driver-local file).
+    pub(crate) fn is_on_disk(&self, name: &str) -> bool {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state
+            .names
+            .get(name)
+            .and_then(|key| state.entries.get(key))
+            .is_some_and(|e| matches!(e.tier, Tier::Disk(_)))
+    }
+
     fn tick(&self) -> u64 {
         self.clock.fetch_add(1, Ordering::Relaxed)
     }

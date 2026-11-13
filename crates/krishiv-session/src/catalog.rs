@@ -734,6 +734,19 @@ impl QueryCatalog {
                 ReadSource::Table { name, options } => {
                     let last = name.last().map_or("", String::as_str);
                     let Some(table) = self.loaded(last) else {
+                        // A relation cache snapshot lives on the driver (design P3-T083
+                        // §3.8): a memory snapshot is dealt as a memory table without a
+                        // lease is (no assignment: a stage of one task reads it whole);
+                        // a disk snapshot is a driver-local file no worker can open, so
+                        // such a plan is refused, not failed as an internal error.
+                        if crate::cache::is_cache_name(last) {
+                            if self.cache.is_on_disk(last) {
+                                return Err(unsupported(
+                                    "a scan of a disk-cached relation in a distributed stage",
+                                ));
+                            }
+                            continue;
+                        }
                         return Err(InternalError {
                             message: format!("the scanned table {last} was not loaded"),
                         }
