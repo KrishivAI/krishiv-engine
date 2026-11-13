@@ -110,6 +110,11 @@ impl Env {
         }
     }
 
+    /// Runs `f` on the engine's runtime.
+    pub(super) fn block_on<F: std::future::Future>(&self, f: F) -> F::Output {
+        self.rt.block_on(f)
+    }
+
     pub(super) fn open(&self) -> Result<DeltaTable, KrishivError> {
         self.rt
             .block_on(DeltaTable::open(self.engine.clone(), None, &Config::new()))
