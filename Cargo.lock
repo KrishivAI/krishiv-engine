@@ -2341,6 +2341,7 @@ dependencies = [
  "chrono",
  "delta_kernel",
  "futures",
+ "jiff",
  "krishiv-common",
  "krishiv-exec",
  "krishiv-io",
