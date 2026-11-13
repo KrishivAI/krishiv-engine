@@ -43,9 +43,8 @@ fn plain_q17() -> String {
 
 #[test]
 fn q17_and_q02_become_windows_only_with_the_key() {
-    // q02's snapshot is the plan the cost guard leaves since #686: SubqueryAsWindow runs before join
-    // ordering, so q02's outer block is still a cross join the estimator prices at 160M rows
-    // (window ~66 GB against a ~190 MB second scan). Moving the guard after ordering is the fix.
+    // SubqueryAsWindow runs before join ordering, so the guard prices the outer block ordered
+    // (as written, q02's is a cross join the estimator prices at 160M rows, and the guard refused).
     for q in [17, 2] {
         let sql = support::tpch_sql(q);
         assert!(
@@ -270,4 +269,53 @@ fn an_argument_the_outer_projection_drops_is_refused() {
                WHERE d.l_partkey < (SELECT min(l2.l_quantity) FROM lineitem l2 \
                WHERE l2.l_partkey = d.l_partkey)";
     assert!(!windowed(sql));
+}
+
+/// The `SubqueryAsWindow` notes of an optimization of `sql` with the key on.
+fn guard_notes(sql: &str) -> Vec<String> {
+    let plan = support::resolve(sql, &support::ctx());
+    let mut config = Config::new();
+    config
+        .set("krishiv.optimizer.subqueryAsWindow", "true")
+        .unwrap();
+    let (_, steps) = krishiv_optimizer::optimize_traced_with_udfs(
+        &plan,
+        &fixture(),
+        &UdfLibrary::new(),
+        &config,
+    )
+    .unwrap();
+    steps
+        .into_iter()
+        .filter(|s| s.rule == "SubqueryAsWindow" && !s.note.is_empty())
+        .map(|s| s.note)
+        .collect()
+}
+
+#[test]
+fn the_guard_prices_q02_on_its_ordered_outer_block() {
+    // As written, q02's outer block is `part` x `supplier` with `partsupp`'s keys above the cross
+    // join; ordered, it is the few rows `p_size`, `p_type` and `r_name` keep.
+    let notes = guard_notes(&support::tpch_sql(2));
+    assert!(
+        notes.iter().any(|n| n.contains("form M")) && !notes.iter().any(|n| n.contains("refused")),
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn the_guard_refuses_a_window_larger_than_the_second_scan() {
+    // Without the `part` filters the window sorts every `lineitem` row with all of `part`'s
+    // columns, while the second scan reads two `lineitem` columns.
+    let sql = "SELECT sum(l_extendedprice) / 7.0 AS avg_yearly FROM lineitem, part \
+               WHERE p_partkey = l_partkey AND l_quantity < (SELECT 0.2 * avg(l_quantity) \
+               FROM lineitem WHERE l_partkey = p_partkey)";
+    assert!(!windowed(sql));
+    let notes = guard_notes(sql);
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains("refused by the cost guard")),
+        "{notes:?}"
+    );
 }
