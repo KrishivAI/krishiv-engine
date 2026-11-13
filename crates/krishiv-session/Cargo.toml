@@ -56,6 +56,9 @@ reqwest = { workspace = true, optional = true, features = ["blocking", "rustls"]
 # Server TLS (P3-T002 PR-14c; design §3.5): rustls on the aws-lc-rs provider, never OpenSSL.
 rustls = { workspace = true, optional = true, features = ["aws_lc_rs", "std", "tls12"] }
 tracing-subscriber = { workspace = true, optional = true, features = ["registry", "std"] }
+# Delta tables (`delta.rs`, feature `delta`).
+krishiv-connectors-delta = { path = "../krishiv-connectors-delta", version = "=0.2.0", optional = true }
+url = { workspace = true, optional = true }
 # The local file system as a store (`fs`); no other store features.
 object_store = { workspace = true, features = ["fs"] }
 
@@ -79,6 +82,8 @@ tls = ["dep:rustls"]
 # OIDC access tokens (`auth::OidcConfig`): JWT signatures on aws-lc-rs, the JWK set fetched over
 # HTTPS (reqwest, rustls). Off by default; a server build turns it on.
 oidc = ["dep:aws-lc-rs", "dep:reqwest"]
+# Delta tables in the session (`USING delta`, `delta.`path``, `format("delta")`): P3-T021.
+delta = ["dep:krishiv-connectors-delta", "dep:url"]
 # Access to the logical-plan IR (`Session::from_plan`, `DataFrame::plan`):
 # for the Python facade and tests; not covered by semver.
 unstable-ir = []
@@ -117,6 +122,10 @@ required-features = ["telemetry-logs"]
 workspace = true
 
 # The S3 round trip needs the S3 builder and an emulator (`KRISHIV_TEST_S3_ENDPOINT`).
+[[test]]
+name = "delta_tables"
+required-features = ["delta"]
+
 [[test]]
 name = "s3_tpch"
 required-features = ["cloud"]

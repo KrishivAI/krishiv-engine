@@ -133,6 +133,12 @@ impl Session {
             incarnation: 0,
             data_version: 0,
         };
+        if is_delta_table(&table) {
+            let located = location_text.is_some();
+            self.create_delta_table(table, t, original, &name, &partition_names, mode, located)
+                .await?;
+            return self.empty_frame().await;
+        }
         let layout = LayoutRequest {
             partition_by: &partition_names,
             bucket: t.bucket.as_ref(),
@@ -210,7 +216,7 @@ impl Session {
                 .unwrap_or_else(|| "parquet".to_owned())
         });
         let lower = provider.to_lowercase();
-        if PROVIDERS.contains(&lower.as_str()) {
+        if PROVIDERS.contains(&lower.as_str()) || crate::delta::handles(&lower) {
             Ok(lower)
         } else {
             Err(DataSourceNotFound { provider }.into())
@@ -348,6 +354,12 @@ impl Session {
         layout: &LayoutRequest<'_>,
         pre: &mut Option<Admitted>,
     ) -> Result<(), KrishivError> {
+        if is_delta_table(&table) {
+            return Err(delta_write_refused(
+                quoted(&table.namespace, &table.name),
+                "CREATE TABLE AS SELECT",
+            ));
+        }
         let env = self.query_env();
         let analysis = df.analyzed_in(self.query_env()).await?;
         crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?;
@@ -539,6 +551,9 @@ impl Session {
             incarnation: 0,
             data_version: 0,
         };
+        if is_delta_table(&table) {
+            return Err(delta_write_refused(name.quoted(), "CREATE TABLE LIKE"));
+        }
         let mode = if t.if_not_exists {
             CreateMode::IfNotExists
         } else {

@@ -2657,6 +2657,7 @@ dependencies = [
  "http",
  "insta",
  "krishiv-common",
+ "krishiv-connectors-delta",
  "krishiv-exec",
  "krishiv-functions",
  "krishiv-io",
@@ -2689,6 +2690,7 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "twox-hash",
+ "url",
 ]
 
 [[package]]

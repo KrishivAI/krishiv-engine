@@ -15,6 +15,10 @@ impl Session {
             && !self.temp_entry_of(name, env)
         {
             if table.view.is_none() {
+                // Reading a Delta table to analyze it is no write; everything else waits for PR-37a.
+                if is_delta_table(&table) && operation != "ANALYZE TABLE" {
+                    return Err(delta_write_refused(name.quoted(), operation));
+                }
                 return Ok(table);
             }
             return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {

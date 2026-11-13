@@ -42,6 +42,13 @@ impl QueryCatalog {
             if self.opened(key).is_some() {
                 continue;
             }
+            if crate::delta::is_delta(source) {
+                // The table's log is read once per query, never listed as files.
+                self.delta
+                    .open_scanned(source, delta_name(key), table)
+                    .await?;
+                continue;
+            }
             let ReadSource::Files {
                 format,
                 paths,
@@ -179,6 +186,17 @@ impl QueryCatalog {
                 Some((key, source, table, ids, partitions))
             })
             .collect()
+    }
+}
+
+/// How Delta errors name the table a scan of `key` reads: a permanent table by its
+/// `namespace.table` (delta-spark's catalog form); a path or a temporary view by the path.
+fn delta_name(key: &FilesKey) -> Option<String> {
+    match key {
+        FilesKey::Table(k) | FilesKey::Reference { key: k, .. } if k.contains('.') => {
+            Some(k.clone())
+        }
+        _ => None,
     }
 }
 

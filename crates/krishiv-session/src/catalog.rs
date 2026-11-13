@@ -485,6 +485,8 @@ pub(crate) struct QueryCatalog {
     /// each action over the analysis pins and unpins (`SnapshotLease`).
     pinned: Mutex<HashMap<String, Pinned>>,
     files: Arc<FileReads>,
+    /// The Delta tables of the query's scans, opened before planning.
+    pub(crate) delta: Arc<crate::delta::DeltaReads>,
     scans: FileScans,
     /// Entries loaded by this query, by lower-case name.
     loaded: Mutex<HashMap<String, Arc<TempTable>>>,
@@ -539,6 +541,7 @@ impl QueryCatalog {
         session: Arc<SessionCatalog>,
         cache: Arc<RelationCache>,
         files: Arc<FileReads>,
+        delta: Arc<crate::delta::DeltaReads>,
         scans: FileScans,
         default_path: &str,
         system: crate::system::Sources,
@@ -557,6 +560,7 @@ impl QueryCatalog {
             cache,
             pinned: Mutex::new(HashMap::new()),
             files,
+            delta,
             scans,
             loaded: Mutex::new(HashMap::new()),
             opened: Mutex::new(Vec::new()),
@@ -730,6 +734,15 @@ impl QueryCatalog {
         scans.sort_by_key(|s| s.id);
         let mut assigned: Vec<(ScanId, ScanSplitsKind)> = Vec::new();
         for scan in scans {
+            let delta = match &scan.scan.source {
+                ReadSource::Table { name, .. } => self.loaded_for(name).is_some_and(
+                    |t| matches!(&*t, TempTable::Files { source, .. } if crate::delta::is_delta(source)),
+                ),
+                source => crate::delta::is_delta(source),
+            };
+            if delta {
+                return Err(unsupported("a Delta scan split across several tasks"));
+            }
             match &scan.scan.source {
                 ReadSource::Table { name, options } => {
                     let last = name.last().map_or("", String::as_str);
@@ -1253,6 +1266,9 @@ impl TableProviderResolver for QueryCatalog {
                     TempTable::Memory { table, .. } => {
                         Ok(Arc::clone(table) as Arc<dyn TableProvider>)
                     }
+                    TempTable::Files { source, .. } if crate::delta::is_delta(source) => {
+                        self.delta.provider(source)
+                    }
                     TempTable::Files {
                         known,
                         permanent,
@@ -1273,6 +1289,9 @@ impl TableProviderResolver for QueryCatalog {
                     }
                     .into()),
                 }
+            }
+            source @ ReadSource::Files { .. } if crate::delta::is_delta(source) => {
+                self.delta.provider(source)
             }
             source @ ReadSource::Files { .. } => {
                 self.files_provider(&FilesKey::Read(source.clone()))

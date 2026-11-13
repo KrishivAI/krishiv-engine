@@ -465,6 +465,39 @@ pub const CATALOGUE: &[MetricDef] = &[
         source: MetricSource::QueryFold,
     },
     MetricDef {
+        name: "krishiv.delta.log_pool.wait_ms",
+        kind: MetricKind::Gauge,
+        unit: "ms",
+        labels: &[],
+        description: "Milliseconds Delta kernel calls have waited for a slot of the process's \
+                      log pool (`krishiv.delta.logThreads`), summed since the process started; \
+                      emitted by builds with the `delta` feature.",
+        since: "0.2.0",
+        source: MetricSource::Scrape,
+    },
+    MetricDef {
+        name: "krishiv.delta.snapshot_cache.hits",
+        kind: MetricKind::Gauge,
+        unit: "1",
+        labels: &[],
+        description: "Delta table opens that found the table's snapshot in the engine runtime's \
+                      cache (it is then brought up to date), since the runtime started; emitted \
+                      by builds with the `delta` feature.",
+        since: "0.2.0",
+        source: MetricSource::Scrape,
+    },
+    MetricDef {
+        name: "krishiv.delta.snapshot_cache.misses",
+        kind: MetricKind::Gauge,
+        unit: "1",
+        labels: &[],
+        description: "Delta table opens that found no cached snapshot and read the log from its \
+                      last checkpoint, since the runtime started; emitted by builds with the \
+                      `delta` feature.",
+        since: "0.2.0",
+        source: MetricSource::Scrape,
+    },
+    MetricDef {
         name: "krishiv.build.info",
         kind: MetricKind::Gauge,
         unit: "1",

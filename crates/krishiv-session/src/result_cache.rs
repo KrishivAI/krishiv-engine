@@ -463,6 +463,10 @@ impl Session {
             if table.view.is_some() {
                 return Err("it reads a view that is not inlined");
             }
+            // Delta resolves the latest version per query (ADR 0037): the key would not see it.
+            if crate::table_commands::is_delta_table(&table) {
+                return Err("it reads a Delta table");
+            }
             tables.push(TableId {
                 namespace: table.namespace.clone(),
                 name: table.name.clone(),

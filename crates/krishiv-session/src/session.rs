@@ -1206,17 +1206,26 @@ impl Session {
         // One I/O context for the query's reads, scans and writes: its
         // counters are the query's own bytes (`system.queries`).
         let io = self.scoped_io();
+        let paths: Arc<dyn krishiv_exec::files::PathLocator> = Arc::new(ObjectPaths::new(
+            StoreId::new(LOCAL_STORE),
+            self.state.cwd.clone(),
+            Arc::clone(&self.state.io),
+            Arc::clone(&stores),
+        ));
         let files = Arc::new(FileReads::new(
             io.clone(),
             Arc::clone(&self.state.runtime.formats),
-            Arc::new(ObjectPaths::new(
-                StoreId::new(LOCAL_STORE),
-                self.state.cwd.clone(),
-                Arc::clone(&self.state.io),
-                Arc::clone(&stores),
-            )),
+            Arc::clone(&paths),
             Arc::clone(&config),
         ));
+        let delta = Arc::new(crate::delta::DeltaReads::new(crate::delta::DeltaInputs {
+            io: io.clone(),
+            paths,
+            runtime: self.state.runtime.executor.io_handle().clone(),
+            config: Arc::clone(&config),
+            cache: Arc::clone(&self.state.runtime.delta),
+            credential: self.state.principal.id(),
+        }));
         let scans = FileScans {
             io: io.clone(),
             config: Arc::clone(&config),
@@ -1238,6 +1247,7 @@ impl Session {
             Arc::clone(&self.state.catalog),
             Arc::clone(&self.state.cache),
             Arc::clone(&files),
+            Arc::clone(&delta),
             scans,
             &config
                 .get(&krishiv_common::config::SQL_DEFAULT_PATH)
@@ -1304,7 +1314,7 @@ impl Session {
             functions,
             table_functions: Arc::new(BuiltinTableFunctions::new()),
             sql: Some(Arc::new(Frontend { options: parser })),
-            files: Some(files),
+            files: Some(Arc::new(crate::delta::SessionFiles { files, delta })),
             variables: Arc::clone(&variables),
         };
         // The epoch the query's catalog reads at: entries it loads are at

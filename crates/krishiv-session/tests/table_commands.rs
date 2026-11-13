@@ -188,7 +188,7 @@ fn create_table_errors() {
     run(&s, "CREATE TABLE IF NOT EXISTS t (a INT, b INT)");
     assert_eq!(col0(&s, "SELECT CAST(count(*) AS STRING) FROM t"), ["0"]);
     assert_eq!(
-        class(&s, "CREATE TABLE d (a INT) USING delta"),
+        class(&s, "CREATE TABLE d (a INT) USING nosuchformat"),
         "DATA_SOURCE_NOT_FOUND"
     );
     assert_eq!(
