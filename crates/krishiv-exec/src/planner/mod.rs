@@ -60,8 +60,8 @@ pub use explain::ExplainNode;
 pub use file_table::FileTable;
 pub use ndv_sample::{SampleOptions, SampleOutcome, SampleResult};
 pub use row_level::{
-    CardinalityRule, RowLevelCapabilities, RowLevelCounts, RowLevelOperation, RowLevelTable,
-    RowLevelWrite,
+    CardinalityRule, RowIdScan, RowLevelCapabilities, RowLevelCounts, RowLevelOperation,
+    RowLevelTable, RowLevelWrite,
 };
 pub use table::{
     MemoryTable, MemoryTables, ProviderStatistics, SpilledTable, TableProvider,
