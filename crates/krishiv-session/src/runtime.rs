@@ -85,6 +85,10 @@ pub struct EngineRuntime {
     deadlines: OnceLock<Deadlines>,
     /// The queries running now, and the closed sessions.
     live: Mutex<LiveSet>,
+    /// The admission controller built from `krishiv.workload.resourceGroups.file`, shared by every
+    /// session of the runtime so the group limits hold across them (`None` when the key is unset:
+    /// every query is admitted at once).
+    pub(crate) admission: Option<Arc<dyn crate::admission::AdmissionController>>,
     /// The sessions, live and recently ended (`system.sessions`).
     pub(crate) sessions: Arc<crate::sessions::SessionRegistry>,
     /// The I/O scheduler: pacing, the file-metadata and block caches and
@@ -246,6 +250,21 @@ impl EngineRuntime {
             Arc::new(ResultCache::default())
         };
         let invalidation = crate::cache::Invalidation::new(Arc::clone(&results));
+        let admission = match config
+            .get(&krishiv_common::config::WORKLOAD_RESOURCE_GROUPS_FILE)
+            .and_then(krishiv_common::config::ConfigValue::as_str)
+        {
+            Some(path) => {
+                let total = MemoryConfig::from_config(&config)
+                    .limit
+                    .unwrap_or(usize::MAX);
+                Some(Arc::new(crate::resource_groups::ResourceGroups::from_file(
+                    path, total,
+                )?)
+                    as Arc<dyn crate::admission::AdmissionController>)
+            }
+            None => None,
+        };
         let runtime = Self {
             pairs,
             config: Arc::new(config),
@@ -265,6 +284,7 @@ impl EngineRuntime {
             deadlines: OnceLock::new(),
             live: Mutex::new(LiveSet::default()),
             sessions: Arc::default(),
+            admission,
             io,
             private,
         };

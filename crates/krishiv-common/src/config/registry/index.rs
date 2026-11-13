@@ -262,6 +262,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &LEGACY_CODING_ERROR_ACTION,
     ),
     (
+        "krishiv.workload.resourceGroups.file",
+        &WORKLOAD_RESOURCE_GROUPS_FILE,
+    ),
+    (
         "spark.connect.grpc.keepAlive.enabled",
         &CONNECT_KEEPALIVE_ENABLED,
     ),

@@ -61,6 +61,7 @@ impl Session {
     /// A session of `parts` on `runtime` starting from `seed`'s state.
     fn seeded(runtime: Arc<EngineRuntime>, parts: SessionParts, seed: Seed) -> Self {
         let config = seed.conf.snapshot();
+        let runtime_admission = runtime.admission.clone();
         let queries = Arc::new(crate::system::QueryLog::new(
             Arc::clone(&runtime.history),
             &parts.principal.name,
@@ -138,7 +139,10 @@ impl Session {
                 // One session id for traces and `system.queries`.
                 session_id: queries.session_id().to_owned(),
                 queries,
-                admission: parts.admission.unwrap_or_else(|| Arc::new(Unlimited)),
+                admission: parts
+                    .admission
+                    .or(runtime_admission)
+                    .unwrap_or_else(|| Arc::new(Unlimited)),
                 statements: AtomicU64::new(0),
                 sql_sources: AtomicU32::new(seed.sql_sources),
             }),
