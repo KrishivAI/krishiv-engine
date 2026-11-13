@@ -69,6 +69,11 @@ fn try_parse_json(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::Variant, true))
 }
 
+/// `is_valid_variant`: a `BOOLEAN`, NULL only for a NULL input.
+fn is_valid_variant(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Boolean, nullable(c)))
+}
+
 fn is_variant_null(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::Boolean, false))
 }
@@ -157,6 +162,7 @@ pub(super) fn specs() -> Vec<Spec> {
     ]);
     let mut out = scalar(&["parse_json"], &string, parse_json);
     out.extend(scalar(&["try_parse_json"], &string, try_parse_json));
+    out.extend(scalar(&["is_valid_variant"], &variant, is_valid_variant));
     out.extend(scalar(&["is_variant_null"], &variant, is_variant_null));
     out.extend(scalar(&["variant_get"], &get, variant_get));
     out.extend(scalar(&["try_variant_get"], &get, try_variant_get));

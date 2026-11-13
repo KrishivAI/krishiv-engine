@@ -108,6 +108,13 @@ impl VariantColumn {
         self.nulls.as_ref().is_some_and(|n| n.is_null(i)) || self.value.is_null(i)
     }
 
+    /// The raw `(metadata, value)` bytes of row `i`, `None` for SQL `NULL`;
+    /// nothing is validated.
+    #[must_use]
+    pub fn raw(&self, i: usize) -> Option<(&[u8], &[u8])> {
+        (!self.is_null(i)).then(|| (self.metadata.value(i), self.value.value(i)))
+    }
+
     /// The value at row `i`, `None` for SQL `NULL`.
     ///
     /// # Errors

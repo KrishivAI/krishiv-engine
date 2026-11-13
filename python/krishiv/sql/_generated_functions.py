@@ -162,6 +162,7 @@ __all__ = [
     "input_file_name",
     "instr",
     "is_valid_utf8",
+    "is_valid_variant",
     "is_variant_null",
     "isnan",
     "isnotnull",
@@ -1106,6 +1107,11 @@ def instr(str: ColumnOrName, substr: str | Column) -> Column:
 def is_valid_utf8(str: ColumnOrName) -> Column:
     """Calls the registry function ``is_valid_utf8``."""
     return _call("is_valid_utf8", _named(str, "str"))
+
+
+def is_valid_variant(v: ColumnOrName) -> Column:
+    """Calls the registry function ``is_valid_variant``."""
+    return _call("is_valid_variant", _named(v, "v"))
 
 
 def is_variant_null(v: ColumnOrName) -> Column:

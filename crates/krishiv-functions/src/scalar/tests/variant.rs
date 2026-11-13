@@ -131,3 +131,54 @@ fn the_variant_functions_bind_and_run() {
     // A wrong argument type does not bind.
     assert!(bind_scalar("is_variant_null", &[lit(Some("x"))], &opts).is_err());
 }
+
+/// The rows of `tests/spark-golden/functions/variant_misc/inputs/malformed.setup.py`
+/// and Spark 4.2.0's `is_valid_variant` over them (`results/.../malformed.sql.out`).
+#[test]
+fn is_valid_variant_matches_spark_on_malformed_bytes() {
+    let good = [0x01, 0x00, 0x00];
+    let rows: [Option<(&[u8], &[u8])>; 9] = [
+        Some((&good, &[0x0C, 0x01])),
+        Some((&good, &[0x0C])),
+        Some((&good, &[0xFF])),
+        Some((&[0x02, 0x00, 0x00], &[0x0C, 0x01])),
+        Some((&good, &[])),
+        Some((&[], &[0x0C, 0x01])),
+        Some((&good, &[0x02, 0x01, 0x00, 0x00, 0x05])),
+        Some((&good, &[0x0C, 0x01, 0x99])),
+        None,
+    ];
+    let mut b = krishiv_kernels::variant::VariantColumnBuilder::with_capacity(rows.len());
+    for r in rows {
+        match r {
+            Some((m, v)) => b.append(m, v),
+            None => b.append_null(),
+        }
+    }
+    let column = b.finish().unwrap();
+    let f = bind_scalar(
+        "is_valid_variant",
+        &[BindArg::Column {
+            ty: column.data_type().clone(),
+            nullable: true,
+        }],
+        &BindOptions::default(),
+    )
+    .unwrap();
+    let out = f.invoke(&[Arg::Array(column)], rows.len()).unwrap();
+    let got: Vec<Option<bool>> = out.as_boolean().iter().collect();
+    assert_eq!(
+        got,
+        [
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(true),
+            None
+        ]
+    );
+}

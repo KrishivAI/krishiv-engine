@@ -32,6 +32,7 @@ use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 
 /// Every name this family binds.
 pub(super) const NAMES: &[&str] = &[
+    "is_valid_variant",
     "is_variant_null",
     "parse_json",
     "schema_of_variant",
@@ -82,6 +83,62 @@ fn schema_of_variant(x: &Inputs<'_>) -> Result<ArrayRef, KrishivError> {
         match col.get(i)? {
             Some(v) => out.append_value(Schema::of(&v)?.sql()),
             None => out.append_null(),
+        }
+    }
+    Ok(Arc::new(out.finish()))
+}
+
+/// The length of the value that starts `value`, from its header byte alone,
+/// when that is fixed or declared up front (primitives and strings; `None`
+/// for objects, arrays and anything unknown).
+fn leading_value_len(value: &[u8]) -> Option<usize> {
+    let header = *value.first()?;
+    let declared = |at: usize| -> Option<usize> {
+        let n = u32::from_le_bytes(value.get(at..at.checked_add(4)?)?.try_into().ok()?);
+        usize::try_from(n).ok()?.checked_add(at)?.checked_add(4)
+    };
+    match header & 3 {
+        0 => match header >> 2 {
+            0..=2 => Some(1),
+            3 => Some(2),
+            4 => Some(3),
+            5 | 11 | 14 => Some(5),
+            6 | 7 | 12 | 13 | 17..=19 => Some(9),
+            8 => Some(6),
+            9 => Some(10),
+            10 => Some(18),
+            15 | 16 => declared(1),
+            20 => Some(17),
+            _ => None,
+        },
+        1 => Some(1 + usize::from(header >> 2)),
+        _ => None,
+    }
+}
+
+/// `is_valid_variant`: whether the bytes are a well-formed variant. Bytes
+/// after a complete primitive value do not make it invalid (Spark checks
+/// the value that starts the buffer); malformed bytes are `false`, never an
+/// error, and SQL NULL is NULL.
+fn is_valid_variant(x: &Inputs<'_>) -> Result<ArrayRef, KrishivError> {
+    let column = x.column(0)?;
+    let col = VariantColumn::new(column.as_ref())?;
+    let mut out = BooleanBuilder::with_capacity(col.len());
+    for i in 0..col.len() {
+        match col.raw(i) {
+            None => out.append_null(),
+            Some((metadata, value)) => {
+                let whole = krishiv_types::variant::VariantRef::new(metadata, value).is_ok();
+                let prefix = || {
+                    leading_value_len(value)
+                        .filter(|n| *n < value.len())
+                        .and_then(|n| value.get(..n))
+                        .is_some_and(|v| {
+                            krishiv_types::variant::VariantRef::new(metadata, v).is_ok()
+                        })
+                };
+                out.append_value(whole || prefix());
+            }
         }
     }
     Ok(Arc::new(out.finish()))
@@ -178,6 +235,9 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                     krishiv_kernels::variant::cast_to_variant(x.column(0)?.as_ref(), &from)
                 })
             })
+        }
+        ("is_valid_variant", [t]) if variant_or_null(t) => {
+            Some(Binding::new(DataType::Boolean, is_valid_variant))
         }
         ("is_variant_null", [t]) if variant_or_null(t) => {
             Some(Binding::new(DataType::Boolean, is_variant_null))
