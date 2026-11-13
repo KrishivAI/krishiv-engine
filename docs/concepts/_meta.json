@@ -1,1 +1,6 @@
-{ "compatibility": "Compatibility", "known-differences": "Known differences", "stability": "API stability" }
+{
+  "index": "Concepts",
+  "compatibility": "Compatibility",
+  "known-differences": "Known differences",
+  "stability": "API stability"
+}
