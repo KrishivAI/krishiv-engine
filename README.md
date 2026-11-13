@@ -118,13 +118,13 @@ musllinux compat build is provided:
 
 ## Status and roadmap at a glance
 
-Krishiv is at **`0.2.0`**. The embedded core (in-process batch SQL and DataFrames over Arrow, from Python) runs;
+Krishiv is at **`0.2.1`**. The embedded core (in-process batch SQL and DataFrames over Arrow, from Python) runs;
 streaming, incremental views, Spark Connect and distributed execution are still being built.
 
 | Milestone | Focus | Status |
 |---|---|---|
 | 1. Embedded core alpha | In-process SQL and DataFrames on Arrow, with Python and Rust APIs | 🚧 In progress |
-| 2. Spark Connect and lakehouse | PySpark over Spark Connect; Parquet, Iceberg and Delta | ⏳ Planned |
+| 2. Single-node (0.3) | `krishiv server` with Spark Connect, authentication, Iceberg and Delta, Python UDFs | ⏳ Planned |
 | 3. Streaming | Stateful streaming with the same SQL and semantics as batch | ⏳ Planned |
 | 4. Incremental views | Always-fresh materialized views and queryable state | ⏳ Planned |
 | 5. Distributed | Scale out to a cluster with the same code | ⏳ Planned |
@@ -216,7 +216,7 @@ Spark.
 ```python
 from pyspark.sql import SparkSession, functions as F
 
-# Planned: a local Krishiv server speaking the Spark Connect protocol.
+# Planned: single-node Krishiv (`krishiv server`) speaking the Spark Connect protocol.
 spark = SparkSession.builder.remote("sc://localhost:15002").getOrCreate()
 
 orders = spark.read.parquet("s3://lake/orders/")
