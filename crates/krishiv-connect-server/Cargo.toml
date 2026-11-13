@@ -1,0 +1,32 @@
+[package]
+name = "krishiv-connect-server"
+description = "Spark Connect gRPC server: the service, session manager and limits"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = true
+
+[lints]
+workspace = true
+
+[dependencies]
+futures = { workspace = true, features = ["std"] }
+bytes = { workspace = true, features = ["std"] }
+krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
+krishiv-connect = { path = "../krishiv-connect", version = "=0.2.0" }
+krishiv-session = { path = "../krishiv-session", version = "=0.2.0" }
+prost = { workspace = true, features = ["derive", "std"] }
+prost-types = { workspace = true, features = ["std"] }
+rustix.workspace = true
+serde_json = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["net", "rt", "sync", "time", "macros"] }
+tonic = { workspace = true, features = ["server", "router", "codegen"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time"] }
+tonic = { workspace = true, features = ["channel", "server", "router", "codegen"] }
+tonic-prost.workspace = true
