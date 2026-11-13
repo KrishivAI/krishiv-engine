@@ -154,7 +154,7 @@ pub(crate) fn parse_header(buf: &[u8]) -> Parsed<Header> {
 }
 
 /// A corrupt-data error.
-fn corrupt(reason: impl Into<String>) -> FormatError {
+pub(super) fn corrupt(reason: impl Into<String>) -> FormatError {
     FormatError::Corrupt(reason.into())
 }
 
@@ -198,7 +198,7 @@ fn single_branch(schema: &AvroSchema) -> Option<Single<'_>> {
 ///
 /// # Errors
 /// [`FormatError::Corrupt`] for a value the reader schema cannot hold.
-fn resolve(
+pub(super) fn resolve(
     writer: &AvroSchema,
     reader: &AvroSchema,
     value: AvroValue,
@@ -513,7 +513,7 @@ fn check_rebase(kind: &str, ancient: bool, mode: Rebase) -> FormatResult<()> {
 /// keep the reader schema of their variable parts, so values append
 /// against the right types.
 #[derive(Debug)]
-enum Node {
+pub(super) enum Node {
     Null {
         len: usize,
     },
@@ -556,7 +556,7 @@ enum Node {
 }
 
 /// Fresh builders for `field` holding `schema` values.
-fn node_of(field: &Field, schema: &AvroSchema) -> FormatResult<Node> {
+pub(super) fn node_of(field: &Field, schema: &AvroSchema) -> FormatResult<Node> {
     // Unions with one non-null branch hold that branch; the builders are the
     // branch's (nulls append as nulls).
     if let Some(single) = single_branch(schema) {
@@ -688,7 +688,7 @@ fn decimal_i128(bytes: &[u8]) -> FormatResult<i128> {
 ///
 /// # Errors
 /// [`FormatError::Corrupt`] for an inconsistent node.
-fn append_null(node: &mut Node) -> FormatResult<()> {
+pub(super) fn append_null(node: &mut Node) -> FormatResult<()> {
     match node {
         Node::Null { len } => *len += 1,
         Node::Bool(b) => b.append_null(),
@@ -721,6 +721,29 @@ fn append_null(node: &mut Node) -> FormatResult<()> {
     Ok(())
 }
 
+/// What `PERMISSIVE` yields for a bad record datum: a non-null struct whose
+/// fields are all NULL.
+///
+/// # Errors
+/// [`FormatError::Corrupt`] when `node` is not a struct.
+pub(super) fn append_null_fields(node: &mut Node) -> FormatResult<()> {
+    let Node::Struct {
+        children,
+        nulls,
+        len,
+        ..
+    } = node
+    else {
+        return Err(corrupt("a datum that is not a record"));
+    };
+    for c in children {
+        append_null(c)?;
+    }
+    nulls.append_non_null();
+    *len += 1;
+    Ok(())
+}
+
 /// Appends `value` (in `reader` terms) to `node`; with `dry` set it only
 /// checks that the append would succeed and changes nothing, so a row can be
 /// checked against every column before any column takes it.
@@ -730,7 +753,12 @@ fn append_null(node: &mut Node) -> FormatResult<()> {
 /// a short fixed value, an out-of-range decimal) and
 /// [`FormatError::InvalidUtf8`] for a string that is not UTF-8.
 #[expect(clippy::too_many_lines, reason = "one arm per leaf type")]
-fn append(node: &mut Node, reader: &AvroSchema, value: &AvroValue, dry: bool) -> FormatResult<()> {
+pub(super) fn append(
+    node: &mut Node,
+    reader: &AvroSchema,
+    value: &AvroValue,
+    dry: bool,
+) -> FormatResult<()> {
     if matches!(value, AvroValue::Null) {
         return if dry { Ok(()) } else { append_null(node) };
     }
@@ -1040,7 +1068,7 @@ fn value_kind(value: &AvroValue) -> &'static str {
 /// # Errors
 /// `INTERNAL_ERROR` for an inconsistent builder (a broken invariant, not a
 /// data error: every value was validated on append).
-fn finish_node(node: Node, field: &Field) -> FormatResult<ArrayRef> {
+pub(super) fn finish_node(node: Node, field: &Field) -> FormatResult<ArrayRef> {
     Ok(match node {
         Node::Null { len } => Arc::new(arrow_array::NullArray::new(len)),
         Node::Bool(mut b) => Arc::new(b.finish()),

@@ -10,6 +10,7 @@
 //! with RUSTSEC-2026-0391); `bzip2`/`xz` and `LEGACY` rebase are
 //! `KRISHIV_UNSUPPORTED_FEATURE`.
 
+pub mod datum;
 mod decode;
 mod encode;
 mod intervals;

@@ -184,7 +184,7 @@ fn rescale(v: i128, from: i8, to: usize, precision: usize) -> FormatResult<i128>
 /// # Errors
 /// [`FormatError::WriteFailed`] for a null in a non-nullable schema or a
 /// value the schema cannot hold.
-fn put_cell(
+pub(super) fn put_cell(
     out: &mut Vec<u8>,
     schema: &AvroSchema,
     array: &ArrayRef,
