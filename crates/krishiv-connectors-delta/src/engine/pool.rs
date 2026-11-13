@@ -13,6 +13,7 @@
 //! the query's token when the deadline passes.
 
 use std::cell::Cell;
+use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, mpsc};
@@ -20,7 +21,6 @@ use std::time::Instant;
 
 use krishiv_common::config::{Config, ConfigValue, DELTA_LOG_THREADS};
 use krishiv_common::error::{InternalError, KrishivError, OperationCanceled};
-use krishiv_exec::CancellationToken;
 use tokio::sync::{Semaphore, oneshot};
 
 /// The name of the slot-wait metric.
@@ -171,14 +171,18 @@ impl LogPool {
     }
 
     /// Runs `f` on a pool thread once a slot is free. The wait for the slot ends early with
-    /// `OPERATION_CANCELED` when `cancel` fires. A call that has started is always awaited to
+    /// `OPERATION_CANCELED` when `cancelled` completes (a token's or a query's cancellation). A call that has started is always awaited to
     /// its real outcome: it may have put a commit, and a commit that landed must not be reported
     /// as cancelled. It still ends soon after a cancel, because every handler call checks the
     /// token first and reads race it.
     ///
     /// # Errors
     /// `OPERATION_CANCELED`; `INTERNAL_ERROR` if `f` panics or the pool has no thread.
-    pub async fn run<T, F>(&self, cancel: &CancellationToken, f: F) -> Result<T, KrishivError>
+    pub async fn run<T, F>(
+        &self,
+        cancelled: impl Future<Output = ()>,
+        f: F,
+    ) -> Result<T, KrishivError>
     where
         T: Send + 'static,
         F: FnOnce() -> T + Send + 'static,
@@ -186,7 +190,7 @@ impl LogPool {
         let started = Instant::now();
         let permit = tokio::select! {
             biased;
-            () = cancel.cancelled() => return Err(canceled()),
+            () = cancelled => return Err(canceled()),
             permit = Arc::clone(&self.slots).acquire_owned() => permit.map_err(|_| canceled())?,
         };
         self.waits

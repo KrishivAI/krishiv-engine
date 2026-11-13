@@ -99,3 +99,24 @@ fn two_scans_of_a_query_pin_one_version_while_a_commit_lands() {
     assert_eq!(theirs.version(), 2);
     assert_eq!((cache.hits(), cache.misses()), (1, 2));
 }
+
+/// A query's reads dropped (its planning future dropped) end the planning-time Delta work: an
+/// engine they made refuses the next kernel call.
+#[test]
+fn dropped_reads_cancel_their_kernel_calls() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (dir, _land) = two_commits(tmp.path());
+    let path = dir.to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    let query = s.query_env();
+    let (store, root) = query.catalog.delta.root_of(&read(&path)).unwrap();
+    let engine = query.catalog.delta.engine(store, root).unwrap();
+    assert!(block_on(engine.delta_blocking(|_| ())).is_ok());
+    drop(query);
+    let e = block_on(engine.delta_blocking(|_| ())).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::OperationCanceled,
+        "{e}"
+    );
+}

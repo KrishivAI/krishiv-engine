@@ -456,7 +456,7 @@ fn delta_handler_cancellation() {
     let engine = f.engine.clone();
     let live = CancellationToken::new();
     let errors =
-        f.rt.block_on(f.pool.run(&live, move || {
+        f.rt.block_on(f.pool.run(live.cancelled(), move || {
             let e = &engine;
             let s = e.storage();
             let j = e.json();
@@ -960,7 +960,7 @@ fn a_commit_put_in_flight_finishes_after_a_cancel() {
     // The next put sees the cancel before it starts.
     let engine = f.engine.clone();
     let next =
-        f.rt.block_on(f.pool.run(&CancellationToken::new(), move || {
+        f.rt.block_on(f.pool.run(CancellationToken::new().cancelled(), move || {
             engine.storage().put(
                 &engine.table_root().join("_delta_log/x.json").unwrap(),
                 Bytes::new(),

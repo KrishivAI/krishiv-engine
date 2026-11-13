@@ -58,8 +58,13 @@ pub(crate) struct DeltaReads {
     config: Arc<Config>,
     cache: Arc<DeltaCache>,
     credential: String,
-    /// The kernel calls' cancellation. Planning has no query context yet; a dropped planning
-    /// future stops waiting, and a kernel call already on the log pool runs to its end.
+    /// The planning-time kernel calls' cancellation (opening tables, `CREATE`'s shape): fired
+    /// when the query's reads are dropped (a dropped planning future), so a call still waiting
+    /// for a log-pool slot gives up and one already running ends at its next handler call.
+    /// Scans do not use it: their engine is bound to the running query's cancellation
+    /// (`DeltaEngine::for_query`). An interrupt during analysis does not reach it yet: the
+    /// query is registered with the session's cancel registry only after planning (a recorded
+    /// follow-up).
     cancel: Arc<CancellationToken>,
     opened: Mutex<Vec<(String, Arc<DeltaTable>)>>,
 }
@@ -69,6 +74,12 @@ impl std::fmt::Debug for DeltaReads {
         f.debug_struct("DeltaReads")
             .field("opened", &self.lock().len())
             .finish_non_exhaustive()
+    }
+}
+
+impl Drop for DeltaReads {
+    fn drop(&mut self) {
+        self.cancel.cancel();
     }
 }
 
@@ -91,7 +102,7 @@ impl DeltaReads {
     }
 
     /// The store and root URL of the Delta read `source`.
-    fn root_of(&self, source: &ReadSource) -> Result<(StoreId, Url), KrishivError> {
+    pub(super) fn root_of(&self, source: &ReadSource) -> Result<(StoreId, Url), KrishivError> {
         let ReadSource::Files { paths, options, .. } = source else {
             return Err(internal("a Delta read that is not a read of files"));
         };
@@ -121,7 +132,7 @@ impl DeltaReads {
         Ok((at.store, url))
     }
 
-    fn engine(&self, store: StoreId, root: Url) -> Result<DeltaEngine, KrishivError> {
+    pub(super) fn engine(&self, store: StoreId, root: Url) -> Result<DeltaEngine, KrishivError> {
         DeltaEngine::new(
             self.io.clone(),
             store,
