@@ -285,18 +285,99 @@ fn udf_cannot_write_outside_tmp() {
         r#"
 check("private", lambda: open({private:?}, "w").write("x"))
 check("readable", lambda: open({readable:?}, "w").write("x"))
-check("tmp", lambda: open("/tmp/krishiv-sandbox-escape", "w").write("x"))
+check("outside", lambda: open({outside:?}, "w").write("x"))
 check("cwd_is_private", lambda: None if os.getcwd() == {dir:?} else 1/0)
 "#,
         private = d.private.join("new.txt"),
         readable = d.readable.join("new.txt"),
+        // Beneath this test's own root, outside every rule: never a shared path such as /tmp.
+        outside = d.outside.join("new.txt"),
         dir = d.private,
     );
     let o = run(&d, &code, |_| {});
     assert_eq!(o.get("private"), "ok", "stderr: {}", o.stderr);
     assert_eq!(o.get("readable"), EACCES);
-    assert_eq!(o.get("tmp"), EACCES);
+    assert_eq!(o.get("outside"), EACCES);
+    assert!(!d.outside.join("new.txt").exists());
     assert_eq!(o.get("cwd_is_private"), "ok");
+}
+
+#[test]
+fn udf_cannot_change_metadata_truncate_or_outlive_the_server() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = dirs();
+    let outside = d.outside.join("file.txt");
+    let readable = d.readable.join("file.txt");
+    let mode = |p: &Path| {
+        std::fs::metadata(p)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .permissions()
+            .mode()
+    };
+    let (outside_mode, readable_mode, outside_dir_mode) =
+        (mode(&outside), mode(&readable), mode(&d.outside));
+    let code = format!(
+        r#"
+import ctypes, socket
+def libc_call(name, *args):
+    libc = ctypes.CDLL(None, use_errno=True)
+    if getattr(libc, name)(*args) != 0:
+        raise OSError(ctypes.get_errno(), name)
+def fchmod_read_only():
+    fd = os.open({readable:?}, os.O_RDONLY)
+    try:
+        os.fchmod(fd, 0)
+    finally:
+        os.close(fd)
+check("chmod_outside", lambda: os.chmod({outside:?}, 0))
+check("chmod_outside_dir", lambda: os.chmod({outside_dir:?}, 0))
+check("fchmod_read_only", fchmod_read_only)
+check("chown", lambda: os.chown({readable:?}, -1, -1))
+check("utime", lambda: os.utime({readable:?}, (0, 0)))
+check("setxattr", lambda: os.setxattr({readable:?}, "user.krishiv", b"1"))
+check("removexattr", lambda: os.removexattr({readable:?}, "user.krishiv"))
+check("truncate_read_only", lambda: os.close(os.open({readable:?}, os.O_RDONLY | os.O_TRUNC)))
+check("write_private", lambda: open({private:?}, "w").write("x"))
+check("pdeathsig_clear", lambda: libc_call("prctl", 1, 0, 0, 0, 0))
+check("pair_dgram", lambda: socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM))
+check("pair_stream", lambda: socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM))
+"#,
+        outside = outside,
+        outside_dir = d.outside,
+        readable = readable,
+        private = d.private.join("w.txt"),
+    );
+    let o = run(&d, &code, |_| {});
+    assert_eq!(o.exit, Some(0), "stderr: {}", o.stderr);
+    for check in [
+        "chmod_outside",
+        "chmod_outside_dir",
+        "fchmod_read_only",
+        "chown",
+        "utime",
+        "setxattr",
+        "removexattr",
+        "truncate_read_only",
+        "pair_dgram",
+        // OSError(1, ...) is a PermissionError.
+        "pdeathsig_clear",
+    ] {
+        assert_eq!(o.get(check), EPERM, "{check}");
+    }
+    assert_eq!(
+        o.get("write_private"),
+        "ok",
+        "a truncating write in the private directory still works"
+    );
+    assert_eq!(o.get("pair_stream"), "ok");
+    assert_eq!(mode(&outside), outside_mode);
+    assert_eq!(mode(&readable), readable_mode);
+    assert_eq!(mode(&d.outside), outside_dir_mode);
+    assert_eq!(
+        std::fs::read_to_string(&readable).unwrap_or_default(),
+        "content",
+        "not truncated"
+    );
 }
 
 #[test]

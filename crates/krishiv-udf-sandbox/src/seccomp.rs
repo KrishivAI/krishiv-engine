@@ -11,12 +11,14 @@
 //!   streams over IPv4/IPv6: MPTCP and SCTP sockets bypass Landlock's TCP rules), process creation other than
 //!   threads, tracing and other processes' memory, `io_uring`, `bpf`, `perf_event_open`, mounts and
 //!   namespaces, keyrings, `userfaultfd`, kernel modules and `kexec`, `open_by_handle_at`, path `truncate`
-//!   (Landlock restricts it only from ABI 3), terminal input injection (`TIOCSTI`, `TIOCLINUX`), signals to
+//!   (Landlock restricts it only from ABI 3) and read-only opens with `O_TRUNC`, file metadata changes (mode,
+//!   owner, extended attributes, times: Landlock has no right for them), clearing the parent-death signal,
+//!   datagram socket pairs, terminal input injection (`TIOCSTI`, `TIOCLINUX`), signals to
 //!   any other process, and changing any other process's limits, priority, scheduling, CPU affinity, I/O
 //!   priority or memory placement (the kernel allows all of these between processes of one uid, and
 //!   Landlock has no hook for them);
-//! - `ENOSYS` for `clone3`, whose flags live in memory a filter cannot read, so glibc falls back to `clone`,
-//!   whose flags the `EPERM` filter checks.
+//! - `ENOSYS` for `clone3` and `openat2`, whose flags live in memory a filter cannot read, so callers fall back
+//!   to `clone` and `openat`, whose flags the `EPERM` filter checks.
 //!
 //! When several filters match, the kernel applies the most restrictive action, so a call one filter allows
 //! and another refuses is refused.
@@ -52,6 +54,7 @@ pub(crate) fn programs(spec: &FilterSpec<'_>) -> Result<Vec<BpfProgram>, Sandbox
     )?;
     let mut no_clone3 = BTreeMap::new();
     no_clone3.insert(libc::SYS_clone3, Vec::new());
+    no_clone3.insert(libc::SYS_openat2, Vec::new());
     let nosys = filter(no_clone3, SeccompAction::Errno(errno(libc::ENOSYS)), arch)?;
     programs.push(deny);
     programs.push(nosys);
@@ -193,7 +196,48 @@ const ALWAYS_DENIED: &[i64] = &[
     // Path truncation: Landlock restricts it only from ABI 3 (Linux 6.2). `ftruncate` of a file the worker
     // opened for writing (only in its private directory) still works.
     libc::SYS_truncate,
+    // File metadata changes: Landlock has no right for mode, owner, extended attributes (ACLs) or times, so a
+    // worker of the server's uid could `chmod 0` a server directory it cannot even open, or change it through
+    // a descriptor it opened read-only (review threads on #717). Refused everywhere, the private directory
+    // included: `shutil.copymode`/`copystat` and `os.utime` fail there with EPERM.
+    libc::SYS_fchmod,
+    libc::SYS_fchmodat,
+    FCHMODAT2,
+    libc::SYS_fchown,
+    libc::SYS_fchownat,
+    libc::SYS_setxattr,
+    libc::SYS_lsetxattr,
+    libc::SYS_fsetxattr,
+    SETXATTRAT,
+    libc::SYS_removexattr,
+    libc::SYS_lremovexattr,
+    libc::SYS_fremovexattr,
+    REMOVEXATTRAT,
+    libc::SYS_utimensat,
+    #[cfg(target_arch = "x86_64")]
+    libc::SYS_chmod,
+    #[cfg(target_arch = "x86_64")]
+    libc::SYS_chown,
+    #[cfg(target_arch = "x86_64")]
+    libc::SYS_lchown,
+    #[cfg(target_arch = "x86_64")]
+    libc::SYS_utime,
+    #[cfg(target_arch = "x86_64")]
+    libc::SYS_utimes,
+    #[cfg(target_arch = "x86_64")]
+    libc::SYS_futimesat,
 ];
+
+/// `fchmodat2` (Linux 6.6), `setxattrat` and `removexattrat` (Linux 6.13): one number on every architecture
+/// (the unified table), which `libc` does not define for all targets yet.
+const FCHMODAT2: i64 = 452;
+const SETXATTRAT: i64 = 463;
+const REMOVEXATTRAT: i64 = 466;
+/// `PR_SET_PDEATHSIG`.
+const PR_SET_PDEATHSIG: u64 = 1;
+/// `O_ACCMODE` and `O_TRUNC` (the same on x86_64 and aarch64).
+const O_ACCMODE: u64 = 0o3;
+const O_TRUNC: u64 = 0o1000;
 
 /// `PRIO_PROCESS` (`setpriority`) and `IOPRIO_WHO_PROCESS` (`ioprio_set`).
 const PRIO_PROCESS: u64 = 0;
@@ -249,6 +293,25 @@ fn deny_rules(spec: &FilterSpec<'_>) -> Result<BTreeMap<i64, Vec<SeccompRule>>, 
             .collect::<Result<_, _>>()?,
     );
 
+    // The parent-death signal armed by the trampoline must stay: clearing it (`prctl(PR_SET_PDEATHSIG, 0)`
+    // through ctypes) would let the worker outlive the server.
+    rules.insert(
+        libc::SYS_prctl,
+        vec![rule(vec![condition(
+            0,
+            SeccompCmpArgLen::Dword,
+            SeccompCmpOp::Eq,
+            PR_SET_PDEATHSIG,
+        )?])?],
+    );
+    // `open(O_RDONLY | O_TRUNC)` truncates a file the worker may only read (Landlock checks the truncate right
+    // only from ABI 3, and a read-only open needs no write right). Any other truncating open needs the write
+    // right, which Landlock grants only in the private directory. `openat2` keeps its flags in memory a filter
+    // cannot read: `ENOSYS` (second filter), so callers fall back to `openat`.
+    rules.insert(libc::SYS_openat, vec![read_only_truncate(2)?]);
+    #[cfg(target_arch = "x86_64")]
+    rules.insert(libc::SYS_open, vec![read_only_truncate(1)?]);
+
     // Process creation: threads only, unless an administrator allowed fork.
     if !spec.allow_fork {
         let clone_flags = af(libc::CLONE_THREAD);
@@ -267,6 +330,24 @@ fn deny_rules(spec: &FilterSpec<'_>) -> Result<BTreeMap<i64, Vec<SeccompRule>>, 
             rules.insert(libc::SYS_vfork, Vec::new());
         }
     }
+
+    // Socket pairs: only connection-oriented ones. A datagram pair (SOCK_RAW is a datagram pair for AF_UNIX)
+    // can `sendto` or reconnect to any pathname socket the uid may write, outside every other rule (Landlock
+    // scopes pathname sockets only from ABI 9).
+    rules.insert(
+        libc::SYS_socketpair,
+        [libc::SOCK_DGRAM, libc::SOCK_RAW, libc::SOCK_RDM, 10]
+            .into_iter()
+            .map(|kind| {
+                rule(vec![condition(
+                    1,
+                    SeccompCmpArgLen::Dword,
+                    SeccompCmpOp::MaskedEq(0xf),
+                    af(kind),
+                )?])
+            })
+            .collect::<Result<_, _>>()?,
+    );
 
     // Sockets: none at all, or TCP streams over IPv4/IPv6 when ports are open (Landlock limits the ports).
     match spec.network {
@@ -307,6 +388,16 @@ fn deny_rules(spec: &FilterSpec<'_>) -> Result<BTreeMap<i64, Vec<SeccompRule>>, 
         }
     }
     Ok(rules)
+}
+
+/// A rule matching a read-only open that truncates: flags (argument `arg`) with no write access and `O_TRUNC`.
+fn read_only_truncate(arg: u8) -> Result<SeccompRule, SandboxError> {
+    rule(vec![condition(
+        arg,
+        SeccompCmpArgLen::Dword,
+        SeccompCmpOp::MaskedEq(O_ACCMODE | O_TRUNC),
+        O_TRUNC,
+    )?])
 }
 
 fn af(value: i32) -> u64 {
