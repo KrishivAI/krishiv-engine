@@ -686,6 +686,55 @@ mod tests {
         assert_eq!(tested(&set) - before, 3 + 4);
     }
 
+    fn source_rows(rows: &mut super::SourceRows, a: &[i64]) -> usize {
+        rows.apply(batch(a))
+            .unwrap_or_else(|e| unreachable!("{e}"))
+            .num_rows()
+    }
+
+    /// A connector's driver stage (`RuntimeFilters::source_rows`): with no filters every row
+    /// stays; a published filter drops the rows no producer keeps, restarting per unit of work;
+    /// nothing is handed to a consumer.
+    #[test]
+    fn source_rows_drop_what_the_filters_drop() {
+        let mut none = RuntimeFilters::default().source_rows(&schema(), 0);
+        none.start_partition();
+        assert_eq!(source_rows(&mut none, &[1, 2, 3]), 3);
+        let f = Arc::new(RuntimeFilter::new(
+            FilterId(1),
+            ColumnPath::new("a"),
+            DataType::Int64,
+        ));
+        publish(&f, &[1]);
+        let slot = RuntimeFilters::new(vec![f]);
+        let mut rows = slot.source_rows(&schema(), 0);
+        rows.start_partition();
+        assert_eq!(source_rows(&mut rows, &[1, 2, 3, 4]), 1);
+        rows.start_partition();
+        assert_eq!(source_rows(&mut rows, &[2, 3]), 0);
+        assert!(slot.consumer_stage(0).is_none());
+    }
+
+    /// Handed to the consumer above (`hand_to_consumer`), the source keeps every row and the
+    /// consumer finds the driver's stage by its partition: the Delta self-join regression,
+    /// where a connector's scan never registered the stage the probe looked up.
+    #[test]
+    fn source_rows_handed_to_the_consumer_keep_the_rows() {
+        let f = Arc::new(RuntimeFilter::new(
+            FilterId(1),
+            ColumnPath::new("a"),
+            DataType::Int64,
+        ));
+        publish(&f, &[1]);
+        let slot = RuntimeFilters::new(vec![f]);
+        assert!(slot.hand_to_consumer(std::collections::HashMap::from([(FilterId(1), 0)])));
+        assert!(slot.consumer_stage(3).is_none(), "before the driver starts");
+        let mut rows = slot.source_rows(&schema(), 3);
+        rows.start_partition();
+        assert_eq!(source_rows(&mut rows, &[1, 2, 3, 4]), 4);
+        assert!(slot.consumer_stage(3).is_some());
+    }
+
     /// Filters on nested or absent columns have no row stage; a batch
     /// without the filtered column is an internal error.
     #[test]
