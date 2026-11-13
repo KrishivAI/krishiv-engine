@@ -1569,6 +1569,8 @@ impl Resolver<'_> {
             })
             .with_origin(e.origin);
             let mut b = self.expr(&Arc::new(cast), cx)?;
+            // The re-bound operand keeps the aggregate, window and outer markers of the original.
+            b.carry_markers(std::slice::from_ref(k));
             b.shown = Some(k.shown());
             plain.push(b);
         }
@@ -1644,6 +1646,7 @@ impl Resolver<'_> {
         })
         .with_origin(origin);
         let mut b = self.expr(&Arc::new(cast), cx)?;
+        b.carry_markers(std::slice::from_ref(k));
         b.shown = Some(k.shown());
         Ok(b)
     }

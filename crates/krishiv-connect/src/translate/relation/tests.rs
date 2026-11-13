@@ -13,8 +13,8 @@ use super::super::testing::{
 };
 use super::super::{TranslateConf, translate_relation};
 use super::*;
-use crate::proto::v4_2::expression::{self, ExprType, literal::LiteralType};
-use crate::proto::v4_2::{aggregate, join, read, relation::RelType};
+use crate::proto::v4_3::expression::{self, ExprType, literal::LiteralType};
+use crate::proto::v4_3::{aggregate, join, read, relation::RelType};
 
 fn input() -> Option<Box<Relation>> {
     boxed(read_table("t"))
@@ -297,7 +297,7 @@ fn project_filter_limit_and_alias() {
 
 #[test]
 fn range_builds_the_range_leaf() {
-    use crate::proto::v4_2 as pb;
+    use crate::proto::v4_3 as pb;
     let r = relation(RelType::Range(pb::Range {
         start: Some(1),
         end: 10,

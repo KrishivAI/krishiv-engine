@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+//! Tests for the scalar function kernels: names and aliases, string, date and boolean families.
 
 use std::sync::Arc;
 

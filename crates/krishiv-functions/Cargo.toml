@@ -6,7 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish = false
+publish = true
 
 [dependencies]
 arrow-array.workspace = true
@@ -26,10 +26,10 @@ regex-automata = { workspace = true, features = [
     "unicode-word-boundary",
 ] }
 regex-syntax = { workspace = true, features = ["unicode-bool", "unicode-case", "unicode-gencat", "unicode-perl", "unicode-script"] }
-krishiv-common = { path = "../krishiv-common" }
-krishiv-kernels = { path = "../krishiv-kernels" }
-krishiv-types = { path = "../krishiv-types" }
-krishiv-udf-sdk = { path = "../krishiv-udf-sdk" }
+krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
+krishiv-kernels = { path = "../krishiv-kernels", version = "=0.2.0" }
+krishiv-types = { path = "../krishiv-types", version = "=0.2.0" }
+krishiv-udf-sdk = { path = "../krishiv-udf-sdk", version = "=0.2.0" }
 quick-xml.workspace = true
 aes.workspace = true
 cbc = { workspace = true, features = ["alloc", "block-padding"] }

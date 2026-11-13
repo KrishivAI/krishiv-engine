@@ -4,12 +4,12 @@
 **Real code arrives:** P2a (protos, decoder, Connect-to-IR translation: P2-T091a); the gRPC server is P3.
 
 ## Purpose
-Spark Connect (protocols 3.5, 4.0, 4.1, 4.2): the vendored protocol types and the translation of a Connect plan into
+Spark Connect (protocols 3.5, 4.0, 4.1, 4.2, 4.3; one 4.3 superset decoder): the vendored protocol types and the translation of a Connect plan into
 the logical-plan IR of `krishiv-plan`. The server (P3-T011, P3-T012) extends this decoder; it does not replace it.
 
 ## Key files
 - `src/wire.rs` the only decode path (`wire::decode_*`): size, count, depth and field-version checks
-- `src/proto/mod.rs` versioned generated protos; `src/proto/v4_2/spark.connect.pb.rs` generated messages (do not edit)
+- `src/proto/mod.rs` versioned generated protos; `src/proto/v4_3/spark.connect.pb.rs` generated messages (4.2 is kept only for the golden descriptor) (do not edit)
 - `src/translate/mod.rs` `translate_*` entry points; `src/translate/relation.rs` and `expression.rs` (IR building)
 - `src/translate/literal.rs` literals; `src/translate/names.rs` names and plan-id origins
 - `src/translate/errors.rs` `KRISHIV_UNSUPPORTED_FEATURE` and `CONNECT_INVALID_PLAN.*` errors

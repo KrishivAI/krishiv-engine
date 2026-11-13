@@ -7,8 +7,8 @@ use krishiv_plan::{Expr, ExprNode, FunctionCall};
 use super::super::testing::{attr, attr_with, conf, expr, fails, func, lit, proto_type};
 use super::super::{TranslateConf, translate_expression};
 use super::*;
-use crate::proto::v4_2::data_type as dt;
-use crate::proto::v4_2::expression::literal::LiteralType;
+use crate::proto::v4_3::data_type as dt;
+use crate::proto::v4_3::expression::literal::LiteralType;
 
 fn text(e: &Expression) -> String {
     translate_expression(e, &conf())

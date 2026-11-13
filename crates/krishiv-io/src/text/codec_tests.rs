@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+//! Tests for the compression codecs of text files: round trips, concatenated members, size limits and corrupt input.
 use super::codec::{Codec, Compressor, Decompressor};
 
 const CODECS: [Codec; 5] = [

@@ -47,6 +47,7 @@ impl Session {
         self.check_open()?;
         let env = self.query_env();
         let row = self.state.queries.begin_as(
+            crate::system::TextPolicy::from_config(&env.config),
             env.text.as_deref(),
             env.statement_class,
             self.operation_id(),
@@ -77,6 +78,7 @@ impl Session {
         };
         // A failed attach drops `run`, which closes the row.
         self.attach(&ctx, &row, &env.config)?;
+        self.state.queries.mark_started(&row);
         Ok(run)
     }
 }

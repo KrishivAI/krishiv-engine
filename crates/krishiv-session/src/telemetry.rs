@@ -173,6 +173,10 @@ pub(crate) fn plain_span(who: &Who) -> Span {
 /// span lasts as long as the result is being produced and read, not only the
 /// planning. A disabled span adds nothing.
 pub(crate) fn in_span(stream: RecordBatchStream, span: Span) -> RecordBatchStream {
+    wrap_span(stream, span)
+}
+
+fn wrap_span(stream: RecordBatchStream, span: Span) -> RecordBatchStream {
     if span.is_disabled() {
         return stream;
     }

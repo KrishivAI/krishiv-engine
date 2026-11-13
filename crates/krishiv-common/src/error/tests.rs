@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+//! Tests for error classes: SQLSTATE and name lookup, sub-classes, message templates and parameters, and the generated docs.
 use std::collections::BTreeSet;
 
 use super::template;

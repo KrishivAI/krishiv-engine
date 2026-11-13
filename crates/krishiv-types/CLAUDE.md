@@ -5,7 +5,7 @@
 
 ## Purpose
 Internal type representations: Spark data types mapped onto Arrow, schemas, scalar values, decimal/interval/timestamp rules.
-The `Batch` newtype (`batch.rs`): Arrow `RecordBatch` + `Weights` (`Const(c)` | Int64 column); `ChangeBatch = Batch`.
+The `Batch` newtype (`batch.rs`): Arrow `RecordBatch` + `Weights` (`Const(c)` | Int64 column) + an optional split tag (`split()`: the scan split the rows were read from, which seeded random functions draw by); `ChangeBatch = Batch`.
 
 ## Key files
 Paths are relative to this crate.
@@ -18,7 +18,7 @@ Paths are relative to this crate.
 - `src/srs.rs` Spark 4.2's registry of spatial reference systems (`vendored/srs_registry.csv`, Spark's `srs_registry.csv` unchanged, from PROJ 9.8.1: 10,713 systems of which 1,406 geographic; plus SRID 0 and the OGC names of 4326, 4267, 4269): which SRIDs `GEOMETRY(n)`/`GEOGRAPHY(n)` accept, the name in a type's JSON, `geo::srid_of_crs` for a Parquet CRS
 - `src/calendar.rs` the CALENDAR INTERVAL carrier: `Calendars` (read view), `calendar_array`/`CalendarBuilder`, and
   `to_month_day_nano`/`from_month_day_nano` for the session edges
-- `src/batch.rs` the `Batch` newtype with `Weights` (`Const` or Int64 column)
+- `src/batch.rs` the `Batch` newtype with `Weights` (`Const` or Int64 column) and the split tag
 - `src/error.rs` error type with Spark classes
 - `tests/spark_type_strings.rs` type-string golden tests; `benches/batch_filter.rs` filter bench
 

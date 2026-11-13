@@ -76,6 +76,14 @@ pub(crate) struct SqlFunctions {
 }
 
 impl SqlFunctions {
+    /// Functions starting from this session's current map; later changes
+    /// to either do not reach the other (the map is replaced, never edited).
+    pub(crate) fn copy(&self) -> Self {
+        Self {
+            map: RwLock::new(self.snapshot()),
+        }
+    }
+
     /// The current map; what a query reads throughout.
     pub(crate) fn snapshot(&self) -> Arc<FunctionMap> {
         Arc::clone(&self.map.read().unwrap_or_else(PoisonError::into_inner))
@@ -121,6 +129,8 @@ pub(crate) struct QueryFunctions {
     map: Arc<FunctionMap>,
     catalog: Arc<SessionCatalog>,
     case_sensitive: bool,
+    /// The current catalog is `system` (which has no namespaces): a two-part call is no stored function.
+    in_system: bool,
     /// The functions stored in the catalog's namespaces, as of the start of
     /// the query, and the namespace a bare name resolves in.
     stored: Arc<StoredFunctions>,
@@ -154,7 +164,9 @@ impl QueryFunctions {
     ) -> Self {
         let stored = catalog.store.functions();
         let path = catalog.sql_path("");
+        let in_system = crate::system::is_system(&catalog.current_catalog());
         Self {
+            in_system,
             path,
             base,
             map,
@@ -165,6 +177,12 @@ impl QueryFunctions {
             expanded: Mutex::new(HashMap::new()),
             reads: Mutex::new((Vec::new(), None)),
         }
+    }
+
+    /// This registry as the query snapshot saw the current catalog (`system` or not).
+    pub(crate) fn in_system(mut self, in_system: bool) -> Self {
+        self.in_system = in_system;
+        self
     }
 
     /// This registry resolving bare names through `path`.
@@ -242,6 +260,7 @@ impl QueryFunctions {
                     // A body reads a view as written; schema binding modes
                     // apply to the views a query reads itself.
                     binding_enabled: false,
+                    in_system: self.in_system,
                     path: if def.path.is_empty() {
                         self.path.clone()
                     } else {
@@ -339,6 +358,20 @@ impl QueryFunctions {
                     let ExprNode::Function(call) = &e.node else {
                         return Ok(e);
                     };
+                    // A call written `ns.f()` inside a stored body is the defining catalog's, whatever
+                    // catalog is current when the body is expanded.
+                    if self.in_system
+                        && let [q] = call.qualifier.as_slice()
+                        && !q.eq_ignore_ascii_case("session")
+                        && !q.eq_ignore_ascii_case("system")
+                        && !q.eq_ignore_ascii_case("builtin")
+                    {
+                        let mut call = call.clone();
+                        call.qualifier = vec![crate::catalog::CATALOG.to_owned(), q.clone()];
+                        let mut next = (*e).clone();
+                        next.node = ExprNode::Function(call);
+                        return Ok(Arc::new(next));
+                    }
                     // Canonical operators and built-ins stay bare; anything
                     // else, session UDFs included, is a user function.
                     let builtin = ["system".to_owned(), "builtin".to_owned(), call.name.clone()];
@@ -411,6 +444,9 @@ impl QueryFunctions {
                         // A view whose path holds no catalog schema keeps the
                         // call bare, unresolved, not the view's namespace.
                         None if temporary_visible => return Ok(e),
+                        None if self.in_system => {
+                            vec![crate::catalog::CATALOG.to_owned(), namespace.to_owned()]
+                        }
                         None => vec![namespace.to_owned()],
                     };
                     let mut next = (*e).clone();
@@ -457,7 +493,7 @@ impl FunctionRegistry for QueryFunctions {
             }),
             [q, f] if q == "session" => temporary(f),
             [s, q, f] if s == "system" && q == "session" => temporary(f),
-            [_, f] => stored(&ns(0), f),
+            [_, f] if !self.in_system => stored(&ns(0), f),
             [c, _, f] if c == crate::catalog::CATALOG => stored(&ns(1), f),
             _ => None,
         };

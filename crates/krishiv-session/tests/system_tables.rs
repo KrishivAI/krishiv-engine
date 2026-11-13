@@ -455,10 +455,11 @@ fn queries_count_result_rows_and_io() {
     .unwrap();
     let r = strings_in(
         &s,
-        "SELECT concat_ws('|', CAST(rows_produced AS STRING), CAST(bytes_read > 0 AS STRING)) \
+        "SELECT concat_ws('|', CAST(rows_produced AS STRING), CAST(bytes_read > 0 AS STRING), \
+         CAST(rows_read >= 7 AS STRING)) \
          FROM system.queries WHERE state = 'finished' AND query_text LIKE '%WHERE id < 7%'",
     );
-    assert_eq!(r, ["7|true"], "{r:?}");
+    assert_eq!(r, ["7|true|true"], "{r:?}");
 }
 
 #[test]
@@ -587,5 +588,1096 @@ fn the_result_cache_probe_does_not_count_a_relation_cache_hit_twice() {
     assert_eq!(
         with, 1,
         "relation cache hits for one run with the result cache"
+    );
+}
+
+#[test]
+fn query_text_honours_the_max_bytes_and_literals_settings() {
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("krishiv.system.queryText.literals", "mask")
+        .unwrap();
+    run_all(&s, "SELECT 'canary-7f3a' AS c, 424242 AS n").unwrap();
+    let texts = strings_in(
+        &s,
+        "SELECT query_text FROM system.queries WHERE query_text LIKE 'SELECT ? AS c%'",
+    );
+    assert_eq!(texts, ["SELECT ? AS c , ? AS n"]);
+    let leaked = strings_in(
+        &s,
+        "SELECT CAST(count(*) AS STRING) FROM system.queries \
+         WHERE query_text LIKE '%canary-7f3a%' OR query_text LIKE '%424242%'",
+    );
+    // The statement that reads the table names the canary itself; only that row may.
+    assert!(leaked[0].parse::<u32>().unwrap() <= 1, "{leaked:?}");
+    // Back to `keep`, and a short limit: the text is cut and says so.
+    s.conf()
+        .set("krishiv.system.queryText.literals", "keep")
+        .unwrap();
+    s.conf()
+        .set("krishiv.system.queryText.maxBytes", "12")
+        .unwrap();
+    run_all(&s, "SELECT 'cutting-edge-literal' AS c").unwrap();
+    let cut = strings_in(
+        &s,
+        "SELECT concat(query_text, '|', CAST(query_text_truncated AS STRING)) FROM system.queries \
+         WHERE query_text LIKE 'SELECT %cutt'",
+    );
+    assert_eq!(cut, ["SELECT 'cutt|true"]);
+}
+
+#[test]
+fn queries_carry_the_sqlstate_of_a_failure_and_are_never_partial_in_one_process() {
+    let s = Session::new().unwrap();
+    run_all(&s, "SELECT 1").unwrap();
+    assert!(run_all(&s, "SELECT * FROM no_such_table_xyz").is_err());
+    let failed = strings_in(
+        &s,
+        "SELECT concat(error_class, '|', sqlstate) FROM system.queries \
+         WHERE error_class = 'TABLE_OR_VIEW_NOT_FOUND'",
+    );
+    assert_eq!(failed, ["TABLE_OR_VIEW_NOT_FOUND|42P01"]);
+    let ok = strings_in(
+        &s,
+        "SELECT CAST(count(*) AS STRING) FROM system.queries WHERE state = 'finished' AND sqlstate IS NOT NULL",
+    );
+    assert_eq!(ok, ["0"]);
+    let partial = strings_in(
+        &s,
+        "SELECT CAST(count(*) AS STRING) FROM system.queries WHERE partial",
+    );
+    assert_eq!(partial, ["0"]);
+}
+
+/// Column `index` of the rows `sql` returns.
+fn column_of(s: &Session, sql: &str, index: usize) -> Vec<String> {
+    let b = block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    let mut out = Vec::new();
+    for batch in &b {
+        let c = batch.column(index);
+        if let Some(v) = c.as_string_view_opt() {
+            out.extend((0..v.len()).map(|i| v.value(i).to_owned()));
+        } else if let Some(v) = c.as_string_opt::<i32>() {
+            out.extend((0..v.len()).map(|i| v.value(i).to_owned()));
+        } else {
+            let v = c.as_string::<i64>();
+            out.extend((0..v.len()).map(|i| v.value(i).to_owned()));
+        }
+    }
+    out
+}
+
+#[test]
+fn show_tables_in_system_lists_the_tables() {
+    let s = Session::new().unwrap();
+    let mut names = column_of(&s, "SHOW TABLES IN system", 1);
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "caches",
+            "capabilities",
+            "memory",
+            "metrics",
+            "operators",
+            "queries"
+        ]
+    );
+    assert_eq!(
+        column_of(&s, "SHOW TABLES IN SYSTEM LIKE 'q*'", 1),
+        ["queries"]
+    );
+    // `system` is still not a database of the session catalog.
+    let dbs = column_of(&s, "SHOW DATABASES", 0);
+    assert!(
+        !dbs.iter().any(|d| d.eq_ignore_ascii_case("system")),
+        "{dbs:?}"
+    );
+}
+
+fn run(s: &Session, sql: &str) -> Result<Vec<arrow_array::RecordBatch>, String> {
+    block_on(async { s.sql(sql).await?.collect().await }).map_err(|e| e.to_string())
+}
+
+#[test]
+fn use_system_switches_the_current_catalog() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        column_of(&s, "SELECT current_catalog()", 0),
+        ["spark_catalog"]
+    );
+    run(&s, "USE SYSTEM").unwrap();
+    assert_eq!(column_of(&s, "SELECT current_catalog()", 0), ["system"]);
+    // A bare name now reads the system catalog.
+    assert!(!column_of(&s, "SELECT name FROM capabilities LIMIT 1", 0).is_empty());
+    // Using the current catalog again is a no-op; a namespace of it is not found.
+    run(&s, "USE system").unwrap();
+    let e = run(&s, "USE x").unwrap_err();
+    assert!(
+        e.contains("SCHEMA_NOT_FOUND") && e.contains("`system`.`x`"),
+        "{e}"
+    );
+    let e = run(&s, "USE spark_catalog.a.b").unwrap_err();
+    assert!(e.contains("`spark_catalog`.`a`.`b`"), "{e}");
+    // Back to the session catalog, in its default database.
+    run(&s, "USE spark_catalog").unwrap();
+    assert_eq!(
+        column_of(&s, "SELECT current_catalog()", 0),
+        ["spark_catalog"]
+    );
+    assert_eq!(column_of(&s, "SELECT current_schema()", 0), ["default"]);
+}
+
+#[test]
+fn a_temp_view_still_resolves_under_system() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE TEMPORARY VIEW mine AS SELECT 7 AS n").unwrap();
+    run(&s, "CREATE TEMPORARY VIEW queries AS SELECT 1 AS only_col").unwrap();
+    run(&s, "USE system").unwrap();
+    assert_eq!(
+        column_of(&s, "SELECT CAST(n AS STRING) FROM mine", 0),
+        ["7"]
+    );
+    // The temp view wins over the system table of the same name.
+    assert_eq!(
+        column_of(&s, "SELECT CAST(only_col AS STRING) FROM queries", 0),
+        ["1"]
+    );
+    // A bare persistent name that is not a system table is not found.
+    let e = run(&s, "SELECT * FROM nosuch").unwrap_err();
+    assert!(e.contains("TABLE_OR_VIEW_NOT_FOUND"), "{e}");
+}
+
+#[test]
+fn show_catalogs_lists_both_and_follows_use() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        column_of(&s, "SHOW CATALOGS", 0),
+        ["spark_catalog", "system"]
+    );
+    assert_eq!(column_of(&s, "SHOW CATALOGS LIKE 'sys*'", 0), ["system"]);
+    run(&s, "USE system").unwrap();
+    assert_eq!(column_of(&s, "SHOW CATALOGS", 0).len(), 2);
+}
+
+#[test]
+fn a_finished_query_started_no_earlier_than_it_was_submitted() {
+    let s = Session::new().unwrap();
+    run_all(&s, "SELECT 1").unwrap();
+    let r = strings_in(
+        &s,
+        "SELECT CAST(started_at >= submitted_at AS STRING) FROM system.queries \
+         WHERE state = 'finished' AND query_text = 'SELECT 1'",
+    );
+    assert_eq!(r, ["true"], "{r:?}");
+}
+
+#[test]
+fn a_query_answered_from_the_result_cache_is_flagged() {
+    let s = Session::new().unwrap();
+    s.conf().set("krishiv.resultCache.enabled", "true").unwrap();
+    run_all(&s, "SELECT id FROM range(5) WHERE id < 4").unwrap();
+    run_all(&s, "SELECT id FROM range(5) WHERE id < 4").unwrap();
+    let r = strings_in(
+        &s,
+        "SELECT CAST(result_cache_hit AS STRING) FROM system.queries \
+         WHERE state = 'finished' AND query_text LIKE '%id < 4%' ORDER BY submitted_at, query_id",
+    );
+    assert_eq!(r, ["false", "true"], "{r:?}");
+}
+
+#[test]
+fn a_file_write_records_the_rows_it_wrote() {
+    let s = Session::new().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("w");
+    block_on(async {
+        s.sql("SELECT id FROM range(321)")
+            .await?
+            .write()
+            .mode("overwrite")
+            .format("parquet")
+            .save(out.to_str().unwrap())
+            .await
+    })
+    .unwrap();
+    let r = strings_in(
+        &s,
+        "SELECT CAST(rows_written AS STRING) FROM system.queries \
+         WHERE state = 'finished' AND rows_written > 0",
+    );
+    assert_eq!(r, ["321"], "{r:?}");
+}
+
+#[test]
+fn a_file_write_records_the_files_it_wrote() {
+    let s = Session::new().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("w");
+    block_on(async {
+        s.sql("SELECT id FROM range(50)")
+            .await?
+            .write()
+            .mode("overwrite")
+            .format("parquet")
+            .save(out.to_str().unwrap())
+            .await
+    })
+    .unwrap();
+    let r = strings_in(
+        &s,
+        "SELECT CAST(files_written AS STRING) FROM system.queries \
+         WHERE state = 'finished' AND files_written > 0",
+    );
+    assert_eq!(r.len(), 1, "{r:?}");
+    let parquet_files = std::fs::read_dir(&out)
+        .unwrap()
+        .filter(|e| {
+            e.as_ref()
+                .is_ok_and(|e| e.path().extension().is_some_and(|x| x == "parquet"))
+        })
+        .count();
+    assert_eq!(r[0].parse::<usize>().unwrap(), parquet_files, "{r:?}");
+}
+
+#[test]
+fn a_failed_query_records_its_message_and_masking_hides_literals() {
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("krishiv.system.queryText.literals", "mask")
+        .unwrap();
+    let _ = block_on(async {
+        s.sql("SELECT * FROM missing_canary_table")
+            .await?
+            .collect()
+            .await
+    });
+    let r = strings_in(
+        &s,
+        "SELECT error_message FROM system.queries WHERE error_message IS NOT NULL",
+    );
+    assert_eq!(r.len(), 1, "{r:?}");
+    assert!(r[0].contains("missing_canary_table"), "{r:?}");
+    assert!(r[0].contains("TABLE_OR_VIEW_NOT_FOUND"), "{r:?}");
+}
+
+#[test]
+fn an_error_message_with_a_string_literal_is_masked_when_literals_are_masked() {
+    let s = Session::new().unwrap();
+    s.conf().set("spark.sql.ansi.enabled", "true").unwrap();
+    s.conf()
+        .set("krishiv.system.queryText.literals", "mask")
+        .unwrap();
+    let _ = block_on(async {
+        s.sql("SELECT CAST('canary99x' AS INT)")
+            .await?
+            .collect()
+            .await
+    });
+    let r = strings_in(
+        &s,
+        "SELECT error_message FROM system.queries WHERE error_message IS NOT NULL",
+    );
+    assert_eq!(r.len(), 1, "{r:?}");
+    assert!(!r[0].contains("canary99x"), "{r:?}");
+}
+
+#[test]
+fn a_scan_records_the_files_it_opened() {
+    let s = Session::new().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("r");
+    block_on(async {
+        s.sql("SELECT id FROM range(40)")
+            .await?
+            .write()
+            .mode("overwrite")
+            .format("parquet")
+            .save(out.to_str().unwrap())
+            .await
+    })
+    .unwrap();
+    let q = format!("SELECT count(*) FROM parquet.`{}`", out.display());
+    block_on(async { s.sql(&q).await?.collect().await }).unwrap();
+    let r = strings_in(
+        &s,
+        "SELECT CAST(files_read AS STRING) FROM system.queries WHERE files_read > 0",
+    );
+    // Each file counts once, however many morsels its splits were cut into.
+    let written = std::fs::read_dir(&out)
+        .unwrap()
+        .filter(|e| {
+            e.as_ref()
+                .is_ok_and(|e| e.path().extension().is_some_and(|x| x == "parquet"))
+        })
+        .count();
+    assert_eq!(r, [written.to_string()], "{r:?}");
+}
+
+#[test]
+fn use_system_shows_no_default_database() {
+    let s = Session::new().unwrap();
+    block_on(async { s.sql("USE system").await.unwrap().collect().await.unwrap() });
+    let cur = column_of(&s, "SHOW CURRENT NAMESPACE", 0);
+    assert_eq!(cur, ["system"]);
+    assert_eq!(column_of(&s, "SHOW CURRENT NAMESPACE", 1), [""]);
+    let mut names = column_of(&s, "SHOW TABLES", 1);
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "caches",
+            "capabilities",
+            "memory",
+            "metrics",
+            "operators",
+            "queries"
+        ]
+    );
+}
+
+#[test]
+fn use_namespace_under_system_finds_no_namespace() {
+    let s = Session::new().unwrap();
+    run(&s, "USE system").unwrap();
+    for sql in ["USE NAMESPACE x", "USE NAMESPACE system"] {
+        let e = run(&s, sql).unwrap_err();
+        assert!(e.contains("SCHEMA_NOT_FOUND"), "{sql}: {e}");
+    }
+    // The failed USE leaves the current catalog alone.
+    assert_eq!(column_of(&s, "SELECT current_catalog()", 0), ["system"]);
+}
+
+#[test]
+fn analyze_table_in_system_is_reserved() {
+    let s = Session::new().unwrap();
+    run(&s, "USE system").unwrap();
+    for sql in [
+        "ANALYZE TABLE queries COMPUTE STATISTICS",
+        "ANALYZE TABLE system.queries COMPUTE STATISTICS FOR ALL COLUMNS",
+    ] {
+        let e = run(&s, sql).unwrap_err();
+        assert!(e.contains("KRISHIV_RESERVED_NAME"), "{sql}: {e}");
+    }
+}
+
+#[test]
+fn namespace_listings_under_system_fail_closed() {
+    let s = Session::new().unwrap();
+    run(&s, "USE system").unwrap();
+    for sql in ["SHOW VIEWS", "SHOW TABLE EXTENDED LIKE '*'"] {
+        let e = run(&s, sql).unwrap_err();
+        assert!(e.contains("SCHEMA_NOT_FOUND"), "{sql}: {e}");
+    }
+}
+
+#[test]
+fn creating_under_system_is_refused_but_a_temp_view_survives_the_switch_back() {
+    let s = Session::new().unwrap();
+    run(&s, "USE system").unwrap();
+    for sql in [
+        "CREATE VIEW v1 AS SELECT 1 AS n",
+        "CREATE TABLE tt1 (a INT)",
+    ] {
+        let e = run(&s, sql).unwrap_err();
+        assert!(e.contains("KRISHIV_RESERVED_NAME"), "{sql}: {e}");
+    }
+    run(&s, "CREATE TEMPORARY VIEW t1 AS SELECT 2 AS n").unwrap();
+    run(&s, "USE spark_catalog").unwrap();
+    assert_eq!(column_of(&s, "SELECT CAST(n AS STRING) FROM t1", 0), ["2"]);
+}
+
+#[test]
+fn metadata_commands_on_a_bare_name_do_not_read_the_session_catalog_under_system() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE TABLE t (a INT)").unwrap();
+    run(&s, "USE system").unwrap();
+    for sql in [
+        "DESCRIBE TABLE t",
+        "SHOW COLUMNS IN t",
+        "SHOW CREATE TABLE t",
+    ] {
+        let e = run(&s, sql).unwrap_err();
+        assert!(e.contains("TABLE_OR_VIEW_NOT_FOUND"), "{sql}: {e}");
+    }
+    // The qualified name still reaches the session catalog's table.
+    assert!(run(&s, "DESCRIBE TABLE spark_catalog.default.t").is_ok());
+}
+
+#[test]
+fn a_failure_message_in_the_history_is_the_client_form() {
+    let s = Session::new().unwrap();
+    assert!(run(&s, "SELECT * FROM nosuch_table_here").is_err());
+    let m = column_of(
+        &s,
+        "SELECT error_message FROM system.queries WHERE error_class IS NOT NULL",
+        0,
+    );
+    assert!(
+        !m.is_empty() && m.iter().all(|x| !x.contains("Caused by")),
+        "{m:?}"
+    );
+}
+
+#[test]
+fn a_bare_drop_of_a_function_or_view_does_not_reach_the_session_catalog_under_system() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE VIEW v AS SELECT 1 AS n").unwrap();
+    run(&s, "CREATE FUNCTION f() RETURNS INT RETURN 1").unwrap();
+    run(&s, "USE system").unwrap();
+    for sql in ["DROP VIEW v", "DROP FUNCTION f"] {
+        assert!(run(&s, sql).unwrap_err().contains("NOT_FOUND"), "{sql}");
+    }
+    run(&s, "USE spark_catalog").unwrap();
+    assert_eq!(column_of(&s, "SELECT CAST(n AS STRING) FROM v", 0), ["1"]);
+    assert_eq!(column_of(&s, "SELECT CAST(f() AS STRING)", 0), ["1"]);
+}
+
+#[test]
+fn a_replayed_query_masks_literals_by_the_session_policy() {
+    let s = Session::new().unwrap();
+    run(&s, "SET krishiv.resultCache.enabled=true").unwrap();
+    run(&s, "SET krishiv.system.queryText.literals=mask").unwrap();
+    run(&s, "CREATE TABLE rc (a INT)").unwrap();
+    run(&s, "INSERT INTO rc VALUES (1)").unwrap();
+    run(&s, "SELECT a FROM rc WHERE a = 12345").unwrap();
+    run(&s, "SELECT a FROM rc WHERE a = 12345").unwrap();
+    let texts = column_of(
+        &s,
+        "SELECT query_text FROM system.queries WHERE result_cache_hit = true",
+        0,
+    );
+    assert!(!texts.is_empty(), "no replayed query was recorded");
+    assert!(texts.iter().all(|t| !t.contains("12345")), "{texts:?}");
+}
+
+#[test]
+fn describe_lists_the_columns_of_a_system_table() {
+    let s = Session::new().unwrap();
+    let qualified = column_of(&s, "DESCRIBE TABLE system.memory", 0);
+    assert!(!qualified.is_empty());
+    assert_eq!(column_of(&s, "DESC system.memory", 0), qualified);
+    assert_eq!(column_of(&s, "DESCRIBE system.MEMORY", 0), qualified);
+    let types = column_of(&s, "DESCRIBE system.queries", 1);
+    assert!(types.iter().any(|t| t == "string"), "{types:?}");
+    run(&s, "USE system").unwrap();
+    assert_eq!(column_of(&s, "DESCRIBE memory", 0), qualified);
+    let e = run(&s, "DESCRIBE EXTENDED system.memory").unwrap_err();
+    assert!(
+        e.contains("UNSUPPORTED") || e.contains("not supported"),
+        "{e}"
+    );
+    let e = run(&s, "DESCRIBE system.nosuch").unwrap_err();
+    assert!(e.contains("TABLE_OR_VIEW_NOT_FOUND"), "{e}");
+}
+
+#[test]
+fn a_qualified_stored_view_is_not_read_through_the_system_catalog() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE VIEW v AS SELECT 'secret' AS value").unwrap();
+    assert_eq!(column_of(&s, "SELECT value FROM default.v", 0), ["secret"]);
+    run(&s, "USE system").unwrap();
+    let e = run(&s, "SELECT value FROM default.v").unwrap_err();
+    assert!(e.contains("TABLE_OR_VIEW_NOT_FOUND"), "{e}");
+    // The catalog-qualified name still reaches it.
+    assert_eq!(
+        column_of(&s, "SELECT value FROM spark_catalog.default.v", 0),
+        ["secret"]
+    );
+}
+
+#[test]
+fn temp_views_win_over_system_tables_in_describe_and_metadata() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE TEMPORARY VIEW queries AS SELECT 1 AS only_col").unwrap();
+    run(&s, "CREATE TEMPORARY VIEW mine AS SELECT 2 AS other").unwrap();
+    run(&s, "USE system").unwrap();
+    assert_eq!(column_of(&s, "DESCRIBE queries", 0), ["only_col"]);
+    assert_eq!(column_of(&s, "DESCRIBE mine", 0), ["other"]);
+}
+
+#[test]
+fn a_system_only_query_has_a_start_time() {
+    let s = Session::new().unwrap();
+    run(&s, "SELECT * FROM system.memory").unwrap();
+    let started = column_of(
+        &s,
+        "SELECT CAST(started_at IS NOT NULL AS STRING) FROM system.queries WHERE query_text LIKE '%system.memory%' AND query_text NOT LIKE '%started_at%'",
+        0,
+    );
+    assert_eq!(started, ["true"]);
+}
+
+#[test]
+fn use_system_dot_name_is_a_missing_schema_of_system() {
+    let s = Session::new().unwrap();
+    let e = run(&s, "USE system.x").unwrap_err();
+    assert!(
+        e.contains("SCHEMA_NOT_FOUND") && e.contains("`system`"),
+        "{e}"
+    );
+}
+
+#[test]
+fn query_text_is_cut_at_a_character_boundary() {
+    let s = Session::new().unwrap();
+    run(&s, "SET krishiv.system.queryText.maxBytes=40").unwrap();
+    run(&s, "SELECT 'ééééééééééééééééééééééééééééééé' AS wide").unwrap();
+    let texts = column_of(&s, "SELECT query_text FROM system.queries", 0);
+    assert!(texts.iter().all(|t| t.len() <= 40), "{texts:?}");
+    // 40 bytes: `SELECT '` (8) and 16 two-byte characters.
+    let cut = format!("SELECT '{}", "é".repeat(16));
+    assert!(texts.contains(&cut), "{texts:?}");
+}
+
+#[test]
+fn namespace_qualified_names_do_not_reach_the_session_catalog_under_system() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE TABLE t (a INT)").unwrap();
+    run(&s, "CREATE FUNCTION f() RETURNS INT RETURN 1").unwrap();
+    run(&s, "USE system").unwrap();
+    for sql in [
+        "DESCRIBE TABLE default.t",
+        "SHOW COLUMNS IN default.t",
+        "SHOW CREATE TABLE default.t",
+        "DROP FUNCTION default.f",
+    ] {
+        assert!(run(&s, sql).unwrap_err().contains("NOT_FOUND"), "{sql}");
+    }
+    run(&s, "USE spark_catalog").unwrap();
+    assert_eq!(column_of(&s, "SELECT CAST(f() AS STRING)", 0), ["1"]);
+    assert!(run(&s, "DESCRIBE TABLE default.t").is_ok());
+}
+
+#[test]
+fn a_masked_error_message_carries_no_value_of_the_failed_statement() {
+    let s = Session::new().unwrap();
+    run(&s, "SET krishiv.system.queryText.literals=mask").unwrap();
+    run(&s, "SET spark.sql.ansi.enabled=true").unwrap();
+    assert!(run(&s, "SELECT CAST(123456789 AS TINYINT)").is_err());
+    let m = column_of(
+        &s,
+        "SELECT error_message FROM system.queries WHERE error_class IS NOT NULL",
+        0,
+    );
+    assert!(!m.is_empty());
+    assert!(m.iter().all(|x| !x.contains("123456789")), "{m:?}");
+}
+
+#[test]
+fn a_stored_view_over_a_stored_table_reads_under_system_when_qualified() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE TABLE t (a INT)").unwrap();
+    run(&s, "INSERT INTO t VALUES (5)").unwrap();
+    run(&s, "CREATE VIEW v AS SELECT a FROM t").unwrap();
+    run(&s, "USE system").unwrap();
+    assert_eq!(
+        column_of(
+            &s,
+            "SELECT CAST(a AS STRING) FROM spark_catalog.default.v",
+            0
+        ),
+        ["5"]
+    );
+    assert!(
+        run(&s, "SELECT a FROM default.v")
+            .unwrap_err()
+            .contains("TABLE_OR_VIEW_NOT_FOUND")
+    );
+}
+
+#[test]
+fn namespace_metadata_and_qualified_view_bodies_follow_the_defining_catalog_under_system() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE TABLE t (a INT)").unwrap();
+    run(&s, "INSERT INTO t VALUES (7)").unwrap();
+    run(&s, "CREATE VIEW v AS SELECT a FROM default.t").unwrap();
+    run(&s, "USE system").unwrap();
+    for sql in ["DESCRIBE SCHEMA EXTENDED default", "SHOW TABLES IN default"] {
+        let e = run(&s, sql).unwrap_err();
+        assert!(e.contains("SCHEMA_NOT_FOUND"), "{sql}: {e}");
+    }
+    assert_eq!(
+        column_of(
+            &s,
+            "SELECT CAST(a AS STRING) FROM spark_catalog.default.v",
+            0
+        ),
+        ["7"]
+    );
+    // The system tables themselves still list.
+    assert!(!column_of(&s, "SHOW TABLES IN system", 1).is_empty());
+}
+
+#[test]
+fn cache_and_refresh_of_a_stored_table_do_not_reach_the_session_catalog_under_system() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE TABLE t (a INT)").unwrap();
+    run(&s, "USE system").unwrap();
+    for sql in [
+        "CACHE TABLE t",
+        "CACHE TABLE default.t",
+        "UNCACHE TABLE t",
+        "REFRESH TABLE default.t",
+    ] {
+        assert!(run(&s, sql).unwrap_err().contains("NOT_FOUND"), "{sql}");
+    }
+}
+
+#[test]
+fn registered_batches_win_over_system_tables_of_the_same_name_under_system() {
+    use arrow_array::{Int64Array, RecordBatch};
+    use arrow_schema::{DataType, Field, Schema};
+    use std::sync::Arc;
+    let s = Session::new().unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new("n", DataType::Int64, false)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int64Array::from(vec![9]))],
+    )
+    .unwrap();
+    s.register_batches("capabilities", Arc::clone(&schema), vec![batch.clone()])
+        .unwrap();
+    s.register_batches("mine", schema, vec![batch]).unwrap();
+    run(&s, "USE system").unwrap();
+    assert_eq!(
+        column_of(&s, "SELECT CAST(n AS STRING) FROM capabilities", 0),
+        ["9"]
+    );
+    assert_eq!(
+        column_of(&s, "SELECT CAST(n AS STRING) FROM mine", 0),
+        ["9"]
+    );
+    // The system table is still there under its qualified name.
+    assert!(!column_of(&s, "SELECT name FROM system.capabilities LIMIT 1", 0).is_empty());
+}
+
+#[test]
+fn use_catalog_and_namespace_is_one_step() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE DATABASE other_db").unwrap();
+    run(&s, "USE system").unwrap();
+    run(&s, "USE spark_catalog.other_db").unwrap();
+    assert_eq!(
+        column_of(&s, "SELECT current_catalog()", 0),
+        ["spark_catalog"]
+    );
+    assert_eq!(column_of(&s, "SELECT current_schema()", 0), ["other_db"]);
+}
+
+#[test]
+fn a_view_over_a_system_table_and_global_temp_views_work_under_system() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE VIEW cv AS SELECT name FROM system.capabilities").unwrap();
+    run(&s, "CREATE GLOBAL TEMP VIEW gv AS SELECT 1 AS x").unwrap();
+    run(&s, "USE system").unwrap();
+    assert!(!column_of(&s, "SELECT * FROM spark_catalog.default.cv", 0).is_empty());
+    assert_eq!(column_of(&s, "DESCRIBE global_temp.gv", 0), ["x"]);
+    assert_eq!(
+        column_of(&s, "SELECT CAST(x AS STRING) FROM global_temp.gv", 0),
+        ["1"]
+    );
+}
+
+#[test]
+fn show_databases_lists_nothing_under_system_and_use_namespace_can_name_the_session_catalog() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE DATABASE other_db").unwrap();
+    run(&s, "USE system").unwrap();
+    assert!(column_of(&s, "SHOW DATABASES", 0).is_empty());
+    assert!(column_of(&s, "SHOW SCHEMAS", 0).is_empty());
+    assert!(
+        run(&s, "USE NAMESPACE x")
+            .unwrap_err()
+            .contains("SCHEMA_NOT_FOUND")
+    );
+    run(&s, "USE NAMESPACE spark_catalog.other_db").unwrap();
+    assert_eq!(
+        column_of(&s, "SELECT current_catalog()", 0),
+        ["spark_catalog"]
+    );
+    assert_eq!(column_of(&s, "SELECT current_schema()", 0), ["other_db"]);
+    assert!(column_of(&s, "SHOW DATABASES", 0).contains(&"other_db".to_owned()));
+}
+
+#[test]
+fn global_temp_views_can_be_created_and_dropped_under_system_and_stored_functions_need_the_session_catalog()
+ {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE FUNCTION f() RETURNS INT RETURN 1").unwrap();
+    run(&s, "USE system").unwrap();
+    run(&s, "CREATE GLOBAL TEMP VIEW gv2 AS SELECT 1 AS x").unwrap();
+    assert_eq!(
+        column_of(&s, "SELECT CAST(x AS STRING) FROM global_temp.gv2", 0),
+        ["1"]
+    );
+    run(&s, "DROP VIEW global_temp.gv2").unwrap();
+    // A two-part call is a namespace of the current catalog, and system has none.
+    assert!(
+        run(&s, "SELECT default.f()")
+            .unwrap_err()
+            .contains("ROUTINE")
+    );
+    run(&s, "USE spark_catalog").unwrap();
+    assert_eq!(
+        column_of(&s, "SELECT CAST(default.f() AS STRING)", 0),
+        ["1"]
+    );
+    run(&s, "USE system").unwrap();
+    assert_eq!(
+        column_of(&s, "SELECT CAST(spark_catalog.default.f() AS STRING)", 0),
+        ["1"]
+    );
+}
+
+#[test]
+fn qualified_views_functions_and_global_temp_listings_follow_their_defining_catalog_under_system() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE FUNCTION g() RETURNS INT RETURN 1").unwrap();
+    run(&s, "CREATE FUNCTION f() RETURNS INT RETURN default.g()").unwrap();
+    run(&s, "CREATE VIEW v AS SELECT 'c' AS value").unwrap();
+    run(&s, "CREATE GLOBAL TEMP VIEW gv3 AS SELECT 1 AS x").unwrap();
+    run(&s, "USE system").unwrap();
+    assert_eq!(
+        column_of(&s, "SELECT CAST(spark_catalog.default.f() AS STRING)", 0),
+        ["1"]
+    );
+    assert_eq!(
+        column_of(&s, "SELECT value FROM spark_catalog.default.v", 0),
+        ["c"]
+    );
+    assert!(column_of(&s, "SHOW VIEWS IN global_temp", 1).contains(&"gv3".to_owned()));
+    assert!(!column_of(&s, "SHOW TABLES IN global_temp", 1).is_empty());
+    // A path with only function schemas finds no system table by its bare name.
+    run(&s, "SET spark.sql.path.enabled=true").unwrap();
+    run(&s, "SET PATH = system.session, system.builtin").unwrap();
+    assert!(
+        run(&s, "SELECT * FROM capabilities")
+            .unwrap_err()
+            .contains("TABLE_OR_VIEW_NOT_FOUND")
+    );
+    assert!(!column_of(&s, "SELECT name FROM system.capabilities LIMIT 1", 0).is_empty());
+}
+
+#[test]
+fn a_view_created_under_system_over_a_system_table_stays_readable_and_scripts_have_a_start_time() {
+    let s = Session::new().unwrap();
+    run(&s, "USE system").unwrap();
+    run(
+        &s,
+        "CREATE VIEW spark_catalog.default.sv AS SELECT name FROM capabilities",
+    )
+    .unwrap();
+    assert!(!column_of(&s, "SELECT * FROM spark_catalog.default.sv", 0).is_empty());
+    run(&s, "USE spark_catalog").unwrap();
+    run(&s, "BEGIN SELECT 1; END").unwrap();
+    let started = column_of(
+        &s,
+        "SELECT CAST(started_at IS NOT NULL AS STRING) FROM system.queries WHERE query_text LIKE 'BEGIN%'",
+        0,
+    );
+    assert!(
+        !started.is_empty() && started.iter().all(|v| v == "true"),
+        "{started:?}"
+    );
+}
+
+#[test]
+fn listing_global_temp_is_authorized_in_the_session_catalog() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE GLOBAL TEMP VIEW gv4 AS SELECT 1 AS x").unwrap();
+    run(&s, "USE system").unwrap();
+    assert!(column_of(&s, "SHOW VIEWS IN global_temp", 1).contains(&"gv4".to_owned()));
+}
+
+#[test]
+fn builtin_qualified_calls_in_a_view_resolve_with_or_without_system() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE VIEW vq AS SELECT builtin.upper('a') AS u").unwrap();
+    assert_eq!(column_of(&s, "SELECT u FROM vq", 0), ["A"]);
+    run(&s, "USE system").unwrap();
+    assert_eq!(
+        column_of(&s, "SELECT u FROM spark_catalog.default.vq", 0),
+        ["A"]
+    );
+}
+
+#[test]
+fn a_missing_table_inside_a_view_is_named_as_written_unless_system_is_current() {
+    let s = Session::new().unwrap();
+    run(&s, "CREATE TABLE gone (a INT)").unwrap();
+    run(&s, "CREATE VIEW vm AS SELECT a FROM default.gone").unwrap();
+    run(&s, "DROP TABLE gone").unwrap();
+    let e = run(&s, "SELECT * FROM vm").unwrap_err();
+    assert!(
+        e.contains("TABLE_OR_VIEW_NOT_FOUND")
+            && e.contains("`default`.`gone`")
+            && !e.contains("`spark_catalog`.`default`.`gone`"),
+        "{e}"
+    );
+}
+
+#[test]
+fn listings_overrides_and_dataframe_writes_with_an_explicit_catalog_work_under_system() {
+    use arrow_array::{Int64Array, RecordBatch};
+    use arrow_schema::{DataType, Field, Schema};
+    use std::sync::Arc;
+    let s = Session::new().unwrap();
+    run(&s, "CREATE TABLE t (a BIGINT)").unwrap();
+    run(&s, "CREATE TEMPORARY VIEW tv AS SELECT 1 AS x").unwrap();
+    run(&s, "CREATE GLOBAL TEMP VIEW gv5 AS SELECT 1 AS x").unwrap();
+    run(&s, "USE system").unwrap();
+    // Temporary views stay listed.
+    assert!(column_of(&s, "SHOW TABLES LIKE 'tv'", 1).contains(&"tv".to_owned()));
+    // SHOW COLUMNS with a FROM namespace reaches the named table.
+    assert_eq!(
+        column_of(&s, "SHOW COLUMNS IN t FROM spark_catalog.default", 0),
+        ["a"]
+    );
+    assert_eq!(
+        column_of(&s, "SHOW COLUMNS IN gv5 FROM global_temp", 0),
+        ["x"]
+    );
+    // A DataFrame write that names the catalog works; a bare or namespace-only name does not.
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int64Array::from(vec![4]))],
+    )
+    .unwrap();
+    s.register_batches("src", schema, vec![batch]).unwrap();
+    let write = |name: &str| block_on(async { s.table("src").write().insert_into(name).await });
+    assert!(write("spark_catalog.default.t").is_ok());
+    assert!(write("t").is_err());
+    assert!(write("default.t").is_err());
+    run(&s, "USE spark_catalog").unwrap();
+    assert_eq!(column_of(&s, "SELECT CAST(a AS STRING) FROM t", 0), ["4"]);
+}
+
+#[test]
+fn a_view_frozen_path_picks_the_first_matching_entry_system_before_a_stored_schema() {
+    let s = Session::builder().build().unwrap();
+    // A stored table with a system table's name, later in the path than `system`.
+    run(&s, "SET spark.sql.path.enabled=true").unwrap();
+    run(&s, "CREATE TABLE capabilities (name STRING)").unwrap();
+    run(&s, "INSERT INTO capabilities VALUES ('stored')").unwrap();
+    run(&s, "USE system").unwrap();
+    run(&s, "SET PATH = CURRENT_SCHEMA, spark_catalog.default").unwrap();
+    run(
+        &s,
+        "CREATE VIEW spark_catalog.default.v AS SELECT name FROM capabilities",
+    )
+    .unwrap();
+    // The view reads the system table, as it did when it was created.
+    let mut names = column_of(&s, "SELECT name FROM spark_catalog.default.v", 0);
+    let mut oracle = column_of(&s, "SELECT name FROM system.capabilities", 0);
+    names.sort();
+    oracle.sort();
+    assert!(!oracle.is_empty() && !oracle.contains(&"stored".to_owned()));
+    assert_eq!(names, oracle);
+}
+
+#[test]
+fn a_top_level_bare_read_follows_the_path_order_between_system_and_a_stored_view() {
+    let s = Session::builder().build().unwrap();
+    run(&s, "SET spark.sql.path.enabled=true").unwrap();
+    run(
+        &s,
+        "CREATE VIEW spark_catalog.default.capabilities AS SELECT 'wrong' AS name",
+    )
+    .unwrap();
+    run(&s, "USE system").unwrap();
+    run(&s, "SET PATH = CURRENT_SCHEMA, spark_catalog.default").unwrap();
+    // `system` comes first in the path: the stored view of the same name does not take the read.
+    let mut names = column_of(&s, "SELECT name FROM capabilities", 0);
+    let mut oracle = column_of(&s, "SELECT name FROM system.capabilities", 0);
+    names.sort();
+    oracle.sort();
+    assert!(!oracle.is_empty() && !oracle.contains(&"wrong".to_owned()));
+    assert_eq!(names, oracle);
+    // With the stored schema first, it does.
+    run(&s, "SET PATH = spark_catalog.default, CURRENT_SCHEMA").unwrap();
+    assert_eq!(column_of(&s, "SELECT name FROM capabilities", 0), ["wrong"]);
+}
+
+#[test]
+fn a_stored_table_before_system_in_the_path_is_read_by_its_bare_name() {
+    let s = Session::builder().build().unwrap();
+    run(&s, "SET spark.sql.path.enabled=true").unwrap();
+    run(&s, "CREATE TABLE capabilities (name STRING)").unwrap();
+    run(&s, "INSERT INTO capabilities VALUES ('stored')").unwrap();
+    run(&s, "USE system").unwrap();
+    // `system` first: the system table. The stored schema first: the stored table.
+    run(&s, "SET PATH = CURRENT_SCHEMA, spark_catalog.default").unwrap();
+    assert!(!column_of(&s, "SELECT name FROM capabilities", 0).contains(&"stored".to_owned()));
+    run(&s, "SET PATH = spark_catalog.default, CURRENT_SCHEMA").unwrap();
+    assert_eq!(
+        column_of(&s, "SELECT name FROM capabilities", 0),
+        ["stored"]
+    );
+}
+
+#[test]
+fn show_columns_and_drop_table_reach_what_their_names_stand_for_under_system() {
+    let s = Session::builder().build().unwrap();
+    run(&s, "CREATE TEMPORARY VIEW tv AS SELECT 1 AS x").unwrap();
+    run(&s, "USE system").unwrap();
+    // SHOW COLUMNS lists a system table's columns, as DESCRIBE does.
+    let columns = column_of(&s, "SHOW COLUMNS IN system.queries", 0);
+    let described = column_of(&s, "DESCRIBE system.queries", 0);
+    assert!(!columns.is_empty());
+    assert_eq!(columns, described);
+    // A temporary view resolves before the catalog: DROP TABLE reaches it, a system table stays reserved.
+    assert_eq!(
+        block_on(async { s.sql("DROP TABLE system.queries").await.err() })
+            .map(|e| e.error_class().name().to_owned())
+            .as_deref(),
+        Some("KRISHIV_RESERVED_NAME")
+    );
+    run(&s, "DROP TABLE tv").unwrap();
+    let after = block_on(async { s.sql("SELECT * FROM tv").await?.collect().await.map(|_| ()) });
+    assert_eq!(
+        after
+            .err()
+            .map(|e| e.error_class().name().to_owned())
+            .as_deref(),
+        Some("TABLE_OR_VIEW_NOT_FOUND")
+    );
+}
+
+#[test]
+fn a_v2_write_target_is_checked_in_the_current_catalog() {
+    use arrow_array::{Int64Array, RecordBatch};
+    use arrow_schema::{DataType, Field, Schema};
+    use std::sync::Arc;
+    let s = Session::builder().build().unwrap();
+    run(&s, "CREATE TABLE t (a BIGINT)").unwrap();
+    run(&s, "USE system").unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int64Array::from(vec![1]))],
+    )
+    .unwrap();
+    s.register_batches("src", schema, vec![batch]).unwrap();
+    // A bare or namespace-only target is not a stored table under `system`; a qualified one is.
+    assert!(block_on(async { s.table("src").write_to_table("t").append().await }).is_err());
+    assert!(block_on(async { s.table("src").write_to_table("default.t").append().await }).is_err());
+    block_on(async {
+        s.table("src")
+            .write_to_table("spark_catalog.default.t")
+            .append()
+            .await
+    })
+    .unwrap();
+}
+
+#[test]
+fn errors_that_print_a_raw_value_are_masked_through_the_real_error_parameters() {
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("krishiv.system.queryText.literals", "mask")
+        .unwrap();
+    s.conf().set("spark.sql.ansi.enabled", "true").unwrap();
+    for sql in [
+        "SELECT from_json('{\"a\":\"canarysecret\",', 'a STRING', map('mode', 'FAILFAST'))",
+        "SELECT parse_url('http://canarysecret host/x', 'HOST')",
+        "SELECT raise_error('canarysecret')",
+        "SELECT next_day(DATE '2024-01-01', 'canarysecret')",
+        "SELECT map('canarysecret', 1, 'canarysecret', 2)",
+        "SELECT mask('canarysecret', 'XX')",
+        "SELECT lag('canarysecret')",
+    ] {
+        assert!(run_all(&s, sql).is_err(), "{sql}");
+    }
+    let messages = strings_in(
+        &s,
+        "SELECT COALESCE(error_message, '') FROM system.queries WHERE error_class IS NOT NULL",
+    );
+    assert_eq!(messages.len(), 7, "{messages:?}");
+    assert!(
+        messages.iter().all(|m| !m.contains("canarysecret")),
+        "{messages:?}"
+    );
+}
+
+#[test]
+fn a_dataframe_writer_never_creates_a_stored_table_through_a_temporary_name_under_system() {
+    use arrow_array::{Int64Array, RecordBatch};
+    use arrow_schema::{DataType, Field, Schema};
+    use std::sync::Arc;
+    let s = Session::builder().build().unwrap();
+    run(&s, "CREATE TEMPORARY VIEW tv AS SELECT 1 AS x").unwrap();
+    run(&s, "USE system").unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int64Array::from(vec![1]))],
+    )
+    .unwrap();
+    s.register_batches("src", schema, vec![batch]).unwrap();
+    assert!(block_on(async { s.table("src").write_to_table("tv").create().await }).is_err());
+    run(&s, "USE spark_catalog").unwrap();
+    assert!(run(&s, "DESCRIBE spark_catalog.default.tv").is_err());
+}
+
+#[test]
+fn show_columns_with_a_from_namespace_reaches_a_system_table() {
+    let s = Session::new().unwrap();
+    let expected = column_of(&s, "DESCRIBE system.queries", 0);
+    assert!(!expected.is_empty());
+    for sql in [
+        "SHOW COLUMNS IN queries FROM system",
+        "SHOW COLUMNS IN system.queries FROM system",
+    ] {
+        assert_eq!(strings_in(&s, sql), expected, "{sql}");
+    }
+}
+
+#[test]
+fn show_columns_with_a_conflicting_qualifier_and_from_system_is_refused() {
+    let s = Session::new().unwrap();
+    let e = run_all(&s, "SHOW COLUMNS IN default.queries FROM system").unwrap_err();
+    assert!(e.contains("SHOW_COLUMNS_WITH_CONFLICT_NAMESPACE"), "{e}");
+}
+
+#[test]
+fn a_message_with_many_unmatched_apostrophes_is_masked() {
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("krishiv.system.queryText.literals", "mask")
+        .unwrap();
+    let name = " 'x".repeat(40_000);
+    // The scan is linear by construction (one closing-quote table); the runner's test timeout is the guard
+    // against a regression to rescanning.
+    assert!(run_all(&s, &format!("SELECT `{name}` FROM (SELECT 1 AS a)")).is_err());
+    let messages = strings_in(
+        &s,
+        "SELECT COALESCE(error_message, '') FROM system.queries WHERE error_class IS NOT NULL",
+    );
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert!(
+        !messages[0].contains(" 'x"),
+        "an unmatched quote run was left unmasked"
+    );
+}
+
+#[test]
+fn a_short_raw_value_is_masked_as_a_whole_token() {
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("krishiv.system.queryText.literals", "mask")
+        .unwrap();
+    assert!(run_all(&s, "SELECT raise_error('xy')").is_err());
+    let m = strings_in(
+        &s,
+        "SELECT COALESCE(error_message, '') FROM system.queries WHERE error_class IS NOT NULL",
+    );
+    assert_eq!(m.len(), 1, "{m:?}");
+    assert!(
+        !m[0]
+            .split(|c: char| !c.is_alphanumeric())
+            .any(|w| w == "xy"),
+        "{m:?}"
     );
 }

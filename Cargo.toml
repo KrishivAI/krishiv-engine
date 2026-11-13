@@ -3,12 +3,12 @@ resolver = "3"
 members = ["crates/*", "xtask"]
 
 [workspace.package]
-version = "0.2.0-alpha"
+version = "0.2.0"
 edition = "2024"
 # MSRV = latest stable (1.99) minus two minor releases.
 rust-version = "1.97"
-license = "Apache-2.0"                                   # ADR 0033
-repository = "https://github.com/krishiv/krishiv-engine"
+license = "Apache-2.0"                                     # ADR 0033
+repository = "https://github.com/KrishivAI/krishiv-engine"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

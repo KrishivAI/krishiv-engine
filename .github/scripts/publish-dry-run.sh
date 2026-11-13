@@ -1,24 +1,16 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
-# P2-T147: `cargo publish --dry-run` for the `krishiv` crate and the workspace
-# crates it depends on, WITHOUT changing what the repository may publish.
-#
-# Every crate in this repository carries `publish = false` and path
-# dependencies without versions (RELEASING.md): nothing can be published from
-# it. A dry run needs the opposite, so it runs on a scratch copy of the tracked
-# files in which, for the dependency closure of `krishiv` (all features):
-#   * `publish = false` is dropped, and
-#   * path dependencies get `version = "=<workspace version>"`.
-# That is exactly the change the owner makes to enable a real release. The
-# repository itself is not touched. `--dry-run` packages every crate, verifies
-# it builds from its packaged files against its (also packaged) workspace
-# dependencies, and stops before any upload.
+# `cargo publish --dry-run` for the crates published to crates.io, in the order of
+# `.github/scripts/publish-crates.txt` (the same list publish-crates.yml uses). It:
+#   * checks that exactly those crates carry `publish = true` and every other crate `publish = false`,
+#   * checks that no crate depends (normal or build) on a crate later in the list or outside it,
+#   * packages and verifies all of them together (cargo resolves the workspace crates against each
+#     other, so no crate needs to be on crates.io yet), stopping before any upload.
 #
 #   publish-dry-run.sh [--package-only]
 #
-# `--package-only` runs `cargo package` instead (the same packaging and build
-# verification, no `publish` command): for machines whose policy forbids
-# `cargo publish` even with --dry-run.
+# `--package-only` runs `cargo package` instead (the same packaging and build verification, no
+# `publish` command): for machines whose policy forbids `cargo publish` even with --dry-run.
 set -euo pipefail
 mode=publish
 case "${1:-}" in
@@ -27,52 +19,35 @@ case "${1:-}" in
   *) echo "usage: publish-dry-run.sh [--package-only]" >&2; exit 2 ;;
 esac
 repo=$(cd "$(dirname "$0")/../.." && pwd)
-work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
-
 cd "$repo"
-git ls-files -z | tar --null -T - -cf - | tar -xf - -C "$work"
+list=.github/scripts/publish-crates.txt
 
-# The crates `krishiv` needs: itself and every workspace crate it depends on
-# through normal or build dependencies, optional ones included.
-mapfile -t crates < <(cargo tree -p krishiv --all-features -e normal,build --prefix none \
-  | awk '$1 ~ /^krishiv/ { print $1 }' | sort -u)
-printf 'dry-run set: %s\n' "${crates[*]}"
-[ "${#crates[@]}" -ge 2 ] || { echo "::error::dependency closure of krishiv not found"; exit 1; }
-version=$(cargo metadata --no-deps --format-version 1 \
-  | python3 -I -c 'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "krishiv"))')
-
-python3 -I - "$work" "$version" "${crates[@]}" <<'PY'
-import re
-import sys
-from pathlib import Path
-
-root, version, *crates = sys.argv[1:]
-# path dependency on a workspace crate, in a single-line inline table
-dep = re.compile(r'^(\s*"?krishiv[\w-]*"?\s*=\s*\{[^}]*?path\s*=\s*"[^"]+")(\s*[,}])')
-for name in crates:
-    manifest = Path(root) / "crates" / name / "Cargo.toml"
-    out, table, saw_publish = [], "", False
-    for line in manifest.read_text().splitlines():
-        header = re.match(r"^\s*\[([^\]]+)\]\s*$", line)
-        if header:
-            table = header.group(1)
-        if table == "package" and re.match(r"^publish\s*=\s*false\s*$", line):
-            saw_publish = True
-            continue
-        # Dev-dependencies are dropped from a published manifest when they
-        # have no version; normal and build ones must carry one.
-        if table in ("dependencies", "build-dependencies") or (table.endswith(".dependencies") and "dev" not in table):
-            line = dep.sub(lambda m: f'{m.group(1)}, version = "={version}"{m.group(2)}', line, count=1)
-        out.append(line)
-    assert saw_publish, f"{name}: no `publish = false` to drop (the guard moved?)"
-    manifest.write_text("\n".join(out) + "\n")
-PY
+cargo metadata --no-deps --format-version 1 | python3 -I -c '
+import json, sys
+order = [line.strip() for line in open(sys.argv[1]) if line.strip()]
+pos = {name: i for i, name in enumerate(order)}
+bad = []
+packages = json.load(sys.stdin)["packages"]
+for missing in sorted(set(order) - {p["name"] for p in packages}):
+    bad.append(f"{missing}: in the list but not in the workspace")
+for p in packages:
+    name = p["name"]
+    if (p["publish"] != []) != (name in pos):  # `publish = false` shows as []
+        bad.append(f"{name}: publish must be {name in pos}")
+    if name not in pos:
+        continue
+    for d in p["dependencies"]:
+        dep = d["name"]
+        if dep.startswith("krishiv") and d["kind"] != "dev" and (dep not in pos or pos[dep] > pos[name]):
+            bad.append(f"{name} depends on {dep}, which is not published before it")
+if bad:
+    print("\n".join(bad), file=sys.stderr)
+    sys.exit(1)
+print("publish order ok:", " ".join(order))
+' "$list"
 
 args=()
-for c in "${crates[@]}"; do args+=(-p "$c"); done
-cd "$work"
-# The scratch copy shares the repository's lock file (versions are unchanged).
+while read -r c; do [ -n "$c" ] && args+=(-p "$c"); done < "$list"
 if [ "$mode" = publish ]; then
   cargo publish --dry-run --locked "${args[@]}"
 else

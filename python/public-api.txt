@@ -1,0 +1,1434 @@
+## __init__.py
+__all__
+__all__ = ['ProfileView', 'SparkSession', '__version__', 'build_info', 'metrics', 'session', 'ui']
+def build_info() -> dict[str, str]
+def metrics() -> list[dict[str, Any]]
+def session() -> SparkSession
+## _native.pyi
+AnonymousPythonUdf.@property def version(self) -> int
+AnonymousPythonUdf.def __new__(cls, name: str, eval_type: int, return_type: str, deterministic: bool, thread_safe: bool, wrapper: object) -> AnonymousPythonUdf
+AnonymousPythonUdf.def call(self, args: list[Column]) -> Column
+ArrowStream.@property def consumed(self) -> bool
+ArrowStream.@staticmethod def from_arrow(data: object) -> ArrowStream
+ArrowStream.def __arrow_c_schema__(self) -> object
+ArrowStream.def __arrow_c_stream__(self, requested_schema: object | None=...) -> object
+ArrowStream.def check_error(self) -> None
+Column.def add(self, other: Column) -> Column
+Column.def alias(self, name: str) -> Column
+Column.def and_(self, other: Column) -> Column
+Column.def between(self, low: Column, high: Column) -> Column
+Column.def cast(self, to: str) -> Column
+Column.def div(self, other: Column) -> Column
+Column.def drop_fields(self, names: list[str]) -> Column
+Column.def eq(self, other: Column) -> Column
+Column.def eq_null_safe(self, other: Column) -> Column
+Column.def ge(self, other: Column) -> Column
+Column.def get_field(self, name: str) -> Column
+Column.def gt(self, other: Column) -> Column
+Column.def invert(self) -> Column
+Column.def is_not_null(self) -> Column
+Column.def is_null(self) -> Column
+Column.def isin(self, values: list[Column]) -> Column
+Column.def le(self, other: Column) -> Column
+Column.def like(self, pattern: str) -> Column
+Column.def lt(self, other: Column) -> Column
+Column.def mul(self, other: Column) -> Column
+Column.def ne(self, other: Column) -> Column
+Column.def neg(self) -> Column
+Column.def or_(self, other: Column) -> Column
+Column.def over(self, window: WindowSpec) -> Column
+Column.def rem(self, other: Column) -> Column
+Column.def sort_order(self, ascending: bool, nulls_first: bool) -> Column
+Column.def sub(self, other: Column) -> Column
+Column.def try_cast(self, to: str) -> Column
+Column.def with_field(self, name: str, value: Column) -> Column
+DataFrame.def agg(self, cols: list[Column]) -> DataFrame
+DataFrame.def alias(self, alias: str) -> DataFrame
+DataFrame.def cache(self) -> DataFrame
+DataFrame.def col(self, name: str) -> Column
+DataFrame.def count(self) -> int
+DataFrame.def create_or_replace_temp_view(self, name: str) -> None
+DataFrame.def distinct(self) -> DataFrame
+DataFrame.def except_all(self, other: DataFrame) -> DataFrame
+DataFrame.def execute(self) -> ArrowStream
+DataFrame.def explain(self, mode: str, json: bool=...) -> str
+DataFrame.def filter(self, condition: Column) -> DataFrame
+DataFrame.def filter_expr(self, condition: str) -> DataFrame
+DataFrame.def group_by(self, cols: list[Column]) -> GroupedData
+DataFrame.def hint(self, name: str, params: list[Column]) -> DataFrame
+DataFrame.def intersect(self, other: DataFrame) -> DataFrame
+DataFrame.def intersect_all(self, other: DataFrame) -> DataFrame
+DataFrame.def is_cached(self) -> bool
+DataFrame.def join(self, other: DataFrame, on: Column | None=..., using: list[str] | None=..., how: str=...) -> DataFrame
+DataFrame.def limit(self, n: int) -> DataFrame
+DataFrame.def offset(self, n: int) -> DataFrame
+DataFrame.def order_by(self, cols: list[Column]) -> DataFrame
+DataFrame.def persist(self, use_disk: bool, use_memory: bool, use_offheap: bool, deserialized: bool, replication: int) -> DataFrame
+DataFrame.def sample(self, with_replacement: bool, fraction: float, seed: int) -> DataFrame
+DataFrame.def schema(self) -> list[tuple[str, str, bool]]
+DataFrame.def select(self, cols: list[Column]) -> DataFrame
+DataFrame.def select_expr(self, exprs: list[str]) -> DataFrame
+DataFrame.def subtract(self, other: DataFrame) -> DataFrame
+DataFrame.def to_df(self, names: list[str]) -> DataFrame
+DataFrame.def union(self, other: DataFrame) -> DataFrame
+DataFrame.def union_by_name(self, other: DataFrame, allow_missing_columns: bool) -> DataFrame
+DataFrame.def unpersist(self, blocking: bool=...) -> DataFrame
+DataFrame.def unpivot(self, ids: list[Column], values: list[tuple[str, Column]], variable: str, value: str) -> DataFrame
+DataFrame.def with_column(self, name: str, value: Column) -> DataFrame
+DataFrame.def write(self, format: str, mode: str, path: str, options: list[tuple[str, str]] | None=..., partition_by: list[str] | None=..., bucket_by: tuple[int, list[str]] | None=..., sort_by: list[str] | None=...) -> None
+DataFrame.def write_table(self, insert_into: bool, table: str, format: str | None, mode: str, options: list[tuple[str, str]] | None=..., partition_by: list[str] | None=..., bucket_by: tuple[int, list[str]] | None=..., sort_by: list[str] | None=...) -> None
+DataFrame.def write_to_table(self, table: str, mode: str, provider: str | None=..., options: list[tuple[str, str]] | None=..., properties: list[tuple[str, str]] | None=..., partitioned_by: list[str] | None=..., cluster_by: list[str] | None=..., condition: str | None=...) -> None
+GroupedData.def agg(self, cols: list[Column]) -> DataFrame
+Session.@staticmethod def is_dataframe_table(name: str) -> bool
+Session.def __new__(cls, config: list[tuple[str, str]] | None=...) -> Session
+Session.def cache_reserved(self) -> int
+Session.def clear_cache(self) -> None
+Session.def conf_get(self, key: str) -> str | None
+Session.def conf_is_modifiable(self, key: str) -> bool
+Session.def conf_set(self, key: str, value: str) -> None
+Session.def conf_unset(self, key: str) -> None
+Session.def create_dataframe(self, data: object) -> DataFrame
+Session.def drop_temp_view(self, name: str) -> bool
+Session.def metrics(self) -> list[dict[str, object]]
+Session.def read(self, format: str, paths: list[str], options: list[tuple[str, str]] | None=...) -> DataFrame
+Session.def refresh_files(self) -> None
+Session.def refresh_table(self, name: str) -> None
+Session.def register_python_udf(self, name: str, eval_type: int, return_type: str, deterministic: bool, thread_safe: bool, wrapper: object) -> int
+Session.def sql(self, query: str) -> DataFrame
+Session.def table(self, name: str) -> DataFrame
+Session.def temp_table_names(self) -> list[str]
+Session.def uncache_table(self, name: str) -> None
+WindowSpec.def __new__(cls) -> WindowSpec
+WindowSpec.def order_by(self, cols: list[Column]) -> WindowSpec
+WindowSpec.def partition_by(self, cols: list[Column]) -> WindowSpec
+WindowSpec.def range_between(self, start: int, end: int) -> WindowSpec
+WindowSpec.def rows_between(self, start: int, end: int) -> WindowSpec
+__all__
+__all__ = ['AnonymousPythonUdf', 'ArrowStream', 'Column', 'DataFrame', 'GroupedData', 'Session', 'WindowSpec', '__allocator__', '__version__', '_udf_pool_shutdown', '_udf_runner_conf', 'call_function', 'col', 'count_distinct', 'count_star', 'expr', 'lit', 'map_literal']
+class AnonymousPythonUdf()
+class ArrowStream()
+class Column()
+class DataFrame()
+class GroupedData()
+class Session()
+class WindowSpec()
+def call_function(name: str, args: list[Column]) -> Column
+def col(name: str) -> Column
+def count_distinct(cols: list[Column]) -> Column
+def count_star() -> Column
+def expr(text: str) -> Column
+def lit(value: object) -> Column
+def map_literal(pairs: list[tuple[str, str]]) -> Column
+## errors.py
+DataFrameQueryContext.def __init__(self, callSite: str='', summary: str='') -> None
+DataFrameQueryContext.def callSite(self) -> str
+DataFrameQueryContext.def contextType(self) -> QueryContextType
+DataFrameQueryContext.def fragment(self) -> str
+DataFrameQueryContext.def objectName(self) -> str
+DataFrameQueryContext.def objectType(self) -> str
+DataFrameQueryContext.def startIndex(self) -> int
+DataFrameQueryContext.def stopIndex(self) -> int
+DataFrameQueryContext.def summary(self) -> str
+KrishivException
+PySparkAssertionError.def __init__(self, message: str | None=None, errorClass: str | None=None, messageParameters: dict[str, Any] | None=None, data: Iterable[Any] | None=None) -> None
+PySparkException.def __init__(self, message: str | None=None, errorClass: str | None=None, messageParameters: dict[str, Any] | None=None, contexts: list[QueryContext] | list[tuple[Any, ...]] | None=None, sqlState: str | None=None, rendered: str | None=None) -> None
+PySparkException.def __str__(self) -> str
+PySparkException.def getCondition(self) -> str | None
+PySparkException.def getErrorClass(self) -> str | None
+PySparkException.def getMessage(self) -> str
+PySparkException.def getMessageParameters(self) -> dict[str, Any] | None
+PySparkException.def getQueryContext(self) -> list[QueryContext]
+PySparkException.def getSqlState(self) -> str | None
+QueryContext.@abstractmethod def callSite(self) -> str
+QueryContext.@abstractmethod def contextType(self) -> QueryContextType
+QueryContext.@abstractmethod def fragment(self) -> str
+QueryContext.@abstractmethod def objectName(self) -> str
+QueryContext.@abstractmethod def objectType(self) -> str
+QueryContext.@abstractmethod def startIndex(self) -> int
+QueryContext.@abstractmethod def stopIndex(self) -> int
+QueryContext.@abstractmethod def summary(self) -> str
+QueryContextType.DataFrame
+QueryContextType.SQL
+SqlQueryContext.def __init__(self, fragment: str='', start: int=0, stop: int=0, objectType: str='', objectName: str='', callSite: str='', summary: str='') -> None
+SqlQueryContext.def callSite(self) -> str
+SqlQueryContext.def contextType(self) -> QueryContextType
+SqlQueryContext.def fragment(self) -> str
+SqlQueryContext.def objectName(self) -> str
+SqlQueryContext.def objectType(self) -> str
+SqlQueryContext.def startIndex(self) -> int
+SqlQueryContext.def stopIndex(self) -> int
+SqlQueryContext.def summary(self) -> str
+class AnalysisException(PySparkException)
+class ArithmeticException(PySparkException)
+class ArrayIndexOutOfBoundsException(PySparkException)
+class DataFrameQueryContext(QueryContext)
+class DateTimeException(PySparkException)
+class IllegalArgumentException(PySparkException)
+class NumberFormatException(IllegalArgumentException)
+class ParseException(AnalysisException)
+class PySparkAssertionError(PySparkException, AssertionError)
+class PySparkAttributeError(PySparkException, AttributeError)
+class PySparkException(Exception)
+class PySparkImportError(PySparkException, ImportError)
+class PySparkIndexError(PySparkException, IndexError)
+class PySparkKeyError(PySparkException, KeyError)
+class PySparkNotImplementedError(PySparkException, NotImplementedError)
+class PySparkRuntimeError(PySparkException, RuntimeError)
+class PySparkTypeError(PySparkException, TypeError)
+class PySparkValueError(PySparkException, ValueError)
+class QueryContext(ABC)
+class QueryContextType(Enum)
+class QueryExecutionException(PySparkException)
+class SparkNoSuchElementException(PySparkException)
+class SparkRuntimeException(PySparkException)
+class SparkUpgradeException(PySparkException)
+class SqlQueryContext(QueryContext)
+class UnknownException(PySparkException)
+class UnsupportedOperationException(PySparkException)
+def not_expected_type(arg_name: str, expected: str, value: object) -> PySparkTypeError
+def not_implemented(feature: str) -> PySparkNotImplementedError
+def unsupported_feature(feature: str) -> UnsupportedOperationException
+## sql/__init__.py
+__all__
+__all__ = ['Catalog', 'Column', 'DataFrame', 'DataFrameNaFunctions', 'DataFrameReader', 'DataFrameStatFunctions', 'DataFrameWriter', 'DataFrameWriterV2', 'GroupedData', 'Row', 'RuntimeConfig', 'SparkSession', 'UDFRegistration', 'Window', 'WindowSpec', 'functions', 'types']
+## sql/_generated_functions.py
+__all__
+__all__ = ['abs', 'acos', 'acosh', 'add_months', 'aes_decrypt', 'aes_encrypt', 'approx_count_distinct', 'approx_percentile', 'array', 'array_append', 'array_compact', 'array_contains', 'array_distinct', 'array_except', 'array_insert', 'array_intersect', 'array_join', 'array_max', 'array_min', 'array_position', 'array_prepend', 'array_remove', 'array_repeat', 'array_size', 'array_union', 'arrays_overlap', 'arrays_zip', 'ascii', 'asin', 'asinh', 'assert_true', 'atan', 'atan2', 'atanh', 'avg', 'base64', 'bin', 'bit_and', 'bit_count', 'bit_get', 'bit_length', 'bit_or', 'bit_xor', 'bitwiseNOT', 'bitwise_not', 'bool_and', 'bool_or', 'bround', 'btrim', 'cardinality', 'cbrt', 'ceil', 'ceiling', 'char', 'char_length', 'character_length', 'coalesce', 'collation', 'collect_list', 'collect_set', 'concat_ws', 'contains', 'conv', 'corr', 'cos', 'cosh', 'cot', 'count_if', 'covar_pop', 'covar_samp', 'crc32', 'create_map', 'csc', 'cume_dist', 'curdate', 'current_catalog', 'current_database', 'current_date', 'current_path', 'current_schema', 'current_timestamp', 'current_timezone', 'current_user', 'date_add', 'date_diff', 'date_format', 'date_from_unix_date', 'date_part', 'date_sub', 'date_trunc', 'dateadd', 'datediff', 'datepart', 'day', 'dayname', 'dayofmonth', 'dayofweek', 'dayofyear', 'decode', 'degrees', 'dense_rank', 'e', 'element_at', 'elt', 'encode', 'endswith', 'equal_null', 'exp', 'expm1', 'extract', 'factorial', 'find_in_set', 'first', 'first_value', 'flatten', 'floor', 'format_number', 'format_string', 'from_json', 'from_unixtime', 'from_utc_timestamp', 'get', 'get_json_object', 'getbit', 'greatest', 'hash', 'hex', 'hour', 'hypot', 'ifnull', 'initcap', 'input_file_block_length', 'input_file_block_start', 'input_file_name', 'instr', 'is_valid_utf8', 'is_variant_null', 'isnan', 'isnotnull', 'isnull', 'json_array_length', 'json_object_keys', 'json_tuple', 'kurtosis', 'lag', 'last', 'last_day', 'last_value', 'lcase', 'lead', 'least', 'left', 'length', 'levenshtein', 'listagg', 'ln', 'localtimestamp', 'locate', 'log10', 'log1p', 'log2', 'lower', 'lpad', 'ltrim', 'make_date', 'make_timestamp', 'make_timestamp_ltz', 'make_timestamp_ntz', 'make_valid_utf8', 'map_concat', 'map_contains_key', 'map_entries', 'map_from_arrays', 'map_from_entries', 'map_keys', 'map_values', 'mask', 'max', 'md5', 'mean', 'median', 'min', 'minute', 'mode', 'monotonically_increasing_id', 'month', 'monthname', 'months_between', 'named_struct', 'nanvl', 'negative', 'next_day', 'now', 'nth_value', 'ntile', 'nullif', 'nullifzero', 'nvl', 'nvl2', 'octet_length', 'overlay', 'parse_json', 'parse_url', 'percent_rank', 'percentile', 'percentile_approx', 'pi', 'pmod', 'position', 'positive', 'pow', 'printf', 'quarter', 'quote', 'radians', 'raise_error', 'rand', 'randn', 'randstr', 'rank', 'regexp', 'regexp_count', 'regexp_extract', 'regexp_extract_all', 'regexp_instr', 'regexp_like', 'regexp_replace', 'regexp_substr', 'regr_avgx', 'regr_avgy', 'regr_count', 'regr_intercept', 'regr_r2', 'regr_slope', 'regr_sxx', 'regr_sxy', 'regr_syy', 'repeat', 'replace', 'reverse', 'right', 'rint', 'round', 'row_number', 'rpad', 'rtrim', 'schema_of_json', 'schema_of_variant', 'sec', 'second', 'sequence', 'session_user', 'sha', 'sha1', 'sha2', 'shiftLeft', 'shiftRight', 'shiftRightUnsigned', 'shiftleft', 'shiftright', 'shiftrightunsigned', 'shuffle', 'sign', 'signum', 'sin', 'sinh', 'size', 'skewness', 'slice', 'sort_array', 'soundex', 'spark_partition_id', 'split', 'split_part', 'sqrt', 'startswith', 'std', 'stddev', 'stddev_pop', 'stddev_samp', 'str_to_map', 'struct', 'substr', 'substring', 'substring_index', 'sum', 'tan', 'tanh', 'time_bucket', 'timestamp_micros', 'timestamp_millis', 'timestamp_seconds', 'toDegrees', 'toRadians', 'to_binary', 'to_char', 'to_date', 'to_json', 'to_number', 'to_timestamp', 'to_timestamp_ltz', 'to_timestamp_ntz', 'to_unix_timestamp', 'to_utc_timestamp', 'to_varchar', 'to_variant_object', 'translate', 'trim', 'trunc', 'try_add', 'try_aes_decrypt', 'try_avg', 'try_divide', 'try_element_at', 'try_make_timestamp', 'try_make_timestamp_ltz', 'try_make_timestamp_ntz', 'try_mod', 'try_multiply', 'try_parse_json', 'try_parse_url', 'try_subtract', 'try_sum', 'try_to_binary', 'try_to_date', 'try_to_number', 'try_to_timestamp', 'try_url_decode', 'try_validate_utf8', 'try_variant_get', 'typeof', 'ucase', 'unbase64', 'unhex', 'uniform', 'unix_date', 'unix_micros', 'unix_millis', 'unix_seconds', 'upper', 'url_decode', 'url_encode', 'user', 'uuid', 'validate_utf8', 'var_pop', 'var_samp', 'variance', 'variant_get', 'version', 'weekday', 'weekofyear', 'width_bucket', 'xxhash64', 'year', 'zeroifnull']
+def abs(col: ColumnOrName) -> Column
+def acos(col: ColumnOrName) -> Column
+def acosh(col: ColumnOrName) -> Column
+def add_months(start: ColumnOrName, months: ColumnOrName | int) -> Column
+def aes_decrypt(input: ColumnOrName, key: ColumnOrName, mode: ColumnOrName | None=None, padding: ColumnOrName | None=None, aad: ColumnOrName | None=None) -> Column
+def aes_encrypt(input: ColumnOrName, key: ColumnOrName, mode: ColumnOrName | None=None, padding: ColumnOrName | None=None, iv: ColumnOrName | None=None, aad: ColumnOrName | None=None) -> Column
+def approx_count_distinct(col: ColumnOrName, rsd: Column | float | None=None) -> Column
+def approx_percentile(col: ColumnOrName, percentage: Column | float, accuracy: Column | int=10000) -> Column
+def array(*cols: ColumnOrName) -> Column
+def array_append(col: ColumnOrName, value: Any) -> Column
+def array_compact(col: ColumnOrName) -> Column
+def array_contains(col: ColumnOrName, value: Any) -> Column
+def array_distinct(col: ColumnOrName) -> Column
+def array_except(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def array_insert(arr: ColumnOrName, pos: ColumnOrName | int, value: Any) -> Column
+def array_intersect(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def array_join(col: ColumnOrName, delimiter: str, null_replacement: str | None=None) -> Column
+def array_max(col: ColumnOrName) -> Column
+def array_min(col: ColumnOrName) -> Column
+def array_position(col: ColumnOrName, value: Any) -> Column
+def array_prepend(col: ColumnOrName, value: Any) -> Column
+def array_remove(col: ColumnOrName, element: Any) -> Column
+def array_repeat(col: ColumnOrName, count: ColumnOrName | int) -> Column
+def array_size(col: ColumnOrName) -> Column
+def array_union(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def arrays_overlap(a1: ColumnOrName, a2: ColumnOrName) -> Column
+def arrays_zip(*cols: ColumnOrName) -> Column
+def ascii(col: ColumnOrName) -> Column
+def asin(col: ColumnOrName) -> Column
+def asinh(col: ColumnOrName) -> Column
+def assert_true(col: ColumnOrName, errMsg: Column | str | None=None) -> Column
+def atan(col: ColumnOrName) -> Column
+def atan2(col1: ColumnOrName | float, col2: ColumnOrName | float) -> Column
+def atanh(col: ColumnOrName) -> Column
+def avg(col: ColumnOrName) -> Column
+def base64(col: ColumnOrName) -> Column
+def bin(col: ColumnOrName) -> Column
+def bit_and(col: ColumnOrName) -> Column
+def bit_count(col: ColumnOrName) -> Column
+def bit_get(col: ColumnOrName, pos: ColumnOrName) -> Column
+def bit_length(col: ColumnOrName) -> Column
+def bit_or(col: ColumnOrName) -> Column
+def bit_xor(col: ColumnOrName) -> Column
+def bitwiseNOT(col: ColumnOrName) -> Column
+def bitwise_not(col: ColumnOrName) -> Column
+def bool_and(col: ColumnOrName) -> Column
+def bool_or(col: ColumnOrName) -> Column
+def bround(col: ColumnOrName, scale: Column | int | None=None) -> Column
+def btrim(str: ColumnOrName, trim: ColumnOrName | None=None) -> Column
+def cardinality(col: ColumnOrName) -> Column
+def cbrt(col: ColumnOrName) -> Column
+def ceil(col: ColumnOrName, scale: Column | int | None=None) -> Column
+def ceiling(col: ColumnOrName, scale: Column | int | None=None) -> Column
+def char(col: ColumnOrName) -> Column
+def char_length(str: ColumnOrName) -> Column
+def character_length(str: ColumnOrName) -> Column
+def coalesce(*cols: ColumnOrName) -> Column
+def collation(col: ColumnOrName) -> Column
+def collect_list(col: ColumnOrName) -> Column
+def collect_set(col: ColumnOrName) -> Column
+def concat_ws(sep: str, *cols: ColumnOrName) -> Column
+def contains(left: ColumnOrName, right: ColumnOrName) -> Column
+def conv(col: ColumnOrName, fromBase: int, toBase: int) -> Column
+def corr(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def cos(col: ColumnOrName) -> Column
+def cosh(col: ColumnOrName) -> Column
+def cot(col: ColumnOrName) -> Column
+def count_if(col: ColumnOrName) -> Column
+def covar_pop(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def covar_samp(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def crc32(col: ColumnOrName) -> Column
+def create_map(*cols: ColumnOrName) -> Column
+def csc(col: ColumnOrName) -> Column
+def cume_dist() -> Column
+def curdate() -> Column
+def current_catalog() -> Column
+def current_database() -> Column
+def current_date() -> Column
+def current_path() -> Column
+def current_schema() -> Column
+def current_timestamp() -> Column
+def current_timezone() -> Column
+def current_user() -> Column
+def date_add(start: ColumnOrName, days: ColumnOrName | int) -> Column
+def date_diff(end: ColumnOrName, start: ColumnOrName) -> Column
+def date_format(date: ColumnOrName, format: str) -> Column
+def date_from_unix_date(days: ColumnOrName) -> Column
+def date_part(field: Column, source: ColumnOrName) -> Column
+def date_sub(start: ColumnOrName, days: ColumnOrName | int) -> Column
+def date_trunc(format: str, timestamp: ColumnOrName) -> Column
+def dateadd(start: ColumnOrName, days: ColumnOrName | int) -> Column
+def datediff(end: ColumnOrName, start: ColumnOrName) -> Column
+def datepart(field: Column, source: ColumnOrName) -> Column
+def day(col: ColumnOrName) -> Column
+def dayname(col: ColumnOrName) -> Column
+def dayofmonth(col: ColumnOrName) -> Column
+def dayofweek(col: ColumnOrName) -> Column
+def dayofyear(col: ColumnOrName) -> Column
+def decode(col: ColumnOrName, charset: str) -> Column
+def degrees(col: ColumnOrName) -> Column
+def dense_rank() -> Column
+def e() -> Column
+def element_at(col: ColumnOrName, extraction: Any) -> Column
+def elt(*inputs: ColumnOrName) -> Column
+def encode(col: ColumnOrName, charset: str) -> Column
+def endswith(str: ColumnOrName, suffix: ColumnOrName) -> Column
+def equal_null(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def exp(col: ColumnOrName) -> Column
+def expm1(col: ColumnOrName) -> Column
+def extract(field: Column, source: ColumnOrName) -> Column
+def factorial(col: ColumnOrName) -> Column
+def find_in_set(str: ColumnOrName, str_array: ColumnOrName) -> Column
+def first(col: ColumnOrName, ignorenulls: bool=False) -> Column
+def first_value(col: ColumnOrName, ignoreNulls: bool | Column | None=None) -> Column
+def flatten(col: ColumnOrName) -> Column
+def floor(col: ColumnOrName, scale: Column | int | None=None) -> Column
+def format_number(col: ColumnOrName, d: int) -> Column
+def format_string(format: str, *cols: ColumnOrName) -> Column
+def from_json(col: ColumnOrName, schema: Column | str, options: dict[str, str] | None=None) -> Column
+def from_unixtime(timestamp: ColumnOrName, format: str='yyyy-MM-dd HH:mm:ss') -> Column
+def from_utc_timestamp(timestamp: ColumnOrName, tz: Column | str) -> Column
+def get(col: ColumnOrName, index: ColumnOrName | int) -> Column
+def get_json_object(col: ColumnOrName, path: str) -> Column
+def getbit(col: ColumnOrName, pos: ColumnOrName) -> Column
+def greatest(*cols: ColumnOrName) -> Column
+def hash(*cols: ColumnOrName) -> Column
+def hex(col: ColumnOrName) -> Column
+def hour(col: ColumnOrName) -> Column
+def hypot(col1: ColumnOrName | float, col2: ColumnOrName | float) -> Column
+def ifnull(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def initcap(col: ColumnOrName) -> Column
+def input_file_block_length() -> Column
+def input_file_block_start() -> Column
+def input_file_name() -> Column
+def instr(str: ColumnOrName, substr: str | Column) -> Column
+def is_valid_utf8(str: ColumnOrName) -> Column
+def is_variant_null(v: ColumnOrName) -> Column
+def isnan(col: ColumnOrName) -> Column
+def isnotnull(col: ColumnOrName) -> Column
+def isnull(col: ColumnOrName) -> Column
+def json_array_length(col: ColumnOrName) -> Column
+def json_object_keys(col: ColumnOrName) -> Column
+def json_tuple(col: ColumnOrName, *fields: str) -> Column
+def kurtosis(col: ColumnOrName) -> Column
+def lag(col: ColumnOrName, offset: int=1, default: Any | None=None) -> Column
+def last(col: ColumnOrName, ignorenulls: bool=False) -> Column
+def last_day(date: ColumnOrName) -> Column
+def last_value(col: ColumnOrName, ignoreNulls: bool | Column | None=None) -> Column
+def lcase(str: ColumnOrName) -> Column
+def lead(col: ColumnOrName, offset: int=1, default: Any | None=None) -> Column
+def least(*cols: ColumnOrName) -> Column
+def left(str: ColumnOrName, len: ColumnOrName) -> Column
+def length(col: ColumnOrName) -> Column
+def levenshtein(left: ColumnOrName, right: ColumnOrName, threshold: int | Column | None=None) -> Column
+def listagg(col: ColumnOrName, delimiter: Column | str | None=None) -> Column
+def ln(col: ColumnOrName) -> Column
+def localtimestamp() -> Column
+def locate(substr: str, str: ColumnOrName, pos: int=1) -> Column
+def log10(col: ColumnOrName) -> Column
+def log1p(col: ColumnOrName) -> Column
+def log2(col: ColumnOrName) -> Column
+def lower(col: ColumnOrName) -> Column
+def lpad(col: ColumnOrName, len: Column | int, pad: Column | str) -> Column
+def ltrim(col: ColumnOrName, trim: ColumnOrName | None=None) -> Column
+def make_date(year: ColumnOrName, month: ColumnOrName, day: ColumnOrName) -> Column
+def make_timestamp(years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName, timezone: ColumnOrName | None=None) -> Column
+def make_timestamp_ltz(years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName, timezone: ColumnOrName | None=None) -> Column
+def make_timestamp_ntz(years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName) -> Column
+def make_valid_utf8(str: ColumnOrName) -> Column
+def map_concat(*cols: ColumnOrName) -> Column
+def map_contains_key(col: ColumnOrName, value: Any) -> Column
+def map_entries(col: ColumnOrName) -> Column
+def map_from_arrays(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def map_from_entries(col: ColumnOrName) -> Column
+def map_keys(col: ColumnOrName) -> Column
+def map_values(col: ColumnOrName) -> Column
+def mask(col: ColumnOrName, upperChar: ColumnOrName | None=None, lowerChar: ColumnOrName | None=None, digitChar: ColumnOrName | None=None, otherChar: ColumnOrName | None=None) -> Column
+def max(col: ColumnOrName) -> Column
+def md5(col: ColumnOrName) -> Column
+def mean(col: ColumnOrName) -> Column
+def median(col: ColumnOrName) -> Column
+def min(col: ColumnOrName) -> Column
+def minute(col: ColumnOrName) -> Column
+def mode(col: ColumnOrName, deterministic: bool=False) -> Column
+def monotonically_increasing_id() -> Column
+def month(col: ColumnOrName) -> Column
+def monthname(col: ColumnOrName) -> Column
+def months_between(date1: ColumnOrName, date2: ColumnOrName, roundOff: bool=True) -> Column
+def named_struct(*cols: ColumnOrName) -> Column
+def nanvl(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def negative(col: ColumnOrName) -> Column
+def next_day(date: ColumnOrName, dayOfWeek: str) -> Column
+def now() -> Column
+def nth_value(col: ColumnOrName, offset: int, ignoreNulls: bool=False) -> Column
+def ntile(n: int) -> Column
+def nullif(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def nullifzero(col: ColumnOrName) -> Column
+def nvl(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def nvl2(col1: ColumnOrName, col2: ColumnOrName, col3: ColumnOrName) -> Column
+def octet_length(col: ColumnOrName) -> Column
+def overlay(src: ColumnOrName, replace: ColumnOrName, pos: ColumnOrName | int, len: ColumnOrName | int=-1) -> Column
+def parse_json(col: ColumnOrName) -> Column
+def parse_url(url: ColumnOrName, partToExtract: ColumnOrName, key: ColumnOrName | None=None) -> Column
+def percent_rank() -> Column
+def percentile(col: ColumnOrName, percentage: Column | float, frequency: Column | int=1) -> Column
+def percentile_approx(col: ColumnOrName, percentage: Column | float, accuracy: Column | int=10000) -> Column
+def pi() -> Column
+def pmod(dividend: ColumnOrName | float, divisor: ColumnOrName | float) -> Column
+def position(substr: ColumnOrName, str: ColumnOrName, start: ColumnOrName | None=None) -> Column
+def positive(col: ColumnOrName) -> Column
+def pow(col1: ColumnOrName | float, col2: ColumnOrName | float) -> Column
+def printf(format: ColumnOrName, *cols: ColumnOrName) -> Column
+def quarter(col: ColumnOrName) -> Column
+def quote(col: ColumnOrName) -> Column
+def radians(col: ColumnOrName) -> Column
+def raise_error(errMsg: Column | str) -> Column
+def rand(seed: int | None=None) -> Column
+def randn(seed: int | None=None) -> Column
+def randstr(length: int | Column, seed: int | Column | None=None) -> Column
+def rank() -> Column
+def regexp(str: ColumnOrName, regexp: ColumnOrName) -> Column
+def regexp_count(str: ColumnOrName, regexp: ColumnOrName) -> Column
+def regexp_extract(str: ColumnOrName, pattern: str, idx: int) -> Column
+def regexp_extract_all(str: ColumnOrName, regexp: ColumnOrName, idx: int | Column | None=None) -> Column
+def regexp_instr(str: ColumnOrName, regexp: ColumnOrName, idx: int | Column | None=None) -> Column
+def regexp_like(str: ColumnOrName, regexp: ColumnOrName) -> Column
+def regexp_replace(string: ColumnOrName, pattern: str | Column, replacement: str | Column) -> Column
+def regexp_substr(str: ColumnOrName, regexp: ColumnOrName) -> Column
+def regr_avgx(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_avgy(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_count(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_intercept(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_r2(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_slope(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_sxx(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_sxy(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_syy(y: ColumnOrName, x: ColumnOrName) -> Column
+def repeat(col: ColumnOrName, n: ColumnOrName | int) -> Column
+def replace(src: ColumnOrName, search: ColumnOrName, replace: ColumnOrName | None=None) -> Column
+def reverse(col: ColumnOrName) -> Column
+def right(str: ColumnOrName, len: ColumnOrName) -> Column
+def rint(col: ColumnOrName) -> Column
+def round(col: ColumnOrName, scale: Column | int | None=None) -> Column
+def row_number() -> Column
+def rpad(col: ColumnOrName, len: Column | int, pad: Column | str) -> Column
+def rtrim(col: ColumnOrName, trim: ColumnOrName | None=None) -> Column
+def schema_of_json(json: Column | str, options: dict[str, str] | None=None) -> Column
+def schema_of_variant(v: ColumnOrName) -> Column
+def sec(col: ColumnOrName) -> Column
+def second(col: ColumnOrName) -> Column
+def sequence(start: ColumnOrName, stop: ColumnOrName, step: ColumnOrName | None=None) -> Column
+def session_user() -> Column
+def sha(col: ColumnOrName) -> Column
+def sha1(col: ColumnOrName) -> Column
+def sha2(col: ColumnOrName, numBits: int) -> Column
+def shiftLeft(col: ColumnOrName, numBits: int) -> Column
+def shiftRight(col: ColumnOrName, numBits: int) -> Column
+def shiftRightUnsigned(col: ColumnOrName, numBits: int) -> Column
+def shiftleft(col: ColumnOrName, numBits: int) -> Column
+def shiftright(col: ColumnOrName, numBits: int) -> Column
+def shiftrightunsigned(col: ColumnOrName, numBits: int) -> Column
+def shuffle(col: ColumnOrName, seed: int | Column | None=None) -> Column
+def sign(col: ColumnOrName) -> Column
+def signum(col: ColumnOrName) -> Column
+def sin(col: ColumnOrName) -> Column
+def sinh(col: ColumnOrName) -> Column
+def size(col: ColumnOrName) -> Column
+def skewness(col: ColumnOrName) -> Column
+def slice(x: ColumnOrName, start: ColumnOrName | int, length: ColumnOrName | int) -> Column
+def sort_array(col: ColumnOrName, asc: bool=True) -> Column
+def soundex(col: ColumnOrName) -> Column
+def spark_partition_id() -> Column
+def split(str: ColumnOrName, pattern: str | Column, limit: int | Column=-1) -> Column
+def split_part(src: ColumnOrName, delimiter: ColumnOrName, partNum: ColumnOrName) -> Column
+def sqrt(col: ColumnOrName) -> Column
+def startswith(str: ColumnOrName, prefix: ColumnOrName) -> Column
+def std(col: ColumnOrName) -> Column
+def stddev(col: ColumnOrName) -> Column
+def stddev_pop(col: ColumnOrName) -> Column
+def stddev_samp(col: ColumnOrName) -> Column
+def str_to_map(text: ColumnOrName, pairDelim: ColumnOrName | None=None, keyValueDelim: ColumnOrName | None=None) -> Column
+def struct(*cols: ColumnOrName) -> Column
+def substr(str: ColumnOrName, pos: ColumnOrName, len: ColumnOrName | None=None) -> Column
+def substring(str: ColumnOrName, pos: ColumnOrName | int, len: ColumnOrName | int) -> Column
+def substring_index(str: ColumnOrName, delim: str, count: int) -> Column
+def sum(col: ColumnOrName) -> Column
+def tan(col: ColumnOrName) -> Column
+def tanh(col: ColumnOrName) -> Column
+def time_bucket(bucket_size: Column, ts: ColumnOrName, origin: Column | None=None) -> Column
+def timestamp_micros(col: ColumnOrName) -> Column
+def timestamp_millis(col: ColumnOrName) -> Column
+def timestamp_seconds(col: ColumnOrName) -> Column
+def toDegrees(col: ColumnOrName) -> Column
+def toRadians(col: ColumnOrName) -> Column
+def to_binary(col: ColumnOrName, format: ColumnOrName | None=None) -> Column
+def to_char(col: ColumnOrName, format: ColumnOrName) -> Column
+def to_date(col: ColumnOrName, format: str | None=None) -> Column
+def to_json(col: ColumnOrName, options: dict[str, str] | None=None) -> Column
+def to_number(col: ColumnOrName, format: ColumnOrName) -> Column
+def to_timestamp(col: ColumnOrName, format: str | None=None) -> Column
+def to_timestamp_ltz(timestamp: ColumnOrName, format: ColumnOrName | None=None) -> Column
+def to_timestamp_ntz(timestamp: ColumnOrName, format: ColumnOrName | None=None) -> Column
+def to_unix_timestamp(timestamp: ColumnOrName, format: ColumnOrName | None=None) -> Column
+def to_utc_timestamp(timestamp: ColumnOrName, tz: Column | str) -> Column
+def to_varchar(col: ColumnOrName, format: ColumnOrName) -> Column
+def to_variant_object(col: ColumnOrName) -> Column
+def translate(srcCol: ColumnOrName, matching: str, replace: str) -> Column
+def trim(col: ColumnOrName, trim: ColumnOrName | None=None) -> Column
+def trunc(date: ColumnOrName, format: str) -> Column
+def try_add(left: ColumnOrName, right: ColumnOrName) -> Column
+def try_aes_decrypt(input: ColumnOrName, key: ColumnOrName, mode: ColumnOrName | None=None, padding: ColumnOrName | None=None, aad: ColumnOrName | None=None) -> Column
+def try_avg(col: ColumnOrName) -> Column
+def try_divide(left: ColumnOrName, right: ColumnOrName) -> Column
+def try_element_at(col: ColumnOrName, extraction: ColumnOrName) -> Column
+def try_make_timestamp(years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName, timezone: ColumnOrName | None=None) -> Column
+def try_make_timestamp_ltz(years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName, timezone: ColumnOrName | None=None) -> Column
+def try_make_timestamp_ntz(years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName) -> Column
+def try_mod(left: ColumnOrName, right: ColumnOrName) -> Column
+def try_multiply(left: ColumnOrName, right: ColumnOrName) -> Column
+def try_parse_json(col: ColumnOrName) -> Column
+def try_parse_url(url: ColumnOrName, partToExtract: ColumnOrName, key: ColumnOrName | None=None) -> Column
+def try_subtract(left: ColumnOrName, right: ColumnOrName) -> Column
+def try_sum(col: ColumnOrName) -> Column
+def try_to_binary(col: ColumnOrName, format: ColumnOrName | None=None) -> Column
+def try_to_date(col: ColumnOrName, format: str | None=None) -> Column
+def try_to_number(col: ColumnOrName, format: ColumnOrName) -> Column
+def try_to_timestamp(col: ColumnOrName, format: ColumnOrName | None=None) -> Column
+def try_url_decode(str: ColumnOrName) -> Column
+def try_validate_utf8(str: ColumnOrName) -> Column
+def try_variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Column
+def typeof(col: ColumnOrName) -> Column
+def ucase(str: ColumnOrName) -> Column
+def unbase64(col: ColumnOrName) -> Column
+def unhex(col: ColumnOrName) -> Column
+def uniform(min: ColumnOrName | float, max: ColumnOrName | float, seed: int | Column | None=None) -> Column
+def unix_date(col: ColumnOrName) -> Column
+def unix_micros(col: ColumnOrName) -> Column
+def unix_millis(col: ColumnOrName) -> Column
+def unix_seconds(col: ColumnOrName) -> Column
+def upper(col: ColumnOrName) -> Column
+def url_decode(str: ColumnOrName) -> Column
+def url_encode(str: ColumnOrName) -> Column
+def user() -> Column
+def uuid(seed: int | Column | None=None) -> Column
+def validate_utf8(str: ColumnOrName) -> Column
+def var_pop(col: ColumnOrName) -> Column
+def var_samp(col: ColumnOrName) -> Column
+def variance(col: ColumnOrName) -> Column
+def variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Column
+def version() -> Column
+def weekday(col: ColumnOrName) -> Column
+def weekofyear(col: ColumnOrName) -> Column
+def width_bucket(v: ColumnOrName, min: ColumnOrName, max: ColumnOrName, numBucket: ColumnOrName | int) -> Column
+def xxhash64(*cols: ColumnOrName) -> Column
+def year(col: ColumnOrName) -> Column
+def zeroifnull(col: ColumnOrName) -> Column
+## sql/_generated_functions.pyi
+__all__
+__all__ = ['abs', 'acos', 'acosh', 'add_months', 'aes_decrypt', 'aes_encrypt', 'approx_count_distinct', 'approx_percentile', 'array', 'array_append', 'array_compact', 'array_contains', 'array_distinct', 'array_except', 'array_insert', 'array_intersect', 'array_join', 'array_max', 'array_min', 'array_position', 'array_prepend', 'array_remove', 'array_repeat', 'array_size', 'array_union', 'arrays_overlap', 'arrays_zip', 'ascii', 'asin', 'asinh', 'assert_true', 'atan', 'atan2', 'atanh', 'avg', 'base64', 'bin', 'bit_and', 'bit_count', 'bit_get', 'bit_length', 'bit_or', 'bit_xor', 'bitwiseNOT', 'bitwise_not', 'bool_and', 'bool_or', 'bround', 'btrim', 'cardinality', 'cbrt', 'ceil', 'ceiling', 'char', 'char_length', 'character_length', 'coalesce', 'collation', 'collect_list', 'collect_set', 'concat_ws', 'contains', 'conv', 'corr', 'cos', 'cosh', 'cot', 'count_if', 'covar_pop', 'covar_samp', 'crc32', 'create_map', 'csc', 'cume_dist', 'curdate', 'current_catalog', 'current_database', 'current_date', 'current_path', 'current_schema', 'current_timestamp', 'current_timezone', 'current_user', 'date_add', 'date_diff', 'date_format', 'date_from_unix_date', 'date_part', 'date_sub', 'date_trunc', 'dateadd', 'datediff', 'datepart', 'day', 'dayname', 'dayofmonth', 'dayofweek', 'dayofyear', 'decode', 'degrees', 'dense_rank', 'e', 'element_at', 'elt', 'encode', 'endswith', 'equal_null', 'exp', 'expm1', 'extract', 'factorial', 'find_in_set', 'first', 'first_value', 'flatten', 'floor', 'format_number', 'format_string', 'from_json', 'from_unixtime', 'from_utc_timestamp', 'get', 'get_json_object', 'getbit', 'greatest', 'hash', 'hex', 'hour', 'hypot', 'ifnull', 'initcap', 'input_file_block_length', 'input_file_block_start', 'input_file_name', 'instr', 'is_valid_utf8', 'is_variant_null', 'isnan', 'isnotnull', 'isnull', 'json_array_length', 'json_object_keys', 'json_tuple', 'kurtosis', 'lag', 'last', 'last_day', 'last_value', 'lcase', 'lead', 'least', 'left', 'length', 'levenshtein', 'listagg', 'ln', 'localtimestamp', 'locate', 'log10', 'log1p', 'log2', 'lower', 'lpad', 'ltrim', 'make_date', 'make_timestamp', 'make_timestamp_ltz', 'make_timestamp_ntz', 'make_valid_utf8', 'map_concat', 'map_contains_key', 'map_entries', 'map_from_arrays', 'map_from_entries', 'map_keys', 'map_values', 'mask', 'max', 'md5', 'mean', 'median', 'min', 'minute', 'mode', 'monotonically_increasing_id', 'month', 'monthname', 'months_between', 'named_struct', 'nanvl', 'negative', 'next_day', 'now', 'nth_value', 'ntile', 'nullif', 'nullifzero', 'nvl', 'nvl2', 'octet_length', 'overlay', 'parse_json', 'parse_url', 'percent_rank', 'percentile', 'percentile_approx', 'pi', 'pmod', 'position', 'positive', 'pow', 'printf', 'quarter', 'quote', 'radians', 'raise_error', 'rand', 'randn', 'randstr', 'rank', 'regexp', 'regexp_count', 'regexp_extract', 'regexp_extract_all', 'regexp_instr', 'regexp_like', 'regexp_replace', 'regexp_substr', 'regr_avgx', 'regr_avgy', 'regr_count', 'regr_intercept', 'regr_r2', 'regr_slope', 'regr_sxx', 'regr_sxy', 'regr_syy', 'repeat', 'replace', 'reverse', 'right', 'rint', 'round', 'row_number', 'rpad', 'rtrim', 'schema_of_json', 'schema_of_variant', 'sec', 'second', 'sequence', 'session_user', 'sha', 'sha1', 'sha2', 'shiftLeft', 'shiftRight', 'shiftRightUnsigned', 'shiftleft', 'shiftright', 'shiftrightunsigned', 'shuffle', 'sign', 'signum', 'sin', 'sinh', 'size', 'skewness', 'slice', 'sort_array', 'soundex', 'spark_partition_id', 'split', 'split_part', 'sqrt', 'startswith', 'std', 'stddev', 'stddev_pop', 'stddev_samp', 'str_to_map', 'struct', 'substr', 'substring', 'substring_index', 'sum', 'tan', 'tanh', 'time_bucket', 'timestamp_micros', 'timestamp_millis', 'timestamp_seconds', 'toDegrees', 'toRadians', 'to_binary', 'to_char', 'to_date', 'to_json', 'to_number', 'to_timestamp', 'to_timestamp_ltz', 'to_timestamp_ntz', 'to_unix_timestamp', 'to_utc_timestamp', 'to_varchar', 'to_variant_object', 'translate', 'trim', 'trunc', 'try_add', 'try_aes_decrypt', 'try_avg', 'try_divide', 'try_element_at', 'try_make_timestamp', 'try_make_timestamp_ltz', 'try_make_timestamp_ntz', 'try_mod', 'try_multiply', 'try_parse_json', 'try_parse_url', 'try_subtract', 'try_sum', 'try_to_binary', 'try_to_date', 'try_to_number', 'try_to_timestamp', 'try_url_decode', 'try_validate_utf8', 'try_variant_get', 'typeof', 'ucase', 'unbase64', 'unhex', 'uniform', 'unix_date', 'unix_micros', 'unix_millis', 'unix_seconds', 'upper', 'url_decode', 'url_encode', 'user', 'uuid', 'validate_utf8', 'var_pop', 'var_samp', 'variance', 'variant_get', 'version', 'weekday', 'weekofyear', 'width_bucket', 'xxhash64', 'year', 'zeroifnull']
+def abs(col: ColumnOrName) -> Column
+def acos(col: ColumnOrName) -> Column
+def acosh(col: ColumnOrName) -> Column
+def add_months(start: ColumnOrName, months: ColumnOrName | int) -> Column
+def aes_decrypt(input: ColumnOrName, key: ColumnOrName, mode: ColumnOrName | None=None, padding: ColumnOrName | None=None, aad: ColumnOrName | None=None) -> Column
+def aes_encrypt(input: ColumnOrName, key: ColumnOrName, mode: ColumnOrName | None=None, padding: ColumnOrName | None=None, iv: ColumnOrName | None=None, aad: ColumnOrName | None=None) -> Column
+def approx_count_distinct(col: ColumnOrName, rsd: Column | float | None=None) -> Column
+def approx_percentile(col: ColumnOrName, percentage: Column | float, accuracy: Column | int=10000) -> Column
+def array(*cols: ColumnOrName) -> Column
+def array_append(col: ColumnOrName, value: Any) -> Column
+def array_compact(col: ColumnOrName) -> Column
+def array_contains(col: ColumnOrName, value: Any) -> Column
+def array_distinct(col: ColumnOrName) -> Column
+def array_except(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def array_insert(arr: ColumnOrName, pos: ColumnOrName | int, value: Any) -> Column
+def array_intersect(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def array_join(col: ColumnOrName, delimiter: str, null_replacement: str | None=None) -> Column
+def array_max(col: ColumnOrName) -> Column
+def array_min(col: ColumnOrName) -> Column
+def array_position(col: ColumnOrName, value: Any) -> Column
+def array_prepend(col: ColumnOrName, value: Any) -> Column
+def array_remove(col: ColumnOrName, element: Any) -> Column
+def array_repeat(col: ColumnOrName, count: ColumnOrName | int) -> Column
+def array_size(col: ColumnOrName) -> Column
+def array_union(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def arrays_overlap(a1: ColumnOrName, a2: ColumnOrName) -> Column
+def arrays_zip(*cols: ColumnOrName) -> Column
+def ascii(col: ColumnOrName) -> Column
+def asin(col: ColumnOrName) -> Column
+def asinh(col: ColumnOrName) -> Column
+def assert_true(col: ColumnOrName, errMsg: Column | str | None=None) -> Column
+def atan(col: ColumnOrName) -> Column
+def atan2(col1: ColumnOrName | float, col2: ColumnOrName | float) -> Column
+def atanh(col: ColumnOrName) -> Column
+def avg(col: ColumnOrName) -> Column
+def base64(col: ColumnOrName) -> Column
+def bin(col: ColumnOrName) -> Column
+def bit_and(col: ColumnOrName) -> Column
+def bit_count(col: ColumnOrName) -> Column
+def bit_get(col: ColumnOrName, pos: ColumnOrName) -> Column
+def bit_length(col: ColumnOrName) -> Column
+def bit_or(col: ColumnOrName) -> Column
+def bit_xor(col: ColumnOrName) -> Column
+def bitwiseNOT(col: ColumnOrName) -> Column
+def bitwise_not(col: ColumnOrName) -> Column
+def bool_and(col: ColumnOrName) -> Column
+def bool_or(col: ColumnOrName) -> Column
+def bround(col: ColumnOrName, scale: Column | int | None=None) -> Column
+def btrim(str: ColumnOrName, trim: ColumnOrName | None=None) -> Column
+def cardinality(col: ColumnOrName) -> Column
+def cbrt(col: ColumnOrName) -> Column
+def ceil(col: ColumnOrName, scale: Column | int | None=None) -> Column
+def ceiling(col: ColumnOrName, scale: Column | int | None=None) -> Column
+def char(col: ColumnOrName) -> Column
+def char_length(str: ColumnOrName) -> Column
+def character_length(str: ColumnOrName) -> Column
+def coalesce(*cols: ColumnOrName) -> Column
+def collation(col: ColumnOrName) -> Column
+def collect_list(col: ColumnOrName) -> Column
+def collect_set(col: ColumnOrName) -> Column
+def concat_ws(sep: str, *cols: ColumnOrName) -> Column
+def contains(left: ColumnOrName, right: ColumnOrName) -> Column
+def conv(col: ColumnOrName, fromBase: int, toBase: int) -> Column
+def corr(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def cos(col: ColumnOrName) -> Column
+def cosh(col: ColumnOrName) -> Column
+def cot(col: ColumnOrName) -> Column
+def count_if(col: ColumnOrName) -> Column
+def covar_pop(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def covar_samp(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def crc32(col: ColumnOrName) -> Column
+def create_map(*cols: ColumnOrName) -> Column
+def csc(col: ColumnOrName) -> Column
+def cume_dist() -> Column
+def curdate() -> Column
+def current_catalog() -> Column
+def current_database() -> Column
+def current_date() -> Column
+def current_path() -> Column
+def current_schema() -> Column
+def current_timestamp() -> Column
+def current_timezone() -> Column
+def current_user() -> Column
+def date_add(start: ColumnOrName, days: ColumnOrName | int) -> Column
+def date_diff(end: ColumnOrName, start: ColumnOrName) -> Column
+def date_format(date: ColumnOrName, format: str) -> Column
+def date_from_unix_date(days: ColumnOrName) -> Column
+def date_part(field: Column, source: ColumnOrName) -> Column
+def date_sub(start: ColumnOrName, days: ColumnOrName | int) -> Column
+def date_trunc(format: str, timestamp: ColumnOrName) -> Column
+def dateadd(start: ColumnOrName, days: ColumnOrName | int) -> Column
+def datediff(end: ColumnOrName, start: ColumnOrName) -> Column
+def datepart(field: Column, source: ColumnOrName) -> Column
+def day(col: ColumnOrName) -> Column
+def dayname(col: ColumnOrName) -> Column
+def dayofmonth(col: ColumnOrName) -> Column
+def dayofweek(col: ColumnOrName) -> Column
+def dayofyear(col: ColumnOrName) -> Column
+def decode(col: ColumnOrName, charset: str) -> Column
+def degrees(col: ColumnOrName) -> Column
+def dense_rank() -> Column
+def e() -> Column
+def element_at(col: ColumnOrName, extraction: Any) -> Column
+def elt(*inputs: ColumnOrName) -> Column
+def encode(col: ColumnOrName, charset: str) -> Column
+def endswith(str: ColumnOrName, suffix: ColumnOrName) -> Column
+def equal_null(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def exp(col: ColumnOrName) -> Column
+def expm1(col: ColumnOrName) -> Column
+def extract(field: Column, source: ColumnOrName) -> Column
+def factorial(col: ColumnOrName) -> Column
+def find_in_set(str: ColumnOrName, str_array: ColumnOrName) -> Column
+def first(col: ColumnOrName, ignorenulls: bool=False) -> Column
+def first_value(col: ColumnOrName, ignoreNulls: bool | Column | None=None) -> Column
+def flatten(col: ColumnOrName) -> Column
+def floor(col: ColumnOrName, scale: Column | int | None=None) -> Column
+def format_number(col: ColumnOrName, d: int) -> Column
+def format_string(format: str, *cols: ColumnOrName) -> Column
+def from_json(col: ColumnOrName, schema: Column | str, options: dict[str, str] | None=None) -> Column
+def from_unixtime(timestamp: ColumnOrName, format: str='yyyy-MM-dd HH:mm:ss') -> Column
+def from_utc_timestamp(timestamp: ColumnOrName, tz: Column | str) -> Column
+def get(col: ColumnOrName, index: ColumnOrName | int) -> Column
+def get_json_object(col: ColumnOrName, path: str) -> Column
+def getbit(col: ColumnOrName, pos: ColumnOrName) -> Column
+def greatest(*cols: ColumnOrName) -> Column
+def hash(*cols: ColumnOrName) -> Column
+def hex(col: ColumnOrName) -> Column
+def hour(col: ColumnOrName) -> Column
+def hypot(col1: ColumnOrName | float, col2: ColumnOrName | float) -> Column
+def ifnull(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def initcap(col: ColumnOrName) -> Column
+def input_file_block_length() -> Column
+def input_file_block_start() -> Column
+def input_file_name() -> Column
+def instr(str: ColumnOrName, substr: str | Column) -> Column
+def is_valid_utf8(str: ColumnOrName) -> Column
+def is_variant_null(v: ColumnOrName) -> Column
+def isnan(col: ColumnOrName) -> Column
+def isnotnull(col: ColumnOrName) -> Column
+def isnull(col: ColumnOrName) -> Column
+def json_array_length(col: ColumnOrName) -> Column
+def json_object_keys(col: ColumnOrName) -> Column
+def json_tuple(col: ColumnOrName, *fields: str) -> Column
+def kurtosis(col: ColumnOrName) -> Column
+def lag(col: ColumnOrName, offset: int=1, default: Any | None=None) -> Column
+def last(col: ColumnOrName, ignorenulls: bool=False) -> Column
+def last_day(date: ColumnOrName) -> Column
+def last_value(col: ColumnOrName, ignoreNulls: bool | Column | None=None) -> Column
+def lcase(str: ColumnOrName) -> Column
+def lead(col: ColumnOrName, offset: int=1, default: Any | None=None) -> Column
+def least(*cols: ColumnOrName) -> Column
+def left(str: ColumnOrName, len: ColumnOrName) -> Column
+def length(col: ColumnOrName) -> Column
+def levenshtein(left: ColumnOrName, right: ColumnOrName, threshold: int | Column | None=None) -> Column
+def listagg(col: ColumnOrName, delimiter: Column | str | None=None) -> Column
+def ln(col: ColumnOrName) -> Column
+def localtimestamp() -> Column
+def locate(substr: str, str: ColumnOrName, pos: int=1) -> Column
+def log10(col: ColumnOrName) -> Column
+def log1p(col: ColumnOrName) -> Column
+def log2(col: ColumnOrName) -> Column
+def lower(col: ColumnOrName) -> Column
+def lpad(col: ColumnOrName, len: Column | int, pad: Column | str) -> Column
+def ltrim(col: ColumnOrName, trim: ColumnOrName | None=None) -> Column
+def make_date(year: ColumnOrName, month: ColumnOrName, day: ColumnOrName) -> Column
+def make_timestamp(years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName, timezone: ColumnOrName | None=None) -> Column
+def make_timestamp_ltz(years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName, timezone: ColumnOrName | None=None) -> Column
+def make_timestamp_ntz(years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName) -> Column
+def make_valid_utf8(str: ColumnOrName) -> Column
+def map_concat(*cols: ColumnOrName) -> Column
+def map_contains_key(col: ColumnOrName, value: Any) -> Column
+def map_entries(col: ColumnOrName) -> Column
+def map_from_arrays(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def map_from_entries(col: ColumnOrName) -> Column
+def map_keys(col: ColumnOrName) -> Column
+def map_values(col: ColumnOrName) -> Column
+def mask(col: ColumnOrName, upperChar: ColumnOrName | None=None, lowerChar: ColumnOrName | None=None, digitChar: ColumnOrName | None=None, otherChar: ColumnOrName | None=None) -> Column
+def max(col: ColumnOrName) -> Column
+def md5(col: ColumnOrName) -> Column
+def mean(col: ColumnOrName) -> Column
+def median(col: ColumnOrName) -> Column
+def min(col: ColumnOrName) -> Column
+def minute(col: ColumnOrName) -> Column
+def mode(col: ColumnOrName, deterministic: bool=False) -> Column
+def monotonically_increasing_id() -> Column
+def month(col: ColumnOrName) -> Column
+def monthname(col: ColumnOrName) -> Column
+def months_between(date1: ColumnOrName, date2: ColumnOrName, roundOff: bool=True) -> Column
+def named_struct(*cols: ColumnOrName) -> Column
+def nanvl(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def negative(col: ColumnOrName) -> Column
+def next_day(date: ColumnOrName, dayOfWeek: str) -> Column
+def now() -> Column
+def nth_value(col: ColumnOrName, offset: int, ignoreNulls: bool=False) -> Column
+def ntile(n: int) -> Column
+def nullif(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def nullifzero(col: ColumnOrName) -> Column
+def nvl(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def nvl2(col1: ColumnOrName, col2: ColumnOrName, col3: ColumnOrName) -> Column
+def octet_length(col: ColumnOrName) -> Column
+def overlay(src: ColumnOrName, replace: ColumnOrName, pos: ColumnOrName | int, len: ColumnOrName | int=-1) -> Column
+def parse_json(col: ColumnOrName) -> Column
+def parse_url(url: ColumnOrName, partToExtract: ColumnOrName, key: ColumnOrName | None=None) -> Column
+def percent_rank() -> Column
+def percentile(col: ColumnOrName, percentage: Column | float, frequency: Column | int=1) -> Column
+def percentile_approx(col: ColumnOrName, percentage: Column | float, accuracy: Column | int=10000) -> Column
+def pi() -> Column
+def pmod(dividend: ColumnOrName | float, divisor: ColumnOrName | float) -> Column
+def position(substr: ColumnOrName, str: ColumnOrName, start: ColumnOrName | None=None) -> Column
+def positive(col: ColumnOrName) -> Column
+def pow(col1: ColumnOrName | float, col2: ColumnOrName | float) -> Column
+def printf(format: ColumnOrName, *cols: ColumnOrName) -> Column
+def quarter(col: ColumnOrName) -> Column
+def quote(col: ColumnOrName) -> Column
+def radians(col: ColumnOrName) -> Column
+def raise_error(errMsg: Column | str) -> Column
+def rand(seed: int | None=None) -> Column
+def randn(seed: int | None=None) -> Column
+def randstr(length: int | Column, seed: int | Column | None=None) -> Column
+def rank() -> Column
+def regexp(str: ColumnOrName, regexp: ColumnOrName) -> Column
+def regexp_count(str: ColumnOrName, regexp: ColumnOrName) -> Column
+def regexp_extract(str: ColumnOrName, pattern: str, idx: int) -> Column
+def regexp_extract_all(str: ColumnOrName, regexp: ColumnOrName, idx: int | Column | None=None) -> Column
+def regexp_instr(str: ColumnOrName, regexp: ColumnOrName, idx: int | Column | None=None) -> Column
+def regexp_like(str: ColumnOrName, regexp: ColumnOrName) -> Column
+def regexp_replace(string: ColumnOrName, pattern: str | Column, replacement: str | Column) -> Column
+def regexp_substr(str: ColumnOrName, regexp: ColumnOrName) -> Column
+def regr_avgx(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_avgy(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_count(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_intercept(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_r2(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_slope(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_sxx(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_sxy(y: ColumnOrName, x: ColumnOrName) -> Column
+def regr_syy(y: ColumnOrName, x: ColumnOrName) -> Column
+def repeat(col: ColumnOrName, n: ColumnOrName | int) -> Column
+def replace(src: ColumnOrName, search: ColumnOrName, replace: ColumnOrName | None=None) -> Column
+def reverse(col: ColumnOrName) -> Column
+def right(str: ColumnOrName, len: ColumnOrName) -> Column
+def rint(col: ColumnOrName) -> Column
+def round(col: ColumnOrName, scale: Column | int | None=None) -> Column
+def row_number() -> Column
+def rpad(col: ColumnOrName, len: Column | int, pad: Column | str) -> Column
+def rtrim(col: ColumnOrName, trim: ColumnOrName | None=None) -> Column
+def schema_of_json(json: Column | str, options: dict[str, str] | None=None) -> Column
+def schema_of_variant(v: ColumnOrName) -> Column
+def sec(col: ColumnOrName) -> Column
+def second(col: ColumnOrName) -> Column
+def sequence(start: ColumnOrName, stop: ColumnOrName, step: ColumnOrName | None=None) -> Column
+def session_user() -> Column
+def sha(col: ColumnOrName) -> Column
+def sha1(col: ColumnOrName) -> Column
+def sha2(col: ColumnOrName, numBits: int) -> Column
+def shiftLeft(col: ColumnOrName, numBits: int) -> Column
+def shiftRight(col: ColumnOrName, numBits: int) -> Column
+def shiftRightUnsigned(col: ColumnOrName, numBits: int) -> Column
+def shiftleft(col: ColumnOrName, numBits: int) -> Column
+def shiftright(col: ColumnOrName, numBits: int) -> Column
+def shiftrightunsigned(col: ColumnOrName, numBits: int) -> Column
+def shuffle(col: ColumnOrName, seed: int | Column | None=None) -> Column
+def sign(col: ColumnOrName) -> Column
+def signum(col: ColumnOrName) -> Column
+def sin(col: ColumnOrName) -> Column
+def sinh(col: ColumnOrName) -> Column
+def size(col: ColumnOrName) -> Column
+def skewness(col: ColumnOrName) -> Column
+def slice(x: ColumnOrName, start: ColumnOrName | int, length: ColumnOrName | int) -> Column
+def sort_array(col: ColumnOrName, asc: bool=True) -> Column
+def soundex(col: ColumnOrName) -> Column
+def spark_partition_id() -> Column
+def split(str: ColumnOrName, pattern: str | Column, limit: int | Column=-1) -> Column
+def split_part(src: ColumnOrName, delimiter: ColumnOrName, partNum: ColumnOrName) -> Column
+def sqrt(col: ColumnOrName) -> Column
+def startswith(str: ColumnOrName, prefix: ColumnOrName) -> Column
+def std(col: ColumnOrName) -> Column
+def stddev(col: ColumnOrName) -> Column
+def stddev_pop(col: ColumnOrName) -> Column
+def stddev_samp(col: ColumnOrName) -> Column
+def str_to_map(text: ColumnOrName, pairDelim: ColumnOrName | None=None, keyValueDelim: ColumnOrName | None=None) -> Column
+def struct(*cols: ColumnOrName) -> Column
+def substr(str: ColumnOrName, pos: ColumnOrName, len: ColumnOrName | None=None) -> Column
+def substring(str: ColumnOrName, pos: ColumnOrName | int, len: ColumnOrName | int) -> Column
+def substring_index(str: ColumnOrName, delim: str, count: int) -> Column
+def sum(col: ColumnOrName) -> Column
+def tan(col: ColumnOrName) -> Column
+def tanh(col: ColumnOrName) -> Column
+def time_bucket(bucket_size: Column, ts: ColumnOrName, origin: Column | None=None) -> Column
+def timestamp_micros(col: ColumnOrName) -> Column
+def timestamp_millis(col: ColumnOrName) -> Column
+def timestamp_seconds(col: ColumnOrName) -> Column
+def toDegrees(col: ColumnOrName) -> Column
+def toRadians(col: ColumnOrName) -> Column
+def to_binary(col: ColumnOrName, format: ColumnOrName | None=None) -> Column
+def to_char(col: ColumnOrName, format: ColumnOrName) -> Column
+def to_date(col: ColumnOrName, format: str | None=None) -> Column
+def to_json(col: ColumnOrName, options: dict[str, str] | None=None) -> Column
+def to_number(col: ColumnOrName, format: ColumnOrName) -> Column
+def to_timestamp(col: ColumnOrName, format: str | None=None) -> Column
+def to_timestamp_ltz(timestamp: ColumnOrName, format: ColumnOrName | None=None) -> Column
+def to_timestamp_ntz(timestamp: ColumnOrName, format: ColumnOrName | None=None) -> Column
+def to_unix_timestamp(timestamp: ColumnOrName, format: ColumnOrName | None=None) -> Column
+def to_utc_timestamp(timestamp: ColumnOrName, tz: Column | str) -> Column
+def to_varchar(col: ColumnOrName, format: ColumnOrName) -> Column
+def to_variant_object(col: ColumnOrName) -> Column
+def translate(srcCol: ColumnOrName, matching: str, replace: str) -> Column
+def trim(col: ColumnOrName, trim: ColumnOrName | None=None) -> Column
+def trunc(date: ColumnOrName, format: str) -> Column
+def try_add(left: ColumnOrName, right: ColumnOrName) -> Column
+def try_aes_decrypt(input: ColumnOrName, key: ColumnOrName, mode: ColumnOrName | None=None, padding: ColumnOrName | None=None, aad: ColumnOrName | None=None) -> Column
+def try_avg(col: ColumnOrName) -> Column
+def try_divide(left: ColumnOrName, right: ColumnOrName) -> Column
+def try_element_at(col: ColumnOrName, extraction: ColumnOrName) -> Column
+def try_make_timestamp(years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName, timezone: ColumnOrName | None=None) -> Column
+def try_make_timestamp_ltz(years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName, timezone: ColumnOrName | None=None) -> Column
+def try_make_timestamp_ntz(years: ColumnOrName, months: ColumnOrName, days: ColumnOrName, hours: ColumnOrName, mins: ColumnOrName, secs: ColumnOrName) -> Column
+def try_mod(left: ColumnOrName, right: ColumnOrName) -> Column
+def try_multiply(left: ColumnOrName, right: ColumnOrName) -> Column
+def try_parse_json(col: ColumnOrName) -> Column
+def try_parse_url(url: ColumnOrName, partToExtract: ColumnOrName, key: ColumnOrName | None=None) -> Column
+def try_subtract(left: ColumnOrName, right: ColumnOrName) -> Column
+def try_sum(col: ColumnOrName) -> Column
+def try_to_binary(col: ColumnOrName, format: ColumnOrName | None=None) -> Column
+def try_to_date(col: ColumnOrName, format: str | None=None) -> Column
+def try_to_number(col: ColumnOrName, format: ColumnOrName) -> Column
+def try_to_timestamp(col: ColumnOrName, format: ColumnOrName | None=None) -> Column
+def try_url_decode(str: ColumnOrName) -> Column
+def try_validate_utf8(str: ColumnOrName) -> Column
+def try_variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Column
+def typeof(col: ColumnOrName) -> Column
+def ucase(str: ColumnOrName) -> Column
+def unbase64(col: ColumnOrName) -> Column
+def unhex(col: ColumnOrName) -> Column
+def uniform(min: ColumnOrName | float, max: ColumnOrName | float, seed: int | Column | None=None) -> Column
+def unix_date(col: ColumnOrName) -> Column
+def unix_micros(col: ColumnOrName) -> Column
+def unix_millis(col: ColumnOrName) -> Column
+def unix_seconds(col: ColumnOrName) -> Column
+def upper(col: ColumnOrName) -> Column
+def url_decode(str: ColumnOrName) -> Column
+def url_encode(str: ColumnOrName) -> Column
+def user() -> Column
+def uuid(seed: int | Column | None=None) -> Column
+def validate_utf8(str: ColumnOrName) -> Column
+def var_pop(col: ColumnOrName) -> Column
+def var_samp(col: ColumnOrName) -> Column
+def variance(col: ColumnOrName) -> Column
+def variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Column
+def version() -> Column
+def weekday(col: ColumnOrName) -> Column
+def weekofyear(col: ColumnOrName) -> Column
+def width_bucket(v: ColumnOrName, min: ColumnOrName, max: ColumnOrName, numBucket: ColumnOrName | int) -> Column
+def xxhash64(*cols: ColumnOrName) -> Column
+def year(col: ColumnOrName) -> Column
+def zeroifnull(col: ColumnOrName) -> Column
+## sql/column.py
+Column.astype
+Column.def __add__(self, other: Any) -> Column
+Column.def __and__(self, other: Any) -> Column
+Column.def __bool__(self) -> bool
+Column.def __eq__(self, other: object) -> Column
+Column.def __ge__(self, other: Any) -> Column
+Column.def __getattr__(self, item: Any) -> Column
+Column.def __getitem__(self, k: Any) -> Column
+Column.def __gt__(self, other: Any) -> Column
+Column.def __init__(self, native: _native.Column) -> None
+Column.def __invert__(self) -> Column
+Column.def __iter__(self) -> Any
+Column.def __le__(self, other: Any) -> Column
+Column.def __lt__(self, other: Any) -> Column
+Column.def __mod__(self, other: Any) -> Column
+Column.def __mul__(self, other: Any) -> Column
+Column.def __ne__(self, other: object) -> Column
+Column.def __neg__(self) -> Column
+Column.def __or__(self, other: Any) -> Column
+Column.def __radd__(self, other: Any) -> Column
+Column.def __rand__(self, other: Any) -> Column
+Column.def __repr__(self) -> str
+Column.def __rmod__(self, other: Any) -> Column
+Column.def __rmul__(self, other: Any) -> Column
+Column.def __ror__(self, other: Any) -> Column
+Column.def __rsub__(self, other: Any) -> Column
+Column.def __rtruediv__(self, other: Any) -> Column
+Column.def __sub__(self, other: Any) -> Column
+Column.def __truediv__(self, other: Any) -> Column
+Column.def alias(self, *alias: str, **kwargs: Any) -> Column
+Column.def asc(self) -> Column
+Column.def asc_nulls_first(self) -> Column
+Column.def asc_nulls_last(self) -> Column
+Column.def between(self, lowerBound: Any, upperBound: Any) -> Column
+Column.def bitwiseAND(self, other: Any) -> Column
+Column.def bitwiseOR(self, other: Any) -> Column
+Column.def bitwiseXOR(self, other: Any) -> Column
+Column.def cast(self, dataType: DataType | str) -> Column
+Column.def contains(self, other: Any) -> Column
+Column.def desc(self) -> Column
+Column.def desc_nulls_first(self) -> Column
+Column.def desc_nulls_last(self) -> Column
+Column.def dropFields(self, *fieldNames: str) -> Column
+Column.def endswith(self, other: Any) -> Column
+Column.def eqNullSafe(self, other: Any) -> Column
+Column.def getField(self, name: Any) -> Column
+Column.def getItem(self, key: Any) -> Column
+Column.def ilike(self, other: str) -> Column
+Column.def isNaN(self) -> Column
+Column.def isNotNull(self) -> Column
+Column.def isNull(self) -> Column
+Column.def isin(self, *cols: Any) -> Column
+Column.def like(self, other: str) -> Column
+Column.def otherwise(self, value: Any) -> Column
+Column.def over(self, window: WindowSpec) -> Column
+Column.def rlike(self, other: str) -> Column
+Column.def startswith(self, other: Any) -> Column
+Column.def substr(self, startPos: Any, length: Any) -> Column
+Column.def try_cast(self, dataType: DataType | str) -> Column
+Column.def when(self, condition: Column, value: Any) -> Column
+Column.def withField(self, fieldName: str, col: Column) -> Column
+Column.name
+class Column()
+## sql/conf.py
+RuntimeConfig.def __init__(self, session: _native.Session) -> None
+RuntimeConfig.def get(self, key: str, default: object=_UNSET) -> str | None
+RuntimeConfig.def set(self, key: str, value: str | int | bool) -> None
+RuntimeConfig.def unset(self, key: str) -> None
+class RuntimeConfig()
+## sql/dataframe.py
+ColumnOrName
+ColumnsOrNames
+DataFrame.@property def columns(self) -> list[str]
+DataFrame.@property def dtypes(self) -> list[tuple[str, str]]
+DataFrame.@property def is_cached(self) -> bool
+DataFrame.@property def na(self) -> DataFrameNaFunctions
+DataFrame.@property def schema(self) -> StructType
+DataFrame.@property def sparkSession(self) -> SparkSession
+DataFrame.@property def stat(self) -> DataFrameStatFunctions
+DataFrame.@property def storageLevel(self) -> StorageLevel
+DataFrame.@property def write(self) -> DataFrameWriter
+DataFrame.def __arrow_c_stream__(self, requested_schema: object=None) -> object
+DataFrame.def __getattr__(self, name: str) -> Column
+DataFrame.def __getitem__(self, item: Any) -> Any
+DataFrame.def __init__(self, native: _native.DataFrame, session: SparkSession) -> None
+DataFrame.def __repr__(self) -> str
+DataFrame.def agg(self, *exprs: Column) -> DataFrame
+DataFrame.def alias(self, alias: str) -> DataFrame
+DataFrame.def approxQuantile(self, col: str | list[str] | tuple[str, ...], probabilities: list[float] | tuple[float, ...], relativeError: float) -> list[Any]
+DataFrame.def cache(self) -> DataFrame
+DataFrame.def coalesce(self, numPartitions: int) -> DataFrame
+DataFrame.def collect(self) -> list[Row]
+DataFrame.def corr(self, col1: str, col2: str, method: str | None=None) -> float
+DataFrame.def count(self) -> int
+DataFrame.def cov(self, col1: str, col2: str) -> float
+DataFrame.def createOrReplaceTempView(self, name: str) -> None
+DataFrame.def crossJoin(self, other: DataFrame) -> DataFrame
+DataFrame.def crosstab(self, col1: str, col2: str) -> DataFrame
+DataFrame.def describe(self, *cols: str | list[str]) -> DataFrame
+DataFrame.def distinct(self) -> DataFrame
+DataFrame.def drop(self, *cols: ColumnOrName) -> DataFrame
+DataFrame.def dropDuplicates(self, subset: list[str] | tuple[str, ...] | None=None) -> DataFrame
+DataFrame.def dropna(self, how: str | None='any', thresh: int | None=None, subset: str | tuple[str, ...] | list[str] | None=None) -> DataFrame
+DataFrame.def exceptAll(self, other: DataFrame) -> DataFrame
+DataFrame.def explain(self, extended: bool | str | None=None, mode: str | None=None, *, analyze: bool=False, verbose: bool=False) -> None
+DataFrame.def explainString(self, extended: bool | str | None=None, mode: str | None=None, *, analyze: bool=False, verbose: bool=False, json: bool=False) -> str
+DataFrame.def fillna(self, value: float | str | bool | dict[str, Any], subset: str | tuple[str, ...] | list[str] | None=None) -> DataFrame
+DataFrame.def filter(self, condition: Column | str) -> DataFrame
+DataFrame.def first(self) -> Row | None
+DataFrame.def freqItems(self, cols: list[str] | tuple[str, ...], support: float | None=None) -> DataFrame
+DataFrame.def groupBy(self, *cols: ColumnsOrNames) -> GroupedData
+DataFrame.def head(self, n: int | None=None) -> Row | list[Row] | None
+DataFrame.def hint(self, name: str, *parameters: Any) -> DataFrame
+DataFrame.def intersect(self, other: DataFrame) -> DataFrame
+DataFrame.def intersectAll(self, other: DataFrame) -> DataFrame
+DataFrame.def join(self, other: DataFrame, on: str | list[str] | Column | list[Column] | None=None, how: str | None=None) -> DataFrame
+DataFrame.def limit(self, num: int) -> DataFrame
+DataFrame.def melt(self, ids: ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...], values: ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...] | None, variableColumnName: str, valueColumnName: str) -> DataFrame
+DataFrame.def offset(self, num: int) -> DataFrame
+DataFrame.def orderBy(self, *cols: ColumnsOrNames, ascending: bool | list[bool]=True) -> DataFrame
+DataFrame.def persist(self, storageLevel: StorageLevel=StorageLevel.MEMORY_AND_DISK) -> DataFrame
+DataFrame.def printSchema(self) -> None
+DataFrame.def profile(self) -> ProfileView
+DataFrame.def repartition(self, numPartitions: int | ColumnOrName, *cols: ColumnOrName) -> DataFrame
+DataFrame.def replace(self, to_replace: Any, value: Any=_NO_VALUE, subset: str | tuple[str, ...] | list[str] | None=None) -> DataFrame
+DataFrame.def sample(self, withReplacement: bool | float | None=None, fraction: float | None=None, seed: int | None=None) -> DataFrame
+DataFrame.def sampleBy(self, col: ColumnOrName, fractions: dict[Any, float], seed: int | None=None) -> DataFrame
+DataFrame.def select(self, *cols: ColumnsOrNames) -> DataFrame
+DataFrame.def selectExpr(self, *expr: str | list[str]) -> DataFrame
+DataFrame.def show(self, n: int=20, truncate: bool | int=True, vertical: bool=False) -> None
+DataFrame.def subtract(self, other: DataFrame) -> DataFrame
+DataFrame.def summary(self, *statistics: str | list[str]) -> DataFrame
+DataFrame.def tail(self, num: int) -> list[Row]
+DataFrame.def take(self, num: int) -> list[Row]
+DataFrame.def toArrow(self) -> Any
+DataFrame.def toDF(self, *cols: str) -> DataFrame
+DataFrame.def toJSON(self, use_unicode: bool=True) -> DataFrame
+DataFrame.def toLocalIterator(self, prefetchPartitions: bool=False) -> Iterator[Row]
+DataFrame.def toPandas(self) -> Any
+DataFrame.def transform(self, func: Any, *args: Any, **kwargs: Any) -> DataFrame
+DataFrame.def union(self, other: DataFrame) -> DataFrame
+DataFrame.def unionAll(self, other: DataFrame) -> DataFrame
+DataFrame.def unionByName(self, other: DataFrame, allowMissingColumns: bool=False) -> DataFrame
+DataFrame.def unpersist(self, blocking: bool=False) -> DataFrame
+DataFrame.def unpivot(self, ids: ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...], values: ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...] | None, variableColumnName: str, valueColumnName: str) -> DataFrame
+DataFrame.def withColumn(self, colName: str, col: Column) -> DataFrame
+DataFrame.def withColumnRenamed(self, existing: str, new: str) -> DataFrame
+DataFrame.def withColumnsRenamed(self, colsMap: dict[str, str]) -> DataFrame
+DataFrame.def writeTo(self, table: str) -> DataFrameWriterV2
+DataFrame.drop_duplicates
+DataFrame.groupby
+DataFrame.sort
+DataFrame.where
+EAGER_DEFAULT_MAX_ROWS
+EAGER_MAX_ROWS_KEY
+class DataFrame()
+## sql/functions.py
+__all__
+__all__ = [*_HAND_WRITTEN, *_generated_functions.__all__]
+column
+countDistinct
+def asc(col: ColumnOrName) -> Column
+def call_function(funcName: str, *cols: Any) -> Column
+def col(col: str) -> Column
+def concat(*cols: ColumnOrName) -> Column
+def convert_timezone(sourceTz: Column | None, targetTz: Column, sourceTs: ColumnOrName) -> Column
+def count(col: ColumnOrName) -> Column
+def count_distinct(col: ColumnOrName, *cols: ColumnOrName) -> Column
+def desc(col: ColumnOrName) -> Column
+def expr(str: str) -> Column
+def lit(col: Any) -> Column
+def log(arg1: ColumnOrName | float, arg2: ColumnOrName | None=None) -> Column
+def make_dt_interval(days: ColumnOrName | None=None, hours: ColumnOrName | None=None, mins: ColumnOrName | None=None, secs: ColumnOrName | None=None) -> Column
+def make_interval(years: ColumnOrName | None=None, months: ColumnOrName | None=None, weeks: ColumnOrName | None=None, days: ColumnOrName | None=None, hours: ColumnOrName | None=None, mins: ColumnOrName | None=None, secs: ColumnOrName | None=None) -> Column
+def make_ym_interval(years: ColumnOrName | None=None, months: ColumnOrName | None=None) -> Column
+def try_make_interval(years: ColumnOrName | None=None, months: ColumnOrName | None=None, weeks: ColumnOrName | None=None, days: ColumnOrName | None=None, hours: ColumnOrName | None=None, mins: ColumnOrName | None=None, secs: ColumnOrName | None=None) -> Column
+def udf(f: Any=None, returnType: DataType | str=StringType(), *, useArrow: bool | None=None) -> Any
+def unix_timestamp(timestamp: ColumnOrName | None=None, format: str='yyyy-MM-dd HH:mm:ss') -> Column
+def when(condition: Column, value: Any) -> Column
+## sql/group.py
+GroupedData.def __init__(self, native: _native.GroupedData, df: DataFrame) -> None
+GroupedData.def agg(self, *exprs: Column | dict[str, str]) -> DataFrame
+GroupedData.def avg(self, *cols: str) -> DataFrame
+GroupedData.def count(self) -> DataFrame
+GroupedData.def max(self, *cols: str) -> DataFrame
+GroupedData.def min(self, *cols: str) -> DataFrame
+GroupedData.def pivot(self, pivot_col: str, values: list[Any] | None=None) -> GroupedData
+GroupedData.def sum(self, *cols: str) -> DataFrame
+GroupedData.mean
+class GroupedData()
+## sql/na.py
+DataFrameNaFunctions.def __init__(self, df: DataFrame) -> None
+DataFrameNaFunctions.def drop(self, how: str | None='any', thresh: int | None=None, subset: Any=None) -> DataFrame
+DataFrameNaFunctions.def fill(self, value: Any, subset: Any=None) -> DataFrame
+DataFrameNaFunctions.def replace(self, to_replace: Any, value: Any=_NO_VALUE, subset: Any=None) -> DataFrame
+class DataFrameNaFunctions()
+## sql/pandas/functions.py
+ArrowUDFType.GROUPED_AGG
+ArrowUDFType.GROUPED_AGG_ITER
+ArrowUDFType.SCALAR
+ArrowUDFType.SCALAR_ITER
+PandasUDFType.GROUPED_AGG
+PandasUDFType.GROUPED_AGG_ITER
+PandasUDFType.GROUPED_MAP
+PandasUDFType.SCALAR
+PandasUDFType.SCALAR_ITER
+__all__
+__all__ = ['ArrowUDFType', 'PandasUDFType', 'arrow_udf', 'pandas_udf']
+class ArrowUDFType()
+class PandasUDFType()
+def arrow_udf(f: Any=None, returnType: Any=None, functionType: Any=None) -> Any
+def pandas_udf(f: Any=None, returnType: Any=None, functionType: Any=None) -> Any
+def vectorized_udf(f: Any=None, returnType: Any=None, functionType: Any=None, kind: str='pandas') -> Any
+## sql/profile_view.py
+ProfileView.def __init__(self, document: dict[str, Any] | str) -> None
+ProfileView.def __repr__(self) -> str
+ProfileView.def save(self, path: str | Path, title: str='Krishiv query profile') -> Path
+ProfileView.def to_html(self, title: str='Krishiv query profile') -> str
+__all__
+__all__ = ['ProfileView', 'ui']
+class ProfileView()
+def ui(source: Any, *, path: str | Path | None=None) -> ProfileView
+## sql/readwriter.py
+DataFrameReader.def __init__(self, session: SparkSession) -> None
+DataFrameReader.def csv(self, path: str | list[str], **options: object) -> DataFrame
+DataFrameReader.def format(self, source: str) -> DataFrameReader
+DataFrameReader.def json(self, path: str | list[str], **options: object) -> DataFrame
+DataFrameReader.def load(self, path: str | list[str] | None=None, format: str | None=None, **options: object) -> DataFrame
+DataFrameReader.def option(self, key: str, value: object) -> DataFrameReader
+DataFrameReader.def options(self, **options: object) -> DataFrameReader
+DataFrameReader.def parquet(self, *paths: str) -> DataFrame
+DataFrameWriter.def __init__(self, df: DataFrame) -> None
+DataFrameWriter.def bucketBy(self, numBuckets: int, col: str | list[str] | tuple[str, ...], *cols: str) -> DataFrameWriter
+DataFrameWriter.def csv(self, path: str, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, **options: object) -> None
+DataFrameWriter.def format(self, source: str) -> DataFrameWriter
+DataFrameWriter.def insertInto(self, tableName: str, overwrite: bool | None=None) -> None
+DataFrameWriter.def json(self, path: str, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, **options: object) -> None
+DataFrameWriter.def mode(self, saveMode: str) -> DataFrameWriter
+DataFrameWriter.def option(self, key: str, value: object) -> DataFrameWriter
+DataFrameWriter.def options(self, **options: object) -> DataFrameWriter
+DataFrameWriter.def parquet(self, path: str, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, **options: object) -> None
+DataFrameWriter.def partitionBy(self, *cols: str | list[str] | tuple[str, ...]) -> DataFrameWriter
+DataFrameWriter.def save(self, path: str | None=None, format: str | None=None, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, **options: object) -> None
+DataFrameWriter.def saveAsTable(self, name: str, format: str | None=None, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, **options: object) -> None
+DataFrameWriter.def sortBy(self, col: str | list[str] | tuple[str, ...], *cols: str) -> DataFrameWriter
+DataFrameWriter.def text(self, path: str, compression: str | None=None, lineSep: str | None=None) -> None
+DataFrameWriterV2.def __init__(self, df: DataFrame, table: str) -> None
+DataFrameWriterV2.def append(self) -> None
+DataFrameWriterV2.def clusterBy(self, col: str, *cols: str) -> DataFrameWriterV2
+DataFrameWriterV2.def create(self) -> None
+DataFrameWriterV2.def createOrReplace(self) -> None
+DataFrameWriterV2.def option(self, key: str, value: object) -> DataFrameWriterV2
+DataFrameWriterV2.def options(self, **options: object) -> DataFrameWriterV2
+DataFrameWriterV2.def overwrite(self, condition: Column | str) -> None
+DataFrameWriterV2.def overwritePartitions(self) -> None
+DataFrameWriterV2.def partitionedBy(self, col: str, *cols: str) -> DataFrameWriterV2
+DataFrameWriterV2.def replace(self) -> None
+DataFrameWriterV2.def tableProperty(self, property: str, value: str) -> DataFrameWriterV2
+DataFrameWriterV2.def using(self, provider: str) -> DataFrameWriterV2
+class DataFrameReader()
+class DataFrameWriter()
+class DataFrameWriterV2()
+## sql/row.py
+Row.def __contains__(self, item: object) -> bool
+Row.def __getattr__(self, name: str) -> Any
+Row.def __getitem__(self, item: Any) -> Any
+Row.def __new__(cls, *args: Any, **kwargs: Any) -> Row
+Row.def __reduce__(self) -> tuple[Any, ...]
+Row.def __repr__(self) -> str
+Row.def asDict(self) -> dict[str, Any]
+class Row(tuple[Any, ...])
+## sql/session.py
+Catalog.def __init__(self, session: SparkSession) -> None
+Catalog.def cacheTable(self, tableName: str, storageLevel: StorageLevel | None=None) -> None
+Catalog.def clearCache(self) -> None
+Catalog.def currentDatabase(self) -> str
+Catalog.def dropTempView(self, viewName: str) -> bool
+Catalog.def isCached(self, tableName: str) -> bool
+Catalog.def listDatabases(self) -> DataFrame
+Catalog.def listTables(self, dbName: str | None=None) -> DataFrame
+Catalog.def refreshByPath(self, path: str) -> None
+Catalog.def refreshTable(self, tableName: str) -> DataFrame
+Catalog.def registerFunction(self, name: str, f: Any, returnType: Any=None) -> Any
+Catalog.def tableExists(self, tableName: str, dbName: str | None=None) -> bool
+Catalog.def uncacheTable(self, tableName: str) -> None
+SPARK_VERSION
+SparkSession.@property def catalog(self) -> Catalog
+SparkSession.@property def conf(self) -> RuntimeConfig
+SparkSession.@property def read(self) -> DataFrameReader
+SparkSession.@property def udf(self) -> UDFRegistration
+SparkSession.@property def version(self) -> str
+SparkSession.Builder.def __init__(self) -> None
+SparkSession.Builder.def appName(self, name: str) -> SparkSession.Builder
+SparkSession.Builder.def config(self, key: str | None=None, value: Any=None, *, conf: None=None, map: dict[str, Any] | None=None) -> SparkSession.Builder
+SparkSession.Builder.def create(self) -> SparkSession
+SparkSession.Builder.def getOrCreate(self) -> SparkSession
+SparkSession.Builder.def master(self, master: str) -> SparkSession.Builder
+SparkSession.Builder.def remote(self, url: str) -> SparkSession.Builder
+SparkSession.builder: Builder
+SparkSession.class Builder()
+SparkSession.def __init__(self, native: _native.Session, config: list[tuple[str, str]] | None=None) -> None
+SparkSession.def createDataFrame(self, data: Any, schema: Any=None, samplingRatio: float | None=None, verifySchema: bool=True) -> DataFrame
+SparkSession.def emptyDataFrame(self, schema: StructType | str) -> DataFrame
+SparkSession.def newSession(self) -> SparkSession
+SparkSession.def range(self, start: int, end: int | None=None, step: int=1, numPartitions: int | None=None) -> DataFrame
+SparkSession.def sql(self, sqlQuery: str, args: Any=None, **kwargs: Any) -> DataFrame
+SparkSession.def stop(self) -> None
+SparkSession.def table(self, tableName: str) -> DataFrame
+class Catalog()
+class SparkSession()
+## sql/stat.py
+DataFrameStatFunctions.def __init__(self, df: DataFrame) -> None
+DataFrameStatFunctions.def approxQuantile(self, col: Any, probabilities: Any, relativeError: Any) -> list[Any]
+DataFrameStatFunctions.def corr(self, col1: str, col2: str, method: str | None=None) -> float
+DataFrameStatFunctions.def cov(self, col1: str, col2: str) -> float
+DataFrameStatFunctions.def crosstab(self, col1: str, col2: str) -> DataFrame
+DataFrameStatFunctions.def freqItems(self, cols: Any, support: float | None=None) -> DataFrame
+DataFrameStatFunctions.def sampleBy(self, col: Column | str, fractions: dict[Any, float], seed: int | None=None) -> DataFrame
+PIVOT_MAX_VALUES_DEFAULT
+PIVOT_MAX_VALUES_KEY
+class DataFrameStatFunctions()
+## sql/types.py
+ArrayType.@classmethod def fromJson(cls, json: dict[str, Any]) -> ArrayType
+ArrayType.def __init__(self, elementType: DataType, containsNull: bool=True) -> None
+ArrayType.def __repr__(self) -> str
+ArrayType.def jsonValue(self) -> dict[str, Any]
+ArrayType.def simpleString(self) -> str
+ByteType.@classmethod def typeName(cls) -> str
+ByteType.def simpleString(self) -> str
+CalendarIntervalType.@classmethod def typeName(cls) -> str
+CharType.def __init__(self, length: int) -> None
+CharType.def __repr__(self) -> str
+CharType.def jsonValue(self) -> str
+CharType.def simpleString(self) -> str
+DataType.@classmethod def fromDDL(cls, ddl: str) -> DataType
+DataType.@classmethod def typeName(cls) -> str
+DataType.def __eq__(self, other: object) -> bool
+DataType.def __hash__(self) -> int
+DataType.def __repr__(self) -> str
+DataType.def json(self) -> str
+DataType.def jsonValue(self) -> str | dict[str, Any]
+DataType.def simpleString(self) -> str
+DayTimeIntervalType.DAY
+DayTimeIntervalType.HOUR
+DayTimeIntervalType.MINUTE
+DayTimeIntervalType.SECOND
+DayTimeIntervalType.def __init__(self, startField: int | None=None, endField: int | None=None) -> None
+DayTimeIntervalType.def __repr__(self) -> str
+DayTimeIntervalType.jsonValue
+DayTimeIntervalType.simpleString
+DecimalType.def __init__(self, precision: int=10, scale: int=0) -> None
+DecimalType.def __repr__(self) -> str
+DecimalType.def jsonValue(self) -> str
+DecimalType.def simpleString(self) -> str
+IntegerType.@classmethod def typeName(cls) -> str
+IntegerType.def simpleString(self) -> str
+LongType.@classmethod def typeName(cls) -> str
+LongType.def simpleString(self) -> str
+MapType.@classmethod def fromJson(cls, json: dict[str, Any]) -> MapType
+MapType.def __init__(self, keyType: DataType, valueType: DataType, valueContainsNull: bool=True) -> None
+MapType.def __repr__(self) -> str
+MapType.def jsonValue(self) -> dict[str, Any]
+MapType.def simpleString(self) -> str
+NullType.@classmethod def typeName(cls) -> str
+ShortType.@classmethod def typeName(cls) -> str
+ShortType.def simpleString(self) -> str
+StringType.def __init__(self, collation: str='UTF8_BINARY') -> None
+StringType.def __repr__(self) -> str
+StringType.def jsonValue(self) -> str
+StringType.def simpleString(self) -> str
+StructField.@classmethod def fromJson(cls, json: dict[str, Any]) -> StructField
+StructField.def __hash__(self) -> int
+StructField.def __init__(self, name: str, dataType: DataType, nullable: bool=True, metadata: dict[str, Any] | None=None) -> None
+StructField.def __repr__(self) -> str
+StructField.def jsonValue(self) -> dict[str, Any]
+StructField.def simpleString(self) -> str
+StructField.def typeName(self) -> str
+StructType.@classmethod def fromJson(cls, json: dict[str, Any]) -> StructType
+StructType.@classmethod def typeName(cls) -> str
+StructType.@overload def __getitem__(self, key: slice) -> StructType
+StructType.@overload def __getitem__(self, key: str | int) -> StructField
+StructType.def __getitem__(self, key: int | str | slice) -> StructField | StructType
+StructType.def __hash__(self) -> int
+StructType.def __init__(self, fields: Iterable[StructField] | None=None) -> None
+StructType.def __iter__(self) -> Iterator[StructField]
+StructType.def __len__(self) -> int
+StructType.def __repr__(self) -> str
+StructType.def add(self, field: str | StructField, data_type: str | DataType | None=None, nullable: bool=True, metadata: dict[str, Any] | None=None) -> StructType
+StructType.def fieldNames(self) -> list[str]
+StructType.def jsonValue(self) -> dict[str, Any]
+StructType.def simpleString(self) -> str
+TimestampNTZType.@classmethod def typeName(cls) -> str
+VarcharType.def __init__(self, length: int) -> None
+VarcharType.def __repr__(self) -> str
+VarcharType.def jsonValue(self) -> str
+VarcharType.def simpleString(self) -> str
+YearMonthIntervalType.MONTH
+YearMonthIntervalType.YEAR
+YearMonthIntervalType.def __init__(self, startField: int | None=None, endField: int | None=None) -> None
+YearMonthIntervalType.def __repr__(self) -> str
+YearMonthIntervalType.jsonValue
+YearMonthIntervalType.simpleString
+class ArrayType(DataType)
+class AtomicType(DataType)
+class BinaryType(AtomicType)
+class BooleanType(AtomicType)
+class ByteType(IntegralType)
+class CalendarIntervalType(AtomicType)
+class CharType(AtomicType)
+class DataType()
+class DateType(AtomicType)
+class DayTimeIntervalType(AtomicType)
+class DecimalType(FractionalType)
+class DoubleType(FractionalType)
+class FloatType(FractionalType)
+class FractionalType(NumericType)
+class IntegerType(IntegralType)
+class IntegralType(NumericType)
+class LongType(IntegralType)
+class MapType(DataType)
+class NullType(DataType)
+class NumericType(AtomicType)
+class ShortType(IntegralType)
+class StringType(AtomicType)
+class StructField(DataType)
+class StructType(DataType)
+class TimestampNTZType(AtomicType)
+class TimestampType(AtomicType)
+class VarcharType(AtomicType)
+class VariantType(AtomicType)
+class YearMonthIntervalType(AtomicType)
+## sql/udf.py
+PythonEvalType.NON_UDF
+PythonEvalType.SQL_ARROW_BATCHED_UDF
+PythonEvalType.SQL_ARROW_TABLE_UDF
+PythonEvalType.SQL_ARROW_UDTF
+PythonEvalType.SQL_BATCHED_UDF
+PythonEvalType.SQL_COGROUPED_MAP_ARROW_UDF
+PythonEvalType.SQL_COGROUPED_MAP_PANDAS_UDF
+PythonEvalType.SQL_GROUPED_AGG_ARROW_ITER_UDF
+PythonEvalType.SQL_GROUPED_AGG_ARROW_UDF
+PythonEvalType.SQL_GROUPED_AGG_PANDAS_ITER_UDF
+PythonEvalType.SQL_GROUPED_AGG_PANDAS_UDF
+PythonEvalType.SQL_GROUPED_MAP_ARROW_ITER_UDF
+PythonEvalType.SQL_GROUPED_MAP_ARROW_UDF
+PythonEvalType.SQL_GROUPED_MAP_PANDAS_ITER_UDF
+PythonEvalType.SQL_GROUPED_MAP_PANDAS_UDF
+PythonEvalType.SQL_GROUPED_MAP_PANDAS_UDF_WITH_STATE
+PythonEvalType.SQL_MAP_ARROW_ITER_UDF
+PythonEvalType.SQL_MAP_PANDAS_ITER_UDF
+PythonEvalType.SQL_SCALAR_ARROW_ITER_UDF
+PythonEvalType.SQL_SCALAR_ARROW_UDF
+PythonEvalType.SQL_SCALAR_PANDAS_ITER_UDF
+PythonEvalType.SQL_SCALAR_PANDAS_UDF
+PythonEvalType.SQL_TABLE_UDF
+PythonEvalType.SQL_TRANSFORM_WITH_STATE_PANDAS_INIT_STATE_UDF
+PythonEvalType.SQL_TRANSFORM_WITH_STATE_PANDAS_UDF
+PythonEvalType.SQL_TRANSFORM_WITH_STATE_PYTHON_ROW_INIT_STATE_UDF
+PythonEvalType.SQL_TRANSFORM_WITH_STATE_PYTHON_ROW_UDF
+PythonEvalType.SQL_WINDOW_AGG_ARROW_UDF
+PythonEvalType.SQL_WINDOW_AGG_PANDAS_UDF
+UDFRegistration.def __init__(self, sparkSession: SparkSession)
+UDFRegistration.def register(self, name: str, f: Callable[..., Any], returnType: DataType | str | None=None) -> Any
+UserDefinedFunction.@property def returnType(self) -> DataType
+UserDefinedFunction.def __call__(self, *args: Any, **kwargs: Any) -> Column
+UserDefinedFunction.def __init__(self, func: Callable[..., Any], returnType: DataType | str=StringType(), name: str | None=None, evalType: int=PythonEvalType.SQL_BATCHED_UDF, deterministic: bool=True)
+UserDefinedFunction.def asNondeterministic(self) -> UserDefinedFunction
+__all__
+__all__ = ['PythonEvalType', 'UDFRegistration', 'UserDefinedFunction']
+class PythonEvalType()
+class UDFRegistration()
+class UserDefinedFunction()
+## sql/variant.py
+VariantVal.def __eq__(self, other: object) -> bool
+VariantVal.def __hash__(self) -> int
+VariantVal.def __init__(self, value: bytes, metadata: bytes) -> None
+VariantVal.def __repr__(self) -> str
+VariantVal.def __str__(self) -> str
+VariantVal.def toJson(self, zone_id: str='UTC') -> str
+VariantVal.def toPython(self) -> Any
+class VariantVal()
+def is_variant_struct(arrow_type: Any) -> bool
+## sql/window.py
+Window.@staticmethod def orderBy(*cols: ColumnOrName | Sequence[ColumnOrName]) -> WindowSpec
+Window.@staticmethod def partitionBy(*cols: ColumnOrName | Sequence[ColumnOrName]) -> WindowSpec
+Window.@staticmethod def rangeBetween(start: int, end: int) -> WindowSpec
+Window.@staticmethod def rowsBetween(start: int, end: int) -> WindowSpec
+Window.currentRow: int
+Window.unboundedFollowing: int
+Window.unboundedPreceding: int
+WindowSpec.def __init__(self, native: _native.WindowSpec) -> None
+WindowSpec.def orderBy(self, *cols: ColumnOrName | Sequence[ColumnOrName]) -> WindowSpec
+WindowSpec.def partitionBy(self, *cols: ColumnOrName | Sequence[ColumnOrName]) -> WindowSpec
+WindowSpec.def rangeBetween(self, start: int, end: int) -> WindowSpec
+WindowSpec.def rowsBetween(self, start: int, end: int) -> WindowSpec
+class Window()
+class WindowSpec()
+## storagelevel.py
+StorageLevel.DISK_ONLY: StorageLevel
+StorageLevel.DISK_ONLY_2: StorageLevel
+StorageLevel.MEMORY_AND_DISK: StorageLevel
+StorageLevel.MEMORY_AND_DISK_2: StorageLevel
+StorageLevel.MEMORY_ONLY: StorageLevel
+StorageLevel.MEMORY_ONLY_2: StorageLevel
+StorageLevel.OFF_HEAP: StorageLevel
+StorageLevel.def __eq__(self, other: object) -> bool
+StorageLevel.def __init__(self, useDisk: bool, useMemory: bool, useOffHeap: bool, deserialized: bool, replication: int=1) -> None
+StorageLevel.def __repr__(self) -> str
+StorageLevel.def __str__(self) -> str
+__all__
+__all__ = ['StorageLevel']
+class StorageLevel()
+## testing/__init__.py
+__all__
+__all__ = ['assertDataFrameEqual', 'assertSchemaEqual']
+## testing/pytest_plugin.py
+@pytest.fixture(scope='session') def krishiv_session() -> Iterator[SparkSession]
+## testing/utils.py
+__all__
+__all__ = ['assertDataFrameEqual', 'assertSchemaEqual']
+def assertDataFrameEqual(actual: Any, expected: Any, checkRowOrder: bool=False, rtol: float=1e-05, atol: float=1e-08, ignoreNullable: bool=True, ignoreColumnOrder: bool=False, ignoreColumnName: bool=False, ignoreColumnType: bool=False, maxErrors: int | None=None, showOnlyDiff: bool=False, includeDiffRows: bool=False) -> None
+def assertSchemaEqual(actual: Any, expected: Any, ignoreNullable: bool=True, ignoreColumnOrder: bool=False, ignoreColumnName: bool=False) -> None
