@@ -98,3 +98,19 @@ fn different_subtrees_are_not_shared() {
     let text = run(sql, true).root().to_string();
     assert!(!text.contains("CteRef"), "{text}");
 }
+
+/// TPC-H q15 reads the `revenue0` body twice (the join and the `max` subquery). The join's
+/// inferred `isnotnull(l_suppkey)` stays off the shared body, so both reads stay one
+/// definition and `lineitem` is scanned once (the #598 regression: the inferred filter made
+/// the two copies differ and each was computed).
+#[test]
+fn q15_computes_the_revenue_body_once() {
+    let plan = run(&support::tpch_sql(15), true);
+    let text = plan.root().to_string();
+    assert!(text.starts_with("WithCte"), "{text}");
+    assert_eq!(
+        text.matches("Scan spark_catalog.default.lineitem").count(),
+        1,
+        "{text}"
+    );
+}

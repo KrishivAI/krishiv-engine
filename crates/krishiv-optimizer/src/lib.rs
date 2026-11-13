@@ -586,7 +586,7 @@ fn unoptimised(plan: &Plan, keyed: Arc<LogicalPlan>) -> Result<Plan, KrishivErro
 
 /// [`constraints::infer_join_filters`] at every join, bottom up.
 fn infer_join_filters(root: &Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, KrishivError> {
-    let mut memo = constraints::Memo::default();
+    let mut memo = constraints::Memo::for_root(root);
     dag::rewrite_up(Arc::clone(root), &mut |p| {
         Ok(constraints::infer_join_filters(p, &mut memo))
     })

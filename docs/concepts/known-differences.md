@@ -113,6 +113,9 @@ another expression, so:
   162 inferred `isnotnull` are of this kind);
 - Spark adds `isnotnull` for every column a null-rejecting join condition reads (`l_quantity < 0.2 * avg(..)`) and
   for a key equality common to every branch of an `OR`; Krishiv only for top-level `=` keys;
+- a join key's `isnotnull` is not pushed into a subtree that another part of the query reads too (TPC-H q15's
+  `revenue0`, read by the join and by the `max` subquery): the filter would make the two reads differ, and they
+  could no longer be computed once;
 - such a filter can raise in Spark (a cast or arithmetic under ANSI) on rows the query's own predicates never
   evaluate; Krishiv does not raise there.
 
