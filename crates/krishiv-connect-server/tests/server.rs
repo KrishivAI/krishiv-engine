@@ -553,6 +553,8 @@ async fn every_placeholder_rpc_is_unimplemented_until_the_server_drains() {
     let service =
         krishiv_connect_server::ConnectService::new(Arc::clone(&manager), Arc::clone(&draining));
     assert!(Arc::ptr_eq(service.manager(), &manager));
+    // No artifact directory until an artifact is written.
+    assert!(service.artifacts().root_path().is_none());
     for (drain, code) in [(false, Code::Unimplemented), (true, Code::Unavailable)] {
         draining.store(drain, Ordering::Release);
         let results: Vec<(&str, tonic::Status)> = vec![

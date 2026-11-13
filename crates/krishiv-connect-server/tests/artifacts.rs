@@ -777,6 +777,17 @@ async fn planted_links_in_the_session_directory_are_not_followed() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_empty_stream_is_refused() {
+    let run = start().await;
+    let s = add(&run, Vec::new()).await.unwrap_err();
+    assert_eq!(
+        error_class(&s),
+        "CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SET"
+    );
+    assert!(!info(&s).metadata.contains_key("errorId"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn add_artifacts_on_an_unknown_session_format_has_no_error_id() {
     let run = start().await;
     let s = add_in(

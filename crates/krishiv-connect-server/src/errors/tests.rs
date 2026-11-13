@@ -141,3 +141,15 @@ fn the_cause_chain_is_cut_at_five_and_redacted_per_cause() {
         "{params:?}"
     );
 }
+
+#[test]
+fn dataframe_contexts_carry_no_span() {
+    let mut c = ErrorQueryContext::dataframe();
+    c.summary = "select".to_owned();
+    let r = details(&error(0).with_query_context(c));
+    let t = r.errors[0].spark_throwable.as_ref().unwrap();
+    let q = &t.query_contexts[0];
+    assert_eq!(q.context_type, ContextType::Dataframe as i32);
+    assert_eq!((q.start_index, q.stop_index), (0, 0));
+    assert_eq!(q.summary, "select");
+}
