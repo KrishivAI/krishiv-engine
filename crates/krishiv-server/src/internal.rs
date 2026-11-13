@@ -3,8 +3,8 @@
 //!
 //! The server holds no engine state. Everything it shows comes from a [`UiSource`] (the system tables
 //! `queries`, `operators`, `memory`, `caches`, ...), read as JSON rows once per request, so a handler never
-//! takes an engine lock beyond the snapshot the source builds (design T133 item 7). Every endpoint needs the
-//! start-up token; columns outside each endpoint's allowlist are dropped, so a table that grows a column does not
+//! takes an engine lock beyond the snapshot the source builds (design T133 item 7). Every endpoint asks the
+//! router's [`Guard`] (the start-up token, or the server's authentication); columns outside each endpoint's allowlist are dropped, so a table that grows a column does not
 //! put it on the page by accident.
 //!
 //! Timestamps are microseconds since the epoch, as the system tables hold them.
@@ -24,6 +24,8 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use serde_json::{Map, Value, json};
+
+use crate::guard::{Access, Guard, GuardRequest, GuardSurface, Refusal, TokenGuard, peer_of};
 
 /// One system-table row as JSON (column name to value).
 pub type Row = Map<String, Value>;
@@ -101,7 +103,7 @@ pub trait UiSource: Send + Sync + 'static {
 #[derive(Clone)]
 struct UiState {
     source: Arc<dyn UiSource>,
-    token: Arc<str>,
+    guard: Arc<dyn Guard>,
     started: Instant,
     /// Event streams open now (capped at [`MAX_EVENT_CLIENTS`]).
     streams: Arc<AtomicUsize>,
@@ -148,9 +150,16 @@ async fn security_headers(req: axum::extract::Request, next: Next) -> Response {
 /// The admin router with the UI backend: [`crate::router`] plus `/api/internal/*`, behind `token`, with the
 /// security headers on every response.
 pub fn router_with_ui(source: Arc<dyn UiSource>, token: &str) -> Router {
+    router_with_ui_guard(source, Arc::new(TokenGuard::new(token)))
+}
+
+/// [`router_with_ui`] behind `guard`: reading other principals' work needs [`Access::Monitor`], a cancel
+/// [`Access::Operate`] (ADR 0046 §3: both operator). The token is taken from the same places as with a start-up
+/// token, so the page works unchanged with a configured token.
+pub fn router_with_ui_guard(source: Arc<dyn UiSource>, guard: Arc<dyn Guard>) -> Router {
     let state = UiState {
         source,
-        token: token.into(),
+        guard,
         started: Instant::now(),
         streams: Arc::new(AtomicUsize::new(0)),
         snapshot: Arc::new(tokio::sync::Mutex::new(None)),
@@ -196,16 +205,6 @@ fn source_error(e: &UiError) -> Response {
     )
 }
 
-/// Constant-time equality of two tokens.
-fn same(a: &str, b: &str) -> bool {
-    let (a, b) = (a.as_bytes(), b.as_bytes());
-    let mut diff = a.len() ^ b.len();
-    for i in 0..a.len().max(b.len()) {
-        diff |= usize::from(a.get(i).copied().unwrap_or(0) ^ b.get(i).copied().unwrap_or(0));
-    }
-    diff == 0
-}
-
 /// A query-string parameter's raw value (no percent-decoding: the parameters here are ids, numbers and names).
 fn param<'a>(uri: &'a Uri, name: &str) -> Option<&'a str> {
     uri.query()?
@@ -245,12 +244,44 @@ async fn require_token(
     req: axum::extract::Request,
     next: Next,
 ) -> Response {
-    match presented(req.method(), req.headers(), req.uri()) {
-        Some(t) if same(&t, &s.token) => next.run(req).await,
-        _ => error(
-            StatusCode::UNAUTHORIZED,
-            "unauthorized",
-            "a valid UI token is required",
+    let token = presented(req.method(), req.headers(), req.uri());
+    let malformed = token.is_none() && req.headers().contains_key(header::AUTHORIZATION);
+    // Anything but a read changes something: a cancel acts on another principal's query.
+    let access = if req.method() == Method::GET {
+        Access::Monitor
+    } else {
+        Access::Operate
+    };
+    let request = GuardRequest::new(GuardSurface::Ui, access)
+        .with_token(token.as_deref())
+        .with_malformed(malformed)
+        .with_peer(peer_of(req.extensions()));
+    match s.guard.check(request).await {
+        Ok(()) => next.run(req).await,
+        Err(Refusal::Unauthenticated) => {
+            let mut res = error(
+                StatusCode::UNAUTHORIZED,
+                "unauthorized",
+                "a valid UI token is required",
+            );
+            res.headers_mut()
+                .insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+            res
+        }
+        Err(Refusal::Denied) => error(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "the principal's role does not allow this",
+        ),
+        Err(Refusal::Unavailable) => error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "unavailable",
+            "authentication is not possible now; retry later",
+        ),
+        Err(_) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "misconfigured",
+            "the server cannot authenticate this request",
         ),
     }
 }
