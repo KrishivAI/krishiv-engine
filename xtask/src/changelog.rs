@@ -51,12 +51,30 @@ pub fn is_fragment_path(path: &str) -> bool {
         .is_some_and(|name| !name.contains('/') && parse_name(name).is_some())
 }
 
-/// The CI check over the files a pull request adds: a fragment, or the exempt label.
+/// The CI check over the files a pull request adds: a non-empty fragment, or the exempt label.
+/// `read` returns a fragment's text, so a file that `assemble` would reject does not pass.
 ///
 /// # Errors
-/// Returns the instruction to add a fragment or the label.
-pub fn check(added: &[&str], labels: &[&str]) -> Result<(), String> {
-    if added.iter().any(|p| is_fragment_path(p)) || labels.contains(&EXEMPT_LABEL) {
+/// Returns the instruction to add a fragment or the label, or the empty fragment.
+pub fn check(
+    added: &[&str],
+    labels: &[&str],
+    read: impl Fn(&str) -> Option<String>,
+) -> Result<(), String> {
+    let fragments: Vec<&str> = added
+        .iter()
+        .copied()
+        .filter(|p| is_fragment_path(p))
+        .collect();
+    if let Some(empty) = fragments
+        .iter()
+        .find(|p| read(p).is_none_or(|t| t.trim().is_empty()))
+    {
+        return Err(format!(
+            "{empty} is empty: write one or two lines a user can read"
+        ));
+    }
+    if !fragments.is_empty() || labels.contains(&EXEMPT_LABEL) {
         return Ok(());
     }
     Err(format!(
@@ -153,7 +171,7 @@ pub fn insert_release(changelog: &str, section: &str) -> Result<String, String> 
 pub fn run_check(args: &DiffArgs, labels: &[&str]) -> Result<(), String> {
     let added = args.git_added_files()?;
     let added: Vec<&str> = added.iter().map(String::as_str).collect();
-    check(&added, labels)?;
+    check(&added, labels, |p| args.git_show_head(p).ok())?;
     println!("changelog: OK");
     Ok(())
 }
@@ -230,10 +248,15 @@ mod tests {
 
     #[test]
     fn check_needs_fragment_or_label() {
-        assert!(check(&["changelog.d/1.fixed.md"], &[]).is_ok());
-        assert!(check(&["src/a.rs"], &["no-changelog"]).is_ok());
-        assert!(check(&["src/a.rs", "changelog.d/README.md"], &[]).is_err());
-        assert!(check(&["changelog.d/sub/1.fixed.md"], &[]).is_err());
+        let text = |_: &str| Some("A line.".to_owned());
+        assert!(check(&["changelog.d/1.fixed.md"], &[], text).is_ok());
+        assert!(check(&["src/a.rs"], &["no-changelog"], text).is_ok());
+        assert!(check(&["src/a.rs", "changelog.d/README.md"], &[], text).is_err());
+        assert!(check(&["changelog.d/sub/1.fixed.md"], &[], text).is_err());
+        let blank = |_: &str| Some(" \n".to_owned());
+        assert!(check(&["changelog.d/1.fixed.md"], &[], blank).is_err());
+        assert!(check(&["changelog.d/1.fixed.md"], &["no-changelog"], blank).is_err());
+        assert!(check(&["changelog.d/1.fixed.md"], &[], |_| None).is_err());
     }
 
     #[test]

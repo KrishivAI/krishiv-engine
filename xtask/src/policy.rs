@@ -63,6 +63,14 @@ impl DiffArgs {
         Ok(out.lines().map(str::to_owned).collect())
     }
 
+    /// The text of `path` at the head of the range.
+    ///
+    /// # Errors
+    /// Returns the git failure message.
+    pub fn git_show_head(&self, path: &str) -> Result<String, String> {
+        self.git(&["show", &format!("{}:{path}", self.head)])
+    }
+
     /// `git diff -U0` of the range, for line-level reports.
     ///
     /// # Errors
