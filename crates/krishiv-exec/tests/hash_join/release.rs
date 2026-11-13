@@ -25,6 +25,21 @@ async fn reserved_at_finalize(
     limit: usize,
     spill: Option<SpillScope>,
 ) -> (usize, u64, Vec<String>) {
+    let (held, build_bytes, _, out) =
+        held_at_finalize(join_type, build, probe, drivers, limit, spill).await;
+    (held, build_bytes, out)
+}
+
+/// As [`reserved_at_finalize`], also returning the bytes the sink itself
+/// had reserved for the rows it buffered (the batches it replays).
+async fn held_at_finalize(
+    join_type: JoinType,
+    build: &[Row],
+    probe: &[Row],
+    drivers: usize,
+    limit: usize,
+    spill: Option<SpillScope>,
+) -> (usize, u64, u64, Vec<String>) {
     const HANG: Duration = Duration::from_secs(60);
     let root = root(limit);
     let q = query(&root, 1, ExecConfig::default());
@@ -54,7 +69,11 @@ async fn reserved_at_finalize(
     q.finished().await;
     assert_released(&root);
     let build_bytes = metric(&q, "HashJoinBuild", "steady_reserved_bytes");
-    (held, build_bytes, render(&out))
+    let sink_bytes = out
+        .iter()
+        .map(|b| b.data().get_array_memory_size() as u64)
+        .sum();
+    (held, build_bytes, sink_bytes, render(&out))
 }
 
 fn rows(n: i64) -> Vec<Row> {
@@ -93,7 +112,7 @@ async fn a_right_outer_join_emits_its_build_rows_before_the_release() {
     let build = rows(40_000);
     let probe: Vec<Row> = (0..500).map(|i| r(Some(i * 3), Some("p"), i)).collect();
     for drivers in [1, 4] {
-        let (held, build_bytes, out) = reserved_at_finalize(
+        let (held, build_bytes, sink_bytes, out) = held_at_finalize(
             JoinType::RightOuter,
             &build,
             &probe,
@@ -105,15 +124,20 @@ async fn a_right_outer_join_emits_its_build_rows_before_the_release() {
         // Every build row once: 500 matched, the rest with NULL probe columns.
         assert_eq!(out.len(), 40_000, "{drivers} drivers: every build row");
         // The sink holds the emitted rows, not the tables beside them.
+        // Measured: released, about 14 KiB beside the sink's rows; with the
+        // release skipped, more than the whole build.
+        let beside_sink = (held as u64).saturating_sub(sink_bytes);
         assert!(
-            (held as u64) < 2 * build_bytes,
-            "{drivers} drivers: held {held}, build {build_bytes}"
+            beside_sink < build_bytes / 2,
+            "{drivers} drivers: held {beside_sink} beside the sink's {sink_bytes} bytes, \
+             build {build_bytes}"
         );
     }
 }
 
 /// A build that spilled some partitions: the grace phase joins them after
-/// the in-memory ones, and the release waits for every driver's grace work.
+/// the in-memory ones, and the release waits for every driver's grace work
+/// (a regression guard: it passes with or without the release).
 #[tokio::test(start_paused = true)]
 async fn a_spilled_build_joins_every_row_before_the_release() {
     let build = rows(40_000);
@@ -143,7 +167,8 @@ async fn a_spilled_build_joins_every_row_before_the_release() {
 }
 
 /// A limit above the probe ends drivers before their flush: the drivers that
-/// left early release nothing, and the query still ends with its pool empty.
+/// left early release nothing, and the query still ends with its pool empty
+/// (a regression guard: it passes with or without the release).
 #[tokio::test]
 async fn a_limit_above_the_probe_ends_the_join_cleanly() {
     let build = rows(40_000);
