@@ -87,6 +87,8 @@ pub struct EngineRuntime {
     live: Mutex<LiveSet>,
     /// The sessions, live and recently ended (`system.sessions`).
     pub(crate) sessions: Arc<crate::sessions::SessionRegistry>,
+    /// The session actions running now, cancellable before their query exists.
+    pub(crate) actions: Arc<crate::action::Actions>,
     /// The I/O scheduler: pacing, the file-metadata and block caches and
     /// the local store, one for every session (design P2-E1 R3). Stores built
     /// from a session's `fs.*` settings carry a fingerprint of them in their
@@ -265,6 +267,7 @@ impl EngineRuntime {
             deadlines: OnceLock::new(),
             live: Mutex::new(LiveSet::default()),
             sessions: Arc::default(),
+            actions: Arc::default(),
             io,
             private,
         };
@@ -351,7 +354,8 @@ impl EngineRuntime {
                 session_id: Arc::from(session_id),
                 id: Arc::from(id),
                 query: None,
-                pending: None,
+                // The action running it hands over: a cancellation it already took is kept.
+                pending: crate::action::hand_over(session, id),
             },
         );
         index
@@ -407,6 +411,25 @@ impl EngineRuntime {
         &self,
         reason: CancelReason,
         pick: impl Fn(u64, &str) -> bool,
+    ) -> Vec<QueryId> {
+        let mut ids = self.cancel_queries(reason, &pick);
+        // Actions still analyzing or planning, and the rows of those that
+        // handed over after the walk above (a reservation racing this cancel).
+        let (actions, rows) = self.actions.cancel_where(reason, &pick);
+        for (session, row) in rows {
+            ids.extend(self.cancel_queries(reason, &|s, q| s == session && q == &*row));
+        }
+        ids.extend(actions.iter().map(|id| QueryId::minted(id.to_string())));
+        let mut seen = std::collections::HashSet::new();
+        ids.retain(|id| seen.insert(id.as_str().to_owned()));
+        ids
+    }
+
+    /// [`Self::cancel_where`] over the registered queries only.
+    fn cancel_queries(
+        &self,
+        reason: CancelReason,
+        pick: &impl Fn(u64, &str) -> bool,
     ) -> Vec<QueryId> {
         let mut pending = Vec::new();
         let picked: Vec<(Arc<QueryContext>, Arc<str>, Arc<str>)> = {

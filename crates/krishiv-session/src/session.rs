@@ -1119,11 +1119,17 @@ impl Session {
         work: impl Future<Output = Result<T, KrishivError>> + Send + 'static,
     ) -> Result<T, KrishivError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
+        // Registered from here on: `cancel` and `interrupt_all` reach the
+        // action during analysis and planning too (`action.rs`).
+        let action = self.state.runtime.actions.begin(
+            self.state.number,
+            self.operation_id().map(crate::QueryId::as_str),
+        );
         let task = self.state.runtime.executor.spawn(
             WorkloadClass::Interactive,
             Box::pin(async move {
                 // The caller may be gone; its result is then not needed.
-                let _ = tx.send(work.await);
+                let _ = tx.send(action.run(work).await);
             }),
         );
         let _abort = AbortOnDrop(task);
