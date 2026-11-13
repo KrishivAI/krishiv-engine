@@ -44,7 +44,9 @@ pub fn string_literal_bodies(sql: &str) -> Vec<String> {
         let text = t.span.text(sql);
         let body = match t.kind {
             TokenKind::String | TokenKind::DoubleQuoted => {
-                text.get(1..text.len().saturating_sub(1))
+                // a raw string (`r'..'`) carries its prefix in the token, like the parser's unescape
+                let quoted = text.strip_prefix(['r', 'R']).unwrap_or(text);
+                quoted.get(1..quoted.len().saturating_sub(1))
             }
             TokenKind::DollarString => text.strip_prefix('$').and_then(|rest| {
                 let tag = rest.find('$')? + 2;
@@ -198,6 +200,14 @@ pub fn query_summary(sql: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raw_string_bodies_drop_the_prefix_and_quotes() {
+        assert_eq!(
+            string_literal_bodies("SELECT r'hunter2', R\"abc\", 'x' FROM t"),
+            ["hunter2", "abc", "x"]
+        );
+    }
 
     #[test]
     fn literals_are_removed() {

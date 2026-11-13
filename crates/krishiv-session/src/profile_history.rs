@@ -298,12 +298,19 @@ struct Writer {
 impl Writer {
     fn run(mut self, rx: &Receiver<Msg>) {
         let mut rows: Vec<StoredProfile> = Vec::new();
+        // When the oldest buffered row entered: the flush is due LINGER after it, however often later rows arrive.
+        let mut since: Option<std::time::Instant> = None;
         loop {
-            let msg = if rows.is_empty() {
-                rx.recv().map_err(|_| RecvTimeoutError::Disconnected)
-            } else {
-                rx.recv_timeout(LINGER)
+            if rows.is_empty() {
+                since = None;
+            }
+            let msg = match since {
+                None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
+                Some(t) => rx.recv_timeout(LINGER.saturating_sub(t.elapsed())),
             };
+            if since.is_none() && matches!(msg, Ok(Msg::Entry(_))) {
+                since = Some(std::time::Instant::now());
+            }
             match msg {
                 Ok(Msg::Entry(entry)) => {
                     match stored(*entry, self.mask) {
@@ -375,10 +382,18 @@ fn stored(e: HistoryEntry, mask: bool) -> Option<StoredProfile> {
     let mut sql = e.sql;
     if mask {
         // A generated output name (`SELECT 'x'` is named `x`) prints the literal's text into the plan.
-        let names = sql
-            .as_deref()
-            .map(krishiv_sql::string_literal_bodies)
-            .unwrap_or_default();
+        // A DataFrame query has no text to read the literals from, so every result column name is masked: it can
+        // be a literal's (`lit("x")` is named `x`), and over-masking a real column name is the safe error.
+        let names = match sql.as_deref() {
+            Some(text) => krishiv_sql::string_literal_bodies(text),
+            None => e
+                .plan
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| f.name().clone())
+                .collect(),
+        };
         mask_plan(&mut profile.plan, &names);
         sql = sql.map(|t| krishiv_sql::mask_literals(&t));
     }
