@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The config entries of the lakehouse connectors: the Delta log pool and the catalog parse
-//! limits (P3-T021 design note section 3.2, P3 lakehouse design section 5.6).
+//! The config entries of the lakehouse connectors: the Delta log pool, the catalog parse
+//! limits (P3-T021 design note section 3.2, P3 lakehouse design section 5.6) and the Iceberg
+//! manifest cache (P3-T026 design note section 2.3).
 
 use super::MIB;
 use crate::config::{ConfigEntry, ConfigValue, Scope, SettableBy, ValueType};
@@ -45,6 +46,22 @@ pub static CATALOG_MAX_COLUMNS: ConfigEntry = ConfigEntry {
     doc: "Most columns, nested fields included, of a table schema a lakehouse connector accepts \
           from table metadata (a Delta `metaData` schema string, an Iceberg schema). A wider one \
           fails the load with `KRISHIV_CATALOG_LIMIT_EXCEEDED`.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
+/// Bytes of decoded Iceberg manifests kept for planning.
+pub static ICEBERG_MANIFEST_CACHE_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.iceberg.manifestCache.bytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(64 * MIB)),
+    doc: "Estimated bytes of decoded Iceberg manifest entries kept in memory, least recently used \
+          first out, so that planning a snapshot again (a self-join, a CTE, the next query on the \
+          same table) does not fetch and parse its manifests again. Manifests are immutable, so \
+          entries are keyed by path and length and never go stale. One cache per Iceberg storage \
+          registration, shared by every table opened through it; 0 disables it.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.2.0",

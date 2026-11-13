@@ -224,6 +224,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_SESSION_IDLE_TIMEOUT,
     ),
     (
+        "krishiv.iceberg.manifestCache.bytes",
+        &ICEBERG_MANIFEST_CACHE_BYTES,
+    ),
+    (
         "krishiv.sql.files.maxPartitionBytes",
         &FILES_MAX_PARTITION_BYTES,
     ),

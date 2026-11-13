@@ -1385,10 +1385,24 @@ fn delta_and_catalog_limit_entries_parse_and_default() {
     assert!(c.set("krishiv.delta.logThreads", "0").is_err());
     assert!(c.set("krishiv.catalog.maxColumns", "-1").is_err());
     assert!(c.set("krishiv.catalog.maxMetadataBytes", "lots").is_err());
+    let cache = |c: &Config| {
+        c.get(&ICEBERG_MANIFEST_CACHE_BYTES)
+            .and_then(ConfigValue::as_size)
+    };
+    assert_eq!(cache(&c), Some(64 << 20));
+    c.set("krishiv.iceberg.manifestCache.bytes", "0").unwrap();
+    assert_eq!(cache(&c), Some(0));
+    c.set("krishiv.iceberg.manifestCache.bytes", "1g").unwrap();
+    assert_eq!(cache(&c), Some(1 << 30));
+    assert!(
+        c.set("krishiv.iceberg.manifestCache.bytes", "lots")
+            .is_err()
+    );
     for e in [
         &DELTA_LOG_THREADS,
         &CATALOG_MAX_METADATA_BYTES,
         &CATALOG_MAX_COLUMNS,
+        &ICEBERG_MANIFEST_CACHE_BYTES,
     ] {
         assert_eq!(e.scope, Scope::Cluster, "{}", e.key);
     }
