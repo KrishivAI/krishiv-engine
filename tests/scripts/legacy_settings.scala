@@ -14,8 +14,19 @@ def call(o: AnyRef, name: String): String = {
   String.valueOf(m.invoke(o))
 }
 
+// A setting can be registered under another key and carry the legacy name as an alternative
+// (`withAlternative`): setting the alternative reads the same entry, so it counts as that entry's default.
+def alts(o: AnyRef): Seq[String] = {
+  val m = o.getClass.getMethod("alternatives")
+  m.setAccessible(true)
+  m.invoke(o).asInstanceOf[Iterable[AnyRef]].toSeq.map {
+    case t: Product => String.valueOf(t.productElement(0))
+    case s => String.valueOf(s)
+  }
+}
+
 entries
-  .map(e => (call(e, "key"), call(e, "defaultValueString")))
+  .flatMap(e => (call(e, "key") +: alts(e)).map(k => (k, call(e, "defaultValueString"))))
   .filter(_._1.startsWith("spark.sql.legacy."))
   .sortBy(_._1)
   .foreach { case (k, d) => println("@@L\t" + k + "\t" + d) }

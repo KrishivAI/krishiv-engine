@@ -528,7 +528,7 @@ impl Config {
     /// Sets `key` (a `krishiv.*` key, a Spark alias or another key) to
     /// `value`. On error the config is unchanged.
     pub fn set(&mut self, key: &str, value: &str) -> Result<Option<ConfigWarning>, KrishivError> {
-        if let Some(entry) = lookup(key) {
+        if let Some(entry) = lookup(legacy::primary_key(key)) {
             let v = entry.parse(key, value)?;
             self.values.insert(entry.key, v);
             Ok(None)

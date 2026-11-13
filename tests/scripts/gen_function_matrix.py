@@ -848,8 +848,9 @@ def spark_shell(container: str, script: str, data: str = "") -> list[str]:
     # prefixes a prompt to some lines (`scala> @@END`).
     shell = "/opt/spark/bin/spark-shell --master 'local[1]' --driver-memory 2g"
     for how in (f"{shell} -I /tmp/krishiv_script.scala", f"{shell} < /tmp/krishiv_script.scala"):
-        cmd = ["docker", "exec", container, "sh", "-c", f"{how} 2>/dev/null; true"]
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=3600, check=True).stdout
+        cmd = ["docker", "exec", container, "sh", "-c", f"{how}; true"]
+        run = subprocess.run(cmd, capture_output=True, text=True, timeout=3600, check=True)
+        out, err = run.stdout, run.stderr
         lines = [m.group(1) for line in out.splitlines() if (m := re.match(r"^(?:scala> )*(@@.*)$", line))]
         if "@@END" in lines:
             break
@@ -858,7 +859,7 @@ def spark_shell(container: str, script: str, data: str = "") -> list[str]:
         check=False,
     )
     if "@@END" not in lines:
-        raise SystemExit("spark-shell script did not complete:\n" + out[-2000:])
+        raise SystemExit("spark-shell script did not complete:\n" + out[-2000:] + "\nstderr:\n" + err[-2000:])
     return lines
 
 
@@ -964,7 +965,16 @@ def main() -> int:
     if missing:
         raise SystemExit("every SHOW FUNCTIONS name must be in the registry dump")
     names = shown if not args.only else sorted(set(args.only.split(",")) & set(shown))
-    render_conf = {k: main_session.conf.get(k) for k in RENDER_CONF_KEYS}
+
+    def read_conf(k: str) -> str | None:
+        try:
+            return main_session.conf.get(k)
+        except Exception as e:  # a release that lacks the key (`binaryOutputStyle` is 4.0+): unset there
+            if "SQL_CONF_NOT_FOUND" in str(e):
+                return None
+            raise
+
+    render_conf = {k: read_conf(k) for k in RENDER_CONF_KEYS}
     base_conf = dict(sorted({TZ: BASE_TZ, **{k: v for k, v in render_conf.items() if v is not None}}.items()))
     unset_conf = sorted(k for k, v in render_conf.items() if v is None)
 
