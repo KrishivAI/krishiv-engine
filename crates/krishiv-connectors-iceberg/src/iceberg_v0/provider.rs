@@ -30,7 +30,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow_schema::{FieldRef, SchemaRef};
 use krishiv_common::config::Config;
@@ -43,6 +43,7 @@ use krishiv_io::{
     ColumnPath, FieldMapping, FileConstants, FileFormat, FileRef, FormatOptions, IoContext,
     NameMapping, PushdownExpr, ScalarValue, ScanOptions, VersionToken, WithoutFieldIds,
 };
+use krishiv_optimizer::TableStats;
 
 use super::eq_deletes::{self, EqProjection, FILE_ORDINAL};
 use super::lazy::{self, DeleteEnv, DeleteSource, DeleteState, LazySelections, Locate, ScanTask};
@@ -213,6 +214,22 @@ impl TableProvider for IcebergTableProvider {
     fn scan(&self) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
         Ok(Arc::clone(&self.scan) as Arc<dyn ScanPushdown>)
     }
+
+    /// From the manifests ([`super::stats`]), worked out once.
+    fn statistics(&self) -> Option<TableStats> {
+        let s = &self.scan;
+        Some(
+            s.stats
+                .get_or_init(|| {
+                    super::stats::table_stats(&s.entries, &s.index, &s.snapshot.fields, &s.metrics)
+                })
+                .clone(),
+        )
+    }
+
+    fn scan_units(&self) -> Option<u64> {
+        Some(super::stats::scan_units(&self.scan.entries))
+    }
 }
 
 /// The scan factory of an [`IcebergTableProvider`]: a [`FileScan`] over the
@@ -238,6 +255,8 @@ struct IcebergScan {
     base: FileScan,
     /// Whether `build` prunes files (not for given splits).
     prune: bool,
+    /// The table's statistics, once asked for.
+    stats: Arc<OnceLock<TableStats>>,
 }
 
 impl fmt::Debug for IcebergScan {
@@ -349,6 +368,7 @@ impl IcebergScan {
             metrics: Arc::new(metrics),
             parts,
             prune: true,
+            stats: Arc::default(),
         })
     }
 

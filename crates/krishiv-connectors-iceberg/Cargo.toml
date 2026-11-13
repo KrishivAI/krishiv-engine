@@ -29,6 +29,9 @@ krishiv-common = { path = "../krishiv-common" }
 krishiv-exec = { path = "../krishiv-exec" }
 krishiv-io = { path = "../krishiv-io" }
 krishiv-memory = { path = "../krishiv-memory" }
+# The optimizer's statistics (`TableStats`, `Literal` bounds) from manifests.
+krishiv-optimizer = { path = "../krishiv-optimizer" }
+krishiv-plan = { path = "../krishiv-plan" }
 krishiv-types = { path = "../krishiv-types" }
 # Deletion vectors (the portable roaring64 layout); already built for iceberg.
 roaring = { workspace = true, features = ["std"] }
@@ -39,7 +42,6 @@ typetag = { workspace = true }
 
 [dev-dependencies]
 arrow-buffer = { workspace = true }
-krishiv-optimizer = { path = "../krishiv-optimizer" }
 krishiv-plan = { path = "../krishiv-plan", features = ["testing"] }
 krishiv-sql = { path = "../krishiv-sql" }
 object_store = { workspace = true }

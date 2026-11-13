@@ -7,6 +7,7 @@ pub(crate) mod eq_deletes;
 pub(crate) mod lazy;
 pub(crate) mod provider;
 pub(crate) mod scan;
+pub(crate) mod stats;
 pub(crate) mod storage;
 pub(crate) mod table;
 pub(crate) mod types;

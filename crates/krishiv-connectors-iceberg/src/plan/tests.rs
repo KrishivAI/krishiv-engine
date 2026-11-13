@@ -34,7 +34,7 @@ fn field(id: i32, name: &str, ty: IcebergType) -> SchemaField {
 }
 
 /// A data file with `rows` rows and nothing else known.
-pub(super) fn file(rows: u64) -> ContentFile {
+pub(crate) fn file(rows: u64) -> ContentFile {
     ContentFile {
         content: ContentKind::Data,
         path: "f.parquet".to_owned(),

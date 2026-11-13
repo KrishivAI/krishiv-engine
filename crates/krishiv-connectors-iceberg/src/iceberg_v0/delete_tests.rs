@@ -792,6 +792,42 @@ fn equality_deletes_follow_files_through_given_splits() {
     assert_eq!(ids, [10, 11, 12, 20, 22]);
 }
 
+/// The row estimate comes from the manifests (PR-25d; design note §2.4):
+/// the data files' record counts less the position deletes and DVs that
+/// apply (each delete file once), equality deletes not subtracted; scan
+/// units are the files' split offsets.
+#[test]
+fn row_estimate_from_iceberg_metadata() {
+    use krishiv_exec::planner::TableProvider;
+    let t = build(
+        &[
+            data("a.parquet", 0, 1, 0, 5),
+            data("b.parquet", 0, 1, 10, 5),
+            data("c.parquet", 0, 1, 20, 5),
+            // Two rows, applying to a and b: subtracted once.
+            positions(
+                "d.parquet",
+                0,
+                2,
+                &[("a.parquet", 0), ("b.parquet", 1)],
+                None,
+            ),
+            dv("c.puffin", 0, 2, "c.parquet", &[3]),
+            equality("e.parquet", 0, 2, &[Some(1), Some(2)]),
+        ],
+        false,
+    );
+    let p = t.env.provider(&t.table, &VersionSpec::Current).unwrap();
+    assert_eq!(p.statistics().unwrap().rows, 15 - 2 - 1);
+    assert_eq!(p.scan_units(), Some(3));
+    let plain = build(&[data("a.parquet", 0, 1, 0, 5)], false);
+    let p = plain
+        .env
+        .provider(&plain.table, &VersionSpec::Current)
+        .unwrap();
+    assert_eq!(p.statistics().unwrap().rows, 5);
+}
+
 /// One step of a generated history (commit `n` has sequence number `n + 1`).
 #[derive(Debug, Clone)]
 enum Op {
