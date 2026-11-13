@@ -371,3 +371,38 @@ fn reads_are_versioned_by_the_store() {
         .sum();
     assert_eq!(rows, 4);
 }
+
+/// Every Parquet read's memory consumer leaves the query's pool when the read ends: reading many
+/// checkpoint parts or sidecars does not pile up consumers (Codex on #728).
+#[test]
+fn parquet_reads_unregister_their_memory_consumers() {
+    use krishiv_memory::MemoryPool as _;
+    let memory = krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default());
+    let consumers = || {
+        memory
+            .snapshot()
+            .entries
+            .iter()
+            .filter(|e| e.is_consumer)
+            .count()
+    };
+    let f = Fixture::with_memory(
+        DeltaLimits::default(),
+        pool(2),
+        None,
+        Some(Arc::clone(&memory) as Arc<dyn krishiv_memory::MemoryPool>),
+    );
+    let rel = "_delta_log/00000000000000000002.checkpoint.parquet";
+    let url = f.url(rel);
+    f.run(move |e| e.parquet().write_parquet_file(url, one(data(5))))
+        .unwrap();
+    let before = consumers();
+    let files = vec![meta(&f, rel); 8];
+    let schema: SchemaRef =
+        Arc::new(StructType::try_new([StructField::nullable("name", DataType::STRING)]).unwrap());
+    let batches = f
+        .run(move |e| collect(e.parquet().read_parquet_files(&files, schema, None)))
+        .unwrap();
+    assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 40);
+    assert_eq!(consumers(), before);
+}

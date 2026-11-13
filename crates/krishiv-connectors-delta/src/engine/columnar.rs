@@ -396,7 +396,8 @@ impl Reads {
             Some(p) => Arc::clone(p),
             None => krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default()),
         };
-        let consumer = pool.register("delta parquet read", None);
+        // The handle's reservation unregisters the consumer when the read ends (or fails).
+        let consumer = krishiv_memory::ConsumerHandle::register(pool, "delta parquet read", None);
         let format = format().map_err(to_kernel)?;
         let stream = shared.block_on(ScanStream::open(
             io,
@@ -405,7 +406,7 @@ impl Reads {
             ByteRange::whole(size),
             &request,
             &options,
-            krishiv_memory::Reservation::new(pool, consumer),
+            consumer.reservation(),
             ScanOptions::default(),
         ))?;
         Ok(Open {

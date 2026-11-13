@@ -74,6 +74,16 @@ impl Fixture {
         pool: &'static LogPool,
         store: Option<Arc<dyn ObjectStore>>,
     ) -> Self {
+        Self::with_memory(limits, pool, store, None)
+    }
+
+    /// [`Self::with`], the engine's I/O reserving from `memory` when given.
+    fn with_memory(
+        limits: DeltaLimits,
+        pool: &'static LogPool,
+        store: Option<Arc<dyn ObjectStore>>,
+        memory: Option<Arc<dyn krishiv_memory::MemoryPool>>,
+    ) -> Self {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("t");
         std::fs::create_dir_all(dir.join("_delta_log")).unwrap();
@@ -92,8 +102,12 @@ impl Fixture {
         sched.register_whole_listing_store(id.clone(), store);
         let root = Url::from_directory_path(&dir).unwrap();
         let cancel = Arc::new(CancellationToken::new());
+        let io = match memory {
+            Some(m) => sched.context().with_memory(m),
+            None => sched.context(),
+        };
         let engine = DeltaEngine::new(
-            sched.context(),
+            io,
             id,
             root.clone(),
             rt.handle().clone(),
