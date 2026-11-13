@@ -159,6 +159,25 @@
     ],
     "sqlState" : "42602"
   },
+  "KRISHIV_RESOURCE_GROUP_CONFIG_INVALID" : {
+    "message" : [
+      "The resource group file is invalid at <path>: <reason>."
+    ],
+    "sqlState" : "22023",
+    "audience" : "operator"
+  },
+  "KRISHIV_RESOURCE_GROUP_QUEUE_FULL" : {
+    "message" : [
+      "The resource group <group> already has <maxQueued> queued queries, so this query is refused. Retry later, or raise \"maxQueued\" of the group."
+    ],
+    "sqlState" : "53400"
+  },
+  "KRISHIV_RESOURCE_GROUP_QUOTA_EXHAUSTED" : {
+    "message" : [
+      "The resource group <group> has used its scan quota for the current window, so this query is refused. The quota resets at <resetAt>."
+    ],
+    "sqlState" : "53400"
+  },
   "KRISHIV_SESSION_LIMIT" : {
     "message" : [
       "Cannot open a new session: <limitName> allows at most <limit> live sessions. Release a session (ReleaseSession, or spark.stop() in the client) or raise \"<limitName>\"."
