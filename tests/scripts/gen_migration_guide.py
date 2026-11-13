@@ -104,6 +104,13 @@ def render() -> str:
         o.append(f"| [{head}](../concepts/known-differences.md#{anchor}) |")
     o += [
         "",
+        "## Where it runs",
+        "",
+        "Krishiv has three deployment modes: embedded (in your Python process, as above), single-node and "
+        "distributed.",
+        "Single-node is one `krishiv server` process that PySpark and other clients reach over Spark Connect; "
+        "see [Deployment](deploy.md).",
+        "",
         "## Step 3: check the result",
         "",
         "Run the same job on both engines over a small input and compare. For plans and "

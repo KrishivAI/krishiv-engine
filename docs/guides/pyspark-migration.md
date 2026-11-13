@@ -156,7 +156,14 @@ Each row links to the full description in [known differences](../concepts/known-
 | [Correlated subqueries with `spark.sql.optimizer.decorrelateInnerQuery.enabled` off](../concepts/known-differences.md#correlated-subqueries-with-sparksqloptimizerdecorrelateinnerqueryenabled-off) |
 | [SQL scripting](../concepts/known-differences.md#sql-scripting) |
 | [SQL function bodies and the ANSI mode they were created under](../concepts/known-differences.md#sql-function-bodies-and-the-ansi-mode-they-were-created-under) |
+| [The relation cache is per session](../concepts/known-differences.md#the-relation-cache-is-per-session) |
+| [Checkpoint files and where a checkpoint lives](../concepts/known-differences.md#checkpoint-files-and-where-a-checkpoint-lives) |
 | [`krishiv server` (Spark Connect)](../concepts/known-differences.md#krishiv-server-spark-connect) |
+
+## Where it runs
+
+Krishiv has three deployment modes: embedded (in your Python process, as above), single-node and distributed.
+Single-node is one `krishiv server` process that PySpark and other clients reach over Spark Connect; see [Deployment](deploy.md).
 
 ## Step 3: check the result
 
