@@ -1,5 +1,5 @@
 ---
-description: The krishiv Python package, which mirrors pyspark.sql and needs CPython 3.11 or newer.
+description: "The krishiv Python package, which mirrors pyspark.sql and needs CPython 3.11 or newer."
 ---
 
 # Python

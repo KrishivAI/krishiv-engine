@@ -1,5 +1,5 @@
 ---
-description: Krishiv is a Rust-native, Spark-compatible engine for batch SQL, DataFrames and streaming, with no JVM.
+description: "Krishiv is a Rust-native, Spark-compatible engine for batch SQL, DataFrames and streaming, with no JVM."
 ---
 
 # Krishiv documentation

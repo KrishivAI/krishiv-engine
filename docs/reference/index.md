@@ -1,5 +1,5 @@
 ---
-description: Facts to look up: SQL and functions, the Python and Rust APIs, configuration, metrics and profiles.
+description: "Facts to look up: SQL and functions, the Python and Rust APIs, configuration, metrics and profiles."
 ---
 
 # Reference

@@ -1,5 +1,5 @@
 ---
-description: Install Krishiv, run your first query and decide where to go next.
+description: "Install Krishiv, run your first query and decide where to go next."
 ---
 
 # Get started

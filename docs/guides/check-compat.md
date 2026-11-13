@@ -1,5 +1,5 @@
 ---
-description: Scan a PySpark or SQL project for functions Krishiv does not run the way Spark does.
+description: "Scan a PySpark or SQL project for functions Krishiv does not run the way Spark does."
 ---
 
 # Check a PySpark or SQL project with check-compat

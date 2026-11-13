@@ -1,5 +1,5 @@
 ---
-description: Write and register native Rust user-defined functions.
+description: "Write and register native Rust user-defined functions."
 ---
 
 <!-- SPDX-License-Identifier: Apache-2.0 -->

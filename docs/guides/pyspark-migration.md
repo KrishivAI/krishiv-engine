@@ -1,5 +1,5 @@
 ---
-description: Move a PySpark job to Krishiv: unsupported functions, workarounds and behaviour differences.
+description: "Move a PySpark job to Krishiv: unsupported functions, workarounds and behaviour differences."
 ---
 
 <!-- SPDX-License-Identifier: Apache-2.0 -->
@@ -46,7 +46,7 @@ an empty cell means there is none yet.
 
 | Function | Status | Workaround |
 | --- | --- | --- |
-| [`approx_top_k`](../reference/sql/functions/approx_top_k.md) | not yet | exact top k: SELECT x, count(*) AS c FROM t GROUP BY x ORDER BY c DESC LIMIT k (a full count, not a sketch) |
+| [`approx_top_k`](../reference/sql/functions/approx_top_k.md) | not yet | exact top k, one row per value: SELECT x, count(*) AS c FROM t GROUP BY x ORDER BY c DESC LIMIT k (a full count, not a sketch) |
 | [`approx_top_k_accumulate`](../reference/sql/functions/approx_top_k_accumulate.md) | not yet |  |
 | [`approx_top_k_combine`](../reference/sql/functions/approx_top_k_combine.md) | not yet |  |
 | [`approx_top_k_estimate`](../reference/sql/functions/approx_top_k_estimate.md) | not yet |  |
@@ -60,12 +60,12 @@ an empty cell means there is none yet.
 | [`count_min_sketch`](../reference/sql/functions/count_min_sketch.md) | not yet |  |
 | [`from_avro`](../reference/sql/functions/from_avro.md) | not yet |  |
 | [`from_protobuf`](../reference/sql/functions/from_protobuf.md) | not yet |  |
-| [`histogram_numeric`](../reference/sql/functions/histogram_numeric.md) | not yet | bucket with width_bucket(col, min, max, n) and GROUP BY it with count(*); the bins are equal-width, not Spark's adaptive bins |
+| [`histogram_numeric`](../reference/sql/functions/histogram_numeric.md) | not yet | GROUP BY width_bucket(col, min, max, n) with count(*) gives equal-width bucket counts (bucket numbers, not bin centres; col = max lands in bucket n+1); Spark's adaptive bins are not reproduced |
 | [`hll_sketch_agg`](../reference/sql/functions/hll_sketch_agg.md) | not yet | approx_count_distinct(expr) returns the estimate directly; serialized HyperLogLog sketches are not available |
 | [`hll_sketch_estimate`](../reference/sql/functions/hll_sketch_estimate.md) | not yet | approx_count_distinct(expr) over the raw column returns the estimate; serialized HyperLogLog sketches are not available |
 | [`hll_union`](../reference/sql/functions/hll_union.md) | not yet |  |
 | [`hll_union_agg`](../reference/sql/functions/hll_union_agg.md) | not yet |  |
-| [`is_valid_variant`](../reference/sql/functions/is_valid_variant.md) | not yet | for a JSON string, try_parse_json(col) IS NOT NULL |
+| [`is_valid_variant`](../reference/sql/functions/is_valid_variant.md) | not yet |  |
 | [`java_method`](../reference/sql/functions/java_method.md) | not yet | Krishiv has no JVM to call into; register a UDF instead (see the Native Rust UDFs reference) |
 | [`kll_merge_agg_bigint`](../reference/sql/functions/kll_merge_agg_bigint.md) | not yet |  |
 | [`kll_merge_agg_double`](../reference/sql/functions/kll_merge_agg_double.md) | not yet |  |
@@ -93,7 +93,7 @@ an empty cell means there is none yet.
 | [`reflect`](../reference/sql/functions/reflect.md) | not yet | Krishiv has no JVM to call into; register a UDF instead (see the Native Rust UDFs reference) |
 | [`schema_of_avro`](../reference/sql/functions/schema_of_avro.md) | not yet |  |
 | [`schema_of_variant_agg`](../reference/sql/functions/schema_of_variant_agg.md) | not yet |  |
-| [`sentences`](../reference/sql/functions/sentences.md) | not yet | for the words of one sentence: regexp_extract_all(str, '\\w+', 0); Spark's sentence and word break rules are not reproduced |
+| [`sentences`](../reference/sql/functions/sentences.md) | not yet | for the words of one sentence: regexp_extract_all(str, '[A-Za-z0-9_]+', 0); Spark's sentence and word break rules are not reproduced |
 | [`session_window`](../reference/sql/functions/session_window.md) | not yet |  |
 | [`theta_difference`](../reference/sql/functions/theta_difference.md) | not yet |  |
 | [`theta_intersection`](../reference/sql/functions/theta_intersection.md) | not yet |  |
@@ -129,7 +129,7 @@ an empty cell means there is none yet.
 | [`tuple_union_integer`](../reference/sql/functions/tuple_union_integer.md) | not yet |  |
 | [`tuple_union_theta_double`](../reference/sql/functions/tuple_union_theta_double.md) | not yet |  |
 | [`tuple_union_theta_integer`](../reference/sql/functions/tuple_union_theta_integer.md) | not yet |  |
-| [`window`](../reference/sql/functions/window.md) | not yet | tumbling windows: group by timestamp_seconds(floor(unix_timestamp(ts) / N) * N) for an N-second window |
+| [`window`](../reference/sql/functions/window.md) | not yet | tumbling windows, start only and whole seconds: group by timestamp_seconds(floor(unix_timestamp(ts) / N) * N) for N seconds; no window struct or end column |
 | [`window_time`](../reference/sql/functions/window_time.md) | not yet |  |
 | [`xpath`](../reference/sql/functions/xpath.md) | not yet |  |
 | [`xpath_boolean`](../reference/sql/functions/xpath_boolean.md) | not yet |  |

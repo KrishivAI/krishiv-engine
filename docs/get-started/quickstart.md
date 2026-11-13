@@ -1,5 +1,5 @@
 ---
-description: Install the Python package and run your first SQL and DataFrame query.
+description: "Install the Python package and run your first SQL and DataFrame query."
 ---
 
 # Quickstart

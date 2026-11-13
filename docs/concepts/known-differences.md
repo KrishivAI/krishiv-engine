@@ -1,5 +1,5 @@
 ---
-description: Where Krishiv behaviour deliberately differs from Spark.
+description: "Where Krishiv behaviour deliberately differs from Spark."
 ---
 
 <!-- SPDX-License-Identifier: Apache-2.0 -->

@@ -1,5 +1,5 @@
 ---
-description: EXPLAIN ANALYZE: per-operator cost of a query.
+description: "EXPLAIN ANALYZE: per-operator cost of a query."
 ---
 
 # EXPLAIN ANALYZE and EXPLAIN VERBOSE

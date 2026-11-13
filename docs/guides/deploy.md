@@ -1,5 +1,5 @@
 ---
-description: The three deployment modes: embedded, single-node and distributed.
+description: "The three deployment modes: embedded, single-node and distributed."
 ---
 
 # Deployment
@@ -25,10 +25,10 @@ Nothing has been published to PyPI or crates.io yet. Until the first release, bu
 
 ## Single-node
 
-One process, started with `krishiv server`, runs the engine and serves Spark Connect; clients connect to it with a
+One process, started with `krishiv server` (a build with the `server` feature), runs the engine and serves Spark Connect; clients connect to it with a
 Spark Connect client such as PySpark. It listens on `127.0.0.1` port `15002` by default (`krishiv.connect.port`, see
-[configuration](../reference/config/index.md)). A non-loopback address needs authentication, and the server refuses to
-start on one until it is configured. Where it differs from Spark see
+[configuration](../reference/config/index.md)). Authentication is not available yet, so keep it on loopback and reach it through a tunnel or proxy; the server refuses a
+non-loopback address until authentication exists. Where it differs from Spark see
 [known differences](../concepts/known-differences.md#krishiv-server-spark-connect).
 
 ## Distributed

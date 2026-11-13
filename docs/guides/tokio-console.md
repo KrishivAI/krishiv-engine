@@ -1,5 +1,5 @@
 ---
-description: Find a stalled or slow task with tokio-console.
+description: "Find a stalled or slow task with tokio-console."
 ---
 
 # tokio-console task diagnostics

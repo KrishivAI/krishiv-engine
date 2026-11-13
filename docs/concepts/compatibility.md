@@ -1,5 +1,5 @@
 ---
-description: Which Spark functions Krishiv supports, partly supports or does not run yet.
+description: "Spark compatibility per surface: file formats, object stores, SQL and Spark Connect."
 ---
 
 <!-- SPDX-License-Identifier: Apache-2.0 -->

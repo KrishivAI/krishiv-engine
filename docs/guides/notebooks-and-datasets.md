@@ -1,5 +1,5 @@
 ---
-description: Sample notebooks and datasets to try Krishiv on.
+description: "Sample notebooks and datasets to try Krishiv on."
 ---
 
 # Notebooks and sample data

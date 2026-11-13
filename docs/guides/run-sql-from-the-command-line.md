@@ -1,5 +1,5 @@
 ---
-description: Run SQL against files from the krishiv command line.
+description: "Run SQL against files from the krishiv command line."
 ---
 
 # Run SQL from the command line

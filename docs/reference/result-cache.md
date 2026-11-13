@@ -1,5 +1,5 @@
 ---
-description: Two opt-in session settings: reuse the result of an identical query, and make runs reproducible.
+description: "Two opt-in session settings: reuse the result of an identical query, and make runs reproducible."
 ---
 
 <!-- SPDX-License-Identifier: Apache-2.0 -->

@@ -39,7 +39,7 @@ def render() -> str:
     missing = sorted(k for k, v in matrix.items() if v != "supported")
     o = [
         "---",
-        "description: Move a PySpark job to Krishiv: unsupported functions, workarounds and behaviour differences.",
+        'description: "Move a PySpark job to Krishiv: unsupported functions, workarounds and behaviour differences."',
         "---",
         "",
         "<!-- SPDX-License-Identifier: Apache-2.0 -->",
