@@ -908,7 +908,8 @@ impl Resolver<'_> {
                     _ => None,
                 };
                 match (upper, i32::try_from(c.id())) {
-                    (Some(upper), Ok(id)) if n == 1 => {
+                    // Without the feature the kernel has no case map: refuse here, as before.
+                    (Some(upper), Ok(id)) if n == 1 && cfg!(feature = "collations-icu") => {
                         rewrite = Some(Rewrite {
                             name: "__icu_case",
                             args: vec![RwArg::Int(upper), RwArg::Int(id), RwArg::Kid(0)],
