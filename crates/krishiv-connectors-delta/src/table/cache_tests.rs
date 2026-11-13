@@ -9,7 +9,7 @@ use krishiv_common::config::Config;
 use krishiv_io::StoreId;
 use serde_json::Value;
 
-use super::oracle_tests::{Env, fixtures};
+use super::oracle_tests::{Env, copy_dir, fixtures};
 use super::*;
 
 const LAST: &str = "_delta_log/00000000000000000002";
@@ -113,6 +113,104 @@ fn the_cache_is_bounded_and_time_travel_bypasses_it() {
         .unwrap();
     assert_eq!(old.version(), 0);
     assert_eq!((cache.hits(), cache.misses(), cache.len()), (0, 2, 1));
+}
+
+fn try_open_cached(
+    env: &Env,
+    cache: &Arc<SnapshotCache>,
+    key: CacheKey,
+) -> Result<DeltaTable, KrishivError> {
+    let options = OpenOptions {
+        cache: Some((Arc::clone(cache), key)),
+        ..OpenOptions::default()
+    };
+    env.block_on(DeltaTable::open_with(
+        env.engine.clone(),
+        options,
+        &Config::new(),
+    ))
+}
+
+/// The table at `env`'s root replaced by the oracle table `name` (same path, a new log).
+fn recreate(env: &Env, name: &str) {
+    std::fs::remove_dir_all(&env.dir).unwrap();
+    copy_dir(&fixtures().join(name), &env.dir);
+}
+
+/// A table removed after a cached open is not served from the cache: the path holds no Delta
+/// table now, and the entry is dropped.
+#[test]
+fn a_removed_table_is_not_served_from_the_cache() {
+    let env = Env::fixture("session-appends");
+    let cache = Arc::new(SnapshotCache::new(4));
+    let first = open_cached(&env, &cache, key(&env, "alice"));
+    assert_eq!(first.version(), 2);
+    std::fs::remove_dir_all(env.dir.join("_delta_log")).unwrap();
+    let fresh = env.open().map(|t| t.version());
+    let e = try_open_cached(&env, &cache, key(&env, "alice")).map(|t| t.version());
+    assert!(fresh.is_err(), "{fresh:?}");
+    // The same outcome as an uncached open, never the old snapshot.
+    assert_eq!(
+        e.as_ref().unwrap_err().error_class(),
+        fresh.as_ref().unwrap_err().error_class(),
+    );
+    assert_eq!(cache.cached_version(&key(&env, "alice")), None);
+}
+
+/// A table recreated at the same path with fewer commits reads as the new table, not as the
+/// kernel's "older than the cached snapshot" error, and its entry is replaced.
+#[test]
+fn a_table_recreated_with_fewer_commits_reads_the_new_one() {
+    let env = Env::fixture("session-appends");
+    let cache = Arc::new(SnapshotCache::new(4));
+    assert_eq!(open_cached(&env, &cache, key(&env, "alice")).version(), 2);
+    recreate(&env, "partitioned");
+    let want = env.open().unwrap();
+    let got = open_cached(&env, &cache, key(&env, "alice"));
+    assert_eq!(got.version(), want.version());
+    assert_eq!(got.schema(), want.schema());
+    assert_eq!(got.units().len(), want.units().len());
+    assert_eq!(
+        cache.cached_version(&key(&env, "alice")),
+        Some(want.version())
+    );
+}
+
+/// A table recreated with as many commits: the cached last commit no longer matches (its
+/// modification time moved), so the listing is read again rather than reused.
+#[test]
+fn a_rewritten_last_commit_is_read_again() {
+    let env = Env::fixture("session-appends");
+    let cache = Arc::new(SnapshotCache::new(4));
+    let first = open_cached(&env, &cache, key(&env, "alice"));
+    recreate(&env, "session-appends");
+    let last = std::fs::File::options()
+        .write(true)
+        .open(env.dir.join(format!("{LAST}.json")))
+        .unwrap();
+    last.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(3_600))
+        .unwrap();
+    let again = open_cached(&env, &cache, key(&env, "alice"));
+    assert_eq!(again.version(), 2);
+    assert!(!Arc::ptr_eq(&first.inner.units, &again.inner.units));
+    // Unchanged since: the listing is reused.
+    let third = open_cached(&env, &cache, key(&env, "alice"));
+    assert!(Arc::ptr_eq(&again.inner.units, &third.inner.units));
+}
+
+/// A cached entry whose refresh fails is dropped, so the table reads again once it is fixed.
+#[test]
+fn a_cached_entry_whose_refresh_fails_is_dropped() {
+    let env = two_commits();
+    let cache = Arc::new(SnapshotCache::new(4));
+    assert_eq!(open_cached(&env, &cache, key(&env, "alice")).version(), 1);
+    // A broken next commit: the refresh from the cached snapshot fails, and so does a fresh build.
+    std::fs::write(env.dir.join(format!("{LAST}.json")), "{not json\n").unwrap();
+    assert!(try_open_cached(&env, &cache, key(&env, "alice")).is_err());
+    assert_eq!(cache.cached_version(&key(&env, "alice")), None);
+    std::fs::remove_file(env.dir.join(format!("{LAST}.json"))).unwrap();
+    commit_last(&env);
+    assert_eq!(open_cached(&env, &cache, key(&env, "alice")).version(), 2);
 }
 
 #[test]

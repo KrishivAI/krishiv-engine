@@ -14,8 +14,11 @@
 //! [`DeltaTable::open_with`] reads through a [`SnapshotCache`] when it is given one (ADR 0037):
 //! the latest snapshot of a table is kept across queries under its root, store and credential
 //! identity, brought up to date by each new query (only the log after the cached version is
-//! listed) and its file listing reused while the version is unchanged. Table authorization runs
-//! before the lookup, in the session's analysis.
+//! listed) and its file listing reused while the version is unchanged. Before that, one `head`
+//! of the cached last commit file confirms the table at the root is still the one cached (same
+//! size and modification time); a mismatch, a missing file or any error on the cached path
+//! drops the entry and the table is built afresh. Table authorization runs before the lookup,
+//! in the session's analysis.
 
 pub mod cache;
 pub mod predicate;
@@ -195,42 +198,59 @@ impl DeltaTable {
         let cache = cache.filter(|_| version.is_none());
         let cached = cache.as_ref().and_then(|(c, k)| c.lookup(k));
         let label = name.clone();
-        let (snapshot, units) = engine
-            .delta_blocking(move |e| -> Result<_, KrishivError> {
-                let snapshot = match &cached {
-                    // Only the log after the cached version is listed.
-                    Some(c) => Snapshot::builder_from(Arc::clone(&c.snapshot))
-                        .with_cancellation_token(e.kernel_cancellation())
-                        .build(e),
-                    None => {
-                        let mut builder = Snapshot::builder_for(&root)
-                            .with_cancellation_token(e.kernel_cancellation());
-                        if let Some(v) = version {
-                            builder = builder.at_version(v);
-                        }
-                        builder.build(e)
+        let entry = cache.clone();
+        let opened = engine
+            .delta_blocking(move |e| -> Result<Opened, KrishivError> {
+                if let Some(c) = cached {
+                    if let Some(opened) = refresh(e, &c, &label) {
+                        return Ok(opened);
+                    }
+                    // Stale or broken: dropped, and the table is built afresh (a lower version
+                    // than the dropped one may then be cached).
+                    if let Some((cache, key)) = &entry {
+                        cache.invalidate(key);
                     }
                 }
-                .map_err(|err| snapshot_error(&err, &label))?;
+                let mut builder =
+                    Snapshot::builder_for(&root).with_cancellation_token(e.kernel_cancellation());
+                if let Some(v) = version {
+                    builder = builder.at_version(v);
+                }
+                let snapshot = builder
+                    .build(e)
+                    .map_err(|err| snapshot_error(&err, &label))?;
                 // The allow-list before the file listing: a refused table reads no more.
                 check_read(&label, &ReadProtocol::of(&snapshot))?;
-                let units: Arc<[ScanUnit]> = match cached {
-                    Some(c) if c.snapshot.version() == snapshot.version() => c.units,
-                    _ => list_units(e, &snapshot, None)
-                        .map_err(|err| from_kernel(&err, &label))?
-                        .into(),
-                };
-                Ok((snapshot, units))
+                let units: Arc<[ScanUnit]> = list_units(e, &snapshot, None)
+                    .map_err(|err| from_kernel(&err, &label))?
+                    .into();
+                let stamp = entry.as_ref().and_then(|_| last_commit(e, &snapshot));
+                Ok(Opened {
+                    snapshot,
+                    units,
+                    stamp,
+                })
             })
             .await??;
+        let Opened {
+            snapshot,
+            units,
+            stamp,
+        } = opened;
         if let Some((cache, key)) = cache {
-            cache.store(
-                key,
-                cache::Cached {
-                    snapshot: Arc::clone(&snapshot),
-                    units: Arc::clone(&units),
-                },
-            );
+            match stamp {
+                Some(last) => cache.store(
+                    key,
+                    cache::Cached {
+                        snapshot: Arc::clone(&snapshot),
+                        units: Arc::clone(&units),
+                        last,
+                    },
+                ),
+                // A version whose commit file cannot be stamped is not cached: a later query
+                // could not tell it is still current.
+                None => cache.invalidate(&key),
+            }
         }
         let tc = snapshot.table_configuration();
         let mode = tc.column_mapping_mode();
@@ -344,6 +364,59 @@ impl TableProvider for DeltaTable {
     fn scan_units(&self) -> Option<u64> {
         u64::try_from(self.inner.units.len()).ok()
     }
+}
+
+/// What an open read on the log pool.
+struct Opened {
+    snapshot: SnapshotRef,
+    units: Arc<[ScanUnit]>,
+    /// The snapshot's last commit file, when it is to be cached.
+    stamp: Option<cache::CommitStamp>,
+}
+
+/// The snapshot's last commit file (`_delta_log/<version>.json`) as the store reports it now,
+/// if it has one. Log cleanup never removes the latest commit, so a cached snapshot whose last
+/// commit no longer matches belongs to a table that was removed or recreated.
+fn last_commit(engine: &DeltaEngine, snapshot: &SnapshotRef) -> Option<cache::CommitStamp> {
+    use delta_kernel::StorageHandler as _;
+    let url = engine
+        .table_root()
+        .join(&format!("_delta_log/{:020}.json", snapshot.version()))
+        .ok()?;
+    let meta = engine.storage().head(&url).ok()?;
+    Some(cache::CommitStamp {
+        size: meta.size,
+        last_modified: meta.last_modified,
+    })
+}
+
+/// The cached table `c` brought up to date (ADR 0037 `per_query`): `None` when its last commit
+/// is gone or rewritten (the table was removed or recreated at its root) or when anything on
+/// the way fails, so the caller builds the table afresh.
+fn refresh(engine: &DeltaEngine, c: &cache::Cached, label: &str) -> Option<Opened> {
+    if last_commit(engine, &c.snapshot) != Some(c.last) {
+        return None;
+    }
+    // Only the log after the cached version is listed.
+    let snapshot = Snapshot::builder_from(Arc::clone(&c.snapshot))
+        .with_cancellation_token(engine.kernel_cancellation())
+        .build(engine)
+        .ok()?;
+    check_read(label, &ReadProtocol::of(&snapshot)).ok()?;
+    if snapshot.version() == c.snapshot.version() {
+        return Some(Opened {
+            snapshot,
+            units: Arc::clone(&c.units),
+            stamp: Some(c.last),
+        });
+    }
+    let units: Arc<[ScanUnit]> = list_units(engine, &snapshot, None).ok()?.into();
+    let stamp = last_commit(engine, &snapshot);
+    Some(Opened {
+        snapshot,
+        units,
+        stamp,
+    })
 }
 
 /// The live files of `snapshot`, pruned by `predicate`. Drains the kernel's lazy iterator, so

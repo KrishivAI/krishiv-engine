@@ -8,7 +8,9 @@
 //! freshness policy is `per_query`: every query starts from the cached snapshot and asks the
 //! kernel for newer commits (`Snapshot::builder_from`, which lists the log after the cached
 //! version only); an unchanged version keeps the cached file listing, a newer one is listed
-//! again. The query then pins the version it got for all its scans; the pinning itself is the
+//! again. A hit first checks the cached last commit file with one `head` (its size and
+//! modification time): a table removed or recreated at the root is built afresh, and so is any
+//! entry whose refresh fails (the entry is dropped). The query then pins the version it got for all its scans; the pinning itself is the
 //! session's (one table per root per query). Authorization runs before the lookup, in the
 //! session's analysis.
 //!
@@ -38,11 +40,21 @@ pub struct CacheKey {
     pub credential: String,
 }
 
-/// One cached table: its latest snapshot and that snapshot's live files.
+/// A commit file as the store last reported it: what a hit checks with one `head` that the
+/// table at the root is still the one cached.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CommitStamp {
+    pub(crate) size: u64,
+    /// Milliseconds since the epoch.
+    pub(crate) last_modified: i64,
+}
+
+/// One cached table: its latest snapshot, that snapshot's live files and its last commit file.
 #[derive(Debug, Clone)]
 pub(crate) struct Cached {
     pub(crate) snapshot: SnapshotRef,
     pub(crate) units: Arc<[ScanUnit]>,
+    pub(crate) last: CommitStamp,
 }
 
 /// The cross-query snapshot cache (see the module docs).
@@ -104,6 +116,11 @@ impl SnapshotCache {
             .iter()
             .find(|(k, _)| k == key)
             .map(|(_, c)| c.snapshot.version())
+    }
+
+    /// Drops the entry of `key`, if any.
+    pub fn invalidate(&self, key: &CacheKey) {
+        self.lock().retain(|(k, _)| k != key);
     }
 
     /// Drops every entry of the table root `root` (any store or credential).
