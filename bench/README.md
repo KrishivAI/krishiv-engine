@@ -66,6 +66,7 @@ returns all rows, `teardown()`; optional `begin_measure()/end_measure()` bracket
   (whole harness process; its pre-run RSS is recorded as `baseline_rss_bytes`); spill = null.
 - `spark-connect`: same VmHWM/`clear_refs` method on the server JVM (`pgrep -x java` + `docker exec`, failures raise); CPU-s from `/proc/<pid>/stat`;
   spill = null (Spark spill is available via the REST API :14040 but not collected yet). Host data path is rewritten to `/data`.
+- `krishiv-connect`: starts `krishiv server --port 0 --connect-port 0` on loopback (binary: `--runner`, `$KRISHIV_BENCH_SERVER`, else `<target>/dist/krishiv`), reads the bound `sc://` address from its stdout and drives it with the pinned pyspark client like `spark-connect` (Arrow results, no path rewrite). Peak RSS, CPU-s and I/O are those of the server process tree, so against `krishiv` it shows the Connect round-trip cost (P3-PR-53a). Needs a `krishiv` build with the `server` feature.
   Spark runs with Spark 4 defaults (ANSI mode on) and `spark.sql.shuffle.partitions=24`. The JVM retains its heap, so Spark peaks are cumulative/order-dependent.
   Probes run outside the timed region (a few ms; no sampler thread).
 - `krishiv`: drives `krishiv-bench-runner` (`dist`-profile build of `krishiv-session` like the shipped artifacts and DuckDB's optimized build, bench-only crate, not the public CLI) over a stdin/stdout
