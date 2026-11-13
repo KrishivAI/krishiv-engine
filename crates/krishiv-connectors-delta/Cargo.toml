@@ -10,3 +10,9 @@ publish = false
 
 [lints]
 workspace = true
+
+[dependencies]
+# Arrow feature off (its arrow-* features pull chrono-tz, banned by ADR 0028);
+# `internal-api` has no dependencies.
+delta_kernel = { workspace = true, features = ["internal-api"] }
+krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
