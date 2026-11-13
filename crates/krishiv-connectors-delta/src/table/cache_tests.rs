@@ -194,3 +194,34 @@ fn the_delta_log_is_found_or_not() {
     let empty = Env::empty();
     assert!(!empty.block_on(has_delta_log(&empty.engine)).unwrap());
 }
+
+#[test]
+fn a_corrupt_commit_is_a_failed_read_of_that_file() {
+    let env = two_commits();
+    let commit = env.dir.join("_delta_log/00000000000000000001.json");
+    std::fs::write(&commit, "{not json\n").unwrap();
+    for entry in std::fs::read_dir(env.dir.join("_delta_log")).unwrap() {
+        let p = entry.unwrap().path();
+        if p.extension().is_some_and(|e| e == "crc") {
+            std::fs::remove_file(p).unwrap();
+        }
+    }
+    let e = env.open().unwrap_err();
+    let want = &session_probe("corrupt_commit");
+    assert_eq!(
+        e.error_class().name(),
+        want["condition"].as_str().unwrap(),
+        "{e}"
+    );
+    assert_eq!(e.sql_state(), want["sqlstate"].as_str());
+    let path = e
+        .message_parameters()
+        .iter()
+        .find(|(k, _)| *k == "path")
+        .map(|(_, v)| v.clone())
+        .unwrap();
+    assert_eq!(
+        path.replace(&env.dir.to_string_lossy().into_owned(), "<path>"),
+        want["parameters"]["path"].as_str().unwrap()
+    );
+}

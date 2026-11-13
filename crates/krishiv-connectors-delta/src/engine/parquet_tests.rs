@@ -370,4 +370,45 @@ fn reads_are_versioned_by_the_store() {
         .map(RecordBatch::num_rows)
         .sum();
     assert_eq!(rows, 4);
+    // A rewrite of the same size (other names of the same length) is a new version too, and
+    // reads the new rows: the size alone would not tell the files apart (08a part 2 re-review R3).
+    let before = meta(&f, rel);
+    let second = version(meta(&f, rel));
+    let renamed = {
+        let b = data(4);
+        let i = b.schema().index_of("name").unwrap();
+        let mut columns = b.columns().to_vec();
+        columns[i] = Arc::new(StringArray::from(
+            (0..4).map(|k| format!("m{k}")).collect::<Vec<_>>(),
+        ));
+        RecordBatch::try_new(b.schema(), columns).unwrap()
+    };
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let url = f.url(rel);
+    f.run(move |e| e.parquet().write_parquet_file(url, one(renamed)))
+        .unwrap();
+    assert_eq!(
+        meta(&f, rel).size,
+        before.size,
+        "the rewrite keeps the size"
+    );
+    assert_ne!(
+        version(meta(&f, rel)),
+        second,
+        "a same-size rewrite is a new version"
+    );
+    let files = vec![meta(&f, rel)];
+    let schema: SchemaRef =
+        Arc::new(StructType::try_new([StructField::nullable("name", DataType::STRING)]).unwrap());
+    let names: Vec<String> = f
+        .run(move |e| collect(e.parquet().read_parquet_files(&files, schema, None)))
+        .unwrap()
+        .iter()
+        .flat_map(|b| {
+            (0..b.num_rows())
+                .map(|r| arrow_cast::display::array_value_to_string(b.column(0), r).unwrap())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(names, ["m0", "m1", "m2", "m3"]);
 }

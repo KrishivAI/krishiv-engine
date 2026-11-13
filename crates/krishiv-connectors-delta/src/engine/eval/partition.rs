@@ -12,12 +12,16 @@
 //!   zone of `MapToStructOptions` (UTC by default). The reader zone may be `UTC` or a fixed
 //!   `+HH:MM`/`-HH:MM` offset; a named IANA zone is unsupported here (the kernel's scan code never
 //!   sets one, and chrono-tz is banned by ADR 0028).
-//! - **A difference from the kernel:** a `timestamp` value ending in an IANA zone name
-//!   (`2024-01-15 12:30:45 America/New_York`) is refused as the kernel's `Unsupported` (raised as
+//! - A `timestamp` value may end in a zone name, spaced or glued to the time, as the kernel's
+//!   Arrow grammar reads it (`12:30:45 UTC`, `12:30:45UTC`); the name is then the value's zone,
+//!   and a value with an offset as well (`12:30:45+02:00 UTC`) does not parse. The names of UTC
+//!   (`UTC`, `GMT`, `UCT`, `Zulu`, `Universal`, `Greenwich`, `GMT0`, `GMT+0`, `GMT-0`, each also
+//!   under `Etc/`) are read as UTC.
+//! - **A difference from the kernel:** any other zone name (`CET`,
+//!   `America/New_York`) is refused as the kernel's `Unsupported` (raised as
 //!   `UNSUPPORTED_FEATURE.TABLE_OPERATION`, naming the zone), where the kernel resolves the
 //!   name with chrono-tz. Spark and Delta writers do not write such values (they write no zone
-//!   or a `Z`/offset); Krishiv has no zone database (no chrono-tz, no jiff tz data). A trailing
-//!   `UTC` or `GMT` is read as UTC.
+//!   or a `Z`/offset); Krishiv has no zone database (no chrono-tz, no jiff tz data).
 //! - Other types use the kernel's `PrimitiveType::parse_scalar` (decimals with exponents,
 //!   booleans case-insensitively, intervals).
 //! - A value that does not parse is the kernel's `ParseError` (a broken table), not NULL.
@@ -72,17 +76,15 @@ impl ReaderZone {
     }
 
     fn parse(self, raw: &str) -> Option<i64> {
-        // `UTC`/`GMT` suffixes need no zone database.
-        if let Some(local) = raw
-            .strip_suffix(" UTC")
-            .or_else(|| raw.strip_suffix(" GMT"))
-        {
-            return micros(&Utc, local.trim_end());
-        }
-        match self {
+        let parsed = match self {
             Self::Utc => micros(&Utc, raw),
             Self::Fixed(z) => micros(&z, raw),
-        }
+        };
+        // A UTC name needs no zone database.
+        parsed.or_else(|| match zone_suffix(raw)? {
+            (local, zone) if is_utc_name(zone) => micros(&Utc, local),
+            _ => None,
+        })
     }
 }
 
@@ -112,27 +114,104 @@ fn fixed_offset(value: &str) -> Option<FixedOffset> {
     FixedOffset::east_opt(sign * (h * 3_600 + m * 60))
 }
 
-/// Why the `timestamp` partition value `raw` did not parse: a trailing IANA zone name on an
-/// offset-less local timestamp is `Unsupported` (see the module docs), anything else the
-/// kernel's `ParseError`. A trailing `UTC`/`GMT` is retried as UTC.
-fn named_zone_or_parse_error(raw: &str, prim: &PrimitiveType) -> KernelError {
-    let Some((local, zone)) = raw.trim_end().rsplit_once(char::is_whitespace) else {
-        return parse_error(raw, prim);
-    };
-    let local = local.trim_end();
-    // An offset in the value as well as a name conflict: the kernel rejects that too.
+/// The names of UTC in the zone database (`Etc/` forms included).
+fn is_utc_name(zone: &str) -> bool {
+    const NAMES: &[&str] = &[
+        "UTC",
+        "GMT",
+        "UCT",
+        "Zulu",
+        "Universal",
+        "Greenwich",
+        "GMT0",
+        "GMT+0",
+        "GMT-0",
+    ];
+    let bare = zone.strip_prefix("Etc/").unwrap_or(zone);
+    NAMES.contains(&bare)
+}
+
+/// The zone database's names without a `/` (tzdata's `backward` links and the old System V
+/// zones), so a trailing word that is no zone (`PM`) is a parse error, as in the kernel.
+const TOP_LEVEL_ZONES: &[&str] = &[
+    "CET",
+    "CST6CDT",
+    "Cuba",
+    "EET",
+    "EST",
+    "EST5EDT",
+    "Egypt",
+    "Eire",
+    "Factory",
+    "GB",
+    "GB-Eire",
+    "GMT",
+    "GMT+0",
+    "GMT-0",
+    "GMT0",
+    "Greenwich",
+    "HST",
+    "Hongkong",
+    "Iceland",
+    "Iran",
+    "Israel",
+    "Jamaica",
+    "Japan",
+    "Kwajalein",
+    "Libya",
+    "MET",
+    "MST",
+    "MST7MDT",
+    "NZ",
+    "NZ-CHAT",
+    "Navajo",
+    "PRC",
+    "PST8PDT",
+    "Poland",
+    "Portugal",
+    "ROC",
+    "ROK",
+    "Singapore",
+    "Turkey",
+    "UCT",
+    "UTC",
+    "Universal",
+    "W-SU",
+    "WET",
+    "Zulu",
+];
+
+/// The value `raw` split into its local timestamp and a trailing zone name, as Arrow's grammar
+/// reads a zone after the time (spaced or glued): `None` unless the local part is a timestamp
+/// with a time and no offset or `Z` of its own, and the rest is a name (letters first; letters,
+/// digits, `/`, `_`, `-`, `+`) with a `/` or one of [`TOP_LEVEL_ZONES`].
+fn zone_suffix(raw: &str) -> Option<(&str, &str)> {
+    let raw = raw.trim_end();
+    // The date is the first ten characters; the time starts after the separator.
+    let at = raw
+        .char_indices()
+        .skip(11)
+        .find(|(_, c)| c.is_ascii_alphabetic())
+        .map(|(i, _)| i)?;
+    let (local, zone) = (raw[..at].trim_end(), &raw[at..]);
     let has_offset = local
-        .get(10..)
+        .get(11..)
         .is_some_and(|time| time.contains(['+', '-', 'Z', 'z']));
-    let is_name = zone.starts_with(|c: char| c.is_ascii_alphabetic())
-        && zone.contains('/')
+    let is_name = (zone.contains('/') || TOP_LEVEL_ZONES.contains(&zone))
         && zone
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '+'));
-    if is_name && !has_offset && micros(&Utc, local).is_some() {
+    (is_name && !has_offset && micros(&Utc, local).is_some()).then_some((local, zone))
+}
+
+/// Why the `timestamp` partition value `raw` did not parse: a trailing zone name other than
+/// UTC's on an offset-less local timestamp is `Unsupported` (see the module docs), anything
+/// else the kernel's `ParseError`.
+fn named_zone_or_parse_error(raw: &str, prim: &PrimitiveType) -> KernelError {
+    if let Some((_, zone)) = zone_suffix(raw) {
         return KernelError::unsupported(format!(
             "the time zone name {zone} in the timestamp partition value '{raw}': Krishiv reads \
-             partition timestamps with no zone, `Z` or a numeric offset"
+             partition timestamps with no zone, `Z`, a numeric offset or a name of UTC"
         ));
     }
     parse_error(raw, prim)
