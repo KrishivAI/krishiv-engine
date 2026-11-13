@@ -441,6 +441,44 @@ async fn analyze_same_semantics_and_semantic_hash() {
     };
     assert_eq!(h1.result, h2.result);
     assert_ne!(h1.result, h3.result);
+    // Spark's canonicalization erases alias and attribute names and drops
+    // `SubqueryAlias` (`QueryPlan.scala:708-729`,
+    // `namedExpressions.scala:326-327`, `basicLogicalOperators.scala:2031`).
+    for (a, b) in [
+        (
+            "SELECT id AS x FROM range(3)",
+            "SELECT id AS y FROM range(3)",
+        ),
+        (
+            "SELECT t.id + 1 AS v FROM range(3) t",
+            "SELECT u.id + 1 AS w FROM range(3) u",
+        ),
+    ] {
+        let AResult::SameSemantics(r) = analyzed(&run, same(sql(a), sql(b))).await else {
+            panic!("same");
+        };
+        assert!(r.result, "{a} / {b}");
+        let AResult::SemanticHash(ha) = analyzed(&run, hash(sql(a))).await else {
+            panic!("hash");
+        };
+        let AResult::SemanticHash(hb) = analyzed(&run, hash(sql(b))).await else {
+            panic!("hash");
+        };
+        assert_eq!(ha.result, hb.result, "{a} / {b}");
+    }
+    // A different expression is still different.
+    let AResult::SameSemantics(r) = analyzed(
+        &run,
+        same(
+            sql("SELECT id + 1 AS x FROM range(3)"),
+            sql("SELECT id + 2 AS x FROM range(3)"),
+        ),
+    )
+    .await
+    else {
+        panic!("same");
+    };
+    assert!(!r.result);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -760,6 +798,39 @@ async fn config_redaction() {
     conf.set("my.url", "jdbc:pg://h/db?password=pw")
         .expect("set");
     conf.set("my.plain", "visible").expect("set");
+    // Keys and values Krishiv's classifier marks (ADR 0038), beyond Spark's
+    // pattern.
+    conf.set("fs.azure.account.key.acct.dfs.core.windows.net", PLANTED)
+        .expect("set");
+    conf.set("kafka.sasl.jaas.config", PLANTED).expect("set");
+    conf.set("my.db", "postgres://u:pw-planted@h/db")
+        .expect("set");
+    for key in [
+        "fs.azure.account.key.acct.dfs.core.windows.net",
+        "kafka.sasl.jaas.config",
+        "my.db",
+    ] {
+        let status = config(&run, OpType::Get(creq::Get { keys: keys(&[key]) }))
+            .await
+            .unwrap_err();
+        assert_eq!(error_class(&status), "SQL_CONF_NOT_FOUND", "{key}");
+        let r = config(
+            &run,
+            OpType::GetOption(creq::GetOption { keys: keys(&[key]) }),
+        )
+        .await
+        .expect("get option");
+        assert_eq!(r.pairs, vec![kv(key, None)]);
+        let r = config(
+            &run,
+            OpType::GetWithDefault(creq::GetWithDefault {
+                pairs: vec![kv(key, Some("dflt"))],
+            }),
+        )
+        .await
+        .expect("get with default");
+        assert_eq!(r.pairs, vec![kv(key, Some("dflt"))]);
+    }
     let status = config(
         &run,
         OpType::Get(creq::Get {
@@ -811,6 +882,9 @@ async fn config_redaction() {
         let text = format!("{:?}", all.pairs);
         assert!(!text.contains(PLANTED), "{text}");
         assert!(!text.contains("pw"), "{text}");
+        assert!(!text.contains("pw-planted"), "{text}");
+        assert!(!text.contains("account.key"), "{text}");
+        assert!(!text.contains("jaas"), "{text}");
         assert!(!all.pairs.iter().any(|p| p.key == "value"));
     }
 }

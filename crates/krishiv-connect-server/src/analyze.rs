@@ -12,10 +12,12 @@
 //! - `input_files`: the paths of the file scans, as written;
 //! - `spark_version`: the session profile's release (`4.2.0` for 4.2);
 //! - `ddl_parse`, `json_to_ddl`: Spark's type parsers and `toDDL`;
-//! - `same_semantics`, `semantic_hash`: the normalized hash of the analyzed
-//!   plans (`krishiv_plan::normalized_plan_hash`: origins left out, attribute
-//!   ids renumbered in first-use order), Spark's canonicalized `sameResult`
-//!   and `semanticHash`; the hash is Krishiv's own value;
+//! - `same_semantics`, `semantic_hash`: the semantic hash of the analyzed
+//!   plans (`krishiv_plan::semantic_plan_hash`: attribute ids renumbered,
+//!   origins, column and alias names and subquery aliases left out), Spark's
+//!   canonicalized `sameResult` and `semanticHash`; the hash is Krishiv's own
+//!   value, and Spark's other rewrites (commutative operands, renaming
+//!   projects) are not made;
 //! - `persist`, `unpersist`, `get_storage_level`: refused (56K00) until the
 //!   cache arms land (design P3-T083, PR-47).
 
@@ -181,11 +183,9 @@ fn cache_arm(name: &str, number: u32) -> KrishivError {
     .into()
 }
 
-/// The normalized hash of `df`'s analyzed plan.
+/// The semantic hash of `df`'s analyzed plan.
 async fn semantic_hash(df: DataFrame) -> Result<u128, KrishivError> {
-    Ok(krishiv_plan::normalized_plan_hash(
-        &df.analyzed().await?.plan,
-    ))
+    Ok(krishiv_plan::semantic_plan_hash(&df.analyzed().await?.plan))
 }
 
 /// A 128-bit hash folded into the `int32` the response carries.

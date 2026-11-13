@@ -28,12 +28,16 @@
 //! Every key read or written gets a warning when it is one of the two SQL
 //! configs Spark Connect does not support, else Spark's deprecation text.
 
+use std::borrow::Cow;
+
 use krishiv_common::config::{SettableBy, lookup};
 use krishiv_common::error::{
     CannotModifyStaticConfig, ConnectInvalidPlanInvalidOneOfFieldNotSet,
     InvalidConfValueRequirement, KrishivError, KrishivInsufficientPermissions, SqlConfNotFound,
 };
 use krishiv_common::principal::Principal;
+use krishiv_common::redact::redact;
+use krishiv_common::secret::is_sensitive_key;
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::config_request::operation::OpType;
 use krishiv_session::RuntimeConf;
@@ -42,7 +46,14 @@ use crate::manager::SessionEntry;
 
 /// What a principal may do with configuration (ADR 0046 §8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConfigRole {
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "viewer and operator arrive with authentication (P3-T002)"
+    )
+)]
+pub(crate) enum ConfigRole {
     /// Reads and sets `User` keys only.
     Viewer,
     /// Reads and sets `User` keys only.
@@ -55,9 +66,15 @@ pub enum ConfigRole {
 ///
 /// TODO(P3-T002): roles arrive with authentication; until then every
 /// principal is the local user on a loopback listener (design P3-T001
-/// §3.6) and is treated as the admin.
+/// §3.6) and is treated as the admin. T002 must also:
+/// - flip this default (an unknown principal is a viewer);
+/// - move [`check_settable`] into the session's `AccessPolicy` path, so
+///   SQL `SET` (`Session::sql`) and Connect's `SqlCommand` (T012) take the
+///   same gate as this RPC (ADR 0046 rejects listener-local checks);
+/// - hide `Startup` and `Admin` keys from `get_all` for viewers and
+///   operators.
 #[must_use]
-pub fn role_of(_principal: &Principal) -> ConfigRole {
+pub(crate) fn role_of(_principal: &Principal) -> ConfigRole {
     ConfigRole::Admin
 }
 
@@ -67,7 +84,7 @@ pub fn role_of(_principal: &Principal) -> ConfigRole {
 /// `CANNOT_MODIFY_STATIC_CONFIG` for a `Startup` key (every role);
 /// `KRISHIV_INSUFFICIENT_PERMISSIONS` for an `Admin` key and a role other
 /// than [`ConfigRole::Admin`].
-pub fn check_settable(
+pub(crate) fn check_settable(
     role: ConfigRole,
     principal: &Principal,
     key: &str,
@@ -206,10 +223,16 @@ fn matches_redaction(text: &str) -> bool {
 }
 
 /// `SparkConnectConfigHandler.isRedacted` (`ConfigH:227-233`): the key or
-/// the value matches.
+/// the value matches Spark's pattern. Krishiv also hides what its own
+/// classifier calls a secret (ADR 0038, threat model T-C8), a difference
+/// toward safety: a key [`is_sensitive_key`] names (`*.account.key.*`,
+/// `sasl.jaas.config`, `*.apiKey`, ...) and a value [`redact`] finds a
+/// credential in (`postgres://user:password@host`, `jdbc:...;password=`).
 #[must_use]
 pub fn is_redacted(key: &str, value: Option<&str>) -> bool {
-    matches_redaction(key) || value.is_some_and(matches_redaction)
+    matches_redaction(key)
+        || is_sensitive_key(key)
+        || value.is_some_and(|v| matches_redaction(v) || matches!(redact(v), Cow::Owned(_)))
 }
 
 /// The value `key` was set to, if it was (not a registered default).
@@ -240,7 +263,7 @@ fn message(e: &KrishivError) -> String {
 /// module docs); `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SET` for a
 /// request without an operation (Spark throws a classless
 /// `UnsupportedOperationException`: a recorded difference).
-pub fn config(
+pub(crate) fn config(
     entry: &SessionEntry,
     request: &pb::ConfigRequest,
     principal: &Principal,

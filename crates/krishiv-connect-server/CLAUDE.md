@@ -18,16 +18,17 @@ Paths are relative to this crate.
   `Interrupt`; the other RPCs are `UNIMPLEMENTED` until PR-15; a draining server answers `UNAVAILABLE` ("server
   shutting down")
 - `src/analyze.rs` `AnalyzePlan` (design §3.5): every arm over the translated, analyzed plan (never run);
-  `same_semantics`/`semantic_hash` from `krishiv_plan::normalized_plan_hash` of the analyzed plan; the cache arms
-  are 56K00 until PR-47; `src/analyze/types.rs` ports of `StructType.treeString`, `toDDL` and the planner's
+  `same_semantics`/`semantic_hash` from `krishiv_plan::semantic_plan_hash` (names and subquery aliases erased) of
+  the analyzed plan; the cache arms are 56K00 until PR-47; `src/analyze/types.rs` ports of `StructType.treeString`, `toDDL` and the planner's
   `parseDatatypeString`
 - `src/config.rs` `Config` (design §3.6) over `RuntimeConf`: the seven operations, `silent`, Spark's per-key
-  warnings, redaction for both profiles, `SettableBy` (`check_settable`; `role_of` makes every principal admin until
-  T002)
+  warnings, redaction for both profiles (Spark's pattern plus `krishiv_common::secret`'s classifier and URL
+  credentials), `SettableBy` (`check_settable`; `role_of` makes every principal admin until T002)
 - `src/interrupt.rs` `Interrupt` (design §3.7): `ALL` and `OPERATION_ID` through the session's operations and
   `Session::cancel`/`interrupt_all`; `TAG` is `UNSUPPORTED_FEATURE.INTERRUPT_TYPE` until T064
 - `src/operation.rs` `Operation` (one per `ExecutePlan`: id, plan digest, tags, reattachable, sent response ids,
-  cancel) and `Operations`, the per-session map in `SessionEntry` (`krishiv.connect.maxOperationsPerSession`,
+  one atomic state: running, then finished or cancelled by compare-and-swap) and `Operations`, the per-session map
+  in `SessionEntry` (`krishiv.connect.maxOperationsPerSession`,
   `KRISHIV_OPERATION_LIMIT`); `ExecuteLimits` (`aheadBytes`, plan and batch sizes); tag checks
   (`KRISHIV_INVALID_OPERATION_TAG`)
 - `src/execute.rs` `ExecutePlan` for ROOT relations: compressed plans (bounded ZSTD), translation, the encoder task

@@ -130,6 +130,9 @@ fn escape_single_quoted(text: &str) -> String {
 /// `StructField.toDDL` (`StructField.scala:295-323`), joined by `,`.
 #[must_use]
 pub fn to_ddl(schema: &StructType) -> String {
+    // A `default` or `comment` value that is not a string is left out;
+    // Spark's `metadata.getString` throws on one (an edge case: Krishiv
+    // builds such metadata only from strings).
     let metadata = |f: &StructField, key: &str| -> Option<String> {
         f.metadata()
             .as_map()

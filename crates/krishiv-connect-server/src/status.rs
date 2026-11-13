@@ -4,7 +4,9 @@
 //! the error's message, and a `google.rpc.ErrorInfo` detail in the domain
 //! `org.apache.spark` naming the exception class and its superclasses, the
 //! SQLSTATE, the error class and its message parameters. PySpark raises the
-//! matching Python exception from that detail.
+//! matching Python exception from that detail. Krishiv's own refusals use
+//! other codes: `RESOURCE_EXHAUSTED` for the session and operation limits,
+//! `PERMISSION_DENIED` for `KRISHIV_INSUFFICIENT_PERMISSIONS` (ADR 0046 §8).
 //!
 //! Only the client-safe form of an error leaves ([`KrishivError::for_client`]).
 //! The exception classes are the ones Spark raises where the Connect server
@@ -209,14 +211,14 @@ pub fn status_of(error: &KrishivError) -> Status {
         metadata,
     };
     // Spark sends INTERNAL for every SparkThrowable; a session limit is a
-    // refusal before admission (threat model T-D4), RESOURCE_EXHAUSTED.
-    let code = if matches!(
-        class,
-        ErrorClass::KrishivSessionLimit | ErrorClass::KrishivOperationLimit
-    ) {
-        Code::ResourceExhausted
-    } else {
-        Code::Internal
+    // refusal before admission (threat model T-D4), RESOURCE_EXHAUSTED; an
+    // authorization refusal is PERMISSION_DENIED (ADR 0046 §8).
+    let code = match class {
+        ErrorClass::KrishivSessionLimit | ErrorClass::KrishivOperationLimit => {
+            Code::ResourceExhausted
+        }
+        ErrorClass::KrishivInsufficientPermissions => Code::PermissionDenied,
+        _ => Code::Internal,
     };
     let message = abbreviate(&error.to_string(), MAX_MESSAGE);
     let details = RpcStatus {

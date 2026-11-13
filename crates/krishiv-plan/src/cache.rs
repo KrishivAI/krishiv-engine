@@ -70,6 +70,26 @@ pub fn normalized_plan_hash(plan: &Plan) -> u128 {
     normalized_subtree_hash(plan.root())
 }
 
+/// The semantic hash of a resolved plan (Spark's `QueryPlan.semanticHash`
+/// over the canonicalized plan, `QueryPlan.scala:708-749`): the normalized
+/// hash without the cosmetic parts Spark's canonicalization erases. Column
+/// and alias names are left out (`Alias(child, "")`, an `AttributeReference`
+/// canonicalized as `"none"`, `namedExpressions.scala:326-327`) and a
+/// `SubqueryAlias` is its input (`basicLogicalOperators.scala:2031`). Spark's
+/// other rewrites (commutative operands sorted, projects that only rename
+/// dropped, join hints dropped) are not made, so plans differing only in
+/// those still hash differently: it may say "different" where Spark says
+/// "same", never the reverse.
+#[must_use]
+pub fn semantic_plan_hash(plan: &Plan) -> u128 {
+    let mut enc = Encoder {
+        semantic: true,
+        ..Encoder::default()
+    };
+    enc.plan(plan.root(), 0);
+    XxHash3_128::oneshot(&enc.out)
+}
+
 /// The normalized hash of a resolved subtree, for subplan substitution: a
 /// plan and a subplan of another query with the same result hash equal.
 #[must_use]
@@ -115,6 +135,8 @@ struct Encoder {
     /// new attribute ids (the first did), so a separate copy of the same
     /// subtree has the same digest: shared and copied plans hash equal.
     seen: HashMap<(NodeKind, usize, u64), u128>,
+    /// [`semantic_plan_hash`]: names and subquery aliases left out.
+    semantic: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -174,7 +196,9 @@ impl Encoder {
     fn bound(&mut self, c: &BoundColumn, bias: u64) {
         let id = self.remap(c.id, bias);
         self.num(id);
-        self.text(&c.name);
+        if !self.semantic {
+            self.text(&c.name);
+        }
         self.debug(&c.data_type);
         self.flag(c.nullable);
     }
@@ -574,6 +598,11 @@ impl Encoder {
 
     /// Writes `plan` as the digest of its encoding, computed once per node.
     fn plan(&mut self, plan: &LogicalPlan, bias: u64) {
+        if self.semantic
+            && let PlanNode::SubqueryAlias { input, .. } = &plan.node
+        {
+            return self.plan(input, bias);
+        }
         let key = (NodeKind::Plan, std::ptr::from_ref(plan) as usize, bias);
         let digest = match self.seen.get(&key) {
             Some(d) => *d,
@@ -1143,6 +1172,41 @@ mod tests {
         let c = project(scan(&[1], &["a"]), &[rcol(1, "a")]);
         let d = project(scan(&[1], &["z"]), &[rcol(1, "z")]);
         assert_ne!(hash(&c), hash(&d));
+    }
+
+    fn semantic(plan: &LogicalPlan) -> u128 {
+        semantic_plan_hash(&Plan::try_new(plan.clone()).unwrap())
+    }
+
+    fn alias(e: Arc<Expr>, id: u64, name: &str) -> Arc<Expr> {
+        Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
+            expr: e,
+            output: bound(id, name),
+        })))
+    }
+
+    #[test]
+    fn the_semantic_hash_ignores_names_and_subquery_aliases() {
+        // Column and alias names (Spark: `AttributeReference` canonicalized
+        // as "none", `Alias` names erased).
+        let a = project(scan(&[1], &["a"]), &[alias(rcol(1, "a"), 2, "x")]);
+        let b = project(scan(&[7], &["z"]), &[alias(rcol(7, "z"), 8, "y")]);
+        assert_eq!(semantic(&a), semantic(&b));
+        assert_ne!(hash(&a), hash(&b), "the cache key keeps the names");
+        // A `SubqueryAlias` (Spark: `doCanonicalize` is the child's).
+        let aliased = LogicalPlan::new(PlanNode::SubqueryAlias {
+            input: Arc::new(scan(&[1], &["a"])),
+            alias: "t".to_owned(),
+            columns: vec!["c".to_owned()],
+        });
+        assert_eq!(semantic(&aliased), semantic(&scan(&[3], &["b"])));
+        // Other columns, literals and shapes still differ.
+        let c = project(scan(&[1, 2], &["a", "b"]), &[rcol(1, "a")]);
+        let d = project(scan(&[1, 2], &["a", "b"]), &[rcol(2, "a")]);
+        assert_ne!(semantic(&c), semantic(&d));
+        let e = filter(scan(&[1], &["a"]), gt(rcol(1, "a"), 1));
+        let f = filter(scan(&[1], &["a"]), gt(rcol(1, "a"), 2));
+        assert_ne!(semantic(&e), semantic(&f));
     }
 
     #[test]

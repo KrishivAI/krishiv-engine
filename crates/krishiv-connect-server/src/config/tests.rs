@@ -36,7 +36,21 @@ fn redaction_matches_the_key_or_the_value() {
     assert!(is_redacted("a.b", Some("jdbc:x?Password=p")));
     assert!(is_redacted("my.Credentials", None));
     assert!(is_redacted("auth.token", None));
-    assert!(!is_redacted("access_key", None), "[.]? is a literal dot");
+    assert!(
+        !super::matches_redaction("access_key"),
+        "Spark's [.]? is a literal dot"
+    );
+    // Krishiv's own classifier (ADR 0038) on top of Spark's pattern.
+    assert!(is_redacted("access_key", None));
+    assert!(is_redacted(
+        "fs.azure.account.key.acct.dfs.core.windows.net",
+        Some("abc")
+    ));
+    assert!(is_redacted("kafka.sasl.jaas.config", Some("x")));
+    assert!(is_redacted("my.apiKey", None));
+    // A value holding URL credentials, whatever its key.
+    assert!(is_redacted("my.db", Some("postgres://u:pw@h/db")));
+    assert!(!is_redacted("my.db", Some("postgres://h/db")));
     assert!(!is_redacted("spark.sql.ansi.enabled", Some("true")));
     assert!(!is_redacted("spark.sql.ansi.enabled", None));
 }
