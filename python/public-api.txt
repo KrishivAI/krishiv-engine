@@ -70,6 +70,7 @@ DataFrame.def sample(self, with_replacement: bool, fraction: float, seed: int) -
 DataFrame.def schema(self) -> list[tuple[str, str, bool]]
 DataFrame.def select(self, cols: list[Column]) -> DataFrame
 DataFrame.def select_expr(self, exprs: list[str]) -> DataFrame
+DataFrame.def storage_level(self) -> tuple[bool, bool, bool, bool, int]
 DataFrame.def subtract(self, other: DataFrame) -> DataFrame
 DataFrame.def to_df(self, names: list[str]) -> DataFrame
 DataFrame.def union(self, other: DataFrame) -> DataFrame
