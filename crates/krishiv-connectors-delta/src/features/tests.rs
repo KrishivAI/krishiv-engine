@@ -137,6 +137,19 @@ fn the_kernels_feature_refusal_is_delta_unsupported_features_for_read() {
     );
     assert_eq!(e.error_class(), ErrorClass::DeltaUnsupportedFeaturesForRead);
     assert!(e.message().contains(": geospatial."), "{}", e.message());
+    let version = snapshot_error(
+        &KernelError::unsupported("Unsupported minimum reader version 4"),
+        "t",
+    );
+    assert_eq!(
+        version.error_class(),
+        ErrorClass::DeltaInvalidProtocolVersion
+    );
+    assert!(
+        version.message().contains("reader version 4"),
+        "{}",
+        version.message()
+    );
     let other = snapshot_error(&KernelError::unsupported("copy_atomic"), "t");
     assert_eq!(
         other.error_class(),
@@ -189,4 +202,34 @@ fn the_refusal_matches_delta_sparks() {
         .collect();
     want.sort();
     assert_eq!(params, want);
+}
+
+/// Two unknown features: named in the protocol's order, joined by `, `, as delta-spark does.
+#[test]
+fn several_unsupported_features_are_named_as_delta_spark_names_them() {
+    let probe: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(fixtures().join("PROBE-two-unknown-reader-features.json")).unwrap(),
+    )
+    .unwrap();
+    let features: Vec<String> = probe["protocol"]["readerFeatures"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f.as_str().unwrap().to_owned())
+        .collect();
+    let p = ReadProtocol {
+        min_reader_version: 3,
+        reader_features: Some(features),
+        ..ReadProtocol::default()
+    };
+    let e = check_read("file:<path>", &p).unwrap_err();
+    let unsupported = e
+        .message_parameters()
+        .iter()
+        .find(|(k, _)| *k == "unsupported")
+        .map(|(_, v)| v.clone());
+    assert_eq!(
+        unsupported.as_deref(),
+        probe["parameters"]["unsupported"].as_str()
+    );
 }

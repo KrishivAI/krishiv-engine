@@ -15,16 +15,24 @@
 //!
 //! A `coordinatedCommits-preview` writer feature or any `delta.coordinatedCommits.*`
 //! configuration, and requested row-tracking columns, are refused as
-//! `UNSUPPORTED_FEATURE.TABLE_OPERATION`.
+//! `UNSUPPORTED_FEATURE.TABLE_OPERATION`. A reader version above 3 is
+//! `DELTA_INVALID_PROTOCOL_VERSION`.
+//!
+//! # Known differences
+//! - When the kernel refuses an unsupported reader feature itself (at snapshot load, before this
+//!   list runs) it stops at the first one, so only that one is named; delta-spark names all.
+//! - `<tableNameOrPath>` is the table root URL (`file:///…/`); delta-spark shows the Hadoop path
+//!   (`file:/…`). PR-08b part 2 passes the registered name or the Hadoop form.
 
 use std::collections::HashMap;
 
 use delta_kernel::{KernelError, Snapshot};
 use krishiv_common::error::{
-    DeltaUnsupportedFeaturesForRead, KrishivError, UnsupportedFeatureTableOperation,
+    DeltaInvalidProtocolVersion, DeltaUnsupportedFeaturesForRead, KrishivError,
+    UnsupportedFeatureTableOperation,
 };
 
-use crate::error::{delta_version, from_kernel};
+use crate::error::{SUPPORTED_READERS, SUPPORTED_WRITERS, delta_version, from_kernel};
 
 /// Reader features Krishiv's scan reads (section 3.5's "yes" rows).
 pub const READABLE: &[&str] = &[
@@ -50,11 +58,11 @@ pub const COORDINATED_COMMITS_PREFIX: &str = "delta.coordinatedCommits.";
 
 /// The operation named when a catalog-managed table is refused.
 pub const CATALOG_MANAGED_OPERATION: &str =
-    "reading a catalog-managed Delta table (its catalog's ratified commits are not read in P3)";
+    "reading a catalog-managed Delta table (its catalog's ratified commits are not read)";
 
 /// The operation named when a table with coordinated commits is refused.
 pub const COORDINATED_COMMITS_OPERATION: &str = "reading a Delta table with coordinated commits \
-                                                 (its unbackfilled commits are not read in P3)";
+                                                 (its unbackfilled commits are not read)";
 
 /// The operation named when row-tracking columns are requested.
 pub const ROW_TRACKING_OPERATION: &str = "reading Delta row-tracking columns";
@@ -144,10 +152,15 @@ pub fn row_tracking_refused(table: &str) -> KrishivError {
 pub fn snapshot_error(error: &KernelError, table: &str) -> KrishivError {
     match error.without_backtrace() {
         KernelError::MaxCatalogVersion(_) => table_operation(table, CATALOG_MANAGED_OPERATION),
-        KernelError::Unsupported(what) => match kernel_unsupported_feature(what) {
-            Some(feature) => unsupported_for_read(table, &[feature]),
-            None => from_kernel(error, table),
-        },
+        KernelError::Unsupported(what) => {
+            if let Some(feature) = kernel_unsupported_feature(what) {
+                unsupported_for_read(table, &[feature])
+            } else if let Some(version) = kernel_unsupported_reader_version(what) {
+                invalid_reader_version(table, version)
+            } else {
+                from_kernel(error, table)
+            }
+        }
         _ => from_kernel(error, table),
     }
 }
@@ -158,6 +171,26 @@ fn kernel_unsupported_feature(message: &str) -> Option<&str> {
     message
         .strip_prefix("Feature '")?
         .strip_suffix("' is not supported")
+}
+
+/// The version of the kernel's "Unsupported minimum reader version <n>" refusal
+/// (`delta_kernel` 0.30.1 `check_reader_version_range`).
+fn kernel_unsupported_reader_version(message: &str) -> Option<&str> {
+    message
+        .strip_prefix("Unsupported minimum reader version ")
+        .filter(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit() || b == b'-'))
+}
+
+fn invalid_reader_version(table: &str, version: &str) -> KrishivError {
+    DeltaInvalidProtocolVersion {
+        table_name_or_path: table.to_owned(),
+        reader_required: version.to_owned(),
+        writer_required: "unknown".to_owned(),
+        delta_version: delta_version(),
+        supported_readers: SUPPORTED_READERS.to_owned(),
+        supported_writers: SUPPORTED_WRITERS.to_owned(),
+    }
+    .into()
 }
 
 fn table_operation(table: &str, operation: &str) -> KrishivError {
