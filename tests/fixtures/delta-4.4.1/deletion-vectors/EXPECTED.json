@@ -1,0 +1,82 @@
+{
+ "delta_log": [
+  "00000000000000000000.crc",
+  "00000000000000000000.json",
+  "00000000000000000001.crc",
+  "00000000000000000001.json",
+  "00000000000000000002.crc",
+  "00000000000000000002.json",
+  "00000000000000000003.crc",
+  "00000000000000000003.json"
+ ],
+ "delta_spark": "4.4.1",
+ "dv_storage_types": [
+  "u"
+ ],
+ "feature": "deletionVectors",
+ "fields": [
+  "id",
+  "v"
+ ],
+ "format_version": 1,
+ "generator": "tests/scripts/gen_delta_fixtures.py",
+ "protocol": {
+  "minReaderVersion": 3,
+  "minWriterVersion": 7,
+  "readerFeatures": [
+   "deletionVectors"
+  ],
+  "writerFeatures": [
+   "deletionVectors",
+   "invariants",
+   "appendOnly"
+  ]
+ },
+ "rows": [
+  {
+   "id": 1,
+   "v": "v1"
+  },
+  {
+   "id": 2,
+   "v": "v2"
+  },
+  {
+   "id": 5,
+   "v": "v5"
+  },
+  {
+   "id": 7,
+   "v": "v7"
+  },
+  {
+   "id": 8,
+   "v": "v8"
+  }
+ ],
+ "schema": "struct<id:bigint,v:string>",
+ "spark": "4.2.0",
+ "timezone": "UTC",
+ "typed_rows": [
+  [
+   1,
+   "v1"
+  ],
+  [
+   2,
+   "v2"
+  ],
+  [
+   5,
+   "v5"
+  ],
+  [
+   7,
+   "v7"
+  ],
+  [
+   8,
+   "v8"
+  ]
+ ]
+}
