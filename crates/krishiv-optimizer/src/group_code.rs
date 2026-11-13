@@ -41,7 +41,7 @@
 //!    (`dict` is numbered in one partition), `rows(I) >= 2 rows(D)`, and the
 //!    dropped keys are wider than 8 bytes; an unknown estimate refuses. Plain
 //!    Parquet stores no distinct counts for strings, so while the rule is on the
-//!    session samples the column group keys before optimizing (when
+//!    session samples the group keys the rule could code before optimizing (when
 //!    `krishiv.optimizer.ndvSampling.enabled` is on and its time budget lasts).
 //! 6. Exactly one input of the aggregate qualifies, and no key is already a
 //!    code: a second optimization then finds nothing new.
@@ -872,6 +872,22 @@ pub fn is_group_code_dictionary(side: &LogicalPlan) -> bool {
             _ => return false,
         }
     }
+}
+
+/// Whether `GroupKeyCode` could code group keys of these types from one
+/// dimension (design P2b D2, conditions 3 and 5's width): every key compares
+/// as bytes and together they are wider than the code. A superset test (the
+/// rule drops only the keys nothing above reads); the session samples the
+/// distinct counts of the keys that pass it.
+pub fn could_code_group_keys<'a>(types: impl IntoIterator<Item = &'a DataType>) -> bool {
+    let mut width = 0_u64;
+    for t in types {
+        if !codable(t) {
+            return false;
+        }
+        width = width.saturating_add(default_size(t));
+    }
+    width > CODE_WIDTH
 }
 
 /// Whether grouping compares values of `t` as their bytes.

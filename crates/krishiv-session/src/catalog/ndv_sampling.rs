@@ -9,6 +9,8 @@ use std::sync::Arc;
 
 use krishiv_plan::{Expr, ExprNode, LogicalPlan, PlanNode};
 
+use krishiv_exec::planner::TableProvider as _;
+
 use super::{FileScanOf, QueryCatalog, run_on};
 
 impl QueryCatalog {
@@ -49,10 +51,18 @@ impl QueryCatalog {
         let mut compared = std::collections::HashSet::new();
         compared_columns(plan, &mut compared);
         // `GroupKeyCode` (design P2b D2) codes an aggregate's dimension keys
-        // only on known distinct counts: while it is on, the column group
-        // keys are sampled too.
+        // only on known distinct counts: while it is on, the group keys it
+        // could code are sampled too.
         if group_key_code(config) {
-            grouped_columns(plan, &mut compared);
+            let rows = |id: krishiv_plan::AttrId| {
+                let scan = scans.iter().find(|s| s.3.iter().any(|(i, _)| *i == id))?;
+                Some(self.opened(&scan.0)?.statistics()?.rows)
+            };
+            for g in grouped_columns(plan) {
+                if dimension_may_pay(rows(g.scan), g.others.iter().map(|id| rows(*id))) {
+                    compared.extend(g.keys);
+                }
+            }
         }
         if compared.is_empty() {
             return;
@@ -137,34 +147,113 @@ fn group_key_code(config: &krishiv_common::config::Config) -> bool {
         || krishiv_common::experimental::is_enabled(config, "groupKeyCodeForce")
 }
 
-/// The attribute ids of the plain-column keys (a cast of a column included) of
-/// every `GROUP BY` aggregate of `plan`, subquery plans included: the columns
-/// whose distinct counts `GroupKeyCode`'s statistics test reads.
-fn grouped_columns(plan: &LogicalPlan, out: &mut std::collections::HashSet<krishiv_plan::AttrId>) {
+/// The column group keys of one aggregate that come from one scan below it
+/// and that `GroupKeyCode` could code by their types
+/// ([`krishiv_optimizer::could_code_group_keys`]).
+struct GroupKeys {
+    /// The keys.
+    keys: Vec<krishiv_plan::AttrId>,
+    /// A column of their scan.
+    scan: krishiv_plan::AttrId,
+    /// A column of each other scan below the aggregate.
+    others: Vec<krishiv_plan::AttrId>,
+}
+
+/// The rule's `rows(I) >= 2 rows(D)` test on the tables' row counts, the
+/// largest other table standing for the aggregate's input `I`: `true` unless
+/// every count is known and the dimension is too large. An unknown count
+/// keeps the sample.
+fn dimension_may_pay(
+    dimension: Option<u64>,
+    mut others: impl Iterator<Item = Option<u64>>,
+) -> bool {
+    let largest = others.try_fold(0_u64, |m, r| r.map(|r| m.max(r)));
+    match (dimension, largest) {
+        (Some(d), Some(i)) => i >= d.saturating_mul(2),
+        _ => true,
+    }
+}
+
+/// Per `GROUP BY` aggregate of `plan` (subquery plans included) with two or
+/// more scans below it, the column group keys of each scan that
+/// `GroupKeyCode` could code: the columns whose distinct counts its
+/// statistics test reads. An aggregate over one table (TPC-H q1) has none.
+fn grouped_columns(plan: &LogicalPlan) -> Vec<GroupKeys> {
     // Plans are DAGs, subquery plans included: every node is visited once.
     let mut seen = std::collections::HashSet::new();
     let mut stack: Vec<Arc<LogicalPlan>> = Vec::new();
-    let mut visit =
-        |p: &LogicalPlan,
-         stack: &mut Vec<Arc<LogicalPlan>>,
-         out: &mut std::collections::HashSet<krishiv_plan::AttrId>| {
-            if !seen.insert(std::ptr::from_ref(p)) {
-                return;
-            }
-            if let PlanNode::Aggregate {
-                grouping: krishiv_plan::Grouping::GroupBy(keys),
-                ..
-            } = &p.node
-            {
-                out.extend(keys.iter().filter_map(|k| column_of(k)));
-            }
-            p.for_each_expr(&mut |e| subquery_plans(e, stack));
-            p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
-        };
-    visit(plan, &mut stack, out);
+    let mut out = Vec::new();
+    let mut visit = |p: &LogicalPlan, stack: &mut Vec<Arc<LogicalPlan>>| {
+        if !seen.insert(std::ptr::from_ref(p)) {
+            return;
+        }
+        if let PlanNode::Aggregate {
+            input,
+            grouping: krishiv_plan::Grouping::GroupBy(keys),
+            ..
+        } = &p.node
+        {
+            aggregate_keys(input, keys, &mut out);
+        }
+        p.for_each_expr(&mut |e| subquery_plans(e, stack));
+        p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+    };
+    visit(plan, &mut stack);
     while let Some(p) = stack.pop() {
-        visit(&p, &mut stack, out);
+        visit(&p, &mut stack);
     }
+    out
+}
+
+/// [`grouped_columns`] of one aggregate over `input` grouped by `keys`.
+fn aggregate_keys(input: &LogicalPlan, keys: &[Arc<Expr>], out: &mut Vec<GroupKeys>) {
+    let scans = scans_below(input);
+    if scans.len() < 2 {
+        return;
+    }
+    let keys: Vec<_> = keys.iter().filter_map(|k| column_of(k)).collect();
+    for (n, scan) in scans.iter().enumerate() {
+        let (ids, types): (Vec<_>, Vec<_>) = scan
+            .output
+            .iter()
+            .filter(|c| keys.contains(&c.id))
+            .map(|c| (c.id, &c.data_type))
+            .unzip();
+        let Some(first) = scan.output.first() else {
+            continue;
+        };
+        if ids.is_empty() || !krishiv_optimizer::could_code_group_keys(types) {
+            continue;
+        }
+        out.push(GroupKeys {
+            keys: ids,
+            scan: first.id,
+            others: scans
+                .iter()
+                .enumerate()
+                .filter(|(m, _)| *m != n)
+                .filter_map(|(_, s)| s.output.first().map(|c| c.id))
+                .collect(),
+        });
+    }
+}
+
+/// The scans in `plan`, subquery plans left out (each is an aggregate's
+/// input of its own), each shared node once.
+fn scans_below(plan: &LogicalPlan) -> Vec<&krishiv_plan::Scan> {
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = vec![plan];
+    let mut out = Vec::new();
+    while let Some(p) = stack.pop() {
+        if !seen.insert(std::ptr::from_ref(p)) {
+            continue;
+        }
+        if let PlanNode::Scan(scan) = &p.node {
+            out.push(scan);
+        }
+        p.for_each_child(&mut |c| stack.push(&**c));
+    }
+    out
 }
 
 /// The column `e` is, under casts.

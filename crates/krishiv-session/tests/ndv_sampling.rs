@@ -59,7 +59,7 @@ fn table(dir: &std::path::Path, name: &str) -> String {
     format!("parquet.`{}`", dir.join(name).display())
 }
 
-/// A session over two Parquet tables: `nation(n_name)` with 25 distinct names, and `orders(status)` of 20,000 rows
+/// A session over two Parquet tables: `nation(n_key, n_name)` with 25 distinct names, and `orders(id, status)` of 20,000 rows
 /// with three statuses.
 fn session(dir: &std::path::Path, sampling: bool) -> Session {
     // The tables are read by path: `parquet.`<dir>/nation`` and `parquet.`<dir>/orders``.
@@ -77,9 +77,10 @@ fn session(dir: &std::path::Path, sampling: bool) -> Session {
     let nation = dir.join("nation");
     let orders = dir.join("orders");
     if !nation.exists() {
-        let n =
-            block_on(s.sql("SELECT concat('NATION', CAST(id AS STRING)) AS n_name FROM range(25)"))
-                .unwrap();
+        let n = block_on(s.sql(
+            "SELECT id AS n_key, concat('NATION', CAST(id AS STRING)) AS n_name FROM range(25)",
+        ))
+        .unwrap();
         block_on(n.write().parquet(nation.to_str().unwrap())).unwrap();
         let o = block_on(s.sql(
             "SELECT id, CASE WHEN id % 50 = 0 THEN 'P' WHEN id % 2 = 0 THEN 'F' ELSE 'O' END AS status FROM range(20000)",
@@ -248,16 +249,18 @@ fn explain_verbose_lists_the_samples_as_a_statistics_step() {
     assert_eq!(first_step, Some(step), "the samples come first");
 }
 
-/// With `krishiv.optimizer.groupKeyCode` on, an aggregate's column group keys
-/// are sampled too: the rule's statistics test needs their distinct counts
-/// (design P2b D2). With it off, a group key alone samples nothing.
+/// With `krishiv.optimizer.groupKeyCode` on, the group keys the rule could
+/// code are sampled too: its statistics test needs their distinct counts
+/// (design P2b D2). Those are keys of a table joined below the aggregate to
+/// one at least twice its size. With it off, a group key alone samples nothing.
 #[test]
 fn group_keys_are_sampled_only_while_group_key_code_is_on() {
     let dir = tempfile::tempdir().unwrap();
     let s = session(dir.path(), true);
     let sql = format!(
-        "SELECT status, count(*) FROM {} GROUP BY status",
-        table(dir.path(), "orders")
+        "SELECT n_name, count(*) FROM {} JOIN {} ON id % 25 = n_key GROUP BY n_name",
+        table(dir.path(), "orders"),
+        table(dir.path(), "nation")
     );
     s.conf()
         .set("krishiv.optimizer.groupKeyCode", "false")
@@ -268,5 +271,66 @@ fn group_keys_are_sampled_only_while_group_key_code_is_on() {
         .unwrap();
     let lines = sample_lines(&explain(&s, "COST", &sql));
     assert_eq!(lines.len(), 1, "{lines:?}");
-    assert!(lines[0].contains("orders`: status: sampled "), "{lines:?}");
+    assert!(lines[0].contains("nation`: n_name: sampled "), "{lines:?}");
+}
+
+/// The force flag samples the same keys as `krishiv.optimizer.groupKeyCode`.
+#[test]
+fn the_force_flag_samples_the_dimension_group_keys_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path(), true);
+    s.conf()
+        .set("krishiv.experimental.groupKeyCodeForce", "true")
+        .unwrap();
+    let sql = format!(
+        "SELECT n_name, count(*) FROM {} JOIN {} ON id % 25 = n_key GROUP BY n_name",
+        table(dir.path(), "orders"),
+        table(dir.path(), "nation")
+    );
+    let lines = sample_lines(&explain(&s, "COST", &sql));
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].contains("nation`: n_name: sampled "), "{lines:?}");
+}
+
+/// Group keys the rule can never code are not sampled: an aggregate over one
+/// table (TPC-H q1's shape), and the keys of the largest table of a join (the
+/// rule needs the aggregate's input twice the dimension's rows).
+#[test]
+fn group_keys_the_rule_cannot_code_are_not_sampled() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path(), true);
+    s.conf()
+        .set("krishiv.optimizer.groupKeyCode", "true")
+        .unwrap();
+    let alone = format!(
+        "SELECT status, count(*) FROM {} GROUP BY status",
+        table(dir.path(), "orders")
+    );
+    assert!(sample_lines(&explain(&s, "COST", &alone)).is_empty());
+    let fact = format!(
+        "SELECT status, n_name, count(*) FROM {} JOIN {} ON id % 25 = n_key GROUP BY status, n_name",
+        table(dir.path(), "orders"),
+        table(dir.path(), "nation")
+    );
+    let lines = sample_lines(&explain(&s, "COST", &fact));
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].contains("nation`: n_name: sampled "), "{lines:?}");
+}
+
+/// A group key inside a scalar subquery is sampled as one in the main query.
+#[test]
+fn group_keys_inside_a_subquery_are_sampled() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path(), true);
+    s.conf()
+        .set("krishiv.optimizer.groupKeyCode", "true")
+        .unwrap();
+    let sql = format!(
+        "SELECT (SELECT max(c) FROM (SELECT n_name, count(*) AS c FROM {} JOIN {} ON id % 25 = n_key GROUP BY n_name))",
+        table(dir.path(), "orders"),
+        table(dir.path(), "nation")
+    );
+    let lines = sample_lines(&explain(&s, "COST", &sql));
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].contains("nation`: n_name: sampled "), "{lines:?}");
 }
