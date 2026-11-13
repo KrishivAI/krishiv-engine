@@ -1,11 +1,14 @@
 [package]
 name = "krishiv-exec"
 description = "Batch execution engine"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 publish = true
 
 [lints]
@@ -21,15 +24,15 @@ arrow-select.workspace = true
 foldhash.workspace = true
 hashbrown.workspace = true
 futures = { workspace = true, features = ["alloc"] }
-krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
-krishiv-functions = { path = "../krishiv-functions", version = "=0.2.0" }
-krishiv-io = { path = "../krishiv-io", version = "=0.2.0" }
-krishiv-kernels = { path = "../krishiv-kernels", version = "=0.2.0" }
-krishiv-memory = { path = "../krishiv-memory", version = "=0.2.0" }
-krishiv-optimizer = { path = "../krishiv-optimizer", version = "=0.2.0" }
-krishiv-plan = { path = "../krishiv-plan", version = "=0.2.0" }
-krishiv-types = { path = "../krishiv-types", version = "=0.2.0" }
-krishiv-udf-sdk = { path = "../krishiv-udf-sdk", version = "=0.2.0" }
+krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
+krishiv-functions = { path = "../krishiv-functions", version = "=0.2.1" }
+krishiv-io = { path = "../krishiv-io", version = "=0.2.1" }
+krishiv-kernels = { path = "../krishiv-kernels", version = "=0.2.1" }
+krishiv-memory = { path = "../krishiv-memory", version = "=0.2.1" }
+krishiv-optimizer = { path = "../krishiv-optimizer", version = "=0.2.1" }
+krishiv-plan = { path = "../krishiv-plan", version = "=0.2.1" }
+krishiv-types = { path = "../krishiv-types", version = "=0.2.1" }
+krishiv-udf-sdk = { path = "../krishiv-udf-sdk", version = "=0.2.1" }
 thiserror.workspace = true
 # The query profile's JSON document (`profile`).
 serde_json = { workspace = true, features = ["std"] }

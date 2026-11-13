@@ -1,11 +1,14 @@
 [package]
 name = "krishiv-connect"
 description = "Spark Connect server"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 publish = true
 
 [lints]
@@ -14,9 +17,9 @@ workspace = true
 [dependencies]
 arrow-array.workspace = true
 arrow-schema.workspace = true
-krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
-krishiv-plan = { path = "../krishiv-plan", version = "=0.2.0" }
-krishiv-types = { path = "../krishiv-types", version = "=0.2.0" }
+krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
+krishiv-plan = { path = "../krishiv-plan", version = "=0.2.1" }
+krishiv-types = { path = "../krishiv-types", version = "=0.2.1" }
 # `no-recursion-limit`: prost's fixed limit of 100 nested messages rejects
 # ordinary plans (a loop of `withColumn` calls); `wire::decode_plan` bounds the
 # depth itself, before prost recurses (see the crate CLAUDE.md).

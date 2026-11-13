@@ -1,21 +1,24 @@
 [package]
 name = "krishiv-server"
 description = "Admin and UI API server"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 publish = true
 
 [dependencies]
 axum = { workspace = true, features = ["http1", "tokio"] }
 arrow-array = { workspace = true, optional = true }
 arrow-schema = { workspace = true, optional = true }
-krishiv-common = { path = "../krishiv-common", version = "=0.2.0", optional = true }
-krishiv-exec = { path = "../krishiv-exec", version = "=0.2.0", optional = true }
-krishiv-session = { path = "../krishiv-session", version = "=0.2.0", optional = true }
-krishiv-ui-assets = { path = "../krishiv-ui-assets", version = "=0.2.0" }
+krishiv-common = { path = "../krishiv-common", version = "=0.2.1", optional = true }
+krishiv-exec = { path = "../krishiv-exec", version = "=0.2.1", optional = true }
+krishiv-session = { path = "../krishiv-session", version = "=0.2.1", optional = true }
+krishiv-ui-assets = { path = "../krishiv-ui-assets", version = "=0.2.1" }
 futures = { workspace = true, features = ["alloc"] }
 getrandom.workspace = true
 serde_json = { workspace = true, features = ["std"] }

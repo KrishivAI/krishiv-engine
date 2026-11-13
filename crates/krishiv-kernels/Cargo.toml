@@ -1,11 +1,14 @@
 [package]
 name = "krishiv-kernels"
 description = "Compute kernels (SIMD)"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 publish = true
 
 [lints]
@@ -18,8 +21,8 @@ arrow-schema.workspace = true
 arrow-select.workspace = true
 arrow-string.workspace = true
 arrow-ord.workspace = true
-krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
-krishiv-types = { path = "../krishiv-types", version = "=0.2.0" }
+krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
+krishiv-types = { path = "../krishiv-types", version = "=0.2.1" }
 jiff = { workspace = true, features = ["std", "tzdb-bundle-always"] }
 libm.workspace = true
 memchr = { workspace = true, features = ["std"] }

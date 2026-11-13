@@ -1,11 +1,14 @@
 [package]
 name = "krishiv-io"
 description = "Object store and file format I/O"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 publish = true
 
 [lints]
@@ -30,13 +33,13 @@ serde_json = { workspace = true, features = ["std"] }
 # Exact runtime-filter sets, placed by the row hash (P2-T163).
 hashbrown.workspace = true
 futures = { workspace = true, features = ["alloc", "std"] }
-krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
+krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
 # Spark value text conversions and datetime patterns (CSV, JSON, text).
-krishiv-kernels = { path = "../krishiv-kernels", version = "=0.2.0" }
-krishiv-memory = { path = "../krishiv-memory", version = "=0.2.0" }
+krishiv-kernels = { path = "../krishiv-kernels", version = "=0.2.1" }
+krishiv-memory = { path = "../krishiv-memory", version = "=0.2.1" }
 # URL parsing, store building and pacing budgets (ADR 0044); `cloud` turns on its builders.
-krishiv-store = { path = "../krishiv-store", version = "=0.2.0" }
-krishiv-types = { path = "../krishiv-types", version = "=0.2.0" }
+krishiv-store = { path = "../krishiv-store", version = "=0.2.1" }
+krishiv-types = { path = "../krishiv-types", version = "=0.2.1" }
 memchr.workspace = true
 # `fs`: the local store reads use wraps `LocalFileSystem` (`io/local_listing.rs`).
 object_store = { workspace = true, features = ["fs"] }

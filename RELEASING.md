@@ -149,8 +149,8 @@ Two things learned from 0.2.0:
 - **crates.io rate-limits new crate names** (HTTP 429, "try again after <date>"). `publish-crates.yml` waits until
   the stated time and retries each crate (up to 40 attempts, a 330-minute job limit); a crate already published is
   skipped, so a failed run can also be dispatched again.
-- **The bare `pip install krishiv` has no pyarrow**, and `collect()` needs it: install `krishiv[pyarrow]`
-  (the TestPyPI line above already does).
+- **0.2.0's bare `pip install krishiv` had no pyarrow**, and `collect()` needs it. From 0.2.1 pyarrow is a
+  required dependency; `krishiv[pyarrow]` stays as an alias.
 
 ## Yanking a bad release (owner only)
 

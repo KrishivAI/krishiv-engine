@@ -29,8 +29,7 @@ DataFrame also implements the Arrow PyCapsule interface (`__arrow_c_stream__`), 
 and releasing the stream cancels it.
 
 `krishiv.sql` mirrors `pyspark.sql` (signatures and import paths); errors are in `krishiv.errors`, shaped like
-`pyspark.errors`. pyarrow is optional: install `krishiv[pyarrow]`; `toArrow`, `collect`, `show` and `toPandas` need it (`count` and
-the PyCapsule interface do not). `toPandas` also needs pandas (`pip install krishiv[pandas]`). SQL expression strings
+`pyspark.errors`. pyarrow is a required dependency since 0.2.1 (`krishiv[pyarrow]` still works as an alias); `toArrow`, `collect`, `show` and `toPandas` use it. `toPandas` also needs pandas (`pip install krishiv[pandas]`). SQL expression strings
 are supported (`F.expr`, `selectExpr`, `filter`/`where` with a string).
 
 ## Run your PySpark tests locally

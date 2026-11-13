@@ -4,11 +4,12 @@ build-backend = "maturin"
 
 [project]
 name = "krishiv"
-description = "Krishiv: a Rust-native, Spark-compatible batch and streaming engine"
-readme = "README.md"
+description = "Spark alternative in Rust: PySpark and Spark SQL without the JVM"
+readme = "PYPI.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 keywords = ["spark", "pyspark", "spark-alternative", "sql", "dataframe", "arrow", "rust", "etl", "big-data"]
+dependencies = ["pyarrow>=16"]
 dynamic = ["version"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -34,10 +35,9 @@ Changelog = "https://github.com/KrishivAI/krishiv-engine/releases"
 Source = "https://github.com/KrishivAI/krishiv-engine"
 
 [project.optional-dependencies]
-# Arrow libraries are optional: `__arrow_c_stream__` needs none (Polars and DuckDB consume it
-# directly); pyarrow is needed by `toArrow`, which imports it lazily. `toPandas` needs the
-# `pandas` extra (pandas and numpy; not bundled in the wheel).
-pyarrow = ["pyarrow>=16"]
+# pyarrow is a required dependency since 0.2.1; this extra stays so `krishiv[pyarrow]` install lines still work.
+# `toPandas` needs the `pandas` extra (pandas and numpy; not bundled in the wheel).
+pyarrow = []
 pandas = ["pandas>=2.2", "numpy>=1.26", "pyarrow>=16"]
 
 [dependency-groups]

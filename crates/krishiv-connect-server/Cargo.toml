@@ -1,11 +1,14 @@
 [package]
 name = "krishiv-connect-server"
 description = "Spark Connect gRPC server: the service, session manager and limits"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 publish = true
 
 [lints]
@@ -17,12 +20,12 @@ arrow-ipc = { workspace = true, features = ["lz4", "zstd"] }
 arrow-schema.workspace = true
 futures = { workspace = true, features = ["std"] }
 bytes = { workspace = true, features = ["std"] }
-krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
-krishiv-connect = { path = "../krishiv-connect", version = "=0.2.0" }
-krishiv-memory = { path = "../krishiv-memory", version = "=0.2.0" }
-krishiv-plan = { path = "../krishiv-plan", version = "=0.2.0" }
-krishiv-session = { path = "../krishiv-session", version = "=0.2.0", features = ["unstable-ir"] }
-krishiv-types = { path = "../krishiv-types", version = "=0.2.0" }
+krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
+krishiv-connect = { path = "../krishiv-connect", version = "=0.2.1" }
+krishiv-memory = { path = "../krishiv-memory", version = "=0.2.1" }
+krishiv-plan = { path = "../krishiv-plan", version = "=0.2.1" }
+krishiv-session = { path = "../krishiv-session", version = "=0.2.1", features = ["unstable-ir"] }
+krishiv-types = { path = "../krishiv-types", version = "=0.2.1" }
 getrandom.workspace = true
 prost = { workspace = true, features = ["derive", "std"] }
 prost-types = { workspace = true, features = ["std"] }
