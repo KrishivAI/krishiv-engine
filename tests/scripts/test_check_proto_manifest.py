@@ -90,3 +90,15 @@ def test_upstream_check_compares_each_file_with_its_tag():
         raise OSError("offline")
 
     assert all("cannot fetch" in p for p in m.upstream_problems(down))
+
+
+def test_every_version_only_adds_to_the_one_before_except_the_listed_removals():
+    assert m.additivity_problems() == []
+
+
+def test_additivity_flags_an_unlisted_removal(monkeypatch):
+    monkeypatch.setattr(m, "ALLOWED_REMOVALS", {})
+    assert m.additivity_problems() == [
+        "3.5 -> 4.0: removed ('relations.proto', 'CachedLocalRelation', 1) ('', 'string', 'userId')",
+        "3.5 -> 4.0: removed ('relations.proto', 'CachedLocalRelation', 2) ('', 'string', 'sessionId')",
+    ]

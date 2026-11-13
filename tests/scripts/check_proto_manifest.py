@@ -18,7 +18,9 @@ import argparse
 import collections
 import difflib
 import hashlib
+import itertools
 import json
+import re
 import sys
 import urllib.request
 from pathlib import Path
@@ -114,6 +116,64 @@ def delta_problems(base: str = "4.2.1", new: str = "4.3") -> list[str]:
     return problems
 
 
+# Items an older version had that a newer one removed (the only non-additive changes between consecutive versions),
+# each with its reason. `LEGACY_3_5_FIELDS` in crates/krishiv-connect/src/wire.rs lets a 3.5 client still send them.
+ALLOWED_REMOVALS = {
+    ("3.5", "4.0"): {
+        ("relations.proto", "CachedLocalRelation", 1),  # userId: the server must use the active user
+        ("relations.proto", "CachedLocalRelation", 2),  # sessionId: likewise
+    },
+}
+
+
+def _items(ver: str) -> dict:
+    """(file, message path, field number) -> (label, type, name), and (file, enum path, "enum", number) -> name."""
+    out: dict = {}
+    for f in sorted((PROTO / ver / "spark" / "connect").glob("*.proto")):
+        stack: list[tuple[str, str]] = []
+        text = re.sub(r"/\*.*?\*/", "", f.read_text(), flags=re.S)
+        for raw in text.splitlines():
+            line = raw.split("//")[0].strip()
+            if not line:
+                continue
+            if m := re.match(r"(message|enum|oneof)\s+(\w+)\s*\{", line):
+                if line.endswith("}"):  # `message Unknown {}` on one line
+                    continue
+                stack.append((m.group(1), m.group(2)))
+                continue
+            if line.startswith("}"):
+                if stack:
+                    stack.pop()
+                continue
+            path = ".".join(n for k, n in stack if k != "oneof")
+            kind = stack[-1][0] if stack else ""
+            if kind in ("message", "oneof") and (
+                m := re.match(r"(?:(optional|repeated)\s+)?([\w.<>, ]+?)\s+(\w+)\s*=\s*(\d+)", line)
+            ):
+                out[(f.name, path, int(m.group(4)))] = (m.group(1) or "", m.group(2).replace(" ", ""), m.group(3))
+            elif kind == "enum" and (m := re.match(r"(\w+)\s*=\s*(-?\d+)\s*;", line)):
+                out[(f.name, path, "enum", int(m.group(2)))] = m.group(1)
+    return out
+
+
+def additivity_problems(chain=("3.5", "4.0", "4.1", "4.2", "4.2.1", "4.3")) -> list[str]:
+    """Each version must keep every field and enum value of the one before (label `optional` may be added),
+    except the listed removals: one superset decoder is only sound if newer versions only add."""
+    problems = []
+    for old, new in itertools.pairwise(chain):
+        a, b = _items(old), _items(new)
+        allowed = ALLOWED_REMOVALS.get((old, new), set())
+        for key, val in a.items():
+            if key in allowed:
+                if key in b:
+                    problems.append(f"{old} -> {new}: {key} is listed as removed but still exists")
+            elif key not in b:
+                problems.append(f"{old} -> {new}: removed {key} {val}")
+            elif b[key] != val and not (isinstance(val, tuple) and val[1:] == b[key][1:] and val[0] == ""):
+                problems.append(f"{old} -> {new}: changed {key} {val} -> {b[key]}")
+    return problems
+
+
 RAW = "https://raw.githubusercontent.com/apache/spark/{tag}/sql/connect/common/src/main/protobuf/spark/connect/{name}"
 
 
@@ -155,6 +215,7 @@ def main(argv: list[str] | None = None) -> int:
     recorded = json.loads(MANIFEST.read_text(encoding="utf-8"))
     errors = [f"{v}: manifest differs from the vendored files" for v in current if current[v] != recorded.get(v)]
     errors += delta_problems()
+    errors += additivity_problems()
     for e in errors:
         print(e, file=sys.stderr)
     return 1 if errors else 0

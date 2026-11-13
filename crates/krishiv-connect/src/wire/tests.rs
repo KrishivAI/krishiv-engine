@@ -695,3 +695,28 @@ fn decoding_and_dropping_a_plan_at_the_cap_fits_a_256_kb_stack() {
         .expect("spawn");
     assert!(handle.join().expect("no stack overflow") > 0);
 }
+
+#[test]
+fn a_3_5_client_may_send_the_fields_4_0_deleted() {
+    // CachedLocalRelation { userId = 1, sessionId = 2, hash = 3 } inside Relation.cached_local_relation = 36.
+    let cached = |with_legacy: bool| {
+        let mut body = Vec::new();
+        if with_legacy {
+            body.extend(field(1, b"user"));
+            body.extend(field(2, b"session"));
+        }
+        body.extend(field(3, b"abc"));
+        field(36, &body)
+    };
+    let rel = decode_relation_with(&cached(true), &opts(ClientVersion::V3_5)).expect("3.5 client");
+    assert!(matches!(
+        rel.rel_type,
+        Some(relation::RelType::CachedLocalRelation(ref c)) if c.hash == "abc"
+    ));
+    // Only a 3.5 client: any other declared version, and the default profile, refuse them.
+    for version in [ClientVersion::V4_0, ClientVersion::V4_3] {
+        let err = decode_relation_with(&cached(true), &opts(version)).expect_err("deleted field");
+        assert_eq!(class(&err), ErrorClass::KrishivUnsupportedFeature);
+    }
+    decode_relation_with(&cached(false), &opts(ClientVersion::V4_0)).expect("hash only");
+}

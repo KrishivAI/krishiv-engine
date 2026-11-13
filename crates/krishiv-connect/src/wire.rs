@@ -468,6 +468,11 @@ fn scan(table: &[Layout], root: u16, buf: &[u8], limits: &Limits) -> Result<usiz
                     .ok()
                     .map(|i| m.fields[i].1)
             })
+            .or_else(|| {
+                // A field 4.0 deleted that a 3.5 client still sends: read past it (prost skips it).
+                (limits.version == ClientVersion::V3_5 && is_legacy_3_5(table, message, number))
+                    .then_some(Field::Bytes)
+            })
             .ok_or(Reject::UnknownField { message, number })?;
         if limits.version < ClientVersion::V4_3 && is_newer_than_declared(table, message, number) {
             return Err(Reject::NotInVersion { message, number });
@@ -563,6 +568,22 @@ fn skip(buf: &[u8], pos: usize, n: usize) -> Result<usize, Reject> {
         .ok_or(Reject::Malformed(
             "a field runs past the end of its message",
         ))
+}
+
+/// Fields Spark 4.0 deleted (reserved) that a 3.5 client still sends, as (message name, field
+/// number): `CachedLocalRelation.userId` and `.sessionId`, which 4.0 removed because the server
+/// must use the active session and user. The one decoder follows 4.3 and 4.0 ignores them, so a
+/// client declaring 3.5 may send them; every other client gets them refused as undefined fields.
+/// The 3.5 -> 4.0 diff of the vendored protos is checked by `check_proto_manifest.py`
+/// (`additivity_problems`): this is its only non-additive change.
+const LEGACY_3_5_FIELDS: &[(&str, u32)] = &[("CachedLocalRelation", 1), ("CachedLocalRelation", 2)];
+
+fn is_legacy_3_5(table: &[Layout], message: u16, number: u32) -> bool {
+    table.get(usize::from(message)).is_some_and(|m| {
+        LEGACY_3_5_FIELDS
+            .iter()
+            .any(|&(name, n)| n == number && name == m.name)
+    })
 }
 
 /// Whether field `number` of message `message` is one of [`FIELDS_SINCE_4_3`].
