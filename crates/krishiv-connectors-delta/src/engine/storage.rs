@@ -11,7 +11,8 @@
 //! | `copy_atomic` | the kernel's `Unsupported`; nothing in the kernel calls it |
 //!
 //! Every call checks the query's cancellation first, confines every URL to the table root and
-//! runs its I/O on the log pool thread it was called on (`Shared::block_on`).
+//! runs its I/O on the log pool thread it was called on (`Shared::block_on`; a put runs to
+//! completion once started, `Shared::block_on_to_completion`).
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -60,9 +61,14 @@ impl KrishivStorageHandler {
         let path = self.confine(url)?;
         let (io, store) = (&self.shared.io, &self.shared.store);
         if overwrite {
-            return self.shared.block_on(io.put_object(store, &path, data));
+            return self
+                .shared
+                .block_on_to_completion(io.put_object(store, &path, data));
         }
-        match self.shared.block_on(io.put_if_absent(store, &path, data))? {
+        match self
+            .shared
+            .block_on_to_completion(io.put_if_absent(store, &path, data))?
+        {
             PutIfAbsent::Created => Ok(()),
             PutIfAbsent::Exists => Err(KernelError::FileAlreadyExists(url.to_string())),
             PutIfAbsent::Unsupported => Err(to_kernel(
@@ -124,15 +130,17 @@ fn parsed_by_kernel(path: &Path) -> bool {
 impl StorageHandler for KrishivStorageHandler {
     fn list_from(&self, url: &Url) -> KernelResult<KernelResultIteratorStatic<FileMeta>> {
         self.shared.check_cancelled()?;
-        let (prefix, offset) = if url.path().ends_with('/') {
-            let dir = self.confine(url)?;
-            (dir.clone(), dir)
-        } else {
-            let offset = self.confine(url)?;
-            let mut parts: Vec<_> = offset.parts().collect();
-            parts.pop();
-            (Path::from_iter(parts), offset)
-        };
+        // The root without its trailing `/` is the root as a directory, not a file of its parent.
+        let (prefix, offset) =
+            if url.path().ends_with('/') || self.shared.root.is_root_without_slash(url) {
+                let dir = self.confine(url)?;
+                (dir.clone(), dir)
+            } else {
+                let offset = self.confine(url)?;
+                let mut parts: Vec<_> = offset.parts().collect();
+                parts.pop();
+                (Path::from_iter(parts), offset)
+            };
         let listed = self.shared.block_on(self.shared.io.list_from(
             &self.shared.store,
             &prefix,

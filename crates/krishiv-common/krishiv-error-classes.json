@@ -7,7 +7,7 @@
   },
   "KRISHIV_CATALOG_LIMIT_EXCEEDED" : {
     "message" : [
-      "<source> exceeds <limit> (<value>), so it was not loaded. A legitimate table or catalog this large needs <config> raised."
+      "<source> exceeds <limit> (<value>), so it was not loaded. A legitimate table or catalog this large needs <config>."
     ],
     "sqlState" : "54000"
   },

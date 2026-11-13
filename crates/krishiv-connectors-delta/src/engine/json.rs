@@ -83,7 +83,7 @@ pub fn check_size(limits: &DeltaLimits, source: &str, bytes: u64) -> Result<(), 
                 limits.max_metadata_bytes
             ),
             format!("{bytes} bytes"),
-            "\"krishiv.catalog.maxMetadataBytes\"",
+            "\"krishiv.catalog.maxMetadataBytes\" raised",
         ));
     }
     Ok(())
@@ -115,7 +115,7 @@ pub fn check_depth(limits: &DeltaLimits, source: &str, text: &[u8]) -> Result<()
                         source,
                         &format!("the JSON nesting depth limit of {}", limits.max_depth),
                         format!("deeper than {}", limits.max_depth),
-                        "a smaller document (the depth limit is fixed)",
+                        "a document nested less deeply (the depth limit is fixed)",
                     ));
                 }
             }
@@ -129,7 +129,7 @@ pub fn check_depth(limits: &DeltaLimits, source: &str, text: &[u8]) -> Result<()
 }
 
 /// Columns of a Delta schema string's type (a struct's fields, recursively, nested ones
-/// counted), or `None` when it is not a Delta type.
+/// counted), or 0 when it is not a Delta type.
 fn columns_of(t: &serde_json::Value) -> usize {
     let Some(obj) = t.as_object() else {
         return 0;
@@ -173,7 +173,7 @@ pub fn check_schema_string(
             source,
             &format!("the schema width limit of {} columns", limits.max_columns),
             format!("{columns} columns"),
-            "\"krishiv.catalog.maxColumns\"",
+            "\"krishiv.catalog.maxColumns\" raised",
         ));
     }
     Ok(())
@@ -355,6 +355,7 @@ impl Target {
 /// Decodes newline-delimited JSON `text`, one batch per [`BATCH_ROWS`] rows.
 fn decode_lines(target: &Target, text: &[u8], file: &str) -> KernelResult<Vec<RecordBatch>> {
     let mut decoder = ReaderBuilder::new(Arc::clone(&target.json))
+        .with_coerce_primitive(true)
         .with_batch_size(BATCH_ROWS)
         .build_decoder()
         .map_err(arrow_err)?;
@@ -393,6 +394,7 @@ fn decode_rows<'s>(
         return Ok(RecordBatch::new_empty(Arc::clone(&target.output)));
     }
     let mut decoder = ReaderBuilder::new(Arc::clone(&target.json))
+        .with_coerce_primitive(true)
         .with_batch_size(count)
         .build_decoder()
         .map_err(arrow_err)?;

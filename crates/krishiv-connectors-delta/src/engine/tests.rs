@@ -22,6 +22,15 @@ use krishiv_io::{IoConfig, IoScheduler, SettledLocalFileSystem, StoreId};
 use object_store::ObjectStore;
 use url::Url;
 
+/// A one-column (`s`) string batch.
+fn strings(rows: &[Option<&str>]) -> RecordBatch {
+    RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new("s", ArrowType::Utf8, true)])),
+        vec![Arc::new(StringArray::from(rows.to_vec()))],
+    )
+    .unwrap()
+}
+
 use super::pool::LogPool;
 use super::*;
 use crate::error::from_kernel;
@@ -69,8 +78,11 @@ impl Fixture {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("t");
         std::fs::create_dir_all(dir.join("_delta_log")).unwrap();
+        // One blocking thread, as `krishiv.io.blockingThreads=1` gives: kernel calls must not
+        // need it for themselves, or their local I/O would queue behind them forever.
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
+            .max_blocking_threads(1)
             .enable_all()
             .build()
             .unwrap();
@@ -89,7 +101,8 @@ impl Fixture {
             limits,
             Arc::clone(&cancel),
             pool,
-        );
+        )
+        .unwrap();
         Self {
             _tmp: tmp,
             dir,
@@ -460,7 +473,7 @@ fn delta_handler_cancellation() {
     let engine = f.engine.clone();
     let live = CancellationToken::new();
     let errors =
-        f.rt.block_on(f.pool.run(f.rt.handle(), &live, move || {
+        f.rt.block_on(f.pool.run(&live, move || {
             let e = &engine;
             let s = e.storage();
             let j = e.json();
@@ -483,6 +496,12 @@ fn delta_handler_cancellation() {
                     .unwrap_err(),
                 j.write_json_file(&u, Box::new(std::iter::empty()), true)
                     .unwrap_err(),
+                j.parse_json(
+                    Box::new(KrishivEngineData::new(strings(&[Some("{}")]))),
+                    action_schema(),
+                )
+                .map(|_| ())
+                .unwrap_err(),
             ]
         }))
         .unwrap();
@@ -663,6 +682,13 @@ fn delta_log_paths_confined() {
         Url::parse("file://otherhost/t/x").unwrap(),
         // A sibling whose name extends the root's.
         Url::from_file_path(format!("{}2/_delta_log/0.json", f.dir.display())).unwrap(),
+        // Percent-encoded `..` and `/`: the object path's parse refuses them.
+        Url::parse(&format!("{}%2E%2E/other/x.json", root.as_str())).unwrap(),
+        Url::parse(&format!(
+            "{}_delta_log%2F..%2F..%2Fother/x.json",
+            root.as_str()
+        ))
+        .unwrap(),
     ];
     let errors = f.run(move |e| {
         let s = e.storage();
@@ -694,7 +720,7 @@ fn delta_log_paths_confined() {
         }
         out
     });
-    assert_eq!(errors.len(), 42);
+    assert_eq!(errors.len(), 54);
     for e in &errors {
         let ours = from_kernel(e, "t");
         assert_eq!(
@@ -720,31 +746,53 @@ fn delta_log_paths_confined() {
     assert_eq!(ok.unwrap(), 1);
 }
 
-/// A store that refuses conditional puts, as one without `If-None-Match` does.
+/// An in-memory store for tests: it can refuse conditional puts, as one without
+/// `If-None-Match` does, and hold every put until the test releases it.
 #[derive(Debug)]
-struct NoConditionalPut(object_store::memory::InMemory);
+struct TestStore {
+    inner: object_store::memory::InMemory,
+    no_conditional_put: bool,
+    /// Signalled when a put starts; the put then waits for a permit of `release`.
+    put_started: Option<std::sync::Mutex<mpsc::Sender<()>>>,
+    release: tokio::sync::Semaphore,
+}
 
-impl std::fmt::Display for NoConditionalPut {
+impl Default for TestStore {
+    fn default() -> Self {
+        Self {
+            inner: object_store::memory::InMemory::new(),
+            no_conditional_put: false,
+            put_started: None,
+            release: tokio::sync::Semaphore::new(0),
+        }
+    }
+}
+
+impl std::fmt::Display for TestStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("NoConditionalPut")
+        f.write_str("TestStore")
     }
 }
 
 #[async_trait::async_trait]
-impl ObjectStore for NoConditionalPut {
+impl ObjectStore for TestStore {
     async fn put_opts(
         &self,
         location: &object_store::path::Path,
         payload: object_store::PutPayload,
         opts: object_store::PutOptions,
     ) -> object_store::Result<object_store::PutResult> {
-        if matches!(opts.mode, object_store::PutMode::Create) {
+        if self.no_conditional_put && matches!(opts.mode, object_store::PutMode::Create) {
             return Err(object_store::Error::NotImplemented {
                 operation: "put_opts(Create)".to_owned(),
-                implementer: "NoConditionalPut".to_owned(),
+                implementer: "TestStore".to_owned(),
             });
         }
-        self.0.put_opts(location, payload, opts).await
+        if let Some(started) = &self.put_started {
+            started.lock().unwrap().send(()).unwrap();
+            self.release.acquire().await.unwrap().forget();
+        }
+        self.inner.put_opts(location, payload, opts).await
     }
 
     async fn put_multipart_opts(
@@ -752,7 +800,7 @@ impl ObjectStore for NoConditionalPut {
         location: &object_store::path::Path,
         opts: object_store::PutMultipartOptions,
     ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
-        self.0.put_multipart_opts(location, opts).await
+        self.inner.put_multipart_opts(location, opts).await
     }
 
     async fn get_opts(
@@ -760,7 +808,7 @@ impl ObjectStore for NoConditionalPut {
         location: &object_store::path::Path,
         options: object_store::GetOptions,
     ) -> object_store::Result<object_store::GetResult> {
-        self.0.get_opts(location, options).await
+        self.inner.get_opts(location, options).await
     }
 
     fn delete_stream(
@@ -770,21 +818,21 @@ impl ObjectStore for NoConditionalPut {
             object_store::Result<object_store::path::Path>,
         >,
     ) -> futures::stream::BoxStream<'static, object_store::Result<object_store::path::Path>> {
-        self.0.delete_stream(locations)
+        self.inner.delete_stream(locations)
     }
 
     fn list(
         &self,
         prefix: Option<&object_store::path::Path>,
     ) -> futures::stream::BoxStream<'static, object_store::Result<object_store::ObjectMeta>> {
-        self.0.list(prefix)
+        self.inner.list(prefix)
     }
 
     async fn list_with_delimiter(
         &self,
         prefix: Option<&object_store::path::Path>,
     ) -> object_store::Result<object_store::ListResult> {
-        self.0.list_with_delimiter(prefix).await
+        self.inner.list_with_delimiter(prefix).await
     }
 
     async fn copy_opts(
@@ -793,14 +841,16 @@ impl ObjectStore for NoConditionalPut {
         to: &object_store::path::Path,
         options: object_store::CopyOptions,
     ) -> object_store::Result<()> {
-        self.0.copy_opts(from, to, options).await
+        self.inner.copy_opts(from, to, options).await
     }
 }
 
 #[test]
 fn a_commit_on_a_store_without_conditional_put_is_refused() {
-    let store =
-        Arc::new(NoConditionalPut(object_store::memory::InMemory::new())) as Arc<dyn ObjectStore>;
+    let store = Arc::new(TestStore {
+        no_conditional_put: true,
+        ..TestStore::default()
+    }) as Arc<dyn ObjectStore>;
     let f = Fixture::with(DeltaLimits::default(), pool(1), Some(store));
     let u = f.url("_delta_log/00000000000000000000.json");
     let (commit, overwrite) = f.run(move |e| {
@@ -821,4 +871,255 @@ fn a_commit_on_a_store_without_conditional_put_is_refused() {
         "{e}"
     );
     assert_eq!(overwrite.unwrap(), 0);
+}
+
+/// Before the pool had its own threads, a kernel call ran on the runtime's blocking pool and
+/// its local reads queued behind it there: with one blocking thread, the first read hung.
+#[test]
+fn kernel_calls_do_not_hold_the_io_blocking_pool() {
+    let f = Fixture::with(DeltaLimits::default(), pool(4), None);
+    f.write("_delta_log/00000000000000000000.json", V0);
+    let calls: Vec<_> = (0..4)
+        .map(|_| {
+            let engine = f.engine.clone();
+            let u = f.url("_delta_log/00000000000000000000.json");
+            let dir = f.url("_delta_log/");
+            async move {
+                engine
+                    .delta_blocking(move |e| {
+                        let s = e.storage();
+                        let listed = s.list_from(&dir).unwrap().count();
+                        let read = s
+                            .read_files(vec![(u, None)])
+                            .unwrap()
+                            .next()
+                            .unwrap()
+                            .unwrap();
+                        (listed, read.len())
+                    })
+                    .await
+            }
+        })
+        .collect();
+    let done =
+        f.rt.block_on(async {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                futures::future::join_all(calls),
+            )
+            .await
+        })
+        .expect("kernel calls finish with one I/O blocking thread");
+    for r in done {
+        assert_eq!(r.unwrap(), (1, V0.len()));
+    }
+}
+
+#[test]
+fn a_current_thread_runtime_is_refused() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let sched = IoScheduler::new(IoConfig::default());
+    let e = DeltaEngine::new(
+        sched.context(),
+        StoreId::new("file"),
+        Url::parse("file:///t/").unwrap(),
+        rt.handle().clone(),
+        DeltaLimits::default(),
+        Arc::new(CancellationToken::new()),
+        pool(1),
+    )
+    .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    assert!(e.to_string().contains("multi-thread runtime"), "{e}");
+}
+
+/// A query cancelled while its commit put is in flight gets the put's real outcome: the commit
+/// landed, so the kernel must not see it as failed.
+#[test]
+fn a_commit_put_in_flight_finishes_after_a_cancel() {
+    let (started, put_started) = mpsc::channel();
+    let store = Arc::new(TestStore {
+        put_started: Some(std::sync::Mutex::new(started)),
+        ..TestStore::default()
+    });
+    let f = Fixture::with(
+        DeltaLimits::default(),
+        pool(1),
+        Some(Arc::clone(&store) as Arc<dyn ObjectStore>),
+    );
+    let u = f.url("_delta_log/00000000000000000000.json");
+    let engine = f.engine.clone();
+    // The pool is driven with a live token, so what is tested is the handler's own I/O.
+    let live = CancellationToken::new();
+    let call = f.rt.spawn({
+        let pool = f.pool;
+        async move {
+            pool.run(&live, move || {
+                engine.storage().put(&u, Bytes::from_static(b"{}"), false)
+            })
+            .await
+        }
+    });
+    put_started.recv().unwrap();
+    f.cancel.cancel();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert!(!call.is_finished(), "the put is not dropped on cancel");
+    store.release.add_permits(1);
+    let outcome = f.rt.block_on(call).unwrap().unwrap();
+    assert!(outcome.is_ok(), "{outcome:?}");
+    let path = object_store::path::Path::from_url_path(
+        f.url("_delta_log/00000000000000000000.json").path(),
+    )
+    .unwrap();
+    assert!(
+        f.rt.block_on(object_store::ObjectStoreExt::head(&store.inner, &path))
+            .is_ok()
+    );
+    // The next put sees the cancel before it starts.
+    let engine = f.engine.clone();
+    let next =
+        f.rt.block_on(f.pool.run(&CancellationToken::new(), move || {
+            engine.storage().put(
+                &engine.table_root().join("_delta_log/x.json").unwrap(),
+                Bytes::new(),
+                true,
+            )
+        }))
+        .unwrap();
+    assert!(matches!(next, Err(KernelError::Cancelled)), "{next:?}");
+}
+
+/// A number or boolean where the read schema has a string reads as its text, as the kernel's
+/// default engine reads it (non-Spark writers put such values in `partitionValues`).
+#[test]
+fn primitive_values_read_as_strings() {
+    let f = Fixture::new();
+    let commit = r#"{"add":{"path":"x","partitionValues":{"p":1,"q":true,"r":1.5},"size":5}}"#;
+    f.write(
+        "_delta_log/00000000000000000000.json",
+        &format!("{commit}\n"),
+    );
+    let meta = FileMeta {
+        location: f.url("_delta_log/00000000000000000000.json"),
+        last_modified: 0,
+        size: 0,
+    };
+    let (read, parsed) = f.run(move |e| {
+        let j = e.json();
+        let read = j
+            .read_json_files(&[meta], action_schema(), None)
+            .unwrap()
+            .map(|d| {
+                KrishivEngineData::from_engine_data(d.unwrap())
+                    .unwrap()
+                    .into_batch()
+            })
+            .next()
+            .unwrap();
+        let parsed = j
+            .parse_json(
+                Box::new(KrishivEngineData::new(strings(&[Some(commit)]))),
+                action_schema(),
+            )
+            .unwrap();
+        (
+            read,
+            KrishivEngineData::batch_of(parsed.as_ref())
+                .unwrap()
+                .clone(),
+        )
+    });
+    for batch in [read, parsed] {
+        let values = Arc::clone(batch.column(0).as_struct().column(1).as_map().values());
+        let values: Vec<_> = values.as_string::<i32>().iter().flatten().collect();
+        assert_eq!(values, ["1", "true", "1.5"]);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinks_out_of_a_local_root_are_refused() {
+    let f = Fixture::new();
+    f.write("_delta_log/00000000000000000000.json", V0);
+    let outside_dir = f.dir.parent().unwrap().join("other");
+    std::fs::create_dir_all(&outside_dir).unwrap();
+    std::fs::write(outside_dir.join("x.json"), V0).unwrap();
+    std::os::unix::fs::symlink(
+        outside_dir.join("x.json"),
+        f.dir.join("_delta_log/00000000000000000001.json"),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(&outside_dir, f.dir.join("_sidecars")).unwrap();
+    let linked = f.url("_delta_log/00000000000000000001.json");
+    let sidecar = f.url("_sidecars/y.json");
+    let dir = f.url("_delta_log/");
+    let errors = f.run(move |e| {
+        let s = e.storage();
+        vec![
+            s.read_files(vec![(linked.clone(), None)])
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap_err(),
+            s.head(&linked).map(|_| ()).unwrap_err(),
+            s.put(&sidecar, Bytes::from_static(b"{}"), true)
+                .unwrap_err(),
+            // The listing meets the link and refuses the whole call.
+            s.list_from(&dir).map(|_| ()).unwrap_err(),
+        ]
+    });
+    for e in &errors {
+        let ours = from_kernel(e, "t");
+        assert!(
+            ours.to_string().contains("outside the table root"),
+            "{ours}"
+        );
+    }
+    assert!(!outside_dir.join("y.json").exists());
+    // A root reached through a link is fine: both sides are resolved.
+    let via = f.dir.parent().unwrap().join("via");
+    std::os::unix::fs::symlink(&f.dir, &via).unwrap();
+    let root = paths::TableRoot::new(Url::from_directory_path(&via).unwrap());
+    let inside = Url::from_file_path(via.join("_delta_log/00000000000000000000.json")).unwrap();
+    assert!(root.confine(&inside).is_ok());
+    let not_yet = Url::from_file_path(via.join("_delta_log/00000000000000000009.json")).unwrap();
+    assert!(root.confine(&not_yet).is_ok());
+}
+
+#[test]
+fn object_urls_round_trip_a_literal_percent() {
+    let root = paths::TableRoot::new(Url::parse("s3://b/t").unwrap());
+    let path = object_store::path::Path::from_iter(["t", "p=a%3Ab", "part-0.parquet"]);
+    let url = root.url_of(&path).unwrap();
+    assert_eq!(root.confine(&url).unwrap(), path);
+    let root_url = Url::parse("s3://b/t").unwrap();
+    assert!(root.is_root_without_slash(&root_url));
+    assert!(!root.is_root_without_slash(&Url::parse("s3://b/t2").unwrap()));
+}
+
+/// The root without its trailing `/` lists the root, not its parent.
+#[test]
+fn listing_the_root_without_its_slash_stays_inside() {
+    let f = Fixture::new();
+    f.write("_delta_log/00000000000000000000.json", V0);
+    let sibling = f.dir.parent().unwrap().join("t2");
+    std::fs::create_dir_all(&sibling).unwrap();
+    std::fs::write(sibling.join("x.json"), V0).unwrap();
+    let bare = Url::from_file_path(&f.dir).unwrap();
+    assert!(!bare.path().ends_with('/'));
+    let root = f.root.clone();
+    let listed = f.run(move |e| {
+        e.storage()
+            .list_from(&bare)
+            .unwrap()
+            .map(Result::unwrap)
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        names(&root, &listed),
+        ["_delta_log/00000000000000000000.json"]
+    );
 }

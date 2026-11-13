@@ -27,7 +27,7 @@ use krishiv_common::config::{
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_exec::CancellationToken;
 use krishiv_io::{IoContext, StoreId};
-use tokio::runtime::Handle;
+use tokio::runtime::{Handle, RuntimeFlavor};
 use url::Url;
 
 use self::paths::TableRoot;
@@ -38,7 +38,7 @@ pub use self::data::KrishivEngineData;
 pub use self::json::KrishivJsonHandler;
 pub use self::storage::KrishivStorageHandler;
 
-/// The bounds on what the handlers parse (threat T-C6; lakehouse design section 5.6).
+/// The bounds on what the handlers parse (lakehouse design section 5.6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeltaLimits {
     /// Largest commit file, `_last_checkpoint` or `.crc` file, or JSON string parsed, in bytes
@@ -106,12 +106,39 @@ impl Shared {
         }
     }
 
-    /// Runs the I/O `fut` to completion from a log-pool thread, racing the query's
-    /// cancellation. Refused anywhere but on the log pool: a runtime worker must never block.
+    /// Runs the I/O `fut` from a log-pool thread, racing the query's cancellation: a pure read,
+    /// which may be dropped mid-flight. Refused anywhere but on the log pool: a runtime worker
+    /// must never block.
     pub(crate) fn block_on<T>(
         &self,
         fut: impl Future<Output = Result<T, KrishivError>>,
     ) -> KernelResult<T> {
+        self.enter_io()?;
+        let cancel = &self.cancel;
+        self.handle.block_on(async {
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => Err(KernelError::Cancelled),
+                r = fut => r.map_err(to_kernel),
+            }
+        })
+    }
+
+    /// Runs the write `fut` to completion from a log-pool thread. Cancellation is checked before
+    /// it starts, never during: a put dropped mid-flight may still land (a request already sent,
+    /// a local write on a detached blocking thread), and a commit reported as cancelled after it
+    /// landed would mislead the kernel (design note section 3.2: everything after the commit put
+    /// has succeeded is exempt from cancellation).
+    pub(crate) fn block_on_to_completion<T>(
+        &self,
+        fut: impl Future<Output = Result<T, KrishivError>>,
+    ) -> KernelResult<T> {
+        self.enter_io()?;
+        self.handle.block_on(fut).map_err(to_kernel)
+    }
+
+    /// The checks before any handler I/O: not cancelled, and on the log pool.
+    fn enter_io(&self) -> KernelResult<()> {
         self.check_cancelled()?;
         if !on_log_pool() {
             debug_assert!(false, "a Delta handler ran outside the log pool");
@@ -122,14 +149,7 @@ impl Shared {
                 .into(),
             ));
         }
-        let cancel = &self.cancel;
-        self.handle.block_on(async {
-            tokio::select! {
-                biased;
-                () = cancel.cancelled() => Err(KernelError::Cancelled),
-                r = fut => r.map_err(to_kernel),
-            }
-        })
+        Ok(())
     }
 }
 
@@ -143,7 +163,12 @@ pub struct DeltaEngine {
 impl DeltaEngine {
     /// An engine for the table at `root` in `store`, reading through `io`, bridging to `handle`,
     /// running kernel calls on `pool` and ending them when `cancel` fires.
-    #[must_use]
+    ///
+    /// `handle` must belong to a multi-thread runtime: the handlers `block_on` it from pool
+    /// threads, and a current-thread runtime drives its I/O only inside its own `block_on`.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a current-thread `handle`.
     pub fn new(
         io: IoContext,
         store: StoreId,
@@ -152,8 +177,14 @@ impl DeltaEngine {
         limits: DeltaLimits,
         cancel: Arc<CancellationToken>,
         pool: &'static LogPool,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, KrishivError> {
+        if handle.runtime_flavor() == RuntimeFlavor::CurrentThread {
+            return Err(InternalError {
+                message: "the Delta engine needs a multi-thread runtime".to_owned(),
+            }
+            .into());
+        }
+        Ok(Self {
             shared: Arc::new(Shared {
                 io,
                 store,
@@ -163,7 +194,7 @@ impl DeltaEngine {
                 cancel,
             }),
             pool,
-        }
+        })
     }
 
     /// The table root (ends with `/`).
@@ -193,6 +224,10 @@ impl DeltaEngine {
     /// Runs the kernel call `f` with this engine on the log pool (see [`LogPool::run`]). The
     /// only way kernel calls are entered; planning code awaits it.
     ///
+    /// Every lazy kernel iterator (scan metadata, log replay, a handler's `read_files`) must be
+    /// drained inside `f`: pulled later on a runtime worker, its handler I/O is refused as off the
+    /// pool (`INTERNAL_ERROR`; a debug assertion in debug builds).
+    ///
     /// # Errors
     /// `OPERATION_CANCELED` when the query is cancelled first; `INTERNAL_ERROR` if `f` panics.
     pub async fn delta_blocking<T, F>(&self, f: F) -> Result<T, KrishivError>
@@ -201,9 +236,7 @@ impl DeltaEngine {
         F: FnOnce(&DeltaEngine) -> T + Send + 'static,
     {
         let engine = self.clone();
-        self.pool
-            .run(&self.shared.handle, &self.shared.cancel, move || f(&engine))
-            .await
+        self.pool.run(&self.shared.cancel, move || f(&engine)).await
     }
 }
 

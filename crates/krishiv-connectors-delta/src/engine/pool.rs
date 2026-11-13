@@ -2,23 +2,26 @@
 //! The bounded pool that runs every kernel call (design note P3-T021 section 3.2).
 //!
 //! The kernel's API is synchronous and owns no runtime, while Krishiv's I/O is async. A kernel
-//! call therefore runs on a blocking thread, never on a runtime worker, and its handlers bridge
-//! back to `IoContext` with `Handle::block_on`. At most [`LogPool::threads`] calls run at once,
+//! call therefore runs on one of the pool's own OS threads, never on a runtime worker, and its
+//! handlers bridge back to `IoContext` with `Handle::block_on`. The threads are the pool's, not
+//! the runtime's blocking pool: the I/O a handler waits for (local files, local listings) runs
+//! on that blocking pool, which `krishiv.io.blockingThreads` bounds, so kernel calls holding its
+//! threads could wait forever for I/O queued behind them. At most [`LogPool::threads`] calls run at once,
 //! one pool for the whole process (`krishiv.delta.logThreads`); a query waits for a slot in a
 //! wait its cancellation ends, and the wait is measured ([`WAIT_METRIC`]) so slow log replays
 //! holding every slot are visible. A statement's deadline ends the wait too: the session cancels
 //! the query's token when the deadline passes.
 
 use std::cell::Cell;
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, mpsc};
 use std::time::Instant;
 
 use krishiv_common::config::{Config, ConfigValue, DELTA_LOG_THREADS};
 use krishiv_common::error::{InternalError, KrishivError, OperationCanceled};
 use krishiv_exec::CancellationToken;
-use tokio::runtime::Handle;
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, oneshot};
 
 /// The name of the slot-wait metric.
 pub const WAIT_METRIC: &str = "delta.log_pool.wait_ms";
@@ -85,24 +88,53 @@ impl WaitStats {
     }
 }
 
-/// A bounded pool of blocking threads for kernel calls.
+/// A job the pool's threads run.
+type Job = Box<dyn FnOnce() + Send + 'static>;
+
+/// A bounded pool of OS threads for kernel calls.
 #[derive(Debug)]
 pub struct LogPool {
     slots: Arc<Semaphore>,
     threads: usize,
+    jobs: mpsc::Sender<Job>,
     waits: WaitStats,
+}
+
+/// The loop of one pool thread: run jobs until the pool is dropped.
+fn pool_thread(jobs: &Mutex<mpsc::Receiver<Job>>) {
+    let _thread = PoolThread::enter();
+    loop {
+        let next = jobs.lock().unwrap_or_else(PoisonError::into_inner).recv();
+        match next {
+            Ok(job) => job(),
+            Err(mpsc::RecvError) => return,
+        }
+    }
 }
 
 static PROCESS_POOL: OnceLock<LogPool> = OnceLock::new();
 
 impl LogPool {
-    /// A pool of `threads` slots (at least one).
+    /// A pool of `threads` slots and OS threads (at least one). The threads end when the pool
+    /// is dropped. A thread that cannot be started leaves fewer threads than slots: calls then
+    /// queue for a thread (none can deadlock, the threads wait on nothing but their jobs), and
+    /// with no thread at all every call fails with `INTERNAL_ERROR`.
     #[must_use]
     pub fn new(threads: usize) -> Self {
         let threads = threads.max(1);
+        let (jobs, queue) = mpsc::channel::<Job>();
+        let queue = Arc::new(Mutex::new(queue));
+        for i in 0..threads {
+            let queue = Arc::clone(&queue);
+            // A failed spawn drops its clone of the queue; see the doc above.
+            let _spawned = std::thread::Builder::new()
+                .name(format!("krishiv-delta-log-{i}"))
+                .spawn(move || pool_thread(&queue));
+        }
         Self {
             slots: Arc::new(Semaphore::new(threads)),
             threads,
+            jobs,
             waits: WaitStats::default(),
         }
     }
@@ -138,19 +170,14 @@ impl LogPool {
         &self.waits
     }
 
-    /// Runs `f` on a blocking thread of `handle` once a slot is free. The wait for the slot and
-    /// the call itself end early with `OPERATION_CANCELED` when `cancel` fires; a call already
-    /// running keeps its slot until the kernel returns (every handler call checks the token
-    /// first, so it returns soon).
+    /// Runs `f` on a pool thread once a slot is free. The wait for the slot and the call itself
+    /// end early with `OPERATION_CANCELED` when `cancel` fires; a call already running keeps its
+    /// slot until the kernel returns (every handler call checks the token first, so it returns
+    /// soon).
     ///
     /// # Errors
-    /// `OPERATION_CANCELED`; `INTERNAL_ERROR` if `f` panics.
-    pub async fn run<T, F>(
-        &self,
-        handle: &Handle,
-        cancel: &CancellationToken,
-        f: F,
-    ) -> Result<T, KrishivError>
+    /// `OPERATION_CANCELED`; `INTERNAL_ERROR` if `f` panics or the pool has no thread.
+    pub async fn run<T, F>(&self, cancel: &CancellationToken, f: F) -> Result<T, KrishivError>
     where
         T: Send + 'static,
         F: FnOnce() -> T + Send + 'static,
@@ -158,24 +185,38 @@ impl LogPool {
         let started = Instant::now();
         let permit = tokio::select! {
             biased;
-            () = cancel.cancelled() => return Err(OperationCanceled {}.into()),
+            () = cancel.cancelled() => return Err(canceled()),
             permit = Arc::clone(&self.slots).acquire_owned() => permit.map_err(|_| canceled())?,
         };
         self.waits
             .record(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
-        let task = handle.spawn_blocking(move || {
+        let (done, result) = oneshot::channel();
+        let job: Job = Box::new(move || {
             let _slot = permit;
-            let _thread = PoolThread::enter();
-            f()
+            let out = std::panic::catch_unwind(AssertUnwindSafe(f));
+            // The caller may have stopped waiting (cancelled); the result is then dropped here.
+            let _unread = done.send(out);
         });
+        self.jobs
+            .send(job)
+            .map_err(|_| internal("the Delta log pool has no thread"))?;
         tokio::select! {
             biased;
-            () = cancel.cancelled() => Err(OperationCanceled {}.into()),
-            joined = task => joined.map_err(|e| {
-                InternalError { message: format!("a Delta kernel call failed: {e}") }.into()
-            }),
+            () = cancel.cancelled() => Err(canceled()),
+            out = result => match out {
+                Ok(Ok(value)) => Ok(value),
+                Ok(Err(_)) => Err(internal("a Delta kernel call panicked")),
+                Err(_) => Err(internal("a Delta kernel call ended without a result")),
+            },
         }
     }
+}
+
+fn internal(message: &str) -> KrishivError {
+    InternalError {
+        message: message.to_owned(),
+    }
+    .into()
 }
 
 fn canceled() -> KrishivError {
