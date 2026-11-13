@@ -470,7 +470,7 @@ fn delta_handler_cancellation() {
     let engine = f.engine.clone();
     let live = CancellationToken::new();
     let errors =
-        f.rt.block_on(f.pool.run(&live, move || {
+        f.rt.block_on(f.pool.run(live.cancelled(), move || {
             let e = &engine;
             let s = e.storage();
             let j = e.json();
@@ -1013,7 +1013,7 @@ fn a_commit_put_in_flight_finishes_after_a_cancel() {
     // The next put sees the cancel before it starts.
     let engine = f.engine.clone();
     let next =
-        f.rt.block_on(f.pool.run(&CancellationToken::new(), move || {
+        f.rt.block_on(f.pool.run(CancellationToken::new().cancelled(), move || {
             engine.storage().put(
                 &engine.table_root().join("_delta_log/x.json").unwrap(),
                 Bytes::new(),
@@ -1168,11 +1168,11 @@ fn a_panicking_call_is_an_internal_error_and_the_pool_survives() {
     let pool = LogPool::new(1);
     let live = CancellationToken::new();
     let e = rt
-        .block_on(pool.run(&live, || -> u8 { panic!("kernel bug") }))
+        .block_on(pool.run(live.cancelled(), || -> u8 { panic!("kernel bug") }))
         .unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::InternalError);
     assert!(e.to_string().contains("panicked"), "{e}");
-    assert_eq!(rt.block_on(pool.run(&live, || 5)).unwrap(), 5);
+    assert_eq!(rt.block_on(pool.run(live.cancelled(), || 5)).unwrap(), 5);
     let waits = pool.waits();
     assert_eq!(waits.count(), 2);
     assert!(waits.max_ms() <= waits.total_ms());

@@ -898,3 +898,112 @@ fn a_missing_file_with_a_deletion_vector_follows_ignore_missing_files() {
     let got = rows(&batches, &skipping.schema()).len();
     assert!(got < all, "{got} of {all} rows");
 }
+
+/// What [`Capture`] keeps of a run: the query and the Delta source's states, built with the
+/// run's own task context.
+type Captured = (
+    Arc<QueryContext>,
+    krishiv_exec::GlobalState,
+    krishiv_exec::LocalState,
+);
+
+/// A source that builds the Delta source's states with the executor's task context and hands
+/// them to the test, reading nothing itself.
+struct Capture {
+    inner: Arc<DeltaScanSource>,
+    got: std::sync::Mutex<Option<Captured>>,
+}
+
+impl Source for Capture {
+    fn name(&self) -> &'static str {
+        "Capture"
+    }
+
+    fn schema(&self) -> SchemaRef {
+        self.inner.schema()
+    }
+
+    fn global_state(
+        &self,
+        ctx: &krishiv_exec::TaskContext,
+    ) -> krishiv_exec::Result<krishiv_exec::GlobalState> {
+        let global = self.inner.global_state(ctx)?;
+        let local = self.inner.local_state(ctx, &global)?;
+        *self
+            .got
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some((Arc::clone(ctx.query()), Arc::clone(&global), local));
+        Ok(global)
+    }
+
+    fn max_parallelism(&self, _global: &krishiv_exec::GlobalState) -> usize {
+        1
+    }
+
+    fn local_state(
+        &self,
+        ctx: &krishiv_exec::TaskContext,
+        global: &krishiv_exec::GlobalState,
+    ) -> krishiv_exec::Result<krishiv_exec::LocalState> {
+        self.inner.local_state(ctx, global)
+    }
+
+    fn get_data<'a>(
+        &'a self,
+        _local: &'a mut krishiv_exec::LocalState,
+        _global: &'a krishiv_exec::GlobalState,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = krishiv_exec::Result<Option<krishiv_types::batch::Batch>>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async { Ok(None) })
+    }
+}
+
+/// The Delta work of a run (the pushed predicate's re-listing, a deletion vector's read) runs
+/// on the table's engine bound to the running query's cancellation, not the planning engine's
+/// token: once the query is cancelled, that work ends with `OPERATION_CANCELED`.
+#[test]
+fn a_cancelled_query_ends_its_delta_work() {
+    let cases: [(&str, Vec<PushedFilter>); 2] = [
+        (
+            "partitioned",
+            vec![filter(PushdownExpr::eq(
+                ColumnPath::new("n"),
+                ScalarValue::Int32(2),
+            ))],
+        ),
+        ("deletion-vectors", Vec::new()),
+    ];
+    for (name, filters) in cases {
+        let env = Env::fixture(name);
+        let table = env.open().unwrap();
+        let pushdowns = ScanPushdowns {
+            filters,
+            ..ScanPushdowns::default()
+        };
+        let source = Arc::new(table.delta_scan().source(&pushdowns).unwrap());
+        let capture = Arc::new(Capture {
+            inner: Arc::clone(&source),
+            got: std::sync::Mutex::new(None),
+        });
+        env.try_run(Arc::clone(&capture) as Arc<dyn Source>)
+            .unwrap();
+        let (query, global, mut local) = capture.got.lock().unwrap().take().unwrap();
+        query.fail(krishiv_common::error::OperationCanceled {}.into());
+        let e = env
+            .block_on(source.get_data(&mut local, &global))
+            .map(|b| b.map(|b| b.num_rows()))
+            .unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::OperationCanceled,
+            "{name}: {e}"
+        );
+    }
+}
