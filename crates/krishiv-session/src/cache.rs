@@ -13,11 +13,14 @@
 //!
 //! A cached relation is one materialized snapshot: Arrow batches held under
 //! the `relation_cache` memory pool (a pool consumer of that name), keyed by
-//! [`CacheKey`] (normalized plan hash, pinned versions, principal id, policy
-//! version). Materialization is lazy: the first action after `cache()` runs
+//! the plan's [`CacheKey`] without table versions (normalized plan hash,
+//! principal id, policy version, resolution configuration; [`key_of`]); the
+//! versions of the tables it was filled from stay on the entry.
+//! Materialization is lazy: the first action after `cache()` runs
 //! the query and keeps its batches when the stream completes; later actions
 //! substitute the cached snapshot for any matching (sub)plan (a subplan matches
-//! when the pinned table versions of its query equal those it was cached under). Substitution
+//! when the versions its query pins of the tables the subplan reads equal those
+//! it was filled from, else the next action refills it). Substitution
 //! replaces the matching subtree by a scan of an in-memory table, the same
 //! [`MemoryTable`] provider reads of created DataFrames use; no plan node is
 //! added and nothing is shared between sessions (a recorded difference from
@@ -61,8 +64,9 @@ use krishiv_common::config::{CACHE_MAX_BYTES, Config, ConfigValue};
 use krishiv_exec::planner::{MemoryTable, SpilledTable, TableProvider};
 use krishiv_memory::{ConsumerId, MemoryPool, Reservation, Spillable};
 use krishiv_plan::analyzer::AnalyzedPlan;
-use krishiv_plan::cache::{CacheKey, normalized_subtree_hash};
-use krishiv_plan::{Expr, ExprNode, LogicalPlan, PlanNode, ReadSource, Scan};
+use krishiv_plan::analyzer::TableIdent;
+use krishiv_plan::cache::{CacheKey, unversioned_subtree_hash};
+use krishiv_plan::{Expr, ExprNode, LogicalPlan, PlanNode, ReadSource, Scan, TableVersion};
 use krishiv_types::batch::Batch;
 
 use crate::StorageLevel;
@@ -216,6 +220,52 @@ pub(crate) struct CacheEntry {
     /// only cover versioned tables; temporary tables leave no pins, so the
     /// entry carries what `REFRESH TABLE` / `UNCACHE TABLE` match on.
     pub(crate) tables: Vec<String>,
+    /// The versions of the tables it was filled from: a query matches it only
+    /// when its own pins of those tables are the same.
+    pins: BTreeMap<TableIdent, TableVersion>,
+}
+
+impl CacheEntry {
+    /// Whether the entry holds the data of `key`: filled from the versions it pins.
+    fn holds(&self, key: &CacheKey) -> bool {
+        self.pins == key.pins
+    }
+}
+
+/// The registry's key of `key`: the same without the table versions.
+/// Registrations, entries and hidden names are kept under it, so a write to a
+/// cached table keeps the registration (Spark's `recacheByPlan`, design §3.1);
+/// the versions an entry was filled from stay on the entry.
+fn unpinned(key: &CacheKey) -> CacheKey {
+    CacheKey {
+        pins: BTreeMap::new(),
+        ..key.clone()
+    }
+}
+
+/// The relation-cache key of `node`, a (sub)plan of `analyzed`: its hash
+/// without table versions, and the pins of the tables it reads (not those of
+/// the whole query: a derived plan reading another versioned table still
+/// matches a cached subtree).
+pub(crate) fn key_of(node: &Arc<LogicalPlan>, analyzed: &AnalyzedPlan) -> CacheKey {
+    let pins = if analyzed.pins.is_empty() {
+        BTreeMap::new()
+    } else {
+        let tables = read_tables(node);
+        analyzed
+            .pins
+            .iter()
+            .filter(|(id, _)| tables.binary_search(&id.name.to_lowercase()).is_ok())
+            .map(|(id, v)| (id.clone(), *v))
+            .collect()
+    };
+    CacheKey {
+        plan: unversioned_subtree_hash(node),
+        pins,
+        principal: analyzed.context.principal.clone(),
+        policy: analyzed.context.policy,
+        conf: analyzed.context.conf,
+    }
 }
 
 /// The relations a session has cached, by key and by hidden scan name.
@@ -497,7 +547,8 @@ impl RelationCache {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .entries
-            .get(key)
+            .get(&unpinned(key))
+            .filter(|e| e.holds(key))
             .cloned()
     }
 
@@ -559,31 +610,44 @@ impl RelationCache {
             .push_back(PendingReg { plan, keep, level });
     }
 
+    /// Registers `reg` under `key`; `false` (nothing changes) when the plan
+    /// is registered already: the first level wins.
+    fn register(&self, key: &CacheKey, reg: Registration) -> bool {
+        let key = unpinned(key);
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if state.registrations.contains_key(&key) {
+            return false;
+        }
+        state.registrations.insert(key, reg);
+        true
+    }
+
     /// The level `key` is registered at, if it is.
     pub(crate) fn level_of(&self, key: &CacheKey) -> Option<StorageLevel> {
         self.state
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .registrations
-            .get(key)
+            .get(&unpinned(key))
             .map(|r| r.level)
     }
 
     /// The fill slot of `key`: `Some` when it is registered, holds no data
-    /// and no other fill runs.
+    /// of `key`'s table versions and no other fill runs.
     pub(crate) fn claim_fill(self: &Arc<Self>, key: &CacheKey) -> Option<FillClaim> {
+        let reg_key = unpinned(key);
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        if state.entries.contains_key(key) {
+        if state.entries.get(&reg_key).is_some_and(|e| e.holds(key)) {
             return None;
         }
-        let reg = state.registrations.get_mut(key)?;
+        let reg = state.registrations.get_mut(&reg_key)?;
         if reg.filling {
             return None;
         }
         reg.filling = true;
         Some(FillClaim {
             cache: Arc::clone(self),
-            key: key.clone(),
+            key: reg_key,
         })
     }
 
@@ -604,16 +668,12 @@ impl RelationCache {
         let mut found = Vec::new();
         let walked: Result<Arc<LogicalPlan>, Infallible> =
             Arc::clone(&root).transform_down(&mut |node| {
-                let key = CacheKey {
-                    plan: normalized_subtree_hash(&node),
-                    pins: analyzed.pins.clone(),
-                    principal: analyzed.context.principal.clone(),
-                    policy: analyzed.context.policy,
-                    conf: analyzed.context.conf,
-                };
+                let key = key_of(&node, analyzed);
+                let reg_key = unpinned(&key);
                 let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-                if let Some(reg) = state.registrations.get(&key) {
-                    let needs_fill = !reg.filling && !state.entries.contains_key(&key);
+                if let Some(reg) = state.registrations.get(&reg_key) {
+                    let needs_fill =
+                        !reg.filling && !state.entries.get(&reg_key).is_some_and(|e| e.holds(&key));
                     found.push((key, Arc::ptr_eq(&node, &root), needs_fill));
                 }
                 drop(state);
@@ -634,9 +694,10 @@ impl RelationCache {
 
     /// The plan registered under `key` if it still needs a fill.
     fn fill_source(&self, key: &CacheKey) -> Option<(Arc<LogicalPlan>, KeepAlive)> {
+        let reg_key = unpinned(key);
         let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        let reg = state.registrations.get(key)?;
-        (!reg.filling && !state.entries.contains_key(key))
+        let reg = state.registrations.get(&reg_key)?;
+        (!reg.filling && !state.entries.get(&reg_key).is_some_and(|e| e.holds(key)))
             .then(|| (Arc::clone(&reg.plan), reg.keep.clone()))
     }
 
@@ -683,8 +744,9 @@ impl RelationCache {
             if cap == 0 || generation != self.generation() {
                 return None;
             }
-            let level = state.registrations.get(&key)?.level;
-            let old = state.entries.get(&key).map(|e| e.bytes).unwrap_or(0);
+            let reg_key = unpinned(&key);
+            let level = state.registrations.get(&reg_key)?.level;
+            let old = state.entries.get(&reg_key).map(|e| e.bytes).unwrap_or(0);
             let fits = state.used.saturating_sub(old).saturating_add(bytes) <= cap;
             let to_disk = level.use_disk && (!level.use_memory || !fits) && self.disk.is_some();
             if !to_disk {
@@ -709,7 +771,7 @@ impl RelationCache {
                     reads_files,
                     tables,
                 };
-                return Some(self.install(&mut state, key, entry));
+                return Some(self.install(&mut state, &key, entry));
             }
             level
         };
@@ -725,7 +787,7 @@ impl RelationCache {
         // The rows are on disk: the memory the fill buffered goes back.
         drop(reservation);
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        if generation != self.generation() || !state.registrations.contains_key(&key) {
+        if generation != self.generation() || !state.registrations.contains_key(&unpinned(&key)) {
             return None;
         }
         let entry = Placed {
@@ -736,13 +798,16 @@ impl RelationCache {
             reads_files,
             tables,
         };
-        Some(self.install(&mut state, key, entry))
+        Some(self.install(&mut state, &key, entry))
     }
 
-    /// Puts `entry` under `key` (replacing any entry there, which keeps its
-    /// hidden name: plans substituted earlier still read the same name, and
-    /// each holds the table it resolved) and returns the hidden name.
-    fn install(&self, state: &mut CacheState, key: CacheKey, entry: Placed) -> String {
+    /// Puts `entry` under `key`'s registry key with `key`'s pins (replacing
+    /// any entry there, which keeps its hidden name: plans substituted
+    /// earlier still read the same name, and each holds the table it
+    /// resolved) and returns the hidden name.
+    fn install(&self, state: &mut CacheState, key: &CacheKey, entry: Placed) -> String {
+        let pins = key.pins.clone();
+        let key = unpinned(key);
         if let Some(old) = state.entries.get(&key) {
             state.used = state.used.saturating_sub(old.bytes);
         }
@@ -771,6 +836,7 @@ impl RelationCache {
                 last_used: AtomicU64::new(self.tick()),
                 reads_files: entry.reads_files,
                 tables: entry.tables,
+                pins,
             }),
         );
         self.publish_spillable(state);
@@ -839,6 +905,7 @@ impl RelationCache {
                         last_used: AtomicU64::new(entry.last_used.load(Ordering::Relaxed)),
                         reads_files: entry.reads_files,
                         tables: entry.tables.clone(),
+                        pins: entry.pins.clone(),
                     });
                     state.entries.insert(key, disk);
                 }
@@ -858,6 +925,7 @@ impl RelationCache {
 
     /// Drops the registration of `key` and its entry; whether one existed.
     pub(crate) fn remove(&self, key: &CacheKey) -> bool {
+        let key = &unpinned(key);
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         self.invalidated();
         let registered = state.registrations.remove(key).is_some();
@@ -912,9 +980,9 @@ impl RelationCache {
         let stale: Vec<CacheKey> = state
             .entries
             .iter()
-            .filter(|(key, entry)| {
+            .filter(|(_, entry)| {
                 entry.tables.iter().any(|t| matches(t))
-                    || key.pins.keys().any(|id| matches(&id.name.to_lowercase()))
+                    || entry.pins.keys().any(|id| matches(&id.name.to_lowercase()))
             })
             .map(|(key, _)| key.clone())
             .collect();
@@ -945,10 +1013,7 @@ impl RelationCache {
         let stale: Vec<CacheKey> = state
             .registrations
             .iter()
-            .filter(|(key, reg)| {
-                reg.tables.iter().any(|t| matches(t))
-                    || key.pins.keys().any(|id| matches(&id.name.to_lowercase()))
-            })
+            .filter(|(_, reg)| reg.tables.iter().any(|t| matches(t)))
             .map(|(key, _)| key.clone())
             .collect();
         for key in &stale {
@@ -1038,24 +1103,15 @@ impl RelationCache {
         {
             return None;
         }
-        let pins = analyzed.pins.clone();
-        let principal = analyzed.context.principal.clone();
-        let policy = analyzed.context.policy;
-        let conf = analyzed.context.conf;
         let root = Arc::clone(analyzed.plan.root());
         let mut tables: Vec<(String, Arc<dyn TableProvider>)> = Vec::new();
         let out: Arc<LogicalPlan> = Arc::clone(&root)
             .transform_down(&mut |node| {
-                let key = CacheKey {
-                    plan: normalized_subtree_hash(&node),
-                    pins: pins.clone(),
-                    principal: principal.clone(),
-                    policy,
-                    conf,
-                };
+                let key = key_of(&node, analyzed);
                 let found = {
                     let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-                    state.entries.get(&key).map(|e| {
+                    let entry = state.entries.get(&unpinned(&key)).filter(|e| e.holds(&key));
+                    entry.map(|e| {
                         e.last_used.store(self.tick(), Ordering::Relaxed);
                         (e.name.clone(), e.tier.provider())
                     })
@@ -1303,30 +1359,24 @@ impl Session {
                 return;
             }
         };
-        let key = CacheKey::of(&analysis.analyzed);
+        let key = key_of(analysis.analyzed.plan.root(), &analysis.analyzed);
         let mut tables = read_tables(analysis.analyzed.plan.root());
         tables.extend(unresolved_tables(&frame.plan));
         tables.sort();
         tables.dedup();
-        let cache = &self.state.cache;
-        let mut state = cache.state.lock().unwrap_or_else(PoisonError::into_inner);
         let Some(pending) = taken.item.take() else {
             return;
         };
-        if state.registrations.contains_key(&key) {
+        let registration = Registration {
+            level: pending.level,
+            plan: Arc::clone(&frame.plan),
+            keep: frame.keep.clone(),
+            tables,
+            filling: false,
+        };
+        if !self.state.cache.register(&key, registration) {
             tracing::warn!(target: "krishiv::session", "Asked to cache already cached data.");
-            return;
         }
-        state.registrations.insert(
-            key,
-            Registration {
-                level: pending.level,
-                plan: Arc::clone(&frame.plan),
-                keep: frame.keep.clone(),
-                tables,
-                filling: false,
-            },
-        );
     }
 
     /// Runs, as queries of their own, the registered proper subtrees of `analyzed` that hold no
@@ -1362,7 +1412,11 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema};
     use futures::FutureExt as _;
     use futures::executor::block_on;
+    use krishiv_plan::TableVersion;
+    use krishiv_plan::analyzer::{PolicyVersion, ResolutionConf, TableIdent};
 
+    use super::{CacheKey, FillLimits, Registration, RelationCache, Snapshot};
+    use crate::StorageLevel;
     use crate::session::Session;
 
     fn session() -> Session {
@@ -1375,6 +1429,93 @@ mod tests {
         .unwrap();
         s.register_batches("t", schema, vec![batch]).unwrap();
         s
+    }
+
+    /// A key of the plan 7 over `default.src` at `version`.
+    fn pinned(version: i64) -> CacheKey {
+        CacheKey {
+            plan: 7,
+            pins: std::collections::BTreeMap::from([(
+                TableIdent {
+                    catalog: "spark_catalog".to_owned(),
+                    namespace: vec!["default".to_owned()],
+                    name: "src".to_owned(),
+                },
+                TableVersion(version),
+            )]),
+            principal: "p".to_owned(),
+            policy: PolicyVersion(0),
+            conf: ResolutionConf::default(),
+        }
+    }
+
+    /// Fills `key` with one row, as an action's fill does.
+    fn fill(cache: &Arc<RelationCache>, key: &CacheKey) -> Option<String> {
+        let claim = cache.claim_fill(key)?;
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1]))],
+        )
+        .unwrap();
+        let stored = block_on(Arc::clone(cache).store(
+            Snapshot {
+                key: key.clone(),
+                schema,
+                batches: vec![batch],
+                reads_files: false,
+                tables: vec!["src".to_owned()],
+            },
+            FillLimits {
+                generation: cache.generation(),
+                cap: usize::MAX,
+                reservation: cache.reserve_fill(),
+            },
+        ));
+        drop(claim);
+        stored
+    }
+
+    /// Spark's `recacheByPlan` (design §3.1): a registration is not tied to the table versions
+    /// it was filled under. After a write to its table the level stays, the next action
+    /// refills it under the new versions, and no registration is left pending (review B2).
+    #[test]
+    fn a_registration_outlives_the_table_versions_it_was_filled_under() {
+        let s = session();
+        let cache = &s.state.cache;
+        let reg = Registration {
+            level: StorageLevel::MEMORY_ONLY,
+            plan: Arc::clone(&s.table("t").plan),
+            keep: Vec::new(),
+            tables: vec!["src".to_owned()],
+            filling: false,
+        };
+        assert!(cache.register(&pinned(1), reg));
+        assert!(fill(cache, &pinned(1)).is_some());
+        assert!(cache.lookup(&pinned(1)).is_some());
+        // A write to `src`: its version moves to 2.
+        cache.invalidate_table("src");
+        assert_eq!(cache.level_of(&pinned(2)), Some(StorageLevel::MEMORY_ONLY));
+        assert!(cache.lookup(&pinned(2)).is_none());
+        let stats = cache.stats();
+        assert_eq!((stats.entries, stats.entries_pending), (0, 1));
+        assert!(
+            fill(cache, &pinned(2)).is_some(),
+            "the next action refills it"
+        );
+        assert!(cache.lookup(&pinned(2)).is_some());
+        assert!(
+            cache.lookup(&pinned(1)).is_none(),
+            "an entry of other versions does not match"
+        );
+        let stats = cache.stats();
+        assert_eq!((stats.entries, stats.entries_pending), (1, 0));
+        // An entry of other versions (an external change) is no hit and is refilled.
+        assert!(fill(cache, &pinned(3)).is_some());
+        assert!(cache.lookup(&pinned(2)).is_none());
+        assert!(cache.remove(&pinned(3)));
+        let stats = cache.stats();
+        assert_eq!((stats.entries, stats.entries_pending), (0, 0));
     }
 
     /// A registry read dropped while it registers a queued `persist` (here: while the frame's

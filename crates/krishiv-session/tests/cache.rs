@@ -941,3 +941,78 @@ fn the_default_storage_level_follows_the_config() {
             .is_err()
     );
 }
+
+/// A session whose warehouse is under `dir`, with the managed (versioned) tables `src(id)`
+/// holding 1, 2, 3 and `other(id)` holding 10.
+fn table_session(dir: &tempfile::TempDir) -> Session {
+    let s = Session::new().unwrap();
+    s.conf()
+        .set(
+            "spark.sql.warehouse.dir",
+            dir.path().join("wh").to_str().unwrap(),
+        )
+        .unwrap();
+    for sql in [
+        "CREATE TABLE src (id INT) USING parquet",
+        "INSERT INTO src VALUES (1), (2), (3)",
+        "CREATE TABLE other (id INT) USING parquet",
+        "INSERT INTO other VALUES (10)",
+    ] {
+        block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    }
+    s
+}
+
+/// Spark's `recacheByPlan` (design §3.1): a write to a permanent table drops the data and keeps
+/// the registration, so `is_cached` and `storage_level` stay, the next action refills it with
+/// the new rows, and no registration is left pending (review B2).
+#[test]
+fn a_write_to_a_permanent_table_keeps_the_registration_and_refills() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = table_session(&dir);
+    let df = s.table("src").cache();
+    assert_eq!(ids(&block_on(df.collect()).unwrap()), vec![1, 2, 3]);
+    let [entries, _, _, pending, _, _] = relation_row(&s);
+    assert_eq!((entries, pending), (1, 0));
+    block_on(async { s.sql("INSERT INTO src VALUES (4)").await?.collect().await }).unwrap();
+    assert!(block_on(df.is_cached()).unwrap(), "the registration stays");
+    assert_eq!(
+        block_on(df.storage_level()).unwrap(),
+        StorageLevel::MEMORY_AND_DISK
+    );
+    let [entries, _, _, pending, _, _] = relation_row(&s);
+    assert_eq!((entries, pending), (0, 1), "the data is dropped");
+    assert_eq!(ids(&block_on(df.collect()).unwrap()), vec![1, 2, 3, 4]);
+    let [entries, memory, _, pending, _, _] = relation_row(&s);
+    assert_eq!((entries, pending), (1, 0), "refilled by the next action");
+    assert!(memory > 0);
+    // Read back from the refilled entry.
+    assert_eq!(ids(&block_on(df.collect()).unwrap()), vec![1, 2, 3, 4]);
+    let df = block_on(df.unpersist()).unwrap();
+    assert!(!block_on(df.is_cached()).unwrap());
+    assert_eq!(relation_row(&s)[..4], [0, 0, 0, 0]);
+}
+
+/// A frame derived from a cached one that also reads another permanent table fills and then
+/// reads the registration: a subtree is matched on the versions of the tables it reads, not on
+/// those of the whole query (review M4).
+#[test]
+fn a_derived_frame_reading_another_versioned_table_uses_the_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = table_session(&dir);
+    let df = s.table("src").cache();
+    let derived = df.union(&s.table("other"));
+    assert_eq!(
+        ids(&block_on(derived.collect()).unwrap()),
+        vec![1, 2, 3, 10]
+    );
+    assert_eq!(
+        relation_row(&s)[0],
+        1,
+        "the derived frame's action filled it"
+    );
+    assert_eq!(
+        ids(&block_on(derived.collect()).unwrap()),
+        vec![1, 2, 3, 10]
+    );
+}

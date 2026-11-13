@@ -17,7 +17,6 @@ use futures::StreamExt;
 use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 use krishiv_common::secret::OptionValue;
 use krishiv_plan::analyzer::{AnalyzedPlan, TableColumn};
-use krishiv_plan::cache::CacheKey;
 use krishiv_plan::{
     Expr, Grouping, JoinCondition, JoinKind, Literal, LogicalPlan, Origin, PlanId, PlanNode,
     ReadSource, SetOperation,
@@ -1193,7 +1192,7 @@ impl DataFrame {
     ) -> Result<(krishiv_exec::planner::PhysicalPlan, CacheFill), KrishivError> {
         self.session.register_pending_caches().await;
         self.session.fill_registered_subtrees(&a.analyzed).await;
-        let key = CacheKey::of(&a.analyzed);
+        let key = crate::cache::key_of(a.analyzed.plan.root(), &a.analyzed);
         let hit = self.session.state.cache.lookup(&key).is_some();
         let mut lease = SnapshotLease::default();
         let planned = match self.cache_substituted(a) {
@@ -1371,7 +1370,10 @@ impl DataFrame {
             .on_executor(async move {
                 df.session.register_pending_caches().await;
                 let a = df.analysis().await?;
-                df.session.state.cache.remove(&CacheKey::of(&a.analyzed));
+                df.session
+                    .state
+                    .cache
+                    .remove(&crate::cache::key_of(a.analyzed.plan.root(), &a.analyzed));
                 Ok(df)
             })
             .await
@@ -1421,7 +1423,7 @@ impl DataFrame {
                     .session
                     .state
                     .cache
-                    .level_of(&CacheKey::of(&a.analyzed))
+                    .level_of(&crate::cache::key_of(a.analyzed.plan.root(), &a.analyzed))
                     .unwrap_or(StorageLevel::NONE))
             })
             .await
