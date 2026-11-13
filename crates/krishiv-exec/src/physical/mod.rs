@@ -421,6 +421,51 @@ pub enum PhysNode {
         /// The calls, in output column order.
         calls: Vec<PythonCallPlan>,
     },
+    /// `mapInPandas` / `mapInArrow` (design P3-T085 §3.1): each partition
+    /// of `input` sent to a Python UDF task; the rows are what it yields.
+    PythonMap {
+        /// The input.
+        input: Box<PhysNode>,
+        /// The UDF and its declared result.
+        udf: PythonRelationPlan,
+    },
+    /// `applyInPandas` / `applyInArrow` over groups: `input` is clustered by
+    /// the key columns and sorted by them (one partition without keys), so
+    /// a driver sees a key's rows together.
+    PythonGroupMap {
+        /// The input.
+        input: Box<PhysNode>,
+        /// The key columns of `input`.
+        keys: Vec<usize>,
+        /// The UDF and its declared result.
+        udf: PythonRelationPlan,
+    },
+    /// A cogrouped `applyInPandas` / `applyInArrow`: `input` is both
+    /// relations in one stream (each row's columns of the other relation
+    /// null), clustered by the key columns and sorted by them then `side`.
+    PythonCoGroupMap {
+        /// The input.
+        input: Box<PhysNode>,
+        /// The key columns of `input`.
+        keys: Vec<usize>,
+        /// The column (`INT`, 0 left, 1 right) naming each row's relation.
+        side: usize,
+        /// The UDF and its declared result; two frame sides.
+        udf: PythonRelationPlan,
+    },
+    /// An aggregate whose calls are all grouped-aggregate Python UDFs, over
+    /// `input` clustered by the key columns and sorted by them: per group,
+    /// the keys, then one value per call.
+    PythonAggregate {
+        /// The input.
+        input: Box<PhysNode>,
+        /// The attribute of each input column.
+        layout: Vec<AttrId>,
+        /// The key columns of `input`.
+        keys: Vec<usize>,
+        /// The calls, in output column order after the keys.
+        calls: Vec<PythonCallPlan>,
+    },
     /// Each row of `input` `count` times (`INTERSECT ALL`, `EXCEPT ALL`).
     ReplicateRows {
         /// The input.
@@ -1023,6 +1068,10 @@ plan_data!(enum PhysNode {
     Limit { input, offset, limit },
     ReplicateRows { input, layout, count, subqueries },
     PythonEval { input, layout, calls },
+    PythonMap { input, udf },
+    PythonGroupMap { input, keys, udf },
+    PythonCoGroupMap { input, keys, side, udf },
+    PythonAggregate { input, layout, keys, calls },
     Generate { input, layout, kind, outer, arg, subqueries },
     Expand { input, layout, projections, nullable, subqueries },
     Sort { input, keys },
@@ -1043,6 +1092,9 @@ plan_data!(enum PhysNode {
     LoopRef { id, layout },
 });
 plan_data!(struct PythonCallPlan { call, output });
+plan_data!(struct PythonRelationPlan { udf, sides, output });
+plan_data!(struct PythonFrameSide { columns, names, types });
+plan_data!(struct PythonOutputColumn { name, data_type, nullable });
 plan_data!(struct LoopLimits { level, rows, pushed_limit });
 plan_data!(struct WritePlan {
     format,
@@ -1127,6 +1179,10 @@ impl PhysNode {
             | Self::WindowGroupLimit { input, .. }
             | Self::Aggregate { input, .. }
             | Self::PythonEval { input, .. }
+            | Self::PythonMap { input, .. }
+            | Self::PythonGroupMap { input, .. }
+            | Self::PythonCoGroupMap { input, .. }
+            | Self::PythonAggregate { input, .. }
             | Self::WriteFiles { input, .. } => vec![input.as_ref()],
             Self::Exchange(e) => vec![e.input.as_ref()],
             Self::HashJoin(j) => vec![j.probe.as_ref(), j.build.as_ref()],
@@ -1173,6 +1229,10 @@ impl PhysNode {
             | Self::WindowGroupLimit { input, .. }
             | Self::Aggregate { input, .. }
             | Self::PythonEval { input, .. }
+            | Self::PythonMap { input, .. }
+            | Self::PythonGroupMap { input, .. }
+            | Self::PythonCoGroupMap { input, .. }
+            | Self::PythonAggregate { input, .. }
             | Self::WriteFiles { input, .. } => vec![input.as_mut()],
             Self::Exchange(e) => vec![e.input.as_mut()],
             Self::HashJoin(j) => vec![j.probe.as_mut(), j.build.as_mut()],
@@ -1195,6 +1255,41 @@ pub struct PythonCallPlan {
     pub call: Arc<Expr>,
     /// The attribute of its output column.
     pub output: AttrId,
+}
+
+/// The Python UDF of a relation node (design P3-T085 §3.1): a reference by
+/// name and version (never the callable), the columns of its frames and its
+/// declared result.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PythonRelationPlan {
+    /// The UDF.
+    pub udf: krishiv_plan::PythonUdfRef,
+    /// The frame columns of each side: one, two for a cogroup.
+    pub sides: Vec<PythonFrameSide>,
+    /// The declared result columns.
+    pub output: Vec<PythonOutputColumn>,
+}
+
+/// The columns of one side's frames.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PythonFrameSide {
+    /// The input columns, in frame order.
+    pub columns: Vec<usize>,
+    /// Their names, as the UDF sees them.
+    pub names: Vec<String>,
+    /// Their Spark types.
+    pub types: Vec<krishiv_types::DataType>,
+}
+
+/// One declared result column of a Python relation node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PythonOutputColumn {
+    /// The name.
+    pub name: String,
+    /// The Spark type.
+    pub data_type: krishiv_types::DataType,
+    /// Whether it may hold nulls.
+    pub nullable: bool,
 }
 
 /// An executable plan as data: the root node, the schema of its result

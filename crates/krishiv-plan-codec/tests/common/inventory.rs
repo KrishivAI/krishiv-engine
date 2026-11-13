@@ -1717,6 +1717,167 @@ pub(crate) fn python_eval() -> PhysNode {
     }
 }
 
+/// A Python UDF reference of a relation node (`python_udf_relations`).
+fn python_udf_ref(eval_type: krishiv_plan::PythonEvalType) -> krishiv_plan::PythonUdfRef {
+    krishiv_plan::PythonUdfRef {
+        name: "py_rel".to_owned(),
+        version: 4,
+        eval_type,
+        thread_safe: true,
+    }
+}
+
+/// A relation node's UDF: frames of columns 0 and 1 per side, a declared
+/// `n BIGINT, tags ARRAY<STRING>` result.
+fn python_relation(
+    eval_type: krishiv_plan::PythonEvalType,
+    sides: usize,
+) -> krishiv_exec::physical::PythonRelationPlan {
+    use krishiv_exec::physical::{PythonFrameSide, PythonOutputColumn, PythonRelationPlan};
+    PythonRelationPlan {
+        udf: python_udf_ref(eval_type),
+        sides: (0..sides)
+            .map(|s| PythonFrameSide {
+                columns: vec![2 * s, 2 * s + 1],
+                names: vec!["a".to_owned(), "b".to_owned()],
+                types: vec![DataType::Integer, DataType::Long],
+            })
+            .collect(),
+        output: vec![
+            PythonOutputColumn {
+                name: "n".to_owned(),
+                data_type: DataType::Long,
+                nullable: false,
+            },
+            PythonOutputColumn {
+                name: "tags".to_owned(),
+                data_type: DataType::Array(
+                    krishiv_types::ArrayType::new(DataType::String, true).into(),
+                ),
+                nullable: true,
+            },
+        ],
+    }
+}
+
+/// The Python UDF relation nodes (`python_udf_relations`, design P3-T085
+/// §3.1), each over a scan.
+pub(crate) fn python_relations() -> Vec<(&'static str, PhysNode)> {
+    use krishiv_plan::PythonEvalType as T;
+    let call = |eval_type: T| {
+        Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+            ResolvedFunction {
+                within_group: Vec::new(),
+                id: python_udf_ref(eval_type).function_id(),
+                kind: FunctionKind::Aggregate,
+                args: vec![col(2, "b", DataType::Long)],
+                distinct: false,
+                filter: None,
+                data_type: DataType::Double,
+                nullable: true,
+                deterministic: true,
+            },
+        ))))
+    };
+    vec![
+        (
+            "python_map",
+            PhysNode::PythonMap {
+                input: boxed(scan()),
+                udf: python_relation(T::MapArrowIter, 1),
+            },
+        ),
+        (
+            "python_group_map",
+            PhysNode::PythonGroupMap {
+                input: boxed(scan()),
+                keys: vec![0],
+                udf: python_relation(T::GroupedMapPandasIter, 1),
+            },
+        ),
+        (
+            "python_cogroup_map",
+            PhysNode::PythonCoGroupMap {
+                input: boxed(scan()),
+                keys: vec![0],
+                side: 1,
+                udf: python_relation(T::CogroupedMapPandas, 2),
+            },
+        ),
+        (
+            "python_aggregate",
+            PhysNode::PythonAggregate {
+                input: boxed(scan()),
+                layout: vec![AttrId(1), AttrId(2)],
+                keys: vec![0],
+                calls: vec![
+                    krishiv_exec::physical::PythonCallPlan {
+                        call: call(T::GroupedAggArrow),
+                        output: AttrId(9),
+                    },
+                    krishiv_exec::physical::PythonCallPlan {
+                        call: call(T::GroupedAggPandasIter),
+                        output: AttrId(10),
+                    },
+                ],
+            },
+        ),
+        (
+            "python_udtf_generate",
+            PhysNode::Generate {
+                input: boxed(scan()),
+                layout: vec![AttrId(1), AttrId(2)],
+                kind: krishiv_plan::GeneratorKind::PythonUdtf,
+                outer: false,
+                arg: Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                    ResolvedFunction {
+                        within_group: Vec::new(),
+                        id: python_udf_ref(T::ArrowUdtf).function_id(),
+                        kind: FunctionKind::Generator,
+                        args: vec![col(1, "a", DataType::Integer)],
+                        distinct: false,
+                        filter: None,
+                        data_type: DataType::Long,
+                        nullable: true,
+                        deterministic: true,
+                    },
+                )))),
+                subqueries: Vec::new(),
+            },
+        ),
+    ]
+}
+
+/// Every eval type, each in a `PythonEval` call: the scalar ones need only
+/// `python_udf`, every other one `python_udf_relations` too.
+pub(crate) fn python_eval_types() -> PhysNode {
+    let calls = krishiv_plan::PythonEvalType::ALL
+        .iter()
+        .enumerate()
+        .map(|(i, t)| krishiv_exec::physical::PythonCallPlan {
+            call: Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                ResolvedFunction {
+                    within_group: Vec::new(),
+                    id: python_udf_ref(*t).function_id(),
+                    kind: FunctionKind::Scalar,
+                    args: vec![col(1, "a", DataType::Integer)],
+                    distinct: false,
+                    filter: None,
+                    data_type: DataType::Long,
+                    nullable: true,
+                    deterministic: true,
+                },
+            )))),
+            output: AttrId(100 + i as u64),
+        })
+        .collect();
+    PhysNode::PythonEval {
+        input: boxed(scan()),
+        layout: vec![AttrId(1), AttrId(2)],
+        calls,
+    }
+}
+
 /// A call of a session-registered native Rust aggregate UDF
 /// (`rust_udaf`): by name and version, with the argument and state
 /// columns the planner fixed, in a final aggregate and the merge of its
@@ -1899,6 +2060,12 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
     out.push(("expressions".to_owned(), plan_of(expressions())));
     out.push(("rust_udf".to_owned(), plan_of(udf_call())));
     out.push(("python_udf".to_owned(), plan_of(python_eval())));
+    out.extend(
+        python_relations()
+            .into_iter()
+            .map(|(name, node)| (name.to_owned(), plan_of(node))),
+    );
+    out.push(("python_eval_types".to_owned(), plan_of(python_eval_types())));
     out.push(("rust_udaf".to_owned(), plan_of(udaf_call())));
     // The expression environment flag the `legacy_statistical_aggregate`
     // feature is about: the same root as `one_row`, under a session with

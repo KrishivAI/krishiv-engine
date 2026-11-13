@@ -1955,3 +1955,55 @@ fn a_python_udf_needs_its_feature() {
         }
     );
 }
+
+/// The Python UDF relation nodes, the Python UDTF generator and every eval
+/// type past the scalar ones list `python_udf_relations` (semantic: no plan
+/// without them computes the same rows); a reader without it refuses each
+/// plan naming it, and a scalar-only plan does not list it.
+#[test]
+fn the_python_udf_relation_kinds_need_their_feature() {
+    assert_eq!(Feature::PythonUdfRelations.kind(), FeatureKind::Semantic);
+    // The declared `ARRAY<STRING>` result is a nested type.
+    for name in ["python_map", "python_group_map", "python_cogroup_map"] {
+        assert_eq!(
+            message(name).features,
+            ["nested_types", "python_udf_relations"],
+            "{name}"
+        );
+    }
+    assert_eq!(
+        message("python_udtf_generate").features,
+        ["generate", "python_udf", "python_udf_relations"]
+    );
+    for name in ["python_aggregate", "python_eval_types"] {
+        assert_eq!(
+            message(name).features,
+            ["python_udf", "python_udf_relations"],
+            "{name}"
+        );
+    }
+    assert_eq!(message("python_udf").features, ["python_udf"]);
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::PythonUdfRelations),
+    );
+    for name in [
+        "python_map",
+        "python_group_map",
+        "python_cogroup_map",
+        "python_aggregate",
+        "python_udtf_generate",
+        "python_eval_types",
+    ] {
+        let bytes = message(name).encode_to_vec();
+        assert_eq!(
+            decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+            CodecError::UnsupportedFeatures {
+                missing: vec!["python_udf_relations".to_owned()]
+            },
+            "{name}"
+        );
+    }
+}

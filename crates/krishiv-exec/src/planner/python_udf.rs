@@ -179,6 +179,16 @@ impl Planner<'_> {
             let ExprNode::Resolved(ResolvedExpr::Function(f)) = &call.node else {
                 return Err(internal("a Python UDF call is not a function"));
             };
+            // A relation kind (design P3-T085) as a column expression: only
+            // the scalar kinds run in a `PythonEval`.
+            if let FunctionId::PythonUdf { eval_type, .. } = &f.id
+                && !eval_type.is_scalar()
+            {
+                return Err(super::build::unsupported(&format!(
+                    "a Python UDF of eval type {} as a column expression",
+                    eval_type.code()
+                )));
+            }
             // The arguments must compile over the input, as on the worker.
             let args: Vec<&Expr> = f.args.iter().map(AsRef::as_ref).collect();
             compile_all(&args, &input.layout, &input.schema, &self.values(&prepared))?;

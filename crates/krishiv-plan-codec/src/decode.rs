@@ -552,6 +552,36 @@ impl Decoder {
                     })
                     .collect::<Result<_>>()?,
             },
+            Kind::PythonMap(p) => PhysNode::PythonMap {
+                input: self.boxed(p.input)?,
+                udf: python_relation(required(&p.udf, "a Python relation UDF")?)?,
+            },
+            Kind::PythonGroupMap(p) => PhysNode::PythonGroupMap {
+                input: self.boxed(p.input)?,
+                keys: usizes(&p.keys)?,
+                udf: python_relation(required(&p.udf, "a Python relation UDF")?)?,
+            },
+            Kind::PythonCoGroupMap(p) => PhysNode::PythonCoGroupMap {
+                input: self.boxed(p.input)?,
+                keys: usizes(&p.keys)?,
+                side: usize_of(p.side)?,
+                udf: python_relation(required(&p.udf, "a Python relation UDF")?)?,
+            },
+            Kind::PythonAggregate(p) => PhysNode::PythonAggregate {
+                input: self.boxed(p.input)?,
+                layout: layout(&p.layout),
+                keys: usizes(&p.keys)?,
+                calls: p
+                    .calls
+                    .iter()
+                    .map(|c| {
+                        Ok(PythonCallPlan {
+                            call: self.expr_ref(c.call)?,
+                            output: AttrId(c.output),
+                        })
+                    })
+                    .collect::<Result<_>>()?,
+            },
             Kind::Generate(g) => PhysNode::Generate {
                 input: self.boxed(g.input)?,
                 layout: layout(&g.layout),
@@ -560,6 +590,7 @@ impl Decoder {
                     PosExplode => krishiv_plan::GeneratorKind::PosExplode,
                     Inline => krishiv_plan::GeneratorKind::Inline,
                     VariantExplode => krishiv_plan::GeneratorKind::VariantExplode,
+                    PythonUdtf => krishiv_plan::GeneratorKind::PythonUdtf,
                 })?,
                 outer: g.outer,
                 arg: self.expr_ref(g.arg)?,
@@ -1682,4 +1713,43 @@ fn day_time_field(v: i32) -> Result<DayTimeField> {
         Minute => DayTimeField::Minute,
         Second => DayTimeField::Second,
     })
+}
+
+/// A Python relation node's UDF, frame sides and declared result.
+fn python_relation(p: &pb::PythonRelation) -> Result<krishiv_exec::physical::PythonRelationPlan> {
+    let u = required(&p.udf, "a Python relation UDF identity")?;
+    let udf = krishiv_plan::PythonUdfRef {
+        name: u.name.clone(),
+        version: u32::try_from(u.version)
+            .map_err(|_| corrupt("a Python UDF version out of range"))?,
+        eval_type: PythonEvalType::from_code(u.eval_type)
+            .ok_or_else(|| corrupt("an unknown Python UDF eval type"))?,
+        thread_safe: u.thread_safe,
+    };
+    let sides = p
+        .sides
+        .iter()
+        .map(|s| {
+            if s.names.len() != s.columns.len() || s.types.len() != s.columns.len() {
+                return Err(corrupt("a Python frame side of uneven lengths"));
+            }
+            Ok(krishiv_exec::physical::PythonFrameSide {
+                columns: usizes(&s.columns)?,
+                names: s.names.clone(),
+                types: s.types.iter().map(spark_type).collect::<Result<_>>()?,
+            })
+        })
+        .collect::<Result<_>>()?;
+    let output = p
+        .output
+        .iter()
+        .map(|c| {
+            Ok(krishiv_exec::physical::PythonOutputColumn {
+                name: c.name.clone(),
+                data_type: spark_type(required(&c.data_type, "a Python result type")?)?,
+                nullable: c.nullable,
+            })
+        })
+        .collect::<Result<_>>()?;
+    Ok(krishiv_exec::physical::PythonRelationPlan { udf, sides, output })
 }

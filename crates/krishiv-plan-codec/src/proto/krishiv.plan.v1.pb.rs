@@ -145,7 +145,7 @@ pub struct ExplainNode {
 pub struct Node {
     #[prost(
         oneof = "node::Kind",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 21, 24, 25, 26"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 21, 24, 25, 26, 27, 28, 29, 30"
     )]
     pub kind: ::core::option::Option<node::Kind>,
 }
@@ -217,7 +217,100 @@ pub mod node {
         /// feature: python_udf
         #[prost(message, tag = "26")]
         PythonEval(super::PythonEvalNode),
+        /// feature: python_udf_relations
+        #[prost(message, tag = "27")]
+        PythonMap(super::PythonMapNode),
+        /// feature: python_udf_relations
+        #[prost(message, tag = "28")]
+        PythonGroupMap(super::PythonGroupMapNode),
+        /// feature: python_udf_relations
+        #[prost(message, tag = "29")]
+        PythonCoGroupMap(super::PythonCoGroupMapNode),
+        /// feature: python_udf_relations
+        #[prost(message, tag = "30")]
+        PythonAggregate(super::PythonAggregateNode),
     }
+}
+/// feature: python_udf_relations
+/// `mapInPandas` / `mapInArrow`: each partition of `input` sent to a Python
+/// UDF task.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PythonMapNode {
+    #[prost(uint32, tag = "1")]
+    pub input: u32,
+    #[prost(message, optional, tag = "2")]
+    pub udf: ::core::option::Option<PythonRelation>,
+}
+/// feature: python_udf_relations
+/// A grouped map over `input` clustered and sorted by the key columns.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PythonGroupMapNode {
+    #[prost(uint32, tag = "1")]
+    pub input: u32,
+    #[prost(uint64, repeated, tag = "2")]
+    pub keys: ::prost::alloc::vec::Vec<u64>,
+    #[prost(message, optional, tag = "3")]
+    pub udf: ::core::option::Option<PythonRelation>,
+}
+/// feature: python_udf_relations
+/// A cogrouped map over both relations in one stream, sorted by the key
+/// columns then the side column.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PythonCoGroupMapNode {
+    #[prost(uint32, tag = "1")]
+    pub input: u32,
+    #[prost(uint64, repeated, tag = "2")]
+    pub keys: ::prost::alloc::vec::Vec<u64>,
+    #[prost(uint64, tag = "3")]
+    pub side: u64,
+    #[prost(message, optional, tag = "4")]
+    pub udf: ::core::option::Option<PythonRelation>,
+}
+/// feature: python_udf_relations
+/// An aggregate of grouped-aggregate Python UDF calls over `input` clustered
+/// and sorted by the key columns.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PythonAggregateNode {
+    #[prost(uint32, tag = "1")]
+    pub input: u32,
+    #[prost(uint64, repeated, tag = "2")]
+    pub layout: ::prost::alloc::vec::Vec<u64>,
+    #[prost(uint64, repeated, tag = "3")]
+    pub keys: ::prost::alloc::vec::Vec<u64>,
+    #[prost(message, repeated, tag = "4")]
+    pub calls: ::prost::alloc::vec::Vec<PythonCall>,
+}
+/// feature: python_udf_relations
+/// The Python UDF of a relation node: by name and version, the columns of its
+/// frames per side, and its declared result.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PythonRelation {
+    #[prost(message, optional, tag = "1")]
+    pub udf: ::core::option::Option<PythonUdfFunction>,
+    #[prost(message, repeated, tag = "2")]
+    pub sides: ::prost::alloc::vec::Vec<PythonFrameSide>,
+    #[prost(message, repeated, tag = "3")]
+    pub output: ::prost::alloc::vec::Vec<PythonOutputColumn>,
+}
+/// feature: python_udf_relations
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PythonFrameSide {
+    #[prost(uint64, repeated, tag = "1")]
+    pub columns: ::prost::alloc::vec::Vec<u64>,
+    #[prost(string, repeated, tag = "2")]
+    pub names: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag = "3")]
+    pub types: ::prost::alloc::vec::Vec<DataType>,
+}
+/// feature: python_udf_relations
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PythonOutputColumn {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub data_type: ::core::option::Option<DataType>,
+    #[prost(bool, tag = "3")]
+    pub nullable: bool,
 }
 /// feature: python_udf
 /// The rows of `input`, then one column per Python UDF call over every row.
@@ -1656,6 +1749,8 @@ pub enum GeneratorKind {
     Inline = 3,
     /// feature: variant_explode
     VariantExplode = 4,
+    /// feature: python_udf_relations
+    PythonUdtf = 5,
 }
 impl GeneratorKind {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1669,6 +1764,7 @@ impl GeneratorKind {
             Self::PosExplode => "GENERATOR_KIND_POS_EXPLODE",
             Self::Inline => "GENERATOR_KIND_INLINE",
             Self::VariantExplode => "GENERATOR_KIND_VARIANT_EXPLODE",
+            Self::PythonUdtf => "GENERATOR_KIND_PYTHON_UDTF",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1679,6 +1775,7 @@ impl GeneratorKind {
             "GENERATOR_KIND_POS_EXPLODE" => Some(Self::PosExplode),
             "GENERATOR_KIND_INLINE" => Some(Self::Inline),
             "GENERATOR_KIND_VARIANT_EXPLODE" => Some(Self::VariantExplode),
+            "GENERATOR_KIND_PYTHON_UDTF" => Some(Self::PythonUdtf),
             _ => None,
         }
     }

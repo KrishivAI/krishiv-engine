@@ -562,6 +562,11 @@ impl<'a> Planner<'a> {
                 output,
                 ..
             } => {
+                if *kind == krishiv_plan::GeneratorKind::PythonUdtf {
+                    return Err(super::python_relation::later_kind(
+                        "a lateral Python table function",
+                    ));
+                }
                 let input = self.plan(input)?;
                 self.generate(input, *kind, *outer, arg, output)
             }
@@ -579,6 +584,11 @@ impl<'a> Planner<'a> {
                 partition_by,
                 order_by,
             } => {
+                if exprs.iter().any(|e| super::python_udf::has_python_udf(e)) {
+                    return Err(super::python_relation::later_kind(
+                        "a Python UDF in a window",
+                    ));
+                }
                 let input = self.plan(input)?;
                 self.window(input, exprs, partition_by, order_by, None)
             }
@@ -599,6 +609,29 @@ impl<'a> Planner<'a> {
                 num_slices,
                 output,
             } => Ok(range_node(*start, *end, *step, *num_slices, output)),
+            PlanNode::MapPartitions {
+                input,
+                udf,
+                output,
+                barrier,
+            } => self.map_partitions(input, udf, output, *barrier),
+            PlanNode::GroupMap {
+                input,
+                keys,
+                udf,
+                output,
+            } => self.group_map(input, keys, udf, output),
+            PlanNode::CoGroupMap {
+                left,
+                right,
+                left_keys,
+                right_keys,
+                udf,
+                output,
+            } => self.cogroup_map(left, right, left_keys, right_keys, udf, output),
+            PlanNode::PythonTableFunction { .. } => Err(super::python_relation::later_kind(
+                "a Python table function",
+            )),
             _ => {
                 let text = p.to_string();
                 let name = text.split_whitespace().next().unwrap_or_default();

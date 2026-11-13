@@ -123,6 +123,17 @@ impl Planner<'_> {
         grouping: &Grouping,
         aggregates: &[Arc<Expr>],
     ) -> Result<Planned> {
+        // Grouped-aggregate Python UDFs (design P3-T085 §3.1): alone in their
+        // aggregate, on a node of their own.
+        if aggregates.iter().any(has_python_udaf) {
+            krishiv_plan::check_python_aggregates(aggregates)?;
+            let Grouping::GroupBy(keys) = grouping else {
+                return Err(super::build::unsupported(
+                    "grouped-aggregate Python UDFs with ROLLUP, CUBE or GROUPING SETS",
+                ));
+            };
+            return self.python_aggregate(input, keys, aggregates);
+        }
         if let Grouping::GroupBy(keys) = grouping {
             self.request_moves(node, input, aggregates, true, keys.clone());
         }
@@ -537,6 +548,23 @@ fn fixed_width(t: &DataType) -> Option<u64> {
         DataType::Decimal(_) => 16,
         _ => return None,
     })
+}
+
+/// Whether `e` calls a grouped-aggregate Python UDF anywhere (shared nodes
+/// visited once).
+fn has_python_udaf(e: &Arc<Expr>) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = vec![Arc::clone(e)];
+    while let Some(x) = stack.pop() {
+        if !seen.insert(Arc::as_ptr(&x).addr()) {
+            continue;
+        }
+        if krishiv_plan::is_python_udaf(&x) {
+            return true;
+        }
+        x.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+    }
+    false
 }
 
 #[cfg(test)]
