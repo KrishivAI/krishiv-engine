@@ -26,7 +26,7 @@ impl Session {
     /// `INVALID_PARAMETER_VALUE.STRING` for a header that is not a valid
     /// `traceparent`; the previous trace stays.
     pub fn set_trace_context(&self, traceparent: &str) -> Result<(), KrishivError> {
-        let Some(trace_id) = crate::system::parse_traceparent(traceparent) else {
+        let Some(trace) = crate::system::parse_remote_parent(traceparent) else {
             return Err(krishiv_common::error::InvalidParameterValueString {
                 parameter: "traceparent".to_owned(),
                 function_name: "Session::set_trace_context".to_owned(),
@@ -36,8 +36,45 @@ impl Session {
             }
             .into());
         };
-        self.state.queries.set_trace_id(Some(trace_id));
+        self.state.queries.set_trace(Some(trace));
         Ok(())
+    }
+
+    /// Takes the trace context of an inbound request, as a protocol front end
+    /// (HTTP, Flight SQL or Connect metadata) reads it: the `traceparent` and
+    /// `baggage` header values, either absent. The headers are untrusted input
+    /// and never fail the request: a malformed `traceparent` starts no trace
+    /// and ends the one an earlier request of this session set (`false`), and
+    /// the baggage keeps at most 32 well-formed entries within 4 KiB. A request
+    /// without a `traceparent` clears both.
+    ///
+    /// ```
+    /// let s = krishiv_session::Session::new()?;
+    /// let tp = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+    /// assert!(s.set_inbound_trace(Some(tp), Some("tenant=acme;p=1, bad, k=v")));
+    /// assert_eq!(s.trace_id().as_deref(), Some("4bf92f3577b34da6a3ce929d0e0e4736"));
+    /// assert_eq!(s.baggage().len(), 2);
+    /// assert!(!s.set_inbound_trace(Some("junk"), None));
+    /// assert!(s.trace_id().is_none());
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    pub fn set_inbound_trace(&self, traceparent: Option<&str>, baggage: Option<&str>) -> bool {
+        let trace = traceparent.and_then(crate::system::parse_remote_parent);
+        let valid = trace.is_some() || traceparent.is_none();
+        self.state.queries.set_baggage(
+            baggage
+                .filter(|_| trace.is_some())
+                .map(crate::system::parse_baggage)
+                .unwrap_or_default(),
+        );
+        self.state.queries.set_trace(trace);
+        valid
+    }
+
+    /// The `baggage` entries [`Session::set_inbound_trace`] kept.
+    #[must_use]
+    pub fn baggage(&self) -> Vec<(String, String)> {
+        self.state.queries.baggage()
     }
 
     /// Tags the queries this session starts next (`system.queries.tags`):
@@ -91,7 +128,8 @@ impl Session {
 
     /// Ends the trace [`Session::set_trace_context`] set.
     pub fn clear_trace_context(&self) {
-        self.state.queries.set_trace_id(None);
+        self.state.queries.set_trace(None);
+        self.state.queries.set_baggage(Vec::new());
     }
 
     /// The trace id in effect, if any.
