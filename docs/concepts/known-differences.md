@@ -218,3 +218,20 @@ A SQL function, scalar or table, evaluates in the `spark.sql.ansi.enabled` mode 
   Setting a key the registry marks admin-only answers `KRISHIV_INSUFFICIENT_PERMISSIONS` (42501, gRPC
   `PERMISSION_DENIED`) for a non-admin role (no role exists before authentication, so the local user is the admin).
 - **Interrupt by tag** fails with `UNSUPPORTED_FEATURE.INTERRUPT_TYPE` until operation tags can be interrupted.
+- **AddArtifacts.** Names are checked before anything is written and more strictly than Spark: one of the prefixes
+  `cache/`, `pyfiles/`, `archives/` or `files/`, `/`-separated, without empty, `.` or `..` segments, `\`, control or
+  invisible formatting characters, at most 32 segments of at most 255 bytes; a `cache/` name is one segment of ASCII
+  letters and digits. Anything else is `INVALID_ARTIFACT_PATH` (Spark accepts an unknown prefix as a plain file and
+  turns `\` into a separator). `jars/` and `classes/` (no JVM) and `forward_to_fs/` (no Hadoop file system) fail with
+  `KRISHIV_UNSUPPORTED_FEATURE`. Each session may hold `krishiv.connect.artifacts.maxBytes` (1 GiB) of artifacts and
+  one artifact `krishiv.connect.artifacts.maxArtifactBytes` (256 MiB), each artifact also counting 4 KiB; past either,
+  `KRISHIV_ARTIFACT_LIMIT` (`RESOURCE_EXHAUSTED`); Spark has no cap. A broken chunk sequence (too many or too few
+  chunks, a chunk with no artifact begun, a new artifact before the last chunk, a wrong `total_bytes`) fails with
+  `KRISHIV_INVALID_ARTIFACT_TRANSFER` where Spark sends `INTERNAL` without an error class; a chunked artifact of one
+  chunk is accepted (Spark fails it). An artifact that collides with one already stored fails with
+  `ARTIFACT_ALREADY_EXISTS` as in Spark, also when the name holds a directory or a link. Archives are stored, not
+  unpacked, until Python UDFs use them.
+- **FetchErrorDetails** sends no stack trace (Spark sends the JVM's): there is no JVM, and a Rust backtrace would
+  expose server internals. A client that asks for the server stack trace gets the root error's class line only. The
+  causes of an error are sent with the parameters of server-internal error classes redacted, as their own status would
+  be. Errors of a Connect `Sql` relation carry no SQL query context yet.
