@@ -684,13 +684,13 @@ def collect(df, F, types: list[str]) -> tuple[list, list, list | None, str | Non
 
     def arrow(cols):
         try:
-            return df.select(*cols).toArrow()
+            return to_arrow(df.select(*cols))
         except ValueError as e:
             if "non-nullable" not in str(e):
                 raise
             # Spark declared a column non-nullable yet returned NULL (recorded in `schema`); the
             # client's Arrow cast rejects that, so re-select through an opaque nullable wrapper.
-            return df.select(*[F.when(F.rand(0) >= 0, c) for c in cols]).toArrow()
+            return to_arrow(df.select(*[F.when(F.rand(0) >= 0, c) for c in cols]))
 
     try:
         table, typed_reason = arrow([e for e, _ in text] + raw), None
@@ -719,6 +719,14 @@ def collect(df, F, types: list[str]) -> tuple[list, list, list | None, str | Non
         tc = [encode_typed(cols[n + i]) for i in range(n)]
         typed = [list(r) for r in zip(*tc, strict=True)] if n else [[] for _ in range(table.num_rows)]
     return rows, kinds, typed, typed_reason
+
+
+def to_arrow(df):
+    """`DataFrame.toArrow` exists from pyspark 4.0; a 3.5 client (needed against a 3.5 server) goes through the client."""
+    if hasattr(df, "toArrow"):
+        return df.toArrow()
+    table, _ = df._session.client.to_table(df._plan)
+    return table
 
 
 class Watchdog:
