@@ -334,6 +334,18 @@ pub const CATALOGUE: &[MetricDef] = &[
         source: MetricSource::QueryFold,
     },
     MetricDef {
+        name: "krishiv.history.write_failures",
+        kind: MetricKind::Gauge,
+        unit: "{profile}",
+        labels: &[],
+        description: "Query profiles that did not reach the persisted history \
+                      (`krishiv.history.path`) since the engine started: a full write queue, a \
+                      profile that did not serialize, or a failed file write. Absent when no \
+                      history path is set.",
+        since: "0.3.0",
+        source: MetricSource::Scrape,
+    },
+    MetricDef {
         name: "krishiv.memory.reserved",
         kind: MetricKind::Gauge,
         unit: "By",
