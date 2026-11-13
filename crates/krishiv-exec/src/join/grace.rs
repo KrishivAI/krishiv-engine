@@ -1603,8 +1603,8 @@ mod loom_model {
                 match lock(&built.grace).next() {
                     Next::Task(_) => break true,
                     Next::Done => break false,
+                    Next::Lost(e) => panic!("build rows lost: {e}"),
                     Next::Wait => {}
-                    Next::Lost(e) => panic!("the build rows were lost: {e}"),
                 }
                 block_on(changed);
             };

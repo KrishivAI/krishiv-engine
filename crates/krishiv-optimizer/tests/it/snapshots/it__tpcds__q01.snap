@@ -20,7 +20,7 @@ Limit 100
                      :     +- Aggregate [sr_customer_sk#3, sr_store_sk#7], [sr_customer_sk#3 AS ctr_customer_sk#48, sr_store_sk#7 AS ctr_store_sk#49, sum(sr_return_amt#11) AS ctr_total_return#50]
                      :        +- Project [sr_customer_sk#3, sr_store_sk#7, sr_return_amt#11]
                      :           +- Join Inner, (sr_returned_date_sk#0 == d_date_sk#20)
-                     :              :- Filter ((isnotnull(sr_returned_date_sk#0) and isnotnull(sr_store_sk#7)) and isnotnull(sr_customer_sk#3))
+                     :              :- Filter ((isnotnull(sr_returned_date_sk#0) and isnotnull(sr_customer_sk#3)) and isnotnull(sr_store_sk#7))
                      :              :  +- Scan spark_catalog.default.store_returns [sr_returned_date_sk#0, sr_customer_sk#3, sr_store_sk#7, sr_return_amt#11] (shared #1)
                      :              +- Project [d_date_sk#20]
                      :                 +- Filter ((d_year#26 == 2000) and isnotnull(d_date_sk#20))

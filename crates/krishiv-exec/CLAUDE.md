@@ -15,6 +15,7 @@ TokioExecutor · `context.rs` QueryContext/TaskContext/MemoryHandle · `morsel.r
 `operators/` (P2-T051) stateless operators: `scan.rs` MemoryScan + `ScanPushdown` (pushdowns decided once as an
 immutable `ScanPushdowns`; implemented by scan factories: MemoryScan, FileScan) ·
 `filter.rs` · `project.rs` · `limit.rs` · `union.rs` (per-branch `UnionAlign`; UNION ALL fan-in is T074, distinct UNION is the aggregate's) ·
+`spilled_scan.rs` `SpilledScan`, one driver streaming a spill file a batch at a time under its own consumer (the scan of `planner/table.rs` `SpilledTable`, a relation cache entry on disk) ·
 `expr.rs` the `Predicate`/`ScalarExpr` evaluator interface the physical planner plugs in ·
 `select.rs` (design P2-E3 U2) `Selection` (ascending `u32` row ids) and `RowSelect` (a fused predicate and a scan's row stage; after a selective stage the predicate reads a copy of the kept rows, of only its columns when compiled as a `Narrow`) ·
 `hash.rs` shared hash-table blocks (seeded key hash, key normalization + row encoding, `KeyTable`, spill
