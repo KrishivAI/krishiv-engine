@@ -343,6 +343,101 @@ fn soft_memory_limit_makes_new_queries_wait() {
     );
 }
 
+#[test]
+fn a_parents_scan_quota_counts_when_its_leaf_has_none() {
+    let json = r#"{"rootGroups": [{"name": "root", "hardConcurrencyLimit": 4, "maxQueued": 4,
+        "scanQuota": 1000, "scanQuotaPeriod": "1h",
+        "subGroups": [{"name": "leaf", "hardConcurrencyLimit": 4, "maxQueued": 4}]}],
+        "defaultGroup": "root.leaf"}"#;
+    let rg = ResourceGroups::from_json(json, MEM).unwrap_or_else(|e| panic!("{e}"));
+    let req = request("u");
+    let mut f: Pending<'_> = rg.admit(&req);
+    let permit = poll(&mut f)
+        .and_then(Result::ok)
+        .unwrap_or_else(|| panic!("admitted"));
+    permit
+        .slot::<GroupSlot>()
+        .unwrap_or_else(|| panic!("a group slot"))
+        .add_bytes_read(1000);
+    drop(permit);
+    let mut g: Pending<'_> = rg.admit(&req);
+    let err = poll(&mut g).map(Result::unwrap_err);
+    assert_eq!(
+        err.map(|e| e.error_class()),
+        Some(ErrorClass::KrishivResourceGroupQuotaExhausted)
+    );
+}
+
+#[test]
+fn max_queued_zero_still_runs_a_query_that_can_start() {
+    let json = r#"{"rootGroups": [{"name": "root", "hardConcurrencyLimit": 1, "maxQueued": 0}],
+        "defaultGroup": "root"}"#;
+    let rg = ResourceGroups::from_json(json, MEM).unwrap_or_else(|e| panic!("{e}"));
+    let req = request("u");
+    let mut a: Pending<'_> = rg.admit(&req);
+    let held = poll(&mut a);
+    assert!(
+        held.as_ref().is_some_and(Result::is_ok),
+        "a free slot runs it"
+    );
+    let mut b: Pending<'_> = rg.admit(&req);
+    let err = poll(&mut b).map(Result::unwrap_err);
+    assert_eq!(
+        err.map(|e| e.error_class()),
+        Some(ErrorClass::KrishivResourceGroupQueueFull)
+    );
+}
+
+#[test]
+fn a_lower_reservation_wakes_a_query_waiting_on_the_soft_limit() {
+    let json = r#"{"rootGroups": [{"name": "root", "hardConcurrencyLimit": 4, "maxQueued": 4,
+        "softMemoryLimit": "50%"}], "defaultGroup": "root"}"#;
+    let rg = ResourceGroups::from_json(json, 1000).unwrap_or_else(|e| panic!("{e}"));
+    let req = request("u");
+    let mut f: Pending<'_> = rg.admit(&req);
+    let p = poll(&mut f)
+        .and_then(Result::ok)
+        .unwrap_or_else(|| panic!("admitted"));
+    let slot = p
+        .slot::<GroupSlot>()
+        .unwrap_or_else(|| panic!("a group slot"));
+    slot.set_reserved(500);
+    let mut g: Pending<'_> = rg.admit(&req);
+    assert!(poll(&mut g).is_none(), "waits at the soft limit");
+    slot.set_reserved(100);
+    assert!(
+        poll(&mut g).is_some_and(|r| r.is_ok()),
+        "starts once the reservation drops, with the first query still running"
+    );
+}
+
+#[test]
+fn bytes_scanned_across_a_window_boundary_are_charged() {
+    let now = Arc::new(AtomicU64::new(1_700_000_000_000));
+    let clock = Arc::clone(&now);
+    let rg =
+        ResourceGroups::with_clock(QUOTA, MEM, Arc::new(move || clock.load(Ordering::Relaxed)))
+            .unwrap_or_else(|e| panic!("{e}"));
+    let req = request("u");
+    let mut f: Pending<'_> = rg.admit(&req);
+    let permit = poll(&mut f)
+        .and_then(Result::ok)
+        .unwrap_or_else(|| panic!("admitted"));
+    permit
+        .slot::<GroupSlot>()
+        .unwrap_or_else(|| panic!("a group slot"))
+        .add_bytes_read(1000);
+    // the window ends while the query runs; it finishes in the next one
+    now.fetch_add(3_600_000, Ordering::Relaxed);
+    drop(permit);
+    let mut g: Pending<'_> = rg.admit(&req);
+    let err = poll(&mut g).map(Result::unwrap_err);
+    assert_eq!(
+        err.map(|e| e.error_class()),
+        Some(ErrorClass::KrishivResourceGroupQuotaExhausted)
+    );
+}
+
 fn refused(json: &str) -> String {
     let e = ResourceGroups::from_json(json, MEM).unwrap_err();
     assert_eq!(

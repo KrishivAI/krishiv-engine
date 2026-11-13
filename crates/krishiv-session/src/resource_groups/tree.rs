@@ -135,16 +135,17 @@ impl Shared {
         if let Some(refusal) = tree.quota_refusal(leaf, now) {
             return Err(Refusal::Quota(refusal));
         }
+        let immediate =
+            tree.can_run(leaf) && tree.nodes.get(leaf).is_some_and(|n| n.waiting.is_empty());
+        if immediate {
+            return Ok(Admitted::Now(tree.start(self, leaf, 0)));
+        }
+        // `maxQueued` limits waiting queries; a query that can start never waits.
         if let Some(full) = tree.full_queue(leaf) {
             return Err(Refusal::QueueFull {
                 group: full.0,
                 max_queued: full.1,
             });
-        }
-        let immediate =
-            tree.can_run(leaf) && tree.nodes.get(leaf).is_some_and(|n| n.waiting.is_empty());
-        if immediate {
-            return Ok(Admitted::Now(tree.start(self, leaf, 0)));
         }
         let (tx, rx) = oneshot::channel();
         let id = tree.next_id();
@@ -235,7 +236,11 @@ impl std::fmt::Debug for GroupSlot {
 impl GroupSlot {
     /// Reports the bytes the query reserves now; a group's `softMemoryLimit` sums these.
     pub fn set_reserved(&self, bytes: usize) {
-        self.reserved.store(bytes, Ordering::Relaxed);
+        let before = self.reserved.swap(bytes, Ordering::Relaxed);
+        if bytes < before {
+            // A lower reservation can bring a group back under its `softMemoryLimit`.
+            self.shared.dispatch();
+        }
     }
 
     /// Adds scanned bytes, charged to the scan quota of every group up to the root when the
@@ -264,6 +269,20 @@ impl Drop for GroupSlot {
             );
         }
         self.shared.dispatch();
+    }
+}
+
+impl Node {
+    /// Starts a fresh quota window when the current one has ended.
+    fn roll_window(&mut self, now: u64) {
+        let Some(q) = self.scan_quota else { return };
+        if now >= self.window_end_ms {
+            self.scan_used = 0;
+            let periods = now.saturating_sub(self.window_end_ms) / q.period_ms.max(1) + 1;
+            self.window_end_ms = self
+                .window_end_ms
+                .saturating_add(periods.saturating_mul(q.period_ms));
+        }
     }
 }
 
@@ -378,14 +397,11 @@ impl Tree {
     fn quota_refusal(&mut self, leaf: usize, now: u64) -> Option<KrishivError> {
         for i in self.chain(leaf) {
             let n = self.nodes.get_mut(i)?;
-            let q = n.scan_quota?;
-            if now >= n.window_end_ms {
-                n.scan_used = 0;
-                let periods = now.saturating_sub(n.window_end_ms) / q.period_ms + 1;
-                n.window_end_ms = n
-                    .window_end_ms
-                    .saturating_add(periods.saturating_mul(q.period_ms));
-            }
+            let Some(q) = n.scan_quota else {
+                // No quota here; an ancestor may still have one.
+                continue;
+            };
+            n.roll_window(now);
             if n.scan_used >= q.bytes {
                 return Some(
                     KrishivResourceGroupQuotaExhausted {
@@ -456,7 +472,9 @@ impl Tree {
         for i in self.chain(leaf) {
             if let Some(n) = self.nodes.get_mut(i) {
                 n.running = n.running.saturating_sub(1);
-                if n.scan_quota.is_some() && now < n.window_end_ms {
+                if n.scan_quota.is_some() {
+                    // Start the new window first, so bytes scanned across a boundary count.
+                    n.roll_window(now);
                     n.scan_used = n.scan_used.saturating_add(bytes_read);
                 }
             }
