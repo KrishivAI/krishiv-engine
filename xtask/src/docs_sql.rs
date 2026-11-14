@@ -273,7 +273,7 @@ fn description_of(name: &str, desc: &str) -> String {
     if first.is_empty() {
         format!("The Spark SQL function {name}: syntax, examples and Krishiv's status.")
     } else {
-        first.to_owned()
+        first.trim_end_matches(['"', ',']).to_owned()
     }
 }
 

@@ -1,5 +1,5 @@
 ---
-description: "Returns the bucket number to which `value` would be assigned in an equiwidth histogram with `num_bucket` buckets, in the range `min_value` to `max_value`.\""
+description: "Returns the bucket number to which `value` would be assigned in an equiwidth histogram with `num_bucket` buckets, in the range `min_value` to `max_value`."
 ---
 
 # `width_bucket`

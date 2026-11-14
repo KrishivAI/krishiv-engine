@@ -1,5 +1,5 @@
 ---
-description: "indicates whether a specified column in a GROUP BY is aggregated or not, returns 1 for aggregated or 0 for not aggregated in the result set.\","
+description: "indicates whether a specified column in a GROUP BY is aggregated or not, returns 1 for aggregated or 0 for not aggregated in the result set."
 ---
 
 # `grouping`
