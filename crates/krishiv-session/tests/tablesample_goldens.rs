@@ -11,8 +11,8 @@
 //! `UNION ALL` numbers its inputs' partitions one after another, as Spark's
 //! `UnionRDD`. The fixture's Parquet tables are registered as in-memory
 //! tables of the same rows in the same order (one partition, as Spark's one
-//! small file); `pq3` (three files whose packing order Spark decides) is
-//! not reproduced.
+//! small file), and again through a Parquet file Krishiv wrote; `pq3`
+//! (`repartition(3)`'s round-robin rows in three files) is not reproduced.
 #![cfg(test)]
 
 use std::sync::Arc;
@@ -167,4 +167,132 @@ fn unseeded_samples_run() {
     // `REPEATABLE (abc)` is a table alias with a column alias, unseeded.
     let df = block_on(s.sql("SELECT * FROM t TABLESAMPLE (10 PERCENT) REPEATABLE (abc)")).unwrap();
     assert_eq!(block_on(df.schema()).unwrap().field(0).name(), "abc");
+}
+
+fn run(s: &Session, sql: &str) {
+    block_on(async { s.sql(sql).await?.collect().await }).unwrap_or_else(|e| panic!("{sql}: {e}"));
+}
+
+/// The `pq1` cases through a real Parquet file scan: one small file is one
+/// partition, as in Spark.
+#[test]
+fn parquet_file_rows_match_spark() {
+    let s = session(1);
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("pq1");
+    let path = path.to_str().unwrap();
+    let df = block_on(s.sql("SELECT id, id * 2 AS b, cast(id AS string) AS s FROM range(0, 1000)"))
+        .unwrap();
+    block_on(df.write().parquet(path)).unwrap();
+    run(
+        &s,
+        &format!(
+            "CREATE TEMPORARY VIEW pqf(id BIGINT, b BIGINT, s STRING) USING parquet OPTIONS (path '{path}')"
+        ),
+    );
+    let doc = fixture();
+    let mut checked = 0;
+    for case in doc["cases"].as_array().unwrap() {
+        if !case["name"].as_str().unwrap().starts_with("parquet1") {
+            continue;
+        }
+        let sql = case["sql"].as_str().unwrap().replace("pq1", "pqf");
+        assert_eq!(ids(&s, &sql), want(case), "{sql}");
+        checked += 1;
+    }
+    assert_eq!(checked, 4);
+}
+
+/// A table of six files cut into several partitions: a file scan under a
+/// sample reads each partition whole, so `REPEATABLE` keeps its rows at any
+/// thread count and on every run.
+#[test]
+fn repeatable_rows_hold_across_threads_and_runs_over_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("multi");
+    let path = path.to_str().unwrap().to_owned();
+    let writer = session(1);
+    for i in 0..6 {
+        let df = block_on(writer.sql(&format!(
+            "SELECT id, cast(id AS string) AS s FROM range({}, {})",
+            i * 20_000,
+            (i + 1) * 20_000
+        )))
+        .unwrap();
+        block_on(df.write().mode("append").parquet(&path)).unwrap();
+    }
+    let sql = "SELECT id FROM multi TABLESAMPLE (10 PERCENT) REPEATABLE (7)";
+    let view = format!(
+        "CREATE TEMPORARY VIEW multi(id BIGINT, s STRING) USING parquet OPTIONS (path '{path}')"
+    );
+    // One partition (the six small files packed together) ...
+    let one = session(1);
+    run(&one, &view);
+    let packed = ids(&one, sql);
+    // ... and one per file or less: each partition draws its own stream.
+    let split = |threads| {
+        let s = session(threads);
+        run(&s, "SET spark.sql.files.maxPartitionBytes=65536");
+        run(&s, "SET spark.sql.files.openCostInBytes=0");
+        run(&s, &view);
+        s
+    };
+    let serial = ids(&split(1), sql);
+    assert_ne!(serial, packed, "the files were not cut into partitions");
+    let four = split(4);
+    for _ in 0..3 {
+        assert_eq!(ids(&four, sql), serial);
+    }
+}
+
+/// `range(0, 1000)` at four threads is four slices, each read by one driver:
+/// the same rows on every run.
+#[test]
+fn repeatable_rows_hold_across_runs_at_four_threads() {
+    let s = session(4);
+    let sql = "SELECT id FROM t TABLESAMPLE (10 PERCENT) REPEATABLE (7)";
+    let first = ids(&s, sql);
+    for _ in 0..3 {
+        assert_eq!(ids(&s, sql), first);
+    }
+}
+
+/// One DataFrame of an unseeded sample keeps its rows across actions, as a
+/// Spark Dataset keeps its executed plan; a new statement draws again.
+#[test]
+fn an_unseeded_dataframe_keeps_its_rows() {
+    let s = session(1);
+    let df = block_on(s.sql("SELECT id FROM t TABLESAMPLE (10 PERCENT)")).unwrap();
+    let rows = |df: &krishiv_session::DataFrame| {
+        let mut out: Vec<i64> = block_on(df.collect())
+            .unwrap()
+            .iter()
+            .flat_map(|b| b.column(0).as_primitive::<Int64Type>().values().to_vec())
+            .collect();
+        out.sort_unstable();
+        out
+    };
+    let first = rows(&df);
+    assert_eq!(rows(&df), first);
+    // Twenty statements: some draw another seed (1 in 1000 each would not).
+    let other = (0..20).any(|_| {
+        let df = block_on(s.sql("SELECT id FROM t TABLESAMPLE (10 PERCENT)")).unwrap();
+        rows(&df) != first
+    });
+    assert!(other);
+}
+
+/// A sampled plan survives the plan codec: with every plan round-tripped
+/// through it, the rows are Spark's.
+#[test]
+fn a_sampled_plan_round_trips_through_the_codec() {
+    let s = session(1);
+    run(&s, "SET krishiv.exec.debug.planRoundTrip=true");
+    let doc = fixture();
+    for case in doc["cases"].as_array().unwrap() {
+        if case["name"] == "view_10pct_seed7" || case["partitions"].as_u64() == Some(4) {
+            let sql = case["sql"].as_str().unwrap();
+            assert_eq!(ids(&s, sql), want(case), "{sql}");
+        }
+    }
 }

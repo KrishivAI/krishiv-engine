@@ -1357,6 +1357,10 @@ impl Session {
             cache_cap,
             sql_functions,
             functions_version,
+            sample_salt: {
+                use std::hash::BuildHasher as _;
+                std::collections::hash_map::RandomState::new().hash_one(0_u8)
+            },
         }
     }
 
@@ -1588,6 +1592,7 @@ impl Session {
         };
         let cx = PlanningContext::new(tables, Arc::clone(&env.config))
             .with_query_start(start)
+            .with_sample_salt(env.sample_salt)
             .with_user(self.state.principal.name.as_str())
             .with_udfs(Arc::clone(&self.state.udfs));
         let physical = self.state.planner.plan(&optimized, &cx)?;
