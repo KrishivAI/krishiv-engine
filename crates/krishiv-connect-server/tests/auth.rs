@@ -566,3 +566,166 @@ async fn the_clients_user_id_is_recorded_not_trusted() {
         [("carol".to_owned(), "dana".to_owned(), "connect".to_owned())]
     );
 }
+
+/// The `krishiv::audit` events of this thread, as `field=value` lines.
+#[derive(Clone, Default)]
+struct AuditCapture(Arc<std::sync::Mutex<Vec<String>>>);
+
+impl AuditCapture {
+    fn take(&self) -> Vec<String> {
+        std::mem::take(
+            &mut *self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+}
+
+struct AuditFields(String);
+
+impl tracing::field::Visit for AuditFields {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        use std::fmt::Write as _;
+        let _ = write!(self.0, "{}={value:?} ", field.name());
+    }
+
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        use std::fmt::Write as _;
+        let _ = write!(self.0, "{}={value} ", field.name());
+    }
+}
+
+impl tracing::Subscriber for AuditCapture {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        if event.metadata().target() == "krishiv::audit" {
+            let mut fields = AuditFields(String::new());
+            event.record(&mut fields);
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(fields.0);
+        }
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// Review N2 (ADR 0046 §3b): `ReattachExecute` of another principal's operation id, end to
+/// end. It is answered as an unknown id and writes one audit record naming the caller only.
+/// A current-thread runtime, so the handler runs on this thread and the thread's subscriber
+/// sees its record.
+#[tokio::test(flavor = "current_thread")]
+async fn reattaching_another_principals_operation_is_unknown_and_recorded() {
+    use krishiv_connect::proto::v4_3::execute_plan_request::request_option::RequestOption;
+    const OP: &str = "1d6a3c1e-77b2-4c55-8d0f-0a6c2e9b4f21";
+    const UNKNOWN: &str = "5b1f7a2e-0c3d-4e8f-9a6b-2d4c6e8f0a1b";
+    const OTHER_SESSION: &str = "2c4e6a8b-0d1f-4a3c-8e5b-7d9f1b3d5f70";
+    let capture = AuditCapture::default();
+    let _guard = tracing::subscriber::set_default(capture.clone());
+    let run = start().await;
+
+    // carol's reattachable operation, read to its end: it stays registered until released.
+    let request = pb::ExecutePlanRequest {
+        session_id: SESSION.to_owned(),
+        operation_id: Some(OP.to_owned()),
+        plan: Some(range(3)),
+        request_options: vec![pb::execute_plan_request::RequestOption {
+            request_option: Some(RequestOption::ReattachOptions(pb::ReattachOptions {
+                reattachable: true,
+            })),
+        }],
+        ..Default::default()
+    };
+    let mut grpc = tonic::client::Grpc::new(run.channel.clone());
+    grpc.ready().await.expect("ready");
+    let mut stream = grpc
+        .server_streaming(
+            with_token(request, Some(VIEWER)),
+            path("ExecutePlan"),
+            tonic_prost::ProstCodec::<pb::ExecutePlanRequest, pb::ExecutePlanResponse>::default(),
+        )
+        .await
+        .expect("execute")
+        .into_inner();
+    while stream.message().await.expect("response").is_some() {}
+    assert!(
+        capture.take().is_empty(),
+        "carol's own operation writes nothing"
+    );
+
+    let reattach = |operation_id: &str| pb::ReattachExecuteRequest {
+        session_id: OTHER_SESSION.to_owned(),
+        operation_id: operation_id.to_owned(),
+        ..Default::default()
+    };
+    let reattach_as_dana = async |operation_id: &str| {
+        let mut grpc = tonic::client::Grpc::new(run.channel.clone());
+        grpc.ready().await.expect("ready");
+        grpc.server_streaming(
+            with_token(reattach(operation_id), Some(ADMIN)),
+            path("ReattachExecute"),
+            tonic_prost::ProstCodec::<pb::ReattachExecuteRequest, pb::ExecutePlanResponse>::default(
+            ),
+        )
+        .await
+        .expect_err("not dana's operation")
+    };
+
+    // Dana (an admin) creates her own session first, so the reattach finds it.
+    execute_in(&run.channel, OTHER_SESSION, ADMIN).await;
+    capture.take();
+
+    let unknown = reattach_as_dana(UNKNOWN).await;
+    assert_eq!(error_class(&unknown), "INVALID_HANDLE.OPERATION_NOT_FOUND");
+    assert!(capture.take().is_empty(), "an unknown id writes nothing");
+
+    let foreign = reattach_as_dana(OP).await;
+    assert_eq!(
+        error_class(&foreign),
+        "INVALID_HANDLE.OPERATION_NOT_FOUND",
+        "answered as the unknown id is"
+    );
+    let records = capture.take();
+    assert_eq!(records.len(), 1, "{records:?}");
+    let r = &records[0];
+    assert!(r.contains("principal=dana "), "{r}");
+    assert!(r.contains("handle=operation "), "{r}");
+    assert!(r.contains("surface=connect "), "{r}");
+    assert!(!r.contains("carol"), "the owner is never named: {r}");
+}
+
+/// Runs a small plan in `session_id` as the holder of `token`, to create that session.
+async fn execute_in(channel: &Channel, session_id: &str, token: &str) {
+    let request = pb::ExecutePlanRequest {
+        session_id: session_id.to_owned(),
+        plan: Some(range(1)),
+        ..Default::default()
+    };
+    let mut grpc = tonic::client::Grpc::new(channel.clone());
+    grpc.ready().await.expect("ready");
+    let mut s = grpc
+        .server_streaming(
+            with_token(request, Some(token)),
+            path("ExecutePlan"),
+            tonic_prost::ProstCodec::<pb::ExecutePlanRequest, pb::ExecutePlanResponse>::default(),
+        )
+        .await
+        .expect("execute")
+        .into_inner();
+    while s.message().await.expect("response").is_some() {}
+}

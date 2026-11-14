@@ -6,7 +6,7 @@
 #![cfg(test)]
 
 use std::fmt::Write as _;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use krishiv_common::principal::{Principal, PrincipalKind};
 use krishiv_connect_server::manager::{SessionLimits, SessionManager};
@@ -121,4 +121,43 @@ fn foreign_ids_are_answered_as_unknown_and_recorded() {
     m.audit_foreign_operation(&alice, OP);
     assert!(take().is_empty());
     m.get(&alice, ID, None).unwrap();
+
+    // The race after the build (review N2): bob's lookup and caps check find the id free, and
+    // alice creates it while bob's session is being built. Bob's create is refused as unknown,
+    // its session closed unused, and exactly one record is written.
+    let racing = racing_manager(&alice);
+    let e = racing.get_or_create(&bob, ID, None, "u").unwrap_err();
+    assert_eq!(e.error_class().name(), "INVALID_HANDLE.SESSION_NOT_FOUND");
+    let records = take();
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert!(records[0].contains("principal=bob "), "{}", records[0]);
+    assert!(records[0].contains("handle=session "), "{}", records[0]);
+    assert!(!records[0].contains("alice"), "{}", records[0]);
+    assert_eq!(
+        racing.counts().live,
+        1,
+        "alice's session stays, bob's is dropped"
+    );
+    assert!(!racing.get(&alice, ID, None).unwrap().session().is_closed());
+}
+
+/// A manager whose factory, building a session for anyone but `winner`, first creates
+/// `winner`'s session of the same id: the create that is being built loses the race.
+fn racing_manager(winner: &Authenticated) -> Arc<SessionManager> {
+    let base = Session::new().unwrap();
+    let this: Arc<OnceLock<Weak<SessionManager>>> = Arc::new(OnceLock::new());
+    let (hook, winner) = (Arc::clone(&this), winner.clone());
+    let m = Arc::new(SessionManager::new(
+        Box::new(move |caller: &Authenticated| {
+            if caller.principal.name != winner.principal.name
+                && let Some(m) = hook.get().and_then(Weak::upgrade)
+            {
+                m.get_or_create(&winner, ID, None, "u").unwrap();
+            }
+            Ok(base.new_session())
+        }),
+        SessionLimits::default(),
+    ));
+    this.set(Arc::downgrade(&m)).unwrap();
+    m
 }
