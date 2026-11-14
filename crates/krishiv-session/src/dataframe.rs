@@ -31,6 +31,7 @@ use crate::session::{QueryEnv, RecordBatchStream, Session, WriteTarget, read_fil
 pub(crate) mod checkpoint;
 mod fill_stream;
 mod geo_gate;
+mod observe;
 mod traced;
 
 pub(crate) use fill_stream::{CacheFill, FillKind};

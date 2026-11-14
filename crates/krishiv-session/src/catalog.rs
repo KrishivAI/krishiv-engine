@@ -950,6 +950,7 @@ fn streaming_leaves(root: &PhysNode) -> (Vec<&krishiv_exec::physical::ScanNode>,
             PhysNode::Filter { input, .. }
             | PhysNode::Project { input, .. }
             | PhysNode::ReplicateRows { input, .. }
+            | PhysNode::CollectMetrics { input, .. }
             | PhysNode::Generate { input, .. }
             | PhysNode::Expand { input, .. }
             | PhysNode::Limit { input, .. }
