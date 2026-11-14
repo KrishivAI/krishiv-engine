@@ -736,6 +736,38 @@ fn a_case_column_inside_a_case_branch_leaves_the_enclosing_case_whole() {
             "SELECT CASE WHEN a THEN case - x WHEN 1 THEN 2 END + case - y END FROM t",
             "Project [CASE WHEN a THEN ((CASE WHEN ((- x) == 1) THEN 2 END + case) - y) END] | +- Read t",
         ),
+        // Spark 4.2.0 parsePlan, sibling CASEs after the branch (Codex on #761,
+        // round 5): `'CASE` is a column in the first.
+        (
+            "SELECT CASE WHEN true THEN case + 1 WHEN false THEN 2 END + CASE WHEN true THEN 3 END FROM t",
+            "Project [CASE WHEN true THEN (CASE WHEN (positive(1) == false) THEN 2 END + CASE) WHEN true THEN 3 END] | +- Read t",
+        ),
+        (
+            "SELECT CASE WHEN true THEN case + 1 WHEN false THEN 2 END, CASE WHEN true THEN 3 END FROM t",
+            "Project [CASE WHEN true THEN (case + 1) WHEN false THEN 2 END, CASE WHEN true THEN 3 END] | +- Read t",
+        ),
+        (
+            "SELECT CASE WHEN true THEN case + 1 WHEN false THEN 2 END + CASE x WHEN 1 THEN 3 END FROM t",
+            "Project [(CASE WHEN true THEN (case + 1) WHEN false THEN 2 END + CASE WHEN (x == 1) THEN 3 END)] | +- Read t",
+        ),
+        (
+            "SELECT CASE WHEN true THEN case + 1 WHEN false THEN 2 END END + CASE WHEN true THEN 3 END FROM t",
+            "Project [(CASE WHEN true THEN CASE WHEN (positive(1) == false) THEN 2 END END + CASE WHEN true THEN 3 END)] | +- Read t",
+        ),
+        // Spark 4.2.0: a searched CASE in a branch is the column `'CASE` when
+        // its END would leave the enclosing CASE none.
+        (
+            "SELECT CASE WHEN a THEN CASE WHEN b THEN 1 END FROM t",
+            "Project [CASE WHEN a THEN CASE WHEN b THEN 1 END] | +- Read t",
+        ),
+        (
+            "SELECT CASE WHEN a THEN CASE WHEN b THEN 1 END WHEN c THEN 2 END FROM t",
+            "Project [CASE WHEN a THEN CASE WHEN b THEN 1 END WHEN c THEN 2 END] | +- Read t",
+        ),
+        (
+            "SELECT CASE WHEN a THEN 1 + CASE WHEN b THEN 2 END END FROM t",
+            "Project [CASE WHEN a THEN (1 + CASE WHEN b THEN 2 END) END] | +- Read t",
+        ),
         (
             "SELECT case + 1 WHEN 2 THEN 3 END FROM t",
             "Project [CASE WHEN (positive(1) == 2) THEN 3 END] | +- Read t",

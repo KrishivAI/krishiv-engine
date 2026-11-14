@@ -98,7 +98,8 @@ impl Parser<'_> {
     /// For each token `i` (and one past the last), the `CASE` words
     /// (`WHEN`, `THEN`, `ELSE`, `END` as [`closer_bit`]s) a scan from `i`
     /// meets in `i`'s brackets, outside any `CASE` that starts at or after
-    /// `i`, before those brackets close or a `;` at their level: one pass
+    /// `i`, before those brackets close or a `;` or `,` at their level (a
+    /// `CASE` never spans a comma of its own brackets): one pass
     /// left to right pairs brackets and each `CASE` with its `END`, one pass
     /// right to left fills the table. Built at the start of the statement
     /// (the cursor at token 0, so offsets are positions).
@@ -125,7 +126,7 @@ impl Parser<'_> {
                         cases.clear();
                     }
                 }
-                Some(TokenKind::Sym(Sym::Semi)) => {
+                Some(TokenKind::Sym(Sym::Semi | Sym::Comma)) => {
                     if let Some((_, cases)) = levels.last_mut() {
                         cases.clear();
                     }
@@ -159,7 +160,7 @@ impl Parser<'_> {
                 Some(TokenKind::Sym(Sym::LParen | Sym::LBracket)) => {
                     after(bracket_end.get(i).copied().unwrap_or(NONE))
                 }
-                Some(TokenKind::Sym(Sym::RParen | Sym::RBracket | Sym::Semi)) => 0,
+                Some(TokenKind::Sym(Sym::RParen | Sym::RBracket | Sym::Semi | Sym::Comma)) => 0,
                 Some(TokenKind::Word) if case_end.get(i).is_some_and(|&e| e != NONE) => {
                     after(case_end.get(i).copied().unwrap_or(NONE))
                 }
@@ -268,12 +269,52 @@ impl Parser<'_> {
         !self.kw_at(1, "WHEN") && self.reserved_column_here()
     }
 
+    /// Whether `CASE WHEN` here, inside a part of an enclosing `CASE` in the
+    /// same brackets, may still be a column: when the searched `CASE` would
+    /// take every word that can close the enclosing part, ANTLR reads the
+    /// column and the `WHEN` continues the enclosing `CASE` (Spark 4.2.0:
+    /// `CASE WHEN a THEN CASE WHEN b THEN 1 END FROM t` is `THEN 'CASE WHEN
+    /// 'b THEN 1 END`), so `case_or_column` decides.
+    pub(super) fn searched_case_may_be_column(&self) -> bool {
+        !self.opts.enforce_reserved_keywords
+            && self.kw_at(1, "WHEN")
+            && self
+                .case_part
+                .is_some_and(|(start, _)| self.depth_since(start) == 0)
+    }
+
     /// Whether a `WHEN` follows in the brackets of the `CASE` here: without
     /// one no `CASE` expression can start here, so `case_or_column` takes the
     /// column without a speculative read (a flat chain `case + 1 > 0 OR ...`
     /// would otherwise read every later term inside the first's operand).
     fn when_ahead(&self) -> bool {
         self.when_ahead.get(self.pos).copied().unwrap_or(false)
+    }
+
+    /// A searched `CASE WHEN` in an enclosing `CASE` part (see
+    /// [`Self::searched_case_may_be_column`]): the `CASE` expression, unless
+    /// it parses and leaves no word that could close the enclosing part, when
+    /// `None` makes `CASE` the column. Its errors, the depth cap included,
+    /// stay the expression's.
+    pub(super) fn searched_case_or_column(&mut self) -> PR<Option<ExprKind>> {
+        let part = self
+            .case_part
+            .filter(|(start, _)| self.depth_since(*start) == 0)
+            .map(|(_, part)| part);
+        let at = self.checkpoint();
+        let kind = match self.case_expr() {
+            Ok(kind) => kind,
+            Err(e) => {
+                self.commit(at);
+                return Err(e);
+            }
+        };
+        if part.is_some_and(|part| !self.part_closer_after(0, part)) {
+            self.restore(at);
+            return Ok(None);
+        }
+        self.commit(at);
+        Ok(Some(kind))
     }
 
     /// `CASE` that may be a column: the `CASE` expression if it parses, as

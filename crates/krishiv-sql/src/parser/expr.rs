@@ -1126,6 +1126,11 @@ impl Parser<'_> {
         } else if is("TRUE") || is("FALSE") {
             self.bump();
             ExprKind::Literal(Literal::Boolean(is("TRUE")))
+        } else if is("CASE") && self.searched_case_may_be_column() {
+            match self.searched_case_or_column()? {
+                Some(kind) => kind,
+                None => return Ok(None),
+            }
         } else if is("CASE") && self.case_may_be_column() {
             match self.case_or_column()? {
                 Some(kind) => kind,
