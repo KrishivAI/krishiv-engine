@@ -342,17 +342,23 @@ async fn system_resource_groups_lists_the_tree_with_its_counters() {
     assert_eq!(b.column(1).as_string::<i32>().value(1), "root");
     assert_eq!(b.column(2).as_string::<i32>().value(0), "active");
     assert_eq!(b.column(3).as_string::<i32>().value(1), "batch");
-    let long = |i: usize, r: usize| {
+    let int = |i: usize, r: usize| {
         b.column(i)
-            .as_primitive::<arrow_array::types::Int64Type>()
+            .as_primitive::<arrow_array::types::Int32Type>()
             .value(r)
     };
-    assert_eq!((long(4, 0), long(4, 1)), (4, 2));
+    assert_eq!((int(4, 0), int(4, 1)), (4, 2));
     assert_eq!(
-        (long(5, 0), long(5, 1)),
+        (int(5, 0), int(5, 1)),
         (1, 1),
         "the held query counts up to the root"
     );
-    assert!(b.column(6).is_null(0) && long(6, 1) == 1_000_000);
+    assert!(b.column(6).is_null(0));
+    assert_eq!(
+        b.column(6)
+            .as_primitive::<arrow_array::types::Int64Type>()
+            .value(1),
+        1_000_000
+    );
     drop(held);
 }
