@@ -562,6 +562,7 @@ fn iceberg_commit_classes_match_java_exceptions() {
         conflicting_snapshot_id: "5".to_owned(),
         check: "format version".to_owned(),
         message: "the table's format version changed from 1 to 2.".to_owned(),
+        files: "the written files were removed where possible".to_owned(),
     });
     assert_eq!(conflict.sql_state(), Some("40001"));
     assert_eq!(conflict.audience(), Audience::User);
@@ -573,6 +574,7 @@ fn iceberg_commit_classes_match_java_exceptions() {
         write_id: "w".to_owned(),
         attempts: "5".to_owned(),
         reason: "409".to_owned(),
+        files: "the written files were removed where possible".to_owned(),
     });
     assert_eq!(failed.sql_state(), Some("40001"));
     assert!(

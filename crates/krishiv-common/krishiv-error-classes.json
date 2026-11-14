@@ -40,13 +40,13 @@
   },
   "KRISHIV_ICEBERG_COMMIT_CONFLICT" : {
     "message" : [
-      "The commit of snapshot <snapshotId> to the Iceberg table <table> conflicts with the table at snapshot <conflictingSnapshotId> (<check>): <message> Nothing was committed and the written files were removed where possible; run the write again against the current table."
+      "The commit of snapshot <snapshotId> to the Iceberg table <table> conflicts with the table at snapshot <conflictingSnapshotId> (<check>): <message> Nothing was committed by this request and <files>; run the write again against the current table."
     ],
     "sqlState" : "40001"
   },
   "KRISHIV_ICEBERG_COMMIT_FAILED" : {
     "message" : [
-      "The commit of snapshot <snapshotId> (write <writeId>) to the Iceberg table <table> was not applied in any of <attempts> requests, the last answered with: <reason>. The written files were removed where possible; retry the write, or raise \"commit.retry.num-retries\" or \"commit.retry.total-timeout-ms\" on the table."
+      "The commit of snapshot <snapshotId> (write <writeId>) to the Iceberg table <table> was not applied in any of <attempts> requests, the last answered with: <reason>. Of this write, <files>; retry the write, or raise \"commit.retry.num-retries\" or \"commit.retry.total-timeout-ms\" on the table."
     ],
     "sqlState" : "40001"
   },

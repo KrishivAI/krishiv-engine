@@ -150,6 +150,9 @@ Fixture: `tests/fixtures/iceberg-1.12.0-spark-types.json` (source-only goldens,
   the same attempt (same snapshot id, base and manifest list) or a rebase after the branch moved off its base follows;
   every attempt of a write carries one snapshot id. A write that ends with any outcome unresolved is
   `KRISHIV_ICEBERG_COMMIT_STATE_UNKNOWN` (40003) and **deletes nothing**; a committed write never deletes a data file.
+  A write that fails after any of its requests had an unknown answer also deletes nothing (its error says the files
+  were kept): an attempt settled as "not applied" because the branch left its base lands if the branch is rolled
+  back to that base (review-1 pass 2 P1; on v2+ the sequence number usually refuses it, on v1 nothing does).
   A 409 leaves the write unresolved until the own-key search has run on a successful load (a duplicated request lands
   and answers 409). A `commit_append` dropped or cancelled after its first request is an unknown outcome too: the
   caller (`sink.rs`'s finalize, whose guard is disarmed before the loop) must not delete the write's files. Only
