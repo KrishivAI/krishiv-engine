@@ -45,8 +45,11 @@ impl Part {
     pub(crate) fn block(&mut self, schema: &SchemaRef) -> Result<usize> {
         match self.memory.first_mut() {
             Some(m) => {
+                // Cut first: a run that already fills a block is copied once,
+                // into the block, not merged and then cut again.
+                let cut = block_chunks(&mut self.chunks, m, schema)?;
                 let merged = merge_tiers(&mut self.chunks, m, schema, ARENA_ROWS, BUILD_FANOUT)?;
-                Ok(merged.max(block_chunks(&mut self.chunks, m, schema)?))
+                Ok(cut.max(merged))
             }
             None => Ok(0),
         }
@@ -362,6 +365,38 @@ mod tests {
             .collect();
         keys.sort_unstable();
         assert!(keys.into_iter().eq(0..next), "rows lost or duplicated");
+        drop(parts);
+        assert_eq!(pool.reserved(), 0);
+    }
+
+    /// A run of short chunks that fills a block is cut into the block, not
+    /// merged into one chunk past the block first: 63 chunks of 255 rows and
+    /// one of 400 give a block and an 81-row tail (review M6 of the S5 stack).
+    #[test]
+    fn a_run_that_fills_a_block_is_cut_not_merged() {
+        let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+        let id = pool.register("cut-first", None);
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+        let mut parts = vec![Part::with_memory(krishiv_memory::Reservation::new(
+            Arc::clone(&pool),
+            id,
+        ))];
+        let mut next = 0i64;
+        for n in std::iter::repeat_n(255i64, 63).chain([400]) {
+            let c = Batch::new(
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(Int64Array::from_iter_values(next..next + n))],
+                )
+                .unwrap(),
+            );
+            next += n;
+            reserve_chunks(&mut parts, &[(0, c.clone())]).unwrap();
+            parts[0].chunks.push(c);
+            parts[0].block(&schema).unwrap();
+        }
+        let rows: Vec<usize> = parts[0].chunks.iter().map(Batch::num_rows).collect();
+        assert_eq!(rows, [ARENA_ROWS, 63 * 255 + 400 - ARENA_ROWS]);
         drop(parts);
         assert_eq!(pool.reserved(), 0);
     }
