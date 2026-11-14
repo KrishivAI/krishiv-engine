@@ -1306,17 +1306,10 @@ fn read_source(source: &ReadSource) -> Result<pb::ReadSource> {
             options: options(o)?,
         }),
         ReadSource::Files {
-            schema: Some(_), ..
-        } => {
-            return Err(CodecError::Unsupported(
-                "a read with a user schema".to_owned(),
-            ));
-        }
-        ReadSource::Files {
             format,
             paths,
             options: o,
-            schema: None,
+            schema,
         } => Kind::Files(pb::FilesSource {
             format: format.clone(),
             paths: paths
@@ -1324,6 +1317,11 @@ fn read_source(source: &ReadSource) -> Result<pb::ReadSource> {
                 .map(|p| option("path", p))
                 .collect::<Result<_>>()?,
             options: options(o)?,
+            schema: schema
+                .as_ref()
+                .map(user_schema)
+                .transpose()?
+                .unwrap_or_default(),
         }),
         _ => {
             return Err(CodecError::Unsupported(
@@ -1332,6 +1330,18 @@ fn read_source(source: &ReadSource) -> Result<pb::ReadSource> {
         }
     };
     Ok(pb::ReadSource { kind: Some(kind) })
+}
+
+/// The JSON form of a read's user schema, within the depth a reader accepts.
+fn user_schema(schema: &krishiv_types::StructType) -> Result<String> {
+    let t = DataType::Struct(schema.clone());
+    if t.nesting_depth() > DataType::MAX_NESTING_DEPTH {
+        return Err(CodecError::Unsupported(format!(
+            "a type nested more than {} levels deep",
+            DataType::MAX_NESTING_DEPTH
+        )));
+    }
+    Ok(t.json())
 }
 
 /// A file write as plan data.

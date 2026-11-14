@@ -1021,6 +1021,34 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             },
         ),
         (
+            "read_user_schema",
+            PhysNode::Scan(ScanNode {
+                scan: Scan {
+                    source: ReadSource::Files {
+                        format: "csv".to_owned(),
+                        paths: vec![OptionValue::Plain("/data/p".to_owned())],
+                        options: BTreeMap::from([(
+                            "header".to_owned(),
+                            OptionValue::Plain("true".to_owned()),
+                        )]),
+                        // Nullability and metadata travel with it.
+                        schema: Some(krishiv_types::StructType::new([
+                            krishiv_types::StructField::new("a", DataType::Integer, false),
+                            krishiv_types::StructField::new("k", DataType::Long, true)
+                                .with_metadata(krishiv_types::Metadata::with_comment("part")),
+                        ])),
+                    },
+                    output: vec![
+                        column(1, "a", DataType::Integer, true),
+                        column(2, "k", DataType::Long, true),
+                    ],
+                    version: None,
+                },
+                projection: vec![ColumnPath::new("a"), ColumnPath::new("k")],
+                ..file_scan()
+            }),
+        ),
+        (
             "top_n",
             PhysNode::TopN {
                 input: boxed(scan()),

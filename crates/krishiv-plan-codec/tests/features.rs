@@ -765,6 +765,39 @@ fn a_reader_without_the_filter_feature_refuses_a_masked_aggregate() {
 }
 
 #[test]
+fn a_reader_without_read_user_schema_refuses_a_read_with_one() {
+    let with = cases()
+        .into_iter()
+        .find(|(n, _)| n == "read_user_schema")
+        .unwrap()
+        .1;
+    let bytes = encode(&with).unwrap();
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &ReaderFeatures::only([])).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["read_user_schema".to_owned()]
+        }
+    );
+    assert_eq!(
+        decode_with(
+            &bytes,
+            &Limits::default(),
+            &ReaderFeatures::only([Feature::ReadUserSchema])
+        )
+        .unwrap(),
+        with
+    );
+    assert_eq!(Feature::ReadUserSchema.kind(), FeatureKind::Semantic);
+    // The same read without a schema needs no feature and encodes as before.
+    let plain = plan_of(PhysNode::Scan(inventory::file_scan()));
+    assert!(
+        plan_features(&plain).is_empty(),
+        "{:?}",
+        plan_features(&plain)
+    );
+}
+
+#[test]
 fn a_reader_without_write_column_types_refuses_the_plan_naming_it() {
     let bytes = encode(
         &cases()

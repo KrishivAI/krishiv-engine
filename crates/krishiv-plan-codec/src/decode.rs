@@ -1453,9 +1453,21 @@ fn read_source(m: &pb::ReadSource) -> Result<ReadSource> {
             format: f.format.clone(),
             paths: f.paths.iter().map(option).collect::<Result<_>>()?,
             options: options(&f.options)?,
-            schema: None,
+            schema: user_schema(&f.schema)?,
         },
     })
+}
+
+/// A read's user schema from its JSON form; empty is none.
+fn user_schema(json: &str) -> Result<Option<krishiv_types::StructType>> {
+    if json.is_empty() {
+        return Ok(None);
+    }
+    // The canonical form only, as for a nested type: the bytes re-encode alike.
+    match DataType::from_canonical_json(json) {
+        Ok(DataType::Struct(s)) if DataType::Struct(s.clone()).json() == json => Ok(Some(s)),
+        _ => Err(corrupt("an invalid read schema")),
+    }
 }
 
 fn option(m: &pb::OptionValue) -> Result<OptionValue> {

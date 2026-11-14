@@ -985,6 +985,11 @@ message FilesSource {
   string format = 1;
   repeated OptionValue paths = 2;
   map<string, OptionValue> options = 3;
+  // feature: read_user_schema
+  // The user's schema of the read (`spark.read.schema`) as Spark's JSON form
+  // of a struct type (`DataType.json`), which keeps nullability and field
+  // metadata; empty when the read infers its schema.
+  string schema = 4;
 }
 
 // A data source option: plain text or a reference to a secret. An inline

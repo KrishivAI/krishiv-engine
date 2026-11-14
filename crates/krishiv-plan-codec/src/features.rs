@@ -155,6 +155,7 @@ registry! {
     (percentile_aggregates, PercentileAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The percentile family and `approx_count_distinct` aggregates (`percentile`, `percentile_approx`, `percentile_disc`, `approx_count_distinct` with their folded parameters)."),
     (python_udf, PythonUdf, POST_MIGRATION_READER_VERSION, Semantic, "Python UDF calls (`PythonUdfFunction`, by name and registration version) and the `PythonEval` node evaluating them; a worker without a UDF runtime refuses the plan."),
     (range, Range, POST_MIGRATION_READER_VERSION, Semantic, "The `Range` node (`range(start, end, step, numSlices)`)."),
+    (read_user_schema, ReadUserSchema, POST_MIGRATION_READER_VERSION, Semantic, "A read of files with the user's schema (`spark.read.schema`, `FilesSource.schema`): the files are read as its columns say. A reader without it would infer the schema again."),
     (rust_udaf, RustUdaf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust aggregate UDF (`UdafCall`, by name and version, with its argument and state columns)."),
     (rust_udf, RustUdf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust UDF (`UdfFunction`, by name and version)."),
     (session_zone_name, SessionZoneName, POST_MIGRATION_READER_VERSION, Semantic, "The configured session time zone name (`spark.sql.session.timeZone`) where it differs from the rendered offset; without it a worker shows the offset in `current_timezone()` and `VV`/`z` patterns."),
@@ -239,6 +240,8 @@ pub enum Construct<'a> {
     Generator(krishiv_plan::GeneratorKind),
     /// A hash join's probe selection (`HashJoinPlan.select`).
     ProbeSelect,
+    /// A read of files with the user's schema (`ReadSource::Files::schema`).
+    ReadUserSchema,
 }
 
 /// The feature a type needs on its own. The walk reports a type inside an
@@ -479,6 +482,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         Construct::EvalMode => Some(Feature::CapturedEvalMode),
         Construct::WriteColumnTypes => Some(Feature::WriteColumnTypes),
         Construct::ProbeSelect => Some(Feature::FusedProbe),
+        Construct::ReadUserSchema => Some(Feature::ReadUserSchema),
         Construct::Generator(kind) => match kind {
             krishiv_plan::GeneratorKind::VariantExplode => Some(Feature::VariantExplode),
             krishiv_plan::GeneratorKind::Explode
@@ -694,9 +698,15 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
                 .iter()
                 .for_each(|field| visit_arrow_field(field, f));
         }
-        PhysNode::Scan(_)
-        | PhysNode::LateFetch { .. }
-        | PhysNode::OneRow
+        PhysNode::Scan(scan) | PhysNode::LateFetch { scan, .. } => {
+            if let krishiv_plan::ReadSource::Files {
+                schema: Some(_), ..
+            } = &scan.scan.source
+            {
+                f(Construct::ReadUserSchema);
+            }
+        }
+        PhysNode::OneRow
         | PhysNode::SharedRead { .. }
         | PhysNode::UnionLoop { .. }
         | PhysNode::LoopRef { .. }
@@ -800,6 +810,20 @@ fn types_of<'a>(node: &'a PhysNode) -> Vec<&'a DataType> {
     }
     if let PhysNode::Scan(scan) | PhysNode::LateFetch { scan, .. } = node {
         out.extend(scan.scan.output.iter().map(|c| &c.data_type));
+        // The schema's own types: its fields name them, not the struct
+        // (which travels as JSON, not as a nested type).
+        if let krishiv_plan::ReadSource::Files {
+            schema: Some(schema),
+            ..
+        } = &scan.scan.source
+        {
+            out.extend(
+                schema
+                    .fields()
+                    .iter()
+                    .map(krishiv_types::StructField::data_type),
+            );
+        }
     }
     if let PhysNode::WriteFiles { write: Some(w), .. } = node {
         out.extend(w.column_types.values());

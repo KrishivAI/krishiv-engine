@@ -1132,6 +1132,12 @@ pub struct FilesSource {
         ::prost::alloc::string::String,
         OptionValue,
     >,
+    /// feature: read_user_schema
+    /// The user's schema of the read (`spark.read.schema`) as Spark's JSON form
+    /// of a struct type (`DataType.json`), which keeps nullability and field
+    /// metadata; empty when the read infers its schema.
+    #[prost(string, tag = "4")]
+    pub schema: ::prost::alloc::string::String,
 }
 /// A data source option: plain text or a reference to a secret. An inline
 /// secret or a URL carrying credentials is not encodable (ADR 0038).
