@@ -69,6 +69,14 @@ enum Fault {
     Duplicated,
 }
 
+/// What happens at a [`When`] point.
+enum Action {
+    /// Another writer's request, landed.
+    Foreign(Foreign),
+    /// Every held request lands (a gateway's late delivery).
+    LandHeld,
+}
+
 /// When a foreign writer commits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum When {
@@ -103,7 +111,7 @@ struct State {
     loads: Vec<bool>,
     /// Loads still to fail (a 503 on `loadTable`).
     failing_loads: usize,
-    foreign: Vec<(When, Foreign)>,
+    foreign: Vec<(When, Action)>,
 }
 
 /// The catalog under test: one table, a script of faults.
@@ -215,6 +223,12 @@ impl State {
         }
     }
 
+    /// Lands every held request; how many were applied.
+    fn land_held(&mut self) -> usize {
+        let held: Vec<Request> = self.pending.drain(..).map(|p| p.request).collect();
+        held.iter().filter(|r| self.land(r).is_ok()).count()
+    }
+
     /// One load went by: delayed requests whose count runs out land.
     fn tick(&mut self) {
         let mut due = Vec::new();
@@ -274,20 +288,30 @@ impl TestCatalog {
     }
 
     fn on(&self, when: When, f: Foreign) {
-        self.state.lock().unwrap().foreign.push((when, f));
+        self.state
+            .lock()
+            .unwrap()
+            .foreign
+            .push((when, Action::Foreign(f)));
+    }
+
+    /// Lands every held request at `when`.
+    fn land_held_at(&self, when: When) {
+        self.state
+            .lock()
+            .unwrap()
+            .foreign
+            .push((when, Action::LandHeld));
     }
 
     fn fail_loads(&self, n: usize) {
         self.state.lock().unwrap().failing_loads = n;
     }
 
-    /// Lands every held request (a gateway's late delivery).
-    fn land_held(&self) {
-        let mut s = self.state.lock().unwrap();
-        let held: Vec<Request> = s.pending.drain(..).map(|p| p.request).collect();
-        for r in held {
-            let _ = s.land(&r);
-        }
+    /// Lands every held request (a gateway's late delivery); how many
+    /// were applied.
+    fn land_held(&self) -> usize {
+        self.state.lock().unwrap().land_held()
     }
 
     fn metadata(&self) -> (TableMetadata, String) {
@@ -303,7 +327,7 @@ impl TestCatalog {
         self.state.lock().unwrap().loads.clone()
     }
 
-    /// Commits the foreign writers due `when`, in order.
+    /// Runs the actions due `when`, in order.
     async fn foreign(&self, when: When) {
         loop {
             let (f, meta) = {
@@ -311,7 +335,13 @@ impl TestCatalog {
                 let Some(i) = s.foreign.iter().position(|(w, _)| *w == when) else {
                     return;
                 };
-                (s.foreign.remove(i).1, s.meta.clone())
+                match s.foreign.remove(i).1 {
+                    Action::Foreign(f) => (f, s.meta.clone()),
+                    Action::LandHeld => {
+                        s.land_held();
+                        continue;
+                    }
+                }
             };
             let request = f(meta).await;
             let mut s = self.state.lock().unwrap();
@@ -742,7 +772,7 @@ fn an_apply_delayed_past_the_budget_is_state_unknown_and_deletes_nothing() {
     assert_eq!(c.cat.loads().len(), 20);
     assert!(exists(&c.list(1)) && exists(&c.manifest()) && exists(&c.data()));
     c.check(&[INIT]);
-    c.cat.land_held();
+    assert_eq!(c.cat.land_held(), 1);
     c.check(&[INIT, MINE]);
 }
 
@@ -758,7 +788,10 @@ fn the_total_timeout_bounds_the_probes() {
     );
     assert_eq!(c.cat.requests(), 1);
     assert_eq!(c.waits(), [1000, 2000, 4000]);
-    assert!(exists(&c.list(1)) && exists(&c.data()));
+    assert!(exists(&c.list(1)) && exists(&c.manifest()) && exists(&c.data()));
+    c.check(&[INIT]);
+    assert_eq!(c.cat.land_held(), 1);
+    c.check(&[INIT, MINE]);
 }
 
 /// §10 36a: a resend answered 401 says nothing about the first request,
@@ -794,7 +827,7 @@ fn a_401_on_every_resend_is_state_unknown_and_deletes_nothing() {
         ErrorClass::KrishivIcebergCommitStateUnknown
     );
     assert!(exists(&c.list(1)) && exists(&c.manifest()) && exists(&c.data()));
-    c.cat.land_held();
+    assert_eq!(c.cat.land_held(), 1);
     c.check(&[INIT, MINE]);
 }
 
@@ -891,8 +924,13 @@ fn a_stale_answer_to_a_resend_leaves_the_write_unknown() {
         e.error_class(),
         ErrorClass::KrishivIcebergCommitStateUnknown
     );
-    assert!(exists(&c.list(1)) && exists(&c.manifest()) && exists(&c.data()));
-    c.cat.land_held();
+    // Four attempts (the fifth request's budget check comes first).
+    for n in 1..=4 {
+        assert!(exists(&c.list(n)), "list {n}");
+    }
+    assert!(!exists(&c.list(5)));
+    assert!(exists(&c.manifest()) && exists(&c.data()));
+    assert_eq!(c.cat.land_held(), 1);
     c.check(&[INIT, MINE]);
 }
 
@@ -909,8 +947,24 @@ fn an_append_commits_across_a_v2_to_v3_upgrade() {
     let s = m.snapshot_by_id(OURS).unwrap();
     assert_eq!(s.parent_snapshot_id(), Some(920));
     let (first, added) = s.row_range().unwrap();
-    assert_eq!(m.next_row_id(), first + added);
-    assert!(added >= 1, "{added}");
+    // The first v3 list (the foreign commit's) assigned ids 0 and 1 to the
+    // pre-upgrade manifest's row and its own; this write's one row is 2.
+    assert_eq!((first, added), (2, 1));
+    assert_eq!(m.next_row_id(), 3);
+    let listed = c
+        .env
+        .rt
+        .block_on(super::scan::read_manifest_files(
+            &c.env.reg.file_io(),
+            s.manifest_list(),
+            3,
+            MAX,
+        ))
+        .unwrap();
+    assert!(
+        listed.iter().all(|f| f.first_row_id.is_some()),
+        "{listed:?}"
+    );
     c.check(&[INIT, MINE, "920|1|f.parquet"]);
 }
 
@@ -940,6 +994,7 @@ fn a_bad_retry_property_is_refused_before_any_request() {
     assert!(e.to_string().contains("commit.retry.num-retries"), "{e}");
     assert_eq!(c.cat.requests(), 0);
     assert!(!exists(&c.manifest()) && !exists(&c.data()));
+    c.check(&[INIT]);
 }
 
 /// R:B1: a 409 says nothing about the write until the own-key search has run
@@ -1048,7 +1103,7 @@ fn a_key_match_on_another_id_deletes_nothing_while_unresolved() {
     let m = c.run().unwrap();
     assert!(m.snapshot_by_id(951).is_some());
     assert!(exists(&c.list(1)) && exists(&c.manifest()) && exists(&c.data()));
-    c.cat.land_held();
+    assert_eq!(c.cat.land_held(), 1);
     let (m, loc) = c.cat.metadata();
     assert_eq!(m.current_snapshot_id(), Some(OURS));
     assert_eq!(rows(&c.env, &loc), [INIT, MINE]);
@@ -1070,4 +1125,168 @@ fn a_foreign_snapshot_with_this_id_is_a_conflict() {
     );
     assert!(!exists(&c.list(1)) && !exists(&c.manifest()) && !exists(&c.data()));
     c.check(&[INIT, "7000|1|f.parquet"]);
+}
+
+/// R:S2, `Probe::Moved`: a 503 before the table, then another writer moves
+/// `main` before the first probe: "not applied" is final, the write is
+/// rebased on the foreign head, one snapshot, the first list deleted.
+#[test]
+fn an_unknown_answer_then_a_moved_branch_rebases() {
+    let mut c = case();
+    c.cat.script(&[Fault::ServerErrorBeforeApply]);
+    c.cat
+        .on(When::BeforeLoad(1), c.foreign("f.parquet", 960, "main"));
+    let m = c.run().unwrap();
+    let s = m.snapshot_by_id(OURS).unwrap();
+    assert_eq!(s.parent_snapshot_id(), Some(960));
+    assert_eq!(s.manifest_list(), c.list(2));
+    assert_eq!(c.cat.requests(), 2);
+    assert_eq!(c.cat.loads().len(), 1);
+    assert!(!exists(&c.list(1)) && exists(&c.list(2)));
+    assert!(exists(&c.manifest()) && exists(&c.data()));
+    c.check(&[INIT, MINE, "960|1|f.parquet"]);
+}
+
+/// R:S2, `resolve`: a held request, then the branch moves, so the held
+/// request is dead (it asserts the old base); every later attempt loses a
+/// race: `KRISHIV_ICEBERG_COMMIT_FAILED`, everything deleted, and the held
+/// request is refused when it lands.
+#[test]
+fn a_held_request_left_behind_by_a_moved_branch_is_resolved() {
+    let mut c = case();
+    c.cat.script(&[Fault::Held]);
+    c.cat
+        .on(When::BeforeLoad(1), c.foreign("f1.parquet", 961, "main"));
+    for n in 2..=5 {
+        c.cat.on(
+            When::BeforeRequest(n),
+            c.foreign(
+                &format!("f{n}.parquet"),
+                960 + i64::try_from(n).unwrap(),
+                "main",
+            ),
+        );
+    }
+    let e = c.run().unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergCommitFailed,
+        "{e}"
+    );
+    assert_eq!(c.cat.requests(), 5);
+    for n in 1..=5 {
+        assert!(!exists(&c.list(n)), "list {n}");
+    }
+    assert!(!exists(&c.manifest()) && !exists(&c.data()));
+    assert_eq!(c.cat.land_held(), 0);
+    c.check(&[
+        INIT,
+        "961|1|f1.parquet",
+        "962|1|f2.parquet",
+        "963|1|f3.parquet",
+        "964|1|f4.parquet",
+        "965|1|f5.parquet",
+    ]);
+}
+
+/// R:S2: a held request, the branch moves, the rebase commits; the held
+/// request is refused when it lands, so the rows are in the table once.
+#[test]
+fn a_held_request_then_a_moved_branch_commits_once() {
+    let mut c = case();
+    c.cat.script(&[Fault::Held]);
+    c.cat
+        .on(When::BeforeLoad(1), c.foreign("f.parquet", 966, "main"));
+    let m = c.run().unwrap();
+    assert_eq!(m.snapshot_by_id(OURS).unwrap().manifest_list(), c.list(2));
+    assert!(!exists(&c.list(1)) && exists(&c.list(2)));
+    assert_eq!(c.cat.land_held(), 0);
+    c.check(&[INIT, MINE, "966|1|f.parquet"]);
+}
+
+/// R:S2, `finish` with an error while unresolved: a held request, a stale
+/// answer to its resend (the rebase follows, the held request still live),
+/// then a 401 to the new attempt's first request: that failure is known for
+/// its request only, so `KRISHIV_ICEBERG_COMMIT_STATE_UNKNOWN` and nothing
+/// deleted; the held request lands later and reads back once.
+#[test]
+fn an_error_while_unresolved_is_state_unknown() {
+    let mut c = case();
+    c.cat
+        .script(&[Fault::Held, Fault::Stale400, Fault::Unauthorized401]);
+    let e = c.run().unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergCommitStateUnknown,
+        "{e}"
+    );
+    assert!(e.to_string().contains("401"), "{e}");
+    assert_eq!(c.cat.requests(), 3);
+    assert!(exists(&c.list(1)) && exists(&c.list(2)));
+    assert!(exists(&c.manifest()) && exists(&c.data()));
+    assert_eq!(c.cat.land_held(), 1);
+    c.check(&[INIT, MINE]);
+}
+
+/// R:S2, §7.4 "it may be an earlier attempt's": a held request, a stale
+/// answer to its resend, a rebase, and the held request lands before the
+/// rebased attempt is sent: that one gets 409 and the own-key search finds
+/// attempt 1's snapshot: committed, list 1 kept, list 2 deleted.
+#[test]
+fn an_earlier_attempt_found_after_a_rebase_is_kept() {
+    let mut c = case();
+    c.cat.script(&[Fault::Held, Fault::Stale400]);
+    c.cat.land_held_at(When::BeforeRequest(3));
+    let m = c.run().unwrap();
+    assert_eq!(m.current_snapshot_id(), Some(OURS));
+    assert_eq!(m.snapshot_by_id(OURS).unwrap().manifest_list(), c.list(1));
+    assert_eq!(c.cat.requests(), 3);
+    assert!(exists(&c.list(1)) && !exists(&c.list(2)));
+    assert!(exists(&c.manifest()) && exists(&c.data()));
+    c.check(&[INIT, MINE]);
+}
+
+/// R:S2, §7.3 step 4a.0: a replaced table (another UUID) is
+/// `KRISHIV_ICEBERG_COMMIT_CONFLICT`, never a rebase onto it; every outcome
+/// known, so the write's files are deleted.
+#[test]
+fn a_replaced_table_is_a_conflict() {
+    let mut c = case();
+    let update: TableUpdate = serde_json::from_value(serde_json::json!({
+        "action": "assign-uuid",
+        "uuid": "0b8f1e0c-1d2e-4f3a-9b4c-5d6e7f809a1b",
+    }))
+    .unwrap();
+    c.cat.on(
+        When::BeforeRequest(1),
+        Box::new(move |_| Box::pin(async move { (vec![], vec![update]) })),
+    );
+    let e = c.run().unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergCommitConflict,
+        "{e}"
+    );
+    assert!(e.message().contains("UUID"), "{e}");
+    assert_eq!(c.cat.requests(), 1);
+    assert!(!exists(&c.list(1)) && !exists(&c.manifest()) && !exists(&c.data()));
+    c.check(&[INIT]);
+}
+
+/// R:S2, §7.3 step 4a.0: a v1 → v3 upgrade under an append is a conflict
+/// (only v2 → v3 is rebased; Java reuses its manifests across any upgrade,
+/// a divergence toward refusal).
+#[test]
+fn a_v1_to_v3_upgrade_is_a_conflict() {
+    let mut c = case_with(1, &[]);
+    c.cat.on(When::BeforeRequest(1), upgrade(FormatVersion::V3));
+    let e = c.run().unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergCommitConflict,
+        "{e}"
+    );
+    assert!(e.message().contains("from 1 to 3"), "{e}");
+    assert!(!exists(&c.list(1)) && !exists(&c.manifest()) && !exists(&c.data()));
+    c.check(&[INIT]);
 }
