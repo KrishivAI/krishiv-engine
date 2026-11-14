@@ -46,7 +46,7 @@ impl QueryCatalog {
                 format,
                 paths,
                 options,
-                ..
+                schema,
             } = source
             else {
                 continue;
@@ -65,7 +65,11 @@ impl QueryCatalog {
                         .listing_known(format, paths, options, Arc::clone(table), partitions)
                         .await?
                 }
-                _ => self.files.listing(format, paths, options).await?,
+                _ => {
+                    self.files
+                        .listing_with_schema(format, paths, options, schema.as_ref())
+                        .await?
+                }
             };
             let opened = open_table(
                 Arc::clone(&listing.format),

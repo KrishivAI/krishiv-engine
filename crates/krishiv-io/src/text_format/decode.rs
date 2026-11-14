@@ -76,7 +76,9 @@ impl TextDecoder {
         for f in schema.fields() {
             if f.name() == ROW_INDEX_COLUMN {
                 outs.push(Out::RowIndex);
-            } else if f.name() == "value" && names.contains(&"value") {
+            } else if names.contains(&f.name().as_str()) {
+                // The table's one column is the line, whatever its name (a
+                // user schema may call it `line`, as Spark allows).
                 outs.push(Out::Value);
             } else {
                 return Err(crate::error::FormatError::Other(internal(format!(

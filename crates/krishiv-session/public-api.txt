@@ -839,6 +839,8 @@ pub fn krishiv_session::DataFrameReader::format(self, &str) -> Self
 pub fn krishiv_session::DataFrameReader::load<S: core::convert::AsRef<str>>(self, impl core::iter::traits::collect::IntoIterator<Item = S>) -> krishiv_session::DataFrame
 pub fn krishiv_session::DataFrameReader::option(self, &str, &str) -> Self
 pub fn krishiv_session::DataFrameReader::parquet<S: core::convert::AsRef<str>>(self, impl core::iter::traits::collect::IntoIterator<Item = S>) -> krishiv_session::DataFrame
+pub fn krishiv_session::DataFrameReader::schema(self, krishiv_types::nested::StructType) -> Self
+pub fn krishiv_session::DataFrameReader::schema_ddl(self, &str) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 impl core::clone::Clone for krishiv_session::DataFrameReader
 pub fn krishiv_session::DataFrameReader::clone(&self) -> krishiv_session::DataFrameReader
 impl core::fmt::Debug for krishiv_session::DataFrameReader

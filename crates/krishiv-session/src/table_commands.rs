@@ -826,26 +826,47 @@ impl Session {
                 .into());
             }
         }
+        // The declared columns are the read's user schema (Spark's `CreateTempViewUsing` resolves the relation
+        // with it now): the partition columns under the path come last, typed as declared, else inferred.
+        let schema =
+            krishiv_types::StructType::new(columns.iter().map(|c| {
+                krishiv_types::StructField::new(&c.name, c.data_type.clone(), c.nullable)
+            }));
+        let options: BTreeMap<String, OptionValue> = options
+            .into_iter()
+            .map(|(k, val)| {
+                let val = OptionValue::from_user(&k, val);
+                (k, val)
+            })
+            .collect();
+        let resolver = env
+            .analysis
+            .files
+            .as_ref()
+            .ok_or_else(|| unsupported("reading files in this session"))?;
+        let columns = resolver
+            .with_schema(&provider, &paths, &options, &schema)
+            .await?
+            .into_iter()
+            .map(|c| TableColumn {
+                nullable: true,
+                ..c
+            })
+            .collect();
         let source = krishiv_plan::ReadSource::Files {
             format: provider,
             paths,
-            options: options
-                .into_iter()
-                .map(|(k, val)| {
-                    let val = OptionValue::from_user(&k, val);
-                    (k, val)
-                })
-                .collect(),
-            schema: None,
+            options,
+            schema: Some(schema),
         };
         self.state.catalog.put(
             name,
             crate::catalog::TempTable::Files {
                 source,
                 columns,
-                known: true,
+                known: false,
                 permanent: false,
-                partitions: Some(Default::default()),
+                partitions: None,
             },
         );
         // A replaced view must not keep serving the rows of the old one.

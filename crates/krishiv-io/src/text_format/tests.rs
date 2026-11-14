@@ -382,10 +382,11 @@ fn write_then_read_round_trips() {
     let bytes = encode(&batch, &o).expect("encode");
     let back = read(&bytes, &o, &ScanRequest::all(value_schema())).expect("read back");
     assert_eq!(rows_of(&back), rows_of(std::slice::from_ref(&batch)));
-    // A missing `value` column is a planning error, never a wrong column.
+    // The table's one column is the line whatever its name: a user schema
+    // may call it anything (Spark 4.2.0, `text one column renamed`).
     let other = Arc::new(Schema::new(vec![Field::new("x", DataType::Utf8View, true)]));
-    let e = read(b"a\n", &o, &ScanRequest::all(other)).expect_err("column");
-    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    let got = read(b"a\n", &o, &ScanRequest::all(other)).expect("renamed column");
+    assert_eq!(rows_of(&got), [Some("a".to_owned())]);
 }
 
 #[test]
