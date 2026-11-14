@@ -27,14 +27,22 @@
 //!
 //! Errors end the stream with the gRPC status of [`crate::status`] after the
 //! responses before them. An interrupted operation ends with
-//! `OPERATION_CANCELED`. Commands answer `CONNECT_INVALID_PLAN` (56K00)
-//! until P3-T012.
+//! `OPERATION_CANCELED`; an encoder that panics ends it with
+//! `INTERNAL_ERROR` (Spark's `ExecuteThreadRunner` catches every
+//! `Throwable`), so no stream waits on an orphan. Commands answer
+//! `CONNECT_INVALID_PLAN` (56K00) until P3-T012, except
+//! `ml_command.clean_cache`: PySpark sends it when its process exits, and
+//! with no ML cache there is nothing to clean, so it is an operation with no
+//! response but `result_complete` (when reattachable). Spark sends an
+//! `ml_command_result` whose shape is unverified; Krishiv sends none.
 //!
 //! The core is protocol-neutral where it is cheap: the plan is decoded into
 //! a `krishiv_plan::Plan`, run as a `DataFrame` and encoded as Arrow IPC;
 //! only the envelope is Connect's.
 
 pub mod arrow;
+#[cfg(test)]
+mod hooks;
 pub mod schema;
 
 use std::io::Read;
@@ -44,8 +52,8 @@ use arrow_schema::SchemaRef;
 use futures::StreamExt;
 use krishiv_common::error::{
     ConnectInvalidPlanInvalidEnum, ConnectInvalidPlanInvalidOneOfFieldNotSet,
-    ConnectInvalidPlanPlanSizeLargerThanMax, InvalidCursorNotReattachable, KrishivError,
-    OperationCanceled,
+    ConnectInvalidPlanPlanSizeLargerThanMax, InternalError, InvalidCursorNotReattachable,
+    KrishivError, OperationCanceled,
 };
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::execute_plan_request::request_option::RequestOption;
@@ -254,31 +262,41 @@ pub async fn execute_plan(
         op: Some(Arc::clone(&op)),
     };
     let session = entry.session();
-    let conf = session.conf();
     let empty = pb::Plan::default();
     let plan = request.plan.as_ref().unwrap_or(&empty);
-    let prepared = until_cancelled(&op, async {
-        // Decompression (up to `maxPlanSize`) runs off the async workers.
-        let logical = request_plan(session, plan, limits).await?;
-        let df = session.from_plan_with(&logical, QueryOptions::new().operation_id(id.as_str()))?;
-        let schema = df.schema().await?;
-        Ok((df, schema))
-    })
-    .await;
-    // A preparation error settles like a query error: an interrupt that
-    // reported this operation first turns it into `OPERATION_CANCELED`.
-    let (df, schema) = match prepared {
-        Ok(ready) => ready,
-        Err(e) => {
-            return Err(if op.finish() {
-                e
-            } else {
-                OperationCanceled {}.into()
-            });
-        }
+    let work = if is_ml_clean_cache(plan) {
+        Work::NoResult
+    } else {
+        let prepared = until_cancelled(&op, async {
+            #[cfg(test)]
+            hooks::preparing(id.as_str()).await;
+            // Decompression (up to `maxPlanSize`) runs off the async workers.
+            let logical = request_plan(session, plan, limits).await?;
+            let df =
+                session.from_plan_with(&logical, QueryOptions::new().operation_id(id.as_str()))?;
+            let schema = df.schema().await?;
+            Ok((df, schema))
+        })
+        .await;
+        // A preparation error settles like a query error: an interrupt that
+        // reported this operation first turns it into `OPERATION_CANCELED`.
+        let (df, schema) = match prepared {
+            Ok(ready) => ready,
+            Err(e) => {
+                return Err(if op.finish() {
+                    e
+                } else {
+                    OperationCanceled {}.into()
+                });
+            }
+        };
+        Work::Query(Box::new(Query {
+            schema_response: schema::proto_schema(&schema)?,
+            settings: encode_settings(&session.conf(), limits, opts.chunking),
+            df,
+            schema,
+        }))
     };
-    let schema_response = schema::proto_schema(&schema)?;
-    let settings = encode_settings(&conf, limits, opts.chunking);
 
     let sender = Sender {
         ahead: Arc::new(Semaphore::new(
@@ -300,8 +318,26 @@ pub async fn execute_plan(
     // before its first stream.
     let stream = sender::attach(Arc::clone(&op), operations, 0, SenderCaps::of(&op, limits));
     registered.keep();
-    tokio::spawn(encode(sender, df, schema, schema_response, settings));
+    tokio::spawn(encode(sender, work));
     Ok(stream)
+}
+
+/// Whether `plan` is exactly `Command{ml_command{clean_cache}}`, the ML
+/// cache cleanup PySpark 4.3.0 sends at exit (`_cleanup_ml_cache`, before
+/// `release_session`): answered with nothing to clean (connect-mapping §4
+/// row 17, decision 11). Every other command, and this one compressed, stays
+/// 56K00.
+fn is_ml_clean_cache(plan: &pb::Plan) -> bool {
+    use krishiv_connect::proto::v4_3::command::CommandType;
+    use krishiv_connect::proto::v4_3::ml_command::Command as MlCommand;
+    matches!(
+        &plan.op_type,
+        Some(OpType::Command(command)) if matches!(
+            &command.command_type,
+            Some(CommandType::MlCommand(ml))
+                if matches!(ml.command, Some(MlCommand::CleanCache(_)))
+        )
+    )
 }
 
 /// The engine plan of a request's `Plan`: a compressed one decompressed
@@ -580,25 +616,92 @@ impl Sender {
     }
 }
 
-async fn encode(
-    sender: Sender,
+/// What an operation's encoder streams.
+enum Work {
+    /// A query's result: schema, batches, metrics, then `result_complete`
+    /// when reattachable.
+    Query(Box<Query>),
+    /// A command with no result (`ml_command.clean_cache`): only
+    /// `result_complete`, when reattachable.
+    NoResult,
+}
+
+/// A prepared query and how its result is encoded.
+struct Query {
     df: DataFrame,
     schema: SchemaRef,
     schema_response: pb::DataType,
     settings: EncodeSettings,
-) {
+}
+
+impl Work {
+    async fn produce(&self, sender: &Sender) -> Result<(), Stop> {
+        match self {
+            Self::Query(q) => {
+                produce(
+                    sender,
+                    &q.df,
+                    &q.schema,
+                    q.schema_response.clone(),
+                    &q.settings,
+                )
+                .await
+            }
+            Self::NoResult => {
+                sender.admit().await?;
+                complete(sender).await
+            }
+        }
+    }
+}
+
+/// Settles its operation when dropped unsettled: the encoder task unwound
+/// (a panic in a kernel or the IPC writer). Without it the operation would
+/// be an orphan (Spark's `ExecuteHolder.isOrphan`): a non-reattachable
+/// stream would wait forever and a reattachable one reattach forever. Spark
+/// catches every `Throwable` of the execution and sends it as the stream's
+/// error (`ExecuteThreadRunner.execute`, v4.3.0 lines 122-160); Krishiv
+/// sends `INTERNAL_ERROR`, or `OPERATION_CANCELED` after an interrupt.
+struct Unsettled(Option<Arc<Operation>>);
+
+impl Unsettled {
+    fn settle(mut self, outcome: Result<(), Stop>) {
+        if let Some(op) = self.0.take() {
+            settle(&op, outcome);
+        }
+    }
+}
+
+impl Drop for Unsettled {
+    fn drop(&mut self) {
+        if let Some(op) = self.0.take() {
+            tracing::error!(
+                target: "krishiv::connect",
+                operation = op.id().as_str(),
+                "the response encoder of a Connect operation stopped without settling it"
+            );
+            let error = InternalError {
+                message: "the response encoder of the operation stopped unexpectedly".to_owned(),
+            };
+            settle(&op, Err(Stop::Failed(error.into())));
+        }
+    }
+}
+
+async fn encode(sender: Sender, work: Work) {
     let op = Arc::clone(&sender.op);
+    let guard = Unsettled(Some(Arc::clone(&op)));
     // A close or an interrupt is seen at once, also while the encoder
     // waits for admission, the query's first batch, a budget or memory.
     let outcome = tokio::select! {
         biased;
         () = op.closed() => Err(Stop::Gone),
         () = op.cancelled() => Err(Stop::Failed(OperationCanceled {}.into())),
-        r = produce(&sender, &df, &schema, schema_response, &settings) => r,
+        r = work.produce(&sender) => r,
     };
     // The query's stream is gone by now (dropped with `produce`).
-    drop(df);
-    settle(&op, outcome);
+    drop(work);
+    guard.settle(outcome);
 }
 
 /// Ends `op`'s stream after its encoder stopped with `outcome`. The
@@ -636,6 +739,8 @@ async fn produce(
     let mut first = sender.response(None);
     first.schema = Some(schema_response);
     sender.send(first).await?;
+    #[cfg(test)]
+    hooks::encoding(sender.op.id().as_str());
     let mut stream: RecordBatchStream = df.execute_stream().await?;
     let mut offset: i64 = 0;
     let mut sent = false;
@@ -657,6 +762,12 @@ async fn produce(
     // metrics (a follow-up); until then the list is empty.
     metrics.metrics = Some(Metrics::default());
     sender.send(metrics).await?;
+    complete(sender).await
+}
+
+/// Ends the operation's responses after its last one: `result_complete`
+/// when reattachable, then the end of its stream.
+async fn complete(sender: &Sender) -> Result<(), Stop> {
     // The end is atomic with interrupts: once finished, an interrupt
     // interrupts nothing; an interrupt that came first turns the end into
     // OPERATION_CANCELED (Spark's `ExecuteThreadRunner`, v4.3.0 lines
@@ -715,5 +826,7 @@ async fn send_batch(
     }
 }
 
+#[cfg(test)]
+mod fault_tests;
 #[cfg(test)]
 mod tests;

@@ -1032,3 +1032,116 @@ async fn large_row_result() {
         .expect("utf8");
     assert_eq!(s.value(0).len(), 65_536);
 }
+
+/// A plan of `Command{ml_command{..}}`.
+fn ml_command(command: pb::ml_command::Command) -> pb::Plan {
+    pb::Plan {
+        op_type: Some(OpType::Command(Box::new(pb::Command {
+            command_type: Some(pb::command::CommandType::MlCommand(Box::new(
+                pb::MlCommand {
+                    command: Some(command),
+                },
+            ))),
+        }))),
+    }
+}
+
+fn clean_cache() -> pb::Plan {
+    ml_command(pb::ml_command::Command::CleanCache(
+        pb::ml_command::CleanCache {},
+    ))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ml_clean_cache_succeeds_with_nothing_to_clean() {
+    // PySpark 4.3.0's `atexit` cleanup (`_cleanup_ml_cache`) sends it before
+    // `release_session` (connect-mapping §4 row 17, decision 11).
+    let run = start().await;
+    let entry = run
+        .manager
+        .get_or_create(&Principal::local_user(), SESSION, None, "u")
+        .expect("session");
+    // Not reattachable: no response, the stream ends OK.
+    let responses = collect(&run.channel, request(clean_cache()))
+        .await
+        .expect("clean_cache");
+    assert!(responses.is_empty(), "{} responses", responses.len());
+    eventually("the operation leaves", || entry.operations().is_empty()).await;
+
+    // Reattachable: only `ResultComplete`, then it reattaches and releases
+    // like any other operation.
+    let id = "00112233-4455-6677-8899-aabbccddee01";
+    let responses = collect(
+        &run.channel,
+        with_id(reattachable(request(clean_cache())), id),
+    )
+    .await
+    .expect("clean_cache");
+    assert_eq!(responses.len(), 1, "only ResultComplete");
+    assert!(matches!(
+        responses[0].response_type,
+        Some(ResponseType::ResultComplete(_))
+    ));
+    assert_eq!(responses[0].operation_id, id);
+    assert_eq!(responses[0].session_id, SESSION);
+    assert_eq!(entry.operations().len(), 1, "kept until released");
+    let mut again = stream(
+        &run.channel,
+        "ReattachExecute",
+        pb::ReattachExecuteRequest {
+            session_id: SESSION.to_owned(),
+            operation_id: id.to_owned(),
+            last_response_id: Some(responses[0].response_id.clone()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("reattach");
+    assert!(
+        again.message().await.expect("ok").is_none(),
+        "nothing after"
+    );
+    let released: pb::ReleaseExecuteResponse = unary(
+        &run.channel,
+        "ReleaseExecute",
+        pb::ReleaseExecuteRequest {
+            session_id: SESSION.to_owned(),
+            operation_id: id.to_owned(),
+            release: Some(pb::release_execute_request::Release::ReleaseAll(
+                pb::release_execute_request::ReleaseAll {},
+            )),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("release all");
+    assert_eq!(released.operation_id.as_deref(), Some(id));
+    assert!(entry.operations().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn other_ml_commands_stay_unsupported() {
+    let run = start().await;
+    let delete = ml_command(pb::ml_command::Command::Delete(
+        pb::ml_command::Delete::default(),
+    ));
+    let info_of = ml_command(pb::ml_command::Command::GetCacheInfo(
+        pb::ml_command::GetCacheInfo {},
+    ));
+    let empty = pb::Plan {
+        op_type: Some(OpType::Command(Box::new(pb::Command {
+            command_type: Some(pb::command::CommandType::MlCommand(Box::default())),
+        }))),
+    };
+    for plan in [delete, info_of, empty] {
+        for r in [request(plan.clone()), reattachable(request(plan))] {
+            let e = collect(&run.channel, r).await.unwrap_err();
+            assert_eq!(info(&e)["sqlState"], "56K00", "{e:?}");
+        }
+    }
+    let entry = run
+        .manager
+        .get(&Principal::local_user(), SESSION, None)
+        .expect("session");
+    assert!(entry.operations().is_empty());
+}
