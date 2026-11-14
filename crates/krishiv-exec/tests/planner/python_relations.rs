@@ -734,6 +734,25 @@ fn a_scalar_python_call_over_a_python_aggregate_runs_above_it() {
     assert!(rows.contains(&"5|2".to_owned()), "{rows:?}");
 }
 
+/// A keyless Python aggregate over no rows yields no row: Spark's
+/// `ArrowAggregatePythonExec` (L156-157 at v4.2.0) returns an empty
+/// partition as it is, without calling the UDF, unlike a built-in global
+/// aggregate's one row.
+#[test]
+fn a_keyless_python_aggregate_over_no_rows_yields_no_row() {
+    let env = env();
+    let (input, cols) = input(&env, "SELECT a, b FROM t WHERE b < 0");
+    let rt = Arc::new(Runtime::default());
+    let node = LogicalPlan::new(PlanNode::Aggregate {
+        input,
+        grouping: Grouping::GroupBy(Vec::new()),
+        aggregates: vec![alias(udaf(&cols[1]), 950, "n")],
+    });
+    let out = run_with(&env, node, Some(Arc::clone(&rt))).unwrap();
+    assert!(lines(&out).is_empty(), "{:?}", lines(&out));
+    assert!(log_of(&rt).is_empty(), "{:?}", log_of(&rt));
+}
+
 /// Two Python aggregates, one slow: each key's values pair up.
 #[test]
 fn two_python_aggregates_pair_their_values_per_key() {
