@@ -427,7 +427,7 @@ fn mask_plan(node: &mut krishiv_exec::profile::ProfileNode, names: &[String], al
         detail = mask_word(&detail, name);
     }
     if aliases {
-        detail = mask_aliases(&detail);
+        detail = mask_write_names(&mask_aliases(&detail));
     }
     node.detail = krishiv_sql::mask_literals(&detail);
     for child in &mut node.children {
@@ -460,12 +460,55 @@ fn mask_aliases(text: &str) -> String {
     out
 }
 
+/// `text` with the names a file write prints without an alias marker replaced by `?`: its `partitioned by [..]` list
+/// and the names that lead a sort key (`name ASC NULLS FIRST`). A DataFrame's partition column can be a literal's name.
+fn mask_write_names(text: &str) -> String {
+    const PARTITIONED: &str = "partitioned by [";
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(PARTITIONED) {
+        let start = at + PARTITIONED.len();
+        out.push_str(&rest[..start]);
+        rest = &rest[start..];
+        match rest.find(']') {
+            Some(end) => {
+                out.push('?');
+                rest = &rest[end..];
+            }
+            None => {
+                out.push('?');
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    // Sort keys: the item before each ` ASC` / ` DESC` is a name or an expression; either way it is hidden.
+    let mut masked = String::with_capacity(out.len());
+    for (i, item) in out.split(", ").enumerate() {
+        if i > 0 {
+            masked.push_str(", ");
+        }
+        let key_end = [" ASC", " DESC"].iter().filter_map(|k| item.find(k)).min();
+        match key_end {
+            Some(end) => {
+                let lead = item[..end].rfind('[').map_or(0, |b| b + 1);
+                masked.push_str(&item[..lead]);
+                masked.push('?');
+                masked.push_str(&item[end..]);
+            }
+            None => masked.push_str(item),
+        }
+    }
+    masked
+}
+
 /// `text` with each occurrence of `word` that is not part of a longer word replaced by `?`.
 fn mask_word(text: &str, word: &str) -> String {
     if word.is_empty() {
         return text.to_owned();
     }
-    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    // `_` is a boundary: a generated name appends to a literal with it (`hunter2_s`, a pivot's output).
+    let is_word = char::is_alphanumeric;
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(at) = rest.find(word) {

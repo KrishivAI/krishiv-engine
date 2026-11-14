@@ -467,11 +467,44 @@ fn a_file_write_of_a_literal_projection_is_masked() {
 }
 
 #[test]
+fn mask_write_names_hides_partition_and_sort_names() {
+    assert_eq!(
+        super::mask_write_names("WriteFiles parquet partitioned by [hunter2, b]"),
+        "WriteFiles parquet partitioned by [?]"
+    );
+    assert_eq!(
+        super::mask_write_names("[hunter2 ASC NULLS FIRST, b DESC NULLS LAST]"),
+        "[? ASC NULLS FIRST, ? DESC NULLS LAST]"
+    );
+    assert_eq!(super::mask_write_names("Scan t"), "Scan t");
+}
+
+#[test]
+fn a_partitioned_write_of_a_literal_column_is_masked() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let rt = runtime(dir.path(), "64m");
+    let session = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    let df = block_on(session.sql("SELECT 'huntery', id FROM range(0, 5)")).unwrap();
+    block_on(
+        df.write()
+            .partition_by(["huntery"])
+            .parquet(out.path().join("t").to_str().unwrap()),
+    )
+    .unwrap();
+    rt.profile_history.as_ref().unwrap().flush();
+    for q in read_history(dir.path()).unwrap() {
+        assert!(!q.profile.contains("huntery"), "{}", q.profile);
+    }
+}
+
+#[test]
 fn mask_word_replaces_whole_words_only() {
     assert_eq!(
         super::mask_word("a, alias, a_b, a", "a"),
-        "?, alias, a_b, ?"
+        "?, alias, ?_b, ?"
     );
+    assert_eq!(super::mask_word("hunter2_s", "hunter2"), "?_s");
     assert_eq!(super::mask_word("x", "hunter2"), "x");
     assert_eq!(super::mask_word("x", ""), "x");
 }

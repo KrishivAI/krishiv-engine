@@ -35,6 +35,17 @@ pub fn mask_literals(sql: &str) -> String {
     sanitized(sql, usize::MAX)
 }
 
+/// Hands over a finished run of adjacent string tokens as the one literal the parser joins it into, once: a
+/// prefix of the run is never a name, so no intermediate text is kept (a long run would cost quadratic memory).
+fn flush(run: &mut [String; 4], run_len: usize, push: &mut impl FnMut(String)) {
+    for acc in run.iter_mut() {
+        let joined = std::mem::take(acc);
+        if run_len > 1 {
+            push(joined);
+        }
+    }
+}
+
 /// The bodies of the string literals in `sql` (quotes and dollar tags removed, escapes left as written): the
 /// text a generated output name can carry, so a caller that masks literals can mask those names too.
 #[must_use]
@@ -78,7 +89,7 @@ pub fn string_literal_bodies(sql: &str) -> Vec<String> {
             _ => Vec::new(),
         };
         if bodies.is_empty() {
-            run = Default::default();
+            flush(&mut run, run_len, &mut push);
             run_len = 0;
             continue;
         }
@@ -87,12 +98,8 @@ pub fn string_literal_bodies(sql: &str) -> Vec<String> {
             push(b.clone());
             acc.push_str(&b);
         }
-        if run_len > 1 {
-            for acc in &run {
-                push(acc.clone());
-            }
-        }
     }
+    flush(&mut run, run_len, &mut push);
     out
 }
 
@@ -256,6 +263,17 @@ mod tests {
         assert!(b.contains(&"hunter".to_owned()) && b.contains(&"two".to_owned()));
         assert!(b.contains(&"dollar".to_owned()), "{b:?}");
         assert!(!string_literal_bodies("SELECT 'a', 'b'").contains(&"ab".to_owned()));
+    }
+
+    #[test]
+    fn a_long_run_of_adjacent_strings_keeps_one_joined_candidate() {
+        let sql = format!("SELECT {}AS s", "'x' ".repeat(5_000));
+        let b = string_literal_bodies(&sql);
+        assert!(
+            b.contains(&"x".repeat(5_000)),
+            "the whole run is a candidate"
+        );
+        assert!(b.len() <= 3, "no prefix of the run is kept: {}", b.len());
     }
 
     #[test]
