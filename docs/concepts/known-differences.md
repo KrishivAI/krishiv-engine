@@ -52,6 +52,28 @@ on every row as Spark's shuffle evaluates them. Two things differ:
 Pinned by `crates/krishiv-session/tests/distribute_by_goldens.rs` (`DIFFERENT`), against a Spark
 4.2.0 run (3.5, 4.0 and 4.1 not run).
 
+## `TABLESAMPLE` rows follow the input's partitions
+
+`TABLESAMPLE (x PERCENT)` and `(BUCKET x OUT OF y)` sample as Spark's `SampleExec` does: each row of
+input partition `i` takes one draw of `XORShiftRandom(seed + i)`, in input order, and is kept when it
+falls below the fraction. The rows therefore equal Spark's when both engines split the input the same
+way, and are otherwise a different Bernoulli sample at the same fraction:
+
+- A session with one compute thread reads `range(0, n)`, `VALUES`, an in-memory table and a small file
+  as one partition, as Spark's `local[1]` does; `range(a, b, step, n)` is the same `n` slices in both
+  engines at any thread count; `UNION ALL` numbers its inputs' partitions one after another, as Spark.
+- With more threads, `range(0, n)` is cut into one slice per thread (Spark: `defaultParallelism`), and a
+  multi-file or large Parquet scan is split by Krishiv's own rules, not Spark's file packing, so the
+  rows differ from a Spark cluster's.
+- Without `REPEATABLE` the seed is a random value in `0..1000` drawn once per physical plan, as Spark
+  does; the rows are reproducible only by chance in either engine.
+- `TABLESAMPLE SYSTEM (...)` (Spark 4.2's block sampling) is `KRISHIV_UNSUPPORTED_FEATURE`, and a
+  `REPEATABLE` seed past `BIGINT` is refused as unsupported where Spark raises an unclassified
+  `NumberFormatException`.
+
+Pinned by `crates/krishiv-session/tests/tablesample_goldens.rs` against a Spark 4.2.0 run
+(`tests/fixtures/spark-4.2.0/tablesample.json`).
+
 ## Filters move below only their deterministic prefix
 
 Spark's predicate pushdown moves every deterministic conjunct of a filter below a node it can pass

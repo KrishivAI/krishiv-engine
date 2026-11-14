@@ -143,6 +143,7 @@ fn ends_in_sort(n: &PhysNode) -> bool {
             PhysNode::Project { input, .. }
             | PhysNode::Filter { input, .. }
             | PhysNode::LateFetch { input, .. }
+            | PhysNode::Sample { input, .. }
             | PhysNode::Limit { input, .. } => n = input,
             _ => return false,
         }
@@ -188,6 +189,7 @@ fn kept_order(node: &PhysNode, order: &[OrderKey], layout: &[AttrId]) -> Vec<Ord
         PhysNode::Project { .. }
         | PhysNode::Filter { .. }
         | PhysNode::Limit { .. }
+        | PhysNode::Sample { .. }
         | PhysNode::Window { .. }
         | PhysNode::WindowGroupLimit { .. } => order
             .iter()
@@ -553,6 +555,14 @@ impl<'a> Planner<'a> {
             PlanNode::ReplicateRows { input, count } => {
                 let input = self.plan(input)?;
                 self.replicate(input, count)
+            }
+            PlanNode::Sample {
+                input,
+                bounds,
+                seed,
+            } => {
+                let input = self.plan(input)?;
+                Ok(sample(input, bounds.lower, bounds.upper, *seed))
             }
             PlanNode::Generate {
                 input,
@@ -1744,3 +1754,34 @@ mod attach_tests;
 
 mod util;
 pub(crate) use util::*;
+
+/// `TABLESAMPLE` over `input` (Spark's `SampleExec`): an unseeded sample
+/// draws its seed here, once per physical plan, as Spark's
+/// `(math.random * 1000).toLong`, so every run of the plan keeps the same
+/// rows. Rows still pass in order, but which ones depends on every row below
+/// reaching the sample: no runtime filter or top-N bound reaches through it.
+fn sample(input: Planned, lower: f64, upper: f64, seed: Option<i64>) -> Planned {
+    let seed = seed.unwrap_or_else(unseeded_sample_seed);
+    let schema = Arc::clone(&input.schema);
+    let layout = input.layout.clone();
+    let mut planned = input.wrap(
+        |input| PhysNode::Sample {
+            input,
+            lower,
+            upper,
+            seed,
+        },
+        schema,
+        layout,
+        ("Sample", format!("{lower:?}, {upper:?}, false, {seed}")),
+    );
+    planned.sites.clear();
+    planned
+}
+
+/// A seed in `0..1000` from the process's random hasher keys.
+fn unseeded_sample_seed() -> i64 {
+    use std::hash::BuildHasher as _;
+    let draw = std::collections::hash_map::RandomState::new().hash_one(0_u8);
+    (draw % 1000).cast_signed()
+}

@@ -71,8 +71,8 @@ use crate::loops::UnionLoopSource;
 use crate::operator::{Operator, Sink, Source};
 use crate::operators::{
     Expand, FileWrite, FileWriteSink, Filter, FilterPushdown, Generate, LateFetch, NullOf,
-    Predicate, Project, ProjectItem, PushedFilter, ReplicateRows, RuntimeFilters, ScanPushdown,
-    ScanPushdowns, Sort, SortKey, TopN,
+    Predicate, Project, ProjectItem, PushedFilter, ReplicateRows, RuntimeFilters, Sample,
+    ScanPushdown, ScanPushdowns, Sort, SortKey, TopN,
 };
 use crate::pipeline::{ExecNode, PipelineBuilder};
 use crate::planner::TableProviderResolver;
@@ -1085,6 +1085,16 @@ impl Instantiation<'_> {
                 } else {
                     built
                 })
+            }
+            PhysNode::Sample {
+                input,
+                lower,
+                upper,
+                seed,
+            } => {
+                let input = self.node(input)?;
+                let op = Sample::new(Arc::clone(&input.schema), *lower, *upper, *seed);
+                Ok(operator(input, op))
             }
             PhysNode::Sort { input, keys } => {
                 let buckets = hash_buckets(input, keys);

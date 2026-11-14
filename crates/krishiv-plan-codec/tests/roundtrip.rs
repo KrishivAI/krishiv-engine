@@ -62,6 +62,7 @@ variants!(
     LateFetch,
     UnionLoop,
     LoopRef,
+    Sample,
 );
 
 fn variant_of(node: &PhysNode) -> Variant {
@@ -92,6 +93,7 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::ExchangeSource { .. } => Variant::ExchangeSource,
         PhysNode::SharedRead { .. } => Variant::SharedRead,
         PhysNode::LateFetch { .. } => Variant::LateFetch,
+        PhysNode::Sample { .. } => Variant::Sample,
     }
 }
 
@@ -124,8 +126,25 @@ fn every_variant_has_a_case_and_round_trips() {
     }
     seen.sort();
     seen.dedup();
-    let missing: Vec<_> = ALL.iter().filter(|v| !seen.contains(v)).collect();
+    // A sample has no wire form yet (`a_sample_is_refused`).
+    let missing: Vec<_> = ALL
+        .iter()
+        .filter(|v| !seen.contains(v) && **v != Variant::Sample)
+        .collect();
     assert!(missing.is_empty(), "no round-trip case for {missing:?}");
+}
+
+/// A `TABLESAMPLE` node has no wire form yet: encoding refuses it
+/// (SQL-14), so a sampled plan runs in-process only.
+#[test]
+fn a_sample_is_refused() {
+    let plan = plan_of(PhysNode::Sample {
+        input: Box::new(inventory::scan()),
+        lower: 0.0,
+        upper: 0.1,
+        seed: 7,
+    });
+    assert!(matches!(encode(&plan), Err(CodecError::Unsupported(_))));
 }
 
 /// A scan's wait for a runtime filter survives the wire. The field is

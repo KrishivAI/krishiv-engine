@@ -306,6 +306,12 @@ impl Encoder {
                 limit: *limit,
                 offset: *offset,
             }),
+            // No wire form yet (SQL-14): a sampled plan runs in-process only.
+            PhysNode::Sample { .. } => {
+                return Err(CodecError::Unsupported(
+                    "a TABLESAMPLE node (no wire form in this version)".to_owned(),
+                ));
+            }
             PhysNode::ReplicateRows {
                 input,
                 layout: l,

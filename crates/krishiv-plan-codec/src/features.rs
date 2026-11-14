@@ -426,6 +426,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | PhysNode::Filter { .. }
             | PhysNode::Project { .. }
             | PhysNode::ReplicateRows { .. }
+            | PhysNode::Sample { .. }
             | PhysNode::Sort { .. }
             | PhysNode::TopN { .. }
             | PhysNode::Aggregate { .. }
@@ -704,6 +705,7 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         | PhysNode::Filter { .. }
         | PhysNode::Limit { .. }
         | PhysNode::ReplicateRows { .. }
+        | PhysNode::Sample { .. }
         | PhysNode::Sort { .. }
         | PhysNode::TopN { .. }
         | PhysNode::WindowGroupLimit { .. }
@@ -845,6 +847,7 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
         | PhysNode::UnionLoop { .. }
         | PhysNode::LoopRef { .. }
         | PhysNode::Limit { .. }
+        | PhysNode::Sample { .. }
         | PhysNode::Range(_)
         | PhysNode::Sort { .. }
         | PhysNode::TopN { .. }
