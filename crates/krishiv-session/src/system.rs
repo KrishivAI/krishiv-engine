@@ -276,6 +276,7 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("sqlstate", Text, true),
             ("error_message", Text, true),
             ("partial", Flag, false),
+            ("delegated_by", Text, true),
         ],
         "sessions" => crate::sessions::layout(),
         _ => return None,
@@ -608,6 +609,7 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             text(rows.iter().map(|r| r.error_message.as_deref())),
             // One process, one worker: every row is whole (design §2.7 for the merged rows).
             Arc::new(BooleanArray::from_iter(rows.iter().map(|_| Some(false)))),
+            text(rows.iter().map(|r| r.delegated_by.as_deref())),
         ];
     }
     let rows = capability_rows();
@@ -687,6 +689,8 @@ pub(crate) struct QueryRow {
     pub(crate) id: String,
     pub(crate) session_id: String,
     pub(crate) principal: String,
+    /// The service principal that ran the query for `principal` (trusted impersonation, P3-T061).
+    pub(crate) delegated_by: Option<String>,
     pub(crate) tags: Vec<(String, String)>,
     pub(crate) trace_id: Option<String>,
     /// `READ`, `WRITE`, `DDL`, `SESSION` or `ADMIN` (T137); `None` when the
@@ -878,6 +882,8 @@ pub(crate) struct QueryLog {
     /// The session this log belongs to, and its principal (fixed for life).
     session_id: String,
     principal: String,
+    /// The service principal acting for `principal`, if any (fixed for life, as the principal).
+    delegated_by: Option<String>,
     /// The W3C trace the session's next queries belong to, and the caller's
     /// span they are children of.
     trace: Mutex<Option<RemoteParent>>,
@@ -896,10 +902,14 @@ pub(crate) fn now_ms() -> i64 {
 impl QueryLog {
     /// The log of a new session of the runtime that keeps `history`, run by
     /// `principal`.
-    pub(crate) fn new(history: Arc<QueryHistory>, principal: &str) -> Self {
+    pub(crate) fn new(
+        history: Arc<QueryHistory>,
+        principal: &krishiv_plan::analyzer::Principal,
+    ) -> Self {
         Self {
             session_id: history.mint(now_ms()),
-            principal: principal.to_owned(),
+            principal: principal.name.clone(),
+            delegated_by: principal.delegated_by.clone(),
             history,
             ..Self::default()
         }
@@ -991,6 +1001,7 @@ impl QueryLog {
             id,
             session_id: self.session_id.clone(),
             principal: self.principal.clone(),
+            delegated_by: self.delegated_by.clone(),
             tags: self.tags(),
             trace_id: self.trace_id(),
             statement_class: class,
@@ -1434,6 +1445,7 @@ impl QueryRow {
             + self.id.len()
             + self.session_id.len()
             + self.principal.len()
+            + self.delegated_by.as_ref().map_or(0, String::len)
             + self
                 .tags
                 .iter()

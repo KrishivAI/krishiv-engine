@@ -40,6 +40,7 @@ mod mtls;
 #[cfg(feature = "oidc")]
 mod oidc;
 mod oidc_config;
+mod principals;
 mod roles;
 mod secret_ref;
 mod server;
@@ -73,6 +74,7 @@ pub use der::{CertNames, DerError};
 pub use jose::Alg;
 pub use mtls::{ClientCertificates, MtlsConfig, PrincipalFrom};
 pub use oidc_config::OidcConfig;
+pub use principals::{ImpersonationTarget, PrincipalPrivilege, PrincipalRights, PrincipalTable};
 pub use roles::RolePolicy;
 pub use secret_ref::SecretRef;
 pub use server::{FailureCount, ServerAuth};

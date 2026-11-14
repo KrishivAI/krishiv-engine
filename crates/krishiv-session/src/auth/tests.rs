@@ -772,3 +772,26 @@ mod roles {
         assert_eq!(none.role(), None);
     }
 }
+
+#[test]
+fn config_reads_principal_rights() {
+    let c = config(&[
+        ("krishiv.auth.principals.portal.privileges", "impersonate"),
+        (
+            "krishiv.auth.principals.portal.impersonates",
+            "group:analysts",
+        ),
+    ])
+    .expect("valid");
+    assert!(
+        c.principals
+            .has("portal", super::PrincipalPrivilege::Impersonate)
+    );
+    assert!(!c.is_configured(), "rights alone authenticate no one");
+    let err = config(&[("krishiv.auth.principals.portal.impersonates", "alice")])
+        .expect_err("a list without the privilege");
+    assert!(invalid_config(&err), "{err}");
+    let err = config(&[("krishiv.auth.principals.portal.secret", "env:X")])
+        .expect_err("credentials stay under krishiv.auth.tokens");
+    assert!(invalid_config(&err), "{err}");
+}

@@ -302,3 +302,41 @@ fn equal_names_in_two_tenants_do_not_see_each_other() {
         ["1"]
     );
 }
+
+/// An impersonated session shows the end user as its principal and the service that acts for
+/// it in `delegated_by`, in `system.sessions` and in every row it adds to `system.queries`
+/// (P3-T061 §4.3, amendment A5); a session of its own shows NULL there. The end user sees the
+/// impersonated session as its own.
+#[test]
+fn delegated_sessions_show_the_delegator() {
+    let rt = EngineRuntime::builder().build().unwrap();
+    let via = Session::builder()
+        .runtime(Arc::clone(&rt))
+        .principal(Principal::new("alice", PrincipalKind::User).with_delegator("portal"))
+        .access_policy(Arc::new(MonitorForAdmin))
+        .build()
+        .unwrap();
+    let own = session_of(&rt, "alice");
+    block_on(block_on(via.sql("SELECT 1")).unwrap().collect()).unwrap();
+    block_on(block_on(own.sql("SELECT 2")).unwrap().collect()).unwrap();
+
+    let sessions = column(
+        &own,
+        "SELECT coalesce(delegated_by, '-') FROM system.sessions WHERE principal = 'alice' \
+         ORDER BY delegated_by NULLS LAST",
+    );
+    assert_eq!(sessions, [Some("portal".to_owned()), Some("-".to_owned())]);
+
+    let queries = column(
+        &own,
+        "SELECT concat(query_text, '|', coalesce(delegated_by, '-')) FROM system.queries \
+         WHERE query_text IN ('SELECT 1', 'SELECT 2') ORDER BY query_text",
+    );
+    assert_eq!(
+        queries,
+        [
+            Some("SELECT 1|portal".to_owned()),
+            Some("SELECT 2|-".to_owned())
+        ]
+    );
+}

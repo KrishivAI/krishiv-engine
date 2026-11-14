@@ -19,6 +19,7 @@
 //! krishiv.auth.mtls.userPrincipals     = alice, bob               (certificate principals that are users)
 //! krishiv.auth.roles.{viewer,operator,admin} = a, b               (certificate principal names; ADR 0046 §6)
 //! krishiv.auth.oidc.*                  (OIDC access tokens; see `oidc_config.rs`)
+//! krishiv.auth.principals.<name>.*     (rights by principal name; see `principals.rs`)
 //! ```
 //!
 //! A static token names its own role. A certificate principal gets its role from the
@@ -38,6 +39,7 @@ use krishiv_common::principal::PrincipalKind;
 use super::Role;
 use super::mtls::MtlsConfig;
 use super::oidc_config::OidcConfig;
+use super::principals::PrincipalTable;
 use super::secret_ref::{SecretRef, invalid};
 
 /// The key prefix of every Krishiv authentication setting.
@@ -105,6 +107,8 @@ pub struct AuthConfig {
     pub roles: RoleLists,
     /// OIDC access tokens.
     pub oidc: OidcConfig,
+    /// The rights of named principals beyond their role (P3-T061 §3).
+    pub principals: PrincipalTable,
 }
 
 /// `krishiv.auth.roles.{viewer,operator,admin}`: principal names by role.
@@ -166,6 +170,7 @@ impl AuthConfig {
         let mut throttle = ThrottleConfig::default();
         let mut mtls = MtlsConfig::default();
         let mut oidc = OidcConfig::default();
+        let mut principals = PrincipalTable::default();
         let mut role_lists: BTreeMap<Role, (String, String)> = BTreeMap::new();
         for (key, raw) in settings {
             if key == SPARK_TOKEN_KEY {
@@ -190,6 +195,10 @@ impl AuthConfig {
                     "role" => entry.role = Some(parse_role(key, raw)?),
                     _ => return Err(unknown(key)),
                 }
+                continue;
+            }
+            if let Some(principal) = rest.strip_prefix("principals.") {
+                principals.apply(key, principal, raw)?;
                 continue;
             }
             if mtls.apply(key, rest, raw)? || oidc.apply(key, raw)? {
@@ -251,6 +260,7 @@ impl AuthConfig {
         }
         mtls.validate()?;
         oidc.validate()?;
+        principals.validate()?;
         // Each list once, whole, so a key given twice keeps its last value.
         let mut roles = RoleLists::default();
         for (role, (key, raw)) in role_lists {
@@ -262,6 +272,7 @@ impl AuthConfig {
             mtls,
             roles,
             oidc,
+            principals,
         })
     }
 

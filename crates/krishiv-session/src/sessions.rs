@@ -198,6 +198,8 @@ pub(crate) struct SessionRow {
     pub(crate) principal: String,
     /// [`owner_key`] of the principal: what the per-principal filter compares.
     pub(crate) owner: String,
+    /// The service principal acting for `principal` (trusted impersonation, P3-T061).
+    pub(crate) delegated_by: Option<String>,
     pub(crate) client_user_id: Option<String>,
     pub(crate) client_type: Option<String>,
     pub(crate) transport: &'static str,
@@ -230,6 +232,7 @@ impl SessionRow {
             server_session_id: c.server_session_id,
             principal: s.principal.name.clone(),
             owner: owner_key(&s.principal),
+            delegated_by: s.principal.delegated_by.clone(),
             client_user_id: c.client_user_id,
             client_type: c.client_type,
             transport: Transport::from_code(a.transport.load(Ordering::Relaxed)).name(),
@@ -395,6 +398,7 @@ pub(crate) fn columns(sources: &Sources) -> Vec<ArrayRef> {
         labels_column(&rows.iter().map(|r| r.tags.as_slice()).collect::<Vec<_>>()),
         long(rows.iter().map(|r| Some(r.queries_running))),
         long(rows.iter().map(|r| Some(r.queries_started))),
+        text(rows.iter().map(|r| r.delegated_by.as_deref())),
     ]
 }
 
@@ -419,5 +423,6 @@ pub(crate) fn layout() -> Vec<(&'static str, Kind, bool)> {
         ("tags", Labels, false),
         ("queries_running", Long, false),
         ("queries_started", Long, false),
+        ("delegated_by", Text, true),
     ]
 }
