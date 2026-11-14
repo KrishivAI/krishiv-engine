@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use crate::common::{build_session, key_value, read_input, split_statements};
 use crate::deadline::Deadline;
-use crate::format::{OutputMode, render_mode};
+use crate::format::{OutputMode, cut_notice, cut_table_footer, render_mode};
 use clap::{Args, ValueEnum};
 use krishiv::DataFrame;
 use krishiv::agent::{field_cell, session_zone};
@@ -476,15 +476,29 @@ fn print_result(
     mode: OutputMode,
     args: &SqlArgs,
 ) -> Result<(), String> {
-    let c = collect_rows(df, session, args.max_rows.unwrap_or(usize::MAX))?;
-    write!(
-        out,
-        "{}",
-        render_mode(
-            mode, &c.names, &c.rows, &c.numeric, &c.float, &c.bools, &c.nulls
-        )
-    )
-    .map_err(|e| format!("cannot write output: {e}"))
+    let max_rows = args.max_rows.unwrap_or(usize::MAX);
+    let c = collect_rows(df, session, max_rows)?;
+    // A statement without a result (DDL, `SET`, `USE`, ...) prints nothing, as `spark-sql` does (RS-9).
+    if c.names.is_empty() {
+        return Ok(());
+    }
+    let mut text = render_mode(
+        mode, &c.names, &c.rows, &c.numeric, &c.float, &c.bools, &c.nulls,
+    );
+    if c.more {
+        // The table's footer says the output was cut (RS-11); the data formats keep stdout clean and say it on
+        // stderr, so a pipe still reads only rows.
+        if mode == OutputMode::Table {
+            text = cut_table_footer(&text, c.rows.len(), max_rows);
+        } else {
+            let _ = writeln!(
+                io::stderr(),
+                "warning: {}",
+                cut_notice(c.rows.len(), max_rows)
+            );
+        }
+    }
+    write!(out, "{text}").map_err(|e| format!("cannot write output: {e}"))
 }
 
 /// The statement an agent result is for.
@@ -634,9 +648,12 @@ struct Collected {
     bools: Vec<bool>,
     /// NULL cells.
     nulls: Vec<Vec<bool>>,
+    /// The query has more rows than `rows` holds (cut to the row cap).
+    more: bool,
 }
 
-/// Collects `df` into typed string rows, cut to `max_rows` for display.
+/// Collects `df` into typed string rows, cut to `max_rows` for display. It reads one batch past the cap when the cap
+/// falls on a batch boundary, so `more` is exact.
 fn collect_rows(
     df: &DataFrame,
     session: &krishiv::Session,
@@ -650,7 +667,7 @@ fn collect_rows(
     let mut stream = futures::executor::block_on(df.execute_stream()).map_err(|e| e.to_string())?;
     let mut batches = Vec::new();
     let mut seen = 0usize;
-    while seen < max_rows {
+    while seen <= max_rows {
         let Some(next) = futures::executor::block_on(stream.next()) else {
             break;
         };
@@ -704,6 +721,7 @@ fn collect_rows(
         float,
         bools,
         nulls,
+        more: seen > max_rows,
     })
 }
 
@@ -857,6 +875,7 @@ mod tests {
             float,
             bools,
             nulls,
+            more: false,
         }
     }
 

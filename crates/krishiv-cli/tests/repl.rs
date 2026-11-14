@@ -125,6 +125,64 @@ fn max_rows_truncates_with_an_explicit_flag() {
 }
 
 #[test]
+fn a_statement_without_a_result_prints_nothing() {
+    // RS-9: DDL used to print an empty box and "0 rows" before the next statement's result.
+    let o = krishiv(
+        &[
+            "sql",
+            "-o",
+            "table",
+            "-e",
+            "CREATE TEMPORARY VIEW v AS SELECT 1 AS a; SELECT a FROM v",
+        ],
+        None,
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let t = out(&o);
+    assert!(t.starts_with("+---+\n| a |\n"), "{t}");
+    assert!(t.ends_with("1 row\n"), "{t}");
+    assert!(!t.contains("0 rows"), "{t}");
+    let o = krishiv(
+        &[
+            "sql",
+            "-o",
+            "csv",
+            "-e",
+            "CREATE TEMPORARY VIEW w AS SELECT 1 AS a",
+        ],
+        None,
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    assert_eq!(out(&o), "", "no empty header line either");
+}
+
+#[test]
+fn a_cut_table_says_so() {
+    // RS-11: the footer of a table cut by --max-rows said "2 rows", which read as the whole result.
+    let q = "select x as a from (select 1 as x union all select 2 union all select 3) order by x";
+    let o = krishiv(&["sql", "-o", "table", "--max-rows", "2", "-e", q], None);
+    assert!(o.status.success(), "{}", err(&o));
+    let t = out(&o);
+    assert!(
+        t.ends_with("| 2 |\n+---+\n2 rows shown; more rows exist (row cap 2)\n"),
+        "{t}"
+    );
+    // A result that fits the cap exactly is not cut.
+    let o = krishiv(&["sql", "-o", "table", "--max-rows", "3", "-e", q], None);
+    assert!(out(&o).ends_with("+---+\n3 rows\n"), "{}", out(&o));
+    // The data formats keep stdout to rows and say it on stderr.
+    let o = krishiv(&["sql", "-o", "csv", "--max-rows", "2", "-e", q], None);
+    assert_eq!(out(&o), "a\n1\n2\n");
+    assert!(
+        err(&o).contains("warning: 2 rows shown; more rows exist (row cap 2)"),
+        "{}",
+        err(&o)
+    );
+    let o = krishiv(&["sql", "-o", "csv", "--max-rows", "3", "-e", q], None);
+    assert!(!err(&o).contains("more rows exist"), "{}", err(&o));
+}
+
+#[test]
 fn file_formats_are_not_capped_unless_asked() {
     let q = "select id from range(2500)";
     let o = krishiv(&["sql", "-o", "csv", "-e", q], None);

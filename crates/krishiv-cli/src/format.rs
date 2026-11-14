@@ -69,12 +69,7 @@ impl Renderer for Table {
             let _ = writeln!(out, "{}", line(row));
         }
         let _ = writeln!(out, "{rule}");
-        let _ = writeln!(
-            out,
-            "{} row{}",
-            rows.len(),
-            if rows.len() == 1 { "" } else { "s" }
-        );
+        let _ = writeln!(out, "{} row{}", rows.len(), plural(rows.len()));
         out
     }
 }
@@ -319,6 +314,26 @@ impl OutputMode {
     }
 }
 
+/// The notice for a result cut to the row cap: `shown` rows printed of more (`cap` is `--max-rows`, or the REPL's
+/// cap).
+pub(crate) fn cut_notice(shown: usize, cap: usize) -> String {
+    format!(
+        "{shown} row{} shown; more rows exist (row cap {cap})",
+        plural(shown)
+    )
+}
+
+/// `table` (a [`Table`] rendering) with its `<n> rows` footer replaced by [`cut_notice`].
+pub(crate) fn cut_table_footer(table: &str, shown: usize, cap: usize) -> String {
+    let footer = format!("{shown} row{}\n", plural(shown));
+    let body = table.strip_suffix(footer.as_str()).unwrap_or(table);
+    format!("{body}{}\n", cut_notice(shown, cap))
+}
+
+fn plural(n: usize) -> &'static str {
+    if n == 1 { "" } else { "s" }
+}
+
 /// Renders already-typed rows in `mode`: `numeric[i]` marks integer and
 /// decimal columns, `float[i]` float columns, `bool_col[i]` boolean
 /// columns, `nulls` the NULL cells.
@@ -380,6 +395,23 @@ mod tests {
             json,
             "{\"a\":\"1\",\"b\":\"x\"}\n{\"a\":\"NULL\",\"b\":\"2.5\"}\n"
         );
+    }
+
+    #[test]
+    fn a_cut_table_replaces_only_its_footer() {
+        let names = names();
+        let rows = rows();
+        let nulls = vec![vec![false; 2]; 2];
+        let table = Table.render(&names, &rows, &nulls);
+        let cut = cut_table_footer(&table, 2, 2);
+        assert_eq!(
+            cut,
+            format!(
+                "{}2 rows shown; more rows exist (row cap 2)\n",
+                table.strip_suffix("2 rows\n").unwrap_or_default()
+            )
+        );
+        assert_eq!(cut_notice(1, 1), "1 row shown; more rows exist (row cap 1)");
     }
 
     #[test]
