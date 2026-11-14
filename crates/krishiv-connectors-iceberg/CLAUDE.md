@@ -75,13 +75,18 @@ merging in one schedule in three; table invariants and the store's files checked
 (apache-iceberg 1.12.0): `Validation` (checks, isolation level, conflict filter, files removed / referenced / DV'd,
 `max_intervening`), `walk` from the branch head to S0 along parent ids (Java's "Cannot determine history ..." when it
 does not end at S0; past `krishiv.iceberg.commit.maxIntervening` a conflict), `read_history` (only the manifests an
-intervening snapshot added, `ADDED`/`DELETED` entries, never `EXISTING`), `check`: added data files (`append`,
-`overwrite`; serializable only), added delete files (`overwrite`, `delete`; data sequence number above S0's), added
+intervening snapshot added, `ADDED`/`DELETED` entries; `EXISTING` only in the delete manifests the added delete files
+check reads, as Java's `DeleteFileIndex`), `check`: added data files (`append`,
+`overwrite`; serializable only), added delete files (`overwrite`, `delete`; live entries with data sequence number above
+S0's; an equality delete judged only by its `equality_ids` columns' metrics), added
 DVs (`overwrite`, `delete`, `replace`), removed files by path (`overwrite`, `replace`, `delete`, `delete` skippable
 for references), through `Pruner` in conservative mode (every unknown a match), Java's message texts; run by
 `commit.rs`'s `commit_validated` on every rebase (`commit_append` passes `Validation::none()`, no walk). No caller
 validates yet (the operations are unit 2). Tests `validate_tests.rs` (the walk, each check over a hand-built history,
-the conservative evaluator, histories written by iceberg-rust's writers, the loop with `commit_tests`' catalog)
+the conservative evaluator, histories written by iceberg-rust's writers, the loop with `commit_tests`' catalog: a
+validation read error with outcomes known, after an unknown answer and while unresolved, a second rebase, a stale
+answer). Open items (filter bound by name to Sn's schema, the CoW check set, two unverified texts) in `validate.rs`'s
+module docs
 · `write.rs` (PR-36a) `DataFileWriter`, one task's data files for an append (distribution `none`): batches of the
 table's Arrow schema (nested types retyped onto the field-id schema; another shape is `INTERNAL_ERROR`), each row's
 partition key from the default spec (`partition_value`; an all-`void` spec does no per-row work), rows taken per key,

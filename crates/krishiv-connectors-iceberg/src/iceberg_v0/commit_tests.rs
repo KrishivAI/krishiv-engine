@@ -628,7 +628,7 @@ impl Case {
         ))
     }
 
-    fn foreign(&self, name: &str, id: i64, branch: &str) -> Foreign {
+    pub(super) fn foreign(&self, name: &str, id: i64, branch: &str) -> Foreign {
         foreign(&self.env, &self.clock, &self.base, name, id, branch)
     }
 

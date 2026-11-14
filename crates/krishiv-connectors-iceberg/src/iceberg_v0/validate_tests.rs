@@ -439,6 +439,105 @@ fn added_delete_files_that_cannot_apply_do_not_conflict() {
     assert!(check(&unknown, &v, &judge()).is_some());
 }
 
+/// `d` as an `EXISTING` entry carried over from snapshot `by`.
+fn existing(d: LiveEntry, by: i64) -> LiveEntry {
+    let LiveEntry::Delete(mut d) = d else {
+        unreachable!()
+    };
+    d.entry.status = EntryStatus::Existing;
+    d.entry.snapshot_id = by;
+    LiveEntry::Delete(d)
+}
+
+/// Review finding 1: as Java's `DeleteFileIndex` (`.liveEntries()`, no
+/// snapshot-id filter), a live `EXISTING` entry of a delete manifest an
+/// intervening `overwrite`/`delete` added counts when its data sequence
+/// number is above S0's: a delete file a `replace` added (seq 2), carried
+/// over by a later overwrite's merged manifest. Not at or below S0's
+/// sequence number, and never a `DELETED` entry.
+#[test]
+fn existing_delete_entries_above_s0_conflict() {
+    let v = validation(ADDED_DELETES);
+    let merged = |seq| {
+        let mut h = history(vec![(
+            3,
+            Operation::Overwrite,
+            vec![existing(pos_delete(2, seq, "d.parquet", 1), 2)],
+        )]);
+        h.snapshots.push((2, Operation::Replace));
+        h
+    };
+    assert_eq!(
+        check(&merged(2), &v, &judge()),
+        Some(Fired {
+            check: CHECK_ADDED_DELETES,
+            snapshot_id: Some(3),
+            message: "Found new conflicting delete files that can apply to records matching \
+                      ref(name=\"x\") == 1: [d.parquet]"
+                .to_owned(),
+        })
+    );
+    assert_eq!(check(&merged(1), &v, &judge()), None);
+    let mut deleted = merged(2);
+    if let LiveEntry::Delete(d) = &mut deleted.changes[0].entries[0] {
+        d.entry.status = EntryStatus::Deleted;
+    }
+    assert_eq!(check(&deleted, &v, &judge()), None);
+}
+
+/// An ADDED equality delete keyed on `equality_ids`, in partition `x`.
+fn eq_delete(snapshot_id: i64, path: &str, x: i32, equality_ids: Vec<i32>) -> LiveEntry {
+    let mut f = content(ContentKind::EqualityDeletes, path, x);
+    f.equality_ids = Some(equality_ids);
+    LiveEntry::Delete(DeleteFileEntry {
+        entry: entry(EntryStatus::Added, snapshot_id, snapshot_id, f),
+        kind: DeleteKind::EqualityDelete,
+    })
+}
+
+/// `name` bounds `[US, US]` on a delete file's entry.
+fn name_bounds_us(mut d: LiveEntry) -> LiveEntry {
+    if let LiveEntry::Delete(d) = &mut d {
+        let f = &mut d.entry.file;
+        f.lower_bounds.insert(3, b"US".to_vec());
+        f.upper_bounds.insert(3, b"US".to_vec());
+        f.value_counts.insert(3, 1);
+        f.null_counts.insert(3, 0);
+    }
+    d
+}
+
+/// Review finding 2: an equality delete applies to every row whose key
+/// matches, whatever its other columns, so its metrics on a column that is
+/// not an equality column (a full-row delete) never prune it. Position
+/// deletes' `row` metrics describe the deleted rows and still prune; an
+/// equality column's metrics prune too.
+#[test]
+fn equality_deletes_prune_only_by_their_equality_columns() {
+    let name_is = |s: &str| {
+        PushdownExpr::cmp(
+            ColumnPath::new("name"),
+            CmpOp::Eq,
+            ScalarValue::Utf8(s.to_owned()),
+        )
+    };
+    let v = Validation {
+        filter: Some(name_is("EU")),
+        filter_text: "ref(name=\"name\") == \"EU\"".to_owned(),
+        ..validation(ADDED_DELETES)
+    };
+    let one = |d| history(vec![(2, Operation::Delete, vec![name_bounds_us(d)])]);
+    let keyed_on_id = one(eq_delete(2, "eq.parquet", 1, vec![1]));
+    assert_eq!(
+        check(&keyed_on_id, &v, &judge()).map(|f| f.check),
+        Some(CHECK_ADDED_DELETES)
+    );
+    let keyed_on_name = one(eq_delete(2, "eq.parquet", 1, vec![3]));
+    assert_eq!(check(&keyed_on_name, &v, &judge()), None);
+    let position = one(pos_delete(2, 2, "pos.parquet", 1));
+    assert_eq!(check(&position, &v, &judge()), None);
+}
+
 const ADDED_DVS: Checks = Checks {
     added_data_files: false,
     added_delete_files: false,
@@ -877,6 +976,36 @@ fn the_history_reads_delete_manifests_by_sequence_number() {
     assert_eq!(fx.validate(3, Some(2), &x2).unwrap().snapshot_id, Some(3));
 }
 
+/// Review finding 1 through manifests: S2 (`replace`) adds a delete file in
+/// x=1 at sequence number 2; S3 (`overwrite`) merges the delete manifests,
+/// carrying it as `EXISTING`. From S0 = 1, Java's `DeleteFileIndex` counts
+/// that live entry; from S0 = 2 its sequence number is not above S0's.
+#[test]
+fn the_history_reads_existing_entries_of_merged_delete_manifests() {
+    let mut fx = Fixture::new();
+    let base = fx.data("base.parquet", 1);
+    let m1 = fx.manifest(1, false, vec![E::Added(base)]);
+    let l1 = fx.snapshot(1, None, "append", vec![m1]);
+    let listed = l1[0].clone();
+    let d2 = fx.pos_delete("d2.parquet", 1);
+    let m2 = fx.manifest(2, true, vec![E::Added(d2.clone())]);
+    let mut l2 = l1;
+    l2.push(m2);
+    fx.snapshot(2, Some(1), "replace", l2);
+    let merged = fx.manifest(3, true, vec![E::Existing(d2, 2, 2)]);
+    fx.snapshot(3, Some(2), "overwrite", vec![listed, merged]);
+
+    let f = fx.validate(3, Some(1), &validation(ADDED_DELETES)).unwrap();
+    assert_eq!((f.check, f.snapshot_id), (CHECK_ADDED_DELETES, Some(3)));
+    assert!(
+        f.message
+            .ends_with(&format!("[{}]", fx.env.at("d2.parquet")))
+    );
+    assert_eq!(fx.validate(3, Some(2), &validation(ADDED_DELETES)), None);
+    // The other checks still never take an `EXISTING` entry for a change.
+    assert_eq!(fx.validate(3, Some(1), &validation(ADDED_DATA)), None);
+}
+
 // ------------------------------------------------------ the commit loop
 
 /// A foreign commit of `op` adding one row in partition `x` to `main` as
@@ -1038,4 +1167,183 @@ fn a_moved_branch_after_an_unknown_answer_is_validated() {
     assert_eq!(c.cat.requests(), 1);
     assert!(exists(&c.list(1)) && exists(&c.manifest()) && exists(&c.data()));
     c.check(&[INIT, "900|1|f.parquet"]);
+}
+
+/// Removes the file at `url`.
+fn remove(url: &str) {
+    std::fs::remove_file(url.strip_prefix("file://").unwrap()).unwrap();
+}
+
+/// `f`, whose snapshot's manifest list is removed once it is built: the
+/// snapshot lands, but validation cannot read it.
+fn with_its_list_lost(f: Foreign) -> Foreign {
+    Box::new(move |m: TableMetadata| {
+        Box::pin(async move {
+            let request = f(m).await;
+            for u in &request.1 {
+                if let TableUpdate::AddSnapshot { snapshot } = u {
+                    remove(snapshot.manifest_list());
+                }
+            }
+            request
+        })
+    })
+}
+
+/// `f`, then the manifest list of the table's snapshot `id` removed.
+fn losing_the_list_of(id: i64, f: Foreign) -> Foreign {
+    Box::new(move |m: TableMetadata| {
+        let list = m.snapshot_by_id(id).unwrap().manifest_list().to_owned();
+        Box::pin(async move {
+            let request = f(m).await;
+            remove(&list);
+            request
+        })
+    })
+}
+
+/// Review finding 5 (a): a validation that cannot read the history fails
+/// with the read's error, never a conflict and never a commit; with every
+/// request's outcome known (a 409), the write's files are removed.
+#[test]
+fn a_validation_read_error_with_every_outcome_known_removes_the_files() {
+    let mut c = case();
+    c.cat.on(
+        When::BeforeRequest(1),
+        with_its_list_lost(foreign_op(&c, "f.parquet", 3, 900, "overwrite")),
+    );
+    let e = c.run_validated(&loop_validation()).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::FailedReadFileFileNotExist,
+        "{e}"
+    );
+    assert_eq!(c.cat.requests(), 1);
+    assert!(!exists(&c.list(1)) && !exists(&c.manifest()) && !exists(&c.data()));
+    assert_ne!(c.cat.metadata().0.current_snapshot_id(), Some(OURS));
+}
+
+/// (a) after an unknown answer: the probe sees the branch moved, validation
+/// cannot read the history; the attempt is settled but a request once had
+/// no answer, so the files are kept.
+#[test]
+fn a_validation_read_error_after_an_unknown_answer_keeps_the_files() {
+    let mut c = case();
+    c.cat.script(&[Fault::ServerErrorBeforeApply]);
+    c.cat.on(
+        When::AfterRequest(1),
+        with_its_list_lost(foreign_op(&c, "f.parquet", 3, 900, "overwrite")),
+    );
+    let e = c.run_validated(&loop_validation()).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::FailedReadFileFileNotExist,
+        "{e}"
+    );
+    assert_eq!(c.cat.requests(), 1);
+    assert!(exists(&c.list(1)) && exists(&c.manifest()) && exists(&c.data()));
+}
+
+/// (a) while an attempt is unresolved: a 409 rebases onto 901; the rebased
+/// request is held (unknown, its base 901); the resend is answered stale
+/// with the branch still at 901, so the held attempt stays unresolved when
+/// validation fails to read 901's list: `STATE_UNKNOWN`, nothing deleted.
+#[test]
+fn a_validation_read_error_while_unresolved_is_state_unknown() {
+    let mut c = case();
+    c.cat.script(&[Fault::Answer, Fault::Held, Fault::Stale400]);
+    c.cat.on(
+        When::BeforeRequest(1),
+        foreign_op(&c, "g.parquet", 3, 901, "overwrite"),
+    );
+    c.cat.on(
+        When::BeforeRequest(3),
+        losing_the_list_of(901, c.foreign("dev.parquet", 903, "dev")),
+    );
+    let e = c.run_validated(&loop_validation()).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergCommitStateUnknown,
+        "{e}"
+    );
+    assert!(e.message().contains("snap-901-"), "{e}");
+    assert_eq!(c.cat.requests(), 3);
+    assert!(exists(&c.list(2)) && exists(&c.manifest()) && exists(&c.data()));
+}
+
+/// Review finding 5 (b): validation passes on the first rebase (901
+/// elsewhere) and fires on the second (902 in the filter's partition).
+#[test]
+fn a_second_rebase_validates_again() {
+    let mut c = case();
+    c.cat.on(
+        When::BeforeRequest(1),
+        foreign_op(&c, "g.parquet", 3, 901, "overwrite"),
+    );
+    c.cat.on(
+        When::BeforeRequest(2),
+        foreign_op(&c, "f.parquet", 1, 902, "overwrite"),
+    );
+    let e = c.run_validated(&loop_validation()).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergCommitConflict,
+        "{e}"
+    );
+    assert!(e.message().contains("snapshot 902"), "{e}");
+    assert!(e.message().contains(CHECK_ADDED_DATA), "{e}");
+    assert_eq!(c.cat.requests(), 2);
+    assert!(!exists(&c.list(1)) && !exists(&c.list(2)) && !exists(&c.data()));
+    c.check(&[INIT, "901|3|g.parquet", "902|1|f.parquet"]);
+}
+
+/// (b) the second walk starts at S0, not at the last base: one snapshot per
+/// rebase under a bound of one passes once, then two exceed it.
+#[test]
+fn every_rebase_walks_from_s0() {
+    let mut c = case();
+    c.cat.on(
+        When::BeforeRequest(1),
+        foreign_op(&c, "g.parquet", 3, 901, "overwrite"),
+    );
+    c.cat.on(
+        When::BeforeRequest(2),
+        foreign_op(&c, "h.parquet", 3, 902, "overwrite"),
+    );
+    let v = Validation {
+        max_intervening: 1,
+        ..loop_validation()
+    };
+    let e = c.run_validated(&v).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergCommitConflict,
+        "{e}"
+    );
+    assert!(e.message().contains(CHECK_HISTORY), "{e}");
+    assert_eq!(c.cat.requests(), 2);
+}
+
+/// Review finding 5 (c): a stale answer (a commit on another branch took the
+/// next sequence number) leaves `main` at S0, so the rebase validates an
+/// empty history, even with a check that every added file would fire, and
+/// commits.
+#[test]
+fn a_stale_answer_validates_nothing_and_rebases() {
+    let mut c = case();
+    c.cat
+        .on(When::BeforeRequest(1), c.foreign("dev.parquet", 903, "dev"));
+    let every = Validation {
+        filter: None,
+        filter_text: "true".to_owned(),
+        ..loop_validation()
+    };
+    let m = c.run_validated(&every).unwrap();
+    assert_eq!(m.current_snapshot_id(), Some(OURS));
+    assert_eq!(
+        m.snapshot_by_id(OURS).unwrap().parent_snapshot_id(),
+        c.base.current_snapshot_id()
+    );
+    assert_eq!(c.cat.requests(), 2);
+    c.check(&[INIT, MINE]);
 }
