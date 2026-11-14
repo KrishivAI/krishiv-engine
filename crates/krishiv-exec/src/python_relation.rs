@@ -39,6 +39,8 @@
 //! `KRISHIV_UDF_NOT_AVAILABLE`, so a runtime that implements only the
 //! scalar kinds keeps compiling and a plan calling a relation kind fails
 //! on it as on a worker without a runtime.
+//!
+//! [`UdfRuntime::prepare_relation`]: crate::python_eval::UdfRuntime::prepare_relation
 
 use std::collections::BTreeMap;
 use std::fmt;
