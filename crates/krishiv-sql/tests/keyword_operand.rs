@@ -779,3 +779,39 @@ fn a_case_column_inside_a_case_branch_leaves_the_enclosing_case_whole() {
         assert_eq!(got.trim_end_matches([' ', '|']), want, "{sql}");
     }
 }
+
+/// Review of round 4, finding 3 (Spark 4.2.0 parsePlan, `local[1]`): a later
+/// select item and `MERGE` clauses after a `CASE` whose branch holds a `case`
+/// column.
+#[test]
+fn a_case_column_before_later_items_and_merge_clauses() {
+    use krishiv_plan::SourceId;
+    for (sql, want) in [
+        (
+            "SELECT CASE WHEN true THEN case + 1 WHEN false THEN 2 END, case + 1 WHEN 2 THEN 3 END FROM t",
+            "Project [CASE WHEN true THEN (case + 1) WHEN false THEN 2 END, CASE WHEN (positive(1) == 2) THEN 3 END] | +- Read t",
+        ),
+        (
+            "SELECT CASE WHEN true THEN case + 1 WHEN false THEN 2 END, case + 1 FROM t",
+            "Project [CASE WHEN true THEN (case + 1) WHEN false THEN 2 END, (case + 1)] | +- Read t",
+        ),
+    ] {
+        let plan = krishiv_sql::parse_and_lower(sql, &ParserOptions::default(), SourceId(0))
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+        let got = plan.root().to_string().replace('\n', " | ");
+        assert_eq!(got.trim_end_matches([' ', '|']), want, "{sql}");
+    }
+    let opts = ParserOptions::default();
+    // Spark: `deleteaction(Some((CASE WHEN true THEN ('case + 1) WHEN false
+    // THEN 2 END > 0)))`, then the insert.
+    for sql in [
+        "MERGE INTO t USING s ON t.id = s.id WHEN MATCHED AND CASE WHEN true THEN case + 1 WHEN false THEN 2 END > 0 THEN DELETE WHEN NOT MATCHED THEN INSERT *",
+        "MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN UPDATE SET x = CASE WHEN true THEN case + 1 WHEN false THEN 2 END",
+    ] {
+        krishiv_sql::parse_statement(sql, &opts).unwrap_or_else(|e| panic!("{sql}: {e}"));
+    }
+    // Spark reads the nested `CASE` here and fails at the end of the input.
+    let sql = "MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN UPDATE SET x = CASE WHEN true THEN case + 1 WHEN false THEN 2 END WHEN NOT MATCHED THEN INSERT *";
+    let err = krishiv_sql::parse_statement(sql, &opts).expect_err(sql);
+    assert!(err.to_string().contains("end of input"), "{err}");
+}

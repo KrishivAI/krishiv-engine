@@ -95,13 +95,31 @@ impl Parser<'_> {
             .is_some_and(|ahead| ahead & want != 0)
     }
 
+    /// Whether the first word closing a `CASE` part (`WHEN`, `THEN`, `ELSE`,
+    /// `END`) after offset `n`, in the same brackets and outside any `CASE`
+    /// that starts after `n`, closes `part`: a nested `CASE` read there leaves
+    /// the enclosing `CASE` a way to go on. `THEN` first (a `MERGE ... WHEN
+    /// MATCHED AND CASE WHEN x THEN case + 1 WHEN y THEN 2 END > 0 THEN
+    /// DELETE`) or nothing leaves it none, and ANTLR reads the column (Spark
+    /// 4.2.0 `('case + 1)`).
+    pub(super) fn part_closes_next_after(&self, n: usize, part: CasePart) -> bool {
+        let want = part
+            .closers()
+            .iter()
+            .fold(0u8, |bits, word| bits | closer_bit(word));
+        self.closer_ahead
+            .get(self.pos + n)
+            .is_some_and(|ahead| (ahead >> 4) & want != 0)
+    }
+
     /// For each token `i` (and one past the last), the `CASE` words
     /// (`WHEN`, `THEN`, `ELSE`, `END` as [`closer_bit`]s) a scan from `i`
     /// meets in `i`'s brackets, outside any `CASE` that starts at or after
     /// `i`, before those brackets close or a `;` or `,` at their level (a
     /// `CASE` never spans a comma of its own brackets): one pass
     /// left to right pairs brackets and each `CASE` with its `END`, one pass
-    /// right to left fills the table. Built at the start of the statement
+    /// right to left fills the table (low four bits: every such word; high
+    /// four: the first one). Built at the start of the statement
     /// (the cursor at token 0, so offsets are positions).
     pub(super) fn closer_ahead_table(&self, case_words: &[u8]) -> Vec<u8> {
         const NONE: usize = usize::MAX;
@@ -166,7 +184,11 @@ impl Parser<'_> {
                 }
                 Some(TokenKind::Word) if word(i) & CASE_BIT != 0 && self.case_starts_at(i) => 0,
                 Some(TokenKind::Word) => {
-                    (word(i) & !CASE_BIT) | out.get(i + 1).copied().unwrap_or(0)
+                    // Low four bits: every closer ahead; high four: the first.
+                    let next = out.get(i + 1).copied().unwrap_or(0);
+                    let own = word(i) & !CASE_BIT;
+                    let first = if own == 0 { next >> 4 } else { own };
+                    own | (next & 0x0f) | (first << 4)
                 }
                 _ => out.get(i + 1).copied().unwrap_or(0),
             };
@@ -309,7 +331,7 @@ impl Parser<'_> {
                 return Err(e);
             }
         };
-        if part.is_some_and(|part| !self.part_closer_after(0, part)) {
+        if part.is_some_and(|part| !self.part_closes_next_after(0, part)) {
             self.restore(at);
             return Ok(None);
         }
@@ -336,7 +358,7 @@ impl Parser<'_> {
             // enclosing part (`THEN case + 1 WHEN false THEN 2 END FROM t`):
             // the enclosing `CASE` cannot end, so ANTLR's full-context
             // prediction takes the column (Spark `('case + 1)`).
-            Ok(_) if part.is_some_and(|part| !self.part_closer_after(0, part)) => {
+            Ok(_) if part.is_some_and(|part| !self.part_closes_next_after(0, part)) => {
                 self.restore(at);
                 Ok(None)
             }
