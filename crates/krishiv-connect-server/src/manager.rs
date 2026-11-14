@@ -492,37 +492,63 @@ impl SessionManager {
         for (key, entry) in sessions {
             for op in entry.operations().all() {
                 op.replay().expire_sender(std::time::Instant::now());
-                let expired = op
-                    .replay()
-                    .detached_since()
-                    .is_some_and(|since| since.elapsed() >= timeout);
-                if !expired {
-                    continue;
-                }
-                // Tombstoned before it leaves the map, so a racing reattach
-                // finds it abandoned rather than unknown (lines 158-166).
-                // A reattach between the check above and the close below
-                // is closed with it (its retry sees OPERATION_ABANDONED):
-                // Spark's `periodicMaintenance` has the same window.
-                self.lock().abandoned.insert(
-                    OpKey {
-                        session: key.clone(),
-                        operation: op.id().clone(),
-                    },
-                    self.limits.abandoned_tombstones,
-                );
-                if entry.operations().remove(&op) {
-                    tracing::info!(
-                        target: "krishiv::connect",
-                        operation = op.id().as_str(),
-                        "abandoned a detached Connect operation"
-                    );
+                if self.abandon(&key, &entry, &op, timeout) {
                     abandoned += 1;
                 }
-                op.close();
             }
         }
         abandoned
+    }
+
+    /// Abandons `op` of session `key` if it has had no stream attached for
+    /// `timeout` and is still registered: it is tombstoned and removed
+    /// under the manager's lock, then closed. One a release removed first
+    /// is left alone (Spark's `removeExecuteHolder` returns before the
+    /// tombstone for a holder no longer in `executions`), so its reattach
+    /// answers `OPERATION_NOT_FOUND`. Whether it was abandoned.
+    fn abandon(
+        &self,
+        key: &Key,
+        entry: &SessionEntry,
+        op: &Arc<Operation>,
+        timeout: Duration,
+    ) -> bool {
+        let expired = op
+            .replay()
+            .detached_since()
+            .is_some_and(|since| since.elapsed() >= timeout);
+        if !expired {
+            return false;
+        }
+        {
+            // The removal (under the operations' lock, as a release takes
+            // it) and the tombstone are one step under the manager's lock:
+            // a racing reattach that no longer finds the operation reads
+            // `is_abandoned` after it, so it finds it abandoned rather than
+            // unknown (Spark's lines 158-166). Lock order: manager, then
+            // operations (as `sweep`).
+            let mut inner = self.lock();
+            if !entry.operations().remove(op) {
+                return false;
+            }
+            inner.abandoned.insert(
+                OpKey {
+                    session: key.clone(),
+                    operation: op.id().clone(),
+                },
+                self.limits.abandoned_tombstones,
+            );
+        }
+        tracing::info!(
+            target: "krishiv::connect",
+            operation = op.id().as_str(),
+            "abandoned a detached Connect operation"
+        );
+        // A reattach between the check above and the close below is closed
+        // with it (its retry sees OPERATION_ABANDONED): Spark's
+        // `periodicMaintenance` has the same window.
+        op.close();
+        true
     }
 
     /// Releases every session idle past the timeout, running no query and

@@ -397,3 +397,48 @@ fn an_ended_detached_operation_does_not_keep_shutdown_waiting() {
     assert!(other.cancel());
     assert_eq!(m.busy(), 0);
 }
+
+#[test]
+fn a_released_operation_is_never_tombstoned_as_abandoned() {
+    // Review L5 (PR-15a): maintenance took its snapshot, then a
+    // `release_all` removed the operation before maintenance reached it. Spark's `removeExecuteHolder` returns before tombstoning a
+    // holder no longer in `executions`: a reattach is OPERATION_NOT_FOUND.
+    use crate::operation::{Operation, plan_digest};
+    const OP: &str = "00112233-4455-6677-8899-aabbccddeeff";
+    let m = manager(SessionLimits::default());
+    let entry = m.get_or_create(&alice(), ID, None, "u").expect("create");
+    let op = Arc::new(Operation::new(
+        krishiv_session::QueryId::parse(OP).expect("id"),
+        plan_digest(b"p"),
+        Arc::from(Vec::new()),
+        true,
+    ));
+    entry.operations().register(&op, 10).expect("register");
+    let generation = op.replay().attach(None);
+    op.replay().detach(generation);
+    let key = SessionManager::key(&alice(), ID);
+    let snapshot = entry.operations().all();
+    // `ReleaseExecute(release_all)` removed it and has not closed it yet:
+    // it still looks detached past the timeout.
+    assert!(entry.operations().remove(&op));
+    for o in &snapshot {
+        assert!(!m.abandon(&key, &entry, o, Duration::ZERO));
+    }
+    op.close();
+    assert!(!m.is_abandoned(&alice(), ID, OP), "released, not abandoned");
+
+    // Still registered and detached past the timeout: abandoned.
+    let other = Arc::new(Operation::new(
+        krishiv_session::QueryId::parse(ID2).expect("id"),
+        plan_digest(b"q"),
+        Arc::from(Vec::new()),
+        true,
+    ));
+    entry.operations().register(&other, 10).expect("register");
+    let generation = other.replay().attach(None);
+    other.replay().detach(generation);
+    assert!(m.abandon(&key, &entry, &other, Duration::ZERO));
+    assert!(m.is_abandoned(&alice(), ID, ID2));
+    assert!(entry.operations().is_empty());
+    assert!(other.is_cancelled());
+}
