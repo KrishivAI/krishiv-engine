@@ -36,6 +36,12 @@
 //!   toward refusal: Java reuses its manifests across any upgrade
 //!   (apache-iceberg 1.12.0 `FastAppend.apply`, `SnapshotProducer.apply`),
 //!   v1 → v2 and v1 → v3 included.
+//! - **Validation** (§7.3 steps 2 and 3, PR-36b): [`commit_validated`] runs a
+//!   [`Validation`] (`validate.rs`) on every rebase, after the own-key search
+//!   and the format and UUID checks, before the next attempt is built; a check
+//!   that fires is `KRISHIV_ICEBERG_COMMIT_CONFLICT` naming the intervening
+//!   snapshot and the check, with §7.4's cleanup. [`commit_append`] passes
+//!   [`Validation::none`] and walks nothing.
 //! - **Budget**, Iceberg's table properties and defaults (apache-iceberg
 //!   1.12.0 `TableProperties`): `COMMIT_NUM_RETRIES` (4: five requests, resends
 //!   and new attempts alike), `COMMIT_MIN_RETRY_WAIT_MS` (100),
@@ -90,6 +96,7 @@ use krishiv_common::error::{
 
 use super::append::{Attempt, NewManifests, WRITE_ID_PROP, WriteIds, prepare_attempt};
 use super::scan::{read_manifest_files, snapshot_refs};
+use super::validate::{Validation, validate};
 
 /// Java's `TableProperties.COMMIT_NUM_RETRIES`.
 const COMMIT_NUM_RETRIES: &str = "commit.retry.num-retries";
@@ -225,6 +232,30 @@ pub(crate) async fn commit_append(
     new: &mut NewManifests,
     ids: WriteIds<'_>,
 ) -> Result<TableMetadata, KrishivError> {
+    commit_validated(table, cx, base, new, ids, &Validation::none()).await
+}
+
+/// [`commit_append`] validating `validation` on every rebase (design note
+/// §7.3 steps 2 and 3, `validate.rs`), after the own-key search and the
+/// format and UUID checks, before the next attempt is built. A check that
+/// fires ends the loop with `KRISHIV_ICEBERG_COMMIT_CONFLICT` naming the
+/// intervening snapshot, the check and Java's message, and the §7.4 cleanup
+/// of a conflict follows. [`Validation::none`] is [`commit_append`].
+///
+/// # Errors
+/// As [`commit_append`]; a validation read that fails ends the write with
+/// its error (every request's outcome known, nothing applied).
+///
+/// # Cancellation
+/// As [`commit_append`].
+pub(crate) async fn commit_validated(
+    table: &dyn CommitTable,
+    cx: CommitContext<'_>,
+    base: &TableMetadata,
+    new: &mut NewManifests,
+    ids: WriteIds<'_>,
+    validation: &Validation,
+) -> Result<TableMetadata, KrishivError> {
     let budget = match Budget::from_properties(base.properties()) {
         Ok(b) => b,
         Err(e) => {
@@ -241,6 +272,8 @@ pub(crate) async fn commit_append(
         start_ms: cx.clock.now_ms(),
         s0_version: base.format_version(),
         s0_uuid: base.uuid().to_string(),
+        s0: branch_head(base, ids.branch).flatten(),
+        validation,
         requests: 0,
         lists: Vec::new(),
         unresolved: Vec::new(),
@@ -354,6 +387,10 @@ struct Loop<'a> {
     start_ms: i64,
     s0_version: FormatVersion,
     s0_uuid: String,
+    /// The branch's head when the write started (S0; `None`: no snapshot).
+    s0: Option<i64>,
+    /// What every rebase validates (`validate.rs`).
+    validation: &'a Validation,
     /// Requests sent.
     requests: u32,
     /// Every manifest list an attempt wrote.
@@ -435,6 +472,7 @@ impl Loop<'_> {
                         }
                         self.resolve(&m);
                         self.check_rebase(&m)?;
+                        self.validate(&m).await?;
                         current = m;
                         continue 'attempts;
                     }
@@ -443,6 +481,7 @@ impl Loop<'_> {
                     Probe::Found(m) => return Ok(m),
                     Probe::Moved(m) => {
                         self.check_rebase(&m)?;
+                        self.validate(&m).await?;
                         current = m;
                         continue 'attempts;
                     }
@@ -579,13 +618,29 @@ impl Loop<'_> {
     /// The branch's head in `m` (`Some(None)`: no such branch), as
     /// [`prepare_attempt`] reads it; `None` when the refs cannot be read.
     fn head(&self, m: &TableMetadata) -> Option<Option<i64>> {
-        let refs = snapshot_refs(m).ok()?;
-        let branch = self.ids.branch;
-        Some(match refs.get(branch) {
-            Some(r) => Some(r.snapshot_id),
-            None if branch == "main" => m.current_snapshot_id(),
-            None => None,
-        })
+        branch_head(m, self.ids.branch)
+    }
+
+    /// §7.3 steps 2 and 3 against the refreshed table `m` (`validate.rs`).
+    async fn validate(&self, m: &TableMetadata) -> Result<(), End> {
+        if !self.validation.runs() {
+            return Ok(());
+        }
+        let head = self.head(m).flatten();
+        match validate(
+            self.cx.io,
+            m,
+            head,
+            self.s0,
+            self.validation,
+            self.cx.max_metadata_bytes,
+        )
+        .await
+        {
+            Ok(None) => Ok(()),
+            Ok(Some(fired)) => Err(self.conflict_at(fired.snapshot_id, fired.check, fired.message)),
+            Err(e) => Err(End::Error(e)),
+        }
     }
 
     /// Settles the unresolved attempts whose base the branch has left in
@@ -628,13 +683,15 @@ impl Loop<'_> {
 
     /// `KRISHIV_ICEBERG_COMMIT_CONFLICT` against `m`'s branch head.
     fn conflict(&self, m: &TableMetadata, check: &str, message: String) -> End {
+        self.conflict_at(self.head(m).flatten(), check, message)
+    }
+
+    /// `KRISHIV_ICEBERG_COMMIT_CONFLICT` against the snapshot `at`.
+    fn conflict_at(&self, at: Option<i64>, check: &str, message: String) -> End {
         End::Conflict(Box::new(KrishivIcebergCommitConflict {
             table: self.table.name(),
             snapshot_id: self.snapshot_id.to_string(),
-            conflicting_snapshot_id: self
-                .head(m)
-                .flatten()
-                .map_or_else(|| "none".to_owned(), |id| id.to_string()),
+            conflicting_snapshot_id: at.map_or_else(|| "none".to_owned(), |id| id.to_string()),
             check: check.to_owned(),
             message,
             files: REMOVED.to_owned(),
@@ -738,6 +795,17 @@ const KEPT: &str = "the written files were kept, since an earlier request of thi
      base: look for the write id in the table's snapshots before running the write \
      again, or its rows may appear twice (remove_orphan_files removes the files if \
      it never lands)";
+
+/// The head of `branch` in `m` (`Some(None)`: no such branch), as
+/// [`prepare_attempt`] reads it; `None` when the refs cannot be read.
+fn branch_head(m: &TableMetadata, branch: &str) -> Option<Option<i64>> {
+    let refs = snapshot_refs(m).ok()?;
+    Some(match refs.get(branch) {
+        Some(r) => Some(r.snapshot_id),
+        None if branch == "main" => m.current_snapshot_id(),
+        None => None,
+    })
+}
 
 /// The base an attempt asserts for its branch (`assert-ref-snapshot-id`).
 fn attempt_base(attempt: &Attempt) -> Option<i64> {
