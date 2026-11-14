@@ -243,7 +243,48 @@ pub struct QueryContext {
 /// drivers.
 struct Observed {
     finalizer: Arc<crate::aggregate::Finalizer>,
+    /// The drivers' states, kept in `(partition, lane)` order whatever order they arrived in, so
+    /// an order-sensitive metric (`collect_list`, `first`, a float `sum`) is the same every run.
     partials: Vec<arrow_array::RecordBatch>,
+    /// The `(partition, lane)` of each of `partials`, ascending.
+    order: Vec<(u32, usize)>,
+}
+
+/// Puts `item` at the place `key` sorts to in `keys`, keeping `items` parallel to them; equal keys
+/// keep their arrival order.
+fn insert_in_order<T>(
+    keys: &mut Vec<(u32, usize)>,
+    items: &mut Vec<T>,
+    key: (u32, usize),
+    item: T,
+) {
+    let at = keys.partition_point(|k| *k <= key);
+    keys.insert(at, key);
+    items.insert(at, item);
+}
+
+#[cfg(test)]
+mod observe_order_tests {
+    use super::insert_in_order;
+
+    #[test]
+    fn partials_merge_in_partition_and_lane_order_whatever_the_arrival_order() {
+        let sources = [(0, 0), (0, 1), (1, 0), (2, 0), (2, 1)];
+        for rot in 0..sources.len() {
+            for rev in [false, true] {
+                let mut arrival = sources.to_vec();
+                arrival.rotate_left(rot);
+                if rev {
+                    arrival.reverse();
+                }
+                let (mut keys, mut items) = (Vec::new(), Vec::new());
+                for k in arrival {
+                    insert_in_order(&mut keys, &mut items, k, k);
+                }
+                assert_eq!(items, sources);
+            }
+        }
+    }
 }
 
 impl fmt::Debug for QueryContext {
@@ -298,6 +339,7 @@ impl QueryContext {
     pub(crate) fn observe_partial(
         &self,
         finalizer: &Arc<crate::aggregate::Finalizer>,
+        source: (u32, usize),
         states: arrow_array::RecordBatch,
     ) -> Result<()> {
         let bytes = states.get_array_memory_size();
@@ -306,14 +348,15 @@ impl QueryContext {
             let reservation = held.get_or_insert_with(|| self.observed_consumer().reservation());
             reservation.try_grow(bytes)?;
         }
-        lock(&self.observed)
+        let mut all = lock(&self.observed);
+        let o = all
             .entry((finalizer.name().to_owned(), finalizer.instance()))
             .or_insert_with(|| Observed {
                 finalizer: Arc::clone(finalizer),
                 partials: Vec::new(),
-            })
-            .partials
-            .push(states);
+                order: Vec::new(),
+            });
+        insert_in_order(&mut o.order, &mut o.partials, source, states);
         Ok(())
     }
 

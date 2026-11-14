@@ -1759,6 +1759,14 @@ pub(crate) fn collect_metrics_op(
             let s = p.schema();
             (Some(p), s)
         }
+        // A registered Python UDF in a metric's argument plans a `PythonEval` stage under the
+        // projection; the observing operator folds rows in place and does not run stages.
+        other if has_python_eval(other) => {
+            return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                feature: "a Python UDF in an observed metric (Dataset.observe)".to_owned(),
+            }
+            .into());
+        }
         _ => return Err(bad()),
     };
     let partial = AggregatePlan {
@@ -1785,6 +1793,15 @@ pub(crate) fn collect_metrics_op(
         },
     )
     .map(|op| op as Arc<dyn Operator>)
+}
+
+/// Whether `node` or a node below it is a `PythonEval`.
+fn has_python_eval(node: &PhysNode) -> bool {
+    match node {
+        PhysNode::PythonEval { .. } => true,
+        PhysNode::Project { input, .. } => has_python_eval(input),
+        _ => false,
+    }
 }
 
 pub(crate) fn replicate_op(

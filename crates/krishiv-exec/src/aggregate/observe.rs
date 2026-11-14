@@ -157,6 +157,8 @@ struct Local {
     query: Arc<crate::context::QueryContext>,
     finalizer: Arc<Finalizer>,
     partition: u32,
+    /// The driver's lane among the logical partitions' (0 when it is not one).
+    lane: usize,
     sent: bool,
     /// The table's bytes, charged to the driver's consumer.
     reservation: Reservation,
@@ -174,7 +176,8 @@ impl Local {
         let states = self.table.state_batch(&[0])?;
         // The states move to the query's own charge: release the driver's first.
         self.reservation.shrink(self.reservation.size());
-        self.query.observe_partial(&self.finalizer, states)
+        self.query
+            .observe_partial(&self.finalizer, (self.partition, self.lane), states)
     }
 }
 
@@ -227,6 +230,7 @@ impl Operator for CollectMetrics {
             query: Arc::clone(ctx.query()),
             finalizer: Arc::clone(&self.finalizer),
             partition: ctx.partition(),
+            lane: ctx.lane().map_or(0, |(lane, _)| lane),
             sent: false,
             reservation: ctx.consumer().reservation(),
             claimed: None,
