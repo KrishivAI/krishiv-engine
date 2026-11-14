@@ -60,8 +60,8 @@ fn spatial_key(node: &Node<'_>) -> Option<(&'static str, crate::Origin)> {
     )
 }
 
-/// Whether a collated leaf of `t` has no key here: ICU collations (unit 6) and an indeterminate
-/// one.
+/// Whether a collated leaf of `t` has no key here: ICU collations without the `collations-icu`
+/// feature, and an indeterminate one.
 fn no_key(t: Option<&DataType>) -> bool {
     t.is_some_and(|t| {
         t.any_type(&|x| {
@@ -69,7 +69,19 @@ fn no_key(t: Option<&DataType>) -> bool {
                 c.family(),
                 krishiv_types::CollationFamily::Utf8Binary
                     | krishiv_types::CollationFamily::Utf8Lcase
-            ) || c.is_indeterminate())
+            ) && !(cfg!(feature = "collations-icu")
+                && matches!(c.family(), krishiv_types::CollationFamily::Icu { .. }))
+                || c.is_indeterminate())
+        })
+    })
+}
+
+/// Whether a collated leaf of `t` is an ICU collation.
+fn has_icu(t: Option<&DataType>) -> bool {
+    t.is_some_and(|t| {
+        t.any_type(&|x| {
+            matches!(x, DataType::CollatedString(c)
+                if matches!(c.family(), krishiv_types::CollationFamily::Icu { .. }))
         })
     })
 }
@@ -210,9 +222,13 @@ fn collated_key(node: &Node<'_>) -> Option<(&'static str, crate::Origin)> {
                 "mode" => is_collated(arg(0)),
                 "min" | "max" => order_refused(arg(0)),
                 "min_by" | "max_by" => order_refused(arg(1)),
-                "listagg" | "approx_count_distinct" => {
-                    f.args.iter().any(|a| no_key(peeled(a).as_ref()))
-                }
+                "listagg" => f.args.iter().any(|a| no_key(peeled(a).as_ref())),
+                // ADR 0043 Decision 6: a sketch over an ICU collation is refused even where the
+                // feature gives ICU a key.
+                "approx_count_distinct" => f
+                    .args
+                    .iter()
+                    .any(|a| no_key(peeled(a).as_ref()) || has_icu(peeled(a).as_ref())),
                 _ => f.distinct && f.args.iter().any(|a| no_key(expr_type(a))),
             };
             bad.then_some((KEY, e.origin))

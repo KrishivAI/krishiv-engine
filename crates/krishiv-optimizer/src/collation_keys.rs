@@ -15,7 +15,7 @@
 //! - **Sorts, windows and `DISTRIBUTE BY`** use the key; a hash over it is Spark's
 //!   `CollationAwareMurmur3Hash`.
 //!
-//! Joins and scalar comparisons are keyed by the analyzer. What has no key (ICU) never gets here:
+//! Joins and scalar comparisons are keyed by the analyzer. What has no key (ICU without `collations-icu`) never gets here:
 //! the analyzer's guard refuses it.
 
 use std::sync::Arc;

@@ -256,6 +256,11 @@ pub(super) fn specs() -> Vec<Spec> {
         string,
     ));
     out.extend(scalar(
+        &["__icu_case"],
+        &Inputs::Expects(vec![int_arg.clone(), int_arg.clone(), text.clone()]),
+        string,
+    ));
+    out.extend(scalar(
         &["__replace_lcase", "__translate_lcase"],
         &Inputs::Expects(vec![text.clone(), text.clone(), text.clone()]),
         string,
