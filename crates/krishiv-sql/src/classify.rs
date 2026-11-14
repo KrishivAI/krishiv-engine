@@ -107,8 +107,50 @@ pub fn classify(statement: &Statement) -> StatementClass {
 /// assert_eq!(class("EXECUTE IMMEDIATE stmt"), StatementClass::Admin);
 /// ```
 #[must_use]
-#[deny(clippy::wildcard_enum_match_arm)]
 pub fn classify_with(statement: &Statement, options: &ParserOptions) -> StatementClass {
+    class_of(statement, options, DynamicText::Reported)
+}
+
+/// Whether `statement` needs `Manage` on the cluster for its class (ADR 0046 §4: every `ADMIN`
+/// statement does), read with `options`. That is [`classify_with`] giving `ADMIN`, except that
+/// dynamic SQL (the text of an `EXECUTE IMMEDIATE` that cannot be placed before it runs) counts as
+/// `SESSION` wherever it stands: at the top, in a script or under `EXPLAIN ANALYZE`. A run asks for no
+/// `Manage` for it (the statement the text becomes is authorized under its own class when it runs), so
+/// neither does the session's up-front check or the analysis (design `P3-T063-analyze-api.md` §4, N3
+/// decisions). Literal text counts as the statement it holds: `EXECUTE IMMEDIATE 'CLEAR CACHE'` needs
+/// `Manage`, as its run does.
+///
+/// ```
+/// use krishiv_sql::{ParserOptions, needs_cluster_manage, parse_statement};
+///
+/// let options = ParserOptions::default();
+/// let manage = |sql: &str| needs_cluster_manage(&parse_statement(sql, &options).unwrap(), &options);
+/// assert!(!manage("EXECUTE IMMEDIATE stmt"));
+/// assert!(!manage("BEGIN DECLARE s STRING DEFAULT 'SELECT 1'; EXECUTE IMMEDIATE s; END"));
+/// assert!(manage("EXECUTE IMMEDIATE 'CLEAR CACHE'"));
+/// assert!(manage("BEGIN EXECUTE IMMEDIATE stmt; CLEAR CACHE; END"));
+/// ```
+#[must_use]
+pub fn needs_cluster_manage(statement: &Statement, options: &ParserOptions) -> bool {
+    class_of(statement, options, DynamicText::Authorized) == StatementClass::Admin
+}
+
+/// What the class of dynamic SQL (an `EXECUTE IMMEDIATE` whose text cannot be placed) is for.
+#[derive(Clone, Copy)]
+enum DynamicText {
+    /// The class reported ([`classify_with`]): `ADMIN`, the class of what cannot be placed.
+    Reported,
+    /// The class that decides `Manage` on the cluster ([`needs_cluster_manage`]): `SESSION`.
+    Authorized,
+}
+
+/// [`classify_with`], with dynamic SQL classed for `dynamic`.
+#[deny(clippy::wildcard_enum_match_arm)]
+fn class_of(
+    statement: &Statement,
+    options: &ParserOptions,
+    dynamic: DynamicText,
+) -> StatementClass {
     match statement {
         Statement::Query(_)
         | Statement::Show(_)
@@ -117,7 +159,7 @@ pub fn classify_with(statement: &Statement, options: &ParserOptions) -> Statemen
         // `EXPLAIN ANALYZE` runs its statement: it takes that statement's
         // class; any other mode only shows a plan.
         Statement::Explain(e) => match e.mode {
-            ExplainMode::Analyze => classify_with(&e.statement, options),
+            ExplainMode::Analyze => class_of(&e.statement, options, dynamic),
             ExplainMode::Simple
             | ExplainMode::Extended
             | ExplainMode::Formatted
@@ -127,19 +169,23 @@ pub fn classify_with(statement: &Statement, options: &ParserOptions) -> Statemen
             | ExplainMode::Json => StatementClass::Read,
         },
         // A script has the class of the strongest statement anywhere in it.
-        Statement::Script(c) => script_class(c, options),
+        Statement::Script(c) => script_class(c, options, dynamic),
         Statement::ExecuteImmediate(e) => match immediate_class_statement(e, options) {
             Some(inner) => {
-                let class = classify_with(&inner, options);
+                let class = class_of(&inner, options, dynamic);
                 if e.into.is_empty() {
                     class
                 } else {
                     stronger(class, StatementClass::Session)
                 }
             }
-            // cluster-scope: text from a variable or an expression (or text that does not parse)
-            // cannot be placed before it runs.
-            None => StatementClass::Admin,
+            None => match dynamic {
+                // cluster-scope: text from a variable or an expression (or text that does not
+                // parse) cannot be placed before it runs.
+                DynamicText::Reported => StatementClass::Admin,
+                // Dynamic SQL needs no `Manage`: what it runs is authorized when it runs.
+                DynamicText::Authorized => StatementClass::Session,
+            },
         },
         // The legacy view nodes are temporary views with a one-part name:
         // session-local, re-analyzed under the session's principal.
@@ -270,8 +316,10 @@ pub fn explain_kind(statement: &Statement) -> Option<ExplainKind> {
 /// The queries `statement` reads from, each analyzable on its own: their
 /// securables are the statement's reads. A multi-table `INSERT` with a
 /// shared `FROM` has no standalone query and returns `None`, as does any
-/// read through a `DEFAULT` or `SET VARIABLE` expression subquery (only
-/// whole queries are listed).
+/// read through a `DEFAULT` or `SET VARIABLE` expression subquery, and a
+/// subquery in a `MERGE` expression or an `INSERT ... REPLACE WHERE|ON`
+/// (only whole queries are listed; fail closed). [`crate::statement_reads`]
+/// also builds the queries of the shapes that are not whole queries.
 #[must_use]
 #[deny(clippy::wildcard_enum_match_arm)]
 pub fn statement_queries(statement: &Statement) -> Option<Vec<&Query>> {
@@ -297,8 +345,9 @@ pub fn statement_queries(statement: &Statement) -> Option<Vec<&Query>> {
             }
             Vec::new()
         }
+        // A subquery in `REPLACE WHERE|ON` is not a whole query: fail closed, as `MERGE`.
         Statement::Insert(i) => {
-            if i.source.is_some() {
+            if i.source.is_some() || crate::reads::replace_reads_a_relation(i) {
                 return None;
             }
             i.clauses.iter().map(|c| &*c.query).collect()
@@ -729,10 +778,10 @@ pub(crate) fn script_leaves<'a>(c: &'a Compound, f: &mut dyn FnMut(&'a Statement
 /// Session > Read`. That is not [`StatementClass`]'s derived order (`Read < Write < Ddl < Session <
 /// Admin`): a script that declares a variable and runs an `INSERT` must read as a write, and a
 /// surface that admits only `Read` and `Session` statements must not admit it.
-fn script_class(c: &Compound, options: &ParserOptions) -> StatementClass {
+fn script_class(c: &Compound, options: &ParserOptions, dynamic: DynamicText) -> StatementClass {
     let mut class = StatementClass::Read;
     script_leaves(c, &mut |leaf| {
-        class = stronger(class, classify_with(leaf, options));
+        class = stronger(class, class_of(leaf, options, dynamic));
     });
     // Declarations and assignments are session state.
     if has_session_items(&c.body) {

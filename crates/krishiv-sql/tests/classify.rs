@@ -12,8 +12,8 @@ use std::collections::BTreeSet;
 
 use krishiv_sql::ast::Statement;
 use krishiv_sql::{
-    ExplainKind, ParserOptions, StatementClass, classify, explain_kind, parse_statement,
-    statement_queries, statement_reads,
+    ExplainKind, ParserOptions, StatementClass, classify, explain_kind, needs_cluster_manage,
+    parse_statement, statement_queries, statement_reads,
 };
 
 const GOLDENS: &str = include_str!("fixtures/statement-classes.tsv");
@@ -319,6 +319,23 @@ fn merge_subquery_condition_is_partial() {
         assert!(statement_queries(&statement).is_none(), "{sql}");
         assert!(statement_reads(&statement).is_none(), "{sql}");
     }
+    // `INSERT ... REPLACE WHERE|ON` with a subquery fails closed in both entry points too (review m3);
+    // without one, both list the inserted query.
+    for (sql, n) in [
+        (
+            "INSERT INTO t REPLACE WHERE k IN (SELECT k FROM x) SELECT * FROM s",
+            None,
+        ),
+        (
+            "INSERT INTO t REPLACE ON t.k = (SELECT max(k) FROM x) SELECT * FROM s",
+            None,
+        ),
+        ("INSERT INTO t REPLACE WHERE k > 0 SELECT * FROM s", Some(1)),
+    ] {
+        let statement = parse(sql);
+        assert_eq!(statement_queries(&statement).map(|q| q.len()), n, "{sql}");
+        assert_eq!(statement_reads(&statement).map(|q| q.len()), n, "{sql}");
+    }
     // A valid MERGE without subqueries keeps its source query.
     let plain = parse(&format!(
         "{head} WHEN MATCHED AND s.v > 0 THEN UPDATE SET v = s.v + 1 \
@@ -345,7 +362,8 @@ fn statement_reads_cover_the_local_shapes() {
             "UPDATE t AS x SET a = (SELECT max(b) FROM s), b = DEFAULT WHERE x.k IN (SELECT k FROM s)",
             Some(3),
         ),
-        ("DELETE FROM t", Some(0)),
+        // A run analyzes `SELECT 1 FROM t` (review m1).
+        ("DELETE FROM t", Some(1)),
         ("DELETE FROM t WHERE k IN (SELECT k FROM s)", Some(1)),
         (
             "EXPLAIN DELETE FROM t WHERE k IN (SELECT k FROM s)",
@@ -360,5 +378,45 @@ fn statement_reads_cover_the_local_shapes() {
         ("DECLARE v INT DEFAULT (SELECT 1)", None),
     ] {
         assert_eq!(count(sql), n, "{sql}");
+    }
+}
+
+/// Dynamic SQL needs no `Manage` on the cluster wherever it stands (review B1, design §4 N3 decisions),
+/// though its reported class is `ADMIN`; literal text needs what the statement it holds needs.
+#[test]
+fn dynamic_sql_needs_no_cluster_manage() {
+    let options = ParserOptions::default();
+    let parse = |sql: &str| parse_statement(sql, &options).unwrap();
+    for (sql, manage) in [
+        ("EXECUTE IMMEDIATE stmt", false),
+        (
+            "BEGIN DECLARE s STRING DEFAULT 'SELECT 1'; EXECUTE IMMEDIATE s; END",
+            false,
+        ),
+        ("EXPLAIN ANALYZE EXECUTE IMMEDIATE stmt", false),
+        (
+            "EXECUTE IMMEDIATE 'SELECT 1 AS IDENTIFIER(:s ''.'' :c)' USING 'd' AS s, 'c' AS c",
+            false,
+        ),
+        ("EXECUTE IMMEDIATE 'SELEC 1'", false),
+        ("EXECUTE IMMEDIATE 'CLEAR CACHE'", true),
+        ("BEGIN EXECUTE IMMEDIATE 'CLEAR CACHE'; END", true),
+        (
+            "BEGIN EXECUTE IMMEDIATE stmt; ADD JAR '/tmp/a.jar'; END",
+            true,
+        ),
+        ("CLEAR CACHE", true),
+        ("SELECT 1", false),
+    ] {
+        let statement = parse(sql);
+        assert_eq!(needs_cluster_manage(&statement, &options), manage, "{sql}");
+        // Each statement here but the plain query is reported `ADMIN`.
+        if sql != "SELECT 1" {
+            assert_eq!(
+                krishiv_sql::classify_with(&statement, &options),
+                StatementClass::Admin,
+                "{sql}"
+            );
+        }
     }
 }

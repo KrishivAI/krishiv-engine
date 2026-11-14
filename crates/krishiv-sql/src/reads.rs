@@ -10,7 +10,8 @@
 //! - `UPDATE`: each assigned column (`SELECT c FROM t`), and its new values and `WHERE` together
 //!   (`SELECT values FROM t [AS alias] [WHERE ...]`), the queries the session analyzes before it finds
 //!   that the table cannot change, subqueries included;
-//! - `DELETE` with a `WHERE`: `SELECT TRUE FROM t [AS alias] WHERE ...`.
+//! - `DELETE`: `SELECT TRUE FROM t [AS alias] [WHERE ...]` (without a `WHERE` too: a run asks `Select`
+//!   on the table).
 //!
 //! What stays `None` (the statement is `partial`), and why:
 //! - `MERGE` whose `ON`, a clause condition, a `SET` value or an inserted value holds a subquery
@@ -28,7 +29,7 @@
 use std::borrow::Cow;
 
 use crate::ast::{
-    DdlName, Expr, ExprKind, FromClause, FromStatement, Ident, Literal, Merge, MergeAction,
+    DdlName, Expr, ExprKind, FromClause, FromStatement, Ident, Insert, Literal, Merge, MergeAction,
     MergeInsert, MergeSource, Query, Relation, Select, SelectItem, SetExpr, SetExprKind, Span,
     Statement, TableAlias, TableFactor, TableFactorKind,
 };
@@ -42,11 +43,7 @@ pub fn statement_reads(statement: &Statement) -> Option<Vec<Cow<'_, Query>>> {
     match statement {
         Statement::Explain(e) => statement_reads(&e.statement),
         Statement::Insert(i) => {
-            if i.clauses
-                .iter()
-                .flat_map(|c| c.replace_where.iter().chain(c.replace_on.iter()))
-                .any(reads_a_relation)
-            {
+            if replace_reads_a_relation(i) {
                 return None;
             }
             Some(match &i.source {
@@ -85,15 +82,13 @@ pub fn statement_reads(statement: &Statement) -> Option<Vec<Cow<'_, Query>>> {
             )));
             Some(out)
         }
-        Statement::Delete(d) => Some(match &d.where_clause {
-            None => Vec::new(),
-            Some(condition) => vec![Cow::Owned(select_from(
-                &d.table,
-                d.alias.as_ref(),
-                Vec::new(),
-                Some(condition),
-            ))],
-        }),
+        // Without a `WHERE` too: a run analyzes `SELECT 1 FROM t`, so it asks `Select` on `t`.
+        Statement::Delete(d) => Some(vec![Cow::Owned(select_from(
+            &d.table,
+            d.alias.as_ref(),
+            Vec::new(),
+            d.where_clause.as_ref(),
+        ))]),
         Statement::Merge(m) => {
             if merge_reads_a_relation(m) {
                 return None;
@@ -126,6 +121,15 @@ pub fn shared_from_query(source: &FromClause, query: &Query) -> Query {
         },
         ..bare_query(span)
     }
+}
+
+/// Whether a `REPLACE WHERE` or `REPLACE ON` condition of the `INSERT` `i` reads a relation of its own
+/// (such an `INSERT` fails closed, as `MERGE` does).
+pub(crate) fn replace_reads_a_relation(i: &Insert) -> bool {
+    i.clauses
+        .iter()
+        .flat_map(|c| c.replace_where.iter().chain(c.replace_on.iter()))
+        .any(reads_a_relation)
 }
 
 /// Whether an expression of the MERGE `m` (its `ON`, a clause condition, a `SET` value or an inserted
@@ -164,8 +168,18 @@ fn reads_a_relation(e: &Expr) -> bool {
     found
 }
 
-/// A bare `DEFAULT` value (`SET c = DEFAULT`): it reads the column's default, not a column.
-fn is_bare_default(e: &Expr) -> bool {
+/// Whether `e` is a bare `DEFAULT` value (`SET c = DEFAULT`, `(DEFAULT)`, any case, not quoted): it
+/// reads the column's default, not a column.
+///
+/// ```
+/// use krishiv_sql::{ParserOptions, is_bare_default, parse_named_expression};
+///
+/// let e = |sql: &str| parse_named_expression(sql, &ParserOptions::default()).unwrap().expr;
+/// assert!(is_bare_default(&e("(default)")));
+/// assert!(!is_bare_default(&e("`default`")));
+/// ```
+#[must_use]
+pub fn is_bare_default(e: &Expr) -> bool {
     match &e.kind {
         ExprKind::Nested(inner) => is_bare_default(inner),
         ExprKind::Column(parts) => {
