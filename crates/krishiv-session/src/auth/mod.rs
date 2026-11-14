@@ -28,6 +28,7 @@
 
 mod config;
 mod der;
+mod impersonation;
 #[cfg_attr(
     all(not(feature = "oidc"), not(test)),
     expect(
@@ -51,6 +52,8 @@ mod tls_config;
 mod tokens;
 
 #[cfg(test)]
+mod impersonation_tests;
+#[cfg(test)]
 mod jose_tests;
 #[cfg(test)]
 mod mtls_tests;
@@ -71,13 +74,14 @@ use krishiv_common::principal::Principal;
 
 pub use config::{AuthConfig, RoleLists, ThrottleConfig, TokenSpec, is_auth_key};
 pub use der::{CertNames, DerError};
+pub use impersonation::{ActAs, Denial, ImpersonationConfig};
 pub use jose::Alg;
 pub use mtls::{ClientCertificates, MtlsConfig, PrincipalFrom};
 pub use oidc_config::OidcConfig;
 pub use principals::{ImpersonationTarget, PrincipalPrivilege, PrincipalRights, PrincipalTable};
 pub use roles::RolePolicy;
 pub use secret_ref::SecretRef;
-pub use server::{FailureCount, ServerAuth};
+pub use server::{FailureCount, ImpersonationCount, ServerAuth};
 pub use throttle::FailureThrottle;
 #[cfg(feature = "tls")]
 pub use tls::ServerTls;

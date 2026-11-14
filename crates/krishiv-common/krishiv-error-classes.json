@@ -1,4 +1,10 @@
 {
+  "KRISHIV_AUTH_IMPERSONATION_DENIED" : {
+    "message" : [
+      "The caller may not act for this user. An administrator grants acting for others with \"krishiv.auth.principals.CALLER.privileges\" = impersonate and lists whom in \"krishiv.auth.principals.CALLER.impersonates\", where CALLER is the caller's principal name; the server's audit log has the reason."
+    ],
+    "sqlState" : "42501"
+  },
   "KRISHIV_CATALOG_FAILURE" : {
     "message" : [
       "The catalog <catalog> failed while loading <relationName>."

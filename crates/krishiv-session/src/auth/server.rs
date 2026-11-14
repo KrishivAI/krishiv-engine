@@ -19,11 +19,13 @@ use krishiv_common::error::KrishivError;
 use krishiv_common::principal::Principal;
 
 use super::config::{AuthConfig, RoleLists, SPARK_TOKEN_NAME};
+use super::impersonation::{self, ActAs, Decision, ImpersonationConfig};
 #[cfg(feature = "oidc")]
 use super::jose::{self, Identity};
 use super::mtls::{ClientCertificates, MtlsConfig};
 #[cfg(feature = "oidc")]
 use super::oidc::{Oidc, Verified, unix_now};
+use super::principals::PrincipalTable;
 use super::throttle::FailureThrottle;
 use super::tokens::StaticTokens;
 use super::{AuthFailure, Authenticated, Authenticator, Credentials, Method, Surface};
@@ -58,6 +60,23 @@ pub struct ServerAuth {
     oidc_roles: RoleLists,
     /// Indexed by `surface * Method::ALL.len() + method`.
     failures: [AtomicU64; Surface::ALL.len() * Method::ALL.len()],
+    /// The rights of named principals.
+    principals: PrincipalTable,
+    /// Trusted impersonation.
+    impersonation: ImpersonationConfig,
+    /// `krishiv_auth_impersonation_total{decision}`: allowed, denied.
+    impersonations: [AtomicU64; 2],
+}
+
+/// The impersonation counters (`krishiv_auth_impersonation_total{decision}`, design P3-T061
+/// §5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub struct ImpersonationCount {
+    /// Requests that acted for another principal.
+    pub allowed: u64,
+    /// Requests refused.
+    pub denied: u64,
 }
 
 impl ServerAuth {
@@ -130,6 +149,9 @@ impl ServerAuth {
             #[cfg(feature = "oidc")]
             oidc_roles: config.oidc.roles.clone(),
             failures: std::array::from_fn(|_| AtomicU64::new(0)),
+            principals: config.principals.clone(),
+            impersonation: config.impersonation.clone(),
+            impersonations: [AtomicU64::new(0), AtomicU64::new(0)],
         })
     }
 
@@ -293,6 +315,61 @@ impl ServerAuth {
             }
         }
         out
+    }
+
+    /// `caller` (authenticated by this server, on `surface` from `peer`) asking to act as
+    /// `act_as` (design P3-T061 §4.2): the end user's result, or the caller itself when
+    /// `act_as` names only the caller.
+    ///
+    /// Every decision on someone else is one `krishiv::audit` record (caller, end user, a
+    /// digest of the groups, tenant, decision, reason, the token's `jti`, peer; never a
+    /// credential) and one count.
+    ///
+    /// # Errors
+    /// `KRISHIV_AUTH_IMPERSONATION_DENIED` (42501) for every refusal; the reason is in the
+    /// audit record only.
+    pub fn impersonate(
+        &self,
+        caller: &Authenticated,
+        surface: Surface,
+        peer: std::net::SocketAddr,
+        act_as: &ActAs,
+    ) -> Result<Authenticated, KrishivError> {
+        let decision =
+            impersonation::decide(&self.principals, &self.impersonation, caller, peer, act_as);
+        let (outcome, reason) = match &decision {
+            Decision::Itself => return Ok(caller.clone()),
+            Decision::Allowed(_) => ("allowed", None),
+            Decision::Denied(d) => ("denied", Some(d.as_str())),
+        };
+        self.impersonations[usize::from(reason.is_some())].fetch_add(1, Ordering::Relaxed);
+        tracing::info!(
+            target: "krishiv::audit",
+            listener = surface.as_str(),
+            caller = %caller.principal.name,
+            end_user = %act_as.user,
+            groups_hash = %impersonation::groups_hash(&act_as.groups),
+            tenant = act_as.tenant.as_deref().or(caller.principal.tenant.as_deref()),
+            decision = outcome,
+            reason_code = reason,
+            jti = caller.token_id.as_deref(),
+            remote_addr = %peer,
+            "impersonation"
+        );
+        match decision {
+            Decision::Allowed(end_user) => Ok(end_user),
+            Decision::Denied(d) => Err(d.error()),
+            Decision::Itself => Ok(caller.clone()),
+        }
+    }
+
+    /// The impersonation counters so far.
+    #[must_use]
+    pub fn impersonation_counts(&self) -> ImpersonationCount {
+        ImpersonationCount {
+            allowed: self.impersonations[0].load(Ordering::Relaxed),
+            denied: self.impersonations[1].load(Ordering::Relaxed),
+        }
     }
 
     /// Logs and counts `failure`, and returns it.
