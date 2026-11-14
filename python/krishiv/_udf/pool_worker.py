@@ -60,7 +60,25 @@ def _traceback(exc: BaseException) -> str:
 
 
 def _error(sock: socket.socket, kind: str, message: str) -> None:
-    _send(sock, {"t": "error", "kind": kind, "message": message})
+    """Sends an ``error``, its message cut (keeping its end) so the encoded packet fits :data:`MAX_MESSAGE`: a
+    character count does not bound the bytes, since JSON escapes a character to up to six (twelve for a
+    surrogate pair)."""
+    msg = {"t": "error", "kind": kind, "message": message}
+    data = json.dumps(msg, separators=(",", ":")).encode()
+    if len(data) > MAX_MESSAGE:
+        mark = "...\n"
+        msg["message"] = mark
+        budget = MAX_MESSAGE - len(json.dumps(msg, separators=(",", ":")).encode())
+        start = len(message)
+        while start > 0:
+            cost = len(json.dumps(message[start - 1])) - 2  # the character as JSON escapes it
+            if cost > budget:
+                break
+            budget -= cost
+            start -= 1
+        msg["message"] = mark + message[start:]
+        data = json.dumps(msg, separators=(",", ":")).encode()
+    sock.send(data)
 
 
 def _read_memfd(fd: int, length: int) -> Any:
@@ -169,9 +187,11 @@ class _Worker:
                 os.close(fd)
 
 
-def main() -> None:
-    """The worker's entry: greets the server, then serves ``udf`` and ``batch`` messages until EOF."""
-    sock = socket.socket(fileno=0)
+def main(sock: socket.socket | None = None) -> None:
+    """The worker's entry: greets the server over ``sock`` (the worker's stdin when not given), then serves
+    ``udf`` and ``batch`` messages until EOF."""
+    if sock is None:
+        sock = socket.socket(fileno=0)
     try:
         import pyarrow
         import pyspark  # ty: ignore[unresolved-import]  # pool workers only
