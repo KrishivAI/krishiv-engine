@@ -40,31 +40,56 @@ pub fn mask_literals(sql: &str) -> String {
 #[must_use]
 pub fn string_literal_bodies(sql: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
+    let mut push = |b: String| {
+        if !b.is_empty() && !out.contains(&b) {
+            out.push(b);
+        }
+    };
+    // Adjacent string tokens are one literal to the parser (`'a' 'b'` is `ab`): the run's joined text per decoding.
+    let mut run: [String; 4] = Default::default();
+    let mut run_len = 0usize;
     for t in tokenize(sql) {
         let text = t.span.text(sql);
+        if matches!(t.kind, TokenKind::Comment | TokenKind::UnclosedComment)
+            || text.trim().is_empty()
+        {
+            continue;
+        }
+        // Every decoding the session settings allow, as `redact` does: the analyzer names an output by the
+        // decoded text (`'\u0068i'` is named `hi`), and a raw string (`r'..'`) carries its prefix in the token.
         let bodies: Vec<String> = match t.kind {
-            // Every decoding the session settings allow, as `redact` does: the analyzer names an output by the
-            // decoded text (`'\u0068i'` is named `hi`), and a raw string (`r'..'`) carries its prefix in the token.
             TokenKind::String | TokenKind::DoubleQuoted => vec![
                 unescape_string(text, true, false),
                 unescape_string(text, true, true),
                 unescape_string(text, false, false),
                 unescape_string(text, false, true),
             ],
-            TokenKind::DollarString => text
-                .strip_prefix('$')
-                .and_then(|rest| {
-                    let tag = rest.find('$')? + 2;
-                    text.get(tag..text.len().checked_sub(tag)?)
-                })
-                .map(str::to_owned)
-                .into_iter()
-                .collect(),
+            TokenKind::DollarString => {
+                let body = text
+                    .strip_prefix('$')
+                    .and_then(|rest| {
+                        let tag = rest.find('$')? + 2;
+                        text.get(tag..text.len().checked_sub(tag)?)
+                    })
+                    .map(str::to_owned)
+                    .unwrap_or_default();
+                vec![body; 4]
+            }
             _ => Vec::new(),
         };
-        for b in bodies {
-            if !b.is_empty() && !out.contains(&b) {
-                out.push(b);
+        if bodies.is_empty() {
+            run = Default::default();
+            run_len = 0;
+            continue;
+        }
+        run_len += 1;
+        for (acc, b) in run.iter_mut().zip(bodies) {
+            push(b.clone());
+            acc.push_str(&b);
+        }
+        if run_len > 1 {
+            for acc in &run {
+                push(acc.clone());
             }
         }
     }
@@ -222,6 +247,15 @@ mod tests {
     #[test]
     fn escaped_bodies_are_decoded() {
         assert!(string_literal_bodies("SELECT '\\u0068unter2'").contains(&"hunter2".to_owned()));
+    }
+
+    #[test]
+    fn adjacent_strings_join_and_dollar_bodies_are_kept() {
+        let b = string_literal_bodies("SELECT 'hunter' /* c */ 'two', $t$dol$t$ $t$lar$t$, 1");
+        assert!(b.contains(&"huntertwo".to_owned()), "{b:?}");
+        assert!(b.contains(&"hunter".to_owned()) && b.contains(&"two".to_owned()));
+        assert!(b.contains(&"dollar".to_owned()), "{b:?}");
+        assert!(!string_literal_bodies("SELECT 'a', 'b'").contains(&"ab".to_owned()));
     }
 
     #[test]

@@ -419,6 +419,28 @@ fn an_unaliased_literal_projection_is_masked_in_the_plan() {
 }
 
 #[test]
+fn concatenated_and_punctuated_literal_names_are_masked() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = EngineRuntime::builder()
+        .config("krishiv.history.path", dir.path().to_str().unwrap())
+        .build()
+        .unwrap();
+    let session = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    run(&session, "SELECT 'huntera' 'twob' FROM range(0, 5)");
+    run(&session, "SELECT 'hunterc-secretd' FROM range(0, 5)");
+    rt.profile_history.as_ref().unwrap().flush();
+    for stored in read_history(dir.path()).unwrap() {
+        for leak in ["huntera", "twob", "hunterc", "secretd"] {
+            assert!(
+                !stored.profile.contains(leak),
+                "{leak} stored: {}",
+                stored.profile
+            );
+        }
+    }
+}
+
+#[test]
 fn mask_word_replaces_whole_words_only() {
     assert_eq!(
         super::mask_word("a, alias, a_b, a", "a"),

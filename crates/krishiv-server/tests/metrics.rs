@@ -70,6 +70,9 @@ fn full_registry() -> Arc<MetricsRegistry> {
             .unwrap();
     }
     registry
+        .add_gauge("krishiv.history.write_failures", Vec::new(), || Some(2))
+        .unwrap();
+    registry
         .add_gauge("krishiv.memory.reserved", Vec::new(), || Some(8))
         .unwrap();
     registry

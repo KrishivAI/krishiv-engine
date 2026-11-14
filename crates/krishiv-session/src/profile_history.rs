@@ -394,6 +394,8 @@ fn stored(e: HistoryEntry, mask: bool) -> Option<StoredProfile> {
                 .map(|f| f.name().clone())
                 .collect(),
         };
+        let mut names = names;
+        names.sort_by_key(|n| std::cmp::Reverse(n.len()));
         mask_plan(&mut profile.plan, &names);
         sql = sql.map(|t| krishiv_sql::mask_literals(&t));
     }
@@ -415,11 +417,14 @@ fn stored(e: HistoryEntry, mask: bool) -> Option<StoredProfile> {
 /// Replaces the literals in every node's argument text with `?`.
 /// Then every whole-word occurrence of a string literal's text (`names`), which a generated output name carries.
 fn mask_plan(node: &mut krishiv_exec::profile::ProfileNode, names: &[String]) {
-    let mut detail = krishiv_sql::mask_literals(&node.detail);
+    // Names first, on the text as printed: `mask_literals` re-spaces tokens (`hunter-secret` would become
+    // `hunter - secret`) and no longer finds the literal's spelling. Longest first, so a name holding another is
+    // masked whole.
+    let mut detail = node.detail.clone();
     for name in names.iter().filter(|n| !n.is_empty()) {
         detail = mask_word(&detail, name);
     }
-    node.detail = detail;
+    node.detail = krishiv_sql::mask_literals(&detail);
     for child in &mut node.children {
         mask_plan(child, names);
     }
