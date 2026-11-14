@@ -158,6 +158,13 @@ pub(crate) struct Parser<'s> {
     /// before they close or a `;` at their level (see
     /// `Parser::case_or_column`); one pass, so each lookup is constant time.
     when_ahead: Vec<bool>,
+    /// For each token (and one past the last), the bracket depth before it:
+    /// `Parser::depth_since` subtracts two entries.
+    depth_before: Vec<i64>,
+    /// For each token (and one past the last), the `CASE` words a scan from
+    /// it meets in its brackets outside nested `CASE`s (see
+    /// `Parser::closer_ahead_table`); filled once the parser is built.
+    closer_ahead: Vec<u8>,
     /// Token positions of the `?` parameter markers, in order.
     markers: Vec<usize>,
     /// How many script bodies the cursor is inside: a statement there ends at its `;`.
@@ -745,10 +752,21 @@ impl<'s> Parser<'s> {
             }
         }
         let when_ahead = when_ahead_table(src, &toks);
+        let mut depth_before = Vec::with_capacity(toks.len() + 1);
+        let mut depth = 0i64;
+        depth_before.push(depth);
+        for t in &toks {
+            match t.kind {
+                TokenKind::Sym(Sym::LParen | Sym::LBracket) => depth += 1,
+                TokenKind::Sym(Sym::RParen | Sym::RBracket) => depth -= 1,
+                _ => {}
+            }
+            depth_before.push(depth);
+        }
         let markers = (0..toks.len())
             .filter(|&i| toks[i].kind == TokenKind::Sym(Sym::Question))
             .collect();
-        Self {
+        let mut parser = Self {
             src,
             toks,
             classes,
@@ -764,6 +782,8 @@ impl<'s> Parser<'s> {
             after_parens,
             closers,
             when_ahead,
+            depth_before,
+            closer_ahead: vec![],
             markers,
             in_script: 0,
             in_named: 0,
@@ -776,7 +796,9 @@ impl<'s> Parser<'s> {
             cast_types: vec![],
             force_bare,
             insert_bodies: false,
-        }
+        };
+        parser.closer_ahead = parser.closer_ahead_table();
+        parser
     }
 
     /// The outcome of a parse that produced `out`: an error Spark raises

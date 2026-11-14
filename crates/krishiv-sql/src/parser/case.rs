@@ -83,44 +83,111 @@ impl Parser<'_> {
     /// and outside any `CASE` that starts after `n`: the operator reading of
     /// `NOT` can then end the part (`THEN NOT end = 1 END`, Spark
     /// `NOT ('end = 1)`), where `ELSE not END AND x FROM t` has no closer
-    /// left, so `NOT` is the column there.
+    /// left, so `NOT` is the column there. Read from the statement's
+    /// [`Self::closer_ahead_table`], so each lookup is constant time.
     pub(super) fn part_closer_after(&self, n: usize, part: CasePart) -> bool {
-        let (mut depth, mut cases) = (0i64, 0usize);
-        let mut i = n;
-        while let Some(kind) = self.kind(i) {
-            match kind {
-                TokenKind::Sym(Sym::LParen | Sym::LBracket) => depth += 1,
-                TokenKind::Sym(Sym::RParen | Sym::RBracket) => {
-                    depth -= 1;
-                    if depth < 0 {
-                        return false;
+        let want = part
+            .closers()
+            .iter()
+            .fold(0u8, |bits, word| bits | closer_bit(word));
+        self.closer_ahead
+            .get(self.pos + n)
+            .is_some_and(|ahead| ahead & want != 0)
+    }
+
+    /// For each token `i` (and one past the last), the `CASE` words
+    /// (`WHEN`, `THEN`, `ELSE`, `END` as [`closer_bit`]s) a scan from `i`
+    /// meets in `i`'s brackets, outside any `CASE` that starts at or after
+    /// `i`, before those brackets close or a `;` at their level: one pass
+    /// left to right pairs brackets and each `CASE` with its `END`, one pass
+    /// right to left fills the table. Built at the start of the statement
+    /// (the cursor at token 0, so offsets are positions).
+    pub(super) fn closer_ahead_table(&self) -> Vec<u8> {
+        const NONE: usize = usize::MAX;
+        let len = self.toks.len();
+        // The closing bracket of each opening one, and the `END` of each
+        // `CASE`, in its brackets (`NONE` when unclosed).
+        let (mut bracket_end, mut case_end) = (vec![NONE; len], vec![NONE; len]);
+        // The open brackets, each with the `CASE`s open at its level; the
+        // first level is the statement's.
+        let mut levels: Vec<(usize, Vec<usize>)> = vec![(NONE, vec![])];
+        for i in 0..len {
+            match self.kind(i) {
+                Some(TokenKind::Sym(Sym::LParen | Sym::LBracket)) => levels.push((i, vec![])),
+                Some(TokenKind::Sym(Sym::RParen | Sym::RBracket)) => {
+                    if levels.len() > 1
+                        && let Some((open, _)) = levels.pop()
+                        && let Some(end) = bracket_end.get_mut(open)
+                    {
+                        *end = i;
+                    } else if let Some((_, cases)) = levels.last_mut() {
+                        cases.clear();
                     }
                 }
-                TokenKind::Sym(Sym::Semi) if depth == 0 => return false,
-                TokenKind::Word if depth == 0 && self.case_starts_at(i) => cases += 1,
-                TokenKind::Word if depth == 0 && cases > 0 && self.kw_at(i, "END") => cases -= 1,
-                TokenKind::Word
-                    if depth == 0 && cases == 0 && self.any_kw_at(i, part.closers()) =>
-                {
-                    return true;
+                Some(TokenKind::Sym(Sym::Semi)) => {
+                    if let Some((_, cases)) = levels.last_mut() {
+                        cases.clear();
+                    }
+                }
+                Some(TokenKind::Word) if self.case_starts_at(i) => {
+                    if let Some((_, cases)) = levels.last_mut() {
+                        cases.push(i);
+                    }
+                }
+                Some(TokenKind::Word) if self.kw_at(i, "END") => {
+                    if let Some((_, cases)) = levels.last_mut()
+                        && let Some(open) = cases.pop()
+                        && let Some(end) = case_end.get_mut(open)
+                    {
+                        *end = i;
+                    }
                 }
                 _ => {}
             }
-            i += 1;
         }
-        false
+        let mut out = vec![0u8; len + 1];
+        for i in (0..len).rev() {
+            let after = |end: usize| {
+                if end == NONE {
+                    0
+                } else {
+                    out.get(end + 1).copied().unwrap_or(0)
+                }
+            };
+            let ahead = match self.kind(i) {
+                Some(TokenKind::Sym(Sym::LParen | Sym::LBracket)) => {
+                    after(bracket_end.get(i).copied().unwrap_or(NONE))
+                }
+                Some(TokenKind::Sym(Sym::RParen | Sym::RBracket | Sym::Semi)) => 0,
+                Some(TokenKind::Word) if case_end.get(i).is_some_and(|&e| e != NONE) => {
+                    after(case_end.get(i).copied().unwrap_or(NONE))
+                }
+                Some(TokenKind::Word) if self.case_starts_at(i) => 0,
+                Some(TokenKind::Word) => {
+                    closer_bit(self.text(i)) | out.get(i + 1).copied().unwrap_or(0)
+                }
+                _ => out.get(i + 1).copied().unwrap_or(0),
+            };
+            if let Some(slot) = out.get_mut(i) {
+                *slot = ahead;
+            }
+        }
+        out
     }
 
     /// Whether `CASE` at offset `n` may start a `CASE` expression, for
-    /// [`Self::part_closer_after`]: not a qualified name's part (`t.case`,
-    /// `case.x`) nor a column that a closer, `,` or `)` ends (`= case END`).
+    /// [`Self::closer_ahead_table`]: not a qualified name's part (`t.case`,
+    /// `case.x`), nor a column the column rule takes (`= case END`,
+    /// `case + 1`, `case * case`, `case || 'x'`, see
+    /// [`Self::column_follows`]), nor one without a `WHEN` after it in its
+    /// brackets (`case - 1 END`), which no `CASE` expression can be.
     fn case_starts_at(&self, n: usize) -> bool {
         self.kw_at(n, "CASE")
             && !(n > 0 && self.sym_at(n - 1, Sym::Dot))
             && !self.sym_at(n + 1, Sym::Dot)
-            && !self.sym_at(n + 1, Sym::Comma)
-            && !self.sym_at(n + 1, Sym::RParen)
+            && !self.column_follows(n + 1)
             && !self.any_kw_at(n + 1, &["END", "THEN", "ELSE", "WHEN"])
+            && self.when_ahead.get(self.pos + n).copied().unwrap_or(false)
     }
 
     /// Whether the token at offset `n` continues an expression before it: a
@@ -142,17 +209,14 @@ impl Parser<'_> {
             || (self.kw_at(n, "NOT") && self.any_kw_at(n + 1, PREDICATES))
     }
 
-    /// The bracket depth of the cursor relative to the token `start`.
+    /// The bracket depth of the cursor relative to the token `start`, from
+    /// the statement's running depth (constant time).
     pub(super) fn depth_since(&self, start: usize) -> i64 {
-        let mut depth = 0i64;
-        for t in self.toks.get(start..self.pos).unwrap_or_default() {
-            match t.kind {
-                TokenKind::Sym(Sym::LParen | Sym::LBracket) => depth += 1,
-                TokenKind::Sym(Sym::RParen | Sym::RBracket) => depth -= 1,
-                _ => {}
-            }
+        if start > self.pos {
+            return 0;
         }
-        depth
+        let at = |i: usize| self.depth_before.get(i).copied().unwrap_or(0);
+        at(self.pos) - at(start)
     }
 
     /// Whether the token at offset `n` may follow a complete expression:
@@ -267,16 +331,23 @@ impl Parser<'_> {
     /// Spark accepts every keyword as an identifier unless keywords are
     /// enforced.
     pub(super) fn reserved_as_column(&self) -> bool {
+        if self.opts.enforce_reserved_keywords || self.kind(0) != Some(TokenKind::Word) {
+            return false;
+        }
+        self.column_follows(1)
+    }
+
+    /// Whether the token at offset `n` ends a reserved word before it as a
+    /// column (see [`Self::reserved_as_column`]): nothing, `FROM`, a binary
+    /// operator but `-`, `,`, `)` or `;`.
+    fn column_follows(&self, n: usize) -> bool {
         use Sym::{
             Amp, Caret, Comma, Concat, Eq, Ge, Gt, Le, Lt, Neq, Percent, Pipe, Plus, RParen, Semi,
             Slash, Star,
         };
-        if self.opts.enforce_reserved_keywords || self.kind(0) != Some(TokenKind::Word) {
-            return false;
-        }
-        match self.kind(1) {
+        match self.kind(n) {
             None => true,
-            Some(TokenKind::Word) => self.kw_at(1, "FROM"),
+            Some(TokenKind::Word) => self.kw_at(n, "FROM"),
             Some(TokenKind::Sym(s)) => [
                 Amp, Caret, Comma, Concat, Eq, Ge, Gt, Le, Lt, Neq, Percent, Pipe, Plus, RParen,
                 Semi, Slash, Star,
@@ -466,5 +537,22 @@ impl Parser<'_> {
             branches,
             else_result,
         })
+    }
+}
+
+/// The bit of a `CASE` word in [`Parser::closer_ahead_table`] (0 for any
+/// other word).
+fn closer_bit(word: &str) -> u8 {
+    use crate::keywords::is_kw;
+    if is_kw(word, "WHEN") {
+        1
+    } else if is_kw(word, "THEN") {
+        2
+    } else if is_kw(word, "ELSE") {
+        4
+    } else if is_kw(word, "END") {
+        8
+    } else {
+        0
     }
 }

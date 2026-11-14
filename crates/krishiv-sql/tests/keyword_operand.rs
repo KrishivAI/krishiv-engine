@@ -607,3 +607,99 @@ fn case_columns_do_not_count_as_nested_case() {
     }
     assert!(started.elapsed().as_secs() < 30);
 }
+
+/// Codex on #761, round 3: a `case` column in arithmetic is not a nested
+/// `CASE` for the closer look-ahead of `NOT`; one with no `WHEN` after it,
+/// or one the column rule takes (`case +`, `case *`, `case ||`, `case /`,
+/// `case =`, `case.x`), leaves the real `END` to close the part. Ground
+/// truth: Spark 4.2.0 `parsePlan` (`'Project [unresolvedalias(CASE WHEN
+/// true THEN NOT ('end = ('case + 1)) END)]` and so on).
+#[test]
+fn case_columns_in_arithmetic_do_not_count_as_nested_case() {
+    use krishiv_plan::SourceId;
+    let t = " | +- Read t";
+    for (sql, want) in [
+        (
+            "SELECT CASE WHEN true THEN NOT end = case + 1 END FROM t",
+            "Project [CASE WHEN true THEN (NOT (end == (case + 1))) END]",
+        ),
+        (
+            "SELECT CASE WHEN true THEN NOT end = case - 1 END FROM t",
+            "Project [CASE WHEN true THEN (NOT (end == (case - 1))) END]",
+        ),
+        (
+            "SELECT CASE WHEN true THEN NOT end = case * case END FROM t",
+            "Project [CASE WHEN true THEN (NOT (end == (case * case))) END]",
+        ),
+        (
+            "SELECT CASE WHEN true THEN NOT end = case || 'x' END FROM t",
+            "Project [CASE WHEN true THEN (NOT (end == concat(case, 'x'))) END]",
+        ),
+        (
+            "SELECT CASE WHEN true THEN NOT end = case.x END FROM t",
+            "Project [CASE WHEN true THEN (NOT (end == case.x)) END]",
+        ),
+        (
+            "SELECT CASE WHEN true THEN NOT end = case / 2 END FROM t",
+            "Project [CASE WHEN true THEN (NOT (end == (case / 2))) END]",
+        ),
+        (
+            "SELECT CASE WHEN true THEN NOT end = case = 1 END FROM t",
+            "Project [CASE WHEN true THEN (NOT ((end == case) == 1)) END]",
+        ),
+        (
+            "SELECT CASE WHEN true THEN NOT end = case + 1 ELSE 0 END FROM t",
+            "Project [CASE WHEN true THEN (NOT (end == (case + 1))) ELSE 0 END]",
+        ),
+        // Real nested `CASE`s still count.
+        (
+            "SELECT CASE WHEN true THEN NOT end = CASE WHEN a THEN 1 END END FROM t",
+            "Project [CASE WHEN true THEN (NOT (end == CASE WHEN a THEN 1 END)) END]",
+        ),
+        (
+            "SELECT CASE WHEN true THEN NOT end = CASE x WHEN 1 THEN 2 END END FROM t",
+            "Project [CASE WHEN true THEN (NOT (end == CASE WHEN (x == 1) THEN 2 END)) END]",
+        ),
+        (
+            "SELECT CASE WHEN true THEN NOT end = case - x WHEN 1 THEN 2 END END FROM t",
+            "Project [CASE WHEN true THEN (NOT (end == CASE WHEN ((- x) == 1) THEN 2 END)) END]",
+        ),
+    ] {
+        let plan = krishiv_sql::parse_and_lower(sql, &ParserOptions::default(), SourceId(0))
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+        let got = plan.root().to_string().replace('\n', " | ");
+        assert_eq!(
+            got.trim_end_matches([' ', '|']),
+            format!("{want}{t}"),
+            "{sql}"
+        );
+    }
+}
+
+/// Codex on #761, round 3: whether a `NOT <closer>` is the operator reads
+/// the bracket depth and the closers ahead from tables built once per
+/// statement, so a long `OR` chain of `NOT end = 1` inside a `CASE` parses in
+/// linear time (each `NOT` rescanned the part from its start and the rest of
+/// the statement), and keeps Spark's tree (`((NOT ('end = 1) OR NOT ('end =
+/// 1)) OR NOT ('end = 1))`, Spark 4.2.0 `parsePlan`).
+#[test]
+fn not_closer_chains_parse_in_linear_time() {
+    use krishiv_plan::SourceId;
+    let sql = "SELECT CASE WHEN true THEN NOT end = 1 OR NOT end = 1 OR NOT end = 1 END FROM t";
+    let plan = krishiv_sql::parse_and_lower(sql, &ParserOptions::default(), SourceId(0))
+        .unwrap_or_else(|e| panic!("{sql}: {e}"));
+    let got = plan.root().to_string().replace('\n', " | ");
+    assert_eq!(
+        got.trim_end_matches([' ', '|']),
+        "Project [CASE WHEN true THEN (((NOT (end == 1)) or (NOT (end == 1))) or (NOT (end == 1))) END] | +- Read t"
+    );
+    let chain = vec!["NOT end = 1"; 60_000].join(" OR ");
+    let sql = format!("SELECT CASE WHEN true THEN {chain} END FROM t");
+    let started = std::time::Instant::now();
+    if let Err(e) = parse_query(&sql, &ParserOptions::default()) {
+        panic!("{e}");
+    }
+    // Generous: linear parsing takes well under a second; the rescans were
+    // about 10^10 token visits.
+    assert!(started.elapsed().as_secs() < 10);
+}
