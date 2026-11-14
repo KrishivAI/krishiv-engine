@@ -373,6 +373,28 @@ pub fn krishiv_session::auth::Credentials<'_>::fmt(&self, &mut core::fmt::Format
 impl<'a> core::clone::Clone for krishiv_session::auth::Credentials<'a>
 pub fn krishiv_session::auth::Credentials<'a>::clone(&self) -> krishiv_session::auth::Credentials<'a>
 impl<'a> core::marker::Copy for krishiv_session::auth::Credentials<'a>
+#[non_exhaustive] pub struct krishiv_session::auth::DeniedCount
+pub krishiv_session::auth::DeniedCount::count: u64
+pub krishiv_session::auth::DeniedCount::privilege: krishiv_plan::analyzer::catalog::Privilege
+pub krishiv_session::auth::DeniedCount::surface: krishiv_session::auth::Surface
+impl core::clone::Clone for krishiv_session::auth::DeniedCount
+pub fn krishiv_session::auth::DeniedCount::clone(&self) -> krishiv_session::auth::DeniedCount
+impl core::cmp::Eq for krishiv_session::auth::DeniedCount
+impl core::cmp::PartialEq for krishiv_session::auth::DeniedCount
+pub fn krishiv_session::auth::DeniedCount::eq(&self, &krishiv_session::auth::DeniedCount) -> bool
+impl core::fmt::Debug for krishiv_session::auth::DeniedCount
+pub fn krishiv_session::auth::DeniedCount::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::auth::DeniedCount
+pub struct krishiv_session::auth::DeniedCounts
+impl krishiv_session::auth::DeniedCounts
+pub fn krishiv_session::auth::DeniedCounts::counts(&self) -> alloc::vec::Vec<krishiv_session::auth::DeniedCount>
+pub fn krishiv_session::auth::DeniedCounts::new() -> Self
+pub fn krishiv_session::auth::DeniedCounts::record(&self, krishiv_session::auth::Surface, krishiv_plan::analyzer::catalog::Privilege)
+pub fn krishiv_session::auth::DeniedCounts::record_named(&self, krishiv_session::auth::Surface, &str)
+impl core::default::Default for krishiv_session::auth::DeniedCounts
+pub fn krishiv_session::auth::DeniedCounts::default() -> Self
+impl core::fmt::Debug for krishiv_session::auth::DeniedCounts
+pub fn krishiv_session::auth::DeniedCounts::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 #[non_exhaustive] pub struct krishiv_session::auth::FailureCount
 pub krishiv_session::auth::FailureCount::count: u64
 pub krishiv_session::auth::FailureCount::method: krishiv_session::auth::Method
@@ -470,8 +492,10 @@ pub fn krishiv_session::auth::RolePolicy::version(&self) -> krishiv_plan::analyz
 pub struct krishiv_session::auth::ServerAuth
 impl krishiv_session::auth::ServerAuth
 pub fn krishiv_session::auth::ServerAuth::authenticate_at(&self, &krishiv_session::auth::Credentials<'_>, std::time::Instant) -> core::result::Result<krishiv_session::auth::Authenticated, krishiv_session::auth::AuthFailure>
+pub fn krishiv_session::auth::ServerAuth::denials(&self) -> alloc::sync::Arc<krishiv_session::auth::DeniedCounts>
 pub fn krishiv_session::auth::ServerAuth::failure_counts(&self) -> alloc::vec::Vec<krishiv_session::auth::FailureCount>
 pub fn krishiv_session::auth::ServerAuth::is_enabled(&self) -> bool
+pub fn krishiv_session::auth::ServerAuth::metrics(&self) -> krishiv_exec::metrics::registry::MetricsSnapshot
 pub fn krishiv_session::auth::ServerAuth::new(&krishiv_session::auth::AuthConfig) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 impl core::fmt::Debug for krishiv_session::auth::ServerAuth
 pub fn krishiv_session::auth::ServerAuth::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -1031,6 +1055,7 @@ pub fn krishiv_session::RuntimeConf::fmt(&self, &mut core::fmt::Formatter<'_>) -
 pub struct krishiv_session::Session
 impl krishiv_session::Session
 pub async fn krishiv_session::Session::authorize_privilege(&self, &krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege, krishiv_sql::classify::StatementClass) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub fn krishiv_session::Session::count_denials(&self, alloc::sync::Arc<krishiv_session::auth::DeniedCounts>, krishiv_session::auth::Surface) -> bool
 impl krishiv_session::Session
 pub fn krishiv_session::Session::builder() -> krishiv_session::SessionBuilder
 pub fn krishiv_session::Session::cache_reserved(&self) -> usize

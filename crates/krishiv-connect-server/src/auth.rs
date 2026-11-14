@@ -42,7 +42,8 @@ use krishiv_connect::proto::v4_3::command::CommandType;
 use krishiv_connect::proto::v4_3::ml_command::Command as MlCommandType;
 use krishiv_plan::analyzer::insufficient_permissions;
 use krishiv_session::auth::{
-    AuthFailure, Authenticated, Authenticator, Credentials, Method, Role, RolePolicy, Surface,
+    AuthFailure, Authenticated, Authenticator, Credentials, DeniedCounts, Method, Role, RolePolicy,
+    Surface,
 };
 use krishiv_session::{
     PathPrefixPolicy, PolicyVersion, Privilege, Securable, Session, StatementClass,
@@ -70,6 +71,7 @@ const GLOBAL_TEMP: &str = "global_temp";
 pub struct ConnectAuth {
     authenticator: Option<Arc<dyn Authenticator>>,
     local: Principal,
+    denials: Option<Arc<DeniedCounts>>,
 }
 
 impl std::fmt::Debug for ConnectAuth {
@@ -94,6 +96,7 @@ impl ConnectAuth {
         Self {
             authenticator: None,
             local: Principal::local_user(),
+            denials: None,
         }
     }
 
@@ -104,7 +107,16 @@ impl ConnectAuth {
         Self {
             authenticator: Some(authenticator),
             local: Principal::local_user(),
+            denials: None,
         }
+    }
+
+    /// The same, counting its refusals of callers with no role into `denials`
+    /// (`krishiv_auth_denied_total`, ADR 0046 §8; normally `ServerAuth::denials`).
+    #[must_use]
+    pub fn with_denials(mut self, denials: Arc<DeniedCounts>) -> Self {
+        self.denials = Some(denials);
+        self
     }
 
     /// Whether requests are authenticated.
@@ -175,6 +187,9 @@ impl ConnectAuth {
                 error_class = error.error_class().name(),
                 "refused a Connect caller with no role"
             );
+            if let Some(d) = &self.denials {
+                d.record(Surface::Connect, Privilege::Browse);
+            }
             return Err(status_of(&error));
         }
         Ok(caller)
@@ -219,11 +234,16 @@ fn failure_status(failure: AuthFailure) -> Status {
 /// for its principal under `PathPrefixPolicy(RolePolicy(role))` on `base`'s runtime. Client
 /// code needs admin until the T014b sandbox merges (ADR 0046 N1). The path confinement of
 /// `config` (`krishiv.io.local.allowedRoots`, `krishiv.io.objectStore.allowedPrefixes`) is
-/// checked once here, so a bad root fails at startup.
+/// checked once here, so a bad root fails at startup. Each session counts its denials into
+/// `denials` under the `connect` surface (`krishiv_auth_denied_total`, ADR 0046 §8).
 ///
 /// # Errors
 /// What `PathPrefixPolicy::from_config` refuses (`KRISHIV_INVALID_CONFIG_VALUE`).
-pub fn role_sessions(base: Session, config: &Config) -> Result<Box<SessionFactory>, KrishivError> {
+pub fn role_sessions(
+    base: Session,
+    config: &Config,
+    denials: Arc<DeniedCounts>,
+) -> Result<Box<SessionFactory>, KrishivError> {
     let config = config.clone();
     let policy = move |role: Option<Role>| {
         let roles = RolePolicy::new(role, Role::Admin, PolicyVersion(0));
@@ -232,7 +252,9 @@ pub fn role_sessions(base: Session, config: &Config) -> Result<Box<SessionFactor
     policy(None)?;
     Ok(Box::new(move |caller: &Authenticated| {
         let policy = policy(caller.role)?;
-        Ok(base.new_session_as(caller.principal.clone(), Arc::new(policy)))
+        let session = base.new_session_as(caller.principal.clone(), Arc::new(policy));
+        session.count_denials(Arc::clone(&denials), Surface::Connect);
+        Ok(session)
     }))
 }
 

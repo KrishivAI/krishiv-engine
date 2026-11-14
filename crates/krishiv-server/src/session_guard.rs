@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
-use krishiv_session::auth::{Authenticator, Credentials, Role, RolePolicy, Surface};
+use krishiv_session::auth::{Authenticator, Credentials, DeniedCounts, Role, RolePolicy, Surface};
 use krishiv_session::{PolicyVersion, Privilege, Securable};
 
 use crate::guard::{Access, Guard, GuardRequest, GuardSurface, Refusal};
@@ -20,6 +20,7 @@ use crate::guard::{Access, Guard, GuardRequest, GuardSurface, Refusal};
 #[derive(Clone)]
 pub struct SessionGuard {
     auth: Arc<dyn Authenticator>,
+    denials: Option<Arc<DeniedCounts>>,
 }
 
 impl std::fmt::Debug for SessionGuard {
@@ -32,7 +33,18 @@ impl SessionGuard {
     /// A guard over `auth` (normally the server's `ServerAuth`).
     #[must_use]
     pub fn new(auth: Arc<dyn Authenticator>) -> Self {
-        Self { auth }
+        Self {
+            auth,
+            denials: None,
+        }
+    }
+
+    /// The same, counting its denials into `denials` (`krishiv_auth_denied_total`, ADR 0046
+    /// §8; normally `ServerAuth::denials`).
+    #[must_use]
+    pub fn with_denials(mut self, denials: Arc<DeniedCounts>) -> Self {
+        self.denials = Some(denials);
+        self
     }
 }
 
@@ -97,6 +109,9 @@ impl Guard for SessionGuard {
                 error_class = "KRISHIV_INSUFFICIENT_PERMISSIONS",
                 "access denied"
             );
+            if let Some(d) = &self.denials {
+                d.record(surface, privilege);
+            }
             Err(Refusal::Denied)
         })
     }

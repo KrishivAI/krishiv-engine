@@ -419,3 +419,32 @@ fn an_admins_stored_options_serve_other_writers() {
         Err(DENIED.to_owned())
     );
 }
+
+/// A server's sessions count their denials (`krishiv_auth_denied_total`, ADR 0046 §8) into the
+/// counter they were given, under its surface and the privilege asked for; an allowed read
+/// counts nothing.
+#[test]
+fn a_session_counts_its_denials() {
+    use krishiv_session::auth::{DeniedCounts, Surface};
+    let tmp = data();
+    let path = tmp.path().join("a.csv");
+    let path = path.to_str().unwrap();
+    let counts = Arc::new(DeniedCounts::new());
+    let viewer = session(tmp.path(), Role::Viewer, &[]);
+    assert!(viewer.count_denials(Arc::clone(&counts), Surface::Connect));
+    assert!(
+        !viewer.count_denials(Arc::new(DeniedCounts::new()), Surface::Ui),
+        "set once"
+    );
+    assert_eq!(read_with(&viewer, path, &[]), Err(DENIED.to_owned()));
+    let operator = session(tmp.path(), Role::Operator, &[]);
+    operator.count_denials(Arc::clone(&counts), Surface::Connect);
+    assert_eq!(read_with(&operator, path, &[]), Ok(2));
+    let nonzero: Vec<_> = counts
+        .counts()
+        .into_iter()
+        .filter(|c| c.count > 0)
+        .map(|c| (c.surface, c.privilege, c.count))
+        .collect();
+    assert_eq!(nonzero, [(Surface::Connect, Privilege::Select, 1)]);
+}

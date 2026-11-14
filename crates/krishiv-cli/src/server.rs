@@ -193,10 +193,12 @@ async fn run_listeners(
         .map_err(|e| e.to_string())?;
     let authenticated = auth.is_enabled();
     let auth = Arc::new(auth);
+    // One denial counter for the guards and every caller's session (ADR 0046 §8).
+    let denials = auth.denials();
     let limits = SessionLimits::from_config(config);
     let manager = Arc::new(if authenticated {
         SessionManager::new(
-            role_sessions(base, config).map_err(|e| e.to_string())?,
+            role_sessions(base, config, Arc::clone(&denials)).map_err(|e| e.to_string())?,
             limits,
         )
     } else {
@@ -215,7 +217,7 @@ async fn run_listeners(
     // without it, a random token printed once (loopback only).
     let token = krishiv_server::internal::random_token().map_err(|e| e.to_string())?;
     let guard: Arc<dyn Guard> = if authenticated {
-        Arc::new(SessionGuard::new(Arc::clone(&auth) as Arc<_>))
+        Arc::new(SessionGuard::new(Arc::clone(&auth) as Arc<_>).with_denials(Arc::clone(&denials)))
     } else {
         Arc::new(TokenGuard::new(&token))
     };
@@ -224,7 +226,7 @@ async fn run_listeners(
         &runtime,
         config,
         guard,
-        authenticated,
+        authenticated.then(|| Arc::clone(&auth)),
         Arc::clone(&ready),
         admin_bound,
     )?;
@@ -233,7 +235,7 @@ async fn run_listeners(
         ConnectServerConfig::from_config(config),
     );
     if authenticated {
-        connect = connect.with_auth(ConnectAuth::new(auth));
+        connect = connect.with_auth(ConnectAuth::new(auth).with_denials(denials));
     }
     if let Some(tls) = &tls {
         connect = connect.with_tls(&tls.server_config());
@@ -322,10 +324,11 @@ fn admin_router(
     runtime: &Arc<EngineRuntime>,
     config: &Config,
     guard: Arc<dyn Guard>,
-    authenticated: bool,
+    auth: Option<Arc<ServerAuth>>,
     ready: Arc<AtomicBool>,
     bound: SocketAddr,
 ) -> Result<axum::Router, String> {
+    let authenticated = auth.is_some();
     let metrics_on = flag(config, &METRICS_ENABLED, false);
     // With authentication configured every scrape authenticates (ADR 0046 §3c: a viewer
     // service principal); `krishiv.server.metrics.public` opens it only without.
@@ -333,7 +336,14 @@ fn admin_router(
     let snapshot_runtime = Arc::clone(runtime);
     let metrics = krishiv_server::metrics::metrics_route_guarded(
         metrics_on,
-        Arc::new(move || snapshot_runtime.metrics()),
+        // With authentication on, the auth counters ride along (ADR 0046 §8).
+        Arc::new(move || {
+            let mut snapshot = snapshot_runtime.metrics();
+            if let Some(auth) = &auth {
+                snapshot.merge(&auth.metrics());
+            }
+            snapshot
+        }),
         (!public).then(|| Arc::clone(&guard)),
     );
     let base = if cfg!(feature = "ui") && flag(config, &UI_ENABLED, true) {

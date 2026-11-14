@@ -167,6 +167,15 @@ pub(crate) fn audit<T>(
 /// an access check fails closed because it cannot name what a statement
 /// touches (`KRISHIV_UNSUPPORTED_FEATURE`).
 fn log_denial(session: &Session, class: StatementClass, e: &KrishivError) {
+    if e.error_class() == ErrorClass::KrishivInsufficientPermissions
+        && let Some((counts, surface)) = session.state.denials.get()
+        && let Some((_, privilege)) = e
+            .message_parameters()
+            .iter()
+            .find(|(name, _)| *name == "privilege")
+    {
+        counts.record_named(*surface, privilege);
+    }
     tracing::warn!(
         target: "krishiv::audit",
         principal = %session.state.principal.name,
@@ -178,6 +187,17 @@ fn log_denial(session: &Session, class: StatementClass, e: &KrishivError) {
 }
 
 impl Session {
+    /// Counts every `KRISHIV_INSUFFICIENT_PERMISSIONS` denial of this session into `counts`
+    /// under `surface` from now on (a server's sessions: `krishiv_auth_denied_total`, ADR 0046
+    /// §8). Set once; a second call changes nothing and returns `false`.
+    pub fn count_denials(
+        &self,
+        counts: Arc<crate::auth::DeniedCounts>,
+        surface: crate::auth::Surface,
+    ) -> bool {
+        self.state.denials.set((counts, surface)).is_ok()
+    }
+
     /// Checks what `statement` (of `class`) writes, creates or drops, and
     /// what it reads without a query, before it runs; an `ADMIN` statement
     /// needs `Manage` on the cluster (ADR 0046 §4). Names are located as analysis locates

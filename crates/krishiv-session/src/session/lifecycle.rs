@@ -140,6 +140,7 @@ impl Session {
                 admission: parts.admission.unwrap_or_else(|| Arc::new(Unlimited)),
                 statements: AtomicU64::new(0),
                 sql_sources: AtomicU32::new(seed.sql_sources),
+                denials: std::sync::OnceLock::new(),
             }),
         }
     }

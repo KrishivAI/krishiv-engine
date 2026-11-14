@@ -27,6 +27,7 @@
 //!   credential) and its failure counters.
 
 mod config;
+mod denials;
 mod der;
 #[cfg_attr(
     all(not(feature = "oidc"), not(test)),
@@ -69,6 +70,7 @@ use futures::future::BoxFuture;
 use krishiv_common::principal::Principal;
 
 pub use config::{AuthConfig, RoleLists, ThrottleConfig, TokenSpec, is_auth_key};
+pub use denials::{DeniedCount, DeniedCounts};
 pub use der::{CertNames, DerError};
 pub use jose::Alg;
 pub use mtls::{ClientCertificates, MtlsConfig, PrincipalFrom};

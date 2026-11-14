@@ -185,6 +185,8 @@ pub(crate) struct SessionState {
     /// while expanding a view point into the view's text, not the outer
     /// statement's (`SourceId(0)` stays the outer statement's).
     sql_sources: AtomicU32,
+    /// Where this session counts its denials (a server's sessions, `Session::count_denials`).
+    pub(crate) denials: std::sync::OnceLock<(Arc<crate::auth::DeniedCounts>, crate::auth::Surface)>,
 }
 
 impl Drop for SessionState {

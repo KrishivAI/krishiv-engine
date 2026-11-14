@@ -174,6 +174,35 @@ pub const ERROR_CLASS_LABEL: LabelDef = LabelDef {
     values: &[],
 };
 
+/// `surface`: the server listener a request came in on (ADR 0046 §8).
+pub const SURFACE_LABEL: LabelDef = LabelDef {
+    name: "surface",
+    values: &["connect", "admin", "metrics", "ui"],
+};
+
+/// `method`: how a request tried to authenticate.
+pub const AUTH_METHOD_LABEL: LabelDef = LabelDef {
+    name: "method",
+    values: &["token", "oidc", "mtls", "throttle", "none"],
+};
+
+/// `privilege`: the privilege an access check asked for.
+pub const PRIVILEGE_LABEL: LabelDef = LabelDef {
+    name: "privilege",
+    values: &[
+        "SELECT",
+        "MODIFY",
+        "CREATE",
+        "DROP",
+        "MONITOR",
+        "USAGE",
+        "BROWSE",
+        "OPERATE",
+        "MANAGE",
+        "IMPERSONATE",
+    ],
+};
+
 /// `cache`: which cache.
 pub const CACHE_LABEL: LabelDef = LabelDef {
     name: "cache",
@@ -216,6 +245,9 @@ pub const LABEL_ALLOWLIST: &[&str] = &[
     "store_kind",
     "version",
     "git_sha",
+    "surface",
+    "method",
+    "privilege",
 ];
 
 /// The most distinct `error_class` label values kept per metric; further
@@ -471,6 +503,28 @@ pub const CATALOGUE: &[MetricDef] = &[
         labels: &[VERSION_LABEL, GIT_SHA_LABEL],
         description: "The build: always 1, labelled with its version and commit.",
         since: "0.1.0",
+        source: MetricSource::Scrape,
+    },
+    MetricDef {
+        name: "krishiv.auth.failed",
+        kind: MetricKind::Counter,
+        unit: "{request}",
+        labels: &[SURFACE_LABEL, AUTH_METHOD_LABEL],
+        description: "Requests to `krishiv server` refused as unauthenticated (a missing, \
+                      malformed, wrong or expired credential) or throttled, by listener and \
+                      the method tried. Zero series without authentication configured.",
+        since: "0.2.0",
+        source: MetricSource::Scrape,
+    },
+    MetricDef {
+        name: "krishiv.auth.denied",
+        kind: MetricKind::Counter,
+        unit: "{request}",
+        labels: &[SURFACE_LABEL, PRIVILEGE_LABEL],
+        description: "Access checks of `krishiv server` callers refused with \
+                      `KRISHIV_INSUFFICIENT_PERMISSIONS`, by listener and the privilege asked \
+                      for.",
+        since: "0.2.0",
         source: MetricSource::Scrape,
     },
 ];

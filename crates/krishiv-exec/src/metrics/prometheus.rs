@@ -507,7 +507,26 @@ mod tests {
 
     #[test]
     fn output_round_trips_and_covers_every_sourced_metric() {
-        let text = render(&full_registry().unwrap().snapshot());
+        let mut snapshot = full_registry().unwrap().snapshot();
+        // The authentication counters are the server's (`ServerAuth::metrics`), merged into
+        // the engine's snapshot by `krishiv server`.
+        let server = |name: &'static str, second: (&str, &str)| CounterSample {
+            name,
+            unit: "{request}",
+            labels: vec![
+                ("surface".to_owned(), "connect".to_owned()),
+                (second.0.to_owned(), second.1.to_owned()),
+            ],
+            value: 1.0,
+        };
+        snapshot.merge(&MetricsSnapshot {
+            counters: vec![
+                server("krishiv.auth.failed", ("method", "token")),
+                server("krishiv.auth.denied", ("privilege", "MODIFY")),
+            ],
+            ..MetricsSnapshot::default()
+        });
+        let text = render(&snapshot);
         let parsed = parse(&text).unwrap();
         for def in CATALOGUE {
             if def.source == MetricSource::NoSource {

@@ -374,6 +374,18 @@ fn configured_tokens_guard_the_admin_routes() {
     assert!(ui.starts_with(expected), "{ui}");
     let probe = http_get(&server.admin, "/healthz");
     assert!(probe.starts_with("HTTP/1.1 200"), "{probe}");
+    // ADR 0046 §8: the refusals above are on `/metrics` (the counters ride on the engine's).
+    let scrape = http_get_as(&server.admin, "/metrics", Some(token));
+    assert!(
+        scrape.contains(r#"krishiv_auth_failed_total{surface="metrics",method="none"} 1"#),
+        "{scrape}"
+    );
+    if cfg!(feature = "ui") {
+        assert!(
+            scrape.contains(r#"krishiv_auth_denied_total{surface="ui",privilege="MONITOR"} 1"#),
+            "{scrape}"
+        );
+    }
 }
 
 #[cfg(unix)]

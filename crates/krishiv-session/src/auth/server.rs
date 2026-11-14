@@ -58,6 +58,8 @@ pub struct ServerAuth {
     oidc_roles: RoleLists,
     /// Indexed by `surface * Method::ALL.len() + method`.
     failures: [AtomicU64; Surface::ALL.len() * Method::ALL.len()],
+    /// The denials of this server's callers (its guards and sessions count into it).
+    denied: std::sync::Arc<super::DeniedCounts>,
 }
 
 impl ServerAuth {
@@ -122,6 +124,7 @@ impl ServerAuth {
             #[cfg(feature = "oidc")]
             oidc_roles: config.oidc.roles.clone(),
             failures: std::array::from_fn(|_| AtomicU64::new(0)),
+            denied: std::sync::Arc::new(super::DeniedCounts::new()),
         })
     }
 
@@ -266,6 +269,52 @@ impl ServerAuth {
             }
             _ => Ok(false),
         }
+    }
+
+    /// The denial counters of this server's callers, shared with whatever counts into them
+    /// (`krishiv_auth_denied_total`, ADR 0046 §8).
+    #[must_use]
+    pub fn denials(&self) -> std::sync::Arc<super::DeniedCounts> {
+        std::sync::Arc::clone(&self.denied)
+    }
+
+    /// `krishiv_auth_failed_total{surface, method}` and `krishiv_auth_denied_total{surface,
+    /// privilege}` (ADR 0046 §8), every series including the zeros, for the server's `/metrics`
+    /// (merged into the engine's snapshot).
+    #[must_use]
+    pub fn metrics(&self) -> krishiv_exec::MetricsSnapshot {
+        let mut out = krishiv_exec::MetricsSnapshot::default();
+        for f in self.failure_counts() {
+            out.counters.push(krishiv_exec::CounterSample {
+                name: "krishiv.auth.failed",
+                unit: "{request}",
+                labels: vec![
+                    ("surface".to_owned(), f.surface.as_str().to_owned()),
+                    ("method".to_owned(), f.method.as_str().to_owned()),
+                ],
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "a counter past 2^53 loses only its low bits"
+                )]
+                value: f.count as f64,
+            });
+        }
+        for d in self.denied.counts() {
+            out.counters.push(krishiv_exec::CounterSample {
+                name: "krishiv.auth.denied",
+                unit: "{request}",
+                labels: vec![
+                    ("surface".to_owned(), d.surface.as_str().to_owned()),
+                    ("privilege".to_owned(), d.privilege.to_string()),
+                ],
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "a counter past 2^53 loses only its low bits"
+                )]
+                value: d.count as f64,
+            });
+        }
+        out
     }
 
     /// The failure counters, every `(surface, method)` pair in order.

@@ -90,7 +90,12 @@ async fn start_with(auth: Arc<dyn Authenticator>, dir: tempfile::TempDir) -> Run
                 .to_string(),
         )
         .expect("allowed roots");
-    let factory = role_sessions(Session::new().expect("session"), &config).expect("factory");
+    let factory = role_sessions(
+        Session::new().expect("session"),
+        &config,
+        Arc::new(krishiv_session::auth::DeniedCounts::new()),
+    )
+    .expect("factory");
     let manager = Arc::new(SessionManager::new(factory, SessionLimits::default()));
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");

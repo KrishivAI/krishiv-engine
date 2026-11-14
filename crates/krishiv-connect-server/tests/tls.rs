@@ -74,7 +74,12 @@ async fn start() -> (SocketAddr, oneshot::Sender<()>, tempfile::TempDir) {
         .expect("server tls")
         .expect("tls on");
     let auth = Arc::new(ServerAuth::new(&auth_config).expect("auth"));
-    let factory = role_sessions(Session::new().expect("session"), &Config::new()).expect("factory");
+    let factory = role_sessions(
+        Session::new().expect("session"),
+        &Config::new(),
+        auth.denials(),
+    )
+    .expect("factory");
     let manager = Arc::new(SessionManager::new(factory, SessionLimits::default()));
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");

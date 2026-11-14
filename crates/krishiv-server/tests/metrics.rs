@@ -320,7 +320,30 @@ fn label<'a>(sample: &'a Sample, name: &str) -> Option<&'a str> {
 
 #[tokio::test]
 async fn metrics_serves_every_sourced_catalogue_metric() {
-    let addr = serve(router_with_metrics(true, provider(&full_registry()))).await;
+    // `krishiv server` merges its authentication counters into the engine's snapshot
+    // (`ServerAuth::metrics`); a sample of each stands in for them here.
+    let registry = full_registry();
+    let with_auth: SnapshotProvider = Arc::new(move || {
+        let mut snapshot = registry.snapshot();
+        let sample = |name: &'static str, second: (&str, &str)| krishiv_exec::CounterSample {
+            name,
+            unit: "{request}",
+            labels: vec![
+                ("surface".to_owned(), "metrics".to_owned()),
+                (second.0.to_owned(), second.1.to_owned()),
+            ],
+            value: 1.0,
+        };
+        snapshot.merge(&krishiv_exec::MetricsSnapshot {
+            counters: vec![
+                sample("krishiv.auth.failed", ("method", "none")),
+                sample("krishiv.auth.denied", ("privilege", "MONITOR")),
+            ],
+            ..krishiv_exec::MetricsSnapshot::default()
+        });
+        snapshot
+    });
+    let addr = serve(router_with_metrics(true, with_auth)).await;
     let response = get(addr, "/metrics").await;
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
     assert!(
