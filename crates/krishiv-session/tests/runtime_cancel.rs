@@ -315,9 +315,13 @@ fn a_write_cancelled_for_any_reason_leaves_no_files() {
         })
     };
     let id = QueryId::parse(OP).unwrap();
-    let until = Instant::now() + Duration::from_secs(30);
-    while !rt.cancel(&id, CancelReason::Admin) {
-        assert!(Instant::now() < until, "the write never started");
+    // `cancel` is true once the id is registered, which can be for the statement's analysis before the
+    // write's own query attaches; a cancel that lands on the analysis alone must not leave the write
+    // running to the end of LONG. Repeat the kill until the write has ended, and fail instead of hanging.
+    let until = Instant::now() + Duration::from_secs(60);
+    while !writer.is_finished() {
+        rt.cancel(&id, CancelReason::Admin);
+        assert!(Instant::now() < until, "the write was never cancelled");
         std::thread::sleep(Duration::from_millis(10));
     }
     let e = writer.join().unwrap().unwrap_err();
