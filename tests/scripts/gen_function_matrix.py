@@ -971,15 +971,14 @@ def pyspark_major() -> int:
     return int(pyspark.__version__.split(".")[0])
 
 
-def conf_or_none(spark, key: str):
-    """The session's value of `key`, or None when the server has no such config (a key newer than the server,
-    e.g. `spark.sql.binaryOutputStyle` on 3.5, which then counts as unset)."""
-    try:
-        return spark.conf.get(key)
-    except Exception as e:  # the client raises version-specific subclasses
-        if "SQL_CONF_NOT_FOUND" in str(e):
-            return None
-        raise
+def outcome_of(res: dict) -> str:
+    """What one mode of a case gave, for the manifest's list of cases a 3.x client could not read."""
+    err = res.get("error")
+    if err:
+        return err["error_class"]
+    if "nondeterministic" in res:
+        return "nondeterministic"
+    return "result"
 
 
 def main() -> int:
@@ -1060,7 +1059,8 @@ def main() -> int:
     for idx, name in enumerate(names):
         fn = by_name[name]
         family = family_of(fn)
-        done = work / (hashlib.sha256(name.encode()).hexdigest()[:16] + ".json") if work else None
+        cache_key = hashlib.sha256(f"{name}|pyspark{pyspark_major()}".encode()).hexdigest()[:16]
+        done = work / (cache_key + ".json") if work else None
         if done and done.exists():
             saved = json.loads(done.read_text(encoding="utf-8"))
             by_family.setdefault(family, []).extend(saved["cases"])
@@ -1093,12 +1093,23 @@ def main() -> int:
                 dropped_parse += 1  # a substitution the parser rejects says nothing about the function
                 continue
             bad_client = [m for m, _ in MODES if c[m].get("error", {}).get("error_class", "").startswith("CLIENT.")]
-            if old_client and bad_client:
+            generator_failed = any(
+                c[m].get("error", {}).get("error_class", "").startswith("GENERATOR.") for m, _ in MODES
+            )
+            if old_client and bad_client and not generator_failed:
                 # A pyspark 3.x client cannot read some types a 3.5 server returns (e.g. year-month intervals):
-                # that says nothing about Spark, so the case is left out and listed in the manifest.
+                # that says nothing about Spark, so the case is left out and listed in the manifest, with what each
+                # mode gave (the loader needs both modes of a case, so a half case cannot stay). A generator
+                # failure in the other mode is never hidden this way: self_check still refuses it.
                 err = c[bad_client[0]]["error"]
                 client_unsupported.append(
-                    {"id": c["id"], "sql": c["sql"], "error": err["error_class"], "message": err["message"]}
+                    {
+                        "id": c["id"],
+                        "sql": c["sql"],
+                        "error": err["error_class"],
+                        "message": err["message"],
+                        "modes": {m: outcome_of(c[m]) for m, _ in MODES},
+                    }
                 )
                 continue
             if c["ansi_off"] == c["ansi_on"]:
@@ -1174,10 +1185,14 @@ def main() -> int:
         "total_cases": sum(f["cases"] for f in families),
         "total_mode_cases": sum(f["cases"] for f in families) * len(MODES),
         "dropped_unparseable_variants": dropped_parse,
-        "dropped_client_unsupported": sorted(client_unsupported, key=lambda d: d["id"]),
         "families": families,
         "functions": fn_rows,
     }
+    if client_unsupported:
+        for d in client_unsupported:
+            if LOCAL_PATH.search(d["message"]) or LOCAL_PATH.search(d["sql"]):
+                raise SystemExit(f"{d['id']}: a local path in the client-unsupported list")
+        manifest["dropped_client_unsupported"] = sorted(client_unsupported, key=lambda d: d["id"])
     write_json(out / "manifest.json", manifest)
     self_check(out, by_family)
     print(

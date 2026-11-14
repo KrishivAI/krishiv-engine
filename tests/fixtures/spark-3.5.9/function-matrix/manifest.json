@@ -559,506 +559,6 @@
  "total_cases": 20657,
  "total_mode_cases": 41314,
  "dropped_unparseable_variants": 0,
- "dropped_client_unsupported": [
-  {
-   "id": "*#a81bc6b8bbe4",
-   "sql": "SELECT (INTERVAL '1-2' YEAR TO MONTH) * 3",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "*#f7c1bbedd489",
-   "sql": "SELECT 2 * (INTERVAL '1-2' YEAR TO MONTH)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "/#76d157b5daf1",
-   "sql": "SELECT (INTERVAL '1-2' YEAR TO MONTH) / 2",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "abs#23a3b7c1c876",
-   "sql": "SELECT abs(CAST(NULL AS interval year to month))",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "abs#5095fc57b734",
-   "sql": "SELECT abs(INTERVAL '1-2' YEAR TO MONTH)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "abs#e54cb1129864",
-   "sql": "SELECT abs(INTERVAL -'1-1' YEAR TO MONTH)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "approx_percentile#07e6f94b9ee1",
-   "sql": "SELECT approx_percentile(col, 0.5, 100) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "approx_percentile#347d3e96575f",
-   "sql": "SELECT approx_percentile(col, 0.5, 100) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '1' MONTH), (INTERVAL '2' MONTH), (INTERVAL '10' MONTH) AS tab(col)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "array_repeat#90135cbf6e9b",
-   "sql": "SELECT array_repeat(INTERVAL '1-2' YEAR TO MONTH, 2)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "coalesce#6790aeb96831",
-   "sql": "SELECT coalesce(NULL, INTERVAL '1-2' YEAR TO MONTH, NULL)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "ifnull#e500a975bbe1",
-   "sql": "SELECT ifnull(NULL, INTERVAL '1-2' YEAR TO MONTH)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#0aa6c8b0ca28",
-   "sql": "SELECT make_ym_interval(2)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#12de73c28d31",
-   "sql": "SELECT make_ym_interval(CAST(1.5 AS DECIMAL(10,2)))",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#1369a3bdf9aa",
-   "sql": "SELECT make_ym_interval(NULL)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#1e811344f628",
-   "sql": "SELECT make_ym_interval(1, 2)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#25f9e57123bb",
-   "sql": "SELECT make_ym_interval(-1, 1)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#28c3771337db",
-   "sql": "SELECT make_ym_interval(1.5D)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#298fa9835775",
-   "sql": "SELECT make_ym_interval(1, CAST(1.5 AS DECIMAL(38,18)))",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#2fc21c101a43",
-   "sql": "SELECT make_ym_interval(CAST(1 AS TINYINT), 2)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#47d37df10d8d",
-   "sql": "SELECT make_ym_interval(CAST(NULL AS int))",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#486b17db35c6",
-   "sql": "SELECT make_ym_interval(CAST(1 AS SMALLINT), 2)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#55a45e7fdd40",
-   "sql": "SELECT make_ym_interval(1, CAST(1 AS TINYINT))",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#582cd07fb72b",
-   "sql": "SELECT make_ym_interval(1, 1.5D)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#584aec67c215",
-   "sql": "SELECT make_ym_interval(1L)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#5d12750c30ac",
-   "sql": "SELECT make_ym_interval(1, 0)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#5da53cf7d016",
-   "sql": "SELECT make_ym_interval(1L, 2)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#68bd4d802c58",
-   "sql": "SELECT make_ym_interval(1, '1')",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#71abc59a863e",
-   "sql": "SELECT make_ym_interval(1, CAST(NULL AS int))",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#79f4fe2c7d06",
-   "sql": "SELECT make_ym_interval(CAST(1 AS SMALLINT))",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#7a2073477bf1",
-   "sql": "SELECT make_ym_interval(1, CAST(1 AS SMALLINT))",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#84a449bb7bd3",
-   "sql": "SELECT make_ym_interval(1, CAST(1.5 AS FLOAT))",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#8bd30123e611",
-   "sql": "SELECT make_ym_interval('1')",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#8f6c91c463ac",
-   "sql": "SELECT make_ym_interval(1, 1)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#93301d125015",
-   "sql": "SELECT make_ym_interval(CAST(1.5 AS FLOAT))",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#93c701d868a7",
-   "sql": "SELECT make_ym_interval('abc', 2)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#a02b861c38f9",
-   "sql": "SELECT make_ym_interval(1, 'abc')",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#a10b0acfa93d",
-   "sql": "SELECT make_ym_interval(CAST(1.5 AS DECIMAL(38,18)))",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#a8bec6e90a3f",
-   "sql": "SELECT make_ym_interval(1, NULL)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#b24167a3b98d",
-   "sql": "SELECT make_ym_interval(CAST(1.5 AS DECIMAL(10,2)), 2)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#bdb97feb7d0e",
-   "sql": "SELECT make_ym_interval(CAST(1.5 AS DECIMAL(38,18)), 2)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#bffd218403ea",
-   "sql": "SELECT make_ym_interval(1, 1L)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#d410aaf3ad94",
-   "sql": "SELECT make_ym_interval('1', 2)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#da7249ce815b",
-   "sql": "SELECT make_ym_interval(1.5D, 2)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#dbe0758c309e",
-   "sql": "SELECT make_ym_interval('abc')",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#dc83fa680168",
-   "sql": "SELECT make_ym_interval(CAST(1 AS TINYINT))",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#e44ae99c542b",
-   "sql": "SELECT make_ym_interval(CAST(NULL AS int), 2)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#e4a59fcc5bdd",
-   "sql": "SELECT make_ym_interval(1)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#e7f6bd9c0195",
-   "sql": "SELECT make_ym_interval(1, CAST(-2147483648 AS INT))",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#e83034dec049",
-   "sql": "SELECT make_ym_interval(CAST(1.5 AS FLOAT), 2)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#f2274d88d78e",
-   "sql": "SELECT make_ym_interval(1, CAST(1.5 AS DECIMAL(10,2)))",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "make_ym_interval#fb98d1bf9c3a",
-   "sql": "SELECT make_ym_interval(NULL, 2)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "median#098c416de7ba",
-   "sql": "SELECT median(col) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "median#925f1a7af8c9",
-   "sql": "SELECT median(col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "mode#5fb17c6a7a68",
-   "sql": "SELECT mode(col) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "mode#a21f5d9d0104",
-   "sql": "SELECT mode(col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH), (INTERVAL '10' MONTH) AS tab(col)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "named_struct#522b3a196d19",
-   "sql": "SELECT named_struct(\"a\", INTERVAL '1-2' YEAR TO MONTH, \"b\", 2, \"c\", 3)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "named_struct#c067a5924893",
-   "sql": "SELECT named_struct(\"a\", 1, \"b\", 2, \"c\", INTERVAL '1-2' YEAR TO MONTH)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "named_struct#e8ebefa519cf",
-   "sql": "SELECT named_struct(\"a\", 1, \"b\", INTERVAL '1-2' YEAR TO MONTH, \"c\", 3)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "negative#987900a6d6ac",
-   "sql": "SELECT negative(INTERVAL '1-2' YEAR TO MONTH)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "nvl#9e1045de78bd",
-   "sql": "SELECT nvl(NULL, INTERVAL '1-2' YEAR TO MONTH)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "percentile#1348e40ceafc",
-   "sql": "SELECT percentile(col, 0.5) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "percentile#7015048ed1f3",
-   "sql": "SELECT percentile(col, 0.5) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "percentile_approx#1e2a57db5bc8",
-   "sql": "SELECT percentile_approx(col, 0.5, 100) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '1' MONTH), (INTERVAL '2' MONTH), (INTERVAL '10' MONTH) AS tab(col)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "percentile_approx#65b2e3cebfe8",
-   "sql": "SELECT percentile_approx(col, 0.5, 100) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "positive#800db4352ef6",
-   "sql": "SELECT positive(INTERVAL '1-2' YEAR TO MONTH)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "stack#2e7db84b83d3",
-   "sql": "SELECT stack(2, 1, INTERVAL '1-2' YEAR TO MONTH, 3)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "struct#0fc70328ef5f",
-   "sql": "SELECT struct(1, 2, INTERVAL '1-2' YEAR TO MONTH)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "struct#5f8c80f88ab9",
-   "sql": "SELECT struct(1, INTERVAL '1-2' YEAR TO MONTH, 3)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "struct#e2beeee445bf",
-   "sql": "SELECT struct(INTERVAL '1-2' YEAR TO MONTH, 2, 3)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "try_add#c1fd50fed303",
-   "sql": "SELECT try_add(interval 1 year, interval 2 year)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "try_add#ddadaf94c15e",
-   "sql": "SELECT try_add(CAST(NULL AS interval year), interval 2 year)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "try_avg#23bbc5b5d375",
-   "sql": "SELECT try_avg(col) FROM VALUES (interval '2147483647 months'), (interval '1 months') AS tab(col)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "try_avg#ec98c24806fe",
-   "sql": "SELECT try_avg(col) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "try_divide#438928ec5060",
-   "sql": "SELECT try_divide(INTERVAL '1-2' YEAR TO MONTH, 2)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "try_divide#67b5387c6e04",
-   "sql": "SELECT try_divide(interval 2 month, 2)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "try_divide#a76d0c6954f9",
-   "sql": "SELECT try_divide(interval 2 month, 0)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "try_divide#c6f73e490267",
-   "sql": "SELECT try_divide(CAST(NULL AS interval month), 2)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "try_multiply#0a188b342bda",
-   "sql": "SELECT try_multiply(INTERVAL '1-2' YEAR TO MONTH, 3)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "try_multiply#31933e3dbf90",
-   "sql": "SELECT try_multiply(CAST(NULL AS interval year), 3)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "try_multiply#66d96b95f6e8",
-   "sql": "SELECT try_multiply(2, INTERVAL '1-2' YEAR TO MONTH)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "try_multiply#79b07d4183ba",
-   "sql": "SELECT try_multiply(interval 2 year, 3)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "try_subtract#4e1124928da8",
-   "sql": "SELECT try_subtract(interval 2 year, interval 1 year)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  },
-  {
-   "id": "try_subtract#6e150f42bc2b",
-   "sql": "SELECT try_subtract(CAST(NULL AS interval year), interval 1 year)",
-   "error": "CLIENT.KeyError",
-   "message": "21"
-  }
- ],
  "families": [
   {
    "family": "agg",
@@ -5579,6 +5079,838 @@
    "deprecated": "",
    "cases": 25,
    "seed_source": "examples"
+  }
+ ],
+ "dropped_client_unsupported": [
+  {
+   "id": "*#a81bc6b8bbe4",
+   "sql": "SELECT (INTERVAL '1-2' YEAR TO MONTH) * 3",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "*#f7c1bbedd489",
+   "sql": "SELECT 2 * (INTERVAL '1-2' YEAR TO MONTH)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "/#76d157b5daf1",
+   "sql": "SELECT (INTERVAL '1-2' YEAR TO MONTH) / 2",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "abs#23a3b7c1c876",
+   "sql": "SELECT abs(CAST(NULL AS interval year to month))",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "abs#5095fc57b734",
+   "sql": "SELECT abs(INTERVAL '1-2' YEAR TO MONTH)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "abs#e54cb1129864",
+   "sql": "SELECT abs(INTERVAL -'1-1' YEAR TO MONTH)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "approx_percentile#07e6f94b9ee1",
+   "sql": "SELECT approx_percentile(col, 0.5, 100) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "approx_percentile#347d3e96575f",
+   "sql": "SELECT approx_percentile(col, 0.5, 100) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '1' MONTH), (INTERVAL '2' MONTH), (INTERVAL '10' MONTH) AS tab(col)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "array_repeat#90135cbf6e9b",
+   "sql": "SELECT array_repeat(INTERVAL '1-2' YEAR TO MONTH, 2)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "coalesce#6790aeb96831",
+   "sql": "SELECT coalesce(NULL, INTERVAL '1-2' YEAR TO MONTH, NULL)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "ifnull#e500a975bbe1",
+   "sql": "SELECT ifnull(NULL, INTERVAL '1-2' YEAR TO MONTH)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#0aa6c8b0ca28",
+   "sql": "SELECT make_ym_interval(2)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#12de73c28d31",
+   "sql": "SELECT make_ym_interval(CAST(1.5 AS DECIMAL(10,2)))",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#1369a3bdf9aa",
+   "sql": "SELECT make_ym_interval(NULL)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#1e811344f628",
+   "sql": "SELECT make_ym_interval(1, 2)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#25f9e57123bb",
+   "sql": "SELECT make_ym_interval(-1, 1)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#28c3771337db",
+   "sql": "SELECT make_ym_interval(1.5D)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#298fa9835775",
+   "sql": "SELECT make_ym_interval(1, CAST(1.5 AS DECIMAL(38,18)))",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#2fc21c101a43",
+   "sql": "SELECT make_ym_interval(CAST(1 AS TINYINT), 2)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#47d37df10d8d",
+   "sql": "SELECT make_ym_interval(CAST(NULL AS int))",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#486b17db35c6",
+   "sql": "SELECT make_ym_interval(CAST(1 AS SMALLINT), 2)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#55a45e7fdd40",
+   "sql": "SELECT make_ym_interval(1, CAST(1 AS TINYINT))",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#582cd07fb72b",
+   "sql": "SELECT make_ym_interval(1, 1.5D)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#584aec67c215",
+   "sql": "SELECT make_ym_interval(1L)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#5d12750c30ac",
+   "sql": "SELECT make_ym_interval(1, 0)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#5da53cf7d016",
+   "sql": "SELECT make_ym_interval(1L, 2)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#68bd4d802c58",
+   "sql": "SELECT make_ym_interval(1, '1')",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#71abc59a863e",
+   "sql": "SELECT make_ym_interval(1, CAST(NULL AS int))",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#79f4fe2c7d06",
+   "sql": "SELECT make_ym_interval(CAST(1 AS SMALLINT))",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#7a2073477bf1",
+   "sql": "SELECT make_ym_interval(1, CAST(1 AS SMALLINT))",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#84a449bb7bd3",
+   "sql": "SELECT make_ym_interval(1, CAST(1.5 AS FLOAT))",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#8bd30123e611",
+   "sql": "SELECT make_ym_interval('1')",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#8f6c91c463ac",
+   "sql": "SELECT make_ym_interval(1, 1)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#93301d125015",
+   "sql": "SELECT make_ym_interval(CAST(1.5 AS FLOAT))",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#93c701d868a7",
+   "sql": "SELECT make_ym_interval('abc', 2)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "UNCLASSIFIED.NumberFormatException",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#a02b861c38f9",
+   "sql": "SELECT make_ym_interval(1, 'abc')",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "UNCLASSIFIED.NumberFormatException",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#a10b0acfa93d",
+   "sql": "SELECT make_ym_interval(CAST(1.5 AS DECIMAL(38,18)))",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#a8bec6e90a3f",
+   "sql": "SELECT make_ym_interval(1, NULL)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#b24167a3b98d",
+   "sql": "SELECT make_ym_interval(CAST(1.5 AS DECIMAL(10,2)), 2)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#bdb97feb7d0e",
+   "sql": "SELECT make_ym_interval(CAST(1.5 AS DECIMAL(38,18)), 2)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#bffd218403ea",
+   "sql": "SELECT make_ym_interval(1, 1L)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#d410aaf3ad94",
+   "sql": "SELECT make_ym_interval('1', 2)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#da7249ce815b",
+   "sql": "SELECT make_ym_interval(1.5D, 2)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#dbe0758c309e",
+   "sql": "SELECT make_ym_interval('abc')",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "UNCLASSIFIED.NumberFormatException",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#dc83fa680168",
+   "sql": "SELECT make_ym_interval(CAST(1 AS TINYINT))",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#e44ae99c542b",
+   "sql": "SELECT make_ym_interval(CAST(NULL AS int), 2)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#e4a59fcc5bdd",
+   "sql": "SELECT make_ym_interval(1)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#e7f6bd9c0195",
+   "sql": "SELECT make_ym_interval(1, CAST(-2147483648 AS INT))",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#e83034dec049",
+   "sql": "SELECT make_ym_interval(CAST(1.5 AS FLOAT), 2)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#f2274d88d78e",
+   "sql": "SELECT make_ym_interval(1, CAST(1.5 AS DECIMAL(10,2)))",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "make_ym_interval#fb98d1bf9c3a",
+   "sql": "SELECT make_ym_interval(NULL, 2)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "median#098c416de7ba",
+   "sql": "SELECT median(col) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "median#925f1a7af8c9",
+   "sql": "SELECT median(col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "mode#5fb17c6a7a68",
+   "sql": "SELECT mode(col) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "mode#a21f5d9d0104",
+   "sql": "SELECT mode(col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH), (INTERVAL '10' MONTH) AS tab(col)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "named_struct#522b3a196d19",
+   "sql": "SELECT named_struct(\"a\", INTERVAL '1-2' YEAR TO MONTH, \"b\", 2, \"c\", 3)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "named_struct#c067a5924893",
+   "sql": "SELECT named_struct(\"a\", 1, \"b\", 2, \"c\", INTERVAL '1-2' YEAR TO MONTH)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "named_struct#e8ebefa519cf",
+   "sql": "SELECT named_struct(\"a\", 1, \"b\", INTERVAL '1-2' YEAR TO MONTH, \"c\", 3)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "negative#987900a6d6ac",
+   "sql": "SELECT negative(INTERVAL '1-2' YEAR TO MONTH)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "nvl#9e1045de78bd",
+   "sql": "SELECT nvl(NULL, INTERVAL '1-2' YEAR TO MONTH)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "percentile#1348e40ceafc",
+   "sql": "SELECT percentile(col, 0.5) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "percentile#7015048ed1f3",
+   "sql": "SELECT percentile(col, 0.5) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "percentile_approx#1e2a57db5bc8",
+   "sql": "SELECT percentile_approx(col, 0.5, 100) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '1' MONTH), (INTERVAL '2' MONTH), (INTERVAL '10' MONTH) AS tab(col)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "percentile_approx#65b2e3cebfe8",
+   "sql": "SELECT percentile_approx(col, 0.5, 100) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "positive#800db4352ef6",
+   "sql": "SELECT positive(INTERVAL '1-2' YEAR TO MONTH)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "stack#2e7db84b83d3",
+   "sql": "SELECT stack(2, 1, INTERVAL '1-2' YEAR TO MONTH, 3)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "struct#0fc70328ef5f",
+   "sql": "SELECT struct(1, 2, INTERVAL '1-2' YEAR TO MONTH)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "struct#5f8c80f88ab9",
+   "sql": "SELECT struct(1, INTERVAL '1-2' YEAR TO MONTH, 3)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "struct#e2beeee445bf",
+   "sql": "SELECT struct(INTERVAL '1-2' YEAR TO MONTH, 2, 3)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "try_add#c1fd50fed303",
+   "sql": "SELECT try_add(interval 1 year, interval 2 year)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "try_add#ddadaf94c15e",
+   "sql": "SELECT try_add(CAST(NULL AS interval year), interval 2 year)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "try_avg#23bbc5b5d375",
+   "sql": "SELECT try_avg(col) FROM VALUES (interval '2147483647 months'), (interval '1 months') AS tab(col)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "try_avg#ec98c24806fe",
+   "sql": "SELECT try_avg(col) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "try_divide#438928ec5060",
+   "sql": "SELECT try_divide(INTERVAL '1-2' YEAR TO MONTH, 2)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "try_divide#67b5387c6e04",
+   "sql": "SELECT try_divide(interval 2 month, 2)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "try_divide#a76d0c6954f9",
+   "sql": "SELECT try_divide(interval 2 month, 0)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "try_divide#c6f73e490267",
+   "sql": "SELECT try_divide(CAST(NULL AS interval month), 2)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "try_multiply#0a188b342bda",
+   "sql": "SELECT try_multiply(INTERVAL '1-2' YEAR TO MONTH, 3)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "try_multiply#31933e3dbf90",
+   "sql": "SELECT try_multiply(CAST(NULL AS interval year), 3)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "try_multiply#66d96b95f6e8",
+   "sql": "SELECT try_multiply(2, INTERVAL '1-2' YEAR TO MONTH)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "try_multiply#79b07d4183ba",
+   "sql": "SELECT try_multiply(interval 2 year, 3)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "try_subtract#4e1124928da8",
+   "sql": "SELECT try_subtract(interval 2 year, interval 1 year)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
+  },
+  {
+   "id": "try_subtract#6e150f42bc2b",
+   "sql": "SELECT try_subtract(CAST(NULL AS interval year), interval 1 year)",
+   "error": "CLIENT.KeyError",
+   "message": "21",
+   "modes": {
+    "ansi_on": "CLIENT.KeyError",
+    "ansi_off": "CLIENT.KeyError"
+   }
   }
  ]
 }
