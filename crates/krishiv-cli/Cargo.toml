@@ -82,6 +82,8 @@ mimalloc = ["krishiv/mimalloc", "dep:mimalloc", "dep:krishiv-alloc", "dep:krishi
 tokio-console = ["krishiv/tokio-console"]
 # JSON logs on stderr with `KRISHIV_LOG=json` (T116).
 telemetry-logs = ["krishiv/telemetry-logs", "dep:krishiv-session"]
+# OTLP export of the query spans and engine metrics.
+telemetry-otlp = ["krishiv/telemetry-otlp", "dep:krishiv-session"]
 # Cloud object stores (S3, GCS, Azure). Opt-in so the default build stays
 # inside the dependency and binary-size budgets.
 cloud = ["krishiv/cloud"]

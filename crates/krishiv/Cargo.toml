@@ -57,4 +57,6 @@ tokio-console = ["dep:krishiv-exec", "krishiv-exec/tokio-console"]
 # JSON log records with query, session and trace ids (T116), installed by the CLI
 # when `KRISHIV_LOG=json`; embedders call `krishiv_session::logging` themselves.
 telemetry-logs = ["krishiv-session/telemetry-logs"]
+# OTLP export of the query spans and engine metrics (`krishiv_session::otlp`), off by default.
+telemetry-otlp = ["krishiv-session/telemetry-otlp"]
 full = ["kafka", "iceberg", "delta", "cdc", "connect", "flight-sql", "mcp", "python", "wasm-udf", "ui", "celeborn", "mimalloc", "cloud"]
