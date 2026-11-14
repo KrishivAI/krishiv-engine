@@ -132,6 +132,7 @@ mod origin;
 mod partial;
 mod plan;
 mod raises;
+mod select_generators;
 pub(crate) mod spark_fmt;
 #[cfg(test)]
 mod tests;
@@ -152,6 +153,7 @@ pub use function::{Builtin, FunctionId, FunctionKind, PythonEvalType, Quantified
 pub use literal::{DayTimeField, Literal, YearMonthField};
 pub use origin::{Origin, PlanId, SourceId, Span};
 pub use partial::partial_state_columns;
+pub use select_generators::{select_with_generators, with_column_generator};
 /// The qualifier prefix of the columns a select-list generator adds: an
 /// unqualified `*` skips them (the generator's own star reads them).
 pub const GENERATE_QUALIFIER_PREFIX: &str = "__krishiv_generate_";

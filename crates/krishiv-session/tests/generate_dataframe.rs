@@ -155,3 +155,78 @@ fn a_generator_in_an_expression_is_refused() {
             .contains("UNSUPPORTED_GENERATOR.NESTED_IN_EXPRESSIONS")
     );
 }
+
+#[test]
+fn with_column_ignores_the_alias_the_generator_carries() {
+    let s = Session::new().unwrap();
+    // `explode(b).alias("zz")` under `withColumn("x", ..)`: the column is `x`.
+    let df = input(&s).with_column("x", call_function("explode", [col("b")]).alias("zz"));
+    assert_eq!(names(&df), ["a", "b", "x"]);
+    assert_eq!(appended_count(&df), 2);
+    // A multi-name alias over a generator of two columns is still one name: the count mismatches.
+    let bad = input(&s).with_column(
+        "x",
+        call_function("posexplode", [col("b")]).alias_all(vec!["p".into(), "v".into()]),
+    );
+    assert!(
+        error_of(&bad)
+            .to_string()
+            .contains("UDTF_ALIAS_NUMBER_MISMATCH")
+    );
+}
+
+/// The rows of a query, as text.
+fn sql_rows(s: &Session, sql: &str) -> Vec<Vec<String>> {
+    rows64(&block_on(s.sql(sql)).unwrap())
+}
+
+#[test]
+fn a_generator_beside_an_aggregate_is_the_sql_path() {
+    let s = Session::new().unwrap();
+    let range = block_on(s.sql("select * from range(3)")).unwrap();
+    for exprs in [
+        &["explode(array(1, 2)) as e", "count(*)"][..],
+        &["explode(array(1, 2)) as e", "count(*) + 1"][..],
+    ] {
+        let df = range.select_expr(exprs.iter().copied()).unwrap();
+        let sql = format!("select {} from range(3)", exprs.join(", "));
+        assert_eq!(rows64(&df), sql_rows(&s, &sql), "{exprs:?}");
+    }
+    let two = range
+        .select_expr(["explode(array(1, 2))", "explode(array(3, 4))", "count(*)"])
+        .unwrap();
+    assert!(
+        error_of(&two)
+            .to_string()
+            .contains("UNSUPPORTED_GENERATOR.MULTI_GENERATOR")
+    );
+    let bare = input(&s).select_expr(["explode(b)", "count(*)"]).unwrap();
+    assert!(error_of(&bare).to_string().contains("MISSING_GROUP_BY"));
+}
+
+fn rows64(df: &DataFrame) -> Vec<Vec<String>> {
+    let batches = block_on(df.collect()).unwrap();
+    let mut out = Vec::new();
+    for b in &batches {
+        for i in 0..b.num_rows() {
+            out.push(
+                b.columns()
+                    .iter()
+                    .map(|c| {
+                        if c.data_type() == &arrow_schema::DataType::Int64 {
+                            c.as_primitive::<arrow_array::types::Int64Type>()
+                                .value(i)
+                                .to_string()
+                        } else {
+                            c.as_primitive::<arrow_array::types::Int32Type>()
+                                .value(i)
+                                .to_string()
+                        }
+                    })
+                    .collect(),
+            );
+        }
+    }
+    out.sort();
+    out
+}

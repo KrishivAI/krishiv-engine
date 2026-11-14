@@ -42,14 +42,19 @@ impl Translator<'_> {
         let node = match kind {
             RelType::Read(r) => self.read(r)?,
             RelType::Sql(s) => self.sql(s)?,
-            RelType::Project(p) => PlanNode::Project {
+            RelType::Project(p) => {
                 // Spark reads a missing input as `OneRowRelation`.
-                input: match &p.input {
+                let input = match &p.input {
                     Some(input) => self.relation(input)?,
                     None => Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
-                },
-                exprs: self.expressions(&p.expressions)?,
-            },
+                };
+                // Generators in the list are lifted as the native DataFrame API does.
+                krishiv_plan::select_with_generators(
+                    input,
+                    self.expressions(&p.expressions)?,
+                    || Origin::UNKNOWN,
+                )
+            }
             RelType::Filter(f) => PlanNode::Filter {
                 input: self.input("Filter", f.input.as_deref())?,
                 predicate: self.required_expression(f.condition.as_ref())?,
@@ -456,10 +461,29 @@ impl Translator<'_> {
                 self.required_expression(alias.expr.as_deref())?,
             ));
         }
-        Ok(PlanNode::WithColumns {
-            input: self.input("WithColumns", w.input.as_deref())?,
-            columns,
-        })
+        let input = self.input("WithColumns", w.input.as_deref())?;
+        // Generator columns are lifted as the native DataFrame API does (one column at a time,
+        // each reading the ones before it).
+        if columns.iter().any(|(n, e)| {
+            krishiv_plan::with_column_generator(&input, n, e, || Origin::UNKNOWN).is_some()
+        }) {
+            let mut plan = input;
+            let last = columns.len() - 1;
+            for (i, (name, value)) in columns.into_iter().enumerate() {
+                let node =
+                    krishiv_plan::with_column_generator(&plan, &name, &value, || Origin::UNKNOWN)
+                        .unwrap_or_else(|| PlanNode::WithColumns {
+                            input: Arc::clone(&plan),
+                            columns: vec![(name, value)],
+                        });
+                if i == last {
+                    return Ok(node);
+                }
+                plan = Arc::new(LogicalPlan::new(node));
+            }
+            return Err(assertion("'aliases' must contain elements."));
+        }
+        Ok(PlanNode::WithColumns { input, columns })
     }
 }
 
