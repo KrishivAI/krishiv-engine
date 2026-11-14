@@ -27,7 +27,14 @@ def spark() -> SparkSession:
 
 
 @pytest.mark.parametrize(
-    "url", ["s3://krishiv-test/x.parquet", "gs://krishiv-test/x.parquet", "az://krishiv-test/x.parquet"]
+    "url",
+    [
+        "s3://krishiv-test/x.parquet",
+        "gs://krishiv-test/x.parquet",
+        "az://krishiv-test/x.parquet",
+        "https://127.0.0.1:9/x.parquet",
+        "hf://datasets/krishiv-test/x/x.parquet",
+    ],
 )
 def test_cloud_urls_are_built_into_the_wheel(spark: SparkSession, url: str) -> None:
     # Point every store at a closed local port so nothing leaves the machine and the failure is quick.
@@ -42,6 +49,7 @@ def test_cloud_urls_are_built_into_the_wheel(spark: SparkSession, url: str) -> N
     with pytest.raises(Exception) as err:  # noqa: PT011 - the class depends on the store; the text is what matters
         spark.read.parquet(url).collect()
     assert "KRISHIV_UNSUPPORTED_FEATURE" not in str(err.value), err.value
+    assert "hadoop" not in str(err.value).lower(), err.value  # PY-031: https:// once failed naming a Hadoop class
 
 
 @pytest.mark.skipif(not ENDPOINT, reason="KRISHIV_TEST_S3_ENDPOINT is not set")
