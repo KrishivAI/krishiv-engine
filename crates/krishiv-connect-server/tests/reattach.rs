@@ -358,15 +358,19 @@ async fn reattach_resumes_after_disconnect() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn execute_plan_with_a_live_id_reattaches_from_the_start() {
     let run = start(ExecuteLimits::default()).await;
-    run.session(10);
-    let mut first = stream(&run.channel, "ExecutePlan", execute(range(100), OP))
+    // About 16 MB of results (490 batches of 4,096 longs): more than the
+    // transport's windows hold, so the first sender is still blocked on its
+    // unread client when the second ExecutePlan replaces it. A small result
+    // could be sent in full before then (seen under coverage).
+    run.session(4096);
+    let mut first = stream(&run.channel, "ExecutePlan", execute(range(2_000_000), OP))
         .await
         .expect("execute");
     first.message().await.expect("ok").expect("schema");
     // The same plan again: a new sender from response 1 (Spark's
     // `SparkConnectExecutePlanHandler` lines 47-55); the old one ends with
     // INVALID_CURSOR.DISCONNECTED.
-    let again = stream(&run.channel, "ExecutePlan", execute(range(100), OP))
+    let again = stream(&run.channel, "ExecutePlan", execute(range(2_000_000), OP))
         .await
         .expect("reattach from the start");
     let old = drain(first).await;
@@ -375,7 +379,7 @@ async fn execute_plan_with_a_live_id_reattaches_from_the_start() {
     let read = drain(again).await;
     read.end.expect("ok");
     assert!(read.responses[0].schema.is_some(), "from the start");
-    assert_every_batch_once(&read.responses, 100, 10);
+    assert_every_batch_once(&read.responses, 2_000_000, 4096);
     assert!(read.responses.last().is_some_and(is_complete));
     // Another plan under the live id is still OPERATION_ALREADY_EXISTS.
     let e = stream(&run.channel, "ExecutePlan", execute(range(7), OP))
