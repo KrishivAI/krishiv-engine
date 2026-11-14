@@ -1,3 +1,7 @@
+---
+description: "Krishiv sessions: Spark SQL and DataFrames over the engine."
+---
+
 **Version:** 0.2.0
 
 # Module `krishiv_session`

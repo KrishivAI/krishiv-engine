@@ -451,7 +451,7 @@ fn an_unwritable_report_exits_2() {
 fn the_docs_examples_pass_check_compat() {
     let docs = repo_root().join("docs");
     let scratch = tempfile::tempdir().expect("tempdir");
-    for (i, page) in ["get-started/quickstart.md", "guides/pyspark-migration.md"]
+    for (i, page) in ["get-started/index.md", "guides/pyspark-migration.md"]
         .iter()
         .enumerate()
     {

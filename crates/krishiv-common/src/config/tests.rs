@@ -613,7 +613,7 @@ fn registry_is_well_formed() {
 #[test]
 fn docs_markdown_lists_every_entry_deterministically() {
     let md = docs_markdown();
-    assert!(md.starts_with("# Krishiv configuration reference\n"));
+    assert!(md.contains("\n# Krishiv configuration reference\n"));
     assert!(md.contains(
         "| Key | Type | Default | Scope | Settable by | Since | Spark alias | Description |"
     ));
