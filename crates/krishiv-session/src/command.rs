@@ -210,12 +210,8 @@ impl Session {
     /// Spark.
     pub(crate) async fn exec_reset(&self, r: &Reset) -> Result<DataFrame, KrishivError> {
         match &r.key {
-            // Back to what the session was built with: every key it set passed `SET`'s check.
-            None => self.state.conf.reset(),
-            Some(key) => {
-                self.authorize_set_key(key).await?;
-                self.conf().unset(key)?;
-            }
+            None => self.state.conf.reset(), // every key it set passed `SET`'s check
+            Some(key) => self.unset_key(key).await?,
         }
         self.empty_frame().await
     }

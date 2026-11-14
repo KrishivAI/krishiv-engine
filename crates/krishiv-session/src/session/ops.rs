@@ -105,6 +105,12 @@ impl Session {
         crate::access::audit(self, class, r)
     }
 
+    /// `RESET key`: the key's `SET` check ([`Self::authorize_set_key`]), then the unset.
+    pub(crate) async fn unset_key(&self, key: &str) -> Result<(), KrishivError> {
+        self.authorize_set_key(key).await?;
+        self.conf().unset(key)
+    }
+
     /// `SET key = ..` (or `RESET key`) of a key only an administrator may change is `Manage`
     /// on the cluster (ADR 0046 §3): a registry key settable by `admin` (its Spark alias too),
     /// or a server-scoped store key (P3-T067b). Any other key passes. Asked before the value
