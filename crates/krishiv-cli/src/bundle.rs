@@ -518,6 +518,7 @@ pub(crate) fn feature_states() -> Vec<(&'static str, bool)> {
         ("celeborn", cfg!(feature = "celeborn")),
         ("tokio-console", cfg!(feature = "tokio-console")),
         ("telemetry-logs", cfg!(feature = "telemetry-logs")),
+        ("telemetry-otlp", cfg!(feature = "telemetry-otlp")),
         ("full", cfg!(feature = "full")),
     ]
 }
@@ -571,6 +572,9 @@ fn enabled_features() -> Vec<&'static str> {
     }
     if cfg!(feature = "telemetry-logs") {
         out.push("telemetry-logs");
+    }
+    if cfg!(feature = "telemetry-otlp") {
+        out.push("telemetry-otlp");
     }
     if cfg!(feature = "full") {
         out.push("full");
