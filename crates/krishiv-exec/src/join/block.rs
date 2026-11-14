@@ -26,56 +26,82 @@ impl Part {
     /// Returns the bytes of the largest run merged (each merge reserves the
     /// run again while it copies: the transient peak), 0 when none was.
     pub(crate) fn coalesce(&mut self, schema: &SchemaRef) -> Result<usize> {
-        const FANOUT: usize = 16;
-        let size = |c: &Batch| c.data().get_array_memory_size();
-        let tier = |c: &Batch| size(c).max(1).ilog(FANOUT);
-        let mut largest = 0;
-        while self.chunks.len() >= FANOUT {
-            let Some(top) = self.chunks.last().map(tier) else {
-                return Ok(largest);
-            };
-            let run = self
-                .chunks
-                .iter()
-                .rev()
-                .take_while(|c| tier(c) <= top)
-                .count();
-            if run < FANOUT {
-                return Ok(largest);
-            }
-            let from = self.chunks.len() - run;
-            let old: usize = self.chunks[from..].iter().map(size).sum();
-            let Some(m) = self.memory.first_mut().filter(|m| m.size() >= old) else {
-                return Ok(largest);
-            };
-            if m.try_grow(old).is_err() {
-                return Ok(largest);
-            }
-            let merged =
-                Batch::concat(schema, &self.chunks[from..]).map_err(|e| internal(e.to_string()));
-            let merged = match merged {
-                Ok(b) if size(&b) <= old => b,
-                other => {
-                    m.shrink(old);
-                    return other.map(|_| largest);
-                }
-            };
-            largest = largest.max(old);
-            m.shrink(old + old - size(&merged));
-            self.chunks.truncate(from);
-            self.chunks.push(merged);
-        }
-        Ok(largest)
-    }
-
-    /// [`block_chunks`] over the part's chunks, the copies reserved in its
-    /// first reservation (the one its chunks are reserved in).
-    pub(crate) fn block(&mut self, schema: &SchemaRef) -> Result<usize> {
         match self.memory.first_mut() {
-            Some(m) => block_chunks(&mut self.chunks, m, schema),
+            Some(m) => merge_tiers(&mut self.chunks, m, schema, usize::MAX, 16),
             None => Ok(0),
         }
     }
+
+    /// [`block_chunks`] over the part's chunks, the copies reserved in its
+    /// first reservation (the one its chunks are reserved in). Runs of
+    /// [`BUILD_FANOUT`] chunks shorter than a block are first merged
+    /// size-tiered among themselves ([`merge_tiers`]): a build fed small
+    /// batches pushes chunks of a few rows (12 drivers cutting each batch
+    /// into its partitions: about 20 rows each on TPC-H q10 at SF10, 29,359
+    /// chunks for 573,157 rows), and finalize's accounting and tail copy then
+    /// walked every one of them (finalize 9 -> 72-89 ms). Chunks of a block or
+    /// more are never merged again, and chunks large enough to fill a block
+    /// before [`BUILD_FANOUT`] of them are held are copied once, by the cut.
+    pub(crate) fn block(&mut self, schema: &SchemaRef) -> Result<usize> {
+        match self.memory.first_mut() {
+            Some(m) => {
+                let merged = merge_tiers(&mut self.chunks, m, schema, ARENA_ROWS, BUILD_FANOUT)?;
+                Ok(merged.max(block_chunks(&mut self.chunks, m, schema)?))
+            }
+            None => Ok(0),
+        }
+    }
+}
+
+/// The build side's merge fan-out: 64 chunks of a block's 2^14 rows hold
+/// 256 rows each on average, so only chunks smaller than that are merged
+/// before the block cut copies them.
+const BUILD_FANOUT: usize = 64;
+
+/// [`Part::coalesce`]'s size-tiered merge over the trailing chunks shorter
+/// than `rows` rows, `fanout` of one tier at a time, each merged copy
+/// reserved in `m` first.
+fn merge_tiers(
+    chunks: &mut Vec<Batch>,
+    m: &mut Reservation,
+    schema: &SchemaRef,
+    rows: usize,
+    fanout: usize,
+) -> Result<usize> {
+    let size = |c: &Batch| c.data().get_array_memory_size();
+    let tier = |c: &Batch| size(c).max(1).ilog(16);
+    let mut largest = 0;
+    while chunks.len() >= fanout {
+        let Some(top) = chunks.last().map(tier) else {
+            return Ok(largest);
+        };
+        let run = chunks
+            .iter()
+            .rev()
+            .take_while(|c| c.num_rows() < rows && tier(c) <= top)
+            .count();
+        if run < fanout {
+            return Ok(largest);
+        }
+        let from = chunks.len() - run;
+        let old: usize = chunks[from..].iter().map(size).sum();
+        if m.size() < old || m.try_grow(old).is_err() {
+            return Ok(largest);
+        }
+        let merged = Batch::concat(schema, &chunks[from..]).map_err(|e| internal(e.to_string()));
+        let merged = match merged {
+            Ok(b) if size(&b) <= old => b,
+            other => {
+                m.shrink(old);
+                return other.map(|_| largest);
+            }
+        };
+        largest = largest.max(old);
+        m.shrink(old + old - size(&merged));
+        chunks.truncate(from);
+        chunks.push(merged);
+    }
+    Ok(largest)
 }
 
 /// Cuts build rows into the arena's blocks as they come (X3' step 3
@@ -336,6 +362,67 @@ mod tests {
             .collect();
         keys.sort_unstable();
         assert!(keys.into_iter().eq(0..next), "rows lost or duplicated");
+        drop(parts);
+        assert_eq!(pool.reserved(), 0);
+    }
+
+    /// A build fed tiny chunks (TPC-H q10 at SF10: about 20 rows each) holds
+    /// few of them: runs of `BUILD_FANOUT` merge before the block cut, so
+    /// finalize does not walk thousands. Rows keep their order, none is
+    /// lost, and the reservation covers what is held.
+    #[test]
+    fn tiny_build_chunks_are_merged_before_the_block_cut() {
+        let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+        let id = pool.register("tiny", None);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int64, false),
+            Field::new("s", DataType::Utf8, false),
+        ]));
+        let mut parts = vec![Part::with_memory(krishiv_memory::Reservation::new(
+            Arc::clone(&pool),
+            id,
+        ))];
+        let mut next = 0i64;
+        let mut most = 0;
+        for _ in 0..5000 {
+            let k = Int64Array::from_iter_values(next..next + 20);
+            let s = StringArray::from_iter_values((next..next + 20).map(|j| format!("row-{j}")));
+            next += 20;
+            let c = Batch::new(
+                RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(k), Arc::new(s)]).unwrap(),
+            );
+            reserve_chunks(&mut parts, &[(0, c.clone())]).unwrap();
+            parts[0].chunks.push(c);
+            parts[0].block(&schema).unwrap();
+            most = most.max(parts[0].chunks.len());
+        }
+        // Without the merge: up to a block's 819 chunks of 20 rows.
+        assert!(most < 2 * BUILD_FANOUT, "{most} chunks held");
+        let keys: Vec<i64> = parts[0]
+            .chunks
+            .iter()
+            .flat_map(|c| {
+                let k = c
+                    .data()
+                    .column(0)
+                    .as_primitive::<arrow_array::types::Int64Type>();
+                k.values().to_vec()
+            })
+            .collect();
+        assert!(
+            keys.into_iter().eq(0..next),
+            "rows lost, duplicated or reordered"
+        );
+        let held: usize = parts[0]
+            .chunks
+            .iter()
+            .map(|c| c.data().get_array_memory_size())
+            .sum();
+        assert!(
+            parts[0].bytes() >= held,
+            "{} reserved, {held} held",
+            parts[0].bytes()
+        );
         drop(parts);
         assert_eq!(pool.reserved(), 0);
     }

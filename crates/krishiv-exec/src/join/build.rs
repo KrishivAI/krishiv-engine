@@ -646,12 +646,13 @@ impl BuildSink {
 }
 
 /// What indexing a partition's in-memory rows reserves, as `(lasting,
-/// transient)`: lasting is its [`JoinTable`] index (and match bitmap when
+/// transient, kept)`: lasting is its [`JoinTable`] index (and match bitmap when
 /// `marks`) plus the copied chunk tails that stay beside chunks the arena
 /// also slices (held through the probe); transient is the rest of the
 /// tails' copy, which replaces chunks dropped once the arena is built
-/// ([`RowArena::reblock_bytes`]). `None` if no rows are in memory.
-fn build_need(part: &Part, row_layout: bool, marks: bool) -> Option<(usize, usize)> {
+/// ([`RowArena::reblock_bytes`]); kept is the tails' part of lasting.
+/// `None` if no rows are in memory.
+fn build_need(part: &Part, row_layout: bool, marks: bool) -> Option<(usize, usize, usize)> {
     if part.chunks.is_empty() {
         return None;
     }
@@ -662,7 +663,7 @@ fn build_need(part: &Part, row_layout: bool, marks: bool) -> Option<(usize, usiz
         index = index.saturating_add(JoinTable::marks_bytes(rows));
     }
     let (copy, kept) = RowArena::reblock_bytes(&part.chunks, 0);
-    Some((index.saturating_add(kept), copy.saturating_sub(kept)))
+    Some((index.saturating_add(kept), copy.saturating_sub(kept), kept))
 }
 
 /// Returns what a built partition's chunks reserved beyond its arena: the
@@ -1015,7 +1016,7 @@ impl Sink for BuildSink {
                         let rows = g.hashing.rows();
                         let marks = s.join_type.builds_preserved();
                         let needs = c.parts.iter().filter_map(|p| build_need(p, rows, marks));
-                        needs.fold((0usize, 0usize), |(i, m), (index, copy)| {
+                        needs.fold((0usize, 0usize), |(i, m), (index, copy, _)| {
                             (i.saturating_add(index), usize::max(m, copy))
                         })
                     };
@@ -1039,12 +1040,12 @@ impl Sink for BuildSink {
                         let marks = s.join_type.builds_preserved();
                         Some((i, build_need(p, g.hashing.rows(), marks)?, p, keys))
                     })
-                    .map(|(i, need, p, keys)| Job {
+                    .map(|(i, (lasting, copy, kept), p, keys)| Job {
                         part: i,
                         bytes: p.bytes(),
-                        kept: RowArena::reblock_bytes(&p.chunks, 0).1,
+                        kept,
                         chunks: std::mem::take(&mut p.chunks),
-                        need,
+                        need: (lasting, copy),
                         keys,
                     })
                     .collect()
