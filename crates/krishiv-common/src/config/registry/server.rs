@@ -171,7 +171,9 @@ pub static CONNECT_HANDSHAKE_TIMEOUT: ConfigEntry = startup(
     ValueType::Duration,
     ConfigValue::Duration(Duration::from_secs(10)),
     "A new Spark Connect connection that sends no first byte for this long is closed, so silent \
-     sockets cannot hold `krishiv.connect.maxConnections` for longer. `0s` means no deadline.",
+     sockets cannot hold `krishiv.connect.maxConnections` for longer; with TLS the whole handshake \
+     must also finish within it. `0s` means no deadline for either, so a client that stalls \
+     mid-handshake holds its connection slot until it disconnects.",
     None,
 );
 
