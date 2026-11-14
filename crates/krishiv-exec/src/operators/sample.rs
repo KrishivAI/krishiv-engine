@@ -9,15 +9,16 @@
 //! upper`; with `upper - lower <= 0` no row is drawn for or kept.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use arrow_array::BooleanArray;
+use arrow_buffer::BooleanBuffer;
 use arrow_schema::SchemaRef;
 use krishiv_types::batch::Batch;
 
-use super::{PartitionState, local_mut};
+use super::local_mut;
 use crate::context::TaskContext;
-use crate::error::{Result, internal};
+use crate::error::Result;
 use crate::operator::{LocalState, Operator, OperatorOutput};
 
 /// Spark's `XORShiftRandom`: the seed hashed with Scala's
@@ -90,16 +91,23 @@ fn mix_last(h: u32, k: u32) -> u32 {
 
 /// Keeps each row whose draw falls in `[lower, upper)`: the draws of one
 /// input partition (the batch's split, else the driver's partition, as a
-/// seeded `rand` reads it) come from one stream seeded `seed + partition`,
-/// shared by the drivers so a partition's rows draw in order whichever
-/// driver runs them.
+/// seeded `rand` reads it) come from one stream seeded `seed + partition`.
+/// Every source that tags splits reads a split whole on one driver, in
+/// order (a file scan under a sample reads whole partitions,
+/// [`ScanPushdowns::partition_order`](super::ScanPushdowns::partition_order)),
+/// so each driver keeps the streams of the splits it reads.
 #[derive(Debug)]
 pub struct Sample {
     schema: SchemaRef,
     lower: f64,
     upper: f64,
     seed: i64,
-    streams: Mutex<HashMap<u32, XorShiftRandom>>,
+}
+
+/// One driver's partition and its splits' streams.
+struct SampleLocal {
+    partition: u32,
+    streams: HashMap<u32, XorShiftRandom>,
 }
 
 impl Sample {
@@ -111,25 +119,21 @@ impl Sample {
             lower,
             upper,
             seed,
-            streams: Mutex::new(HashMap::new()),
         })
     }
 
     /// The keep mask of `rows` rows of `partition`, drawn in order.
-    fn mask(&self, partition: u32, rows: usize) -> Result<BooleanArray> {
-        let mut streams = self
+    fn mask(&self, local: &mut SampleLocal, partition: u32, rows: usize) -> BooleanArray {
+        let seed = self.seed;
+        let rng = local
             .streams
-            .lock()
-            .map_err(|_| internal("a sample's streams are poisoned".to_owned()))?;
-        let rng = streams
             .entry(partition)
-            .or_insert_with(|| XorShiftRandom::new(self.seed.wrapping_add(i64::from(partition))));
-        Ok((0..rows)
-            .map(|_| {
-                let x = rng.next_double();
-                Some(self.lower <= x && x < self.upper)
-            })
-            .collect())
+            .or_insert_with(|| XorShiftRandom::new(seed.wrapping_add(i64::from(partition))));
+        let keep = BooleanBuffer::collect_bool(rows, |_| {
+            let x = rng.next_double();
+            self.lower <= x && x < self.upper
+        });
+        BooleanArray::new(keep, None)
     }
 }
 
@@ -147,8 +151,9 @@ impl Operator for Sample {
     }
 
     fn local_state(&self, ctx: &TaskContext) -> Result<LocalState> {
-        Ok(Box::new(PartitionState {
+        Ok(Box::new(SampleLocal {
             partition: ctx.partition(),
+            streams: HashMap::new(),
         }))
     }
 
@@ -157,8 +162,9 @@ impl Operator for Sample {
         if input.num_rows() == 0 || self.upper - self.lower <= 0.0 {
             return Ok(OperatorOutput::NeedMoreInput(None));
         }
-        let partition = local_mut::<PartitionState>(local, "Sample")?.partition;
-        let mask = self.mask(input.split().unwrap_or(partition), input.num_rows())?;
+        let local = local_mut::<SampleLocal>(local, "Sample")?;
+        let split = input.split().unwrap_or(local.partition);
+        let mask = self.mask(local, split, input.num_rows());
         let out = input.filter(&mask)?;
         if out.num_rows() == 0 {
             return Ok(OperatorOutput::NeedMoreInput(None));
@@ -175,6 +181,13 @@ impl Operator for Sample {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fresh() -> SampleLocal {
+        SampleLocal {
+            partition: 0,
+            streams: HashMap::new(),
+        }
+    }
 
     fn fixture() -> serde_json::Value {
         serde_json::from_str(include_str!(
@@ -231,7 +244,7 @@ mod tests {
             let mask = if upper - lower <= 0.0 {
                 BooleanArray::from(vec![false; 1000])
             } else {
-                s.mask(0, 1000).unwrap()
+                s.mask(&mut fresh(), 0, 1000)
             };
             let ids: Vec<i64> = (0..1000_usize)
                 .filter(|&i| mask.value(i))
@@ -254,12 +267,11 @@ mod tests {
     #[test]
     fn a_partition_stream_continues_across_batches() {
         let schema = Arc::new(arrow_schema::Schema::empty());
-        let whole = Sample::new(Arc::clone(&schema), 0.0, 0.5, 3)
-            .mask(2, 1000)
-            .unwrap();
+        let whole = Sample::new(Arc::clone(&schema), 0.0, 0.5, 3).mask(&mut fresh(), 2, 1000);
         let split = Sample::new(schema, 0.0, 0.5, 3);
-        let a = split.mask(2, 500).unwrap();
-        let b = split.mask(2, 500).unwrap();
+        let mut local = fresh();
+        let a = split.mask(&mut local, 2, 500);
+        let b = split.mask(&mut local, 2, 500);
         let joined: Vec<bool> = a.iter().chain(b.iter()).map(Option::unwrap).collect();
         let whole: Vec<bool> = whole.iter().map(Option::unwrap).collect();
         assert_eq!(joined, whole);
