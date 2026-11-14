@@ -52,7 +52,7 @@ arrow-ipc = { workspace = true, features = ["zstd"] }
 criterion.workspace = true
 object_store = { workspace = true, features = ["fs"] }
 proptest = { workspace = true, features = ["std"] }
-serde_json = { workspace = true, features = ["std"] }
+serde_json = { workspace = true, features = ["std", "float_roundtrip"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "test-util", "time"] }
 

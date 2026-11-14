@@ -791,3 +791,95 @@ fn malformed_inputs_are_errors_not_panics() {
     // A moment kernel only exists for moment aggregates.
     assert!(super::Moments::new(AggregateFunction::Count, true).is_err());
 }
+
+/// SQL-7: every double case of the Spark 4.2.0 moment fixture (`tests/fixtures/spark-4.2.0/moment-goldens.json`,
+/// generator `tests/scripts/gen_moment_goldens.py`) reproduced to the bit under the fixture's own partition
+/// slices: each slice folded into a partial buffer, the partials merged in order into an empty one.
+#[test]
+fn the_spark_420_moment_fixture_is_reproduced_to_the_bit() {
+    use AggregateFunction::{RegrIntercept, RegrR2, RegrSlope, RegrSxx, RegrSxy, RegrSyy};
+    use serde_json::Value;
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../../tests/fixtures/spark-4.2.0/moment-goldens.json"
+    ))
+    .unwrap();
+    // `regr_avgx` / `regr_avgy` are left out: Spark averages as sum / count, the engine keeps a running mean
+    // (a finding recorded with the acceptance issues, not part of SQL-7).
+    let functions: [(&str, AggregateFunction); 15] = [
+        ("kurtosis", Kurtosis),
+        ("skewness", Skewness),
+        ("var_samp", VarSamp),
+        ("var_pop", VarPop),
+        ("stddev_samp", StddevSamp),
+        ("stddev_pop", StddevPop),
+        ("covar_samp", CovarSamp),
+        ("covar_pop", CovarPop),
+        ("corr", Corr),
+        ("regr_sxx", RegrSxx),
+        ("regr_syy", RegrSyy),
+        ("regr_sxy", RegrSxy),
+        ("regr_slope", RegrSlope),
+        ("regr_intercept", RegrIntercept),
+        ("regr_r2", RegrR2),
+    ];
+    let cell = |v: &Value| match v {
+        Value::Null => None,
+        Value::String(s) => Some(match s.as_str() {
+            "NaN" => f64::NAN,
+            "Infinity" => f64::INFINITY,
+            "-Infinity" => f64::NEG_INFINITY,
+            other => panic!("{other}"),
+        }),
+        v => Some(v.as_f64().unwrap()),
+    };
+    let (mut compared, mut bad) = (0, Vec::new());
+    for case in fixture["cases"].as_array().unwrap() {
+        if case["type"] != "double" || case["dataset"] == "big_splitmix64" {
+            continue;
+        }
+        // Rows are (y, x), the argument order of the SQL functions.
+        let rows = case["rows"].as_array().unwrap();
+        let ys: Vec<Option<f64>> = rows.iter().map(|r| cell(&r[0])).collect();
+        let xs: Vec<Option<f64>> = rows.iter().map(|r| cell(&r[1])).collect();
+        let name = case["dataset"].as_str().unwrap();
+        for (fname, f) in &functions {
+            let want = match &case["results"][*fname] {
+                v if v.get("error").is_some() => continue,
+                v if v.get("null").is_some() => None,
+                v => Some(f64::from_bits(
+                    u64::from_str_radix(v["hex"].as_str().unwrap(), 16).unwrap(),
+                )),
+            };
+            // The one-column statistics read x, the pair statistics (y, x).
+            let (first, second) = if arity(f) == 2 {
+                (&ys, &xs)
+            } else {
+                (&xs, &ys)
+            };
+            let mut last = acc(f, false, 1);
+            for s in case["slices"].as_array().unwrap() {
+                let at = |i: usize| usize::try_from(s[i].as_u64().unwrap()).unwrap();
+                let r = at(0)..at(1);
+                let mut partial = acc(f, false, 1);
+                partial
+                    .update(
+                        &vec![0; r.len()],
+                        &columns(f, &first[r.clone()], &second[r]),
+                        &Weights::Const(1),
+                    )
+                    .unwrap();
+                last.merge(&[0], &partial.state(&[0]).unwrap()).unwrap();
+            }
+            let got = value(&last, 0);
+            compared += 1;
+            if !same(got, want) && !(is_nan(got) && is_nan(want)) {
+                bad.push(format!(
+                    "{name} x{} {fname}: {got:?} vs {want:?}",
+                    case["partitions"]
+                ));
+            }
+        }
+    }
+    assert!(compared > 200, "{compared}");
+    assert!(bad.is_empty(), "{} differ:\n{}", bad.len(), bad.join("\n"));
+}

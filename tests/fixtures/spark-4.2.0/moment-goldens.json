@@ -1,0 +1,4277 @@
+{
+ "spark": "4.2.0",
+ "ansi": "true",
+ "generator": "tests/scripts/gen_moment_goldens.py",
+ "big_dataset": {
+  "n": 10000,
+  "seed": 7012,
+  "rule": "x = 1000 + 200 * (u1 - 0.5), y = 0.5 * x + 30 * (u2 - 0.5); ~1% NULL in each column.\n\n    Per row, in this order: u1, u2, u3, u4 from one splitmix64 stream (state starts at `seed`);\n    x is NULL when u3 < 0.01, y is NULL when u4 < 0.01. Doubles are computed left to right in f64."
+ },
+ "cases": [
+  {
+   "dataset": "issue_kurtosis_skewness",
+   "type": "double",
+   "partitions": 1,
+   "slices": [
+    [
+     0,
+     4
+    ]
+   ],
+   "rows": [
+    [
+     0.0,
+     -10.0
+    ],
+    [
+     0.0,
+     -20.0
+    ],
+    [
+     0.0,
+     100.0
+    ],
+    [
+     0.0,
+     1000.0
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "bfe6722b9913fd94",
+     "text": "-0.7014368047529609"
+    },
+    "skewness": {
+     "hex": "3ff1d12a510e4095",
+     "text": "1.1135657469022011"
+    },
+    "var_samp": {
+     "hex": "410d7887ffffffff",
+     "text": "241424.99999999997"
+    },
+    "var_pop": {
+     "hex": "41061a65ffffffff",
+     "text": "181068.74999999997"
+    },
+    "stddev_samp": {
+     "hex": "407eb59a56ffb1b1",
+     "text": "491.350180624776"
+    },
+    "stddev_pop": {
+     "hex": "407a98590a8c53d0",
+     "text": "425.52173857512844"
+    },
+    "covar_samp": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "covar_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "corr": {
+     "error": "DIVIDE_BY_ZERO"
+    },
+    "regr_count": {
+     "long": 4
+    },
+    "regr_avgx": {
+     "hex": "4070b80000000000",
+     "text": "267.5"
+    },
+    "regr_avgy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_sxx": {
+     "hex": "41261a65ffffffff",
+     "text": "724274.9999999999"
+    },
+    "regr_syy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_sxy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_slope": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_intercept": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_r2": {
+     "hex": "3ff0000000000000",
+     "text": "1.0"
+    }
+   }
+  },
+  {
+   "dataset": "issue_kurtosis_skewness",
+   "type": "double",
+   "partitions": 2,
+   "slices": [
+    [
+     0,
+     2
+    ],
+    [
+     2,
+     4
+    ]
+   ],
+   "rows": [
+    [
+     0.0,
+     -10.0
+    ],
+    [
+     0.0,
+     -20.0
+    ],
+    [
+     0.0,
+     100.0
+    ],
+    [
+     0.0,
+     1000.0
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "bfe6722b9913fda4",
+     "text": "-0.7014368047529627"
+    },
+    "skewness": {
+     "hex": "3ff1d12a510e4095",
+     "text": "1.1135657469022011"
+    },
+    "var_samp": {
+     "hex": "410d788800000000",
+     "text": "241425.0"
+    },
+    "var_pop": {
+     "hex": "41061a6600000000",
+     "text": "181068.75"
+    },
+    "stddev_samp": {
+     "hex": "407eb59a56ffb1b1",
+     "text": "491.350180624776"
+    },
+    "stddev_pop": {
+     "hex": "407a98590a8c53d1",
+     "text": "425.5217385751285"
+    },
+    "covar_samp": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "covar_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "corr": {
+     "error": "DIVIDE_BY_ZERO"
+    },
+    "regr_count": {
+     "long": 4
+    },
+    "regr_avgx": {
+     "hex": "4070b80000000000",
+     "text": "267.5"
+    },
+    "regr_avgy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_sxx": {
+     "hex": "41261a6600000000",
+     "text": "724275.0"
+    },
+    "regr_syy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_sxy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_slope": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_intercept": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_r2": {
+     "hex": "3ff0000000000000",
+     "text": "1.0"
+    }
+   }
+  },
+  {
+   "dataset": "issue_regr",
+   "type": "double",
+   "partitions": 1,
+   "slices": [
+    [
+     0,
+     4
+    ]
+   ],
+   "rows": [
+    [
+     1.0,
+     2.0
+    ],
+    [
+     2.0,
+     2.0
+    ],
+    [
+     2.0,
+     3.0
+    ],
+    [
+     2.0,
+     4.0
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "bff5f34e47ef130d",
+     "text": "-1.3719008264462815"
+    },
+    "skewness": {
+     "hex": "3fdf9392ef976494",
+     "text": "0.49338220021815826"
+    },
+    "var_samp": {
+     "hex": "3fed555555555555",
+     "text": "0.9166666666666666"
+    },
+    "var_pop": {
+     "hex": "3fe6000000000000",
+     "text": "0.6875"
+    },
+    "stddev_samp": {
+     "hex": "3feea33e2c83c140",
+     "text": "0.9574271077563381"
+    },
+    "stddev_pop": {
+     "hex": "3fea887293fd6f34",
+     "text": "0.82915619758885"
+    },
+    "covar_samp": {
+     "hex": "3fcffffffffffffd",
+     "text": "0.24999999999999992"
+    },
+    "covar_pop": {
+     "hex": "3fc7fffffffffffe",
+     "text": "0.18749999999999994"
+    },
+    "corr": {
+     "hex": "3fe0b621e9bc3adc",
+     "text": "0.5222329678670934"
+    },
+    "regr_count": {
+     "long": 4
+    },
+    "regr_avgx": {
+     "hex": "4006000000000000",
+     "text": "2.75"
+    },
+    "regr_avgy": {
+     "hex": "3ffc000000000000",
+     "text": "1.75"
+    },
+    "regr_sxx": {
+     "hex": "4006000000000000",
+     "text": "2.75"
+    },
+    "regr_syy": {
+     "hex": "3fe8000000000000",
+     "text": "0.75"
+    },
+    "regr_sxy": {
+     "hex": "3fe7fffffffffffe",
+     "text": "0.7499999999999998"
+    },
+    "regr_slope": {
+     "hex": "3fd1745d1745d174",
+     "text": "0.2727272727272727"
+    },
+    "regr_intercept": {
+     "hex": "3ff0000000000000",
+     "text": "1.0"
+    },
+    "regr_r2": {
+     "hex": "3fd1745d1745d172",
+     "text": "0.2727272727272726"
+    }
+   }
+  },
+  {
+   "dataset": "issue_regr",
+   "type": "double",
+   "partitions": 2,
+   "slices": [
+    [
+     0,
+     2
+    ],
+    [
+     2,
+     4
+    ]
+   ],
+   "rows": [
+    [
+     1.0,
+     2.0
+    ],
+    [
+     2.0,
+     2.0
+    ],
+    [
+     2.0,
+     3.0
+    ],
+    [
+     2.0,
+     4.0
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "bff5f34e47ef130b",
+     "text": "-1.371900826446281"
+    },
+    "skewness": {
+     "hex": "3fdf9392ef97649b",
+     "text": "0.49338220021815865"
+    },
+    "var_samp": {
+     "hex": "3fed555555555555",
+     "text": "0.9166666666666666"
+    },
+    "var_pop": {
+     "hex": "3fe6000000000000",
+     "text": "0.6875"
+    },
+    "stddev_samp": {
+     "hex": "3feea33e2c83c140",
+     "text": "0.9574271077563381"
+    },
+    "stddev_pop": {
+     "hex": "3fea887293fd6f34",
+     "text": "0.82915619758885"
+    },
+    "covar_samp": {
+     "hex": "3fd0000000000000",
+     "text": "0.25"
+    },
+    "covar_pop": {
+     "hex": "3fc8000000000000",
+     "text": "0.1875"
+    },
+    "corr": {
+     "hex": "3fe0b621e9bc3add",
+     "text": "0.5222329678670935"
+    },
+    "regr_count": {
+     "long": 4
+    },
+    "regr_avgx": {
+     "hex": "4006000000000000",
+     "text": "2.75"
+    },
+    "regr_avgy": {
+     "hex": "3ffc000000000000",
+     "text": "1.75"
+    },
+    "regr_sxx": {
+     "hex": "4006000000000000",
+     "text": "2.75"
+    },
+    "regr_syy": {
+     "hex": "3fe8000000000000",
+     "text": "0.75"
+    },
+    "regr_sxy": {
+     "hex": "3fe8000000000000",
+     "text": "0.75"
+    },
+    "regr_slope": {
+     "hex": "3fd1745d1745d174",
+     "text": "0.2727272727272727"
+    },
+    "regr_intercept": {
+     "hex": "3ff0000000000000",
+     "text": "1.0"
+    },
+    "regr_r2": {
+     "hex": "3fd1745d1745d174",
+     "text": "0.2727272727272727"
+    }
+   }
+  },
+  {
+   "dataset": "doc_skew_neg",
+   "type": "double",
+   "partitions": 1,
+   "slices": [
+    [
+     0,
+     4
+    ]
+   ],
+   "rows": [
+    [
+     0.0,
+     -1000.0
+    ],
+    [
+     0.0,
+     -100.0
+    ],
+    [
+     0.0,
+     10.0
+    ],
+    [
+     0.0,
+     20.0
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "bfe6722b9913fda4",
+     "text": "-0.7014368047529627"
+    },
+    "skewness": {
+     "hex": "bff1d12a510e4094",
+     "text": "-1.113565746902201"
+    },
+    "var_samp": {
+     "hex": "410d788800000001",
+     "text": "241425.00000000003"
+    },
+    "var_pop": {
+     "hex": "41061a6600000001",
+     "text": "181068.75000000003"
+    },
+    "stddev_samp": {
+     "hex": "407eb59a56ffb1b2",
+     "text": "491.35018062477604"
+    },
+    "stddev_pop": {
+     "hex": "407a98590a8c53d2",
+     "text": "425.52173857512855"
+    },
+    "covar_samp": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "covar_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "corr": {
+     "error": "DIVIDE_BY_ZERO"
+    },
+    "regr_count": {
+     "long": 4
+    },
+    "regr_avgx": {
+     "hex": "c070b80000000000",
+     "text": "-267.5"
+    },
+    "regr_avgy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_sxx": {
+     "hex": "41261a6600000001",
+     "text": "724275.0000000001"
+    },
+    "regr_syy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_sxy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_slope": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_intercept": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_r2": {
+     "hex": "3ff0000000000000",
+     "text": "1.0"
+    }
+   }
+  },
+  {
+   "dataset": "doc_skew_neg",
+   "type": "double",
+   "partitions": 2,
+   "slices": [
+    [
+     0,
+     2
+    ],
+    [
+     2,
+     4
+    ]
+   ],
+   "rows": [
+    [
+     0.0,
+     -1000.0
+    ],
+    [
+     0.0,
+     -100.0
+    ],
+    [
+     0.0,
+     10.0
+    ],
+    [
+     0.0,
+     20.0
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "bfe6722b9913fda4",
+     "text": "-0.7014368047529627"
+    },
+    "skewness": {
+     "hex": "bff1d12a510e4095",
+     "text": "-1.1135657469022011"
+    },
+    "var_samp": {
+     "hex": "410d788800000000",
+     "text": "241425.0"
+    },
+    "var_pop": {
+     "hex": "41061a6600000000",
+     "text": "181068.75"
+    },
+    "stddev_samp": {
+     "hex": "407eb59a56ffb1b1",
+     "text": "491.350180624776"
+    },
+    "stddev_pop": {
+     "hex": "407a98590a8c53d1",
+     "text": "425.5217385751285"
+    },
+    "covar_samp": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "covar_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "corr": {
+     "error": "DIVIDE_BY_ZERO"
+    },
+    "regr_count": {
+     "long": 4
+    },
+    "regr_avgx": {
+     "hex": "c070b80000000000",
+     "text": "-267.5"
+    },
+    "regr_avgy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_sxx": {
+     "hex": "41261a6600000000",
+     "text": "724275.0"
+    },
+    "regr_syy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_sxy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_slope": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_intercept": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_r2": {
+     "hex": "3ff0000000000000",
+     "text": "1.0"
+    }
+   }
+  },
+  {
+   "dataset": "doc_kurtosis_5",
+   "type": "double",
+   "partitions": 1,
+   "slices": [
+    [
+     0,
+     5
+    ]
+   ],
+   "rows": [
+    [
+     0.0,
+     1.0
+    ],
+    [
+     0.0,
+     10.0
+    ],
+    [
+     0.0,
+     100.0
+    ],
+    [
+     0.0,
+     10.0
+    ],
+    [
+     0.0,
+     1.0
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "3fc8df956af7df10",
+     "text": "0.19432323191698986"
+    },
+    "skewness": {
+     "hex": "3ff7547ae03ed812",
+     "text": "1.4581249961461293"
+    },
+    "var_samp": {
+     "hex": "409c393333333333",
+     "text": "1806.3"
+    },
+    "var_pop": {
+     "hex": "40969428f5c28f5c",
+     "text": "1445.04"
+    },
+    "stddev_samp": {
+     "hex": "404540134670eef1",
+     "text": "42.50058823122334"
+    },
+    "stddev_pop": {
+     "hex": "404301c052d106b8",
+     "text": "38.01368174749717"
+    },
+    "covar_samp": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "covar_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "corr": {
+     "error": "DIVIDE_BY_ZERO"
+    },
+    "regr_count": {
+     "long": 5
+    },
+    "regr_avgx": {
+     "hex": "4038666666666666",
+     "text": "24.4"
+    },
+    "regr_avgy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_sxx": {
+     "hex": "40bc393333333333",
+     "text": "7225.2"
+    },
+    "regr_syy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_sxy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_slope": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_intercept": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_r2": {
+     "hex": "3ff0000000000000",
+     "text": "1.0"
+    }
+   }
+  },
+  {
+   "dataset": "doc_kurtosis_5",
+   "type": "double",
+   "partitions": 2,
+   "slices": [
+    [
+     0,
+     2
+    ],
+    [
+     2,
+     5
+    ]
+   ],
+   "rows": [
+    [
+     0.0,
+     1.0
+    ],
+    [
+     0.0,
+     10.0
+    ],
+    [
+     0.0,
+     100.0
+    ],
+    [
+     0.0,
+     10.0
+    ],
+    [
+     0.0,
+     1.0
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "3fc8df956af7df30",
+     "text": "0.19432323191699075"
+    },
+    "skewness": {
+     "hex": "3ff7547ae03ed811",
+     "text": "1.4581249961461291"
+    },
+    "var_samp": {
+     "hex": "409c393333333333",
+     "text": "1806.3"
+    },
+    "var_pop": {
+     "hex": "40969428f5c28f5c",
+     "text": "1445.04"
+    },
+    "stddev_samp": {
+     "hex": "404540134670eef1",
+     "text": "42.50058823122334"
+    },
+    "stddev_pop": {
+     "hex": "404301c052d106b8",
+     "text": "38.01368174749717"
+    },
+    "covar_samp": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "covar_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "corr": {
+     "error": "DIVIDE_BY_ZERO"
+    },
+    "regr_count": {
+     "long": 5
+    },
+    "regr_avgx": {
+     "hex": "4038666666666666",
+     "text": "24.4"
+    },
+    "regr_avgy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_sxx": {
+     "hex": "40bc393333333333",
+     "text": "7225.2"
+    },
+    "regr_syy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_sxy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_slope": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_intercept": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_r2": {
+     "hex": "3ff0000000000000",
+     "text": "1.0"
+    }
+   }
+  },
+  {
+   "dataset": "negatives",
+   "type": "double",
+   "partitions": 1,
+   "slices": [
+    [
+     0,
+     5
+    ]
+   ],
+   "rows": [
+    [
+     -1.5,
+     -2.5
+    ],
+    [
+     -3.25,
+     -0.5
+    ],
+    [
+     -7.0,
+     -9.75
+    ],
+    [
+     -0.125,
+     -4.0
+    ],
+    [
+     -8.5,
+     -1.0
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "bfd947852679e0b0",
+     "text": "-0.3949902415984168"
+    },
+    "skewness": {
+     "hex": "bff09e2c1d06886b",
+     "text": "-1.0386162885484065"
+    },
+    "var_samp": {
+     "hex": "402bc66666666666",
+     "text": "13.8875"
+    },
+    "var_pop": {
+     "hex": "40263851eb851eb8",
+     "text": "11.11"
+    },
+    "stddev_samp": {
+     "hex": "400dd01050b34c28",
+     "text": "3.7265936188428164"
+    },
+    "stddev_pop": {
+     "hex": "400aaa53487c6ebf",
+     "text": "3.3331666624997918"
+    },
+    "covar_samp": {
+     "hex": "4004966666666667",
+     "text": "2.5734375000000003"
+    },
+    "covar_pop": {
+     "hex": "40007851eb851eb9",
+     "text": "2.0587500000000003"
+    },
+    "corr": {
+     "hex": "3fc8be14dcbb8701",
+     "text": "0.1933008268161345"
+    },
+    "regr_count": {
+     "long": 5
+    },
+    "regr_avgx": {
+     "hex": "c00c666666666666",
+     "text": "-3.55"
+    },
+    "regr_avgy": {
+     "hex": "c0104ccccccccccd",
+     "text": "-4.075"
+    },
+    "regr_sxx": {
+     "hex": "404bc66666666666",
+     "text": "55.55"
+    },
+    "regr_syy": {
+     "hex": "4049866666666666",
+     "text": "51.05"
+    },
+    "regr_sxy": {
+     "hex": "4024966666666667",
+     "text": "10.293750000000001"
+    },
+    "regr_slope": {
+     "hex": "3fc7b81ba6988a40",
+     "text": "0.18530603060306028"
+    },
+    "regr_intercept": {
+     "hex": "c00b5659dd6fc154",
+     "text": "-3.4171635913591363"
+    },
+    "regr_r2": {
+     "hex": "3fa3218862e41742",
+     "text": "0.037365209647801226"
+    }
+   }
+  },
+  {
+   "dataset": "negatives",
+   "type": "double",
+   "partitions": 2,
+   "slices": [
+    [
+     0,
+     2
+    ],
+    [
+     2,
+     5
+    ]
+   ],
+   "rows": [
+    [
+     -1.5,
+     -2.5
+    ],
+    [
+     -3.25,
+     -0.5
+    ],
+    [
+     -7.0,
+     -9.75
+    ],
+    [
+     -0.125,
+     -4.0
+    ],
+    [
+     -8.5,
+     -1.0
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "bfd947852679e0c0",
+     "text": "-0.39499024159841767"
+    },
+    "skewness": {
+     "hex": "bff09e2c1d068869",
+     "text": "-1.038616288548406"
+    },
+    "var_samp": {
+     "hex": "402bc66666666668",
+     "text": "13.887500000000003"
+    },
+    "var_pop": {
+     "hex": "40263851eb851eba",
+     "text": "11.110000000000003"
+    },
+    "stddev_samp": {
+     "hex": "400dd01050b34c29",
+     "text": "3.726593618842817"
+    },
+    "stddev_pop": {
+     "hex": "400aaa53487c6ec0",
+     "text": "3.333166662499792"
+    },
+    "covar_samp": {
+     "hex": "4004966666666665",
+     "text": "2.5734374999999994"
+    },
+    "covar_pop": {
+     "hex": "40007851eb851eb7",
+     "text": "2.0587499999999994"
+    },
+    "corr": {
+     "hex": "3fc8be14dcbb86fe",
+     "text": "0.19330082681613442"
+    },
+    "regr_count": {
+     "long": 5
+    },
+    "regr_avgx": {
+     "hex": "c00c666666666666",
+     "text": "-3.55"
+    },
+    "regr_avgy": {
+     "hex": "c0104ccccccccccd",
+     "text": "-4.075"
+    },
+    "regr_sxx": {
+     "hex": "404bc66666666668",
+     "text": "55.55000000000001"
+    },
+    "regr_syy": {
+     "hex": "4049866666666667",
+     "text": "51.050000000000004"
+    },
+    "regr_sxy": {
+     "hex": "4024966666666665",
+     "text": "10.293749999999998"
+    },
+    "regr_slope": {
+     "hex": "3fc7b81ba6988a3f",
+     "text": "0.18530603060306025"
+    },
+    "regr_intercept": {
+     "hex": "c00b5659dd6fc154",
+     "text": "-3.4171635913591363"
+    },
+    "regr_r2": {
+     "hex": "3fa3218862e4173d",
+     "text": "0.03736520964780119"
+    }
+   }
+  },
+  {
+   "dataset": "big_offset",
+   "type": "double",
+   "partitions": 1,
+   "slices": [
+    [
+     0,
+     5
+    ]
+   ],
+   "rows": [
+    [
+     1000000000.1,
+     1000000000.3
+    ],
+    [
+     1000000000.2,
+     1000000000.1
+    ],
+    [
+     1000000000.4,
+     1000000000.6
+    ],
+    [
+     1000000000.3,
+     1000000000.2
+    ],
+    [
+     1000000000.5,
+     1000000000.9
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "bff2aa6dc0432903",
+     "text": "-1.1666085729835352"
+    },
+    "skewness": {
+     "hex": "3fe2371fc8afb2a9",
+     "text": "0.5692290229468046"
+    },
+    "var_samp": {
+     "hex": "3fbb64599ba5e40d",
+     "text": "0.1069999699592616"
+    },
+    "var_pop": {
+     "hex": "3fb5e9e14951833e",
+     "text": "0.08559997596740929"
+    },
+    "stddev_samp": {
+     "hex": "3fd4ef587c1a00ed",
+     "text": "0.3271084987573108"
+    },
+    "stddev_pop": {
+     "hex": "3fd2b98b625cba71",
+     "text": "0.29257473569570097"
+    },
+    "covar_samp": {
+     "hex": "3fa5c28ed9999a00",
+     "text": "0.04249998480081629"
+    },
+    "covar_pop": {
+     "hex": "3fa1687247ae14cd",
+     "text": "0.033999987840653036"
+    },
+    "corr": {
+     "hex": "3fea4b943826a14f",
+     "text": "0.8217259499261135"
+    },
+    "regr_count": {
+     "long": 5
+    },
+    "regr_avgx": {
+     "hex": "41cdcd650035c28e",
+     "text": "1000000000.4199998"
+    },
+    "regr_avgy": {
+     "hex": "41cdcd6500266666",
+     "text": "1000000000.3"
+    },
+    "regr_sxx": {
+     "hex": "3fdb64599ba5e40d",
+     "text": "0.4279998798370464"
+    },
+    "regr_syy": {
+     "hex": "3fb99998dddde178",
+     "text": "0.09999995628993996"
+    },
+    "regr_sxy": {
+     "hex": "3fc5c28ed9999a00",
+     "text": "0.16999993920326517"
+    },
+    "regr_slope": {
+     "hex": "3fd96baa6e2afa9c",
+     "text": "0.39719639547903696"
+    },
+    "regr_intercept": {
+     "hex": "41c1f706ca53bae0",
+     "text": "602803604.6541405"
+    },
+    "regr_r2": {
+     "hex": "3fe59b835cb482fc",
+     "text": "0.6752335367819735"
+    }
+   }
+  },
+  {
+   "dataset": "big_offset",
+   "type": "double",
+   "partitions": 2,
+   "slices": [
+    [
+     0,
+     2
+    ],
+    [
+     2,
+     5
+    ]
+   ],
+   "rows": [
+    [
+     1000000000.1,
+     1000000000.3
+    ],
+    [
+     1000000000.2,
+     1000000000.1
+    ],
+    [
+     1000000000.4,
+     1000000000.6
+    ],
+    [
+     1000000000.3,
+     1000000000.2
+    ],
+    [
+     1000000000.5,
+     1000000000.9
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "bff2aa6ddd2b4978",
+     "text": "-1.1666086806695528"
+    },
+    "skewness": {
+     "hex": "3fe2371fa159efa1",
+     "text": "0.5692289496796442"
+    },
+    "var_samp": {
+     "hex": "3fbb6459b53f7dcd",
+     "text": "0.10699997591972661"
+    },
+    "var_pop": {
+     "hex": "3fb5e9e15dcc64a4",
+     "text": "0.08559998073578129"
+    },
+    "stddev_samp": {
+     "hex": "3fd4ef5885e25f23",
+     "text": "0.32710850786814855"
+    },
+    "stddev_pop": {
+     "hex": "3fd2b98b6b1cb401",
+     "text": "0.292574743844682"
+    },
+    "covar_samp": {
+     "hex": "3fa5c28f258bf133",
+     "text": "0.042499993642169186"
+    },
+    "covar_pop": {
+     "hex": "3fa16872846ff429",
+     "text": "0.03399999491373535"
+    },
+    "corr": {
+     "hex": "3fea4b94c94b8c17",
+     "text": "0.8217262202782675"
+    },
+    "regr_count": {
+     "long": 5
+    },
+    "regr_avgx": {
+     "hex": "41cdcd650035c290",
+     "text": "1000000000.4200001"
+    },
+    "regr_avgy": {
+     "hex": "41cdcd6500266666",
+     "text": "1000000000.3"
+    },
+    "regr_sxx": {
+     "hex": "3fdb6459b53f7dcd",
+     "text": "0.42799990367890645"
+    },
+    "regr_syy": {
+     "hex": "3fb99998ccccd378",
+     "text": "0.09999995231630787"
+    },
+    "regr_sxy": {
+     "hex": "3fc5c28f258bf133",
+     "text": "0.16999997456867674"
+    },
+    "regr_slope": {
+     "hex": "3fd96ba9aeef04d2",
+     "text": "0.3971962173782916"
+    },
+    "regr_intercept": {
+     "hex": "41c1f7072360a01b",
+     "text": "602803782.754886"
+    },
+    "regr_r2": {
+     "hex": "3fe59b844b3e20b3",
+     "text": "0.6752339810928077"
+    }
+   }
+  },
+  {
+   "dataset": "big_offset_ints",
+   "type": "double",
+   "partitions": 1,
+   "slices": [
+    [
+     0,
+     8
+    ]
+   ],
+   "rows": [
+    [
+     1000000000.0,
+     1000000000.0
+    ],
+    [
+     1000000001.0,
+     1000000002.0
+    ],
+    [
+     1000000002.0,
+     1000000004.0
+    ],
+    [
+     1000000003.0,
+     1000000001.0
+    ],
+    [
+     1000000004.0,
+     1000000003.0
+    ],
+    [
+     1000000005.0,
+     1000000000.0
+    ],
+    [
+     1000000006.0,
+     1000000002.0
+    ],
+    [
+     1000000007.0,
+     1000000004.0
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "bff5ed097b75bdb1",
+     "text": "-1.3703703711179112"
+    },
+    "skewness": {
+     "hex": "be4a12f684069f39",
+     "text": "-1.2141686878848952e-08"
+    },
+    "var_samp": {
+     "hex": "4004924923b35fc9",
+     "text": "2.5714285649409914"
+    },
+    "var_pop": {
+     "hex": "4001ffffff3cf3d0",
+     "text": "2.2499999943233675"
+    },
+    "stddev_samp": {
+     "hex": "3ff9a836578533be",
+     "text": "1.6035674494516878"
+    },
+    "stddev_pop": {
+     "hex": "3ff7ffffff7df7e0",
+     "text": "1.4999999981077892"
+    },
+    "covar_samp": {
+     "hex": "3ff4924926db6db7",
+     "text": "1.285714294229235"
+    },
+    "covar_pop": {
+     "hex": "3ff2000002000000",
+     "text": "1.1250000074505806"
+    },
+    "corr": {
+     "hex": "3fd4f2ec449e2725",
+     "text": "0.32732683850245997"
+    },
+    "regr_count": {
+     "long": 8
+    },
+    "regr_avgx": {
+     "hex": "41cdcd6501000000",
+     "text": "1000000002.0"
+    },
+    "regr_avgy": {
+     "hex": "41cdcd6501c00000",
+     "text": "1000000003.5"
+    },
+    "regr_sxx": {
+     "hex": "4031ffffff3cf3d0",
+     "text": "17.99999995458694"
+    },
+    "regr_syy": {
+     "hex": "4045000000000000",
+     "text": "42.0"
+    },
+    "regr_sxy": {
+     "hex": "4022000002000000",
+     "text": "9.000000059604645"
+    },
+    "regr_slope": {
+     "hex": "3fe0000002747c9d",
+     "text": "0.5000000045728431"
+    },
+    "regr_intercept": {
+     "hex": "41bdcd64fded5a27",
+     "text": "499999997.92715687"
+    },
+    "regr_r2": {
+     "hex": "3fbb6db6e447fb5c",
+     "text": "0.1071428592040155"
+    }
+   }
+  },
+  {
+   "dataset": "big_offset_ints",
+   "type": "double",
+   "partitions": 2,
+   "slices": [
+    [
+     0,
+     4
+    ],
+    [
+     4,
+     8
+    ]
+   ],
+   "rows": [
+    [
+     1000000000.0,
+     1000000000.0
+    ],
+    [
+     1000000001.0,
+     1000000002.0
+    ],
+    [
+     1000000002.0,
+     1000000004.0
+    ],
+    [
+     1000000003.0,
+     1000000001.0
+    ],
+    [
+     1000000004.0,
+     1000000003.0
+    ],
+    [
+     1000000005.0,
+     1000000000.0
+    ],
+    [
+     1000000006.0,
+     1000000002.0
+    ],
+    [
+     1000000007.0,
+     1000000004.0
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "bff5ed0979dac6c3",
+     "text": "-1.3703703651375896"
+    },
+    "skewness": {
+     "hex": "3e4097b42770b969",
+     "text": "7.726528068472658e-09"
+    },
+    "var_samp": {
+     "hex": "40049249273cf3d0",
+     "text": "2.5714285912967867"
+    },
+    "var_pop": {
+     "hex": "4002000002555556",
+     "text": "2.2500000173846884"
+    },
+    "stddev_samp": {
+     "hex": "3ff9a83659b9edeb",
+     "text": "1.6035674576695509"
+    },
+    "stddev_pop": {
+     "hex": "3ff80000018e38e4",
+     "text": "1.5000000057948961"
+    },
+    "covar_samp": {
+     "hex": "3ff4924926db6db7",
+     "text": "1.285714294229235"
+    },
+    "covar_pop": {
+     "hex": "3ff2000002000000",
+     "text": "1.1250000074505806"
+    },
+    "corr": {
+     "hex": "3fd4f2ec42b12205",
+     "text": "0.3273268367088636"
+    },
+    "regr_count": {
+     "long": 8
+    },
+    "regr_avgx": {
+     "hex": "41cdcd6501000000",
+     "text": "1000000002.0"
+    },
+    "regr_avgy": {
+     "hex": "41cdcd6501c00000",
+     "text": "1000000003.5"
+    },
+    "regr_sxx": {
+     "hex": "4032000002555556",
+     "text": "18.000000139077507"
+    },
+    "regr_syy": {
+     "hex": "4045000000000000",
+     "text": "42.0"
+    },
+    "regr_sxy": {
+     "hex": "4022000002000000",
+     "text": "9.000000059604645"
+    },
+    "regr_slope": {
+     "hex": "3fdfffffff684bd9",
+     "text": "0.4999999994481051"
+    },
+    "regr_intercept": {
+     "hex": "41bdcd65030d48fc",
+     "text": "500000003.0518949"
+    },
+    "regr_r2": {
+     "hex": "3fbb6db6df3cf3d1",
+     "text": "0.10714285802983105"
+    }
+   }
+  },
+  {
+   "dataset": "constant_both",
+   "type": "double",
+   "partitions": 1,
+   "slices": [
+    [
+     0,
+     5
+    ]
+   ],
+   "rows": [
+    [
+     4.0,
+     4.0
+    ],
+    [
+     4.0,
+     4.0
+    ],
+    [
+     4.0,
+     4.0
+    ],
+    [
+     4.0,
+     4.0
+    ],
+    [
+     4.0,
+     4.0
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "null": true
+    },
+    "skewness": {
+     "null": true
+    },
+    "var_samp": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "var_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "stddev_samp": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "stddev_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "covar_samp": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "covar_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "corr": {
+     "error": "DIVIDE_BY_ZERO"
+    },
+    "regr_count": {
+     "long": 5
+    },
+    "regr_avgx": {
+     "hex": "4010000000000000",
+     "text": "4.0"
+    },
+    "regr_avgy": {
+     "hex": "4010000000000000",
+     "text": "4.0"
+    },
+    "regr_sxx": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_syy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_sxy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_slope": {
+     "null": true
+    },
+    "regr_intercept": {
+     "null": true
+    },
+    "regr_r2": {
+     "null": true
+    }
+   }
+  },
+  {
+   "dataset": "constant_both",
+   "type": "double",
+   "partitions": 2,
+   "slices": [
+    [
+     0,
+     2
+    ],
+    [
+     2,
+     5
+    ]
+   ],
+   "rows": [
+    [
+     4.0,
+     4.0
+    ],
+    [
+     4.0,
+     4.0
+    ],
+    [
+     4.0,
+     4.0
+    ],
+    [
+     4.0,
+     4.0
+    ],
+    [
+     4.0,
+     4.0
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "null": true
+    },
+    "skewness": {
+     "null": true
+    },
+    "var_samp": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "var_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "stddev_samp": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "stddev_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "covar_samp": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "covar_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "corr": {
+     "error": "DIVIDE_BY_ZERO"
+    },
+    "regr_count": {
+     "long": 5
+    },
+    "regr_avgx": {
+     "hex": "4010000000000000",
+     "text": "4.0"
+    },
+    "regr_avgy": {
+     "hex": "4010000000000000",
+     "text": "4.0"
+    },
+    "regr_sxx": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_syy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_sxy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_slope": {
+     "null": true
+    },
+    "regr_intercept": {
+     "null": true
+    },
+    "regr_r2": {
+     "null": true
+    }
+   }
+  },
+  {
+   "dataset": "constant_x",
+   "type": "double",
+   "partitions": 1,
+   "slices": [
+    [
+     0,
+     4
+    ]
+   ],
+   "rows": [
+    [
+     1.0,
+     3.0
+    ],
+    [
+     2.0,
+     3.0
+    ],
+    [
+     5.0,
+     3.0
+    ],
+    [
+     4.0,
+     3.0
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "null": true
+    },
+    "skewness": {
+     "null": true
+    },
+    "var_samp": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "var_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "stddev_samp": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "stddev_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "covar_samp": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "covar_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "corr": {
+     "error": "DIVIDE_BY_ZERO"
+    },
+    "regr_count": {
+     "long": 4
+    },
+    "regr_avgx": {
+     "hex": "4008000000000000",
+     "text": "3.0"
+    },
+    "regr_avgy": {
+     "hex": "4008000000000000",
+     "text": "3.0"
+    },
+    "regr_sxx": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_syy": {
+     "hex": "4023ffffffffffff",
+     "text": "9.999999999999998"
+    },
+    "regr_sxy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_slope": {
+     "null": true
+    },
+    "regr_intercept": {
+     "null": true
+    },
+    "regr_r2": {
+     "null": true
+    }
+   }
+  },
+  {
+   "dataset": "constant_x",
+   "type": "double",
+   "partitions": 2,
+   "slices": [
+    [
+     0,
+     2
+    ],
+    [
+     2,
+     4
+    ]
+   ],
+   "rows": [
+    [
+     1.0,
+     3.0
+    ],
+    [
+     2.0,
+     3.0
+    ],
+    [
+     5.0,
+     3.0
+    ],
+    [
+     4.0,
+     3.0
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "null": true
+    },
+    "skewness": {
+     "null": true
+    },
+    "var_samp": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "var_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "stddev_samp": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "stddev_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "covar_samp": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "covar_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "corr": {
+     "error": "DIVIDE_BY_ZERO"
+    },
+    "regr_count": {
+     "long": 4
+    },
+    "regr_avgx": {
+     "hex": "4008000000000000",
+     "text": "3.0"
+    },
+    "regr_avgy": {
+     "hex": "4008000000000000",
+     "text": "3.0"
+    },
+    "regr_sxx": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_syy": {
+     "hex": "4024000000000000",
+     "text": "10.0"
+    },
+    "regr_sxy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_slope": {
+     "null": true
+    },
+    "regr_intercept": {
+     "null": true
+    },
+    "regr_r2": {
+     "null": true
+    }
+   }
+  },
+  {
+   "dataset": "constant_y",
+   "type": "double",
+   "partitions": 1,
+   "slices": [
+    [
+     0,
+     4
+    ]
+   ],
+   "rows": [
+    [
+     3.0,
+     1.0
+    ],
+    [
+     3.0,
+     2.0
+    ],
+    [
+     3.0,
+     5.0
+    ],
+    [
+     3.0,
+     4.0
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "bffa3d70a3d70a45",
+     "text": "-1.6400000000000017"
+    },
+    "skewness": {
+     "hex": "3cbc55818998664a",
+     "text": "3.932133484805906e-16"
+    },
+    "var_samp": {
+     "hex": "400aaaaaaaaaaaa9",
+     "text": "3.3333333333333326"
+    },
+    "var_pop": {
+     "hex": "4003ffffffffffff",
+     "text": "2.4999999999999996"
+    },
+    "stddev_samp": {
+     "hex": "3ffd363d1848dcbe",
+     "text": "1.8257418583505536"
+    },
+    "stddev_pop": {
+     "hex": "3ff94c583ada5b52",
+     "text": "1.5811388300841895"
+    },
+    "covar_samp": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "covar_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "corr": {
+     "error": "DIVIDE_BY_ZERO"
+    },
+    "regr_count": {
+     "long": 4
+    },
+    "regr_avgx": {
+     "hex": "4008000000000000",
+     "text": "3.0"
+    },
+    "regr_avgy": {
+     "hex": "4008000000000000",
+     "text": "3.0"
+    },
+    "regr_sxx": {
+     "hex": "4023ffffffffffff",
+     "text": "9.999999999999998"
+    },
+    "regr_syy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_sxy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_slope": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_intercept": {
+     "hex": "4008000000000000",
+     "text": "3.0"
+    },
+    "regr_r2": {
+     "hex": "3ff0000000000000",
+     "text": "1.0"
+    }
+   }
+  },
+  {
+   "dataset": "constant_y",
+   "type": "double",
+   "partitions": 2,
+   "slices": [
+    [
+     0,
+     2
+    ],
+    [
+     2,
+     4
+    ]
+   ],
+   "rows": [
+    [
+     3.0,
+     1.0
+    ],
+    [
+     3.0,
+     2.0
+    ],
+    [
+     3.0,
+     5.0
+    ],
+    [
+     3.0,
+     4.0
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "bffa3d70a3d70a3d",
+     "text": "-1.64"
+    },
+    "skewness": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "var_samp": {
+     "hex": "400aaaaaaaaaaaab",
+     "text": "3.3333333333333335"
+    },
+    "var_pop": {
+     "hex": "4004000000000000",
+     "text": "2.5"
+    },
+    "stddev_samp": {
+     "hex": "3ffd363d1848dcbf",
+     "text": "1.8257418583505538"
+    },
+    "stddev_pop": {
+     "hex": "3ff94c583ada5b53",
+     "text": "1.5811388300841898"
+    },
+    "covar_samp": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "covar_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "corr": {
+     "error": "DIVIDE_BY_ZERO"
+    },
+    "regr_count": {
+     "long": 4
+    },
+    "regr_avgx": {
+     "hex": "4008000000000000",
+     "text": "3.0"
+    },
+    "regr_avgy": {
+     "hex": "4008000000000000",
+     "text": "3.0"
+    },
+    "regr_sxx": {
+     "hex": "4024000000000000",
+     "text": "10.0"
+    },
+    "regr_syy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_sxy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_slope": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_intercept": {
+     "hex": "4008000000000000",
+     "text": "3.0"
+    },
+    "regr_r2": {
+     "hex": "3ff0000000000000",
+     "text": "1.0"
+    }
+   }
+  },
+  {
+   "dataset": "one_row",
+   "type": "double",
+   "partitions": 1,
+   "slices": [
+    [
+     0,
+     1
+    ]
+   ],
+   "rows": [
+    [
+     2.5,
+     7.5
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "null": true
+    },
+    "skewness": {
+     "null": true
+    },
+    "var_samp": {
+     "null": true
+    },
+    "var_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "stddev_samp": {
+     "null": true
+    },
+    "stddev_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "covar_samp": {
+     "null": true
+    },
+    "covar_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "corr": {
+     "null": true
+    },
+    "regr_count": {
+     "long": 1
+    },
+    "regr_avgx": {
+     "hex": "401e000000000000",
+     "text": "7.5"
+    },
+    "regr_avgy": {
+     "hex": "4004000000000000",
+     "text": "2.5"
+    },
+    "regr_sxx": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_syy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_sxy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_slope": {
+     "null": true
+    },
+    "regr_intercept": {
+     "null": true
+    },
+    "regr_r2": {
+     "null": true
+    }
+   }
+  },
+  {
+   "dataset": "two_rows",
+   "type": "double",
+   "partitions": 1,
+   "slices": [
+    [
+     0,
+     2
+    ]
+   ],
+   "rows": [
+    [
+     1.0,
+     2.0
+    ],
+    [
+     4.0,
+     8.0
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "c000000000000000",
+     "text": "-2.0"
+    },
+    "skewness": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "var_samp": {
+     "hex": "4032000000000000",
+     "text": "18.0"
+    },
+    "var_pop": {
+     "hex": "4022000000000000",
+     "text": "9.0"
+    },
+    "stddev_samp": {
+     "hex": "4010f876ccdf6cd9",
+     "text": "4.242640687119285"
+    },
+    "stddev_pop": {
+     "hex": "4008000000000000",
+     "text": "3.0"
+    },
+    "covar_samp": {
+     "hex": "4022000000000000",
+     "text": "9.0"
+    },
+    "covar_pop": {
+     "hex": "4012000000000000",
+     "text": "4.5"
+    },
+    "corr": {
+     "hex": "3ff0000000000000",
+     "text": "1.0"
+    },
+    "regr_count": {
+     "long": 2
+    },
+    "regr_avgx": {
+     "hex": "4014000000000000",
+     "text": "5.0"
+    },
+    "regr_avgy": {
+     "hex": "4004000000000000",
+     "text": "2.5"
+    },
+    "regr_sxx": {
+     "hex": "4032000000000000",
+     "text": "18.0"
+    },
+    "regr_syy": {
+     "hex": "4012000000000000",
+     "text": "4.5"
+    },
+    "regr_sxy": {
+     "hex": "4022000000000000",
+     "text": "9.0"
+    },
+    "regr_slope": {
+     "hex": "3fe0000000000000",
+     "text": "0.5"
+    },
+    "regr_intercept": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_r2": {
+     "hex": "3ff0000000000000",
+     "text": "1.0"
+    }
+   }
+  },
+  {
+   "dataset": "two_rows",
+   "type": "double",
+   "partitions": 2,
+   "slices": [
+    [
+     0,
+     1
+    ],
+    [
+     1,
+     2
+    ]
+   ],
+   "rows": [
+    [
+     1.0,
+     2.0
+    ],
+    [
+     4.0,
+     8.0
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "c000000000000000",
+     "text": "-2.0"
+    },
+    "skewness": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "var_samp": {
+     "hex": "4032000000000000",
+     "text": "18.0"
+    },
+    "var_pop": {
+     "hex": "4022000000000000",
+     "text": "9.0"
+    },
+    "stddev_samp": {
+     "hex": "4010f876ccdf6cd9",
+     "text": "4.242640687119285"
+    },
+    "stddev_pop": {
+     "hex": "4008000000000000",
+     "text": "3.0"
+    },
+    "covar_samp": {
+     "hex": "4022000000000000",
+     "text": "9.0"
+    },
+    "covar_pop": {
+     "hex": "4012000000000000",
+     "text": "4.5"
+    },
+    "corr": {
+     "hex": "3ff0000000000000",
+     "text": "1.0"
+    },
+    "regr_count": {
+     "long": 2
+    },
+    "regr_avgx": {
+     "hex": "4014000000000000",
+     "text": "5.0"
+    },
+    "regr_avgy": {
+     "hex": "4004000000000000",
+     "text": "2.5"
+    },
+    "regr_sxx": {
+     "hex": "4032000000000000",
+     "text": "18.0"
+    },
+    "regr_syy": {
+     "hex": "4012000000000000",
+     "text": "4.5"
+    },
+    "regr_sxy": {
+     "hex": "4022000000000000",
+     "text": "9.0"
+    },
+    "regr_slope": {
+     "hex": "3fe0000000000000",
+     "text": "0.5"
+    },
+    "regr_intercept": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_r2": {
+     "hex": "3ff0000000000000",
+     "text": "1.0"
+    }
+   }
+  },
+  {
+   "dataset": "two_rows_equal",
+   "type": "double",
+   "partitions": 1,
+   "slices": [
+    [
+     0,
+     2
+    ]
+   ],
+   "rows": [
+    [
+     3.0,
+     3.0
+    ],
+    [
+     3.0,
+     3.0
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "null": true
+    },
+    "skewness": {
+     "null": true
+    },
+    "var_samp": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "var_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "stddev_samp": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "stddev_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "covar_samp": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "covar_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "corr": {
+     "error": "DIVIDE_BY_ZERO"
+    },
+    "regr_count": {
+     "long": 2
+    },
+    "regr_avgx": {
+     "hex": "4008000000000000",
+     "text": "3.0"
+    },
+    "regr_avgy": {
+     "hex": "4008000000000000",
+     "text": "3.0"
+    },
+    "regr_sxx": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_syy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_sxy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_slope": {
+     "null": true
+    },
+    "regr_intercept": {
+     "null": true
+    },
+    "regr_r2": {
+     "null": true
+    }
+   }
+  },
+  {
+   "dataset": "two_rows_equal",
+   "type": "double",
+   "partitions": 2,
+   "slices": [
+    [
+     0,
+     1
+    ],
+    [
+     1,
+     2
+    ]
+   ],
+   "rows": [
+    [
+     3.0,
+     3.0
+    ],
+    [
+     3.0,
+     3.0
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "null": true
+    },
+    "skewness": {
+     "null": true
+    },
+    "var_samp": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "var_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "stddev_samp": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "stddev_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "covar_samp": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "covar_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "corr": {
+     "error": "DIVIDE_BY_ZERO"
+    },
+    "regr_count": {
+     "long": 2
+    },
+    "regr_avgx": {
+     "hex": "4008000000000000",
+     "text": "3.0"
+    },
+    "regr_avgy": {
+     "hex": "4008000000000000",
+     "text": "3.0"
+    },
+    "regr_sxx": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_syy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_sxy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_slope": {
+     "null": true
+    },
+    "regr_intercept": {
+     "null": true
+    },
+    "regr_r2": {
+     "null": true
+    }
+   }
+  },
+  {
+   "dataset": "with_nan",
+   "type": "double",
+   "partitions": 1,
+   "slices": [
+    [
+     0,
+     4
+    ]
+   ],
+   "rows": [
+    [
+     1.0,
+     2.0
+    ],
+    [
+     2.0,
+     "NaN"
+    ],
+    [
+     3.0,
+     4.0
+    ],
+    [
+     4.0,
+     7.0
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    },
+    "skewness": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    },
+    "var_samp": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    },
+    "var_pop": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    },
+    "stddev_samp": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    },
+    "stddev_pop": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    },
+    "covar_samp": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    },
+    "covar_pop": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    },
+    "corr": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    },
+    "regr_count": {
+     "long": 4
+    },
+    "regr_avgx": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    },
+    "regr_avgy": {
+     "hex": "4004000000000000",
+     "text": "2.5"
+    },
+    "regr_sxx": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    },
+    "regr_syy": {
+     "hex": "4014000000000000",
+     "text": "5.0"
+    },
+    "regr_sxy": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    },
+    "regr_slope": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    },
+    "regr_intercept": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    },
+    "regr_r2": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    }
+   }
+  },
+  {
+   "dataset": "with_nan",
+   "type": "double",
+   "partitions": 2,
+   "slices": [
+    [
+     0,
+     2
+    ],
+    [
+     2,
+     4
+    ]
+   ],
+   "rows": [
+    [
+     1.0,
+     2.0
+    ],
+    [
+     2.0,
+     "NaN"
+    ],
+    [
+     3.0,
+     4.0
+    ],
+    [
+     4.0,
+     7.0
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    },
+    "skewness": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    },
+    "var_samp": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    },
+    "var_pop": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    },
+    "stddev_samp": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    },
+    "stddev_pop": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    },
+    "covar_samp": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    },
+    "covar_pop": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    },
+    "corr": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    },
+    "regr_count": {
+     "long": 4
+    },
+    "regr_avgx": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    },
+    "regr_avgy": {
+     "hex": "4004000000000000",
+     "text": "2.5"
+    },
+    "regr_sxx": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    },
+    "regr_syy": {
+     "hex": "4014000000000000",
+     "text": "5.0"
+    },
+    "regr_sxy": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    },
+    "regr_slope": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    },
+    "regr_intercept": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    },
+    "regr_r2": {
+     "hex": "7ff8000000000000",
+     "text": "nan"
+    }
+   }
+  },
+  {
+   "dataset": "with_infinity",
+   "type": "double",
+   "partitions": 1,
+   "slices": [
+    [
+     0,
+     3
+    ]
+   ],
+   "rows": [
+    [
+     1.0,
+     2.0
+    ],
+    [
+     2.0,
+     "Infinity"
+    ],
+    [
+     3.0,
+     4.0
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "fff8000000000000",
+     "text": "nan"
+    },
+    "skewness": {
+     "hex": "fff8000000000000",
+     "text": "nan"
+    },
+    "var_samp": {
+     "hex": "fff8000000000000",
+     "text": "nan"
+    },
+    "var_pop": {
+     "hex": "fff8000000000000",
+     "text": "nan"
+    },
+    "stddev_samp": {
+     "hex": "fff8000000000000",
+     "text": "nan"
+    },
+    "stddev_pop": {
+     "hex": "fff8000000000000",
+     "text": "nan"
+    },
+    "covar_samp": {
+     "hex": "fff8000000000000",
+     "text": "nan"
+    },
+    "covar_pop": {
+     "hex": "fff8000000000000",
+     "text": "nan"
+    },
+    "corr": {
+     "hex": "fff8000000000000",
+     "text": "nan"
+    },
+    "regr_count": {
+     "long": 3
+    },
+    "regr_avgx": {
+     "hex": "7ff0000000000000",
+     "text": "inf"
+    },
+    "regr_avgy": {
+     "hex": "4000000000000000",
+     "text": "2.0"
+    },
+    "regr_sxx": {
+     "hex": "fff8000000000000",
+     "text": "nan"
+    },
+    "regr_syy": {
+     "hex": "4000000000000000",
+     "text": "2.0"
+    },
+    "regr_sxy": {
+     "hex": "fff8000000000000",
+     "text": "nan"
+    },
+    "regr_slope": {
+     "hex": "fff8000000000000",
+     "text": "nan"
+    },
+    "regr_intercept": {
+     "hex": "fff8000000000000",
+     "text": "nan"
+    },
+    "regr_r2": {
+     "hex": "fff8000000000000",
+     "text": "nan"
+    }
+   }
+  },
+  {
+   "dataset": "with_infinity",
+   "type": "double",
+   "partitions": 2,
+   "slices": [
+    [
+     0,
+     1
+    ],
+    [
+     1,
+     3
+    ]
+   ],
+   "rows": [
+    [
+     1.0,
+     2.0
+    ],
+    [
+     2.0,
+     "Infinity"
+    ],
+    [
+     3.0,
+     4.0
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "fff8000000000000",
+     "text": "nan"
+    },
+    "skewness": {
+     "hex": "fff8000000000000",
+     "text": "nan"
+    },
+    "var_samp": {
+     "hex": "fff8000000000000",
+     "text": "nan"
+    },
+    "var_pop": {
+     "hex": "fff8000000000000",
+     "text": "nan"
+    },
+    "stddev_samp": {
+     "hex": "fff8000000000000",
+     "text": "nan"
+    },
+    "stddev_pop": {
+     "hex": "fff8000000000000",
+     "text": "nan"
+    },
+    "covar_samp": {
+     "hex": "fff8000000000000",
+     "text": "nan"
+    },
+    "covar_pop": {
+     "hex": "fff8000000000000",
+     "text": "nan"
+    },
+    "corr": {
+     "hex": "fff8000000000000",
+     "text": "nan"
+    },
+    "regr_count": {
+     "long": 3
+    },
+    "regr_avgx": {
+     "hex": "7ff0000000000000",
+     "text": "inf"
+    },
+    "regr_avgy": {
+     "hex": "4000000000000000",
+     "text": "2.0"
+    },
+    "regr_sxx": {
+     "hex": "fff8000000000000",
+     "text": "nan"
+    },
+    "regr_syy": {
+     "hex": "4000000000000000",
+     "text": "2.0"
+    },
+    "regr_sxy": {
+     "hex": "fff8000000000000",
+     "text": "nan"
+    },
+    "regr_slope": {
+     "hex": "fff8000000000000",
+     "text": "nan"
+    },
+    "regr_intercept": {
+     "hex": "fff8000000000000",
+     "text": "nan"
+    },
+    "regr_r2": {
+     "hex": "fff8000000000000",
+     "text": "nan"
+    }
+   }
+  },
+  {
+   "dataset": "with_nulls",
+   "type": "double",
+   "partitions": 1,
+   "slices": [
+    [
+     0,
+     6
+    ]
+   ],
+   "rows": [
+    [
+     1.0,
+     2.0
+    ],
+    [
+     null,
+     3.0
+    ],
+    [
+     3.0,
+     null
+    ],
+    [
+     4.0,
+     9.0
+    ],
+    [
+     null,
+     null
+    ],
+    [
+     6.0,
+     1.0
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "bfe989ea3dc7ee30",
+     "text": "-0.7980853277835589"
+    },
+    "skewness": {
+     "hex": "3fef57525481fb23",
+     "text": "0.9794093752424015"
+    },
+    "var_samp": {
+     "hex": "4029d55555555555",
+     "text": "12.916666666666666"
+    },
+    "var_pop": {
+     "hex": "4023600000000000",
+     "text": "9.6875"
+    },
+    "stddev_samp": {
+     "hex": "400cc076b88cbb0f",
+     "text": "3.593976442141304"
+    },
+    "stddev_pop": {
+     "hex": "4008e6593d77b0b8",
+     "text": "3.112474899497183"
+    },
+    "covar_samp": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "covar_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "corr": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_count": {
+     "long": 3
+    },
+    "regr_avgx": {
+     "hex": "4010000000000000",
+     "text": "4.0"
+    },
+    "regr_avgy": {
+     "hex": "400d555555555555",
+     "text": "3.6666666666666665"
+    },
+    "regr_sxx": {
+     "hex": "4043000000000000",
+     "text": "38.0"
+    },
+    "regr_syy": {
+     "hex": "4029555555555555",
+     "text": "12.666666666666666"
+    },
+    "regr_sxy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_slope": {
+     "hex": "3c8af286bca1af28",
+     "text": "4.674623261579606e-17"
+    },
+    "regr_intercept": {
+     "hex": "400d555555555556",
+     "text": "3.666666666666667"
+    },
+    "regr_r2": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    }
+   }
+  },
+  {
+   "dataset": "with_nulls",
+   "type": "double",
+   "partitions": 2,
+   "slices": [
+    [
+     0,
+     3
+    ],
+    [
+     3,
+     6
+    ]
+   ],
+   "rows": [
+    [
+     1.0,
+     2.0
+    ],
+    [
+     null,
+     3.0
+    ],
+    [
+     3.0,
+     null
+    ],
+    [
+     4.0,
+     9.0
+    ],
+    [
+     null,
+     null
+    ],
+    [
+     6.0,
+     1.0
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "bfe989ea3dc7ee30",
+     "text": "-0.7980853277835589"
+    },
+    "skewness": {
+     "hex": "3fef57525481fb26",
+     "text": "0.9794093752424018"
+    },
+    "var_samp": {
+     "hex": "4029d55555555555",
+     "text": "12.916666666666666"
+    },
+    "var_pop": {
+     "hex": "4023600000000000",
+     "text": "9.6875"
+    },
+    "stddev_samp": {
+     "hex": "400cc076b88cbb0f",
+     "text": "3.593976442141304"
+    },
+    "stddev_pop": {
+     "hex": "4008e6593d77b0b8",
+     "text": "3.112474899497183"
+    },
+    "covar_samp": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "covar_pop": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "corr": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_count": {
+     "long": 3
+    },
+    "regr_avgx": {
+     "hex": "4010000000000000",
+     "text": "4.0"
+    },
+    "regr_avgy": {
+     "hex": "400d555555555555",
+     "text": "3.6666666666666665"
+    },
+    "regr_sxx": {
+     "hex": "4043000000000000",
+     "text": "38.0"
+    },
+    "regr_syy": {
+     "hex": "4029555555555555",
+     "text": "12.666666666666666"
+    },
+    "regr_sxy": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_slope": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    },
+    "regr_intercept": {
+     "hex": "400d555555555555",
+     "text": "3.6666666666666665"
+    },
+    "regr_r2": {
+     "hex": "0000000000000000",
+     "text": "0.0"
+    }
+   }
+  },
+  {
+   "dataset": "all_null",
+   "type": "double",
+   "partitions": 1,
+   "slices": [
+    [
+     0,
+     2
+    ]
+   ],
+   "rows": [
+    [
+     null,
+     null
+    ],
+    [
+     null,
+     null
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "null": true
+    },
+    "skewness": {
+     "null": true
+    },
+    "var_samp": {
+     "null": true
+    },
+    "var_pop": {
+     "null": true
+    },
+    "stddev_samp": {
+     "null": true
+    },
+    "stddev_pop": {
+     "null": true
+    },
+    "covar_samp": {
+     "null": true
+    },
+    "covar_pop": {
+     "null": true
+    },
+    "corr": {
+     "null": true
+    },
+    "regr_count": {
+     "long": 0
+    },
+    "regr_avgx": {
+     "null": true
+    },
+    "regr_avgy": {
+     "null": true
+    },
+    "regr_sxx": {
+     "null": true
+    },
+    "regr_syy": {
+     "null": true
+    },
+    "regr_sxy": {
+     "null": true
+    },
+    "regr_slope": {
+     "null": true
+    },
+    "regr_intercept": {
+     "null": true
+    },
+    "regr_r2": {
+     "null": true
+    }
+   }
+  },
+  {
+   "dataset": "all_null",
+   "type": "double",
+   "partitions": 2,
+   "slices": [
+    [
+     0,
+     1
+    ],
+    [
+     1,
+     2
+    ]
+   ],
+   "rows": [
+    [
+     null,
+     null
+    ],
+    [
+     null,
+     null
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "null": true
+    },
+    "skewness": {
+     "null": true
+    },
+    "var_samp": {
+     "null": true
+    },
+    "var_pop": {
+     "null": true
+    },
+    "stddev_samp": {
+     "null": true
+    },
+    "stddev_pop": {
+     "null": true
+    },
+    "covar_samp": {
+     "null": true
+    },
+    "covar_pop": {
+     "null": true
+    },
+    "corr": {
+     "null": true
+    },
+    "regr_count": {
+     "long": 0
+    },
+    "regr_avgx": {
+     "null": true
+    },
+    "regr_avgy": {
+     "null": true
+    },
+    "regr_sxx": {
+     "null": true
+    },
+    "regr_syy": {
+     "null": true
+    },
+    "regr_sxy": {
+     "null": true
+    },
+    "regr_slope": {
+     "null": true
+    },
+    "regr_intercept": {
+     "null": true
+    },
+    "regr_r2": {
+     "null": true
+    }
+   }
+  },
+  {
+   "dataset": "tiny_values",
+   "type": "double",
+   "partitions": 1,
+   "slices": [
+    [
+     0,
+     8
+    ]
+   ],
+   "rows": [
+    [
+     1e-09,
+     2e-09
+    ],
+    [
+     2e-09,
+     5e-09
+    ],
+    [
+     3.0000000000000004e-09,
+     3.0000000000000004e-09
+    ],
+    [
+     4e-09,
+     3.0000000000000004e-09
+    ],
+    [
+     5e-09,
+     5e-09
+    ],
+    [
+     6.000000000000001e-09,
+     2e-09
+    ],
+    [
+     7.000000000000001e-09,
+     1e-09
+    ],
+    [
+     8e-09,
+     2e-09
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "bff03d9bf514bc3b",
+     "text": "-1.015041310641904"
+    },
+    "skewness": {
+     "hex": "3fe0b69351048db7",
+     "text": "0.5222870428446446"
+    },
+    "var_samp": {
+     "hex": "3c439983aeef67e6",
+     "text": "2.125e-18"
+    },
+    "var_pop": {
+     "hex": "3c41265339117ae9",
+     "text": "1.8593749999999998e-18"
+    },
+    "stddev_samp": {
+     "hex": "3e190b330c7e52b2",
+     "text": "1.4577379737113251e-09"
+    },
+    "stddev_pop": {
+     "hex": "3e176d20be843adf",
+     "text": "1.3635890143294641e-09"
+    },
+    "covar_samp": {
+     "hex": "bc3bab8cbabb6581",
+     "text": "-1.5e-18"
+    },
+    "covar_pop": {
+     "hex": "bc38361b2363f8d1",
+     "text": "-1.3125e-18"
+    },
+    "corr": {
+     "hex": "bfdae2a81b75e575",
+     "text": "-0.4200840252084029"
+    },
+    "regr_count": {
+     "long": 8
+    },
+    "regr_avgx": {
+     "hex": "3e28b2311db7d477",
+     "text": "2.8750000000000005e-09"
+    },
+    "regr_avgy": {
+     "hex": "3e3353cd652bb168",
+     "text": "4.500000000000001e-09"
+    },
+    "regr_sxx": {
+     "hex": "3c71265339117ae9",
+     "text": "1.4874999999999998e-17"
+    },
+    "regr_syy": {
+     "hex": "3c88361b2363f8d4",
+     "text": "4.2000000000000017e-17"
+    },
+    "regr_sxy": {
+     "hex": "bc68361b2363f8d1",
+     "text": "-1.05e-17"
+    },
+    "regr_slope": {
+     "hex": "bfe6969696969698",
+     "text": "-0.7058823529411766"
+    },
+    "regr_intercept": {
+     "hex": "3e3c0b2a063f65ce",
+     "text": "6.529411764705883e-09"
+    },
+    "regr_r2": {
+     "hex": "3fc6969696969695",
+     "text": "0.17647058823529407"
+    }
+   }
+  },
+  {
+   "dataset": "tiny_values",
+   "type": "double",
+   "partitions": 2,
+   "slices": [
+    [
+     0,
+     4
+    ],
+    [
+     4,
+     8
+    ]
+   ],
+   "rows": [
+    [
+     1e-09,
+     2e-09
+    ],
+    [
+     2e-09,
+     5e-09
+    ],
+    [
+     3.0000000000000004e-09,
+     3.0000000000000004e-09
+    ],
+    [
+     4e-09,
+     3.0000000000000004e-09
+    ],
+    [
+     5e-09,
+     5e-09
+    ],
+    [
+     6.000000000000001e-09,
+     2e-09
+    ],
+    [
+     7.000000000000001e-09,
+     1e-09
+    ],
+    [
+     8e-09,
+     2e-09
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "bff03d9bf514bc3d",
+     "text": "-1.0150413106419045"
+    },
+    "skewness": {
+     "hex": "3fe0b69351048db7",
+     "text": "0.5222870428446446"
+    },
+    "var_samp": {
+     "hex": "3c439983aeef67e6",
+     "text": "2.125e-18"
+    },
+    "var_pop": {
+     "hex": "3c41265339117ae9",
+     "text": "1.8593749999999998e-18"
+    },
+    "stddev_samp": {
+     "hex": "3e190b330c7e52b2",
+     "text": "1.4577379737113251e-09"
+    },
+    "stddev_pop": {
+     "hex": "3e176d20be843adf",
+     "text": "1.3635890143294641e-09"
+    },
+    "covar_samp": {
+     "hex": "bc3bab8cbabb6582",
+     "text": "-1.5000000000000001e-18"
+    },
+    "covar_pop": {
+     "hex": "bc38361b2363f8d2",
+     "text": "-1.3125000000000001e-18"
+    },
+    "corr": {
+     "hex": "bfdae2a81b75e577",
+     "text": "-0.420084025208403"
+    },
+    "regr_count": {
+     "long": 8
+    },
+    "regr_avgx": {
+     "hex": "3e28b2311db7d476",
+     "text": "2.875e-09"
+    },
+    "regr_avgy": {
+     "hex": "3e3353cd652bb168",
+     "text": "4.500000000000001e-09"
+    },
+    "regr_sxx": {
+     "hex": "3c71265339117ae9",
+     "text": "1.4874999999999998e-17"
+    },
+    "regr_syy": {
+     "hex": "3c88361b2363f8d2",
+     "text": "4.2000000000000005e-17"
+    },
+    "regr_sxy": {
+     "hex": "bc68361b2363f8d2",
+     "text": "-1.0500000000000001e-17"
+    },
+    "regr_slope": {
+     "hex": "bfe6969696969698",
+     "text": "-0.7058823529411766"
+    },
+    "regr_intercept": {
+     "hex": "3e3c0b2a063f65ce",
+     "text": "6.529411764705883e-09"
+    },
+    "regr_r2": {
+     "hex": "3fc6969696969698",
+     "text": "0.17647058823529416"
+    }
+   }
+  },
+  {
+   "dataset": "int_columns",
+   "type": "int",
+   "partitions": 1,
+   "slices": [
+    [
+     0,
+     6
+    ]
+   ],
+   "rows": [
+    [
+     1,
+     2
+    ],
+    [
+     5,
+     3
+    ],
+    [
+     9,
+     4
+    ],
+    [
+     2,
+     10
+    ],
+    [
+     7,
+     7
+    ],
+    [
+     -3,
+     1
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "bfed4fcf5fe068b0",
+     "text": "-0.9159924385633271"
+    },
+    "skewness": {
+     "hex": "3fe5929e59b83e63",
+     "text": "0.6741477730119637"
+    },
+    "var_samp": {
+     "hex": "4027000000000000",
+     "text": "11.5"
+    },
+    "var_pop": {
+     "hex": "40232aaaaaaaaaab",
+     "text": "9.583333333333334"
+    },
+    "stddev_samp": {
+     "hex": "400b211b1c70d023",
+     "text": "3.391164991562634"
+    },
+    "stddev_pop": {
+     "hex": "4008c3fc3b38832e",
+     "text": "3.095695936834452"
+    },
+    "covar_samp": {
+     "hex": "401399999999999a",
+     "text": "4.9"
+    },
+    "covar_pop": {
+     "hex": "4010555555555555",
+     "text": "4.083333333333333"
+    },
+    "corr": {
+     "hex": "3fd528e51d314d3c",
+     "text": "0.33062103129232745"
+    },
+    "regr_count": {
+     "long": 6
+    },
+    "regr_avgx": {
+     "hex": "4012000000000000",
+     "text": "4.5"
+    },
+    "regr_avgy": {
+     "hex": "400c000000000000",
+     "text": "3.5"
+    },
+    "regr_sxx": {
+     "hex": "404cc00000000000",
+     "text": "57.5"
+    },
+    "regr_syy": {
+     "hex": "4057e00000000000",
+     "text": "95.5"
+    },
+    "regr_sxy": {
+     "hex": "4038800000000000",
+     "text": "24.5"
+    },
+    "regr_slope": {
+     "hex": "3fdb450239e0d5b4",
+     "text": "0.4260869565217391"
+    },
+    "regr_intercept": {
+     "hex": "3ff9525d7ee30f96",
+     "text": "1.582608695652174"
+    },
+    "regr_r2": {
+     "hex": "3fbbfbc1f3043518",
+     "text": "0.10931026633280216"
+    }
+   }
+  },
+  {
+   "dataset": "int_columns",
+   "type": "int",
+   "partitions": 2,
+   "slices": [
+    [
+     0,
+     3
+    ],
+    [
+     3,
+     6
+    ]
+   ],
+   "rows": [
+    [
+     1,
+     2
+    ],
+    [
+     5,
+     3
+    ],
+    [
+     9,
+     4
+    ],
+    [
+     2,
+     10
+    ],
+    [
+     7,
+     7
+    ],
+    [
+     -3,
+     1
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "bfed4fcf5fe068b0",
+     "text": "-0.9159924385633271"
+    },
+    "skewness": {
+     "hex": "3fe5929e59b83e63",
+     "text": "0.6741477730119637"
+    },
+    "var_samp": {
+     "hex": "4027000000000000",
+     "text": "11.5"
+    },
+    "var_pop": {
+     "hex": "40232aaaaaaaaaab",
+     "text": "9.583333333333334"
+    },
+    "stddev_samp": {
+     "hex": "400b211b1c70d023",
+     "text": "3.391164991562634"
+    },
+    "stddev_pop": {
+     "hex": "4008c3fc3b38832e",
+     "text": "3.095695936834452"
+    },
+    "covar_samp": {
+     "hex": "401399999999999a",
+     "text": "4.9"
+    },
+    "covar_pop": {
+     "hex": "4010555555555555",
+     "text": "4.083333333333333"
+    },
+    "corr": {
+     "hex": "3fd528e51d314d3c",
+     "text": "0.33062103129232745"
+    },
+    "regr_count": {
+     "long": 6
+    },
+    "regr_avgx": {
+     "hex": "4012000000000000",
+     "text": "4.5"
+    },
+    "regr_avgy": {
+     "hex": "400c000000000000",
+     "text": "3.5"
+    },
+    "regr_sxx": {
+     "hex": "404cc00000000000",
+     "text": "57.5"
+    },
+    "regr_syy": {
+     "hex": "4057e00000000000",
+     "text": "95.5"
+    },
+    "regr_sxy": {
+     "hex": "4038800000000000",
+     "text": "24.5"
+    },
+    "regr_slope": {
+     "hex": "3fdb450239e0d5b4",
+     "text": "0.4260869565217391"
+    },
+    "regr_intercept": {
+     "hex": "3ff9525d7ee30f96",
+     "text": "1.582608695652174"
+    },
+    "regr_r2": {
+     "hex": "3fbbfbc1f3043518",
+     "text": "0.10931026633280216"
+    }
+   }
+  },
+  {
+   "dataset": "decimal_columns",
+   "type": "decimal(10,2)",
+   "partitions": 1,
+   "slices": [
+    [
+     0,
+     5
+    ]
+   ],
+   "rows": [
+    [
+     "1.10",
+     "2.20"
+    ],
+    [
+     "3.35",
+     "0.05"
+    ],
+    [
+     "-4.40",
+     "7.75"
+    ],
+    [
+     "9.99",
+     "1.01"
+    ],
+    [
+     "0.01",
+     "5.55"
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "bff6a5dec56989b2",
+     "text": "-1.4154956542412092"
+    },
+    "skewness": {
+     "hex": "3fda93eb9838364e",
+     "text": "0.41527833810036874"
+    },
+    "var_samp": {
+     "hex": "4024f0c0ad03d9a9",
+     "text": "10.47022"
+    },
+    "var_pop": {
+     "hex": "4020c09a24031487",
+     "text": "8.376176"
+    },
+    "stddev_samp": {
+     "hex": "4009e2dc651fb48f",
+     "text": "3.235771932630605"
+    },
+    "stddev_pop": {
+     "hex": "4007273e9dd8e7bd",
+     "text": "2.894162400419161"
+    },
+    "covar_samp": {
+     "hex": "c02b538bac710cb2",
+     "text": "-13.663174999999999"
+    },
+    "covar_pop": {
+     "hex": "c025dc6fbd273d5b",
+     "text": "-10.930539999999999"
+    },
+    "corr": {
+     "hex": "bfe99ae73180e7e1",
+     "text": "-0.8001590697160702"
+    },
+    "regr_count": {
+     "long": 5
+    },
+    "regr_avgx": {
+     "decimal": "3.312000"
+    },
+    "regr_avgy": {
+     "decimal": "2.010000"
+    },
+    "regr_sxx": {
+     "hex": "4044f0c0ad03d9a9",
+     "text": "41.88088"
+    },
+    "regr_syy": {
+     "hex": "405bd919ce075f70",
+     "text": "111.3922"
+    },
+    "regr_sxy": {
+     "hex": "c04b538bac710cb2",
+     "text": "-54.652699999999996"
+    },
+    "regr_slope": {
+     "hex": "bff4e11966c31cc6",
+     "text": "-1.3049558653017796"
+    },
+    "regr_intercept": {
+     "hex": "401953fb6eafe39a",
+     "text": "6.3320138258794945"
+    },
+    "regr_r2": {
+     "hex": "3fe47cf7151c3609",
+     "text": "0.6402545368488869"
+    }
+   }
+  },
+  {
+   "dataset": "decimal_columns",
+   "type": "decimal(10,2)",
+   "partitions": 2,
+   "slices": [
+    [
+     0,
+     2
+    ],
+    [
+     2,
+     5
+    ]
+   ],
+   "rows": [
+    [
+     "1.10",
+     "2.20"
+    ],
+    [
+     "3.35",
+     "0.05"
+    ],
+    [
+     "-4.40",
+     "7.75"
+    ],
+    [
+     "9.99",
+     "1.01"
+    ],
+    [
+     "0.01",
+     "5.55"
+    ]
+   ],
+   "results": {
+    "kurtosis": {
+     "hex": "bff6a5dec56989af",
+     "text": "-1.4154956542412085"
+    },
+    "skewness": {
+     "hex": "3fda93eb9838364c",
+     "text": "0.4152783381003686"
+    },
+    "var_samp": {
+     "hex": "4024f0c0ad03d9aa",
+     "text": "10.470220000000001"
+    },
+    "var_pop": {
+     "hex": "4020c09a24031488",
+     "text": "8.376176000000001"
+    },
+    "stddev_samp": {
+     "hex": "4009e2dc651fb48f",
+     "text": "3.235771932630605"
+    },
+    "stddev_pop": {
+     "hex": "4007273e9dd8e7bd",
+     "text": "2.894162400419161"
+    },
+    "covar_samp": {
+     "hex": "c02b538bac710cb3",
+     "text": "-13.663175"
+    },
+    "covar_pop": {
+     "hex": "c025dc6fbd273d5c",
+     "text": "-10.93054"
+    },
+    "corr": {
+     "hex": "bfe99ae73180e7e2",
+     "text": "-0.8001590697160703"
+    },
+    "regr_count": {
+     "long": 5
+    },
+    "regr_avgx": {
+     "decimal": "3.312000"
+    },
+    "regr_avgy": {
+     "decimal": "2.010000"
+    },
+    "regr_sxx": {
+     "hex": "4044f0c0ad03d9aa",
+     "text": "41.880880000000005"
+    },
+    "regr_syy": {
+     "hex": "405bd919ce075f70",
+     "text": "111.3922"
+    },
+    "regr_sxy": {
+     "hex": "c04b538bac710cb3",
+     "text": "-54.6527"
+    },
+    "regr_slope": {
+     "hex": "bff4e11966c31cc6",
+     "text": "-1.3049558653017796"
+    },
+    "regr_intercept": {
+     "hex": "401953fb6eafe39a",
+     "text": "6.3320138258794945"
+    },
+    "regr_r2": {
+     "hex": "3fe47cf7151c360b",
+     "text": "0.6402545368488871"
+    }
+   }
+  },
+  {
+   "dataset": "big_splitmix64",
+   "type": "double",
+   "partitions": 1,
+   "slices": [
+    [
+     0,
+     10000
+    ]
+   ],
+   "first_rows": [
+    [
+     457.43946456235955,
+     940.6934276117605
+    ],
+    [
+     544.6702090262528,
+     1086.0301282939065
+    ],
+    [
+     481.7965450072603,
+     940.2598196244614
+    ],
+    [
+     527.8911284785174,
+     1055.4021319087828
+    ],
+    [
+     481.97795637483756,
+     967.3273238789262
+    ]
+   ],
+   "null_counts": [
+    98,
+    98
+   ],
+   "sum_x_nonnull": 9905060.531738443,
+   "results": {
+    "kurtosis": {
+     "hex": "bff3302584c6d442",
+     "text": "-1.199254530581371"
+    },
+    "skewness": {
+     "hex": "bf8a565ec9389d30",
+     "text": "-0.012860050693304176"
+    },
+    "var_samp": {
+     "hex": "40aa0d8ea4e7c799",
+     "text": "3334.778601878276"
+    },
+    "var_pop": {
+     "hex": "40aa0ce236b3a2ca",
+     "text": "3334.4418235908715"
+    },
+    "stddev_samp": {
+     "hex": "404cdfaf746d2f4b",
+     "text": "57.74754195529257"
+    },
+    "stddev_pop": {
+     "hex": "404cdf4fe704be92",
+     "text": "57.74462592822705"
+    },
+    "covar_samp": {
+     "hex": "409a181dff213a73",
+     "text": "1670.0292935554432"
+    },
+    "covar_pop": {
+     "hex": "409a176f911844c1",
+     "text": "1669.8589519302334"
+    },
+    "corr": {
+     "hex": "3feea604f504e819",
+     "text": "0.9577660356073948"
+    },
+    "regr_count": {
+     "long": 9804
+    },
+    "regr_avgx": {
+     "hex": "408f41ead4f36028",
+     "text": "1000.2396639836998"
+    },
+    "regr_avgy": {
+     "hex": "407f422e0c757aef",
+     "text": "500.1362423504897"
+    },
+    "regr_sxx": {
+     "hex": "417f2c5398f01624",
+     "text": "32687417.558614865"
+    },
+    "regr_syy": {
+     "hex": "41610c85cf6e0fd5",
+     "text": "8938542.482185284"
+    },
+    "regr_sxy": {
+     "hex": "416f39cc25456b49",
+     "text": "16371297.16472401"
+    },
+    "regr_slope": {
+     "hex": "3fe006ea026aab93",
+     "text": "0.5008440062714378"
+    },
+    "regr_intercept": {
+     "hex": "bfea7d52a1986c00",
+     "text": "-0.8277981907043568"
+    },
+    "regr_r2": {
+     "hex": "3fed5aa69ed80aac",
+     "text": "0.9173157789631055"
+    }
+   }
+  },
+  {
+   "dataset": "big_splitmix64",
+   "type": "double",
+   "partitions": 4,
+   "slices": [
+    [
+     0,
+     2500
+    ],
+    [
+     2500,
+     5000
+    ],
+    [
+     5000,
+     7500
+    ],
+    [
+     7500,
+     10000
+    ]
+   ],
+   "first_rows": [
+    [
+     457.43946456235955,
+     940.6934276117605
+    ],
+    [
+     544.6702090262528,
+     1086.0301282939065
+    ],
+    [
+     481.7965450072603,
+     940.2598196244614
+    ],
+    [
+     527.8911284785174,
+     1055.4021319087828
+    ],
+    [
+     481.97795637483756,
+     967.3273238789262
+    ]
+   ],
+   "null_counts": [
+    98,
+    98
+   ],
+   "sum_x_nonnull": 9905060.531738443,
+   "results": {
+    "kurtosis": {
+     "hex": "bff3302584c6d420",
+     "text": "-1.1992545305813636"
+    },
+    "skewness": {
+     "hex": "bf8a565ec9389b4f",
+     "text": "-0.012860050693303341"
+    },
+    "var_samp": {
+     "hex": "40aa0d8ea4e7c77f",
+     "text": "3334.778601878264"
+    },
+    "var_pop": {
+     "hex": "40aa0ce236b3a2af",
+     "text": "3334.4418235908593"
+    },
+    "stddev_samp": {
+     "hex": "404cdfaf746d2f3d",
+     "text": "57.74754195529247"
+    },
+    "stddev_pop": {
+     "hex": "404cdf4fe704be83",
+     "text": "57.744625928226945"
+    },
+    "covar_samp": {
+     "hex": "409a181dff213a8a",
+     "text": "1670.0292935554485"
+    },
+    "covar_pop": {
+     "hex": "409a176f911844d9",
+     "text": "1669.8589519302388"
+    },
+    "corr": {
+     "hex": "3feea604f504e820",
+     "text": "0.9577660356073956"
+    },
+    "regr_count": {
+     "long": 9804
+    },
+    "regr_avgx": {
+     "hex": "408f41ead4f36028",
+     "text": "1000.2396639836998"
+    },
+    "regr_avgy": {
+     "hex": "407f422e0c757ae8",
+     "text": "500.1362423504893"
+    },
+    "regr_sxx": {
+     "hex": "417f2c5398f0164b",
+     "text": "32687417.55861501"
+    },
+    "regr_syy": {
+     "hex": "41610c85cf6e0fd6",
+     "text": "8938542.482185286"
+    },
+    "regr_sxy": {
+     "hex": "416f39cc25456b65",
+     "text": "16371297.164724061"
+    },
+    "regr_slope": {
+     "hex": "3fe006ea026aab8f",
+     "text": "0.5008440062714373"
+    },
+    "regr_intercept": {
+     "hex": "bfea7d52a1984e00",
+     "text": "-0.8277981907035041"
+    },
+    "regr_r2": {
+     "hex": "3fed5aa69ed80aba",
+     "text": "0.917315778963107"
+    }
+   }
+  }
+ ]
+}

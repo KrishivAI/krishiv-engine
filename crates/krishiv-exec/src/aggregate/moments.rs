@@ -138,16 +138,36 @@ pub(crate) fn arity(f: &AggregateFunction) -> usize {
 enum Family {
     /// `CentralMomentAgg` of this order (2, 3 or 4).
     Central(usize),
-    /// `Covariance` (`marginals`: false) or `PearsonCorrelation` (true).
-    Pair { marginals: bool },
+    /// `Covariance` (`marginals`: false) or `PearsonCorrelation` (true), folded as `mode` says.
+    Pair { marginals: bool, mode: Pairing },
+}
+
+/// How a pair buffer's two marginal sums of squares are folded, and which argument leads the covariance. The buffer
+/// is the same six slots whatever the mode; what differs is the arithmetic, which must be Spark's bit for bit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pairing {
+    /// `PearsonCorrelation` (`corr`, `regr_r2`): `xMk + dx * (x - newXAvg)`.
+    Pearson,
+    /// `regr_sxx` and `regr_syy` are Spark's `RegrReplacement`, a central moment of order 2 of one argument: the
+    /// marginals are folded as `CentralMomentAgg` does, `m2 + delta * (delta - deltaN)`.
+    CentralMarginals,
+    /// `regr_slope` and `regr_intercept` are `covar_pop(x, y) / var_pop(x)`: the covariance leads with `x`, the
+    /// second argument (so the arguments are swapped on the way in), and the marginal of `x` is a central moment.
+    SlopeOfX,
 }
 
 impl Family {
     fn of(f: &AggregateFunction) -> Option<Self> {
         let width = buffer(f)?.len();
+        use AggregateFunction as F;
         Some(if arity(f) == 2 {
             Self::Pair {
                 marginals: width == WIDTH,
+                mode: match f {
+                    F::RegrSxx | F::RegrSyy => Pairing::CentralMarginals,
+                    F::RegrSlope | F::RegrIntercept => Pairing::SlopeOfX,
+                    _ => Pairing::Pearson,
+                },
             }
         } else {
             Self::Central(width - 1)
@@ -157,8 +177,12 @@ impl Family {
     fn width(self) -> usize {
         match self {
             Self::Central(order) => order + 1,
-            Self::Pair { marginals: false } => 4,
-            Self::Pair { marginals: true } => WIDTH,
+            Self::Pair {
+                marginals: false, ..
+            } => 4,
+            Self::Pair {
+                marginals: true, ..
+            } => WIDTH,
         }
     }
 }
@@ -189,7 +213,13 @@ fn update(family: Family, s: &mut Row, x: f64, y: f64) {
             };
             *s = [new_n, new_avg, new_m2, new_m3, new_m4, 0.0];
         }
-        Family::Pair { marginals } => {
+        Family::Pair { marginals, mode } => {
+            // The slope's covariance leads with the second argument (see `Pairing::SlopeOfX`).
+            let (x, y) = if mode == Pairing::SlopeOfX {
+                (y, x)
+            } else {
+                (x, y)
+            };
             let [n, x_avg, y_avg, ck, x_mk, y_mk] = *s;
             let new_n = n + 1.0;
             let dx = x - x_avg;
@@ -199,10 +229,14 @@ fn update(family: Family, s: &mut Row, x: f64, y: f64) {
             let new_x_avg = x_avg + dx_n;
             let new_y_avg = y_avg + dy_n;
             let new_ck = ck + dx * (y - new_y_avg);
-            let (new_x_mk, new_y_mk) = if marginals {
-                (x_mk + dx * (x - new_x_avg), y_mk + dy * (y - new_y_avg))
-            } else {
-                (0.0, 0.0)
+            let (new_x_mk, new_y_mk) = match (marginals, mode) {
+                (false, _) => (0.0, 0.0),
+                (true, Pairing::Pearson) => {
+                    (x_mk + dx * (x - new_x_avg), y_mk + dy * (y - new_y_avg))
+                }
+                (true, Pairing::CentralMarginals | Pairing::SlopeOfX) => {
+                    (x_mk + dx * (dx - dx_n), y_mk + dy * (dy - dy_n))
+                }
             };
             *s = [new_n, new_x_avg, new_y_avg, new_ck, new_x_mk, new_y_mk];
         }
@@ -239,7 +273,7 @@ fn merge(family: Family, a: &mut Row, b: &Row) {
             };
             *a = [new_n, new_avg, new_m2, new_m3, new_m4, 0.0];
         }
-        Family::Pair { marginals } => {
+        Family::Pair { marginals, .. } => {
             let [n1, x_avg1, y_avg1, ck1, x_mk1, y_mk1] = *a;
             let [n2, x_avg2, y_avg2, ck2, x_mk2, y_mk2] = *b;
             let dx = x_avg2 - x_avg1;
@@ -319,10 +353,12 @@ fn finish(f: &AggregateFunction, s: &Row, legacy: bool, ansi: bool) -> Result<Op
         F::RegrSxx => Some(s[5]),
         F::RegrSyy => Some(s[4]),
         F::RegrSxy => Some(s[3]),
-        // NULL when `x` does not vary.
-        F::RegrSlope | F::RegrIntercept | F::RegrR2 if s[5] == 0.0 => None,
-        F::RegrSlope => Some(s[3] / s[5]),
-        F::RegrIntercept => Some(s[1] - s[3] / s[5] * s[2]),
+        // NULL when `x` does not vary. The slope's buffer has `x`, the second argument, in the first slots
+        // (`Pairing::SlopeOfX`): `covar_pop(x, y) / var_pop(x)` and `yAvg - ck / m2 * xAvg`.
+        F::RegrSlope | F::RegrIntercept if s[4] == 0.0 => None,
+        F::RegrSlope => Some(s[3] / s[4]),
+        F::RegrIntercept => Some(s[2] - s[3] / s[4] * s[1]),
+        F::RegrR2 if s[5] == 0.0 => None,
         // `1` when only `y` does not vary, NULL when `x` does not;
         // otherwise the squared correlation, as Spark squares `corr`.
         F::RegrR2 if s[4] == 0.0 => Some(1.0),
