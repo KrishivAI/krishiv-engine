@@ -13,5 +13,6 @@ and Rust APIs, configuration settings, metrics and query profiles.
 - [Metrics](metrics-v1.md)
 - [EXPLAIN ANALYZE](explain-analyze.md)
 - [Query profile schema](query-profile-v1.schema.json)
+- [Analyze result schema](analyze/krishiv.analyze.v1.schema.json) (`krishiv.analyze.v1`, `Session::analyze`)
 - [Result cache](result-cache.md)
 - [Rust UDFs](rust-udfs.md)

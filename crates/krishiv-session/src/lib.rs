@@ -44,6 +44,7 @@
 mod access;
 mod action;
 mod admission;
+mod analyze;
 mod arrow_values;
 pub mod auth;
 mod cache;
@@ -102,6 +103,7 @@ mod window;
 
 pub use access::{PathPrefixPolicy, ReadOnlyPolicy, StatementInfo};
 pub use admission::{AdmissionController, Permit, QueryRequest, Unlimited};
+pub use analyze::{Analysis, AnalysisWarning, OutputColumn};
 pub use sessions::Transport;
 pub use system::register_build_features;
 
