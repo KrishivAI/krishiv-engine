@@ -229,7 +229,7 @@ enum Step {
 enum Waited {
     Step(Step),
     /// All tickets completed ([`Until::Tickets`]), or something changed
-    /// ([`Until::Change`]): re-plan.
+    /// ([`Until::Pending`], [`Until::Change`]): re-plan.
     TicketsDone,
     Deadline,
 }
@@ -239,8 +239,12 @@ enum Waited {
 enum Until {
     /// Once every ticket completed.
     Tickets,
-    /// Only on a grant or the deadline.
-    Grant,
+    /// While pending releases cover the shortfall: at the first release or
+    /// abort the caller re-plans. A release reaches the root before the
+    /// aborted query's own counter, so `pending` can count bytes the binding
+    /// already got back; re-planning then finds the rest of the shortfall
+    /// still to fund (another abort) instead of waiting out the deadline.
+    Pending,
     /// At the first release, credit taken, ticket or abort: the caller
     /// re-plans.
     Change,
@@ -280,6 +284,10 @@ impl Plan {
                 .saturating_add(self.writing)
                 .saturating_add(self.holding)
                 >= shortfall
+    }
+    /// Releases of already-aborted queries alone cover `shortfall`.
+    fn covered_by_pending(&self, shortfall: usize) -> bool {
+        self.pending > 0 && self.pending >= shortfall
     }
     fn excess(&self, group: Option<&Arc<Node>>) -> usize {
         group.map_or(0, |g| g.reserved().saturating_sub(self.fair_share))
@@ -547,8 +555,20 @@ impl Round {
             let consumers = self.consumers_within(&binding);
             let plan = self.plan(&binding, &consumers);
             let shortfall = binding.shortfall(need, self.class());
-            if plan.pending > 0 && plan.pending >= shortfall {
-                match self.wait(slot, deadline, Vec::new(), Until::Grant).await? {
+            if shortfall == 0 {
+                // Released since the refused attempt (the victim's release
+                // may have funded it): ask again before aborting anything.
+                // Each pass re-reads the counters only; a shortfall of 0
+                // means room was free at that read, so this cannot spin
+                // without other reservations (fast path or rounds) taking
+                // that room each time.
+                continue;
+            }
+            if plan.covered_by_pending(shortfall) {
+                match self
+                    .wait(slot, deadline, Vec::new(), Until::Pending)
+                    .await?
+                {
                     Waited::Step(s) => return Ok(s),
                     Waited::Deadline => return Err(self.exhausted(&binding)),
                     Waited::TicketsDone => continue,
@@ -674,10 +694,16 @@ impl Round {
             };
             // The caller planned before this listener existed: a grant
             // settled in between notified no one, so check it again now.
-            if until == Until::Change {
+            if matches!(until, Until::Pending | Until::Change) {
                 let (binding, need) = short;
                 let plan = self.plan(&binding, &self.consumers_within(&binding));
-                if !plan.covered_by_releases(binding.shortfall(need, self.class())) {
+                let shortfall = binding.shortfall(need, self.class());
+                let covered = if until == Until::Pending {
+                    plan.covered_by_pending(shortfall)
+                } else {
+                    plan.covered_by_releases(shortfall)
+                };
+                if !covered {
                     return Ok(Waited::TicketsDone);
                 }
             }
@@ -710,7 +736,7 @@ impl Round {
                 }
             })
             .await;
-            if woke && until == Until::Change {
+            if woke && matches!(until, Until::Pending | Until::Change) {
                 return Ok(match self.step(slot)? {
                     Step::Short(..) => Waited::TicketsDone,
                     s => Waited::Step(s),

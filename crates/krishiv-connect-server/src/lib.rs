@@ -19,6 +19,7 @@ pub mod host;
 pub mod interrupt;
 pub mod manager;
 pub mod operation;
+pub mod sender;
 pub mod server;
 pub mod service;
 pub mod status;
