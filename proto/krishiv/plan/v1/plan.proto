@@ -228,6 +228,8 @@ message PythonRelation {
   PythonUdfFunction udf = 1;
   repeated PythonFrameSide sides = 2;
   repeated PythonOutputColumn output = 3;
+  // Whether the UDF is deterministic (Spark's `udfDeterministic`).
+  bool deterministic = 4;
 }
 
 // feature: python_udf_relations

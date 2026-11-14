@@ -20,6 +20,7 @@ fn udf(eval_type: PythonEvalType) -> PythonUdfRef {
         version: 1,
         eval_type,
         thread_safe: true,
+        deterministic: true,
     }
 }
 
@@ -129,4 +130,69 @@ fn a_filter_stays_above_a_python_relation_whose_input_keeps_every_column() {
             "{kind}: an input column was pruned:\n{root}"
         );
     }
+}
+
+/// The `CteRef`s left in `p`.
+fn cte_refs(p: &LogicalPlan) -> usize {
+    let mut n = usize::from(matches!(p.node, PlanNode::CteRef(_)));
+    p.for_each_child(&mut |c| n += cte_refs(c));
+    n
+}
+
+/// `WITH c AS (<a map of nation over a UDF deterministic or not>) SELECT *
+/// FROM c UNION ALL SELECT * FROM c`, optimized.
+fn twice_referenced_map(deterministic: bool) -> Arc<LogicalPlan> {
+    let base = resolve("SELECT * FROM nation", &ctx());
+    let x = |id: u64| BoundColumn {
+        id: AttrId(id),
+        name: "x".to_owned(),
+        data_type: DataType::Long,
+        nullable: true,
+    };
+    let def = Arc::new(LogicalPlan::new(PlanNode::MapPartitions {
+        input: Arc::clone(base.root()),
+        udf: PythonUdfRef {
+            deterministic,
+            ..udf(PythonEvalType::MapArrowIter)
+        },
+        output: vec![x(1000)],
+        barrier: false,
+    }));
+    let reference = |id: u64| {
+        Arc::new(LogicalPlan::new(PlanNode::CteRef(krishiv_plan::CteRef {
+            name: "c".to_owned(),
+            source: vec![AttrId(1000)],
+            output: vec![x(id)],
+        })))
+    };
+    let plan = Plan::try_new(LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(LogicalPlan::new(PlanNode::Union {
+            inputs: vec![reference(2000), reference(3000)],
+            by_name: false,
+            allow_missing_columns: false,
+        })),
+        ctes: vec![krishiv_plan::Cte {
+            name: "c".to_owned(),
+            plan: Arc::clone(&def),
+        }],
+    }))
+    .unwrap();
+    assert_eq!(
+        krishiv_optimizer::plan_is_deterministic(&def),
+        deterministic
+    );
+    Arc::clone(optimize(&plan).unwrap().root())
+}
+
+/// A map over a nondeterministic UDF (Spark's `MapInPandas` allows one,
+/// `CheckAnalysis` at v4.2.0) makes its CTE nondeterministic: referenced
+/// twice, it is computed once and shared, not inlined per reference
+/// (Spark's `InlineCTE.shouldInline`, `cteDef.deterministic`, which sees
+/// the node's `PythonUDF`). A deterministic one is inlined.
+#[test]
+fn a_cte_over_a_nondeterministic_python_map_is_shared_not_inlined() {
+    let shared = twice_referenced_map(false);
+    assert_eq!(cte_refs(&shared), 2, "{shared}");
+    let inlined = twice_referenced_map(true);
+    assert_eq!(cte_refs(&inlined), 0, "{inlined}");
 }

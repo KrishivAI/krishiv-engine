@@ -1886,6 +1886,7 @@ mod tests {
             version: 1,
             eval_type,
             thread_safe: true,
+            deterministic: true,
         }
     }
 

@@ -1733,6 +1733,7 @@ fn python_relation(p: &pb::PythonRelation) -> Result<krishiv_exec::physical::Pyt
         eval_type: PythonEvalType::from_code(u.eval_type)
             .ok_or_else(|| corrupt("an unknown Python UDF eval type"))?,
         thread_safe: u.thread_safe,
+        deterministic: p.deterministic,
     };
     let sides = p
         .sides

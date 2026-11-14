@@ -801,6 +801,7 @@ impl Encoder {
                 eval_type: r.udf.eval_type.code(),
                 thread_safe: r.udf.thread_safe,
             }),
+            deterministic: r.udf.deterministic,
             sides: r
                 .sides
                 .iter()

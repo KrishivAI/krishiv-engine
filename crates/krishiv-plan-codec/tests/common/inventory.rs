@@ -1741,6 +1741,7 @@ fn python_udf_ref(eval_type: krishiv_plan::PythonEvalType) -> krishiv_plan::Pyth
         version: 4,
         eval_type,
         thread_safe: true,
+        deterministic: true,
     }
 }
 

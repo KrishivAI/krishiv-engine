@@ -244,7 +244,7 @@ impl Instantiation<'_> {
                     "a Python aggregate call is not a function".to_owned(),
                 ));
             };
-            let Some(udf) = PythonUdfRef::of(&f.id) else {
+            let Some(udf) = PythonUdfRef::of(&f.id, f.deterministic) else {
                 return Err(internal(
                     "a Python aggregate call is not a Python UDF".to_owned(),
                 ));

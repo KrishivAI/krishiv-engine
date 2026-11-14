@@ -47,6 +47,7 @@ fn udf(eval_type: PythonEvalType) -> PythonUdfRef {
         version: 1,
         eval_type,
         thread_safe: true,
+        deterministic: true,
     }
 }
 
@@ -149,8 +150,39 @@ fn eval_types_classify_by_what_the_udf_sees() {
 fn a_udf_reference_is_its_function_identity() {
     let r = udf(PythonEvalType::GroupedAggArrow);
     let id = r.function_id();
-    assert_eq!(PythonUdfRef::of(&id), Some(r));
-    assert_eq!(PythonUdfRef::of(&FunctionId::Builtin(Builtin::Add)), None);
+    assert_eq!(PythonUdfRef::of(&id, true), Some(r.clone()));
+    assert_eq!(
+        PythonUdfRef::of(&id, false),
+        Some(PythonUdfRef {
+            deterministic: false,
+            ..r
+        })
+    );
+    assert_eq!(
+        PythonUdfRef::of(&FunctionId::Builtin(Builtin::Add), true),
+        None
+    );
+}
+
+/// A relation node is as deterministic as its UDF; any other node has none.
+#[test]
+fn a_relation_node_is_as_deterministic_as_its_udf() {
+    for node in nodes() {
+        assert!(
+            crate::python_relation_is_deterministic(&node.node),
+            "{node}"
+        );
+        let mut node = node.node.clone();
+        match &mut node {
+            PlanNode::MapPartitions { udf, .. }
+            | PlanNode::GroupMap { udf, .. }
+            | PlanNode::CoGroupMap { udf, .. }
+            | PlanNode::PythonTableFunction { udf, .. } => udf.deterministic = false,
+            other => panic!("not a relation node: {other:?}"),
+        }
+        assert!(!crate::python_relation_is_deterministic(&node), "{node:?}");
+    }
+    assert!(crate::python_relation_is_deterministic(&scan(1).node));
 }
 
 #[test]

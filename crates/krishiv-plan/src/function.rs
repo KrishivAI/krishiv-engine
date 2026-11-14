@@ -548,6 +548,13 @@ pub struct PythonUdfRef {
     pub eval_type: PythonEvalType,
     /// Whether calls may run concurrently; `false` serialises them.
     pub thread_safe: bool,
+    /// Whether the UDF gives the same rows for the same input (Spark's
+    /// `PythonUDF.udfDeterministic`): a relation over one that does not is
+    /// nondeterministic ([`crate::python_relation_is_deterministic`]), so a
+    /// CTE holding it is computed once, not once per reference. Not part of
+    /// the identity, as a scalar call's determinism is the call's
+    /// ([`ResolvedFunction`](crate::ResolvedFunction)).
+    pub deterministic: bool,
 }
 
 impl PythonUdfRef {
@@ -562,10 +569,11 @@ impl PythonUdfRef {
         }
     }
 
-    /// The reference of a [`FunctionId::PythonUdf`]; `None` for any other
+    /// The reference of a [`FunctionId::PythonUdf`] called with
+    /// `deterministic` (the call's determinism); `None` for any other
     /// function.
     #[must_use]
-    pub fn of(id: &FunctionId) -> Option<Self> {
+    pub fn of(id: &FunctionId, deterministic: bool) -> Option<Self> {
         match id {
             FunctionId::PythonUdf {
                 name,
@@ -577,6 +585,7 @@ impl PythonUdfRef {
                 version: *version,
                 eval_type: *eval_type,
                 thread_safe: *thread_safe,
+                deterministic,
             }),
             _ => None,
         }

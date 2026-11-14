@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use krishiv_common::error::{InvalidPandasUdfPlacement, KrishivError};
 
-use crate::{Expr, ExprNode, FunctionId, FunctionKind, PythonUdfKind, ResolvedExpr};
+use crate::{Expr, ExprNode, FunctionId, FunctionKind, PlanNode, PythonUdfKind, ResolvedExpr};
 
 /// Whether `e` is a call of a grouped-aggregate Python UDF (202, 217, 252,
 /// 254).
@@ -20,6 +20,22 @@ pub fn is_python_udaf(e: &Expr) -> bool {
             FunctionId::PythonUdf { eval_type, .. } if eval_type.kind() == PythonUdfKind::GroupedAgg
         )
     )
+}
+
+/// Whether the Python relation UDF `node` runs, if it runs one, is
+/// deterministic. A relation node's UDF is not an expression of it, so a
+/// plan's determinism check asks this beside its expressions' (Spark's
+/// `QueryPlan.deterministic` sees the node's `functionExpr`, a `PythonUDF`,
+/// at v4.2.0).
+#[must_use]
+pub fn python_relation_is_deterministic(node: &PlanNode) -> bool {
+    match node {
+        PlanNode::MapPartitions { udf, .. }
+        | PlanNode::GroupMap { udf, .. }
+        | PlanNode::CoGroupMap { udf, .. }
+        | PlanNode::PythonTableFunction { udf, .. } => udf.deterministic,
+        _ => true,
+    }
 }
 
 /// Refuses an aggregate whose expressions call a grouped-aggregate Python UDF

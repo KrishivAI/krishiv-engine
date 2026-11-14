@@ -294,6 +294,9 @@ pub struct PythonRelation {
     pub sides: ::prost::alloc::vec::Vec<PythonFrameSide>,
     #[prost(message, repeated, tag = "3")]
     pub output: ::prost::alloc::vec::Vec<PythonOutputColumn>,
+    /// Whether the UDF is deterministic (Spark's `udfDeterministic`).
+    #[prost(bool, tag = "4")]
+    pub deterministic: bool,
 }
 /// feature: python_udf_relations
 #[derive(Clone, PartialEq, ::prost::Message)]

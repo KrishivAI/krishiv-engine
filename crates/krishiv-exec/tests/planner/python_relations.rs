@@ -297,6 +297,7 @@ fn udf(name: &str, eval_type: PythonEvalType) -> PythonUdfRef {
         version: 1,
         eval_type,
         thread_safe: true,
+        deterministic: true,
     }
 }
 
