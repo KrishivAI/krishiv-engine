@@ -340,3 +340,27 @@ fn non_ansi_mode_drops_the_context_of_a_cast_and_element_at() {
         }
     }
 }
+
+/// A run-time error's context carries Spark's summary, the `== SQL ==` block
+/// (`SQLQueryContext.summary`), so a surface without the statement's text
+/// (a Python DataFrame action) can show it (RS-14).
+#[test]
+fn runtime_error_context_carries_its_summary() {
+    for sql in [
+        "SELECT a / b FROM VALUES (1, 0) AS t(a, b)",
+        "SELECT CAST(a AS INT) FROM VALUES ('x') AS t(a)",
+        "SELECT 1/0",
+    ] {
+        let e = fails(sql);
+        let summary = &e.query_contexts()[0].summary;
+        assert!(
+            summary.starts_with("== SQL (line 1, position 8) =="),
+            "{sql}: {summary}"
+        );
+        assert_eq!(
+            render_with_context(&e, sql),
+            format!("{e}\n{summary}"),
+            "{sql}"
+        );
+    }
+}

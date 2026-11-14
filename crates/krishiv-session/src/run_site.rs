@@ -37,7 +37,7 @@ pub(crate) fn resolve_site(error: KrishivError, text: Option<&RedactedSql>) -> K
     let error = error.without_pending_site();
     match text {
         Some(t) if site.source == 0 && site.start < site.end => {
-            sql_context(error, t, site.start as usize, site.end as usize)
+            runtime_context(error, t, site.start as usize, site.end as usize)
         }
         _ => error,
     }
@@ -49,6 +49,24 @@ pub(crate) fn resolve_sites(stream: RecordBatchStream, env: &QueryEnv) -> Record
         Some(text) => Box::pin(stream.map(move |r| r.map_err(|e| resolve_site(e, Some(&text))))),
         None => stream,
     }
+}
+
+/// [`sql_context`] for a run-time error, with the context's `summary` set
+/// to the `== SQL ==` block, as Spark's `SQLQueryContext.summary` is: the
+/// surfaces that render an error without the statement's text (a Python
+/// DataFrame action, a Spark Connect client) show it from there.
+fn runtime_context(
+    error: KrishivError,
+    text: &RedactedSql,
+    start: usize,
+    end: usize,
+) -> KrishivError {
+    let mut context =
+        ErrorQueryContext::sql(text.fragment(start..end), start, end.saturating_sub(1));
+    if let Some(summary) = krishiv_common::error::sql_summary(&context, text.as_str()) {
+        context.summary = summary;
+    }
+    error.with_query_context(context)
 }
 
 /// `error` with the SQL span `start..end` of `text` attached as its

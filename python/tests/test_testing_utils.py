@@ -569,6 +569,28 @@ def test_sql_error_text_marks_the_span(spark: SparkSession) -> None:
     assert str(e) == e.getMessage() + "\n== SQL (line 1, position 8) ==\nSELECT a\n       ^"
 
 
+def test_runtime_error_text_marks_the_span(spark: SparkSession) -> None:
+    # RS-14: an ANSI run-time error raised by an action shows the span that raised it, as an analysis error does.
+    spark.sql("SET spark.sql.ansi.enabled = true")
+    spark.sql("CREATE OR REPLACE TEMPORARY VIEW rs14 AS SELECT 'abc' AS a")
+    for sql, summary in [
+        (
+            "select cast('abc' as int)",
+            "\n== SQL (line 1, position 8) ==\nselect cast('abc' as int)\n       ^^^^^^^^^^^^^^^^^^",
+        ),
+        ("select 1/0", "\n== SQL (line 1, position 8) ==\nselect 1/0\n       ^^^"),
+        (
+            "select cast(a as int) from rs14",
+            "\n== SQL (line 1, position 8) ==\nselect cast(a as int) from rs14\n       ^^^^^^^^^^^^^^",
+        ),
+    ]:
+        with pytest.raises(errors.PySparkException) as raised:
+            spark.sql(sql).collect()
+        e = raised.value
+        assert "== SQL" not in e.getMessage(), sql
+        assert str(e) == e.getMessage() + summary, sql
+
+
 def test_sql_error_text_counts_lines_and_characters(spark: SparkSession) -> None:
     with pytest.raises(errors.AnalysisException) as raised:
         spark.sql("SELECT 'é',\n  nope")

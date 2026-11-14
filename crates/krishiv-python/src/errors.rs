@@ -13,7 +13,21 @@ type RawContext = (u8, String, usize, usize, String, String, String, String);
 /// The Python exception for `error`; a `RuntimeError` carrying the message (and
 /// the conversion failure as its cause) if `krishiv.errors` cannot be used.
 pub(crate) fn to_py(py: Python<'_>, error: &KrishivError) -> PyErr {
-    convert(py, error, None)
+    convert(py, error, rendered_from_summaries(error))
+}
+
+/// The message followed by the `== SQL ==` summaries the error's contexts
+/// carry (a run-time error's, filled by the session from the statement's
+/// text), for an error raised where the query text is not at hand (a
+/// DataFrame action); `None` when no context has one.
+fn rendered_from_summaries(error: &KrishivError) -> Option<String> {
+    let summaries: Vec<&str> = error
+        .query_contexts()
+        .iter()
+        .map(|c| c.summary.as_str())
+        .filter(|s| !s.is_empty())
+        .collect();
+    (!summaries.is_empty()).then(|| format!("{error}\n{}", summaries.join("\n")))
 }
 
 /// [`to_py`] for an error of the query `sql`: the exception's `str` also marks

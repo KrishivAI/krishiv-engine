@@ -142,6 +142,40 @@ fn analysis_error_lines_count_from_the_file_start() {
     );
 }
 
+/// A run-time error shows the SQL span that raised it, as an analysis error
+/// does (RS-14): a cast and a division in a constant query, the same over a
+/// temporary view's column, and a statement past the first line of a file.
+#[test]
+fn runtime_errors_show_their_sql_span() {
+    let ansi = ["--conf", "spark.sql.ansi.enabled=true"];
+    let run = |sql: &str| {
+        let mut args = vec!["sql"];
+        args.extend(ansi);
+        args.extend(["-e", sql]);
+        let o = krishiv(&args, None);
+        assert_eq!(o.status.code(), Some(1), "{sql}");
+        err(&o)
+    };
+    let e = run("select cast('abc' as int)");
+    assert!(e.contains("[CAST_INVALID_INPUT]"), "{e}");
+    assert!(
+        e.ends_with("\n== SQL (line 1, position 8) ==\nselect cast('abc' as int)\n       ^^^^^^^^^^^^^^^^^^\n"),
+        "{e}"
+    );
+    let e = run("select 1/0");
+    assert!(e.contains("[DIVIDE_BY_ZERO]"), "{e}");
+    assert!(
+        e.ends_with("\n== SQL (line 1, position 8) ==\nselect 1/0\n       ^^^\n"),
+        "{e}"
+    );
+    let e = run("create temporary view v as select 'abc' as a;\nselect cast(a as int) from v");
+    assert!(e.contains("[CAST_INVALID_INPUT]"), "{e}");
+    assert!(
+        e.ends_with("\n== SQL (line 2, position 8) ==\nselect cast(a as int) from v\n       ^^^^^^^^^^^^^^\n"),
+        "{e}"
+    );
+}
+
 #[test]
 fn parse_error_shows_redacted_text() {
     let o = krishiv(&["sql", "-e", "select 'https://user:hunter2@host/p"], None);
