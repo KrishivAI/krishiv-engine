@@ -196,7 +196,8 @@ pub(crate) struct CommitContext<'a> {
 /// # Errors
 /// `KRISHIV_ICEBERG_COMMIT_STATE_UNKNOWN` when any request's outcome is
 /// unresolved at the end (nothing deleted); otherwise, with everything the
-/// write produced deleted: `KRISHIV_ICEBERG_COMMIT_FAILED` when every request
+/// write produced deleted unless some request ever had an unknown answer
+/// (then nothing is deleted, module docs): `KRISHIV_ICEBERG_COMMIT_FAILED` when every request
 /// was a known "not applied" and the budget ran out,
 /// `KRISHIV_ICEBERG_COMMIT_CONFLICT` for a format-version change other than
 /// v2 → v3 or a replaced table, `KRISHIV_UNSUPPORTED_FEATURE` for a commit
@@ -210,8 +211,10 @@ pub(crate) struct CommitContext<'a> {
 /// may be in flight and still land. Nothing is deleted here, and the caller
 /// must not delete the write's data files or manifests either (`sink.rs`
 /// disarms its guard before calling this). Only a drop before the first
-/// request, or a returned error other than
-/// `KRISHIV_ICEBERG_COMMIT_STATE_UNKNOWN`, says nothing was applied.
+/// request says nothing was applied. A returned error other than
+/// `KRISHIV_ICEBERG_COMMIT_STATE_UNKNOWN` says no request is in the table
+/// now; one that had an unknown answer can still land later if the branch
+/// returns to its base (module docs), so its files are kept.
 pub(crate) async fn commit_append(
     table: &dyn CommitTable,
     cx: CommitContext<'_>,
@@ -620,13 +623,14 @@ impl Loop<'_> {
     /// lists; delete every other list and manifest of this write; never a
     /// data file, never a list any snapshot of `m` names. Without the
     /// snapshot (it cannot be read back) nothing is deleted, as Java; nor
-    /// when it is another id's (a replayed write) while a request of this
-    /// one is unresolved and may still land (R:S1).
+    /// when it is another id's (a replayed write) and a request of this one
+    /// ever had an unknown answer, so it may still land (R:S1; settled or
+    /// not, review of the P1 fix finding 1).
     async fn clean_committed(&self, m: &TableMetadata, new: &NewManifests) {
         let Ok(Some(found)) = self.found(m) else {
             return;
         };
-        if found.snapshot_id() != self.snapshot_id && !self.unresolved.is_empty() {
+        if found.snapshot_id() != self.snapshot_id && self.ever_unknown {
             return;
         }
         let keep = found.manifest_list();
@@ -700,12 +704,15 @@ impl Loop<'_> {
 }
 
 /// The `<files>` text of a failed write whose files were deleted.
-const REMOVED: &str = "the written files were removed where possible";
+const REMOVED: &str = "the written files were removed where possible, and the write \
+     can run again";
 
 /// The `<files>` text of a failed write that once had an unknown answer.
-const KEPT: &str = "the written files were kept: an earlier request of this write \
-     got no answer and could still land if the branch returns to its base; \
-     remove_orphan_files removes them if it never does";
+const KEPT: &str = "the written files were kept, since an earlier request of this \
+     write had no definite answer and could still land if the branch returns to its \
+     base: look for the write id in the table's snapshots before running the write \
+     again, or its rows may appear twice (remove_orphan_files removes the files if \
+     it never lands)";
 
 /// The base an attempt asserts for its branch (`assert-ref-snapshot-id`).
 fn attempt_base(attempt: &Attempt) -> Option<i64> {

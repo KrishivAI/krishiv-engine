@@ -1151,6 +1151,53 @@ fn a_key_match_on_another_id_deletes_nothing_while_unresolved() {
     assert_eq!(rows(&c.env, &loc), [INIT, MINE]);
 }
 
+/// Review of the P1 fix, finding 1: a held request settled when the branch
+/// moves, then a 409 whose refresh finds a replay of this write under
+/// another id. The write counts as committed, but nothing of it is deleted:
+/// after a rollback to the base the held request lands and its files are
+/// there. (The write is then in two snapshots, the replay's own exposure,
+/// so only the rows are read.) A v1 table, as in the P1 case.
+#[test]
+fn a_replay_found_after_a_settled_unknown_answer_deletes_nothing() {
+    let mut c = case_with(1, &[]);
+    c.cat.script(&[Fault::Held, Fault::Conflict409]);
+    c.cat
+        .on(When::BeforeLoad(1), c.foreign("f.parquet", 968, "main"));
+    c.cat.on(
+        When::BeforeLoad(2),
+        c.foreign_keyed("r.parquet", 952, "main", OUR_KEY),
+    );
+    let m = c.run().unwrap();
+    assert!(m.snapshot_by_id(952).is_some() && m.snapshot_by_id(OURS).is_none());
+    assert!(exists(&c.list(1)) && exists(&c.manifest()) && exists(&c.data()));
+    let back = rollback(c.base.current_snapshot_id().unwrap());
+    c.env.rt.block_on(async {
+        let (m, _) = c.cat.metadata();
+        let request = back(m).await;
+        c.cat.state.lock().unwrap().land(&request).ok().unwrap();
+    });
+    assert_eq!(c.cat.land_held(), 1);
+    let (m, loc) = c.cat.metadata();
+    assert_eq!(m.current_snapshot_id(), Some(OURS));
+    assert_eq!(rows(&c.env, &loc), [INIT, MINE]);
+}
+
+/// Review of the P1 fix, finding 5: a held request settled when the branch
+/// moves, then a 401 to the new attempt's first request: that error is
+/// returned as is, and the files are kept.
+#[test]
+fn a_plain_failure_after_a_settled_unknown_answer_keeps_the_files() {
+    let mut c = case();
+    c.cat.script(&[Fault::Held, Fault::Unauthorized401]);
+    c.cat
+        .on(When::BeforeLoad(1), c.foreign("f.parquet", 969, "main"));
+    let e = c.run().unwrap_err();
+    assert!(e.to_string().contains("401"), "{e}");
+    assert_eq!(c.cat.requests(), 2);
+    assert!(exists(&c.list(1)) && exists(&c.list(2)));
+    assert!(exists(&c.manifest()) && exists(&c.data()));
+}
+
 /// R:N3: a foreign snapshot holding this write's snapshot id under another
 /// write key is not this write: `KRISHIV_ICEBERG_COMMIT_CONFLICT`, never
 /// "committed", and (every outcome known) the write's files deleted.
