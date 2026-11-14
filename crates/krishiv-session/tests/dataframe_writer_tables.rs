@@ -558,3 +558,21 @@ fn an_overwrite_a_collated_schema_refuses_keeps_the_old_table() {
     );
     assert_eq!(count(&s, "c.t"), 3, "the old table survives");
 }
+
+/// A table that exists before its schema gains a default collation can still be renamed: the rename drops the
+/// source entry and creates the new one, and the store must not refuse either (the new-table refusal lives in the
+/// SQL create and the catalog adapter, before the store).
+#[test]
+fn a_table_in_a_schema_that_gained_a_collation_can_be_renamed() {
+    let s = session();
+    block_on(s.sql("CREATE SCHEMA c")).unwrap();
+    block_on(s.table("people").write().save_as_table("c.t")).unwrap();
+    block_on(s.sql("SET spark.sql.collation.schemaLevel.enabled = true")).unwrap();
+    block_on(s.sql("ALTER SCHEMA c DEFAULT COLLATION UTF8_LCASE")).unwrap();
+    block_on(s.sql("ALTER TABLE c.t RENAME TO c.u")).unwrap();
+    assert_eq!(count(&s, "c.u"), 3, "the renamed table keeps its rows");
+    assert!(
+        block_on(s.sql("SELECT * FROM c.t")).is_err(),
+        "the old name is gone"
+    );
+}

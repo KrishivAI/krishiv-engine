@@ -17,13 +17,23 @@ use crate::support::{self, data, eval};
 use crate::tpcds;
 
 /// The optimized plan, its text and the rule's notes, with the rule on or off.
+/// The optimizer's options with the group-key code (D2) off: without a
+/// session configuration it would run, and code the dimension keys these
+/// tests move as payload before `LatePayloadJoin` sees them. Sessions run
+/// it only with `krishiv.optimizer.groupKeyCode` on (off by default).
+fn options() -> Options {
+    let mut options = Options::default();
+    options.group_key_code = false;
+    options
+}
+
 fn run_with(
     sql: &str,
     stats: &dyn Statistics,
     on: bool,
 ) -> (krishiv_plan::Plan, String, Vec<String>) {
     let plan = support::resolve(sql, &support::ctx());
-    let mut options = Options::default();
+    let mut options = options();
     options.late_payload_join = on;
     let (optimized, steps) = optimize_traced_with_options(&plan, stats, &options).unwrap();
     let notes = steps
@@ -49,7 +59,7 @@ fn check(sql: &str) -> (String, Vec<String>) {
         plan.root().resolved_output(),
         "{text}"
     );
-    let again = optimize_with_options(&optimized, &fixture(), &Options::default()).unwrap();
+    let again = optimize_with_options(&optimized, &fixture(), &options()).unwrap();
     assert!(
         again.structurally_eq(&optimized),
         "not a fixed point:\n{}",

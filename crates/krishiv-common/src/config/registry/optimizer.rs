@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The config entries of the subquery shared-scan rules (P3 W1).
+//! The config entries of the subquery shared-scan rules (P3 W1) and of the group-key code (P2b D2).
 
 use crate::config::{ConfigEntry, ConfigValue, Scope, SettableBy, ValueType};
 
@@ -47,5 +47,37 @@ pub static LATE_PAYLOAD_JOIN: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Whether an aggregate's group keys from one dimension travel as one integer code (P2b D2).
+pub static GROUP_KEY_CODE: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.groupKeyCode",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Internal. Let an aggregate whose group keys include several columns of one dimension \
+          table (TPC-H q16's `p_brand, p_type, p_size`) group by one integer code made on the \
+          dimension's side, and read the columns back from the dimension's distinct values above \
+          the aggregate, so the joins below it carry the code instead of the columns. Applies only \
+          when statistics say it pays. Results are the same either way. Off until its timed \
+          A/B passes.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
+/// Experimental: the group-key code applies wherever the plan's shape qualifies, without the statistics test
+/// (a measurement switch for P2b D2's timed A/B).
+pub static EXPERIMENTAL_GROUP_KEY_CODE_FORCE: ConfigEntry = ConfigEntry {
+    key: "krishiv.experimental.groupKeyCodeForce",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Experimental: apply `krishiv.optimizer.groupKeyCode` wherever an aggregate's shape qualifies, \
+          also when a key's distinct count is a guess or the estimated ratios say it does not pay. \
+          For measuring the rewrite; results are the same either way.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
     spark_alias: None,
 };

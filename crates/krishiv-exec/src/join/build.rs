@@ -26,7 +26,7 @@ use crate::operator::{GlobalState, LocalState, Sink, SinkStatus};
 use crate::output_spill::{OutputSpill, SpillUnread};
 use crate::rows::Hll;
 use crate::sync::{Event, Mutex, lock};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 /// The build sink.
 #[derive(Debug)]
@@ -49,6 +49,12 @@ pub(crate) struct BuildGlobal {
     /// Between `finalize` and the first read: the finalized build, its
     /// tables spillable (see [`IdleBuild`]).
     idle: Mutex<Option<Arc<IdleBuild>>>,
+    /// Probe drivers that may still read the level-0 tables
+    /// ([`Self::probe_joined`], [`Self::probe_left`]).
+    probes: AtomicUsize,
+    /// A probe driver reached the probe's flush, so every probe driver
+    /// exists: the flush starts behind a barrier all of them arrive at.
+    probe_flushing: AtomicBool,
     /// Runtime filter partials merged so far, and the memory they hold.
     runtime: Mutex<Partials>,
     /// The runtime filters and where they are published, abandoned if the
@@ -92,9 +98,9 @@ struct Collect {
 /// The finalized build.
 #[derive(Debug)]
 pub(crate) struct Built {
-    /// Per level-0 partition: its table, or `None` if it spilled or is
-    /// empty.
-    pub(crate) tables: Vec<Option<JoinTable>>,
+    /// The level-0 tables, `None` once every probe driver is done with
+    /// them ([`BuildGlobal::probe_left`]).
+    level0: Mutex<Option<Arc<Level0>>>,
     /// Level-0 partitions with build rows on disk (bit per partition).
     pub(crate) spilled: u64,
     /// The spilled partitions' work, shared by the probe drivers' flush
@@ -103,7 +109,62 @@ pub(crate) struct Built {
     /// Notified whenever a driver's claim on `grace` ends, or a write of an
     /// idle build's partition does.
     pub(crate) grace_changed: Arc<Event>,
+    /// The runtime filters' memory: a scan of another pipeline may still
+    /// read a filter after the probe ends, so it stays until the build's
+    /// state is dropped.
     _memory: Vec<Reservation>,
+}
+
+impl Built {
+    /// The level-0 tables, for a probe driver to hold while it probes;
+    /// `None` once they were released.
+    pub(crate) fn level0(&self) -> Option<Arc<Level0>> {
+        lock(&self.level0).clone()
+    }
+}
+
+/// A finalized build's level-0 tables and the memory they hold (their rows
+/// and indexes). Each probe driver holds a reference while it probes, and
+/// the build holds one until every probe driver is done, so the memory goes
+/// back when the probe ends rather than when its pipeline does: a
+/// downstream sink's final phase (an aggregate's merge) gets it.
+#[derive(Debug)]
+pub(crate) struct Level0 {
+    /// Per level-0 partition: its table, or `None` if it spilled or is
+    /// empty.
+    pub(crate) tables: Vec<Option<JoinTable>>,
+    /// Held only to go back with the tables.
+    _memory: Vec<Reservation>,
+}
+
+impl BuildGlobal {
+    /// A probe driver that may read the level-0 tables: its state was made.
+    /// Only for a build its probe owns (a prebuilt build may serve more
+    /// than one probe, so it is never released).
+    pub(crate) fn probe_joined(&self) {
+        self.probes.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A probe driver started the probe's flush.
+    pub(crate) fn probe_flushing(&self) {
+        self.probe_flushing.store(true, Ordering::Release);
+    }
+
+    /// A probe driver that [joined](Self::probe_joined) is done with the
+    /// tables: its flush ended, or its state was dropped. It dropped its
+    /// own reference first. When the last one leaves after some driver
+    /// started the flush, every probe driver has left, and the build's
+    /// reference is taken out: the caller drops it, and with it the tables
+    /// and their memory. A count that reaches zero before any flush (drivers
+    /// whose output was not wanted) releases nothing: later drivers may
+    /// still join, and the tables go when the build's state is dropped.
+    pub(crate) fn probe_left(&self) -> Option<Arc<Level0>> {
+        let last = self.probes.fetch_sub(1, Ordering::AcqRel) == 1;
+        if !last || !self.probe_flushing.load(Ordering::Acquire) {
+            return None;
+        }
+        lock(&self.built.get()?.level0).take()
+    }
 }
 
 impl BuildGlobal {
@@ -179,10 +240,23 @@ impl IdleBuild {
     /// Ends the idle window: the build as the probe reads it.
     fn seal(&self) -> Option<Built> {
         let mut st = lock(&self.state);
-        let mut built = st.built.take()?;
-        for m in &mut st.memory {
-            built._memory.append(m);
+        let built = st.built.take()?;
+        // The tables' memory goes back with the tables (`Level0`), not with
+        // the build: a probe that ends releases it for the sink above.
+        // No clone of the tables exists before the seal, so `get_mut` holds.
+        let mut level0 = lock(&built.level0);
+        let present = level0.is_some();
+        let unique = level0.as_mut().and_then(Arc::get_mut);
+        debug_assert!(
+            unique.is_some() || !present,
+            "hash join level-0 tables shared before the build sealed"
+        );
+        if let Some(l0) = unique {
+            for m in &mut st.memory {
+                l0._memory.append(m);
+            }
         }
+        drop(level0);
         drop(st);
         self.hook.set_idle(false);
         self.hook.set_spillable_bytes(0);
@@ -237,8 +311,14 @@ impl SpillUnread for IdleBuild {
                 let Some(built) = built.as_mut() else {
                     return Ok(0);
                 };
-                let mut order: Vec<usize> = (0..built.tables.len())
-                    .filter(|&p| built.tables[p].is_some() && memory.get(p).is_some())
+                // Idle: no probe driver holds the tables yet, so the
+                // reference is unique.
+                let mut l0 = lock(&built.level0);
+                let Some(l0) = l0.as_mut().and_then(Arc::get_mut) else {
+                    return Ok(0);
+                };
+                let mut order: Vec<usize> = (0..l0.tables.len())
+                    .filter(|&p| l0.tables[p].is_some() && memory.get(p).is_some())
                     .collect();
                 order.sort_by_key(|&p| std::cmp::Reverse(held(&memory[p])));
                 // One partition covers the request: the smallest that does,
@@ -265,7 +345,7 @@ impl SpillUnread for IdleBuild {
                 topup.shrink_to_credit(topup.size());
                 let mut jobs = Vec::with_capacity(chosen.len());
                 for p in chosen {
-                    let Some(table) = built.tables[p].take() else {
+                    let Some(table) = l0.tables[p].take() else {
                         continue;
                     };
                     built.spilled |= 1 << p;
@@ -749,12 +829,17 @@ impl BuildGlobal {
             collect: Mutex::new(Collect::default()),
             built: OnceLock::new(),
             idle: Mutex::new(None),
+            probes: AtomicUsize::new(0),
+            probe_flushing: AtomicBool::new(false),
             runtime: Mutex::new(Partials::default()),
             filters: Vec::new(),
             publisher: None,
         };
         let _ = g.built.set(Built {
-            tables: Vec::new(),
+            level0: Mutex::new(Some(Arc::new(Level0 {
+                tables: Vec::new(),
+                _memory: Vec::new(),
+            }))),
             spilled: 0,
             grace: Arc::new(Mutex::new(grace)),
             grace_changed: Arc::new(Event::default()),
@@ -802,6 +887,8 @@ impl Sink for BuildSink {
             }),
             built: OnceLock::new(),
             idle: Mutex::new(None),
+            probes: AtomicUsize::new(0),
+            probe_flushing: AtomicBool::new(false),
             runtime: Mutex::new(Partials {
                 builders: partials(&self.0),
                 memory: Vec::new(),
@@ -1216,7 +1303,7 @@ impl Sink for BuildSink {
                     }
                 }
             }
-            let mut memory = vec![index, filter_memory];
+            let mut memory = vec![index];
             let mut grace = Grace::new(g.hashing.fanout0());
             grace.keep_unprobed = s.join_type.keeps_null_build_keys();
             for (p, kept, bytes) in arena_held {
@@ -1245,11 +1332,14 @@ impl Sink for BuildSink {
             n.add(Counter::BuildSpillBytes, c.file_bytes);
             n.add(Counter::FinalizeNs, nanos(started.elapsed()));
             let built = Built {
-                tables: all,
+                level0: Mutex::new(Some(Arc::new(Level0 {
+                    tables: all,
+                    _memory: memory,
+                }))),
                 spilled,
                 grace: Arc::new(Mutex::new(grace)),
                 grace_changed: Arc::new(Event::default()),
-                _memory: memory,
+                _memory: vec![filter_memory],
             };
             drop(c);
             if g.built.get().is_some() || lock(&g.idle).is_some() {

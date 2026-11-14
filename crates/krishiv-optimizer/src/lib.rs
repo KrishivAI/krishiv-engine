@@ -30,6 +30,9 @@
 //!    cardinality estimates ([`Statistics`]): exact dynamic programming up
 //!    to [`DP_LIMIT`] inputs, greedy above, never a cross product the query
 //!    does not have.
+//!    **Group-key code**, once, with statistics (`group_code`, design P2b
+//!    D2): an aggregate's keys from one dimension travel as one integer
+//!    code, decoded above it.
 //! 4. **Prune**: column pruning over the whole plan (projection pushdown
 //!    into scans), once.
 //! 5. **Tidy**: the rewrite batch again over the pruned plan; prune and
@@ -61,6 +64,7 @@ mod eager;
 mod estimate;
 mod expr;
 mod fold;
+mod group_code;
 mod group_limit;
 mod inline_cte;
 mod join_order;
@@ -81,9 +85,9 @@ mod win_magic;
 use std::sync::Arc;
 
 use krishiv_common::config::{
-    ANSI_ENABLED, AUTO_BROADCAST_JOIN_THRESHOLD, Config, ConfigValue, EAGER_AGGREGATION, JOIN_COST,
-    JOIN_DP_LIMIT, JOIN_ENUMERATOR, LATE_PAYLOAD_JOIN, SESSION_TIME_ZONE, SHARE_CTE_INSTANCES,
-    SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
+    ANSI_ENABLED, AUTO_BROADCAST_JOIN_THRESHOLD, Config, ConfigValue, EAGER_AGGREGATION,
+    GROUP_KEY_CODE, JOIN_COST, JOIN_DP_LIMIT, JOIN_ENUMERATOR, LATE_PAYLOAD_JOIN,
+    SESSION_TIME_ZONE, SHARE_CTE_INSTANCES, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
 };
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{
@@ -92,6 +96,7 @@ use krishiv_plan::{
 };
 use krishiv_udf_sdk::UdfLibrary;
 
+pub use group_code::{could_code_group_keys, is_group_code_dictionary};
 pub use group_limit::{
     DEFAULT_WINDOW_GROUP_LIMIT_THRESHOLD, RankLikeFunction, WindowGroupLimit,
     infer_window_group_limit,
@@ -174,6 +179,11 @@ pub struct Options {
     /// direct members, P3 W1 shape (b)). Runs only when
     /// `krishiv.optimizer.shareRepeatedSubtrees` is also on.
     pub share_repeated_subtrees: bool,
+    /// Group-key codes (`group_code`, design P2b D2): an aggregate's keys
+    /// from one dimension travel as one integer code. Needs statistics; a
+    /// session configuration, when given, must also switch it on
+    /// (`krishiv.optimizer.groupKeyCode`).
+    pub group_key_code: bool,
 }
 
 impl Default for Options {
@@ -185,6 +195,7 @@ impl Default for Options {
             late_payload_join: true,
             subquery_as_window: true,
             share_repeated_subtrees: true,
+            group_key_code: true,
         }
     }
 }
@@ -489,6 +500,43 @@ fn run(
         let root = match stats {
             Some(stats) if eager => {
                 eager_pass(&root, stats, options.stats_propagation, joins, &mut t)?
+            }
+            _ => root,
+        };
+        // After eager aggregation (which may pre-empt it) and the final join
+        // order, before pruning: an aggregate's dimension keys travel as one
+        // code (design P2b D2).
+        // `krishiv.experimental.groupKeyCodeForce` (measurement only) also
+        // switches it on, without the statistics test.
+        let forced = udfs.is_some_and(|(_, config)| {
+            krishiv_common::experimental::is_enabled(config, "groupKeyCodeForce")
+        });
+        let coded = options.group_key_code
+            && (forced
+                || udfs.is_none_or(|(_, config)| {
+                    config
+                        .get(&GROUP_KEY_CODE)
+                        .and_then(ConfigValue::as_bool)
+                        .unwrap_or(false)
+                }));
+        let root = match stats {
+            Some(stats) if coded => {
+                let (after, notes) = group_code::rewrite(
+                    Arc::clone(&root),
+                    stats,
+                    options.stats_propagation,
+                    forced,
+                )?;
+                t.step("GroupKeyCode", 1, "GroupKeyCode", &root, &after);
+                t.notes("GroupKeyCode", &after, notes);
+                // The decode join is a new inner join: ordered (and its
+                // inputs' canonical order settled) here, as a second
+                // optimization would.
+                if Arc::ptr_eq(&after, &root) {
+                    after
+                } else {
+                    order_and_restrict(after, stats, options.stats_propagation, joins, &mut t)?
+                }
             }
             _ => root,
         };

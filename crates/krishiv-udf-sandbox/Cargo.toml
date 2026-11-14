@@ -1,0 +1,25 @@
+[package]
+name = "krishiv-udf-sandbox"
+description = "OS sandbox for Krishiv's Python UDF workers: Landlock, seccomp and rlimits applied by a trampoline before exec"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = true
+
+[lints]
+workspace = true
+
+[dependencies]
+krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
+thiserror.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock.workspace = true
+libc.workspace = true
+rustix = { workspace = true, features = ["thread"] }
+seccompiler.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
