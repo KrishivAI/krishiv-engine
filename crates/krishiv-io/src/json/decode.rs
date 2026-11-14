@@ -639,6 +639,21 @@ pub(crate) fn parse_next(
     Ok(Some((top, c.pos)))
 }
 
+/// The rows a record of a line before the split counts, as the main loop
+/// counts them: one per element of a top-level array of objects (none for
+/// `[]`), else one (a record, malformed or not).
+fn prefix_rows(line: &str, syntax: Syntax) -> i64 {
+    if !line.trim_start().starts_with('[') {
+        return 1;
+    }
+    match parse_line(line, syntax) {
+        Ok(Top::Array(items)) if items.iter().all(|v| matches!(v, JVal::Object(..))) => {
+            i64::try_from(items.len()).unwrap_or(i64::MAX)
+        }
+        _ => 1,
+    }
+}
+
 /// The cause Spark gives a top-level value that is not an object (or a
 /// top-level array element that is not one): `INVALID_JSON_ROOT_FIELD` for
 /// `null`, none it classifies otherwise.
@@ -844,7 +859,7 @@ impl JsonDecoder {
                         if line.trim_matches(|c: char| c <= ' ').is_empty() {
                             continue;
                         }
-                        self.row_no += 1;
+                        self.row_no += prefix_rows(&line, self.syntax);
                         continue;
                     }
                 }
@@ -1013,8 +1028,8 @@ impl JsonDecoder {
         let mut bad: Option<Option<KrishivError>> = None;
         for out in &self.outs {
             vals.push(match out {
-                Out::Corrupt => NVal::Null,
-                Out::RowIndex => NVal::Leaf(Val::I64(self.row_no)),
+                // The corrupt text and the row index are set later.
+                Out::Corrupt | Out::RowIndex => NVal::Null,
                 Out::Data { slot, shape } => {
                     match conv.value(shape, &self.data_names[*slot], slots[*slot], raw) {
                         Ok(v) => v,
@@ -1044,8 +1059,17 @@ impl JsonDecoder {
     /// Accepted rows: counted and appended (rows before the split are
     /// counted by the prefix reader and never get here).
     fn accept(&mut self, vals: Vec<NVal>) {
+        // `_metadata.row_index`: the row's place among the file's rows,
+        // given when it is accepted (each row of a top-level array has its
+        // own).
+        let index = self.row_no;
         self.row_no += 1;
-        for (col, v) in self.columns.iter_mut().zip(vals) {
+        for ((col, v), out) in self.columns.iter_mut().zip(vals).zip(&self.outs) {
+            let v = if matches!(out, Out::RowIndex) {
+                NVal::Leaf(Val::I64(index))
+            } else {
+                v
+            };
             match col {
                 Builder::Flat(c) => match &v {
                     NVal::Leaf(x) => {
@@ -1067,14 +1091,7 @@ impl JsonDecoder {
 
     /// A malformed record without a conversion error.
     fn malformed(&mut self, raw: &str, cause: Option<KrishivError>) -> FormatResult<()> {
-        let vals = self
-            .outs
-            .iter()
-            .map(|out| match out {
-                Out::RowIndex => NVal::Leaf(Val::I64(self.row_no)),
-                _ => NVal::Null,
-            })
-            .collect();
+        let vals = vec![NVal::Null; self.outs.len()];
         self.malformed_with(raw, cause, vals)
     }
 

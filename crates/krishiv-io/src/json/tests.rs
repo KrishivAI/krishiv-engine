@@ -1066,6 +1066,46 @@ fn dropped_records_keep_their_row_index_across_splits() {
 }
 
 #[test]
+fn top_level_arrays_number_each_row_across_splits() {
+    // Each object of a top-level array is its own row with its own index; a
+    // split that starts later counts the array lines before it the same way.
+    let text =
+        "[{\"a\":0},{\"a\":1}]\n[]\n{\"a\":2}\n[{\"a\":3},{\"a\":4},{\"a\":5}]\n[1]\n{\"a\":7}\n";
+    let bytes = text.as_bytes();
+    let schema = ddl("a int");
+    let req = row_indexed(&schema);
+    let size = bytes.len() as u64;
+    for mode in ["PERMISSIVE", "DROPMALFORMED"] {
+        let o = options(&serde_json::json!({ "mode": mode }));
+        let indexes = |range: ByteRange| -> Vec<(i64, Option<i32>)> {
+            let got = read_split(bytes, &o, &req, range).expect("read");
+            let mut seen = Vec::new();
+            for b in &got {
+                let a = b.column(0).as_primitive::<Int32Type>();
+                let idx = b.column_by_name(ROW_INDEX_COLUMN).expect("row index");
+                let idx = idx.as_primitive::<Int64Type>();
+                seen.extend(
+                    (0..b.num_rows()).map(|i| (idx.value(i), (!a.is_null(i)).then(|| a.value(i)))),
+                );
+            }
+            seen
+        };
+        let mut want: Vec<(i64, Option<i32>)> = (0..6).map(|i| (i64::from(i), Some(i))).collect();
+        if mode == "PERMISSIVE" {
+            want.push((6, None));
+        }
+        want.push((7, Some(7)));
+        assert_eq!(indexes(ByteRange::new(0, size)), want, "{mode}");
+        for cut in 1..size {
+            let mut halves = indexes(ByteRange::new(0, cut));
+            halves.extend(indexes(ByteRange::new(cut, size)));
+            halves.sort_unstable();
+            assert_eq!(halves, want, "{mode} cut at {cut}");
+        }
+    }
+}
+
+#[test]
 fn splits_read_each_line_once() {
     let mut text = String::new();
     for i in 0..600 {
