@@ -111,6 +111,12 @@ jobs:
           tool: typos,taplo
       - run: typos
       - run: taplo fmt --check
+      # P3-T074: runs on every PR, docs-only ones included (the wheel job below is Rust-gated).
+      - name: Docs links and the generated migration guide
+        run: |
+          python3 tests/scripts/check_docs_links.py
+          python3 tests/scripts/gen_migration_guide.py --check \
+            || { echo "::error::docs/guides/pyspark-migration.md is stale: run tests/scripts/gen_migration_guide.py"; exit 1; }
       - name: markdownlint
         run: docker run --rm -v "$PWD:/workdir" davidanson/markdownlint-cli2:v0.23.3 "**/*.md"
       # Self-test: each checker must reject its fixture, or the gate is vacuous.
@@ -290,6 +296,12 @@ jobs:
           KRISHIV_SIM_TPCH_DIR: ${{ runner.temp }}/tpch-sf0.1
       - run: cargo test --workspace --doc --locked
       - run: cargo nextest run -p krishiv-session --features telemetry-otlp --test otlp_collector --locked
+      # Server TLS (`tls`) and OIDC (`oidc`), both off by default: the in-memory rustls handshakes,
+      # and the JWT verifier against keys generated per run.
+      - run: cargo nextest run -p krishiv-session --features tls,oidc --lib -E 'test(/auth::mtls_tests::tls/) | test(/auth::oidc_tests/)' --locked
+      # The admin listener's authentication (P3-T002) is feature-gated, so default-feature runs skip it.
+      - run: cargo nextest run -p krishiv-server --features session,metrics-prometheus --locked
+      - run: cargo nextest run -p krishiv-cli --features server --test server --locked
       - name: Disk left
         if: always()
         run: df -h / "$RUNNER_TEMP"
@@ -740,6 +752,12 @@ jobs:
         env:
           PY: ${{ matrix.python }}
         run: .github/scripts/quickstart-test.sh dist "$PY"
+      # P3-T074: the docs quickstart and migration guide and the sample notebooks, run the same way.
+      - name: Docs examples and notebooks (clean venv, built wheel)
+        if: matrix.coverage
+        env:
+          PY: ${{ matrix.python }}
+        run: .github/scripts/docs-examples-test.sh dist "$PY"
       # Python diff coverage is a merge gate (this job is part of the required
       # `wheels-ok`): at least 90% of the executable lines a PR adds under
       # python/krishiv must run in the pytest run above, counted as coverage.py

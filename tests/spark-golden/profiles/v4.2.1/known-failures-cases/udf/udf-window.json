@@ -1,0 +1,9 @@
+{
+  "cases": {
+    "depends-on-command": [
+      17
+    ]
+  },
+  "file": "udf/udf-window",
+  "format_version": 1
+}

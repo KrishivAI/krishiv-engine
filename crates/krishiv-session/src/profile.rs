@@ -300,7 +300,7 @@ impl DataFrame {
                 // One plan for the trace and the run: the one with cached
                 // subplans substituted, which is what executes.
                 let a = df.action_analysis().await?;
-                let substituted = df.cache_substituted(&a)?;
+                let (substituted, _lease) = df.cache_substituted(&a)?;
                 let analyzed = substituted.as_ref().unwrap_or(&a.analyzed);
                 let (verbose, physical) = df.verbose_of(&a, analyzed).await?;
                 let (_, mut profile) = df.run_profiled_plan(&a, &physical, false).await?;
@@ -329,7 +329,8 @@ impl DataFrame {
         keep: bool,
     ) -> Result<(Vec<RecordBatch>, QueryProfile), KrishivError> {
         let a = self.action_analysis().await?;
-        let (physical, _) = self.physical_cached(&a).await?;
+        let (physical, fill) = self.physical_cached(&a).await?;
+        let _lease = fill.into_lease();
         self.run_profiled_plan(&a, &physical, keep).await
     }
 

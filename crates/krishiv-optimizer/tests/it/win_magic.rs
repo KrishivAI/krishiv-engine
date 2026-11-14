@@ -13,11 +13,12 @@ use crate::support;
 fn run(sql: &str, on: bool) -> Plan {
     let plan = support::resolve(sql, &support::ctx());
     let mut config = Config::new();
-    if on {
-        config
-            .set("krishiv.optimizer.subqueryAsWindow", "true")
-            .unwrap();
-    }
+    config
+        .set(
+            "krishiv.optimizer.subqueryAsWindow",
+            if on { "true" } else { "false" },
+        )
+        .unwrap();
     optimize_with_udfs(&plan, &fixture(), &UdfLibrary::new(), &config).unwrap()
 }
 

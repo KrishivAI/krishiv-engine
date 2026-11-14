@@ -131,8 +131,58 @@ pub(crate) fn share(
     // unused definition; the planner never plans it.
     Ok(Arc::new(LogicalPlan::new(PlanNode::WithCte {
         input,
-        ctes,
+        ctes: dependencies_first(ctes),
     })))
+}
+
+/// `ctes` ordered so that each definition follows the definitions it reads
+/// (a group nested in another group's body is read by that body's
+/// definition), as a `WITH` lists them; otherwise in their given order.
+fn dependencies_first(ctes: Vec<Cte>) -> Vec<Cte> {
+    let names: HashMap<String, usize> = ctes
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.name.clone(), i))
+        .collect();
+    let reads: Vec<Vec<usize>> = ctes
+        .iter()
+        .map(|c| {
+            let mut out = Vec::new();
+            walk(&c.plan, &mut |p| {
+                if let PlanNode::CteRef(r) = &p.node
+                    && let Some(&i) = names.get(&r.name)
+                {
+                    out.push(i);
+                }
+            });
+            out
+        })
+        .collect();
+    // Depth-first, dependencies before the definition; a cycle cannot occur
+    // (a body never contains itself), and `placed` stops one anyway.
+    let mut order: Vec<usize> = Vec::with_capacity(ctes.len());
+    let mut placed = vec![false; ctes.len()];
+    for start in 0..ctes.len() {
+        let mut stack = vec![(start, false)];
+        while let Some((i, expanded)) = stack.pop() {
+            if expanded {
+                order.push(i);
+                continue;
+            }
+            if placed[i] {
+                continue;
+            }
+            placed[i] = true;
+            stack.push((i, true));
+            for &d in reads[i].iter().rev() {
+                if !placed[d] {
+                    stack.push((d, false));
+                }
+            }
+        }
+    }
+    let mut slots: Vec<Option<Cte>> = ctes.into_iter().map(Some).collect();
+    order.into_iter().filter_map(|i| slots[i].take()).collect()
 }
 
 /// Every `Shift` of the plan (subquery plans included), once each, with the
@@ -258,7 +308,7 @@ fn equal(a: &Arc<LogicalPlan>, b: &Arc<LogicalPlan>) -> bool {
 
 /// Whether `body` is deterministic, holds no outer reference and a pipeline
 /// breaker.
-fn worth_sharing(body: &Arc<LogicalPlan>) -> bool {
+pub(crate) fn worth_sharing(body: &Arc<LogicalPlan>) -> bool {
     deterministic(body) && !has_outer(body) && has_breaker(body)
 }
 

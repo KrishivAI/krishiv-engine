@@ -9,7 +9,7 @@ the `SQLQueryTestSuite` golden runner over `tests/spark-golden/<tag>/` (`.sql.ou
 three-number report, exclusion manifest `tests/spark-golden/exclusions.json`; `cargo xtask golden` writes
 `target/golden-report.json`; `--engine sql-parse` measures the `krishiv-sql` parser on the DQL statements,
 `golden::sql_parse`; `--engine session` runs every statement through `krishiv-session`, `golden::session_engine`),
-the frozen statement-level baseline, one file per key (`golden::known_failures`): `tests/spark-golden/known-failures.json`
+the other Spark releases' baselines `tests/spark-golden/profiles/<tag>/` (v4.3.0, v4.2.1, v4.1.4, v4.0.5, v3.5.9; nightly `golden-profiles`, test `golden_profiles`) each with `gate.json` (the phase gate's result rate and a ratchet floor, shown in the job summary), the frozen statement-level baseline, one file per key (`golden::known_failures`): `tests/spark-golden/known-failures.json`
 holds only the format version, Spark tag and freeze date; `known-failures-categories/<category>.json` one category
 each (unsupported feature with its plan task, divergence with ADR 0023, or bug with its owner) with the classification
 rules that assign it (`golden::classify`; each rule has an `order`, rules are tried in ascending order across all
@@ -79,6 +79,8 @@ Paths are relative to this crate.
 
 ## Tests
 `cargo nextest run -p krishiv-testkit --no-tests=pass` · `cargo clippy -p krishiv-testkit --all-targets -- -D warnings`
+
+**ICU collations (ADR 0043).** The ICU statements of `collations-basic` need the `collations-icu` feature, so the default baseline lists them. `tests/golden_icu.rs` (feature `collations-icu`, nightly step) runs that file and requires the statements of `tests/spark-golden/icu-cases/collations-basic.json` to pass; with the feature on, `golden_ratchet` is compiled out (its baseline lists those rows as failures). When a statement of the list is fixed without the feature it leaves both lists.
 
 **Other Spark versions (P3-T090).** Only the v4.2.0 goldens are committed. `tests/golden_profiles.rs` runs the ratchet for another tag
 (`v4.3.0`, `v4.1.4`, `v4.0.5`, `v3.5.9`) against its committed baseline `tests/spark-golden/profiles/<tag>/` (same split layout as the 4.2 baseline, with the 4.2 categories plus `s43-*` for 4.3.0 and `v35-ansi-default` for 3.5.9); the goldens themselves are fetched by `tests/scripts/import_spark_golden.sh <tag>` in the nightly `golden-profiles` job

@@ -45,6 +45,12 @@ jobs:
             args: -max_len=1048576
           - target: capsule_import
             args: -max_len=256
+          - target: cert_names
+            args: -max_len=8192
+          - target: jwt_parse
+            args: -max_len=20000
+          - target: delta_commit_json
+            args: -max_len=262144
     env:
       RUSTC_WRAPPER: "" # instrumented builds are not cacheable
       TARGET: ${{ matrix.target }}
@@ -81,6 +87,17 @@ jobs:
           case "$TARGET" in
             sql_parse) python3 tests/scripts/fuzz_seed_sql.py "fuzz/corpus/$TARGET" ;;
             parquet_read) python3 tests/scripts/fuzz_seed_parquet.py "fuzz/corpus/$TARGET" ;;
+            cert_names)
+              mkdir -p "fuzz/corpus/$TARGET"
+              cp crates/krishiv-session/tests/fixtures/tls/*.der "fuzz/corpus/$TARGET/" ;;
+            delta_commit_json)
+              # Commit files, _last_checkpoint and .crc files of the oracle tables.
+              mkdir -p "fuzz/corpus/$TARGET"
+              for f in tests/fixtures/delta-4.4.1/*/_delta_log/*.json \
+                       tests/fixtures/delta-4.4.1/*/_delta_log/*.crc \
+                       tests/fixtures/delta-4.4.1/*/_delta_log/_last_checkpoint; do
+                cp "$f" "fuzz/corpus/$TARGET/$(sha1sum "$f" | cut -c1-16)"
+              done ;;
             connect_decode)
               KRISHIV_FUZZ_SEED_DIR="$PWD/fuzz/corpus/$TARGET" \
                 cargo test -p krishiv-connect --test goldens --locked ;;

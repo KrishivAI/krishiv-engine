@@ -513,6 +513,7 @@ pub(crate) fn feature_states() -> Vec<(&'static str, bool)> {
         ("flight-sql", cfg!(feature = "flight-sql")),
         ("mcp", cfg!(feature = "mcp")),
         ("python", cfg!(feature = "python")),
+        ("collations-icu", cfg!(feature = "collations-icu")),
         ("wasm-udf", cfg!(feature = "wasm-udf")),
         ("celeborn", cfg!(feature = "celeborn")),
         ("tokio-console", cfg!(feature = "tokio-console")),
@@ -555,6 +556,9 @@ fn enabled_features() -> Vec<&'static str> {
     }
     if cfg!(feature = "python") {
         out.push("python");
+    }
+    if cfg!(feature = "collations-icu") {
+        out.push("collations-icu");
     }
     if cfg!(feature = "wasm-udf") {
         out.push("wasm-udf");
