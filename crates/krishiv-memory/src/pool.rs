@@ -210,6 +210,12 @@ impl Shared {
     }
 }
 
+/// The abort priority of a query made with [`MemoryPool::child`].
+pub const DEFAULT_PRIORITY: u8 = 50;
+
+/// The highest abort priority; a larger value is lowered to it.
+pub const MAX_PRIORITY: u8 = 100;
+
 /// What a group's subtree is: the top of a group is a child of the root or
 /// of a tenant pool ([`TreePool::tenant`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -226,6 +232,10 @@ pub(crate) enum GroupKind {
 #[derive(Debug)]
 pub(crate) struct Group {
     pub(crate) kind: GroupKind,
+    /// The abort order of a query (0 to 100): on pool exhaustion the lowest priority is aborted
+    /// first ([`DEFAULT_PRIORITY`] unless the pool was made with
+    /// [`MemoryPool::child_with_priority`]).
+    pub(crate) priority: u8,
     aborted: AtomicBool,
     error: Mutex<Option<MemoryError>>,
     pub(crate) abort_event: Event,
@@ -235,8 +245,13 @@ pub(crate) struct Group {
 
 impl Group {
     fn new(kind: GroupKind) -> Self {
+        Self::with_priority(kind, DEFAULT_PRIORITY)
+    }
+
+    fn with_priority(kind: GroupKind, priority: u8) -> Self {
         Self {
             kind,
+            priority,
             aborted: AtomicBool::new(false),
             error: Mutex::new(None),
             abort_event: Event::default(),
@@ -924,10 +939,23 @@ impl TreePool {
 
     /// [`MemoryPool::child`], returning the concrete type.
     pub(crate) fn child_pool(&self, name: &str, limit: Option<usize>) -> Arc<TreePool> {
+        self.child_pool_with_priority(name, limit, DEFAULT_PRIORITY)
+    }
+
+    /// [`MemoryPool::child_with_priority`], returning the concrete type.
+    pub(crate) fn child_pool_with_priority(
+        &self,
+        name: &str,
+        limit: Option<usize>,
+        priority: u8,
+    ) -> Arc<TreePool> {
         let p = &self.node;
         let group = match &p.group {
             Some(g) => Arc::clone(g),
-            None => Arc::new(Group::new(GroupKind::Query)),
+            None => Arc::new(Group::with_priority(
+                GroupKind::Query,
+                priority.min(MAX_PRIORITY),
+            )),
         };
         Self::new_child(p, name, limit, group)
     }
@@ -1021,6 +1049,15 @@ impl TreePool {
 impl MemoryPool for TreePool {
     fn child(&self, name: &str, limit: Option<usize>) -> Arc<dyn MemoryPool> {
         self.child_pool(name, limit)
+    }
+
+    fn child_with_priority(
+        &self,
+        name: &str,
+        limit: Option<usize>,
+        priority: u8,
+    ) -> Arc<dyn MemoryPool> {
+        self.child_pool_with_priority(name, limit, priority)
     }
 
     fn register(&self, name: &str, spill: Option<Arc<dyn Spillable>>) -> ConsumerId {

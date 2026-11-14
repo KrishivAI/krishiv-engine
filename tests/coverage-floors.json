@@ -64,6 +64,9 @@
     "krishiv-types": {
       "floor": 93.0
     },
+    "krishiv-udf-pool": {
+      "floor": 89.0
+    },
     "krishiv-udf-sandbox": {
       "floor": 90.0
     },

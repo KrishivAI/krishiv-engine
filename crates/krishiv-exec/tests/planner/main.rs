@@ -21,6 +21,7 @@ mod exchanges;
 mod existence;
 mod folding;
 mod fused_probe;
+mod group_code;
 mod group_limit;
 mod hints;
 mod late_fetch;

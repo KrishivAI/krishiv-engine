@@ -440,6 +440,17 @@ pub(crate) trait CatalogStore: Send + Sync {
     /// Removes the entry `expected` was read as, returning it; `None` when that entry was dropped or replaced
     /// since, so a delete checked against one entry never removes (or deletes the files of) another.
     fn drop_table_entry(&self, expected: &Arc<CatalogTable>) -> Option<Arc<CatalogTable>>;
+    /// Renames the entry `expected` was read as to `renamed` (same namespace, another name), under one lock: the
+    /// old name is gone and the new one is there, or nothing changed. The table keeps its incarnation and gets a
+    /// new stamp. `Ok(None)` when that entry was dropped or replaced since.
+    ///
+    /// # Errors
+    /// `TABLE_OR_VIEW_ALREADY_EXISTS` when the new name is taken, `SCHEMA_NOT_FOUND` when its namespace is gone.
+    fn rename_table_entry(
+        &self,
+        expected: &Arc<CatalogTable>,
+        renamed: CatalogTable,
+    ) -> Result<Option<Arc<CatalogTable>>, KrishivError>;
     /// The stored functions as of now.
     fn functions(&self) -> Arc<StoredFunctions>;
     /// Defines `function`, replacing one of its name. `expected` is the
@@ -740,6 +751,45 @@ impl CatalogStore for InMemoryCatalogStore {
         self.epoch.fetch_add(1, Ordering::AcqRel);
         self.hub.invalidate_table(&format!("{}.{}", key.0, key.1));
         removed
+    }
+
+    fn rename_table_entry(
+        &self,
+        expected: &Arc<CatalogTable>,
+        renamed: CatalogTable,
+    ) -> Result<Option<Arc<CatalogTable>>, KrishivError> {
+        let old = (expected.namespace.clone(), expected.name.clone());
+        let new = (renamed.namespace.clone(), renamed.name.clone());
+        let mut state = self.lock();
+        if !state
+            .tables
+            .get(&old)
+            .is_some_and(|t| Arc::ptr_eq(t, expected))
+        {
+            return Ok(None);
+        }
+        if !state.namespaces.contains_key(&new.0) {
+            return Err(SchemaNotFound {
+                schema_name: format!("`{}`", new.0),
+            }
+            .into());
+        }
+        if state.tables.contains_key(&new) {
+            return Err(TableOrViewAlreadyExists {
+                relation_name: format!("`spark_catalog`.`{}`.`{}`", new.0, new.1),
+            }
+            .into());
+        }
+        let mut renamed = renamed;
+        renamed.incarnation = expected.incarnation;
+        renamed.data_version = renamed.data_version.max(expected.data_version);
+        renamed.stamp = self.epoch.fetch_add(1, Ordering::AcqRel) + 1;
+        let entry = Arc::new(renamed);
+        state.tables.remove(&old);
+        state.tables.insert(new.clone(), Arc::clone(&entry));
+        self.hub.invalidate_table(&format!("{}.{}", old.0, old.1));
+        self.hub.invalidate_table(&format!("{}.{}", new.0, new.1));
+        Ok(Some(entry))
     }
 
     fn functions(&self) -> Arc<StoredFunctions> {
