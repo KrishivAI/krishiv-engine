@@ -1,0 +1,885 @@
+{
+ "spark_version": "4.2.0",
+ "generator": "tests/scripts/gen_json_nested_goldens.py",
+ "notes": "JSON reads with nested types: inferred schemas (simpleString) and rows as JSON (struct = object in schema order, map = object, decimal = string, binary = base64), or the error classes outermost first. UTC session, ANSI off.",
+ "infers": [
+  {
+   "name": "root order",
+   "file": "eyJiIjoxLCJhIjoyLCJDIjozLCJfeCI6NH0KeyJhYSI6NX0K",
+   "options": {},
+   "inferred": "struct<C:bigint,_x:bigint,a:bigint,aa:bigint,b:bigint>"
+  },
+  {
+   "name": "nested order",
+   "file": "eyJzIjp7InoiOjEsInkiOiJ0IiwiQiI6dHJ1ZX19Cg==",
+   "options": {},
+   "inferred": "struct<s:struct<B:boolean,y:string,z:bigint>>"
+  },
+  {
+   "name": "nested case duplicates",
+   "file": "eyJzIjp7InoiOjEsInkiOiJ0IiwiWSI6dHJ1ZX19Cg==",
+   "options": {},
+   "error": [
+    "COLUMN_ALREADY_EXISTS"
+   ]
+  },
+  {
+   "name": "malformed line",
+   "file": "bm9wZQp7ImEiOjF9Cg==",
+   "options": {},
+   "inferred": "struct<_corrupt_record:string,a:bigint>"
+  },
+  {
+   "name": "malformed line dropmalformed",
+   "file": "bm9wZQp7ImEiOjF9Cg==",
+   "options": {
+    "mode": "DROPMALFORMED"
+   },
+   "inferred": "struct<a:bigint>"
+  },
+  {
+   "name": "malformed line failfast",
+   "file": "bm9wZQp7ImEiOjF9Cg==",
+   "options": {
+    "mode": "FAILFAST"
+   },
+   "error": [
+    "MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION"
+   ]
+  },
+  {
+   "name": "top-level scalar failfast",
+   "file": "MQp7ImEiOjJ9Cg==",
+   "options": {
+    "mode": "FAILFAST"
+   },
+   "error": [
+    "INVALID_JSON_RECORD_TYPE"
+   ]
+  },
+  {
+   "name": "top-level scalar dropmalformed",
+   "file": "MQp7ImEiOjJ9Cg==",
+   "options": {
+    "mode": "DROPMALFORMED"
+   },
+   "inferred": "struct<a:bigint>"
+  },
+  {
+   "name": "decimal strings",
+   "file": "eyJhIjoiMS4yNSIsImIiOiJ4IiwiYyI6IjFlMyIsImQiOiItMC41In0K",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "inferred": "struct<a:decimal(3,2),b:string,c:string,d:decimal(1,1)>"
+  },
+  {
+   "name": "null with primitives as string",
+   "file": "eyJhIjpudWxsLCJiIjoxfQo=",
+   "options": {
+    "primitivesAsString": "true"
+   },
+   "inferred": "struct<a:string,b:string>"
+  },
+  {
+   "name": "unicode name order",
+   "file": "eyLDqSI6MSwieiI6Miwi8J+YgCI6Mywi77yhIjo0fQo=",
+   "options": {},
+   "inferred": "struct<z:bigint,\u00e9:bigint,\ud83d\ude00:bigint,\uff21:bigint>"
+  },
+  {
+   "name": "depth 1000",
+   "file": "eyJhIjpbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tdXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV19Cg==",
+   "options": {},
+   "error": [
+    "CANNOT_PARSE_DATATYPE"
+   ]
+  },
+  {
+   "name": "depth 1001",
+   "file": "eyJhIjpbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXX0K",
+   "options": {},
+   "error": [
+    "UNSUPPORTED_FEATURE.QUERY_ONLY_CORRUPT_RECORD_COLUMN"
+   ]
+  },
+  {
+   "name": "struct merge",
+   "file": "eyJzIjp7ImEiOjF9fQp7InMiOnsiYiI6IngifX0KeyJzIjp7ImEiOjIuNSwiYyI6bnVsbH19Cg==",
+   "options": {},
+   "inferred": "struct<s:struct<a:double,b:string,c:string>>"
+  },
+  {
+   "name": "array widen",
+   "file": "eyJhIjpbMSwyXX0KeyJhIjpbMS41XX0KeyJhIjpbXX0KeyJhIjpudWxsfQo=",
+   "options": {},
+   "inferred": "struct<a:array<double>>"
+  },
+  {
+   "name": "array mixed elements",
+   "file": "eyJhIjpbMSwieCIsdHJ1ZV19Cg==",
+   "options": {},
+   "inferred": "struct<a:array<string>>"
+  },
+  {
+   "name": "array of structs",
+   "file": "eyJhIjpbeyJ4IjoxfSx7InkiOiJ0In1dfQp7ImEiOlt7IngiOjIsInoiOlt0cnVlXX1dfQo=",
+   "options": {},
+   "inferred": "struct<a:array<struct<x:bigint,y:string,z:array<boolean>>>>"
+  },
+  {
+   "name": "array of arrays",
+   "file": "eyJhIjpbWzFdLFsyLDNdXX0KeyJhIjpbW10sW251bGxdXX0K",
+   "options": {},
+   "inferred": "struct<a:array<array<bigint>>>"
+  },
+  {
+   "name": "empty array only",
+   "file": "eyJhIjpbXX0KeyJhIjpbXX0K",
+   "options": {},
+   "inferred": "struct<a:array<string>>"
+  },
+  {
+   "name": "array of nulls",
+   "file": "eyJhIjpbbnVsbCxudWxsXX0K",
+   "options": {},
+   "inferred": "struct<a:array<string>>"
+  },
+  {
+   "name": "empty object dropped",
+   "file": "eyJlIjp7fSwiayI6MX0K",
+   "options": {},
+   "inferred": "struct<k:bigint>"
+  },
+  {
+   "name": "empty object in array",
+   "file": "eyJlIjpbe31dLCJrIjoxfQo=",
+   "options": {},
+   "inferred": "struct<k:bigint>"
+  },
+  {
+   "name": "struct with empty name",
+   "file": "eyJzIjp7IiI6MSwiYSI6Mn19Cg==",
+   "options": {},
+   "inferred": "struct<s:struct<a:bigint>>"
+  },
+  {
+   "name": "struct vs scalar",
+   "file": "eyJzIjp7ImEiOjF9fQp7InMiOjV9Cg==",
+   "options": {},
+   "inferred": "struct<s:string>"
+  },
+  {
+   "name": "array vs struct",
+   "file": "eyJzIjpbMV19CnsicyI6eyJhIjoxfX0K",
+   "options": {},
+   "inferred": "struct<s:string>"
+  },
+  {
+   "name": "array vs scalar",
+   "file": "eyJzIjpbMV19CnsicyI6IngifQo=",
+   "options": {},
+   "inferred": "struct<s:string>"
+  },
+  {
+   "name": "null then struct",
+   "file": "eyJzIjpudWxsfQp7InMiOnsiYSI6MX19Cg==",
+   "options": {},
+   "inferred": "struct<s:struct<a:bigint>>"
+  },
+  {
+   "name": "empty string field",
+   "file": "eyJzIjoiIn0KeyJzIjoxfQo=",
+   "options": {},
+   "inferred": "struct<s:bigint>"
+  },
+  {
+   "name": "empty string only",
+   "file": "eyJzIjoiIn0K",
+   "options": {},
+   "inferred": "struct<s:string>"
+  },
+  {
+   "name": "empty string in struct",
+   "file": "eyJzIjp7ImEiOiIifX0KeyJzIjp7ImEiOjJ9fQo=",
+   "options": {},
+   "inferred": "struct<s:struct<a:bigint>>"
+  },
+  {
+   "name": "decimal in array",
+   "file": "eyJhIjpbMS4yNSwxMC41XX0K",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "inferred": "struct<a:array<decimal(4,2)>>"
+  },
+  {
+   "name": "primitives as string",
+   "file": "eyJzIjp7ImEiOjEsImIiOnRydWV9LCJhIjpbMS41LDJdfQo=",
+   "options": {
+    "primitivesAsString": "true"
+   },
+   "inferred": "struct<a:array<string>,s:struct<a:string,b:string>>"
+  },
+  {
+   "name": "drop all-null nested",
+   "file": "eyJzIjp7ImEiOm51bGwsImIiOjF9LCJuIjpudWxsLCJlIjpbXX0K",
+   "options": {
+    "dropFieldIfAllNull": "true"
+   },
+   "inferred": "struct<s:struct<b:bigint>>"
+  },
+  {
+   "name": "drop all-null struct",
+   "file": "eyJzIjp7ImEiOm51bGx9LCJrIjoxfQo=",
+   "options": {
+    "dropFieldIfAllNull": "true"
+   },
+   "inferred": "struct<k:bigint>"
+  },
+  {
+   "name": "deep",
+   "file": "eyJhIjp7ImIiOnsiYyI6eyJkIjpbeyJlIjpbMV19XX19fX0K",
+   "options": {},
+   "inferred": "struct<a:struct<b:struct<c:struct<d:array<struct<e:array<bigint>>>>>>>"
+  },
+  {
+   "name": "top-level array",
+   "file": "W3siYSI6MX0seyJiIjoieCJ9XQp7ImEiOjJ9Cg==",
+   "options": {},
+   "inferred": "struct<a:bigint,b:string>"
+  },
+  {
+   "name": "top-level empty array",
+   "file": "W10KeyJhIjoyfQo=",
+   "options": {},
+   "inferred": "struct<a:bigint>"
+  },
+  {
+   "name": "top-level scalar",
+   "file": "MQp7ImEiOjJ9Cg==",
+   "options": {},
+   "inferred": "struct<_corrupt_record:string,a:bigint>"
+  },
+  {
+   "name": "top-level array of scalars",
+   "file": "WzEsMl0KeyJhIjoyfQo=",
+   "options": {},
+   "inferred": "struct<_corrupt_record:string,a:bigint>"
+  },
+  {
+   "name": "multiline nested",
+   "file": "WwogeyJhIjogeyJiIjogWzEsIDJdfX0sCiB7ImEiOiB7ImMiOiAieCJ9fQpdCg==",
+   "options": {
+    "multiLine": "true"
+   },
+   "inferred": "struct<a:struct<b:array<bigint>,c:string>>"
+  },
+  {
+   "name": "github archive sample",
+   "file": "eyJpZCI6IjEiLCJ0eXBlIjoiUHVzaEV2ZW50IiwiYWN0b3IiOnsiaWQiOjcsImxvZ2luIjoiYSIsInVybCI6InUifSwicmVwbyI6eyJpZCI6OSwibmFtZSI6InIveCJ9LCJwYXlsb2FkIjp7InNpemUiOjEsImNvbW1pdHMiOlt7InNoYSI6InMxIiwiZGlzdGluY3QiOnRydWV9XX0sInB1YmxpYyI6dHJ1ZSwiY3JlYXRlZF9hdCI6IjIwMjQtMDEtMTVUMTI6MDA6MDBaIn0KeyJpZCI6IjIiLCJ0eXBlIjoiQ3JlYXRlRXZlbnQiLCJhY3RvciI6eyJpZCI6OCwibG9naW4iOiJiIiwidXJsIjoidiIsImRpc3BsYXlfbG9naW4iOiJCIn0sInJlcG8iOnsiaWQiOjEwLCJuYW1lIjoici95In0sInBheWxvYWQiOnsicmVmIjoibWFpbiIsInJlZl90eXBlIjoiYnJhbmNoIiwicHVzaGVyX3R5cGUiOiJ1c2VyIn0sInB1YmxpYyI6dHJ1ZSwiY3JlYXRlZF9hdCI6IjIwMjQtMDEtMTVUMTI6MDA6MDFaIiwib3JnIjp7ImlkIjozLCJsb2dpbiI6Im8ifX0KeyJpZCI6IjMiLCJ0eXBlIjoiUHVzaEV2ZW50IiwiYWN0b3IiOnsiaWQiOjcsImxvZ2luIjoiYSIsInVybCI6InUifSwicmVwbyI6eyJpZCI6OSwibmFtZSI6InIveCJ9LCJwYXlsb2FkIjp7InNpemUiOjIsImNvbW1pdHMiOlt7InNoYSI6InMyIiwiZGlzdGluY3QiOmZhbHNlfSx7InNoYSI6InMzIiwiZGlzdGluY3QiOnRydWUsIm1lc3NhZ2UiOiJtIn1dfSwicHVibGljIjp0cnVlLCJjcmVhdGVkX2F0IjoiMjAyNC0wMS0xNVQxMjowMDowMloifQo=",
+   "options": {},
+   "inferred": "struct<actor:struct<display_login:string,id:bigint,login:string,url:string>,created_at:string,id:string,org:struct<id:bigint,login:string>,payload:struct<commits:array<struct<distinct:boolean,message:string,sha:string>>,pusher_type:string,ref:string,ref_type:string,size:bigint>,public:boolean,repo:struct<id:bigint,name:string>,type:string>"
+  }
+ ],
+ "reads": [
+  {
+   "name": "inferred nested",
+   "file": "eyJzIjp7ImIiOiJ4IiwiYSI6MX0sImFyciI6WzEsMixudWxsXSwiayI6MX0KeyJzIjpudWxsLCJhcnIiOltdLCJrIjoyfQp7ImsiOjN9Cg==",
+   "options": {},
+   "schema": null,
+   "inferred": "struct<arr:array<bigint>,k:bigint,s:struct<a:bigint,b:string>>",
+   "rows": [
+    [
+     [
+      1,
+      2,
+      null
+     ],
+     1,
+     {
+      "a": 1,
+      "b": "x"
+     }
+    ],
+    [
+     [],
+     2,
+     null
+    ],
+    [
+     null,
+     3,
+     null
+    ]
+   ]
+  },
+  {
+   "name": "inferred array of structs",
+   "file": "eyJhIjpbeyJ4IjoxfSx7InkiOiJ0In1dfQp7ImEiOlt7IngiOjIsInoiOlt0cnVlXX0sbnVsbF19Cg==",
+   "options": {},
+   "schema": null,
+   "inferred": "struct<a:array<struct<x:bigint,y:string,z:array<boolean>>>>",
+   "rows": [
+    [
+     [
+      {
+       "x": 1,
+       "y": null,
+       "z": null
+      },
+      {
+       "x": null,
+       "y": "t",
+       "z": null
+      }
+     ]
+    ],
+    [
+     [
+      {
+       "x": 2,
+       "y": null,
+       "z": [
+        true
+       ]
+      },
+      null
+     ]
+    ]
+   ]
+  },
+  {
+   "name": "inferred conflict as text",
+   "file": "eyJzIjp7ImEiOiAxLCAiYiI6WzEsIDJdfX0KeyJzIjo1fQp7InMiOlsgdHJ1ZSBdfQo=",
+   "options": {},
+   "schema": null,
+   "inferred": "struct<s:string>",
+   "rows": [
+    [
+     "{\"a\": 1, \"b\":[1, 2]}"
+    ],
+    [
+     "5"
+    ],
+    [
+     "[ true ]"
+    ]
+   ]
+  },
+  {
+   "name": "inferred top-level array",
+   "file": "W3siYSI6MX0seyJiIjoieCJ9XQp7ImEiOjJ9CltdCg==",
+   "options": {},
+   "schema": null,
+   "inferred": "struct<a:bigint,b:string>",
+   "rows": [
+    [
+     1,
+     null
+    ],
+    [
+     null,
+     "x"
+    ],
+    [
+     2,
+     null
+    ]
+   ]
+  },
+  {
+   "name": "inferred github archive",
+   "file": "eyJpZCI6IjEiLCJ0eXBlIjoiUHVzaEV2ZW50IiwiYWN0b3IiOnsiaWQiOjcsImxvZ2luIjoiYSIsInVybCI6InUifSwicmVwbyI6eyJpZCI6OSwibmFtZSI6InIveCJ9LCJwYXlsb2FkIjp7InNpemUiOjEsImNvbW1pdHMiOlt7InNoYSI6InMxIiwiZGlzdGluY3QiOnRydWV9XX0sInB1YmxpYyI6dHJ1ZSwiY3JlYXRlZF9hdCI6IjIwMjQtMDEtMTVUMTI6MDA6MDBaIn0KeyJpZCI6IjIiLCJ0eXBlIjoiQ3JlYXRlRXZlbnQiLCJhY3RvciI6eyJpZCI6OCwibG9naW4iOiJiIiwidXJsIjoidiIsImRpc3BsYXlfbG9naW4iOiJCIn0sInJlcG8iOnsiaWQiOjEwLCJuYW1lIjoici95In0sInBheWxvYWQiOnsicmVmIjoibWFpbiIsInJlZl90eXBlIjoiYnJhbmNoIiwicHVzaGVyX3R5cGUiOiJ1c2VyIn0sInB1YmxpYyI6dHJ1ZSwiY3JlYXRlZF9hdCI6IjIwMjQtMDEtMTVUMTI6MDA6MDFaIiwib3JnIjp7ImlkIjozLCJsb2dpbiI6Im8ifX0KeyJpZCI6IjMiLCJ0eXBlIjoiUHVzaEV2ZW50IiwiYWN0b3IiOnsiaWQiOjcsImxvZ2luIjoiYSIsInVybCI6InUifSwicmVwbyI6eyJpZCI6OSwibmFtZSI6InIveCJ9LCJwYXlsb2FkIjp7InNpemUiOjIsImNvbW1pdHMiOlt7InNoYSI6InMyIiwiZGlzdGluY3QiOmZhbHNlfSx7InNoYSI6InMzIiwiZGlzdGluY3QiOnRydWUsIm1lc3NhZ2UiOiJtIn1dfSwicHVibGljIjp0cnVlLCJjcmVhdGVkX2F0IjoiMjAyNC0wMS0xNVQxMjowMDowMloifQo=",
+   "options": {},
+   "schema": null,
+   "inferred": "struct<actor:struct<display_login:string,id:bigint,login:string,url:string>,created_at:string,id:string,org:struct<id:bigint,login:string>,payload:struct<commits:array<struct<distinct:boolean,message:string,sha:string>>,pusher_type:string,ref:string,ref_type:string,size:bigint>,public:boolean,repo:struct<id:bigint,name:string>,type:string>",
+   "rows": [
+    [
+     {
+      "display_login": null,
+      "id": 7,
+      "login": "a",
+      "url": "u"
+     },
+     "2024-01-15T12:00:00Z",
+     "1",
+     null,
+     {
+      "commits": [
+       {
+        "distinct": true,
+        "message": null,
+        "sha": "s1"
+       }
+      ],
+      "pusher_type": null,
+      "ref": null,
+      "ref_type": null,
+      "size": 1
+     },
+     true,
+     {
+      "id": 9,
+      "name": "r/x"
+     },
+     "PushEvent"
+    ],
+    [
+     {
+      "display_login": "B",
+      "id": 8,
+      "login": "b",
+      "url": "v"
+     },
+     "2024-01-15T12:00:01Z",
+     "2",
+     {
+      "id": 3,
+      "login": "o"
+     },
+     {
+      "commits": null,
+      "pusher_type": "user",
+      "ref": "main",
+      "ref_type": "branch",
+      "size": null
+     },
+     true,
+     {
+      "id": 10,
+      "name": "r/y"
+     },
+     "CreateEvent"
+    ],
+    [
+     {
+      "display_login": null,
+      "id": 7,
+      "login": "a",
+      "url": "u"
+     },
+     "2024-01-15T12:00:02Z",
+     "3",
+     null,
+     {
+      "commits": [
+       {
+        "distinct": false,
+        "message": null,
+        "sha": "s2"
+       },
+       {
+        "distinct": true,
+        "message": "m",
+        "sha": "s3"
+       }
+      ],
+      "pusher_type": null,
+      "ref": null,
+      "ref_type": null,
+      "size": 2
+     },
+     true,
+     {
+      "id": 9,
+      "name": "r/x"
+     },
+     "PushEvent"
+    ]
+   ]
+  },
+  {
+   "name": "inferred multiline",
+   "file": "WwogeyJhIjogeyJiIjogWzEsIDJdfX0sCiB7ImEiOiB7ImMiOiAieCJ9fQpdCg==",
+   "options": {
+    "multiLine": "true"
+   },
+   "schema": null,
+   "inferred": "struct<a:struct<b:array<bigint>,c:string>>",
+   "rows": [
+    [
+     {
+      "b": [
+       1,
+       2
+      ],
+      "c": null
+     }
+    ],
+    [
+     {
+      "b": null,
+      "c": "x"
+     }
+    ]
+   ]
+  },
+  {
+   "name": "struct partial",
+   "file": "eyJzIjp7ImEiOjEsImIiOiJ4In0sImsiOjF9CnsicyI6eyJhIjoiYmFkIiwiYiI6InkifSwiayI6Mn0KeyJzIjo3LCJrIjozfQp7InMiOiIiLCJrIjo0fQo=",
+   "options": {},
+   "schema": "s struct<a:int,b:string>, k int, _corrupt_record string",
+   "inferred": "struct<s:struct<a:int,b:string>,k:int,_corrupt_record:string>",
+   "rows": [
+    [
+     {
+      "a": 1,
+      "b": "x"
+     },
+     1,
+     null
+    ],
+    [
+     {
+      "a": null,
+      "b": "y"
+     },
+     2,
+     "{\"s\":{\"a\":\"bad\",\"b\":\"y\"},\"k\":2}"
+    ],
+    [
+     null,
+     3,
+     "{\"s\":7,\"k\":3}"
+    ],
+    [
+     null,
+     4,
+     "{\"s\":\"\",\"k\":4}"
+    ]
+   ]
+  },
+  {
+   "name": "struct partial dropmalformed",
+   "file": "eyJzIjp7ImEiOjEsImIiOiJ4In0sImsiOjF9CnsicyI6eyJhIjoiYmFkIiwiYiI6InkifSwiayI6Mn0K",
+   "options": {
+    "mode": "DROPMALFORMED"
+   },
+   "schema": "s struct<a:int,b:string>, k int",
+   "inferred": "struct<s:struct<a:int,b:string>,k:int>",
+   "rows": [
+    [
+     {
+      "a": 1,
+      "b": "x"
+     },
+     1
+    ]
+   ]
+  },
+  {
+   "name": "struct partial failfast",
+   "file": "eyJzIjp7ImEiOjEsImIiOiJ4In0sImsiOjF9CnsicyI6eyJhIjoiYmFkIiwiYiI6InkifSwiayI6Mn0K",
+   "options": {
+    "mode": "FAILFAST"
+   },
+   "schema": "s struct<a:int,b:string>, k int",
+   "error": [
+    "FAILED_READ_FILE.NO_HINT",
+    "MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION",
+    "CANNOT_PARSE_JSON_FIELD"
+   ]
+  },
+  {
+   "name": "array elements",
+   "file": "eyJhIjpbMSxudWxsLDNdLCJrIjoxfQp7ImEiOlsxLCJ4IiwzXSwiayI6Mn0KeyJhIjo1LCJrIjozfQp7ImEiOltdLCJrIjo0fQp7ImEiOlsxLjVdLCJrIjo1fQo=",
+   "options": {},
+   "schema": "a array<int>, k int, _corrupt_record string",
+   "inferred": "struct<a:array<int>,k:int,_corrupt_record:string>",
+   "rows": [
+    [
+     [
+      1,
+      null,
+      3
+     ],
+     1,
+     null
+    ],
+    [
+     null,
+     2,
+     "{\"a\":[1,\"x\",3],\"k\":2}"
+    ],
+    [
+     null,
+     3,
+     "{\"a\":5,\"k\":3}"
+    ],
+    [
+     [],
+     4,
+     null
+    ],
+    [
+     null,
+     5,
+     "{\"a\":[1.5],\"k\":5}"
+    ]
+   ]
+  },
+  {
+   "name": "array of structs partial",
+   "file": "eyJhIjpbeyJ4IjoxfSx7IngiOiJiYWQifSxudWxsLHsieSI6Mn1dLCJrIjoxfQo=",
+   "options": {},
+   "schema": "a array<struct<x:int,y:int>>, k int, _corrupt_record string",
+   "inferred": "struct<a:array<struct<x:int,y:int>>,k:int,_corrupt_record:string>",
+   "rows": [
+    [
+     [
+      {
+       "x": 1,
+       "y": null
+      },
+      {
+       "x": null,
+       "y": null
+      },
+      null,
+      {
+       "x": null,
+       "y": 2
+      }
+     ],
+     1,
+     "{\"a\":[{\"x\":1},{\"x\":\"bad\"},null,{\"y\":2}],\"k\":1}"
+    ]
+   ]
+  },
+  {
+   "name": "nested arrays",
+   "file": "eyJhIjpbWzEsMl0sW10sbnVsbCxbM11dfQp7ImEiOltbMV0sWyJ4Il1dfQo=",
+   "options": {},
+   "schema": "a array<array<int>>, _corrupt_record string",
+   "inferred": "struct<a:array<array<int>>,_corrupt_record:string>",
+   "rows": [
+    [
+     [
+      [
+       1,
+       2
+      ],
+      [],
+      null,
+      [
+       3
+      ]
+     ],
+     null
+    ],
+    [
+     null,
+     "{\"a\":[[1],[\"x\"]]}"
+    ]
+   ]
+  },
+  {
+   "name": "map",
+   "file": "eyJtIjp7IngiOjEsInkiOm51bGwsInoiOjN9fQp7Im0iOnt9fQp7Im0iOnsieCI6ImJhZCIsInkiOjJ9fQp7Im0iOlsxXX0KeyJtIjpudWxsfQo=",
+   "options": {},
+   "schema": "m map<string,int>, _corrupt_record string",
+   "inferred": "struct<m:map<string,int>,_corrupt_record:string>",
+   "rows": [
+    [
+     {
+      "x": 1,
+      "y": null,
+      "z": 3
+     },
+     null
+    ],
+    [
+     {},
+     null
+    ],
+    [
+     null,
+     "{\"m\":{\"x\":\"bad\",\"y\":2}}"
+    ],
+    [
+     null,
+     "{\"m\":[1]}"
+    ],
+    [
+     null,
+     null
+    ]
+   ]
+  },
+  {
+   "name": "map of structs",
+   "file": "eyJtIjp7IngiOnsiYSI6MX0sInkiOnsiYSI6MiwiYiI6M319fQo=",
+   "options": {},
+   "schema": "m map<string,struct<a:int>>",
+   "inferred": "struct<m:map<string,struct<a:int>>>",
+   "rows": [
+    [
+     {
+      "x": {
+       "a": 1
+      },
+      "y": {
+       "a": 2
+      }
+     }
+    ]
+   ]
+  },
+  {
+   "name": "struct missing and extra fields",
+   "file": "eyJzIjp7ImIiOiJ4IiwiZXh0cmEiOnsicSI6MX0sImEiOjJ9fQp7InMiOnt9fQo=",
+   "options": {},
+   "schema": "s struct<a:int,b:string,c:double>",
+   "inferred": "struct<s:struct<a:int,b:string,c:double>>",
+   "rows": [
+    [
+     {
+      "a": 2,
+      "b": "x",
+      "c": null
+     }
+    ],
+    [
+     {
+      "a": null,
+      "b": null,
+      "c": null
+     }
+    ]
+   ]
+  },
+  {
+   "name": "struct duplicate keys",
+   "file": "eyJzIjp7ImEiOjEsImEiOjJ9fQo=",
+   "options": {},
+   "schema": "s struct<a:int>, _corrupt_record string",
+   "inferred": "struct<s:struct<a:int>,_corrupt_record:string>",
+   "rows": [
+    [
+     {
+      "a": 2
+     },
+     null
+    ]
+   ]
+  },
+  {
+   "name": "string column holds nested text",
+   "file": "eyJzIjp7ImEiOiAxLCAiYiI6IFsxLCAyXX0sInQiOlsgMSAsICJ4IiBdfQo=",
+   "options": {},
+   "schema": "s string, t string",
+   "inferred": "struct<s:string,t:string>",
+   "rows": [
+    [
+     "{\"a\": 1, \"b\": [1, 2]}",
+     "[ 1 , \"x\" ]"
+    ]
+   ]
+  },
+  {
+   "name": "string column holds nested text multiline",
+   "file": "eyJzIjp7ImEiOiAxLCAiYiI6IFsxLCAyXX0sCiAidCI6WyAxICwgIngiIF19Cg==",
+   "options": {
+    "multiLine": "true"
+   },
+   "schema": "s string, t string",
+   "inferred": "struct<s:string,t:string>",
+   "rows": [
+    [
+     "{\"a\": 1, \"b\": [1, 2]}",
+     "[ 1 , \"x\" ]"
+    ]
+   ]
+  },
+  {
+   "name": "struct case sensitivity",
+   "file": "eyJzIjp7IkEiOjEsImIiOjJ9fQo=",
+   "options": {},
+   "schema": "s struct<a:int,B:int>",
+   "inferred": "struct<s:struct<a:int,B:int>>",
+   "rows": [
+    [
+     {
+      "a": null,
+      "B": null
+     }
+    ]
+   ]
+  },
+  {
+   "name": "struct of scalar types",
+   "file": "eyJzIjp7ImIiOiJ0cnVlIiwiZCI6IjIwMjAtMDEtMDIiLCJ0cyI6IjIwMjAtMDEtMDJUMDM6MDQ6MDVaIiwiZGVjIjoiMS4yNSIsImJpbiI6InF3PT0ifX0K",
+   "options": {},
+   "schema": "s struct<b:boolean,d:date,ts:timestamp,dec:decimal(5,2),bin:binary>, _corrupt_record string",
+   "inferred": "struct<s:struct<b:boolean,d:date,ts:timestamp,dec:decimal(5,2),bin:binary>,_corrupt_record:string>",
+   "rows": [
+    [
+     {
+      "b": null,
+      "d": "2020-01-02",
+      "ts": "2020-01-02T03:04:05",
+      "dec": "1.25",
+      "bin": "qw=="
+     },
+     "{\"s\":{\"b\":\"true\",\"d\":\"2020-01-02\",\"ts\":\"2020-01-02T03:04:05Z\",\"dec\":\"1.25\",\"bin\":\"qw==\"}}"
+    ]
+   ]
+  },
+  {
+   "name": "array root schema mismatch",
+   "file": "eyJhIjp7IngiOjF9fQo=",
+   "options": {},
+   "schema": "a array<struct<x:int>>, _corrupt_record string",
+   "inferred": "struct<a:array<struct<x:int>>,_corrupt_record:string>",
+   "rows": [
+    [
+     null,
+     "{\"a\":{\"x\":1}}"
+    ]
+   ]
+  },
+  {
+   "name": "depth 1000 read",
+   "file": "eyJhIjpbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tdXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV0sImsiOjF9Cg==",
+   "options": {},
+   "schema": "a string, k int, _corrupt_record string",
+   "inferred": "struct<a:string,k:int,_corrupt_record:string>",
+   "rows": [
+    [
+     "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
+     1,
+     null
+    ]
+   ]
+  },
+  {
+   "name": "depth 1001 read",
+   "file": "eyJhIjpbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXSwiayI6MX0K",
+   "options": {},
+   "schema": "a string, k int, _corrupt_record string",
+   "inferred": "struct<a:string,k:int,_corrupt_record:string>",
+   "rows": [
+    [
+     "]",
+     1,
+     "{\"a\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]],\"k\":1}"
+    ]
+   ]
+  },
+  {
+   "name": "deep nesting",
+   "file": "eyJhIjpbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tdXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV1dXV0sImsiOjF9Cg==",
+   "options": {},
+   "schema": "a string, k int, _corrupt_record string",
+   "inferred": "struct<a:string,k:int,_corrupt_record:string>",
+   "rows": [
+    [
+     null,
+     null,
+     "{\"a\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]],\"k\":1}"
+    ]
+   ]
+  }
+ ]
+}
