@@ -63,7 +63,7 @@ impl ReaderZone {
         let Some(zone) = options.timestamp_timezone() else {
             return Ok(Self::Utc);
         };
-        if matches!(zone, "UTC" | "Etc/UTC") {
+        if matches!(zone, "UTC" | "Etc/UTC" | "Z") {
             return Ok(Self::Utc);
         }
         let invalid = || KernelError::generic(format!("Invalid timestamp timezone: {zone}"));
