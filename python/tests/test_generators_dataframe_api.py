@@ -38,6 +38,7 @@ def rows(d: DataFrame) -> list[tuple[Any, ...]]:
     return sorted((tuple(r) for r in d.collect()), key=repr)
 
 
+# goldens (generators.json): g_expr_explode, g_expr_explode_with_id
 def test_select_explode_expr(df: DataFrame) -> None:
     d = df.select(F.expr("explode(arr)"))
     assert d.schema.simpleString() == "struct<col:int>"
@@ -47,6 +48,7 @@ def test_select_explode_expr(df: DataFrame) -> None:
     assert rows(d) == [(1, 10), (1, 20), (4, 5), (4, None)]
 
 
+# goldens: g_expr_explode_alias2, g_selectExpr_posexplode_alias, g_inline_alias
 def test_multi_alias_names_the_columns(df: DataFrame) -> None:
     d = df.select("id", F.expr("explode(m)").alias("k", "v"))
     assert d.schema.simpleString() == "struct<id:int,k:string,v:int>"
@@ -57,6 +59,9 @@ def test_multi_alias_names_the_columns(df: DataFrame) -> None:
     assert d.schema.simpleString() == "struct<id:int,pp:int,qq:string>"
 
 
+# goldens: g_selectExpr_explode_star, g_selectExpr_star_after, g_selectExpr_explode_noalias_map,
+# g_selectExpr_inline_noalias
+# g_selectExpr_explode_outer
 def test_select_expr_forms(df: DataFrame) -> None:
     d = df.selectExpr("*", "explode(arr) as v")
     assert d.columns == ["id", "arr", "m", "st", "v"]
@@ -73,6 +78,7 @@ def test_select_expr_forms(df: DataFrame) -> None:
     ]
 
 
+# goldens: g_two_generators_posexplode, g_two_gens_selectexpr
 def test_several_generators_are_a_cross_product(df: DataFrame) -> None:
     d = df.filter("id = 1").select(F.expr("explode(arr)"), F.expr("posexplode(arr)"))
     assert d.columns == ["col", "pos", "col"]
@@ -80,6 +86,7 @@ def test_several_generators_are_a_cross_product(df: DataFrame) -> None:
     assert len(df.selectExpr("explode(arr)", "explode(arr)").collect()) == 8
 
 
+# goldens: g_withColumn_explode, g_withColumn_replace_existing, g_withColumn_two
 def test_with_column_generator(df: DataFrame) -> None:
     d = df.withColumn("x", F.expr("explode(arr)"))
     assert d.columns == ["id", "arr", "m", "st", "x"]
@@ -93,12 +100,14 @@ def test_with_column_generator(df: DataFrame) -> None:
 
 
 @pytest.mark.parametrize("generator", ["posexplode(arr)", "explode(m)", "inline(st)"])
+# goldens: g_withColumn_posexplode, g_withColumn_explode_map, g_withColumn_inline
 def test_with_column_of_a_multi_column_generator(df: DataFrame, generator: str) -> None:
     with pytest.raises(errors.AnalysisException) as bad:
         df.withColumn("x", F.expr(generator)).collect()
     assert bad.value.getCondition() == "UDTF_ALIAS_NUMBER_MISMATCH"
 
 
+# goldens: g_explode_alias_wrong_count, g_explode_map_alias1, g_inline_alias_wrong_count
 def test_wrong_alias_count(df: DataFrame) -> None:
     for column in (F.expr("explode(arr)").alias("a", "b"), F.expr("explode(m)").alias("a")):
         with pytest.raises(errors.AnalysisException) as bad:
@@ -116,6 +125,8 @@ def test_wrong_alias_count(df: DataFrame) -> None:
         lambda d: d.selectExpr("explode(arr) + 1"),
     ],
 )
+# goldens: g_explode_in_expr, g_explode_in_func, g_explode_nested_explode, g_withColumn_expr_explode_plus,
+# g_expr_explode_plus
 def test_generator_nested_in_an_expression(df: DataFrame, build: Any) -> None:
     with pytest.raises(errors.AnalysisException) as bad:
         build(df).collect()
@@ -126,18 +137,21 @@ def test_generator_nested_in_an_expression(df: DataFrame, build: Any) -> None:
     "build",
     [lambda d: d.filter("explode(arr) > 1"), lambda d: d.where("explode(arr) > 1")],
 )
+# goldens: g_filter_explode, g_where_sql_explode
 def test_generator_outside_select(df: DataFrame, build: Any) -> None:
     with pytest.raises(errors.AnalysisException) as bad:
         build(df).collect()
     assert bad.value.getCondition() == "UNSUPPORTED_GENERATOR.OUTSIDE_SELECT"
 
 
+# goldens: g_explode_non_array
 def test_generator_of_the_wrong_type(df: DataFrame) -> None:
     with pytest.raises(errors.AnalysisException) as bad:
         df.selectExpr("explode(id)").collect()
     assert bad.value.getCondition() == "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
 
 
+# goldens: g_explode_then_filter, g_explode_then_groupBy, g_explode_empty_df
 def test_generated_rows_feed_later_operators(df: DataFrame) -> None:
     d = df.select("id", F.expr("explode(arr) as v")).filter("v > 15")
     assert rows(d) == [(1, 20)]
@@ -145,3 +159,22 @@ def test_generated_rows_feed_later_operators(df: DataFrame) -> None:
     assert rows(counts) == [(1, 2), (4, 2)]
     assert df.limit(0).select("id", F.expr("explode(arr)")).collect() == []
     assert Row(id=1, p=1, q="x") in df.select("id", F.expr("inline(st)")).collect()
+
+
+# goldens: g_withColumn_explode (the alias the generator carries is replaced), g_withColumn_posexplode
+def test_with_column_replaces_an_alias_on_the_generator(df: DataFrame) -> None:
+    d = df.withColumn("x", F.expr("explode(arr)").alias("zz"))
+    assert d.columns == ["id", "arr", "m", "st", "x"]
+    assert d.count() == 4
+    with pytest.raises(errors.AnalysisException) as bad:
+        df.withColumn("x", F.expr("posexplode(arr)").alias("p", "v")).collect()
+    assert bad.value.getCondition() == "UDTF_ALIAS_NUMBER_MISMATCH"
+
+
+# goldens: g_sql_explode_in_agg_group, g_explode_with_agg_in_select, gx_* (generators beside aggregates)
+def test_a_generator_beside_an_aggregate(spark: SparkSession) -> None:
+    one = spark.range(3).selectExpr("explode(array(1, 2)) as e", "count(*) + 1")
+    assert rows(one) == [(1, 4), (2, 4)]
+    with pytest.raises(errors.AnalysisException) as bad:
+        spark.range(3).selectExpr("explode(array(1, 2))", "explode(array(3, 4))", "count(*)").collect()
+    assert bad.value.getCondition() == "UNSUPPORTED_GENERATOR.MULTI_GENERATOR"

@@ -33,6 +33,9 @@ _TEMPLATES = {
     "FIELD_STRUCT_LENGTH_MISMATCH": (
         "Length of object (<object_length>) does not match with length of fields (<field_length>)."
     ),
+    "FIELD_STRUCT_LENGTH_MISMATCH_WITH_NAME": (
+        "<field_name>: Length of object (<object_length>) does not match with length of fields (<field_length>)."
+    ),
     "VALUE_OUT_OF_BOUNDS": (
         "Value for `<arg_name>` must be between <lower_bound> and <upper_bound> (inclusive), got <actual>"
     ),

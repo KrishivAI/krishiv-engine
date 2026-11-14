@@ -23,6 +23,8 @@ def spark() -> SparkSession:
     return SparkSession.builder.getOrCreate()
 
 
+# goldens (create_dataframe_rows.json): ddl_arr_map_struct, ddl_struct_from_row, ddl_struct_from_dict,
+# ddl_dict_extra_key
 def test_explicit_nested_schema(spark: SparkSession) -> None:
     ddl = "a array<int>, m map<string,double>, s struct<x:int,y:string>"
     df = spark.createDataFrame([([1, 2], {"k": 1.0}, Row(x=1, y="a")), ([3], {}, (2, "b"))], ddl)
@@ -38,6 +40,7 @@ def test_explicit_nested_schema(spark: SparkSession) -> None:
     assert df.collect() == [Row(a=1)]
 
 
+# goldens: ddl_nested, ddl_null_type_arr
 def test_deeply_nested_schema(spark: SparkSession) -> None:
     df = spark.createDataFrame(
         [([[1], [2, None]], {"a": [Row(p=1)]})], "a array<array<int>>, m map<string,array<struct<p:long>>>"
@@ -46,11 +49,13 @@ def test_deeply_nested_schema(spark: SparkSession) -> None:
     assert spark.createDataFrame([([],)], "a array<void>").collect() == [Row(a=[])]
 
 
+# goldens: scalar_list_atomic_type, scalar_str_ddl
 def test_atomic_schema_is_one_value_column(spark: SparkSession) -> None:
     assert spark.createDataFrame([1, 2], "int").collect() == [Row(value=1), Row(value=2)]
     assert spark.createDataFrame([[1, 2]], "array<int>").collect() == [Row(value=[1, 2])]
 
 
+# goldens: ddl_int_for_str, ddl_bytes_for_str, ddl_decimal, ddl_datetime_for_date
 def test_values_convert_to_the_column_type(spark: SparkSession) -> None:
     assert spark.createDataFrame([(1,)], "a string").collect() == [Row(a="1")]
     assert spark.createDataFrame([(b"ab",)], "a string").collect() == [Row(a="b'ab'")]
@@ -90,6 +95,9 @@ def test_values_convert_to_the_column_type(spark: SparkSession) -> None:
         ([(1,)], "a int, b int", "FIELD_STRUCT_LENGTH_MISMATCH", None),
     ],
 )
+# goldens: ddl_str_for_int, ddl_int_for_double, ddl_float_for_int, ddl_bool_for_int, ddl_list_for_arr_wrong,
+# ddl_str_for_date, ddl_date_for_ts, ddl_none_for_notnull, ddl_arr_containsNull_false, ddl_map_none_key,
+# ddl_nested_notnull_struct, ddl_overflow_int, ddl_overflow_byte, ddl_too_many_fields, ddl_too_few_fields
 def test_verification_errors(spark: SparkSession, data: Any, ddl: Any, cls: str, name: str | None) -> None:
     with pytest.raises((errors.PySparkTypeError, errors.PySparkValueError)) as bad:
         spark.createDataFrame(data, ddl)
@@ -100,6 +108,7 @@ def test_verification_errors(spark: SparkSession, data: Any, ddl: Any, cls: str,
         assert params["field_name"] == name
 
 
+# golden: ddl_row_reordered_names
 def test_a_row_is_read_by_position(spark: SparkSession) -> None:
     with pytest.raises(errors.PySparkTypeError) as bad:
         spark.createDataFrame([Row(b="x", a=1)], "a int, b string")
@@ -109,6 +118,7 @@ def test_a_row_is_read_by_position(spark: SparkSession) -> None:
     )
 
 
+# goldens: ddl_decimal_overflow
 def test_decimal_out_of_range(spark: SparkSession) -> None:
     with pytest.raises(errors.ArithmeticException) as bad:
         spark.createDataFrame([(Decimal("123456"),)], "a decimal(4,2)")
@@ -119,6 +129,7 @@ def test_decimal_out_of_range(spark: SparkSession) -> None:
 # pandas and pyarrow ---------------------------------------------------------------
 
 
+# goldens (create_dataframe_pandas_arrow.json): pd_obj_list, pd_obj_dict, pd_obj_list_of_dict, pd_obj_decimal
 def test_pandas_object_columns(spark: SparkSession) -> None:
     pd = pytest.importorskip("pandas")
     df = spark.createDataFrame(
@@ -138,6 +149,7 @@ def test_pandas_object_columns(spark: SparkSession) -> None:
     assert first.d == Row(k=1, j=None)
 
 
+# goldens: pd_with_schema, pd_with_names, pd_int_col_names
 def test_pandas_with_schema_and_names(spark: SparkSession) -> None:
     pd = pytest.importorskip("pandas")
     frame = pd.DataFrame({"a": [[1, 2]], "m": [{"k": 1}]})
@@ -147,6 +159,7 @@ def test_pandas_with_schema_and_names(spark: SparkSession) -> None:
     assert spark.createDataFrame(pd.DataFrame([[1, 2]])).columns == ["0", "1"]
 
 
+# goldens: pd_int32_float32, pd_nullable_int, pd_category, pd_nan_float, pd_datetime, pd_empty, pd_empty_nocols
 def test_pandas_types(spark: SparkSession) -> None:
     pd = pytest.importorskip("pandas")
     np = pytest.importorskip("numpy")
@@ -174,6 +187,8 @@ def test_pandas_types(spark: SparkSession) -> None:
         assert bad.value.getCondition() == "CANNOT_INFER_EMPTY_SCHEMA"
 
 
+# goldens: pa_large_list, pa_fixed_list, pa_map, pa_struct_nested, pa_large_string, pa_dictionary, pa_decimal256,
+# pa_ts_ns
 def test_pyarrow_nested_and_normalised_types(spark: SparkSession) -> None:
     table = pa.table(
         {
@@ -217,7 +232,70 @@ def test_pyarrow_types_spark_lacks(spark: SparkSession, column: Any) -> None:
     assert bad.value.getCondition() == "UNSUPPORTED_DATA_TYPE_FOR_ARROW_CONVERSION"
 
 
+# goldens: pa_with_schema_cast, pa_with_names, pa_empty (classic keeps the schema)
 def test_pyarrow_with_schema_names_and_empty(spark: SparkSession) -> None:
     assert spark.createDataFrame(pa.table({"a": [1, 2]}), "a string").collect() == [Row(a="1"), Row(a="2")]
     assert spark.createDataFrame(pa.table({"a": [1]}), ["z"]).columns == ["z"]
     assert spark.createDataFrame(pa.table({"a": pa.array([], pa.int64())})).dtypes == [("a", "bigint")]
+
+
+# ddl_nested_notnull_struct-style nested path; the message is PySpark 4.2.0 classic's (review run)
+def test_nested_struct_length_mismatch_names_the_field(spark: SparkSession) -> None:
+    with pytest.raises(errors.PySparkValueError) as bad:
+        spark.createDataFrame([((1,),)], "s struct<x:int,y:int>")
+    assert bad.value.getCondition() == "FIELD_STRUCT_LENGTH_MISMATCH_WITH_NAME"
+    assert str(bad.value) == (
+        "[FIELD_STRUCT_LENGTH_MISMATCH_WITH_NAME] field s: Length of object (1) "
+        "does not match with length of fields (2)."
+    )
+
+
+# goldens: ddl_verifySchema_false
+def test_verify_schema_false_gives_null(spark: SparkSession) -> None:
+    assert spark.createDataFrame([("x",), (1,)], "a int", verifySchema=False).collect() == [
+        Row(a=None),
+        Row(a=1),
+    ]
+
+
+# goldens: rows_mismatched_fields, infer_struct_diff_fields, dict_keys_sorted
+def test_rows_with_different_fields_do_not_shift_values(spark: SparkSession) -> None:
+    with pytest.raises(errors.PySparkValueError) as bad:
+        spark.createDataFrame([Row(a=1), Row(b=2)])
+    assert bad.value.getCondition() == "STRUCT_ARRAY_LENGTH_MISMATCH"
+    assert bad.value.getSqlState() == "2201E"
+    # A dict row is read by its sorted keys, then the names rename by position.
+    assert spark.createDataFrame([{"z": 1, "a": 2}], ["z", "a"]).collect() == [Row(z=2, a=1)]
+    assert spark.createDataFrame([{"a": 1}, {"b": 2}]).collect() == [Row(a=1, b=None), Row(a=None, b=2)]
+
+
+# golden: names_dup (Spark keeps both columns; the engine reads registered tables by name, so it is refused)
+def test_duplicate_column_names_are_refused(spark: SparkSession) -> None:
+    with pytest.raises(errors.UnsupportedOperationException) as bad:
+        spark.createDataFrame([(1, 2)], ["a", "a"])
+    assert bad.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
+    assert spark.createDataFrame([(1, 2)], ["a", "b"]).columns == ["a", "b"]
+
+
+# goldens: array_array (typecode u is a string)
+def test_array_array_of_text(spark: SparkSession) -> None:
+    import array
+
+    frame = spark.createDataFrame([(array.array("u", "ab"),)])  # ty: ignore[deprecated]
+    assert frame.dtypes == [("_1", "array<string>")]
+
+
+def test_struct_schema_rejects_a_scalar_row(spark: SparkSession) -> None:
+    with pytest.raises(errors.PySparkTypeError) as bad:
+        spark.createDataFrame([1], "struct<a:int>")
+    assert bad.value.getCondition() == "FIELD_DATA_TYPE_UNACCEPTABLE"
+
+
+def test_naive_timestamps_in_a_dst_gap(spark: SparkSession) -> None:
+    pd = pytest.importorskip("pandas")
+    spark.conf.set("spark.sql.session.timeZone", "America/New_York")
+    try:
+        frame = pd.DataFrame({"t": pd.to_datetime(["2024-03-10 02:30:00", "2024-11-03 01:30:00"])})
+        assert spark.createDataFrame(frame).count() == 2
+    finally:
+        spark.conf.unset("spark.sql.session.timeZone")

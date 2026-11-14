@@ -73,6 +73,7 @@ _ARRAY_CODES: dict[str, Callable[[], DataType]] = {
     "q": LongType,
     "f": FloatType,
     "d": DoubleType,
+    "u": StringType,
 }
 
 

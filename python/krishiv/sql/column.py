@@ -487,9 +487,15 @@ class Column:
 
     def alias(self, *alias: str, **kwargs: Any) -> Column:
         if kwargs:
-            raise PySparkValueError(f"unsupported alias argument(s): {sorted(kwargs)}")
+            raise PySparkValueError(
+                errorClass="UNSUPPORTED_OPERATION",
+                messageParameters={"operation": f"alias argument(s) {sorted(kwargs)}"},
+            )
         if not alias:
-            raise PySparkValueError("alias takes at least one name")
+            raise PySparkValueError(
+                errorClass="ARGUMENT_REQUIRED",
+                messageParameters={"arg_name": "alias", "condition": "alias() is called"},
+            )
         for name in alias:
             if not isinstance(name, str):
                 raise not_expected_type("alias", "str", name)

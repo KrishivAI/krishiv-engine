@@ -115,7 +115,7 @@ def _struct_values(value: Any, struct: StructType) -> list[Any] | None:
     return None
 
 
-def _unacceptable(name: str | None, data_type: DataType, value: Any) -> PySparkTypeError:
+def unacceptable(name: str | None, data_type: DataType, value: Any) -> PySparkTypeError:
     params = {"data_type": repr(data_type), "obj": repr(value), "obj_type": str(type(value))}
     if name is None:
         return PySparkTypeError(errorClass="FIELD_DATA_TYPE_UNACCEPTABLE", messageParameters=params)
@@ -165,14 +165,14 @@ def verify(value: Any, data_type: DataType, nullable: bool = True, name: str | N
         ok = isinstance(value, datetime.timedelta)
     elif isinstance(data_type, ArrayType):
         if not _is_sequence(value):
-            raise _unacceptable(name, data_type, value)
+            raise unacceptable(name, data_type, value)
         element_name = f"element in array {name}" if name else "element in array"
         for item in value:
             verify(item, data_type.elementType, data_type.containsNull, element_name)
         return
     elif isinstance(data_type, MapType):
         if not isinstance(value, dict):
-            raise _unacceptable(name, data_type, value)
+            raise unacceptable(name, data_type, value)
         key_name = f"key of map {name}" if name else "key of map"
         value_name = f"value of map {name}" if name else "value of map"
         for k, v in value.items():
@@ -182,11 +182,13 @@ def verify(value: Any, data_type: DataType, nullable: bool = True, name: str | N
     elif isinstance(data_type, StructType):
         values = _struct_values(value, data_type)
         if values is None:
-            raise _unacceptable(name, data_type, value)
+            raise unacceptable(name, data_type, value)
         if not isinstance(value, dict) and len(values) != len(data_type.fields):
+            params = {"object_length": str(len(values)), "field_length": str(len(data_type.fields))}
+            if name is None:
+                raise PySparkValueError(errorClass="FIELD_STRUCT_LENGTH_MISMATCH", messageParameters=params)
             raise PySparkValueError(
-                errorClass="FIELD_STRUCT_LENGTH_MISMATCH",
-                messageParameters={"object_length": str(len(values)), "field_length": str(len(data_type.fields))},
+                errorClass="FIELD_STRUCT_LENGTH_MISMATCH_WITH_NAME", messageParameters={"field_name": name, **params}
             )
         for field, item in zip(data_type.fields, values, strict=True):
             verify(
@@ -196,7 +198,7 @@ def verify(value: Any, data_type: DataType, nullable: bool = True, name: str | N
     else:
         ok = True  # a type this layer does not model: the Arrow conversion reports it
     if not ok:
-        raise _unacceptable(name, data_type, value)
+        raise unacceptable(name, data_type, value)
 
 
 _WIDE = Context(prec=200)
@@ -320,8 +322,28 @@ def normalize_arrow_table(table: Any, pa: Any, zone: str | None = None) -> Any:
     columns = []
     for column in table.columns:
         if zone is not None and pa.types.is_timestamp(column.type) and column.type.tz is None:
-            column = pc.assume_timezone(column, zone)  # ty: ignore[unresolved-attribute]
+            # A time in a DST gap moves forward and an ambiguous one is the earlier, as java.time reads it.
+            column = pc.assume_timezone(  # ty: ignore[unresolved-attribute]
+                column, zone, ambiguous="earliest", nonexistent="latest"
+            )
         columns.append(column)
     table = pa.table(columns, names=table.column_names)
     schema = pa.schema([pa.field(f.name, normalize_arrow_type(f.type, pa), nullable=True) for f in table.schema])
     return table if table.schema.equals(schema) else table.cast(schema)
+
+
+def arrow_array(values: list[Any], arrow_type: Any, pa: Any, null_on_error: bool) -> Any:
+    """``pa.array(values, type=arrow_type)``; with ``null_on_error`` (``verifySchema=False``) a value
+    pyarrow cannot take is NULL, as the JVM conversion of classic PySpark leaves it."""
+    try:
+        return pa.array(values, type=arrow_type)
+    except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError, OverflowError, ValueError, TypeError):
+        if not null_on_error:
+            raise
+    cells = []
+    for v in values:
+        try:
+            cells.append(pa.array([v], type=arrow_type)[0].as_py() if v is not None else None)
+        except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError, OverflowError, ValueError, TypeError):
+            cells.append(None)
+    return pa.array(cells, type=arrow_type)

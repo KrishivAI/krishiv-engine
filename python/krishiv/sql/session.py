@@ -15,12 +15,13 @@ from krishiv.errors import (
     PySparkValueError,
     not_expected_type,
     not_implemented,
+    unsupported_feature,
 )
 from krishiv.sql import _rowconv
 from krishiv.sql.conf import RuntimeConfig
 from krishiv.sql.dataframe import DataFrame
 from krishiv.sql.readwriter import DataFrameReader
-from krishiv.sql.types import DataType, StructType
+from krishiv.sql.types import DataType, StructField, StructType
 from krishiv.storagelevel import StorageLevel
 
 if TYPE_CHECKING:
@@ -256,7 +257,7 @@ class SparkSession:
         rows = list(data)
         if schema is None or isinstance(schema, list | tuple):
             return self._create_from_rows(rows, schema, verifySchema)
-        return self._from_rows(rows, schema, verifySchema, Row)
+        return self._from_rows(rows, schema, verifySchema, Row, null_on_error=not verifySchema)
 
     def _from_pandas(self, data: Any, schema: Any) -> DataFrame:
         from krishiv.sql import _convert
@@ -275,6 +276,10 @@ class SparkSession:
         names or cast to an explicit schema."""
         ntz = (self._conf.get("spark.sql.timestampType", "TIMESTAMP_LTZ") or "").strip().upper() == "TIMESTAMP_NTZ"
         table = _rowconv.normalize_arrow_table(table, pa, None if ntz else _session_zone(self))
+        if isinstance(schema, list | tuple):
+            _refuse_duplicate_names([str(n) for n in schema])
+        elif schema is None:
+            _refuse_duplicate_names(table.column_names)
         if schema is None:
             return DataFrame(self._native.create_dataframe(table), self)
         if isinstance(schema, list | tuple):
@@ -291,14 +296,21 @@ class SparkSession:
             rows = [tuple(r.values()) for r in table.to_pylist()]
             return self._from_rows(rows, struct, False, Row)
 
-    def _from_rows(self, rows: list[Any], schema: Any, verify: bool, Row: Any) -> DataFrame:
+    def _from_rows(
+        self, rows: list[Any], schema: Any, verify: bool, Row: Any, null_on_error: bool = False
+    ) -> DataFrame:
         from krishiv.sql import _convert
 
         pa = _convert.require_pyarrow("createDataFrame")
         struct = self._explicit_schema(schema)
         if not _is_struct_schema(schema):
             rows = [(row,) for row in rows]  # an atomic schema: one ``value`` column, one value per row
+        elif verify:
+            for row in rows:
+                if not isinstance(row, dict | list | tuple):
+                    raise _rowconv.unacceptable(None, struct, row)
         named = [f.name for f in struct.fields]
+        _refuse_duplicate_names(named)
         width = len(named)
         valued = [_row_values(row, named, Row) for row in rows]
         if verify:
@@ -312,7 +324,7 @@ class SparkSession:
         for i, field in enumerate(struct.fields):
             arrow_type = _rowconv.pa_type(field.dataType, pa)
             values = [_rowconv.convert(v[i], field.dataType, zone) for v in valued]
-            columns.append(pa.array(values, type=arrow_type))
+            columns.append(_rowconv.arrow_array(values, arrow_type, pa, null_on_error))
         table = pa.table(columns, schema=_pa_schema(struct, pa))
         return DataFrame(self._native.create_dataframe(table), self)
 
@@ -358,7 +370,9 @@ class SparkSession:
         """A DataFrame of Python rows with column names, or none: names come from ``schema``,
         else the first ``Row`` or dict, else ``_1``, ``_2``, ...; the types are PySpark's
         inference over every row (see :mod:`krishiv.sql._infer`), converted like an explicit schema."""
-        from krishiv.sql._infer import infer_schema
+        from functools import reduce
+
+        from krishiv.sql._infer import has_nulltype, infer_row, merge_type
         from krishiv.sql.row import Row
 
         names: list[str] | None = None
@@ -376,33 +390,50 @@ class SparkSession:
                 )
         if not data:
             raise PySparkValueError(errorClass="CANNOT_INFER_EMPTY_SCHEMA")
-        first = data[0]
-        if isinstance(first, Row) and hasattr(first, "__fields__"):
-            inferred_names = list(first.__fields__)
-        elif isinstance(first, dict):
-            inferred_names = list(names) if names is not None else sorted(first)
-        else:
-            inferred_names = [f"_{i + 1}" for i in range(len(first))]
-        width = len(inferred_names)
-        # Spark infers the row type first, then renames its fields by position:
-        # fewer names keep the inferred ones for the rest, more names fail.
-        if names is None:
-            names = inferred_names
-        elif len(names) > width:
-            raise _axis_length_mismatch(len(names), width)
-        else:
-            names = names + inferred_names[len(names) :]
+        timestamp_type = self._conf.get("spark.sql.timestampType", "TIMESTAMP_LTZ") or "TIMESTAMP_LTZ"
+        timestamp_ntz = timestamp_type.strip().upper() == "TIMESTAMP_NTZ"
+        # PySpark's ``_infer_schema`` per row (a dict by its sorted keys, a ``Row`` or named tuple by its
+        # fields, any other tuple by ``names`` then ``_1``, ``_2``, ...), the rows merged as ``_merge_type``.
+        inferred = []
+        for row in data:
+            if isinstance(row, dict):
+                row_names = sorted(row)
+                values = [row[k] for k in row_names]
+            else:
+                values = list(row)
+                row_names = list(getattr(row, "__fields__", None) or getattr(row, "_fields", None) or [])
+                if not row_names:
+                    given = (names or [])[: len(values)]
+                    row_names = given + [f"_{i + 1}" for i in range(len(given), len(values))]
+            inferred.append(infer_row(values, row_names, timestamp_ntz))
+        merged = reduce(merge_type, inferred)
+        if not isinstance(merged, StructType) or has_nulltype(merged):
+            raise PySparkValueError(errorClass="CANNOT_DETERMINE_TYPE")
+        # The merged row type is renamed by position: fewer names keep the inferred ones for the rest,
+        # more names fail.
+        pre = [f.name for f in merged.fields]
+        width = len(pre)
+        final = pre
+        if names is not None:
+            if len(names) > width:
+                raise _axis_length_mismatch(len(names), width)
+            final = names + pre[len(names) :]
         valued: list[list[Any]] = []
         for row in data:
             if isinstance(row, dict):
-                valued.append([row.get(name) for name in names])
-            else:
-                if len(row) != width:
-                    raise _axis_length_mismatch(width, len(row))
-                valued.append(list(row))
-        timestamp_type = self._conf.get("spark.sql.timestampType", "TIMESTAMP_LTZ") or "TIMESTAMP_LTZ"
-        timestamp_ntz = timestamp_type.strip().upper() == "TIMESTAMP_NTZ"
-        return self._from_rows(valued, infer_schema(valued, names, timestamp_ntz), False, Row)
+                valued.append([row.get(name) for name in pre])
+                continue
+            if len(row) != width:
+                if hasattr(row, "__fields__"):
+                    raise PySparkValueError(
+                        errorClass="STRUCT_ARRAY_LENGTH_MISMATCH",
+                        messageParameters={"expected": str(width), "actual": str(len(row))},
+                        sqlState="2201E",
+                    )
+                raise _axis_length_mismatch(width, len(row))
+            valued.append(list(row))
+        struct = StructType([StructField(n, f.dataType, f.nullable) for n, f in zip(final, merged.fields, strict=True)])
+        return self._from_rows(valued, struct, False, Row, null_on_error=not verify)
 
     def stop(self) -> None:
         """Ends this session; the next ``getOrCreate`` makes a new one."""
@@ -423,6 +454,16 @@ _pa_type = _rowconv.pa_type
 
 def _pa_schema(struct: StructType, pa: Any) -> Any:
     return _rowconv.pa_schema(struct, pa)
+
+
+def _refuse_duplicate_names(names: list[str]) -> None:
+    """The engine reads a registered table's columns by name, so duplicate names (which Spark
+    allows) are refused up front instead of failing at the first action."""
+    seen: set[str] = set()
+    for name in names:
+        if name.lower() in seen:
+            raise unsupported_feature(f"createDataFrame with the duplicate column name `{name}`")
+        seen.add(name.lower())
 
 
 def _is_struct_schema(schema: Any) -> bool:
