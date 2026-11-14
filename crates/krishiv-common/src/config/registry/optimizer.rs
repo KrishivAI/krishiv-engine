@@ -27,7 +27,7 @@ pub static SEMI_ANTI_JOIN_ORDER: ConfigEntry = ConfigEntry {
     doc: "Run the `LEFT SEMI` and `LEFT ANTI` joins stacked over one input (`EXISTS` and \
           `NOT EXISTS` subqueries of one block, TPC-H q21) in the order of their estimated \
           survivors, fewest first, instead of the order of the text, when their conditions \
-          cannot raise. Needs statistics. Results are the same either way; `false` turns it off.",
+          cannot raise, and only when every input is estimated from statistics. Results are the same either way; `false` turns it off.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.1.0",

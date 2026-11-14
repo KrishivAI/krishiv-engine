@@ -99,3 +99,16 @@ fn a_condition_that_may_raise_keeps_the_written_order() {
     );
     assert!(on.structurally_eq(&run(&plan, false)));
 }
+
+#[test]
+fn without_statistics_the_stack_keeps_the_written_order() {
+    // An equi anti join estimates one row without statistics, so it would always sort first.
+    let plan = support::resolve(&q21(""), &support::ctx());
+    let optimized = krishiv_optimizer::optimize(&plan).unwrap();
+    assert_eq!(
+        stack(optimized.root()),
+        [JoinKind::LeftAnti, JoinKind::LeftSemi],
+        "{}",
+        optimized.root()
+    );
+}

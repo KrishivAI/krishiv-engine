@@ -10,7 +10,8 @@
 //!
 //! The rule estimates every join of a stack over the stack's input alone (not over the joins
 //! below it), so a join's estimate does not depend on where it stands and the sorted stack is a
-//! fixed point; it sorts by estimated output rows, ties in their written order. A join moves only
+//! fixed point; it sorts by estimated output rows, ties in their written order, and only when
+//! every input of the stack is estimated from statistics (`from_statistics`). A join moves only
 //! when its condition is deterministic and raises on no row ([`runs_on_any_row`], under ANSI):
 //! after the swap it sees rows the join that used to run first would have dropped.
 
@@ -80,15 +81,18 @@ fn order_stack(p: Arc<LogicalPlan>, est: &mut Estimator<'_>) -> Arc<LogicalPlan>
     let Some(base) = base else {
         return p;
     };
-    // Bottom up, each with its rows estimated over the base alone.
-    let mut keyed: Vec<(f64, Arc<LogicalPlan>)> = stack
-        .into_iter()
-        .rev()
-        .map(|j| {
-            let alone = with_left(&j, Arc::clone(&base));
-            (est.plan(&alone).rows, j)
-        })
-        .collect();
+    // Bottom up, each with its rows estimated over the base alone; every input of every join
+    // must be estimated from statistics (without them an equi anti join reads as one row and
+    // would always sort first).
+    let mut keyed: Vec<(f64, Arc<LogicalPlan>)> = Vec::with_capacity(stack.len());
+    for j in stack.into_iter().rev() {
+        let alone = with_left(&j, Arc::clone(&base));
+        let e = est.plan(&alone);
+        if !e.from_statistics {
+            return p;
+        }
+        keyed.push((e.rows, j));
+    }
     let written: Vec<usize> = keyed.iter().map(|(_, j)| Arc::as_ptr(j).addr()).collect();
     keyed.sort_by(|a, b| a.0.total_cmp(&b.0));
     if keyed
