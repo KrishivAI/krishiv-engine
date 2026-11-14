@@ -109,6 +109,9 @@ struct Counters {
     resizes: Arc<AtomicU64>,
     /// Partition tasks of the row tables' final phase.
     row_final_tasks: AtomicU64,
+    /// Final-phase tasks whose row pages and accumulators were presized
+    /// from the estimate (the pool granted them at the task's start).
+    row_final_presized: AtomicU64,
     /// Final phases that moved to disk (out of memory, or a spill request).
     row_final_spills: AtomicU64,
     /// Times the final phase wrote its finished partitions' groups to the
@@ -1781,6 +1784,10 @@ impl Sink for HashAggregate {
                 (
                     "row_final_tasks",
                     c.row_final_tasks.load(AtomicOrdering::Relaxed),
+                ),
+                (
+                    "row_final_presized",
+                    c.row_final_presized.load(AtomicOrdering::Relaxed),
                 ),
                 (
                     "row_final_spills",
