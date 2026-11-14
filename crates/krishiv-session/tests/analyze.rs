@@ -264,15 +264,27 @@ fn admin_statements_list_manage_on_the_cluster() {
     );
 }
 
-/// A statement whose reads are not whole queries is `partial`: its targets, `UNSUPPORTED_READ_SHAPE`, and
-/// no analysis (`statement_info` refuses it).
+/// The privilege and securable of each use, as text.
+fn uses(a: &krishiv_session::Analysis) -> Vec<String> {
+    a.info
+        .securables
+        .iter()
+        .map(|u| {
+            let columns: Vec<&str> = u.columns.iter().map(String::as_str).collect();
+            format!("{} {} {columns:?}", u.privilege, u.securable)
+        })
+        .collect()
+}
+
+/// A statement whose reads are not known from its text is `partial`: its targets,
+/// `UNSUPPORTED_READ_SHAPE`, and no analysis (`statement_info` refuses it).
 #[test]
 fn unsupported_read_shapes_are_partial() {
     let s = corpus_ready();
     for sql in [
-        "UPDATE t SET a = 1 WHERE b = 2",
-        "FROM s INSERT INTO t SELECT a, b, k INSERT INTO u SELECT a, b, k",
-        "EXECUTE IMMEDIATE 'SELECT 1'",
+        "EXECUTE IMMEDIATE 'SELECT ?' USING 1",
+        "EXECUTE IMMEDIATE 'SELECT 1' || ''",
+        "SET VAR v = (SELECT 1)",
     ] {
         let a = block_on(s.analyze(sql)).unwrap();
         assert!(a.partial, "{sql}");
@@ -284,14 +296,216 @@ fn unsupported_read_shapes_are_partial() {
         assert!(a.to_json().contains("\"partial\":true"));
         assert!(block_on(s.statement_info(sql)).is_err());
     }
-    let a = block_on(s.analyze("UPDATE t SET a = 1")).unwrap();
-    let uses: Vec<String> = a
-        .info
-        .securables
+}
+
+/// A MERGE with a subquery in `ON`, a clause condition or a `SET` value fails closed (review m1): `partial`,
+/// with its targets only; one without keeps its reads (design §3.2).
+#[test]
+fn merge_subquery_condition_is_partial() {
+    let s = corpus_ready();
+    let head = "MERGE INTO t USING s ON t.k = s.k";
+    for sql in [
+        "MERGE INTO t USING s ON t.k = (SELECT max(k) FROM u) WHEN MATCHED THEN DELETE".to_owned(),
+        format!("{head} WHEN MATCHED AND EXISTS (SELECT 1 FROM u) THEN DELETE"),
+        format!("{head} WHEN MATCHED THEN UPDATE SET a = (SELECT max(a) FROM u)"),
+    ] {
+        let a = block_on(s.analyze(&sql)).unwrap();
+        assert!(a.partial, "{sql}");
+        assert!(
+            a.warnings.contains(&AnalysisWarning::UnsupportedReadShape),
+            "{sql}"
+        );
+        assert!(
+            !a.to_json().contains("`u`"),
+            "{sql}: a subquery's table is not listed"
+        );
+    }
+    let a = block_on(s.analyze(&format!("{head} WHEN MATCHED THEN DELETE"))).unwrap();
+    assert!(!a.partial);
+    assert_eq!(
+        uses(&a),
+        [
+            "MODIFY table `spark_catalog`.`default`.`t` []",
+            "SELECT table `spark_catalog`.`default`.`s` []",
+        ]
+    );
+}
+
+/// `UPDATE`, `DELETE` with a subquery predicate and a multi-table `INSERT` with a shared `FROM` list their
+/// reads, subqueries included (design §3.2).
+#[test]
+fn local_read_shapes_list_their_reads() {
+    let s = corpus_ready();
+    let a = block_on(s.analyze(
+        "UPDATE t AS x SET a = (SELECT max(a) FROM u), b = DEFAULT WHERE x.k IN (SELECT k FROM s)",
+    ))
+    .unwrap();
+    assert!(!a.partial && a.warnings.is_empty());
+    assert_eq!(
+        uses(&a),
+        [
+            "SELECT table `spark_catalog`.`default`.`t` [\"a\", \"b\", \"k\"]",
+            "SELECT table `spark_catalog`.`default`.`u` [\"a\"]",
+            "SELECT table `spark_catalog`.`default`.`s` [\"k\"]",
+            "MODIFY table `spark_catalog`.`default`.`t` []",
+        ]
+    );
+    let a = block_on(s.analyze("DELETE FROM t WHERE k IN (SELECT k FROM s)")).unwrap();
+    assert!(!a.partial);
+    assert_eq!(
+        uses(&a),
+        [
+            "SELECT table `spark_catalog`.`default`.`s` [\"k\"]",
+            "SELECT table `spark_catalog`.`default`.`t` [\"k\"]",
+            "MODIFY table `spark_catalog`.`default`.`t` []",
+        ]
+    );
+    let sql = "FROM s INSERT INTO t SELECT a, b, k INSERT INTO u SELECT a, b, k WHERE k > 0";
+    let a = block_on(s.analyze(sql)).unwrap();
+    assert!(!a.partial);
+    assert_eq!(
+        uses(&a),
+        [
+            "SELECT table `spark_catalog`.`default`.`s` [\"a\", \"b\", \"k\"]",
+            "MODIFY table `spark_catalog`.`default`.`t` []",
+            "MODIFY table `spark_catalog`.`default`.`u` []",
+        ]
+    );
+    assert!(block_on(s.statement_info(sql)).is_ok());
+}
+
+/// `EXECUTE IMMEDIATE` of literal text reports the class and securables of the statement it holds (review
+/// m2), in analyze, `statement_info` and `system.queries.statement_class`; text from a variable is `ADMIN`
+/// and `partial`.
+#[test]
+fn execute_immediate_literal_reports_inner_class() {
+    let s = corpus_ready();
+    let a = block_on(s.analyze("EXECUTE IMMEDIATE 'SELECT a FROM t'")).unwrap();
+    assert_eq!(a.info.class, StatementClass::Read);
+    assert!(!a.partial);
+    assert_eq!(
+        uses(&a),
+        ["SELECT table `spark_catalog`.`default`.`t` [\"a\"]"]
+    );
+    assert_eq!(a.output_schema.len(), 1);
+    let a = block_on(s.analyze("EXECUTE IMMEDIATE 'DROP TABLE u'")).unwrap();
+    assert_eq!(a.info.class, StatementClass::Ddl);
+    assert_eq!(uses(&a), ["DROP table `spark_catalog`.`default`.`u` []"]);
+    let info = block_on(s.statement_info("EXECUTE IMMEDIATE 'CLEAR CACHE'")).unwrap();
+    assert_eq!(info.class, StatementClass::Admin);
+    assert_eq!(info.securables.len(), 1, "{:?}", info.securables);
+    block_on(s.sql("DECLARE stmt STRING DEFAULT 'SELECT 1'")).unwrap();
+    let a = block_on(s.analyze("EXECUTE IMMEDIATE stmt")).unwrap();
+    assert_eq!(a.info.class, StatementClass::Admin);
+    assert!(a.partial && a.info.securables.is_empty());
+    // A run records the statement it ran under its own text and class (the outer text is not
+    // recorded); dynamic text needs no `Manage` of its own.
+    block_on(
+        block_on(s.sql("EXECUTE IMMEDIATE 'SELECT a FROM t'"))
+            .unwrap()
+            .collect(),
+    )
+    .unwrap();
+    block_on(block_on(s.sql("EXECUTE IMMEDIATE stmt")).unwrap().collect()).unwrap();
+    let rows = block_on(
+        block_on(s.sql(
+            "SELECT concat(statement_class, ' ', query_text) FROM system.queries \
+             WHERE query_text IN ('SELECT a FROM t', 'SELECT 1') ORDER BY submitted_at",
+        ))
+        .unwrap()
+        .collect(),
+    )
+    .unwrap();
+    let classes: Vec<String> = rows
         .iter()
-        .map(|u| format!("{} {}", u.privilege, u.securable))
+        .flat_map(|b| {
+            use arrow_array::cast::AsArray as _;
+            let c = b.column(0);
+            (0..c.len())
+                .map(|i| match c.as_string_view_opt() {
+                    Some(v) => v.value(i).to_owned(),
+                    None => c.as_string::<i32>().value(i).to_owned(),
+                })
+                .collect::<Vec<_>>()
+        })
         .collect();
-    assert_eq!(uses, ["MODIFY table `spark_catalog`.`default`.`t`"]);
+    assert_eq!(
+        classes,
+        ["READ SELECT a FROM t", "READ SELECT 1"],
+        "{classes:?}"
+    );
+}
+
+/// Denies everything on the table `canary`, allows the rest.
+struct DenyCanary;
+
+impl AccessPolicy for DenyCanary {
+    fn version(&self) -> PolicyVersion {
+        PolicyVersion(1)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _: &'a Principal,
+        securable: &'a Securable,
+        _: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        let d = if matches!(securable, Securable::Table(t) if t.name.eq_ignore_ascii_case("canary"))
+        {
+            AccessDecision::Deny {
+                reason: "canary".to_owned(),
+            }
+        } else {
+            AccessDecision::Allow
+        };
+        Box::pin(std::future::ready(Ok(d)))
+    }
+}
+
+/// The analyze JSON as a surface of T062's leak matrix (design §3.5, review M3): a securable the principal
+/// has nothing on never appears in it. Every statement that would read the canary fails analysis with the
+/// 42501 a run gives (so no JSON); every other one analyzes, and its JSON never names the canary, whatever
+/// shape reached it (subqueries, temporary views, MERGE and UPDATE expressions, `EXECUTE IMMEDIATE`).
+#[test]
+fn analyze_canary_never_in_json() {
+    let admin = corpus_ready();
+    block_on(admin.sql("CREATE TABLE canary (a INT, k INT)")).unwrap();
+    let s = Session::builder()
+        .principal(Principal::new("ana", PrincipalKind::User))
+        .access_policy(Arc::new(DenyCanary))
+        .runtime(Arc::clone(admin.runtime()))
+        .build()
+        .unwrap();
+    let reaches = [
+        "SELECT a FROM t WHERE k IN (SELECT k FROM canary)",
+        "SELECT (SELECT max(a) FROM canary) AS m",
+        "UPDATE t SET a = (SELECT max(a) FROM canary)",
+        "DELETE FROM t WHERE EXISTS (SELECT 1 FROM canary)",
+        "FROM canary INSERT INTO t SELECT a, a, k INSERT INTO u SELECT a, a, k",
+        "EXECUTE IMMEDIATE 'SELECT * FROM canary'",
+        "EXPLAIN FORMAT JSON SELECT * FROM t JOIN canary USING (k)",
+        "CREATE TABLE x AS SELECT * FROM canary",
+    ];
+    for sql in reaches {
+        let e = block_on(s.analyze(sql)).unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "KRISHIV_INSUFFICIENT_PERMISSIONS",
+            "{sql}"
+        );
+    }
+    let clean = [
+        "SELECT a FROM t WHERE k IN (SELECT k FROM s)",
+        "UPDATE t SET a = 1 WHERE k IN (SELECT k FROM s)",
+        "MERGE INTO t USING s ON t.k = (SELECT max(k) FROM s) WHEN MATCHED THEN DELETE",
+        "EXECUTE IMMEDIATE 'SELECT * FROM t'",
+        "EXPLAIN FORMAT JSON DELETE FROM t WHERE k IN (SELECT k FROM s)",
+        "SHOW TABLES",
+    ];
+    for sql in clean {
+        let json = block_on(s.analyze(sql)).unwrap().to_json();
+        assert!(!json.to_lowercase().contains("canary"), "{sql}: {json}");
+    }
 }
 
 /// Denies `Select` on table `t` (by name), allows the rest.

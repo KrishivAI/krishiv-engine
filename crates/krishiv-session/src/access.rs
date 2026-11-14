@@ -79,9 +79,9 @@ impl Session {
     /// # Errors
     /// Parse and analysis errors (`KRISHIV_INSUFFICIENT_PERMISSIONS` for a
     /// denied read); `KRISHIV_UNSUPPORTED_FEATURE` for a statement whose
-    /// reads are not whole queries (a multi-table `INSERT` with a shared
-    /// `FROM`, reads through `UPDATE`/`DELETE` predicates or variable
-    /// expressions).
+    /// reads are not known from its text (a `MERGE` with a subquery in an
+    /// expression, `EXECUTE IMMEDIATE` of non-literal text or with `USING`,
+    /// scripts and variable expressions; `krishiv_sql::statement_reads`).
     pub async fn statement_info(&self, sql: &str) -> Result<StatementInfo, KrishivError> {
         let (session, sql) = (self.clone(), sql.to_owned());
         self.on_executor(async move { session.statement_info_here(&sql).await })
@@ -120,14 +120,17 @@ impl Session {
         redacted: &krishiv_common::redact::RedactedSql,
     ) -> Result<StatementParts, KrishivError> {
         let env = self.query_env();
-        let class = krishiv_sql::classify(&statement);
+        let class = krishiv_sql::classify_with(&statement, &env.parser);
+        if let Statement::ExecuteImmediate(e) = &statement {
+            return Box::pin(self.immediate_parts(e, class, statement.clone())).await;
+        }
         let explain = krishiv_sql::explain_kind(&statement);
-        let queries = krishiv_sql::statement_queries(&statement);
+        let queries = krishiv_sql::statement_reads(&statement);
         let partial = queries.is_none();
         let mut securables: Vec<SecurableUse> = Vec::new();
         let mut analyzed = Vec::new();
         for query in queries.unwrap_or_default() {
-            let plan = krishiv_sql::lower(query, SourceId(0))
+            let plan = krishiv_sql::lower(&query, SourceId(0))
                 .map_err(|e| sql_context(e.error, redacted, e.span.start, e.span.end))?;
             let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
             let analysis = df
@@ -164,6 +167,51 @@ impl Session {
     }
 }
 
+impl Session {
+    /// The parts of `EXECUTE IMMEDIATE` (of `class`, see `krishiv_sql::classify_with`): with literal
+    /// text and no `USING`, those of the statement the text holds (its spans index the text), under the
+    /// outer class (`INTO` makes it at least `SESSION`); text with `USING` arguments is bound only when
+    /// it runs, so it is `partial` with the inner statement's class; text from a variable or an
+    /// expression is `ADMIN` and `partial`, permanently (design §3.2). Nothing is evaluated.
+    async fn immediate_parts(
+        &self,
+        e: &krishiv_sql::ast::ExecuteImmediate,
+        class: StatementClass,
+        statement: Statement,
+    ) -> Result<StatementParts, KrishivError> {
+        let env = self.query_env();
+        let inner = e
+            .using
+            .is_empty()
+            .then(|| krishiv_sql::immediate_statement(e, &env.parser))
+            .flatten();
+        // A nested `EXECUTE IMMEDIATE` or a script is refused when it runs: no reads to list.
+        let Some(inner) =
+            inner.filter(|i| !matches!(i, Statement::ExecuteImmediate(_) | Statement::Script(_)))
+        else {
+            return Ok(StatementParts {
+                info: StatementInfo {
+                    class,
+                    explain: None,
+                    securables: Vec::new(),
+                },
+                partial: true,
+                analyzed: Vec::new(),
+                statement,
+            });
+        };
+        let inner_redacted =
+            krishiv_sql::redact_sql(krishiv_sql::immediate_text(e).unwrap_or_default());
+        let mut parts = self.parts_of_statement(inner, &inner_redacted).await?;
+        parts.info.class = class;
+        if !e.into.is_empty() {
+            // The row goes to variables: no result columns or lineage.
+            parts.statement = statement;
+        }
+        Ok(parts)
+    }
+}
+
 /// A statement as [`Session::statement_parts`] found it.
 pub(crate) struct StatementParts {
     /// Its class, explain kind and securables.
@@ -193,9 +241,14 @@ pub(crate) fn merge_reads(securables: &mut Vec<SecurableUse>, used: &[SecurableU
 /// What `statement` (of `class`) writes, creates or drops and reads without a query
 /// (`statement_targets`), plus `Manage` on the cluster for every `ADMIN` statement (ADR 0046 §4),
 /// whatever else it names: what the session checks before it runs, and what `statement_info` lists.
+///
+/// `EXECUTE IMMEDIATE` needs nothing of its own: its class reports what its text holds (`ADMIN` for text
+/// from a variable, which cannot be placed), and the statement it runs is authorized under its own class
+/// when it runs (`execute_immediate.rs`).
 fn required_targets(statement: &Statement, class: StatementClass) -> Vec<Target<'_>> {
     let mut targets = statement_targets(statement);
     if class == StatementClass::Admin
+        && !matches!(statement, Statement::ExecuteImmediate(_))
         && !targets
             .iter()
             .any(|t| t.object == TargetObject::Cluster && t.privilege == Privilege::Manage)
@@ -963,6 +1016,12 @@ impl AccessPolicy for PathPrefixPolicy {
     }
 }
 
+/// The privileges a read-only surface allows: `Select` and `Browse` (metadata, which reads nothing a
+/// `Select` would not). [`ReadOnlyPolicy`] denies every other one, and the MCP server's analyze check
+/// refuses a statement that needs any other (design `P3-T063-analyze-api.md` §3.4): `Monitor` (other
+/// principals' `system.*` rows) and `Usage` (on `system.udf`, sending code the server runs) stay out.
+pub const READ_ONLY_PRIVILEGES: [Privilege; 2] = [Privilege::Select, Privilege::Browse];
+
 /// A policy that allows `Select` as `inner` decides and denies every other
 /// privilege: the read-only surfaces (the MCP server) enforce read-only
 /// through the same [`authorize`] path as every other check, even if a
@@ -1008,7 +1067,7 @@ impl AccessPolicy for ReadOnlyPolicy {
         privilege: Privilege,
     ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
         // `Browse` (metadata) reads nothing a `Select` would not; the inner policy decides both.
-        if !matches!(privilege, Privilege::Select | Privilege::Browse) {
+        if !READ_ONLY_PRIVILEGES.contains(&privilege) {
             return Box::pin(std::future::ready(Ok(AccessDecision::Deny {
                 reason: "the session is read-only".to_owned(),
             })));

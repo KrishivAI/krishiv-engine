@@ -1430,33 +1430,8 @@ struct InsertTarget<'a> {
 /// A clause of a multi-table insert as a single-table one: its query reads `FROM source`, as
 /// Spark's `visitMultiInsertQuery` gives each body the shared relation.
 fn from_source(source: &krishiv_sql::ast::FromClause, c: &InsertClause) -> InsertClause {
-    use krishiv_sql::ast::{FromStatement, Query, SetExpr, SetExprKind};
-    let mut body = (*c.query).clone();
-    let with = body.with.take();
-    let span = c.query.span;
-    let query = Query {
-        with,
-        body: SetExpr {
-            kind: SetExprKind::FromStatement(Box::new(FromStatement {
-                from: source.clone(),
-                bodies: vec![body],
-                span,
-            })),
-            span,
-        },
-        order_by: Vec::new(),
-        order_span: None,
-        organization_span: None,
-        cluster_by: Vec::new(),
-        distribute_by: Vec::new(),
-        sort_by: Vec::new(),
-        windows: Vec::new(),
-        limit: None,
-        offset: None,
-        span,
-    };
     InsertClause {
-        query: Box::new(query),
+        query: Box::new(krishiv_sql::shared_from_query(source, &c.query)),
         ..c.clone()
     }
 }

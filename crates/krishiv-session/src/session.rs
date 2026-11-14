@@ -598,7 +598,7 @@ impl Session {
         }
         // Before any side effect: what the statement writes, creates or
         // drops (its reads are checked by analysis, first thing).
-        let class = krishiv_sql::classify(&statement);
+        let class = krishiv_sql::classify_with(&statement, &env.parser);
         self.authorize_statement(&statement, class, &env).await?;
         env.statement_class = Some(class.name());
         let df = self.run_statement(statement, env, query, &redacted).await?;

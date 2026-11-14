@@ -18,11 +18,12 @@
 //! by ordinal, sources, filters, columns and warnings sorted, and no process-local value (attribute ids)
 //! in it. Securables print through `Securable`'s `Display`, the 42501 text (ADR 0038 redaction, reused).
 //!
-//! Known gaps, owned by N3: a statement whose reads are not whole queries (a multi-table `INSERT` with a
-//! shared `FROM`, `UPDATE`, `DELETE` with a subquery predicate, `EXECUTE IMMEDIATE`, scripts, variable
-//! expressions) is `partial` with only its targets and the warning `UNSUPPORTED_READ_SHAPE`; `MERGE`
-//! reports what `statement_queries` gives today (its source query), not the subqueries of its `ON`,
-//! clause conditions or `SET` values; `EXECUTE IMMEDIATE` is always `SESSION`.
+//! Reads (N3, design §3.2): a statement's reads are the queries `krishiv_sql::statement_reads` gives,
+//! whole `SELECT`s or built from its own expressions (`UPDATE`, `DELETE` with a predicate, a multi-table
+//! `INSERT` with a shared `FROM`). A statement whose reads are not known from its text is `partial`, with
+//! only its targets and the warning `UNSUPPORTED_READ_SHAPE`: a `MERGE` with a subquery in an expression
+//! (fail closed), `EXECUTE IMMEDIATE` with `USING` arguments or of non-literal text (`ADMIN`), scripts and
+//! variable expressions. `EXECUTE IMMEDIATE` of literal text is analyzed as the statement it holds.
 //!
 //! Output schema and lineage are a query's (`Statement::Query`). A `SHOW`, `DESCRIBE`, `EXPLAIN`, `SET` or
 //! `RESET` command has the result columns the session returns for it ([`command_schema`]; `RESET` and

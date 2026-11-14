@@ -14,3 +14,6 @@ Insert: INSERT INTO t SELECT * FROM s
 Truncate: TRUNCATE TABLE t
   analyze only: []
   run only: [("MODIFY", "path '<warehouse>/t'")]
+ExecuteImmediate: EXECUTE IMMEDIATE 'DROP TABLE t'
+  analyze only: []
+  run only: [("MODIFY", "path '<warehouse>/t'")]

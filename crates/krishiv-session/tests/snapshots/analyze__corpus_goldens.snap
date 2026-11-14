@@ -1001,35 +1001,38 @@ error KRISHIV_UNSUPPORTED_FEATURE
 {"schema_version":"krishiv.analyze.v1",
 "statement_class":"WRITE",
 "explain":null,
-"partial":true,
-"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"MODIFY","columns":[]},
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","s"],"display":"table `spark_catalog`.`default`.`s`","privilege":"SELECT","columns":["a","b"]},
+  {"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"MODIFY","columns":[]},
   {"kind":"table","name":["spark_catalog","default","u"],"display":"table `spark_catalog`.`default`.`u`","privilege":"MODIFY","columns":[]}],
 "output_schema":[],
 "lineage":[],
 "filters":[],
-"warnings":["UNSUPPORTED_READ_SHAPE"]}
+"warnings":[]}
 
 -- Delete: DELETE FROM t WHERE a = 1
 {"schema_version":"krishiv.analyze.v1",
 "statement_class":"WRITE",
 "explain":null,
-"partial":true,
-"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"MODIFY","columns":[]}],
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"SELECT","columns":["a"]},
+  {"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"MODIFY","columns":[]}],
 "output_schema":[],
 "lineage":[],
 "filters":[],
-"warnings":["UNSUPPORTED_READ_SHAPE"]}
+"warnings":[]}
 
 -- Update: UPDATE t SET a = 1 WHERE b = 2
 {"schema_version":"krishiv.analyze.v1",
 "statement_class":"WRITE",
 "explain":null,
-"partial":true,
-"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"MODIFY","columns":[]}],
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"SELECT","columns":["a","b"]},
+  {"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"MODIFY","columns":[]}],
 "output_schema":[],
 "lineage":[],
 "filters":[],
-"warnings":["UNSUPPORTED_READ_SHAPE"]}
+"warnings":[]}
 
 -- Merge::Table: MERGE INTO t USING s ON t.k = s.k WHEN MATCHED THEN DELETE
 {"schema_version":"krishiv.analyze.v1",
@@ -1371,7 +1374,107 @@ error KRISHIV_UNSUPPORTED_FEATURE
 
 -- ExecuteImmediate: EXECUTE IMMEDIATE 'SELECT 1'
 {"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[],
+"output_schema":[{"ordinal":0,"name":"1","type":"int","type_json":"\"integer\"","nullable":false,"declared_type":null}],
+"lineage":[{"ordinal":0,"output":"1","sources":[],"transform":"literal"}],
+"filters":[],
+"warnings":[]}
+
+-- ExecuteImmediate: EXECUTE IMMEDIATE 'DROP TABLE t'
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"DROP","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- ExecuteImmediate: EXECUTE IMMEDIATE 'INSERT INTO t VALUES (?)' USING 1
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"WRITE",
+"explain":null,
+"partial":true,
+"securables":[],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":["UNSUPPORTED_READ_SHAPE"]}
+
+-- ExecuteImmediate: EXECUTE IMMEDIATE 'SELECT 1' INTO v
+{"schema_version":"krishiv.analyze.v1",
 "statement_class":"SESSION",
+"explain":null,
+"partial":false,
+"securables":[],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- ExecuteImmediate: EXECUTE IMMEDIATE 'CREATE TABLE u AS SELECT 1' INTO v
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]},
+  {"kind":"table","name":["spark_catalog","default","u"],"display":"table `spark_catalog`.`default`.`u`","privilege":"MODIFY","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- ExecuteImmediate: EXECUTE IMMEDIATE 'CLEAR CACHE'
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"ADMIN",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"system","name":["cluster"],"display":"system `cluster`","privilege":"MANAGE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- ExecuteImmediate: EXECUTE IMMEDIATE stmt
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"ADMIN",
+"explain":null,
+"partial":true,
+"securables":[],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":["UNSUPPORTED_READ_SHAPE"]}
+
+-- ExecuteImmediate: EXECUTE IMMEDIATE 'SELECT ' || 'a FROM t'
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"ADMIN",
+"explain":null,
+"partial":true,
+"securables":[],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":["UNSUPPORTED_READ_SHAPE"]}
+
+-- ExecuteImmediate: EXECUTE IMMEDIATE 'SELEC 1'
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"ADMIN",
+"explain":null,
+"partial":true,
+"securables":[],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":["UNSUPPORTED_READ_SHAPE"]}
+
+-- ExecuteImmediate: EXECUTE IMMEDIATE 'SELECT * FROM IDENTIFIER(:t)' USING 't' AS t
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
 "explain":null,
 "partial":true,
 "securables":[],

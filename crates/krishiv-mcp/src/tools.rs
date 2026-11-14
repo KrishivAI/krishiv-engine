@@ -23,7 +23,7 @@ use krishiv_sql::ParserOptions;
 use serde_json::{Map, Value};
 use tokio::sync::Semaphore;
 
-use crate::gate::{SetupLock, check_read};
+use crate::gate::{SetupLock, check_analysis, check_read};
 
 /// Tools of this server, in `tools/list` order.
 pub const TOOL_NAMES: [&str; 10] = [
@@ -632,6 +632,8 @@ impl Tools {
         // directory: they run under the deadline too.
         let setup = Box::pin(async {
             let session = child_session(&self.config.data).await?;
+            // Layer 2 of the gate (`gate.rs`): the analysis must be a complete read.
+            check_analysis(&session, sql).await?;
             let estimate = if limits.explain || limits.allow_heavy {
                 None
             } else {

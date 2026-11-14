@@ -426,3 +426,61 @@ async fn colliding_table_names_are_refused_and_dotted_directories_stay_whole() {
         "{text}"
     );
 }
+
+/// A read whose reads cannot be listed (`partial`) passes the class check but not the analyze layer
+/// (design `P3-T063-analyze-api.md` §3.4): an `EXPLAIN` of a MERGE with a subquery condition, and
+/// `EXECUTE IMMEDIATE` of a query with `USING` arguments.
+#[tokio::test]
+async fn partial_read_shape_refused_by_mcp() {
+    let (_d, t) = fixture();
+    for sql in [
+        "EXPLAIN MERGE INTO nums USING nums AS s ON nums.id = (SELECT max(id) FROM nums) \
+         WHEN MATCHED THEN DELETE",
+        "EXECUTE IMMEDIATE 'SELECT id FROM nums WHERE id = ?' USING 1",
+    ] {
+        krishiv_mcp::gate::check_read(sql).unwrap();
+        let (text, err) = call(&t, "run_query", json!({"sql": sql})).await;
+        assert!(err, "{sql}: {text}");
+        assert!(
+            text.contains("KRISHIV_MCP_STATEMENT_NOT_ALLOWED") && text.contains("cannot be listed"),
+            "{sql}: {text}"
+        );
+    }
+    // Literal text without arguments is the read it holds.
+    let (text, err) = call(
+        &t,
+        "run_query",
+        json!({"sql": "EXECUTE IMMEDIATE 'SELECT count(*) AS n FROM nums'"}),
+    )
+    .await;
+    assert!(!err && text.contains("| 50 |"), "{text}");
+    let (text, err) = call(
+        &t,
+        "run_query",
+        json!({"sql": "EXECUTE IMMEDIATE 'DROP TABLE nums'"}),
+    )
+    .await;
+    assert!(err && text.contains("DDL"), "{text}");
+}
+
+/// `EXPLAIN FORMAT JSON DROP TABLE` is a read: it passes every layer, returns the analysis and drops
+/// nothing.
+#[tokio::test]
+async fn explain_format_json_of_a_drop_passes_and_drops_nothing() {
+    let (_d, t) = fixture();
+    let (text, err) = call(
+        &t,
+        "run_query",
+        json!({"sql": "EXPLAIN FORMAT JSON DROP TABLE nums"}),
+    )
+    .await;
+    assert!(!err, "{text}");
+    assert!(text.contains("krishiv.analyze.v1"), "{text}");
+    let (text, err) = call(
+        &t,
+        "run_query",
+        json!({"sql": "SELECT count(*) AS n FROM nums"}),
+    )
+    .await;
+    assert!(!err && text.contains("| 50 |"), "{text}");
+}
