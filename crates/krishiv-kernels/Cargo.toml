@@ -30,6 +30,13 @@ md5.workspace = true
 sha1.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+icu_collator = { workspace = true, optional = true }
+icu_locale_core = { workspace = true, optional = true }
+icu_casemap = { workspace = true, optional = true }
+
+[features]
+# ICU collations (UNICODE, en, sv, ..., with _CI/_AI): ICU4X data compiled in (ADR 0043). Additive; without it ICU names are unsupported.
+collations-icu = ["dep:icu_collator", "dep:icu_locale_core", "dep:icu_casemap", "icu_collator/compiled_data", "icu_casemap/compiled_data"]
 
 [dev-dependencies]
 criterion.workspace = true

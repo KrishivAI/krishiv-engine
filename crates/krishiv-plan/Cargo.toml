@@ -31,6 +31,8 @@ twox-hash = { workspace = true, features = ["xxhash3_128"] }
 [features]
 # Test doubles (a function registry) for other crates' tests and benchmarks.
 testing = []
+# ICU collation keys in the analyzer (forwards to the kernels, ADR 0043).
+collations-icu = ["krishiv-kernels/collations-icu"]
 
 [dev-dependencies]
 criterion.workspace = true

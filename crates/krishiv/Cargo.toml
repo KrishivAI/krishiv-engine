@@ -29,6 +29,8 @@ krishiv-types = { path = "../krishiv-types", version = "=0.2.1" }
 futures = { workspace = true, features = ["alloc", "executor"] }
 
 [features]
+# ICU collations are on by default (ADR 0043 decision 5; +1.7% binary size); turn off with default-features = false.
+default = ["collations-icu"]
 # Strictly additive (ADR 0027). Forwarded to crates as they gain code.
 kafka = []
 iceberg = []
@@ -41,6 +43,7 @@ python = []
 wasm-udf = []
 ui = ["dep:krishiv-server"]
 celeborn = []
+collations-icu = ["krishiv-session/collations-icu"]
 mimalloc = []
 # Cloud object stores (S3, GCS, Azure) via `krishiv-session/cloud`. Opt-in so
 # the default build stays inside the dependency and binary-size budgets.

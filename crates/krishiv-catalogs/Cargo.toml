@@ -1,0 +1,24 @@
+[package]
+name = "krishiv-catalogs"
+description = "External catalogs: Hive metastore and Unity Catalog (read-only)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+# The Hive metastore catalog (Thrift client). Off by default: the default build carries no Thrift runtime.
+hive = ["dep:thrift", "dep:krishiv-plan", "dep:krishiv-types", "dep:tokio"]
+
+[dependencies]
+krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
+krishiv-plan = { path = "../krishiv-plan", version = "=0.2.1", optional = true }
+krishiv-types = { path = "../krishiv-types", version = "=0.2.1", optional = true }
+tracing.workspace = true
+thrift = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["rt"], optional = true }

@@ -386,6 +386,8 @@ jobs:
           tool: sccache@0.18.0
       - name: Golden ratchet through the wire format
         run: "cargo test -p krishiv-testkit --release --locked --test golden_ratchet serialize_through_matches_the_frozen_baseline -- --ignored"
+      - name: ICU collation goldens (collations-icu)
+        run: "cargo test -p krishiv-testkit --release --locked --features collations-icu --test golden_icu"
 
   # Object stores against throw-away emulators (P2-T084): krishiv-io's S3 (MinIO) and Azure (Azurite) round trips,
   # then TPC-H SF1 uploaded to MinIO and read back over `s3a://`, equal to the local answers. The script names and
