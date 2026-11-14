@@ -971,6 +971,12 @@ def pyspark_major() -> int:
     return int(pyspark.__version__.split(".")[0])
 
 
+def is_unreadable_type(res: dict) -> bool:
+    """A pyspark 3.x client's failure to read a year-month interval column: `KeyError: 21` (Arrow type id 21)."""
+    err = res.get("error", {})
+    return err.get("error_class") == "CLIENT.KeyError" and err.get("message") == "21"
+
+
 def outcome_of(res: dict) -> str:
     """What one mode of a case gave, for the manifest's list of cases a 3.x client could not read."""
     err = res.get("error")
@@ -1092,9 +1098,14 @@ def main() -> int:
             if ":" in c["kind"] and all(is_parse_error(c[m]) for m, _ in MODES):
                 dropped_parse += 1  # a substitution the parser rejects says nothing about the function
                 continue
-            bad_client = [m for m, _ in MODES if c[m].get("error", {}).get("error_class", "").startswith("CLIENT.")]
+            # Only the one failure a pyspark 3.x client is known to raise for a type it cannot read (the Arrow type
+            # id of a year-month interval, 21, missing from its type table). Any other CLIENT.* error is a generator
+            # defect and is left for self_check to refuse.
+            bad_client = [m for m, _ in MODES if is_unreadable_type(c[m])]
             generator_failed = any(
-                c[m].get("error", {}).get("error_class", "").startswith("GENERATOR.") for m, _ in MODES
+                c[m].get("error", {}).get("error_class", "").startswith(("GENERATOR.", "CLIENT."))
+                and not is_unreadable_type(c[m])
+                for m, _ in MODES
             )
             if old_client and bad_client and not generator_failed:
                 # A pyspark 3.x client cannot read some types a 3.5 server returns (e.g. year-month intervals):
