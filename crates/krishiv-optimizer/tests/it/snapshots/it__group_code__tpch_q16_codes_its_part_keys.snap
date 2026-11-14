@@ -1,0 +1,30 @@
+---
+source: crates/krishiv-optimizer/tests/it/group_code.rs
+expression: text
+---
+Sort [supplier_cnt#21 DESC NULLS LAST, p_brand#8 ASC NULLS FIRST, p_type#9 ASC NULLS FIRST, p_size#10 ASC NULLS FIRST], true
++- Project [p_brand#45 AS p_brand#8, p_type#46 AS p_type#9, p_size#47 AS p_size#10, supplier_cnt#21]
+   +- Join Inner, (krishiv_group_code#66 == krishiv_group_code#51)
+      :- Shift +15
+      :  +- Window [row_number() OVER (ORDER BY p_brand#30 ASC NULLS FIRST, p_type#31 ASC NULLS FIRST, p_size#32 ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS krishiv_group_code#36], [], [p_brand#30 ASC NULLS FIRST, p_type#31 ASC NULLS FIRST, p_size#32 ASC NULLS FIRST] (shared #1)
+      :     +- Aggregate [p_brand#30, p_type#31, p_size#32], [p_brand#30, p_type#31, p_size#32]
+      :        +- Project [p_brand#30, p_type#31, p_size#32]
+      :           +- Shift +22
+      :              +- Filter ((((NOT (p_brand#8 == 'Brand#45')) and (NOT (p_type#9 like 'MEDIUM POLISHED%'))) and (p_size#10 IN (49, 14, 23, 45, 19, 3, 36, 9))) and isnotnull(p_partkey#5))
+      :                 +- Scan spark_catalog.default.part [p_partkey#5, p_brand#8, p_type#9, p_size#10] (shared #2)
+      +- Aggregate [krishiv_group_code#66], [krishiv_group_code#66, count(DISTINCT ps_suppkey#1) AS supplier_cnt#21]
+         +- Join LeftAnti, ((ps_suppkey#1 == s_suppkey#14) or isnull((ps_suppkey#1 == s_suppkey#14)))
+            :- Project [ps_suppkey#1, krishiv_group_code#66]
+            :  +- Join Inner, (p_partkey#5 == ps_partkey#0)
+            :     :- Filter isnotnull(ps_partkey#0)
+            :     :  +- Scan spark_catalog.default.partsupp [ps_partkey#0, ps_suppkey#1]
+            :     +- Shift +0
+            :        +- Project [p_partkey#5, krishiv_group_code#66]
+            :           +- Join Inner, (((p_brand#8 <=> p_brand#60) and (p_type#9 <=> p_type#61)) and (p_size#10 <=> p_size#62))
+            :              :- Filter (((isnotnull(p_partkey#5) and (p_size#10 IN (49, 14, 23, 45, 19, 3, 36, 9))) and (NOT (p_type#9 like 'MEDIUM POLISHED%'))) and (NOT (p_brand#8 == 'Brand#45')))
+            :              :  +- Shared #2, printed above
+            :              +- Shift +30
+            :                 +- Shared #1, printed above
+            +- Project [s_suppkey#14]
+               +- Filter (s_comment#20 like '%Customer%Complaints%')
+                  +- Scan spark_catalog.default.supplier [s_suppkey#14, s_comment#20]

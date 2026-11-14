@@ -19,18 +19,25 @@ mod lakehouse;
 mod optimizer;
 mod result_cache;
 mod server;
-pub use lakehouse::{CATALOG_MAX_COLUMNS, CATALOG_MAX_METADATA_BYTES, DELTA_LOG_THREADS};
-pub use optimizer::{SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW};
+pub use lakehouse::{
+    CATALOG_MAX_COLUMNS, CATALOG_MAX_METADATA_BYTES, CATALOG_REQUEST_TIMEOUT, DELTA_LOG_THREADS,
+};
+pub use optimizer::{
+    EXPERIMENTAL_GROUP_KEY_CODE_FORCE, GROUP_KEY_CODE, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
+};
 pub use result_cache::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
 pub use server::{
-    CONNECT_ADDRESS, CONNECT_EXECUTE_AHEAD_BYTES, CONNECT_HANDSHAKE_TIMEOUT,
+    CONNECT_ADDRESS, CONNECT_EXECUTE_ABANDONED_TOMBSTONES, CONNECT_EXECUTE_AHEAD_BYTES,
+    CONNECT_EXECUTE_DETACHED_TIMEOUT, CONNECT_EXECUTE_MAINTENANCE_INTERVAL,
+    CONNECT_EXECUTE_RETRY_BUFFER_SIZE, CONNECT_EXECUTE_SENDER_MAX_STREAM_DURATION,
+    CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE, CONNECT_HANDSHAKE_TIMEOUT,
     CONNECT_HTTP2_MAX_CONCURRENT_STREAMS, CONNECT_HTTP2_MAX_HEADER_LIST_BYTES,
     CONNECT_HTTP2_MAX_PENDING_ACCEPT_RESETS, CONNECT_KEEPALIVE_ENABLED, CONNECT_KEEPALIVE_TIME,
     CONNECT_KEEPALIVE_TIMEOUT, CONNECT_MAX_CONNECTIONS, CONNECT_MAX_INBOUND_MESSAGE_SIZE,
-    CONNECT_MAX_OPERATIONS_PER_SESSION, CONNECT_MAX_SESSIONS, CONNECT_MAX_SESSIONS_PER_PRINCIPAL,
-    CONNECT_PORT, CONNECT_SESSION_IDLE_TIMEOUT, CONNECT_SESSION_MAINTENANCE_INTERVAL,
-    CONNECT_SESSION_TOMBSTONES, SERVER_ALLOW_CORE_DUMPS, SERVER_METRICS_PUBLIC,
-    SERVER_SHUTDOWN_TIMEOUT,
+    CONNECT_MAX_OPERATIONS_PER_SESSION, CONNECT_MAX_RESPONSE_BYTES, CONNECT_MAX_SESSIONS,
+    CONNECT_MAX_SESSIONS_PER_PRINCIPAL, CONNECT_PORT, CONNECT_SESSION_IDLE_TIMEOUT,
+    CONNECT_SESSION_MAINTENANCE_INTERVAL, CONNECT_SESSION_TOMBSTONES, SERVER_ALLOW_CORE_DUMPS,
+    SERVER_METRICS_PUBLIC, SERVER_SHUTDOWN_TIMEOUT,
 };
 
 const MIB: u64 = 1024 * 1024;
@@ -85,8 +92,11 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RESULT_CACHE_TTL,
     &RESULT_CACHE_MAX_BYTES,
     &SUBQUERY_AS_WINDOW,
+    &GROUP_KEY_CODE,
+    &EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
     &SHARE_REPEATED_SUBTREES,
     &SPILL_DIR,
+    &WORKLOAD_RESOURCE_GROUPS_FILE,
     &SPILL_MAX_BYTES,
     &SPILL_COMPRESSION,
     &SPILL_ZSTD_LEVEL,
@@ -107,6 +117,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &DELTA_LOG_THREADS,
     &CATALOG_MAX_METADATA_BYTES,
     &CATALOG_MAX_COLUMNS,
+    &CATALOG_REQUEST_TIMEOUT,
     &IO_COALESCE_BYTES,
     &IO_COALESCE_WASTE_BYTES,
     &IO_COALESCE_WASTE_DIVISOR,
@@ -120,6 +131,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &IO_METADATA_CACHE_BYTES,
     &IO_CACHE_ENABLED,
     &IO_CACHE_PATH,
+    &IO_LOCAL_ALLOWED_ROOTS,
+    &IO_OBJECT_STORE_ALLOWED_PREFIXES,
     &IO_CACHE_DISK_BYTES,
     &IO_CACHE_BLOCK_BYTES,
     &IO_CACHE_MEMORY_BYTES,
@@ -177,6 +190,13 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &CONNECT_MAX_SESSIONS_PER_PRINCIPAL,
     &CONNECT_MAX_OPERATIONS_PER_SESSION,
     &CONNECT_EXECUTE_AHEAD_BYTES,
+    &CONNECT_EXECUTE_RETRY_BUFFER_SIZE,
+    &CONNECT_EXECUTE_SENDER_MAX_STREAM_DURATION,
+    &CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE,
+    &CONNECT_EXECUTE_DETACHED_TIMEOUT,
+    &CONNECT_EXECUTE_MAINTENANCE_INTERVAL,
+    &CONNECT_EXECUTE_ABANDONED_TOMBSTONES,
+    &CONNECT_MAX_RESPONSE_BYTES,
     &CONNECT_MAX_CONNECTIONS,
     &CONNECT_HANDSHAKE_TIMEOUT,
     &CONNECT_HTTP2_MAX_CONCURRENT_STREAMS,
@@ -1176,6 +1196,49 @@ pub static IO_CACHE_PATH: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// `krishiv.io.local.allowedRoots`.
+pub static IO_LOCAL_ALLOWED_ROOTS: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.local.allowedRoots",
+    value_type: ValueType::String,
+    default: None,
+    doc: "Server mode (authentication configured): a comma-separated list of absolute paths of \
+          existing local directories (a path holding a comma cannot be listed) that reads and \
+          writes by path may use, for every role, admin included. A path is \
+          compared after `.`, `..` and symbolic links are resolved, and a glob or directory \
+          read below a root fails at a link out of every root. Unset or empty: no local path is \
+          allowed in server mode. Embedded use is not confined by path; set there, the key only \
+          makes listings refuse links out of the roots.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.objectStore.allowedPrefixes`.
+pub static IO_OBJECT_STORE_ALLOWED_PREFIXES: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.objectStore.allowedPrefixes",
+    value_type: ValueType::String,
+    default: None,
+    doc: "Server mode (authentication configured) only: a comma-separated list of object-store \
+          prefixes (`s3://bucket/prefix`, `gs://bucket`, \
+          `abfss://container@account.dfs.core.windows.net/prefix`; an Azure prefix names its \
+          account host) that reads and writes by path may use, for every role, admin included. \
+          A prefix matches whole key segments (`s3://b/data` does not match \
+          `s3://b/data2`) and holds no glob character; `s3` and `s3a` name the same store; a \
+          path holding `%`, `?` or `#` is never allowed, so `?` globs are refused. It is the one \
+          opt-in for the server's own (ambient) credentials and for `http(s)://` locations, which \
+          are refused unless listed. Any `fs.*` store option but an inline access key, secret, \
+          token or SAS (so endpoints, regions, accounts, key files, the GCS key JSON and tuning \
+          keys alike), per read, on a table or set in a session, needs admin; a \
+          table's options stored by an admin are not asked about again when others read or \
+          insert. Unset or empty: no object-store path \
+          is allowed. Embedded use and a server without authentication do not read it.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
 /// `krishiv.io.cache.diskBytes`.
 pub static IO_CACHE_DISK_BYTES: ConfigEntry = ConfigEntry {
     key: "krishiv.io.cache.diskBytes",
@@ -1766,3 +1829,19 @@ pub static SHARE_CTE_INSTANCES: ConfigEntry = ConfigEntry {
 
 mod index;
 pub use index::INDEX;
+
+/// `krishiv.workload.resourceGroups.file`.
+pub static WORKLOAD_RESOURCE_GROUPS_FILE: ConfigEntry = ConfigEntry {
+    key: "krishiv.workload.resourceGroups.file",
+    value_type: ValueType::String,
+    default: None,
+    doc: "Path of the resource group file (JSON in the shape of Trino's `resource-groups.json`, \
+          restricted to the subset Krishiv supports): the group tree, its concurrency, queue, \
+          per-query memory and scan limits, and the selectors that route a query to a group. Read when \
+          the engine starts; a malformed file stops the start with \
+          `KRISHIV_RESOURCE_GROUP_CONFIG_INVALID`. When unset, every query is admitted at once.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};

@@ -30,6 +30,8 @@ krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
 krishiv-exec = { path = "../krishiv-exec", version = "=0.2.0" }
 krishiv-io = { path = "../krishiv-io", version = "=0.2.0" }
 krishiv-memory = { path = "../krishiv-memory", version = "=0.2.0" }
+krishiv-optimizer = { path = "../krishiv-optimizer", version = "=0.2.0" }
+krishiv-types = { path = "../krishiv-types", version = "=0.2.0" }
 object_store.workspace = true
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["macros", "rt", "sync"] }

@@ -388,6 +388,8 @@ jobs:
           tool: sccache@0.18.0
       - name: Golden ratchet through the wire format
         run: "cargo test -p krishiv-testkit --release --locked --test golden_ratchet serialize_through_matches_the_frozen_baseline -- --ignored"
+      - name: ICU collation goldens (collations-icu)
+        run: "cargo test -p krishiv-testkit --release --locked --features collations-icu --test golden_icu"
 
   # Object stores against throw-away emulators (P2-T084): krishiv-io's S3 (MinIO) and Azure (Azurite) round trips,
   # then TPC-H SF1 uploaded to MinIO and read back over `s3a://`, equal to the local answers. The script names and
@@ -435,7 +437,8 @@ jobs:
 
   # The Spark golden ratchet for other Spark versions (P3-T090): the upstream goldens of the tag are fetched
   # here (they are not committed, only v4.2.0 is), the baseline of failing statements is committed under
-  # `tests/spark-golden/profiles/<tag>/`.
+  # `tests/spark-golden/profiles/<tag>/`, with the phase gate's result rate and a floor (`gate.json`); each
+  # version's rate against its gate is in the job summary.
   golden-profiles:
     if: github.repository == 'KrishivAI/krishiv-engine'
     runs-on: ubuntu-latest
@@ -454,8 +457,8 @@ jobs:
         uses: $/.github/actions/install-tool
         with:
           tool: sccache@0.18.0
-      - name: Fetch the Spark v4.3.0, v4.1.4, v4.0.5 and v3.5.9 goldens
-        run: "for t in v4.3.0 v4.1.4 v4.0.5 v3.5.9; do bash tests/scripts/import_spark_golden.sh $t; done"
+      - name: Fetch the Spark v4.3.0, v4.2.1, v4.1.4, v4.0.5 and v3.5.9 goldens
+        run: "for t in v4.3.0 v4.2.1 v4.1.4 v4.0.5 v3.5.9; do bash tests/scripts/import_spark_golden.sh $t; done"
       - name: Golden ratchet per Spark version
         run: "cargo test -p krishiv-testkit --release --locked --test golden_profiles -- --ignored"
 

@@ -1076,7 +1076,7 @@ impl QueryCatalog {
 
 /// The `_metadata` column of a table read through the file source
 /// `provider` (Spark: file sources; row positions only from Parquet).
-fn file_metadata(provider: &str) -> FileMetadata {
+pub(crate) fn file_metadata(provider: &str) -> FileMetadata {
     match provider.to_ascii_lowercase().as_str() {
         "parquet" => FileMetadata::WithRowIndex,
         "orc" | "csv" | "json" | "text" | "avro" | "xml" | "binaryfile" => FileMetadata::Basic,

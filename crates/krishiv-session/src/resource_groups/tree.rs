@@ -40,10 +40,6 @@ struct Node {
     soft_memory: Option<usize>,
     per_query_memory: Option<usize>,
     priority: u8,
-    #[expect(
-        dead_code,
-        reason = "the session wiring reads the class for system.queries"
-    )]
     class: WorkloadClass,
     scan_quota: Option<ScanQuota>,
     // Counters, over the group's subtree.
@@ -176,6 +172,11 @@ impl Shared {
         for d in deliveries {
             d.send();
         }
+    }
+
+    /// The abort priority and workload class of a leaf (inherited down the tree).
+    pub(super) fn leaf_traits(&self, leaf: usize) -> Option<(u8, WorkloadClass)> {
+        self.lock().nodes.get(leaf).map(|n| (n.priority, n.class))
     }
 
     /// The per-query memory budget of a leaf.

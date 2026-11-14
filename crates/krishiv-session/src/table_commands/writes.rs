@@ -500,9 +500,11 @@ impl Session {
                 // both before the drop.
                 let location =
                     managed_location(&self.warehouse_dir()?, &name.namespace, &name.name);
+                self.authorize_write_options(&spec.options, &BTreeMap::new())
+                    .await?;
                 let at =
                     self.locate_write_path(&location.display().to_string(), &spec.options, &env)?;
-                self.authorize_write_path(&at, &spec.options).await?;
+                self.authorize_write_path(&at).await?;
                 // A managed table's own directory goes with it; any other one in the way stays.
                 let own = self
                     .state
@@ -678,6 +680,7 @@ impl Session {
             column_stats: BTreeMap::new(),
             incarnation: 0,
             data_version: 0,
+            stamp: 0,
         };
         let layout = LayoutRequest {
             partition_by: &[],
