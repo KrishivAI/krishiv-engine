@@ -387,7 +387,8 @@ impl<'a> Shape<'a> {
         // Pays off.
         let d = est.plan(&leaf.plan);
         let i = est.plan(self.input);
-        if !d.from_statistics || !i.from_statistics {
+        // Forcing asks the shape only, so an input without statistics is coded too.
+        if !force && (!d.from_statistics || !i.from_statistics) {
             return Err(format!("no statistics for the input of [{names}]"));
         }
         let mut groups = 1.0_f64;
