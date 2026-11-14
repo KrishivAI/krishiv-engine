@@ -695,6 +695,31 @@ fn grouping_sets() {
 }
 
 #[test]
+fn an_aliased_grouping_key_groups_by_the_bare_expression() {
+    // `groupBy((a % 2).alias("m"))` (PY-009): the output keeps the alias, the
+    // grouping expression is `a`, as `GROUP BY a` is.
+    let aliased = expr(ExprType::Alias(Box::new(expression::Alias {
+        expr: Some(Box::new(attr("a"))),
+        name: vec!["m".to_owned()],
+        metadata: None,
+    })));
+    let r = aggregate_of(1, vec![aliased], vec![func("count", vec![])]);
+    let PlanNode::Aggregate {
+        grouping,
+        aggregates,
+        ..
+    } = node(&r)
+    else {
+        panic!("not an aggregate")
+    };
+    assert_eq!(
+        show(&r),
+        "Aggregate [a], [a AS m, count()]\n+- Read t\n",
+        "{grouping:?} {aggregates:?}"
+    );
+}
+
+#[test]
 fn aggregate_errors() {
     let pivot = aggregate_of(4, vec![attr("a")], vec![]);
     let e = fails(translate(&pivot));

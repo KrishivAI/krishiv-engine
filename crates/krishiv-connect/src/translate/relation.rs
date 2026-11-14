@@ -352,16 +352,29 @@ impl Translator<'_> {
         let input = self.relation(input)?;
         let keys = self.expressions(&a.grouping_expressions)?;
         let aggregates = self.expressions(&a.aggregate_expressions)?;
+        // The output keeps `expr AS name`; the grouping expressions are the
+        // bare `expr`: an alias is not an input column (PY-009).
+        let bare = |k: &Arc<Expr>| match &k.node {
+            ExprNode::Alias { expr, .. } => Arc::clone(expr),
+            _ => Arc::clone(k),
+        };
+        let group_keys: Vec<Arc<Expr>> = keys.iter().map(bare).collect();
         let grouping = match GroupType::try_from(a.group_type) {
-            Ok(GroupType::Groupby) => Grouping::GroupBy(keys.clone()),
-            Ok(GroupType::Rollup) => Grouping::Rollup(keys.clone()),
-            Ok(GroupType::Cube) => Grouping::Cube(keys.clone()),
+            Ok(GroupType::Groupby) => Grouping::GroupBy(group_keys),
+            Ok(GroupType::Rollup) => Grouping::Rollup(group_keys),
+            Ok(GroupType::Cube) => Grouping::Cube(group_keys),
             Ok(GroupType::GroupingSets) => Grouping::GroupingSets {
-                exprs: keys.clone(),
+                exprs: group_keys,
                 sets: a
                     .grouping_sets
                     .iter()
-                    .map(|s| self.expressions(&s.grouping_set))
+                    .map(|s| {
+                        Ok(self
+                            .expressions(&s.grouping_set)?
+                            .iter()
+                            .map(bare)
+                            .collect())
+                    })
                     .collect::<Result<_>>()?,
             },
             Ok(GroupType::Pivot) => {

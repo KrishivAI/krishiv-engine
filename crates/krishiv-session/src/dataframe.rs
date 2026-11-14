@@ -1847,14 +1847,11 @@ impl GroupedData {
         // The output keeps `expr AS name`; the grouping expressions are the bare
         // `expr`, as `GROUP BY expr` in SQL: an alias is not an input column.
         let mut output: Vec<Arc<Expr>> = self.keys.iter().cloned().map(Arc::new).collect();
-        let keys: Vec<Arc<Expr>> = self
-            .keys
-            .iter()
-            .map(|k| match &k.node {
-                ExprNode::Alias { expr, .. } => Arc::clone(expr),
-                _ => Arc::new(k.clone()),
-            })
-            .collect();
+        let bare = |k: &Expr| match &k.node {
+            ExprNode::Alias { expr, .. } => Arc::clone(expr),
+            _ => Arc::new(k.clone()),
+        };
+        let keys: Vec<Arc<Expr>> = self.keys.iter().map(bare).collect();
         output.extend(aggregates.into_iter().map(|c| Arc::new(c.expr)));
         let grouping = match &self.sets {
             Sets::GroupBy => Grouping::GroupBy(keys),
@@ -1864,7 +1861,7 @@ impl GroupedData {
                 exprs: keys,
                 sets: sets
                     .iter()
-                    .map(|set| set.iter().cloned().map(Arc::new).collect())
+                    .map(|set| set.iter().map(bare).collect())
                     .collect(),
             },
         };
