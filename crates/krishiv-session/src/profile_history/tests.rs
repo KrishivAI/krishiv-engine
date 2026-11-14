@@ -419,6 +419,28 @@ fn an_unaliased_literal_projection_is_masked_in_the_plan() {
 }
 
 #[test]
+fn a_view_with_a_literal_output_name_is_masked_in_the_plan() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = EngineRuntime::builder()
+        .config("krishiv.history.path", dir.path().to_str().unwrap())
+        .build()
+        .unwrap();
+    let session = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    run(
+        &session,
+        &format!("CREATE TEMPORARY VIEW v AS SELECT '{SECRET_TEXT}' FROM range(0, 1)"),
+    );
+    run(&session, "SELECT * FROM v");
+    rt.profile_history.as_ref().unwrap().flush();
+    for e in read_history(dir.path()).unwrap() {
+        assert!(
+            !e.profile.contains(SECRET_TEXT),
+            "a view's literal name was stored"
+        );
+    }
+}
+
+#[test]
 fn concatenated_and_punctuated_literal_names_are_masked() {
     let dir = tempfile::tempdir().unwrap();
     let rt = EngineRuntime::builder()

@@ -396,9 +396,10 @@ fn stored(e: HistoryEntry, mask: bool) -> Option<StoredProfile> {
         };
         let mut names = names;
         names.sort_by_key(|n| std::cmp::Reverse(n.len()));
-        // Without the statement's text no list of names is complete (a file write's result schema is its commit
-        // columns, not its input's), so every alias in the plan is masked too.
-        mask_plan(&mut profile.plan, &names, sql.is_none());
+        // No list of names taken from the statement is complete: a file write's result schema is its commit
+        // columns, and a view's definition is inlined with its literal-derived output names, which the outer text
+        // does not show. So every alias in the plan is masked too.
+        mask_plan(&mut profile.plan, &names, true);
         sql = sql.map(|t| krishiv_sql::mask_literals(&t));
     }
     let sql = sql.map(|t| cut(t, SQL_MAX));
