@@ -24,6 +24,7 @@ impl Walker<'_> {
             return Ok(Arc::clone(i));
         }
         let info = self.deeper(|w| w.expr(e, offset))?;
+        self.counts.expressions += 1;
         self.remember_expr(key, &info);
         Ok(info)
     }
@@ -119,7 +120,8 @@ impl Walker<'_> {
             ResolvedExpr::Function(f) => self.function(f, offset),
             ResolvedExpr::Field { base, name, .. } => {
                 let v = self.value(base, offset)?;
-                Ok(over(&metadata_field(&v, name), Transform::Expression))
+                let field = self.metadata_field(&v, name)?;
+                Ok(over(&field, Transform::Expression))
             }
             ResolvedExpr::Alias { expr, .. } | ResolvedExpr::EvalMode { expr, .. } => {
                 self.value(expr, offset)
@@ -130,19 +132,22 @@ impl Walker<'_> {
         }
     }
 
-    /// A call: the sources of its value arguments (a `CASE WHEN` or `IF` condition is a `conditional`
-    /// filter instead), a lambda's variables bound to the call's other arguments, and the step of its kind.
+    /// A call: the sources of its arguments (a `CASE WHEN` or `IF` condition decides the value, so it is a
+    /// source and a `conditional` filter), a lambda's variables bound to the call's other arguments, and the
+    /// step of its kind.
     fn function(&mut self, f: &ResolvedFunction, offset: u64) -> Result<Info, KrishivError> {
         // A lambda's variables read the other arguments (the array, map or initial value).
-        let mut inputs = literal();
-        for a in f.args.iter().filter(|a| !is_lambda(a)) {
-            let v = self.value(a, offset)?;
-            inputs = merge(&inputs, &v);
-        }
-        for a in &f.args {
-            if let ExprNode::Lambda { params, .. } = &a.node {
-                for p in params {
-                    self.env.insert(shifted(p.id, offset)?, Arc::clone(&inputs));
+        if f.args.iter().any(|a| is_lambda(a)) {
+            let mut inputs = literal();
+            for a in f.args.iter().filter(|a| !is_lambda(a)) {
+                let v = self.value(a, offset)?;
+                inputs = merge(&inputs, &v);
+            }
+            for a in &f.args {
+                if let ExprNode::Lambda { params, .. } = &a.node {
+                    for p in params {
+                        self.env.insert(shifted(p.id, offset)?, Arc::clone(&inputs));
+                    }
                 }
             }
         }
@@ -156,9 +161,8 @@ impl Walker<'_> {
             strongest = strongest.max(v.transform);
             if conditions.contains(&i) {
                 self.record(FilterKind::Conditional, &v);
-            } else {
-                value = merge(&value, &v);
             }
+            value = merge(&value, &v);
         }
         if let Some(filter) = &f.filter {
             let v = self.value(filter, offset)?;
@@ -186,7 +190,7 @@ impl Walker<'_> {
 
 /// `v` one step `step` further: a constant stays a constant.
 fn over(v: &Info, step: Transform) -> Info {
-    if v.transform == Transform::Literal {
+    if v.transform == Transform::Literal || v.transform >= step {
         return Arc::clone(v);
     }
     Arc::new(ColInfo {
@@ -195,32 +199,33 @@ fn over(v: &Info, step: Transform) -> Info {
     })
 }
 
-/// A field `name` of `v`: when `v` is a file scan's `_metadata` column (its leaves are `_metadata.<field>`),
-/// only that field's leaves.
-fn metadata_field(v: &Info, name: &str) -> Info {
-    let column = |l: &Leaf| match l {
-        Leaf::Table { column, .. } | Leaf::Path { column, .. } | Leaf::View { column, .. } => {
-            column.clone()
+impl Walker<'_> {
+    /// A field `name` of `v`: when `v` is a file scan's `_metadata` column (its leaves are path leaves
+    /// `_metadata.<field>`), only that field's leaves. A table's column of that name is not narrowed.
+    fn metadata_field(&self, v: &Info, name: &str) -> Result<Info, KrishivError> {
+        #[deny(clippy::wildcard_enum_match_arm)]
+        let path_column = |l: &Leaf| match l {
+            Leaf::Path { column, .. } => Some(column.clone()),
+            Leaf::Table { .. } | Leaf::View { .. } => None,
+        };
+        let field = format!("_metadata.{name}");
+        let mut metadata = !v.sources.is_empty();
+        let mut kept = BTreeSet::new();
+        for s in &v.sources {
+            let column = path_column(&self.resolve(*s)?.leaf);
+            metadata &= column.as_ref().is_some_and(|c| c.starts_with("_metadata."));
+            if column.is_some_and(|c| c == field) {
+                kept.insert(*s);
+            }
         }
-    };
-    let field = format!("_metadata.{name}");
-    let metadata = !v.sources.is_empty()
-        && v.sources
-            .iter()
-            .all(|s| column(&s.leaf).starts_with("_metadata."));
-    let kept: BTreeSet<_> = v
-        .sources
-        .iter()
-        .filter(|s| column(&s.leaf) == field)
-        .cloned()
-        .collect();
-    if !metadata || kept.is_empty() {
-        return Arc::clone(v);
+        if !metadata || kept.is_empty() {
+            return Ok(Arc::clone(v));
+        }
+        Ok(Arc::new(ColInfo {
+            sources: kept,
+            transform: v.transform,
+        }))
     }
-    Arc::new(ColInfo {
-        sources: kept,
-        transform: v.transform,
-    })
 }
 
 /// Whether `e` is a lambda (an argument of a higher-order function).
@@ -229,12 +234,18 @@ fn is_lambda(e: &Expr) -> bool {
 }
 
 /// The step a built-in of `kind` adds.
+#[expect(
+    clippy::match_same_arms,
+    reason = "`Scalar` is listed so a reader sees every known kind; the wildcard is for kinds added later"
+)]
 fn kind_step(kind: FunctionKind) -> Transform {
     match kind {
         FunctionKind::Aggregate => Transform::Aggregate,
         FunctionKind::Window => Transform::Window,
         FunctionKind::Generator => Transform::Generated,
-        // A scalar; `FunctionKind` is another crate's non-exhaustive enum, so a new kind reads as one too.
+        FunctionKind::Scalar => Transform::Expression,
+        // `FunctionKind` is another crate's non-exhaustive enum: a new kind reads as a scalar until it states
+        // its step here.
         _ => Transform::Expression,
     }
 }

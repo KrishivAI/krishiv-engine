@@ -5,7 +5,6 @@
 //! `crates/krishiv-sql/tests/lineage.rs`.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use krishiv_common::error::ErrorClass;
 use krishiv_types::DataType;
@@ -66,6 +65,7 @@ fn cte(depth: usize, twice: bool) -> LogicalPlan {
 fn a_cte_referenced_twice_is_computed_once() {
     let (once, n1) = lineage_counting(&analyze(cte(40, false))).unwrap();
     let (twice, n2) = lineage_counting(&analyze(cte(40, true))).unwrap();
+    let (n1, n2) = (n1.relations, n2.relations);
     assert_eq!(once.columns.len(), 2);
     assert_eq!(twice.columns.len(), 4);
     assert_eq!(twice.columns[2].sources, once.columns[0].sources);
@@ -88,10 +88,11 @@ fn shared_expression_dags_are_walked_once() {
         })))
     });
     let a = analyze(LogicalPlan::table(["t"]).filter(e));
-    let start = Instant::now();
-    let l = lineage(&a).unwrap();
-    assert!(start.elapsed() < Duration::from_secs(5));
+    let (l, counts) = lineage_counting(&a).unwrap();
     assert_eq!(l.filters.len(), 1);
+    // Each distinct node once: 30 `AND`s, the `=`, its column and literal (the analyzer may wrap a few more,
+    // never the 2^30 of the tree).
+    assert!(counts.expressions < 100, "{counts:?}");
 }
 
 #[test]

@@ -64,6 +64,8 @@ pub mod functions;
 mod history;
 mod identifier_clause;
 mod introspection;
+#[cfg(test)]
+mod lineage_tests;
 mod locals;
 #[cfg(feature = "telemetry-logs")]
 pub mod logging;

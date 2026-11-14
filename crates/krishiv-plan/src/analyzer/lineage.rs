@@ -15,10 +15,27 @@
 //! `PythonTableFunction`, `GeneratorKind::PythonUdtf`) are not on main yet: PR-26a or PR-26c adds their rows.
 //!
 //! Views (design Q4): permanent and temporary views are inlined before binding, so view inlining records a
-//! side table ([`ViewExpansion`]) instead of an IR node. A view whose base tables were authorized for the
-//! caller (temporary and `INVOKER` views) is expanded through, and its sources record
-//! [`via_view`](Source::via_view); any other (`DEFINER`, T062) is a [`Leaf::View`] with transform
-//! [`Transform::View`] and the warning [`LineageWarning::ViewNotExpanded`], and nothing under it appears.
+//! side table ([`ViewExpansion`](super::views::ViewExpansion)) instead of an IR node. A `SubqueryAlias` is a
+//! view read when an entry has its (alias, origin); ids play no part, so a view inlined twice (`df.join(df)`)
+//! or renumbered is still found. A view whose base tables were authorized for the caller (temporary and
+//! `INVOKER` views) is expanded through, and its sources record [`via_view`](Source::via_view); any other
+//! (`DEFINER`, T062) is a [`Leaf::View`] with transform [`Transform::View`] and the warning
+//! [`LineageWarning::ViewNotExpanded`], and nothing under it appears. When entries of one (alias, origin)
+//! disagree, the node is not expanded. A view that is not expanded and that no node carries fails the pass
+//! (fail closed): its base tables could otherwise show.
+//!
+//! Rules where the design's table leaves a choice (design v3):
+//! - a condition that decides a value (`CASE WHEN`, `IF`, an `IN` subquery's values, an existence join's
+//!   condition) is a source of that value (`expression`) and a `conditional` (or `join`) filter;
+//! - every set operation (`UNION`, `INTERSECT`, `EXCEPT`, `DISTINCT` and `ALL`) gives an output column the
+//!   union of both sides' column at its position, `identity`; the `join` filters of the rewrite stay;
+//! - `sources: []` is not always `literal`/`generated`: `count(*)` is `aggregate`, `rand()` `expression`,
+//!   an uncorrelated `EXISTS` `expression`.
+//!
+//! The walk evaluates each expression once per (node, `Shift` offset). A view's `via_view` tag rewrites the
+//! walk's map for the view's ids, so the invariant is that no expression node is shared across a view
+//! boundary (a view's body is lowered on its own, so it holds today); a rewrite that shares expressions
+//! across one must key the memo by the view too.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -26,7 +43,6 @@ use std::fmt;
 use krishiv_common::error::KrishivError;
 
 use super::AnalyzedPlan;
-pub use super::views::{ViewExpansion, ViewSecurity, locate_views};
 
 mod exprs;
 mod walk;
@@ -140,7 +156,7 @@ pub enum FilterKind {
     Sort,
     /// A window's partition or order key.
     Window,
-    /// A `CASE WHEN` or `IF` condition.
+    /// A `CASE WHEN` or `IF` condition (also a source of the value it decides).
     Conditional,
 }
 
@@ -227,8 +243,11 @@ pub fn lineage(analyzed: &AnalyzedPlan) -> Result<Lineage, KrishivError> {
     walk::run(analyzed).map(|(l, _)| l)
 }
 
-/// [`lineage`], and the number of (node, `Shift` offset) pairs the walk computed (each at most once).
+/// [`lineage`], and the number of (node, `Shift` offset) pairs and of (expression, `Shift` offset) pairs
+/// the walk computed (each at most once).
 #[cfg(test)]
-pub(crate) fn lineage_counting(analyzed: &AnalyzedPlan) -> Result<(Lineage, usize), KrishivError> {
+pub(crate) fn lineage_counting(
+    analyzed: &AnalyzedPlan,
+) -> Result<(Lineage, walk::Counts), KrishivError> {
     walk::run(analyzed)
 }

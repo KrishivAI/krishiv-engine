@@ -9,10 +9,9 @@ use std::sync::Arc;
 
 use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_common::secret::OptionValue;
-use krishiv_plan::analyzer::lineage::{
-    FilterKind, Leaf, Lineage, LineageWarning, ViewExpansion, ViewSecurity, lineage, locate_views,
-};
+use krishiv_plan::analyzer::lineage::{FilterKind, Leaf, Lineage, LineageWarning, lineage};
 use krishiv_plan::analyzer::testing::{block_on, context};
+use krishiv_plan::analyzer::views::{ViewExpansion, ViewSecurity, locate_views};
 use krishiv_plan::analyzer::{
     AnalysisContext, AnalyzedPlan, Analyzer as _, BoxFuture, BuiltinFunctions, DefaultAnalyzer,
     FileSchemaResolver, FunctionLookup, FunctionRegistry, MemoryCatalog, ResolutionConf,
@@ -172,12 +171,32 @@ fn project_filter_sort_and_case() {
         [
             "a: [t.a] -> identity",
             "b1: [t.b] -> expression",
-            "k: [t.a, t.b] -> expression",
+            "k: [t.a, t.b, t.c] -> expression",
             "one: [] -> literal",
         ]
     );
     assert_eq!(filters(&l), ["filter t.b", "sort t.a", "conditional t.c"]);
     assert!(l.warnings.is_empty());
+}
+
+/// A condition decides the value: it is a source of the output (not only a statement-level filter).
+#[test]
+fn case_and_if_conditions_are_sources() {
+    let l = of(
+        "SELECT CASE WHEN b > 100 THEN 'high' ELSE 'low' END AS band,          IF(c IS NULL, 'missing', 'present') AS has_c, if(a > 0, b, 0) AS pick FROM t",
+    );
+    assert_eq!(
+        columns(&l),
+        [
+            "band: [t.b] -> expression",
+            "has_c: [t.c] -> expression",
+            "pick: [t.a, t.b] -> expression",
+        ]
+    );
+    assert_eq!(
+        filters(&l),
+        ["conditional t.a", "conditional t.b", "conditional t.c"]
+    );
 }
 
 #[test]
@@ -208,28 +227,49 @@ fn aggregate_keys_stay_identity() {
 }
 
 #[test]
-fn distinct_intersect_and_except_stay_identity() {
+fn distinct_is_identity() {
+    assert_eq!(
+        columns(&of("SELECT DISTINCT a FROM t")),
+        ["a: [t.a] -> identity"]
+    );
+}
+
+/// One rule for every set operation: an output column reads both sides' column at its position, `identity`.
+#[test]
+fn set_operations_read_both_sides() {
     for sql in [
-        "SELECT DISTINCT a FROM t",
         "SELECT a FROM t INTERSECT SELECT a FROM u",
         "SELECT a FROM t EXCEPT SELECT a FROM u",
-    ] {
-        let l = of(sql);
-        assert_eq!(columns(&l), ["a: [t.a] -> identity"], "{sql}");
-    }
-    // The `DISTINCT` forms compare through a semi or anti join on every column.
-    assert_eq!(
-        filters(&of("SELECT a FROM t INTERSECT SELECT a FROM u")),
-        ["join t.a", "join u.a", "group_by t.a"]
-    );
-    // The `ALL` forms count rows of both sides (a union), so both sides' columns are sources.
-    for sql in [
         "SELECT a FROM t INTERSECT ALL SELECT a FROM u",
         "SELECT a FROM t EXCEPT ALL SELECT a FROM u",
+        "SELECT a FROM t UNION SELECT a FROM u",
     ] {
         let l = of(sql);
         assert_eq!(columns(&l), ["a: [t.a, u.a] -> identity"], "{sql}");
     }
+    // Positional over several columns, and the `DISTINCT` rewrite's `join` filters stay; its distinct
+    // aggregate groups the merged columns, so both sides show under `group_by` too.
+    let l = of("SELECT a, b FROM t INTERSECT SELECT x, a FROM u");
+    assert_eq!(
+        columns(&l),
+        ["a: [t.a, u.x] -> identity", "b: [t.b, u.a] -> identity"]
+    );
+    assert_eq!(
+        filters(&l),
+        [
+            "join t.a",
+            "join t.b",
+            "join u.a",
+            "join u.x",
+            "group_by t.a",
+            "group_by t.b",
+            "group_by u.a",
+            "group_by u.x"
+        ]
+    );
+    // A user's semi join is no set operation: the right side only decides the rows.
+    let l = of("SELECT a FROM t LEFT SEMI JOIN u ON t.a = u.a");
+    assert_eq!(columns(&l), ["a: [t.a] -> identity"]);
 }
 
 #[test]
@@ -333,6 +373,21 @@ fn correlated_in_and_exists_are_join_filters() {
         filters(&l),
         ["join t.a", "join t.b", "join t.c", "join u.a", "join u.x"]
     );
+}
+
+#[test]
+fn uncorrelated_exists_is_no_constant() {
+    let l = of("SELECT a, EXISTS (SELECT 1 FROM u WHERE u.x > 0) AS e FROM t");
+    assert_eq!(columns(&l), ["a: [t.a] -> identity", "e: [] -> expression"]);
+    assert_eq!(filters(&l), ["filter u.x"]);
+}
+
+/// An analyzed plan keeps what the optimizer would fold: lineage reads the analyzed plan, so a filter
+/// column the optimizer drops still shows.
+#[test]
+fn a_folded_condition_still_lists_its_columns() {
+    let l = of("SELECT a FROM t WHERE 1 = 1 OR b > 0");
+    assert_eq!(filters(&l), ["filter t.b"]);
 }
 
 #[test]
@@ -501,22 +556,23 @@ fn alias_origin(p: &LogicalPlan, alias: &str) -> Option<krishiv_plan::Origin> {
 fn with_view(sql: &str, security: ViewSecurity) -> AnalyzedPlan {
     let mut a = analyzed(sql);
     let origin = alias_origin(a.plan.root(), "v").unwrap();
-    a.views = locate_views(
-        a.plan.root(),
-        vec![ViewExpansion {
-            name: vec![
-                "spark_catalog".to_owned(),
-                "default".to_owned(),
-                "v".to_owned(),
-            ],
-            alias: "v".to_owned(),
-            origin,
-            security,
-            bases_authorized: true,
-            output: None,
-        }],
-    );
+    a.views = locate_views(a.plan.root(), vec![view_entry(origin, security)]);
     a
+}
+
+/// A side-table entry for `spark_catalog.default.v`, read as `SubqueryAlias v` at `origin`.
+fn view_entry(origin: krishiv_plan::Origin, security: ViewSecurity) -> ViewExpansion {
+    ViewExpansion::new(
+        vec![
+            "spark_catalog".to_owned(),
+            "default".to_owned(),
+            "v".to_owned(),
+        ],
+        "v".to_owned(),
+        origin,
+        security,
+        true,
+    )
 }
 
 const VIEW_QUERY: &str =
@@ -567,13 +623,103 @@ fn lineage_definer_view_is_leaf() {
 
 #[test]
 fn a_view_not_expanded_that_is_not_found_fails_closed() {
+    // A `DEFINER` entry whose (alias, origin) no node in the plan carries fails closed, even with stale
+    // located ids.
     let mut a = with_view(VIEW_QUERY, ViewSecurity::Definer);
-    a.views[0].output = None;
+    a.views[0].origin = krishiv_plan::Origin::plan(krishiv_plan::PlanId(999));
     let e = lineage(&a).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::InternalError);
+    a.views[0].output = None;
+    assert_eq!(
+        lineage(&a).unwrap_err().error_class(),
+        ErrorClass::InternalError
+    );
     // An expanded view that is not found only loses its `via_view`.
     a.views[0].security = ViewSecurity::Invoker;
     assert!(lineage(&a).is_ok());
+    // A node that is found hides the view whether or not the entry was located.
+    let mut b = with_view(VIEW_QUERY, ViewSecurity::Definer);
+    let want = lineage(&b).unwrap();
+    b.views[0].output = None;
+    assert_eq!(lineage(&b).unwrap(), want);
+}
+
+/// The node is found by (alias, origin), never by ids: an entry with other ids (a renumbered copy) still
+/// hides the view.
+#[test]
+fn a_definer_view_is_matched_by_alias_and_origin_not_ids() {
+    let mut a = with_view(VIEW_QUERY, ViewSecurity::Definer);
+    let want = lineage(&a).unwrap();
+    a.views[0].output = Some(vec![krishiv_plan::AttrId(123_456)]);
+    assert_eq!(lineage(&a).unwrap(), want);
+}
+
+/// `df.union(df)` over one view: the shared read is inlined twice, two subtrees with one (alias, origin)
+/// and two entries. Both reads are found: tagged `via_view` when expanded, hidden when `DEFINER` (no `t`
+/// anywhere).
+#[test]
+fn a_view_read_twice_through_a_shared_dataframe() {
+    let origin = krishiv_plan::Origin::plan(krishiv_plan::PlanId(7));
+    let read = || {
+        Arc::new(
+            LogicalPlan::table(["t"])
+                .filter(Expr::function(
+                    ">",
+                    vec![
+                        Expr::column(["b"]),
+                        Expr::literal(krishiv_plan::Literal::Integer(0)),
+                    ],
+                ))
+                .project(vec![Expr::column(["a"]).alias("k")])
+                .alias("v")
+                .with_origin(origin),
+        )
+    };
+    let union = LogicalPlan::new(PlanNode::Union {
+        inputs: vec![read(), read()],
+        by_name: false,
+        allow_missing_columns: false,
+    });
+    let base = analyzed_plan(&Plan::try_new(union).unwrap());
+    for (security, want) in [
+        (
+            ViewSecurity::Invoker,
+            "k: [t.a@spark_catalog.default.v] -> identity",
+        ),
+        (
+            ViewSecurity::Definer,
+            "k: [view:spark_catalog.default.v.k] -> view",
+        ),
+    ] {
+        let mut a = base.clone();
+        a.views = locate_views(
+            a.plan.root(),
+            vec![view_entry(origin, security), view_entry(origin, security)],
+        );
+        // The key's first entry is located (the analyzer may keep the two equal subtrees as one node).
+        assert!(a.views[0].output.is_some(), "{:?}", a.views);
+        let l = lineage(&a).unwrap();
+        assert_eq!(columns(&l), [want], "{security:?}");
+        if security == ViewSecurity::Definer {
+            assert!(l.filters.is_empty(), "{:?}", filters(&l));
+            assert!(!format!("{l:?}").contains("\"t\""));
+        } else {
+            assert_eq!(filters(&l), ["filter t.b"]);
+        }
+    }
+    // Entries of one key that disagree: the node is hidden.
+    let mut a = base;
+    a.views = locate_views(
+        a.plan.root(),
+        vec![
+            view_entry(origin, ViewSecurity::Invoker),
+            view_entry(origin, ViewSecurity::Definer),
+        ],
+    );
+    assert_eq!(
+        columns(&lineage(&a).unwrap()),
+        ["k: [view:spark_catalog.default.v.k] -> view"]
+    );
 }
 
 #[test]
