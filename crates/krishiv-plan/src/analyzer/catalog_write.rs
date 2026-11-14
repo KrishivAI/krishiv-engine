@@ -119,11 +119,10 @@ pub trait CatalogWrite: Catalog {
     /// [`TableMeta::version`], so the guard holds for every catalog.
     ///
     /// # Errors
-    /// `TABLE_OPERATION`-class refusals and the first change's error (see
-    /// [`apply_changes`](super::apply_changes)); `TABLE_OR_VIEW_NOT_FOUND`
-    /// when the table is gone. The class a moved version raises is decided
-    /// with the in-memory adapter (the next commit on this branch) and named
-    /// here then.
+    /// `TABLE_OR_VIEW_NOT_FOUND` when the table is gone; the first change's
+    /// error (see [`apply_changes`](super::apply_changes)); `INTERNAL_ERROR`
+    /// ("was changed by another statement while this one ran; retry") when
+    /// the table is no longer at `expected`, as the session raises today.
     fn alter_table<'a>(
         &'a self,
         id: &'a TableIdent,
@@ -131,11 +130,13 @@ pub trait CatalogWrite: Catalog {
         changes: &'a [TableChange],
     ) -> BoxFuture<'a, Result<TableMeta, KrishivError>>;
 
-    /// Drops the table; `purge` also deletes its data. Returns whether it
-    /// existed.
+    /// Drops the table and returns whether it existed. A managed table's
+    /// data goes with it and an external table's never does; a catalog that
+    /// keeps a trash may keep a managed table's data unless `purge`. The
+    /// delete is checked before the metadata changes.
     ///
     /// # Errors
-    /// Errors deleting the data.
+    /// A refused or failed delete; a view (it is not a table to drop).
     fn drop_table<'a>(
         &'a self,
         id: &'a TableIdent,
