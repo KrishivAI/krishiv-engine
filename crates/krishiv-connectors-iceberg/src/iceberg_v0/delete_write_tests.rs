@@ -460,7 +460,10 @@ fn v2_files(
 
 /// A v3 write unions the new positions with the file's old DV and every v2
 /// position delete that applies to it; it supersedes the DV and the
-/// file-scoped position delete file, never the partition-scoped one.
+/// file-scoped position delete file, never the partition-scoped one. The
+/// input is synthetic (a scan never assigns position deletes next to a DV,
+/// `TaskDeletes`); it checks the union and rewritten rules only. The real
+/// upgrade case is `the_first_dv_after_an_upgrade_absorbs_v2_position_deletes`.
 #[test]
 fn a_dv_absorbs_the_old_dv_and_v2_position_deletes() {
     let env = env();
@@ -509,6 +512,46 @@ fn a_dv_absorbs_the_old_dv_and_v2_position_deletes() {
         ..TaskDeletes::default()
     };
     assert_eq!(selection(&env, &a, &task), excluding([10, 11, 20, 30, 40]));
+}
+
+/// The v2 → v3 upgrade case (design note §8 item 4, review S4): the data
+/// file has no DV yet, a partition-scoped and a file-scoped v2 position
+/// delete file apply to it (assigned by `DeleteIndex`, as a scan assigns
+/// them). The first DV holds both files' positions and the new ones; only
+/// the file-scoped file is superseded.
+#[test]
+fn the_first_dv_after_an_upgrade_absorbs_v2_position_deletes() {
+    let env = env();
+    let (a, other) = (data_path(&env, 1, "a"), data_path(&env, 1, "other"));
+    let shared = v2_files(&env, "partition", &[(&a, 10), (&a, 11), (&other, 2)], 2);
+    let scoped = v2_files(&env, "file", &[(&a, 20)], 3);
+    let m = table(&env, FormatVersion::V3, &[]);
+    let specs = super::scan::partition_specs(&m, m.current_schema());
+    let index =
+        crate::plan::DeleteIndex::new(&[Arc::clone(&shared[0]), Arc::clone(&scoped[0])], &specs)
+            .unwrap();
+    let task = index.for_data_file(&data_entry(&a, 1)).unwrap();
+    assert!(task.deletion_vector.is_none());
+    assert_eq!(task.position_deletes.len(), 2);
+
+    let prev = previous(&env, DeleteFormat::DeletionVectors, &a, &task).unwrap();
+    assert_eq!(prev.positions, treemap(&[10, 11, 20]));
+    let mut d = PositionDeletes::default();
+    d.delete(&a, 40, 0, &part(1)).unwrap();
+    let r = write(&env, &m, &d, &HashMap::from([(a.clone(), prev)])).unwrap();
+    let rewritten: Vec<_> = r
+        .rewritten
+        .iter()
+        .map(|f| f.entry.file.path.clone())
+        .collect();
+    assert_eq!(rewritten, vec![scoped[0].entry.file.path.clone()]);
+    let new = through_manifest(&env, FormatVersion::V3, &r.delete_files, 4);
+    assert_eq!(new[0].entry.file.record_count, 4);
+    let task = TaskDeletes {
+        deletion_vector: Some(Arc::clone(&new[0])),
+        ..TaskDeletes::default()
+    };
+    assert_eq!(selection(&env, &a, &task), excluding([10, 11, 20, 40]));
 }
 
 /// Granularity `file`: one delete file per data file, rows sorted, both
@@ -781,7 +824,7 @@ fn an_upload_failure_leaves_no_file() {
         (FormatVersion::V2, "-00002-deletes.parquet"),
         (FormatVersion::V3, "-deletes.puffin"),
     ] {
-        let store = Arc::new(Refuse(object_store::local::LocalFileSystem::new(), refused));
+        let store = Arc::new(Faulty::new(refused, Fault::Refuse));
         let env = env_on(store, krishiv_io::IoConfig::default());
         let m = table(&env, version, &[]);
         let mut d = PositionDeletes::default();
@@ -799,38 +842,225 @@ fn an_upload_failure_leaves_no_file() {
     }
 }
 
-/// The local file system refusing writes of files whose names end with `.1` (a suffix).
-#[derive(Debug)]
-struct Refuse(object_store::local::LocalFileSystem, &'static str);
+/// A Puffin that landed although its upload answered with an error (a lost
+/// answer) is deleted by the failed write (review S3).
+#[test]
+fn a_v3_failure_after_the_puffin_landed_deletes_it() {
+    let store = Arc::new(Faulty::new("-deletes.puffin", Fault::LandThenFail));
+    let env = env_on(store, krishiv_io::IoConfig::default());
+    let m = table(&env, FormatVersion::V3, &[]);
+    let mut d = PositionDeletes::default();
+    d.delete(&data_path(&env, 1, "a"), 1, 0, &part(1)).unwrap();
+    let e = write(&env, &m, &d, &HashMap::new()).unwrap_err();
+    assert!(format!("{e}").contains("-deletes.puffin"), "{e}");
+    assert!(files_with(env.dir.path(), "puffin").is_empty());
+}
 
-impl std::fmt::Display for Refuse {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Refuse")
+/// Runs `w.write(d)` as a task until the store's targeted upload starts
+/// (and blocks), samples `pool`'s charge, then aborts the task (a dropped
+/// write future) and returns the sample.
+fn charge_then_drop(
+    env: &Env,
+    started: &std::sync::atomic::AtomicBool,
+    pool: &Arc<dyn MemoryPool>,
+    w: DeleteFileWriter,
+    d: PositionDeletes,
+) -> usize {
+    let task = env
+        .rt
+        .spawn(async move { w.write(&d, &HashMap::new()).await.map(drop) });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !started.load(std::sync::atomic::Ordering::SeqCst) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the upload never started"
+        );
+        assert!(!task.is_finished(), "the write ended before the upload");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let charged = pool.reserved();
+    task.abort();
+    let _ = env.rt.block_on(task);
+    charged
+}
+
+/// Waits until no `.parquet` or `.puffin` file is left under the table.
+fn wait_for_no_files(env: &Env) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let left = [
+            files_with(env.dir.path(), "parquet"),
+            files_with(env.dir.path(), "puffin"),
+        ]
+        .concat();
+        if left.is_empty() {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "left behind: {left:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
 
-impl Refuse {
-    fn check(&self, location: &object_store::path::Path) -> object_store::Result<()> {
-        if location.as_ref().ends_with(self.1) {
-            return Err(object_store::Error::PermissionDenied {
-                path: location.to_string(),
-                source: "refused by the test".into(),
-            });
+/// A write future dropped while its second delete file uploads deletes the
+/// first (already finished) file in the background and releases its memory
+/// (review S3).
+#[test]
+fn a_dropped_write_deletes_its_files() {
+    let store = Arc::new(Faulty::new("-00002-deletes.parquet", Fault::Block));
+    let started = Arc::clone(&store.started);
+    let env = env_on(store, krishiv_io::IoConfig::default());
+    let m = table(&env, FormatVersion::V2, &[]);
+    let mut d = PositionDeletes::default();
+    for name in ["a", "b", "c"] {
+        d.delete(&data_path(&env, 1, name), 1, 0, &part(1)).unwrap();
+    }
+    let pool = pool();
+    let w = writer(&env, &m, &pool);
+    charge_then_drop(&env, &started, &pool, w, d);
+    wait_for_no_files(&env);
+    assert_eq!(pool.reserved(), 0);
+}
+
+/// The Puffin is buffered whole until `close` uploads it: its blobs stay
+/// charged until then (review S1), and a write dropped during that upload
+/// releases the charge.
+#[test]
+fn puffin_blobs_stay_charged_until_close() {
+    let store = Arc::new(Faulty::new("-deletes.puffin", Fault::Block));
+    let started = Arc::clone(&store.started);
+    let env = env_on(store, krishiv_io::IoConfig::default());
+    let m = table(&env, FormatVersion::V3, &[]);
+    let mut d = PositionDeletes::default();
+    for name in ["a", "b", "c"] {
+        d.delete_all(
+            &data_path(&env, 1, name),
+            &(0..5_000).step_by(3).collect(),
+            0,
+            &part(1),
+        )
+        .unwrap();
+    }
+    let blobs: usize = d
+        .paths()
+        .map(|_| {
+            crate::plan::encode_dv(&(0..5_000).step_by(3).collect())
+                .unwrap()
+                .len()
+        })
+        .sum();
+    let pool = pool();
+    let w = writer(&env, &m, &pool);
+    let charged = charge_then_drop(&env, &started, &pool, w, d);
+    assert!(
+        charged >= blobs,
+        "{charged} charged while the Puffin uploads, {blobs} buffered"
+    );
+    wait_for_no_files(&env);
+    assert_eq!(pool.reserved(), 0);
+}
+
+/// With `write.object-storage.enabled` the Puffin gets the hash directories
+/// of an unpartitioned data file of its name (review N6).
+#[test]
+fn the_puffin_goes_where_an_unpartitioned_data_file_goes() {
+    let env = env();
+    let m = table(
+        &env,
+        FormatVersion::V3,
+        &[("write.object-storage.enabled", "true")],
+    );
+    let mut d = PositionDeletes::default();
+    d.delete(&data_path(&env, 1, "a"), 1, 0, &part(1)).unwrap();
+    let r = write(&env, &m, &d, &HashMap::new()).unwrap();
+    let name = "00003-7-w1-00001-deletes.puffin";
+    let want = super::data_file::DataLocations::for_table(&m)
+        .unwrap()
+        .location(
+            &PartitionSpec::unpartition_spec(),
+            m.current_schema(),
+            &Struct::empty(),
+            name,
+        )
+        .unwrap();
+    assert_eq!(r.delete_files[0].file_path(), want);
+    assert_ne!(want, env.at(&format!("t/data/{name}")));
+    assert!(!want.contains("x=1"), "{want}");
+}
+
+/// How [`Faulty`] treats the uploads of the files it targets.
+#[derive(Debug, Clone, Copy)]
+enum Fault {
+    /// Refused before anything is written.
+    Refuse,
+    /// Written, then answered with an error (a lost answer).
+    LandThenFail,
+    /// Never answered (blocks until dropped).
+    Block,
+}
+
+/// The local file system with a [`Fault`] on the uploads of files whose
+/// names end with a suffix.
+#[derive(Debug)]
+struct Faulty {
+    inner: object_store::local::LocalFileSystem,
+    suffix: &'static str,
+    fault: Fault,
+    /// Set once a targeted upload started.
+    started: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Faulty {
+    fn new(suffix: &'static str, fault: Fault) -> Self {
+        Self {
+            inner: object_store::local::LocalFileSystem::new(),
+            suffix,
+            fault,
+            started: Arc::default(),
         }
-        Ok(())
+    }
+
+    fn targets(&self, location: &object_store::path::Path) -> bool {
+        location.as_ref().ends_with(self.suffix)
+    }
+}
+
+impl std::fmt::Display for Faulty {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Faulty")
+    }
+}
+
+fn refused(location: &object_store::path::Path) -> object_store::Error {
+    object_store::Error::PermissionDenied {
+        path: location.to_string(),
+        source: "refused by the test".into(),
     }
 }
 
 #[async_trait::async_trait]
-impl object_store::ObjectStore for Refuse {
+impl object_store::ObjectStore for Faulty {
     async fn put_opts(
         &self,
         location: &object_store::path::Path,
         payload: object_store::PutPayload,
         opts: object_store::PutOptions,
     ) -> object_store::Result<object_store::PutResult> {
-        self.check(location)?;
-        self.0.put_opts(location, payload, opts).await
+        if self.targets(location) {
+            self.started
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            match self.fault {
+                Fault::Refuse => return Err(refused(location)),
+                Fault::LandThenFail => {
+                    self.inner.put_opts(location, payload, opts).await?;
+                    return Err(refused(location));
+                }
+                Fault::Block => std::future::pending::<()>().await,
+            }
+        }
+        self.inner.put_opts(location, payload, opts).await
     }
 
     async fn put_multipart_opts(
@@ -838,8 +1068,15 @@ impl object_store::ObjectStore for Refuse {
         location: &object_store::path::Path,
         opts: object_store::PutMultipartOptions,
     ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
-        self.check(location)?;
-        self.0.put_multipart_opts(location, opts).await
+        if self.targets(location) {
+            self.started
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            match self.fault {
+                Fault::Refuse | Fault::LandThenFail => return Err(refused(location)),
+                Fault::Block => std::future::pending::<()>().await,
+            }
+        }
+        self.inner.put_multipart_opts(location, opts).await
     }
 
     async fn get_opts(
@@ -847,7 +1084,7 @@ impl object_store::ObjectStore for Refuse {
         location: &object_store::path::Path,
         options: object_store::GetOptions,
     ) -> object_store::Result<object_store::GetResult> {
-        self.0.get_opts(location, options).await
+        self.inner.get_opts(location, options).await
     }
 
     async fn get_ranges(
@@ -855,7 +1092,7 @@ impl object_store::ObjectStore for Refuse {
         location: &object_store::path::Path,
         ranges: &[std::ops::Range<u64>],
     ) -> object_store::Result<Vec<bytes::Bytes>> {
-        self.0.get_ranges(location, ranges).await
+        self.inner.get_ranges(location, ranges).await
     }
 
     fn delete_stream(
@@ -865,21 +1102,21 @@ impl object_store::ObjectStore for Refuse {
             object_store::Result<object_store::path::Path>,
         >,
     ) -> futures::stream::BoxStream<'static, object_store::Result<object_store::path::Path>> {
-        self.0.delete_stream(locations)
+        self.inner.delete_stream(locations)
     }
 
     fn list(
         &self,
         prefix: Option<&object_store::path::Path>,
     ) -> futures::stream::BoxStream<'static, object_store::Result<object_store::ObjectMeta>> {
-        self.0.list(prefix)
+        self.inner.list(prefix)
     }
 
     async fn list_with_delimiter(
         &self,
         prefix: Option<&object_store::path::Path>,
     ) -> object_store::Result<object_store::ListResult> {
-        self.0.list_with_delimiter(prefix).await
+        self.inner.list_with_delimiter(prefix).await
     }
 
     async fn copy_opts(
@@ -888,6 +1125,6 @@ impl object_store::ObjectStore for Refuse {
         to: &object_store::path::Path,
         options: object_store::CopyOptions,
     ) -> object_store::Result<()> {
-        self.0.copy_opts(from, to, options).await
+        self.inner.copy_opts(from, to, options).await
     }
 }

@@ -6,18 +6,21 @@
 //! (the commit is a later unit), with the delete files they supersede.
 //!
 //! Java references are apache-iceberg 1.12.0 (`ij:`) and its Spark 4.1
-//! module (`spark:`), from the fetched sources.
+//! module (`spark:`). Those marked "(not in the fetched sources)" rest on a
+//! class that was not fetched for this unit and stay unverified.
 //!
 //! - **The kind of delete is fixed by the format version**
-//!   (`ij:MergingSnapshotProducer.java:302-309`): v3 writes deletion vectors
+//!   (`ij:MergingSnapshotProducer.java:302-309`, cited by design note §8
+//!   item 4; not in the fetched sources): v3 writes deletion vectors
 //!   only, v2 position delete files only, v1 is refused
 //!   (`KRISHIV_UNSUPPORTED_FEATURE`: row-level deletes need v2). On v3 the
 //!   delete format is Puffin whatever `write.delete.format.default` says
 //!   (`spark:SparkWriteConf.java:245-257`); on v2 that property, else
 //!   `write.format.default`, must be `parquet`.
 //! - **Granularity** (`write.delete.granularity`, case-insensitive `file` or
-//!   `partition`; otherwise "Unknown delete granularity: <v>", Java's
-//!   `DeleteGranularity.fromString` text, as `KRISHIV_UNSUPPORTED_FEATURE`)
+//!   `partition`; otherwise "Unknown delete granularity: <v>", as
+//!   `KRISHIV_UNSUPPORTED_FEATURE`; the text and the case-insensitivity are
+//!   `DeleteGranularity.fromString`'s, not in the fetched sources)
 //!   defaults to `file`, Spark's `SparkWriteConf.deleteGranularity`
 //!   (`spark:SparkWriteConf.java:727-733`), not `TableProperties`'
 //!   `partition` (`ij:TableProperties.java:429-430`). Spark parses it for
@@ -56,24 +59,31 @@
 //!   deletes are merged first and returned as rewritten (only when they hold
 //!   a position, as Java's `isNotEmpty` check; anything not file-scoped is
 //!   an internal error, Java's "Previous deletes must be file-scoped").
-//!   Metrics as `PositionDeleteWriter.metrics` with the two columns in
-//!   `full` mode (Java's `MetricsConfig.forPositionDelete`, not in the
-//!   fetched sources): the record count; when the file names exactly one
-//!   data path, untruncated lower and upper bounds of both columns (so the
-//!   `file_path` bounds are equal and the file is file-scoped) and no
-//!   counts; with more paths no counts and no bounds. **`referenced_data_file`
+//!   Metrics as `PositionDeleteWriter.metrics` (`:124-131`) with the two
+//!   columns in `full` mode (Java's `MetricsConfig.forPositionDelete`, not
+//!   in the fetched sources): the record count; when the file names exactly
+//!   one data path, untruncated lower and upper bounds of both columns (so
+//!   the `file_path` bounds are equal and the file is file-scoped) and no
+//!   counts; with more paths no counts and no bounds. What
+//!   `MetricsUtil.copyWithoutFieldCounts(AndBounds)` drops (column sizes,
+//!   NaN counts too?) is not in the fetched sources; Krishiv writes neither. **`referenced_data_file`
 //!   is not set**: Java's writer never sets it, file scope comes from the
 //!   equal bounds (design note §8 item 4 says it is set; Java wins).
-//!   Rolling as Java's `RollingFileWriter` (a new file once the current one
-//!   holds a multiple of 1,000 rows and has reached
-//!   `write.delete.target-file-size-bytes`, 64 MiB by default). Parquet
+//!   Rolling as `write.rs` rolls data files, after Java's `RollingFileWriter`
+//!   (not in the fetched sources): a new file once the current one holds a
+//!   multiple of 1,000 rows and its encoder has written
+//!   `write.delete.target-file-size-bytes` (64 MiB by default). Parquet
 //!   codec: `write.delete.parquet.compression-codec`, else
 //!   `write.parquet.compression-codec`, else `gzip`
 //!   (`spark:SparkWriteConf.java:570-588`); row-group and page sizes from
 //!   `write.parquet.row-group-size-bytes` / `page-size-bytes`: the
 //!   `write.delete.parquet.*` variants exist (`ij:TableProperties.java:129-134`)
 //!   but their fallback lives in `Parquet.WriteBuilder`, which was not
-//!   fetched, so they are not read (an open item). No split offsets.
+//!   fetched, so they are not read (an open item). Codec names as `write.rs`
+//!   checks them (Parquet's `CompressionCodecName.valueOf` and Iceberg's
+//!   "Unsupported compression codec" text, not in the fetched sources);
+//!   row-group and page sizes below 1 are refused as `write.rs` refuses
+//!   them (stricter than Java, unproven). No split offsets.
 //! - **Names and locations** (`ij:io/OutputFileFactory.java:93-121`):
 //!   `%05d-%d-%s-%05d-deletes.parquet` / `.puffin` (partition id, attempt id,
 //!   write id, a counter of this writer from 1; the suffix `deletes` as
@@ -87,10 +97,22 @@
 //! - **Failure:** any error deletes what the writer wrote (finished files
 //!   deleted, open uploads aborted); a write future dropped midway deletes
 //!   its finished files in the background, as `write.rs`'s writer does.
-//!
-//! The collected positions themselves are not charged to memory (the
-//! caller holds them); encoder and upload buffers and a blob being written
-//! are charged to the writer's `Reservation`.
+//!   A drop while an upload's `finish` (or the Puffin's put) is in flight
+//!   can race that put: the background delete may run first and leave an
+//!   orphan, which no manifest names (a leak, not a wrong table; the same
+//!   shape as `write.rs`).
+//! - **Memory:** the collected positions are not charged (the caller holds
+//!   them); encoder and upload buffers are charged to the writer's
+//!   `Reservation`, and so is the Puffin: iceberg-rust's `FileWrite` over
+//!   Krishiv's storage buffers the whole file until `close`, so every blob
+//!   stays charged (twice while it is copied in) plus a footer estimate
+//!   until `close` returns (`storage.rs`' doc line saying data files never
+//!   go through iceberg-rust predates DVs).
+//! - **Open items for the DML unit:** Spark's write options and session
+//!   confs (`delete-granularity`, `delete-format`, `compression-codec`,
+//!   `target-delete-file-size-bytes`, `spark.sql.iceberg.compression-codec`;
+//!   `spark:SparkWriteConf.java:576-587,727-733`) are not read: only table
+//!   properties are. Unit 2 wires or refuses them.
 
 #![cfg_attr(
     not(test),
@@ -160,7 +182,11 @@ pub(crate) const REFERENCED_DATA_FILE_KEY: &str = "referenced-data-file";
 pub(crate) const CARDINALITY_KEY: &str = "cardinality";
 /// The Puffin header magic's length: the first blob starts after it.
 const PUFFIN_MAGIC_LEN: u64 = 4;
-/// Rows between two checks of the target file size (`RollingFileWriter.ROWS_DIVISOR`).
+/// The footer bytes charged per DV blob besides its path (the JSON of its
+/// metadata, an estimate).
+const FOOTER_BYTES_PER_BLOB: usize = 256;
+/// Rows between two checks of the target file size (`RollingFileWriter.ROWS_DIVISOR`,
+/// not in the fetched sources; as `write.rs`).
 const ROWS_DIVISOR: u64 = 1000;
 
 /// How the v2 position deletes of a task are split into files.
@@ -176,7 +202,8 @@ impl Granularity {
     /// `write.delete.granularity` of a table with `props` (module docs).
     ///
     /// # Errors
-    /// `KRISHIV_UNSUPPORTED_FEATURE` with Java's text for another value.
+    /// `KRISHIV_UNSUPPORTED_FEATURE` with `DeleteGranularity.fromString`'s text
+    /// (not in the fetched sources) for another value.
     pub(crate) fn from_table(props: &HashMap<String, String>) -> Result<Self, KrishivError> {
         match props.get(DELETE_GRANULARITY) {
             None => Ok(Self::File),
@@ -665,9 +692,12 @@ impl DeleteFileWriter {
             }
             let data = encode_dv(&positions)?;
             let len = data.len() as u64;
-            self.mem
-                .grow(usize::try_from(len).unwrap_or(usize::MAX))
-                .await?;
+            let bytes = usize::try_from(len).unwrap_or(usize::MAX);
+            // The blob twice while `add` copies it into the Puffin's buffer,
+            // then the buffered copy until `close` uploads it (review S1:
+            // iceberg-rust's `FileWrite` over Krishiv's storage buffers the
+            // whole file).
+            self.mem.grow(bytes.saturating_mul(2)).await?;
             let cardinality = positions.len();
             let blob = Blob::builder()
                 .r#type(DELETION_VECTOR_V1.to_owned())
@@ -684,13 +714,22 @@ impl DeleteFileWriter {
                 .add(blob, CompressionCodec::None)
                 .await
                 .map_err(from_iceberg)?;
-            let held = self.mem.size();
-            self.mem.shrink(held);
+            self.mem.shrink(bytes);
             blobs.push((path, d, offset, len, cardinality));
             offset = offset.saturating_add(len);
             out.referenced_data_files.insert(path.clone());
         }
+        // The footer (JSON, a few hundred bytes per blob plus its path) is
+        // built and buffered by `close`.
+        let footer = deletes
+            .by_path
+            .keys()
+            .map(|p| p.len().saturating_add(FOOTER_BYTES_PER_BLOB))
+            .fold(0_usize, usize::saturating_add);
+        self.mem.grow(footer).await?;
         let size = writer.close().await.map_err(from_iceberg)?.size;
+        let held = self.mem.size();
+        self.mem.shrink(held);
         for (path, d, offset, len, cardinality) in blobs {
             let mut b = DataFileBuilder::default();
             b.content(DataContentType::PositionDeletes)
@@ -728,6 +767,11 @@ impl DeleteFileWriter {
                 groups.len() - 1
             });
             groups[at].push((path, d));
+        }
+        for group in &groups {
+            if let Some((_, d)) = group.first() {
+                check_partition(self.spec(d.spec_id)?, &self.schema, &d.partition)?;
+            }
         }
         for group in groups {
             let units: Vec<Vec<(&String, &PathDeletes)>> = match granularity {
@@ -803,7 +847,10 @@ impl DeleteFileWriter {
                 let batch = RecordBatch::try_new(
                     Arc::clone(&self.arrow),
                     vec![
-                        Arc::new(StringArray::from(vec![path.as_str(); n])) as ArrayRef,
+                        Arc::new(StringArray::from_iter_values(std::iter::repeat_n(
+                            path.as_str(),
+                            n,
+                        ))) as ArrayRef,
                         Arc::new(Int64Array::from(chunk)),
                     ],
                 )
@@ -1004,7 +1051,8 @@ fn parquet_options(props: &HashMap<String, String>) -> Result<FormatOptions, Kri
         .get(DELETE_PARQUET_CODEC)
         .or_else(|| props.get(PARQUET_CODEC))
         .map_or(PARQUET_CODEC_DEFAULT, String::as_str);
-    // Java's `CompressionCodecName.valueOf(codec.toUpperCase(Locale.ENGLISH))`.
+    // As `write.rs`: Java's `CompressionCodecName.valueOf(codec.toUpperCase(Locale.ENGLISH))`
+    // (not in the fetched sources).
     let name = codec.to_ascii_lowercase();
     match name.as_str() {
         "uncompressed" | "snappy" | "gzip" | "brotli" | "lz4" | "lz4_raw" | "zstd" => {}
