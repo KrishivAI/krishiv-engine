@@ -286,3 +286,28 @@ fn sql_19_hidden_and_underscore_directories_are_not_partition_columns() {
     run(&s, "MSCK REPAIR TABLE pt");
     assert_eq!(rows(&s, "SHOW PARTITIONS pt").len(), 1);
 }
+
+#[test]
+fn rs_8_a_view_with_declared_columns_over_a_partitioned_directory_reads_every_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE src (id INT, p INT) USING parquet PARTITIONED BY (p)",
+    );
+    run(&s, "INSERT INTO src VALUES (1, 10), (2, 20)");
+    let l = dir.path().join("src");
+    run(
+        &s,
+        &format!(
+            "CREATE TEMPORARY VIEW dv (id BIGINT, p INT) USING parquet OPTIONS (path '{}')",
+            l.to_str().unwrap()
+        ),
+    );
+    assert_eq!(
+        rows(&s, "SELECT id, p FROM dv ORDER BY id"),
+        [vec![some("1"), some("10")], vec![some("2"), some("20")]]
+    );
+    // the declared type is the view's type, not the files' (`INT` in the parquet files)
+    assert_eq!(rows(&s, "DESCRIBE dv")[0][1], some("bigint"));
+}

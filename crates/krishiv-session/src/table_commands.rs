@@ -859,15 +859,12 @@ impl Session {
             crate::catalog::TempTable::Files {
                 source,
                 columns,
-                // A view whose columns were inferred reads its files as a read by path does, partition directories
-                // included; a declared column list keeps the table-like read.
-                known: !infer,
+                // A view reads its files as a read by path does, partition directories included, so no registered
+                // partition set stands in for the listing (an empty one read nothing from a partitioned directory:
+                // RS-8). A declared column list is the schema as given and is not inferred again.
+                known: false,
                 permanent: false,
-                partitions: if infer {
-                    None
-                } else {
-                    Some(Default::default())
-                },
+                partitions: None,
             },
         );
         // A replaced view must not keep serving the rows of the old one.
