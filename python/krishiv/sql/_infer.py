@@ -4,17 +4,18 @@
 The rules of ``pyspark.sql.types._infer_type`` and ``_merge_type`` (PySpark 4.2): each
 value has the Spark type its Python type maps to, a row's types are merged with the
 types of the rows before it, and a column that is still ``void`` at the end cannot be
-typed. Merging is strict: ``bigint`` with ``double`` is an error, not a widening.
+typed. Merging is strict: ``bigint`` with ``double`` is an error, not a widening; but an atomic type
+merged with ``string`` is ``string`` (its values are converted to text).
 
 Naive datetimes infer ``timestamp``; with ``spark.sql.timestampType = TIMESTAMP_NTZ``
 they infer ``timestamp_ntz`` instead (time-zone-aware datetimes always infer
-``timestamp``). Two Python types have no Spark type here yet: ``datetime.timedelta``
-and ``datetime.time`` are ``UNSUPPORTED_DATA_TYPE`` until the engine can materialize
-their types.
+``timestamp``). ``datetime.timedelta`` is ``interval day to second``; ``datetime.time``
+is ``UNSUPPORTED_TIME_TYPE`` (the engine has no ``time`` type).
 """
 
 from __future__ import annotations
 
+import array
 import datetime
 from collections.abc import Callable, Iterable
 from decimal import Decimal
@@ -24,15 +25,21 @@ from typing import Any, cast
 from krishiv.errors import PySparkTypeError, PySparkValueError
 from krishiv.sql.types import (
     ArrayType,
+    AtomicType,
     BinaryType,
     BooleanType,
+    ByteType,
     DataType,
     DateType,
+    DayTimeIntervalType,
     DecimalType,
     DoubleType,
+    FloatType,
+    IntegerType,
     LongType,
     MapType,
     NullType,
+    ShortType,
     StringType,
     StructField,
     StructType,
@@ -54,6 +61,18 @@ _ATOMIC: dict[type, Callable[[], DataType]] = {
     Decimal: lambda: DecimalType(38, 18),
     datetime.date: DateType,
     datetime.datetime: TimestampType,
+    datetime.timedelta: DayTimeIntervalType,
+}
+
+# ``array.array`` typecodes, as ``pyspark.sql.types._array_type_mappings``.
+_ARRAY_CODES: dict[str, Callable[[], DataType]] = {
+    "b": ByteType,
+    "h": ShortType,
+    "i": IntegerType,
+    "l": LongType,
+    "q": LongType,
+    "f": FloatType,
+    "d": DoubleType,
 }
 
 
@@ -62,6 +81,13 @@ def infer_type(value: Any, timestamp_ntz: bool = False) -> DataType:
     when the session prefers ``TIMESTAMP_NTZ``, else ``timestamp``."""
     if type(value) is datetime.datetime and value.tzinfo is None and timestamp_ntz:
         return TimestampNTZType()
+    if type(value) is datetime.time:
+        raise PySparkValueError(errorClass="UNSUPPORTED_TIME_TYPE", sqlState="0A000")
+    if isinstance(value, array.array):
+        code = _ARRAY_CODES.get(value.typecode)
+        if code is None:
+            raise PySparkTypeError(errorClass="UNSUPPORTED_DATA_TYPE", messageParameters={"data_type": "array.array"})
+        return ArrayType(code(), False)
     atomic = _ATOMIC.get(type(value))
     if atomic is not None:
         return atomic()
@@ -89,9 +115,15 @@ def infer_row(row: Any, names: list[str] | None, timestamp_ntz: bool = False) ->
         names = getattr(row, "__fields__", None) or getattr(row, "_fields", None)
     if names is None:
         names = [f"_{i + 1}" for i in range(len(row))]
-    return StructType(
-        [StructField(name, infer_type(v, timestamp_ntz), True) for name, v in zip(names, row, strict=True)]
-    )
+    fields = []
+    for name, v in zip(names, row, strict=True):
+        try:
+            fields.append(StructField(name, infer_type(v, timestamp_ntz), True))
+        except PySparkTypeError as e:
+            raise PySparkTypeError(
+                errorClass="CANNOT_INFER_TYPE_FOR_FIELD", messageParameters={"field_name": name}, sqlState="42K09"
+            ) from e
+    return StructType(fields)
 
 
 def merge_type(a: DataType, b: DataType) -> DataType:
@@ -101,6 +133,14 @@ def merge_type(a: DataType, b: DataType) -> DataType:
     if isinstance(a, NullType):
         return b
     if isinstance(b, NullType):
+        return a
+    if (
+        isinstance(a, AtomicType)
+        and isinstance(b, AtomicType)
+        and (isinstance(a, StringType) or isinstance(b, StringType))
+    ):
+        return StringType()
+    if isinstance(a, TimestampType | TimestampNTZType) and isinstance(b, TimestampType | TimestampNTZType):
         return a
     if type(a) is not type(b):
         raise PySparkTypeError(

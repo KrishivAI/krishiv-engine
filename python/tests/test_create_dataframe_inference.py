@@ -83,8 +83,6 @@ def test_equal_types_merge_whatever_the_values(spark: SparkSession) -> None:
         (1, 1.5, "LongType", "DoubleType"),
         (1.5, 1, "DoubleType", "LongType"),
         (True, 1, "BooleanType", "LongType"),
-        (1, "a", "LongType", "StringType"),
-        ("a", b"a", "StringType", "BinaryType"),
         (datetime.date(2024, 1, 1), datetime.datetime(2024, 1, 1), "DateType", "TimestampType"),
         (Decimal("1"), 1, "DecimalType", "LongType"),
     ],
@@ -97,12 +95,21 @@ def test_other_differences_cannot_merge(spark: SparkSession, first: Any, second:
     assert str(bad.value) == f"[CANNOT_MERGE_TYPE] Can not merge type `{type1}` and `{type2}`."
 
 
+def test_an_atomic_type_merged_with_string_is_string(spark: SparkSession) -> None:
+    df = spark.createDataFrame([(1,), ("a",)])
+    assert df.dtypes == [("_1", "string")]
+    assert sorted(r._1 for r in df.collect()) == ["1", "a"]
+    assert spark.createDataFrame([("a",), (b"b",)]).dtypes == [("_1", "string")]
+    assert spark.createDataFrame([([1, "a"],)]).dtypes == [("_1", "array<string>")]
+    assert spark.createDataFrame([({"a": 1, "b": "x"},)]).collect() == [Row(_1={"a": "1", "b": "x"})]
+
+
 def test_the_first_row_that_does_not_merge_is_reported(spark: SparkSession) -> None:
-    # Row 2 breaks column b, row 3 would break column a: rows merge in order, as in PySpark.
+    # Row 2 widens column b to string, row 3 breaks column a: rows merge in order, as in PySpark.
     rows = [(1, "x"), (2, 1), (1.5, "y")]
     with pytest.raises(errors.PySparkTypeError) as bad:
         spark.createDataFrame(rows, ["a", "b"])
-    assert bad.value.getMessageParameters() == {"data_type1": "StringType", "data_type2": "LongType"}
+    assert bad.value.getMessageParameters() == {"data_type1": "LongType", "data_type2": "DoubleType"}
 
 
 def test_a_column_that_stays_void_cannot_be_determined(spark: SparkSession) -> None:
@@ -113,29 +120,56 @@ def test_a_column_that_stays_void_cannot_be_determined(spark: SparkSession) -> N
         assert str(bad.value) == "[CANNOT_DETERMINE_TYPE] Some of types cannot be determined after inferring."
 
 
-def test_nested_values_merge_before_the_engine_rejects_them(spark: SparkSession) -> None:
+def test_nested_values_merge_across_rows(spark: SparkSession) -> None:
     with pytest.raises(errors.PySparkTypeError) as bad:
         spark.createDataFrame([([1],), ([1.5],)])
     assert bad.value.getCondition() == "CANNOT_MERGE_TYPE"
-    assert bad.value.getMessageParameters() == {"data_type1": "LongType", "data_type2": "DoubleType"}
     with pytest.raises(errors.PySparkTypeError) as bad:
-        spark.createDataFrame([({"k": 1},), ({"k": "v"},)])
+        spark.createDataFrame([({"k": 1},), ({"k": 1.5},)])
     assert bad.value.getCondition() == "CANNOT_MERGE_TYPE"
     with pytest.raises(errors.PySparkTypeError) as bad:
-        spark.createDataFrame([(Row(a=1),), (Row(a="x"),)])
+        spark.createDataFrame([(Row(a=1),), (Row(a=1.5),)])
     assert bad.value.getCondition() == "CANNOT_MERGE_TYPE"
-    # Merged, the type is the engine's to hold: it has no array type yet.
-    with pytest.raises(errors.UnsupportedOperationException) as unsupported:
-        spark.createDataFrame([([1, 2],), ([],), ([3],)])
-    assert "array<bigint>" in str(unsupported.value)
+    df = spark.createDataFrame([([1, 2],), ([],), ([3],)])
+    assert df.dtypes == [("_1", "array<bigint>")]
+    assert sorted(df.collect()) == [Row(_1=[]), Row(_1=[1, 2]), Row(_1=[3])]
 
 
-def test_values_without_a_spark_type_are_unsupported(spark: SparkSession) -> None:
-    for value in (datetime.time(1, 2), {1, 2}, object()):
+def test_nested_python_values(spark: SparkSession) -> None:
+    df = spark.createDataFrame([(1, [1, None], {"a": 1.5}, Row(x=1, y="s"), ((1, "a"),), [[1], [2, 3]])])
+    assert df.dtypes == [
+        ("_1", "bigint"),
+        ("_2", "array<bigint>"),
+        ("_3", "map<string,double>"),
+        ("_4", "struct<x:bigint,y:string>"),
+        ("_5", "struct<_1:struct<_1:bigint,_2:string>>"),
+        ("_6", "array<array<bigint>>"),
+    ]
+    row = df.first()
+    assert row is not None
+    assert (row._2, row._3, row._4, row._6) == ([1, None], {"a": 1.5}, Row(x=1, y="s"), [[1], [2, 3]])
+
+
+def test_a_value_without_a_spark_type_cannot_infer_the_field(spark: SparkSession) -> None:
+    for value in ({1, 2}, object()):
         with pytest.raises(errors.PySparkTypeError) as bad:
             spark.createDataFrame([(value,)])
-        assert bad.value.getCondition() == "UNSUPPORTED_DATA_TYPE"
-        assert bad.value.getMessageParameters() == {"data_type": type(value).__name__}
+        assert bad.value.getCondition() == "CANNOT_INFER_TYPE_FOR_FIELD"
+        assert bad.value.getMessageParameters() == {"field_name": "_1"}
+    with pytest.raises(errors.PySparkTypeError) as bad:
+        spark.createDataFrame([([1, 2.5],)])
+    assert bad.value.getCondition() == "CANNOT_INFER_TYPE_FOR_FIELD"
+    with pytest.raises(errors.PySparkTypeError) as bad:
+        spark.createDataFrame([1, 2, 3])
+    assert bad.value.getCondition() == "CANNOT_INFER_SCHEMA_FOR_TYPE"
+    with pytest.raises(errors.PySparkValueError) as time:
+        spark.createDataFrame([(datetime.time(1, 2),)])
+    assert time.value.getCondition() == "UNSUPPORTED_TIME_TYPE"
+
+
+def test_dict_rows_name_their_fields_in_key_order(spark: SparkSession) -> None:
+    assert spark.createDataFrame([{"z": 1, "a": 2}]).columns == ["a", "z"]
+    assert spark.createDataFrame([Row(b=1, a=2)]).columns == ["b", "a"]
 
 
 def test_infer_type_of_each_kind() -> None:
@@ -162,12 +196,12 @@ def test_infer_type_of_each_kind() -> None:
     assert infer_type(Row(x=1.5)) == T.StructType([T.StructField("x", T.DoubleType(), True)])
     with pytest.raises(errors.PySparkTypeError, match="UNSUPPORTED_DATA_TYPE"):
         infer_type(object())
+    assert infer_type([1, "a"]) == T.ArrayType(T.StringType(), True)
+    assert infer_type({1: 1, "b": 2}) == T.MapType(T.StringType(), T.LongType(), True)
     with pytest.raises(errors.PySparkTypeError, match="CANNOT_MERGE_TYPE"):
-        infer_type([1, "a"])
+        infer_type([1, 1.5])
     with pytest.raises(errors.PySparkTypeError, match="CANNOT_MERGE_TYPE"):
         infer_type({"a": 1, "b": 1.5})
-    with pytest.raises(errors.PySparkTypeError, match="CANNOT_MERGE_TYPE"):
-        infer_type({1: 1, "b": 2})
 
 
 def test_merge_type_rules() -> None:
@@ -189,8 +223,9 @@ def test_merge_type_rules() -> None:
     with pytest.raises(errors.PySparkTypeError) as bad:
         merge_type(T.ArrayType(long, True), T.MapType(long, long, True))
     assert bad.value.getMessageParameters() == {"data_type1": "ArrayType", "data_type2": "MapType"}
-    with pytest.raises(errors.PySparkTypeError, match="CANNOT_MERGE_TYPE"):
-        merge_type(T.MapType(string, long, True), T.MapType(long, long, True))
+    assert merge_type(T.MapType(string, long, True), T.MapType(long, long, True)) == T.MapType(string, long, True)
+    assert merge_type(long, string) == string
+    assert merge_type(T.BinaryType(), string) == string
     # Structs merge by field name: a field one side lacks is kept, in order of appearance.
     left = T.StructType([T.StructField("a", void), T.StructField("b", long)])
     right = T.StructType([T.StructField("b", void), T.StructField("c", string), T.StructField("a", double)])

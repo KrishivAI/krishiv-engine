@@ -658,9 +658,10 @@ def test_create_dataframe_rejects_bad_shapes(spark: SparkSession) -> None:
         spark.createDataFrame([(1,)], schema=[1])
     with pytest.raises(errors.PySparkTypeError):
         spark.createDataFrame([1], schema=["a"])
-    with pytest.raises(errors.PySparkTypeError, match="NOT_EXPECTED_TYPE"):
+    # A dict is iterated (its keys are the rows), as in PySpark: a string row has no schema.
+    with pytest.raises(errors.PySparkTypeError, match="CANNOT_INFER_SCHEMA_FOR_TYPE"):
         spark.createDataFrame({"a": 1})
-    with pytest.raises(errors.UnsupportedOperationException, match="KRISHIV_UNSUPPORTED_FEATURE"):
+    with pytest.raises(errors.PySparkTypeError, match="FIELD_DATA_TYPE_UNACCEPTABLE_WITH_NAME"):
         spark.createDataFrame(
             [(1,)],
             T.StructType([T.StructField("a", T.ArrayType(T.IntegerType()), True)]),
