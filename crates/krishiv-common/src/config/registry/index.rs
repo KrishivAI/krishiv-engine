@@ -83,6 +83,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.sql.binaryOutputStyle", &BINARY_OUTPUT_STYLE),
     ("krishiv.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
     ("spark.sql.legacy.javaCharsets", &LEGACY_JAVA_CHARSETS),
+    ("krishiv.catalog.requestTimeout", &CATALOG_REQUEST_TIMEOUT),
     ("krishiv.connect.keepAlive.time", &CONNECT_KEEPALIVE_TIME),
     ("krishiv.connect.maxConnections", &CONNECT_MAX_CONNECTIONS),
     ("krishiv.exec.lateFetch.maxRows", &LATE_FETCH_MAX_ROWS),
