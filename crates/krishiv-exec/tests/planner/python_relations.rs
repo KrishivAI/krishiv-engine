@@ -54,6 +54,9 @@ type Log = Arc<std::sync::Mutex<Vec<String>>>;
 
 impl UdfRuntime for Runtime {
     fn prepare(&self, spec: &UdfCallSpec) -> Result<Arc<dyn PreparedUdf>, KrishivError> {
+        if spec.name == "plus1" && spec.arg_types == [DataType::Long] {
+            return Ok(Arc::new(PlusOne));
+        }
         Err(krishiv_common::error::InternalError {
             message: format!("no scalar {}", spec.name),
         }
@@ -91,6 +94,18 @@ impl UdfRuntime for Runtime {
             names: spec.input_names.clone(),
             key_count: spec.key_count,
         }))
+    }
+}
+
+/// The scalar fake `plus1(BIGINT) -> BIGINT`.
+struct PlusOne;
+
+impl PreparedUdf for PlusOne {
+    fn call(&self, args: RecordBatch) -> BoxFuture<'static, Result<ArrayRef, KrishivError>> {
+        let column = args.column(0);
+        let values = column.as_any().downcast_ref::<Int64Array>().unwrap();
+        let out: Int64Array = values.iter().map(|v| v.map(|v| v + 1)).collect();
+        Box::pin(async move { Ok(Arc::new(out) as ArrayRef) })
     }
 }
 
@@ -558,6 +573,99 @@ fn a_python_aggregate_yields_one_row_per_group() {
     assert_eq!(rows.len(), 9, "{rows:?}");
     assert!(rows.contains(&"NULL|2".to_owned()), "{rows:?}");
     assert!(rows.contains(&"5|1".to_owned()), "{rows:?}");
+}
+
+/// A scalar Python UDF call `plus1(arg)`.
+fn plus1(arg: Arc<Expr>) -> Arc<Expr> {
+    Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+        ResolvedFunction {
+            id: udf("plus1", PythonEvalType::ScalarArrow).function_id(),
+            kind: FunctionKind::Scalar,
+            args: vec![arg],
+            distinct: false,
+            filter: None,
+            within_group: Vec::new(),
+            data_type: DataType::Long,
+            nullable: true,
+            deterministic: true,
+        },
+    ))))
+}
+
+/// `udaf(arg)` with `arg` any expression.
+fn udaf_of(arg: Arc<Expr>) -> Arc<Expr> {
+    let ExprNode::Resolved(ResolvedExpr::Function(f)) =
+        &udaf_named("count", &bound(0, "x", DataType::Long)).node
+    else {
+        unreachable!()
+    };
+    Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+        ResolvedFunction {
+            args: vec![arg],
+            ..f.clone()
+        },
+    ))))
+}
+
+/// `udaf(plus1(b))`: the scalar call in the aggregate's argument runs
+/// below it (Spark's `ExtractPythonUDFs` at v4.2.0 evaluates it in an
+/// `ArrowEvalPython` under the aggregate).
+#[test]
+fn a_scalar_python_call_in_a_python_aggregates_argument_runs_below_it() {
+    let env = env();
+    let (input, cols) = input(&env, "SELECT a, b FROM t");
+    let node = LogicalPlan::new(PlanNode::Aggregate {
+        input,
+        grouping: Grouping::GroupBy(vec![col(&cols[0])]),
+        aggregates: vec![
+            col(&cols[0]),
+            alias(udaf_of(plus1(col(&cols[1]))), 950, "n"),
+        ],
+    });
+    let out = run_with(&env, node, Some(Arc::new(Runtime::default()))).unwrap();
+    let rows = lines(&out);
+    assert_eq!(rows.len(), 9, "{rows:?}");
+    assert!(rows.contains(&"NULL|2".to_owned()), "{rows:?}");
+}
+
+/// `GROUP BY plus1(b)`: the scalar call in the key runs below the aggregate
+/// (Spark's `ExtractGroupingPythonUDFFromAggregate` at v4.2.0), and the
+/// output reads the key's column.
+#[test]
+fn a_scalar_python_call_in_a_python_aggregates_key_runs_below_it() {
+    let env = env();
+    let (input, cols) = input(&env, "SELECT a, b FROM t");
+    let key = plus1(col(&cols[1]));
+    let node = LogicalPlan::new(PlanNode::Aggregate {
+        input,
+        grouping: Grouping::GroupBy(vec![Arc::clone(&key)]),
+        aggregates: vec![alias(key, 949, "k"), alias(udaf(&cols[0]), 950, "n")],
+    });
+    let out = run_with(&env, node, Some(Arc::new(Runtime::default()))).unwrap();
+    let rows = lines(&out);
+    // `b` is 0, 10, ..., 90: ten keys of one row each.
+    assert_eq!(rows.len(), 10, "{rows:?}");
+    assert!(rows.contains(&"1|1".to_owned()), "{rows:?}");
+    assert!(rows.contains(&"91|1".to_owned()), "{rows:?}");
+}
+
+/// `plus1(udaf(b))`: the scalar call over the aggregate's result runs above
+/// it (Spark's `ExtractPythonUDFFromAggregate` at v4.2.0).
+#[test]
+fn a_scalar_python_call_over_a_python_aggregate_runs_above_it() {
+    let env = env();
+    let (input, cols) = input(&env, "SELECT a, b FROM t");
+    let node = LogicalPlan::new(PlanNode::Aggregate {
+        input,
+        grouping: Grouping::GroupBy(vec![col(&cols[0])]),
+        aggregates: vec![col(&cols[0]), alias(plus1(udaf(&cols[1])), 950, "n")],
+    });
+    let out = run_with(&env, node, Some(Arc::new(Runtime::default()))).unwrap();
+    let rows = lines(&out);
+    // Eight keys of one row (1 + 1), NULL of two (2 + 1).
+    assert_eq!(rows.len(), 9, "{rows:?}");
+    assert!(rows.contains(&"NULL|3".to_owned()), "{rows:?}");
+    assert!(rows.contains(&"5|2".to_owned()), "{rows:?}");
 }
 
 /// Two Python aggregates, one slow: each key's values pair up.

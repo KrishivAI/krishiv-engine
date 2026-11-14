@@ -338,24 +338,51 @@ impl Planner<'_> {
         for a in aggregates {
             udaf_calls(a, &mut calls, &mut seen);
         }
-        let planned = self.plan(input)?;
-        let (planned, key_columns) = self.with_columns(planned, keys)?;
-        let prepared = self.prepare(&[])?;
         for call in &calls {
-            let ExprNode::Resolved(ResolvedExpr::Function(f)) = &call.node else {
-                return Err(internal("a Python UDAF call is not a function"));
-            };
+            let f = function_of(call)?;
             refuse_call_syntax(f)?;
             if f.args.iter().any(|a| super::build::has_subquery(a)) {
                 return Err(unsupported("a subquery in the arguments of a Python UDF"));
             }
-            let args: Vec<&Expr> = f.args.iter().map(AsRef::as_ref).collect();
+        }
+        // Scalar Python calls in the keys and the calls' arguments run below
+        // (Spark's `ExtractGroupingPythonUDFFromAggregate` and
+        // `ExtractPythonUDFs` at v4.2.0); the node reads their columns.
+        let mut wanted: Vec<Arc<Expr>> = keys.to_vec();
+        for call in &calls {
+            wanted.extend(function_of(call)?.args.iter().cloned());
+        }
+        let planned = self.plan(input)?;
+        let (planned, wanted) = self.extract_python(planned, &wanted)?;
+        let (key_exprs, mut arg_exprs) = wanted
+            .split_at_checked(keys.len())
+            .ok_or_else(|| internal("Python aggregate key arity"))?;
+        let (planned, key_columns) = self.with_columns(planned, key_exprs)?;
+        let prepared = self.prepare(&[])?;
+        // Each call as the node runs it: over the arguments' columns.
+        let mut run = Vec::with_capacity(calls.len());
+        for call in &calls {
+            let f = function_of(call)?;
+            let (args, rest) = arg_exprs
+                .split_at_checked(f.args.len())
+                .ok_or_else(|| internal("Python aggregate argument arity"))?;
+            arg_exprs = rest;
+            let refs: Vec<&Expr> = args.iter().map(AsRef::as_ref).collect();
             compile_all(
-                &args,
+                &refs,
                 &planned.layout,
                 &planned.schema,
                 &self.values(&prepared),
             )?;
+            run.push(Arc::new(
+                Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                    krishiv_plan::ResolvedFunction {
+                        args: args.to_vec(),
+                        ..f.clone()
+                    },
+                )))
+                .with_origin(call.origin),
+            ));
         }
         let sorted = self.clustered_and_sorted(planned, &key_columns, &[])?;
         let mut layout: Vec<AttrId> = key_columns
@@ -368,10 +395,8 @@ impl Planner<'_> {
             .collect();
         let mut plans = Vec::with_capacity(calls.len());
         let mut columns: Vec<(Arc<Expr>, BoundColumn)> = Vec::with_capacity(calls.len());
-        for (i, call) in calls.iter().enumerate() {
-            let ExprNode::Resolved(ResolvedExpr::Function(f)) = &call.node else {
-                return Err(internal("a Python UDAF call is not a function"));
-            };
+        for (i, (call, ran)) in calls.iter().zip(&run).enumerate() {
+            let f = function_of(call)?;
             let column = BoundColumn {
                 id: self.fresh_id(),
                 name: format!("pythonUDAF{i}"),
@@ -381,12 +406,12 @@ impl Planner<'_> {
             fields.push(Field::new(&column.name, f.data_type.to_arrow(), true));
             layout.push(column.id);
             plans.push(PythonCallPlan {
-                call: Arc::clone(call),
+                call: Arc::clone(ran),
                 output: column.id,
             });
             columns.push((Arc::clone(call), column));
         }
-        let detail = calls
+        let detail = run
             .iter()
             .zip(&columns)
             .map(|(c, (_, col))| format!("{c} AS {}", col.name))
@@ -428,7 +453,9 @@ impl Planner<'_> {
             .iter()
             .map(|e| replaced(e, &columns, &key_bound))
             .collect::<Result<Vec<_>>>()?;
-        let mut out = self.project(
+        // Scalar Python calls over the results run above (Spark's
+        // `ExtractPythonUDFFromAggregate` at v4.2.0).
+        let (node, exprs) = self.extract_python(
             Planned {
                 placement: Placement::Unknown,
                 ordering: Vec::new(),
@@ -437,6 +464,7 @@ impl Planner<'_> {
             },
             &exprs,
         )?;
+        let mut out = self.project(node, &exprs)?;
         out.sites.clear();
         Ok(out)
     }
@@ -525,6 +553,14 @@ fn refuse_call_syntax(f: &krishiv_plan::ResolvedFunction) -> Result<()> {
         "{clause} on a call of the Python aggregate UDF {}",
         f.id.name()
     )))
+}
+
+/// The function `call` is.
+fn function_of(call: &Expr) -> Result<&krishiv_plan::ResolvedFunction> {
+    match &call.node {
+        ExprNode::Resolved(ResolvedExpr::Function(f)) => Ok(f),
+        _ => Err(internal("a Python UDAF call is not a function")),
+    }
 }
 
 /// The attribute `e` reads if it is a plain column.
