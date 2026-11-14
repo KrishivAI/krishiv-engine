@@ -86,6 +86,12 @@ wait_for "http://127.0.0.1:${az_port}/devstoreaccount1?comp=list"
 docker run --rm --network host "$AZ_CLI_IMAGE" az storage container create --name krishiv-test \
   --connection-string "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=${AZURITE_KEY};BlobEndpoint=http://127.0.0.1:${az_port}/devstoreaccount1;" >/dev/null
 
+# A read+list container SAS for the CSV read signed with Hadoop ABFS's SAS keys (`azure_csv_reads_with_a_sas`).
+KRISHIV_TEST_AZURE_SAS="$(docker run --rm --network host "$AZ_CLI_IMAGE" az storage container generate-sas \
+  --name krishiv-test --permissions rl --expiry 2030-01-01T00:00:00Z -o tsv \
+  --connection-string "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=${AZURITE_KEY};BlobEndpoint=http://127.0.0.1:${az_port}/devstoreaccount1;")"
+export KRISHIV_TEST_AZURE_SAS
+
 export KRISHIV_TEST_S3_ENDPOINT="http://127.0.0.1:${s3_port}"
 export KRISHIV_TEST_AZURE_ENDPOINT="http://127.0.0.1:${az_port}/devstoreaccount1"
 

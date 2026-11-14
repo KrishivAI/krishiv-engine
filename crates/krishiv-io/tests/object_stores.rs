@@ -17,7 +17,9 @@
 //!   does).
 //! - Azurite: `KRISHIV_TEST_AZURE_ENDPOINT=http://127.0.0.1:10000/devstoreaccount1`,
 //!   container `krishiv-test`
-//!   (`az storage container create --name krishiv-test --connection-string ...`).
+//!   (`az storage container create --name krishiv-test --connection-string ...`), and for the
+//!   SAS read `KRISHIV_TEST_AZURE_SAS`, a container SAS with read and list permissions
+//!   (`az storage container generate-sas`; `tests/scripts/object_store_emulators.sh` makes both).
 //!
 //! Every byte goes through the layer's wrappers ([`IoContext`](krishiv_io::IoContext)):
 //! the round-trip writes with [`put_object`](krishiv_io::IoContext::put_object),
@@ -322,6 +324,132 @@ async fn azure_round_trip() {
         "abfss://krishiv-test@devstoreaccount1.dfs.core.windows.net",
     )
     .await;
+}
+
+/// The `(id, name)` rows of a CSV file read through the CSV format with a header and a user
+/// schema (`spark.read.schema("id INT, name STRING").option("header", true).csv(url)`).
+async fn read_csv(config: Arc<Config>, url: &str) -> (Vec<i32>, Vec<Option<String>>) {
+    use arrow_array::Array;
+    use krishiv_common::secret::OptionValue;
+    use krishiv_io::{ByteRange, CsvFormat, FileFormat, ScanOptions, ScanRequest, ScanStream};
+    use krishiv_memory::{MemoryConfig, MemoryPool, Reservation, TreePool};
+    let sched = IoScheduler::new(IoConfig::from_config(&config));
+    let registry = StoreRegistry::new(Arc::clone(&config));
+    let (store, path, _) = register(&sched, &registry, url).unwrap();
+    let io = sched.context();
+    let meta = io.head(&store, &path).await.unwrap().unwrap();
+    let file = FileRef::from_meta(store, &meta);
+    let user = std::collections::BTreeMap::from([(
+        "header".to_owned(),
+        OptionValue::Plain("true".to_owned()),
+    )]);
+    let options = CsvFormat.options().parse(&user, &config).unwrap().0;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, true),
+        Field::new("name", DataType::Utf8, true),
+    ]));
+    let root = TreePool::new(&MemoryConfig::default());
+    let pool: Arc<dyn MemoryPool> = root.child("query", None);
+    let id = pool.register("FileScan", None);
+    let mut stream = ScanStream::open(
+        &io,
+        &CsvFormat,
+        file.clone(),
+        ByteRange::whole(file.size),
+        &ScanRequest::all(schema),
+        &options,
+        Reservation::new(Arc::clone(&pool), id),
+        ScanOptions::default(),
+    )
+    .await
+    .unwrap();
+    let (mut ids, mut names) = (Vec::new(), Vec::new());
+    while let Some(batch) = stream.next_batch().await.unwrap() {
+        let id = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let name = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        for i in 0..batch.num_rows() {
+            ids.push(id.value(i));
+            names.push(name.is_valid(i).then(|| name.value(i).to_owned()));
+        }
+    }
+    (ids, names)
+}
+
+/// Azurite's published development account key (public, fixed by Microsoft; not a secret).
+const AZURITE_KEY: &str =
+    "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==";
+
+/// A raw CSV file on `abfss://` (lakehouse benchmark gate 2): written with the account key, read
+/// back through the CSV format with a header and a schema, signed with a container SAS given by
+/// the Hadoop ABFS keys `fs.azure.account.auth.type.<host> = SAS` and
+/// `fs.azure.sas.fixed.token.<host>`. Azurite serves bearer tokens only over https
+/// (`--oauth basic` needs a certificate), so the bearer path is covered by the loopback tests of
+/// `krishiv-store` (`tests/azure_auth.rs`).
+#[tokio::test]
+async fn azure_csv_reads_with_a_sas() {
+    let host = "devstoreaccount1.dfs.core.windows.net";
+    let (auth_key, sas_key, account_key) = (
+        format!("fs.azure.account.auth.type.{host}"),
+        format!("fs.azure.sas.fixed.token.{host}"),
+        format!("fs.azure.account.key.{host}"),
+    );
+    let (Some(endpoint), Some(sas)) = (
+        endpoint("KRISHIV_TEST_AZURE_ENDPOINT"),
+        endpoint("KRISHIV_TEST_AZURE_SAS"),
+    ) else {
+        // Offline: a SAS store builds without I/O, and the ambient environment plays no part.
+        let config = test_config(&[
+            ("fs.azure.endpoint", "http://127.0.0.1:1/devstoreaccount1"),
+            (auth_key.as_str(), "SAS"),
+            (sas_key.as_str(), "sv=2024-01-01&sig=c2ln"),
+        ]);
+        let sched = IoScheduler::new(IoConfig::from_config(&config));
+        let registry = StoreRegistry::new(config);
+        register(
+            &sched,
+            &registry,
+            &format!("abfss://krishiv-test@{host}/a.csv"),
+        )
+        .unwrap();
+        return;
+    };
+    let url = format!("abfss://krishiv-test@{host}/{}/people.csv", unique_dir());
+    let writer = test_config(&[
+        ("fs.azure.endpoint", endpoint.as_str()),
+        (account_key.as_str(), AZURITE_KEY),
+    ]);
+    let sched = IoScheduler::new(IoConfig::from_config(&writer));
+    let registry = StoreRegistry::new(Arc::clone(&writer));
+    let (store, path, _) = register(&sched, &registry, &url).unwrap();
+    sched
+        .context()
+        .put_object(
+            &store,
+            &path,
+            Bytes::from_static(b"id,name\n1,a\n2,\n3,c\n"),
+        )
+        .await
+        .unwrap();
+    let reader = test_config(&[
+        ("fs.azure.endpoint", endpoint.as_str()),
+        (auth_key.as_str(), "SAS"),
+        (sas_key.as_str(), sas.as_str()),
+    ]);
+    let (ids, names) = read_csv(reader, &url).await;
+    assert_eq!(ids, vec![1, 2, 3]);
+    assert_eq!(
+        names,
+        vec![Some("a".to_owned()), None, Some("c".to_owned())]
+    );
+    sched.context().delete(&store, &path).await.unwrap();
 }
 
 /// A one-file web server on loopback that honours `Range`, logging each
