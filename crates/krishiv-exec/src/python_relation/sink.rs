@@ -22,9 +22,11 @@
 //! with [`Frame::EndGroup`]. A cogroup's input is both relations in one
 //! stream sorted by key then side: a key's left rows, then its right rows;
 //! a side without rows for a key gets one zero-row frame.
-//! Rows are cut into frames of `maxRecordsPerBatch` rows (and
-//! `maxBytesPerBatch` bytes when set) or at the end of their group or side,
-//! as Spark cuts a group's Arrow stream; a group is never held whole.
+//! Rows are cut into frames of `maxRecordsPerBatch` rows (and, when set,
+//! closed by the row that brings the frame's columns to `maxBytesPerBatch`
+//! bytes as Spark's Arrow writer sizes them) or at the end of their group
+//! or side, as Spark cuts a group's Arrow stream; a group is never held
+//! whole.
 //!
 //! **Window.** The window bounds the frames queued per lane and is checked
 //! frame by frame: input rows cut but not framed yet wait in the driver's
@@ -184,7 +186,8 @@ impl fmt::Debug for RelationSink {
 pub struct RelationLimits {
     /// Most rows per frame; 0 is no limit.
     pub max_rows: usize,
-    /// Most bytes per frame (cut between rows); 0 is no limit.
+    /// The bytes that end a frame: its rows up to the one that brings its
+    /// columns to them (Spark's `maxBytesPerBatch`); 0 is no limit.
     pub max_bytes: usize,
     /// Frames in flight per lane before the driver blocks.
     pub window: usize,
@@ -430,15 +433,9 @@ impl RelationSink {
             buffer_ranges(&c.to_data(), &mut input);
         }
         for (e, name) in exprs.iter().zip(names) {
-            let a = e.evaluate_in(rows, partition)?;
-            let client = krishiv_types::arrow::client_arrow_type(a.data_type());
-            let a = if a.data_type() == &client {
-                a
-            } else {
-                crate::carrier::recarried_array(&a, &client)?
-            };
+            let a = client_column(e.as_ref(), rows, partition)?;
             copied += fresh_bytes(&a.to_data(), &input);
-            fields.push(Field::new(name, client, e.nullable()));
+            fields.push(Field::new(name, a.data_type().clone(), e.nullable()));
             columns.push(a);
         }
         let options = RecordBatchOptions::new().with_row_count(Some(rows.num_rows()));
@@ -465,21 +462,40 @@ impl RelationSink {
             arrow_select::concat::concat_batches(&self.input, &held)
                 .map_err(|e| internal(format!("held Python UDF rows: {e}")))?
         };
-        let mut step = if self.max_rows == 0 {
+        let step = if self.max_rows == 0 {
             rows
         } else {
             self.max_rows
         };
-        if self.max_bytes > 0 {
-            let bytes = data.get_array_memory_size().max(1);
-            let fit = (self.max_bytes.saturating_mul(rows) / bytes).max(1);
-            step = step.min(fit);
-        }
+        // The frames' columns as the tasks get them (computed arguments,
+        // client forms), sized as Spark's Arrow writer sizes them.
+        let sized = if self.max_bytes > 0 {
+            let mut columns = Vec::new();
+            for lane in self.lanes.iter() {
+                for e in &lane.sides[usize::from(d.held_side)] {
+                    columns.push(client_column(e.as_ref(), &data, d.partition)?);
+                }
+            }
+            Some(columns)
+        } else {
+            None
+        };
+        // A map's rows travel as one struct column (its validity counts).
+        let wrapped = if matches!(self.shape, RelationShape::Map) {
+            self.lanes.len()
+        } else {
+            0
+        };
         let mut feed = lock(&d.feed);
         let mut offset = 0;
         while offset < rows {
-            let len = step.min(rows - offset);
-            if len < step && !all {
+            let most = step.min(rows - offset);
+            let (len, capped) = match &sized {
+                Some(columns) => sized_rows(columns, wrapped, offset, most, self.max_bytes),
+                None => (most, false),
+            };
+            let full = capped || len == step;
+            if !full && !all {
                 // Too few for a full frame: held for the next input.
                 d.held.push(data.slice(offset, len));
                 d.held_rows = len;
@@ -828,6 +844,137 @@ fn flush_feed(
             }
         }
     }
+}
+
+/// `e` over `rows`, in its client form.
+fn client_column(e: &dyn ScalarExpr, rows: &RecordBatch, partition: u32) -> Result<ArrayRef> {
+    let a = e.evaluate_in(rows, partition)?;
+    let client = krishiv_types::arrow::client_arrow_type(a.data_type());
+    if a.data_type() == &client {
+        Ok(a)
+    } else {
+        crate::carrier::recarried_array(&a, &client)
+    }
+}
+
+/// The rows of the frame starting at row `start` of `columns`, at most
+/// `most`, under a `maxBytesPerBatch` of `cap`; and whether the cap closed
+/// it.
+///
+/// Spark writes rows into the frame while its Arrow size is under the cap
+/// and closes it once a row brings it to the cap or past
+/// (`BatchedPythonArrowInput.writeSizedBatch`, PythonArrowInput.scala:226-233
+/// at v4.2.0): the frame is the fewest rows whose size reaches the cap, at
+/// least one, so the row that crosses the cap is the frame's last. The size
+/// grows with the rows, so the cut is a binary search over the columns'
+/// offsets, never a copy.
+fn sized_rows(
+    columns: &[ArrayRef],
+    wrapped: usize,
+    start: usize,
+    most: usize,
+    cap: usize,
+) -> (usize, bool) {
+    let size = |rows: usize| -> usize {
+        let wrap = wrapped * validity_bytes(rows);
+        columns.iter().fold(wrap, |n, c| {
+            n.saturating_add(arrow_size(c.as_ref(), start, rows))
+        })
+    };
+    if size(most) < cap {
+        return (most, false);
+    }
+    // The fewest rows in `1..=most` whose size reaches the cap.
+    let (mut lo, mut hi) = (1, most);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if size(mid) >= cap {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    (lo, true)
+}
+
+/// The bytes of a validity bitmap of `rows` rows.
+fn validity_bytes(rows: usize) -> usize {
+    rows.div_ceil(8)
+}
+
+/// The size Spark's Arrow writer gives rows `start..start + rows` of `a`
+/// (`ArrowFieldWriter.getSizeInBytes`, ArrowWriter.scala:183-187 at
+/// v4.2.0: Arrow Java's `getBufferSizeFor`): validity, offsets and values,
+/// a validity bitmap for every vector, `rows + 1` offsets, the values the
+/// offsets span; nothing for zero rows.
+fn arrow_size(a: &dyn Array, start: usize, rows: usize) -> usize {
+    use arrow_array::cast::AsArray;
+    if rows == 0 {
+        return 0;
+    }
+    let validity = validity_bytes(rows);
+    // Offsets, then the child rows they span.
+    let nested = |width: usize, (from, len): (usize, usize), child: &dyn Array| {
+        validity + (rows + 1) * width + arrow_size(child, from, len)
+    };
+    match a.data_type() {
+        ArrowType::Null => 0,
+        ArrowType::Boolean => 2 * validity,
+        ArrowType::Utf8 => {
+            validity + (rows + 1) * 4 + span(a.as_string::<i32>().value_offsets(), start, rows).1
+        }
+        ArrowType::Binary => {
+            validity + (rows + 1) * 4 + span(a.as_binary::<i32>().value_offsets(), start, rows).1
+        }
+        ArrowType::LargeUtf8 => {
+            validity + (rows + 1) * 8 + span(a.as_string::<i64>().value_offsets(), start, rows).1
+        }
+        ArrowType::LargeBinary => {
+            validity + (rows + 1) * 8 + span(a.as_binary::<i64>().value_offsets(), start, rows).1
+        }
+        ArrowType::FixedSizeBinary(width) => validity + rows * usize::try_from(*width).unwrap_or(0),
+        ArrowType::List(_) => {
+            let l = a.as_list::<i32>();
+            nested(4, span(l.value_offsets(), start, rows), l.values().as_ref())
+        }
+        ArrowType::LargeList(_) => {
+            let l = a.as_list::<i64>();
+            nested(8, span(l.value_offsets(), start, rows), l.values().as_ref())
+        }
+        ArrowType::Map(..) => {
+            let m = a.as_map();
+            nested(4, span(m.value_offsets(), start, rows), m.entries())
+        }
+        ArrowType::FixedSizeList(_, width) => {
+            let width = usize::try_from(*width).unwrap_or(0);
+            let l = a.as_fixed_size_list();
+            validity + arrow_size(l.values().as_ref(), start * width, rows * width)
+        }
+        ArrowType::Struct(_) => a.as_struct().columns().iter().fold(validity, |n, c| {
+            n.saturating_add(arrow_size(c.as_ref(), start, rows))
+        }),
+        t => match t.primitive_width() {
+            Some(width) => validity + rows * width,
+            // A form Spark's writer has no vector for: the rows' share of
+            // the array's buffers.
+            None => a
+                .get_buffer_memory_size()
+                .saturating_mul(rows)
+                .div_ceil(a.len().max(1)),
+        },
+    }
+}
+
+/// The first child row and the count of child rows (or bytes) that rows
+/// `start..start + rows` span in `offsets`.
+fn span<O: arrow_array::OffsetSizeTrait>(
+    offsets: &[O],
+    start: usize,
+    rows: usize,
+) -> (usize, usize) {
+    let at = |i: usize| offsets.get(i).map_or(0, |o| o.as_usize());
+    let from = at(start);
+    (from, at(start + rows).saturating_sub(from))
 }
 
 /// The address ranges of `data`'s buffers (validity and children too).

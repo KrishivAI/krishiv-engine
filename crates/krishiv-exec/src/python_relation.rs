@@ -110,8 +110,9 @@ pub struct RunnerConf {
     /// `spark.sql.execution.arrow.maxRecordsPerBatch`: most rows per frame;
     /// 0 is no limit.
     pub max_records_per_batch: usize,
-    /// `spark.sql.execution.arrow.maxBytesPerBatch`: most bytes per frame
-    /// (cut between rows, at least one row); 0 is no limit.
+    /// `spark.sql.execution.arrow.maxBytesPerBatch`: a frame ends at the
+    /// row that brings its columns to this many bytes (at least one row);
+    /// 0 is no limit.
     pub max_bytes_per_batch: usize,
     /// Every explicit session setting, by key.
     pub settings: BTreeMap<String, String>,

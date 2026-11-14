@@ -21,7 +21,7 @@ use crate::python_relation::{
 
 /// Spark's `spark.sql.execution.arrow.maxBytesPerBatch`, read as the
 /// session wrote it (Krishiv registers no key for it yet): no limit unless
-/// set.
+/// set to other than Spark's default.
 const MAX_BYTES_PER_BATCH: &str = "spark.sql.execution.arrow.maxBytesPerBatch";
 
 impl Instantiation<'_> {
@@ -112,6 +112,9 @@ impl Instantiation<'_> {
         let max_bytes = config
             .and_then(|c| c.get_unregistered(MAX_BYTES_PER_BATCH))
             .and_then(|v| v.trim().parse::<i64>().ok())
+            // Spark's default, `Int.MaxValue`, is no limit
+            // (PythonArrowInput.scala:227 at v4.2.0).
+            .filter(|&v| v != i64::from(i32::MAX))
             .unwrap_or(0);
         let mut settings = std::collections::BTreeMap::new();
         if let Some(c) = config {

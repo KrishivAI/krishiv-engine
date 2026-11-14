@@ -737,6 +737,85 @@ async fn max_bytes_per_batch_cuts_frames_between_rows() {
     done(r);
 }
 
+/// A computed argument of uneven width: row `i` (its `v`) is a string of
+/// `widths[i]` bytes.
+#[derive(Debug)]
+struct Uneven {
+    widths: Vec<usize>,
+}
+
+impl ScalarExpr for Uneven {
+    fn data_type(&self) -> ArrowType {
+        ArrowType::Utf8
+    }
+
+    fn nullable(&self) -> bool {
+        false
+    }
+
+    fn evaluate(&self, batch: &RecordBatch) -> crate::error::Result<ArrayRef> {
+        let v = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let a: arrow_array::StringArray = v
+            .values()
+            .iter()
+            .map(|&i| Some("x".repeat(self.widths[usize::try_from(i).unwrap()])))
+            .collect();
+        Ok(Arc::new(a))
+    }
+}
+
+/// The frames a map task gets for one batch of rows of `widths` bytes under
+/// a `maxBytesPerBatch` of 32 KiB.
+async fn frames_of_widths(widths: Vec<usize>) -> Vec<String> {
+    let limits = RelationLimits {
+        max_rows: 0,
+        max_bytes: 32 << 10,
+        window: 64,
+    };
+    let keys: Vec<i32> = (0..i32::try_from(widths.len()).unwrap()).collect();
+    let wide: Arc<dyn ScalarExpr> = Arc::new(Uneven { widths });
+    let r = rig_columns(limits, 64 << 20, &[(wide, "s")]);
+    drive(&r, vec![rows(&keys, None)]).await.unwrap();
+    let log = r.shared.log();
+    done(r);
+    log
+}
+
+#[tokio::test]
+async fn max_bytes_per_batch_cuts_by_the_frame_columns_row_sizes() {
+    // Two 30 KiB strings, then 100 empty ones. The input rows are a few
+    // bytes each; the argument is not. As Spark's writer: the first frame
+    // closes at the row that brings it to the cap (row 2), not at the
+    // batch's average bytes per row.
+    let mut widths = vec![30 << 10, 30 << 10];
+    widths.extend([0; 100]);
+    assert_eq!(frames_of_widths(widths).await, ["B0:2", "B0:100", "E"]);
+    // 20 KiB rows: two per frame (the second crosses the cap).
+    assert_eq!(
+        frames_of_widths(vec![20 << 10; 5]).await,
+        ["B0:2", "B0:2", "B0:1", "E"]
+    );
+}
+
+#[tokio::test]
+async fn a_row_over_max_bytes_per_batch_closes_its_frame() {
+    // As Spark's writer: a row over the cap by itself ends the frame it
+    // joins (rows before it under the cap share it), and alone it is a
+    // frame of its own.
+    assert_eq!(
+        frames_of_widths(vec![10, 40 << 10, 10, 10]).await,
+        ["B0:2", "B0:2", "E"]
+    );
+    assert_eq!(
+        frames_of_widths(vec![40 << 10, 10, 10]).await,
+        ["B0:1", "B0:2", "E"]
+    );
+}
+
 #[tokio::test]
 async fn a_result_of_another_width_fails_the_phase() {
     // The task yields `n BIGINT` where `k, v` were declared.
