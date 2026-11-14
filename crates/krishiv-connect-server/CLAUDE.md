@@ -49,7 +49,12 @@ Paths are relative to this crate.
   `aheadBytes` + retry buffer, reserved before the first response, held until close), then pushing into the
   operation's `Replay` under the ahead budget (`krishiv.connect.execute.aheadBytes`) and memory consumer
   `connect_responses` (the Arrow payload is `Bytes`, shared with the copy sent), the
-  response order (schema, batches, metrics, `ResultComplete` when reattachable); commands are 56K00 until T012;
+  response order (schema, batches, metrics, `ResultComplete` when reattachable); commands are 56K00 until T012,
+  except exactly `Command{ml_command{clean_cache}}` (PySpark's exit cleanup), an operation with no response but
+  `ResultComplete` (`Work::NoResult`; Spark's `ml_command_result` is not sent); a drop guard (`Unsettled`) settles an
+  operation whose encoder task unwinds (`INTERNAL_ERROR`, or `OPERATION_CANCELED` after an interrupt), so no stream
+  waits on an orphan; `src/execute/hooks.rs` (cfg(test) only) injects an encoder panic or a held preparation per
+  operation id, used by `src/execute/fault_tests.rs`;
   `src/execute/arrow.rs` Spark's Arrow shapes, batch limits, IPC streams, codecs and chunks;
   `src/execute/schema.rs` the `schema` response (`DataTypeProtoConverter.toConnectProtoType`)
 - `src/codec.rs` `WireCodec`: requests decode only through `wire::decode_request` (bounded size, count, depth, fields)
@@ -59,19 +64,22 @@ Paths are relative to this crate.
   classes, else the Python facade's class/SQLSTATE rules); `KRISHIV_SESSION_LIMIT` and `KRISHIV_OPERATION_LIMIT`
   are `RESOURCE_EXHAUSTED`
 - `src/manager.rs` `SessionManager` (Spark's `SparkConnectSessionManager`): get-or-create / lookup / release, tombstones
-  (LRU, no expiry), abandoned-operation tombstones and `abandon_detached` (Spark's execution maintenance), `SESSION_CHANGED` on a changed server-side id, the idle sweep (skips a session running a query or
+  (LRU, no expiry), abandoned-operation tombstones and `abandon_detached` (Spark's execution maintenance; an
+  operation is tombstoned only if it is still registered, removal and tombstone under the manager's lock, so a
+  released one stays `OPERATION_NOT_FOUND`), `SESSION_CHANGED` on a changed server-side id, the idle sweep (skips a session running a query or
   holding a live operation; `busy()` is what shutdown waits for), `krishiv.connect.maxSessions` /
   `maxSessionsPerPrincipal`
 - `src/server.rs` `ConnectServer::serve`: HTTP/2 limits, connection cap, sweeper and abandon tasks, shutdown order
 - `tests/server.rs`, `tests/execute.rs`, `tests/rpcs.rs` (AnalyzePlan, Config, Interrupt), `tests/reattach.rs`
-  (replay, reattach, caps, detach, races) end to end over a raw tonic client
+  (replay, reattach, caps, detach, races) end to end over a raw tonic client; `src/execute/fault_tests.rs` the same
+  with the test-only fault points (encoder panic, cancel or release during plan preparation)
 
 ## Invariants
 - **Sessions are keyed by the authenticated principal**, never by `UserContext.user_id` (ADR 0046 §5, threat model
   T-A8); a session id another principal holds is `INVALID_HANDLE.SESSION_NOT_FOUND`, the same answer as unknown.
   Until T002 the principal is a request extension set by the auth layer, else the local user (loopback only).
 - **No lock across an `await`**, and none while a session is built or closed: the manager's mutex guards map
-  lookups and inserts only. A racing create of the same key keeps the first and closes the loser.
+  lookups and inserts only. Lock order: the manager's, then a session's `Operations` (never the reverse). A racing create of the same key keeps the first and closes the loser.
 - **Decode only through `wire`** (`#![deny(clippy::disallowed_methods)]`): the codec is the one decode path.
 - Shutdown: draining flag (new RPCs `UNAVAILABLE`, `/readyz` 503), stop accepting, queries get
   `krishiv.server.shutdownTimeout`, then every session is closed (queries cancelled). The engine runtime is dropped
