@@ -572,7 +572,7 @@ def test_sql_error_text_marks_the_span(spark: SparkSession) -> None:
 
 def test_runtime_error_text_marks_the_span(spark: SparkSession) -> None:
     # RS-14: an ANSI run-time error raised by an action shows the span that raised it, as an analysis error does.
-    ansi = spark.conf.get("spark.sql.ansi.enabled", "true")
+    ansi = spark.conf.get("spark.sql.ansi.enabled") or "true"
     spark.conf.set("spark.sql.ansi.enabled", "true")
     spark.sql("CREATE OR REPLACE TEMPORARY VIEW rs14 AS SELECT 'abc' AS a")
     try:
