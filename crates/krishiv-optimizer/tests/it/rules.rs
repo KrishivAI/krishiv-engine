@@ -914,3 +914,43 @@ fn windows_are_pruned() {
         insta::assert_snapshot!(name, optimized.root().to_string(), sql);
     }
 }
+
+/// Column pruning leaves a file scan no column when nothing above reads one
+/// (`count(*)`, Spark's empty `requiredSchema`); a table scan keeps one.
+#[test]
+fn a_file_scan_may_read_no_column() {
+    let ctx = support::ctx();
+    let plan = support::resolve("SELECT count(*) AS n FROM t", &ctx);
+    let scan_width = |p: &Plan| {
+        let mut node = Arc::clone(p.root());
+        loop {
+            if let PlanNode::Scan(s) = &node.node {
+                return s.output.len();
+            }
+            let mut next = None;
+            node.for_each_child(&mut |c| next = Some(Arc::clone(c)));
+            node = next.expect("a scan below");
+        }
+    };
+    assert_eq!(scan_width(&optimize(&plan).unwrap()), 1, "table scan");
+    let files = Arc::clone(plan.root())
+        .transform_up(&mut |n: Arc<LogicalPlan>| {
+            Ok::<_, std::convert::Infallible>(match &n.node {
+                PlanNode::Scan(s) => Arc::new(LogicalPlan {
+                    node: PlanNode::Scan(Scan {
+                        source: krishiv_plan::ReadSource::Files {
+                            format: "csv".to_owned(),
+                            paths: Vec::new(),
+                            options: std::collections::BTreeMap::new(),
+                        },
+                        ..s.clone()
+                    }),
+                    origin: n.origin,
+                }),
+                _ => n,
+            })
+        })
+        .unwrap();
+    let files = Plan::try_new(files).unwrap();
+    assert_eq!(scan_width(&optimize(&files).unwrap()), 0, "file scan");
+}

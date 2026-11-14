@@ -1298,7 +1298,7 @@ impl DataFrame {
     pub async fn count(&self) -> Result<u64, KrishivError> {
         // Spark's `Dataset.count` is `groupBy().count()`: an aggregate over
         // the plan, so the optimizer prunes the columns no row needs (a CSV
-        // or JSON scan then parses no value).
+        // scan then tokenizes no line, a JSON scan converts no value).
         let batches = self.agg([crate::functions::count_star()]).collect().await?;
         let rows = batches
             .iter()

@@ -228,8 +228,9 @@ impl Rewrite<'_> {
                     .cloned()
                     .collect();
                 // A file scan may read no column: its batches carry only a
-                // row count, as Spark's empty `requiredSchema` (a CSV or JSON
-                // reader then parses no value for `count()`). Other sources
+                // row count, as Spark's empty `requiredSchema` (a CSV reader
+                // then tokenizes no line for `count()`, a JSON reader converts
+                // no value). Other sources
                 // keep one column so the row count survives.
                 if output.is_empty() && !matches!(scan.source, ReadSource::Files { .. }) {
                     output.extend(scan.output.first().cloned());

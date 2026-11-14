@@ -368,9 +368,6 @@ impl CsvDecoder {
     }
 }
 
-/// A line's text: the bytes themselves when they are UTF-8 in a UTF-8 file
-/// (no copy), else decoded by `charset`; the first line of a file drops a
-/// UTF-8 byte order mark.
 /// [`skip_line`] on a line's bytes when the comment character is ASCII (in
 /// UTF-8, ISO-8859-1 and US-ASCII the characters up to a space and an ASCII
 /// comment character are those bytes, and no other byte decodes to them);
@@ -390,6 +387,9 @@ fn skip_bare(o: &CsvOptions, bytes: &[u8], first: bool) -> bool {
     }
 }
 
+/// A line's text: the bytes themselves when they are UTF-8 in a UTF-8 file
+/// (no copy), else decoded by `charset`; the first line of a file drops a
+/// UTF-8 byte order mark.
 fn line_text(charset: Charset, bytes: Vec<u8>, first: bool) -> String {
     const BOM: &[u8] = b"\xEF\xBB\xBF";
     if first && bytes.starts_with(BOM) {
