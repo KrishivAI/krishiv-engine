@@ -82,6 +82,51 @@ where
     )
 }
 
+/// The popcount of `f` over the words of two bit sequences of `n` bits ([`words2`] without the output).
+fn count2<A, B>(n: usize, a: A, b: B, rem: [u64; 2], f: impl Fn(u64, u64) -> u64) -> usize
+where
+    A: Iterator<Item = u64>,
+    B: Iterator<Item = u64>,
+{
+    let (words, tail) = (n / 64, n % 64);
+    let mut count: usize = a
+        .zip(b)
+        .take(words)
+        .map(|(x, y)| f(x, y).count_ones() as usize)
+        .sum();
+    if tail > 0 {
+        count += (f(rem[0], rem[1]) & ((1u64 << tail) - 1)).count_ones() as usize;
+    }
+    count
+}
+
+/// How many rows [`open_rows`] has set, without building the mask: the short circuit only needs the
+/// mask when the right side may raise, and every other `AND`/`OR` only needs this count.
+fn open_count(and: bool, l: &BooleanArray) -> usize {
+    let n = l.len();
+    let v = l.values().bit_chunks();
+    let f = move |ok: u64, v: u64| if and { !(ok & !v) } else { !(ok & v) };
+    match l.nulls() {
+        Some(nulls) => {
+            let ok = nulls.inner().bit_chunks();
+            count2(
+                n,
+                ok.iter(),
+                v.iter(),
+                [ok.remainder_bits(), v.remainder_bits()],
+                f,
+            )
+        }
+        None => count2(
+            n,
+            std::iter::repeat(!0u64),
+            v.iter(),
+            [!0, v.remainder_bits()],
+            f,
+        ),
+    }
+}
+
 /// The rows the left side of `AND` (`and`) or `OR` does not decide: `AND` is decided by a valid
 /// false, `OR` by a valid true.
 fn open_rows(and: bool, l: &BooleanArray) -> BooleanBuffer {
@@ -250,11 +295,12 @@ impl PhysExpr for AndOr {
             .as_boolean_opt()
             .ok_or_else(|| internal("AND of a non-boolean"))?;
         let and = self.and;
-        let open = open_rows(and, l);
-        let open_count = open.count_set_bits();
-        let rv = if open_count == rows || (open_count > 0 && self.r_never_raises) {
+        let open = open_count(and, l);
+        let rv = if open == rows || (open > 0 && self.r_never_raises) {
             self.r.eval(batch, partition)?
         } else {
+            // Only here is the mask itself needed.
+            let open = open_rows(and, l);
             Value::Array(super::eval_where(self.r.as_ref(), batch, &open, partition)?)
         };
         let scalar = lv.is_scalar() && rv.is_scalar();
@@ -1166,6 +1212,11 @@ mod tests {
                             }
                         };
                         assert_eq!(open, want_open, "open n={n} slice={slice} and={and}");
+                        assert_eq!(
+                            open_count(and, &l),
+                            want_open.count_set_bits(),
+                            "open count n={n} slice={slice} and={and}"
+                        );
                         let (want_values, want_valid) = kleene_reference(and, &l, &r);
                         assert_eq!(values, want_values, "values n={n} slice={slice} and={and}");
                         assert_eq!(valid, want_valid, "valid n={n} slice={slice} and={and}");
