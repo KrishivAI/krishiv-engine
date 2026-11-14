@@ -675,3 +675,156 @@ fn explain_format_json_applies_the_read_checks() {
     let e = block_on(s.sql("EXPLAIN FORMAT JSON PHYSICAL SELECT a FROM s")).unwrap_err();
     assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
 }
+
+/// Whether `name` resolves to a table or view in `s`.
+fn resolves(s: &Session, name: &str) -> bool {
+    block_on(async { s.table(name).collect().await }).is_ok()
+}
+
+/// `EXPLAIN FORMAT JSON CREATE TABLE … AS SELECT` lists the target and its reads, and creates and
+/// writes nothing.
+#[test]
+fn explain_format_json_ctas_creates_nothing() {
+    let s = corpus_ready();
+    block_on(s.sql("INSERT INTO t VALUES (1, 2, 3)")).unwrap();
+    let inner = "CREATE TABLE c AS SELECT a, k FROM t";
+    let json = explain_json(&s, &format!("EXPLAIN FORMAT JSON {inner}"));
+    assert_valid(&json);
+    assert_eq!(json, block_on(s.analyze(inner)).unwrap().to_json());
+    assert!(json.contains("\"statement_class\":\"DDL\""), "{json}");
+    assert!(
+        json.contains("table `spark_catalog`.`default`.`c`"),
+        "{json}"
+    );
+    assert!(
+        json.contains("table `spark_catalog`.`default`.`t`"),
+        "{json}"
+    );
+    assert!(!resolves(&s, "c"));
+    // The name is still free: the real statement then runs.
+    block_on(async { s.sql(inner).await?.collect().await }).unwrap();
+    assert_eq!(row_count(&s, "c"), 1);
+}
+
+/// A temporary view is neither created by `EXPLAIN FORMAT JSON CREATE TEMPORARY VIEW`, nor replaced
+/// by `… OR REPLACE`; a read through an existing temporary view lists the view's base table.
+#[test]
+fn explain_format_json_temp_views() {
+    let s = corpus_ready();
+    let inner = "CREATE TEMPORARY VIEW tv AS SELECT a FROM t";
+    let json = explain_json(&s, &format!("EXPLAIN FORMAT JSON {inner}"));
+    assert_valid(&json);
+    assert_eq!(json, block_on(s.analyze(inner)).unwrap().to_json());
+    assert!(!resolves(&s, "tv"));
+    // `v1` keeps its two columns.
+    let inner = "CREATE OR REPLACE TEMPORARY VIEW v1 AS SELECT a FROM t";
+    let json = explain_json(&s, &format!("EXPLAIN FORMAT JSON {inner}"));
+    assert_eq!(json, block_on(s.analyze(inner)).unwrap().to_json());
+    let schema = block_on(async { s.table("v1").schema().await }).unwrap();
+    assert_eq!(schema.fields().len(), 2);
+    // A read through a temporary view: `READ`, the view expanded to its base table.
+    let inner = "SELECT a FROM v1 WHERE k > 0";
+    let json = explain_json(&s, &format!("EXPLAIN FORMAT JSON {inner}"));
+    assert_valid(&json);
+    assert_eq!(json, block_on(s.analyze(inner)).unwrap().to_json());
+    assert!(json.contains("\"statement_class\":\"READ\""), "{json}");
+    assert!(
+        json.contains("table `spark_catalog`.`default`.`t`"),
+        "{json}"
+    );
+}
+
+/// `EXPLAIN FORMAT JSON CACHE TABLE` caches nothing.
+#[test]
+fn explain_format_json_cache_table_caches_nothing() {
+    let s = corpus_ready();
+    for inner in [
+        "CACHE TABLE t",
+        "CACHE LAZY TABLE t",
+        "CACHE TABLE ct AS SELECT a FROM t",
+    ] {
+        let json = explain_json(&s, &format!("EXPLAIN FORMAT JSON {inner}"));
+        assert_valid(&json);
+        assert_eq!(
+            json,
+            block_on(s.analyze(inner)).unwrap().to_json(),
+            "{inner}"
+        );
+        assert!(!block_on(s.table("t").is_cached()).unwrap(), "{inner}");
+    }
+    assert!(!resolves(&s, "ct"));
+}
+
+/// Nested `EXPLAIN`: the explained statement is the inner `EXPLAIN`, analyzed as `analyze` analyzes it.
+/// An `EXPLAIN` in any mode but `ANALYZE` is a `READ` of kind `PLAN` that lists no write targets (§3.3.1,
+/// `EXPLAIN_KINDS`); nothing runs at either level.
+#[test]
+fn explain_format_json_of_an_explain() {
+    let s = corpus_ready();
+    for inner in [
+        "EXPLAIN SELECT a FROM t",
+        "EXPLAIN EXTENDED SELECT a FROM t",
+        "EXPLAIN FORMAT JSON SELECT a FROM t",
+        "EXPLAIN FORMAT JSON EXPLAIN FORMAT JSON SELECT 1",
+        "EXPLAIN FORMAT JSON INSERT INTO u SELECT * FROM t",
+    ] {
+        let json = explain_json(&s, &format!("EXPLAIN FORMAT JSON {inner}"));
+        assert_valid(&json);
+        assert_eq!(
+            json,
+            block_on(s.analyze(inner)).unwrap().to_json(),
+            "{inner}"
+        );
+        assert!(
+            json.contains("\"statement_class\":\"READ\""),
+            "{inner}: {json}"
+        );
+        assert!(json.contains("\"explain\":\"PLAN\""), "{inner}: {json}");
+        assert!(
+            !json.contains("\"privilege\":\"INSERT\""),
+            "{inner}: {json}"
+        );
+    }
+    let json = explain_json(&s, "EXPLAIN FORMAT JSON EXPLAIN SELECT a FROM t");
+    assert!(
+        json.contains("table `spark_catalog`.`default`.`t`"),
+        "{json}"
+    );
+    // One level up, the explained statement is `EXPLAIN FORMAT JSON EXPLAIN ANALYZE …`: a `READ`; nothing runs.
+    let json = explain_json(
+        &s,
+        "EXPLAIN FORMAT JSON EXPLAIN FORMAT JSON EXPLAIN ANALYZE INSERT INTO u SELECT * FROM t",
+    );
+    assert!(json.contains("\"statement_class\":\"READ\""), "{json}");
+    assert_eq!(row_count(&s, "u"), 0);
+}
+
+/// `EXPLAIN FORMAT JSON SET` leaves the session conf as it was.
+#[test]
+fn explain_format_json_set_changes_no_conf() {
+    let s = corpus_ready();
+    let keys = ["spark.sql.ansi.enabled", "spark.sql.shuffle.partitions"];
+    let before = keys.map(|k| s.conf().get(k));
+    for inner in [
+        "SET spark.sql.ansi.enabled = false",
+        "SET spark.sql.ansi.enabled = true",
+        "SET spark.sql.shuffle.partitions = 7",
+        "RESET",
+    ] {
+        let json = explain_json(&s, &format!("EXPLAIN FORMAT JSON {inner}"));
+        assert_valid(&json);
+        assert_eq!(
+            json,
+            block_on(s.analyze(inner)).unwrap().to_json(),
+            "{inner}"
+        );
+    }
+    assert_eq!(keys.map(|k| s.conf().get(k)), before);
+    assert_ne!(before[1].as_deref(), Some("7"));
+    // The real `SET` does change it, so the check above can fail.
+    block_on(s.sql("SET spark.sql.shuffle.partitions = 7")).unwrap();
+    assert_eq!(
+        s.conf().get("spark.sql.shuffle.partitions").as_deref(),
+        Some("7")
+    );
+}
