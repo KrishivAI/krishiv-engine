@@ -277,8 +277,9 @@ counted are the first the racing drivers hand over (Spark's are partition 0's: a
   node, an outer join's preserved side and a union with a live branch keep it (`n = 0`). Not matched: a cached frame
   (`observe(..).cache().where(false)`: the engine fills the cache before the filter prunes it) and `sample` (not supported).
   Spark's classic Python `get` raises a JVM `AssertionError` for a pruned node (an upstream defect); the engine returns `{}` as Connect does.
-- **Connect:** struct, map and interval metric values are refused when the server builds the
-  `ObservedMetrics` literal (after the rows were sent); a name with no plan id reports `plan_id` 0.
+- **Connect:** struct, map, array, binary and day-time interval metrics go out as Spark's `ObservedMetrics` literal forms
+  (year-month and calendar intervals too: Spark's Python client raises `UNSUPPORTED_LITERAL` for those, the server sends them);
+  a name with no plan id reports `plan_id` 0. A calendar-interval metric cannot be built yet (the engine has no aggregate over it).
 - **Cancelled actions:** a dropped result stream completes the observation with `{}` or the rows
   folded before the drivers stopped (Spark: a partial value); a failed finalization of a metric is what `get`
   raises.
