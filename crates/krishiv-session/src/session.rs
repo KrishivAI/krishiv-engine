@@ -120,6 +120,8 @@ pub struct Session {
     /// The trace of the request that started the statement ([`crate::QueryOptions::inbound_trace`]):
     /// `Some(None)` is a request without a valid one (no trace), `None` means the session's.
     pub(crate) inbound_trace: Option<Option<Arc<crate::trace_context::RemoteParent>>>,
+    /// The baggage that came with it (empty without a valid `traceparent`).
+    pub(crate) inbound_baggage: Arc<[(String, String)]>,
 }
 
 impl fmt::Debug for Session {
@@ -525,7 +527,7 @@ impl Session {
                 error,
                 self.operation_id(),
             );
-            self.state.queries.add_request_tags(&id, &self.request_tags);
+            self.stamp_row(&id);
             // Ended by `cancel`/`interrupt_all` while it was analyzed (`action.rs`).
             if let Some(reason) = cancelled {
                 self.state.queries.note_cancel_reason(&id, reason);

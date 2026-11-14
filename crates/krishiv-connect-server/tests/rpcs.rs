@@ -1253,7 +1253,7 @@ async fn the_client_type_and_transport_show_in_system_sessions() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_requests_tags_reach_the_engine_queries_and_cancel_by_tag() {
+async fn a_requests_tags_reach_the_engine_queries() {
     use arrow_array::cast::AsArray;
     let run = start().await;
     let mut live = stream(

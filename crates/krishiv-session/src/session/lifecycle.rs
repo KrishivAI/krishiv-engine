@@ -112,6 +112,7 @@ impl Session {
             deadline: None,
             request_tags: Arc::from([]),
             inbound_trace: None,
+            inbound_baggage: Arc::from([]),
             state: Arc::new(SessionState {
                 conf: Arc::new(seed.conf),
                 catalog: Arc::new(seed.catalog),
@@ -442,17 +443,30 @@ impl Session {
                 Some(Arc::new(taken))
             }
         };
+        // A request's trace parses once: a valid `traceparent` carries its bounded baggage.
+        let parsed = options.inbound_trace.map(|(tp, baggage)| {
+            let parent = tp
+                .as_deref()
+                .and_then(crate::trace_context::parse_remote_parent)
+                .map(Arc::new);
+            let bag = match (&parent, baggage.as_deref()) {
+                (Some(_), Some(b)) => crate::trace_context::parse_baggage(b),
+                _ => Vec::new(),
+            };
+            (parent, bag)
+        });
+        let (inbound_trace, inbound_baggage) = match parsed {
+            Some((parent, bag)) => (Some(parent), Arc::from(bag)),
+            None => (None, Arc::from([])),
+        };
         let handle = Session {
             state: Arc::clone(&self.state),
             locals: Arc::clone(&self.locals),
             operation,
             deadline: options.deadline.or(self.deadline),
             request_tags: options.request_tags.into(),
-            inbound_trace: options.inbound_trace.map(|(tp, _)| {
-                tp.as_deref()
-                    .and_then(crate::trace_context::parse_remote_parent)
-                    .map(Arc::new)
-            }),
+            inbound_trace,
+            inbound_baggage,
         };
         Ok(handle)
     }

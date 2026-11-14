@@ -6,6 +6,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use arrow_array::Array;
 use arrow_array::cast::AsArray;
 use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_session::{
@@ -400,4 +401,51 @@ async fn a_queued_query_without_an_operation_id_is_named_when_cancelled_by_tag()
         "the minted row id of the queued query is returned"
     );
     assert_eq!(class(task.await), ErrorClass::OperationCanceled.name());
+}
+
+#[tokio::test]
+async fn a_statements_own_trace_never_borrows_or_changes_the_sessions() {
+    let s = Session::new().unwrap_or_else(|e| panic!("{e}"));
+    let a = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+    let b = "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-00f067aa0ba902b7-01";
+    s.set_trace_context(a).unwrap_or_else(|e| panic!("{e}"));
+    for options in [
+        QueryOptions::new().inbound_trace(Some(b), Some("tenant=acme")),
+        QueryOptions::new().inbound_trace(None, Some("tenant=acme")),
+        QueryOptions::new().inbound_trace(Some("junk"), None),
+        QueryOptions::new(),
+    ] {
+        s.sql_with("select 1", options)
+            .await
+            .unwrap_or_else(|e| panic!("{e}"))
+            .collect()
+            .await
+            .unwrap_or_else(|e| panic!("{e}"));
+    }
+    // The session's own trace is untouched by the statements' traces.
+    assert_eq!(
+        s.trace_id().as_deref(),
+        Some("4bf92f3577b34da6a3ce929d0e0e4736")
+    );
+    let batches = s
+        .sql("select trace_id from system.queries where state = 'finished' order by submitted_at")
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .collect()
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let col = batches[0].column(0).as_string::<i32>();
+    let seen: Vec<Option<String>> = (0..batches[0].num_rows())
+        .map(|i| (!col.is_null(i)).then(|| col.value(i).to_owned()))
+        .collect();
+    assert_eq!(
+        seen,
+        [
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned()),
+            None,
+            None,
+            Some("4bf92f3577b34da6a3ce929d0e0e4736".to_owned()),
+        ],
+        "its own trace, none without a valid traceparent, the session's only for a plain statement"
+    );
 }

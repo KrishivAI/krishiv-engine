@@ -207,11 +207,6 @@ async fn until_cancelled<T>(
     }
 }
 
-/// Starts `request` on the session `entry`; with the id of a live
-/// operation running the same plan, attaches to it from the start instead
-/// (Spark's `SparkConnectExecutePlanHandler`, v4.3.0 lines 47-60).
-///
-/// # Errors
 /// The trace headers of an `ExecutePlan` request (`traceparent`, `baggage`): untrusted text the
 /// engine parses and bounds ([`QueryOptions::inbound_trace`]); either may be absent.
 #[derive(Debug, Clone, Default)]
@@ -222,6 +217,11 @@ pub struct InboundTrace {
     pub baggage: Option<String>,
 }
 
+/// Starts `request` on the session `entry`; with the id of a live
+/// operation running the same plan, attaches to it from the start instead
+/// (Spark's `SparkConnectExecutePlanHandler`, v4.3.0 lines 47-60).
+///
+/// # Errors
 /// Before the first response: `INVALID_HANDLE.FORMAT` for an operation id
 /// that is not a UUID, `KRISHIV_INVALID_OPERATION_TAG`, the refusals of
 /// [`Operations::register`], `INVALID_CURSOR.NOT_REATTACHABLE` for the live

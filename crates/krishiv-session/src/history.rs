@@ -169,7 +169,7 @@ impl QueryOptions {
     /// [`crate::Session::set_inbound_trace`], which sets the session's: concurrent requests of one
     /// session each keep their own. The headers are untrusted and never fail anything: a missing
     /// or malformed `traceparent` means no trace for these queries (the session's own trace, if
-    /// any, is not used either). The baggage is accepted for symmetry and not kept per request yet.
+    /// any, is not used either). A valid `traceparent` brings its `baggage` (at most 32 well-formed entries within 4 KiB), read back with [`crate::Session::baggage`] on the statement's handle.
     pub fn inbound_trace(mut self, traceparent: Option<&str>, baggage: Option<&str>) -> Self {
         self.inbound_trace = Some((traceparent.map(str::to_owned), baggage.map(str::to_owned)));
         self
