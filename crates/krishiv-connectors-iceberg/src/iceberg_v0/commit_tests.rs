@@ -914,3 +914,73 @@ fn a_bad_retry_property_is_refused_before_any_request() {
     assert_eq!(c.cat.requests(), 0);
     assert!(!exists(&c.manifest()) && !exists(&c.data()));
 }
+
+/// R:B1: a 409 says nothing about the write until the own-key search has run
+/// on a successful load. A request delivered twice lands its first copy and
+/// answers the second's 409; when every refresh then fails, the write is
+/// `KRISHIV_ICEBERG_COMMIT_STATE_UNKNOWN` and nothing is deleted (the table's
+/// head references the files).
+#[test]
+fn a_conflict_whose_refresh_never_succeeds_is_state_unknown() {
+    let mut c = case();
+    c.cat.script(&[Fault::Duplicated]);
+    c.cat.fail_loads(4);
+    let e = c.run().unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergCommitStateUnknown,
+        "{e}"
+    );
+    assert_eq!(c.cat.requests(), 1);
+    assert!(exists(&c.list(1)) && exists(&c.manifest()) && exists(&c.data()));
+    c.check(&[INIT, MINE]);
+}
+
+/// R:B1, a plain 409 (nothing applied) with failing refreshes: still
+/// unknown to the loop, so nothing is deleted.
+#[test]
+fn a_plain_conflict_whose_refresh_never_succeeds_deletes_nothing() {
+    let mut c = case();
+    c.cat.script(&[Fault::Conflict409]);
+    c.cat.fail_loads(4);
+    let e = c.run().unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergCommitStateUnknown,
+        "{e}"
+    );
+    assert!(exists(&c.list(1)) && exists(&c.manifest()) && exists(&c.data()));
+    c.check(&[INIT]);
+}
+
+/// R:B1, the total timeout ending the refresh: the same.
+#[test]
+fn a_conflict_whose_refresh_times_out_is_state_unknown() {
+    let mut c = case_with(2, &[("commit.retry.total-timeout-ms", "1500")]);
+    c.cat.script(&[Fault::Duplicated]);
+    c.cat.fail_loads(10);
+    let e = c.run().unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergCommitStateUnknown,
+        "{e}"
+    );
+    assert_eq!(c.waits(), [1000, 2000]);
+    assert!(exists(&c.list(1)) && exists(&c.manifest()) && exists(&c.data()));
+    c.check(&[INIT, MINE]);
+}
+
+/// A refresh that fails fewer times than `commit.status-check.num-retries`
+/// and then succeeds: rebased and committed.
+#[test]
+fn a_refresh_that_recovers_rebases() {
+    let mut c = case();
+    c.cat.script(&[Fault::Conflict409]);
+    c.cat.fail_loads(2);
+    let m = c.run().unwrap();
+    assert_eq!(m.snapshot_by_id(OURS).unwrap().manifest_list(), c.list(2));
+    assert_eq!(c.cat.requests(), 2);
+    assert_eq!(c.waits(), [1000, 2000, 100]);
+    assert!(!exists(&c.list(1)) && exists(&c.manifest()) && exists(&c.data()));
+    c.check(&[INIT, MINE]);
+}
