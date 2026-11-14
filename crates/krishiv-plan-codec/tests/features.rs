@@ -112,6 +112,11 @@ fn the_header_lists_exactly_the_features_in_use() {
         message("options_map_literal").features,
         ["options_map_literals"]
     );
+    // The literal's own type is nested, so a reader needs both.
+    assert_eq!(
+        message("nested_literals").features,
+        ["nested_literals", "nested_types"]
+    );
     assert_eq!(
         message("aggregate_any_value").features,
         ["any_value_by_aggregates"]
@@ -2099,4 +2104,103 @@ fn a_python_udf_needs_its_feature() {
             missing: vec!["python_udf".to_owned()]
         }
     );
+}
+
+// ---- nested literals (nested_literals) ------------------------------------
+
+#[test]
+fn nested_literals_need_their_feature_and_their_type_feature() {
+    let m = message("nested_literals");
+    assert_eq!(m.features, ["nested_literals", "nested_types"]);
+    assert_eq!(Feature::NestedLiterals.kind(), FeatureKind::Semantic);
+    let bytes = m.encode_to_vec();
+    // A reader that has the nested types but not the literals refuses the
+    // plan naming the literals; the reverse names the types.
+    let without_literals = ReaderFeatures::only([Feature::NestedTypes]);
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &without_literals).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["nested_literals".to_owned()]
+        }
+    );
+    let without_types = ReaderFeatures::only([Feature::NestedLiterals]);
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &without_types).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["nested_types".to_owned()]
+        }
+    );
+    let both = ReaderFeatures::only([Feature::NestedLiterals, Feature::NestedTypes]);
+    let plan = decode_with(&bytes, &Limits::default(), &both).unwrap();
+    assert_eq!(encode(&plan).unwrap(), bytes);
+}
+
+#[test]
+fn a_nested_literal_is_classified_as_an_expression_and_by_its_type() {
+    use krishiv_plan::{Expr, Literal};
+    use krishiv_types::{ArrayType, DataType};
+    let l = Literal::array(ArrayType::new(DataType::Integer, true), Vec::new()).unwrap();
+    assert_eq!(
+        feature_of(Construct::Expr(&Expr::from(l))),
+        Some(Feature::NestedLiterals)
+    );
+    assert_eq!(
+        feature_of(Construct::NestedLiteralType),
+        Some(Feature::NestedTypes)
+    );
+}
+
+/// Every literal of the plan's expression table, mutably.
+fn literals_mut(m: &mut pb::PhysicalPlan) -> Vec<&mut pb::Literal> {
+    m.exprs
+        .iter_mut()
+        .filter_map(|e| match &mut e.kind {
+            Some(pb::expr::Kind::Literal(l)) => Some(l),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_nested_literal_that_does_not_fit_its_type_is_corrupt() {
+    use pb::literal::Kind;
+    let int_type = pb::DataType {
+        kind: pb::data_type::Kind::Integer as i32,
+        ..pb::DataType::default()
+    };
+    // The array type replaced by a scalar one.
+    let mut m = message("nested_literals");
+    for l in literals_mut(&mut m) {
+        if let Some(Kind::Array(a)) = &mut l.kind {
+            a.data_type = Some(int_type.clone());
+        }
+    }
+    corrupt(&m, "an array literal whose type is not an array");
+    // An element of another type.
+    let mut m = message("nested_literals");
+    for l in literals_mut(&mut m) {
+        if let Some(Kind::Array(a)) = &mut l.kind {
+            for e in &mut a.elements {
+                e.kind = Some(Kind::String("x".to_owned()));
+            }
+        }
+    }
+    corrupt(&m, "an array literal that does not fit its type");
+    // A struct with a missing value.
+    let mut m = message("nested_literals");
+    for l in literals_mut(&mut m) {
+        if let Some(Kind::Struct(s)) = &mut l.kind {
+            s.fields.pop();
+        }
+    }
+    corrupt(&m, "a struct literal that does not fit its type");
+    // No type at all.
+    let mut m = message("nested_literals");
+    for l in literals_mut(&mut m) {
+        if let Some(Kind::KeyValueMap(v)) = &mut l.kind {
+            v.data_type = None;
+        }
+    }
+    let err = decode(&m.encode_to_vec()).unwrap_err();
+    assert!(matches!(err, CodecError::Corrupt(_)), "{err:?}");
 }

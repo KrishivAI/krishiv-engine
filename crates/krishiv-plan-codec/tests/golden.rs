@@ -192,12 +192,15 @@ fn the_registry_is_sorted_and_every_feature_has_goldens() {
         // aggregate, whose feature sorts after it, so its plans file under
         // `moment_aggregates` and it has no directory of its own; likewise
         // `collated_min_max`, whose struct argument files its plans under
-        // `nested_types`.
+        // `nested_types`; and `nested_literals`, whose literal's type is a
+        // nested type too, so its plans file there.
         assert!(
             files > 0
                 || matches!(
                     *f,
-                    Feature::LegacyStatisticalAggregate | Feature::CollatedMinMax
+                    Feature::LegacyStatisticalAggregate
+                        | Feature::CollatedMinMax
+                        | Feature::NestedLiterals
                 ),
             "{id}: no golden files in {}",
             dir.display()

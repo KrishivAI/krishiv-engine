@@ -792,6 +792,30 @@ fn m_literal(v: &mut Literal, w: &mut Walk) -> bool {
             site!(w, *days += 1);
             site!(w, *micros += 1);
         }
+        Literal::Array { elements, .. } => {
+            site!(w, elements.push(Literal::Integer(1)));
+            for e in elements.iter_mut() {
+                if m_literal(e, w) {
+                    return true;
+                }
+            }
+        }
+        Literal::KeyValueMap { entries, .. } => {
+            site!(w, entries.push((Literal::Integer(1), Literal::Integer(2))));
+            for (k, v) in entries.iter_mut() {
+                if m_literal(k, w) || m_literal(v, w) {
+                    return true;
+                }
+            }
+        }
+        Literal::Struct { fields, .. } => {
+            site!(w, fields.push(Literal::Integer(1)));
+            for f in fields.iter_mut() {
+                if m_literal(f, w) {
+                    return true;
+                }
+            }
+        }
     }
     false
 }

@@ -1090,8 +1090,86 @@ pub(crate) fn literal_array(l: &Literal) -> Result<ArrayRef> {
                 .map_err(|e| internal(&e.to_string()))?,
             )
         }
+        Literal::Array {
+            data_type,
+            elements,
+        } => {
+            let ArrowType::List(field) = DataType::Array(Arc::clone(data_type)).to_arrow() else {
+                return Err(internal("an array literal's Arrow type"));
+            };
+            let values = concat_literals(elements.iter(), field.data_type())?;
+            let len = i32::try_from(values.len())
+                .map_err(|_| internal("an array literal past the 32-bit offset limit"))?;
+            Arc::new(
+                arrow_array::ListArray::try_new(
+                    field,
+                    OffsetBuffer::new(ScalarBuffer::from(vec![0, len])),
+                    values,
+                    None,
+                )
+                .map_err(|e| internal(&e.to_string()))?,
+            )
+        }
+        Literal::KeyValueMap { data_type, entries } => {
+            let ArrowType::Map(entries_field, sorted) =
+                DataType::Map(Arc::clone(data_type)).to_arrow()
+            else {
+                return Err(internal("a map literal's Arrow type"));
+            };
+            let ArrowType::Struct(kv) = entries_field.data_type() else {
+                return Err(internal("a map literal's entries type"));
+            };
+            let [key_field, value_field] = &kv[..] else {
+                return Err(internal("a map literal's entries type"));
+            };
+            let keys = concat_literals(entries.iter().map(|(k, _)| k), key_field.data_type())?;
+            let values = concat_literals(entries.iter().map(|(_, v)| v), value_field.data_type())?;
+            let len = i32::try_from(keys.len())
+                .map_err(|_| internal("a map literal past the 32-bit offset limit"))?;
+            let pairs = StructArray::try_new(kv.clone(), vec![keys, values], None)
+                .map_err(|e| internal(&e.to_string()))?;
+            Arc::new(
+                MapArray::try_new(
+                    entries_field,
+                    OffsetBuffer::new(ScalarBuffer::from(vec![0, len])),
+                    pairs,
+                    None,
+                    sorted,
+                )
+                .map_err(|e| internal(&e.to_string()))?,
+            )
+        }
+        Literal::Struct { data_type, fields } => {
+            let ArrowType::Struct(arrow_fields) =
+                DataType::Struct((**data_type).clone()).to_arrow()
+            else {
+                return Err(internal("a struct literal's Arrow type"));
+            };
+            let columns = fields
+                .iter()
+                .map(literal_array)
+                .collect::<Result<Vec<_>>>()?;
+            Arc::new(
+                StructArray::try_new(arrow_fields, columns, None)
+                    .map_err(|e| internal(&e.to_string()))?,
+            )
+        }
         _ => return Err(unsupported("interval literals in physical plans")),
     })
+}
+
+/// The one-row arrays of `values` joined into one array of `data_type`
+/// (an empty one when there are none).
+fn concat_literals<'a>(
+    values: impl Iterator<Item = &'a Literal>,
+    data_type: &ArrowType,
+) -> Result<ArrayRef> {
+    let arrays = values.map(literal_array).collect::<Result<Vec<_>>>()?;
+    if arrays.is_empty() {
+        return Ok(arrow_array::new_empty_array(data_type));
+    }
+    let refs: Vec<&dyn arrow_array::Array> = arrays.iter().map(AsRef::as_ref).collect();
+    arrow_select::concat::concat(&refs).map_err(|e| internal(&e.to_string()))
 }
 
 /// A compiled expression as the operators' [`Predicate`] and
@@ -1199,6 +1277,97 @@ mod tests {
         let values: Vec<Option<&str>> = entries.column(1).as_string::<i32>().iter().collect();
         assert_eq!(keys, [Some("mode"), Some("timestampFormat")]);
         assert_eq!(values, [Some("FAILFAST"), Some("dd/MM/yyyy")]);
+    }
+
+    /// Nested literals build one-row list, map and struct arrays of exactly
+    /// their type's Arrow form: empty, with a null element, and nested.
+    #[test]
+    fn nested_literals_build_one_row_arrays_of_their_arrow_type() {
+        use arrow_array::cast::AsArray;
+        use arrow_array::{Array, ListArray};
+        use krishiv_types::{ArrayType, DataType, MapType, StructField, StructType};
+
+        let ints = |values: Vec<Literal>| {
+            Literal::array(ArrayType::new(DataType::Integer, true), values).unwrap()
+        };
+        let array_type: DataType = ArrayType::new(DataType::Integer, true).into();
+
+        // Empty.
+        let empty = super::literal_array(&ints(vec![])).unwrap();
+        assert_eq!(empty.data_type(), &array_type.to_arrow());
+        assert_eq!((empty.len(), empty.as_list::<i32>().value(0).len()), (1, 0));
+
+        // A null element.
+        let a = super::literal_array(&ints(vec![
+            Literal::Integer(1),
+            Literal::Null(Some(DataType::Integer)),
+            Literal::Integer(3),
+        ]))
+        .unwrap();
+        assert_eq!(a.data_type(), &array_type.to_arrow());
+        let list: &ListArray = a.as_list();
+        let row = list.value(0);
+        let values: Vec<Option<i32>> = row
+            .as_primitive::<arrow_array::types::Int32Type>()
+            .iter()
+            .collect();
+        assert_eq!(values, [Some(1), None, Some(3)]);
+
+        // Array of arrays, strings inside.
+        let outer_type = ArrayType::new(array_type.clone(), true);
+        let outer = Literal::array(
+            outer_type.clone(),
+            vec![
+                ints(vec![Literal::Integer(7)]),
+                Literal::Null(Some(array_type)),
+                ints(vec![]),
+            ],
+        )
+        .unwrap();
+        let a = super::literal_array(&outer).unwrap();
+        assert_eq!(a.data_type(), &DataType::from(outer_type).to_arrow());
+        let inner = a.as_list::<i32>().value(0);
+        assert_eq!(inner.len(), 3);
+        assert!(inner.is_null(1));
+
+        // A map with a struct value.
+        let struct_type = StructType::new([
+            StructField::new("a", DataType::Integer, false),
+            StructField::new("s", DataType::String, true),
+        ]);
+        let map_type = MapType::new(DataType::String, struct_type.clone().into(), true);
+        let entry = |k: &str, v: i32| {
+            (
+                Literal::String(k.to_owned()),
+                Literal::struct_value(
+                    struct_type.clone(),
+                    vec![Literal::Integer(v), Literal::Null(Some(DataType::String))],
+                )
+                .unwrap(),
+            )
+        };
+        let map =
+            Literal::key_value_map(map_type.clone(), vec![entry("x", 1), entry("y", 2)]).unwrap();
+        let a = super::literal_array(&map).unwrap();
+        assert_eq!(a.data_type(), &DataType::from(map_type).to_arrow());
+        let m = a.as_map();
+        assert_eq!((m.len(), m.value_length(0)), (1, 2));
+
+        // An empty map and a bare struct.
+        let empty_map = Literal::key_value_map(
+            MapType::new(DataType::Integer, DataType::Integer, true),
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(super::literal_array(&empty_map).unwrap().len(), 1);
+        let st = Literal::struct_value(
+            struct_type.clone(),
+            vec![Literal::Integer(5), Literal::String("z".to_owned())],
+        )
+        .unwrap();
+        let a = super::literal_array(&st).unwrap();
+        assert_eq!(a.data_type(), &DataType::from(struct_type).to_arrow());
+        assert_eq!(a.as_struct().num_columns(), 2);
     }
 
     /// `scatter` puts the i-th value at the i-th set row, NULL elsewhere,

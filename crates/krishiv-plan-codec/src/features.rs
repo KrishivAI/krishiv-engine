@@ -148,6 +148,7 @@ registry! {
     (map_key_dedup_policy, MapKeyDedupPolicy, POST_MIGRATION_READER_VERSION, Semantic, "The session's map-key dedup policy (`LAST_WIN`); without it a worker keeps the first value on duplicate map keys."),
     (mode_regr_bit_listagg_aggs, ModeRegrBitListaggAggs, POST_MIGRATION_READER_VERSION, Semantic, "The `mode`, regression (`regr_*`), bitwise (`bit_and`, `bit_or`, `bit_xor`), `listagg`/`string_agg` and `try_sum`/`try_avg` aggregates."),
     (moment_aggregates, MomentAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The moment aggregates (`stddev_samp`, `stddev_pop`, `var_samp`, `var_pop`, `skewness`, `kurtosis`, `corr`, `covar_samp`, `covar_pop`)."),
+    (nested_literals, NestedLiterals, POST_MIGRATION_READER_VERSION, Semantic, "An array, map or struct literal value (`Literal::{Array, KeyValueMap, Struct}`). The literal's type is a nested type, so a plan with one lists `nested_types` too."),
     (nested_types, NestedTypes, POST_MIGRATION_READER_VERSION, Semantic, "Array, map and struct types (`DataType.KIND_NESTED`, written as Spark's JSON form of the type)."),
     (options_map_literals, OptionsMapLiterals, POST_MIGRATION_READER_VERSION, Semantic, "A `MAP<STRING, STRING>` literal: the options of one call (`from_json`, `from_csv`, `from_xml`). Entries are classified as source options are: a sensitive key or a URL with credentials does not encode (ADR 0038)."),
     (partial_aggregate, PartialAggregate, POST_MIGRATION_READER_VERSION, Optimization, "Partial aggregates below a join, whose states a later aggregate merges (eager aggregation)."),
@@ -235,6 +236,10 @@ pub enum Construct<'a> {
     EvalMode,
     /// A `WritePlan` naming the Spark types of input columns.
     WriteColumnTypes,
+    /// The type of a nested literal (array, map or struct): a nested type
+    /// the literal carries itself, so `nested_types` is listed with
+    /// `nested_literals`.
+    NestedLiteralType,
     /// A `Generate` node's generator.
     Generator(krishiv_plan::GeneratorKind),
     /// A hash join's probe selection (`HashJoinPlan.select`).
@@ -478,6 +483,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         Construct::Lambda => Some(Feature::LambdaFunctions),
         Construct::EvalMode => Some(Feature::CapturedEvalMode),
         Construct::WriteColumnTypes => Some(Feature::WriteColumnTypes),
+        Construct::NestedLiteralType => Some(Feature::NestedTypes),
         Construct::ProbeSelect => Some(Feature::FusedProbe),
         Construct::Generator(kind) => match kind {
             krishiv_plan::GeneratorKind::VariantExplode => Some(Feature::VariantExplode),
@@ -517,6 +523,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             ExprNode::Resolved(ResolvedExpr::Field { .. }) => Some(Feature::StructField),
             ExprNode::Literal(Literal::CalendarInterval { .. }) => Some(Feature::IntervalTypes),
             ExprNode::Literal(Literal::Map(_)) => Some(Feature::OptionsMapLiterals),
+            ExprNode::Literal(
+                Literal::Array { .. } | Literal::KeyValueMap { .. } | Literal::Struct { .. },
+            ) => Some(Feature::NestedLiterals),
             // The year-month and day-time literal kinds predate the feature,
             // so a bare one stays baseline: whatever reads its column names
             // the interval type. As an argument nothing else may name it, and
@@ -732,9 +741,41 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
             f(Construct::EvalMode);
         }
         f(Construct::Expr(e));
+        nested_literal_types(e, f);
         // A UDF call hides in any expression of the node (`exprs_of`
         // already yields every descendant, so one node check is enough).
         functions_in(e, f);
+    }
+}
+
+/// A nested literal's type as constructs: the literal itself is a nested type
+/// (`nested_types`), and the types inside it are visited as any type is
+/// (`array<time(3)>` needs `time_type` too).
+fn nested_literal_types<'a>(e: &'a Expr, f: &mut impl FnMut(Construct<'a>)) {
+    let ExprNode::Literal(l) = &e.node else {
+        return;
+    };
+    match l {
+        Literal::Array { data_type, .. } => {
+            f(Construct::NestedLiteralType);
+            visit_type(data_type.element_type(), f);
+        }
+        Literal::KeyValueMap { data_type, .. } => {
+            f(Construct::NestedLiteralType);
+            visit_type(data_type.key_type(), f);
+            visit_type(data_type.value_type(), f);
+        }
+        Literal::Struct { data_type, .. } => {
+            f(Construct::NestedLiteralType);
+            data_type
+                .fields()
+                .iter()
+                .for_each(|x| visit_type(x.data_type(), f));
+        }
+        // Scalars and the options map have no type of their own to visit;
+        // `Literal` is non-exhaustive, and a kind added later fails to encode
+        // (`encode::literal`) until it is handled there.
+        _ => {}
     }
 }
 
