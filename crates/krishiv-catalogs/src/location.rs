@@ -29,8 +29,11 @@ pub enum LocationRule {
     /// User information in the URL (`s3://key:secret@bucket/...`): credentials come from the store's own
     /// configuration, never from a catalog.
     CredentialsInLocation,
-    /// A `..` segment (plain or percent-encoded): the location would leave the prefix it appears to name.
+    /// A `..` segment (plain or percent-encoded), or an encoded slash or backslash inside a segment: the location
+    /// would leave the prefix it appears to name once something decodes it.
     PathEscape,
+    /// No host or bucket after `scheme://` (`s3:///key`).
+    MissingHost,
 }
 
 impl LocationRule {
@@ -45,6 +48,7 @@ impl LocationRule {
             Self::SchemeNotAllowed => "scheme not allowed",
             Self::CredentialsInLocation => "credentials in the location",
             Self::PathEscape => "path escape",
+            Self::MissingHost => "no bucket or host",
         }
     }
 }
@@ -116,6 +120,9 @@ impl LocationPolicy for RemoteLocationPolicy {
             return Err(LocationRule::SchemeNotAllowed);
         }
         let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+        if authority.is_empty() || authority.starts_with('@') {
+            return Err(LocationRule::MissingHost);
+        }
         if let Some((userinfo, _host)) = authority.split_once('@') {
             // `abfs[s]://container@account.dfs.core.windows.net` names the container before the `@`: that is
             // an address, not a credential. A password, or user information on any other scheme, is one.
@@ -126,7 +133,12 @@ impl LocationPolicy for RemoteLocationPolicy {
         }
         let escapes = path.split(['/', '?', '#']).any(|segment| {
             let segment = segment.to_ascii_lowercase();
-            segment == ".." || segment == "%2e%2e" || segment == ".%2e" || segment == "%2e."
+            segment == ".."
+                || segment == "%2e%2e"
+                || segment == ".%2e"
+                || segment == "%2e."
+                || segment.contains("%2f")
+                || segment.contains("%5c")
         });
         if escapes {
             return Err(LocationRule::PathEscape);
@@ -219,6 +231,10 @@ mod tests {
             ("s3://bucket/a/%2E%2e/b", LocationRule::PathEscape),
             ("s3://bucket/a/.%2e/b", LocationRule::PathEscape),
             ("gs://b/../x", LocationRule::PathEscape),
+            ("s3://bucket/a%2F..%2Fb", LocationRule::PathEscape),
+            ("s3://bucket/a%5cb", LocationRule::PathEscape),
+            ("s3:///key", LocationRule::MissingHost),
+            ("gs://", LocationRule::MissingHost),
         ];
         for (location, expected) in cases {
             assert_eq!(rule(location), Err(expected), "{location:?}");

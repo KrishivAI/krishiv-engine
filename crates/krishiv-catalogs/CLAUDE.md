@@ -13,13 +13,17 @@ input, not a trusted party (design `P3-lakehouse.md` §5.6): everything it retur
   catalog and the table and never the location, and logs a catalog fault on `krishiv::catalog`; it is not an authorization
   denial). The allowlists of ADR 0046 §3a and the egress policy join through the trait when they exist.
 - `src/hive/` (feature `hive`; the plain `thrift` runtime, default features off) the Hive metastore: `types.rs` the structs of
-  `hive_metastore.thrift` by field id (read-only, unknown or mistyped fields skipped), `client.rs` `HmsClient` (blocking;
-  connect, read and write timeouts from `krishiv.catalog.requestTimeout`, message size and nesting limits through
-  `TConfiguration`; a missing table is `None`, `MetaException` an error; no SASL), `catalog.rs` `HiveCatalog`
-  (a read-only `Catalog`: a table Spark wrote takes its schema from `spark.sql.sources.schema[.part.N]`, any other from the
-  metastore's columns, partition columns last; the location goes through `check_location`; a failure is
-  `KRISHIV_CATALOG_FAILURE` naming the catalog and table, detail in the log; the connection is dropped on a failure),
-  `test_server.rs` a fake metastore over real Thrift binary (tests only).
+  `hive_metastore.thrift` by field id (read-only; unknown or mistyped fields are skipped, a list or map of the wrong element
+  type is refused), `limits.rs` the budget of one call (a deadline for the whole call, bytes read, decoded elements, longest
+  string; `thrift` bounds none of these as a total), `client.rs` `HmsClient` (blocking, buffered binary; a guarded socket
+  spends the deadline and the byte budget on every read, so a server that trickles bytes cannot hold a call; the type
+  readers spend the element budget before they allocate; a missing table is `None`, `MetaException` an error; no SASL, no
+  framed transport), `catalog.rs` `HiveCatalog` (a read-only `Catalog`: a table Spark wrote takes its schema from
+  `spark.sql.sources.schema[.part.N]` and its partition columns from `numPartCols`/`partCol.N`, any other from the
+  metastore's columns, partition columns last; a damaged Spark schema property is a catalog fault, never the placeholder
+  columns; `sd.location` and the serde `path` go through `check_location`; a failure is `KRISHIV_CATALOG_FAILURE`, a limit
+  `KRISHIV_CATALOG_LIMIT_EXCEEDED`, both naming the catalog and table with the detail in the log, cut short; the connection is
+  dropped on a failure), `test_server.rs` a fake metastore over real Thrift binary (tests only).
 - Not here yet: the write half of the Hive catalog, the Unity Catalog client, the Docker acceptance against a real metastore
   (the default port, transport and SASL are settings and unverified until then).
 

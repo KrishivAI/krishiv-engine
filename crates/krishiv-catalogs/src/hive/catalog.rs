@@ -4,19 +4,23 @@
 //! A table's schema comes from where its writer put it: a table Spark wrote through a metastore keeps the real
 //! schema as JSON in the table properties (`spark.sql.sources.schema`, or `.numParts` and `.part.N`), with a
 //! placeholder column list in the metastore itself; any other table has its columns (and partition columns, last)
-//! in the metastore's own lists, as Hive type strings. The storage location goes through
-//! [`check_location`](crate::location::check_location) before it leaves this module, so a catalog that names
-//! `file:///etc` or an endpoint of its own is refused as a catalog fault, never read.
+//! in the metastore's own lists, as Hive type strings. A Spark schema property that is damaged (a part missing, JSON
+//! that does not parse or is not a struct, a partition column the schema does not have) is a catalog fault, never a
+//! silent fall back to the placeholder columns. The storage locations (`sd.location`, and the serde's `path` property
+//! where Spark records it) go through [`check_location`](crate::location::check_location) before they leave this
+//! module, so a catalog that names `file:///etc` or an endpoint of its own is refused as a catalog fault, never read.
 //!
-//! The client is blocking: each call runs on the blocking pool, on one connection that is dropped on any failure
-//! so the next call reconnects. A failure reaches the user as `KRISHIV_CATALOG_FAILURE` naming the catalog and the
-//! table; the detail goes to the log.
+//! The client is blocking: each call runs on the blocking pool, on one connection that is dropped on any failure so
+//! the next call reconnects. A failure reaches the user as `KRISHIV_CATALOG_FAILURE` naming the catalog and the
+//! table, and a limit as `KRISHIV_CATALOG_LIMIT_EXCEEDED`; the detail goes to the log, cut short.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use krishiv_common::error::{KrishivCatalogFailure, KrishivError, KrishivUnsupportedFeature};
+use krishiv_common::error::{
+    KrishivCatalogFailure, KrishivCatalogLimitExceeded, KrishivError, KrishivUnsupportedFeature,
+};
 use krishiv_plan::TableVersion;
 use krishiv_plan::analyzer::{
     BoxFuture, Catalog, FileMetadata, NameForm, TableColumn, TableIdent, TableKind, TableMeta,
@@ -24,8 +28,15 @@ use krishiv_plan::analyzer::{
 use krishiv_types::{DataType, parse_data_type};
 
 use super::client::{HmsClient, HmsConfig, HmsError};
+use super::limits::Limit;
 use super::types::{FieldSchema, Table};
 use crate::location::{LocationPolicy, check_location};
+
+/// Spark's field-metadata key for a `CHAR(n)` / `VARCHAR(n)` column, whose type is `string`.
+const CHAR_VARCHAR_KEY: &str = "__CHAR_VARCHAR_TYPE_STRING";
+
+/// How much of a server's text reaches the log.
+const LOGGED_DETAIL_CHARS: usize = 300;
 
 /// What a Hive table is, read and checked: the planner's [`TableMeta`] plus what a reader of its files needs.
 #[derive(Debug, Clone)]
@@ -49,6 +60,7 @@ pub struct HiveTable {
 struct Inner {
     name: String,
     config: HmsConfig,
+    max_columns: usize,
     policy: Arc<dyn LocationPolicy + Send + Sync>,
     client: Mutex<Option<HmsClient>>,
     epoch: AtomicU64,
@@ -73,19 +85,46 @@ fn quoted(part: &str) -> String {
     format!("`{}`", part.replace('`', "``"))
 }
 
+/// A server's text, cut to what a log line should carry.
+fn shortened(text: &str) -> String {
+    let mut out: String = text.chars().take(LOGGED_DETAIL_CHARS).collect();
+    if text.chars().count() > LOGGED_DETAIL_CHARS {
+        out.push('…');
+    }
+    out
+}
+
+/// A catalog fault with the detail in the log only.
+fn fault(catalog: &str, relation: &str, detail: &str) -> KrishivError {
+    tracing::warn!(
+        target: "krishiv::catalog",
+        catalog,
+        table = relation,
+        detail = shortened(detail).as_str(),
+        "a Hive metastore returned something Krishiv cannot use"
+    );
+    KrishivCatalogFailure {
+        catalog: quoted(catalog),
+        relation_name: relation.to_owned(),
+    }
+    .into()
+}
+
 impl HiveCatalog {
-    /// A catalog named `name` over the metastore `config` reaches; `policy` decides which locations it may name.
-    /// Nothing connects until the first call.
+    /// A catalog named `name` over the metastore `config` reaches; `policy` decides which locations it may name and
+    /// `max_columns` (`krishiv.catalog.maxColumns`) how wide a table may be. Nothing connects until the first call.
     #[must_use]
     pub fn new(
         name: impl Into<String>,
         config: HmsConfig,
+        max_columns: usize,
         policy: Arc<dyn LocationPolicy + Send + Sync>,
     ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 name: name.into(),
                 config,
+                max_columns,
                 policy,
                 client: Mutex::new(None),
                 epoch: AtomicU64::new(0),
@@ -93,19 +132,49 @@ impl HiveCatalog {
         }
     }
 
+    /// The error for a failed call: a limit is `KRISHIV_CATALOG_LIMIT_EXCEEDED`, anything else
+    /// `KRISHIV_CATALOG_FAILURE` with the detail in the log.
     fn failure(&self, relation: &str, detail: &HmsError) -> KrishivError {
-        tracing::warn!(
-            target: "krishiv::catalog",
-            catalog = self.inner.name.as_str(),
-            table = relation,
-            detail = ?detail,
-            "a Hive metastore call failed"
-        );
-        KrishivCatalogFailure {
-            catalog: quoted(&self.inner.name),
-            relation_name: relation.to_owned(),
+        let c = &self.inner.config;
+        match detail {
+            HmsError::Limit(limit) => {
+                let (what, value, config) = match limit {
+                    Limit::Bytes => (
+                        "bytes in one reply",
+                        c.max_message_bytes.to_string(),
+                        "a higher `krishiv.catalog.maxMetadataBytes`",
+                    ),
+                    Limit::Elements => (
+                        "elements in one reply",
+                        c.max_elements.to_string(),
+                        "a higher element limit for this catalog",
+                    ),
+                    Limit::Size => (
+                        "the size of one string or list",
+                        c.max_string_bytes.to_string(),
+                        "a higher size limit for this catalog",
+                    ),
+                    Limit::Depth => (
+                        "the nesting depth of a reply",
+                        c.max_depth.to_string(),
+                        "a higher depth limit for this catalog",
+                    ),
+                };
+                KrishivCatalogLimitExceeded {
+                    source: format!(
+                        "The reply of the Hive metastore {} for {relation}",
+                        quoted(&self.inner.name)
+                    ),
+                    limit: what.to_owned(),
+                    value,
+                    config: config.to_owned(),
+                }
+                .into()
+            }
+            HmsError::Meta(text) | HmsError::Failed(text) => {
+                fault(&self.inner.name, relation, text)
+            }
         }
-        .into()
     }
 
     /// Runs `call` on the one connection, connecting first if there is none. A failure drops the connection.
@@ -151,9 +220,10 @@ impl HiveCatalog {
     /// Loads `database.table`: `None` when it does not exist.
     ///
     /// # Errors
-    /// `KRISHIV_CATALOG_FAILURE` when the metastore fails; `KRISHIV_CATALOG_LOCATION_REFUSED` when the location it
-    /// names is refused; `KRISHIV_UNSUPPORTED_FEATURE` for a view, a table without storage or a column type that
-    /// has no Krishiv type.
+    /// `KRISHIV_CATALOG_FAILURE` when the metastore fails or sends something damaged;
+    /// `KRISHIV_CATALOG_LIMIT_EXCEEDED` when a reply or a schema is over a limit;
+    /// `KRISHIV_CATALOG_LOCATION_REFUSED` when a location it names is refused; `KRISHIV_UNSUPPORTED_FEATURE` for a
+    /// view, a table without storage or a column type that has no Krishiv type.
     pub fn load(&self, database: &str, table: &str) -> Result<Option<HiveTable>, KrishivError> {
         let relation = format!(
             "{}.{}.{}",
@@ -165,8 +235,30 @@ impl HiveCatalog {
             .with_client(|c| c.get_table(database, table))
             .map_err(|e| self.failure(&relation, &e))?;
         found
-            .map(|t| convert(&self.inner.name, &relation, t, &*self.inner.policy))
+            .map(|t| {
+                convert(
+                    &self.inner.name,
+                    &relation,
+                    t,
+                    &*self.inner.policy,
+                    self.inner.max_columns,
+                )
+                .map_err(|e| match e {
+                    Converted::Error(e) => e,
+                    Converted::Columns(n) => self.columns_over_limit(&relation, n),
+                })
+            })
             .transpose()
+    }
+
+    fn columns_over_limit(&self, relation: &str, columns: usize) -> KrishivError {
+        KrishivCatalogLimitExceeded {
+            source: format!("The schema of {relation}"),
+            limit: format!("{} columns", self.inner.max_columns),
+            value: format!("{columns} columns"),
+            config: "`krishiv.catalog.maxColumns`".to_owned(),
+        }
+        .into()
     }
 }
 
@@ -193,7 +285,7 @@ impl Catalog for HiveCatalog {
     ) -> BoxFuture<'a, Result<Option<TableMeta>, KrishivError>> {
         let catalog = self.clone();
         let (database, table) = match id.namespace.as_slice() {
-            [database] if version.is_none() => {
+            [database] if version.is_none() && !form.temporary_only => {
                 if form.case_sensitive {
                     (database.clone(), id.name.clone())
                 } else {
@@ -202,47 +294,84 @@ impl Catalog for HiveCatalog {
             }
             _ => return Box::pin(async { Ok(None) }),
         };
-        if form.temporary_only {
-            return Box::pin(async { Ok(None) });
-        }
+        let relation = format!(
+            "{}.{}.{}",
+            quoted(&self.inner.name),
+            quoted(&database),
+            quoted(&table)
+        );
         Box::pin(async move {
-            tokio::task::spawn_blocking(move || {
+            let name = catalog.inner.name.clone();
+            match tokio::task::spawn_blocking(move || {
                 catalog.load(&database, &table).map(|t| t.map(|t| t.meta))
             })
             .await
-            .map_err(|e| {
-                KrishivError::from(KrishivUnsupportedFeature {
-                    feature: format!("a Hive metastore call that was cancelled: {e}"),
-                })
-            })?
+            {
+                Ok(loaded) => loaded,
+                // The blocking task panicked or was cancelled: the panic text stays out of the user's error.
+                Err(e) => Err(fault(
+                    &name,
+                    &relation,
+                    &format!("the metastore call did not finish: {e}"),
+                )),
+            }
         })
     }
 }
 
-/// Spark's schema property: the JSON in one value, or split in `numParts` parts.
-fn spark_schema_json(properties: &BTreeMap<String, String>) -> Option<String> {
-    if let Some(whole) = properties.get("spark.sql.sources.schema") {
-        return Some(whole.clone());
-    }
-    let parts: usize = properties
-        .get("spark.sql.sources.schema.numParts")?
-        .parse()
-        .ok()?;
-    let mut json = String::new();
-    for i in 0..parts {
-        json.push_str(properties.get(&format!("spark.sql.sources.schema.part.{i}"))?);
-    }
-    Some(json)
+/// Why a conversion failed: an error to raise, or a schema over `krishiv.catalog.maxColumns`.
+enum Converted {
+    Error(KrishivError),
+    Columns(usize),
 }
 
-fn spark_partition_columns(properties: &BTreeMap<String, String>) -> Vec<String> {
-    let n: usize = properties
-        .get("spark.sql.sources.schema.numPartCols")
-        .and_then(|n| n.parse().ok())
-        .unwrap_or(0);
+impl From<KrishivError> for Converted {
+    fn from(e: KrishivError) -> Self {
+        Self::Error(e)
+    }
+}
+
+/// The Spark schema property: the JSON in one value, or split in `numParts` parts. `Ok(None)` when the table has
+/// none (then the metastore's columns are the schema); a damaged one is `Err`.
+fn spark_schema_json(
+    properties: &BTreeMap<String, String>,
+) -> Result<Option<String>, &'static str> {
+    if let Some(whole) = properties.get("spark.sql.sources.schema") {
+        return Ok(Some(whole.clone()));
+    }
+    let Some(parts) = properties.get("spark.sql.sources.schema.numParts") else {
+        return Ok(None);
+    };
+    let parts: usize = parts
+        .parse()
+        .map_err(|_| "the number of schema parts is not a number")?;
+    let mut json = String::new();
+    for i in 0..parts {
+        json.push_str(
+            properties
+                .get(&format!("spark.sql.sources.schema.part.{i}"))
+                .ok_or("a part of the schema property is missing")?,
+        );
+    }
+    Ok(Some(json))
+}
+
+fn spark_partition_columns(
+    properties: &BTreeMap<String, String>,
+) -> Result<Vec<String>, &'static str> {
+    let Some(n) = properties.get("spark.sql.sources.schema.numPartCols") else {
+        return Ok(Vec::new());
+    };
+    let n: usize = n
+        .parse()
+        .map_err(|_| "the number of partition columns is not a number")?;
     (0..n)
-        .filter_map(|i| properties.get(&format!("spark.sql.sources.schema.partCol.{i}")))
-        .cloned()
+        .map(|i| {
+            properties
+                .get(&format!("spark.sql.sources.schema.partCol.{i}"))
+                .cloned()
+                .ok_or("a partition column of the schema property is missing")
+        })
         .collect()
 }
 
@@ -265,57 +394,105 @@ fn hive_column(field: &FieldSchema, relation: &str) -> Result<TableColumn, Krish
     Ok(TableColumn::new(&field.name, data_type, true))
 }
 
+/// The schema of a table Spark wrote: its columns, their comments and its partition columns.
+struct SparkSchema {
+    columns: Vec<TableColumn>,
+    comments: BTreeMap<String, String>,
+    partitions: Vec<String>,
+}
+
+/// The schema of a table Spark wrote, from its schema property. `Ok(None)` when it has no schema property.
+fn spark_table(
+    catalog: &str,
+    relation: &str,
+    properties: &BTreeMap<String, String>,
+) -> Result<Option<SparkSchema>, KrishivError> {
+    let damaged = |why: &str| {
+        fault(
+            catalog,
+            relation,
+            &format!("the Spark schema property is damaged: {why}"),
+        )
+    };
+    let Some(json) = spark_schema_json(properties).map_err(damaged)? else {
+        return Ok(None);
+    };
+    let Ok(DataType::Struct(schema)) = DataType::from_json(&json) else {
+        return Err(damaged("it is not the JSON of a struct type"));
+    };
+    let mut columns = Vec::new();
+    let mut comments = BTreeMap::new();
+    for f in schema.fields() {
+        let mut column = TableColumn::new(f.name(), f.data_type().clone(), f.nullable());
+        column.char_varchar = f
+            .metadata()
+            .as_map()
+            .get(CHAR_VARCHAR_KEY)
+            .and_then(|v| v.as_str())
+            .map(str::to_ascii_lowercase);
+        columns.push(column);
+        if let Some(c) = f.metadata().comment() {
+            comments.insert(f.name().to_owned(), c.to_owned());
+        }
+    }
+    let partitions = spark_partition_columns(properties).map_err(damaged)?;
+    for p in &partitions {
+        if !columns.iter().any(|c| c.name.eq_ignore_ascii_case(p)) {
+            return Err(damaged("a partition column is not a column of the schema"));
+        }
+    }
+    Ok(Some(SparkSchema {
+        columns,
+        comments,
+        partitions,
+    }))
+}
+
 fn convert(
     catalog: &str,
     relation: &str,
     table: Table,
     policy: &dyn LocationPolicy,
-) -> Result<HiveTable, KrishivError> {
+    max_columns: usize,
+) -> Result<HiveTable, Converted> {
     if matches!(
         table.table_type.as_deref(),
         Some("VIRTUAL_VIEW" | "MATERIALIZED_VIEW")
     ) {
-        return Err(KrishivUnsupportedFeature {
+        return Err(KrishivError::from(KrishivUnsupportedFeature {
             feature: format!("reading the Hive view {relation}"),
-        }
+        })
         .into());
     }
     let Some(sd) = table.sd else {
-        return Err(KrishivUnsupportedFeature {
+        return Err(KrishivError::from(KrishivUnsupportedFeature {
             feature: format!("the Hive table {relation} without storage"),
-        }
+        })
         .into());
     };
     let location = sd.location.clone().unwrap_or_default();
     check_location(catalog, relation, &location, policy)?;
+    // Spark also records where a data source table reads from as the serde's `path`: it is a location a reader may
+    // use, so it is checked the same way.
+    if let Some(path) = sd
+        .serde_info
+        .as_ref()
+        .and_then(|s| s.parameters.get("path"))
+    {
+        check_location(catalog, relation, path, policy)?;
+    }
 
     let provider = table.parameters.get("spark.sql.sources.provider").cloned();
-    let mut comments = BTreeMap::new();
-    let spark_schema = provider
-        .as_ref()
-        .and_then(|_| spark_schema_json(&table.parameters))
-        .map(|json| DataType::from_json(&json))
-        .transpose()
-        .map_err(|_| {
-            KrishivError::from(KrishivUnsupportedFeature {
-                feature: format!("the Spark schema property of {relation}"),
-            })
-        })?;
-    let (columns, partition_columns) = if let Some(DataType::Struct(schema)) = spark_schema {
-        let mut columns = Vec::new();
-        for f in schema.fields() {
-            columns.push(TableColumn::new(
-                f.name(),
-                f.data_type().clone(),
-                f.nullable(),
-            ));
-            if let Some(c) = f.metadata().comment() {
-                comments.insert(f.name().to_owned(), c.to_owned());
-            }
-        }
-        (columns, spark_partition_columns(&table.parameters))
+    let from_spark = if provider.is_some() {
+        spark_table(catalog, relation, &table.parameters)?
+    } else {
+        None
+    };
+    let (columns, comments, partition_columns) = if let Some(spark) = from_spark {
+        (spark.columns, spark.comments, spark.partitions)
     } else {
         let mut columns = Vec::new();
+        let mut comments = BTreeMap::new();
         for f in sd.cols.iter().chain(&table.partition_keys) {
             columns.push(hive_column(f, relation)?);
             if let Some(c) = f.comment.as_ref().filter(|c| !c.is_empty()) {
@@ -327,8 +504,11 @@ fn convert(
             .iter()
             .map(|f| f.name.clone())
             .collect();
-        (columns, keys)
+        (columns, comments, keys)
     };
+    if columns.len() > max_columns {
+        return Err(Converted::Columns(columns.len()));
+    }
     let meta = TableMeta {
         ident: TableIdent {
             catalog: catalog.to_owned(),
@@ -371,6 +551,7 @@ mod tests {
         cols: Vec<(&'static str, &'static str, &'static str)>,
         partitions: Vec<(&'static str, &'static str)>,
         params: Vec<(String, String)>,
+        serde_params: Vec<(&'static str, &'static str)>,
     }
 
     impl Fake {
@@ -385,6 +566,7 @@ mod tests {
                 ],
                 partitions: vec![("dt", "string")],
                 params: vec![("EXTERNAL".to_owned(), "TRUE".to_owned())],
+                serde_params: Vec::new(),
             }
         }
     }
@@ -426,7 +608,12 @@ mod tests {
                     o,
                     2,
                     "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe",
-                )
+                )?;
+                if t.serde_params.is_empty() {
+                    Ok(())
+                } else {
+                    map_field(o, 3, &t.serde_params)
+                }
             })
         })?;
         o.write_field_begin(&thrift::protocol::TFieldIdentifier {
@@ -455,6 +642,7 @@ mod tests {
         HiveCatalog::new(
             "hms",
             cfg(address),
+            10_000,
             Arc::new(RemoteLocationPolicy::default()),
         )
     }
@@ -707,5 +895,162 @@ mod tests {
         assert_eq!(c.list_databases().unwrap(), ["default", "web"]);
         assert_eq!(c.list_tables("web").unwrap(), ["events"]);
         server.join().unwrap();
+    }
+
+    fn spark(props: &[(&str, &str)]) -> Fake {
+        let mut t = Fake::hive();
+        t.cols = vec![("col", "array<string>", "from deserializer")];
+        t.partitions = Vec::new();
+        t.params = std::iter::once(("spark.sql.sources.provider", "parquet"))
+            .chain(props.iter().copied())
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect();
+        t
+    }
+
+    const SCHEMA: &str = r#"{"type":"struct","fields":[{"name":"id","type":"long","nullable":false,"metadata":{}},{"name":"dt","type":"string","nullable":true,"metadata":{}}]}"#;
+
+    /// A schema property that does not add up is a fault of the catalog, never the placeholder column list.
+    #[test]
+    fn a_damaged_spark_schema_property_is_a_catalog_fault_not_the_placeholder_schema() {
+        let cases: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            (
+                "a part is missing",
+                vec![
+                    ("spark.sql.sources.schema.numParts", "2"),
+                    ("spark.sql.sources.schema.part.0", "{"),
+                ],
+            ),
+            (
+                "numParts is not a number",
+                vec![("spark.sql.sources.schema.numParts", "two")],
+            ),
+            ("not JSON", vec![("spark.sql.sources.schema", "{not json")]),
+            (
+                "not a struct",
+                vec![("spark.sql.sources.schema", "\"integer\"")],
+            ),
+            (
+                "a partition column the schema lacks",
+                vec![
+                    ("spark.sql.sources.schema", SCHEMA),
+                    ("spark.sql.sources.schema.numPartCols", "1"),
+                    ("spark.sql.sources.schema.partCol.0", "nope"),
+                ],
+            ),
+            (
+                "a partition column entry is missing",
+                vec![
+                    ("spark.sql.sources.schema", SCHEMA),
+                    ("spark.sql.sources.schema.numPartCols", "2"),
+                    ("spark.sql.sources.schema.partCol.0", "dt"),
+                ],
+            ),
+            (
+                "numPartCols is not a number",
+                vec![
+                    ("spark.sql.sources.schema", SCHEMA),
+                    ("spark.sql.sources.schema.numPartCols", "x"),
+                ],
+            ),
+        ];
+        for (why, props) in cases {
+            let (address, server) = serving(spark(&props));
+            let e = catalog(&address).load("web", "events").unwrap_err();
+            server.join().unwrap();
+            assert_eq!(e.error_class(), ErrorClass::KrishivCatalogFailure, "{why}");
+            assert!(e.to_string().contains("`hms`.`web`.`events`"), "{why}: {e}");
+            assert!(
+                !e.to_string().contains("damaged"),
+                "the detail stays in the log: {e}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_spark_table_without_a_schema_property_reads_the_metastore_columns() {
+        let (address, server) = serving(spark(&[]));
+        let table = catalog(&address).load("web", "events").unwrap().unwrap();
+        server.join().unwrap();
+        assert_eq!(table.meta.columns.len(), 1);
+        assert_eq!(table.meta.columns[0].name, "col");
+        assert_eq!(table.provider.as_deref(), Some("parquet"));
+    }
+
+    #[test]
+    fn a_spark_char_or_varchar_column_keeps_its_declared_type() {
+        let json = r#"{"type":"struct","fields":[{"name":"c","type":"string","nullable":true,"metadata":{"__CHAR_VARCHAR_TYPE_STRING":"VARCHAR(20)"}},{"name":"s","type":"string","nullable":true,"metadata":{}}]}"#;
+        let (address, server) = serving(spark(&[("spark.sql.sources.schema", json)]));
+        let table = catalog(&address).load("web", "events").unwrap().unwrap();
+        server.join().unwrap();
+        assert_eq!(table.meta.columns[0].data_type, DataType::String);
+        assert_eq!(
+            table.meta.columns[0].char_varchar.as_deref(),
+            Some("varchar(20)")
+        );
+        assert_eq!(table.meta.columns[1].char_varchar, None);
+    }
+
+    /// Spark records a data source table's path in the serde too: it is a location a reader may use.
+    #[test]
+    fn the_serde_path_property_is_checked_like_the_location() {
+        let mut t = Fake::hive();
+        t.serde_params = vec![("path", "file:///etc/passwd")];
+        let (address, server) = serving(t);
+        let e = catalog(&address).load("web", "events").unwrap_err();
+        server.join().unwrap();
+        assert_eq!(e.error_class(), ErrorClass::KrishivCatalogLocationRefused);
+        assert!(!e.to_string().contains("passwd"), "{e}");
+        let mut ok = Fake::hive();
+        ok.serde_params = vec![
+            ("path", "s3a://bucket/web/events"),
+            ("serialization.format", "1"),
+        ];
+        let (address, server) = serving(ok);
+        assert!(catalog(&address).load("web", "events").unwrap().is_some());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn limits_are_the_limit_class_naming_the_limit_and_the_key() {
+        let (address, server) = serving(Fake::hive());
+        let tight = HmsConfig {
+            max_message_bytes: 64,
+            ..cfg(&address)
+        };
+        let c = HiveCatalog::new(
+            "hms",
+            tight,
+            10_000,
+            Arc::new(RemoteLocationPolicy::default()),
+        );
+        let e = c.load("web", "events").unwrap_err();
+        drop(server);
+        assert_eq!(e.error_class(), ErrorClass::KrishivCatalogLimitExceeded);
+        let text = e.to_string();
+        assert!(
+            text.contains("64") && text.contains("krishiv.catalog.maxMetadataBytes"),
+            "{text}"
+        );
+        assert!(text.contains("`hms`.`web`.`events`"), "{text}");
+    }
+
+    #[test]
+    fn a_schema_wider_than_max_columns_is_the_limit_class() {
+        let (address, server) = serving(Fake::hive());
+        let c = HiveCatalog::new(
+            "hms",
+            cfg(&address),
+            3,
+            Arc::new(RemoteLocationPolicy::default()),
+        );
+        let e = c.load("web", "events").unwrap_err();
+        server.join().unwrap();
+        assert_eq!(e.error_class(), ErrorClass::KrishivCatalogLimitExceeded);
+        let text = e.to_string();
+        assert!(
+            text.contains("4 columns") && text.contains("krishiv.catalog.maxColumns"),
+            "{text}"
+        );
     }
 }

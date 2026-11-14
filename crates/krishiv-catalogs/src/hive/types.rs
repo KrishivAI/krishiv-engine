@@ -10,6 +10,8 @@ use std::collections::BTreeMap;
 use thrift::Result;
 use thrift::protocol::{TInputProtocol, TType};
 
+use super::limits::Budget;
+
 /// Reads one struct: calls `field(protocol, id, type)` for each field, which returns whether it read it; a field
 /// it did not read is skipped.
 pub(crate) fn read_fields(
@@ -30,14 +32,20 @@ pub(crate) fn read_fields(
     p.read_struct_end()
 }
 
-/// A `list<T>` read with `item` for each element. A negative length is a protocol error.
+/// A `list<T>` of `expected` elements, `item` read for each. The elements are spent from the call's budget before
+/// anything is allocated, a header of the wrong element type is refused, and a negative length is a protocol error.
 pub(crate) fn read_list<T>(
     p: &mut dyn TInputProtocol,
+    budget: &Budget,
+    expected: TType,
     mut item: impl FnMut(&mut dyn TInputProtocol) -> Result<T>,
 ) -> Result<Vec<T>> {
     let header = p.read_list_begin()?;
     let n = usize::try_from(header.size).map_err(|_| negative_size())?;
-    // The protocol checked `n` against the message size limit; do not trust it for the allocation.
+    if n > 0 && header.element_type != expected {
+        return Err(wrong_type("a list"));
+    }
+    budget.take_elements(n)?;
     let mut out = Vec::with_capacity(n.min(1024));
     for _ in 0..n {
         out.push(item(p)?);
@@ -47,14 +55,22 @@ pub(crate) fn read_list<T>(
 }
 
 /// A `list<string>`.
-pub(crate) fn read_strings(p: &mut dyn TInputProtocol) -> Result<Vec<String>> {
-    read_list(p, |p| p.read_string())
+pub(crate) fn read_strings(p: &mut dyn TInputProtocol, budget: &Budget) -> Result<Vec<String>> {
+    read_list(p, budget, TType::String, |p| p.read_string())
 }
 
 /// A `map<string, string>`.
-pub(crate) fn read_string_map(p: &mut dyn TInputProtocol) -> Result<BTreeMap<String, String>> {
+pub(crate) fn read_string_map(
+    p: &mut dyn TInputProtocol,
+    budget: &Budget,
+) -> Result<BTreeMap<String, String>> {
     let header = p.read_map_begin()?;
     let n = usize::try_from(header.size).map_err(|_| negative_size())?;
+    if n > 0 && (header.key_type != Some(TType::String) || header.value_type != Some(TType::String))
+    {
+        return Err(wrong_type("a map"));
+    }
+    budget.take_elements(n)?;
     let mut out = BTreeMap::new();
     for _ in 0..n {
         let key = p.read_string()?;
@@ -69,6 +85,13 @@ fn negative_size() -> thrift::Error {
     thrift::Error::Protocol(thrift::ProtocolError::new(
         thrift::ProtocolErrorKind::NegativeSize,
         "a container with a negative length",
+    ))
+}
+
+fn wrong_type(what: &str) -> thrift::Error {
+    thrift::Error::Protocol(thrift::ProtocolError::new(
+        thrift::ProtocolErrorKind::InvalidData,
+        format!("{what} of an unexpected element type"),
     ))
 }
 
@@ -111,13 +134,13 @@ pub struct SerDeInfo {
 }
 
 impl SerDeInfo {
-    pub(crate) fn read(p: &mut dyn TInputProtocol) -> Result<Self> {
+    pub(crate) fn read(p: &mut dyn TInputProtocol, b: &Budget) -> Result<Self> {
         let mut out = Self::default();
         read_fields(p, |p, id, t| {
             match (id, t) {
                 (1, TType::String) => out.name = Some(p.read_string()?),
                 (2, TType::String) => out.serialization_lib = Some(p.read_string()?),
-                (3, TType::Map) => out.parameters = read_string_map(p)?,
+                (3, TType::Map) => out.parameters = read_string_map(p, b)?,
                 _ => return Ok(false),
             }
             Ok(true)
@@ -151,19 +174,21 @@ pub struct StorageDescriptor {
 }
 
 impl StorageDescriptor {
-    pub(crate) fn read(p: &mut dyn TInputProtocol) -> Result<Self> {
+    pub(crate) fn read(p: &mut dyn TInputProtocol, b: &Budget) -> Result<Self> {
         let mut out = Self::default();
         read_fields(p, |p, id, t| {
             match (id, t) {
-                (1, TType::List) => out.cols = read_list(p, FieldSchema::read)?,
+                (1, TType::List) => {
+                    out.cols = read_list(p, b, TType::Struct, FieldSchema::read)?;
+                }
                 (2, TType::String) => out.location = Some(p.read_string()?),
                 (3, TType::String) => out.input_format = Some(p.read_string()?),
                 (4, TType::String) => out.output_format = Some(p.read_string()?),
                 (5, TType::Bool) => out.compressed = p.read_bool()?,
                 (6, TType::I32) => out.num_buckets = p.read_i32()?,
-                (7, TType::Struct) => out.serde_info = Some(SerDeInfo::read(p)?),
-                (8, TType::List) => out.bucket_cols = read_strings(p)?,
-                (10, TType::Map) => out.parameters = read_string_map(p)?,
+                (7, TType::Struct) => out.serde_info = Some(SerDeInfo::read(p, b)?),
+                (8, TType::List) => out.bucket_cols = read_strings(p, b)?,
+                (10, TType::Map) => out.parameters = read_string_map(p, b)?,
                 _ => return Ok(false),
             }
             Ok(true)
@@ -199,7 +224,7 @@ pub struct Table {
 }
 
 impl Table {
-    pub(crate) fn read(p: &mut dyn TInputProtocol) -> Result<Self> {
+    pub(crate) fn read(p: &mut dyn TInputProtocol, b: &Budget) -> Result<Self> {
         let mut out = Self::default();
         read_fields(p, |p, id, t| {
             match (id, t) {
@@ -207,9 +232,11 @@ impl Table {
                 (2, TType::String) => out.db_name = p.read_string()?,
                 (3, TType::String) => out.owner = Some(p.read_string()?),
                 (4, TType::I32) => out.create_time = p.read_i32()?,
-                (7, TType::Struct) => out.sd = Some(StorageDescriptor::read(p)?),
-                (8, TType::List) => out.partition_keys = read_list(p, FieldSchema::read)?,
-                (9, TType::Map) => out.parameters = read_string_map(p)?,
+                (7, TType::Struct) => out.sd = Some(StorageDescriptor::read(p, b)?),
+                (8, TType::List) => {
+                    out.partition_keys = read_list(p, b, TType::Struct, FieldSchema::read)?;
+                }
+                (9, TType::Map) => out.parameters = read_string_map(p, b)?,
                 (10, TType::String) => out.view_original_text = Some(p.read_string()?),
                 (11, TType::String) => out.view_expanded_text = Some(p.read_string()?),
                 (12, TType::String) => out.table_type = Some(p.read_string()?),
@@ -235,14 +262,14 @@ pub struct Database {
 }
 
 impl Database {
-    pub(crate) fn read(p: &mut dyn TInputProtocol) -> Result<Self> {
+    pub(crate) fn read(p: &mut dyn TInputProtocol, b: &Budget) -> Result<Self> {
         let mut out = Self::default();
         read_fields(p, |p, id, t| {
             match (id, t) {
                 (1, TType::String) => out.name = p.read_string()?,
                 (2, TType::String) => out.description = Some(p.read_string()?),
                 (3, TType::String) => out.location_uri = Some(p.read_string()?),
-                (4, TType::Map) => out.parameters = read_string_map(p)?,
+                (4, TType::Map) => out.parameters = read_string_map(p, b)?,
                 _ => return Ok(false),
             }
             Ok(true)

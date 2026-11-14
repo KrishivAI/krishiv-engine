@@ -5,6 +5,7 @@
 
 pub mod catalog;
 pub mod client;
+pub mod limits;
 #[cfg(test)]
 mod test_server;
 pub mod types;
