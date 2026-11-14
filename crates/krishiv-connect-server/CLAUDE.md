@@ -17,7 +17,7 @@ Paths are relative to this crate.
 - `src/service.rs` `ConnectService`, Krishiv's implementation: `ExecutePlan`, `ReattachExecute` / `ReleaseExecute`
   (design P3-T011a §3.8: resume after `last_response_id`, `release_until` trims, `release_all` closes; the server's
   `ResponseBudget`), `ReleaseSession`, `AnalyzePlan`, `Config`,
-  `Interrupt` (each looks the session up and `observe`s the request: `client_type`, user and the Connect transport go to `system.sessions`; `ExecutePlan` and `AnalyzePlan` also take the `traceparent`/`baggage` metadata into the session's trace via `Session::set_inbound_trace`, never failing the request, P3-T068); the other RPCs are `UNIMPLEMENTED` until PR-15; a draining server answers `UNAVAILABLE` ("server
+  `Interrupt` (each looks the session up and `observe`s the request: `client_type`, user and the Connect transport go to `system.sessions`; `ExecutePlan` and `AnalyzePlan` also take the `traceparent`/`baggage` metadata into the session's trace via `Session::set_inbound_trace`, never failing the request, P3-T068; the trace is the session's, so two concurrent requests of one session can join each other's trace and a request without a `traceparent` clears it: a per-request trace through `QueryOptions` is the follow-up; the T068 acceptance, a client span and the engine span sharing one trace id in an OTLP collector, is not tested yet); the other RPCs are `UNIMPLEMENTED` until PR-15; a draining server answers `UNAVAILABLE` ("server
   shutting down")
 - `src/analyze.rs` `AnalyzePlan` (design §3.5): every arm over the translated, analyzed plan (never run);
   `same_semantics`/`semantic_hash` from `krishiv_plan::semantic_plan_hash` (names and subquery aliases erased) of

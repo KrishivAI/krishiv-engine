@@ -558,3 +558,34 @@ fn a_selector_tag_matches_a_key_or_the_whole_pair() {
     assert!(!tag_matches("teams", "team", "x"));
     assert!(!tag_matches("team=", "team", "x"));
 }
+
+#[test]
+fn rows_carry_the_subtree_counters_and_reserved_memory_to_every_ancestor() {
+    let rg = ResourceGroups::from_json(CAPS, MEM).unwrap_or_else(|e| panic!("{e}"));
+    let req = request("u");
+    let mut f: Pending<'_> = rg.admit(&req);
+    let permit = poll(&mut f)
+        .and_then(Result::ok)
+        .unwrap_or_else(|| panic!("admitted"));
+    permit
+        .slot::<GroupSlot>()
+        .unwrap_or_else(|| panic!("a group slot"))
+        .set_reserved(4096);
+    let rows = rg.rows();
+    let by_id = |id: &str| {
+        rows.iter()
+            .find(|r| r.group_id == id)
+            .unwrap_or_else(|| panic!("row {id}"))
+    };
+    let (root, leaf) = (by_id("root"), by_id("root.q"));
+    assert_eq!(root.parent_id, None);
+    assert_eq!(leaf.parent_id.as_deref(), Some("root"));
+    assert_eq!((root.running, leaf.running), (1, 1));
+    assert_eq!(
+        (root.memory_reserved_bytes, leaf.memory_reserved_bytes),
+        (4096, 4096),
+        "the parent row sums its subtree"
+    );
+    drop(permit);
+    assert_eq!(rg.rows()[0].memory_reserved_bytes, 0);
+}

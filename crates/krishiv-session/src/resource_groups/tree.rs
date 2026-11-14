@@ -189,7 +189,8 @@ impl Shared {
         let tree = self.lock();
         tree.nodes
             .iter()
-            .map(|n| GroupRow {
+            .enumerate()
+            .map(|(i, n)| GroupRow {
                 group_id: n.id.clone(),
                 parent_id: n.parent.map(|p| tree.nodes[p].id.clone()),
                 scheduling_policy: match n.policy {
@@ -199,8 +200,8 @@ impl Shared {
                 scheduling_weight: i32::try_from(n.weight).unwrap_or(i32::MAX),
                 priority: i32::from(n.priority),
                 workload_class: n.class.as_str(),
-                hard_concurrency_limit: i64::try_from(n.hard).unwrap_or(i64::MAX),
-                max_queued: i64::try_from(n.max_queued).unwrap_or(i64::MAX),
+                hard_concurrency_limit: i32::try_from(n.hard).unwrap_or(i32::MAX),
+                max_queued: i32::try_from(n.max_queued).unwrap_or(i32::MAX),
                 soft_memory_limit_bytes: n
                     .soft_memory
                     .map(|b| i64::try_from(b).unwrap_or(i64::MAX)),
@@ -213,15 +214,9 @@ impl Shared {
                 scan_quota_period_s: n
                     .scan_quota
                     .map(|q| i64::try_from(q.period_ms / 1000).unwrap_or(i64::MAX)),
-                running: i64::try_from(n.running).unwrap_or(i64::MAX),
-                queued: i64::try_from(n.queued).unwrap_or(i64::MAX),
-                memory_reserved_bytes: i64::try_from(
-                    n.reserved
-                        .iter()
-                        .map(|(_, r)| r.load(Ordering::Relaxed))
-                        .sum::<usize>(),
-                )
-                .unwrap_or(i64::MAX),
+                running: i32::try_from(n.running).unwrap_or(i32::MAX),
+                queued: i32::try_from(n.queued).unwrap_or(i32::MAX),
+                memory_reserved_bytes: i64::try_from(tree.reserved_in(i)).unwrap_or(i64::MAX),
                 scan_bytes_in_window: n
                     .scan_quota
                     .map(|_| i64::try_from(n.scan_used).unwrap_or(i64::MAX)),
@@ -251,14 +246,14 @@ pub struct GroupRow {
     pub(crate) scheduling_weight: i32,
     pub(crate) priority: i32,
     pub(crate) workload_class: &'static str,
-    pub(crate) hard_concurrency_limit: i64,
-    pub(crate) max_queued: i64,
+    pub(crate) hard_concurrency_limit: i32,
+    pub(crate) max_queued: i32,
     pub(crate) soft_memory_limit_bytes: Option<i64>,
     pub(crate) per_query_memory_limit_bytes: Option<i64>,
     pub(crate) scan_quota_bytes: Option<i64>,
     pub(crate) scan_quota_period_s: Option<i64>,
-    pub(crate) running: i64,
-    pub(crate) queued: i64,
+    pub(crate) running: i32,
+    pub(crate) queued: i32,
     pub(crate) memory_reserved_bytes: i64,
     pub(crate) scan_bytes_in_window: Option<i64>,
     pub(crate) scan_window_resets_at_ms: Option<i64>,

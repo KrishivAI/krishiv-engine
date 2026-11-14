@@ -475,9 +475,17 @@ mod tests {
     fn a_finished_action_is_not_cancelled_or_named() {
         let actions = Arc::new(Actions::default());
         let guard = actions.begin(1, Some("op"));
-        // The work finishes, but the guard (and so the registry entry) is still alive.
+        let action = Arc::clone(&guard.action);
         let done = block(guard.run(async { Ok::<_, KrishivError>(7) }));
         assert_eq!(done.ok(), Some(7));
+        assert!(action.lock().finished, "run marks the action finished");
+        // The window the flag covers: the work is done but the registry entry is still there
+        // (here put back by hand; in `run` it is the moment before the guard drops).
+        actions
+            .live
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(99, action);
         let out = actions.cancel_where(CancelReason::Admin, &all);
         assert_eq!(out.ended, 0, "nothing left to end");
         assert!(
