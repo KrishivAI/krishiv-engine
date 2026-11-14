@@ -21,7 +21,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use iceberg::spec::{FormatVersion, TableMetadata, TableMetadataBuilder};
+use iceberg::spec::{
+    FormatVersion, SnapshotReference, SnapshotRetention, TableMetadata, TableMetadataBuilder,
+};
 use iceberg::{TableRequirement, TableUpdate};
 use krishiv_common::error::{ErrorClass, InternalError, KrishivError};
 
@@ -345,7 +347,15 @@ impl TestCatalog {
             };
             let request = f(meta).await;
             let mut s = self.state.lock().unwrap();
-            assert!(s.land(&request).is_ok(), "a foreign commit was refused");
+            if let Err(r) = s.land(&request) {
+                let why = match r {
+                    Refusal::Conflict => "conflict".to_owned(),
+                    Refusal::Stale => "stale".to_owned(),
+                    Refusal::Duplicate => "duplicate".to_owned(),
+                    Refusal::Other(s) => s,
+                };
+                panic!("a foreign commit was refused: {why}");
+            }
         }
     }
 }
@@ -472,6 +482,37 @@ fn foreign_keyed(
             (a.requirements, a.updates)
         })
     })
+}
+
+/// Another writer rolls `main` back to snapshot `to` (no requirements).
+fn rollback(to: i64) -> Foreign {
+    Box::new(move |_| {
+        Box::pin(async move {
+            let retention = SnapshotRetention::Branch {
+                min_snapshots_to_keep: None,
+                max_snapshot_age_ms: None,
+                max_ref_age_ms: None,
+            };
+            (
+                vec![],
+                vec![TableUpdate::SetSnapshotRef {
+                    ref_name: "main".to_owned(),
+                    reference: SnapshotReference::new(to, retention),
+                }],
+            )
+        })
+    })
+}
+
+/// The snapshot ids of `main`'s ancestry in `m`, head first.
+fn main_ancestry(m: &TableMetadata) -> Vec<i64> {
+    let mut out = Vec::new();
+    let mut next = m.current_snapshot_id();
+    while let Some(id) = next {
+        out.push(id);
+        next = m.snapshot_by_id(id).and_then(|s| s.parent_snapshot_id());
+    }
+    out
 }
 
 /// A format-version upgrade by another writer.
@@ -980,6 +1021,7 @@ fn a_v1_to_v2_upgrade_is_a_conflict() {
     assert_eq!(e.error_class(), ErrorClass::KrishivIcebergCommitConflict);
     assert_eq!(e.sql_state(), Some("40001"));
     assert!(e.message().contains("930"), "{e}");
+    assert!(e.message().contains("removed where possible"), "{e}");
     assert!(!exists(&c.list(1)) && !exists(&c.manifest()) && !exists(&c.data()));
     c.check(&[INIT, "930|1|f.parquet"]);
 }
@@ -1162,13 +1204,19 @@ fn an_unknown_answer_then_a_moved_branch_rebases() {
     c.check(&[INIT, MINE, "960|1|f.parquet"]);
 }
 
-/// R:S2, `resolve`: a held request, then the branch moves, so the held
-/// request is dead (it asserts the old base); every later attempt loses a
-/// race: `KRISHIV_ICEBERG_COMMIT_FAILED`, everything deleted, and the held
-/// request is refused when it lands.
+/// R:S2, `resolve`, and review-1 pass 2 P1: a held request, then the branch
+/// moves, so the held request is settled as not applied and the write
+/// rebases; every later attempt loses a race: `KRISHIV_ICEBERG_COMMIT_FAILED`,
+/// but nothing is deleted, since the held request asserts a base the branch
+/// can return to. Another writer rolls `main` back to that base and the held
+/// request lands: every file its snapshot names is there, and it reads back
+/// once. A v1 table: from v2 on a catalog refuses the held request after the
+/// rollback, since its sequence number is behind the table's (Java's
+/// `TableMetadata.addSnapshot`), so the exposure needs v1 or a branch moved
+/// without a new snapshot.
 #[test]
-fn a_held_request_left_behind_by_a_moved_branch_is_resolved() {
-    let mut c = case();
+fn a_failed_write_that_had_an_unknown_answer_keeps_its_files() {
+    let mut c = case_with(1, &[]);
     c.cat.script(&[Fault::Held]);
     c.cat
         .on(When::BeforeLoad(1), c.foreign("f1.parquet", 961, "main"));
@@ -1188,20 +1236,44 @@ fn a_held_request_left_behind_by_a_moved_branch_is_resolved() {
         ErrorClass::KrishivIcebergCommitFailed,
         "{e}"
     );
+    assert!(e.message().contains("files were kept"), "{e}");
     assert_eq!(c.cat.requests(), 5);
     for n in 1..=5 {
-        assert!(!exists(&c.list(n)), "list {n}");
+        assert!(exists(&c.list(n)), "list {n}");
     }
-    assert!(!exists(&c.manifest()) && !exists(&c.data()));
-    assert_eq!(c.cat.land_held(), 0);
-    c.check(&[
-        INIT,
-        "961|1|f1.parquet",
-        "962|1|f2.parquet",
-        "963|1|f3.parquet",
-        "964|1|f4.parquet",
-        "965|1|f5.parquet",
-    ]);
+    assert!(exists(&c.manifest()) && exists(&c.data()));
+    let base = c.base.current_snapshot_id().unwrap();
+    let back = rollback(base);
+    c.env.rt.block_on(async {
+        let (m, _) = c.cat.metadata();
+        let request = back(m).await;
+        c.cat.state.lock().unwrap().land(&request).ok().unwrap();
+    });
+    assert_eq!(c.cat.land_held(), 1);
+    let (m, _) = c.cat.metadata();
+    assert_eq!(m.current_snapshot_id(), Some(OURS));
+    assert_eq!(m.snapshot_by_id(OURS).unwrap().manifest_list(), c.list(1));
+    c.check(&[INIT, MINE]);
+}
+
+/// Review-1 pass 2 P1: an unknown answer, then a conflict refused by the
+/// rebase check: `KRISHIV_ICEBERG_COMMIT_CONFLICT`, its text says the files
+/// were kept, and they are.
+#[test]
+fn a_conflict_after_a_settled_unknown_answer_keeps_the_files() {
+    let mut c = case_with(1, &[]);
+    c.cat.script(&[Fault::Held]);
+    c.cat
+        .on(When::BeforeLoad(1), c.foreign("f.parquet", 967, "main"));
+    c.cat.on(When::BeforeLoad(1), upgrade(FormatVersion::V2));
+    let e = c.run().unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergCommitConflict,
+        "{e}"
+    );
+    assert!(e.message().contains("files were kept"), "{e}");
+    assert!(exists(&c.list(1)) && exists(&c.manifest()) && exists(&c.data()));
 }
 
 /// R:S2: a held request, the branch moves, the rebase commits; the held
@@ -1362,10 +1434,10 @@ impl Seeded {
 /// One generated schedule: a fault per request, up to three foreign commits
 /// (on `main` or `dev`) at random points, failing loads, and held requests
 /// landed at a random point or after the run.
-fn sweep_one(seed: u64) {
+fn sweep_one(seed: u64, version: u8) {
     let mut g = Seeded(seed);
-    let mut c = case();
-    let faults: Vec<Fault> = (0..5)
+    let mut c = case_with(version, &[]);
+    let mut faults: Vec<Fault> = (0..5)
         .map(|_| match g.below(11) {
             0 => Fault::LostResponse,
             1 => Fault::DelayedApply(g.below(8)),
@@ -1379,12 +1451,16 @@ fn sweep_one(seed: u64) {
             _ => Fault::Answer,
         })
         .collect();
-    c.cat.script(&faults);
     let mut main_foreign = Vec::new();
     for n in 0..g.below(4) {
         let id = 980 + i64::try_from(n).unwrap();
         let name = format!("s{n}.parquet");
-        let branch = if g.below(3) == 0 { "dev" } else { "main" };
+        // v1 metadata keeps no refs, so other branches are v2 only.
+        let branch = if g.below(3) == 0 && version > 1 {
+            "dev"
+        } else {
+            "main"
+        };
         if branch == "main" {
             main_foreign.push((id, format!("{id}|1|{name}")));
         }
@@ -1401,7 +1477,23 @@ fn sweep_one(seed: u64) {
     if g.below(2) == 0 {
         c.cat.land_held_at(g.when());
     }
-    let schedule = format!("seed {seed}: {faults:?}");
+    // One schedule in three rolls `main` back to the write's base (review-1
+    // pass 2 P1), during the run or after it: a request settled as "not
+    // applied" can then land.
+    let rolled = g.below(3) == 0;
+    let base = c.base.current_snapshot_id().unwrap();
+    let roll_after = rolled && g.below(2) == 0;
+    // On v1 those schedules hold the first request: the shape of the P1
+    // (unknown, the branch moves, a known failure, the rollback, the held
+    // request lands).
+    if version == 1 && roll_after {
+        faults[0] = Fault::Held;
+    }
+    c.cat.script(&faults);
+    if rolled && !roll_after {
+        c.cat.on(g.when(), rollback(base));
+    }
+    let schedule = format!("seed {seed}: {faults:?}, rollback {rolled}");
     let out = c.run();
     // Files the write produced before any late delivery.
     let data = exists(&c.data());
@@ -1426,32 +1518,55 @@ fn sweep_one(seed: u64) {
                 "{schedule}: an unresolved write deleted a file: {e}"
             );
         }
-        Err(e) => {
+        // Every request known: never in the table, a rollback or not.
+        Err(e) if e.message().contains("removed where possible") => {
             assert!(!ours_now(&c), "{schedule}: failed but committed: {e}");
         }
+        Err(e) => {
+            if e.message().contains("files were kept") {
+                assert!(data && manifest, "{schedule}: kept files deleted: {e}");
+            }
+            assert!(
+                rolled || !ours_now(&c),
+                "{schedule}: failed but committed: {e}"
+            );
+        }
+    }
+    if roll_after {
+        c.env.rt.block_on(async {
+            let (m, _) = c.cat.metadata();
+            let request = rollback(base)(m).await;
+            assert!(c.cat.state.lock().unwrap().land(&request).is_ok());
+        });
     }
     c.cat.land_held();
     // Delayed requests still pending land on later loads.
     for _ in 0..10 {
         let _ = c.env.rt.block_on(c.cat.load(true));
     }
+    // A known failure lands later only through a rollback after an unknown
+    // answer (the accepted remainder), never when every request was known.
     if let Err(e) = &out
         && e.error_class() != ErrorClass::KrishivIcebergCommitStateUnknown
+        && (!rolled || e.message().contains("removed where possible"))
     {
         assert!(
             !ours_now(&c),
             "{schedule}: a known failure landed later: {e}"
         );
     }
+    // The rows of `main`'s ancestry; reading them fails if a landed snapshot
+    // names a deleted file.
     let (m, _) = c.cat.metadata();
+    let ancestry = main_ancestry(&m);
     let mut expected: Vec<String> = vec![INIT.to_owned()];
     expected.extend(
         main_foreign
             .iter()
-            .filter(|(id, _)| m.snapshot_by_id(*id).is_some())
+            .filter(|(id, _)| ancestry.contains(id))
             .map(|(_, row)| row.clone()),
     );
-    if ours_now(&c) {
+    if ancestry.contains(&OURS) {
         expected.push(MINE.to_owned());
     }
     expected.sort_by_key(|r| r.split('|').next().unwrap().parse::<i64>().unwrap());
@@ -1468,6 +1583,15 @@ fn sweep_one(seed: u64) {
 #[test]
 fn generated_schedules_keep_the_invariants() {
     for seed in 0..300 {
-        sweep_one(seed);
+        sweep_one(seed, 2);
+    }
+}
+
+/// The sweep on a v1 table, where no sequence number stops a request settled
+/// as "not applied" from landing after a rollback (review-1 pass 2 P1).
+#[test]
+fn generated_schedules_on_v1_keep_the_invariants() {
+    for seed in 0..200 {
+        sweep_one(seed, 1);
     }
 }

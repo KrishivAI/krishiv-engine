@@ -56,7 +56,16 @@
 //!   snapshot does not list are deleted, never a data file. Every outcome known
 //!   and none applied → everything the write produced is deleted (data files,
 //!   manifests, lists) and the error is `KRISHIV_ICEBERG_COMMIT_FAILED` when
-//!   the budget ran out, else the failure itself. Any outcome unresolved →
+//!   the budget ran out, else the failure itself. Known, none applied, but
+//!   some request of the write once had an unknown answer → the same error,
+//!   and **nothing is deleted**: an attempt settled as "not applied" because
+//!   the branch left its base still lands if another writer rolls the branch
+//!   back to that base, so its files must exist (review-1 pass 2, P1; Java
+//!   never cleans up after an unknown outcome either). The error then says
+//!   the files were kept (`<files>`), except a plain failure
+//!   ([`CommitOutcome::Failed`] or a local error), which is returned as is.
+//!   The error can still be wrong in that schedule (`FAILED`, then the rows
+//!   appear): the accepted remainder. Any outcome unresolved →
 //!   `KRISHIV_ICEBERG_COMMIT_STATE_UNKNOWN` (40003) and **nothing is deleted**:
 //!   a late request would otherwise reference deleted files.
 //!
@@ -230,6 +239,7 @@ pub(crate) async fn commit_append(
         lists: Vec::new(),
         unresolved: Vec::new(),
         searching: false,
+        ever_unknown: false,
         last_answer: String::new(),
     };
     match run.drive(base.clone(), new).await {
@@ -348,6 +358,11 @@ struct Loop<'a> {
     /// successful load: the write may be in the table (a duplicated request,
     /// R:B1), so it is unresolved until then.
     searching: bool,
+    /// Some request of this write had an unknown answer. Never cleared: an
+    /// attempt settled as "not applied" because the branch left its base can
+    /// still land if another writer rolls the branch back to that base, so a
+    /// write that then fails keeps its files (review-1 pass 2, P1).
+    ever_unknown: bool,
     /// The last answer that was not a commit, for messages.
     last_answer: String,
 }
@@ -391,6 +406,7 @@ impl Loop<'_> {
                     CommitOutcome::Unknown(reason) => {
                         if !unknown {
                             unknown = true;
+                            self.ever_unknown = true;
                             self.unresolved.push(base);
                         }
                         self.last_answer = reason;
@@ -596,6 +612,7 @@ impl Loop<'_> {
                 .map_or_else(|| "none".to_owned(), |id| id.to_string()),
             check: check.to_owned(),
             message,
+            files: REMOVED.to_owned(),
         }))
     }
 
@@ -657,7 +674,12 @@ impl Loop<'_> {
             }
             .into();
         }
-        delete_all(self.cx.io, new, &self.lists).await;
+        let files = if self.ever_unknown {
+            KEPT.to_owned()
+        } else {
+            delete_all(self.cx.io, new, &self.lists).await;
+            REMOVED.to_owned()
+        };
         match end {
             End::Exhausted => KrishivIcebergCommitFailed {
                 table: self.table.name(),
@@ -665,13 +687,25 @@ impl Loop<'_> {
                 write_id: self.ids.write_id.to_owned(),
                 attempts: self.requests.to_string(),
                 reason: self.last_answer.clone(),
+                files,
             }
             .into(),
-            End::Conflict(c) => (*c).into(),
+            End::Conflict(mut c) => {
+                c.files = files;
+                (*c).into()
+            }
             End::Error(e) => e,
         }
     }
 }
+
+/// The `<files>` text of a failed write whose files were deleted.
+const REMOVED: &str = "the written files were removed where possible";
+
+/// The `<files>` text of a failed write that once had an unknown answer.
+const KEPT: &str = "the written files were kept: an earlier request of this write \
+     got no answer and could still land if the branch returns to its base; \
+     remove_orphan_files removes them if it never does";
 
 /// The base an attempt asserts for its branch (`assert-ref-snapshot-id`).
 fn attempt_base(attempt: &Attempt) -> Option<i64> {
