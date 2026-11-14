@@ -299,7 +299,7 @@ fn at_consumer(
     for (i, kid) in kids.iter().enumerate() {
         let mut found = Vec::new();
         let mut budget = MAX_WALK;
-        walk(kid, &mut Vec::new(), &mut found, &mut budget);
+        walk(kid, &mut Vec::new(), false, &mut found, &mut budget);
         for cand in found {
             if cand
                 .path
@@ -316,9 +316,6 @@ fn at_consumer(
             // The consumer must be where the path ends for this payload: a
             // node the payload could pass is not the consumer (its parent is).
             if passes(consumer, i, &shape.blocked) {
-                continue;
-            }
-            if !cand.path.iter().any(|s| is_non_inner_join(&s.node)) {
                 continue;
             }
             // Nothing of the dimension above the join: nothing to move.
@@ -358,12 +355,15 @@ fn at_consumer(
     None
 }
 
-/// Every inner join reachable from `at` through pass-through nodes, with the
-/// path above it. `path` holds the nodes from the consumer's child down to
-/// `at`'s parent (top first while walking).
+/// Every inner join reachable from `at` through pass-through nodes with a
+/// non-inner join on the path above it (nothing else can move), with that
+/// path. `path` holds the nodes from the consumer's child down to `at`'s
+/// parent (top first while walking); `non_inner` says it holds a non-inner
+/// join, so a plan of inner joins only yields no candidate to read.
 fn walk(
     at: &Arc<LogicalPlan>,
     path: &mut Vec<Step>,
+    non_inner: bool,
     found: &mut Vec<Candidate>,
     budget: &mut usize,
 ) {
@@ -375,6 +375,7 @@ fn walk(
         kind: JoinKind::Inner,
         ..
     } = &at.node
+        && non_inner
     {
         for dim_left in [true, false] {
             found.push(Candidate {
@@ -393,7 +394,7 @@ fn walk(
                 node: Arc::clone(at),
                 child: i,
             });
-            walk(kid, path, found, budget);
+            walk(kid, path, non_inner || is_non_inner_join(at), found, budget);
             path.pop();
         }
     }
