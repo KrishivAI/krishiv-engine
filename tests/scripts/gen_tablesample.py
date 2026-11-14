@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# ruff: noqa: E501  (the embedded Scala probe and Spark source quotes keep their lines)
 """Generate the TABLESAMPLE / Sample fixture (SQL-14).
 
 A REAL Spark run (local[1]) records, for `TABLESAMPLE (x PERCENT | BUCKET x OUT OF y) [REPEATABLE (seed)]`:
@@ -27,6 +28,7 @@ import json
 import struct
 import sys
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -67,7 +69,10 @@ add("view_bernoulli_keyword_seed3", f"SELECT id FROM t {S} BERNOULLI (10 PERCENT
 add("filter_above_sample", f"SELECT id FROM t {S} (10 PERCENT) REPEATABLE (7) WHERE id % 2 = 0")
 add("filter_below_sample", f"SELECT id FROM (SELECT id FROM t WHERE id % 2 = 0) {S} (10 PERCENT) REPEATABLE (7)")
 add("project_below_sample", f"SELECT x FROM (SELECT id + 1 AS x FROM t) {S} (10 PERCENT) REPEATABLE (7)")
-add("nested_50pct_seed7_twice", f"SELECT id FROM (SELECT id FROM t {S} (50 PERCENT) REPEATABLE (7)) {S} (50 PERCENT) REPEATABLE (7)")
+add(
+    "nested_50pct_seed7_twice",
+    f"SELECT id FROM (SELECT id FROM t {S} (50 PERCENT) REPEATABLE (7)) {S} (50 PERCENT) REPEATABLE (7)",
+)
 add("values20_50pct_seed7", f"SELECT col1 FROM {VALUES20} {S} (50 PERCENT) REPEATABLE (7)")
 add("values20_30pct_seed0", f"SELECT col1 FROM {VALUES20} {S} (30 PERCENT) REPEATABLE (0)")
 add("values20_bucket5of10_seed42", f"SELECT col1 FROM {VALUES20} {S} (BUCKET 5 OUT OF 10) REPEATABLE (42)")
@@ -77,12 +82,18 @@ for conf in ("-", "wholeStage=false"):
     add(f"range4_10pct_seed7{sfx}", f"SELECT id FROM t4 {S} (10 PERCENT) REPEATABLE (7)", conf)
     add(f"range4_50pct_seed0{sfx}", f"SELECT id FROM t4 {S} (50 PERCENT) REPEATABLE (0)", conf)
     add(f"range4_10pct_seedLongMax{sfx}", f"SELECT id FROM t4 {S} (10 PERCENT) REPEATABLE ({LONG_MAX})", conf)
-add("range4_via_subquery_10pct_seed7", f"SELECT id FROM (SELECT * FROM range(0, 1000, 1, 4)) {S} (10 PERCENT) REPEATABLE (7)")
+add(
+    "range4_via_subquery_10pct_seed7",
+    f"SELECT id FROM (SELECT * FROM range(0, 1000, 1, 4)) {S} (10 PERCENT) REPEATABLE (7)",
+)
 add("range4_dataframe_api_equivalent", "SELECT id FROM t4 TABLESAMPLE (10 PERCENT) REPEATABLE (7)")
 add("parquet1_10pct_seed7", f"SELECT id FROM pq1 {S} (10 PERCENT) REPEATABLE (7)")
 add("parquet1_allcols_10pct_seed7", f"SELECT id, b, s FROM pq1 {S} (10 PERCENT) REPEATABLE (7)")
 add("parquet3files_10pct_seed7", f"SELECT id FROM pq3 {S} (10 PERCENT) REPEATABLE (7)")
-add("parquet1_union_all_10pct_seed7", f"SELECT id FROM (SELECT * FROM pq1 UNION ALL SELECT * FROM pq1) {S} (10 PERCENT) REPEATABLE (7)")
+add(
+    "parquet1_union_all_10pct_seed7",
+    f"SELECT id FROM (SELECT * FROM pq1 UNION ALL SELECT * FROM pq1) {S} (10 PERCENT) REPEATABLE (7)",
+)
 add("parquet1_count_10pct_seed7", f"SELECT id FROM pq1 {S} (10 PERCENT) REPEATABLE (7) ORDER BY id")
 add("parquet_big_1pct_seed7", f"SELECT id FROM big {S} (1 PERCENT) REPEATABLE (7)")
 
@@ -205,13 +216,24 @@ def main() -> None:
         assert hash_seed(int(seed)) == int(hashed) & ((1 << 64) - 1)
         rng[seed] = {"hash_seed": int(hashed), "first10_double_bits_hex": bits.split(","), "first10": dec.split(",")}
 
-    cases = []
+    cases: list[dict[str, Any]] = []
     for name, parts, parsed, plan, ids in parse_lines(lines, "CASE"):
         sorted_ids = [int(x) for x in ids.split(",")] if ids else []
-        cases.append({"name": name, "partitions": int(parts), "parsed_sample": parsed, "executed_sample_nodes": unesc(plan), "count": len(sorted_ids), "ids": sorted_ids})
+        cases.append(
+            {
+                "name": name,
+                "partitions": int(parts),
+                "parsed_sample": parsed,
+                "executed_sample_nodes": unesc(plan),
+                "count": len(sorted_ids),
+                "ids": sorted_ids,
+            }
+        )
     expected_names = [n for n, _, _ in CASES]
     got_names = [c["name"] for c in cases]
-    assert got_names == expected_names, f"case order or count differs; missing {[n for n in expected_names if n not in got_names]}"
+    assert got_names == expected_names, (
+        f"case order or count differs; missing {[n for n in expected_names if n not in got_names]}"
+    )
     by_sql = {n: s for n, _, s in CASES}
 
     # Self-check: derive the rows with the reference port for the shapes where the partition layout is known.
@@ -249,7 +271,13 @@ def main() -> None:
         c["confs"] = {n: cf for n, cf, _ in CASES}[c["name"]]
 
     errors = [
-        {"sql": unesc(sql), "thrown": kind, "condition": cond or None, "sqlstate": st if st not in ("", "null") else None, "message": unesc(msg)}
+        {
+            "sql": unesc(sql),
+            "thrown": kind,
+            "condition": cond or None,
+            "sqlstate": st if st not in ("", "null") else None,
+            "message": unesc(msg),
+        }
         for sql, kind, cond, st, msg in parse_lines(lines, "ERR")
     ]
     quirks = [{"sql": unesc(sql), "parsed": unesc(tree)} for sql, tree in parse_lines(lines, "QUIRK")]
