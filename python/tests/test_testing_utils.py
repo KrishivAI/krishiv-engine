@@ -534,7 +534,8 @@ def test_divide_by_zero_accessors(spark: SparkSession) -> None:
     assert e.getCondition() == "DIVIDE_BY_ZERO"
     assert e.getSqlState() == "22012"
     assert e.getMessageParameters() == {"config": '"spark.sql.ansi.enabled"'}
-    assert e.getMessage() == str(e)
+    # `getMessage()` is the message alone; `str()` adds the span, as for an analysis error (RS-14).
+    assert str(e) == e.getMessage() + "\n== SQL (line 1, position 8) ==\nselect 1 / 0 as x\n       ^^^^^"
     assert "[DIVIDE_BY_ZERO]" in e.getMessage()
     # As Spark 4.2: the failed expression's span in the statement.
     (qc,) = e.getQueryContext()
