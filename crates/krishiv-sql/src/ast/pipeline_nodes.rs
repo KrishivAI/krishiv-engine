@@ -98,23 +98,42 @@ pub struct InsertDirectory {
     pub format: DirectoryFormat,
     /// The rows to write.
     pub query: Box<Query>,
+    /// Source text of the insert header, from `INSERT` to the end of the format (Spark's `insertInto` context).
+    pub header_span: Span,
     /// Source text, from `INSERT` to the end of the statement.
     pub span: Span,
 }
 
 impl InsertDirectory {
-    /// Whether `OPTIONS` carries a `path` key.
+    /// The `path` key of `OPTIONS`, if written: its string value (`""` when the value is not a string
+    /// literal).
+    #[must_use]
+    pub fn option_path(&self) -> Option<&str> {
+        let DirectoryFormat::Provider { options, .. } = &self.format else {
+            return None;
+        };
+        let option = options.iter().find(|o| {
+            o.key.parts.len() == 1
+                && o.key
+                    .parts
+                    .first()
+                    .is_some_and(|p| p.value.eq_ignore_ascii_case("path"))
+        })?;
+        Some(match option.value.as_ref().map(|e| &e.kind) {
+            Some(ExprKind::Literal(Literal::String(s))) => s,
+            _ => "",
+        })
+    }
+
+    /// Whether the directory is written outside `OPTIONS` (Spark counts an empty literal as none).
+    #[must_use]
+    pub fn has_path(&self) -> bool {
+        self.path.as_deref().is_some_and(|p| !p.is_empty())
+    }
+
+    /// Whether `OPTIONS` carries a `path` (an empty value counts as none, as in Spark).
     #[must_use]
     pub fn has_path_option(&self) -> bool {
-        match &self.format {
-            DirectoryFormat::Provider { options, .. } => options.iter().any(|o| {
-                o.key.parts.len() == 1
-                    && o.key
-                        .parts
-                        .first()
-                        .is_some_and(|p| p.value.eq_ignore_ascii_case("path"))
-            }),
-            DirectoryFormat::Hive { .. } => false,
-        }
+        self.option_path().is_some_and(|p| !p.is_empty())
     }
 }

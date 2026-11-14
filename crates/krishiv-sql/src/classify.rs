@@ -459,12 +459,18 @@ pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
         }
         Statement::LoadData(l) => {
             let mut out = vec![t(O::Table(&l.table), Modify)];
+            // `LOCAL` reads a file of the client, not the cluster's storage: no read target.
             if !l.local {
                 out.push(t(O::Path(&l.path), Select));
             }
             out
         }
-        Statement::InsertDirectory(d) => location(&d.path),
+        // The directory is a write target whether written outside `OPTIONS` or as its `path`.
+        Statement::InsertDirectory(d) => {
+            let mut out = location(&d.path);
+            out.extend(d.option_path().map(|p| t(TargetObject::Path(p), Modify)));
+            out
+        }
         Statement::CreateTableLike(c) => {
             let mut out = vec![
                 t(O::ParentOf(&c.name), Create),

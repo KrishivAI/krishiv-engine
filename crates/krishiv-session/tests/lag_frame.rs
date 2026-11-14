@@ -32,6 +32,14 @@ fn offset_functions_refuse_a_frame_at_analysis() {
             "SELECT lead(a) OVER (ORDER BY a ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) FROM nat",
             "lead",
         ),
+        (
+            "SELECT lead(a) OVER (ORDER BY a ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM nat",
+            "lead",
+        ),
+        (
+            "SELECT lag(a) OVER (ORDER BY a ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) FROM nat",
+            "lag",
+        ),
     ] {
         // At `sql`, not at collect: analysis raises it.
         let e = block_on(s.sql(sql))

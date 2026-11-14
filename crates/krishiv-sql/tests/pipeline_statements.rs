@@ -16,6 +16,13 @@ fn fails(sql: &str) -> (ErrorClass, String, usize) {
     (e.error.error_class(), e.error.to_string(), e.span.start)
 }
 
+fn fail_end(sql: &str) -> usize {
+    parse_statement(sql, &ParserOptions::default())
+        .expect_err(sql)
+        .span
+        .end
+}
+
 #[test]
 fn materialized_view_and_streaming_table() {
     let Statement::CreatePipelineDataset(c) = parse("CREATE MATERIALIZED VIEW mv AS SELECT 1")
@@ -60,7 +67,7 @@ fn pipeline_dataset_errors() {
     assert_eq!(class, ErrorClass::LegacyErrorTemp0035);
     assert!(
         message.contains(
-            "Operation not allowed: Unable to find query for CREATE MATERIALIZED VIEW statement."
+            "Operation not allowed: Unable to find query for CREATE MATERIALIZED VIEW statement.."
         ),
         "{message}"
     );
@@ -151,4 +158,72 @@ fn insert_directory_errors() {
         fails("INSERT INTO DIRECTORY '/tmp/o9' USING parquet SELECT a FROM nat");
     assert_eq!(class, ErrorClass::ParseSyntaxError);
     assert_eq!(start, 22);
+}
+
+/// A table may be named `directory` (non-reserved) or `local`: those stay table inserts.
+#[test]
+fn a_table_named_directory_is_still_a_table() {
+    for sql in [
+        "INSERT OVERWRITE directory SELECT 1",
+        "INSERT OVERWRITE directory VALUES (1)",
+        "INSERT OVERWRITE directory (a) SELECT 1",
+        "INSERT OVERWRITE TABLE directory SELECT 1",
+        "INSERT OVERWRITE local SELECT 1",
+        "INSERT INTO directory SELECT 1",
+    ] {
+        assert!(matches!(parse(sql), Statement::Insert(_)), "{sql}");
+    }
+}
+
+/// Spark's context for the one-path rule is the insert header (the probe's carets: 40 and 77 characters).
+#[test]
+fn the_path_rule_covers_the_header_only() {
+    assert_eq!(
+        fail_end("INSERT OVERWRITE DIRECTORY USING parquet SELECT a FROM nat"),
+        40
+    );
+    assert_eq!(
+        fail_end(
+            "INSERT OVERWRITE DIRECTORY '/tmp/o7' USING parquet OPTIONS ('path' '/tmp/o8') SELECT a FROM nat"
+        ),
+        77
+    );
+    // An empty literal counts as no path, as in Spark.
+    assert!(matches!(
+        parse("INSERT OVERWRITE DIRECTORY '' USING parquet OPTIONS ('path' '/x') SELECT 1"),
+        Statement::InsertDirectory(_)
+    ));
+    assert_eq!(
+        fails("INSERT OVERWRITE DIRECTORY '' USING parquet SELECT 1").0,
+        ErrorClass::LegacyErrorTemp0049
+    );
+}
+
+/// The directory is a write target whether written outside `OPTIONS` or as its `path` (any case).
+#[test]
+fn the_directory_is_a_write_target() {
+    use krishiv_sql::{TargetObject, statement_targets};
+    for sql in [
+        "INSERT OVERWRITE DIRECTORY '/x' USING parquet SELECT 1",
+        "INSERT OVERWRITE DIRECTORY USING parquet OPTIONS ('PATH' '/x') SELECT 1",
+    ] {
+        let statement = parse(sql);
+        let targets = statement_targets(&statement);
+        assert!(
+            targets.iter().any(|t| t.object == TargetObject::Path("/x")),
+            "{sql}"
+        );
+    }
+}
+
+/// `identity(a)` partitioning and the comment of the Spark tree.
+#[test]
+fn partition_columns_and_comment_are_kept() {
+    let Statement::CreatePipelineDataset(c) = parse(
+        "CREATE MATERIALIZED VIEW mv (a INT) COMMENT 'x' PARTITIONED BY (a) AS SELECT 1 AS a",
+    ) else {
+        panic!("not a pipeline dataset")
+    };
+    assert_eq!(c.table.comment.as_deref(), Some("x"));
+    assert_eq!(c.table.partitioned_by.len(), 1);
 }

@@ -129,3 +129,59 @@ fn unbound_parameters() {
     );
     assert_eq!(e.sql_state(), Some("42613"));
 }
+
+#[test]
+fn probe_rows_for_flows_and_load_data_on_views_and_missing_tables() {
+    let s = session();
+    block_on(s.sql("CREATE TABLE t (a INT) USING parquet")).unwrap();
+    block_on(s.sql("CREATE VIEW vw AS SELECT 1 AS a")).unwrap();
+    block_on(s.sql("CREATE TEMPORARY VIEW tv AS SELECT 1 AS a")).unwrap();
+    for (sql, operation) in [
+        ("CREATE FLOW f AS INSERT INTO vw SELECT 1", "'INSERT'"),
+        ("LOAD DATA INPATH 'x' INTO TABLE vw", "'LOAD DATA'"),
+        ("LOAD DATA INPATH 'x' INTO TABLE tv", "'LOAD DATA'"),
+    ] {
+        let e = error(&s, sql);
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::ExpectTableNotViewNoAlternative,
+            "{sql}"
+        );
+        assert!(e.to_string().contains(operation), "{e}");
+    }
+    // Without BY NAME the flow is refused the same way.
+    assert_eq!(
+        error(&s, "CREATE FLOW f AS INSERT INTO t SELECT 1").error_class(),
+        ErrorClass::UnsupportedFeatureCreateFlowQueryExecution
+    );
+    for sql in [
+        "LOAD DATA INPATH 'x' INTO TABLE missing_t",
+        "CREATE FLOW f AS INSERT INTO missing BY NAME SELECT 1",
+    ] {
+        let e = error(&s, sql);
+        assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound, "{sql}");
+        assert!(e.to_string().contains("cannot be found"), "{e}");
+    }
+}
+
+#[test]
+fn unbound_markers_inside_insert_and_ctas() {
+    let s = session();
+    for (sql, name) in [
+        ("INSERT INTO nat SELECT ?", "_23"),
+        ("CREATE TABLE c2 AS SELECT ? AS x", "_26"),
+        ("INSERT INTO nat SELECT 'é' || ?", "_30"),
+    ] {
+        let e = error(&s, sql);
+        assert_eq!(e.error_class(), ErrorClass::UnboundSqlParameter, "{sql}");
+        assert!(
+            e.to_string()
+                .contains(&format!("unbound parameter: {name}.")),
+            "{e}"
+        );
+    }
+    assert_eq!(
+        error(&s, "INSERT INTO nat SELECT ?, :p").error_class(),
+        ErrorClass::InvalidQueryMixedQueryParameters
+    );
+}

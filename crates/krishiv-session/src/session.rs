@@ -654,7 +654,15 @@ impl Session {
             }
             Statement::DropFunction(f) => self.exec_drop_function(&f).await,
             Statement::CreateTable(t) => {
-                Box::pin(self.exec_create_table(&t, query, &env.identifier_spans)).await
+                Box::pin(self.exec_create_table(&t, query, &env.identifier_spans))
+                    .await
+                    .map_err(|e| {
+                        crate::execute_immediate::unbound_markers(
+                            e,
+                            query,
+                            env.parser.double_quoted_identifiers,
+                        )
+                    })
             }
             Statement::CreateTableLike(t) => Box::pin(self.exec_create_table_like(&t, query)).await,
             Statement::DropTable(d) => self.exec_drop_table(&d).await,
@@ -677,9 +685,15 @@ impl Session {
                 self.exec_alter_view(&a, query, ids).await
             }
             Statement::AlterTable(a) => Box::pin(self.exec_alter_table(&a, query)).await,
-            Statement::Insert(i) => {
-                Box::pin(self.exec_insert(&i, query, &env.identifier_spans)).await
-            }
+            Statement::Insert(i) => Box::pin(self.exec_insert(&i, query, &env.identifier_spans))
+                .await
+                .map_err(|e| {
+                    crate::execute_immediate::unbound_markers(
+                        e,
+                        query,
+                        env.parser.double_quoted_identifiers,
+                    )
+                }),
             Statement::Truncate(t) => self.exec_truncate(&t).await,
             Statement::Script(c) => {
                 let off =

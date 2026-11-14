@@ -9,8 +9,20 @@ impl Parser<'_> {
         self.nested(|p| {
             let start = p.start();
             p.expect_kw("INSERT")?;
+            // A table may be named `directory` or `local`: the directory form needs a path or `USING`
+            // right after `DIRECTORY`.
+            let after = if p.kw_at(1, "DIRECTORY") {
+                Some(2)
+            } else if p.kw_at(1, "LOCAL") && p.kw_at(2, "DIRECTORY") {
+                Some(3)
+            } else {
+                None
+            };
             if p.kw_at(0, "OVERWRITE")
-                && (p.kw_at(1, "DIRECTORY") || (p.kw_at(1, "LOCAL") && p.kw_at(2, "DIRECTORY")))
+                && after.is_some_and(|n| {
+                    p.kw_at(n, "USING")
+                        || matches!(p.kind(n), Some(TokenKind::String | TokenKind::DoubleQuoted))
+                })
             {
                 return p.insert_directory(start);
             }
@@ -59,10 +71,12 @@ impl Parser<'_> {
                 file_format,
             }
         };
+        let header_span = self.span_from(start);
         let query = self.insert_query(false)?;
         let span = self.span_from(start);
         self.command_end()?;
         Ok(Statement::InsertDirectory(Box::new(InsertDirectory {
+            header_span,
             local,
             path,
             format,

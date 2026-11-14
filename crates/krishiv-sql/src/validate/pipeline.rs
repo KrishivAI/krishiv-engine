@@ -34,7 +34,7 @@ impl Checker<'_> {
             Some(q) => self.query(q),
             None if c.kind == PipelineDatasetKind::MaterializedView => Err(at(
                 LegacyErrorTemp0035 {
-                    message: "Unable to find query for CREATE MATERIALIZED VIEW statement"
+                    message: "Unable to find query for CREATE MATERIALIZED VIEW statement."
                         .to_owned(),
                 },
                 c.span,
@@ -55,8 +55,8 @@ impl Checker<'_> {
         if let DirectoryFormat::Provider { options, .. } = &d.format {
             self.option_values(options)?;
         }
-        if d.path.is_some() == d.has_path_option() {
-            return Err(at(LegacyErrorTemp0049 {}, d.span));
+        if d.has_path() == d.has_path_option() {
+            return Err(at(LegacyErrorTemp0049 {}, d.header_span));
         }
         Ok(())
     }
