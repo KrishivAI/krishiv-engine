@@ -360,6 +360,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &EXEC_AGG_DISTINCT_COUNT_AT_MERGE,
     ),
     (
+        "krishiv.iceberg.commit.maxIntervening",
+        &ICEBERG_COMMIT_MAX_INTERVENING,
+    ),
+    (
         "krishiv.optimizer.ndvSampling.enabled",
         &NDV_SAMPLING_ENABLED,
     ),
