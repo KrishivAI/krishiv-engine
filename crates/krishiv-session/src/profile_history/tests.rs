@@ -515,13 +515,16 @@ fn a_file_write_of_a_literal_projection_is_masked() {
 fn mask_write_names_hides_partition_and_sort_names() {
     assert_eq!(
         super::mask_write_names("WriteFiles parquet partitioned by [hunter2, b]"),
-        "WriteFiles parquet partitioned by [?]"
+        "WriteFiles parquet partitioned by [?"
     );
     assert_eq!(
         super::mask_write_names("[hunter2 ASC NULLS FIRST, b DESC NULLS LAST]"),
-        "[? ASC NULLS FIRST, ? DESC NULLS LAST]"
+        "[?"
     );
     assert_eq!(super::mask_write_names("Scan t"), "Scan t");
+    let masked =
+        super::mask_write_names("WriteFiles partitioned by [prefix]hunter2], sort [a ASC, x DESC]");
+    assert!(!masked.contains("hunter2"), "{masked}");
 }
 
 #[test]

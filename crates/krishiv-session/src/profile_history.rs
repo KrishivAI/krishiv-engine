@@ -454,42 +454,18 @@ fn mask_aliases(text: &str) -> String {
 /// and the names that lead a sort key (`name ASC NULLS FIRST`). A DataFrame's partition column can be a literal's name.
 fn mask_write_names(text: &str) -> String {
     const PARTITIONED: &str = "partitioned by [";
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(at) = rest.find(PARTITIONED) {
-        let start = at + PARTITIONED.len();
-        out.push_str(&rest[..start]);
-        rest = &rest[start..];
-        match rest.find(']') {
-            Some(end) => {
-                out.push('?');
-                rest = &rest[end..];
-            }
-            None => {
-                out.push('?');
-                rest = "";
-            }
-        }
+    // A partition or sort name can hold `]`, `, ` or ` ASC`, so no scan finds the end of the list: everything from the
+    // start of the first list to the end of the text is hidden. Over-masking is the safe error.
+    let partitions = text.find(PARTITIONED).map(|at| at + PARTITIONED.len());
+    let sort = [" ASC", " DESC"]
+        .iter()
+        .filter_map(|k| text.find(k))
+        .min()
+        .map(|end| text[..end].rfind('[').map_or(0, |b| b + 1));
+    match partitions.into_iter().chain(sort).min() {
+        Some(cut) => format!("{}?", &text[..cut]),
+        None => text.to_owned(),
     }
-    out.push_str(rest);
-    // Sort keys: the item before each ` ASC` / ` DESC` is a name or an expression; either way it is hidden.
-    let mut masked = String::with_capacity(out.len());
-    for (i, item) in out.split(", ").enumerate() {
-        if i > 0 {
-            masked.push_str(", ");
-        }
-        let key_end = [" ASC", " DESC"].iter().filter_map(|k| item.find(k)).min();
-        match key_end {
-            Some(end) => {
-                let lead = item[..end].rfind('[').map_or(0, |b| b + 1);
-                masked.push_str(&item[..lead]);
-                masked.push('?');
-                masked.push_str(&item[end..]);
-            }
-            None => masked.push_str(item),
-        }
-    }
-    masked
 }
 
 /// `text` with each occurrence of `word` that is not part of a longer word replaced by `?`.
