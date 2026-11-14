@@ -9,9 +9,10 @@
 //! one batch into one partition, as `local[1]` does; `range(0, 1000, 1, 4)`
 //! is four slices of 250 rows in both engines, whatever the thread count;
 //! `UNION ALL` numbers its inputs' partitions one after another, as Spark's
-//! `UnionRDD`, while a sample inside a branch numbers the branch's own. The fixture's Parquet tables are registered as in-memory
-//! tables of the same rows in the same order (one partition, as Spark's one
-//! small file), and again through a Parquet file Krishiv wrote; `pq3`
+//! `UnionRDD`, while a sample inside a branch numbers the branch's own. The
+//! fixture's Parquet tables are registered as in-memory tables of the same
+//! rows in the same order (one partition, as Spark's one small file), and
+//! again through a Parquet file Krishiv wrote; `pq3`
 //! (`repartition(3)`'s round-robin rows in three files) is not reproduced.
 #![cfg(test)]
 
