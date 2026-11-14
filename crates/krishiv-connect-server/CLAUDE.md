@@ -57,7 +57,8 @@ Paths are relative to this crate.
 - `src/manager.rs` `SessionManager` (Spark's `SparkConnectSessionManager`; its factory gets the `Authenticated`
   caller; a new session records transport `connect`, the client's `user_id` (unverified, ADR 0046 §5) and its
   server-side id for `system.sessions`): get-or-create / lookup / release, tombstones
-  (LRU, no expiry), `SESSION_CHANGED` on a changed server-side id, the idle sweep (skips a session running a query or
+  (LRU, no expiry), `SESSION_CHANGED` on a changed server-side id, a `krishiv::audit` record (not counted) for a
+  session or operation id another owner holds (ADR 0046 §3b; `audit_foreign_operation`, `tests/foreign_handles_audit.rs`), the idle sweep (skips a session running a query or
   holding a live operation; `busy()` is what shutdown waits for), `krishiv.connect.maxSessions` /
   `maxSessionsPerPrincipal`
 - `src/server.rs` `ConnectServer::serve`: HTTP/2 limits, connection cap, sweeper task, shutdown order; `with_tls` (P3-T002 §3.5): the TLS handshake (ALPN `h2`) on the connection's own task within `handshakeTimeout`, `PeerInfo` (address and verified client leaf) as the connection's `ConnectInfo`, which `AuthLayer` passes to the authenticator; `tests/tls.rs`

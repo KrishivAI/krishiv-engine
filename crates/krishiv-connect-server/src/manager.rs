@@ -11,7 +11,13 @@
 //! The key is the caller's [`SessionOwner`] (method, principal kind, tenant
 //! and name, without groups). A session id another owner holds is refused as
 //! unknown (`INVALID_HANDLE.SESSION_NOT_FOUND`), the answer a lookup of an
-//! unknown id gets.
+//! unknown id gets, and writes a `krishiv::audit` denial record (ADR 0046
+//! §3b: no existence oracle, but the denial is recorded); so does a release
+//! of such an id (a no-op) and, through
+//! [`SessionManager::audit_foreign_operation`], an operation id another
+//! owner's session holds. These records are not counted in
+//! `krishiv_auth_denied_total`, which counts `KRISHIV_INSUFFICIENT_PERMISSIONS`
+//! refusals only (§8).
 //!
 //! A session's policy is fixed when it is built, from the caller's role. A
 //! caller whose role differs from the role its live session was built with
@@ -39,7 +45,7 @@ use krishiv_common::error::{
     InvalidHandleSessionChanged, InvalidHandleSessionClosed, InvalidHandleSessionNotFound,
     KrishivError, KrishivSessionLimit,
 };
-use krishiv_session::auth::Authenticated;
+use krishiv_session::auth::{Authenticated, Surface};
 use krishiv_session::{QueryId, Session};
 
 use crate::auth::SessionOwner;
@@ -391,7 +397,7 @@ impl SessionManager {
             Err(e) => {
                 // Built, then refused by a check that changed meanwhile.
                 entry.session.close();
-                Err(e)
+                Err(audit_foreign(caller, "session", e))
             }
             Ok(Some(existing)) => {
                 entry.session.close();
@@ -468,7 +474,14 @@ impl SessionManager {
         let key = Self::key(caller, session_id);
         let entry = {
             let mut inner = self.lock();
-            let entry = Self::remove_locked(&mut inner, &key)?;
+            let Some(entry) = Self::remove_locked(&mut inner, &key) else {
+                let foreign = Self::foreign_locked(&inner, &key);
+                drop(inner);
+                if foreign {
+                    write_foreign_record(caller, "session");
+                }
+                return None;
+            };
             if !allow_reconnect {
                 inner.closed.insert(key, self.limits.tombstones);
             }
@@ -582,11 +595,7 @@ impl SessionManager {
             match self.live_locked(&mut inner, key, caller, &mut retired) {
                 Some(e) => Ok(Some(e)),
                 // Held by another owner: refused as unknown.
-                None if inner
-                    .owners
-                    .get(&key.session_id)
-                    .is_some_and(|o| *o != key.owner) =>
-                {
+                None if Self::foreign_locked(&inner, key) => {
                     Err(KrishivError::from(InvalidHandleSessionNotFound {
                         handle: key.session_id.clone(),
                     }))
@@ -595,11 +604,40 @@ impl SessionManager {
             }
         };
         Self::close_retired(retired);
-        let Some(entry) = found? else {
+        let Some(entry) = found.map_err(|e| audit_foreign(caller, "session", e))? else {
             return Ok(None);
         };
         Self::check_observed(key, &entry, observed)?;
         Ok(Some(entry))
+    }
+
+    /// Whether another owner holds `key`'s session id.
+    fn foreign_locked(inner: &Inner, key: &Key) -> bool {
+        inner
+            .owners
+            .get(&key.session_id)
+            .is_some_and(|o| *o != key.owner)
+    }
+
+    /// Writes the denial record of ADR 0046 §3b when `operation_id`, unknown in
+    /// `caller`'s session, is a live operation of another owner's session (the
+    /// caller is answered `INVALID_HANDLE.OPERATION_NOT_FOUND` either way). An
+    /// error path only: it looks through every live session.
+    pub fn audit_foreign_operation(&self, caller: &Authenticated, operation_id: &str) {
+        let owner = SessionOwner::of(caller);
+        let others: Vec<Arc<SessionEntry>> = self
+            .lock()
+            .live
+            .iter()
+            .filter(|(k, _)| k.owner != owner)
+            .map(|(_, e)| Arc::clone(e))
+            .collect();
+        if others
+            .iter()
+            .any(|e| e.operations().get(operation_id).is_some())
+        {
+            write_foreign_record(caller, "operation");
+        }
     }
 
     fn check_observed(
@@ -633,7 +671,7 @@ impl SessionManager {
             }
         };
         Self::close_retired(retired);
-        checked
+        checked.map_err(|e| audit_foreign(caller, "session", e))
     }
 
     fn check_create_locked(
@@ -649,11 +687,7 @@ impl SessionManager {
             }
             .into());
         }
-        if inner
-            .owners
-            .get(&key.session_id)
-            .is_some_and(|o| *o != key.owner)
-        {
+        if Self::foreign_locked(inner, key) {
             return Err(InvalidHandleSessionNotFound {
                 handle: key.session_id.clone(),
             }
@@ -689,6 +723,33 @@ impl SessionManager {
         }
         Some(entry)
     }
+}
+
+/// `error` unchanged, after the ADR 0046 §3b denial record when it is the
+/// `INVALID_HANDLE.SESSION_NOT_FOUND` of an id another owner holds (the only
+/// `SESSION_NOT_FOUND` [`SessionManager::lookup`] and the create checks give).
+fn audit_foreign(
+    caller: &Authenticated,
+    handle: &'static str,
+    error: KrishivError,
+) -> KrishivError {
+    if error.error_class().name() == "INVALID_HANDLE.SESSION_NOT_FOUND" {
+        write_foreign_record(caller, handle);
+    }
+    error
+}
+
+/// The `krishiv::audit` record of a refused id another principal holds: who
+/// asked and what kind of id, never the id's owner.
+fn write_foreign_record(caller: &Authenticated, handle: &'static str) {
+    tracing::warn!(
+        target: "krishiv::audit",
+        principal = %caller.principal.name,
+        method = caller.method.as_str(),
+        surface = Surface::Connect.as_str(),
+        handle,
+        "refused a Connect id another principal holds, answered as unknown"
+    );
 }
 
 #[cfg(test)]

@@ -269,10 +269,14 @@ impl SparkConnectService for ConnectService {
             )
             .map_err(|e| status_of(&e))?;
         let error: KrishivError = match entry.operations().get(&request.operation_id) {
-            None => InvalidHandleOperationNotFound {
-                handle: request.operation_id.clone(),
+            None => {
+                self.manager
+                    .audit_foreign_operation(&caller, &request.operation_id);
+                InvalidHandleOperationNotFound {
+                    handle: request.operation_id.clone(),
+                }
+                .into()
             }
-            .into(),
             Some(op) if !op.reattachable() => InvalidCursorNotReattachable {}.into(),
             Some(_) => InvalidCursorDisconnected {}.into(),
         };
