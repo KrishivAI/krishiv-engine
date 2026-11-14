@@ -135,3 +135,61 @@ fn a_fixed_size_list_that_is_not_a_vector_is_an_ordinary_list() {
     let list = out[0].column(0).as_list::<i32>();
     assert_eq!(list.value(1).as_primitive::<Int32Type>().values(), &[3, 4]);
 }
+
+fn vector_table(s: &Session, name: &str, n: i32, rows: &[&[f32]]) {
+    let item = Arc::new(Field::new("item", DataType::Float32, true));
+    let flat: Vec<f32> = rows.iter().flat_map(|r| r.iter().copied()).collect();
+    let v: ArrayRef = Arc::new(
+        FixedSizeListArray::try_new(
+            Arc::clone(&item),
+            n,
+            Arc::new(Float32Array::from(flat)),
+            None,
+        )
+        .unwrap(),
+    );
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "v",
+        DataType::FixedSizeList(item, n),
+        true,
+    )]));
+    let batch = RecordBatch::try_new(Arc::clone(&schema), vec![v]).unwrap();
+    s.register_batches(name, schema, vec![batch]).unwrap();
+}
+
+fn lists(batches: &[RecordBatch]) -> Vec<Vec<f32>> {
+    let mut out = Vec::new();
+    for b in batches {
+        let l = b.column(0).as_list::<i32>();
+        for i in 0..l.len() {
+            out.push(l.value(i).as_primitive::<Float32Type>().values().to_vec());
+        }
+    }
+    out.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    out
+}
+
+/// A union of vectors of one length is a vector column, of two lengths or with a plain list a list column
+/// (design P3-T075 §4): the values are right either way.
+#[test]
+fn a_union_of_vectors_keeps_values_whatever_the_lengths() {
+    let s = Session::new().unwrap();
+    vector_table(&s, "a", 2, &[&[1.0, 2.0], &[3.0, 4.0]]);
+    vector_table(&s, "b", 2, &[&[5.0, 6.0]]);
+    vector_table(&s, "c", 3, &[&[7.0, 8.0, 9.0]]);
+    assert_eq!(
+        lists(&rows(&s, "SELECT v FROM a UNION ALL SELECT v FROM b")),
+        vec![vec![1.0, 2.0], vec![3.0, 4.0], vec![5.0, 6.0]]
+    );
+    assert_eq!(
+        lists(&rows(&s, "SELECT v FROM a UNION ALL SELECT v FROM c")),
+        vec![vec![1.0, 2.0], vec![3.0, 4.0], vec![7.0, 8.0, 9.0]]
+    );
+    assert_eq!(
+        lists(&rows(
+            &s,
+            "SELECT v FROM a UNION ALL SELECT array(CAST(0.5 AS FLOAT), CAST(1.5 AS FLOAT))"
+        )),
+        vec![vec![0.5, 1.5], vec![1.0, 2.0], vec![3.0, 4.0]]
+    );
+}

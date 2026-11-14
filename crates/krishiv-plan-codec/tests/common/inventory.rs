@@ -2335,6 +2335,30 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
                 },
             },
         ),
+        (
+            // A vector column on the `FixedSizeList` carrier (design P3-T075): the argument type of a count.
+            "vector_carrier_aggregate",
+            PhysNode::Aggregate {
+                input: Box::new(PhysNode::Scan(file_scan())),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    aggregates: vec![AggregateExpr {
+                        function: AggregateFunction::Count,
+                        args: vec![1],
+                        input: AggInput::Raw,
+                        arg_type: ArrowType::FixedSizeList(
+                            std::sync::Arc::new(Field::new("item", ArrowType::Float32, true)),
+                            768,
+                        ),
+                        name: "vec".to_owned(),
+                        mask: None,
+                        element: None,
+                    }],
+                    distinct: vec![false],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
         ("time_nested", nested_times),
         ("time_project", times),
         ("geo_scan", PhysNode::Scan(spatial)),

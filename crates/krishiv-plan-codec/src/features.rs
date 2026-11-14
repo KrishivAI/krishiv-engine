@@ -130,6 +130,7 @@ registry! {
     (exchange_source, ExchangeSource, POST_MIGRATION_READER_VERSION, Semantic, "The `ExchangeSource` node: a plan fragment's read of an exchange another stage wrote (distributed stages)."),
     (existence_join, ExistenceJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `Existence` join type (Spark's `ExistenceJoin`: `EXISTS` and `IN` outside a filter conjunct), hash or nested loop."),
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
+    (fixed_size_list_carrier, FixedSizeListCarrier, POST_MIGRATION_READER_VERSION, Semantic, "A vector column on the `FixedSizeList` carrier (design P3-T075): an `array<float>` or `array<double>` stored with its length. A reader without it would read the column through code that expects a plain list."),
     (fused_probe, FusedProbe, POST_MIGRATION_READER_VERSION, Optimization, "A hash join's probe selection (`HashJoinPlan.select`, design P2-E3 U2): a filter and a scan's runtime-filter row stage fused into the probe, which joins the selected rows by id; without it the planner keeps the `Filter` node and the scan's own row stage."),
     (generate, Generate, POST_MIGRATION_READER_VERSION, Semantic, "The `Generate` node (`explode`, `posexplode`, `inline` and their `_outer` forms)."),
     (geo_types, GeoTypes, POST_MIGRATION_READER_VERSION, Semantic, "The `GEOMETRY` and `GEOGRAPHY` types, with their SRID."),
@@ -386,7 +387,10 @@ fn arrow_nested(t: &arrow_schema::DataType) -> bool {
 /// excludes it (it is `calendar_struct`).
 pub(crate) fn arrow_type_is_nested(t: &arrow_schema::DataType) -> bool {
     // A variant's carrier is one value, not a struct: it needs `variant_type`, not `nested_types`.
-    !krishiv_types::arrow::is_variant_struct(t) && arrow_nested(t)
+    // Nor is a vector carrier: it needs `fixed_size_list_carrier`.
+    !krishiv_types::arrow::is_variant_struct(t)
+        && !matches!(t, arrow_schema::DataType::FixedSizeList(..))
+        && arrow_nested(t)
 }
 
 /// The feature `construct` needs, or `None` for the epoch-1 baseline.
@@ -509,6 +513,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             } else if krishiv_types::arrow::is_variant_struct(t) {
                 // A variant's carrier is one value, not a struct.
                 Some(Feature::VariantType)
+            } else if matches!(t, arrow_schema::DataType::FixedSizeList(..)) {
+                // A vector carrier is one value, not a nested type: a reader needs the carrier, not `nested_types`.
+                Some(Feature::FixedSizeListCarrier)
             } else {
                 arrow_nested(t).then_some(Feature::NestedTypes)
             }
