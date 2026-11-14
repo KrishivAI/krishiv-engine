@@ -247,3 +247,53 @@ async fn a_queued_query_shows_its_wait_in_queued_ns() {
         "queued for about 200 ms, saw {waited} ns"
     );
 }
+
+#[tokio::test]
+async fn a_spent_scan_quota_refuses_the_next_query() {
+    let data = std::env::temp_dir().join(format!("krishiv-rg-{}-scan.csv", std::process::id()));
+    let rows: String = (0..2000).map(|i| format!("{i},row-{i}\n")).collect();
+    std::fs::write(&data, rows).unwrap_or_else(|e| panic!("{e}"));
+    let path = write_file(
+        "quota",
+        r#"{"rootGroups": [{"name": "root", "hardConcurrencyLimit": 4, "maxQueued": 4,
+                           "scanQuota": 1, "scanQuotaPeriod": "1h"}],
+            "defaultGroup": "root"}"#,
+    );
+    let rt = EngineRuntime::builder()
+        .config("krishiv.workload.resourceGroups.file", path)
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let s = Session::builder()
+        .runtime(rt)
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let sql = format!("select count(*) from csv.`{}`", data.display());
+    s.sql(&sql)
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .collect()
+        .await
+        .unwrap_or_else(|e| panic!("the first scan is admitted: {e}"));
+    // The slot's drop charges the scanned bytes; allow the fold a moment.
+    let mut refused = None;
+    for _ in 0..100 {
+        match s
+            .sql("select 1")
+            .await
+            .unwrap_or_else(|e| panic!("{e}"))
+            .collect()
+            .await
+        {
+            Err(e) => {
+                refused = Some(e);
+                break;
+            }
+            Ok(_) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
+        }
+    }
+    let err = refused.unwrap_or_else(|| panic!("the spent quota never refused a query"));
+    assert_eq!(
+        err.error_class().name(),
+        ErrorClass::KrishivResourceGroupQuotaExhausted.name()
+    );
+}
