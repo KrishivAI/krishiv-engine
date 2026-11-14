@@ -122,7 +122,7 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         int("maxCharsPerColumn", -1, i64::from(i32::MAX), -1, "Most characters of a value (-1: any).");
         unescaped_spec();
         flag("enableDateTimeParsingFallback", None, "Parse with the lenient grammar when the pattern fails.");
-        conf("columnPruning", OptionKind::Bool, OptionDefault::Bool(true), "spark.sql.csv.parser.columnPruning.enabled", "Parse only the requested columns.");
+        conf("columnPruning", OptionKind::Bool, OptionDefault::None, "spark.sql.csv.parser.columnPruning.enabled", "Parse only the requested columns (default: on unless `multiLine`).");
         string("compression", "Write codec: none, uncompressed, bzip2, deflate, gzip, lz4 or snappy.");
         string("codec", "Alias of `compression`.");
         string("locale", "The locale of numbers (only en-US).");
@@ -327,7 +327,12 @@ impl CsvOptions {
             enforce_schema: o.bool("enforceSchema").unwrap_or(true),
             quote_all: o.bool("quoteAll").unwrap_or(false),
             escape_quotes: o.bool("escapeQuotes").unwrap_or(true),
-            column_pruning: o.bool("columnPruning").unwrap_or(true),
+            // Spark 4.2's `CSVOptions`: `getBool(COLUMN_PRUNING, !multiLine
+            // && columnPruning)`. The option or a session-set conf is taken
+            // as given; unset, pruning is on unless `multiLine` (a conf set
+            // to true under `multiLine` prunes here, not in Spark: the
+            // options layer cannot tell the conf from the option).
+            column_pruning: o.bool("columnPruning").unwrap_or(!multi_line),
         })
     }
 }

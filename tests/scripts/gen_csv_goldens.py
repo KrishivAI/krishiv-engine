@@ -277,6 +277,31 @@ READS += [
             ("swapped select b", "b,a\n1,2\n", "a int, b int", ["b"]),
         ]
     ],
+    # Spark turns pruning off by default under multiLine (`!multiLine && columnPruning`), so the whole header is
+    # checked; an explicit `columnPruning` option still wins.
+    *[
+        (
+            f"enforceSchema false multiLine {n}",
+            t,
+            {"header": "true", "enforceSchema": "false", "multiLine": "true", **o},
+            "a int, b int",
+            sel,
+        )
+        for n, t, o, sel in [
+            ("other column select a", "A,X\n1,2\n", {}, ["a"]),
+            ("wide header select a", "a,b,c\n1,2,3\n", {}, ["a"]),
+            ("other column select a pruning", "A,X\n1,2\n", {"columnPruning": "true"}, ["a"]),
+            ("short record select a", "a,b\n1\n3,4\n", {"mode": "DROPMALFORMED"}, ["a"]),
+        ]
+    ],
+    ("short record select a", "a,b\n1\n3,4\n", {"header": "true", "mode": "DROPMALFORMED"}, "a int, b int", ["a"]),
+    (
+        "enforceSchema false short header select b",
+        "a\n1,2\n",
+        {"header": "true", "enforceSchema": "false"},
+        "a int, b int",
+        ["b"],
+    ),
     (
         "enforceSchema false no pruning",
         "A,X\n1,2\n",
