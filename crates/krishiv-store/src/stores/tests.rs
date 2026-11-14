@@ -866,11 +866,26 @@ fn onelake_hosts_keep_their_host_and_never_share_an_azure_store() {
             "onelake.dfs.fabric.microsoft.com",
             "abfss://ws@onelake.dfs.fabric.microsoft.com",
         ),
+        // Hosts are case-insensitive: object_store reads the lower-cased `Url::host_str`, so the
+        // account (and the store id) is lower-case too; the `blob` name of a OneLake host is the
+        // same store as its `dfs` name.
         (
             "abfss://ws@OneLake.Blob.Fabric.Microsoft.com/lh",
-            "OneLake",
+            "onelake",
             "onelake.blob.fabric.microsoft.com",
-            "abfss://ws@onelake.blob.fabric.microsoft.com",
+            "abfss://ws@onelake.dfs.fabric.microsoft.com",
+        ),
+        (
+            "abfss://c@Acct.DFS.core.windows.net/k",
+            "acct",
+            "acct.dfs.core.windows.net",
+            "abfss://c@acct",
+        ),
+        (
+            "abfss://ws@WsId.Z28.dfs.fabric.microsoft.com/lh",
+            "wsid.z28",
+            "wsid.z28.dfs.fabric.microsoft.com",
+            "abfss://ws@wsid.z28.dfs.fabric.microsoft.com",
         ),
         (
             "abfss://ws@wsid.z28.dfs.fabric.microsoft.com/lh",
@@ -946,9 +961,11 @@ fn azure_hosts_other_than_storage_and_onelake_are_refused() {
 fn onelake_stores_address_the_fabric_endpoint() {
     // The store's service URL (object_store's `AzureConfig::service`, in its `Debug`): what every
     // request is sent to.
+    // The store's `Debug` (object_store's, derived) prints its credential: the token here is no
+    // secret.
     let registry = StoreRegistry::new(config(&[
         (AZURE_AUTH_TYPE, "OAuth"),
-        (AZURE_OAUTH_ACCESS_TOKEN, CANARY),
+        (AZURE_OAUTH_ACCESS_TOKEN, "not-a-secret"),
     ]));
     for (input, service) in [
         (

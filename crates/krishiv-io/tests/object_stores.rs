@@ -150,6 +150,11 @@ async fn write_then_read(config: Arc<Config>, bucket_url: &str) {
 
 /// The non-empty value of an emulator endpoint variable, if set.
 fn endpoint(name: &str) -> Option<String> {
+    env_nonempty(name)
+}
+
+/// The non-empty value of the environment variable `name`, if set.
+fn env_nonempty(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
 }
 
@@ -403,7 +408,7 @@ async fn azure_csv_reads_with_a_sas() {
     );
     let (Some(endpoint), Some(sas)) = (
         endpoint("KRISHIV_TEST_AZURE_ENDPOINT"),
-        endpoint("KRISHIV_TEST_AZURE_SAS"),
+        env_nonempty("KRISHIV_TEST_AZURE_SAS"),
     ) else {
         // Offline: a SAS store builds without I/O, and the ambient environment plays no part.
         let config = test_config(&[

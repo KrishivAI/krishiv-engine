@@ -16,16 +16,18 @@
 //! (`fs.azure.sas.fixed.token`) or `OAuth` with `fs.azure.account.oauth.provider.type` naming
 //! `ClientCredsTokenProvider`, `WorkloadIdentityTokenProvider` or `MsiTokenProvider`; Krishiv adds
 //! `fs.azure.account.oauth2.access.token`, a static bearer token, for `OAuth` without a provider
-//! class. Without an auth type the credential keys are tried in the order Krishiv always did
-//! (account key, SAS), then the bearer token, then the builder's environment.
+//! class. Without an auth type the most specific credential key of any family is used (at one
+//! scope level: account key, then SAS, then the bearer token), else the builder's environment.
 //!
 //! Every key is resolved as ABFS resolves it (`AbfsConfiguration.accountConf`/`containerConf`):
 //! the account-host form `<key>.<host>` beats the bare `<key>`, and a secret
 //! (`getPasswordString`: keys, tokens, client ids, endpoints, tenants) also has the container form
 //! `<key>.<container>.<host>` first. The host is the URL's (`account.dfs.core.windows.net`), its
 //! `blob` twin, and for Azure Storage accounts Krishiv's older `<key>.<container>.<account>` and
-//! `<key>.<account>` forms. A provider class set only on the bare key applies only when the bare
-//! auth type is `OAuth` too (`getTokenProviderClass`).
+//! `<key>.<account>` forms. A provider class (OAuth or SAS) set only on the bare key applies only
+//! when the bare auth type is the same (`getTokenProviderClass`). Keys of one credential (the
+//! account key, `fs.azure.sas.fixed.token` and `fs.azure.sas`, the bearer token) are compared by
+//! scope level first, so a host-scoped key of any of them beats a bare one.
 //!
 //! With an explicit credential the builder starts empty (`MicrosoftAzureBuilder::new`), never from
 //! the process environment, so an ambient `AZURE_STORAGE_TOKEN`, `AZURE_CLIENT_ID`,
@@ -147,10 +149,34 @@ impl Lookup<'_> {
 
     /// The most specific value of the secret `base`.
     fn secret(&self, base: &str) -> Result<Option<SecretString>> {
-        for key in self.secret_keys(base) {
-            if let Some(value) = cred(self.config, self.options, &key)? {
-                return Ok(Some(value));
+        Ok(self.first_secret(&[base])?.map(|(_, value)| value))
+    }
+
+    /// The most specific value among the secret keys `bases` (key families), with the index of
+    /// its family: scope level first (container, host, account, bare), then the family in the
+    /// order given, so a host-scoped key of any family beats a bare key of every family, as each
+    /// `AbfsConfiguration` lookup is per account.
+    fn first_secret(&self, bases: &[&str]) -> Result<Option<(usize, SecretString)>> {
+        let forms: Vec<Vec<String>> = bases.iter().map(|b| self.secret_keys(b)).collect();
+        let levels = forms.first().map_or(0, Vec::len);
+        for level in 0..levels {
+            for (family, keys) in forms.iter().enumerate() {
+                if let Some(value) = cred(self.config, self.options, &keys[level])? {
+                    return Ok(Some((family, value)));
+                }
             }
+        }
+        Ok(None)
+    }
+
+    /// A token provider class of `class_key` as `getTokenProviderClass` reads it: the
+    /// account-scoped forms, else the bare key only when the bare auth type is `auth_type` too.
+    fn provider_class(&self, class_key: &str, auth_type: &str) -> Result<Option<String>> {
+        if let Some(class) = self.plain_scoped(class_key)? {
+            return Ok(Some(class));
+        }
+        if text(self.config, self.options, AZURE_AUTH_TYPE)?.as_deref() == Some(auth_type) {
+            return text(self.config, self.options, class_key);
         }
         Ok(None)
     }
@@ -211,20 +237,25 @@ fn account_hosts(url: &ParsedUrl, account: Option<&str>) -> Vec<String> {
 /// supported, both naming the key and never a secret.
 fn resolve_auth(l: &Lookup<'_>) -> Result<Option<Auth>> {
     match l.plain(AZURE_AUTH_TYPE)?.as_deref() {
-        None => {
-            if let Some(key) = l.secret(AZURE_ACCOUNT_KEY)? {
-                return Ok(Some(Auth::Key(key)));
-            }
-            if let Some(sas) = sas(l)? {
-                return Ok(Some(Auth::Sas(sas)));
-            }
-            Ok(l.secret(AZURE_OAUTH_ACCESS_TOKEN)?.map(Auth::Bearer))
-        }
+        // Krishiv's inference: the most specific credential key of any family; at one scope
+        // level the account key, then a SAS, then the bearer token.
+        None => Ok(l
+            .first_secret(&[
+                AZURE_ACCOUNT_KEY,
+                AZURE_SAS_FIXED_TOKEN,
+                AZURE_SAS,
+                AZURE_OAUTH_ACCESS_TOKEN,
+            ])?
+            .map(|(family, value)| match family {
+                0 => Auth::Key(value),
+                1 | 2 => Auth::Sas(value),
+                _ => Auth::Bearer(value),
+            })),
         Some("SharedKey") => l
             .required(AZURE_ACCOUNT_KEY, "fs.azure.account.auth.type SharedKey")
             .map(|k| Some(Auth::Key(k))),
         Some("SAS") => {
-            if let Some(class) = l.plain(AZURE_SAS_TOKEN_PROVIDER_TYPE)? {
+            if let Some(class) = l.provider_class(AZURE_SAS_TOKEN_PROVIDER_TYPE, "SAS")? {
                 return Err(unsupported(format!(
                     "the SAS token provider class {class} ({AZURE_SAS_TOKEN_PROVIDER_TYPE}); set \
                      {AZURE_SAS_FIXED_TOKEN}"
@@ -247,24 +278,17 @@ fn resolve_auth(l: &Lookup<'_>) -> Result<Option<Auth>> {
     }
 }
 
-/// The SAS: Hadoop's `fs.azure.sas.fixed.token` forms, then Krishiv's `fs.azure.sas` forms.
+/// The SAS: the most specific of Hadoop's `fs.azure.sas.fixed.token` and Krishiv's `fs.azure.sas`
+/// forms (the fixed token first at one scope level).
 fn sas(l: &Lookup<'_>) -> Result<Option<SecretString>> {
-    match l.secret(AZURE_SAS_FIXED_TOKEN)? {
-        Some(sas) => Ok(Some(sas)),
-        None => l.secret(AZURE_SAS),
-    }
+    Ok(l.first_secret(&[AZURE_SAS_FIXED_TOKEN, AZURE_SAS])?
+        .map(|(_, value)| value))
 }
 
 /// The `OAuth` credential: a token provider class (account-scoped, else the bare one when the bare
 /// auth type is `OAuth` too, as `getTokenProviderClass`), or the static bearer token.
 fn oauth(l: &Lookup<'_>) -> Result<Auth> {
-    let provider = match l.plain_scoped(AZURE_OAUTH_PROVIDER_TYPE)? {
-        Some(class) => Some(class),
-        None if text(l.config, l.options, AZURE_AUTH_TYPE)?.as_deref() == Some("OAuth") => {
-            text(l.config, l.options, AZURE_OAUTH_PROVIDER_TYPE)?
-        }
-        None => None,
-    };
+    let provider = l.provider_class(AZURE_OAUTH_PROVIDER_TYPE, "OAuth")?;
     let token = l.secret(AZURE_OAUTH_ACCESS_TOKEN)?;
     let class = match (provider, token) {
         (Some(_), Some(_)) => {
@@ -483,8 +507,9 @@ pub(super) fn azure_store(
 /// Splits a SAS token (`sv=..&sig=..`) into its query pairs, redacting any
 /// complaint: the token itself must never reach an error. A leading `?` (as
 /// Azure portals copy it) and surrounding whitespace are ignored. Names and values are
-/// percent-decoded, as object_store's `split_sas` decodes them (`azure/builder.rs` l.1353):
-/// object_store encodes the pairs again when it adds them to a request.
+/// percent-decoded per pair, after the split (object_store's `split_sas`, `azure/builder.rs`
+/// l.1353, decodes the whole token before splitting, which breaks an encoded `&` or `=` inside a
+/// value): object_store encodes the pairs again when it adds them to a request.
 pub(super) fn sas_pairs(secret: &SecretString) -> Result<Vec<(String, String)>, String> {
     let token = secret.expose_secret().trim();
     let token = token.strip_prefix('?').unwrap_or(token);

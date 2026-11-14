@@ -342,6 +342,97 @@ async fn host_scoped_keys_beat_bare_keys_as_abfs_resolves_them() {
 }
 
 #[tokio::test]
+async fn host_scoped_credentials_of_any_family_beat_bare_ones() {
+    let (endpoint, log) = stand_in().await;
+    let base = account_endpoint(&endpoint);
+    let url = |account: &str| format!("abfss://cont@{account}.dfs.core.windows.net/dir/a.csv");
+    // SAS: a bare Hadoop fixed token (the default account) and Krishiv's container form for
+    // another account: the more specific scope wins whatever the key family.
+    let sas = registry(&[
+        ("fs.azure.endpoint", &base),
+        ("fs.azure.account.auth.type", "SAS"),
+        ("fs.azure.sas.fixed.token", "sv=1&sig=YmFyZQ"),
+        (
+            "fs.azure.sas.cont.acct2.dfs.core.windows.net",
+            "sv=1&sig=c2NvcGVk",
+        ),
+    ]);
+    let seen = storage_request(&sas, &url("acct2"), &log).await;
+    assert!(seen.line.contains("sig=c2NvcGVk"), "{seen:?}");
+    let seen = storage_request(&sas, &url("acct"), &log).await;
+    assert!(seen.line.contains("sig=YmFyZQ"), "{seen:?}");
+
+    // Without an auth type: a bare account key, a host-scoped bearer token for `acct2` and a
+    // host-scoped SAS for `acct3`.
+    let mixed = registry(&[
+        ("fs.azure.endpoint", &base),
+        ("fs.azure.account.key", ACCOUNT_KEY),
+        (
+            "fs.azure.account.oauth2.access.token.acct2.dfs.core.windows.net",
+            "scoped-token",
+        ),
+        (
+            "fs.azure.sas.fixed.token.acct3.dfs.core.windows.net",
+            "sv=1&sig=YWNjdDM",
+        ),
+    ]);
+    let seen = storage_request(&mixed, &url("acct2"), &log).await;
+    assert_eq!(seen.auth.as_deref(), Some("Bearer scoped-token"));
+    let seen = storage_request(&mixed, &url("acct3"), &log).await;
+    assert_eq!(seen.auth, None, "{seen:?}");
+    assert!(seen.line.contains("sig=YWNjdDM"), "{seen:?}");
+    let seen = storage_request(&mixed, &url("acct"), &log).await;
+    assert!(
+        seen.auth.as_deref().unwrap().starts_with("SharedKey acct:"),
+        "{seen:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_bare_sas_provider_class_applies_only_under_a_bare_sas_auth_type() {
+    // `getTokenProviderClass`: the bare class counts only when the bare auth type is SAS too, so
+    // here the host's SAS auth signs with its fixed token.
+    let (endpoint, log) = stand_in().await;
+    let registry = registry(&[
+        ("fs.azure.endpoint", &account_endpoint(&endpoint)),
+        ("fs.azure.account.auth.type", "OAuth"),
+        (
+            "fs.azure.sas.token.provider.type",
+            "com.example.SasProvider",
+        ),
+        (
+            "fs.azure.account.auth.type.acct.dfs.core.windows.net",
+            "SAS",
+        ),
+        ("fs.azure.sas.fixed.token", "sv=1&sig=Zml4ZWQ"),
+    ]);
+    let seen = storage_request(&registry, URL, &log).await;
+    assert!(seen.line.contains("sig=Zml4ZWQ"), "{seen:?}");
+}
+
+#[tokio::test]
+async fn mixed_case_hosts_sign_for_the_lower_case_account() {
+    let (endpoint, log) = stand_in().await;
+    let registry = registry(&[
+        ("fs.azure.endpoint", &account_endpoint(&endpoint)),
+        (
+            "fs.azure.account.key.acct.dfs.core.windows.net",
+            ACCOUNT_KEY,
+        ),
+    ]);
+    let seen = storage_request(
+        &registry,
+        "abfss://cont@Acct.Dfs.Core.Windows.Net/dir/a.csv",
+        &log,
+    )
+    .await;
+    assert!(
+        seen.auth.as_deref().unwrap().starts_with("SharedKey acct:"),
+        "{seen:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_new_static_token_reaches_the_next_request() {
     let (endpoint, log) = stand_in().await;
     let base = account_endpoint(&endpoint);

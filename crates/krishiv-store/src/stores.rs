@@ -235,6 +235,7 @@ impl fmt::Display for ObjectScheme {
 
 /// A cloud URL split into its store and its key.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ParsedUrl {
     /// The scheme class.
     pub scheme: ObjectScheme,
@@ -242,8 +243,9 @@ pub struct ParsedUrl {
     pub scheme_text: String,
     /// The bucket (S3, GCS) or container (Azure).
     pub bucket: String,
-    /// The Azure account, from a `container@account.host` URL (two labels, `<workspace>.z<xy>`,
-    /// for a OneLake workspace private link, as object_store names it).
+    /// The Azure account, from a `container@account.host` URL, ASCII lower-cased as object_store's
+    /// `parse_url` takes it from `Url::host_str` (two labels, `<workspace>.z<xy>`, for a OneLake
+    /// workspace private link).
     pub account: Option<String>,
     /// The Azure host of a `container@host` URL, ASCII lower-cased: an Azure Storage
     /// (`<account>.dfs|blob.core.windows.net`) or OneLake (`<account>.dfs|blob.fabric.microsoft.com`,
@@ -255,8 +257,9 @@ pub struct ParsedUrl {
     pub key: Path,
     /// The store id: `s3://bucket`, `gs://bucket`,
     /// `abfss://container`, `abfss://container@account` (Azure Storage) or
-    /// `abfss://container@host` (OneLake: the host is kept, so a OneLake workspace never shares a
-    /// store with a same-named container of an Azure Storage account).
+    /// `abfss://container@host` (OneLake: the host is kept, its `blob` name written as the `dfs`
+    /// one, so a OneLake workspace never shares a store with a same-named container of an Azure
+    /// Storage account). Azure accounts and hosts are lower-case in the id.
     pub store_id: StoreId,
     /// The URL in canonical form (`scheme://authority/key`); what errors
     /// print and what re-parses to the same store and key.
@@ -336,7 +339,7 @@ pub fn parse_object_url(text: &str) -> Result<ParsedUrl> {
             if AzureHost::is_core(host) {
                 StoreId::new(format!("abfss://{bucket}@{account}"))
             } else {
-                StoreId::new(format!("abfss://{bucket}@{host}"))
+                StoreId::new(format!("abfss://{bucket}@{}", AzureHost::store_host(host)))
             }
         }
         (ObjectScheme::Azure, _, _) => StoreId::new(format!("abfss://{bucket}")),
@@ -383,14 +386,13 @@ impl AzureHost {
         let labels: Vec<&str> = lower.split('.').collect();
         let plain =
             |l: &str| !l.is_empty() && l.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
-        let original: Vec<&str> = host.split('.').collect();
         match labels.as_slice() {
             [a, "dfs" | "blob", "core", "windows", "net"]
             | [a, "dfs" | "blob", "fabric", "microsoft", "com"]
                 if plain(a) =>
             {
                 Some(Self {
-                    account: original[0].to_owned(),
+                    account: (*a).to_owned(),
                     host: lower.clone(),
                 })
             }
@@ -407,11 +409,22 @@ impl AzureHost {
                 && zone.bytes().all(|b| b.is_ascii_alphanumeric()) =>
             {
                 Some(Self {
-                    account: format!("{}.{}", original[0], original[1]),
+                    account: format!("{ws}.{zone}"),
                     host: lower.clone(),
                 })
             }
             _ => None,
+        }
+    }
+
+    /// The host part of a OneLake store id: the `dfs` name for both names of a OneLake host (one
+    /// service, object_store addresses the `blob` endpoint for either); a private-link host as is.
+    pub(crate) fn store_host(host: &str) -> String {
+        match host.strip_suffix(".blob.fabric.microsoft.com") {
+            Some(account) if !account.contains('.') => {
+                format!("{account}.dfs.fabric.microsoft.com")
+            }
+            _ => host.to_owned(),
         }
     }
 
@@ -661,7 +674,8 @@ impl StoreRegistry {
 
     /// The store of `url`'s bucket or container, cached by store id within
     /// this query. Credentials come from the configuration (see the module
-    /// docs) with the builders' environment fallback.
+    /// docs) with the builders' environment fallback. Never format the returned store with
+    /// `{:?}`: object_store's derived `Debug` prints its credential.
     ///
     /// # Errors
     /// Invalid configuration and storage errors (named bucket and endpoint

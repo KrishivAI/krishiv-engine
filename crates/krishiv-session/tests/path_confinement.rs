@@ -262,11 +262,14 @@ fn onelake_prefixes_hold_their_host() {
         .unwrap()
         .with_object_prefixes(["abfss://ws@onelake.dfs.fabric.microsoft.com/lh.Lakehouse/Files"])
         .unwrap();
-    assert!(decide(
-        &p,
+    // The `dfs` and `blob` names of the host, in any case, are one store.
+    for path in [
         "abfss://ws@onelake.dfs.fabric.microsoft.com/lh.Lakehouse/Files/raw/a.csv",
-        Privilege::Select
-    ));
+        "abfss://ws@onelake.blob.fabric.microsoft.com/lh.Lakehouse/Files/raw/a.csv",
+        "abfss://ws@OneLake.DFS.Fabric.Microsoft.com/lh.Lakehouse/Files/raw/a.csv",
+    ] {
+        assert!(decide(&p, path, Privilege::Select), "{path}");
+    }
     for path in [
         "abfss://ws@onelake.dfs.core.windows.net/lh.Lakehouse/Files/raw/a.csv",
         "abfss://other@onelake.dfs.fabric.microsoft.com/lh.Lakehouse/Files/a.csv",
