@@ -79,6 +79,10 @@ arrow-schema = { version = "60", default-features = false }
 arrow-select = { version = "60", default-features = false }
 arrow-string = { version = "60", default-features = false }
 arrow-ord = { version = "60", default-features = false }
+# The Delta connector's evaluator (P3-T021 design note section 3.3): arithmetic and Kleene logic.
+arrow-arith = { version = "60", default-features = false }
+# Already built through arrow-json; named for the Delta evaluator's casts.
+arrow-cast = { version = "60", default-features = false }
 arrow-row = { version = "60", default-features = false }
 arrow-data = { version = "60", default-features = false }
 arrow-ipc = { version = "60", default-features = false }
@@ -110,8 +114,8 @@ apache-avro = { version = "=0.22.0", default-features = false, features = ["bzip
 # Implementing `object_store::ObjectStore` (an `async_trait` trait) for store
 # wrappers; already in the tree through object_store itself.
 async-trait = { version = "0.1.89", default-features = false }
-# Only for object_store's `if_unmodified_since` precondition (chrono 0.4.45 comes
-# with Arrow/object_store, ADR 0028).
+# For object_store's `if_unmodified_since` precondition, and the zone type of the Delta
+# evaluator's partition timestamps (chrono 0.4.45 comes with Arrow/object_store, ADR 0028).
 chrono = { version = "0.4.42", default-features = false }
 tokio = { version = "1.53", default-features = false }
 tonic = { version = "0.14.6", default-features = false }
@@ -174,6 +178,8 @@ rust-embed = { version = "8.13", default-features = false }
 utoipa = { version = "6.0", default-features = false }
 rmcp = { version = "3.5.1", default-features = false }
 rustls = { version = "0.23", default-features = false }
+# OIDC JWT signatures (krishiv-session `oidc`); already in the tree as rustls's crypto provider.
+aws-lc-rs = { version = "1.18.2", default-features = false, features = ["aws-lc-sys"] }
 tracing = { version = "0.1.44", default-features = false }
 tracing-subscriber = { version = "0.3.23", default-features = false }
 opentelemetry = { version = "0.33.1", default-features = false }

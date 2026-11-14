@@ -11,20 +11,26 @@ publish = false
 [package.metadata]
 cargo-fuzz = true
 
-# `capsule_import` includes crates/krishiv-python/src/stream/ffi.rs by path, which is what
-# uses these two; cargo-machete cannot see through the path include.
+# `capsule_import` includes crates/krishiv-python/src/stream/ffi.rs by path (arrow-data,
+# krishiv-common) and `jwt_parse` includes krishiv-session's auth/jose.rs (serde, serde_json);
+# cargo-machete cannot see through a path include.
 [package.metadata.cargo-machete]
-ignored = ["arrow-data", "krishiv-common"]
+ignored = ["arrow-data", "krishiv-common", "serde", "serde_json"]
 
 [dependencies]
 libfuzzer-sys = "0.4.10"
 prost = "0.14.4"
+bytes = { version = "1.12", default-features = false }
+delta_kernel = { version = "=0.30.1", default-features = false }
+url = { version = "2.5", default-features = false, features = ["std"] }
 arrow-array = { version = "60", default-features = false, features = ["ffi"] }
 arrow-buffer = { version = "60", default-features = false }
 arrow-data = { version = "60", default-features = false, features = ["ffi"] }
 arrow-schema = { version = "60", default-features = false, features = ["ffi"] }
 krishiv-common = { path = "../crates/krishiv-common" }
+krishiv-connectors-delta = { path = "../crates/krishiv-connectors-delta" }
 krishiv-connect = { path = "../crates/krishiv-connect" }
+krishiv-exec = { path = "../crates/krishiv-exec" }
 krishiv-io = { path = "../crates/krishiv-io" }
 krishiv-memory = { path = "../crates/krishiv-memory" }
 krishiv-plan = { path = "../crates/krishiv-plan", features = ["testing"] }
@@ -32,7 +38,9 @@ krishiv-sql = { path = "../crates/krishiv-sql" }
 krishiv-types = { path = "../crates/krishiv-types" }
 krishiv-testkit = { path = "../crates/krishiv-testkit" }
 object_store = { version = "=0.14.2", default-features = false }
-tokio = { version = "1.53", default-features = false, features = ["rt", "time"] }
+serde = { version = "1.0.229", default-features = false, features = ["std"] }
+serde_json = { version = "1.0.154", default-features = false, features = ["std"] }
+tokio = { version = "1.53", default-features = false, features = ["rt", "rt-multi-thread", "time"] }
 
 [[bin]]
 name = "sql_parse"
@@ -56,8 +64,29 @@ doc = false
 bench = false
 
 [[bin]]
+name = "cert_names"
+path = "fuzz_targets/cert_names.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "jwt_parse"
+path = "fuzz_targets/jwt_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "capsule_import"
 path = "fuzz_targets/capsule_import.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "delta_commit_json"
+path = "fuzz_targets/delta_commit_json.rs"
 test = false
 doc = false
 bench = false

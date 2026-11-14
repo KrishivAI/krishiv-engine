@@ -1,0 +1,22 @@
+{
+  "cases": {
+    "nested-interval-types": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      14,
+      17
+    ]
+  },
+  "file": "postgreSQL/interval",
+  "format_version": 1
+}

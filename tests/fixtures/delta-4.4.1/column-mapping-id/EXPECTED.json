@@ -1,0 +1,105 @@
+{
+ "delta_log": [
+  "00000000000000000000.crc",
+  "00000000000000000000.json",
+  "00000000000000000001.crc",
+  "00000000000000000001.json",
+  "00000000000000000002.crc",
+  "00000000000000000002.json",
+  "00000000000000000003.crc",
+  "00000000000000000003.json",
+  "00000000000000000004.crc",
+  "00000000000000000004.json",
+  "00000000000000000005.crc",
+  "00000000000000000005.json",
+  "00000000000000000006.crc",
+  "00000000000000000006.json"
+ ],
+ "delta_spark": "4.4.1",
+ "dv_storage_types": [],
+ "feature": "columnMapping",
+ "fields": [
+  "id",
+  "a2",
+  "s",
+  "p",
+  "b"
+ ],
+ "format_version": 1,
+ "generator": "tests/scripts/gen_delta_fixtures.py",
+ "mode": "id",
+ "protocol": {
+  "minReaderVersion": 2,
+  "minWriterVersion": 7,
+  "writerFeatures": [
+   "columnMapping",
+   "invariants",
+   "appendOnly"
+  ]
+ },
+ "rows": [
+  {
+   "a2": "a1",
+   "b": null,
+   "id": 1,
+   "p": "p1",
+   "s": [
+    100,
+    "y1"
+   ]
+  },
+  {
+   "a2": null,
+   "b": null,
+   "id": 2,
+   "p": null,
+   "s": null
+  },
+  {
+   "a2": "a3",
+   "b": "new-b",
+   "id": 3,
+   "p": "p1",
+   "s": [
+    300,
+    "y3"
+   ]
+  }
+ ],
+ "schema": "struct<id:bigint,a2:string,s:struct<x2:int,y:string>,p:string,b:string>",
+ "spark": "4.2.0",
+ "timezone": "UTC",
+ "typed_rows": [
+  [
+   1,
+   "a1",
+   {
+    "struct": {
+     "x2": 100,
+     "y": "y1"
+    }
+   },
+   "p1",
+   null
+  ],
+  [
+   2,
+   null,
+   null,
+   null,
+   null
+  ],
+  [
+   3,
+   "a3",
+   {
+    "struct": {
+     "x2": 300,
+     "y": "y3"
+    }
+   },
+   "p1",
+   "new-b"
+  ]
+ ]
+}

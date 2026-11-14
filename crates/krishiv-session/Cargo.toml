@@ -1,14 +1,11 @@
 [package]
 name = "krishiv-session"
 description = "Krishiv sessions: SQL and DataFrames over the engine"
-readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-keywords.workspace = true
-categories.workspace = true
 publish = true
 
 [dependencies]
@@ -30,8 +27,11 @@ krishiv-plan-codec = { path = "../krishiv-plan-codec", version = "=0.2.1" }
 krishiv-sql = { path = "../krishiv-sql", version = "=0.2.1" }
 krishiv-types = { path = "../krishiv-types", version = "=0.2.1" }
 krishiv-udf-sdk = { path = "../krishiv-udf-sdk", version = "=0.2.1" }
-# The `EXPLAIN VERBOSE` JSON document.
+# The `EXPLAIN VERBOSE` JSON document; OIDC token and JWK set parsing (`auth/jose.rs`).
+serde = { workspace = true, features = ["std"] }
 serde_json = { workspace = true, features = ["std"] }
+# OIDC signature checks (P3-T002 PR-14d; design §3.3): RSA PKCS#1 v1.5 and ECDSA, feature `oidc`.
+aws-lc-rs = { workspace = true, optional = true }
 # Static token digests (`auth/tokens.rs`, P3-T002).
 sha2.workspace = true
 # Row hashes for the agent table (`xxhash3_128`, v1 frozen in `agent.rs`).
@@ -53,6 +53,8 @@ opentelemetry_sdk = { workspace = true, optional = true, features = ["trace"] }
 tracing-opentelemetry = { workspace = true, optional = true }
 prost = { workspace = true, optional = true, features = ["std"] }
 reqwest = { workspace = true, optional = true, features = ["blocking", "rustls"] }
+# Server TLS (P3-T002 PR-14c; design §3.5): rustls on the aws-lc-rs provider, never OpenSSL.
+rustls = { workspace = true, optional = true, features = ["aws_lc_rs", "std", "tls12"] }
 tracing-subscriber = { workspace = true, optional = true, features = ["registry", "std"] }
 # The local file system as a store (`fs`); no other store features.
 object_store = { workspace = true, features = ["fs"] }
@@ -71,6 +73,12 @@ tracing-subscriber = { workspace = true, features = ["registry", "std", "fmt", "
 # Cloud object stores (S3, GCS, Azure) via `krishiv-io/cloud`. Opt-in so the
 # default build stays inside the dependency and binary-size budgets.
 cloud = ["krishiv-exec/cloud", "krishiv-io/cloud"]
+# Server TLS for the listeners (`auth::ServerTls`: rustls on aws-lc-rs, reloadable certificate,
+# client-certificate verification). `krishiv-server`'s `server` feature turns it on.
+tls = ["dep:rustls"]
+# OIDC access tokens (`auth::OidcConfig`): JWT signatures on aws-lc-rs, the JWK set fetched over
+# HTTPS (reqwest, rustls). Off by default; a server build turns it on.
+oidc = ["dep:aws-lc-rs", "dep:reqwest"]
 # Access to the logical-plan IR (`Session::from_plan`, `DataFrame::plan`):
 # for the Python facade and tests; not covered by semver.
 unstable-ir = []
