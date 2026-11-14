@@ -826,17 +826,17 @@ impl Session {
                 .into());
             }
         }
-        let source = krishiv_plan::ReadSource::Files {
-            format: provider,
+        let source = krishiv_plan::ReadSource::files(
+            provider,
             paths,
-            options: options
+            options
                 .into_iter()
                 .map(|(k, val)| {
                     let val = OptionValue::from_user(&k, val);
                     (k, val)
                 })
                 .collect(),
-        };
+        );
         self.state.catalog.put(
             name,
             crate::catalog::TempTable::Files {

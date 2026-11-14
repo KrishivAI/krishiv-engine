@@ -153,9 +153,9 @@ pub(crate) fn read_files(
     paths: Vec<OptionValue>,
     options: BTreeMap<String, OptionValue>,
 ) -> LogicalPlan {
-    LogicalPlan::new(PlanNode::Read(ReadSource::Files {
-        format: format.to_owned(),
+    LogicalPlan::new(PlanNode::Read(ReadSource::files(
+        format.to_owned(),
         paths,
         options,
-    }))
+    )))
 }

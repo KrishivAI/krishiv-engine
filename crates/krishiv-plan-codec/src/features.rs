@@ -130,6 +130,7 @@ registry! {
     (exchange_source, ExchangeSource, POST_MIGRATION_READER_VERSION, Semantic, "The `ExchangeSource` node: a plan fragment's read of an exchange another stage wrote (distributed stages)."),
     (existence_join, ExistenceJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `Existence` join type (Spark's `ExistenceJoin`: `EXISTS` and `IN` outside a filter conjunct), hash or nested loop."),
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
+    (file_source_schema, FileSourceSchema, POST_MIGRATION_READER_VERSION, Semantic, "A user-declared schema on a file read (`ReadSource::Files.schema`). A reader without it would infer the columns again and misread formats such as CSV. The schema is a struct type, so a plan with one lists `nested_types` too."),
     (fused_probe, FusedProbe, POST_MIGRATION_READER_VERSION, Optimization, "A hash join's probe selection (`HashJoinPlan.select`, design P2-E3 U2): a filter and a scan's runtime-filter row stage fused into the probe, which joins the selected rows by id; without it the planner keeps the `Filter` node and the scan's own row stage."),
     (generate, Generate, POST_MIGRATION_READER_VERSION, Semantic, "The `Generate` node (`explode`, `posexplode`, `inline` and their `_outer` forms)."),
     (geo_types, GeoTypes, POST_MIGRATION_READER_VERSION, Semantic, "The `GEOMETRY` and `GEOGRAPHY` types, with their SRID."),
@@ -240,6 +241,11 @@ pub enum Construct<'a> {
     /// the literal carries itself, so `nested_types` is listed with
     /// `nested_literals`.
     NestedLiteralType,
+    /// The schema a file read declares (`ReadSource::Files.schema`).
+    FileSourceSchema,
+    /// A declared schema's struct type, written as one nested type (so
+    /// `nested_types` is listed with `file_source_schema`).
+    SchemaType,
     /// A `Generate` node's generator.
     Generator(krishiv_plan::GeneratorKind),
     /// A hash join's probe selection (`HashJoinPlan.select`).
@@ -483,7 +489,8 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         Construct::Lambda => Some(Feature::LambdaFunctions),
         Construct::EvalMode => Some(Feature::CapturedEvalMode),
         Construct::WriteColumnTypes => Some(Feature::WriteColumnTypes),
-        Construct::NestedLiteralType => Some(Feature::NestedTypes),
+        Construct::NestedLiteralType | Construct::SchemaType => Some(Feature::NestedTypes),
+        Construct::FileSourceSchema => Some(Feature::FileSourceSchema),
         Construct::ProbeSelect => Some(Feature::FusedProbe),
         Construct::Generator(kind) => match kind {
             krishiv_plan::GeneratorKind::VariantExplode => Some(Feature::VariantExplode),
@@ -703,9 +710,21 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
                 .iter()
                 .for_each(|field| visit_arrow_field(field, f));
         }
-        PhysNode::Scan(_)
-        | PhysNode::LateFetch { .. }
-        | PhysNode::OneRow
+        PhysNode::Scan(scan) | PhysNode::LateFetch { scan, .. } => {
+            if let krishiv_plan::ReadSource::Files {
+                schema: Some(schema),
+                ..
+            } = &scan.scan.source
+            {
+                f(Construct::FileSourceSchema);
+                f(Construct::SchemaType);
+                schema
+                    .fields()
+                    .iter()
+                    .for_each(|x| visit_type(x.data_type(), f));
+            }
+        }
+        PhysNode::OneRow
         | PhysNode::SharedRead { .. }
         | PhysNode::UnionLoop { .. }
         | PhysNode::LoopRef { .. }

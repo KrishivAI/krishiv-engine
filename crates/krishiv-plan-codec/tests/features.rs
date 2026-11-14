@@ -117,6 +117,11 @@ fn the_header_lists_exactly_the_features_in_use() {
         message("nested_literals").features,
         ["nested_literals", "nested_types"]
     );
+    // The declared schema is one struct type, so a reader needs both.
+    assert_eq!(
+        message("file_source_schema").features,
+        ["file_source_schema", "nested_types"]
+    );
     assert_eq!(
         message("aggregate_any_value").features,
         ["any_value_by_aggregates"]
@@ -2203,4 +2208,76 @@ fn a_nested_literal_that_does_not_fit_its_type_is_corrupt() {
     }
     let err = decode(&m.encode_to_vec()).unwrap_err();
     assert!(matches!(err, CodecError::Corrupt(_)), "{err:?}");
+}
+
+// ---- declared file schema (file_source_schema) -----------------------------
+
+#[test]
+fn a_declared_file_schema_needs_its_feature_and_the_type_feature() {
+    let m = message("file_source_schema");
+    assert_eq!(Feature::FileSourceSchema.kind(), FeatureKind::Semantic);
+    let bytes = m.encode_to_vec();
+    let without_schema = ReaderFeatures::only([Feature::NestedTypes]);
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &without_schema).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["file_source_schema".to_owned()]
+        }
+    );
+    let without_types = ReaderFeatures::only([Feature::FileSourceSchema]);
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &without_types).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["nested_types".to_owned()]
+        }
+    );
+    let both = ReaderFeatures::only([Feature::FileSourceSchema, Feature::NestedTypes]);
+    let plan = decode_with(&bytes, &Limits::default(), &both).unwrap();
+    assert_eq!(encode(&plan).unwrap(), bytes);
+    assert_eq!(
+        feature_of(Construct::FileSourceSchema),
+        Some(Feature::FileSourceSchema)
+    );
+}
+
+/// A read that infers writes no schema field and lists no feature for it.
+#[test]
+fn a_read_without_a_declared_schema_has_no_field_and_no_feature() {
+    let m = message("interval_array_aggregate");
+    assert!(!m.features.iter().any(|f| f == "file_source_schema"));
+    let sources: Vec<_> = m
+        .nodes
+        .iter()
+        .filter_map(|n| match &n.kind {
+            Some(pb::node::Kind::Scan(s)) => s.source.as_ref(),
+            _ => None,
+        })
+        .collect();
+    assert!(!sources.is_empty());
+    for s in sources {
+        if let Some(pb::read_source::Kind::Files(f)) = &s.kind {
+            assert!(f.schema.is_none());
+        }
+    }
+}
+
+#[test]
+fn a_declared_file_schema_that_is_not_a_struct_is_corrupt() {
+    let mut m = message("file_source_schema");
+    let mut seen = false;
+    for node in &mut m.nodes {
+        if let Some(pb::node::Kind::Scan(s)) = &mut node.kind
+            && let Some(pb::ReadSource {
+                kind: Some(pb::read_source::Kind::Files(f)),
+            }) = &mut s.source
+        {
+            f.schema = Some(pb::DataType {
+                kind: pb::data_type::Kind::Integer as i32,
+                ..pb::DataType::default()
+            });
+            seen = true;
+        }
+    }
+    assert!(seen);
+    corrupt(&m, "a declared file schema that is not a struct");
 }

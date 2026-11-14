@@ -1132,6 +1132,10 @@ pub struct FilesSource {
         ::prost::alloc::string::String,
         OptionValue,
     >,
+    /// feature: file_source_schema
+    /// The schema the user declared (a struct type); absent: inferred.
+    #[prost(message, optional, tag = "4")]
+    pub schema: ::core::option::Option<DataType>,
 }
 /// A data source option: plain text or a reference to a secret. An inline
 /// secret or a URL carrying credentials is not encodable (ADR 0038).

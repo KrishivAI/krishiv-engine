@@ -1108,12 +1108,18 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 format,
                 paths,
                 options,
+                schema,
             } => {
-                self.u8(2);
+                // Tag 2 stays byte-identical for a read that infers; a
+                // declared schema is tag 4 (tag-2 fields, then the schema).
+                self.u8(if schema.is_some() { 4 } else { 2 });
                 self.str(format);
                 self.len(paths.len());
                 paths.iter().for_each(|p| self.option_value(p));
                 self.options(options);
+                if let Some(schema) = schema {
+                    self.str(&krishiv_types::DataType::Struct(schema.clone()).sql());
+                }
             }
         }
     }

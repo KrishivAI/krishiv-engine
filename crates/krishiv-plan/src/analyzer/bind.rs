@@ -1009,11 +1009,11 @@ async fn path_read(
         }
         SourceKind::Unknown => return Ok(BoundTable::Missing),
     }
-    let source = ReadSource::Files {
-        format: format.clone(),
-        paths: vec![OptionValue::from_user("path", path)],
-        options: BTreeMap::new(),
-    };
+    let source = ReadSource::files(
+        format.clone(),
+        vec![OptionValue::from_user("path", path)],
+        BTreeMap::new(),
+    );
     Ok(BoundTable::Files(
         bind_files(ctx, b, checked, &source, origin).await?,
     ))
@@ -1079,6 +1079,7 @@ async fn bind_files(
             format,
             paths,
             options,
+            schema,
         },
         Some(files),
     ) = (source, &ctx.files)
@@ -1105,23 +1106,35 @@ async fn bind_files(
     if server_scoped(options) {
         authorize_store_options(ctx, b, checked, origin).await?;
     }
-    let columns = files
-        .infer(format, &qualified, options)
-        .await
-        .map_err(fail)?
-        .into_iter()
-        // Spark reads every file column as nullable.
-        .map(|c| TableColumn {
-            nullable: true,
-            ..c
-        })
-        .collect();
+    let columns = if let Some(schema) = schema {
+        // A declared schema replaces inference. The nullability rule is the
+        // inferred one (every file column nullable); whether Spark keeps a
+        // declared `NOT NULL` per format is golden-pending (P3-T012a note, 3).
+        schema
+            .fields()
+            .iter()
+            .map(|f| TableColumn::new(f.name(), f.data_type().clone(), true))
+            .collect()
+    } else {
+        files
+            .infer(format, &qualified, options)
+            .await
+            .map_err(fail)?
+            .into_iter()
+            // Spark reads every file column as nullable.
+            .map(|c| TableColumn {
+                nullable: true,
+                ..c
+            })
+            .collect()
+    };
     b.files.push(BoundFiles {
         source: source.clone(),
         read: ReadSource::Files {
             format: format.to_lowercase(),
             paths: qualified,
             options: options.clone(),
+            schema: schema.clone(),
         },
         columns,
     });

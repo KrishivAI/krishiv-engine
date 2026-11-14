@@ -625,7 +625,7 @@ impl Encoder {
             .transpose()?;
         Ok(pb::ScanNode {
             id: node.id.0,
-            source: Some(read_source(source)?),
+            source: Some(read_source(source, &self.nested)?),
             output: output
                 .iter()
                 .map(|c| bound_column(c, &self.nested))
@@ -1292,7 +1292,7 @@ fn percentile_expr(
     }
 }
 
-fn read_source(source: &ReadSource) -> Result<pb::ReadSource> {
+fn read_source(source: &ReadSource, nested: &Cell<bool>) -> Result<pb::ReadSource> {
     use pb::read_source::Kind;
     let options = |options: &std::collections::BTreeMap<String, OptionValue>| {
         options
@@ -1309,6 +1309,8 @@ fn read_source(source: &ReadSource) -> Result<pb::ReadSource> {
             format,
             paths,
             options: o,
+            schema,
+            ..
         } => Kind::Files(pb::FilesSource {
             format: format.clone(),
             paths: paths
@@ -1316,6 +1318,11 @@ fn read_source(source: &ReadSource) -> Result<pb::ReadSource> {
                 .map(|p| option("path", p))
                 .collect::<Result<_>>()?,
             options: options(o)?,
+            // Written only when declared: a plan that infers keeps its bytes.
+            schema: schema
+                .as_ref()
+                .map(|s| spark_type(&DataType::Struct(s.clone()), nested))
+                .transpose()?,
         }),
         _ => {
             return Err(CodecError::Unsupported(

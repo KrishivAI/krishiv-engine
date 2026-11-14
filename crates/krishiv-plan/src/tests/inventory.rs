@@ -185,6 +185,7 @@ fn slice_ops() -> Vec<(&'static str, LogicalPlan)> {
             "path", "/data",
         )],
         options: BTreeMap::new(),
+        schema: None,
     }));
     let sql = LogicalPlan::new(PlanNode::Sql {
         query: "SELECT 1".to_owned(),

@@ -46,11 +46,28 @@ impl QueryCatalog {
                 format,
                 paths,
                 options,
+                schema,
+                ..
             } = source
             else {
                 continue;
             };
             let listing = match key {
+                // A declared schema is the table: nothing is inferred. Which
+                // directories a declared-schema read descends into (partition
+                // discovery per format) is golden-pending, so none beyond the
+                // root files, as a catalog table without partitions.
+                FilesKey::Read(_) if schema.is_some() => {
+                    self.files
+                        .listing_known(
+                            format,
+                            paths,
+                            options,
+                            Arc::clone(table),
+                            &krishiv_exec::files::KnownPartitions::default(),
+                        )
+                        .await?
+                }
                 FilesKey::Table(_) | FilesKey::Reference { known: true, .. } => {
                     let Some(partitions) = partitions else {
                         return Err(krishiv_common::error::KrishivUnsupportedFeature {

@@ -181,14 +181,14 @@ pub(crate) fn file_scan() -> ScanNode {
     ScanNode {
         id: ScanId(8),
         scan: Scan {
-            source: ReadSource::Files {
-                format: "parquet".to_owned(),
-                paths: vec![
+            source: ReadSource::files(
+                "parquet".to_owned(),
+                vec![
                     OptionValue::Plain("s3://bucket/a/*.parquet".to_owned()),
                     OptionValue::reference("prod", "signed-path"),
                 ],
-                options: BTreeMap::new(),
-            },
+                BTreeMap::new(),
+            ),
             output: scan_columns(),
             version: None,
         },
@@ -2340,7 +2340,22 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         nullable: None,
         subqueries: Vec::new(),
     };
+    // A file read with a declared schema (a nested field too).
+    let file_source_schema = {
+        use krishiv_types::{ArrayType, StructField, StructType};
+        let mut scan = file_scan();
+        scan.scan.source = scan.scan.source.with_schema(StructType::new([
+            StructField::new("a", DataType::Integer, false),
+            StructField::new(
+                "tags",
+                DataType::Array(std::sync::Arc::new(ArrayType::new(DataType::String, true))),
+                true,
+            ),
+        ]));
+        PhysNode::Scan(scan)
+    };
     vec![
+        ("file_source_schema", file_source_schema),
         ("interval_literals", interval_literals),
         ("options_map_literal", options_map),
         ("nested_literals", nested_literals),
