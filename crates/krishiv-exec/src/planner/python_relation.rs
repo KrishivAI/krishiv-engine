@@ -153,7 +153,11 @@ impl Planner<'_> {
         ))
     }
 
-    /// `groupBy(keys).applyInPandas` / `applyInArrow`.
+    /// `groupBy(keys).applyInPandas` / `applyInArrow`. Scalar Python calls
+    /// in the keys run in a `PythonEval` below (Spark computes the keys in
+    /// a `Project` under `FlatMapGroupsInPandas`, which `ExtractPythonUDFs`
+    /// at v4.2.0 turns into an `ArrowEvalPython`); the frames keep the
+    /// keys' own names and types.
     pub(crate) fn group_map(
         &mut self,
         input: &Arc<LogicalPlan>,
@@ -164,8 +168,9 @@ impl Planner<'_> {
         check_kind(udf, PythonUdfKind::GroupedMap, "GroupMap")?;
         let cols = columns_of(input)?;
         let planned = self.plan(input)?;
-        let (planned, key_columns) = self.with_columns(planned, keys)?;
-        let (planned, compared) = self.compared(planned, keys, &key_columns)?;
+        let (planned, computed) = self.extract_python(planned, keys)?;
+        let (planned, key_columns) = self.with_columns(planned, &computed)?;
+        let (planned, compared) = self.compared(planned, &computed, &key_columns)?;
         let columns = cols
             .iter()
             .map(|c| planned.column(c.id))
@@ -194,7 +199,8 @@ impl Planner<'_> {
         ))
     }
 
-    /// `cogroup(...).applyInPandas` / `applyInArrow`.
+    /// `cogroup(...).applyInPandas` / `applyInArrow`; each side's scalar
+    /// Python key calls run below its branch, as in [`Self::group_map`].
     pub(crate) fn cogroup_map(
         &mut self,
         left: &Arc<LogicalPlan>,
@@ -210,11 +216,13 @@ impl Planner<'_> {
         }
         let (left_cols, right_cols) = (columns_of(left)?, columns_of(right)?);
         let l = self.plan(left)?;
-        let (l, lk) = self.with_columns(l, left_keys)?;
-        let (l, lc) = self.compared(l, left_keys, &lk)?;
+        let (l, left_computed) = self.extract_python(l, left_keys)?;
+        let (l, lk) = self.with_columns(l, &left_computed)?;
+        let (l, lc) = self.compared(l, &left_computed, &lk)?;
         let r = self.plan(right)?;
-        let (r, rk) = self.with_columns(r, right_keys)?;
-        let (r, rc) = self.compared(r, right_keys, &rk)?;
+        let (r, right_computed) = self.extract_python(r, right_keys)?;
+        let (r, rk) = self.with_columns(r, &right_computed)?;
+        let (r, rc) = self.compared(r, &right_computed, &rk)?;
         let k = lk.len();
         // One layout for both branches: keys, side, left, right, then (for
         // collated keys) the keys compared.

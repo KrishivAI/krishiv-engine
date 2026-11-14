@@ -597,6 +597,59 @@ fn a_cogroup_matches_collated_keys_by_their_collation() {
     assert_eq!(keys, ["0:K:3", "1:k:2"], "{keys:?}");
 }
 
+/// `groupBy(plus1(b)).applyInPandas`: the scalar call in the key runs in a
+/// `PythonEval` below the node (Spark evaluates it in a `Project` under
+/// `FlatMapGroupsInPandas`, which `ExtractPythonUDFs` at v4.2.0 turns into
+/// an `ArrowEvalPython`); the frames lead with its values.
+#[test]
+fn a_scalar_python_call_in_a_grouped_maps_key_runs_below_it() {
+    let env = env();
+    let (input, cols) = input(&env, "SELECT a, b FROM t");
+    let rt = Arc::new(Runtime::default());
+    let node = LogicalPlan::new(PlanNode::GroupMap {
+        input,
+        keys: vec![plus1(col(&cols[1]))],
+        udf: udf("count", PythonEvalType::GroupedMapPandas),
+        output: counted(),
+    });
+    let out = run_with(&env, node, Some(Arc::clone(&rt))).unwrap();
+    // `b` is 0, 10, ..., 90: ten keys of one row each.
+    assert_eq!(lines(&out), vec!["1"; 10]);
+    let keys = rt.keys.lock().unwrap().clone();
+    assert!(keys.contains(&"0:1:1".to_owned()), "{keys:?}");
+    assert!(keys.contains(&"0:91:1".to_owned()), "{keys:?}");
+}
+
+/// A cogroup keyed by `plus1(b)` on both sides: each side's call runs
+/// below its branch, and equal results meet.
+#[test]
+fn a_scalar_python_call_in_a_cogroups_keys_runs_below_it() {
+    let env = env();
+    let (left, lc) = input(&env, "SELECT a, b FROM t");
+    let (right, rc) = input(&env, "SELECT b AS c, s FROM t WHERE b < 20");
+    let rt = Arc::new(Runtime::default());
+    let node = LogicalPlan::new(PlanNode::CoGroupMap {
+        left,
+        right,
+        left_keys: vec![plus1(col(&lc[1]))],
+        right_keys: vec![plus1(col(&rc[0]))],
+        udf: udf("count", PythonEvalType::CogroupedMapArrow),
+        output: counted(),
+    });
+    let out = run_with(&env, node, Some(Arc::clone(&rt))).unwrap();
+    // Keys 1 and 11 have a row on each side; the other eight the left one.
+    let rows = lines(&out);
+    assert_eq!(rows.len(), 10, "{rows:?}");
+    assert_eq!(rows.iter().filter(|r| *r == "2").count(), 2, "{rows:?}");
+    let keys = rt.keys.lock().unwrap().clone();
+    let mut right: Vec<&String> = keys
+        .iter()
+        .filter(|k| k.starts_with("1:") && !k.ends_with(":0"))
+        .collect();
+    right.sort();
+    assert_eq!(right, ["1:11:1", "1:1:1"], "{keys:?}");
+}
+
 /// A grouped-aggregate Python UDF call over `arg`.
 fn udaf(arg: &BoundColumn) -> Arc<Expr> {
     udaf_named("count", arg)
