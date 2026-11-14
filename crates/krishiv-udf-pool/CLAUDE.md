@@ -19,8 +19,11 @@ Paths are relative to this crate.
   that exits 125 before the worker greets the server; afterwards, or with the sandbox off, 125 is an ordinary exit) and the validating result reader `decode_result`
 - `src/wire.rs` control messages (JSON, `SCM_RIGHTS`), memfds (`sealed_memfd`, `read_untrusted`)
 - `src/runtime.rs` `SessionUdfs`: a session's payload store keyed by `(name, version)` as a `UdfRuntime`; each call
-  runs on a thread of its own and is cancelled (worker killed) when its future is dropped
-- `src/interpreter.rs` the startup record of each listed interpreter (version, read paths, packages) and `choose`
+  runs on a pool call thread and is cancelled (worker killed, even one still starting) when its future is dropped
+- `src/calls.rs` `CallThreads`: the bounded call threads (at most `maxTotal` threads, at most `maxPerSession`
+  running calls per owner; the rest wait in a FIFO queue, not on a thread)
+- `src/interpreter.rs` the startup record of each listed interpreter (version, read paths, packages) and `choose`;
+  the inspection runs in a process group of its own, its output read while it runs (capped, under the timeout)
 - `src/package.rs` the embedded worker package and the `-c` bootstrap
 - `worker/krishiv/_udf` a symbolic link to `python/krishiv/_udf` (one copy of the Python code; `cargo package`
   copies the files through it; one link rather than one per file, so ruff, which lints them under `python/`, does
@@ -39,17 +42,18 @@ Paths are relative to this crate.
 
 ## Invariants
 - `#![forbid(unsafe_code)]`: the server never maps a memfd. Input is written and sealed; results are read with
-  `pread` into server memory, capped (`max_result_bytes`), their framing checked by `check_frames` (verified
+  `pread` into one 64-byte-aligned Arrow buffer, capped (`max_result_bytes`), their framing checked by `check_frames` (verified
   flatbuffer headers, bodies and buffers in bounds, **no compression**: arrow-ipc 60 allocates a compressed
   buffer's declared length up front, so a 16 KiB stream could abort the server), then decoded by `arrow-ipc`'s
-  validating reader and checked for one column of the declared type, one batch and the input's row count. Worker
+  validating `StreamDecoder`, whose columns are slices of that buffer (no second copy), and checked for one column of the declared type, one batch and the input's row count. Worker
   output is untrusted; fuzz target `fuzz/fuzz_targets/udf_result_ipc.rs` runs `decode_result` nightly.
 - Every worker is started by the one `krishiv-udf-spawner` thread (the parent-death signal follows the starting
   thread), never in a process group of its own. Every signal goes through the worker's **pidfd** (opened before
   the child can be reaped), never a pid, so a late kill (a cancel racing the worker's own exit, or `Drop` after
   `exited` reaped it) reaches no other process. pidfds need Linux 5.3, so that is the pool's floor even with
   `krishiv.udf.sandbox=off` (the sandbox itself needs 5.13). A call's cancel kills only while the call holds the worker
-  (`CallState.running`, cleared under its lock before the worker is given back).
+  (`CallState.running`, cleared under its lock before the worker is given back). A starting worker's pidfd is
+  set there before the greeting is awaited (`CallWatch::starting`), so a cancel kills it and the start ends at once.
 - A worker that breaks the protocol (user code writing to fd 0, a result changed after it was sent) is
   `KRISHIV_PYTHON_WORKER_EXITED`; `INTERNAL_ERROR` is only for the server's own failures (memfd, socket calls).
 - The bootstrap closes every descriptor above 2 before anything else (`close_range` through `ctypes`, or
@@ -66,12 +70,8 @@ Paths are relative to this crate.
 ## Not here yet (design note §9 records why)
 Per-query RSS accounting and `system.queries` visibility, the timing trailer, traceback shaping by the three
 `spark.sql.execution.pyspark.udf.*Traceback*` flags, the memfd buffer ring, artifacts and the in-process opt-in:
-PR-26c/26d, where the pool meets the session and the query. Also open (review 2026-11-13 nits): the result is
-copied twice (`pread` into a `Vec`, then `StreamReader`; `StreamDecoder` over the buffer would not copy), one
-thread per call, a cancelled call still waits for its worker's start, the inspection reads an interpreter's
-output only after it exits (a huge output or a grandchild holding the pipe defeats its timeout), no test of
-the per-session-cap eviction across two interpreters (CI lists one), and the default-Docker CI run of the
-sandbox suite.
+PR-26c/26d, where the pool meets the session and the query. Also open (review 2026-11-13): the default-Docker
+CI run of the sandbox suite.
 
 ## ADRs (in `../krishiv-internal/adr/`)
 0022 (UDF isolation; process pool is the server default), 0046 (N1: client code is admin-only in server mode until

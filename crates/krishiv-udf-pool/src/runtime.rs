@@ -18,7 +18,7 @@ use krishiv_common::error::{
 use krishiv_exec::python_eval::{PreparedUdf, UdfCallSpec, UdfRuntime};
 use std::os::fd::OwnedFd;
 
-use crate::pool::{Owner, Pool};
+use crate::pool::{CallWatch, Owner, Pool};
 use crate::worker::{PythonPayload, kill_via};
 
 /// Ids of loaded payloads, unique in the process: a worker keeps what it has loaded by id.
@@ -120,6 +120,25 @@ struct CallState {
     /// a late cancel can never signal a worker that already serves another call (and a pidfd never names a
     /// reused pid, so a worker that exited on its own is safe too).
     running: Option<Arc<OwnedFd>>,
+    /// The cancel killed `running` (a worker still starting, or one mid-call): it is never given back.
+    killed: bool,
+}
+
+impl CallWatch for Mutex<CallState> {
+    fn cancelled(&self) -> bool {
+        self.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .cancelled
+    }
+
+    fn starting(&self, pidfd: &Arc<OwnedFd>) -> bool {
+        let mut state = self.lock().unwrap_or_else(PoisonError::into_inner);
+        if state.cancelled {
+            return false;
+        }
+        state.running = Some(Arc::clone(pidfd));
+        true
+    }
 }
 
 struct CancelOnDrop(Arc<Mutex<CallState>>);
@@ -130,6 +149,7 @@ impl Drop for CancelOnDrop {
         state.cancelled = true;
         if let Some(pidfd) = state.running.take() {
             kill_via(&pidfd);
+            state.killed = true;
         }
     }
 }
@@ -144,11 +164,11 @@ impl PreparedUdf for Prepared {
         let registered = self.registered.clone();
         let return_type = self.return_type.clone();
         let conf = Arc::clone(&self.conf);
-        // Each call blocks on its worker, so it runs on a thread of its own, never on the caller (a compute
-        // worker). Calls are bounded by the drivers' in-flight window, and workers by the pool's caps.
-        let spawned = std::thread::Builder::new()
-            .name("krishiv-udf-call".to_owned())
-            .spawn(move || {
+        // Each call blocks on its worker, so it runs on one of the pool's call threads, never on the caller
+        // (a compute worker). Those threads are bounded by the worker caps (`crate::calls`).
+        let submitted = self.pool.submit(
+            &self.owner,
+            Box::new(move || {
                 let result = run(
                     &pool,
                     &owner,
@@ -159,12 +179,10 @@ impl PreparedUdf for Prepared {
                     &call,
                 );
                 let _ = done.send(result);
-            });
-        if let Err(e) = spawned {
-            return Box::pin(std::future::ready(Err(InternalError {
-                message: format!("cannot start a Python UDF call: {e}"),
-            }
-            .into())));
+            }),
+        );
+        if let Err(e) = submitted {
+            return Box::pin(std::future::ready(Err(e)));
         }
         Box::pin(async move {
             let _cancel = cancel;
@@ -188,16 +206,33 @@ fn run(
     call: &Mutex<CallState>,
 ) -> Result<ArrayRef, KrishivError> {
     let lock = || call.lock().unwrap_or_else(PoisonError::into_inner);
-    let cancelled = || lock().cancelled;
-    let mut lease = pool.checkout(owner, &registered.payload.python_ver, &cancelled)?;
-    let worker = lease.worker()?;
+    let mut lease = match pool.checkout(owner, &registered.payload.python_ver, call) {
+        Ok(lease) => lease,
+        Err(e) => {
+            // A start that failed (or was killed by the cancel) left its pidfd behind; that worker is reaped.
+            let mut state = lock();
+            state.running = None;
+            return Err(if state.cancelled {
+                OperationCanceled {}.into()
+            } else {
+                e
+            });
+        }
+    };
+    let pidfd = lease.worker()?.pidfd();
     {
         let mut state = lock();
         if state.cancelled {
+            state.running = None;
+            if state.killed {
+                // Killed while it started (or just after): never reused.
+                lease.discard();
+            }
             return Err(OperationCanceled {}.into());
         }
-        state.running = Some(worker.pidfd());
+        state.running = Some(pidfd);
     }
+    let worker = lease.worker()?;
     let max_result = pool.max_result_bytes();
     let result = worker
         .ensure_loaded(registered.id, &registered.payload)

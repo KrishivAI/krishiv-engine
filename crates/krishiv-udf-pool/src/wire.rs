@@ -13,6 +13,7 @@ use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::os::unix::fs::FileExt;
 
+use arrow_buffer::{Buffer, MutableBuffer};
 use rustix::fs::{MemfdFlags, SealFlags};
 use rustix::net::{
     RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags, SendAncillaryBuffer,
@@ -150,8 +151,9 @@ pub(crate) fn seal(file: &File) -> io::Result<()> {
 /// Reads the first `len` bytes of a descriptor a worker sent, refusing more than `cap` bytes or a file
 /// shorter than `len`. Reads with `pread` into memory the server owns: the worker may still change the file
 /// while it is read, which can only change the bytes (they are validated afterwards), never the server's
-/// memory.
-pub(crate) fn read_untrusted(fd: OwnedFd, len: u64, cap: u64) -> io::Result<Vec<u8>> {
+/// memory. The buffer is Arrow's (64-byte aligned), so the result's columns are decoded as slices of it,
+/// with no second copy.
+pub(crate) fn read_untrusted(fd: OwnedFd, len: u64, cap: u64) -> io::Result<Buffer> {
     if len > cap {
         return Err(io::Error::other(format!(
             "a worker result of {len} bytes is over the limit of {cap} bytes"
@@ -164,9 +166,12 @@ pub(crate) fn read_untrusted(fd: OwnedFd, len: u64, cap: u64) -> io::Result<Vec<
         )));
     }
     let n = usize::try_from(len).map_err(io::Error::other)?;
-    let mut out = vec![0_u8; n];
-    File::from(fd).read_exact_at(&mut out, 0)?;
-    Ok(out)
+    let mut out = MutableBuffer::new(0);
+    out.try_reserve(n)
+        .map_err(|e| io::Error::new(io::ErrorKind::OutOfMemory, e.to_string()))?;
+    out.resize(n, 0);
+    File::from(fd).read_exact_at(out.as_slice_mut(), 0)?;
+    Ok(out.into())
 }
 
 #[cfg(test)]
@@ -194,7 +199,9 @@ mod tests {
         assert_eq!(msg.kind(), "x");
         assert_eq!(msg.u64_field("len"), Some(5));
         let fd = msg.fds.pop().expect("one fd");
-        assert_eq!(read_untrusted(fd, 5, 5).expect("read"), b"hello");
+        let read = read_untrusted(fd, 5, 5).expect("read");
+        assert_eq!(read.as_slice(), b"hello");
+        assert_eq!(read.as_ptr().addr() % 64, 0, "aligned for Arrow");
     }
 
     #[test]

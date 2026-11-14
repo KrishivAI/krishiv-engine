@@ -766,3 +766,182 @@ fn the_total_cap_stops_another_sessions_idle_worker() {
     assert_ne!(a, b);
     assert_eq!(pool.live_workers(), 1, "a's idle worker made room for b's");
 }
+
+#[test]
+fn a_call_cancelled_while_its_worker_starts_ends_the_start() {
+    // Review 2026-11-13 n3: the start used to run on until the greeting timeout (120 s).
+    let Some(py) = python() else { return };
+    let pool = fake_worker_pool(&py, "exec sleep 60");
+    let udfs = SessionUdfs::new(pool.clone(), owner("s1"));
+    udfs.register(
+        "never",
+        1,
+        PythonPayload {
+            command: Arc::from(&b"unused"[..]),
+            eval_type: 101,
+            python_ver: "3.12".to_owned(),
+        },
+    );
+    let prepared = udfs
+        .prepare(&spec(
+            "never",
+            PythonEvalType::ArrowBatched,
+            ArrowType::Int64,
+        ))
+        .expect("prepare");
+    let mut fut = prepared.call(longs(&[Some(1)]));
+    let started = Instant::now();
+    while pool.live_workers() == 0 && started.elapsed() < Duration::from_secs(10) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        futures::FutureExt::now_or_never(&mut fut).is_none(),
+        "still starting"
+    );
+    assert_eq!(pool.live_workers(), 1, "the worker is starting");
+    let cancelled = Instant::now();
+    drop(fut);
+    while pool.live_workers() > 0 && cancelled.elapsed() < Duration::from_secs(10) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        pool.live_workers(),
+        0,
+        "the starting worker was not stopped"
+    );
+    assert!(
+        cancelled.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        cancelled.elapsed()
+    );
+}
+
+/// The pool's call threads in this process (`krishiv-udf-call`, cut to 15 bytes by the kernel).
+fn call_threads() -> usize {
+    std::fs::read_dir("/proc/self/task")
+        .expect("tasks")
+        .filter_map(Result::ok)
+        .filter(|t| {
+            std::fs::read_to_string(t.path().join("comm"))
+                .is_ok_and(|name| name.starts_with("krishiv-udf-cal"))
+        })
+        .count()
+}
+
+#[test]
+fn concurrent_calls_share_the_pools_threads() {
+    // Review 2026-11-13 n2: N concurrent calls used to make N threads.
+    let Some(py) = python() else { return };
+    let mut config = config(&py);
+    config.max_total = 2;
+    config.max_per_session = 2;
+    let pool = Pool::new(config).expect("pool");
+    let udfs = SessionUdfs::new(pool.clone(), owner("s1"));
+    udfs.register(
+        "nap",
+        1,
+        command(
+            &py,
+            "import time\ndef f(x):\n    time.sleep(0.05)\n    return x",
+            "LongType()",
+        ),
+    );
+    let prepared = udfs
+        .prepare(&spec("nap", PythonEvalType::ArrowBatched, ArrowType::Int64))
+        .expect("prepare");
+    let before = call_threads();
+    let calls: Vec<_> = (0..12).map(|i| prepared.call(longs(&[Some(i)]))).collect();
+    assert!(
+        call_threads() - before <= 2,
+        "{} call threads",
+        call_threads() - before
+    );
+    let results = block_on(futures::future::join_all(calls));
+    for (i, r) in results.into_iter().enumerate() {
+        assert_eq!(
+            as_longs(&r.expect("runs")),
+            [Some(i64::try_from(i).expect("small"))]
+        );
+    }
+    assert!(
+        call_threads() - before <= 2,
+        "{} call threads",
+        call_threads() - before
+    );
+    assert!(pool.live_workers() <= 2);
+}
+
+#[test]
+fn the_session_cap_stops_an_idle_worker_of_another_interpreter() {
+    // Review 2026-11-13 m2, tested with two interpreters: an interpreter is one entry of the list, chosen by
+    // the client's Python version, so the second is a wrapper of the first whose inspection reports 3.99.
+    let Some(py) = python() else { return };
+    let dir = tempfile::tempdir().expect("dir");
+    let wrapper = dir.path().join("python3.99");
+    let real = py.display().to_string();
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\ncase \"$*\" in\n*base_exec_prefix*) '{real}' \"$@\" | '{real}' -I -c \
+             'import json, sys; r = json.load(sys.stdin); r[\"version\"] = [3, 99, 0]; print(json.dumps(r))' ;;\n\
+             *) exec '{real}' \"$@\" ;;\nesac\n"
+        ),
+    )
+    .expect("wrapper");
+    std::fs::set_permissions(
+        &wrapper,
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .expect("chmod");
+    let mut config = config(&py);
+    config.executables = vec![real, wrapper.display().to_string()];
+    config.sandbox = false;
+    config.max_per_session = 1;
+    config.idle_timeout = Duration::from_secs(600);
+    let pool = Pool::new(config).expect("pool");
+    assert_eq!(pool.interpreters().len(), 2, "{:?}", pool.refusal());
+    assert_eq!(pool.interpreters()[1].minor_version(), "3.99");
+    let udfs = SessionUdfs::new(pool.clone(), owner("s1"));
+    let payload = command(
+        &py,
+        "import os\ndef f(x):\n    return os.getpid()",
+        "LongType()",
+    );
+    let first = call(
+        &udfs,
+        payload.clone(),
+        ARROW_BATCHED,
+        ArrowType::Int64,
+        longs(&[Some(1)]),
+    )
+    .expect("runs");
+    let first = as_longs(&first)[0].expect("pid");
+    assert_eq!(pool.live_workers(), 1);
+    // The second interpreter's worker: the session is at its cap with an idle worker of the first, which is
+    // stopped rather than waited for (the idle timeout is 10 minutes). The worker is the real interpreter, so
+    // it reports the version mismatch.
+    let started = Instant::now();
+    let err = call(
+        &udfs,
+        PythonPayload {
+            python_ver: "3.99".to_owned(),
+            ..payload
+        },
+        ARROW_BATCHED,
+        ArrowType::Int64,
+        longs(&[Some(1)]),
+    )
+    .expect_err("mismatch");
+    assert!(err.to_string().contains("PYTHON_VERSION_MISMATCH"), "{err}");
+    assert!(
+        started.elapsed() < Duration::from_secs(60),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(pool.live_workers(), 1, "never more than the cap");
+    assert!(
+        !PathBuf::from(format!("/proc/{first}")).exists(),
+        "the first interpreter's idle worker was stopped"
+    );
+}
