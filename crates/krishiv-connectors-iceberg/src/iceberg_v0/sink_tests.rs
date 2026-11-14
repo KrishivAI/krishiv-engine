@@ -7,6 +7,7 @@
 //! capability check without a committer; a schema mismatch refused before
 //! anything is written.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -40,6 +41,10 @@ use crate::plan::VersionSpec;
 /// updates applied and the new metadata file written.
 struct Catalog {
     state: Mutex<(TableMetadata, String, u32)>,
+    /// A request never answers (it is in flight forever) when set.
+    hang: AtomicBool,
+    /// A request was sent.
+    sent: AtomicBool,
 }
 
 impl Catalog {
@@ -50,6 +55,8 @@ impl Catalog {
                 table.metadata_location().unwrap().to_owned(),
                 0,
             )),
+            hang: AtomicBool::new(false),
+            sent: AtomicBool::new(false),
         })
     }
 
@@ -73,6 +80,10 @@ impl CommitTable for Catalog {
         requirements: Vec<TableRequirement>,
         updates: Vec<TableUpdate>,
     ) -> CommitOutcome {
+        self.sent.store(true, Ordering::SeqCst);
+        if self.hang.load(Ordering::SeqCst) {
+            return std::future::pending().await;
+        }
         let mut s = self.state.lock().unwrap();
         if requirements.iter().any(|r| r.check(Some(&s.0)).is_err()) {
             return CommitOutcome::Conflict { stale: false };
@@ -549,6 +560,42 @@ fn a_cancelled_write_leaves_nothing() {
     assert_eq!(settled(&pool), 0);
     assert!(catalog.metadata().current_snapshot().is_none());
     assert_eq!(parquet_files(&env, true), Vec::<String>::new());
+}
+
+/// R:S4: a write cancelled while its commit request is in flight is an
+/// unknown outcome: the finalize (and with it `commit_append`) is dropped,
+/// and nothing is deleted, as the request may still land.
+#[test]
+fn a_write_cancelled_during_its_commit_deletes_nothing() {
+    let env = env();
+    let t = create(&env, ixn_schema(), false, &[]);
+    let catalog = Catalog::new(&t);
+    catalog.hang.store(true, Ordering::SeqCst);
+    let p = provider(&env, &catalog.location(), &catalog);
+    let sink = p.writer(&request(Some("w-inflight"))).unwrap();
+    let input = Batches::new(input_schema(), vec![Batch::new(range(0, 10))]);
+    let sent = Arc::clone(&catalog);
+    let (out, pool, _runner) = run(
+        &env,
+        sink,
+        input,
+        Some(Box::new(move || sent.sent.load(Ordering::SeqCst))),
+    );
+    assert!(out.is_err());
+    assert_eq!(settled(&pool), 0);
+    // Give any (wrong) background delete time to run.
+    std::thread::sleep(Duration::from_millis(500));
+    let files = parquet_files(&env, false);
+    assert_eq!(files.len(), 1, "{files:?}");
+    let metadata = env.dir.path().join("db/t/metadata");
+    let avro: Vec<_> = std::fs::read_dir(&metadata)
+        .unwrap()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "avro"))
+        .collect();
+    // The manifest and the attempt's manifest list.
+    assert_eq!(avro.len(), 2, "{avro:?}");
+    assert!(catalog.metadata().current_snapshot().is_none());
 }
 
 /// Without a committer the table declares no write mode, so the session's

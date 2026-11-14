@@ -1127,6 +1127,21 @@ fn a_foreign_snapshot_with_this_id_is_a_conflict() {
     c.check(&[INIT, "7000|1|f.parquet"]);
 }
 
+/// R:N2: a property value is parsed as Java's `Integer.parseInt` does, so
+/// " 4" is not a number.
+#[test]
+fn a_retry_property_with_spaces_is_not_a_number() {
+    let mut c = case_with(2, &[("commit.retry.num-retries", " 4")]);
+    let e = c.run().unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{e}"
+    );
+    assert_eq!(c.cat.requests(), 0);
+    c.check(&[INIT]);
+}
+
 /// R:S2, `Probe::Moved`: a 503 before the table, then another writer moves
 /// `main` before the first probe: "not applied" is final, the write is
 /// rebased on the foreign head, one snapshot, the first list deleted.

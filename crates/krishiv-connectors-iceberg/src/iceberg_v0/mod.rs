@@ -3,13 +3,6 @@
 //! is private: what leaves it is Krishiv types only.
 
 pub(crate) mod append;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "`CommitOutcome` is built only by a `CommitTable`: PR-17's catalog clients"
-    )
-)]
 pub(crate) mod commit;
 pub(crate) mod data_file;
 pub(crate) mod deletes;

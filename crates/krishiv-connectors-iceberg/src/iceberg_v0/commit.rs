@@ -32,7 +32,10 @@
 //!   recomputes the list, sequence number, totals, v3 row ids and timestamp
 //!   against the refreshed table. Across a v2 → v3 upgrade it takes the v3
 //!   lineage fields; any other change of format version, or a replaced table
-//!   (another UUID), is `KRISHIV_ICEBERG_COMMIT_CONFLICT`.
+//!   (another UUID), is `KRISHIV_ICEBERG_COMMIT_CONFLICT`. A divergence
+//!   toward refusal: Java reuses its manifests across any upgrade
+//!   (apache-iceberg 1.12.0 `FastAppend.apply`, `SnapshotProducer.apply`),
+//!   v1 → v2 and v1 → v3 included.
 //! - **Budget**, Iceberg's table properties and defaults (apache-iceberg
 //!   1.12.0 `TableProperties`): `COMMIT_NUM_RETRIES` (4: five requests, resends
 //!   and new attempts alike), `COMMIT_MIN_RETRY_WAIT_MS` (100),
@@ -102,6 +105,13 @@ const COMMIT_STATUS_CHECKS_MAX_WAIT_MS: &str = "commit.status-check.max-wait-ms"
 /// The loop, not the implementation, decides that a `Failed` answer to a
 /// resend is still unknown (§7.2's per-request rule).
 #[derive(Debug)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "built only by a `CommitTable`: PR-17's catalog clients"
+    )
+)]
 pub(crate) enum CommitOutcome {
     /// Applied; the table's new metadata.
     Committed(Box<TableMetadata>),
@@ -179,6 +189,15 @@ pub(crate) struct CommitContext<'a> {
 /// property that is not a number, a failure answered to an attempt's first
 /// request, or [`prepare_attempt`]'s errors. A refresh after a conflict that
 /// never succeeds is `KRISHIV_ICEBERG_COMMIT_STATE_UNKNOWN`.
+///
+/// # Cancellation
+/// Dropping the future once it has been polled past its first
+/// [`CommitTable::commit`] call is an **unknown outcome** (R:S4): a request
+/// may be in flight and still land. Nothing is deleted here, and the caller
+/// must not delete the write's data files or manifests either (`sink.rs`
+/// disarms its guard before calling this). Only a drop before the first
+/// request, or a returned error other than
+/// `KRISHIV_ICEBERG_COMMIT_STATE_UNKNOWN`, says nothing was applied.
 pub(crate) async fn commit_append(
     table: &dyn CommitTable,
     cx: CommitContext<'_>,
@@ -268,7 +287,8 @@ impl Budget {
         let num = |key: &str, default: i64| -> Result<u64, KrishivError> {
             let n = match props.get(key) {
                 None => default,
-                Some(v) => v.trim().parse::<i64>().map_err(|_| {
+                // No trim: Java's `Integer.parseInt` refuses " 4" (R:N2).
+                Some(v) => v.parse::<i64>().map_err(|_| {
                     KrishivError::from(KrishivUnsupportedFeature {
                         feature: format!(
                             "committing to an Iceberg table whose {key} is {v:?}, not a number"
