@@ -2,6 +2,7 @@
 //! View expansion: the walk that inlines permanent and temporary views into a plan.
 
 use super::*;
+use krishiv_plan::analyzer::views::{ViewExpansion, ViewSecurity};
 
 /// [`expand_temp_views`]: the views on the current expansion path, by
 /// lower-case name, for cycle detection.
@@ -20,6 +21,21 @@ pub(super) struct Expander<'a> {
     pub(super) deferred: Option<KrishivError>,
     /// The stored views inlined so far, for [`Expansion::stored_reads`].
     pub(super) stored_reads: Vec<crate::view_schema::StoredRead>,
+    /// The views inlined so far, for [`Expansion::views`] (the lineage side table).
+    pub(super) views: Vec<ViewExpansion>,
+}
+
+/// A view read the expansion inlined as `SubqueryAlias alias` at `origin`, for the view side table. Every
+/// view inlined here is read with its base tables checked against the caller (the analyzer binds them as the
+/// query's own reads): a temporary view, or a permanent view as `INVOKER` (T062 adds `DEFINER`). The expansion
+/// has no memo, so a read shared by two parents of the plan (`df.join(df)`) is inlined, and recorded, twice.
+fn view_read(
+    name: Vec<String>,
+    alias: &str,
+    origin: Origin,
+    security: ViewSecurity,
+) -> ViewExpansion {
+    ViewExpansion::new(name, alias.to_owned(), origin, security, true)
 }
 
 impl Expander<'_> {
@@ -126,16 +142,22 @@ impl Expander<'_> {
                 let input = self.go(Arc::clone(definition), &mut Vec::new());
                 self.path.pop();
                 let columns = columns.iter().map(|c| c.name.clone()).collect();
+                // A global view's qualifier is `global_temp.v`, two parts (see `ALIAS_PART_SEP`).
+                let alias = if name.len() == 2 {
+                    format!("{GLOBAL_NAMESPACE}{ALIAS_PART_SEP}{view}")
+                } else {
+                    view.to_owned()
+                };
+                self.views.push(view_read(
+                    name.clone(),
+                    &alias,
+                    plan.origin,
+                    ViewSecurity::Temporary,
+                ));
                 return Ok(Arc::new(
                     LogicalPlan::new(PlanNode::SubqueryAlias {
                         input: input?,
-                        // A global view's qualifier is `global_temp.v`, two parts (see
-                        // `ALIAS_PART_SEP`).
-                        alias: if name.len() == 2 {
-                            format!("{GLOBAL_NAMESPACE}{ALIAS_PART_SEP}{view}")
-                        } else {
-                            view.to_owned()
-                        },
+                        alias,
                         columns,
                     })
                     .with_origin(plan.origin),
@@ -311,6 +333,16 @@ impl Expander<'_> {
                 LogicalPlan::new(PlanNode::Project { input, exprs }).with_origin(plan.origin),
             );
         }
+        self.views.push(view_read(
+            vec![
+                CATALOG.to_owned(),
+                namespace.to_owned(),
+                table_key.to_owned(),
+            ],
+            &table,
+            plan.origin,
+            ViewSecurity::Invoker,
+        ));
         // Otherwise (a view stored without its query's column names) the columns are only renamed by position.
         Ok(Arc::new(
             LogicalPlan::new(PlanNode::SubqueryAlias {
@@ -397,3 +429,9 @@ impl Expander<'_> {
         Ok(expr)
     }
 }
+
+/// The view side table (P3-T063, review m4): each view inlined here is recorded, once per expansion, and
+/// located in the analyzed plan by its (alias, origin).
+#[cfg(test)]
+#[path = "expand_tests.rs"]
+mod view_side_table;
