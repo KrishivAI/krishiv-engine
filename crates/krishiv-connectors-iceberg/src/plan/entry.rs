@@ -253,6 +253,28 @@ pub fn inherit(
     manifest: &ManifestFileEntry,
     entries: Vec<ParsedEntry>,
 ) -> Result<Vec<LiveEntry>, KrishivError> {
+    inherit_entries(manifest, entries, false)
+}
+
+/// [`inherit`] keeping the DELETED entries too (their status says so), for
+/// T027's conflict validation, which looks for the files an intervening
+/// snapshot removed. A DELETED entry carries its sequence numbers as written
+/// (the spec requires them) and takes no row id.
+///
+/// # Errors
+/// As [`inherit`].
+pub(crate) fn inherit_changes(
+    manifest: &ManifestFileEntry,
+    entries: Vec<ParsedEntry>,
+) -> Result<Vec<LiveEntry>, KrishivError> {
+    inherit_entries(manifest, entries, true)
+}
+
+fn inherit_entries(
+    manifest: &ManifestFileEntry,
+    entries: Vec<ParsedEntry>,
+    keep_deleted: bool,
+) -> Result<Vec<LiveEntry>, KrishivError> {
     let mut next_row_id = match (manifest.content, manifest.first_row_id) {
         (ManifestContent::Data, Some(id)) => Some(i64::try_from(id).map_err(|_| {
             internal(format!(
@@ -264,7 +286,8 @@ pub fn inherit(
     };
     let mut out = Vec::with_capacity(entries.len());
     for e in entries {
-        if e.status == EntryStatus::Deleted {
+        let deleted = e.status == EntryStatus::Deleted;
+        if deleted && !keep_deleted {
             continue;
         }
         let inherits = e.status == EntryStatus::Added || manifest.sequence_number == 0;
@@ -272,7 +295,7 @@ pub fn inherit(
         let data_sequence_number = seq(e.sequence_number);
         let file_sequence_number = seq(e.file_sequence_number);
         let mut file = e.file;
-        if manifest.content == ManifestContent::Data {
+        if manifest.content == ManifestContent::Data && !deleted {
             match &mut next_row_id {
                 None => file.first_row_id = None,
                 Some(next) if file.first_row_id.is_none() => {

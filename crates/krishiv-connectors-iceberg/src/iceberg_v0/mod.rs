@@ -17,6 +17,7 @@ pub(crate) mod stats;
 pub(crate) mod storage;
 pub(crate) mod table;
 pub(crate) mod types;
+pub(crate) mod validate;
 pub(crate) mod write;
 pub(crate) mod write_metrics;
 
@@ -46,5 +47,7 @@ mod sink_tests;
 mod table_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod validate_tests;
 #[cfg(test)]
 mod write_tests;

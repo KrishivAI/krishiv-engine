@@ -29,25 +29,28 @@ use krishiv_common::error::{ErrorClass, InternalError, KrishivError};
 
 use super::append::{NewManifests, WRITE_ID_PROP, WriteIds, prepare_attempt, write_new_manifests};
 use super::append_tests::{MAX, create, file, iceberg_rust_files, ids, rows};
-use super::commit::{CommitClock, CommitContext, CommitOutcome, CommitTable, commit_append};
+use super::commit::{
+    CommitClock, CommitContext, CommitOutcome, CommitTable, commit_append, commit_validated,
+};
 use super::provider_tests::{Env, env};
 use super::scan::read_manifest_files;
+use super::validate::Validation;
 
 /// One commit request's body.
-type Request = (Vec<TableRequirement>, Vec<TableUpdate>);
+pub(super) type Request = (Vec<TableRequirement>, Vec<TableUpdate>);
 
 /// A foreign writer's request, built on the metadata it is given.
-type Foreign =
+pub(super) type Foreign =
     Box<dyn FnOnce(TableMetadata) -> Pin<Box<dyn Future<Output = Request> + Send>> + Send>;
 
 /// The snapshot id and write key of the write under test.
-const OURS: i64 = 7_000;
+pub(super) const OURS: i64 = 7_000;
 const OUR_KEY: &str = "w-ours";
 const OUR_UUID: &str = "uuid-ours";
 
 /// What the catalog does with one request.
 #[derive(Debug, Clone, Copy)]
-enum Fault {
+pub(super) enum Fault {
     /// Applied (or refused) and answered.
     Answer,
     /// Applied; the answer is lost (a timeout).
@@ -82,7 +85,7 @@ enum Action {
 
 /// When a foreign writer commits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum When {
+pub(super) enum When {
     BeforeRequest(usize),
     AfterRequest(usize),
     BeforeLoad(usize),
@@ -118,7 +121,7 @@ struct State {
 }
 
 /// The catalog under test: one table, a script of faults.
-struct TestCatalog {
+pub(super) struct TestCatalog {
     state: Mutex<State>,
 }
 
@@ -286,11 +289,11 @@ impl TestCatalog {
         }
     }
 
-    fn script(&self, faults: &[Fault]) {
+    pub(super) fn script(&self, faults: &[Fault]) {
         self.state.lock().unwrap().script.extend(faults);
     }
 
-    fn on(&self, when: When, f: Foreign) {
+    pub(super) fn on(&self, when: When, f: Foreign) {
         self.state
             .lock()
             .unwrap()
@@ -317,12 +320,12 @@ impl TestCatalog {
         self.state.lock().unwrap().land_held()
     }
 
-    fn metadata(&self) -> (TableMetadata, String) {
+    pub(super) fn metadata(&self) -> (TableMetadata, String) {
         let s = self.state.lock().unwrap();
         (s.meta.clone(), s.location.clone())
     }
 
-    fn requests(&self) -> usize {
+    pub(super) fn requests(&self) -> usize {
         self.state.lock().unwrap().requests
     }
 
@@ -409,7 +412,7 @@ impl CommitTable for TestCatalog {
 }
 
 /// Virtual time: a sleep advances the clock at once and is recorded.
-struct TestClock {
+pub(super) struct TestClock {
     now: AtomicI64,
     waits: Mutex<Vec<u64>>,
     /// Jitter at its largest (`bound - 1`) rather than 0.
@@ -531,12 +534,12 @@ fn upgrade(to: FormatVersion) -> Foreign {
 /// A table of format `version` with one committed snapshot (row `1|1|init`),
 /// the catalog over it, the clock and the write under test: one data file
 /// (`10|2|ours`) and its manifests, written against that snapshot.
-struct Case {
-    env: Env,
-    cat: TestCatalog,
-    clock: Arc<TestClock>,
-    base: TableMetadata,
-    new: NewManifests,
+pub(super) struct Case {
+    pub(super) env: Env,
+    pub(super) cat: TestCatalog,
+    pub(super) clock: Arc<TestClock>,
+    pub(super) base: TableMetadata,
+    pub(super) new: NewManifests,
 }
 
 fn case_with(version: u8, properties: &[(&str, &str)]) -> Case {
@@ -583,12 +586,12 @@ fn case_with(version: u8, properties: &[(&str, &str)]) -> Case {
     }
 }
 
-fn case() -> Case {
+pub(super) fn case() -> Case {
     case_with(2, &[])
 }
 
 impl Case {
-    fn run(&mut self) -> Result<TableMetadata, KrishivError> {
+    pub(super) fn run(&mut self) -> Result<TableMetadata, KrishivError> {
         let io = self.env.reg.file_io();
         let cx = CommitContext {
             io: &io,
@@ -601,6 +604,27 @@ impl Case {
             &self.base,
             &mut self.new,
             ids(OUR_KEY),
+        ))
+    }
+
+    /// [`Self::run`] through `commit_validated` with `validation`.
+    pub(super) fn run_validated(
+        &mut self,
+        validation: &Validation,
+    ) -> Result<TableMetadata, KrishivError> {
+        let io = self.env.reg.file_io();
+        let cx = CommitContext {
+            io: &io,
+            clock: self.clock.as_ref(),
+            max_metadata_bytes: MAX,
+        };
+        self.env.rt.block_on(commit_validated(
+            &self.cat,
+            cx,
+            &self.base,
+            &mut self.new,
+            ids(OUR_KEY),
+            validation,
         ))
     }
 
@@ -622,18 +646,18 @@ impl Case {
     }
 
     /// The location of attempt `n`'s manifest list.
-    fn list(&self, n: u32) -> String {
+    pub(super) fn list(&self, n: u32) -> String {
         format!(
             "{}/metadata/snap-{OURS}-{n}-{OUR_UUID}.avro",
             self.base.location()
         )
     }
 
-    fn manifest(&self) -> String {
+    pub(super) fn manifest(&self) -> String {
         self.new.manifests[0].manifest_path.clone()
     }
 
-    fn data(&self) -> String {
+    pub(super) fn data(&self) -> String {
         self.env.at("ours.parquet")
     }
 
@@ -644,7 +668,7 @@ impl Case {
     /// The table's invariants: every live data file listed once, our
     /// snapshot at most once, and the rows `expected` (`id|x|name`, by id)
     /// through SQL and the same files through iceberg-rust's planning.
-    fn check(&self, expected: &[&str]) {
+    pub(super) fn check(&self, expected: &[&str]) {
         let (m, loc) = self.cat.metadata();
         let files = iceberg_rust_files(&self.env, &m, &loc);
         let unique: HashSet<&String> = files.iter().collect();
@@ -660,12 +684,12 @@ impl Case {
     }
 }
 
-fn exists(url: &str) -> bool {
+pub(super) fn exists(url: &str) -> bool {
     std::path::Path::new(url.strip_prefix("file://").unwrap()).exists()
 }
 
-const INIT: &str = "1|1|init.parquet";
-const MINE: &str = "10|2|ours";
+pub(super) const INIT: &str = "1|1|init.parquet";
+pub(super) const MINE: &str = "10|2|ours";
 
 /// The plain path: one request, committed; the list, manifest and data file
 /// kept; no wait.
