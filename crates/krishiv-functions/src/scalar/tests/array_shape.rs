@@ -129,4 +129,9 @@ fn sequence_over_dates_needs_a_whole_day_step_and_a_step_that_advances() {
     // A step of one day over four days gives five dates.
     let out = run(86_400_000_000).unwrap();
     assert_eq!(out.as_list::<i32>().value(0).len(), 5);
+    // A step that moves backwards cannot reach a later stop (Spark: `_LEGACY_ERROR_TEMP_3243`).
+    assert_eq!(
+        run(-86_400_000_000).unwrap_err().error_class(),
+        ErrorClass::LegacyErrorTemp3243
+    );
 }

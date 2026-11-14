@@ -523,12 +523,13 @@ fn temporal_sequence(
         }
         // The direction is the one from start to stop; the step must move that way, its sign being that of its first non-zero field
         // (months, then days, then microseconds), except that equal bounds give one element for any step a timestamp takes.
+        // Months decide the direction when there are any; otherwise the whole of days and microseconds does (`1 day` with `-48 hours`
+        // moves backwards however its first field reads).
+        let rest = i128::from(days) * i128::from(MICROS_PER_DAY) + i128::from(micros);
         let sign = if months != 0 {
-            months.signum()
-        } else if days != 0 {
-            days.signum()
+            i128::from(months.signum())
         } else {
-            micros.signum()
+            rest.signum()
         };
         let up = start <= stop;
         // A step whose days and microseconds cancel out (`1 day` and `-24 hours`) never advances: it is a zero step.
@@ -625,6 +626,15 @@ fn temporal_sequence(
             }
             if start == stop && i > 0 {
                 break;
+            }
+            // A month step whose other fields pull the other way can wander without reaching `stop`: bound the steps taken.
+            if i > 12_000_000 {
+                return Err(LegacyErrorTemp3243 {
+                    start: start.to_string(),
+                    stop: stop.to_string(),
+                    step: months.to_string(),
+                }
+                .into());
             }
             values.push(at);
             if values.len() - first > MAX_ARRAY_LENGTH {
