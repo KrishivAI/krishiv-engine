@@ -68,6 +68,7 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         flag("allowNumericLeadingZeros", false, "Allow numbers like `007`.");
         flag("allowBackslashEscapingAnyCharacter", false, "Allow `\\` before any character.");
         flag("allowUnquotedControlChars", false, "Allow raw control characters in strings.");
+        flag("allowNonNumericNumbers", true, "Read `NaN`, `Infinity`, `+INF`, `-INF` strings into float and double columns.");
         mode_spec();
         conf("columnNameOfCorruptRecord", OptionKind::String, OptionDefault::Str("_corrupt_record"), "spark.sql.columnNameOfCorruptRecord", "The column that receives malformed records in PERMISSIVE mode.");
         string("dateFormat", "The pattern of DATE values (default: Spark's lenient grammar).");
@@ -161,6 +162,8 @@ pub(crate) struct JsonOptions {
     pub line_sep: LineSep,
     pub drop_field_if_all_null: bool,
     pub ignore_null_fields: bool,
+    /// `allowNonNumericNumbers`: non-numeric strings read as floats.
+    pub non_numeric: bool,
 }
 
 impl JsonOptions {
@@ -204,6 +207,7 @@ impl JsonOptions {
             line_sep,
             drop_field_if_all_null: o.bool("dropFieldIfAllNull").unwrap_or(false),
             ignore_null_fields: o.bool("ignoreNullFields").unwrap_or(true),
+            non_numeric: o.bool("allowNonNumericNumbers").unwrap_or(true),
         })
     }
 }

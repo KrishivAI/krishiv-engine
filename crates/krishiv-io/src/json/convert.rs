@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Values of a flat JSON object as typed columns: Spark's `JacksonParser`
-//! value conversions for the flat types, over the CSV column builders.
+//! Scalar values of JSON records as typed columns: Spark's `JacksonParser`
+//! value conversions for the scalar types, over the CSV column builders
+//! (structs, arrays and maps are `super::nested`).
 
 use arrow_schema::Field;
 use krishiv_common::error::KrishivError;
@@ -14,15 +15,15 @@ use crate::error::unsupported;
 use crate::text::{Datetimes, spark_type_name};
 use krishiv_common::error::CannotParseJsonField;
 
-/// The Spark type of a column, as the JSON reader handles it: exactly the
-/// CSV kinds (flat scalars and binary); anything else is not flat.
+/// The Spark type of a scalar column, as the JSON reader handles it:
+/// exactly the CSV kinds (scalars and binary).
 ///
 /// # Errors
 /// `KRISHIV_UNSUPPORTED_FEATURE` naming the column's type.
 pub(crate) fn kind_of(f: &Field) -> Result<Kind, KrishivError> {
     Kind::of_field(f).map_err(|_| {
         unsupported(format!(
-            "the JSON data source with a column of type {} (only flat types are supported)",
+            "the JSON data source with a column of type {}",
             spark_type_name(f.data_type())
         ))
     })
@@ -30,119 +31,111 @@ pub(crate) fn kind_of(f: &Field) -> Result<Kind, KrishivError> {
 
 /// Converts the fields of records.
 pub(crate) struct JsonConverter<'a> {
-    pub primitives_as_string: bool,
     pub dt: &'a Datetimes,
+    /// `allowNonNumericNumbers`: `"NaN"`, `"Infinity"` and the like read as
+    /// floating point values.
+    pub non_numeric: bool,
 }
 
-/// The JSON token type of a value, for conversion errors.
+/// Jackson's token type of a value, for conversion errors.
 fn token_type(v: &JVal) -> &'static str {
     match v {
-        JVal::Null => "NULL",
-        JVal::Bool(_) => "BOOLEAN",
-        JVal::Num(_, _) => "NUMBER",
-        JVal::Str(_) => "STRING",
-        JVal::Nested(_) => "OBJECT",
+        JVal::Null => "VALUE_NULL",
+        JVal::Bool(true) => "VALUE_TRUE",
+        JVal::Bool(false) => "VALUE_FALSE",
+        JVal::Num(_, false) => "VALUE_NUMBER_INT",
+        JVal::Num(_, true) => "VALUE_NUMBER_FLOAT",
+        JVal::Str(_) => "VALUE_STRING",
+        JVal::Object(..) => "START_OBJECT",
+        JVal::Array(..) => "START_ARRAY",
     }
 }
 
 impl JsonConverter<'_> {
     /// `v` (absent when the field is missing) as a value of `kind` for the
-    /// field `name` of Spark type `target`.
+    /// field `name` of Spark type `target`, in a record whose text is
+    /// `record`. Spark's `JacksonParser.makeConverter`: each type reads only
+    /// its own JSON tokens (a boolean only `true`/`false`, an integer only an
+    /// integral number, a float a number or a non-numeric string, a date,
+    /// timestamp, binary or interval only a string), and a string column
+    /// reads any value, a non-string one as its exact text.
     ///
     /// # Errors
-    /// [`Conv::Malformed`] for a value that is not of the type (including a
-    /// nested value flat schemas cannot hold: it is a malformed record, not
-    /// a failed scan);
-    /// [`Conv::Fatal`] for a conversion that cannot be done at all (a
-    /// region time zone).
+    /// [`Conv::Malformed`] for a value of the right token that is not a value
+    /// of the type; [`Conv::Fatal`] with `CANNOT_PARSE_JSON_FIELD` for the
+    /// wrong token (the decoder makes the record malformed), or for a
+    /// conversion that cannot be done at all (a region time zone).
     pub(crate) fn convert(
         &self,
         kind: &Kind,
         name: &str,
         target: &str,
         v: Option<&JVal>,
+        record: &str,
     ) -> Result<Val, Conv> {
         let Some(v) = v else {
             return Ok(Val::Null);
         };
-        if let (Kind::Str, JVal::Nested(raw)) = (kind, v) {
-            return Ok(Val::Text(raw.clone()));
-        }
-        if self.primitives_as_string {
-            return match v {
-                JVal::Null => Ok(Val::Null),
-                JVal::Bool(b) => Ok(Val::Text(b.to_string())),
-                JVal::Num(t, _) => Ok(Val::Text(t.clone())),
-                JVal::Str(s) => Ok(Val::Text(s.clone())),
-                JVal::Nested(_) => Err(Self::nested(name)),
-            };
-        }
         let bad = || Conv::Malformed;
         Ok(match (kind, v) {
-            (_, JVal::Nested(_)) => return Err(Self::nested(name)),
             (_, JVal::Null) | (Kind::Null, _) => Val::Null,
             (Kind::Str, JVal::Str(s)) => Val::Text(s.clone()),
             (Kind::Str, JVal::Bool(b)) => Val::Text(b.to_string()),
             (Kind::Str, JVal::Num(t, _)) => Val::Text(t.clone()),
+            (Kind::Str, JVal::Object(_, span) | JVal::Array(_, span)) => {
+                Val::Text(span.text(record).to_owned())
+            }
             (Kind::Bin, JVal::Str(s)) => Val::Bytes(decode_base64(s).ok_or_else(bad)?),
             (Kind::Bool, JVal::Bool(b)) => Val::Bool(*b),
-            // Like the CSV converter: only `true`/`false` (any case) read;
-            // anything else is a malformed record (Spark's JacksonParser
-            // rejects non-boolean strings for BooleanType).
-            (Kind::Bool, JVal::Str(s)) => {
-                if s.eq_ignore_ascii_case("true") {
-                    Val::Bool(true)
-                } else if s.eq_ignore_ascii_case("false") {
-                    Val::Bool(false)
-                } else {
-                    return Err(Conv::Malformed);
-                }
-            }
-            // Spark's JacksonParser reads `VALUE_NUMBER_*` for BooleanType
-            // as `!= 0` (`getLongValue`/`getDoubleValue`); `NaN != 0` is
-            // true in Java, so `NaN` reads `true`.
-            (Kind::Bool, JVal::Num(t, _)) => {
-                Val::Bool(java_parse_double(t).ok_or_else(bad)? != 0.0)
-            }
-            (Kind::Int(_), JVal::Bool(b)) => Val::I64(i64::from(*b)),
             (Kind::Int(bits), JVal::Num(t, false)) => {
                 Val::I64(java_parse_integral(t, *bits).ok_or_else(bad)?)
             }
-            (Kind::F32, JVal::Bool(b)) => Val::F32(if *b { 1.0 } else { 0.0 }),
             (Kind::F32, JVal::Num(t, _)) => Val::F32(java_parse_float(t).ok_or_else(bad)?),
-            (Kind::F64, JVal::Bool(b)) => Val::F64(if *b { 1.0 } else { 0.0 }),
             (Kind::F64, JVal::Num(t, _)) => Val::F64(java_parse_double(t).ok_or_else(bad)?),
-            (Kind::Decimal(p, sc), JVal::Bool(b)) => {
-                let sc = u8::try_from(*sc).map_err(|_| bad())?;
-                let v = java_parse_decimal(if *b { "1" } else { "0" }, *p, sc).ok_or_else(bad)?;
-                Val::I128(v)
+            (Kind::F32, JVal::Str(s)) if !s.is_empty() => {
+                let v = self.non_numeric_value(s).ok_or_else(bad)?;
+                // NaN or an infinity: the same value as a float.
+                Val::F32(if v.is_nan() {
+                    f32::NAN
+                } else if v > 0.0 {
+                    f32::INFINITY
+                } else {
+                    f32::NEG_INFINITY
+                })
+            }
+            (Kind::F64, JVal::Str(s)) if !s.is_empty() => {
+                Val::F64(self.non_numeric_value(s).ok_or_else(bad)?)
             }
             (Kind::Decimal(p, sc), JVal::Num(t, _)) => {
                 let sc = u8::try_from(*sc).map_err(|_| bad())?;
                 Val::I128(java_parse_decimal(t, *p, sc).ok_or_else(bad)?)
             }
-            (Kind::Int(_), JVal::Str(s)) => {
-                Val::I64(java_parse_integral(s, int_bits(kind)).ok_or_else(bad)?)
-            }
-            (Kind::F32, JVal::Str(s)) => Val::F32(java_parse_float(s).ok_or_else(bad)?),
-            (Kind::F64, JVal::Str(s)) => Val::F64(java_parse_double(s).ok_or_else(bad)?),
-            (Kind::Decimal(p, sc), JVal::Str(s)) => {
+            (Kind::Decimal(p, sc), JVal::Str(s)) if !s.is_empty() => {
                 let sc = u8::try_from(*sc).map_err(|_| bad())?;
                 Val::I128(java_parse_decimal(s, *p, sc).ok_or_else(bad)?)
             }
-            (Kind::Date, JVal::Str(s)) => {
+            (Kind::Date, JVal::Str(s)) if !s.is_empty() => {
                 Val::I64(i64::from(self.dt.parse_date(s)?.ok_or_else(bad)?))
             }
-            (Kind::Timestamp, JVal::Str(s)) => {
+            (Kind::Timestamp, JVal::Str(s)) if !s.is_empty() => {
                 Val::I64(self.dt.parse_timestamp(s)?.ok_or_else(bad)?)
             }
-            (Kind::TimestampNtz, JVal::Str(s)) => Val::I64(self.dt.parse_ntz(s)?.ok_or_else(bad)?),
+            // An integral number is seconds since the epoch.
+            (Kind::Timestamp, JVal::Num(t, false)) => Val::I64(
+                java_parse_integral(t, 64)
+                    .and_then(|s| s.checked_mul(1_000_000))
+                    .ok_or_else(bad)?,
+            ),
+            (Kind::TimestampNtz, JVal::Str(s)) if !s.is_empty() => {
+                Val::I64(self.dt.parse_ntz(s)?.ok_or_else(bad)?)
+            }
             (Kind::YearMonth(..) | Kind::DayTime(..), JVal::Str(s)) => interval_of_text(kind, s)?,
-            (Kind::YearMonth(..) | Kind::DayTime(..), _) => return Err(Conv::Malformed),
+            // An empty string is not a value of a non-string type.
+            (_, JVal::Str(s)) if s.is_empty() => return Err(Conv::Malformed),
             _ => {
                 let e: KrishivError = CannotParseJsonField {
                     field_name: name.to_owned(),
-                    field_value: scalar_text(v),
+                    field_value: scalar_text(v, record),
                     json_type: token_type(v).to_owned(),
                     data_type: target.to_owned(),
                 }
@@ -152,30 +145,28 @@ impl JsonConverter<'_> {
         })
     }
 
-    /// A nested value where a flat column was requested: a malformed
-    /// record (handled by the parse mode), never a failed scan. Only a
-    /// nested *schema* is unsupported at open.
-    fn nested(_name: &str) -> Conv {
-        Conv::Malformed
+    /// A non-numeric floating point string (`allowNonNumericNumbers`).
+    fn non_numeric_value(&self, s: &str) -> Option<f64> {
+        if !self.non_numeric {
+            return None;
+        }
+        match s {
+            "NaN" => Some(f64::NAN),
+            "+INF" | "+Infinity" | "Infinity" => Some(f64::INFINITY),
+            "-INF" | "-Infinity" => Some(f64::NEG_INFINITY),
+            _ => None,
+        }
     }
 }
 
-/// The width of an integer kind.
-fn int_bits(kind: &Kind) -> u32 {
-    match kind {
-        Kind::Int(bits) => *bits,
-        _ => 64,
-    }
-}
-
-/// A scalar as text, for conversion errors.
-fn scalar_text(v: &JVal) -> String {
+/// A value as text, for conversion errors.
+fn scalar_text(v: &JVal, record: &str) -> String {
     match v {
         JVal::Null => "null".to_owned(),
         JVal::Bool(b) => b.to_string(),
         JVal::Num(t, _) => t.clone(),
         JVal::Str(s) => s.clone(),
-        JVal::Nested(raw) => raw.clone(),
+        JVal::Object(_, span) | JVal::Array(_, span) => span.text(record).to_owned(),
     }
 }
 
