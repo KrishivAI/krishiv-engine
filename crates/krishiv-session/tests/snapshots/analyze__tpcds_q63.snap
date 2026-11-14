@@ -15,7 +15,7 @@ expression: layout(&json)
   {"ordinal":2,"name":"avg_monthly_sales","type":"decimal(21,6)","type_json":"\"decimal(21,6)\"","nullable":true,"declared_type":null}],
 "lineage":[{"ordinal":0,"output":"i_manager_id","sources":[{"table":["spark_catalog","default","item"],"column":"i_manager_id","via_view":null}],"transform":"identity"},
   {"ordinal":1,"output":"sum_sales","sources":[{"table":["spark_catalog","default","store_sales"],"column":"ss_sales_price","via_view":null}],"transform":"aggregate"},
-  {"ordinal":2,"output":"avg_monthly_sales","sources":[{"table":["spark_catalog","default","item"],"column":"i_manager_id","via_view":null},{"table":["spark_catalog","default","store_sales"],"column":"ss_sales_price","via_view":null}],"transform":"window"}],
+  {"ordinal":2,"output":"avg_monthly_sales","sources":[{"table":["spark_catalog","default","item"],"column":"i_manager_id","via_view":null},{"table":["spark_catalog","default","store_sales"],"column":"ss_sales_price","via_view":null}],"transform":"aggregate"}],
 "filters":[{"kind":"filter","table":["spark_catalog","default","date_dim"],"column":"d_date_sk"},
   {"kind":"filter","table":["spark_catalog","default","date_dim"],"column":"d_month_seq"},
   {"kind":"filter","table":["spark_catalog","default","item"],"column":"i_brand"},

@@ -375,6 +375,15 @@ fn window_outputs_read_args_partition_and_order() {
 }
 
 #[test]
+fn a_window_over_an_aggregate_stays_aggregate() {
+    // The window's own `sum` is a window step; its argument was aggregated below, the stronger transform.
+    let l = of("SELECT sum(s) OVER () AS w FROM (SELECT sum(a) AS s FROM t GROUP BY b) q");
+    assert_eq!(columns(&l), ["w: [t.a] -> aggregate"]);
+    let l = of("SELECT sum(a) OVER () AS w FROM t");
+    assert_eq!(columns(&l), ["w: [t.a] -> window"]);
+}
+
+#[test]
 fn cte_referenced_twice() {
     let l = of(
         "WITH q AS (SELECT a, b + 1 AS c FROM t) SELECT q.c, q2.a FROM q JOIN q q2 ON q.a = q2.a",
@@ -500,6 +509,25 @@ fn file_source_with_metadata() {
             "p: [path:/data/x.p] -> identity",
             "f: [path:/data/x._metadata.file_name] -> expression",
         ]
+    );
+}
+
+#[test]
+fn a_struct_built_of_metadata_fields_is_not_narrowed_by_name() {
+    // `s.file_name` is `_metadata.file_path`: a rebuilt struct keeps all of its sources.
+    let l = of(
+        "SELECT s.file_name AS f FROM (SELECT named_struct('file_name', _metadata.file_path, \
+         'other', _metadata.file_name) AS s FROM parquet.`/data/x`) q",
+    );
+    assert_eq!(
+        columns(&l),
+        ["f: [path:/data/x._metadata.file_name, path:/data/x._metadata.file_path] -> expression"]
+    );
+    // The original `_metadata` through a subquery is still narrowed.
+    let l = of("SELECT m.file_name AS f FROM (SELECT _metadata AS m FROM parquet.`/data/x`) q");
+    assert_eq!(
+        columns(&l),
+        ["f: [path:/data/x._metadata.file_name] -> expression"]
     );
 }
 
