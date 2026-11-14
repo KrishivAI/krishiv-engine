@@ -286,6 +286,30 @@ fn not_takes_a_keyword_operand_where_spark_does() {
     use krishiv_plan::SourceId;
     for (sql, want) in [
         (
+            r#"SELECT 1 FROM t WHERE NOT AND (x)"#,
+            r#"Project [1] | +- Filter (NOT AND(x)) |    +- Read t"#,
+        ),
+        (
+            r#"SELECT 1 FROM t WHERE NOT OR (x)"#,
+            r#"Project [1] | +- Filter (NOT OR(x)) |    +- Read t"#,
+        ),
+        (
+            r#"SELECT NOT AND (x)"#,
+            r#"Project [(NOT AND(x))] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT transform(array(1), x -> NOT AND (x))"#,
+            r#"Project [transform(array(1), (x) -> (NOT AND(x)))] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT 1 FROM t WHERE NOT IS (x)"#,
+            r#"Project [1] | +- Filter (NOT IS(x)) |    +- Read t"#,
+        ),
+        (
+            r#"SELECT CASE WHEN a THEN NOT END (x) END"#,
+            r#"Project [CASE WHEN a THEN (NOT END(x)) END] | +- OneRowRelation"#,
+        ),
+        (
             r#"SELECT 1 FROM t WHERE NOT IS IN (1)"#,
             r#"Project [1] | +- Filter (NOT (IS IN (1))) |    +- Read t"#,
         ),
@@ -423,6 +447,15 @@ fn not_takes_a_keyword_operand_where_spark_does() {
         let got = plan.root().to_string().replace('\n', " | ");
         assert_eq!(got.trim_end_matches([' ', '|']), want, "{sql}");
     }
+    // `NOT and 'x'` is the operator over a typed literal of the unknown
+    // type `and`: an error (Spark's class is UNSUPPORTED_TYPED_LITERAL).
+    assert!(
+        parse_query(
+            "SELECT 1 FROM t WHERE NOT AND 'x'",
+            &ParserOptions::default()
+        )
+        .is_err()
+    );
     // After a failed `CASE` reading, the error is at the furthest token
     // any reading reached, as in Spark.
     let sql = "SELECT transform(array(1), case -> case - 1 WHEN 0 THEN 1)";

@@ -298,13 +298,17 @@ impl Parser<'_> {
     }
 
     /// Whether the token at offset `n` continues an expression before it: a
-    /// field or element access, `::`, `COLLATE`, `DIV` or a predicate (`IS
-    /// NULL`, `IN`, `BETWEEN`, `LIKE`, ..., also after `NOT`).
+    /// field or element access, call arguments, a string (a typed literal),
+    /// `::`, `COLLATE`, `DIV` or a predicate (`IS NULL`, `IN`, `BETWEEN`,
+    /// `LIKE`, ..., also after `NOT`).
     fn expr_continues_at(&self, n: usize) -> bool {
         const PREDICATES: &[&str] = &["IN", "BETWEEN", "LIKE", "ILIKE", "RLIKE", "REGEXP"];
         const IS_TAIL: &[&str] = &["NULL", "NOT", "TRUE", "FALSE", "UNKNOWN", "DISTINCT"];
         self.sym_at(n, Sym::Dot)
             || self.sym_at(n, Sym::LBracket)
+            // The word is then a call or a typed literal (`NOT and(x)`).
+            || self.sym_at(n, Sym::LParen)
+            || self.single_string_at(n)
             || self.sym_at(n, Sym::DoubleColon)
             || self.any_kw_at(n, PREDICATES)
             || self.any_kw_at(n, &["COLLATE", "DIV"])
