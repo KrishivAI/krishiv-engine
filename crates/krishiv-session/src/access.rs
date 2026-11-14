@@ -29,7 +29,7 @@ use krishiv_plan::analyzer::{
 };
 use krishiv_sql::ast::{DdlName, ExprKind, Literal, Statement, TableOption};
 use krishiv_sql::{
-    ExplainKind, StatementClass, Target, TargetObject, parse_multipart_identifier,
+    ExplainKind, ParserOptions, StatementClass, Target, TargetObject, parse_multipart_identifier,
     statement_targets,
 };
 
@@ -100,9 +100,9 @@ impl Session {
     }
 
     /// The statement `sql` parsed, classified and its reads analyzed (see [`Self::statement_info`]),
-    /// for `statement_info` and the analyze API. When its reads are not whole queries
-    /// (`statement_queries` gives `None`), nothing is analyzed and `partial` is set: the securables
-    /// are then its targets only.
+    /// for `statement_info` and the analyze API. When its reads are not known from its text
+    /// (`krishiv_sql::statement_reads` gives `None`), nothing is analyzed and `partial` is set: the
+    /// securables are then its targets only.
     pub(crate) async fn statement_parts(&self, sql: &str) -> Result<StatementParts, KrishivError> {
         let env = self.query_env();
         let sql = &*self.substituted(sql);
@@ -139,21 +139,7 @@ impl Session {
             merge_reads(&mut securables, &analysis.analyzed.securables);
             analyzed.push(Arc::clone(&analysis.analyzed));
         }
-        // Then what it writes, creates or drops, as the session would check
-        // it (the name as written), and `Manage` on the cluster for `ADMIN`.
-        for target in required_targets(&statement, class) {
-            if let Some(securable) = self.securables_of(target.object, &env)?.into_iter().next()
-                && !securables
-                    .iter()
-                    .any(|s| s.securable == securable && s.privilege == target.privilege)
-            {
-                securables.push(SecurableUse {
-                    securable,
-                    privilege: target.privilege,
-                    columns: std::collections::BTreeSet::new(),
-                });
-            }
-        }
+        self.add_targets(&mut securables, &statement, &env)?;
         Ok(StatementParts {
             info: StatementInfo {
                 class,
@@ -168,11 +154,36 @@ impl Session {
 }
 
 impl Session {
+    /// Adds what `statement` writes, creates or drops to `securables`, as the session would check it
+    /// (the name as written), and `Manage` on the cluster for `ADMIN` ([`required_targets`]).
+    fn add_targets(
+        &self,
+        securables: &mut Vec<SecurableUse>,
+        statement: &Statement,
+        env: &QueryEnv,
+    ) -> Result<(), KrishivError> {
+        for target in required_targets(statement, &env.parser) {
+            if let Some(securable) = self.securables_of(target.object, env)?.into_iter().next()
+                && !securables
+                    .iter()
+                    .any(|s| s.securable == securable && s.privilege == target.privilege)
+            {
+                securables.push(SecurableUse {
+                    securable,
+                    privilege: target.privilege,
+                    columns: std::collections::BTreeSet::new(),
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// The parts of `EXECUTE IMMEDIATE` (of `class`, see `krishiv_sql::classify_with`): with literal
     /// text and no `USING`, those of the statement the text holds (its spans index the text), under the
     /// outer class (`INTO` makes it at least `SESSION`); text with `USING` arguments is bound only when
-    /// it runs, so it is `partial` with the inner statement's class; text from a variable or an
-    /// expression is `ADMIN` and `partial`, permanently (design §3.2). Nothing is evaluated.
+    /// it runs, so it is `partial` with the inner statement's class and targets (the text parses with
+    /// its markers); text from a variable or an expression is `ADMIN` and `partial`, permanently
+    /// (design §3.2). Nothing is evaluated.
     async fn immediate_parts(
         &self,
         e: &krishiv_sql::ast::ExecuteImmediate,
@@ -180,25 +191,27 @@ impl Session {
         statement: Statement,
     ) -> Result<StatementParts, KrishivError> {
         let env = self.query_env();
-        let inner = e
-            .using
-            .is_empty()
-            .then(|| krishiv_sql::immediate_statement(e, &env.parser))
-            .flatten();
-        // A nested `EXECUTE IMMEDIATE` or a script is refused when it runs: no reads to list.
-        let Some(inner) =
-            inner.filter(|i| !matches!(i, Statement::ExecuteImmediate(_) | Statement::Script(_)))
-        else {
-            return Ok(StatementParts {
-                info: StatementInfo {
-                    class,
-                    explain: None,
-                    securables: Vec::new(),
-                },
-                partial: true,
-                analyzed: Vec::new(),
-                statement,
-            });
+        // A nested `EXECUTE IMMEDIATE` or a script is refused when it runs: nothing to list.
+        let inner = krishiv_sql::immediate_statement(e, &env.parser)
+            .filter(|i| !matches!(i, Statement::ExecuteImmediate(_) | Statement::Script(_)));
+        let inner = match inner {
+            Some(inner) if e.using.is_empty() => inner,
+            known => {
+                let mut securables = Vec::new();
+                if let Some(inner) = &known {
+                    self.add_targets(&mut securables, inner, &env)?;
+                }
+                return Ok(StatementParts {
+                    info: StatementInfo {
+                        class,
+                        explain: None,
+                        securables,
+                    },
+                    partial: true,
+                    analyzed: Vec::new(),
+                    statement,
+                });
+            }
         };
         let inner_redacted =
             krishiv_sql::redact_sql(krishiv_sql::immediate_text(e).unwrap_or_default());
@@ -238,17 +251,17 @@ pub(crate) fn merge_reads(securables: &mut Vec<SecurableUse>, used: &[SecurableU
     }
 }
 
-/// What `statement` (of `class`) writes, creates or drops and reads without a query
-/// (`statement_targets`), plus `Manage` on the cluster for every `ADMIN` statement (ADR 0046 §4),
-/// whatever else it names: what the session checks before it runs, and what `statement_info` lists.
+/// What `statement` writes, creates or drops and reads without a query (`statement_targets`), plus
+/// `Manage` on the cluster for every `ADMIN` statement (ADR 0046 §4), whatever else it names: what the
+/// session checks before it runs, and what `statement_info` lists. `options` read the text of an
+/// `EXECUTE IMMEDIATE`.
 ///
-/// `EXECUTE IMMEDIATE` needs nothing of its own: its class reports what its text holds (`ADMIN` for text
-/// from a variable, which cannot be placed), and the statement it runs is authorized under its own class
-/// when it runs (`execute_immediate.rs`).
-fn required_targets(statement: &Statement, class: StatementClass) -> Vec<Target<'_>> {
+/// Dynamic SQL (`EXECUTE IMMEDIATE` of text that cannot be placed, reported `ADMIN`) adds no `Manage`
+/// wherever it stands, in a script or under `EXPLAIN ANALYZE` too (`krishiv_sql::needs_cluster_manage`):
+/// the statement it runs is authorized under its own class when it runs (`execute_immediate.rs`).
+fn required_targets<'s>(statement: &'s Statement, options: &ParserOptions) -> Vec<Target<'s>> {
     let mut targets = statement_targets(statement);
-    if class == StatementClass::Admin
-        && !matches!(statement, Statement::ExecuteImmediate(_))
+    if krishiv_sql::needs_cluster_manage(statement, options)
         && !targets
             .iter()
             .any(|t| t.object == TargetObject::Cluster && t.privilege == Privilege::Manage)
@@ -312,7 +325,7 @@ impl Session {
             log_denial(self, class, &e);
             return Err(e);
         }
-        let targets = required_targets(statement, class);
+        let targets = required_targets(statement, &env.parser);
         let mut checked: Vec<(Securable, Privilege)> = Vec::new();
         for target in targets {
             let securables = match self.securables_of(target.object, env) {

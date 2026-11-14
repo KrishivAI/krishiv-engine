@@ -882,6 +882,39 @@ mod tests {
 }
 
 #[cfg(test)]
+mod udf_runtime_tests {
+    use krishiv_common::error::ErrorClass;
+    use krishiv_session::PythonUdfDef;
+
+    use super::child_session;
+
+    /// The gate's UDTF clause is post hoc (`gate.rs`, layer 2): it holds today only because an MCP
+    /// session cannot run Python code. A Python function registered on a child session (no SQL path
+    /// can do it) still finds no runtime. If this fails, move the UDTF refusal before the analysis.
+    #[tokio::test]
+    async fn child_sessions_have_no_python_udf_runtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let session = child_session(dir.path()).await.unwrap();
+        session.register_python_udf(PythonUdfDef {
+            name: "py_plus".to_owned(),
+            eval_type: krishiv_plan::PythonEvalType::ArrowBatched,
+            return_type: krishiv_types::DataType::Long,
+            deterministic: true,
+            thread_safe: true,
+        });
+        let err = match session.sql("SELECT py_plus(id) FROM range(3)").await {
+            Ok(df) => df.collect().await.unwrap_err(),
+            Err(e) => e,
+        };
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::KrishivUdfNotAvailable,
+            "{err}"
+        );
+    }
+}
+
+#[cfg(test)]
 mod queue_tests {
     use super::*;
 

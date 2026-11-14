@@ -1953,15 +1953,7 @@ fn default_row_query(query: &Query, inner: &str, stored: &[StoredVariable]) -> O
     Some(text)
 }
 
-pub(crate) fn is_bare_default(e: &Expr) -> bool {
-    match &e.kind {
-        ExprKind::Nested(inner) => is_bare_default(inner),
-        ExprKind::Column(parts) => {
-            matches!(&parts[..], [p] if !p.quoted && p.value.eq_ignore_ascii_case("default"))
-        }
-        _ => false,
-    }
-}
+pub(crate) use krishiv_sql::is_bare_default;
 
 /// Whether any node of the top-level expression tree `e` (windows
 /// included) matches `pred`. Subquery plans are not crossed: a `Query` is

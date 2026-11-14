@@ -1022,6 +1022,18 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "filters":[],
 "warnings":[]}
 
+-- Delete: DELETE FROM t
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"WRITE",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"SELECT","columns":[]},
+  {"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"MODIFY","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
 -- Update: UPDATE t SET a = 1 WHERE b = 2
 {"schema_version":"krishiv.analyze.v1",
 "statement_class":"WRITE",
@@ -1399,7 +1411,7 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "statement_class":"WRITE",
 "explain":null,
 "partial":true,
-"securables":[],
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"MODIFY","columns":[]}],
 "output_schema":[],
 "lineage":[],
 "filters":[],

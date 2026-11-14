@@ -4,9 +4,13 @@
 //! 1. the statement must parse as exactly one statement of class `Read` ([`check_read`]: sync and
 //!    session-free, before the call queues);
 //! 2. its analysis, in the call's session, must be a complete read ([`check_analysis`]): class `READ`,
-//!    not `partial`, needing no privilege outside [`READ_ONLY_PRIVILEGES`], and no user code run at
-//!    analysis (a Python UDTF's `analyze`; MCP sessions have no UDF runtime today, but the gate does not
-//!    rely on that);
+//!    not `partial`, and needing no privilege outside [`READ_ONLY_PRIVILEGES`]. It also refuses an
+//!    analysis that reports user code ran (`USER_CODE_RAN_AT_ANALYSIS`, a Python UDTF's `analyze`), but
+//!    only after that analysis: the check is post hoc. Today no user code can run there only because
+//!    nothing sets that warning yet (PR-48b) and an MCP session has no Python UDF runtime and no way
+//!    to register a Python function (`CREATE FUNCTION` is not a read, so layer 1 refuses it);
+//!    `tools::tests::child_sessions_have_no_python_udf_runtime` pins the second fact. When PR-48b lands,
+//!    the refusal has to move before the analysis (follow-up, design §3.4);
 //! 3. the call's session denies every privilege but `Select` and `Browse` through the normal access
 //!    path ([`SetupLock`]), which also closes the gap between the analysis and the run (a catalog or
 //!    policy change between the two);
@@ -167,7 +171,9 @@ mod tests {
     use super::allows_parts;
 
     /// The analyze layer refuses `Monitor` and `Usage` (others' `system.*` rows, sending code the server
-    /// runs), and anything that is not a complete read; it allows `Select` and `Browse`.
+    /// runs), and anything that is not a complete read; it allows `Select` and `Browse`. A unit test: no
+    /// SQL statement asks `Monitor` or `Usage` at `authorize()` today (see the integration test
+    /// `monitor_and_usage_through_the_tool_path`).
     #[test]
     fn mcp_refuses_monitor_and_usage() {
         let read = StatementClass::Read;

@@ -24,6 +24,8 @@ serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
 
 [dev-dependencies]
+krishiv-plan = { path = "../krishiv-plan", version = "=0.2.0" }
+krishiv-types = { path = "../krishiv-types", version = "=0.2.0" }
 tempfile.workspace = true
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "io-util", "process", "time"] }

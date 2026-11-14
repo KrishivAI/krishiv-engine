@@ -19,11 +19,12 @@
 //! in it. Securables print through `Securable`'s `Display`, the 42501 text (ADR 0038 redaction, reused).
 //!
 //! Reads (N3, design §3.2): a statement's reads are the queries `krishiv_sql::statement_reads` gives,
-//! whole `SELECT`s or built from its own expressions (`UPDATE`, `DELETE` with a predicate, a multi-table
-//! `INSERT` with a shared `FROM`). A statement whose reads are not known from its text is `partial`, with
-//! only its targets and the warning `UNSUPPORTED_READ_SHAPE`: a `MERGE` with a subquery in an expression
-//! (fail closed), `EXECUTE IMMEDIATE` with `USING` arguments or of non-literal text (`ADMIN`), scripts and
-//! variable expressions. `EXECUTE IMMEDIATE` of literal text is analyzed as the statement it holds.
+//! whole `SELECT`s or built from its own expressions (`UPDATE`, `DELETE`, a multi-table `INSERT` with a
+//! shared `FROM`). A statement whose reads are not known from its text is `partial`, with only its targets
+//! and the warning `UNSUPPORTED_READ_SHAPE`: a `MERGE` or `INSERT ... REPLACE` with a subquery in an
+//! expression (fail closed), `EXECUTE IMMEDIATE` with `USING` arguments (the targets of its text are
+//! listed) or of non-literal text (`ADMIN`, with no `MANAGE`: dynamic SQL), scripts and variable
+//! expressions. `EXECUTE IMMEDIATE` of literal text is analyzed as the statement it holds.
 //!
 //! Output schema and lineage are a query's (`Statement::Query`). A `SHOW`, `DESCRIBE`, `EXPLAIN`, `SET` or
 //! `RESET` command has the result columns the session returns for it ([`command_schema`]; `RESET` and

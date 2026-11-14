@@ -484,3 +484,25 @@ async fn explain_format_json_of_a_drop_passes_and_drops_nothing() {
     .await;
     assert!(!err && text.contains("| 50 |"), "{text}");
 }
+
+/// `Monitor` and `Usage` through the tool path (review m5). No SQL statement asks either at
+/// `authorize()` today, so none reaches the analyze layer's refusal end to end (its unit test,
+/// `gate::tests::mcp_refuses_monitor_and_usage`, covers it):
+/// - `system.*` tables decide `Monitor` to filter other principals' rows (`monitor.rs`), not as a
+///   requirement: a read of `system.queries` passes every layer, and the read-only session's denial of
+///   `Monitor` only hides the rows;
+/// - `Usage` is asked for a `secret('scope', 'key')` reference in a read's options; only
+///   `OptionValue::reference` builds one, no SQL path calls it (`OptionValue::from_user` never makes a
+///   reference, and `secret(...)` in a SQL option list is refused), and MCP takes SQL only.
+#[tokio::test]
+async fn monitor_and_usage_through_the_tool_path() {
+    let (_d, t) = fixture();
+    let (text, err) = call(
+        &t,
+        "run_query",
+        json!({"sql": "SELECT count(*) AS n FROM system.queries"}),
+    )
+    .await;
+    assert!(!err, "{text}");
+    assert!(text.contains("| n:bigint |"), "{text}");
+}

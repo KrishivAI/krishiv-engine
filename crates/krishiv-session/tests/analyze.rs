@@ -436,12 +436,114 @@ fn execute_immediate_literal_reports_inner_class() {
     );
 }
 
-/// Denies everything on the table `canary`, allows the rest.
-struct DenyCanary;
+/// Denies `Manage` (on anything), allows the rest: an ordinary user under a policy that keeps cluster
+/// administration to admins.
+struct DenyManage;
+
+impl AccessPolicy for DenyManage {
+    fn version(&self) -> PolicyVersion {
+        PolicyVersion(1)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _: &'a Principal,
+        _: &'a Securable,
+        privilege: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        let d = if privilege == Privilege::Manage {
+            AccessDecision::Deny {
+                reason: "admins only".to_owned(),
+            }
+        } else {
+            AccessDecision::Allow
+        };
+        Box::pin(std::future::ready(Ok(d)))
+    }
+}
+
+/// Dynamic SQL needs no `Manage` on the cluster wherever it stands (review B1, design §4 N3 decisions):
+/// a script running it, `EXPLAIN ANALYZE` of it and marker text that does not parse with its markers
+/// replaced all run for a user denied `Manage`, and analyze lists no `MANAGE` for them, though their class
+/// is `ADMIN`. Literal `CLEAR CACHE` still needs `Manage`, at the top and in a script.
+#[test]
+fn dynamic_sql_needs_no_manage() {
+    let s = Session::builder()
+        .principal(Principal::new("ana", PrincipalKind::User))
+        .access_policy(Arc::new(DenyManage))
+        .build()
+        .unwrap();
+    corpus_session(&s);
+    block_on(s.sql("DECLARE stmt STRING DEFAULT 'SELECT 1'")).unwrap();
+    let run = |sql: &str| -> Result<(), KrishivError> {
+        block_on(async { s.sql(sql).await?.collect().await.map(|_| ()) })
+    };
+    // The run's outcome: `None` runs; otherwise the error class it fails with after the up-front check,
+    // which asked no `Manage` (never `KRISHIV_INSUFFICIENT_PERMISSIONS`).
+    for (sql, fails) in [
+        (
+            "BEGIN DECLARE x STRING DEFAULT 'SELECT 1'; EXECUTE IMMEDIATE x; END",
+            None,
+        ),
+        ("EXECUTE IMMEDIATE stmt", None),
+        // Not supported yet.
+        (
+            "EXPLAIN ANALYZE EXECUTE IMMEDIATE stmt",
+            Some("KRISHIV_UNSUPPORTED_FEATURE"),
+        ),
+        // Text that does not parse with its markers replaced (so `ADMIN`); bound, it names two
+        // parts, which Spark refuses as well.
+        (
+            "EXECUTE IMMEDIATE 'SELECT 1 AS IDENTIFIER(:s ''.'' :c)' USING 'd' AS s, 'c' AS c",
+            Some("IDENTIFIER_TOO_MANY_NAME_PARTS"),
+        ),
+    ] {
+        let a = block_on(s.analyze(sql)).unwrap();
+        assert_eq!(a.info.class, StatementClass::Admin, "{sql}");
+        assert!(
+            a.info
+                .securables
+                .iter()
+                .all(|u| u.privilege != Privilege::Manage),
+            "{sql}: {:?}",
+            uses(&a)
+        );
+        let outcome = run(sql).err().map(|e| e.error_class().name().to_owned());
+        assert_eq!(outcome.as_deref(), fails, "{sql}");
+    }
+    for sql in [
+        "EXECUTE IMMEDIATE 'CLEAR CACHE'",
+        "BEGIN EXECUTE IMMEDIATE 'CLEAR CACHE'; END",
+    ] {
+        let e = run(sql).unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "KRISHIV_INSUFFICIENT_PERMISSIONS",
+            "{sql}: {e}"
+        );
+    }
+}
+
+/// A partial `EXECUTE IMMEDIATE ... USING` lists the targets of its text, which parses with its markers
+/// (review m4); its reads stay unlisted.
+#[test]
+fn execute_immediate_using_lists_its_targets() {
+    let s = corpus_ready();
+    let a = block_on(
+        s.analyze("EXECUTE IMMEDIATE 'INSERT INTO t SELECT a, b, k FROM s WHERE k = ?' USING 1"),
+    )
+    .unwrap();
+    assert_eq!(a.info.class, StatementClass::Write);
+    assert!(a.partial);
+    assert_eq!(uses(&a), ["MODIFY table `spark_catalog`.`default`.`t` []"]);
+}
+
+/// Denies everything on the table `canary` once armed (its version moves with it), allows the rest.
+struct DenyCanary(std::sync::atomic::AtomicBool);
 
 impl AccessPolicy for DenyCanary {
     fn version(&self) -> PolicyVersion {
-        PolicyVersion(1)
+        PolicyVersion(u64::from(self.0.load(Ordering::SeqCst)) + 1)
     }
 
     fn check<'a>(
@@ -450,7 +552,8 @@ impl AccessPolicy for DenyCanary {
         securable: &'a Securable,
         _: Privilege,
     ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
-        let d = if matches!(securable, Securable::Table(t) if t.name.eq_ignore_ascii_case("canary"))
+        let d = if self.0.load(Ordering::SeqCst)
+            && matches!(securable, Securable::Table(t) if t.name.eq_ignore_ascii_case("canary"))
         {
             AccessDecision::Deny {
                 reason: "canary".to_owned(),
@@ -463,19 +566,31 @@ impl AccessPolicy for DenyCanary {
 }
 
 /// The analyze JSON as a surface of T062's leak matrix (design §3.5, review M3): a securable the principal
-/// has nothing on never appears in it. Every statement that would read the canary fails analysis with the
-/// 42501 a run gives (so no JSON); every other one analyzes, and its JSON never names the canary, whatever
-/// shape reached it (subqueries, temporary views, MERGE and UPDATE expressions, `EXECUTE IMMEDIATE`).
+/// has nothing on and that is not written in the statement never appears in it. Every statement that would
+/// read the canary fails analysis with the 42501 a run gives (so no JSON), whatever shape reaches it
+/// (subqueries, a temporary view, `UPDATE` and `DELETE` expressions, a multi-table `INSERT`'s shared
+/// `FROM`, `EXECUTE IMMEDIATE`); every other one analyzes, and its JSON never names the canary, the
+/// `partial` shapes that read it included (a `MERGE` subquery, `EXECUTE IMMEDIATE ... USING`: their reads
+/// are not listed at all).
+///
+/// The one exception, by design (§1, §3.5): a target (what the statement writes, creates or drops) is
+/// listed without being authorized, so the canary as a target in the user's own text appears, as the user
+/// wrote it; the JSON reveals nothing the text does not hold.
 #[test]
 fn analyze_canary_never_in_json() {
     let admin = corpus_ready();
     block_on(admin.sql("CREATE TABLE canary (a INT, k INT)")).unwrap();
+    let policy = Arc::new(DenyCanary(std::sync::atomic::AtomicBool::new(false)));
     let s = Session::builder()
         .principal(Principal::new("ana", PrincipalKind::User))
-        .access_policy(Arc::new(DenyCanary))
+        .access_policy(Arc::clone(&policy) as Arc<dyn AccessPolicy>)
         .runtime(Arc::clone(admin.runtime()))
         .build()
         .unwrap();
+    // A temporary view over the canary, made while it was readable: it is re-analyzed under the
+    // session's principal, so reading through it reads the canary.
+    block_on(s.sql("CREATE TEMPORARY VIEW over_canary AS SELECT * FROM canary")).unwrap();
+    policy.0.store(true, Ordering::SeqCst);
     let reaches = [
         "SELECT a FROM t WHERE k IN (SELECT k FROM canary)",
         "SELECT (SELECT max(a) FROM canary) AS m",
@@ -485,6 +600,9 @@ fn analyze_canary_never_in_json() {
         "EXECUTE IMMEDIATE 'SELECT * FROM canary'",
         "EXPLAIN FORMAT JSON SELECT * FROM t JOIN canary USING (k)",
         "CREATE TABLE x AS SELECT * FROM canary",
+        "CREATE TEMPORARY VIEW mine AS SELECT * FROM canary",
+        "SELECT * FROM over_canary",
+        "DELETE FROM t WHERE k = (SELECT max(k) FROM canary)",
     ];
     for sql in reaches {
         let e = block_on(s.analyze(sql)).unwrap_err();
@@ -501,11 +619,17 @@ fn analyze_canary_never_in_json() {
         "EXECUTE IMMEDIATE 'SELECT * FROM t'",
         "EXPLAIN FORMAT JSON DELETE FROM t WHERE k IN (SELECT k FROM s)",
         "SHOW TABLES",
+        // Partial: their reads are not listed, so the canary they read is not either.
+        "MERGE INTO t USING s ON t.k = (SELECT max(k) FROM canary) WHEN MATCHED THEN DELETE",
+        "EXECUTE IMMEDIATE 'SELECT * FROM canary WHERE a = ?' USING 1",
     ];
     for sql in clean {
         let json = block_on(s.analyze(sql)).unwrap().to_json();
         assert!(!json.to_lowercase().contains("canary"), "{sql}: {json}");
     }
+    // The target exception: the user's own text names it.
+    let json = block_on(s.analyze("DROP TABLE canary")).unwrap().to_json();
+    assert!(json.contains("canary"), "{json}");
 }
 
 /// Denies `Select` on table `t` (by name), allows the rest.
@@ -701,6 +825,11 @@ fn warehouse_free(s: &str) -> String {
 /// Both ways (N1b review M3): what analyze itself asks `authorize()` is also recorded, and it asks no more
 /// than the run does and nothing it does not list.
 ///
+/// An `UPDATE` or `DELETE` run, which fails with `UNSUPPORTED_FEATURE.TABLE_OPERATION` (no table can change
+/// yet), is compared too: it fails after it has asked about its reads. A `MERGE` run is not: it analyzes
+/// only `SELECT 1 FROM target` before it fails, not its source, which analyze lists (a follow-up for
+/// when MERGE runs).
+///
 /// The snapshot pins the known differences: a run of `DROP TABLE`, `INSERT` and `TRUNCATE` on a managed
 /// table also asks for its directory (`table_commands/files.rs`), which analyze does not list: the check
 /// runs only when the directory exists, on its resolved path (documented in the `analyze` module doc and
@@ -747,8 +876,14 @@ fn securables_equal_what_a_run_authorizes() {
             "{label}: {sql}\n  analyze asked but did not list: {:?}",
             analyze_asked.difference(&analyzed).collect::<Vec<_>>()
         );
-        if block_on(s.sql(&sql)).is_err() {
-            continue;
+        // `UPDATE` and `DELETE` analyze their queries, then find that the table cannot change (review
+        // m2): what they asked is compared all the same.
+        match block_on(s.sql(&sql)) {
+            Ok(_) => {}
+            Err(e)
+                if matches!(label.as_str(), "Update" | "Delete")
+                    && e.error_class().name() == "UNSUPPORTED_FEATURE.TABLE_OPERATION" => {}
+            Err(_) => continue,
         }
         let ran = asked_by(&principal);
         compared += 1;
