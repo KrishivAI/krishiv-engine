@@ -12,8 +12,9 @@
 //! included, are exactly what two separate folds give; any other batch is
 //! folded by each accumulator on its own.
 
+use super::small_fold::{SMALL_GROUPS, small_totals};
 use super::{Accumulator, AggInput, AggregateExpr, AggregateFunction, DataType, Decimals, Kind};
-use super::{arg, decimals, proven, refresh_max};
+use super::{arg, decimals, fits64_moves, proven_moves, refresh_max};
 use crate::error::Result;
 use arrow_array::{Array, ArrayRef};
 use krishiv_kernels::decimal::DecimalNative;
@@ -174,8 +175,34 @@ fn fold<N: DecimalNative>(
     sum: &mut [i128],
     state: &mut [u8],
 ) -> bool {
-    if !proven(true, bound, max_sum, v, None, Some(&Weights::Const(1))) {
+    let Some(moves) = proven_moves(true, bound, max_sum, v, None, Some(&Weights::Const(1))) else {
         return false;
+    };
+    if avg_sum.len() <= SMALL_GROUPS && sum.len() == avg_sum.len() {
+        debug_assert!(
+            groups.iter().all(|&g| (g as usize) < avg_sum.len()),
+            "a group id past the table"
+        );
+        debug_assert!(
+            count.len() == avg_sum.len() && state.len() == avg_sum.len(),
+            "the four states have one slot per group"
+        );
+        let (acc, rows) = small_totals(groups, v, fits64_moves(moves));
+        for (g, ((a, c), (s, st))) in avg_sum
+            .iter_mut()
+            .zip(count.iter_mut())
+            .zip(sum.iter_mut().zip(state.iter_mut()))
+            .enumerate()
+        {
+            *a = a.wrapping_add(acc[g]);
+            *c = c.wrapping_add(rows[g]);
+            // An overflowed sum stays NULL, as in `DecFold::sum`.
+            if rows[g] > 0 && *st != 2 {
+                *s = s.wrapping_add(acc[g]);
+                *st = 1;
+            }
+        }
+        return true;
     }
     for (&g, x) in groups.iter().zip(v) {
         let (g, x) = (g as usize, x.wide());

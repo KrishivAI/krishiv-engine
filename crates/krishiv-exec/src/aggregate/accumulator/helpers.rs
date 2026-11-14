@@ -32,13 +32,8 @@ pub(super) fn batch_abs<N: DecimalNative>(
     }
 }
 
-/// The per-batch overflow proof of a decimal `sum`/`avg` fold (design
-/// P2-T160): every stored sum is within `max_sum` and the batch moves any
-/// one group's sum by at most `Σ |w|·|v|`, so if `max_sum + Σ |w|·|v|` is
-/// below the bound, no running sum of any group leaves the bound during
-/// the batch, in any row order. The fold may then add with wrapping
-/// arithmetic and no range test, and its result is exactly the per-row
-/// path's. Proofs are local to one batch; the next batch is tested afresh.
+/// [`proven_moves`] as a yes or no (the proof tests' form).
+#[cfg(test)]
 pub(super) fn proven<N: DecimalNative>(
     enabled: bool,
     bound: Option<u128>,
@@ -47,11 +42,40 @@ pub(super) fn proven<N: DecimalNative>(
     nulls: Option<&NullBuffer>,
     w: Option<&Weights>,
 ) -> bool {
-    enabled
-        && bound.is_some_and(|b| {
-            max_sum.saturating_add(quick_abs(v, w)) < b
-                || max_sum.saturating_add(batch_abs(v, nulls, w)) < b
-        })
+    proven_moves(enabled, bound, max_sum, v, nulls, w).is_some()
+}
+
+/// The per-batch overflow proof of a decimal `sum`/`avg` fold (design
+/// P2-T160): every stored sum is within `max_sum` and the batch moves any
+/// one group's sum by at most `Σ |w|·|v|`, so if `max_sum + Σ |w|·|v|` is
+/// below the bound, no running sum of any group leaves the bound during
+/// the batch, in any row order. The fold may then add with wrapping
+/// arithmetic and no range test, and its result is exactly the per-row
+/// path's. Proofs are local to one batch; the next batch is tested afresh.
+/// Returns the bound of `Σ |w|·|v|` the proof used (over every slot when
+/// `nulls` is `None`), or `None` if the batch is not proven.
+pub(super) fn proven_moves<N: DecimalNative>(
+    enabled: bool,
+    bound: Option<u128>,
+    max_sum: u128,
+    v: &[N],
+    nulls: Option<&NullBuffer>,
+    w: Option<&Weights>,
+) -> Option<u128> {
+    let b = bound.filter(|_| enabled)?;
+    let quick = quick_abs(v, w);
+    if max_sum.saturating_add(quick) < b {
+        return Some(quick);
+    }
+    let exact = batch_abs(v, nulls, w);
+    (max_sum.saturating_add(exact) < b).then_some(exact)
+}
+
+/// Whether a batch whose `Σ |v|` is at most `moves` (see [`proven_moves`])
+/// can be totalled on 64-bit lanes: every value and every partial total of
+/// any group then fits an `i64`, so the 64-bit wrapping adds are exact.
+pub(super) fn fits64_moves(moves: u128) -> bool {
+    moves <= u128::from(i64::MAX.cast_unsigned())
 }
 
 /// A cheap upper bound of [`batch_abs`]: rows × max |v| × max |w|, with
@@ -59,10 +83,7 @@ pub(super) fn proven<N: DecimalNative>(
 /// OR + 1`, branch-free) over every slot, NULL ones included. When it is
 /// too loose (values near the bound, large values under NULLs) the caller takes the exact sum.
 pub(super) fn quick_abs<N: DecimalNative>(v: &[N], w: Option<&Weights>) -> u128 {
-    let or = v
-        .iter()
-        .fold(0_u128, |m, &x| m | x.ones_magnitude())
-        .saturating_add(1);
+    let or = N::or_magnitudes(v).saturating_add(1);
     let wmax = match w {
         None => 1,
         Some(Weights::Const(c)) => u128::from(c.unsigned_abs()),
@@ -127,9 +148,10 @@ impl DecFold<'_> {
         self.bound.is_none_or(|b| s.unsigned_abs() < b)
     }
 
-    /// Whether the batch takes the proof path (see [`proven`]).
-    pub(super) fn proven<N: DecimalNative>(&self, v: &[N]) -> bool {
-        proven(self.proofs, self.bound, self.max_sum, v, self.nulls, self.w)
+    /// Whether the batch takes the proof path, and the bound it proved (see
+    /// [`proven_moves`]).
+    pub(super) fn proven<N: DecimalNative>(&self, v: &[N]) -> Option<u128> {
+        proven_moves(self.proofs, self.bound, self.max_sum, v, self.nulls, self.w)
     }
 
     /// `sum` (`st`: 0 no value, 1 a value, 2 overflowed); a partial state
@@ -141,10 +163,11 @@ impl DecFold<'_> {
         v: &[N],
         nonempty: Option<&BooleanArray>,
     ) {
-        let fast = self.proven(v);
-        if fast && self.dense_unit() {
+        let moves = self.proven(v);
+        let fast = moves.is_some();
+        if let Some(m) = moves.filter(|_| self.dense_unit()) {
             debug_assert_eq!(v.len(), self.groups.len(), "one value per group id");
-            small_fold::dense_sum(self.groups, v, sum, st);
+            small_fold::dense_sum(self.groups, v, sum, st, fits64_moves(m));
             return;
         }
         for (i, &g) in self.groups.iter().enumerate() {
@@ -197,11 +220,12 @@ impl DecFold<'_> {
         v: &[N],
         counts: Option<&[i64]>,
     ) {
-        let fast = self.proven(v);
-        if fast && counts.is_none() && self.dense_unit() {
+        let moves = self.proven(v);
+        let fast = moves.is_some();
+        if let Some(m) = moves.filter(|_| counts.is_none() && self.dense_unit()) {
             debug_assert_eq!(v.len(), self.groups.len(), "one value per group id");
             // As in `sum`: raw rows, all valid, unit weights, proven.
-            small_fold::dense_avg(self.groups, v, sum, count);
+            small_fold::dense_avg(self.groups, v, sum, count, fits64_moves(m));
             return;
         }
         for (i, &g) in self.groups.iter().enumerate() {

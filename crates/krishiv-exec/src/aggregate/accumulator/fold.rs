@@ -125,9 +125,27 @@ impl Accumulator {
                 self.expr.function
             )));
         }
+        // Raw rows of weight 1 (or partial states), no mask, no running
+        // window: the dense kernels of `dense.rs` apply.
+        let dense = run.is_none() && mask.is_none() && (state || is_unit(w));
+        // The native integer-like values of a dense `min`/`max` argument.
+        let native = args
+            .first()
+            .filter(|_| dense && matches!(self.kind, Kind::MinMax { .. }))
+            .and_then(|a| dense::native_ints(a));
         match (&mut self.kind, state) {
             // Handled at the top of `fold`.
             (Kind::Udf(_), _) => return Err(internal("an aggregate UDF fold".to_owned())),
+            // One weight, no mask: every row counts (no NULL argument), or
+            // the rows the arguments' validity marks.
+            (Kind::Count(c), false)
+                if run.is_none() && mask.is_none() && matches!(w, Weights::Const(_)) =>
+            {
+                match dense::all_valid(&nulls) {
+                    None => small_fold::dense_count(groups, weight(w, 0), c),
+                    Some(v) => dense::count_valid(groups, &v, weight(w, 0), c),
+                }
+            }
             (Kind::Count(c), false) => {
                 for (i, &g) in groups.iter().enumerate() {
                     if active(i)
@@ -146,6 +164,12 @@ impl Accumulator {
                 for (&g, &v) in groups.iter().zip(s.iter()) {
                     let x = &mut c[g as usize];
                     *x = x.wrapping_add(v);
+                }
+            }
+            (Kind::SumInt { sum, seen }, _) if dense => {
+                let v = ints(args[0])?;
+                if dense::sum_i64(groups, &v, first, sum, seen) && ansi {
+                    return Err(long_overflow());
                 }
             }
             (Kind::SumInt { sum, seen }, _) => {
@@ -173,6 +197,10 @@ impl Accumulator {
                     }
                     snapshot!(i, sum, seen);
                 }
+            }
+            (Kind::SumFloat { sum, seen }, _) if dense => {
+                let v = floats(args[0])?;
+                dense::sum_f64(groups, &v, first, sum, dense::Tally::Seen(seen));
             }
             (Kind::SumFloat { sum, seen }, _) => {
                 let a = args[0];
@@ -337,6 +365,10 @@ impl Accumulator {
                     Decimals::I128(v) => f.sum(sum, st, v, nonempty),
                 }
             }
+            (Kind::AvgFloat { sum, count }, false) if dense => {
+                let v = floats(args[0])?;
+                dense::sum_f64(groups, &v, first, sum, dense::Tally::Count(count));
+            }
             (Kind::AvgFloat { sum, count }, _) => {
                 let a = args[0];
                 let v = floats(a)?;
@@ -380,6 +412,20 @@ impl Accumulator {
                     Decimals::I64(v) => f.avg(sum, count, overflow, v, counts.as_deref()),
                     Decimals::I128(v) => f.avg(sum, count, overflow, v, counts.as_deref()),
                 }
+            }
+            (
+                Kind::MinMax {
+                    max,
+                    values: Values::Int(vals),
+                    set,
+                    ..
+                },
+                _,
+            ) if native.is_some() => {
+                let Some(v) = native.as_ref() else {
+                    return Err(internal("a dense min/max without values".to_owned()));
+                };
+                dense::extremum(*max, groups, v, first, vals, set);
             }
             (
                 Kind::MinMax {

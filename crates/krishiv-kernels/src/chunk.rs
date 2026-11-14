@@ -28,22 +28,24 @@ use crate::unsafe_dispatch::{Kernel, run, scalar_loops};
 /// Rows per chunk: one validity word.
 pub(crate) const CHUNK: usize = 64;
 
-/// An elementwise operation on two lanes of native `T`, with results of
-/// native [`LaneOp::Out`] (the same as `T` except for decimal lanes, whose
-/// inputs and result may use different carriers).
-pub(crate) trait LaneOp<T>: Copy {
+/// An elementwise operation on a lane of native `A` and one of native `B`
+/// (the same as `A` except for decimal lanes over a `Decimal64` and a
+/// `Decimal128` operand), with results of native [`LaneOp::Out`] (the same
+/// as `A` except for decimal lanes, whose inputs and result may use
+/// different carriers).
+pub(crate) trait LaneOp<A, B = A>: Copy {
     /// The result native.
     type Out: Copy + Default;
     /// Whether the operation can fault with [`Fault::DivideByZero`].
     const MAY_DIVIDE_BY_ZERO: bool = false;
     /// The result without checks. Total: never panics.
-    fn wrapping(self, a: T, b: T) -> Self::Out;
+    fn wrapping(self, a: A, b: B) -> Self::Out;
     /// The result and a cheap flag that is set for every faulting row (it
     /// may also be set for a good one; [`LaneOp::fault`] decides).
-    fn checked(self, a: T, b: T) -> (Self::Out, bool);
+    fn checked(self, a: A, b: B) -> (Self::Out, bool);
     /// The exact verdict for a row whose flag was set (slow path). For a row
     /// without a fault, the value [`LaneOp::checked`] returned must be exact.
-    fn fault(self, a: T, b: T) -> Option<Fault>;
+    fn fault(self, a: A, b: B) -> Option<Fault>;
 }
 
 /// One operand reduced to its values.
@@ -78,14 +80,14 @@ impl<'a, T: Copy> Side<'a, T> {
 
 /// Operands resolved once per batch.
 #[derive(Debug)]
-pub(crate) enum Resolved<'a, T> {
+pub(crate) enum Resolved<'a, T, U = T> {
     /// A NULL scalar: every row is NULL and nothing is computed.
     AllNull(usize),
     /// Values to compute, with the union of the input validities (only
     /// present when some row is NULL).
     Lanes {
         l: Side<'a, T>,
-        r: Side<'a, T>,
+        r: Side<'a, U>,
         nulls: Option<NullBuffer>,
         len: usize,
     },
@@ -97,6 +99,15 @@ pub(crate) fn resolve<'a, P: ArrowPrimitiveType>(
     l: Operand<'a, P>,
     r: Operand<'a, P>,
 ) -> Result<Resolved<'a, P::Native>, KernelError> {
+    resolve_mixed(l, r)
+}
+
+/// [`resolve`] for operands of two Arrow types (a `Decimal64` against a
+/// `Decimal128` column).
+pub(crate) fn resolve_mixed<'a, P: ArrowPrimitiveType, Q: ArrowPrimitiveType>(
+    l: Operand<'a, P>,
+    r: Operand<'a, Q>,
+) -> Result<Resolved<'a, P::Native, Q::Native>, KernelError> {
     let len = match (l, r) {
         (Operand::Array(a), Operand::Array(b)) if a.len() != b.len() => {
             return Err(KernelError::internal(format!(
@@ -105,22 +116,15 @@ pub(crate) fn resolve<'a, P: ArrowPrimitiveType>(
                 b.len()
             )));
         }
-        (Operand::Array(a), _) | (_, Operand::Array(a)) => a.len(),
+        (Operand::Array(a), _) => a.len(),
+        (_, Operand::Array(b)) => b.len(),
         (Operand::Scalar(_), Operand::Scalar(_)) => {
             return Err(KernelError::internal(
                 "binary kernel needs at least one array operand",
             ));
         }
     };
-    let side = |o: Operand<'a, P>| match o {
-        Operand::Array(a) => Some((
-            Side::Array(a.values().as_ref()),
-            a.nulls().filter(|n| n.null_count() > 0),
-        )),
-        Operand::Scalar(Some(v)) => Some((Side::Scalar(v), None)),
-        Operand::Scalar(None) => None,
-    };
-    let (Some((l, ln)), Some((r, rn))) = (side(l), side(r)) else {
+    let (Some((l, ln)), Some((r, rn))) = (side_of(l), side_of(r)) else {
         return Ok(Resolved::AllNull(len));
     };
     Ok(Resolved::Lanes {
@@ -129,6 +133,21 @@ pub(crate) fn resolve<'a, P: ArrowPrimitiveType>(
         nulls: NullBuffer::union(ln, rn),
         len,
     })
+}
+
+/// An operand's values and its validity when some row is NULL; `None` for
+/// a NULL scalar.
+fn side_of<P: ArrowPrimitiveType>(
+    o: Operand<'_, P>,
+) -> Option<(Side<'_, P::Native>, Option<&NullBuffer>)> {
+    match o {
+        Operand::Array(a) => Some((
+            Side::Array(a.values().as_ref()),
+            a.nulls().filter(|n| n.null_count() > 0),
+        )),
+        Operand::Scalar(Some(v)) => Some((Side::Scalar(v), None)),
+        Operand::Scalar(None) => None,
+    }
 }
 
 /// The values of a chunk computation and the output validity (the input
@@ -140,7 +159,7 @@ pub(crate) struct Computed<T> {
 }
 
 /// Whether policy `O` must check lane op `L` at all.
-fn checks<T, L: LaneOp<T>, O: Overflow>() -> bool {
+fn checks<A, B, L: LaneOp<A, B>, O: Overflow>() -> bool {
     O::MODE.action(Fault::Overflow) != Action::Wrap || L::MAY_DIVIDE_BY_ZERO
 }
 
@@ -160,11 +179,31 @@ where
     L: LaneOp<T>,
     O: Overflow,
 {
+    compute_mixed::<T, T, L, O>(ctx, l, r, nulls, len, op, raise)
+}
+
+/// [`compute`] over sides of two natives (a decimal `Decimal64` column
+/// against a `Decimal128` one, without widening a copy first).
+pub(crate) fn compute_mixed<A, B, L, O>(
+    ctx: &impl Dispatch,
+    l: Side<'_, A>,
+    r: Side<'_, B>,
+    nulls: Option<NullBuffer>,
+    len: usize,
+    op: L,
+    raise: impl FnOnce(usize, Fault) -> KernelError,
+) -> Result<Computed<L::Out>, KernelError>
+where
+    A: Copy + Default,
+    B: Copy + Default,
+    L: LaneOp<A, B>,
+    O: Overflow,
+{
     let mut out = with_capacity::<L::Out>(len)?;
     let n_words = len.div_ceil(CHUNK);
     // Space for one NULL-row word per chunk, reserved up front so the loop
     // never allocates. Only policies that can turn a row NULL need it.
-    let may_null = checks::<T, L, O>()
+    let may_null = checks::<A, B, L, O>()
         && (O::MODE.action(Fault::Overflow) == Action::Null
             || (L::MAY_DIVIDE_BY_ZERO && O::MODE.action(Fault::DivideByZero) == Action::Null));
     let mut null_words = with_capacity::<u64>(if may_null { n_words } else { 0 })?;
@@ -173,7 +212,7 @@ where
         ($ls:literal, $rs:literal, $l:expr, $r:expr) => {
             run(
                 ctx,
-                Chunks::<'_, T, L, O, $ls, $rs> {
+                Chunks::<'_, A, B, L, O, $ls, $rs> {
                     l: $l,
                     r: $r,
                     validity: n,
@@ -234,9 +273,9 @@ fn low_bits(n: usize) -> u64 {
 }
 
 /// The chunk loop for one monomorph; `run` compiles it per CPU target.
-struct Chunks<'a, T, L: LaneOp<T>, O, const L_SCALAR: bool, const R_SCALAR: bool> {
-    l: Side<'a, T>,
-    r: Side<'a, T>,
+struct Chunks<'a, A, B, L: LaneOp<A, B>, O, const L_SCALAR: bool, const R_SCALAR: bool> {
+    l: Side<'a, A>,
+    r: Side<'a, B>,
     validity: Option<&'a NullBuffer>,
     /// Empty, with capacity for `len` values.
     out: &'a mut Vec<L::Out>,
@@ -267,11 +306,12 @@ struct ChunkFaults {
     raise: Option<(u32, Fault)>,
 }
 
-impl<T, L, O, const L_SCALAR: bool, const R_SCALAR: bool> Kernel
-    for Chunks<'_, T, L, O, L_SCALAR, R_SCALAR>
+impl<A, B, L, O, const L_SCALAR: bool, const R_SCALAR: bool> Kernel
+    for Chunks<'_, A, B, L, O, L_SCALAR, R_SCALAR>
 where
-    T: Copy + Default,
-    L: LaneOp<T>,
+    A: Copy + Default,
+    B: Copy + Default,
+    L: LaneOp<A, B>,
     O: Overflow,
 {
     /// The first raised `(row, fault)`, if any.
@@ -279,10 +319,10 @@ where
 
     #[inline(always)]
     fn run(self) -> Self::Output {
-        let checks = checks::<T, L, O>();
+        let checks = checks::<A, B, L, O>();
         let (lc, lt, ls) = split(self.l);
         let (rc, rt, rs) = split(self.r);
-        let zero = [T::default(); CHUNK];
+        let (zero_a, zero_b) = ([A::default(); CHUNK], [B::default(); CHUNK]);
         let full = self.len / CHUNK;
         let chunks = self.validity.map(|v| v.inner().bit_chunks());
         let mut valid = chunks.as_ref().map(BitChunks::iter_padded);
@@ -296,10 +336,11 @@ where
                 .map(|(bit, fault)| (word.wrapping_mul(CHUNK).wrapping_add(bit as usize), fault))
         };
         for i in 0..full {
-            let a = lc.get(i).unwrap_or(&zero);
-            let b = rc.get(i).unwrap_or(&zero);
-            let flags =
-                chunk::<T, L, L_SCALAR, R_SCALAR>(a, ls, b, rs, self.out, CHUNK, self.op, checks);
+            let a = lc.get(i).unwrap_or(&zero_a);
+            let b = rc.get(i).unwrap_or(&zero_b);
+            let flags = chunk::<A, B, L, L_SCALAR, R_SCALAR>(
+                a, ls, b, rs, self.out, CHUNK, self.op, checks,
+            );
             if !checks {
                 continue;
             }
@@ -309,7 +350,7 @@ where
             let f = if flags & valid == 0 {
                 ChunkFaults::default()
             } else {
-                faults::<T, L, O, L_SCALAR, R_SCALAR>(a, ls, b, rs, self.op, valid)
+                faults::<A, B, L, O, L_SCALAR, R_SCALAR>(a, ls, b, rs, self.op, valid)
             };
             if let Some(raised) = record(i, f) {
                 return Some(raised);
@@ -317,17 +358,18 @@ where
         }
         let rem = self.len.wrapping_sub(full.wrapping_mul(CHUNK));
         if rem > 0 {
-            let (mut a, mut b) = (zero, zero);
+            let (mut a, mut b) = (zero_a, zero_b);
             copy_prefix(&mut a, lt);
             copy_prefix(&mut b, rt);
-            let flags =
-                chunk::<T, L, L_SCALAR, R_SCALAR>(&a, ls, &b, rs, self.out, rem, self.op, checks);
+            let flags = chunk::<A, B, L, L_SCALAR, R_SCALAR>(
+                &a, ls, &b, rs, self.out, rem, self.op, checks,
+            );
             if checks {
                 let valid = next_valid() & low_bits(rem);
                 let f = if flags & valid == 0 {
                     ChunkFaults::default()
                 } else {
-                    faults::<T, L, O, L_SCALAR, R_SCALAR>(&a, ls, &b, rs, self.op, valid)
+                    faults::<A, B, L, O, L_SCALAR, R_SCALAR>(&a, ls, &b, rs, self.op, valid)
                 };
                 return record(full, f);
             }
@@ -352,21 +394,22 @@ fn copy_prefix<T: Copy>(dst: &mut [T; CHUNK], src: &[T]) {
     reason = "the hot loop takes its operands unpacked so it inlines into each clone"
 )]
 #[inline(always)]
-fn chunk<T, L, const L_SCALAR: bool, const R_SCALAR: bool>(
-    a: &[T; CHUNK],
-    ls: T,
-    b: &[T; CHUNK],
-    rs: T,
+fn chunk<A, B, L, const L_SCALAR: bool, const R_SCALAR: bool>(
+    a: &[A; CHUNK],
+    ls: A,
+    b: &[B; CHUNK],
+    rs: B,
     out: &mut Vec<L::Out>,
     take: usize,
     op: L,
     checks: bool,
 ) -> u64
 where
-    T: Copy,
-    L: LaneOp<T>,
+    A: Copy,
+    B: Copy,
+    L: LaneOp<A, B>,
 {
-    let pick = move |x: T, y: T| (if L_SCALAR { ls } else { x }, if R_SCALAR { rs } else { y });
+    let pick = move |x: A, y: B| (if L_SCALAR { ls } else { x }, if R_SCALAR { rs } else { y });
     let lanes = a.iter().zip(b).take(take);
     if !checks {
         out.extend(lanes.map(|(&x, &y)| {
@@ -405,17 +448,18 @@ where
 /// zeros past the end of the data), so NULL and padding rows never raise.
 #[cold]
 #[inline(never)]
-fn faults<T, L, O, const L_SCALAR: bool, const R_SCALAR: bool>(
-    a: &[T; CHUNK],
-    ls: T,
-    b: &[T; CHUNK],
-    rs: T,
+fn faults<A, B, L, O, const L_SCALAR: bool, const R_SCALAR: bool>(
+    a: &[A; CHUNK],
+    ls: A,
+    b: &[B; CHUNK],
+    rs: B,
     op: L,
     valid: u64,
 ) -> ChunkFaults
 where
-    T: Copy,
-    L: LaneOp<T>,
+    A: Copy,
+    B: Copy,
+    L: LaneOp<A, B>,
     O: Overflow,
 {
     let mut f = ChunkFaults::default();

@@ -1083,6 +1083,13 @@ impl Accumulator {
 
 mod small_fold;
 
+mod dense;
+
+/// The dense folds against the per-row loop.
+#[cfg(test)]
+#[cfg(not(loom))]
+mod dense_tests;
+
 #[cfg(test)]
 #[cfg(not(loom))]
 mod differential;
