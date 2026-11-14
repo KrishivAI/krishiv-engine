@@ -780,11 +780,8 @@ impl Session {
                 ))
             })
             .collect::<Result<Vec<_>, KrishivError>>()?;
-        if columns.is_empty() {
-            return Err(unsupported(
-                "datasource views without declared column types",
-            ));
-        }
+        // No column list: Spark reads the schema from the files when the view is created (SQL-19, RS-8).
+        let infer = columns.is_empty();
         let mut options = options_of(refuse_secret_options(&v.options, original)?, original);
         let path_key = options
             .keys()
@@ -826,6 +823,26 @@ impl Session {
                 .into());
             }
         }
+        let columns = if infer {
+            let plain: Vec<&str> = paths.iter().filter_map(OptionValue::as_plain).collect();
+            if plain.is_empty() {
+                return Err(unsupported(
+                    "datasource views without declared column types",
+                ));
+            }
+            let inferred = self.infer_file_columns(&provider, &plain, &options).await?;
+            if inferred.is_empty() {
+                return Err(unsupported(
+                    "datasource views without declared column types",
+                ));
+            }
+            inferred
+                .into_iter()
+                .map(|c| TableColumn::new(c.name, c.data_type, true))
+                .collect()
+        } else {
+            columns
+        };
         let source = krishiv_plan::ReadSource::Files {
             format: provider,
             paths,
@@ -850,6 +867,38 @@ impl Session {
         // A replaced view must not keep serving the rows of the old one.
         self.state.cache.invalidate_table(name);
         self.empty_frame().await
+    }
+
+    /// The columns Spark infers for `USING <format>` over `paths` when a table or view is created without a column list: what
+    /// a read of the same files with the same options returns (CSV `header` and `inferSchema` included).
+    ///
+    /// # Errors
+    /// The read's: a missing path, an unreadable file, an unknown format.
+    pub(crate) async fn infer_file_columns(
+        &self,
+        format: &str,
+        paths: &[&str],
+        options: &BTreeMap<String, String>,
+    ) -> Result<Vec<StoreColumn>, KrishivError> {
+        let mut reader = self.read().format(format);
+        for (k, v) in options {
+            reader = reader.option(k, v);
+        }
+        let schema = reader.load(paths.iter().copied()).schema().await?;
+        schema
+            .fields()
+            .iter()
+            .map(|f| {
+                Ok(StoreColumn {
+                    name: f.name().clone(),
+                    data_type: krishiv_types::DataType::from_arrow_field(f)?,
+                    nullable: true,
+                    default: None,
+                    comment: None,
+                    char_varchar: None,
+                })
+            })
+            .collect()
     }
 
     /// `DROP VIEW global_temp.name`: the global temporary view, when the name is one.

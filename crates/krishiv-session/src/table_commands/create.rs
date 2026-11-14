@@ -169,9 +169,32 @@ impl Session {
                         c.comment.clone(),
                     )?);
                 }
-                if table.columns.is_empty() {
-                    return Err(unsupported("CREATE TABLE without columns"));
-                }
+                // `CREATE TABLE t USING fmt LOCATION 'dir'` without columns: Spark reads the schema, and the partition
+                // columns of `key=value` directories, from the files (SQL-19).
+                let discovered: Vec<String> = if table.columns.is_empty() {
+                    if !external {
+                        return Err(unsupported("CREATE TABLE without columns"));
+                    }
+                    let location = table.location.to_string_lossy().into_owned();
+                    table.columns = self
+                        .infer_file_columns(&table.provider, &[location.as_str()], &table.options)
+                        .await?;
+                    if table.columns.is_empty() {
+                        return Err(unsupported("CREATE TABLE without columns"));
+                    }
+                    if layout.partition_by.is_empty() {
+                        crate::partitions::partition_keys(&table.location)
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    Vec::new()
+                };
+                let partition_by: &[String] = if discovered.is_empty() {
+                    layout.partition_by
+                } else {
+                    &discovered
+                };
                 krishiv_io::check_declared_schema(
                     &table.provider,
                     &arrow_schema::Schema::new(
@@ -185,7 +208,7 @@ impl Session {
                 table.layout = crate::partitions::table_layout(
                     &name,
                     &mut table.columns,
-                    layout.partition_by,
+                    partition_by,
                     layout.bucket,
                     env.analysis.conf.case_sensitive,
                 )?;

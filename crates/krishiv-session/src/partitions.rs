@@ -1276,9 +1276,11 @@ impl Session {
             return Ok(());
         }
         if !table.managed {
-            return Err(unsupported(
-                "ALTER TABLE ... DROP PARTITION of an external table",
-            ));
+            // An external table's files are not the catalog's to delete: Spark drops the partitions' metadata only (SQL-19).
+            return match self.swap_without(table, name, &hit) {
+                Swap::Done => Ok(()),
+                Swap::Lost | Swap::Gone => Err(crate::table_commands::concurrent_change(name)),
+            };
         }
         if let Some(p) = gone
             .iter()
@@ -1797,6 +1799,37 @@ fn resolves_in_place(location: &Path, path: &Path) -> bool {
             Err(_) => return false,
         }
     }
+}
+
+/// The partition columns of the files under the local directory `location`: the key of each level of `key=value`
+/// directories, following the first directory (by path) at each level. Empty for a path that is not a local directory.
+/// Spark takes a table's partition columns from them when `CREATE TABLE ... USING fmt LOCATION` has no column list.
+pub(crate) fn partition_keys(location: &Path) -> Vec<String> {
+    let mut dir = location.to_path_buf();
+    let mut keys: Vec<String> = Vec::new();
+    loop {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            break;
+        };
+        let mut next: Option<(String, PathBuf)> = None;
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if e.path().is_dir()
+                && let Some((k, _)) = name.split_once('=')
+                && !k.is_empty()
+                && next.as_ref().is_none_or(|(_, p)| e.path() < *p)
+            {
+                next = Some((k.to_owned(), e.path()));
+            }
+        }
+        let Some((key, path)) = next else { break };
+        if keys.iter().any(|k| k.eq_ignore_ascii_case(&key)) {
+            break;
+        }
+        keys.push(key);
+        dir = path;
+    }
+    keys
 }
 
 #[cfg(test)]

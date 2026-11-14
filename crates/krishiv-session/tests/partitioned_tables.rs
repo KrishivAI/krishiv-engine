@@ -2288,10 +2288,9 @@ fn rename_partition_refuses_a_partition_outside_its_default_directory() {
     assert_eq!(rows(&s, "show partitions ro"), ["p=2", "p=4"]);
 }
 
-/// Spark keeps an external table's files of a dropped partition and stops reading them; the engine's reads refuse
-/// a directory the catalog does not know, so the drop is refused and changes nothing.
+/// Spark drops an external table's partition from the catalog and keeps its files; the table stops reading them (SQL-19).
 #[test]
-fn drop_partition_of_an_external_table_is_refused() {
+fn drop_partition_of_an_external_table_forgets_it_and_keeps_its_files() {
     let dir = tempfile::tempdir().unwrap();
     let s = session(dir.path());
     let ext = tempfile::tempdir().unwrap();
@@ -2303,17 +2302,22 @@ fn drop_partition_of_an_external_table_is_refused() {
         ),
     );
     run(&s, "insert into e values (1,1),(2,2)");
+    run(&s, "alter table e drop partition (p=1)");
+    assert_eq!(rows(&s, "show partitions e"), ["p=2"]);
     assert_eq!(
-        class(&s, "alter table e drop partition (p=1)"),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        rows(&s, "select cast(x as string) from e order by x"),
+        ["2"]
     );
-    assert_eq!(rows(&s, "show partitions e"), ["p=1", "p=2"]);
-    // A missing spec is still reported first, and IF EXISTS over nothing changes nothing.
+    assert!(ext.path().join("p=1").is_dir(), "the files stay");
+    // A missing spec is still reported, and IF EXISTS over nothing changes nothing.
     assert_eq!(
         class(&s, "alter table e drop partition (p=9)"),
         "PARTITIONS_NOT_FOUND"
     );
     run(&s, "alter table e drop if exists partition (p=9)");
+    // MSCK REPAIR TABLE registers the kept directory again
+    run(&s, "msck repair table e");
+    assert_eq!(rows(&s, "show partitions e"), ["p=1", "p=2"]);
 }
 
 /// The commit log forgets a dropped partition's files in one entry, so a read of the table does not list them.
