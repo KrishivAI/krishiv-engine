@@ -193,9 +193,13 @@ pub(crate) fn block_chunks(
         // Held now: the block, and the last chunk while its tail lives
         // (`old + excess >= new`).
         m.shrink(old + excess + freed - new);
+        // Chunks past `last` (held while an earlier cut could not be
+        // reserved) are not in the block: they stay, after its tail.
+        let rest: Vec<Batch> = chunks.drain(last + 1..).collect();
         chunks.truncate(from);
         chunks.push(block);
         chunks.extend(tail);
+        chunks.extend(rest);
     }
 }
 
@@ -458,6 +462,55 @@ mod tests {
             "{} reserved, {held} held",
             parts[0].bytes()
         );
+        drop(parts);
+        assert_eq!(pool.reserved(), 0);
+    }
+
+    /// Chunks held past the one that fills a block (a cut skipped while its
+    /// copy could not be reserved, then more chunks pushed; a grace reload
+    /// under pressure) stay: the cut drops only the chunks it copied. Three
+    /// chunks of 10,000 rows give a block, the second's tail and the third.
+    #[test]
+    fn chunks_past_the_block_are_kept() {
+        let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+        let id = pool.register("past-the-block", None);
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+        let mut parts = vec![Part::with_memory(krishiv_memory::Reservation::new(
+            Arc::clone(&pool),
+            id,
+        ))];
+        let mut next = 0i64;
+        for _ in 0..3 {
+            let c = Batch::new(
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(Int64Array::from_iter_values(next..next + 10_000))],
+                )
+                .unwrap(),
+            );
+            next += 10_000;
+            reserve_chunks(&mut parts, &[(0, c.clone())]).unwrap();
+            parts[0].chunks.push(c);
+        }
+        let part = &mut parts[0];
+        let Some(m) = part.memory.first_mut() else {
+            panic!("no reservation");
+        };
+        block_chunks(&mut part.chunks, m, &schema).unwrap();
+        let mut keys: Vec<i64> = parts[0]
+            .chunks
+            .iter()
+            .flat_map(|c| {
+                let k = c
+                    .data()
+                    .column(0)
+                    .as_primitive::<arrow_array::types::Int64Type>();
+                k.values().to_vec()
+            })
+            .collect();
+        keys.sort_unstable();
+        assert!(keys.into_iter().eq(0..next), "rows lost or duplicated");
+        assert_eq!(parts[0].chunks[0].num_rows(), ARENA_ROWS);
         drop(parts);
         assert_eq!(pool.reserved(), 0);
     }
