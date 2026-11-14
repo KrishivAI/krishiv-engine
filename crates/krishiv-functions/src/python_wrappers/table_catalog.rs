@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! PySpark functions added to the wrapper table after the first batch, each one `pyspark.sql.functions`
 //! signature of Spark 4.2.0. A function the registry implements calls it; one that only Spark's catalog
-//! lists (sketches, bitmaps, `xpath`, `like`, `grouping`, ...) is sent by name all the same, so the
-//! analyzer answers with its unsupported-function error until the registry gains it.
+//! lists (sketches, bitmaps, `xpath`, `like`, `grouping`, ...) gets a wrapper that raises the unsupported-feature
+//! error when called, until the registry gains it.
 
 use super::Row;
 

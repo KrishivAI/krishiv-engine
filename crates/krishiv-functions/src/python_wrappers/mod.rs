@@ -40,6 +40,7 @@ const HELPERS: &[&str] = &[
     "_one_of",
     "_opt",
     "_opts",
+    "_unsupported",
 ];
 
 /// The generated files.
@@ -327,7 +328,7 @@ fn natural_cmp(a: &str, b: &str) -> Ordering {
 }
 
 /// One wrapper: the definition, and its stub.
-fn render_function(row: &Row, params: &[Param]) -> (String, String) {
+fn render_function(row: &Row, params: &[Param], unsupported: bool) -> (String, String) {
     let declarations: Vec<String> = params.iter().map(Param::declaration).collect();
     let head = format!("def {}(", row.py);
     let mut args: Vec<String> = params
@@ -372,6 +373,15 @@ fn render_function(row: &Row, params: &[Param]) -> (String, String) {
     }
     args.insert(0, format!("\"{}\"", row.registry));
     let mut body = String::new();
+    if unsupported {
+        body.push_str(&format!(
+            "    \"\"\"Not supported by the engine yet: calling it raises ``UnsupportedOperationException``.\"\"\"\n    raise _unsupported(\"{}\")\n",
+            row.py
+        ));
+        let def = format!("{}\n{body}", wrap(&head, &declarations, ") -> Column:", 0));
+        let stub = wrap(&head, &declarations, ") -> Column: ...", 0);
+        return (def, stub);
+    }
     let doc = if row.deprecated.is_some() {
         format!(
             "Deprecated alias; calls the registry function ``{}``.",
@@ -425,6 +435,19 @@ fn render_function(row: &Row, params: &[Param]) -> (String, String) {
 /// Returns a message when a registered function has neither a PySpark signature nor an entry in the
 /// not-exported or hand-written lists, or when the table is malformed.
 pub(crate) fn generate(registered: &BTreeSet<&str>) -> Result<Generated, String> {
+    generate_with(registered, &BTreeSet::new())
+}
+
+/// As [`generate`]; the wrappers of the functions in `unsupported` (named in Spark's catalog, not
+/// registered: they are in `registered` too, so they get a signature) raise the engine's
+/// unsupported-feature error when called, instead of building a call the analyzer refuses.
+///
+/// # Errors
+/// As [`generate`].
+pub(crate) fn generate_with(
+    registered: &BTreeSet<&str>,
+    unsupported: &BTreeSet<&str>,
+) -> Result<Generated, String> {
     let rows = table::rows();
     let known: BTreeSet<&str> = rows
         .iter()
@@ -456,7 +479,7 @@ pub(crate) fn generate(registered: &BTreeSet<&str>) -> Result<Generated, String>
     let names: Vec<String> = chosen.iter().map(|(r, _)| r.py.to_owned()).collect();
     let (defs, stubs): (Vec<String>, Vec<String>) = chosen
         .iter()
-        .map(|(row, params)| render_function(row, params))
+        .map(|(row, params)| render_function(row, params, unsupported.contains(row.registry)))
         .unzip();
     let body = defs.join("\n\n");
     let imports: String = HELPERS
@@ -465,6 +488,12 @@ pub(crate) fn generate(registered: &BTreeSet<&str>) -> Result<Generated, String>
         .map(|h| format!("    {h},\n"))
         .collect();
     let all: String = names.iter().map(|n| format!("    \"{n}\",\n")).collect();
+    // The names whose wrapper raises the unsupported-feature error (the tests read this list).
+    let unsupported_names: String = chosen
+        .iter()
+        .filter(|(r, _)| unsupported.contains(r.registry))
+        .map(|(r, _)| format!("    \"{}\",\n", r.py))
+        .collect();
     // `Any` (a literal of any type, as `lag`'s default) needs its import.
     let typing = if body.contains(": Any") {
         "from typing import Any\n\n"
@@ -480,13 +509,14 @@ pub(crate) fn generate(registered: &BTreeSet<&str>) -> Result<Generated, String>
          from __future__ import annotations\n\n{typing}\
          from krishiv.sql._function_support import (\n    ColumnOrName,\n{imports})\n\
          from krishiv.sql.column import Column\n\n\
-         __all__ = [\n{all}]\n\n\n{body}"
+         __all__ = [\n{all}]\n\n\
+         _ENGINE_UNSUPPORTED = (\n{unsupported_names})\n\n\n{body}"
     );
     let pyi = format!(
         "# SPDX-License-Identifier: Apache-2.0\n{marker}\n\
          {typing}from krishiv.sql._function_support import ColumnOrName\n\
          from krishiv.sql.column import Column\n\n\
-         __all__ = [\n{all}]\n\n{}\n",
+         __all__ = [\n{all}]\n\n_ENGINE_UNSUPPORTED: tuple[str, ...]\n\n{}\n",
         stubs.join("\n")
     );
     Ok(Generated { py, pyi, names })
@@ -499,6 +529,7 @@ pub(crate) fn generate(registered: &BTreeSet<&str>) -> Result<Generated, String>
 pub(crate) fn generate_for_registry() -> Result<Generated, String> {
     let registry = crate::registry::builtins();
     let mut names: BTreeSet<&str> = registry.functions().iter().map(|d| d.name).collect();
+    let implemented = names.clone();
     // A function only Spark's catalog lists is wrapped too: the call reaches the analyzer, which refuses
     // it as unsupported until the registry implements it.
     names.extend(
@@ -507,7 +538,12 @@ pub(crate) fn generate_for_registry() -> Result<Generated, String> {
             .map(|r| r.registry)
             .filter(|n| registry.spark_function(n).is_some()),
     );
-    generate(&names)
+    let unsupported: BTreeSet<&str> = names
+        .difference(&implemented)
+        .copied()
+        .filter(|n| !table::ANALYZER_HANDLED.contains(n))
+        .collect();
+    generate_with(&names, &unsupported)
 }
 
 /// The generated files under `root` (the workspace root) that differ from the registry's output.

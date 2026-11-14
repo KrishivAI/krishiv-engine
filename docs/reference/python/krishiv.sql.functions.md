@@ -277,7 +277,7 @@ Calls the registry function `arrays_zip`.
 ### `arrow_udtf`
 
 ```python
-def arrow_udtf(cls: Any=None) -> Column
+def arrow_udtf(cls: Any=None, *, returnType: Any=None) -> Any
 ```
 
 Not available: table UDFs (UDTF) are not implemented.
@@ -438,7 +438,7 @@ Calls the registry function `bit_xor`.
 def bitmap_and_agg(col: ColumnOrName) -> Column
 ```
 
-Calls the registry function `bitmap_and_agg`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `bitmap_bit_position`
 
@@ -446,7 +446,7 @@ Calls the registry function `bitmap_and_agg`.
 def bitmap_bit_position(col: ColumnOrName) -> Column
 ```
 
-Calls the registry function `bitmap_bit_position`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `bitmap_bucket_number`
 
@@ -454,7 +454,7 @@ Calls the registry function `bitmap_bit_position`.
 def bitmap_bucket_number(col: ColumnOrName) -> Column
 ```
 
-Calls the registry function `bitmap_bucket_number`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `bitmap_construct_agg`
 
@@ -462,7 +462,7 @@ Calls the registry function `bitmap_bucket_number`.
 def bitmap_construct_agg(col: ColumnOrName) -> Column
 ```
 
-Calls the registry function `bitmap_construct_agg`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `bitmap_count`
 
@@ -470,7 +470,7 @@ Calls the registry function `bitmap_construct_agg`.
 def bitmap_count(col: ColumnOrName) -> Column
 ```
 
-Calls the registry function `bitmap_count`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `bitmap_or_agg`
 
@@ -478,7 +478,7 @@ Calls the registry function `bitmap_count`.
 def bitmap_or_agg(col: ColumnOrName) -> Column
 ```
 
-Calls the registry function `bitmap_or_agg`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `bitwiseNOT`
 
@@ -646,7 +646,7 @@ The column named `col` (`a`, `t.a`, `*`).
 def collate(col: ColumnOrName, collation: str) -> Column
 ```
 
-Calls the registry function `collate`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `collation`
 
@@ -772,7 +772,7 @@ Calls the registry function `count_if`.
 def count_min_sketch(col: ColumnOrName, eps: Column | float, confidence: Column | float, seed: Column | int | None=None) -> Column
 ```
 
-Calls the registry function `count_min_sketch`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `covar_pop`
 
@@ -1379,7 +1379,7 @@ Calls the registry function `hex`.
 def histogram_numeric(col: ColumnOrName, nBins: Column) -> Column
 ```
 
-Calls the registry function `histogram_numeric`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `hll_sketch_agg`
 
@@ -1387,7 +1387,7 @@ Calls the registry function `histogram_numeric`.
 def hll_sketch_agg(col: ColumnOrName, lgConfigK: Column | int | None=None) -> Column
 ```
 
-Calls the registry function `hll_sketch_agg`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `hll_sketch_estimate`
 
@@ -1395,7 +1395,7 @@ Calls the registry function `hll_sketch_agg`.
 def hll_sketch_estimate(col: ColumnOrName) -> Column
 ```
 
-Calls the registry function `hll_sketch_estimate`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `hll_union`
 
@@ -1403,7 +1403,7 @@ Calls the registry function `hll_sketch_estimate`.
 def hll_union(col1: ColumnOrName, col2: ColumnOrName, allowDifferentLgConfigK: bool | None=None) -> Column
 ```
 
-Calls the registry function `hll_union`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `hll_union_agg`
 
@@ -1411,7 +1411,7 @@ Calls the registry function `hll_union`.
 def hll_union_agg(col: ColumnOrName, allowDifferentLgConfigK: bool | Column | None=None) -> Column
 ```
 
-Calls the registry function `hll_union_agg`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `hour`
 
@@ -1523,7 +1523,7 @@ Calls the registry function `is_valid_utf8`.
 def is_valid_variant(v: ColumnOrName) -> Column
 ```
 
-Calls the registry function `is_valid_variant`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `is_variant_null`
 
@@ -1563,7 +1563,7 @@ Calls the registry function `isnull`.
 def java_method(*cols: ColumnOrName) -> Column
 ```
 
-Calls the registry function `java_method`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `json_array_length`
 
@@ -1595,7 +1595,7 @@ Calls the registry function `json_tuple`.
 def kll_merge_agg_bigint(col: ColumnOrName, k: Column | int | None=None) -> Column
 ```
 
-Calls the registry function `kll_merge_agg_bigint`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `kll_merge_agg_double`
 
@@ -1603,7 +1603,7 @@ Calls the registry function `kll_merge_agg_bigint`.
 def kll_merge_agg_double(col: ColumnOrName, k: Column | int | None=None) -> Column
 ```
 
-Calls the registry function `kll_merge_agg_double`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `kll_merge_agg_float`
 
@@ -1611,7 +1611,7 @@ Calls the registry function `kll_merge_agg_double`.
 def kll_merge_agg_float(col: ColumnOrName, k: Column | int | None=None) -> Column
 ```
 
-Calls the registry function `kll_merge_agg_float`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `kll_sketch_agg_bigint`
 
@@ -1619,7 +1619,7 @@ Calls the registry function `kll_merge_agg_float`.
 def kll_sketch_agg_bigint(col: ColumnOrName, k: Column | int | None=None) -> Column
 ```
 
-Calls the registry function `kll_sketch_agg_bigint`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `kll_sketch_agg_double`
 
@@ -1627,7 +1627,7 @@ Calls the registry function `kll_sketch_agg_bigint`.
 def kll_sketch_agg_double(col: ColumnOrName, k: Column | int | None=None) -> Column
 ```
 
-Calls the registry function `kll_sketch_agg_double`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `kll_sketch_agg_float`
 
@@ -1635,7 +1635,7 @@ Calls the registry function `kll_sketch_agg_double`.
 def kll_sketch_agg_float(col: ColumnOrName, k: Column | int | None=None) -> Column
 ```
 
-Calls the registry function `kll_sketch_agg_float`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `kll_sketch_get_n_bigint`
 
@@ -1643,7 +1643,7 @@ Calls the registry function `kll_sketch_agg_float`.
 def kll_sketch_get_n_bigint(col: ColumnOrName) -> Column
 ```
 
-Calls the registry function `kll_sketch_get_n_bigint`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `kll_sketch_get_n_double`
 
@@ -1651,7 +1651,7 @@ Calls the registry function `kll_sketch_get_n_bigint`.
 def kll_sketch_get_n_double(col: ColumnOrName) -> Column
 ```
 
-Calls the registry function `kll_sketch_get_n_double`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `kll_sketch_get_n_float`
 
@@ -1659,7 +1659,7 @@ Calls the registry function `kll_sketch_get_n_double`.
 def kll_sketch_get_n_float(col: ColumnOrName) -> Column
 ```
 
-Calls the registry function `kll_sketch_get_n_float`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `kll_sketch_get_quantile_bigint`
 
@@ -1667,7 +1667,7 @@ Calls the registry function `kll_sketch_get_n_float`.
 def kll_sketch_get_quantile_bigint(sketch: ColumnOrName, rank: ColumnOrName) -> Column
 ```
 
-Calls the registry function `kll_sketch_get_quantile_bigint`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `kll_sketch_get_quantile_double`
 
@@ -1675,7 +1675,7 @@ Calls the registry function `kll_sketch_get_quantile_bigint`.
 def kll_sketch_get_quantile_double(sketch: ColumnOrName, rank: ColumnOrName) -> Column
 ```
 
-Calls the registry function `kll_sketch_get_quantile_double`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `kll_sketch_get_quantile_float`
 
@@ -1683,7 +1683,7 @@ Calls the registry function `kll_sketch_get_quantile_double`.
 def kll_sketch_get_quantile_float(sketch: ColumnOrName, rank: ColumnOrName) -> Column
 ```
 
-Calls the registry function `kll_sketch_get_quantile_float`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `kll_sketch_get_rank_bigint`
 
@@ -1691,7 +1691,7 @@ Calls the registry function `kll_sketch_get_quantile_float`.
 def kll_sketch_get_rank_bigint(sketch: ColumnOrName, quantile: ColumnOrName) -> Column
 ```
 
-Calls the registry function `kll_sketch_get_rank_bigint`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `kll_sketch_get_rank_double`
 
@@ -1699,7 +1699,7 @@ Calls the registry function `kll_sketch_get_rank_bigint`.
 def kll_sketch_get_rank_double(sketch: ColumnOrName, quantile: ColumnOrName) -> Column
 ```
 
-Calls the registry function `kll_sketch_get_rank_double`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `kll_sketch_get_rank_float`
 
@@ -1707,7 +1707,7 @@ Calls the registry function `kll_sketch_get_rank_double`.
 def kll_sketch_get_rank_float(sketch: ColumnOrName, quantile: ColumnOrName) -> Column
 ```
 
-Calls the registry function `kll_sketch_get_rank_float`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `kll_sketch_merge_bigint`
 
@@ -1715,7 +1715,7 @@ Calls the registry function `kll_sketch_get_rank_float`.
 def kll_sketch_merge_bigint(left: ColumnOrName, right: ColumnOrName) -> Column
 ```
 
-Calls the registry function `kll_sketch_merge_bigint`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `kll_sketch_merge_double`
 
@@ -1723,7 +1723,7 @@ Calls the registry function `kll_sketch_merge_bigint`.
 def kll_sketch_merge_double(left: ColumnOrName, right: ColumnOrName) -> Column
 ```
 
-Calls the registry function `kll_sketch_merge_double`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `kll_sketch_merge_float`
 
@@ -1731,7 +1731,7 @@ Calls the registry function `kll_sketch_merge_double`.
 def kll_sketch_merge_float(left: ColumnOrName, right: ColumnOrName) -> Column
 ```
 
-Calls the registry function `kll_sketch_merge_float`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `kll_sketch_to_string_bigint`
 
@@ -1739,7 +1739,7 @@ Calls the registry function `kll_sketch_merge_float`.
 def kll_sketch_to_string_bigint(col: ColumnOrName) -> Column
 ```
 
-Calls the registry function `kll_sketch_to_string_bigint`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `kll_sketch_to_string_double`
 
@@ -1747,7 +1747,7 @@ Calls the registry function `kll_sketch_to_string_bigint`.
 def kll_sketch_to_string_double(col: ColumnOrName) -> Column
 ```
 
-Calls the registry function `kll_sketch_to_string_double`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `kll_sketch_to_string_float`
 
@@ -1755,7 +1755,7 @@ Calls the registry function `kll_sketch_to_string_double`.
 def kll_sketch_to_string_float(col: ColumnOrName) -> Column
 ```
 
-Calls the registry function `kll_sketch_to_string_float`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `kurtosis`
 
@@ -1867,7 +1867,7 @@ Calls the registry function `listagg`.
 def listagg_distinct(col: ColumnOrName, delimiter: Any=None) -> Column
 ```
 
-Not available: DISTINCT aggregates are not available through the Column API.
+Not available: DISTINCT aggregates have no Column builder yet.
 
 ### `lit`
 
@@ -2502,6 +2502,14 @@ def randn(seed: int | None=None) -> Column
 
 Calls the registry function `randn`.
 
+### `random`
+
+```python
+def random(seed: int | None=None) -> Column
+```
+
+Calls the registry function `random`.
+
 ### `randstr`
 
 ```python
@@ -2532,7 +2540,7 @@ An alias of `aggregate`.
 def reflect(*cols: ColumnOrName) -> Column
 ```
 
-Calls the registry function `reflect`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `regexp`
 
@@ -2780,7 +2788,7 @@ Calls the registry function `schema_of_variant`.
 def schema_of_variant_agg(v: ColumnOrName) -> Column
 ```
 
-Calls the registry function `schema_of_variant_agg`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `schema_of_xml`
 
@@ -2812,7 +2820,7 @@ Calls the registry function `second`.
 def sentences(string: ColumnOrName, language: ColumnOrName | None=None, country: ColumnOrName | None=None) -> Column
 ```
 
-Calls the registry function `sentences`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `sequence`
 
@@ -2836,7 +2844,7 @@ Calls the registry function `session_user`.
 def session_window(timeColumn: ColumnOrName, gapDuration: Column | str) -> Column
 ```
 
-Calls the registry function `session_window`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `sha`
 
@@ -3140,7 +3148,7 @@ Calls the registry function `string_agg`.
 def string_agg_distinct(col: ColumnOrName, delimiter: Any=None) -> Column
 ```
 
-Not available: DISTINCT aggregates are not available through the Column API.
+Not available: DISTINCT aggregates have no Column builder yet.
 
 ### `struct`
 
@@ -3188,7 +3196,7 @@ Calls the registry function `sum`.
 def sumDistinct(col: ColumnOrName) -> Column
 ```
 
-Not available: DISTINCT aggregates are not available through the Column API.
+Not available: DISTINCT aggregates have no Column builder yet.
 
 ### `sum_distinct`
 
@@ -3196,7 +3204,7 @@ Not available: DISTINCT aggregates are not available through the Column API.
 def sum_distinct(col: ColumnOrName) -> Column
 ```
 
-Not available: DISTINCT aggregates are not available through the Column API.
+Not available: DISTINCT aggregates have no Column builder yet.
 
 ### `tan`
 
@@ -3220,7 +3228,7 @@ Calls the registry function `tanh`.
 def theta_difference(col1: ColumnOrName, col2: ColumnOrName) -> Column
 ```
 
-Calls the registry function `theta_difference`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `theta_intersection`
 
@@ -3228,7 +3236,7 @@ Calls the registry function `theta_difference`.
 def theta_intersection(col1: ColumnOrName, col2: ColumnOrName) -> Column
 ```
 
-Calls the registry function `theta_intersection`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `theta_intersection_agg`
 
@@ -3236,7 +3244,7 @@ Calls the registry function `theta_intersection`.
 def theta_intersection_agg(col: ColumnOrName) -> Column
 ```
 
-Calls the registry function `theta_intersection_agg`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `theta_sketch_agg`
 
@@ -3244,7 +3252,7 @@ Calls the registry function `theta_intersection_agg`.
 def theta_sketch_agg(col: ColumnOrName, lgNomEntries: Column | int | None=None) -> Column
 ```
 
-Calls the registry function `theta_sketch_agg`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `theta_sketch_estimate`
 
@@ -3252,7 +3260,7 @@ Calls the registry function `theta_sketch_agg`.
 def theta_sketch_estimate(col: ColumnOrName) -> Column
 ```
 
-Calls the registry function `theta_sketch_estimate`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `theta_union`
 
@@ -3260,7 +3268,7 @@ Calls the registry function `theta_sketch_estimate`.
 def theta_union(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None=None) -> Column
 ```
 
-Calls the registry function `theta_union`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `theta_union_agg`
 
@@ -3268,7 +3276,7 @@ Calls the registry function `theta_union`.
 def theta_union_agg(col: ColumnOrName, lgNomEntries: Column | int | None=None) -> Column
 ```
 
-Calls the registry function `theta_union_agg`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `time_bucket`
 
@@ -3676,7 +3684,7 @@ Calls the registry function `try_parse_url`.
 def try_reflect(*cols: ColumnOrName) -> Column
 ```
 
-Calls the registry function `try_reflect`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `try_subtract`
 
@@ -3764,7 +3772,7 @@ Calls the registry function `try_variant_get`.
 def tuple_difference_double(col1: ColumnOrName, col2: ColumnOrName) -> Column
 ```
 
-Calls the registry function `tuple_difference_double`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `tuple_difference_integer`
 
@@ -3772,7 +3780,7 @@ Calls the registry function `tuple_difference_double`.
 def tuple_difference_integer(col1: ColumnOrName, col2: ColumnOrName) -> Column
 ```
 
-Calls the registry function `tuple_difference_integer`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `tuple_difference_theta_double`
 
@@ -3780,7 +3788,7 @@ Calls the registry function `tuple_difference_integer`.
 def tuple_difference_theta_double(col1: ColumnOrName, col2: ColumnOrName) -> Column
 ```
 
-Calls the registry function `tuple_difference_theta_double`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `tuple_difference_theta_integer`
 
@@ -3788,7 +3796,7 @@ Calls the registry function `tuple_difference_theta_double`.
 def tuple_difference_theta_integer(col1: ColumnOrName, col2: ColumnOrName) -> Column
 ```
 
-Calls the registry function `tuple_difference_theta_integer`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `tuple_intersection_agg_double`
 
@@ -3796,7 +3804,7 @@ Calls the registry function `tuple_difference_theta_integer`.
 def tuple_intersection_agg_double(col: ColumnOrName, mode: Column | str | None=None) -> Column
 ```
 
-Calls the registry function `tuple_intersection_agg_double`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `tuple_intersection_agg_integer`
 
@@ -3804,7 +3812,7 @@ Calls the registry function `tuple_intersection_agg_double`.
 def tuple_intersection_agg_integer(col: ColumnOrName, mode: Column | str | None=None) -> Column
 ```
 
-Calls the registry function `tuple_intersection_agg_integer`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `tuple_intersection_double`
 
@@ -3812,7 +3820,7 @@ Calls the registry function `tuple_intersection_agg_integer`.
 def tuple_intersection_double(col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None=None) -> Column
 ```
 
-Calls the registry function `tuple_intersection_double`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `tuple_intersection_integer`
 
@@ -3820,7 +3828,7 @@ Calls the registry function `tuple_intersection_double`.
 def tuple_intersection_integer(col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None=None) -> Column
 ```
 
-Calls the registry function `tuple_intersection_integer`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `tuple_intersection_theta_double`
 
@@ -3828,7 +3836,7 @@ Calls the registry function `tuple_intersection_integer`.
 def tuple_intersection_theta_double(col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None=None) -> Column
 ```
 
-Calls the registry function `tuple_intersection_theta_double`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `tuple_intersection_theta_integer`
 
@@ -3836,7 +3844,7 @@ Calls the registry function `tuple_intersection_theta_double`.
 def tuple_intersection_theta_integer(col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None=None) -> Column
 ```
 
-Calls the registry function `tuple_intersection_theta_integer`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `tuple_sketch_agg_double`
 
@@ -3844,7 +3852,7 @@ Calls the registry function `tuple_intersection_theta_integer`.
 def tuple_sketch_agg_double(key: ColumnOrName, summary: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
 ```
 
-Calls the registry function `tuple_sketch_agg_double`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `tuple_sketch_agg_integer`
 
@@ -3852,7 +3860,7 @@ Calls the registry function `tuple_sketch_agg_double`.
 def tuple_sketch_agg_integer(key: ColumnOrName, summary: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
 ```
 
-Calls the registry function `tuple_sketch_agg_integer`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `tuple_sketch_estimate_double`
 
@@ -3860,7 +3868,7 @@ Calls the registry function `tuple_sketch_agg_integer`.
 def tuple_sketch_estimate_double(col: ColumnOrName) -> Column
 ```
 
-Calls the registry function `tuple_sketch_estimate_double`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `tuple_sketch_estimate_integer`
 
@@ -3868,7 +3876,7 @@ Calls the registry function `tuple_sketch_estimate_double`.
 def tuple_sketch_estimate_integer(col: ColumnOrName) -> Column
 ```
 
-Calls the registry function `tuple_sketch_estimate_integer`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `tuple_sketch_summary_double`
 
@@ -3876,7 +3884,7 @@ Calls the registry function `tuple_sketch_estimate_integer`.
 def tuple_sketch_summary_double(col: ColumnOrName, mode: Column | str | None=None) -> Column
 ```
 
-Calls the registry function `tuple_sketch_summary_double`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `tuple_sketch_summary_integer`
 
@@ -3884,7 +3892,7 @@ Calls the registry function `tuple_sketch_summary_double`.
 def tuple_sketch_summary_integer(col: ColumnOrName, mode: Column | str | None=None) -> Column
 ```
 
-Calls the registry function `tuple_sketch_summary_integer`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `tuple_sketch_theta_double`
 
@@ -3892,7 +3900,7 @@ Calls the registry function `tuple_sketch_summary_integer`.
 def tuple_sketch_theta_double(col: ColumnOrName) -> Column
 ```
 
-Calls the registry function `tuple_sketch_theta_double`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `tuple_sketch_theta_integer`
 
@@ -3900,7 +3908,7 @@ Calls the registry function `tuple_sketch_theta_double`.
 def tuple_sketch_theta_integer(col: ColumnOrName) -> Column
 ```
 
-Calls the registry function `tuple_sketch_theta_integer`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `tuple_union_agg_double`
 
@@ -3908,7 +3916,7 @@ Calls the registry function `tuple_sketch_theta_integer`.
 def tuple_union_agg_double(col: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
 ```
 
-Calls the registry function `tuple_union_agg_double`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `tuple_union_agg_integer`
 
@@ -3916,7 +3924,7 @@ Calls the registry function `tuple_union_agg_double`.
 def tuple_union_agg_integer(col: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
 ```
 
-Calls the registry function `tuple_union_agg_integer`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `tuple_union_double`
 
@@ -3924,7 +3932,7 @@ Calls the registry function `tuple_union_agg_integer`.
 def tuple_union_double(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
 ```
 
-Calls the registry function `tuple_union_double`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `tuple_union_integer`
 
@@ -3932,7 +3940,7 @@ Calls the registry function `tuple_union_double`.
 def tuple_union_integer(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
 ```
 
-Calls the registry function `tuple_union_integer`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `tuple_union_theta_double`
 
@@ -3940,7 +3948,7 @@ Calls the registry function `tuple_union_integer`.
 def tuple_union_theta_double(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
 ```
 
-Calls the registry function `tuple_union_theta_double`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `tuple_union_theta_integer`
 
@@ -3948,7 +3956,7 @@ Calls the registry function `tuple_union_theta_double`.
 def tuple_union_theta_integer(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
 ```
 
-Calls the registry function `tuple_union_theta_integer`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `typeof`
 
@@ -3986,7 +3994,7 @@ with a warning (a documented divergence).
 ### `udtf`
 
 ```python
-def udtf(cls: Any=None) -> Column
+def udtf(cls: Any=None, *, returnType: Any=None, useArrow: bool | None=None) -> Any
 ```
 
 Not available: table UDFs (UDTF) are not implemented.
@@ -4223,7 +4231,7 @@ Not available: time windows through the Column API are not implemented.
 def xpath(xml: ColumnOrName, path: ColumnOrName) -> Column
 ```
 
-Calls the registry function `xpath`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `xpath_boolean`
 
@@ -4231,7 +4239,7 @@ Calls the registry function `xpath`.
 def xpath_boolean(xml: ColumnOrName, path: ColumnOrName) -> Column
 ```
 
-Calls the registry function `xpath_boolean`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `xpath_double`
 
@@ -4239,7 +4247,7 @@ Calls the registry function `xpath_boolean`.
 def xpath_double(xml: ColumnOrName, path: ColumnOrName) -> Column
 ```
 
-Calls the registry function `xpath_double`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `xpath_float`
 
@@ -4247,7 +4255,7 @@ Calls the registry function `xpath_double`.
 def xpath_float(xml: ColumnOrName, path: ColumnOrName) -> Column
 ```
 
-Calls the registry function `xpath_float`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `xpath_int`
 
@@ -4255,7 +4263,7 @@ Calls the registry function `xpath_float`.
 def xpath_int(xml: ColumnOrName, path: ColumnOrName) -> Column
 ```
 
-Calls the registry function `xpath_int`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `xpath_long`
 
@@ -4263,7 +4271,7 @@ Calls the registry function `xpath_int`.
 def xpath_long(xml: ColumnOrName, path: ColumnOrName) -> Column
 ```
 
-Calls the registry function `xpath_long`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `xpath_number`
 
@@ -4271,7 +4279,7 @@ Calls the registry function `xpath_long`.
 def xpath_number(xml: ColumnOrName, path: ColumnOrName) -> Column
 ```
 
-Calls the registry function `xpath_number`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `xpath_short`
 
@@ -4279,7 +4287,7 @@ Calls the registry function `xpath_number`.
 def xpath_short(xml: ColumnOrName, path: ColumnOrName) -> Column
 ```
 
-Calls the registry function `xpath_short`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `xpath_string`
 
@@ -4287,7 +4295,7 @@ Calls the registry function `xpath_short`.
 def xpath_string(xml: ColumnOrName, path: ColumnOrName) -> Column
 ```
 
-Calls the registry function `xpath_string`.
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `xxhash64`
 

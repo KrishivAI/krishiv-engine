@@ -145,7 +145,6 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     ),
     ("mod", "no PySpark function"),
     ("any", "no PySpark function"),
-    ("random", "an alias of `rand`; no PySpark function"),
     ("len", "no PySpark function; use `length`"),
     ("luhn_check", "no PySpark function"),
     (
@@ -224,36 +223,28 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     ),
 ];
 
+/// Catalog-only names the analyzer handles itself (`like`/`ilike`/`rlike` become the operators,
+/// `grouping`/`grouping_id` are rewritten over grouping sets), so their wrappers send the call.
+pub(super) const ANALYZER_HANDLED: &[&str] = &["like", "ilike", "rlike", "grouping", "grouping_id"];
+
 /// Registry names whose wrapper is written by hand in `functions.py`.
 pub(super) const HANDWRITTEN: &[(&str, &str)] = &[
-    (
-        "explode",
-        "generator: written by hand in `functions.py` (a call of the generator, as `explode(col)` in SQL)",
-    ),
+    ("explode", "generator: written by hand in `functions.py`"),
     (
         "explode_outer",
-        "generator: written by hand in `functions.py` (a call of the generator, as `explode(col)` in SQL)",
+        "generator: written by hand in `functions.py`",
     ),
-    (
-        "posexplode",
-        "generator: written by hand in `functions.py` (a call of the generator, as `explode(col)` in SQL)",
-    ),
+    ("posexplode", "generator: written by hand in `functions.py`"),
     (
         "posexplode_outer",
-        "generator: written by hand in `functions.py` (a call of the generator, as `explode(col)` in SQL)",
+        "generator: written by hand in `functions.py`",
     ),
-    (
-        "inline",
-        "generator: written by hand in `functions.py` (a call of the generator, as `explode(col)` in SQL)",
-    ),
+    ("inline", "generator: written by hand in `functions.py`"),
     (
         "inline_outer",
-        "generator: written by hand in `functions.py` (a call of the generator, as `explode(col)` in SQL)",
+        "generator: written by hand in `functions.py`",
     ),
-    (
-        "stack",
-        "generator: written by hand in `functions.py` (a call of the generator, as `explode(col)` in SQL)",
-    ),
+    ("stack", "generator: written by hand in `functions.py`"),
     (
         "transform",
         "takes a Python lambda: written by hand in `functions.py`, which turns it into a SQL lambda",
@@ -695,6 +686,7 @@ pub(super) fn rows() -> Vec<Row> {
         ),
         Row::new("ntile", "n: int"),
         Row::new("rand", "seed: int = None"),
+        Row::new("random", "seed: int = None"),
         Row::new("randn", "seed: int = None"),
         Row::new(
             "randstr",

@@ -62,6 +62,20 @@ def test_map_functions(df: DataFrame) -> None:
     assert one(df, F.map_zip_with("m", "m", lambda k, a, b: a + b)) == {"a": 2, "b": 4}
 
 
+def test_lambda_variables_do_not_capture_columns() -> None:
+    """A column named like a lambda variable of an earlier version (``x_0``) is read as the column."""
+    spark = SparkSession.builder.create()
+    d = spark.sql("select array(1,2) arr, 100 x_0, 1000 y_0, 10000 x_1")
+    assert one(d, F.transform("arr", lambda x: x + F.col("x_0"))) == [101, 102]
+    assert one(d, F.transform("arr", lambda x: x + F.col("x_1"))) == [10001, 10002]
+    assert one(d, F.aggregate("arr", F.lit(0), lambda acc, x: acc + x + F.col("y_0"))) == 2003
+
+
+@pytest.mark.xfail(reason="the engine's filter takes no index lambda: INVALID_LAMBDA_FUNCTION_CALL", strict=True)
+def test_filter_with_an_index_lambda(df: DataFrame) -> None:
+    assert one(df, F.filter("arr", lambda x, i: i > 0)) == [1, 2]
+
+
 def test_nested_lambdas_do_not_capture(df: DataFrame) -> None:
     got = one(df, F.transform("arr", lambda x: F.aggregate("arr2", F.lit(0), lambda acc, y: acc + y * x)))
     assert got == [27, 9, 18]
@@ -71,7 +85,12 @@ def test_lambda_argument_checks(df: DataFrame) -> None:
     with pytest.raises(errors.PySparkValueError, match="WRONG_NUM_ARGS_FOR_HIGHER_ORDER_FUNCTION"):
         F.transform("arr", lambda: F.lit(1))
     with pytest.raises(errors.PySparkValueError, match="WRONG_NUM_ARGS_FOR_HIGHER_ORDER_FUNCTION"):
-        F.exists("arr", lambda x, y: x)  # ty: ignore[invalid-argument-type]
+        F.transform("arr", lambda x, y, z, w: x)
+    # PySpark accepts one to three parameters when the function is built; a wrong count for this higher-order
+    # function fails when the query is analyzed.
+    bad = F.exists("arr", lambda x, y: x)  # ty: ignore[invalid-argument-type]
+    with pytest.raises(errors.AnalysisException, match="NUM_ARGS_MISMATCH"):
+        df.select(bad).collect()
     with pytest.raises(errors.PySparkValueError, match="HIGHER_ORDER_FUNCTION_SHOULD_RETURN_COLUMN"):
         F.transform("arr", lambda x: 1)  # ty: ignore[invalid-argument-type]
     with pytest.raises(errors.PySparkValueError, match="UNSUPPORTED_PARAM_TYPE_FOR_HIGHER_ORDER_FUNCTION"):
@@ -92,12 +111,12 @@ def test_generators_build_their_call(name: str) -> None:
     assert isinstance(column, Column)
 
 
-@pytest.mark.xfail(reason="generators in select() wait for the DataFrame generator work (PR-C)", strict=False)
+@pytest.mark.xfail(reason="generators in select() wait for the DataFrame generator work (PR-C)", strict=True)
 def test_explode_in_select(df: DataFrame) -> None:
     assert [r[0] for r in df.select(F.explode("arr")).collect()] == [3, 1, 2]
 
 
-@pytest.mark.xfail(reason="generators in select() wait for the DataFrame generator work (PR-C)", strict=False)
+@pytest.mark.xfail(reason="generators in select() wait for the DataFrame generator work (PR-C)", strict=True)
 def test_posexplode_and_inline_in_select(df: DataFrame) -> None:
     assert [tuple(r) for r in df.select(F.posexplode("arr")).collect()] == [(0, 3), (1, 1), (2, 2)]
     assert [tuple(r) for r in df.select(F.inline("astr")).collect()] == [("a", 1)]
@@ -143,7 +162,8 @@ def test_aggregates_added(df: DataFrame) -> None:
     assert df.select(F.min_by("i", "l")).collect()[0][0] == 5
     assert df.select(F.any_value("i")).collect()[0][0] == 5
     assert df.select(F.array_agg("i")).collect()[0][0] == [5]
-    assert df.select(F.every(F.lit(True)), F.some(F.lit(False))).collect()[0].asDict().values()
+    row = df.select(F.every(F.lit(True)), F.some(F.lit(False))).collect()[0]
+    assert (row[0], row[1]) == (True, False)
 
 
 # What the engine lacks: a clear error, never an AttributeError.
@@ -166,6 +186,18 @@ def test_missing_engine_functions_raise_not_implemented(name: str, args: tuple[A
         getattr(F, name)(*args)
 
 
-def test_catalog_only_functions_fail_at_analysis(df: DataFrame) -> None:
-    with pytest.raises(errors.PySparkException):
-        df.select(F.bitmap_count("n")).collect()
+def test_catalog_only_functions_raise_unsupported_when_called() -> None:
+    with pytest.raises(errors.UnsupportedOperationException, match="KRISHIV_UNSUPPORTED_FEATURE"):
+        F.bitmap_count("n")
+
+
+def test_udtf_stubs_take_pysparks_keywords() -> None:
+    with pytest.raises(NotImplementedError):
+        F.udtf(returnType="a int")
+    with pytest.raises(NotImplementedError):
+        F.arrow_udtf(returnType="a int")
+
+
+def test_random_is_rand_by_another_name(df: DataFrame) -> None:
+    assert one(df, F.random(1)) == one(df, F.rand(1))
+    assert isinstance(one(df, F.random()), float)

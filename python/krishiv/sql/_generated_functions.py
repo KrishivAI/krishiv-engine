@@ -22,6 +22,7 @@ from krishiv.sql._function_support import (
     _one_of,
     _opt,
     _opts,
+    _unsupported,
 )
 from krishiv.sql.column import Column
 
@@ -295,6 +296,7 @@ __all__ = [
     "raise_error",
     "rand",
     "randn",
+    "random",
     "randstr",
     "rank",
     "reflect",
@@ -488,6 +490,90 @@ __all__ = [
     "year",
     "zeroifnull",
 ]
+
+_ENGINE_UNSUPPORTED = (
+    "bitmap_and_agg",
+    "bitmap_bit_position",
+    "bitmap_bucket_number",
+    "bitmap_construct_agg",
+    "bitmap_count",
+    "bitmap_or_agg",
+    "collate",
+    "count_min_sketch",
+    "histogram_numeric",
+    "hll_sketch_agg",
+    "hll_sketch_estimate",
+    "hll_union",
+    "hll_union_agg",
+    "is_valid_variant",
+    "java_method",
+    "kll_merge_agg_bigint",
+    "kll_merge_agg_double",
+    "kll_merge_agg_float",
+    "kll_sketch_agg_bigint",
+    "kll_sketch_agg_double",
+    "kll_sketch_agg_float",
+    "kll_sketch_get_n_bigint",
+    "kll_sketch_get_n_double",
+    "kll_sketch_get_n_float",
+    "kll_sketch_get_quantile_bigint",
+    "kll_sketch_get_quantile_double",
+    "kll_sketch_get_quantile_float",
+    "kll_sketch_get_rank_bigint",
+    "kll_sketch_get_rank_double",
+    "kll_sketch_get_rank_float",
+    "kll_sketch_merge_bigint",
+    "kll_sketch_merge_double",
+    "kll_sketch_merge_float",
+    "kll_sketch_to_string_bigint",
+    "kll_sketch_to_string_double",
+    "kll_sketch_to_string_float",
+    "reflect",
+    "schema_of_variant_agg",
+    "sentences",
+    "session_window",
+    "theta_difference",
+    "theta_intersection",
+    "theta_intersection_agg",
+    "theta_sketch_agg",
+    "theta_sketch_estimate",
+    "theta_union",
+    "theta_union_agg",
+    "try_reflect",
+    "tuple_difference_double",
+    "tuple_difference_integer",
+    "tuple_difference_theta_double",
+    "tuple_difference_theta_integer",
+    "tuple_intersection_agg_double",
+    "tuple_intersection_agg_integer",
+    "tuple_intersection_double",
+    "tuple_intersection_integer",
+    "tuple_intersection_theta_double",
+    "tuple_intersection_theta_integer",
+    "tuple_sketch_agg_double",
+    "tuple_sketch_agg_integer",
+    "tuple_sketch_estimate_double",
+    "tuple_sketch_estimate_integer",
+    "tuple_sketch_summary_double",
+    "tuple_sketch_summary_integer",
+    "tuple_sketch_theta_double",
+    "tuple_sketch_theta_integer",
+    "tuple_union_agg_double",
+    "tuple_union_agg_integer",
+    "tuple_union_double",
+    "tuple_union_integer",
+    "tuple_union_theta_double",
+    "tuple_union_theta_integer",
+    "xpath",
+    "xpath_boolean",
+    "xpath_double",
+    "xpath_float",
+    "xpath_int",
+    "xpath_long",
+    "xpath_number",
+    "xpath_short",
+    "xpath_string",
+)
 
 
 def abs(col: ColumnOrName) -> Column:
@@ -763,33 +849,33 @@ def bit_xor(col: ColumnOrName) -> Column:
 
 
 def bitmap_and_agg(col: ColumnOrName) -> Column:
-    """Calls the registry function ``bitmap_and_agg``."""
-    return _call("bitmap_and_agg", _named(col, "col"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("bitmap_and_agg")
 
 
 def bitmap_bit_position(col: ColumnOrName) -> Column:
-    """Calls the registry function ``bitmap_bit_position``."""
-    return _call("bitmap_bit_position", _named(col, "col"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("bitmap_bit_position")
 
 
 def bitmap_bucket_number(col: ColumnOrName) -> Column:
-    """Calls the registry function ``bitmap_bucket_number``."""
-    return _call("bitmap_bucket_number", _named(col, "col"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("bitmap_bucket_number")
 
 
 def bitmap_construct_agg(col: ColumnOrName) -> Column:
-    """Calls the registry function ``bitmap_construct_agg``."""
-    return _call("bitmap_construct_agg", _named(col, "col"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("bitmap_construct_agg")
 
 
 def bitmap_count(col: ColumnOrName) -> Column:
-    """Calls the registry function ``bitmap_count``."""
-    return _call("bitmap_count", _named(col, "col"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("bitmap_count")
 
 
 def bitmap_or_agg(col: ColumnOrName) -> Column:
-    """Calls the registry function ``bitmap_or_agg``."""
-    return _call("bitmap_or_agg", _named(col, "col"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("bitmap_or_agg")
 
 
 def bitwiseNOT(col: ColumnOrName) -> Column:
@@ -869,8 +955,8 @@ def coalesce(*cols: ColumnOrName) -> Column:
 
 
 def collate(col: ColumnOrName, collation: str) -> Column:
-    """Calls the registry function ``collate``."""
-    return _call("collate", _named(col, "col"), _lit(collation, "collation"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("collate")
 
 
 def collation(col: ColumnOrName) -> Column:
@@ -931,14 +1017,8 @@ def count_if(col: ColumnOrName) -> Column:
 def count_min_sketch(
     col: ColumnOrName, eps: Column | float, confidence: Column | float, seed: Column | int | None = None
 ) -> Column:
-    """Calls the registry function ``count_min_sketch``."""
-    return _call(
-        "count_min_sketch",
-        _named(col, "col"),
-        _lit(eps, "eps"),
-        _lit(confidence, "confidence"),
-        *_opt(_lit, seed, "seed"),
-    )
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("count_min_sketch")
 
 
 def covar_pop(col1: ColumnOrName, col2: ColumnOrName) -> Column:
@@ -1263,33 +1343,28 @@ def hex(col: ColumnOrName) -> Column:
 
 
 def histogram_numeric(col: ColumnOrName, nBins: Column) -> Column:
-    """Calls the registry function ``histogram_numeric``."""
-    return _call("histogram_numeric", _named(col, "col"), _named(nBins, "nBins"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("histogram_numeric")
 
 
 def hll_sketch_agg(col: ColumnOrName, lgConfigK: Column | int | None = None) -> Column:
-    """Calls the registry function ``hll_sketch_agg``."""
-    return _call("hll_sketch_agg", _named(col, "col"), *_opt(_lit, lgConfigK, "lgConfigK"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("hll_sketch_agg")
 
 
 def hll_sketch_estimate(col: ColumnOrName) -> Column:
-    """Calls the registry function ``hll_sketch_estimate``."""
-    return _call("hll_sketch_estimate", _named(col, "col"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("hll_sketch_estimate")
 
 
 def hll_union(col1: ColumnOrName, col2: ColumnOrName, allowDifferentLgConfigK: bool | None = None) -> Column:
-    """Calls the registry function ``hll_union``."""
-    return _call(
-        "hll_union",
-        _named(col1, "col1"),
-        _named(col2, "col2"),
-        *_opt(_lit, allowDifferentLgConfigK, "allowDifferentLgConfigK"),
-    )
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("hll_union")
 
 
 def hll_union_agg(col: ColumnOrName, allowDifferentLgConfigK: bool | Column | None = None) -> Column:
-    """Calls the registry function ``hll_union_agg``."""
-    return _call("hll_union_agg", _named(col, "col"), *_opt(_lit, allowDifferentLgConfigK, "allowDifferentLgConfigK"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("hll_union_agg")
 
 
 def hour(col: ColumnOrName) -> Column:
@@ -1343,8 +1418,8 @@ def is_valid_utf8(str: ColumnOrName) -> Column:
 
 
 def is_valid_variant(v: ColumnOrName) -> Column:
-    """Calls the registry function ``is_valid_variant``."""
-    return _call("is_valid_variant", _named(v, "v"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("is_valid_variant")
 
 
 def is_variant_null(v: ColumnOrName) -> Column:
@@ -1368,8 +1443,8 @@ def isnull(col: ColumnOrName) -> Column:
 
 
 def java_method(*cols: ColumnOrName) -> Column:
-    """Calls the registry function ``java_method``."""
-    return _call("java_method", *_cols(cols))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("java_method")
 
 
 def json_array_length(col: ColumnOrName) -> Column:
@@ -1388,108 +1463,108 @@ def json_tuple(col: ColumnOrName, *fields: str) -> Column:
 
 
 def kll_merge_agg_bigint(col: ColumnOrName, k: Column | int | None = None) -> Column:
-    """Calls the registry function ``kll_merge_agg_bigint``."""
-    return _call("kll_merge_agg_bigint", _named(col, "col"), *_opt(_lit, k, "k"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("kll_merge_agg_bigint")
 
 
 def kll_merge_agg_double(col: ColumnOrName, k: Column | int | None = None) -> Column:
-    """Calls the registry function ``kll_merge_agg_double``."""
-    return _call("kll_merge_agg_double", _named(col, "col"), *_opt(_lit, k, "k"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("kll_merge_agg_double")
 
 
 def kll_merge_agg_float(col: ColumnOrName, k: Column | int | None = None) -> Column:
-    """Calls the registry function ``kll_merge_agg_float``."""
-    return _call("kll_merge_agg_float", _named(col, "col"), *_opt(_lit, k, "k"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("kll_merge_agg_float")
 
 
 def kll_sketch_agg_bigint(col: ColumnOrName, k: Column | int | None = None) -> Column:
-    """Calls the registry function ``kll_sketch_agg_bigint``."""
-    return _call("kll_sketch_agg_bigint", _named(col, "col"), *_opt(_lit, k, "k"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("kll_sketch_agg_bigint")
 
 
 def kll_sketch_agg_double(col: ColumnOrName, k: Column | int | None = None) -> Column:
-    """Calls the registry function ``kll_sketch_agg_double``."""
-    return _call("kll_sketch_agg_double", _named(col, "col"), *_opt(_lit, k, "k"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("kll_sketch_agg_double")
 
 
 def kll_sketch_agg_float(col: ColumnOrName, k: Column | int | None = None) -> Column:
-    """Calls the registry function ``kll_sketch_agg_float``."""
-    return _call("kll_sketch_agg_float", _named(col, "col"), *_opt(_lit, k, "k"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("kll_sketch_agg_float")
 
 
 def kll_sketch_get_n_bigint(col: ColumnOrName) -> Column:
-    """Calls the registry function ``kll_sketch_get_n_bigint``."""
-    return _call("kll_sketch_get_n_bigint", _named(col, "col"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("kll_sketch_get_n_bigint")
 
 
 def kll_sketch_get_n_double(col: ColumnOrName) -> Column:
-    """Calls the registry function ``kll_sketch_get_n_double``."""
-    return _call("kll_sketch_get_n_double", _named(col, "col"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("kll_sketch_get_n_double")
 
 
 def kll_sketch_get_n_float(col: ColumnOrName) -> Column:
-    """Calls the registry function ``kll_sketch_get_n_float``."""
-    return _call("kll_sketch_get_n_float", _named(col, "col"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("kll_sketch_get_n_float")
 
 
 def kll_sketch_get_quantile_bigint(sketch: ColumnOrName, rank: ColumnOrName) -> Column:
-    """Calls the registry function ``kll_sketch_get_quantile_bigint``."""
-    return _call("kll_sketch_get_quantile_bigint", _named(sketch, "sketch"), _named(rank, "rank"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("kll_sketch_get_quantile_bigint")
 
 
 def kll_sketch_get_quantile_double(sketch: ColumnOrName, rank: ColumnOrName) -> Column:
-    """Calls the registry function ``kll_sketch_get_quantile_double``."""
-    return _call("kll_sketch_get_quantile_double", _named(sketch, "sketch"), _named(rank, "rank"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("kll_sketch_get_quantile_double")
 
 
 def kll_sketch_get_quantile_float(sketch: ColumnOrName, rank: ColumnOrName) -> Column:
-    """Calls the registry function ``kll_sketch_get_quantile_float``."""
-    return _call("kll_sketch_get_quantile_float", _named(sketch, "sketch"), _named(rank, "rank"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("kll_sketch_get_quantile_float")
 
 
 def kll_sketch_get_rank_bigint(sketch: ColumnOrName, quantile: ColumnOrName) -> Column:
-    """Calls the registry function ``kll_sketch_get_rank_bigint``."""
-    return _call("kll_sketch_get_rank_bigint", _named(sketch, "sketch"), _named(quantile, "quantile"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("kll_sketch_get_rank_bigint")
 
 
 def kll_sketch_get_rank_double(sketch: ColumnOrName, quantile: ColumnOrName) -> Column:
-    """Calls the registry function ``kll_sketch_get_rank_double``."""
-    return _call("kll_sketch_get_rank_double", _named(sketch, "sketch"), _named(quantile, "quantile"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("kll_sketch_get_rank_double")
 
 
 def kll_sketch_get_rank_float(sketch: ColumnOrName, quantile: ColumnOrName) -> Column:
-    """Calls the registry function ``kll_sketch_get_rank_float``."""
-    return _call("kll_sketch_get_rank_float", _named(sketch, "sketch"), _named(quantile, "quantile"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("kll_sketch_get_rank_float")
 
 
 def kll_sketch_merge_bigint(left: ColumnOrName, right: ColumnOrName) -> Column:
-    """Calls the registry function ``kll_sketch_merge_bigint``."""
-    return _call("kll_sketch_merge_bigint", _named(left, "left"), _named(right, "right"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("kll_sketch_merge_bigint")
 
 
 def kll_sketch_merge_double(left: ColumnOrName, right: ColumnOrName) -> Column:
-    """Calls the registry function ``kll_sketch_merge_double``."""
-    return _call("kll_sketch_merge_double", _named(left, "left"), _named(right, "right"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("kll_sketch_merge_double")
 
 
 def kll_sketch_merge_float(left: ColumnOrName, right: ColumnOrName) -> Column:
-    """Calls the registry function ``kll_sketch_merge_float``."""
-    return _call("kll_sketch_merge_float", _named(left, "left"), _named(right, "right"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("kll_sketch_merge_float")
 
 
 def kll_sketch_to_string_bigint(col: ColumnOrName) -> Column:
-    """Calls the registry function ``kll_sketch_to_string_bigint``."""
-    return _call("kll_sketch_to_string_bigint", _named(col, "col"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("kll_sketch_to_string_bigint")
 
 
 def kll_sketch_to_string_double(col: ColumnOrName) -> Column:
-    """Calls the registry function ``kll_sketch_to_string_double``."""
-    return _call("kll_sketch_to_string_double", _named(col, "col"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("kll_sketch_to_string_double")
 
 
 def kll_sketch_to_string_float(col: ColumnOrName) -> Column:
-    """Calls the registry function ``kll_sketch_to_string_float``."""
-    return _call("kll_sketch_to_string_float", _named(col, "col"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("kll_sketch_to_string_float")
 
 
 def kurtosis(col: ColumnOrName) -> Column:
@@ -1957,6 +2032,11 @@ def randn(seed: int | None = None) -> Column:
     return _call("randn", *_opt(_lit, seed, "seed"))
 
 
+def random(seed: int | None = None) -> Column:
+    """Calls the registry function ``random``."""
+    return _call("random", *_opt(_lit, seed, "seed"))
+
+
 def randstr(length: int | Column, seed: int | Column | None = None) -> Column:
     """Calls the registry function ``randstr``."""
     return _call("randstr", _lit(length, "length"), *_opt(_lit, seed, "seed"))
@@ -1968,8 +2048,8 @@ def rank() -> Column:
 
 
 def reflect(*cols: ColumnOrName) -> Column:
-    """Calls the registry function ``reflect``."""
-    return _call("reflect", *_cols(cols))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("reflect")
 
 
 def regexp(str: ColumnOrName, regexp: ColumnOrName) -> Column:
@@ -2123,8 +2203,8 @@ def schema_of_variant(v: ColumnOrName) -> Column:
 
 
 def schema_of_variant_agg(v: ColumnOrName) -> Column:
-    """Calls the registry function ``schema_of_variant_agg``."""
-    return _call("schema_of_variant_agg", _named(v, "v"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("schema_of_variant_agg")
 
 
 def schema_of_xml(xml: Column | str, options: dict[str, str] | None = None) -> Column:
@@ -2145,10 +2225,8 @@ def second(col: ColumnOrName) -> Column:
 def sentences(
     string: ColumnOrName, language: ColumnOrName | None = None, country: ColumnOrName | None = None
 ) -> Column:
-    """Calls the registry function ``sentences``."""
-    return _call(
-        "sentences", _named(string, "string"), *_opt(_named, language, "language"), *_opt(_named, country, "country")
-    )
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("sentences")
 
 
 def sequence(start: ColumnOrName, stop: ColumnOrName, step: ColumnOrName | None = None) -> Column:
@@ -2162,8 +2240,8 @@ def session_user() -> Column:
 
 
 def session_window(timeColumn: ColumnOrName, gapDuration: Column | str) -> Column:
-    """Calls the registry function ``session_window``."""
-    return _call("session_window", _named(timeColumn, "timeColumn"), _lit(gapDuration, "gapDuration"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("session_window")
 
 
 def sha(col: ColumnOrName) -> Column:
@@ -2370,38 +2448,38 @@ def tanh(col: ColumnOrName) -> Column:
 
 
 def theta_difference(col1: ColumnOrName, col2: ColumnOrName) -> Column:
-    """Calls the registry function ``theta_difference``."""
-    return _call("theta_difference", _named(col1, "col1"), _named(col2, "col2"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("theta_difference")
 
 
 def theta_intersection(col1: ColumnOrName, col2: ColumnOrName) -> Column:
-    """Calls the registry function ``theta_intersection``."""
-    return _call("theta_intersection", _named(col1, "col1"), _named(col2, "col2"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("theta_intersection")
 
 
 def theta_intersection_agg(col: ColumnOrName) -> Column:
-    """Calls the registry function ``theta_intersection_agg``."""
-    return _call("theta_intersection_agg", _named(col, "col"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("theta_intersection_agg")
 
 
 def theta_sketch_agg(col: ColumnOrName, lgNomEntries: Column | int | None = None) -> Column:
-    """Calls the registry function ``theta_sketch_agg``."""
-    return _call("theta_sketch_agg", _named(col, "col"), *_opt(_lit, lgNomEntries, "lgNomEntries"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("theta_sketch_agg")
 
 
 def theta_sketch_estimate(col: ColumnOrName) -> Column:
-    """Calls the registry function ``theta_sketch_estimate``."""
-    return _call("theta_sketch_estimate", _named(col, "col"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("theta_sketch_estimate")
 
 
 def theta_union(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None = None) -> Column:
-    """Calls the registry function ``theta_union``."""
-    return _call("theta_union", _named(col1, "col1"), _named(col2, "col2"), *_opt(_lit, lgNomEntries, "lgNomEntries"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("theta_union")
 
 
 def theta_union_agg(col: ColumnOrName, lgNomEntries: Column | int | None = None) -> Column:
-    """Calls the registry function ``theta_union_agg``."""
-    return _call("theta_union_agg", _named(col, "col"), *_opt(_lit, lgNomEntries, "lgNomEntries"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("theta_union_agg")
 
 
 def time_bucket(bucket_size: Column, ts: ColumnOrName, origin: Column | None = None) -> Column:
@@ -2657,8 +2735,8 @@ def try_parse_url(url: ColumnOrName, partToExtract: ColumnOrName, key: ColumnOrN
 
 
 def try_reflect(*cols: ColumnOrName) -> Column:
-    """Calls the registry function ``try_reflect``."""
-    return _call("try_reflect", *_cols(cols))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("try_reflect")
 
 
 def try_subtract(left: ColumnOrName, right: ColumnOrName) -> Column:
@@ -2707,191 +2785,141 @@ def try_variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Col
 
 
 def tuple_difference_double(col1: ColumnOrName, col2: ColumnOrName) -> Column:
-    """Calls the registry function ``tuple_difference_double``."""
-    return _call("tuple_difference_double", _named(col1, "col1"), _named(col2, "col2"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("tuple_difference_double")
 
 
 def tuple_difference_integer(col1: ColumnOrName, col2: ColumnOrName) -> Column:
-    """Calls the registry function ``tuple_difference_integer``."""
-    return _call("tuple_difference_integer", _named(col1, "col1"), _named(col2, "col2"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("tuple_difference_integer")
 
 
 def tuple_difference_theta_double(col1: ColumnOrName, col2: ColumnOrName) -> Column:
-    """Calls the registry function ``tuple_difference_theta_double``."""
-    return _call("tuple_difference_theta_double", _named(col1, "col1"), _named(col2, "col2"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("tuple_difference_theta_double")
 
 
 def tuple_difference_theta_integer(col1: ColumnOrName, col2: ColumnOrName) -> Column:
-    """Calls the registry function ``tuple_difference_theta_integer``."""
-    return _call("tuple_difference_theta_integer", _named(col1, "col1"), _named(col2, "col2"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("tuple_difference_theta_integer")
 
 
 def tuple_intersection_agg_double(col: ColumnOrName, mode: Column | str | None = None) -> Column:
-    """Calls the registry function ``tuple_intersection_agg_double``."""
-    return _call("tuple_intersection_agg_double", _named(col, "col"), *_opt(_lit, mode, "mode"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("tuple_intersection_agg_double")
 
 
 def tuple_intersection_agg_integer(col: ColumnOrName, mode: Column | str | None = None) -> Column:
-    """Calls the registry function ``tuple_intersection_agg_integer``."""
-    return _call("tuple_intersection_agg_integer", _named(col, "col"), *_opt(_lit, mode, "mode"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("tuple_intersection_agg_integer")
 
 
 def tuple_intersection_double(col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None = None) -> Column:
-    """Calls the registry function ``tuple_intersection_double``."""
-    return _call("tuple_intersection_double", _named(col1, "col1"), _named(col2, "col2"), *_opt(_lit, mode, "mode"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("tuple_intersection_double")
 
 
 def tuple_intersection_integer(col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None = None) -> Column:
-    """Calls the registry function ``tuple_intersection_integer``."""
-    return _call("tuple_intersection_integer", _named(col1, "col1"), _named(col2, "col2"), *_opt(_lit, mode, "mode"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("tuple_intersection_integer")
 
 
 def tuple_intersection_theta_double(col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None = None) -> Column:
-    """Calls the registry function ``tuple_intersection_theta_double``."""
-    return _call(
-        "tuple_intersection_theta_double", _named(col1, "col1"), _named(col2, "col2"), *_opt(_lit, mode, "mode")
-    )
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("tuple_intersection_theta_double")
 
 
 def tuple_intersection_theta_integer(
     col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None = None
 ) -> Column:
-    """Calls the registry function ``tuple_intersection_theta_integer``."""
-    return _call(
-        "tuple_intersection_theta_integer", _named(col1, "col1"), _named(col2, "col2"), *_opt(_lit, mode, "mode")
-    )
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("tuple_intersection_theta_integer")
 
 
 def tuple_sketch_agg_double(
     key: ColumnOrName, summary: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
 ) -> Column:
-    """Calls the registry function ``tuple_sketch_agg_double``."""
-    return _call(
-        "tuple_sketch_agg_double",
-        _named(key, "key"),
-        _named(summary, "summary"),
-        *_opt(_lit, lgNomEntries, "lgNomEntries"),
-        *_opt(_lit, mode, "mode"),
-    )
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("tuple_sketch_agg_double")
 
 
 def tuple_sketch_agg_integer(
     key: ColumnOrName, summary: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
 ) -> Column:
-    """Calls the registry function ``tuple_sketch_agg_integer``."""
-    return _call(
-        "tuple_sketch_agg_integer",
-        _named(key, "key"),
-        _named(summary, "summary"),
-        *_opt(_lit, lgNomEntries, "lgNomEntries"),
-        *_opt(_lit, mode, "mode"),
-    )
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("tuple_sketch_agg_integer")
 
 
 def tuple_sketch_estimate_double(col: ColumnOrName) -> Column:
-    """Calls the registry function ``tuple_sketch_estimate_double``."""
-    return _call("tuple_sketch_estimate_double", _named(col, "col"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("tuple_sketch_estimate_double")
 
 
 def tuple_sketch_estimate_integer(col: ColumnOrName) -> Column:
-    """Calls the registry function ``tuple_sketch_estimate_integer``."""
-    return _call("tuple_sketch_estimate_integer", _named(col, "col"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("tuple_sketch_estimate_integer")
 
 
 def tuple_sketch_summary_double(col: ColumnOrName, mode: Column | str | None = None) -> Column:
-    """Calls the registry function ``tuple_sketch_summary_double``."""
-    return _call("tuple_sketch_summary_double", _named(col, "col"), *_opt(_lit, mode, "mode"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("tuple_sketch_summary_double")
 
 
 def tuple_sketch_summary_integer(col: ColumnOrName, mode: Column | str | None = None) -> Column:
-    """Calls the registry function ``tuple_sketch_summary_integer``."""
-    return _call("tuple_sketch_summary_integer", _named(col, "col"), *_opt(_lit, mode, "mode"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("tuple_sketch_summary_integer")
 
 
 def tuple_sketch_theta_double(col: ColumnOrName) -> Column:
-    """Calls the registry function ``tuple_sketch_theta_double``."""
-    return _call("tuple_sketch_theta_double", _named(col, "col"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("tuple_sketch_theta_double")
 
 
 def tuple_sketch_theta_integer(col: ColumnOrName) -> Column:
-    """Calls the registry function ``tuple_sketch_theta_integer``."""
-    return _call("tuple_sketch_theta_integer", _named(col, "col"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("tuple_sketch_theta_integer")
 
 
 def tuple_union_agg_double(
     col: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
 ) -> Column:
-    """Calls the registry function ``tuple_union_agg_double``."""
-    return _call(
-        "tuple_union_agg_double",
-        _named(col, "col"),
-        *_opt(_lit, lgNomEntries, "lgNomEntries"),
-        *_opt(_lit, mode, "mode"),
-    )
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("tuple_union_agg_double")
 
 
 def tuple_union_agg_integer(
     col: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
 ) -> Column:
-    """Calls the registry function ``tuple_union_agg_integer``."""
-    return _call(
-        "tuple_union_agg_integer",
-        _named(col, "col"),
-        *_opt(_lit, lgNomEntries, "lgNomEntries"),
-        *_opt(_lit, mode, "mode"),
-    )
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("tuple_union_agg_integer")
 
 
 def tuple_union_double(
     col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
 ) -> Column:
-    """Calls the registry function ``tuple_union_double``."""
-    return _call(
-        "tuple_union_double",
-        _named(col1, "col1"),
-        _named(col2, "col2"),
-        *_opt(_lit, lgNomEntries, "lgNomEntries"),
-        *_opt(_lit, mode, "mode"),
-    )
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("tuple_union_double")
 
 
 def tuple_union_integer(
     col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
 ) -> Column:
-    """Calls the registry function ``tuple_union_integer``."""
-    return _call(
-        "tuple_union_integer",
-        _named(col1, "col1"),
-        _named(col2, "col2"),
-        *_opt(_lit, lgNomEntries, "lgNomEntries"),
-        *_opt(_lit, mode, "mode"),
-    )
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("tuple_union_integer")
 
 
 def tuple_union_theta_double(
     col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
 ) -> Column:
-    """Calls the registry function ``tuple_union_theta_double``."""
-    return _call(
-        "tuple_union_theta_double",
-        _named(col1, "col1"),
-        _named(col2, "col2"),
-        *_opt(_lit, lgNomEntries, "lgNomEntries"),
-        *_opt(_lit, mode, "mode"),
-    )
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("tuple_union_theta_double")
 
 
 def tuple_union_theta_integer(
     col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
 ) -> Column:
-    """Calls the registry function ``tuple_union_theta_integer``."""
-    return _call(
-        "tuple_union_theta_integer",
-        _named(col1, "col1"),
-        _named(col2, "col2"),
-        *_opt(_lit, lgNomEntries, "lgNomEntries"),
-        *_opt(_lit, mode, "mode"),
-    )
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("tuple_union_theta_integer")
 
 
 def typeof(col: ColumnOrName) -> Column:
@@ -3012,48 +3040,48 @@ def width_bucket(v: ColumnOrName, min: ColumnOrName, max: ColumnOrName, numBucke
 
 
 def xpath(xml: ColumnOrName, path: ColumnOrName) -> Column:
-    """Calls the registry function ``xpath``."""
-    return _call("xpath", _named(xml, "xml"), _named(path, "path"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("xpath")
 
 
 def xpath_boolean(xml: ColumnOrName, path: ColumnOrName) -> Column:
-    """Calls the registry function ``xpath_boolean``."""
-    return _call("xpath_boolean", _named(xml, "xml"), _named(path, "path"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("xpath_boolean")
 
 
 def xpath_double(xml: ColumnOrName, path: ColumnOrName) -> Column:
-    """Calls the registry function ``xpath_double``."""
-    return _call("xpath_double", _named(xml, "xml"), _named(path, "path"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("xpath_double")
 
 
 def xpath_float(xml: ColumnOrName, path: ColumnOrName) -> Column:
-    """Calls the registry function ``xpath_float``."""
-    return _call("xpath_float", _named(xml, "xml"), _named(path, "path"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("xpath_float")
 
 
 def xpath_int(xml: ColumnOrName, path: ColumnOrName) -> Column:
-    """Calls the registry function ``xpath_int``."""
-    return _call("xpath_int", _named(xml, "xml"), _named(path, "path"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("xpath_int")
 
 
 def xpath_long(xml: ColumnOrName, path: ColumnOrName) -> Column:
-    """Calls the registry function ``xpath_long``."""
-    return _call("xpath_long", _named(xml, "xml"), _named(path, "path"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("xpath_long")
 
 
 def xpath_number(xml: ColumnOrName, path: ColumnOrName) -> Column:
-    """Calls the registry function ``xpath_number``."""
-    return _call("xpath_number", _named(xml, "xml"), _named(path, "path"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("xpath_number")
 
 
 def xpath_short(xml: ColumnOrName, path: ColumnOrName) -> Column:
-    """Calls the registry function ``xpath_short``."""
-    return _call("xpath_short", _named(xml, "xml"), _named(path, "path"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("xpath_short")
 
 
 def xpath_string(xml: ColumnOrName, path: ColumnOrName) -> Column:
-    """Calls the registry function ``xpath_string``."""
-    return _call("xpath_string", _named(xml, "xml"), _named(path, "path"))
+    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
+    raise _unsupported("xpath_string")
 
 
 def xxhash64(*cols: ColumnOrName) -> Column:
