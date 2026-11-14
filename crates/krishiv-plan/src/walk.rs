@@ -203,6 +203,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::CollectMetrics { .. }
                 | PlanNode::Expand { .. }
                 | PlanNode::Window { .. }
+                | PlanNode::Sample { .. }
                 | PlanNode::ReplicateRows { .. } => true,
                 // Lowering builds the generator without its columns.
                 PlanNode::Generate { output, .. }
@@ -427,6 +428,7 @@ impl Teardown {
             PlanNode::SubqueryAlias { input, .. }
             | PlanNode::Shift { input, .. }
             | PlanNode::JoinHint { input, .. }
+            | PlanNode::Sample { input, .. }
             | PlanNode::PipeOperator { input }
             | PlanNode::Distinct { input } => {
                 self.plans.push(input);

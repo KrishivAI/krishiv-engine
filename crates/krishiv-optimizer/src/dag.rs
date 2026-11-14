@@ -124,6 +124,7 @@ pub(crate) fn with_input(node: &Arc<LogicalPlan>, input: Arc<LogicalPlan>) -> Ar
         | PlanNode::CollectMetrics { input: slot, .. }
         | PlanNode::Window { input: slot, .. }
         | PlanNode::Generate { input: slot, .. }
+        | PlanNode::Sample { input: slot, .. }
         | PlanNode::ReplicateRows { input: slot, .. } => *slot = input,
         _ => return Arc::clone(node),
     }

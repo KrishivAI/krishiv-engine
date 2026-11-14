@@ -172,9 +172,23 @@ message Node {
     ExchangeSourceNode exchange_source = 25;
     // feature: python_udf
     PythonEvalNode python_eval = 26;
+    // feature: sample
+    SampleNode sample = 27;
     // feature: observe
-    CollectMetricsNode collect_metrics = 27;
+    CollectMetricsNode collect_metrics = 28;
   }
+}
+
+// feature: sample
+// `TABLESAMPLE` (Spark's Bernoulli `SampleExec`): each row of input
+// partition `i` takes the next draw of `XORShiftRandom(seed + i)` and is
+// kept when it falls in `[lower, upper)`. The seed is always resolved (an
+// unseeded sample's is drawn when the plan is built).
+message SampleNode {
+  uint32 input = 1;
+  double lower = 2;
+  double upper = 3;
+  int64 seed = 4;
 }
 
 // feature: observe

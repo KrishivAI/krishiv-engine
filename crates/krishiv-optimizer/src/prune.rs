@@ -129,6 +129,8 @@ impl Graph {
             // `count` action prunes everything else, not these.
             | PlanNode::CollectMetrics { input, .. }
             | PlanNode::Generate { input, .. }
+            // Spark prunes columns below a sample; its rows stay.
+            | PlanNode::Sample { input, .. }
             | PlanNode::ReplicateRows { input, .. } => {
                 let mut need = req.clone();
                 p.for_each_expr(&mut |e| references_into(e, &mut need));
