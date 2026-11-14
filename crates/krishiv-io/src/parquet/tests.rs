@@ -1834,3 +1834,69 @@ fn dictionary_encoded_nested_leaves_round_trip() {
         }
     }
 }
+
+/// A vector column written as a `FixedSizeList` reads back as one (design P3-T075 §6, decision D1): the footer's
+/// `ARROW:schema` keeps the carrier, a row selection and null vectors included, and the file holds the standard
+/// three-level `LIST` a `List` write of the same values gives.
+#[test]
+fn a_vector_column_round_trips_as_a_fixed_size_list() {
+    let env = Env::new();
+    let item = Arc::new(Field::new("item", DataType::Float32, true));
+    let values = arrow_array::Float32Array::from(vec![
+        Some(1.0),
+        Some(2.0),
+        Some(3.0),
+        None,
+        None,
+        None,
+        Some(7.0),
+        None,
+        Some(9.0),
+    ]);
+    let vectors = arrow_array::FixedSizeListArray::try_new(
+        Arc::clone(&item),
+        3,
+        Arc::new(values),
+        Some(vec![true, false, true].into()),
+    )
+    .unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "v",
+        vectors.data_type().clone(),
+        true,
+    )]));
+    let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(vectors)]).unwrap();
+    let file = env.put(
+        "vectors.parquet",
+        write(std::slice::from_ref(&batch), WriterProperties::default()),
+    );
+    let o = env.options(&[]);
+    let meta = env
+        .rt
+        .block_on(
+            env.io
+                .read_metadata(&ParquetFormat, &file, MetadataNeeds::default(), &o),
+        )
+        .unwrap();
+    assert!(
+        matches!(
+            meta.schema().field(0).data_type(),
+            DataType::FixedSizeList(_, 3)
+        ),
+        "{:?}",
+        meta.schema()
+    );
+    let out = env
+        .scan(&file, &ScanRequest::all(meta.schema()), &o)
+        .unwrap();
+    let out = arrow_select::concat::concat_batches(&out[0].schema(), &out).unwrap();
+    assert_eq!(out.column(0).to_data(), batch.column(0).to_data());
+    let mut req = ScanRequest::all(meta.schema());
+    req.selection = Some(RowSelection::from_ranges(std::iter::once(1..3)));
+    let out = env.scan(&file, &req, &o).unwrap();
+    let out = arrow_select::concat::concat_batches(&out[0].schema(), &out).unwrap();
+    assert_eq!(
+        out.column(0).to_data(),
+        batch.column(0).slice(1, 2).to_data()
+    );
+}

@@ -534,6 +534,14 @@ impl Resolver {
                     .map_or(Conv::Struct(Vec::new()), |(c, _)| c);
                 Ok(Some((Conv::List(Box::new(elem)), whole)))
             }
+            // A vector carrier in the file (`FixedSizeList`, kept by `ARROW:schema`) read into a table that declares
+            // `array<T>`: the plain list of the same values (design P3-T075 §4).
+            (DataType::List(te), DataType::FixedSizeList(fe, _)) => {
+                let elem = self
+                    .resolve(te, fe, at, false)?
+                    .map_or(Conv::Struct(Vec::new()), |(c, _)| c);
+                Ok(Some((Conv::List(Box::new(elem)), whole)))
+            }
             (DataType::Map(te, _), DataType::Map(fe, _)) => {
                 let (DataType::Struct(tkv), DataType::Struct(fkv)) =
                     (te.data_type(), fe.data_type())
@@ -938,6 +946,20 @@ fn convert(array: &ArrayRef, conv: &Conv, target: &DataType) -> Result<ArrayRef>
             Ok(Arc::new(s))
         }
         Conv::List(elem) => match target {
+            DataType::List(field) if array.as_fixed_size_list_opt().is_some() => {
+                let vectors = array.as_fixed_size_list();
+                let (offsets, values) = vectors_as_list_parts(vectors)?;
+                let values = convert(&values, elem, field.data_type())?;
+                Ok(Arc::new(
+                    ListArray::try_new(
+                        Arc::clone(field),
+                        offsets,
+                        values,
+                        vectors.nulls().cloned(),
+                    )
+                    .map_err(arrow_internal)?,
+                ))
+            }
             DataType::List(field) => {
                 let la = array
                     .as_list_opt::<i32>()
@@ -1030,6 +1052,41 @@ fn same_conv(dt: &DataType) -> Conv {
         },
         _ => Conv::Same,
     }
+}
+
+/// The offsets and values of the plain list a vector column reads as: `0, N, 2N, ..` over the values, which are
+/// shared when no row is null; a null row is an empty slot, so the values of the other rows are gathered.
+fn vectors_as_list_parts(
+    vectors: &arrow_array::FixedSizeListArray,
+) -> Result<(arrow_buffer::OffsetBuffer<i32>, ArrayRef)> {
+    let n = usize::try_from(vectors.value_length())
+        .map_err(|_| internal("a negative vector length"))?;
+    let rows = vectors.len();
+    let too_long = || internal("vectors too long for list offsets");
+    let total = rows.checked_mul(n).ok_or_else(too_long)?;
+    i32::try_from(total).map_err(|_| too_long())?;
+    if vectors.null_count() == 0 {
+        let offsets = arrow_buffer::OffsetBuffer::from_lengths(std::iter::repeat_n(n, rows));
+        return Ok((offsets, Arc::clone(vectors.values())));
+    }
+    let mut take = Vec::with_capacity(total);
+    let mut lengths = Vec::with_capacity(rows);
+    for row in 0..rows {
+        if vectors.is_valid(row) {
+            let start = u32::try_from(row * n).map_err(|_| too_long())?;
+            take.extend(start..start + u32::try_from(n).map_err(|_| too_long())?);
+            lengths.push(n);
+        } else {
+            lengths.push(0);
+        }
+    }
+    let values = arrow_select::take::take(
+        vectors.values().as_ref(),
+        &arrow_array::UInt32Array::from(take),
+        None,
+    )
+    .map_err(arrow_internal)?;
+    Ok((arrow_buffer::OffsetBuffer::from_lengths(lengths), values))
 }
 
 fn pow10(scale: i8) -> i128 {

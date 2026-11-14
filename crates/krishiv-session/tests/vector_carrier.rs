@@ -193,3 +193,38 @@ fn a_union_of_vectors_keeps_values_whatever_the_lengths() {
         vec![vec![0.5, 1.5], vec![1.0, 2.0], vec![3.0, 4.0]]
     );
 }
+
+/// Written to Parquet and read back by path (which keeps the file's carrier) and through a table declared as
+/// `array<float>` (which reads the plain list), a vector column gives the same values (design P3-T075 §4, §6).
+#[test]
+fn a_vector_column_through_parquet_reads_the_same_by_path_and_by_table() {
+    let s = session();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("vectors");
+    let path = path.to_str().unwrap();
+    block_on(
+        block_on(s.sql("SELECT id, v FROM t"))
+            .unwrap()
+            .write()
+            .parquet(path),
+    )
+    .unwrap();
+    let by_path = rows(
+        &s,
+        &format!("SELECT id, size(v), v FROM parquet.`{path}` ORDER BY id"),
+    );
+    block_on(s.sql(&format!(
+        "CREATE TABLE vt (id INT, v ARRAY<FLOAT>) USING parquet LOCATION '{path}'"
+    )))
+    .map(|df| block_on(df.collect()))
+    .unwrap()
+    .unwrap();
+    let by_table = rows(&s, "SELECT id, size(v), v FROM vt ORDER BY id");
+    let render = |b: &[RecordBatch]| {
+        b.iter()
+            .map(|b| format!("{:?}", b.columns()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(render(&by_path), render(&by_table));
+    assert_eq!(by_path[0].num_rows(), 3);
+}
