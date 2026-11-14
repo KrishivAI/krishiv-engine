@@ -243,6 +243,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         "krishiv.connect.session.idleTimeout",
         &CONNECT_SESSION_IDLE_TIMEOUT,
     ),
+    ("krishiv.optimizer.semiAntiJoinOrder", &SEMI_ANTI_JOIN_ORDER),
     (
         "krishiv.sql.files.maxPartitionBytes",
         &FILES_MAX_PARTITION_BYTES,
