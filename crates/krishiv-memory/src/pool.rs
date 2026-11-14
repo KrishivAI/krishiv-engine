@@ -382,8 +382,9 @@ pub(crate) struct Node {
     floor: usize,
     /// Bytes held by the subtree; on a query node, plus the abort bit.
     /// Releases subtract from the root down ([`Node::sub_chain`]), so while
-    /// one is in flight a node may count more than its ancestors do, never
-    /// less.
+    /// one is in flight a node may count more than its ancestors do; only a
+    /// refused grant's rollback in [`Node::add_chain`] (leaf first) briefly
+    /// leaves an ancestor counting more, for bytes that were never granted.
     word: AtomicUsize,
     /// The most bytes the subtree held after a grant that every pool on its
     /// path accepted (statistics: a grant rolled back is not counted).

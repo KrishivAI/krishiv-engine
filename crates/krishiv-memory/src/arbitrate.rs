@@ -560,7 +560,8 @@ impl Round {
                 // may have funded it): ask again before aborting anything.
                 // Each pass re-reads the counters only; a shortfall of 0
                 // means room was free at that read, so this cannot spin
-                // without other rounds taking that room each time.
+                // without other reservations (fast path or rounds) taking
+                // that room each time.
                 continue;
             }
             if plan.covered_by_pending(shortfall) {
