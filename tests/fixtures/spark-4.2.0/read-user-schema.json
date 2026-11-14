@@ -1,0 +1,2298 @@
+{
+ "format_version": 1,
+ "spark_version": "4.2.0",
+ "generator": "tests/scripts/gen_read_user_schema.py",
+ "notes": "Reads with a user schema on a tree laid out under <root>; reported schema plus rows (cast to STRING, UTC, sorted) or the error per case.",
+ "cases": [
+  {
+   "name": "nullability parquet StructType NOT NULL",
+   "input": "parquet pq schema a INT NOT NULL, b STRING NOT NULL",
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "x"
+    ],
+    [
+     "2",
+     "y"
+    ]
+   ]
+  },
+  {
+   "name": "nullability parquet DDL NOT NULL",
+   "input": "parquet pq schema a INT NOT NULL, b STRING NOT NULL",
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "x"
+    ],
+    [
+     "2",
+     "y"
+    ]
+   ]
+  },
+  {
+   "name": "nullability json StructType NOT NULL",
+   "input": "json js schema a INT NOT NULL, b STRING NOT NULL",
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "x"
+    ],
+    [
+     "2",
+     null
+    ],
+    [
+     "3",
+     "z"
+    ]
+   ]
+  },
+  {
+   "name": "nullability json DDL NOT NULL",
+   "input": "json js schema a INT NOT NULL, b STRING NOT NULL",
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "x"
+    ],
+    [
+     "2",
+     null
+    ],
+    [
+     "3",
+     "z"
+    ]
+   ]
+  },
+  {
+   "name": "nullability csv StructType NOT NULL",
+   "input": "csv csv schema a INT NOT NULL, b STRING NOT NULL",
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "x"
+    ],
+    [
+     "2",
+     "y"
+    ]
+   ]
+  },
+  {
+   "name": "nullability csv DDL NOT NULL",
+   "input": "csv csv schema a INT NOT NULL, b STRING NOT NULL",
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "x"
+    ],
+    [
+     "2",
+     "y"
+    ]
+   ]
+  },
+  {
+   "name": "nullability json NOT NULL with a null in data",
+   "input": "json js a INT NOT NULL, b STRING NOT NULL; record 2 has no b",
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "x"
+    ],
+    [
+     "2",
+     null
+    ],
+    [
+     "3",
+     "z"
+    ]
+   ]
+  },
+  {
+   "name": "nullability parquet NOT NULL, FAILFAST irrelevant",
+   "input": "parquet pq a INT NOT NULL only",
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "json missing and extra fields",
+   "input": "json js a INT, b STRING",
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "x"
+    ],
+    [
+     "2",
+     null
+    ],
+    [
+     "3",
+     "z"
+    ]
+   ]
+  },
+  {
+   "name": "json wrong types PERMISSIVE",
+   "input": "json jbad a INT, b STRING",
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     null,
+     "y"
+    ],
+    [
+     null,
+     "z"
+    ],
+    [
+     "1",
+     "x"
+    ],
+    [
+     "4",
+     "{\"q\":1}"
+    ]
+   ]
+  },
+  {
+   "name": "json wrong types PERMISSIVE with _corrupt_record",
+   "input": "json jbad a INT, b STRING, _corrupt_record STRING",
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "_corrupt_record",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     null,
+     "y",
+     "{\"a\":\"x\",\"b\":\"y\"}"
+    ],
+    [
+     null,
+     "z",
+     "{\"a\":1.5,\"b\":\"z\"}"
+    ],
+    [
+     "1",
+     "x",
+     null
+    ],
+    [
+     "4",
+     "{\"q\":1}",
+     null
+    ]
+   ]
+  },
+  {
+   "name": "json wrong types DROPMALFORMED",
+   "input": "json jbad a INT, b STRING DROPMALFORMED",
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "x"
+    ],
+    [
+     "4",
+     "{\"q\":1}"
+    ]
+   ]
+  },
+  {
+   "name": "json wrong types FAILFAST",
+   "input": "json jbad a INT, b STRING FAILFAST",
+   "error_class": "FAILED_READ_FILE.NO_HINT",
+   "error_chain": [
+    "FAILED_READ_FILE.NO_HINT",
+    "MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION",
+    "CANNOT_PARSE_JSON_FIELD"
+   ],
+   "message": "org.apache.spark.SparkException: [FAILED_READ_FILE.NO_HINT] Encountered error while reading file file://<root>/jbad/a.json.  SQLSTATE: KD001"
+  },
+  {
+   "name": "json string for int PERMISSIVE",
+   "input": "json jbad1 a INT, b STRING",
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     null,
+     "y"
+    ],
+    [
+     "1",
+     "x"
+    ]
+   ]
+  },
+  {
+   "name": "json string for int with _corrupt_record",
+   "input": "json jbad1 a INT, b STRING, _corrupt_record STRING",
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "_corrupt_record",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     null,
+     "y",
+     "{\"a\":\"x\",\"b\":\"y\"}"
+    ],
+    [
+     "1",
+     "x",
+     null
+    ]
+   ]
+  },
+  {
+   "name": "json string for int FAILFAST",
+   "input": "json jbad1 a INT, b STRING FAILFAST",
+   "error_class": "FAILED_READ_FILE.NO_HINT",
+   "error_chain": [
+    "FAILED_READ_FILE.NO_HINT",
+    "MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION",
+    "CANNOT_PARSE_JSON_FIELD"
+   ],
+   "message": "org.apache.spark.SparkException: [FAILED_READ_FILE.NO_HINT] Encountered error while reading file file://<root>/jbad1/a.json.  SQLSTATE: KD001"
+  },
+  {
+   "name": "json double for int PERMISSIVE",
+   "input": "json jbad2 a INT, b STRING",
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     null,
+     "y"
+    ],
+    [
+     "1",
+     "x"
+    ]
+   ]
+  },
+  {
+   "name": "json double for int with _corrupt_record",
+   "input": "json jbad2 a INT, b STRING, _corrupt_record STRING",
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "_corrupt_record",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     null,
+     "y",
+     "{\"a\":1.5,\"b\":\"y\"}"
+    ],
+    [
+     "1",
+     "x",
+     null
+    ]
+   ]
+  },
+  {
+   "name": "json double for int FAILFAST",
+   "input": "json jbad2 a INT, b STRING FAILFAST",
+   "error_class": "FAILED_READ_FILE.NO_HINT",
+   "error_chain": [
+    "FAILED_READ_FILE.NO_HINT",
+    "MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION",
+    "CANNOT_PARSE_JSON_FIELD"
+   ],
+   "message": "org.apache.spark.SparkException: [FAILED_READ_FILE.NO_HINT] Encountered error while reading file file://<root>/jbad2/a.json.  SQLSTATE: KD001"
+  },
+  {
+   "name": "json object for string PERMISSIVE",
+   "input": "json jbad3 a INT, b STRING",
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "x"
+    ],
+    [
+     "4",
+     "{\"q\":1}"
+    ]
+   ]
+  },
+  {
+   "name": "json object for string FAILFAST",
+   "input": "json jbad3 a INT, b STRING FAILFAST",
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "x"
+    ],
+    [
+     "4",
+     "{\"q\":1}"
+    ]
+   ]
+  },
+  {
+   "name": "json malformed line PERMISSIVE",
+   "input": "json jmalformed a INT, b STRING",
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     null,
+     null
+    ],
+    [
+     "1",
+     "x"
+    ],
+    [
+     "3",
+     "z"
+    ]
+   ]
+  },
+  {
+   "name": "json malformed line with _corrupt_record",
+   "input": "json jmalformed a INT, b STRING, _corrupt_record STRING",
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "_corrupt_record",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     null,
+     null,
+     "not json"
+    ],
+    [
+     "1",
+     "x",
+     null
+    ],
+    [
+     "3",
+     "z",
+     null
+    ]
+   ]
+  },
+  {
+   "name": "json malformed line FAILFAST",
+   "input": "json jmalformed a INT, b STRING FAILFAST",
+   "error_class": "FAILED_READ_FILE.NO_HINT",
+   "error_chain": [
+    "FAILED_READ_FILE.NO_HINT",
+    "MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION"
+   ],
+   "message": "org.apache.spark.SparkException: [FAILED_READ_FILE.NO_HINT] Encountered error while reading file file://<root>/jmalformed/a.json.  SQLSTATE: KD001"
+  },
+  {
+   "name": "json nested struct field absent from data",
+   "input": "json jnest a INT, s STRUCT<p: INT, q: STRING, r: INT>",
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "s",
+     "type": "struct<p:int,q:string,r:int>",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "{1, null, null}"
+    ],
+    [
+     "2",
+     null
+    ],
+    [
+     "3",
+     "{2, t, null}"
+    ]
+   ]
+  },
+  {
+   "name": "json schema column absent from all data",
+   "input": "json js a INT, zz STRING",
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "zz",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     null
+    ],
+    [
+     "2",
+     null
+    ],
+    [
+     "3",
+     null
+    ]
+   ]
+  },
+  {
+   "name": "json name case differs, default caseSensitive",
+   "input": "json jcase A INT, B STRING",
+   "schema": [
+    {
+     "name": "A",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "B",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     null,
+     null
+    ],
+    [
+     null,
+     null
+    ]
+   ]
+  },
+  {
+   "name": "json name case differs, caseSensitive=true",
+   "input": "json jcase A INT, B STRING caseSensitive=true",
+   "conf": {
+    "spark.sql.caseSensitive": "true"
+   },
+   "schema": [
+    {
+     "name": "A",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "B",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     null,
+     null
+    ],
+    [
+     null,
+     null
+    ]
+   ]
+  },
+  {
+   "name": "parquet subset",
+   "input": "parquet pq c BIGINT",
+   "schema": [
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "10"
+    ],
+    [
+     "20"
+    ]
+   ]
+  },
+  {
+   "name": "parquet reordered",
+   "input": "parquet pq c BIGINT, a INT",
+   "schema": [
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "10",
+     "1"
+    ],
+    [
+     "20",
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "parquet absent column",
+   "input": "parquet pq a INT, zz STRING",
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "zz",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     null
+    ],
+    [
+     "2",
+     null
+    ]
+   ]
+  },
+  {
+   "name": "parquet absent column NOT NULL",
+   "input": "parquet pq a INT, zz STRING NOT NULL",
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "zz",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     null
+    ],
+    [
+     "2",
+     null
+    ]
+   ]
+  },
+  {
+   "name": "parquet int read as string",
+   "input": "parquet pq a STRING",
+   "error_class": "FAILED_READ_FILE.PARQUET_COLUMN_DATA_TYPE_MISMATCH",
+   "error_chain": [
+    "FAILED_READ_FILE.PARQUET_COLUMN_DATA_TYPE_MISMATCH"
+   ],
+   "message": "org.apache.spark.SparkException: [FAILED_READ_FILE.PARQUET_COLUMN_DATA_TYPE_MISMATCH] Encountered error while reading file file://<root>/pq/part-<uuid>.snappy.parquet. Data type mismatches when reading Parquet column [a]. Expected Spark type string, actual Parquet type INT32. SQLSTATE: KD001"
+  },
+  {
+   "name": "parquet int read as bigint",
+   "input": "parquet pq a BIGINT",
+   "schema": [
+    {
+     "name": "a",
+     "type": "bigint",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "parquet bigint read as int",
+   "input": "parquet pq c INT",
+   "error_class": "FAILED_READ_FILE.PARQUET_COLUMN_DATA_TYPE_MISMATCH",
+   "error_chain": [
+    "FAILED_READ_FILE.PARQUET_COLUMN_DATA_TYPE_MISMATCH"
+   ],
+   "message": "org.apache.spark.SparkException: [FAILED_READ_FILE.PARQUET_COLUMN_DATA_TYPE_MISMATCH] Encountered error while reading file file://<root>/pq/part-<uuid>.snappy.parquet. Data type mismatches when reading Parquet column [c]. Expected Spark type int, actual Parquet type INT64. SQLSTATE: KD001"
+  },
+  {
+   "name": "parquet int read as decimal",
+   "input": "parquet pq a DECIMAL(10,2)",
+   "error_class": "FAILED_READ_FILE.PARQUET_COLUMN_DATA_TYPE_MISMATCH",
+   "error_chain": [
+    "FAILED_READ_FILE.PARQUET_COLUMN_DATA_TYPE_MISMATCH"
+   ],
+   "message": "org.apache.spark.SparkException: [FAILED_READ_FILE.PARQUET_COLUMN_DATA_TYPE_MISMATCH] Encountered error while reading file file://<root>/pq/part-<uuid>.snappy.parquet. Data type mismatches when reading Parquet column [a]. Expected Spark type decimal(10,2), actual Parquet type INT32. SQLSTATE: KD001"
+  },
+  {
+   "name": "parquet string read as int",
+   "input": "parquet pq b INT",
+   "error_class": "FAILED_READ_FILE.PARQUET_COLUMN_DATA_TYPE_MISMATCH",
+   "error_chain": [
+    "FAILED_READ_FILE.PARQUET_COLUMN_DATA_TYPE_MISMATCH"
+   ],
+   "message": "org.apache.spark.SparkException: [FAILED_READ_FILE.PARQUET_COLUMN_DATA_TYPE_MISMATCH] Encountered error while reading file file://<root>/pq/part-<uuid>.snappy.parquet. Data type mismatches when reading Parquet column [b]. Expected Spark type int, actual Parquet type BINARY. SQLSTATE: KD001"
+  },
+  {
+   "name": "parquet int read as double",
+   "input": "parquet pq a DOUBLE",
+   "schema": [
+    {
+     "name": "a",
+     "type": "double",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1.0"
+    ],
+    [
+     "2.0"
+    ]
+   ]
+  },
+  {
+   "name": "parquet name case differs, default",
+   "input": "parquet pqcase A INT, b STRING",
+   "schema": [
+    {
+     "name": "A",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "x"
+    ]
+   ]
+  },
+  {
+   "name": "parquet name case differs, caseSensitive=true",
+   "input": "parquet pqcase A INT, b STRING caseSensitive=true",
+   "conf": {
+    "spark.sql.caseSensitive": "true"
+   },
+   "schema": [
+    {
+     "name": "A",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     null,
+     null
+    ]
+   ]
+  },
+  {
+   "name": "partition parquet schema without k",
+   "input": "parquet pp/p schema v STRING",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ],
+    [
+     "vabc",
+     "abc"
+    ]
+   ]
+  },
+  {
+   "name": "partition parquet no schema",
+   "input": "parquet pp/p, no user schema",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ],
+    [
+     "vabc",
+     "abc"
+    ]
+   ]
+  },
+  {
+   "name": "partition parquet k last",
+   "input": "parquet pp/p schema v STRING, k STRING",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ],
+    [
+     "vabc",
+     "abc"
+    ]
+   ]
+  },
+  {
+   "name": "partition parquet k first",
+   "input": "parquet pp/p schema k STRING, v STRING",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ],
+    [
+     "vabc",
+     "abc"
+    ]
+   ]
+  },
+  {
+   "name": "partition parquet k in the middle",
+   "input": "parquet pp/p schema v STRING, k STRING",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ],
+    [
+     "vabc",
+     "abc"
+    ]
+   ]
+  },
+  {
+   "name": "partition parquet k int",
+   "input": "parquet pp/p schema v STRING, k INT",
+   "error_class": "INVALID_PARTITION_VALUE",
+   "message_parameters": {
+    "columnName": "`k`",
+    "dataType": "\"INT\"",
+    "value": "'abc'"
+   }
+  },
+  {
+   "name": "partition parquet k int FAILFAST",
+   "input": "parquet pp/p schema v STRING, k INT FAILFAST",
+   "error_class": "INVALID_PARTITION_VALUE",
+   "message_parameters": {
+    "columnName": "`k`",
+    "dataType": "\"INT\"",
+    "value": "'abc'"
+   }
+  },
+  {
+   "name": "partition parquet k bigint NOT NULL",
+   "input": "parquet pp/p schema v STRING, k BIGINT NOT NULL",
+   "error_class": "INVALID_PARTITION_VALUE",
+   "message_parameters": {
+    "columnName": "`k`",
+    "dataType": "\"BIGINT\"",
+    "value": "'abc'"
+   }
+  },
+  {
+   "name": "partition parquet only k",
+   "input": "parquet pp/p schema k STRING",
+   "schema": [
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "abc"
+    ]
+   ]
+  },
+  {
+   "name": "partition parquet basePath",
+   "input": "parquet pp/p/k=1 basePath=pp/p schema v STRING",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ]
+   ]
+  },
+  {
+   "name": "partition parquet basePath, k in schema",
+   "input": "parquet pp/p/k=1 basePath=pp/p schema v STRING, k STRING",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ]
+   ]
+  },
+  {
+   "name": "partition parquet sub-directory without basePath",
+   "input": "parquet pp/p/k=1 schema v STRING",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1"
+    ]
+   ]
+  },
+  {
+   "name": "partition csv schema without k",
+   "input": "csv pc/p schema v STRING, w STRING",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "w",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "10",
+     "1"
+    ],
+    [
+     "v2",
+     "20",
+     "2"
+    ],
+    [
+     "vabc",
+     "abc0",
+     "abc"
+    ]
+   ]
+  },
+  {
+   "name": "partition csv no schema",
+   "input": "csv pc/p, no user schema",
+   "schema": [
+    {
+     "name": "_c0",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "_c1",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "10",
+     "1"
+    ],
+    [
+     "v2",
+     "20",
+     "2"
+    ],
+    [
+     "vabc",
+     "abc0",
+     "abc"
+    ]
+   ]
+  },
+  {
+   "name": "partition csv k last",
+   "input": "csv pc/p schema v STRING, w STRING, k STRING",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "w",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "10",
+     "1"
+    ],
+    [
+     "v2",
+     "20",
+     "2"
+    ],
+    [
+     "vabc",
+     "abc0",
+     "abc"
+    ]
+   ]
+  },
+  {
+   "name": "partition csv k first",
+   "input": "csv pc/p schema k STRING, v STRING, w STRING",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "w",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "10",
+     "1"
+    ],
+    [
+     "v2",
+     "20",
+     "2"
+    ],
+    [
+     "vabc",
+     "abc0",
+     "abc"
+    ]
+   ]
+  },
+  {
+   "name": "partition csv k in the middle",
+   "input": "csv pc/p schema v STRING, k STRING, w STRING",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "w",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "10",
+     "1"
+    ],
+    [
+     "v2",
+     "20",
+     "2"
+    ],
+    [
+     "vabc",
+     "abc0",
+     "abc"
+    ]
+   ]
+  },
+  {
+   "name": "partition csv k int",
+   "input": "csv pc/p schema v STRING, w STRING, k INT",
+   "error_class": "INVALID_PARTITION_VALUE",
+   "message_parameters": {
+    "columnName": "`k`",
+    "dataType": "\"INT\"",
+    "value": "'abc'"
+   }
+  },
+  {
+   "name": "partition csv k int FAILFAST",
+   "input": "csv pc/p schema v STRING, w STRING, k INT FAILFAST",
+   "error_class": "INVALID_PARTITION_VALUE",
+   "message_parameters": {
+    "columnName": "`k`",
+    "dataType": "\"INT\"",
+    "value": "'abc'"
+   }
+  },
+  {
+   "name": "partition csv k bigint NOT NULL",
+   "input": "csv pc/p schema v STRING, w STRING, k BIGINT NOT NULL",
+   "error_class": "INVALID_PARTITION_VALUE",
+   "message_parameters": {
+    "columnName": "`k`",
+    "dataType": "\"BIGINT\"",
+    "value": "'abc'"
+   }
+  },
+  {
+   "name": "partition csv only k",
+   "input": "csv pc/p schema k STRING",
+   "schema": [
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "abc"
+    ]
+   ]
+  },
+  {
+   "name": "partition csv basePath",
+   "input": "csv pc/p/k=1 basePath=pc/p schema v STRING, w STRING",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "w",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "10",
+     "1"
+    ]
+   ]
+  },
+  {
+   "name": "partition csv basePath, k in schema",
+   "input": "csv pc/p/k=1 basePath=pc/p schema v STRING, w STRING, k STRING",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "w",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "10",
+     "1"
+    ]
+   ]
+  },
+  {
+   "name": "partition csv sub-directory without basePath",
+   "input": "csv pc/p/k=1 schema v STRING, w STRING",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "w",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "10"
+    ]
+   ]
+  },
+  {
+   "name": "partition parquet values 1,2 no schema",
+   "input": "parquet pp1/p, no user schema",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "partition parquet values 1,2 schema without k",
+   "input": "parquet pp1/p schema v STRING",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "partition parquet values 1,2 k int last",
+   "input": "parquet pp1/p schema v STRING, k INT",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "partition parquet values 1,2 k int first",
+   "input": "parquet pp1/p schema k INT, v STRING",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "partition parquet values 1,2 k bigint NOT NULL",
+   "input": "parquet pp1/p schema v STRING, k BIGINT NOT NULL",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "bigint",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "partition parquet values 1,2 k string NOT NULL",
+   "input": "parquet pp1/p schema v STRING, k STRING NOT NULL",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "partition parquet values 1,2 k double",
+   "input": "parquet pp1/p schema v STRING, k DOUBLE",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "double",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1.0"
+    ],
+    [
+     "v2",
+     "2.0"
+    ]
+   ]
+  },
+  {
+   "name": "partition csv values 1,2 no schema",
+   "input": "csv pc1/p, no user schema",
+   "schema": [
+    {
+     "name": "_c0",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "_c1",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "10",
+     "1"
+    ],
+    [
+     "v2",
+     "20",
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "partition csv values 1,2 schema without k",
+   "input": "csv pc1/p schema v STRING, w STRING",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "w",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "10",
+     "1"
+    ],
+    [
+     "v2",
+     "20",
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "partition csv values 1,2 k int last",
+   "input": "csv pc1/p schema v STRING, w STRING, k INT",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "w",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "10",
+     "1"
+    ],
+    [
+     "v2",
+     "20",
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "partition csv values 1,2 k int first",
+   "input": "csv pc1/p schema k INT, v STRING, w STRING",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "w",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "10",
+     "1"
+    ],
+    [
+     "v2",
+     "20",
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "partition csv values 1,2 k bigint NOT NULL",
+   "input": "csv pc1/p schema v STRING, w STRING, k BIGINT NOT NULL",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "w",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "bigint",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "10",
+     "1"
+    ],
+    [
+     "v2",
+     "20",
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "partition csv values 1,2 k string NOT NULL",
+   "input": "csv pc1/p schema v STRING, w STRING, k STRING NOT NULL",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "w",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "10",
+     "1"
+    ],
+    [
+     "v2",
+     "20",
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "partition csv values 1,2 k double",
+   "input": "csv pc1/p schema v STRING, w STRING, k DOUBLE",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "w",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "double",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "10",
+     "1.0"
+    ],
+    [
+     "v2",
+     "20",
+     "2.0"
+    ]
+   ]
+  },
+  {
+   "name": "partition parquet k also in data files, schema without k",
+   "input": "parquet ppk/p schema v STRING",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ],
+    [
+     "vabc",
+     "abc"
+    ]
+   ]
+  },
+  {
+   "name": "partition parquet k also in data files, k STRING",
+   "input": "parquet ppk/p schema v STRING, k STRING",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ],
+    [
+     "vabc",
+     "abc"
+    ]
+   ]
+  },
+  {
+   "name": "partition parquet k also in data files, k INT",
+   "input": "parquet ppk/p schema v STRING, k INT",
+   "error_class": "INVALID_PARTITION_VALUE",
+   "message_parameters": {
+    "columnName": "`k`",
+    "dataType": "\"INT\"",
+    "value": "'abc'"
+   }
+  },
+  {
+   "name": "partition parquet k also in data files, no schema",
+   "input": "parquet ppk/p no schema",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ],
+    [
+     "vabc",
+     "abc"
+    ]
+   ]
+  },
+  {
+   "name": "text one column renamed",
+   "input": "text txt line STRING",
+   "schema": [
+    {
+     "name": "line",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "line1"
+    ],
+    [
+     "line2"
+    ]
+   ]
+  },
+  {
+   "name": "text default schema",
+   "input": "text txt no schema",
+   "schema": [
+    {
+     "name": "value",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "line1"
+    ],
+    [
+     "line2"
+    ]
+   ]
+  },
+  {
+   "name": "text two columns",
+   "input": "text txt a STRING, b STRING",
+   "error_class": "_LEGACY_ERROR_TEMP_1290",
+   "message_parameters": {
+    "schemaSize": "2"
+   }
+  },
+  {
+   "name": "text int column",
+   "input": "text txt line INT",
+   "error_class": "UNSUPPORTED_DATA_TYPE_FOR_DATASOURCE",
+   "message_parameters": {
+    "columnName": "`line`",
+    "columnType": "\"INT\"",
+    "format": "Text"
+   }
+  },
+  {
+   "name": "text one column NOT NULL",
+   "input": "text txt line STRING NOT NULL",
+   "schema": [
+    {
+     "name": "line",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "line1"
+    ],
+    [
+     "line2"
+    ]
+   ]
+  },
+  {
+   "name": "sql view json",
+   "input": "CREATE TEMPORARY VIEW v1 (a INT, b STRING) USING json OPTIONS (path jbad)",
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     null,
+     "y"
+    ],
+    [
+     null,
+     "z"
+    ],
+    [
+     "1",
+     "x"
+    ],
+    [
+     "4",
+     "{\"q\":1}"
+    ]
+   ]
+  },
+  {
+   "name": "sql view json NOT NULL",
+   "input": "CREATE TEMPORARY VIEW v1b (a INT NOT NULL, b STRING NOT NULL) USING json OPTIONS (path js)",
+   "schema": [
+    {
+     "name": "a",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "b",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "x"
+    ],
+    [
+     "2",
+     null
+    ],
+    [
+     "3",
+     "z"
+    ]
+   ]
+  },
+  {
+   "name": "sql view parquet",
+   "input": "CREATE TEMPORARY VIEW v2 (c BIGINT, zz STRING) USING parquet OPTIONS (path pq)",
+   "schema": [
+    {
+     "name": "c",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "zz",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "10",
+     null
+    ],
+    [
+     "20",
+     null
+    ]
+   ]
+  },
+  {
+   "name": "sql view parquet partitioned without k",
+   "input": "CREATE TEMPORARY VIEW v3 (v STRING) USING parquet OPTIONS (path pp/p)",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ],
+    [
+     "vabc",
+     "abc"
+    ]
+   ]
+  },
+  {
+   "name": "sql view parquet partitioned with k",
+   "input": "CREATE TEMPORARY VIEW v4 (k STRING, v STRING) USING parquet OPTIONS (path pp/p)",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ],
+    [
+     "vabc",
+     "abc"
+    ]
+   ]
+  },
+  {
+   "name": "sql view csv partitioned with k int",
+   "input": "CREATE TEMPORARY VIEW v5 (v STRING, w STRING, k INT) USING csv OPTIONS (path pc/p)",
+   "error_class": "INVALID_PARTITION_VALUE",
+   "message_parameters": {
+    "columnName": "`k`",
+    "dataType": "\"INT\"",
+    "value": "'abc'"
+   }
+  }
+ ]
+}
