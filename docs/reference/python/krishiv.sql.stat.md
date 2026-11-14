@@ -5,11 +5,8 @@
 `DataFrameStatFunctions` (`DataFrame.stat`), as `pyspark.sql.DataFrameStatFunctions`.
 
 `crosstab` and `sampleBy` are built from the DataFrame facade, so they stay lazy and run in the
-engine. `approxQuantile`, `corr`, `cov` and `freqItems` need engine aggregates (variance,
-covariance, correlation, approximate percentiles, a frequent-items sketch) that do not exist yet:
-they check their arguments as PySpark does and then fail with the engine's own
-`KRISHIV_UNSUPPORTED_FEATURE` error, as `DataFrame.sample` does, instead of computing the
-statistic in Python.
+engine. `approxQuantile`, `corr` and `cov` run one engine aggregate and return a Python value;
+`freqItems` reads the columns and counts as Spark's `CollectFrequentItems` does (`_stats.py`).
 
 ## `DataFrameStatFunctions`
 
@@ -27,8 +24,8 @@ def approxQuantile(self, col: Any, probabilities: Any, relativeError: Any) -> li
 
 The approximate quantiles of numeric columns; see `DataFrame.approxQuantile`.
 
-.. note:: The engine has no approximate-percentile aggregate yet: after checking its
-    arguments this fails with `KRISHIV_UNSUPPORTED_FEATURE`.
+With `relativeError` 0 the quantiles are exact (the nearest rank); otherwise the engine's
+approximate percentile is used. NULL and NaN are skipped; a column with no usable value gives `[]`.
 
 ### `corr`
 
@@ -38,8 +35,8 @@ def corr(self, col1: str, col2: str, method: str | None=None) -> float
 
 The Pearson correlation of two columns; see `DataFrame.corr`.
 
-.. note:: The engine has no correlation aggregate yet: after checking its arguments this
-    fails with `KRISHIV_UNSUPPORTED_FEATURE`.
+NULL values count as 0.0, and the result is NaN where it is undefined; with ANSI on, a column
+with no variance raises `DIVIDE_BY_ZERO`, as Spark 4 does.
 
 ### `cov`
 
@@ -49,8 +46,7 @@ def cov(self, col1: str, col2: str) -> float
 
 The sample covariance of two columns; see `DataFrame.cov`.
 
-.. note:: The engine has no covariance aggregate yet: after checking its arguments this
-    fails with `KRISHIV_UNSUPPORTED_FEATURE`.
+NULL values count as 0.0, and the result is 0.0 where it is undefined.
 
 ### `crosstab`
 
@@ -68,8 +64,9 @@ def freqItems(self, cols: Any, support: float | None=None) -> DataFrame
 
 The frequent items of columns; see `DataFrame.freqItems`.
 
-.. note:: The engine has no frequent-items sketch yet: after checking its arguments this
-    fails with `KRISHIV_UNSUPPORTED_FEATURE`.
+The columns are read into Python and counted as Spark's frequent-items sketch counts (Karp,
+Schenker and Papadimitriou): exact on one partition, and the order of the items is not Spark's hash
+order.
 
 ### `sampleBy`
 
@@ -78,7 +75,3 @@ def sampleBy(self, col: Column | str, fractions: dict[Any, float], seed: int | N
 ```
 
 A stratified sample without replacement; see `DataFrame.sampleBy`.
-
-.. note:: The engine cannot sample yet: unless `fractions` is empty, the returned
-    `DataFrame` fails its first action with `KRISHIV_UNSUPPORTED_FEATURE` (from
-    `DataFrame.sample`).

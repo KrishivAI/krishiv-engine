@@ -33,10 +33,7 @@ def alias(self, alias: str) -> DataFrame
 def approxQuantile(self, col: str | list[str] | tuple[str, ...], probabilities: list[float] | tuple[float, ...], relativeError: float) -> list[Any]
 ```
 
-The approximate quantiles of numeric columns.
-
-.. note:: The engine has no approximate-percentile aggregate yet: after checking its
-    arguments this fails with `KRISHIV_UNSUPPORTED_FEATURE`.
+The approximate quantiles of numeric columns (see `DataFrameStatFunctions.approxQuantile`).
 
 ### `cache`
 
@@ -126,10 +123,7 @@ def columns(self) -> list[str]
 def corr(self, col1: str, col2: str, method: str | None=None) -> float
 ```
 
-The Pearson correlation of two columns as a double value.
-
-.. note:: The engine has no correlation aggregate yet: after checking its arguments this
-    fails with `KRISHIV_UNSUPPORTED_FEATURE`.
+The Pearson correlation of two columns as a double value (see `DataFrameStatFunctions.corr`).
 
 ### `count`
 
@@ -146,9 +140,6 @@ def cov(self, col1: str, col2: str) -> float
 ```
 
 The sample covariance of two columns as a double value.
-
-.. note:: The engine has no covariance aggregate yet: after checking its arguments this
-    fails with `KRISHIV_UNSUPPORTED_FEATURE`.
 
 ### `createOrReplaceTempView`
 
@@ -218,13 +209,18 @@ def describe(self, *cols: str | list[str]) -> DataFrame
 
 Computes basic statistics for numeric and string columns: count, mean, stddev, min and max.
 
-.. note:: The engine has no standard-deviation aggregate yet: after checking its
-    arguments this fails with `KRISHIV_UNSUPPORTED_FEATURE`.
+This includes count, mean, stddev, min, and max. If no columns are given, this function computes
+statistics for all numerical or string columns. Other columns are left out.
 
 **Parameters**
 
 cols : str, list, optional
      Column name or list of column names to describe by (default All columns).
+
+**Notes**
+
+The statistics are computed when this is called (one engine aggregate) and the result is a local
+`DataFrame` of strings.
 
 ### `distinct`
 
@@ -648,10 +644,8 @@ def first(self) -> Row | None
 def freqItems(self, cols: list[str] | tuple[str, ...], support: float | None=None) -> DataFrame
 ```
 
-The frequent items of columns, possibly with false positives.
-
-.. note:: The engine has no frequent-items sketch yet: after checking its arguments this
-    fails with `KRISHIV_UNSUPPORTED_FEATURE`.
+The frequent items of columns, possibly with false positives (see
+`DataFrameStatFunctions.freqItems`).
 
 ### `groupBy`
 
@@ -912,6 +906,37 @@ def profile(self) -> ProfileView
 Runs the query and returns its profile as a viewer (`EXPLAIN ANALYZE`): leave it as
 the last expression of a notebook cell, or call `.save("profile.html")`. Krishiv extension.
 
+### `randomSplit`
+
+```python
+def randomSplit(self, weights: list[float], seed: int | None=None) -> list[DataFrame]
+```
+
+Randomly splits this `DataFrame` with the provided weights.
+
+**Parameters**
+
+weights : list
+    list of doubles as weights with which to split the `DataFrame`.
+    Weights will be normalized if they don't sum up to 1.0.
+seed : int, optional
+    The seed for sampling.
+
+**Notes**
+
+The rows are ordered by every sortable column first, so a split does not depend on the order of the
+input; each split is the rows whose draw of `rand(seed)` falls in its slice of the weights, so the
+splits are disjoint and together are the input.
+
+**Examples**
+
+```python
+>>> df = spark.range(20)
+>>> splits = df.randomSplit([1.0, 2.0, 3.0], 11)
+>>> [s.count() for s in splits]
+[6, 5, 9]
+```
+
 ### `repartition`
 
 ```python
@@ -1053,13 +1078,11 @@ def sample(self, withReplacement: bool | float | None=None, fraction: float | No
 
 Returns a sampled subset of this `DataFrame`.
 
-.. note:: The engine cannot sample yet: the returned `DataFrame` fails its
-    first action with `KRISHIV_UNSUPPORTED_FEATURE`.
-
 **Parameters**
 
 withReplacement : bool, optional
-    Sample with replacement or not (default `False`).
+    Sample with replacement or not (default `False`). Sampling with replacement is not
+    supported: it fails with `KRISHIV_UNSUPPORTED_FEATURE`.
 fraction : float, optional
     Fraction of rows to generate, range [0.0, 1.0].
 seed : int, optional
@@ -1077,6 +1100,19 @@ count of the given `DataFrame`.
 
 `fraction` is required and, `withReplacement` and `seed` are optional.
 
+Each row draws one number from Spark's `XORShiftRandom` stream (`rand(seed)`) and is kept when
+it is below `fraction`, so on one partition the rows are the ones Spark keeps for the same seed. An
+explicit `seed` is always honoured, also in `df.sample(0.3, seed=1)`, where PySpark (4.2.0) drops
+it and samples at random. The result depends on the order of the rows and on how they are partitioned.
+
+**Examples**
+
+```python
+>>> df = spark.range(20)
+>>> df.sample(0.3, 1).count()
+7
+```
+
 ### `sampleBy`
 
 ```python
@@ -1085,10 +1121,6 @@ def sampleBy(self, col: ColumnOrName, fractions: dict[Any, float], seed: int | N
 
 Returns a stratified sample without replacement based on the
 fraction given on each stratum.
-
-.. note:: The engine cannot sample yet: unless `fractions` is empty, the returned
-    `DataFrame` fails its first action with `KRISHIV_UNSUPPORTED_FEATURE` (from
-    `DataFrame.sample`).
 
 **Parameters**
 
@@ -1106,7 +1138,7 @@ a new `DataFrame` that represents the stratified sample
 
 **Notes**
 
-The rows come back grouped by stratum, not in the order of this DataFrame.
+As Spark, each row draws `rand(seed)` and is kept when the draw is below its stratum's fraction.
 
 ### `schema`
 
@@ -1216,13 +1248,16 @@ def summary(self, *statistics: str | list[str]) -> DataFrame
 Computes the given statistics (count, mean, stddev, min, max and percentiles such as
 `75%`) for numeric and string columns.
 
-.. note:: The engine has no standard-deviation or approximate-percentile aggregate yet:
-    after checking its arguments this fails with `KRISHIV_UNSUPPORTED_FEATURE`.
-
 **Parameters**
 
 statistics : str, optional
      The statistics to calculate (default count, mean, stddev, min, 25%, 50%, 75%, max).
+     Also `count_distinct` and `approx_count_distinct`, and any `<number>%`.
+
+**Notes**
+
+The statistics are computed when this is called (one engine aggregate) and the result is a local
+`DataFrame` of strings. A percentile is the exact nearest-rank value up to 10000 rows.
 
 ### `tail`
 
