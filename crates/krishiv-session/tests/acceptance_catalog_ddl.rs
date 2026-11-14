@@ -142,7 +142,7 @@ fn sql_19_a_managed_table_without_columns_is_still_refused() {
     let dir = tempfile::tempdir().unwrap();
     let s = session(dir.path());
     let e = block_on(s.sql("CREATE TABLE nothing USING parquet")).unwrap_err();
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert_eq!(e.error_class(), ErrorClass::UnableToInferSchema);
 }
 
 #[test]
@@ -209,4 +209,78 @@ fn rs_8_a_view_over_parquet_files_infers_its_schema_and_a_missing_path_is_still_
     // a view with neither columns nor a path has nothing to infer from
     let e = block_on(s.sql("CREATE TEMPORARY VIEW nopath USING parquet")).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+}
+
+#[test]
+fn rs_8_a_view_over_a_partitioned_directory_reads_every_row_with_its_partition_column() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE src (id INT, p INT) USING parquet PARTITIONED BY (p)",
+    );
+    run(&s, "INSERT INTO src VALUES (1, 10), (2, 20)");
+    let l = dir.path().join("src");
+    run(
+        &s,
+        &format!(
+            "CREATE TEMPORARY VIEW pv USING parquet OPTIONS (path '{}')",
+            l.to_str().unwrap()
+        ),
+    );
+    assert_eq!(rows(&s, "SELECT count(*) FROM pv"), [vec![some("2")]]);
+    assert_eq!(
+        rows(&s, "SELECT id, p FROM pv ORDER BY id"),
+        [vec![some("1"), some("10")], vec![some("2"), some("20")]]
+    );
+}
+
+#[test]
+fn sql_19_a_table_without_columns_does_not_take_partitioning_or_bucketing_and_a_missing_location_cannot_infer()
+ {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE src (id INT, p INT) USING parquet PARTITIONED BY (p)",
+    );
+    run(&s, "INSERT INTO src VALUES (1, 10)");
+    let l = dir.path().join("src");
+    let l = l.to_str().unwrap();
+    let e = block_on(s.sql(&format!(
+        "CREATE TABLE a USING parquet PARTITIONED BY (p) LOCATION '{l}'"
+    )))
+    .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::SpecifyPartitionIsNotAllowed);
+    let e = block_on(s.sql(&format!(
+        "CREATE TABLE b USING parquet CLUSTERED BY (id) INTO 2 BUCKETS LOCATION '{l}'"
+    )))
+    .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::SpecifyBucketingIsNotAllowed);
+    let e = block_on(s.sql("CREATE TABLE c USING parquet LOCATION '/nonexistent/krishiv'"))
+        .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::UnableToInferSchema);
+}
+
+#[test]
+fn sql_19_hidden_and_underscore_directories_are_not_partition_columns() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE src (id INT, p INT) USING parquet PARTITIONED BY (p)",
+    );
+    run(&s, "INSERT INTO src VALUES (1, 10)");
+    let l = dir.path().join("src");
+    std::fs::create_dir_all(l.join(".hidden=1")).unwrap();
+    std::fs::create_dir_all(l.join("_temporary=1")).unwrap();
+    run(
+        &s,
+        &format!(
+            "CREATE TABLE pt USING parquet LOCATION '{}'",
+            l.to_str().unwrap()
+        ),
+    );
+    run(&s, "MSCK REPAIR TABLE pt");
+    assert_eq!(rows(&s, "SHOW PARTITIONS pt").len(), 1);
 }

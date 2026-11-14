@@ -172,21 +172,43 @@ impl Session {
                 // `CREATE TABLE t USING fmt LOCATION 'dir'` without columns: Spark reads the schema, and the partition
                 // columns of `key=value` directories, from the files (SQL-19).
                 let discovered: Vec<String> = if table.columns.is_empty() {
+                    // Spark infers the partitioning and the bucketing of a table without a column list; naming them is an error.
+                    if !layout.partition_by.is_empty() {
+                        return Err(krishiv_common::error::SpecifyPartitionIsNotAllowed {}.into());
+                    }
+                    if layout.bucket.is_some() {
+                        return Err(krishiv_common::error::SpecifyBucketingIsNotAllowed {}.into());
+                    }
+                    let unable = || -> KrishivError {
+                        krishiv_common::error::UnableToInferSchema {
+                            format: table.provider_written.clone(),
+                        }
+                        .into()
+                    };
+                    // A managed table has no files to read a schema from.
                     if !external {
-                        return Err(unsupported("CREATE TABLE without columns"));
+                        return Err(unable());
                     }
                     let location = table.location.to_string_lossy().into_owned();
-                    table.columns = self
+                    // Spark ignores a location that does not exist and finds no files to infer from.
+                    table.columns = match self
                         .infer_file_columns(&table.provider, &[location.as_str()], &table.options)
-                        .await?;
+                        .await
+                    {
+                        Ok(columns) => columns,
+                        Err(e)
+                            if e.error_class()
+                                == krishiv_common::error::ErrorClass::PathNotFound =>
+                        {
+                            return Err(unable());
+                        }
+                        Err(e) => return Err(e),
+                    };
                     if table.columns.is_empty() {
-                        return Err(unsupported("CREATE TABLE without columns"));
+                        return Err(unable());
                     }
-                    if layout.partition_by.is_empty() {
-                        crate::partitions::partition_keys(&table.location)
-                    } else {
-                        Vec::new()
-                    }
+                    // The partition columns of `key=value` directories (hidden and `_`-prefixed entries are not).
+                    crate::partitions::partition_keys(&table.location)
                 } else {
                     Vec::new()
                 };

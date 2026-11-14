@@ -148,7 +148,7 @@ fn binding_refuses_a_type_that_does_not_up_cast() {
          data or choose a higher precision type of the field in the target object"
     );
     // The stored schema did not change.
-    assert_eq!(columns(&s, "v"), ["c1|int|"]);
+    assert_eq!(columns(&s, "v"), ["c1|int|~"]);
 }
 
 #[test]
@@ -260,7 +260,7 @@ fn compensation_casts_with_ansi_casts() {
         err(&s, "SELECT * FROM v").error_class().name(),
         "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
     );
-    assert_eq!(columns(&s, "v"), ["c1|int|"]);
+    assert_eq!(columns(&s, "v"), ["c1|int|~"]);
     // A missing column.
     run(&s, "DROP TABLE IF EXISTS t");
     run(&s, "CREATE TABLE t(c3 INT NOT NULL, c2 INT) USING PARQUET");
@@ -297,7 +297,7 @@ fn alter_view_changes_the_mode() {
     assert_eq!(rows(&s, "SELECT * FROM v"), ["1"]);
     run(&s, "ALTER VIEW v WITH SCHEMA TYPE EVOLUTION");
     assert_eq!(schema(&s, "SELECT * FROM v"), ["c1:string"]);
-    assert_eq!(columns(&s, "v"), ["c1|string|"]);
+    assert_eq!(columns(&s, "v"), ["c1|string|~"]);
     assert_eq!(
         info(&s, "v", "View Schema Mode").as_deref(),
         Some("TYPE EVOLUTION")
@@ -332,7 +332,7 @@ fn type_evolution_keeps_the_names_and_takes_the_types() {
     assert_eq!(schema(&s, "SELECT * FROM v"), ["c1:string", "c2:double"]);
     assert_eq!(rows(&s, "SELECT * FROM v"), ["1|2"]);
     // The read stored the new types.
-    assert_eq!(columns(&s, "v"), ["c1|string|", "c2|double|"]);
+    assert_eq!(columns(&s, "v"), ["c1|string|~", "c2|double|~"]);
     assert_eq!(
         info(&s, "v", "View Query Output Columns").as_deref(),
         Some("[`c1`, `c2`]")
@@ -371,7 +371,7 @@ fn a_column_list_turns_evolution_into_type_evolution() {
         "CREATE TABLE t(c1 STRING NOT NULL, c2 DOUBLE) USING PARQUET",
     );
     assert_eq!(schema(&s, "SELECT * FROM v"), ["a1:string", "a2:double"]);
-    assert_eq!(columns(&s, "v"), ["a1|string|", "a2|double|"]);
+    assert_eq!(columns(&s, "v"), ["a1|string|~", "a2|double|~"]);
     run(&s, "DROP TABLE IF EXISTS t");
     run(&s, "CREATE TABLE t(c3 INT, c2 INT) USING PARQUET");
     let e = err(&s, "SELECT * FROM v");
@@ -408,7 +408,7 @@ fn evolution_takes_the_query_schema() {
     run(&s, "INSERT INTO t VALUES ('1', 2.0)");
     assert_eq!(schema(&s, "SELECT * FROM v"), ["c4:string", "c5:double"]);
     assert_eq!(rows(&s, "SELECT * FROM v"), ["1|2"]);
-    assert_eq!(columns(&s, "v"), ["c4|string|", "c5|double|"]);
+    assert_eq!(columns(&s, "v"), ["c4|string|~", "c5|double|~"]);
     assert_eq!(
         info(&s, "v", "View Query Output Columns").as_deref(),
         Some("[`c4`, `c5`]")
@@ -416,7 +416,7 @@ fn evolution_takes_the_query_schema() {
     run(&s, "DROP TABLE IF EXISTS t");
     run(&s, "CREATE TABLE t(c1 INT) USING PARQUET");
     assert_eq!(schema(&s, "SELECT * FROM v"), ["c1:int"]);
-    assert_eq!(columns(&s, "v"), ["c1|int|"]);
+    assert_eq!(columns(&s, "v"), ["c1|int|~"]);
 }
 
 #[test]
@@ -447,7 +447,7 @@ fn alter_view_to_evolution_follows_the_table() {
     run(&s, "DROP TABLE IF EXISTS t");
     run(&s, "CREATE TABLE t(c1 STRING, c2 INT) USING PARQUET");
     assert_eq!(schema(&s, "SELECT * FROM v"), ["c1:string", "c2:int"]);
-    assert_eq!(columns(&s, "v"), ["c1|string|", "c2|int|"]);
+    assert_eq!(columns(&s, "v"), ["c1|string|~", "c2|int|~"]);
     assert_eq!(
         info(&s, "v", "View Query Output Columns").as_deref(),
         Some("[`c1`, `c2`]")

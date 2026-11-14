@@ -190,7 +190,7 @@ fn describe_table_query_namespace_and_column() {
     setup(&s);
     let (names, d) = table(&s, "DESCRIBE t");
     assert_eq!(names, ["col_name", "data_type", "comment"]);
-    assert_eq!(d, [["a", "int", "ca"], ["b", "string", ""]]);
+    assert_eq!(d, [["a", "int", "ca"], ["b", "string", "NULL"]]);
     let ext = rows(&s, "DESCRIBE TABLE EXTENDED t");
     assert_eq!(ext[2], ["", "", ""]);
     assert_eq!(ext[3][0], "# Detailed Table Information");
@@ -233,7 +233,7 @@ fn describe_table_query_namespace_and_column() {
     assert_eq!(ns[2], ["Comment", "dc"]);
     // Spark 4.2.0 prints nothing for no properties (`schema-collation/probe1.out`).
     assert_eq!(ns[5], ["Properties", ""]);
-    assert_eq!(rows(&s, "DESCRIBE tv"), [["x", "int", ""]]);
+    assert_eq!(rows(&s, "DESCRIBE tv"), [["x", "int", "NULL"]]);
     assert_eq!(class(&s, "DESCRIBE missing"), "TABLE_OR_VIEW_NOT_FOUND");
 }
 
@@ -243,7 +243,7 @@ fn temporary_views_and_unsupported_layouts() {
     let s = session(dir.path());
     setup(&s);
     // A temporary view has columns only, and no properties.
-    assert_eq!(rows(&s, "DESCRIBE EXTENDED tv"), [["x", "int", ""]]);
+    assert_eq!(rows(&s, "DESCRIBE EXTENDED tv"), [["x", "int", "NULL"]]);
     assert!(rows(&s, "SHOW TBLPROPERTIES tv").is_empty());
     assert_eq!(
         class(&s, "SHOW CREATE TABLE tv"),
@@ -440,8 +440,8 @@ fn column_comments_follow_columns_through_queries() {
     run(&s, "CREATE TABLE ct AS SELECT a, b AS bb, c FROM t");
     assert_eq!(
         desc("ct"),
-        // DESC prints an empty comment for a table column without one.
-        pairs(&[("a", "ca"), ("bb", "cb"), ("c", "")])
+        // DESC prints NULL for a table column without a comment.
+        pairs(&[("a", "ca"), ("bb", "cb"), ("c", "NULL")])
     );
     run(&s, "CREATE VIEW v1 AS SELECT a, b FROM t");
     assert_eq!(desc("v1"), pairs(&[("a", "ca"), ("b", "cb")]));
@@ -628,7 +628,7 @@ fn column_metadata_follows_renames_keys_and_repeated_columns() {
         (
             "x1",
             "SELECT k, sum(v) s FROM c GROUP BY ROLLUP(k)",
-            &[("k", "char(3)", "ck"), ("s", "bigint", "")][..],
+            &[("k", "char(3)", "ck"), ("s", "bigint", "NULL")][..],
         ),
         (
             "x2",
@@ -636,7 +636,7 @@ fn column_metadata_follows_renames_keys_and_repeated_columns() {
             &[
                 ("k", "char(3)", "ck"),
                 ("n", "varchar(4)", "cn"),
-                ("s", "bigint", ""),
+                ("s", "bigint", "NULL"),
             ],
         ),
         (

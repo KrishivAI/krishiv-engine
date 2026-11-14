@@ -1206,9 +1206,10 @@ impl Session {
     /// 3. only the files that entry removed are deleted (a writer that committed into the partition after it keeps
     ///    its files), then the directories left empty. An I/O error there leaves files no read lists.
     ///
-    /// `PURGE` changes nothing (no trash). Refused: an external table (Spark keeps its files and stops reading
-    /// them; reads here refuse a directory the catalog does not know) and a partition registered away from its
-    /// default directory (reads never list it, and its directory may hold anything).
+    /// `PURGE` changes nothing (no trash). An external table's partitions are dropped from the catalog only and
+    /// no file is touched (Spark keeps its files and stops reading them; `MSCK REPAIR TABLE` registers them
+    /// again). Refused: a managed table's partition registered away from its default directory (reads never list
+    /// it, and its directory may hold anything).
     pub(crate) async fn drop_partitions(
         &self,
         table: &Arc<CatalogTable>,
@@ -1804,6 +1805,8 @@ fn resolves_in_place(location: &Path, path: &Path) -> bool {
 /// The partition columns of the files under the local directory `location`: the key of each level of `key=value`
 /// directories, following the first directory (by path) at each level. Empty for a path that is not a local directory.
 /// Spark takes a table's partition columns from them when `CREATE TABLE ... USING fmt LOCATION` has no column list.
+/// Local directories only (an object-store location finds none: its `key=value` prefixes stay ordinary data columns of the inferred
+/// schema), at most 32 levels; keys are not percent-decoded.
 pub(crate) fn partition_keys(location: &Path) -> Vec<String> {
     let mut dir = location.to_path_buf();
     let mut keys: Vec<String> = Vec::new();
@@ -1814,7 +1817,9 @@ pub(crate) fn partition_keys(location: &Path) -> Vec<String> {
         let mut next: Option<(String, PathBuf)> = None;
         for e in entries.flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
-            if e.path().is_dir()
+            // Hidden entries and `_`-prefixed ones (`_SUCCESS`, `_temporary`, `.hive-staging`) are not partitions.
+            if !name.starts_with(['.', '_'])
+                && e.path().is_dir()
                 && let Some((k, _)) = name.split_once('=')
                 && !k.is_empty()
                 && next.as_ref().is_none_or(|(_, p)| e.path() < *p)
@@ -1823,7 +1828,7 @@ pub(crate) fn partition_keys(location: &Path) -> Vec<String> {
             }
         }
         let Some((key, path)) = next else { break };
-        if keys.iter().any(|k| k.eq_ignore_ascii_case(&key)) {
+        if keys.iter().any(|k| k.eq_ignore_ascii_case(&key)) || keys.len() >= 32 {
             break;
         }
         keys.push(key);

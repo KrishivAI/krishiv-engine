@@ -859,9 +859,15 @@ impl Session {
             crate::catalog::TempTable::Files {
                 source,
                 columns,
-                known: true,
+                // A view whose columns were inferred reads its files as a read by path does, partition directories
+                // included; a declared column list keeps the table-like read.
+                known: !infer,
                 permanent: false,
-                partitions: Some(Default::default()),
+                partitions: if infer {
+                    None
+                } else {
+                    Some(Default::default())
+                },
             },
         );
         // A replaced view must not keep serving the rows of the old one.
