@@ -109,11 +109,53 @@ fn sent_ids_and_cancellation() {
     assert!(o.has_sent("r1"));
     assert!(!o.has_sent("r2"));
     assert!(!o.is_cancelled());
-    o.cancel();
-    o.cancel();
+    assert!(o.cancel(), "the first cancel interrupts");
+    assert!(!o.cancel(), "a second interrupts nothing");
     assert!(o.is_cancelled());
     // Resolves at once after a cancel, whether or not anyone waited.
     futures::executor::block_on(o.cancelled());
+}
+
+#[test]
+fn a_finished_operation_is_not_interrupted() {
+    // Completion wins: the interrupt finds it finished.
+    let o = op(A, b"p");
+    assert!(o.finish(), "a running operation finishes");
+    assert!(o.finish(), "finishing twice is still finished");
+    assert!(!o.cancel());
+    assert!(!o.is_cancelled());
+    // Interrupt wins: the completion finds it cancelled.
+    let c = op(B, b"q");
+    assert!(c.cancel());
+    assert!(!c.finish(), "a cancelled operation does not finish");
+    assert!(c.is_cancelled());
+    assert!(!c.cancel());
+    let ops = Operations::default();
+    ops.register(&o, 2).unwrap();
+    ops.register(&op(B, b"q"), 2).unwrap();
+    let mut ids: Vec<String> = ops
+        .all()
+        .iter()
+        .map(|o| o.id().as_str().to_owned())
+        .collect();
+    ids.sort();
+    assert_eq!(ids, vec![A.to_owned(), B.to_owned()]);
+}
+
+/// Racing threads: exactly one of `cancel` and `finish` wins, and their
+/// answers agree with the final state.
+#[test]
+fn cancel_and_finish_race_to_one_winner() {
+    for _ in 0..2_000 {
+        let o = op(A, b"p");
+        let (c, f) = std::thread::scope(|s| {
+            let c = s.spawn(|| o.cancel());
+            let f = s.spawn(|| o.finish());
+            (c.join().unwrap(), f.join().unwrap())
+        });
+        assert!(c != f, "cancelled {c}, finished {f}");
+        assert_eq!(o.is_cancelled(), c);
+    }
 }
 
 #[tokio::test]
@@ -147,4 +189,33 @@ fn limits_from_config() {
     assert_eq!(l.ahead_bytes, 2 << 20);
     assert_eq!(l.max_plan_size, 512 << 20);
     assert_eq!(l.max_batch_size, 128 << 20);
+}
+
+#[tokio::test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "#[tokio::test] blocks on its own runtime"
+)]
+async fn close_stops_the_encoder_of_a_finished_operation() {
+    // Codex review (#738): `release_all` of a finished operation whose
+    // `ResultComplete` waits for room must still stop its encoder, though
+    // a cancel of a finished operation interrupts nothing.
+    let o = op(A, b"p");
+    assert!(o.finish());
+    let waiter = {
+        let o = Arc::clone(&o);
+        tokio::spawn(async move { o.cancelled().await })
+    };
+    tokio::task::yield_now().await;
+    assert!(!o.cancel(), "a finished operation is not interrupted");
+    o.close();
+    tokio::time::timeout(std::time::Duration::from_secs(5), waiter)
+        .await
+        .expect("close wakes the encoder")
+        .unwrap();
+    // Closed before anyone waits: resolves at once.
+    let late = op(B, b"q");
+    assert!(late.finish());
+    late.close();
+    late.cancelled().await;
 }

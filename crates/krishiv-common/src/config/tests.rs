@@ -1302,6 +1302,42 @@ fn fuse_probe_select_defaults_on_and_parses() {
 }
 
 #[test]
+fn path_confinement_entries_default_to_empty_and_are_startup_only() {
+    let mut c = Config::new();
+    for entry in [&IO_LOCAL_ALLOWED_ROOTS, &IO_OBJECT_STORE_ALLOWED_PREFIXES] {
+        assert_eq!(c.get(entry), None, "{}", entry.key);
+        assert_eq!(entry.scope, Scope::Cluster, "{}", entry.key);
+        assert_eq!(entry.settable_by, SettableBy::Startup, "{}", entry.key);
+    }
+    c.set(
+        "krishiv.io.objectStore.allowedPrefixes",
+        "s3://lake/data, gs://shared",
+    )
+    .unwrap();
+    assert_eq!(
+        c.get(&IO_OBJECT_STORE_ALLOWED_PREFIXES)
+            .and_then(ConfigValue::as_str),
+        Some("s3://lake/data, gs://shared")
+    );
+}
+
+#[test]
+fn connect_max_plan_depth_defaults_and_rejects_non_positive() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&CONNECT_MAX_PLAN_DEPTH).and_then(ConfigValue::as_int),
+        Some(1024)
+    );
+    c.set("krishiv.connect.maxPlanDepth", "2048").unwrap();
+    assert_eq!(
+        c.get(&CONNECT_MAX_PLAN_DEPTH).and_then(ConfigValue::as_int),
+        Some(2048)
+    );
+    assert!(c.set("krishiv.connect.maxPlanDepth", "0").is_err());
+    assert!(c.set("krishiv.connect.maxPlanDepth", "abc").is_err());
+}
+
+#[test]
 fn server_entries_parse_default_and_take_sparks_names() {
     let mut c = Config::new();
     assert_eq!(
