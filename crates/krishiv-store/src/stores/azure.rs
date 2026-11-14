@@ -482,7 +482,9 @@ pub(super) fn azure_store(
 
 /// Splits a SAS token (`sv=..&sig=..`) into its query pairs, redacting any
 /// complaint: the token itself must never reach an error. A leading `?` (as
-/// Azure portals copy it) and surrounding whitespace are ignored.
+/// Azure portals copy it) and surrounding whitespace are ignored. Names and values are
+/// percent-decoded, as object_store's `split_sas` decodes them (`azure/builder.rs` l.1353):
+/// object_store encodes the pairs again when it adds them to a request.
 pub(super) fn sas_pairs(secret: &SecretString) -> Result<Vec<(String, String)>, String> {
     let token = secret.expose_secret().trim();
     let token = token.strip_prefix('?').unwrap_or(token);
@@ -490,7 +492,11 @@ pub(super) fn sas_pairs(secret: &SecretString) -> Result<Vec<(String, String)>, 
     for part in token.split('&') {
         match part.split_once('=') {
             Some((name, value)) if !name.is_empty() && !value.is_empty() => {
-                pairs.push((name.to_owned(), value.to_owned()));
+                let decoded = percent_decoded(name).zip(percent_decoded(value));
+                let Some((name, value)) = decoded else {
+                    return Err("the Azure SAS token holds a broken `%` escape".to_owned());
+                };
+                pairs.push((name, value));
             }
             _ => return Err("the Azure SAS token is not `name=value&...`".to_owned()),
         }
@@ -499,4 +505,27 @@ pub(super) fn sas_pairs(secret: &SecretString) -> Result<Vec<(String, String)>, 
         return Err("the Azure SAS token is not `name=value&...`".to_owned());
     }
     Ok(pairs)
+}
+
+/// `text` with its `%XY` escapes decoded (`+` stays `+`, as in a URL query's percent-decoding);
+/// `None` for a broken escape or bytes that are not UTF-8.
+fn percent_decoded(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = bytes.get(i + 1..i + 3)?;
+            if !hex.iter().all(u8::is_ascii_hexdigit) {
+                return None;
+            }
+            let hex = std::str::from_utf8(hex).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
 }

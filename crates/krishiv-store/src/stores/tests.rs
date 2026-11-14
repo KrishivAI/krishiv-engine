@@ -597,8 +597,29 @@ fn sas_tokens_allow_a_leading_question_mark() {
             ("sig".to_owned(), "abc".to_owned())
         ]
     );
-    // Empty names or values are not pairs.
-    for bad in ["", "?", "?&", "sv=&sig=abc", "sv=2024-01-01&sig="] {
+    // A SAS is copied percent-encoded (`az storage container generate-sas`, the portal): the
+    // pairs are decoded, as object_store's own `split_sas` (`azure/builder.rs` l.1353) does, since
+    // object_store encodes them again when it signs a request.
+    let encoded = SecretString::new("se=2030-01-01T00%3A00%3A00Z&sig=ab%2Bc%3D".to_owned());
+    assert_eq!(
+        azure::sas_pairs(&encoded).unwrap(),
+        vec![
+            ("se".to_owned(), "2030-01-01T00:00:00Z".to_owned()),
+            ("sig".to_owned(), "ab+c=".to_owned())
+        ]
+    );
+    // Empty names or values are not pairs, nor is a broken escape.
+    for bad in [
+        "",
+        "?",
+        "?&",
+        "sv=&sig=abc",
+        "sv=2024-01-01&sig=",
+        "sig=ab%2",
+        "sig=ab%zz",
+        "sig=%ff",
+        "sig=%+1",
+    ] {
         assert!(
             azure::sas_pairs(&SecretString::new(bad.to_owned())).is_err(),
             "{bad}"
