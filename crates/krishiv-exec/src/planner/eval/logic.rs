@@ -10,7 +10,7 @@ use arrow_array::types::{
     TimestampMicrosecondType,
 };
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, RecordBatchOptions};
-use arrow_buffer::{BooleanBuffer, NullBuffer};
+use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer};
 use arrow_schema::{DataType as ArrowType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit};
 use krishiv_kernels::compare::{
     self, BoolOperand, CompareKind, Equal, Greater, GreaterEq, Less, LessEq, Validity,
@@ -28,6 +28,154 @@ fn parts(a: &BooleanArray) -> (BooleanBuffer, BooleanBuffer) {
         .nulls()
         .map_or_else(|| BooleanBuffer::new_set(a.len()), |n| n.inner().clone());
     (a.values().clone(), valid)
+}
+
+/// `f` over the 64-bit words of four bit sequences of `n` bits (the last word's bits beyond `n`
+/// cleared), one pass and one output buffer per result: the intermediate buffers of the same formula
+/// written with `&`, `|` and `!` on `BooleanBuffer` (each an allocation, a pass and a free) are never
+/// made. The operands are iterators, so that an array without nulls passes `repeat(!0)` for its
+/// validity instead of a buffer allocated to hold ones, and each combination is compiled on its own.
+fn words2<A, B>(n: usize, a: A, b: B, rem: [u64; 2], f: impl Fn(u64, u64) -> u64) -> BooleanBuffer
+where
+    A: Iterator<Item = u64>,
+    B: Iterator<Item = u64>,
+{
+    let (words, tail) = (n / 64, n % 64);
+    let mut out: Vec<u64> = Vec::with_capacity(words + 1);
+    out.extend(a.zip(b).take(words).map(|(x, y)| f(x, y)));
+    if tail > 0 {
+        out.push(f(rem[0], rem[1]) & ((1u64 << tail) - 1));
+    }
+    BooleanBuffer::new(Buffer::from_vec(out), 0, n)
+}
+
+/// As [`words2`] over four operands and two results.
+fn words4<A, B, C, D>(
+    n: usize,
+    ins: (A, B, C, D),
+    rem: [u64; 4],
+    f: impl Fn(u64, u64, u64, u64) -> (u64, u64),
+) -> (BooleanBuffer, BooleanBuffer)
+where
+    A: Iterator<Item = u64>,
+    B: Iterator<Item = u64>,
+    C: Iterator<Item = u64>,
+    D: Iterator<Item = u64>,
+{
+    let (words, tail) = (n / 64, n % 64);
+    let mut o0: Vec<u64> = Vec::with_capacity(words + 1);
+    let mut o1: Vec<u64> = Vec::with_capacity(words + 1);
+    for (((x, y), z), w) in ins.0.zip(ins.1).zip(ins.2).zip(ins.3).take(words) {
+        let (p, q) = f(x, y, z, w);
+        o0.push(p);
+        o1.push(q);
+    }
+    if tail > 0 {
+        let (p, q) = f(rem[0], rem[1], rem[2], rem[3]);
+        let mask = (1u64 << tail) - 1;
+        o0.push(p & mask);
+        o1.push(q & mask);
+    }
+    (
+        BooleanBuffer::new(Buffer::from_vec(o0), 0, n),
+        BooleanBuffer::new(Buffer::from_vec(o1), 0, n),
+    )
+}
+
+/// The rows the left side of `AND` (`and`) or `OR` does not decide: `AND` is decided by a valid
+/// false, `OR` by a valid true.
+fn open_rows(and: bool, l: &BooleanArray) -> BooleanBuffer {
+    let n = l.len();
+    let v = l.values().bit_chunks();
+    let f = move |ok: u64, v: u64| if and { !(ok & !v) } else { !(ok & v) };
+    match l.nulls() {
+        Some(nulls) => {
+            let ok = nulls.inner().bit_chunks();
+            words2(
+                n,
+                ok.iter(),
+                v.iter(),
+                [ok.remainder_bits(), v.remainder_bits()],
+                f,
+            )
+        }
+        None => words2(
+            n,
+            std::iter::repeat(!0u64),
+            v.iter(),
+            [!0, v.remainder_bits()],
+            f,
+        ),
+    }
+}
+
+/// The values and validity of Kleene `AND` (`and`) or `OR` of `l` and `r`, which have the same length:
+/// `AND`: false wins over NULL; `OR`: true wins over NULL.
+fn kleene(and: bool, l: &BooleanArray, r: &BooleanArray) -> (BooleanBuffer, BooleanBuffer) {
+    let n = l.len();
+    let f = move |lo: u64, lv: u64, ro: u64, rv: u64| {
+        if and {
+            (lv & rv, ((lo & !lv) | (ro & !rv)) | (lo & ro))
+        } else {
+            ((lv & lo) | (rv & ro), ((lo & lv) | (ro & rv)) | (lo & ro))
+        }
+    };
+    let (lv, rv) = (l.values().bit_chunks(), r.values().bit_chunks());
+    match (l.nulls(), r.nulls()) {
+        (None, None) => words4(
+            n,
+            (
+                std::iter::repeat(!0u64),
+                lv.iter(),
+                std::iter::repeat(!0u64),
+                rv.iter(),
+            ),
+            [!0, lv.remainder_bits(), !0, rv.remainder_bits()],
+            f,
+        ),
+        (Some(lo), None) => {
+            let lo = lo.inner().bit_chunks();
+            words4(
+                n,
+                (lo.iter(), lv.iter(), std::iter::repeat(!0u64), rv.iter()),
+                [
+                    lo.remainder_bits(),
+                    lv.remainder_bits(),
+                    !0,
+                    rv.remainder_bits(),
+                ],
+                f,
+            )
+        }
+        (None, Some(ro)) => {
+            let ro = ro.inner().bit_chunks();
+            words4(
+                n,
+                (std::iter::repeat(!0u64), lv.iter(), ro.iter(), rv.iter()),
+                [
+                    !0,
+                    lv.remainder_bits(),
+                    ro.remainder_bits(),
+                    rv.remainder_bits(),
+                ],
+                f,
+            )
+        }
+        (Some(lo), Some(ro)) => {
+            let (lo, ro) = (lo.inner().bit_chunks(), ro.inner().bit_chunks());
+            words4(
+                n,
+                (lo.iter(), lv.iter(), ro.iter(), rv.iter()),
+                [
+                    lo.remainder_bits(),
+                    lv.remainder_bits(),
+                    ro.remainder_bits(),
+                    rv.remainder_bits(),
+                ],
+                f,
+            )
+        }
+    }
 }
 
 /// Two boolean values of one batch as arrays of its row count.
@@ -101,11 +249,10 @@ impl PhysExpr for AndOr {
         let l = l_all
             .as_boolean_opt()
             .ok_or_else(|| internal("AND of a non-boolean"))?;
-        let (lb, l_ok) = parts(l);
-        let decided = if self.and { &l_ok & &!&lb } else { &l_ok & &lb };
-        let open = !&decided;
-        let open_rows = open.count_set_bits();
-        let rv = if open_rows == rows || (open_rows > 0 && self.r_never_raises) {
+        let and = self.and;
+        let open = open_rows(and, l);
+        let open_count = open.count_set_bits();
+        let rv = if open_count == rows || (open_count > 0 && self.r_never_raises) {
             self.r.eval(batch, partition)?
         } else {
             Value::Array(super::eval_where(self.r.as_ref(), batch, &open, partition)?)
@@ -113,19 +260,7 @@ impl PhysExpr for AndOr {
         let scalar = lv.is_scalar() && rv.is_scalar();
         let rows = if scalar { 1 } else { rows };
         let (l, r) = both(&lv, &rv, rows)?;
-        let ((lb, l_ok), (rb, rok)) = (parts(&l), parts(&r));
-        // AND: false wins over NULL; OR: true wins over NULL.
-        let (values, valid) = if self.and {
-            let l_false = &l_ok & &!&lb;
-            let r_false = &rok & &!&rb;
-            let decided = &(&l_false | &r_false) | &(&l_ok & &rok);
-            (&lb & &rb, decided)
-        } else {
-            let l_true = &l_ok & &lb;
-            let r_true = &rok & &rb;
-            let decided = &(&l_true | &r_true) | &(&l_ok & &rok);
-            (&(&lb & &l_ok) | &(&rb & &rok), decided)
-        };
+        let (values, valid) = kleene(and, &l, &r);
         let out: ArrayRef = Arc::new(BooleanArray::new(values, Some(NullBuffer::new(valid))));
         Ok(if scalar {
             Value::Scalar(out)
@@ -970,6 +1105,75 @@ mod tests {
     use krishiv_common::config::Config;
 
     use super::*;
+
+    /// The Kleene combination as it was written with `BooleanBuffer` operators: the oracle of `fuse`.
+    fn kleene_reference(
+        and: bool,
+        l: &BooleanArray,
+        r: &BooleanArray,
+    ) -> (BooleanBuffer, BooleanBuffer) {
+        let (lb, l_ok) = parts(l);
+        let (rb, rok) = parts(r);
+        if and {
+            let l_false = &l_ok & &!&lb;
+            let r_false = &rok & &!&rb;
+            (&lb & &rb, &(&l_false | &r_false) | &(&l_ok & &rok))
+        } else {
+            let l_true = &l_ok & &lb;
+            let r_true = &rok & &rb;
+            (
+                &(&lb & &l_ok) | &(&rb & &rok),
+                &(&l_true | &r_true) | &(&l_ok & &rok),
+            )
+        }
+    }
+
+    #[test]
+    fn word_wise_and_or_match_the_buffer_operators_on_every_shape() {
+        // lengths around the word size, with and without nulls, whole and sliced arrays
+        let make = |n: usize, seed: u64, nulls: bool| {
+            let mut x = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+            let mut next = || {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                x
+            };
+            let vals: Vec<bool> = (0..n).map(|_| next() & 1 == 1).collect();
+            let valid: Vec<bool> = (0..n).map(|_| next() % 5 != 0).collect();
+            BooleanArray::new(
+                BooleanBuffer::from(vals),
+                nulls.then(|| NullBuffer::from(valid)),
+            )
+        };
+        for n in [0usize, 1, 7, 63, 64, 65, 127, 128, 130, 1000] {
+            for (ln, rn) in [(false, false), (true, false), (false, true), (true, true)] {
+                for slice in [0usize, 3] {
+                    if n < slice {
+                        continue;
+                    }
+                    let l = make(n + 5, 1 + n as u64, ln).slice(slice, n - slice);
+                    let r = make(n + 9, 7 + n as u64, rn).slice(slice + 1, n - slice);
+                    for and in [true, false] {
+                        let (values, valid) = kleene(and, &l, &r);
+                        let open = open_rows(and, &l);
+                        let want_open = {
+                            let (lb, l_ok) = parts(&l);
+                            if and {
+                                !&(&l_ok & &!&lb)
+                            } else {
+                                !&(&l_ok & &lb)
+                            }
+                        };
+                        assert_eq!(open, want_open, "open n={n} slice={slice} and={and}");
+                        let (want_values, want_valid) = kleene_reference(and, &l, &r);
+                        assert_eq!(values, want_values, "values n={n} slice={slice} and={and}");
+                        assert_eq!(valid, want_valid, "valid n={n} slice={slice} and={and}");
+                    }
+                }
+            }
+        }
+    }
 
     /// An input column.
     #[derive(Debug)]
