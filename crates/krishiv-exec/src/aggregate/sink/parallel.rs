@@ -88,6 +88,8 @@ impl Task {
     fn run(&mut self, query: &QueryContext) -> Result<Option<usize>> {
         if self.presize > 0 {
             self.table.presize(std::mem::take(&mut self.presize))?;
+            // Non-empty only when the scheduler granted `pages` with `need`
+            // (it clears them otherwise), so these bytes are reserved.
             let groups = std::mem::take(&mut self.part_groups);
             if !groups.is_empty() {
                 self.table.presize_parts(self.parts.start, &groups, CHUNK);

@@ -1811,19 +1811,25 @@ impl RowTable {
     /// The bytes [`presize_parts`](Self::presize_parts) adds to an empty
     /// table.
     pub(crate) fn projected_parts(&self, groups: &[usize], chunk: usize) -> usize {
-        let total: usize = if self.parts.len() == 1 {
-            let n: usize = groups.iter().sum();
-            n + n.min(chunk)
-        } else {
-            groups.iter().map(|&n| n + n.min(chunk)).sum()
+        // Per partition, as `presize_parts` reserves (an accumulator's
+        // capacity rounds up per vector).
+        let sum: usize = groups.iter().sum();
+        let one = [sum];
+        let each: &[usize] = if self.parts.len() == 1 { &one } else { groups };
+        let Some(empty) = self.parts.first() else {
+            return 0;
         };
-        let accs: usize = self.parts.first().map_or(0, |v| {
-            v.accs
-                .iter()
-                .map(|a| a.projected(total, None, None).saturating_sub(a.size()))
-                .sum()
-        });
-        total.saturating_mul(self.stride).saturating_add(accs)
+        each.iter()
+            .map(|&g| {
+                let n = g.saturating_add(g.min(chunk));
+                let accs: usize = empty
+                    .accs
+                    .iter()
+                    .map(|a| a.projected(n, None, None).saturating_sub(a.size()))
+                    .sum();
+                n.saturating_mul(self.stride).saturating_add(accs)
+            })
+            .sum()
     }
 
     /// [`memory_size`](Self::memory_size) after [`presize`](Self::presize).
