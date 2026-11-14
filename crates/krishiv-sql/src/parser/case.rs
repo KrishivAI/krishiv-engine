@@ -102,7 +102,7 @@ impl Parser<'_> {
     /// left to right pairs brackets and each `CASE` with its `END`, one pass
     /// right to left fills the table. Built at the start of the statement
     /// (the cursor at token 0, so offsets are positions).
-    pub(super) fn closer_ahead_table(&self) -> Vec<u8> {
+    pub(super) fn closer_ahead_table(&self, case_words: &[u8]) -> Vec<u8> {
         const NONE: usize = usize::MAX;
         let len = self.toks.len();
         // The closing bracket of each opening one, and the `END` of each
@@ -111,6 +111,7 @@ impl Parser<'_> {
         // The open brackets, each with the `CASE`s open at its level; the
         // first level is the statement's.
         let mut levels: Vec<(usize, Vec<usize>)> = vec![(NONE, vec![])];
+        let word = |i: usize| case_words.get(i).copied().unwrap_or(0);
         for i in 0..len {
             match self.kind(i) {
                 Some(TokenKind::Sym(Sym::LParen | Sym::LBracket)) => levels.push((i, vec![])),
@@ -129,12 +130,12 @@ impl Parser<'_> {
                         cases.clear();
                     }
                 }
-                Some(TokenKind::Word) if self.case_starts_at(i) => {
+                Some(TokenKind::Word) if word(i) & CASE_BIT != 0 && self.case_starts_at(i) => {
                     if let Some((_, cases)) = levels.last_mut() {
                         cases.push(i);
                     }
                 }
-                Some(TokenKind::Word) if self.kw_at(i, "END") => {
+                Some(TokenKind::Word) if word(i) & 8 != 0 => {
                     if let Some((_, cases)) = levels.last_mut()
                         && let Some(open) = cases.pop()
                         && let Some(end) = case_end.get_mut(open)
@@ -162,9 +163,9 @@ impl Parser<'_> {
                 Some(TokenKind::Word) if case_end.get(i).is_some_and(|&e| e != NONE) => {
                     after(case_end.get(i).copied().unwrap_or(NONE))
                 }
-                Some(TokenKind::Word) if self.case_starts_at(i) => 0,
+                Some(TokenKind::Word) if word(i) & CASE_BIT != 0 && self.case_starts_at(i) => 0,
                 Some(TokenKind::Word) => {
-                    closer_bit(self.text(i)) | out.get(i + 1).copied().unwrap_or(0)
+                    (word(i) & !CASE_BIT) | out.get(i + 1).copied().unwrap_or(0)
                 }
                 _ => out.get(i + 1).copied().unwrap_or(0),
             };
@@ -542,6 +543,23 @@ impl Parser<'_> {
 
 /// The bit of a `CASE` word in [`Parser::closer_ahead_table`] (0 for any
 /// other word).
+/// The [`case_word`] bit of `CASE` (the closers take the low four bits).
+pub(super) const CASE_BIT: u8 = 16;
+
+/// A word's `CASE` keyword bits, computed once per token: the [`closer_bit`]
+/// of `WHEN`, `THEN`, `ELSE` or `END`, or [`CASE_BIT`]. An ASCII word of
+/// another length is none of them without a comparison.
+pub(super) fn case_word(word: &str) -> u8 {
+    use crate::keywords::is_kw;
+    if word.is_ascii() && !(3..=4).contains(&word.len()) {
+        0
+    } else if is_kw(word, "CASE") {
+        CASE_BIT
+    } else {
+        closer_bit(word)
+    }
+}
+
 fn closer_bit(word: &str) -> u8 {
     use crate::keywords::is_kw;
     if is_kw(word, "WHEN") {

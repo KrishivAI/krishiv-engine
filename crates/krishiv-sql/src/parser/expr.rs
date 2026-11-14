@@ -1030,7 +1030,11 @@ impl Parser<'_> {
         // `functionName`: any word but structural ones, or only `LEFT`,
         // `RIGHT` and `FILTER` among the reserved words when keywords are
         // enforced (`any(x)` is then an error, as in Spark).
-        let reserved_call = self.kind(0) == Some(TokenKind::Word)
+        // An identifier needs none of the keyword checks below (they cost a
+        // look-ahead per primary).
+        let identifier = self.is_ident_at(0, false);
+        let reserved_call = !identifier
+            && self.kind(0) == Some(TokenKind::Word)
             && self.sym_at(1, Sym::LParen)
             && if self.opts.enforce_reserved_keywords {
                 self.any_kw_at(0, &["LEFT", "RIGHT", "FILTER"])
@@ -1039,11 +1043,10 @@ impl Parser<'_> {
             };
         // `NOT` here, where no boolean expression may start, and a lone
         // `CASE` are columns, as ANTLR reads them (`1 + NOT a`).
-        let keyword_column = !self.opts.enforce_reserved_keywords
+        let keyword_column = !identifier
+            && !self.opts.enforce_reserved_keywords
             && (self.kw_at(0, "NOT") || (self.kw_at(0, "CASE") && self.case_is_column()));
-        if (reserved_call || keyword_column || self.reserved_column_here())
-            && !self.is_ident_at(0, false)
-        {
+        if !identifier && (reserved_call || keyword_column || self.reserved_column_here()) {
             parts.push(self.keyword_ident());
         } else {
             parts.push(self.ident()?);

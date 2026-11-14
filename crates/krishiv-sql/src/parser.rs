@@ -679,7 +679,7 @@ fn checked<R: TopRule>(
 /// For each token `i`, whether a `WHEN` follows it at its bracket level
 /// before that level closes or meets a `;`: read right to left with one
 /// flag per open level, so the table costs one pass over the tokens.
-fn when_ahead_table(src: &str, toks: &[Token]) -> Vec<bool> {
+fn when_ahead_table(toks: &[Token], case_words: &[u8]) -> Vec<bool> {
     let mut out = vec![false; toks.len()];
     // The flag of the innermost level seen so far (from the right), then
     // the enclosing ones; an unclosed `(` leaves into a fresh level with
@@ -700,7 +700,7 @@ fn when_ahead_table(src: &str, toks: &[Token]) -> Vec<bool> {
                     *top = false;
                 }
             }
-            TokenKind::Word if is_kw(t.span.text(src), "WHEN") => {
+            TokenKind::Word if case_words.get(i).is_some_and(|&w| w & 1 != 0) => {
                 if let Some(top) = levels.last_mut() {
                     *top = true;
                 }
@@ -720,16 +720,35 @@ impl<'s> Parser<'s> {
     fn new(src: &'s str, toks: Vec<Token>, opts: ParserOptions, force_bare: Option<usize>) -> Self {
         #[cfg(test)]
         PARSERS.set(PARSERS.get() + 1);
-        let classes = toks
-            .iter()
-            .map(|t| {
-                if t.kind == TokenKind::Word {
-                    classify(t.span.text(src))
+        // One pass: keyword classes, the `CASE` keyword bits (all five are
+        // reserved words, so only those are compared) and the bracket depth.
+        let mut classes = Vec::with_capacity(toks.len());
+        let mut case_words = Vec::with_capacity(toks.len());
+        let mut depth_before = Vec::with_capacity(toks.len() + 1);
+        let mut depth = 0i64;
+        depth_before.push(depth);
+        for t in &toks {
+            let (class, case_bits) = if t.kind == TokenKind::Word {
+                let text = t.span.text(src);
+                let class = classify(text);
+                let bits = if class & RESERVED_WORD != 0 {
+                    case::case_word(text)
                 } else {
                     0
-                }
-            })
-            .collect();
+                };
+                (class, bits)
+            } else {
+                (0, 0)
+            };
+            classes.push(class);
+            case_words.push(case_bits);
+            match t.kind {
+                TokenKind::Sym(Sym::LParen | Sym::LBracket) => depth += 1,
+                TokenKind::Sym(Sym::RParen | Sym::RBracket) => depth -= 1,
+                _ => {}
+            }
+            depth_before.push(depth);
+        }
         let mut after_parens = vec![0; toks.len()];
         let mut next = toks.len();
         for (i, t) in toks.iter().enumerate().rev() {
@@ -751,18 +770,14 @@ impl<'s> Parser<'s> {
                 _ => {}
             }
         }
-        let when_ahead = when_ahead_table(src, &toks);
-        let mut depth_before = Vec::with_capacity(toks.len() + 1);
-        let mut depth = 0i64;
-        depth_before.push(depth);
-        for t in &toks {
-            match t.kind {
-                TokenKind::Sym(Sym::LParen | Sym::LBracket) => depth += 1,
-                TokenKind::Sym(Sym::RParen | Sym::RBracket) => depth -= 1,
-                _ => {}
-            }
-            depth_before.push(depth);
-        }
+        // The `CASE` tables are read only at a `CASE` word or inside a `CASE`
+        // part: a statement without one skips them (they cost ~10% of parsing).
+        let has_case = case_words.iter().any(|&w| w & case::CASE_BIT != 0);
+        let when_ahead = if has_case {
+            when_ahead_table(&toks, &case_words)
+        } else {
+            Vec::new()
+        };
         let markers = (0..toks.len())
             .filter(|&i| toks[i].kind == TokenKind::Sym(Sym::Question))
             .collect();
@@ -797,7 +812,9 @@ impl<'s> Parser<'s> {
             force_bare,
             insert_bodies: false,
         };
-        parser.closer_ahead = parser.closer_ahead_table();
+        if has_case {
+            parser.closer_ahead = parser.closer_ahead_table(&case_words);
+        }
         parser
     }
 
