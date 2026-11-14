@@ -619,7 +619,13 @@ impl Session {
         )?;
         match statement {
             Statement::Query(q) => {
-                let plan = self.lower_identified(&q, &env, redacted)?;
+                let plan = self.lower_identified(&q, &env, redacted).map_err(|e| {
+                    crate::execute_immediate::unbound_markers(
+                        e,
+                        query,
+                        env.parser.double_quoted_identifiers,
+                    )
+                })?;
                 let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
                 df.analyzed_in_with_text(env, Some(redacted)).await?;
                 Ok(df)
@@ -688,6 +694,13 @@ impl Session {
                 Box::pin(self.exec_script(&c, query, redacted)).await
             }
             Statement::Analyze(a) => Box::pin(self.exec_analyze(&a, query)).await,
+            Statement::CreatePipelineDataset(c) => Self::exec_create_pipeline_dataset(&c),
+            Statement::CreateFlow(f) => self.exec_create_flow(&f),
+            Statement::LoadData(l) => self.exec_load_data(&l),
+            // The path write belongs to the session's write path: it has no plan node to lower to yet.
+            Statement::InsertDirectory(_) => {
+                Err(unsupported_statement("INSERT OVERWRITE DIRECTORY"))
+            }
             Statement::AddResource(_) => Err(unsupported_statement("ADD JAR | FILE | ARCHIVE")),
             Statement::ListResource(_) => Err(unsupported_statement("LIST JAR | FILE | ARCHIVE")),
             Statement::Delete(d) => {

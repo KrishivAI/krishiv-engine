@@ -9,12 +9,94 @@ impl Parser<'_> {
         self.nested(|p| {
             let start = p.start();
             p.expect_kw("INSERT")?;
+            if p.kw_at(0, "OVERWRITE")
+                && (p.kw_at(1, "DIRECTORY") || (p.kw_at(1, "LOCAL") && p.kw_at(2, "DIRECTORY")))
+            {
+                return p.insert_directory(start);
+            }
             let clause = p.insert_clause(start, false)?;
             let span = p.span_from(start);
             p.command_end()?;
             Ok(Statement::Insert(Box::new(Insert {
                 source: None,
                 clauses: vec![clause],
+                span,
+            })))
+        })
+    }
+
+    /// `OVERWRITE [LOCAL] DIRECTORY ['path'] USING provider [OPTIONS (...)] query` or
+    /// `OVERWRITE [LOCAL] DIRECTORY 'path' [ROW FORMAT ...] [STORED AS ...] query`, after `INSERT`.
+    fn insert_directory(&mut self, start: usize) -> PR<Statement> {
+        self.expect_kw("OVERWRITE")?;
+        let local = self.eat_kw("LOCAL");
+        self.expect_kw("DIRECTORY")?;
+        let path = self.string_lit();
+        let format = if self.eat_kw("USING") {
+            let provider = self.table_name()?;
+            let options = if self.eat_kw("OPTIONS") {
+                self.property_list(true)?
+            } else {
+                Vec::new()
+            };
+            DirectoryFormat::Provider { provider, options }
+        } else {
+            if path.is_none() {
+                return self.fail();
+            }
+            let row_format = if self.kw_at(0, "ROW") && self.kw_at(1, "FORMAT") {
+                Some(self.row_format()?)
+            } else {
+                None
+            };
+            let file_format = if self.kw_at(0, "STORED") {
+                Some(self.file_format()?)
+            } else {
+                None
+            };
+            DirectoryFormat::Hive {
+                row_format,
+                file_format,
+            }
+        };
+        let query = self.insert_query(false)?;
+        let span = self.span_from(start);
+        self.command_end()?;
+        Ok(Statement::InsertDirectory(Box::new(InsertDirectory {
+            local,
+            path,
+            format,
+            query: Box::new(query),
+            span,
+        })))
+    }
+
+    /// `LOAD DATA [LOCAL] INPATH 'path' [OVERWRITE] INTO TABLE name [PARTITION (...)]`.
+    pub(crate) fn load_data_command(&mut self) -> PR<Statement> {
+        self.nested(|p| {
+            let start = p.start();
+            p.expect_kw("LOAD")?;
+            p.expect_kw("DATA")?;
+            let local = p.eat_kw("LOCAL");
+            p.expect_kw("INPATH")?;
+            let path = p.string_after()?;
+            let overwrite = p.eat_kw("OVERWRITE");
+            p.expect_kw("INTO")?;
+            p.expect_kw("TABLE")?;
+            let table = p.ddl_name()?;
+            let partition = if p.kw_at(0, "PARTITION") {
+                Some(p.partition_spec()?)
+            } else {
+                None
+            };
+            let span = p.span_from(start);
+            p.command_end()?;
+            Ok(Statement::LoadData(Box::new(LoadData {
+                local,
+                path,
+                overwrite,
+                table,
+                partition,
                 span,
             })))
         })
@@ -115,7 +197,11 @@ impl Parser<'_> {
     /// [BY NAME] REPLACE (WHERE | ON) ... query` or `REPLACE USING
     /// (columns) query`. A `(` opening a query reads as the query (it
     /// consumes its own parens), anything else as a column list.
-    pub(super) fn insert_clause(&mut self, clause_start: usize, multi: bool) -> PR<InsertClause> {
+    pub(in crate::parser) fn insert_clause(
+        &mut self,
+        clause_start: usize,
+        multi: bool,
+    ) -> PR<InsertClause> {
         let with_schema_evolution =
             if self.kw_at(0, "WITH") && self.kw_at(1, "SCHEMA") && self.kw_at(2, "EVOLUTION") {
                 self.pos += 3;

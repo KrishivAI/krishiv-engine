@@ -21,7 +21,8 @@ use std::sync::Arc;
 
 use krishiv_common::error::{
     FailedToParseTooComplex, InvalidRecursiveCte, KrishivError, KrishivUnsupportedFeature,
-    MissingWindowSpecification, UnionNotSupportedInRecursiveCte, WrongNumArgsWithoutSuggestion,
+    MissingWindowSpecification, UnboundSqlParameter, UnionNotSupportedInRecursiveCte,
+    WrongNumArgsWithoutSuggestion,
 };
 use krishiv_common::secret::OptionValue;
 use krishiv_common::stack::{STEP, on_big_stack};
@@ -1571,8 +1572,24 @@ impl Lowerer {
                 self.call(b.name(), args, sp)
             }
             ExprKind::Nested(inner) => self.expr(inner)?,
-            ExprKind::Parameter(_) | ExprKind::NamedParameter(_) => {
-                return Err(unsupported("parameter markers", sp));
+            // No arguments were bound: Spark's analysis raises `UNBOUND_SQL_PARAMETER`
+            // (a `?` is `_` and its offset in the text; the session refines the offset and
+            // mixed markers from the statement text).
+            ExprKind::Parameter(_) => {
+                return Err(err(
+                    UnboundSqlParameter {
+                        name: format!("_{}", sp.start),
+                    },
+                    sp,
+                ));
+            }
+            ExprKind::NamedParameter(name) => {
+                return Err(err(
+                    UnboundSqlParameter {
+                        name: name.value.clone(),
+                    },
+                    sp,
+                ));
             }
             ExprKind::Subscript(base, index) => {
                 let args = vec![self.arg(base)?, self.arg(index)?];
