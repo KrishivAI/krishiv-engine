@@ -542,7 +542,9 @@ def main():
             "spark_version": spark.version,
             "generator": "tests/scripts/gen_read_user_schema.py",
             "notes": "Reads with a user schema on a tree laid out under <root>; reported schema plus rows "
-            "(cast to STRING, UTC, sorted) or the error per case.",
+            "(cast to STRING, UTC, sorted) or the error per case. Only Spark 4.2.0 was run: what 3.5, 4.0 and "
+            "4.1 report for these reads (nullability, INVALID_PARTITION_VALUE, partition value conversion) is not "
+            "pinned here.",
             "cases": results,
         }
         print(json.dumps(doc, indent=1, ensure_ascii=False))

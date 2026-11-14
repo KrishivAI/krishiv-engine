@@ -828,6 +828,8 @@ impl Session {
         }
         // The declared columns are the read's user schema (Spark's `CreateTempViewUsing` resolves the relation
         // with it now): the partition columns under the path come last, typed as declared, else inferred.
+        // Unlike Spark, which keeps the file listing it made here, each query lists the path again, so a
+        // partition directory added later is read (with the columns fixed now).
         let schema =
             krishiv_types::StructType::new(columns.iter().map(|c| {
                 krishiv_types::StructField::new(&c.name, c.data_type.clone(), c.nullable)
@@ -866,7 +868,7 @@ impl Session {
                 columns,
                 known: false,
                 permanent: false,
-                partitions: None,
+                partitions: Some(Default::default()),
             },
         );
         // A replaced view must not keep serving the rows of the old one.

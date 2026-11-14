@@ -134,10 +134,11 @@ impl PySession {
             match krishiv_types::DataType::from_json(json) {
                 Ok(krishiv_types::DataType::Struct(s)) => reader = reader.schema(s),
                 Ok(other) => {
-                    return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                        "a read schema must be a StructType, not {}",
-                        other.simple_string()
-                    )));
+                    let e = krishiv_common::error::InvalidSchemaNonStructType {
+                        input_schema: format!("\"{json}\""),
+                        data_type: format!("\"{}\"", other.sql()),
+                    };
+                    return Err(to_py(py, &e.into()));
                 }
                 Err(e) => return Err(to_py(py, &e)),
             }
