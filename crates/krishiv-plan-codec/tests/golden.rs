@@ -201,6 +201,7 @@ fn the_registry_is_sorted_and_every_feature_has_goldens() {
                     Feature::LegacyStatisticalAggregate
                         | Feature::CollatedMinMax
                         | Feature::NestedLiterals
+                        | Feature::FileSourceSchema
                 ),
             "{id}: no golden files in {}",
             dir.display()

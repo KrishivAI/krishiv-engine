@@ -281,6 +281,7 @@ impl Encoder {
                 format,
                 paths,
                 options,
+                schema,
             } => {
                 self.tag("files");
                 self.text(format);
@@ -292,6 +293,11 @@ impl Encoder {
                 for (key, value) in options {
                     self.text(key);
                     self.option_value(value);
+                }
+                // Only when declared, so a read that infers keeps its key.
+                if let Some(schema) = schema {
+                    self.tag("schema");
+                    self.debug(schema);
                 }
             }
         }
@@ -1751,6 +1757,7 @@ mod tests {
                                 OptionValue::from_user("password", "pw"),
                             ),
                         ]),
+                        schema: None,
                     })),
                 ),
                 (

@@ -999,6 +999,9 @@ message FilesSource {
   string format = 1;
   repeated OptionValue paths = 2;
   map<string, OptionValue> options = 3;
+  // feature: file_source_schema
+  // The schema the user declared (a struct type); absent: inferred.
+  DataType schema = 4;
 }
 
 // A data source option: plain text or a reference to a secret. An inline

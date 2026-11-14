@@ -1470,11 +1470,18 @@ fn read_source(m: &pb::ReadSource) -> Result<ReadSource> {
             name: t.name.clone(),
             options: options(&t.options)?,
         },
-        Kind::Files(f) => ReadSource::Files {
-            format: f.format.clone(),
-            paths: f.paths.iter().map(option).collect::<Result<_>>()?,
-            options: options(&f.options)?,
-        },
+        Kind::Files(f) => {
+            let files = ReadSource::files(
+                f.format.clone(),
+                f.paths.iter().map(option).collect::<Result<_>>()?,
+                options(&f.options)?,
+            );
+            match f.schema.as_ref().map(spark_type).transpose()? {
+                None => files,
+                Some(DataType::Struct(schema)) => files.with_schema(schema),
+                Some(_) => return Err(corrupt("a declared file schema that is not a struct")),
+            }
+        }
     })
 }
 

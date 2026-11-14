@@ -1087,13 +1087,13 @@ pub(crate) fn file_metadata(provider: &str) -> FileMetadata {
 
 /// The read of a table's files.
 pub(crate) fn table_source(table: &crate::store::CatalogTable) -> ReadSource {
-    ReadSource::Files {
-        format: table.provider.clone(),
-        paths: vec![krishiv_common::secret::OptionValue::from_user(
+    ReadSource::files(
+        table.provider.clone(),
+        vec![krishiv_common::secret::OptionValue::from_user(
             "path",
             table.location.display().to_string(),
         )],
-        options: table
+        table
             .options
             .iter()
             .map(|(k, v)| {
@@ -1103,7 +1103,7 @@ pub(crate) fn table_source(table: &crate::store::CatalogTable) -> ReadSource {
                 )
             })
             .collect(),
-    }
+    )
 }
 
 fn unsupported(feature: &str) -> KrishivError {

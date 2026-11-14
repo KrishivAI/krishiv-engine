@@ -378,6 +378,7 @@ impl Gen<'_> {
                 format: self.name(),
                 paths: self.many(1, 2, Gen::option),
                 options,
+                schema: None,
             }
         }
     }
@@ -1084,6 +1085,7 @@ fn m_source(s: &mut ReadSource, w: &mut Walk) -> bool {
             format: "parquet".to_owned(),
             paths: name.iter().cloned().map(OptionValue::Plain).collect(),
             options: options.clone(),
+            schema: None,
         },
         ReadSource::Files { paths, options, .. } => ReadSource::Table {
             name: paths.iter().map(ToString::to_string).collect(),
@@ -1097,6 +1099,7 @@ fn m_source(s: &mut ReadSource, w: &mut Walk) -> bool {
             format,
             paths,
             options,
+            ..
         } => m_string(format, w) || m_values(paths, w) || m_options(options, w),
     }
 }

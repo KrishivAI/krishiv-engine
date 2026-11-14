@@ -547,12 +547,22 @@ impl Display for SourceText<'_> {
                 format,
                 paths,
                 options,
+                schema,
             } => {
                 write!(f, "{format} [")?;
                 for (i, p) in paths.iter().enumerate() {
                     write!(f, "{}{p}", sep(i))?;
                 }
                 f.write_str("]")?;
+                if let Some(schema) = schema {
+                    f.write_str(" schema=")?;
+                    for (i, field) in schema.fields().iter().enumerate() {
+                        write!(f, "{}{} {}", sep(i), field.name(), field.data_type().sql())?;
+                        if !field.nullable() {
+                            f.write_str(" NOT NULL")?;
+                        }
+                    }
+                }
                 options
             }
         };
