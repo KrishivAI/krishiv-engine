@@ -1737,6 +1737,7 @@ impl Session {
             env.statement_class,
             self.operation_id(),
         )?;
+        crate::action::note_row(&log_id);
         // The request tags join the row's tags at once, so a queued query shows them too.
         self.state
             .queries

@@ -119,6 +119,9 @@ struct State {
     handed_over: bool,
     /// The `system.queries` rows reserved under the action or a nested one.
     rows: Vec<HandedOver>,
+    /// The `system.queries` row an action that gave no operation id minted before its query
+    /// reserved (admission), so a cancel can name it ([`note_row`]).
+    noted_row: Option<Arc<str>>,
 }
 
 impl Action {
@@ -255,7 +258,7 @@ impl Actions {
                 // row yet). An action with rows is reported by the registry, through them.
                 if state.rows.is_empty() {
                     out.ended += 1;
-                    if let Some(id) = &action.operation {
+                    if let Some(id) = action.operation.as_ref().or(state.noted_row.as_ref()) {
                         out.ids.push(Arc::clone(id));
                     }
                 }
@@ -339,6 +342,15 @@ impl Drop for ActionGuard {
 /// Hands the current action (if it is of session `session`) and its ancestors
 /// over to the reservation of row `row`: the reason one of them was already
 /// cancelled with, if any, which the reservation keeps as pending.
+/// Records the `system.queries` row the current action minted (a query waiting for admission has
+/// a row but is not reserved yet), so cancelling the action names the row when the caller gave
+/// no operation id. A no-op outside an action.
+pub(crate) fn note_row(row: &str) {
+    let _ = CURRENT.try_with(|action| {
+        action.lock().noted_row = Some(Arc::from(row));
+    });
+}
+
 pub(crate) fn hand_over(session: u64, row: &str) -> Option<CancelReason> {
     CURRENT
         .try_with(|action| {

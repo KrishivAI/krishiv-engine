@@ -383,3 +383,21 @@ async fn a_set_tag_during_admission_does_not_change_the_tags_a_query_is_cancelle
     assert_eq!(ids.len(), 1, "cancelled by the tag it started with");
     let _ = task.await;
 }
+
+#[tokio::test]
+async fn a_queued_query_without_an_operation_id_is_named_when_cancelled_by_tag() {
+    let rt = EngineRuntime::builder()
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let gate = Arc::new(Never::default());
+    let s = session(&rt, &gate);
+    let task = start(&s, QueryOptions::new().tags(["t"]));
+    settle().await;
+    let ids = s.interrupt_tag("t");
+    assert_eq!(
+        ids.len(),
+        1,
+        "the minted row id of the queued query is returned"
+    );
+    assert_eq!(class(task.await), ErrorClass::OperationCanceled.name());
+}
