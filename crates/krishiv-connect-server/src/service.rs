@@ -242,9 +242,16 @@ impl SparkConnectService for ConnectService {
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
-        interrupt::interrupt(&entry, &request)
-            .map(Response::new)
-            .map_err(|e| status_of(&e))
+        let response = interrupt::interrupt(&entry, &request).map_err(|e| status_of(&e))?;
+        // An id it did not interrupt that is no operation of this session may be another
+        // owner's: answered the same (an empty list), recorded (ADR 0046 §3b).
+        if let Some(pb::interrupt_request::Interrupt::OperationId(id)) = &request.interrupt
+            && response.interrupted_ids.is_empty()
+            && entry.operations().get(id).is_none()
+        {
+            self.manager.audit_foreign_operation(&caller, id);
+        }
+        Ok(Response::new(response))
     }
 
     /// Spark's `SparkConnectReattachExecuteHandler`, minimal (design
@@ -304,7 +311,14 @@ impl SparkConnectService for ConnectService {
             server_side_session_id: entry.server_side_id().to_owned(),
             operation_id: None,
         };
-        if let Some(op) = entry.operations().get(&request.operation_id) {
+        let found = entry.operations().get(&request.operation_id);
+        if found.is_none() {
+            // Answered as unknown (success, no operation id), recorded if another owner's
+            // (ADR 0046 §3b).
+            self.manager
+                .audit_foreign_operation(&caller, &request.operation_id);
+        }
+        if let Some(op) = found {
             if !op.reattachable() {
                 return Err(status_of(&InvalidCursorNotReattachable {}.into()));
             }

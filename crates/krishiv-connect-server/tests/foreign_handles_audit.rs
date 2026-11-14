@@ -112,6 +112,7 @@ fn foreign_ids_are_answered_as_unknown_and_recorded() {
     {
         assert!(r.contains("principal=bob "), "{r}");
         assert!(r.contains("surface=connect "), "{r}");
+        assert!(r.contains("role=operator "), "{r}");
         assert!(r.contains(&format!("handle={handle} ")), "{r}");
         assert!(!r.contains("alice"), "the owner is never named: {r}");
     }

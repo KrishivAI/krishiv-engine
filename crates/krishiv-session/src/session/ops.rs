@@ -112,6 +112,9 @@ impl Session {
     /// configuration itself, for every principal (`CANNOT_MODIFY_STATIC_CONFIG`).
     pub(crate) async fn authorize_set_key(&self, key: &str) -> Result<(), KrishivError> {
         if krishiv_common::config::lookup(key)
+            .or_else(|| {
+                krishiv_common::config::lookup(krishiv_common::config::resolve_alternative(key))
+            })
             .is_some_and(|e| e.settable_by == krishiv_common::config::SettableBy::Admin)
         {
             let r = authorize(

@@ -45,7 +45,7 @@ use krishiv_common::error::{
     InvalidHandleSessionChanged, InvalidHandleSessionClosed, InvalidHandleSessionNotFound,
     KrishivError, KrishivSessionLimit,
 };
-use krishiv_session::auth::{Authenticated, Surface};
+use krishiv_session::auth::{Authenticated, Role, Surface};
 use krishiv_session::{QueryId, Session};
 
 use crate::auth::SessionOwner;
@@ -621,8 +621,11 @@ impl SessionManager {
 
     /// Writes the denial record of ADR 0046 §3b when `operation_id`, unknown in
     /// `caller`'s session, is a live operation of another owner's session (the
-    /// caller is answered `INVALID_HANDLE.OPERATION_NOT_FOUND` either way). An
-    /// error path only: it looks through every live session.
+    /// caller is answered as for an unknown id either way: `ReattachExecute`,
+    /// `ReleaseExecute`, `Interrupt` by id). It looks through every live
+    /// session (at most `krishiv.connect.maxSessions`), and runs on every
+    /// unknown operation id, which includes a normal client's reattach or
+    /// release after its operation finished.
     pub fn audit_foreign_operation(&self, caller: &Authenticated, operation_id: &str) {
         let owner = SessionOwner::of(caller);
         let others: Vec<Arc<SessionEntry>> = self
@@ -746,6 +749,7 @@ fn write_foreign_record(caller: &Authenticated, handle: &'static str) {
         target: "krishiv::audit",
         principal = %caller.principal.name,
         method = caller.method.as_str(),
+        role = caller.role.map_or("none", Role::as_str),
         surface = Surface::Connect.as_str(),
         handle,
         "refused a Connect id another principal holds, answered as unknown"
