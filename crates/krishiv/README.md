@@ -33,8 +33,8 @@ Actions are `async` and run on the session's own executor, so any runtime (or no
 
 ## Speed
 
-On TPC-H at scale factor 100, Krishiv is **10.4x faster than Spark 4.2.0** (derived from TPC-H, not an official
-TPC result). Method and numbers: <https://krishiv.ai/benchmarks>.
+Benchmark results against Spark 4.2.0 on TPC-H-derived queries (not official TPC results) are published with their
+method and numbers at <https://krishiv.ai/benchmarks>.
 
 ## Status
 

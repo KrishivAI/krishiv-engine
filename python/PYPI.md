@@ -44,8 +44,8 @@ there is no stable API yet.
 
 ## Speed
 
-On TPC-H at scale factor 100, Krishiv is **10.4x faster than Spark 4.2.0** (derived from TPC-H, not an official
-TPC result). Method, queries and raw numbers: <https://krishiv.ai/benchmarks>.
+Benchmark results against Spark 4.2.0 on TPC-H-derived queries (not official TPC results) are published with their
+method, queries and raw numbers at <https://krishiv.ai/benchmarks>.
 
 ## Supported CPUs
 
