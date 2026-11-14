@@ -13,8 +13,7 @@ use bytes::Bytes;
 use delta_kernel::engine_data::FilteredEngineData;
 use delta_kernel::schema::{DataType, MapType, StructField, StructType};
 use delta_kernel::{
-    EngineData, EvaluationHandler, FileMeta, JsonHandler, KernelError, ParquetHandler, Snapshot,
-    StorageHandler,
+    EngineData, FileMeta, JsonHandler, KernelError, ParquetHandler, Snapshot, StorageHandler,
 };
 use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_exec::CancellationToken;
@@ -75,6 +74,16 @@ impl Fixture {
         pool: &'static LogPool,
         store: Option<Arc<dyn ObjectStore>>,
     ) -> Self {
+        Self::with_memory(limits, pool, store, None)
+    }
+
+    /// [`Self::with`], the engine's I/O reserving from `memory` when given.
+    fn with_memory(
+        limits: DeltaLimits,
+        pool: &'static LogPool,
+        store: Option<Arc<dyn ObjectStore>>,
+        memory: Option<Arc<dyn krishiv_memory::MemoryPool>>,
+    ) -> Self {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("t");
         std::fs::create_dir_all(dir.join("_delta_log")).unwrap();
@@ -93,8 +102,12 @@ impl Fixture {
         sched.register_whole_listing_store(id.clone(), store);
         let root = Url::from_directory_path(&dir).unwrap();
         let cancel = Arc::new(CancellationToken::new());
+        let io = match memory {
+            Some(m) => sched.context().with_memory(m),
+            None => sched.context(),
+        };
         let engine = DeltaEngine::new(
-            sched.context(),
+            io,
             id,
             root.clone(),
             rt.handle().clone(),
@@ -118,6 +131,12 @@ impl Fixture {
         let path = self.dir.join(rel);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();
+    }
+
+    fn write_bytes(&self, rel: &str, bytes: &[u8]) {
+        let path = self.dir.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, bytes).unwrap();
     }
 
     fn url(&self, rel: &str) -> Url {
@@ -346,25 +365,73 @@ fn json_handler_reads_in_order_parses_and_commits() {
 }
 
 /// The kernel reads a two-commit table's log through these handlers.
+const V2: &str = concat!(
+    r#"{"commitInfo":{"timestamp":1700000002000,"operation":"WRITE","operationParameters":{"mode":"Append"},"isBlindAppend":true}}"#,
+    "\n",
+    r#"{"add":{"path":"p=b/part-1.parquet","partitionValues":{"p":"b"},"size":200,"modificationTime":1700000002000,"dataChange":true,"stats":"{\"numRecords\":2,\"minValues\":{\"id\":10},\"maxValues\":{\"id\":20},\"nullCount\":{\"id\":0}}"}}"#,
+    "\n",
+);
+
+/// A scan file: its path, records and partition `p`.
+type ScanEntry = (String, Option<u64>, Option<String>);
+
+/// The scan files of `snapshot` under `predicate`.
+fn scan_files(
+    engine: &DeltaEngine,
+    snapshot: &Arc<Snapshot>,
+    predicate: Option<delta_kernel::expressions::Predicate>,
+) -> Vec<ScanEntry> {
+    let scan = Arc::clone(snapshot)
+        .scan_builder()
+        .with_predicate(predicate.map(Arc::new))
+        .build()
+        .unwrap();
+    let mut files: Vec<ScanEntry> = Vec::new();
+    // Drained inside the log-pool call, as every lazy kernel iterator must be.
+    for metadata in scan.scan_metadata(engine).unwrap() {
+        files = metadata
+            .unwrap()
+            .visit_scan_files(files, |acc, f| {
+                acc.push((
+                    f.path,
+                    f.stats.map(|s| s.num_records),
+                    f.partition_values.get("p").cloned(),
+                ));
+            })
+            .unwrap();
+    }
+    files.sort();
+    files
+}
+
 #[test]
-fn the_kernel_builds_a_snapshot_through_our_handlers() {
+fn the_kernel_builds_a_snapshot_and_scans_through_our_engine() {
+    use delta_kernel::expressions::{Expression as Expr, Predicate as Pred};
     let f = Fixture::new();
     f.write("_delta_log/00000000000000000000.json", V0);
     f.write("_delta_log/00000000000000000001.json", V1);
+    f.write("_delta_log/00000000000000000002.json", V2);
     let root = f.root.clone();
-    let (version, schema, at_zero) = f.run(move |e| {
-        let engine = TestEngine(e.clone());
+    let (version, schema, at_zero, scans) = f.run(move |e| {
         let snapshot = Snapshot::builder_for(root.as_str())
             .with_cancellation_token(e.kernel_cancellation())
-            .build(&engine)
+            .build(e)
             .unwrap();
         let old = Snapshot::builder_for(root.as_str())
             .at_version(0)
-            .build(&engine)
+            .build(e)
             .unwrap();
-        (snapshot.version(), snapshot.schema(), old.version())
+        let scans = [
+            None,
+            // Partition pruning: MapToStruct of partitionValues, then the predicate.
+            Some(Pred::eq(Expr::column(["p"]), Expr::literal("a"))),
+            // Data skipping: ParseJson of the stats; a file without min/max is kept.
+            Some(Pred::lt(Expr::column(["id"]), Expr::literal(5i64))),
+        ]
+        .map(|p| scan_files(e, &snapshot, p));
+        (snapshot.version(), snapshot.schema(), old.version(), scans)
     });
-    assert_eq!((version, at_zero), (1, 0));
+    assert_eq!((version, at_zero), (2, 0));
     let fields: Vec<_> = schema
         .fields()
         .map(|f| (f.name().clone(), f.data_type().clone()))
@@ -376,90 +443,20 @@ fn the_kernel_builds_a_snapshot_through_our_handlers() {
             ("p".to_owned(), DataType::STRING)
         ]
     );
-}
-
-/// The kernel's other two handlers are part 2 (the evaluator, the Parquet handler).
-struct TestEngine(DeltaEngine);
-
-struct NoEval;
-
-impl EvaluationHandler for NoEval {
-    fn new_expression_evaluator(
-        &self,
-        _: delta_kernel::schema::SchemaRef,
-        _: delta_kernel::expressions::ExpressionRef,
-        _: DataType,
-    ) -> delta_kernel::KernelResult<Arc<dyn delta_kernel::ExpressionEvaluator>> {
-        Err(KernelError::unsupported("the evaluator is PR-08a part 2"))
-    }
-
-    fn new_predicate_evaluator(
-        &self,
-        _: delta_kernel::schema::SchemaRef,
-        _: delta_kernel::expressions::PredicateRef,
-    ) -> delta_kernel::KernelResult<Arc<dyn delta_kernel::PredicateEvaluator>> {
-        Err(KernelError::unsupported("the evaluator is PR-08a part 2"))
-    }
-
-    fn create_many(
-        &self,
-        _: delta_kernel::schema::SchemaRef,
-        _: Vec<Vec<delta_kernel::expressions::Scalar>>,
-    ) -> delta_kernel::KernelResult<Box<dyn EngineData>> {
-        Err(KernelError::unsupported("the evaluator is PR-08a part 2"))
-    }
-}
-
-struct NoParquet;
-
-impl ParquetHandler for NoParquet {
-    fn read_parquet_files(
-        &self,
-        _: &[FileMeta],
-        _: delta_kernel::schema::SchemaRef,
-        _: Option<delta_kernel::expressions::PredicateRef>,
-    ) -> delta_kernel::KernelResult<delta_kernel::FileDataReadResultIterator> {
-        Err(KernelError::unsupported(
-            "the Parquet handler is PR-08a part 2",
-        ))
-    }
-
-    fn write_parquet_file(
-        &self,
-        _: Url,
-        _: delta_kernel::KernelResultIteratorStatic<Box<dyn EngineData>>,
-    ) -> delta_kernel::KernelResult<delta_kernel::FileSize> {
-        Err(KernelError::unsupported(
-            "the Parquet handler is PR-08a part 2",
-        ))
-    }
-
-    fn read_parquet_footer(
-        &self,
-        _: &FileMeta,
-    ) -> delta_kernel::KernelResult<delta_kernel::ParquetFooter> {
-        Err(KernelError::unsupported(
-            "the Parquet handler is PR-08a part 2",
-        ))
-    }
-}
-
-impl delta_kernel::Engine for TestEngine {
-    fn evaluation_handler(&self) -> Arc<dyn EvaluationHandler> {
-        Arc::new(NoEval)
-    }
-
-    fn storage_handler(&self) -> Arc<dyn StorageHandler> {
-        self.0.storage()
-    }
-
-    fn json_handler(&self) -> Arc<dyn JsonHandler> {
-        self.0.json()
-    }
-
-    fn parquet_handler(&self) -> Arc<dyn ParquetHandler> {
-        Arc::new(NoParquet)
-    }
+    let a = (
+        "p=a/part-0.parquet".to_owned(),
+        Some(1),
+        Some("a".to_owned()),
+    );
+    let b = (
+        "p=b/part-1.parquet".to_owned(),
+        Some(2),
+        Some("b".to_owned()),
+    );
+    let [all, by_partition, by_stats] = scans;
+    assert_eq!(all, [a.clone(), b]);
+    assert_eq!(by_partition, std::slice::from_ref(&a));
+    assert_eq!(by_stats, [a]);
 }
 
 #[test]
@@ -512,6 +509,45 @@ fn delta_handler_cancellation() {
     // A cancelled query does not start the next kernel call.
     let e = f.rt.block_on(f.engine.delta_blocking(|_| ())).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::OperationCanceled);
+}
+
+#[test]
+fn delta_evaluation_cancellation() {
+    use delta_kernel::EvaluationHandler;
+    use delta_kernel::expressions::{ColumnName, Expression, Predicate, Scalar};
+    let f = Fixture::new();
+    let h = f.engine.evaluation();
+    let input =
+        Arc::new(StructType::try_new([StructField::nullable("s", DataType::STRING)]).unwrap());
+    let s = || Expression::Column(ColumnName::new(["s"]));
+    let expr = h
+        .new_expression_evaluator(Arc::clone(&input), Arc::new(s()), DataType::STRING)
+        .unwrap();
+    let pred = h
+        .new_predicate_evaluator(Arc::clone(&input), Arc::new(Predicate::is_null(s())))
+        .unwrap();
+    let batch = || KrishivEngineData::new(strings(&[Some("a")]));
+    // Live: both evaluate.
+    expr.evaluate(&batch()).unwrap();
+    pred.evaluate(&batch()).unwrap();
+    f.cancel.cancel();
+    let errors = [
+        expr.evaluate(&batch()).map(|_| ()).unwrap_err(),
+        pred.evaluate(&batch()).map(|_| ()).unwrap_err(),
+        h.new_expression_evaluator(Arc::clone(&input), Arc::new(s()), DataType::STRING)
+            .map(|_| ())
+            .unwrap_err(),
+        h.new_predicate_evaluator(Arc::clone(&input), Arc::new(Predicate::is_null(s())))
+            .map(|_| ())
+            .unwrap_err(),
+        h.create_many(input, vec![vec![Scalar::from("a")]])
+            .map(|_| ())
+            .unwrap_err(),
+    ];
+    for e in &errors {
+        assert!(matches!(e, KernelError::Cancelled), "{e:?}");
+        assert_eq!(f.class(e), ErrorClass::OperationCanceled);
+    }
 }
 
 #[test]
@@ -1203,3 +1239,9 @@ fn a_foreign_kernel_error_is_internal() {
     );
     assert_eq!(e.error_class(), ErrorClass::InternalError);
 }
+
+#[path = "parquet_tests.rs"]
+mod parquet;
+
+#[path = "oracle_tests.rs"]
+mod oracle;
