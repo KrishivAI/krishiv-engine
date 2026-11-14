@@ -48,8 +48,8 @@ assert_eq!(rows.iter().map(|b| b.num_rows()).sum::<usize>(), 2);
 
 Server authentication (the role model and the token chain).
 
-One [`Authenticator`] turns what a transport received (a bearer token today; client
-certificates in a later unit) into an [`Authenticated`] principal with a [`Role`]. The Spark
+One [`Authenticator`] turns what a transport received (a bearer token, a verified client
+certificate) into an [`Authenticated`] principal with a [`Role`]. The Spark
 Connect listener, the admin HTTP server, `/metrics` and the UI all call the same
 [`ServerAuth`]; none keeps a token of its own.
 
@@ -61,7 +61,16 @@ access policy.
 - [`StaticTokens`]: one principal per configured token, held as SHA-256 digests and compared
   in constant time against every entry.
 - [`FailureThrottle`]: repeated failures from one peer address are refused for a while.
-- [`ServerAuth`]: the chain, its failure log record (target `krishiv::auth`, never the
+- [`MtlsConfig`]: client certificates; the one `principalFrom` rule reads the principal out
+  of the leaf with a minimal DER walk ([`CertNames`]).
+- [`TlsConfig`] and [`check_listener`]: the `krishiv.server.tls.*` settings and the startup
+  refusals of an address, authentication and TLS that do not fit together; `ServerTls`
+  (feature `tls`) is the rustls configuration the listeners serve, reloadable.
+- [`OidcConfig`]: OIDC access tokens (feature `oidc`): JWS compact tokens parsed by a
+  strict, fuzzed parser (`jose.rs`), signatures checked on aws-lc-rs with the algorithm pinned
+  by construction (no `none`, no HMAC), keys from a cached JWK set fetched on a thread of its
+  own, the role from the groups claim through the role lists.
+- [`ServerAuth`]: the chain (throttle, client certificate, bearer token), its failure log record (target `krishiv::auth`, never the
   credential) and its failure counters.
 
 ```rust
@@ -388,11 +397,11 @@ A configured static token.
 
 ###### `Oidc`
 
-An OIDC access token (a later unit).
+An OIDC access token (a JWT the configured issuer signed).
 
 ###### `Mtls`
 
-A client certificate (a later unit).
+A client certificate the client CA verified.
 
 ###### `Throttle`
 
@@ -516,6 +525,7 @@ What a transport received, borrowed for one authentication. Never logged.
 ```rust
 pub struct Credentials<''a> {
     pub bearer: Option<&''a str>,
+    pub peer_leaf: Option<&''a [u8]>,
     pub peer: std::net::SocketAddr,
     pub surface: Surface,
     pub malformed: bool,
@@ -527,6 +537,7 @@ pub struct Credentials<''a> {
 | Name | Type | Documentation |
 |------|------|---------------|
 | `bearer` | `Option<&''a str>` | The token of an `authorization: Bearer <token>` header or gRPC metadata entry. |
+| `peer_leaf` | `Option<&''a [u8]>` | The client's leaf certificate (DER), which the TLS layer verified against the client<br>CA at the handshake. Only the verified leaf may be passed here. |
 | `peer` | `std::net::SocketAddr` | The peer's address (the throttle's key). |
 | `surface` | `Surface` | The listener. |
 | `malformed` | `bool` | An `Authorization` header was present but not a usable `Bearer` token (`Basic ..`,<br>`Bearer` with no token): Spark answers "Invalid authentication token", not "missing". |
@@ -960,6 +971,12 @@ pub fn bearer_token(value: &str) -> Option<&str> { /* ... */ }
 pub use config::AuthConfig;
 ```
 
+#### Re-export `RoleLists`
+
+```rust
+pub use config::RoleLists;
+```
+
 #### Re-export `ThrottleConfig`
 
 ```rust
@@ -976,6 +993,48 @@ pub use config::TokenSpec;
 
 ```rust
 pub use config::is_auth_key;
+```
+
+#### Re-export `CertNames`
+
+```rust
+pub use der::CertNames;
+```
+
+#### Re-export `DerError`
+
+```rust
+pub use der::DerError;
+```
+
+#### Re-export `Alg`
+
+```rust
+pub use jose::Alg;
+```
+
+#### Re-export `ClientCertificates`
+
+```rust
+pub use mtls::ClientCertificates;
+```
+
+#### Re-export `MtlsConfig`
+
+```rust
+pub use mtls::MtlsConfig;
+```
+
+#### Re-export `PrincipalFrom`
+
+```rust
+pub use mtls::PrincipalFrom;
+```
+
+#### Re-export `OidcConfig`
+
+```rust
+pub use oidc_config::OidcConfig;
 ```
 
 #### Re-export `RolePolicy`
@@ -1006,6 +1065,18 @@ pub use server::ServerAuth;
 
 ```rust
 pub use throttle::FailureThrottle;
+```
+
+#### Re-export `TlsConfig`
+
+```rust
+pub use tls_config::TlsConfig;
+```
+
+#### Re-export `check_listener`
+
+```rust
+pub use tls_config::check_listener;
 ```
 
 #### Re-export `StaticTokens`
@@ -1355,6 +1426,130 @@ let c = coalesce([col("a"), lit(0)]);
 
 ```rust
 pub fn coalesce</* synthetic */ impl IntoIterator<Item = Column>: IntoIterator<Item = crate::Column>>(cols: impl IntoIterator<Item = crate::Column>) -> crate::Column { /* ... */ }
+```
+
+## Module `resource_groups`
+
+Resource groups: an [`AdmissionController`] that routes each query to a leaf group by selector, runs it when the
+group and its ancestors have room, queues it when they do not (refusing past `maxQueued`),
+and dispatches queued queries by each parent's scheduling policy.
+
+The group file is Trino's `resource-groups.json` shape (`config.rs`); the tree and the
+dispatcher are in `tree.rs`. Selectors on `source` and `clientTags` read what the client
+asserts, so they route queries but never limit a tenant: use `user` / `userGroup` for that.
+
+```rust
+pub mod resource_groups { /* ... */ }
+```
+
+### Types
+
+#### Struct `ResourceGroups`
+
+The admission controller for a resource group tree.
+
+```rust
+pub struct ResourceGroups {
+    // Some fields omitted
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| *private fields* | ... | *Some fields have been omitted* |
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn from_json(json: &str, total_memory: usize) -> Result<Self, KrishivError> { /* ... */ }
+  ```
+  Builds the controller from the text of a group file. `total_memory` is what a
+
+- ```rust
+  pub fn with_clock(json: &str, total_memory: usize, now_ms: Arc<dyn Fn() -> u64 + Send + Sync>) -> Result<Self, KrishivError> { /* ... */ }
+  ```
+  As [`ResourceGroups::from_json`], with the clock (milliseconds since the Unix epoch)
+
+- ```rust
+  pub fn counts(self: &Self, id: &str) -> Option<(usize, usize)> { /* ... */ }
+  ```
+  `(running, queued)` queries of the group `id` (a dotted path such as `root.etl`).
+
+###### Trait Implementations
+
+- **AdmissionController**
+  - ```rust
+    fn admit<''a>(self: &''a Self, request: &''a QueryRequest) -> BoxFuture<''a, Result<Permit, KrishivError>> { /* ... */ }
+    ```
+
+  - ```rust
+    fn uses_estimate(self: &Self) -> bool { /* ... */ }
+    ```
+
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **Sync**
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+### Re-exports
+
+#### Re-export `GroupSlot`
+
+```rust
+pub use tree::GroupSlot;
 ```
 
 ## Module `agent`
@@ -2273,6 +2468,12 @@ pub use admission::QueryRequest;
 
 ```rust
 pub use admission::Unlimited;
+```
+
+### Re-export `Transport`
+
+```rust
+pub use sessions::Transport;
 ```
 
 ### Re-export `register_build_features`
