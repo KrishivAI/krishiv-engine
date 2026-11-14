@@ -2,17 +2,13 @@
 //! Everything that names an `iceberg` (iceberg-rust 0.11, Arrow 58) item. The module
 //! is private: what leaves it is Krishiv types only.
 
+pub(crate) mod append;
 #[cfg_attr(
     not(test),
     expect(
         dead_code,
-        reason = "the Iceberg sink of PR-36a (later step) calls the commit loop"
+        reason = "`CommitOutcome` is built only by a `CommitTable`: PR-17's catalog clients"
     )
-)]
-pub(crate) mod append;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the Iceberg sink of PR-36a (later step) calls it")
 )]
 pub(crate) mod commit;
 pub(crate) mod data_file;
@@ -22,14 +18,11 @@ pub(crate) mod lazy;
 pub(crate) mod manifest_cache;
 pub(crate) mod provider;
 pub(crate) mod scan;
+pub(crate) mod sink;
 pub(crate) mod stats;
 pub(crate) mod storage;
 pub(crate) mod table;
 pub(crate) mod types;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the Iceberg sink of PR-36a (later step) calls it")
-)]
 pub(crate) mod write;
 pub(crate) mod write_metrics;
 
@@ -51,6 +44,8 @@ mod evolution_tests;
 mod provider_tests;
 #[cfg(test)]
 mod scan_tests;
+#[cfg(test)]
+mod sink_tests;
 #[cfg(test)]
 mod table_tests;
 #[cfg(test)]

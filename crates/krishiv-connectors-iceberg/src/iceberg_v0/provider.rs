@@ -33,10 +33,12 @@ use std::fmt;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use arrow_schema::{FieldRef, SchemaRef};
-use krishiv_common::config::Config;
+use krishiv_common::config::{Config, ConfigValue, ICEBERG_WRITE_MAX_OPEN_FILES};
 use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
-use krishiv_exec::planner::TableProvider;
-use krishiv_exec::{FileScan, FilterPushdown, PushedFilter, ScanPushdown, ScanPushdowns, Source};
+use krishiv_exec::planner::{TableCapabilities, TableProvider, WriteRequest};
+use krishiv_exec::{
+    FileScan, FilterPushdown, PushedFilter, ScanPushdown, ScanPushdowns, Sink, Source,
+};
 use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::split::{FilePartition, SplitConfig};
 use krishiv_io::{
@@ -47,8 +49,10 @@ use krishiv_optimizer::TableStats;
 
 use super::eq_deletes::{self, EqProjection, FILE_ORDINAL};
 use super::lazy::{self, DeleteEnv, DeleteSource, DeleteState, LazySelections, Locate, ScanTask};
+use super::sink::{IcebergWriteSink, WriteTarget};
 use super::table::IcebergTable;
 use super::types::arrow_schema;
+use super::write::DEFAULT_MAX_OPEN_FILES;
 use crate::plan::deletes::DeleteIndex;
 use crate::plan::{
     DataFileEntry, FileFormatKind, PartitionValue, PruneOptions, Pruner, ScanPlan, TableSnapshot,
@@ -71,6 +75,9 @@ fn internal(message: String) -> KrishivError {
 #[derive(Debug, Clone)]
 pub struct IcebergTableProvider {
     scan: Arc<IcebergScan>,
+    /// Where an append goes: set when the table has a committer and the
+    /// provider reads its current state ([`super::sink`]).
+    write: Option<Arc<WriteTarget>>,
 }
 
 impl IcebergTableProvider {
@@ -95,7 +102,24 @@ impl IcebergTableProvider {
     ) -> Result<Self, KrishivError> {
         let snapshot = table.snapshot(version)?;
         let (plan, index) = table.plan_files(&snapshot).await?;
-        Self::from_plan(table, snapshot, plan, index, config, worker_slots)
+        let mut provider = Self::from_plan(table, snapshot, plan, index, config, worker_slots)?;
+        // A time-travelled read is not a write target.
+        if let (Some(committer), VersionSpec::Current) = (&table.committer, version) {
+            let max_open_files = config
+                .get(&ICEBERG_WRITE_MAX_OPEN_FILES)
+                .and_then(ConfigValue::as_int)
+                .and_then(|n| usize::try_from(n).ok())
+                .unwrap_or(DEFAULT_MAX_OPEN_FILES);
+            provider.write = Some(Arc::new(WriteTarget {
+                committer: Arc::clone(committer),
+                base: table.table.metadata().clone(),
+                registered: table.registered.clone(),
+                file_io: table.table.file_io().clone(),
+                max_metadata_bytes: table.max_metadata_bytes,
+                max_open_files,
+            }));
+        }
+        Ok(provider)
     }
 
     /// The provider of `snapshot`'s planned files.
@@ -151,6 +175,7 @@ impl IcebergTableProvider {
         )?;
         Ok(Self {
             scan: Arc::new(scan),
+            write: None,
         })
     }
 
@@ -237,7 +262,7 @@ impl TableProvider for IcebergTableProvider {
         Ok(Arc::clone(&self.scan) as Arc<dyn ScanPushdown>)
     }
 
-    /// From the manifests ([`super::stats`]), worked out once.
+    /// From the manifests (`stats.rs`), worked out once.
     fn statistics(&self) -> Option<TableStats> {
         let s = &self.scan;
         Some(
@@ -251,6 +276,28 @@ impl TableProvider for IcebergTableProvider {
 
     fn scan_units(&self) -> Option<u64> {
         Some(super::stats::scan_units(&self.scan.entries))
+    }
+
+    /// `BATCH_WRITE` (appends only: overwrites are PR-36b) when the table
+    /// has a committer and the provider reads its current state; else none.
+    fn capabilities(&self) -> TableCapabilities {
+        let mut caps = TableCapabilities::default();
+        caps.batch_write = self.write.is_some();
+        caps
+    }
+
+    /// The append sink, committing when it finalizes (`sink.rs`).
+    fn writer(&self, request: &WriteRequest) -> krishiv_exec::Result<Arc<dyn Sink>> {
+        self.capabilities()
+            .check(&request.mode, &request.table_name)?;
+        let target = self
+            .write
+            .as_ref()
+            .ok_or_else(|| internal("a write capability without a target".to_owned()))?;
+        Ok(Arc::new(IcebergWriteSink::try_new(
+            Arc::clone(target),
+            request,
+        )?))
     }
 }
 
