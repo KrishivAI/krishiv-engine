@@ -190,42 +190,24 @@ pub async fn execute_plan(
     let conf = session.conf();
     let empty = pb::Plan::default();
     let plan = request.plan.as_ref().unwrap_or(&empty);
-    let (df, schema) = until_cancelled(&op, async {
-        let translate = TranslateConf {
-            default_data_source: conf
-                .get("spark.sql.sources.default")
-                .unwrap_or_else(|| TranslateConf::default().default_data_source),
-        };
+    let prepared = until_cancelled(&op, async {
         // Decompression (up to `maxPlanSize`) runs off the async workers.
-        let decompressed = match &plan.op_type {
-            Some(OpType::CompressedOperation(c)) => {
-                let c = (**c).clone();
-                let max = limits.max_plan_size;
-                Some(
-                    tokio::task::spawn_blocking(move || decompress(&c, max))
-                        .await
-                        .map_err(|e| -> KrishivError {
-                            krishiv_common::error::InternalError {
-                                message: format!("decompressing a plan: {e}"),
-                            }
-                            .into()
-                        })??,
-                )
-            }
-            _ => None,
-        };
-        let logical = match translate_plan(plan, decompressed.as_deref(), &translate)? {
-            Translated::Relation(logical) => logical,
-            Translated::Command { check, refusal } => {
-                crate::auth::enforce(&check, session).await?;
-                return Err(refusal);
-            }
-        };
+        let logical = request_plan(session, plan, limits).await?;
         let df = session.from_plan_with(&logical, QueryOptions::new().operation_id(id.as_str()))?;
         let schema = df.schema().await?;
         Ok((df, schema))
     })
-    .await?;
+    .await;
+    // A preparation error settles like a query error: an interrupt that
+    // reported this operation first turns it into `OPERATION_CANCELED`.
+    let (df, schema) = match prepared {
+        Ok(ready) => ready,
+        Err(e) => {
+            return Err(
+                settle(&op, Err(Stop::Failed(e))).unwrap_or_else(|| OperationCanceled {}.into())
+            );
+        }
+    };
     let schema_response = schema::proto_schema(&schema)?;
     let settings = encode_settings(&conf, limits, opts.chunking);
 
@@ -279,6 +261,54 @@ impl Translated {
         Self::Command {
             check: check_command(command),
             refusal: command_not_supported(command),
+        }
+    }
+}
+
+/// The engine plan of a request's `Plan`: a compressed one decompressed
+/// (off the async workers, bounded by `maxPlanSize`), then translated with
+/// the session's `spark.sql.sources.default`. Shared by `ExecutePlan` and
+/// `AnalyzePlan` (Spark's `RequestDecompressionInterceptor` then
+/// `SparkConnectPlanner`). A command gets its class checked, then its refusal (until
+/// P3-T012 runs commands).
+///
+/// # Errors
+/// The decompression, decoding and translation errors.
+pub(crate) async fn request_plan(
+    session: &krishiv_session::Session,
+    plan: &pb::Plan,
+    limits: &ExecuteLimits,
+) -> Result<krishiv_plan::Plan, KrishivError> {
+    let translate = TranslateConf {
+        default_data_source: session
+            .conf()
+            .get("spark.sql.sources.default")
+            .unwrap_or_else(|| TranslateConf::default().default_data_source),
+    };
+    let decompressed = match &plan.op_type {
+        Some(OpType::CompressedOperation(c)) => {
+            let c = (**c).clone();
+            let max = limits.max_plan_size;
+            Some(
+                tokio::task::spawn_blocking(move || decompress(&c, max))
+                    .await
+                    .map_err(|e| -> KrishivError {
+                        krishiv_common::error::InternalError {
+                            message: format!("decompressing a plan: {e}"),
+                        }
+                        .into()
+                    })??,
+            )
+        }
+        _ => None,
+    };
+    match translate_plan(plan, decompressed.as_deref(), &translate)? {
+        Translated::Relation(logical) => Ok(logical),
+        // A command's ADR 0046 §3b class is checked before it is refused, on every RPC that
+        // takes a plan.
+        Translated::Command { check, refusal } => {
+            crate::auth::enforce(&check, session).await?;
+            Err(refusal)
         }
     }
 }
@@ -545,11 +575,34 @@ async fn encode(
     };
     // The query's stream is gone by now (dropped with `produce`).
     drop(df);
-    match outcome {
-        Ok(()) | Err(Stop::Gone) => {}
-        Err(Stop::Failed(e)) => sender.fail(&e).await,
+    if let Some(e) = settle(&op, outcome) {
+        sender.fail(&e).await;
     }
     drop(registered);
+}
+
+/// Ends `op` after its encoder stopped with `outcome` and returns the error
+/// its stream ends with. The operation is finished (an interrupt from now
+/// on interrupts nothing) before the error waits for room in the channel;
+/// an interrupt that came first wins, and the stream ends with
+/// `OPERATION_CANCELED` instead of the error (Spark's
+/// `ExecuteThreadRunner.execute`, v4.3.0 lines 149-180).
+fn settle(op: &Operation, outcome: Result<(), Stop>) -> Option<KrishivError> {
+    match outcome {
+        // `produce` finished the operation before its last response.
+        Ok(()) => None,
+        Err(Stop::Gone) => {
+            op.finish();
+            None
+        }
+        Err(Stop::Failed(e)) => {
+            if op.finish() {
+                Some(e)
+            } else {
+                Some(OperationCanceled {}.into())
+            }
+        }
+    }
 }
 
 async fn produce(
@@ -583,6 +636,13 @@ async fn produce(
     // metrics (a follow-up); until then the list is empty.
     metrics.metrics = Some(Metrics::default());
     sender.send(metrics).await?;
+    // The end is atomic with interrupts: once finished, an interrupt
+    // interrupts nothing; an interrupt that came first turns the end into
+    // OPERATION_CANCELED (Spark's `ExecuteThreadRunner`, v4.3.0 lines
+    // 271-293).
+    if !sender.op.finish() {
+        return Err(Stop::Failed(OperationCanceled {}.into()));
+    }
     if sender.op.reattachable() {
         sender
             .send(sender.response(Some(ResponseType::ResultComplete(ResultComplete {}))))

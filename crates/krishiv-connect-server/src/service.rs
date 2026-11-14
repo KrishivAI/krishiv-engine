@@ -8,8 +8,9 @@
 //! unimplemented ones too (`crate::auth`). T011a (PR-11a) adds
 //! `ExecutePlan` (`crate::execute`) and the minimal `ReattachExecute` and
 //! `ReleaseExecute` of design P3-T011a §3.4 (no replay buffer: a live
-//! operation cannot be reattached yet). `AnalyzePlan`, `Config`, `Interrupt`
-//! (PR-11b) and the rest answer `UNIMPLEMENTED`.
+//! operation cannot be reattached yet). PR-11b adds `AnalyzePlan`
+//! (`crate::analyze`), `Config` (`crate::config`) and `Interrupt`
+//! (`crate::interrupt`); the rest answer `UNIMPLEMENTED` until PR-15.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -28,10 +29,10 @@ use tonic::{Request, Response, Status, Streaming};
 
 use crate::auth::{Check, ConnectAuth, Rpc, check_rpc};
 use crate::codec::WireCodec;
-use crate::execute;
-use crate::manager::SessionManager;
+use crate::manager::{SessionEntry, SessionManager};
 use crate::operation::ExecuteLimits;
 use crate::status::status_of;
+use crate::{analyze, config, execute, interrupt};
 
 /// The generated server side of `spark.connect.SparkConnectService`.
 #[expect(
@@ -117,6 +118,22 @@ impl ConnectService {
         }
     }
 
+    /// The session `session_id` of `caller`, created if needed, its server-side id checked
+    /// against the client's (the get-or-create RPCs of design P3-T011a §2.1). The client's
+    /// `user_id` is recorded, never trusted (ADR 0046 §5).
+    fn session(
+        &self,
+        caller: &Authenticated,
+        session_id: &str,
+        observed: Option<&str>,
+        user: Option<&pb::UserContext>,
+    ) -> Result<Arc<SessionEntry>, Status> {
+        let user = user.map_or("", |u| u.user_id.as_str());
+        self.manager
+            .get_or_create(caller, session_id, observed, user)
+            .map_err(|e| status_of(&e))
+    }
+
     /// `UNIMPLEMENTED`, once `request` is admitted and authenticated: an
     /// unauthenticated client learns nothing about what the server
     /// implements.
@@ -141,37 +158,60 @@ impl SparkConnectService for ConnectService {
     ) -> Result<Response<Self::ExecutePlanStream>, Status> {
         let caller = self.caller(&request, Rpc::ExecutePlan)?;
         let request = request.into_inner();
-        let user = request
-            .user_context
-            .as_ref()
-            .map_or("", |u| u.user_id.as_str());
-        let entry = self
-            .manager
-            .get_or_create(
-                &caller,
-                &request.session_id,
-                request.client_observed_server_side_session_id.as_deref(),
-                user,
-            )
-            .map_err(|e| status_of(&e))?;
+        let entry = self.session(
+            &caller,
+            &request.session_id,
+            request.client_observed_server_side_session_id.as_deref(),
+            request.user_context.as_ref(),
+        )?;
         let stream = execute::execute_plan(&entry, &request, &self.limits)
             .await
             .map_err(|e| status_of(&e))?;
         Ok(Response::new(stream))
     }
 
+    /// Spark's `SparkConnectAnalyzeHandler`: the session is looked up or
+    /// created, the plan translated and analyzed (`crate::analyze`).
     async fn analyze_plan(
         &self,
         request: Request<Decoded<pb::AnalyzePlanRequest>>,
     ) -> Result<Response<pb::AnalyzePlanResponse>, Status> {
-        Err(self.unimplemented(&request, Rpc::AnalyzePlan))
+        let caller = self.caller(&request, Rpc::AnalyzePlan)?;
+        let request = request.into_inner();
+        let entry = self.session(
+            &caller,
+            &request.session_id,
+            request.client_observed_server_side_session_id.as_deref(),
+            request.user_context.as_ref(),
+        )?;
+        analyze::analyze_plan(&entry, &request, &self.limits)
+            .await
+            .map(Response::new)
+            .map_err(|e| status_of(&e))
     }
 
+    /// Spark's `SparkConnectConfigHandler`: the session is looked up or
+    /// created (`crate::config`).
     async fn config(
         &self,
         request: Request<Decoded<pb::ConfigRequest>>,
     ) -> Result<Response<pb::ConfigResponse>, Status> {
-        Err(self.unimplemented(&request, Rpc::Config))
+        let caller = self.caller(&request, Rpc::Config)?;
+        let request = request.into_inner();
+        let entry = self.session(
+            &caller,
+            &request.session_id,
+            request.client_observed_server_side_session_id.as_deref(),
+            request.user_context.as_ref(),
+        )?;
+        config::config(
+            &entry,
+            &request,
+            &caller.principal,
+            config::role_of(&caller),
+        )
+        .map(Response::new)
+        .map_err(|e| status_of(&e))
     }
 
     async fn add_artifacts(
@@ -188,11 +228,23 @@ impl SparkConnectService for ConnectService {
         Err(self.unimplemented(&request, Rpc::ArtifactStatus))
     }
 
+    /// Spark's `SparkConnectInterruptHandler`: the session is looked up or
+    /// created (`crate::interrupt`).
     async fn interrupt(
         &self,
         request: Request<Decoded<pb::InterruptRequest>>,
     ) -> Result<Response<pb::InterruptResponse>, Status> {
-        Err(self.unimplemented(&request, Rpc::Interrupt))
+        let caller = self.caller(&request, Rpc::Interrupt)?;
+        let request = request.into_inner();
+        let entry = self.session(
+            &caller,
+            &request.session_id,
+            request.client_observed_server_side_session_id.as_deref(),
+            request.user_context.as_ref(),
+        )?;
+        interrupt::interrupt(&entry, &request)
+            .map(Response::new)
+            .map_err(|e| status_of(&e))
     }
 
     /// Spark's `SparkConnectReattachExecuteHandler`, minimal (design
@@ -255,7 +307,7 @@ impl SparkConnectService for ConnectService {
             response.operation_id = Some(op.id().as_str().to_owned());
             match &request.release {
                 Some(Release::ReleaseAll(_)) => {
-                    op.cancel();
+                    op.close();
                     entry.operations().remove(&op);
                 }
                 Some(Release::ReleaseUntil(until)) => {

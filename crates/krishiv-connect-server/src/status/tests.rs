@@ -168,12 +168,14 @@ fn an_operation_limit_is_resource_exhausted() {
     assert_eq!(status_of(&e).code(), Code::ResourceExhausted);
 }
 
+/// ADR 0046 §8: an authorization refusal is `PERMISSION_DENIED`, with the
+/// same `ErrorInfo` as every other error.
 #[test]
-fn an_access_denial_is_permission_denied_with_its_class() {
+fn insufficient_permissions_is_permission_denied() {
     let e: KrishivError = krishiv_common::error::KrishivInsufficientPermissions {
-        principal: "`carol`".to_owned(),
-        privilege: "USAGE".to_owned(),
-        securable: "system `udf`".to_owned(),
+        principal: "ann".to_owned(),
+        privilege: "SET".to_owned(),
+        securable: "configuration `krishiv.resultCache.ttl`".to_owned(),
     }
     .into();
     let status = status_of(&e);

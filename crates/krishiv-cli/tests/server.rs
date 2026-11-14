@@ -243,12 +243,29 @@ fn sigterm_shuts_down_cleanly_and_removes_the_spill_directory() {
 }
 
 /// Runs `script` with a PySpark 4.x Connect client against a fresh server,
-/// `SPARK_REMOTE` set to its Connect address.
+/// `SPARK_REMOTE` set to its Connect address. The interpreter is
+/// `KRISHIV_TEST_PYSPARK_PYTHON` (a venv with `pyspark-client` installed),
+/// else `python3`. The script runs from a file: under `python -c`,
+/// `pyspark-client` 4.3.0 takes the run for its own doctests and looks for a
+/// `SPARK_HOME` (`pyspark/sql/connect/utils.py`, `check_dependencies`).
 fn pyspark(script: &str) {
     let spill = tempfile::tempdir().expect("tempdir");
+    // The spill root must be private (`krishiv-memory`, `check_root_is_private`);
+    // a temporary directory follows the umask.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(spill.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("private spill root");
+    }
+    let scripts = tempfile::tempdir().expect("tempdir");
+    let file = scripts.path().join("client.py");
+    std::fs::write(&file, script).expect("script");
+    let python =
+        std::env::var("KRISHIV_TEST_PYSPARK_PYTHON").unwrap_or_else(|_| "python3".to_owned());
     let run = start(spill.path());
-    let out = Command::new("python3")
-        .args(["-c", script])
+    let out = Command::new(python)
+        .arg(&file)
         .env("SPARK_REMOTE", format!("sc://{}", run.connect))
         .output()
         .expect("python3");
@@ -261,7 +278,7 @@ fn pyspark(script: &str) {
 }
 
 #[test]
-#[ignore = "needs PR-11 (ExecutePlan, Config: P3-T011a)"]
+#[ignore = "needs a Python with pyspark-client 4.3.0 or 4.2.1 (KRISHIV_TEST_PYSPARK_PYTHON); CI hosts have none"]
 fn sc_localhost_runs_spark_range_collect() {
     pyspark(
         "from pyspark.sql import SparkSession\n\
@@ -278,7 +295,7 @@ fn sc_localhost_runs_spark_range_collect() {
 /// `SPARK_CONNECT_LOG_LEVEL` is set when it is imported; a failed release
 /// is a warning there (`reattach.py`, "ReleaseExecute failed").
 #[test]
-#[ignore = "needs pyspark-client 4.3.0 / 4.2.1 on the host (none on CI runners) and the Config RPC (PR-11b)"]
+#[ignore = "needs a Python with pyspark-client 4.3.0 or 4.2.1 (KRISHIV_TEST_PYSPARK_PYTHON); CI hosts have none"]
 fn pyspark_minimal_reattach() {
     pyspark(
         "import logging, os\n\
@@ -299,7 +316,7 @@ fn pyspark_minimal_reattach() {
 }
 
 #[test]
-#[ignore = "needs PR-11 (ExecutePlan, Config: P3-T011a)"]
+#[ignore = "needs SqlCommand (P3-T012) and a Python with pyspark-client (KRISHIV_TEST_PYSPARK_PYTHON)"]
 fn server_sessions_are_isolated() {
     pyspark(
         "from pyspark.sql import SparkSession\n\
@@ -314,7 +331,7 @@ fn server_sessions_are_isolated() {
 }
 
 #[test]
-#[ignore = "needs PR-11; nightly: a client idle for 3 minutes keeps its session (keepalive)"]
+#[ignore = "nightly: a client idle for 3 minutes keeps its session (keepalive); needs a Python with pyspark-client (KRISHIV_TEST_PYSPARK_PYTHON)"]
 fn idle_client_survives_keepalive() {
     pyspark(
         "import time\n\

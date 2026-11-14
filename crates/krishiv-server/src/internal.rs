@@ -238,7 +238,29 @@ fn presented(method: &Method, headers: &HeaderMap, uri: &Uri) -> Option<String> 
     {
         return Some(t.to_owned());
     }
-    param(uri, "token").map(str::to_owned)
+    param(uri, "token").and_then(percent_decode)
+}
+
+/// A `?token=` value as the page sent it (`encodeURIComponent`): every `%XX` becomes its byte. `+` stays `+` (the
+/// page never writes a space as `+`, and a token may hold `+`). A broken escape or a value that is not UTF-8 after
+/// decoding presents no token.
+fn percent_decode(raw: &str) -> Option<String> {
+    let b = raw.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' {
+            let hex = b.get(i + 1..i + 3)?;
+            let hi = char::from(hex[0]).to_digit(16)?;
+            let lo = char::from(hex[1]).to_digit(16)?;
+            out.push(u8::try_from(hi * 16 + lo).ok()?);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
 }
 
 async fn require_token(
@@ -837,7 +859,7 @@ async fn events(State(s): State<UiState>) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::{CSP, human_bytes, mask_literals};
+    use super::{CSP, human_bytes, mask_literals, percent_decode};
 
     /// `ui/tests/fixture_server.py` repeats the policy; the page check is only honest while both agree.
     #[test]
@@ -857,6 +879,21 @@ mod tests {
             .filter_map(|l| l.trim().strip_prefix('"').and_then(|l| l.strip_suffix('"')))
             .collect();
         assert_eq!(joined, CSP);
+    }
+
+    #[test]
+    fn a_query_string_token_is_percent_decoded_as_the_page_encodes_it() {
+        assert_eq!(
+            percent_decode("ab%2Bc%2Fd%3D%3D").as_deref(),
+            Some("ab+c/d==")
+        );
+        assert_eq!(percent_decode("a+b").as_deref(), Some("a+b"));
+        assert_eq!(percent_decode("%e2%82%ac").as_deref(), Some("\u{20ac}"));
+        assert_eq!(percent_decode("plain0123").as_deref(), Some("plain0123"));
+        assert_eq!(percent_decode("").as_deref(), Some(""));
+        for broken in ["%", "%2", "%zz", "a%G1", "%ff"] {
+            assert_eq!(percent_decode(broken), None, "{broken}");
+        }
     }
 
     #[test]

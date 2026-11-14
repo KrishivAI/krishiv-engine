@@ -25,6 +25,8 @@ use tokio::net::{TcpListener, TcpStream};
 
 const VIEWER: &str = "viewer-token-0123456789abcdef0123456789";
 const OPERATOR: &str = "operator-token-0123456789abcdef012345678";
+/// A configured token holding characters a URL must escape (`encodeURIComponent` writes `%2B`, `%2F`, `%3D`).
+const RESERVED: &str = "ops+token/0123456789abcdef0123456789==";
 
 struct Empty;
 
@@ -48,9 +50,10 @@ fn secret(dir: &std::path::Path, name: &str, value: &str) -> String {
 /// throttle that blocks a peer after two failures.
 async fn start() -> SocketAddr {
     let dir = tempfile::tempdir().expect("tempdir");
-    let (v, o) = (
+    let (v, o, r) = (
         secret(dir.path(), "v", VIEWER),
         secret(dir.path(), "o", OPERATOR),
+        secret(dir.path(), "r", RESERVED),
     );
     let settings = [
         ("krishiv.auth.tokens.prom.secret", v.as_str()),
@@ -60,6 +63,9 @@ async fn start() -> SocketAddr {
         ("krishiv.auth.tokens.ops.secret", o.as_str()),
         ("krishiv.auth.tokens.ops.principal", "ann"),
         ("krishiv.auth.tokens.ops.role", "operator"),
+        ("krishiv.auth.tokens.bo.secret", r.as_str()),
+        ("krishiv.auth.tokens.bo.principal", "bo"),
+        ("krishiv.auth.tokens.bo.role", "operator"),
         ("krishiv.auth.failureThrottle.maxFailures", "2"),
     ];
     let config = AuthConfig::from_settings(settings).expect("auth config");
@@ -135,6 +141,13 @@ async fn each_role_reaches_what_the_matrix_gives_it() {
     );
     // The configured token works in the UI's query-string form too (GET only).
     let page = format!("{queries}?token={OPERATOR}");
+    assert_eq!(status(&call(addr, "GET", &page, None).await), "200");
+    // The page percent-encodes the token for its event stream; the server decodes it before checking.
+    let encoded = RESERVED
+        .replace('+', "%2B")
+        .replace('/', "%2F")
+        .replace('=', "%3D");
+    let page = format!("{queries}?token={encoded}");
     assert_eq!(status(&call(addr, "GET", &page, None).await), "200");
     // The probes stay open.
     assert_eq!(status(&call(addr, "GET", "/healthz", None).await), "200");

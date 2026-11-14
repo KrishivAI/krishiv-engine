@@ -1322,6 +1322,22 @@ fn path_confinement_entries_default_to_empty_and_are_startup_only() {
 }
 
 #[test]
+fn connect_max_plan_depth_defaults_and_rejects_non_positive() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&CONNECT_MAX_PLAN_DEPTH).and_then(ConfigValue::as_int),
+        Some(1024)
+    );
+    c.set("krishiv.connect.maxPlanDepth", "2048").unwrap();
+    assert_eq!(
+        c.get(&CONNECT_MAX_PLAN_DEPTH).and_then(ConfigValue::as_int),
+        Some(2048)
+    );
+    assert!(c.set("krishiv.connect.maxPlanDepth", "0").is_err());
+    assert!(c.set("krishiv.connect.maxPlanDepth", "abc").is_err());
+}
+
+#[test]
 fn server_entries_parse_default_and_take_sparks_names() {
     let mut c = Config::new();
     assert_eq!(

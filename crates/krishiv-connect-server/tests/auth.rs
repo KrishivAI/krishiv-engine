@@ -293,8 +293,9 @@ async fn every_rpc_needs_a_credential() {
         Some(VIEWER),
     )
     .await
-    .expect_err("not implemented yet");
-    assert_eq!(s.code(), Code::Unimplemented);
+    .expect_err("an empty session id");
+    assert_ne!(s.code(), Code::Unauthenticated, "{s:?}");
+    assert_ne!(s.code(), Code::PermissionDenied, "{s:?}");
     unary::<_, pb::ReleaseSessionResponse>(&run.channel, "ReleaseSession", release(), Some(VIEWER))
         .await
         .expect("an unknown session is a no-op");

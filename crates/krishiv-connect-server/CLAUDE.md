@@ -14,8 +14,18 @@ Paths are relative to this crate.
 - `src/service/v4_3.pb.rs` **generated** by `tools/connect-protogen` (do not edit): the `SparkConnectService` trait
   (one method per RPC, requests arrive as `krishiv_connect::wire::Decoded<_>`) and the tonic router
 - `src/service.rs` `ConnectService`, Krishiv's implementation: `ExecutePlan`, the minimal `ReattachExecute` /
-  `ReleaseExecute` (design P3-T011a §3.4: no replay buffer until PR-15a), `ReleaseSession`; the other RPCs are
-  `UNIMPLEMENTED` until PR-11b/PR-15; a draining server answers `UNAVAILABLE` ("server shutting down")
+  `ReleaseExecute` (design P3-T011a §3.4: no replay buffer until PR-15a), `ReleaseSession`, `AnalyzePlan`, `Config`,
+  `Interrupt`; the other RPCs are `UNIMPLEMENTED` until PR-15; a draining server answers `UNAVAILABLE` ("server
+  shutting down")
+- `src/analyze.rs` `AnalyzePlan` (design §3.5): every arm over the translated, analyzed plan (never run);
+  `same_semantics`/`semantic_hash` from `krishiv_plan::semantic_plan_hash` (names and subquery aliases erased) of
+  the analyzed plan; the cache arms are 56K00 until PR-47; `src/analyze/types.rs` ports of `StructType.treeString`, `toDDL` and the planner's
+  `parseDatatypeString`
+- `src/config.rs` `Config` (design §3.6) over `RuntimeConf`: the seven operations, `silent`, Spark's per-key
+  warnings, redaction for both profiles (Spark's pattern plus `krishiv_common::secret`'s classifier and URL
+  credentials), `SettableBy` (`check_settable`; `role_of` is the caller's authenticated role, no role a viewer, the local user of an unauthenticated server the admin)
+- `src/interrupt.rs` `Interrupt` (design §3.7): `ALL` and `OPERATION_ID` through the session's operations and
+  `Session::cancel` per reported id; `TAG` is `UNSUPPORTED_FEATURE.INTERRUPT_TYPE` until T064
 - `src/auth.rs` (P3-T002, design `design/P3-T002-authentication.md` §3.1/§3.6, ADR 0046 §2/§3b/§5) `ConnectAuth`;
   `src/auth/layer.rs` `AuthLayer`, the tower layer in front of the router: every RPC (the unimplemented ones too)
   authenticates from its headers before the body is decoded, through the server's one `Authenticator`
@@ -28,8 +38,8 @@ Paths are relative to this crate.
   no wildcard arm (a new proto arm fails to compile); `enforce` asks the session's policy for a
   `Check::Privilege` (`Session::authorize_privilege`, one `krishiv::audit` record per denial); `tests/auth.rs`
 - `src/operation.rs` `Operation` (one per `ExecutePlan`: id, plan digest, tags, reattachable, sent response ids,
-  whether its encoder waits for the client,
-  cancel) and `Operations`, the per-session map in `SessionEntry` (`krishiv.connect.maxOperationsPerSession`,
+  one atomic state: running, then finished or cancelled by compare-and-swap, whether its encoder waits for the
+  client) and `Operations`, the per-session map in `SessionEntry` (`krishiv.connect.maxOperationsPerSession`,
   `KRISHIV_OPERATION_LIMIT`); `ExecuteLimits` (`aheadBytes`, plan and batch sizes); tag checks
   (`KRISHIV_INVALID_OPERATION_TAG`)
 - `src/execute.rs` `ExecutePlan` for ROOT relations: compressed plans (bounded ZSTD), translation, the encoder task
@@ -50,7 +60,8 @@ Paths are relative to this crate.
   holding a live operation; `busy()` is what shutdown waits for), `krishiv.connect.maxSessions` /
   `maxSessionsPerPrincipal`
 - `src/server.rs` `ConnectServer::serve`: HTTP/2 limits, connection cap, sweeper task, shutdown order; `with_tls` (P3-T002 §3.5): the TLS handshake (ALPN `h2`) on the connection's own task within `handshakeTimeout`, `PeerInfo` (address and verified client leaf) as the connection's `ConnectInfo`, which `AuthLayer` passes to the authenticator; `tests/tls.rs`
-- `tests/server.rs`, `tests/execute.rs`, `tests/auth.rs` end to end over a raw tonic client
+- `tests/server.rs`, `tests/execute.rs`, `tests/rpcs.rs` (AnalyzePlan, Config, Interrupt), `tests/auth.rs`, `tests/tls.rs`
+  end to end over a raw tonic client
 
 ## Invariants
 - **Sessions are keyed by the authenticated caller's `SessionOwner`**, never by `UserContext.user_id` (ADR 0046

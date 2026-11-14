@@ -4,7 +4,9 @@
 //! the error's message, and a `google.rpc.ErrorInfo` detail in the domain
 //! `org.apache.spark` naming the exception class and its superclasses, the
 //! SQLSTATE, the error class and its message parameters. PySpark raises the
-//! matching Python exception from that detail.
+//! matching Python exception from that detail. Krishiv's own refusals use
+//! other codes: `RESOURCE_EXHAUSTED` for the session and operation limits,
+//! `PERMISSION_DENIED` for `KRISHIV_INSUFFICIENT_PERMISSIONS` (ADR 0046 §8).
 //!
 //! Only the client-safe form of an error leaves ([`KrishivError::for_client`]).
 //! The exception classes are the ones Spark raises where the Connect server
@@ -56,6 +58,13 @@ macro_rules! classes {
 const SPARK_SQL_EXCEPTION: &[&str] = classes!(
     "org.apache.spark.SparkSQLException",
     "java.sql.SQLException"
+);
+/// `SparkNoSuchElementException` (`SQL_CONF_NOT_FOUND`,
+/// `QueryExecutionErrors.sqlConfigNotFoundError`, v4.3.0 line 1985).
+const SPARK_NO_SUCH_ELEMENT_EXCEPTION: &[&str] = classes!(
+    "org.apache.spark.SparkNoSuchElementException",
+    "java.util.NoSuchElementException",
+    "java.lang.RuntimeException",
 );
 /// `SparkException`.
 const SPARK_EXCEPTION: &[&str] = classes!("org.apache.spark.SparkException");
@@ -139,6 +148,15 @@ pub(crate) fn exception_classes(class: ErrorClass) -> &'static [&'static str] {
         ),
         ("CONNECT_INVALID_PLAN.CANNOT_PARSE", SPARK_SQL_EXCEPTION),
         ("CONNECT_INVALID_PLAN.", INVALID_PLAN_INPUT),
+        // The Interrupt handler throws `SparkSQLException` (v4.3.0 lines 45-61).
+        (
+            "INVALID_PARAMETER_VALUE.INTERRUPT_TYPE_",
+            SPARK_SQL_EXCEPTION,
+        ),
+        ("UNSUPPORTED_FEATURE.INTERRUPT_TYPE", SPARK_SQL_EXCEPTION),
+        ("SQL_CONF_NOT_FOUND", SPARK_NO_SUCH_ELEMENT_EXCEPTION),
+        // `QueryCompilationErrors.cannotModifyValueOf*ConfigError`.
+        ("CANNOT_MODIFY_", ANALYSIS_EXCEPTION),
         ("KRISHIV_SESSION_LIMIT", SPARK_EXCEPTION),
         ("KRISHIV_OPERATION_LIMIT", SPARK_EXCEPTION),
         ("INTERNAL_ERROR", SPARK_EXCEPTION),
@@ -196,8 +214,7 @@ pub fn status_of(error: &KrishivError) -> Status {
     };
     // Spark sends INTERNAL for every SparkThrowable; a session limit is a
     // refusal before admission (threat model T-D4), RESOURCE_EXHAUSTED; an
-    // access denial is PERMISSION_DENIED (ADR 0046 §8), with the same
-    // ErrorInfo, which PySpark reads whatever the code.
+    // authorization refusal is PERMISSION_DENIED (ADR 0046 §8).
     let code = match class {
         ErrorClass::KrishivSessionLimit | ErrorClass::KrishivOperationLimit => {
             Code::ResourceExhausted

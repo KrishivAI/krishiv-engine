@@ -4,13 +4,16 @@
 //! [`DeltaEngine`] holds what every handler needs: the query's `IoContext`, the table's store
 //! and root, the runtime handle the handlers bridge to, the parse limits and the query's
 //! cancellation. Kernel calls are entered only through [`DeltaEngine::delta_blocking`], which
-//! runs them on the process's [`LogPool`]. This part has the storage and JSON handlers; the
-//! evaluator, the Parquet handler and the assembled `Engine` come with PR-08a part 2.
+//! runs them on the process's [`LogPool`]. Handlers: storage ([`storage`]), JSON ([`json`]),
+//! Parquet ([`columnar`]) and evaluation ([`eval`]).
 
+pub mod columnar;
 pub mod data;
+pub mod eval;
 pub mod json;
 pub mod paths;
 pub mod pool;
+pub(crate) mod relabel;
 pub mod schema;
 pub mod storage;
 
@@ -34,7 +37,9 @@ use self::paths::TableRoot;
 use self::pool::{LogPool, on_log_pool};
 use crate::error::to_kernel;
 
+pub use self::columnar::KrishivParquetHandler;
 pub use self::data::KrishivEngineData;
+pub use self::eval::KrishivEvaluationHandler;
 pub use self::json::KrishivJsonHandler;
 pub use self::storage::KrishivStorageHandler;
 
@@ -215,6 +220,21 @@ impl DeltaEngine {
         Arc::new(KrishivJsonHandler::new(Arc::clone(&self.shared)))
     }
 
+    /// The Parquet handler.
+    #[must_use]
+    pub fn parquet(&self) -> Arc<KrishivParquetHandler> {
+        Arc::new(KrishivParquetHandler::new(Arc::clone(&self.shared)))
+    }
+
+    /// The evaluation handler.
+    #[must_use]
+    pub fn evaluation(&self) -> Arc<KrishivEvaluationHandler> {
+        Arc::new(KrishivEvaluationHandler::with_cancel(
+            self.shared.limits,
+            Arc::clone(&self.shared.cancel),
+        ))
+    }
+
     /// The query's cancellation as the kernel's token, for `with_cancellation_token`.
     #[must_use]
     pub fn kernel_cancellation(&self) -> CancellationTokenRef {
@@ -241,6 +261,26 @@ impl DeltaEngine {
     {
         let engine = self.clone();
         self.pool.run(&self.shared.cancel, move || f(&engine)).await
+    }
+}
+
+/// The assembled engine: the kernel's four handlers over Krishiv's I/O and Arrow compute.
+/// Every kernel call that takes it still goes through [`DeltaEngine::delta_blocking`].
+impl delta_kernel::Engine for DeltaEngine {
+    fn evaluation_handler(&self) -> Arc<dyn delta_kernel::EvaluationHandler> {
+        self.evaluation()
+    }
+
+    fn storage_handler(&self) -> Arc<dyn delta_kernel::StorageHandler> {
+        self.storage()
+    }
+
+    fn json_handler(&self) -> Arc<dyn delta_kernel::JsonHandler> {
+        self.json()
+    }
+
+    fn parquet_handler(&self) -> Arc<dyn delta_kernel::ParquetHandler> {
+        self.parquet()
     }
 }
 

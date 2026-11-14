@@ -20,12 +20,17 @@ ignored = ["arrow-data", "krishiv-common", "serde", "serde_json"]
 [dependencies]
 libfuzzer-sys = "0.4.10"
 prost = "0.14.4"
+bytes = { version = "1.12", default-features = false }
+delta_kernel = { version = "=0.30.1", default-features = false }
+url = { version = "2.5", default-features = false, features = ["std"] }
 arrow-array = { version = "60", default-features = false, features = ["ffi"] }
 arrow-buffer = { version = "60", default-features = false }
 arrow-data = { version = "60", default-features = false, features = ["ffi"] }
 arrow-schema = { version = "60", default-features = false, features = ["ffi"] }
 krishiv-common = { path = "../crates/krishiv-common" }
+krishiv-connectors-delta = { path = "../crates/krishiv-connectors-delta" }
 krishiv-connect = { path = "../crates/krishiv-connect" }
+krishiv-exec = { path = "../crates/krishiv-exec" }
 krishiv-io = { path = "../crates/krishiv-io" }
 krishiv-memory = { path = "../crates/krishiv-memory" }
 krishiv-plan = { path = "../crates/krishiv-plan", features = ["testing"] }
@@ -35,7 +40,7 @@ krishiv-testkit = { path = "../crates/krishiv-testkit" }
 object_store = { version = "=0.14.2", default-features = false }
 serde = { version = "1.0.229", default-features = false, features = ["std"] }
 serde_json = { version = "1.0.154", default-features = false, features = ["std"] }
-tokio = { version = "1.53", default-features = false, features = ["rt", "time"] }
+tokio = { version = "1.53", default-features = false, features = ["rt", "rt-multi-thread", "time"] }
 
 [[bin]]
 name = "sql_parse"
@@ -75,6 +80,13 @@ bench = false
 [[bin]]
 name = "capsule_import"
 path = "fuzz_targets/capsule_import.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "delta_commit_json"
+path = "fuzz_targets/delta_commit_json.rs"
 test = false
 doc = false
 bench = false
