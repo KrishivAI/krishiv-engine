@@ -24,17 +24,15 @@ use crate::request::ScanRequest;
 const NESTED: &str = include_str!("../../../../tests/fixtures/spark-4.2.0/json-nested.json");
 const FLAT: &str = include_str!("../../../../tests/fixtures/spark-4.2.0/json.json");
 
-/// Cases where Krishiv knowingly differs from the recorded Spark run, with
-/// the reason.
+/// Cases where Krishiv knowingly differs from the recorded Spark run: the
+/// reason, and what Krishiv gives instead (asserted, so a change in the
+/// difference fails the test).
 const KNOWN: &[(&str, &str)] = &[
     (
-        "nested case duplicates",
-        "COLUMN_ALREADY_EXISTS comes from Spark's analysis of the inferred schema, not from the reader",
-    ),
-    (
         "depth 1000",
-        "Krishiv types nest at most 32 deep (DataType::MAX_NESTING_DEPTH), so inference refuses it; \
-         Spark's error here is PySpark failing to parse the 1000-deep schema",
+        "Krishiv types nest at most 32 deep (DataType::MAX_NESTING_DEPTH), so inference refuses it \
+         with FAILED_TO_PARSE_TOO_COMPLEX; Spark's error here is PySpark failing to parse the \
+         1000-deep schema",
     ),
     (
         "depth 1001",
@@ -48,8 +46,20 @@ const KNOWN: &[(&str, &str)] = &[
     ),
 ];
 
-fn known(name: &str) -> bool {
-    KNOWN.iter().any(|(n, _)| *n == name)
+/// What Krishiv gives for a [`KNOWN`] case, or `None` for any other case.
+fn known(name: &str, case: &Value) -> Option<Value> {
+    KNOWN.iter().find(|(n, _)| *n == name)?;
+    Some(match name {
+        "depth 1000" => serde_json::json!({ "error": ["FAILED_TO_PARSE_TOO_COMPLEX"] }),
+        "depth 1001" => serde_json::json!({ "inferred": "struct<_corrupt_record:string>" }),
+        _ => {
+            let text = String::from_utf8(file_of(case)).expect("utf-8");
+            serde_json::json!({
+                "inferred": case["inferred"],
+                "rows": [[null, null, text.trim_end()]],
+            })
+        }
+    })
 }
 
 fn file_of(case: &Value) -> Vec<u8> {
@@ -156,6 +166,8 @@ fn plain(a: &dyn Array, i: usize) -> Value {
 fn float(v: f64) -> Value {
     if v.is_nan() {
         Value::String("NaN".to_owned())
+    } else if v.is_infinite() {
+        Value::String(if v > 0.0 { "Infinity" } else { "-Infinity" }.to_owned())
     } else {
         serde_json::Number::from_f64(v).map_or(Value::Null, Value::Number)
     }
@@ -188,27 +200,21 @@ fn nested_json_matches_spark() {
     let mut failures = Vec::new();
     for case in golden["infers"].as_array().expect("infers") {
         let name = case["name"].as_str().expect("name");
-        if known(name) {
-            continue;
-        }
         let file = file_of(case);
         let got = match infer(&file, &options_of(case)) {
             Ok(s) => serde_json::json!({ "inferred": simple_string(&s) }),
             Err(e) => serde_json::json!({ "error": class_names(&e) }),
         };
-        let want = match case.get("inferred") {
+        let want = known(name, case).unwrap_or_else(|| match case.get("inferred") {
             Some(s) => serde_json::json!({ "inferred": s }),
             None => serde_json::json!({ "error": case["error"] }),
-        };
+        });
         if got != want {
-            failures.push(format!("infer {name}: got {got}, Spark {want}"));
+            failures.push(format!("infer {name}: got {got}, want {want}"));
         }
     }
     for case in golden["reads"].as_array().expect("reads") {
         let name = case["name"].as_str().expect("name");
-        if known(name) {
-            continue;
-        }
         let file = file_of(case);
         let o = options_of(case);
         let got = read_schema(case, &file, &o).and_then(|schema| {
@@ -219,15 +225,52 @@ fn nested_json_matches_spark() {
             }))
         });
         let got = got.unwrap_or_else(|e| serde_json::json!({ "error": class_names(&e) }));
-        let want = match case.get("error") {
+        let want = known(name, case).unwrap_or_else(|| match case.get("error") {
             Some(e) => serde_json::json!({ "error": e }),
             None => serde_json::json!({ "inferred": case["inferred"], "rows": case["rows"] }),
-        };
+        });
         if got != want {
-            failures.push(format!("read {name}: got {got}, Spark {want}"));
+            failures.push(format!("read {name}: got {got}, want {want}"));
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Values the row encoding cannot show: duplicate map keys and a wrapped
+/// integral timestamp, against the expressions Spark ran over the read.
+#[test]
+fn map_duplicates_and_timestamp_overflow_match_spark() {
+    let golden: Value = serde_json::from_str(NESTED).expect("fixture");
+    let selects = golden["selects"].as_array().expect("selects");
+    let case = |name: &str| {
+        selects
+            .iter()
+            .find(|c| c["name"] == name)
+            .unwrap_or_else(|| panic!("{name}"))
+    };
+    // `size(m)` and `map_keys(m)`: every key is kept.
+    let c = case("map duplicate keys");
+    let schema = schema_of(c["schema"].as_str().expect("schema"));
+    let got = read(&file_of(c), &options_of(c), &ScanRequest::all(schema)).expect("read");
+    let m = got[0].column(0).as_map();
+    let keys: Vec<Value> = (0..m.keys().len())
+        .map(|j| Value::String(m.keys().as_string_view().value(j).to_owned()))
+        .collect();
+    assert_eq!(
+        serde_json::json!([[keys.len(), keys]]),
+        c["rows"],
+        "map duplicate keys"
+    );
+    // `unix_micros(ts)` and the corrupt column: seconds wrap past i64.
+    let c = case("integral timestamp overflow");
+    let schema = schema_of(c["schema"].as_str().expect("schema"));
+    let got = read(&file_of(c), &options_of(c), &ScanRequest::all(schema)).expect("read");
+    let ts = got[0].column(0).as_primitive::<TimestampMicrosecondType>();
+    let corrupt = got[0].column(1);
+    let rows: Vec<Value> = (0..ts.len())
+        .map(|i| serde_json::json!([ts.value(i), plain(corrupt.as_ref(), i)]))
+        .collect();
+    assert_eq!(Value::Array(rows), c["rows"], "integral timestamp overflow");
 }
 
 /// Spark's `CAST(value AS STRING)` of a flat value, as the flat generator

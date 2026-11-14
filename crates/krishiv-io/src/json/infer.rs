@@ -19,7 +19,9 @@ use crate::options::FormatOptions;
 use crate::split::{SplitConfig, SplitFile, plan};
 use crate::text::Datetimes;
 use crate::text::reader::{LineReader, ReadChunk, WholeReader};
-use krishiv_common::error::{InvalidJsonRecordType, MalformedRecordInParsingWithoutSuggestion};
+use krishiv_common::error::{
+    ColumnAlreadyExists, InvalidJsonRecordType, MalformedRecordInParsingWithoutSuggestion,
+};
 
 /// The types inference moves through (Spark's inferred `DataType`s).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -329,6 +331,31 @@ fn canonical(t: Ty, drop_all_null: bool) -> Option<Ty> {
     }
 }
 
+/// `COLUMN_ALREADY_EXISTS` when two fields of a struct anywhere in `t` have
+/// the same name, ignoring case.
+fn no_duplicates(t: &Ty) -> FormatResult<()> {
+    match t {
+        Ty::Array(e) => no_duplicates(e),
+        Ty::Struct(fields) => {
+            let mut seen = std::collections::HashSet::with_capacity(fields.len());
+            for (n, t) in fields {
+                let lower = n.to_lowercase();
+                if !seen.insert(lower.clone()) {
+                    return Err(FormatError::Other(
+                        ColumnAlreadyExists {
+                            column_name: format!("`{}`", lower.replace('`', "``")),
+                        }
+                        .into(),
+                    ));
+                }
+                no_duplicates(t)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Spark's `toSQLType` of an inferred type (without the quotes).
 fn sql_type(t: &Ty) -> String {
     match t {
@@ -590,13 +617,23 @@ pub(crate) fn infer<'a>(
             }
         }
         // Fields are sorted by name, as Spark's inference sorts them.
-        let fields: Vec<Field> = match canonical(root, opts.drop_field_if_all_null) {
-            Some(Ty::Struct(fields)) => fields
-                .iter()
-                .map(|(n, t)| Field::new(n, arrow_type(t), true))
-                .collect(),
-            _ => Vec::new(),
+        let root = match canonical(root, opts.drop_field_if_all_null) {
+            Some(t @ Ty::Struct(_)) => t,
+            _ => Ty::Struct(Vec::new()),
         };
+        // Spark refuses a schema whose names repeat at any level, ignoring
+        // case (`checkSchemaColumnNameDuplication`, case-insensitive by
+        // default), when the relation resolves.
+        no_duplicates(&root)?;
+        let Ty::Struct(root) = root else {
+            return Err(FormatError::Other(internal(
+                "the inferred root is a struct",
+            )));
+        };
+        let fields: Vec<Field> = root
+            .iter()
+            .map(|(n, t)| Field::new(n, arrow_type(t), true))
+            .collect();
         // Krishiv types nest at most `DataType::MAX_NESTING_DEPTH` deep:
         // a deeper inferred type is refused here, by the type system.
         for f in &fields {

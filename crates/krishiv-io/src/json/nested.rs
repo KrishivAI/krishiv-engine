@@ -5,20 +5,22 @@
 //!
 //! Spark's `JacksonParser` rules, read at tag `v4.2.0` and checked against
 //! `tests/fixtures/spark-4.2.0/json-nested.json`:
-//! - a struct (`convertObject`) takes the members it names (exact names),
-//!   ignores the others; a member that does not convert is null, and the
-//!   struct is kept as a partial result;
+//! - a struct (`convertObject`) takes the members it names (exact names; of
+//!   duplicate keys the last), ignores the others; a member that does not
+//!   convert is null, and the struct is kept as a partial result;
 //! - an array (`convertArray`) keeps a partial element (a struct or array
 //!   with a bad part), but any element that fails outright fails the whole
 //!   array;
-//! - a map (`convertMap`) keeps partial values; a value that fails outright
-//!   fails the whole map (Spark's key and value lists then differ in length);
+//! - a map (`convertMap`) keeps every member, duplicate keys included, and
+//!   partial values; a value that fails outright fails the whole map (it is
+//!   null);
 //! - a value of the wrong JSON kind for its type fails outright; `null` is
 //!   null at any level.
 //!
 //! A partial result anywhere makes the record malformed (its raw text goes
 //! to the corrupt column), but its values are kept.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::{ArrayRef, ListArray, MapArray, StructArray, new_null_array};
@@ -37,8 +39,9 @@ use crate::text::spark_type_name;
 pub(crate) enum Shape {
     /// A scalar: its kind and its Spark type name (for errors).
     Leaf(Kind, String),
-    /// A struct: its fields by name.
-    Struct(Vec<(String, Shape)>),
+    /// A struct: its fields, and each name's position (the first field of a
+    /// name).
+    Struct(Vec<(String, Shape)>, HashMap<String, usize>),
     /// An array of the element shape.
     List(Box<Shape>),
     /// A map with string keys, of the value shape.
@@ -62,12 +65,17 @@ impl Shape {
             return Err(refused(f));
         }
         Ok(match f.data_type() {
-            DataType::Struct(fields) => Self::Struct(
-                fields
+            DataType::Struct(fields) => {
+                let shapes: Vec<(String, Shape)> = fields
                     .iter()
                     .map(|c| Ok((c.name().clone(), Self::of(c)?)))
-                    .collect::<Result<_, KrishivError>>()?,
-            ),
+                    .collect::<Result<_, KrishivError>>()?;
+                let mut index = HashMap::with_capacity(shapes.len());
+                for (i, (n, _)) in shapes.iter().enumerate() {
+                    index.entry(n.clone()).or_insert(i);
+                }
+                Self::Struct(shapes, index)
+            }
             DataType::List(e) | DataType::LargeList(e) => Self::List(Box::new(Self::of(e)?)),
             DataType::Map(entries, _) => {
                 let DataType::Struct(kv) = entries.data_type() else {
@@ -168,8 +176,8 @@ impl JsonConverter<'_> {
                     }
                 }
             }
-            (Shape::Struct(fields), JVal::Object(members, _)) => {
-                self.object(fields, members, record)
+            (Shape::Struct(fields, index), JVal::Object(members, _)) => {
+                self.object(fields, index, members, record)
             }
             (Shape::List(element), JVal::Array(items, _)) => {
                 let mut out = Vec::with_capacity(items.len());
@@ -217,13 +225,14 @@ impl JsonConverter<'_> {
     pub(crate) fn object(
         &self,
         fields: &[(String, Shape)],
+        index: &HashMap<String, usize>,
         members: &[(String, JVal)],
         record: &str,
     ) -> Result<NVal, Fail> {
         let mut out = vec![NVal::Null; fields.len()];
         let mut bad = None;
         for (k, v) in members {
-            let Some(i) = fields.iter().position(|(n, _)| n == k) else {
+            let Some(&i) = index.get(k) else {
                 continue;
             };
             match self.value(&fields[i].1, k, Some(v), record) {

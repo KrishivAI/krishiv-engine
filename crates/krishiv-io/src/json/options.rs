@@ -68,7 +68,7 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         flag("allowNumericLeadingZeros", false, "Allow numbers like `007`.");
         flag("allowBackslashEscapingAnyCharacter", false, "Allow `\\` before any character.");
         flag("allowUnquotedControlChars", false, "Allow raw control characters in strings.");
-        flag("allowNonNumericNumbers", true, "Read `NaN`, `Infinity`, `+INF`, `-INF` strings into float and double columns.");
+        flag("allowNonNumericNumbers", true, "Accept `NaN` and `Infinity` as numbers, and `NaN`, `Infinity`, `+INF`, `-INF` strings in float and double columns.");
         mode_spec();
         conf("columnNameOfCorruptRecord", OptionKind::String, OptionDefault::Str("_corrupt_record"), "spark.sql.columnNameOfCorruptRecord", "The column that receives malformed records in PERMISSIVE mode.");
         string("dateFormat", "The pattern of DATE values (default: Spark's lenient grammar).");
@@ -132,6 +132,8 @@ pub(crate) struct Syntax {
     pub backslash_any: bool,
     /// Raw bytes below `0x20` are accepted in strings.
     pub unquoted_controls: bool,
+    /// `NaN` and `Infinity` are numbers (`allowNonNumericNumbers`).
+    pub non_numeric: bool,
 }
 
 impl From<&JsonOptions> for Syntax {
@@ -143,6 +145,7 @@ impl From<&JsonOptions> for Syntax {
             leading_zeros: o.syntax.leading_zeros,
             backslash_any: o.syntax.backslash_any,
             unquoted_controls: o.syntax.unquoted_controls,
+            non_numeric: o.syntax.non_numeric,
         }
     }
 }
@@ -162,8 +165,6 @@ pub(crate) struct JsonOptions {
     pub line_sep: LineSep,
     pub drop_field_if_all_null: bool,
     pub ignore_null_fields: bool,
-    /// `allowNonNumericNumbers`: non-numeric strings read as floats.
-    pub non_numeric: bool,
 }
 
 impl JsonOptions {
@@ -197,6 +198,7 @@ impl JsonOptions {
                     .bool("allowBackslashEscapingAnyCharacter")
                     .unwrap_or(false),
                 unquoted_controls: o.bool("allowUnquotedControlChars").unwrap_or(false),
+                non_numeric: o.bool("allowNonNumericNumbers").unwrap_or(true),
             },
             mode,
             corrupt_column: o
@@ -207,7 +209,6 @@ impl JsonOptions {
             line_sep,
             drop_field_if_all_null: o.bool("dropFieldIfAllNull").unwrap_or(false),
             ignore_null_fields: o.bool("ignoreNullFields").unwrap_or(true),
-            non_numeric: o.bool("allowNonNumericNumbers").unwrap_or(true),
         })
     }
 }

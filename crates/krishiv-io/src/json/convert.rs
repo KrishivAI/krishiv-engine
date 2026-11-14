@@ -13,7 +13,9 @@ use super::decode::JVal;
 use crate::csv::convert::{Conv, Kind, Val, interval_of_text};
 use crate::error::unsupported;
 use crate::text::{Datetimes, spark_type_name};
-use krishiv_common::error::CannotParseJsonField;
+use krishiv_common::error::{
+    CannotParseJsonField, EmptyJsonFieldValue, MalformedRecordInParsingCannotParseStringAsDatatype,
+};
 
 /// The Spark type of a scalar column, as the JSON reader handles it:
 /// exactly the CSV kinds (scalars and binary).
@@ -93,7 +95,9 @@ impl JsonConverter<'_> {
             (Kind::F32, JVal::Num(t, _)) => Val::F32(java_parse_float(t).ok_or_else(bad)?),
             (Kind::F64, JVal::Num(t, _)) => Val::F64(java_parse_double(t).ok_or_else(bad)?),
             (Kind::F32, JVal::Str(s)) if !s.is_empty() => {
-                let v = self.non_numeric_value(s).ok_or_else(bad)?;
+                let v = self
+                    .non_numeric_value(s)
+                    .ok_or_else(|| not_a_float(record, name, s, target))?;
                 // NaN or an infinity: the same value as a float.
                 Val::F32(if v.is_nan() {
                     f32::NAN
@@ -103,9 +107,10 @@ impl JsonConverter<'_> {
                     f32::NEG_INFINITY
                 })
             }
-            (Kind::F64, JVal::Str(s)) if !s.is_empty() => {
-                Val::F64(self.non_numeric_value(s).ok_or_else(bad)?)
-            }
+            (Kind::F64, JVal::Str(s)) if !s.is_empty() => Val::F64(
+                self.non_numeric_value(s)
+                    .ok_or_else(|| not_a_float(record, name, s, target))?,
+            ),
             (Kind::Decimal(p, sc), JVal::Num(t, _)) => {
                 let sc = u8::try_from(*sc).map_err(|_| bad())?;
                 Val::I128(java_parse_decimal(t, *p, sc).ok_or_else(bad)?)
@@ -120,18 +125,25 @@ impl JsonConverter<'_> {
             (Kind::Timestamp, JVal::Str(s)) if !s.is_empty() => {
                 Val::I64(self.dt.parse_timestamp(s)?.ok_or_else(bad)?)
             }
-            // An integral number is seconds since the epoch.
+            // An integral number is seconds since the epoch (Spark's
+            // `getLongValue * 1000000L` wraps on overflow).
             (Kind::Timestamp, JVal::Num(t, false)) => Val::I64(
                 java_parse_integral(t, 64)
-                    .and_then(|s| s.checked_mul(1_000_000))
-                    .ok_or_else(bad)?,
+                    .ok_or_else(bad)?
+                    .wrapping_mul(1_000_000),
             ),
             (Kind::TimestampNtz, JVal::Str(s)) if !s.is_empty() => {
                 Val::I64(self.dt.parse_ntz(s)?.ok_or_else(bad)?)
             }
             (Kind::YearMonth(..) | Kind::DayTime(..), JVal::Str(s)) => interval_of_text(kind, s)?,
             // An empty string is not a value of a non-string type.
-            (_, JVal::Str(s)) if s.is_empty() => return Err(Conv::Malformed),
+            (_, JVal::Str(s)) if s.is_empty() => {
+                let e: KrishivError = EmptyJsonFieldValue {
+                    data_type: format!("\"{}\"", target.to_uppercase()),
+                }
+                .into();
+                return Err(Conv::Fatal(e));
+            }
             _ => {
                 let e: KrishivError = CannotParseJsonField {
                     field_name: name.to_owned(),
@@ -157,6 +169,22 @@ impl JsonConverter<'_> {
             _ => None,
         }
     }
+}
+
+/// A string that is not a float for a float or double column (Spark's
+/// `StringAsDataTypeException`, raised as is in FAILFAST).
+fn not_a_float(record: &str, name: &str, s: &str, target: &str) -> Conv {
+    Conv::Fatal(
+        MalformedRecordInParsingCannotParseStringAsDatatype {
+            bad_record: record.to_owned(),
+            fail_fast_mode: "FAILFAST".to_owned(),
+            field_value: format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'")),
+            field_name: format!("`{}`", name.replace('`', "``")),
+            target_type: format!("\"{}\"", target.to_uppercase()),
+            input_type: "StringType".to_owned(),
+        }
+        .into(),
+    )
 }
 
 /// A value as text, for conversion errors.

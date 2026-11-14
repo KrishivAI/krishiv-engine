@@ -327,13 +327,17 @@ fn tokenizer_reads_flat_values() {
     assert!(parse_line("{\"s\":\"\\uD83D\"}", s).is_err());
     assert!(parse_line("{\"s\":\"\\uDE00\"}", s).is_err());
     assert!(parse_line("{\"s\":\"\\u12\"}", s).is_err());
-    // Duplicates: the last wins.
+    // Duplicates are kept as written (a read takes the last; a map keeps
+    // both).
     let Top::Object(o) = parse_line(r#"{"a":1,"a":2}"#, s).expect("dup") else {
         panic!("object")
     };
     assert_eq!(
         o.fields,
-        vec![("a".to_owned(), JVal::Num("2".to_owned(), false))]
+        vec![
+            ("a".to_owned(), JVal::Num("1".to_owned(), false)),
+            ("a".to_owned(), JVal::Num("2".to_owned(), false))
+        ]
     );
     // Empty objects and blank input.
     assert!(matches!(
@@ -521,10 +525,45 @@ fn parse_modes_and_the_corrupt_column() {
 }
 
 #[test]
+fn a_top_level_array_reads_one_batch_at_a_time() {
+    // One record holding more rows than a batch: its rows go out over
+    // several steps, never as one oversized batch; a partial array keeps
+    // every row with the record's text.
+    let n = crate::text::BATCH_ROWS * 2 + 5;
+    let mut text = String::from("[");
+    for i in 0..n {
+        if i > 0 {
+            text.push(',');
+        }
+        text.push_str(&format!("{{\"a\":{i}}}"));
+    }
+    text.push_str("]\n{\"a\":-1}\n");
+    let schema = ddl("a int, _corrupt_record string");
+    let o = options(&serde_json::json!({}));
+    let got = read(text.as_bytes(), &o, &ScanRequest::all(Arc::clone(&schema))).expect("read");
+    assert!(got.iter().all(|b| b.num_rows() <= crate::text::BATCH_ROWS));
+    let rows = rows_of(&got);
+    assert_eq!(rows.len(), n + 1);
+    assert_eq!(
+        rows[n - 1][0].as_deref(),
+        Some(format!("{}", n - 1).as_str())
+    );
+    assert_eq!(rows[n], [Some("-1".to_owned()), None]);
+    let partial = "[{\"a\":\"bad\"},{\"a\":1}]\n";
+    let got = read(partial.as_bytes(), &o, &ScanRequest::all(schema)).expect("partial");
+    assert_eq!(
+        rows_of(&got),
+        [
+            vec![None, Some(partial.trim_end().to_owned())],
+            vec![Some("1".to_owned()), Some(partial.trim_end().to_owned())],
+        ]
+    );
+}
+
+#[test]
 fn top_level_arrays_and_scalars_are_malformed() {
     use ErrorClass::{
         FailedReadFileNoHint as NoHint, InvalidJsonRootField as Root,
-        MalformedRecordInParsingCannotParseJsonArraysAsStructs as Arrays,
         MalformedRecordInParsingWithoutSuggestion as Without,
     };
     let schema = ddl("a int, _corrupt_record string");
@@ -540,9 +579,13 @@ fn top_level_arrays_and_scalars_are_malformed() {
         ]
     );
     let fail = options(&serde_json::json!({"mode": "FAILFAST"}));
+    // Spark classifies no cause for these; only a `null` root is
+    // INVALID_JSON_ROOT_FIELD (`golden_tests` holds every mode).
     let e = read(b"[1,2]\n", &fail, &req).expect_err("array");
-    assert_eq!(classes_of(&e), [NoHint, Without, Arrays]);
+    assert_eq!(classes_of(&e), [NoHint, Without]);
     let e = read(b"42\n", &fail, &req).expect_err("scalar");
+    assert_eq!(classes_of(&e), [NoHint, Without]);
+    let e = read(b"null\n", &fail, &req).expect_err("null");
     assert_eq!(classes_of(&e), [NoHint, Without, Root]);
     let drop = options(&serde_json::json!({"mode": "DROPMALFORMED"}));
     let got = read(b"[1,2]\n{\"a\":1}\n", &drop, &req).expect("read");

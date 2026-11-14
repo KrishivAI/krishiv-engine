@@ -15,7 +15,8 @@ for JSON-lines (and `multiLine`) files read with `spark.read.json`:
 
 Each row is a list of column values as JSON: a struct is an object with its
 fields in schema order, an array a list, a map an object, a decimal a
-string, binary base64; anything else as `json.dumps` writes the Python value.
+string, binary base64, NaN and infinities their names as strings; anything
+else as `json.dumps` writes the Python value.
 An error is recorded as its error classes, outermost first.
 
 Usage (from repo root):
@@ -67,6 +68,8 @@ def plain(v):
         return v.isoformat()
     if isinstance(v, float) and v != v:
         return "NaN"
+    if isinstance(v, float) and v in (float("inf"), float("-inf")):
+        return "Infinity" if v > 0 else "-Infinity"
     return v
 
 
@@ -125,6 +128,8 @@ INFERS: list[tuple[str, str, dict[str, str]]] = [
     ("top-level array of scalars", '[1,2]\n{"a":2}\n', {}),
     ("multiline nested", '[\n {"a": {"b": [1, 2]}},\n {"a": {"c": "x"}}\n]\n', {"multiLine": "true"}),
     ("github archive sample", GH, {}),
+    ("root duplicate keys", '{"a":1,"a":2}\n', {}),
+    ("nested duplicate keys", '{"s":{"a":1,"a":"x"}}\n', {}),
 ]
 
 # (name, file text, read options, schema DDL or None to infer)
@@ -241,6 +246,59 @@ READS: list[tuple[str, str, dict[str, str], str | None]] = [
 ]
 
 
+MODES = ["PERMISSIVE", "DROPMALFORMED", "FAILFAST"]
+
+# Top-level values that are not one object, read in each parse mode.
+for _name, _text in [
+    ("root array of scalars", "[1,2]\n"),
+    ("root array of null", "[null]\n"),
+    ("root array with a scalar", '[{"a":1},2]\n'),
+    ("root array partial", '[{"a":"bad"},{"a":1}]\n'),
+    ("root scalar", "1\n"),
+    ("root null", "null\n"),
+]:
+    for _mode in MODES:
+        READS.append((f"{_name} {_mode}", _text, {"mode": _mode}, "a int, _corrupt_record string"))
+READS += [
+    (
+        "root array partial renamed corrupt column",
+        '[{"a":"bad"},{"a":1}]\n',
+        {"columnNameOfCorruptRecord": "bad"},
+        "a int, bad string",
+    ),
+    ("root array string as double failfast", '[{"d":"abc"}]\n', {"mode": "FAILFAST"}, "d double"),
+    ("string as double failfast", '{"d":"abc"}\n', {"mode": "FAILFAST"}, "d double"),
+    ("nested string as double failfast", '{"s":{"d":"abc"}}\n', {"mode": "FAILFAST"}, "s struct<d:double>"),
+    ("empty string as int failfast", '{"i":""}\n', {"mode": "FAILFAST"}, "i int"),
+    ("empty string in struct failfast", '{"s":{"i":""}}\n', {"mode": "FAILFAST"}, "s struct<i:int>"),
+    (
+        "non-numeric numbers",
+        '{"d":NaN}\n{"d":"NaN"}\n{"d":"-Infinity"}\n{"d":"+INF"}\n{"d":Infinity}\n',
+        {},
+        "d double, _corrupt_record string",
+    ),
+    (
+        "non-numeric numbers off",
+        '{"d":NaN}\n{"d":"NaN"}\n{"d":"-Infinity"}\n{"d":Infinity}\n{"d":1.5}\n',
+        {"allowNonNumericNumbers": "false"},
+        "d double, _corrupt_record string",
+    ),
+]
+
+# Reads whose values the row encoding cannot show (duplicate map keys, a
+# wrapped timestamp): the listed expressions over the read instead.
+SELECTS: list[tuple[str, str, dict[str, str], str, list[str]]] = [
+    ("map duplicate keys", '{"m":{"x":1,"x":2,"y":3}}\n', {}, "m map<string,int>", ["size(m)", "map_keys(m)"]),
+    (
+        "integral timestamp overflow",
+        '{"ts":100000000000000}\n{"ts":-5}\n',
+        {},
+        "ts timestamp, _corrupt_record string",
+        ["unix_micros(ts)", "_corrupt_record"],
+    ),
+]
+
+
 def run(spark, text: str, options: dict[str, str], schema: str | None):
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         f.write(text)
@@ -283,6 +341,19 @@ def main() -> None:
     for name, text, options, schema in READS:
         r = run(spark, text, options, schema)
         out["reads"].append({"name": name, "file": b64(text), "options": options, "schema": schema, **r})
+    out["selects"] = []
+    for name, text, options, schema, exprs in SELECTS:
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            f.write(text)
+            path = f.name
+        try:
+            df = spark.read.options(**options).schema(schema).json(path).selectExpr(*exprs)
+            rows = [[plain(r[c]) for c in range(len(exprs))] for r in df.collect()]
+            out["selects"].append(
+                {"name": name, "file": b64(text), "options": options, "schema": schema, "exprs": exprs, "rows": rows}
+            )
+        finally:
+            os.unlink(path)
     spark.stop()
     json.dump(out, sys.stdout, indent=1)
     sys.stdout.write("\n")

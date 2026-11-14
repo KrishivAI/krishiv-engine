@@ -280,6 +280,22 @@
    "file": "eyJpZCI6IjEiLCJ0eXBlIjoiUHVzaEV2ZW50IiwiYWN0b3IiOnsiaWQiOjcsImxvZ2luIjoiYSIsInVybCI6InUifSwicmVwbyI6eyJpZCI6OSwibmFtZSI6InIveCJ9LCJwYXlsb2FkIjp7InNpemUiOjEsImNvbW1pdHMiOlt7InNoYSI6InMxIiwiZGlzdGluY3QiOnRydWV9XX0sInB1YmxpYyI6dHJ1ZSwiY3JlYXRlZF9hdCI6IjIwMjQtMDEtMTVUMTI6MDA6MDBaIn0KeyJpZCI6IjIiLCJ0eXBlIjoiQ3JlYXRlRXZlbnQiLCJhY3RvciI6eyJpZCI6OCwibG9naW4iOiJiIiwidXJsIjoidiIsImRpc3BsYXlfbG9naW4iOiJCIn0sInJlcG8iOnsiaWQiOjEwLCJuYW1lIjoici95In0sInBheWxvYWQiOnsicmVmIjoibWFpbiIsInJlZl90eXBlIjoiYnJhbmNoIiwicHVzaGVyX3R5cGUiOiJ1c2VyIn0sInB1YmxpYyI6dHJ1ZSwiY3JlYXRlZF9hdCI6IjIwMjQtMDEtMTVUMTI6MDA6MDFaIiwib3JnIjp7ImlkIjozLCJsb2dpbiI6Im8ifX0KeyJpZCI6IjMiLCJ0eXBlIjoiUHVzaEV2ZW50IiwiYWN0b3IiOnsiaWQiOjcsImxvZ2luIjoiYSIsInVybCI6InUifSwicmVwbyI6eyJpZCI6OSwibmFtZSI6InIveCJ9LCJwYXlsb2FkIjp7InNpemUiOjIsImNvbW1pdHMiOlt7InNoYSI6InMyIiwiZGlzdGluY3QiOmZhbHNlfSx7InNoYSI6InMzIiwiZGlzdGluY3QiOnRydWUsIm1lc3NhZ2UiOiJtIn1dfSwicHVibGljIjp0cnVlLCJjcmVhdGVkX2F0IjoiMjAyNC0wMS0xNVQxMjowMDowMloifQo=",
    "options": {},
    "inferred": "struct<actor:struct<display_login:string,id:bigint,login:string,url:string>,created_at:string,id:string,org:struct<id:bigint,login:string>,payload:struct<commits:array<struct<distinct:boolean,message:string,sha:string>>,pusher_type:string,ref:string,ref_type:string,size:bigint>,public:boolean,repo:struct<id:bigint,name:string>,type:string>"
+  },
+  {
+   "name": "root duplicate keys",
+   "file": "eyJhIjoxLCJhIjoyfQo=",
+   "options": {},
+   "error": [
+    "COLUMN_ALREADY_EXISTS"
+   ]
+  },
+  {
+   "name": "nested duplicate keys",
+   "file": "eyJzIjp7ImEiOjEsImEiOiJ4In19Cg==",
+   "options": {},
+   "error": [
+    "COLUMN_ALREADY_EXISTS"
+   ]
   }
  ],
  "reads": [
@@ -878,6 +894,417 @@
      null,
      null,
      "{\"a\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]],\"k\":1}"
+    ]
+   ]
+  },
+  {
+   "name": "root array of scalars PERMISSIVE",
+   "file": "WzEsMl0K",
+   "options": {
+    "mode": "PERMISSIVE"
+   },
+   "schema": "a int, _corrupt_record string",
+   "inferred": "struct<a:int,_corrupt_record:string>",
+   "rows": [
+    [
+     null,
+     "[1,2]"
+    ]
+   ]
+  },
+  {
+   "name": "root array of scalars DROPMALFORMED",
+   "file": "WzEsMl0K",
+   "options": {
+    "mode": "DROPMALFORMED"
+   },
+   "schema": "a int, _corrupt_record string",
+   "inferred": "struct<a:int,_corrupt_record:string>",
+   "rows": []
+  },
+  {
+   "name": "root array of scalars FAILFAST",
+   "file": "WzEsMl0K",
+   "options": {
+    "mode": "FAILFAST"
+   },
+   "schema": "a int, _corrupt_record string",
+   "error": [
+    "FAILED_READ_FILE.NO_HINT",
+    "MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION"
+   ]
+  },
+  {
+   "name": "root array of null PERMISSIVE",
+   "file": "W251bGxdCg==",
+   "options": {
+    "mode": "PERMISSIVE"
+   },
+   "schema": "a int, _corrupt_record string",
+   "inferred": "struct<a:int,_corrupt_record:string>",
+   "rows": [
+    [
+     null,
+     "[null]"
+    ]
+   ]
+  },
+  {
+   "name": "root array of null DROPMALFORMED",
+   "file": "W251bGxdCg==",
+   "options": {
+    "mode": "DROPMALFORMED"
+   },
+   "schema": "a int, _corrupt_record string",
+   "inferred": "struct<a:int,_corrupt_record:string>",
+   "rows": []
+  },
+  {
+   "name": "root array of null FAILFAST",
+   "file": "W251bGxdCg==",
+   "options": {
+    "mode": "FAILFAST"
+   },
+   "schema": "a int, _corrupt_record string",
+   "error": [
+    "FAILED_READ_FILE.NO_HINT",
+    "MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION",
+    "INVALID_JSON_ROOT_FIELD"
+   ]
+  },
+  {
+   "name": "root array with a scalar PERMISSIVE",
+   "file": "W3siYSI6MX0sMl0K",
+   "options": {
+    "mode": "PERMISSIVE"
+   },
+   "schema": "a int, _corrupt_record string",
+   "inferred": "struct<a:int,_corrupt_record:string>",
+   "rows": [
+    [
+     null,
+     "[{\"a\":1},2]"
+    ]
+   ]
+  },
+  {
+   "name": "root array with a scalar DROPMALFORMED",
+   "file": "W3siYSI6MX0sMl0K",
+   "options": {
+    "mode": "DROPMALFORMED"
+   },
+   "schema": "a int, _corrupt_record string",
+   "inferred": "struct<a:int,_corrupt_record:string>",
+   "rows": []
+  },
+  {
+   "name": "root array with a scalar FAILFAST",
+   "file": "W3siYSI6MX0sMl0K",
+   "options": {
+    "mode": "FAILFAST"
+   },
+   "schema": "a int, _corrupt_record string",
+   "error": [
+    "FAILED_READ_FILE.NO_HINT",
+    "MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION"
+   ]
+  },
+  {
+   "name": "root array partial PERMISSIVE",
+   "file": "W3siYSI6ImJhZCJ9LHsiYSI6MX1dCg==",
+   "options": {
+    "mode": "PERMISSIVE"
+   },
+   "schema": "a int, _corrupt_record string",
+   "inferred": "struct<a:int,_corrupt_record:string>",
+   "rows": [
+    [
+     null,
+     "[{\"a\":\"bad\"},{\"a\":1}]"
+    ],
+    [
+     1,
+     "[{\"a\":\"bad\"},{\"a\":1}]"
+    ]
+   ]
+  },
+  {
+   "name": "root array partial DROPMALFORMED",
+   "file": "W3siYSI6ImJhZCJ9LHsiYSI6MX1dCg==",
+   "options": {
+    "mode": "DROPMALFORMED"
+   },
+   "schema": "a int, _corrupt_record string",
+   "inferred": "struct<a:int,_corrupt_record:string>",
+   "rows": []
+  },
+  {
+   "name": "root array partial FAILFAST",
+   "file": "W3siYSI6ImJhZCJ9LHsiYSI6MX1dCg==",
+   "options": {
+    "mode": "FAILFAST"
+   },
+   "schema": "a int, _corrupt_record string",
+   "error": [
+    "FAILED_READ_FILE.NO_HINT",
+    "MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION"
+   ]
+  },
+  {
+   "name": "root scalar PERMISSIVE",
+   "file": "MQo=",
+   "options": {
+    "mode": "PERMISSIVE"
+   },
+   "schema": "a int, _corrupt_record string",
+   "inferred": "struct<a:int,_corrupt_record:string>",
+   "rows": [
+    [
+     null,
+     "1"
+    ]
+   ]
+  },
+  {
+   "name": "root scalar DROPMALFORMED",
+   "file": "MQo=",
+   "options": {
+    "mode": "DROPMALFORMED"
+   },
+   "schema": "a int, _corrupt_record string",
+   "inferred": "struct<a:int,_corrupt_record:string>",
+   "rows": []
+  },
+  {
+   "name": "root scalar FAILFAST",
+   "file": "MQo=",
+   "options": {
+    "mode": "FAILFAST"
+   },
+   "schema": "a int, _corrupt_record string",
+   "error": [
+    "FAILED_READ_FILE.NO_HINT",
+    "MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION"
+   ]
+  },
+  {
+   "name": "root null PERMISSIVE",
+   "file": "bnVsbAo=",
+   "options": {
+    "mode": "PERMISSIVE"
+   },
+   "schema": "a int, _corrupt_record string",
+   "inferred": "struct<a:int,_corrupt_record:string>",
+   "rows": [
+    [
+     null,
+     "null"
+    ]
+   ]
+  },
+  {
+   "name": "root null DROPMALFORMED",
+   "file": "bnVsbAo=",
+   "options": {
+    "mode": "DROPMALFORMED"
+   },
+   "schema": "a int, _corrupt_record string",
+   "inferred": "struct<a:int,_corrupt_record:string>",
+   "rows": []
+  },
+  {
+   "name": "root null FAILFAST",
+   "file": "bnVsbAo=",
+   "options": {
+    "mode": "FAILFAST"
+   },
+   "schema": "a int, _corrupt_record string",
+   "error": [
+    "FAILED_READ_FILE.NO_HINT",
+    "MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION",
+    "INVALID_JSON_ROOT_FIELD"
+   ]
+  },
+  {
+   "name": "root array partial renamed corrupt column",
+   "file": "W3siYSI6ImJhZCJ9LHsiYSI6MX1dCg==",
+   "options": {
+    "columnNameOfCorruptRecord": "bad"
+   },
+   "schema": "a int, bad string",
+   "inferred": "struct<a:int,bad:string>",
+   "rows": [
+    [
+     null,
+     "[{\"a\":\"bad\"},{\"a\":1}]"
+    ],
+    [
+     1,
+     "[{\"a\":\"bad\"},{\"a\":1}]"
+    ]
+   ]
+  },
+  {
+   "name": "root array string as double failfast",
+   "file": "W3siZCI6ImFiYyJ9XQo=",
+   "options": {
+    "mode": "FAILFAST"
+   },
+   "schema": "d double",
+   "error": [
+    "FAILED_READ_FILE.NO_HINT",
+    "MALFORMED_RECORD_IN_PARSING.CANNOT_PARSE_STRING_AS_DATATYPE"
+   ]
+  },
+  {
+   "name": "string as double failfast",
+   "file": "eyJkIjoiYWJjIn0K",
+   "options": {
+    "mode": "FAILFAST"
+   },
+   "schema": "d double",
+   "error": [
+    "FAILED_READ_FILE.NO_HINT",
+    "MALFORMED_RECORD_IN_PARSING.CANNOT_PARSE_STRING_AS_DATATYPE"
+   ]
+  },
+  {
+   "name": "nested string as double failfast",
+   "file": "eyJzIjp7ImQiOiJhYmMifX0K",
+   "options": {
+    "mode": "FAILFAST"
+   },
+   "schema": "s struct<d:double>",
+   "error": [
+    "FAILED_READ_FILE.NO_HINT",
+    "MALFORMED_RECORD_IN_PARSING.CANNOT_PARSE_STRING_AS_DATATYPE"
+   ]
+  },
+  {
+   "name": "empty string as int failfast",
+   "file": "eyJpIjoiIn0K",
+   "options": {
+    "mode": "FAILFAST"
+   },
+   "schema": "i int",
+   "error": [
+    "FAILED_READ_FILE.NO_HINT",
+    "MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION",
+    "EMPTY_JSON_FIELD_VALUE"
+   ]
+  },
+  {
+   "name": "empty string in struct failfast",
+   "file": "eyJzIjp7ImkiOiIifX0K",
+   "options": {
+    "mode": "FAILFAST"
+   },
+   "schema": "s struct<i:int>",
+   "error": [
+    "FAILED_READ_FILE.NO_HINT",
+    "MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION",
+    "EMPTY_JSON_FIELD_VALUE"
+   ]
+  },
+  {
+   "name": "non-numeric numbers",
+   "file": "eyJkIjpOYU59CnsiZCI6Ik5hTiJ9CnsiZCI6Ii1JbmZpbml0eSJ9CnsiZCI6IitJTkYifQp7ImQiOkluZmluaXR5fQo=",
+   "options": {},
+   "schema": "d double, _corrupt_record string",
+   "inferred": "struct<d:double,_corrupt_record:string>",
+   "rows": [
+    [
+     "NaN",
+     null
+    ],
+    [
+     "NaN",
+     null
+    ],
+    [
+     "-Infinity",
+     null
+    ],
+    [
+     "Infinity",
+     null
+    ],
+    [
+     "Infinity",
+     null
+    ]
+   ]
+  },
+  {
+   "name": "non-numeric numbers off",
+   "file": "eyJkIjpOYU59CnsiZCI6Ik5hTiJ9CnsiZCI6Ii1JbmZpbml0eSJ9CnsiZCI6SW5maW5pdHl9CnsiZCI6MS41fQo=",
+   "options": {
+    "allowNonNumericNumbers": "false"
+   },
+   "schema": "d double, _corrupt_record string",
+   "inferred": "struct<d:double,_corrupt_record:string>",
+   "rows": [
+    [
+     null,
+     "{\"d\":NaN}"
+    ],
+    [
+     null,
+     "{\"d\":\"NaN\"}"
+    ],
+    [
+     null,
+     "{\"d\":\"-Infinity\"}"
+    ],
+    [
+     null,
+     "{\"d\":Infinity}"
+    ],
+    [
+     1.5,
+     null
+    ]
+   ]
+  }
+ ],
+ "selects": [
+  {
+   "name": "map duplicate keys",
+   "file": "eyJtIjp7IngiOjEsIngiOjIsInkiOjN9fQo=",
+   "options": {},
+   "schema": "m map<string,int>",
+   "exprs": [
+    "size(m)",
+    "map_keys(m)"
+   ],
+   "rows": [
+    [
+     3,
+     [
+      "x",
+      "x",
+      "y"
+     ]
+    ]
+   ]
+  },
+  {
+   "name": "integral timestamp overflow",
+   "file": "eyJ0cyI6MTAwMDAwMDAwMDAwMDAwfQp7InRzIjotNX0K",
+   "options": {},
+   "schema": "ts timestamp, _corrupt_record string",
+   "exprs": [
+    "unix_micros(ts)",
+    "_corrupt_record"
+   ],
+   "rows": [
+    [
+     7766279631452241920,
+     null
+    ],
+    [
+     -5000000,
+     null
     ]
    ]
   }

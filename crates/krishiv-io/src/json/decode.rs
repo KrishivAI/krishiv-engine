@@ -11,7 +11,7 @@
 //! Jackson allows. Values convert through `super::convert` (scalars) and
 //! `super::nested` (structs, arrays, maps).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -19,8 +19,7 @@ use arrow_array::{ArrayRef, RecordBatch, RecordBatchOptions};
 use arrow_schema::SchemaRef;
 use bytes::Bytes;
 use krishiv_common::error::{
-    InvalidJsonRootField, KrishivError, MalformedRecordInParsingCannotParseJsonArraysAsStructs,
-    MalformedRecordInParsingWithoutSuggestion,
+    ErrorClass, InvalidJsonRootField, KrishivError, MalformedRecordInParsingWithoutSuggestion,
 };
 use krishiv_kernels::datetime_pattern::Purpose;
 
@@ -49,9 +48,10 @@ pub(crate) enum JVal {
     Num(String, bool),
     /// An unescaped string.
     Str(String),
-    /// An object: its members (later duplicates already won, as at the top
-    /// level) and where its text is in the record (a string column holds
-    /// that text exactly as written, as Spark's exact string parsing does).
+    /// An object: its members as written (duplicates included: a struct
+    /// takes the last, a map keeps every one, as Spark does) and where its
+    /// text is in the record (a string column holds that text exactly as
+    /// written, as Spark's exact string parsing does).
     Object(Vec<(String, JVal)>, Span),
     /// An array: its elements and where its text is in the record.
     Array(Vec<JVal>, Span),
@@ -76,8 +76,8 @@ impl Span {
 /// nested deeper (the top-level value is depth 1) is malformed.
 pub(crate) const MAX_NESTING_DEPTH: usize = 1000;
 
-/// A JSON object of one record: field names in order with their values.
-/// Later duplicates already won in the parser, as in Spark.
+/// A JSON object of one record: field names in order with their values,
+/// duplicates included (the last one wins when the record is read).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) struct JObject {
     pub fields: Vec<(String, JVal)>,
@@ -304,8 +304,11 @@ fn parse_number(c: &mut Cur<'_>) -> Result<(usize, bool), Reason> {
     if c.at() == Some(b'-') {
         c.pos += 1;
     }
-    // Non-numeric tokens.
+    // Non-numeric tokens (`allowNonNumericNumbers`).
     for word in ["NaN", "Infinity"] {
+        if !c.syntax.non_numeric {
+            break;
+        }
         if let Some(rest) = c.b.get(c.pos..)
             && rest.len() >= word.len()
             && &rest[..word.len()] == word.as_bytes()
@@ -444,16 +447,6 @@ fn member_name(c: &mut Cur<'_>, text: &str) -> Result<String, Reason> {
     Ok(name)
 }
 
-/// A member into an object's fields: a later duplicate replaces the value
-/// in place, as at the top level.
-fn put_member(fields: &mut Vec<(String, JVal)>, name: String, value: JVal) {
-    if let Some(slot) = fields.iter_mut().find(|(n, _)| *n == name) {
-        slot.1 = value;
-    } else {
-        fields.push((name, value));
-    }
-}
-
 /// One value starting at `c.pos`, inside `outer` open containers (the
 /// top-level object is one). Containers are parsed with an explicit stack,
 /// never recursion, and a value nested deeper than
@@ -509,7 +502,7 @@ fn parse_value(c: &mut Cur<'_>, text: &str, outer: usize) -> Result<JVal, Reason
             };
             match top {
                 Frame::Object { fields, name, .. } => {
-                    put_member(fields, std::mem::take(name), value);
+                    fields.push((std::mem::take(name), value));
                 }
                 Frame::Array { items, .. } => items.push(value),
             }
@@ -582,7 +575,7 @@ fn parse_members(c: &mut Cur<'_>, text: &str) -> Result<JObject, Reason> {
     loop {
         let name = member_name(c, text)?;
         let value = parse_value(c, text, 1)?;
-        put_member(&mut fields, name, value);
+        fields.push((name, value));
         c.skip_gap();
         match c.at() {
             Some(b',') => c.pos += 1,
@@ -646,9 +639,23 @@ pub(crate) fn parse_next(
     Ok(Some((top, c.pos)))
 }
 
+/// The cause Spark gives a top-level value that is not an object (or a
+/// top-level array element that is not one): `INVALID_JSON_ROOT_FIELD` for
+/// `null`, none it classifies otherwise.
+fn root_cause(v: &JVal) -> Option<KrishivError> {
+    matches!(v, JVal::Null).then(|| InvalidJsonRootField {}.into())
+}
+
 /// A malformed record in `FAILFAST` mode: `MALFORMED_RECORD_IN_PARSING`
-/// caused by the classified error, like the CSV decoder.
+/// caused by the classified error, like the CSV decoder. A string that is
+/// not a float is its own error (Spark's `FailureSafeParser` raises
+/// `CANNOT_PARSE_STRING_AS_DATATYPE` for it).
 fn fail_fast(raw: &str, cause: Option<KrishivError>) -> FormatError {
+    if let Some(c) = &cause
+        && c.error_class() == ErrorClass::MalformedRecordInParsingCannotParseStringAsDatatype
+    {
+        return FormatError::Failed(c.clone());
+    }
     let e: KrishivError = MalformedRecordInParsingWithoutSuggestion {
         bad_record: raw.to_owned(),
         fail_fast_mode: "FAILFAST".to_owned(),
@@ -704,6 +711,13 @@ pub(crate) struct JsonDecoder {
     prefix: Option<LineReader>,
     /// Rows accepted so far in the file, prefix included.
     row_no: i64,
+    /// Rows of a top-level array not yet in a batch, each with its
+    /// malformed cause (`Some`) when the array was partial.
+    pending: VecDeque<(Vec<NVal>, Option<Option<KrishivError>>)>,
+    /// The text of the array the pending rows came from.
+    pending_raw: String,
+    /// The approximate size of the pending rows.
+    pending_held: usize,
     rows: usize,
     held_text: usize,
     done: bool,
@@ -796,6 +810,9 @@ impl JsonDecoder {
             source,
             prefix,
             row_no: 0,
+            pending: VecDeque::new(),
+            pending_raw: String::new(),
+            pending_held: 0,
             rows: 0,
             held_text: 0,
             done: units.units.is_empty(),
@@ -909,47 +926,68 @@ impl JsonDecoder {
                 let mut rows = Vec::with_capacity(items.len());
                 let mut bad: Option<Option<KrishivError>> = None;
                 for item in items {
-                    // An element that is not an object (`null` included)
-                    // makes the whole record malformed, with no rows.
+                    // An element that is not an object makes the whole
+                    // record malformed, with no rows; Spark's cause is
+                    // `INVALID_JSON_ROOT_FIELD` for `null`, unclassified
+                    // otherwise.
                     let JVal::Object(fields, _) = item else {
-                        let cause: KrishivError =
-                            MalformedRecordInParsingCannotParseJsonArraysAsStructs {
-                                bad_record: raw.to_owned(),
-                                fail_fast_mode: "FAILFAST".to_owned(),
-                            }
-                            .into();
-                        return self.malformed(raw, Some(cause));
+                        return self.malformed(raw, root_cause(item));
                     };
                     let (vals, b) = self.row(fields, raw)?;
                     if let Some(cause) = b
                         && bad.is_none()
                     {
-                        bad = Some(cause);
+                        // Spark passes an array's partial cause on
+                        // unconverted: only a string that is not a float
+                        // keeps its class.
+                        bad = Some(cause.filter(|c| {
+                            c.error_class()
+                                == ErrorClass::MalformedRecordInParsingCannotParseStringAsDatatype
+                        }));
                     }
                     rows.push(vals);
                 }
-                match bad {
-                    // Every row of the array is kept with the record's
-                    // text (Spark's partial results of the array).
-                    Some(cause) => {
-                        for vals in rows {
-                            self.malformed_with(raw, cause.clone(), vals)?;
-                        }
-                        Ok(())
-                    }
-                    None => {
-                        for vals in rows {
-                            self.accept(vals);
-                        }
-                        Ok(())
-                    }
+                // Every row of the array is kept (with the record's text when
+                // it is partial); the rows go out over later steps, a batch
+                // at a time.
+                self.pending_raw = raw.to_owned();
+                for vals in rows {
+                    self.pending_held += vals.iter().map(size_of).sum::<usize>();
+                    self.pending.push_back((vals, bad.clone()));
                 }
+                Ok(())
             }
-            Top::Other(_) => {
-                let cause: KrishivError = InvalidJsonRootField {}.into();
-                self.malformed(raw, Some(cause))
+            Top::Other(v) => {
+                let cause = root_cause(v);
+                self.malformed(raw, cause)
             }
         }
+    }
+
+    /// The pending rows of a top-level array, until the batch is full.
+    fn drain_pending(&mut self) -> FormatResult<()> {
+        while self.rows < BATCH_ROWS {
+            let Some((vals, bad)) = self.pending.pop_front() else {
+                break;
+            };
+            self.pending_held = self
+                .pending_held
+                .saturating_sub(vals.iter().map(size_of).sum::<usize>());
+            match bad {
+                Some(cause) => {
+                    let raw = std::mem::take(&mut self.pending_raw);
+                    let r = self.malformed_with(&raw, cause, vals);
+                    self.pending_raw = raw;
+                    r?;
+                }
+                None => self.accept(vals),
+            }
+        }
+        if self.pending.is_empty() {
+            self.pending_raw = String::new();
+            self.pending_held = 0;
+        }
+        Ok(())
     }
 
     /// The output values of one object, and the first cause when a value
@@ -961,7 +999,7 @@ impl JsonDecoder {
     ) -> FormatResult<(Vec<NVal>, Option<Option<KrishivError>>)> {
         let conv = JsonConverter {
             dt: &self.dt,
-            non_numeric: self.o.non_numeric,
+            non_numeric: self.o.syntax.non_numeric,
         };
         // Each record field to its data-column slot (later duplicates
         // already won in the parser).
@@ -1104,10 +1142,15 @@ impl Decoder for JsonDecoder {
             return Ok(Step::Done);
         }
         loop {
+            self.drain_pending()?;
+            if self.rows >= BATCH_ROWS {
+                return Ok(Step::Batch(self.batch()?));
+            }
             match self.next()? {
                 Next::NeedData(r) => return Ok(Step::NeedData(vec![r])),
                 Next::Record(parsed, raw) => {
                     self.add(&raw, &parsed)?;
+                    self.drain_pending()?;
                     if self.rows >= BATCH_ROWS {
                         return Ok(Step::Batch(self.batch()?));
                     }
@@ -1154,6 +1197,8 @@ impl Decoder for JsonDecoder {
         source
             + self.prefix.as_ref().map_or(0, LineReader::buffered_bytes)
             + self.held_text
+            + self.pending_held
+            + self.pending_raw.len()
             + self.rows * 8 * self.columns.len()
     }
 
