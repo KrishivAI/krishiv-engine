@@ -74,6 +74,16 @@ pub(crate) enum TempTable {
         columns: Vec<TableColumn>,
         table: Arc<MemoryTable>,
     },
+    /// Any table provider under a hidden name: a row-level statement's target at the version the
+    /// statement read, with its row id (`RowIdScan`).
+    #[expect(
+        dead_code,
+        reason = "built by the row-level planner, the next commit of PR-DML"
+    )]
+    Provider {
+        columns: Vec<TableColumn>,
+        table: Arc<dyn TableProvider>,
+    },
     /// A read by path, with the columns inferred when the view was created.
     Files {
         source: ReadSource,
@@ -790,6 +800,8 @@ impl QueryCatalog {
                             })?;
                             assigned.push((scan.id, self.file_splits(&table, total_slots)?));
                         }
+                        // A row-level target plans its own splits through its scan.
+                        TempTable::Provider { .. } => {}
                         TempTable::View { .. } => {
                             return Err(InternalError {
                                 message: "a scan of a temporary view that was not inlined"
@@ -1146,9 +1158,9 @@ impl Catalog for QueryCatalog {
                 return Ok(self.load_stored(id, form));
             };
             let (columns, kind) = match &*table {
-                TempTable::Memory { columns, .. } | TempTable::Files { columns, .. } => {
-                    (columns.clone(), TableKind::Table)
-                }
+                TempTable::Memory { columns, .. }
+                | TempTable::Files { columns, .. }
+                | TempTable::Provider { columns, .. } => (columns.clone(), TableKind::Table),
                 TempTable::View { columns, .. } => (columns.clone(), TableKind::View),
             };
             let file_metadata = match &*table {
@@ -1253,6 +1265,7 @@ impl TableProviderResolver for QueryCatalog {
                     TempTable::Memory { table, .. } => {
                         Ok(Arc::clone(table) as Arc<dyn TableProvider>)
                     }
+                    TempTable::Provider { table, .. } => Ok(Arc::clone(table)),
                     TempTable::Files {
                         known,
                         permanent,

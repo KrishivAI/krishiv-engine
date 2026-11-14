@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, PoisonError};
 
-use krishiv_exec::planner::MemoryTable;
+use krishiv_exec::planner::{MemoryTable, TableProvider};
 use krishiv_plan::analyzer::TableColumn;
 
 use super::{SessionCatalog, TempTable, is_hidden_name};
@@ -32,6 +32,32 @@ impl SessionCatalog {
         let mut tables = self.tables.write().unwrap_or_else(PoisonError::into_inner);
         tables.insert(name.to_lowercase(), (name.clone(), Arc::clone(&entry)));
         // The caller's reference keeps the new entry through this collection.
+        Self::collect_garbage(&mut tables);
+        self.epoch.fetch_add(1, Ordering::AcqRel);
+        (name, entry)
+    }
+}
+
+impl SessionCatalog {
+    /// Adds the hidden table `table`, read through its provider, and returns its name, which no SQL
+    /// text spells: a row-level statement's target at the version the statement read. Like a
+    /// script result it goes once nothing but the catalog holds the returned entry.
+    #[expect(
+        dead_code,
+        reason = "used by the row-level planner, the next commit of PR-DML"
+    )]
+    pub(crate) fn put_hidden_provider(
+        &self,
+        columns: Vec<TableColumn>,
+        table: Arc<dyn TableProvider>,
+    ) -> (String, Arc<TempTable>) {
+        let name = format!(
+            "{SCRIPT_RESULT_PREFIX}{}",
+            self.hidden.fetch_add(1, Ordering::AcqRel)
+        );
+        let entry = Arc::new(TempTable::Provider { columns, table });
+        let mut tables = self.tables.write().unwrap_or_else(PoisonError::into_inner);
+        tables.insert(name.to_lowercase(), (name.clone(), Arc::clone(&entry)));
         Self::collect_garbage(&mut tables);
         self.epoch.fetch_add(1, Ordering::AcqRel);
         (name, entry)

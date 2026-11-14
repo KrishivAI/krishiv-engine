@@ -470,6 +470,7 @@ impl Session {
             let columns = match &*entry {
                 crate::catalog::TempTable::Memory { columns, .. }
                 | crate::catalog::TempTable::Files { columns, .. }
+                | crate::catalog::TempTable::Provider { columns, .. }
                 | crate::catalog::TempTable::View { columns, .. } => columns,
             };
             (
