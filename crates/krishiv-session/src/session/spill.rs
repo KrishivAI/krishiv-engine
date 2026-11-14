@@ -57,6 +57,9 @@ pub(crate) struct WriteTarget {
     pub(crate) mode: String,
     pub(crate) path: OptionValue,
     pub(crate) options: BTreeMap<String, OptionValue>,
+    /// The stored options of the table written (`INSERT`), already authorized when they were
+    /// stored: an option equal to one of them is not asked about again (P3-T067b).
+    pub(crate) table_options: BTreeMap<String, OptionValue>,
     pub(crate) partition_by: Vec<String>,
 }
 

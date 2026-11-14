@@ -471,6 +471,9 @@ pub(crate) struct FileScans {
     pub(crate) runtime: tokio::runtime::Handle,
 }
 
+/// A snapshot pinned by hidden name, and how many actions pinned it.
+type Pinned = (Arc<dyn TableProvider>, usize);
+
 /// The session catalog as one query sees it: the catalog resolver and the
 /// table providers of its scans.
 pub(crate) struct QueryCatalog {
@@ -478,8 +481,9 @@ pub(crate) struct QueryCatalog {
     cache: Arc<RelationCache>,
     /// The cached snapshots this query's plan was rewritten to scan, by
     /// hidden name: held so a concurrent `CLEAR CACHE` cannot pull them out
-    /// from under the query between substitution and planning.
-    pinned: Mutex<HashMap<String, Arc<MemoryTable>>>,
+    /// from under the query between substitution and planning. Counted:
+    /// each action over the analysis pins and unpins (`SnapshotLease`).
+    pinned: Mutex<HashMap<String, Pinned>>,
     files: Arc<FileReads>,
     scans: FileScans,
     /// Entries loaded by this query, by lower-case name.
@@ -588,11 +592,25 @@ impl QueryCatalog {
     }
 
     /// Keeps the snapshot `table` for this query's scans of the hidden `name`.
-    pub(crate) fn pin_cached(&self, name: String, table: Arc<MemoryTable>) {
-        self.pinned
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(name, table);
+    pub(crate) fn pin_cached(&self, name: String, table: Arc<dyn TableProvider>) {
+        let mut pinned = self.pinned.lock().unwrap_or_else(PoisonError::into_inner);
+        let slot = pinned
+            .entry(name)
+            .or_insert_with(|| (Arc::clone(&table), 0));
+        slot.0 = table;
+        slot.1 += 1;
+    }
+
+    /// Lets go of one pin of the hidden `name` ([`Self::pin_cached`]); the
+    /// last one drops the snapshot from this query's catalog.
+    pub(crate) fn unpin_cached(&self, name: &str) {
+        let mut pinned = self.pinned.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(slot) = pinned.get_mut(name) {
+            slot.1 = slot.1.saturating_sub(1);
+            if slot.1 == 0 {
+                pinned.remove(name);
+            }
+        }
     }
 
     /// The entry a scan of `name` (as the analyzer kept it) reads: a
@@ -716,6 +734,19 @@ impl QueryCatalog {
                 ReadSource::Table { name, options } => {
                     let last = name.last().map_or("", String::as_str);
                     let Some(table) = self.loaded(last) else {
+                        // A relation cache snapshot lives on the driver (design P3-T083
+                        // §3.8): a memory snapshot is dealt as a memory table without a
+                        // lease is (no assignment: a stage of one task reads it whole);
+                        // a disk snapshot is a driver-local file no worker can open, so
+                        // such a plan is refused, not failed as an internal error.
+                        if crate::cache::is_cache_name(last) {
+                            if self.cache.is_on_disk(last) {
+                                return Err(unsupported(
+                                    "a scan of a disk-cached relation in a distributed stage",
+                                ));
+                            }
+                            continue;
+                        }
                         return Err(InternalError {
                             message: format!("the scanned table {last} was not loaded"),
                         }
@@ -1045,7 +1076,7 @@ impl QueryCatalog {
 
 /// The `_metadata` column of a table read through the file source
 /// `provider` (Spark: file sources; row positions only from Parquet).
-fn file_metadata(provider: &str) -> FileMetadata {
+pub(crate) fn file_metadata(provider: &str) -> FileMetadata {
     match provider.to_ascii_lowercase().as_str() {
         "parquet" => FileMetadata::WithRowIndex,
         "orc" | "csv" | "json" | "text" | "avro" | "xml" | "binaryfile" => FileMetadata::Basic,
@@ -1209,9 +1240,9 @@ impl TableProviderResolver for QueryCatalog {
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
                         .get(last)
-                        .cloned();
+                        .map(|(table, _)| Arc::clone(table));
                     if let Some(cached) = pinned.or_else(|| self.cache.table(last)) {
-                        return Ok(cached as Arc<dyn TableProvider>);
+                        return Ok(cached);
                     }
                     return Err(InternalError {
                         message: format!("the scanned table {last} was not loaded"),
@@ -1332,6 +1363,7 @@ pub(crate) fn expand_views_in(
         reads: Vec::new(),
         deferred: None,
         stored_reads: Vec::new(),
+        views: Vec::new(),
     };
     let plan = expander.go(Arc::clone(plan), &mut Vec::new())?;
     Ok(Expansion {
@@ -1339,6 +1371,7 @@ pub(crate) fn expand_views_in(
         reads: expander.reads,
         deferred: expander.deferred,
         stored_reads: expander.stored_reads,
+        views: expander.views,
     })
 }
 
@@ -1365,6 +1398,8 @@ pub(crate) struct Expansion {
     /// The stored views inlined, inner views before the views that read them: their schema binding is checked
     /// against their analyzed queries (`view_schema::check_read`).
     pub(crate) stored_reads: Vec<crate::view_schema::StoredRead>,
+    /// The views inlined, for the lineage side table (`AnalyzedPlan::views`, located once analyzed).
+    pub(crate) views: Vec<krishiv_plan::analyzer::views::ViewExpansion>,
 }
 
 /// Whether creating the temporary view `name` over `plan` would close a

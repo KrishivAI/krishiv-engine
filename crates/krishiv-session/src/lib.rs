@@ -42,6 +42,7 @@
 #![forbid(unsafe_code)]
 
 mod access;
+mod action;
 mod admission;
 mod arrow_values;
 pub mod auth;
@@ -67,6 +68,7 @@ mod locals;
 #[cfg(feature = "telemetry-logs")]
 pub mod logging;
 mod memory_table;
+mod monitor;
 mod nested_value;
 #[cfg(feature = "telemetry-otlp")]
 pub mod otlp;
@@ -76,17 +78,21 @@ mod profile;
 mod python_udfs;
 mod query_fold;
 mod recursion;
+pub mod resource_groups;
 mod result_cache;
 mod run_site;
 mod runtime;
 mod scripting;
 mod session;
+mod sessions;
 mod sql_functions;
 mod sql_path;
 mod store;
+mod store_catalog;
 mod system;
 mod table_commands;
 mod telemetry;
+mod trace_context;
 mod udfs;
 mod variable_substitution;
 mod variables;
@@ -95,6 +101,7 @@ mod window;
 
 pub use access::{PathPrefixPolicy, ReadOnlyPolicy, StatementInfo};
 pub use admission::{AdmissionController, Permit, QueryRequest, Unlimited};
+pub use sessions::Transport;
 pub use system::register_build_features;
 
 pub mod agent;
