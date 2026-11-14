@@ -2100,3 +2100,24 @@ fn a_python_udf_needs_its_feature() {
         }
     );
 }
+
+/// A plan observing metrics lists `observe`; a reader without it refuses
+/// the plan naming the feature.
+#[test]
+fn an_observation_needs_its_feature() {
+    assert_eq!(message("observe").features, ["observe"]);
+    assert_eq!(Feature::Observe.kind(), FeatureKind::Semantic);
+    let bytes = message("observe").encode_to_vec();
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::Observe),
+    );
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["observe".to_owned()]
+        }
+    );
+}

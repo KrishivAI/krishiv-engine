@@ -56,7 +56,11 @@ pub fn to_message(plan: &PhysicalPlan) -> Result<pb::PhysicalPlan> {
     let features = plan_features(plan);
     let mut e = Encoder::default();
     for tree in plan.roots() {
-        let order = post_order(tree, PhysNode::children);
+        let order = post_order(tree, |n| {
+            let mut v = n.children();
+            v.extend(n.measure());
+            v
+        });
         for node in &order {
             let message = e.node(node)?;
             e.nodes.insert(std::ptr::from_ref(*node), e.table.len());
@@ -305,6 +309,15 @@ impl Encoder {
                 input: self.node_index(input)?,
                 limit: *limit,
                 offset: *offset,
+            }),
+            PhysNode::CollectMetrics {
+                input,
+                name,
+                measure,
+            } => Kind::CollectMetrics(pb::CollectMetricsNode {
+                input: self.node_index(input)?,
+                name: name.clone(),
+                measure: self.node_index(measure)?,
             }),
             PhysNode::ReplicateRows {
                 input,

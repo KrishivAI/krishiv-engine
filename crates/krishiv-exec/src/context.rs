@@ -226,11 +226,21 @@ pub struct QueryContext {
     /// The scans' decode working sets (`krishiv_io::ScanGate`), made on
     /// first use with a budget of a quarter of the query's memory limit.
     scan_gate: OnceLock<Arc<krishiv_io::ScanGate>>,
+    /// The partial states of each observation (`Dataset.observe`), by name
+    /// and instance (see [`Self::observe_partial`]).
+    observed: Mutex<BTreeMap<String, Vec<Observed>>>,
     finished: AtomicBool,
     finished_event: Event,
     /// Blocking closures in flight; the query ends only once they have.
     blocking: AtomicUsize,
     blocking_idle: Event,
+}
+
+/// One instance of an observation's node and the partial states of its
+/// drivers.
+struct Observed {
+    finalizer: Arc<crate::aggregate::Finalizer>,
+    partials: Vec<arrow_array::RecordBatch>,
 }
 
 impl fmt::Debug for QueryContext {
@@ -266,11 +276,54 @@ impl QueryContext {
             threads: Mutex::new(BTreeMap::new()),
             spills: Mutex::new(BTreeMap::new()),
             scan_gate: OnceLock::new(),
+            observed: Mutex::new(BTreeMap::new()),
             finished: AtomicBool::new(false),
             finished_event: Event::default(),
             blocking: AtomicUsize::new(0),
             blocking_idle: Event::default(),
         })
+    }
+
+    /// A driver's partial states of an observation: its task metric, sent
+    /// when the driver's input ended (or was abandoned). The states of one
+    /// instance of the node merge in [`Self::observed`].
+    pub(crate) fn observe_partial(
+        &self,
+        finalizer: &Arc<crate::aggregate::Finalizer>,
+        states: arrow_array::RecordBatch,
+    ) {
+        let mut all = lock(&self.observed);
+        let instances = all.entry(finalizer.name().to_owned()).or_default();
+        match instances
+            .iter_mut()
+            .find(|o| o.finalizer.instance() == finalizer.instance())
+        {
+            Some(o) => o.partials.push(states),
+            None => instances.push(Observed {
+                finalizer: Arc::clone(finalizer),
+                partials: vec![states],
+            }),
+        }
+    }
+
+    /// The observations (`Dataset.observe`) of the query so far: each name's
+    /// metrics as a one-row batch, the columns named as the metrics are.
+    /// An observation whose node never ran is absent. Where a name has
+    /// several instances in the plan (a self-join of an observed relation)
+    /// the last one's states are the observation's, not their sum, as in
+    /// Spark.
+    ///
+    /// # Errors
+    /// A metric's own error (finalizing runs its expressions).
+    pub fn observed(&self) -> Result<BTreeMap<String, arrow_array::RecordBatch>> {
+        let all = lock(&self.observed);
+        let mut out = BTreeMap::new();
+        for (name, instances) in all.iter() {
+            if let Some(last) = instances.iter().max_by_key(|o| o.finalizer.instance()) {
+                out.insert(name.clone(), last.finalizer.finalize(&last.partials)?);
+            }
+        }
+        Ok(out)
     }
 
     /// The query id.

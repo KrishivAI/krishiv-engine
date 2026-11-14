@@ -697,6 +697,7 @@ impl Memo {
             | PlanNode::WithCte { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Repartition { input, .. }
+            | PlanNode::CollectMetrics { input, .. }
             | PlanNode::ReplicateRows { input, .. }
             | PlanNode::SubqueryAlias { input, .. }
                 if !matches!(

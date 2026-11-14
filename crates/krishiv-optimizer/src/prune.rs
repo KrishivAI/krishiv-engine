@@ -125,6 +125,9 @@ impl Graph {
             // A repartition reads its expressions' columns whatever is
             // read above it: Spark evaluates them under `count(*)` too.
             | PlanNode::Repartition { input, .. }
+            // The metrics read their columns whatever is read above: a
+            // `count` action prunes everything else, not these.
+            | PlanNode::CollectMetrics { input, .. }
             | PlanNode::Generate { input, .. }
             | PlanNode::ReplicateRows { input, .. } => {
                 let mut need = req.clone();

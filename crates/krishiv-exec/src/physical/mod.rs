@@ -421,6 +421,22 @@ pub enum PhysNode {
         /// The calls, in output column order.
         calls: Vec<PythonCallPlan>,
     },
+    /// `Dataset.observe`: the rows of `input` pass through unchanged while
+    /// each partition folds them into the metrics' aggregate states, which
+    /// the query's result reports under `name`. `measure` is plain data,
+    /// not a child: `Project(Aggregate(Project(OneRow)))` with `OneRow`
+    /// standing for the input's rows, as the planner lowers the metrics
+    /// as a global aggregate (the first projection computes the aggregates'
+    /// arguments, the aggregate is the partial phase's plan, the last
+    /// projection computes the metrics from its results).
+    CollectMetrics {
+        /// The input.
+        input: Box<PhysNode>,
+        /// The observation's name.
+        name: String,
+        /// The metrics' computation over the input's columns.
+        measure: Box<PhysNode>,
+    },
     /// Each row of `input` `count` times (`INTERSECT ALL`, `EXCEPT ALL`).
     ReplicateRows {
         /// The input.
@@ -1021,6 +1037,7 @@ plan_data!(enum PhysNode {
     Filter { input, layout, predicate, subqueries },
     Project { input, layout, items, nullable, subqueries },
     Limit { input, offset, limit },
+    CollectMetrics { input, name, measure },
     ReplicateRows { input, layout, count, subqueries },
     PythonEval { input, layout, calls },
     Generate { input, layout, kind, outer, arg, subqueries },
@@ -1127,6 +1144,7 @@ impl PhysNode {
             | Self::WindowGroupLimit { input, .. }
             | Self::Aggregate { input, .. }
             | Self::PythonEval { input, .. }
+            | Self::CollectMetrics { input, .. }
             | Self::WriteFiles { input, .. } => vec![input.as_ref()],
             Self::Exchange(e) => vec![e.input.as_ref()],
             Self::HashJoin(j) => vec![j.probe.as_ref(), j.build.as_ref()],
@@ -1136,6 +1154,17 @@ impl PhysNode {
             Self::UnionLoop {
                 anchor, recursive, ..
             } => vec![anchor.as_ref(), recursive.as_ref()],
+        }
+    }
+
+    /// The plan of an observation's metrics (`CollectMetrics`): plain data
+    /// that is not a child (it reads no relation), listed for the codec and
+    /// the feature scan.
+    #[must_use]
+    pub fn measure(&self) -> Option<&PhysNode> {
+        match self {
+            Self::CollectMetrics { measure, .. } => Some(measure),
+            _ => None,
         }
     }
 
@@ -1173,6 +1202,7 @@ impl PhysNode {
             | Self::WindowGroupLimit { input, .. }
             | Self::Aggregate { input, .. }
             | Self::PythonEval { input, .. }
+            | Self::CollectMetrics { input, .. }
             | Self::WriteFiles { input, .. } => vec![input.as_mut()],
             Self::Exchange(e) => vec![e.input.as_mut()],
             Self::HashJoin(j) => vec![j.probe.as_mut(), j.build.as_mut()],

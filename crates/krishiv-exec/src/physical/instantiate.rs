@@ -57,8 +57,8 @@ use super::{
     SortMergeJoinPlan, SubqueryPlan, ValueId, Version, WritePlan, files_of, partitions_of,
 };
 use crate::aggregate::{
-    AggInput, AggregateExpr, AggregateNode, AggregateOutput, AggregateSpec, HashAggregate,
-    distinct_plan,
+    AggInput, AggregateExpr, AggregateNode, AggregateOutput, AggregateSpec, CollectMetrics,
+    HashAggregate, distinct_plan,
 };
 use crate::error::{Result, internal};
 use crate::exchange::{Exchange, ExchangeRead, ExchangeSink, ExchangeWrite, MapOutputId};
@@ -1035,6 +1035,13 @@ impl Instantiation<'_> {
             } => self.with_subqueries(input, subqueries, |input, v| {
                 Ok(project_op(input, layout, items, nullable.as_deref(), v)? as Arc<dyn Operator>)
             }),
+            PhysNode::CollectMetrics {
+                input,
+                name,
+                measure,
+            } => self.with_subqueries(input, &[], |input, v| {
+                collect_metrics_op(name, measure, input, v)
+            }),
             PhysNode::ReplicateRows {
                 input,
                 layout,
@@ -1691,6 +1698,82 @@ pub(crate) fn expand_op(
         .map(|items| project_op(schema, layout, items, Some(nullable), v))
         .collect::<Result<Vec<_>>>()?;
     Ok(Expand::try_new(projects)?)
+}
+
+/// The operator of a `CollectMetrics` node over rows of `schema`: the
+/// shape of `measure` is what `planner/observe.rs` makes.
+pub(crate) fn collect_metrics_op(
+    name: &str,
+    measure: &PhysNode,
+    schema: &SchemaRef,
+    v: &Values<'_>,
+) -> Result<Arc<dyn Operator>> {
+    let bad = || {
+        internal(format!(
+            "the metrics of observation {name} have an unexpected plan"
+        ))
+    };
+    let PhysNode::Project {
+        input: aggregate,
+        layout: post_layout,
+        items: post_items,
+        nullable: post_nullable,
+        subqueries,
+    } = measure
+    else {
+        return Err(bad());
+    };
+    let PhysNode::Aggregate {
+        input: args,
+        aggregate: plan,
+    } = aggregate.as_ref()
+    else {
+        return Err(bad());
+    };
+    if !subqueries.is_empty()
+        || !plan.group_by.is_empty()
+        || plan.output != AggregateOutput::Final
+        || plan.distinct.iter().any(|d| *d)
+    {
+        return Err(bad());
+    }
+    let (pre, pre_schema) = match args.as_ref() {
+        PhysNode::OneRow => (None, Arc::clone(schema)),
+        PhysNode::Project {
+            input: leaf,
+            layout,
+            items,
+            nullable,
+            subqueries,
+        } if matches!(leaf.as_ref(), PhysNode::OneRow) && subqueries.is_empty() => {
+            let p = project_op(schema, layout, items, nullable.as_deref(), v)?;
+            let s = p.schema();
+            (Some(p), s)
+        }
+        _ => return Err(bad()),
+    };
+    let partial = AggregatePlan {
+        output: AggregateOutput::Partial,
+        ..plan.clone()
+    };
+    let merge = final_of(&partial)?;
+    CollectMetrics::try_new(
+        name,
+        Arc::clone(schema),
+        pre,
+        aggregate_spec(&pre_schema, &partial, v.env, None),
+        |states| Ok(aggregate_spec(states, &merge, v.env, None)),
+        |results| {
+            project_op(
+                results,
+                post_layout,
+                post_items,
+                post_nullable.as_deref(),
+                v,
+            )
+        },
+    )
+    .map(|op| op as Arc<dyn Operator>)
 }
 
 pub(crate) fn replicate_op(

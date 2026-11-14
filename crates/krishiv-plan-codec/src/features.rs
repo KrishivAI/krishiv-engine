@@ -149,6 +149,7 @@ registry! {
     (mode_regr_bit_listagg_aggs, ModeRegrBitListaggAggs, POST_MIGRATION_READER_VERSION, Semantic, "The `mode`, regression (`regr_*`), bitwise (`bit_and`, `bit_or`, `bit_xor`), `listagg`/`string_agg` and `try_sum`/`try_avg` aggregates."),
     (moment_aggregates, MomentAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The moment aggregates (`stddev_samp`, `stddev_pop`, `var_samp`, `var_pop`, `skewness`, `kurtosis`, `corr`, `covar_samp`, `covar_pop`)."),
     (nested_types, NestedTypes, POST_MIGRATION_READER_VERSION, Semantic, "Array, map and struct types (`DataType.KIND_NESTED`, written as Spark's JSON form of the type)."),
+    (observe, Observe, POST_MIGRATION_READER_VERSION, Semantic, "The `CollectMetrics` node (`Dataset.observe`): rows pass through while the metrics of a named observation are folded; a worker without it cannot report them."),
     (options_map_literals, OptionsMapLiterals, POST_MIGRATION_READER_VERSION, Semantic, "A `MAP<STRING, STRING>` literal: the options of one call (`from_json`, `from_csv`, `from_xml`). Entries are classified as source options are: a sensitive key or a URL with credentials does not encode (ADR 0038)."),
     (partial_aggregate, PartialAggregate, POST_MIGRATION_READER_VERSION, Optimization, "Partial aggregates below a join, whose states a later aggregate merges (eager aggregation)."),
     (partitioned_writes, PartitionedWrites, POST_MIGRATION_READER_VERSION, Semantic, "A `WritePlan` laid out by partition columns (Spark's directory layout)."),
@@ -412,6 +413,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             PhysNode::SortMergeJoin(_) => Some(Feature::SortMergeJoin),
             PhysNode::WindowGroupLimit { .. } => Some(Feature::WindowGroupLimit),
             PhysNode::PythonEval { .. } => Some(Feature::PythonUdf),
+            PhysNode::CollectMetrics { .. } => Some(Feature::Observe),
             // A partitioned write needs a reader that
             // lays files out by partition (the older fields would be
             // ignored and the rows written flat).
@@ -708,6 +710,7 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         | PhysNode::TopN { .. }
         | PhysNode::WindowGroupLimit { .. }
         | PhysNode::PythonEval { .. }
+        | PhysNode::CollectMetrics { .. }
         | PhysNode::Union { .. } => {}
         PhysNode::WriteFiles { write, .. } => {
             if write.as_ref().is_some_and(|w| !w.column_types.is_empty()) {
@@ -851,6 +854,7 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
         | PhysNode::Window { .. }
         | PhysNode::WindowGroupLimit { .. }
         | PhysNode::Aggregate { .. }
+        | PhysNode::CollectMetrics { .. }
         | PhysNode::Union { .. }
         | PhysNode::WriteFiles { .. }
         | PhysNode::Exchange(_)
@@ -925,6 +929,7 @@ pub fn plan_features(plan: &PhysicalPlan) -> BTreeSet<Feature> {
             out.extend(feature_of(c));
         });
         stack.extend(node.children());
+        stack.extend(node.measure());
     }
     for field in plan.schema().fields() {
         visit_arrow_field(field, &mut |c| out.extend(feature_of(c)));

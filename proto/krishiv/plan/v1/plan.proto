@@ -172,7 +172,19 @@ message Node {
     ExchangeSourceNode exchange_source = 25;
     // feature: python_udf
     PythonEvalNode python_eval = 26;
+    // feature: observe
+    CollectMetricsNode collect_metrics = 27;
   }
+}
+
+// feature: observe
+// `Dataset.observe`: the rows of `input` pass through unchanged while the
+// metrics (`measure`, a plan over no relation: `OneRow` stands for the input's
+// rows) are folded into an observation named `name`.
+message CollectMetricsNode {
+  uint32 input = 1;
+  string name = 2;
+  uint32 measure = 3;
 }
 
 // feature: python_udf
