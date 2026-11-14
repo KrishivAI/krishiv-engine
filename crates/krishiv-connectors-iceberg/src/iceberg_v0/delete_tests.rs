@@ -751,20 +751,36 @@ fn delete_state_is_charged_to_the_query_pool() {
     assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory, "{e}");
     assert_eq!((tiny.reserved(), consumers(&tiny)), (0, 0));
 
-    // Cancelled: polled until it holds memory, then dropped mid-load.
-    let state = p.delete_state(&pool).unwrap();
-    let held = t.env.rt.block_on(async {
-        let mut load = std::pin::pin!(state.ensure());
-        loop {
-            assert!(futures::poll!(load.as_mut()).is_pending());
-            if pool.reserved() > 0 {
-                break pool.reserved();
+    // Cancelled: polled until it holds memory, then dropped mid-load. A load
+    // whose reads complete within one poll finishes before memory is seen
+    // held mid-way; such an attempt is dropped (the pool must still empty)
+    // and the next one tried, until one is caught mid-load.
+    let mut caught = false;
+    for _ in 0..100 {
+        let state = p.delete_state(&pool).unwrap();
+        let held = t.env.rt.block_on(async {
+            let mut load = std::pin::pin!(state.ensure());
+            loop {
+                if futures::poll!(load.as_mut()).is_ready() {
+                    break None;
+                }
+                if pool.reserved() > 0 {
+                    break Some(pool.reserved());
+                }
+                tokio::task::yield_now().await;
             }
-            tokio::task::yield_now().await;
+        });
+        if held.is_some() {
+            assert!(state.loaded().is_none());
         }
-    });
-    assert!(held > 0 && state.loaded().is_none());
-    assert_eq!((pool.reserved(), consumers(&pool)), (0, 0));
+        drop(state);
+        assert_eq!((pool.reserved(), consumers(&pool)), (0, 0));
+        if held.is_some() {
+            caught = true;
+            break;
+        }
+    }
+    assert!(caught, "no load of 100 was caught holding memory mid-way");
 }
 
 /// A distributed task's scan of a reordered subset of the files
