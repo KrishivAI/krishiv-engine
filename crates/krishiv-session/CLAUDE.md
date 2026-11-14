@@ -74,4 +74,4 @@ Paths are relative to this crate.
 
 ## Split modules (T193)
 Files split to stay under 2,000 lines; the parent file keeps the types and the entry points.
-- `session/` `env.rs` (`QueryEnv`, parser options), `spill.rs` (per-query spill scopes, `WriteTarget`), `writes.rs` (write helpers), `ops.rs` (more `impl Session`); `catalog/expand.rs` (view expansion), `command/tests.rs`; `dataframe/writer.rs` (`DataFrameWriter`, `DataFrameWriterV2`); `table_commands/` `create.rs` (create, drop, truncate, analyze, row-level changes), `writes.rs` (INSERT, saveAsTable, v2 writes).
+- `session/` `env.rs` (`QueryEnv`, parser options), `spill.rs` (per-query spill scopes, `WriteTarget`), `writes.rs` (write helpers), `ops.rs` (more `impl Session`); `catalog/expand.rs` (view expansion), `command/tests.rs`; `dataframe/reader.rs` (`DataFrameReader`, with the user schema of `schema`/`schema_ddl`); `dataframe/writer.rs` (`DataFrameWriter`, `DataFrameWriterV2`); `table_commands/` `create.rs` (create, drop, truncate, analyze, row-level changes), `writes.rs` (INSERT, saveAsTable, v2 writes).
