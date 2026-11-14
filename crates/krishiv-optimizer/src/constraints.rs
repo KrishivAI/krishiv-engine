@@ -698,6 +698,7 @@ impl Memo {
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Repartition { input, .. }
             | PlanNode::ReplicateRows { input, .. }
+            | PlanNode::Sample { input, .. }
             | PlanNode::SubqueryAlias { input, .. }
                 if !matches!(
                     &plan.node,

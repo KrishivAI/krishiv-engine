@@ -75,6 +75,25 @@ pub const TABLE_FUNCTION_NAME_SEP: char = '\u{1f}';
 /// holds, so a quoted alias with a dot in it stays one part.
 pub const ALIAS_PART_SEP: char = '\u{1e}';
 
+/// The kept range `[lower, upper)` of a [`PlanNode::Sample`]'s draws,
+/// compared bit for bit (so a plan stays `Eq`).
+#[derive(Debug, Clone, Copy)]
+pub struct SampleBounds {
+    /// Inclusive lower bound (Spark's `lowerBound`).
+    pub lower: f64,
+    /// Exclusive upper bound (Spark's `upperBound`).
+    pub upper: f64,
+}
+
+impl PartialEq for SampleBounds {
+    fn eq(&self, other: &Self) -> bool {
+        self.lower.to_bits() == other.lower.to_bits()
+            && self.upper.to_bits() == other.upper.to_bits()
+    }
+}
+
+impl Eq for SampleBounds {}
+
 /// The relation node kinds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -238,6 +257,20 @@ pub enum PlanNode {
         input: Arc<LogicalPlan>,
         /// The partitioning expressions.
         exprs: Vec<Arc<Expr>>,
+    },
+    /// `TABLESAMPLE (x PERCENT)` or `(BUCKET x OUT OF y)`: Spark's `Sample`
+    /// without replacement (Bernoulli). Each row of input partition `i`
+    /// takes one draw of `XORShiftRandom(seed + i)` and is kept when
+    /// `lower <= x < upper`; no draw when `upper - lower <= 0`. The output
+    /// is the input's attributes. Rewrites never move a filter or a
+    /// projection across it, and never drop it.
+    Sample {
+        /// Input.
+        input: Arc<LogicalPlan>,
+        /// The kept range of the draw.
+        bounds: SampleBounds,
+        /// The `REPEATABLE` seed; `None` draws one per physical plan.
+        seed: Option<i64>,
     },
     /// A join strategy hint on a relation (Spark's `ResolvedHint`): a join
     /// this relation is a side of prefers `strategy`. Rows pass through.
@@ -988,6 +1021,7 @@ impl LogicalPlan {
             | PlanNode::Pivot { input, .. }
             | PlanNode::Unpivot { input, .. }
             | PlanNode::Window { input, .. }
+            | PlanNode::Sample { input, .. }
             | PlanNode::ReplicateRows { input, .. } => f(input),
             PlanNode::Join { left, right, .. } | PlanNode::SetOp { left, right, .. } => {
                 f(left);
@@ -1038,6 +1072,7 @@ impl LogicalPlan {
             | PlanNode::Pivot { input, .. }
             | PlanNode::Unpivot { input, .. }
             | PlanNode::Window { input, .. }
+            | PlanNode::Sample { input, .. }
             | PlanNode::ReplicateRows { input, .. } => f(input),
             PlanNode::Join { left, right, .. } | PlanNode::SetOp { left, right, .. } => {
                 f(left);
@@ -1069,6 +1104,7 @@ impl LogicalPlan {
             | PlanNode::JoinHint { .. }
             | PlanNode::Union { .. }
             | PlanNode::SetOp { .. }
+            | PlanNode::Sample { .. }
             | PlanNode::Distinct { .. } => {}
             PlanNode::Hint { params, .. } | PlanNode::Repartition { exprs: params, .. } => {
                 params.iter().for_each(f);
@@ -1153,6 +1189,7 @@ impl LogicalPlan {
             | PlanNode::JoinHint { .. }
             | PlanNode::Union { .. }
             | PlanNode::SetOp { .. }
+            | PlanNode::Sample { .. }
             | PlanNode::Distinct { .. } => {}
             PlanNode::Hint { params, .. } | PlanNode::Repartition { exprs: params, .. } => {
                 params.iter_mut().for_each(f);
@@ -1253,6 +1290,7 @@ impl LogicalPlan {
                 | PlanNode::WithCte { input, .. }
                 | PlanNode::JoinHint { input, .. }
                 | PlanNode::Repartition { input, .. }
+                | PlanNode::Sample { input, .. }
                 | PlanNode::ReplicateRows { input, .. } => p = input,
                 PlanNode::Union { inputs, .. } => {
                     let mut out = inputs.first()?.resolved_output()?;

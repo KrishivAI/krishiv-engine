@@ -144,6 +144,15 @@ fn exception_classes_pick_the_python_exception_spark_would_raise() {
         first(ErrorClass::ParseSyntaxError),
         "org.apache.spark.sql.catalyst.parser.ParseException"
     );
+    // SQL-18: unnamed errors by their number range (no SQLSTATE).
+    assert_eq!(
+        first(ErrorClass::LegacyErrorTemp1035),
+        "org.apache.spark.sql.AnalysisException"
+    );
+    assert_eq!(
+        first(ErrorClass::LegacyErrorTemp0035),
+        "org.apache.spark.sql.catalyst.parser.ParseException"
+    );
     // Every list ends as ErrorUtils.allClasses ends it.
     for c in [ErrorClass::DivideByZero, ErrorClass::InvalidHandleFormat] {
         let list = exception_classes(c);

@@ -52,6 +52,42 @@ on every row as Spark's shuffle evaluates them. Two things differ:
 Pinned by `crates/krishiv-session/tests/distribute_by_goldens.rs` (`DIFFERENT`), against a Spark
 4.2.0 run (3.5, 4.0 and 4.1 not run).
 
+## `TABLESAMPLE` rows follow the input's partitions
+
+`TABLESAMPLE (x PERCENT)` and `(BUCKET x OUT OF y)` sample as Spark's `SampleExec` does: each row of
+input partition `i` takes one draw of `XORShiftRandom(seed + i)`, in input order, and is kept when it
+falls below the fraction. The rows therefore equal Spark's when both engines split the input the same
+way, and are otherwise a different Bernoulli sample at the same fraction:
+
+- A session with one compute thread reads `range(0, n)`, `VALUES` and a small file as one partition, as
+  Spark's `local[1]` does; `range(a, b, step, n)` is the same `n` slices in both engines at any thread
+  count; `UNION ALL` numbers its inputs' partitions one after another, as Spark.
+- An in-memory table (registered batches, a cached relation) is one partition per 128 Ki rows
+  (`morsel_rows`), even at one thread: a larger one draws from several streams where Spark's
+  `local[1]` draws from one.
+- A file scan under a sample reads Spark's file partitions (the same split planning:
+  `maxPartitionBytes`, `openCostInBytes`, the leaf parallelism) each whole, by one driver, in row order.
+  So `REPEATABLE` gives the same rows on every run at any thread count; they equal Spark's when the
+  files hold the same rows in the same order and the same sizes (files Krishiv writes differ in size
+  from Spark's, which can pack them differently).
+- With more threads, `range(0, n)` is cut into one slice per thread (Spark: `defaultParallelism`), so
+  the rows differ from a Spark cluster's of another parallelism; the same session repeats them.
+- After a join, an aggregate or an exchange the input partition is the driver's, and its rows' order
+  depends on scheduling: as in Spark, a sample there is not repeatable.
+- Without `REPEATABLE` the seed is a random value in `0..1000`, drawn when the plan is built. One
+  DataFrame keeps its seeds across actions (`df.collect()` twice gives the same rows, as a Spark
+  Dataset keeps its executed plan); each new statement draws again. Every reference of a `WITH`
+  definition holding one samples with its own seed, as Spark's inlined references do.
+- Inside a recursive CTE a sample draws from the stream of its iteration's input partition, without
+  Spark's per-round partition shift, so its rows there differ from Spark's.
+- `TABLESAMPLE SYSTEM (...)` (Spark 4.2's block sampling) is `KRISHIV_UNSUPPORTED_FEATURE`, and a
+  `REPEATABLE` seed past `BIGINT` is refused as unsupported where Spark raises an unclassified
+  `NumberFormatException`. A sampled plan travels through the plan codec (feature `sample`); a
+  worker without that feature refuses it.
+
+Pinned by `crates/krishiv-session/tests/tablesample_goldens.rs` against a Spark 4.2.0 run
+(`tests/fixtures/spark-4.2.0/tablesample.json`).
+
 ## Filters move below only their deterministic prefix
 
 Spark's predicate pushdown moves every deterministic conjunct of a filter below a node it can pass

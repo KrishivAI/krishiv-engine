@@ -16,6 +16,7 @@ pub(super) fn reads_range_in_order(n: &PhysNode) -> bool {
         PhysNode::Filter { input, .. }
         | PhysNode::Project { input, .. }
         | PhysNode::Limit { input, .. }
+        | PhysNode::Sample { input, .. }
         | PhysNode::PythonEval { input, .. } => reads_range_in_order(input),
         _ => false,
     }
@@ -39,6 +40,7 @@ pub(super) fn range_ordered_evals<'a>(
             }
             PhysNode::Filter { input, .. }
             | PhysNode::Project { input, .. }
+            | PhysNode::Sample { input, .. }
             | PhysNode::Limit { input, .. } => chain(input, out),
             _ => {}
         }

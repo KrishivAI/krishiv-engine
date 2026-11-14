@@ -11,8 +11,8 @@ use crate::ast::{
     BinaryOp, Expr, ExprKind, FrameBound, FrameBoundKind, FrameUnits, Function, FunctionArg, Ident,
     Interval, IntervalValue, LikeQuantifier, Literal, NullTreatment, NumKind, ObjectName,
     Partitioning, SelectItem, Span, TableArgument, TableArgumentPartitioning, TableArgumentSource,
-    Truth, UnaryOp, VariantPath, VariantPathPart, VariantPathPartKind, WhenClause, WindowFrame,
-    WindowRef, WindowSpec,
+    Truth, UnaryOp, VariantPath, VariantPathPart, VariantPathPartKind, WindowFrame, WindowRef,
+    WindowSpec,
 };
 use crate::keywords::{NOT_FUNCTION_WORD, PRIMARY_WORD, RESERVED_WORD};
 use crate::lexer::{Sym, TokenKind, unescape_string};
@@ -85,6 +85,10 @@ const TIMESTAMP_UNIT_FUNCTIONS: &[&str] = &[
 /// Spark's `unitInUnitToUnit`.
 const UNIT_TO_UNIT: &[&str] = &["SECOND", "MINUTE", "HOUR", "DAY", "MONTH", "YEAR"];
 
+/// Words that follow a `NOT` read as a column: no operand of `NOT` starts
+/// with them (`NOT IS NULL`, `WHEN y < not THEN not ELSE not END`).
+pub(super) const BRANCH_END: &[&str] = &["IS", "AND", "OR", "THEN", "ELSE", "END"];
+
 const INTERVAL_UNITS: &[&str] = &[
     "NANOSECOND",
     "NANOSECONDS",
@@ -122,7 +126,7 @@ fn balance(mut operands: Vec<Expr>, op: BinaryOp) -> Option<Expr> {
     })
 }
 
-fn boxed(e: Expr) -> Box<Expr> {
+pub(super) fn boxed(e: Expr) -> Box<Expr> {
     Box::new(e)
 }
 
@@ -242,17 +246,14 @@ impl Parser<'_> {
         }
     }
 
-    /// Whether the `NOT` here is a column, as Spark reads `SELECT NOT`,
-    /// `NOT = 1`, `NOT.x`, `NOT::INT` and `NOT[0]`: no operand can follow
-    /// it (a postfix operator does instead). `+` and `-` do
-    /// (`NOT + 1` is `NOT (+1)`).
-    fn not_is_column(&self) -> bool {
-        let operand_sign = self.sym_at(1, Sym::Plus) || self.sym_at(1, Sym::Minus);
-        !operand_sign
-            && (self.reserved_as_column()
-                || self.sym_at(1, Sym::Dot)
-                || self.sym_at(1, Sym::DoubleColon)
-                || self.sym_at(1, Sym::LBracket))
+    /// Whether the token before the cursor is the keyword `kw`.
+    pub(super) fn kw_before(&self, kw: &str) -> bool {
+        self.pos
+            .checked_sub(1)
+            .and_then(|i| self.toks.get(i))
+            .is_some_and(|t| {
+                t.kind == TokenKind::Word && crate::keywords::is_kw(t.span.text(self.src), kw)
+            })
     }
 
     fn exists_follows(&self) -> bool {
@@ -1010,6 +1011,14 @@ impl Parser<'_> {
         {
             return Ok(e);
         }
+        // `x -> body`, also when `x` is a keyword that starts a primary
+        // (`true -> true`, `current_date -> current_date - 1`).
+        if self.sym_at(1, Sym::Arrow) && self.is_ident_at(0, true) {
+            let params = vec![self.any_ident()?];
+            self.bump();
+            let body = boxed(self.expr()?);
+            return Ok(self.mk(ExprKind::Lambda { params, body }, start));
+        }
         let special = self.class(0) & PRIMARY_WORD != 0 || self.single_string_at(1);
         if self.kind(0) == Some(TokenKind::Word)
             && special
@@ -1017,18 +1026,15 @@ impl Parser<'_> {
         {
             return Ok(e);
         }
-        // `x -> body`
-        if self.sym_at(1, Sym::Arrow) && self.is_ident_at(0, true) {
-            let params = vec![self.any_ident()?];
-            self.bump();
-            let body = boxed(self.expr()?);
-            return Ok(self.mk(ExprKind::Lambda { params, body }, start));
-        }
         let mut parts = vec![];
         // `functionName`: any word but structural ones, or only `LEFT`,
         // `RIGHT` and `FILTER` among the reserved words when keywords are
         // enforced (`any(x)` is then an error, as in Spark).
-        let reserved_call = self.kind(0) == Some(TokenKind::Word)
+        // An identifier needs none of the keyword checks below (they cost a
+        // look-ahead per primary).
+        let identifier = self.is_ident_at(0, false);
+        let reserved_call = !identifier
+            && self.kind(0) == Some(TokenKind::Word)
             && self.sym_at(1, Sym::LParen)
             && if self.opts.enforce_reserved_keywords {
                 self.any_kw_at(0, &["LEFT", "RIGHT", "FILTER"])
@@ -1037,11 +1043,10 @@ impl Parser<'_> {
             };
         // `NOT` here, where no boolean expression may start, and a lone
         // `CASE` are columns, as ANTLR reads them (`1 + NOT a`).
-        let keyword_column = !self.opts.enforce_reserved_keywords
+        let keyword_column = !identifier
+            && !self.opts.enforce_reserved_keywords
             && (self.kw_at(0, "NOT") || (self.kw_at(0, "CASE") && self.case_is_column()));
-        if (reserved_call || keyword_column || self.reserved_as_column())
-            && !self.is_ident_at(0, false)
-        {
+        if !identifier && (reserved_call || keyword_column || self.reserved_column_here()) {
             parts.push(self.keyword_ident());
         } else {
             parts.push(self.ident()?);
@@ -1097,40 +1102,6 @@ impl Parser<'_> {
         )
     }
 
-    /// Whether `CASE` here is a column, as Spark reads `SELECT CASE` and
-    /// `SELECT CASE END` (a column `CASE` aliased `END`) unless keywords are
-    /// enforced: no `WHEN` or operand can follow it.
-    fn case_is_column(&self) -> bool {
-        let alias_then_end =
-            self.kind(1) == Some(TokenKind::Word) && !self.kw_at(1, "WHEN") && self.item_end_at(2);
-        !self.opts.enforce_reserved_keywords && (self.reserved_as_column() || alias_then_end)
-    }
-
-    /// Whether the reserved word here is a column, because no keyword
-    /// reading can continue with the next token (`all, b`, `all * 2`,
-    /// `all FROM t`).
-    /// Spark accepts every keyword as an identifier unless keywords are
-    /// enforced.
-    fn reserved_as_column(&self) -> bool {
-        use Sym::{
-            Amp, Caret, Comma, Concat, Eq, Ge, Gt, Le, Lt, Neq, Percent, Pipe, Plus, RParen, Semi,
-            Slash, Star,
-        };
-        if self.opts.enforce_reserved_keywords || self.kind(0) != Some(TokenKind::Word) {
-            return false;
-        }
-        match self.kind(1) {
-            None => true,
-            Some(TokenKind::Word) => self.kw_at(1, "FROM"),
-            Some(TokenKind::Sym(s)) => [
-                Amp, Caret, Comma, Concat, Eq, Ge, Gt, Le, Lt, Neq, Percent, Pipe, Plus, RParen,
-                Semi, Slash, Star,
-            ]
-            .contains(&s),
-            Some(_) => false,
-        }
-    }
-
     /// The current word as an identifier, whatever it is.
     pub(super) fn keyword_ident(&mut self) -> Ident {
         let span = self.tok(0).map_or_else(Span::default, |t| t.span);
@@ -1155,6 +1126,16 @@ impl Parser<'_> {
         } else if is("TRUE") || is("FALSE") {
             self.bump();
             ExprKind::Literal(Literal::Boolean(is("TRUE")))
+        } else if is("CASE") && self.searched_case_may_be_column() {
+            match self.searched_case_or_column()? {
+                Some(kind) => kind,
+                None => return Ok(None),
+            }
+        } else if is("CASE") && self.case_may_be_column() {
+            match self.case_or_column()? {
+                Some(kind) => kind,
+                None => return Ok(None),
+            }
         } else if is("CASE") && !self.case_is_column() {
             self.case_expr()?
         } else if (is("CAST") || is("TRY_CAST")) && call {
@@ -1351,43 +1332,6 @@ impl Parser<'_> {
         self.call_tail(name, None, args, start)
     }
 
-    #[inline(never)]
-    fn case_expr(&mut self) -> PR<ExprKind> {
-        self.bump();
-        let operand = if self.kw_at(0, "WHEN") {
-            None
-        } else {
-            Some(boxed(self.expr()?))
-        };
-        let mut branches = vec![];
-        while self.kw_at(0, "WHEN") {
-            let start = self.start();
-            self.bump();
-            let condition = self.expr()?;
-            self.expect_kw("THEN")?;
-            let result = self.expr()?;
-            branches.push(WhenClause {
-                condition,
-                result,
-                span: self.span_from(start),
-            });
-        }
-        if branches.is_empty() {
-            return self.fail();
-        }
-        let else_result = if self.eat_kw("ELSE") {
-            Some(boxed(self.expr()?))
-        } else {
-            None
-        };
-        self.expect_kw("END")?;
-        Ok(ExprKind::Case {
-            operand,
-            branches,
-            else_result,
-        })
-    }
-
     // ---- function calls -------------------------------------------------
 
     /// The arguments of a call; `table_args` admits `TABLE(...)` ones, which
@@ -1544,11 +1488,17 @@ impl Parser<'_> {
     #[inline(never)]
     fn function_call(&mut self, name: ObjectName, start: usize) -> PR<Expr> {
         self.expect_sym(Sym::LParen)?;
-        let quantifier = if self.kw_at(0, "ALL") && self.sym_at(1, Sym::RParen) {
-            None
-        } else {
-            self.set_quantifier()
-        };
+        // `f(all)`, `f(distinct)` and `f(distinct, x)` pass the column
+        // (keywords are identifiers unless enforced).
+        let column_quantifier = !self.opts.enforce_reserved_keywords
+            && self.any_kw_at(0, &["ALL", "DISTINCT"])
+            && (self.sym_at(1, Sym::RParen) || self.sym_at(1, Sym::Comma));
+        let quantifier =
+            if (self.kw_at(0, "ALL") && self.sym_at(1, Sym::RParen)) || column_quantifier {
+                None
+            } else {
+                self.set_quantifier()
+            };
         let args = self.function_args(false)?;
         let f = self.call_tail(name, quantifier, args, start)?;
         Ok(self.mk(ExprKind::Function(Box::new(f)), start))
@@ -1757,8 +1707,16 @@ impl Parser<'_> {
 
     /// `INTERVAL` followed by a value (`intervalValue`: an integer, a
     /// decimal or a string).
+    /// A signed number with no unit after it is no interval: `interval - 1`
+    /// is the column `interval` minus one, as Spark reads it (`INTERVAL` is
+    /// not reserved even when keywords are enforced).
     fn interval_follows(&self) -> bool {
-        self.interval_value_len(1).is_some()
+        let Some(len) = self.interval_value_len(1) else {
+            return false;
+        };
+        let signed_number = (self.sym_at(1, Sym::Plus) || self.sym_at(1, Sym::Minus))
+            && matches!(self.kind(2), Some(TokenKind::Number(_)));
+        !signed_number || self.any_kw_at(1 + len, INTERVAL_UNITS)
     }
 
     /// `[+|-] (integer | decimal | string)` at offset `n`: its length in

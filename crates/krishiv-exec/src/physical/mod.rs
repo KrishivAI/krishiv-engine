@@ -421,6 +421,20 @@ pub enum PhysNode {
         /// The calls, in output column order.
         calls: Vec<PythonCallPlan>,
     },
+    /// `TABLESAMPLE`: each row of `input` kept when its draw of input
+    /// partition `i`'s `XORShiftRandom(seed + i)` is in `[lower, upper)`
+    /// (Spark's `SampleExec` without replacement). An unseeded sample's seed
+    /// is drawn when the node is planned.
+    Sample {
+        /// The input.
+        input: Box<PhysNode>,
+        /// Inclusive lower bound of the kept draws.
+        lower: f64,
+        /// Exclusive upper bound of the kept draws.
+        upper: f64,
+        /// The seed of partition 0.
+        seed: i64,
+    },
     /// Each row of `input` `count` times (`INTERSECT ALL`, `EXCEPT ALL`).
     ReplicateRows {
         /// The input.
@@ -1022,6 +1036,7 @@ plan_data!(enum PhysNode {
     Project { input, layout, items, nullable, subqueries },
     Limit { input, offset, limit },
     ReplicateRows { input, layout, count, subqueries },
+    Sample { input, lower, upper, seed },
     PythonEval { input, layout, calls },
     Generate { input, layout, kind, outer, arg, subqueries },
     Expand { input, layout, projections, nullable, subqueries },
@@ -1120,6 +1135,7 @@ impl PhysNode {
                 .chain(subqueries.iter().map(|s| &s.plan))
                 .collect(),
             Self::Limit { input, .. }
+            | Self::Sample { input, .. }
             | Self::Sort { input, .. }
             | Self::TopN { input, .. }
             | Self::LateFetch { input, .. }
@@ -1166,6 +1182,7 @@ impl PhysNode {
                 .chain(subqueries.iter_mut().map(|s| &mut s.plan))
                 .collect(),
             Self::Limit { input, .. }
+            | Self::Sample { input, .. }
             | Self::Sort { input, .. }
             | Self::TopN { input, .. }
             | Self::LateFetch { input, .. }

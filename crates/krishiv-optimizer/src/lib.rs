@@ -915,6 +915,14 @@ pub fn plan_is_deterministic(plan: &Arc<LogicalPlan>) -> bool {
     inline_cte::deterministic(plan)
 }
 
+/// Whether `plan` (subquery plans included) holds a `TABLESAMPLE` without
+/// `REPEATABLE`: Spark plans one sample, with its own seed, per reference,
+/// so such a plan is never shared between references.
+#[must_use]
+pub fn plan_has_unseeded_sample(plan: &Arc<LogicalPlan>) -> bool {
+    share_cte::has_unseeded_sample(plan)
+}
+
 #[cfg(test)]
 mod tests {
     use krishiv_common::error::ErrorClass;

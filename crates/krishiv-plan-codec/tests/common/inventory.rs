@@ -1093,6 +1093,15 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             },
         ),
         (
+            "sample",
+            PhysNode::Sample {
+                input: boxed(scan()),
+                lower: 0.0,
+                upper: 0.1,
+                seed: 7,
+            },
+        ),
+        (
             "window_group_limit",
             PhysNode::Window {
                 input: boxed(PhysNode::WindowGroupLimit {

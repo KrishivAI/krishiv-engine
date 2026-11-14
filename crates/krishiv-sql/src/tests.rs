@@ -15,6 +15,7 @@ mod commands;
 mod function;
 mod golden_syntax;
 mod probe;
+mod sample;
 mod tail;
 
 /// The tree of `sql`, without Spark's post-parse checks (tree shapes).

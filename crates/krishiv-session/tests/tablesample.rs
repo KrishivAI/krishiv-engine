@@ -104,18 +104,14 @@ fn rows_are_checked_as_a_limit() -> R {
 }
 
 #[test]
-fn a_partial_fraction_and_system_sampling_are_refused() -> R {
+fn system_sampling_is_refused() -> R {
+    // Partial fractions and buckets are sampled (`tablesample_goldens.rs`).
     let s = session()?;
-    for sql in [
-        "SELECT * FROM t TABLESAMPLE (50 PERCENT)",
-        "SELECT * FROM t TABLESAMPLE (BUCKET 1 OUT OF 3)",
-        "SELECT * FROM t TABLESAMPLE SYSTEM (100 PERCENT)",
-    ] {
-        assert_eq!(
-            class(&s, sql),
-            Some(ErrorClass::KrishivUnsupportedFeature),
-            "{sql}"
-        );
-    }
+    let sql = "SELECT * FROM t TABLESAMPLE SYSTEM (100 PERCENT)";
+    assert_eq!(
+        class(&s, sql),
+        Some(ErrorClass::KrishivUnsupportedFeature),
+        "{sql}"
+    );
     Ok(())
 }
