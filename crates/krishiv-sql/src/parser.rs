@@ -153,6 +153,10 @@ pub(crate) struct Parser<'s> {
     /// For each `(` token, the position of its matching `)`; `usize::MAX`
     /// for any other token and for an unclosed `(`.
     closers: Vec<usize>,
+    /// For each token, whether a `WHEN` follows it in the same brackets
+    /// before they close or a `;` at their level (see
+    /// `Parser::case_or_column`); one pass, so each lookup is constant time.
+    when_ahead: Vec<bool>,
     /// Token positions of the `?` parameter markers, in order.
     markers: Vec<usize>,
     /// How many script bodies the cursor is inside: a statement there ends at its `;`.
@@ -664,6 +668,41 @@ fn checked<R: TopRule>(
     }
 }
 
+/// For each token `i`, whether a `WHEN` follows it at its bracket level
+/// before that level closes or meets a `;`: read right to left with one
+/// flag per open level, so the table costs one pass over the tokens.
+fn when_ahead_table(src: &str, toks: &[Token]) -> Vec<bool> {
+    let mut out = vec![false; toks.len()];
+    // The flag of the innermost level seen so far (from the right), then
+    // the enclosing ones; an unclosed `(` leaves into a fresh level with
+    // nothing after it.
+    let mut levels = vec![false];
+    for (i, t) in toks.iter().enumerate().rev() {
+        out[i] = levels.last().copied().unwrap_or(false);
+        match t.kind {
+            TokenKind::Sym(Sym::RParen | Sym::RBracket) => levels.push(false),
+            TokenKind::Sym(Sym::LParen | Sym::LBracket) => {
+                levels.pop();
+                if levels.is_empty() {
+                    levels.push(false);
+                }
+            }
+            TokenKind::Sym(Sym::Semi) => {
+                if let Some(top) = levels.last_mut() {
+                    *top = false;
+                }
+            }
+            TokenKind::Word if is_kw(t.span.text(src), "WHEN") => {
+                if let Some(top) = levels.last_mut() {
+                    *top = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Words after which a parenthesis opens a query rather than an expression.
 const QUERY_START: &[&str] = &["SELECT", "WITH", "VALUES", "TABLE", "FROM"];
 
@@ -704,6 +743,7 @@ impl<'s> Parser<'s> {
                 _ => {}
             }
         }
+        let when_ahead = when_ahead_table(src, &toks);
         let markers = (0..toks.len())
             .filter(|&i| toks[i].kind == TokenKind::Sym(Sym::Question))
             .collect();
@@ -722,6 +762,7 @@ impl<'s> Parser<'s> {
             failed_queries: HashMap::new(),
             after_parens,
             closers,
+            when_ahead,
             markers,
             in_script: 0,
             in_named: 0,

@@ -482,6 +482,35 @@ fn chains_of_case_columns_parse_in_linear_time() {
     }
 }
 
+/// Whether a `WHEN` follows a `case` comes from a table built once per
+/// statement: a wide projection of `case` columns parses in linear time
+/// (Codex on #761: each column rescanned the rest of the statement), and the
+/// table keeps the bracket levels apart.
+#[test]
+fn wide_projections_of_case_columns_parse_in_linear_time() {
+    let cols = vec!["case"; 100_000].join(", ");
+    let sql = format!("SELECT {cols} FROM t");
+    let started = std::time::Instant::now();
+    let parsed = parse_query(&sql, &ParserOptions::default());
+    assert!(parsed.is_ok(), "{:?}", parsed.err());
+    // Generous: linear parsing takes well under a second; the rescan was
+    // 5 * 10^9 token visits.
+    assert!(started.elapsed().as_secs() < 10);
+    for (sql, want) in [
+        // A `WHEN` outside the brackets of the `case` does not count.
+        ("SELECT f(case), CASE WHEN a THEN 1 END FROM t", true),
+        ("SELECT f(case - 1) + CASE WHEN a THEN 1 END FROM t", true),
+        // One inside nested brackets does not either.
+        (
+            "SELECT case FROM t WHERE x IN (SELECT CASE WHEN a THEN 1 END)",
+            true,
+        ),
+        ("SELECT CASE (case) WHEN 1 THEN 2 END FROM t", true),
+    ] {
+        assert_eq!(shape(sql).is_ok(), want, "{sql}: {:?}", shape(sql));
+    }
+}
+
 /// `NOT <closer> <binary operator>` inside a `CASE` part: the operator over
 /// the operation when a closer of the part follows, the column when none is
 /// left (`ELSE not END AND x FROM t`). Codex on #761: `THEN NOT end = 1 END`

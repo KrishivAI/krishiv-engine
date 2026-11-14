@@ -208,24 +208,7 @@ impl Parser<'_> {
     /// column without a speculative read (a flat chain `case + 1 > 0 OR ...`
     /// would otherwise read every later term inside the first's operand).
     fn when_ahead(&self) -> bool {
-        let mut depth = 0i64;
-        let mut i = 1;
-        while let Some(kind) = self.kind(i) {
-            match kind {
-                TokenKind::Sym(Sym::LParen | Sym::LBracket) => depth += 1,
-                TokenKind::Sym(Sym::RParen | Sym::RBracket) => {
-                    depth -= 1;
-                    if depth < 0 {
-                        return false;
-                    }
-                }
-                TokenKind::Sym(Sym::Semi) if depth == 0 => return false,
-                TokenKind::Word if depth == 0 && self.kw_at(i, "WHEN") => return true,
-                _ => {}
-            }
-            i += 1;
-        }
-        false
+        self.when_ahead.get(self.pos).copied().unwrap_or(false)
     }
 
     /// `CASE` that may be a column: the `CASE` expression if it parses, as
