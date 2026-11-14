@@ -31,7 +31,7 @@ use std::time::Duration;
 
 use arrow_array::{Array, ArrayRef, Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use krishiv_common::error::{InternalError, KrishivError};
+use krishiv_common::error::{InternalError, KrishivError, KrishivInvalidConfigValue};
 use krishiv_exec::QueryMetrics;
 use krishiv_exec::planner::PhysicalPlan;
 use krishiv_exec::profile::{PROFILE_MINOR, PROFILE_VERSION, ProfileIdentity, QueryProfile};
@@ -211,8 +211,13 @@ impl ProfileHistory {
     /// # Errors
     /// The directory cannot be created.
     pub(crate) fn open(dir: &Path, max_bytes: u64, mask: bool) -> Result<Self, KrishivError> {
-        std::fs::create_dir_all(dir)
-            .map_err(|e| internal(format!("krishiv.history.path {}: {e}", dir.display())))?;
+        std::fs::create_dir_all(dir).map_err(|e| {
+            KrishivError::from(KrishivInvalidConfigValue {
+                value: format!("'{}'", dir.display()),
+                key: "\"krishiv.history.path\"".to_owned(),
+                reason: format!("the directory cannot be created: {e}"),
+            })
+        })?;
         let (tx, rx) = sync_channel(QUEUE);
         let failures = Arc::new(AtomicU64::new(0));
         let writer = Writer {
@@ -381,22 +386,11 @@ fn stored(e: HistoryEntry, mask: bool) -> Option<StoredProfile> {
     profile.identity = Some(e.identity.clone());
     let mut sql = e.sql;
     if mask {
-        // A generated output name (`SELECT 'x'` is named `x`) prints the literal's text into the plan.
-        match sql.as_deref() {
-            Some(text) => {
-                let mut names = krishiv_sql::string_literal_bodies(text);
-                names.sort_by_key(|n| std::cmp::Reverse(n.len()));
-                // No list of names taken from the statement is complete: a file write's result schema is its
-                // commit columns, and a view's definition is inlined with its literal-derived output names, which
-                // the outer text does not show. So every alias in the plan is masked too.
-                mask_plan(&mut profile.plan, &names, true);
-            }
-            // A DataFrame query has no text to read the literals from, and a literal's text reaches the plan
-            // through any name (`lit("x")` is a column named `x`; a grouping key, a partition or a sort prints it
-            // with no marker). No scan finds every such name, so the arguments of every node are dropped: the
-            // operator tree and the metrics remain.
-            None => blank_details(&mut profile.plan),
-        }
+        // A literal's text reaches the plan through any name: a generated output name (`SELECT 'x'` is named
+        // `x`), a view's inlined definition, a grouping key, a partition or sort name, printed with or without an
+        // alias marker. No scan finds every such name, so the arguments of every node are dropped: the operator
+        // tree and the metrics remain.
+        blank_details(&mut profile.plan);
         sql = sql.map(|t| krishiv_sql::mask_literals(&t));
     }
     let sql = sql.map(|t| cut(t, SQL_MAX));
@@ -420,81 +414,6 @@ fn blank_details(node: &mut krishiv_exec::profile::ProfileNode) {
     for child in &mut node.children {
         blank_details(child);
     }
-}
-
-/// Replaces the literals in every node's argument text with `?`.
-/// Then every whole-word occurrence of a string literal's text (`names`), which a generated output name carries.
-fn mask_plan(node: &mut krishiv_exec::profile::ProfileNode, names: &[String], aliases: bool) {
-    // Names first, on the text as printed: `mask_literals` re-spaces tokens (`hunter-secret` would become
-    // `hunter - secret`) and no longer finds the literal's spelling. Longest first, so a name holding another is
-    // masked whole.
-    let mut detail = node.detail.clone();
-    for name in names.iter().filter(|n| !n.is_empty()) {
-        detail = mask_word(&detail, name);
-    }
-    if aliases {
-        detail = mask_write_names(&mask_aliases(&detail));
-    }
-    node.detail = krishiv_sql::mask_literals(&detail);
-    for child in &mut node.children {
-        mask_plan(child, names, aliases);
-    }
-}
-
-/// `text` with everything an alias can hide replaced by `?`. A generated name holds the literal's text, which can itself
-/// hold ` AS `, `#1` or `]`, so no scanner finds its end reliably: from the first ` AS ` to the end of the bracketed list
-/// (the last `]`, else the end of the text) is masked. Over-masking is the safe error.
-fn mask_aliases(text: &str) -> String {
-    let Some(at) = text.find(" AS ") else {
-        return text.to_owned();
-    };
-    let start = at + " AS ".len();
-    match text.rfind(']').filter(|&close| close >= start) {
-        Some(close) => format!("{}?{}", &text[..start], &text[close..]),
-        None => format!("{}?", &text[..start]),
-    }
-}
-
-/// `text` with the names a file write prints without an alias marker replaced by `?`: its `partitioned by [..]` list
-/// and the names that lead a sort key (`name ASC NULLS FIRST`). A DataFrame's partition column can be a literal's name.
-fn mask_write_names(text: &str) -> String {
-    const PARTITIONED: &str = "partitioned by [";
-    // A partition or sort name can hold `]`, `, ` or ` ASC`, so no scan finds the end of the list: everything from the
-    // start of the first list to the end of the text is hidden. Over-masking is the safe error.
-    let partitions = text.find(PARTITIONED).map(|at| at + PARTITIONED.len());
-    let sort = [" ASC", " DESC"]
-        .iter()
-        .filter_map(|k| text.find(k))
-        .min()
-        .map(|end| text[..end].rfind('[').map_or(0, |b| b + 1));
-    match partitions.into_iter().chain(sort).min() {
-        Some(cut) => format!("{}?", &text[..cut]),
-        None => text.to_owned(),
-    }
-}
-
-/// `text` with each occurrence of `word` that is not part of a longer word replaced by `?`.
-fn mask_word(text: &str, word: &str) -> String {
-    if word.is_empty() {
-        return text.to_owned();
-    }
-    // `_` is a boundary: a generated name appends to a literal with it (`hunter2_s`, a pivot's output).
-    let is_word = char::is_alphanumeric;
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(at) = rest.find(word) {
-        let before = rest[..at].chars().next_back();
-        let after = rest[at + word.len()..].chars().next();
-        out.push_str(&rest[..at]);
-        if before.is_some_and(is_word) || after.is_some_and(is_word) {
-            out.push_str(word);
-        } else {
-            out.push('?');
-        }
-        rest = &rest[at + word.len()..];
-    }
-    out.push_str(rest);
-    out
 }
 
 /// `text` cut to at most `max` bytes at a character boundary.
@@ -591,7 +510,12 @@ fn list_segments(dir: &Path) -> std::io::Result<Vec<(PathBuf, u64)>> {
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if name.starts_with(PREFIX) && name.ends_with(SUFFIX) {
-            out.push((entry.path(), entry.metadata()?.len()));
+            // Another engine's trim can remove a segment after the listing: it is gone, not an error.
+            match entry.metadata() {
+                Ok(meta) => out.push((entry.path(), meta.len())),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
         }
     }
     // The name leads with the first finish time and ends with a sequence number.

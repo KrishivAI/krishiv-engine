@@ -463,22 +463,6 @@ fn concatenated_and_punctuated_literal_names_are_masked() {
 }
 
 #[test]
-fn mask_aliases_hides_every_alias_name() {
-    assert_eq!(
-        super::mask_aliases("Project [hunter 2 AS hunter 2#12, a AS b#3, c]"),
-        "Project [hunter 2 AS ?]"
-    );
-    assert_eq!(super::mask_aliases("x AS y"), "x AS ?");
-    assert_eq!(super::mask_aliases("no alias"), "no alias");
-}
-
-#[test]
-fn mask_aliases_keeps_no_text_of_a_name_with_a_hash_digit_run() {
-    let masked = super::mask_aliases("Project [x AS prefix#1hunter2#12, a#3]");
-    assert!(!masked.contains("hunter2"), "{masked}");
-}
-
-#[test]
 fn a_file_write_of_a_literal_holding_as_and_a_hash_is_masked() {
     let dir = tempfile::tempdir().unwrap();
     let out = tempfile::tempdir().unwrap();
@@ -512,22 +496,6 @@ fn a_file_write_of_a_literal_projection_is_masked() {
 }
 
 #[test]
-fn mask_write_names_hides_partition_and_sort_names() {
-    assert_eq!(
-        super::mask_write_names("WriteFiles parquet partitioned by [hunter2, b]"),
-        "WriteFiles parquet partitioned by [?"
-    );
-    assert_eq!(
-        super::mask_write_names("[hunter2 ASC NULLS FIRST, b DESC NULLS LAST]"),
-        "[?"
-    );
-    assert_eq!(super::mask_write_names("Scan t"), "Scan t");
-    let masked =
-        super::mask_write_names("WriteFiles partitioned by [prefix]hunter2], sort [a ASC, x DESC]");
-    assert!(!masked.contains("hunter2"), "{masked}");
-}
-
-#[test]
 fn a_partitioned_write_of_a_literal_column_is_masked() {
     let dir = tempfile::tempdir().unwrap();
     let out = tempfile::tempdir().unwrap();
@@ -543,6 +511,28 @@ fn a_partitioned_write_of_a_literal_column_is_masked() {
     rt.profile_history.as_ref().unwrap().flush();
     for q in read_history(dir.path()).unwrap() {
         assert!(!q.profile.contains("huntery"), "{}", q.profile);
+    }
+}
+
+#[test]
+fn a_view_over_a_literal_is_masked_in_unions_and_distinct() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = EngineRuntime::builder()
+        .config("krishiv.history.path", dir.path().to_str().unwrap())
+        .build()
+        .unwrap();
+    let session = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    run(
+        &session,
+        "CREATE TEMP VIEW hv AS SELECT 'hunterq' FROM range(0, 1)",
+    );
+    run(&session, "SELECT * FROM hv UNION ALL SELECT * FROM hv");
+    run(&session, "SELECT DISTINCT * FROM hv");
+    rt.profile_history.as_ref().unwrap().flush();
+    let stored = read_history(dir.path()).unwrap();
+    assert!(!stored.is_empty());
+    for q in stored {
+        assert!(!q.profile.contains("hunterq"), "{}", q.profile);
     }
 }
 
@@ -565,17 +555,6 @@ fn a_dataframe_write_of_literal_named_keys_is_masked() {
     for q in stored {
         assert!(!q.profile.contains("hunterz"), "{}", q.profile);
     }
-}
-
-#[test]
-fn mask_word_replaces_whole_words_only() {
-    assert_eq!(
-        super::mask_word("a, alias, a_b, a", "a"),
-        "?, alias, ?_b, ?"
-    );
-    assert_eq!(super::mask_word("hunter2_s", "hunter2"), "?_s");
-    assert_eq!(super::mask_word("x", "hunter2"), "x");
-    assert_eq!(super::mask_word("x", ""), "x");
 }
 
 #[test]
