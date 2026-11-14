@@ -119,6 +119,8 @@ struct Live {
     session_id: Arc<str>,
     /// Its id in `system.queries`.
     id: Arc<str>,
+    /// Who runs it and its tags, for cancel by tag.
+    tagging: crate::action::Tagging,
     /// `None` until the query's context exists ([`EngineRuntime::attach`]).
     query: Option<Weak<QueryContext>>,
     /// A cancellation that came before the context: adopted at `attach`.
@@ -369,7 +371,19 @@ impl EngineRuntime {
     /// Reserves the worker-local index of a new query of session `session`
     /// (`session_id`), `system.queries` row `id`, before its context
     /// exists: from here a cancellation of `id` is never lost.
+    #[cfg(test)]
     pub(crate) fn reserve(&self, session: u64, session_id: &str, id: &str) -> u64 {
+        self.reserve_tagged(session, session_id, id, crate::action::Tagging::none())
+    }
+
+    /// [`Self::reserve`] for a query that carries `tagging` (cancel by tag finds it from here on).
+    pub(crate) fn reserve_tagged(
+        &self,
+        session: u64,
+        session_id: &str,
+        id: &str,
+        tagging: crate::action::Tagging,
+    ) -> u64 {
         let index = self.query_index.fetch_add(1, Ordering::Relaxed);
         let mut live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
         // Entries of ended queries go as new ones arrive.
@@ -384,6 +398,7 @@ impl EngineRuntime {
                 session,
                 session_id: Arc::from(session_id),
                 id: Arc::from(id),
+                tagging,
                 query: None,
                 // The action running it hands over: a cancellation it already took is kept.
                 // Lock order: `live` (held here) -> the action's state (`action.rs`).
@@ -456,11 +471,22 @@ impl EngineRuntime {
         reason: CancelReason,
         pick: &impl Fn(u64, &str) -> bool,
     ) -> (Vec<QueryId>, usize) {
-        let mut ids = self.cancel_queries(reason, pick);
+        let ids = self.cancel_queries(reason, pick);
         // Actions still analyzing or planning, and the rows of those that
         // handed over after the walk above (a reservation racing this cancel).
-        // One registry pass for all of them (nested actions repeat rows).
         let actions = self.actions.cancel_where(reason, pick);
+        self.finish_cancel(reason, ids, actions)
+    }
+
+    /// Ends what the registry walk and the actions' pass picked: the rows the picked actions
+    /// handed over are cancelled through the registry (one pass for all of them: nested actions
+    /// repeat rows). Returns the ids and how many queries and statements ended.
+    fn finish_cancel(
+        &self,
+        reason: CancelReason,
+        mut ids: Vec<QueryId>,
+        actions: crate::action::ActionsCancelled,
+    ) -> (Vec<QueryId>, usize) {
         if !actions.rows.is_empty() {
             let rows: std::collections::HashSet<(u64, &str)> =
                 actions.rows.iter().map(|(s, r)| (*s, &**r)).collect();
@@ -475,6 +501,60 @@ impl EngineRuntime {
             }
         }
         (ids, ended)
+    }
+
+    /// Cancels, with `reason`, every query and statement of the runtime whose session number and
+    /// tagging `pick` accepts, and returns the ids of those it cancelled: statements still
+    /// analyzing or queued (the action registry) and queries already running (the live set).
+    pub(crate) fn cancel_tagged(
+        &self,
+        reason: CancelReason,
+        pick: impl Fn(u64, &crate::action::Tagging) -> bool,
+    ) -> Vec<QueryId> {
+        let actions = self.actions.cancel_tagged(reason, &pick);
+        // Running queries outlive their action, so they are picked from the live set by the
+        // tagging reserved with them.
+        let running: std::collections::HashSet<(u64, Arc<str>)> = self
+            .live
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .queries
+            .values()
+            .filter(|l| pick(l.session, &l.tagging))
+            .map(|l| (l.session, Arc::clone(&l.id)))
+            .collect();
+        let ids = self.cancel_queries(reason, &|s, q| running.contains(&(s, Arc::from(q))));
+        self.finish_cancel(reason, ids, actions).0
+    }
+
+    /// Cancels the queries and statements, of any session of the runtime, that carry a tag
+    /// matching `selector`: a bare `k` matches a pair with key `k`, `k=v` the exact pair, and a
+    /// Connect request tag (an opaque string, stored as the key of a pair) matches as written
+    /// ([`crate::resource_groups::tag_matches`]). The caller's own queries (principal `caller`)
+    /// end with `User` (`OPERATION_CANCELED`); with `all_principals` (the caller holds `Operate`
+    /// on `System("sessions")`) other principals' queries end with `Admin`
+    /// (`KRISHIV_QUERY_KILLED`). Returns the ids and no count of what was skipped, so a guessed
+    /// tag reveals nothing about queries the caller may not touch. Not reachable from SQL.
+    pub fn cancel_by_tag(
+        &self,
+        selector: &str,
+        caller: &str,
+        all_principals: bool,
+    ) -> Vec<crate::QueryId> {
+        let matches = |t: &crate::action::Tagging| {
+            t.tags
+                .iter()
+                .any(|(k, v)| crate::resource_groups::tag_matches(selector, k, v))
+        };
+        let mut ids = self.cancel_tagged(CancelReason::User, |_, t| {
+            &*t.principal == caller && matches(t)
+        });
+        if all_principals {
+            ids.extend(self.cancel_tagged(CancelReason::Admin, |_, t| {
+                &*t.principal != caller && matches(t)
+            }));
+        }
+        ids
     }
 
     /// [`Self::cancel_where`] over the registered queries only.

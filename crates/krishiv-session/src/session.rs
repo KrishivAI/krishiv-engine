@@ -115,6 +115,8 @@ pub struct Session {
     pub(crate) operation: Option<Arc<crate::history::Operation>>,
     /// The statement's own time limit ([`crate::QueryOptions::deadline`]).
     pub(crate) deadline: Option<std::time::Duration>,
+    /// The statement's request tags ([`crate::QueryOptions::tags`]).
+    pub(crate) request_tags: Arc<[Arc<str>]>,
 }
 
 impl fmt::Debug for Session {
@@ -1136,9 +1138,10 @@ impl Session {
         let (tx, rx) = tokio::sync::oneshot::channel();
         // Registered from here on: `cancel` and `interrupt_all` reach the
         // action during analysis and planning too (`action.rs`).
-        let action = self.state.runtime.actions.begin(
+        let action = self.state.runtime.actions.begin_tagged(
             self.state.number,
             self.operation_id().map(crate::QueryId::as_str),
+            self.tagging(),
         );
         let reason = action.reason();
         let task = self.state.runtime.executor.spawn(
@@ -1628,6 +1631,23 @@ impl Session {
         Ok((crate::run_site::resolve_sites(stream, env), query))
     }
 
+    /// The tags a query started now carries: the session's, then the statement's request tags as
+    /// `(tag, "")` pairs (a key appears once; design P3-T064 §4.3).
+    pub(crate) fn effective_tags(&self) -> Vec<(String, String)> {
+        let mut tags = self.state.queries.tags_now();
+        crate::action::merge_request_tags(&mut tags, &self.request_tags);
+        tags
+    }
+
+    /// The principal and tags of a statement started now, for cancel by tag.
+    pub(crate) fn tagging(&self) -> crate::action::Tagging {
+        crate::action::Tagging {
+            principal: Arc::from(self.state.principal.name.as_str()),
+            tags: self.effective_tags().into(),
+            request_tags: Arc::clone(&self.request_tags),
+        }
+    }
+
     /// Asks the admission controller for a permit for the query whose
     /// `system.queries` row is `log_id`. A controller that answers at once
     /// leaves the row `running`; one that waits shows it `queued`. A refusal
@@ -1645,7 +1665,7 @@ impl Session {
         }
         let request = QueryRequest {
             principal: Arc::clone(&self.state.principal),
-            tags: self.state.queries.tags_now(),
+            tags: self.effective_tags(),
             class: WorkloadClass::Interactive,
             source: None,
             statement_class: None,
@@ -1702,6 +1722,10 @@ impl Session {
             env.statement_class,
             self.operation_id(),
         )?;
+        // The request tags join the row's tags at once, so a queued query shows them too.
+        self.state
+            .queries
+            .add_request_tags(&log_id, &self.request_tags);
         *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
         let permit = self.admit(&log_id, env, exempt).await?;
         Ok(Admitted::new(Arc::clone(&self.state), log_id, permit))
@@ -1730,10 +1754,11 @@ impl Session {
                 .into_parts(),
         };
         self.state.activity.query_started();
-        let id = QueryId(self.state.runtime.reserve(
+        let id = QueryId(self.state.runtime.reserve_tagged(
             self.state.number,
             self.state.queries.session_id(),
             &log_id,
+            self.tagging(),
         ));
         let pool = self.state.memory.child_with_priority(
             &crate::system::pool_name(&log_id),

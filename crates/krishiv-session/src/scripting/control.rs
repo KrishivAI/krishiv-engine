@@ -52,10 +52,12 @@ impl Session {
             env.statement_class,
             self.operation_id(),
         )?;
-        let index =
-            self.state
-                .runtime
-                .reserve(self.state.number, self.state.queries.session_id(), &row);
+        let index = self.state.runtime.reserve_tagged(
+            self.state.number,
+            self.state.queries.session_id(),
+            &row,
+            self.tagging(),
+        );
         let pool = self
             .state
             .memory
