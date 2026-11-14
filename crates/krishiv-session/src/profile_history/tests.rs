@@ -547,6 +547,27 @@ fn a_partitioned_write_of_a_literal_column_is_masked() {
 }
 
 #[test]
+fn a_dataframe_write_of_literal_named_keys_is_masked() {
+    use crate::functions::{count_star, lit};
+    let dir = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let rt = runtime(dir.path(), "64m");
+    let session = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    let df = session
+        .range(0, 5, 1, None)
+        .select([lit("hunterz[")])
+        .group_by(["hunterz["])
+        .agg([count_star()]);
+    block_on(df.write().parquet(out.path().join("t").to_str().unwrap())).unwrap();
+    rt.profile_history.as_ref().unwrap().flush();
+    let stored = read_history(dir.path()).unwrap();
+    assert!(!stored.is_empty());
+    for q in stored {
+        assert!(!q.profile.contains("hunterz"), "{}", q.profile);
+    }
+}
+
+#[test]
 fn mask_word_replaces_whole_words_only() {
     assert_eq!(
         super::mask_word("a, alias, a_b, a", "a"),

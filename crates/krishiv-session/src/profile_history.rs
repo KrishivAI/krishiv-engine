@@ -382,24 +382,21 @@ fn stored(e: HistoryEntry, mask: bool) -> Option<StoredProfile> {
     let mut sql = e.sql;
     if mask {
         // A generated output name (`SELECT 'x'` is named `x`) prints the literal's text into the plan.
-        // A DataFrame query has no text to read the literals from, so every result column name is masked: it can
-        // be a literal's (`lit("x")` is named `x`), and over-masking a real column name is the safe error.
-        let names = match sql.as_deref() {
-            Some(text) => krishiv_sql::string_literal_bodies(text),
-            None => e
-                .plan
-                .schema()
-                .fields()
-                .iter()
-                .map(|f| f.name().clone())
-                .collect(),
-        };
-        let mut names = names;
-        names.sort_by_key(|n| std::cmp::Reverse(n.len()));
-        // No list of names taken from the statement is complete: a file write's result schema is its commit
-        // columns, and a view's definition is inlined with its literal-derived output names, which the outer text
-        // does not show. So every alias in the plan is masked too.
-        mask_plan(&mut profile.plan, &names, true);
+        match sql.as_deref() {
+            Some(text) => {
+                let mut names = krishiv_sql::string_literal_bodies(text);
+                names.sort_by_key(|n| std::cmp::Reverse(n.len()));
+                // No list of names taken from the statement is complete: a file write's result schema is its
+                // commit columns, and a view's definition is inlined with its literal-derived output names, which
+                // the outer text does not show. So every alias in the plan is masked too.
+                mask_plan(&mut profile.plan, &names, true);
+            }
+            // A DataFrame query has no text to read the literals from, and a literal's text reaches the plan
+            // through any name (`lit("x")` is a column named `x`; a grouping key, a partition or a sort prints it
+            // with no marker). No scan finds every such name, so the arguments of every node are dropped: the
+            // operator tree and the metrics remain.
+            None => blank_details(&mut profile.plan),
+        }
         sql = sql.map(|t| krishiv_sql::mask_literals(&t));
     }
     let sql = sql.map(|t| cut(t, SQL_MAX));
@@ -415,6 +412,14 @@ fn stored(e: HistoryEntry, mask: bool) -> Option<StoredProfile> {
         profile_minor: i64::try_from(PROFILE_MINOR).ok()?,
         profile: profile.to_json(),
     })
+}
+
+/// Replaces the argument text of every node with `?`.
+fn blank_details(node: &mut krishiv_exec::profile::ProfileNode) {
+    node.detail = "?".to_owned();
+    for child in &mut node.children {
+        blank_details(child);
+    }
 }
 
 /// Replaces the literals in every node's argument text with `?`.
