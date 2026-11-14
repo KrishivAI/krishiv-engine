@@ -28,6 +28,12 @@ both off (the default) nothing differs. See [result cache](../reference/result-c
 what is cached, when entries go, and the one staleness the cache accepts (a change made outside the
 engine, until the entry expires or `REFRESH TABLE`).
 
+## `EXPLAIN FORMAT JSON`, `EXPLAIN ANALYZE`, `EXPLAIN VERBOSE` (Krishiv extensions)
+
+Spark 4.2 has none of these forms, and its parser rejects each with a syntax error. Krishiv accepts them:
+`EXPLAIN FORMAT JSON <statement>` returns the statement's analysis as JSON without running it (see the
+[SQL reference](../reference/sql/index.md)); any other `EXPLAIN FORMAT ...` is a syntax error, as in Spark.
+
 ## A malformed value of a Spark config key fails at `SET`
 
 A Spark key that Krishiv maps to a typed setting (for example

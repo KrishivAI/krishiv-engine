@@ -251,6 +251,17 @@ pub(crate) fn unsupported_function_class(span: Span) -> ParseError {
     )
 }
 
+/// `KRISHIV_UNSUPPORTED_FEATURE` for `EXPLAIN FORMAT JSON PHYSICAL`, reserved
+/// for a JSON plan tree.
+pub(crate) fn explain_json_physical(span: Span) -> ParseError {
+    at(
+        KrishivUnsupportedFeature {
+            feature: "EXPLAIN FORMAT JSON PHYSICAL (reserved for a JSON physical plan)".to_owned(),
+        },
+        span,
+    )
+}
+
 /// `_LEGACY_ERROR_TEMP_0045`: `SET TIME ZONE` followed by neither a zone
 /// nor an interval.
 pub(crate) fn invalid_time_zone_displacement(span: Span) -> ParseError {

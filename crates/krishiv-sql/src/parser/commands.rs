@@ -71,6 +71,21 @@ impl Parser<'_> {
                 "ANALYZE" => Some(ExplainMode::Analyze),
                 // A syntax error in Spark; Krishiv's `EXPLAIN VERBOSE`.
                 "VERBOSE" => Some(ExplainMode::Verbose),
+                // Krishiv's `EXPLAIN FORMAT JSON` (a syntax error in Spark):
+                // only with `JSON` next, so any other `FORMAT` starts the
+                // explained statement and fails as in Spark.
+                "FORMAT" if self.kw_at(1, "JSON") => {
+                    // `FORMAT JSON PHYSICAL` is reserved for a plan tree.
+                    if self.kw_at(2, "PHYSICAL") {
+                        let span = match (self.tok(0), self.tok(2)) {
+                            (Some(a), Some(b)) => Span::new(a.span.start, b.span.end),
+                            _ => self.span_from(start),
+                        };
+                        return Self::fatal(error::explain_json_physical(span));
+                    }
+                    self.bump();
+                    Some(ExplainMode::Json)
+                }
                 _ => None,
             };
             let logical = word == "LOGICAL";

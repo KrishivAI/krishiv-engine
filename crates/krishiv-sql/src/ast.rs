@@ -255,6 +255,10 @@ pub enum ExplainMode {
     /// `VERBOSE` (a Krishiv extension): the logical plan after each
     /// optimizer rule that changed it, then the physical plan.
     Verbose,
+    /// `FORMAT JSON` (a Krishiv extension; a syntax error in Spark): the
+    /// statement's analyze document (`krishiv.analyze.v1`), without running
+    /// it.
+    Json,
 }
 
 /// `SET`, `SET -v`, `SET key`, `SET key = value` or `SET TIME ZONE ...`:

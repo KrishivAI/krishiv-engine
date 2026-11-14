@@ -176,6 +176,50 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "filters":[],
 "warnings":[]}
 
+-- Explain::Json: EXPLAIN FORMAT JSON SELECT 1
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":"PLAN",
+"partial":false,
+"securables":[],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Explain::Json: EXPLAIN FORMAT JSON INSERT INTO t SELECT 1
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":"PLAN",
+"partial":false,
+"securables":[],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Explain::Json: EXPLAIN FORMAT JSON DROP TABLE t
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":"PLAN",
+"partial":false,
+"securables":[],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Explain::Json: EXPLAIN FORMAT JSON EXPLAIN ANALYZE INSERT INTO t SELECT 1
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":"PLAN",
+"partial":false,
+"securables":[],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
 -- Explain::Analyze: EXPLAIN ANALYZE SELECT 1
 {"schema_version":"krishiv.analyze.v1",
 "statement_class":"READ",

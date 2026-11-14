@@ -556,3 +556,122 @@ fn securables_equal_what_a_run_authorizes() {
     assert!(compared >= 60, "{compared} compared");
     insta::assert_snapshot!(differences);
 }
+
+/// The one `plan` value of `EXPLAIN FORMAT JSON ...` (P3-T063 N2): one row, one string column.
+fn explain_json(s: &Session, sql: &str) -> String {
+    use arrow_array::cast::AsArray as _;
+    let df = block_on(s.sql(sql)).unwrap();
+    let schema = block_on(df.schema()).unwrap();
+    assert_eq!(schema.fields().len(), 1, "{sql}");
+    assert_eq!(schema.field(0).name(), "plan", "{sql}");
+    let batches = block_on(df.collect()).unwrap();
+    let rows: usize = batches.iter().map(arrow_array::RecordBatch::num_rows).sum();
+    assert_eq!(rows, 1, "{sql}");
+    let column = batches[0].column(0);
+    match column.data_type() {
+        arrow_schema::DataType::Utf8View => column.as_string_view().value(0).to_owned(),
+        arrow_schema::DataType::Utf8 => column.as_string::<i32>().value(0).to_owned(),
+        other => panic!("{sql}: plan is {other}"),
+    }
+}
+
+/// The rows of table `name`.
+fn row_count(s: &Session, name: &str) -> usize {
+    let batches = block_on(async { s.table(name).collect().await }).unwrap();
+    batches.iter().map(arrow_array::RecordBatch::num_rows).sum()
+}
+
+/// `EXPLAIN FORMAT JSON <statement>` returns `analyze(<statement>)`'s document as one `plan` row, and
+/// runs nothing: no insert, no drop, not the `EXPLAIN ANALYZE` it explains.
+#[test]
+fn explain_format_json_returns_the_analysis_and_runs_nothing() {
+    let s = corpus_ready();
+    block_on(s.sql("INSERT INTO u VALUES (1, 2, 3)")).unwrap();
+    for inner in [
+        "SELECT a + 1 AS b FROM t WHERE k > 0",
+        "INSERT INTO u SELECT * FROM t",
+        "EXPLAIN ANALYZE INSERT INTO u SELECT * FROM t",
+        "DROP TABLE u",
+        "SET spark.sql.ansi.enabled = false",
+    ] {
+        let json = explain_json(&s, &format!("EXPLAIN FORMAT JSON {inner}"));
+        assert_valid(&json);
+        assert_eq!(
+            json,
+            block_on(s.analyze(inner)).unwrap().to_json(),
+            "{inner}"
+        );
+    }
+    assert_eq!(row_count(&s, "u"), 1);
+    // The explained statement's class and explain kind, and the drop target, listed.
+    let json = explain_json(
+        &s,
+        "EXPLAIN FORMAT JSON EXPLAIN ANALYZE INSERT INTO u SELECT * FROM t",
+    );
+    assert!(json.contains("\"statement_class\":\"WRITE\""), "{json}");
+    assert!(json.contains("\"explain\":\"ANALYZE\""), "{json}");
+    assert_eq!(row_count(&s, "u"), 1);
+    let json = explain_json(&s, "EXPLAIN FORMAT JSON DROP TABLE u");
+    assert!(json.contains("\"statement_class\":\"DDL\""), "{json}");
+    assert!(
+        json.contains("\"display\":\"table `spark_catalog`.`default`.`u`\",\"privilege\":\"DROP\""),
+        "{json}"
+    );
+    assert_eq!(row_count(&s, "u"), 1);
+}
+
+/// The outer statement is `READ` with the `plan STRING` result of every `EXPLAIN`.
+#[test]
+fn explain_format_json_is_a_read_with_a_plan_column() {
+    let s = corpus_ready();
+    for sql in [
+        "EXPLAIN FORMAT JSON SELECT a FROM t",
+        "EXPLAIN FORMAT JSON DROP TABLE t",
+        "EXPLAIN FORMAT JSON EXPLAIN ANALYZE INSERT INTO u SELECT * FROM t",
+    ] {
+        let a = block_on(s.analyze(sql)).unwrap();
+        assert_eq!(a.info.class, StatementClass::Read, "{sql}");
+        assert!(!a.partial, "{sql}");
+        let cols: Vec<String> = a
+            .output_schema
+            .iter()
+            .map(|c| format!("{}: {}", c.name, c.data_type.simple_string()))
+            .collect();
+        assert_eq!(cols, ["plan: string"], "{sql}");
+        assert!(a.to_json().contains("\"explain\":\"PLAN\""), "{sql}");
+        // Nothing is dropped or written by the outer statement.
+        assert!(
+            a.info
+                .securables
+                .iter()
+                .all(|u| u.privilege == Privilege::Select),
+            "{sql}: {:?}",
+            a.info.securables
+        );
+    }
+}
+
+/// The explained statement's reads are checked: a denied read fails as the run of that statement does.
+#[test]
+fn explain_format_json_applies_the_read_checks() {
+    let admin = corpus_ready();
+    let s = Session::builder()
+        .principal(Principal::new("ana", PrincipalKind::User))
+        .access_policy(Arc::new(DenyT(AtomicU64::new(1))))
+        .runtime(Arc::clone(admin.runtime()))
+        .build()
+        .unwrap();
+    for sql in ["SELECT a FROM t", "INSERT INTO u SELECT * FROM t"] {
+        let explained = block_on(s.sql(&format!("EXPLAIN FORMAT JSON {sql}"))).unwrap_err();
+        let ran = block_on(async { s.sql(sql).await?.collect().await }).unwrap_err();
+        assert_eq!(
+            explained.error_class().name(),
+            "KRISHIV_INSUFFICIENT_PERMISSIONS"
+        );
+        assert_eq!(explained.to_string(), ran.to_string(), "{sql}");
+    }
+    assert!(block_on(s.sql("EXPLAIN FORMAT JSON SELECT a FROM s")).is_ok());
+    // `PHYSICAL` is reserved.
+    let e = block_on(s.sql("EXPLAIN FORMAT JSON PHYSICAL SELECT a FROM s")).unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+}

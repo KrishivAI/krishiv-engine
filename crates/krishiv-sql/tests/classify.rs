@@ -243,6 +243,11 @@ fn explain_kind_and_statement_queries() {
         explain_kind(&parse("EXPLAIN ANALYZE SELECT 1")),
         Some(ExplainKind::Analyze)
     );
+    // `EXPLAIN FORMAT JSON` shows the analysis without running anything.
+    assert_eq!(
+        explain_kind(&parse("EXPLAIN FORMAT JSON INSERT INTO t SELECT 1")),
+        Some(ExplainKind::Plan)
+    );
     let count = |sql: &str| statement_queries(&parse(sql)).map(|q| q.len());
     for (sql, n) in [
         ("SELECT 1", Some(1)),

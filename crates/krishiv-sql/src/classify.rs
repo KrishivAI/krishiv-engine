@@ -103,7 +103,8 @@ pub fn classify(statement: &Statement) -> StatementClass {
             | ExplainMode::Formatted
             | ExplainMode::Codegen
             | ExplainMode::Cost
-            | ExplainMode::Verbose => StatementClass::Read,
+            | ExplainMode::Verbose
+            | ExplainMode::Json => StatementClass::Read,
         },
         // A script has the class of the strongest statement anywhere in it.
         Statement::Script(c) => script_class(c),
@@ -405,7 +406,8 @@ pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
             | ExplainMode::Formatted
             | ExplainMode::Codegen
             | ExplainMode::Cost
-            | ExplainMode::Verbose => Vec::new(),
+            | ExplainMode::Verbose
+            | ExplainMode::Json => Vec::new(),
         },
         Statement::CreateTable(c) => {
             if c.temporary {

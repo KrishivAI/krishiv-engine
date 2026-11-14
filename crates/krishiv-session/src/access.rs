@@ -109,6 +109,17 @@ impl Session {
         let redacted = krishiv_sql::redact_sql(sql);
         let statement = krishiv_sql::parse_statement(sql, &env.parser)
             .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
+        self.parts_of_statement(statement, &redacted).await
+    }
+
+    /// [`Self::statement_parts`] of the parsed `statement`, whose spans index `redacted`'s text
+    /// (`EXPLAIN FORMAT JSON` analyzes its explained statement here).
+    pub(crate) async fn parts_of_statement(
+        &self,
+        statement: Statement,
+        redacted: &krishiv_common::redact::RedactedSql,
+    ) -> Result<StatementParts, KrishivError> {
+        let env = self.query_env();
         let class = krishiv_sql::classify(&statement);
         let explain = krishiv_sql::explain_kind(&statement);
         let queries = krishiv_sql::statement_queries(&statement);
@@ -117,10 +128,10 @@ impl Session {
         let mut analyzed = Vec::new();
         for query in queries.unwrap_or_default() {
             let plan = krishiv_sql::lower(query, SourceId(0))
-                .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
+                .map_err(|e| sql_context(e.error, redacted, e.span.start, e.span.end))?;
             let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
             let analysis = df
-                .analyzed_in_with_text(self.query_env(), Some(&redacted))
+                .analyzed_in_with_text(self.query_env(), Some(redacted))
                 .await?;
             merge_reads(&mut securables, &analysis.analyzed.securables);
             analyzed.push(Arc::clone(&analysis.analyzed));
