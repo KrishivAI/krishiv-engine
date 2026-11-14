@@ -113,6 +113,7 @@ pub(crate) fn plan_tag(node: &PlanNode) -> u8 {
         PlanNode::Generate { .. } => 33,
         PlanNode::PipeOperator { .. } => 34,
         PlanNode::Repartition { .. } => 35,
+        PlanNode::Sample { .. } => 36,
     }
 }
 
@@ -921,6 +922,12 @@ impl<'k, 'a> Encoder<'k, 'a> {
             }
             PlanNode::ReplicateRows { count, .. } => {
                 self.expr(count);
+            }
+            PlanNode::Sample { bounds, seed, .. } => {
+                self.i64(bounds.lower.to_bits().cast_signed());
+                self.i64(bounds.upper.to_bits().cast_signed());
+                self.bool(seed.is_some());
+                self.i64(seed.unwrap_or(0));
             }
             PlanNode::Offset { offset, .. } => {
                 self.expr(offset);

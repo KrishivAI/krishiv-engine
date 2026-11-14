@@ -384,6 +384,14 @@ impl Display for NodeLine<'_> {
             PlanNode::ReplicateRows { count, .. } => {
                 write!(f, "Generate replicaterows({})", Text(count))
             }
+            // Spark's `Sample 0.0, 0.1, false, 7` (no seed when unseeded).
+            PlanNode::Sample { bounds, seed, .. } => {
+                write!(f, "Sample {:?}, {:?}, false", bounds.lower, bounds.upper)?;
+                match seed {
+                    Some(s) => write!(f, ", {s}"),
+                    None => Ok(()),
+                }
+            }
             // Spark's `UnionLoop 0, [n#1]`.
             PlanNode::UnionLoop { id, output, .. } => {
                 write!(f, "UnionLoop {id}, [")?;
