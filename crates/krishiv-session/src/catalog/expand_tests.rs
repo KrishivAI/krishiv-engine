@@ -128,3 +128,21 @@ fn a_view_read_in_a_sql_function_body_is_recorded() {
     assert_eq!(a.views.len(), 1, "{:?}", a.views);
     assert!(a.views[0].output.is_some());
 }
+
+/// A view whose query repeats a column name is inlined with an inner rename `SubqueryAlias` of the same
+/// (alias, origin) under the one recorded. One read locates its entry at the outer node; a shared read
+/// (`df.union(df)`) locates only the first entry, never the second at the inner rename node.
+#[test]
+fn a_view_that_repeats_a_column_name_is_located_at_its_outer_node() {
+    let s = session();
+    block_on(s.sql("CREATE VIEW rv (x, y) AS SELECT a, a FROM base")).unwrap();
+    let a = analyzed(&s.table("rv"));
+    assert_eq!(a.views.len(), 1, "{:?}", a.views);
+    let out: Vec<_> = a.output.iter().map(|c| c.id).collect();
+    assert_eq!(a.views[0].output.as_deref(), Some(out.as_slice()));
+    let df = s.table("rv");
+    let a = analyzed(&df.union(&df));
+    assert_eq!(a.views.len(), 2, "{:?}", a.views);
+    assert!(a.views[0].output.is_some(), "{:?}", a.views);
+    assert_eq!(a.views[1].output, None, "{:?}", a.views);
+}

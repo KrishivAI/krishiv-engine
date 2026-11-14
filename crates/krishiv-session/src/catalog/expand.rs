@@ -333,7 +333,6 @@ impl Expander<'_> {
                 LogicalPlan::new(PlanNode::Project { input, exprs }).with_origin(plan.origin),
             );
         }
-        // Otherwise (a view stored without its query's column names) the columns are only renamed by position.
         self.views.push(view_read(
             vec![
                 CATALOG.to_owned(),
@@ -344,6 +343,7 @@ impl Expander<'_> {
             plan.origin,
             ViewSecurity::Invoker,
         ));
+        // Otherwise (a view stored without its query's column names) the columns are only renamed by position.
         Ok(Arc::new(
             LogicalPlan::new(PlanNode::SubqueryAlias {
                 input,
