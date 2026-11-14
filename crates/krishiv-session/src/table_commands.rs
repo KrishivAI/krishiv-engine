@@ -58,7 +58,7 @@ use crate::store::{
 };
 
 /// The file formats a table can have.
-const PROVIDERS: &[&str] = &["parquet", "csv", "json", "text", "orc", "avro"];
+pub(crate) const PROVIDERS: &[&str] = &["parquet", "csv", "json", "text", "orc", "avro"];
 
 /// The short name of a data source written fully qualified, as Spark maps its built-in classes
 /// (`org.apache.spark.sql.parquet`, `com.databricks.spark.csv`); other names stay as written.
@@ -88,7 +88,7 @@ fn valid_name(name: &str) -> bool {
 
 /// `INVALID_SCHEMA_OR_RELATION_NAME` (and for `.` and `..`, which Spark's parser rejects as attribute names,
 /// `INVALID_ATTRIBUTE_NAME_SYNTAX`) unless `name` is a valid new table or namespace name.
-fn check_new_name(name: &str) -> Result<(), KrishivError> {
+pub(crate) fn check_new_name(name: &str) -> Result<(), KrishivError> {
     if valid_name(name) {
         Ok(())
     } else if name.chars().all(|c| c == '.') && !name.is_empty() {
@@ -431,6 +431,11 @@ impl Session {
                 }
                 .into());
             }
+            Err(DropNamespaceError::Changed) => {
+                return Err(internal(format!(
+                    "`{name}` was changed by another statement while this one ran; retry"
+                )));
+            }
         }
         self.empty_frame().await
     }
@@ -670,6 +675,7 @@ impl Session {
             column_stats: BTreeMap::new(),
             incarnation: 0,
             data_version: 0,
+            stamp: 0,
         };
         self.state.catalog.store.create_table(view, mode)?;
         self.empty_frame().await
@@ -1812,7 +1818,7 @@ mod tests;
 
 /// Why an [`OwnedDirectory`] could not be made.
 #[derive(Debug)]
-enum OwnedDirectoryError {
+pub(crate) enum OwnedDirectoryError {
     /// Something is already at the path (not ours to touch).
     Exists,
     Io(String),
@@ -1822,14 +1828,14 @@ enum OwnedDirectoryError {
 /// failed, or its future was dropped), it removes what is in it, provided the path still names the
 /// directory that was created (same device and inode): a path swapped for another directory in the
 /// meantime is left alone.
-struct OwnedDirectory {
+pub(crate) struct OwnedDirectory {
     path: PathBuf,
     identity: Option<(u64, u64)>,
     kept: bool,
 }
 
 impl OwnedDirectory {
-    fn create(path: PathBuf) -> Result<Self, OwnedDirectoryError> {
+    pub(crate) fn create(path: PathBuf) -> Result<Self, OwnedDirectoryError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
                 OwnedDirectoryError::Io(format!("cannot create {}: {e}", parent.display()))
@@ -1870,7 +1876,7 @@ impl OwnedDirectory {
     }
 
     /// The statement succeeded: the directory stays.
-    fn keep(mut self) {
+    pub(crate) fn keep(mut self) {
         self.kept = true;
     }
 }

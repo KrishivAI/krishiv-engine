@@ -1077,7 +1077,7 @@ impl QueryCatalog {
 
 /// The `_metadata` column of a table read through the file source
 /// `provider` (Spark: file sources; row positions only from Parquet).
-fn file_metadata(provider: &str) -> FileMetadata {
+pub(crate) fn file_metadata(provider: &str) -> FileMetadata {
     match provider.to_ascii_lowercase().as_str() {
         "parquet" => FileMetadata::WithRowIndex,
         "orc" | "csv" | "json" | "text" | "avro" | "xml" | "binaryfile" => FileMetadata::Basic,
@@ -1364,6 +1364,7 @@ pub(crate) fn expand_views_in(
         reads: Vec::new(),
         deferred: None,
         stored_reads: Vec::new(),
+        views: Vec::new(),
     };
     let plan = expander.go(Arc::clone(plan), &mut Vec::new())?;
     Ok(Expansion {
@@ -1371,6 +1372,7 @@ pub(crate) fn expand_views_in(
         reads: expander.reads,
         deferred: expander.deferred,
         stored_reads: expander.stored_reads,
+        views: expander.views,
     })
 }
 
@@ -1397,6 +1399,8 @@ pub(crate) struct Expansion {
     /// The stored views inlined, inner views before the views that read them: their schema binding is checked
     /// against their analyzed queries (`view_schema::check_read`).
     pub(crate) stored_reads: Vec<crate::view_schema::StoredRead>,
+    /// The views inlined, for the lineage side table (`AnalyzedPlan::views`, located once analyzed).
+    pub(crate) views: Vec<krishiv_plan::analyzer::views::ViewExpansion>,
 }
 
 /// Whether creating the temporary view `name` over `plan` would close a
