@@ -438,6 +438,14 @@ impl Operation {
     /// decided the end, so its stream ends with an error and `GetStatus`
     /// must not say `SUCCEEDED`. Whether it is failed now: `false` when a
     /// cancel won before the finish.
+    ///
+    /// A known window (PR-15d review L1): a `release_all` or `close_all`
+    /// that closes and records the operation as `SUCCEEDED` between the
+    /// failed last send and this call leaves the ended record `SUCCEEDED`
+    /// while the removed operation says `FAILED`. It is two statements wide,
+    /// needs the last response to fail to buffer (a memory-pool refusal),
+    /// and the client released the operation, so its stream ends
+    /// `INVALID_CURSOR.DISCONNECTED` anyway.
     pub fn fail_finished(&self) -> bool {
         match self
             .state
@@ -725,14 +733,22 @@ impl Operations {
 
     /// Removes and closes every live operation (the session is released;
     /// Spark's `removeAllExecutionsForSession`). Returns them. Each is
-    /// closed before its final state is recorded (as
-    /// [`Self::close_and_remove`]); closing takes no lock of this map.
+    /// interrupted before its final state is recorded under the map's lock
+    /// (the compare-and-swap decides it, as in [`Self::close_and_remove`]),
+    /// and closed after the lock is released, so its buffered responses are
+    /// not freed under it.
     pub fn close_all(&self) -> Vec<Arc<Operation>> {
-        let mut live = self.lock();
-        let ops: Vec<Arc<Operation>> = live.drain().map(|(_, op)| op).collect();
+        let ops: Vec<Arc<Operation>> = {
+            let mut live = self.lock();
+            let ops: Vec<Arc<Operation>> = live.drain().map(|(_, op)| op).collect();
+            for op in &ops {
+                op.cancel();
+                self.record_ended(op);
+            }
+            ops
+        };
         for op in &ops {
             op.close();
-            self.record_ended(op);
         }
         ops
     }

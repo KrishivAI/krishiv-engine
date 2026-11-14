@@ -444,39 +444,35 @@ fn a_released_operation_is_never_tombstoned_as_abandoned() {
 }
 
 #[test]
-fn an_abandon_racing_the_finish_records_the_winner() {
-    // PR-15c merge review L1: the abandoned operation is remembered with the
-    // state its close left, the one it reports itself.
+fn a_finish_right_after_the_abandon_recorded_it_changes_nothing() {
+    // PR-15c merge review L1, made deterministic (PR-15d review L2): the
+    // query tries to finish right after maintenance removed and recorded
+    // the operation. The interrupt before the record decided the state, so
+    // the finish loses and the record agrees with the operation. With the
+    // old order (record, then close) the finish won: SUCCEEDED on the
+    // operation, CANCELLED in the record.
+    use crate::execute::hooks::{self, Fault};
     use crate::operation::{Operation, OperationState, plan_digest};
-    const OP: &str = "00112233-4455-6677-8899-aabbccddeeff";
     let m = manager(SessionLimits::default());
     let entry = m.get_or_create(&alice(), ID, None, "u").expect("create");
     let key = SessionManager::key(&alice(), ID);
-    for _ in 0..1_000 {
-        let op = Arc::new(Operation::new(
-            krishiv_session::QueryId::parse(OP).expect("id"),
-            plan_digest(b"p"),
-            Arc::from(Vec::new()),
-            true,
-        ));
-        entry.operations().register(&op, 10).expect("register");
-        let generation = op.replay().attach(None);
-        op.replay().detach(generation);
-        let barrier = std::sync::Barrier::new(2);
-        std::thread::scope(|s| {
-            s.spawn(|| {
-                barrier.wait();
-                assert!(m.abandon(&key, &entry, &op, Duration::ZERO));
-            });
-            s.spawn(|| {
-                barrier.wait();
-                op.finish();
-            });
-        });
-        let own = match op.state() {
-            OperationState::Succeeded => OperationState::Succeeded,
-            _ => OperationState::Cancelled,
-        };
-        assert_eq!(entry.operations().state_of(OP), Some(own));
-    }
+    let id = crate::operation::new_operation_id().expect("id");
+    let op = Arc::new(Operation::new(
+        id.clone(),
+        plan_digest(b"p"),
+        Arc::from(Vec::new()),
+        true,
+    ));
+    hooks::inject(id.as_str(), Fault::FinishAfterAbandonRecord);
+    entry.operations().register(&op, 10).expect("register");
+    let generation = op.replay().attach(None);
+    op.replay().detach(generation);
+    assert!(m.abandon(&key, &entry, &op, Duration::ZERO));
+    assert!(hooks::reached(id.as_str()));
+    assert!(op.is_cancelled(), "the finish lost");
+    assert_eq!(
+        entry.operations().state_of(id.as_str()),
+        Some(OperationState::Cancelled)
+    );
+    assert!(op.replay().is_closed(), "closed after the lock");
 }

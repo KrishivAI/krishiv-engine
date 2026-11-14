@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Test-only fault points of `ExecutePlan`, keyed by operation id so tests
 //! running in one process do not see each other's faults: a panic inside
-//! the encoder, and a plan preparation that never ends on its own (slow
-//! analysis). Compiled only for this crate's unit tests; production builds
+//! the encoder, a plan preparation that never ends on its own (slow
+//! analysis), and a finish landing just after an abandon recorded the
+//! operation. Compiled only for this crate's unit tests; production builds
 //! have no hook.
 
 use std::sync::{Mutex, PoisonError};
@@ -14,6 +15,9 @@ pub(crate) enum Fault {
     PanicInEncoder,
     /// The plan's preparation waits until it is dropped.
     HoldPreparation,
+    /// The query finishes right after maintenance recorded the abandoned
+    /// operation's final state (a finish racing the abandon).
+    FinishAfterAbandonRecord,
 }
 
 /// (operation id, fault, whether the fault point was reached).
@@ -58,5 +62,13 @@ pub(crate) async fn preparing(id: &str) {
 pub(crate) fn encoding(id: &str) {
     if fault_of(id) == Some(Fault::PanicInEncoder) {
         panic!("injected encoder panic of operation {id}");
+    }
+}
+
+/// The fault point after maintenance removed (and recorded) an abandoned
+/// operation, before the lock is released.
+pub(crate) fn abandon_recorded(op: &crate::operation::Operation) {
+    if fault_of(op.id().as_str()) == Some(Fault::FinishAfterAbandonRecord) {
+        op.finish();
     }
 }

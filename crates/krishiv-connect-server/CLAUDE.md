@@ -118,7 +118,9 @@ Paths are relative to this crate.
   `Bytes` are shared): deliberate, conservative accounting (review L4); a tight pool can refuse such a clone.
 - **GetStatus and the operation states follow design §3.12, not Spark's handler** (unverified, not in the vendored
   sources): a setup failure is `FAILED`, a setup whose RPC was dropped is `CANCELLED`, an interrupt whose encoder still
-  runs is `TERMINATING`.
+  runs is `TERMINATING`. An operation's final state is decided (interrupted) before it is recorded; one known window
+  remains: a release that records `SUCCEEDED` between a failed last response and `fail_finished` (the record says
+  `SUCCEEDED`, the removed operation `FAILED`; needs a pool refusal on the last response).
 - **Decode only through `wire`** (`#![deny(clippy::disallowed_methods)]`): the codec is the one decode path.
 - Shutdown: draining flag (new RPCs `UNAVAILABLE`, `/readyz` 503), stop accepting, queries get
   `krishiv.server.shutdownTimeout`, then every session is closed (queries cancelled). The engine runtime is dropped

@@ -551,8 +551,10 @@ impl SessionManager {
     }
 
     /// Abandons `op` of session `key` if it has had no stream attached for
-    /// `timeout` and is still registered: it is tombstoned and removed
-    /// under the manager's lock, then closed. One a release removed first
+    /// `timeout` and is still registered: under the manager's lock it is
+    /// interrupted (its final state decided), removed (which records that
+    /// state) and tombstoned; it is closed after the lock is released, so
+    /// its buffered responses are not freed under it. One a release removed first
     /// is left alone (Spark's `removeExecuteHolder` returns before the
     /// tombstone for a holder no longer in `executions`), so its reattach
     /// answers `OPERATION_NOT_FOUND`. Whether it was abandoned.
@@ -576,11 +578,11 @@ impl SessionManager {
             // manager's lock: a racing reattach that no longer finds the
             // operation reads `is_abandoned` after it, so it finds it
             // abandoned rather than unknown (Spark's lines 158-166). One a
-            // release removed first is left alone. Closed before it is
+            // release removed first is left alone. Interrupted before it is
             // removed, so the state it is remembered with is the one the
-            // close's compare-and-swap left (a query that finished just
-            // before stays `SUCCEEDED`). Lock order: manager, then
-            // operations (as `sweep`).
+            // compare-and-swap left (a query that finished just before stays
+            // `SUCCEEDED`). Lock order: manager, then operations (as
+            // `sweep`).
             let mut inner = self.lock();
             let registered = entry
                 .operations()
@@ -589,10 +591,12 @@ impl SessionManager {
             if !registered {
                 return false;
             }
-            op.close();
+            op.cancel();
             if !entry.operations().remove(op) {
                 return false;
             }
+            #[cfg(test)]
+            crate::execute::hooks::abandon_recorded(op);
             inner.abandoned.insert(
                 OpKey {
                     session: key.clone(),
@@ -601,14 +605,15 @@ impl SessionManager {
                 self.limits.abandoned_tombstones,
             );
         }
+        // A reattach between the expiry check and this close is closed with
+        // it (its retry sees OPERATION_ABANDONED): Spark's
+        // `periodicMaintenance` has the same window.
+        op.close();
         tracing::info!(
             target: "krishiv::connect",
             operation = op.id().as_str(),
             "abandoned a detached Connect operation"
         );
-        // A reattach between the expiry check and the close was closed with
-        // it (its retry sees OPERATION_ABANDONED): Spark's
-        // `periodicMaintenance` has the same window.
         true
     }
 

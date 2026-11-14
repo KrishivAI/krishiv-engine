@@ -324,6 +324,11 @@ async fn an_interrupt_during_plan_preparation_cancels_it() {
     assert_eq!(answer.interrupted_ids, vec![op.clone()]);
     assert_eq!(refused(call).await, "OPERATION_CANCELED");
     assert!(run.entry().operations().is_empty(), "nothing leaks");
+    assert_eq!(
+        run.entry().operations().state_of(&op),
+        Some(OperationState::Cancelled),
+        "GetStatus"
+    );
     assert_eq!(run.budget.available(), run.budget.cap());
 }
 
@@ -335,6 +340,11 @@ async fn a_release_during_plan_preparation_cancels_it() {
     release_all(&run, &op).await;
     assert_eq!(refused(call).await, "OPERATION_CANCELED");
     assert!(run.entry().operations().is_empty(), "nothing leaks");
+    assert_eq!(
+        run.entry().operations().state_of(&op),
+        Some(OperationState::Cancelled),
+        "GetStatus"
+    );
     assert_eq!(run.budget.available(), run.budget.cap());
     assert_eq!(run.entry().session().running_queries(), 0);
 }

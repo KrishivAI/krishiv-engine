@@ -42,7 +42,7 @@
 
 pub mod arrow;
 #[cfg(test)]
-mod hooks;
+pub(crate) mod hooks;
 pub mod schema;
 
 use std::io::Read;
