@@ -2,6 +2,7 @@ krishiv-common
 krishiv-types
 krishiv-kernels
 krishiv-udf-sdk
+krishiv-udf-sandbox
 krishiv-functions
 krishiv-memory
 krishiv-store
@@ -12,6 +13,8 @@ krishiv-exec
 krishiv-plan-codec
 krishiv-sql
 krishiv-session
+krishiv-connect
+krishiv-connect-server
 krishiv-ui-assets
 krishiv-server
 krishiv

@@ -1,0 +1,13 @@
+{
+  "cases": {
+    "files": [
+      9
+    ],
+    "sql-commands": [
+      6,
+      10
+    ]
+  },
+  "file": "sql-on-files",
+  "format_version": 1
+}

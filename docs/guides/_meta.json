@@ -1,1 +1,9 @@
-{ "deploy": "Deploy", "run-sql-from-the-command-line": "Run SQL from the command line", "tokio-console": "Task diagnostics with tokio-console" }
+{
+  "index": "Guides",
+  "pyspark-migration": "Migrate a PySpark job",
+  "deploy": "Deploy",
+  "check-compat": "Check a project with check-compat",
+  "run-sql-from-the-command-line": "Run SQL from the command line",
+  "tokio-console": "Task diagnostics with tokio-console",
+  "notebooks-and-datasets": "Notebooks and sample data"
+}

@@ -59,7 +59,7 @@ use krishiv_connect::wire;
 use krishiv_memory::ConsumerHandle;
 use krishiv_session::{DataFrame, QueryOptions, RecordBatchStream};
 use prost::Message;
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, TryAcquireError};
 use tonic::Status;
 
 use self::arrow::EncodeSettings;
@@ -182,6 +182,64 @@ impl Drop for Registered {
     }
 }
 
+/// The digest of the request's plan, encoded from the decoded request
+/// itself (no copy); a deep plan is encoded on a big stack, as it was
+/// decoded.
+fn request_digest(
+    request: &wire::Decoded<pb::ExecutePlanRequest>,
+) -> Result<[u8; 32], KrishivError> {
+    let digest = || {
+        request.plan.as_ref().map_or_else(
+            || plan_digest(&[]),
+            |plan| plan_digest(&plan.encode_to_vec()),
+        )
+    };
+    if !request.is_deep() {
+        return Ok(digest());
+    }
+    krishiv_common::stack::on_big_stack(digest).ok_or_else(|| {
+        krishiv_common::error::InternalError {
+            message: "cannot start a thread for a deeply nested plan".to_owned(),
+        }
+        .into()
+    })
+}
+
+/// `prepare`, unless the operation is cancelled first: then
+/// `OPERATION_CANCELED` and `prepare` is dropped (a release or a closed
+/// session also stops a plan that is still being analysed).
+async fn until_cancelled<T>(
+    op: &Operation,
+    prepare: impl std::future::Future<Output = Result<T, KrishivError>>,
+) -> Result<T, KrishivError> {
+    tokio::select! {
+        biased;
+        () = op.cancelled() => Err(OperationCanceled {}.into()),
+        r = prepare => r,
+    }
+}
+
+/// The outcome of an operation's preparation. A preparation error settles
+/// like a query error, by the state's one compare-and-swap: failed first,
+/// the error (GetStatus `FAILED`); an interrupt that reported the operation
+/// first, `OPERATION_CANCELED` (GetStatus `CANCELLED`). Either way the
+/// operation leaves its session. (A dropped RPC drops `registered`:
+/// `CANCELLED`.)
+fn settle_preparation<T>(
+    op: &Operation,
+    registered: Registered,
+    prepared: Result<T, KrishivError>,
+) -> Result<(T, Registered), KrishivError> {
+    match prepared {
+        Ok(ready) => Ok((ready, registered)),
+        Err(e) if op.fail() => {
+            registered.fail();
+            Err(e)
+        }
+        Err(_) => Err(OperationCanceled {}.into()),
+    }
+}
+
 /// Starts `request` on the session `entry`; with the id of a live
 /// operation running the same plan, attaches to it from the start instead
 /// (Spark's `SparkConnectExecutePlanHandler`, v4.3.0 lines 47-60).
@@ -196,7 +254,7 @@ impl Drop for Registered {
 /// analysis errors.
 pub async fn execute_plan(
     entry: &Arc<SessionEntry>,
-    request: &pb::ExecutePlanRequest,
+    request: &wire::Decoded<pb::ExecutePlanRequest>,
     limits: &ExecuteLimits,
     budget: &ResponseBudget,
 ) -> Result<ResponseStream, KrishivError> {
@@ -206,11 +264,10 @@ pub async fn execute_plan(
     };
     let tags = validate_tags(&request.tags)?;
     let opts = options(request);
-    let plan = request.plan.clone().unwrap_or_default();
     let op = Arc::new(
         Operation::new(
             id.clone(),
-            plan_digest(&plan.encode_to_vec()),
+            request_digest(request)?,
             tags,
             opts.reattachable,
         )
@@ -237,22 +294,19 @@ pub async fn execute_plan(
     };
     let session = entry.session();
     let conf = session.conf();
-    let setup = async {
-        let logical = request_plan(session, &plan, limits).await?;
+    let empty = pb::Plan::default();
+    let plan = request.plan.as_ref().unwrap_or(&empty);
+    let prepared = until_cancelled(&op, async {
+        // Decompression (up to `maxPlanSize`) runs off the async workers.
+        let logical = request_plan(session, plan, limits).await?;
         let df = session.from_plan_with(&logical, QueryOptions::new().operation_id(id.as_str()))?;
         let schema = df.schema().await?;
         let schema_response = schema::proto_schema(&schema)?;
-        Ok::<_, KrishivError>((df, schema, schema_response))
-    };
-    // A failure is FAILED; this future dropped (its client cancelled the
-    // RPC) drops `registered`, which is CANCELLED.
-    let (df, schema, schema_response) = match setup.await {
-        Ok(ready) => ready,
-        Err(e) => {
-            registered.fail();
-            return Err(e);
-        }
-    };
+        Ok((df, schema, schema_response))
+    })
+    .await;
+    let ((df, schema, schema_response), registered) =
+        settle_preparation(&op, registered, prepared)?;
     let settings = encode_settings(&conf, limits, opts.chunking);
 
     let sender = Sender {
@@ -357,11 +411,19 @@ fn translate_plan(
                         _ => Err(command_not_supported(&pb::Command::default())),
                     }
                 }
-                _ => Err(ConnectInvalidPlanInvalidOneOfFieldNotSet {
-                    full_name: "spark.connect.Plan.CompressedOperation".to_owned(),
-                    name: "OP_TYPE_UNSPECIFIED".to_owned(),
+                _ => {
+                    // Spark's `PlanCompressionUtils` re-throws what parsing
+                    // the operation raised as `CANNOT_PARSE` (v4.3.0).
+                    let unset: KrishivError = ConnectInvalidPlanInvalidOneOfFieldNotSet {
+                        full_name: "spark.connect.Plan.CompressedOperation".to_owned(),
+                        name: "OP_TYPE_UNSPECIFIED".to_owned(),
+                    }
+                    .into();
+                    Err(krishiv_common::error::ConnectInvalidPlanCannotParse {
+                        error_msg: unset.to_string(),
+                    }
+                    .into())
                 }
-                .into()),
             }
         }
         None => Err(ConnectInvalidPlanInvalidOneOfFieldNotSet {
@@ -528,10 +590,17 @@ impl Sender {
         response.response_id = uuid_text(id);
         let size = response.encoded_len();
         let want = |cap: usize| u32::try_from(size.clamp(1, cap)).unwrap_or(u32::MAX);
-        let ahead = Arc::clone(&self.ahead)
-            .acquire_many_owned(want(self.ahead_cap))
-            .await
-            .map_err(|_| Stop::Gone)?;
+        let ahead = match Arc::clone(&self.ahead).try_acquire_many_owned(want(self.ahead_cap)) {
+            Ok(permit) => permit,
+            Err(TryAcquireError::Closed) => return Err(Stop::Gone),
+            Err(TryAcquireError::NoPermits) => {
+                let _waiting = self.op.waiting_for_client();
+                Arc::clone(&self.ahead)
+                    .acquire_many_owned(want(self.ahead_cap))
+                    .await
+                    .map_err(|_| Stop::Gone)?
+            }
+        };
         let mut reservation = self.consumer.reservation();
         reservation
             .grow_without_abort(size)
@@ -672,7 +741,10 @@ async fn send_batch(
             for (i, chunk) in chunks.into_iter().enumerate() {
                 let response = sender.response(Some(ResponseType::ArrowBatch(ArrowBatch {
                     row_count: rows,
-                    data: bytes.slice_ref(chunk),
+                    // Each chunk owns its bytes: a slice of the batch would
+                    // keep the whole batch alive in the retry buffer while
+                    // only the chunk's length is reserved (Codex, #742).
+                    data: prost::bytes::Bytes::copy_from_slice(chunk),
                     start_offset: Some(offset),
                     chunk_index: Some(i64::try_from(i).unwrap_or(i64::MAX)),
                     num_chunks_in_batch: Some(n),

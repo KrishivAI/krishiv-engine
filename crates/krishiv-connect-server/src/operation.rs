@@ -287,6 +287,8 @@ pub struct Operation {
     state: AtomicU8,
     /// Set once its encoder stopped (or it never started one).
     ended: AtomicBool,
+    /// Whether the encoder waits for the client ([`Self::is_waiting_for_client`]).
+    waiting: AtomicBool,
     cancel: Notify,
     /// Set by [`Self::close`]; wakes the encoder.
     closed: Notify,
@@ -316,6 +318,7 @@ impl Operation {
             replay: Replay::new(retry, reattachable),
             state: AtomicU8::new(RUNNING),
             ended: AtomicBool::new(false),
+            waiting: AtomicBool::new(false),
             cancel: Notify::new(),
             closed: Notify::new(),
         }
@@ -372,6 +375,20 @@ impl Operation {
     #[must_use]
     pub fn sent_count(&self) -> usize {
         usize::try_from(self.replay.produced()).unwrap_or(usize::MAX)
+    }
+
+    /// Whether the operation's encoder is waiting for its client to read:
+    /// its responses fill the ahead budget or the channel (backpressure).
+    #[must_use]
+    pub fn is_waiting_for_client(&self) -> bool {
+        self.waiting.load(Ordering::Acquire)
+    }
+
+    /// Marks the encoder as waiting for its client until the guard drops
+    /// (also when the wait is cancelled).
+    pub(crate) fn waiting_for_client(&self) -> WaitingForClient<'_> {
+        self.waiting.store(true, Ordering::Release);
+        WaitingForClient(self)
     }
 
     /// Asks the operation to stop: its stream ends with
@@ -449,6 +466,15 @@ impl Operation {
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.state.load(Ordering::Acquire) == CANCELLED
+    }
+
+    /// Whether shutdown waits for the operation: its query still runs, or
+    /// a client is attached and reading its responses. A finished or
+    /// interrupted operation nobody reads (detached, unreleased) does not
+    /// count: shutdown closes it with its session.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        self.state.load(Ordering::Acquire) == RUNNING || self.replay.is_attached()
     }
 
     /// Resolves once [`Self::cancel`] runs (one waiter: the operation's
@@ -540,6 +566,16 @@ impl Ended {
         let state = self.by_id.get(id)?.2;
         self.put(id.clone(), state, now);
         Some(state)
+    }
+}
+
+/// The encoder of an operation waits for its client while this lives
+/// ([`Operation::waiting_for_client`]).
+pub(crate) struct WaitingForClient<'a>(&'a Operation);
+
+impl Drop for WaitingForClient<'_> {
+    fn drop(&mut self) {
+        self.0.waiting.store(false, Ordering::Release);
     }
 }
 
@@ -684,6 +720,13 @@ impl Operations {
     #[must_use]
     pub fn all(&self) -> Vec<Arc<Operation>> {
         self.lock().values().map(Arc::clone).collect()
+    }
+
+    /// The number of live operations shutdown waits for
+    /// ([`Operation::is_active`]).
+    #[must_use]
+    pub fn active(&self) -> usize {
+        self.lock().values().filter(|op| op.is_active()).count()
     }
 
     /// The number of live operations.

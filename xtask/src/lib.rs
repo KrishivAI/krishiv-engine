@@ -4,9 +4,11 @@
 #![forbid(unsafe_code)]
 
 pub mod budgets;
+pub mod changelog;
 pub mod ci;
 pub mod codeql_proxy;
 pub mod compat;
+pub mod connect_coverage;
 pub mod console;
 pub mod coverage;
 pub mod dev;

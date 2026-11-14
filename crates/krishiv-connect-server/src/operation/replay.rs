@@ -270,6 +270,12 @@ impl Replay {
         }
     }
 
+    /// Whether a sender is attached (a client is reading).
+    #[must_use]
+    pub fn is_attached(&self) -> bool {
+        self.lock().current.is_some()
+    }
+
     /// Since when no sender is attached; `None` while one is.
     #[must_use]
     pub fn detached_since(&self) -> Option<Instant> {

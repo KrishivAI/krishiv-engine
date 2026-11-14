@@ -1,0 +1,9 @@
+{
+  "cases": {
+    "depends-on-command": [
+      13
+    ]
+  },
+  "file": "sql-compatibility-functions",
+  "format_version": 1
+}

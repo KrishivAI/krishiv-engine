@@ -99,6 +99,20 @@ pub fn normalized_subtree_hash(plan: &LogicalPlan) -> u128 {
     XxHash3_128::oneshot(&enc.out)
 }
 
+/// [`normalized_subtree_hash`] without the scans' table versions: the same
+/// plan over other versions of its tables hashes equal. A relation cache keys
+/// its registrations by it and compares the versions apart, so a write to a
+/// cached table keeps the registration (Spark's `recacheByPlan`).
+#[must_use]
+pub fn unversioned_subtree_hash(plan: &LogicalPlan) -> u128 {
+    let mut enc = Encoder {
+        unversioned: true,
+        ..Encoder::default()
+    };
+    enc.plan(plan, 0);
+    XxHash3_128::oneshot(&enc.out)
+}
+
 /// The normalized hash of an expression, except that the attribute ids in
 /// `pinned` keep their raw values: two copies of one subquery resolved apart
 /// hash equal only when they read the same enclosing-query columns in the
@@ -137,6 +151,8 @@ struct Encoder {
     seen: HashMap<(NodeKind, usize, u64), u128>,
     /// [`semantic_plan_hash`]: names and subquery aliases left out.
     semantic: bool,
+    /// Leaves the scans' table versions out ([`unversioned_subtree_hash`]).
+    unversioned: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -649,9 +665,11 @@ impl Encoder {
                 for c in &s.output {
                     self.bound(c, bias);
                 }
-                self.flag(s.version.is_some());
-                if let Some(v) = &s.version {
-                    self.inum(v.0);
+                if !self.unversioned {
+                    self.flag(s.version.is_some());
+                    if let Some(v) = &s.version {
+                        self.inum(v.0);
+                    }
                 }
             }
             PlanNode::OneRowRelation => self.tag("OneRowRelation"),
@@ -1753,6 +1771,33 @@ mod tests {
         );
         let whole = project(sub.clone(), &[rcol(3, "a")]);
         assert_ne!(normalized_subtree_hash(&sub), hash(&whole));
+    }
+
+    #[test]
+    fn the_unversioned_hash_leaves_out_scan_versions_only() {
+        let versioned = |v: Option<i64>| {
+            let mut s = scan(&[1], &["a"]);
+            if let PlanNode::Scan(sc) = &mut s.node {
+                sc.version = v.map(crate::TableVersion);
+            }
+            filter(s, gt(rcol(1, "a"), 1))
+        };
+        let base = unversioned_subtree_hash(&versioned(Some(3)));
+        assert_eq!(unversioned_subtree_hash(&versioned(Some(4))), base);
+        assert_eq!(unversioned_subtree_hash(&versioned(None)), base);
+        assert_ne!(
+            normalized_subtree_hash(&versioned(Some(3))),
+            normalized_subtree_hash(&versioned(Some(4)))
+        );
+        let mut other = scan(&[1], &["a"]);
+        if let PlanNode::Scan(sc) = &mut other.node {
+            sc.version = Some(crate::TableVersion(3));
+        }
+        assert_ne!(
+            unversioned_subtree_hash(&filter(other, gt(rcol(1, "a"), 2))),
+            base,
+            "everything else still enters"
+        );
     }
 
     #[test]

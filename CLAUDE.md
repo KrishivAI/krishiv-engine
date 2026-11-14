@@ -31,6 +31,7 @@ cargo machete                                    # unused deps
 cargo hack check --each-feature --workspace --locked   # features stay additive
 cargo xtask layering                             # L0–L7 layer rule (xtask/layers.toml)
 cargo xtask quarantine [--list]                 # flaky-test registry tests/quarantine.toml vs .config/nextest.toml; a test is quarantined at most 3 days (owner, issue, deadline), then fixed or removed
+cargo xtask connect-coverage [--check]          # docs/reference/connect/coverage.md + tests/connect/coverage.json from crates/krishiv-connect/src/coverage.rs
 cargo xtask docs-config | docs-errors            # regenerate config / error-class docs
 cargo xtask docs-sql | docs-python | docs-rust [--check]   # docs/reference/{sql/functions,python,rust}/ (docs-rust needs nightly rustdoc + `cargo install rustdoc-md --version 0.2.0 --locked`; the docs-reference nightly job diffs them); docs-config docs/reference/config/index.md
 cargo xtask budgets [--build-time] [--write-baseline]   # crate-count / build-time / size budgets; PRs are gated against CI's measurement of main, `budgets.json` is only a reference record / fallback
@@ -98,7 +99,7 @@ New crate → add it to `xtask/layers.toml` and root `Cargo.toml`, and write its
 - **`unsafe` only** in krishiv-memory, krishiv-kernels and FFI crates (krishiv-python, SDK bridges), each block with
   `// SAFETY:`; everything else `#![forbid(unsafe_code)]` (ADR 0029).
 - No `unwrap`/`expect`/`panic` in library code; `thiserror` errors with a Spark error class + SQLSTATE from
-  the generated registry (`crates/krishiv-common/vendored/spark-error-conditions.json`, Spark 4.2.0); no `anyhow` in libraries.
+  the generated registry (`crates/krishiv-common/vendored/`, the union of Spark 4.2.1 and 4.3.0); no `anyhow` in libraries.
 - On-disk formats carry a version; N reads N−1 (ADR 0026). Public surfaces change only via ADR.
 - Identifiers are `krishiv` / `krishiv-*` (ADR 0030). Decisions change only through an ADR (skill `krishiv-adr`).
 - Never commit secrets. Commit identity: a human author only (`gopal tathe` or `techysneha14`, noreply). **No AI

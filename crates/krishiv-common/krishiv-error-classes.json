@@ -11,6 +11,12 @@
     ],
     "sqlState" : "58030"
   },
+  "KRISHIV_CATALOG_LIMIT_EXCEEDED" : {
+    "message" : [
+      "<source> exceeds <limit> (<value>), so it was not loaded. A legitimate table or catalog this large needs <config>."
+    ],
+    "sqlState" : "54000"
+  },
   "KRISHIV_COMMIT_LOG_CORRUPT" : {
     "message" : [
       "The commit log of <root> cannot be read: <reason>. Nothing was changed; a missing or damaged entry under \"_krishiv_log\" needs the directory restored from a copy."
@@ -165,6 +171,25 @@
     ],
     "sqlState" : "42602"
   },
+  "KRISHIV_RESOURCE_GROUP_CONFIG_INVALID" : {
+    "message" : [
+      "The resource group file is invalid at <path>: <reason>."
+    ],
+    "sqlState" : "22023",
+    "audience" : "operator"
+  },
+  "KRISHIV_RESOURCE_GROUP_QUEUE_FULL" : {
+    "message" : [
+      "The resource group <group> already has <maxQueued> queued queries, so this query is refused. Retry later, or raise \"maxQueued\" of the group."
+    ],
+    "sqlState" : "53400"
+  },
+  "KRISHIV_RESOURCE_GROUP_QUOTA_EXHAUSTED" : {
+    "message" : [
+      "The resource group <group> has used its scan quota for the current window, so this query is refused. The quota resets at <resetAt>."
+    ],
+    "sqlState" : "53400"
+  },
   "KRISHIV_SESSION_LIMIT" : {
     "message" : [
       "Cannot open a new session: <limitName> allows at most <limit> live sessions. Release a session (ReleaseSession, or spark.stop() in the client) or raise \"<limitName>\"."
@@ -203,6 +228,13 @@
       "The user-defined function <name>@<version> is not available on this worker: register it on the executing session before running the plan."
     ],
     "sqlState" : "39000",
+    "audience" : "operator"
+  },
+  "KRISHIV_UDF_SANDBOX_UNAVAILABLE" : {
+    "message" : [
+      "Python UDF workers cannot run sandboxed on this server: <reason>. Run the server on Linux 5.13 or later with Landlock and seccomp enabled, or have an administrator set \"krishiv.udf.sandbox\" to \"off\" (worker code then runs without file and network confinement)."
+    ],
+    "sqlState" : "0A000",
     "audience" : "operator"
   },
   "KRISHIV_UNKNOWN_FORMAT_OPTION" : {

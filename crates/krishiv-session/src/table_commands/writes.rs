@@ -500,9 +500,11 @@ impl Session {
                 // both before the drop.
                 let location =
                     managed_location(&self.warehouse_dir()?, &name.namespace, &name.name);
+                self.authorize_write_options(&spec.options, &BTreeMap::new())
+                    .await?;
                 let at =
                     self.locate_write_path(&location.display().to_string(), &spec.options, &env)?;
-                self.authorize_write_path(&at, &spec.options).await?;
+                self.authorize_write_path(&at).await?;
                 // A managed table's own directory goes with it; any other one in the way stays.
                 let own = self
                     .state
@@ -524,6 +526,9 @@ impl Session {
                 // this admission instead of asking again.
                 let mut pre = Some(self.admit_query(&analysis.env, false).await?);
                 let done = async {
+                    // From the drop on, a cancel waits for the write's query
+                    // instead of dropping the statement half-way (`action.rs`).
+                    crate::action::commit_point();
                     self.drop_named_table(&name, &env, true).await?;
                     self.exec_write_v2(df, spec, V2Mode::Create, &mut pre).await
                 }
