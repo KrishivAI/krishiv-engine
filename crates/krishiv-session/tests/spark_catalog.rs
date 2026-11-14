@@ -2,8 +2,15 @@
 //! `Session::catalog()` (Spark's `spark.catalog`, T082): the PySpark `Catalog` doc examples, as Rust.
 #![cfg(test)]
 
+use std::sync::Arc;
+
 use futures::executor::block_on;
-use krishiv_session::Session;
+use krishiv_common::error::KrishivError;
+use krishiv_plan::analyzer::{BoxFuture, PolicyVersion};
+use krishiv_session::{
+    AccessDecision, AccessPolicy, EngineRuntime, Principal, PrincipalKind, Privilege, Securable,
+    Session,
+};
 
 fn session(dir: &std::path::Path) -> Session {
     let s = Session::new().unwrap();
@@ -38,17 +45,21 @@ fn databases_list_get_exists() {
     let s = session(dir.path());
     run(&s, "CREATE DATABASE db1 COMMENT 'first'");
     let c = s.catalog();
-    let names: Vec<_> = c.list_databases(None).into_iter().map(|d| d.name).collect();
+    let names: Vec<_> = block_on(c.list_databases(None))
+        .unwrap()
+        .into_iter()
+        .map(|d| d.name)
+        .collect();
     assert_eq!(names, ["db1", "default"]);
-    let d = c.get_database("DB1").unwrap();
+    let d = block_on(c.get_database("DB1")).unwrap();
     assert_eq!(d.name, "db1");
     assert_eq!(d.catalog, "spark_catalog");
     assert_eq!(d.description.as_deref(), Some("first"));
     assert!(d.location_uri.ends_with("db1.db"));
-    assert!(c.database_exists("default"));
-    assert!(!c.database_exists("zzz"));
-    assert_eq!(c.list_databases(Some("d*")).len(), 2);
-    assert_eq!(c.list_databases(Some("db*")).len(), 1);
+    assert!(block_on(c.database_exists("default")).unwrap());
+    assert!(!block_on(c.database_exists("zzz")).unwrap());
+    assert_eq!(block_on(c.list_databases(Some("d*"))).unwrap().len(), 2);
+    assert_eq!(block_on(c.list_databases(Some("db*"))).unwrap().len(), 1);
 }
 
 #[test]
@@ -60,7 +71,7 @@ fn tables_list_get_exists() {
     run(&s, "CREATE TEMPORARY VIEW tab1 AS SELECT 1 AS x");
     run(&s, "CREATE GLOBAL TEMPORARY VIEW gv AS SELECT 1 AS x");
     let c = s.catalog();
-    let t = c.list_tables(None, None).unwrap();
+    let t = block_on(c.list_tables(None, None)).unwrap();
     let got: Vec<_> = t
         .iter()
         .map(|t| (t.name.as_str(), t.table_type.as_str(), t.is_temporary))
@@ -69,29 +80,38 @@ fn tables_list_get_exists() {
         got,
         [
             ("pv", "VIEW", false),
-            ("tab1", "TEMPORARY", true),
-            ("tbl1", "MANAGED", false)
+            ("tbl1", "MANAGED", false),
+            ("tab1", "TEMPORARY", true)
         ]
     );
-    let tbl1 = c.get_table("tbl1").unwrap();
+    let tbl1 = block_on(c.get_table("tbl1")).unwrap();
     assert_eq!(tbl1.catalog.as_deref(), Some("spark_catalog"));
     assert_eq!(tbl1.namespace, Some(vec!["default".to_owned()]));
     assert_eq!(tbl1.description, None);
-    let tab1 = c.get_table("tab1").unwrap();
+    let tab1 = block_on(c.get_table("tab1")).unwrap();
     assert_eq!((tab1.catalog, tab1.namespace), (None, Some(vec![])));
-    let gv = c.get_table("global_temp.gv").unwrap();
+    let gv = block_on(c.get_table("global_temp.gv")).unwrap();
     assert_eq!(gv.namespace, Some(vec!["global_temp".to_owned()]));
-    assert_eq!(c.list_tables(Some("global_temp"), None).unwrap().len(), 1);
-    assert_eq!(c.list_tables(None, Some("tb*")).unwrap().len(), 1);
-    assert!(c.table_exists("default.tbl1"));
-    assert!(c.table_exists("spark_catalog.default.tbl1"));
-    assert!(!c.table_exists("missing"));
+    // the global views and the local ones, as `SHOW TABLES IN global_temp` lists them
+    let global: Vec<_> = block_on(c.list_tables(Some("global_temp"), None))
+        .unwrap()
+        .into_iter()
+        .map(|t| t.name)
+        .collect();
+    assert_eq!(global, ["gv", "tab1"]);
+    assert_eq!(block_on(c.list_tables(None, Some("tb*"))).unwrap().len(), 1);
+    assert!(block_on(c.table_exists("default.tbl1")).unwrap());
+    assert!(block_on(c.table_exists("spark_catalog.default.tbl1")).unwrap());
+    assert!(!block_on(c.table_exists("missing")).unwrap());
     assert_eq!(
-        c.get_table("missing").unwrap_err().error_class().name(),
+        block_on(c.get_table("missing"))
+            .unwrap_err()
+            .error_class()
+            .name(),
         "TABLE_OR_VIEW_NOT_FOUND"
     );
     assert_eq!(
-        c.list_tables(Some("nope"), None)
+        block_on(c.list_tables(Some("nope"), None))
             .unwrap_err()
             .error_class()
             .name(),
@@ -133,8 +153,10 @@ fn columns_carry_partition_and_bucket_flags() {
     assert_eq!(cols[0].description.as_deref(), Some("key"));
     let v = block_on(c.list_columns("v")).unwrap();
     assert_eq!(
-        v.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
-        ["x", "y"]
+        v.iter()
+            .map(|c| (c.name.as_str(), c.data_type.as_str()))
+            .collect::<Vec<_>>(),
+        [("x", "int"), ("y", "string")]
     );
     assert_eq!(
         block_on(c.list_columns("nope"))
@@ -154,18 +176,19 @@ fn functions_list_get_exists() {
         "CREATE TEMPORARY FUNCTION twice(x INT) RETURNS INT RETURN x * 2",
     );
     let c = s.catalog();
-    assert!(c.function_exists("abs"));
-    assert!(c.function_exists("TWICE"));
-    assert!(!c.function_exists("no_such_fn"));
-    let f = c.get_function("abs").unwrap();
+    assert!(block_on(c.function_exists("abs")).unwrap());
+    assert!(block_on(c.function_exists("TWICE")).unwrap());
+    assert!(!block_on(c.function_exists("no_such_fn")).unwrap());
+    let f = block_on(c.get_function("abs")).unwrap();
     assert_eq!((f.catalog, f.namespace, f.is_temporary), (None, None, true));
     assert!(
-        c.list_functions(Some("tw*"))
+        block_on(c.list_functions(Some("tw*")))
+            .unwrap()
             .iter()
             .any(|f| f.name == "twice")
     );
     assert_eq!(
-        c.get_function("no_such_fn")
+        block_on(c.get_function("no_such_fn"))
             .unwrap_err()
             .error_class()
             .name(),
@@ -186,7 +209,7 @@ fn create_table_managed_with_a_schema_and_external_from_files() {
         &[],
     ))
     .unwrap();
-    let t = c.get_table("m").unwrap();
+    let t = block_on(c.get_table("m")).unwrap();
     assert_eq!(t.table_type, "MANAGED");
     assert_eq!(t.description.as_deref(), Some("a managed table"));
     let cols = block_on(c.list_columns("m")).unwrap();
@@ -207,7 +230,7 @@ fn create_table_managed_with_a_schema_and_external_from_files() {
     let location = dir.path().join("m");
     let path = location.to_str().unwrap();
     block_on(c.create_table("ext", Some("parquet"), None, None, &[("path", path)])).unwrap();
-    assert_eq!(c.get_table("ext").unwrap().table_type, "EXTERNAL");
+    assert_eq!(block_on(c.get_table("ext")).unwrap().table_type, "EXTERNAL");
     let rows = block_on(async {
         s.sql("SELECT concat_ws('|', a, b) FROM ext ORDER BY a")
             .await?
@@ -266,4 +289,104 @@ fn drop_views_and_refresh() {
             .name(),
         "TABLE_OR_VIEW_NOT_FOUND"
     );
+}
+
+#[test]
+fn a_name_with_a_dot_inside_backquotes_is_one_part() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE TEMPORARY VIEW `a.b` AS SELECT 1 AS x");
+    let c = s.catalog();
+    assert!(block_on(c.table_exists("`a.b`")).unwrap());
+    assert!(!block_on(c.table_exists("a.b")).unwrap());
+    let t = block_on(c.get_table("`a.b`")).unwrap();
+    assert_eq!(t.name, "a.b");
+}
+
+#[test]
+fn listings_come_in_sparks_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TEMPORARY FUNCTION aaa_first(x INT) RETURNS INT RETURN x",
+    );
+    let c = s.catalog();
+    let names: Vec<_> = block_on(c.list_functions(None))
+        .unwrap()
+        .into_iter()
+        .map(|f| f.name)
+        .collect();
+    let user = names.iter().position(|n| n == "aaa_first").unwrap();
+    let abs = names.iter().position(|n| n == "abs").unwrap();
+    assert!(abs < user, "built-ins come before the session's functions");
+}
+
+/// Denies `Browse` and `Select` (`Select` implies `Browse`, ADR 0046 section 4), allows the rest.
+struct NoBrowse;
+
+impl AccessPolicy for NoBrowse {
+    fn version(&self) -> PolicyVersion {
+        PolicyVersion(1)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _principal: &'a Principal,
+        _securable: &'a Securable,
+        privilege: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        let decision = if matches!(privilege, Privilege::Browse | Privilege::Select) {
+            AccessDecision::Deny {
+                reason: "browse".to_owned(),
+            }
+        } else {
+            AccessDecision::Allow
+        };
+        Box::pin(std::future::ready(Ok(decision)))
+    }
+}
+
+#[test]
+fn the_catalog_api_shows_a_principal_no_more_than_the_sql_statements_do() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = EngineRuntime::builder().build().unwrap();
+    let open = |policy: Option<Arc<dyn AccessPolicy>>| {
+        let mut b = Session::builder()
+            .runtime(Arc::clone(&rt))
+            .principal(Principal::new("pat", PrincipalKind::User));
+        if let Some(p) = policy {
+            b = b.access_policy(p);
+        }
+        let s = b.build().unwrap();
+        s.conf()
+            .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+            .unwrap();
+        s
+    };
+    let admin = open(None);
+    run(&admin, "CREATE TABLE secret (card STRING) USING parquet");
+    let s = open(Some(Arc::new(NoBrowse)));
+    // the statements are refused ...
+    for sql in ["SHOW TABLES", "DESCRIBE TABLE secret", "SHOW NAMESPACES"] {
+        let e = block_on(s.sql(sql)).unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "KRISHIV_INSUFFICIENT_PERMISSIONS",
+            "{sql}"
+        );
+    }
+    // ... and so is every call of the catalog API that stands for one
+    let c = s.catalog();
+    let denied = |e: KrishivError| e.error_class().name() == "KRISHIV_INSUFFICIENT_PERMISSIONS";
+    assert!(denied(block_on(c.list_tables(None, None)).unwrap_err()));
+    assert!(denied(block_on(c.get_table("secret")).unwrap_err()));
+    assert!(denied(block_on(c.table_exists("secret")).unwrap_err()));
+    assert!(denied(block_on(c.table_exists("missing")).unwrap_err()));
+    assert!(denied(block_on(c.list_columns("secret")).unwrap_err()));
+    assert!(denied(block_on(c.list_databases(None)).unwrap_err()));
+    assert!(denied(block_on(c.get_database("default")).unwrap_err()));
+    assert!(denied(block_on(c.database_exists("default")).unwrap_err()));
+    assert!(denied(block_on(c.list_functions(None)).unwrap_err()));
+    assert!(denied(block_on(c.function_exists("abs")).unwrap_err()));
 }

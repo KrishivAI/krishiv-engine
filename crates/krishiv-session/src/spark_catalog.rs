@@ -79,10 +79,31 @@ pub struct Function {
 }
 
 /// A name as `spark.catalog` takes it: `table`, `db.table` or `catalog.db.table`.
+/// The parts of a multipart name as Spark parses it: dots separate parts outside backquotes, and a doubled
+/// backquote inside backquotes is one.
 fn parts(name: &str) -> Vec<String> {
-    name.split('.')
-        .map(|p| p.trim_matches('`').to_owned())
-        .collect()
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quoted = false;
+    let mut chars = name.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '`' if quoted && chars.peek() == Some(&'`') => {
+                cur.push('`');
+                chars.next();
+            }
+            '`' => quoted = !quoted,
+            '.' if !quoted => out.push(std::mem::take(&mut cur)),
+            c => cur.push(c),
+        }
+    }
+    out.push(cur);
+    out
+}
+
+/// A SQL string literal of `v`: backslashes and single quotes escaped.
+fn literal(v: &str) -> String {
+    format!("'{}'", v.replace('\\', "\\\\").replace('\'', "\\'"))
 }
 
 fn quote(part: &str) -> String {
@@ -121,6 +142,18 @@ impl Catalog<'_> {
     async fn run(&self, sql: &str) -> Result<(), KrishivError> {
         self.session.sql(sql).await?.collect().await?;
         Ok(())
+    }
+
+    /// Checks what the SQL statement that stands for this call needs (`Browse` on what it names), as
+    /// `Session::sql` does before it runs one: the same policy, denial and audit record, so the catalog API
+    /// shows a principal no more than `SHOW TABLES` or `DESCRIBE` would.
+    async fn authorize_as(&self, sql: &str) -> Result<(), KrishivError> {
+        let env = self.session.query_env();
+        let statement = krishiv_sql::parse_statement(sql, &env.parser).map_err(|e| e.error)?;
+        let class = krishiv_sql::classify(&statement);
+        self.session
+            .authorize_statement(&statement, class, &env)
+            .await
     }
 
     fn case_sensitive(&self) -> bool {
@@ -188,8 +221,18 @@ impl Catalog<'_> {
 
     /// The namespaces of the current catalog, sorted by name, optionally only those matching the
     /// `*`/`|` pattern.
-    #[must_use]
-    pub fn list_databases(&self, pattern: Option<&str>) -> Vec<Database> {
+    ///
+    /// # Errors
+    /// The access error `SHOW NAMESPACES` would give.
+    pub async fn list_databases(
+        &self,
+        pattern: Option<&str>,
+    ) -> Result<Vec<Database>, KrishivError> {
+        self.authorize_as("SHOW NAMESPACES").await?;
+        Ok(self.databases(pattern))
+    }
+
+    fn databases(&self, pattern: Option<&str>) -> Vec<Database> {
         let mut out: Vec<Database> = self
             .session
             .state
@@ -207,8 +250,14 @@ impl Catalog<'_> {
     /// The namespace `name`.
     ///
     /// # Errors
-    /// `SCHEMA_NOT_FOUND`.
-    pub fn get_database(&self, name: &str) -> Result<Database, KrishivError> {
+    /// `SCHEMA_NOT_FOUND`, or the access error `DESCRIBE NAMESPACE` would give.
+    pub async fn get_database(&self, name: &str) -> Result<Database, KrishivError> {
+        self.authorize_as(&format!("DESCRIBE NAMESPACE {}", quoted(name)))
+            .await?;
+        self.lookup_database(name)
+    }
+
+    fn lookup_database(&self, name: &str) -> Result<Database, KrishivError> {
         let want = self.fold(name);
         self.session
             .state
@@ -227,9 +276,15 @@ impl Catalog<'_> {
     }
 
     /// Whether the namespace exists.
-    #[must_use]
-    pub fn database_exists(&self, name: &str) -> bool {
-        self.get_database(name).is_ok()
+    ///
+    /// # Errors
+    /// The access error `DESCRIBE NAMESPACE` would give.
+    pub async fn database_exists(&self, name: &str) -> Result<bool, KrishivError> {
+        match self.get_database(name).await {
+            Ok(_) => Ok(true),
+            Err(e) if e.error_class().name() == "SCHEMA_NOT_FOUND" => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 
     fn table_of(t: &CatalogTable) -> Table {
@@ -268,28 +323,38 @@ impl Catalog<'_> {
     /// The tables, views and temporary views of `database` (default: the current one), sorted by name.
     /// Local temporary views are listed for every database, global ones for `global_temp`.
     ///
+    /// Permanent tables and views come first, then the temporary views, each group sorted by name.
+    ///
     /// # Errors
-    /// `SCHEMA_NOT_FOUND` for an unknown namespace.
-    pub fn list_tables(
+    /// `SCHEMA_NOT_FOUND` for an unknown namespace, or the access error `SHOW TABLES` would give.
+    pub async fn list_tables(
         &self,
         database: Option<&str>,
         pattern: Option<&str>,
     ) -> Result<Vec<Table>, KrishivError> {
+        let statement = match database {
+            Some(d) => format!("SHOW TABLES IN {}", quoted(d)),
+            None => "SHOW TABLES".to_owned(),
+        };
+        self.authorize_as(&statement).await?;
         let keep = |n: &str| pattern.is_none_or(|p| crate::introspection::matches(p, n));
         let catalog = &self.session.state.catalog;
-        let mut out = Vec::new();
+        let mut permanent = Vec::new();
+        let mut temporary = Vec::new();
         if database.is_some_and(|d| d.eq_ignore_ascii_case(GLOBAL_NAMESPACE)) {
+            // Spark lists the global views and the session's local ones for `global_temp`, as
+            // `SHOW TABLES IN global_temp` does.
             for n in catalog.global_names() {
                 if keep(&n) {
-                    out.push(Self::temp_table(&n, true));
+                    temporary.push(Self::temp_table(&n, true));
                 }
             }
         } else {
             let db = match database {
-                Some(d) => self.get_database(d)?.name,
+                Some(d) => self.lookup_database(d)?.name,
                 None => self.current_database(),
             };
-            out.extend(
+            permanent.extend(
                 catalog
                     .store
                     .tables_in(&db)
@@ -297,21 +362,29 @@ impl Catalog<'_> {
                     .filter(|t| keep(&t.name))
                     .map(|t| Self::table_of(t)),
             );
-            for n in catalog.names() {
-                if keep(&n) {
-                    out.push(Self::temp_table(&n, false));
-                }
+        }
+        for n in catalog.names() {
+            if keep(&n) {
+                temporary.push(Self::temp_table(&n, false));
             }
         }
-        out.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok(out)
+        permanent.sort_by(|a, b| a.name.cmp(&b.name));
+        temporary.sort_by(|a, b| a.name.cmp(&b.name));
+        permanent.extend(temporary);
+        Ok(permanent)
     }
 
     /// The table, view or temporary view `name` (`t`, `db.t` or `global_temp.v`).
     ///
     /// # Errors
-    /// `TABLE_OR_VIEW_NOT_FOUND`.
-    pub fn get_table(&self, name: &str) -> Result<Table, KrishivError> {
+    /// `TABLE_OR_VIEW_NOT_FOUND`, or the access error `DESCRIBE TABLE` would give.
+    pub async fn get_table(&self, name: &str) -> Result<Table, KrishivError> {
+        self.authorize_as(&format!("DESCRIBE TABLE {}", quoted(name)))
+            .await?;
+        self.lookup_table(name)
+    }
+
+    fn lookup_table(&self, name: &str) -> Result<Table, KrishivError> {
         let not_found = || -> KrishivError {
             krishiv_common::error::TableOrViewNotFound {
                 relation_name: quoted(name),
@@ -358,36 +431,48 @@ impl Catalog<'_> {
     }
 
     /// Whether the table or view exists.
-    #[must_use]
-    pub fn table_exists(&self, name: &str) -> bool {
-        self.get_table(name).is_ok()
+    ///
+    /// # Errors
+    /// The access error `DESCRIBE TABLE` would give: a principal that may not browse a table learns
+    /// nothing about whether it exists.
+    pub async fn table_exists(&self, name: &str) -> Result<bool, KrishivError> {
+        match self.get_table(name).await {
+            Ok(_) => Ok(true),
+            Err(e) if e.error_class().name() == "TABLE_OR_VIEW_NOT_FOUND" => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 
     /// The columns of the table or view `name`, in table order.
     ///
     /// # Errors
-    /// `TABLE_OR_VIEW_NOT_FOUND`.
+    /// `TABLE_OR_VIEW_NOT_FOUND`, or the access error `DESCRIBE TABLE` would give.
     pub async fn list_columns(&self, name: &str) -> Result<Vec<Column>, KrishivError> {
-        let table = self.get_table(name)?;
+        self.authorize_as(&format!("DESCRIBE TABLE {}", quoted(name)))
+            .await?;
+        let table = self.lookup_table(name)?;
         if table.is_temporary {
             let df = self
                 .session
                 .sql(&format!("SELECT * FROM {}", quoted(name)))
                 .await?;
             let schema = df.schema().await?;
-            return Ok(schema
+            return schema
                 .fields()
                 .iter()
-                .map(|f| Column {
-                    name: f.name().clone(),
-                    description: None,
-                    data_type: f.data_type().to_string(),
-                    nullable: f.is_nullable(),
-                    is_partition: false,
-                    is_bucket: false,
-                    is_cluster: false,
+                .map(|f| {
+                    Ok(Column {
+                        name: f.name().clone(),
+                        description: None,
+                        // Spark's `dataType.catalogString`: `int`, `string`, `array<int>`.
+                        data_type: krishiv_types::DataType::from_arrow_field(f)?.catalog_string(),
+                        nullable: f.is_nullable(),
+                        is_partition: false,
+                        is_bucket: false,
+                        is_cluster: false,
+                    })
                 })
-                .collect());
+                .collect();
         }
         let ns = table
             .namespace
@@ -427,8 +512,18 @@ impl Catalog<'_> {
 
     /// The functions: the built-ins, the session's temporary functions and the current namespace's
     /// stored ones, sorted by name.
-    #[must_use]
-    pub fn list_functions(&self, pattern: Option<&str>) -> Vec<Function> {
+    ///
+    /// # Errors
+    /// The access error `SHOW FUNCTIONS` would give.
+    pub async fn list_functions(
+        &self,
+        pattern: Option<&str>,
+    ) -> Result<Vec<Function>, KrishivError> {
+        self.authorize_as("SHOW FUNCTIONS").await?;
+        Ok(self.functions(pattern))
+    }
+
+    fn functions(&self, pattern: Option<&str>) -> Vec<Function> {
         let keep = |n: &str| pattern.is_none_or(|p| crate::introspection::matches(p, n));
         let mut out: Vec<Function> = krishiv_functions::registry::builtins()
             .functions()
@@ -443,6 +538,9 @@ impl Catalog<'_> {
                 is_temporary: true,
             })
             .collect();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        // Spark lists the built-in functions before the session's and the stored ones.
+        let builtin = out.len();
         for n in self.session.state.sql_functions.snapshot().names() {
             if keep(n) {
                 out.push(Function {
@@ -469,7 +567,7 @@ impl Catalog<'_> {
                 });
             }
         }
-        out.sort_by(|a, b| a.name.cmp(&b.name));
+        out[builtin..].sort_by(|a, b| a.name.cmp(&b.name));
         out
     }
 
@@ -477,9 +575,10 @@ impl Catalog<'_> {
     ///
     /// # Errors
     /// `UNRESOLVED_ROUTINE`.
-    pub fn get_function(&self, name: &str) -> Result<Function, KrishivError> {
+    pub async fn get_function(&self, name: &str) -> Result<Function, KrishivError> {
+        self.authorize_as("SHOW FUNCTIONS").await?;
         let last = parts(name).pop().unwrap_or_default().to_lowercase();
-        self.list_functions(None)
+        self.functions(None)
             .into_iter()
             .find(|f| f.name == last)
             .ok_or_else(|| {
@@ -492,9 +591,15 @@ impl Catalog<'_> {
     }
 
     /// Whether the function exists.
-    #[must_use]
-    pub fn function_exists(&self, name: &str) -> bool {
-        self.get_function(name).is_ok()
+    ///
+    /// # Errors
+    /// The access error `SHOW FUNCTIONS` would give.
+    pub async fn function_exists(&self, name: &str) -> Result<bool, KrishivError> {
+        match self.get_function(name).await {
+            Ok(_) => Ok(true),
+            Err(e) if e.error_class().name() == "UNRESOLVED_ROUTINE" => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 
     /// Drops the local temporary view; whether it existed.
@@ -549,7 +654,11 @@ impl Catalog<'_> {
             .map(|(_, v)| *v);
         // A data source table without a schema takes it from its files (Spark infers it when it creates the
         // table); `CREATE TABLE` here wants columns, so they are read from the files first.
-        let inferred = match (given, source, location) {
+        let default_source = crate::conf::get(
+            &self.session.state.conf.snapshot(),
+            "spark.sql.sources.default",
+        );
+        let inferred = match (given, source.or(default_source.as_deref()), location) {
             (None, Some(source), Some(location)) => {
                 Some(self.infer_columns(source, location).await?)
             }
@@ -561,7 +670,6 @@ impl Catalog<'_> {
         if let Some(source) = source {
             sql.push_str(&format!(" USING {}", quote(source)));
         }
-        let literal = |v: &str| format!("'{}'", v.replace('\\', "\\\\").replace('\'', "\\'"));
         let (path, rest): (Vec<_>, Vec<_>) = options
             .iter()
             .partition(|(k, _)| k.eq_ignore_ascii_case("path"));
@@ -631,8 +739,7 @@ impl Catalog<'_> {
     /// # Errors
     /// The statement's.
     pub async fn refresh_by_path(&self, path: &str) -> Result<(), KrishivError> {
-        self.run(&format!("REFRESH '{}'", path.replace('\'', "\\'")))
-            .await
+        self.run(&format!("REFRESH {}", literal(path))).await
     }
 
     /// `ALTER TABLE name RECOVER PARTITIONS` (`MSCK REPAIR TABLE`).

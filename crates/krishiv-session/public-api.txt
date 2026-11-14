@@ -434,25 +434,25 @@ pub fn krishiv_session::spark_catalog::Catalog<'_>::clear_cache(&self)
 pub async fn krishiv_session::spark_catalog::Catalog<'_>::create_table(&self, &str, core::option::Option<&str>, core::option::Option<&str>, core::option::Option<&str>, &[(&str, &str)]) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::spark_catalog::Catalog<'_>::current_catalog(&self) -> alloc::string::String
 pub fn krishiv_session::spark_catalog::Catalog<'_>::current_database(&self) -> alloc::string::String
-pub fn krishiv_session::spark_catalog::Catalog<'_>::database_exists(&self, &str) -> bool
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::database_exists(&self, &str) -> core::result::Result<bool, krishiv_common::error::KrishivError>
 pub fn krishiv_session::spark_catalog::Catalog<'_>::drop_global_temp_view(&self, &str) -> bool
 pub fn krishiv_session::spark_catalog::Catalog<'_>::drop_temp_view(&self, &str) -> bool
-pub fn krishiv_session::spark_catalog::Catalog<'_>::function_exists(&self, &str) -> bool
-pub fn krishiv_session::spark_catalog::Catalog<'_>::get_database(&self, &str) -> core::result::Result<krishiv_session::spark_catalog::Database, krishiv_common::error::KrishivError>
-pub fn krishiv_session::spark_catalog::Catalog<'_>::get_function(&self, &str) -> core::result::Result<krishiv_session::spark_catalog::Function, krishiv_common::error::KrishivError>
-pub fn krishiv_session::spark_catalog::Catalog<'_>::get_table(&self, &str) -> core::result::Result<krishiv_session::spark_catalog::Table, krishiv_common::error::KrishivError>
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::function_exists(&self, &str) -> core::result::Result<bool, krishiv_common::error::KrishivError>
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::get_database(&self, &str) -> core::result::Result<krishiv_session::spark_catalog::Database, krishiv_common::error::KrishivError>
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::get_function(&self, &str) -> core::result::Result<krishiv_session::spark_catalog::Function, krishiv_common::error::KrishivError>
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::get_table(&self, &str) -> core::result::Result<krishiv_session::spark_catalog::Table, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::spark_catalog::Catalog<'_>::is_cached(&self, &str) -> core::result::Result<bool, krishiv_common::error::KrishivError>
 pub fn krishiv_session::spark_catalog::Catalog<'_>::list_catalogs(&self) -> alloc::vec::Vec<alloc::string::String>
 pub async fn krishiv_session::spark_catalog::Catalog<'_>::list_columns(&self, &str) -> core::result::Result<alloc::vec::Vec<krishiv_session::spark_catalog::Column>, krishiv_common::error::KrishivError>
-pub fn krishiv_session::spark_catalog::Catalog<'_>::list_databases(&self, core::option::Option<&str>) -> alloc::vec::Vec<krishiv_session::spark_catalog::Database>
-pub fn krishiv_session::spark_catalog::Catalog<'_>::list_functions(&self, core::option::Option<&str>) -> alloc::vec::Vec<krishiv_session::spark_catalog::Function>
-pub fn krishiv_session::spark_catalog::Catalog<'_>::list_tables(&self, core::option::Option<&str>, core::option::Option<&str>) -> core::result::Result<alloc::vec::Vec<krishiv_session::spark_catalog::Table>, krishiv_common::error::KrishivError>
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::list_databases(&self, core::option::Option<&str>) -> core::result::Result<alloc::vec::Vec<krishiv_session::spark_catalog::Database>, krishiv_common::error::KrishivError>
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::list_functions(&self, core::option::Option<&str>) -> core::result::Result<alloc::vec::Vec<krishiv_session::spark_catalog::Function>, krishiv_common::error::KrishivError>
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::list_tables(&self, core::option::Option<&str>, core::option::Option<&str>) -> core::result::Result<alloc::vec::Vec<krishiv_session::spark_catalog::Table>, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::spark_catalog::Catalog<'_>::recover_partitions(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub async fn krishiv_session::spark_catalog::Catalog<'_>::refresh_by_path(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub async fn krishiv_session::spark_catalog::Catalog<'_>::refresh_table(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub async fn krishiv_session::spark_catalog::Catalog<'_>::set_current_catalog(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub async fn krishiv_session::spark_catalog::Catalog<'_>::set_current_database(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
-pub fn krishiv_session::spark_catalog::Catalog<'_>::table_exists(&self, &str) -> bool
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::table_exists(&self, &str) -> core::result::Result<bool, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::spark_catalog::Catalog<'_>::uncache_table(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 impl<'a> core::clone::Clone for krishiv_session::spark_catalog::Catalog<'a>
 pub fn krishiv_session::spark_catalog::Catalog<'a>::clone(&self) -> krishiv_session::spark_catalog::Catalog<'a>
