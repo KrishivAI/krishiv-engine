@@ -21,17 +21,6 @@ use serde_json::{Value, json};
 /// Cases not matched yet, with the reason; each must still differ from Spark.
 const KNOWN_GAPS: &[(&str, &str)] = &[
     (
-        "overlap parquet k first, no schema",
-        "review 1: an overlapped data column must keep its position",
-    ),
-    ("overlap parquet k in the middle, no schema", "review 1"),
-    ("overlap parquet K upper-case, no schema", "review 1"),
-    (
-        "overlap parquet K upper-case, no schema, caseSensitive=true",
-        "review 1: names compare under spark.sql.caseSensitive",
-    ),
-    ("overlap json k first, no schema", "review 1"),
-    (
         "typed parquet k=1.5 as INT",
         "review 2: a partition value converts as Spark's PartitioningUtils",
     ),

@@ -605,7 +605,7 @@ impl FileReads {
                 .await
                 .map_err(|e| e.into_error(&files[0].display_path()))?
         };
-        let schema = with_partition_columns(schema, &partition_columns)?;
+        let schema = with_partition_columns(&schema, &partition_columns, self.case_sensitive());
         Ok(FileListing {
             format,
             files: files.into(),
@@ -1366,27 +1366,49 @@ fn user_schema_columns(
     Ok((Arc::new(arrow_schema::Schema::new(fields)), partitions))
 }
 
-fn with_partition_columns(schema: SchemaRef, partitions: &[FieldRef]) -> Result<SchemaRef> {
+/// The schema of an inferred read: the files' `schema` with the partition
+/// columns, as Spark 4.2.0's `HadoopFsRelation` combines them. A data
+/// column that has a partition column's name (compared under
+/// `case_sensitive`) keeps its position and takes the partition column's
+/// name, type and value (from the directory); the other partition columns
+/// come last, in directory order.
+fn with_partition_columns(
+    schema: &SchemaRef,
+    partitions: &[FieldRef],
+    case_sensitive: bool,
+) -> SchemaRef {
     if partitions.is_empty() {
-        return Ok(schema);
+        return Arc::clone(schema);
     }
-    // A data column with a partition column's name gives way to it: the
-    // value comes from the directory and the column comes last (Spark 4.2.0).
-    let fields: Vec<FieldRef> = schema
-        .fields()
-        .iter()
-        .filter(|f| {
-            !partitions
-                .iter()
-                .any(|p| f.name().eq_ignore_ascii_case(p.name()))
-        })
-        .cloned()
-        .chain(partitions.iter().cloned())
-        .collect();
-    Ok(Arc::new(arrow_schema::Schema::new_with_metadata(
+    let same = |a: &str, b: &str| {
+        if case_sensitive {
+            a == b
+        } else {
+            krishiv_types::equals_ignore_case(a, b)
+        }
+    };
+    let mut placed = vec![false; partitions.len()];
+    let mut fields: Vec<FieldRef> = Vec::with_capacity(schema.fields().len() + partitions.len());
+    for f in schema.fields() {
+        match partitions.iter().position(|p| same(f.name(), p.name())) {
+            Some(i) => {
+                placed[i] = true;
+                fields.push(Arc::clone(&partitions[i]));
+            }
+            None => fields.push(Arc::clone(f)),
+        }
+    }
+    fields.extend(
+        partitions
+            .iter()
+            .zip(&placed)
+            .filter(|(_, placed)| !**placed)
+            .map(|(p, _)| Arc::clone(p)),
+    );
+    Arc::new(arrow_schema::Schema::new_with_metadata(
         fields,
         schema.metadata().clone(),
-    )))
+    ))
 }
 
 /// The columns of a listing's schema.
@@ -1594,6 +1616,40 @@ mod tests {
                 ("value", "'abc'"),
                 ("dataType", "\"INT\""),
                 ("columnName", "`k`")
+            ]
+        );
+    }
+
+    #[test]
+    fn an_overlapped_data_column_keeps_its_place_as_the_partition_column() {
+        use arrow_schema::{DataType as A, Field, Schema};
+        let files: SchemaRef = Arc::new(Schema::new(vec![
+            Field::new("a", A::Utf8View, true),
+            Field::new("K", A::Utf8View, true),
+            Field::new("v", A::Utf8View, true),
+        ]));
+        let parts: Vec<FieldRef> = vec![
+            Arc::new(Field::new("k", A::Int32, true)),
+            Arc::new(Field::new("j", A::Int32, true)),
+        ];
+        let names = |s: &SchemaRef| {
+            s.fields()
+                .iter()
+                .map(|f| format!("{}:{}", f.name(), f.data_type()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names(&with_partition_columns(&files, &parts, false)),
+            ["a:Utf8View", "k:Int32", "v:Utf8View", "j:Int32"]
+        );
+        assert_eq!(
+            names(&with_partition_columns(&files, &parts, true)),
+            [
+                "a:Utf8View",
+                "K:Utf8View",
+                "v:Utf8View",
+                "k:Int32",
+                "j:Int32"
             ]
         );
     }
