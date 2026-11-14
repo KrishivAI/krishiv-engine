@@ -307,6 +307,7 @@ fn a_write_cancelled_for_any_reason_leaves_no_files() {
     let rt = EngineRuntime::builder().build().unwrap();
     let s = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
     let path = out.path().join("admin");
+    let watcher = s.clone();
     let writer = {
         let path = path.clone();
         std::thread::spawn(move || {
@@ -314,12 +315,18 @@ fn a_write_cancelled_for_any_reason_leaves_no_files() {
             block_on(df.write().format("parquet").save(path.to_str().unwrap()))
         })
     };
-    let id = QueryId::parse(OP).unwrap();
-    let until = Instant::now() + Duration::from_secs(30);
-    while !rt.cancel(&id, CancelReason::Admin) {
+    // Kill only once the write's own query runs: a cancel that comes while the statement is still
+    // being analyzed ends the `sql_with` call itself (`action.rs`), which is not what this checks.
+    let until = Instant::now() + Duration::from_secs(60);
+    while watcher.running_queries() == 0 {
         assert!(Instant::now() < until, "the write never started");
         std::thread::sleep(Duration::from_millis(10));
     }
+    let id = QueryId::parse(OP).unwrap();
+    assert!(
+        rt.cancel(&id, CancelReason::Admin),
+        "a running write is cancelled"
+    );
     let e = writer.join().unwrap().unwrap_err();
     assert_eq!(e.error_class().name(), "KRISHIV_QUERY_KILLED");
     assert_eq!(part_files(&path), 0);
