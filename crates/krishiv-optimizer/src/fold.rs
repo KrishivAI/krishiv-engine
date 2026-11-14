@@ -245,8 +245,10 @@ pub(crate) fn compare_values(x: &Literal, y: &Literal) -> Option<Ordering> {
                 |v: i128, from: u8| v.checked_mul(10_i128.checked_pow(u32::from(scale - from))?);
             up(*a, s.scale())?.cmp(&up(*b, t.scale())?)
         }
-        // Not foldable: nested values (`Literal::{Array, KeyValueMap,
-        // Struct}`) are not ordered here, nor are mixed types.
+        // Not foldable: nested values are not ordered here, nor are mixed types.
+        (Literal::Array { .. } | Literal::KeyValueMap { .. } | Literal::Struct { .. }, _) => {
+            return None;
+        }
         _ => return None,
     })
 }
@@ -406,9 +408,11 @@ fn to_array(l: &Literal) -> Option<ArrayRef> {
         Literal::String(v) => Arc::new(StringArray::from(vec![v.as_str()])),
         Literal::Date(v) => Arc::new(Date32Array::from(vec![*v])),
         Literal::TimestampNtz(v) => Arc::new(TimestampMicrosecondArray::from(vec![*v])),
-        // Not foldable: `Literal::{Array, KeyValueMap, Struct}` have no
-        // one-row form here, so a cast or call over a nested value stays as
-        // written.
+        // Not foldable: nested values have no one-row form here, so a cast or
+        // call over one stays as written.
+        Literal::Array { .. } | Literal::KeyValueMap { .. } | Literal::Struct { .. } => {
+            return None;
+        }
         _ => return None,
     })
 }

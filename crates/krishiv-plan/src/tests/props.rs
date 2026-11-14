@@ -113,7 +113,7 @@ impl Gen<'_> {
             DayTimeField::Minute,
             DayTimeField::Second,
         ];
-        match self.pick(16) {
+        match self.pick(19) {
             0 => Literal::Null(self.flag().then(|| self.data_type())),
             1 => Literal::Boolean(v.is_multiple_of(2)),
             2 => Literal::Byte(i8::from_le_bytes([v])),
@@ -138,6 +138,38 @@ impl Gen<'_> {
                     start,
                     end: start.max(ym[usize::from(self.pick(2))]),
                 }
+            }
+            16 => {
+                let contains_null = self.flag();
+                Literal::array(
+                    krishiv_types::ArrayType::new(DataType::Integer, contains_null),
+                    vec![Literal::Integer(i32::from(v)); usize::from(v % 3)],
+                )
+                .unwrap()
+            }
+            17 => {
+                let value_null = self.flag();
+                Literal::key_value_map(
+                    krishiv_types::MapType::new(DataType::String, DataType::Integer, value_null),
+                    vec![(
+                        Literal::String("k".to_owned()),
+                        Literal::Integer(i32::from(v)),
+                    )],
+                )
+                .unwrap()
+            }
+            18 => {
+                let nullable = self.flag();
+                let name = self.name();
+                Literal::struct_value(
+                    krishiv_types::StructType::new([krishiv_types::StructField::new(
+                        name,
+                        DataType::Integer,
+                        nullable,
+                    )]),
+                    vec![Literal::Integer(i32::from(v))],
+                )
+                .unwrap()
             }
             _ => {
                 let start = dt[usize::from(self.pick(4))];
@@ -378,7 +410,13 @@ impl Gen<'_> {
                 format: self.name(),
                 paths: self.many(1, 2, Gen::option),
                 options,
-                schema: None,
+                schema: self.flag().then(|| {
+                    krishiv_types::StructType::new([krishiv_types::StructField::new(
+                        "c",
+                        DataType::Integer,
+                        self.flag(),
+                    )])
+                }),
             }
         }
     }
@@ -1106,8 +1144,19 @@ fn m_source(s: &mut ReadSource, w: &mut Walk) -> bool {
             format,
             paths,
             options,
-            ..
-        } => m_string(format, w) || m_values(paths, w) || m_options(options, w),
+            schema,
+        } => {
+            let flipped = schema.as_ref().map_or_else(
+                || {
+                    Some(krishiv_types::StructType::new([
+                        krishiv_types::StructField::new("c", DataType::Integer, true),
+                    ]))
+                },
+                |_| None,
+            );
+            site!(w, *schema = flipped);
+            m_string(format, w) || m_values(paths, w) || m_options(options, w)
+        }
         // Nothing inside to mutate: the hash and counts are the whole value.
         ReadSource::Local(_) => false,
     }

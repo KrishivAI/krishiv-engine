@@ -244,7 +244,10 @@ fn value_or_null(e: &Expr) -> Option<Option<ScalarValue>> {
         Literal::Date(v) => ScalarValue::Date32(*v),
         Literal::Timestamp(v) | Literal::TimestampNtz(v) => ScalarValue::TimestampMicros(*v),
         // No scalar form for the file filters, so never pushed down: nested
-        // values (`Literal::{Array, KeyValueMap, Struct}`), maps, intervals.
+        // values, maps, intervals.
+        Literal::Array { .. } | Literal::KeyValueMap { .. } | Literal::Struct { .. } => {
+            return None;
+        }
         _ => return None,
     }))
 }

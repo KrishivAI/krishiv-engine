@@ -1150,7 +1150,7 @@ pub(crate) fn literal_array(l: &Literal) -> Result<ArrayRef> {
                 .map(literal_array)
                 .collect::<Result<Vec<_>>>()?;
             Arc::new(
-                StructArray::try_new(arrow_fields, columns, None)
+                StructArray::try_new_with_length(arrow_fields, columns, None, 1)
                     .map_err(|e| internal(&e.to_string()))?,
             )
         }

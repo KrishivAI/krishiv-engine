@@ -41,6 +41,11 @@ impl LocalRelation {
 
     /// A relation named by its 32-byte content hash, holding no lease (the
     /// plan codec's decode: the entry is found by hash where the plan runs).
+    ///
+    /// For decoding and for internal plans that must not keep the entry
+    /// alive; a session builds one from a lease with [`Self::from_lease`].
+    /// The hash is the caller's claim: a wrong one fails loudly at the
+    /// relation provider, which finds no entry (or none with that content).
     #[must_use]
     pub fn from_decoded(
         schema: SchemaRef,

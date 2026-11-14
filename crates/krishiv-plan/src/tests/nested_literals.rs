@@ -187,3 +187,50 @@ fn nested_literals_print_as_constructor_calls() {
     .unwrap();
     assert_eq!(map.to_string(), "MAP('a', 1)");
 }
+
+/// Every pair `Literal::eq` tells apart must encode differently: the
+/// canonical type keeps nullability and every struct field.
+#[test]
+fn the_hash_keeps_nullability_and_every_field_of_the_type() {
+    let arr = |contains_null: bool| {
+        Literal::array(
+            ArrayType::new(DataType::Integer, contains_null),
+            vec![Literal::Integer(1)],
+        )
+        .unwrap()
+    };
+    assert_ne!(arr(true), arr(false));
+    assert_ne!(hash_of(arr(true)), hash_of(arr(false)));
+
+    let map = |value_null: bool| {
+        Literal::key_value_map(
+            MapType::new(DataType::String, DataType::Integer, value_null),
+            vec![(Literal::String("a".to_owned()), Literal::Integer(1))],
+        )
+        .unwrap()
+    };
+    assert_ne!(map(true), map(false));
+    assert_ne!(hash_of(map(true)), hash_of(map(false)));
+
+    let st = |nullable: bool| {
+        Literal::struct_value(
+            StructType::new([StructField::new("a", DataType::Integer, nullable)]),
+            vec![Literal::Integer(1)],
+        )
+        .unwrap()
+    };
+    assert_ne!(st(true), st(false));
+    assert_ne!(hash_of(st(true)), hash_of(st(false)));
+
+    // Names that differ only after the 25th field (`simple_string` stops there).
+    let wide = |last: &str| {
+        let fields: Vec<_> = (0..25)
+            .map(|i| StructField::new(format!("f{i}"), DataType::Integer, true))
+            .chain([StructField::new(last, DataType::Integer, true)])
+            .collect();
+        Literal::struct_value(StructType::new(fields), vec![Literal::Integer(1); 26]).unwrap()
+    };
+    assert_ne!(wide("x"), wide("y"));
+    assert_ne!(hash_of(wide("x")), hash_of(wide("y")));
+    assert_eq!(hash_of(wide("x")), hash_of(wide("x")));
+}

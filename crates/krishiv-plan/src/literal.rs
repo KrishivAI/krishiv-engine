@@ -290,6 +290,11 @@ fn check_member(
 
 impl Literal {
     /// The type of this literal; `None` for an untyped `NULL`.
+    ///
+    /// Golden-pending (P3-T012a): a typed null of `VOID` is also `None`, so
+    /// an `ARRAY<VOID>`/`MAP<_, VOID>` literal holding a null member is
+    /// refused as an untyped null; whether Spark's `typedLit` reaches that
+    /// is settled with the literal goldens in part 2b.
     #[must_use]
     pub fn data_type(&self) -> Option<DataType> {
         Some(match self {

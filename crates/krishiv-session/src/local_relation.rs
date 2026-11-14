@@ -245,6 +245,10 @@ fn null_in(path: &str) -> KrishivError {
 /// Fails when `array` holds a null where `field` (and the fields under it) is non-nullable. A struct
 /// child's nulls count only where the struct itself is valid; a list's elements are checked over
 /// the whole values array (a null parent owns an empty range in the arrays Arrow writes).
+///
+/// Golden-pending (P3-T012a): a writer that leaves data under a null list slot, or a null grandchild
+/// under a null struct two levels up, can raise a violation Spark would not; carrying the parent
+/// validity mask down is settled with the nullability goldens.
 fn check_non_null(array: &ArrayRef, field: &Field, path: &str) -> Result<(), KrishivError> {
     if !field.is_nullable() && array.logical_null_count() > 0 {
         return Err(null_in(path));

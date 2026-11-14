@@ -718,6 +718,46 @@ impl<'k, 'a> Encoder<'k, 'a> {
         self.str(&t.simple_string());
     }
 
+    /// A nested literal's type without loss: `simple_string` drops
+    /// nullability, comments and fields past the 25th, which `Literal::eq`
+    /// keeps. Bounded by `DataType::MAX_NESTING_DEPTH`.
+    fn lossless_type(&mut self, t: &krishiv_types::DataType) {
+        use krishiv_types::DataType;
+        match t {
+            DataType::Array(a) => {
+                self.u8(1);
+                self.bool(a.contains_null());
+                self.lossless_type(a.element_type());
+            }
+            DataType::Map(m) => {
+                self.u8(2);
+                self.bool(m.value_contains_null());
+                self.lossless_type(m.key_type());
+                self.lossless_type(m.value_type());
+            }
+            DataType::Struct(st) => {
+                self.u8(3);
+                self.len(st.fields().len());
+                for f in st.fields() {
+                    self.str(f.name());
+                    self.bool(f.nullable());
+                    // The map is ordered by key, so its debug text is stable.
+                    let md = f.metadata();
+                    self.str(&if md.is_empty() {
+                        String::new()
+                    } else {
+                        format!("{:?}", md.as_map())
+                    });
+                    self.lossless_type(f.data_type());
+                }
+            }
+            leaf => {
+                self.u8(0);
+                self.data_type(leaf);
+            }
+        }
+    }
+
     fn exprs(&mut self, v: &'a [Arc<Expr>]) {
         self.len(v.len());
         v.iter().for_each(|e| self.expr(e));
@@ -1580,7 +1620,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 elements,
             } => {
                 self.u8(20);
-                self.data_type(&krishiv_types::DataType::Array(Arc::clone(data_type)));
+                self.lossless_type(&krishiv_types::DataType::Array(Arc::clone(data_type)));
                 self.len(elements.len());
                 for e in elements {
                     self.literal(e);
@@ -1588,7 +1628,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
             }
             Literal::KeyValueMap { data_type, entries } => {
                 self.u8(21);
-                self.data_type(&krishiv_types::DataType::Map(Arc::clone(data_type)));
+                self.lossless_type(&krishiv_types::DataType::Map(Arc::clone(data_type)));
                 self.len(entries.len());
                 for (k, v) in entries {
                     self.literal(k);
@@ -1597,7 +1637,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
             }
             Literal::Struct { data_type, fields } => {
                 self.u8(22);
-                self.data_type(&krishiv_types::DataType::Struct((**data_type).clone()));
+                self.lossless_type(&krishiv_types::DataType::Struct((**data_type).clone()));
                 self.len(fields.len());
                 for f in fields {
                     self.literal(f);
