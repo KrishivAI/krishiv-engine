@@ -193,6 +193,51 @@
    ]
   },
   {
+   "id": "part_cast_fails",
+   "setup": [
+    "create table pt using parquet partitioned by (dep) location '{tmp}/pt' as select * from values (1,'hr'),(2,'eng') as v(id,dep)"
+   ],
+   "sql": "select id from pt where cast(dep as int) = 1",
+   "error_class": "CAST_INVALID_INPUT"
+  },
+  {
+   "id": "part_cast_fails_with_data_filter",
+   "setup": [
+    "create table pt using parquet partitioned by (dep) location '{tmp}/pt' as select * from values (1,'hr'),(2,'eng') as v(id,dep)"
+   ],
+   "sql": "select id from pt where id > 0 and cast(dep as int) = 1",
+   "error_class": "CAST_INVALID_INPUT"
+  },
+  {
+   "id": "part_try_cast_tolerates",
+   "setup": [
+    "create table pt using parquet partitioned by (dep) location '{tmp}/pt' as select * from values (1,'hr'),(2,'eng') as v(id,dep)"
+   ],
+   "sql": "select id from pt where try_cast(dep as int) = 1",
+   "rows": []
+  },
+  {
+   "id": "part_cast_ok_numeric_values",
+   "setup": [
+    "create table pn using parquet partitioned by (dep) location '{tmp}/pn' as select * from values (1,'1'),(2,'2') as v(id,dep)"
+   ],
+   "sql": "select id, dep from pn where cast(dep as int) = 1",
+   "rows": [
+    [
+     "1",
+     "1"
+    ]
+   ]
+  },
+  {
+   "id": "part_delete_cast_fails",
+   "setup": [
+    "create table pt using parquet partitioned by (dep) location '{tmp}/pt' as select * from values (1,'hr'),(2,'eng') as v(id,dep)"
+   ],
+   "sql": "delete from pt where cast(dep as int) = 1",
+   "error_class": "UNSUPPORTED_FEATURE.TABLE_OPERATION"
+  },
+  {
    "id": "opts_self_join_header_first",
    "setup": [],
    "sql": "select a.name, b._c0 from csv.`{people}` WITH ('delimiter'=';','header'='true') a join csv.`{people}` WITH ('delimiter'=';','header'='false') b on true order by 1, 2",

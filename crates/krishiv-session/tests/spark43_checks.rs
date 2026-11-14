@@ -10,11 +10,13 @@
 //! - `gen_*`: with a generator in the SELECT list, HAVING runs before window
 //!   functions.
 //! - `opts_*`: two references to one relation keep their own `WITH (...)`.
+//! - `part_*`: a partition predicate that fails to evaluate (an ANSI cast of a
+//!   partition value) raises the error; it never keeps the partition or lets a
+//!   DELETE remove it. These cases build a small partitioned table under `{tmp}`.
 //!
 //! A case the engine cannot answer yet is listed in `PENDING` with the way it
 //! fails, and the test requires it to keep failing that way, so fixing one
-//! forces the list to shrink. (Check 3, a failing partition predicate, needs a
-//! partitioned table that the oracle's temp-view-only rule cannot build.)
+//! forces the list to shrink.
 #![cfg(test)]
 
 use std::path::Path;
@@ -51,9 +53,11 @@ fn cell(a: &ArrayRef, i: usize) -> String {
 /// Empty when the case matches Spark, else how it differs.
 fn run(dir: &Path, case: &Value) -> String {
     let s = Session::new().unwrap();
+    let scratch = tempfile::tempdir().unwrap();
     let sub = |sql: &str| {
         sql.replace("{kv}", dir.join("kv1.txt").to_str().unwrap())
             .replace("{people}", dir.join("people.csv").to_str().unwrap())
+            .replace("{tmp}", scratch.path().to_str().unwrap())
     };
     let result = block_on(async {
         for stmt in case["setup"].as_array().unwrap() {
@@ -95,7 +99,15 @@ fn run(dir: &Path, case: &Value) -> String {
                 "rows".to_owned()
             }
         }
-        (Err(e), _) => e.error_class().name().to_owned(),
+        (Err(e), _) => {
+            let got = e.error_class().name();
+            // An expected error is a match when the class agrees.
+            if case["error_class"].as_str() == Some(got) {
+                String::new()
+            } else {
+                got.to_owned()
+            }
+        }
         (Ok(_), None) => "no error".to_owned(),
     }
 }

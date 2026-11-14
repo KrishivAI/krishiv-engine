@@ -5,10 +5,12 @@ Every expectation comes from a REAL Spark 4.3.0 run (Spark Connect), never from 
   nd_*      (1) non-deterministic predicates (`rand`) are evaluated after the scan, never pushed into it.
   gen_*     (2) with a generator in the SELECT list, HAVING is applied before window functions.
   opts_*    (4) two references to the same relation with different `WITH (...)` options keep their own.
-Check (3), a failing partition predicate, needs a partitioned table and is not generated here.
+  part_*    (3) a partition predicate whose evaluation fails raises the error; it never keeps the
+            partition or lets a DELETE remove it. These cases build a small partitioned parquet table
+            under `{tmp}` (a scratch directory of the Spark server, never a shared one).
 
 Data is read from the Spark image's read-only example files (`{kv}` is kv1.txt, `{people}` is
-people.csv); copies live beside the fixture. Temporary views only; nothing is written. Each row is
+people.csv); copies live beside the fixture. Other cases use temporary views only. Each row is
 recorded as the text of its values, rows sorted. Output is deterministic and has no local paths.
 
     SPARK_HOME=<empty dir> uv run --no-project --python 3.12 --with 'pyspark-client==4.3.0' \\
@@ -21,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import uuid
 from pathlib import Path
 
 FORMAT_VERSION = 1
@@ -34,6 +37,15 @@ PEOPLE = "csv.`{people}` WITH ('delimiter'=';','header'='{h}')"
 P_HDR = PEOPLE.format(h="true", people="{people}")
 P_RAW = PEOPLE.format(h="false", people="{people}")
 VIEW_D = "create temporary view d as select * from values (1,10),(2,20),(3,30) as t(k,v)"
+# (3): `dep` holds a non-numeric partition value, `pn` only numeric ones.
+PT = (
+    "create table pt using parquet partitioned by (dep) location '{tmp}/pt' as "
+    "select * from values (1,'hr'),(2,'eng') as v(id,dep)"
+)
+PN = (
+    "create table pn using parquet partitioned by (dep) location '{tmp}/pn' as "
+    "select * from values (1,'1'),(2,'2') as v(id,dep)"
+)
 
 CASES: list[tuple[str, list[str], str]] = [
     # (1) non-deterministic predicates stay after the scan.
@@ -65,6 +77,12 @@ CASES: list[tuple[str, list[str], str]] = [
         "(select k, explode(array(1,2)) x, sum(v) over () s from d group by k, v) |> where x > 1",
     ),
     ("nogen_window_sum", [VIEW_D], "select k, sum(v) over (order by k) s from d group by k, v having k > 1 order by k"),
+    # (3) a failing partition predicate raises; it does not keep or remove the partition.
+    ("part_cast_fails", [PT], "select id from pt where cast(dep as int) = 1"),
+    ("part_cast_fails_with_data_filter", [PT], "select id from pt where id > 0 and cast(dep as int) = 1"),
+    ("part_try_cast_tolerates", [PT], "select id from pt where try_cast(dep as int) = 1"),
+    ("part_cast_ok_numeric_values", [PN], "select id, dep from pn where cast(dep as int) = 1"),
+    ("part_delete_cast_fails", [PT], "delete from pt where cast(dep as int) = 1"),
     # (4) each reference keeps its own options.
     (
         "opts_self_join_header_first",
@@ -84,6 +102,10 @@ CASES: list[tuple[str, list[str], str]] = [
 ]
 
 
+def sub(sql: str, tmp: str) -> str:
+    return sql.replace("{kv}", f"{RES}/kv1.txt").replace("{people}", f"{RES}/people.csv").replace("{tmp}", tmp)
+
+
 def run(remote: str) -> list[dict]:
     from pyspark.sql import SparkSession
 
@@ -91,11 +113,14 @@ def run(remote: str) -> list[dict]:
     for cid, setup, sql in CASES:
         # A fresh session per case; temporary views only.
         spark = SparkSession.builder.remote(remote).create()
+        tmp = f"/tmp/p3-check3-{uuid.uuid4().hex[:12]}"
         try:
             spark.sql("SET spark.sql.ansi.enabled=true").collect()
-            for stmt in setup:
+            for t in ("pt", "pn"):  # tables live in the server's shared catalog: start from none
+                spark.sql(f"drop table if exists {t}").collect()
+            for stmt in (sub(x, tmp) for x in setup):
                 spark.sql(stmt).collect()
-            real = sql.replace("{kv}", f"{RES}/kv1.txt").replace("{people}", f"{RES}/people.csv")
+            real = sub(sql, tmp)
             case = {"id": cid, "setup": setup, "sql": sql}
             try:
                 rows = [[None if v is None else str(v) for v in r] for r in spark.sql(real).collect()]
