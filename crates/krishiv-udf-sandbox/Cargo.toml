@@ -12,7 +12,7 @@ publish = true
 workspace = true
 
 [dependencies]
-krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
+krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
 thiserror.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
