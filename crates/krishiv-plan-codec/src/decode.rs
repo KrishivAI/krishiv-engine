@@ -532,6 +532,25 @@ impl Decoder {
                 offset: l.offset,
                 limit: l.limit,
             },
+            Kind::Sample(s) => {
+                // The planner writes finite bounds with `0 <= lower <= upper`.
+                if !(s.lower.is_finite()
+                    && s.upper.is_finite()
+                    && 0.0 <= s.lower
+                    && s.lower <= s.upper)
+                {
+                    return Err(CodecError::Corrupt(format!(
+                        "a sample's bounds [{}, {}) are not a range of draws",
+                        s.lower, s.upper
+                    )));
+                }
+                PhysNode::Sample {
+                    input: self.boxed(s.input)?,
+                    lower: s.lower,
+                    upper: s.upper,
+                    seed: s.seed,
+                }
+            }
             Kind::ReplicateRows(r) => PhysNode::ReplicateRows {
                 input: self.boxed(r.input)?,
                 layout: layout(&r.layout),
