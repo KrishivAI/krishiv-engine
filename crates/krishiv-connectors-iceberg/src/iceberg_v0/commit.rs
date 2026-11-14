@@ -242,9 +242,15 @@ pub(crate) async fn commit_append(
 /// intervening snapshot, the check and Java's message, and the §7.4 cleanup
 /// of a conflict follows. [`Validation::none`] is [`commit_append`].
 ///
+/// S0, where validation starts, is `base`'s head of the branch: `base` must
+/// be the metadata the write read when it was planned, never a refreshed
+/// one, or the validated window shrinks silently (review nit 7).
+///
 /// # Errors
 /// As [`commit_append`]; a validation read that fails ends the write with
-/// its error (every request's outcome known, nothing applied).
+/// its error, cleaned up as any other error: the files removed when every
+/// request's outcome is known, kept after an unknown answer, and
+/// `KRISHIV_ICEBERG_COMMIT_STATE_UNKNOWN` while an attempt is unresolved.
 ///
 /// # Cancellation
 /// As [`commit_append`].

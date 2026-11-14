@@ -18,16 +18,25 @@
 //!   `MergingSnapshotProducer.java:957-1000`): for each intervening snapshot
 //!   whose `operation` some enabled check looks at, only the manifests it added
 //!   (`added_snapshot_id` = that snapshot) of the content the checks need, read
-//!   with the spec's inheritance; within them only `ADDED` and `DELETED`
-//!   entries. `EXISTING` entries (a foreign merged manifest) are never changes
-//!   (R:S4); each check keeps only entries whose snapshot id is one of the
-//!   intervening snapshots of its own operations.
+//!   with the spec's inheritance; within them `ADDED` and `DELETED` entries.
+//!   `EXISTING` entries (a foreign merged manifest) are not changes (R:S4),
+//!   and the data and DV checks keep only entries whose snapshot id is one of
+//!   the intervening snapshots of their own operations. The exception is the
+//!   added delete files check, which reads delete manifests as Java's
+//!   `DeleteFileIndex` does (`.liveEntries()`, `DeleteFileIndex.java:504`,
+//!   `:668`): every live entry, `ADDED` or `EXISTING`, whichever snapshot
+//!   added the file, filtered by data sequence number only.
 //! - **The checks** ([`check`], step 3), each over the conflict filter (`None`
 //!   matches everything) through [`Pruner`] in [`PruneOptions::conservative`]:
 //!   every unknown is a match (a missing or undecodable bound, an unknown
 //!   transform, a spec or column the filter cannot be projected onto, missing
 //!   counts). Here pruning is the correctness mechanism: a wrong "cannot
-//!   match" is a lost update (R:S11).
+//!   match" is a lost update (R:S11). An equality delete file is judged by
+//!   the metrics of its `equality_ids` columns only: it deletes every row
+//!   whose key matches, whatever its other columns, so a full-row delete's
+//!   metrics on another column say nothing about the rows it deletes
+//!   (review finding 2). Position deletes' `row` metrics describe the deleted
+//!   rows and are used.
 //!
 //! | Check | Operations (`MergingSnapshotProducer.java:73-85`) | Java |
 //! |---|---|---|
@@ -41,16 +50,39 @@
 //! `KRISHIV_ICEBERG_COMMIT_CONFLICT`. The checks run in the table's order and
 //! the first that fires is reported, as Java throws at the first failure.
 //!
-//! Divergences, all toward refusal or equivalent: the path checks ignore the
-//! conflict filter (Java's `validateDataFilesExist` also applies it, `:842`),
-//! as a file this write depends on conflicts whatever its rows; the added
-//! delete files check counts only `ADDED` entries of the intervening
-//! snapshots (Java's `DeleteFileIndex` also counts a live `EXISTING` entry
-//! whose data sequence number is above S0's, which a foreign rewrite of
-//! delete manifests carries over unchanged). The DV description in the
-//! "concurrently added DV" message follows `ContentFileUtil.dvDesc`'s shape,
-//! **unverified** (the source was not read).
+//! Divergences, all toward refusal: the path checks ignore the conflict
+//! filter (Java's `validateDataFilesExist` also applies it, `:842`), as a
+//! file this write depends on conflicts whatever its rows; the checks run in
+//! one fixed order (only which message is reported can differ; unit 2 should
+//! follow each operation's Java order, `BaseRowDelta` runs
+//! `validateDataFilesExist` first); an equality delete is not pruned by
+//! metrics of columns outside `equality_ids` (Java probably prunes it by all
+//! of them through `ManifestReader`'s row filter; unverified).
+//!
+//! Open items (review of unit 1, not changed here):
+//! - **Filter binding (finding 3, Java parity):** the conflict filter is
+//!   bound by name to Sn's current schema ([`Judge::of`]), as Java binds it
+//!   to the refreshed table. A rename between S0 and Sn (say `a` and `b`
+//!   swapped) binds a filter written against S0's names to other field ids,
+//!   so a file that matches may be pruned: a false "no conflict", an
+//!   exception to R:S11 kept for parity. Unit 2 should carry the filter's
+//!   field ids from planning, or treat a column whose id changed as unknown.
+//! - **The CoW check set (finding 4):** design note §7.3 maps CoW to "added
+//!   delete files matching the filter". As recalled (unverified),
+//!   `BaseOverwriteFiles.validate` with Spark's CoW (no row filter) runs only
+//!   `validateNoNewDeletesForDataFiles` over the files the write removes, so
+//!   Krishiv's set is wider: no lost update, but a concurrent MoR DELETE of
+//!   another file in the filter's region fails a CoW UPDATE that Spark
+//!   commits. Verify against `BaseOverwriteFiles` and `SparkWrite` at the tag
+//!   before unit 2 wires CoW; record it as a divergence or implement
+//!   `validateNoNewDeletesForDataFiles`.
+//! - **Message texts (findings 8, 9), unverified:** "Missing required files
+//!   to delete: ..." joins with `", "`, where Java's `ManifestFilterManager`
+//!   may join with `","` (`Joiner.on(",")`, recalled); the DV description in
+//!   the "concurrently added DV" message follows `ContentFileUtil.dvDesc`'s
+//!   recalled shape. Neither source was read.
 
+use std::borrow::Cow;
 use std::collections::{BTreeSet, HashSet};
 
 use iceberg::io::FileIO;
@@ -62,7 +94,7 @@ use super::scan::{
     parse_manifest, partition_specs, read_capped, read_manifest_list, schema_fields,
 };
 use crate::plan::entry::{
-    ContentFile, DataFileEntry, DeleteKind, EntryStatus, LiveEntry, ManifestContent,
+    ContentFile, ContentKind, DataFileEntry, DeleteKind, EntryStatus, LiveEntry, ManifestContent,
     ManifestFileEntry, inherit_changes,
 };
 use crate::plan::metrics::WriterMetrics;
@@ -296,7 +328,8 @@ pub(crate) struct Change {
     pub(crate) operation: Operation,
     /// One manifest it added.
     pub(crate) manifest: ManifestFileEntry,
-    /// Its `ADDED` and `DELETED` entries, inherited.
+    /// Its `ADDED` and `DELETED` entries, inherited; for a delete manifest
+    /// the added delete files check reads, its `EXISTING` entries too.
     pub(crate) entries: Vec<LiveEntry>,
 }
 
@@ -411,7 +444,7 @@ pub(crate) fn check(history: &History, v: &Validation, judge: &Judge) -> Option<
     let always = PushdownExpr::Constant(true);
     let pruner = judge.pruner(v.filter.as_ref().unwrap_or(&always));
     let matches = |c: &Change, f: &ContentFile| {
-        pruner.manifest_may_match(&c.manifest) && pruner.file_may_match(f)
+        pruner.manifest_may_match(&c.manifest) && pruner.file_may_match(&judged(f))
     };
     if v.added_data() {
         let found: Vec<_> = history
@@ -430,18 +463,25 @@ pub(crate) fn check(history: &History, v: &Validation, judge: &Judge) -> Option<
     }
     if v.checks.added_delete_files && !history.v1 {
         let mut seen = HashSet::new();
+        // `DeleteFileIndex` over the manifests the intervening `overwrite` /
+        // `delete` snapshots added: every live entry (`ADDED` or `EXISTING`,
+        // whichever snapshot added the file), `DeleteFileIndex.java:504`,
+        // `:668`.
         let found: Vec<_> = history
-            .entries(
-                ADDED_DELETES_OPS,
-                ManifestContent::Deletes,
-                EntryStatus::Added,
-            )
+            .changes
+            .iter()
+            .filter(|c| {
+                ADDED_DELETES_OPS.contains(&c.operation)
+                    && c.manifest.content == ManifestContent::Deletes
+            })
+            .flat_map(|c| c.entries.iter().map(move |e| (c, e)))
             .filter(|(c, e)| {
                 let d = data_entry(e);
                 // `afterSequenceNumber(startingSequenceNumber)`; a missing one
                 // counts.
-                d.data_sequence_number
-                    .is_none_or(|s| s > history.start_sequence)
+                d.status != EntryStatus::Deleted
+                    && d.data_sequence_number
+                        .is_none_or(|s| s > history.start_sequence)
                     && matches(c, &d.file)
             })
             // A `LinkedHashSet` of locations.
@@ -466,6 +506,27 @@ pub(crate) fn check(history: &History, v: &Validation, judge: &Judge) -> Option<
         return removed(history, v);
     }
     None
+}
+
+/// `f` as the checks may prune it (review finding 2): an equality delete
+/// applies to every row whose equality key matches, whatever its other
+/// columns, so only the metrics of its `equality_ids` columns are kept (the
+/// rest are unknown: a match). A full-row equality delete's metrics on other
+/// columns describe the row images written, not the rows it deletes. Data
+/// files, position deletes (their `row` metrics describe the deleted rows)
+/// and DVs as they are.
+fn judged(f: &ContentFile) -> Cow<'_, ContentFile> {
+    if f.content != ContentKind::EqualityDeletes {
+        return Cow::Borrowed(f);
+    }
+    let keys: HashSet<i32> = f.equality_ids.iter().flatten().copied().collect();
+    let mut g = f.clone();
+    g.value_counts.retain(|id, _| keys.contains(id));
+    g.null_counts.retain(|id, _| keys.contains(id));
+    g.nan_counts.retain(|id, _| keys.contains(id));
+    g.lower_bounds.retain(|id, _| keys.contains(id));
+    g.upper_bounds.retain(|id, _| keys.contains(id));
+    Cow::Owned(g)
 }
 
 /// The conflict of a check that found the files `found` (none: no
@@ -518,7 +579,7 @@ fn added_dvs(history: &History, v: &Validation, pruner: &Pruner<'_>) -> Option<F
                 || d.entry.status != EntryStatus::Added
                 || !ids.contains(&d.entry.snapshot_id)
                 || !v.dvs_for.contains(referenced)
-                || !pruner.file_may_match(f)
+                || !pruner.file_may_match(&judged(f))
             {
                 continue;
             }
@@ -540,6 +601,13 @@ fn added_dvs(history: &History, v: &Validation, pruner: &Pruner<'_>) -> Option<F
 
 /// The files of [`Validation::removes`] and [`Validation::references`] an
 /// intervening snapshot removed (`DELETED` entries, by path).
+///
+/// Not the structural check (review finding 6): Java's "Missing required
+/// files to delete" comes from `ManifestFilterManager` at `apply()`, against
+/// Sn's live entries whoever removed the file, while this sees only the
+/// `DELETED` entries intervening `overwrite`/`replace`/`delete` snapshots
+/// wrote. It gives the early message; unit 2's re-application of the removals
+/// to Sn (§7.3 step 4a.2) must still fail on a file that is not live.
 fn removed(history: &History, v: &Validation) -> Option<Fired> {
     let gone = |ops: &[Operation], wanted: &BTreeSet<String>| -> Vec<(i64, String)> {
         history
@@ -621,7 +689,12 @@ pub(crate) async fn read_history(
             if manifest.added_snapshot_id != *id || !wanted(manifest.content) {
                 continue;
             }
-            let entries = read_changes(io, &manifest, max_bytes).await?;
+            // Java's `DeleteFileIndex` reads every live entry of a delete
+            // manifest (review finding 1).
+            let existing = manifest.content == ManifestContent::Deletes
+                && v.checks.added_delete_files
+                && ADDED_DELETES_OPS.contains(&op);
+            let entries = read_changes(io, &manifest, existing, max_bytes).await?;
             changes.push(Change {
                 snapshot_id: *id,
                 operation: op.clone(),
@@ -642,10 +715,12 @@ pub(crate) async fn read_history(
     })
 }
 
-/// A manifest's `ADDED` and `DELETED` entries, inherited.
+/// A manifest's `ADDED` and `DELETED` entries, inherited; its `EXISTING`
+/// entries too when `existing`.
 async fn read_changes(
     io: &FileIO,
     manifest: &ManifestFileEntry,
+    existing: bool,
     max_bytes: u64,
 ) -> Result<Vec<LiveEntry>, KrishivError> {
     if manifest.encrypted {
@@ -657,7 +732,7 @@ async fn read_changes(
     let declared = u64::try_from(manifest.length).ok().filter(|n| *n > 0);
     let bytes = read_capped(io, "manifest", &manifest.path, declared, max_bytes).await?;
     let mut entries = inherit_changes(manifest, parse_manifest(&bytes, manifest.spec_id)?)?;
-    entries.retain(|e| data_entry(e).status != EntryStatus::Existing);
+    entries.retain(|e| existing || data_entry(e).status != EntryStatus::Existing);
     Ok(entries)
 }
 
