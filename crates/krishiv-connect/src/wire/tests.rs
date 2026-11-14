@@ -151,6 +151,7 @@ const fn limits(bytes: usize, messages: usize, nesting: usize) -> Limits {
         messages,
         decoded: usize::MAX,
         nesting,
+        version: ClientVersion::V4_3,
     }
 }
 
@@ -160,6 +161,7 @@ const fn decoded(decoded: usize) -> Limits {
         messages: usize::MAX,
         decoded,
         nesting: usize::MAX,
+        version: ClientVersion::V4_3,
     }
 }
 
@@ -487,4 +489,263 @@ fn the_4_3_additions_decode_in_the_superset() {
         "{}",
         err.message()
     );
+}
+
+const fn opts(version: ClientVersion) -> DecodeOptions {
+    DecodeOptions {
+        version,
+        max_nesting: MAX_NESTING,
+    }
+}
+
+#[test]
+fn client_version_comes_from_the_client_type() {
+    for (client_type, want) in [
+        (
+            "_SPARK_CONNECT_PYTHON spark/3.5.0",
+            Some(ClientVersion::V3_5),
+        ),
+        (
+            "_SPARK_CONNECT_PYTHON spark/4.0.0",
+            Some(ClientVersion::V4_0),
+        ),
+        ("spark/4.1.1", Some(ClientVersion::V4_1)),
+        (
+            "_SPARK_CONNECT_PYTHON spark/4.2.1 os/linux",
+            Some(ClientVersion::V4_2),
+        ),
+        (
+            "_SPARK_CONNECT_SCALA spark/4.3.0-SNAPSHOT",
+            Some(ClientVersion::V4_3),
+        ),
+        ("spark/5.0.0", Some(ClientVersion::V4_3)),
+        ("myspark/1.2 spark/4.3.0", Some(ClientVersion::V4_3)),
+        ("myspark/1.2", None),
+        ("something-else", None),
+        ("spark/x.y", None),
+    ] {
+        assert_eq!(
+            ClientVersion::from_client_type(client_type),
+            want,
+            "{client_type}"
+        );
+    }
+}
+
+#[test]
+fn every_gated_field_exists_in_4_3() {
+    // That the fields are absent from 4.2 is pinned by `tests/scripts/check_proto_manifest.py`.
+    for &(name, number, _) in FIELDS_SINCE_4_3 {
+        let found = layout::MESSAGES
+            .iter()
+            .find(|m| m.name == name)
+            .is_some_and(|m| m.fields.binary_search_by_key(&number, |&(n, _)| n).is_ok());
+        assert!(found, "{name} {number} missing from the 4.3 layout");
+    }
+}
+
+#[test]
+fn a_field_newer_than_the_declared_version_is_56k00() {
+    let zip = field(48, &[field(1, &sql_leaf()), field(2, &sql_leaf())].concat());
+    let literal = |number| field(1, &field(number, &[0x08, 0x01]));
+    // A cast to a nanosecond DataType: Expression.cast = 7 { expr = 1, type = 2 { field 29 } }.
+    let cast = |number| field(7, &[field(1, &[]), field(2, &field(number, &[]))].concat());
+    let flow = |number| {
+        // PipelineCommand.DefineFlow.AutoCdcFlowDetails: reached through its own layout id.
+        let id = layout::MESSAGES
+            .iter()
+            .position(|m| m.name == "PipelineCommand.DefineFlow.AutoCdcFlowDetails")
+            .expect("layout");
+        (id, field(number, &[]))
+    };
+    let parameters = |e: &KrishivError, full_name: &str, name: &str, number: u32| {
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported
+        );
+        assert!(
+            e.message().ends_with(&format!(
+                "This oneOf field message in {full_name} is not supported: {name}({number})"
+            )),
+            "{}",
+            e.message()
+        );
+    };
+    for version in [
+        ClientVersion::V3_5,
+        ClientVersion::V4_0,
+        ClientVersion::V4_1,
+        ClientVersion::V4_2,
+    ] {
+        parameters(
+            &decode_relation_with(&zip, &opts(version)).expect_err("zip"),
+            "spark.connect.Relation",
+            "ZIP",
+            48,
+        );
+        for (number, name) in [(29, "TIMESTAMP_NTZ_NANOS"), (30, "TIMESTAMP_LTZ_NANOS")] {
+            parameters(
+                &decode_expression_with(&literal(number), &opts(version)).expect_err("literal"),
+                "spark.connect.Expression.Literal",
+                name,
+                number,
+            );
+            parameters(
+                &decode_expression_with(&cast(number), &opts(version)).expect_err("cast type"),
+                "spark.connect.DataType",
+                name,
+                number,
+            );
+        }
+        // The SCD2 lists, walked from their own message.
+        for (number, name) in [
+            (11, "TRACK_HISTORY_COLUMN_LIST"),
+            (12, "TRACK_HISTORY_EXCEPT_COLUMN_LIST"),
+        ] {
+            let (id, bytes) = flow(number);
+            let e = scan(
+                &layout::MESSAGES,
+                u16::try_from(id).expect("id"),
+                &bytes,
+                &Limits {
+                    bytes: usize::MAX,
+                    messages: usize::MAX,
+                    decoded: usize::MAX,
+                    nesting: usize::MAX,
+                    version,
+                },
+            )
+            .expect_err("scd2");
+            parameters(
+                &KrishivError::from(e),
+                "spark.connect.PipelineCommand.DefineFlow.AutoCdcFlowDetails",
+                name,
+                number,
+            );
+        }
+    }
+    // A 4.3 client, and the default profile, are accepted.
+    decode_relation_with(&zip, &opts(ClientVersion::V4_3)).expect("4.3 zip");
+    decode_relation(&zip).expect("default profile");
+    decode_expression_with(&cast(29), &opts(ClientVersion::V4_3)).expect("4.3 cast");
+    // A field every version has is not gated.
+    decode_relation_with(&sql_leaf(), &opts(ClientVersion::V3_5)).expect("sql");
+}
+
+fn capped(max_nesting: usize) -> DecodeOptions {
+    DecodeOptions {
+        max_nesting,
+        ..DecodeOptions::default()
+    }
+}
+
+#[test]
+fn the_depth_cap_is_configurable_and_exact() {
+    // A cap of 64: depth 64 decodes, depth 65 fails, however the default stands.
+    let at = filter_chain(31, &table_leaf()); // 31 * 2 + 2 = 64
+    decode_relation_with(&at, &capped(64)).expect("depth 64 at a cap of 64");
+    let over = filter_chain(32, &sql_leaf()); // 32 * 2 + 1 = 65
+    let err = decode_relation_with(&over, &capped(64)).expect_err("depth 65 at a cap of 64");
+    assert_eq!(class(&err), ErrorClass::FailedToParseTooComplex);
+    // The same plan is fine under the default cap, and a larger cap accepts deeper plans.
+    decode_relation(&over).expect("default cap");
+    let deeper = filter_chain(1_000, &sql_leaf());
+    decode_relation_with(&deeper, &capped(2_048)).expect("depth 2001 at a cap of 2048");
+    assert!(decode_relation_with(&deeper, &capped(2_000)).is_err());
+    // 100,000 levels built as raw bytes are rejected by the walk, whatever the cap is.
+    let hostile = filter_chain(100_000, &sql_leaf());
+    let err = decode_relation_with(&hostile, &capped(64)).expect_err("hostile depth");
+    assert_eq!(class(&err), ErrorClass::FailedToParseTooComplex);
+}
+
+#[test]
+fn the_cap_comes_from_krishiv_connect_max_plan_depth() {
+    use krishiv_common::config::Config;
+    let mut config = Config::new();
+    assert_eq!(
+        DecodeOptions::from_config(&config, ClientVersion::V4_2),
+        DecodeOptions {
+            version: ClientVersion::V4_2,
+            max_nesting: 1024
+        }
+    );
+    config.set("krishiv.connect.maxPlanDepth", "64").unwrap();
+    assert_eq!(
+        DecodeOptions::from_config(&config, ClientVersion::V4_3).max_nesting,
+        64
+    );
+    // A cap above what the decode stack is sized for is lowered to MAX_NESTING_LIMIT.
+    config
+        .set("krishiv.connect.maxPlanDepth", "1000000")
+        .unwrap();
+    assert_eq!(
+        DecodeOptions::from_config(&config, ClientVersion::V4_3).max_nesting,
+        super::MAX_NESTING_LIMIT
+    );
+    // Zero and negative caps are refused when set.
+    assert!(config.set("krishiv.connect.maxPlanDepth", "0").is_err());
+    assert!(config.set("krishiv.connect.maxPlanDepth", "-5").is_err());
+}
+
+#[test]
+fn decoding_and_dropping_a_plan_at_the_cap_fits_a_256_kb_stack() {
+    // The decoder moves a deep message to a big-stack thread for decoding and for dropping, so the
+    // caller's stack stays small whatever the cap is.
+    let bytes = filter_chain(MAX_NESTING / 2 - 1, &table_leaf());
+    let handle = std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(move || {
+            // Only decode and drop run here: both hop to the big-stack thread, unlike prost's
+            // recursive `encoded_len`, which is deliberately not called.
+            let rel = decode_relation(&bytes).expect("decodes at the cap");
+            drop(rel);
+        })
+        .expect("spawn");
+    handle.join().expect("no stack overflow");
+}
+
+#[test]
+fn a_3_5_client_may_send_the_fields_4_0_deleted() {
+    // CachedLocalRelation { userId = 1, sessionId = 2, hash = 3 } inside Relation.cached_local_relation = 36.
+    let cached = |with_legacy: bool| {
+        let mut body = Vec::new();
+        if with_legacy {
+            body.extend(field(1, b"user"));
+            body.extend(field(2, b"session"));
+        }
+        body.extend(field(3, b"abc"));
+        field(36, &body)
+    };
+    let rel = decode_relation_with(&cached(true), &opts(ClientVersion::V3_5)).expect("3.5 client");
+    assert!(matches!(
+        rel.rel_type,
+        Some(relation::RelType::CachedLocalRelation(ref c)) if c.hash == "abc"
+    ));
+    // Only a 3.5 client: any other declared version, and the default profile, refuse them.
+    for version in [ClientVersion::V4_0, ClientVersion::V4_3] {
+        let err = decode_relation_with(&cached(true), &opts(version)).expect_err("deleted field");
+        assert_eq!(class(&err), ErrorClass::KrishivUnsupportedFeature);
+    }
+    decode_relation_with(&cached(false), &opts(ClientVersion::V4_0)).expect("hash only");
+}
+
+#[test]
+fn options_built_by_hand_cannot_exceed_the_ceiling() {
+    // A cap far above the ceiling still rejects a plan nested past MAX_NESTING_LIMIT.
+    let hostile = filter_chain(MAX_NESTING_LIMIT, &sql_leaf());
+    let opts = DecodeOptions {
+        max_nesting: usize::MAX,
+        ..DecodeOptions::default()
+    };
+    let err = decode_relation_with(&hostile, &opts).expect_err("past the ceiling");
+    assert_eq!(class(&err), ErrorClass::FailedToParseTooComplex);
+}
+
+#[test]
+fn prost_keeps_no_recursion_limit_because_the_pre_walk_is_the_bound() {
+    // Owner decision 2026-11-13 (P3-E10-02): prost's fixed limit of 100 rejects ordinary plans, so
+    // `krishiv.connect.maxPlanDepth` (checked by the iterative walk) is the limit. Removing the
+    // feature would break real clients; this test makes that a deliberate change.
+    let manifest = include_str!("../../Cargo.toml");
+    assert!(manifest.contains("no-recursion-limit"));
 }

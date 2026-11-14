@@ -14,7 +14,7 @@
 //! under it.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use krishiv_common::config::{
@@ -154,6 +154,11 @@ pub fn plan_digest(plan_bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(plan_bytes).into()
 }
 
+/// [`Operation`] states.
+const RUNNING: u8 = 0;
+const FINISHED: u8 = 1;
+const CANCELLED: u8 = 2;
+
 /// One `ExecutePlan` (Spark's `ExecuteHolder`).
 #[derive(Debug)]
 pub struct Operation {
@@ -164,9 +169,14 @@ pub struct Operation {
     /// The response ids sent so far (`ReleaseExecute.release_until` accepts
     /// only these).
     sent: Mutex<HashSet<String>>,
-    cancelled: AtomicBool,
+    /// [`RUNNING`], then [`FINISHED`] or [`CANCELLED`], each set once by a
+    /// compare-and-swap (Spark's `ExecuteThreadRunner` state).
+    state: AtomicU8,
     /// Whether the encoder waits for the client ([`Self::is_waiting_for_client`]).
     waiting: AtomicBool,
+    /// Set by [`Self::close`]: the encoder stops even after the operation
+    /// finished (a release while the last responses wait for the client).
+    closed: AtomicBool,
     cancel: Notify,
     /// The memory consumer its buffered responses are reserved from.
     responses: OnceLock<Arc<ConsumerHandle>>,
@@ -187,8 +197,9 @@ impl Operation {
             tags,
             reattachable,
             sent: Mutex::new(HashSet::new()),
-            cancelled: AtomicBool::new(false),
+            state: AtomicU8::new(RUNNING),
             waiting: AtomicBool::new(false),
+            closed: AtomicBool::new(false),
             cancel: Notify::new(),
             responses: OnceLock::new(),
         }
@@ -271,24 +282,56 @@ impl Operation {
     }
 
     /// Asks the operation to stop: its stream ends with
-    /// `OPERATION_CANCELED`. Idempotent.
-    pub fn cancel(&self) {
-        if !self.cancelled.swap(true, Ordering::AcqRel) {
+    /// `OPERATION_CANCELED`. Idempotent. Whether this call interrupted it
+    /// (Spark's `ExecuteThreadRunner.interrupt`, one compare-and-swap of the
+    /// state): `false` when it was cancelled before or had already ended
+    /// ([`Self::finish`]).
+    pub fn cancel(&self) -> bool {
+        let won = self
+            .state
+            .compare_exchange(RUNNING, CANCELLED, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok();
+        if won {
             // `notify_one` keeps a permit when nobody waits yet.
             self.cancel.notify_one();
         }
+        won
     }
 
-    /// Whether [`Self::cancel`] ran.
+    /// Ends the operation on its own (result complete, failed, or its client
+    /// gone), unless it was cancelled first; a later [`Self::cancel`]
+    /// interrupts nothing. Whether it is finished: `false` when a cancel won.
+    pub fn finish(&self) -> bool {
+        match self
+            .state
+            .compare_exchange(RUNNING, FINISHED, Ordering::AcqRel, Ordering::Acquire)
+        {
+            Ok(_) => true,
+            Err(now) => now == FINISHED,
+        }
+    }
+
+    /// Whether [`Self::cancel`] interrupted the operation.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Acquire)
+        self.state.load(Ordering::Acquire) == CANCELLED
     }
 
-    /// Resolves once [`Self::cancel`] runs (one waiter: the operation's
-    /// encoder).
+    /// Closes the operation (ReleaseExecute `release_all`, a released
+    /// session): interrupts it if it still runs ([`Self::cancel`]) and, in
+    /// every state, stops its encoder, so a finished operation whose last
+    /// responses wait for a client that reads nothing gives back its task
+    /// and memory too.
+    pub fn close(&self) {
+        self.cancel();
+        self.closed.store(true, Ordering::Release);
+        self.cancel.notify_one();
+    }
+
+    /// Resolves once [`Self::cancel`] or [`Self::close`] runs (one waiter:
+    /// the operation's encoder).
     pub async fn cancelled(&self) {
-        if self.is_cancelled() {
+        if self.is_cancelled() || self.closed.load(Ordering::Acquire) {
             return;
         }
         self.cancel.notified().await;
@@ -371,9 +414,15 @@ impl Operations {
     pub fn cancel_all(&self) -> usize {
         let ops: Vec<Arc<Operation>> = self.lock().drain().map(|(_, op)| op).collect();
         for op in &ops {
-            op.cancel();
+            op.close();
         }
         ops.len()
+    }
+
+    /// Every live operation.
+    #[must_use]
+    pub fn all(&self) -> Vec<Arc<Operation>> {
+        self.lock().values().map(Arc::clone).collect()
     }
 
     /// The number of live operations.
