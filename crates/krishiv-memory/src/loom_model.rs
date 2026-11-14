@@ -297,6 +297,41 @@ fn unregister_races_a_reservation() {
     });
 }
 
+/// An aborted query's release in flight still counts as pending: one abort
+/// funds the request. Releases subtract from the root down and unregister
+/// leaves the registry last, so no read sees the victim's own counter at 0
+/// (or the victim gone) while a pool above it still holds the bytes, which
+/// would look like nothing pending and abort a second query.
+#[test]
+fn a_victim_releasing_is_never_aborted_twice() {
+    model(|| {
+        let root = pool(9, 1);
+        let big = root.child_pool("big", None);
+        let small = root.child_pool("small", None);
+        let bid = big.register("op", None);
+        let sid = small.register("op", None);
+        big.try_reserve(bid, 5).unwrap();
+        small.try_reserve(sid, 2).unwrap();
+        let victim = {
+            let big = Arc::clone(&big);
+            thread::spawn(move || {
+                while big.check_aborted().is_ok() {
+                    thread::yield_now();
+                }
+                big.unregister(bid);
+            })
+        };
+        let asker = root.child_pool("asker", None);
+        let aid = asker.register("op", None);
+        // Only an abort makes room; `big` is furthest above its fair share.
+        assert!(block_on(asker.reserve(aid, 3)).is_ok());
+        victim.join().unwrap();
+        assert!(big.check_aborted().is_err(), "big is the victim");
+        assert!(small.check_aborted().is_ok(), "one abort funds the request");
+        assert_eq!(root.stats().aborts, 1);
+    });
+}
+
 /// Overlapping rounds (root and a query) never run together.
 #[test]
 fn overlapping_rounds_are_exclusive() {

@@ -547,6 +547,11 @@ impl Round {
             let consumers = self.consumers_within(&binding);
             let plan = self.plan(&binding, &consumers);
             let shortfall = binding.shortfall(need, self.class());
+            if shortfall == 0 {
+                // Released since the refused attempt (the victim's release
+                // may have funded it): ask again before aborting anything.
+                continue;
+            }
             if plan.pending > 0 && plan.pending >= shortfall {
                 match self.wait(slot, deadline, Vec::new(), Until::Grant).await? {
                     Waited::Step(s) => return Ok(s),
