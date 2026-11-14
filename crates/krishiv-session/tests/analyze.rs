@@ -536,6 +536,12 @@ fn execute_immediate_using_lists_its_targets() {
     assert_eq!(a.info.class, StatementClass::Write);
     assert!(a.partial);
     assert_eq!(uses(&a), ["MODIFY table `spark_catalog`.`default`.`t` []"]);
+    // A target named by a marker cannot be placed before it is bound: left out, still `partial`
+    // (review m6).
+    let a = block_on(s.analyze("EXECUTE IMMEDIATE 'DROP TABLE IDENTIFIER(:t)' USING 'x' AS t"))
+        .unwrap();
+    assert_eq!(a.info.class, StatementClass::Ddl);
+    assert!(a.partial && a.info.securables.is_empty(), "{:?}", uses(&a));
 }
 
 /// Denies everything on the table `canary` once armed (its version moves with it), allows the rest.
@@ -843,6 +849,7 @@ fn securables_equal_what_a_run_authorizes() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| tracing::subscriber::set_global_default(Recorder).unwrap());
     let mut compared = 0;
+    let mut row_level = BTreeSet::new();
     let mut differences = String::new();
     for (i, (label, sql)) in corpus().into_iter().enumerate() {
         let principal = format!("prop{i}");
@@ -887,6 +894,9 @@ fn securables_equal_what_a_run_authorizes() {
         }
         let ran = asked_by(&principal);
         compared += 1;
+        if matches!(label.as_str(), "Update" | "Delete") {
+            row_level.insert(label.clone());
+        }
         assert!(
             analyze_asked.is_subset(&ran),
             "{label}: {sql}\n  analyze asked more than the run: {:?}",
@@ -903,6 +913,11 @@ fn securables_equal_what_a_run_authorizes() {
         }
     }
     assert!(compared >= 60, "{compared} compared");
+    // At least one `UPDATE` and one `DELETE` were compared (review m2).
+    assert_eq!(
+        row_level.into_iter().collect::<Vec<_>>(),
+        ["Delete", "Update"]
+    );
     insta::assert_snapshot!(differences);
 }
 

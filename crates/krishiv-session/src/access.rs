@@ -139,7 +139,7 @@ impl Session {
             merge_reads(&mut securables, &analysis.analyzed.securables);
             analyzed.push(Arc::clone(&analysis.analyzed));
         }
-        self.add_targets(&mut securables, &statement, &env)?;
+        self.add_targets(&mut securables, &statement, &env, false)?;
         Ok(StatementParts {
             info: StatementInfo {
                 class,
@@ -155,15 +155,23 @@ impl Session {
 
 impl Session {
     /// Adds what `statement` writes, creates or drops to `securables`, as the session would check it
-    /// (the name as written), and `Manage` on the cluster for `ADMIN` ([`required_targets`]).
+    /// (the name as written), and `Manage` on the cluster for `ADMIN` ([`required_targets`]). With
+    /// `skip_unplaced`, a target that cannot be placed (an `IDENTIFIER(:marker)` name of text not yet
+    /// bound) is left out instead of failing.
     fn add_targets(
         &self,
         securables: &mut Vec<SecurableUse>,
         statement: &Statement,
         env: &QueryEnv,
+        skip_unplaced: bool,
     ) -> Result<(), KrishivError> {
         for target in required_targets(statement, &env.parser) {
-            if let Some(securable) = self.securables_of(target.object, env)?.into_iter().next()
+            let placed = match self.securables_of(target.object, env) {
+                Ok(placed) => placed,
+                Err(_) if skip_unplaced => continue,
+                Err(e) => return Err(e),
+            };
+            if let Some(securable) = placed.into_iter().next()
                 && !securables
                     .iter()
                     .any(|s| s.securable == securable && s.privilege == target.privilege)
@@ -199,7 +207,8 @@ impl Session {
             known => {
                 let mut securables = Vec::new();
                 if let Some(inner) = &known {
-                    self.add_targets(&mut securables, inner, &env)?;
+                    // Its markers are unbound: a name made of one cannot be placed yet.
+                    self.add_targets(&mut securables, inner, &env, true)?;
                 }
                 return Ok(StatementParts {
                     info: StatementInfo {
