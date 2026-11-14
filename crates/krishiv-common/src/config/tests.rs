@@ -1462,6 +1462,23 @@ fn server_entries_parse_default_and_take_sparks_names() {
     assert_eq!(CONNECT_PORT.settable_by, SettableBy::Startup);
 }
 
+/// P3-T020b: one catalog request is bounded, 30 s by default, fixed at startup.
+#[test]
+fn the_catalog_request_timeout_defaults_parses_and_rejects() {
+    use std::time::Duration;
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        c.get(&CATALOG_REQUEST_TIMEOUT)
+            .and_then(ConfigValue::as_duration)
+    };
+    assert_eq!(get(&c), Some(Duration::from_secs(30)));
+    c.set("krishiv.catalog.requestTimeout", "5s").unwrap();
+    assert_eq!(get(&c), Some(Duration::from_secs(5)));
+    assert!(c.set("krishiv.catalog.requestTimeout", "soon").is_err());
+    assert_eq!(CATALOG_REQUEST_TIMEOUT.scope, Scope::Cluster);
+    assert_eq!(CATALOG_REQUEST_TIMEOUT.settable_by, SettableBy::Startup);
+}
+
 #[test]
 fn connect_reattach_entries_parse_default_and_take_sparks_names() {
     let d = Config::new();
