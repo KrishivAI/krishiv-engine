@@ -1028,7 +1028,9 @@ impl RelationSink {
                     all_done &= lane.finished();
                     let q = lock(&lane.io);
                     if aggregate {
-                        joinable &= !q.outputs.is_empty();
+                        // Only rows can be joined: a lane holding nothing but
+                        // empty batches would make `finalize` spin.
+                        joinable &= q.outputs.iter().any(|(b, _)| b.num_rows() > 0);
                     } else {
                         ready |= q.has_results();
                     }
