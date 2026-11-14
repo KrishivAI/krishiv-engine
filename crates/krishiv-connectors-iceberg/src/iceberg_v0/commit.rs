@@ -54,9 +54,11 @@
 //!   `NumberFormatException`), before any request.
 //! - **Outcomes and cleanup** (§7.4): committed → the table's new metadata;
 //!   the manifest lists of every other attempt and the manifests the found
-//!   snapshot does not list are deleted, never a data file. Every outcome known
+//!   snapshot does not list are deleted (this write's new manifests a listed
+//!   merged manifest absorbed, and merged manifests of an attempt that did
+//!   not commit, `merge.rs`), never a data file and never a base manifest. Every outcome known
 //!   and none applied → everything the write produced is deleted (data files,
-//!   manifests, lists) and the error is `KRISHIV_ICEBERG_COMMIT_FAILED` when
+//!   new and merged manifests, lists) and the error is `KRISHIV_ICEBERG_COMMIT_FAILED` when
 //!   the budget ran out, else the failure itself. Known, none applied, but
 //!   some request of the write once had an unknown answer → the same error,
 //!   and **nothing is deleted**: an attempt settled as "not applied" because
@@ -669,9 +671,12 @@ impl Loop<'_> {
             return;
         };
         let listed: HashSet<&str> = listed.iter().map(|f| f.manifest_path.as_str()).collect();
-        for manifest in &new.manifests {
-            if !listed.contains(manifest.manifest_path.as_str()) {
-                let _ = self.cx.io.delete(&manifest.manifest_path).await;
+        // The new manifests a listed merged manifest absorbed, and merged
+        // manifests of an attempt that did not commit, are not listed.
+        let manifests = new.manifests.iter().map(|m| &m.manifest_path);
+        for path in manifests.chain(&new.merged) {
+            if !listed.contains(path.as_str()) {
+                let _ = self.cx.io.delete(path).await;
             }
         }
     }
@@ -746,7 +751,13 @@ fn attempt_base(attempt: &Attempt) -> Option<i64> {
 /// Failures to delete leave orphans, never a wrong table.
 async fn delete_all(io: &FileIO, new: &NewManifests, lists: &[String]) {
     let manifests = new.manifests.iter().map(|m| &m.manifest_path);
-    for path in new.data_files.iter().chain(manifests).chain(lists) {
+    for path in new
+        .data_files
+        .iter()
+        .chain(manifests)
+        .chain(&new.merged)
+        .chain(lists)
+    {
         let _ = io.delete(path).await;
     }
 }

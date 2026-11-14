@@ -39,13 +39,26 @@ object storage with hash directories; the deprecated path properties honoured, a
 `partition_tuple` (transformed values through `plan::bounds` to iceberg literals), `data_file` (an iceberg `DataFile`
 from size, rows and `FileMetrics`; sort order 0 unless claimed); `write_metrics.rs` `WriteMetricsConfig` (Java's
 `MetricsConfig.from`); tests `data_file_tests.rs` (Java's partition paths and hash directories, a built file through a
-manifest and back) · `append.rs` (PR-36a) an append's metadata, as Java's `SnapshotProducer`/`FastAppend`:
+manifest and back) · `append.rs` (PR-36a) an append's metadata, as Java's `SnapshotProducer`/`MergeAppend`:
 `write_new_manifests` once per write (one manifest per spec, entries with the write's snapshot id and inherited
-sequence numbers), `prepare_attempt` per commit attempt (the list: new manifests reset to unassigned, then the base's;
-sequence number `last-sequence-number` + 1; v3 `first-row-id`/`added-rows`; summary with `total-*`, `engine-name`,
-`krishiv.write-id`/`krishiv.query-id`; requirements `assert-table-uuid`/`assert-ref-snapshot-id`, updates
-`add-snapshot`/`set-snapshot-ref`); no manifest split or merge yet; tests `append_tests.rs` (committed as a catalog
-applies a request, read back through SQL and iceberg-rust's planning, a stale attempt refused and rebuilt, v3 lineage)
+sequence numbers; no rolling at the target size), `prepare_attempt` per commit attempt (the list through `merge.rs`'s
+`arrange`: new manifests reset to unassigned, then the base's data manifests, then its delete manifests;
+sequence number `last-sequence-number` + 1; v3 `first-row-id`/`added-rows`; summary with `total-*`,
+`manifests-created`/`-kept`/`-replaced`, `engine-name`, `krishiv.write-id`/`krishiv.query-id`; requirements
+`assert-table-uuid`/`assert-ref-snapshot-id`, updates `add-snapshot`/`set-snapshot-ref`); tests `append_tests.rs`
+(committed as a catalog applies a request, read back through SQL and iceberg-rust's planning, a stale attempt refused
+and rebuilt, v3 lineage) · `merge.rs` (PR-36a, design note §6.2) manifest merging as Java's `MergeAppend`
+(`MergingSnapshotProducer.apply`, `ManifestMergeManager`, `BinPacking.ListPacker.packEnd`, apache-iceberg 1.12.0):
+`commit.manifest.{target-size-bytes,min-count-to-merge}`, `commit.manifest-merge.enabled` (`MergeConfig`, garbage
+`KRISHIV_UNSUPPORTED_FEATURE`); base manifests without added or existing files left out (`shouldKeep`); data and
+delete manifests merged apart, by spec id highest first, `pack_end` lookback 1, the bin holding the first manifest
+merged only at `min-count-to-merge`, others at 2; merged entries: older `DELETED` dropped, own `ADDED` kept with
+inherited sequence numbers, the rest `EXISTING` with explicit sequence numbers, inherited snapshot id and (v3) explicit
+`first_row_id`; **first attempt only** (later attempts list the unmerged manifests; Java re-merges every attempt);
+merged paths in `NewManifests::merged` for §7.4 cleanup; tests `merge_tests.rs` (100 appends into one manifest,
+count/switch/target, packEnd order, two specs, review-1 P2's `DELETED` entry, v3 row ids, empty manifests dropped
+and delete manifests merged apart, v1, first attempt only; every merged manifest read back through
+`Manifest::parse_avro`)
 · `commit.rs` (PR-36a, design note §7, Tier U) the append commit loop `commit_append` over the crate-private
 `CommitTable` (`commit(requirements, updates) -> CommitOutcome { Committed, Conflict { stale }, Unknown, Failed }`,
 `load(all_snapshots)`; the REST status mapping documented on `CommitOutcome`, implemented by the catalog client
@@ -56,7 +69,8 @@ rebase across v2 → v3 only (other format changes and a replaced table `KRISHIV
 `commit.retry.*` budget and Java's `Tasks` backoff; `KRISHIV_ICEBERG_COMMIT_FAILED` / `_STATE_UNKNOWN`; §7.4 cleanup.
 No production `CommitTable` yet (PR-17's catalog clients); the production clock is `sink.rs`'s `IoClock`. Tests `commit_tests.rs` (DST: `TestCatalog`
 applies requests as `append_tests` does, with scripted faults per request and foreign writers at chosen points,
-on virtual time; the §10 36a cases; table invariants and the store's files checked after each case)
+on virtual time; the §10 36a cases; merged first attempts committed, rebased, failed and left unknown; the sweep
+merging in one schedule in three; table invariants and the store's files checked after each case)
 · `write.rs` (PR-36a) `DataFileWriter`, one task's data files for an append (distribution `none`): batches of the
 table's Arrow schema (nested types retyped onto the field-id schema; another shape is `INTERNAL_ERROR`), each row's
 partition key from the default spec (`partition_value`; an all-`void` spec does no per-row work), rows taken per key,
@@ -158,6 +172,11 @@ Fixture: `tests/fixtures/iceberg-1.12.0-spark-types.json` (source-only goldens,
   and answers 409). A `commit_append` dropped or cancelled after its first request is an unknown outcome too: the
   caller (`sink.rs`'s finalize, whose guard is disarmed before the loop) must not delete the write's files. Only
   v2 → v3 is rebased; Java reuses manifests across any upgrade (a divergence toward refusal).
+- Manifest merging (`merge.rs`) runs on a write's first attempt only; a merged manifest is derived from that
+  attempt's base and never reused by a later attempt. Its merged manifests are cleaned up with the attempt's files
+  (deleted when the committed list does not name them or the write fails with every outcome known, kept otherwise);
+  a base manifest is never deleted, only left out of the list. Merged `EXISTING` entries carry explicit sequence
+  numbers, the adding snapshot's id and (v3) `first_row_id`, so files keep their sequence numbers and row ids.
 - `#![forbid(unsafe_code)]`. No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE
   (iceberg-rust's own failures map to `INTERNAL_ERROR` naming its message until PR-17's catalog classes).
 
