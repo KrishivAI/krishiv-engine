@@ -357,6 +357,7 @@ mod tests {
             format: "parquet".to_owned(),
             paths: vec![OptionValue::from_user("path", path)],
             options: BTreeMap::new(),
+            schema: None,
         }
     }
 

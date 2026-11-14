@@ -648,6 +648,32 @@ pub trait FileSchemaResolver: Send + Sync {
         paths: &'a [OptionValue],
         options: &'a BTreeMap<String, OptionValue>,
     ) -> BoxFuture<'a, Result<Vec<TableColumn>, KrishivError>>;
+    /// The columns of reading `paths` as `format` with `options` and the
+    /// user's `schema` (`spark.read.schema(..)`): nothing is inferred from
+    /// the files' contents. As Spark, the data columns are the schema's in
+    /// its order and the partition columns found under the paths come last,
+    /// typed as the schema names them (inferred when it does not). The
+    /// default refuses the read.
+    ///
+    /// # Errors
+    /// As [`Self::infer`], except that no files is not an error, plus
+    /// `INVALID_PARTITION_VALUE` for a partition value that is not of the
+    /// schema's type and the format's checks of the schema.
+    fn with_schema<'a>(
+        &'a self,
+        format: &'a str,
+        paths: &'a [OptionValue],
+        options: &'a BTreeMap<String, OptionValue>,
+        schema: &'a krishiv_types::StructType,
+    ) -> BoxFuture<'a, Result<Vec<TableColumn>, KrishivError>> {
+        let _ = (format, paths, options, schema);
+        Box::pin(async {
+            Err(krishiv_common::error::KrishivUnsupportedFeature {
+                feature: "a user schema on a read by path".to_owned(),
+            }
+            .into())
+        })
+    }
 }
 
 /// Tables in memory, by namespace and name, stored lower-case like Spark's

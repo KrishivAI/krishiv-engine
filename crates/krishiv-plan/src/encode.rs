@@ -1108,12 +1108,19 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 format,
                 paths,
                 options,
+                schema,
             } => {
-                self.u8(2);
+                // A read with a user schema has a tag of its own, so a read
+                // without one encodes as before.
+                self.u8(if schema.is_some() { 3 } else { 2 });
                 self.str(format);
                 self.len(paths.len());
                 paths.iter().for_each(|p| self.option_value(p));
                 self.options(options);
+                if let Some(schema) = schema {
+                    // The JSON form keeps nullability and field metadata.
+                    self.str(&krishiv_types::DataType::Struct(schema.clone()).json());
+                }
             }
         }
     }

@@ -1102,6 +1102,7 @@ pub(crate) fn table_source(table: &crate::store::CatalogTable) -> ReadSource {
                 )
             })
             .collect(),
+        schema: None,
     }
 }
 

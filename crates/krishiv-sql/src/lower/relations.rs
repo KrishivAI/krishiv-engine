@@ -610,6 +610,7 @@ impl Lowerer {
                         format: format.value.clone(),
                         paths: vec![OptionValue::from_user("path", path.value.clone())],
                         options: opts,
+                        schema: None,
                     },
                     _ => ReadSource::Table {
                         name: parts,

@@ -210,6 +210,7 @@ fn directories_list_like_spark() {
         format: "delta".to_owned(),
         paths: paths(&["/d"]),
         options: BTreeMap::new(),
+        schema: None,
     }));
     let e = env
         .block_on(DefaultAnalyzer.analyze(&Plan::try_new(read).unwrap(), &ctx))
@@ -329,6 +330,7 @@ fn the_analyzer_reads_parquet_paths() {
         format: "parquet".to_owned(),
         paths: paths(&["/t"]),
         options: BTreeMap::new(),
+        schema: None,
     }));
     let analyzed = analyze(read).unwrap();
     assert_eq!(analyzed.output.len(), 1);
@@ -475,6 +477,7 @@ fn agrees_with_spark_on_the_file_read_probe() {
                 format: "parquet".to_owned(),
                 paths: self::paths(&refs),
                 options: BTreeMap::new(),
+                schema: None,
             })))
             .unwrap()
         } else {

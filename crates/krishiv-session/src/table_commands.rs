@@ -836,6 +836,7 @@ impl Session {
                     (k, val)
                 })
                 .collect(),
+            schema: None,
         };
         self.state.catalog.put(
             name,

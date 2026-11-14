@@ -57,6 +57,7 @@ fn files(col: &str) -> TempTable {
             format: "parquet".to_owned(),
             paths: vec![],
             options: Default::default(),
+            schema: None,
         },
         columns: vec![TableColumn::new(col.to_owned(), DataType::Integer, false)],
     }
@@ -921,6 +922,7 @@ fn task_specs_rejects_what_it_cannot_split() {
                 format: "parquet".to_owned(),
                 paths: Vec::new(),
                 options: BTreeMap::new(),
+                schema: None,
             }),
             2,
             2,

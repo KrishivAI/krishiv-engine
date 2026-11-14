@@ -1453,6 +1453,7 @@ fn read_source(m: &pb::ReadSource) -> Result<ReadSource> {
             format: f.format.clone(),
             paths: f.paths.iter().map(option).collect::<Result<_>>()?,
             options: options(&f.options)?,
+            schema: None,
         },
     })
 }

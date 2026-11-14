@@ -1306,9 +1306,17 @@ fn read_source(source: &ReadSource) -> Result<pb::ReadSource> {
             options: options(o)?,
         }),
         ReadSource::Files {
+            schema: Some(_), ..
+        } => {
+            return Err(CodecError::Unsupported(
+                "a read with a user schema".to_owned(),
+            ));
+        }
+        ReadSource::Files {
             format,
             paths,
             options: o,
+            schema: None,
         } => Kind::Files(pb::FilesSource {
             format: format.clone(),
             paths: paths

@@ -608,6 +608,7 @@ fn tables_and_statistics() {
         format: "parquet".to_owned(),
         paths: Vec::new(),
         options: std::collections::BTreeMap::new(),
+        schema: None,
     };
     let e = MemoryTables::new().provider(&files).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
@@ -680,6 +681,7 @@ fn unoptimized_plans_and_file_sources() {
         format: "parquet".to_owned(),
         paths: Vec::new(),
         options: std::collections::BTreeMap::new(),
+        schema: None,
     };
     let (schema, batches) = table(5);
     let any = AnyTable(Arc::new(Bare(MemoryTable::new(schema, batches))));

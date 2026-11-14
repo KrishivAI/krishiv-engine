@@ -312,6 +312,7 @@ fn stars_in_calls_and_elsewhere() {
             format: "parquet".to_owned(),
             paths: vec![krishiv_common::secret::OptionValue::from_user("path", "/d")],
             options: std::collections::BTreeMap::new(),
+            schema: None,
         },
         output: Vec::new(),
         version: None,

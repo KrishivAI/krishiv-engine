@@ -237,6 +237,7 @@ impl Translator<'_> {
                         .map(|p| OptionValue::from_user("path", p.as_str()))
                         .collect(),
                     options: typed(&d.options),
+                    schema: None,
                 }
             }
         }))

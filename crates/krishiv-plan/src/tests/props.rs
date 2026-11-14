@@ -378,6 +378,7 @@ impl Gen<'_> {
                 format: self.name(),
                 paths: self.many(1, 2, Gen::option),
                 options,
+                schema: None,
             }
         }
     }
@@ -1052,6 +1053,7 @@ fn m_source(s: &mut ReadSource, w: &mut Walk) -> bool {
             format: "parquet".to_owned(),
             paths: name.iter().cloned().map(OptionValue::Plain).collect(),
             options: options.clone(),
+            schema: None,
         },
         ReadSource::Files { paths, options, .. } => ReadSource::Table {
             name: paths.iter().map(ToString::to_string).collect(),
@@ -1065,7 +1067,24 @@ fn m_source(s: &mut ReadSource, w: &mut Walk) -> bool {
             format,
             paths,
             options,
-        } => m_string(format, w) || m_values(paths, w) || m_options(options, w),
+            schema,
+        } => {
+            let toggled = match schema {
+                Some(_) => None,
+                None => Some(krishiv_types::StructType::new([
+                    krishiv_types::StructField::new("a", DataType::Integer, false),
+                ])),
+            };
+            site!(w, *schema = toggled);
+            if let Some(s) = schema.as_mut() {
+                // Nullability is part of the read: the key keeps it.
+                let flipped = krishiv_types::StructType::new(s.fields().iter().map(|f| {
+                    krishiv_types::StructField::new(f.name(), f.data_type().clone(), !f.nullable())
+                }));
+                site!(w, *s = flipped);
+            }
+            m_string(format, w) || m_values(paths, w) || m_options(options, w)
+        }
     }
 }
 

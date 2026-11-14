@@ -1013,6 +1013,7 @@ async fn path_read(
         format: format.clone(),
         paths: vec![OptionValue::from_user("path", path)],
         options: BTreeMap::new(),
+        schema: None,
     };
     Ok(BoundTable::Files(
         bind_files(ctx, b, checked, &source, origin).await?,
@@ -1079,6 +1080,7 @@ async fn bind_files(
             format,
             paths,
             options,
+            schema,
         },
         Some(files),
     ) = (source, &ctx.files)
@@ -1105,23 +1107,27 @@ async fn bind_files(
     if server_scoped(options) {
         authorize_store_options(ctx, b, checked, origin).await?;
     }
-    let columns = files
-        .infer(format, &qualified, options)
-        .await
-        .map_err(fail)?
-        .into_iter()
-        // Spark reads every file column as nullable.
-        .map(|c| TableColumn {
-            nullable: true,
-            ..c
-        })
-        .collect();
+    // A user schema is never checked against inference: the files are read
+    // as it says (Spark's `userSpecifiedSchema`).
+    let columns = match schema {
+        Some(schema) => files.with_schema(format, &qualified, options, schema).await,
+        None => files.infer(format, &qualified, options).await,
+    }
+    .map_err(fail)?
+    .into_iter()
+    // Spark reads every file column as nullable.
+    .map(|c| TableColumn {
+        nullable: true,
+        ..c
+    })
+    .collect();
     b.files.push(BoundFiles {
         source: source.clone(),
         read: ReadSource::Files {
             format: format.to_lowercase(),
             paths: qualified,
             options: options.clone(),
+            schema: schema.clone(),
         },
         columns,
     });

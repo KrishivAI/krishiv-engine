@@ -88,6 +88,38 @@ impl FileSchemaResolver for Files {
         };
         Box::pin(std::future::ready(result))
     }
+
+    /// The schema's columns as given, then a partition column `k`.
+    fn with_schema<'a>(
+        &'a self,
+        format: &'a str,
+        paths: &'a [OptionValue],
+        _: &'a BTreeMap<String, OptionValue>,
+        schema: &'a krishiv_types::StructType,
+    ) -> BoxFuture<'a, Result<Vec<TableColumn>, KrishivError>> {
+        let path = paths.first().map(ToString::to_string).unwrap_or_default();
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("{format}:{path}:schema"));
+        let mut columns: Vec<TableColumn> = schema
+            .fields()
+            .iter()
+            .map(|f| TableColumn {
+                name: f.name().to_owned(),
+                data_type: f.data_type().clone(),
+                nullable: f.nullable(),
+                char_varchar: None,
+            })
+            .collect();
+        columns.push(TableColumn {
+            name: "k".to_owned(),
+            data_type: DataType::Integer,
+            nullable: false,
+            char_varchar: None,
+        });
+        Box::pin(std::future::ready(Ok(columns)))
+    }
 }
 
 fn catalog() -> MemoryCatalog {
@@ -120,6 +152,7 @@ fn read(format: &str, paths: &[&str]) -> LogicalPlan {
             .map(|p| OptionValue::from_user("path", *p))
             .collect(),
         options: BTreeMap::new(),
+        schema: None,
     }))
 }
 
@@ -179,6 +212,41 @@ fn reads_by_path_resolve_to_nullable_file_scans() {
         &ctx(&files),
     );
     assert_eq!(output(&r)[0].0, "a");
+}
+
+#[test]
+fn a_user_schema_reads_through_the_resolver_and_stays_on_the_scan() {
+    let files = Arc::new(Files::default());
+    let schema = krishiv_types::StructType::new([
+        krishiv_types::StructField::new("x", DataType::Long, false),
+        krishiv_types::StructField::new("y", DataType::String, false),
+    ]);
+    let plan = LogicalPlan::new(PlanNode::Read(ReadSource::Files {
+        format: "JSON".to_owned(),
+        paths: vec![OptionValue::from_user("path", "one")],
+        options: BTreeMap::new(),
+        schema: Some(schema.clone()),
+    }));
+    let r = run(plan, &ctx(&files));
+    // Spark reports every column of a read nullable, whatever the schema says.
+    assert_eq!(
+        output(&r),
+        [
+            ("x".to_owned(), DataType::Long, true),
+            ("y".to_owned(), DataType::String, true),
+            ("k".to_owned(), DataType::Integer, true),
+        ]
+    );
+    // Nothing was inferred.
+    assert_eq!(*files.calls.lock().unwrap(), ["JSON:/data/one:schema"]);
+    let a = r.unwrap();
+    let PlanNode::Scan(scan) = &a.plan.root().node else {
+        panic!("not a scan: {}", a.plan.root());
+    };
+    assert!(matches!(
+        &scan.source,
+        ReadSource::Files { format, schema: Some(s), .. } if format == "json" && *s == schema
+    ));
 }
 
 #[test]
@@ -548,6 +616,7 @@ fn read_with_secret(table: bool) -> LogicalPlan {
             format: "parquet".to_owned(),
             paths: vec![OptionValue::from_user("path", "/data/one")],
             options,
+            schema: None,
         }))
     }
 }

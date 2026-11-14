@@ -188,6 +188,7 @@ pub(crate) fn file_scan() -> ScanNode {
                     OptionValue::reference("prod", "signed-path"),
                 ],
                 options: BTreeMap::new(),
+                schema: None,
             },
             output: scan_columns(),
             version: None,

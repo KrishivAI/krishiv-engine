@@ -157,5 +157,6 @@ pub(crate) fn read_files(
         format: format.to_owned(),
         paths,
         options,
+        schema: None,
     }))
 }

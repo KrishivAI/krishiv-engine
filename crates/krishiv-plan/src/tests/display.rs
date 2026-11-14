@@ -158,12 +158,35 @@ fn options_print_as_typed_values() {
         format: "csv".to_owned(),
         paths: vec![OptionValue::from_user("path", "/d")],
         options,
+        schema: None,
     }));
     assert_eq!(
         plan.to_string(),
         "Read csv [/d] {fs.s3a.secret.key=*********(redacted), header=true, password=*********(redacted), \
          token=secret('prod', 'kafka'), \
          url=jdbc:postgresql://user:*********(redacted)@h/db?password=*********(redacted)&ssl=true}\n"
+    );
+}
+
+#[test]
+fn a_user_schema_prints_after_the_paths() {
+    let schema = krishiv_types::StructType::new([
+        krishiv_types::StructField::new("a", krishiv_types::DataType::Integer, false),
+        krishiv_types::StructField::new("b", krishiv_types::DataType::String, true),
+    ]);
+    let plan = LogicalPlan::new(PlanNode::Read(ReadSource::Files {
+        format: "csv".to_owned(),
+        paths: vec![OptionValue::from_user("path", "/d")],
+        options: [(
+            "header".to_owned(),
+            OptionValue::from_user("header", "true"),
+        )]
+        .into(),
+        schema: Some(schema),
+    }));
+    assert_eq!(
+        plan.to_string(),
+        "Read csv [/d] schema struct<a:int,b:string> {header=true}\n"
     );
 }
 

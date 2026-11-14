@@ -45,6 +45,7 @@ fn read(secret: &str) -> LogicalPlan {
             format!("https://b.s3.amazonaws.com/k?X-Amz-Signature={secret}&X-Amz-Expires=60"),
         )],
         options: options(secret),
+        schema: None,
     }))
 }
 

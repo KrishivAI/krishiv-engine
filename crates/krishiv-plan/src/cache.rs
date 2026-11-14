@@ -281,8 +281,13 @@ impl Encoder {
                 format,
                 paths,
                 options,
+                schema,
             } => {
-                self.tag("files");
+                self.tag(if schema.is_some() {
+                    "files_schema"
+                } else {
+                    "files"
+                });
                 self.text(format);
                 self.num(paths.len() as u64);
                 for path in paths {
@@ -292,6 +297,9 @@ impl Encoder {
                 for (key, value) in options {
                     self.text(key);
                     self.option_value(value);
+                }
+                if let Some(schema) = schema {
+                    self.text(&krishiv_types::DataType::Struct(schema.clone()).json());
                 }
             }
         }
@@ -1734,6 +1742,31 @@ mod tests {
                                 OptionValue::from_user("password", "pw"),
                             ),
                         ]),
+                        schema: None,
+                    })),
+                ),
+                (
+                    "read-files-schema",
+                    node(PlanNode::Read(ReadSource::Files {
+                        format: "csv".into(),
+                        paths: vec![OptionValue::from_user("path", "/p")],
+                        options: BTreeMap::new(),
+                        schema: Some(krishiv_types::StructType::new([
+                            krishiv_types::StructField::new(
+                                "a",
+                                krishiv_types::DataType::Integer,
+                                true,
+                            ),
+                        ])),
+                    })),
+                ),
+                (
+                    "read-files-plain",
+                    node(PlanNode::Read(ReadSource::Files {
+                        format: "csv".into(),
+                        paths: vec![OptionValue::from_user("path", "/p")],
+                        options: BTreeMap::new(),
+                        schema: None,
                     })),
                 ),
                 (

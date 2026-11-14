@@ -539,12 +539,17 @@ impl Display for SourceText<'_> {
                 format,
                 paths,
                 options,
+                schema,
             } => {
                 write!(f, "{format} [")?;
                 for (i, p) in paths.iter().enumerate() {
                     write!(f, "{}{p}", sep(i))?;
                 }
                 f.write_str("]")?;
+                if let Some(schema) = schema {
+                    let ty = krishiv_types::DataType::Struct(schema.clone());
+                    write!(f, " schema {}", ty.simple_string())?;
+                }
                 options
             }
         };

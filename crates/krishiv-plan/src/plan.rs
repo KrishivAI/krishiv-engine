@@ -666,6 +666,11 @@ pub enum ReadSource {
         paths: Vec<OptionValue>,
         /// Data source options.
         options: BTreeMap<String, OptionValue>,
+        /// The user's schema (`spark.read.schema(..)`), as given: the data
+        /// columns in the user's order, and any partition column it names
+        /// (which reads with this type). `None` infers the schema from the
+        /// files.
+        schema: Option<krishiv_types::StructType>,
     },
 }
 

@@ -46,6 +46,7 @@ impl QueryCatalog {
                 format,
                 paths,
                 options,
+                ..
             } = source
             else {
                 continue;
