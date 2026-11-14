@@ -1220,6 +1220,7 @@ DataFrameReader.def option(self, key: str, value: object) -> DataFrameReader
 DataFrameReader.def options(self, **options: object) -> DataFrameReader
 DataFrameReader.def orc(self, path: str | list[str], **options: object) -> DataFrame
 DataFrameReader.def parquet(self, *paths: str) -> DataFrame
+DataFrameReader.def schema(self, schema: object) -> DataFrameReader
 DataFrameReader.def table(self, tableName: str) -> DataFrame
 DataFrameReader.def text(self, paths: str | list[str], wholetext: bool=False, lineSep: str | None=None, pathGlobFilter: str | None=None, recursiveFileLookup: bool | None=None, modifiedBefore: str | None=None, modifiedAfter: str | None=None) -> DataFrame
 DataFrameReader.def xml(self, path: str | list[str], **options: object) -> DataFrame

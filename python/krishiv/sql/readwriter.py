@@ -19,6 +19,15 @@ if TYPE_CHECKING:
     from krishiv.sql.session import SparkSession
 
 
+#: What a read with a user schema is refused as, until reads carry one: a
+#: schema that were dropped would read every column as text without a word
+#: (acceptance issue KN-1). SQL takes the columns today.
+_READ_SCHEMA = (
+    "a user schema on spark.read (DataFrameReader.schema or schema=); declare the columns in SQL "
+    "instead: CREATE TEMPORARY VIEW v (<columns>) USING <format> OPTIONS (path '<path>')"
+)
+
+
 class DataFrameReader:
     def __init__(self, session: SparkSession) -> None:
         self._session = session
@@ -28,6 +37,11 @@ class DataFrameReader:
     def format(self, source: str) -> DataFrameReader:
         self._format = source
         return self
+
+    def schema(self, schema: object) -> DataFrameReader:
+        """Refused with ``KRISHIV_UNSUPPORTED_FEATURE``: reads do not carry a
+        user schema yet, and dropping it would read every column as text."""
+        raise unsupported_feature(_READ_SCHEMA)
 
     def option(self, key: str, value: object) -> DataFrameReader:
         self._options.append((key, _option_text(value)))
@@ -41,6 +55,8 @@ class DataFrameReader:
     def load(self, path: str | list[str] | None = None, format: str | None = None, **options: object) -> DataFrame:
         if format is not None:
             self.format(format)
+        if options.pop("schema", None) is not None:
+            raise unsupported_feature(_READ_SCHEMA)
         self.options(**options)
         if path is None:
             raise not_expected_type("path", "str or list of str", path)

@@ -73,6 +73,15 @@ Not supported: the engine reads no ORC (`KRISHIV_UNSUPPORTED_FEATURE`).
 def parquet(self, *paths: str) -> DataFrame
 ```
 
+### `schema`
+
+```python
+def schema(self, schema: object) -> DataFrameReader
+```
+
+Refused with `KRISHIV_UNSUPPORTED_FEATURE`: reads do not carry a
+user schema yet, and dropping it would read every column as text.
+
 ### `table`
 
 ```python
