@@ -1582,3 +1582,15 @@ fn delta_and_catalog_limit_entries_parse_and_default() {
         assert_eq!(e.scope, Scope::Cluster, "{}", e.key);
     }
 }
+
+#[test]
+fn catalog_request_timeout_defaults_to_thirty_seconds() {
+    let mut c = Config::new();
+    let secs = |c: &Config| match c.get(&CATALOG_REQUEST_TIMEOUT) {
+        Some(ConfigValue::Duration(d)) => Some(d.as_secs()),
+        _ => None,
+    };
+    assert_eq!(secs(&c), Some(30));
+    c.set("krishiv.catalog.requestTimeout", "5s").unwrap();
+    assert_eq!(secs(&c), Some(5));
+}

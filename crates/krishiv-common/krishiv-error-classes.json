@@ -11,6 +11,13 @@
     ],
     "sqlState" : "54000"
   },
+  "KRISHIV_CATALOG_LOCATION_REFUSED" : {
+    "message" : [
+      "The catalog <catalog> gave the table <table> a location this server may not read (<rule>)."
+    ],
+    "sqlState" : "58000",
+    "audience" : "operator"
+  },
   "KRISHIV_COMMIT_LOG_CORRUPT" : {
     "message" : [
       "The commit log of <root> cannot be read: <reason>. Nothing was changed; a missing or damaged entry under \"_krishiv_log\" needs the directory restored from a copy."
