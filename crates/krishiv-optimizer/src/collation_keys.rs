@@ -91,7 +91,13 @@ fn key(e: &Arc<Expr>) -> Res<Arc<Expr>> {
     ))
 }
 
-fn key_if_collated(e: &Arc<Expr>) -> Res<Arc<Expr>> {
+/// `e`'s comparison key if it is collated (`__collation_key(e, 'type of e')`), else `e`: what an
+/// operator outside this rewrite that compares `e` by bytes groups, sorts and hashes by (the
+/// Python UDF relations' grouping keys, whose frames keep `e` itself).
+///
+/// # Errors
+/// `INTERNAL_ERROR` if `__collation_key` is not registered.
+pub fn key_if_collated(e: &Arc<Expr>) -> Res<Arc<Expr>> {
     if collated(e) {
         key(e)
     } else {

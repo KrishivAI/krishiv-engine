@@ -165,11 +165,12 @@ impl Planner<'_> {
         let cols = columns_of(input)?;
         let planned = self.plan(input)?;
         let (planned, key_columns) = self.with_columns(planned, keys)?;
+        let (planned, compared) = self.compared(planned, keys, &key_columns)?;
         let columns = cols
             .iter()
             .map(|c| planned.column(c.id))
             .collect::<Result<Vec<_>>>()?;
-        let sorted = self.clustered_and_sorted(planned, &key_columns, &[])?;
+        let sorted = self.clustered_and_sorted(planned, &compared, &[])?;
         let plan = PythonRelationPlan {
             udf: udf.clone(),
             sides: vec![side_of(keys, &key_columns, &columns, &cols)?],
@@ -185,7 +186,7 @@ impl Planner<'_> {
             sorted,
             |input| PhysNode::PythonGroupMap {
                 input,
-                keys: key_columns,
+                keys: compared,
                 udf: plan,
             },
             output,
@@ -210,16 +211,23 @@ impl Planner<'_> {
         let (left_cols, right_cols) = (columns_of(left)?, columns_of(right)?);
         let l = self.plan(left)?;
         let (l, lk) = self.with_columns(l, left_keys)?;
+        let (l, lc) = self.compared(l, left_keys, &lk)?;
         let r = self.plan(right)?;
         let (r, rk) = self.with_columns(r, right_keys)?;
+        let (r, rc) = self.compared(r, right_keys, &rk)?;
         let k = lk.len();
-        // One layout for both branches: keys, side, left, right.
+        // One layout for both branches: keys, side, left, right, then (for
+        // collated keys) the keys compared.
         let width = k + 1 + left_cols.len() + right_cols.len();
-        let layout: Vec<AttrId> = (0..width).map(|_| self.fresh_id()).collect();
-        let nullable = vec![true; width];
+        let keyed = lc != lk || rc != rk;
+        let total = if keyed { width + k } else { width };
+        let layout: Vec<AttrId> = (0..total).map(|_| self.fresh_id()).collect();
+        let nullable = vec![true; total];
         let mut branches = Vec::with_capacity(2);
-        for (side, (planned, keys)) in [(l, &lk), (r, &rk)].into_iter().enumerate() {
-            let mut items = Vec::with_capacity(width);
+        for (side, (planned, keys, compared)) in
+            [(l, &lk, &lc), (r, &rk, &rc)].into_iter().enumerate()
+        {
+            let mut items = Vec::with_capacity(total);
             for (i, &c) in keys.iter().enumerate() {
                 items.push(ProjectItemPlan::Column {
                     index: c,
@@ -247,6 +255,14 @@ impl Planner<'_> {
                             expr: literal(krishiv_plan::Literal::Null(Some(c.data_type.clone()))),
                         });
                     }
+                }
+            }
+            if keyed {
+                for (i, &c) in compared.iter().enumerate() {
+                    items.push(ProjectItemPlan::Column {
+                        index: c,
+                        name: Some(format!("_c{i}")),
+                    });
                 }
             }
             let op = project_op(
@@ -291,7 +307,12 @@ impl Planner<'_> {
             placement: Placement::Unknown,
         };
         let key_columns: Vec<usize> = (0..k).collect();
-        let sorted = self.clustered_and_sorted(union, &key_columns, &[k])?;
+        let compared: Vec<usize> = if keyed {
+            (width..total).collect()
+        } else {
+            key_columns.clone()
+        };
+        let sorted = self.clustered_and_sorted(union, &compared, &[k])?;
         let plan = PythonRelationPlan {
             udf: udf.clone(),
             sides: vec![
@@ -315,7 +336,7 @@ impl Planner<'_> {
             sorted,
             |input| PhysNode::PythonCoGroupMap {
                 input,
-                keys: key_columns,
+                keys: compared,
                 side: k,
                 udf: plan,
             },
@@ -467,6 +488,47 @@ impl Planner<'_> {
         let mut out = self.project(node, &exprs)?;
         out.sites.clear();
         Ok(out)
+    }
+
+    /// The columns a relation's grouping `keys` (at `columns` of `input`)
+    /// are compared by: a collated key's comparison key, appended
+    /// (`krishiv_optimizer::collation_key`, the key the aggregates, sorts
+    /// and exchanges of collated values use), else the key itself. Spark
+    /// groups and cogroups by the collation (`GroupedIterator`'s and
+    /// `CoGroupedIterator`'s orderings at v4.2.0); the frames keep each
+    /// row's own key values.
+    fn compared(
+        &mut self,
+        input: Planned,
+        keys: &[Arc<Expr>],
+        columns: &[usize],
+    ) -> Result<(Planned, Vec<usize>)> {
+        let mut exprs = Vec::with_capacity(keys.len());
+        let mut changed = false;
+        for (key, &at) in keys.iter().zip(columns) {
+            let compared = krishiv_optimizer::collation_key(key)?;
+            if Arc::ptr_eq(&compared, key) {
+                // The key's column as it is (a computed key reads its own).
+                let column = input.schema.field(at).clone();
+                exprs.push(Arc::new(Expr::new(ExprNode::Resolved(
+                    ResolvedExpr::Column(BoundColumn {
+                        id: input.column_attr(at)?,
+                        name: column.name().clone(),
+                        data_type: key
+                            .resolved_type()
+                            .ok_or_else(|| internal("a Python UDF grouping key without a type"))?,
+                        nullable: column.is_nullable(),
+                    }),
+                ))));
+            } else {
+                changed = true;
+                exprs.push(compared);
+            }
+        }
+        if !changed {
+            return Ok((input, columns.to_vec()));
+        }
+        self.with_columns(input, &exprs)
     }
 
     /// `input` placed by `keys` (one partition without) and sorted by

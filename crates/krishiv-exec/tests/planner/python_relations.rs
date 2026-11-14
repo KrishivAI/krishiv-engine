@@ -186,8 +186,14 @@ impl Task {
         } else {
             key(0)
         };
+        // Equal under the key's collation: the tests' collated keys are
+        // `UTF8_LCASE`, and a group's rows keep their own values.
         for r in 1..batch.num_rows() {
-            assert_eq!(key(r), first, "one key per group");
+            assert_eq!(
+                key(r).to_lowercase(),
+                first.to_lowercase(),
+                "one key per group"
+            );
         }
         self.keys
             .lock()
@@ -529,6 +535,66 @@ fn a_computed_grouping_key_leads_every_frame() {
     let mut keys = rt.keys.lock().unwrap().clone();
     keys.sort();
     assert_eq!(keys, ["0:0:5", "0:1:3", "0:NULL:2"]);
+}
+
+/// `groupBy(k)` of a `UTF8_LCASE` key: `K` and `k` are one group (Spark's
+/// `GroupedIterator` compares keys by the collation), each row keeping its
+/// own value.
+#[test]
+fn a_grouped_map_groups_a_collated_key_by_its_collation() {
+    let env = env();
+    let (input, cols) = input(
+        &env,
+        "SELECT CASE WHEN b < 50 THEN 'K' ELSE 'k' END COLLATE UTF8_LCASE AS k, b FROM t",
+    );
+    let rt = Arc::new(Runtime::default());
+    let node = LogicalPlan::new(PlanNode::GroupMap {
+        input,
+        keys: vec![col(&cols[0])],
+        udf: udf("count", PythonEvalType::GroupedMapPandas),
+        output: counted(),
+    });
+    let out = run_with(&env, node, Some(Arc::clone(&rt))).unwrap();
+    assert_eq!(lines(&out), ["10"]);
+    // The frames carry the rows' own key values, not the collation key.
+    let keys = rt.keys.lock().unwrap().clone();
+    assert!(
+        keys.iter()
+            .all(|k| k.starts_with("0:K:") || k.starts_with("0:k:")),
+        "{keys:?}"
+    );
+}
+
+/// A cogroup on `UTF8_LCASE` keys: the left side's `K` and the right side's
+/// `k` are one key (Spark's `CoGroupedIterator` compares them by the
+/// collation), so the UDF gets one call with both sides.
+#[test]
+fn a_cogroup_matches_collated_keys_by_their_collation() {
+    let env = env();
+    let (left, lc) = input(
+        &env,
+        "SELECT 'K' COLLATE UTF8_LCASE AS k, b FROM t WHERE b < 30",
+    );
+    let (right, rc) = input(
+        &env,
+        "SELECT 'k' COLLATE UTF8_LCASE AS c, s FROM t WHERE b >= 80",
+    );
+    let rt = Arc::new(Runtime::default());
+    let node = LogicalPlan::new(PlanNode::CoGroupMap {
+        left,
+        right,
+        left_keys: vec![col(&lc[0])],
+        right_keys: vec![col(&rc[0])],
+        udf: udf("count", PythonEvalType::CogroupedMapArrow),
+        output: counted(),
+    });
+    let out = run_with(&env, node, Some(Arc::clone(&rt))).unwrap();
+    assert_eq!(lines(&out), ["5"]);
+    let log = log_of(&rt);
+    assert_eq!(log.iter().filter(|e| *e == "G").count(), 1, "{log:?}");
+    let mut keys = rt.keys.lock().unwrap().clone();
+    keys.sort();
+    assert_eq!(keys, ["0:K:3", "1:k:2"], "{keys:?}");
 }
 
 /// A grouped-aggregate Python UDF call over `arg`.
