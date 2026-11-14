@@ -49,8 +49,9 @@ Paths are relative to this crate.
   type when the complex one fails later); optional type parts are taken only when complete.
 - Spark 4.2's query-syntax tail parses into the tree; their `AstBuilder` errors are in `validate/`. Pipe operators
   (`SetExprKind::Pipe`: input plus a flat `PipeOp` list; pipes bind below set operators; `lower/pipe.rs`) lower,
-  each behind a `PipeOperator` boundary. `TABLESAMPLE` lowers for `n ROWS` and for fractions that keep every row or
-  none; other fractions and `SYSTEM` are `KRISHIV_UNSUPPORTED_FEATURE`, as are `COLLATE`, `NEAREST BY`, `TABLE(...)` arguments,
+  each behind a `PipeOperator` boundary. `TABLESAMPLE` lowers `n ROWS` to a limit and `PERCENT` / `BUCKET x OUT OF y` (with
+  `REPEATABLE`) to `PlanNode::Sample` (goldens `tests/fixtures/spark-4.2.0/tablesample.json`, `src/tests/sample.rs`);
+  `SYSTEM` is `KRISHIV_UNSUPPORTED_FEATURE`, as are `COLLATE`, `NEAREST BY`, `TABLE(...)` arguments,
   `IDENTIFIER(...)` (names, function names, identifier literals unless `legacy_identifier_clause`), variant paths
   and `TRANSFORM`.
 - `FROM ... SELECT ...` stores its `FROM` once (`FromStatement`); never copy subtrees per use.

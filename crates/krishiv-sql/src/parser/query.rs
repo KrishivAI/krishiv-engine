@@ -1237,7 +1237,23 @@ impl Parser<'_> {
         } else {
             None
         };
-        let alias = self.table_alias()?;
+        // A table function takes no sample: Spark reads `TABLESAMPLE` there
+        // as its alias, so `range(3) TABLESAMPLE (10 PERCENT)` fails at `10`.
+        let alias = if self.kw_at(0, "TABLESAMPLE")
+            && self.sym_at(1, Sym::LParen)
+            && matches!(kind, TableFactorKind::TableFunction { .. })
+        {
+            let alias_start = self.start();
+            let name = self.any_ident()?;
+            let columns = self.ident_list()?;
+            Some(TableAlias {
+                name: Some(name),
+                columns,
+                span: self.span_from(alias_start),
+            })
+        } else {
+            self.table_alias()?
+        };
         Ok(TableFactor {
             kind,
             sample,
@@ -1264,9 +1280,25 @@ impl Parser<'_> {
         } else {
             Some(self.sample_method()?)
         };
-        self.expect_sym(Sym::RParen)?;
+        // After a lone number (`(10 BYTES)`) Spark drops the word in the way
+        // as "extra input"; after any other expression (`(id PERCENT)`) its
+        // error has no hint (`tablesample.json`).
+        if matches!(
+            &method,
+            Some(SampleMethod { kind: SampleMethodKind::Bytes(e), .. })
+                if matches!(e.kind, ExprKind::Literal(Literal::Number { .. }))
+        ) {
+            self.expect_closing(Sym::RParen, Close::Drop)?;
+        } else {
+            self.expect_sym(Sym::RParen)?;
+        }
         let mut seed = None;
-        if self.kw_at(0, "REPEATABLE") && self.sym_at(1, Sym::LParen) {
+        // `REPEATABLE (abc)` is a table alias with column aliases (Spark
+        // reads the clause only when an integer follows the parenthesis).
+        if self.kw_at(0, "REPEATABLE")
+            && self.sym_at(1, Sym::LParen)
+            && self.kind(2) == Some(TokenKind::Number(NumKind::Int))
+        {
             self.pos += 2;
             seed = Some(self.integer_text()?);
             self.expect_sym(Sym::RParen)?;

@@ -506,13 +506,11 @@ impl Lowerer {
     }
 
     /// `TABLESAMPLE` over `plan`, as Spark's `AstBuilder.withSample` builds
-    /// it (its checks are in `validate/sample.rs`): `n ROWS` is `LIMIT n`;
-    /// `PERCENT` and `BUCKET x OUT OF y` are a Bernoulli sample of a
-    /// fraction, which keeps every row at a fraction of 1 or more and none
-    /// at 0 or less (Spark's `BernoulliCellSampler`). A fraction in between
-    /// keeps rows by a random draw per row seeded by Spark's partition
-    /// index, which Krishiv's partitions do not reproduce, so it stays
-    /// unsupported, as does `SYSTEM` (block) sampling.
+    /// it (its checks are in `validate/sample.rs`): `n ROWS` is `LIMIT n`
+    /// (a `REPEATABLE` seed is ignored); `x PERCENT` and `BUCKET x OUT OF y`
+    /// are a Bernoulli [`PlanNode::Sample`] of `[0, fraction)`, the lower
+    /// bound 0 even for a bucket, kept at a fraction of 0 or 1 as Spark keeps
+    /// it. `SYSTEM` (block) sampling stays unsupported.
     pub(super) fn sample(&mut self, plan: LogicalPlan, s: &TableSample) -> R<LogicalPlan> {
         if s.sample_type == Some(SampleType::System) {
             return Err(unsupported("TABLESAMPLE SYSTEM", s.span));
@@ -520,19 +518,16 @@ impl Lowerer {
         let Some(method) = &s.method else {
             return Err(unsupported("TABLESAMPLE", s.span));
         };
-        let limit = |l: &mut Self, plan: LogicalPlan, limit: Arc<IrExpr>| {
-            l.node(
-                PlanNode::Limit {
-                    input: arc(plan),
-                    limit,
-                },
-                s.span,
-            )
-        };
         let fraction = match &method.kind {
             SampleMethodKind::Rows(e) => {
-                let n = arc(self.expr(e)?);
-                return Ok(limit(self, plan, n));
+                let limit = arc(self.expr(e)?);
+                return Ok(self.node(
+                    PlanNode::Limit {
+                        input: arc(plan),
+                        limit,
+                    },
+                    s.span,
+                ));
             }
             SampleMethodKind::Percent { negative, value } => {
                 let sign = if *negative { -1.0 } else { 1.0 };
@@ -549,20 +544,25 @@ impl Lowerer {
             // Validation refuses these.
             _ => return Err(unsupported("TABLESAMPLE", s.span)),
         };
-        if fraction >= 1.0 {
-            Ok(plan)
-        } else if fraction <= 0.0 {
-            Ok(limit(
-                self,
-                plan,
-                arc(IrExpr::literal(IrLiteral::Integer(0))),
-            ))
-        } else {
-            Err(unsupported(
-                "TABLESAMPLE of a fraction between 0 and 1",
-                s.span,
-            ))
-        }
+        // Validation refuses a seed past `i64`.
+        let seed = match &s.seed {
+            None => None,
+            Some(text) => Some(
+                text.parse::<i64>()
+                    .map_err(|_| unsupported("this REPEATABLE seed", s.span))?,
+            ),
+        };
+        Ok(self.node(
+            PlanNode::Sample {
+                input: arc(plan),
+                bounds: krishiv_plan::SampleBounds {
+                    lower: 0.0,
+                    upper: fraction,
+                },
+                seed,
+            },
+            s.span,
+        ))
     }
 
     pub(super) fn factor(&mut self, tf: &TableFactor) -> R<LogicalPlan> {
