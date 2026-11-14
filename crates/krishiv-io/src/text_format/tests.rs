@@ -387,6 +387,13 @@ fn write_then_read_round_trips() {
     let other = Arc::new(Schema::new(vec![Field::new("x", DataType::Utf8View, true)]));
     let got = read(b"a\n", &o, &ScanRequest::all(other)).expect("renamed column");
     assert_eq!(rows_of(&got), [Some("a".to_owned())]);
+    // Two columns, neither `value`: a planning error, never the line twice.
+    let two = Arc::new(Schema::new(vec![
+        Field::new("x", DataType::Utf8View, true),
+        Field::new("y", DataType::Utf8View, true),
+    ]));
+    let e = read(b"a\n", &o, &ScanRequest::all(two)).expect_err("two columns");
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
 }
 
 #[test]
