@@ -204,9 +204,15 @@ proptest = { version = "1.9", default-features = false }
 prost-reflect = { version = "0.16.5", default-features = false }
 # Concurrency model checking (dev-dependency only, under `--cfg loom`).
 loom = { version = "0.7", default-features = false }
-# Self-removing test directories (dev-dependency only).
+# Safe system calls: spill-file page-cache hints (krishiv-memory) and the UDF sandbox's prctl, setsid and rlimits.
 rustix = { version = "=1.1.6", default-features = false, features = ["fs", "process", "std"] }
+# Self-removing test directories (dev-dependency only).
 tempfile = { version = "3.27", default-features = false }
+# UDF worker sandbox (P3-T014b, `krishiv-udf-sandbox` only): Landlock rulesets, seccomp-bpf filters, and
+# the libc syscall and socket constants the filters name.
+landlock = { version = "=0.4.7", default-features = false }
+seccompiler = { version = "=0.5.0", default-features = false }
+libc = { version = "0.2.186", default-features = false }
 thiserror = { version = "2.0", default-features = false }
 serde = { version = "1.0.229", default-features = false }
 serde_json = { version = "1.0.154", default-features = false }
