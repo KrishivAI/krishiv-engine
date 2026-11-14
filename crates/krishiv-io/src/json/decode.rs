@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The JSON tokenizer and decoder: flat objects (one per line, or spanning
-//! lines with `multiLine`) into batches, with Spark's parse modes,
+//! The JSON tokenizer and decoder: records (one per line, or spanning lines
+//! with `multiLine`) into batches, with Spark's parse modes,
 //! `columnNameOfCorruptRecord` and option handling.
 //!
-//! The tokenizer is a small flat-object scanner over the record's text. A
-//! parsed record owns its field names and string values (like the CSV
-//! decoder's owned tokens); numbers borrow nothing either, so a huge line
-//! holds only its own bytes plus one batch. Nested values are recognised
-//! iteratively (never recursed into) and treated as malformed records:
-//! nulls plus the raw record in PERMISSIVE, dropped in DROPMALFORMED,
-//! failed in FAILFAST. Only a nested *schema* is unsupported at open.
+//! The tokenizer parses a record's text into owned values (like the CSV
+//! decoder's owned tokens), so a huge line holds only its own bytes plus one
+//! batch. Objects and arrays are parsed with an explicit stack (never
+//! recursion), keep the span of their text (a string column holds it
+//! exactly, as Spark does) and may nest [`MAX_NESTING_DEPTH`] deep, as
+//! Jackson allows. Values convert through `super::convert` (scalars) and
+//! `super::nested` (structs, arrays, maps).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -19,20 +19,20 @@ use arrow_array::{ArrayRef, RecordBatch, RecordBatchOptions};
 use arrow_schema::SchemaRef;
 use bytes::Bytes;
 use krishiv_common::error::{
-    InvalidJsonRootField, KrishivError, MalformedRecordInParsingCannotParseJsonArraysAsStructs,
-    MalformedRecordInParsingWithoutSuggestion,
+    ErrorClass, InvalidJsonRootField, KrishivError, MalformedRecordInParsingWithoutSuggestion,
 };
 use krishiv_kernels::datetime_pattern::Purpose;
 
-use super::convert::kind_of;
+use super::convert::JsonConverter;
+use super::nested::{Fail, NVal, Shape, build, size_of};
 use super::options::{JsonOptions, Mode, Syntax};
-use crate::csv::convert::{Column, Conv, Kind, Val};
+use crate::csv::convert::{Column, Val};
 use crate::error::{FormatError, FormatResult, internal};
 use crate::format::{Decoder, ScanUnitMetrics, Step, UnitPlan};
 use crate::io::ByteRange;
 use crate::request::{ROW_INDEX_COLUMN, ScanRequest};
 use crate::text::reader::{LineReader, ReadChunk, WholeReader};
-use crate::text::{BATCH_ROWS, Datetimes, TextMetadata, spark_type_name};
+use crate::text::{BATCH_ROWS, Datetimes, TextMetadata};
 
 /// Why a record is not a flat object: always the record's defect, never a
 /// bug, so every arm maps to malformed-record handling.
@@ -48,25 +48,51 @@ pub(crate) enum JVal {
     Num(String, bool),
     /// An unescaped string.
     Str(String),
-    /// An object or array value, as compact JSON text: only a string column
-    /// can hold it (Spark reads a nested value as its raw JSON text there).
-    Nested(String),
+    /// An object: its members as written (duplicates included: a struct
+    /// takes the last, a map keeps every one, as Spark does) and where its
+    /// text is in the record (a string column holds that text exactly as
+    /// written, as Spark's exact string parsing does).
+    Object(Vec<(String, JVal)>, Span),
+    /// An array: its elements and where its text is in the record.
+    Array(Vec<JVal>, Span),
 }
 
-/// A flat JSON object: field names in order with their values. Later
-/// duplicates already won in the parser, as in Spark.
+/// Byte offsets of a nested value's text within its record's text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Span {
+    pub start: usize,
+    pub end: usize,
+}
+
+impl Span {
+    /// The value's text in `record` (empty when the span does not fit, which
+    /// a record parsed from that text never gives).
+    pub(crate) fn text(self, record: &str) -> &str {
+        record.get(self.start..self.end).unwrap_or("")
+    }
+}
+
+/// Jackson's default `StreamReadConstraints.maxNestingDepth`: a record
+/// nested deeper (the top-level value is depth 1) is malformed.
+pub(crate) const MAX_NESTING_DEPTH: usize = 1000;
+
+/// A JSON object of one record: field names in order with their values,
+/// duplicates included (the last one wins when the record is read).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) struct JObject {
     pub fields: Vec<(String, JVal)>,
 }
 
-/// A top-level JSON value: a flat object, or anything else (an array, a
-/// scalar) which the malformed-record path handles.
+/// A top-level JSON value: an object (one row), a non-empty array (Spark
+/// reads each element as a row), or anything else (a scalar), which the
+/// malformed-record path handles.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Top {
     Object(JObject),
-    /// The raw text of the non-object value.
-    Other(String),
+    /// The elements of a top-level array (an empty array has no rows).
+    Array(Vec<JVal>),
+    /// A scalar top-level value.
+    Other(JVal),
 }
 
 /// The scanner's settings live in `super::options` ([`Syntax`]): the
@@ -75,6 +101,8 @@ pub(crate) enum Top {
 struct Cur<'t> {
     b: &'t [u8],
     pos: usize,
+    /// Where the record starts in `b`: spans are relative to it.
+    base: usize,
     syntax: Syntax,
 }
 
@@ -276,8 +304,11 @@ fn parse_number(c: &mut Cur<'_>) -> Result<(usize, bool), Reason> {
     if c.at() == Some(b'-') {
         c.pos += 1;
     }
-    // Non-numeric tokens.
+    // Non-numeric tokens (`allowNonNumericNumbers`).
     for word in ["NaN", "Infinity"] {
+        if !c.syntax.non_numeric {
+            break;
+        }
         if let Some(rest) = c.b.get(c.pos..)
             && rest.len() >= word.len()
             && &rest[..word.len()] == word.as_bytes()
@@ -361,126 +392,10 @@ fn scalar_end(c: &Cur<'_>) -> bool {
     }
 }
 
-/// Skips any JSON value starting at `c.pos` (for nested values and
-/// non-object records): iterative, so no depth limit to overflow.
-fn skip_value(c: &mut Cur<'_>, text: &str) -> Result<(), Reason> {
-    c.skip_gap();
-    let mut depth = 0_u32;
-    loop {
-        c.skip_gap();
-        match c.at() {
-            None => return Err("truncated value"),
-            Some(b'{' | b'[') => {
-                depth = depth.checked_add(1).ok_or("too deeply nested")?;
-                c.pos += 1;
-            }
-            Some(b'}' | b']') => {
-                if depth == 0 {
-                    return Err("unexpected bracket");
-                }
-                depth -= 1;
-                c.pos += 1;
-                if depth == 0 {
-                    return Ok(());
-                }
-            }
-            Some(b'"') => {
-                parse_quoted(c, text)?;
-                if depth == 0 {
-                    return Ok(());
-                }
-                expect_sep(c)?;
-            }
-            Some(b'\'') => {
-                if !c.syntax.single_quotes {
-                    return Err("unexpected character");
-                }
-                parse_quoted(c, text)?;
-                if depth == 0 {
-                    return Ok(());
-                }
-                expect_sep(c)?;
-            }
-            Some(b'-' | b'0'..=b'9' | b'N' | b'I') => {
-                parse_number(c)?;
-                if !scalar_end(c) {
-                    return Err("bad number");
-                }
-                if depth == 0 {
-                    return Ok(());
-                }
-                expect_sep(c)?;
-            }
-            Some(b't' | b'f' | b'n') => {
-                parse_literal(c)?;
-                if !scalar_end(c) {
-                    return Err("bad literal");
-                }
-                if depth == 0 {
-                    return Ok(());
-                }
-                expect_sep(c)?;
-            }
-            Some(_) => return Err("unexpected character"),
-        }
-    }
-}
-
-/// After a scalar inside a container: the separator (consumed) or closing
-/// bracket (left for the main loop) that must follow it.
-fn expect_sep(c: &mut Cur<'_>) -> Result<(), Reason> {
-    c.skip_gap();
-    match c.at() {
-        Some(b',' | b':') => {
-            c.pos += 1;
-            Ok(())
-        }
-        Some(b'}' | b']') => Ok(()),
-        None => Err("truncated value"),
-        Some(_) => Err("unexpected character"),
-    }
-}
-
-/// `raw` without the whitespace between tokens (string contents are kept
-/// as written).
-fn compact_json(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
-    let mut quote: Option<char> = None;
-    let mut escaped = false;
-    for ch in raw.chars() {
-        match quote {
-            Some(q) => {
-                out.push(ch);
-                if escaped {
-                    escaped = false;
-                } else if ch == '\\' {
-                    escaped = true;
-                } else if ch == q {
-                    quote = None;
-                }
-            }
-            None if ch == '"' || ch == '\'' => {
-                quote = Some(ch);
-                out.push(ch);
-            }
-            None if ch.is_whitespace() => {}
-            None => out.push(ch),
-        }
-    }
-    out
-}
-
-/// One field value starting at `c.pos`.
-fn parse_value(c: &mut Cur<'_>, text: &str) -> Result<JVal, Reason> {
-    c.skip_gap();
+/// A scalar value starting at `c.pos`.
+fn parse_scalar(c: &mut Cur<'_>, text: &str) -> Result<JVal, Reason> {
     match c.at() {
         None => Err("truncated value"),
-        Some(b'{' | b'[') => {
-            let start = c.pos;
-            skip_value(c, text)?;
-            let raw = text.get(start..c.pos).ok_or("truncated value")?;
-            Ok(JVal::Nested(compact_json(raw)))
-        }
         Some(b'"') => Ok(JVal::Str(parse_quoted(c, text)?)),
         Some(b'\'') => {
             if !c.syntax.single_quotes {
@@ -505,6 +420,120 @@ fn parse_value(c: &mut Cur<'_>, text: &str) -> Result<JVal, Reason> {
             Ok(v)
         }
         Some(_) => Err("unexpected character"),
+    }
+}
+
+/// An open container of [`parse_value`]'s explicit stack.
+enum Frame {
+    /// An object: its start, its members so far and the name of the member
+    /// whose value is being parsed.
+    Object {
+        start: usize,
+        fields: Vec<(String, JVal)>,
+        name: String,
+    },
+    /// An array: its start and its elements so far.
+    Array { start: usize, items: Vec<JVal> },
+}
+
+/// The name and colon of an object member (the cursor is before the name).
+fn member_name(c: &mut Cur<'_>, text: &str) -> Result<String, Reason> {
+    let name = parse_name(c, text)?;
+    c.skip_gap();
+    if c.at() != Some(b':') {
+        return Err("expected a colon");
+    }
+    c.pos += 1;
+    Ok(name)
+}
+
+/// One value starting at `c.pos`, inside `outer` open containers (the
+/// top-level object is one). Containers are parsed with an explicit stack,
+/// never recursion, and a value nested deeper than
+/// [`MAX_NESTING_DEPTH`] is malformed (Jackson's limit).
+fn parse_value(c: &mut Cur<'_>, text: &str, outer: usize) -> Result<JVal, Reason> {
+    let mut stack: Vec<Frame> = Vec::new();
+    loop {
+        c.skip_gap();
+        // A value starts here: open a container or read a scalar.
+        let mut value = match c.at() {
+            Some(open @ (b'{' | b'[')) => {
+                if outer + stack.len() + 1 > MAX_NESTING_DEPTH {
+                    return Err("too deeply nested");
+                }
+                let start = c.pos - c.base;
+                c.pos += 1;
+                c.skip_gap();
+                let close = if open == b'{' { b'}' } else { b']' };
+                if c.at() == Some(close) {
+                    c.pos += 1;
+                    let span = Span {
+                        start,
+                        end: c.pos - c.base,
+                    };
+                    if open == b'{' {
+                        JVal::Object(Vec::new(), span)
+                    } else {
+                        JVal::Array(Vec::new(), span)
+                    }
+                } else {
+                    stack.push(if open == b'{' {
+                        Frame::Object {
+                            start,
+                            fields: Vec::new(),
+                            name: member_name(c, text)?,
+                        }
+                    } else {
+                        Frame::Array {
+                            start,
+                            items: Vec::new(),
+                        }
+                    });
+                    continue;
+                }
+            }
+            _ => parse_scalar(c, text)?,
+        };
+        // A value is complete: add it to its container, closing every
+        // container that ends after it.
+        loop {
+            let Some(top) = stack.last_mut() else {
+                return Ok(value);
+            };
+            match top {
+                Frame::Object { fields, name, .. } => {
+                    fields.push((std::mem::take(name), value));
+                }
+                Frame::Array { items, .. } => items.push(value),
+            }
+            c.skip_gap();
+            match (c.at(), &mut *top) {
+                (Some(b','), Frame::Object { name, .. }) => {
+                    c.pos += 1;
+                    *name = member_name(c, text)?;
+                    break;
+                }
+                (Some(b','), Frame::Array { .. }) => {
+                    c.pos += 1;
+                    break;
+                }
+                (Some(b'}'), Frame::Object { .. }) | (Some(b']'), Frame::Array { .. }) => {
+                    c.pos += 1;
+                    let end = c.pos - c.base;
+                    value = match stack.pop() {
+                        Some(Frame::Object { start, fields, .. }) => {
+                            JVal::Object(fields, Span { start, end })
+                        }
+                        Some(Frame::Array { start, items }) => {
+                            JVal::Array(items, Span { start, end })
+                        }
+                        None => return Err("unexpected bracket"),
+                    };
+                }
+                (None, _) => return Err("truncated value"),
+                (Some(_), _) => return Err("expected a comma"),
+            }
+        }
     }
 }
 
@@ -544,18 +573,9 @@ fn parse_members(c: &mut Cur<'_>, text: &str) -> Result<JObject, Reason> {
         return Ok(JObject { fields });
     }
     loop {
-        let name = parse_name(c, text)?;
-        c.skip_gap();
-        if c.at() != Some(b':') {
-            return Err("expected a colon");
-        }
-        c.pos += 1;
-        let value = parse_value(c, text)?;
-        if let Some(slot) = fields.iter_mut().find(|(n, _)| *n == name) {
-            slot.1 = value;
-        } else {
-            fields.push((name, value));
-        }
+        let name = member_name(c, text)?;
+        let value = parse_value(c, text, 1)?;
+        fields.push((name, value));
         c.skip_gap();
         match c.at() {
             Some(b',') => c.pos += 1,
@@ -569,34 +589,30 @@ fn parse_members(c: &mut Cur<'_>, text: &str) -> Result<JObject, Reason> {
     }
 }
 
-/// The top-level value at `c.pos`: an object or anything else.
+/// The top-level value at `c.pos`: an object, an array or anything else.
 fn parse_top(c: &mut Cur<'_>, text: &str) -> Result<Top, Reason> {
     c.skip_gap();
-    let start = c.pos;
     match c.at() {
         None => Err("empty record"),
         Some(b'{') => Ok(Top::Object(parse_members(c, text)?)),
-        Some(_) => {
-            skip_value(c, text)?;
-            let raw = text.get(start..c.pos).ok_or("truncated value")?;
-            Ok(Top::Other(raw.to_owned()))
-        }
+        Some(_) => match parse_value(c, text, 0)? {
+            JVal::Array(items, _) => Ok(Top::Array(items)),
+            v => Ok(Top::Other(v)),
+        },
     }
 }
 
-/// One line of JSON-lines text: exactly one top-level value.
+/// One line of JSON-lines text: its first top-level value. Anything after
+/// it is never read, as Spark's parser stops after the record's value (so
+/// `{"a":1},` in a pretty-printed array is a record).
 pub(crate) fn parse_line(text: &str, syntax: Syntax) -> Result<Top, Reason> {
     let mut c = Cur {
         b: text.as_bytes(),
         pos: 0,
+        base: 0,
         syntax,
     };
-    let top = parse_top(&mut c, text)?;
-    c.skip_gap();
-    if c.pos != c.b.len() {
-        return Err("trailing text");
-    }
-    Ok(top)
+    parse_top(&mut c, text)
 }
 
 /// The next top-level value of multi-line text from `pos`: the value and
@@ -609,6 +625,7 @@ pub(crate) fn parse_next(
     let mut c = Cur {
         b: text.as_bytes(),
         pos,
+        base: pos,
         syntax,
     };
     c.skip_gap();
@@ -619,9 +636,46 @@ pub(crate) fn parse_next(
     Ok(Some((top, c.pos)))
 }
 
+/// The rows a record of a line before the split counts, as the main loop
+/// counts them: one per element of a top-level array of objects (none for
+/// `[]`), else one (a record, malformed or not). The first value byte is
+/// found past comments too, when `allowComments` is on.
+fn prefix_rows(line: &str, syntax: Syntax) -> i64 {
+    let mut c = Cur {
+        b: line.as_bytes(),
+        pos: 0,
+        base: 0,
+        syntax,
+    };
+    c.skip_gap();
+    if c.at() != Some(b'[') {
+        return 1;
+    }
+    match parse_line(line, syntax) {
+        Ok(Top::Array(items)) if items.iter().all(|v| matches!(v, JVal::Object(..))) => {
+            i64::try_from(items.len()).unwrap_or(i64::MAX)
+        }
+        _ => 1,
+    }
+}
+
+/// The cause Spark gives a top-level value that is not an object (or a
+/// top-level array element that is not one): `INVALID_JSON_ROOT_FIELD` for
+/// `null`, none it classifies otherwise.
+fn root_cause(v: &JVal) -> Option<KrishivError> {
+    matches!(v, JVal::Null).then(|| InvalidJsonRootField {}.into())
+}
+
 /// A malformed record in `FAILFAST` mode: `MALFORMED_RECORD_IN_PARSING`
-/// caused by the classified error, like the CSV decoder.
+/// caused by the classified error, like the CSV decoder. A string that is
+/// not a float is its own error (Spark's `FailureSafeParser` raises
+/// `CANNOT_PARSE_STRING_AS_DATATYPE` for it).
 fn fail_fast(raw: &str, cause: Option<KrishivError>) -> FormatError {
+    if let Some(c) = &cause
+        && c.error_class() == ErrorClass::MalformedRecordInParsingCannotParseStringAsDatatype
+    {
+        return FormatError::Failed(c.clone());
+    }
     let e: KrishivError = MalformedRecordInParsingWithoutSuggestion {
         bad_record: raw.to_owned(),
         fail_fast_mode: "FAILFAST".to_owned(),
@@ -638,7 +692,7 @@ enum Out {
     /// The column of malformed records.
     Corrupt,
     /// A value from the record's field `slot`.
-    Data { slot: usize, kind: Kind },
+    Data { slot: usize, shape: Shape },
     /// `_metadata.row_index`: the record's position among the file's rows.
     RowIndex,
 }
@@ -666,12 +720,10 @@ pub(crate) struct JsonDecoder {
     o: JsonOptions,
     dt: Datetimes,
     outs: Vec<Out>,
-    columns: Vec<Column>,
+    columns: Vec<Builder>,
     schema: SchemaRef,
     /// Names of the data columns, for field lookup.
     data_names: Vec<String>,
-    /// Spark type names of the data columns, for conversion errors.
-    data_types: Vec<String>,
     /// Field name to data-column index.
     index: HashMap<String, usize>,
     /// Reads the lines before a split that starts after byte 0, to count
@@ -679,6 +731,13 @@ pub(crate) struct JsonDecoder {
     prefix: Option<LineReader>,
     /// Rows accepted so far in the file, prefix included.
     row_no: i64,
+    /// Rows of a top-level array not yet in a batch, each with its
+    /// malformed cause (`Some`) when the array was partial.
+    pending: VecDeque<(Vec<NVal>, Option<Option<KrishivError>>)>,
+    /// The text of the array the pending rows came from.
+    pending_raw: String,
+    /// The approximate size of the pending rows.
+    pending_held: usize,
     rows: usize,
     held_text: usize,
     done: bool,
@@ -715,20 +774,18 @@ impl JsonDecoder {
                     .iter()
                     .position(|n| *n == f.name())
                     .ok_or_else(|| internal(format!("no column {}", f.name())))?;
-                let kind = kind_of(f)?;
-                columns.push(Column::new(f.data_type())?);
-                outs.push(Out::Data { slot, kind });
+                let shape = Shape::of(f)?;
+                columns.push(if shape.is_leaf() {
+                    Builder::Flat(Column::new(f.data_type())?)
+                } else {
+                    Builder::Nested(Vec::new(), f.data_type().clone())
+                });
+                outs.push(Out::Data { slot, shape });
                 continue;
             }
-            columns.push(Column::new(f.data_type())?);
+            columns.push(Builder::Flat(Column::new(f.data_type())?));
         }
         let data_names: Vec<String> = data.iter().map(|s| (*s).to_owned()).collect();
-        let data_types: Vec<String> = table
-            .fields()
-            .iter()
-            .filter(|f| f.name() != &opts.corrupt_column)
-            .map(|f| spark_type_name(f.data_type()))
-            .collect();
         let index = data_names
             .iter()
             .enumerate()
@@ -769,11 +826,13 @@ impl JsonDecoder {
             columns,
             schema,
             data_names,
-            data_types,
             index,
             source,
             prefix,
             row_no: 0,
+            pending: VecDeque::new(),
+            pending_raw: String::new(),
+            pending_held: 0,
             rows: 0,
             held_text: 0,
             done: units.units.is_empty(),
@@ -805,7 +864,7 @@ impl JsonDecoder {
                         if line.trim_matches(|c: char| c <= ' ').is_empty() {
                             continue;
                         }
-                        self.row_no += 1;
+                        self.row_no += prefix_rows(&line, self.syntax);
                         continue;
                     }
                 }
@@ -866,108 +925,178 @@ impl JsonDecoder {
         }
     }
 
-    /// One record into the builders.
+    /// One record into the builders: an object is a row, a top-level
+    /// array a row per element (Spark reads arrays of objects as rows).
     fn add(&mut self, raw: &str, parsed: &Result<Top, Reason>) -> FormatResult<()> {
         let Ok(top) = parsed else {
             return self.malformed(raw, None);
         };
-        let obj = match top {
-            Top::Object(o) => o,
-            Top::Other(other) => {
-                let cause: KrishivError = if other.trim_start().starts_with('[') {
-                    MalformedRecordInParsingCannotParseJsonArraysAsStructs {
-                        bad_record: raw.to_owned(),
-                        fail_fast_mode: "FAILFAST".to_owned(),
+        match top {
+            Top::Object(o) => {
+                let (vals, bad) = self.row(&o.fields, raw)?;
+                match bad {
+                    Some(cause) => self.malformed_with(raw, cause, vals),
+                    None => {
+                        self.accept(vals);
+                        Ok(())
                     }
-                    .into()
-                } else {
-                    InvalidJsonRootField {}.into()
-                };
-                return self.malformed(raw, Some(cause));
+                }
             }
-        };
-        let mut vals: Vec<Val> = Vec::with_capacity(self.outs.len());
-        let conv = super::convert::JsonConverter {
-            primitives_as_string: self.o.primitives_as_string,
+            Top::Array(items) => {
+                let mut rows = Vec::with_capacity(items.len());
+                let mut bad: Option<Option<KrishivError>> = None;
+                for item in items {
+                    // An element that is not an object makes the whole
+                    // record malformed, with no rows; Spark's cause is
+                    // `INVALID_JSON_ROOT_FIELD` for `null`, unclassified
+                    // otherwise.
+                    let JVal::Object(fields, _) = item else {
+                        return self.malformed(raw, root_cause(item));
+                    };
+                    let (vals, b) = self.row(fields, raw)?;
+                    if let Some(cause) = b
+                        && bad.is_none()
+                    {
+                        // Spark passes an array's partial cause on
+                        // unconverted: only a string that is not a float
+                        // keeps its class.
+                        bad = Some(cause.filter(|c| {
+                            c.error_class()
+                                == ErrorClass::MalformedRecordInParsingCannotParseStringAsDatatype
+                        }));
+                    }
+                    rows.push(vals);
+                }
+                // Every row of the array is kept (with the record's text when
+                // it is partial); the rows go out over later steps, a batch
+                // at a time.
+                self.pending_raw = raw.to_owned();
+                for vals in rows {
+                    self.pending_held += vals.iter().map(size_of).sum::<usize>();
+                    self.pending.push_back((vals, bad.clone()));
+                }
+                Ok(())
+            }
+            Top::Other(v) => {
+                let cause = root_cause(v);
+                self.malformed(raw, cause)
+            }
+        }
+    }
+
+    /// The pending rows of a top-level array, until the batch is full.
+    fn drain_pending(&mut self) -> FormatResult<()> {
+        while self.rows < BATCH_ROWS {
+            let Some((vals, bad)) = self.pending.pop_front() else {
+                break;
+            };
+            self.pending_held = self
+                .pending_held
+                .saturating_sub(vals.iter().map(size_of).sum::<usize>());
+            match bad {
+                Some(cause) => {
+                    let raw = std::mem::take(&mut self.pending_raw);
+                    let r = self.malformed_with(&raw, cause, vals);
+                    self.pending_raw = raw;
+                    r?;
+                }
+                None => self.accept(vals),
+            }
+        }
+        if self.pending.is_empty() {
+            self.pending_raw = String::new();
+            self.pending_held = 0;
+        }
+        Ok(())
+    }
+
+    /// The output values of one object, and the first cause when a value
+    /// did not convert (`Some(None)`: malformed without a cause).
+    fn row(
+        &self,
+        fields: &[(String, JVal)],
+        raw: &str,
+    ) -> FormatResult<(Vec<NVal>, Option<Option<KrishivError>>)> {
+        let conv = JsonConverter {
             dt: &self.dt,
+            non_numeric: self.o.syntax.non_numeric,
         };
         // Each record field to its data-column slot (later duplicates
         // already won in the parser).
         let mut slots: Vec<Option<&JVal>> = vec![None; self.data_names.len()];
-        for (name, v) in &obj.fields {
+        for (name, v) in fields {
             if let Some(i) = self.index.get(name) {
                 slots[*i] = Some(v);
             }
         }
+        let mut vals: Vec<NVal> = Vec::with_capacity(self.outs.len());
         let mut bad: Option<Option<KrishivError>> = None;
         for out in &self.outs {
             vals.push(match out {
-                Out::Corrupt => Val::Null,
-                Out::RowIndex => Val::I64(self.row_no),
-                Out::Data { slot, kind } => {
-                    match conv.convert(
-                        kind,
-                        &self.data_names[*slot],
-                        &self.data_types[*slot],
-                        slots[*slot],
-                    ) {
-                        Ok(val) => val,
-                        Err(Conv::Malformed) => {
+                // The corrupt text and the row index are set later.
+                Out::Corrupt | Out::RowIndex => NVal::Null,
+                Out::Data { slot, shape } => {
+                    match conv.value(shape, &self.data_names[*slot], slots[*slot], raw) {
+                        Ok(v) => v,
+                        Err(Fail::Partial(v, cause)) => {
                             if bad.is_none() {
-                                bad = Some(None);
+                                bad = Some(cause);
                             }
-                            Val::Null
+                            v
                         }
-                        Err(Conv::Fatal(e)) => {
-                            // A conversion that cannot be done at all (a
-                            // unknown time zone) fails the scan even in
-                            // PERMISSIVE. Nested values never reach here:
-                            // they are `Malformed` above.
-                            if matches!(
-                                e.error_class().name(),
-                                "KRISHIV_UNSUPPORTED_FEATURE" | "INVALID_TIMEZONE"
-                            ) {
-                                return Err(FormatError::Other(e));
-                            }
+                        Err(Fail::Whole(cause)) => {
                             if bad.is_none() {
-                                bad = Some(Some(e));
+                                bad = Some(cause);
                             }
-                            Val::Null
+                            NVal::Null
                         }
+                        // A conversion that cannot be done at all (an
+                        // unknown time zone) fails the scan even in
+                        // PERMISSIVE.
+                        Err(Fail::Fatal(e)) => return Err(FormatError::Other(e)),
                     }
                 }
             });
         }
-        if let Some(cause) = bad {
-            return self.malformed_with(raw, cause, vals);
-        }
-        self.accept(&vals);
-        Ok(())
+        Ok((vals, bad))
     }
 
     /// Accepted rows: counted and appended (rows before the split are
     /// counted by the prefix reader and never get here).
-    fn accept(&mut self, vals: &[Val]) {
+    fn accept(&mut self, vals: Vec<NVal>) {
+        // `_metadata.row_index`: the row's place among the file's rows,
+        // given when it is accepted (each row of a top-level array has its
+        // own).
+        let index = self.row_no;
         self.row_no += 1;
-        for (col, v) in self.columns.iter_mut().zip(vals) {
-            if let Val::Text(s) = v {
-                self.held_text += s.len();
+        for ((col, v), out) in self.columns.iter_mut().zip(vals).zip(&self.outs) {
+            let v = if matches!(out, Out::RowIndex) {
+                NVal::Leaf(Val::I64(index))
+            } else {
+                v
+            };
+            match col {
+                Builder::Flat(c) => match &v {
+                    NVal::Leaf(x) => {
+                        if let Val::Text(s) = x {
+                            self.held_text += s.len();
+                        }
+                        c.append(x);
+                    }
+                    _ => c.append_null(),
+                },
+                Builder::Nested(buf, _) => {
+                    self.held_text += size_of(&v);
+                    buf.push(v);
+                }
             }
-            col.append(v);
         }
         self.rows += 1;
     }
 
     /// A malformed record without a conversion error.
     fn malformed(&mut self, raw: &str, cause: Option<KrishivError>) -> FormatResult<()> {
-        let vals = self
-            .outs
-            .iter()
-            .map(|out| match out {
-                Out::RowIndex => Val::I64(self.row_no),
-                _ => Val::Null,
-            })
-            .collect();
+        let vals = vec![NVal::Null; self.outs.len()];
         self.malformed_with(raw, cause, vals)
     }
 
@@ -976,7 +1105,7 @@ impl JsonDecoder {
         &mut self,
         raw: &str,
         cause: Option<KrishivError>,
-        mut vals: Vec<Val>,
+        mut vals: Vec<NVal>,
     ) -> FormatResult<()> {
         match self.o.mode {
             // A dropped record still holds its place in the file's row
@@ -989,17 +1118,25 @@ impl JsonDecoder {
             Mode::Permissive => {
                 for (out, v) in self.outs.iter().zip(&mut vals) {
                     if matches!(out, Out::Corrupt) {
-                        *v = Val::Text(raw.to_owned());
+                        *v = NVal::Leaf(Val::Text(raw.to_owned()));
                     }
                 }
-                self.accept(&vals);
+                self.accept(vals);
                 Ok(())
             }
         }
     }
 
     fn batch(&mut self) -> FormatResult<RecordBatch> {
-        let arrays: Vec<ArrayRef> = self.columns.iter_mut().map(Column::finish).collect();
+        let arrays: Vec<ArrayRef> = self
+            .columns
+            .iter_mut()
+            .map(|c| match c {
+                Builder::Flat(c) => Ok(c.finish()),
+                Builder::Nested(buf, dt) => build(dt, std::mem::take(buf)),
+            })
+            .collect::<Result<_, KrishivError>>()
+            .map_err(FormatError::Other)?;
         let rows = std::mem::take(&mut self.rows);
         self.held_text = 0;
         self.metrics.rows += rows as u64;
@@ -1012,16 +1149,30 @@ impl JsonDecoder {
     }
 }
 
+/// The builder of one output column.
+enum Builder {
+    /// A scalar column.
+    Flat(Column),
+    /// A struct, array or map column: the batch's values, built at the end
+    /// of the batch.
+    Nested(Vec<NVal>, arrow_schema::DataType),
+}
+
 impl Decoder for JsonDecoder {
     fn step(&mut self) -> FormatResult<Step> {
         if self.done {
             return Ok(Step::Done);
         }
         loop {
+            self.drain_pending()?;
+            if self.rows >= BATCH_ROWS {
+                return Ok(Step::Batch(self.batch()?));
+            }
             match self.next()? {
                 Next::NeedData(r) => return Ok(Step::NeedData(vec![r])),
                 Next::Record(parsed, raw) => {
                     self.add(&raw, &parsed)?;
+                    self.drain_pending()?;
                     if self.rows >= BATCH_ROWS {
                         return Ok(Step::Batch(self.batch()?));
                     }
@@ -1068,6 +1219,8 @@ impl Decoder for JsonDecoder {
         source
             + self.prefix.as_ref().map_or(0, LineReader::buffered_bytes)
             + self.held_text
+            + self.pending_held
+            + self.pending_raw.len()
             + self.rows * 8 * self.columns.len()
     }
 
