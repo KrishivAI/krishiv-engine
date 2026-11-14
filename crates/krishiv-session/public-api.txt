@@ -710,6 +710,7 @@ pub struct krishiv_session::EngineRuntime
 impl krishiv_session::EngineRuntime
 pub fn krishiv_session::EngineRuntime::builder() -> krishiv_session::EngineRuntimeBuilder
 pub fn krishiv_session::EngineRuntime::cancel(&self, &krishiv_session::QueryId, krishiv_session::CancelReason) -> bool
+pub fn krishiv_session::EngineRuntime::cancel_by_tag(&self, &str, krishiv_session::CancelReason, impl core::ops::function::Fn(u64) -> bool) -> alloc::vec::Vec<krishiv_session::QueryId>
 pub fn krishiv_session::EngineRuntime::executor(&self) -> &alloc::sync::Arc<dyn krishiv_exec::executor::Executor>
 pub fn krishiv_session::EngineRuntime::expire_session(&self, &str) -> core::option::Option<usize>
 pub fn krishiv_session::EngineRuntime::io_totals(&self) -> &krishiv_io::io::IoCounters
@@ -857,6 +858,7 @@ impl krishiv_session::QueryOptions
 pub fn krishiv_session::QueryOptions::deadline(self, core::time::Duration) -> Self
 pub fn krishiv_session::QueryOptions::new() -> Self
 pub fn krishiv_session::QueryOptions::operation_id(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn krishiv_session::QueryOptions::tags<I, T>(self, I) -> Self where I: core::iter::traits::collect::IntoIterator<Item = T>, T: core::convert::AsRef<str>
 impl core::clone::Clone for krishiv_session::QueryOptions
 pub fn krishiv_session::QueryOptions::clone(&self) -> krishiv_session::QueryOptions
 impl core::default::Default for krishiv_session::QueryOptions
@@ -932,6 +934,7 @@ pub fn krishiv_session::Session::clone_session(&self) -> core::result::Result<Se
 pub fn krishiv_session::Session::close(&self) -> usize
 pub fn krishiv_session::Session::id(&self) -> &str
 pub fn krishiv_session::Session::interrupt_all(&self) -> alloc::vec::Vec<krishiv_session::QueryId>
+pub fn krishiv_session::Session::interrupt_tag(&self, &str) -> alloc::vec::Vec<krishiv_session::QueryId>
 pub fn krishiv_session::Session::is_closed(&self) -> bool
 pub fn krishiv_session::Session::new_session(&self) -> Self
 pub fn krishiv_session::Session::running_queries(&self) -> usize

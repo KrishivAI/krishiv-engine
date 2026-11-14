@@ -66,6 +66,10 @@ pub(crate) struct Action {
     /// The caller's operation id, if it gave one (the id `Session::cancel`
     /// names it by).
     operation: Option<Arc<str>>,
+    /// The tags its queries carry, fixed at the start: the session's and the request's.
+    tags: Arc<[(String, String)]>,
+    /// The request tags among them (exact-match interrupts).
+    request_tags: Arc<[Arc<str>]>,
     /// The action this one runs inside, if any (a nested `on_executor`).
     parent: Option<Arc<Action>>,
     /// Taken after `EngineRuntime::live` when both are held, never together
@@ -141,11 +145,25 @@ impl Actions {
     /// Registers an action of session `session`, named `operation` when the
     /// caller gave an id, inside the current action if there is one (so call
     /// it on the caller's task); it leaves the registry when the guard drops.
+    #[cfg(test)]
     pub(crate) fn begin(self: &Arc<Self>, session: u64, operation: Option<&str>) -> ActionGuard {
+        self.begin_tagged(session, operation, Arc::from([]), Arc::from([]))
+    }
+
+    /// [`Self::begin`] for an action whose queries carry `tags` (`request_tags` among them).
+    pub(crate) fn begin_tagged(
+        self: &Arc<Self>,
+        session: u64,
+        operation: Option<&str>,
+        tags: Arc<[(String, String)]>,
+        request_tags: Arc<[Arc<str>]>,
+    ) -> ActionGuard {
         let (reason, _) = watch::channel(None);
         let action = Arc::new(Action {
             session,
             operation: operation.map(Arc::from),
+            tags,
+            request_tags,
             parent: CURRENT.try_with(Arc::clone).ok(),
             state: Mutex::new(State::default()),
             reason,
@@ -171,12 +189,34 @@ impl Actions {
         reason: CancelReason,
         pick: &impl Fn(u64, &str) -> bool,
     ) -> ActionsCancelled {
+        self.cancel_matching(reason, &|a: &Action| {
+            pick(a.session, a.operation.as_deref().unwrap_or(""))
+        })
+    }
+
+    /// As [`Self::cancel_where`], picking by the action's tags: `pick` sees the session number,
+    /// the effective tags and the request tags.
+    pub(crate) fn cancel_tagged(
+        &self,
+        reason: CancelReason,
+        pick: &impl Fn(u64, &[(String, String)], &[Arc<str>]) -> bool,
+    ) -> ActionsCancelled {
+        self.cancel_matching(reason, &|a: &Action| {
+            pick(a.session, &a.tags, &a.request_tags)
+        })
+    }
+
+    fn cancel_matching(
+        &self,
+        reason: CancelReason,
+        pick: &impl Fn(&Action) -> bool,
+    ) -> ActionsCancelled {
         let picked: Vec<Arc<Action>> = self
             .live
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .values()
-            .filter(|a| pick(a.session, a.operation.as_deref().unwrap_or("")))
+            .filter(|a| pick(a))
             .cloned()
             .collect();
         let mut out = ActionsCancelled::default();

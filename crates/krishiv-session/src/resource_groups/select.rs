@@ -28,10 +28,15 @@ fn matches(s: &SelectorCfg, r: &QueryRequest) -> bool {
         && s.query_type.is_none_or(|c| r.statement_class == Some(c))
 }
 
-/// A selector tag `k` matches any pair with key `k`; `k=v` matches the exact pair.
+/// A selector tag `s` matches a pair `(k, v)` when `s == k` or `s == "k=v"`. A Connect request tag
+/// `job=42` is the pair `("job=42", "")` (tags are opaque and may contain `=`), so it matches the
+/// selector `job=42` through the first rule, and the session pair `("job", "42")` matches it
+/// through the second: the over-match is accepted (design P3-T064 §4.3).
 fn has_tag(tags: &[(String, String)], want: &str) -> bool {
-    match want.split_once('=') {
-        Some((k, v)) => tags.iter().any(|(tk, tv)| tk == k && tv == v),
-        None => tags.iter().any(|(tk, _)| tk == want),
-    }
+    tags.iter().any(|(k, v)| {
+        want == k
+            || want
+                .split_once('=')
+                .is_some_and(|(wk, wv)| wk == k && wv == v)
+    })
 }

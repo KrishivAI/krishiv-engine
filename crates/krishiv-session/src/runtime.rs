@@ -425,11 +425,22 @@ impl EngineRuntime {
         reason: CancelReason,
         pick: &impl Fn(u64, &str) -> bool,
     ) -> (Vec<QueryId>, usize) {
-        let mut ids = self.cancel_queries(reason, pick);
+        let ids = self.cancel_queries(reason, pick);
         // Actions still analyzing or planning, and the rows of those that
         // handed over after the walk above (a reservation racing this cancel).
-        // One registry pass for all of them (nested actions repeat rows).
         let actions = self.actions.cancel_where(reason, pick);
+        self.finish_cancel(reason, ids, actions)
+    }
+
+    /// Ends what the registry walk and the actions' pass picked: the rows the picked actions
+    /// handed over are cancelled through the registry (one pass for all of them: nested actions
+    /// repeat rows). Returns the ids and how many queries and statements ended.
+    fn finish_cancel(
+        &self,
+        reason: CancelReason,
+        mut ids: Vec<QueryId>,
+        actions: crate::action::ActionsCancelled,
+    ) -> (Vec<QueryId>, usize) {
         if !actions.rows.is_empty() {
             let rows: std::collections::HashSet<(u64, &str)> =
                 actions.rows.iter().map(|(s, r)| (*s, &**r)).collect();
@@ -444,6 +455,39 @@ impl EngineRuntime {
             }
         }
         (ids, ended)
+    }
+
+    /// Cancels, with `reason`, every query and statement of the runtime whose tags `pick`
+    /// accepts (given the session number, the effective tags and the request tags), and returns
+    /// the ids of those it cancelled.
+    pub(crate) fn cancel_tagged(
+        &self,
+        reason: CancelReason,
+        pick: impl Fn(u64, &[(String, String)], &[Arc<str>]) -> bool,
+    ) -> Vec<QueryId> {
+        let actions = self.actions.cancel_tagged(reason, &pick);
+        self.finish_cancel(reason, Vec::new(), actions).0
+    }
+
+    /// Cancels, with `reason`, the queries of the sessions `sessions` accepts whose tags match
+    /// `selector`: the selector is a key `k` (matches any pair with that key) or `k=v` (that
+    /// exact pair), the rule of a resource group's `clientTags`. A request tag is the key of a
+    /// pair with an empty value, so `job=42` also matches it as written. Returns the ids
+    /// cancelled and no count of what was skipped, so a guessed tag reveals nothing about
+    /// queries the caller may not touch. Not reachable from SQL (an admin check belongs in front
+    /// of it, as for [`Self::cancel`]).
+    pub fn cancel_by_tag(
+        &self,
+        selector: &str,
+        reason: CancelReason,
+        sessions: impl Fn(u64) -> bool,
+    ) -> Vec<crate::QueryId> {
+        self.cancel_tagged(reason, |session, tags, _| {
+            sessions(session)
+                && tags
+                    .iter()
+                    .any(|(k, v)| selector == k || selector == format!("{k}={v}"))
+        })
     }
 
     /// [`Self::cancel_where`] over the registered queries only.

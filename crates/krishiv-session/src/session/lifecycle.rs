@@ -109,6 +109,7 @@ impl Session {
             locals: Arc::from([]),
             operation: None,
             deadline: None,
+            request_tags: Arc::from([]),
             state: Arc::new(SessionState {
                 conf: Arc::new(seed.conf),
                 catalog: Arc::new(seed.catalog),
@@ -441,6 +442,11 @@ impl Session {
             locals: Arc::clone(&self.locals),
             operation,
             deadline: options.deadline.or(self.deadline),
+            request_tags: if options.request_tags.is_empty() {
+                Arc::clone(&self.request_tags)
+            } else {
+                options.request_tags.into()
+            },
         };
         Ok(handle)
     }
@@ -527,6 +533,20 @@ impl Session {
         self.state
             .runtime
             .cancel_where(crate::CancelReason::User, |s, _| s == number)
+    }
+
+    /// Cancels every running query of this session that carries the request tag `tag`
+    /// (Spark Connect's `Interrupt` of type `TAG`; [`crate::QueryOptions::tags`]) and returns
+    /// their ids. The match is exact: `a` does not match `ab` or `a=1`, and the session's own
+    /// tags ([`Session::set_tag`]) never match, as a Connect client cannot see them. Nothing
+    /// matched is an empty list. The queries end with `OPERATION_CANCELED`.
+    pub fn interrupt_tag(&self, tag: &str) -> Vec<crate::QueryId> {
+        let number = self.state.number;
+        self.state
+            .runtime
+            .cancel_tagged(crate::CancelReason::User, |s, _, request| {
+                s == number && request.iter().any(|t| &**t == tag)
+            })
     }
 }
 

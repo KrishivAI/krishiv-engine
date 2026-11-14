@@ -1135,6 +1135,17 @@ impl QueryLog {
         });
     }
 
+    /// Adds the statement's request tags, as `(tag, "")` pairs, to the tags of row `id`.
+    pub(crate) fn add_request_tags(&self, id: &str, tags: &[Arc<str>]) {
+        if tags.is_empty() {
+            return;
+        }
+        self.history.update(&self.session_id, id, |row| {
+            row.tags
+                .extend(tags.iter().map(|t| (t.to_string(), String::new())));
+        });
+    }
+
     /// The session's tags now.
     pub(crate) fn tags_now(&self) -> Vec<(String, String)> {
         self.tags()
