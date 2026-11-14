@@ -21,8 +21,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use krishiv_common::config::{
-    CONNECT_MAX_SESSIONS, CONNECT_MAX_SESSIONS_PER_PRINCIPAL, CONNECT_SESSION_IDLE_TIMEOUT,
-    CONNECT_SESSION_TOMBSTONES, Config, ConfigValue,
+    CONNECT_EXECUTE_ABANDONED_TOMBSTONES, CONNECT_MAX_SESSIONS, CONNECT_MAX_SESSIONS_PER_PRINCIPAL,
+    CONNECT_SESSION_IDLE_TIMEOUT, CONNECT_SESSION_TOMBSTONES, Config, ConfigValue,
 };
 use krishiv_common::error::{
     InvalidHandleSessionChanged, InvalidHandleSessionClosed, InvalidHandleSessionNotFound,
@@ -31,7 +31,7 @@ use krishiv_common::error::{
 use krishiv_common::principal::Principal;
 use krishiv_session::{QueryId, Session};
 
-use crate::operation::Operations;
+use crate::operation::{Operation, Operations};
 
 /// Builds the session a principal gets for a new session id.
 pub type SessionFactory = dyn Fn(&Principal) -> Result<Session, KrishivError> + Send + Sync;
@@ -52,6 +52,10 @@ pub struct SessionLimits {
     /// `INVALID_HANDLE.SESSION_CLOSED`
     /// (`spark.connect.session.manager.closedSessionsTombstonesSize`).
     pub tombstones: usize,
+    /// How many abandoned operation ids are remembered to answer
+    /// `INVALID_HANDLE.OPERATION_ABANDONED`
+    /// (`spark.connect.execute.manager.abandonedTombstonesSize`, 10,000).
+    pub abandoned_tombstones: usize,
 }
 
 impl Default for SessionLimits {
@@ -61,6 +65,7 @@ impl Default for SessionLimits {
             max_sessions_per_principal: 100,
             idle_timeout: Some(Duration::from_secs(60 * 60)),
             tombstones: 1000,
+            abandoned_tombstones: 10_000,
         }
     }
 }
@@ -92,6 +97,8 @@ impl SessionLimits {
                 .unwrap_or(d.max_sessions_per_principal),
             idle_timeout,
             tombstones: count(&CONNECT_SESSION_TOMBSTONES).unwrap_or(d.tombstones),
+            abandoned_tombstones: count(&CONNECT_EXECUTE_ABANDONED_TOMBSTONES)
+                .unwrap_or(d.abandoned_tombstones),
         }
     }
 }
@@ -134,11 +141,12 @@ impl SessionEntry {
         &self.operations
     }
 
-    /// Cancels the session's operations, then closes the session (its
-    /// queries cancelled).
-    fn close(&self) {
-        self.operations.cancel_all();
+    /// Closes the session's operations, then the session (its queries
+    /// cancelled). Returns the operations it closed.
+    fn close(&self) -> Vec<Arc<Operation>> {
+        let ops = self.operations.close_all();
         self.session.close();
+        ops
     }
 }
 
@@ -157,28 +165,46 @@ struct Key {
     session_id: String,
 }
 
+/// An operation of a session (Spark's `ExecuteKey`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct OpKey {
+    session: Key,
+    operation: QueryId,
+}
+
 #[derive(Default)]
 struct Inner {
     live: HashMap<Key, Arc<SessionEntry>>,
     /// The principal holding each live session id.
     owners: HashMap<String, Principal>,
     per_principal: HashMap<Principal, usize>,
-    closed: Tombstones,
+    closed: Tombstones<Key>,
+    /// Abandoned operations (Spark's `abandonedTombstones`).
+    abandoned: Tombstones<OpKey>,
     /// Set by [`SessionManager::close_all`]: no session is created after it.
     shut: bool,
 }
 
 /// A bounded set of released keys; the least recently used goes first, as
 /// Spark's Guava cache with a maximum size and no expiry.
-#[derive(Default)]
-struct Tombstones {
-    stamp: HashMap<Key, u64>,
-    order: BTreeMap<u64, Key>,
+struct Tombstones<K> {
+    stamp: HashMap<K, u64>,
+    order: BTreeMap<u64, K>,
     next: u64,
 }
 
-impl Tombstones {
-    fn contains(&mut self, key: &Key) -> bool {
+impl<K> Default for Tombstones<K> {
+    fn default() -> Self {
+        Self {
+            stamp: HashMap::new(),
+            order: BTreeMap::new(),
+            next: 0,
+        }
+    }
+}
+
+impl<K: Clone + Eq + std::hash::Hash> Tombstones<K> {
+    fn contains(&mut self, key: &K) -> bool {
         // A lookup is an access: it refreshes the entry.
         let Some(old) = self.stamp.get(key).copied() else {
             return false;
@@ -190,7 +216,7 @@ impl Tombstones {
         true
     }
 
-    fn insert(&mut self, key: Key, capacity: usize) {
+    fn insert(&mut self, key: K, capacity: usize) {
         if let Some(old) = self.stamp.remove(&key) {
             self.order.remove(&old);
         }
@@ -407,13 +433,96 @@ impl SessionManager {
             let mut inner = self.lock();
             let entry = Self::remove_locked(&mut inner, &key)?;
             if !allow_reconnect {
-                inner.closed.insert(key, self.limits.tombstones);
+                inner.closed.insert(key.clone(), self.limits.tombstones);
             }
             entry
         };
         let id = entry.server_side_id().to_owned();
-        entry.close();
+        // Spark's `removeAllExecutionsForSession` removes them as abandoned.
+        let ops = entry.close();
+        if !ops.is_empty() {
+            let mut inner = self.lock();
+            for op in ops {
+                inner.abandoned.insert(
+                    OpKey {
+                        session: key.clone(),
+                        operation: op.id().clone(),
+                    },
+                    self.limits.abandoned_tombstones,
+                );
+            }
+        }
         Some(id)
+    }
+
+    /// Whether operation `operation_id` of session `session_id` was
+    /// abandoned (a reattach answers `INVALID_HANDLE.OPERATION_ABANDONED`).
+    #[must_use]
+    pub fn is_abandoned(
+        &self,
+        principal: &Principal,
+        session_id: &str,
+        operation_id: &str,
+    ) -> bool {
+        let Ok(operation) = QueryId::parse(operation_id) else {
+            return false;
+        };
+        let key = OpKey {
+            session: Self::key(principal, session_id),
+            operation,
+        };
+        self.lock().abandoned.contains(&key)
+    }
+
+    /// Spark's periodic maintenance of executions
+    /// (`SparkConnectExecutionManager.periodicMaintenance`, v4.3.0 lines
+    /// 342-362): a sender past its deadline is detached first (its client
+    /// may have stopped reading, so its stream is never polled again), then
+    /// every reattachable operation with no stream attached for `timeout`
+    /// is tombstoned as abandoned, removed and closed (its query
+    /// interrupted, its responses and budgets returned). Returns how many.
+    pub fn abandon_detached(&self, timeout: Duration) -> usize {
+        let sessions: Vec<(Key, Arc<SessionEntry>)> = self
+            .lock()
+            .live
+            .iter()
+            .map(|(k, e)| (k.clone(), Arc::clone(e)))
+            .collect();
+        let mut abandoned = 0;
+        for (key, entry) in sessions {
+            for op in entry.operations().all() {
+                op.replay().expire_sender(std::time::Instant::now());
+                let expired = op
+                    .replay()
+                    .detached_since()
+                    .is_some_and(|since| since.elapsed() >= timeout);
+                if !expired {
+                    continue;
+                }
+                // Tombstoned before it leaves the map, so a racing reattach
+                // finds it abandoned rather than unknown (lines 158-166).
+                // A reattach between the check above and the close below
+                // is closed with it (its retry sees OPERATION_ABANDONED):
+                // Spark's `periodicMaintenance` has the same window.
+                self.lock().abandoned.insert(
+                    OpKey {
+                        session: key.clone(),
+                        operation: op.id().clone(),
+                    },
+                    self.limits.abandoned_tombstones,
+                );
+                if entry.operations().remove(&op) {
+                    tracing::info!(
+                        target: "krishiv::connect",
+                        operation = op.id().as_str(),
+                        "abandoned a detached Connect operation"
+                    );
+                    abandoned += 1;
+                }
+                op.close();
+            }
+        }
+        abandoned
     }
 
     /// Releases every session idle past the timeout, running no query and
@@ -455,6 +564,7 @@ impl SessionManager {
                 session = entry.server_side_id(),
                 "released an idle Connect session"
             );
+            // It holds no operation (checked above).
             entry.close();
         }
         expired.len()
@@ -477,14 +587,16 @@ impl SessionManager {
         entries.len()
     }
 
-    /// The running queries plus the live operations of all live sessions:
-    /// zero once nothing is left to finish (shutdown waits for it).
+    /// The running queries plus the active operations (still running, or
+    /// read by an attached client) of all live sessions: zero once nothing
+    /// is left to finish (shutdown waits for it). A detached operation that
+    /// has ended does not count; closing its session releases it.
     #[must_use]
     pub fn busy(&self) -> usize {
         let entries: Vec<Arc<SessionEntry>> = self.lock().live.values().map(Arc::clone).collect();
         entries
             .iter()
-            .map(|e| e.session.running_queries() + e.operations.len())
+            .map(|e| e.session.running_queries() + e.operations.active())
             .sum()
     }
 
