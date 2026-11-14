@@ -798,15 +798,18 @@ fn set_op_condition(
             _ => None,
         }
     }
-    /// The `<=>` pairs of `e`, left to right, if `e` is a conjunction of them.
-    fn pairs(e: &Expr, out: &mut Vec<(AttrId, AttrId)>) -> bool {
+    /// The `<=>` pairs of `e`, left to right, if `e` is a conjunction of at most `limit` of them. The bound
+    /// stops early on a condition that shares nodes (`e AND e`, 30 times over, is 2^30 pairs as a tree).
+    fn pairs(e: &Expr, limit: usize, out: &mut Vec<(AttrId, AttrId)>) -> bool {
         let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node else {
             return false;
         };
         match (&f.id, f.args.as_slice()) {
-            (FunctionId::Builtin(Builtin::And), [x, y]) => pairs(x, out) && pairs(y, out),
+            (FunctionId::Builtin(Builtin::And), [x, y]) => {
+                pairs(x, limit, out) && pairs(y, limit, out)
+            }
             (FunctionId::Builtin(Builtin::EqNullSafe), [x, y]) => match (column(x), column(y)) {
-                (Some(x), Some(y)) => {
+                (Some(x), Some(y)) if out.len() < limit => {
                     out.push((x, y));
                     true
                 }
@@ -819,11 +822,13 @@ fn set_op_condition(
         // `x INTERSECT y` over relations with no column (`SELECT FROM ...` is not SQL, so only a DataFrame).
         return l.is_empty() && r.is_empty();
     };
-    let mut found = Vec::new();
+    if l.len() != r.len() {
+        return false;
+    }
+    let mut found = Vec::with_capacity(l.len());
     // The condition's ids are as written; the outputs' are shifted by `offset`.
-    pairs(e, &mut found)
+    pairs(e, l.len(), &mut found)
         && found.len() == l.len()
-        && l.len() == r.len()
         && found
             .iter()
             .zip(l.iter().zip(r))

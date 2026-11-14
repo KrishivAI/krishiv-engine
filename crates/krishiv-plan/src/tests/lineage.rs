@@ -9,7 +9,7 @@ use std::sync::Arc;
 use krishiv_common::error::ErrorClass;
 use krishiv_types::DataType;
 
-use super::dsl::{c, eq, int};
+use super::dsl::{c, eq, int, op};
 use crate::analyzer::lineage::{Transform, lineage, lineage_counting};
 use crate::analyzer::testing::{block_on, context};
 use crate::analyzer::{
@@ -24,12 +24,9 @@ fn catalog() -> MemoryCatalog {
         nullable: true,
         char_varchar: None,
     };
-    MemoryCatalog::new("spark_catalog").with_table(
-        &["default"],
-        "t",
-        vec![col("x"), col("y")],
-        None,
-    )
+    MemoryCatalog::new("spark_catalog")
+        .with_table(&["default"], "t", vec![col("x"), col("y")], None)
+        .with_table(&["default"], "u", vec![col("z")], None)
 }
 
 fn analyze(plan: LogicalPlan) -> AnalyzedPlan {
@@ -76,7 +73,18 @@ fn a_cte_referenced_twice_is_computed_once() {
 #[test]
 fn shared_expression_dags_are_walked_once() {
     // `e AND e` 30 times: 2^30 nodes as a tree.
-    let e = (0..30).fold(Arc::new(eq(c("x"), int(1))), |e, _| {
+    let e = and_dag(eq(c("x"), int(1)), 30);
+    let a = analyze(LogicalPlan::table(["t"]).filter(e));
+    let (l, counts) = lineage_counting(&a).unwrap();
+    assert_eq!(l.filters.len(), 1);
+    // Each distinct node once: 30 `AND`s, the `=`, its column and literal (the analyzer may wrap a few more,
+    // never the 2^30 of the tree).
+    assert!(counts.expressions < 100, "{counts:?}");
+}
+
+/// `e AND e`, `n` times over, as one shared DAG (2^n nodes as a tree).
+fn and_dag(e: Expr, n: usize) -> Arc<Expr> {
+    (0..n).fold(Arc::new(e), |e, _| {
         Arc::new(Expr::new(ExprNode::Function(FunctionCall {
             within_group: Vec::new(),
             name: Builtin::And.name().to_owned(),
@@ -86,13 +94,30 @@ fn shared_expression_dags_are_walked_once() {
             distinct: false,
             filter: None,
         })))
-    });
-    let a = analyze(LogicalPlan::table(["t"]).filter(e));
-    let (l, counts) = lineage_counting(&a).unwrap();
-    assert_eq!(l.filters.len(), 1);
-    // Each distinct node once: 30 `AND`s, the `=`, its column and literal (the analyzer may wrap a few more,
-    // never the 2^30 of the tree).
-    assert!(counts.expressions < 100, "{counts:?}");
+    })
+}
+
+#[test]
+fn a_semi_join_on_a_shared_condition_dag_is_probed_in_bounded_time() {
+    // `x <=> z`, then `e AND e` 30 times: about 30 nodes, 2^30 `<=>` pairs as a tree. The set-operation
+    // probe stops once the pairs outnumber the columns.
+    let condition = and_dag(op(Builtin::EqNullSafe, c("x"), c("z")), 30);
+    let plan = LogicalPlan::table(["t"]).join(
+        LogicalPlan::table(["u"]),
+        crate::JoinKind::LeftSemi,
+        crate::JoinCondition::On(condition),
+    );
+    let start = std::time::Instant::now();
+    let l = lineage(&analyze(plan)).unwrap();
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(5),
+        "{:?}",
+        start.elapsed()
+    );
+    // Not the set operations' rewrite: the left side's columns as they are.
+    assert_eq!(l.columns.len(), 2);
+    assert_eq!(l.columns[0].transform, Transform::Identity);
+    assert_eq!(l.columns[0].sources.len(), 1);
 }
 
 #[test]

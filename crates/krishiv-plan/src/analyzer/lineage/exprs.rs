@@ -94,11 +94,14 @@ impl Walker<'_> {
                     keys = merge(&keys, &v);
                 }
                 self.record(FilterKind::Window, &keys);
-                // A window's value derives from its arguments and its keys (they change `rank()`).
+                // A window's value derives from its arguments and its keys (they change `rank()`). The window
+                // function's own step is `window` (an aggregate's `sum(a) OVER ()` too); its arguments keep the
+                // transform they bring (`sum(s) OVER ()` of an aggregated `s` stays `aggregate`).
+                let upstream = self.window_arguments(&w.function, offset)?;
                 let transform = if f.transform > Transform::Aggregate {
                     f.transform
                 } else {
-                    Transform::Window.max(keys.transform)
+                    Transform::Window.max(keys.transform).max(upstream)
                 };
                 Ok(Arc::new(ColInfo {
                     sources: f.sources.union(&keys.sources).cloned().collect(),
@@ -198,6 +201,31 @@ impl Walker<'_> {
     }
 }
 
+impl Walker<'_> {
+    /// The strongest transform the arguments of the window function `function` bring (memoized: the
+    /// function's own walk read them already).
+    fn window_arguments(
+        &mut self,
+        function: &Arc<Expr>,
+        offset: u64,
+    ) -> Result<Transform, KrishivError> {
+        match &function.node {
+            ExprNode::Resolved(ResolvedExpr::Function(f)) => {
+                let mut strongest = Transform::Literal;
+                for a in &f.args {
+                    strongest = strongest.max(self.value(a, offset)?.transform);
+                }
+                Ok(strongest)
+            }
+            ExprNode::Resolved(
+                ResolvedExpr::Alias { expr, .. } | ResolvedExpr::EvalMode { expr, .. },
+            ) => self.window_arguments(expr, offset),
+            // Not a call: its whole transform, the conservative (stronger) reading.
+            _ => Ok(self.value(function, offset)?.transform),
+        }
+    }
+}
+
 /// `v` one step `step` further: a constant stays a constant.
 fn over(v: &Info, step: Transform) -> Info {
     if v.transform == Transform::Literal || v.transform >= step {
@@ -210,9 +238,14 @@ fn over(v: &Info, step: Transform) -> Info {
 }
 
 impl Walker<'_> {
-    /// A field `name` of `v`: when `v` is a file scan's `_metadata` column (its leaves are path leaves
-    /// `_metadata.<field>`), only that field's leaves. A table's column of that name is not narrowed.
+    /// A field `name` of `v`: when `v` is a file scan's `_metadata` column as read (an `identity` whose leaves
+    /// are path leaves `_metadata.<field>`), only that field's leaves. A struct rebuilt of `_metadata` fields
+    /// (`named_struct('file_name', _metadata.file_path)`) is an `expression`: its field names say nothing of
+    /// its sources, so it keeps them all. A table's column of that name is not narrowed.
     fn metadata_field(&self, v: &Info, name: &str) -> Result<Info, KrishivError> {
+        if v.transform != Transform::Identity {
+            return Ok(Arc::clone(v));
+        }
         #[deny(clippy::wildcard_enum_match_arm)]
         let path_column = |l: &Leaf| match l {
             Leaf::Path { column, .. } => Some(column.clone()),
