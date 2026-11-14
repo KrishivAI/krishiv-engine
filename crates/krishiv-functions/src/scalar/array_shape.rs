@@ -531,6 +531,17 @@ fn temporal_sequence(
             micros.signum()
         };
         let up = start <= stop;
+        // A step whose days and microseconds cancel out (`1 day` and `-24 hours`) never advances: it is a zero step.
+        let advances =
+            months != 0 || i128::from(days) * i128::from(MICROS_PER_DAY) + i128::from(micros) != 0;
+        if !advances && start != stop {
+            return Err(LegacyErrorTemp3243 {
+                start: start.to_string(),
+                stop: stop.to_string(),
+                step: "0".to_owned(),
+            }
+            .into());
+        }
         if !(start == stop || (up && sign > 0) || (!up && sign < 0)) {
             return Err(LegacyErrorTemp3243 {
                 start: start.to_string(),

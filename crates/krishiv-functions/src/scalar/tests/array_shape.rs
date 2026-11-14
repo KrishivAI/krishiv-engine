@@ -99,3 +99,34 @@ fn reverse_of_an_array_reverses_the_elements_and_keeps_nulls_and_empty_arrays() 
     assert!(ints(2).is_empty());
     assert!(out.is_null(3));
 }
+
+#[test]
+fn sequence_over_dates_needs_a_whole_day_step_and_a_step_that_advances() {
+    use arrow_array::types::DurationMicrosecondType;
+    use arrow_array::{Date32Array, PrimitiveArray};
+    use krishiv_common::error::ErrorClass;
+    let start: ArrayRef = Arc::new(Date32Array::from(vec![17532]));
+    let stop: ArrayRef = Arc::new(Date32Array::from(vec![17536]));
+    let step = |micros: i64| -> ArrayRef {
+        Arc::new(PrimitiveArray::<DurationMicrosecondType>::from(vec![
+            micros,
+        ]))
+    };
+    let run = |micros: i64| {
+        let s = step(micros);
+        let f = bind_with("sequence", &[&start, &stop, &s], &BindOptions::new());
+        f.invoke(&[col(&start), col(&stop), col(&s)], 1)
+    };
+    // `sequence step must be an interval day to second of day granularity if start and end values are dates` (Spark: `_LEGACY_ERROR_TEMP_3242`).
+    assert_eq!(
+        run(12 * 3_600_000_000).unwrap_err().error_class(),
+        ErrorClass::LegacyErrorTemp3242
+    );
+    assert_eq!(
+        run(0).unwrap_err().error_class(),
+        ErrorClass::LegacyErrorTemp3242
+    );
+    // A step of one day over four days gives five dates.
+    let out = run(86_400_000_000).unwrap();
+    assert_eq!(out.as_list::<i32>().value(0).len(), 5);
+}

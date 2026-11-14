@@ -89,19 +89,19 @@ $78.12
 ```sql
 -- to_varchar, example 7
 > SELECT to_varchar(x'537061726b2053514c', 'base64');
-Error: KRISHIV_UNSUPPORTED_FEATURE
+U3BhcmsgU1FM
 ```
 
 ```sql
 -- to_varchar, example 8
 > SELECT to_varchar(x'537061726b2053514c', 'hex');
-Error: KRISHIV_UNSUPPORTED_FEATURE
+537061726B2053514C
 ```
 
 ```sql
 -- to_varchar, example 9
 > SELECT to_varchar(encode('abc', 'utf-8'), 'utf-8');
-Error: KRISHIV_UNSUPPORTED_FEATURE
+abc
 ```
 
 ## Version history
