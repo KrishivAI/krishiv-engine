@@ -342,6 +342,9 @@ impl<'a> Estimator<'a> {
         let mut est = self.compute(p);
         est.from_statistics = match &p.node {
             PlanNode::Scan(_) | PlanNode::CteRef(_) => est.from_statistics,
+            // Leaves estimated by default: a recursive CTE's reference (Spark's `UnionLoopRef`
+            // is `defaultSizeInBytes`, `cteOperators.scala:86`) and an unresolved read.
+            PlanNode::UnionLoopRef { .. } | PlanNode::Read(_) => false,
             _ => {
                 let mut all = true;
                 p.for_each_child(&mut |c| all &= self.plan(c).from_statistics);

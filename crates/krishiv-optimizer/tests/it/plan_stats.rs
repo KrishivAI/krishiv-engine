@@ -1175,3 +1175,16 @@ fn one_row_relation_inline_tables_and_ranges_are_exact() {
     let id = e.col("id");
     assert_eq!((id.min, id.max), (Some(-12.0), Some(-10.0)));
 }
+
+/// A recursive CTE's reference is unknown, as Spark's `UnionLoopRef.computeStats`
+/// (`defaultSizeInBytes`, `cteOperators.scala:86`): estimated by default and not counted as
+/// resting on statistics, so statistics-gated rules do not treat it as measured.
+#[test]
+fn a_recursive_reference_is_not_from_statistics() {
+    let e = Estimated::of(
+        "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 3) SELECT * FROM r",
+        |p| matches!(p.node, PlanNode::UnionLoopRef { .. }),
+    );
+    let est = e.stats.get(&e.node).unwrap();
+    assert!(!est.from_statistics, "{est:?}");
+}
