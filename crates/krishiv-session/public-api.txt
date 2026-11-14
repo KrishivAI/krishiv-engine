@@ -691,6 +691,7 @@ impl core::marker::StructuralPartialEq for krishiv_session::Transport
 pub struct krishiv_session::Column
 impl krishiv_session::Column
 pub fn krishiv_session::Column::alias(self, &str) -> Self
+pub fn krishiv_session::Column::alias_all(self, alloc::vec::Vec<alloc::string::String>) -> Self
 pub fn krishiv_session::Column::and(self, impl core::convert::Into<Self>) -> Self
 pub fn krishiv_session::Column::asc(self) -> Self
 pub fn krishiv_session::Column::asc_nulls_last(self) -> Self

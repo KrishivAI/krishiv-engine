@@ -30,6 +30,7 @@ use crate::session::{QueryEnv, RecordBatchStream, Session, WriteTarget, read_fil
 
 pub(crate) mod checkpoint;
 mod fill_stream;
+mod generators;
 mod geo_gate;
 mod traced;
 
@@ -297,10 +298,7 @@ impl DataFrame {
     /// ```
     #[must_use]
     pub fn select(&self, cols: impl IntoIterator<Item = impl Into<Column>>) -> Self {
-        self.derive(PlanNode::Project {
-            input: Arc::clone(&self.plan),
-            exprs: exprs(cols),
-        })
+        self.select_lifting_generators(exprs(cols))
     }
 
     /// `SELECT` of SQL expression strings (PySpark's `selectExpr`): each
@@ -329,10 +327,7 @@ impl DataFrame {
                     .map_err(|e| e.error)?,
             );
         }
-        Ok(self.derive(PlanNode::Project {
-            input: Arc::clone(&self.plan),
-            exprs: lowered,
-        }))
+        Ok(self.select_lifting_generators(lowered))
     }
 
     /// Rows where `condition` is true (PySpark's `filter`).
@@ -401,6 +396,9 @@ impl DataFrame {
     /// ```
     #[must_use]
     pub fn with_column(&self, name: &str, value: Column) -> Self {
+        if let Some(generated) = self.with_column_generator(name, &Arc::new(value.expr.clone())) {
+            return generated;
+        }
         self.derive(PlanNode::WithColumns {
             input: Arc::clone(&self.plan),
             columns: vec![(name.to_owned(), Arc::new(value.expr))],

@@ -488,10 +488,14 @@ class Column:
     def alias(self, *alias: str, **kwargs: Any) -> Column:
         if kwargs:
             raise PySparkValueError(f"unsupported alias argument(s): {sorted(kwargs)}")
-        if len(alias) != 1:
-            raise PySparkValueError("alias takes exactly one name")
-        if not isinstance(alias[0], str):
-            raise not_expected_type("alias", "str", alias[0])
+        if not alias:
+            raise PySparkValueError("alias takes at least one name")
+        for name in alias:
+            if not isinstance(name, str):
+                raise not_expected_type("alias", "str", name)
+        if len(alias) > 1:
+            # Several names are for a generator (``explode(m).alias("k", "v")``).
+            return Column(self._c.alias_all(list(alias)))
         return Column(self._c.alias(alias[0]))
 
     name = alias

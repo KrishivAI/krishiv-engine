@@ -15,6 +15,7 @@ ArrowStream.def __arrow_c_stream__(self, requested_schema: object | None=...) ->
 ArrowStream.def check_error(self) -> None
 Column.def add(self, other: Column) -> Column
 Column.def alias(self, name: str) -> Column
+Column.def alias_all(self, names: list[str]) -> Column
 Column.def and_(self, other: Column) -> Column
 Column.def between(self, low: Column, high: Column) -> Column
 Column.def cast(self, to: str) -> Column
