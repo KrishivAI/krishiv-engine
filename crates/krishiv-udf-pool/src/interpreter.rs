@@ -200,10 +200,14 @@ fn run_with_timeout(command: &mut Command, timeout: Duration, cap: usize) -> io:
     let kill_group = || {
         let _ = rustix::process::kill_process_group(pid, Signal::KILL);
     };
-    let fail = |child: &mut std::process::Child, error: io::Error| {
-        kill_group();
-        let _ = child.kill();
-        let _ = child.wait();
+    // Fails the run. Once the process is reaped (`reaped`), its group id may name another group, so nothing is
+    // signalled: the group was killed at the exit, and only readers held by a grandchild that left it remain.
+    let fail = |child: &mut std::process::Child, reaped: bool, error: io::Error| {
+        if !reaped {
+            kill_group();
+            let _ = child.kill();
+            let _ = child.wait();
+        }
         Err(error)
     };
     let (sender, outputs) = mpsc::channel::<(bool, io::Result<Vec<u8>>)>();
@@ -227,7 +231,7 @@ fn run_with_timeout(command: &mut Command, timeout: Duration, cap: usize) -> io:
     for (is_stdout, pipe) in pipes {
         let Some(pipe) = pipe else { continue };
         if let Err(e) = read_capped(pipe, cap, is_stdout, sender.clone()) {
-            return fail(&mut child, e);
+            return fail(&mut child, false, e);
         }
         readers += 1;
     }
@@ -247,11 +251,12 @@ fn run_with_timeout(command: &mut Command, timeout: Duration, cap: usize) -> io:
                         let which = if is_stdout { "output" } else { "error output" };
                         return fail(
                             &mut child,
+                            status.is_some(),
                             io::Error::other(format!("more than {cap} bytes of {which}")),
                         );
                     }
                     Ok(bytes) => bytes,
-                    Err(e) => return fail(&mut child, e),
+                    Err(e) => return fail(&mut child, status.is_some(), e),
                 };
                 if is_stdout {
                     stdout = bytes;
@@ -280,11 +285,7 @@ fn run_with_timeout(command: &mut Command, timeout: Duration, cap: usize) -> io:
                 io::ErrorKind::TimedOut,
                 format!("no answer within {} s", timeout.as_secs()),
             );
-            if status.is_some() {
-                // Reaped: its group id may name another group now, so only the readers are left behind.
-                return Err(error);
-            }
-            return fail(&mut child, error);
+            return fail(&mut child, status.is_some(), error);
         }
     }
 }
@@ -479,6 +480,28 @@ mod tests {
                 started.elapsed()
             );
         }
+    }
+
+    #[test]
+    fn output_over_the_cap_after_the_exit_signals_nothing() {
+        // Review 2026-11-14 M1: a grandchild out of the group writes past the cap after the interpreter was
+        // reaped. The run fails on the cap, and no group is signalled (the reaped pid may be another's now).
+        if !Path::new("/usr/bin/setsid").is_file() {
+            return;
+        }
+        let started = Instant::now();
+        let err = run_with_timeout(
+            &mut sh("/usr/bin/setsid sh -c 'sleep 0.5; exec yes' & sleep 0.2; echo hi"),
+            Duration::from_secs(20),
+            64 * 1024,
+        )
+        .expect_err("too much");
+        assert!(err.to_string().contains("more than 65536 bytes"), "{err}");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "{:?}",
+            started.elapsed()
+        );
     }
 
     #[test]

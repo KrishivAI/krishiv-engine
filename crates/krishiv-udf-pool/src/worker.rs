@@ -473,7 +473,31 @@ pub fn decode_result(
         .into()
     };
     let mut bytes: Buffer = bytes.into();
-    check_frames(bytes.as_slice()).map_err(invalid)?;
+    let first = check_frames(bytes.as_slice()).map_err(invalid)?;
+    // The schema is checked from the first message's header before any batch is decoded (review 2026-11-14 m5).
+    if let Some(header) = bytes.as_slice().get(8..first) {
+        let message = arrow_ipc::root_as_message(header)
+            .map_err(|e| invalid(format!("an invalid message header: {e}")))?;
+        let Some(schema) = message.header_as_schema() else {
+            return Err(invalid(
+                "the stream does not start with a schema".to_owned(),
+            ));
+        };
+        let schema = arrow_ipc::convert::try_fb_to_schema(schema)
+            .map_err(|e| invalid(format!("an unreadable schema: {e}")))?;
+        let [field] = schema.fields().iter().collect::<Vec<_>>()[..] else {
+            return Err(invalid(format!(
+                "{} columns, expected one",
+                schema.fields().len()
+            )));
+        };
+        if field.data_type() != return_type {
+            return Err(invalid(format!(
+                "a column of type {}, expected {return_type}",
+                field.data_type()
+            )));
+        }
+    }
     let mut decoder = StreamDecoder::new();
     let mut batch = None;
     // `check_frames` saw a whole stream, so the decoder sees every message whole and keeps body slices.
@@ -481,20 +505,6 @@ pub fn decode_result(
         let decoded = decoder
             .decode(&mut bytes)
             .map_err(|e| invalid(format!("unreadable Arrow stream: {e}")))?;
-        if let Some(schema) = decoder.schema() {
-            let [field] = schema.fields().iter().collect::<Vec<_>>()[..] else {
-                return Err(invalid(format!(
-                    "{} columns, expected one",
-                    schema.fields().len()
-                )));
-            };
-            if field.data_type() != return_type {
-                return Err(invalid(format!(
-                    "a column of type {}, expected {return_type}",
-                    field.data_type()
-                )));
-            }
-        }
         if let Some(decoded) = decoded
             && batch.replace(decoded).is_some()
         {
@@ -523,7 +533,10 @@ pub fn decode_result(
 /// Compression is refused because arrow-ipc 60 allocates a compressed buffer's declared uncompressed length
 /// before reading it: a worker could declare 2^45 bytes in a 16 KiB stream and abort the server (review
 /// 2026-11-13 M1). The server never asks for a compressed result, and the worker writes without compression.
-fn check_frames(bytes: &[u8]) -> Result<(), String> {
+///
+/// Returns where the first message's header ends (it starts at byte 8), so the schema can be checked before
+/// any batch is decoded; 0 for an empty stream.
+fn check_frames(bytes: &[u8]) -> Result<usize, String> {
     const CONTINUATION: u32 = 0xFFFF_FFFF;
     let word = |at: usize| -> Option<u32> {
         Some(u32::from_le_bytes(
@@ -531,6 +544,7 @@ fn check_frames(bytes: &[u8]) -> Result<(), String> {
         ))
     };
     let mut at = 0_usize;
+    let mut first = None;
     while at < bytes.len() {
         if word(at) != Some(CONTINUATION) {
             return Err(format!("no continuation marker at byte {at}"));
@@ -540,7 +554,7 @@ fn check_frames(bytes: &[u8]) -> Result<(), String> {
         if len == 0 {
             // End of stream: nothing may follow.
             return if at == bytes.len() {
-                Ok(())
+                Ok(first.unwrap_or(0))
             } else {
                 Err(format!(
                     "{} bytes after the end of the stream",
@@ -584,9 +598,10 @@ fn check_frames(bytes: &[u8]) -> Result<(), String> {
                 }
             }
         }
+        first.get_or_insert(meta_end);
         at = body_end;
     }
-    Ok(())
+    Ok(first.unwrap_or(0))
 }
 
 #[cfg(test)]
@@ -720,7 +735,16 @@ mod tests {
     #[test]
     fn framing_errors_are_refused() {
         let good = stream(&[longs(vec![1])]);
-        assert!(check_frames(&good).is_ok());
+        let first = check_frames(&good).expect("framed");
+        let header = arrow_ipc::root_as_message(&good[8..first]).expect("the first header");
+        assert!(header.header_as_schema().is_some());
+        let batch_first = stream(&[longs(vec![1])])
+            .split_off(first + usize::try_from(header.bodyLength()).expect("small"));
+        let err = decode_result(batch_first, &DataType::Int64, 1).expect_err("no schema");
+        assert!(
+            err.to_string().contains("does not start with a schema"),
+            "{err}"
+        );
         let mut no_marker = good.clone();
         no_marker[0] = 0;
         assert!(

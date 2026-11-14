@@ -850,13 +850,13 @@ fn concurrent_calls_share_the_pools_threads() {
     let prepared = udfs
         .prepare(&spec("nap", PythonEvalType::ArrowBatched, ArrowType::Int64))
         .expect("prepare");
+    // The count is of the whole process: exact only when this test has it to itself (nextest's default);
+    // under `cargo test` other tests' pools start and stop call threads meanwhile, so only the results count.
+    let alone = std::env::var("NEXTEST_EXECUTION_MODE").is_ok_and(|m| m == "process-per-test");
     let before = call_threads();
     let calls: Vec<_> = (0..12).map(|i| prepared.call(longs(&[Some(i)]))).collect();
-    assert!(
-        call_threads() - before <= 2,
-        "{} call threads",
-        call_threads() - before
-    );
+    let added = call_threads().saturating_sub(before);
+    assert!(!alone || added <= 2, "{added} call threads");
     let results = block_on(futures::future::join_all(calls));
     for (i, r) in results.into_iter().enumerate() {
         assert_eq!(
@@ -864,11 +864,8 @@ fn concurrent_calls_share_the_pools_threads() {
             [Some(i64::try_from(i).expect("small"))]
         );
     }
-    assert!(
-        call_threads() - before <= 2,
-        "{} call threads",
-        call_threads() - before
-    );
+    let added = call_threads().saturating_sub(before);
+    assert!(!alone || added <= 2, "{added} call threads");
     assert!(pool.live_workers() <= 2);
 }
 

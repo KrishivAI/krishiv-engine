@@ -6,8 +6,10 @@
 //! is taken: at most `max_total` threads (one per worker the pool may run, so every worker can be busy), and
 //! at most `max_per_session` running calls of one owner (one per worker that owner may have). A call beyond
 //! either waits in a FIFO queue instead of on a thread. With both bounds a running call never waits long in
-//! `Pool::checkout`: every worker of its owner, and every worker in all, is held by a running call or idle,
-//! so one session's calls cannot take every thread while another session's call waits.
+//! `Pool::checkout`: every worker of its owner, and every worker in all, is held by a running call or idle.
+//! While `max_per_session < max_total`, one session's calls cannot take every thread while another session's
+//! call waits; otherwise one session may hold every thread, and another's call waits (in FIFO order, so it is
+//! not starved) until one of those calls ends.
 //!
 //! Threads start when a call finds none free and end after `idle` without work, or when the pool is dropped.
 //! A queued call holds what its closure holds (the pool among them), so the pool outlives its queued calls;
@@ -74,8 +76,11 @@ impl CallThreads {
         queue.calls.push_back((owner, job));
         let started = shared.wake(&mut queue);
         if queue.threads == 0 {
-            // No thread runs it later either: it was the last one pushed.
-            queue.calls.pop_back();
+            // No thread runs it later either: it was the last one pushed. It is dropped after the lock is
+            // released, since it may hold the last reference to the pool, whose drop takes this lock.
+            let unrun = queue.calls.pop_back();
+            drop(queue);
+            drop(unrun);
             return Err(started
                 .err()
                 .unwrap_or_else(|| "no call thread is running".to_owned()));

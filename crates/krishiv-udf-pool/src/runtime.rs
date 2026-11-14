@@ -122,6 +122,9 @@ struct CallState {
     running: Option<Arc<OwnedFd>>,
     /// The cancel killed `running` (a worker still starting, or one mid-call): it is never given back.
     killed: bool,
+    /// The call's input until a call thread takes it; a cancel drops it, so a call still queued keeps no
+    /// batch in memory (review 2026-11-14 m1).
+    args: Option<RecordBatch>,
 }
 
 impl CallWatch for Mutex<CallState> {
@@ -151,13 +154,19 @@ impl Drop for CancelOnDrop {
             kill_via(&pidfd);
             state.killed = true;
         }
+        let args = state.args.take();
+        drop(state);
+        drop(args);
     }
 }
 
 impl PreparedUdf for Prepared {
     fn call(&self, args: RecordBatch) -> BoxFuture<'static, krishiv_exec::Result<ArrayRef>> {
         let (done, result) = oneshot::channel();
-        let call = Arc::new(Mutex::new(CallState::default()));
+        let call = Arc::new(Mutex::new(CallState {
+            args: Some(args),
+            ..CallState::default()
+        }));
         let cancel = CancelOnDrop(Arc::clone(&call));
         let pool = self.pool.clone();
         let owner = self.owner.clone();
@@ -169,15 +178,24 @@ impl PreparedUdf for Prepared {
         let submitted = self.pool.submit(
             &self.owner,
             Box::new(move || {
-                let result = run(
-                    &pool,
-                    &owner,
-                    &registered,
-                    &args,
-                    &conf,
-                    &return_type,
-                    &call,
-                );
+                let args = call
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .args
+                    .take();
+                let result = match args {
+                    Some(args) => run(
+                        &pool,
+                        &owner,
+                        &registered,
+                        &args,
+                        &conf,
+                        &return_type,
+                        &call,
+                    ),
+                    // Cancelled while it was queued.
+                    None => Err(OperationCanceled {}.into()),
+                };
                 let _ = done.send(result);
             }),
         );
