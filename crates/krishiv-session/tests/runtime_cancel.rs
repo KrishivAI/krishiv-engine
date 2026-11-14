@@ -319,6 +319,11 @@ fn a_write_cancelled_for_any_reason_leaves_no_files() {
     // being analyzed ends the `sql_with` call itself (`action.rs`), which is not what this checks.
     let until = Instant::now() + Duration::from_secs(60);
     while watcher.running_queries() == 0 {
+        assert!(
+            !writer.is_finished(),
+            "the write ended before it ran: {:?}",
+            writer.join()
+        );
         assert!(Instant::now() < until, "the write never started");
         std::thread::sleep(Duration::from_millis(10));
     }
