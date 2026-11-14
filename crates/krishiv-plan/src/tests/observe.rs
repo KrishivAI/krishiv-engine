@@ -47,6 +47,12 @@ fn allowed_metrics_pass_rows_through() {
                 int(42),
                 f("sum", vec![f("rand", vec![])]).alias("r"),
                 f("max", vec![c("p_partkey")]),
+                // A nondeterministic call inside an aggregate stays allowed under arithmetic.
+                crate::Expr::builtin(
+                    crate::Builtin::Add,
+                    vec![f("sum", vec![f("rand", vec![])]), int(1)],
+                )
+                .alias("r2"),
             ],
         ),
         &ctx(),
@@ -56,7 +62,7 @@ fn allowed_metrics_pass_rows_through() {
     let PlanNode::CollectMetrics { metrics, input, .. } = &root.node else {
         panic!("root is {root}");
     };
-    assert_eq!(metrics.len(), 5);
+    assert_eq!(metrics.len(), 6);
     assert_eq!(
         root.resolved_output().map(|o| o.len()),
         input.resolved_output().map(|o| o.len())

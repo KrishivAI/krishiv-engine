@@ -360,6 +360,24 @@ impl QueryContext {
         Ok(())
     }
 
+    /// Moves this context's observation partials to `parent`, for a task of a staged run whose
+    /// own context ends before the query's (the parent's `observed` then reports them). The states
+    /// are charged to `parent`'s pool and released from this one's.
+    ///
+    /// # Errors
+    /// `UNABLE_TO_ACQUIRE_MEMORY` when the parent's pool cannot hold them.
+    #[doc(hidden)]
+    pub fn forward_observed_to(&self, parent: &Self) -> Result<()> {
+        let taken = std::mem::take(&mut *lock(&self.observed));
+        for o in taken.into_values() {
+            for (source, states) in o.order.into_iter().zip(o.partials) {
+                parent.observe_partial(&o.finalizer, source, states)?;
+            }
+        }
+        *lock(&self.observed_memory) = None;
+        Ok(())
+    }
+
     fn observed_consumer(&self) -> Arc<ConsumerHandle> {
         ConsumerHandle::register(Arc::clone(&self.pool), "observed-metrics", None)
     }

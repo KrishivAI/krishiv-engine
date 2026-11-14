@@ -67,7 +67,7 @@ fn violation(metric: &Arc<Expr>) -> Option<Violation> {
                 return Some(Violation::Attribute);
             }
             ExprNode::Resolved(ResolvedExpr::Alias { .. }) => {}
-            _ if !seen && !crate::raises::is_deterministic(&e) => {
+            _ if !seen && is_nondeterministic_call(&e) => {
                 return Some(Violation::NonDeterministic);
             }
             _ => {}
@@ -77,6 +77,16 @@ fn violation(metric: &Arc<Expr>) -> Option<Violation> {
         stack.extend(kids.into_iter().rev().map(|k| (k, inside)));
     }
     None
+}
+
+/// Whether `e` itself, not an expression below it, is a nondeterministic (or unresolved) call: the
+/// walk in [`violation`] visits the children, and stops counting once inside an aggregate.
+fn is_nondeterministic_call(e: &Expr) -> bool {
+    match &e.node {
+        ExprNode::Function(_) => true,
+        ExprNode::Resolved(ResolvedExpr::Function(f)) => !f.deterministic,
+        _ => false,
+    }
 }
 
 /// Whether `e` holds a subquery expression.
