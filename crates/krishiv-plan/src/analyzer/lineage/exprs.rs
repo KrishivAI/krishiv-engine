@@ -1,0 +1,306 @@
+// SPDX-License-Identifier: Apache-2.0
+//! The lineage of a resolved expression (design §3.1, "Expressions"): column references read the walk's
+//! map, functions compose their arguments, a UDF is `opaque` over its arguments, a lambda variable reads
+//! its higher-order function's other arguments, a scalar subquery is its output's lineage, and `IN` /
+//! `EXISTS` subqueries are `join` filters. Memoized by (expression address, `Shift` offset), but for bare
+//! columns and literals (no children).
+
+use std::collections::BTreeSet;
+use std::sync::Arc;
+
+use krishiv_common::error::KrishivError;
+
+use super::walk::{ColInfo, Info, Walker, addr, internal, literal, merge, shifted};
+use super::{FilterKind, Leaf, LineageWarning, Transform};
+use crate::{
+    Builtin, Expr, ExprNode, FunctionId, FunctionKind, ResolvedExpr, ResolvedFunction,
+    SubqueryKind, WindowSpecRef,
+};
+
+impl Walker<'_> {
+    /// The lineage of the value of `e` under `offset`.
+    pub(super) fn value(&mut self, e: &Arc<Expr>, offset: u64) -> Result<Info, KrishivError> {
+        // A bare column is one map lookup and a literal has no leaf: no children, so no memo (most expressions
+        // of a plan are these, and a memo entry costs more than the rule).
+        match &e.node {
+            ExprNode::Literal(_) => return Ok(literal()),
+            ExprNode::Resolved(
+                ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c) | ResolvedExpr::LambdaVar(c),
+            ) => return self.column(shifted(c.id, offset)?),
+            _ => {}
+        }
+        let key = (addr(&**e), offset);
+        if let Some(i) = self.exprs.get(&key) {
+            return Ok(Arc::clone(i));
+        }
+        let info = self.deeper(|w| w.expr(e, offset))?;
+        self.counts.expressions += 1;
+        self.remember_expr(key, &info);
+        Ok(info)
+    }
+
+    /// The rule of `e`'s kind.
+    #[deny(clippy::wildcard_enum_match_arm)]
+    fn expr(&mut self, e: &Expr, offset: u64) -> Result<Info, KrishivError> {
+        match &e.node {
+            ExprNode::Literal(_) => Ok(literal()),
+            ExprNode::Cast { expr, .. } => {
+                let v = self.value(expr, offset)?;
+                Ok(over(&v, Transform::Expression))
+            }
+            ExprNode::Lambda { body, .. } => self.value(body, offset),
+            ExprNode::Subquery { kind, plan } => {
+                let out = self.subquery(plan, offset)?;
+                match kind {
+                    SubqueryKind::Scalar => out
+                        .first()
+                        .cloned()
+                        .ok_or_else(|| internal("a scalar subquery without a column")),
+                    SubqueryKind::Exists => {
+                        for o in &out {
+                            self.record(FilterKind::Join, o);
+                        }
+                        Ok(Arc::new(ColInfo {
+                            sources: BTreeSet::new(),
+                            transform: Transform::Expression,
+                        }))
+                    }
+                    SubqueryKind::In(values) => {
+                        let mut acc = literal();
+                        for v in values {
+                            let v = self.value(v, offset)?;
+                            acc = merge(&acc, &v);
+                        }
+                        for o in &out {
+                            acc = merge(&acc, o);
+                        }
+                        self.record(FilterKind::Join, &acc);
+                        Ok(over(&acc, Transform::Expression))
+                    }
+                }
+            }
+            ExprNode::Window(w) => {
+                let f = self.value(&w.function, offset)?;
+                let WindowSpecRef::Spec(spec) = &w.window else {
+                    return Err(internal("an unresolved window"));
+                };
+                let mut keys = literal();
+                for p in &spec.partition_by {
+                    let v = self.value(p, offset)?;
+                    keys = merge(&keys, &v);
+                }
+                for o in &spec.order_by {
+                    let v = self.value(&o.expr, offset)?;
+                    keys = merge(&keys, &v);
+                }
+                self.record(FilterKind::Window, &keys);
+                // A window's value derives from its arguments and its keys (they change `rank()`). The window
+                // function's own step is `window` (an aggregate's `sum(a) OVER ()` too); its arguments keep the
+                // transform they bring (`sum(s) OVER ()` of an aggregated `s` stays `aggregate`).
+                let upstream = self.window_arguments(&w.function, offset)?;
+                let transform = if f.transform > Transform::Aggregate {
+                    f.transform
+                } else {
+                    Transform::Window.max(keys.transform).max(upstream)
+                };
+                Ok(Arc::new(ColInfo {
+                    sources: f.sources.union(&keys.sources).cloned().collect(),
+                    transform,
+                }))
+            }
+            ExprNode::Resolved(r) => self.resolved(r, offset),
+            ExprNode::Column(_)
+            | ExprNode::TypedLiteral { .. }
+            | ExprNode::Star(_)
+            | ExprNode::Function(_)
+            | ExprNode::Field { .. }
+            | ExprNode::UpdateFields { .. }
+            | ExprNode::StoredField { .. }
+            | ExprNode::Collate { .. }
+            | ExprNode::Alias { .. }
+            | ExprNode::Pipe { .. }
+            | ExprNode::MultiAlias { .. } => Err(internal("an unresolved expression")),
+        }
+    }
+
+    /// The rule of a resolved expression's kind.
+    #[deny(clippy::wildcard_enum_match_arm)]
+    fn resolved(&mut self, r: &ResolvedExpr, offset: u64) -> Result<Info, KrishivError> {
+        match r {
+            ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c) | ResolvedExpr::LambdaVar(c) => {
+                self.column(shifted(c.id, offset)?)
+            }
+            ResolvedExpr::Function(f) => self.function(f, offset),
+            ResolvedExpr::Field { base, name, .. } => {
+                let v = self.value(base, offset)?;
+                let field = self.metadata_field(&v, name)?;
+                Ok(over(&field, Transform::Expression))
+            }
+            ResolvedExpr::Alias { expr, .. } | ResolvedExpr::EvalMode { expr, .. } => {
+                self.value(expr, offset)
+            }
+            ResolvedExpr::StateInput { .. } => Err(internal(
+                "a partial aggregate's state (optimizer only) in an analyzed plan",
+            )),
+        }
+    }
+
+    /// A call: the sources of its arguments (a `CASE WHEN` or `IF` condition decides the value, so it is a
+    /// source and a `conditional` filter), a lambda's variables bound to the call's other arguments, and the
+    /// step of its kind.
+    fn function(&mut self, f: &ResolvedFunction, offset: u64) -> Result<Info, KrishivError> {
+        // A lambda's variables read the other arguments (the array, map or initial value).
+        if f.args.iter().any(|a| is_lambda(a)) {
+            let mut inputs = literal();
+            for a in f.args.iter().filter(|a| !is_lambda(a)) {
+                let v = self.value(a, offset)?;
+                inputs = merge(&inputs, &v);
+            }
+            for a in &f.args {
+                if let ExprNode::Lambda { params, .. } = &a.node {
+                    for p in params {
+                        self.env.insert(shifted(p.id, offset)?, Arc::clone(&inputs));
+                    }
+                }
+            }
+        }
+        let conditions = conditions(f);
+        let mut value = literal();
+        let mut all_literal = true;
+        let mut strongest = Transform::Literal;
+        for (i, a) in f.args.iter().enumerate() {
+            let v = self.value(a, offset)?;
+            all_literal &= v.transform == Transform::Literal;
+            strongest = strongest.max(v.transform);
+            if conditions.contains(&i) {
+                self.record(FilterKind::Conditional, &v);
+            }
+            value = merge(&value, &v);
+        }
+        if let Some(filter) = &f.filter {
+            let v = self.value(filter, offset)?;
+            self.record(FilterKind::Filter, &v);
+        }
+        let step = match &f.id {
+            FunctionId::Udf { .. } | FunctionId::PythonUdf { .. } => {
+                self.warnings.insert(LineageWarning::LineageOpaqueUdf);
+                Transform::Opaque
+            }
+            FunctionId::Builtin(_) | FunctionId::Registry { .. } => kind_step(f.kind),
+        };
+        // A deterministic scalar call of constants is a constant.
+        let transform = if step == Transform::Expression && all_literal && f.deterministic {
+            Transform::Literal
+        } else {
+            step.max(strongest)
+        };
+        Ok(Arc::new(ColInfo {
+            sources: value.sources.clone(),
+            transform,
+        }))
+    }
+}
+
+impl Walker<'_> {
+    /// The strongest transform the arguments of the window function `function` bring (memoized: the
+    /// function's own walk read them already).
+    fn window_arguments(
+        &mut self,
+        function: &Arc<Expr>,
+        offset: u64,
+    ) -> Result<Transform, KrishivError> {
+        match &function.node {
+            ExprNode::Resolved(ResolvedExpr::Function(f)) => {
+                let mut strongest = Transform::Literal;
+                for a in &f.args {
+                    strongest = strongest.max(self.value(a, offset)?.transform);
+                }
+                Ok(strongest)
+            }
+            ExprNode::Resolved(
+                ResolvedExpr::Alias { expr, .. } | ResolvedExpr::EvalMode { expr, .. },
+            ) => self.window_arguments(expr, offset),
+            // Not a call: its whole transform, the conservative (stronger) reading.
+            _ => Ok(self.value(function, offset)?.transform),
+        }
+    }
+}
+
+/// `v` one step `step` further: a constant stays a constant.
+fn over(v: &Info, step: Transform) -> Info {
+    if v.transform == Transform::Literal || v.transform >= step {
+        return Arc::clone(v);
+    }
+    Arc::new(ColInfo {
+        sources: v.sources.clone(),
+        transform: v.transform.max(step),
+    })
+}
+
+impl Walker<'_> {
+    /// A field `name` of `v`: when `v` is a file scan's `_metadata` column as read (an `identity` whose leaves
+    /// are path leaves `_metadata.<field>`), only that field's leaves. A struct rebuilt of `_metadata` fields
+    /// (`named_struct('file_name', _metadata.file_path)`) is an `expression`: its field names say nothing of
+    /// its sources, so it keeps them all. A table's column of that name is not narrowed.
+    fn metadata_field(&self, v: &Info, name: &str) -> Result<Info, KrishivError> {
+        if v.transform != Transform::Identity {
+            return Ok(Arc::clone(v));
+        }
+        #[deny(clippy::wildcard_enum_match_arm)]
+        let path_column = |l: &Leaf| match l {
+            Leaf::Path { column, .. } => Some(column.clone()),
+            Leaf::Table { .. } | Leaf::View { .. } => None,
+        };
+        let field = format!("_metadata.{name}");
+        let mut metadata = !v.sources.is_empty();
+        let mut kept = BTreeSet::new();
+        for s in &v.sources {
+            let column = path_column(&self.resolve(*s)?.leaf);
+            metadata &= column.as_ref().is_some_and(|c| c.starts_with("_metadata."));
+            if column.is_some_and(|c| c == field) {
+                kept.insert(*s);
+            }
+        }
+        if !metadata || kept.is_empty() {
+            return Ok(Arc::clone(v));
+        }
+        Ok(Arc::new(ColInfo {
+            sources: kept,
+            transform: v.transform,
+        }))
+    }
+}
+
+/// Whether `e` is a lambda (an argument of a higher-order function).
+fn is_lambda(e: &Expr) -> bool {
+    matches!(e.node, ExprNode::Lambda { .. })
+}
+
+/// The step a built-in of `kind` adds.
+#[expect(
+    clippy::match_same_arms,
+    reason = "`Scalar` is listed so a reader sees every known kind; the wildcard is for kinds added later"
+)]
+fn kind_step(kind: FunctionKind) -> Transform {
+    match kind {
+        FunctionKind::Aggregate => Transform::Aggregate,
+        FunctionKind::Window => Transform::Window,
+        FunctionKind::Generator => Transform::Generated,
+        FunctionKind::Scalar => Transform::Expression,
+        // `FunctionKind` is another crate's non-exhaustive enum: a new kind reads as a scalar until it states
+        // its step here.
+        _ => Transform::Expression,
+    }
+}
+
+/// The positions of `f`'s condition arguments: `CASE WHEN`'s (`when(c1, v1, ..., [else])`) and `IF`'s.
+fn conditions(f: &ResolvedFunction) -> Vec<usize> {
+    match &f.id {
+        FunctionId::Builtin(Builtin::When) => (0..f.args.len() / 2).map(|i| 2 * i).collect(),
+        FunctionId::Registry { name, .. } if name == "if" => vec![0],
+        FunctionId::Builtin(_)
+        | FunctionId::Registry { .. }
+        | FunctionId::Udf { .. }
+        | FunctionId::PythonUdf { .. } => Vec::new(),
+    }
+}

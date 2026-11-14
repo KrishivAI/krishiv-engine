@@ -1,0 +1,62 @@
+---
+source: crates/krishiv-session/tests/analyze.rs
+expression: out
+---
+SHOW CATALOGS
+  catalog: string
+SHOW TABLES
+  namespace: string, tableName: string, isTemporary: boolean
+SHOW TABLE EXTENDED LIKE 't*'
+  namespace: string, tableName: string, isTemporary: boolean, information: string
+SHOW VIEWS IN d
+  namespace: string, viewName: string, isTemporary: boolean
+SHOW COLUMNS IN t
+  col_name: string
+SHOW FUNCTIONS
+  (refused by the session)
+SHOW DATABASES
+  namespace: string
+SHOW CREATE TABLE t
+  createtab_stmt: string
+SHOW TBLPROPERTIES t
+  key: string, value: string
+SHOW PARTITIONS pt
+  partition: string
+SHOW CURRENT NAMESPACE
+  catalog: string, namespace: string
+DESCRIBE TABLE t
+  col_name: string, data_type: string, comment: string
+DESCRIBE FUNCTION abs
+  (refused by the session)
+DESCRIBE DATABASE d
+  info_name: string, info_value: string
+DESCRIBE QUERY SELECT a, b FROM t
+  col_name: string, data_type: string, comment: string
+DESCRIBE TABLE t a
+  info_name: string, info_value: string
+DESCRIBE TABLE EXTENDED t AS JSON
+  json_metadata: string
+SHOW TBLPROPERTIES t ('k')
+  key: string, value: string
+SHOW CURRENT SCHEMA
+  catalog: string, namespace: string
+EXPLAIN SELECT a FROM t
+  plan: string
+EXPLAIN EXTENDED SELECT a FROM t
+  plan: string
+EXPLAIN SET
+  plan: string
+SET
+  key: string, value: string
+SET -v
+  key: string, value: string, meaning: string, Since version: string
+SET spark.sql.ansi.enabled
+  key: string, value: string
+SET spark.sql.ansi.enabled = true
+  key: string, value: string
+SET TIME ZONE 'UTC'
+  key: string, value: string
+RESET spark.sql.ansi.enabled
+  (no columns)
+RESET
+  (no columns)

@@ -1,0 +1,33 @@
+---
+source: crates/krishiv-session/tests/analyze.rs
+expression: layout(&json)
+---
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","store_sales"],"display":"table `spark_catalog`.`default`.`store_sales`","privilege":"SELECT","columns":["ss_net_profit","ss_sold_date_sk","ss_store_sk"]},
+  {"kind":"table","name":["spark_catalog","default","date_dim"],"display":"table `spark_catalog`.`default`.`date_dim`","privilege":"SELECT","columns":["d_date_sk","d_qoy","d_year"]},
+  {"kind":"table","name":["spark_catalog","default","store"],"display":"table `spark_catalog`.`default`.`store`","privilege":"SELECT","columns":["s_store_name","s_store_sk","s_zip"]},
+  {"kind":"table","name":["spark_catalog","default","customer_address"],"display":"table `spark_catalog`.`default`.`customer_address`","privilege":"SELECT","columns":["ca_address_sk","ca_zip"]},
+  {"kind":"table","name":["spark_catalog","default","customer"],"display":"table `spark_catalog`.`default`.`customer`","privilege":"SELECT","columns":["c_current_addr_sk","c_preferred_cust_flag"]}],
+"output_schema":[{"ordinal":0,"name":"s_store_name","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":1,"name":"sum(ss_net_profit)","type":"decimal(17,2)","type_json":"\"decimal(17,2)\"","nullable":true,"declared_type":null}],
+"lineage":[{"ordinal":0,"output":"s_store_name","sources":[{"table":["spark_catalog","default","store"],"column":"s_store_name","via_view":null}],"transform":"identity"},
+  {"ordinal":1,"output":"sum(ss_net_profit)","sources":[{"table":["spark_catalog","default","store_sales"],"column":"ss_net_profit","via_view":null}],"transform":"aggregate"}],
+"filters":[{"kind":"filter","table":["spark_catalog","default","customer"],"column":"c_current_addr_sk"},
+  {"kind":"filter","table":["spark_catalog","default","customer"],"column":"c_preferred_cust_flag"},
+  {"kind":"filter","table":["spark_catalog","default","customer_address"],"column":"ca_address_sk"},
+  {"kind":"filter","table":["spark_catalog","default","customer_address"],"column":"ca_zip"},
+  {"kind":"filter","table":["spark_catalog","default","date_dim"],"column":"d_date_sk"},
+  {"kind":"filter","table":["spark_catalog","default","date_dim"],"column":"d_qoy"},
+  {"kind":"filter","table":["spark_catalog","default","date_dim"],"column":"d_year"},
+  {"kind":"filter","table":["spark_catalog","default","store"],"column":"s_store_sk"},
+  {"kind":"filter","table":["spark_catalog","default","store"],"column":"s_zip"},
+  {"kind":"filter","table":["spark_catalog","default","store_sales"],"column":"ss_sold_date_sk"},
+  {"kind":"filter","table":["spark_catalog","default","store_sales"],"column":"ss_store_sk"},
+  {"kind":"join","table":["spark_catalog","default","customer_address"],"column":"ca_zip"},
+  {"kind":"group_by","table":["spark_catalog","default","customer_address"],"column":"ca_zip"},
+  {"kind":"group_by","table":["spark_catalog","default","store"],"column":"s_store_name"},
+  {"kind":"sort","table":["spark_catalog","default","store"],"column":"s_store_name"}],
+"warnings":[]}

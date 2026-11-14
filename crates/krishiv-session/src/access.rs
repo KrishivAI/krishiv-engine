@@ -89,6 +89,21 @@ impl Session {
     }
 
     async fn statement_info_here(&self, sql: &str) -> Result<StatementInfo, KrishivError> {
+        let parts = self.statement_parts(sql).await?;
+        if parts.partial {
+            return Err(KrishivUnsupportedFeature {
+                feature: "listing the reads of this statement".to_owned(),
+            }
+            .into());
+        }
+        Ok(parts.info)
+    }
+
+    /// The statement `sql` parsed, classified and its reads analyzed (see [`Self::statement_info`]),
+    /// for `statement_info` and the analyze API. When its reads are not whole queries
+    /// (`statement_queries` gives `None`), nothing is analyzed and `partial` is set: the securables
+    /// are then its targets only.
+    pub(crate) async fn statement_parts(&self, sql: &str) -> Result<StatementParts, KrishivError> {
         let env = self.query_env();
         let sql = &*self.substituted(sql);
         let redacted = krishiv_sql::redact_sql(sql);
@@ -96,32 +111,23 @@ impl Session {
             .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
         let class = krishiv_sql::classify(&statement);
         let explain = krishiv_sql::explain_kind(&statement);
-        let queries = krishiv_sql::statement_queries(&statement).ok_or_else(|| {
-            KrishivError::from(KrishivUnsupportedFeature {
-                feature: "listing the reads of this statement".to_owned(),
-            })
-        })?;
+        let queries = krishiv_sql::statement_queries(&statement);
+        let partial = queries.is_none();
         let mut securables: Vec<SecurableUse> = Vec::new();
-        for query in queries {
+        let mut analyzed = Vec::new();
+        for query in queries.unwrap_or_default() {
             let plan = krishiv_sql::lower(query, SourceId(0))
                 .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
             let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
             let analysis = df
                 .analyzed_in_with_text(self.query_env(), Some(&redacted))
                 .await?;
-            for used in &analysis.analyzed.securables {
-                match securables
-                    .iter_mut()
-                    .find(|s| s.securable == used.securable && s.privilege == used.privilege)
-                {
-                    Some(seen) => seen.columns.extend(used.columns.iter().cloned()),
-                    None => securables.push(used.clone()),
-                }
-            }
+            merge_reads(&mut securables, &analysis.analyzed.securables);
+            analyzed.push(Arc::clone(&analysis.analyzed));
         }
         // Then what it writes, creates or drops, as the session would check
-        // it (the name as written).
-        for target in statement_targets(&statement) {
+        // it (the name as written), and `Manage` on the cluster for `ADMIN`.
+        for target in required_targets(&statement, class) {
             if let Some(securable) = self.securables_of(target.object, &env)?.into_iter().next()
                 && !securables
                     .iter()
@@ -134,12 +140,61 @@ impl Session {
                 });
             }
         }
-        Ok(StatementInfo {
-            class,
-            explain,
-            securables,
+        Ok(StatementParts {
+            info: StatementInfo {
+                class,
+                explain,
+                securables,
+            },
+            partial,
+            analyzed,
+            statement,
         })
     }
+}
+
+/// A statement as [`Session::statement_parts`] found it.
+pub(crate) struct StatementParts {
+    /// Its class, explain kind and securables.
+    pub(crate) info: StatementInfo,
+    /// Whether its reads are not whole queries (none were analyzed).
+    pub(crate) partial: bool,
+    /// The analyses of its queries, in order.
+    pub(crate) analyzed: Vec<Arc<krishiv_plan::analyzer::AnalyzedPlan>>,
+    /// The parsed statement.
+    pub(crate) statement: Statement,
+}
+
+/// Adds the reads `used` to `securables`: one entry per (securable, privilege), with the union of
+/// the columns.
+pub(crate) fn merge_reads(securables: &mut Vec<SecurableUse>, used: &[SecurableUse]) {
+    for used in used {
+        match securables
+            .iter_mut()
+            .find(|s| s.securable == used.securable && s.privilege == used.privilege)
+        {
+            Some(seen) => seen.columns.extend(used.columns.iter().cloned()),
+            None => securables.push(used.clone()),
+        }
+    }
+}
+
+/// What `statement` (of `class`) writes, creates or drops and reads without a query
+/// (`statement_targets`), plus `Manage` on the cluster for every `ADMIN` statement (ADR 0046 §4),
+/// whatever else it names: what the session checks before it runs, and what `statement_info` lists.
+fn required_targets(statement: &Statement, class: StatementClass) -> Vec<Target<'_>> {
+    let mut targets = statement_targets(statement);
+    if class == StatementClass::Admin
+        && !targets
+            .iter()
+            .any(|t| t.object == TargetObject::Cluster && t.privilege == Privilege::Manage)
+    {
+        targets.push(Target {
+            object: TargetObject::Cluster,
+            privilege: Privilege::Manage,
+        });
+    }
+    targets
 }
 
 /// The parts of a function name as written.
@@ -193,19 +248,7 @@ impl Session {
             log_denial(self, class, &e);
             return Err(e);
         }
-        let mut targets = statement_targets(statement);
-        // Every cluster-scope statement needs `Manage` on the cluster (ADR 0046 §4), whatever
-        // else it names.
-        if class == StatementClass::Admin
-            && !targets
-                .iter()
-                .any(|t| t.object == TargetObject::Cluster && t.privilege == Privilege::Manage)
-        {
-            targets.push(Target {
-                object: TargetObject::Cluster,
-                privilege: Privilege::Manage,
-            });
-        }
+        let targets = required_targets(statement, class);
         let mut checked: Vec<(Securable, Privilege)> = Vec::new();
         for target in targets {
             let securables = match self.securables_of(target.object, env) {

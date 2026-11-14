@@ -600,6 +600,30 @@ pub fn krishiv_session::resource_groups::ResourceGroups::fmt(&self, &mut core::f
 impl krishiv_session::AdmissionController for krishiv_session::resource_groups::ResourceGroups
 pub fn krishiv_session::resource_groups::ResourceGroups::admit<'a>(&'a self, &'a krishiv_session::QueryRequest) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<krishiv_session::Permit, krishiv_common::error::KrishivError>>
 pub fn krishiv_session::resource_groups::ResourceGroups::uses_estimate(&self) -> bool
+pub fn krishiv_session::resource_groups::tag_matches(&str, &str, &str) -> bool
+#[non_exhaustive] pub enum krishiv_session::AnalysisWarning
+pub krishiv_session::AnalysisWarning::LineageOpaqueUdf
+pub krishiv_session::AnalysisWarning::UnsupportedReadShape
+pub krishiv_session::AnalysisWarning::UserCodeRanAtAnalysis
+pub krishiv_session::AnalysisWarning::ViewNotExpanded
+impl krishiv_session::AnalysisWarning
+pub const krishiv_session::AnalysisWarning::ALL: [Self; 4]
+pub const fn krishiv_session::AnalysisWarning::code(self) -> &'static str
+impl core::clone::Clone for krishiv_session::AnalysisWarning
+pub fn krishiv_session::AnalysisWarning::clone(&self) -> krishiv_session::AnalysisWarning
+impl core::cmp::Eq for krishiv_session::AnalysisWarning
+impl core::cmp::Ord for krishiv_session::AnalysisWarning
+pub fn krishiv_session::AnalysisWarning::cmp(&self, &krishiv_session::AnalysisWarning) -> core::cmp::Ordering
+impl core::cmp::PartialEq for krishiv_session::AnalysisWarning
+pub fn krishiv_session::AnalysisWarning::eq(&self, &krishiv_session::AnalysisWarning) -> bool
+impl core::cmp::PartialOrd for krishiv_session::AnalysisWarning
+pub fn krishiv_session::AnalysisWarning::partial_cmp(&self, &krishiv_session::AnalysisWarning) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for krishiv_session::AnalysisWarning
+pub fn krishiv_session::AnalysisWarning::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for krishiv_session::AnalysisWarning
+pub fn krishiv_session::AnalysisWarning::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for krishiv_session::AnalysisWarning
+impl core::marker::StructuralPartialEq for krishiv_session::AnalysisWarning
 #[non_exhaustive] pub enum krishiv_session::CancelReason
 pub krishiv_session::CancelReason::Admin
 pub krishiv_session::CancelReason::ClientGone
@@ -688,6 +712,23 @@ impl core::fmt::Debug for krishiv_session::Transport
 pub fn krishiv_session::Transport::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for krishiv_session::Transport
 impl core::marker::StructuralPartialEq for krishiv_session::Transport
+#[non_exhaustive] pub struct krishiv_session::Analysis
+pub krishiv_session::Analysis::filters: alloc::collections::btree::set::BTreeSet<(krishiv_plan::analyzer::lineage::FilterKind, krishiv_plan::analyzer::lineage::Leaf)>
+pub krishiv_session::Analysis::info: krishiv_session::StatementInfo
+pub krishiv_session::Analysis::lineage: alloc::vec::Vec<krishiv_plan::analyzer::lineage::ColumnLineage>
+pub krishiv_session::Analysis::output_schema: alloc::vec::Vec<krishiv_session::OutputColumn>
+pub krishiv_session::Analysis::partial: bool
+pub krishiv_session::Analysis::warnings: alloc::collections::btree::set::BTreeSet<krishiv_session::AnalysisWarning>
+impl krishiv_session::Analysis
+pub fn krishiv_session::Analysis::to_json(&self) -> alloc::string::String
+impl core::clone::Clone for krishiv_session::Analysis
+pub fn krishiv_session::Analysis::clone(&self) -> krishiv_session::Analysis
+impl core::cmp::Eq for krishiv_session::Analysis
+impl core::cmp::PartialEq for krishiv_session::Analysis
+pub fn krishiv_session::Analysis::eq(&self, &krishiv_session::Analysis) -> bool
+impl core::fmt::Debug for krishiv_session::Analysis
+pub fn krishiv_session::Analysis::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::Analysis
 pub struct krishiv_session::Column
 impl krishiv_session::Column
 pub fn krishiv_session::Column::alias(self, &str) -> Self
@@ -953,6 +994,21 @@ pub fn krishiv_session::OptimizerStep::eq(&self, &krishiv_session::OptimizerStep
 impl core::fmt::Debug for krishiv_session::OptimizerStep
 pub fn krishiv_session::OptimizerStep::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for krishiv_session::OptimizerStep
+#[non_exhaustive] pub struct krishiv_session::OutputColumn
+pub krishiv_session::OutputColumn::data_type: krishiv_types::data_type::DataType
+pub krishiv_session::OutputColumn::declared_type: core::option::Option<alloc::string::String>
+pub krishiv_session::OutputColumn::name: alloc::string::String
+pub krishiv_session::OutputColumn::nullable: bool
+impl krishiv_session::OutputColumn
+pub fn krishiv_session::OutputColumn::new(impl core::convert::Into<alloc::string::String>, krishiv_types::data_type::DataType, bool) -> Self
+impl core::clone::Clone for krishiv_session::OutputColumn
+pub fn krishiv_session::OutputColumn::clone(&self) -> krishiv_session::OutputColumn
+impl core::cmp::Eq for krishiv_session::OutputColumn
+impl core::cmp::PartialEq for krishiv_session::OutputColumn
+pub fn krishiv_session::OutputColumn::eq(&self, &krishiv_session::OutputColumn) -> bool
+impl core::fmt::Debug for krishiv_session::OutputColumn
+pub fn krishiv_session::OutputColumn::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::OutputColumn
 pub struct krishiv_session::PathPrefixPolicy
 impl krishiv_session::PathPrefixPolicy
 pub fn krishiv_session::PathPrefixPolicy::from_config(&krishiv_common::config::Config, alloc::sync::Arc<dyn krishiv_plan::analyzer::catalog::AccessPolicy>) -> core::result::Result<Self, krishiv_common::error::KrishivError>
@@ -1081,6 +1137,8 @@ pub fn krishiv_session::RuntimeConf::clone(&self) -> krishiv_session::RuntimeCon
 impl core::fmt::Debug for krishiv_session::RuntimeConf
 pub fn krishiv_session::RuntimeConf::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct krishiv_session::Session
+impl krishiv_session::Session
+pub async fn krishiv_session::Session::analyze(&self, &str) -> core::result::Result<krishiv_session::Analysis, krishiv_common::error::KrishivError>
 impl krishiv_session::Session
 pub fn krishiv_session::Session::baggage(&self) -> alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
 pub fn krishiv_session::Session::clear_trace_context(&self)
@@ -1250,5 +1308,4 @@ pub fn krishiv_session::dot_of_profile(&krishiv_exec::profile::QueryProfile) -> 
 pub fn krishiv_session::mermaid_of_plan(&krishiv_exec::planner::explain::ExplainNode) -> alloc::string::String
 pub fn krishiv_session::mermaid_of_profile(&krishiv_exec::profile::QueryProfile) -> alloc::string::String
 pub fn krishiv_session::register_build_features(&[(&str, bool)])
-pub fn krishiv_session::resource_groups::tag_matches(&str, &str, &str) -> bool
 pub type krishiv_session::RecordBatchStream = futures_core::stream::BoxStream<'static, core::result::Result<arrow_array::record_batch::RecordBatch, krishiv_common::error::KrishivError>>

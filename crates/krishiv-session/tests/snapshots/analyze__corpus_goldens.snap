@@ -1,0 +1,1404 @@
+---
+source: crates/krishiv-session/tests/analyze.rs
+expression: out
+---
+-- Query: SELECT a FROM t
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"SELECT","columns":["a"]}],
+"output_schema":[{"ordinal":0,"name":"a","type":"int","type_json":"\"integer\"","nullable":true,"declared_type":null}],
+"lineage":[{"ordinal":0,"output":"a","sources":[{"table":["spark_catalog","default","t"],"column":"a","via_view":null}],"transform":"identity"}],
+"filters":[],
+"warnings":[]}
+
+-- Query: WITH c AS (SELECT * FROM t) SELECT * FROM c
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"SELECT","columns":["a","b","k"]}],
+"output_schema":[{"ordinal":0,"name":"a","type":"int","type_json":"\"integer\"","nullable":true,"declared_type":null},
+  {"ordinal":1,"name":"b","type":"int","type_json":"\"integer\"","nullable":true,"declared_type":null},
+  {"ordinal":2,"name":"k","type":"int","type_json":"\"integer\"","nullable":true,"declared_type":null}],
+"lineage":[{"ordinal":0,"output":"a","sources":[{"table":["spark_catalog","default","t"],"column":"a","via_view":null}],"transform":"identity"},
+  {"ordinal":1,"output":"b","sources":[{"table":["spark_catalog","default","t"],"column":"b","via_view":null}],"transform":"identity"},
+  {"ordinal":2,"output":"k","sources":[{"table":["spark_catalog","default","t"],"column":"k","via_view":null}],"transform":"identity"}],
+"filters":[],
+"warnings":[]}
+
+-- Query: SELECT 1 -- ; DROP TABLE t
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[],
+"output_schema":[{"ordinal":0,"name":"1","type":"int","type_json":"\"integer\"","nullable":false,"declared_type":null}],
+"lineage":[{"ordinal":0,"output":"1","sources":[],"transform":"literal"}],
+"filters":[],
+"warnings":[]}
+
+-- Query: SELECT /*+ BROADCAST(t) */ * FROM t /* ; DROP TABLE t */
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"SELECT","columns":["a","b","k"]}],
+"output_schema":[{"ordinal":0,"name":"a","type":"int","type_json":"\"integer\"","nullable":true,"declared_type":null},
+  {"ordinal":1,"name":"b","type":"int","type_json":"\"integer\"","nullable":true,"declared_type":null},
+  {"ordinal":2,"name":"k","type":"int","type_json":"\"integer\"","nullable":true,"declared_type":null}],
+"lineage":[{"ordinal":0,"output":"a","sources":[{"table":["spark_catalog","default","t"],"column":"a","via_view":null}],"transform":"identity"},
+  {"ordinal":1,"output":"b","sources":[{"table":["spark_catalog","default","t"],"column":"b","via_view":null}],"transform":"identity"},
+  {"ordinal":2,"output":"k","sources":[{"table":["spark_catalog","default","t"],"column":"k","via_view":null}],"transform":"identity"}],
+"filters":[],
+"warnings":[]}
+
+-- Query: SELECT * FROM parquet.`/data/x`
+error PATH_NOT_FOUND
+
+-- Query: SELECT * FROM v1 JOIN (SELECT * FROM v2) USING (k)
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"SELECT","columns":["a","k"]},
+  {"kind":"table","name":["spark_catalog","default","s"],"display":"table `spark_catalog`.`default`.`s`","privilege":"SELECT","columns":["b","k"]}],
+"output_schema":[{"ordinal":0,"name":"k","type":"int","type_json":"\"integer\"","nullable":true,"declared_type":null},
+  {"ordinal":1,"name":"a","type":"int","type_json":"\"integer\"","nullable":true,"declared_type":null},
+  {"ordinal":2,"name":"b","type":"int","type_json":"\"integer\"","nullable":true,"declared_type":null}],
+"lineage":[{"ordinal":0,"output":"k","sources":[{"table":["spark_catalog","default","t"],"column":"k","via_view":["v1"]}],"transform":"identity"},
+  {"ordinal":1,"output":"a","sources":[{"table":["spark_catalog","default","t"],"column":"a","via_view":["v1"]}],"transform":"identity"},
+  {"ordinal":2,"output":"b","sources":[{"table":["spark_catalog","default","s"],"column":"b","via_view":["v2"]}],"transform":"identity"}],
+"filters":[{"kind":"join","table":["spark_catalog","default","s"],"column":"k"},
+  {"kind":"join","table":["spark_catalog","default","t"],"column":"k"}],
+"warnings":[]}
+
+-- Query: SELECT * FROM IDENTIFIER('t')
+error KRISHIV_UNSUPPORTED_FEATURE
+
+-- Query: FROM t SELECT a
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"SELECT","columns":["a"]}],
+"output_schema":[{"ordinal":0,"name":"a","type":"int","type_json":"\"integer\"","nullable":true,"declared_type":null}],
+"lineage":[{"ordinal":0,"output":"a","sources":[{"table":["spark_catalog","default","t"],"column":"a","via_view":null}],"transform":"identity"}],
+"filters":[],
+"warnings":[]}
+
+-- Explain::Simple: EXPLAIN SELECT 1
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":"PLAN",
+"partial":false,
+"securables":[],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Explain::Extended: EXPLAIN EXTENDED SELECT 1
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":"PLAN",
+"partial":false,
+"securables":[],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Explain::Formatted: EXPLAIN FORMATTED SELECT 1
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":"PLAN",
+"partial":false,
+"securables":[],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Explain::Codegen: EXPLAIN CODEGEN SELECT 1
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":"PLAN",
+"partial":false,
+"securables":[],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Explain::Cost: EXPLAIN COST SELECT 1
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":"PLAN",
+"partial":false,
+"securables":[],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Explain::Verbose: EXPLAIN VERBOSE SELECT 1
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":"PLAN",
+"partial":false,
+"securables":[],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Explain::Simple: EXPLAIN INSERT INTO t SELECT 1
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":"PLAN",
+"partial":false,
+"securables":[],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Explain::Simple: EXPLAIN DROP TABLE t
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":"PLAN",
+"partial":false,
+"securables":[],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Explain::Analyze: EXPLAIN ANALYZE SELECT 1
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":"ANALYZE",
+"partial":false,
+"securables":[],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Explain::Analyze: EXPLAIN ANALYZE INSERT INTO t SELECT 1
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"WRITE",
+"explain":"ANALYZE",
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"MODIFY","columns":[]}],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Explain::Analyze: EXPLAIN ANALYZE DROP TABLE t
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":"ANALYZE",
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"DROP","columns":[]}],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Explain::Analyze: EXPLAIN ANALYZE SET a = b
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"SESSION",
+"explain":"ANALYZE",
+"partial":false,
+"securables":[],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Explain::Analyze: EXPLAIN ANALYZE CLEAR CACHE
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"ADMIN",
+"explain":"ANALYZE",
+"partial":false,
+"securables":[{"kind":"system","name":["cluster"],"display":"system `cluster`","privilege":"MANAGE","columns":[]}],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Set::All: SET
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"SESSION",
+"explain":null,
+"partial":false,
+"securables":[],
+"output_schema":[{"ordinal":0,"name":"key","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":1,"name":"value","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Set::Verbose: SET -v
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"SESSION",
+"explain":null,
+"partial":false,
+"securables":[],
+"output_schema":[{"ordinal":0,"name":"key","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":1,"name":"value","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":2,"name":"meaning","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":3,"name":"Since version","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Set::Show: SET spark.sql.ansi.enabled
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"SESSION",
+"explain":null,
+"partial":false,
+"securables":[],
+"output_schema":[{"ordinal":0,"name":"key","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":1,"name":"value","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Set::Assign: SET spark.sql.ansi.enabled = false
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"SESSION",
+"explain":null,
+"partial":false,
+"securables":[],
+"output_schema":[{"ordinal":0,"name":"key","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":1,"name":"value","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Set::TimeZone: SET TIME ZONE 'UTC'
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"SESSION",
+"explain":null,
+"partial":false,
+"securables":[],
+"output_schema":[{"ordinal":0,"name":"key","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":1,"name":"value","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Set::Path: SET PATH = spark_catalog.default, system.builtin
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"SESSION",
+"explain":null,
+"partial":false,
+"securables":[],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Reset: RESET
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"SESSION",
+"explain":null,
+"partial":false,
+"securables":[],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Reset: RESET spark.sql.ansi.enabled
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"SESSION",
+"explain":null,
+"partial":false,
+"securables":[],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- CreateView: CREATE TEMPORARY VIEW v AS SELECT * FROM t
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"SESSION",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"SELECT","columns":["a","b","k"]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- CreateView: CREATE OR REPLACE TEMP VIEW v AS SELECT * FROM v0
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"SESSION",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"SELECT","columns":["a","b","k"]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- DropView: DROP VIEW v
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"SESSION",
+"explain":null,
+"partial":false,
+"securables":[],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- CreateTable: CREATE TABLE t (a INT) USING parquet
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- CreateTable: CREATE TABLE t USING parquet AS SELECT * FROM s
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","s"],"display":"table `spark_catalog`.`default`.`s`","privilege":"SELECT","columns":["a","b","k"]},
+  {"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]},
+  {"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"MODIFY","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- CreateTable: CREATE OR REPLACE TABLE db.t (a INT)
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"namespace","name":["spark_catalog","db"],"display":"namespace `spark_catalog`.`db`","privilege":"CREATE","columns":[]},
+  {"kind":"table","name":["spark_catalog","db","t"],"display":"table `spark_catalog`.`db`.`t`","privilege":"DROP","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- CreateTable::temporary: CREATE TEMPORARY TABLE t USING parquet OPTIONS (path '/data/x')
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"SESSION",
+"explain":null,
+"partial":false,
+"securables":[],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- CreateTableLike: CREATE TABLE t LIKE s
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]},
+  {"kind":"table","name":["spark_catalog","default","s"],"display":"table `spark_catalog`.`default`.`s`","privilege":"SELECT","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- DropTable: DROP TABLE IF EXISTS t
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"DROP","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- DropTable: DROP TABLE IDENTIFIER('t')
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"DROP","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- CreateNamespace: CREATE DATABASE d
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"namespace","name":["spark_catalog"],"display":"namespace `spark_catalog`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- CreateNamespace: CREATE SCHEMA IF NOT EXISTS cat.d
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"namespace","name":["spark_catalog","cat"],"display":"namespace `spark_catalog`.`cat`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- DropNamespace: DROP NAMESPACE d CASCADE
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"namespace","name":["spark_catalog","d"],"display":"namespace `spark_catalog`.`d`","privilege":"DROP","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Use: USE d
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"SESSION",
+"explain":null,
+"partial":false,
+"securables":[],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Use: USE NAMESPACE d
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"SESSION",
+"explain":null,
+"partial":false,
+"securables":[],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- DeclareVariable: DECLARE v INT DEFAULT 1
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"SESSION",
+"explain":null,
+"partial":true,
+"securables":[],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":["UNSUPPORTED_READ_SHAPE"]}
+
+-- SetVariable::Single: SET VARIABLE v = 2
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"SESSION",
+"explain":null,
+"partial":true,
+"securables":[],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":["UNSUPPORTED_READ_SHAPE"]}
+
+-- SetVariable::Row: SET VAR (v) = (SELECT max(a) FROM t)
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"SESSION",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"SELECT","columns":["a"]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- DropVariable: DROP TEMPORARY VARIABLE v
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"SESSION",
+"explain":null,
+"partial":false,
+"securables":[],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- CreateFunction: CREATE TEMPORARY FUNCTION f(a INT) RETURNS INT RETURN a + 1
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"SESSION",
+"explain":null,
+"partial":false,
+"securables":[],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- CreateFunction: CREATE FUNCTION f(a INT) RETURNS INT RETURN a + 1
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- DropFunction: DROP TEMPORARY FUNCTION f
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"SESSION",
+"explain":null,
+"partial":false,
+"securables":[],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- DropFunction: DROP FUNCTION f
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"function","name":["spark_catalog","default","f"],"display":"function `spark_catalog`.`default`.`f`","privilege":"DROP","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- CreatePermanentView: CREATE VIEW db.v AS SELECT * FROM t
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"SELECT","columns":["a","b","k"]},
+  {"kind":"namespace","name":["spark_catalog","db"],"display":"namespace `spark_catalog`.`db`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- CreatePermanentView::temporary: CREATE TEMPORARY VIEW v USING parquet OPTIONS (path '/data/x')
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"SESSION",
+"explain":null,
+"partial":false,
+"securables":[],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- CreatePermanentView::global: CREATE GLOBAL TEMPORARY VIEW v AS SELECT 1
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"namespace","name":["spark_catalog","global_temp"],"display":"namespace `spark_catalog`.`global_temp`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- DropPermanentView: DROP VIEW db.v
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"view","name":["spark_catalog","db","v"],"display":"view `spark_catalog`.`db`.`v`","privilege":"DROP","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- DropPermanentView: DROP VIEW global_temp.v
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"view","name":["spark_catalog","global_temp","v"],"display":"view `spark_catalog`.`global_temp`.`v`","privilege":"DROP","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AlterTable::AddColumns: ALTER TABLE t ADD COLUMNS (b INT)
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"DROP","columns":[]},
+  {"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AlterTable::DropColumns: ALTER TABLE t DROP COLUMN b
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"DROP","columns":[]},
+  {"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AlterTable::RenameColumn: ALTER TABLE t RENAME COLUMN a TO b
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"DROP","columns":[]},
+  {"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AlterTable::RenameTo: ALTER TABLE t RENAME TO u
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"DROP","columns":[]},
+  {"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AlterTable::ChangeColumn: ALTER TABLE t CHANGE COLUMN a COMMENT 'c'
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"DROP","columns":[]},
+  {"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AlterTable::AlterColumn: ALTER TABLE t ALTER COLUMN a SET NOT NULL
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"DROP","columns":[]},
+  {"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AlterTable::SetTblProperties: ALTER TABLE t SET TBLPROPERTIES ('k' = 'v')
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"DROP","columns":[]},
+  {"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AlterTable::UnsetTblProperties: ALTER TABLE t UNSET TBLPROPERTIES ('k')
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"DROP","columns":[]},
+  {"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AlterTable::SetSerdeProperties: ALTER TABLE t SET SERDEPROPERTIES ('k' = 'v')
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"DROP","columns":[]},
+  {"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AlterTable::SetPartitionSerdeProperties: ALTER TABLE t PARTITION (p = 1) SET SERDEPROPERTIES ('k' = 'v')
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"DROP","columns":[]},
+  {"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AlterTable::SetLocation: ALTER TABLE t SET LOCATION '/data/t'
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"DROP","columns":[]},
+  {"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]},
+  {"kind":"path","name":["file:/data/t"],"display":"path 'file:/data/t'","privilege":"MODIFY","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AlterTable::AddPartition: ALTER TABLE t ADD PARTITION (p = 1)
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"DROP","columns":[]},
+  {"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AlterTable::DropPartition: ALTER TABLE t DROP PARTITION (p = 1)
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"DROP","columns":[]},
+  {"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AlterTable::RenamePartition: ALTER TABLE t PARTITION (p = 1) RENAME TO PARTITION (p = 2)
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"DROP","columns":[]},
+  {"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AlterTable::SetPartitionLocation: ALTER TABLE t PARTITION (p = 1) SET LOCATION '/data/p'
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"DROP","columns":[]},
+  {"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]},
+  {"kind":"path","name":["file:/data/p"],"display":"path 'file:/data/p'","privilege":"MODIFY","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AlterTable::RecoverPartitions: ALTER TABLE t RECOVER PARTITIONS
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"DROP","columns":[]},
+  {"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AlterView::SetQuery: ALTER VIEW v AS SELECT 1
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"view","name":["spark_catalog","default","v"],"display":"view `spark_catalog`.`default`.`v`","privilege":"DROP","columns":[]},
+  {"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AlterView::SetSchemaBinding: ALTER VIEW v WITH SCHEMA BINDING
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"view","name":["spark_catalog","default","v"],"display":"view `spark_catalog`.`default`.`v`","privilege":"DROP","columns":[]},
+  {"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AlterView::SetTblProperties: ALTER VIEW v SET TBLPROPERTIES ('k' = 'v')
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"view","name":["spark_catalog","default","v"],"display":"view `spark_catalog`.`default`.`v`","privilege":"DROP","columns":[]},
+  {"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AlterView::UnsetTblProperties: ALTER VIEW v UNSET TBLPROPERTIES ('k')
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"view","name":["spark_catalog","default","v"],"display":"view `spark_catalog`.`default`.`v`","privilege":"DROP","columns":[]},
+  {"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AlterView::RenameTo: ALTER VIEW v RENAME TO w
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"view","name":["spark_catalog","default","v"],"display":"view `spark_catalog`.`default`.`v`","privilege":"DROP","columns":[]},
+  {"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AlterNamespace::SetProperties: ALTER DATABASE d SET PROPERTIES (k = 'v')
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"namespace","name":["spark_catalog","d"],"display":"namespace `spark_catalog`.`d`","privilege":"DROP","columns":[]},
+  {"kind":"namespace","name":["spark_catalog"],"display":"namespace `spark_catalog`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AlterNamespace::SetLocation: ALTER DATABASE d SET LOCATION '/data/d'
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"namespace","name":["spark_catalog","d"],"display":"namespace `spark_catalog`.`d`","privilege":"DROP","columns":[]},
+  {"kind":"namespace","name":["spark_catalog"],"display":"namespace `spark_catalog`","privilege":"CREATE","columns":[]},
+  {"kind":"path","name":["file:/data/d"],"display":"path 'file:/data/d'","privilege":"MODIFY","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AlterNamespace::SetComment: COMMENT ON SCHEMA d IS 'c'
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"namespace","name":["spark_catalog","d"],"display":"namespace `spark_catalog`.`d`","privilege":"DROP","columns":[]},
+  {"kind":"namespace","name":["spark_catalog"],"display":"namespace `spark_catalog`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Insert: INSERT INTO t SELECT * FROM s
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"WRITE",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","s"],"display":"table `spark_catalog`.`default`.`s`","privilege":"SELECT","columns":["a","b","k"]},
+  {"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"MODIFY","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Insert: INSERT OVERWRITE TABLE t VALUES (1)
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"WRITE",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"MODIFY","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Insert: FROM s INSERT INTO t SELECT a INSERT INTO u SELECT b
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"WRITE",
+"explain":null,
+"partial":true,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"MODIFY","columns":[]},
+  {"kind":"table","name":["spark_catalog","default","u"],"display":"table `spark_catalog`.`default`.`u`","privilege":"MODIFY","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":["UNSUPPORTED_READ_SHAPE"]}
+
+-- Delete: DELETE FROM t WHERE a = 1
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"WRITE",
+"explain":null,
+"partial":true,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"MODIFY","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":["UNSUPPORTED_READ_SHAPE"]}
+
+-- Update: UPDATE t SET a = 1 WHERE b = 2
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"WRITE",
+"explain":null,
+"partial":true,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"MODIFY","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":["UNSUPPORTED_READ_SHAPE"]}
+
+-- Merge::Table: MERGE INTO t USING s ON t.k = s.k WHEN MATCHED THEN DELETE
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"WRITE",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"MODIFY","columns":[]},
+  {"kind":"table","name":["spark_catalog","default","s"],"display":"table `spark_catalog`.`default`.`s`","privilege":"SELECT","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Merge::Query: MERGE INTO t USING (SELECT * FROM s) AS s ON t.k = s.k WHEN NOT MATCHED THEN INSERT *
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"WRITE",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","s"],"display":"table `spark_catalog`.`default`.`s`","privilege":"SELECT","columns":["a","b","k"]},
+  {"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"MODIFY","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Truncate: TRUNCATE TABLE t
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"WRITE",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"MODIFY","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Show::Catalogs: SHOW CATALOGS
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[],
+"output_schema":[{"ordinal":0,"name":"catalog","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Show::Tables: SHOW TABLES
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"BROWSE","columns":[]}],
+"output_schema":[{"ordinal":0,"name":"namespace","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":1,"name":"tableName","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":2,"name":"isTemporary","type":"boolean","type_json":"\"boolean\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Show::TableExtended: SHOW TABLE EXTENDED LIKE 't*'
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"SELECT","columns":[]}],
+"output_schema":[{"ordinal":0,"name":"namespace","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":1,"name":"tableName","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":2,"name":"isTemporary","type":"boolean","type_json":"\"boolean\"","nullable":true,"declared_type":null},
+  {"ordinal":3,"name":"information","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Show::Views: SHOW VIEWS IN d
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"namespace","name":["spark_catalog","d"],"display":"namespace `spark_catalog`.`d`","privilege":"BROWSE","columns":[]}],
+"output_schema":[{"ordinal":0,"name":"namespace","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":1,"name":"viewName","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":2,"name":"isTemporary","type":"boolean","type_json":"\"boolean\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Show::Columns: SHOW COLUMNS IN t
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"BROWSE","columns":[]}],
+"output_schema":[{"ordinal":0,"name":"col_name","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Show::Functions: SHOW FUNCTIONS
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"BROWSE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Show::Namespaces: SHOW DATABASES
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"namespace","name":["spark_catalog"],"display":"namespace `spark_catalog`","privilege":"BROWSE","columns":[]}],
+"output_schema":[{"ordinal":0,"name":"namespace","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Show::CreateTable: SHOW CREATE TABLE t
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"BROWSE","columns":[]}],
+"output_schema":[{"ordinal":0,"name":"createtab_stmt","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Show::TblProperties: SHOW TBLPROPERTIES t
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"BROWSE","columns":[]}],
+"output_schema":[{"ordinal":0,"name":"key","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":1,"name":"value","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Show::Partitions: SHOW PARTITIONS t
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"SELECT","columns":[]}],
+"output_schema":[{"ordinal":0,"name":"partition","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Show::CurrentNamespace: SHOW CURRENT NAMESPACE
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[],
+"output_schema":[{"ordinal":0,"name":"catalog","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":1,"name":"namespace","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Describe::Table: DESCRIBE TABLE t
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"BROWSE","columns":[]}],
+"output_schema":[{"ordinal":0,"name":"col_name","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":1,"name":"data_type","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":2,"name":"comment","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Describe::Function: DESCRIBE FUNCTION abs
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Describe::Namespace: DESCRIBE DATABASE d
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"namespace","name":["spark_catalog","d"],"display":"namespace `spark_catalog`.`d`","privilege":"BROWSE","columns":[]}],
+"output_schema":[{"ordinal":0,"name":"info_name","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":1,"name":"info_value","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Describe::Query: DESCRIBE QUERY SELECT * FROM t
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"SELECT","columns":["a","b","k"]}],
+"output_schema":[{"ordinal":0,"name":"col_name","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":1,"name":"data_type","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":2,"name":"comment","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Cache::Cache: CACHE TABLE t
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"SESSION",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"SELECT","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Cache::Cache: CACHE LAZY TABLE c AS SELECT * FROM t
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"SESSION",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"SELECT","columns":["a","b","k"]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Cache::Uncache: UNCACHE TABLE IF EXISTS t
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"SESSION",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"SELECT","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Cache::Clear: CLEAR CACHE
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"ADMIN",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"system","name":["cluster"],"display":"system `cluster`","privilege":"MANAGE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Refresh::Table: REFRESH TABLE t
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"ADMIN",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"SELECT","columns":[]},
+  {"kind":"system","name":["cluster"],"display":"system `cluster`","privilege":"MANAGE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Refresh::Function: REFRESH FUNCTION f
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"ADMIN",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"system","name":["cluster"],"display":"system `cluster`","privilege":"MANAGE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Refresh::Path: REFRESH '/data/x'
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"ADMIN",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"system","name":["cluster"],"display":"system `cluster`","privilege":"MANAGE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Analyze: ANALYZE TABLE t COMPUTE STATISTICS
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"WRITE",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"SELECT","columns":[]},
+  {"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"MODIFY","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Repair: MSCK REPAIR TABLE t
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"DROP","columns":[]},
+  {"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- AddResource: ADD JAR '/tmp/a.jar'
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"ADMIN",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"system","name":["cluster"],"display":"system `cluster`","privilege":"MANAGE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- ListResource: LIST JARS
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- ExecuteImmediate: EXECUTE IMMEDIATE 'SELECT 1'
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"SESSION",
+"explain":null,
+"partial":true,
+"securables":[],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":["UNSUPPORTED_READ_SHAPE"]}
+
+-- Script: BEGIN DECLARE x INT DEFAULT 1; SET x = 2; END
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"SESSION",
+"explain":null,
+"partial":true,
+"securables":[],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":["UNSUPPORTED_READ_SHAPE"]}
+
+-- Script: BEGIN DECLARE x INT DEFAULT 1; INSERT INTO t VALUES (x); END
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"WRITE",
+"explain":null,
+"partial":true,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"MODIFY","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":["UNSUPPORTED_READ_SHAPE"]}
+
+-- Script: BEGIN SELECT 1; END
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":true,
+"securables":[],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":["UNSUPPORTED_READ_SHAPE"]}
+
+-- Script: BEGIN IF 1 = 1 THEN SELECT 1; ELSE ADD JAR '/tmp/a.jar'; END IF; END
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"ADMIN",
+"explain":null,
+"partial":true,
+"securables":[{"kind":"system","name":["cluster"],"display":"system `cluster`","privilege":"MANAGE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":["UNSUPPORTED_READ_SHAPE"]}
+
+-- Script: BEGIN DECLARE EXIT HANDLER FOR SQLEXCEPTION DROP TABLE t; SELECT 1; END
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":true,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"DROP","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":["UNSUPPORTED_READ_SHAPE"]}
+
+-- AlterTable::SetComment: COMMENT ON TABLE t IS 'c'
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"DROP","columns":[]},
+  {"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}

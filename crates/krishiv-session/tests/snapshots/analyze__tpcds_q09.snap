@@ -1,0 +1,23 @@
+---
+source: crates/krishiv-session/tests/analyze.rs
+expression: layout(&json)
+---
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","store_sales"],"display":"table `spark_catalog`.`default`.`store_sales`","privilege":"SELECT","columns":["ss_ext_discount_amt","ss_net_paid","ss_quantity"]},
+  {"kind":"table","name":["spark_catalog","default","reason"],"display":"table `spark_catalog`.`default`.`reason`","privilege":"SELECT","columns":["r_reason_sk"]}],
+"output_schema":[{"ordinal":0,"name":"bucket1","type":"decimal(11,6)","type_json":"\"decimal(11,6)\"","nullable":true,"declared_type":null},
+  {"ordinal":1,"name":"bucket2","type":"decimal(11,6)","type_json":"\"decimal(11,6)\"","nullable":true,"declared_type":null},
+  {"ordinal":2,"name":"bucket3","type":"decimal(11,6)","type_json":"\"decimal(11,6)\"","nullable":true,"declared_type":null},
+  {"ordinal":3,"name":"bucket4","type":"decimal(11,6)","type_json":"\"decimal(11,6)\"","nullable":true,"declared_type":null},
+  {"ordinal":4,"name":"bucket5","type":"decimal(11,6)","type_json":"\"decimal(11,6)\"","nullable":true,"declared_type":null}],
+"lineage":[{"ordinal":0,"output":"bucket1","sources":[{"table":["spark_catalog","default","store_sales"],"column":"ss_ext_discount_amt","via_view":null},{"table":["spark_catalog","default","store_sales"],"column":"ss_net_paid","via_view":null}],"transform":"aggregate"},
+  {"ordinal":1,"output":"bucket2","sources":[{"table":["spark_catalog","default","store_sales"],"column":"ss_ext_discount_amt","via_view":null},{"table":["spark_catalog","default","store_sales"],"column":"ss_net_paid","via_view":null}],"transform":"aggregate"},
+  {"ordinal":2,"output":"bucket3","sources":[{"table":["spark_catalog","default","store_sales"],"column":"ss_ext_discount_amt","via_view":null},{"table":["spark_catalog","default","store_sales"],"column":"ss_net_paid","via_view":null}],"transform":"aggregate"},
+  {"ordinal":3,"output":"bucket4","sources":[{"table":["spark_catalog","default","store_sales"],"column":"ss_ext_discount_amt","via_view":null},{"table":["spark_catalog","default","store_sales"],"column":"ss_net_paid","via_view":null}],"transform":"aggregate"},
+  {"ordinal":4,"output":"bucket5","sources":[{"table":["spark_catalog","default","store_sales"],"column":"ss_ext_discount_amt","via_view":null},{"table":["spark_catalog","default","store_sales"],"column":"ss_net_paid","via_view":null}],"transform":"aggregate"}],
+"filters":[{"kind":"filter","table":["spark_catalog","default","reason"],"column":"r_reason_sk"},
+  {"kind":"filter","table":["spark_catalog","default","store_sales"],"column":"ss_quantity"}],
+"warnings":[]}

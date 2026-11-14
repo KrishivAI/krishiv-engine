@@ -1,0 +1,25 @@
+---
+source: crates/krishiv-session/tests/analyze.rs
+expression: layout(&json)
+---
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","store_sales"],"display":"table `spark_catalog`.`default`.`store_sales`","privilege":"SELECT","columns":["ss_hdemo_sk","ss_sold_time_sk","ss_store_sk"]},
+  {"kind":"table","name":["spark_catalog","default","household_demographics"],"display":"table `spark_catalog`.`default`.`household_demographics`","privilege":"SELECT","columns":["hd_demo_sk","hd_dep_count"]},
+  {"kind":"table","name":["spark_catalog","default","time_dim"],"display":"table `spark_catalog`.`default`.`time_dim`","privilege":"SELECT","columns":["t_hour","t_minute","t_time_sk"]},
+  {"kind":"table","name":["spark_catalog","default","store"],"display":"table `spark_catalog`.`default`.`store`","privilege":"SELECT","columns":["s_store_name","s_store_sk"]}],
+"output_schema":[{"ordinal":0,"name":"count(1)","type":"bigint","type_json":"\"long\"","nullable":false,"declared_type":null}],
+"lineage":[{"ordinal":0,"output":"count(1)","sources":[],"transform":"aggregate"}],
+"filters":[{"kind":"filter","table":["spark_catalog","default","household_demographics"],"column":"hd_demo_sk"},
+  {"kind":"filter","table":["spark_catalog","default","household_demographics"],"column":"hd_dep_count"},
+  {"kind":"filter","table":["spark_catalog","default","store"],"column":"s_store_name"},
+  {"kind":"filter","table":["spark_catalog","default","store"],"column":"s_store_sk"},
+  {"kind":"filter","table":["spark_catalog","default","store_sales"],"column":"ss_hdemo_sk"},
+  {"kind":"filter","table":["spark_catalog","default","store_sales"],"column":"ss_sold_time_sk"},
+  {"kind":"filter","table":["spark_catalog","default","store_sales"],"column":"ss_store_sk"},
+  {"kind":"filter","table":["spark_catalog","default","time_dim"],"column":"t_hour"},
+  {"kind":"filter","table":["spark_catalog","default","time_dim"],"column":"t_minute"},
+  {"kind":"filter","table":["spark_catalog","default","time_dim"],"column":"t_time_sk"}],
+"warnings":[]}
