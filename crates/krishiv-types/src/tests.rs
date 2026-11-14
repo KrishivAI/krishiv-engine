@@ -406,7 +406,6 @@ fn arrow_storage_alternatives() {
         ArrowType::UInt32,
         ArrowType::Float16,
         ArrowType::Decimal256(10, 2),
-        ArrowType::FixedSizeList(Arc::new(Field::new("item", ArrowType::Int32, true)), 2),
     ] {
         let e = DataType::from_arrow(&a).map_err(|e| e.error_class());
         assert_eq!(e, Err(ErrorClass::KrishivUnsupportedFeature), "{a}");
@@ -1113,4 +1112,45 @@ fn canonical_json_reads_the_indeterminate_collation_back() {
     .into();
     assert!(DataType::from_json(&indeterminate.json()).is_err());
     assert!(DataType::from_canonical_json("\"string collate nope\"").is_err());
+}
+
+/// A fixed-length list is a stored carrier of `array<T>` (design P3-T075): the length is not part of the Spark type,
+/// `containsNull` follows the child field, and the canonical Arrow type stays `List`.
+#[test]
+fn a_fixed_size_list_is_an_array_stored_with_a_length() {
+    let fixed = |n, nullable| {
+        ArrowType::FixedSizeList(
+            Arc::new(Field::new("item", ArrowType::Float32, nullable)),
+            n,
+        )
+    };
+    let float_array =
+        |contains_null| DataType::from(ArrayType::new(DataType::Float, contains_null));
+    assert_eq!(
+        DataType::from_arrow(&fixed(4, false)),
+        Ok(float_array(false))
+    );
+    assert_eq!(
+        DataType::from_arrow(&fixed(768, true)),
+        Ok(float_array(true))
+    );
+    // Two lengths are one Spark type, and the canonical carrier is still a `List`.
+    assert_eq!(
+        DataType::from_arrow(&fixed(3, true)),
+        DataType::from_arrow(&fixed(4, true))
+    );
+    assert!(matches!(float_array(true).to_arrow(), ArrowType::List(_)));
+    assert!(float_array(true).is_valid_storage(&fixed(4, true)));
+    // The element type still decides: a vector of strings is not storage for `array<float>`.
+    let strings = ArrowType::FixedSizeList(Arc::new(Field::new("item", ArrowType::Utf8, true)), 4);
+    assert!(!float_array(true).is_valid_storage(&strings));
+    // Nested fixed-size lists count toward the nesting limit like lists.
+    let mut deep = fixed(2, true);
+    for _ in 0..=DataType::MAX_NESTING_DEPTH {
+        deep = ArrowType::FixedSizeList(Arc::new(Field::new("item", deep, true)), 2);
+    }
+    assert_eq!(
+        DataType::from_arrow(&deep).unwrap_err().error_class(),
+        ErrorClass::FailedToParseTooComplex
+    );
 }

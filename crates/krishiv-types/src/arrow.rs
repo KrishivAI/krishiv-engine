@@ -17,7 +17,7 @@
 //! | `interval day to second` | `Duration(Microsecond)`, tagged for other fields | |
 //! | `interval` | `Struct<months: Int32, days: Int32, microseconds: Int64>`, children non-null and marked with [`CALENDAR_CHILD_METADATA_KEY`] (Spark's `CalendarInterval`) | `Interval(MonthDayNano)` (the session edges convert to and from it) |
 //! | `geometry(s)` / `geography(s)` | `Struct<srid: Int32, wkb: BinaryView>`, both children non-null, always tagged | |
-//! | `array<e>` | `List` of a field `element` (nullable when `containsNull`) | `LargeList`, any child name |
+//! | `array<e>` | `List` of a field `element` (nullable when `containsNull`) | `LargeList`, `FixedSizeList` (the vector carrier, any length), any child name |
 //! | `map<k,v>` | `Map` of a non-null struct `entries` of `key` (non-null) and `value` (nullable when `valueContainsNull`), unsorted | any child names |
 //! | `struct<...>` | `Struct` of the fields | |
 //! | `variant` | `Struct<metadata: BinaryView, value: BinaryView>`, both children non-null and marked with [`VARIANT_CHILD_METADATA_KEY`]; the field also carries the Arrow extension name `arrow.parquet.variant` | |
@@ -322,6 +322,7 @@ impl DataType {
             arrow,
             ArrowType::List(_)
                 | ArrowType::LargeList(_)
+                | ArrowType::FixedSizeList(..)
                 | ArrowType::Map(..)
                 | ArrowType::Struct(_)
         );
@@ -351,7 +352,9 @@ impl DataType {
             ArrowType::Interval(IntervalUnit::YearMonth) => Self::DEFAULT_YEAR_MONTH_INTERVAL,
             ArrowType::Duration(TimeUnit::Microsecond) => Self::DEFAULT_DAY_TIME_INTERVAL,
             ArrowType::Interval(IntervalUnit::MonthDayNano) => Self::CalendarInterval,
-            ArrowType::List(f) | ArrowType::LargeList(f) => {
+            // A fixed-length list is the stored carrier of `array<T>` (design P3-T075): the length is not part of
+            // the Spark type.
+            ArrowType::List(f) | ArrowType::LargeList(f) | ArrowType::FixedSizeList(f, _) => {
                 ArrayType::new(Self::from_arrow_field_at(f, depth + 1)?, f.is_nullable()).into()
             }
             ArrowType::Map(entries, _) => match entries.data_type() {
@@ -409,9 +412,10 @@ impl DataType {
             ) => *arrow == self.to_arrow(),
             // The element, key, value or field types decide, so a tag on the
             // top-level field can say what plain nested fields don't.
-            (Self::Array(a), ArrowType::List(e) | ArrowType::LargeList(e)) => {
-                a.element_type().is_valid_storage(e.data_type())
-            }
+            (
+                Self::Array(a),
+                ArrowType::List(e) | ArrowType::LargeList(e) | ArrowType::FixedSizeList(e, _),
+            ) => a.element_type().is_valid_storage(e.data_type()),
             (Self::Map(m), ArrowType::Map(entries, _)) => match entries.data_type() {
                 ArrowType::Struct(kv) => match (kv.first(), kv.get(1)) {
                     (Some(k), Some(v)) => {
