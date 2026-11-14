@@ -359,6 +359,12 @@ impl SharedSink {
         Arc::new(Self { schema, scope })
     }
 
+    /// Whether a part added by [`Self::add_spilled_part`] is written out
+    /// (the sink has a spill scope) rather than waited for.
+    pub(crate) fn spills(&self) -> bool {
+        self.scope.is_some()
+    }
+
     /// Adds `batches`, charged to `reservation`, after the parts combined so
     /// far: what a `PythonEval` finishes once its drivers have combined.
     /// Call before `finalize`.

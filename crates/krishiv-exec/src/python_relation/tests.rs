@@ -899,3 +899,119 @@ async fn a_result_refused_in_finalize_spills_instead_of_waiting() {
     drop(g);
     done(r);
 }
+
+/// A frame whose copies the pool refuses in `finalize` while a lane's
+/// results hold the rest of the pool: the results are stored first, written
+/// out, which frees their memory, so the frame gets its copies instead of
+/// waiting for memory nothing can release (the lane queues are not
+/// spillable, nor the store's parts before it finalizes).
+#[tokio::test]
+async fn finalize_drains_results_before_waiting_for_frame_copies() {
+    let dir = tempfile::tempdir().unwrap();
+    let scope = krishiv_memory::SpillManager::open(&krishiv_memory::SpillConfig {
+        dir: dir.path().join("spill"),
+        ..krishiv_memory::SpillConfig::default()
+    })
+    .unwrap()
+    .scope()
+    .unwrap();
+    let mut r = rig(RelationShape::Map, Yield::Nothing, limits(100, 8), 1 << 20);
+    // `k INT, v BIGINT, d DECIMAL(18, 2)`: lane `f` echoes `k, v` many
+    // times; lane `g` takes `d`, whose frames are copied to the client's
+    // `Decimal128`.
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("k", ArrowType::Int32, true),
+        Field::new("v", ArrowType::Int64, true),
+        Field::new("d", ArrowType::Decimal64(18, 2), true),
+    ]));
+    let quiet = Arc::new(Shared::default());
+    let lane =
+        |shared: &Arc<Shared>, yields, sides: Vec<Arc<dyn ScalarExpr>>, names| RelationLane {
+            name: "f".to_owned(),
+            udf: Arc::new(Fake {
+                shared: Arc::clone(shared),
+                yields,
+            }),
+            sides: vec![sides],
+            names: vec![names],
+            client: vec![ArrowType::Int32, ArrowType::Int64],
+        };
+    r.sink = RelationSink::try_new(
+        Arc::clone(&schema),
+        RelationShape::Map,
+        vec![
+            lane(
+                &r.shared,
+                Yield::Burst(2000),
+                vec![column(0, ArrowType::Int32), column(1, ArrowType::Int64)],
+                vec!["k".to_owned(), "v".to_owned()],
+            ),
+            lane(
+                &quiet,
+                Yield::Nothing,
+                vec![column(2, ArrowType::Decimal64(18, 2))],
+                vec!["d".to_owned()],
+            ),
+        ],
+        Arc::new(Schema::new(vec![
+            Field::new("k", ArrowType::Int32, true),
+            Field::new("v", ArrowType::Int64, true),
+        ])),
+        limits(100, 8),
+        Some(scope),
+    )
+    .unwrap();
+    let g = r.sink.global_state(&r.ctx).unwrap();
+    let mut l = r.sink.local_state(&r.ctx, &g).unwrap();
+    // 150 rows: a frame of 100 now, 50 held for `combine`.
+    let n = 150;
+    let k: Int32Array = (0..n).map(Some).collect();
+    let v: Int64Array = (0..i64::from(n)).map(Some).collect();
+    let s = arrow_array::Decimal64Array::from_iter_values(0..i64::from(n))
+        .with_precision_and_scale(18, 2)
+        .unwrap();
+    let batch = Batch::new(
+        RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(k), Arc::new(v), Arc::new(s)],
+        )
+        .unwrap(),
+    );
+    let status = r.sink.sink(batch, &mut l, &g).unwrap();
+    assert!(matches!(status, SinkStatus::NeedMoreInput), "{status:?}");
+    assert!(
+        r.shared.taken.load(Ordering::SeqCst) < 2000,
+        "a result refused"
+    );
+    // Whatever the pool has left goes to another holder, so the held frame
+    // can get its copies only from memory the results release.
+    let mut hog = r.ctx.consumer().reservation();
+    let mut step = 1 << 20;
+    while step >= 64 {
+        if hog.try_grow(step).is_err() {
+            step /= 2;
+        }
+    }
+    r.sink.combine(l, &g).unwrap();
+    // The held frame is refused its copies.
+    assert_eq!(quiet.log(), ["B0:100"]);
+    // The other holder lets go once the held frame is sent: before that,
+    // only the results' memory can be had.
+    let release = async {
+        while !quiet.log().iter().any(|e| e == "B0:50") {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        drop(hog);
+    };
+    let (finalized, ()) = tokio::time::timeout(
+        Duration::from_secs(4),
+        futures::future::join(r.sink.finalize(&g, &r.ctx), release),
+    )
+    .await
+    .unwrap();
+    finalized.unwrap();
+    assert_eq!(quiet.log(), ["B0:100", "B0:50", "E"]);
+    assert_eq!(r.shared.taken.load(Ordering::SeqCst), 4000);
+    drop(g);
+    done(r);
+}

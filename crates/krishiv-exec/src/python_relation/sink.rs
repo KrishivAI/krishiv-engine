@@ -291,11 +291,14 @@ struct Driver {
     /// Memory reserved for the next frame's copies (`finalize` waits for
     /// it; `sink` asks the driver for it).
     spare: Reservation,
+    /// In `finalize`, the bytes the next frame's copies wait for (0: none).
+    wants: usize,
     /// An aggregate's groups waiting for their values.
     pending: Pending,
 }
 
 /// What [`RelationSink::flush`] stopped at.
+#[derive(Clone, Copy)]
 enum Flushed {
     /// The backlog is empty.
     All,
@@ -824,6 +827,7 @@ impl Sink for RelationSink {
                 held_bytes: consumer.reservation(),
                 backlog: VecDeque::new(),
                 spare: consumer.reservation(),
+                wants: 0,
                 pending: Pending::default(),
             },
         }))
@@ -905,6 +909,14 @@ impl Sink for RelationSink {
                 if done {
                     break;
                 }
+                // A frame waiting for its copies' memory: every driver's
+                // results are stored by now (written out where a frame
+                // waits), so only the pool can give it.
+                if let Some(d) = drivers.iter_mut().find(|d| d.wants > 0) {
+                    let bytes = std::mem::take(&mut d.wants);
+                    d.spare.grow(bytes).await.map_err(KrishivError::from)?;
+                    continue;
+                }
                 self.wait(&drivers, ctx).await?;
             }
             if matches!(self.shape, RelationShape::Aggregate { .. }) {
@@ -932,16 +944,17 @@ impl Sink for RelationSink {
 
 impl RelationSink {
     /// One step of a finished driver in `finalize`: the backlog framed as
-    /// far as the windows allow (waiting for the copies' memory), the
-    /// results stored, a refused map or grouped result with them (written
-    /// to a spill file when the pool has no room), then an aggregate's
-    /// refused values reserved if the pool has room now. Whether the driver
+    /// far as the windows and the pool allow, the results stored, a refused
+    /// map or grouped result with them (written to a spill file when the
+    /// pool has no room, or when a frame waits for its copies' memory: the
+    /// results' memory is what it can get), the backlog framed again, then
+    /// an aggregate's refused values reserved if the pool has room now. A
+    /// frame still refused leaves its bytes in `wants`, which `finalize`
+    /// waits for once every driver stored its results. Whether the driver
     /// is done: no backlog, every task ended, every result stored (an
     /// aggregate's values left over are `check_complete`'s error).
     async fn finish_step(&self, d: &mut Driver, g: &RelGlobal, ctx: &TaskContext) -> Result<bool> {
-        while let Flushed::Memory(bytes) = self.flush(d)? {
-            d.spare.grow(bytes).await.map_err(KrishivError::from)?;
-        }
+        d.wants = wanted(self.flush(d)?);
         let mut batches = Vec::new();
         let mut held = Vec::new();
         if let Some((batch, memory)) = d.ready.take() {
@@ -971,12 +984,16 @@ impl RelationSink {
             let handle = ctx.consumer().consumer();
             let lent = lend(std::mem::take(&mut held), handle, bytes);
             let mut reservation = ctx.consumer().reservation();
-            if reservation.try_grow(bytes).is_ok() {
+            let free = d.wants > 0 && self.store.spills();
+            if !free && reservation.try_grow(bytes).is_ok() {
                 self.store.add_part(&g.store, batches, reservation)?;
             } else {
                 drop((reservation, handle.reservation_from_credit(lent)));
                 self.store.add_spilled_part(&g.store, batches, ctx).await?;
             }
+        }
+        if d.wants > 0 {
+            d.wants = wanted(self.flush(d)?);
         }
         if aggregate {
             // The stored results' memory is free again; a value still
@@ -1046,6 +1063,14 @@ impl RelationSink {
             }
         })
         .await
+    }
+}
+
+/// The bytes a [`Flushed`] frame waits for (0: none).
+fn wanted(flushed: Flushed) -> usize {
+    match flushed {
+        Flushed::Memory(bytes) => bytes,
+        Flushed::All | Flushed::Window => 0,
     }
 }
 
