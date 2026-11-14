@@ -24,6 +24,14 @@ def not_expected_type(arg_name: str, expected: str, value: object) -> PySparkTyp
 def not_implemented(feature: str) -> PySparkNotImplementedError
 ```
 
+### `not_implemented_attribute`
+
+```python
+def not_implemented_attribute(feature: str) -> PySparkNotImplementedAttributeError
+```
+
+`not_implemented` for a property: `hasattr` is `False` and the error still says `NOT_IMPLEMENTED`.
+
 ### `unsupported_feature`
 
 ```python
@@ -218,6 +226,15 @@ class PySparkIndexError(PySparkException, IndexError)
 ```python
 class PySparkKeyError(PySparkException, KeyError)
 ```
+
+## `PySparkNotImplementedAttributeError`
+
+```python
+class PySparkNotImplementedAttributeError(PySparkNotImplementedError, AttributeError)
+```
+
+`NOT_IMPLEMENTED` for an attribute: also an `AttributeError`, so `hasattr` and
+`getattr(obj, name, default)` work on names the engine lacks (as PySpark Connect's JVM attributes).
 
 ## `PySparkNotImplementedError`
 

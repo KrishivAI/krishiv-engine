@@ -111,7 +111,8 @@ def colRegex(self, colName: str) -> Column
 ```
 
 The columns whose names match the regular expression `colName` (in backquotes,
-optionally qualified), for `select`: ``df.select(df.colRegex("`^a.*`"))`. Matching is
+optionally qualified; the qualifier is ignored), for `select`: ``df.select(df.colRegex("`^a.*`"))`. It is
+only meaningful as a `select` argument (anywhere else it stands for its first match). Matching is
 case-insensitive unless `spark.sql.caseSensitive`` is true.
 
 ### `collect`
@@ -699,7 +700,7 @@ def first(self) -> Row | None
 def foreach(self, f: Callable[[Row], None]) -> None
 ```
 
-Applies `f` to every row (in this process, as there are no executors).
+Applies `f` to every row (in this process, as there are no executors), streaming the result.
 
 ### `foreachPartition`
 
@@ -911,7 +912,7 @@ storageLevel : `krishiv.storagelevel.StorageLevel`, optional
 def mapInArrow(self, func: Callable[..., Any], schema: StructType | str, barrier: bool=False, profile: Any=None) -> DataFrame
 ```
 
-As `mapInPandas`, over `pyarrow.RecordBatch` batches.
+Not available: it needs the Python UDF worker pool, which is planned (`NOT_IMPLEMENTED`).
 
 ### `mapInPandas`
 
@@ -919,10 +920,7 @@ As `mapInPandas`, over `pyarrow.RecordBatch` batches.
 def mapInPandas(self, func: Callable[..., Any], schema: StructType | str, barrier: bool=False, profile: Any=None) -> DataFrame
 ```
 
-Maps an iterator of `pandas.DataFrame` batches with `func` and returns the result.
-
-.. note:: The function runs in this process when the method is called, over the whole result
-    (see `krishiv.sql._map_in_batches`); it is not planned into the query.
+Not available: it needs the Python UDF worker pool, which is planned (`NOT_IMPLEMENTED`).
 
 ### `melt`
 
@@ -1049,7 +1047,7 @@ Not available: it needs `sample`, which the engine cannot run yet (`NOT_IMPLEMEN
 def registerTempTable(self, name: str) -> None
 ```
 
-Deprecated alias of `createOrReplaceTempView` (removed from PySpark 4).
+Deprecated alias of `createOrReplaceTempView` (deprecated since Spark 2.0).
 
 ### `repartition`
 
@@ -1447,8 +1445,9 @@ def take(self, num: int) -> list[Row]
 def to(self, schema: StructType) -> DataFrame
 ```
 
-Reconciles each row with `schema`: columns are matched by name, reordered, extra
-columns dropped, the others cast to the field types; a field the DataFrame lacks is `NULL`.
+Reconciles each row with `schema` as Spark's `Dataset.to`: columns are matched by name,
+reordered (inside structs too) and cast where store assignment allows; see
+`krishiv.sql._to_schema` for the errors. (Spark 4.x: the method is new in 3.4.)
 
 ### `toArrow`
 

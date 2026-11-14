@@ -85,6 +85,7 @@ DataFrame.def write(self, format: str, mode: str, path: str, options: list[tuple
 DataFrame.def write_table(self, insert_into: bool, table: str, format: str | None, mode: str, options: list[tuple[str, str]] | None=..., partition_by: list[str] | None=..., bucket_by: tuple[int, list[str]] | None=..., sort_by: list[str] | None=...) -> None
 DataFrame.def write_to_table(self, table: str, mode: str, provider: str | None=..., options: list[tuple[str, str]] | None=..., properties: list[tuple[str, str]] | None=..., partitioned_by: list[str] | None=..., cluster_by: list[str] | None=..., condition: str | None=...) -> None
 GroupedData.def agg(self, cols: list[Column]) -> DataFrame
+Session.@staticmethod def conf_is_registered(key: str) -> bool
 Session.@staticmethod def is_dataframe_table(name: str) -> bool
 Session.def __new__(cls, config: list[tuple[str, str]] | None=...) -> Session
 Session.def cache_reserved(self) -> int
@@ -178,6 +179,7 @@ class PySparkException(Exception)
 class PySparkImportError(PySparkException, ImportError)
 class PySparkIndexError(PySparkException, IndexError)
 class PySparkKeyError(PySparkException, KeyError)
+class PySparkNotImplementedAttributeError(PySparkNotImplementedError, AttributeError)
 class PySparkNotImplementedError(PySparkException, NotImplementedError)
 class PySparkRuntimeError(PySparkException, RuntimeError)
 class PySparkTypeError(PySparkException, TypeError)
@@ -193,6 +195,7 @@ class UnknownException(PySparkException)
 class UnsupportedOperationException(PySparkException)
 def not_expected_type(arg_name: str, expected: str, value: object) -> PySparkTypeError
 def not_implemented(feature: str) -> PySparkNotImplementedError
+def not_implemented_attribute(feature: str) -> PySparkNotImplementedAttributeError
 def unsupported_feature(feature: str) -> UnsupportedOperationException
 ## sql/__init__.py
 __all__
@@ -1159,24 +1162,20 @@ def udf(f: Any=None, returnType: DataType | str=StringType(), *, useArrow: bool 
 def unix_timestamp(timestamp: ColumnOrName | None=None, format: str='yyyy-MM-dd HH:mm:ss') -> Column
 def when(condition: Column, value: Any) -> Column
 ## sql/group.py
-GroupedData.def __init__(self, native: _native.GroupedData, df: DataFrame, keys: list[Any] | None=None) -> None
+GroupedData.def __init__(self, native: _native.GroupedData, df: DataFrame) -> None
 GroupedData.def agg(self, *exprs: Column | dict[str, str]) -> DataFrame
 GroupedData.def apply(self, udf: Any) -> DataFrame
 GroupedData.def applyInArrow(self, func: Any, schema: Any) -> DataFrame
 GroupedData.def applyInPandas(self, func: Any, schema: Any) -> DataFrame
 GroupedData.def avg(self, *cols: str) -> DataFrame
-GroupedData.def cogroup(self, other: GroupedData) -> PandasCogroupedOps
+GroupedData.def cogroup(self, other: GroupedData) -> Any
 GroupedData.def count(self) -> DataFrame
 GroupedData.def max(self, *cols: str) -> DataFrame
 GroupedData.def min(self, *cols: str) -> DataFrame
 GroupedData.def pivot(self, pivot_col: str, values: list[Any] | None=None) -> GroupedData
 GroupedData.def sum(self, *cols: str) -> DataFrame
 GroupedData.mean
-PandasCogroupedOps.def __init__(self, left: GroupedData, right: GroupedData) -> None
-PandasCogroupedOps.def applyInArrow(self, func: Any, schema: Any) -> DataFrame
-PandasCogroupedOps.def applyInPandas(self, func: Any, schema: Any) -> DataFrame
 class GroupedData()
-class PandasCogroupedOps()
 ## sql/na.py
 DataFrameNaFunctions.def __init__(self, df: DataFrame) -> None
 DataFrameNaFunctions.def drop(self, how: str | None='any', thresh: int | None=None, subset: Any=None) -> DataFrame

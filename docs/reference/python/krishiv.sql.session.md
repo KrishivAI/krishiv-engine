@@ -46,8 +46,9 @@ An alias for `createTable` (deprecated since 2.2.0 in PySpark).
 def createTable(self, tableName: str, path: str | None=None, source: str | None=None, schema: StructType | None=None, description: str | None=None, **options: str) -> DataFrame
 ```
 
-Creates a table over the files at `path` (an external table) as a temporary view
-and returns it. `schema` and `description` are not supported yet.
+Creates a table over the files at `path` as a *temporary view* (the catalog has no persistent
+tables: `listTables` shows `isTemporary=True`), failing if the name exists, and returns it.
+`schema` and `description` are not supported yet.
 
 ### `currentCatalog`
 
@@ -87,8 +88,9 @@ Drops the temporary view `viewName`; whether it existed.
 def functionExists(self, functionName: str, dbName: str | None=None) -> bool
 ```
 
-Whether the function `functionName` exists: whether a call of it resolves (a call with
-the wrong number of arguments does, as the function is there).
+Whether the function `functionName` exists: whether a call of it resolves (a call with the
+wrong number of arguments does, as the function is there). A name that is not an identifier
+(or dotted identifiers) is a `PARSE_SYNTAX_ERROR`, as in Spark.
 
 ### `getDatabase`
 
@@ -153,7 +155,7 @@ The databases: just `default`, as a list of `Database` (as PySpark).
 def listFunctions(self, dbName: str | None=None, pattern: str | None=None) -> list[Function]
 ```
 
-The functions that have a wrapper in `krishiv.sql.functions`, as a list of
+The SQL functions that have a wrapper in `krishiv.sql.functions`, as a list of
 `Function`. The engine cannot list its functions (`SHOW FUNCTIONS` is not supported),
 so SQL-only functions are missing here, though `functionExists` finds them.
 
@@ -514,7 +516,8 @@ Not available: operation tags (`NOT_IMPLEMENTED`).
 def sparkContext(self) -> Any
 ```
 
-Not available: there is no `SparkContext` (RDDs and the JVM) in an embedded session.
+Not available: there is no `SparkContext` (RDDs and the JVM) in an embedded session. Raises
+`JVM_ATTRIBUTE_NOT_SUPPORTED` as PySpark Connect does, so `hasattr` is `False`.
 
 ### `sql`
 

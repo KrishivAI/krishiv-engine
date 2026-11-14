@@ -428,7 +428,8 @@ def simpleString(self) -> str
 def treeString(self, level: int | None=None) -> str
 ```
 
-The schema as the indented tree `printSchema` prints, to `level` levels (all by default).
+The schema as the indented tree `printSchema` prints, to `level` levels (all by default and for
+`level <= 0`, as Spark).
 
 ### `typeName`
 

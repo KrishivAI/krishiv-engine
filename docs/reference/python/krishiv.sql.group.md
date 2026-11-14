@@ -56,7 +56,7 @@ expressions.
 def apply(self, udf: Any) -> DataFrame
 ```
 
-Not available: the deprecated grouped-map `pandas_udf` form; use `applyInPandas`.
+Not available: the deprecated grouped-map `pandas_udf` form (`NOT_IMPLEMENTED`).
 
 ### `applyInArrow`
 
@@ -64,7 +64,7 @@ Not available: the deprecated grouped-map `pandas_udf` form; use `applyInPandas`
 def applyInArrow(self, func: Any, schema: Any) -> DataFrame
 ```
 
-As `applyInPandas`, over `pyarrow.Table`: `func(table)` or `func(key, table)`.
+Not available: it needs the Python UDF worker pool, which is planned (`NOT_IMPLEMENTED`).
 
 ### `applyInPandas`
 
@@ -72,12 +72,7 @@ As `applyInPandas`, over `pyarrow.Table`: `func(table)` or `func(key, table)`.
 def applyInPandas(self, func: Any, schema: Any) -> DataFrame
 ```
 
-Maps each group of the `DataFrame` with a function over `pandas.DataFrame` and
-returns the result, as `pyspark.sql.GroupedData.applyInPandas`: `func(pdf)` or
-`func(key, pdf)`, returning a `pandas.DataFrame` of `schema`.
-
-.. note:: The function runs in the driver process when this method is called (see
-    `krishiv.sql._map_in_batches`), and groups are keyed by column names.
+Not available: it needs the Python UDF worker pool, which is planned (`NOT_IMPLEMENTED`).
 
 ### `avg`
 
@@ -104,10 +99,10 @@ The average per group of each numeric column, as `pyspark.sql.GroupedData.avg`.
 ### `cogroup`
 
 ```python
-def cogroup(self, other: GroupedData) -> PandasCogroupedOps
+def cogroup(self, other: GroupedData) -> Any
 ```
 
-Cogroups this group with another, as `pyspark.sql.GroupedData.cogroup`.
+Not available: it needs the Python UDF worker pool, which is planned (`NOT_IMPLEMENTED`).
 
 ### `count`
 
@@ -207,28 +202,3 @@ The sum per group of each numeric column, as `pyspark.sql.GroupedData.sum`.
 |  Bob|       5|
 +-----+--------+
 ```
-
-## `PandasCogroupedOps`
-
-```python
-class PandasCogroupedOps
-```
-
-Two grouped DataFrames cogrouped by key, as `pyspark.sql.PandasCogroupedOps`.
-
-### `applyInArrow`
-
-```python
-def applyInArrow(self, func: Any, schema: Any) -> DataFrame
-```
-
-As `applyInPandas`, over `pyarrow.Table`.
-
-### `applyInPandas`
-
-```python
-def applyInPandas(self, func: Any, schema: Any) -> DataFrame
-```
-
-`func(left_pdf, right_pdf)` or `func(key, left_pdf, right_pdf)` per key; see
-`GroupedData.applyInPandas` for where it runs.

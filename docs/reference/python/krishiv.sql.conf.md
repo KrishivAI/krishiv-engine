@@ -31,7 +31,8 @@ Every configuration set in this session, under the names the engine uses (a prop
 def isModifiable(self, key: str) -> bool
 ```
 
-Whether the configuration `key` can be changed at run time (`spark.conf.set`).
+Whether the configuration `key` is a known setting that can be changed at run time
+(`spark.conf.set`); static and unknown keys are `False`, as in Spark.
 
 ### `set`
 
