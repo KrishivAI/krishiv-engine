@@ -12,8 +12,10 @@
 //! unverified, and a framing layer is one more place a size can hide.)
 
 use std::io::{self, Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::Arc;
+use std::sync::mpsc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use thrift::protocol::{
@@ -193,19 +195,10 @@ impl HmsClient {
             config.max_elements,
         ));
         budget.begin_until(deadline);
-        let address = config
-            .address
-            .to_socket_addrs()
-            .map_err(|e| HmsError::Failed(format!("cannot resolve the metastore address: {e}")))?
-            .next()
-            .ok_or_else(|| {
-                HmsError::Failed("the metastore address resolves to nothing".to_owned())
-            })?;
-        let remaining = budget.remaining().ok_or_else(|| {
-            HmsError::Failed("cannot connect to the metastore: out of time".to_owned())
+        let addresses = resolve_within(config.address.clone(), deadline, |a| {
+            a.to_socket_addrs().map(Iterator::collect)
         })?;
-        let stream = TcpStream::connect_timeout(&address, remaining)
-            .map_err(|e| HmsError::Failed(format!("cannot connect to the metastore: {e}")))?;
+        let stream = connect_any(&addresses, deadline)?;
         stream
             .set_nodelay(true)
             .map_err(|e| HmsError::Failed(e.to_string()))?;
@@ -261,7 +254,7 @@ impl HmsClient {
         match reply {
             Reply::Success(names) => Ok(names),
             Reply::Declared { message, .. } => Err(HmsError::Meta(message)),
-            Reply::Nothing => Ok(Vec::new()),
+            Reply::Nothing => Err(no_result("get_all_databases")),
         }
     }
 
@@ -280,8 +273,9 @@ impl HmsClient {
         match reply {
             Reply::Success(db) => Ok(Some(db)),
             // throws (1: NoSuchObjectException o1, 2: MetaException o2)
-            Reply::Declared { id: 1, .. } | Reply::Nothing => Ok(None),
+            Reply::Declared { id: 1, .. } => Ok(None),
             Reply::Declared { message, .. } => Err(HmsError::Meta(message)),
+            Reply::Nothing => Err(no_result("get_database")),
         }
     }
 
@@ -300,7 +294,7 @@ impl HmsClient {
         match reply {
             Reply::Success(names) => Ok(names),
             Reply::Declared { message, .. } => Err(HmsError::Meta(message)),
-            Reply::Nothing => Ok(Vec::new()),
+            Reply::Nothing => Err(no_result("get_all_tables")),
         }
     }
 
@@ -322,8 +316,9 @@ impl HmsClient {
         match reply {
             Reply::Success(table) => Ok(Some(table)),
             // throws (1: MetaException o1, 2: NoSuchObjectException o2)
-            Reply::Declared { id: 2, .. } | Reply::Nothing => Ok(None),
+            Reply::Declared { id: 2, .. } => Ok(None),
             Reply::Declared { message, .. } => Err(HmsError::Meta(message)),
+            Reply::Nothing => Err(no_result("get_table")),
         }
     }
 
@@ -425,6 +420,69 @@ impl HmsClient {
         })();
         read.map_err(|e| self.classify(e))
     }
+}
+
+/// Resolves `address` within `deadline`: a literal `ip:port` needs no lookup, and a name is looked up on a thread of
+/// its own so a stalled resolver cannot hold the call past the deadline (the thread ends when the resolver returns).
+fn resolve_within(
+    address: String,
+    deadline: Instant,
+    resolver: impl FnOnce(&str) -> io::Result<Vec<SocketAddr>> + Send + 'static,
+) -> Result<Vec<SocketAddr>> {
+    if let Ok(literal) = address.parse::<SocketAddr>() {
+        return Ok(vec![literal]);
+    }
+    let left = deadline
+        .checked_duration_since(Instant::now())
+        .filter(|d| !d.is_zero())
+        .ok_or_else(|| {
+            HmsError::Failed("out of time before resolving the metastore address".to_owned())
+        })?;
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        // The receiver may have given up: nothing to do about that.
+        let _ = sender.send(resolver(&address));
+    });
+    match receiver.recv_timeout(left) {
+        Ok(Ok(addresses)) if !addresses.is_empty() => Ok(addresses),
+        Ok(Ok(_)) => Err(HmsError::Failed(
+            "the metastore address resolves to nothing".to_owned(),
+        )),
+        Ok(Err(e)) => Err(HmsError::Failed(format!(
+            "cannot resolve the metastore address: {e}"
+        ))),
+        Err(_) => Err(HmsError::Failed(
+            "timed out resolving the metastore address".to_owned(),
+        )),
+    }
+}
+
+/// Connects to the first of `addresses` that answers, all within `deadline`: each attempt gets an equal share of
+/// what is left, so a dead first address (`localhost` resolving to `::1` before `127.0.0.1`) leaves time for the next.
+fn connect_any(addresses: &[SocketAddr], deadline: Instant) -> Result<TcpStream> {
+    let mut last = None;
+    for (i, address) in addresses.iter().enumerate() {
+        let Some(left) = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|d| !d.is_zero())
+        else {
+            break;
+        };
+        let remaining_addresses = u32::try_from(addresses.len() - i).unwrap_or(1).max(1);
+        match TcpStream::connect_timeout(address, left / remaining_addresses) {
+            Ok(stream) => return Ok(stream),
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(HmsError::Failed(match last {
+        Some(e) => format!("cannot connect to the metastore: {e}"),
+        None => "cannot connect to the metastore: out of time".to_owned(),
+    }))
+}
+
+/// A reply that holds neither the result nor a declared exception is damaged: it does not say the name is absent.
+fn no_result(method: &str) -> HmsError {
+    HmsError::Failed(format!("the reply to {method} has no result"))
 }
 
 fn string_arg(o: &mut dyn TOutputProtocol, name: &str, id: i16, value: &str) -> thrift::Result<()> {
@@ -838,6 +896,126 @@ mod tests {
             .get_all_databases()
             .unwrap_err();
         assert!(matches!(e, HmsError::Failed(_)), "{e:?}");
+        drop(server);
+    }
+
+    /// A reply that has neither the result nor a declared exception does not say the name is absent.
+    #[test]
+    fn a_reply_with_no_result_and_no_exception_is_a_failure_not_absence() {
+        let (address, server) = serve(4, |method, seq, o| reply_with(o, method, seq, |_| Ok(())));
+        let mut client = HmsClient::connect(&cfg(&address)).unwrap();
+        for e in [
+            client.get_table("web", "t").map(|_| ()).unwrap_err(),
+            client.get_database("web").map(|_| ()).unwrap_err(),
+            client.get_all_tables("web").map(|_| ()).unwrap_err(),
+            client.get_all_databases().map(|_| ()).unwrap_err(),
+        ] {
+            assert!(
+                matches!(&e, HmsError::Failed(m) if m.contains("has no result")),
+                "{e:?}"
+            );
+        }
+        server.join().unwrap();
+    }
+
+    /// A success field of the wrong wire type is also no result.
+    #[test]
+    fn a_result_of_the_wrong_type_is_a_failure_not_absence() {
+        let (address, server) = serve(1, |method, seq, o| {
+            reply_with(o, method, seq, |o| {
+                field(o, TType::I32, 0)?;
+                o.write_i32(7)?;
+                o.write_field_end()
+            })
+        });
+        let e = HmsClient::connect(&cfg(&address))
+            .unwrap()
+            .get_table("web", "t")
+            .unwrap_err();
+        assert!(
+            matches!(&e, HmsError::Failed(m) if m.contains("has no result")),
+            "{e:?}"
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn a_stalled_resolver_cannot_hold_the_call_past_the_deadline() {
+        let started = Instant::now();
+        let e = resolve_within(
+            "metastore.example:9083".to_owned(),
+            Instant::now() + Duration::from_millis(200),
+            |_| {
+                thread::sleep(Duration::from_secs(3));
+                Ok(Vec::new())
+            },
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&e, HmsError::Failed(m) if m.contains("timed out resolving")),
+            "{e:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_literal_address_needs_no_lookup_and_a_failed_lookup_is_named() {
+        let literal = resolve_within(
+            "127.0.0.1:9083".to_owned(),
+            Instant::now() + Duration::from_secs(1),
+            |_| panic!("a literal address is not looked up"),
+        )
+        .unwrap();
+        assert_eq!(literal, ["127.0.0.1:9083".parse::<SocketAddr>().unwrap()]);
+        let e = resolve_within(
+            "nope.invalid:1".to_owned(),
+            Instant::now() + Duration::from_secs(1),
+            |_| Err(io::Error::other("no such host")),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&e, HmsError::Failed(m) if m.contains("cannot resolve")),
+            "{e:?}"
+        );
+        let none = resolve_within(
+            "x.invalid:1".to_owned(),
+            Instant::now() + Duration::from_secs(1),
+            |_| Ok(Vec::new()),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&none, HmsError::Failed(m) if m.contains("resolves to nothing")),
+            "{none:?}"
+        );
+    }
+
+    /// The first address is dead, the second answers: a hostname that resolves to both still connects.
+    #[test]
+    fn a_dead_first_address_leaves_time_for_the_next() {
+        let (live, server) = serve(1, |method, seq, o| {
+            reply_with(o, method, seq, |o| strings_field(o, 0, &["default"]))
+        });
+        let dead = {
+            let l = TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap()
+        };
+        let addresses = [dead, live.parse::<SocketAddr>().unwrap()];
+        let stream = connect_any(&addresses, Instant::now() + Duration::from_secs(5)).unwrap();
+        drop(stream);
+        let e = connect_any(&[dead], Instant::now() + Duration::from_secs(5)).unwrap_err();
+        assert!(
+            matches!(&e, HmsError::Failed(m) if m.contains("cannot connect")),
+            "{e:?}"
+        );
+        let out_of_time = connect_any(&addresses, Instant::now()).unwrap_err();
+        assert!(
+            matches!(&out_of_time, HmsError::Failed(m) if m.contains("out of time")),
+            "{out_of_time:?}"
+        );
         drop(server);
     }
 }
