@@ -821,6 +821,14 @@ fn a_sample_survives_the_wire_and_corrupt_bounds_are_refused() {
     corrupt(&edit(&|s| s.lower = 0.5), "not a range of draws");
     corrupt(&edit(&|s| s.lower = -0.1), "not a range of draws");
     corrupt(&edit(&|s| s.upper = f64::NAN), "not a range of draws");
+    // `TABLESAMPLE (-0.00001 PERCENT)`: Spark keeps the negative fraction as
+    // the upper bound over a lower bound of zero, an empty range of draws.
+    let empty = edit(&|s| {
+        s.lower = 0.0;
+        s.upper = -1e-7;
+    });
+    let plan = decode(&empty.encode_to_vec()).unwrap();
+    assert_eq!(round_trip(&plan), plan);
 }
 
 #[test]

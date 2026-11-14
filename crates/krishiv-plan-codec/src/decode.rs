@@ -533,11 +533,13 @@ impl Decoder {
                 limit: l.limit,
             },
             Kind::Sample(s) => {
-                // The planner writes finite bounds with `0 <= lower <= upper`.
+                // The planner writes finite bounds with `0 <= lower <= upper`,
+                // or `lower = 0` over a negative `upper`: a fraction within
+                // Spark's rounding epsilon below zero, an empty range of draws.
                 if !(s.lower.is_finite()
                     && s.upper.is_finite()
                     && 0.0 <= s.lower
-                    && s.lower <= s.upper)
+                    && (s.lower <= s.upper || s.lower == 0.0))
                 {
                     return Err(CodecError::Corrupt(format!(
                         "a sample's bounds [{}, {}) are not a range of draws",
