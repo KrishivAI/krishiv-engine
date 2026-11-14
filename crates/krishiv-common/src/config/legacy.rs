@@ -236,12 +236,12 @@ mod tests {
         let baseline = crate::config::Config::default();
         let mut c = crate::config::Config::default();
         c.set(alt, "LEGACY").unwrap();
-        assert!(c.get(primary).is_some());
+        assert_ne!(c.get(primary), baseline.get(primary));
         c.unset(alt);
-        assert!(c.get(primary).is_none());
+        assert_eq!(c.get(primary), baseline.get(primary));
         c.set(alt, "LEGACY").unwrap();
         c.reset_key(alt, &baseline);
-        assert!(c.get(primary).is_none());
+        assert_eq!(c.get(primary), baseline.get(primary));
     }
 
     #[test]
