@@ -27,6 +27,7 @@ pub mod cache;
 mod coalesce;
 pub mod distinct_samples;
 pub mod fault;
+pub mod inferred;
 pub mod latency;
 #[cfg(unix)]
 pub mod local_listing;
@@ -69,6 +70,7 @@ pub use self::cache::{CacheKey, CacheStats, MetadataCache};
 pub use self::coalesce::{Coalesced, Waste, coalesce, coalesce_with};
 pub use self::distinct_samples::{DistinctSample, DistinctSamples, SampleKey};
 pub use self::fault::{FaultStats, FaultStore, ScheduledRequest, TransientError};
+pub use self::inferred::{InferKey, InferredSchemas, infer_schema_cached};
 pub use self::latency::{LATENCY_BUCKETS, LatencyHistogram};
 use self::pace::{Direction, Pacer};
 pub use self::stores::{
@@ -407,6 +409,8 @@ pub struct IoScheduler {
     cache: MetadataCache,
     /// The distinct-value samples the planner took of file columns (P2-T164 U6).
     distinct_samples: DistinctSamples,
+    /// The schemas formats inferred from files (see [`InferredSchemas`]).
+    inferred: InferredSchemas,
     /// The local block cache of remote reads, when `krishiv.io.cache.enabled`.
     block_cache: Option<Arc<BlockCache>>,
     runtime: Option<tokio::runtime::Handle>,
@@ -451,6 +455,7 @@ impl IoScheduler {
             block_cache,
             cache: MetadataCache::new(config.metadata_cache_bytes),
             distinct_samples: DistinctSamples::default(),
+            inferred: InferredSchemas::default(),
             jitter: AtomicU64::new(config.seed),
             config,
             stores: RwLock::new(HashMap::new()),
@@ -608,6 +613,12 @@ impl IoScheduler {
     #[must_use]
     pub fn distinct_samples(&self) -> &DistinctSamples {
         &self.distinct_samples
+    }
+
+    /// The schemas formats inferred from files, next to the metadata cache.
+    #[must_use]
+    pub fn inferred_schemas(&self) -> &InferredSchemas {
+        &self.inferred
     }
 
     /// Process-wide counters.
@@ -895,6 +906,31 @@ impl IoContext {
     #[must_use]
     pub fn memory_pool(&self) -> Option<&Arc<dyn MemoryPool>> {
         self.memory.as_ref().map(|h| h.pool())
+    }
+
+    /// An empty reservation from the query's pool, when the context has one.
+    pub(crate) fn reservation(&self) -> Option<Reservation> {
+        self.memory.as_ref().map(ConsumerHandle::reservation)
+    }
+
+    /// Grows (waiting for memory) or shrinks `r` to `bytes`.
+    ///
+    /// # Errors
+    /// Memory errors.
+    pub(crate) async fn resize_reservation(
+        &self,
+        r: &mut Option<Reservation>,
+        bytes: usize,
+    ) -> Result<()> {
+        if let Some(r) = r {
+            let have = r.size();
+            if bytes > have {
+                r.grow(bytes - have).await?;
+            } else {
+                r.shrink(have - bytes);
+            }
+        }
+        Ok(())
     }
 
     async fn reserve(&self, bytes: u64) -> Result<Option<Reservation>> {

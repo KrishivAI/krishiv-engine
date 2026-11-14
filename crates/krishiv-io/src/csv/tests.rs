@@ -291,7 +291,14 @@ fn camel(class: &str) -> String {
 }
 
 fn in_memory_file(bytes: &[u8], name: &str) -> (Arc<IoScheduler>, FileRef) {
-    let sched = IoScheduler::new(IoConfig::default());
+    in_memory_file_on(IoScheduler::new(IoConfig::default()), bytes, name)
+}
+
+fn in_memory_file_on(
+    sched: Arc<IoScheduler>,
+    bytes: &[u8],
+    name: &str,
+) -> (Arc<IoScheduler>, FileRef) {
     let store = Arc::new(object_store::memory::InMemory::new());
     let id = StoreId::new("memory://csv");
     sched.register_store(
@@ -328,6 +335,66 @@ fn infer_named(bytes: &[u8], name: &str, o: &FormatOptions) -> Result<SchemaRef,
     let io = sched.context();
     rt.block_on(CsvFormat.infer_schema(&io, std::slice::from_ref(&file), o))
         .map_err(|e| e.into_error("f.csv"))
+}
+
+/// [`infer`] on a runtime of four threads (the caller's runtime, as the
+/// compute runtime is for a statement), so the partitions infer on its
+/// blocking threads in parallel.
+fn infer_parallel(bytes: &[u8], o: &FormatOptions) -> Result<SchemaRef, KrishivError> {
+    let io_rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .enable_all()
+        .build()
+        .map_err(|e| crate::error::internal(e.to_string()))?;
+    let sched = IoScheduler::with_runtime(IoConfig::default(), io_rt.handle().clone());
+    let (sched, file) = in_memory_file_on(sched, bytes, "f.csv");
+    let io = sched.context();
+    io_rt
+        .block_on(CsvFormat.infer_schema(&io, std::slice::from_ref(&file), o))
+        .map_err(|e| e.into_error("f.csv"))
+}
+
+/// Partitions infer in parallel and merge in partition order: a type that
+/// only appears in a late partition still widens the column, and the schema
+/// is the one the caller's task infers alone.
+#[test]
+fn parallel_inference_widens_as_one_pass_does() {
+    let mut file = String::from("a,b,c,d\n");
+    for r in 0..4_000_u32 {
+        // a: int, then a long near the end; b: int, a double in the middle;
+        // c: int except one string in the last line; d: never set.
+        let a = if r == 3_000 {
+            "9999999999".to_owned()
+        } else {
+            r.to_string()
+        };
+        let b = if r == 2_000 {
+            "1.5".to_owned()
+        } else {
+            (r % 7).to_string()
+        };
+        let c = if r == 3_999 {
+            "x".to_owned()
+        } else {
+            "3".to_owned()
+        };
+        file.push_str(&format!("{a},{b},{c},\n"));
+    }
+    let o = options(&serde_json::json!({
+        "header": "true",
+        "inferSchema": "true",
+        "inferenceMaxPartitionBytes": "1024",
+        "inferenceOpenCostInBytes": "1",
+    }));
+    let one = infer(file.as_bytes(), &o).expect("infer");
+    let many = infer_parallel(file.as_bytes(), &o).expect("infer");
+    assert_eq!(one, many);
+    let types: Vec<String> = many
+        .fields()
+        .iter()
+        .map(|f| type_name(f.data_type()))
+        .collect();
+    assert_eq!(types, ["bigint", "double", "string", "string"]);
 }
 
 #[test]
@@ -785,6 +852,11 @@ fn sampling_ratio_matches_spark() {
             opts["inferenceOpenCostInBytes"] = c.to_string().into();
         }
         let schema = infer(file.as_bytes(), &options(&opts)).expect("infer");
+        let parallel = infer_parallel(file.as_bytes(), &options(&opts)).expect("infer");
+        assert_eq!(
+            schema, parallel,
+            "samplingRatio case {case} on an I/O runtime"
+        );
         let got: Vec<String> = schema
             .fields()
             .iter()
@@ -1356,4 +1428,131 @@ fn a_binary_value_follows_the_binary_output_style_and_an_unknown_style_fails() {
     }
     let o = options(&serde_json::json!({"binaryOutputStyle": "NOPE"}));
     assert!(encode(&batch, &o).is_err());
+}
+
+/// An inferred schema is kept per file version and parsed options: the same
+/// read infers once; another option, or the file rewritten with as many
+/// bytes, infers again.
+#[test]
+fn inferred_schemas_are_kept_per_file_version_and_options() {
+    use object_store::ObjectStoreExt;
+    use std::sync::atomic::Ordering;
+    let sched = IoScheduler::new(IoConfig::default());
+    let store = Arc::new(object_store::memory::InMemory::new());
+    let id = StoreId::new("memory://csv");
+    sched.register_store(
+        id.clone(),
+        Arc::clone(&store) as Arc<dyn object_store::ObjectStore>,
+    );
+    let path = object_store::path::Path::from("f.csv");
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .expect("runtime");
+    let write = |bytes: &'static [u8]| {
+        rt.block_on(async {
+            store.put(&path, bytes.into()).await.expect("put");
+            FileRef::from_meta(id.clone(), &store.head(&path).await.expect("head"))
+        })
+    };
+    let typed = options(&serde_json::json!({"header": "true", "inferSchema": "true"}));
+    let plain = options(&serde_json::json!({"header": "true"}));
+    let read = |o: &FormatOptions, f: &FileRef| {
+        let io = sched.context();
+        let schema = rt
+            .block_on(crate::infer_schema_cached(
+                &CsvFormat,
+                &io,
+                std::slice::from_ref(f),
+                o,
+            ))
+            .expect("infer");
+        let first = type_name(schema.field(0).data_type());
+        (first, io.counters().bytes_read.load(Ordering::Relaxed))
+    };
+    let file = write(b"a,b\n1,x\n2,y\n");
+    let (first, read_first) = read(&typed, &file);
+    assert_eq!(first, "int");
+    assert!(read_first > 0);
+    assert_eq!(read(&typed, &file), ("int".to_owned(), 0));
+    // Another option is another key.
+    let (other, read_other) = read(&plain, &file);
+    assert_eq!(other, "string");
+    assert!(read_other > 0);
+    // The same size, another version: read again.
+    let changed = write(b"a,b\n1.5,x\n2\n");
+    assert_eq!(changed.size, file.size);
+    assert_ne!(changed.version, file.version);
+    let (now, read_now) = read(&typed, &changed);
+    assert_eq!(now, "double");
+    assert!(read_now > 0);
+    assert_eq!(sched.inferred_schemas().len(), 3);
+}
+
+/// The cache drops its oldest schemas when it would hold more file keys than
+/// its bound, and never stores a key larger than the bound.
+#[test]
+fn inferred_schemas_are_bounded_by_file_keys() {
+    let (_, file) = in_memory_file(b"a\n1\n", "f.csv");
+    let o = options(&serde_json::json!({"inferSchema": "true"}));
+    let cache = crate::InferredSchemas::new(2);
+    let schema = int_schema();
+    let one = |path: &str| {
+        let mut f = file.clone();
+        f.path = object_store::path::Path::from(path);
+        f
+    };
+    let key = |files: &[FileRef]| crate::InferKey::new("csv", files, &o);
+    cache.insert(key(&[one("a")]), Arc::clone(&schema));
+    cache.insert(key(&[one("b")]), Arc::clone(&schema));
+    assert_eq!(cache.len(), 2);
+    cache.insert(key(&[one("c")]), Arc::clone(&schema));
+    assert_eq!(cache.len(), 2);
+    assert!(cache.get(&key(&[one("a")])).is_none());
+    assert!(cache.get(&key(&[one("b")])).is_some());
+    assert!(cache.get(&key(&[one("c")])).is_some());
+    // Two files: both older entries go.
+    cache.insert(key(&[one("d"), one("e")]), Arc::clone(&schema));
+    assert_eq!(cache.len(), 1);
+    assert!(cache.get(&key(&[one("d"), one("e")])).is_some());
+    // Larger than the bound: not stored, nothing dropped.
+    cache.insert(key(&[one("f"), one("g"), one("h")]), Arc::clone(&schema));
+    assert_eq!(cache.len(), 1);
+}
+
+/// Inference reserves the bytes its readers hold from the query's pool and
+/// releases them all when it ends: a pool too small for one chunk refuses it.
+#[test]
+fn inference_reserves_what_its_readers_hold() {
+    use krishiv_common::error::ErrorClass;
+    use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+    let mut file = String::from("a,b\n");
+    for r in 0..200_000_u32 {
+        file.push_str(&format!("{r},{}\n", r % 13));
+    }
+    let o = options(&serde_json::json!({"header": "true", "inferSchema": "true"}));
+    let (sched, f) = in_memory_file(file.as_bytes(), "f.csv");
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let root = TreePool::new(&MemoryConfig::default());
+    let query = root.child("q", None);
+    let io = sched.context().with_memory(Arc::clone(&query));
+    let schema = rt
+        .block_on(CsvFormat.infer_schema(&io, std::slice::from_ref(&f), &o))
+        .expect("infer");
+    assert_eq!(type_name(schema.field(0).data_type()), "int");
+    assert_eq!(query.reserved(), 0, "everything is released");
+    let tiny = TreePool::new(&MemoryConfig {
+        limit: Some(1 << 10),
+        ..MemoryConfig::default()
+    });
+    let io = sched.context().with_memory(tiny.child("q", None));
+    let e = rt
+        .block_on(CsvFormat.infer_schema(&io, std::slice::from_ref(&f), &o))
+        .expect_err("a 1 KiB pool cannot hold a chunk")
+        .into_error("f.csv");
+    assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory);
 }

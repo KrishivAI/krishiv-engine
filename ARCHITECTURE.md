@@ -63,7 +63,7 @@ holds that crate's invariants, and the module docs (`//!`) at the top of the nam
 | L2 | `krishiv-kernels`, `krishiv-functions` (registry and bindings), `krishiv-io` (formats, scan, runtime filters) |
 | L3 | `krishiv-sql`, `krishiv-plan`, `krishiv-optimizer` |
 | L4 | `krishiv-exec`, `krishiv-plan-codec`, `krishiv-state`, `krishiv-stream` |
-| L5 | `krishiv-session`, `krishiv-shuffle`, `krishiv-scheduler`, `krishiv-connectors-{kafka,iceberg,delta,cdc}` |
+| L5 | `krishiv-session`, `krishiv-udf-pool` (the server's sandboxed Python UDF worker processes), `krishiv-shuffle`, `krishiv-scheduler`, `krishiv-connectors-{kafka,iceberg,delta,cdc}` |
 | L6 | `krishiv-connect`, `krishiv-flight-sql`, `krishiv-mcp`, `krishiv-server`, `krishiv-python`, `krishiv-ui-assets` |
 | L7 | `krishiv` (facade), `krishiv-cli`, `krishiv-bench-runner`; test crates `krishiv-testkit`, `krishiv-sim` |
 
