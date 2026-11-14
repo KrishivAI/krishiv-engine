@@ -259,6 +259,15 @@ for _name, _text in [
 ]:
     for _mode in MODES:
         READS.append((f"{_name} {_mode}", _text, {"mode": _mode}, "a int, _corrupt_record string"))
+# PY-029: the commonest JSON file shape, one array of objects.
+PY029 = '[{"a":1,"b":"x"},{"a":2,"b":"y"}]\n'
+READS += [
+    ("text after a record", '{"a":1} {"b":2}\n{"a":3}x\n{"a":4},\n', {}, "a int, b int, _corrupt_record string"),
+    ("PY-029 array file", PY029, {}, None),
+    ("PY-029 array file multiline", PY029, {"multiLine": "true"}, None),
+    ("PY-029 pretty array file", '[\n{"a":1,"b":"x"},\n{"a":2,"b":"y"}\n]\n', {}, None),
+    ("PY-029 pretty array file multiline", '[\n{"a":1,"b":"x"},\n{"a":2,"b":"y"}\n]\n', {"multiLine": "true"}, None),
+]
 READS += [
     (
         "root array partial renamed corrupt column",

@@ -1126,6 +1126,114 @@
    ]
   },
   {
+   "name": "text after a record",
+   "file": "eyJhIjoxfSB7ImIiOjJ9CnsiYSI6M314CnsiYSI6NH0sCg==",
+   "options": {},
+   "schema": "a int, b int, _corrupt_record string",
+   "inferred": "struct<a:int,b:int,_corrupt_record:string>",
+   "rows": [
+    [
+     1,
+     null,
+     null
+    ],
+    [
+     3,
+     null,
+     null
+    ],
+    [
+     4,
+     null,
+     null
+    ]
+   ]
+  },
+  {
+   "name": "PY-029 array file",
+   "file": "W3siYSI6MSwiYiI6IngifSx7ImEiOjIsImIiOiJ5In1dCg==",
+   "options": {},
+   "schema": null,
+   "inferred": "struct<a:bigint,b:string>",
+   "rows": [
+    [
+     1,
+     "x"
+    ],
+    [
+     2,
+     "y"
+    ]
+   ]
+  },
+  {
+   "name": "PY-029 array file multiline",
+   "file": "W3siYSI6MSwiYiI6IngifSx7ImEiOjIsImIiOiJ5In1dCg==",
+   "options": {
+    "multiLine": "true"
+   },
+   "schema": null,
+   "inferred": "struct<a:bigint,b:string>",
+   "rows": [
+    [
+     1,
+     "x"
+    ],
+    [
+     2,
+     "y"
+    ]
+   ]
+  },
+  {
+   "name": "PY-029 pretty array file",
+   "file": "Wwp7ImEiOjEsImIiOiJ4In0sCnsiYSI6MiwiYiI6InkifQpdCg==",
+   "options": {},
+   "schema": null,
+   "inferred": "struct<_corrupt_record:string,a:bigint,b:string>",
+   "rows": [
+    [
+     "[",
+     null,
+     null
+    ],
+    [
+     null,
+     1,
+     "x"
+    ],
+    [
+     null,
+     2,
+     "y"
+    ],
+    [
+     "]",
+     null,
+     null
+    ]
+   ]
+  },
+  {
+   "name": "PY-029 pretty array file multiline",
+   "file": "Wwp7ImEiOjEsImIiOiJ4In0sCnsiYSI6MiwiYiI6InkifQpdCg==",
+   "options": {
+    "multiLine": "true"
+   },
+   "schema": null,
+   "inferred": "struct<a:bigint,b:string>",
+   "rows": [
+    [
+     1,
+     "x"
+    ],
+    [
+     2,
+     "y"
+    ]
+   ]
+  },
+  {
    "name": "root array partial renamed corrupt column",
    "file": "W3siYSI6ImJhZCJ9LHsiYSI6MX1dCg==",
    "options": {

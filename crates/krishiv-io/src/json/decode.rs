@@ -602,7 +602,9 @@ fn parse_top(c: &mut Cur<'_>, text: &str) -> Result<Top, Reason> {
     }
 }
 
-/// One line of JSON-lines text: exactly one top-level value.
+/// One line of JSON-lines text: its first top-level value. Anything after
+/// it is never read, as Spark's parser stops after the record's value (so
+/// `{"a":1},` in a pretty-printed array is a record).
 pub(crate) fn parse_line(text: &str, syntax: Syntax) -> Result<Top, Reason> {
     let mut c = Cur {
         b: text.as_bytes(),
@@ -610,12 +612,7 @@ pub(crate) fn parse_line(text: &str, syntax: Syntax) -> Result<Top, Reason> {
         base: 0,
         syntax,
     };
-    let top = parse_top(&mut c, text)?;
-    c.skip_gap();
-    if c.pos != c.b.len() {
-        return Err("trailing text");
-    }
-    Ok(top)
+    parse_top(&mut c, text)
 }
 
 /// The next top-level value of multi-line text from `pos`: the value and

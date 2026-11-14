@@ -345,9 +345,16 @@ fn tokenizer_reads_flat_values() {
         Ok(Top::Object(o)) if o.fields.is_empty()
     ));
     assert!(parse_line("  ", s).is_err());
-    // Trailing text and structural defects are malformed.
+    // Text after a line's value is never read, as in Spark
+    // (`golden_tests`: "text after a record").
+    for ok in [r#"{"a":1} {"b":2}"#, r#"{"a":1}x"#, r#"{"a":1},"#] {
+        assert!(
+            matches!(parse_line(ok, s), Ok(Top::Object(o)) if o.fields.len() == 1),
+            "{ok:?}"
+        );
+    }
+    // Structural defects are malformed.
     for bad in [
-        r#"{"a":1} {"b":2}"#,
         r#"{"a":1,}"#,
         r#"{"a"}"#,
         r#"{"a":}"#,
@@ -358,7 +365,6 @@ fn tokenizer_reads_flat_values() {
         r#"{"a":1e}"#,
         r#"{"a":t}"#,
         r#"{"a":nul}"#,
-        r#"{"a":1}x"#,
         r#"{"a":"x"#,
         r#"{"a":'x'}"#,
         "{a:1}",
