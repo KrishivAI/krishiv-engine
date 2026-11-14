@@ -689,6 +689,13 @@ enum AggregateFunction {
   // A session aggregate UDF, by name and version (`AggregateExpr.udaf`).
   // feature: rust_udaf
   AGGREGATE_FUNCTION_UDF = 46;
+  // `max` of a collated string: `MAX_BY` of the value by its collation key,
+  // keeping the first of equal keys.
+  // feature: collated_min_max
+  AGGREGATE_FUNCTION_MAX_BY_KEY_FIRST = 47;
+  // `min` of a collated string, as `MAX_BY_KEY_FIRST`.
+  // feature: collated_min_max
+  AGGREGATE_FUNCTION_MIN_BY_KEY_FIRST = 48;
 }
 
 enum AggregateInput {
@@ -1266,7 +1273,8 @@ message DataType {
   // feature: collated_strings
   // `KIND_COLLATED_STRING` only: the collation's canonical name (never
   // `UTF8_BINARY`, which is `KIND_STRING`). Ids index an ICU build's
-  // table, so they never travel.
+  // table, so they never travel. The INDETERMINATE collation is `null`
+  // (feature `indeterminate_collation`).
   string collation = 10;
 }
 

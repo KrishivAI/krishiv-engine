@@ -1280,12 +1280,8 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
         AggregateFunction::AnyValue { ignore_nulls } => {
             (pb::AggregateFunction::AnyValue, *ignore_nulls)
         }
-        // `min`/`max` of a collated string have no wire form yet: the plan stays on one node.
-        AggregateFunction::MaxByKeyFirst | AggregateFunction::MinByKeyFirst => {
-            return Err(CodecError::Unsupported(
-                "min/max of a collated string".to_owned(),
-            ));
-        }
+        AggregateFunction::MaxByKeyFirst => (pb::AggregateFunction::MaxByKeyFirst, false),
+        AggregateFunction::MinByKeyFirst => (pb::AggregateFunction::MinByKeyFirst, false),
         AggregateFunction::MaxBy => (pb::AggregateFunction::MaxBy, false),
         AggregateFunction::MinBy => (pb::AggregateFunction::MinBy, false),
         AggregateFunction::Udf(call) => {
@@ -1557,8 +1553,8 @@ fn spark_type(t: &DataType, nested: &Cell<bool>) -> Result<pb::DataType> {
         }
         DataType::CalendarInterval => (Kind::CalendarInterval, 0, 0, 0),
         DataType::CollatedString(c) => {
-            // By canonical name: ids index an ICU build's table.
-            if c.is_indeterminate() || c.is_utf8_binary() {
+            // By canonical name: ids index an ICU build's table. INDETERMINATE is `null`.
+            if c.is_utf8_binary() {
                 return Err(CodecError::Unsupported(format!(
                     "a string type of collation {c}"
                 )));
