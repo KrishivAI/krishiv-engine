@@ -2250,6 +2250,50 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         nullable: None,
         subqueries: Vec::new(),
     };
+    // Nested values: an array with a null element, an empty one, a map with
+    // a struct value and a bare struct.
+    let nested_literals = {
+        use krishiv_types::{ArrayType, MapType, StructField, StructType};
+        let array_type = ArrayType::new(DataType::Integer, true);
+        let struct_type = StructType::new([
+            StructField::new("a", DataType::Integer, false),
+            StructField::new("s", DataType::String, true),
+        ]);
+        let a_struct = |v: i32| {
+            Literal::struct_value(
+                struct_type.clone(),
+                vec![Literal::Integer(v), Literal::Null(Some(DataType::String))],
+            )
+            .unwrap()
+        };
+        PhysNode::Project {
+            input: boxed(scan()),
+            layout: vec![AttrId(1), AttrId(2)],
+            items: [
+                Literal::array(
+                    array_type.clone(),
+                    vec![Literal::Integer(1), Literal::Null(Some(DataType::Integer))],
+                )
+                .unwrap(),
+                Literal::array(array_type, Vec::new()).unwrap(),
+                Literal::key_value_map(
+                    MapType::new(DataType::String, struct_type.clone().into(), true),
+                    vec![(Literal::String("k".to_owned()), a_struct(1))],
+                )
+                .unwrap(),
+                a_struct(2),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(i, l)| ProjectItemPlan::Expr {
+                name: format!("n{i}"),
+                expr: lit(l),
+            })
+            .collect(),
+            nullable: None,
+            subqueries: Vec::new(),
+        }
+    };
     let mut interval_columns = file_scan();
     interval_columns.scan.output = vec![
         column(
@@ -2308,6 +2352,7 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
     vec![
         ("interval_literals", interval_literals),
         ("options_map_literal", options_map),
+        ("nested_literals", nested_literals),
         ("interval_scan", PhysNode::Scan(interval_columns)),
         ("interval_nested", nested_intervals),
         (

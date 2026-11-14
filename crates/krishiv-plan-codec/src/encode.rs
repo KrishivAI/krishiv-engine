@@ -1558,6 +1558,38 @@ fn literal(l: &Literal, nested: &Cell<bool>) -> Result<pb::Literal> {
                 .map(|(key, value)| map_entry(key, value))
                 .collect::<Result<_>>()?,
         }),
+        Literal::Array {
+            data_type,
+            elements,
+        } => Kind::Array(pb::ArrayLiteral {
+            data_type: Some(spark_type(&DataType::Array(Arc::clone(data_type)), nested)?),
+            elements: elements
+                .iter()
+                .map(|e| nested_member(e, nested))
+                .collect::<Result<_>>()?,
+        }),
+        Literal::KeyValueMap { data_type, entries } => Kind::KeyValueMap(pb::KeyValueMapLiteral {
+            data_type: Some(spark_type(&DataType::Map(Arc::clone(data_type)), nested)?),
+            entries: entries
+                .iter()
+                .map(|(k, v)| {
+                    Ok(pb::KeyValueEntry {
+                        key: Some(nested_member(k, nested)?),
+                        value: Some(nested_member(v, nested)?),
+                    })
+                })
+                .collect::<Result<_>>()?,
+        }),
+        Literal::Struct { data_type, fields } => Kind::Struct(pb::StructLiteral {
+            data_type: Some(spark_type(
+                &DataType::Struct((**data_type).clone()),
+                nested,
+            )?),
+            fields: fields
+                .iter()
+                .map(|e| nested_member(e, nested))
+                .collect::<Result<_>>()?,
+        }),
         _ => {
             return Err(CodecError::Unsupported(
                 "a literal kind this version does not know".to_owned(),
@@ -1565,6 +1597,18 @@ fn literal(l: &Literal, nested: &Cell<bool>) -> Result<pb::Literal> {
         }
     };
     Ok(pb::Literal { kind: Some(kind) })
+}
+
+/// A value inside a nested literal. The options map is its own feature
+/// (`options_map_literals`), which the walk reports for an expression, not for
+/// a member, so it does not travel inside one.
+fn nested_member(l: &Literal, nested: &Cell<bool>) -> Result<pb::Literal> {
+    if matches!(l, Literal::Map(_)) {
+        return Err(CodecError::Unsupported(
+            "an options map inside an array, map or struct literal".to_owned(),
+        ));
+    }
+    literal(l, nested)
 }
 
 fn year_month_field(f: YearMonthField) -> pb::YearMonthField {

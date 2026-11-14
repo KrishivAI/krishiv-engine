@@ -1550,6 +1550,36 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.put(&days.to_le_bytes());
                 self.i64(*micros);
             }
+            // Nested values: the type, then the values (the type bounds the
+            // depth, `Literal::array` and friends check it).
+            Literal::Array {
+                data_type,
+                elements,
+            } => {
+                self.u8(20);
+                self.data_type(&krishiv_types::DataType::Array(Arc::clone(data_type)));
+                self.len(elements.len());
+                for e in elements {
+                    self.literal(e);
+                }
+            }
+            Literal::KeyValueMap { data_type, entries } => {
+                self.u8(21);
+                self.data_type(&krishiv_types::DataType::Map(Arc::clone(data_type)));
+                self.len(entries.len());
+                for (k, v) in entries {
+                    self.literal(k);
+                    self.literal(v);
+                }
+            }
+            Literal::Struct { data_type, fields } => {
+                self.u8(22);
+                self.data_type(&krishiv_types::DataType::Struct((**data_type).clone()));
+                self.len(fields.len());
+                for f in fields {
+                    self.literal(f);
+                }
+            }
         }
     }
 }

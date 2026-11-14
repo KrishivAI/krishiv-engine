@@ -1531,7 +1531,7 @@ pub mod data_type {
 pub struct Literal {
     #[prost(
         oneof = "literal::Kind",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21"
     )]
     pub kind: ::core::option::Option<literal::Kind>,
 }
@@ -1577,7 +1577,53 @@ pub mod literal {
         /// feature: options_map_literals
         #[prost(message, tag = "18")]
         Map(super::MapLiteral),
+        /// feature: nested_literals
+        #[prost(message, tag = "19")]
+        Array(super::ArrayLiteral),
+        /// feature: nested_literals
+        #[prost(message, tag = "20")]
+        KeyValueMap(super::KeyValueMapLiteral),
+        /// feature: nested_literals
+        #[prost(message, tag = "21")]
+        Struct(super::StructLiteral),
     }
+}
+/// feature: nested_literals
+/// An array value of any element type: `data_type` is the array type (a
+/// nested type, so `nested_types` too), each element a literal of the element
+/// type, a null one a typed `NullLiteral`.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ArrayLiteral {
+    #[prost(message, optional, tag = "1")]
+    pub data_type: ::core::option::Option<DataType>,
+    #[prost(message, repeated, tag = "2")]
+    pub elements: ::prost::alloc::vec::Vec<Literal>,
+}
+/// feature: nested_literals
+/// A map value of any key and value type (not the options-only `MapLiteral`).
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct KeyValueMapLiteral {
+    #[prost(message, optional, tag = "1")]
+    pub data_type: ::core::option::Option<DataType>,
+    #[prost(message, repeated, tag = "2")]
+    pub entries: ::prost::alloc::vec::Vec<KeyValueEntry>,
+}
+/// feature: nested_literals
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct KeyValueEntry {
+    #[prost(message, optional, tag = "1")]
+    pub key: ::core::option::Option<Literal>,
+    #[prost(message, optional, tag = "2")]
+    pub value: ::core::option::Option<Literal>,
+}
+/// feature: nested_literals
+/// A struct value: one literal per field of `data_type`, in field order.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct StructLiteral {
+    #[prost(message, optional, tag = "1")]
+    pub data_type: ::core::option::Option<DataType>,
+    #[prost(message, repeated, tag = "2")]
+    pub fields: ::prost::alloc::vec::Vec<Literal>,
 }
 /// feature: options_map_literals
 /// A `MAP<STRING, STRING>` literal: one call's options (`from_json`,

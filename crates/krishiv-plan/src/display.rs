@@ -1277,6 +1277,38 @@ impl Display for Literal {
                 "INTERVAL '{}'",
                 krishiv_types::interval::calendar_string(*months, *days, *micros)
             ),
+            // Nested values print as the constructor call that builds them;
+            // Spark's own text is golden-pending (design P3-T012a note, 5).
+            Self::Array { elements, .. } => {
+                f.write_str("ARRAY(")?;
+                for (i, e) in elements.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{e}")?;
+                }
+                f.write_str(")")
+            }
+            Self::KeyValueMap { entries, .. } => {
+                f.write_str("MAP(")?;
+                for (i, (k, v)) in entries.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{k}, {v}")?;
+                }
+                f.write_str(")")
+            }
+            Self::Struct { data_type, fields } => {
+                f.write_str("NAMED_STRUCT(")?;
+                for (i, (field, v)) in data_type.fields().iter().zip(fields).enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "'{}', {v}", Escaped(field.name()))?;
+                }
+                f.write_str(")")
+            }
         }
     }
 }

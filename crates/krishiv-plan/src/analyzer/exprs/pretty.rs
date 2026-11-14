@@ -822,7 +822,15 @@ pub(super) fn pretty_literal(v: &Literal, zone: Option<SessionZone>) -> String {
             crate::spark_fmt::timestamp(SessionZone::local_micros(zone, *us), false)
         }
         Literal::TimestampNtz(us) => crate::spark_fmt::timestamp(*us, true),
-        _ => v.to_string(),
+        // Nested values name as the display form (`ARRAY(1, 2)`); Spark's own
+        // name is golden-pending (design P3-T012a, 5).
+        Literal::Array { .. }
+        | Literal::KeyValueMap { .. }
+        | Literal::Struct { .. }
+        | Literal::Map(_)
+        | Literal::YearMonthInterval { .. }
+        | Literal::DayTimeInterval { .. }
+        | Literal::CalendarInterval { .. } => v.to_string(),
     }
 }
 
