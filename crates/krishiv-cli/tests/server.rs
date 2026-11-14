@@ -122,6 +122,11 @@ impl Drop for Running {
 }
 
 fn start(spill: &std::path::Path) -> Running {
+    start_with(spill, &[])
+}
+
+/// [`start`] with more `--conf KEY=VALUE` settings.
+fn start_with(spill: &std::path::Path, conf: &[String]) -> Running {
     let mut child = krishiv()
         // `--allow-root`: CI containers may run as root.
         .args([
@@ -134,6 +139,7 @@ fn start(spill: &std::path::Path) -> Running {
         ])
         .args(["--conf", "krishiv.metrics.enabled=true", "--conf"])
         .arg(format!("krishiv.spill.dir={}", spill.display()))
+        .args(conf.iter().flat_map(|c| ["--conf", c.as_str()]))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -161,12 +167,18 @@ fn start(spill: &std::path::Path) -> Running {
 }
 
 fn http_get(addr: &str, path: &str) -> String {
+    http_get_as(addr, path, None)
+}
+
+/// `GET path` with `Authorization: Bearer token` when `token` is given.
+fn http_get_as(addr: &str, path: &str, token: Option<&str>) -> String {
     let mut s = TcpStream::connect(addr).expect("connect");
     s.set_read_timeout(Some(Duration::from_secs(10)))
         .expect("timeout");
+    let auth = token.map_or(String::new(), |t| format!("Authorization: Bearer {t}\r\n"));
     write!(
         s,
-        "GET {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"
+        "GET {path} HTTP/1.1\r\nHost: x\r\n{auth}Connection: close\r\n\r\n"
     )
     .expect("write");
     let mut out = String::new();
@@ -228,12 +240,35 @@ fn sigterm_shuts_down_cleanly_and_removes_the_spill_directory() {
 }
 
 /// Runs `script` with a PySpark 4.x Connect client against a fresh server,
-/// `SPARK_REMOTE` set to its Connect address.
+/// `SPARK_REMOTE` set to its Connect address. The interpreter is
+/// `KRISHIV_TEST_PYSPARK_PYTHON` (a venv with `pyspark-client` installed),
+/// else `python3`. The script runs from a file: under `python -c`,
+/// `pyspark-client` 4.3.0 takes the run for its own doctests and looks for a
+/// `SPARK_HOME` (`pyspark/sql/connect/utils.py`, `check_dependencies`).
 fn pyspark(script: &str) {
+    pyspark_with(&[], script);
+}
+
+/// [`pyspark`] against a server started with `confs`.
+fn pyspark_with(confs: &[&str], script: &str) {
     let spill = tempfile::tempdir().expect("tempdir");
-    let run = start(spill.path());
-    let out = Command::new("python3")
-        .args(["-c", script])
+    // The spill root must be private (`krishiv-memory`, `check_root_is_private`);
+    // a temporary directory follows the umask.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(spill.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("private spill root");
+    }
+    let scripts = tempfile::tempdir().expect("tempdir");
+    let file = scripts.path().join("client.py");
+    std::fs::write(&file, script).expect("script");
+    let python =
+        std::env::var("KRISHIV_TEST_PYSPARK_PYTHON").unwrap_or_else(|_| "python3".to_owned());
+    let confs: Vec<String> = confs.iter().map(|c| (*c).to_owned()).collect();
+    let run = start_with(spill.path(), &confs);
+    let out = Command::new(python)
+        .arg(&file)
         .env("SPARK_REMOTE", format!("sc://{}", run.connect))
         .output()
         .expect("python3");
@@ -246,7 +281,7 @@ fn pyspark(script: &str) {
 }
 
 #[test]
-#[ignore = "needs PR-11 (ExecutePlan, Config: P3-T011a)"]
+#[ignore = "needs a Python with pyspark-client 4.3.0 or 4.2.1 (KRISHIV_TEST_PYSPARK_PYTHON); CI hosts have none"]
 fn sc_localhost_runs_spark_range_collect() {
     pyspark(
         "from pyspark.sql import SparkSession\n\
@@ -263,7 +298,7 @@ fn sc_localhost_runs_spark_range_collect() {
 /// `SPARK_CONNECT_LOG_LEVEL` is set when it is imported; a failed release
 /// is a warning there (`reattach.py`, "ReleaseExecute failed").
 #[test]
-#[ignore = "needs pyspark-client 4.3.0 / 4.2.1 on the host (none on CI runners) and the Config RPC (PR-11b)"]
+#[ignore = "needs a Python with pyspark-client 4.3.0 or 4.2.1 (KRISHIV_TEST_PYSPARK_PYTHON); CI hosts have none"]
 fn pyspark_minimal_reattach() {
     pyspark(
         "import logging, os\n\
@@ -283,8 +318,32 @@ fn pyspark_minimal_reattach() {
     );
 }
 
+/// Design P3-T011a §3.8 `stream_cap_reattach` with the stock client: a
+/// 4 KiB `senderMaxStreamSize` ends each stream without `ResultComplete`;
+/// the client reattaches after its last response until it has every row,
+/// releasing as it goes, and logs no error.
 #[test]
-#[ignore = "needs PR-11 (ExecutePlan, Config: P3-T011a)"]
+#[ignore = "needs a Python with pyspark-client 4.3.0 or 4.2.1 (KRISHIV_TEST_PYSPARK_PYTHON); CI hosts have none"]
+fn pyspark_stream_cap_reattach() {
+    pyspark_with(
+        &[
+            "spark.connect.execute.reattachable.senderMaxStreamSize=4096",
+            "spark.connect.execute.reattachable.observerRetryBufferSize=8192",
+        ],
+        "import io, logging\n\
+         from pyspark.sql import SparkSession\n\
+         log = io.StringIO()\n\
+         logging.getLogger('pyspark').addHandler(logging.StreamHandler(log))\n\
+         s = SparkSession.builder.getOrCreate()\n\
+         s.conf.set('spark.sql.execution.arrow.maxRecordsPerBatch', '100')\n\
+         assert [r.id for r in s.range(20000).collect()] == list(range(20000))\n\
+         s.stop()\n\
+         assert 'ERROR' not in log.getvalue() and 'Traceback' not in log.getvalue(), log.getvalue()\n",
+    );
+}
+
+#[test]
+#[ignore = "needs SqlCommand (P3-T012) and a Python with pyspark-client (KRISHIV_TEST_PYSPARK_PYTHON)"]
 fn server_sessions_are_isolated() {
     pyspark(
         "from pyspark.sql import SparkSession\n\
@@ -299,7 +358,7 @@ fn server_sessions_are_isolated() {
 }
 
 #[test]
-#[ignore = "needs PR-11; nightly: a client idle for 3 minutes keeps its session (keepalive)"]
+#[ignore = "nightly: a client idle for 3 minutes keeps its session (keepalive); needs a Python with pyspark-client (KRISHIV_TEST_PYSPARK_PYTHON)"]
 fn idle_client_survives_keepalive() {
     pyspark(
         "import time\n\
@@ -310,4 +369,53 @@ fn idle_client_survives_keepalive() {
          assert s.range(2).count() == 2\n\
          s.stop()\n",
     );
+}
+
+#[test]
+fn an_inline_auth_secret_is_refused_and_not_echoed() {
+    let out = krishiv()
+        .args(["server", "--port", "0", "--connect-port", "0", "--conf"])
+        .arg("krishiv.auth.tokens.a.secret=inline-canary-secret-0123456789abcdef")
+        .output()
+        .expect("run krishiv server");
+    assert_eq!(out.status.code(), Some(1));
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!all.contains("inline-canary-secret"), "{all}");
+    assert!(!all.contains("Spark Connect on"), "{all}");
+}
+
+#[cfg(unix)]
+#[test]
+fn configured_tokens_guard_the_admin_routes() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let token = "prometheus-scrape-token-0123456789abcdef";
+    let path = dir.path().join("prom");
+    std::fs::write(&path, token).expect("write secret");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    let conf = [
+        format!("krishiv.auth.tokens.prom.secret=file:{}", path.display()),
+        "krishiv.auth.tokens.prom.principal=prometheus".to_owned(),
+        "krishiv.auth.tokens.prom.role=viewer".to_owned(),
+    ];
+    let server = start_with(dir.path(), &conf);
+    let none = http_get(&server.admin, "/metrics");
+    assert!(none.starts_with("HTTP/1.1 401"), "{none}");
+    let scrape = http_get_as(&server.admin, "/metrics", Some(token));
+    assert!(scrape.starts_with("HTTP/1.1 200"), "{scrape}");
+    // A viewer sees no other principal's work in the UI's data routes (the route exists only
+    // with the `ui` feature).
+    let ui = http_get_as(&server.admin, "/api/internal/queries", Some(token));
+    let expected = if cfg!(feature = "ui") {
+        "HTTP/1.1 403"
+    } else {
+        "HTTP/1.1 404"
+    };
+    assert!(ui.starts_with(expected), "{ui}");
+    let probe = http_get(&server.admin, "/healthz");
+    assert!(probe.starts_with("HTTP/1.1 200"), "{probe}");
 }

@@ -794,3 +794,41 @@ fn store_ids_carry_a_hash_of_every_fs_setting() {
     let registry = StoreRegistry::new(config(&[("fs.s3a.endpoint", "http://a:9000")]));
     assert_ne!(registry.id_of(&url, None, &options), a);
 }
+
+/// object_store formats an S3 region into the S3 and STS host names, so a region that could name
+/// another host (`evil.example#`, `/`, `@`, upper case, too long) is refused, per read or in the
+/// session, before a store is built (P3-T067b review B1).
+#[cfg(feature = "cloud")]
+#[test]
+fn a_region_cannot_name_a_host() {
+    let url = parse_object_url("s3://bucket/k").unwrap();
+    let long = "a".repeat(33);
+    for key in [S3_REGION, S3_ENDPOINT_REGION] {
+        for bad in [
+            "evil.example#",
+            "localhost:9000/",
+            "a@b",
+            "EU-WEST-1",
+            "",
+            long.as_str(),
+        ] {
+            let error = StoreRegistry::new(config(&[]))
+                .store_with_options(&url, &read_options(&[(key, bad)]))
+                .err()
+                .unwrap_or_else(|| panic!("{key}={bad} was accepted"));
+            assert_eq!(
+                error.error_class(),
+                ErrorClass::KrishivInvalidConfigValue,
+                "{key}={bad}"
+            );
+            // (An empty session value is an unset one: the default region.)
+            if !bad.is_empty() {
+                let session = StoreRegistry::new(config(&[(key, bad)]));
+                assert!(session.store(&url).is_err(), "{key}={bad} in the session");
+            }
+        }
+        StoreRegistry::new(config(&[(key, "eu-west-1")]))
+            .store(&url)
+            .unwrap();
+    }
+}

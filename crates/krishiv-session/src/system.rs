@@ -1085,6 +1085,13 @@ impl QueryLog {
     /// or ended before its run): its wall time is the time since it was submitted, so the
     /// queue time is not lost.
     pub(crate) fn close_unrun(&self, id: &str, state: &'static str, error_class: Option<&str>) {
+        // A statement dropped while it waited because its action was cancelled
+        // (`action.rs`; the drop runs with the action current): name the reason.
+        if state == "cancelled"
+            && let Some(reason) = crate::action::current_reason()
+        {
+            self.note_cancel_reason(id, reason);
+        }
         let waited = self
             .history
             .submitted_at(&self.session_id, id)
@@ -1102,6 +1109,16 @@ impl QueryLog {
                 totals: None,
             },
         );
+    }
+
+    /// Records `reason` as the `cancel_reason` of row `id` unless it has one
+    /// (the first reason wins, as for a running query).
+    pub(crate) fn note_cancel_reason(&self, id: &str, reason: crate::CancelReason) {
+        self.history.update(&self.session_id, id, |row| {
+            if row.cancel_reason.is_none() {
+                row.cancel_reason = Some(reason.as_str());
+            }
+        });
     }
 
     /// Sets the state of the live row `id` (`queued` while admission waits,

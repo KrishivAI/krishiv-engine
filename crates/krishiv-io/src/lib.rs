@@ -69,8 +69,8 @@ pub use io::{
     BlockCacheStats, ByteRange, CacheKey, CacheScope, CacheStats, DistinctSample, DistinctSamples,
     FileRef, Held, IoConfig, IoContext, IoCounters, IoScheduler, LATENCY_BUCKETS, LatencyHistogram,
     ObjectScheme, OpenedStore, ParsedUrl, PinnedStore, PutIfAbsent, SampleKey, SecretResolver,
-    StoreId, StorePolicy, StoreRegistry, StoreSettings, Tail, VersionToken, parse_object_url,
-    query_registry, register, register_with_options,
+    StoreId, StorePolicy, StoreRegistry, StoreSettings, Tail, VersionToken,
+    is_server_scoped_option, parse_object_url, query_registry, register, register_with_options,
 };
 pub use json::JsonFormat;
 pub use options::{

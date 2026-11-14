@@ -1,0 +1,9 @@
+{
+  "cases": {
+    "sql-commands": [
+      6
+    ]
+  },
+  "file": "postgreSQL/create_view",
+  "format_version": 1
+}

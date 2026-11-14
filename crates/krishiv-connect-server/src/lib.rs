@@ -10,11 +10,15 @@
 // Requests decode only through `krishiv_connect::wire` (the codec here).
 #![deny(clippy::disallowed_methods)]
 
+pub mod analyze;
 pub mod codec;
+pub mod config;
 pub mod execute;
 pub mod host;
+pub mod interrupt;
 pub mod manager;
 pub mod operation;
+pub mod sender;
 pub mod server;
 pub mod service;
 pub mod status;
