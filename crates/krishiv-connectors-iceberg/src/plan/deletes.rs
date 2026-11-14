@@ -151,7 +151,7 @@ fn dv_desc(d: &DeleteFileEntry) -> String {
 /// The data file a position delete file names: `referenced_data_file`, or
 /// its `file_path` bounds when they are equal (Java's
 /// `ContentFileUtil.referencedDataFile`).
-fn referenced_data_file(d: &DeleteFileEntry) -> Option<String> {
+pub(crate) fn referenced_data_file(d: &DeleteFileEntry) -> Option<String> {
     let f = &d.entry.file;
     if let Some(p) = &f.referenced_data_file {
         return Some(p.clone());

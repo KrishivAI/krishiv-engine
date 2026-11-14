@@ -5,6 +5,7 @@
 pub(crate) mod append;
 pub(crate) mod commit;
 pub(crate) mod data_file;
+pub(crate) mod delete_write;
 pub(crate) mod deletes;
 pub(crate) mod eq_deletes;
 pub(crate) mod lazy;
@@ -31,6 +32,8 @@ mod commit_tests;
 mod data_file_tests;
 #[cfg(test)]
 mod delete_tests;
+#[cfg(test)]
+mod delete_write_tests;
 #[cfg(test)]
 mod dst_tests;
 #[cfg(test)]

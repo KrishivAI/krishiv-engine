@@ -175,7 +175,7 @@ pub(super) async fn load(
 
 /// The positions of a v2 position delete file `d` that name one of `paths`,
 /// by data path, and the reservation of `mem` paying for them.
-async fn read_position_file(
+pub(super) async fn read_position_file(
     io: &IoContext,
     locate: &(dyn Fn(&str) -> Result<FileRef, KrishivError> + Send + Sync),
     mem: &Arc<ConsumerHandle>,
@@ -272,7 +272,7 @@ async fn read_position_file(
 
 /// The positions of the deletion vector `dv`, and the reservation of `mem`
 /// paying for them.
-async fn read_dv(
+pub(super) async fn read_dv(
     io: &IoContext,
     locate: &(dyn Fn(&str) -> Result<FileRef, KrishivError> + Send + Sync),
     mem: &Arc<ConsumerHandle>,
