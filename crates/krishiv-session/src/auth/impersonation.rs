@@ -4,11 +4,17 @@
 //!
 //! ```text
 //! krishiv.auth.impersonation.roles.{viewer,operator,admin} = g1, g2  (end users' groups by role; default viewer)
+//! krishiv.auth.impersonation.signedAssertion = false                 (accept signed act-as assertions, unit I3)
+//! krishiv.auth.impersonation.assertion.issuer = https://portal.example.com/   (their verifier: the
+//!     krishiv.auth.oidc.* keys under this prefix, except roles.*; maxLifetime defaults to 5m)
 //! ```
 //!
 //! The transport hands over what the caller asked for as an [`ActAs`] (Spark Connect: the
 //! `UserContext.user_id` plus the `x-krishiv-act-as-*` metadata), and [`decide`] gives either
-//! the end user's [`Authenticated`] or the [`Denial`] reason. The rules (§4.2):
+//! the end user's [`Authenticated`] or the [`Denial`] reason. A signed assertion
+//! (`x-krishiv-act-as-token`, RFC 8693) is a JWT from the assertion issuer whose `sub` is the
+//! end user, whose groups claim holds the end user's groups and whose `act.sub` is the caller;
+//! it becomes the same [`ActAs`] (see `ServerAuth::impersonate_signed`). The rules (§4.2):
 //!
 //! 1. Asking for nothing but one's own name is no impersonation and needs no right. Anything
 //!    else needs `impersonate` (`krishiv.auth.principals.<caller>.privileges`): without it the
@@ -21,7 +27,10 @@
 //! 4. The result keeps the caller as `Principal::delegated_by`, for the audit and the system
 //!    tables; the tenant is the caller's (an end user cannot be placed in another tenant).
 //! 5. Plain act-as is accepted only over a client certificate or from loopback (Q2): a front
-//!    end across a network hop must sign its assertion (unit I3).
+//!    end across a network hop must sign its assertion (unit I3). A signed assertion is valid
+//!    from any peer, but only for the caller its `act.sub` names, and never for a chain (an
+//!    `act` inside `act`). The caller still needs `impersonate` and the allowlist: the
+//!    assertion proves what the front end asked for, not that it may ask.
 //!
 //! Fixing the act-as identity for a session's life (rule 5 of §4.2) is the transport's: it
 //! keys the session by the result, `delegated_by` included (A4), and compares [`ActAs`] on
@@ -34,7 +43,9 @@ use krishiv_common::principal::{Principal, PrincipalKind};
 
 use super::config::RoleLists;
 use super::jose::is_format_char;
+use super::oidc_config::OidcConfig;
 use super::principals::{PrincipalPrivilege, PrincipalTable};
+use super::secret_ref::invalid;
 use super::{Authenticated, Method, Role};
 
 /// The longest end-user name accepted, in bytes (as an OIDC principal name).
@@ -91,16 +102,41 @@ impl ActAs {
 }
 
 /// `krishiv.auth.impersonation.*`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ImpersonationConfig {
     /// End users' groups by role.
     pub roles: RoleLists,
+    /// Signed act-as assertions are accepted (Q2, unit I3).
+    pub signed_assertion: bool,
+    /// The verifier of signed assertions: `krishiv.auth.impersonation.assertion.*`.
+    pub assertion: OidcConfig,
+}
+
+impl Default for ImpersonationConfig {
+    fn default() -> Self {
+        Self {
+            roles: RoleLists::default(),
+            signed_assertion: false,
+            assertion: OidcConfig::assertion(),
+        }
+    }
 }
 
 impl ImpersonationConfig {
     /// Applies `krishiv.auth.impersonation.<rest>` = `raw`; whether `rest` was one of these.
     pub(super) fn apply(&mut self, key: &str, rest: &str, raw: &str) -> Result<bool, KrishivError> {
+        if rest == "signedAssertion" {
+            self.signed_assertion = match raw.trim().to_ascii_lowercase().as_str() {
+                "true" => true,
+                "false" => false,
+                _ => return Err(invalid(key, raw, "expected true or false")),
+            };
+            return Ok(true);
+        }
+        if rest.starts_with("assertion.") {
+            return self.assertion.apply(key, raw);
+        }
         let Some(role) = rest.strip_prefix("roles.") else {
             return Ok(false);
         };
@@ -109,6 +145,27 @@ impl ImpersonationConfig {
         };
         self.roles.set(key, role, raw)?;
         Ok(true)
+    }
+
+    /// Startup checks: `signedAssertion=true` needs the assertion issuer and audience, and
+    /// assertion settings without `signedAssertion=true` are refused (they would do nothing).
+    pub(super) fn validate(&self) -> Result<(), KrishivError> {
+        self.assertion.validate()?;
+        let key = |k: &str| format!("krishiv.auth.impersonation.{k}");
+        match (self.signed_assertion, self.assertion.is_on()) {
+            (true, false) => Err(invalid(
+                &key("assertion.issuer"),
+                "",
+                "required with krishiv.auth.impersonation.signedAssertion=true",
+            )),
+            (false, true) => Err(invalid(
+                &key("signedAssertion"),
+                "false",
+                "krishiv.auth.impersonation.assertion.* is set: set signedAssertion=true to use it, \
+                 or remove it",
+            )),
+            _ => Ok(()),
+        }
     }
 
     /// The end user's role: the highest any of its groups has, else viewer.
@@ -139,6 +196,15 @@ pub enum Denial {
     Malformed,
     /// An end user in a tenant other than the caller's.
     OtherTenant,
+    /// A signed assertion while `signedAssertion` is off.
+    AssertionOff,
+    /// A signed assertion that does not verify: signature, issuer, audience, dates, lifetime,
+    /// or no `act`.
+    BadAssertion,
+    /// A signed assertion whose key could not be fetched; the client may retry.
+    AssertionUnavailable,
+    /// A signed assertion whose `act.sub` is not the caller.
+    ActorMismatch,
 }
 
 impl Denial {
@@ -152,6 +218,10 @@ impl Denial {
             Self::UntrustedChannel => "untrusted_channel",
             Self::Malformed => "malformed",
             Self::OtherTenant => "other_tenant",
+            Self::AssertionOff => "assertion_off",
+            Self::BadAssertion => "bad_assertion",
+            Self::AssertionUnavailable => "assertion_unavailable",
+            Self::ActorMismatch => "actor_mismatch",
         }
     }
 
@@ -172,12 +242,21 @@ pub(crate) enum Decision {
     Denied(Denial),
 }
 
-/// Rules 1-5 for `caller` (already authenticated, from `peer`) asking to act as `act_as`.
+/// How the act-as request reached the server (rule 5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Channel {
+    /// Plain act-as from this peer: trusted only from loopback or with a client certificate.
+    Plain(SocketAddr),
+    /// A signed assertion that verified and names the caller in `act.sub`.
+    Signed,
+}
+
+/// Rules 1-5 for `caller` (already authenticated) asking, over `channel`, to act as `act_as`.
 pub(crate) fn decide(
     principals: &PrincipalTable,
     config: &ImpersonationConfig,
     caller: &Authenticated,
-    peer: SocketAddr,
+    channel: Channel,
     act_as: &ActAs,
 ) -> Decision {
     let me = &caller.principal;
@@ -190,7 +269,11 @@ pub(crate) fn decide(
     if !principals.has(&me.name, PrincipalPrivilege::Impersonate) {
         return Decision::Denied(Denial::NoPrivilege);
     }
-    if !(caller.method == Method::Mtls || peer.ip().is_loopback()) {
+    let trusted = match channel {
+        Channel::Plain(peer) => caller.method == Method::Mtls || peer.ip().is_loopback(),
+        Channel::Signed => true,
+    };
+    if !trusted {
         return Decision::Denied(Denial::UntrustedChannel);
     }
     let well_formed = is_name(&act_as.user)

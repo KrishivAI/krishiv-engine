@@ -19,7 +19,7 @@ use krishiv_common::error::KrishivError;
 use krishiv_common::principal::Principal;
 
 use super::config::{AuthConfig, RoleLists, SPARK_TOKEN_NAME};
-use super::impersonation::{self, ActAs, Decision, ImpersonationConfig};
+use super::impersonation::{self, ActAs, Channel, Decision, Denial, ImpersonationConfig};
 #[cfg(feature = "oidc")]
 use super::jose::{self, Identity};
 use super::mtls::{ClientCertificates, MtlsConfig};
@@ -64,6 +64,10 @@ pub struct ServerAuth {
     principals: PrincipalTable,
     /// Trusted impersonation.
     impersonation: ImpersonationConfig,
+    /// The verifier of signed act-as assertions, when `signedAssertion` is on: its own issuer,
+    /// audience and JWK set cache, apart from OIDC's.
+    #[cfg(feature = "oidc")]
+    assertions: Option<Oidc>,
     /// `krishiv_auth_impersonation_total{decision}`: allowed, denied.
     impersonations: [AtomicU64; 2],
 }
@@ -94,10 +98,18 @@ impl ServerAuth {
         } else {
             None
         };
+        #[cfg(feature = "oidc")]
+        let assertions = if config.impersonation.signed_assertion {
+            Some(Oidc::start(&config.impersonation.assertion)?)
+        } else {
+            None
+        };
         Self::build(
             config,
             #[cfg(feature = "oidc")]
             oidc,
+            #[cfg(feature = "oidc")]
+            assertions,
         )
     }
 
@@ -109,7 +121,26 @@ impl ServerAuth {
         source: Box<dyn super::oidc::KeySource>,
     ) -> Result<Self, KrishivError> {
         let oidc = Oidc::with_source(&config.oidc, source)?;
-        Self::build(config, Some(oidc))
+        Self::build(config, Some(oidc), None)
+    }
+
+    /// [`ServerAuth::new`] without OIDC, with the signed-assertion verifier over an in-memory
+    /// key source.
+    #[cfg(test)]
+    #[cfg(feature = "oidc")]
+    pub(crate) fn with_assertion_source(
+        config: &AuthConfig,
+        source: Box<dyn super::oidc::KeySource>,
+    ) -> Result<Self, KrishivError> {
+        let assertions = Oidc::with_source(&config.impersonation.assertion, source)?;
+        Self::build(config, None, Some(assertions))
+    }
+
+    /// The signed-assertion verifier (tests).
+    #[cfg(test)]
+    #[cfg(feature = "oidc")]
+    pub(crate) fn assertions(&self) -> Option<&Oidc> {
+        self.assertions.as_ref()
     }
 
     /// This chain with `tokens` in place of the configured ones (tests: tokens built at
@@ -130,6 +161,7 @@ impl ServerAuth {
     fn build(
         config: &AuthConfig,
         #[cfg(feature = "oidc")] oidc: Option<Oidc>,
+        #[cfg(feature = "oidc")] assertions: Option<Oidc>,
     ) -> Result<Self, KrishivError> {
         let tokens = StaticTokens::build(&config.tokens)?;
         if config.tokens.iter().any(|t| t.name == SPARK_TOKEN_NAME) {
@@ -151,6 +183,8 @@ impl ServerAuth {
             failures: std::array::from_fn(|_| AtomicU64::new(0)),
             principals: config.principals.clone(),
             impersonation: config.impersonation.clone(),
+            #[cfg(feature = "oidc")]
+            assertions,
             impersonations: [AtomicU64::new(0), AtomicU64::new(0)],
         })
     }
@@ -335,8 +369,128 @@ impl ServerAuth {
         peer: std::net::SocketAddr,
         act_as: &ActAs,
     ) -> Result<Authenticated, KrishivError> {
-        let decision =
-            impersonation::decide(&self.principals, &self.impersonation, caller, peer, act_as);
+        let decision = impersonation::decide(
+            &self.principals,
+            &self.impersonation,
+            caller,
+            Channel::Plain(peer),
+            act_as,
+        );
+        self.audit(caller, surface, peer, Some(act_as), None, decision)
+    }
+
+    /// `caller` (authenticated by this server, on `surface` from `peer`) presenting the signed
+    /// act-as assertion `assertion` (`x-krishiv-act-as-token`, design P3-T061 §4.1, unit I3):
+    /// the [`ActAs`] it names and the end user's result.
+    ///
+    /// The assertion must verify against `krishiv.auth.impersonation.assertion.*` (signature,
+    /// `iss`, `aud`, dates, lifetime), carry `act.sub` equal to the caller's name and no `act`
+    /// inside `act`; then the rules of [`ServerAuth::impersonate`] apply as for a trusted
+    /// channel, from any peer. A key not cached yet waits for one JWK set fetch. The returned
+    /// [`ActAs`] is what the transport pins for the session (rule 5): a later call may bring a
+    /// fresh assertion, which must name the same end user, groups and tenant. The transport
+    /// refuses plain act-as metadata that disagrees with an assertion sent beside it.
+    ///
+    /// # Errors
+    /// `KRISHIV_AUTH_IMPERSONATION_DENIED` (42501) for every refusal, `signedAssertion` off
+    /// included; the reason is in the audit record only.
+    pub async fn impersonate_signed(
+        &self,
+        caller: &Authenticated,
+        surface: Surface,
+        peer: std::net::SocketAddr,
+        assertion: &str,
+    ) -> Result<(ActAs, Authenticated), KrishivError> {
+        let (act_as, assertion_id) = match self.verify_assertion(caller, assertion).await {
+            Ok(found) => found,
+            Err(denial) => {
+                self.audit(caller, surface, peer, None, None, Decision::Denied(denial))?;
+                return Err(denial.error());
+            }
+        };
+        let decision = impersonation::decide(
+            &self.principals,
+            &self.impersonation,
+            caller,
+            Channel::Signed,
+            &act_as,
+        );
+        let end_user = self.audit(
+            caller,
+            surface,
+            peer,
+            Some(&act_as),
+            assertion_id.as_deref(),
+            decision,
+        )?;
+        Ok((act_as, end_user))
+    }
+
+    /// The [`ActAs`] a signed assertion names for `caller`, and its `jti`.
+    #[cfg(feature = "oidc")]
+    async fn verify_assertion(
+        &self,
+        caller: &Authenticated,
+        assertion: &str,
+    ) -> Result<(ActAs, Option<String>), Denial> {
+        let Some(verifier) = &self.assertions else {
+            return Err(Denial::AssertionOff);
+        };
+        let verdict = match verifier.verify(assertion, Instant::now(), unix_now(), true) {
+            // No cached key fits: wait for one fetch, then decide on what it brought.
+            Verified::Refresh => {
+                drop(verifier.refresh().await);
+                verifier.verify(assertion, Instant::now(), unix_now(), false)
+            }
+            v => v,
+        };
+        let identity = match verdict {
+            Verified::Ok(identity) => identity,
+            Verified::Failed(AuthFailure::Unavailable) | Verified::Refresh => {
+                return Err(Denial::AssertionUnavailable);
+            }
+            Verified::Failed(_) => return Err(Denial::BadAssertion),
+        };
+        let Some(actor) = identity.act else {
+            return Err(Denial::BadAssertion);
+        };
+        if actor.chained {
+            return Err(Denial::Chained);
+        }
+        if actor.subject.as_deref() != Some(caller.principal.name.as_str()) {
+            return Err(Denial::ActorMismatch);
+        }
+        Ok((
+            ActAs::new(identity.principal).with_groups(identity.groups),
+            identity.token_id,
+        ))
+    }
+
+    /// Without the `oidc` feature no assertion can be verified.
+    #[cfg(not(feature = "oidc"))]
+    #[expect(
+        clippy::unused_async,
+        reason = "the same signature as with the `oidc` feature"
+    )]
+    async fn verify_assertion(
+        &self,
+        _caller: &Authenticated,
+        _assertion: &str,
+    ) -> Result<(ActAs, Option<String>), Denial> {
+        Err(Denial::AssertionOff)
+    }
+
+    /// Writes the audit record of `decision` and counts it; the end user, the caller itself
+    /// ([`Decision::Itself`], neither recorded nor counted) or the refusal.
+    fn audit(
+        &self,
+        caller: &Authenticated,
+        surface: Surface,
+        peer: std::net::SocketAddr,
+        act_as: Option<&ActAs>,
+        assertion_id: Option<&str>,
+        decision: Decision,
+    ) -> Result<Authenticated, KrishivError> {
         let (outcome, reason) = match &decision {
             Decision::Itself => return Ok(caller.clone()),
             Decision::Allowed(_) => ("allowed", None),
@@ -347,12 +501,15 @@ impl ServerAuth {
             target: "krishiv::audit",
             listener = surface.as_str(),
             caller = %caller.principal.name,
-            end_user = %act_as.user,
-            groups_hash = %impersonation::groups_hash(&act_as.groups),
-            tenant = act_as.tenant.as_deref().or(caller.principal.tenant.as_deref()),
+            end_user = act_as.map(|a| tracing::field::display(&a.user)),
+            groups_hash = act_as.map(|a| impersonation::groups_hash(&a.groups)),
+            tenant = act_as
+                .and_then(|a| a.tenant.as_deref())
+                .or(caller.principal.tenant.as_deref()),
             decision = outcome,
             reason_code = reason,
             jti = caller.token_id.as_deref(),
+            assertion_jti = assertion_id,
             remote_addr = %peer,
             "impersonation"
         );

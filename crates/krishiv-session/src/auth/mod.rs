@@ -52,6 +52,9 @@ mod tls_config;
 mod tokens;
 
 #[cfg(test)]
+#[cfg(feature = "oidc")]
+mod assertion_tests;
+#[cfg(test)]
 mod impersonation_tests;
 #[cfg(test)]
 mod jose_tests;

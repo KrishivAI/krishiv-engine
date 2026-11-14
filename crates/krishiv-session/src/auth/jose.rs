@@ -337,6 +337,19 @@ pub(crate) struct Identity {
     /// The `jti` claim, for the audit record (never enforced: bearer tokens are bearer; the
     /// lifetime cap is the replay control, P3-T061 §2).
     pub(crate) token_id: Option<String>,
+    /// The RFC 8693 `act` claim, when present: who acts for the principal. Read only for
+    /// signed act-as assertions (P3-T061 I3).
+    pub(crate) act: Option<Actor>,
+}
+
+/// An RFC 8693 §4.1 `act` claim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub(crate) struct Actor {
+    /// `act.sub`, the acting party, when it is a string.
+    pub(crate) subject: Option<String>,
+    /// Whether `act` holds an `act` of its own (a delegation chain).
+    pub(crate) chained: bool,
 }
 
 /// Checks the claims of a token whose signature was verified, at `now` (seconds since the Unix
@@ -417,10 +430,23 @@ pub(crate) fn check_claims(
         Some(Value::String(j)) if is_name(j) => Some(j.clone()),
         Some(_) => return Err(JoseError::Invalid("jti")),
     };
+    let act = match claims.0.get("act") {
+        None => None,
+        Some(Value::Object(a)) => Some(Actor {
+            subject: a
+                .get("sub")
+                .and_then(Value::as_str)
+                .filter(|s| is_name(s))
+                .map(str::to_owned),
+            chained: a.contains_key("act"),
+        }),
+        Some(_) => return Err(JoseError::Invalid("act")),
+    };
     Ok(Identity {
         principal,
         groups,
         token_id,
+        act,
     })
 }
 

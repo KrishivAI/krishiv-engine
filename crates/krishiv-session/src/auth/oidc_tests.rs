@@ -25,14 +25,14 @@ use super::{
 const ISSUER: &str = "https://idp.example.test/";
 const AUDIENCE: &str = "krishiv";
 
-fn rsa() -> &'static RsaKeyPair {
+pub(super) fn rsa() -> &'static RsaKeyPair {
     static KEY: OnceLock<RsaKeyPair> = OnceLock::new();
     KEY.get_or_init(|| {
         RsaKeyPair::generate(aws_lc_rs::rsa::KeySize::Rsa2048).expect("generate an RSA key")
     })
 }
 
-fn rsa_other() -> &'static RsaKeyPair {
+pub(super) fn rsa_other() -> &'static RsaKeyPair {
     static KEY: OnceLock<RsaKeyPair> = OnceLock::new();
     KEY.get_or_init(|| {
         RsaKeyPair::generate(aws_lc_rs::rsa::KeySize::Rsa2048).expect("generate an RSA key")
@@ -84,7 +84,7 @@ fn rsa_components(der: &[u8]) -> (Vec<u8>, Vec<u8>) {
     (strip(n), strip(e))
 }
 
-fn rsa_jwk(key: &RsaKeyPair, kid: &str) -> Value {
+pub(super) fn rsa_jwk(key: &RsaKeyPair, kid: &str) -> Value {
     let (n, e) = rsa_components(key.public_key().as_ref());
     json!({"kty": "RSA", "kid": kid, "use": "sig", "alg": "RS256", "n": b64(&n), "e": b64(&e)})
 }
@@ -94,12 +94,12 @@ fn ec_jwk(key: &EcdsaKeyPair, kid: &str) -> Value {
     json!({"kty": "EC", "kid": kid, "crv": "P-256", "x": b64(&point[1..33]), "y": b64(&point[33..65])})
 }
 
-fn jwks(keys: &[Value]) -> Vec<u8> {
+pub(super) fn jwks(keys: &[Value]) -> Vec<u8> {
     serde_json::to_vec(&json!({ "keys": keys })).expect("serialize")
 }
 
 /// A token with `header` and `claims`, signed by `sign` over the signing input.
-fn token(header: &Value, claims: &Value, sign: impl Fn(&[u8]) -> Vec<u8>) -> String {
+pub(super) fn token(header: &Value, claims: &Value, sign: impl Fn(&[u8]) -> Vec<u8>) -> String {
     let input = format!(
         "{}.{}",
         b64(&serde_json::to_vec(header).expect("header")),
@@ -109,7 +109,7 @@ fn token(header: &Value, claims: &Value, sign: impl Fn(&[u8]) -> Vec<u8>) -> Str
     format!("{input}.{}", b64(&sig))
 }
 
-fn rs256(key: &'static RsaKeyPair) -> impl Fn(&[u8]) -> Vec<u8> {
+pub(super) fn rs256(key: &'static RsaKeyPair) -> impl Fn(&[u8]) -> Vec<u8> {
     move |msg| {
         let mut sig = vec![0; key.public_modulus_len()];
         key.sign(&RSA_PKCS1_SHA256, &SystemRandom::new(), msg, &mut sig)
@@ -133,7 +133,7 @@ fn claims() -> Value {
     })
 }
 
-fn rs_header(kid: &str) -> Value {
+pub(super) fn rs_header(kid: &str) -> Value {
     json!({"alg": "RS256", "typ": "JWT", "kid": kid})
 }
 
@@ -142,20 +142,20 @@ type Answers = Arc<Mutex<Vec<Result<Vec<u8>, String>>>>;
 
 /// An in-memory JWK set source: each fetch takes the next answer (the last repeats).
 #[derive(Clone)]
-struct Source {
+pub(super) struct Source {
     answers: Answers,
     fetches: Arc<AtomicUsize>,
 }
 
 impl Source {
-    fn new(answers: Vec<Result<Vec<u8>, String>>) -> Self {
+    pub(super) fn new(answers: Vec<Result<Vec<u8>, String>>) -> Self {
         Self {
             answers: Arc::new(Mutex::new(answers)),
             fetches: Arc::new(AtomicUsize::new(0)),
         }
     }
 
-    fn fetches(&self) -> usize {
+    pub(super) fn fetches(&self) -> usize {
         self.fetches.load(Ordering::SeqCst)
     }
 }
@@ -204,7 +204,7 @@ fn server(source: &Source, extra: &[(&str, &str)]) -> ServerAuth {
     auth
 }
 
-fn wait_until(mut done: impl FnMut() -> bool) {
+pub(super) fn wait_until(mut done: impl FnMut() -> bool) {
     let start = Instant::now();
     while !done() {
         assert!(start.elapsed() < Duration::from_secs(10), "timed out");

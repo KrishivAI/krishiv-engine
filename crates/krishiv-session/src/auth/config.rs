@@ -21,7 +21,7 @@
 //! krishiv.auth.roles.{viewer,operator,admin} = a, b               (certificate principal names; ADR 0046 §6)
 //! krishiv.auth.oidc.*                  (OIDC access tokens; see `oidc_config.rs`)
 //! krishiv.auth.principals.<name>.*     (rights by principal name; see `principals.rs`)
-//! krishiv.auth.impersonation.*         (end users' roles; see `impersonation.rs`)
+//! krishiv.auth.impersonation.*         (end users' roles, signed assertions; see `impersonation.rs`)
 //! ```
 //!
 //! A static token names its own role. A certificate principal gets its role from the
@@ -277,6 +277,7 @@ impl AuthConfig {
         }
         mtls.validate()?;
         oidc.validate()?;
+        impersonation.validate()?;
         principals.validate()?;
         for t in &mut tokens {
             t.expires = principals.get(&t.principal).and_then(|r| r.expires);

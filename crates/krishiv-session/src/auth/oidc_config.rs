@@ -33,6 +33,8 @@ use super::jose::Alg;
 use super::secret_ref::invalid;
 
 const PREFIX: &str = "krishiv.auth.oidc.";
+/// The prefix of the signed act-as assertion's verifier (P3-T061 §4.1, unit I3).
+pub(crate) const ASSERTION_PREFIX: &str = "krishiv.auth.impersonation.assertion.";
 
 /// The OIDC settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +62,9 @@ pub struct OidcConfig {
     pub jwks_refresh: Duration,
     /// `http://` issuer and JWK set locations are allowed (tests only).
     pub allow_insecure_issuer: bool,
+    /// The key prefix these settings are read from: OIDC access tokens, or signed act-as
+    /// assertions.
+    prefix: &'static str,
 }
 
 impl Default for OidcConfig {
@@ -76,14 +81,37 @@ impl Default for OidcConfig {
             max_lifetime: Duration::from_hours(24),
             jwks_refresh: Duration::from_mins(10),
             allow_insecure_issuer: false,
+            prefix: PREFIX,
         }
     }
 }
 
 impl OidcConfig {
-    /// Applies `key = raw` if it is an OIDC setting; returns whether it was.
+    /// The verifier settings of signed act-as assertions, `krishiv.auth.impersonation.assertion.*`
+    /// (P3-T061 §4.1): the same keys as OIDC but `roles.*` (an end user's role comes from
+    /// `krishiv.auth.impersonation.roles.*`, A3), and a 5 minute default `maxLifetime`: an
+    /// assertion is minted per connection, not per login.
+    #[must_use]
+    pub(crate) fn assertion() -> Self {
+        Self {
+            max_lifetime: Duration::from_mins(5),
+            prefix: ASSERTION_PREFIX,
+            ..Self::default()
+        }
+    }
+
+    /// These settings, unset (the default of their prefix).
+    fn unset(&self) -> Self {
+        if self.prefix == ASSERTION_PREFIX {
+            Self::assertion()
+        } else {
+            Self::default()
+        }
+    }
+
+    /// Applies `key = raw` if it is one of these settings; returns whether it was.
     pub(crate) fn apply(&mut self, key: &str, raw: &str) -> Result<bool, KrishivError> {
-        let Some(rest) = key.strip_prefix(PREFIX) else {
+        let Some(rest) = key.strip_prefix(self.prefix) else {
             return Ok(false);
         };
         let text = || -> Result<String, KrishivError> {
@@ -138,7 +166,7 @@ impl OidcConfig {
                     return Err(invalid(key, raw, "must be between 1m and 24h"));
                 }
             }
-            _ if rest.starts_with("roles.") => {
+            _ if rest.starts_with("roles.") && self.prefix == PREFIX => {
                 let name = rest.strip_prefix("roles.").unwrap_or_default();
                 let Some(role) = super::Role::parse(name).filter(|r| r.as_str() == name) else {
                     return Ok(false);
@@ -197,9 +225,9 @@ impl OidcConfig {
     /// when any OIDC key is given.
     pub(crate) fn validate(&self) -> Result<(), KrishivError> {
         self.validate_values()?;
-        if !cfg!(feature = "oidc") && *self != Self::default() {
+        if !cfg!(feature = "oidc") && *self != self.unset() {
             return Err(invalid(
-                &format!("{PREFIX}issuer"),
+                &format!("{}issuer", self.prefix),
                 self.issuer.as_deref().unwrap_or_default(),
                 "this build has no OIDC (the `oidc` feature of krishiv-session is off)",
             ));
@@ -211,38 +239,34 @@ impl OidcConfig {
     /// with the issuer, and `https://` locations unless `allowInsecureIssuer` (design §3.5's
     /// fourth refusal).
     pub(crate) fn validate_values(&self) -> Result<(), KrishivError> {
+        let prefix = self.prefix;
         let Some(issuer) = &self.issuer else {
-            if *self != Self::default() {
+            if *self != self.unset() {
                 return Err(invalid(
-                    &format!("{PREFIX}issuer"),
+                    &format!("{prefix}issuer"),
                     "",
-                    "required when any krishiv.auth.oidc.* setting is given",
+                    &format!("required when any {prefix}* setting is given"),
                 ));
             }
             return Ok(());
         };
         if self.audience.is_none() {
             return Err(invalid(
-                &format!("{PREFIX}audience"),
+                &format!("{prefix}audience"),
                 "",
-                "required with krishiv.auth.oidc.issuer",
+                &format!("required with {prefix}issuer"),
             ));
         }
+        let https_only = format!(
+            "must be an https:// URL (http:// only with {prefix}allowInsecureIssuer, for tests)"
+        );
         if !self.uri_allowed(issuer) {
-            return Err(invalid(
-                &format!("{PREFIX}issuer"),
-                issuer,
-                "must be an https:// URL (http:// only with krishiv.auth.oidc.allowInsecureIssuer, for tests)",
-            ));
+            return Err(invalid(&format!("{prefix}issuer"), issuer, &https_only));
         }
         if let Some(uri) = &self.jwks_uri
             && !self.uri_allowed(uri)
         {
-            return Err(invalid(
-                &format!("{PREFIX}jwksUri"),
-                uri,
-                "must be an https:// URL (http:// only with krishiv.auth.oidc.allowInsecureIssuer, for tests)",
-            ));
+            return Err(invalid(&format!("{prefix}jwksUri"), uri, &https_only));
         }
         Ok(())
     }
