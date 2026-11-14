@@ -1818,7 +1818,7 @@ impl DataFrame {
         self.session
             .state
             .catalog
-            .set_view_keeps(name, self.observation_handles());
+            .set_view_keeps(name, self.observation_handles_with(&analysis.env.observers));
         self.session.state.cache.forget_table(name);
         Ok(())
     }

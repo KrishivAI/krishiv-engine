@@ -464,3 +464,19 @@ fn a_temp_view_of_an_observed_frame_completes_the_observation() {
         3
     );
 }
+
+/// A view of a view of an observed frame completes the observation too, though the first view was
+/// never executed.
+#[test]
+fn a_view_over_a_view_of_an_observed_frame_completes_the_observation() {
+    let s = Session::new().unwrap();
+    let obs = Observation::new();
+    let df = base(&s).observe(&obs, [count(lit(1)).alias("n")]).unwrap();
+    block_on(df.create_or_replace_temp_view("v1")).unwrap();
+    block_on(s.table("v1").create_or_replace_temp_view("v2")).unwrap();
+    assert_eq!(block_on(s.table("v2").count()).unwrap(), 3);
+    assert_eq!(
+        metrics(&obs.get_timeout(Duration::from_secs(10)).unwrap().unwrap())["n"],
+        3
+    );
+}

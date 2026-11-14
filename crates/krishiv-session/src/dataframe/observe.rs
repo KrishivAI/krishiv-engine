@@ -86,6 +86,25 @@ impl DataFrame {
             .collect()
     }
 
+    /// As [`Self::observation_handles`], plus the observations the analysis inherited through the
+    /// temporary views the plan reads (`inherited`), so a view over a view completes them too.
+    pub(super) fn observation_handles_with(
+        &self,
+        inherited: &Observers,
+    ) -> Vec<Arc<dyn std::any::Any + Send + Sync>> {
+        let mut out = self.observation_handles();
+        for shared in &inherited.observations {
+            if !self.keep.iter().any(|k| {
+                Arc::clone(k)
+                    .downcast::<Shared>()
+                    .is_ok_and(|s| Arc::ptr_eq(&s, shared))
+            }) {
+                out.push(Arc::clone(shared) as _);
+            }
+        }
+        out
+    }
+
     /// The observations and sinks this frame carries, and those of the temporary views it reads
     /// (`through_views`), for the query's env.
     pub(super) fn observers_through(
