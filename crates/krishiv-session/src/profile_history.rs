@@ -396,7 +396,9 @@ fn stored(e: HistoryEntry, mask: bool) -> Option<StoredProfile> {
         };
         let mut names = names;
         names.sort_by_key(|n| std::cmp::Reverse(n.len()));
-        mask_plan(&mut profile.plan, &names);
+        // Without the statement's text no list of names is complete (a file write's result schema is its commit
+        // columns, not its input's), so every alias in the plan is masked too.
+        mask_plan(&mut profile.plan, &names, sql.is_none());
         sql = sql.map(|t| krishiv_sql::mask_literals(&t));
     }
     let sql = sql.map(|t| cut(t, SQL_MAX));
@@ -416,7 +418,7 @@ fn stored(e: HistoryEntry, mask: bool) -> Option<StoredProfile> {
 
 /// Replaces the literals in every node's argument text with `?`.
 /// Then every whole-word occurrence of a string literal's text (`names`), which a generated output name carries.
-fn mask_plan(node: &mut krishiv_exec::profile::ProfileNode, names: &[String]) {
+fn mask_plan(node: &mut krishiv_exec::profile::ProfileNode, names: &[String], aliases: bool) {
     // Names first, on the text as printed: `mask_literals` re-spaces tokens (`hunter-secret` would become
     // `hunter - secret`) and no longer finds the literal's spelling. Longest first, so a name holding another is
     // masked whole.
@@ -424,10 +426,38 @@ fn mask_plan(node: &mut krishiv_exec::profile::ProfileNode, names: &[String]) {
     for name in names.iter().filter(|n| !n.is_empty()) {
         detail = mask_word(&detail, name);
     }
+    if aliases {
+        detail = mask_aliases(&detail);
+    }
     node.detail = krishiv_sql::mask_literals(&detail);
     for child in &mut node.children {
-        mask_plan(child, names);
+        mask_plan(child, names, aliases);
     }
+}
+
+/// `text` with the name of every `AS <name>#<id>` alias replaced by `?`: a generated name can carry a literal.
+fn mask_aliases(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(" AS ") {
+        let name_start = at + " AS ".len();
+        out.push_str(&rest[..name_start]);
+        rest = &rest[name_start..];
+        // The name ends at the first `#` that starts a numeric id.
+        let end = rest.match_indices('#').find_map(|(i, _)| {
+            rest[i + 1..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_digit())
+                .then_some(i)
+        });
+        if let Some(end) = end {
+            out.push('?');
+            rest = &rest[end..];
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// `text` with each occurrence of `word` that is not part of a longer word replaced by `?`.

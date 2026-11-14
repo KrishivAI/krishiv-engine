@@ -441,6 +441,32 @@ fn concatenated_and_punctuated_literal_names_are_masked() {
 }
 
 #[test]
+fn mask_aliases_hides_every_alias_name() {
+    assert_eq!(
+        super::mask_aliases("Project [hunter 2 AS hunter 2#12, a AS b#3, c]"),
+        "Project [hunter 2 AS ?#12, a AS ?#3, c]"
+    );
+    assert_eq!(super::mask_aliases("x AS y"), "x AS y");
+    assert_eq!(super::mask_aliases("no alias"), "no alias");
+}
+
+#[test]
+fn a_file_write_of_a_literal_projection_is_masked() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let rt = runtime(dir.path(), "64m");
+    let session = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    let df = block_on(session.sql("SELECT 'huntere' FROM range(0, 5)")).unwrap();
+    block_on(df.write().parquet(out.path().join("t").to_str().unwrap())).unwrap();
+    rt.profile_history.as_ref().unwrap().flush();
+    let stored = read_history(dir.path()).unwrap();
+    assert!(!stored.is_empty());
+    for q in stored {
+        assert!(!q.profile.contains("huntere"), "{}", q.profile);
+    }
+}
+
+#[test]
 fn mask_word_replaces_whole_words_only() {
     assert_eq!(
         super::mask_word("a, alias, a_b, a", "a"),
