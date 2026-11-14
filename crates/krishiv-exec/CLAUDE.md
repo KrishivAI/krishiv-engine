@@ -119,6 +119,7 @@ Paths are relative to this crate.
 - `src/operator.rs` Source, Operator and Sink traits; `src/pipeline.rs` `ExecNode` and `PipelineBuilder`
 - `src/driver.rs` the pipeline driver: yields, memory waits, spill servicing, cancellation
 - `src/runner.rs` `QueryRunner` and the scheduler (first error wins)
+- `src/files.rs` `FileReads`: reads by path listed and their schema inferred, or taken from a user schema (`listing_with_schema`); `src/files/user_schema.rs` how a user schema's columns meet the partition columns (Spark 4.2.0: data columns, then partition columns typed as named; `COLUMN_ALREADY_EXISTS`, `INVALID_PARTITION_VALUE`, the text format's checks)
 - `src/physical/mod.rs` `PhysNode` and `PhysicalPlan` as serializable data; `src/physical/instantiate.rs` builds operators on the worker
 - `src/planner/mod.rs` physical planner (IR to physical plan); `src/planner/runtime_filter.rs` runtime-filter sites
 - `src/planner/build_project.rs` (S4') an exact, narrowing expression above an inner hash join computed on the build input before its table is built; `krishiv.exec.join.buildProjection`; differential `tests/planner/build_projection.rs`
