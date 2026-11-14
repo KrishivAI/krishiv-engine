@@ -416,3 +416,30 @@ fn the_catalog_api_shows_a_principal_no_more_than_the_sql_statements_do() {
     assert!(denied(block_on(c.list_functions(None)).unwrap_err()));
     assert!(denied(block_on(c.function_exists("abs")).unwrap_err()));
 }
+
+#[test]
+fn an_external_table_over_partitioned_files_keeps_its_partition_columns() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE src (id INT, p STRING) USING parquet PARTITIONED BY (p)",
+    );
+    run(&s, "INSERT INTO src VALUES (1, 'x'), (2, 'y')");
+    let location = dir.path().join("src");
+    let c = s.catalog();
+    block_on(c.create_table(
+        "ext",
+        Some("parquet"),
+        None,
+        None,
+        &[("path", location.to_str().unwrap())],
+    ))
+    .unwrap();
+    let cols = block_on(c.list_columns("ext")).unwrap();
+    let got: Vec<_> = cols
+        .iter()
+        .map(|c| (c.name.as_str(), c.is_partition))
+        .collect();
+    assert_eq!(got, [("id", false), ("p", true)]);
+}

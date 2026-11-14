@@ -101,6 +101,37 @@ fn parts(name: &str) -> Vec<String> {
     out
 }
 
+/// The partition columns of the files under the local directory `location`: the `key` of each level of
+/// `key=value` directories, following the first one at each level. Empty for a path that is not a local
+/// directory.
+fn partition_keys(location: &str) -> Vec<String> {
+    let mut dir = std::path::PathBuf::from(location.strip_prefix("file:").unwrap_or(location));
+    let mut keys: Vec<String> = Vec::new();
+    loop {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            break;
+        };
+        let mut next: Option<(String, std::path::PathBuf)> = None;
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if e.path().is_dir()
+                && let Some((k, _)) = name.split_once('=')
+                && !k.is_empty()
+                && next.as_ref().is_none_or(|(_, p)| e.path() < *p)
+            {
+                next = Some((k.to_owned(), e.path()));
+            }
+        }
+        let Some((key, path)) = next else { break };
+        if keys.iter().any(|k| k.eq_ignore_ascii_case(&key)) {
+            break;
+        }
+        keys.push(key);
+        dir = path;
+    }
+    keys
+}
+
 fn unsupported_schema() -> KrishivError {
     krishiv_common::error::KrishivUnsupportedFeature {
         feature: "anything but a column list in the schema of createTable".to_owned(),
@@ -721,6 +752,14 @@ impl Catalog<'_> {
                 .map(|(k, v)| format!("{} {}", quote(k), literal(v)))
                 .collect();
             sql.push_str(&format!(" OPTIONS ({})", list.join(", ")));
+        }
+        if let (Some((_, location)), true) = (path.last(), given.is_none()) {
+            // Spark takes the partition columns of a table over files from their `key=value` directories.
+            let keys = partition_keys(location);
+            if !keys.is_empty() {
+                let list: Vec<String> = keys.iter().map(|k| quote(k)).collect();
+                sql.push_str(&format!(" PARTITIONED BY ({})", list.join(", ")));
+            }
         }
         if let Some((_, location)) = path.last() {
             sql.push_str(&format!(" LOCATION {}", literal(location)));
