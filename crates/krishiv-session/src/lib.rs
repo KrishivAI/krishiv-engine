@@ -110,7 +110,7 @@ pub use column::Column;
 pub use conf::RuntimeConf;
 pub use dataframe::{
     DataFrame, DataFrameReader, DataFrameWriter, DataFrameWriterV2, ExplainMode, GroupedData,
-    JoinType, StorageLevel,
+    JoinType, ObservedSink, StorageLevel,
 };
 pub use explain::Estimate;
 pub use explain_graph::{

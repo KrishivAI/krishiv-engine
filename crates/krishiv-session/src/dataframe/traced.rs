@@ -74,7 +74,7 @@ impl DataFrame {
                 .run_with_query(&physical, &a.env)
                 .instrument(exec.clone())
                 .await?;
-            let stream = super::observe::deliver(stream, query, self.observations());
+            let stream = super::observe::deliver(stream, query, self.observations(), self.sinks());
             let stream = crate::telemetry::hold_span(stream, exec);
             let stream = fill.fill(stream, &self.session.state.cache);
             let stream = match result {

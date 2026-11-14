@@ -1013,3 +1013,88 @@ async fn large_row_result() {
         .expect("utf8");
     assert_eq!(s.value(0).len(), 65_536);
 }
+
+fn literal_long(v: i64) -> pb::Expression {
+    pb::Expression {
+        common: None,
+        expr_type: Some(pb::expression::ExprType::Literal(pb::expression::Literal {
+            literal_type: Some(pb::expression::literal::LiteralType::Long(v)),
+            data_type: None,
+        })),
+    }
+}
+
+fn aliased_count(alias: &str) -> pb::Expression {
+    let call = pb::Expression {
+        common: None,
+        expr_type: Some(pb::expression::ExprType::UnresolvedFunction(
+            pb::expression::UnresolvedFunction {
+                function_name: "count".to_owned(),
+                arguments: vec![literal_long(1)],
+                ..Default::default()
+            },
+        )),
+    };
+    pb::Expression {
+        common: None,
+        expr_type: Some(pb::expression::ExprType::Alias(Box::new(
+            pb::expression::Alias {
+                expr: Some(Box::new(call)),
+                name: vec![alias.to_owned()],
+                metadata: None,
+            },
+        ))),
+    }
+}
+
+fn observed(input: pb::Relation, plan_id: i64) -> pb::Relation {
+    pb::Relation {
+        common: Some(pb::RelationCommon {
+            plan_id: Some(plan_id),
+            ..Default::default()
+        }),
+        rel_type: Some(RelType::CollectMetrics(Box::new(pb::CollectMetrics {
+            input: Some(Box::new(input)),
+            name: "m".to_owned(),
+            metrics: vec![aliased_count("n")],
+        }))),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn observed_metrics_follow_the_result() {
+    let run = start().await;
+    let responses = collect(&run.channel, request(root(observed(range(10), 7))))
+        .await
+        .expect("execute");
+    let metrics: Vec<_> = responses.iter().flat_map(|r| &r.observed_metrics).collect();
+    assert_eq!(metrics.len(), 1, "{responses:?}");
+    let m = metrics[0];
+    assert_eq!((m.name.as_str(), m.plan_id), ("m", 7));
+    assert_eq!(m.keys, ["n"]);
+    assert_eq!(
+        m.values[0].literal_type,
+        Some(pb::expression::literal::LiteralType::Long(10))
+    );
+    // After the arrow batches and the metrics response.
+    let at =
+        |f: fn(&pb::ExecutePlanResponse) -> bool| responses.iter().position(f).expect("present");
+    assert!(at(|r| !r.observed_metrics.is_empty()) > at(|r| r.metrics.is_some()));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_query_sends_no_observed_metrics() {
+    let run = start().await;
+    let failing = pb::Relation {
+        common: None,
+        rel_type: Some(RelType::CollectMetrics(Box::new(pb::CollectMetrics {
+            input: Some(Box::new(sql("SELECT * FROM no_such_table"))),
+            name: "m".to_owned(),
+            metrics: vec![aliased_count("n")],
+        }))),
+    };
+    let status = collect(&run.channel, request(root(failing)))
+        .await
+        .expect_err("the table is missing");
+    assert_eq!(status.code(), Code::Internal);
+}

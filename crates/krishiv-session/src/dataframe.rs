@@ -32,6 +32,7 @@ pub(crate) mod checkpoint;
 mod fill_stream;
 mod geo_gate;
 mod observe;
+pub use observe::ObservedSink;
 mod traced;
 
 pub(crate) use fill_stream::{CacheFill, FillKind};

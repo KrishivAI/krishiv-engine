@@ -825,6 +825,16 @@ def na(self) -> DataFrameNaFunctions
 
 Functionality for working with missing data (`DataFrameNaFunctions`).
 
+### `observe`
+
+```python
+def observe(self, observation: Observation | str, *exprs: Column) -> DataFrame
+```
+
+Observes named metrics (aggregate expressions) of this DataFrame as the first action runs
+(`DataFrame.observe`). With an `krishiv.sql.Observation` they are read from
+`observation.get`; with a name only, the metrics are computed with the query.
+
 ### `offset`
 
 ```python

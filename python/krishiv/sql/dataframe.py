@@ -17,6 +17,7 @@ from krishiv import _native
 from krishiv.errors import (
     AnalysisException,
     PySparkAttributeError,
+    PySparkException,
     PySparkTypeError,
     PySparkValueError,
     not_expected_type,
@@ -27,6 +28,7 @@ from krishiv.sql.column import Column, _literal, _named
 from krishiv.sql.functions import first as _first
 from krishiv.sql.group import GroupedData
 from krishiv.sql.na import _NO_VALUE, DataFrameNaFunctions
+from krishiv.sql.observation import Observation, _non_empty, _pyspark_error
 from krishiv.sql.profile_view import ProfileView
 from krishiv.sql.row import Row
 from krishiv.sql.stat import DataFrameStatFunctions
@@ -425,6 +427,26 @@ class DataFrame:
         return self._new(self._df.order_by(ordered))
 
     sort = orderBy
+
+    def observe(self, observation: Observation | str, *exprs: Column) -> DataFrame:
+        """Observes named metrics (aggregate expressions) of this DataFrame as the first action runs
+        (``DataFrame.observe``). With an :class:`~krishiv.sql.Observation` they are read from
+        ``observation.get``; with a name only, the metrics are computed with the query."""
+        if not isinstance(observation, Observation | str):
+            raise not_expected_type("observation", "Observation or str", observation)
+        if len(exprs) == 0:
+            raise PySparkValueError(errorClass="CANNOT_BE_EMPTY", messageParameters={"item": "exprs"})
+        if not all(isinstance(c, Column) for c in exprs):
+            raise PySparkTypeError(
+                errorClass="NOT_LIST_OF_COLUMN", messageParameters={"arg_name": "exprs", "arg_type": "tuple"}
+            )
+        if isinstance(observation, str):
+            _non_empty(observation)
+            observation = Observation(observation)
+        try:
+            return self._new(self._df.observe(observation._native, [c._c for c in exprs]))
+        except PySparkException as e:
+            raise _pyspark_error(e) from e
 
     def limit(self, num: int) -> DataFrame:
         if not isinstance(num, int):

@@ -38,6 +38,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<session::PySession>()?;
     m.add_class::<dataframe::PyDataFrame>()?;
     m.add_class::<dataframe::PyGroupedData>()?;
+    m.add_class::<dataframe::PyObservation>()?;
     m.add_class::<column::PyColumn>()?;
     m.add_class::<window::PyWindowSpec>()?;
     m.add_function(wrap_pyfunction!(column::column, m)?)?;

@@ -28,8 +28,10 @@
 //! only the envelope is Connect's.
 
 pub mod arrow;
+pub mod observed;
 pub mod schema;
 
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::sync::Arc;
 
@@ -187,7 +189,7 @@ pub async fn execute_plan(
     let conf = session.conf();
     let empty = pb::Plan::default();
     let plan = request.plan.as_ref().unwrap_or(&empty);
-    let (df, schema) = until_cancelled(&op, async {
+    let (df, schema, plan_ids) = until_cancelled(&op, async {
         let translate = TranslateConf {
             default_data_source: conf
                 .get("spark.sql.sources.default")
@@ -214,7 +216,7 @@ pub async fn execute_plan(
         let logical = translate_plan(plan, decompressed.as_deref(), &translate)?;
         let df = session.from_plan_with(&logical, QueryOptions::new().operation_id(id.as_str()))?;
         let schema = df.schema().await?;
-        Ok((df, schema))
+        Ok((df, schema, observed::plan_ids(logical.root())))
     })
     .await?;
     let schema_response = schema::proto_schema(&schema)?;
@@ -242,6 +244,7 @@ pub async fn execute_plan(
         schema_response,
         settings,
         registered,
+        plan_ids,
     ));
     Ok(futures::stream::unfold(rx, |mut rx| async move {
         let item = rx.recv().await?;
@@ -497,6 +500,7 @@ async fn encode(
     schema_response: pb::DataType,
     settings: EncodeSettings,
     registered: Registered,
+    plan_ids: BTreeMap<String, i64>,
 ) {
     let op = Arc::clone(&sender.op);
     // The client going away is seen at once, also while the encoder waits
@@ -505,7 +509,7 @@ async fn encode(
         biased;
         () = op.cancelled() => Err(Stop::Failed(OperationCanceled {}.into())),
         () = sender.tx.closed() => Err(Stop::Gone),
-        r = produce(&sender, &df, &schema, schema_response, &settings) => r,
+        r = produce(&sender, &df, &schema, schema_response, &settings, &plan_ids) => r,
     };
     // The query's stream is gone by now (dropped with `produce`).
     drop(df);
@@ -522,7 +526,10 @@ async fn produce(
     schema: &SchemaRef,
     schema_response: pb::DataType,
     settings: &EncodeSettings,
+    plan_ids: &BTreeMap<String, i64>,
 ) -> Result<(), Stop> {
+    let sink = krishiv_session::ObservedSink::new();
+    let df = &df.with_observed_sink(&sink);
     let mut first = sender.response(None);
     first.schema = Some(schema_response);
     sender.send(first).await?;
@@ -547,6 +554,16 @@ async fn produce(
     // metrics (a follow-up); until then the list is empty.
     metrics.metrics = Some(Metrics::default());
     sender.send(metrics).await?;
+    // The observed nodes' metrics follow the SQL metrics; a query that ended
+    // in an error never gets here, so it sends none.
+    for (name, row) in sink.take().unwrap_or_default() {
+        let plan_id = plan_ids.get(&name).copied().unwrap_or(0);
+        let mut response = sender.response(None);
+        response
+            .observed_metrics
+            .push(observed::observed_metrics(&name, plan_id, &row)?);
+        sender.send(response).await?;
+    }
     if sender.op.reattachable() {
         sender
             .send(sender.response(Some(ResponseType::ResultComplete(ResultComplete {}))))
