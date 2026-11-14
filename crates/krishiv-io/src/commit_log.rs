@@ -175,6 +175,23 @@ impl<'a> CommitLog<'a> {
         self.replay(entries, checkpoint, u64::MAX).await.map(Some)
     }
 
+    /// The files visible at exactly `version`, not at a later one: what a catalog entry that pins the version it
+    /// describes reads (design P3-lakehouse §2.1a), so a commit written after the catalog entry was is not seen
+    /// through it. A path read of the directory, with no catalog, uses [`snapshot`](Self::snapshot) and reads the
+    /// newest version.
+    ///
+    /// # Errors
+    /// `KRISHIV_COMMIT_LOG_CORRUPT` when the log does not reach `version` (a version that was never written, or one
+    /// a gap hides), or for a gap or an unreadable entry; storage failures.
+    pub async fn snapshot_at(&self, version: u64) -> Result<Snapshot> {
+        let snap = self.snapshot_to(version).await?;
+        if snap.version == Some(version) {
+            Ok(snap)
+        } else {
+            Err(self.corrupt(&format!("version {version} does not exist")))
+        }
+    }
+
     /// Entry versions (ascending) and the newest checkpoint.
     async fn versions(&self) -> Result<(Vec<u64>, Option<u64>)> {
         let mut entries = Vec::new();
