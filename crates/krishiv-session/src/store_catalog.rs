@@ -713,15 +713,16 @@ impl CatalogWrite for StoreCatalog {
                         p.location = renamed.location.join(rest);
                     }
                 }
-                if let (Some(source), Some(parent)) = (&source_dir, renamed.location.parent()) {
-                    // A directory that is there is not ours to take (an empty one would be replaced by the move).
-                    if renamed.location.symlink_metadata().is_ok() {
-                        return Err(LocationAlreadyExists {
-                            identifier: to.to_string(),
-                            location: renamed.location.display().to_string(),
-                        }
-                        .into());
+                // A directory that is there is not ours to take (an empty one would be replaced by the move), and
+                // it is not ours whether or not the source directory still exists.
+                if renamed.location.symlink_metadata().is_ok() {
+                    return Err(LocationAlreadyExists {
+                        identifier: to.to_string(),
+                        location: renamed.location.display().to_string(),
                     }
+                    .into());
+                }
+                if let (Some(source), Some(parent)) = (&source_dir, renamed.location.parent()) {
                     std::fs::create_dir_all(parent).map_err(|e| {
                         internal(format!("cannot create {}: {e}", parent.display()))
                     })?;
@@ -740,6 +741,16 @@ impl CatalogWrite for StoreCatalog {
             let swapped = self.store.rename_table_entry(&table, renamed);
             if !matches!(swapped, Ok(Some(_))) {
                 if dir_moved && let Some(source) = &source_dir {
+                    // The source path may have a new owner by now (a table dropped and created again under the old
+                    // name); a move back would replace its directory, so the files stay where they are and the
+                    // failure says so.
+                    if source.symlink_metadata().is_ok() {
+                        return Err(internal(format!(
+                            "the rename failed and {} is in use again; the files stay at {}",
+                            source.display(),
+                            moved_to.display()
+                        )));
+                    }
                     std::fs::rename(&moved_to, source).map_err(|e| {
                         internal(format!(
                             "the rename failed and {} could not be moved back to {}: {e}",
@@ -1829,6 +1840,25 @@ mod tests {
         assert_eq!(class(&e), ErrorClass::TableOrViewAlreadyExists);
         assert_eq!(c.epoch(), epoch, "a refused swap changes nothing");
         assert!(Arc::ptr_eq(&c.store.table("db", "a").unwrap(), &a));
+    }
+
+    /// The source directory is gone (a managed table whose files were removed): the target is still not taken over.
+    #[test]
+    fn a_missing_source_directory_does_not_let_a_rename_take_over_the_target() {
+        let f = fixture();
+        let c = &f.catalog;
+        block_on(c.create_namespace(&ns("db"), NamespaceInfo::default())).unwrap();
+        block_on(c.create_table(info("db", "a"), CreateMode::ErrorIfExists)).unwrap();
+        std::fs::remove_dir_all(managed_location(f.warehouse.path(), "db", "a")).unwrap();
+        let target = managed_location(f.warehouse.path(), "db", "z");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("other"), b"x").unwrap();
+
+        let e = rename(c, "a", "z").unwrap_err();
+
+        assert_eq!(class(&e), ErrorClass::LocationAlreadyExists);
+        assert!(target.join("other").exists());
+        assert!(load(c, &ident("db", "z")).is_none());
     }
 
     #[test]

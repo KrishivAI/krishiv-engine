@@ -194,15 +194,21 @@ impl<'a> CommitLog<'a> {
 
     /// Entry versions (ascending) and the newest checkpoint.
     async fn versions(&self) -> Result<(Vec<u64>, Option<u64>)> {
+        let (entries, checkpoints) = self.listing().await?;
+        Ok((entries, checkpoints.last().copied()))
+    }
+
+    /// Entry versions and checkpoint versions, both ascending.
+    async fn listing(&self) -> Result<(Vec<u64>, Vec<u64>)> {
         let mut entries = Vec::new();
-        let mut checkpoint: Option<u64> = None;
+        let mut checkpoints = Vec::new();
         for meta in self.io.list(&self.store, &self.dir()).await? {
             let Some(name) = meta.location.filename() else {
                 continue;
             };
             if let Some(v) = name.strip_suffix(".checkpoint.json") {
                 if let Ok(v) = v.parse::<u64>() {
-                    checkpoint = checkpoint.max(Some(v));
+                    checkpoints.push(v);
                 }
             } else if let Some(v) = name
                 .strip_suffix(".json")
@@ -212,7 +218,8 @@ impl<'a> CommitLog<'a> {
             }
         }
         entries.sort_unstable();
-        Ok((entries, checkpoint))
+        checkpoints.sort_unstable();
+        Ok((entries, checkpoints))
     }
 
     async fn read_entry(&self, version: u64) -> Result<(LogEntry, Bytes)> {
@@ -354,7 +361,10 @@ impl<'a> CommitLog<'a> {
 
     /// The snapshot as of `version` (not later).
     async fn snapshot_to(&self, version: u64) -> Result<Snapshot> {
-        let (entries, checkpoint) = self.versions().await?;
+        // The newest checkpoint not past `version`: a later one would be discarded and leave a log whose old
+        // entries were pruned unreadable at an older version.
+        let (entries, checkpoints) = self.listing().await?;
+        let checkpoint = checkpoints.into_iter().rfind(|c| *c <= version);
         self.replay(entries, checkpoint, version).await
     }
 

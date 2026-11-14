@@ -258,6 +258,39 @@ async fn a_snapshot_at_a_version_after_a_checkpoint_uses_it_and_one_before_repla
     );
 }
 
+/// A version between two checkpoints is read from the older one, not reported corrupt because the newest is past it.
+#[tokio::test]
+async fn a_snapshot_at_a_version_between_two_checkpoints_starts_from_the_older_one() {
+    let s = setup();
+    let l = log(&s);
+    let mut base = None;
+    for i in 0..(2 * CHECKPOINT_EVERY + 3) {
+        let v = l
+            .commit(
+                base,
+                &entry(
+                    &format!("w{i}"),
+                    CommitMode::Append,
+                    &[&format!("f{i:03}")],
+                    &[],
+                ),
+            )
+            .await
+            .unwrap();
+        base = Some(v);
+    }
+    let between = CHECKPOINT_EVERY + 4;
+    let expected = l.snapshot_at(between).await.unwrap();
+    // The entries the older checkpoint covers are pruned, as a retention job would.
+    for v in 0..CHECKPOINT_EVERY {
+        s.inner
+            .delete(&Path::from(format!("t/_krishiv_log/{v:020}.json")))
+            .await
+            .unwrap();
+    }
+    assert_eq!(l.snapshot_at(between).await.unwrap(), expected);
+}
+
 #[tokio::test]
 async fn a_checkpoint_bounds_replay_and_equals_the_full_replay() {
     let s = setup();
