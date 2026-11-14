@@ -6,7 +6,7 @@
 //! `UTF8_LCASE` is Spark's `CollationAwareUTF8String.lowerCaseCodePoints`: the simple lower case
 //! of each code point (ICU's, not the JDK's; generated from Spark, `case_table.rs`), `U+0130` to
 //! `i` + `U+0307`, final sigma to sigma, with a byte path for ASCII. `_RTRIM` first drops the trailing
-//! spaces (`U+0020` only). `UTF8_BINARY` is the bytes. ICU collations have no key here (unit 6): the
+//! spaces (`U+0020` only). `UTF8_BINARY` is the bytes. ICU collations have a key here only with `collations-icu`; without it the
 //! analyzer refuses them before a key is asked for.
 
 use std::sync::Arc;
@@ -48,7 +48,7 @@ fn push_lower(c: char, out: &mut Vec<u8>) {
 /// Appends the key of `s` under `collation`.
 ///
 /// # Errors
-/// `INTERNAL_ERROR` for an ICU collation, which has no key here (the analyzer refuses it first).
+/// `INTERNAL_ERROR` for an ICU collation without `collations-icu` (the analyzer refuses it first).
 pub fn push_collation_key(
     collation: Collation,
     s: &str,
@@ -68,14 +68,168 @@ pub fn push_collation_key(
                 s.chars().for_each(|c| push_lower(c, out));
             }
         }
-        CollationFamily::Icu { .. } => {
-            return Err(KernelError::internal(format!(
-                "no collation key for {}",
-                collation.name()
-            )));
-        }
+        CollationFamily::Icu { ci, ai } => icu_key(collation, ci, ai, s, out)?,
     }
     Ok(())
+}
+
+/// The ICU sort key of `s`: the collator of the collation's locale at Spark's strength (`_CI`
+/// secondary, `_AI` primary, `_CS_AI` primary with the case level on), kept per thread.
+#[cfg(feature = "collations-icu")]
+#[inline(never)]
+fn icu_key(
+    collation: Collation,
+    ci: bool,
+    ai: bool,
+    s: &str,
+    out: &mut Vec<u8>,
+) -> Result<(), KernelError> {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    use icu_collator::options::{CaseLevel, CollatorOptions, Strength};
+    use icu_collator::{Collator, CollatorBorrowed, CollatorPreferences};
+
+    thread_local! {
+        static COLLATORS: RefCell<HashMap<u32, Option<CollatorBorrowed<'static>>>> = RefCell::new(HashMap::new());
+    }
+    COLLATORS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let collator = cache.entry(collation.id()).or_insert_with(|| {
+            let locale = icu_locale_of(collation)?;
+            let mut options = CollatorOptions::default();
+            let (strength, case_level) = match (ci, ai) {
+                (false, false) => (Strength::Tertiary, CaseLevel::Off),
+                (true, false) => (Strength::Secondary, CaseLevel::Off),
+                (true, true) => (Strength::Primary, CaseLevel::Off),
+                (false, true) => (Strength::Primary, CaseLevel::On),
+            };
+            options.strength = Some(strength);
+            options.case_level = Some(case_level);
+            Collator::try_new(CollatorPreferences::from(&locale), options).ok()
+        });
+        let collator = collator.as_ref().ok_or_else(|| {
+            KernelError::internal(format!("no ICU data for {}", collation.name()))
+        })?;
+        collator
+            .write_sort_key_to(s, out)
+            .map_err(|_| KernelError::internal("ICU sort key".to_owned()))
+    })
+}
+
+/// The ICU locale of an ICU collation: Spark spells it `language[_Script][_ALPHA3]`; ICU reads the
+/// alpha-2 region (`fr_CAN` is `fr-CA`, whose French sorts the accents backwards).
+#[cfg(feature = "collations-icu")]
+fn icu_locale_of(collation: Collation) -> Option<icu_locale_core::Locale> {
+    use icu_locale_core::Locale;
+    let name = collation.icu_locale()?;
+    if name == "UNICODE" {
+        return Some(Locale::UNKNOWN);
+    }
+    let mut tag = String::new();
+    for (i, part) in name.split('_').enumerate() {
+        if i > 0 {
+            tag.push('-');
+        }
+        if part.len() == 3 && i > 0 && part.chars().all(|c| c.is_ascii_uppercase()) {
+            tag.push_str(region_alpha2(part)?);
+        } else {
+            tag.push_str(part);
+        }
+    }
+    tag.parse::<Locale>().ok()
+}
+
+/// `upper(s)` / `lower(s)` under an ICU collation: ICU's full case mapping in the collation's
+/// language (`tr` maps `i` to `İ` and `I` to `ı`; `ß` upper-cases to `SS`).
+///
+/// # Errors
+/// `INTERNAL_ERROR` when the collation is not an ICU one or the build has no ICU data.
+#[cfg(feature = "collations-icu")]
+pub(super) fn icu_case_map(
+    collation: Collation,
+    upper: bool,
+    s: &str,
+) -> Result<String, KernelError> {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    use icu_casemap::CaseMapper;
+    use icu_locale_core::LanguageIdentifier;
+
+    thread_local! {
+        static LANGS: RefCell<HashMap<u32, Option<LanguageIdentifier>>> = RefCell::new(HashMap::new());
+    }
+    LANGS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let lang = cache
+            .entry(collation.id())
+            .or_insert_with(|| icu_locale_of(collation).map(|l| l.id))
+            .as_ref()
+            .ok_or_else(|| {
+                KernelError::internal(format!("no ICU data for {}", collation.name()))
+            })?;
+        let mapper = CaseMapper::new();
+        Ok(if upper {
+            mapper.uppercase_to_string(s, lang)
+        } else {
+            mapper.lowercase_to_string(s, lang)
+        }
+        .into_owned())
+    })
+}
+
+/// Without the `collations-icu` feature an ICU collation has no case mapping.
+#[cfg(not(feature = "collations-icu"))]
+pub(super) fn icu_case_map(
+    collation: Collation,
+    _upper: bool,
+    _s: &str,
+) -> Result<String, KernelError> {
+    Err(KernelError::internal(format!(
+        "no case mapping for {}",
+        collation.name()
+    )))
+}
+
+/// The alpha-2 code of a country Spark's ICU collation names carry (`collations()`).
+#[cfg(feature = "collations-icu")]
+fn region_alpha2(alpha3: &str) -> Option<&'static str> {
+    Some(match alpha3 {
+        "SAU" => "SA",
+        "AUT" => "AT",
+        "USA" => "US",
+        "AFG" => "AF",
+        "CAN" => "CA",
+        "ISR" => "IL",
+        "IDN" => "ID",
+        "NOR" => "NO",
+        "IND" => "IN",
+        "BIH" => "BA",
+        "MNE" => "ME",
+        "SRB" => "RS",
+        "CHN" => "CN",
+        "SGP" => "SG",
+        "HKG" => "HK",
+        "MAC" => "MO",
+        "TWN" => "TW",
+        _ => return None,
+    })
+}
+
+/// Without the `collations-icu` feature an ICU collation has no key.
+#[cfg(not(feature = "collations-icu"))]
+fn icu_key(
+    collation: Collation,
+    _ci: bool,
+    _ai: bool,
+    _s: &str,
+    _out: &mut Vec<u8>,
+) -> Result<(), KernelError> {
+    Err(KernelError::internal(format!(
+        "no collation key for {}",
+        collation.name()
+    )))
 }
 
 /// The Arrow type of the key of a value of Arrow type `t`: strings become `BinaryView` (the engine's binary carrier), inside
@@ -337,6 +491,7 @@ mod tests {
         assert_eq!(key("UTF8_LCASE_RTRIM", " a "), b" a");
     }
 
+    #[cfg(not(feature = "collations-icu"))]
     #[test]
     fn icu_has_no_key_here() {
         let mut out = Vec::new();
@@ -437,5 +592,26 @@ mod tests {
         let ints: ArrayRef = Arc::new(arrow_array::Int32Array::from(vec![Some(1)]));
         let out = collation_key(&DataType::Integer, &ints).unwrap();
         assert_eq!(out.data_type(), &ArrowType::Int32);
+    }
+    /// The `collations-basic` ICU statements of Spark 4.2 (`'a' collate unicode < 'A'` ...): each
+    /// comparison is true, here by the sort key.
+    #[cfg(feature = "collations-icu")]
+    #[test]
+    #[cfg_attr(miri, ignore = "the ICU data is large for miri")]
+    fn icu_keys_order_as_the_spark_goldens_say() {
+        assert!(key("unicode", "a") < key("unicode", "A"));
+        assert_eq!(key("unicode_ci", "a"), key("unicode_ci", "A"));
+        assert_eq!(key("unicode_ai", "a"), key("unicode_ai", "\u{e5}"));
+        assert_eq!(key("unicode_ci_ai", "a"), key("unicode_ci_ai", "\u{c5}"));
+        assert!(key("en", "a") < key("en", "A"));
+        assert_eq!(key("en_ci", "a"), key("en_ci", "A"));
+        assert_eq!(key("en_ai", "a"), key("en_ai", "\u{e5}"));
+        assert_eq!(key("en_ci_ai", "a"), key("en_ci_ai", "\u{c5}"));
+        assert!(key("sv", "Kypper") < key("sv", "K\u{f6}pfe"));
+        assert!(key("de", "Kypper") > key("de", "K\u{f6}pfe"));
+        assert_eq!(key("tr_ci", "I"), key("tr_ci", "\u{131}"));
+        // `fr_CAN` is Canadian French: the accents order backwards.
+        assert!(key("fr_CAN", "c\u{f4}te") < key("fr_CAN", "cot\u{e9}"));
+        assert!(key("fr", "cot\u{e9}") < key("fr", "c\u{f4}te"));
     }
 }

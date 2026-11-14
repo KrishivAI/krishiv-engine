@@ -140,6 +140,16 @@ jobs:
         if: steps.scope.outputs.rust == 'true'
         with:
           tool: cargo-llvm-cov,cargo-nextest
+      # The Python UDF worker interpreter of krishiv-udf-pool's tests, as in CI's `test` job: without
+      # it `tests/pool.rs` passes with a note and starts no worker, so the pool's lines go uncovered.
+      - uses: $/.github/actions/setup-uv
+        if: steps.scope.outputs.rust == 'true'
+      - name: UDF worker interpreter
+        if: steps.scope.outputs.rust == 'true'
+        run: |
+          uv venv --python 3.12 "$RUNNER_TEMP/udf-python"
+          uv pip install --python "$RUNNER_TEMP/udf-python/bin/python" \
+            "pyspark-client==4.2.1" "pyarrow==26.0.1" "pandas==3.1.1" "numpy==2.5.4"
       # Line coverage on the pinned stable toolchain (branch coverage needs
       # nightly and runs in the nightly job).
       - name: Coverage run
@@ -151,6 +161,8 @@ jobs:
           # runner's disk on 2026-11-14 (#734, 3.5 GB free) and filled it on #743.
           CARGO_PROFILE_DEV_DEBUG: "false"
           CARGO_PROFILE_TEST_DEBUG: "false"
+          KRISHIV_TEST_UDF_PYTHON: ${{ runner.temp }}/udf-python/bin/python
+          KRISHIV_UDF_POOL_REQUIRED: "1"
         run: |
           # `PACKAGES` is `-p a -p b`, or empty for the whole workspace; the
           # word splitting is intended.
