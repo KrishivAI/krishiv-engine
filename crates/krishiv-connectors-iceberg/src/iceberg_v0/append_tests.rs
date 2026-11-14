@@ -41,6 +41,7 @@ pub(super) fn create(env: &Env, version: u8) -> iceberg::table::Table {
         .schema(schema)
         .partition_spec(spec.into_unbound())
         .format_version(match version {
+            1 => FormatVersion::V1,
             3 => FormatVersion::V3,
             _ => FormatVersion::V2,
         })
@@ -55,7 +56,7 @@ pub(super) fn create(env: &Env, version: u8) -> iceberg::table::Table {
 }
 
 /// A Parquet file of `rows` (id, name) in partition `x`, as a `DataFile`.
-fn file(
+pub(super) fn file(
     env: &Env,
     m: &TableMetadata,
     name: &str,

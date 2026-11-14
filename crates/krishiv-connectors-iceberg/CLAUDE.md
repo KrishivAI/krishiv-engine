@@ -46,6 +46,17 @@ sequence number `last-sequence-number` + 1; v3 `first-row-id`/`added-rows`; summ
 `krishiv.write-id`/`krishiv.query-id`; requirements `assert-table-uuid`/`assert-ref-snapshot-id`, updates
 `add-snapshot`/`set-snapshot-ref`); no manifest split or merge yet; tests `append_tests.rs` (committed as a catalog
 applies a request, read back through SQL and iceberg-rust's planning, a stale attempt refused and rebuilt, v3 lineage)
+· `commit.rs` (PR-36a, design note §7, Tier U) the append commit loop `commit_append` over the crate-private
+`CommitTable` (`commit(requirements, updates) -> CommitOutcome { Committed, Conflict { stale }, Unknown, Failed }`,
+`load(all_snapshots)`; the REST status mapping documented on `CommitOutcome`, implemented by the catalog client
+later) and `CommitClock` (time and jitter, injected): an unknown outcome probed with `snapshots=all`
+(`commit.status-check.*`), the same attempt resent while the branch stays at its base, "not applied" final only once
+the branch moved; own-key search (snapshot id or `krishiv.write-id`) before every rebase; per-request outcomes;
+rebase across v2 → v3 only (other format changes and a replaced table `KRISHIV_ICEBERG_COMMIT_CONFLICT`); Iceberg's
+`commit.retry.*` budget and Java's `Tasks` backoff; `KRISHIV_ICEBERG_COMMIT_FAILED` / `_STATE_UNKNOWN`; §7.4 cleanup.
+No production `CommitTable` or `CommitClock` yet (the sink step). Tests `commit_tests.rs` (DST: `TestCatalog`
+applies requests as `append_tests` does, with scripted faults per request and foreign writers at chosen points,
+on virtual time; the §10 36a cases; table invariants and the store's files checked after each case)
 · `write.rs` (PR-36a) `DataFileWriter`, one task's data files for an append (distribution `none`): batches of the
 table's Arrow schema (nested types retyped onto the field-id schema; another shape is `INTERNAL_ERROR`), each row's
 partition key from the default spec (`partition_value`; an all-`void` spec does no per-row work), rows taken per key,
@@ -124,6 +135,10 @@ Fixture: `tests/fixtures/iceberg-1.12.0-spark-types.json` (source-only goldens,
   a corrupt DV fail with Java's texts (class `KRISHIV_ICEBERG_INVALID_DELETES`, SQLSTATE KD001). An equality delete
   whose partition tuple, or its data file's, cannot be read is refused (`KRISHIV_UNSUPPORTED_FEATURE`), never
   offered to every file of the spec (review N4).
+- Commits (`commit.rs`) are **never retried blind**: a request whose outcome is unknown is probed, and only a resend of
+  the same attempt (same snapshot id, base and manifest list) or a rebase after the branch moved off its base follows;
+  every attempt of a write carries one snapshot id. A write that ends with any outcome unresolved is
+  `KRISHIV_ICEBERG_COMMIT_STATE_UNKNOWN` (40003) and **deletes nothing**; a committed write never deletes a data file.
 - `#![forbid(unsafe_code)]`. No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE
   (iceberg-rust's own failures map to `INTERNAL_ERROR` naming its message until PR-17's catalog classes).
 
