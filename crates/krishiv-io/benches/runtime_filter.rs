@@ -350,14 +350,21 @@ impl Sbbf {
 }
 
 /// Spans past L2 (2e7: 2.4 MiB of bitmap) and past this server's L3 per
-/// core complex (2e8: 24 MiB), at 40 K, 400 K and 4 M keys (Blooms of
+/// core complex (2e8: 24 MiB), at 40 K, 400 K and 4 M keys, and 2^25 bits
+/// (4 MiB) at 40 K keys (Blooms of
 /// 48 KiB, 484 KiB and 4.7 MiB): the bitmap and
 /// the Bloom's member pass, each with and without a prefetch `AHEAD` rows
 /// early, plus the Bloom form end to end and the range-only pass.
 fn bench_bitmap_wide(c: &mut Criterion) {
     let mut group = c.benchmark_group("runtime_filter_bitmap_wide");
-    for n in [40_960usize, 409_600, 4_096_000] {
-        for range in [20_000_000i64, 200_000_000] {
+    // Plus 2^25 bits at 40 K keys: the candidate default cap (research-1,
+    // gap ledger fifth revision; 2^24 would take customer's keys, not part's).
+    let points = [40_960usize, 409_600, 4_096_000]
+        .into_iter()
+        .flat_map(|n| [20_000_000i64, 200_000_000].map(|r| (n, r)))
+        .chain([(40_960, 33_554_432)]);
+    for (n, range) in points {
+        {
             let (keys, probe) = in_range(n, range);
             let options = KeyFilterOptions {
                 max_values: 0,
