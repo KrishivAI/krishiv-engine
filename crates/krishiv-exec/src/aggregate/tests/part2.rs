@@ -616,8 +616,10 @@ async fn row_merge_presizes_pages_when_granted() {
     let (tasks, all) = presized[0];
     assert!(tasks > 1);
     assert_eq!(all, tasks, "every task presized with ample memory");
+    // A tight limit that still reaches the final phase (tasks > 0)
+    // refuses some presizing.
     assert!(
-        presized.iter().any(|&(t, p)| p < t),
+        presized.iter().any(|&(t, p)| t > 0 && p < t),
         "a tight limit refuses some presizing: {presized:?}"
     );
 }
