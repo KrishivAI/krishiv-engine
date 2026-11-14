@@ -208,7 +208,8 @@ fn map_decimals(arrow: &ArrowType, to: fn(u8, i8) -> ArrowType) -> ArrowType {
 /// what an Arrow value of any carrier becomes when it enters a query.
 #[must_use]
 pub fn canonical_arrow_type(arrow: &ArrowType) -> ArrowType {
-    let arrow = map_calendar(arrow, false);
+    let arrow = map_fixed_lists(arrow, true);
+    let arrow = map_calendar(&arrow, false);
     map_decimals(&arrow, |p, s| {
         if p <= DECIMAL64_MAX_PRECISION {
             ArrowType::Decimal64(p, s)
@@ -228,7 +229,41 @@ pub fn client_arrow_type(arrow: &ArrowType) -> ArrowType {
 /// `Interval(MonthDayNano)` (Spark's own Arrow form of it).
 #[must_use]
 pub fn edge_arrow_type(arrow: &ArrowType) -> ArrowType {
-    map_calendar(&client_arrow_type(arrow), true)
+    map_calendar(&client_arrow_type(&map_fixed_lists(arrow, false)), true)
+}
+
+/// The longest vector the engine carries as a `FixedSizeList` (design P3-T075): the bound keeps `N` times a batch's rows
+/// far from the `i32` offsets of the plain list it becomes at an expression input.
+pub const MAX_VECTOR_LENGTH: i32 = 65_536;
+
+/// Whether `arrow` is a vector carrier: a top-level `FixedSizeList` of `Float32` or `Float64` of length `1..=`
+/// [`MAX_VECTOR_LENGTH`] (design P3-T075 §3).
+#[must_use]
+pub fn is_vector_carrier(arrow: &ArrowType) -> bool {
+    matches!(arrow, ArrowType::FixedSizeList(f, n)
+        if (1..=MAX_VECTOR_LENGTH).contains(n)
+            && matches!(f.data_type(), ArrowType::Float32 | ArrowType::Float64))
+}
+
+/// `arrow` with every `FixedSizeList` a plain `List`, except (when `keep_vectors`) a vector carrier at the top
+/// level: the carrier a column is born with only where a source's schema says so, and never nested.
+fn map_fixed_lists(arrow: &ArrowType, keep_vectors: bool) -> ArrowType {
+    if keep_vectors && is_vector_carrier(arrow) {
+        return arrow.clone();
+    }
+    let field = |f: &Field| {
+        f.clone()
+            .with_data_type(map_fixed_lists(f.data_type(), false))
+    };
+    match arrow {
+        ArrowType::FixedSizeList(f, _) | ArrowType::List(f) => ArrowType::List(Arc::new(field(f))),
+        ArrowType::LargeList(f) => ArrowType::LargeList(Arc::new(field(f))),
+        ArrowType::Map(f, sorted) => ArrowType::Map(Arc::new(field(f)), *sorted),
+        ArrowType::Struct(fields) => {
+            ArrowType::Struct(fields.iter().map(|f| field(f)).collect::<Fields>())
+        }
+        other => other.clone(),
+    }
 }
 
 /// `arrow` with each calendar interval on the struct carrier (`to_edge == false`) or on `Interval(MonthDayNano)`.

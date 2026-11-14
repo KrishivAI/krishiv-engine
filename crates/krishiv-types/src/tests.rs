@@ -7,7 +7,7 @@ use krishiv_common::error::ErrorClass;
 
 use crate::arrow::{
     SPARK_METADATA_KEY, SPARK_TYPE_METADATA_KEY, canonical_arrow_type, client_arrow_type,
-    normalize_ingest_type,
+    edge_arrow_type, normalize_ingest_type,
 };
 use crate::{
     ArrayType, DataType, DecimalStorage, DecimalType, MapType, Metadata, Srid, StructField,
@@ -931,10 +931,11 @@ fn decimal_carriers_map_through_nested_types() {
         client_arrow_type(&large),
         ArrowType::LargeList(item(ArrowType::Decimal128(3, 0)))
     );
+    // A fixed-size list of decimals is no vector carrier (design P3-T075): it enters a query as a plain list.
     let fixed = ArrowType::FixedSizeList(item(ArrowType::Decimal128(3, 0)), 2);
     assert_eq!(
         canonical_arrow_type(&fixed),
-        ArrowType::FixedSizeList(item(ArrowType::Decimal64(3, 0)), 2)
+        ArrowType::List(item(ArrowType::Decimal64(3, 0)))
     );
     assert_eq!(client_arrow_type(&ArrowType::Int32), ArrowType::Int32);
 }
@@ -1152,5 +1153,43 @@ fn a_fixed_size_list_is_an_array_stored_with_a_length() {
     assert_eq!(
         DataType::from_arrow(&deep).unwrap_err().error_class(),
         ErrorClass::FailedToParseTooComplex
+    );
+}
+
+/// Design P3-T075 §3: only a top-level `FixedSizeList` of floats, `1..=65,536` long, enters a query as a vector
+/// carrier; any other becomes a plain list, and every client edge reads a plain list.
+#[test]
+fn only_a_top_level_float_vector_stays_a_carrier_and_edges_read_lists() {
+    let fixed =
+        |t: ArrowType, n| ArrowType::FixedSizeList(Arc::new(Field::new("item", t, true)), n);
+    let list = |t: ArrowType| ArrowType::List(Arc::new(Field::new("item", t, true)));
+    for keep in [
+        fixed(ArrowType::Float32, 1),
+        fixed(ArrowType::Float64, 768),
+        fixed(ArrowType::Float32, 65_536),
+    ] {
+        assert_eq!(canonical_arrow_type(&keep), keep);
+    }
+    for (becomes, from) in [
+        (list(ArrowType::Int32), fixed(ArrowType::Int32, 4)),
+        (list(ArrowType::Float32), fixed(ArrowType::Float32, 0)),
+        (list(ArrowType::Float32), fixed(ArrowType::Float32, 65_537)),
+        (list(ArrowType::Float32), fixed(ArrowType::Float32, -1)),
+        (
+            list(list(ArrowType::Float32)),
+            fixed(fixed(ArrowType::Float32, 2), 2),
+        ),
+    ] {
+        assert_eq!(canonical_arrow_type(&from), becomes, "{from}");
+    }
+    // Nested in a list: a plain list of plain lists.
+    assert_eq!(
+        canonical_arrow_type(&list(fixed(ArrowType::Float32, 4))),
+        list(list(ArrowType::Float32))
+    );
+    // The edge reads Spark's list whatever the carrier.
+    assert_eq!(
+        edge_arrow_type(&fixed(ArrowType::Float32, 4)),
+        list(ArrowType::Float32)
     );
 }

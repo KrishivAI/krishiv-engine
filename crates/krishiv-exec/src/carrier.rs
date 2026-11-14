@@ -5,10 +5,13 @@
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
+use arrow_array::types::UInt32Type;
 use arrow_array::types::{Decimal32Type, Decimal64Type, Decimal128Type};
 use arrow_array::{
-    Array, ArrayRef, FixedSizeListArray, GenericListArray, MapArray, OffsetSizeTrait, StructArray,
+    Array, ArrayRef, FixedSizeListArray, GenericListArray, ListArray, MapArray, OffsetSizeTrait,
+    PrimitiveArray, StructArray,
 };
+use arrow_buffer::OffsetBuffer;
 use arrow_schema::{ArrowError, DataType, FieldRef};
 use krishiv_common::error::KrishivError;
 
@@ -90,7 +93,63 @@ fn decimal(a: &ArrayRef, to: &DataType, p: u8, s: i8) -> Result<ArrayRef, Krishi
     Ok(out)
 }
 
-/// `a` as `to`, which differs at most in decimal carriers, nested ones included.
+/// A vector carrier as the plain list every expression and every edge reads (design P3-T075 §5): the offsets are
+/// `0, N, 2N, ..` and the values (and their nulls) are shared, not copied. A null row becomes an empty null slot, as a
+/// list builder writes it, so the values of the non-null rows are gathered.
+///
+/// # Errors
+/// `INTERNAL_ERROR` when `N` times the rows does not fit the `i32` offsets (it cannot under the length bound for a
+/// batch of 32,767 rows or fewer; it is checked, not assumed).
+pub fn fixed_to_list(l: &FixedSizeListArray, item: &FieldRef) -> Result<ListArray, KrishivError> {
+    let n = usize::try_from(l.value_length())
+        .map_err(|_| internal("a negative vector length".to_owned()))?;
+    let rows = l.len();
+    let overflow = || {
+        internal(format!(
+            "{rows} vectors of length {n} overflow list offsets"
+        ))
+    };
+    let total = rows.checked_mul(n).ok_or_else(overflow)?;
+    i32::try_from(total).map_err(|_| overflow())?;
+    if l.null_count() == 0 {
+        let offsets = OffsetBuffer::from_lengths(std::iter::repeat_n(n, rows));
+        return GenericListArray::try_new(
+            Arc::clone(item),
+            offsets,
+            recarried_array(l.values(), item.data_type())?,
+            None,
+        )
+        .map_err(|e| arrow_error(&e));
+    }
+    // Valid rows only: each contributes its `n` values, a null row none.
+    let mut take = Vec::with_capacity(total);
+    let mut lengths = Vec::with_capacity(rows);
+    for row in 0..rows {
+        if l.is_valid(row) {
+            let start = u32::try_from(row * n).map_err(|_| overflow())?;
+            take.extend(start..start + u32::try_from(n).map_err(|_| overflow())?);
+            lengths.push(n);
+        } else {
+            lengths.push(0);
+        }
+    }
+    let values = arrow_select::take::take(
+        l.values().as_ref(),
+        &PrimitiveArray::<UInt32Type>::from(take),
+        None,
+    )
+    .map_err(|e| arrow_error(&e))?;
+    GenericListArray::try_new(
+        Arc::clone(item),
+        OffsetBuffer::from_lengths(lengths),
+        recarried_array(&values, item.data_type())?,
+        l.nulls().cloned(),
+    )
+    .map_err(|e| arrow_error(&e))
+}
+
+/// `a` as `to`, which differs at most in decimal carriers, nested ones included, and in a vector carrier
+/// (`FixedSizeList`) read as a plain list.
 ///
 /// # Errors
 /// `INTERNAL_ERROR` for any other difference, or a value too large for the
@@ -115,6 +174,10 @@ pub fn recarried_array(a: &ArrayRef, to: &DataType) -> Result<ArrayRef, KrishivE
         && let Some(m) = a.as_primitive_opt::<arrow_array::types::IntervalMonthDayNanoType>()
     {
         return Ok(krishiv_types::calendar::from_month_day_nano(m));
+    }
+    // A vector carrier read as a plain list (an expression input, an edge or a sink).
+    if let (Some(l), DataType::List(item)) = (a.as_fixed_size_list_opt(), to) {
+        return Ok(Arc::new(fixed_to_list(l, item)?));
     }
     Ok(match to {
         DataType::Decimal64(p, s) | DataType::Decimal128(p, s) => decimal(a, to, *p, *s)?,
