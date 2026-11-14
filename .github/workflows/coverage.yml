@@ -104,6 +104,8 @@ jobs:
             /usr/share/swift /usr/local/share/powershell /usr/local/share/chromium /usr/local/share/boost \
             /opt/microsoft /opt/az /usr/lib/google-cloud-sdk /usr/lib/mono /usr/local/julia* /usr/local/graalvm \
             /opt/hostedtoolcache/Java_* /opt/hostedtoolcache/Ruby /opt/hostedtoolcache/go /opt/hostedtoolcache/PyPy
+          # The image's preinstalled container images (this job runs none).
+          if command -v docker > /dev/null; then sudo docker image prune --all --force > /dev/null || true; fi
           df -h /
       - name: Toolchain (from rust-toolchain.toml)
         if: steps.changes.outputs.cargo == 'true'
@@ -154,6 +156,11 @@ jobs:
         if: steps.scope.outputs.rust == 'true'
         env:
           PACKAGES: ${{ steps.scope.outputs.packages }}
+          # No debug info in the instrumented build: coverage counts lines from LLVM's coverage
+          # mapping, not DWARF. A whole-workspace run (397 test binaries) ended at 98% of the
+          # runner's disk on 2026-11-14 (#734, 3.5 GB free) and filled it on #743.
+          CARGO_PROFILE_DEV_DEBUG: "false"
+          CARGO_PROFILE_TEST_DEBUG: "false"
           KRISHIV_TEST_UDF_PYTHON: ${{ runner.temp }}/udf-python/bin/python
           KRISHIV_UDF_POOL_REQUIRED: "1"
         run: |
@@ -178,6 +185,16 @@ jobs:
           grep -Eq "^SF:(src/krishiv_bench/|$GITHUB_WORKSPACE/bench/src/krishiv_bench/)" "$RUNNER_TEMP/bench.lcov" \
             || { echo "::error::bench.lcov has no src/krishiv_bench paths"; exit 1; }
           cargo xtask diff-coverage --base "$BASE_SHA" --head "$HEAD_SHA" --lcov "$RUNNER_TEMP/bench.lcov:bench" --fail-under 90
+      # Where the disk went, also when the run failed: the instrumented build against the
+      # pooled profiles (`krishiv-%8m.profraw`, up to eight per test binary).
+      - name: Coverage disk use
+        if: always() && steps.scope.outputs.rust == 'true'
+        run: |
+          df -h /
+          du -sh target/llvm-cov-target 2> /dev/null || true
+          du -sh target/llvm-cov-target/debug/deps 2> /dev/null || true
+          find target/llvm-cov-target -maxdepth 1 -name '*.profraw' -printf '%s\n' 2> /dev/null \
+            | awk '{ n++; s += $1 } END { printf "profraw: %d files, %.1f GB\n", n, s / 1e9 }'
       - name: Upload to Codecov (informational)
         # Only a whole-workspace run uploads: a partial run would replace the carried-forward flag.
         if: steps.scope.outputs.workspace == 'true' && !cancelled()
