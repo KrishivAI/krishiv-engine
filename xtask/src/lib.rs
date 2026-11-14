@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod budgets;
+pub mod changelog;
 pub mod ci;
 pub mod codeql_proxy;
 pub mod compat;

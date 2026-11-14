@@ -1,0 +1,9 @@
+{
+  "cases": {
+    "query-features": [
+      33
+    ]
+  },
+  "file": "postgreSQL/aggregates_part1",
+  "format_version": 1
+}

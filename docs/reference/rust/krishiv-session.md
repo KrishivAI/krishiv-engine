@@ -44,6 +44,1047 @@ assert_eq!(rows.iter().map(|b| b.num_rows()).sum::<usize>(), 2);
 
 ## Modules
 
+## Module `auth`
+
+Server authentication (the role model and the token chain).
+
+One [`Authenticator`] turns what a transport received (a bearer token, a verified client
+certificate) into an [`Authenticated`] principal with a [`Role`]. The Spark
+Connect listener, the admin HTTP server, `/metrics` and the UI all call the same
+[`ServerAuth`]; none keeps a token of its own.
+
+What a role may do is not decided here: that is the role matrix, applied by the session's
+access policy.
+
+- [`AuthConfig`] reads the `krishiv.auth.*` settings (and Spark's
+  `spark.connect.authenticate.token`).
+- [`StaticTokens`]: one principal per configured token, held as SHA-256 digests and compared
+  in constant time against every entry.
+- [`FailureThrottle`]: repeated failures from one peer address are refused for a while.
+- [`MtlsConfig`]: client certificates; the one `principalFrom` rule reads the principal out
+  of the leaf with a minimal DER walk ([`CertNames`]).
+- [`TlsConfig`] and [`check_listener`]: the `krishiv.server.tls.*` settings and the startup
+  refusals of an address, authentication and TLS that do not fit together; `ServerTls`
+  (feature `tls`) is the rustls configuration the listeners serve, reloadable.
+- [`OidcConfig`]: OIDC access tokens (feature `oidc`): JWS compact tokens parsed by a
+  strict, fuzzed parser (`jose.rs`), signatures checked on aws-lc-rs with the algorithm pinned
+  by construction (no `none`, no HMAC), keys from a cached JWK set fetched on a thread of its
+  own, the role from the groups claim through the role lists.
+- [`ServerAuth`]: the chain (throttle, client certificate, bearer token), its failure log record (target `krishiv::auth`, never the
+  credential) and its failure counters.
+
+```rust
+pub mod auth { /* ... */ }
+```
+
+### Types
+
+#### Enum `Role`
+
+A server role: a total order, so a check is `role >= required`.
+
+```rust
+pub enum Role {
+    Viewer,
+    Operator,
+    Admin,
+}
+```
+
+##### Variants
+
+###### `Viewer`
+
+Sees metadata and its own work.
+
+###### `Operator`
+
+Reads data, runs client code, acts on others' running work.
+
+###### `Admin`
+
+Everything, including durable writes, DDL and cluster changes.
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn as_str(self: Self) -> &''static str { /* ... */ }
+  ```
+  The configuration spelling: `viewer`, `operator` or `admin`.
+
+- ```rust
+  pub fn parse(s: &str) -> Option<Self> { /* ... */ }
+  ```
+  Parses the configuration spelling, ignoring ASCII case.
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> Role { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Copy**
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **Display**
+  - ```rust
+    fn fmt(self: &Self, f: &mut fmt::Formatter<''_>) -> fmt::Result { /* ... */ }
+    ```
+
+- **Eq**
+- **Equivalent**
+  - ```rust
+    fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
+    ```
+
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Hash**
+  - ```rust
+    fn hash<__H: $crate::hash::Hasher>(self: &Self, state: &mut __H) { /* ... */ }
+    ```
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **Ord**
+  - ```rust
+    fn cmp(self: &Self, other: &Role) -> $crate::cmp::Ordering { /* ... */ }
+    ```
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &Role) -> bool { /* ... */ }
+    ```
+
+- **PartialOrd**
+  - ```rust
+    fn partial_cmp(self: &Self, other: &Role) -> $crate::option::Option<$crate::cmp::Ordering> { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **ToString**
+  - ```rust
+    fn to_string(self: &Self) -> String { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Enum `Surface`
+
+**Attributes:**
+
+- `NonExhaustive`
+
+The listener a request arrived on.
+
+```rust
+pub enum Surface {
+    Connect,
+    Admin,
+    Metrics,
+    Ui,
+}
+```
+
+##### Variants
+
+###### `Connect`
+
+The Spark Connect gRPC listener.
+
+###### `Admin`
+
+The admin HTTP API.
+
+###### `Metrics`
+
+`GET /metrics`.
+
+###### `Ui`
+
+The web UI and its `/api/internal` routes.
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn as_str(self: Self) -> &''static str { /* ... */ }
+  ```
+  The label value: `connect`, `admin`, `metrics` or `ui`.
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> Surface { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Copy**
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **Eq**
+- **Equivalent**
+  - ```rust
+    fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
+    ```
+
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Hash**
+  - ```rust
+    fn hash<__H: $crate::hash::Hasher>(self: &Self, state: &mut __H) { /* ... */ }
+    ```
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &Surface) -> bool { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Enum `Method`
+
+**Attributes:**
+
+- `NonExhaustive`
+
+How a request authenticated (or tried to).
+
+```rust
+pub enum Method {
+    Token,
+    Oidc,
+    Mtls,
+    Throttle,
+    None,
+}
+```
+
+##### Variants
+
+###### `Token`
+
+A configured static token.
+
+###### `Oidc`
+
+An OIDC access token (a JWT the configured issuer signed).
+
+###### `Mtls`
+
+A client certificate the client CA verified.
+
+###### `Throttle`
+
+Refused before any method ran (the peer is throttled).
+
+###### `None`
+
+No credential was presented.
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn as_str(self: Self) -> &''static str { /* ... */ }
+  ```
+  The label value: `token`, `oidc`, `mtls` or `none`.
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> Method { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Copy**
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **Eq**
+- **Equivalent**
+  - ```rust
+    fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
+    ```
+
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Hash**
+  - ```rust
+    fn hash<__H: $crate::hash::Hasher>(self: &Self, state: &mut __H) { /* ... */ }
+    ```
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &Method) -> bool { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Struct `Credentials`
+
+**Attributes:**
+
+- `NonExhaustive`
+
+What a transport received, borrowed for one authentication. Never logged.
+
+```rust
+pub struct Credentials<''a> {
+    pub bearer: Option<&''a str>,
+    pub peer_leaf: Option<&''a [u8]>,
+    pub peer: std::net::SocketAddr,
+    pub surface: Surface,
+    pub malformed: bool,
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| `bearer` | `Option<&''a str>` | The token of an `authorization: Bearer <token>` header or gRPC metadata entry. |
+| `peer_leaf` | `Option<&''a [u8]>` | The client's leaf certificate (DER), which the TLS layer verified against the client<br>CA at the handshake. Only the verified leaf may be passed here. |
+| `peer` | `std::net::SocketAddr` | The peer's address (the throttle's key). |
+| `surface` | `Surface` | The listener. |
+| `malformed` | `bool` | An `Authorization` header was present but not a usable `Bearer` token (`Basic ..`,<br>`Bearer` with no token): Spark answers "Invalid authentication token", not "missing". |
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn new(peer: SocketAddr, surface: Surface) -> Self { /* ... */ }
+  ```
+  Credentials with no bearer token.
+
+- ```rust
+  pub fn with_bearer(self: Self, token: &''a str) -> Self { /* ... */ }
+  ```
+  The same credentials carrying `token`.
+
+- ```rust
+  pub fn with_authorization_header(self: Self, value: &''a str) -> Self { /* ... */ }
+  ```
+  The same credentials with the token of an `Authorization` header value, if it is a
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> Credentials<''a> { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Copy**
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut fmt::Formatter<''_>) -> fmt::Result { /* ... */ }
+    ```
+
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Struct `Authenticated`
+
+**Attributes:**
+
+- `NonExhaustive`
+
+A successful authentication.
+
+```rust
+pub struct Authenticated {
+    pub principal: krishiv_common::principal::Principal,
+    pub role: Option<Role>,
+    pub method: Method,
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| `principal` | `krishiv_common::principal::Principal` | Who the request acts for. |
+| `role` | `Option<Role>` | The role; `None` when the credential maps to no role (every request is then refused by<br>the policy). |
+| `method` | `Method` | How it authenticated. |
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn new(principal: Principal, role: Option<Role>, method: Method) -> Self { /* ... */ }
+  ```
+  An authentication result.
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> Authenticated { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **Eq**
+- **Equivalent**
+  - ```rust
+    fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
+    ```
+
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &Authenticated) -> bool { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Enum `AuthFailure`
+
+**Attributes:**
+
+- `NonExhaustive`
+
+Why authentication failed. Never carries the credential.
+
+```rust
+pub enum AuthFailure {
+    Missing,
+    Invalid,
+    Expired,
+    Unavailable,
+    Throttled,
+}
+```
+
+##### Variants
+
+###### `Missing`
+
+No credential where one is required.
+
+###### `Invalid`
+
+A credential that matches nothing.
+
+###### `Expired`
+
+A credential that has expired.
+
+###### `Unavailable`
+
+The credential cannot be checked now (for example no OIDC key could be fetched): clients
+should retry.
+
+###### `Throttled`
+
+The peer failed too often and is refused for a while.
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn as_str(self: Self) -> &''static str { /* ... */ }
+  ```
+  The label value and log field.
+
+- ```rust
+  pub fn message(self: Self) -> &''static str { /* ... */ }
+  ```
+  The status message: Spark's own two for a missing and a wrong token
+
+- ```rust
+  pub fn is_retryable(self: Self) -> bool { /* ... */ }
+  ```
+  Whether the transport answers "retry later" (gRPC `UNAVAILABLE`, HTTP 503) rather than
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> AuthFailure { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Copy**
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **Display**
+  - ```rust
+    fn fmt(self: &Self, f: &mut fmt::Formatter<''_>) -> fmt::Result { /* ... */ }
+    ```
+
+- **Eq**
+- **Equivalent**
+  - ```rust
+    fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
+    ```
+
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Hash**
+  - ```rust
+    fn hash<__H: $crate::hash::Hasher>(self: &Self, state: &mut __H) { /* ... */ }
+    ```
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &AuthFailure) -> bool { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **ToString**
+  - ```rust
+    fn to_string(self: &Self) -> String { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+### Traits
+
+#### Trait `Authenticator`
+
+Turns credentials into a principal. One implementation per server ([`ServerAuth`]); tests
+may supply their own.
+
+```rust
+pub trait Authenticator: Send + Sync {
+    /* Associated items */
+}
+```
+
+##### Required Items
+
+###### Required Methods
+
+- `authenticate`: Authenticates `credentials`. Asynchronous because an OIDC key may need fetching.
+
+##### Implementations
+
+This trait is implemented for the following types:
+
+- `ServerAuth`
+
+### Functions
+
+#### Function `bearer_token`
+
+**Attributes:**
+
+- `MustUse { reason: None }`
+
+The token of an `Authorization` header value `Bearer <token>`; `None` for any other scheme
+or an empty token.
+
+```rust
+pub fn bearer_token(value: &str) -> Option<&str> { /* ... */ }
+```
+
+### Re-exports
+
+#### Re-export `AuthConfig`
+
+```rust
+pub use config::AuthConfig;
+```
+
+#### Re-export `RoleLists`
+
+```rust
+pub use config::RoleLists;
+```
+
+#### Re-export `ThrottleConfig`
+
+```rust
+pub use config::ThrottleConfig;
+```
+
+#### Re-export `TokenSpec`
+
+```rust
+pub use config::TokenSpec;
+```
+
+#### Re-export `is_auth_key`
+
+```rust
+pub use config::is_auth_key;
+```
+
+#### Re-export `CertNames`
+
+```rust
+pub use der::CertNames;
+```
+
+#### Re-export `DerError`
+
+```rust
+pub use der::DerError;
+```
+
+#### Re-export `Alg`
+
+```rust
+pub use jose::Alg;
+```
+
+#### Re-export `ClientCertificates`
+
+```rust
+pub use mtls::ClientCertificates;
+```
+
+#### Re-export `MtlsConfig`
+
+```rust
+pub use mtls::MtlsConfig;
+```
+
+#### Re-export `PrincipalFrom`
+
+```rust
+pub use mtls::PrincipalFrom;
+```
+
+#### Re-export `OidcConfig`
+
+```rust
+pub use oidc_config::OidcConfig;
+```
+
+#### Re-export `RolePolicy`
+
+```rust
+pub use roles::RolePolicy;
+```
+
+#### Re-export `SecretRef`
+
+```rust
+pub use secret_ref::SecretRef;
+```
+
+#### Re-export `FailureCount`
+
+```rust
+pub use server::FailureCount;
+```
+
+#### Re-export `ServerAuth`
+
+```rust
+pub use server::ServerAuth;
+```
+
+#### Re-export `FailureThrottle`
+
+```rust
+pub use throttle::FailureThrottle;
+```
+
+#### Re-export `TlsConfig`
+
+```rust
+pub use tls_config::TlsConfig;
+```
+
+#### Re-export `check_listener`
+
+```rust
+pub use tls_config::check_listener;
+```
+
+#### Re-export `StaticTokens`
+
+```rust
+pub use tokens::StaticTokens;
+```
+
 ## Module `functions`
 
 Column builders, as PySpark's `pyspark.sql.functions`. Functions resolve
@@ -385,6 +1426,130 @@ let c = coalesce([col("a"), lit(0)]);
 
 ```rust
 pub fn coalesce</* synthetic */ impl IntoIterator<Item = Column>: IntoIterator<Item = crate::Column>>(cols: impl IntoIterator<Item = crate::Column>) -> crate::Column { /* ... */ }
+```
+
+## Module `resource_groups`
+
+Resource groups: an [`AdmissionController`] that routes each query to a leaf group by selector, runs it when the
+group and its ancestors have room, queues it when they do not (refusing past `maxQueued`),
+and dispatches queued queries by each parent's scheduling policy.
+
+The group file is Trino's `resource-groups.json` shape (`config.rs`); the tree and the
+dispatcher are in `tree.rs`. Selectors on `source` and `clientTags` read what the client
+asserts, so they route queries but never limit a tenant: use `user` / `userGroup` for that.
+
+```rust
+pub mod resource_groups { /* ... */ }
+```
+
+### Types
+
+#### Struct `ResourceGroups`
+
+The admission controller for a resource group tree.
+
+```rust
+pub struct ResourceGroups {
+    // Some fields omitted
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| *private fields* | ... | *Some fields have been omitted* |
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn from_json(json: &str, total_memory: usize) -> Result<Self, KrishivError> { /* ... */ }
+  ```
+  Builds the controller from the text of a group file. `total_memory` is what a
+
+- ```rust
+  pub fn with_clock(json: &str, total_memory: usize, now_ms: Arc<dyn Fn() -> u64 + Send + Sync>) -> Result<Self, KrishivError> { /* ... */ }
+  ```
+  As [`ResourceGroups::from_json`], with the clock (milliseconds since the Unix epoch)
+
+- ```rust
+  pub fn counts(self: &Self, id: &str) -> Option<(usize, usize)> { /* ... */ }
+  ```
+  `(running, queued)` queries of the group `id` (a dotted path such as `root.etl`).
+
+###### Trait Implementations
+
+- **AdmissionController**
+  - ```rust
+    fn admit<''a>(self: &''a Self, request: &''a QueryRequest) -> BoxFuture<''a, Result<Permit, KrishivError>> { /* ... */ }
+    ```
+
+  - ```rust
+    fn uses_estimate(self: &Self) -> bool { /* ... */ }
+    ```
+
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **Sync**
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+### Re-exports
+
+#### Re-export `GroupSlot`
+
+```rust
+pub use tree::GroupSlot;
 ```
 
 ## Module `agent`
@@ -1303,6 +2468,12 @@ pub use admission::QueryRequest;
 
 ```rust
 pub use admission::Unlimited;
+```
+
+### Re-export `Transport`
+
+```rust
+pub use sessions::Transport;
 ```
 
 ### Re-export `register_build_features`
