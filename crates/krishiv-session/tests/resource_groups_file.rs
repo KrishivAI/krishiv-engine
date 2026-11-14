@@ -179,3 +179,13 @@ async fn the_group_sets_the_workload_class() {
         "background"
     );
 }
+
+#[test]
+fn the_shipped_example_tree_loads() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/examples/resource-groups.json"
+    );
+    krishiv_session::resource_groups::ResourceGroups::from_file(path, 8 << 30)
+        .unwrap_or_else(|e| panic!("{e}"));
+}
