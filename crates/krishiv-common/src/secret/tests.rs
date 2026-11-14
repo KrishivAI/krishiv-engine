@@ -220,6 +220,9 @@ fn object_store_paths_are_not_credentials() {
         "hf://datasets/acme/tiny@v2/data/t.parquet",
         "https://huggingface.co/datasets/a/b/resolve/main/c.parquet",
         "s3a://bucket/key/part-00000.parquet",
+        "abfss://exports@lakeacct.dfs.core.windows.net/public/a.parquet",
+        "ABFS://exports@lakeacct.dfs.core.windows.net/x",
+        "wasbs://cont@acct.blob.core.windows.net/k",
     ] {
         assert!(
             OptionValue::from_user("path", url).as_plain().is_some(),
@@ -231,6 +234,10 @@ fn object_store_paths_are_not_credentials() {
         "hf://user:SECRET@datasets/acme/tiny/t.parquet",
         "hf://SECRETTOKEN@datasets/acme/tiny/t.parquet",
         "HF://user:SECRET@host/x",
+        // Azure: a `:` in the userinfo, or an `@` past the authority, keeps the redaction.
+        "abfss://user:SECRET@acct.dfs.core.windows.net/x",
+        "abfss://acct.dfs.core.windows.net/a/SECRET@b",
+        "wasbs://cont@acct.blob.core.windows.net/a/SECRET@b",
     ] {
         assert!(
             OptionValue::from_user("path", url).as_plain().is_none(),
