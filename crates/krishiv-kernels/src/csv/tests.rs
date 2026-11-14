@@ -406,3 +406,93 @@ fn from_csv_converts_every_kind_and_reports_the_parsed_row() {
     .unwrap_err();
     assert_eq!(err.row(), Some(1), "{err}");
 }
+
+proptest::proptest! {
+    /// The `memchr` length of an unquoted value is where the character walk
+    /// stops, for each record end the fast path takes.
+    #[test]
+    fn plain_len_stops_where_the_char_walk_stops(
+        text in "[a,;\"\\\\ \\r\\né\t]{0,24}",
+        pos in 0usize..24,
+        sep in proptest::sample::select(vec![",", ";", "\t"]),
+        eol in proptest::sample::select(vec![Eol::EndOfText, Eol::Default]),
+    ) {
+        let t = Tokenizer::new(Syntax { sep: sep.to_owned(), eol, ..Syntax::default() });
+        let pos = (0..=pos.min(text.len()))
+            .rev()
+            .find(|&p| text.is_char_boundary(p))
+            .unwrap_or(0);
+        let fast = Cursor { text: &text, pos };
+        let len = t.plain_len(&fast).expect("a one-byte separator takes the fast path");
+        let mut slow = Cursor { text: &text, pos };
+        let walked = t.unquoted_chars(&mut slow);
+        let end = pos.checked_add(len).expect("in the text");
+        proptest::prop_assert_eq!(&text[pos..end], walked.as_str());
+        proptest::prop_assert_eq!(end, slow.pos);
+    }
+}
+
+#[test]
+fn plain_len_leaves_other_separators_to_the_char_walk() {
+    let c = Cursor {
+        text: "a||b",
+        pos: 0,
+    };
+    let multi = Tokenizer::new(Syntax {
+        sep: "||".to_owned(),
+        ..Syntax::default()
+    });
+    assert_eq!(multi.plain_len(&c), None);
+    let custom = Tokenizer::new(Syntax {
+        eol: Eol::Custom("x".to_owned()),
+        ..Syntax::default()
+    });
+    assert_eq!(custom.plain_len(&c), None);
+    let wide = Tokenizer::new(Syntax {
+        sep: "é".to_owned(),
+        ..Syntax::default()
+    });
+    assert_eq!(wide.plain_len(&c), None);
+}
+
+proptest::proptest! {
+    /// The split fast path gives the walk's values, end and error, whenever
+    /// it applies.
+    #[test]
+    fn plain_record_agrees_with_the_walk(
+        text in "[ab,;\"\\\\ \\ré\t]{0,24}",
+        sep in proptest::sample::select(vec![",", ";", "\t", "é", ",;"]),
+        quote in proptest::sample::select(vec![Some('"'), Some('é'), None]),
+        max_columns in 1usize..6,
+        trim in proptest::bool::ANY,
+        eol in proptest::sample::select(vec![Eol::EndOfText, Eol::Default]),
+    ) {
+        let t = Tokenizer::new(Syntax {
+            sep: sep.to_owned(),
+            quote,
+            max_columns,
+            ltrim: trim,
+            eol,
+            ..Syntax::default()
+        });
+        let mut fast = Vec::new();
+        if let Some(got) = t.plain_record(&text, 0, &mut fast) {
+            let mut walk = Vec::new();
+            let want = t.record_walk(&text, 0, &mut walk);
+            proptest::prop_assert_eq!(got, want);
+            proptest::prop_assert_eq!(fast, walk);
+        }
+    }
+}
+
+#[test]
+fn plain_record_applies_to_a_quote_free_line() {
+    let t = Tokenizer::new(Syntax::default());
+    let mut out = Vec::new();
+    assert_eq!(t.plain_record("a,,b,", 0, &mut out), Some(Ok(5)));
+    assert_eq!(
+        out,
+        [Some("a".to_owned()), None, Some("b".to_owned()), None]
+    );
+    assert_eq!(t.plain_record("a,\"b\"", 0, &mut Vec::new()), None);
+}

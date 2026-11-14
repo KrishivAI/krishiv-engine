@@ -21,7 +21,7 @@ use crate::format::{Decoder, ScanUnitMetrics, Step, UnitPlan};
 use crate::io::ByteRange;
 use crate::request::{ROW_INDEX_COLUMN, ScanRequest};
 use crate::text::reader::{LineReader, ReadChunk, WholeReader};
-use crate::text::{BATCH_ROWS, Datetimes, TextMetadata};
+use crate::text::{BATCH_ROWS, Charset, Datetimes, TextMetadata};
 
 /// What one output column is.
 enum Out {
@@ -214,16 +214,11 @@ impl CsvDecoder {
                     }
                     ReadChunk::End => return Ok(Next::End),
                     ReadChunk::Line(bytes, offset) => {
-                        let bytes = if offset == 0 {
-                            bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes)
-                        } else {
-                            &bytes[..]
-                        };
-                        let line = self.o.charset.decode(bytes).into_owned();
+                        let line = line_text(self.o.charset, bytes, offset == 0);
                         if self.skip_line(&line) {
                             continue;
                         }
-                        let mut tokens = Vec::new();
+                        let mut tokens = Vec::with_capacity(self.data_names.len());
                         let res = self.tok.record(&line, 0, &mut tokens).map(|_| tokens);
                         return Ok(Next::Record(line, res));
                     }
@@ -357,6 +352,23 @@ impl CsvDecoder {
         )
         .map_err(|e| FormatError::Corrupt(e.to_string()))
     }
+}
+
+/// A line's text: the bytes themselves when they are UTF-8 in a UTF-8 file
+/// (no copy), else decoded by `charset`; the first line of a file drops a
+/// UTF-8 byte order mark.
+fn line_text(charset: Charset, bytes: Vec<u8>, first: bool) -> String {
+    const BOM: &[u8] = b"\xEF\xBB\xBF";
+    if first && bytes.starts_with(BOM) {
+        return charset.decode(&bytes[BOM.len()..]).into_owned();
+    }
+    if charset == Charset::Utf8 {
+        return match String::from_utf8(bytes) {
+            Ok(s) => s,
+            Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
+        };
+    }
+    charset.decode(&bytes).into_owned()
 }
 
 impl Decoder for CsvDecoder {

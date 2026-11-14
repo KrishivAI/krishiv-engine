@@ -263,6 +263,57 @@ impl Tokenizer {
         pos: usize,
         out: &mut Vec<Token>,
     ) -> Result<usize, TokenizeError> {
+        match self.plain_record(text, pos, out) {
+            Some(res) => res,
+            None => self.record_walk(text, pos, out),
+        }
+    }
+
+    /// [`Self::record`] for a line with no quote character, when the record
+    /// is the whole text, the separator is one ASCII byte and no value is
+    /// trimmed or length-checked: then the walk takes every value as
+    /// unquoted, so the values are the text split at the separator, an empty
+    /// one NULL. `None`: the walk decides.
+    fn plain_record(
+        &self,
+        text: &str,
+        pos: usize,
+        out: &mut Vec<Token>,
+    ) -> Option<Result<usize, TokenizeError>> {
+        let &[sep] = self.s.sep.as_bytes() else {
+            return None;
+        };
+        if !sep.is_ascii()
+            || self.s.eol != Eol::EndOfText
+            || self.s.ltrim
+            || self.s.rtrim
+            || self.s.max_chars.is_some()
+        {
+            return None;
+        }
+        let rest = text.get(pos..)?;
+        if let Some(q) = self.s.quote {
+            let mut buf = [0; 4];
+            if memchr::memmem::find(rest.as_bytes(), q.encode_utf8(&mut buf).as_bytes()).is_some() {
+                return None;
+            }
+        }
+        for v in rest.split(char::from(sep)) {
+            if out.len() >= self.s.max_columns {
+                return Some(Err(TokenizeError::TooManyColumns));
+            }
+            out.push((!v.is_empty()).then(|| v.to_owned()));
+        }
+        Some(Ok(text.len()))
+    }
+
+    /// [`Self::record`] one value at a time.
+    fn record_walk(
+        &self,
+        text: &str,
+        pos: usize,
+        out: &mut Vec<Token>,
+    ) -> Result<usize, TokenizeError> {
         let mut c = Cursor { text, pos };
         loop {
             if self.s.ltrim {
@@ -305,17 +356,51 @@ impl Tokenizer {
 
     /// An unquoted value: up to the next separator.
     fn unquoted(&self, c: &mut Cursor<'_>) -> Token {
-        let mut v = String::new();
-        while !self.at_sep(c) && !self.at_end(c) {
-            let Some(ch) = c.bump() else { break };
-            v.push(ch);
-        }
+        let mut v = match self.plain_len(c) {
+            Some(len) => {
+                let v = c.rest().get(..len).unwrap_or_default().to_owned();
+                c.pos = c.pos.saturating_add(len);
+                v
+            }
+            None => self.unquoted_chars(c),
+        };
         self.double_closing_quote(c, &mut v);
         if self.s.rtrim {
             let t = v.trim_end_matches(|ch: char| ch <= ' ').len();
             v.truncate(t);
         }
         if v.is_empty() { None } else { Some(v) }
+    }
+
+    /// The byte length of an unquoted value at the cursor, found with
+    /// `memchr`, when the separator is one ASCII byte and records end at the
+    /// end of the text or at `\r`/`\n` (the stop bytes are ASCII, so the
+    /// length is a char boundary). `None`: walk it with
+    /// [`Self::unquoted_chars`]. Both stop where `at_sep` or `at_end` first
+    /// holds.
+    fn plain_len(&self, c: &Cursor<'_>) -> Option<usize> {
+        let &[sep] = self.s.sep.as_bytes() else {
+            return None;
+        };
+        if !sep.is_ascii() {
+            return None;
+        }
+        let rest = c.rest().as_bytes();
+        match &self.s.eol {
+            Eol::EndOfText => Some(memchr::memchr(sep, rest).unwrap_or(rest.len())),
+            Eol::Default => Some(memchr::memchr3(sep, b'\r', b'\n', rest).unwrap_or(rest.len())),
+            Eol::Custom(_) => None,
+        }
+    }
+
+    /// An unquoted value's text, one character at a time.
+    fn unquoted_chars(&self, c: &mut Cursor<'_>) -> String {
+        let mut v = String::new();
+        while !self.at_sep(c) && !self.at_end(c) {
+            let Some(ch) = c.bump() else { break };
+            v.push(ch);
+        }
+        v
     }
 
     /// Whether a record ends at the cursor (or the text does).
