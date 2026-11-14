@@ -15,7 +15,7 @@ use arrow_array::{Array, ArrayRef, Int32Array, StringArray};
 use arrow_schema::{DataType, Field};
 use krishiv_common::error::{
     CollectionSizeLimitExceededParameter, InvalidParameterValueLength, InvalidParameterValueStart,
-    KrishivError, LegacyErrorTemp3243,
+    KrishivError, LegacyErrorTemp3242, LegacyErrorTemp3243,
 };
 
 use super::args::{Inputs, internal, to_utf8};
@@ -26,7 +26,7 @@ use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 pub(super) const NAMES: &[&str] = &["array_join", "flatten", "sequence", "slice"];
 
 /// Binds the function `name` to `args`.
-pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyResult {
+pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyResult {
     let listed = listed(NAMES, name)?;
     let types: Vec<DataType> = args.iter().map(BindArg::data_type).collect();
     let binding = match (listed, types.as_slice()) {
@@ -58,6 +58,11 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
             Ok(Binding::new(out, move |x: &Inputs<'_>| {
                 sequence(x, &element, &field, steps)
             }))
+        }
+        ("sequence", [first, second, rest @ ..])
+            if temporal_bound(first) && first == second && rest.len() <= 1 =>
+        {
+            temporal_binding(first, rest.first(), opts)
         }
         ("slice", [t @ DataType::List(f), DataType::Int32, DataType::Int32]) => {
             let field = Arc::clone(f);
@@ -148,6 +153,15 @@ fn longs(x: &Inputs<'_>, i: usize) -> Result<Vec<Option<i64>>, KrishivError> {
             .map(|v| v.map(i64::from))
             .collect(),
         DataType::Int64 => c.as_primitive::<Int64Type>().iter().collect(),
+        DataType::Date32 => c
+            .as_primitive::<arrow_array::types::Date32Type>()
+            .iter()
+            .map(|v| v.map(i64::from))
+            .collect(),
+        DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, _) => c
+            .as_primitive::<arrow_array::types::TimestampMicrosecondType>()
+            .iter()
+            .collect(),
         t => return Err(internal(format!("sequence over {t}"))),
     })
 }
@@ -381,4 +395,244 @@ fn join(x: &Inputs<'_>, replaced: bool) -> Result<ArrayRef, KrishivError> {
         out.push(Some(text));
     }
     Ok(Arc::new(StringArray::from(out)))
+}
+
+/// Whether `t` is a bound `sequence` takes over time: a date or a (zoned or zone-less) microsecond timestamp.
+fn temporal_bound(t: &DataType) -> bool {
+    matches!(
+        t,
+        DataType::Date32 | DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, _)
+    )
+}
+
+/// How a step is read: its `(months, days, micros)` per row.
+#[derive(Clone, Copy)]
+enum StepKind {
+    YearMonth,
+    DayTime,
+    Calendar,
+}
+
+fn temporal_binding(
+    bound: &DataType,
+    step: Option<&DataType>,
+    opts: &BindOptions,
+) -> Result<Binding, KrishivError> {
+    use arrow_schema::{IntervalUnit, TimeUnit};
+    let kind = match step {
+        None => None,
+        Some(DataType::Interval(IntervalUnit::YearMonth)) => Some(StepKind::YearMonth),
+        Some(DataType::Duration(TimeUnit::Microsecond)) => Some(StepKind::DayTime),
+        Some(t) if krishiv_types::arrow::is_calendar_struct(t) => Some(StepKind::Calendar),
+        Some(_) => {
+            return Err(internal(
+                "a sequence step that is not an interval".to_owned(),
+            ));
+        }
+    };
+    let element = bound.clone();
+    let field = Arc::new(Field::new("item", element.clone(), false));
+    let zone = Arc::clone(&opts.time_zone);
+    Ok(Binding::new(
+        DataType::List(Arc::clone(&field)),
+        move |x: &Inputs<'_>| temporal_sequence(x, &element, &field, kind, zone.as_ref()),
+    ))
+}
+
+/// A step's `(months, days, micros)`: a year-month interval is months; a day-time one splits into whole days and the
+/// remainder; a calendar interval is its three fields.
+fn read_step(
+    x: &Inputs<'_>,
+    kind: StepKind,
+    row: usize,
+) -> Result<Option<(i64, i64, i64)>, KrishivError> {
+    use arrow_array::types::{DurationMicrosecondType, IntervalYearMonthType};
+    let col = x.column(2)?;
+    Ok(match kind {
+        StepKind::YearMonth => {
+            let a = col.as_primitive::<IntervalYearMonthType>();
+            a.is_valid(row).then(|| (i64::from(a.value(row)), 0, 0))
+        }
+        StepKind::DayTime => {
+            let a = col.as_primitive::<DurationMicrosecondType>();
+            a.is_valid(row).then(|| {
+                let m = a.value(row);
+                (0, m / MICROS_PER_DAY, m % MICROS_PER_DAY)
+            })
+        }
+        StepKind::Calendar => {
+            let c = krishiv_types::calendar::Calendars::of(col.as_ref()).ok_or_else(|| {
+                internal("a sequence step that is not a calendar interval".to_owned())
+            })?;
+            c.get(row)
+                .map(|v| (i64::from(v.months), i64::from(v.days), v.micros))
+        }
+    })
+}
+
+const MICROS_PER_DAY: i64 = 86_400_000_000;
+
+/// `sequence(start, stop[, step])` over dates or timestamps (Spark 4.2.0, goldens `functions/sequence_xml`): element `i` is `start`
+/// plus `i * step` (months, then calendar days on the local clock, then elapsed microseconds), taken from the start each time,
+/// while it has not passed `stop`; a missing step is one day towards `stop`.
+fn temporal_sequence(
+    x: &Inputs<'_>,
+    element: &DataType,
+    field: &Arc<Field>,
+    kind: Option<StepKind>,
+    zone: &dyn krishiv_kernels::datetime::TimeZoneRules,
+) -> Result<ArrayRef, KrishivError> {
+    use krishiv_kernels::datetime::{
+        add_day_time_to_timestamp, add_months_to_date, add_months_to_timestamp,
+    };
+    let is_date = matches!(element, DataType::Date32);
+    let tz: Option<&dyn krishiv_kernels::datetime::TimeZoneRules> = match element {
+        DataType::Timestamp(_, Some(_)) => Some(zone),
+        _ => None,
+    };
+    let (starts, stops) = (longs(x, 0)?, longs(x, 1)?);
+    let mut offsets: Vec<i32> = vec![0];
+    let mut valid = Vec::with_capacity(x.rows());
+    let mut values: Vec<i64> = Vec::new();
+    for row in 0..x.rows() {
+        let step = match kind {
+            Some(k) => read_step(x, k, row)?,
+            None => Some((0, 0, 0)),
+        };
+        let (Some(start), Some(stop), Some(step)) = (starts[row], stops[row], step) else {
+            valid.push(false);
+            offsets.push(offsets[row]);
+            continue;
+        };
+        let (mut months, mut days, micros) = step;
+        if kind.is_none() {
+            days = if start <= stop { 1 } else { -1 };
+            months = 0;
+        }
+        let type_name = match kind {
+            Some(StepKind::YearMonth) => "year to month",
+            Some(StepKind::DayTime) => "day to second",
+            _ => "interval",
+        };
+        if is_date && months == 0 && days == 0 {
+            return Err(LegacyErrorTemp3242 {
+                interval_type: format!("interval {type_name}")
+                    .replace("interval interval", "interval"),
+            }
+            .into());
+        }
+        // The direction is the one from start to stop; the step must move that way (a step of mixed signs by its total, a month as 30
+        // days), except that equal bounds give one element for any step a timestamp takes.
+        let total = i128::from(months) * 30 * i128::from(MICROS_PER_DAY)
+            + i128::from(days) * i128::from(MICROS_PER_DAY)
+            + i128::from(micros);
+        let up = start <= stop;
+        let moves = if start == stop {
+            !is_date || total != 0 || months != 0 || days != 0
+        } else if up {
+            total > 0
+        } else {
+            total < 0
+        };
+        if !moves {
+            return Err(LegacyErrorTemp3243 {
+                start: start.to_string(),
+                stop: stop.to_string(),
+                step: if months != 0 && days == 0 && micros == 0 {
+                    months.to_string()
+                } else {
+                    (days * MICROS_PER_DAY + micros).to_string()
+                },
+            }
+            .into());
+        }
+        // Whole-day steps over dates have their length from the micros (`(stop - start) / step + 1`), as Spark computes it before
+        // taking the elements: `1 day 12 hours` from Jan 1 to Jan 5 gives Jan 1, Jan 2, Jan 4.
+        let date_count = (is_date && months == 0).then(|| {
+            let step = i128::from(days) * i128::from(MICROS_PER_DAY) + i128::from(micros);
+            let span = (i128::from(stop) - i128::from(start)) * i128::from(MICROS_PER_DAY);
+            if step == 0 { 1 } else { span / step + 1 }
+        });
+        let first = values.len();
+        let overflow = |what: &str| internal(format!("sequence {what} out of range"));
+        let mut i: i64 = 0;
+        loop {
+            let at = if is_date {
+                let moved = add_months_to_date(
+                    i32::try_from(start).map_err(|_| overflow("date"))?,
+                    months.checked_mul(i).ok_or_else(|| overflow("months"))?,
+                )
+                .ok_or_else(|| overflow("date"))?;
+                // A date's step is whole days: the remainder of `i * micros` below a day is dropped (`1 day 12 hours` gives
+                // Jan 1, Jan 2, Jan 4).
+                let extra =
+                    micros.checked_mul(i).ok_or_else(|| overflow("micros"))? / MICROS_PER_DAY;
+                i64::from(moved)
+                    .checked_add(days.checked_mul(i).ok_or_else(|| overflow("days"))?)
+                    .and_then(|d| d.checked_add(extra))
+                    .ok_or_else(|| overflow("date"))?
+            } else {
+                let by_months = add_months_to_timestamp(
+                    start,
+                    months.checked_mul(i).ok_or_else(|| overflow("months"))?,
+                    tz,
+                )
+                .ok_or_else(|| overflow("timestamp"))?;
+                let by_days = add_day_time_to_timestamp(
+                    by_months,
+                    days.checked_mul(i)
+                        .and_then(|d| d.checked_mul(MICROS_PER_DAY))
+                        .ok_or_else(|| overflow("days"))?,
+                    tz,
+                )
+                .ok_or_else(|| overflow("timestamp"))?;
+                by_days
+                    .checked_add(micros.checked_mul(i).ok_or_else(|| overflow("micros"))?)
+                    .ok_or_else(|| overflow("timestamp"))?
+            };
+            let past = if up { at > stop } else { at < stop };
+            if past || date_count.is_some_and(|n| i128::from(i) >= n) {
+                break;
+            }
+            if start == stop && i > 0 {
+                break;
+            }
+            values.push(at);
+            if values.len() - first > MAX_ARRAY_LENGTH {
+                return Err(CollectionSizeLimitExceededParameter {
+                    function_name: "`sequence`".to_owned(),
+                    parameter: "`count`".to_owned(),
+                    number_of_elements: (values.len() - first).to_string(),
+                    max_rounded_array_length: MAX_ARRAY_LENGTH.to_string(),
+                }
+                .into());
+            }
+            i += 1;
+        }
+        valid.push(true);
+        offsets.push(i32::try_from(values.len()).map_err(|_| too_long("sequence", values.len()))?);
+    }
+    let child: ArrayRef = match element {
+        DataType::Date32 => Arc::new(arrow_array::Date32Array::from(
+            values
+                .iter()
+                .map(|v| {
+                    i32::try_from(*v)
+                        .map_err(|_| internal("a sequence date out of range".to_owned()))
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
+        DataType::Timestamp(_, tzname) => Arc::new(
+            arrow_array::TimestampMicrosecondArray::from(values).with_timezone_opt(tzname.clone()),
+        ),
+        other => return Err(internal(format!("a sequence over {other}"))),
+    };
+    let list = arrow_array::ListArray::try_new(
+        Arc::clone(field),
+        arrow_buffer::OffsetBuffer::new(offsets.into()),
+        child,
+        Some(arrow_buffer::NullBuffer::from(valid)),
+    )
+    .map_err(|e| internal(e.to_string()))?;
+    Ok(Arc::new(list))
 }
