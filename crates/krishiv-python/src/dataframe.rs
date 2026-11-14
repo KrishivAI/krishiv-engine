@@ -561,7 +561,9 @@ impl PyGroupedData {
     /// Pivots on `col` with literal `values`: the next `agg` gives one column per value.
     fn pivot(&self, col: PyColumn, values: Vec<PyColumn>) -> PyGroupedData {
         PyGroupedData {
-            inner: self.inner.pivot(col.inner, values.into_iter().map(|c| c.inner)),
+            inner: self
+                .inner
+                .pivot(col.inner, values.into_iter().map(|c| c.inner)),
             owned: self.owned.clone(),
         }
     }

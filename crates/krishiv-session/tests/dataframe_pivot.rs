@@ -100,10 +100,7 @@ fn an_aggregate_may_read_the_pivot_column_and_names_use_the_aggregate() -> R {
         .pivot(col("course"), [lit("Java")])
         .agg([count(col("course")), max(col("earnings"))]);
     let got = shown(&block_on(df.collect())?);
-    assert_eq!(
-        got.0,
-        ["year", "Java_count(course)", "Java_max(earnings)"]
-    );
+    assert_eq!(got.0, ["year", "Java_count(course)", "Java_max(earnings)"]);
     assert_eq!(got.1, ["2012|1|20", "2013|1|30"]);
     Ok(())
 }
