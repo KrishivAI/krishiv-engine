@@ -67,6 +67,8 @@ loom = { workspace = true, features = ["futures"] }
 # Cloud object stores (S3, GCS, Azure) via `krishiv-io/cloud`. Opt-in so the
 # default build stays inside the dependency and binary-size budgets.
 cloud = ["krishiv-io/cloud"]
+# ICU collations (ADR 0043); forwards to the plan and the kernels.
+collations-icu = ["krishiv-plan/collations-icu", "krishiv-kernels/collations-icu"]
 # Row-layout key-page prototype (P2-T157); not part of the default build.
 row-table-prototype = []
 # Live async-task diagnostics over `tokio-console` (P2-T129): task names and

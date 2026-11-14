@@ -306,6 +306,7 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
         "__endswith_lcase" => "__endswith_lcase",
         "__find_in_set_lcase" => "__find_in_set_lcase",
         "__trim_collated" => "__trim_collated",
+        "__icu_case" => "__icu_case",
         "__replace_lcase" => "__replace_lcase",
         "__translate_lcase" => "__translate_lcase",
         "__split_part_lcase" => "__split_part_lcase",

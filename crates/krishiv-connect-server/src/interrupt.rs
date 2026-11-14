@@ -6,8 +6,7 @@
 //!
 //! - `ALL`: every live operation of the session is cancelled;
 //! - `OPERATION_ID`: the operation of that id, if live (any text: an unknown
-//!   or malformed id interrupts nothing), and it leaves the session's map at
-//!   once, as Spark's `closeOperation`;
+//!   or malformed id interrupts nothing);
 //! - `TAG`: `UNSUPPORTED_FEATURE.INTERRUPT_TYPE` until P3-T064 (PR-38b)
 //!   gives operations their tags' cancellation.
 //!
@@ -16,6 +15,12 @@
 //! operation's stream ends with `OPERATION_CANCELED`; its engine query is
 //! cancelled through the session (`Session::cancel`, one per reported id)
 //! so it stops at its next batch boundary and returns its memory.
+//!
+//! Either way the operation stays in the session's map, as Spark keeps the
+//! `ExecuteHolder` (its `closeOperation` is session bookkeeping only): a
+//! reattach gets what was buffered, then `OPERATION_CANCELED`. Its buffered
+//! responses and budgets return on `release_all` (which the stock client
+//! sends after the error), its session's release, or abandonment.
 
 use krishiv_common::error::{
     InvalidParameterValueInterruptTypeOperationIdRequiresId,
@@ -74,7 +79,6 @@ pub fn interrupt(
             match entry.operations().get(id) {
                 Some(op) if op.cancel() => {
                     entry.session().cancel(op.id());
-                    entry.operations().remove(&op);
                     vec![id.clone()]
                 }
                 _ => Vec::new(),

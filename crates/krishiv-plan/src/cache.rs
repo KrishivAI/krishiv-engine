@@ -1834,6 +1834,7 @@ mod tests {
             reads_files: false,
             timings: crate::analyzer::AnalysisTimings::default(),
             warnings: Vec::new(),
+            views: Vec::new(),
         };
         let base = CacheKey::of(&analyzed("a", 7));
         assert_ne!(CacheKey::of(&analyzed("b", 7)), base, "principals");

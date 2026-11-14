@@ -12,8 +12,10 @@ use std::collections::{HashMap, HashSet};
 use arrow_array::types::Int32Type;
 use arrow_array::{GenericStringArray, OffsetSizeTrait};
 use krishiv_common::error::InvalidIndexOfZero;
+use krishiv_types::Collation;
 
 use super::chars::{lcase_match_from, lcase_points, reserve_str, str_rows};
+use super::collation_key::icu_case_map;
 use super::{Slot, StrOperand, TrimSide, int_at};
 use crate::error::KernelError;
 use crate::ops::Operand;
@@ -373,6 +375,30 @@ pub fn substring_index_lcase<O: OffsetSizeTrait>(
             found.map(|(a, len)| a.saturating_add(len)..text.len())
         };
         out.extend(range.map_or(text.as_slice(), |r| text.get(r).unwrap_or_default()));
+        Ok(())
+    })
+}
+
+/// `upper(input)` (`upper` nonzero) or `lower(input)` under the ICU collation whose Spark id is
+/// `collation`: ICU's full case mapping in the collation's language (collations unit 5, design
+/// `P2-collations.md` 3.3; values read off Spark 4.2.0).
+///
+/// # Errors
+/// `INTERNAL_ERROR` for operands of different lengths, an id that is no ICU collation, or a
+/// build without `collations-icu`; `UNABLE_TO_ACQUIRE_MEMORY` if the result does not fit the
+/// offset type.
+pub fn icu_case<O: OffsetSizeTrait>(
+    upper: Operand<'_, Int32Type>,
+    collation: Operand<'_, Int32Type>,
+    input: StrOperand<'_, O>,
+) -> Result<GenericStringArray<O>, KernelError> {
+    let slots: [&dyn Slot; 3] = [&upper, &collation, &input];
+    str_rows(&slots, |i, out| {
+        let id = u32::try_from(int_at(collation, i))
+            .map_err(|_| KernelError::internal("collation id".to_owned()))?;
+        let mapped = icu_case_map(Collation::from_id(id), int_at(upper, i) != 0, input.at(i))?;
+        reserve_str(out, mapped.len())?;
+        out.push_str(&mapped);
         Ok(())
     })
 }
