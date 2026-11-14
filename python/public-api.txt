@@ -49,6 +49,7 @@ DataFrame.def checkpoint(self, eager: bool=...) -> DataFrame
 DataFrame.def col(self, name: str) -> Column
 DataFrame.def count(self) -> int
 DataFrame.def create_or_replace_temp_view(self, name: str) -> None
+DataFrame.def cube(self, cols: list[Column]) -> GroupedData
 DataFrame.def distinct(self) -> DataFrame
 DataFrame.def except_all(self, other: DataFrame) -> DataFrame
 DataFrame.def execute(self) -> ArrowStream
@@ -56,6 +57,7 @@ DataFrame.def explain(self, mode: str, json: bool=...) -> str
 DataFrame.def filter(self, condition: Column) -> DataFrame
 DataFrame.def filter_expr(self, condition: str) -> DataFrame
 DataFrame.def group_by(self, cols: list[Column]) -> GroupedData
+DataFrame.def grouping_sets(self, sets: list[list[Column]], keys: list[Column]) -> GroupedData
 DataFrame.def hint(self, name: str, params: list[Column]) -> DataFrame
 DataFrame.def intersect(self, other: DataFrame) -> DataFrame
 DataFrame.def intersect_all(self, other: DataFrame) -> DataFrame
@@ -66,6 +68,7 @@ DataFrame.def local_checkpoint(self, eager: bool=..., level: tuple[bool, bool, b
 DataFrame.def offset(self, n: int) -> DataFrame
 DataFrame.def order_by(self, cols: list[Column]) -> DataFrame
 DataFrame.def persist(self, use_disk: bool, use_memory: bool, use_offheap: bool, deserialized: bool, replication: int) -> DataFrame
+DataFrame.def rollup(self, cols: list[Column]) -> GroupedData
 DataFrame.def sample(self, with_replacement: bool, fraction: float, seed: int) -> DataFrame
 DataFrame.def schema(self) -> list[tuple[str, str, bool]]
 DataFrame.def select(self, cols: list[Column]) -> DataFrame
@@ -107,7 +110,7 @@ WindowSpec.def partition_by(self, cols: list[Column]) -> WindowSpec
 WindowSpec.def range_between(self, start: int, end: int) -> WindowSpec
 WindowSpec.def rows_between(self, start: int, end: int) -> WindowSpec
 __all__
-__all__ = ['AnonymousPythonUdf', 'ArrowStream', 'Column', 'DataFrame', 'GroupedData', 'Session', 'WindowSpec', '__allocator__', '__version__', '_udf_pool_shutdown', '_udf_runner_conf', 'call_function', 'col', 'count_distinct', 'count_star', 'expr', 'lit', 'map_literal']
+__all__ = ['AnonymousPythonUdf', 'ArrowStream', 'Column', 'DataFrame', 'GroupedData', 'Session', 'WindowSpec', '__allocator__', '__git_sha__', '__version__', '_udf_pool_shutdown', '_udf_runner_conf', 'call_function', 'col', 'count_distinct', 'count_star', 'expr', 'lit', 'map_literal']
 class AnonymousPythonUdf()
 class ArrowStream()
 class Column()
@@ -912,6 +915,40 @@ def width_bucket(v: ColumnOrName, min: ColumnOrName, max: ColumnOrName, numBucke
 def xxhash64(*cols: ColumnOrName) -> Column
 def year(col: ColumnOrName) -> Column
 def zeroifnull(col: ColumnOrName) -> Column
+## sql/catalog.py
+CatalogMetadata.description: str | None
+CatalogMetadata.name: str
+Column.dataType: str
+Column.description: str | None
+Column.isBucket: bool
+Column.isCluster: bool
+Column.isPartition: bool
+Column.name: str
+Column.nullable: bool
+Database.catalog: str | None
+Database.description: str | None
+Database.locationUri: str
+Database.name: str
+Function.catalog: str | None
+Function.className: str
+Function.description: str | None
+Function.isTemporary: bool
+Function.name: str
+Function.namespace: list[str] | None
+Table.@property def database(self) -> str | None
+Table.catalog: str | None
+Table.description: str | None
+Table.isTemporary: bool
+Table.name: str
+Table.namespace: list[str] | None
+Table.tableType: str
+TablePartition.partition: str
+class CatalogMetadata(NamedTuple)
+class Column(NamedTuple)
+class Database(NamedTuple)
+class Function(NamedTuple)
+class Table(NamedTuple)
+class TablePartition(NamedTuple)
 ## sql/column.py
 Column.astype
 Column.def __add__(self, other: Any) -> Column
@@ -977,8 +1014,10 @@ Column.def withField(self, fieldName: str, col: Column) -> Column
 Column.name
 class Column()
 ## sql/conf.py
-RuntimeConfig.def __init__(self, session: _native.Session) -> None
+RuntimeConfig.@property def getAll(self) -> dict[str, str]
+RuntimeConfig.def __init__(self, session: _native.Session, spark: SparkSession | None=None) -> None
 RuntimeConfig.def get(self, key: str, default: object=_UNSET) -> str | None
+RuntimeConfig.def isModifiable(self, key: str) -> bool
 RuntimeConfig.def set(self, key: str, value: str | int | bool) -> None
 RuntimeConfig.def unset(self, key: str) -> None
 class RuntimeConfig()
@@ -987,6 +1026,7 @@ ColumnOrName
 ColumnsOrNames
 DataFrame.@property def columns(self) -> list[str]
 DataFrame.@property def dtypes(self) -> list[tuple[str, str]]
+DataFrame.@property def isStreaming(self) -> bool
 DataFrame.@property def is_cached(self) -> bool
 DataFrame.@property def na(self) -> DataFrameNaFunctions
 DataFrame.@property def schema(self) -> StructType
@@ -994,6 +1034,7 @@ DataFrame.@property def sparkSession(self) -> SparkSession
 DataFrame.@property def stat(self) -> DataFrameStatFunctions
 DataFrame.@property def storageLevel(self) -> StorageLevel
 DataFrame.@property def write(self) -> DataFrameWriter
+DataFrame.@property def writeStream(self) -> Any
 DataFrame.def __arrow_c_stream__(self, requested_schema: object=None) -> object
 DataFrame.def __getattr__(self, name: str) -> Column
 DataFrame.def __getitem__(self, item: Any) -> Any
@@ -1005,17 +1046,23 @@ DataFrame.def approxQuantile(self, col: str | list[str] | tuple[str, ...], proba
 DataFrame.def cache(self) -> DataFrame
 DataFrame.def checkpoint(self, eager: bool=True) -> DataFrame
 DataFrame.def coalesce(self, numPartitions: int) -> DataFrame
+DataFrame.def colRegex(self, colName: str) -> Column
 DataFrame.def collect(self) -> list[Row]
 DataFrame.def corr(self, col1: str, col2: str, method: str | None=None) -> float
 DataFrame.def count(self) -> int
 DataFrame.def cov(self, col1: str, col2: str) -> float
+DataFrame.def createGlobalTempView(self, name: str) -> None
+DataFrame.def createOrReplaceGlobalTempView(self, name: str) -> None
 DataFrame.def createOrReplaceTempView(self, name: str) -> None
+DataFrame.def createTempView(self, name: str) -> None
 DataFrame.def crossJoin(self, other: DataFrame) -> DataFrame
 DataFrame.def crosstab(self, col1: str, col2: str) -> DataFrame
+DataFrame.def cube(self, *cols: ColumnsOrNames) -> GroupedData
 DataFrame.def describe(self, *cols: str | list[str]) -> DataFrame
 DataFrame.def distinct(self) -> DataFrame
 DataFrame.def drop(self, *cols: ColumnOrName) -> DataFrame
 DataFrame.def dropDuplicates(self, subset: list[str] | tuple[str, ...] | None=None) -> DataFrame
+DataFrame.def dropDuplicatesWithinWatermark(self, subset: list[str] | None=None) -> DataFrame
 DataFrame.def dropna(self, how: str | None='any', thresh: int | None=None, subset: str | tuple[str, ...] | list[str] | None=None) -> DataFrame
 DataFrame.def exceptAll(self, other: DataFrame) -> DataFrame
 DataFrame.def explain(self, extended: bool | str | None=None, mode: str | None=None, *, analyze: bool=False, verbose: bool=False) -> None
@@ -1023,32 +1070,47 @@ DataFrame.def explainString(self, extended: bool | str | None=None, mode: str | 
 DataFrame.def fillna(self, value: float | str | bool | dict[str, Any], subset: str | tuple[str, ...] | list[str] | None=None) -> DataFrame
 DataFrame.def filter(self, condition: Column | str) -> DataFrame
 DataFrame.def first(self) -> Row | None
+DataFrame.def foreach(self, f: Callable[[Row], None]) -> None
+DataFrame.def foreachPartition(self, f: Callable[[Iterator[Row]], None]) -> None
 DataFrame.def freqItems(self, cols: list[str] | tuple[str, ...], support: float | None=None) -> DataFrame
 DataFrame.def groupBy(self, *cols: ColumnsOrNames) -> GroupedData
+DataFrame.def groupingSets(self, groupingSets: Sequence[Sequence[ColumnOrName]], *cols: ColumnOrName) -> GroupedData
 DataFrame.def head(self, n: int | None=None) -> Row | list[Row] | None
 DataFrame.def hint(self, name: str, *parameters: Any) -> DataFrame
+DataFrame.def inputFiles(self) -> list[str]
 DataFrame.def intersect(self, other: DataFrame) -> DataFrame
 DataFrame.def intersectAll(self, other: DataFrame) -> DataFrame
+DataFrame.def isEmpty(self) -> bool
 DataFrame.def join(self, other: DataFrame, on: str | list[str] | Column | list[Column] | None=None, how: str | None=None) -> DataFrame
 DataFrame.def limit(self, num: int) -> DataFrame
 DataFrame.def localCheckpoint(self, eager: bool=True, storageLevel: StorageLevel | None=None) -> DataFrame
+DataFrame.def mapInArrow(self, func: Callable[..., Any], schema: StructType | str, barrier: bool=False, profile: Any=None) -> DataFrame
+DataFrame.def mapInPandas(self, func: Callable[..., Any], schema: StructType | str, barrier: bool=False, profile: Any=None) -> DataFrame
 DataFrame.def melt(self, ids: ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...], values: ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...] | None, variableColumnName: str, valueColumnName: str) -> DataFrame
 DataFrame.def offset(self, num: int) -> DataFrame
 DataFrame.def orderBy(self, *cols: ColumnsOrNames, ascending: bool | list[bool]=True) -> DataFrame
 DataFrame.def persist(self, storageLevel: StorageLevel=StorageLevel.MEMORY_AND_DISK) -> DataFrame
-DataFrame.def printSchema(self) -> None
+DataFrame.def printSchema(self, level: int | None=None) -> None
 DataFrame.def profile(self) -> ProfileView
+DataFrame.def randomSplit(self, weights: list[float], seed: int | None=None) -> list[DataFrame]
+DataFrame.def registerTempTable(self, name: str) -> None
 DataFrame.def repartition(self, numPartitions: int | ColumnOrName, *cols: ColumnOrName) -> DataFrame
+DataFrame.def repartitionByRange(self, numPartitions: int | ColumnOrName, *cols: ColumnOrName) -> DataFrame
 DataFrame.def replace(self, to_replace: Any, value: Any=_NO_VALUE, subset: str | tuple[str, ...] | list[str] | None=None) -> DataFrame
+DataFrame.def rollup(self, *cols: ColumnsOrNames) -> GroupedData
+DataFrame.def sameSemantics(self, other: DataFrame) -> bool
 DataFrame.def sample(self, withReplacement: bool | float | None=None, fraction: float | None=None, seed: int | None=None) -> DataFrame
 DataFrame.def sampleBy(self, col: ColumnOrName, fractions: dict[Any, float], seed: int | None=None) -> DataFrame
 DataFrame.def select(self, *cols: ColumnsOrNames) -> DataFrame
 DataFrame.def selectExpr(self, *expr: str | list[str]) -> DataFrame
+DataFrame.def semanticHash(self) -> int
 DataFrame.def show(self, n: int=20, truncate: bool | int=True, vertical: bool=False) -> None
+DataFrame.def sortWithinPartitions(self, *cols: ColumnsOrNames, ascending: bool | list[bool]=True) -> DataFrame
 DataFrame.def subtract(self, other: DataFrame) -> DataFrame
 DataFrame.def summary(self, *statistics: str | list[str]) -> DataFrame
 DataFrame.def tail(self, num: int) -> list[Row]
 DataFrame.def take(self, num: int) -> list[Row]
+DataFrame.def to(self, schema: StructType) -> DataFrame
 DataFrame.def toArrow(self) -> Any
 DataFrame.def toDF(self, *cols: str) -> DataFrame
 DataFrame.def toJSON(self, use_unicode: bool=True) -> DataFrame
@@ -1062,7 +1124,9 @@ DataFrame.def unpersist(self, blocking: bool=False) -> DataFrame
 DataFrame.def unpivot(self, ids: ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...], values: ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...] | None, variableColumnName: str, valueColumnName: str) -> DataFrame
 DataFrame.def withColumn(self, colName: str, col: Column) -> DataFrame
 DataFrame.def withColumnRenamed(self, existing: str, new: str) -> DataFrame
+DataFrame.def withColumns(self, colsMap: dict[str, Column | str]) -> DataFrame
 DataFrame.def withColumnsRenamed(self, colsMap: dict[str, str]) -> DataFrame
+DataFrame.def withWatermark(self, eventTime: str, delayThreshold: str) -> DataFrame
 DataFrame.def writeTo(self, table: str) -> DataFrameWriterV2
 DataFrame.drop_duplicates
 DataFrame.groupby
@@ -1095,16 +1159,24 @@ def udf(f: Any=None, returnType: DataType | str=StringType(), *, useArrow: bool 
 def unix_timestamp(timestamp: ColumnOrName | None=None, format: str='yyyy-MM-dd HH:mm:ss') -> Column
 def when(condition: Column, value: Any) -> Column
 ## sql/group.py
-GroupedData.def __init__(self, native: _native.GroupedData, df: DataFrame) -> None
+GroupedData.def __init__(self, native: _native.GroupedData, df: DataFrame, keys: list[Any] | None=None) -> None
 GroupedData.def agg(self, *exprs: Column | dict[str, str]) -> DataFrame
+GroupedData.def apply(self, udf: Any) -> DataFrame
+GroupedData.def applyInArrow(self, func: Any, schema: Any) -> DataFrame
+GroupedData.def applyInPandas(self, func: Any, schema: Any) -> DataFrame
 GroupedData.def avg(self, *cols: str) -> DataFrame
+GroupedData.def cogroup(self, other: GroupedData) -> PandasCogroupedOps
 GroupedData.def count(self) -> DataFrame
 GroupedData.def max(self, *cols: str) -> DataFrame
 GroupedData.def min(self, *cols: str) -> DataFrame
 GroupedData.def pivot(self, pivot_col: str, values: list[Any] | None=None) -> GroupedData
 GroupedData.def sum(self, *cols: str) -> DataFrame
 GroupedData.mean
+PandasCogroupedOps.def __init__(self, left: GroupedData, right: GroupedData) -> None
+PandasCogroupedOps.def applyInArrow(self, func: Any, schema: Any) -> DataFrame
+PandasCogroupedOps.def applyInPandas(self, func: Any, schema: Any) -> DataFrame
 class GroupedData()
+class PandasCogroupedOps()
 ## sql/na.py
 DataFrameNaFunctions.def __init__(self, df: DataFrame) -> None
 DataFrameNaFunctions.def drop(self, how: str | None='any', thresh: int | None=None, subset: Any=None) -> DataFrame
@@ -1141,26 +1213,35 @@ def ui(source: Any, *, path: str | Path | None=None) -> ProfileView
 DataFrameReader.def __init__(self, session: SparkSession) -> None
 DataFrameReader.def csv(self, path: str | list[str], **options: object) -> DataFrame
 DataFrameReader.def format(self, source: str) -> DataFrameReader
+DataFrameReader.def jdbc(self, *args: object, **kwargs: object) -> DataFrame
 DataFrameReader.def json(self, path: str | list[str], **options: object) -> DataFrame
 DataFrameReader.def load(self, path: str | list[str] | None=None, format: str | None=None, **options: object) -> DataFrame
 DataFrameReader.def option(self, key: str, value: object) -> DataFrameReader
 DataFrameReader.def options(self, **options: object) -> DataFrameReader
+DataFrameReader.def orc(self, path: str | list[str], **options: object) -> DataFrame
 DataFrameReader.def parquet(self, *paths: str) -> DataFrame
+DataFrameReader.def table(self, tableName: str) -> DataFrame
+DataFrameReader.def text(self, paths: str | list[str], wholetext: bool=False, lineSep: str | None=None, pathGlobFilter: str | None=None, recursiveFileLookup: bool | None=None, modifiedBefore: str | None=None, modifiedAfter: str | None=None) -> DataFrame
+DataFrameReader.def xml(self, path: str | list[str], **options: object) -> DataFrame
 DataFrameWriter.def __init__(self, df: DataFrame) -> None
 DataFrameWriter.def bucketBy(self, numBuckets: int, col: str | list[str] | tuple[str, ...], *cols: str) -> DataFrameWriter
+DataFrameWriter.def clusterBy(self, col: str | list[str] | tuple[str, ...], *cols: str) -> DataFrameWriter
 DataFrameWriter.def csv(self, path: str, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, **options: object) -> None
 DataFrameWriter.def format(self, source: str) -> DataFrameWriter
 DataFrameWriter.def insertInto(self, tableName: str, overwrite: bool | None=None) -> None
+DataFrameWriter.def jdbc(self, *args: object, **kwargs: object) -> None
 DataFrameWriter.def json(self, path: str, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, **options: object) -> None
 DataFrameWriter.def mode(self, saveMode: str) -> DataFrameWriter
 DataFrameWriter.def option(self, key: str, value: object) -> DataFrameWriter
 DataFrameWriter.def options(self, **options: object) -> DataFrameWriter
+DataFrameWriter.def orc(self, path: str, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, compression: str | None=None) -> None
 DataFrameWriter.def parquet(self, path: str, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, **options: object) -> None
 DataFrameWriter.def partitionBy(self, *cols: str | list[str] | tuple[str, ...]) -> DataFrameWriter
 DataFrameWriter.def save(self, path: str | None=None, format: str | None=None, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, **options: object) -> None
 DataFrameWriter.def saveAsTable(self, name: str, format: str | None=None, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, **options: object) -> None
 DataFrameWriter.def sortBy(self, col: str | list[str] | tuple[str, ...], *cols: str) -> DataFrameWriter
 DataFrameWriter.def text(self, path: str, compression: str | None=None, lineSep: str | None=None) -> None
+DataFrameWriter.def xml(self, path: str, **options: object) -> None
 DataFrameWriterV2.def __init__(self, df: DataFrame, table: str) -> None
 DataFrameWriterV2.def append(self) -> None
 DataFrameWriterV2.def clusterBy(self, col: str, *cols: str) -> DataFrameWriterV2
@@ -1178,33 +1259,58 @@ class DataFrameReader()
 class DataFrameWriter()
 class DataFrameWriterV2()
 ## sql/row.py
+Row.def __call__(self, *args: Any) -> Row
 Row.def __contains__(self, item: object) -> bool
 Row.def __getattr__(self, name: str) -> Any
 Row.def __getitem__(self, item: Any) -> Any
 Row.def __new__(cls, *args: Any, **kwargs: Any) -> Row
 Row.def __reduce__(self) -> tuple[Any, ...]
 Row.def __repr__(self) -> str
-Row.def asDict(self) -> dict[str, Any]
+Row.def asDict(self, recursive: bool=False) -> dict[str, Any]
 class Row(tuple[Any, ...])
 ## sql/session.py
 Catalog.def __init__(self, session: SparkSession) -> None
 Catalog.def cacheTable(self, tableName: str, storageLevel: StorageLevel | None=None) -> None
 Catalog.def clearCache(self) -> None
+Catalog.def createExternalTable(self, tableName: str, path: str | None=None, source: str | None=None, schema: StructType | None=None, **options: str) -> DataFrame
+Catalog.def createTable(self, tableName: str, path: str | None=None, source: str | None=None, schema: StructType | None=None, description: str | None=None, **options: str) -> DataFrame
+Catalog.def currentCatalog(self) -> str
 Catalog.def currentDatabase(self) -> str
+Catalog.def databaseExists(self, dbName: str) -> bool
 Catalog.def dropTempView(self, viewName: str) -> bool
+Catalog.def functionExists(self, functionName: str, dbName: str | None=None) -> bool
+Catalog.def getDatabase(self, dbName: str) -> Database
+Catalog.def getFunction(self, functionName: str) -> Function
+Catalog.def getTable(self, tableName: str) -> Table
 Catalog.def isCached(self, tableName: str) -> bool
-Catalog.def listDatabases(self) -> DataFrame
-Catalog.def listTables(self, dbName: str | None=None) -> DataFrame
+Catalog.def listCatalogs(self, pattern: str | None=None) -> list[CatalogMetadata]
+Catalog.def listColumns(self, tableName: str, dbName: str | None=None) -> list[Column]
+Catalog.def listDatabases(self, pattern: str | None=None) -> list[Database]
+Catalog.def listFunctions(self, dbName: str | None=None, pattern: str | None=None) -> list[Function]
+Catalog.def listTables(self, dbName: str | None=None, pattern: str | None=None) -> list[Table]
+Catalog.def listViews(self, dbName: str | None=None, pattern: str | None=None) -> list[Table]
+Catalog.def recoverPartitions(self, tableName: str) -> None
 Catalog.def refreshByPath(self, path: str) -> None
 Catalog.def refreshTable(self, tableName: str) -> DataFrame
 Catalog.def registerFunction(self, name: str, f: Any, returnType: Any=None) -> Any
+Catalog.def setCurrentCatalog(self, catalogName: str) -> None
+Catalog.def setCurrentDatabase(self, dbName: str) -> None
 Catalog.def tableExists(self, tableName: str, dbName: str | None=None) -> bool
 Catalog.def uncacheTable(self, tableName: str) -> None
 SPARK_VERSION
+SparkSession.@classmethod def active(cls) -> SparkSession
+SparkSession.@classmethod def getActiveSession(cls) -> SparkSession | None
 SparkSession.@property def catalog(self) -> Catalog
 SparkSession.@property def conf(self) -> RuntimeConfig
+SparkSession.@property def dataSource(self) -> Any
+SparkSession.@property def profile(self) -> Any
 SparkSession.@property def read(self) -> DataFrameReader
+SparkSession.@property def readStream(self) -> Any
+SparkSession.@property def sparkContext(self) -> Any
+SparkSession.@property def streams(self) -> Any
+SparkSession.@property def tvf(self) -> Any
 SparkSession.@property def udf(self) -> UDFRegistration
+SparkSession.@property def udtf(self) -> Any
 SparkSession.@property def version(self) -> str
 SparkSession.Builder.def __init__(self) -> None
 SparkSession.Builder.def appName(self, name: str) -> SparkSession.Builder
@@ -1213,13 +1319,23 @@ SparkSession.Builder.def create(self) -> SparkSession
 SparkSession.Builder.def getOrCreate(self) -> SparkSession
 SparkSession.Builder.def master(self, master: str) -> SparkSession.Builder
 SparkSession.Builder.def remote(self, url: str) -> SparkSession.Builder
+SparkSession.addArtifact
 SparkSession.builder: Builder
 SparkSession.class Builder()
 SparkSession.def __init__(self, native: _native.Session, config: list[tuple[str, str]] | None=None) -> None
+SparkSession.def addArtifacts(self, *path: str, pyfile: bool=False, archive: bool=False, file: bool=False) -> None
+SparkSession.def addTag(self, tag: str) -> None
+SparkSession.def clearTags(self) -> None
+SparkSession.def copyFromLocalToFs(self, local_path: str, dest_path: str) -> None
 SparkSession.def createDataFrame(self, data: Any, schema: Any=None, samplingRatio: float | None=None, verifySchema: bool=True) -> DataFrame
 SparkSession.def emptyDataFrame(self, schema: StructType | str) -> DataFrame
+SparkSession.def getTags(self) -> set[str]
+SparkSession.def interruptAll(self) -> list[str]
+SparkSession.def interruptOperation(self, op_id: str) -> list[str]
+SparkSession.def interruptTag(self, tag: str) -> list[str]
 SparkSession.def newSession(self) -> SparkSession
 SparkSession.def range(self, start: int, end: int | None=None, step: int=1, numPartitions: int | None=None) -> DataFrame
+SparkSession.def removeTag(self, tag: str) -> None
 SparkSession.def sql(self, sqlQuery: str, args: Any=None, **kwargs: Any) -> DataFrame
 SparkSession.def stop(self) -> None
 SparkSession.def table(self, tableName: str) -> DataFrame
@@ -1306,6 +1422,7 @@ StructType.def add(self, field: str | StructField, data_type: str | DataType | N
 StructType.def fieldNames(self) -> list[str]
 StructType.def jsonValue(self) -> dict[str, Any]
 StructType.def simpleString(self) -> str
+StructType.def treeString(self, level: int | None=None) -> str
 TimestampNTZType.@classmethod def typeName(cls) -> str
 VarcharType.def __init__(self, length: int) -> None
 VarcharType.def __repr__(self) -> str

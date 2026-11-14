@@ -31,6 +31,10 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // v3-compiled code on it. `krishiv/_cpu.py` checks first, in pure Python.
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add("__allocator__", ALLOCATOR)?;
+    m.add(
+        "__git_sha__",
+        option_env!("KRISHIV_GIT_SHA").unwrap_or("unknown"),
+    )?;
     m.add_class::<stream::ArrowStream>()?;
     m.add_function(wrap_pyfunction!(udf::_udf_pool_shutdown, m)?)?;
     m.add_function(wrap_pyfunction!(udf::runtime::_udf_runner_conf, m)?)?;

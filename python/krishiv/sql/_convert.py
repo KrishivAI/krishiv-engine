@@ -121,9 +121,7 @@ def _by_position(array: Any, arrow_type: Any) -> list[Any]:
         children = [_by_position(array.field(i), f.type) for i, f in enumerate(fields)]
         names = [f.name for f in fields]
         valid = array.is_valid().to_pylist()
-        return [
-            _create_row(names, [c[j] for c in children]) if ok else None for j, ok in enumerate(valid)
-        ]
+        return [_create_row(names, [c[j] for c in children]) if ok else None for j, ok in enumerate(valid)]
     if pa.types.is_map(arrow_type):
         out: list[Any] = []
         for scalar in array:

@@ -422,6 +422,14 @@ def jsonValue(self) -> dict[str, Any]
 def simpleString(self) -> str
 ```
 
+### `treeString`
+
+```python
+def treeString(self, level: int | None=None) -> str
+```
+
+The schema as the indented tree `printSchema` prints, to `level` levels (all by default).
+
 ### `typeName`
 
 ```python

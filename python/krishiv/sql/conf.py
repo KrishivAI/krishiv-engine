@@ -3,9 +3,9 @@
 
 from __future__ import annotations
 
-from krishiv import _native
 from typing import TYPE_CHECKING
 
+from krishiv import _native
 from krishiv.errors import SparkNoSuchElementException, not_expected_type, not_implemented
 
 if TYPE_CHECKING:
@@ -50,7 +50,7 @@ class RuntimeConfig:
 
     @property
     def getAll(self) -> dict[str, str]:
-        """Every configuration that has a value in this session (a property, as in PySpark)."""
+        """Every configuration set in this session, under the names the engine uses (a property, as in PySpark)."""
         if self._spark is None:
             raise not_implemented("RuntimeConfig.getAll on a configuration without a session")
         return {row[0]: row[1] for row in self._spark.sql("SET").collect()}

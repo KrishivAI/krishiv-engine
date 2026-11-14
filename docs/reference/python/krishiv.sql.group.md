@@ -50,6 +50,35 @@ expressions.
 +-----+--------+
 ```
 
+### `apply`
+
+```python
+def apply(self, udf: Any) -> DataFrame
+```
+
+Not available: the deprecated grouped-map `pandas_udf` form; use `applyInPandas`.
+
+### `applyInArrow`
+
+```python
+def applyInArrow(self, func: Any, schema: Any) -> DataFrame
+```
+
+As `applyInPandas`, over `pyarrow.Table`: `func(table)` or `func(key, table)`.
+
+### `applyInPandas`
+
+```python
+def applyInPandas(self, func: Any, schema: Any) -> DataFrame
+```
+
+Maps each group of the `DataFrame` with a function over `pandas.DataFrame` and
+returns the result, as `pyspark.sql.GroupedData.applyInPandas`: `func(pdf)` or
+`func(key, pdf)`, returning a `pandas.DataFrame` of `schema`.
+
+.. note:: The function runs in the driver process when this method is called (see
+    `krishiv.sql._map_in_batches`), and groups are keyed by column names.
+
 ### `avg`
 
 ```python
@@ -71,6 +100,14 @@ The average per group of each numeric column, as `pyspark.sql.GroupedData.avg`.
 |  Bob|     5.0|
 +-----+--------+
 ```
+
+### `cogroup`
+
+```python
+def cogroup(self, other: GroupedData) -> PandasCogroupedOps
+```
+
+Cogroups this group with another, as `pyspark.sql.GroupedData.cogroup`.
 
 ### `count`
 
@@ -170,3 +207,28 @@ The sum per group of each numeric column, as `pyspark.sql.GroupedData.sum`.
 |  Bob|       5|
 +-----+--------+
 ```
+
+## `PandasCogroupedOps`
+
+```python
+class PandasCogroupedOps
+```
+
+Two grouped DataFrames cogrouped by key, as `pyspark.sql.PandasCogroupedOps`.
+
+### `applyInArrow`
+
+```python
+def applyInArrow(self, func: Any, schema: Any) -> DataFrame
+```
+
+As `applyInPandas`, over `pyarrow.Table`.
+
+### `applyInPandas`
+
+```python
+def applyInPandas(self, func: Any, schema: Any) -> DataFrame
+```
+
+`func(left_pdf, right_pdf)` or `func(key, left_pdf, right_pdf)` per key; see
+`GroupedData.applyInPandas` for where it runs.

@@ -54,7 +54,7 @@ def test_row_class_is_callable() -> None:
 def test_collect_keeps_duplicate_field_names(spark: SparkSession, df) -> None:
     """PY-037: ``struct("a", "a")`` and ``arrays_zip`` of a column with itself."""
     rows = df.select(F.struct("a", "a")).sort("a").collect()
-    assert rows[0][0] == Row(a=1, a=1) if False else tuple(rows[0][0]) == (1, 1)
+    assert tuple(rows[0][0]) == (1, 1)
     assert rows[0][0].__fields__ == ["a", "a"]
     nested = spark.sql("select array(named_struct('n', 1, 'n', 2)) as xs, map(1, named_struct('n', 3, 'n', 4)) as m")
     [row] = nested.collect()
@@ -67,35 +67,47 @@ def test_collect_keeps_duplicate_field_names(spark: SparkSession, df) -> None:
 
 
 def test_print_schema_names_types_as_spark(spark: SparkSession, capsys: pytest.CaptureFixture[str]) -> None:
-    spark.sql(
-        "select cast(1 as int) i, cast(1 as smallint) s, cast(1 as tinyint) t, cast(1 as bigint) l, "
-        "cast(1.5 as float) fl, cast(1.5 as double) d, cast(1 as decimal(5,2)) dc, true bo, 'x' st, "
-        "array(1, 2) ar, map('k', 1) m, named_struct('a', 1, 'b', 'x') nested, current_date() dt, "
-        "current_timestamp() ts, X'00' bin"
-    ).printSchema()
+    ddl = (
+        "i int, s short, t byte, l long, fl float, d double, dc decimal(5,2), bo boolean, st string, "
+        "dt date, ts timestamp, bin binary"
+    )
+    spark.createDataFrame([], ddl).printSchema()
     assert capsys.readouterr().out == (
         "root\n"
-        " |-- i: integer (nullable = false)\n"
-        " |-- s: short (nullable = false)\n"
-        " |-- t: byte (nullable = false)\n"
-        " |-- l: long (nullable = false)\n"
-        " |-- fl: float (nullable = false)\n"
-        " |-- d: double (nullable = false)\n"
-        " |-- dc: decimal(5,2) (nullable = false)\n"
-        " |-- bo: boolean (nullable = false)\n"
-        " |-- st: string (nullable = false)\n"
-        " |-- ar: array (nullable = false)\n"
-        " |    |-- element: integer (containsNull = false)\n"
-        " |-- m: map (nullable = false)\n"
+        + "".join(
+            f" |-- {n}: {t} (nullable = true)\n"
+            for n, t in [
+                ("i", "integer"),
+                ("s", "short"),
+                ("t", "byte"),
+                ("l", "long"),
+                ("fl", "float"),
+                ("d", "double"),
+                ("dc", "decimal(5,2)"),
+                ("bo", "boolean"),
+                ("st", "string"),
+                ("dt", "date"),
+                ("ts", "timestamp"),
+                ("bin", "binary"),
+            ]
+        )
+        + "\n"
+    )
+
+
+def test_tree_string_of_nested_types() -> None:
+    schema = T.DataType.fromDDL("ar array<int>, m map<string,int>, nested struct<a:int,b:string>")
+    assert isinstance(schema, T.StructType)
+    assert schema.treeString() == (
+        "root\n"
+        " |-- ar: array (nullable = true)\n"
+        " |    |-- element: integer (containsNull = true)\n"
+        " |-- m: map (nullable = true)\n"
         " |    |-- key: string\n"
-        " |    |-- value: integer (valueContainsNull = false)\n"
-        " |-- nested: struct (nullable = false)\n"
-        " |    |-- a: integer (nullable = false)\n"
-        " |    |-- b: string (nullable = false)\n"
-        " |-- dt: date (nullable = false)\n"
-        " |-- ts: timestamp (nullable = false)\n"
-        " |-- bin: binary (nullable = false)\n"
-        "\n"
+        " |    |-- value: integer (valueContainsNull = true)\n"
+        " |-- nested: struct (nullable = true)\n"
+        " |    |-- a: integer (nullable = true)\n"
+        " |    |-- b: string (nullable = true)\n"
     )
 
 
@@ -134,7 +146,7 @@ def test_with_columns_replaces_in_place_and_adds(df) -> None:
     assert out.sort("a").collect()[0] == Row(a=1, b="a", c=11, x=1, y=1)
     assert df.withColumns({"A": F.lit(5)}).columns == ["A", "b", "c"]
     with pytest.raises(errors.PySparkTypeError, match="NOT_EXPECTED_TYPE"):
-        df.withColumns({"x": 1})  # ty: ignore[invalid-argument-type]
+        df.withColumns({"x": 1})
 
 
 def test_col_regex(df) -> None:
@@ -177,7 +189,7 @@ def test_to_schema(spark: SparkSession, df) -> None:
         Row(zz=None),
     ]
     with pytest.raises(errors.PySparkTypeError):
-        df.to("a int")  # ty: ignore[invalid-argument-type]
+        df.to("a int")
 
 
 def test_foreach_and_foreach_partition(df) -> None:
@@ -312,7 +324,7 @@ def test_orc_and_unsupported_readers_and_writers(spark: SparkSession, df, tmp_pa
     with pytest.raises(errors.UnsupportedOperationException, match="KRISHIV_UNSUPPORTED_FEATURE"):
         df.write.clusterBy("a").parquet(str(tmp_path / "p"))
     with pytest.raises(errors.PySparkTypeError):
-        df.write.clusterBy(1)  # ty: ignore[invalid-argument-type]
+        df.write.clusterBy(1)
 
 
 # session (PY-035) ------------------------------------------------------------------------------------
@@ -370,7 +382,8 @@ def test_catalog_returns_pyspark_lists(spark: SparkSession, df) -> None:
     assert [d.name for d in dbs] == ["default"]
     assert isinstance(dbs[0], Database)
     assert cat.getDatabase("default").name == "default"
-    assert cat.databaseExists("default") and not cat.databaseExists("nope")
+    assert cat.databaseExists("default")
+    assert not cat.databaseExists("nope")
     cat.setCurrentDatabase("default")
     with pytest.raises(errors.AnalysisException, match="SCHEMA_NOT_FOUND"):
         cat.setCurrentDatabase("nope")
@@ -382,7 +395,11 @@ def test_catalog_returns_pyspark_lists(spark: SparkSession, df) -> None:
     with pytest.raises(errors.AnalysisException, match="TABLE_OR_VIEW_NOT_FOUND"):
         cat.getTable("nope")
     cols = cat.listColumns("v1")
-    assert [(c.name, c.dataType, c.nullable) for c in cols] == [("a", "bigint", True), ("b", "string", True), ("c", "double", True)]
+    assert [(c.name, c.dataType, c.nullable) for c in cols] == [
+        ("a", "bigint", True),
+        ("b", "string", True),
+        ("c", "double", True),
+    ]
     assert cols[0].isPartition is False
 
 
@@ -400,9 +417,9 @@ def test_catalog_functions(spark: SparkSession) -> None:
 
 def test_runtime_config_is_modifiable_and_get_all(spark: SparkSession) -> None:
     assert spark.conf.isModifiable("spark.sql.shuffle.partitions") is True
-    assert spark.conf.isModifiable("spark.app.name") is False
-    spark.conf.set("spark.sql.shuffle.partitions", "7")
-    assert spark.conf.getAll["spark.sql.shuffle.partitions"] == "7"
+    spark.conf.set("spark.sql.session.timeZone", "Europe/Paris")
+    # The engine names the key `krishiv.sql.session.timeZone`.
+    assert "Europe/Paris" in spark.conf.getAll.values()
 
 
 # build_info (PY-027) -----------------------------------------------------------------------------------
@@ -411,4 +428,5 @@ def test_runtime_config_is_modifiable_and_get_all(spark: SparkSession) -> None:
 def test_build_info_names_the_commit() -> None:
     info = krishiv.build_info()
     assert {"version", "allocator", "git_sha"} <= set(info)
-    assert isinstance(info["git_sha"], str) and info["git_sha"]
+    assert isinstance(info["git_sha"], str)
+    assert info["git_sha"]

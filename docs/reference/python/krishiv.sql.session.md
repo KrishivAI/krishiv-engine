@@ -32,6 +32,31 @@ def clearCache(self) -> None
 
 Drops every cached relation: later actions run uncached.
 
+### `createExternalTable`
+
+```python
+def createExternalTable(self, tableName: str, path: str | None=None, source: str | None=None, schema: StructType | None=None, **options: str) -> DataFrame
+```
+
+An alias for `createTable` (deprecated since 2.2.0 in PySpark).
+
+### `createTable`
+
+```python
+def createTable(self, tableName: str, path: str | None=None, source: str | None=None, schema: StructType | None=None, description: str | None=None, **options: str) -> DataFrame
+```
+
+Creates a table over the files at `path` (an external table) as a temporary view
+and returns it. `schema` and `description` are not supported yet.
+
+### `currentCatalog`
+
+```python
+def currentCatalog(self) -> str
+```
+
+The current catalog: always `spark_catalog` (there is no other).
+
 ### `currentDatabase`
 
 ```python
@@ -39,6 +64,14 @@ def currentDatabase(self) -> str
 ```
 
 The current database: always `default` (there is no other).
+
+### `databaseExists`
+
+```python
+def databaseExists(self, dbName: str) -> bool
+```
+
+Whether the database `dbName` exists (only `default` does).
 
 ### `dropTempView`
 
@@ -48,6 +81,40 @@ def dropTempView(self, viewName: str) -> bool
 
 Drops the temporary view `viewName`; whether it existed.
 
+### `functionExists`
+
+```python
+def functionExists(self, functionName: str, dbName: str | None=None) -> bool
+```
+
+Whether the function `functionName` exists: whether a call of it resolves (a call with
+the wrong number of arguments does, as the function is there).
+
+### `getDatabase`
+
+```python
+def getDatabase(self, dbName: str) -> Database
+```
+
+The database `dbName` (only `default` exists).
+
+### `getFunction`
+
+```python
+def getFunction(self, functionName: str) -> Function
+```
+
+The function `functionName`; `UNRESOLVED_ROUTINE` when there is none (the engine
+reports no description or class name).
+
+### `getTable`
+
+```python
+def getTable(self, tableName: str) -> Table
+```
+
+The table or view `tableName`; `TABLE_OR_VIEW_NOT_FOUND` when there is none.
+
 ### `isCached`
 
 ```python
@@ -56,25 +123,63 @@ def isCached(self, tableName: str) -> bool
 
 Whether the table `tableName` is cached now.
 
+### `listCatalogs`
+
+```python
+def listCatalogs(self, pattern: str | None=None) -> list[CatalogMetadata]
+```
+
+The catalogs: just `spark_catalog`.
+
+### `listColumns`
+
+```python
+def listColumns(self, tableName: str, dbName: str | None=None) -> list[Column]
+```
+
+The columns of `tableName`, as a list of `Column` (as PySpark).
+
 ### `listDatabases`
 
 ```python
-def listDatabases(self) -> DataFrame
+def listDatabases(self, pattern: str | None=None) -> list[Database]
 ```
 
-The databases: just `default`.
+The databases: just `default`, as a list of `Database` (as PySpark).
+
+### `listFunctions`
+
+```python
+def listFunctions(self, dbName: str | None=None, pattern: str | None=None) -> list[Function]
+```
+
+The functions that have a wrapper in `krishiv.sql.functions`, as a list of
+`Function`. The engine cannot list its functions (`SHOW FUNCTIONS` is not supported),
+so SQL-only functions are missing here, though `functionExists` finds them.
 
 ### `listTables`
 
 ```python
-def listTables(self, dbName: str | None=None) -> DataFrame
+def listTables(self, dbName: str | None=None, pattern: str | None=None) -> list[Table]
 ```
 
-The temporary views as a DataFrame of `(name, database,
-description, tableType, isTemporary)` rows.
+The temporary views, as a list of `Table` (as PySpark).
 
-.. note:: The engine has no catalogs or namespaces, so this is the
-    classic five-column shape rather than Spark 4.x's namespaced one.
+### `listViews`
+
+```python
+def listViews(self, dbName: str | None=None, pattern: str | None=None) -> list[Table]
+```
+
+The temporary views (every table is one), as `listTables`.
+
+### `recoverPartitions`
+
+```python
+def recoverPartitions(self, tableName: str) -> None
+```
+
+Not available: tables are not partitioned (`NOT_IMPLEMENTED`).
 
 ### `refreshByPath`
 
@@ -102,6 +207,22 @@ def registerFunction(self, name: str, f: Any, returnType: Any=None) -> Any
 
 An alias for `spark.udf.register` (deprecated since 2.3.0, `pyspark/sql/catalog.py:1272`).
 
+### `setCurrentCatalog`
+
+```python
+def setCurrentCatalog(self, catalogName: str) -> None
+```
+
+Only `spark_catalog` exists.
+
+### `setCurrentDatabase`
+
+```python
+def setCurrentDatabase(self, dbName: str) -> None
+```
+
+Only `default` exists, so any other name fails with `SCHEMA_NOT_FOUND`.
+
 ### `tableExists`
 
 ```python
@@ -126,6 +247,31 @@ class SparkSession
 
 An embedded session. Create one with `SparkSession.builder.getOrCreate()`.
 
+### `active`
+
+```python
+@classmethod
+def active(cls) -> SparkSession
+```
+
+The active session; fails with `NO_ACTIVE_OR_DEFAULT_SESSION` when there is none, as PySpark.
+
+### `addArtifacts`
+
+```python
+def addArtifacts(self, *path: str, pyfile: bool=False, archive: bool=False, file: bool=False) -> None
+```
+
+Not available: artifacts belong to Spark Connect sessions (`NOT_IMPLEMENTED`).
+
+### `addTag`
+
+```python
+def addTag(self, tag: str) -> None
+```
+
+Not available: operation tags (`NOT_IMPLEMENTED`).
+
 ### `catalog`
 
 ```python
@@ -138,12 +284,28 @@ The catalog of temporary views, as `pyspark.sql.catalog.Catalog`.
 The embedded engine has no databases: every view is temporary and
 listed under the `default` database.
 
+### `clearTags`
+
+```python
+def clearTags(self) -> None
+```
+
+Not available: operation tags (`NOT_IMPLEMENTED`).
+
 ### `conf`
 
 ```python
 @property
 def conf(self) -> RuntimeConfig
 ```
+
+### `copyFromLocalToFs`
+
+```python
+def copyFromLocalToFs(self, local_path: str, dest_path: str) -> None
+```
+
+Not available: artifacts belong to Spark Connect sessions (`NOT_IMPLEMENTED`).
 
 ### `createDataFrame`
 
@@ -195,6 +357,15 @@ which the embedded session does not take).
 +-----+---+
 ```
 
+### `dataSource`
+
+```python
+@property
+def dataSource(self) -> Any
+```
+
+Not available: Python data sources (`NOT_IMPLEMENTED`).
+
 ### `emptyDataFrame`
 
 ```python
@@ -211,10 +382,51 @@ or a DDL string), as `pyspark.sql.SparkSession.emptyDataFrame`.
 >>> df.printSchema()
 root
  |-- name: string (nullable = true)
- |-- age: int (nullable = true)
+ |-- age: integer (nullable = true)
 >>> df.count()
 0
 ```
+
+### `getActiveSession`
+
+```python
+@classmethod
+def getActiveSession(cls) -> SparkSession | None
+```
+
+The session `getOrCreate` made and `stop` has not ended, or `None`.
+
+### `getTags`
+
+```python
+def getTags(self) -> set[str]
+```
+
+Not available: operation tags (`NOT_IMPLEMENTED`).
+
+### `interruptAll`
+
+```python
+def interruptAll(self) -> list[str]
+```
+
+Not available: running operations cannot be interrupted by id (`NOT_IMPLEMENTED`).
+
+### `interruptOperation`
+
+```python
+def interruptOperation(self, op_id: str) -> list[str]
+```
+
+Not available: running operations cannot be interrupted by id (`NOT_IMPLEMENTED`).
+
+### `interruptTag`
+
+```python
+def interruptTag(self, tag: str) -> list[str]
+```
+
+Not available: operation tags (`NOT_IMPLEMENTED`).
 
 ### `newSession`
 
@@ -225,6 +437,15 @@ def newSession(self) -> SparkSession
 A new session with separate SQL configuration and temporary views,
 as `pyspark.sql.SparkSession.newSession`: it starts from the options
 this session was built with, not from later `conf.set` changes.
+
+### `profile`
+
+```python
+@property
+def profile(self) -> Any
+```
+
+Not available: UDF profiling (`NOT_IMPLEMENTED`).
 
 ### `range`
 
@@ -269,6 +490,32 @@ accepted and ignored (one node has nothing to partition).
 def read(self) -> DataFrameReader
 ```
 
+### `readStream`
+
+```python
+@property
+def readStream(self) -> Any
+```
+
+Not available: streaming reads are not part of 0.2 (`NOT_IMPLEMENTED`).
+
+### `removeTag`
+
+```python
+def removeTag(self, tag: str) -> None
+```
+
+Not available: operation tags (`NOT_IMPLEMENTED`).
+
+### `sparkContext`
+
+```python
+@property
+def sparkContext(self) -> Any
+```
+
+Not available: there is no `SparkContext` (RDDs and the JVM) in an embedded session.
+
 ### `sql`
 
 ```python
@@ -285,11 +532,29 @@ def stop(self) -> None
 
 Ends this session; the next `getOrCreate` makes a new one.
 
+### `streams`
+
+```python
+@property
+def streams(self) -> Any
+```
+
+Not available: streaming queries are not part of 0.2 (`NOT_IMPLEMENTED`).
+
 ### `table`
 
 ```python
 def table(self, tableName: str) -> DataFrame
 ```
+
+### `tvf`
+
+```python
+@property
+def tvf(self) -> Any
+```
+
+Not available: the `TableValuedFunction` namespace (`NOT_IMPLEMENTED`).
 
 ### `udf`
 
@@ -299,6 +564,15 @@ def udf(self) -> UDFRegistration
 ```
 
 The `UDFRegistration` of this session (`spark.udf.register(name, f, returnType)`).
+
+### `udtf`
+
+```python
+@property
+def udtf(self) -> Any
+```
+
+Not available: user-defined table functions (`NOT_IMPLEMENTED`).
 
 ### `version`
 

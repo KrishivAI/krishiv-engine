@@ -16,6 +16,23 @@ class RuntimeConfig
 def get(self, key: str, default: object=_UNSET) -> str | None
 ```
 
+### `getAll`
+
+```python
+@property
+def getAll(self) -> dict[str, str]
+```
+
+Every configuration set in this session, under the names the engine uses (a property, as in PySpark).
+
+### `isModifiable`
+
+```python
+def isModifiable(self, key: str) -> bool
+```
+
+Whether the configuration `key` can be changed at run time (`spark.conf.set`).
+
 ### `set`
 
 ```python

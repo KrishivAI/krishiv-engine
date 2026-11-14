@@ -14,6 +14,7 @@ from typing import final
 
 __version__: str
 __allocator__: str
+__git_sha__: str
 __all__ = [
     "AnonymousPythonUdf",
     "ArrowStream",
@@ -23,6 +24,7 @@ __all__ = [
     "Session",
     "WindowSpec",
     "__allocator__",
+    "__git_sha__",
     "__version__",
     "_udf_pool_shutdown",
     "_udf_runner_conf",

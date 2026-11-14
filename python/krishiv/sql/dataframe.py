@@ -2100,7 +2100,7 @@ class DataFrame:
                 picked.append(values[match].alias(match))
                 taken.add(match)
         picked.extend(v.alias(n) for n, v in values.items() if n not in taken)
-        return self.select(picked)
+        return self.select(*picked)
 
     def colRegex(self, colName: str) -> Column:
         """The columns whose names match the regular expression ``colName`` (in backquotes,
@@ -2168,7 +2168,7 @@ class DataFrame:
             have = next((c for c in self.columns if _same(c, field.name, case_sensitive)), None)
             source = _quoted(have) if have is not None else Column(_literal(None))
             picked.append(source.cast(field.dataType.simpleString()).alias(field.name))
-        return self.select(picked)
+        return self.select(*picked)
 
     def foreach(self, f: Callable[[Row], None]) -> None:
         """Applies ``f`` to every row (in this process, as there are no executors)."""

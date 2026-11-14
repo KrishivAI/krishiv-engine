@@ -884,7 +884,9 @@ def _tree_type_name(t: DataType) -> str:
     return value if isinstance(value, str) else t.typeName()
 
 
-def _tree_type(t: DataType, label: str, nullable_note: str, prefix: str, depth: int, limit: int, out: list[str]) -> None:
+def _tree_type(
+    t: DataType, label: str, nullable_note: str, prefix: str, depth: int, limit: int, out: list[str]
+) -> None:
     out.append(f"{prefix}-- {label}: {_tree_type_name(t)}{nullable_note}")
     if depth >= limit:
         return
@@ -892,10 +894,20 @@ def _tree_type(t: DataType, label: str, nullable_note: str, prefix: str, depth: 
     if isinstance(t, StructType):
         _tree_fields(t, child, depth + 1, limit, out)
     elif isinstance(t, ArrayType):
-        _tree_type(t.elementType, "element", f" (containsNull = {str(t.containsNull).lower()})", child, depth + 1, limit, out)
+        _tree_type(
+            t.elementType, "element", f" (containsNull = {str(t.containsNull).lower()})", child, depth + 1, limit, out
+        )
     elif isinstance(t, MapType):
         _tree_type(t.keyType, "key", "", child, depth + 1, limit, out)
-        _tree_type(t.valueType, "value", f" (valueContainsNull = {str(t.valueContainsNull).lower()})", child, depth + 1, limit, out)
+        _tree_type(
+            t.valueType,
+            "value",
+            f" (valueContainsNull = {str(t.valueContainsNull).lower()})",
+            child,
+            depth + 1,
+            limit,
+            out,
+        )
 
 
 def _tree_fields(struct: StructType, prefix: str, depth: int, limit: int, out: list[str]) -> None:

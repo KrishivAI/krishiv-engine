@@ -297,7 +297,7 @@ def test_row() -> None:
     assert "a" not in positional
     with pytest.raises(errors.PySparkValueError):
         Row(1, a=2)
-    with pytest.raises(errors.PySparkValueError):
+    with pytest.raises(errors.PySparkTypeError, match="CANNOT_CONVERT_TYPE"):
         positional.asDict()
     with pytest.raises(KeyError):
         r["zz"]

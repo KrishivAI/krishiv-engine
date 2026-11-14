@@ -7,6 +7,7 @@
 | [`krishiv`](krishiv.md) | Krishiv: a Rust-native, Spark-compatible batch and streaming engine. |
 | [`krishiv.errors`](krishiv.errors.md) | Exceptions, shaped like `pyspark.errors` (Spark 4.2); no dependency on `pyspark`. |
 | [`krishiv.sql`](krishiv.sql.md) | The PySpark-shaped API: `from krishiv.sql import functions as F`. |
+| [`krishiv.sql.catalog`](krishiv.sql.catalog.md) | The result types of `spark.catalog`, as `pyspark.sql.catalog` (named tuples). |
 | [`krishiv.sql.column`](krishiv.sql.column.md) | `Column`: a column expression, as `pyspark.sql.Column` (a thin wrapper on the native handle). |
 | [`krishiv.sql.conf`](krishiv.sql.conf.md) | `RuntimeConfig`: `spark.conf`. |
 | [`krishiv.sql.dataframe`](krishiv.sql.dataframe.md) | `DataFrame`: a lazily evaluated query, as `pyspark.sql.DataFrame`. |

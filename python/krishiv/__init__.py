@@ -7,7 +7,7 @@ from krishiv import _cpu
 
 _cpu.ensure_supported()  # before the native module: an old CPU would die with SIGILL there
 
-from krishiv._native import __allocator__, __version__  # noqa: E402
+from krishiv._native import __allocator__, __git_sha__, __version__  # noqa: E402
 from krishiv._udf_hooks import register as _register_udf_hooks  # noqa: E402
 from krishiv.sql.profile_view import ProfileView, ui  # noqa: E402
 
@@ -18,8 +18,9 @@ __all__ = ["ProfileView", "SparkSession", "__version__", "build_info", "metrics"
 
 
 def build_info() -> dict[str, str]:
-    """Return how this build was made, e.g. ``{"version": "0.1.0", "allocator": "mimalloc"}``."""
-    return {"version": __version__, "allocator": __allocator__}
+    """Return how this build was made: version, allocator and ``git_sha``, the commit the wheel was built from
+    (``"unknown"`` when the build had no checkout)."""
+    return {"version": __version__, "allocator": __allocator__, "git_sha": __git_sha__}
 
 
 def session() -> SparkSession:

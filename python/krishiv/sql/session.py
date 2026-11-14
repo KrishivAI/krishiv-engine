@@ -695,8 +695,8 @@ class Catalog:
             raise not_expected_type("dbName", "str", dbName)
         if dbName.lower() != "default":
             raise AnalysisException(
-                f"[SCHEMA_NOT_FOUND] The schema `{_CATALOG}`.`{dbName}` cannot be found. Verify the spelling and correctness of "
-                "the schema and catalog.\nIf you did not qualify the name with a catalog, verify the "
+                f"[SCHEMA_NOT_FOUND] The schema `{_CATALOG}`.`{dbName}` cannot be found. Verify the spelling and "
+                "correctness of the schema and catalog.\nIf you did not qualify the name with a catalog, verify the "
                 "current_schema() output, or qualify the name with the correct catalog.\nTo tolerate the error on "
                 "drop use DROP SCHEMA IF EXISTS. SQLSTATE: 42704",
                 errorClass="SCHEMA_NOT_FOUND",
@@ -770,41 +770,48 @@ class Catalog:
             for name, dtype, nullable in self._session.table(tableName)._df.schema()
         ]
 
-    def _function_rows(self) -> list[str]:
-        return [r[0] for r in self._session.sql("SHOW FUNCTIONS").collect()]
+    def _function_names(self) -> list[str]:
+        from krishiv.sql import functions
+
+        return sorted(functions.__all__)
 
     def listFunctions(self, dbName: str | None = None, pattern: str | None = None) -> list[Function]:
-        """The functions the engine knows, as a list of :class:`Function` (built-ins have no
-        class name; the description is empty)."""
+        """The functions that have a wrapper in :mod:`krishiv.sql.functions`, as a list of
+        :class:`Function`. The engine cannot list its functions (``SHOW FUNCTIONS`` is not supported),
+        so SQL-only functions are missing here, though :meth:`functionExists` finds them."""
         if dbName is not None:
             self._check_database(dbName)
         if pattern is not None and not isinstance(pattern, str):
             raise not_expected_type("pattern", "str", pattern)
         return [
             Function(n, None, None, None, "", True)
-            for n in self._function_rows()
+            for n in self._function_names()
             if pattern is None or _like(n, pattern)
         ]
 
     def functionExists(self, functionName: str, dbName: str | None = None) -> bool:
-        """Whether the function ``functionName`` exists."""
+        """Whether the function ``functionName`` exists: whether a call of it resolves (a call with
+        the wrong number of arguments does, as the function is there)."""
         if not isinstance(functionName, str):
             raise not_expected_type("functionName", "str", functionName)
         if dbName is not None:
             self._check_database(dbName)
+        if functionName in self._function_names():
+            return True
         try:
-            self._session.sql(f"DESCRIBE FUNCTION {functionName}").collect()
-        except AnalysisException:
-            return False
+            self._session.sql(f"SELECT {functionName}(NULL)").schema  # noqa: B018  # analysis raises
+        except AnalysisException as e:
+            return e.getCondition() != "UNRESOLVED_ROUTINE"
         return True
 
     def getFunction(self, functionName: str) -> Function:
-        """The function ``functionName``; ``UNRESOLVED_ROUTINE`` when there is none."""
+        """The function ``functionName``; ``UNRESOLVED_ROUTINE`` when there is none (the engine
+        reports no description or class name)."""
         if not isinstance(functionName, str):
             raise not_expected_type("functionName", "str", functionName)
-        rows = self._session.sql(f"DESCRIBE FUNCTION {functionName}").collect()
-        text = "\n".join(str(r[0]) for r in rows)
-        return Function(functionName, None, None, text or None, "", True)
+        if not self.functionExists(functionName):
+            self._session.sql(f"SELECT {functionName}(NULL)").schema  # noqa: B018  # raises UNRESOLVED_ROUTINE
+        return Function(functionName, None, None, None, "", True)
 
     def createTable(
         self,
@@ -829,10 +836,17 @@ class Catalog:
         return df
 
     def createExternalTable(
-        self, tableName: str, path: str | None = None, source: str | None = None, schema: StructType | None = None, **options: str
+        self,
+        tableName: str,
+        path: str | None = None,
+        source: str | None = None,
+        schema: StructType | None = None,
+        **options: str,
     ) -> DataFrame:
         """An alias for :meth:`createTable` (deprecated since 2.2.0 in PySpark)."""
-        warnings.warn("createExternalTable is deprecated since Spark 2.2.0, use createTable instead.", FutureWarning, stacklevel=2)
+        warnings.warn(
+            "createExternalTable is deprecated since Spark 2.2.0, use createTable instead.", FutureWarning, stacklevel=2
+        )
         return self.createTable(tableName, path, source, schema, **options)
 
     def recoverPartitions(self, tableName: str) -> None:

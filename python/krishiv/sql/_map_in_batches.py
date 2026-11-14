@@ -220,4 +220,3 @@ def cogroup_apply(
                     messageParameters={"expected": "pyarrow.Table", "actual": type(res).__name__},
                 )
     return _wrap(ldf, struct, _result_table(ldf, struct, out))
-
