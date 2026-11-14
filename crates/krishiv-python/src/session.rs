@@ -191,6 +191,13 @@ impl PySession {
         self.inner.conf().is_modifiable(key)
     }
 
+    /// Whether `key` is a registered configuration entry (by its key or a Spark alias): Spark's
+    /// `isModifiable` is false for any other key.
+    #[staticmethod]
+    fn conf_is_registered(key: &str) -> bool {
+        krishiv_common::config::lookup(krishiv_common::config::resolve_alternative(key)).is_some()
+    }
+
     fn conf_get(&self, key: &str) -> Option<String> {
         self.inner.conf().get(key)
     }

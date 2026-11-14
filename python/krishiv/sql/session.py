@@ -13,10 +13,13 @@ from typing import TYPE_CHECKING, Any
 from krishiv import _native
 from krishiv.errors import (
     AnalysisException,
+    ParseException,
+    PySparkAttributeError,
     PySparkRuntimeError,
     PySparkValueError,
     not_expected_type,
     not_implemented,
+    not_implemented_attribute,
     unsupported_feature,
 )
 from krishiv.sql.catalog import CatalogMetadata, Column, Database, Function, Table
@@ -393,38 +396,41 @@ class SparkSession:
 
     @property
     def sparkContext(self) -> Any:
-        """Not available: there is no ``SparkContext`` (RDDs and the JVM) in an embedded session."""
-        raise not_implemented("SparkSession.sparkContext (no SparkContext in an embedded session)")
+        """Not available: there is no ``SparkContext`` (RDDs and the JVM) in an embedded session. Raises
+        ``JVM_ATTRIBUTE_NOT_SUPPORTED`` as PySpark Connect does, so ``hasattr`` is ``False``."""
+        raise PySparkAttributeError(
+            errorClass="JVM_ATTRIBUTE_NOT_SUPPORTED", messageParameters={"attr_name": "sparkContext"}
+        )
 
     @property
     def readStream(self) -> Any:
         """Not available: streaming reads are not part of 0.2 (``NOT_IMPLEMENTED``)."""
-        raise not_implemented("SparkSession.readStream (streaming)")
+        raise not_implemented_attribute("SparkSession.readStream (streaming)")
 
     @property
     def streams(self) -> Any:
         """Not available: streaming queries are not part of 0.2 (``NOT_IMPLEMENTED``)."""
-        raise not_implemented("SparkSession.streams (streaming)")
+        raise not_implemented_attribute("SparkSession.streams (streaming)")
 
     @property
     def tvf(self) -> Any:
         """Not available: the ``TableValuedFunction`` namespace (``NOT_IMPLEMENTED``)."""
-        raise not_implemented("SparkSession.tvf")
+        raise not_implemented_attribute("SparkSession.tvf")
 
     @property
     def udtf(self) -> Any:
         """Not available: user-defined table functions (``NOT_IMPLEMENTED``)."""
-        raise not_implemented("SparkSession.udtf")
+        raise not_implemented_attribute("SparkSession.udtf")
 
     @property
     def dataSource(self) -> Any:
         """Not available: Python data sources (``NOT_IMPLEMENTED``)."""
-        raise not_implemented("SparkSession.dataSource")
+        raise not_implemented_attribute("SparkSession.dataSource")
 
     @property
     def profile(self) -> Any:
         """Not available: UDF profiling (``NOT_IMPLEMENTED``)."""
-        raise not_implemented("SparkSession.profile")
+        raise not_implemented_attribute("SparkSession.profile")
 
     def addArtifacts(self, *path: str, pyfile: bool = False, archive: bool = False, file: bool = False) -> None:
         """Not available: artifacts belong to Spark Connect sessions (``NOT_IMPLEMENTED``)."""
@@ -636,13 +642,21 @@ _CATALOG = "spark_catalog"
 
 
 def _like(name: str, pattern: str) -> bool:
-    """Spark's catalog name patterns: ``*`` matches any run, ``|`` separates alternatives; case-insensitive."""
+    """Spark's catalog name patterns (``StringUtils.filterPattern``): ``|`` separates alternatives, ``*`` matches
+    any run, the rest is a case-insensitive regular expression."""
     import re
 
-    return any(
-        re.fullmatch(".*".join(re.escape(part) for part in alt.strip().split("*")), name, re.IGNORECASE)
-        for alt in pattern.split("|")
-    )
+    return any(re.fullmatch("(?i)" + alt.strip().replace("*", ".*"), name) for alt in pattern.split("|"))
+
+
+#: Functions of ``krishiv.sql.functions`` that exist only in the DataFrame API: SQL has no function of that name.
+_DATAFRAME_ONLY = frozenset(
+    {
+        "col", "column", "lit", "udf", "udtf", "pandas_udf", "arrow_udf", "arrow_udtf", "call_function", "call_udf",
+        "broadcast", "asc", "desc", "asc_nulls_first", "asc_nulls_last", "desc_nulls_first", "desc_nulls_last",
+        "when", "bucket", "years", "months", "days", "hours", "partitioning", "builtin", "unwrap_udt",
+    }
+)  # fmt: skip
 
 
 class Catalog:
@@ -752,10 +766,13 @@ class Catalog:
         for t in self.listTables():
             if t.name.lower() == tableName.lower():
                 return t
-        self._session.table(tableName).schema  # noqa: B018  # raises the engine's TABLE_OR_VIEW_NOT_FOUND
         raise AnalysisException(
-            f"[TABLE_OR_VIEW_NOT_FOUND] The table or view `{tableName}` cannot be found. SQLSTATE: 42P01",
+            f"[TABLE_OR_VIEW_NOT_FOUND] The table or view `{tableName}` cannot be found. Verify the spelling and "
+            "correctness of the schema and catalog.\nIf you did not qualify the name with a schema, verify the "
+            "current_schema() output, or qualify the name with the correct schema and catalog.\nTo tolerate the "
+            "error on drop use DROP VIEW IF EXISTS or DROP TABLE IF EXISTS. SQLSTATE: 42P01",
             errorClass="TABLE_OR_VIEW_NOT_FOUND",
+            messageParameters={"relationName": f"`{tableName}`"},
             sqlState="42P01",
         )
 
@@ -773,10 +790,10 @@ class Catalog:
     def _function_names(self) -> list[str]:
         from krishiv.sql import functions
 
-        return sorted(functions.__all__)
+        return sorted(set(functions.__all__) - _DATAFRAME_ONLY)
 
     def listFunctions(self, dbName: str | None = None, pattern: str | None = None) -> list[Function]:
-        """The functions that have a wrapper in :mod:`krishiv.sql.functions`, as a list of
+        """The SQL functions that have a wrapper in :mod:`krishiv.sql.functions`, as a list of
         :class:`Function`. The engine cannot list its functions (``SHOW FUNCTIONS`` is not supported),
         so SQL-only functions are missing here, though :meth:`functionExists` finds them."""
         if dbName is not None:
@@ -790,16 +807,25 @@ class Catalog:
         ]
 
     def functionExists(self, functionName: str, dbName: str | None = None) -> bool:
-        """Whether the function ``functionName`` exists: whether a call of it resolves (a call with
-        the wrong number of arguments does, as the function is there)."""
+        """Whether the function ``functionName`` exists: whether a call of it resolves (a call with the
+        wrong number of arguments does, as the function is there). A name that is not an identifier
+        (or dotted identifiers) is a ``PARSE_SYNTAX_ERROR``, as in Spark."""
+        import re
+
         if not isinstance(functionName, str):
             raise not_expected_type("functionName", "str", functionName)
         if dbName is not None:
             self._check_database(dbName)
-        if functionName in self._function_names():
-            return True
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*(\.[A-Za-z_][A-Za-z0-9_$]*)*", functionName):
+            raise ParseException(
+                f"[PARSE_SYNTAX_ERROR] Syntax error at or near '{functionName}'. SQLSTATE: 42601",
+                errorClass="PARSE_SYNTAX_ERROR",
+                messageParameters={"error": f"'{functionName}'", "hint": ""},
+                sqlState="42601",
+            )
+        quoted = ".".join(f"`{part}`" for part in functionName.split("."))
         try:
-            self._session.sql(f"SELECT {functionName}(NULL)").schema  # noqa: B018  # analysis raises
+            self._session.sql(f"SELECT {quoted}(NULL)").schema  # noqa: B018  # analysis raises
         except AnalysisException as e:
             return e.getCondition() != "UNRESOLVED_ROUTINE"
         return True
@@ -807,10 +833,8 @@ class Catalog:
     def getFunction(self, functionName: str) -> Function:
         """The function ``functionName``; ``UNRESOLVED_ROUTINE`` when there is none (the engine
         reports no description or class name)."""
-        if not isinstance(functionName, str):
-            raise not_expected_type("functionName", "str", functionName)
         if not self.functionExists(functionName):
-            self._session.sql(f"SELECT {functionName}(NULL)").schema  # noqa: B018  # raises UNRESOLVED_ROUTINE
+            self._session.sql(f"SELECT `{functionName}`(NULL)").schema  # noqa: B018  # raises UNRESOLVED_ROUTINE
         return Function(functionName, None, None, None, "", True)
 
     def createTable(
@@ -822,8 +846,9 @@ class Catalog:
         description: str | None = None,
         **options: str,
     ) -> DataFrame:
-        """Creates a table over the files at ``path`` (an external table) as a temporary view
-        and returns it. ``schema`` and ``description`` are not supported yet."""
+        """Creates a table over the files at ``path`` as a *temporary view* (the catalog has no persistent
+        tables: ``listTables`` shows ``isTemporary=True``), failing if the name exists, and returns it.
+        ``schema`` and ``description`` are not supported yet."""
         if not isinstance(tableName, str):
             raise not_expected_type("tableName", "str", tableName)
         if schema is not None:
@@ -832,7 +857,7 @@ class Catalog:
             raise not_implemented("Catalog.createTable without a path (managed tables)")
         reader = self._session.read.format(source or "parquet").options(**options)
         df = reader.load(path)
-        df.createOrReplaceTempView(tableName)
+        df.createTempView(tableName)
         return df
 
     def createExternalTable(

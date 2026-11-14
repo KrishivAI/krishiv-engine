@@ -46,11 +46,9 @@ def _numeric(names: list[str], dtypes: list[tuple[str, str]], strict: bool) -> l
 
 
 class GroupedData:
-    def __init__(self, native: _native.GroupedData, df: DataFrame, keys: list[Any] | None = None) -> None:
+    def __init__(self, native: _native.GroupedData, df: DataFrame) -> None:
         self._grouped = native
         self._source = df
-        #: The grouping columns as given (names or Columns), for the grouped-map functions.
-        self._keys = list(keys or [])
 
     def agg(self, *exprs: Column | dict[str, str]) -> DataFrame:
         """Computes aggregates and returns the result as a :class:`DataFrame`.
@@ -216,54 +214,17 @@ class GroupedData:
         raise unsupported_feature("GroupedData.pivot")
 
     def applyInPandas(self, func: Any, schema: Any) -> DataFrame:
-        """Maps each group of the :class:`DataFrame` with a function over ``pandas.DataFrame`` and
-        returns the result, as ``pyspark.sql.GroupedData.applyInPandas``: ``func(pdf)`` or
-        ``func(key, pdf)``, returning a ``pandas.DataFrame`` of ``schema``.
-
-        .. note:: The function runs in the driver process when this method is called (see
-            :mod:`krishiv.sql._map_in_batches`), and groups are keyed by column names.
-        """
-        from krishiv.sql import _map_in_batches
-
-        return _map_in_batches.apply_in_pandas(self._source, self._keys, func, schema)
+        """Not available: it needs the Python UDF worker pool, which is planned (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("GroupedData.applyInPandas (needs the Python UDF worker pool, planned)")
 
     def applyInArrow(self, func: Any, schema: Any) -> DataFrame:
-        """As :meth:`applyInPandas`, over ``pyarrow.Table``: ``func(table)`` or ``func(key, table)``."""
-        from krishiv.sql import _map_in_batches
+        """Not available: it needs the Python UDF worker pool, which is planned (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("GroupedData.applyInArrow (needs the Python UDF worker pool, planned)")
 
-        return _map_in_batches.apply_in_arrow(self._source, self._keys, func, schema)
-
-    def cogroup(self, other: GroupedData) -> PandasCogroupedOps:
-        """Cogroups this group with another, as ``pyspark.sql.GroupedData.cogroup``."""
-        if not isinstance(other, GroupedData):
-            raise not_expected_type("other", "GroupedData", other)
-        return PandasCogroupedOps(self, other)
+    def cogroup(self, other: GroupedData) -> Any:
+        """Not available: it needs the Python UDF worker pool, which is planned (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("GroupedData.cogroup (needs the Python UDF worker pool, planned)")
 
     def apply(self, udf: Any) -> DataFrame:
-        """Not available: the deprecated grouped-map ``pandas_udf`` form; use :meth:`applyInPandas`."""
-        raise not_implemented("GroupedData.apply (use applyInPandas)")
-
-
-class PandasCogroupedOps:
-    """Two grouped DataFrames cogrouped by key, as ``pyspark.sql.PandasCogroupedOps``."""
-
-    def __init__(self, left: GroupedData, right: GroupedData) -> None:
-        self._left = left
-        self._right = right
-
-    def applyInPandas(self, func: Any, schema: Any) -> DataFrame:
-        """``func(left_pdf, right_pdf)`` or ``func(key, left_pdf, right_pdf)`` per key; see
-        :meth:`GroupedData.applyInPandas` for where it runs."""
-        from krishiv.sql import _map_in_batches
-
-        return _map_in_batches.cogroup_apply(
-            (self._left._source, self._left._keys), (self._right._source, self._right._keys), func, schema, False
-        )
-
-    def applyInArrow(self, func: Any, schema: Any) -> DataFrame:
-        """As :meth:`applyInPandas`, over ``pyarrow.Table``."""
-        from krishiv.sql import _map_in_batches
-
-        return _map_in_batches.cogroup_apply(
-            (self._left._source, self._left._keys), (self._right._source, self._right._keys), func, schema, True
-        )
+        """Not available: the deprecated grouped-map ``pandas_udf`` form (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("GroupedData.apply (needs the Python UDF worker pool, planned)")

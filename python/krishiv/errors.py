@@ -29,6 +29,7 @@ _TEMPLATES = {
         "information, see SPARK-5063."
     ),
     "CANNOT_SET_TOGETHER": "<arg_list> should not be set together.",
+    "JVM_ATTRIBUTE_NOT_SUPPORTED": "Attribute `<attr_name>` is not supported: Krishiv runs without a JVM.",
     "CANNOT_BE_EMPTY": "At least one <item> must be specified.",
     "CANNOT_CONVERT_TYPE": "Cannot convert <from_type> into <to_type>.",
     "TOO_MANY_VALUES": "Expected <expected> values for `<item>`, got <actual>.",
@@ -404,6 +405,11 @@ class PySparkNotImplementedError(PySparkException, NotImplementedError):
     pass
 
 
+class PySparkNotImplementedAttributeError(PySparkNotImplementedError, AttributeError):
+    """``NOT_IMPLEMENTED`` for an attribute: also an ``AttributeError``, so ``hasattr`` and
+    ``getattr(obj, name, default)`` work on names the engine lacks (as PySpark Connect's JVM attributes)."""
+
+
 class PySparkImportError(PySparkException, ImportError):
     pass
 
@@ -485,6 +491,11 @@ def not_expected_type(arg_name: str, expected: str, value: object) -> PySparkTyp
 
 def not_implemented(feature: str) -> PySparkNotImplementedError:
     return PySparkNotImplementedError(errorClass="NOT_IMPLEMENTED", messageParameters={"feature": feature})
+
+
+def not_implemented_attribute(feature: str) -> PySparkNotImplementedAttributeError:
+    """:func:`not_implemented` for a property: ``hasattr`` is ``False`` and the error still says ``NOT_IMPLEMENTED``."""
+    return PySparkNotImplementedAttributeError(errorClass="NOT_IMPLEMENTED", messageParameters={"feature": feature})
 
 
 def unsupported_feature(feature: str) -> UnsupportedOperationException:

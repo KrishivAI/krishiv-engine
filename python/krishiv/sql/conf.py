@@ -43,10 +43,11 @@ class RuntimeConfig:
         self._session.conf_unset(key)
 
     def isModifiable(self, key: str) -> bool:
-        """Whether the configuration ``key`` can be changed at run time (``spark.conf.set``)."""
+        """Whether the configuration ``key`` is a known setting that can be changed at run time
+        (``spark.conf.set``); static and unknown keys are ``False``, as in Spark."""
         if not isinstance(key, str):
             raise not_expected_type("key", "str", key)
-        return self._session.conf_is_modifiable(key)
+        return self._session.conf_is_registered(key) and self._session.conf_is_modifiable(key)
 
     @property
     def getAll(self) -> dict[str, str]:

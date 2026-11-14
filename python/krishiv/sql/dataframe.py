@@ -23,6 +23,7 @@ from krishiv.errors import (
     PySparkValueError,
     not_expected_type,
     not_implemented,
+    not_implemented_attribute,
     unsupported_feature,
 )
 from krishiv.sql import _convert
@@ -187,6 +188,8 @@ class DataFrame:
         raise not_expected_type("item", "int, str, Column, list or tuple", item)
 
     def __getattr__(self, name: str) -> Column:
+        if name == "writeStream":  # the property raised an AttributeError: Python lands here
+            raise not_implemented_attribute("DataFrame.writeStream (streaming)")
         if name.startswith("_") or name not in self.columns:
             raise PySparkAttributeError(f"'DataFrame' object has no attribute '{name}'")
         return Column(self._df.col(name))
@@ -395,8 +398,7 @@ class DataFrame:
         return self._df.is_cached()
 
     def groupBy(self, *cols: ColumnsOrNames) -> GroupedData:
-        keys = _flatten(cols)
-        return GroupedData(self._df.group_by([_named(c) for c in keys]), self, keys)
+        return GroupedData(self._df.group_by([_named(c) for c in _flatten(cols)]), self)
 
     groupby = groupBy
 
@@ -2042,7 +2044,7 @@ class DataFrame:
         raise not_implemented("DataFrame.createOrReplaceGlobalTempView (no global_temp database)")
 
     def registerTempTable(self, name: str) -> None:
-        """Deprecated alias of :meth:`createOrReplaceTempView` (removed from PySpark 4)."""
+        """Deprecated alias of :meth:`createOrReplaceTempView` (deprecated since Spark 2.0)."""
         self.createOrReplaceTempView(name)
 
     # More of the PySpark DataFrame API.
@@ -2057,13 +2059,11 @@ class DataFrame:
 
     def rollup(self, *cols: ColumnsOrNames) -> GroupedData:
         """Groups by ``cols`` and their prefixes (a key a row is rolled up over reads ``NULL``)."""
-        keys = _flatten(cols)
-        return GroupedData(self._df.rollup([_named(c) for c in keys]), self, keys)
+        return GroupedData(self._df.rollup([_named(c) for c in _flatten(cols)]), self)
 
     def cube(self, *cols: ColumnsOrNames) -> GroupedData:
         """Groups by every subset of ``cols`` (a key a row is rolled up over reads ``NULL``)."""
-        keys = _flatten(cols)
-        return GroupedData(self._df.cube([_named(c) for c in keys]), self, keys)
+        return GroupedData(self._df.cube([_named(c) for c in _flatten(cols)]), self)
 
     def groupingSets(self, groupingSets: Sequence[Sequence[ColumnOrName]], *cols: ColumnOrName) -> GroupedData:
         """Groups by each of ``groupingSets`` (a key a set does not group by reads ``NULL``); ``cols``
@@ -2071,8 +2071,7 @@ class DataFrame:
         if not isinstance(groupingSets, list | tuple) or not all(isinstance(g, list | tuple) for g in groupingSets):
             raise not_expected_type("groupingSets", "list of lists of Column or str", groupingSets)
         sets = [[_named(c) for c in g] for g in groupingSets]
-        keys = _flatten(cols)
-        return GroupedData(self._df.grouping_sets(sets, [_named(c) for c in keys]), self, keys)
+        return GroupedData(self._df.grouping_sets(sets, [_named(c) for c in _flatten(cols)]), self)
 
     def withColumns(self, colsMap: dict[str, Column | str]) -> DataFrame:
         """Adds or replaces columns by name (a replaced column keeps its place); every expression
@@ -2104,12 +2103,15 @@ class DataFrame:
 
     def colRegex(self, colName: str) -> Column:
         """The columns whose names match the regular expression ``colName`` (in backquotes,
-        optionally qualified), for ``select``: ``df.select(df.colRegex("`^a.*`"))``. Matching is
+        optionally qualified; the qualifier is ignored), for ``select``: ``df.select(df.colRegex("`^a.*`"))``. It is
+        only meaningful as a ``select`` argument (anywhere else it stands for its first match). Matching is
         case-insensitive unless ``spark.sql.caseSensitive`` is true."""
         if not isinstance(colName, str):
             raise not_expected_type("colName", "str", colName)
         match = re.fullmatch(r"(?:[^`]*\.)?`((?:[^`]|``)*)`", colName)
-        pattern = match.group(1).replace("``", "`") if match else colName
+        if match is None:
+            return self[colName]  # not a backquoted pattern: a plain column, as Spark
+        pattern = match.group(1).replace("``", "`")
         flags = 0 if _case_sensitive(self._session) else re.IGNORECASE
         names = [c for c in self.columns if re.fullmatch(pattern, c, flags)]
         return _RegexColumn(names, colName)
@@ -2158,51 +2160,40 @@ class DataFrame:
         return value - 2**32 if value >= 2**31 else value
 
     def to(self, schema: StructType) -> DataFrame:
-        """Reconciles each row with ``schema``: columns are matched by name, reordered, extra
-        columns dropped, the others cast to the field types; a field the DataFrame lacks is ``NULL``."""
+        """Reconciles each row with ``schema`` as Spark's ``Dataset.to``: columns are matched by name,
+        reordered (inside structs too) and cast where store assignment allows; see
+        :mod:`krishiv.sql._to_schema` for the errors. (Spark 4.x: the method is new in 3.4.)"""
+        from krishiv.sql._to_schema import to_schema
+
         if not isinstance(schema, StructType):
             raise not_expected_type("schema", "StructType", schema)
-        case_sensitive = _case_sensitive(self._session)
-        picked: list[Column] = []
-        for field in schema.fields:
-            have = next((c for c in self.columns if _same(c, field.name, case_sensitive)), None)
-            source = _quoted(have) if have is not None else Column(_literal(None))
-            picked.append(source.cast(field.dataType.simpleString()).alias(field.name))
-        return self.select(*picked)
+        return to_schema(self, schema, _case_sensitive(self._session))
 
     def foreach(self, f: Callable[[Row], None]) -> None:
-        """Applies ``f`` to every row (in this process, as there are no executors)."""
-        for row in self.collect():
+        """Applies ``f`` to every row (in this process, as there are no executors), streaming the result."""
+        for row in self.toLocalIterator():
             f(row)
 
     def foreachPartition(self, f: Callable[[Iterator[Row]], None]) -> None:
         """Applies ``f`` to an iterator over all the rows (the one partition of an embedded session)."""
-        f(iter(self.collect()))
+        f(self.toLocalIterator())
 
     def mapInPandas(
         self, func: Callable[..., Any], schema: StructType | str, barrier: bool = False, profile: Any = None
     ) -> DataFrame:
-        """Maps an iterator of ``pandas.DataFrame`` batches with ``func`` and returns the result.
-
-        .. note:: The function runs in this process when the method is called, over the whole result
-            (see :mod:`krishiv.sql._map_in_batches`); it is not planned into the query.
-        """
-        from krishiv.sql import _map_in_batches
-
-        return _map_in_batches.map_in_pandas(self, func, schema)
+        """Not available: it needs the Python UDF worker pool, which is planned (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("DataFrame.mapInPandas (needs the Python UDF worker pool, planned)")
 
     def mapInArrow(
         self, func: Callable[..., Any], schema: StructType | str, barrier: bool = False, profile: Any = None
     ) -> DataFrame:
-        """As :meth:`mapInPandas`, over ``pyarrow.RecordBatch`` batches."""
-        from krishiv.sql import _map_in_batches
-
-        return _map_in_batches.map_in_arrow(self, func, schema)
+        """Not available: it needs the Python UDF worker pool, which is planned (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("DataFrame.mapInArrow (needs the Python UDF worker pool, planned)")
 
     @property
     def writeStream(self) -> Any:
         """Not available: streaming writes are not part of 0.2 (``NOT_IMPLEMENTED``)."""
-        raise not_implemented("DataFrame.writeStream (streaming)")
+        raise not_implemented_attribute("DataFrame.writeStream (streaming)")
 
     def withWatermark(self, eventTime: str, delayThreshold: str) -> DataFrame:
         """Not available: streaming is not part of 0.2 (``NOT_IMPLEMENTED``)."""

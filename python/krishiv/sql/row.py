@@ -43,7 +43,8 @@ class Row(tuple[Any, ...]):
                 errorClass="TOO_MANY_VALUES",
                 messageParameters={"expected": str(len(self)), "item": "fields", "actual": str(len(args))},
             )
-        return _create_row(list(self), list(args))
+        # As PySpark: fewer values name only the first fields (`Row("a", "b")(1)` is `Row(a=1)`).
+        return _create_row(list(self)[: len(args)], list(args))
 
     def __contains__(self, item: object) -> bool:
         """Like PySpark: on a named row, ``in`` tests the field names."""

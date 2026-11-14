@@ -571,15 +571,6 @@ def test_to_json_is_a_dataframe_of_json_documents(spark: SparkSession) -> None:
     assert [r.value for r in out.collect()] == ['{"age":14,"h":1.5}', '{"age":23,"h":2.5}']
 
 
-@pytest.mark.xfail(strict=True, reason="engine: struct() over a string column of a table fails (Utf8 vs Utf8View)")
-def test_to_json_of_a_string_column(spark: SparkSession) -> None:
-    people = spark.createDataFrame([(14, "Tom"), (23, "Alice")], "age long, name string")
-    assert [r.value for r in people.sort("age").toJSON().collect()] == [
-        '{"age":14,"name":"Tom"}',
-        '{"age":23,"name":"Alice"}',
-    ]
-
-
 def test_drop_duplicates_on_every_column(spark: SparkSession) -> None:
     df = spark.createDataFrame([(1, "a"), (1, "a"), (2, "b")], ["k", "v"])
     assert df.dropDuplicates(["k", "v"]).sort("k").collect() == [Row(k=1, v="a"), Row(k=2, v="b")]

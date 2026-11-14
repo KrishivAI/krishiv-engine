@@ -160,6 +160,9 @@ pub(super) fn same_shape(a: &ArrowType, b: &ArrowType) -> bool {
                     .zip(y.iter())
                     .all(|(p, q)| p.name() == q.name() && same_shape(p.data_type(), q.data_type()))
         }
+        // The binding builds plain carriers inside a nested value (`struct(a)` of a string is
+        // `Struct<Utf8>`); the analyzer types a string there as a view.
+        (ArrowType::Utf8, ArrowType::Utf8View) | (ArrowType::Binary, ArrowType::BinaryView) => true,
         _ => a == b,
     }
 }
@@ -216,6 +219,7 @@ pub(super) fn relabeled(array: &ArrayRef, to: &ArrowType) -> Result<ArrayRef> {
                     .map_err(|e| internal(&e.to_string()))?,
             ))
         }
+        ArrowType::Utf8View | ArrowType::BinaryView if array.data_type() != to => to_view(array),
         _ => Ok(Arc::clone(array)),
     }
 }
@@ -285,6 +289,7 @@ pub(super) fn compile(
     let mut relabel = false;
     let view = match (function.return_type(), &out) {
         (a, b) if a == b => false,
+        (ArrowType::Utf8, ArrowType::Utf8View) | (ArrowType::Binary, ArrowType::BinaryView) => true,
         // The analyzer types a result nullable where the folded arguments
         // are not (a cast of a literal): the data is the same, so the
         // result takes the analyzer's field flags.
@@ -292,7 +297,6 @@ pub(super) fn compile(
             relabel = true;
             false
         }
-        (ArrowType::Utf8, ArrowType::Utf8View) | (ArrowType::Binary, ArrowType::BinaryView) => true,
         (a, b) => {
             return Err(internal(&format!(
                 "{name} returns {a} where the analyzer typed {b}"

@@ -47,6 +47,9 @@ def test_row_class_is_callable() -> None:
     assert r(1, 2) == Row(x=1, y=2)
     assert repr(r(1, 2)) == "Row(x=1, y=2)"
     assert r(1) == Row(x=1)
+    assert repr(r(1)) == "Row(x=1)"
+    assert r(1).asDict() == {"x": 1}
+    assert r() == Row()
     with pytest.raises(errors.PySparkValueError, match=r"TOO_MANY_VALUES\] Expected 2 values for `fields`, got 3"):
         r(1, 2, 3)
 
@@ -109,6 +112,25 @@ def test_tree_string_of_nested_types() -> None:
         " |    |-- a: integer (nullable = true)\n"
         " |    |-- b: string (nullable = true)\n"
     )
+
+
+def test_print_schema_level_zero_or_negative_is_unlimited(df) -> None:
+    nested = df.select(F.struct("a", "b").alias("s"))
+    full = nested.schema.treeString()
+    assert nested.schema.treeString(0) == full
+    assert nested.schema.treeString(-1) == full
+    assert "|    |-- a:" in full
+
+
+def test_foreach_streams_rows(df) -> None:
+    seen: list[int] = []
+    df.sort("a").foreach(lambda r: seen.append(r.a))
+    assert seen == [1, 2]
+
+
+def test_col_regex_of_a_plain_name_is_that_column(df) -> None:
+    assert df.select(df.colRegex("a")).columns == ["a"]
+    assert df.select(df.colRegex("t.`^[ab]$`")).columns == ["a", "b"]
 
 
 def test_print_schema_level(df, capsys: pytest.CaptureFixture[str]) -> None:
@@ -179,17 +201,69 @@ def test_global_temp_views_are_not_implemented(df) -> None:
         df.createOrReplaceGlobalTempView("g")
 
 
-def test_to_schema(spark: SparkSession, df) -> None:
-    out = df.to(T.StructType([T.StructField("B", T.StringType()), T.StructField("a", T.StringType())]))
+def _struct(*fields: T.StructField) -> T.StructType:
+    return T.StructType(list(fields))
+
+
+def test_to_reorders_casts_and_fills(spark: SparkSession, df) -> None:
+    out = df.to(_struct(T.StructField("B", T.StringType()), T.StructField("a", T.StringType())))
     assert out.columns == ["B", "a"]
     assert out.sort("a").collect()[0] == Row(B="a", a="1")
-    # PySpark 4.2: a field the DataFrame lacks reads NULL.
-    assert df.to(T.StructType([T.StructField("zz", T.IntegerType())])).sort("zz").collect() == [
-        Row(zz=None),
-        Row(zz=None),
-    ]
+    # PySpark 4.2: a nullable field the DataFrame lacks reads NULL, extra columns are dropped.
+    assert df.to(_struct(T.StructField("zz", T.IntegerType()))).sort("zz").collect() == [Row(zz=None), Row(zz=None)]
     with pytest.raises(errors.PySparkTypeError):
         df.to("a int")
+
+
+def test_to_missing_non_nullable_field_is_unresolved(df) -> None:
+    with pytest.raises(errors.AnalysisException, match=r"UNRESOLVED_COLUMN.WITH_SUGGESTION.*`zz`.*\[`a`, `b`, `c`\]"):
+        df.to(_struct(T.StructField("zz", T.IntegerType(), False)))
+
+
+def test_to_nullable_into_non_nullable_is_refused(df) -> None:
+    with pytest.raises(errors.AnalysisException, match=r"NULLABLE_COLUMN_OR_FIELD.*`a`"):
+        df.to(_struct(T.StructField("a", T.LongType(), False)))
+
+
+def test_to_string_to_int_is_refused_at_analysis(df) -> None:
+    with pytest.raises(errors.AnalysisException, match=r'INVALID_COLUMN_OR_FIELD_DATA_TYPE.*"STRING".*"INT"'):
+        df.to(_struct(T.StructField("b", T.IntegerType())))
+
+
+def test_to_reorders_nested_structs_by_name(spark: SparkSession) -> None:
+    nested = spark.sql("select named_struct('p', 1, 'q', 's') s")
+    out = nested.to(
+        _struct(T.StructField("s", _struct(T.StructField("q", T.StringType()), T.StructField("p", T.LongType()))))
+    )
+    assert out.collect() == [Row(s=Row(q="s", p=1))]
+    with pytest.raises(errors.AnalysisException, match=r"INVALID_COLUMN_OR_FIELD_DATA_TYPE.*`s`.`q`"):
+        nested.to(_struct(T.StructField("s", _struct(T.StructField("q", T.IntegerType())))))
+    with pytest.raises(errors.AnalysisException, match=r"UNRESOLVED_FIELD.WITH_SUGGESTION.*`z`.*`s`"):
+        nested.to(_struct(T.StructField("s", _struct(T.StructField("z", T.IntegerType(), False)))))
+    null_struct = spark.sql("select cast(null as struct<p:int>) s")
+    assert null_struct.to(_struct(T.StructField("s", _struct(T.StructField("p", T.IntegerType()))))).collect() == [
+        Row(s=None)
+    ]
+
+
+def test_to_matches_the_spark_4_2_0_cast_matrix(spark: SparkSession) -> None:
+    """256 (from, to) pairs of atomic types, each run on PySpark 4.2.0 (``fixtures/to_schema_matrix_*.json``)."""
+    import json
+    from pathlib import Path
+
+    matrix = json.loads((Path(__file__).parent / "fixtures" / "to_schema_matrix_spark_4_2_0.json").read_text())
+    wrong = []
+    for pair, allowed in matrix.items():
+        have, want = pair.split("->")
+        frame = spark.sql(f"select cast(null as {have}) x")
+        try:
+            _ = frame.to(_struct(T.StructField("x", T.DataType.fromDDL(want)))).schema
+            got = True
+        except errors.AnalysisException:
+            got = False
+        if got != allowed:
+            wrong.append((pair, allowed, got))
+    assert wrong == []
 
 
 def test_foreach_and_foreach_partition(df) -> None:
@@ -204,6 +278,13 @@ def test_foreach_and_foreach_partition(df) -> None:
 def test_to_json_omits_null_fields(spark: SparkSession) -> None:
     out = spark.sql("select 1 as a, cast(null as int) as g, 'x' as s").toJSON()
     assert [r.value for r in out.collect()] == ['{"a":1,"s":"x"}']
+
+
+def test_to_json_of_string_columns_from_data(spark: SparkSession) -> None:
+    """``struct()`` over a string column of a table typed Utf8 inside a Utf8View struct (engine bug, fixed)."""
+    data = spark.createDataFrame([(1, "x", 2.0), (2, None, 3.0)], "a int, b string, c double")
+    assert [r.value for r in data.sort("a").toJSON().collect()] == ['{"a":1,"b":"x","c":2.0}', '{"a":2,"c":3.0}']
+    assert data.select(F.struct("a", "b")).sort("a").collect()[0][0] == Row(a=1, b="x")
 
 
 def test_same_semantics(df) -> None:
@@ -228,78 +309,23 @@ def test_names_the_engine_cannot_run_are_not_implemented(df, call) -> None:
         call(df)
 
 
-# mapInPandas, applyInPandas, cogroup ---------------------------------------------------------------
+# mapInPandas, applyInPandas, cogroup: need the Python UDF worker pool (planned) ----------------------------------
 
 
-pd = pytest.importorskip("pandas")
-
-
-def test_map_in_pandas(df) -> None:
-    def double(batches):
-        for pdf in batches:
-            pdf["a"] = pdf["a"] * 2
-            yield pdf[["a", "b"]]
-
-    out = df.mapInPandas(double, "a long, b string")
-    assert out.sort("a").collect() == [Row(a=2, b="a"), Row(a=4, b="b")]
-
-
-def test_map_in_arrow(df) -> None:
-    def keep_big(batches):
-        for b in batches:
-            yield pa.RecordBatch.from_pandas(b.to_pandas().query("a > 1")[["a"]])
-
-    assert df.mapInArrow(keep_big, "a long").collect() == [Row(a=2)]
-
-
-def test_apply_in_pandas_with_and_without_key(spark: SparkSession) -> None:
-    data = spark.createDataFrame([(1, 1.0), (1, 2.0), (2, 3.0), (2, 5.0), (2, 10.0)], "id long, v double")
-
-    def demean(pdf):
-        return pdf.assign(v=pdf.v - pdf.v.mean())
-
-    out = data.groupBy("id").applyInPandas(demean, "id long, v double").sort("id", "v").collect()
-    assert out == [
-        Row(id=1, v=-0.5),
-        Row(id=1, v=0.5),
-        Row(id=2, v=-3.0),
-        Row(id=2, v=-1.0),
-        Row(id=2, v=4.0),
-    ]
-
-    def total(key, pdf):
-        return pd.DataFrame([{"id": key[0], "total": float(pdf.v.sum())}])
-
-    out = data.groupBy("id").applyInPandas(total, "id long, total double").sort("id").collect()
-    assert out == [Row(id=1, total=3.0), Row(id=2, total=18.0)]
-
-
-def test_apply_in_arrow(spark: SparkSession) -> None:
-    data = spark.createDataFrame([(1, 1.0), (1, 2.0), (2, 3.0)], "id long, v double")
-
-    def count(key, table):
-        return pa.table({"id": [key[0]], "n": [table.num_rows]})
-
-    out = data.groupBy("id").applyInArrow(count, "id long, n long").sort("id").collect()
-    assert out == [Row(id=1, n=2), Row(id=2, n=1)]
-
-
-def test_cogroup_apply_in_pandas(spark: SparkSession) -> None:
-    left = spark.createDataFrame([(1, 10), (2, 20)], "id long, x long")
-    right = spark.createDataFrame([(1, 100), (1, 200), (3, 300)], "id long, y long")
-
-    def merge(key, lpdf, rpdf):
-        return pd.DataFrame([{"id": key[0], "nx": len(lpdf), "ny": len(rpdf)}])
-
-    out = left.groupBy("id").cogroup(right.groupBy("id")).applyInPandas(merge, "id long, nx long, ny long")
-    assert out.sort("id").collect() == [Row(id=1, nx=1, ny=2), Row(id=2, nx=1, ny=0), Row(id=3, nx=0, ny=1)]
-
-
-def test_grouped_map_over_an_expression_key_is_not_implemented(df) -> None:
-    with pytest.raises(errors.PySparkNotImplementedError, match="NOT_IMPLEMENTED"):
-        df.groupBy(F.col("a") + 1).applyInPandas(lambda p: p, "a long")
-    with pytest.raises(errors.PySparkNotImplementedError, match="NOT_IMPLEMENTED"):
-        df.groupBy("a").apply(None)
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda df: df.mapInPandas(lambda it: it, "a long"),
+        lambda df: df.mapInArrow(lambda it: it, "a long"),
+        lambda df: df.groupBy("a").applyInPandas(lambda p: p, "a long"),
+        lambda df: df.groupBy("a").applyInArrow(lambda t: t, "a long"),
+        lambda df: df.groupBy("a").cogroup(df.groupBy("a")),
+        lambda df: df.groupBy("a").apply(None),
+    ],
+)
+def test_map_functions_are_refused_until_the_udf_worker_pool_runs_them(df, call) -> None:
+    with pytest.raises(errors.PySparkNotImplementedError, match=r"NOT_IMPLEMENTED.*worker pool"):
+        call(df)
 
 
 # reader and writer (PY-018, PY-033) ----------------------------------------------------------------
@@ -346,11 +372,24 @@ def test_active_session() -> None:
 
 @pytest.mark.parametrize(
     "name",
-    ["sparkContext", "readStream", "streams", "tvf", "udtf", "dataSource", "profile"],
+    ["readStream", "streams", "tvf", "udtf", "dataSource", "profile"],
 )
 def test_session_properties_the_engine_lacks_are_not_implemented(spark: SparkSession, name: str) -> None:
     with pytest.raises(errors.PySparkNotImplementedError, match="NOT_IMPLEMENTED"):
         getattr(spark, name)
+    # ... and an AttributeError, so probing code still works.
+    assert hasattr(spark, name) is False
+    assert getattr(spark, name, "fallback") == "fallback"
+
+
+def test_spark_context_is_a_jvm_attribute_error_as_in_connect(spark: SparkSession) -> None:
+    with pytest.raises(errors.PySparkAttributeError, match="JVM_ATTRIBUTE_NOT_SUPPORTED"):
+        _ = spark.sparkContext
+    assert hasattr(spark, "sparkContext") is False
+
+
+def test_write_stream_is_an_attribute_error_too(df) -> None:
+    assert hasattr(df, "writeStream") is False
 
 
 @pytest.mark.parametrize(
@@ -403,6 +442,46 @@ def test_catalog_returns_pyspark_lists(spark: SparkSession, df) -> None:
     assert cols[0].isPartition is False
 
 
+def test_catalog_function_exists_is_the_sql_function_namespace(spark: SparkSession) -> None:
+    cat = spark.catalog
+    for dataframe_only in ("col", "lit", "udf", "column"):
+        assert cat.functionExists(dataframe_only) is False
+        assert dataframe_only not in [f.name for f in cat.listFunctions()]
+    assert cat.functionExists("ABS") is True
+    assert cat.functionExists("abs", "default") is True
+    for bad in ("a b", "abs(1) + abs", "x;y"):
+        with pytest.raises(errors.ParseException, match="PARSE_SYNTAX_ERROR"):
+            cat.functionExists(bad)
+
+
+def test_catalog_name_patterns_are_spark_regexes(spark: SparkSession, df) -> None:
+    df.createOrReplaceTempView("t_one")
+    df.createOrReplaceTempView("t_two")
+    names = lambda pattern: sorted(t.name for t in spark.catalog.listTables(pattern=pattern))  # noqa: E731
+    assert names("t_*") == ["t_one", "t_two"]
+    assert names("T_ONE|nope") == ["t_one"]
+    assert names("t_[a-z]ne") == ["t_one"]
+    assert names("t.one") == ["t_one"]
+
+
+def test_catalog_get_table_error_has_parameters_and_hides_internal_tables(spark: SparkSession, df) -> None:
+    with pytest.raises(errors.AnalysisException) as info:
+        spark.catalog.getTable("nope")
+    assert info.value.getCondition() == "TABLE_OR_VIEW_NOT_FOUND"
+    assert info.value.getMessageParameters() == {"relationName": "`nope`"}
+    [hidden] = [n for n in spark._native.temp_table_names() if n.startswith("__krishiv_arrow_")][:1]
+    with pytest.raises(errors.AnalysisException, match="TABLE_OR_VIEW_NOT_FOUND"):
+        spark.catalog.getTable(hidden)
+
+
+def test_catalog_create_table_does_not_replace(spark: SparkSession, df, tmp_path) -> None:
+    path = str(tmp_path / "p")
+    df.write.parquet(path)
+    assert spark.catalog.createTable("created", path, "parquet").count() == 2
+    with pytest.raises(errors.AnalysisException, match="TEMP_TABLE_OR_VIEW_ALREADY_EXISTS"):
+        spark.catalog.createTable("created", path, "parquet")
+
+
 def test_catalog_functions(spark: SparkSession) -> None:
     cat = spark.catalog
     names = [f.name for f in cat.listFunctions()]
@@ -417,6 +496,8 @@ def test_catalog_functions(spark: SparkSession) -> None:
 
 def test_runtime_config_is_modifiable_and_get_all(spark: SparkSession) -> None:
     assert spark.conf.isModifiable("spark.sql.shuffle.partitions") is True
+    assert spark.conf.isModifiable("krishiv.memory.limit") is False
+    assert spark.conf.isModifiable("no.such.key") is False
     spark.conf.set("spark.sql.session.timeZone", "Europe/Paris")
     # The engine names the key `krishiv.sql.session.timeZone`.
     assert "Europe/Paris" in spark.conf.getAll.values()

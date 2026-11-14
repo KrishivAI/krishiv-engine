@@ -488,9 +488,10 @@ class StructType(DataType):
         return list(self.names)
 
     def treeString(self, level: int | None = None) -> str:
-        """The schema as the indented tree ``printSchema`` prints, to ``level`` levels (all by default)."""
+        """The schema as the indented tree ``printSchema`` prints, to ``level`` levels (all by default and for
+        ``level <= 0``, as Spark)."""
         lines = ["root"]
-        _tree_fields(self, " |", 1, level if level is not None else 2**31 - 1, lines)
+        _tree_fields(self, " |", 1, level if level is not None and level > 0 else 2**31 - 1, lines)
         return "\n".join(lines) + "\n"
 
     def simpleString(self) -> str:
