@@ -464,21 +464,30 @@ proptest::proptest! {
         sep in proptest::sample::select(vec![",", ";", "\t", "é", ",;"]),
         quote in proptest::sample::select(vec![Some('"'), Some('é'), None]),
         max_columns in 1usize..6,
-        trim in proptest::bool::ANY,
+        ltrim in proptest::bool::ANY,
+        rtrim in proptest::bool::ANY,
+        max_chars in proptest::option::of(0usize..3),
         eol in proptest::sample::select(vec![Eol::EndOfText, Eol::Default]),
+        pos in 0usize..24,
     ) {
         let t = Tokenizer::new(Syntax {
             sep: sep.to_owned(),
             quote,
             max_columns,
-            ltrim: trim,
+            ltrim,
+            rtrim,
+            max_chars,
             eol,
             ..Syntax::default()
         });
+        let pos = (0..=pos.min(text.len()))
+            .rev()
+            .find(|&p| text.is_char_boundary(p))
+            .unwrap_or(0);
         let mut fast = Vec::new();
-        if let Some(got) = t.plain_record(&text, 0, &mut fast) {
+        if let Some(got) = t.plain_record(&text, pos, &mut fast) {
             let mut walk = Vec::new();
-            let want = t.record_walk(&text, 0, &mut walk);
+            let want = t.record_walk(&text, pos, &mut walk);
             proptest::prop_assert_eq!(got, want);
             proptest::prop_assert_eq!(fast, walk);
         }
