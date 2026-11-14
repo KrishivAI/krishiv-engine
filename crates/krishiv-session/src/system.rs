@@ -691,6 +691,8 @@ pub(crate) struct QueryRow {
     pub(crate) principal: String,
     /// The service principal that ran the query for `principal` (trusted impersonation, P3-T061).
     pub(crate) delegated_by: Option<String>,
+    /// [`crate::sessions::owner_key`] of the principal: what the own-rows filter compares.
+    pub(crate) owner: String,
     pub(crate) tags: Vec<(String, String)>,
     pub(crate) trace_id: Option<String>,
     /// `READ`, `WRITE`, `DDL`, `SESSION` or `ADMIN` (T137); `None` when the
@@ -884,6 +886,8 @@ pub(crate) struct QueryLog {
     principal: String,
     /// The service principal acting for `principal`, if any (fixed for life, as the principal).
     delegated_by: Option<String>,
+    /// [`crate::sessions::owner_key`] of the principal.
+    owner: String,
     /// The W3C trace the session's next queries belong to, and the caller's
     /// span they are children of.
     trace: Mutex<Option<RemoteParent>>,
@@ -910,6 +914,7 @@ impl QueryLog {
             session_id: history.mint(now_ms()),
             principal: principal.name.clone(),
             delegated_by: principal.delegated_by.clone(),
+            owner: crate::sessions::owner_key(principal),
             history,
             ..Self::default()
         }
@@ -1002,6 +1007,7 @@ impl QueryLog {
             session_id: self.session_id.clone(),
             principal: self.principal.clone(),
             delegated_by: self.delegated_by.clone(),
+            owner: self.owner.clone(),
             tags: self.tags(),
             trace_id: self.trace_id(),
             statement_class: class,
@@ -1276,14 +1282,13 @@ impl QueryLog {
     /// or of every principal when `all`, oldest query first.
     pub(crate) fn operators(&self, all: bool) -> Vec<OperatorRow> {
         self.history
-            .operators((!all).then_some(self.principal.as_str()))
+            .operators((!all).then_some(self.owner.as_str()))
     }
 
     /// The rows of this session's principal, or of every principal when
     /// `all`, oldest first.
     pub(crate) fn snapshot(&self, all: bool) -> Vec<QueryRow> {
-        self.history
-            .snapshot((!all).then_some(self.principal.as_str()))
+        self.history.snapshot((!all).then_some(self.owner.as_str()))
     }
 }
 
@@ -1446,6 +1451,7 @@ impl QueryRow {
             + self.session_id.len()
             + self.principal.len()
             + self.delegated_by.as_ref().map_or(0, String::len)
+            + self.owner.len()
             + self
                 .tags
                 .iter()

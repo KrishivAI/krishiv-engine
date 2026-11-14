@@ -184,10 +184,17 @@ impl Activity {
     }
 }
 
-/// Who owns a session, for the per-principal filter: kind, tenant and name (never the groups,
-/// which may differ between two sessions of one principal), so equal names in two tenants differ.
+/// Who owns a session or a query, for the per-principal filters of `system.sessions` and
+/// `system.queries`: kind, tenant, name and the service acting for it (never the groups, which
+/// may differ between two sessions of one principal). Equal names in two tenants differ, and so
+/// does an end user a service acts for from a principal of the same name that logged in itself
+/// (with `impersonates = *` a service could otherwise name the `spark` admin principal and read
+/// its rows; P3-T061 security review).
 pub(crate) fn owner_key(p: &krishiv_plan::analyzer::Principal) -> String {
-    format!("{:?}|{:?}|{}", p.kind, p.tenant, p.name)
+    format!(
+        "{:?}|{:?}|{}|{:?}",
+        p.kind, p.tenant, p.name, p.delegated_by
+    )
 }
 
 /// One row of `system.sessions`.

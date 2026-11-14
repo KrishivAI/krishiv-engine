@@ -433,29 +433,30 @@ impl QueryHistory {
         });
     }
 
-    /// The rows `principal` may see, oldest first: its own, or every row
-    /// when `principal` is `None`.
-    pub(crate) fn snapshot(&self, principal: Option<&str>) -> Vec<QueryRow> {
+    /// The rows of the principal with ownership key `owner`
+    /// ([`crate::sessions::owner_key`]), oldest first, or every row when `None`.
+    pub(crate) fn snapshot(&self, owner: Option<&str>) -> Vec<QueryRow> {
         self.rows
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .rows
             .iter()
-            .filter(|r| principal.is_none_or(|p| r.principal == p))
+            .filter(|r| owner.is_none_or(|o| r.owner == o))
             .cloned()
             .collect()
     }
 
-    /// The operators of the remembered queries `principal` may see, oldest
-    /// query first (copied after the lock is released).
-    pub(crate) fn operators(&self, principal: Option<&str>) -> Vec<OperatorRow> {
+    /// The operators of the remembered queries of the principal with
+    /// ownership key `owner`, or of every query when `None`, oldest query
+    /// first (copied after the lock is released).
+    pub(crate) fn operators(&self, owner: Option<&str>) -> Vec<OperatorRow> {
         let shared: Vec<Arc<[OperatorRow]>> = self
             .rows
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .rows
             .iter()
-            .filter(|r| principal.is_none_or(|p| r.principal == p))
+            .filter(|r| owner.is_none_or(|o| r.owner == o))
             .map(|r| Arc::clone(&r.operators))
             .collect();
         shared.iter().flat_map(|o| o.iter().cloned()).collect()
