@@ -6,11 +6,14 @@
 //! `sys.path` and packages. The record gives the sandbox's read paths for that interpreter and the choice of
 //! interpreter per request. One without `pyspark` or `pyarrow` is logged and not used.
 
-use std::io::Read;
+use std::io::{self, Read};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use rustix::process::{Pid, Signal, WaitId, WaitIdOptions};
 use serde_json::Value;
 
 /// What the inspection prints: one JSON object.
@@ -34,6 +37,10 @@ print(json.dumps({
 
 /// How long the inspection of one interpreter may take: a hanging interpreter must not hold up server startup.
 const INSPECT_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// The most the inspection keeps of each of standard output and standard error: its record is a few
+/// kilobytes, so more is refused rather than buffered.
+const INSPECT_OUTPUT_CAP: usize = 1 << 20;
 
 /// The oldest Python a worker may run: the 4.3 client's floor (design §2, "Python floor").
 const MIN_VERSION: (u32, u32) = (3, 11);
@@ -72,6 +79,7 @@ impl Interpreter {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped()),
             INSPECT_TIMEOUT,
+            INSPECT_OUTPUT_CAP,
         )
         .map_err(|e| format!("{}: cannot run it: {e}", path.display()))?;
         if !out.status.success() {
@@ -178,38 +186,136 @@ pub fn choose<'a>(
         .or_else(|| interpreters.first().map(|i| (0, i)))
 }
 
-/// Runs `command` (stdout and stderr piped) and collects its output, killing it after `timeout`. The
-/// inspection prints a few kilobytes, well inside a pipe's buffer, so reading after the exit cannot block it.
-fn run_with_timeout(command: &mut Command, timeout: Duration) -> std::io::Result<Output> {
-    let mut child = command.spawn()?;
-    let started = Instant::now();
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
-        }
-        if started.elapsed() > timeout {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                format!("no answer within {} s", timeout.as_secs()),
-            ));
-        }
-        std::thread::sleep(Duration::from_millis(10));
+/// Runs `command` in a process group of its own and collects its standard output and error (those piped),
+/// read while it runs, at most `cap` bytes each. `timeout` covers the run and the reads. On the timeout, or on
+/// output over the cap, the process group is killed and the run fails. When the process exits, the rest of
+/// its group is killed too: a grandchild that kept a pipe open (a `.pth` hook starting a daemon) must not hold
+/// up the reads (review 2026-11-13 n9). A grandchild that left the group and holds a pipe only delays the
+/// failure to the timeout; its reader thread ends when the pipe closes.
+fn run_with_timeout(command: &mut Command, timeout: Duration, cap: usize) -> io::Result<Output> {
+    let deadline = Instant::now() + timeout;
+    let mut child = command.process_group(0).spawn()?;
+    let pid = Pid::from_child(&child);
+    // The process is not reaped until `child.wait`, so until then its group id names no other group.
+    let kill_group = || {
+        let _ = rustix::process::kill_process_group(pid, Signal::KILL);
     };
+    let fail = |child: &mut std::process::Child, error: io::Error| {
+        kill_group();
+        let _ = child.kill();
+        let _ = child.wait();
+        Err(error)
+    };
+    let (sender, outputs) = mpsc::channel::<(bool, io::Result<Vec<u8>>)>();
+    let pipes: [(bool, Option<Box<dyn Read + Send>>); 2] = [
+        (
+            true,
+            child
+                .stdout
+                .take()
+                .map(|p| Box::new(p) as Box<dyn Read + Send>),
+        ),
+        (
+            false,
+            child
+                .stderr
+                .take()
+                .map(|p| Box::new(p) as Box<dyn Read + Send>),
+        ),
+    ];
+    let mut readers = 0_usize;
+    for (is_stdout, pipe) in pipes {
+        let Some(pipe) = pipe else { continue };
+        if let Err(e) = read_capped(pipe, cap, is_stdout, sender.clone()) {
+            return fail(&mut child, e);
+        }
+        readers += 1;
+    }
+    drop(sender);
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
-    if let Some(mut pipe) = child.stdout.take() {
-        pipe.read_to_end(&mut stdout)?;
+    let mut status = None;
+    loop {
+        let wait = deadline
+            .saturating_duration_since(Instant::now())
+            .min(Duration::from_millis(10));
+        match outputs.recv_timeout(wait) {
+            Ok((is_stdout, read)) => {
+                readers = readers.saturating_sub(1);
+                let bytes = match read {
+                    Ok(bytes) if bytes.len() > cap => {
+                        let which = if is_stdout { "output" } else { "error output" };
+                        return fail(
+                            &mut child,
+                            io::Error::other(format!("more than {cap} bytes of {which}")),
+                        );
+                    }
+                    Ok(bytes) => bytes,
+                    Err(e) => return fail(&mut child, e),
+                };
+                if is_stdout {
+                    stdout = bytes;
+                } else {
+                    stderr = bytes;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            // Every reader is done: only the exit is awaited.
+            Err(mpsc::RecvTimeoutError::Disconnected) => std::thread::sleep(wait),
+        }
+        if status.is_none() && exited(pid) {
+            // Its own exit: whatever it left running in its group goes too, then it is reaped.
+            kill_group();
+            status = Some(child.wait()?);
+        }
+        if let (Some(status), 0) = (status, readers) {
+            return Ok(Output {
+                status,
+                stdout,
+                stderr,
+            });
+        }
+        if Instant::now() >= deadline {
+            let error = io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("no answer within {} s", timeout.as_secs()),
+            );
+            if status.is_some() {
+                // Reaped: its group id may name another group now, so only the readers are left behind.
+                return Err(error);
+            }
+            return fail(&mut child, error);
+        }
     }
-    if let Some(mut pipe) = child.stderr.take() {
-        pipe.read_to_end(&mut stderr)?;
-    }
-    Ok(Output {
-        status,
-        stdout,
-        stderr,
-    })
+}
+
+/// Whether the child `pid` has exited, without reaping it.
+fn exited(pid: Pid) -> bool {
+    matches!(
+        rustix::process::waitid(
+            WaitId::Pid(pid),
+            WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+        ),
+        Ok(Some(_))
+    )
+}
+
+/// Reads `pipe` to its end, or to `cap + 1` bytes, on a thread of its own, and sends what it read.
+fn read_capped(
+    pipe: Box<dyn Read + Send>,
+    cap: usize,
+    is_stdout: bool,
+    sender: mpsc::Sender<(bool, io::Result<Vec<u8>>)>,
+) -> io::Result<()> {
+    std::thread::Builder::new()
+        .name("krishiv-udf-inspect".to_owned())
+        .spawn(move || {
+            let mut bytes = Vec::new();
+            let limit = u64::try_from(cap).unwrap_or(u64::MAX).saturating_add(1);
+            let read = pipe.take(limit).read_to_end(&mut bytes).map(|_| bytes);
+            let _ = sender.send((is_stdout, read));
+        })
+        .map(drop)
 }
 
 /// `name` as an absolute path: itself when it has a directory part, else the first match on `PATH`.
@@ -292,22 +398,87 @@ mod tests {
         assert!(choose(&[], "3.12").is_none());
     }
 
+    fn sh(script: &str) -> Command {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", script])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command
+    }
+
     #[test]
     fn a_hanging_interpreter_times_out() {
-        let err = run_with_timeout(
-            Command::new("/bin/sh").args(["-c", "exec sleep 30"]),
-            Duration::from_millis(200),
-        )
-        .expect_err("timed out");
+        let err = run_with_timeout(&mut sh("exec sleep 30"), Duration::from_millis(200), 1024)
+            .expect_err("timed out");
         assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
         let out = run_with_timeout(
             Command::new("/bin/sh")
-                .args(["-c", "echo hi"])
+                .args(["-c", "echo hi; echo err >&2"])
                 .stdout(Stdio::piped()),
             Duration::from_secs(10),
+            1024,
         )
         .expect("runs");
         assert_eq!(out.stdout, b"hi\n");
+        assert!(out.stderr.is_empty(), "not piped, not read");
+        let out = run_with_timeout(
+            &mut sh("echo hi; echo err >&2; exit 3"),
+            Duration::from_secs(10),
+            1024,
+        )
+        .expect("runs");
+        assert_eq!(
+            (out.stdout.as_slice(), out.stderr.as_slice()),
+            (&b"hi\n"[..], &b"err\n"[..])
+        );
+        assert_eq!(out.status.code(), Some(3));
+    }
+
+    #[test]
+    fn output_over_the_cap_fails_at_once() {
+        // Review 2026-11-13 n9: more than a pipe's buffer used to block the interpreter until the timeout.
+        for script in ["exec yes", "exec yes >&2"] {
+            let started = Instant::now();
+            let err = run_with_timeout(&mut sh(script), Duration::from_secs(30), 64 * 1024)
+                .expect_err("too much");
+            assert_ne!(err.kind(), std::io::ErrorKind::TimedOut, "{script}");
+            assert!(
+                err.to_string().contains("more than 65536 bytes"),
+                "{script}: {err}"
+            );
+            assert!(started.elapsed() < Duration::from_secs(10), "{script}");
+        }
+    }
+
+    #[test]
+    fn a_grandchild_holding_the_pipe_does_not_hold_up_the_inspection() {
+        // In its group: killed when the interpreter exits.
+        let started = Instant::now();
+        let out = run_with_timeout(&mut sh("sleep 30 & echo hi"), Duration::from_secs(20), 1024)
+            .expect("runs");
+        assert_eq!(out.stdout, b"hi\n");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "{:?}",
+            started.elapsed()
+        );
+        // Out of its group: the timeout still covers the reads.
+        if Path::new("/usr/bin/setsid").is_file() {
+            let started = Instant::now();
+            let err = run_with_timeout(
+                &mut sh("/usr/bin/setsid sleep 5 & sleep 0.2; echo hi"),
+                Duration::from_secs(1),
+                1024,
+            )
+            .expect_err("the pipe stays open");
+            assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+            assert!(
+                started.elapsed() < Duration::from_secs(4),
+                "{:?}",
+                started.elapsed()
+            );
+        }
     }
 
     #[test]
