@@ -167,8 +167,32 @@ fn a_user_schema_reads_as_ddl_or_json() {
     };
     assert_eq!(from_json, ddl);
     assert_eq!(show(&with("a INT")), "Read csv [/a] schema struct<a:int>\n");
-    // Neither form: the parser's error.
+    // Neither form: the DDL parser's error (Spark's `parseTypeWithFallback`
+    // keeps the first parser's error).
     assert_eq!(code(&with("a INT,,")), ErrorClass::ParseSyntaxError);
+    assert_eq!(code(&with("integer")), ErrorClass::ParseSyntaxError);
+    // JSON of another type: Spark's `parseSchema` names the input as sent.
+    let array = r#"{"type":"array","elementType":"integer","containsNull":true}"#;
+    let e = fails(translate(&with(array)));
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::ConnectInvalidPlanInvalidSchemaNonStructType
+    );
+    assert_eq!(
+        e.message_parameters(),
+        [
+            ("inputSchema", format!("\"{array}\"")),
+            ("dataType", "\"ARRAY<INT>\"".to_owned()),
+        ]
+    );
+    // JSON that does not start with `{` falls back after DDL fails, as in Spark.
+    let e = fails(translate(&with("\"integer\"")));
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::ConnectInvalidPlanInvalidSchemaNonStructType
+    );
+    // Only blanks: no columns, an empty statement, never an empty schema.
+    assert_eq!(code(&with("   ")), ErrorClass::ParseEmptyStatement);
 }
 
 #[test]

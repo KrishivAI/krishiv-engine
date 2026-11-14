@@ -96,7 +96,7 @@ pub fn all() -> Vec<Coverage> {
 }
 
 oneof! { relation, RELATION_ROWS, relation::RelType, "Relation.rel_type";
-    Read => ("read", 2, Partial, "predicates (JDBC) and is_streaming", "Read(ReadSource::{Table,Files}); DataSource.schema (DDL or JSON) → ReadSource::Files::schema; predicates → JDBC partitions (refuse as Spark does for non-JDBC formats: PREDICATES_NOT_SUPPORTED_FOR_DATA_SOURCE)", "P3-T012", 1),
+    Read => ("read", 2, Partial, "predicates (JDBC) and is_streaming", "Read(ReadSource::{Table,Files}); DataSource.schema (DDL first, JSON fallback, as parseSchema; DDL read as STRUCT<...> fields, so syntax-error positions differ) → ReadSource::Files::schema; predicates → JDBC partitions (refuse as Spark does for non-JDBC formats: PREDICATES_NOT_SUPPORTED_FOR_DATA_SOURCE)", "P3-T012", 1),
     Project => ("project", 3, Done, "", "Project; missing input → OneRowRelation", "P3-T012", 1),
     Filter => ("filter", 4, Done, "", "Filter", "P2-T091a", 0),
     Join => ("join", 5, Partial, "join_data_type (joinWith, typed)", "Join; join_data_type is Scala joinWith only → unsupported row", "P3-T012", 1),

@@ -463,23 +463,35 @@ impl Translator<'_> {
     }
 }
 
-/// A read's user schema as the client sends it (`Read.DataSource.schema`):
-/// a `StructType`'s JSON form (PySpark sends `schema.json()`), or a DDL
-/// column list (`"a INT, b STRING NOT NULL"`), read as the fields of a
-/// `STRUCT<...>` type, which has the same column grammar.
+/// A read's user schema as the client sends it (`Read.DataSource.schema`), as Spark's
+/// `SparkConnectPlanner.parseSchema`: a DDL column list (`"a INT, b STRING NOT NULL"`)
+/// first, then, when that fails, a type's JSON form (PySpark sends `StructType.json()`);
+/// when both fail, the DDL error. The column list is read as the fields of a `STRUCT<...>`
+/// type (the same column grammar; krishiv-connect has no SQL parser), so a syntax error's
+/// position is counted from the wrapper.
 fn read_schema(text: &str) -> Result<krishiv_types::StructType> {
-    let parsed = if text.trim_start().starts_with('{') {
-        krishiv_types::DataType::from_json(text)?
+    let parsed = if text.trim().is_empty() {
+        // No columns: Spark's table-schema parser refuses the empty statement.
+        Err(krishiv_types::parse_data_type(text).err().map_or_else(
+            || unsupported_field("Read.DataSource", "schema", "an empty schema"),
+            Into::into,
+        ))
     } else {
-        krishiv_types::parse_data_type(&format!("struct<{text}>"))?
+        krishiv_types::parse_data_type(&format!("struct<{text}>"))
+    };
+    let parsed = match parsed {
+        Ok(t) => t,
+        Err(ddl) => krishiv_types::DataType::from_json(text).map_err(|_| ddl)?,
     };
     match parsed {
         krishiv_types::DataType::Struct(s) => Ok(s),
-        other => Err(krishiv_common::error::InvalidSchemaNonStructType {
-            input_schema: format!("\"{}\"", other.sql()),
-            data_type: format!("\"{}\"", other.sql()),
-        }
-        .into()),
+        other => Err(
+            krishiv_common::error::ConnectInvalidPlanInvalidSchemaNonStructType {
+                input_schema: format!("\"{text}\""),
+                data_type: format!("\"{}\"", other.sql()),
+            }
+            .into(),
+        ),
     }
 }
 
