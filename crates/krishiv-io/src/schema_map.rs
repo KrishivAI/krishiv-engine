@@ -436,7 +436,14 @@ impl Resolver {
                 Some(_) => by_meta(FIELD_ID_KEY, table_field),
                 None => children.iter().position(|f| f.name() == table_field.name()),
             },
-            FieldMapping::DeltaColumnMapping { by_id: true } => by_meta(DELTA_ID, table_field),
+            // A table field without an id is matched by name: the fixed `metadata`/`value`
+            // children of a Variant carry none.
+            FieldMapping::DeltaColumnMapping { by_id: true } => {
+                match table_field.metadata().get(DELTA_ID) {
+                    Some(_) => by_meta(DELTA_ID, table_field),
+                    None => children.iter().position(|f| f.name() == table_field.name()),
+                }
+            }
             FieldMapping::DeltaColumnMapping { by_id: false } => {
                 let name = table_field
                     .metadata()

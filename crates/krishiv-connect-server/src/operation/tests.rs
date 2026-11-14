@@ -63,8 +63,11 @@ fn register_refuses_a_live_id_and_the_cap() {
     let ops = Operations::default();
     let first = op(A, b"plan");
     ops.register(&first, 2).unwrap();
-    let e = ops.register(&op(A, b"plan"), 2).unwrap_err();
-    assert_eq!(e.error_class().name(), "INVALID_CURSOR.DISCONNECTED");
+    // The same plan under a live id attaches to it (Spark reattaches).
+    match ops.register(&op(A, b"plan"), 2).unwrap() {
+        Admitted::Existing(live) => assert!(Arc::ptr_eq(&live, &first)),
+        Admitted::New => panic!("registered twice"),
+    }
     let e = ops.register(&op(A, b"other"), 2).unwrap_err();
     assert_eq!(
         e.error_class().name(),
@@ -81,7 +84,7 @@ fn register_refuses_a_live_id_and_the_cap() {
 }
 
 #[test]
-fn lookup_remove_and_cancel_all() {
+fn lookup_remove_and_close_all() {
     let ops = Operations::default();
     let first = op(A, b"plan");
     ops.register(&first, 10).unwrap();
@@ -95,25 +98,95 @@ fn lookup_remove_and_cancel_all() {
     assert!(!ops.remove(&first));
     let second = op(B, b"plan");
     ops.register(&second, 10).unwrap();
-    assert_eq!(ops.cancel_all(), 1);
+    assert_eq!(ops.close_all().len(), 1);
     assert!(second.is_cancelled());
+    assert!(second.replay().is_closed());
     assert!(ops.is_empty());
 }
 
 #[test]
-fn sent_ids_and_cancellation() {
+fn cancellation_and_close() {
     let o = op(A, b"p");
     assert!(o.reattachable());
     assert!(o.tags().is_empty());
-    o.record_sent("r1");
-    assert!(o.has_sent("r1"));
-    assert!(!o.has_sent("r2"));
+    assert_eq!(o.sent_count(), 0);
+    assert_eq!(o.buffered_peak(), 0);
     assert!(!o.is_cancelled());
-    o.cancel();
-    o.cancel();
+    assert!(o.cancel(), "the first cancel interrupts");
+    assert!(!o.cancel(), "a second interrupts nothing");
     assert!(o.is_cancelled());
     // Resolves at once after a cancel, whether or not anyone waited.
     futures::executor::block_on(o.cancelled());
+    o.close();
+    o.close();
+    futures::executor::block_on(o.closed());
+    // A closed finished operation was not interrupted.
+    let f = op(B, b"q");
+    assert!(f.finish());
+    f.close();
+    assert!(!f.is_cancelled());
+    futures::executor::block_on(f.closed());
+}
+
+#[test]
+fn the_retry_buffer_is_for_reattachable_operations() {
+    let plain = Operation::new(
+        QueryId::parse(A).unwrap(),
+        plan_digest(b"p"),
+        Arc::from(Vec::new()),
+        false,
+    )
+    .with_retry_buffer(1 << 20);
+    assert!(!plain.reattachable());
+    let id = random_uuid().unwrap();
+    assert_eq!(id >> 76 & 0xf, 4, "version 4");
+    assert_eq!(
+        replay::uuid_bits(&replay::uuid_text(id)),
+        Some(id),
+        "canonical text"
+    );
+}
+
+#[test]
+fn a_finished_operation_is_not_interrupted() {
+    // Completion wins: the interrupt finds it finished.
+    let o = op(A, b"p");
+    assert!(o.finish(), "a running operation finishes");
+    assert!(o.finish(), "finishing twice is still finished");
+    assert!(!o.cancel());
+    assert!(!o.is_cancelled());
+    // Interrupt wins: the completion finds it cancelled.
+    let c = op(B, b"q");
+    assert!(c.cancel());
+    assert!(!c.finish(), "a cancelled operation does not finish");
+    assert!(c.is_cancelled());
+    assert!(!c.cancel());
+    let ops = Operations::default();
+    ops.register(&o, 2).unwrap();
+    ops.register(&op(B, b"q"), 2).unwrap();
+    let mut ids: Vec<String> = ops
+        .all()
+        .iter()
+        .map(|o| o.id().as_str().to_owned())
+        .collect();
+    ids.sort();
+    assert_eq!(ids, vec![A.to_owned(), B.to_owned()]);
+}
+
+/// Racing threads: exactly one of `cancel` and `finish` wins, and their
+/// answers agree with the final state.
+#[test]
+fn cancel_and_finish_race_to_one_winner() {
+    for _ in 0..2_000 {
+        let o = op(A, b"p");
+        let (c, f) = std::thread::scope(|s| {
+            let c = s.spawn(|| o.cancel());
+            let f = s.spawn(|| o.finish());
+            (c.join().unwrap(), f.join().unwrap())
+        });
+        assert!(c != f, "cancelled {c}, finished {f}");
+        assert_eq!(o.is_cancelled(), c);
+    }
 }
 
 #[tokio::test]
@@ -147,4 +220,34 @@ fn limits_from_config() {
     assert_eq!(l.ahead_bytes, 2 << 20);
     assert_eq!(l.max_plan_size, 512 << 20);
     assert_eq!(l.max_batch_size, 128 << 20);
+}
+
+#[tokio::test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "#[tokio::test] blocks on its own runtime"
+)]
+async fn close_stops_the_encoder_of_a_finished_operation() {
+    // Codex review (#738): `release_all` of a finished operation whose
+    // `ResultComplete` waits for room must still stop its encoder, though
+    // a cancel of a finished operation interrupts nothing. Here the encoder
+    // waits on `closed()` (Spark's `ExecuteHolder.close`).
+    let o = op(A, b"p");
+    assert!(o.finish());
+    let waiter = {
+        let o = Arc::clone(&o);
+        tokio::spawn(async move { o.closed().await })
+    };
+    tokio::task::yield_now().await;
+    assert!(!o.cancel(), "a finished operation is not interrupted");
+    o.close();
+    tokio::time::timeout(std::time::Duration::from_secs(5), waiter)
+        .await
+        .expect("close wakes the encoder")
+        .unwrap();
+    // Closed before anyone waits: resolves at once.
+    let late = op(B, b"q");
+    assert!(late.finish());
+    late.close();
+    late.closed().await;
 }

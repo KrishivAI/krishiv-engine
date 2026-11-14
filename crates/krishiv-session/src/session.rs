@@ -1342,10 +1342,15 @@ impl Session {
         env: &QueryEnv,
         text: Option<&RedactedSql>,
     ) -> Result<AnalyzedPlan, KrishivError> {
+        // A store setting this session redirected (endpoint, region, account) could send the
+        // server's credentials to another host:
+        // asked once per analysis, before any table or file is read (P3-T067b).
+        self.authorize_store_options(StatementClass::Read, &env.config, std::iter::empty())
+            .await?;
         // Temporary views over queries inline as subqueries, so the
         // analyzer sees one plan however the view was made.
         let next_source = || self.next_source_id();
-        let expansion = crate::catalog::expand_views(
+        let mut expansion = crate::catalog::expand_views(
             &self.state.catalog,
             plan,
             env.analysis.conf.case_sensitive,
@@ -1367,6 +1372,7 @@ impl Session {
                 }),
             }),
         )?;
+        let mut inlined = std::mem::take(&mut expansion.views);
         // A permanent view is inlined before binding, so the analyzer never asks the
         // policy about it: ask here, before any read and before the text of a stored view
         // can fail, so a principal who may not read it learns nothing from it.
@@ -1406,6 +1412,9 @@ impl Session {
         for (found, changed) in synced {
             crate::store::CatalogStore::replace_table(&*self.state.catalog.store, &found, changed);
         }
+        // The view side table: where each view the query and its functions' bodies inlined landed.
+        inlined.extend(env.sql_functions.body_views());
+        analyzed.views = krishiv_plan::analyzer::views::locate_views(analyzed.plan.root(), inlined);
         for view in views {
             let securable = krishiv_plan::analyzer::Securable::View(view);
             if !analyzed.securables.iter().any(|s| s.securable == securable) {

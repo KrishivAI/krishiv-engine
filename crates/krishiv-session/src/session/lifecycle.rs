@@ -344,6 +344,22 @@ impl Session {
         self.state.queries.session_id()
     }
 
+    /// The Spark release line the session behaves as
+    /// ([`SessionBuilder::profile`](crate::SessionBuilder::profile)); Spark
+    /// Connect's `AnalyzePlan.spark_version` answers from it.
+    ///
+    /// ```
+    /// use krishiv_plan::analyzer::SparkProfile;
+    /// let s = krishiv_session::Session::builder().profile(SparkProfile::V4_1).build()?;
+    /// assert_eq!(s.spark_profile(), SparkProfile::V4_1);
+    /// assert_eq!(s.new_session().spark_profile(), SparkProfile::V4_1);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    #[must_use]
+    pub fn spark_profile(&self) -> krishiv_plan::analyzer::SparkProfile {
+        self.state.profile
+    }
+
     /// Whether [`Self::close`] ran.
     #[must_use]
     pub fn is_closed(&self) -> bool {
