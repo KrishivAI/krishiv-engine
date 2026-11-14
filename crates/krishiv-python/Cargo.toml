@@ -28,11 +28,14 @@ doctest = false
 [features]
 # Default wheel: one abi3 wheel for CPython >= 3.11. The free-threaded (cp314t)
 # build cannot use abi3, so it builds with
-# `--no-default-features --features mimalloc`.
-default = ["abi3-py311", "mimalloc"]
+# `--no-default-features --features mimalloc,cloud`.
+default = ["abi3-py311", "mimalloc", "cloud"]
 abi3-py311 = ["pyo3/abi3-py311"]
 # mimalloc is the global allocator of the extension module (P2-T012).
 mimalloc = ["dep:mimalloc"]
+# Cloud object stores (s3://, gs://, az://) in every wheel: without it they fail with
+# KRISHIV_UNSUPPORTED_FEATURE. 0.2.0 shipped without it.
+cloud = ["krishiv-session/cloud"]
 
 [dependencies]
 arrow-array = { workspace = true, features = ["ffi"] }
