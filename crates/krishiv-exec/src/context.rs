@@ -240,7 +240,8 @@ pub struct QueryContext {
 /// drivers.
 struct Observed {
     finalizer: Arc<crate::aggregate::Finalizer>,
-    partials: Vec<arrow_array::RecordBatch>,
+    /// `(partition, states)` of each driver, in arrival order.
+    partials: Vec<(u32, arrow_array::RecordBatch)>,
 }
 
 impl fmt::Debug for QueryContext {
@@ -290,6 +291,7 @@ impl QueryContext {
     pub(crate) fn observe_partial(
         &self,
         finalizer: &Arc<crate::aggregate::Finalizer>,
+        partition: u32,
         states: arrow_array::RecordBatch,
     ) {
         lock(&self.observed)
@@ -299,7 +301,7 @@ impl QueryContext {
                 partials: Vec::new(),
             })
             .partials
-            .push(states);
+            .push((partition, states));
     }
 
     /// The observations (`Dataset.observe`) of the query so far: each name's

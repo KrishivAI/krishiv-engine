@@ -66,10 +66,6 @@ const KNOWN_GAPS: &[(&str, &str)] = &[
         "err_scalar_subquery",
         "Spark runs a scalar subquery in a metric; the engine refuses it with KRISHIV_UNSUPPORTED_FEATURE (P3-T084c)",
     ),
-    (
-        "ansi_on_overflow_sum",
-        "Spark's metric aggregate saturates a long sum at 9223372036854775807 under ANSI; the engine raises ARITHMETIC_OVERFLOW (P3-T084c)",
-    ),
 ];
 
 /// Cases whose `metrics` are compared as a subset of the fixture's columns (the case leaves out
@@ -974,4 +970,118 @@ fn outcome_of(name: &str, case: Case, want: &Value) -> Result<(), String> {
     } else {
         Err(format!("{name}: got {got}\n   want {want}"))
     }
+}
+
+// ---- ANSI overflow inside a metric (`ansi_sum`, P3-T084c) ----
+
+const MAXL: i64 = i64::MAX;
+
+/// One `ansi_sum` case: the rows, the metric and the ANSI setting, run with `count()`.
+fn ansi_run(ansi: bool, parts: u32, rows: &str, metric: &str) -> Value {
+    let s = session();
+    s.conf()
+        .set(
+            "spark.sql.ansi.enabled",
+            if ansi { "true" } else { "false" },
+        )
+        .unwrap();
+    let df = s
+        .range(0, if rows.contains("int") { 3 } else { 2 }, 1, Some(parts))
+        .select_expr([rows])
+        .unwrap();
+    run(df, vec![e(metric).alias("s")], count_action)
+}
+
+/// `got` against the fixture's first run: the action's outcome and what `get` holds. A long
+/// `sum` over two tasks that overflows when merged keeps the first task's rows only, so either
+/// row's value is Spark's answer (the winner is task-completion order there); the engine's is
+/// the first partition's.
+fn ansi_matches(got: &Value, run: &Value, either: &[i64]) -> Result<(), String> {
+    let action = &run["action"];
+    if let Some(err) = action.get("error") {
+        return if got["action_result"]["errorClass"] == err["errorClass"] {
+            Ok(())
+        } else {
+            Err(format!(
+                "action: got {got}, want error {}",
+                err["errorClass"]
+            ))
+        };
+    }
+    if got["action_result"] != *action {
+        return Err(format!(
+            "action: got {}, want {action}",
+            got["action_result"]
+        ));
+    }
+    if got["get"] != run["get"] {
+        return Err(format!("get: got {got}, want {run}"));
+    }
+    if run["get"] == "error" {
+        // Spark raises NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION for a decimal sum and
+        // ARITHMETIC_OVERFLOW for the engine's decimal kernels (both SQLSTATE 22003).
+        return if got["error"]["sqlState"] == run["sqlState"] {
+            Ok(())
+        } else {
+            Err(format!("get error: got {got}, want {run}"))
+        };
+    }
+    let key = "s".to_owned();
+    let (mine, theirs) = (&got["metrics"][&key], &run["metrics"][&key]);
+    let float = |v: &Value| v.as_str().and_then(|t| t.parse::<f64>().ok());
+    let same_float = float(mine).zip(float(theirs)).is_some_and(|(a, b)| a == b);
+    if either.iter().any(|v| *mine == json!(v)) || mine == theirs || same_float {
+        Ok(())
+    } else {
+        Err(format!("metric: got {mine}, want {theirs}"))
+    }
+}
+
+/// Cases the engine does not match yet (each must still fail).
+const ANSI_GAPS: &[(&str, &str)] = &[];
+
+#[test]
+fn ansi_overflow_in_metrics_matches_spark() {
+    let want = followup("classic", "ansi_sum");
+    let big = format!("id + {} as v", MAXL - 1);
+    let dec = "cast(99999999999999999999999999999999999999 as decimal(38,0)) as v";
+    let int = "cast(2147483647 as int) as v";
+    let cases: Vec<(&str, bool, u32, &str, &str)> = vec![
+        ("sum_bigint_overflow", true, 1, &big, "sum(v)"),
+        ("sum_bigint_overflow", true, 2, &big, "sum(v)"),
+        ("sum_bigint_overflow", false, 1, &big, "sum(v)"),
+        ("sum_bigint_overflow", false, 2, &big, "sum(v)"),
+        ("avg_bigint", true, 2, &big, "avg(v)"),
+        ("sum_decimal_overflow", true, 1, dec, "sum(v)"),
+        ("sum_decimal_overflow", true, 2, dec, "sum(v)"),
+        ("sum_decimal_overflow", false, 1, dec, "sum(v)"),
+        ("avg_decimal_overflow", true, 1, dec, "avg(v)"),
+        ("avg_decimal_overflow", true, 2, dec, "avg(v)"),
+        ("try_sum_bigint_overflow", true, 2, &big, "try_sum(v)"),
+        ("try_sum_bigint_overflow", false, 1, &big, "try_sum(v)"),
+        ("sum_int_no_overflow", true, 2, int, "sum(v)"),
+    ];
+    let mut failures = Vec::new();
+    let mut fixed = Vec::new();
+    for (name, ansi, parts, rows, metric) in cases {
+        let key = format!("{name}/ansi_{ansi}/P{parts}");
+        let first = &want[&key]["runs"][0];
+        let got = ansi_run(ansi, parts, rows, metric);
+        let mut first = first.clone();
+        // The metric is named `s` here; the fixture's average is `a`.
+        if first["metrics"].get("s").is_none()
+            && let Some(a) = first["metrics"].get("a").cloned()
+        {
+            first["metrics"]["s"] = a;
+        }
+        let ok = ansi_matches(&got, &first, &[MAXL - 1, MAXL]);
+        let gap = ANSI_GAPS.iter().any(|(g, _)| *g == key);
+        match (ok, gap) {
+            (Err(why), false) => failures.push(format!("{key}: {why}")),
+            (Ok(()), true) => fixed.push(key),
+            _ => {}
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert!(fixed.is_empty(), "remove from ANSI_GAPS: {fixed:?}");
 }

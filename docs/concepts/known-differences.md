@@ -268,8 +268,14 @@ counted are the first the racing drivers hand over (Spark's are partition 0's: a
 - **Limit not last, or a filter in between:** `observe(..).limit(n).count()`, a limit under a join, or a filter between the observed node and the limit: Spark's per-partition `LocalLimit` can pull up to `n` rows per partition, and a filter changes how many rows the node saw per row taken; the engine applies one global cap of `n` rows counted at the node. Not yet backed by a golden (P3-T084c).
 - **Sort and limit:** `df.observe(..).orderBy(..).limit(n)` reads every row in the engine (`n` = the input);
   Spark's `TakeOrderedAndProject` pulls a partition-dependent subset (20 of 1000 in the golden).
-- **ANSI `sum` overflow:** Spark's metric aggregate returns the saturated `9223372036854775807` for a long
-  `sum` that overflows under ANSI; the engine raises `ARITHMETIC_OVERFLOW`. With ANSI off both wrap.
+- **ANSI `sum` overflow:** modelled on Spark's mechanism (`AggregatingAccumulator`): an overflow inside one task's
+  partition fails the action with `ARITHMETIC_OVERFLOW`; an overflow when the tasks' buffers are merged drops *that task's
+  whole buffer* and the action succeeds (Spark merges in task-completion order, so which task survives varies from run to
+  run: `{MAX-1, MAX}` for two rows in two tasks; the engine merges in partition order, so the first partition's buffer
+  wins). An overflow in a metric's result (a decimal `sum`/`avg`, `max(v) + 2`) is raised by `get`, not the action. The
+  decimal class is `ARITHMETIC_OVERFLOW` where Spark's is `NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION` (both SQLSTATE
+  22003). The ANSI setting read is the one at action time (as Connect; classic Spark bakes the `Column`'s mode in when it
+  is built).
 - **Scalar subquery in a metric:** Spark runs it; the engine refuses it with `KRISHIV_UNSUPPORTED_FEATURE`.
 - **Empty relation above:** a relation proven empty (a filter that folds to `false` or NULL, `LIMIT 0`, and what
   Spark's `PropagateEmptyRelation` carries that through: project, sort, keyed aggregate, inner or semi join with an
