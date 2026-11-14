@@ -23,7 +23,7 @@ from typing import Any, Callable, Dict, Optional, Union, TYPE_CHECKING, get_type
 from inspect import getfullargspec, signature
 
 from krishiv._udf.pandas_utils import require_minimum_pandas_version, require_minimum_pyarrow_version
-from krishiv.errors import PySparkNotImplementedError, PySparkValueError
+from krishiv._udf._host import PySparkNotImplementedError, PySparkValueError
 
 if TYPE_CHECKING:
     from pyspark.sql.pandas._typing import (
