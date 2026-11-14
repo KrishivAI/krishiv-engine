@@ -284,8 +284,13 @@ struct Driver {
     held_side: u8,
     /// The cogroup sides the open group has rows on.
     sides_seen: [bool; 2],
-    /// The reservation of the held rows' bytes.
+    /// The reservation of the bytes of the input rows taken and not cut
+    /// yet: the held rows and the rest of the batch being fed.
     held_bytes: Reservation,
+    /// The rows `held_bytes` covers: each cut takes its share by rows of
+    /// all of them, not of the held rows only (a batch's later groups keep
+    /// theirs while its first group is cut).
+    held_bytes_rows: usize,
     /// Cut, waiting for room in the lanes' windows.
     backlog: VecDeque<Cut>,
     /// Memory reserved for the next frame's copies (`finalize` waits for
@@ -453,7 +458,8 @@ impl RelationSink {
                 d.held_rows = len;
                 break;
             }
-            let share = d.held_bytes.size() * len / (rows - offset);
+            let share = d.held_bytes.size() * len / d.held_bytes_rows.max(len);
+            d.held_bytes_rows = d.held_bytes_rows.saturating_sub(len);
             d.backlog.push_back(Cut::Rows {
                 side: d.held_side,
                 rows: data.slice(offset, len),
@@ -726,6 +732,7 @@ impl RelationSink {
             let memory = d.held_bytes.split(key_bytes);
             d.pending.push(keys, memory);
         }
+        d.held_bytes_rows += data.num_rows();
         self.feed(d, data, runs)?;
         d.current = last;
         Ok(None)
@@ -825,6 +832,7 @@ impl Sink for RelationSink {
                 held_side: 0,
                 sides_seen: [false; 2],
                 held_bytes: consumer.reservation(),
+                held_bytes_rows: 0,
                 backlog: VecDeque::new(),
                 spare: consumer.reservation(),
                 wants: 0,

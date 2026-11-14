@@ -1015,3 +1015,45 @@ async fn finalize_drains_results_before_waiting_for_frame_copies() {
     drop(g);
     done(r);
 }
+
+/// A batch of two groups: the first group's frame is taken while the
+/// second waits in the backlog, which still holds its share of the batch's
+/// reservation (the slices keep the batch's buffers).
+#[tokio::test]
+async fn a_batch_s_later_group_keeps_its_share_of_the_input_reservation() {
+    let r = rig(
+        RelationShape::Grouped { keys: vec![0] },
+        Yield::Nothing,
+        limits(0, 1),
+        64 << 20,
+    );
+    r.shared.closed.store(true, Ordering::SeqCst);
+    let g = r.sink.global_state(&r.ctx).unwrap();
+    let mut l = r.sink.local_state(&r.ctx, &g).unwrap();
+    let keys: Vec<i32> = (0..20_000).map(|i| 1 + i / 10_000).collect();
+    let batch = rows(&keys, None);
+    let bytes = batch.data().get_array_memory_size();
+    let SinkStatus::Blocked(wait) = r.sink.sink(batch, &mut l, &g).unwrap() else {
+        panic!("a window of one must block");
+    };
+    // The first group's frame in flight; its end and the second group's
+    // rows wait.
+    assert_eq!(super::sink::queued(&mut l).unwrap(), (vec![1], 2));
+    r.shared.open_gate();
+    tokio::time::timeout(Duration::from_secs(5), wait)
+        .await
+        .unwrap();
+    // The first frame is taken and its memory freed; the second group's
+    // rows are still reserved.
+    assert_eq!(r.shared.log(), ["B0:10000"]);
+    assert!(
+        r.root.reserved() >= bytes / 2,
+        "{} of {bytes} bytes reserved",
+        r.root.reserved()
+    );
+    r.sink.combine(l, &g).unwrap();
+    r.sink.finalize(&g, &r.ctx).await.unwrap();
+    assert_eq!(r.shared.log(), ["B0:10000", "G", "B0:10000", "G", "E"]);
+    drop(g);
+    done(r);
+}
