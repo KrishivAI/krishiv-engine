@@ -1677,6 +1677,8 @@ pub(crate) struct FinalTask {
     pub(crate) parts: Range<usize>,
     /// Estimated groups (merged sketches, capped by the rows).
     pub(crate) groups: usize,
+    /// The estimate per partition of `parts`, in order (step 0 scratch).
+    pub(crate) part_groups: Vec<usize>,
 }
 
 /// Groups per final-phase task the radix bits aim for: a task's index and
@@ -1732,7 +1734,15 @@ pub(crate) fn final_tasks(tables: &[&RowTable]) -> Vec<FinalTask> {
             let parts = start..start + width;
             let rows: usize = est[parts.clone()].iter().map(|e| e.0).sum();
             let groups = est[parts.clone()].iter().map(|e| e.1).sum();
-            (rows, FinalTask { parts, groups })
+            let part_groups = est[parts.clone()].iter().map(|e| e.1).collect();
+            (
+                rows,
+                FinalTask {
+                    parts,
+                    groups,
+                    part_groups,
+                },
+            )
         })
         .filter(|(rows, _)| *rows > 0)
         .map(|(_, t)| t)
@@ -1763,6 +1773,40 @@ impl RowTable {
     /// join's size rule, [`FLAT_MAX_BYTES`].
     fn salted_merge(groups: usize) -> bool {
         buckets_for(groups).saturating_mul(BUCKET_BYTES) > FLAT_MAX_BYTES
+    }
+
+    /// Step 0 scratch: reserves partition `start + i`'s row page and
+    /// accumulators for `groups[i]` groups. Returns the bytes added.
+    pub(crate) fn presize_parts(&mut self, start: usize, groups: &[usize]) -> usize {
+        let before = self.memory_size();
+        let one = self.parts.len() == 1;
+        let total: usize = groups.iter().sum();
+        for (i, &n) in groups.iter().enumerate() {
+            let (p, n) = if one { (0, total) } else { (start + i, n) };
+            if let Some(v) = self.parts.get_mut(p) {
+                v.rows.reserve(n.saturating_mul(self.stride));
+                for a in &mut v.accs {
+                    a.reserve(n);
+                }
+            }
+            if one {
+                break;
+            }
+        }
+        self.memory_size().saturating_sub(before)
+    }
+
+    /// Step 0 scratch: bytes [`presize_parts`](Self::presize_parts) adds to
+    /// an empty table (row pages and accumulators).
+    pub(crate) fn projected_parts(&self, groups: &[usize]) -> usize {
+        let total: usize = groups.iter().sum();
+        let accs: usize = self.parts.first().map_or(0, |v| {
+            v.accs
+                .iter()
+                .map(|a| a.projected(total, None, None).saturating_sub(a.size()))
+                .sum()
+        });
+        total.saturating_mul(self.stride) + accs
     }
 
     /// [`memory_size`](Self::memory_size) after [`presize`](Self::presize).

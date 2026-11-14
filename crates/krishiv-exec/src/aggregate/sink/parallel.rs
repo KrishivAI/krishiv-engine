@@ -73,6 +73,8 @@ struct Task {
     need: usize,
     /// Groups to presize the index for on the first start (0 once done).
     presize: usize,
+    /// Step 0 scratch: per-partition groups to presize pages for.
+    part_groups: Vec<usize>,
 }
 
 impl Task {
@@ -81,6 +83,11 @@ impl Task {
     fn run(&mut self, query: &QueryContext) -> Result<Option<usize>> {
         if self.presize > 0 {
             self.table.presize(std::mem::take(&mut self.presize))?;
+            let groups = std::mem::take(&mut self.part_groups);
+            if !groups.is_empty() {
+                self.table.presize_parts(self.parts.start, &groups);
+                shrink_to(&mut self.reservation, self.table.memory_size());
+            }
         }
         let Self {
             parts,
@@ -468,6 +475,7 @@ impl HashAggregate {
             vec![FinalTask {
                 parts: 0..wide,
                 groups: inputs.iter().map(RowTable::len).max().unwrap_or(0),
+                part_groups: Vec::new(),
             }]
         };
         let ranges: Vec<Range<usize>> = plan.iter().map(|t| t.parts.clone()).collect();
@@ -492,8 +500,19 @@ impl HashAggregate {
             let table = RowTable::new(&self.core, &g.seed, Mode::Grow, false, bits)?
                 .with_resizes(Arc::clone(&self.counters.resizes))
                 .with_probes(g.probes.clone());
+            let pages = std::env::var_os("KRISHIV_S0_PRESIZE_PAGES").is_some();
+            let extra = if pages {
+                table.projected_parts(&t.part_groups)
+            } else {
+                0
+            };
             queue.push_back(Task {
-                need: table.projected_presize(t.groups),
+                need: table.projected_presize(t.groups) + extra,
+                part_groups: if pages {
+                    t.part_groups.clone()
+                } else {
+                    Vec::new()
+                },
                 presize: t.groups.max(1),
                 at: (0, t.parts.start, 0),
                 parts: t.parts,
