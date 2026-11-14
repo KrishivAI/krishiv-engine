@@ -509,3 +509,60 @@ async fn authentication_comes_before_the_body_is_decoded() {
     assert_ne!(s.code(), Code::Unauthenticated, "{s:?}");
     assert_ne!(s.code(), Code::Ok);
 }
+
+/// ADR 0046 §5 (threat model T-R3): the client's `UserContext.user_id` is never the identity,
+/// but its session's `system.sessions` row records it as the client reported it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_clients_user_id_is_recorded_not_trusted() {
+    use arrow_array::Array as _;
+    let run = start().await;
+    // The helper's requests say `user_id = "dana"`; the token is carol's (a viewer, who sees
+    // her own rows of `system.sessions`).
+    let responses = execute(
+        &run.channel,
+        sql("SELECT principal, client_user_id, transport FROM system.sessions"),
+        Some(VIEWER),
+    )
+    .await
+    .expect("a viewer reads her own sessions");
+    let rows: Vec<(String, String, String)> = responses
+        .iter()
+        .filter_map(|r| match &r.response_type {
+            Some(pb::execute_plan_response::ResponseType::ArrowBatch(b)) => Some(b),
+            _ => None,
+        })
+        .flat_map(|b| {
+            arrow_ipc::reader::StreamReader::try_new(std::io::Cursor::new(b.data.clone()), None)
+                .expect("ipc")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("batches")
+        })
+        .flat_map(|batch| {
+            let text = |i: usize| {
+                batch
+                    .column(i)
+                    .as_any()
+                    .downcast_ref::<arrow_array::StringArray>()
+                    .expect("string column")
+                    .clone()
+            };
+            let (p, u, t) = (text(0), text(1), text(2));
+            (0..batch.num_rows())
+                .map(|r| {
+                    let get = |a: &arrow_array::StringArray| {
+                        if a.is_null(r) {
+                            String::new()
+                        } else {
+                            a.value(r).to_owned()
+                        }
+                    };
+                    (get(&p), get(&u), get(&t))
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [("carol".to_owned(), "dana".to_owned(), "connect".to_owned())]
+    );
+}

@@ -176,9 +176,12 @@ fn log_denial(session: &Session, class: StatementClass, e: &KrishivError) {
     {
         counts.record_named(*surface, privilege);
     }
+    // ADR 0046 §5: the client's own `user_id` is recorded, marked unverified, never used.
+    let client_user_id = session.state.activity.client_user_id();
     tracing::warn!(
         target: "krishiv::audit",
         principal = %session.state.principal.name,
+        client_user_id_unverified = client_user_id.as_deref(),
         statement_class = class.name(),
         error_class = e.error_class().name(),
         denial = %e,

@@ -352,6 +352,14 @@ impl SessionManager {
         // Built without the lock; a racing create of the same key wins and
         // this one is closed unused.
         let session = (self.factory)(caller)?;
+        // `system.sessions` shows the client's `user_id` as reported (ADR 0046 §5: recorded,
+        // unverified, never the identity).
+        session.set_client_info(
+            krishiv_session::Transport::Connect,
+            None,
+            Some(client_user_id),
+            Some(session.id()),
+        );
         let entry = Arc::new(SessionEntry {
             session,
             caller: caller.clone(),

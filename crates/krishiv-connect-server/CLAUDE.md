@@ -55,7 +55,8 @@ Paths are relative to this crate.
   classes, else the Python facade's class/SQLSTATE rules); `KRISHIV_SESSION_LIMIT` and `KRISHIV_OPERATION_LIMIT`
   are `RESOURCE_EXHAUSTED`
 - `src/manager.rs` `SessionManager` (Spark's `SparkConnectSessionManager`; its factory gets the `Authenticated`
-  caller): get-or-create / lookup / release, tombstones
+  caller; a new session records transport `connect`, the client's `user_id` (unverified, ADR 0046 §5) and its
+  server-side id for `system.sessions`): get-or-create / lookup / release, tombstones
   (LRU, no expiry), `SESSION_CHANGED` on a changed server-side id, the idle sweep (skips a session running a query or
   holding a live operation; `busy()` is what shutdown waits for), `krishiv.connect.maxSessions` /
   `maxSessionsPerPrincipal`
