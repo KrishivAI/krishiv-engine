@@ -85,6 +85,7 @@ mod runtime;
 mod scripting;
 mod session;
 mod sessions;
+pub mod spark_catalog;
 mod sql_functions;
 mod sql_path;
 mod store;

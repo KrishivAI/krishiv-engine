@@ -46,6 +46,11 @@ impl FunctionMap {
         self.entries.get(&name.to_lowercase())
     }
 
+    /// The defined functions' names, sorted (lower case).
+    pub(crate) fn names(&self) -> impl Iterator<Item = &str> {
+        self.entries.keys().map(String::as_str)
+    }
+
     /// This map with `entry` defined (replacing any of its name), at the
     /// next version.
     pub(crate) fn with(&self, entry: Entry) -> Self {
