@@ -15,6 +15,7 @@
 //! nested deeper than [`INLINE_NESTING`] brackets parses on a thread whose
 //! stack fits that depth.
 
+mod case;
 mod ddl;
 mod expr;
 mod function;
@@ -211,6 +212,10 @@ impl CasePart {
 
 /// The outcome of reading a `CASE` expression at a token position.
 pub(crate) enum CaseMemo {
+    /// It parsed once; a second parse here stores the tree. Only a
+    /// speculative re-read parses a position twice, so an unambiguous
+    /// `CASE` is never copied (nested ones would copy every subtree).
+    Seen,
     /// It parsed to this expression, ending before this token, its tree
     /// reaching this many levels below the `CASE`.
     Parsed(crate::ast::ExprKind, usize, usize),

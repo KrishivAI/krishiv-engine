@@ -481,3 +481,69 @@ fn chains_of_case_columns_parse_in_linear_time() {
         assert!(started.elapsed().as_secs() < 30, "{}", &sql[..40]);
     }
 }
+
+/// `NOT <closer> <binary operator>` inside a `CASE` part: the operator over
+/// the operation when a closer of the part follows, the column when none is
+/// left (`ELSE not END AND x FROM t`). Codex on #761: `THEN NOT end = 1 END`
+/// failed. Each plan is the shape Spark 4.2.0's `parsePlan` gives.
+#[test]
+fn not_before_a_closer_and_an_operator_follows_spark() {
+    use krishiv_plan::SourceId;
+    let t = " | +- Read t";
+    for (sql, want) in [
+        (
+            "SELECT CASE WHEN true THEN NOT end = 1 END FROM t",
+            "Project [CASE WHEN true THEN (NOT (end == 1)) END]",
+        ),
+        (
+            "SELECT CASE WHEN true THEN NOT end + 1 END FROM t",
+            "Project [CASE WHEN true THEN (NOT (end + 1)) END]",
+        ),
+        (
+            "SELECT CASE WHEN true THEN NOT end AND x END FROM t",
+            "Project [CASE WHEN true THEN ((NOT end) and x) END]",
+        ),
+        (
+            "SELECT CASE WHEN true THEN NOT end < 1 END FROM t",
+            "Project [CASE WHEN true THEN (NOT (end < 1)) END]",
+        ),
+        (
+            "SELECT CASE WHEN true THEN NOT end || 'a' END FROM t",
+            "Project [CASE WHEN true THEN (NOT concat(end, 'a')) END]",
+        ),
+        (
+            "SELECT CASE x WHEN 1 THEN NOT else = 2 ELSE 3 END FROM t",
+            "Project [CASE WHEN (x == 1) THEN (NOT (else == 2)) ELSE 3 END]",
+        ),
+        (
+            "SELECT CASE WHEN true THEN NOT when = 1 END FROM t",
+            "Project [CASE WHEN true THEN (NOT (when == 1)) END]",
+        ),
+        (
+            "SELECT CASE WHEN true THEN NOT end = 1 ELSE NOT else = 2 END FROM t",
+            "Project [CASE WHEN true THEN (NOT (end == 1)) ELSE (NOT (else == 2)) END]",
+        ),
+        (
+            "SELECT CASE WHEN a THEN 1 ELSE not END AND x FROM t",
+            "Project [(CASE WHEN a THEN 1 ELSE not END and x)]",
+        ),
+        (
+            "SELECT CASE WHEN a THEN NOT end = CASE WHEN b THEN 2 END END FROM t",
+            "Project [CASE WHEN a THEN (NOT (end == CASE WHEN b THEN 2 END)) END]",
+        ),
+        // Codex's query (the same CASE inside a call).
+        (
+            "SELECT coalesce(CASE WHEN true THEN NOT end = 1 END, false) FROM t",
+            "Project [coalesce(CASE WHEN true THEN (NOT (end == 1)) END, false)]",
+        ),
+    ] {
+        let plan = krishiv_sql::parse_and_lower(sql, &ParserOptions::default(), SourceId(0))
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+        let got = plan.root().to_string().replace('\n', " | ");
+        assert_eq!(
+            got.trim_end_matches([' ', '|']),
+            format!("{want}{t}"),
+            "{sql}"
+        );
+    }
+}
