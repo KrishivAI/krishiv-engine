@@ -454,7 +454,7 @@ fn compile_unary(name: &str, f: &ResolvedFunction, input: Input<'_>) -> Result<A
     let ArrowType::List(field) = array.data_type().clone() else {
         return Err(internal("a higher-order call over a non-list"));
     };
-    let index = name == "transform" && params.len() == 2;
+    let index = matches!(name, "transform" | "filter") && params.len() == 2;
     let mut refs = Refs::default();
     collect(
         body,
