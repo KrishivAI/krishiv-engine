@@ -9,6 +9,7 @@ use super::{CaseMemo, CasePart, Checkpoint, Fail, PR, Parser};
 use crate::ast::{Expr, ExprKind, WhenClause};
 use crate::keywords::CLAUSE_WORD;
 use crate::lexer::{Sym, TokenKind};
+use krishiv_common::error::ErrorClass;
 
 impl Parser<'_> {
     /// Whether the `NOT` here is a column, as Spark reads `SELECT NOT`,
@@ -96,7 +97,7 @@ impl Parser<'_> {
                     }
                 }
                 TokenKind::Sym(Sym::Semi) if depth == 0 => return false,
-                TokenKind::Word if depth == 0 && self.kw_at(i, "CASE") => cases += 1,
+                TokenKind::Word if depth == 0 && self.case_starts_at(i) => cases += 1,
                 TokenKind::Word if depth == 0 && cases > 0 && self.kw_at(i, "END") => cases -= 1,
                 TokenKind::Word
                     if depth == 0 && cases == 0 && self.any_kw_at(i, part.closers()) =>
@@ -108,6 +109,18 @@ impl Parser<'_> {
             i += 1;
         }
         false
+    }
+
+    /// Whether `CASE` at offset `n` may start a `CASE` expression, for
+    /// [`Self::part_closer_after`]: not a qualified name's part (`t.case`,
+    /// `case.x`) nor a column that a closer, `,` or `)` ends (`= case END`).
+    fn case_starts_at(&self, n: usize) -> bool {
+        self.kw_at(n, "CASE")
+            && !(n > 0 && self.sym_at(n - 1, Sym::Dot))
+            && !self.sym_at(n + 1, Sym::Dot)
+            && !self.sym_at(n + 1, Sym::Comma)
+            && !self.sym_at(n + 1, Sym::RParen)
+            && !self.any_kw_at(n + 1, &["END", "THEN", "ELSE", "WHEN"])
     }
 
     /// Whether the token at offset `n` continues an expression before it: a
@@ -190,12 +203,37 @@ impl Parser<'_> {
         !self.kw_at(1, "WHEN") && self.reserved_column_here()
     }
 
+    /// Whether a `WHEN` follows in the brackets of the `CASE` here: without
+    /// one no `CASE` expression can start here, so `case_or_column` takes the
+    /// column without a speculative read (a flat chain `case + 1 > 0 OR ...`
+    /// would otherwise read every later term inside the first's operand).
+    fn when_ahead(&self) -> bool {
+        let mut depth = 0i64;
+        let mut i = 1;
+        while let Some(kind) = self.kind(i) {
+            match kind {
+                TokenKind::Sym(Sym::LParen | Sym::LBracket) => depth += 1,
+                TokenKind::Sym(Sym::RParen | Sym::RBracket) => {
+                    depth -= 1;
+                    if depth < 0 {
+                        return false;
+                    }
+                }
+                TokenKind::Sym(Sym::Semi) if depth == 0 => return false,
+                TokenKind::Word if depth == 0 && self.kw_at(i, "WHEN") => return true,
+                _ => {}
+            }
+            i += 1;
+        }
+        false
+    }
+
     /// `CASE` that may be a column: the `CASE` expression if it parses, as
     /// ANTLR's prediction takes it, else `None` and `CASE` is a column
     /// (`(case, y) -> case - y`, `CASE WHEN case IS NULL THEN ...`, `ON
     /// t.id = case - 1 WHEN MATCHED`).
     pub(super) fn case_or_column(&mut self) -> PR<Option<ExprKind>> {
-        if self.case_column_at == Some(self.pos) {
+        if self.case_column_at == Some(self.pos) || !self.when_ahead() {
             return Ok(None);
         }
         let at = self.checkpoint();
@@ -203,6 +241,21 @@ impl Parser<'_> {
             Ok(kind) => {
                 self.commit(at);
                 Ok(Some(kind))
+            }
+            // The speculative reading ran into the depth cap (each `case`
+            // of a flat chain read as a `CASE` nests the rest of the chain
+            // in its operand): the column reading decides, and reports the
+            // cap itself if it is too deep too. Remembered as a failed
+            // reading, so later visits do not try again.
+            Err(Fail::Fatal(e)) if e.error.error_class() == ErrorClass::FailedToParseTooComplex => {
+                self.restore(at);
+                let memo = CaseMemo::Failed {
+                    far: self.far,
+                    matched: self.matched,
+                    missing: self.missing,
+                };
+                self.case_memo.insert(self.pos, memo);
+                Ok(None)
             }
             Err(Fail::Fatal(e)) => Err(Fail::Fatal(e)),
             Err(Fail::Syntax) => {

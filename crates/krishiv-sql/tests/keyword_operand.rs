@@ -547,3 +547,34 @@ fn not_before_a_closer_and_an_operator_follows_spark() {
         );
     }
 }
+
+/// Codex on #761, round 2: a qualified `t.case` is a column, not a nested
+/// `CASE`, for the closer look-ahead of `NOT`; and a `CASE` reading that
+/// runs into the depth cap while speculating falls back to the column (a
+/// flat `OR` chain of `case + 1 > 0` is shallow).
+#[test]
+fn case_columns_do_not_count_as_nested_case() {
+    use krishiv_plan::SourceId;
+    let sql = "SELECT CASE WHEN true THEN NOT end = t.case END FROM t";
+    let plan = krishiv_sql::parse_and_lower(sql, &ParserOptions::default(), SourceId(0))
+        .unwrap_or_else(|e| panic!("{sql}: {e}"));
+    let got = plan.root().to_string().replace('\n', " | ");
+    assert_eq!(
+        got.trim_end_matches([' ', '|']),
+        "Project [CASE WHEN true THEN (NOT (end == t.case)) END] | +- Read t"
+    );
+    let chain = vec!["case + 1 > 0"; 2000].join(" OR ");
+    let sql = format!("SELECT 1 FROM t WHERE {chain}");
+    if let Err(e) = parse_query(&sql, &ParserOptions::default()) {
+        panic!("{e}");
+    }
+    // With a `WHEN` ahead each `case` is read speculatively; a read that
+    // reaches the depth cap falls back to the column.
+    let chain = vec!["case + 1 > 0"; 300].join(" OR ");
+    let sql = format!("SELECT 1 FROM t WHERE {chain} OR CASE WHEN a THEN true END");
+    let started = std::time::Instant::now();
+    if let Err(e) = parse_query(&sql, &ParserOptions::default()) {
+        panic!("{e}");
+    }
+    assert!(started.elapsed().as_secs() < 30);
+}

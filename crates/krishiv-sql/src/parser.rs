@@ -102,6 +102,9 @@ struct Checkpoint {
     missing: Option<(usize, &'static str)>,
     matched: Option<(usize, Sym, Close)>,
     deferred: Option<ParseError>,
+    /// The deepest level reached: an abandoned reading must not count toward
+    /// the height of the tree around it.
+    peak: usize,
 }
 
 /// The inline recovery ANTLR shows a failed `match` of a closing token with
@@ -840,6 +843,7 @@ impl<'s> Parser<'s> {
             missing: self.missing,
             matched: self.matched,
             deferred: self.deferred.take(),
+            peak: self.peak,
         }
     }
 
@@ -851,6 +855,7 @@ impl<'s> Parser<'s> {
         self.missing = checkpoint.missing;
         self.matched = checkpoint.matched;
         self.deferred = checkpoint.deferred;
+        self.peak = checkpoint.peak;
     }
 
     /// Keeps the speculative parse begun at `checkpoint`: an error deferred
