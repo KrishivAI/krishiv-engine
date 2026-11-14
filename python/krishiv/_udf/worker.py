@@ -18,8 +18,8 @@ are cast to Spark's ``string`` / ``binary`` before the conversion, and the resul
 type, is cast to the engine's (views again) after it. Both casts are lossless.
 
 The runner conf (the SQL conf Spark sends its worker, ``worker.py:113-184``) comes from the session the call
-runs in: the runtime hands it to the running call (``_native._udf_runner_conf()``), so one wrapper serves
-every session.
+runs in: the runtime hands it to the running call (``_host.runner_conf()``: the native module in-process,
+the batch record in a pool worker), so one wrapper serves every session.
 """
 
 from __future__ import annotations
@@ -27,8 +27,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from krishiv.errors import PySparkRuntimeError, PySparkTypeError
-from krishiv.sql.types import DataType, StructField, StructType
+from krishiv._udf._host import PySparkRuntimeError, PySparkTypeError
+from krishiv._udf.types import DataType, StructField, StructType
 
 #: Spark's ``PythonEvalType`` codes (``pyspark/util.py:646-688``) of the kinds the engine runs.
 SQL_BATCHED_UDF = 100
@@ -84,9 +84,9 @@ class RunnerConf:
 
 
 def _runner_conf() -> RunnerConf:
-    from krishiv import _native
+    from krishiv._udf._host import runner_conf
 
-    return RunnerConf(_native._udf_runner_conf())
+    return RunnerConf(runner_conf())
 
 
 # --- ported from pyspark/util.py:151-168 ---
@@ -314,9 +314,9 @@ def arrow_batched_wrapper(udf_func: Callable[..., Any], return_type: DataType) -
 def _zero_arg_rows() -> int:
     """The rows of a call without arguments: the runtime passes none (the engine sends the batch's row count
     only with arguments), so it is read from the runner conf the runtime sets."""
-    from krishiv import _native
+    from krishiv._udf._host import runner_conf
 
-    return int(_native._udf_runner_conf().get("krishiv.python.udf.rows", "0"))
+    return int(runner_conf().get("krishiv.python.udf.rows", "0"))
 
 
 # --- SQL_SCALAR_PANDAS_UDF (200): serializers.py:363-549 around worker.py:381-414 ---
@@ -332,7 +332,7 @@ def scalar_pandas_wrapper(f: Callable[..., Any], return_type: DataType) -> Calla
     def func(*arrays: Any) -> Any:
         import pandas as pd
 
-        from krishiv.errors import PySparkValueError
+        from krishiv._udf._host import PySparkValueError
 
         conf = _runner_conf()
         batch = pa.RecordBatch.from_arrays(
@@ -412,6 +412,6 @@ def make_wrapper(f: Callable[..., Any], eval_type: int, return_type: DataType) -
         return scalar_pandas_wrapper(f, return_type)
     if eval_type == SQL_SCALAR_ARROW_UDF:
         return scalar_arrow_wrapper(f, return_type)
-    from krishiv.errors import not_implemented
+    from krishiv._udf._host import not_implemented
 
     raise not_implemented(f"Python UDFs of eval type {eval_type}")
