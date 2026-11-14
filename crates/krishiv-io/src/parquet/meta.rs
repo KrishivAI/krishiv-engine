@@ -295,20 +295,21 @@ fn describe_checked(
         let mut columns = Vec::new();
         for (j, col) in rg.columns().iter().enumerate() {
             let d = descr.column(j);
-            if d.max_rep_level() > 0 {
-                continue;
-            }
             let path = ColumnPath(d.path().parts().to_vec());
-            let Some(dt) = leaf_type(&schema, &path.0) else {
-                continue;
+            // `check` refused a negative size.
+            let compressed =
+                u64::try_from(col.compressed_size()).map_or(Precision::Absent, Precision::Exact);
+            // Values of a repeated leaf, or of one the engine schema does not
+            // read, have no row-level meaning: only the size is kept.
+            let typed = (d.max_rep_level() == 0)
+                .then(|| leaf_type(&schema, &path.0))
+                .flatten();
+            let mut c = match typed {
+                Some(dt) => column_statistics(path, &d, dt, col.statistics(), legacy_writer),
+                None => ColumnStatistics::new(path),
             };
-            columns.push(column_statistics(
-                path,
-                &d,
-                dt,
-                col.statistics(),
-                legacy_writer,
-            ));
+            c.compressed_bytes = compressed;
+            columns.push(c);
         }
         planned.push(RowGroup {
             first_row,
@@ -680,8 +681,9 @@ fn be_i128(b: &[u8]) -> Option<i128> {
     Some(i128::from_be_bytes(buf))
 }
 
-/// Whole-file statistics: rows, bytes, and per column the null count and
-/// the bounds over every row group (exact only if every row group's is).
+/// Whole-file statistics: rows, bytes, and per column the null count, the
+/// compressed size and the bounds over every row group (exact only if every
+/// row group's is).
 fn file_statistics(row_groups: &[RowGroup]) -> FileStatistics {
     let rows: u64 = row_groups.iter().map(|r| r.rows).sum();
     let bytes: u64 = row_groups.iter().map(|r| r.bytes.end - r.bytes.start).sum();
@@ -694,6 +696,7 @@ fn file_statistics(row_groups: &[RowGroup]) -> FileStatistics {
                 Some(m) => {
                     m.null_count = sum(&m.null_count, &c.null_count);
                     m.nan_count = sum(&m.nan_count, &c.nan_count);
+                    m.compressed_bytes = sum(&m.compressed_bytes, &c.compressed_bytes);
                     m.min = bound(&m.min, &c.min, std::cmp::Ordering::Less);
                     m.max = bound(&m.max, &c.max, std::cmp::Ordering::Greater);
                 }

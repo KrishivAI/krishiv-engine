@@ -85,6 +85,10 @@ pub struct ColumnStatistics {
     /// A serialized distinct-count sketch (a later statistics task reads
     /// it); pruning ignores it.
     pub sketch: Option<SketchRef>,
+    /// Bytes the column takes in storage, compressed (Parquet: the sum of
+    /// its column chunks' `total_compressed_size`, what Iceberg's
+    /// `column_sizes` records). Pruning ignores it.
+    pub compressed_bytes: Precision<u64>,
 }
 
 /// Statistics of a file or of a unit of one. Formats without statistics
@@ -96,7 +100,10 @@ pub struct FileStatistics {
     pub rows: Precision<u64>,
     /// Bytes in storage.
     pub bytes: Precision<u64>,
-    /// Per-column statistics; columns not listed are unknown.
+    /// Per-column statistics; columns not listed are unknown. A Parquet
+    /// file lists every leaf column chunk, also leaves that carry only
+    /// [`ColumnStatistics::compressed_bytes`] (repeated leaves, leaves the
+    /// engine schema does not read).
     pub columns: Vec<ColumnStatistics>,
 }
 

@@ -1834,3 +1834,66 @@ fn dictionary_encoded_nested_leaves_round_trip() {
         }
     }
 }
+
+/// Every leaf column chunk's compressed size is kept, per row group and
+/// summed for the file, repeated leaves included (Iceberg's `column_sizes`).
+#[test]
+fn compressed_column_sizes_cover_every_leaf() {
+    use arrow_array::ListArray;
+    use parquet::file::metadata::ParquetMetaDataReader;
+    let env = Env::new();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Int32, false),
+        Field::new(
+            "l",
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+            true,
+        ),
+    ]));
+    let lists = ListArray::from_iter_primitive::<Int32Type, _, _>(
+        (0..3000).map(|i| Some(vec![Some(i), Some(i * 7), None])),
+    );
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Int32Array::from_iter_values(0..3000)),
+            Arc::new(lists),
+        ],
+    )
+    .unwrap();
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(1000))
+        .build();
+    let bytes = write(&[batch], props);
+    let footer = ParquetMetaDataReader::new()
+        .parse_and_finish(&bytes::Bytes::from(bytes.clone()))
+        .unwrap();
+    assert_eq!(footer.num_row_groups(), 3);
+    let expected = |leaf: usize| -> u64 {
+        footer
+            .row_groups()
+            .iter()
+            .map(|rg| u64::try_from(rg.column(leaf).compressed_size()).unwrap())
+            .sum()
+    };
+    let file = env.put("sizes.parquet", bytes);
+    let o = env.options(&[]);
+    let meta = env
+        .rt
+        .block_on(
+            env.io
+                .read_metadata(&ParquetFormat, &file, MetadataNeeds::default(), &o),
+        )
+        .unwrap();
+    let st = meta.statistics();
+    let k = st.column(&ColumnPath(vec!["k".into()])).unwrap();
+    assert_eq!(k.compressed_bytes, crate::Precision::Exact(expected(0)));
+    assert_eq!(k.min, crate::Precision::Exact(ScalarValue::Int32(0)));
+    let element = ColumnPath(vec!["l".into(), "list".into(), "item".into()]);
+    let l = st.column(&element).unwrap();
+    assert_eq!(l.compressed_bytes, crate::Precision::Exact(expected(1)));
+    // A repeated leaf carries its size only.
+    assert_eq!(l.null_count, crate::Precision::Absent);
+    assert_eq!(l.min, crate::Precision::Absent);
+    assert!(expected(0) > 0 && expected(1) > 0);
+}
