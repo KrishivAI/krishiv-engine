@@ -1357,6 +1357,131 @@ let c = coalesce([col("a"), lit(0)]);
 pub fn coalesce</* synthetic */ impl IntoIterator<Item = Column>: IntoIterator<Item = crate::Column>>(cols: impl IntoIterator<Item = crate::Column>) -> crate::Column { /* ... */ }
 ```
 
+## Module `resource_groups`
+
+Resource groups (P3-T003, `design/P3-T003-workload-management.md`): an
+[`AdmissionController`] that routes each query to a leaf group by selector, runs it when the
+group and its ancestors have room, queues it when they do not (refusing past `maxQueued`),
+and dispatches queued queries by each parent's scheduling policy.
+
+The group file is Trino's `resource-groups.json` shape (`config.rs`); the tree and the
+dispatcher are in `tree.rs`. Selectors on `source` and `clientTags` read what the client
+asserts, so they route queries but never limit a tenant: use `user` / `userGroup` for that.
+
+```rust
+pub mod resource_groups { /* ... */ }
+```
+
+### Types
+
+#### Struct `ResourceGroups`
+
+The admission controller for a resource group tree.
+
+```rust
+pub struct ResourceGroups {
+    // Some fields omitted
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| *private fields* | ... | *Some fields have been omitted* |
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn from_json(json: &str, total_memory: usize) -> Result<Self, KrishivError> { /* ... */ }
+  ```
+  Builds the controller from the text of a group file. `total_memory` is what a
+
+- ```rust
+  pub fn with_clock(json: &str, total_memory: usize, now_ms: Arc<dyn Fn() -> u64 + Send + Sync>) -> Result<Self, KrishivError> { /* ... */ }
+  ```
+  As [`ResourceGroups::from_json`], with the clock (milliseconds since the Unix epoch)
+
+- ```rust
+  pub fn counts(self: &Self, id: &str) -> Option<(usize, usize)> { /* ... */ }
+  ```
+  `(running, queued)` queries of the group `id` (a dotted path such as `root.etl`).
+
+###### Trait Implementations
+
+- **AdmissionController**
+  - ```rust
+    fn admit<''a>(self: &''a Self, request: &''a QueryRequest) -> BoxFuture<''a, Result<Permit, KrishivError>> { /* ... */ }
+    ```
+
+  - ```rust
+    fn uses_estimate(self: &Self) -> bool { /* ... */ }
+    ```
+
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<''_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **Sync**
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+### Re-exports
+
+#### Re-export `GroupSlot`
+
+```rust
+pub use tree::GroupSlot;
+```
+
 ## Module `agent`
 
 Compact injection-safe query results for tools and agents (`krishiv.agent-result` v1).
@@ -2273,6 +2398,12 @@ pub use admission::QueryRequest;
 
 ```rust
 pub use admission::Unlimited;
+```
+
+### Re-export `Transport`
+
+```rust
+pub use sessions::Transport;
 ```
 
 ### Re-export `register_build_features`

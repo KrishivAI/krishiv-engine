@@ -122,6 +122,18 @@ fn cgroup_available() -> bool {
         .is_ok_and(|s| s.success())
 }
 
+/// Resident room a coverage-instrumented build needs on top of the bound: the profile counters and
+/// bitmaps are mapped into the process (the nightly coverage job measured 5 MB over a 140 MB bound).
+/// `cargo llvm-cov` sets `LLVM_PROFILE_FILE` for every test process; a plain run gets no allowance.
+fn instrumented_bound(bound: u64) -> u64 {
+    const INSTRUMENTATION_ALLOWANCE: u64 = 32 << 20;
+    if std::env::var_os("LLVM_PROFILE_FILE").is_some() {
+        bound + INSTRUMENTATION_ALLOWANCE
+    } else {
+        bound
+    }
+}
+
 /// The cgroup cap for a child with resident-set bound `bound`, or `None` where `systemd-run --user`
 /// does not work (CI runners). Says which, since a run without the cap only compares the peak
 /// RSS; `KRISHIV_TEST_REQUIRE_CGROUP=1` makes a missing cgroup a failure.
@@ -218,7 +230,7 @@ fn memory_field(json: &str, key: &str) -> Option<u64> {
 fn peak_rss_stays_within_the_bound_while_queries_spill() {
     let dir = tempfile::tempdir().unwrap();
     write_tables(dir.path());
-    let bound = rss_bound(LIMIT, THREADS);
+    let bound = instrumented_bound(rss_bound(LIMIT, THREADS));
     // A cgroup also charges the page cache of the spill files the child
     // writes (reclaimable once written back, but charged meanwhile), which is
     // not resident memory: the cap allows for it on top of the bound. The
@@ -408,7 +420,7 @@ fn q21_shaped_expected() -> (i64, i64) {
 fn a_q21_shaped_spilling_join_stays_within_the_bound() {
     let dir = tempfile::tempdir().unwrap();
     write_li(dir.path());
-    let bound = rss_bound(LI_LIMIT, LI_THREADS);
+    let bound = instrumented_bound(rss_bound(LI_LIMIT, LI_THREADS));
     let cap = cgroup_cap(bound);
     let mut runner = Runner::start(
         dir.path(),
