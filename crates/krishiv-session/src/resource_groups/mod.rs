@@ -25,6 +25,7 @@ use crate::admission::{AdmissionController, Permit, QueryRequest};
 use config::Config;
 use tree::{Admitted, Refusal, Shared};
 
+pub use select::tag_matches;
 pub use tree::GroupSlot;
 
 /// The admission controller for a resource group tree.

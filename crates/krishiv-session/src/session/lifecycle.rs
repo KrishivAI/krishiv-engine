@@ -442,11 +442,7 @@ impl Session {
             locals: Arc::clone(&self.locals),
             operation,
             deadline: options.deadline.or(self.deadline),
-            request_tags: if options.request_tags.is_empty() {
-                Arc::clone(&self.request_tags)
-            } else {
-                options.request_tags.into()
-            },
+            request_tags: options.request_tags.into(),
         };
         Ok(handle)
     }
@@ -544,8 +540,8 @@ impl Session {
         let number = self.state.number;
         self.state
             .runtime
-            .cancel_tagged(crate::CancelReason::User, |s, _, request| {
-                s == number && request.iter().any(|t| &**t == tag)
+            .cancel_tagged(crate::CancelReason::User, |s, t| {
+                s == number && t.request_tags.iter().any(|r| &**r == tag)
             })
     }
 }

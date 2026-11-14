@@ -1141,8 +1141,7 @@ impl QueryLog {
             return;
         }
         self.history.update(&self.session_id, id, |row| {
-            row.tags
-                .extend(tags.iter().map(|t| (t.to_string(), String::new())));
+            crate::action::merge_request_tags(&mut row.tags, tags);
         });
     }
 

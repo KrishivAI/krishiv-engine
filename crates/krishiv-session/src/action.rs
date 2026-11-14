@@ -58,6 +58,40 @@ tokio::task_local! {
 /// The `query_id` an error names for an action the caller gave no id.
 const NOT_STARTED: &str = "(not started)";
 
+/// Who runs a statement and the tags its queries carry, fixed when it starts: what cancel by tag
+/// looks at (design P3-T064 §4.5).
+#[derive(Debug, Clone)]
+pub(crate) struct Tagging {
+    /// The name of the principal of the session that runs it.
+    pub(crate) principal: Arc<str>,
+    /// The session's tags, then the request tags as `(tag, "")` pairs (a key appears once).
+    pub(crate) tags: Arc<[(String, String)]>,
+    /// The request tags among them (exact-match interrupts).
+    pub(crate) request_tags: Arc<[Arc<str>]>,
+}
+
+impl Tagging {
+    /// No principal and no tags (a statement nothing selects by tag).
+    #[cfg(test)]
+    pub(crate) fn none() -> Self {
+        Self {
+            principal: Arc::from(""),
+            tags: Arc::from([]),
+            request_tags: Arc::from([]),
+        }
+    }
+}
+
+/// Adds the request tags `request` to `tags` as `(tag, "")` pairs, skipping a tag whose key is
+/// already there (a session tag of the same key, or a repeated request tag).
+pub(crate) fn merge_request_tags(tags: &mut Vec<(String, String)>, request: &[Arc<str>]) {
+    for t in request {
+        if !tags.iter().any(|(k, _)| k == &**t) {
+            tags.push((t.to_string(), String::new()));
+        }
+    }
+}
+
 /// One running action of a session.
 #[derive(Debug)]
 pub(crate) struct Action {
@@ -66,10 +100,8 @@ pub(crate) struct Action {
     /// The caller's operation id, if it gave one (the id `Session::cancel`
     /// names it by).
     operation: Option<Arc<str>>,
-    /// The tags its queries carry, fixed at the start: the session's and the request's.
-    tags: Arc<[(String, String)]>,
-    /// The request tags among them (exact-match interrupts).
-    request_tags: Arc<[Arc<str>]>,
+    /// Who runs it and the tags its queries carry, fixed at the start.
+    tagging: Tagging,
     /// The action this one runs inside, if any (a nested `on_executor`).
     parent: Option<Arc<Action>>,
     /// Taken after `EngineRuntime::live` when both are held, never together
@@ -147,23 +179,21 @@ impl Actions {
     /// it on the caller's task); it leaves the registry when the guard drops.
     #[cfg(test)]
     pub(crate) fn begin(self: &Arc<Self>, session: u64, operation: Option<&str>) -> ActionGuard {
-        self.begin_tagged(session, operation, Arc::from([]), Arc::from([]))
+        self.begin_tagged(session, operation, Tagging::none())
     }
 
-    /// [`Self::begin`] for an action whose queries carry `tags` (`request_tags` among them).
+    /// [`Self::begin`] for an action whose queries carry `tagging`.
     pub(crate) fn begin_tagged(
         self: &Arc<Self>,
         session: u64,
         operation: Option<&str>,
-        tags: Arc<[(String, String)]>,
-        request_tags: Arc<[Arc<str>]>,
+        tagging: Tagging,
     ) -> ActionGuard {
         let (reason, _) = watch::channel(None);
         let action = Arc::new(Action {
             session,
             operation: operation.map(Arc::from),
-            tags,
-            request_tags,
+            tagging,
             parent: CURRENT.try_with(Arc::clone).ok(),
             state: Mutex::new(State::default()),
             reason,
@@ -194,16 +224,13 @@ impl Actions {
         })
     }
 
-    /// As [`Self::cancel_where`], picking by the action's tags: `pick` sees the session number,
-    /// the effective tags and the request tags.
+    /// As [`Self::cancel_where`], picking by the action's session number and tagging.
     pub(crate) fn cancel_tagged(
         &self,
         reason: CancelReason,
-        pick: &impl Fn(u64, &[(String, String)], &[Arc<str>]) -> bool,
+        pick: &impl Fn(u64, &Tagging) -> bool,
     ) -> ActionsCancelled {
-        self.cancel_matching(reason, &|a: &Action| {
-            pick(a.session, &a.tags, &a.request_tags)
-        })
+        self.cancel_matching(reason, &|a: &Action| pick(a.session, &a.tagging))
     }
 
     fn cancel_matching(

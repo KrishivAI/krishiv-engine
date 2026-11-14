@@ -28,15 +28,21 @@ fn matches(s: &SelectorCfg, r: &QueryRequest) -> bool {
         && s.query_type.is_none_or(|c| r.statement_class == Some(c))
 }
 
-/// A selector tag `s` matches a pair `(k, v)` when `s == k` or `s == "k=v"`. A Connect request tag
-/// `job=42` is the pair `("job=42", "")` (tags are opaque and may contain `=`), so it matches the
-/// selector `job=42` through the first rule, and the session pair `("job", "42")` matches it
-/// through the second: the over-match is accepted (design P3-T064 §4.3).
+/// Whether the selector tag `selector` matches the tag pair `(key, value)`: `selector == key`, or
+/// `selector == "key=value"`. A Connect request tag `job=42` is the pair `("job=42", "")` (tags
+/// are opaque and may contain `=`), so it matches the selector `job=42` through the first rule,
+/// and the session pair `("job", "42")` matches it through the second: the over-match is
+/// accepted (design P3-T064 §4.3). It also means a session key that itself contains `=` (`team=x`)
+/// matches the selector `team=x` whatever its value.
+#[must_use]
+pub fn tag_matches(selector: &str, key: &str, value: &str) -> bool {
+    selector == key
+        || selector
+            .strip_prefix(key)
+            .and_then(|rest| rest.strip_prefix('='))
+            == Some(value)
+}
+
 fn has_tag(tags: &[(String, String)], want: &str) -> bool {
-    tags.iter().any(|(k, v)| {
-        want == k
-            || want
-                .split_once('=')
-                .is_some_and(|(wk, wv)| wk == k && wv == v)
-    })
+    tags.iter().any(|(k, v)| tag_matches(want, k, v))
 }

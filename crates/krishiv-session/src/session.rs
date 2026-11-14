@@ -1141,8 +1141,7 @@ impl Session {
         let action = self.state.runtime.actions.begin_tagged(
             self.state.number,
             self.operation_id().map(crate::QueryId::as_str),
-            self.effective_tags().into(),
-            Arc::clone(&self.request_tags),
+            self.tagging(),
         );
         let reason = action.reason();
         let task = self.state.runtime.executor.spawn(
@@ -1628,15 +1627,20 @@ impl Session {
     }
 
     /// The tags a query started now carries: the session's, then the statement's request tags as
-    /// `(tag, "")` pairs (design P3-T064 §4.3).
+    /// `(tag, "")` pairs (a key appears once; design P3-T064 §4.3).
     pub(crate) fn effective_tags(&self) -> Vec<(String, String)> {
         let mut tags = self.state.queries.tags_now();
-        tags.extend(
-            self.request_tags
-                .iter()
-                .map(|t| (t.to_string(), String::new())),
-        );
+        crate::action::merge_request_tags(&mut tags, &self.request_tags);
         tags
+    }
+
+    /// The principal and tags of a statement started now, for cancel by tag.
+    pub(crate) fn tagging(&self) -> crate::action::Tagging {
+        crate::action::Tagging {
+            principal: Arc::from(self.state.principal.name.as_str()),
+            tags: self.effective_tags().into(),
+            request_tags: Arc::clone(&self.request_tags),
+        }
     }
 
     /// Asks the admission controller for a permit for the query whose
@@ -1740,10 +1744,11 @@ impl Session {
                 .into_parts(),
         };
         self.state.activity.query_started();
-        let id = QueryId(self.state.runtime.reserve(
+        let id = QueryId(self.state.runtime.reserve_tagged(
             self.state.number,
             self.state.queries.session_id(),
             &log_id,
+            self.tagging(),
         ));
         let pool = self
             .state
