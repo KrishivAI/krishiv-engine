@@ -410,19 +410,30 @@ fn failure() -> krishiv_common::error::KrishivError {
     .into()
 }
 
+/// How the stream of `op` ends once its responses are sent.
+fn end_of(op: &crate::operation::Operation) -> Option<tonic::Status> {
+    let g = op.replay().attach(None);
+    match op.replay().next(g, 1, true) {
+        crate::operation::replay::Next::Finished(end) => end,
+        other => panic!("{other:?}"),
+    }
+}
+
 #[test]
 fn a_failed_operation_is_finished_before_its_error_is_sent() {
     let op = running_op();
-    let sent = super::settle(&op, Err(super::Stop::Failed(failure())));
-    assert_eq!(sent.unwrap().error_class().name(), "INTERNAL_ERROR");
-    // Its error is on the way: an interrupt now interrupts nothing.
+    super::settle(&op, Err(super::Stop::Failed(failure())));
+    let status = end_of(&op).unwrap();
+    assert!(status.message().contains("INTERNAL_ERROR"), "{status:?}");
+    // Its error is recorded: an interrupt now interrupts nothing.
     assert!(!op.cancel());
 }
 
 #[test]
-fn a_gone_client_finishes_the_operation() {
+fn a_closed_operation_finishes_its_stream() {
     let op = running_op();
-    assert!(super::settle(&op, Err(super::Stop::Gone)).is_none());
+    super::settle(&op, Err(super::Stop::Gone));
+    assert!(end_of(&op).is_none());
     assert!(!op.cancel());
 }
 
@@ -432,8 +443,12 @@ fn an_interrupt_before_the_end_wins_over_the_error() {
     // OPERATION_CANCELED (`ExecuteThreadRunner.scala:150-178`).
     let op = running_op();
     assert!(op.cancel());
-    let sent = super::settle(&op, Err(super::Stop::Failed(failure())));
-    assert_eq!(sent.unwrap().error_class().name(), "OPERATION_CANCELED");
+    super::settle(&op, Err(super::Stop::Failed(failure())));
+    let status = end_of(&op).unwrap();
+    assert!(
+        status.message().contains("OPERATION_CANCELED"),
+        "{status:?}"
+    );
 }
 
 #[tokio::test]

@@ -396,6 +396,10 @@ pub(crate) struct Node {
     /// The top of `limit` only spill scratch may take (see the module docs).
     floor: usize,
     /// Bytes held by the subtree; on a query node, plus the abort bit.
+    /// Releases subtract from the root down ([`Node::sub_chain`]), so while
+    /// one is in flight a node may count more than its ancestors do; only a
+    /// refused grant's rollback in [`Node::add_chain`] (leaf first) briefly
+    /// leaves an ancestor counting more, for bytes that were never granted.
     word: AtomicUsize,
     /// The most bytes the subtree held after a grant that every pool on its
     /// path accepted (statistics: a grant rolled back is not counted).
@@ -587,12 +591,22 @@ impl Node {
         if n == 0 {
             return;
         }
-        let mut cur = Some(self);
-        while let Some(node) = cur {
-            node.sub(n);
-            cur = node.parent.as_deref();
-        }
+        self.sub_from_top(n);
         self.shared.release.released();
+    }
+
+    /// Subtracts `n` from the root down to this node. The other order would
+    /// leave a moment where a query's own counter no longer holds bytes a
+    /// pool above it still does: an arbitration round reading the aborted
+    /// query then sees no pending release for memory that is still in use,
+    /// and aborts a second query. Root first, a node below only ever holds
+    /// more than the pools above it count for it, which only makes a round
+    /// wait for the release.
+    fn sub_from_top(&self, n: usize) {
+        if let Some(p) = self.parent.as_deref() {
+            p.sub_from_top(n);
+        }
+        self.sub(n);
     }
 
     /// Whether `self` is `ancestor` or below it.
@@ -761,6 +775,10 @@ impl Drop for Node {
     fn drop(&mut self) {
         // Children hold their parent, so they are gone and have already
         // returned their grants: what is left belongs to our own consumers.
+        // Normally nothing: every `ConsumerHandle` holds this node's pool and
+        // unregisters (returning its bytes) when dropped. A node being
+        // dropped can no longer be upgraded, so its consumers are already
+        // invisible to arbitration; the registry order does not matter here.
         let mut registry = lock(&self.shared.registry);
         for id in lock(&self.consumers).keys() {
             registry.remove(id);
@@ -1058,7 +1076,6 @@ impl MemoryPool for TreePool {
 
     fn unregister(&self, id: ConsumerId) {
         let removed = lock(&self.node.consumers).remove(&id);
-        lock(&self.node.shared.registry).remove(&id);
         if let Some(c) = removed {
             let mut u = lock(&c.usage);
             self.node.sub_chain(u.granted);
@@ -1067,6 +1084,10 @@ impl MemoryPool for TreePool {
                 ..Usage::default()
             };
         }
+        // Last: while the bytes were being returned the consumer stayed
+        // visible to arbitration, so its query (if aborted) counted as a
+        // pending release. Closed, it now offers nothing to spill or wait for.
+        lock(&self.node.shared.registry).remove(&id);
     }
 
     fn try_reserve(&self, id: ConsumerId, bytes: usize) -> Result<(), MemoryError> {

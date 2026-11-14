@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 
-use krishiv_common::error::{KrishivError, TableOrViewAlreadyExists};
+use krishiv_common::error::{KrishivError, SchemaNotFound, TableOrViewAlreadyExists};
 use krishiv_types::DataType;
 use std::sync::Arc;
 
@@ -197,9 +197,18 @@ pub(crate) struct CatalogTable {
     /// [`CatalogStore::replace_table`]. `ANALYZE` reads it with the table and publishes its statistics only if it
     /// has not moved, so statistics of rows a concurrent write replaced are never stored.
     pub(crate) data_version: u64,
+    /// The entry's version for `CatalogWrite::alter_table`: taken from the store's epoch, under its lock, when
+    /// the entry is created or replaced, so no two entries (or states of one) share it. A caller that read one
+    /// stamp and finds another has been overtaken by a change, a drop and create, or an `ANALYZE`.
+    pub(crate) stamp: u64,
 }
 
 impl CatalogTable {
+    /// The table's version for `CatalogWrite::alter_table` (see [`stamp`](Self::stamp)).
+    pub(crate) fn version(&self) -> krishiv_plan::TableVersion {
+        krishiv_plan::TableVersion(i64::try_from(self.stamp).unwrap_or(i64::MAX))
+    }
+
     /// Records that the table's data changed: its column statistics no longer describe it (`updateTableStats`).
     pub(crate) fn data_changed(&mut self) {
         self.column_stats.clear();
@@ -357,6 +366,8 @@ pub(crate) enum DropNamespaceError {
     Missing,
     /// It holds tables and the drop was a `RESTRICT`.
     NotEmpty,
+    /// Its tables are not the ones the caller checked (`drop_namespace_matching`): nothing was dropped.
+    Changed,
 }
 
 /// What `CREATE TABLE` does when the table exists.
@@ -387,6 +398,19 @@ pub(crate) trait CatalogStore: Send + Sync {
         &self,
         namespace: &str,
         cascade: bool,
+    ) -> Result<Vec<Arc<CatalogTable>>, DropNamespaceError> {
+        self.drop_namespace_matching(namespace, cascade, None)
+    }
+    /// [`drop_namespace`](Self::drop_namespace) that, given the tables the caller checked before deleting
+    /// anything, drops only if the namespace still holds exactly those entries.
+    ///
+    /// # Errors
+    /// As `drop_namespace`, and [`DropNamespaceError::Changed`] when its tables are not `expected`.
+    fn drop_namespace_matching(
+        &self,
+        namespace: &str,
+        cascade: bool,
+        expected: Option<&[Arc<CatalogTable>]>,
     ) -> Result<Vec<Arc<CatalogTable>>, DropNamespaceError>;
     /// Every namespace with its metadata, by name.
     fn namespaces(&self) -> Vec<(String, NamespaceMeta)>;
@@ -399,11 +423,23 @@ pub(crate) trait CatalogStore: Send + Sync {
     /// # Errors
     /// `TABLE_OR_VIEW_ALREADY_EXISTS` for `ErrorIfExists`.
     fn create_table(&self, table: CatalogTable, mode: CreateMode) -> Result<bool, KrishivError>;
-    /// Replaces the entry `expected` was read as with `table`; `false` when that entry was dropped or replaced
-    /// since, so a concurrent `DROP` or `ALTER` is never undone by a stale copy.
-    fn replace_table(&self, expected: &Arc<CatalogTable>, table: CatalogTable) -> bool;
+    /// Replaces the entry `expected` was read as with `table` and returns the entry it stored (with its new
+    /// stamp), taken under the same lock; `None` when that entry was dropped or replaced since, so a concurrent
+    /// `DROP` or `ALTER` is never undone by a stale copy.
+    fn replace_table_entry(
+        &self,
+        expected: &Arc<CatalogTable>,
+        table: CatalogTable,
+    ) -> Option<Arc<CatalogTable>>;
+    /// [`replace_table_entry`](Self::replace_table_entry) as a yes or no.
+    fn replace_table(&self, expected: &Arc<CatalogTable>, table: CatalogTable) -> bool {
+        self.replace_table_entry(expected, table).is_some()
+    }
     /// Removes the table, returning it.
     fn drop_table(&self, namespace: &str, name: &str) -> Option<Arc<CatalogTable>>;
+    /// Removes the entry `expected` was read as, returning it; `None` when that entry was dropped or replaced
+    /// since, so a delete checked against one entry never removes (or deletes the files of) another.
+    fn drop_table_entry(&self, expected: &Arc<CatalogTable>) -> Option<Arc<CatalogTable>>;
     /// The stored functions as of now.
     fn functions(&self) -> Arc<StoredFunctions>;
     /// Defines `function`, replacing one of its name. `expected` is the
@@ -557,10 +593,11 @@ impl CatalogStore for InMemoryCatalogStore {
         true
     }
 
-    fn drop_namespace(
+    fn drop_namespace_matching(
         &self,
         namespace: &str,
         cascade: bool,
+        expected: Option<&[Arc<CatalogTable>]>,
     ) -> Result<Vec<Arc<CatalogTable>>, DropNamespaceError> {
         if namespace == DEFAULT_NAMESPACE {
             return Err(DropNamespaceError::Default);
@@ -579,6 +616,18 @@ impl CatalogStore for InMemoryCatalogStore {
         if (!held.is_empty() || has_functions) && !cascade {
             return Err(DropNamespaceError::NotEmpty);
         }
+        if let Some(expected) = expected {
+            let same = held.len() == expected.len()
+                && expected.iter().all(|e| {
+                    state
+                        .tables
+                        .get(&(e.namespace.clone(), e.name.clone()))
+                        .is_some_and(|t| Arc::ptr_eq(t, e))
+                });
+            if !same {
+                return Err(DropNamespaceError::Changed);
+            }
+        }
         if has_functions {
             let mut next = StoredFunctions::clone(&state.functions);
             next.entries.retain(|(ns, _), _| ns != namespace);
@@ -591,6 +640,12 @@ impl CatalogStore for InMemoryCatalogStore {
             .collect();
         state.namespaces.remove(namespace);
         self.epoch.fetch_add(1, Ordering::AcqRel);
+        // What the caches hold over a dropped table is stale, for every caller of this drop.
+        let dropped: Vec<Arc<CatalogTable>> = dropped;
+        for t in &dropped {
+            self.hub
+                .invalidate_table(&format!("{}.{}", t.namespace, t.name));
+        }
         Ok(dropped)
     }
 
@@ -604,6 +659,13 @@ impl CatalogStore for InMemoryCatalogStore {
     fn create_table(&self, table: CatalogTable, mode: CreateMode) -> Result<bool, KrishivError> {
         let key = (table.namespace.clone(), table.name.clone());
         let mut state = self.lock();
+        // Checked under the lock the insert takes, so a namespace dropped meanwhile cannot be left holding a table.
+        if !state.namespaces.contains_key(&table.namespace) {
+            return Err(SchemaNotFound {
+                schema_name: format!("`{}`", table.namespace),
+            }
+            .into());
+        }
         match (state.tables.contains_key(&key), mode) {
             (true, CreateMode::ErrorIfExists) => {
                 return Err(TableOrViewAlreadyExists {
@@ -621,6 +683,7 @@ impl CatalogStore for InMemoryCatalogStore {
         // The epoch moves under the state lock on every create, so each created entry gets its own value.
         let mut table = table;
         table.incarnation = self.epoch.fetch_add(1, Ordering::AcqRel) + 1;
+        table.stamp = table.incarnation;
         state.tables.insert(key, Arc::new(table));
         // What the result cache holds for this table is stale (it also covers the results
         // computed between a table's data being written and its partitions being registered).
@@ -628,22 +691,27 @@ impl CatalogStore for InMemoryCatalogStore {
         Ok(true)
     }
 
-    fn replace_table(&self, expected: &Arc<CatalogTable>, table: CatalogTable) -> bool {
+    fn replace_table_entry(
+        &self,
+        expected: &Arc<CatalogTable>,
+        table: CatalogTable,
+    ) -> Option<Arc<CatalogTable>> {
         let key = (table.namespace.clone(), table.name.clone());
         let mut state = self.lock();
         match state.tables.get(&key) {
             Some(current) if Arc::ptr_eq(current, expected) => {}
-            _ => return false,
+            _ => return None,
         }
         let changed = format!("{}.{}", key.0, key.1);
         // The same table, changed: it keeps its incarnation.
         let mut table = table;
         table.incarnation = expected.incarnation;
         table.data_version = table.data_version.max(expected.data_version);
-        state.tables.insert(key, Arc::new(table));
-        self.epoch.fetch_add(1, Ordering::AcqRel);
+        table.stamp = self.epoch.fetch_add(1, Ordering::AcqRel) + 1;
+        let entry = Arc::new(table);
+        state.tables.insert(key, Arc::clone(&entry));
         self.hub.invalidate_table(&changed);
-        true
+        Some(entry)
     }
 
     fn drop_table(&self, namespace: &str, name: &str) -> Option<Arc<CatalogTable>> {
@@ -655,6 +723,22 @@ impl CatalogStore for InMemoryCatalogStore {
             self.epoch.fetch_add(1, Ordering::AcqRel);
             self.hub.invalidate_table(&format!("{namespace}.{name}"));
         }
+        removed
+    }
+
+    fn drop_table_entry(&self, expected: &Arc<CatalogTable>) -> Option<Arc<CatalogTable>> {
+        let key = (expected.namespace.clone(), expected.name.clone());
+        let mut state = self.lock();
+        if !state
+            .tables
+            .get(&key)
+            .is_some_and(|t| Arc::ptr_eq(t, expected))
+        {
+            return None;
+        }
+        let removed = state.tables.remove(&key);
+        self.epoch.fetch_add(1, Ordering::AcqRel);
+        self.hub.invalidate_table(&format!("{}.{}", key.0, key.1));
         removed
     }
 
@@ -775,7 +859,96 @@ mod tests {
             column_stats: BTreeMap::new(),
             incarnation: 0,
             data_version: 0,
+            stamp: 0,
         }
+    }
+
+    #[test]
+    fn a_table_cannot_be_created_in_a_namespace_that_is_not_there() {
+        let s = InMemoryCatalogStore::default();
+        let e = s
+            .create_table(table("nope", "t"), CreateMode::ErrorIfExists)
+            .unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            krishiv_common::error::ErrorClass::SchemaNotFound
+        );
+        assert!(s.table("nope", "t").is_none());
+        // Dropped meanwhile: the namespace is checked where the insert happens.
+        s.create_namespace("db", NamespaceMeta::default());
+        s.drop_namespace("db", false).unwrap();
+        assert!(
+            s.create_table(table("db", "t"), CreateMode::ErrorIfExists)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn the_store_takes_a_table_in_a_collated_namespace_so_a_rename_can_always_restore_it() {
+        // `Session::rename_table` drops the source entry and creates the new one, and puts the source
+        // back if that fails: neither create may be refused by the store. The SQL create refuses a *new*
+        // table in a collated schema before it gets here.
+        let s = InMemoryCatalogStore::default();
+        s.create_namespace(
+            "ci",
+            NamespaceMeta {
+                collation: Some("UTF8_LCASE".into()),
+                ..NamespaceMeta::default()
+            },
+        );
+        assert!(
+            s.create_table(table("ci", "t"), CreateMode::ErrorIfExists)
+                .unwrap()
+        );
+        assert!(s.table("ci", "t").is_some());
+    }
+
+    #[test]
+    fn a_removal_checked_against_one_entry_never_removes_another() {
+        let s = InMemoryCatalogStore::default();
+        s.create_table(table("default", "t"), CreateMode::ErrorIfExists)
+            .unwrap();
+        let read = s.table("default", "t").unwrap();
+        s.drop_table("default", "t");
+        s.create_table(table("default", "t"), CreateMode::ErrorIfExists)
+            .unwrap();
+        // `read` is the dropped incarnation: the new table stays.
+        assert!(s.drop_table_entry(&read).is_none());
+        assert!(s.table("default", "t").is_some());
+        let current = s.table("default", "t").unwrap();
+        let epoch = s.epoch();
+        assert!(s.drop_table_entry(&current).is_some());
+        assert!(s.table("default", "t").is_none());
+        assert!(s.epoch() > epoch);
+        assert!(s.drop_table_entry(&current).is_none());
+    }
+
+    #[test]
+    fn a_namespace_drop_bound_to_the_tables_checked_refuses_a_changed_set() {
+        let s = InMemoryCatalogStore::default();
+        s.create_namespace("db", NamespaceMeta::default());
+        s.create_table(table("db", "a"), CreateMode::ErrorIfExists)
+            .unwrap();
+        let checked = s.tables_in("db");
+        // A table appears (or is replaced) after the check: nothing is dropped.
+        s.create_table(table("db", "b"), CreateMode::ErrorIfExists)
+            .unwrap();
+        assert!(matches!(
+            s.drop_namespace_matching("db", true, Some(&checked)),
+            Err(DropNamespaceError::Changed)
+        ));
+        assert!(s.has_namespace("db") && s.table("db", "b").is_some());
+        let again = s.tables_in("db");
+        let replaced = s.table("db", "a").unwrap();
+        assert!(s.replace_table(&replaced, table("db", "a")));
+        assert!(matches!(
+            s.drop_namespace_matching("db", true, Some(&again)),
+            Err(DropNamespaceError::Changed)
+        ));
+        let fresh = s.tables_in("db");
+        let dropped = s.drop_namespace_matching("db", true, Some(&fresh)).unwrap();
+        assert_eq!(dropped.len(), 2);
+        assert!(!s.has_namespace("db"));
     }
 
     #[test]
