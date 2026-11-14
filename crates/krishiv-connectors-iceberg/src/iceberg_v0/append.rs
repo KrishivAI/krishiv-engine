@@ -220,7 +220,12 @@ pub(crate) async fn write_new_manifests(
 pub(crate) struct WriteIds<'a> {
     /// The branch.
     pub(crate) branch: &'a str,
-    /// The write's idempotency key.
+    /// The write's idempotency key (`krishiv.write-id`). Not unique per
+    /// snapshot: a re-executed or replayed write keeps it, so the commit
+    /// loop's own-key search takes a snapshot of this write's id first and a
+    /// key match under another id only after (`commit.rs`, R:S1); a key
+    /// found under another id means "this write is in the table", and this
+    /// execution's files are then orphans.
     pub(crate) write_id: &'a str,
     /// The query that wrote, when known.
     pub(crate) query_id: Option<&'a str>,

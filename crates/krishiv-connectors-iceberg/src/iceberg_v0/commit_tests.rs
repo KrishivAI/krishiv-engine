@@ -406,7 +406,21 @@ fn foreign(
     id: i64,
     branch: &str,
 ) -> Foreign {
+    foreign_keyed(env, clock, m, name, id, branch, None)
+}
+
+/// [`foreign`] with the write key `key` (default `uuid-<id>`).
+fn foreign_keyed(
+    env: &Env,
+    clock: &Arc<TestClock>,
+    m: &TableMetadata,
+    name: &str,
+    id: i64,
+    branch: &str,
+    key: Option<&str>,
+) -> Foreign {
     let f = file(env, m, name, 1, &[(id, name)]);
+    let key = key.map_or_else(|| format!("uuid-{id}"), str::to_owned);
     let io = env.reg.file_io();
     let clock = Arc::clone(clock);
     let branch = branch.to_owned();
@@ -419,7 +433,7 @@ fn foreign(
             let ts = clock.now_ms().max(m.last_updated_ms() + 1);
             let ids = WriteIds {
                 branch: &branch,
-                write_id: &uuid,
+                write_id: &key,
                 query_id: None,
             };
             let a = prepare_attempt(&io, &m, &mut new, ids, ts, MAX)
@@ -520,6 +534,19 @@ impl Case {
 
     fn foreign(&self, name: &str, id: i64, branch: &str) -> Foreign {
         foreign(&self.env, &self.clock, &self.base, name, id, branch)
+    }
+
+    /// A foreign append carrying the write key `key`.
+    fn foreign_keyed(&self, name: &str, id: i64, branch: &str, key: &str) -> Foreign {
+        foreign_keyed(
+            &self.env,
+            &self.clock,
+            &self.base,
+            name,
+            id,
+            branch,
+            Some(key),
+        )
     }
 
     /// The location of attempt `n`'s manifest list.
@@ -983,4 +1010,64 @@ fn a_refresh_that_recovers_rebases() {
     assert_eq!(c.waits(), [1000, 2000, 100]);
     assert!(!exists(&c.list(1)) && exists(&c.manifest()) && exists(&c.data()));
     c.check(&[INIT, MINE]);
+}
+
+/// R:S1: with this write's snapshot in the table and another snapshot
+/// carrying the same write key (a replayed write on `dev`), the own-key
+/// search takes the snapshot id match, whatever the order of the table's
+/// snapshot map, so the kept list is the one `main` reads. Repeated, as the
+/// map's order is per instance.
+#[test]
+fn the_own_key_search_prefers_the_snapshot_id() {
+    for _ in 0..8 {
+        let mut c = case();
+        c.cat.script(&[Fault::LostResponse]);
+        c.cat.on(
+            When::BeforeLoad(1),
+            c.foreign_keyed("r.parquet", 950, "dev", OUR_KEY),
+        );
+        let m = c.run().unwrap();
+        assert_eq!(m.current_snapshot_id(), Some(OURS));
+        assert!(exists(&c.list(1)) && exists(&c.manifest()) && exists(&c.data()));
+        assert_eq!(rows(&c.env, &c.cat.metadata().1), [INIT, MINE]);
+    }
+}
+
+/// R:S1: the write key found only under another snapshot id (a replayed
+/// write, on `dev`) while this write's own request is still unresolved: no
+/// list is deleted, so the held request that lands later reads back. A v1
+/// table, where the `dev` commit does not make the held request stale.
+#[test]
+fn a_key_match_on_another_id_deletes_nothing_while_unresolved() {
+    let mut c = case_with(1, &[]);
+    c.cat.script(&[Fault::Held]);
+    c.cat.on(
+        When::BeforeLoad(1),
+        c.foreign_keyed("r.parquet", 951, "dev", OUR_KEY),
+    );
+    let m = c.run().unwrap();
+    assert!(m.snapshot_by_id(951).is_some());
+    assert!(exists(&c.list(1)) && exists(&c.manifest()) && exists(&c.data()));
+    c.cat.land_held();
+    let (m, loc) = c.cat.metadata();
+    assert_eq!(m.current_snapshot_id(), Some(OURS));
+    assert_eq!(rows(&c.env, &loc), [INIT, MINE]);
+}
+
+/// R:N3: a foreign snapshot holding this write's snapshot id under another
+/// write key is not this write: `KRISHIV_ICEBERG_COMMIT_CONFLICT`, never
+/// "committed", and (every outcome known) the write's files deleted.
+#[test]
+fn a_foreign_snapshot_with_this_id_is_a_conflict() {
+    let mut c = case();
+    c.cat
+        .on(When::BeforeRequest(1), c.foreign("f.parquet", OURS, "main"));
+    let e = c.run().unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergCommitConflict,
+        "{e}"
+    );
+    assert!(!exists(&c.list(1)) && !exists(&c.manifest()) && !exists(&c.data()));
+    c.check(&[INIT, "7000|1|f.parquet"]);
 }
