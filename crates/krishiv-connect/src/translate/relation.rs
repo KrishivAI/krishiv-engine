@@ -471,7 +471,8 @@ impl Translator<'_> {
 /// position is counted from the wrapper.
 fn read_schema(text: &str) -> Result<krishiv_types::StructType> {
     let parsed = if text.trim().is_empty() {
-        // No columns: Spark's table-schema parser refuses the empty statement.
+        // No columns: Spark's table-schema parser refuses the empty statement. Parsing the blank text as a
+        // type gives the same class, PARSE_EMPTY_STATEMENT (pinned by `a_user_schema_reads_as_ddl_or_json`).
         Err(krishiv_types::parse_data_type(text).err().map_or_else(
             || unsupported_field("Read.DataSource", "schema", "an empty schema"),
             Into::into,
