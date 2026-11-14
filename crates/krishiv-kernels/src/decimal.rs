@@ -914,7 +914,15 @@ where
 {
     check_plan::<O>(l, r, plan.left, plan.right, plan.overflow_impossible())?;
     carrier.check(plan.out.0)?;
-    if plan.storage == DecimalStorage::I128 && plan.try64 && may_fit64(l) && may_fit64(r) {
+    // The 64-bit try is compiled for `*` only (the q01 products): each
+    // operator it covers adds 9 chunk loops per operand pair (3 targets x 3
+    // shapes) to the binary; `+ -` on 128-bit storage keep the 128-bit lanes.
+    if Op::OP == ArithOp::Multiply
+        && plan.storage == DecimalStorage::I128
+        && plan.try64
+        && may_fit64(l)
+        && may_fit64(r)
+    {
         let tried = match carrier {
             DecimalCarrier::Decimal64 => try_lanes64::<Op, i64>(l, r, plan, carrier, ctx)?,
             DecimalCarrier::Decimal128 => try_lanes64::<Op, i128>(l, r, plan, carrier, ctx)?,
@@ -1044,13 +1052,12 @@ where
             )
         };
     }
-    // A side at the result scale skips the rescale multiply.
-    let computed = match (plan.l_mul == 1, plan.r_mul == 1) {
-        (true, true) => go!(true, true),
-        (true, false) => go!(true, false),
-        (false, true) => go!(false, true),
-        (false, false) => go!(false, false),
-    };
+    // Only `*` tries the 64-bit lanes, and both of its rescale factors are
+    // 1 (`DecimalPlan::new`), so only the unit/unit lane is compiled.
+    if (plan.l_mul, plan.r_mul) != (1, 1) {
+        return Ok(None);
+    }
+    let computed = go!(true, true);
     match computed {
         Ok(c) => R::finish(c.values, c.nulls, carrier, plan.out).map(Some),
         Err(_) if fell.get() => Ok(None),
@@ -1075,10 +1082,9 @@ where
     R: DecimalOut,
 {
     let raise = |row, fault| plan_error(plan, ctx, sl, sr, row, fault);
-    let lane64 = Lane64::<Op, R>::new(plan);
     // A side at the result scale (`+ -`; both sides of `*`) skips the
     // rescale multiply.
-    let unit = (lane64.l_mul == 1, lane64.r_mul == 1);
+    let unit = (plan.l_mul == 1, plan.r_mul == 1);
     let lane128 = Lane128::<Op> {
         plan,
         bound: pow10(plan.out.0),
@@ -1094,10 +1100,15 @@ where
     };
     let done = |c: chunk::Computed<R>| R::finish(c.values, c.nulls, carrier, plan.out);
     let wide = |c: chunk::Computed<i128>| i128::finish(c.values, c.nulls, carrier, plan.out);
+    // Reachable unit combinations only, each one 9 chunk loops (3 targets
+    // x 3 shapes): `*` has both factors 1; `+ -` rescale at most one side
+    // (the exact scale is the larger input scale), so equal scales take the
+    // left-unit lane (multiplying the right side by 1, as before the unit
+    // lanes). `DecimalPlan::new` makes the last arm unreachable.
     macro_rules! lanes64 {
         ($pol:ty) => {
-            match unit {
-                (true, true) => chunk::compute::<N, _, $pol>(
+            match (Op::OP == ArithOp::Multiply, unit) {
+                (true, (true, true)) => chunk::compute::<N, _, $pol>(
                     ctx,
                     sl,
                     sr,
@@ -1106,16 +1117,7 @@ where
                     Lane64::<Op, R, true, true>::new(plan),
                     raise,
                 ),
-                (false, true) => chunk::compute::<N, _, $pol>(
-                    ctx,
-                    sl,
-                    sr,
-                    nulls,
-                    len,
-                    Lane64::<Op, R, false, true>::new(plan),
-                    raise,
-                ),
-                (true, false) => chunk::compute::<N, _, $pol>(
+                (false, (true, _)) => chunk::compute::<N, _, $pol>(
                     ctx,
                     sl,
                     sr,
@@ -1124,9 +1126,21 @@ where
                     Lane64::<Op, R, true, false>::new(plan),
                     raise,
                 ),
-                (false, false) => {
-                    chunk::compute::<N, _, $pol>(ctx, sl, sr, nulls, len, lane64, raise)
-                }
+                (false, (false, true)) => chunk::compute::<N, _, $pol>(
+                    ctx,
+                    sl,
+                    sr,
+                    nulls,
+                    len,
+                    Lane64::<Op, R, false, true>::new(plan),
+                    raise,
+                ),
+                _ => Err(KernelError::internal(format!(
+                    "decimal {:?} 64-bit lanes with rescale factors {} and {}",
+                    Op::OP,
+                    plan.l_mul,
+                    plan.r_mul
+                ))),
             }
         };
     }
