@@ -399,9 +399,15 @@ fn column(input: Input<'_>, c: &BoundColumn) -> Result<Arc<dyn PhysExpr>> {
         .position(|a| *a == c.id)
         .ok_or_else(|| internal(&format!("attribute #{} is not an input column", c.id.0)))?;
     let field = input.schema.field(index);
+    // The expression-input guard (design P3-T075 §5): a vector carrier is read as the plain list every kernel and
+    // function was written against. Plain column items of a projection never come through here, so they keep it.
+    let data_type = match field.data_type() {
+        ArrowType::FixedSizeList(item, _) => ArrowType::List(Arc::clone(item)),
+        other => other.clone(),
+    };
     Ok(Arc::new(Column {
         index,
-        data_type: field.data_type().clone(),
+        data_type,
         nullable: field.is_nullable(),
     }))
 }
@@ -952,11 +958,17 @@ impl PhysExpr for Column {
     }
 
     fn eval(&self, batch: &RecordBatch, _partition: u32) -> Result<Value> {
-        batch
+        let column = batch
             .columns()
             .get(self.index)
-            .map(|c| Value::Array(Arc::clone(c)))
-            .ok_or_else(|| internal("input column out of range"))
+            .ok_or_else(|| internal("input column out of range"))?;
+        // A vector carrier reads as a plain list (see `column`).
+        match (column.as_fixed_size_list_opt(), &self.data_type) {
+            (Some(vector), ArrowType::List(item)) => Ok(Value::Array(Arc::new(
+                crate::carrier::fixed_to_list(vector, item)?,
+            ))),
+            _ => Ok(Value::Array(Arc::clone(column))),
+        }
     }
 }
 
