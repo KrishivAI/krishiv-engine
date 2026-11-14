@@ -419,7 +419,7 @@ impl DataFrame {
         let stats = ProviderStatistics(
             Arc::clone(&planned.analysis.env.catalog) as Arc<dyn TableProviderResolver>
         );
-        let mut text = render(mode, &parsed, &planned, &stats);
+        let mut text = dense_ids(&render(mode, &parsed, &planned, &stats));
         // Which estimates came from distinct-value samples and which stayed
         // the defaults (only when a table was sampled, so a query that
         // samples nothing prints Spark's text).
@@ -489,6 +489,60 @@ fn render(mode: ExplainMode, parsed: &str, p: &Planned, stats: &ProviderStatisti
 
 /// Spark's `FORMATTED`: the outline with operator ids (children first),
 /// then `(id) Name` with the node's arguments.
+/// The ids the planner gives its own columns start at 2^62, far above the
+/// plan's; in the text they follow the plan's largest id in order of first
+/// appearance (`sum(amount#1)#4`, as Spark prints `sum(amount#1)#12L`),
+/// never `#4611686018427387904` (PY-008).
+fn dense_ids(text: &str) -> String {
+    const HIGH: u64 = 1 << 62;
+    let ids = |text: &str| -> Vec<(usize, usize, u64)> {
+        let b = text.as_bytes();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] == b'#' && b.get(i + 1).is_some_and(u8::is_ascii_digit) {
+                let end = (i + 1..b.len())
+                    .find(|&j| !b[j].is_ascii_digit())
+                    .unwrap_or(b.len());
+                if let Ok(n) = text[i + 1..end].parse::<u64>() {
+                    out.push((i + 1, end, n));
+                }
+                i = end;
+            } else {
+                i += 1;
+            }
+        }
+        out
+    };
+    let found = ids(text);
+    if !found.iter().any(|&(_, _, n)| n >= HIGH) {
+        return text.to_owned();
+    }
+    let base = found
+        .iter()
+        .map(|&(_, _, n)| n)
+        .filter(|&n| n < HIGH)
+        .max()
+        .map_or(0, |m| m.saturating_add(1));
+    let mut mapped: Vec<u64> = Vec::new();
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    for (start, end, n) in found {
+        if n < HIGH {
+            continue;
+        }
+        let rank = mapped.iter().position(|&m| m == n).unwrap_or_else(|| {
+            mapped.push(n);
+            mapped.len() - 1
+        });
+        out.push_str(&text[at..start]);
+        let _ = write!(out, "{}", base.saturating_add(rank as u64));
+        at = end;
+    }
+    out.push_str(&text[at..]);
+    out
+}
+
 fn formatted(root: &ExplainNode) -> String {
     let mut ids = Vec::new();
     number(root, &mut ids);
@@ -601,4 +655,19 @@ fn f64_to_u64(v: f64) -> u64 {
     )]
     let n = v.max(0.0).min(u64::MAX as f64) as u64;
     n
+}
+
+#[cfg(test)]
+mod dense_ids_tests {
+    use super::dense_ids;
+
+    #[test]
+    fn planner_ids_follow_the_plans_own() {
+        let text = "HashAggregate(sum(amount#1)#4611686018427387904 AS revenue#2)\nx#4611686018427387905 y#4611686018427387904 z#7";
+        assert_eq!(
+            dense_ids(text),
+            "HashAggregate(sum(amount#1)#8 AS revenue#2)\nx#9 y#8 z#7"
+        );
+        assert_eq!(dense_ids("a#1 b#22"), "a#1 b#22");
+    }
 }
