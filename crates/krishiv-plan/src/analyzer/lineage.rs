@@ -26,8 +26,7 @@ use std::fmt;
 use krishiv_common::error::KrishivError;
 
 use super::AnalyzedPlan;
-use crate::plan::{LogicalPlan, PlanNode};
-use crate::{AttrId, Origin};
+pub use super::views::{ViewExpansion, ViewSecurity, locate_views};
 
 mod exprs;
 mod walk;
@@ -215,76 +214,6 @@ pub struct Lineage {
     pub filters: BTreeSet<(FilterKind, Leaf)>,
     /// Fixed warning codes, sorted.
     pub warnings: BTreeSet<LineageWarning>,
-}
-
-/// How a view's base tables are authorized (T062 sets [`Self::Definer`]; today every permanent view is
-/// read as its invoker reads its query).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[non_exhaustive]
-pub enum ViewSecurity {
-    /// A temporary view: its query is the caller's.
-    Temporary,
-    /// `SQL SECURITY INVOKER`: base tables are checked against the caller.
-    Invoker,
-    /// `SQL SECURITY DEFINER`: base tables are checked against the view's owner.
-    Definer,
-}
-
-/// The view side table: one view read the expansion inlined, recorded by view inlining (there is no IR node
-/// for it), and located in the resolved plan by [`locate_views`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ViewExpansion {
-    /// The view's name parts.
-    pub name: Vec<String>,
-    /// The alias of the `SubqueryAlias` the inlining built.
-    pub alias: String,
-    /// That node's origin (the read's), which resolution keeps.
-    pub origin: Origin,
-    /// How its base tables are authorized.
-    pub security: ViewSecurity,
-    /// Whether its base securables were authorized for the caller.
-    pub bases_authorized: bool,
-    /// The output attributes of the inlined subtree in the resolved plan; `None` until located (or when
-    /// resolution left no node for it).
-    pub output: Option<Vec<AttrId>>,
-}
-
-impl ViewExpansion {
-    /// Whether lineage expands through the view: only views whose base tables were checked against the
-    /// caller (temporary and `INVOKER` views), never a `DEFINER` view.
-    #[must_use]
-    pub fn expands(&self) -> bool {
-        match self.security {
-            ViewSecurity::Temporary | ViewSecurity::Invoker => self.bases_authorized,
-            ViewSecurity::Definer => false,
-        }
-    }
-}
-
-/// `views` with their [`output`](ViewExpansion::output) set from the resolved plan `root`: the outputs of
-/// the `SubqueryAlias` nodes with the view's alias and origin. A view resolution left no node for keeps
-/// `None`.
-#[must_use]
-pub fn locate_views(root: &LogicalPlan, mut views: Vec<ViewExpansion>) -> Vec<ViewExpansion> {
-    if views.is_empty() {
-        return views;
-    }
-    let _ = crate::walk::visit_distinct(crate::walk::Node::Plan(root), |node| {
-        if let crate::walk::Node::Plan(p) = node
-            && let PlanNode::SubqueryAlias { alias, .. } = &p.node
-        {
-            for v in views
-                .iter_mut()
-                .filter(|v| v.output.is_none() && v.alias == *alias && v.origin == p.origin)
-            {
-                v.output = p
-                    .resolved_output()
-                    .map(|out| out.into_iter().map(|c| c.id).collect());
-            }
-        }
-        std::ops::ControlFlow::Continue(())
-    });
-    views
 }
 
 /// The column lineage of `analyzed` (see the module doc).

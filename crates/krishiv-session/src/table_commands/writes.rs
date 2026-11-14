@@ -524,6 +524,9 @@ impl Session {
                 // this admission instead of asking again.
                 let mut pre = Some(self.admit_query(&analysis.env, false).await?);
                 let done = async {
+                    // From the drop on, a cancel waits for the write's query
+                    // instead of dropping the statement half-way (`action.rs`).
+                    crate::action::commit_point();
                     self.drop_named_table(&name, &env, true).await?;
                     self.exec_write_v2(df, spec, V2Mode::Create, &mut pre).await
                 }

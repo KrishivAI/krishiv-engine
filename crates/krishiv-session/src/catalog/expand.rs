@@ -2,7 +2,7 @@
 //! View expansion: the walk that inlines permanent and temporary views into a plan.
 
 use super::*;
-use krishiv_plan::analyzer::lineage::{ViewExpansion, ViewSecurity};
+use krishiv_plan::analyzer::views::{ViewExpansion, ViewSecurity};
 
 /// [`expand_temp_views`]: the views on the current expansion path, by
 /// lower-case name, for cycle detection.
@@ -25,23 +25,17 @@ pub(super) struct Expander<'a> {
     pub(super) views: Vec<ViewExpansion>,
 }
 
-/// A view read the expansion inlined as `SubqueryAlias alias` at `origin`, for the lineage side table. Every
+/// A view read the expansion inlined as `SubqueryAlias alias` at `origin`, for the view side table. Every
 /// view inlined here is read with its base tables checked against the caller (the analyzer binds them as the
-/// query's own reads): a temporary view, or a permanent view as `INVOKER` (T062 adds `DEFINER`).
+/// query's own reads): a temporary view, or a permanent view as `INVOKER` (T062 adds `DEFINER`). The expansion
+/// has no memo, so a read shared by two parents of the plan (`df.join(df)`) is inlined, and recorded, twice.
 fn view_read(
     name: Vec<String>,
     alias: &str,
     origin: Origin,
     security: ViewSecurity,
 ) -> ViewExpansion {
-    ViewExpansion {
-        name,
-        alias: alias.to_owned(),
-        origin,
-        security,
-        bases_authorized: true,
-        output: None,
-    }
+    ViewExpansion::new(name, alias.to_owned(), origin, security, true)
 }
 
 impl Expander<'_> {
@@ -436,78 +430,8 @@ impl Expander<'_> {
     }
 }
 
-/// The lineage view side table (P3-T063 N1a, review m4): each view inlined here is located in the analyzed
-/// plan, and lineage expands through temporary and permanent (`INVOKER`) views with `via_view`.
+/// The view side table (P3-T063, review m4): each view inlined here is recorded, once per expansion, and
+/// located in the analyzed plan by its (alias, origin).
 #[cfg(test)]
-mod lineage_side_table {
-    use std::sync::Arc;
-
-    use futures::executor::block_on;
-    use krishiv_plan::analyzer::lineage::{Leaf, ViewSecurity, lineage};
-
-    #[test]
-    fn lineage_view_expanded() {
-        let s = crate::Session::new().unwrap();
-        for sql in [
-            "CREATE TABLE base (a INT, b INT)",
-            "CREATE VIEW pv AS SELECT a + 1 AS k FROM base WHERE b > 0",
-            "CREATE TEMPORARY VIEW tv AS SELECT b FROM base",
-        ] {
-            block_on(s.sql(sql)).unwrap();
-        }
-        let df = block_on(s.sql("SELECT k, b FROM pv, tv")).unwrap();
-        let analyzed = Arc::clone(&block_on(df.analysis()).unwrap().analyzed);
-        // Both views are in the side table, located in the resolved plan.
-        let mut views: Vec<(String, ViewSecurity, bool)> = analyzed
-            .views
-            .iter()
-            .map(|v| (v.name.join("."), v.security, v.output.is_some()))
-            .collect();
-        views.sort();
-        assert_eq!(
-            views,
-            [
-                (
-                    "spark_catalog.default.pv".to_owned(),
-                    ViewSecurity::Invoker,
-                    true
-                ),
-                ("tv".to_owned(), ViewSecurity::Temporary, true),
-            ]
-        );
-        let l = lineage(&analyzed).unwrap();
-        let got: Vec<(String, Option<String>, &str)> = l
-            .columns
-            .iter()
-            .flat_map(|c| {
-                c.sources.iter().map(|s| {
-                    let column = match &s.leaf {
-                        Leaf::Table { name, column } => format!("{}.{column}", name.join(".")),
-                        other => format!("{other:?}"),
-                    };
-                    (
-                        column,
-                        s.via_view.as_ref().map(|v| v.join(".")),
-                        c.transform.name(),
-                    )
-                })
-            })
-            .collect();
-        assert_eq!(
-            got,
-            [
-                (
-                    "spark_catalog.default.base.a".to_owned(),
-                    Some("spark_catalog.default.pv".to_owned()),
-                    "expression"
-                ),
-                (
-                    "spark_catalog.default.base.b".to_owned(),
-                    Some("tv".to_owned()),
-                    "identity"
-                ),
-            ]
-        );
-        assert!(l.warnings.is_empty());
-    }
-}
+#[path = "expand_tests.rs"]
+mod view_side_table;

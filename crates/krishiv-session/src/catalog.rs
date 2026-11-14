@@ -1399,7 +1399,7 @@ pub(crate) struct Expansion {
     /// against their analyzed queries (`view_schema::check_read`).
     pub(crate) stored_reads: Vec<crate::view_schema::StoredRead>,
     /// The views inlined, for the lineage side table (`AnalyzedPlan::views`, located once analyzed).
-    pub(crate) views: Vec<krishiv_plan::analyzer::lineage::ViewExpansion>,
+    pub(crate) views: Vec<krishiv_plan::analyzer::views::ViewExpansion>,
 }
 
 /// Whether creating the temporary view `name` over `plan` would close a

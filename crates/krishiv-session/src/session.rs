@@ -493,8 +493,8 @@ impl Session {
         let (session, text) = (self.clone(), query.to_owned());
         let row: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
         let marker = Arc::clone(&row);
-        let result = self
-            .on_executor(async move {
+        let (result, cancelled) = self
+            .on_executor_reasoned(async move {
                 let seq = session.state.statements.fetch_add(1, Ordering::Relaxed);
                 use tracing::Instrument as _;
                 let trace = crate::telemetry::QueryTrace::of(seq, &text);
@@ -513,13 +513,17 @@ impl Session {
         if let Err(error) = &result
             && row.lock().unwrap_or_else(PoisonError::into_inner).is_none()
         {
-            self.state.queries.record_refused(
+            let id = self.state.queries.record_refused(
                 crate::system::TextPolicy::from_config(&self.state.conf.snapshot()),
                 Some(krishiv_sql::redact_sql(query).as_str()),
                 None,
                 error,
                 self.operation_id(),
             );
+            // Ended by `cancel`/`interrupt_all` while it was analyzed (`action.rs`).
+            if let Some(reason) = cancelled {
+                self.state.queries.note_cancel_reason(&id, reason);
+            }
         }
         result
     }
@@ -1118,17 +1122,38 @@ impl Session {
         &self,
         work: impl Future<Output = Result<T, KrishivError>> + Send + 'static,
     ) -> Result<T, KrishivError> {
+        // Boxed: the work is held once, not in both futures (`clippy::large_futures` at the callers).
+        self.on_executor_reasoned(Box::pin(work)).await.0
+    }
+
+    /// [`Self::on_executor`], also returning the reason the action was ended
+    /// with before any query of it was reserved, if it was (for the row of a
+    /// statement that ended before its query existed).
+    pub(crate) async fn on_executor_reasoned<T: Send + 'static>(
+        &self,
+        work: impl Future<Output = Result<T, KrishivError>> + Send + 'static,
+    ) -> (Result<T, KrishivError>, Option<crate::CancelReason>) {
         let (tx, rx) = tokio::sync::oneshot::channel();
+        // Registered from here on: `cancel` and `interrupt_all` reach the
+        // action during analysis and planning too (`action.rs`).
+        let action = self.state.runtime.actions.begin(
+            self.state.number,
+            self.operation_id().map(crate::QueryId::as_str),
+        );
+        let reason = action.reason();
         let task = self.state.runtime.executor.spawn(
             WorkloadClass::Interactive,
             Box::pin(async move {
                 // The caller may be gone; its result is then not needed.
-                let _ = tx.send(work.await);
+                let _ = tx.send(action.run(work).await);
             }),
         );
         let _abort = AbortOnDrop(task);
-        rx.await
-            .map_err(|_| internal("a session task ended without a result".to_owned()))?
+        let result = match rx.await {
+            Ok(result) => result,
+            Err(_) => Err(internal("a session task ended without a result".to_owned())),
+        };
+        (result, reason.ended_with())
     }
 
     /// A fresh DataFrame plan id.
@@ -1342,7 +1367,7 @@ impl Session {
                 }),
             }),
         )?;
-        let inlined = std::mem::take(&mut expansion.views);
+        let mut inlined = std::mem::take(&mut expansion.views);
         // A permanent view is inlined before binding, so the analyzer never asks the
         // policy about it: ask here, before any read and before the text of a stored view
         // can fail, so a principal who may not read it learns nothing from it.
@@ -1382,9 +1407,9 @@ impl Session {
         for (found, changed) in synced {
             crate::store::CatalogStore::replace_table(&*self.state.catalog.store, &found, changed);
         }
-        // The lineage side table: where each inlined view landed in the resolved plan.
-        analyzed.views =
-            krishiv_plan::analyzer::lineage::locate_views(analyzed.plan.root(), inlined);
+        // The view side table: where each view the query and its functions' bodies inlined landed.
+        inlined.extend(env.sql_functions.body_views());
+        analyzed.views = krishiv_plan::analyzer::views::locate_views(analyzed.plan.root(), inlined);
         for view in views {
             let securable = krishiv_plan::analyzer::Securable::View(view);
             if !analyzed.securables.iter().any(|s| s.securable == securable) {

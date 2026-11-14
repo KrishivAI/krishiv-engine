@@ -120,6 +120,7 @@ mod unexecutable;
 mod unpivot;
 mod variables;
 mod variant;
+pub mod views;
 mod windows;
 
 use krishiv_kernels::datetime::{TimeZoneRules, ZoneRef, resolve_zone};
@@ -809,8 +810,8 @@ pub struct AnalyzedPlan {
     /// What Spark logs as warnings during analysis: hints it ignores.
     pub warnings: Vec<String>,
     /// The view side table: the views inlined before binding, located in [`Self::plan`] (filled by the
-    /// session that inlines them; see [`lineage::ViewExpansion`]).
-    pub views: Vec<lineage::ViewExpansion>,
+    /// session that inlines them; see [`views::ViewExpansion`]).
+    pub views: Vec<views::ViewExpansion>,
 }
 
 impl PartialEq for AnalyzedPlan {
