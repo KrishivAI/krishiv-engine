@@ -306,6 +306,14 @@ impl PhysExpr for AndOr {
         let scalar = lv.is_scalar() && rv.is_scalar();
         let rows = if scalar { 1 } else { rows };
         let (l, r) = both(&lv, &rv, rows)?;
+        // The buffer operators this replaced asserted equal lengths; the word-wise pass would read the shorter side as zeros.
+        if l.len() != r.len() {
+            return Err(internal(&format!(
+                "AND/OR operands of different lengths ({} and {})",
+                l.len(),
+                r.len()
+            )));
+        }
         let (values, valid) = kleene(and, &l, &r);
         let out: ArrayRef = Arc::new(BooleanArray::new(values, Some(NullBuffer::new(valid))));
         Ok(if scalar {
@@ -1192,7 +1200,7 @@ mod tests {
                 nulls.then(|| NullBuffer::from(valid)),
             )
         };
-        for n in [0usize, 1, 7, 63, 64, 65, 127, 128, 130, 1000] {
+        for n in [0usize, 1, 7, 63, 64, 65, 67, 127, 128, 130, 131, 1000] {
             for (ln, rn) in [(false, false), (true, false), (false, true), (true, true)] {
                 for slice in [0usize, 3] {
                     if n < slice {
@@ -1219,9 +1227,69 @@ mod tests {
                         );
                         let (want_values, want_valid) = kleene_reference(and, &l, &r);
                         assert_eq!(values, want_values, "values n={n} slice={slice} and={and}");
+                        // the bits of the last word beyond the length are cleared, not just ignored
+                        for buf in [&values, &valid] {
+                            let len = buf.len();
+                            if len % 64 != 0 {
+                                let words = buf.inner().typed_data::<u64>();
+                                assert_eq!(
+                                    words[len / 64] >> (len % 64),
+                                    0,
+                                    "tail bits n={n} slice={slice} and={and}"
+                                );
+                            }
+                        }
                         assert_eq!(valid, want_valid, "valid n={n} slice={slice} and={and}");
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn word_wise_and_or_with_values_and_validity_at_different_offsets() {
+        let bits = |n: usize, seed: u64| {
+            let mut x = seed | 1;
+            BooleanBuffer::from(
+                (0..n)
+                    .map(|_| {
+                        x ^= x << 13;
+                        x ^= x >> 7;
+                        x ^= x << 17;
+                        x & 1 == 1
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        };
+        for n in [1usize, 63, 64, 67, 130, 131, 257] {
+            // the values start 3 bits in, the validity 5 bits in, the right side 9 and 2
+            let l = BooleanArray::new(
+                bits(n + 20, 11).slice(3, n),
+                Some(NullBuffer::new(bits(n + 20, 12).slice(5, n))),
+            );
+            let r = BooleanArray::new(
+                bits(n + 20, 13).slice(9, n),
+                Some(NullBuffer::new(bits(n + 20, 14).slice(2, n))),
+            );
+            for and in [true, false] {
+                let (values, valid) = kleene(and, &l, &r);
+                let (want_values, want_valid) = kleene_reference(and, &l, &r);
+                assert_eq!(values, want_values, "values n={n} and={and}");
+                assert_eq!(valid, want_valid, "valid n={n} and={and}");
+                let want_open = {
+                    let (lb, l_ok) = parts(&l);
+                    if and {
+                        !&(&l_ok & &!&lb)
+                    } else {
+                        !&(&l_ok & &lb)
+                    }
+                };
+                assert_eq!(open_rows(and, &l), want_open, "open n={n} and={and}");
+                assert_eq!(
+                    open_count(and, &l),
+                    want_open.count_set_bits(),
+                    "count n={n} and={and}"
+                );
             }
         }
     }
