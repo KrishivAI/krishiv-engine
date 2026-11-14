@@ -1108,3 +1108,87 @@ async fn interrupt_refusals() {
         .unwrap_err();
     assert_eq!(error_class(&status), "UNSUPPORTED_FEATURE.INTERRUPT_TYPE");
 }
+
+// ------------------------------------------------- trace context and client type
+
+/// `AnalyzePlan` with extra request metadata, as a client interceptor adds it.
+async fn analyze_with_metadata(
+    run: &Running,
+    metadata: &[(&'static str, &str)],
+    client_type: Option<&str>,
+) -> Result<pb::AnalyzePlanResponse, tonic::Status> {
+    let mut request = tonic::Request::new(pb::AnalyzePlanRequest {
+        session_id: SESSION.to_owned(),
+        client_type: client_type.map(str::to_owned),
+        analyze: Some(Analyze::Schema(Box::new(areq::Schema {
+            plan: Some(sql("SELECT 1 AS a")),
+        }))),
+        ..Default::default()
+    });
+    for (k, v) in metadata {
+        request
+            .metadata_mut()
+            .insert(*k, v.parse().expect("metadata value"));
+    }
+    let mut grpc = tonic::client::Grpc::new(run.channel.clone());
+    grpc.ready().await.expect("ready");
+    grpc.unary(
+        request,
+        path("AnalyzePlan"),
+        tonic_prost::ProstCodec::<pb::AnalyzePlanRequest, pb::AnalyzePlanResponse>::default(),
+    )
+    .await
+    .map(tonic::Response::into_inner)
+}
+
+const TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_request_traceparent_reaches_the_session_and_a_later_request_without_one_clears_it() {
+    let run = start().await;
+    analyze_with_metadata(
+        &run,
+        &[("traceparent", TRACEPARENT), ("baggage", "tenant=acme")],
+        Some("_SPARK_CONNECT_PYTHON spark/4.3.0"),
+    )
+    .await
+    .expect("analyze");
+    let session = run.entry();
+    assert_eq!(
+        session.session().trace_id().as_deref(),
+        Some("4bf92f3577b34da6a3ce929d0e0e4736")
+    );
+    assert_eq!(
+        session.session().baggage(),
+        [("tenant".to_owned(), "acme".to_owned())]
+    );
+    // A malformed header is ignored (the request still succeeds) and ends the earlier trace.
+    analyze_with_metadata(&run, &[("traceparent", "junk")], None)
+        .await
+        .expect("a bad traceparent never fails the request");
+    assert!(session.session().trace_id().is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_client_type_and_transport_show_in_system_sessions() {
+    use arrow_array::cast::AsArray;
+    let run = start().await;
+    analyze_with_metadata(&run, &[], Some("_SPARK_CONNECT_PYTHON spark/4.3.0"))
+        .await
+        .expect("analyze");
+    let batches = run
+        .entry()
+        .session()
+        .sql("select transport, client_type from system.sessions where client_type is not null")
+        .await
+        .expect("sql")
+        .collect()
+        .await
+        .expect("collect");
+    let b = &batches[0];
+    assert_eq!(b.column(0).as_string::<i32>().value(0), "connect");
+    assert_eq!(
+        b.column(1).as_string::<i32>().value(0),
+        "_SPARK_CONNECT_PYTHON spark/4.3.0"
+    );
+}
