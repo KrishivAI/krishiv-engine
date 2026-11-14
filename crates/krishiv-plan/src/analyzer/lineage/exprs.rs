@@ -2,7 +2,8 @@
 //! The lineage of a resolved expression (design §3.1, "Expressions"): column references read the walk's
 //! map, functions compose their arguments, a UDF is `opaque` over its arguments, a lambda variable reads
 //! its higher-order function's other arguments, a scalar subquery is its output's lineage, and `IN` /
-//! `EXISTS` subqueries are `join` filters. Memoized by (expression address, `Shift` offset).
+//! `EXISTS` subqueries are `join` filters. Memoized by (expression address, `Shift` offset), but for bare
+//! columns and literals (no children).
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -19,6 +20,15 @@ use crate::{
 impl Walker<'_> {
     /// The lineage of the value of `e` under `offset`.
     pub(super) fn value(&mut self, e: &Arc<Expr>, offset: u64) -> Result<Info, KrishivError> {
+        // A bare column is one map lookup and a literal has no leaf: no children, so no memo (most expressions
+        // of a plan are these, and a memo entry costs more than the rule).
+        match &e.node {
+            ExprNode::Literal(_) => return Ok(literal()),
+            ExprNode::Resolved(
+                ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c) | ResolvedExpr::LambdaVar(c),
+            ) => return self.column(shifted(c.id, offset)?),
+            _ => {}
+        }
         let key = (addr(&**e), offset);
         if let Some(i) = self.exprs.get(&key) {
             return Ok(Arc::clone(i));

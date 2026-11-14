@@ -4,7 +4,10 @@
 //!
 //! Attribute ids are unique within a resolved plan, and inside a `Shift` every id reads `id + offset`, so the
 //! walk keeps one map from global attribute id to lineage: a node's expressions (and a subquery's outer
-//! references) read their columns there, after the node's children put them in.
+//! references) read their columns there, after the node's children put them in. A join, a `Window` and a
+//! `Generate` put in only the columns they add or change (their inputs' are there already); the `INTERSECT` /
+//! `EXCEPT DISTINCT` semi join puts the left side's ids back with both sides' lineage (only its ancestors read
+//! them, ids being unique).
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
@@ -41,10 +44,12 @@ pub(super) type Info = Arc<ColInfo>;
 /// A relation's output: its global attribute ids with their lineage, in order.
 type Out = Arc<Vec<(AttrId, Info)>>;
 
-/// What a node's rule gives: its input's output as it is (a pass-through), or a new one.
+/// What a node's rule gives: its input's output as it is (a pass-through), a new one, or a new one whose
+/// first columns are its inputs' as they are (in the map already: only the rest go in).
 enum Rule {
     Same(Out),
     New(Vec<(AttrId, Info)>),
+    Extend(Vec<(AttrId, Info)>, usize),
 }
 
 /// Rounds of a recursive CTE's fixed point before the walk gives up (each round's lineage is merged into
@@ -269,6 +274,12 @@ impl Walker<'_> {
                 }
                 Arc::new(v)
             }
+            Rule::Extend(v, kept) => {
+                for (id, info) in v.iter().skip(kept) {
+                    self.env.insert(*id, Arc::clone(info));
+                }
+                Arc::new(v)
+            }
         };
         self.plans.insert(key, Arc::clone(&out));
         self.journal.push(Memo::Plan(key));
@@ -363,9 +374,7 @@ impl Walker<'_> {
                 right,
                 kind,
                 condition,
-            } => self
-                .join(left, right, *kind, condition, offset)
-                .map(Rule::New),
+            } => self.join(left, right, *kind, condition, offset),
             PlanNode::Sort { input, order, .. } => {
                 let out = self.plan(input, offset)?;
                 for o in order {
@@ -442,6 +451,7 @@ impl Walker<'_> {
                 order_by,
             } => {
                 let mut out = self.plan(input, offset)?.to_vec();
+                let kept = out.len();
                 for e in partition_by {
                     self.filter_by(FilterKind::Window, e, offset)?;
                 }
@@ -451,7 +461,7 @@ impl Walker<'_> {
                 for e in exprs {
                     out.push(self.output(e, offset)?);
                 }
-                Ok(Rule::New(out))
+                Ok(Rule::Extend(out, kept))
             }
             PlanNode::Expand {
                 input,
@@ -500,6 +510,7 @@ impl Walker<'_> {
                     let id = shifted(id, offset)?;
                     out.retain(|(c, _)| *c != id);
                 }
+                let kept = out.len();
                 let generated = Arc::new(ColInfo {
                     sources: a.sources.clone(),
                     transform,
@@ -507,7 +518,7 @@ impl Walker<'_> {
                 for c in output {
                     out.push((shifted(c.id, offset)?, Arc::clone(&generated)));
                 }
-                Ok(Rule::New(out))
+                Ok(Rule::Extend(out, kept))
             }
             PlanNode::UnionLoop {
                 id,
@@ -558,7 +569,7 @@ impl Walker<'_> {
         kind: JoinKind,
         condition: &JoinCondition,
         offset: u64,
-    ) -> Result<Vec<(AttrId, Info)>, KrishivError> {
+    ) -> Result<Rule, KrishivError> {
         let l = self.plan(left, offset)?;
         let r = self.plan(right, offset)?;
         let cond = match condition {
@@ -572,11 +583,14 @@ impl Walker<'_> {
                 return Err(internal("an unresolved join condition"));
             }
         };
+        // The columns at the front that are the inputs' as they are.
+        let mut kept = l.len();
         let mut out = if matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti)
             && set_op_condition(condition, &l, &r, offset)
         {
             // The `INTERSECT`/`EXCEPT DISTINCT` rewrite: both sides decide the rows, so each output column
             // reads both sides' column at its position, as `UNION` and the `ALL` forms do.
+            kept = 0;
             positional(l.to_vec(), &r)?
         } else {
             l.to_vec()
@@ -589,7 +603,10 @@ impl Walker<'_> {
             | JoinKind::Cross
             | JoinKind::Single
             | JoinKind::LateralInner
-            | JoinKind::LateralLeft => out.extend(r.iter().cloned()),
+            | JoinKind::LateralLeft => {
+                out.extend(r.iter().cloned());
+                kept = out.len();
+            }
             JoinKind::LeftSemi | JoinKind::LeftAnti => {}
             JoinKind::Existence(id) => {
                 // Whether a matching row exists: a value of the condition's columns, and of the right side's
@@ -604,7 +621,7 @@ impl Walker<'_> {
                 ));
             }
         }
-        Ok(out)
+        Ok(Rule::Extend(out, kept))
     }
 
     /// A `SubqueryAlias`: a pass-through, unless it is a view read of the side table (an entry with its alias
