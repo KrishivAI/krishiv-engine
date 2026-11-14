@@ -4,10 +4,11 @@
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 
 import pytest
 
-from krishiv.errors import PySparkAssertionError, PySparkTypeError, PySparkValueError
+from krishiv.errors import PySparkAssertionError, PySparkException, PySparkTypeError, PySparkValueError
 from krishiv.sql import DataFrame, Observation, SparkSession
 from krishiv.sql import functions as F
 
@@ -84,6 +85,26 @@ def test_argument_errors(df: DataFrame) -> None:
     with pytest.raises(PySparkValueError) as c2:
         df.observe("m")
     assert c2.value.getCondition() == "CANNOT_BE_EMPTY"
+
+
+def test_empty_string_name_is_refused_by_the_engine(df: DataFrame) -> None:
+    # classic Spark's string form: INVALID_OBSERVED_METRICS.MISSING_NAME (the class API's VALUE_NOT_NON_EMPTY_STR
+    # is the Observation constructor's)
+    with pytest.raises(PySparkException) as e:
+        df.observe("", F.count(F.lit(1)).alias("n")).count()
+    assert e.value.getCondition() == "INVALID_OBSERVED_METRICS.MISSING_NAME"
+
+
+def test_limit_above_counts_the_rows_it_takes(df: DataFrame) -> None:
+    obs = Observation()
+    df.observe(obs, F.count(F.lit(1)).alias("n")).limit(1).collect()
+    assert obs.get == {"n": 1}
+
+
+def test_write_completes_the_observation(df: DataFrame, tmp_path: Path) -> None:
+    obs = Observation()
+    df.observe(obs, F.count(F.lit(1)).alias("n")).write.parquet(str(tmp_path / "o"))
+    assert obs.get == {"n": 10}
 
 
 def test_limit_zero_gives_empty(df: DataFrame) -> None:

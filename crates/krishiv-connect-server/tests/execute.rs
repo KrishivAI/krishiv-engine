@@ -1098,3 +1098,290 @@ async fn a_failed_query_sends_no_observed_metrics() {
         .expect_err("the table is missing");
     assert_eq!(status.code(), Code::Internal);
 }
+
+// ---- the Connect leg of tests/fixtures/spark-4.2.0/observe-goldens.json (P3-T084) ----
+//
+// Connect returns the metrics of the last action that ran the plan (no first-wins), all names
+// in one `ExecutePlanResponse`, and nothing for a query that failed. The cases below are the
+// fixture's Connect-only `flows_*` and the ones where the Connect leg differs from the classic
+// one; the classic leg (`krishiv-session/tests/observe_goldens.rs`) covers the rest. Cases the
+// engine does not match yet are asserted as what they give now (a gap), so a fix fails them.
+
+use pb::expression::literal::LiteralType;
+
+fn expression(e: pb::expression::ExprType) -> pb::Expression {
+    pb::Expression {
+        common: None,
+        expr_type: Some(e),
+    }
+}
+
+fn attr(name: &str) -> pb::Expression {
+    expression(pb::expression::ExprType::UnresolvedAttribute(
+        pb::expression::UnresolvedAttribute {
+            unparsed_identifier: name.to_owned(),
+            ..Default::default()
+        },
+    ))
+}
+
+fn call(function: &str, arguments: Vec<pb::Expression>) -> pb::Expression {
+    expression(pb::expression::ExprType::UnresolvedFunction(
+        pb::expression::UnresolvedFunction {
+            function_name: function.to_owned(),
+            arguments,
+            ..Default::default()
+        },
+    ))
+}
+
+fn aliased(e: pb::Expression, name: &str) -> pb::Expression {
+    expression(pb::expression::ExprType::Alias(Box::new(
+        pb::expression::Alias {
+            expr: Some(Box::new(e)),
+            name: vec![name.to_owned()],
+            metadata: None,
+        },
+    )))
+}
+
+fn base() -> pb::Relation {
+    sql(
+        "SELECT * FROM VALUES ('a', 1, 1.5D), ('b', 2, CAST(NULL AS DOUBLE)), \
+         ('c', CAST(NULL AS INT), 3.0D) AS t(k, v, x)",
+    )
+}
+
+fn observe_as(
+    input: pb::Relation,
+    name: &str,
+    metrics: Vec<pb::Expression>,
+    plan_id: i64,
+) -> pb::Relation {
+    pb::Relation {
+        common: Some(pb::RelationCommon {
+            plan_id: Some(plan_id),
+            ..Default::default()
+        }),
+        rel_type: Some(RelType::CollectMetrics(Box::new(pb::CollectMetrics {
+            input: Some(Box::new(input)),
+            name: name.to_owned(),
+            metrics,
+        }))),
+    }
+}
+
+fn count_n() -> pb::Expression {
+    aliased(call("count", vec![literal_long(1)]), "n")
+}
+
+fn limit_of(input: pb::Relation, limit: i32) -> pb::Relation {
+    relation(RelType::Limit(Box::new(pb::Limit {
+        input: Some(Box::new(input)),
+        limit,
+    })))
+}
+
+fn union_of(left: pb::Relation, right: pb::Relation) -> pb::Relation {
+    relation(RelType::SetOp(Box::new(pb::SetOperation {
+        left_input: Some(Box::new(left)),
+        right_input: Some(Box::new(right)),
+        set_op_type: pb::set_operation::SetOpType::Union as i32,
+        is_all: Some(true),
+        by_name: None,
+        allow_missing_columns: None,
+    })))
+}
+
+/// The observed metrics of a run: name -> (keys, values), and how many responses carried any.
+/// Metric name -> (key, value) cells, and how many responses carried metrics.
+type Observed = (BTreeMap<String, Vec<(String, Option<LiteralType>)>>, usize);
+
+fn observed_of(responses: &[pb::ExecutePlanResponse]) -> Observed {
+    let carrying = responses
+        .iter()
+        .filter(|r| !r.observed_metrics.is_empty())
+        .count();
+    let all = responses
+        .iter()
+        .flat_map(|r| &r.observed_metrics)
+        .map(|m| {
+            let cells = m
+                .keys
+                .iter()
+                .cloned()
+                .zip(m.values.iter().map(|v| v.literal_type.clone()))
+                .collect();
+            (m.name.clone(), cells)
+        })
+        .collect();
+    (all, carrying)
+}
+
+fn long(v: i64) -> Option<LiteralType> {
+    Some(LiteralType::Long(v))
+}
+
+async fn observed_run(plan: pb::Relation) -> Observed {
+    let run = start().await;
+    let responses = collect(&run.channel, request(root(plan)))
+        .await
+        .expect("execute");
+    observed_of(&responses)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_flows_string_observe_and_no_alias() {
+    // flows_string_observe: an unaliased literal is named by its text.
+    let plan = observe_as(
+        base(),
+        "nm",
+        vec![
+            count_n(),
+            aliased(call("sum", vec![attr("v")]), "s"),
+            literal_long(7),
+        ],
+        1,
+    );
+    let (got, _) = observed_run(plan).await;
+    assert_eq!(
+        got["nm"],
+        vec![
+            ("n".to_owned(), long(3)),
+            ("s".to_owned(), long(3)),
+            ("7".to_owned(), long(7))
+        ]
+    );
+    // flows_no_alias: metrics named as Spark names them.
+    let plan = observe_as(
+        base(),
+        "x",
+        vec![
+            call("count", vec![literal_long(1)]),
+            call("max", vec![attr("v")]),
+        ],
+        2,
+    );
+    let (got, _) = observed_run(plan).await;
+    assert_eq!(
+        got["x"],
+        vec![
+            ("count(1)".to_owned(), long(3)),
+            ("max(v)".to_owned(), Some(LiteralType::Integer(2)))
+        ]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_flows_two_nested_in_one_response() {
+    let inner = observe_as(base(), "a", vec![count_n()], 1);
+    let outer = observe_as(
+        inner,
+        "b",
+        vec![aliased(call("sum", vec![attr("v")]), "s")],
+        2,
+    );
+    let (got, carrying) = observed_run(outer).await;
+    assert_eq!(got["a"], vec![("n".to_owned(), long(3))]);
+    assert_eq!(got["b"], vec![("s".to_owned(), long(3))]);
+    assert_eq!(carrying, 1, "Spark sends all the names in one response");
+}
+
+/// Connect has no first-wins: each run reports its own metrics (`first_then_second_action`:
+/// the count after a `limit(1)` run is 3), and the limit's run counts the rows it took.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_each_action_reports_its_own_metrics() {
+    let run = start().await;
+    let observed = observe_as(base(), "m", vec![count_n()], 1);
+    let first = collect(&run.channel, request(root(limit_of(observed.clone(), 1))))
+        .await
+        .expect("execute");
+    assert_eq!(observed_of(&first).0["m"], vec![("n".to_owned(), long(1))]);
+    let second = collect(&run.channel, request(root(observed)))
+        .await
+        .expect("execute");
+    assert_eq!(observed_of(&second).0["m"], vec![("n".to_owned(), long(3))]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_self_union_reports_one_instance_not_the_sum() {
+    let d = observe_as(base(), "m", vec![count_n()], 1);
+    let (got, _) = observed_run(union_of(d.clone(), d)).await;
+    assert_eq!(got["m"], vec![("n".to_owned(), long(3))]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_limit_zero_sends_no_metrics() {
+    let observed = observe_as(base(), "m", vec![count_n()], 1);
+    let (got, carrying) = observed_run(limit_of(observed, 0)).await;
+    assert!(got.is_empty(), "{got:?}");
+    assert_eq!(carrying, 0);
+}
+
+/// KNOWN GAP (docs/concepts/known-differences.md): Spark prunes an observe node under an empty
+/// relation (`flows_observe_pruned_by_empty_relation` gives `e: {}`); the engine runs it and
+/// reports the rows it read. When this fails the gap is closed: assert Spark's `{}`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_gap_where_false_above_observe_is_not_pruned() {
+    let observed = observe_as(base(), "e", vec![count_n()], 1);
+    let filtered = relation(RelType::Filter(Box::new(pb::Filter {
+        input: Some(Box::new(observed)),
+        condition: Some(call("==", vec![literal_long(1), literal_long(0)])),
+    })));
+    let (got, _) = observed_run(filtered).await;
+    assert_eq!(got["e"], vec![("n".to_owned(), long(3))]);
+}
+
+/// KNOWN GAP: Spark supports a struct-valued metric (`types`); the server refuses it when it
+/// builds the literal. The refusal names the feature, and the other values of the case work.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_types_and_the_struct_metric_gap() {
+    let run = start().await;
+    let types = sql(
+        "SELECT CAST(1.10 AS DECIMAL(5,2)) d, CAST('NaN' AS DOUBLE) n, CAST(-0.0 AS DOUBLE) z, 1 i",
+    );
+    let plan = observe_as(
+        types.clone(),
+        "m",
+        vec![
+            aliased(call("sum", vec![attr("d")]), "sd"),
+            aliased(call("max", vec![attr("n")]), "mn"),
+            aliased(call("collect_list", vec![attr("i")]), "l"),
+        ],
+        1,
+    );
+    let responses = collect(&run.channel, request(root(plan)))
+        .await
+        .expect("execute");
+    let (got, _) = observed_of(&responses);
+    let cells = &got["m"];
+    assert_eq!(cells[0].0, "sd");
+    assert!(
+        matches!(cells[0].1, Some(LiteralType::Decimal(_))),
+        "{cells:?}"
+    );
+    assert!(
+        matches!(&cells[1].1, Some(LiteralType::Double(d)) if d.is_nan()),
+        "{cells:?}"
+    );
+    assert!(
+        matches!(cells[2].1, Some(LiteralType::Array(_))),
+        "{cells:?}"
+    );
+    let with_struct = observe_as(
+        types,
+        "m",
+        vec![aliased(
+            call(
+                "struct",
+                vec![call("max", vec![attr("i")]), call("min", vec![attr("i")])],
+            ),
+            "st",
+        )],
+        1,
+    );
+    let status = collect(&run.channel, request(root(with_struct)))
+        .await
+        .expect_err("a struct metric is not supported yet");
+    assert_eq!(error_class(&status), "KRISHIV_UNSUPPORTED_FEATURE");
+}

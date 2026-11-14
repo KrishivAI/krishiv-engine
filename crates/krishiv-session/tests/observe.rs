@@ -1,21 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `DataFrame::observe` / `Observation` end to end (P3-T084): the classic
-//! cases of `tests/fixtures/spark-4.2.0/observe-goldens.json` that do not
-//! depend on row-at-a-time pulling, parallelism exactness, first action
-//! wins, `LIMIT 0`, reuse errors and cancellation.
+//! `DataFrame::observe` / `Observation` end to end (P3-T084): the actions that must complete an
+//! observation (writes, table writes, metrics and profile runs, result-cache hits), a limit above
+//! capping the count, the engine's own errors, memory and cancellation. The fixture's cases are
+//! in `observe_goldens.rs`.
 #![cfg(test)]
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::{Float64Type, Int32Type, Int64Type};
+use arrow_array::types::{Int32Type, Int64Type};
 use arrow_array::{Array, Float64Array, Int32Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use futures::StreamExt;
 use futures::executor::block_on;
-use krishiv_session::functions::{col, count, lit, max, sum};
-use krishiv_session::{Column, DataFrame, Observation, Session};
+use krishiv_session::functions::{col, count, expr, lit, max, sum};
+use krishiv_session::{DataFrame, Observation, Session};
 use serde_json::Value;
 
 /// The generator's `base()`: `k string, v int, x double`.
@@ -38,7 +38,7 @@ fn base(s: &Session) -> DataFrame {
     s.table("t")
 }
 
-/// One metric cell as the fixture writes it: an integer or null.
+/// One metric cell: an integer or null.
 fn cell(row: &RecordBatch, i: usize) -> Value {
     let c = row.column(i);
     if c.is_null(0) {
@@ -47,11 +47,6 @@ fn cell(row: &RecordBatch, i: usize) -> Value {
     match c.data_type() {
         DataType::Int64 => Value::from(c.as_primitive::<Int64Type>().value(0)),
         DataType::Int32 => Value::from(c.as_primitive::<Int32Type>().value(0)),
-        DataType::Float64 => Value::from(c.as_primitive::<Float64Type>().value(0)),
-        DataType::Utf8 | DataType::Utf8View => Value::from(c.as_string_opt::<i32>().map_or_else(
-            || c.as_string_view().value(0).to_owned(),
-            |s| s.value(0).to_owned(),
-        )),
         other => panic!("unexpected metric type {other}"),
     }
 }
@@ -65,83 +60,10 @@ fn metrics(row: &RecordBatch) -> serde_json::Map<String, Value> {
         .collect()
 }
 
-fn golden(case: &str) -> serde_json::Map<String, Value> {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../tests/fixtures/spark-4.2.0/observe-goldens.json"
-    );
-    let all: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-    all["classic"][case]["metrics"].as_object().unwrap().clone()
-}
-
 /// Runs `df.count()` and returns what the observation holds.
 fn run(df: &DataFrame, obs: &Observation) -> serde_json::Map<String, Value> {
     block_on(df.count()).unwrap();
     metrics(&obs.get().unwrap())
-}
-
-/// A golden case: its name, its metrics and what the frame is filtered by below the observation.
-type Case = (
-    &'static str,
-    Vec<Column>,
-    Box<dyn Fn(DataFrame) -> DataFrame>,
-);
-
-#[test]
-fn classic_goldens() {
-    let s = Session::new().unwrap();
-    let t = base(&s);
-    let n = || count(lit(1)).alias("n");
-    let cases: Vec<Case> = vec![
-        (
-            "basic_alias",
-            vec![
-                count(lit(1)).alias("rows"),
-                sum(col("v")).alias("sv"),
-                max(col("k")).alias("mk"),
-            ],
-            Box::new(|d| d),
-        ),
-        (
-            "literal_only",
-            vec![lit(42).alias("c"), lit("s").alias("s")],
-            Box::new(|d| d),
-        ),
-        (
-            "filter_before_observe",
-            vec![n()],
-            Box::new(|d| d.filter(col("v").eq(1))),
-        ),
-        (
-            "empty_input",
-            vec![
-                count(lit(1)).alias("c"),
-                sum(col("v")).alias("s"),
-                max(col("v")).alias("mx"),
-            ],
-            Box::new(|d| d.filter(lit(1).eq(0))),
-        ),
-        (
-            "nulls_all",
-            vec![
-                sum(col("v")).alias("s"),
-                count(col("v")).alias("c"),
-                max(col("v")).alias("m"),
-            ],
-            Box::new(|d| d.filter(col("v").is_null())),
-        ),
-    ];
-    for (name, metrics_of, below) in cases {
-        let obs = Observation::new();
-        let df = below(t.clone()).observe(&obs, metrics_of).unwrap();
-        let got = run(&df, &obs);
-        let want = golden(name);
-        // `empty_input` and `nulls_all` fixtures list more columns than the
-        // cases above build; every column built here must agree.
-        for (k, v) in &got {
-            assert_eq!(Some(v), want.get(k), "{name}: {k}");
-        }
-    }
 }
 
 #[test]
@@ -240,6 +162,9 @@ fn reuse_and_get_before_observe_fail() {
     );
 }
 
+/// What a dropped stream guarantees: the observation completes, and what it holds is
+/// `{}` (the aborted drivers' partials had not arrived) or a count no larger than the input.
+/// Spark also reports a partial value for a cancelled action.
 #[test]
 fn a_cancelled_action_completes_the_observation() {
     let s = Session::new().unwrap();
@@ -257,9 +182,209 @@ fn a_cancelled_action_completes_the_observation() {
         .get_timeout(Duration::from_secs(30))
         .unwrap()
         .expect("completes after the stream is dropped");
-    // Whatever flowed before the cancellation was counted, no more than the input.
-    let n = metrics(&got).get("n").and_then(Value::as_i64).unwrap_or(0);
-    assert!((0..=50_000_000).contains(&n));
+    match metrics(&got).get("n") {
+        None => assert_eq!(got.num_columns(), 0),
+        Some(n) => assert!((0..=50_000_000).contains(&n.as_i64().unwrap())),
+    }
+}
+
+/// Every way an action runs the plan completes the observation (one hook,
+/// `Session::run_on_query_logged`), not only `execute_stream`.
+#[test]
+fn a_parquet_write_completes_the_observation() {
+    let s = Session::new().unwrap();
+    let obs = Observation::new();
+    let df = base(&s)
+        .observe(&obs, [count(lit(1)).alias("n"), sum(col("v")).alias("s")])
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    block_on(df.write().parquet(dir.path().join("o").to_str().unwrap())).unwrap();
+    let got = metrics(
+        &obs.get_timeout(Duration::from_secs(10))
+            .unwrap()
+            .expect("completes"),
+    );
+    assert_eq!((got["n"].as_i64(), got["s"].as_i64()), (Some(3), Some(3)));
+}
+
+#[test]
+fn a_table_write_completes_the_observation() {
+    let s = Session::new().unwrap();
+    let obs = Observation::new();
+    let df = base(&s).observe(&obs, [count(lit(1)).alias("n")]).unwrap();
+    block_on(df.write().save_as_table("observed_out")).unwrap();
+    let got = obs
+        .get_timeout(Duration::from_secs(10))
+        .unwrap()
+        .expect("completes");
+    assert_eq!(metrics(&got)["n"], 3);
+    // Appending is another write through the same hook.
+    let again = Observation::new();
+    let df = base(&s)
+        .observe(&again, [count(lit(1)).alias("n")])
+        .unwrap();
+    block_on(df.write().mode("append").insert_into("observed_out")).unwrap();
+    let got = again
+        .get_timeout(Duration::from_secs(10))
+        .unwrap()
+        .expect("completes");
+    assert_eq!(metrics(&got)["n"], 3);
+}
+
+#[test]
+fn collect_with_metrics_and_profile_complete_the_observation() {
+    let s = Session::new().unwrap();
+    let obs = Observation::new();
+    let df = base(&s).observe(&obs, [count(lit(1)).alias("n")]).unwrap();
+    block_on(df.collect_with_metrics()).unwrap();
+    let got = obs
+        .get_timeout(Duration::from_secs(10))
+        .unwrap()
+        .expect("completes");
+    assert_eq!(metrics(&got)["n"], 3);
+    let obs = Observation::new();
+    let df = base(&s).observe(&obs, [count(lit(1)).alias("n")]).unwrap();
+    block_on(df.explain(krishiv_session::ExplainMode::Simple)).unwrap();
+    assert!(
+        obs.get_timeout(Duration::from_millis(200))
+            .unwrap()
+            .is_none()
+    );
+    block_on(df.collect_with_profile()).unwrap();
+    let got = obs
+        .get_timeout(Duration::from_secs(10))
+        .unwrap()
+        .expect("completes");
+    assert_eq!(metrics(&got)["n"], 3);
+}
+
+/// A plan that observes is never served from the result cache: every action runs it, so every
+/// observation completes.
+#[test]
+fn a_result_cache_hit_does_not_skip_the_observation() {
+    let s = Session::new().unwrap();
+    s.conf().set("krishiv.resultCache.enabled", "true").unwrap();
+    block_on(
+        block_on(s.sql(
+            "CREATE TABLE rc_observed USING parquet AS SELECT 1 AS a UNION ALL SELECT 2 AS a",
+        ))
+        .unwrap()
+        .collect(),
+    )
+    .unwrap();
+    for _ in 0..3 {
+        let obs = Observation::named("m").unwrap();
+        let df = block_on(s.sql("SELECT a FROM rc_observed"))
+            .unwrap()
+            .observe(&obs, [count(lit(1)).alias("n")])
+            .unwrap();
+        assert_eq!(block_on(df.count()).unwrap(), 2);
+        let got = obs
+            .get_timeout(Duration::from_secs(10))
+            .unwrap()
+            .expect("completes");
+        assert_eq!(metrics(&got)["n"], 2);
+    }
+}
+
+/// Spark counts the rows its consumer pulled: a limit above (through row-for-row operators)
+/// takes no more than that, not the batch it read.
+#[test]
+fn a_limit_above_caps_the_count_at_the_rows_it_takes() {
+    let s = Session::new().unwrap();
+    let count_of = |df: &DataFrame, limit: i32| {
+        let obs = Observation::new();
+        let observed = df.observe(&obs, [count(lit(1)).alias("n")]).unwrap();
+        block_on(observed.limit(limit).collect()).unwrap();
+        metrics(&obs.get_timeout(Duration::from_secs(10)).unwrap().unwrap())["n"]
+            .as_i64()
+            .unwrap()
+    };
+    assert_eq!(count_of(&base(&s), 1), 1);
+    assert_eq!(count_of(&base(&s), 2), 2);
+    assert_eq!(count_of(&base(&s), 10), 3);
+    assert_eq!(count_of(&s.range(0, 1000, 1, Some(4)), 4), 4);
+    // A projection between passes every row on.
+    let obs = Observation::new();
+    let df = s
+        .range(0, 1000, 1, Some(4))
+        .observe(&obs, [count(lit(1)).alias("n")])
+        .unwrap()
+        .select([col("id")]);
+    block_on(df.limit(7).collect()).unwrap();
+    assert_eq!(metrics(&obs.get().unwrap())["n"], 7);
+    // A filter between changes which rows the limit pulled: the count is whole batches at least.
+    let obs = Observation::new();
+    let df = base(&s)
+        .observe(&obs, [count(lit(1)).alias("n")])
+        .unwrap()
+        .filter(col("v").is_not_null());
+    block_on(df.limit(1).collect()).unwrap();
+    assert!(metrics(&obs.get().unwrap())["n"].as_i64().unwrap() >= 1);
+}
+
+/// A scalar subquery in a metric is refused as an unsupported feature, never an internal error.
+#[test]
+fn a_scalar_subquery_metric_is_unsupported_not_internal() {
+    let s = Session::new().unwrap();
+    let obs = Observation::new();
+    let df = base(&s)
+        .observe(
+            &obs,
+            [expr("(select max(id) from range(3))").unwrap().alias("s")],
+        )
+        .unwrap();
+    let e = block_on(df.count()).unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE", "{e}");
+}
+
+/// The state of a metric is charged to the query's pool: an unbounded `collect_list` fails with
+/// `UNABLE_TO_ACQUIRE_MEMORY` under a tiny limit and runs under a sufficient one.
+#[test]
+fn metric_state_is_charged_to_the_memory_pool() {
+    let tiny = Session::builder()
+        .config("krishiv.memory.limit", "64kb")
+        .build()
+        .unwrap();
+    let obs = Observation::new();
+    let df = tiny
+        .range(0, 1_000_000, 1, Some(2))
+        .observe(&obs, [expr("collect_list(id)").unwrap().alias("l")])
+        .unwrap();
+    let e = block_on(df.count()).unwrap_err();
+    assert_eq!(e.error_class().name(), "UNABLE_TO_ACQUIRE_MEMORY", "{e}");
+    let roomy = Session::builder()
+        .config("krishiv.memory.limit", "512mb")
+        .build()
+        .unwrap();
+    let obs = Observation::new();
+    let df = roomy
+        .range(0, 100_000, 1, Some(2))
+        .observe(&obs, [expr("size(collect_list(id))").unwrap().alias("l")])
+        .unwrap();
+    assert_eq!(block_on(df.count()).unwrap(), 100_000);
+    assert_eq!(metrics(&obs.get().unwrap())["l"], 100_000);
+}
+
+/// A metric that raises while the states are finalized is what `get` returns (Spark rethrows the
+/// root cause), not an empty row.
+#[test]
+fn a_failed_finalization_is_what_get_returns() {
+    let s = Session::new().unwrap();
+    let obs = Observation::new();
+    // The state folds; the metric over the results divides by zero when finalized.
+    let df = base(&s)
+        .observe(
+            &obs,
+            [expr("count(1) / (count(1) - 3)").unwrap().alias("r")],
+        )
+        .unwrap();
+    s.conf().set("spark.sql.ansi.enabled", "true").unwrap();
+    block_on(df.count()).unwrap();
+    let e = obs
+        .get_timeout(Duration::from_secs(10))
+        .expect_err("the finalization error, not a silent {}");
+    assert_eq!(e.error_class().name(), "DIVIDE_BY_ZERO", "{e}");
 }
 
 #[test]
