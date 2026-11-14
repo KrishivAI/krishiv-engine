@@ -316,7 +316,7 @@ fn leading_number(text: &str) -> Option<(u32, &str)> {
 /// `krishiv.*` key or Spark alias) with its default, else an unregistered
 /// key as set.
 pub(crate) fn get(config: &Config, key: &str) -> Option<String> {
-    match lookup(key) {
+    match lookup(krishiv_common::config::resolve_alternative(key)) {
         Some(entry) => config.get(entry).map(ToString::to_string),
         None => config.get_unregistered(key).map(str::to_owned),
     }

@@ -1,0 +1,10 @@
+{
+  "cases": {
+    "query-features": [
+      77,
+      79
+    ]
+  },
+  "file": "group-by-filter",
+  "format_version": 1
+}

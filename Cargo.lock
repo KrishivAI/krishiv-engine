@@ -2349,6 +2349,8 @@ dependencies = [
  "krishiv-exec",
  "krishiv-io",
  "krishiv-memory",
+ "krishiv-optimizer",
+ "krishiv-types",
  "object_store",
  "serde_json",
  "tempfile",

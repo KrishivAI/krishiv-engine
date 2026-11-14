@@ -95,3 +95,12 @@ fn warnings_name_unsupported_then_deprecated_keys() {
     );
     assert_eq!(warning("spark.sql.ansi.enabled"), None);
 }
+
+#[test]
+fn explicit_resolves_a_legacy_alternative_to_its_primary_entry() {
+    let alt = "spark.sql.legacy.avro.datetimeRebaseModeInRead";
+    let session = krishiv_session::Session::new().unwrap();
+    let conf = session.conf();
+    conf.set(alt, "LEGACY").unwrap();
+    assert_eq!(super::explicit(&conf, alt).as_deref(), Some("LEGACY"));
+}
