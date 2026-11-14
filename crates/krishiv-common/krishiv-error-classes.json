@@ -38,6 +38,27 @@
     "sqlState" : "KD001",
     "audience" : "operator"
   },
+  "KRISHIV_ICEBERG_COMMIT_CONFLICT" : {
+    "message" : [
+      "The commit of snapshot <snapshotId> to the Iceberg table <table> conflicts with the table at snapshot <conflictingSnapshotId> (<check>): <message> Nothing was committed and the written files were deleted; run the write again against the current table."
+    ],
+    "sqlState" : "40001"
+  },
+  "KRISHIV_ICEBERG_COMMIT_FAILED" : {
+    "message" : [
+      "The commit of snapshot <snapshotId> (write <writeId>) to the Iceberg table <table> was refused by concurrent commits in each of <attempts> requests, the last with: <reason>. None was applied and the written files were deleted; retry the write, or raise \"commit.retry.num-retries\" or \"commit.retry.total-timeout-ms\" on the table."
+    ],
+    "sqlState" : "40001"
+  },
+  "KRISHIV_ICEBERG_COMMIT_STATE_UNKNOWN" : {
+    "message" : [
+      "The commit of snapshot <snapshotId> (write <writeId>) to the Iceberg table <table> may or may not have been applied: <reason>. Look for the snapshot id or the \"krishiv.write-id\" summary value in the table's snapshots before writing the data again.",
+      "Cannot determine whether the commit was successful or not, the underlying data files may or may not be needed. Manual intervention via the Remove Orphan Files Action can remove these files when a connection to the Catalog can be re-established if the commit was actually unsuccessful.",
+      "Please check to see whether or not your commit was successful before retrying this commit. Retrying an already successful operation will result in duplicate records or unintentional modifications.",
+      "At this time no files will be deleted including possibly unused manifest lists."
+    ],
+    "sqlState" : "40003"
+  },
   "KRISHIV_ICEBERG_INVALID_DELETES" : {
     "message" : [
       "<message>"
