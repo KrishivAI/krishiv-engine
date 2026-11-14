@@ -381,6 +381,9 @@ pub(crate) struct Node {
     /// The top of `limit` only spill scratch may take (see the module docs).
     floor: usize,
     /// Bytes held by the subtree; on a query node, plus the abort bit.
+    /// Releases subtract from the root down ([`Node::sub_chain`]), so while
+    /// one is in flight a node may count more than its ancestors do, never
+    /// less.
     word: AtomicUsize,
     /// The most bytes the subtree held after a grant that every pool on its
     /// path accepted (statistics: a grant rolled back is not counted).
@@ -756,6 +759,10 @@ impl Drop for Node {
     fn drop(&mut self) {
         // Children hold their parent, so they are gone and have already
         // returned their grants: what is left belongs to our own consumers.
+        // Normally nothing: every `ConsumerHandle` holds this node's pool and
+        // unregisters (returning its bytes) when dropped. A node being
+        // dropped can no longer be upgraded, so its consumers are already
+        // invisible to arbitration; the registry order does not matter here.
         let mut registry = lock(&self.shared.registry);
         for id in lock(&self.consumers).keys() {
             registry.remove(id);
