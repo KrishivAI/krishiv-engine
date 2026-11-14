@@ -540,3 +540,21 @@ fn the_file_is_checked() {
         ResourceGroups::from_json(&g(r#","jmxExport":true,"softConcurrencyLimit":1"#), MEM).is_ok()
     );
 }
+
+#[test]
+fn a_selector_tag_matches_a_key_or_the_whole_pair() {
+    use super::tag_matches;
+    // A bare key matches any value; `k=v` the exact pair.
+    assert!(tag_matches("team", "team", "x"));
+    assert!(tag_matches("team=x", "team", "x"));
+    assert!(!tag_matches("team=y", "team", "x"));
+    // A Connect tag is opaque: `job=42` is a key, and the selector `job=42` matches it as written.
+    assert!(tag_matches("job=42", "job=42", ""));
+    // The over-match documented in the design: the selector `job=42` also matches the session
+    // pair `("job", "42")`, and a key containing `=` matches whatever its value.
+    assert!(tag_matches("job=42", "job", "42"));
+    assert!(tag_matches("team=x", "team=x", "anything"));
+    // Prefixes are not matches.
+    assert!(!tag_matches("teams", "team", "x"));
+    assert!(!tag_matches("team=", "team", "x"));
+}
