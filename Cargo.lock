@@ -2240,7 +2240,10 @@ name = "krishiv-catalogs"
 version = "0.2.0"
 dependencies = [
  "krishiv-common",
+ "krishiv-plan",
+ "krishiv-types",
  "thrift",
+ "tokio",
  "tracing",
 ]
 
