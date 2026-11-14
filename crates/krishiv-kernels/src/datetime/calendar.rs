@@ -297,9 +297,10 @@ fn truncate_instant(t: i64, unit: TruncUnit, zone: &dyn TimeZoneRules) -> Option
                 TruncUnit::Hour => MICROS_PER_HOUR,
                 _ => MICROS_PER_DAY,
             };
-            let truncated = floor(utc_to_local(t, zone)?, step)?;
+            // One offset lookup reads the local time and is the offset to keep.
             let preferred = zone.offset_at_utc(t.div_euclid(MICROS_PER_SECOND));
-            local_to_utc_keeping(truncated, zone, preferred)
+            let local = t.checked_add(i64::from(preferred).checked_mul(MICROS_PER_SECOND)?)?;
+            local_to_utc_keeping(floor(local, step)?, zone, preferred)
         }
         TruncUnit::Week | TruncUnit::Month | TruncUnit::Quarter | TruncUnit::Year => {
             let local = utc_to_local(t, zone)?;

@@ -48,7 +48,7 @@ pub use format::{
 };
 pub use make::{TimestampFields, make_timestamp, make_timestamp_from_date};
 pub use unit::{TimestampUnit, timestamp_add, timestamp_diff};
-pub use zone::{ZoneRef, resolve_zone, zone_id};
+pub use zone::{Region, ZoneRef, resolve_zone, zone_id};
 
 use crate::cast::datetime::{
     MICROS_PER_DAY, civil_from_days, days_from_civil, local_to_utc, utc_to_local,

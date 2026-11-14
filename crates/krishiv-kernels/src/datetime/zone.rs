@@ -22,6 +22,8 @@
               slices fall on ASCII bytes, and hour/minute/second totals stay below 400,000"
 )]
 
+use std::sync::{Arc, OnceLock};
+
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use krishiv_common::error::{InvalidTimezone, KrishivError};
@@ -64,16 +66,58 @@ pub enum ZoneRef {
     Fixed(FixedOffset),
     /// A region id (`America/Los_Angeles`), short id (`PST`) or `Etc/GMT`
     /// name the bundled database knows.
-    Named(TimeZone),
+    Named(Region),
+}
+
+mod periods;
+
+/// A zone of the bundled database with its offsets from 1900 to 2100 as a
+/// table, built on first use and shared by clones, so per-row offset
+/// lookups are a binary search ([`periods`]). Dereferences to the `jiff`
+/// zone.
+#[derive(Debug, Clone)]
+pub struct Region {
+    zone: TimeZone,
+    periods: Arc<OnceLock<Option<periods::Periods>>>,
+}
+
+impl Region {
+    /// `zone` with an empty table.
+    #[must_use]
+    pub fn new(zone: TimeZone) -> Self {
+        Self {
+            zone,
+            periods: Arc::new(OnceLock::new()),
+        }
+    }
+
+    fn periods(&self) -> Option<&periods::Periods> {
+        self.periods
+            .get_or_init(|| periods::Periods::build(&self.zone))
+            .as_ref()
+    }
+}
+
+impl std::ops::Deref for Region {
+    type Target = TimeZone;
+
+    fn deref(&self) -> &TimeZone {
+        &self.zone
+    }
 }
 
 impl TimeZoneRules for ZoneRef {
     fn offset_at_utc(&self, utc_seconds: i64) -> i32 {
         match self {
             Self::Fixed(fixed) => fixed.offset_at_utc(utc_seconds),
-            Self::Named(zone) => Timestamp::from_second(fold_seconds(utc_seconds))
-                .map(|t| zone.to_offset(t).seconds())
-                .unwrap_or(0),
+            Self::Named(zone) => zone
+                .periods()
+                .and_then(|p| p.offset_at_utc(utc_seconds))
+                .unwrap_or_else(|| {
+                    Timestamp::from_second(fold_seconds(utc_seconds))
+                        .map(|t| zone.to_offset(t).seconds())
+                        .unwrap_or(0)
+                }),
         }
     }
 
@@ -81,6 +125,12 @@ impl TimeZoneRules for ZoneRef {
         match self {
             Self::Fixed(fixed) => fixed.offset_for_local(local_seconds),
             Self::Named(zone) => {
+                if let Some(offset) = zone
+                    .periods()
+                    .and_then(|p| p.offset_for_local(local_seconds))
+                {
+                    return offset;
+                }
                 // The local date-time read as if it were UTC, resolved the
                 // way `java.time.ZonedDateTime.of` does: the earlier offset
                 // in an overlap, forward by the gap's length in a gap. The
@@ -285,7 +335,7 @@ fn resolve_uncached(text: &str) -> Result<ZoneRef, KrishivError> {
         return Ok(match offset_seconds(id) {
             Some(secs) => ZoneRef::Fixed(FixedOffset(secs)),
             // A short id that names a region resolves like one.
-            None => ZoneRef::Named(TimeZone::get(id).map_err(|_| invalid(text))?),
+            None => ZoneRef::Named(Region::new(TimeZone::get(id).map_err(|_| invalid(text))?)),
         });
     }
     if matches!(padded.as_str(), "Z" | "UTC" | "GMT" | "UT") {
@@ -329,7 +379,7 @@ fn resolve_uncached(text: &str) -> Result<ZoneRef, KrishivError> {
             // `ZoneId.of` does not, so only the database's own spelling
             // resolves (`etc/utc` is not a zone).
             if zone.iana_name().is_some_and(|name| name == padded) {
-                Ok(ZoneRef::Named(zone))
+                Ok(ZoneRef::Named(Region::new(zone)))
             } else {
                 Err(invalid(text))
             }
