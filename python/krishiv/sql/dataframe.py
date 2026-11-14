@@ -22,7 +22,7 @@ from krishiv.errors import (
     not_expected_type,
     unsupported_feature,
 )
-from krishiv.sql import _convert
+from krishiv.sql import _convert, _stats
 from krishiv.sql.column import Column, _literal, _named
 from krishiv.sql.functions import first as _first
 from krishiv.sql.group import GroupedData
@@ -1015,13 +1015,11 @@ class DataFrame:
     ) -> DataFrame:
         """Returns a sampled subset of this :class:`DataFrame`.
 
-        .. note:: The engine cannot sample yet: the returned :class:`DataFrame` fails its
-            first action with ``KRISHIV_UNSUPPORTED_FEATURE``.
-
         Parameters
         ----------
         withReplacement : bool, optional
-            Sample with replacement or not (default ``False``).
+            Sample with replacement or not (default ``False``). Sampling with replacement is not
+            supported: it fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
         fraction : float, optional
             Fraction of rows to generate, range [0.0, 1.0].
         seed : int, optional
@@ -1038,13 +1036,25 @@ class DataFrame:
         count of the given :class:`DataFrame`.
 
         `fraction` is required and, `withReplacement` and `seed` are optional.
+
+        Each row draws one number from Spark's ``XORShiftRandom`` stream (``rand(seed)``) and is kept when
+        it is below ``fraction``, so on one partition the rows are the ones Spark keeps for the same seed. An
+        explicit ``seed`` is always honoured, also in ``df.sample(0.3, seed=1)``, where PySpark (4.2.0) drops
+        it and samples at random. The result depends on the order of the rows and on how they are partitioned.
+
+        Examples
+        --------
+        >>> df = spark.range(20)
+        >>> df.sample(0.3, 1).count()
+        7
         """
         if isinstance(withReplacement, bool) and isinstance(fraction, float):
             replace, frac, sampled_seed = withReplacement, fraction, seed
         elif withReplacement is None and isinstance(fraction, float):
             replace, frac, sampled_seed = False, fraction, seed
         elif isinstance(withReplacement, float):
-            replace, frac, sampled_seed = False, float(withReplacement), None if fraction is None else int(fraction)
+            # ``sample(0.3, 1)``: the seed is the second positional argument, or the keyword.
+            replace, frac, sampled_seed = False, float(withReplacement), seed if fraction is None else int(fraction)
         else:
             raise PySparkTypeError(
                 errorClass="NOT_EXPECTED_TYPE",
@@ -1055,7 +1065,39 @@ class DataFrame:
                 },
             )
         sampled = int(sampled_seed) if sampled_seed is not None else random.randint(0, sys.maxsize)
-        return self._new(self._df.sample(replace, frac, sampled))
+        return _stats.sample(self, replace, frac, sampled)
+
+    def randomSplit(self, weights: list[float], seed: int | None = None) -> list[DataFrame]:
+        """Randomly splits this :class:`DataFrame` with the provided weights.
+
+        Parameters
+        ----------
+        weights : list
+            list of doubles as weights with which to split the :class:`DataFrame`.
+            Weights will be normalized if they don't sum up to 1.0.
+        seed : int, optional
+            The seed for sampling.
+
+        Notes
+        -----
+        The rows are ordered by every sortable column first, so a split does not depend on the order of the
+        input; each split is the rows whose draw of ``rand(seed)`` falls in its slice of the weights, so the
+        splits are disjoint and together are the input.
+
+        Examples
+        --------
+        >>> df = spark.range(20)
+        >>> splits = df.randomSplit([1.0, 2.0, 3.0], 11)
+        >>> [s.count() for s in splits]
+        [6, 5, 9]
+        """
+        for w in weights:
+            if w < 0.0:
+                raise PySparkValueError(
+                    errorClass="VALUE_NOT_POSITIVE", messageParameters={"arg_name": "weights", "arg_value": str(w)}
+                )
+        chosen = int(seed) if seed is not None else random.randint(0, sys.maxsize)
+        return _stats.random_split(self, [float(w) for w in weights], chosen)
 
     @property
     def na(self) -> DataFrameNaFunctions:
@@ -1380,10 +1422,6 @@ class DataFrame:
         """Returns a stratified sample without replacement based on the
         fraction given on each stratum.
 
-        .. note:: The engine cannot sample yet: unless ``fractions`` is empty, the returned
-            :class:`DataFrame` fails its first action with ``KRISHIV_UNSUPPORTED_FEATURE`` (from
-            :meth:`DataFrame.sample`).
-
         Parameters
         ----------
         col : :class:`Column` or str
@@ -1400,67 +1438,64 @@ class DataFrame:
 
         Notes
         -----
-        The rows come back grouped by stratum, not in the order of this DataFrame.
+        As Spark, each row draws ``rand(seed)`` and is kept when the draw is below its stratum's fraction.
         """
         return self.stat.sampleBy(col, fractions, seed)
 
     def describe(self, *cols: str | list[str]) -> DataFrame:
         """Computes basic statistics for numeric and string columns: count, mean, stddev, min and max.
 
-        .. note:: The engine has no standard-deviation aggregate yet: after checking its
-            arguments this fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
+        This includes count, mean, stddev, min, and max. If no columns are given, this function computes
+        statistics for all numerical or string columns. Other columns are left out.
 
         Parameters
         ----------
         cols : str, list, optional
              Column name or list of column names to describe by (default All columns).
+
+        Notes
+        -----
+        The statistics are computed when this is called (one engine aggregate) and the result is a local
+        :class:`DataFrame` of strings.
         """
         names = cols[0] if len(cols) == 1 and isinstance(cols[0], list) else cols
         for name in names:
             if not isinstance(name, str):
                 raise not_expected_type("cols", "str", name)
-        raise unsupported_feature("DataFrame.describe")
+        return _stats.describe_frame(self, tuple(cast("tuple[str, ...]", names)))
 
     def summary(self, *statistics: str | list[str]) -> DataFrame:
         """Computes the given statistics (count, mean, stddev, min, max and percentiles such as
         ``75%``) for numeric and string columns.
 
-        .. note:: The engine has no standard-deviation or approximate-percentile aggregate yet:
-            after checking its arguments this fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
-
         Parameters
         ----------
         statistics : str, optional
              The statistics to calculate (default count, mean, stddev, min, 25%, 50%, 75%, max).
+             Also ``count_distinct`` and ``approx_count_distinct``, and any ``<number>%``.
+
+        Notes
+        -----
+        The statistics are computed when this is called (one engine aggregate) and the result is a local
+        :class:`DataFrame` of strings. A percentile is the exact nearest-rank value up to 10000 rows.
         """
         names = statistics[0] if len(statistics) == 1 and isinstance(statistics[0], list) else statistics
         for name in names:
             if not isinstance(name, str):
                 raise not_expected_type("statistics", "list[str]", name)
-        raise unsupported_feature("DataFrame.summary")
+        return _stats.summary_frame(self, tuple(cast("tuple[str, ...]", names)) or _stats.DEFAULT_SUMMARY)
 
     def corr(self, col1: str, col2: str, method: str | None = None) -> float:
-        """The Pearson correlation of two columns as a double value.
-
-        .. note:: The engine has no correlation aggregate yet: after checking its arguments this
-            fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
-        """
+        """The Pearson correlation of two columns as a double value (see :meth:`DataFrameStatFunctions.corr`)."""
         return self.stat.corr(col1, col2, method)
 
     def cov(self, col1: str, col2: str) -> float:
-        """The sample covariance of two columns as a double value.
-
-        .. note:: The engine has no covariance aggregate yet: after checking its arguments this
-            fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
-        """
+        """The sample covariance of two columns as a double value."""
         return self.stat.cov(col1, col2)
 
     def freqItems(self, cols: list[str] | tuple[str, ...], support: float | None = None) -> DataFrame:
-        """The frequent items of columns, possibly with false positives.
-
-        .. note:: The engine has no frequent-items sketch yet: after checking its arguments this
-            fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
-        """
+        """The frequent items of columns, possibly with false positives (see
+        :meth:`DataFrameStatFunctions.freqItems`)."""
         return self.stat.freqItems(cols, support)
 
     def approxQuantile(
@@ -1469,11 +1504,7 @@ class DataFrame:
         probabilities: list[float] | tuple[float, ...],
         relativeError: float,
     ) -> list[Any]:
-        """The approximate quantiles of numeric columns.
-
-        .. note:: The engine has no approximate-percentile aggregate yet: after checking its
-            arguments this fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
-        """
+        """The approximate quantiles of numeric columns (see :meth:`DataFrameStatFunctions.approxQuantile`)."""
         return self.stat.approxQuantile(col, probabilities, relativeError)
 
     def repartition(self, numPartitions: int | ColumnOrName, *cols: ColumnOrName) -> DataFrame:

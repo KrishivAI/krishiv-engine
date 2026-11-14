@@ -2,18 +2,14 @@
 """``DataFrameStatFunctions`` (``DataFrame.stat``), as ``pyspark.sql.DataFrameStatFunctions``.
 
 ``crosstab`` and ``sampleBy`` are built from the DataFrame facade, so they stay lazy and run in the
-engine. ``approxQuantile``, ``corr``, ``cov`` and ``freqItems`` need engine aggregates (variance,
-covariance, correlation, approximate percentiles, a frequent-items sketch) that do not exist yet:
-they check their arguments as PySpark does and then fail with the engine's own
-``KRISHIV_UNSUPPORTED_FEATURE`` error, as ``DataFrame.sample`` does, instead of computing the
-statistic in Python.
+engine. ``approxQuantile``, ``corr`` and ``cov`` run one engine aggregate and return a Python value;
+``freqItems`` reads the columns and counts as Spark's ``CollectFrequentItems`` does (``_stats.py``).
 """
 
 from __future__ import annotations
 
 import random
 import sys
-from functools import reduce
 from typing import TYPE_CHECKING, Any
 
 from krishiv.errors import (
@@ -22,8 +18,8 @@ from krishiv.errors import (
     PySparkTypeError,
     PySparkValueError,
     not_expected_type,
-    unsupported_feature,
 )
+from krishiv.sql import _stats
 from krishiv.sql import functions as F
 from krishiv.sql.column import Column
 
@@ -64,8 +60,8 @@ class DataFrameStatFunctions:
     def approxQuantile(self, col: Any, probabilities: Any, relativeError: Any) -> list[Any]:
         """The approximate quantiles of numeric columns; see :meth:`DataFrame.approxQuantile`.
 
-        .. note:: The engine has no approximate-percentile aggregate yet: after checking its
-            arguments this fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
+        With ``relativeError`` 0 the quantiles are exact (the nearest rank); otherwise the engine's
+        approximate percentile is used. NULL and NaN are skipped; a column with no usable value gives ``[]``.
         """
         if not isinstance(col, str | list | tuple):
             raise not_expected_type("col", "list, str or tuple", col)
@@ -84,13 +80,15 @@ class DataFrameStatFunctions:
                 errorClass="NEGATIVE_VALUE",
                 messageParameters={"arg_name": "relativeError", "arg_value": str(relativeError)},
             )
-        raise unsupported_feature("DataFrame.approxQuantile")
+        names = [col] if isinstance(col, str) else list(col)
+        result = _stats.approx_quantile(self.df, names, [float(p) for p in probabilities], float(relativeError))
+        return result[0] if isinstance(col, str) else result
 
     def corr(self, col1: str, col2: str, method: str | None = None) -> float:
         """The Pearson correlation of two columns; see :meth:`DataFrame.corr`.
 
-        .. note:: The engine has no correlation aggregate yet: after checking its arguments this
-            fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
+        NULL values count as 0.0, and the result is NaN where it is undefined; with ANSI on, a column
+        with no variance raises ``DIVIDE_BY_ZERO``, as Spark 4 does.
         """
         _check_names(col1=col1, col2=col2)
         # PySpark (``classic/dataframe.py``) treats every falsy ``method`` as the default:
@@ -103,16 +101,15 @@ class DataFrameStatFunctions:
                 errorClass="VALUE_NOT_PEARSON",
                 messageParameters={"arg_name": "method", "arg_value": method},
             )
-        raise unsupported_feature("DataFrame.corr")
+        return _stats.corr(self.df, col1, col2)
 
     def cov(self, col1: str, col2: str) -> float:
         """The sample covariance of two columns; see :meth:`DataFrame.cov`.
 
-        .. note:: The engine has no covariance aggregate yet: after checking its arguments this
-            fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
+        NULL values count as 0.0, and the result is 0.0 where it is undefined.
         """
         _check_names(col1=col1, col2=col2)
-        raise unsupported_feature("DataFrame.cov")
+        return _stats.cov(self.df, col1, col2)
 
     def crosstab(self, col1: str, col2: str) -> DataFrame:
         """A pair-wise frequency table of two columns; see :meth:`DataFrame.crosstab`."""
@@ -149,23 +146,21 @@ class DataFrameStatFunctions:
     def freqItems(self, cols: Any, support: float | None = None) -> DataFrame:
         """The frequent items of columns; see :meth:`DataFrame.freqItems`.
 
-        .. note:: The engine has no frequent-items sketch yet: after checking its arguments this
-            fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
+        The columns are read into Python and counted as Spark's frequent-items sketch counts (Karp,
+        Schenker and Papadimitriou): exact on one partition, and the order of the items is not Spark's hash
+        order.
         """
-        # Like PySpark (``classic/dataframe.py``): only the ``cols`` container type is checked
-        # client-side (a bad ``support`` or non-string column just falls through to the engine,
-        # where it would fail); here everything past the check is the unsupported sketch.
+        # Like PySpark (``classic/dataframe.py``): only the ``cols`` container type is checked client-side;
+        # a falsy ``support`` is the default 0.01.
         if not isinstance(cols, list | tuple):
             raise not_expected_type("cols", "list or tuple", cols)
-        raise unsupported_feature("DataFrame.freqItems")
+        for name in cols:
+            if not isinstance(name, str):
+                raise not_expected_type("cols", "str", name)
+        return _stats.frequent_items(self.df, list(cols), support if support else 0.01)
 
     def sampleBy(self, col: Column | str, fractions: dict[Any, float], seed: int | None = None) -> DataFrame:
-        """A stratified sample without replacement; see :meth:`DataFrame.sampleBy`.
-
-        .. note:: The engine cannot sample yet: unless ``fractions`` is empty, the returned
-            :class:`DataFrame` fails its first action with ``KRISHIV_UNSUPPORTED_FEATURE`` (from
-            :meth:`DataFrame.sample`).
-        """
+        """A stratified sample without replacement; see :meth:`DataFrame.sampleBy`."""
         if isinstance(col, str):
             strata = F.col(col)
         elif isinstance(col, Column):
@@ -190,12 +185,4 @@ class DataFrameStatFunctions:
         if not all(0.0 <= fraction <= 1.0 for _, fraction in wanted):
             raise IllegalArgumentException(f"Fractions must be in [0, 1], but got {fractions}.")
         sampled_seed = seed if seed is not None else random.randint(0, sys.maxsize)
-        if not wanted:
-            return self.df.filter(F.lit(False))
-        # A stratum is a filter and a sample of its own; the rows of a stratum that is not in
-        # ``fractions`` are in none of them, as Spark treats its fraction as zero.
-        parts = [
-            self.df.filter(strata == F.lit(stratum)).sample(False, fraction, sampled_seed)
-            for stratum, fraction in wanted
-        ]
-        return reduce(lambda left, right: left.union(right), parts)
+        return _stats.stratified_sample(self.df, strata, wanted, int(sampled_seed))

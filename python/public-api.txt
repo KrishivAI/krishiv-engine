@@ -82,6 +82,7 @@ DataFrame.def write(self, format: str, mode: str, path: str, options: list[tuple
 DataFrame.def write_table(self, insert_into: bool, table: str, format: str | None, mode: str, options: list[tuple[str, str]] | None=..., partition_by: list[str] | None=..., bucket_by: tuple[int, list[str]] | None=..., sort_by: list[str] | None=...) -> None
 DataFrame.def write_to_table(self, table: str, mode: str, provider: str | None=..., options: list[tuple[str, str]] | None=..., properties: list[tuple[str, str]] | None=..., partitioned_by: list[str] | None=..., cluster_by: list[str] | None=..., condition: str | None=...) -> None
 GroupedData.def agg(self, cols: list[Column]) -> DataFrame
+GroupedData.def pivot(self, col: Column, values: list[Column]) -> GroupedData
 Session.@staticmethod def is_dataframe_table(name: str) -> bool
 Session.def __new__(cls, config: list[tuple[str, str]] | None=...) -> Session
 Session.def cache_reserved(self) -> int
@@ -1038,6 +1039,7 @@ DataFrame.def orderBy(self, *cols: ColumnsOrNames, ascending: bool | list[bool]=
 DataFrame.def persist(self, storageLevel: StorageLevel=StorageLevel.MEMORY_AND_DISK) -> DataFrame
 DataFrame.def printSchema(self) -> None
 DataFrame.def profile(self) -> ProfileView
+DataFrame.def randomSplit(self, weights: list[float], seed: int | None=None) -> list[DataFrame]
 DataFrame.def repartition(self, numPartitions: int | ColumnOrName, *cols: ColumnOrName) -> DataFrame
 DataFrame.def replace(self, to_replace: Any, value: Any=_NO_VALUE, subset: str | tuple[str, ...] | list[str] | None=None) -> DataFrame
 DataFrame.def sample(self, withReplacement: bool | float | None=None, fraction: float | None=None, seed: int | None=None) -> DataFrame
