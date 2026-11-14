@@ -202,8 +202,8 @@ jobs:
       - name: UDF worker interpreter
         run: |
           uv venv --python 3.12 "$RUNNER_TEMP/udf-python"
-          uv pip install --python "$RUNNER_TEMP/udf-python/bin/python" \
-            "pyspark-client==4.2.1" "pyarrow==26.0.1" "pandas==3.1.1" "numpy==2.5.4"
+          uv pip install --python "$RUNNER_TEMP/udf-python/bin/python" --require-hashes \
+            -r tests/udf-worker/requirements.txt
       - run: cargo xtask coverage --all-features --html --no-branch
         env:
           KRISHIV_TEST_UDF_PYTHON: ${{ runner.temp }}/udf-python/bin/python

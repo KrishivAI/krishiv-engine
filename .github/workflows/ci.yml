@@ -294,8 +294,8 @@ jobs:
       - name: UDF worker interpreter
         run: |
           uv venv --python 3.12 "$RUNNER_TEMP/udf-python"
-          uv pip install --python "$RUNNER_TEMP/udf-python/bin/python" \
-            "pyspark-client==4.2.1" "pyarrow==26.0.1" "pandas==3.1.1" "numpy==2.5.4"
+          uv pip install --python "$RUNNER_TEMP/udf-python/bin/python" --require-hashes \
+            -r tests/udf-worker/requirements.txt
       # Every GitHub-hosted x64 runner has x86-64-v3, so the kernel tests must
       # run that clone, not skip it (AVX-512 varies by runner: not required).
       - run: cargo nextest run --workspace --locked --no-tests=pass

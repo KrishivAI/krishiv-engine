@@ -1,0 +1,8 @@
+# The Python UDF worker interpreter of krishiv-udf-pool's tests (CI, nightly and coverage jobs).
+# Regenerate requirements.txt after a change here (hash-pinned, installed with --require-hashes):
+#   uv pip compile tests/udf-worker/requirements.in --generate-hashes --python-version 3.12 \
+#     --python-platform x86_64-unknown-linux-gnu -o tests/udf-worker/requirements.txt
+pyspark-client==4.2.1
+pyarrow==26.0.1
+pandas==3.1.1
+numpy==2.5.4
