@@ -166,7 +166,8 @@ pub(crate) struct Inner {
     interpreters: Vec<Interpreter>,
     /// Why every call is refused, when the pool cannot run workers at all.
     refusal: Option<KrishivError>,
-    package: PathBuf,
+    /// Declared before `root`: dropping it makes its directories writable, so `root` can then be removed.
+    package: package::Package,
     fd_limit: u64,
     spawner: Mutex<mpsc::Sender<SpawnRequest>>,
     /// The package and the workers' private directories; removed with the pool.
@@ -418,13 +419,19 @@ impl Pool {
             spec.args = vec![
                 "-I".into(),
                 "-c".into(),
-                package::bootstrap(&inner.package, inner.fd_limit, None, !config.allow_fork).into(),
+                package::bootstrap(
+                    inner.package.path(),
+                    inner.fd_limit,
+                    None,
+                    !config.allow_fork,
+                )
+                .into(),
             ];
             spec.env = env;
             spec.read_paths = SandboxSpec::system_read_paths();
             spec.read_paths
                 .extend(interpreter.read_paths.iter().cloned());
-            spec.read_paths.push(inner.package.clone());
+            spec.read_paths.push(inner.package.path().to_path_buf());
             spec.limits = limits;
             spec.allow_fork = config.allow_fork;
             spec.parent_pid = Some(std::process::id());
@@ -437,7 +444,7 @@ impl Pool {
             command
         } else {
             let bootstrap = package::bootstrap(
-                &inner.package,
+                inner.package.path(),
                 inner.fd_limit,
                 Some(&BootstrapLimits {
                     address_space: limits.address_space,
@@ -475,6 +482,7 @@ impl Pool {
             child,
             control: server_end,
             private_dir,
+            sandboxed: config.sandbox,
         })
     }
 }
@@ -618,4 +626,27 @@ fn start_reaper(pool: Weak<Inner>) {
 
 fn internal(message: String) -> KrishivError {
     InternalError { message }.into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dropping_the_pool_removes_its_directory_and_package() {
+        let config = PoolConfig {
+            sandbox: false,
+            ..PoolConfig::default()
+        };
+        let pool = Pool::new(config).unwrap_or_else(|e| panic!("{e}"));
+        let root = pool.inner.root.path().to_path_buf();
+        assert!(root.join("package/krishiv/_udf/pool_worker.py").is_file());
+        drop(pool);
+        // The reaper upgrades its weak reference once a tick, so the last reference may be its own.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while root.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!root.exists(), "{} is left behind", root.display());
+    }
 }

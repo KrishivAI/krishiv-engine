@@ -283,6 +283,8 @@ fn worker_crash_respawns() {
     let udfs = SessionUdfs::new(pool.clone(), owner("s1"));
     for (body, how) in [
         ("import os\ndef f(x):\n    os._exit(3)", "exit code 3"),
+        // The trampoline's reserved status, from the UDF after the greeting: an ordinary exit, not the sandbox.
+        ("import os\ndef f(x):\n    os._exit(125)", "exit code 125"),
         (
             "import os, signal\ndef f(x):\n    os.kill(os.getpid(), signal.SIGSEGV)",
             "signal 11",

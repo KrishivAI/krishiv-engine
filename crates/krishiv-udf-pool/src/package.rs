@@ -57,10 +57,39 @@ const STUB_INIT: &str = "# SPDX-License-Identifier: Apache-2.0\n\
 \n\
 _UDF_WORKER = True\n";
 
+/// The directories of the package made read-only, parents last.
+const DIRS: [&str; 2] = ["krishiv/_udf", "krishiv"];
+
+/// The extracted worker package. Dropping it makes its directories writable again: an unprivileged owner
+/// cannot remove the entries of a read-only directory, so the pool's temporary directory would otherwise stay
+/// behind (the files themselves stay read-only; unlinking needs only the directory's write bit).
+#[derive(Debug)]
+pub(crate) struct Package {
+    root: PathBuf,
+}
+
+impl Package {
+    /// The directory to put first on the worker's `sys.path`.
+    pub(crate) fn path(&self) -> &Path {
+        &self.root
+    }
+}
+
+impl Drop for Package {
+    fn drop(&mut self) {
+        for dir in DIRS {
+            let _ = set_writable(&self.root.join(dir));
+        }
+    }
+}
+
 /// Writes the worker package under `root` (which must exist and be empty or absent) and makes it read-only.
-/// Returns `root`, the directory to put first on the worker's `sys.path`.
-pub(crate) fn extract(root: &Path) -> io::Result<PathBuf> {
+pub(crate) fn extract(root: &Path) -> io::Result<Package> {
     fs::create_dir_all(root)?;
+    // From here on a failure still restores the directories (`Drop`).
+    let package = Package {
+        root: root.to_path_buf(),
+    };
     for (rel, contents) in FILES {
         let path = root.join(rel);
         if let Some(parent) = path.parent() {
@@ -69,10 +98,10 @@ pub(crate) fn extract(root: &Path) -> io::Result<PathBuf> {
         fs::write(&path, contents)?;
         set_read_only(&path)?;
     }
-    for dir in ["krishiv/_udf", "krishiv"] {
+    for dir in DIRS {
         set_read_only(&root.join(dir))?;
     }
-    Ok(root.to_path_buf())
+    Ok(package)
 }
 
 #[cfg(unix)]
@@ -87,6 +116,23 @@ fn set_read_only(path: &Path) -> io::Result<()> {
     let mut perms = fs::metadata(path)?.permissions();
     perms.set_readonly(true);
     fs::set_permissions(path, perms)
+}
+
+#[cfg(unix)]
+fn set_writable(dir: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o755))
+}
+
+#[cfg(not(unix))]
+fn set_writable(dir: &Path) -> io::Result<()> {
+    let mut perms = fs::metadata(dir)?.permissions();
+    #[expect(
+        clippy::permissions_set_readonly_false,
+        reason = "the package's own directory, made writable for its removal"
+    )]
+    perms.set_readonly(false);
+    fs::set_permissions(dir, perms)
 }
 
 /// The `close_range` system call number: the same on every Linux architecture with the generic table
@@ -144,21 +190,27 @@ pub(crate) fn bootstrap(
         ]);
     }
     if let Some(limits) = limits {
-        lines.push("import resource".to_owned());
+        // An unprivileged process may only lower its hard limit, so never ask above a finite inherited one
+        // (as the sandbox's own `set_limits` does for sandboxed workers).
+        lines.extend([
+            "import resource".to_owned(),
+            "def _limit(r, n):".to_owned(),
+            "    h = resource.getrlimit(r)[1]".to_owned(),
+            "    if h != resource.RLIM_INFINITY and h < n:".to_owned(),
+            "        n = h".to_owned(),
+            "    resource.setrlimit(r, (n, n))".to_owned(),
+        ]);
         if let Some(n) = limits.address_space {
-            lines.push(format!(
-                "resource.setrlimit(resource.RLIMIT_AS, ({n}, {n}))"
-            ));
+            lines.push(format!("_limit(resource.RLIMIT_AS, {n})"));
         }
         if let Some(n) = limits.file_size {
-            lines.push(format!(
-                "resource.setrlimit(resource.RLIMIT_FSIZE, ({n}, {n}))"
-            ));
+            lines.push(format!("_limit(resource.RLIMIT_FSIZE, {n})"));
         }
-        let n = limits.open_files;
         lines.push(format!(
-            "resource.setrlimit(resource.RLIMIT_NOFILE, ({n}, {n}))"
+            "_limit(resource.RLIMIT_NOFILE, {})",
+            limits.open_files
         ));
+        lines.push("del _limit".to_owned());
     }
     lines.extend([
         "import sys".to_owned(),
@@ -255,7 +307,8 @@ mod tests {
     #[test]
     fn every_file_is_embedded_and_marks_the_worker() {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let root = extract(&dir.path().join("pkg")).unwrap_or_else(|e| panic!("{e}"));
+        let package = extract(&dir.path().join("pkg")).unwrap_or_else(|e| panic!("{e}"));
+        let root = package.path();
         let init =
             fs::read_to_string(root.join("krishiv/__init__.py")).unwrap_or_else(|e| panic!("{e}"));
         assert!(init.contains("_UDF_WORKER = True"));
@@ -266,7 +319,7 @@ mod tests {
         assert!(
             fs::read_to_string(root.join("krishiv/_udf/pool_worker.py"))
                 .unwrap_or_default()
-                .contains("def main()")
+                .contains("def main(")
         );
     }
 
@@ -288,10 +341,55 @@ mod tests {
             }),
             false,
         );
-        assert!(limited.contains("resource.RLIMIT_AS, (1073741824, 1073741824)"));
-        assert!(limited.contains("resource.RLIMIT_NOFILE, (256, 256)"));
+        assert!(limited.contains("_limit(resource.RLIMIT_AS, 1073741824)"));
+        assert!(limited.contains("_limit(resource.RLIMIT_NOFILE, 256)"));
         assert!(!limited.contains("RLIMIT_FSIZE"));
         assert!(!code.contains("prctl"));
+    }
+
+    /// With the sandbox off, the bootstrap never asks above an inherited finite hard limit (an unprivileged
+    /// process cannot raise it): run its limit statements under hard limits below the requested ones.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn sandbox_off_limits_are_clamped_to_the_inherited_hard_limits() {
+        let python =
+            std::env::var_os("KRISHIV_TEST_UDF_PYTHON").unwrap_or_else(|| "python3".into());
+        let code = bootstrap(
+            Path::new("/p"),
+            8,
+            Some(&BootstrapLimits {
+                address_space: Some(1 << 40),
+                file_size: Some(1 << 40),
+                open_files: 256,
+            }),
+            false,
+        );
+        let limits_only = code
+            .split("\nimport sys\nsys.path.insert")
+            .next()
+            .unwrap_or_default();
+        let program = format!(
+            "import resource\n\
+             _kinds = (resource.RLIMIT_AS, resource.RLIMIT_FSIZE, resource.RLIMIT_NOFILE)\n\
+             _hard = [resource.getrlimit(r)[1] for r in _kinds]\n\
+             {limits_only}\n\
+             assert [resource.getrlimit(r) for r in _kinds] == [(h, h) for h in _hard], \
+             [resource.getrlimit(r) for r in _kinds]\n"
+        );
+        let out = std::process::Command::new("/bin/sh")
+            .args([
+                "-c",
+                "ulimit -n 128 && ulimit -v 8388608 && ulimit -f 2097152 && exec \"$0\" -I -c \"$1\"",
+            ])
+            .arg(&python)
+            .arg(&program)
+            .output();
+        let Ok(out) = out else { return }; // no `sh`: nothing to run the check with
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
     #[test]

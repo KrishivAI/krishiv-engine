@@ -36,6 +36,8 @@ pub(crate) struct Started {
     pub(crate) child: Child,
     pub(crate) control: OwnedFd,
     pub(crate) private_dir: tempfile::TempDir,
+    /// Started through the sandbox trampoline, whose reserved exit status means it could not enter the sandbox.
+    pub(crate) sandboxed: bool,
 }
 
 /// A worker that greeted the server.
@@ -55,6 +57,10 @@ pub(crate) struct Worker {
     stderr_done: Option<std::sync::mpsc::Receiver<()>>,
     /// False once an exchange failed in a way that leaves the worker unusable.
     healthy: bool,
+    /// Started through the trampoline (`Started::sandboxed`).
+    sandboxed: bool,
+    /// True once the worker greeted the server: the trampoline is gone, so an exit status is the worker's own.
+    greeted: bool,
 }
 
 impl std::fmt::Debug for Worker {
@@ -85,6 +91,7 @@ impl Worker {
             mut child,
             control,
             private_dir,
+            sandboxed,
         } = started;
         let pid = Pid::from_child(&child);
         // The child is not reaped yet, so `pid` is still its own.
@@ -114,6 +121,8 @@ impl Worker {
             stderr,
             stderr_done,
             healthy: false,
+            sandboxed,
+            greeted: false,
         };
         let greeting = rustix::net::sockopt::set_socket_timeout(
             worker.control.as_fd(),
@@ -158,6 +167,7 @@ impl Worker {
             "Python UDF worker started"
         );
         worker.healthy = true;
+        worker.greeted = true;
         Ok(worker)
     }
 
@@ -307,7 +317,11 @@ impl Worker {
             let _ = done.recv_timeout(Duration::from_secs(1));
         }
         let tail = self.stderr_tail();
-        if let Ok(status) = status
+        // Only the trampoline exits with the reserved status, and only before the worker greets the server:
+        // after that (or without the sandbox) the same code is the UDF's own `os._exit(125)`.
+        if self.sandboxed
+            && !self.greeted
+            && let Ok(status) = status
             && status.code() == Some(i32::from(EXIT_SANDBOX_FAILED))
         {
             return KrishivError::from(&SandboxError::Unavailable {

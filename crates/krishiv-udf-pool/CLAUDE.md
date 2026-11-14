@@ -16,7 +16,7 @@ Paths are relative to this crate.
   `Owner`; the spawner thread, the caps, idle stop, `release`, and `Lease` (a worker handed to one call)
 - `src/worker.rs` one worker: handshake, `ensure_loaded` (a `udf` message), `run_batch` (a `batch` message), the
   error mapping (`PYTHON_EXCEPTION`, `KRISHIV_PYTHON_WORKER_EXITED`, `KRISHIV_UDF_SANDBOX_UNAVAILABLE` for a trampoline
-  that exits 125) and the validating result reader `decode_result`
+  that exits 125 before the worker greets the server; afterwards, or with the sandbox off, 125 is an ordinary exit) and the validating result reader `decode_result`
 - `src/wire.rs` control messages (JSON, `SCM_RIGHTS`), memfds (`sealed_memfd`, `read_untrusted`)
 - `src/runtime.rs` `SessionUdfs`: a session's payload store keyed by `(name, version)` as a `UdfRuntime`; each call
   runs on a thread of its own and is cancelled (worker killed) when its future is dropped
