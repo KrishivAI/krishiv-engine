@@ -16,7 +16,11 @@
 //!   all carry one snapshot id, and each asserts its base.
 //! - **Own-key search first** (§7.3 step 1). Every conflict refreshes the
 //!   table and looks for this write's snapshot before rebasing, which closes
-//!   "lost response, then 409".
+//!   "lost response, then 409" and "duplicated request, then 409". A 409 is
+//!   known for its request, not for the write: until that search has run on
+//!   a successful load the write is unresolved, so a refresh that keeps
+//!   failing or runs into the total timeout ends
+//!   `KRISHIV_ICEBERG_COMMIT_STATE_UNKNOWN` and deletes nothing (R:B1).
 //! - **Per-request outcomes** (§7.2). A failure is "known" only as the answer
 //!   to an attempt's first request; once a request of an attempt was unknown,
 //!   later answers to it say nothing about that request. An attempt left
@@ -173,7 +177,8 @@ pub(crate) struct CommitContext<'a> {
 /// `KRISHIV_ICEBERG_COMMIT_CONFLICT` for a format-version change other than
 /// v2 → v3 or a replaced table, `KRISHIV_UNSUPPORTED_FEATURE` for a commit
 /// property that is not a number, a failure answered to an attempt's first
-/// request, or [`prepare_attempt`]'s and the refresh's errors.
+/// request, or [`prepare_attempt`]'s errors. A refresh after a conflict that
+/// never succeeds is `KRISHIV_ICEBERG_COMMIT_STATE_UNKNOWN`.
 pub(crate) async fn commit_append(
     table: &dyn CommitTable,
     cx: CommitContext<'_>,
@@ -200,6 +205,7 @@ pub(crate) async fn commit_append(
         requests: 0,
         lists: Vec::new(),
         unresolved: Vec::new(),
+        searching: false,
         last_answer: String::new(),
     };
     match run.drive(base.clone(), new).await {
@@ -309,6 +315,10 @@ struct Loop<'a> {
     lists: Vec<String>,
     /// The bases of attempts with a request whose outcome is unresolved.
     unresolved: Vec<Option<i64>>,
+    /// A conflict was answered and the own-key search has not yet run on a
+    /// successful load: the write may be in the table (a duplicated request,
+    /// R:B1), so it is unresolved until then.
+    searching: bool,
     /// The last answer that was not a commit, for messages.
     last_answer: String,
 }
@@ -362,10 +372,16 @@ impl Loop<'_> {
                         } else {
                             "a conflict (the branch moved)".to_owned()
                         };
+                        // A 409 is known for this request, not for the
+                        // write: until the own-key search has run on a
+                        // successful load, the write is unresolved (§7.3
+                        // step 1).
+                        self.searching = true;
                         let m = self.refresh().await?;
                         if self.found(&m).is_some() {
                             return Ok(m);
                         }
+                        self.searching = false;
                         self.resolve(&m);
                         self.check_rebase(&m)?;
                         current = m;
@@ -554,7 +570,7 @@ impl Loop<'_> {
 
     /// The error of a run that ended without a commit, after its cleanup.
     async fn finish(&self, end: End, new: &NewManifests) -> KrishivError {
-        if !self.unresolved.is_empty() {
+        if !self.unresolved.is_empty() || self.searching {
             let reason = match end {
                 End::Exhausted => format!(
                     "the retry budget ran out after {} requests, the last answered with: {}",
