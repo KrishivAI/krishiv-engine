@@ -296,3 +296,69 @@ fn struct_comparison_ignores_field_names_under_both_settings() {
         }
     }
 }
+
+/// Newline-delimited JSON with nested objects and arrays (the shape of a
+/// GitHub Archive file, RS-6) reads as structs and arrays: the inferred
+/// schema sorts fields by name, struct fields and array elements are
+/// queryable, and `explode` over an array of structs runs.
+#[test]
+fn nested_json_reads_as_structs_and_arrays() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("events.json");
+    std::fs::write(
+        &path,
+        concat!(
+            r#"{"id":"1","type":"PushEvent","actor":{"id":7,"login":"a"},"repo":{"name":"r/x"},"#,
+            r#""payload":{"size":1,"commits":[{"sha":"s1","distinct":true}]}}"#,
+            "\n",
+            r#"{"id":"2","type":"CreateEvent","actor":{"id":8,"login":"b"},"repo":{"name":"r/y"},"#,
+            r#""payload":{"ref":"main"}}"#,
+            "\n",
+            r#"{"id":"3","type":"PushEvent","actor":{"id":7,"login":"a"},"repo":{"name":"r/x"},"#,
+            r#""payload":{"size":2,"commits":[{"sha":"s2"},{"sha":"s3","message":"m"}]}}"#,
+            "\n",
+        ),
+    )
+    .unwrap();
+    let s = Session::new().unwrap();
+    let t = format!("json.`{}`", path.display());
+    assert_eq!(
+        types(&s, &format!("SELECT * FROM {t}"))
+            .into_iter()
+            .map(|(t, _)| t)
+            .collect::<Vec<_>>(),
+        [
+            r#"{"type":"struct","fields":[{"name":"id","type":"long","nullable":true,"metadata":{}},{"name":"login","type":"string","nullable":true,"metadata":{}}]}"#,
+            r#""string""#,
+            r#"{"type":"struct","fields":[{"name":"commits","type":{"type":"array","elementType":{"type":"struct","fields":[{"name":"distinct","type":"boolean","nullable":true,"metadata":{}},{"name":"message","type":"string","nullable":true,"metadata":{}},{"name":"sha","type":"string","nullable":true,"metadata":{}}]},"containsNull":true},"nullable":true,"metadata":{}},{"name":"ref","type":"string","nullable":true,"metadata":{}},{"name":"size","type":"long","nullable":true,"metadata":{}}]}"#,
+            r#"{"type":"struct","fields":[{"name":"name","type":"string","nullable":true,"metadata":{}}]}"#,
+            r#""string""#,
+        ]
+    );
+    assert_eq!(
+        strings(
+            &s,
+            &format!("SELECT concat(type, ':', count(*)) FROM {t} GROUP BY type ORDER BY type")
+        ),
+        some(&["CreateEvent:1", "PushEvent:2"])
+    );
+    assert_eq!(
+        strings(
+            &s,
+            &format!(
+                "SELECT concat_ws('/', actor.login, repo.name, payload.commits[0].sha) \
+                 FROM {t} ORDER BY id"
+            )
+        ),
+        some(&["a/r/x/s1", "b/r/y", "a/r/x/s2"])
+    );
+    assert_eq!(
+        strings(
+            &s,
+            &format!(
+                "SELECT c.sha FROM (SELECT explode(payload.commits) AS c FROM {t}) ORDER BY c.sha"
+            )
+        ),
+        some(&["s1", "s2", "s3"])
+    );
+}
