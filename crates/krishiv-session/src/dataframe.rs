@@ -1554,6 +1554,7 @@ impl DataFrame {
             format: "parquet".to_owned(),
             mode: "error".to_owned(),
             options: BTreeMap::new(),
+            table_options: BTreeMap::new(),
             partition_by: Vec::new(),
             bucket_by: None,
             sort_by: None,

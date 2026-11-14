@@ -1,0 +1,10 @@
+{
+  "cases": {
+    "sql-commands": [
+      15,
+      16
+    ]
+  },
+  "file": "describe-query",
+  "format_version": 1
+}

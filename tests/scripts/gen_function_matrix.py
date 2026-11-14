@@ -684,13 +684,13 @@ def collect(df, F, types: list[str]) -> tuple[list, list, list | None, str | Non
 
     def arrow(cols):
         try:
-            return df.select(*cols).toArrow()
+            return to_arrow(df.select(*cols))
         except ValueError as e:
             if "non-nullable" not in str(e):
                 raise
             # Spark declared a column non-nullable yet returned NULL (recorded in `schema`); the
             # client's Arrow cast rejects that, so re-select through an opaque nullable wrapper.
-            return df.select(*[F.when(F.rand(0) >= 0, c) for c in cols]).toArrow()
+            return to_arrow(df.select(*[F.when(F.rand(0) >= 0, c) for c in cols]))
 
     try:
         table, typed_reason = arrow([e for e, _ in text] + raw), None
@@ -719,6 +719,14 @@ def collect(df, F, types: list[str]) -> tuple[list, list, list | None, str | Non
         tc = [encode_typed(cols[n + i]) for i in range(n)]
         typed = [list(r) for r in zip(*tc, strict=True)] if n else [[] for _ in range(table.num_rows)]
     return rows, kinds, typed, typed_reason
+
+
+def to_arrow(df):
+    """`DataFrame.toArrow` exists from pyspark 4.0; a 3.5 client (for a 3.5 server) uses the client."""
+    if hasattr(df, "toArrow"):
+        return df.toArrow()
+    table, _ = df._session.client.to_table(df._plan)
+    return table
 
 
 class Watchdog:
@@ -844,19 +852,22 @@ def spark_shell(container: str, script: str, data: str = "") -> list[str]:
         subprocess.run(
             ["docker", "exec", "-i", container, "sh", "-c", f"cat > {path}"], input=text, text=True, check=True
         )
-    cmd = [
-        "docker",
-        "exec",
-        container,
-        "sh",
-        "-c",
-        "/opt/spark/bin/spark-shell --master 'local[1]' --driver-memory 2g -I /tmp/krishiv_script.scala "
-        "2>/dev/null; rm -f /tmp/krishiv_script.scala /tmp/krishiv_cases.jsonl",
-    ]
-    out = subprocess.run(cmd, capture_output=True, text=True, timeout=3600, check=True).stdout
-    lines = [line for line in out.splitlines() if line.startswith("@@")]
+    # `-I FILE` runs silently on some releases (4.0.5): then the same script is fed on stdin, where the REPL
+    # prefixes a prompt to some lines (`scala> @@END`).
+    shell = "/opt/spark/bin/spark-shell --master 'local[1]' --driver-memory 2g"
+    for how in (f"{shell} -I /tmp/krishiv_script.scala", f"{shell} < /tmp/krishiv_script.scala"):
+        cmd = ["docker", "exec", container, "sh", "-c", f"{how}; true"]
+        run = subprocess.run(cmd, capture_output=True, text=True, timeout=3600, check=True)
+        out, err = run.stdout, run.stderr
+        lines = [m.group(1) for line in out.splitlines() if (m := re.match(r"^(?:scala> )*(@@.*)$", line))]
+        if "@@END" in lines:
+            break
+    subprocess.run(
+        ["docker", "exec", container, "sh", "-c", "rm -f /tmp/krishiv_script.scala /tmp/krishiv_cases.jsonl"],
+        check=False,
+    )
     if "@@END" not in lines:
-        raise SystemExit("spark-shell script did not complete:\n" + out[-2000:])
+        raise SystemExit("spark-shell script did not complete:\n" + out[-2000:] + "\nstderr:\n" + err[-2000:])
     return lines
 
 
@@ -962,7 +973,16 @@ def main() -> int:
     if missing:
         raise SystemExit("every SHOW FUNCTIONS name must be in the registry dump")
     names = shown if not args.only else sorted(set(args.only.split(",")) & set(shown))
-    render_conf = {k: main_session.conf.get(k) for k in RENDER_CONF_KEYS}
+
+    def read_conf(k: str) -> str | None:
+        try:
+            return main_session.conf.get(k)
+        except Exception as e:  # a release that lacks the key (`binaryOutputStyle` is 4.0+): unset there
+            if "SQL_CONF_NOT_FOUND" in str(e):
+                return None
+            raise
+
+    render_conf = {k: read_conf(k) for k in RENDER_CONF_KEYS}
     base_conf = dict(sorted({TZ: BASE_TZ, **{k: v for k, v in render_conf.items() if v is not None}}.items()))
     unset_conf = sorted(k for k, v in render_conf.items() if v is None)
 

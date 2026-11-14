@@ -1660,6 +1660,8 @@ dependencies = [
  "libfuzzer-sys",
  "object_store",
  "prost",
+ "serde",
+ "serde_json",
  "tokio",
  "url",
 ]
@@ -1799,6 +1801,8 @@ dependencies = [
  "krishiv-types",
  "krishiv-udf-sdk",
  "object_store",
+ "regex-lite",
+ "serde",
  "serde_json",
  "sha2",
  "tokio",

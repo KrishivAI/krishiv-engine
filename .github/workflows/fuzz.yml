@@ -47,6 +47,10 @@ jobs:
             args: -max_len=8192
           - target: capsule_import
             args: -max_len=256
+          - target: cert_names
+            args: -max_len=8192
+          - target: jwt_parse
+            args: -max_len=20000
           - target: delta_commit_json
             args: -max_len=262144
     env:
@@ -85,6 +89,9 @@ jobs:
           case "$TARGET" in
             sql_parse) python3 tests/scripts/fuzz_seed_sql.py "fuzz/corpus/$TARGET" ;;
             parquet_read) python3 tests/scripts/fuzz_seed_parquet.py "fuzz/corpus/$TARGET" ;;
+            cert_names)
+              mkdir -p "fuzz/corpus/$TARGET"
+              cp crates/krishiv-session/tests/fixtures/tls/*.der "fuzz/corpus/$TARGET/" ;;
             delta_commit_json)
               # Commit files, _last_checkpoint and .crc files of the oracle tables.
               mkdir -p "fuzz/corpus/$TARGET"

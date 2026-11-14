@@ -103,3 +103,12 @@ fn add_artifact_privilege() {
         check_add_artifact(ConfigRole::Admin, &p, &name).unwrap();
     }
 }
+
+#[test]
+fn explicit_resolves_a_legacy_alternative_to_its_primary_entry() {
+    let alt = "spark.sql.legacy.avro.datetimeRebaseModeInRead";
+    let session = krishiv_session::Session::new().unwrap();
+    let conf = session.conf();
+    conf.set(alt, "LEGACY").unwrap();
+    assert_eq!(super::explicit(&conf, alt).as_deref(), Some("LEGACY"));
+}
