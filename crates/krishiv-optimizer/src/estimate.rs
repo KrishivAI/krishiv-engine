@@ -534,7 +534,8 @@ impl<'a> Estimator<'a> {
                     .extend(states.iter().map(|c| (c.id, AttrStats::guess(rows))));
                 out
             }
-            // Spark's `OneRowRelation.computeStats` (`basicLogicalOperators.scala:2154`):
+            // Spark's `OneRowRelation`: `maxRows = Some(1)` and `sizeInBytes = 1`
+            // (`basicLogicalOperators.scala:2152-2154`; its `computeStats` sets no row count):
             // so an inline table, an `Expand` over it, is one row per `VALUES` row.
             PlanNode::OneRowRelation => RelStats::unknown(1.0, ids()),
             PlanNode::Range {

@@ -205,7 +205,8 @@ impl AttrStats {
 /// The estimated output of a relation.
 #[derive(Debug, Clone, Default)]
 pub struct RelStats {
-    /// Rows. Zero only where a predicate proves the relation empty; cost
+    /// Rows. Zero only where the relation is known empty (a predicate proves
+    /// it, or an empty `range`); cost
     /// decisions read at least 1 ([`Self::rows_for_costing`]).
     pub rows: f64,
     /// Per output attribute.

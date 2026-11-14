@@ -1150,7 +1150,28 @@ fn one_row_relation_inline_tables_and_ranges_are_exact() {
     assert_eq!((id.min, id.max), (Some(1.0), Some(10.0)));
     let e = range("SELECT * FROM range(5, 0)");
     close(e.rows(), 0.0, "empty");
-    // The full i64 span has more elements than an i64 holds.
+    // A step past the end: one element.
+    let e = range("SELECT * FROM range(3, 10, 100)");
+    close(e.rows(), 1.0, "one element");
+    let id = e.col("id");
+    assert_eq!((id.min, id.max), (Some(3.0), Some(3.0)));
+    // The full i64 span has more elements than an i64 holds: no bounds, as Spark.
     let e = range("SELECT * FROM range(-9223372036854775808, 9223372036854775807)");
-    close(e.rows(), 1.844_674_407_370_955_2e19 - 1.0, "full span");
+    close(e.rows(), 1.844_674_407_370_955e19, "full span");
+    let id = e.col("id");
+    assert_eq!((id.min, id.max), (None, None));
+    // Descending at the i64 limit: (MIN - MAX) / -2 rounds up to 2^63, more than an i64.
+    let e = range("SELECT * FROM range(9223372036854775807, -9223372036854775808, -2)");
+    close(e.rows(), 9.223_372_036_854_776e18, "descending span");
+    assert_eq!((e.col("id").min, e.col("id").max), (None, None));
+    // Descending near the limit with a count that fits: the last value (MIN + 1) is computed
+    // without overflow and both bounds are kept (f64 cannot tell them apart at this scale).
+    let e = range("SELECT * FROM range(-9223372036854775805, -9223372036854775808, -1)");
+    close(e.rows(), 3.0, "descending near MIN");
+    let id = e.col("id");
+    assert!(id.min.is_some() && id.min <= id.max, "{id:?}");
+    // Descending, small: the last value is the minimum.
+    let e = range("SELECT * FROM range(-10, -13, -1)");
+    let id = e.col("id");
+    assert_eq!((id.min, id.max), (Some(-12.0), Some(-10.0)));
 }
