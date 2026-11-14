@@ -151,6 +151,7 @@ Each row links to the full description in [known differences](../concepts/known-
 | [Result cache, reproducible results (Krishiv extensions, off by default)](../concepts/known-differences.md#result-cache-reproducible-results-krishiv-extensions-off-by-default) |
 | [A malformed value of a Spark config key fails at `SET`](../concepts/known-differences.md#a-malformed-value-of-a-spark-config-key-fails-at-set) |
 | [`DISTRIBUTE BY` under a `LIMIT`, and partition numbers](../concepts/known-differences.md#distribute-by-under-a-limit-and-partition-numbers) |
+| [`TABLESAMPLE` rows follow the input's partitions](../concepts/known-differences.md#tablesample-rows-follow-the-inputs-partitions) |
 | [Filters move below only their deterministic prefix](../concepts/known-differences.md#filters-move-below-only-their-deterministic-prefix) |
 | [PySpark's `VariantVal`](../concepts/known-differences.md#pysparks-variantval) |
 | [`schema_of_variant` with `spark.sql.caseSensitive=true`](../concepts/known-differences.md#schema_of_variant-with-sparksqlcasesensitivetrue) |
