@@ -714,6 +714,14 @@ impl CatalogWrite for StoreCatalog {
                     }
                 }
                 if let (Some(source), Some(parent)) = (&source_dir, renamed.location.parent()) {
+                    // A directory that is there is not ours to take (an empty one would be replaced by the move).
+                    if renamed.location.symlink_metadata().is_ok() {
+                        return Err(LocationAlreadyExists {
+                            identifier: to.to_string(),
+                            location: renamed.location.display().to_string(),
+                        }
+                        .into());
+                    }
                     std::fs::create_dir_all(parent).map_err(|e| {
                         internal(format!("cannot create {}: {e}", parent.display()))
                     })?;
@@ -727,26 +735,23 @@ impl CatalogWrite for StoreCatalog {
                 }
             }
             let moved_to = renamed.location.clone();
-            let put_back = |dir_moved: bool| {
-                if dir_moved && let Some(source) = &source_dir {
-                    let _ = std::fs::rename(&moved_to, source);
-                }
-            };
             let dir_moved = table.managed && source_dir.is_some();
-            // The entry that was checked, and no other.
-            if self.store.drop_table_entry(&table).is_none() {
-                put_back(dir_moved);
-                return Err(concurrent(from));
-            }
-            if let Err(e) = self
-                .store
-                .create_table(renamed, StoreCreateMode::ErrorIfExists)
-            {
-                let _ = self
-                    .store
-                    .create_table((*table).clone(), StoreCreateMode::Replace);
-                put_back(dir_moved);
-                return Err(e);
+            // The entry that was checked, swapped for the renamed one under one lock: both names or neither.
+            let swapped = self.store.rename_table_entry(&table, renamed);
+            if !matches!(swapped, Ok(Some(_))) {
+                if dir_moved && let Some(source) = &source_dir {
+                    std::fs::rename(&moved_to, source).map_err(|e| {
+                        internal(format!(
+                            "the rename failed and {} could not be moved back to {}: {e}",
+                            moved_to.display(),
+                            source.display()
+                        ))
+                    })?;
+                }
+                return match swapped {
+                    Err(e) => Err(e),
+                    _ => Err(concurrent(from)),
+                };
             }
             Ok(())
         })
@@ -1776,8 +1781,7 @@ mod tests {
 
         let e = rename(c, "a", "z").unwrap_err();
 
-        assert_eq!(class(&e), ErrorClass::InternalError);
-        assert!(e.to_string().contains("cannot move"), "{e}");
+        assert_eq!(class(&e), ErrorClass::LocationAlreadyExists);
         assert!(
             from_dir.join("f").exists(),
             "the source files are where they were"
@@ -1788,6 +1792,43 @@ mod tests {
         );
         assert_eq!(load(c, &ident("db", "a")).unwrap(), before);
         assert!(load(c, &ident("db", "z")).is_none());
+    }
+
+    /// An empty directory at the target is as much in the way as a full one: the move would replace it.
+    #[test]
+    fn an_empty_target_directory_is_not_replaced_by_a_rename() {
+        let f = fixture();
+        let c = &f.catalog;
+        block_on(c.create_namespace(&ns("db"), NamespaceInfo::default())).unwrap();
+        block_on(c.create_table(info("db", "a"), CreateMode::ErrorIfExists)).unwrap();
+        let target = managed_location(f.warehouse.path(), "db", "z");
+        std::fs::create_dir_all(&target).unwrap();
+
+        let e = rename(c, "a", "z").unwrap_err();
+
+        assert_eq!(class(&e), ErrorClass::LocationAlreadyExists);
+        assert!(target.is_dir());
+        assert!(load(c, &ident("db", "a")).is_some() && load(c, &ident("db", "z")).is_none());
+    }
+
+    /// The name is taken between the check and the swap: the directory goes back, the source entry is untouched.
+    #[test]
+    fn a_name_taken_during_a_rename_puts_the_files_back() {
+        let f = fixture();
+        let c = &f.catalog;
+        block_on(c.create_namespace(&ns("db"), NamespaceInfo::default())).unwrap();
+        block_on(c.create_table(info("db", "a"), CreateMode::ErrorIfExists)).unwrap();
+        block_on(c.create_table(info("db", "z"), CreateMode::ErrorIfExists)).unwrap();
+        let a = c.store.table("db", "a").unwrap();
+        let mut renamed = (*a).clone();
+        renamed.name = "z".to_owned();
+        let epoch = c.epoch();
+
+        let e = c.store.rename_table_entry(&a, renamed).unwrap_err();
+
+        assert_eq!(class(&e), ErrorClass::TableOrViewAlreadyExists);
+        assert_eq!(c.epoch(), epoch, "a refused swap changes nothing");
+        assert!(Arc::ptr_eq(&c.store.table("db", "a").unwrap(), &a));
     }
 
     #[test]
