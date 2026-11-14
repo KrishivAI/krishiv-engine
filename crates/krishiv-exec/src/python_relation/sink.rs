@@ -29,12 +29,16 @@
 //! **Window.** The window bounds the frames queued per lane and is checked
 //! frame by frame: input rows cut but not framed yet wait in the driver's
 //! backlog (raw rows, reserved), are framed as the window frees, and the
-//! driver is `Blocked` while a lane's window is full.
+//! driver is `Blocked` while a lane's window is full or cuts wait: its
+//! future frames the backlog as the windows free, so no input is taken
+//! before the backlog drained and the cuts held stay within about one
+//! input batch.
 //!
 //! **Memory (I11).** Every byte the sink holds is reserved in the driver's
 //! consumer: input rows held or in the backlog, queued frames (the chunk's
 //! rows shared by the lanes' frames, released by the last lane's task to
-//! take it, and the copies made for the client forms), the results a task
+//! take it, and what a frame's columns hold beyond those rows: a computed
+//! argument's result, a client form's copy), the results a task
 //! yielded until they are stored (`lane.rs`: a refused result stops the
 //! task's reads until reserved), and an aggregate's pending group keys
 //! (`pair.rs`). A refusal in `sink` returns `NeedMemory` before the input
@@ -150,7 +154,8 @@ pub const DEFAULT_WINDOW: usize = 4;
 /// The sink side of a Python relation node.
 pub struct RelationSink {
     shape: RelationShape,
-    lanes: Vec<RelationLane>,
+    /// Shared with the drivers' `Blocked` futures, which frame with them.
+    lanes: Arc<[RelationLane]>,
     encoder: Option<Arc<KeyEncoder>>,
     /// The output (canonical carriers).
     schema: SchemaRef,
@@ -244,7 +249,7 @@ impl RelationSink {
         };
         Ok(Arc::new(Self {
             shape,
-            lanes,
+            lanes: lanes.into(),
             encoder,
             store: SharedSink::new(Arc::clone(&schema), scope),
             schema,
@@ -300,8 +305,9 @@ struct Driver {
     /// all of them, not of the held rows only (a batch's later groups keep
     /// theirs while its first group is cut).
     held_bytes_rows: usize,
-    /// Cut, waiting for room in the lanes' windows.
-    backlog: VecDeque<Cut>,
+    /// Cut, waiting for room in the lanes' windows (shared with the
+    /// driver's `Blocked` future, which frames it as the windows free).
+    feed: Arc<Mutex<Feed>>,
     /// Memory reserved for the next frame's copies (`finalize` waits for
     /// it; `sink` asks the driver for it).
     spare: Reservation,
@@ -311,7 +317,15 @@ struct Driver {
     pending: Pending,
 }
 
-/// What [`RelationSink::flush`] stopped at.
+/// A driver's backlog, shared with its `Blocked` future.
+struct Feed {
+    /// Cut, not framed yet.
+    backlog: VecDeque<Cut>,
+    /// A failure of the `Blocked` future's framing: the next call's error.
+    failed: Option<KrishivError>,
+}
+
+/// What [`flush_feed`] stopped at.
 #[derive(Clone, Copy)]
 enum Flushed {
     /// The backlog is empty.
@@ -398,8 +412,8 @@ impl RelationSink {
     }
 
     /// The frame of `lane` over `rows` (one side): its columns evaluated,
-    /// in their client forms; and the bytes of the columns copied to reach
-    /// them.
+    /// in their client forms; and the bytes they hold beyond the rows'
+    /// buffers (a computed argument's result, a client form's copy).
     fn frame(
         lane: &RelationLane,
         side: u8,
@@ -411,16 +425,19 @@ impl RelationSink {
         let mut fields = Vec::with_capacity(exprs.len());
         let mut columns = Vec::with_capacity(exprs.len());
         let mut copied = 0;
+        let mut input = Vec::new();
+        for c in rows.columns() {
+            buffer_ranges(&c.to_data(), &mut input);
+        }
         for (e, name) in exprs.iter().zip(names) {
             let a = e.evaluate_in(rows, partition)?;
             let client = krishiv_types::arrow::client_arrow_type(a.data_type());
             let a = if a.data_type() == &client {
                 a
             } else {
-                let moved = crate::carrier::recarried_array(&a, &client)?;
-                copied += moved.get_array_memory_size();
-                moved
+                crate::carrier::recarried_array(&a, &client)?
             };
+            copied += fresh_bytes(&a.to_data(), &input);
             fields.push(Field::new(name, client, e.nullable()));
             columns.push(a);
         }
@@ -458,6 +475,7 @@ impl RelationSink {
             let fit = (self.max_bytes.saturating_mul(rows) / bytes).max(1);
             step = step.min(fit);
         }
+        let mut feed = lock(&d.feed);
         let mut offset = 0;
         while offset < rows {
             let len = step.min(rows - offset);
@@ -469,7 +487,7 @@ impl RelationSink {
             }
             let share = d.held_bytes.size() * len / d.held_bytes_rows.max(len);
             d.held_bytes_rows = d.held_bytes_rows.saturating_sub(len);
-            d.backlog.push_back(Cut::Rows {
+            feed.backlog.push_back(Cut::Rows {
                 side: d.held_side,
                 rows: data.slice(offset, len),
                 memory: d.held_bytes.split(share),
@@ -484,7 +502,7 @@ impl RelationSink {
     /// seen, so a key whose rows span input batches gets it once.
     fn empty_side(&self, d: &mut Driver, side: u8) {
         d.sides_seen[usize::from(side)] = true;
-        d.backlog.push_back(Cut::Rows {
+        lock(&d.feed).backlog.push_back(Cut::Rows {
             side,
             rows: RecordBatch::new_empty(Arc::clone(&self.input)),
             memory: d.held_bytes.split(0),
@@ -502,7 +520,7 @@ impl RelationSink {
         if self.cogrouped() && !d.sides_seen[1] {
             self.empty_side(d, 1);
         }
-        d.backlog.push_back(Cut::EndGroup);
+        lock(&d.feed).backlog.push_back(Cut::EndGroup);
         Ok(())
     }
 
@@ -535,62 +553,21 @@ impl RelationSink {
         Ok(())
     }
 
-    /// Frames the backlog into the lanes while every lane's window has
-    /// room. Nothing changes for a frame whose copies the pool refuses.
+    /// Frames the driver's backlog as [`flush_feed`] does; the failure of
+    /// a `Blocked` future's framing first.
     fn flush(&self, d: &mut Driver) -> Result<Flushed> {
-        loop {
-            if d.lanes
-                .iter()
-                .any(|l| lock(&l.io).in_flight() >= self.window)
-            {
-                return Ok(Flushed::Window);
-            }
-            let Some(cut) = d.backlog.front() else {
-                return Ok(Flushed::All);
-            };
-            match cut {
-                Cut::Rows { side, rows, .. } => {
-                    let mut frames = Vec::with_capacity(self.lanes.len());
-                    for lane in &self.lanes {
-                        frames.push(Self::frame(lane, *side, rows, d.partition)?);
-                    }
-                    let copied: usize = frames.iter().map(|(_, c)| c).sum();
-                    let more = copied.saturating_sub(d.spare.size());
-                    if more > 0 && d.spare.try_grow(more).is_err() {
-                        return Ok(Flushed::Memory(more));
-                    }
-                    let Some(Cut::Rows { memory, .. }) = d.backlog.pop_front() else {
-                        return Err(internal("the Python UDF backlog changed".to_owned()));
-                    };
-                    let shared = Arc::new(Mutex::new(memory));
-                    for ((lane, state), (frame, copied)) in
-                        self.lanes.iter().zip(&d.lanes).zip(frames)
-                    {
-                        let memory = FrameMem {
-                            _shared: Some(Arc::clone(&shared)),
-                            _own: d.spare.split(copied),
-                        };
-                        state.queue(lane.udf.as_ref(), frame, memory)?;
-                    }
-                }
-                Cut::EndGroup | Cut::End => {
-                    let end = matches!(cut, Cut::End);
-                    d.backlog.pop_front();
-                    for (lane, state) in self.lanes.iter().zip(&d.lanes) {
-                        // A task never opened (no rows) gets no `End`.
-                        if end && !state.opened() {
-                            continue;
-                        }
-                        let frame = if end { Frame::End } else { Frame::EndGroup };
-                        let memory = FrameMem {
-                            _shared: None,
-                            _own: d.spare.split(0),
-                        };
-                        state.queue(lane.udf.as_ref(), frame, memory)?;
-                    }
-                }
-            }
+        let mut feed = lock(&d.feed);
+        if let Some(e) = feed.failed.take() {
+            return Err(e);
         }
+        flush_feed(
+            &self.lanes,
+            self.window,
+            d.partition,
+            &d.lanes,
+            &mut feed.backlog,
+            &mut d.spare,
+        )
     }
 
     /// A task's batch as an output batch: its columns checked against the
@@ -792,19 +769,162 @@ fn lend(parts: Vec<Reservation>, handle: &Arc<ConsumerHandle>, bytes: usize) -> 
     lent
 }
 
-/// The future of a `Blocked` driver: ready once every lane's window has
-/// room, a lane ended (its failure is the next call's), or a result waits
-/// for memory (the next call asks for it).
-fn blocked(lanes: Vec<Lane>, window: usize) -> BoxFuture<'static, ()> {
+/// Frames `backlog` into `lanes` while every lane's window has room, the
+/// copies reserved in `spare`. Nothing changes for a frame whose copies the
+/// pool refuses.
+fn flush_feed(
+    specs: &[RelationLane],
+    window: usize,
+    partition: u32,
+    lanes: &[Lane],
+    backlog: &mut VecDeque<Cut>,
+    spare: &mut Reservation,
+) -> Result<Flushed> {
+    loop {
+        if lanes.iter().any(|l| lock(&l.io).in_flight() >= window) {
+            return Ok(Flushed::Window);
+        }
+        let Some(cut) = backlog.front() else {
+            return Ok(Flushed::All);
+        };
+        match cut {
+            Cut::Rows { side, rows, .. } => {
+                let mut frames = Vec::with_capacity(specs.len());
+                for lane in specs {
+                    frames.push(RelationSink::frame(lane, *side, rows, partition)?);
+                }
+                let copied: usize = frames.iter().map(|(_, c)| c).sum();
+                let more = copied.saturating_sub(spare.size());
+                if more > 0 && spare.try_grow(more).is_err() {
+                    return Ok(Flushed::Memory(more));
+                }
+                let Some(Cut::Rows { memory, .. }) = backlog.pop_front() else {
+                    return Err(internal("the Python UDF backlog changed".to_owned()));
+                };
+                let shared = Arc::new(Mutex::new(memory));
+                for ((lane, state), (frame, copied)) in specs.iter().zip(lanes).zip(frames) {
+                    let memory = FrameMem {
+                        _shared: Some(Arc::clone(&shared)),
+                        _own: spare.split(copied),
+                    };
+                    state.queue(lane.udf.as_ref(), frame, memory)?;
+                }
+            }
+            Cut::EndGroup | Cut::End => {
+                let end = matches!(cut, Cut::End);
+                backlog.pop_front();
+                for (lane, state) in specs.iter().zip(lanes) {
+                    // A task never opened (no rows) gets no `End`.
+                    if end && !state.opened() {
+                        continue;
+                    }
+                    let frame = if end { Frame::End } else { Frame::EndGroup };
+                    let memory = FrameMem {
+                        _shared: None,
+                        _own: spare.split(0),
+                    };
+                    state.queue(lane.udf.as_ref(), frame, memory)?;
+                }
+            }
+        }
+    }
+}
+
+/// The address ranges of `data`'s buffers (validity and children too).
+fn buffer_ranges(data: &arrow_data::ArrayData, out: &mut Vec<(usize, usize)>) {
+    let mut add = |b: &arrow_buffer::Buffer| {
+        let start = b.as_ptr() as usize;
+        out.push((start, start + b.len()));
+    };
+    if let Some(nulls) = data.nulls() {
+        add(nulls.buffer());
+    }
+    for b in data.buffers() {
+        add(b);
+    }
+    for c in data.child_data() {
+        buffer_ranges(c, out);
+    }
+}
+
+/// The bytes of `data`'s buffers that lie outside every range of `input`:
+/// what evaluating a frame column allocated (a column read shares the
+/// input's buffers, a computed argument does not).
+fn fresh_bytes(data: &arrow_data::ArrayData, input: &[(usize, usize)]) -> usize {
+    let size = |b: &arrow_buffer::Buffer| {
+        let at = b.as_ptr() as usize;
+        if input.iter().any(|&(start, end)| start <= at && at < end) {
+            0
+        } else {
+            b.capacity()
+        }
+    };
+    let mut bytes = data.nulls().map_or(0, |n| size(n.buffer()));
+    bytes += data.buffers().iter().map(size).sum::<usize>();
+    bytes
+        + data
+            .child_data()
+            .iter()
+            .map(|c| fresh_bytes(c, input))
+            .sum::<usize>()
+}
+
+/// The future of a `Blocked` driver. It frames the driver's backlog as the
+/// windows free (the driver takes no input before the backlog drained, so
+/// the cuts held stay within about one input batch), and is ready once the
+/// backlog is empty and every lane's window has room; or early when a
+/// lane ended (its failure is the next call's), a result waits for memory,
+/// a frame's copies need memory or framing failed (the next call asks for
+/// the memory or returns the failure).
+fn blocked(
+    specs: Arc<[RelationLane]>,
+    lanes: Vec<Lane>,
+    feed: Arc<Mutex<Feed>>,
+    mut spare: Reservation,
+    window: usize,
+    partition: u32,
+) -> BoxFuture<'static, ()> {
     Box::pin(poll_fn(move |cx| {
-        let mut room = true;
-        for lane in &lanes {
-            if lane.poll(cx).is_some() || lock(&lane.io).refused.is_some() {
+        loop {
+            for lane in &lanes {
+                if lane.poll(cx).is_some() || lock(&lane.io).refused.is_some() {
+                    return Poll::Ready(());
+                }
+            }
+            let mut f = lock(&feed);
+            if f.failed.is_some() {
                 return Poll::Ready(());
             }
-            room &= lock(&lane.io).in_flight() < window;
+            let before = f.backlog.len();
+            match flush_feed(
+                &specs,
+                window,
+                partition,
+                &lanes,
+                &mut f.backlog,
+                &mut spare,
+            ) {
+                Err(e) => {
+                    f.failed = Some(e);
+                    return Poll::Ready(());
+                }
+                Ok(Flushed::Memory(_)) => return Poll::Ready(()),
+                Ok(Flushed::All | Flushed::Window) => {
+                    let (moved, empty) = (f.backlog.len() < before, f.backlog.is_empty());
+                    drop(f);
+                    if moved {
+                        // The pumps take the new frames, then frame again.
+                        continue;
+                    }
+                    let room = lanes.iter().all(|l| lock(&l.io).in_flight() < window);
+                    return if empty && room {
+                        Poll::Ready(())
+                    } else {
+                        Poll::Pending
+                    };
+                }
+            }
         }
-        if room { Poll::Ready(()) } else { Poll::Pending }
     }))
 }
 
@@ -842,7 +962,10 @@ impl Sink for RelationSink {
                 sides_seen: [false; 2],
                 held_bytes: consumer.reservation(),
                 held_bytes_rows: 0,
-                backlog: VecDeque::new(),
+                feed: Arc::new(Mutex::new(Feed {
+                    backlog: VecDeque::new(),
+                    failed: None,
+                })),
                 spare: consumer.reservation(),
                 wants: 0,
                 pending: Pending::default(),
@@ -874,12 +997,22 @@ impl Sink for RelationSink {
             self.flush(&mut l.driver)?;
             Self::progress(&l.driver)?;
         }
-        let d = &l.driver;
-        if d.lanes
-            .iter()
-            .any(|lane| lock(&lane.io).in_flight() >= self.window)
+        // Blocked while cuts wait or a window is full: the future frames
+        // the backlog, so no more input is taken before it drained.
+        let d = &mut l.driver;
+        if !lock(&d.feed).backlog.is_empty()
+            || d.lanes
+                .iter()
+                .any(|lane| lock(&lane.io).in_flight() >= self.window)
         {
-            return Ok(SinkStatus::Blocked(blocked(d.lanes.clone(), self.window)));
+            return Ok(SinkStatus::Blocked(blocked(
+                Arc::clone(&self.lanes),
+                d.lanes.clone(),
+                Arc::clone(&d.feed),
+                d.spare.split(0),
+                self.window,
+                d.partition,
+            )));
         }
         Ok(SinkStatus::NeedMoreInput)
     }
@@ -899,7 +1032,7 @@ impl Sink for RelationSink {
         } else {
             self.cut_held(&mut driver, true)?;
         }
-        driver.backlog.push_back(Cut::End);
+        lock(&driver.feed).backlog.push_back(Cut::End);
         self.flush(&mut driver)?;
         Self::progress(&driver)?;
         lock(&g.leftover).push(driver);
@@ -1019,7 +1152,7 @@ impl RelationSink {
                 let _missing = lane.try_take_refused();
             }
         }
-        Ok(d.backlog.is_empty()
+        Ok(lock(&d.feed).backlog.is_empty()
             && d.ready.is_none()
             && d.lanes
                 .iter()
@@ -1070,8 +1203,9 @@ impl RelationSink {
                     }
                     room &= q.in_flight() < self.window;
                 }
-                ready |= joinable || (room && !d.backlog.is_empty());
-                all_done &= d.backlog.is_empty() && d.ready.is_none();
+                let backlog = !lock(&d.feed).backlog.is_empty();
+                ready |= joinable || (room && backlog);
+                all_done &= !backlog && d.ready.is_none();
             }
             if ready || all_done {
                 Poll::Ready(Ok(()))
@@ -1098,7 +1232,8 @@ pub(super) fn queued(local: &mut LocalState) -> Result<(Vec<usize>, usize)> {
     let l = local_mut::<RelLocal>(local, "PythonRelation")?;
     let d = &l.driver;
     let lanes = d.lanes.iter().map(|l| lock(&l.io).in_flight()).collect();
-    Ok((lanes, d.backlog.len()))
+    let backlog = lock(&d.feed).backlog.len();
+    Ok((lanes, backlog))
 }
 
 /// The global state a relation node's reader takes its list from: the

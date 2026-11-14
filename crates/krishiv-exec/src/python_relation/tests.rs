@@ -40,6 +40,8 @@ struct Shared {
     opened: std::sync::atomic::AtomicUsize,
     /// While closed, `send` waits.
     closed: AtomicBool,
+    /// While set, `send` waits once the log has this many frames.
+    admit: std::sync::Mutex<Option<usize>>,
     gate: AtomicWaker,
     /// Fail the n-th frame (counted from 1).
     fail_at: std::sync::Mutex<Option<usize>>,
@@ -131,7 +133,9 @@ impl UdfTask for Task {
         Box::pin(async move {
             poll_fn(|cx| {
                 self.shared.gate.register(cx.waker());
-                if self.shared.closed.load(Ordering::SeqCst) {
+                let full = (*self.shared.admit.lock().unwrap())
+                    .is_some_and(|n| self.shared.log.lock().unwrap().len() >= n);
+                if full || self.shared.closed.load(Ordering::SeqCst) {
                     Poll::Pending
                 } else {
                     Poll::Ready(())
@@ -251,6 +255,59 @@ struct Rig {
 
 fn rig(shape: RelationShape, yields: Yield, limits: RelationLimits, limit: usize) -> Rig {
     rig_in(shape, yields, limits, limit, None)
+}
+
+/// As [`rig`], every frame of the map lane being `columns` (the task yields
+/// nothing).
+fn rig_columns(
+    limits: RelationLimits,
+    limit: usize,
+    columns: &[(Arc<dyn ScalarExpr>, &str)],
+) -> Rig {
+    let r = rig(RelationShape::Map, Yield::Nothing, limits, limit);
+    let lane = RelationLane {
+        name: "f".to_owned(),
+        udf: Arc::new(Fake {
+            shared: Arc::clone(&r.shared),
+            yields: Yield::Nothing,
+        }),
+        sides: vec![columns.iter().map(|(e, _)| Arc::clone(e)).collect()],
+        names: vec![columns.iter().map(|(_, n)| (*n).to_owned()).collect()],
+        client: vec![ArrowType::Int32, ArrowType::Int64],
+    };
+    let sink = RelationSink::try_new(
+        input(false),
+        RelationShape::Map,
+        vec![lane],
+        r.sink.schema(),
+        limits,
+        None,
+    )
+    .unwrap();
+    Rig { sink, ..r }
+}
+
+/// A computed argument (as `repeat(s, n)`): a new string of `width` bytes
+/// per row, already in its client form.
+#[derive(Debug)]
+struct Wide {
+    width: usize,
+}
+
+impl ScalarExpr for Wide {
+    fn data_type(&self) -> ArrowType {
+        ArrowType::Utf8
+    }
+
+    fn nullable(&self) -> bool {
+        false
+    }
+
+    fn evaluate(&self, batch: &RecordBatch) -> crate::error::Result<ArrayRef> {
+        let s = "x".repeat(self.width);
+        let a: arrow_array::StringArray = (0..batch.num_rows()).map(|_| Some(s.as_str())).collect();
+        Ok(Arc::new(a))
+    }
 }
 
 /// As [`rig`], its finished rows spilling to `scope`.
@@ -1084,21 +1141,157 @@ async fn a_batch_s_later_group_keeps_its_share_of_the_input_reservation() {
     // The first group's frame in flight; its end and the second group's
     // rows wait.
     assert_eq!(super::sink::queued(&mut l).unwrap(), (vec![1], 2));
+    // The task takes the first frame only.
+    *r.shared.admit.lock().unwrap() = Some(1);
     r.shared.open_gate();
-    tokio::time::timeout(Duration::from_secs(5), wait)
-        .await
-        .unwrap();
+    let mut wait = wait;
+    let first = poll_fn(|cx| Poll::Ready(wait.as_mut().poll(cx))).await;
+    assert!(first.is_pending(), "ready with the task stuck");
     // The first frame is taken and its memory freed; the second group's
     // rows are still reserved.
     assert_eq!(r.shared.log(), ["B0:10000"]);
+    assert_eq!(super::sink::queued(&mut l).unwrap(), (vec![1], 1));
     assert!(
         r.root.reserved() >= bytes / 2,
         "{} of {bytes} bytes reserved",
         r.root.reserved()
     );
+    *r.shared.admit.lock().unwrap() = None;
+    r.shared.open_gate();
+    tokio::time::timeout(Duration::from_secs(5), wait)
+        .await
+        .unwrap();
     r.sink.combine(l, &g).unwrap();
     r.sink.finalize(&g, &r.ctx).await.unwrap();
     assert_eq!(r.shared.log(), ["B0:10000", "G", "B0:10000", "G", "E"]);
+    drop(g);
+    done(r);
+}
+
+/// A frame column computed from the rows (`python_udaf(repeat(s, 1000))`)
+/// holds memory of its own while the frame is queued: it is reserved, as
+/// the copies of a client form are, not only the input rows. A column read
+/// shares the input's buffers and adds nothing.
+#[tokio::test]
+async fn a_computed_frame_column_is_reserved_while_queued() {
+    let width = 1000;
+    let r = rig_columns(
+        limits(0, 4),
+        64 << 20,
+        &[
+            (column(0, ArrowType::Int32), "k"),
+            (Arc::new(Wide { width }), "s"),
+        ],
+    );
+    r.shared.closed.store(true, Ordering::SeqCst);
+    let g = r.sink.global_state(&r.ctx).unwrap();
+    let mut l = r.sink.local_state(&r.ctx, &g).unwrap();
+    let keys: Vec<i32> = (0..100).collect();
+    let batch = rows(&keys, None);
+    let input = batch.data().get_array_memory_size();
+    let status = r.sink.sink(batch, &mut l, &g).unwrap();
+    assert!(matches!(status, SinkStatus::NeedMoreInput), "{status:?}");
+    // The frame waits for the closed task: its rows and its strings.
+    assert_eq!(super::sink::queued(&mut l).unwrap(), (vec![1], 0));
+    let reserved = r.root.reserved();
+    assert!(
+        reserved >= input + 100 * width,
+        "{reserved} bytes reserved for {input} input bytes and {} computed",
+        100 * width
+    );
+    r.shared.open_gate();
+    r.sink.combine(l, &g).unwrap();
+    r.sink.finalize(&g, &r.ctx).await.unwrap();
+    assert_eq!(r.shared.log(), ["B0:100", "E"]);
+    drop(g);
+    done(r);
+}
+
+/// A column read adds nothing to the frame's reservation: it shares the
+/// input's buffers, which the input's reservation covers.
+#[tokio::test]
+async fn a_frame_of_column_reads_reserves_only_the_input() {
+    let r = rig_columns(
+        limits(0, 4),
+        64 << 20,
+        &[
+            (column(0, ArrowType::Int32), "k"),
+            (column(1, ArrowType::Int64), "v"),
+        ],
+    );
+    r.shared.closed.store(true, Ordering::SeqCst);
+    let g = r.sink.global_state(&r.ctx).unwrap();
+    let mut l = r.sink.local_state(&r.ctx, &g).unwrap();
+    let keys: Vec<i32> = (0..10_000).collect();
+    let batch = rows(&keys, None);
+    let input = batch.data().get_array_memory_size();
+    let status = r.sink.sink(batch, &mut l, &g).unwrap();
+    assert!(matches!(status, SinkStatus::NeedMoreInput), "{status:?}");
+    let reserved = r.root.reserved();
+    // The quantum rounds the input's bytes up.
+    assert!(
+        reserved < input + (4 << 10),
+        "{reserved} bytes reserved for {input} input bytes"
+    );
+    r.shared.open_gate();
+    r.sink.combine(l, &g).unwrap();
+    r.sink.finalize(&g, &r.ctx).await.unwrap();
+    drop(g);
+    done(r);
+}
+
+/// More frames per batch than the window takes (`maxRecordsPerBatch=1`):
+/// the driver is blocked until its backlog drained, so the cuts held never
+/// outgrow one input batch, however many batches come.
+#[tokio::test]
+async fn the_backlog_drains_before_the_next_input_is_taken() {
+    let r = rig(RelationShape::Map, Yield::Nothing, limits(1, 4), 64 << 20);
+    let g = r.sink.global_state(&r.ctx).unwrap();
+    let mut l = r.sink.local_state(&r.ctx, &g).unwrap();
+    let keys: Vec<i32> = (0..100).collect();
+    for _ in 0..5 {
+        // `Blocked` took the batch: wait, then the next one.
+        if let SinkStatus::Blocked(wait) = r.sink.sink(rows(&keys, None), &mut l, &g).unwrap() {
+            tokio::time::timeout(Duration::from_secs(5), wait)
+                .await
+                .unwrap();
+        }
+        let (_, backlog) = super::sink::queued(&mut l).unwrap();
+        assert_eq!(backlog, 0, "cuts left when the next input comes");
+    }
+    r.sink.combine(l, &g).unwrap();
+    r.sink.finalize(&g, &r.ctx).await.unwrap();
+    assert_eq!(r.shared.log().len(), 501);
+    drop(g);
+    done(r);
+}
+
+/// A blocked driver's future frames the backlog only as the task takes
+/// frames: while the task is stuck it stays pending, and the cuts keep
+/// their reservation.
+#[tokio::test]
+async fn a_blocked_future_waits_while_the_task_takes_nothing() {
+    let r = rig(RelationShape::Map, Yield::Nothing, limits(1, 2), 64 << 20);
+    r.shared.closed.store(true, Ordering::SeqCst);
+    let g = r.sink.global_state(&r.ctx).unwrap();
+    let mut l = r.sink.local_state(&r.ctx, &g).unwrap();
+    let keys: Vec<i32> = (0..10).collect();
+    let SinkStatus::Blocked(wait) = r.sink.sink(rows(&keys, None), &mut l, &g).unwrap() else {
+        panic!("ten frames over a window of two must block");
+    };
+    let waiting = tokio::spawn(wait);
+    tokio::task::yield_now().await;
+    assert!(!waiting.is_finished(), "ready while the task took nothing");
+    assert_eq!(super::sink::queued(&mut l).unwrap(), (vec![2], 8));
+    r.shared.open_gate();
+    tokio::time::timeout(Duration::from_secs(5), waiting)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(super::sink::queued(&mut l).unwrap().1, 0);
+    r.sink.combine(l, &g).unwrap();
+    r.sink.finalize(&g, &r.ctx).await.unwrap();
+    assert_eq!(r.shared.log().len(), 11);
     drop(g);
     done(r);
 }
