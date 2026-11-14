@@ -32,6 +32,7 @@ krishiv-server = { path = "../krishiv-server", version = "=0.2.1", optional = tr
 krishiv-session = { path = "../krishiv-session", version = "=0.2.1", optional = true }
 krishiv-mcp = { path = "../krishiv-mcp", version = "=0.2.1", optional = true }
 krishiv-connect-server = { path = "../krishiv-connect-server", version = "=0.2.1", optional = true }
+krishiv-udf-pool = { path = "../krishiv-udf-pool", version = "=0.2.1", optional = true }
 axum = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"], optional = true }
 serde_json = { workspace = true }
@@ -52,7 +53,8 @@ kafka = ["krishiv/kafka"]
 iceberg = ["krishiv/iceberg"]
 delta = ["krishiv/delta"]
 cdc = ["krishiv/cdc"]
-connect = ["krishiv/connect"]
+# The Connect server hosts the Python UDF worker pool; the binary runs its sandbox trampoline (P3-T014).
+connect = ["krishiv/connect", "dep:krishiv-udf-pool"]
 flight-sql = ["krishiv/flight-sql"]
 mcp = ["krishiv/mcp", "dep:krishiv-mcp", "dep:tokio"]
 python = ["krishiv/python"]

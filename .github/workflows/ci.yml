@@ -288,12 +288,22 @@ jobs:
       - uses: $/.github/actions/setup-uv
       - name: TPC-H SF 0.1 Parquet
         run: uv run --frozen --project bench python -I tests/scripts/gen_tpch_parquet.py 0.1 "$RUNNER_TEMP/tpch-sf0.1"
+      # The Python UDF worker interpreter of krishiv-udf-pool's tests (P3-T014): a uv-installed CPython (a
+      # python-build-standalone build, the case the sandbox's PT_INTERP reader must handle) with what a worker
+      # needs. KRISHIV_UDF_POOL_REQUIRED makes those tests fail rather than pass with a note without it.
+      - name: UDF worker interpreter
+        run: |
+          uv venv --python 3.12 "$RUNNER_TEMP/udf-python"
+          uv pip install --python "$RUNNER_TEMP/udf-python/bin/python" \
+            "pyspark-client==4.2.1" "pyarrow==26.0.1" "pandas==3.1.1" "numpy==2.5.4"
       # Every GitHub-hosted x64 runner has x86-64-v3, so the kernel tests must
       # run that clone, not skip it (AVX-512 varies by runner: not required).
       - run: cargo nextest run --workspace --locked --no-tests=pass
         env:
           KRISHIV_REQUIRE_TARGETS: baseline,x86_64v3
           KRISHIV_SIM_TPCH_DIR: ${{ runner.temp }}/tpch-sf0.1
+          KRISHIV_TEST_UDF_PYTHON: ${{ runner.temp }}/udf-python/bin/python
+          KRISHIV_UDF_POOL_REQUIRED: "1"
       - run: cargo test --workspace --doc --locked
       - run: cargo nextest run -p krishiv-session --features telemetry-otlp --test otlp_collector --locked
       # Server TLS (`tls`) and OIDC (`oidc`), both off by default: the in-memory rustls handshakes,

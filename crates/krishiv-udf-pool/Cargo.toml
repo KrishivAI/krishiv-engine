@@ -1,0 +1,34 @@
+[package]
+name = "krishiv-udf-pool"
+description = "Krishiv's isolated Python UDF worker pool: sandboxed worker processes, memfd transport and lifecycle"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = true
+
+[lints]
+workspace = true
+
+[dependencies]
+arrow-array.workspace = true
+arrow-ipc.workspace = true
+arrow-schema.workspace = true
+futures = { workspace = true, features = ["std"] }
+krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
+krishiv-exec = { path = "../krishiv-exec", version = "=0.2.1" }
+krishiv-udf-sandbox = { path = "../krishiv-udf-sandbox", version = "=0.2.1" }
+serde_json = { workspace = true, features = ["std"] }
+tempfile.workspace = true
+tracing = { workspace = true, features = ["std"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { workspace = true, features = ["fs", "net", "process", "std"] }
+
+[dev-dependencies]
+# The compressed-result regression test writes an LZ4 stream.
+arrow-ipc = { workspace = true, features = ["lz4"] }
+futures = { workspace = true, features = ["executor"] }
+krishiv-plan = { path = "../krishiv-plan" }
+krishiv-types = { path = "../krishiv-types" }
