@@ -190,7 +190,9 @@ def upstream_problems(fetch=None) -> list[str]:
     for ver, tag in TAGS.items():
         for f in sorted((PROTO / ver / "spark" / "connect").glob("*.proto")):
             try:
-                body = fetch(RAW.format(tag=tag, base="connector/connect" if ver == "3.5" else "sql/connect", name=f.name))
+                body = fetch(
+                    RAW.format(tag=tag, base="connector/connect" if ver == "3.5" else "sql/connect", name=f.name)
+                )
             except OSError as e:
                 problems.append(f"{ver}/{f.name}: cannot fetch {tag}: {e}")
                 continue
