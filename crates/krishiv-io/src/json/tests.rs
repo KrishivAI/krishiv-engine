@@ -1923,3 +1923,32 @@ fn decimals_are_written_from_both_carriers() {
         );
     }
 }
+
+#[test]
+fn failfast_raises_the_json_value_and_record_type_classes() {
+    // Each class engine code raises for a JSON value or record, named here so
+    // the registry-coverage check sees a test for it.
+    let o = options(&serde_json::json!({ "mode": "FAILFAST" }));
+    let raised = |text: &str, schema: &str| -> Vec<ErrorClass> {
+        let e = read(text.as_bytes(), &o, &ScanRequest::all(ddl(schema))).expect_err("fails");
+        classes_of(&e)
+    };
+    // An empty string is not a value of an int column.
+    assert!(
+        raised("{\"a\":\"\"}\n", "a int").contains(&ErrorClass::EmptyJsonFieldValue),
+        "EMPTY_JSON_FIELD_VALUE"
+    );
+    // A string that is not a float, for a double column.
+    assert!(
+        raised("{\"a\":\"abc\"}\n", "a double")
+            .contains(&ErrorClass::MalformedRecordInParsingCannotParseStringAsDatatype),
+        "MALFORMED_RECORD_IN_PARSING.CANNOT_PARSE_STRING_AS_DATATYPE"
+    );
+    // Inference over a record that is not an object.
+    let e = infer(b"1\n", &o).expect_err("fails");
+    assert!(
+        classes_of(&e).contains(&ErrorClass::InvalidJsonRecordType),
+        "INVALID_JSON_RECORD_TYPE: {:?}",
+        classes_of(&e)
+    );
+}
