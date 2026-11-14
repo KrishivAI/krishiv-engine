@@ -18,10 +18,12 @@ use std::fmt;
 
 use krishiv_plan::analyzer::Privilege;
 
+use crate::ParserOptions;
+
 use crate::ast::{
     AlterNamespaceAction, AlterTableAction, AlterViewAction, CacheKind, Compound, DdlName,
-    DescribeKind, ExplainMode, HandlerBody, MergeSource, ObjectName, Query, RefreshKind,
-    ScriptStatement, SetVariableKind, ShowKind, Statement,
+    DescribeKind, ExecuteImmediate, ExplainMode, ExprKind, HandlerBody, Literal, MergeSource,
+    ObjectName, Query, RefreshKind, ScriptStatement, SetVariableKind, ShowKind, Statement,
 };
 
 /// What kind of effect a statement has.
@@ -87,8 +89,26 @@ pub enum ExplainKind {
 /// assert_eq!(class("ADD JAR '/tmp/a.jar'"), StatementClass::Admin);
 /// ```
 #[must_use]
-#[deny(clippy::wildcard_enum_match_arm)]
 pub fn classify(statement: &Statement) -> StatementClass {
+    classify_with(statement, &ParserOptions::default())
+}
+
+/// [`classify`] with the session's parser options, which read the text of an `EXECUTE IMMEDIATE`:
+/// literal text has the class of the statement it holds (with `INTO`, at least `SESSION`, since it
+/// assigns variables); text from a variable or any other expression, or text that does not parse, is
+/// `ADMIN` (the module's "cannot place" rule).
+///
+/// ```
+/// use krishiv_sql::{ParserOptions, StatementClass, classify_with, parse_statement};
+///
+/// let options = ParserOptions::default();
+/// let class = |sql: &str| classify_with(&parse_statement(sql, &options).unwrap(), &options);
+/// assert_eq!(class("EXECUTE IMMEDIATE 'DROP TABLE t'"), StatementClass::Ddl);
+/// assert_eq!(class("EXECUTE IMMEDIATE stmt"), StatementClass::Admin);
+/// ```
+#[must_use]
+#[deny(clippy::wildcard_enum_match_arm)]
+pub fn classify_with(statement: &Statement, options: &ParserOptions) -> StatementClass {
     match statement {
         Statement::Query(_)
         | Statement::Show(_)
@@ -97,7 +117,7 @@ pub fn classify(statement: &Statement) -> StatementClass {
         // `EXPLAIN ANALYZE` runs its statement: it takes that statement's
         // class; any other mode only shows a plan.
         Statement::Explain(e) => match e.mode {
-            ExplainMode::Analyze => classify(&e.statement),
+            ExplainMode::Analyze => classify_with(&e.statement, options),
             ExplainMode::Simple
             | ExplainMode::Extended
             | ExplainMode::Formatted
@@ -107,7 +127,20 @@ pub fn classify(statement: &Statement) -> StatementClass {
             | ExplainMode::Json => StatementClass::Read,
         },
         // A script has the class of the strongest statement anywhere in it.
-        Statement::Script(c) => script_class(c),
+        Statement::Script(c) => script_class(c, options),
+        Statement::ExecuteImmediate(e) => match immediate_class_statement(e, options) {
+            Some(inner) => {
+                let class = classify_with(&inner, options);
+                if e.into.is_empty() {
+                    class
+                } else {
+                    stronger(class, StatementClass::Session)
+                }
+            }
+            // cluster-scope: text from a variable or an expression (or text that does not parse)
+            // cannot be placed before it runs.
+            None => StatementClass::Admin,
+        },
         // The legacy view nodes are temporary views with a one-part name:
         // session-local, re-analyzed under the session's principal.
         Statement::Set(_)
@@ -116,7 +149,6 @@ pub fn classify(statement: &Statement) -> StatementClass {
         | Statement::DeclareVariable(_)
         | Statement::SetVariable(_)
         | Statement::DropVariable(_)
-        | Statement::ExecuteImmediate(_)
         | Statement::CreateView(_)
         | Statement::DropView(_) => StatementClass::Session,
         Statement::CreateTable(t) => {
@@ -179,6 +211,52 @@ pub fn classify(statement: &Statement) -> StatementClass {
     }
 }
 
+/// The literal text of `e`: its statement text when that is a string literal, else `None` (a
+/// variable or an expression, known only when it runs).
+#[must_use]
+pub fn immediate_text(e: &ExecuteImmediate) -> Option<&str> {
+    fn literal(e: &crate::ast::Expr) -> Option<&str> {
+        match &e.kind {
+            ExprKind::Literal(Literal::String(s)) => Some(s),
+            ExprKind::Nested(inner) => literal(inner),
+            _ => None,
+        }
+    }
+    literal(&e.query)
+}
+
+/// The statement the literal text of `e` holds ([`immediate_text`]), parsed with `options`; `None`
+/// when the text is not literal or does not parse. Parameter markers parse as markers: they stand for
+/// literals, which change no class.
+#[must_use]
+pub fn immediate_statement(e: &ExecuteImmediate, options: &ParserOptions) -> Option<Statement> {
+    crate::parse_statement(immediate_text(e)?, options).ok()
+}
+
+/// The statement whose class `EXECUTE IMMEDIATE` `e` takes: its literal text parsed, or, when that
+/// fails, the text with each parameter marker replaced by a string literal (`IDENTIFIER(:t)` parses
+/// only once bound). A marker is bound to a literal when the statement runs, so the replaced text is
+/// one the statement can become, and a literal changes no class.
+fn immediate_class_statement(e: &ExecuteImmediate, options: &ParserOptions) -> Option<Statement> {
+    if let Some(statement) = immediate_statement(e, options) {
+        return Some(statement);
+    }
+    let text = immediate_text(e)?;
+    let markers = crate::parameter_markers(text, options.double_quoted_identifiers);
+    if markers.is_empty() {
+        return None;
+    }
+    let mut bound = String::with_capacity(text.len());
+    let mut at = 0;
+    for m in &markers {
+        bound.push_str(text.get(at..m.start)?);
+        bound.push_str("'x'");
+        at = m.end;
+    }
+    bound.push_str(text.get(at..)?);
+    crate::parse_statement(&bound, options).ok()
+}
+
 /// How `statement` explains, if it is an `EXPLAIN`.
 #[must_use]
 pub fn explain_kind(statement: &Statement) -> Option<ExplainKind> {
@@ -225,10 +303,17 @@ pub fn statement_queries(statement: &Statement) -> Option<Vec<&Query>> {
             }
             i.clauses.iter().map(|c| &*c.query).collect()
         }
-        Statement::Merge(m) => match &m.source {
-            MergeSource::Query { query, .. } => vec![&**query],
-            MergeSource::Table { .. } => Vec::new(),
-        },
+        // A subquery in `ON`, a clause condition or a value is not a whole query: fail closed
+        // (`crate::reads` module doc).
+        Statement::Merge(m) => {
+            if crate::reads::merge_reads_a_relation(m) {
+                return None;
+            }
+            match &m.source {
+                MergeSource::Query { query, .. } => vec![&**query],
+                MergeSource::Table { .. } => Vec::new(),
+            }
+        }
         Statement::Cache(c) => match &c.kind {
             CacheKind::Cache { query, .. } => query.iter().map(|q| &**q).collect(),
             CacheKind::Uncache { .. } | CacheKind::Clear => Vec::new(),
@@ -644,7 +729,21 @@ pub(crate) fn script_leaves<'a>(c: &'a Compound, f: &mut dyn FnMut(&'a Statement
 /// Session > Read`. That is not [`StatementClass`]'s derived order (`Read < Write < Ddl < Session <
 /// Admin`): a script that declares a variable and runs an `INSERT` must read as a write, and a
 /// surface that admits only `Read` and `Session` statements must not admit it.
-fn script_class(c: &Compound) -> StatementClass {
+fn script_class(c: &Compound, options: &ParserOptions) -> StatementClass {
+    let mut class = StatementClass::Read;
+    script_leaves(c, &mut |leaf| {
+        class = stronger(class, classify_with(leaf, options));
+    });
+    // Declarations and assignments are session state.
+    if has_session_items(&c.body) {
+        class = stronger(class, StatementClass::Session);
+    }
+    class
+}
+
+/// The stronger of `a` and `b` by the order `Admin > Ddl > Write > Session > Read` (see
+/// [`script_class`]).
+const fn stronger(a: StatementClass, b: StatementClass) -> StatementClass {
     const fn strength(class: StatementClass) -> u8 {
         match class {
             StatementClass::Read => 0,
@@ -654,18 +753,7 @@ fn script_class(c: &Compound) -> StatementClass {
             StatementClass::Admin => 4,
         }
     }
-    let mut class = StatementClass::Read;
-    script_leaves(c, &mut |leaf| {
-        let leaf = classify(leaf);
-        if strength(leaf) > strength(class) {
-            class = leaf;
-        }
-    });
-    // Declarations and assignments are session state.
-    if has_session_items(&c.body) && strength(class) < strength(StatementClass::Session) {
-        class = StatementClass::Session;
-    }
-    class
+    if strength(b) > strength(a) { b } else { a }
 }
 
 /// Whether a declaration or an assignment stands anywhere in `items`.

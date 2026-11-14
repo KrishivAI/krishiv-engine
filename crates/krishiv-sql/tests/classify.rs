@@ -13,7 +13,7 @@ use std::collections::BTreeSet;
 use krishiv_sql::ast::Statement;
 use krishiv_sql::{
     ExplainKind, ParserOptions, StatementClass, classify, explain_kind, parse_statement,
-    statement_queries,
+    statement_queries, statement_reads,
 };
 
 const GOLDENS: &str = include_str!("fixtures/statement-classes.tsv");
@@ -270,6 +270,12 @@ fn explain_kind_and_statement_queries() {
             "MERGE INTO t USING s ON t.k = s.k WHEN MATCHED THEN DELETE",
             Some(0),
         ),
+        // A subquery in a MERGE expression fails closed (review m1).
+        (
+            "MERGE INTO t USING s ON t.k = s.k AND s.k IN (SELECT k FROM x) \
+             WHEN MATCHED THEN DELETE",
+            None,
+        ),
         ("CACHE TABLE c AS SELECT 1", Some(1)),
         ("CACHE TABLE c", Some(0)),
         ("UNCACHE TABLE c", Some(0)),
@@ -292,4 +298,67 @@ fn explain_kind_and_statement_queries() {
         panic!("not an EXPLAIN");
     };
     assert_eq!(statement_queries(&e.statement).map(|q| q.len()), Some(1));
+}
+
+/// A subquery anywhere in a MERGE's expressions leaves its reads unknown (`None`), in both entry
+/// points: `ON`, a clause condition, an `UPDATE SET` value and an inserted value (review m1).
+#[test]
+fn merge_subquery_condition_is_partial() {
+    let options = ParserOptions::default();
+    let parse = |sql: &str| parse_statement(sql, &options).unwrap();
+    let head = "MERGE INTO t USING s ON t.k = s.k";
+    for sql in [
+        "MERGE INTO t USING s ON t.k = (SELECT max(k) FROM x) WHEN MATCHED THEN DELETE".to_owned(),
+        format!("{head} WHEN MATCHED AND EXISTS (SELECT 1 FROM x) THEN DELETE"),
+        format!("{head} WHEN MATCHED THEN UPDATE SET v = (SELECT max(v) FROM x)"),
+        format!("{head} WHEN NOT MATCHED THEN INSERT (k, v) VALUES (s.k, (SELECT 1 FROM x))"),
+        format!("{head} WHEN NOT MATCHED BY SOURCE AND t.k IN (SELECT k FROM x) THEN DELETE"),
+        format!("EXPLAIN {head} WHEN MATCHED AND EXISTS (SELECT 1 FROM x) THEN DELETE"),
+    ] {
+        let statement = parse(&sql);
+        assert!(statement_queries(&statement).is_none(), "{sql}");
+        assert!(statement_reads(&statement).is_none(), "{sql}");
+    }
+    // A valid MERGE without subqueries keeps its source query.
+    let plain = parse(&format!(
+        "{head} WHEN MATCHED AND s.v > 0 THEN UPDATE SET v = s.v + 1 \
+         WHEN NOT MATCHED THEN INSERT *"
+    ));
+    assert_eq!(statement_reads(&plain).map(|r| r.len()), Some(0));
+}
+
+/// The reads of a statement whose reads are not whole queries but are local (design §3.2): the
+/// queries are built from the statement's own expressions.
+#[test]
+fn statement_reads_cover_the_local_shapes() {
+    let options = ParserOptions::default();
+    let count =
+        |sql: &str| statement_reads(&parse_statement(sql, &options).unwrap()).map(|r| r.len());
+    for (sql, n) in [
+        ("SELECT 1", Some(1)),
+        (
+            "FROM s INSERT INTO t SELECT a INSERT INTO u SELECT b WHERE a > 0",
+            Some(2),
+        ),
+        ("UPDATE t SET a = 1", Some(2)),
+        (
+            "UPDATE t AS x SET a = (SELECT max(b) FROM s), b = DEFAULT WHERE x.k IN (SELECT k FROM s)",
+            Some(3),
+        ),
+        ("DELETE FROM t", Some(0)),
+        ("DELETE FROM t WHERE k IN (SELECT k FROM s)", Some(1)),
+        (
+            "EXPLAIN DELETE FROM t WHERE k IN (SELECT k FROM s)",
+            Some(1),
+        ),
+        (
+            "INSERT INTO t REPLACE WHERE k IN (SELECT k FROM s) SELECT * FROM s",
+            None,
+        ),
+        ("EXECUTE IMMEDIATE 'SELECT 1'", None),
+        ("SET VAR v = (SELECT 1)", None),
+        ("DECLARE v INT DEFAULT (SELECT 1)", None),
+    ] {
+        assert_eq!(count(sql), n, "{sql}");
+    }
 }
