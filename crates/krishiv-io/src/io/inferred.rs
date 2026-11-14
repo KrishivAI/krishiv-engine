@@ -8,9 +8,10 @@
 //! so a changed time zone or parse policy is another key) and every file by
 //! its metadata-cache key (store, path, size and version), so a changed,
 //! added or removed file is a miss, never a stale schema. The cache is
-//! bounded by the file keys it holds: when full, it starts over (a miss only
-//! costs the inference again).
+//! bounded by the file keys it holds: when full, the oldest schemas go first
+//! (a miss only costs the inference again).
 
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, PoisonError};
 
 use arrow_schema::SchemaRef;
@@ -26,23 +27,32 @@ use crate::options::FormatOptions;
 pub struct InferKey {
     files: Vec<CacheKey>,
     options: FormatOptions,
+    /// A hash of `files`, taken once, so a lookup compares whole keys only
+    /// against the entries of the same hash.
+    hash: u64,
 }
 
 impl InferKey {
     /// The key of inferring `files` as `format` with `options`.
     #[must_use]
     pub fn new(format: &'static str, files: &[FileRef], options: &FormatOptions) -> Self {
+        use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
+        let files: Vec<CacheKey> = files
+            .iter()
+            .map(|f| CacheKey::new(format, f, None))
+            .collect();
+        let hash = BuildHasherDefault::<DefaultHasher>::default().hash_one(&files);
         Self {
-            files: files
-                .iter()
-                .map(|f| CacheKey::new(format, f, None))
-                .collect(),
+            files,
             options: options.clone(),
+            hash,
         }
     }
 
     fn same(&self, other: &Self) -> bool {
-        self.files == other.files && self.options.same_read(&other.options)
+        self.hash == other.hash
+            && self.files == other.files
+            && self.options.same_read(&other.options)
     }
 }
 
@@ -55,12 +65,34 @@ pub struct InferredSchemas {
 
 #[derive(Debug, Default)]
 struct Entries {
-    held: Vec<(InferKey, SchemaRef)>,
+    /// The entries of each key hash.
+    by_hash: HashMap<u64, Vec<(InferKey, SchemaRef)>>,
+    /// Key hashes in insertion order, oldest first (one per entry).
+    order: VecDeque<u64>,
+    /// File keys held.
     files: usize,
 }
 
+impl Entries {
+    /// Drops the oldest entry.
+    fn evict_oldest(&mut self) {
+        let Some(h) = self.order.pop_front() else {
+            return;
+        };
+        if let Some(bucket) = self.by_hash.get_mut(&h) {
+            if !bucket.is_empty() {
+                let (k, _) = bucket.remove(0);
+                self.files -= k.files.len();
+            }
+            if bucket.is_empty() {
+                self.by_hash.remove(&h);
+            }
+        }
+    }
+}
+
 impl InferredSchemas {
-    /// File keys held before the cache starts over.
+    /// File keys held at most; the oldest schemas are dropped first.
     pub const MAX_FILES: usize = 16_384;
 
     /// An empty cache holding at most `max_files` file keys.
@@ -76,30 +108,35 @@ impl InferredSchemas {
     #[must_use]
     pub fn get(&self, key: &InferKey) -> Option<SchemaRef> {
         let e = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
-        e.held
+        e.by_hash
+            .get(&key.hash)?
             .iter()
             .find(|(k, _)| k.same(key))
             .map(|(_, s)| SchemaRef::clone(s))
     }
 
-    /// Stores `schema` under `key`. A key of more files than the cache holds
-    /// is not stored; a full cache starts over first.
+    /// Stores `schema` under `key`, dropping the oldest schemas until it
+    /// fits. A key of more files than the cache holds is not stored.
     pub fn insert(&self, key: InferKey, schema: SchemaRef) {
         let n = key.files.len();
         if n > self.max_files {
             return;
         }
         let mut e = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(at) = e.held.iter().position(|(k, _)| k.same(&key)) {
-            e.held[at].1 = schema;
+        if let Some(slot) = e
+            .by_hash
+            .get_mut(&key.hash)
+            .and_then(|b| b.iter_mut().find(|(k, _)| k.same(&key)))
+        {
+            slot.1 = schema;
             return;
         }
-        if e.files + n > self.max_files {
-            e.held.clear();
-            e.files = 0;
+        while e.files + n > self.max_files && !e.order.is_empty() {
+            e.evict_oldest();
         }
         e.files += n;
-        e.held.push((key, schema));
+        e.order.push_back(key.hash);
+        e.by_hash.entry(key.hash).or_default().push((key, schema));
     }
 
     /// The number of schemas held.
@@ -108,7 +145,7 @@ impl InferredSchemas {
         self.entries
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .held
+            .order
             .len()
     }
 

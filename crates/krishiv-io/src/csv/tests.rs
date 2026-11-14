@@ -337,8 +337,9 @@ fn infer_named(bytes: &[u8], name: &str, o: &FormatOptions) -> Result<SchemaRef,
         .map_err(|e| e.into_error("f.csv"))
 }
 
-/// [`infer`] with an I/O runtime of four threads, so the partitions infer
-/// on its blocking threads in parallel.
+/// [`infer`] on a runtime of four threads (the caller's runtime, as the
+/// compute runtime is for a statement), so the partitions infer on its
+/// blocking threads in parallel.
 fn infer_parallel(bytes: &[u8], o: &FormatOptions) -> Result<SchemaRef, KrishivError> {
     let io_rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(4)
@@ -1488,8 +1489,8 @@ fn inferred_schemas_are_kept_per_file_version_and_options() {
     assert_eq!(sched.inferred_schemas().len(), 3);
 }
 
-/// The cache starts over when it would hold more file keys than its bound,
-/// and never stores a key larger than the bound.
+/// The cache drops its oldest schemas when it would hold more file keys than
+/// its bound, and never stores a key larger than the bound.
 #[test]
 fn inferred_schemas_are_bounded_by_file_keys() {
     let (_, file) = in_memory_file(b"a\n1\n", "f.csv");
@@ -1506,9 +1507,52 @@ fn inferred_schemas_are_bounded_by_file_keys() {
     cache.insert(key(&[one("b")]), Arc::clone(&schema));
     assert_eq!(cache.len(), 2);
     cache.insert(key(&[one("c")]), Arc::clone(&schema));
-    assert_eq!(cache.len(), 1);
+    assert_eq!(cache.len(), 2);
     assert!(cache.get(&key(&[one("a")])).is_none());
+    assert!(cache.get(&key(&[one("b")])).is_some());
     assert!(cache.get(&key(&[one("c")])).is_some());
-    cache.insert(key(&[one("d"), one("e"), one("f")]), Arc::clone(&schema));
+    // Two files: both older entries go.
+    cache.insert(key(&[one("d"), one("e")]), Arc::clone(&schema));
     assert_eq!(cache.len(), 1);
+    assert!(cache.get(&key(&[one("d"), one("e")])).is_some());
+    // Larger than the bound: not stored, nothing dropped.
+    cache.insert(key(&[one("f"), one("g"), one("h")]), Arc::clone(&schema));
+    assert_eq!(cache.len(), 1);
+}
+
+/// Inference reserves the bytes its readers hold from the query's pool and
+/// releases them all when it ends: a pool too small for one chunk refuses it.
+#[test]
+fn inference_reserves_what_its_readers_hold() {
+    use krishiv_common::error::ErrorClass;
+    use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+    let mut file = String::from("a,b\n");
+    for r in 0..200_000_u32 {
+        file.push_str(&format!("{r},{}\n", r % 13));
+    }
+    let o = options(&serde_json::json!({"header": "true", "inferSchema": "true"}));
+    let (sched, f) = in_memory_file(file.as_bytes(), "f.csv");
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let root = TreePool::new(&MemoryConfig::default());
+    let query = root.child("q", None);
+    let io = sched.context().with_memory(Arc::clone(&query));
+    let schema = rt
+        .block_on(CsvFormat.infer_schema(&io, std::slice::from_ref(&f), &o))
+        .expect("infer");
+    assert_eq!(type_name(schema.field(0).data_type()), "int");
+    assert_eq!(query.reserved(), 0, "everything is released");
+    let tiny = TreePool::new(&MemoryConfig {
+        limit: Some(1 << 10),
+        ..MemoryConfig::default()
+    });
+    let io = sched.context().with_memory(tiny.child("q", None));
+    let e = rt
+        .block_on(CsvFormat.infer_schema(&io, std::slice::from_ref(&f), &o))
+        .expect_err("a 1 KiB pool cannot hold a chunk")
+        .into_error("f.csv");
+    assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory);
 }

@@ -440,14 +440,27 @@ impl Part {
             None => Err(FormatError::Other(internal("bytes for no split"))),
         }
     }
+
+    /// Bytes the split's reader holds (a chunk, or what one compressed chunk
+    /// inflated to).
+    fn buffered(&self) -> usize {
+        self.reading.as_ref().map_or(0, |(_, r)| r.buffered_bytes())
+    }
 }
 
-/// The types of one partition. With an I/O runtime the inference runs on its
-/// blocking threads, one hop per chunk read, so partitions infer in parallel;
-/// without one it runs on the caller's task.
+/// The types of one partition. The lines are inferred on the blocking pool
+/// of the caller's runtime (statements run on the compute runtime, whose pool
+/// is sized to the cores), one hop per chunk read, so partitions infer in
+/// parallel; never on the I/O runtime, whose bounded blocking threads serve
+/// every query's local reads. Without a runtime it runs on the caller's task.
+/// The bytes the reader holds are reserved from the query's pool, waiting
+/// for memory, so partitions in flight stay within the limit. A dropped
+/// future leaves at most the chunk being inferred to finish.
 async fn infer_part(io: &IoContext, sh: &Arc<Shared>, mut part: Part) -> FormatResult<Vec<T>> {
+    let rt = tokio::runtime::Handle::try_current().ok();
+    let mut held = io.reservation();
     loop {
-        let need = match io.runtime() {
+        let need = match &rt {
             Some(rt) => {
                 let sh = Arc::clone(sh);
                 let (back, need) = rt
@@ -473,6 +486,7 @@ async fn infer_part(io: &IoContext, sh: &Arc<Shared>, mut part: Part) -> FormatR
             .next()
             .ok_or_else(|| FormatError::Other(internal("no bytes for a range")))?;
         part.push(&need, &bytes)?;
+        io.resize_reservation(&mut held, part.buffered()).await?;
     }
 }
 

@@ -900,6 +900,31 @@ impl IoContext {
         self.memory.as_ref().map(|h| h.pool())
     }
 
+    /// An empty reservation from the query's pool, when the context has one.
+    pub(crate) fn reservation(&self) -> Option<Reservation> {
+        self.memory.as_ref().map(ConsumerHandle::reservation)
+    }
+
+    /// Grows (waiting for memory) or shrinks `r` to `bytes`.
+    ///
+    /// # Errors
+    /// Memory errors.
+    pub(crate) async fn resize_reservation(
+        &self,
+        r: &mut Option<Reservation>,
+        bytes: usize,
+    ) -> Result<()> {
+        if let Some(r) = r {
+            let have = r.size();
+            if bytes > have {
+                r.grow(bytes - have).await?;
+            } else {
+                r.shrink(have - bytes);
+            }
+        }
+        Ok(())
+    }
+
     async fn reserve(&self, bytes: u64) -> Result<Option<Reservation>> {
         let Some(h) = &self.memory else {
             return Ok(None);
@@ -1052,11 +1077,6 @@ impl IoContext {
     #[must_use]
     pub fn request_bytes(&self, file: &FileRef, ranges: &[Range<u64>]) -> u64 {
         self.plan(file, ranges).span_bytes()
-    }
-
-    /// The I/O runtime the scheduler runs requests on, if it has one.
-    pub(crate) fn runtime(&self) -> Option<&tokio::runtime::Handle> {
-        self.sched.runtime.as_ref()
     }
 
     /// Like [`Self::get_ranges`], but owned: runs on the I/O runtime when
