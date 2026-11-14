@@ -6,12 +6,11 @@
 //! (the commit is a later unit), with the delete files they supersede.
 //!
 //! Java references are apache-iceberg 1.12.0 (`ij:`) and its Spark 4.1
-//! module (`spark:`). Those marked "(not in the fetched sources)" rest on a
-//! class that was not fetched for this unit and stay unverified.
+//! module (`spark:`), every one read at that tag.
 //!
 //! - **The kind of delete is fixed by the format version**
-//!   (`ij:MergingSnapshotProducer.java:302-309`, cited by design note §8
-//!   item 4; not in the fetched sources): v3 writes deletion vectors
+//!   (`ij:MergingSnapshotProducer.java:295-315`,
+//!   `validateDeleteFileForVersion`; v4 as v3): v3 writes deletion vectors
 //!   only, v2 position delete files only, v1 is refused
 //!   (`KRISHIV_UNSUPPORTED_FEATURE`: row-level deletes need v2). On v3 the
 //!   delete format is Puffin whatever `write.delete.format.default` says
@@ -20,7 +19,7 @@
 //! - **Granularity** (`write.delete.granularity`, case-insensitive `file` or
 //!   `partition`; otherwise "Unknown delete granularity: <v>", as
 //!   `KRISHIV_UNSUPPORTED_FEATURE`; the text and the case-insensitivity are
-//!   `DeleteGranularity.fromString`'s, not in the fetched sources)
+//!   `ij:deletes/DeleteGranularity.java:58-69`)
 //!   defaults to `file`, Spark's `SparkWriteConf.deleteGranularity`
 //!   (`spark:SparkWriteConf.java:727-733`), not `TableProperties`'
 //!   `partition` (`ij:TableProperties.java:429-430`). Spark parses it for
@@ -60,30 +59,33 @@
 //!   a position, as Java's `isNotEmpty` check; anything not file-scoped is
 //!   an internal error, Java's "Previous deletes must be file-scoped").
 //!   Metrics as `PositionDeleteWriter.metrics` (`:124-131`) with the two
-//!   columns in `full` mode (Java's `MetricsConfig.forPositionDelete`, not
-//!   in the fetched sources): the record count; when the file names exactly
+//!   columns in `full` mode (`ij:MetricsConfig.java:58-70`,
+//!   `forPositionDelete`): the record count; when the file names exactly
 //!   one data path, untruncated lower and upper bounds of both columns (so
 //!   the `file_path` bounds are equal and the file is file-scoped) and no
-//!   counts; with more paths no counts and no bounds. What
-//!   `MetricsUtil.copyWithoutFieldCounts(AndBounds)` drops (column sizes,
-//!   NaN counts too?) is not in the fetched sources; Krishiv writes neither. **`referenced_data_file`
+//!   counts; with more paths no counts and no bounds
+//!   (`ij:MetricsUtil.java:51-83`: value, null and NaN counts and average
+//!   sizes dropped). **Divergence:** Java keeps both columns' `column_sizes`;
+//!   Krishiv writes none, as `write.rs` writes none for data files
+//!   (`krishiv-io`'s `FileStatistics` carries no per-column byte sizes).
+//!   **`referenced_data_file`
 //!   is not set**: Java's writer never sets it, file scope comes from the
 //!   equal bounds (design note §8 item 4 says it is set; Java wins).
 //!   Rolling as `write.rs` rolls data files, after Java's `RollingFileWriter`
-//!   (not in the fetched sources): a new file once the current one holds a
-//!   multiple of 1,000 rows and its encoder has written
+//!   (`ij:io/RollingFileWriter.java:37, 97-105`): a new file once the
+//!   current one holds a multiple of 1,000 rows and its encoder has written
 //!   `write.delete.target-file-size-bytes` (64 MiB by default). Parquet
 //!   codec: `write.delete.parquet.compression-codec`, else
 //!   `write.parquet.compression-codec`, else `gzip`
 //!   (`spark:SparkWriteConf.java:570-588`); row-group and page sizes from
-//!   `write.parquet.row-group-size-bytes` / `page-size-bytes`: the
-//!   `write.delete.parquet.*` variants exist (`ij:TableProperties.java:129-134`)
-//!   but their fallback lives in `Parquet.WriteBuilder`, which was not
-//!   fetched, so they are not read (an open item). Codec names as `write.rs`
-//!   checks them (Parquet's `CompressionCodecName.valueOf` and Iceberg's
-//!   "Unsupported compression codec" text, not in the fetched sources);
-//!   row-group and page sizes below 1 are refused as `write.rs` refuses
-//!   them (stricter than Java, unproven). No split offsets.
+//!   `write.delete.parquet.row-group-size-bytes` / `page-size-bytes`, else
+//!   the `write.parquet.*` keys, else 128 MiB / 1 MiB
+//!   (`ij:parquet/Parquet.java:710-735`, `deleteContext`). Codec names as
+//!   Parquet's `CompressionCodecName.valueOf` with Iceberg's "Unsupported
+//!   compression codec" text (`ij:parquet/Parquet.java:790-796`); sizes
+//!   below 1 are refused, as Java's "must be > 0" checks (Krishiv's error
+//!   class). The compression level, dictionary size and page row limit are
+//!   not applied (as `write.rs`). No split offsets.
 //! - **Names and locations** (`ij:io/OutputFileFactory.java:93-121`):
 //!   `%05d-%d-%s-%05d-deletes.parquet` / `.puffin` (partition id, attempt id,
 //!   write id, a counter of this writer from 1; the suffix `deletes` as
@@ -92,8 +94,8 @@
 //!   where an unpartitioned data file goes (`BaseDVFileWriter` takes
 //!   `fileFactory::newOutputFile`, the no-partition overload). One Puffin
 //!   per task whatever partitions its paths span follows Java's
-//!   `PartitioningDVWriter` holding one `BaseDVFileWriter` (that class was
-//!   not fetched: from its use in `spark:SparkPositionDeltaWrite.java:548-549`).
+//!   `PartitioningDVWriter` holding one `BaseDVFileWriter`
+//!   (`ij:io/PartitioningDVWriter.java:40-44`).
 //! - **Failure:** any error deletes what the writer wrote (finished files
 //!   deleted, open uploads aborted); a write future dropped midway deletes
 //!   its finished files in the background, as `write.rs`'s writer does.
@@ -173,6 +175,12 @@ const ROW_GROUP_SIZE_DEFAULT: i32 = 128 * 1024 * 1024;
 /// `write.parquet.page-size-bytes` and its default (1 MiB).
 const PAGE_SIZE: &str = "write.parquet.page-size-bytes";
 const PAGE_SIZE_DEFAULT: i32 = 1024 * 1024;
+/// `write.delete.parquet.row-group-size-bytes`, read before [`ROW_GROUP_SIZE`]
+/// (`ij:parquet/Parquet.java:714-717`).
+pub(crate) const DELETE_ROW_GROUP_SIZE: &str = "write.delete.parquet.row-group-size-bytes";
+/// `write.delete.parquet.page-size-bytes`, read before [`PAGE_SIZE`]
+/// (`ij:parquet/Parquet.java:719-722`).
+const DELETE_PAGE_SIZE: &str = "write.delete.parquet.page-size-bytes";
 
 /// `_pos`, the field a deletion vector is computed for (`MetadataColumns.ROW_POSITION`).
 pub(crate) const ROW_POSITION_ID: i32 = i32::MAX - 2;
@@ -186,7 +194,7 @@ const PUFFIN_MAGIC_LEN: u64 = 4;
 /// metadata, an estimate).
 const FOOTER_BYTES_PER_BLOB: usize = 256;
 /// Rows between two checks of the target file size (`RollingFileWriter.ROWS_DIVISOR`,
-/// not in the fetched sources; as `write.rs`).
+/// `ij:io/RollingFileWriter.java:37`; as `write.rs`).
 const ROWS_DIVISOR: u64 = 1000;
 
 /// How the v2 position deletes of a task are split into files.
@@ -203,7 +211,7 @@ impl Granularity {
     ///
     /// # Errors
     /// `KRISHIV_UNSUPPORTED_FEATURE` with `DeleteGranularity.fromString`'s text
-    /// (not in the fetched sources) for another value.
+    /// for another value.
     pub(crate) fn from_table(props: &HashMap<String, String>) -> Result<Self, KrishivError> {
         match props.get(DELETE_GRANULARITY) {
             None => Ok(Self::File),
@@ -1051,8 +1059,8 @@ fn parquet_options(props: &HashMap<String, String>) -> Result<FormatOptions, Kri
         .get(DELETE_PARQUET_CODEC)
         .or_else(|| props.get(PARQUET_CODEC))
         .map_or(PARQUET_CODEC_DEFAULT, String::as_str);
-    // As `write.rs`: Java's `CompressionCodecName.valueOf(codec.toUpperCase(Locale.ENGLISH))`
-    // (not in the fetched sources).
+    // Java's `CompressionCodecName.valueOf(codec.toUpperCase(Locale.ROOT))` and its
+    // "Unsupported compression codec: <v>" (`ij:parquet/Parquet.java:790-796`).
     let name = codec.to_ascii_lowercase();
     match name.as_str() {
         "uncompressed" | "snappy" | "gzip" | "brotli" | "lz4" | "lz4_raw" | "zstd" => {}
@@ -1063,8 +1071,16 @@ fn parquet_options(props: &HashMap<String, String>) -> Result<FormatOptions, Kri
             )));
         }
     }
-    let row_group = int_property(props, ROW_GROUP_SIZE, ROW_GROUP_SIZE_DEFAULT)?;
-    let page = int_property(props, PAGE_SIZE, PAGE_SIZE_DEFAULT)?;
+    let row_group = int_property(
+        props,
+        DELETE_ROW_GROUP_SIZE,
+        int_property(props, ROW_GROUP_SIZE, ROW_GROUP_SIZE_DEFAULT)?,
+    )?;
+    let page = int_property(
+        props,
+        DELETE_PAGE_SIZE,
+        int_property(props, PAGE_SIZE, PAGE_SIZE_DEFAULT)?,
+    )?;
     let user = [
         ("compression", name),
         ("parquet.block.size", row_group.to_string()),

@@ -28,9 +28,9 @@ use roaring::RoaringTreemap;
 
 use super::delete_write::{
     CARDINALITY_KEY, DELETE_FORMAT, DELETE_GRANULARITY, DELETE_PARQUET_CODEC,
-    DELETE_TARGET_FILE_SIZE, DeleteFileWriter, DeleteFormat, DeleteWriteResult, Granularity,
-    PositionDeletes, Previous, REFERENCED_DATA_FILE_KEY, ROW_POSITION_ID, delete_file_name,
-    is_file_scoped, load_previous,
+    DELETE_ROW_GROUP_SIZE, DELETE_TARGET_FILE_SIZE, DeleteFileWriter, DeleteFormat,
+    DeleteWriteResult, Granularity, PositionDeletes, Previous, REFERENCED_DATA_FILE_KEY,
+    ROW_POSITION_ID, delete_file_name, is_file_scoped, load_previous,
 };
 use super::deletes;
 use super::provider_tests::{Env, env, env_on};
@@ -764,6 +764,38 @@ fn delete_codec_falls_back_to_the_data_codec() {
             (DELETE_PARQUET_CODEC, "uncompressed")
         ]),
         "UNCOMPRESSED"
+    );
+}
+
+/// `Parquet.WriteBuilder.Context.deleteContext` (`ij:Parquet.java:710-735`):
+/// the `write.delete.parquet.*` sizes first, then the data file's.
+#[test]
+fn delete_row_group_size_falls_back_to_the_data_size() {
+    let env = env();
+    let groups = |props: &[(&str, &str)]| {
+        let m = table(&env, FormatVersion::V2, props);
+        let mut d = PositionDeletes::default();
+        let path = data_path(&env, 1, "a");
+        for pos in 0..3_000 {
+            d.delete(&path, pos, 0, &part(1)).unwrap();
+        }
+        let r = write(&env, &m, &d, &HashMap::new()).unwrap();
+        let path = r.delete_files[0].file_path().to_owned();
+        let file = std::fs::File::open(path.strip_prefix("file://").unwrap()).unwrap();
+        let reader = parquet::file::reader::SerializedFileReader::new(file).unwrap();
+        let n = parquet::file::reader::FileReader::metadata(&reader).num_row_groups();
+        std::fs::remove_file(path.strip_prefix("file://").unwrap()).unwrap();
+        n
+    };
+    assert_eq!(groups(&[]), 1);
+    assert!(groups(&[(DELETE_ROW_GROUP_SIZE, "1")]) > 1);
+    assert!(groups(&[("write.parquet.row-group-size-bytes", "1")]) > 1);
+    assert_eq!(
+        groups(&[
+            ("write.parquet.row-group-size-bytes", "1"),
+            (DELETE_ROW_GROUP_SIZE, "134217728")
+        ]),
+        1
     );
 }
 
