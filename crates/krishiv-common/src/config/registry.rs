@@ -28,7 +28,8 @@ pub use lakehouse::{
     CATALOG_MAX_COLUMNS, CATALOG_MAX_METADATA_BYTES, CATALOG_REQUEST_TIMEOUT, DELTA_LOG_THREADS,
 };
 pub use optimizer::{
-    EXPERIMENTAL_GROUP_KEY_CODE_FORCE, GROUP_KEY_CODE, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
+    EXPERIMENTAL_GROUP_KEY_CODE_FORCE, GROUP_KEY_CODE, LATE_PAYLOAD_JOIN, SHARE_REPEATED_SUBTREES,
+    SUBQUERY_AS_WINDOW,
 };
 pub use result_cache::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
 pub use server::{
@@ -97,6 +98,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RESULT_CACHE_TTL,
     &RESULT_CACHE_MAX_BYTES,
     &SUBQUERY_AS_WINDOW,
+    &LATE_PAYLOAD_JOIN,
     &GROUP_KEY_CODE,
     &EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
     &SHARE_REPEATED_SUBTREES,
@@ -798,7 +800,8 @@ pub static DETERMINISTIC_ORDER: ConfigEntry = ConfigEntry {
           seed, so an operator that spills splits its rows the same way on every run. Costs \
           parallelism where it falls back to one driver: meant for reproducing a result, \
           comparing two builds, and tests. Memory pressure from other queries in the process \
-          can still change when an operator spills, and so the order of what it returns. The \
+          can still change when an operator spills, or whether a hash join build copies its \
+          rows into blocks as they arrive, and so the order of what it returns. The \
           branches of a `UNION ALL` under an operator that must see all of them (a hash join \
           probing a union) take turns in branch order, so they lose their overlap too. Off by \
           default.",

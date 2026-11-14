@@ -33,6 +33,7 @@ use krishiv_memory::{
 };
 use krishiv_types::batch::Batch;
 
+use super::block::block_chunks;
 use super::build::BuildGlobal;
 use super::keys::{Hashing, MAX_DEPTH, PARTITIONS};
 use super::probe::{Cursor, Tables};
@@ -76,61 +77,6 @@ impl Part {
 
     pub(crate) fn mem_rows(&self) -> usize {
         self.chunks.iter().map(Batch::num_rows).sum()
-    }
-
-    /// Merges runs of small in-memory chunks (each chunk carries fixed array
-    /// overhead), if each merged copy can be reserved first.
-    ///
-    /// Size-tiered, like an LSM tree: a chunk's tier is `log16` of its bytes,
-    /// and only a trailing run of at least `FANOUT` chunks no higher in tier
-    /// than the newest one is merged. Merging every chunk held whenever the
-    /// count reached the fan-out copied the whole partition again every 15
-    /// pushes (quadratic in its size); tiered, a row is copied about once
-    /// per tier it climbs.
-    ///
-    /// Returns the bytes of the largest run merged (each merge reserves the
-    /// run again while it copies: the transient peak), 0 when none was.
-    pub(crate) fn coalesce(&mut self, schema: &SchemaRef) -> Result<usize> {
-        const FANOUT: usize = 16;
-        let size = |c: &Batch| c.data().get_array_memory_size();
-        let tier = |c: &Batch| size(c).max(1).ilog(FANOUT);
-        let mut largest = 0;
-        while self.chunks.len() >= FANOUT {
-            let Some(top) = self.chunks.last().map(tier) else {
-                return Ok(largest);
-            };
-            let run = self
-                .chunks
-                .iter()
-                .rev()
-                .take_while(|c| tier(c) <= top)
-                .count();
-            if run < FANOUT {
-                return Ok(largest);
-            }
-            let from = self.chunks.len() - run;
-            let old: usize = self.chunks[from..].iter().map(size).sum();
-            let Some(m) = self.memory.first_mut().filter(|m| m.size() >= old) else {
-                return Ok(largest);
-            };
-            if m.try_grow(old).is_err() {
-                return Ok(largest);
-            }
-            let merged =
-                Batch::concat(schema, &self.chunks[from..]).map_err(|e| internal(e.to_string()));
-            let merged = match merged {
-                Ok(b) if size(&b) <= old => b,
-                other => {
-                    m.shrink(old);
-                    return other.map(|_| largest);
-                }
-            };
-            largest = largest.max(old);
-            m.shrink(old + old - size(&merged));
-            self.chunks.truncate(from);
-            self.chunks.push(merged);
-        }
-        Ok(largest)
     }
 
     pub(crate) fn absorb(&mut self, other: Self) {
@@ -466,6 +412,8 @@ struct Active {
     table: JoinTable,
     _memory: Reservation,
     chunks: Vec<Batch>,
+    /// The build part's own reservations (its in-memory chunks, if any).
+    _build_memory: Vec<Reservation>,
     _chunk_memory: Vec<Reservation>,
     files: VecDeque<SpillFile>,
     reader: Option<SpillReader>,
@@ -701,7 +649,7 @@ fn reverse_blocking(
         // The stream runs in one blocking call: a cancelled query stops it
         // at the next chunk.
         query.check_cancelled()?;
-        let arena = RowArena::concat(schema, std::slice::from_ref(&chunk))?;
+        let arena = RowArena::over_chunks(schema, std::slice::from_ref(&chunk))?;
         let rows =
             u32::try_from(arena.len()).map_err(|_| internal("build chunk too large".to_owned()))?;
         // (probe row, build row of this chunk), evaluated before it is dropped.
@@ -1230,10 +1178,12 @@ impl Loading {
         ctx.consumer().consumer().release_credit();
         self.memory.shrink_to_credit(headroom);
         let Task { build, probe, .. } = self.task;
-        drop(build);
         Active {
             table,
             _memory: self.memory,
+            // The arena reads its chunks in place: any build chunks the task
+            // still held stay reserved while the table may read them.
+            _build_memory: build.memory,
             chunks: probe.chunks,
             _chunk_memory: probe.memory,
             files: probe.files.into(),
@@ -1254,6 +1204,16 @@ impl Loading {
                     return Ok(Loaded::Need(bytes));
                 }
                 self.chunks.push(b);
+                // Spill frames are slices of 64 KiB: joined into blocks as
+                // they come, one block's copy at a time, not all at the end.
+                let copied = block_chunks(
+                    &mut self.chunks,
+                    &mut self.memory,
+                    shared.arena_schema(hashing),
+                )?;
+                shared
+                    .counters
+                    .max(Counter::MaxCoalesceCopyBytes, copied as u64);
             }
             if self.reader.is_none() {
                 let Some(file) = self.task.build.files.get(self.file) else {
@@ -1287,9 +1247,10 @@ impl Loading {
                 Some(b) => self.pending = Some(b?),
             }
         }
-        // Every row read: the table's index, the concatenated copy of the
-        // rows and the probe rows' read-back headroom (exact, so a
-        // partition that loads can always be joined).
+        // Every row read: the table's index and the probe rows' read-back
+        // headroom (exact, so a partition that loads can always be joined).
+        // The arena reads the chunks in place, copying only blocks that span
+        // chunks.
         let chunks: Vec<Batch> = self
             .task
             .build
@@ -1299,28 +1260,26 @@ impl Loading {
             .cloned()
             .collect();
         let rows = chunks.iter().map(Batch::num_rows).sum();
-        let concat = if chunks.len() > 1 {
-            self.memory.size() + self.task.build.bytes()
-        } else {
-            0
-        };
         let headroom = self.task.probe.read_headroom();
         let marks = if shared.join_type.builds_preserved() {
             JoinTable::marks_bytes(rows)
         } else {
             0
         };
+        // Blocks that span chunks are copied: reserved, and the part beside
+        // chunks that live on (the task's own build chunks) stays reserved.
+        let (copy, kept) = RowArena::reblock_bytes(&chunks, self.task.build.chunks.len());
         let need = JoinTable::index_bytes(rows, key_bytes(&chunks), hashing.rows())
             + marks
-            + concat
-            + headroom;
+            + headroom
+            + copy;
         if self.memory.try_grow(need).is_err() {
             return Ok(Loaded::Need(need));
         }
-        let arena = RowArena::concat(shared.arena_schema(hashing), &chunks)?;
+        let arena = RowArena::over_chunks(shared.arena_schema(hashing), &chunks)?;
         drop(chunks);
         self.chunks.clear();
-        self.memory.shrink(concat);
+        self.memory.shrink(copy - kept);
         let layout = shared.keys.layout().filter(|_| hashing.rows());
         let mut table = JoinTable::build(arena, layout, hashing.g_seed())?;
         if shared.join_type.builds_preserved() {

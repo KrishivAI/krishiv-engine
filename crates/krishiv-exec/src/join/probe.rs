@@ -248,7 +248,7 @@ impl Cursor {
                 probe.push(u32::try_from(i).unwrap_or(u32::MAX));
                 build.push((p, self.chain));
             }
-            self.chain = table.map_or(NONE, |t| t.next()[self.chain as usize]);
+            self.chain = table.map_or(NONE, |t| t.next_of(self.chain));
             if self.chain == NONE {
                 self.pos += 1;
             }

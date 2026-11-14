@@ -1330,6 +1330,21 @@ fn fuse_probe_select_defaults_on_and_parses() {
 }
 
 #[test]
+fn late_payload_join_defaults_on_and_parses() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&LATE_PAYLOAD_JOIN).and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+    c.set("krishiv.optimizer.latePayloadJoin", "false").unwrap();
+    assert_eq!(
+        c.get(&LATE_PAYLOAD_JOIN).and_then(ConfigValue::as_bool),
+        Some(false)
+    );
+    assert!(c.set("krishiv.optimizer.latePayloadJoin", "maybe").is_err());
+}
+
+#[test]
 fn python_worker_entries_parse_and_default() {
     let mut c = Config::new();
     let get = |c: &Config| {

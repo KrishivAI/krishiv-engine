@@ -170,6 +170,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         "krishiv.memory.reservationQuantum",
         &MEMORY_RESERVATION_QUANTUM,
     ),
+    ("krishiv.optimizer.latePayloadJoin", &LATE_PAYLOAD_JOIN),
     (
         "krishiv.python.worker.executables",
         &PYTHON_WORKER_EXECUTABLES,
