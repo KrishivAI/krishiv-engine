@@ -410,6 +410,13 @@ fn spark_partition_columns(
     properties: &BTreeMap<String, String>,
 ) -> Result<Vec<String>, &'static str> {
     let Some(n) = properties.get("spark.sql.sources.schema.numPartCols") else {
+        // No partition columns is a table without any; entries without their count are a damaged property.
+        if properties
+            .keys()
+            .any(|k| k.starts_with("spark.sql.sources.schema.partCol."))
+        {
+            return Err("partition column entries are present but numPartCols is not");
+        }
         return Ok(Vec::new());
     };
     let n: usize = n
@@ -1316,5 +1323,30 @@ mod tests {
         let e = catalog(&address).load("web", "events").unwrap_err();
         server.join().unwrap();
         assert_eq!(e.error_class(), ErrorClass::KrishivCatalogFailure);
+    }
+
+    /// `partCol.N` entries without `numPartCols` are a damaged property, not an unpartitioned table.
+    #[test]
+    fn partition_column_entries_without_their_count_are_a_catalog_fault() {
+        let (address, server) = serving(spark(&[
+            ("spark.sql.sources.schema", SCHEMA),
+            ("spark.sql.sources.schema.partCol.0", "dt"),
+        ]));
+        let e = catalog(&address).load("web", "events").unwrap_err();
+        server.join().unwrap();
+        assert_eq!(e.error_class(), ErrorClass::KrishivCatalogFailure);
+        // With its count it is a partitioned table, and with neither it is an unpartitioned one.
+        let (address, server) = serving(spark(&[
+            ("spark.sql.sources.schema", SCHEMA),
+            ("spark.sql.sources.schema.numPartCols", "1"),
+            ("spark.sql.sources.schema.partCol.0", "dt"),
+        ]));
+        let t = catalog(&address).load("web", "events").unwrap().unwrap();
+        server.join().unwrap();
+        assert_eq!(t.partition_columns, ["dt"]);
+        let (address, server) = serving(spark(&[("spark.sql.sources.schema", SCHEMA)]));
+        let t = catalog(&address).load("web", "events").unwrap().unwrap();
+        server.join().unwrap();
+        assert!(t.partition_columns.is_empty());
     }
 }
