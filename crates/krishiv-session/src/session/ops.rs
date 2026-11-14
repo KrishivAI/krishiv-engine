@@ -116,7 +116,11 @@ impl Session {
     /// or a server-scoped store key (P3-T067b). Any other key passes. Asked before the value
     /// is stored, so a refused `SET` changes nothing. A `startup` key is refused by the
     /// configuration itself, for every principal (`CANNOT_MODIFY_STATIC_CONFIG`).
-    pub(crate) async fn authorize_set_key(&self, key: &str) -> Result<(), KrishivError> {
+    ///
+    /// # Errors
+    /// `KRISHIV_INSUFFICIENT_PERMISSIONS` (42501) when the principal lacks `Manage`; the
+    /// denial is audited and counted like every other.
+    pub async fn authorize_set_key(&self, key: &str) -> Result<(), KrishivError> {
         if krishiv_common::config::lookup(key)
             .or_else(|| {
                 krishiv_common::config::lookup(krishiv_common::config::resolve_alternative(key))

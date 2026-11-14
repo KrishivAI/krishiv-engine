@@ -1106,6 +1106,7 @@ pub fn krishiv_session::RuntimeConf::fmt(&self, &mut core::fmt::Formatter<'_>) -
 pub struct krishiv_session::Session
 impl krishiv_session::Session
 pub async fn krishiv_session::Session::authorize_privilege(&self, &krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege, krishiv_sql::classify::StatementClass) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub async fn krishiv_session::Session::authorize_set_key(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::Session::count_denials(&self, alloc::sync::Arc<krishiv_session::auth::DeniedCounts>, krishiv_session::auth::Surface) -> bool
 impl krishiv_session::Session
 pub fn krishiv_session::Session::baggage(&self) -> alloc::vec::Vec<(alloc::string::String, alloc::string::String)>

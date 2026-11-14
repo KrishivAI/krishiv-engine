@@ -238,6 +238,7 @@ impl SparkConnectService for ConnectService {
             &caller.principal,
             config::role_of(&caller),
         )
+        .await
         .map(Response::new)
         .map_err(|e| status_of(&e))
     }

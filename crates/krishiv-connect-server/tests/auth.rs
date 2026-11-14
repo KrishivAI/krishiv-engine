@@ -729,3 +729,98 @@ async fn execute_in(channel: &Channel, session_id: &str, token: &str) {
         .into_inner();
     while s.message().await.expect("response").is_some() {}
 }
+
+/// A `Config` request of `ops` in [`SESSION`] as `token`.
+async fn config_as(
+    run: &Running,
+    token: &str,
+    op: krishiv_connect::proto::v4_3::config_request::operation::OpType,
+) -> Result<pb::ConfigResponse, tonic::Status> {
+    unary(
+        &run.channel,
+        "Config",
+        pb::ConfigRequest {
+            session_id: SESSION.to_owned(),
+            operation: Some(pb::config_request::Operation { op_type: Some(op) }),
+            ..Default::default()
+        },
+        Some(token),
+    )
+    .await
+}
+
+/// `Config` set and unset of an admin-only key or a server-scoped store key ask the session's
+/// policy as SQL `SET` does: a refusal is `PERMISSION_DENIED`, audited and counted under
+/// `connect` and `MANAGE` (ADR 0046 §8), a silent set turns it into a warning (still counted)
+/// and changes nothing, and an admin may.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_refusals_are_counted_like_sql_set() {
+    use krishiv_connect::proto::v4_3::config_request::{self as creq, operation::OpType as Op};
+    let kv = |key: &str, value: &str| pb::KeyValue {
+        key: key.to_owned(),
+        value: Some(value.to_owned()),
+    };
+    let run = start().await;
+    let set = |silent| {
+        Op::Set(creq::Set {
+            pairs: vec![kv("krishiv.resultCache.ttl", "1m")],
+            silent: Some(silent),
+        })
+    };
+    let s = config_as(&run, OPERATOR, set(false))
+        .await
+        .expect_err("admin key");
+    assert_eq!(s.code(), Code::PermissionDenied);
+    assert_eq!(error_class(&s), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+    assert_eq!(denied(&run), [(Surface::Connect, Privilege::Manage, 1)]);
+
+    let quiet = config_as(&run, OPERATOR, set(true)).await.expect("silent");
+    assert!(
+        quiet
+            .warnings
+            .iter()
+            .any(|w| w.contains("krishiv.resultCache.ttl")),
+        "{:?}",
+        quiet.warnings
+    );
+    let s = config_as(
+        &run,
+        OPERATOR,
+        Op::Unset(creq::Unset {
+            keys: vec!["krishiv.resultCache.ttl".to_owned()],
+        }),
+    )
+    .await
+    .expect_err("admin key");
+    assert_eq!(s.code(), Code::PermissionDenied);
+    let s = config_as(
+        &run,
+        OPERATOR,
+        Op::Set(creq::Set {
+            pairs: vec![kv("fs.s3a.endpoint", "http://169.254.169.254")],
+            silent: None,
+        }),
+    )
+    .await
+    .expect_err("server-scoped store key");
+    assert_eq!(s.code(), Code::PermissionDenied);
+    assert_eq!(denied(&run), [(Surface::Connect, Privilege::Manage, 4)]);
+    let got = config_as(
+        &run,
+        OPERATOR,
+        Op::GetOption(creq::GetOption {
+            keys: vec!["krishiv.resultCache.ttl".to_owned()],
+        }),
+    )
+    .await
+    .expect("get");
+    assert_ne!(
+        got.pairs[0].value.as_deref(),
+        Some("1m"),
+        "a refused set changes nothing"
+    );
+    release_as(&run, OPERATOR).await;
+
+    config_as(&run, ADMIN, set(false)).await.expect("admin may");
+    assert_eq!(denied(&run), [(Surface::Connect, Privilege::Manage, 4)]);
+}

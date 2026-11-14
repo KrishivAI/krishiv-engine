@@ -258,7 +258,7 @@ fn message(e: &KrishivError) -> String {
 /// module docs); `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SET` for a
 /// request without an operation (Spark throws a classless
 /// `UnsupportedOperationException`: a recorded difference).
-pub(crate) fn config(
+pub(crate) async fn config(
     entry: &SessionEntry,
     request: &pb::ConfigRequest,
     principal: &Principal,
@@ -283,7 +283,7 @@ pub(crate) fn config(
         Some(OpType::Set(set)) => {
             let silent = set.silent.unwrap_or(false);
             for kv in &set.pairs {
-                match set_one(&conf, principal, role, &kv.key, kv.value.as_deref()) {
+                match set_one(entry, principal, role, &kv.key, kv.value.as_deref()).await {
                     Ok(()) => out.warnings.extend(warning(&kv.key)),
                     Err(e) if silent => {
                         let shown = kv
@@ -365,7 +365,7 @@ pub(crate) fn config(
         }
         Some(OpType::Unset(u)) => {
             for key in &u.keys {
-                check_settable(role, principal, key)?;
+                authorize(entry, role, principal, key).await?;
                 conf.unset(key)?;
                 out.warnings.extend(warning(key));
             }
@@ -381,14 +381,35 @@ pub(crate) fn config(
     Ok(out)
 }
 
-fn set_one(
-    conf: &RuntimeConf,
+/// The checks of a `set` or `unset` of `key`: a `Startup` key is refused for every role, then
+/// the session asks its policy as SQL `SET` does (`Session::authorize_set_key`: an `Admin` key
+/// or a server-scoped store key needs `Manage` on the cluster; a denial is audited and
+/// counted), then the role's `SettableBy`.
+async fn authorize(
+    entry: &SessionEntry,
+    role: ConfigRole,
+    principal: &Principal,
+    key: &str,
+) -> Result<(), KrishivError> {
+    if matches!(
+        lookup(key).map(|e| e.settable_by),
+        Some(SettableBy::Startup)
+    ) {
+        return check_settable(role, principal, key);
+    }
+    entry.session().authorize_set_key(key).await?;
+    check_settable(role, principal, key)
+}
+
+async fn set_one(
+    entry: &SessionEntry,
     principal: &Principal,
     role: ConfigRole,
     key: &str,
     value: Option<&str>,
 ) -> Result<(), KrishivError> {
-    check_settable(role, principal, key)?;
+    authorize(entry, role, principal, key).await?;
+    let conf = entry.session().conf();
     // Spark's `require(value != null)` is a classless
     // `IllegalArgumentException`: a recorded difference.
     let Some(value) = value else {
