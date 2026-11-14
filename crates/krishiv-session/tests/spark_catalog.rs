@@ -230,6 +230,19 @@ fn create_table_managed_with_a_schema_and_external_from_files() {
         cols.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
         ["a", "b"]
     );
+    // the schema is a column list, not a way to add clauses to the statement
+    for bad in [
+        "a INT) USING csv LOCATION '/tmp/x' (b INT",
+        "a INT) COMMENT 'x'",
+        "a INT) OPTIONS (k 'v'",
+    ] {
+        let e = block_on(c.create_table("bad", Some("parquet"), Some(bad), None, &[])).unwrap_err();
+        assert!(
+            ["KRISHIV_UNSUPPORTED_FEATURE", "PARSE_SYNTAX_ERROR"].contains(&e.error_class().name()),
+            "{bad}: {e}"
+        );
+        assert!(!block_on(c.table_exists("bad")).unwrap(), "{bad}");
+    }
     // a second create is the statement's error
     assert_eq!(
         block_on(c.create_table("m", Some("parquet"), Some("a INT"), None, &[]))

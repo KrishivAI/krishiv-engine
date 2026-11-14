@@ -101,6 +101,13 @@ fn parts(name: &str) -> Vec<String> {
     out
 }
 
+fn unsupported_schema() -> KrishivError {
+    krishiv_common::error::KrishivUnsupportedFeature {
+        feature: "anything but a column list in the schema of createTable".to_owned(),
+    }
+    .into()
+}
+
 /// A SQL string literal of `v`: backslashes and single quotes escaped.
 fn literal(v: &str) -> String {
     format!("'{}'", v.replace('\\', "\\\\").replace('\'', "\\'"))
@@ -679,6 +686,9 @@ impl Catalog<'_> {
     ) -> Result<(), KrishivError> {
         let mut sql = format!("CREATE TABLE {}", quoted(name));
         let given = schema.filter(|s| !s.trim().is_empty());
+        if let Some(schema) = given {
+            self.check_column_list(schema)?;
+        }
         let location = options
             .iter()
             .rev()
@@ -719,6 +729,36 @@ impl Catalog<'_> {
             sql.push_str(&format!(" COMMENT {}", literal(description)));
         }
         self.run(&sql).await
+    }
+
+    /// Refuses `schema` unless it is only a column list: it is written into the `CREATE TABLE`, so text like
+    /// `a INT) USING x LOCATION '/y' (b INT` must not become clauses of the statement.
+    fn check_column_list(&self, schema: &str) -> Result<(), KrishivError> {
+        let env = self.session.query_env();
+        let statement =
+            krishiv_sql::parse_statement(&format!("CREATE TABLE t ({schema})"), &env.parser)
+                .map_err(|e| e.error)?;
+        let krishiv_sql::ast::Statement::CreateTable(t) = statement else {
+            return Err(unsupported_schema());
+        };
+        let only_columns = t.using.is_none()
+            && t.options.is_empty()
+            && t.partitioned_by.is_empty()
+            && t.cluster_by.is_empty()
+            && t.bucket.is_none()
+            && t.skew.is_none()
+            && t.row_format.is_none()
+            && t.file_format.is_none()
+            && t.location.is_none()
+            && t.comment.is_none()
+            && t.collation.is_none()
+            && t.tblproperties.is_empty()
+            && t.as_query.is_none();
+        if only_columns {
+            Ok(())
+        } else {
+            Err(unsupported_schema())
+        }
     }
 
     /// The column list (`` `a` INT, `b` STRING ``) of the files at `location`, read as `source`.
