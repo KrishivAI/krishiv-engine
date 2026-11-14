@@ -52,11 +52,14 @@ impl Session {
             env.statement_class,
             self.operation_id(),
         )?;
+        self.state
+            .queries
+            .add_request_tags(&row, &self.request_tags);
         let index = self.state.runtime.reserve_tagged(
             self.state.number,
             self.state.queries.session_id(),
             &row,
-            self.tagging(),
+            self.tagging_of_row(&row),
         );
         let pool = self
             .state

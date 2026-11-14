@@ -365,3 +365,21 @@ async fn refused_and_replayed_statements_keep_their_request_tags() {
         .value(0);
     assert_eq!(n, 1, "the refused statement's row carries its request tag");
 }
+
+#[tokio::test]
+async fn a_set_tag_during_admission_does_not_change_the_tags_a_query_is_cancelled_by() {
+    let rt = EngineRuntime::builder()
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let gate = Arc::new(Never::default());
+    let s = session(&rt, &gate);
+    s.set_tag("team", "a").unwrap_or_else(|e| panic!("{e}"));
+    let task = start(&s, QueryOptions::new().operation_id(id(1)));
+    settle().await;
+    // The query waits in admission with team=a; a later tag change does not move it.
+    s.set_tag("team", "b").unwrap_or_else(|e| panic!("{e}"));
+    assert!(rt.cancel_by_tag("team=b", "nobody", true).is_empty());
+    let ids = rt.cancel_by_tag("team=a", "nobody", true);
+    assert_eq!(ids.len(), 1, "cancelled by the tag it started with");
+    let _ = task.await;
+}

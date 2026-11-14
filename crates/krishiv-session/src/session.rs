@@ -1640,6 +1640,16 @@ impl Session {
         tags
     }
 
+    /// [`Self::tagging`] with the tags row `log_id` was recorded with, so a `set_tag` while the
+    /// query waited for admission does not change what cancel by tag sees.
+    pub(crate) fn tagging_of_row(&self, log_id: &str) -> crate::action::Tagging {
+        let mut tagging = self.tagging();
+        if let Some(tags) = self.state.queries.row_tags(log_id) {
+            tagging.tags = tags.into();
+        }
+        tagging
+    }
+
     /// The principal and tags of a statement started now, for cancel by tag.
     pub(crate) fn tagging(&self) -> crate::action::Tagging {
         crate::action::Tagging {
@@ -1759,7 +1769,7 @@ impl Session {
             self.state.number,
             self.state.queries.session_id(),
             &log_id,
-            self.tagging(),
+            self.tagging_of_row(&log_id),
         ));
         let pool = self.state.memory.child_with_priority(
             &crate::system::pool_name(&log_id),
