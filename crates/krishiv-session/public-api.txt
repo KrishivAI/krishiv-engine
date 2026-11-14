@@ -592,6 +592,7 @@ pub fn krishiv_session::resource_groups::GroupSlot::drop(&mut self)
 pub struct krishiv_session::resource_groups::ResourceGroups
 impl krishiv_session::resource_groups::ResourceGroups
 pub fn krishiv_session::resource_groups::ResourceGroups::counts(&self, &str) -> core::option::Option<(usize, usize)>
+pub fn krishiv_session::resource_groups::ResourceGroups::from_file(&str, usize) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 pub fn krishiv_session::resource_groups::ResourceGroups::from_json(&str, usize) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 pub fn krishiv_session::resource_groups::ResourceGroups::with_clock(&str, usize, alloc::sync::Arc<(dyn core::ops::function::Fn() -> u64 + core::marker::Send + core::marker::Sync)>) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 impl core::fmt::Debug for krishiv_session::resource_groups::ResourceGroups
@@ -886,6 +887,7 @@ pub struct krishiv_session::EngineRuntime
 impl krishiv_session::EngineRuntime
 pub fn krishiv_session::EngineRuntime::builder() -> krishiv_session::EngineRuntimeBuilder
 pub fn krishiv_session::EngineRuntime::cancel(&self, &krishiv_session::QueryId, krishiv_session::CancelReason) -> bool
+pub fn krishiv_session::EngineRuntime::cancel_by_tag(&self, &str, &str, bool) -> alloc::vec::Vec<krishiv_session::QueryId>
 pub fn krishiv_session::EngineRuntime::executor(&self) -> &alloc::sync::Arc<dyn krishiv_exec::executor::Executor>
 pub fn krishiv_session::EngineRuntime::expire_session(&self, &str) -> core::option::Option<usize>
 pub fn krishiv_session::EngineRuntime::io_totals(&self) -> &krishiv_io::io::IoCounters
@@ -980,10 +982,16 @@ pub fn krishiv_session::PathPrefixPolicy::check<'a>(&'a self, &'a krishiv_common
 pub fn krishiv_session::PathPrefixPolicy::version(&self) -> krishiv_plan::analyzer::catalog::PolicyVersion
 pub struct krishiv_session::Permit
 impl krishiv_session::Permit
+pub fn krishiv_session::Permit::class(&self) -> core::option::Option<krishiv_exec::executor::WorkloadClass>
+pub fn krishiv_session::Permit::group(&self) -> core::option::Option<&str>
 pub fn krishiv_session::Permit::memory_budget(&self) -> core::option::Option<usize>
+pub fn krishiv_session::Permit::priority(&self) -> core::option::Option<u8>
 pub fn krishiv_session::Permit::slot<T: 'static>(&self) -> core::option::Option<&T>
 pub fn krishiv_session::Permit::unlimited() -> Self
+pub fn krishiv_session::Permit::with_class(self, krishiv_exec::executor::WorkloadClass) -> Self
+pub fn krishiv_session::Permit::with_group(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn krishiv_session::Permit::with_memory_budget(self, usize) -> Self
+pub fn krishiv_session::Permit::with_priority(self, u8) -> Self
 pub fn krishiv_session::Permit::with_slot(impl core::marker::Send + core::marker::Sync + 'static) -> Self
 impl core::fmt::Debug for krishiv_session::Permit
 pub fn krishiv_session::Permit::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -1048,6 +1056,7 @@ impl krishiv_session::QueryOptions
 pub fn krishiv_session::QueryOptions::deadline(self, core::time::Duration) -> Self
 pub fn krishiv_session::QueryOptions::new() -> Self
 pub fn krishiv_session::QueryOptions::operation_id(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn krishiv_session::QueryOptions::tags<I, T>(self, I) -> Self where I: core::iter::traits::collect::IntoIterator<Item = T>, T: core::convert::AsRef<str>
 impl core::clone::Clone for krishiv_session::QueryOptions
 pub fn krishiv_session::QueryOptions::clone(&self) -> krishiv_session::QueryOptions
 impl core::default::Default for krishiv_session::QueryOptions
@@ -1123,6 +1132,7 @@ pub fn krishiv_session::Session::clone_session(&self) -> core::result::Result<Se
 pub fn krishiv_session::Session::close(&self) -> usize
 pub fn krishiv_session::Session::id(&self) -> &str
 pub fn krishiv_session::Session::interrupt_all(&self) -> alloc::vec::Vec<krishiv_session::QueryId>
+pub fn krishiv_session::Session::interrupt_tag(&self, &str) -> alloc::vec::Vec<krishiv_session::QueryId>
 pub fn krishiv_session::Session::is_closed(&self) -> bool
 pub fn krishiv_session::Session::new_session(&self) -> Self
 pub fn krishiv_session::Session::running_queries(&self) -> usize
@@ -1255,4 +1265,5 @@ pub fn krishiv_session::dot_of_profile(&krishiv_exec::profile::QueryProfile) -> 
 pub fn krishiv_session::mermaid_of_plan(&krishiv_exec::planner::explain::ExplainNode) -> alloc::string::String
 pub fn krishiv_session::mermaid_of_profile(&krishiv_exec::profile::QueryProfile) -> alloc::string::String
 pub fn krishiv_session::register_build_features(&[(&str, bool)])
+pub fn krishiv_session::resource_groups::tag_matches(&str, &str, &str) -> bool
 pub type krishiv_session::RecordBatchStream = futures_core::stream::BoxStream<'static, core::result::Result<arrow_array::record_batch::RecordBatch, krishiv_common::error::KrishivError>>
