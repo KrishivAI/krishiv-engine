@@ -31,7 +31,11 @@ REGISTRY_NAME = {
     "bitwiseNOT": "~",
     "create_map": "map",
     "mean": "avg",
+    "negate": "negative",
     "pow": "power",
+    "approxCountDistinct": "approx_count_distinct",
+    "timestamp_add": "timestampadd",
+    "timestamp_diff": "timestampdiff",
     "shiftLeft": "shiftleft",
     "shiftRight": "shiftright",
     "shiftRightUnsigned": "shiftrightunsigned",
@@ -102,7 +106,7 @@ def test_names_and_parameters_are_pysparks() -> None:
 
 
 def test_registered_functions_pyspark_lacks_are_not_exported() -> None:
-    for name in ("power", "mod", "if"):
+    for name in ("mod", "if"):
         assert not hasattr(F, name), name
     for name in ("count", "log", "ln"):
         assert callable(getattr(F, name))

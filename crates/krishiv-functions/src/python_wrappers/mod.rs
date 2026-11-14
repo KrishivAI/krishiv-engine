@@ -11,6 +11,7 @@
 //! `KRISHIV_REGENERATE_PYTHON=1 cargo test -p krishiv-functions python_wrappers` rewrites them.
 
 mod table;
+mod table_catalog;
 #[cfg(test)]
 mod tests;
 
@@ -496,8 +497,17 @@ pub(crate) fn generate(registered: &BTreeSet<&str>) -> Result<Generated, String>
 /// # Errors
 /// As [`generate`].
 pub(crate) fn generate_for_registry() -> Result<Generated, String> {
-    let functions = crate::registry::builtins().functions();
-    generate(&functions.iter().map(|d| d.name).collect())
+    let registry = crate::registry::builtins();
+    let mut names: BTreeSet<&str> = registry.functions().iter().map(|d| d.name).collect();
+    // A function only Spark's catalog lists is wrapped too: the call reaches the analyzer, which refuses
+    // it as unsupported until the registry implements it.
+    names.extend(
+        table::rows()
+            .iter()
+            .map(|r| r.registry)
+            .filter(|n| registry.spark_function(n).is_some()),
+    );
+    generate(&names)
 }
 
 /// The generated files under `root` (the workspace root) that differ from the registry's output.

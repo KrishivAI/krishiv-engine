@@ -32,9 +32,12 @@ __all__ = [
     "add_months",
     "aes_decrypt",
     "aes_encrypt",
+    "any_value",
+    "approxCountDistinct",
     "approx_count_distinct",
     "approx_percentile",
     "array",
+    "array_agg",
     "array_append",
     "array_compact",
     "array_contains",
@@ -69,6 +72,12 @@ __all__ = [
     "bit_length",
     "bit_or",
     "bit_xor",
+    "bitmap_and_agg",
+    "bitmap_bit_position",
+    "bitmap_bucket_number",
+    "bitmap_construct_agg",
+    "bitmap_count",
+    "bitmap_or_agg",
     "bitwiseNOT",
     "bitwise_not",
     "bool_and",
@@ -82,7 +91,9 @@ __all__ = [
     "char",
     "char_length",
     "character_length",
+    "chr",
     "coalesce",
+    "collate",
     "collation",
     "collect_list",
     "collect_set",
@@ -94,6 +105,7 @@ __all__ = [
     "cosh",
     "cot",
     "count_if",
+    "count_min_sketch",
     "covar_pop",
     "covar_samp",
     "crc32",
@@ -133,6 +145,7 @@ __all__ = [
     "encode",
     "endswith",
     "equal_null",
+    "every",
     "exp",
     "expm1",
     "extract",
@@ -144,31 +157,64 @@ __all__ = [
     "floor",
     "format_number",
     "format_string",
+    "from_csv",
     "from_json",
     "from_unixtime",
     "from_utc_timestamp",
+    "from_xml",
     "get",
     "get_json_object",
     "getbit",
     "greatest",
+    "grouping",
+    "grouping_id",
     "hash",
     "hex",
+    "histogram_numeric",
+    "hll_sketch_agg",
+    "hll_sketch_estimate",
+    "hll_union",
+    "hll_union_agg",
     "hour",
     "hypot",
     "ifnull",
+    "ilike",
     "initcap",
     "input_file_block_length",
     "input_file_block_start",
     "input_file_name",
     "instr",
     "is_valid_utf8",
+    "is_valid_variant",
     "is_variant_null",
     "isnan",
     "isnotnull",
     "isnull",
+    "java_method",
     "json_array_length",
     "json_object_keys",
     "json_tuple",
+    "kll_merge_agg_bigint",
+    "kll_merge_agg_double",
+    "kll_merge_agg_float",
+    "kll_sketch_agg_bigint",
+    "kll_sketch_agg_double",
+    "kll_sketch_agg_float",
+    "kll_sketch_get_n_bigint",
+    "kll_sketch_get_n_double",
+    "kll_sketch_get_n_float",
+    "kll_sketch_get_quantile_bigint",
+    "kll_sketch_get_quantile_double",
+    "kll_sketch_get_quantile_float",
+    "kll_sketch_get_rank_bigint",
+    "kll_sketch_get_rank_double",
+    "kll_sketch_get_rank_float",
+    "kll_sketch_merge_bigint",
+    "kll_sketch_merge_double",
+    "kll_sketch_merge_float",
+    "kll_sketch_to_string_bigint",
+    "kll_sketch_to_string_double",
+    "kll_sketch_to_string_float",
     "kurtosis",
     "lag",
     "last",
@@ -180,6 +226,7 @@ __all__ = [
     "left",
     "length",
     "levenshtein",
+    "like",
     "listagg",
     "ln",
     "localtimestamp",
@@ -204,10 +251,12 @@ __all__ = [
     "map_values",
     "mask",
     "max",
+    "max_by",
     "md5",
     "mean",
     "median",
     "min",
+    "min_by",
     "minute",
     "mode",
     "monotonically_increasing_id",
@@ -216,6 +265,7 @@ __all__ = [
     "months_between",
     "named_struct",
     "nanvl",
+    "negate",
     "negative",
     "next_day",
     "now",
@@ -237,6 +287,7 @@ __all__ = [
     "position",
     "positive",
     "pow",
+    "power",
     "printf",
     "quarter",
     "quote",
@@ -246,6 +297,7 @@ __all__ = [
     "randn",
     "randstr",
     "rank",
+    "reflect",
     "regexp",
     "regexp_count",
     "regexp_extract",
@@ -268,16 +320,22 @@ __all__ = [
     "reverse",
     "right",
     "rint",
+    "rlike",
     "round",
     "row_number",
     "rpad",
     "rtrim",
+    "schema_of_csv",
     "schema_of_json",
     "schema_of_variant",
+    "schema_of_variant_agg",
+    "schema_of_xml",
     "sec",
     "second",
+    "sentences",
     "sequence",
     "session_user",
+    "session_window",
     "sha",
     "sha1",
     "sha2",
@@ -295,6 +353,7 @@ __all__ = [
     "size",
     "skewness",
     "slice",
+    "some",
     "sort_array",
     "soundex",
     "spark_partition_id",
@@ -307,6 +366,7 @@ __all__ = [
     "stddev_pop",
     "stddev_samp",
     "str_to_map",
+    "string_agg",
     "struct",
     "substr",
     "substring",
@@ -314,7 +374,16 @@ __all__ = [
     "sum",
     "tan",
     "tanh",
+    "theta_difference",
+    "theta_intersection",
+    "theta_intersection_agg",
+    "theta_sketch_agg",
+    "theta_sketch_estimate",
+    "theta_union",
+    "theta_union_agg",
     "time_bucket",
+    "timestamp_add",
+    "timestamp_diff",
     "timestamp_micros",
     "timestamp_millis",
     "timestamp_seconds",
@@ -322,6 +391,7 @@ __all__ = [
     "toRadians",
     "to_binary",
     "to_char",
+    "to_csv",
     "to_date",
     "to_json",
     "to_number",
@@ -332,6 +402,7 @@ __all__ = [
     "to_utc_timestamp",
     "to_varchar",
     "to_variant_object",
+    "to_xml",
     "translate",
     "trim",
     "trunc",
@@ -347,6 +418,7 @@ __all__ = [
     "try_multiply",
     "try_parse_json",
     "try_parse_url",
+    "try_reflect",
     "try_subtract",
     "try_sum",
     "try_to_binary",
@@ -356,6 +428,30 @@ __all__ = [
     "try_url_decode",
     "try_validate_utf8",
     "try_variant_get",
+    "tuple_difference_double",
+    "tuple_difference_integer",
+    "tuple_difference_theta_double",
+    "tuple_difference_theta_integer",
+    "tuple_intersection_agg_double",
+    "tuple_intersection_agg_integer",
+    "tuple_intersection_double",
+    "tuple_intersection_integer",
+    "tuple_intersection_theta_double",
+    "tuple_intersection_theta_integer",
+    "tuple_sketch_agg_double",
+    "tuple_sketch_agg_integer",
+    "tuple_sketch_estimate_double",
+    "tuple_sketch_estimate_integer",
+    "tuple_sketch_summary_double",
+    "tuple_sketch_summary_integer",
+    "tuple_sketch_theta_double",
+    "tuple_sketch_theta_integer",
+    "tuple_union_agg_double",
+    "tuple_union_agg_integer",
+    "tuple_union_double",
+    "tuple_union_integer",
+    "tuple_union_theta_double",
+    "tuple_union_theta_integer",
     "typeof",
     "ucase",
     "unbase64",
@@ -379,6 +475,15 @@ __all__ = [
     "weekday",
     "weekofyear",
     "width_bucket",
+    "xpath",
+    "xpath_boolean",
+    "xpath_double",
+    "xpath_float",
+    "xpath_int",
+    "xpath_long",
+    "xpath_number",
+    "xpath_short",
+    "xpath_string",
     "xxhash64",
     "year",
     "zeroifnull",
@@ -451,6 +556,17 @@ def aes_encrypt(
     )
 
 
+def any_value(col: ColumnOrName, ignoreNulls: bool | Column | None = None) -> Column:
+    """Calls the registry function ``any_value``."""
+    return _call("any_value", _named(col, "col"), *_opt(_lit, ignoreNulls, "ignoreNulls"))
+
+
+def approxCountDistinct(col: ColumnOrName, rsd: Column | float | None = None) -> Column:
+    """Deprecated alias; calls the registry function ``approx_count_distinct``."""
+    _deprecated("Deprecated in 2.1, use approx_count_distinct instead.")
+    return _call("approx_count_distinct", _named(col, "col"), *_opt(_lit, rsd, "rsd"))
+
+
 def approx_count_distinct(col: ColumnOrName, rsd: Column | float | None = None) -> Column:
     """Calls the registry function ``approx_count_distinct``."""
     return _call("approx_count_distinct", _named(col, "col"), *_opt(_lit, rsd, "rsd"))
@@ -464,6 +580,11 @@ def approx_percentile(col: ColumnOrName, percentage: Column | float, accuracy: C
 def array(*cols: ColumnOrName) -> Column:
     """Calls the registry function ``array``."""
     return _call("array", *_cols(cols))
+
+
+def array_agg(col: ColumnOrName) -> Column:
+    """Calls the registry function ``array_agg``."""
+    return _call("array_agg", _named(col, "col"))
 
 
 def array_append(col: ColumnOrName, value: Any) -> Column:
@@ -641,6 +762,36 @@ def bit_xor(col: ColumnOrName) -> Column:
     return _call("bit_xor", _named(col, "col"))
 
 
+def bitmap_and_agg(col: ColumnOrName) -> Column:
+    """Calls the registry function ``bitmap_and_agg``."""
+    return _call("bitmap_and_agg", _named(col, "col"))
+
+
+def bitmap_bit_position(col: ColumnOrName) -> Column:
+    """Calls the registry function ``bitmap_bit_position``."""
+    return _call("bitmap_bit_position", _named(col, "col"))
+
+
+def bitmap_bucket_number(col: ColumnOrName) -> Column:
+    """Calls the registry function ``bitmap_bucket_number``."""
+    return _call("bitmap_bucket_number", _named(col, "col"))
+
+
+def bitmap_construct_agg(col: ColumnOrName) -> Column:
+    """Calls the registry function ``bitmap_construct_agg``."""
+    return _call("bitmap_construct_agg", _named(col, "col"))
+
+
+def bitmap_count(col: ColumnOrName) -> Column:
+    """Calls the registry function ``bitmap_count``."""
+    return _call("bitmap_count", _named(col, "col"))
+
+
+def bitmap_or_agg(col: ColumnOrName) -> Column:
+    """Calls the registry function ``bitmap_or_agg``."""
+    return _call("bitmap_or_agg", _named(col, "col"))
+
+
 def bitwiseNOT(col: ColumnOrName) -> Column:
     """Deprecated alias; calls the registry function ``~``."""
     _deprecated("Deprecated in 3.2, use bitwise_not instead.")
@@ -707,9 +858,19 @@ def character_length(str: ColumnOrName) -> Column:
     return _call("character_length", _named(str, "str"))
 
 
+def chr(n: ColumnOrName) -> Column:
+    """Calls the registry function ``chr``."""
+    return _call("chr", _named(n, "n"))
+
+
 def coalesce(*cols: ColumnOrName) -> Column:
     """Calls the registry function ``coalesce``."""
     return _call("coalesce", *_cols(cols))
+
+
+def collate(col: ColumnOrName, collation: str) -> Column:
+    """Calls the registry function ``collate``."""
+    return _call("collate", _named(col, "col"), _lit(collation, "collation"))
 
 
 def collation(col: ColumnOrName) -> Column:
@@ -765,6 +926,19 @@ def cot(col: ColumnOrName) -> Column:
 def count_if(col: ColumnOrName) -> Column:
     """Calls the registry function ``count_if``."""
     return _call("count_if", _named(col, "col"))
+
+
+def count_min_sketch(
+    col: ColumnOrName, eps: Column | float, confidence: Column | float, seed: Column | int | None = None
+) -> Column:
+    """Calls the registry function ``count_min_sketch``."""
+    return _call(
+        "count_min_sketch",
+        _named(col, "col"),
+        _lit(eps, "eps"),
+        _lit(confidence, "confidence"),
+        *_opt(_lit, seed, "seed"),
+    )
 
 
 def covar_pop(col1: ColumnOrName, col2: ColumnOrName) -> Column:
@@ -962,6 +1136,11 @@ def equal_null(col1: ColumnOrName, col2: ColumnOrName) -> Column:
     return _call("equal_null", _named(col1, "col1"), _named(col2, "col2"))
 
 
+def every(col: ColumnOrName) -> Column:
+    """Calls the registry function ``every``."""
+    return _call("every", _named(col, "col"))
+
+
 def exp(col: ColumnOrName) -> Column:
     """Calls the registry function ``exp``."""
     return _call("exp", _named(col, "col"))
@@ -1017,6 +1196,11 @@ def format_string(format: str, *cols: ColumnOrName) -> Column:
     return _call("format_string", _lit(format, "format"), *_cols(cols))
 
 
+def from_csv(col: ColumnOrName, schema: Column | str, options: dict[str, str] | None = None) -> Column:
+    """Calls the registry function ``from_csv``."""
+    return _call("from_csv", _named(col, "col"), _lit(schema, "schema"), *_opt(_opts, options, "options"))
+
+
 def from_json(col: ColumnOrName, schema: Column | str, options: dict[str, str] | None = None) -> Column:
     """Calls the registry function ``from_json``."""
     return _call("from_json", _named(col, "col"), _lit(schema, "schema"), *_opt(_opts, options, "options"))
@@ -1030,6 +1214,11 @@ def from_unixtime(timestamp: ColumnOrName, format: str = "yyyy-MM-dd HH:mm:ss") 
 def from_utc_timestamp(timestamp: ColumnOrName, tz: Column | str) -> Column:
     """Calls the registry function ``from_utc_timestamp``."""
     return _call("from_utc_timestamp", _named(timestamp, "timestamp"), _lit(tz, "tz"))
+
+
+def from_xml(col: ColumnOrName, schema: Column | str, options: dict[str, str] | None = None) -> Column:
+    """Calls the registry function ``from_xml``."""
+    return _call("from_xml", _named(col, "col"), _lit(schema, "schema"), *_opt(_opts, options, "options"))
 
 
 def get(col: ColumnOrName, index: ColumnOrName | int) -> Column:
@@ -1053,6 +1242,16 @@ def greatest(*cols: ColumnOrName) -> Column:
     return _call("greatest", *_cols(cols))
 
 
+def grouping(col: ColumnOrName) -> Column:
+    """Calls the registry function ``grouping``."""
+    return _call("grouping", _named(col, "col"))
+
+
+def grouping_id(*cols: ColumnOrName) -> Column:
+    """Calls the registry function ``grouping_id``."""
+    return _call("grouping_id", *_cols(cols))
+
+
 def hash(*cols: ColumnOrName) -> Column:
     """Calls the registry function ``hash``."""
     return _call("hash", *_cols(cols))
@@ -1061,6 +1260,36 @@ def hash(*cols: ColumnOrName) -> Column:
 def hex(col: ColumnOrName) -> Column:
     """Calls the registry function ``hex``."""
     return _call("hex", _named(col, "col"))
+
+
+def histogram_numeric(col: ColumnOrName, nBins: Column) -> Column:
+    """Calls the registry function ``histogram_numeric``."""
+    return _call("histogram_numeric", _named(col, "col"), _named(nBins, "nBins"))
+
+
+def hll_sketch_agg(col: ColumnOrName, lgConfigK: Column | int | None = None) -> Column:
+    """Calls the registry function ``hll_sketch_agg``."""
+    return _call("hll_sketch_agg", _named(col, "col"), *_opt(_lit, lgConfigK, "lgConfigK"))
+
+
+def hll_sketch_estimate(col: ColumnOrName) -> Column:
+    """Calls the registry function ``hll_sketch_estimate``."""
+    return _call("hll_sketch_estimate", _named(col, "col"))
+
+
+def hll_union(col1: ColumnOrName, col2: ColumnOrName, allowDifferentLgConfigK: bool | None = None) -> Column:
+    """Calls the registry function ``hll_union``."""
+    return _call(
+        "hll_union",
+        _named(col1, "col1"),
+        _named(col2, "col2"),
+        *_opt(_lit, allowDifferentLgConfigK, "allowDifferentLgConfigK"),
+    )
+
+
+def hll_union_agg(col: ColumnOrName, allowDifferentLgConfigK: bool | Column | None = None) -> Column:
+    """Calls the registry function ``hll_union_agg``."""
+    return _call("hll_union_agg", _named(col, "col"), *_opt(_lit, allowDifferentLgConfigK, "allowDifferentLgConfigK"))
 
 
 def hour(col: ColumnOrName) -> Column:
@@ -1076,6 +1305,11 @@ def hypot(col1: ColumnOrName | float, col2: ColumnOrName | float) -> Column:
 def ifnull(col1: ColumnOrName, col2: ColumnOrName) -> Column:
     """Calls the registry function ``ifnull``."""
     return _call("ifnull", _named(col1, "col1"), _named(col2, "col2"))
+
+
+def ilike(str: ColumnOrName, pattern: ColumnOrName, escapeChar: Column | None = None) -> Column:
+    """Calls the registry function ``ilike``."""
+    return _call("ilike", _named(str, "str"), _named(pattern, "pattern"), *_opt(_named, escapeChar, "escapeChar"))
 
 
 def initcap(col: ColumnOrName) -> Column:
@@ -1108,6 +1342,11 @@ def is_valid_utf8(str: ColumnOrName) -> Column:
     return _call("is_valid_utf8", _named(str, "str"))
 
 
+def is_valid_variant(v: ColumnOrName) -> Column:
+    """Calls the registry function ``is_valid_variant``."""
+    return _call("is_valid_variant", _named(v, "v"))
+
+
 def is_variant_null(v: ColumnOrName) -> Column:
     """Calls the registry function ``is_variant_null``."""
     return _call("is_variant_null", _named(v, "v"))
@@ -1128,6 +1367,11 @@ def isnull(col: ColumnOrName) -> Column:
     return _call("isnull", _named(col, "col"))
 
 
+def java_method(*cols: ColumnOrName) -> Column:
+    """Calls the registry function ``java_method``."""
+    return _call("java_method", *_cols(cols))
+
+
 def json_array_length(col: ColumnOrName) -> Column:
     """Calls the registry function ``json_array_length``."""
     return _call("json_array_length", _named(col, "col"))
@@ -1141,6 +1385,111 @@ def json_object_keys(col: ColumnOrName) -> Column:
 def json_tuple(col: ColumnOrName, *fields: str) -> Column:
     """Calls the registry function ``json_tuple``."""
     return _call("json_tuple", _named(col, "col"), *[_lit(value, "fields") for value in fields])
+
+
+def kll_merge_agg_bigint(col: ColumnOrName, k: Column | int | None = None) -> Column:
+    """Calls the registry function ``kll_merge_agg_bigint``."""
+    return _call("kll_merge_agg_bigint", _named(col, "col"), *_opt(_lit, k, "k"))
+
+
+def kll_merge_agg_double(col: ColumnOrName, k: Column | int | None = None) -> Column:
+    """Calls the registry function ``kll_merge_agg_double``."""
+    return _call("kll_merge_agg_double", _named(col, "col"), *_opt(_lit, k, "k"))
+
+
+def kll_merge_agg_float(col: ColumnOrName, k: Column | int | None = None) -> Column:
+    """Calls the registry function ``kll_merge_agg_float``."""
+    return _call("kll_merge_agg_float", _named(col, "col"), *_opt(_lit, k, "k"))
+
+
+def kll_sketch_agg_bigint(col: ColumnOrName, k: Column | int | None = None) -> Column:
+    """Calls the registry function ``kll_sketch_agg_bigint``."""
+    return _call("kll_sketch_agg_bigint", _named(col, "col"), *_opt(_lit, k, "k"))
+
+
+def kll_sketch_agg_double(col: ColumnOrName, k: Column | int | None = None) -> Column:
+    """Calls the registry function ``kll_sketch_agg_double``."""
+    return _call("kll_sketch_agg_double", _named(col, "col"), *_opt(_lit, k, "k"))
+
+
+def kll_sketch_agg_float(col: ColumnOrName, k: Column | int | None = None) -> Column:
+    """Calls the registry function ``kll_sketch_agg_float``."""
+    return _call("kll_sketch_agg_float", _named(col, "col"), *_opt(_lit, k, "k"))
+
+
+def kll_sketch_get_n_bigint(col: ColumnOrName) -> Column:
+    """Calls the registry function ``kll_sketch_get_n_bigint``."""
+    return _call("kll_sketch_get_n_bigint", _named(col, "col"))
+
+
+def kll_sketch_get_n_double(col: ColumnOrName) -> Column:
+    """Calls the registry function ``kll_sketch_get_n_double``."""
+    return _call("kll_sketch_get_n_double", _named(col, "col"))
+
+
+def kll_sketch_get_n_float(col: ColumnOrName) -> Column:
+    """Calls the registry function ``kll_sketch_get_n_float``."""
+    return _call("kll_sketch_get_n_float", _named(col, "col"))
+
+
+def kll_sketch_get_quantile_bigint(sketch: ColumnOrName, rank: ColumnOrName) -> Column:
+    """Calls the registry function ``kll_sketch_get_quantile_bigint``."""
+    return _call("kll_sketch_get_quantile_bigint", _named(sketch, "sketch"), _named(rank, "rank"))
+
+
+def kll_sketch_get_quantile_double(sketch: ColumnOrName, rank: ColumnOrName) -> Column:
+    """Calls the registry function ``kll_sketch_get_quantile_double``."""
+    return _call("kll_sketch_get_quantile_double", _named(sketch, "sketch"), _named(rank, "rank"))
+
+
+def kll_sketch_get_quantile_float(sketch: ColumnOrName, rank: ColumnOrName) -> Column:
+    """Calls the registry function ``kll_sketch_get_quantile_float``."""
+    return _call("kll_sketch_get_quantile_float", _named(sketch, "sketch"), _named(rank, "rank"))
+
+
+def kll_sketch_get_rank_bigint(sketch: ColumnOrName, quantile: ColumnOrName) -> Column:
+    """Calls the registry function ``kll_sketch_get_rank_bigint``."""
+    return _call("kll_sketch_get_rank_bigint", _named(sketch, "sketch"), _named(quantile, "quantile"))
+
+
+def kll_sketch_get_rank_double(sketch: ColumnOrName, quantile: ColumnOrName) -> Column:
+    """Calls the registry function ``kll_sketch_get_rank_double``."""
+    return _call("kll_sketch_get_rank_double", _named(sketch, "sketch"), _named(quantile, "quantile"))
+
+
+def kll_sketch_get_rank_float(sketch: ColumnOrName, quantile: ColumnOrName) -> Column:
+    """Calls the registry function ``kll_sketch_get_rank_float``."""
+    return _call("kll_sketch_get_rank_float", _named(sketch, "sketch"), _named(quantile, "quantile"))
+
+
+def kll_sketch_merge_bigint(left: ColumnOrName, right: ColumnOrName) -> Column:
+    """Calls the registry function ``kll_sketch_merge_bigint``."""
+    return _call("kll_sketch_merge_bigint", _named(left, "left"), _named(right, "right"))
+
+
+def kll_sketch_merge_double(left: ColumnOrName, right: ColumnOrName) -> Column:
+    """Calls the registry function ``kll_sketch_merge_double``."""
+    return _call("kll_sketch_merge_double", _named(left, "left"), _named(right, "right"))
+
+
+def kll_sketch_merge_float(left: ColumnOrName, right: ColumnOrName) -> Column:
+    """Calls the registry function ``kll_sketch_merge_float``."""
+    return _call("kll_sketch_merge_float", _named(left, "left"), _named(right, "right"))
+
+
+def kll_sketch_to_string_bigint(col: ColumnOrName) -> Column:
+    """Calls the registry function ``kll_sketch_to_string_bigint``."""
+    return _call("kll_sketch_to_string_bigint", _named(col, "col"))
+
+
+def kll_sketch_to_string_double(col: ColumnOrName) -> Column:
+    """Calls the registry function ``kll_sketch_to_string_double``."""
+    return _call("kll_sketch_to_string_double", _named(col, "col"))
+
+
+def kll_sketch_to_string_float(col: ColumnOrName) -> Column:
+    """Calls the registry function ``kll_sketch_to_string_float``."""
+    return _call("kll_sketch_to_string_float", _named(col, "col"))
 
 
 def kurtosis(col: ColumnOrName) -> Column:
@@ -1197,6 +1546,11 @@ def length(col: ColumnOrName) -> Column:
 def levenshtein(left: ColumnOrName, right: ColumnOrName, threshold: int | Column | None = None) -> Column:
     """Calls the registry function ``levenshtein``."""
     return _call("levenshtein", _named(left, "left"), _named(right, "right"), *_opt(_lit, threshold, "threshold"))
+
+
+def like(str: ColumnOrName, pattern: ColumnOrName, escapeChar: Column | None = None) -> Column:
+    """Calls the registry function ``like``."""
+    return _call("like", _named(str, "str"), _named(pattern, "pattern"), *_opt(_named, escapeChar, "escapeChar"))
 
 
 def listagg(col: ColumnOrName, delimiter: Column | str | None = None) -> Column:
@@ -1381,6 +1735,11 @@ def max(col: ColumnOrName) -> Column:
     return _call("max", _named(col, "col"))
 
 
+def max_by(col: ColumnOrName, ord: ColumnOrName, k: int | None = None) -> Column:
+    """Calls the registry function ``max_by``."""
+    return _call("max_by", _named(col, "col"), _named(ord, "ord"), *_opt(_lit, k, "k"))
+
+
 def md5(col: ColumnOrName) -> Column:
     """Calls the registry function ``md5``."""
     return _call("md5", _named(col, "col"))
@@ -1399,6 +1758,11 @@ def median(col: ColumnOrName) -> Column:
 def min(col: ColumnOrName) -> Column:
     """Calls the registry function ``min``."""
     return _call("min", _named(col, "col"))
+
+
+def min_by(col: ColumnOrName, ord: ColumnOrName, k: int | None = None) -> Column:
+    """Calls the registry function ``min_by``."""
+    return _call("min_by", _named(col, "col"), _named(ord, "ord"), *_opt(_lit, k, "k"))
 
 
 def minute(col: ColumnOrName) -> Column:
@@ -1439,6 +1803,11 @@ def named_struct(*cols: ColumnOrName) -> Column:
 def nanvl(col1: ColumnOrName, col2: ColumnOrName) -> Column:
     """Calls the registry function ``nanvl``."""
     return _call("nanvl", _named(col1, "col1"), _named(col2, "col2"))
+
+
+def negate(col: ColumnOrName) -> Column:
+    """Calls the registry function ``negative``."""
+    return _call("negative", _named(col, "col"))
 
 
 def negative(col: ColumnOrName) -> Column:
@@ -1548,6 +1917,11 @@ def pow(col1: ColumnOrName | float, col2: ColumnOrName | float) -> Column:
     return _call("power", _num_or_col(col1, "col1"), _num_or_col(col2, "col2"))
 
 
+def power(col1: ColumnOrName | float, col2: ColumnOrName | float) -> Column:
+    """Calls the registry function ``power``."""
+    return _call("power", _num_or_col(col1, "col1"), _num_or_col(col2, "col2"))
+
+
 def printf(format: ColumnOrName, *cols: ColumnOrName) -> Column:
     """Calls the registry function ``printf``."""
     return _call("printf", _named(format, "format"), *_cols(cols))
@@ -1591,6 +1965,11 @@ def randstr(length: int | Column, seed: int | Column | None = None) -> Column:
 def rank() -> Column:
     """Calls the registry function ``rank``."""
     return _call("rank")
+
+
+def reflect(*cols: ColumnOrName) -> Column:
+    """Calls the registry function ``reflect``."""
+    return _call("reflect", *_cols(cols))
 
 
 def regexp(str: ColumnOrName, regexp: ColumnOrName) -> Column:
@@ -1703,6 +2082,11 @@ def rint(col: ColumnOrName) -> Column:
     return _call("rint", _named(col, "col"))
 
 
+def rlike(str: ColumnOrName, regexp: ColumnOrName) -> Column:
+    """Calls the registry function ``rlike``."""
+    return _call("rlike", _named(str, "str"), _named(regexp, "regexp"))
+
+
 def round(col: ColumnOrName, scale: Column | int | None = None) -> Column:
     """Calls the registry function ``round``."""
     return _call("round", _named(col, "col"), *_opt(_lit, scale, "scale"))
@@ -1723,6 +2107,11 @@ def rtrim(col: ColumnOrName, trim: ColumnOrName | None = None) -> Column:
     return _call("rtrim", *_opt(_named, trim, "trim"), _named(col, "col"))
 
 
+def schema_of_csv(csv: Column | str, options: dict[str, str] | None = None) -> Column:
+    """Calls the registry function ``schema_of_csv``."""
+    return _call("schema_of_csv", _lit(csv, "csv"), *_opt(_opts, options, "options"))
+
+
 def schema_of_json(json: Column | str, options: dict[str, str] | None = None) -> Column:
     """Calls the registry function ``schema_of_json``."""
     return _call("schema_of_json", _lit(json, "json"), *_opt(_opts, options, "options"))
@@ -1731,6 +2120,16 @@ def schema_of_json(json: Column | str, options: dict[str, str] | None = None) ->
 def schema_of_variant(v: ColumnOrName) -> Column:
     """Calls the registry function ``schema_of_variant``."""
     return _call("schema_of_variant", _named(v, "v"))
+
+
+def schema_of_variant_agg(v: ColumnOrName) -> Column:
+    """Calls the registry function ``schema_of_variant_agg``."""
+    return _call("schema_of_variant_agg", _named(v, "v"))
+
+
+def schema_of_xml(xml: Column | str, options: dict[str, str] | None = None) -> Column:
+    """Calls the registry function ``schema_of_xml``."""
+    return _call("schema_of_xml", _lit(xml, "xml"), *_opt(_opts, options, "options"))
 
 
 def sec(col: ColumnOrName) -> Column:
@@ -1743,6 +2142,15 @@ def second(col: ColumnOrName) -> Column:
     return _call("second", _named(col, "col"))
 
 
+def sentences(
+    string: ColumnOrName, language: ColumnOrName | None = None, country: ColumnOrName | None = None
+) -> Column:
+    """Calls the registry function ``sentences``."""
+    return _call(
+        "sentences", _named(string, "string"), *_opt(_named, language, "language"), *_opt(_named, country, "country")
+    )
+
+
 def sequence(start: ColumnOrName, stop: ColumnOrName, step: ColumnOrName | None = None) -> Column:
     """Calls the registry function ``sequence``."""
     return _call("sequence", _named(start, "start"), _named(stop, "stop"), *_opt(_named, step, "step"))
@@ -1751,6 +2159,11 @@ def sequence(start: ColumnOrName, stop: ColumnOrName, step: ColumnOrName | None 
 def session_user() -> Column:
     """Calls the registry function ``session_user``."""
     return _call("session_user")
+
+
+def session_window(timeColumn: ColumnOrName, gapDuration: Column | str) -> Column:
+    """Calls the registry function ``session_window``."""
+    return _call("session_window", _named(timeColumn, "timeColumn"), _lit(gapDuration, "gapDuration"))
 
 
 def sha(col: ColumnOrName) -> Column:
@@ -1842,6 +2255,11 @@ def slice(x: ColumnOrName, start: ColumnOrName | int, length: ColumnOrName | int
     return _call("slice", _named(x, "x"), _int_or_col(start, "start"), _int_or_col(length, "length"))
 
 
+def some(col: ColumnOrName) -> Column:
+    """Calls the registry function ``some``."""
+    return _call("some", _named(col, "col"))
+
+
 def sort_array(col: ColumnOrName, asc: bool = True) -> Column:
     """Calls the registry function ``sort_array``."""
     return _call("sort_array", _named(col, "col"), _lit(asc, "asc"))
@@ -1911,6 +2329,11 @@ def str_to_map(
     )
 
 
+def string_agg(col: ColumnOrName, delimiter: Column | str | None = None) -> Column:
+    """Calls the registry function ``string_agg``."""
+    return _call("string_agg", _named(col, "col"), *_opt(_lit, delimiter, "delimiter"))
+
+
 def struct(*cols: ColumnOrName) -> Column:
     """Calls the registry function ``struct``."""
     return _call("struct", *_cols(cols))
@@ -1946,9 +2369,54 @@ def tanh(col: ColumnOrName) -> Column:
     return _call("tanh", _named(col, "col"))
 
 
+def theta_difference(col1: ColumnOrName, col2: ColumnOrName) -> Column:
+    """Calls the registry function ``theta_difference``."""
+    return _call("theta_difference", _named(col1, "col1"), _named(col2, "col2"))
+
+
+def theta_intersection(col1: ColumnOrName, col2: ColumnOrName) -> Column:
+    """Calls the registry function ``theta_intersection``."""
+    return _call("theta_intersection", _named(col1, "col1"), _named(col2, "col2"))
+
+
+def theta_intersection_agg(col: ColumnOrName) -> Column:
+    """Calls the registry function ``theta_intersection_agg``."""
+    return _call("theta_intersection_agg", _named(col, "col"))
+
+
+def theta_sketch_agg(col: ColumnOrName, lgNomEntries: Column | int | None = None) -> Column:
+    """Calls the registry function ``theta_sketch_agg``."""
+    return _call("theta_sketch_agg", _named(col, "col"), *_opt(_lit, lgNomEntries, "lgNomEntries"))
+
+
+def theta_sketch_estimate(col: ColumnOrName) -> Column:
+    """Calls the registry function ``theta_sketch_estimate``."""
+    return _call("theta_sketch_estimate", _named(col, "col"))
+
+
+def theta_union(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None = None) -> Column:
+    """Calls the registry function ``theta_union``."""
+    return _call("theta_union", _named(col1, "col1"), _named(col2, "col2"), *_opt(_lit, lgNomEntries, "lgNomEntries"))
+
+
+def theta_union_agg(col: ColumnOrName, lgNomEntries: Column | int | None = None) -> Column:
+    """Calls the registry function ``theta_union_agg``."""
+    return _call("theta_union_agg", _named(col, "col"), *_opt(_lit, lgNomEntries, "lgNomEntries"))
+
+
 def time_bucket(bucket_size: Column, ts: ColumnOrName, origin: Column | None = None) -> Column:
     """Calls the registry function ``time_bucket``."""
     return _call("time_bucket", _named(bucket_size, "bucket_size"), _named(ts, "ts"), *_opt(_named, origin, "origin"))
+
+
+def timestamp_add(unit: str, quantity: ColumnOrName, ts: ColumnOrName) -> Column:
+    """Calls the registry function ``timestampadd``."""
+    return _call("timestampadd", _lit(unit, "unit"), _named(quantity, "quantity"), _named(ts, "ts"))
+
+
+def timestamp_diff(unit: str, start: ColumnOrName, end: ColumnOrName) -> Column:
+    """Calls the registry function ``timestampdiff``."""
+    return _call("timestampdiff", _lit(unit, "unit"), _named(start, "start"), _named(end, "end"))
 
 
 def timestamp_micros(col: ColumnOrName) -> Column:
@@ -1986,6 +2454,11 @@ def to_binary(col: ColumnOrName, format: ColumnOrName | None = None) -> Column:
 def to_char(col: ColumnOrName, format: ColumnOrName) -> Column:
     """Calls the registry function ``to_char``."""
     return _call("to_char", _named(col, "col"), _named(format, "format"))
+
+
+def to_csv(col: ColumnOrName, options: dict[str, str] | None = None) -> Column:
+    """Calls the registry function ``to_csv``."""
+    return _call("to_csv", _named(col, "col"), *_opt(_opts, options, "options"))
 
 
 def to_date(col: ColumnOrName, format: str | None = None) -> Column:
@@ -2036,6 +2509,11 @@ def to_varchar(col: ColumnOrName, format: ColumnOrName) -> Column:
 def to_variant_object(col: ColumnOrName) -> Column:
     """Calls the registry function ``to_variant_object``."""
     return _call("to_variant_object", _named(col, "col"))
+
+
+def to_xml(col: ColumnOrName, options: dict[str, str] | None = None) -> Column:
+    """Calls the registry function ``to_xml``."""
+    return _call("to_xml", _named(col, "col"), *_opt(_opts, options, "options"))
 
 
 def translate(srcCol: ColumnOrName, matching: str, replace: str) -> Column:
@@ -2178,6 +2656,11 @@ def try_parse_url(url: ColumnOrName, partToExtract: ColumnOrName, key: ColumnOrN
     return _call("try_parse_url", _named(url, "url"), _named(partToExtract, "partToExtract"), *_opt(_named, key, "key"))
 
 
+def try_reflect(*cols: ColumnOrName) -> Column:
+    """Calls the registry function ``try_reflect``."""
+    return _call("try_reflect", *_cols(cols))
+
+
 def try_subtract(left: ColumnOrName, right: ColumnOrName) -> Column:
     """Calls the registry function ``try_subtract``."""
     return _call("try_subtract", _named(left, "left"), _named(right, "right"))
@@ -2221,6 +2704,194 @@ def try_validate_utf8(str: ColumnOrName) -> Column:
 def try_variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Column:
     """Calls the registry function ``try_variant_get``."""
     return _call("try_variant_get", _named(v, "v"), _lit(path, "path"), _lit(targetType, "targetType"))
+
+
+def tuple_difference_double(col1: ColumnOrName, col2: ColumnOrName) -> Column:
+    """Calls the registry function ``tuple_difference_double``."""
+    return _call("tuple_difference_double", _named(col1, "col1"), _named(col2, "col2"))
+
+
+def tuple_difference_integer(col1: ColumnOrName, col2: ColumnOrName) -> Column:
+    """Calls the registry function ``tuple_difference_integer``."""
+    return _call("tuple_difference_integer", _named(col1, "col1"), _named(col2, "col2"))
+
+
+def tuple_difference_theta_double(col1: ColumnOrName, col2: ColumnOrName) -> Column:
+    """Calls the registry function ``tuple_difference_theta_double``."""
+    return _call("tuple_difference_theta_double", _named(col1, "col1"), _named(col2, "col2"))
+
+
+def tuple_difference_theta_integer(col1: ColumnOrName, col2: ColumnOrName) -> Column:
+    """Calls the registry function ``tuple_difference_theta_integer``."""
+    return _call("tuple_difference_theta_integer", _named(col1, "col1"), _named(col2, "col2"))
+
+
+def tuple_intersection_agg_double(col: ColumnOrName, mode: Column | str | None = None) -> Column:
+    """Calls the registry function ``tuple_intersection_agg_double``."""
+    return _call("tuple_intersection_agg_double", _named(col, "col"), *_opt(_lit, mode, "mode"))
+
+
+def tuple_intersection_agg_integer(col: ColumnOrName, mode: Column | str | None = None) -> Column:
+    """Calls the registry function ``tuple_intersection_agg_integer``."""
+    return _call("tuple_intersection_agg_integer", _named(col, "col"), *_opt(_lit, mode, "mode"))
+
+
+def tuple_intersection_double(col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None = None) -> Column:
+    """Calls the registry function ``tuple_intersection_double``."""
+    return _call("tuple_intersection_double", _named(col1, "col1"), _named(col2, "col2"), *_opt(_lit, mode, "mode"))
+
+
+def tuple_intersection_integer(col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None = None) -> Column:
+    """Calls the registry function ``tuple_intersection_integer``."""
+    return _call("tuple_intersection_integer", _named(col1, "col1"), _named(col2, "col2"), *_opt(_lit, mode, "mode"))
+
+
+def tuple_intersection_theta_double(col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None = None) -> Column:
+    """Calls the registry function ``tuple_intersection_theta_double``."""
+    return _call(
+        "tuple_intersection_theta_double", _named(col1, "col1"), _named(col2, "col2"), *_opt(_lit, mode, "mode")
+    )
+
+
+def tuple_intersection_theta_integer(
+    col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None = None
+) -> Column:
+    """Calls the registry function ``tuple_intersection_theta_integer``."""
+    return _call(
+        "tuple_intersection_theta_integer", _named(col1, "col1"), _named(col2, "col2"), *_opt(_lit, mode, "mode")
+    )
+
+
+def tuple_sketch_agg_double(
+    key: ColumnOrName, summary: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
+) -> Column:
+    """Calls the registry function ``tuple_sketch_agg_double``."""
+    return _call(
+        "tuple_sketch_agg_double",
+        _named(key, "key"),
+        _named(summary, "summary"),
+        *_opt(_lit, lgNomEntries, "lgNomEntries"),
+        *_opt(_lit, mode, "mode"),
+    )
+
+
+def tuple_sketch_agg_integer(
+    key: ColumnOrName, summary: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
+) -> Column:
+    """Calls the registry function ``tuple_sketch_agg_integer``."""
+    return _call(
+        "tuple_sketch_agg_integer",
+        _named(key, "key"),
+        _named(summary, "summary"),
+        *_opt(_lit, lgNomEntries, "lgNomEntries"),
+        *_opt(_lit, mode, "mode"),
+    )
+
+
+def tuple_sketch_estimate_double(col: ColumnOrName) -> Column:
+    """Calls the registry function ``tuple_sketch_estimate_double``."""
+    return _call("tuple_sketch_estimate_double", _named(col, "col"))
+
+
+def tuple_sketch_estimate_integer(col: ColumnOrName) -> Column:
+    """Calls the registry function ``tuple_sketch_estimate_integer``."""
+    return _call("tuple_sketch_estimate_integer", _named(col, "col"))
+
+
+def tuple_sketch_summary_double(col: ColumnOrName, mode: Column | str | None = None) -> Column:
+    """Calls the registry function ``tuple_sketch_summary_double``."""
+    return _call("tuple_sketch_summary_double", _named(col, "col"), *_opt(_lit, mode, "mode"))
+
+
+def tuple_sketch_summary_integer(col: ColumnOrName, mode: Column | str | None = None) -> Column:
+    """Calls the registry function ``tuple_sketch_summary_integer``."""
+    return _call("tuple_sketch_summary_integer", _named(col, "col"), *_opt(_lit, mode, "mode"))
+
+
+def tuple_sketch_theta_double(col: ColumnOrName) -> Column:
+    """Calls the registry function ``tuple_sketch_theta_double``."""
+    return _call("tuple_sketch_theta_double", _named(col, "col"))
+
+
+def tuple_sketch_theta_integer(col: ColumnOrName) -> Column:
+    """Calls the registry function ``tuple_sketch_theta_integer``."""
+    return _call("tuple_sketch_theta_integer", _named(col, "col"))
+
+
+def tuple_union_agg_double(
+    col: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
+) -> Column:
+    """Calls the registry function ``tuple_union_agg_double``."""
+    return _call(
+        "tuple_union_agg_double",
+        _named(col, "col"),
+        *_opt(_lit, lgNomEntries, "lgNomEntries"),
+        *_opt(_lit, mode, "mode"),
+    )
+
+
+def tuple_union_agg_integer(
+    col: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
+) -> Column:
+    """Calls the registry function ``tuple_union_agg_integer``."""
+    return _call(
+        "tuple_union_agg_integer",
+        _named(col, "col"),
+        *_opt(_lit, lgNomEntries, "lgNomEntries"),
+        *_opt(_lit, mode, "mode"),
+    )
+
+
+def tuple_union_double(
+    col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
+) -> Column:
+    """Calls the registry function ``tuple_union_double``."""
+    return _call(
+        "tuple_union_double",
+        _named(col1, "col1"),
+        _named(col2, "col2"),
+        *_opt(_lit, lgNomEntries, "lgNomEntries"),
+        *_opt(_lit, mode, "mode"),
+    )
+
+
+def tuple_union_integer(
+    col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
+) -> Column:
+    """Calls the registry function ``tuple_union_integer``."""
+    return _call(
+        "tuple_union_integer",
+        _named(col1, "col1"),
+        _named(col2, "col2"),
+        *_opt(_lit, lgNomEntries, "lgNomEntries"),
+        *_opt(_lit, mode, "mode"),
+    )
+
+
+def tuple_union_theta_double(
+    col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
+) -> Column:
+    """Calls the registry function ``tuple_union_theta_double``."""
+    return _call(
+        "tuple_union_theta_double",
+        _named(col1, "col1"),
+        _named(col2, "col2"),
+        *_opt(_lit, lgNomEntries, "lgNomEntries"),
+        *_opt(_lit, mode, "mode"),
+    )
+
+
+def tuple_union_theta_integer(
+    col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
+) -> Column:
+    """Calls the registry function ``tuple_union_theta_integer``."""
+    return _call(
+        "tuple_union_theta_integer",
+        _named(col1, "col1"),
+        _named(col2, "col2"),
+        *_opt(_lit, lgNomEntries, "lgNomEntries"),
+        *_opt(_lit, mode, "mode"),
+    )
 
 
 def typeof(col: ColumnOrName) -> Column:
@@ -2338,6 +3009,51 @@ def width_bucket(v: ColumnOrName, min: ColumnOrName, max: ColumnOrName, numBucke
     return _call(
         "width_bucket", _named(v, "v"), _named(min, "min"), _named(max, "max"), _int_or_col(numBucket, "numBucket")
     )
+
+
+def xpath(xml: ColumnOrName, path: ColumnOrName) -> Column:
+    """Calls the registry function ``xpath``."""
+    return _call("xpath", _named(xml, "xml"), _named(path, "path"))
+
+
+def xpath_boolean(xml: ColumnOrName, path: ColumnOrName) -> Column:
+    """Calls the registry function ``xpath_boolean``."""
+    return _call("xpath_boolean", _named(xml, "xml"), _named(path, "path"))
+
+
+def xpath_double(xml: ColumnOrName, path: ColumnOrName) -> Column:
+    """Calls the registry function ``xpath_double``."""
+    return _call("xpath_double", _named(xml, "xml"), _named(path, "path"))
+
+
+def xpath_float(xml: ColumnOrName, path: ColumnOrName) -> Column:
+    """Calls the registry function ``xpath_float``."""
+    return _call("xpath_float", _named(xml, "xml"), _named(path, "path"))
+
+
+def xpath_int(xml: ColumnOrName, path: ColumnOrName) -> Column:
+    """Calls the registry function ``xpath_int``."""
+    return _call("xpath_int", _named(xml, "xml"), _named(path, "path"))
+
+
+def xpath_long(xml: ColumnOrName, path: ColumnOrName) -> Column:
+    """Calls the registry function ``xpath_long``."""
+    return _call("xpath_long", _named(xml, "xml"), _named(path, "path"))
+
+
+def xpath_number(xml: ColumnOrName, path: ColumnOrName) -> Column:
+    """Calls the registry function ``xpath_number``."""
+    return _call("xpath_number", _named(xml, "xml"), _named(path, "path"))
+
+
+def xpath_short(xml: ColumnOrName, path: ColumnOrName) -> Column:
+    """Calls the registry function ``xpath_short``."""
+    return _call("xpath_short", _named(xml, "xml"), _named(path, "path"))
+
+
+def xpath_string(xml: ColumnOrName, path: ColumnOrName) -> Column:
+    """Calls the registry function ``xpath_string``."""
+    return _call("xpath_string", _named(xml, "xml"), _named(path, "path"))
 
 
 def xxhash64(*cols: ColumnOrName) -> Column:

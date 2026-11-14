@@ -98,6 +98,13 @@ class Column:
     def __rmod__(self, other: Any) -> Column:
         return Column(_operand(other).rem(self._c))
 
+    def __pow__(self, other: Any) -> Column:
+        """``self ** other``: the registry's ``power`` (``pow``), as ``pyspark.sql.Column.__pow__``."""
+        return _call("power", self, other)
+
+    def __rpow__(self, other: Any) -> Column:
+        return _call("power", other, self)
+
     def __neg__(self) -> Column:
         return Column(self._c.neg())
 

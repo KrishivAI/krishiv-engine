@@ -30,7 +30,7 @@ Spark-compatible function library: scalar, aggregate, window and generator funct
 - `python_wrappers`: generates `python/krishiv/sql/_generated_functions.py` and `.pyi` (PySpark names and parameters) from the
   registry. Test-only code (not in the library): `the_checked_in_wrappers_match_the_registry` fails when they are stale and
   `KRISHIV_REGENERATE_PYTHON=1 cargo test -p krishiv-functions python_wrappers` rewrites them. `python_wrappers/table.rs` is the PySpark
-  signature table (data). Every registered function must have a row, or be listed as not exported / hand-written there, or
+  signature table (data) and `table_catalog.rs` its second half: functions added later, including the ones only Spark's catalog lists (sketches, bitmaps, `xpath`, ...), whose wrapper sends the call by name so the analyzer refuses it as unsupported. Generators and the lambda functions are hand-written in `python/krishiv/sql/functions.py` (`HANDWRITTEN`). Every registered function must have a row, or be listed as not exported / hand-written there, or
   generation fails (and with it the crate's tests). Never edit the generated files by hand.
 
 ## Key files

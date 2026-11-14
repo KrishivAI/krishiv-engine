@@ -14,10 +14,13 @@ literal and ``sha2`` over a string fail in the engine's analyzer."""
 
 from __future__ import annotations
 
-from typing import Any
+import inspect
+import itertools
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from krishiv import _native
-from krishiv.errors import not_expected_type
+from krishiv.errors import PySparkValueError, not_expected_type, not_implemented
 from krishiv.sql import _generated_functions
 from krishiv.sql._function_support import ColumnOrName, _call, _lit, _named, _num_or_col
 from krishiv.sql._generated_functions import *  # noqa: F403  # re-exported through `__all__`
@@ -25,32 +28,92 @@ from krishiv.sql.column import Column, _literal, _operand
 from krishiv.sql.pandas.functions import ArrowUDFType, PandasUDFType, arrow_udf, pandas_udf  # noqa: F401  # re-exported through `__all__`
 from krishiv.sql.types import DataType, StringType
 
+if TYPE_CHECKING:
+    from krishiv.sql.dataframe import DataFrame
+
 #: The functions written by hand below; every other name in ``__all__`` is generated.
 _HAND_WRITTEN = [
     "ArrowUDFType",
     "PandasUDFType",
+    "aggregate",
+    "array_sort",
     "arrow_udf",
+    "arrow_udtf",
     "asc",
+    "asc_nulls_first",
+    "asc_nulls_last",
+    "broadcast",
+    "bucket",
     "call_function",
+    "call_udf",
     "col",
     "column",
     "concat",
     "convert_timezone",
-    "make_dt_interval",
-    "make_interval",
-    "make_ym_interval",
-    "pandas_udf",
-    "try_make_interval",
-    "udf",
     "count",
     "countDistinct",
     "count_distinct",
+    "current_time",
+    "days",
     "desc",
+    "desc_nulls_first",
+    "desc_nulls_last",
+    "exists",
+    "explode",
+    "explode_outer",
     "expr",
+    "filter",
+    "forall",
+    "hours",
+    "inline",
+    "inline_outer",
+    "listagg_distinct",
     "lit",
     "log",
+    "make_dt_interval",
+    "make_interval",
+    "make_time",
+    "make_ym_interval",
+    "map_filter",
+    "map_zip_with",
+    "months",
+    "pandas_udf",
+    "posexplode",
+    "posexplode_outer",
+    "product",
+    "reduce",
+    "st_asbinary",
+    "st_geogfromwkb",
+    "st_geomfromwkb",
+    "st_setsrid",
+    "st_srid",
+    "stack",
+    "string_agg_distinct",
+    "sumDistinct",
+    "sum_distinct",
+    "time_diff",
+    "time_from_micros",
+    "time_from_millis",
+    "time_from_seconds",
+    "time_to_micros",
+    "time_to_millis",
+    "time_to_seconds",
+    "time_trunc",
+    "to_time",
+    "transform",
+    "transform_keys",
+    "transform_values",
+    "try_make_interval",
+    "try_to_time",
+    "udf",
+    "udtf",
     "unix_timestamp",
+    "unwrap_udt",
     "when",
+    "window",
+    "window_time",
+    "years",
+    "zip_with",
 ]
 
 __all__ = [*_generated_functions.__all__, *_HAND_WRITTEN]
@@ -270,3 +333,354 @@ def udf(
         )
     else:
         return _create_py_udf(f=f, returnType=returnType, useArrow=useArrow)
+
+
+_DISTINCT = "DISTINCT aggregates are not available through the Column API (use `F.expr` or SQL)"
+
+# Generators. Each builds the call that ``explode(col)`` is in SQL; the DataFrame API turns it into a ``Generate``
+# node (a generator in ``select`` / ``withColumn``).
+
+
+def explode(col: ColumnOrName) -> Column:
+    """One row per element of the array (or entry of the map) ``col``."""
+    return _call("explode", _named(col, "col"))
+
+
+def explode_outer(col: ColumnOrName) -> Column:
+    """As :func:`explode`, and a null or empty ``col`` gives one row of nulls."""
+    return _call("explode_outer", _named(col, "col"))
+
+
+def posexplode(col: ColumnOrName) -> Column:
+    """As :func:`explode`, with the position of the element (``pos``, ``col``; ``pos``, ``key``, ``value``)."""
+    return _call("posexplode", _named(col, "col"))
+
+
+def posexplode_outer(col: ColumnOrName) -> Column:
+    """As :func:`posexplode`, and a null or empty ``col`` gives one row of nulls."""
+    return _call("posexplode_outer", _named(col, "col"))
+
+
+def inline(col: ColumnOrName) -> Column:
+    """One row per struct of the array of structs ``col``, one column per field."""
+    return _call("inline", _named(col, "col"))
+
+
+def inline_outer(col: ColumnOrName) -> Column:
+    """As :func:`inline`, and a null or empty ``col`` gives one row of nulls."""
+    return _call("inline_outer", _named(col, "col"))
+
+
+def stack(*cols: ColumnOrName) -> Column:
+    """Separates ``cols[1:]`` into ``cols[0]`` rows (``cols[0]`` is the row count, a literal column)."""
+    return _call("stack", *[_named(c, "cols") for c in cols])
+
+
+# Higher-order functions: the Python function is called once with placeholder columns, and the Column it returns
+# becomes the SQL lambda (``x -> x + 1``), as in PySpark.
+
+_lambda_ids = itertools.count()
+
+
+def _lambda(name: str, f: Callable[..., Column], arities: tuple[int, ...]) -> _native.Column:
+    """The lambda that the Python function ``f`` stands for, which must take one of ``arities`` arguments."""
+    if not callable(f):
+        raise not_expected_type("f", "function", f)
+    params = list(inspect.signature(f).parameters.values())
+    if not all(p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD) for p in params):
+        raise PySparkValueError(
+            f"[UNSUPPORTED_PARAM_TYPE_FOR_HIGHER_ORDER_FUNCTION] Function `{name}` should use only POSITIONAL or "
+            "POSITIONAL OR KEYWORD arguments.",
+            errorClass="UNSUPPORTED_PARAM_TYPE_FOR_HIGHER_ORDER_FUNCTION",
+            messageParameters={"func_name": name},
+        )
+    if len(params) not in arities:
+        low, high = arities[0], arities[-1]
+        raise PySparkValueError(
+            f"[WRONG_NUM_ARGS_FOR_HIGHER_ORDER_FUNCTION] Function `{name}` should take between {low} and {high} "
+            f"arguments, but the provided function takes {len(params)}.",
+            errorClass="WRONG_NUM_ARGS_FOR_HIGHER_ORDER_FUNCTION",
+            messageParameters={"func_name": name, "num_args": str(len(params))},
+        )
+    # Fresh names, so a lambda inside a lambda never captures its parent's variable.
+    names = [f"{base}_{next(_lambda_ids)}" for base in ("x", "y", "z")[: len(params)]]
+    body = f(*[Column(_native.col(n)) for n in names])
+    if not isinstance(body, Column):
+        raise PySparkValueError(
+            f"[HIGHER_ORDER_FUNCTION_SHOULD_RETURN_COLUMN] Function `{name}` should return Column, got {type(body)}.",
+            errorClass="HIGHER_ORDER_FUNCTION_SHOULD_RETURN_COLUMN",
+            messageParameters={"func_name": name, "return_type": str(type(body))},
+        )
+    return _native.lambda_function(names, body._c)
+
+
+def transform(col: ColumnOrName, f: Callable[..., Column]) -> Column:
+    """The array ``col`` with ``f(element)`` or ``f(element, index)`` of each element."""
+    return _call("transform", _named(col, "col"), _lambda("transform", f, (1, 2)))
+
+
+def exists(col: ColumnOrName, f: Callable[[Column], Column]) -> Column:
+    """Whether ``f(element)`` holds for at least one element of the array ``col``."""
+    return _call("exists", _named(col, "col"), _lambda("exists", f, (1,)))
+
+
+def forall(col: ColumnOrName, f: Callable[[Column], Column]) -> Column:
+    """Whether ``f(element)`` holds for every element of the array ``col``."""
+    return _call("forall", _named(col, "col"), _lambda("forall", f, (1,)))
+
+
+def filter(col: ColumnOrName, f: Callable[..., Column]) -> Column:  # PySpark's name
+    """The elements of the array ``col`` for which ``f(element)`` or ``f(element, index)`` holds."""
+    return _call("filter", _named(col, "col"), _lambda("filter", f, (1, 2)))
+
+
+def aggregate(
+    col: ColumnOrName,
+    initialValue: ColumnOrName,
+    merge: Callable[[Column, Column], Column],
+    finish: Callable[[Column], Column] | None = None,
+) -> Column:
+    """Folds the array ``col`` from ``initialValue`` with ``merge(acc, element)``, then ``finish(acc)`` if given."""
+    args = [_named(col, "col"), _named(initialValue, "initialValue"), _lambda("aggregate", merge, (2,))]
+    if finish is not None:
+        args.append(_lambda("aggregate", finish, (1,)))
+    return _call("aggregate", *args)
+
+
+def reduce(
+    col: ColumnOrName,
+    initialValue: ColumnOrName,
+    merge: Callable[[Column, Column], Column],
+    finish: Callable[[Column], Column] | None = None,
+) -> Column:
+    """An alias of :func:`aggregate`."""
+    return aggregate(col, initialValue, merge, finish)
+
+
+def zip_with(left: ColumnOrName, right: ColumnOrName, f: Callable[[Column, Column], Column]) -> Column:
+    """The arrays ``left`` and ``right`` merged element by element with ``f(l, r)``."""
+    return _call("zip_with", _named(left, "left"), _named(right, "right"), _lambda("zip_with", f, (2,)))
+
+
+def map_filter(col: ColumnOrName, f: Callable[[Column, Column], Column]) -> Column:
+    """The entries of the map ``col`` for which ``f(key, value)`` holds."""
+    return _call("map_filter", _named(col, "col"), _lambda("map_filter", f, (2,)))
+
+
+def map_zip_with(col1: ColumnOrName, col2: ColumnOrName, f: Callable[[Column, Column, Column], Column]) -> Column:
+    """The maps ``col1`` and ``col2`` merged by key with ``f(key, value1, value2)``."""
+    return _call("map_zip_with", _named(col1, "col1"), _named(col2, "col2"), _lambda("map_zip_with", f, (3,)))
+
+
+def transform_keys(col: ColumnOrName, f: Callable[[Column, Column], Column]) -> Column:
+    """The map ``col`` with the keys ``f(key, value)``."""
+    return _call("transform_keys", _named(col, "col"), _lambda("transform_keys", f, (2,)))
+
+
+def transform_values(col: ColumnOrName, f: Callable[[Column, Column], Column]) -> Column:
+    """The map ``col`` with the values ``f(key, value)``."""
+    return _call("transform_values", _named(col, "col"), _lambda("transform_values", f, (2,)))
+
+
+def array_sort(col: ColumnOrName, comparator: Callable[[Column, Column], Column] | None = None) -> Column:
+    """The array ``col`` sorted ascending (nulls last), or by ``comparator(left, right)``, which returns a negative
+    integer, 0 or a positive integer."""
+    if comparator is None:
+        return _call("array_sort", _named(col, "col"))
+    return _call("array_sort", _named(col, "col"), _lambda("array_sort", comparator, (2,)))
+
+
+def asc_nulls_first(col: ColumnOrName) -> Column:
+    """A sort expression: ``col`` ascending, nulls first."""
+    return Column(_named(col, "col")).asc_nulls_first()
+
+
+def asc_nulls_last(col: ColumnOrName) -> Column:
+    """A sort expression: ``col`` ascending, nulls last."""
+    return Column(_named(col, "col")).asc_nulls_last()
+
+
+def desc_nulls_first(col: ColumnOrName) -> Column:
+    """A sort expression: ``col`` descending, nulls first."""
+    return Column(_named(col, "col")).desc_nulls_first()
+
+
+def desc_nulls_last(col: ColumnOrName) -> Column:
+    """A sort expression: ``col`` descending, nulls last."""
+    return Column(_named(col, "col")).desc_nulls_last()
+
+
+def broadcast(df: DataFrame) -> DataFrame:
+    """Marks ``df`` as small enough for a broadcast join (``df.hint("broadcast")``)."""
+    return df.hint("broadcast")
+
+
+def call_udf(udfName: str, *cols: ColumnOrName) -> Column:
+    """A call of the function ``udfName`` (a registered UDF or any registered function) on ``cols``."""
+    return _call(udfName, *[_named(c, "cols") for c in cols])
+
+
+# The functions below exist under PySpark's names and fail with ``PySparkNotImplementedError`` (a
+# ``NotImplementedError``) where the engine, or the Python mapping of a type, is missing.
+
+
+def product(col: ColumnOrName) -> Column:
+    """Not available: the engine has no `product` aggregate."""
+    raise not_implemented("product: the engine has no `product` aggregate")
+
+
+def sum_distinct(col: ColumnOrName) -> Column:
+    """Not available: DISTINCT aggregates are not available through the Column API."""
+    raise not_implemented(f"sum_distinct: {_DISTINCT}")
+
+
+def sumDistinct(col: ColumnOrName) -> Column:
+    """Not available: DISTINCT aggregates are not available through the Column API."""
+    raise not_implemented(f"sumDistinct: {_DISTINCT}")
+
+
+def listagg_distinct(col: ColumnOrName, delimiter: Any = None) -> Column:
+    """Not available: DISTINCT aggregates are not available through the Column API."""
+    raise not_implemented(f"listagg_distinct: {_DISTINCT}")
+
+
+def string_agg_distinct(col: ColumnOrName, delimiter: Any = None) -> Column:
+    """Not available: DISTINCT aggregates are not available through the Column API."""
+    raise not_implemented(f"string_agg_distinct: {_DISTINCT}")
+
+
+def bucket(numBuckets: Any, col: ColumnOrName) -> Column:
+    """Not available: partitioning transforms are not implemented."""
+    raise not_implemented("bucket: partitioning transforms are not implemented")
+
+
+def years(col: ColumnOrName) -> Column:
+    """Not available: partitioning transforms are not implemented."""
+    raise not_implemented("years: partitioning transforms are not implemented")
+
+
+def months(col: ColumnOrName) -> Column:
+    """Not available: partitioning transforms are not implemented."""
+    raise not_implemented("months: partitioning transforms are not implemented")
+
+
+def days(col: ColumnOrName) -> Column:
+    """Not available: partitioning transforms are not implemented."""
+    raise not_implemented("days: partitioning transforms are not implemented")
+
+
+def hours(col: ColumnOrName) -> Column:
+    """Not available: partitioning transforms are not implemented."""
+    raise not_implemented("hours: partitioning transforms are not implemented")
+
+
+def udtf(cls: Any = None) -> Column:
+    """Not available: table UDFs (UDTF) are not implemented."""
+    raise not_implemented("udtf: table UDFs (UDTF) are not implemented")
+
+
+def arrow_udtf(cls: Any = None) -> Column:
+    """Not available: table UDFs (UDTF) are not implemented."""
+    raise not_implemented("arrow_udtf: table UDFs (UDTF) are not implemented")
+
+
+def unwrap_udt(col: ColumnOrName) -> Column:
+    """Not available: user-defined types are not implemented."""
+    raise not_implemented("unwrap_udt: user-defined types are not implemented")
+
+
+def window(
+    timeColumn: ColumnOrName, windowDuration: str, slideDuration: str | None = None, startTime: str | None = None
+) -> Column:
+    """Not available: time windows through the Column API are not implemented."""
+    raise not_implemented("window: time windows through the Column API are not implemented")
+
+
+def window_time(windowColumn: ColumnOrName) -> Column:
+    """Not available: time windows through the Column API are not implemented."""
+    raise not_implemented("window_time: time windows through the Column API are not implemented")
+
+
+def current_time(precision: int | None = None) -> Column:
+    """Not available: the TIME type has no Python mapping yet (P2-T181)."""
+    raise not_implemented("current_time: the TIME type has no Python mapping yet (P2-T181)")
+
+
+def make_time(hour: ColumnOrName, minute: ColumnOrName, second: ColumnOrName) -> Column:
+    """Not available: the TIME type has no Python mapping yet (P2-T181)."""
+    raise not_implemented("make_time: the TIME type has no Python mapping yet (P2-T181)")
+
+
+def time_diff(unit: ColumnOrName, start: ColumnOrName, end: ColumnOrName) -> Column:
+    """Not available: the TIME type has no Python mapping yet (P2-T181)."""
+    raise not_implemented("time_diff: the TIME type has no Python mapping yet (P2-T181)")
+
+
+def time_from_micros(col: ColumnOrName) -> Column:
+    """Not available: the TIME type has no Python mapping yet (P2-T181)."""
+    raise not_implemented("time_from_micros: the TIME type has no Python mapping yet (P2-T181)")
+
+
+def time_from_millis(col: ColumnOrName) -> Column:
+    """Not available: the TIME type has no Python mapping yet (P2-T181)."""
+    raise not_implemented("time_from_millis: the TIME type has no Python mapping yet (P2-T181)")
+
+
+def time_from_seconds(col: ColumnOrName) -> Column:
+    """Not available: the TIME type has no Python mapping yet (P2-T181)."""
+    raise not_implemented("time_from_seconds: the TIME type has no Python mapping yet (P2-T181)")
+
+
+def time_to_micros(col: ColumnOrName) -> Column:
+    """Not available: the TIME type has no Python mapping yet (P2-T181)."""
+    raise not_implemented("time_to_micros: the TIME type has no Python mapping yet (P2-T181)")
+
+
+def time_to_millis(col: ColumnOrName) -> Column:
+    """Not available: the TIME type has no Python mapping yet (P2-T181)."""
+    raise not_implemented("time_to_millis: the TIME type has no Python mapping yet (P2-T181)")
+
+
+def time_to_seconds(col: ColumnOrName) -> Column:
+    """Not available: the TIME type has no Python mapping yet (P2-T181)."""
+    raise not_implemented("time_to_seconds: the TIME type has no Python mapping yet (P2-T181)")
+
+
+def time_trunc(unit: ColumnOrName, time: ColumnOrName) -> Column:
+    """Not available: the TIME type has no Python mapping yet (P2-T181)."""
+    raise not_implemented("time_trunc: the TIME type has no Python mapping yet (P2-T181)")
+
+
+def to_time(str: ColumnOrName, format: ColumnOrName | None = None) -> Column:
+    """Not available: the TIME type has no Python mapping yet (P2-T181)."""
+    raise not_implemented("to_time: the TIME type has no Python mapping yet (P2-T181)")
+
+
+def try_to_time(str: ColumnOrName, format: ColumnOrName | None = None) -> Column:
+    """Not available: the TIME type has no Python mapping yet (P2-T181)."""
+    raise not_implemented("try_to_time: the TIME type has no Python mapping yet (P2-T181)")
+
+
+def st_asbinary(geo: ColumnOrName, endianness: ColumnOrName | None = None) -> Column:
+    """Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)."""
+    raise not_implemented("st_asbinary: GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)")
+
+
+def st_geogfromwkb(wkb: ColumnOrName) -> Column:
+    """Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)."""
+    raise not_implemented("st_geogfromwkb: GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)")
+
+
+def st_geomfromwkb(wkb: ColumnOrName, srid: Any = None) -> Column:
+    """Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)."""
+    raise not_implemented("st_geomfromwkb: GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)")
+
+
+def st_setsrid(geo: ColumnOrName, srid: Any) -> Column:
+    """Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)."""
+    raise not_implemented("st_setsrid: GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)")
+
+
+def st_srid(geo: ColumnOrName) -> Column:
+    """Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)."""
+    raise not_implemented("st_srid: GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)")

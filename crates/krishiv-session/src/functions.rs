@@ -70,6 +70,23 @@ pub fn map_literal(pairs: Vec<(String, String)>) -> Column {
     Column::new(Expr::literal(Literal::Map(pairs)))
 }
 
+/// The lambda `params -> body` of a higher-order function call (`transform`, `filter`,
+/// `aggregate`, ...). The body refers to a parameter through `col(name)`, as the SQL form
+/// `x -> x + 1` does; the analyzer binds the names when the call is resolved.
+///
+/// ```
+/// use krishiv_session::functions::{call_function, col, lambda, lit};
+/// let plus_one = lambda(["x"], col("x") + lit(1));
+/// let call = call_function("transform", [col("xs"), plus_one]);
+/// ```
+#[must_use]
+pub fn lambda<S: Into<String>>(params: impl IntoIterator<Item = S>, body: Column) -> Column {
+    Column::new(Expr::lambda(
+        params.into_iter().map(Into::into).collect(),
+        body.expr,
+    ))
+}
+
 /// The untyped `NULL` literal (`lit(None)` in PySpark; Spark's `void` type).
 ///
 /// ```

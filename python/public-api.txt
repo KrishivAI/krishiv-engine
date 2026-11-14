@@ -122,6 +122,7 @@ def count_star() -> Column
 def expr(text: str) -> Column
 def lit(value: object) -> Column
 def map_literal(pairs: list[tuple[str, str]]) -> Column
+def lambda_function(params: list[str], body: Column) -> Column
 ## errors.py
 DataFrameQueryContext.def __init__(self, callSite: str='', summary: str='') -> None
 DataFrameQueryContext.def callSite(self) -> str
