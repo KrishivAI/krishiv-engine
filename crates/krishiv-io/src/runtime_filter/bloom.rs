@@ -199,8 +199,8 @@ impl RuntimeBloom {
     ///
     /// A filter larger than the caches makes each probe a memory miss,
     /// one block load waiting on the next (study 18 §R4: 16-22 ns a row
-    /// on 1-4 MB filters). Past [`PREFETCH_ABOVE_BYTES`] the block index of
-    /// every hash is computed once, and the block [`PREFETCH_DISTANCE`]
+    /// on 1-4 MB filters). Past `PREFETCH_ABOVE_BYTES` the block index of
+    /// every hash is computed once, and the block `PREFETCH_DISTANCE`
     /// hashes ahead is prefetched while the current one is tested, so many
     /// loads are in flight at once (Impala's and Kudu's batched SBBF
     /// `Find`). The answers are the same either way.
