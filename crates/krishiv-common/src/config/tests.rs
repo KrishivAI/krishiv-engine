@@ -862,7 +862,7 @@ fn join_enumerator_entries_default_and_parse() {
 }
 
 #[test]
-fn the_w1_rule_keys_default_off_and_are_user_settable() {
+fn the_w1_rule_keys_default_on_and_are_user_settable() {
     let mut c = Config::new();
     for (key, entry) in [
         ("krishiv.optimizer.subqueryAsWindow", &SUBQUERY_AS_WINDOW),
@@ -871,9 +871,9 @@ fn the_w1_rule_keys_default_off_and_are_user_settable() {
             &SHARE_REPEATED_SUBTREES,
         ),
     ] {
-        assert_eq!(c.get(entry).and_then(ConfigValue::as_bool), Some(false));
-        c.set(key, "true").unwrap();
         assert_eq!(c.get(entry).and_then(ConfigValue::as_bool), Some(true));
+        c.set(key, "false").unwrap();
+        assert_eq!(c.get(entry).and_then(ConfigValue::as_bool), Some(false));
     }
 }
 
@@ -1366,6 +1366,42 @@ fn python_worker_entries_parse_and_default() {
 }
 
 #[test]
+fn path_confinement_entries_default_to_empty_and_are_startup_only() {
+    let mut c = Config::new();
+    for entry in [&IO_LOCAL_ALLOWED_ROOTS, &IO_OBJECT_STORE_ALLOWED_PREFIXES] {
+        assert_eq!(c.get(entry), None, "{}", entry.key);
+        assert_eq!(entry.scope, Scope::Cluster, "{}", entry.key);
+        assert_eq!(entry.settable_by, SettableBy::Startup, "{}", entry.key);
+    }
+    c.set(
+        "krishiv.io.objectStore.allowedPrefixes",
+        "s3://lake/data, gs://shared",
+    )
+    .unwrap();
+    assert_eq!(
+        c.get(&IO_OBJECT_STORE_ALLOWED_PREFIXES)
+            .and_then(ConfigValue::as_str),
+        Some("s3://lake/data, gs://shared")
+    );
+}
+
+#[test]
+fn connect_max_plan_depth_defaults_and_rejects_non_positive() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&CONNECT_MAX_PLAN_DEPTH).and_then(ConfigValue::as_int),
+        Some(1024)
+    );
+    c.set("krishiv.connect.maxPlanDepth", "2048").unwrap();
+    assert_eq!(
+        c.get(&CONNECT_MAX_PLAN_DEPTH).and_then(ConfigValue::as_int),
+        Some(2048)
+    );
+    assert!(c.set("krishiv.connect.maxPlanDepth", "0").is_err());
+    assert!(c.set("krishiv.connect.maxPlanDepth", "abc").is_err());
+}
+
+#[test]
 fn server_entries_parse_default_and_take_sparks_names() {
     let mut c = Config::new();
     assert_eq!(
@@ -1426,5 +1462,187 @@ fn server_entries_parse_default_and_take_sparks_names() {
     );
     assert!(c.set("krishiv.connect.maxSessions", "0").is_err());
     assert!(c.set("krishiv.connect.port", "-1").is_err());
+    assert_eq!(
+        Config::new()
+            .get(&CONNECT_MAX_OPERATIONS_PER_SESSION)
+            .and_then(ConfigValue::as_int),
+        Some(100)
+    );
+    assert_eq!(
+        Config::new()
+            .get(&CONNECT_EXECUTE_AHEAD_BYTES)
+            .and_then(ConfigValue::as_size),
+        Some(64 << 20)
+    );
+    c.set("krishiv.connect.maxOperationsPerSession", "3")
+        .unwrap();
+    c.set("krishiv.connect.execute.aheadBytes", "1m").unwrap();
+    assert_eq!(
+        c.get(&CONNECT_MAX_OPERATIONS_PER_SESSION)
+            .and_then(ConfigValue::as_int),
+        Some(3)
+    );
+    assert_eq!(
+        c.get(&CONNECT_EXECUTE_AHEAD_BYTES)
+            .and_then(ConfigValue::as_size),
+        Some(1 << 20)
+    );
+    assert!(
+        c.set("krishiv.connect.maxOperationsPerSession", "0")
+            .is_err()
+    );
+    assert_eq!(
+        CONNECT_MAX_OPERATIONS_PER_SESSION.settable_by,
+        SettableBy::Startup
+    );
     assert_eq!(CONNECT_PORT.settable_by, SettableBy::Startup);
+}
+
+#[test]
+fn connect_reattach_entries_parse_default_and_take_sparks_names() {
+    let d = Config::new();
+    let size = |c: &Config, e| c.get(e).and_then(ConfigValue::as_size);
+    let millis = |c: &Config, e| c.get(e).and_then(ConfigValue::as_duration);
+    // Spark 4.3.0 `Connect.scala` lines 161-227 (static, internal).
+    assert_eq!(size(&d, &CONNECT_EXECUTE_RETRY_BUFFER_SIZE), Some(10 << 20));
+    assert_eq!(
+        millis(&d, &CONNECT_EXECUTE_SENDER_MAX_STREAM_DURATION),
+        Some(Duration::from_secs(120))
+    );
+    assert_eq!(
+        size(&d, &CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE),
+        Some(1 << 30)
+    );
+    assert_eq!(
+        millis(&d, &CONNECT_EXECUTE_DETACHED_TIMEOUT),
+        Some(Duration::from_secs(300))
+    );
+    assert_eq!(
+        millis(&d, &CONNECT_EXECUTE_MAINTENANCE_INTERVAL),
+        Some(Duration::from_secs(30))
+    );
+    assert_eq!(
+        d.get(&CONNECT_EXECUTE_ABANDONED_TOMBSTONES)
+            .and_then(ConfigValue::as_int),
+        Some(10_000)
+    );
+    assert_eq!(size(&d, &CONNECT_MAX_RESPONSE_BYTES), Some(1 << 30));
+
+    let mut c = Config::new();
+    c.set(
+        "spark.connect.execute.reattachable.observerRetryBufferSize",
+        "1m",
+    )
+    .unwrap();
+    c.set(
+        "spark.connect.execute.reattachable.senderMaxStreamDuration",
+        "1500",
+    )
+    .unwrap();
+    c.set(
+        "spark.connect.execute.reattachable.senderMaxStreamSize",
+        "0",
+    )
+    .unwrap();
+    c.set("spark.connect.execute.manager.detachedTimeout", "1s")
+        .unwrap();
+    c.set("spark.connect.execute.manager.maintenanceInterval", "100")
+        .unwrap();
+    c.set("spark.connect.execute.manager.abandonedTombstonesSize", "5")
+        .unwrap();
+    c.set("krishiv.connect.maxResponseBytes", "2m").unwrap();
+    assert_eq!(size(&c, &CONNECT_EXECUTE_RETRY_BUFFER_SIZE), Some(1 << 20));
+    assert_eq!(
+        millis(&c, &CONNECT_EXECUTE_SENDER_MAX_STREAM_DURATION),
+        Some(Duration::from_millis(1500))
+    );
+    assert_eq!(size(&c, &CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE), Some(0));
+    assert_eq!(
+        millis(&c, &CONNECT_EXECUTE_DETACHED_TIMEOUT),
+        Some(Duration::from_secs(1))
+    );
+    assert_eq!(
+        millis(&c, &CONNECT_EXECUTE_MAINTENANCE_INTERVAL),
+        Some(Duration::from_millis(100))
+    );
+    assert_eq!(
+        c.get(&CONNECT_EXECUTE_ABANDONED_TOMBSTONES)
+            .and_then(ConfigValue::as_int),
+        Some(5)
+    );
+    assert_eq!(size(&c, &CONNECT_MAX_RESPONSE_BYTES), Some(2 << 20));
+    assert!(c.set("krishiv.connect.maxResponseBytes", "-1").is_err());
+    for e in [
+        &CONNECT_EXECUTE_RETRY_BUFFER_SIZE,
+        &CONNECT_EXECUTE_SENDER_MAX_STREAM_DURATION,
+        &CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE,
+        &CONNECT_EXECUTE_DETACHED_TIMEOUT,
+        &CONNECT_EXECUTE_MAINTENANCE_INTERVAL,
+        &CONNECT_EXECUTE_ABANDONED_TOMBSTONES,
+        &CONNECT_MAX_RESPONSE_BYTES,
+    ] {
+        assert_eq!(e.settable_by, SettableBy::Startup, "{}", e.key);
+    }
+    // Krishiv's own names, which the Spark names above alias.
+    for (e, key) in [
+        (
+            &CONNECT_EXECUTE_RETRY_BUFFER_SIZE,
+            "krishiv.connect.execute.retryBufferSize",
+        ),
+        (
+            &CONNECT_EXECUTE_SENDER_MAX_STREAM_DURATION,
+            "krishiv.connect.execute.senderMaxStreamDuration",
+        ),
+        (
+            &CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE,
+            "krishiv.connect.execute.senderMaxStreamSize",
+        ),
+        (
+            &CONNECT_EXECUTE_DETACHED_TIMEOUT,
+            "krishiv.connect.execute.detachedTimeout",
+        ),
+        (
+            &CONNECT_EXECUTE_MAINTENANCE_INTERVAL,
+            "krishiv.connect.execute.maintenanceInterval",
+        ),
+        (
+            &CONNECT_EXECUTE_ABANDONED_TOMBSTONES,
+            "krishiv.connect.execute.abandonedTombstones",
+        ),
+    ] {
+        assert_eq!(e.key, key);
+        let mut k = Config::new();
+        k.set(key, &d.get(e).map(ToString::to_string).unwrap_or_default())
+            .unwrap();
+        assert_eq!(k.get(e), d.get(e), "{key}");
+    }
+}
+
+/// P3-T021: the Delta log pool and the catalog parse limits.
+#[test]
+fn delta_and_catalog_limit_entries_parse_and_default() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        (
+            c.get(&DELTA_LOG_THREADS).and_then(ConfigValue::as_int),
+            c.get(&CATALOG_MAX_METADATA_BYTES)
+                .and_then(ConfigValue::as_size),
+            c.get(&CATALOG_MAX_COLUMNS).and_then(ConfigValue::as_int),
+        )
+    };
+    assert_eq!(get(&c), (Some(4), Some(256 << 20), Some(10_000)));
+    c.set("krishiv.delta.logThreads", "8").unwrap();
+    c.set("krishiv.catalog.maxMetadataBytes", "1g").unwrap();
+    c.set("krishiv.catalog.maxColumns", "50000").unwrap();
+    assert_eq!(get(&c), (Some(8), Some(1 << 30), Some(50_000)));
+    assert!(c.set("krishiv.delta.logThreads", "0").is_err());
+    assert!(c.set("krishiv.catalog.maxColumns", "-1").is_err());
+    assert!(c.set("krishiv.catalog.maxMetadataBytes", "lots").is_err());
+    for e in [
+        &DELTA_LOG_THREADS,
+        &CATALOG_MAX_METADATA_BYTES,
+        &CATALOG_MAX_COLUMNS,
+    ] {
+        assert_eq!(e.scope, Scope::Cluster, "{}", e.key);
+    }
 }

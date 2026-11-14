@@ -59,9 +59,18 @@ Paths are relative to this crate.
   `fchmodat2`, `setxattrat`, `removexattrat`) are `EPERM`, since Landlock has no right for them and a same-uid
   worker could otherwise `chmod 0` server files it cannot open. The private directory is included (`os.utime`,
   `shutil.copystat` fail there).
-- No truncation outside the private directory on any ABI: a read-only `open`/`openat` with `O_TRUNC` is `EPERM`,
+- No truncation outside the private directory on any ABI: an `open`/`openat` with `O_TRUNC` and access mode `O_RDONLY` or 3 (no write right; Landlock requires none for mode 3) is `EPERM`,
   `openat2` is `ENOSYS` (its flags cannot be inspected), path `truncate` is `EPERM`.
 - The parent-death signal stays armed: `prctl(PR_SET_PDEATHSIG, ...)` is `EPERM` after the trampoline sets it.
+- **The parent-death signal is per thread** and the kernel clears it in every new thread, so an `execve` from a
+  thread other than the first replaces the worker with an image whose signal is 0 (it could outlive the server).
+  This filter cannot tell that `execve` from the trampoline's own, so **the worker module (PR-26b) must, with
+  `allow_fork` off, install a second seccomp filter that makes `execve` and `execveat` `EPERM`** among its first
+  statements, beside `os.closerange`, before any client code arrives; PR-26b carries the test
+  (`udf_cannot_outlive_the_server_by_exec_from_a_thread`). With `allow_fork` on, exec and children are allowed
+  and their lifetime is not bound to the server (note §4.6).
+- No descriptor gets a signal owner: `fcntl` `F_SETOWN`, `F_SETOWN_EX` and `F_SETSIG` are `EPERM` (with `O_ASYNC`
+  they would make the kernel signal the same-uid server, `SIGKILL` included, below Landlock ABI 6).
 - Socket pairs are connection-oriented only: datagram (and `SOCK_RAW`, a datagram pair for `AF_UNIX`) and RDM pairs
   are `EPERM`, since a datagram endpoint can `sendto` any writable pathname socket (Landlock scopes those from ABI 9).
 - The worker runs in its own session (`setsid`): no controlling terminal, no terminal signals from the server's

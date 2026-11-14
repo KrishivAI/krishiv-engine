@@ -34,7 +34,9 @@
 //! already implies is never added again ([`held`]), so a second `optimize`
 //! adds nothing.
 
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use krishiv_plan::{
@@ -48,6 +50,7 @@ use crate::expr::{
     has_subquery, is_deterministic, references, same, substitute, unshift,
 };
 use crate::pushdown::{alias_map, into_side_new, rebuild_join};
+use crate::restrict::subquery_plans;
 
 /// The rule at a `Join` (see the module docs).
 pub(crate) fn infer_join_filters(node: Arc<LogicalPlan>, memo: &mut Memo) -> Arc<LogicalPlan> {
@@ -99,11 +102,25 @@ pub(crate) fn infer_join_filters(node: Arc<LogicalPlan>, memo: &mut Memo) -> Arc
         by_root.entry(classes.find(id)).or_default().push(id);
     }
     let (lo, ro) = (memo.ids(left), memo.ids(right));
+    // An `isnotnull` the join already enforces is not pushed into a side
+    // whose push path reaches a subtree read from elsewhere too: it would
+    // change one reader's copy only, and the copies could no longer be
+    // computed once (`ShareCte`; TPC-H q15's `revenue0`, the #598
+    // regression). A literal comparison still moves: it removes rows the
+    // join would otherwise read.
+    let (nn_left, nn_right) = (!memo.reaches_shared(left), !memo.reaches_shared(right));
     let (mut add_left, mut add_right) = (Vec::new(), Vec::new());
     let mut push = |target: AttrId, pred: Arc<Expr>| {
-        if to_left && lo.contains(&target) && !holds(left, &add_left, &pred, memo) {
-            add_left.push(pred);
-        } else if to_right && ro.contains(&target) && !holds(right, &add_right, &pred, memo) {
+        let nn = is_not_null(&pred);
+        if to_left && lo.contains(&target) {
+            if (nn_left || !nn) && !holds(left, &add_left, &pred, memo) {
+                add_left.push(pred);
+            }
+        } else if to_right
+            && ro.contains(&target)
+            && (nn_right || !nn)
+            && !holds(right, &add_right, &pred, memo)
+        {
             add_right.push(pred);
         }
     };
@@ -437,9 +454,176 @@ type Conjuncts = Arc<[Arc<Expr>]>;
 pub(crate) struct Memo {
     constraints: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, Conjuncts)>,
     ids: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, bool, Arc<Attrs>)>,
+    /// The relations of the pass's root that more than one path reaches
+    /// (shared through `Arc`, subquery plans included), with whether
+    /// `ShareCte` could compute them once (worked out when first asked; a
+    /// scan read twice is not one). A relation the pass rebuilt points at the
+    /// input relation it comes from.
+    shared: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, Arc<LogicalPlan>)>,
+    worth: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, bool)>,
+}
+
+/// A cheap fingerprint of `plan`'s relation tree (node kinds and shape, not
+/// expressions), memoised by address in `memo`: equal plans have equal
+/// fingerprints.
+fn shape(plan: &Arc<LogicalPlan>, memo: &mut HashMap<*const LogicalPlan, u64>) -> u64 {
+    let mut stack = vec![(Arc::clone(plan), false)];
+    while let Some((p, expanded)) = stack.pop() {
+        let key = Arc::as_ptr(&p);
+        if memo.contains_key(&key) {
+            continue;
+        }
+        if expanded {
+            let mut h = DefaultHasher::new();
+            std::mem::discriminant(&p.node).hash(&mut h);
+            p.for_each_child(&mut |c| {
+                memo.get(&Arc::as_ptr(c)).copied().unwrap_or(0).hash(&mut h);
+            });
+            memo.insert(key, h.finish());
+        } else {
+            stack.push((Arc::clone(&p), true));
+            p.for_each_child(&mut |c| {
+                if !memo.contains_key(&Arc::as_ptr(c)) {
+                    stack.push((Arc::clone(c), false));
+                }
+            });
+        }
+    }
+    memo.get(&Arc::as_ptr(plan)).copied().unwrap_or(0)
 }
 
 impl Memo {
+    /// A memo for one pass over `root`, knowing which of its relations
+    /// more than one path reaches.
+    pub(crate) fn for_root(root: &Arc<LogicalPlan>) -> Self {
+        let mut parents: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, u32)> = HashMap::new();
+        // The bodies of the `Shift`s (instances of one CTE or view), with how
+        // many `Shift`s read each: equal bodies under two or more instances
+        // are read twice even when an earlier pass rebuilt them into separate
+        // `Arc`s (join ordering re-plans a join inside each copy apart).
+        let mut bodies: Vec<(Arc<LogicalPlan>, u32)> = Vec::new();
+        let mut body_at: HashMap<*const LogicalPlan, usize> = HashMap::new();
+        let mut stack = vec![Arc::clone(root)];
+        let mut seen: HashSet<*const LogicalPlan> = HashSet::new();
+        while let Some(p) = stack.pop() {
+            if !seen.insert(Arc::as_ptr(&p)) {
+                continue;
+            }
+            if let PlanNode::Shift { input, .. } = &p.node {
+                let at = *body_at.entry(Arc::as_ptr(input)).or_insert_with(|| {
+                    bodies.push((Arc::clone(input), 0));
+                    bodies.len() - 1
+                });
+                if let Some(slot) = bodies.get_mut(at) {
+                    slot.1 = slot.1.saturating_add(1);
+                }
+            }
+            let mut children = Vec::new();
+            p.for_each_expr(&mut |e| children.extend(subquery_plans(e)));
+            p.for_each_child(&mut |c| children.push(Arc::clone(c)));
+            for c in children {
+                let slot = parents
+                    .entry(Arc::as_ptr(&c))
+                    .or_insert_with(|| (Arc::clone(&c), 0));
+                slot.1 = slot.1.saturating_add(1);
+                stack.push(c);
+            }
+        }
+        // A child of a shared relation is reached by more than one path too,
+        // but the walk in `reaches_shared` stops at the first shared node, so
+        // its parent count is enough.
+        let mut shared: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, Arc<LogicalPlan>)> = parents
+            .into_iter()
+            .filter(|(_, (_, n))| *n > 1)
+            .map(|(k, (p, _))| (k, (Arc::clone(&p), p)))
+            .collect();
+        // Twins are found by `==` within groups of equal shape (a cheap
+        // fingerprint of the relation tree); `worth_sharing` is asked only of
+        // a body with a twin.
+        let mut shapes: HashMap<*const LogicalPlan, u64> = HashMap::new();
+        let mut groups: HashMap<u64, Vec<(Arc<LogicalPlan>, u32)>> = HashMap::new();
+        if bodies.len() > 1 || bodies.iter().any(|(_, n)| *n > 1) {
+            for (body, n) in bodies {
+                groups
+                    .entry(shape(&body, &mut shapes))
+                    .or_default()
+                    .push((body, n));
+            }
+        }
+        for group in groups.into_values() {
+            for (i, (body, n)) in group.iter().enumerate() {
+                let twin = *n > 1
+                    || group
+                        .iter()
+                        .enumerate()
+                        .any(|(j, (other, _))| i != j && **body == **other);
+                if twin && crate::share_cte::worth_sharing(body) {
+                    shared.insert(Arc::as_ptr(body), (Arc::clone(body), Arc::clone(body)));
+                }
+            }
+        }
+        Self {
+            shared,
+            ..Self::default()
+        }
+    }
+
+    /// Whether `ShareCte` could compute `plan` once (memoised).
+    fn worth(&mut self, plan: &Arc<LogicalPlan>) -> bool {
+        if let Some((_, w)) = self.worth.get(&Arc::as_ptr(plan)) {
+            return *w;
+        }
+        let w = crate::share_cte::worth_sharing(plan);
+        self.worth.insert(Arc::as_ptr(plan), (Arc::clone(plan), w));
+        w
+    }
+
+    /// `rebuilt`, which this pass made from the input relation `original`,
+    /// is shared when `original` is.
+    pub(crate) fn carry_shared(&mut self, original: &Arc<LogicalPlan>, rebuilt: &Arc<LogicalPlan>) {
+        if Arc::ptr_eq(original, rebuilt) {
+            return;
+        }
+        if let Some((_, from)) = self.shared.get(&Arc::as_ptr(original)) {
+            let from = Arc::clone(from);
+            self.shared
+                .insert(Arc::as_ptr(rebuilt), (Arc::clone(rebuilt), from));
+        }
+    }
+
+    /// Whether a predicate pushed into `side` can reach a relation read from
+    /// elsewhere too that `ShareCte` could compute once: `side` or a node
+    /// below it through single-input operators. Pushdown also moves a filter
+    /// through an inner join into the side that holds its column; this walk
+    /// stops at joins and set operations, so such a deeper shared body may
+    /// still get the filter (a lost sharing, never a wrong row).
+    fn reaches_shared(&mut self, side: &Arc<LogicalPlan>) -> bool {
+        let mut at = Arc::clone(side);
+        loop {
+            if let Some((_, from)) = self.shared.get(&Arc::as_ptr(&at)) {
+                let from = Arc::clone(from);
+                if self.worth(&from) {
+                    return true;
+                }
+            }
+
+            let next = match &at.node {
+                PlanNode::Project { input, .. }
+                | PlanNode::Filter { input, .. }
+                | PlanNode::Aggregate { input, .. }
+                | PlanNode::Sort { input, .. }
+                | PlanNode::SubqueryAlias { input, .. }
+                | PlanNode::Shift { input, .. }
+                | PlanNode::JoinHint { input, .. }
+                | PlanNode::Repartition { input, .. }
+                | PlanNode::Window { input, .. }
+                | PlanNode::Generate { input, .. } => Arc::clone(input),
+                _ => return false,
+            };
+            at = next;
+        }
+    }
+
     /// The deterministic conjuncts known to hold of `plan`'s output, found
     /// through filters, inner joins, column-only projections and shifts (the
     /// walk of the implied filters of `pushdown`, plus self-join

@@ -337,6 +337,7 @@ check("utime", lambda: os.utime({readable:?}, (0, 0)))
 check("setxattr", lambda: os.setxattr({readable:?}, "user.krishiv", b"1"))
 check("removexattr", lambda: os.removexattr({readable:?}, "user.krishiv"))
 check("truncate_read_only", lambda: os.close(os.open({readable:?}, os.O_RDONLY | os.O_TRUNC)))
+check("truncate_mode3", lambda: os.close(os.open({readable:?}, 3 | os.O_TRUNC)))
 check("write_private", lambda: open({private:?}, "w").write("x"))
 check("pdeathsig_clear", lambda: libc_call("prctl", 1, 0, 0, 0, 0))
 check("pair_dgram", lambda: socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM))
@@ -376,6 +377,7 @@ check("isatty", lambda: os.isatty(0))
         "setxattr",
         "removexattr",
         "truncate_read_only",
+        "truncate_mode3",
         "pair_dgram",
         "ioctl_setflags",
         // OSError(1, ...) is a PermissionError.
@@ -706,10 +708,26 @@ check("affinity_other", lambda: os.sched_setaffinity({pid}, {{0}}))
 check("prlimit_self", lambda: resource.setrlimit(resource.RLIMIT_CORE, (0, 0)))
 check("setpriority_self", lambda: os.setpriority(os.PRIO_PROCESS, 0, 5))
 check("affinity_self", lambda: os.sched_setaffinity(0, os.sched_getaffinity(0)))
+import fcntl
+def async_signal(cmd, arg):
+    # SIGKILL to the sibling through O_ASYNC on a pipe: F_SETOWN (8), F_SETSIG (10) or F_SETOWN_EX (15).
+    r, w = os.pipe()
+    fcntl.fcntl(r, cmd, arg)
+    fcntl.fcntl(r, fcntl.F_SETFL, fcntl.fcntl(r, fcntl.F_GETFL) | os.O_ASYNC)
+    os.write(w, b"x")
+def setown_ex():
+    import struct
+    r, _ = os.pipe()
+    fcntl.fcntl(r, 15, struct.pack("ii", 1, {pid}))
+check("fcntl_setown_other", lambda: async_signal(8, {pid}))
+check("fcntl_setsig", lambda: async_signal(10, 9))
+check("fcntl_setown_ex", setown_ex)
+check("fcntl_getfl", lambda: fcntl.fcntl(0, fcntl.F_GETFL))
 "#
     );
     let o = run(&d, &code, |_| {});
     let limits_after = std::fs::read_to_string(format!("/proc/{pid}/limits")).unwrap_or_default();
+    let alive = matches!(sibling.try_wait(), Ok(None));
     let _ = sibling.kill();
     let _ = sibling.wait();
     for name in [
@@ -718,13 +736,22 @@ check("affinity_self", lambda: os.sched_setaffinity(0, os.sched_getaffinity(0)))
         "setpriority_user",
         "setpriority_group",
         "affinity_other",
+        "fcntl_setown_other",
+        "fcntl_setsig",
+        "fcntl_setown_ex",
     ] {
         assert_eq!(o.get(name), EPERM, "{name}; stderr: {}", o.stderr);
     }
-    for name in ["prlimit_self", "setpriority_self", "affinity_self"] {
+    for name in [
+        "prlimit_self",
+        "setpriority_self",
+        "affinity_self",
+        "fcntl_getfl",
+    ] {
         assert_eq!(o.get(name), "ok", "{name}; stderr: {}", o.stderr);
     }
     assert_eq!(limits_before, limits_after);
+    assert!(alive, "the sibling survived the O_ASYNC signal attempt");
 }
 
 /// x32 system calls, path truncation and terminal input injection are refused; the worker runs in a session

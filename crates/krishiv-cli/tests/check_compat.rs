@@ -163,7 +163,7 @@ fn text_report_spells_out_the_statuses() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(
         dir.path().join("a.sql"),
-        "SELECT nopefn(1),\n  sentences(2)\n",
+        "SELECT nopefn(1),\n  bitmap_count(2)\n",
     )
     .expect("write");
     let out = run(&[], dir.path());
@@ -174,7 +174,10 @@ fn text_report_spells_out_the_statuses() {
         lines[0].ends_with("a.sql:1: nopefn: unknown, not supported"),
         "{text}"
     );
-    assert!(lines[1].ends_with("a.sql:2: sentences: not yet"), "{text}");
+    assert!(
+        lines[1].ends_with("a.sql:2: bitmap_count: not yet"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -195,10 +198,10 @@ fn walk_skips_environments_and_rejects_other_named_files() {
     std::fs::create_dir_all(&venv).expect("mkdir");
     std::fs::write(
         venv.join("x.py"),
-        "import pyspark.sql.functions as F\nF.sentences(1)\n",
+        "import pyspark.sql.functions as F\nF.bitmap_count(1)\n",
     )
     .expect("write");
-    std::fs::write(dir.path().join("notes.txt"), "sentences(1)").expect("write");
+    std::fs::write(dir.path().join("notes.txt"), "bitmap_count(1)").expect("write");
     assert_eq!(run(&[], dir.path()).status.code(), Some(0));
     assert_eq!(
         run(&[], &dir.path().join("notes.txt")).status.code(),
@@ -365,7 +368,7 @@ fn findings_carry_an_alternative_where_one_is_listed() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(
         dir.path().join("a.sql"),
-        "SELECT hll_sketch_estimate(hll_sketch_agg(c)), sentences(s) FROM t\n",
+        "SELECT hll_sketch_estimate(hll_sketch_agg(c)), bitmap_count(s) FROM t\n",
     )
     .expect("write");
     let (_, rep) = report(dir.path());
@@ -382,7 +385,7 @@ fn findings_carry_an_alternative_where_one_is_listed() {
             .is_some_and(|a| a.contains("approx_count_distinct")),
         "{alt}"
     );
-    assert!(by_name("sentences").get("alternative").is_none());
+    assert!(by_name("bitmap_count").get("alternative").is_none());
     let text = run(&[], dir.path());
     let out = String::from_utf8_lossy(&text.stdout);
     assert!(
@@ -400,7 +403,7 @@ fn a_thousand_files_scan_in_under_ten_seconds() {
         let (name, body) = if i % 2 == 0 {
             (
                 format!("q{i}.sql"),
-                "WITH a AS (SELECT id, upper(name) AS n FROM t WHERE id > 1)\nSELECT n, count(*), sentences(n) FROM a GROUP BY n;\n".repeat(20),
+                "WITH a AS (SELECT id, upper(name) AS n FROM t WHERE id > 1)\nSELECT n, count(*), bitmap_count(n) FROM a GROUP BY n;\n".repeat(20),
             )
         } else {
             (
@@ -430,7 +433,7 @@ fn an_unwritable_report_exits_2() {
             .open("/dev/full")
             .expect("/dev/full");
         // Findings make the text report non-empty; the JSON report is always written.
-        std::fs::write(dir.path().join("b.sql"), "SELECT sentences(x)\n").expect("write");
+        std::fs::write(dir.path().join("b.sql"), "SELECT bitmap_count(x)\n").expect("write");
         let out = Command::new(env!("CARGO_BIN_EXE_krishiv"))
             .arg("check-compat")
             .args(args)
@@ -440,4 +443,41 @@ fn an_unwritable_report_exits_2() {
             .expect("run");
         assert_eq!(out.status.code(), Some(2), "{args:?}");
     }
+}
+
+/// P3-T074: the Python of the quickstart and the migration guide, and the sample notebooks,
+/// call only supported functions (the same scan a user runs on their own project).
+#[test]
+fn the_docs_examples_pass_check_compat() {
+    let docs = repo_root().join("docs");
+    let scratch = tempfile::tempdir().expect("tempdir");
+    for (i, page) in ["get-started/quickstart.md", "guides/pyspark-migration.md"]
+        .iter()
+        .enumerate()
+    {
+        let text = std::fs::read_to_string(docs.join(page)).expect("docs page");
+        let mut code = String::from("import krishiv\nfrom krishiv.sql import functions as F\n");
+        let mut in_py = false;
+        for line in text.lines() {
+            match (in_py, line) {
+                (false, "```python") => in_py = true,
+                (true, "```") => in_py = false,
+                (true, l) => {
+                    code.push_str(l);
+                    code.push('\n');
+                }
+                _ => {}
+            }
+        }
+        assert!(code.lines().count() > 5, "{page}: no python blocks found");
+        std::fs::write(scratch.path().join(format!("page{i}.py")), code).expect("write");
+    }
+    let (code, v) = report(scratch.path());
+    assert_eq!(code, Some(0), "docs pages: {v}");
+    let (code, v) = report(&docs.join("notebooks"));
+    assert_eq!(code, Some(0), "notebooks: {v}");
+    assert!(
+        v["files_scanned"].as_u64() >= Some(3),
+        "notebooks scanned: {v}"
+    );
 }

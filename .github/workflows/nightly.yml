@@ -7,8 +7,9 @@ name: Nightly (heavy)
 # cargo-fuzz target of `fuzz/` (mutation testing is `mutants.yml`).
 on:
   schedule:
-    - cron: "0 2 * * *"
-    # One-off extra runs on 2026-11-13 for the v0.2.0 release (publish needs a green scheduled nightly); remove after.
+    # Off the hour: the top of the hour is when scheduled runs are delayed or dropped most.
+    - cron: "23 22 * * *"
+    # One-off extra runs on 2026-11-13 for the v0.2.0 release (binaries.yml and release.yml still need a green scheduled nightly; publishing no longer does); remove after.
     - cron: "17 8,10 13 11 *"
   workflow_dispatch:
 
@@ -159,6 +160,12 @@ jobs:
       id-token: write # Codecov OIDC upload (no secret)
     env:
       RUSTC_WRAPPER: "" # no sccache here: instrumented builds are not cacheable
+      # 2026-11-13: the all-features instrumented build filled the runner's disk even after the
+      # cleanup below (119 GB free at the start; "No space left on device", ld Bus error), as the
+      # test binaries grew with the P3 code. Coverage reads the instrumentation's own mapping, not
+      # DWARF, so no debug info at all.
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - name: Harden the runner (audit egress)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -428,7 +435,8 @@ jobs:
 
   # The Spark golden ratchet for other Spark versions (P3-T090): the upstream goldens of the tag are fetched
   # here (they are not committed, only v4.2.0 is), the baseline of failing statements is committed under
-  # `tests/spark-golden/profiles/<tag>/`.
+  # `tests/spark-golden/profiles/<tag>/`, with the phase gate's result rate and a floor (`gate.json`); each
+  # version's rate against its gate is in the job summary.
   golden-profiles:
     if: github.repository == 'KrishivAI/krishiv-engine'
     runs-on: ubuntu-latest
@@ -447,10 +455,25 @@ jobs:
         uses: $/.github/actions/install-tool
         with:
           tool: sccache@0.18.0
-      - name: Fetch the Spark v4.3.0, v4.1.4, v4.0.5 and v3.5.9 goldens
-        run: "for t in v4.3.0 v4.1.4 v4.0.5 v3.5.9; do bash tests/scripts/import_spark_golden.sh $t; done"
+      - name: Fetch the Spark v4.3.0, v4.2.1, v4.1.4, v4.0.5 and v3.5.9 goldens
+        run: "for t in v4.3.0 v4.2.1 v4.1.4 v4.0.5 v3.5.9; do bash tests/scripts/import_spark_golden.sh $t; done"
       - name: Golden ratchet per Spark version
         run: "cargo test -p krishiv-testkit --release --locked --test golden_profiles -- --ignored"
+
+  # The vendored Spark Connect protos still equal apache/spark at their tags (P3-T010).
+  connect-proto-upstream:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 tests/scripts/check_proto_manifest.py --upstream
 
   # cargo-fuzz targets (`fuzz/`), one hour each: the reusable `fuzz.yml`
   # (regression replay, cached corpus, crash triage). The weekly long run is
@@ -584,7 +607,9 @@ jobs:
       - name: Pinned tools (sccache, cargo-semver-checks)
         uses: $/.github/actions/install-tool
         with:
-          tool: sccache@0.18.0,cargo-semver-checks@0.43.0
+          # 0.43.0 cannot read the rustdoc JSON (format v61) of the pinned 1.99 toolchain: "unsupported
+          # rustdoc format v61 (supported: v43, v45, v53, v55)"; 0.51.0 checked main against v0.2.0.
+          tool: sccache@0.18.0,cargo-semver-checks@0.51.0
       - name: Check against the last release tag
         run: |
           base=$(git tag --list 'v*' --sort=-v:refname | grep -v -- '-' | head -n1 || true)

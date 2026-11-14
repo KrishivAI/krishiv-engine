@@ -70,7 +70,7 @@ enum Command {
         #[arg(long)]
         allow_root: bool,
     },
-    /// Serve Spark Connect (port 15002) and the admin API (port 8080; the web UI with `ui`).
+    /// Run Krishiv single-node: serve Spark Connect (port 15002) and the admin API (port 8080; the web UI with `ui`).
     #[cfg(feature = "server")]
     Server(server::ServerArgs),
 }

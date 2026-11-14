@@ -456,6 +456,23 @@ pub(crate) fn max_min_by_exprs() -> Vec<AggregateExpr> {
     vec![by(AggregateFunction::MaxBy), by(AggregateFunction::MinBy)]
 }
 
+/// `max` and `min` of a collated string: the value and its collation key, the
+/// first of equal keys kept (a struct argument, so `nested_types` too).
+pub(crate) fn collated_min_max_exprs() -> Vec<AggregateExpr> {
+    let by = |function| {
+        AggregateExpr::by(
+            function,
+            (0, 1),
+            (ArrowType::Utf8View, ArrowType::Binary),
+            "x",
+        )
+    };
+    vec![
+        by(AggregateFunction::MaxByKeyFirst),
+        by(AggregateFunction::MinByKeyFirst),
+    ]
+}
+
 fn window_function(function: WindowFunction, frame: WindowFrame, name: &str) -> WindowFunctionPlan {
     WindowFunctionPlan {
         function,
@@ -2256,6 +2273,14 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         column(3, "lcase", collated("utf8_lcase"), true),
         column(4, "icu", collated("UNICODE_CI_RTRIM"), false),
     ];
+    // The INDETERMINATE collation of a mixed expression (`string collate null`).
+    let mut indeterminate_columns = file_scan();
+    indeterminate_columns.scan.output = vec![column(
+        3,
+        "mixed",
+        DataType::collated_string(Collation::INDETERMINATE),
+        true,
+    )];
     let collated_nested = PhysNode::Project {
         input: boxed(scan()),
         layout: vec![AttrId(1), AttrId(2)],
@@ -2317,6 +2342,22 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         ("variant_scan", PhysNode::Scan(variants)),
         ("collated_scan", PhysNode::Scan(collated_columns)),
         ("collated_nested", collated_nested),
+        (
+            "collated_indeterminate_scan",
+            PhysNode::Scan(indeterminate_columns),
+        ),
+        (
+            "collated_min_max",
+            PhysNode::Aggregate {
+                input: Box::new(PhysNode::Scan(file_scan())),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    aggregates: collated_min_max_exprs(),
+                    distinct: vec![false; 2],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
     ]
 }
 

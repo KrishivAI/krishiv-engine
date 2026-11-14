@@ -14,7 +14,8 @@
 //!   (Landlock restricts it only from ABI 3) and read-only opens with `O_TRUNC`, file metadata changes (mode,
 //!   owner, extended attributes, times: Landlock has no right for them), clearing the parent-death signal,
 //!   datagram socket pairs, every `ioctl` outside a small allowlist of queries (terminal input injection,
-//!   file attribute changes), signals to
+//!   file attribute changes), naming a signal owner for a descriptor (`fcntl` `F_SETOWN`, `F_SETOWN_EX`,
+//!   `F_SETSIG`), signals to
 //!   any other process, and changing any other process's limits, priority, scheduling, CPU affinity, I/O
 //!   priority or memory placement (the kernel allows all of these between processes of one uid, and
 //!   Landlock has no hook for them);
@@ -243,6 +244,8 @@ const O_TRUNC: u64 = 0o1000;
 /// `PRIO_PROCESS` (`setpriority`) and `IOPRIO_WHO_PROCESS` (`ioprio_set`).
 const PRIO_PROCESS: u64 = 0;
 const IOPRIO_WHO_PROCESS: u64 = 1;
+/// `F_SETOWN`, `F_SETSIG` and `F_SETOWN_EX` (asm-generic, the same on x86_64 and aarch64).
+const FCNTL_SIGNAL_OWNER: [u64; 3] = [8, 10, 15];
 /// The only `ioctl` requests a worker may make: queries and per-descriptor flags. Every other request is `EPERM`.
 /// An allowlist, not a denylist, because Landlock does not mediate `ioctl` on regular files, and a same-uid
 /// worker holding a read-only descriptor could otherwise change file attributes (`FS_IOC_SETFLAGS`,
@@ -322,13 +325,31 @@ fn deny_rules(spec: &FilterSpec<'_>) -> Result<BTreeMap<i64, Vec<SeccompRule>>, 
             PR_SET_PDEATHSIG,
         )?])?],
     );
-    // `open(O_RDONLY | O_TRUNC)` truncates a file the worker may only read (Landlock checks the truncate right
-    // only from ABI 3, and a read-only open needs no write right). Any other truncating open needs the write
+    // Signal ownership of a descriptor: `F_SETOWN`/`F_SETOWN_EX` name the process that receives `SIGIO` (or,
+    // with `F_SETSIG`, any signal, `SIGKILL` included) when the descriptor becomes ready. With `O_ASYNC` on a
+    // pipe the kernel would deliver it to the same-uid server without any filtered signal call, and Landlock
+    // scopes signals only from ABI 6. The `ioctl` forms (`FIOSETOWN`, `SIOCSPGRP`) are outside the allowlist.
+    rules.insert(
+        libc::SYS_fcntl,
+        FCNTL_SIGNAL_OWNER
+            .iter()
+            .map(|&cmd| {
+                rule(vec![condition(
+                    1,
+                    SeccompCmpArgLen::Dword,
+                    SeccompCmpOp::Eq,
+                    cmd,
+                )?])
+            })
+            .collect::<Result<_, _>>()?,
+    );
+    // `open(O_RDONLY | O_TRUNC)` (or access mode 3, which needs no Landlock right) truncates a file the worker
+    // may only read (Landlock checks the truncate right only from ABI 3, and such an open needs no write right). Any other truncating open needs the write
     // right, which Landlock grants only in the private directory. `openat2` keeps its flags in memory a filter
     // cannot read: `ENOSYS` (second filter), so callers fall back to `openat`.
-    rules.insert(libc::SYS_openat, vec![read_only_truncate(2)?]);
+    rules.insert(libc::SYS_openat, read_only_truncate(2)?);
     #[cfg(target_arch = "x86_64")]
-    rules.insert(libc::SYS_open, vec![read_only_truncate(1)?]);
+    rules.insert(libc::SYS_open, read_only_truncate(1)?);
 
     // Process creation: threads only, unless an administrator allowed fork.
     if !spec.allow_fork {
@@ -409,13 +430,20 @@ fn deny_rules(spec: &FilterSpec<'_>) -> Result<BTreeMap<i64, Vec<SeccompRule>>, 
 }
 
 /// A rule matching a read-only open that truncates: flags (argument `arg`) with no write access and `O_TRUNC`.
-fn read_only_truncate(arg: u8) -> Result<SeccompRule, SandboxError> {
-    rule(vec![condition(
-        arg,
-        SeccompCmpArgLen::Dword,
-        SeccompCmpOp::MaskedEq(O_ACCMODE | O_TRUNC),
-        O_TRUNC,
-    )?])
+/// `O_TRUNC` with an access mode that carries no write right: `O_RDONLY` (0) and the ioctl-only mode 3, for
+/// which Landlock requires no access right at all (neither `FMODE_READ` nor `FMODE_WRITE` is set).
+fn read_only_truncate(arg: u8) -> Result<Vec<SeccompRule>, SandboxError> {
+    [0, O_ACCMODE]
+        .into_iter()
+        .map(|mode| {
+            rule(vec![condition(
+                arg,
+                SeccompCmpArgLen::Dword,
+                SeccompCmpOp::MaskedEq(O_ACCMODE | O_TRUNC),
+                O_TRUNC | mode,
+            )?])
+        })
+        .collect()
 }
 
 fn af(value: i32) -> u64 {
@@ -477,6 +505,7 @@ mod tests {
             libc::SYS_ioprio_set,
             libc::SYS_truncate,
             libc::SYS_ioctl,
+            libc::SYS_fcntl,
         ] {
             assert!(rules.contains_key(&call), "{call}");
         }
