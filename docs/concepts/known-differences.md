@@ -256,5 +256,6 @@ do not see it, as in Spark. `system.caches` lists the session's live checkpoints
 - **Interrupt by tag** fails with `UNSUPPORTED_FEATURE.INTERRUPT_TYPE` until operation tags can be interrupted.
 - **`ml_command.clean_cache` answers with no result.** PySpark sends it when its process exits; Krishiv has no ML
   cache, so the operation succeeds with no response (only `result_complete` when reattachable). Spark sends an
-  `ml_command_result`, whose content for this command is not verified; PySpark ignores it. Every other `ml_command`
-  fails with SQLSTATE 56K00.
+  `ml_command_result`, whose content for this command is not verified; PySpark ignores it. Its operation id is not
+  remembered after it ends, so the same id may be reused (Spark refuses a reused id with `OPERATION_ABANDONED`;
+  clients send fresh ids). Every other `ml_command` fails with SQLSTATE 56K00.
