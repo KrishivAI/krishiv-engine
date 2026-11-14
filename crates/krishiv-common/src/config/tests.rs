@@ -1499,6 +1499,39 @@ fn connect_reattach_entries_parse_default_and_take_sparks_names() {
     ] {
         assert_eq!(e.settable_by, SettableBy::Startup, "{}", e.key);
     }
+    // Krishiv's own names, which the Spark names above alias.
+    for (e, key) in [
+        (
+            &CONNECT_EXECUTE_RETRY_BUFFER_SIZE,
+            "krishiv.connect.execute.retryBufferSize",
+        ),
+        (
+            &CONNECT_EXECUTE_SENDER_MAX_STREAM_DURATION,
+            "krishiv.connect.execute.senderMaxStreamDuration",
+        ),
+        (
+            &CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE,
+            "krishiv.connect.execute.senderMaxStreamSize",
+        ),
+        (
+            &CONNECT_EXECUTE_DETACHED_TIMEOUT,
+            "krishiv.connect.execute.detachedTimeout",
+        ),
+        (
+            &CONNECT_EXECUTE_MAINTENANCE_INTERVAL,
+            "krishiv.connect.execute.maintenanceInterval",
+        ),
+        (
+            &CONNECT_EXECUTE_ABANDONED_TOMBSTONES,
+            "krishiv.connect.execute.abandonedTombstones",
+        ),
+    ] {
+        assert_eq!(e.key, key);
+        let mut k = Config::new();
+        k.set(key, &d.get(e).map(ToString::to_string).unwrap_or_default())
+            .unwrap();
+        assert_eq!(k.get(e), d.get(e), "{key}");
+    }
 }
 
 #[test]
