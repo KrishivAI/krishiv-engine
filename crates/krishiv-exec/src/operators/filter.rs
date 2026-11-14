@@ -6,10 +6,12 @@ use std::sync::Arc;
 use arrow_schema::SchemaRef;
 use krishiv_types::batch::Batch;
 
+use super::RuntimeFilters;
 use super::expr::Predicate;
-use super::{PartitionState, local_mut};
+use super::local_mut;
+use super::select::{Narrow, RowSelect};
 use crate::context::TaskContext;
-use crate::error::Result;
+use crate::error::{Result, internal};
 use crate::operator::{LocalState, Operator, OperatorOutput};
 
 /// Keeps the rows for which the predicate is true (a null does not select
@@ -24,16 +26,58 @@ use crate::operator::{LocalState, Operator, OperatorOutput};
 /// write queue), unseen by the memory pool. A filter keeping most bytes of
 /// a batch that shares a page with its neighbours shares the buffers:
 /// copying those would cost it and save little.
+///
+/// A filter may also run the runtime-filter row stage of the scan below it
+/// (design P2-E3 U1, [`Filter::with_row_stage`]): a row is kept when both
+/// the predicate and the stage keep it, in one copy. The predicate sees the
+/// rows a fused hash probe's would (`select` module docs): every row, or
+/// only those the stage kept when it dropped at least half of the batch.
 #[derive(Debug)]
 pub struct Filter {
     schema: SchemaRef,
     predicate: Arc<dyn Predicate>,
+    /// The predicate over only the columns it reads, for the copy of the
+    /// rows a selective row stage kept.
+    narrow: Option<Narrow>,
+    /// The runtime filters whose drivers' row stages this filter runs.
+    runtime: Option<RuntimeFilters>,
+}
+
+/// A driver's state: its partition, and its selection when the filter runs
+/// a row stage.
+#[derive(Debug)]
+struct FilterLocal {
+    partition: u32,
+    select: Option<RowSelect>,
 }
 
 impl Filter {
     /// A filter over batches of `schema`.
     pub fn new(schema: SchemaRef, predicate: Arc<dyn Predicate>) -> Arc<Self> {
-        Arc::new(Self { schema, predicate })
+        Arc::new(Self {
+            schema,
+            predicate,
+            narrow: None,
+            runtime: None,
+        })
+    }
+
+    /// A filter over batches of `schema` that also runs the row stage the
+    /// scan below built for each driver, after `runtime` was handed to it
+    /// (`RuntimeFilters::hand_to_consumer`). `narrow` is `predicate` over
+    /// only the columns it reads.
+    pub(crate) fn with_row_stage(
+        schema: SchemaRef,
+        predicate: Arc<dyn Predicate>,
+        narrow: Option<Narrow>,
+        runtime: RuntimeFilters,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            schema,
+            predicate,
+            narrow,
+            runtime: Some(runtime),
+        })
     }
 }
 
@@ -51,8 +95,27 @@ impl Operator for Filter {
     }
 
     fn local_state(&self, ctx: &TaskContext) -> Result<LocalState> {
-        Ok(Box::new(PartitionState {
+        // The scan below built this driver's row stage before this
+        // operator's state (a driver builds its source's first); a stage it
+        // cannot find is a broken contract, not a filter without one.
+        let select = match &self.runtime {
+            None => None,
+            Some(runtime) => {
+                let stage = runtime.consumer_stage(ctx.partition()).ok_or_else(|| {
+                    internal(
+                        "a scan handed its row stage to a filter that cannot find it".to_owned(),
+                    )
+                })?;
+                Some(RowSelect::new(
+                    Some(Arc::clone(&self.predicate)),
+                    self.narrow.clone(),
+                    Some(stage),
+                ))
+            }
+        };
+        Ok(Box::new(FilterLocal {
             partition: ctx.partition(),
+            select,
         }))
     }
 
@@ -60,11 +123,15 @@ impl Operator for Filter {
         if input.num_rows() == 0 {
             return Ok(OperatorOutput::NeedMoreInput(None));
         }
-        let partition = local_mut::<PartitionState>(local, "Filter")?.partition;
-        let mask = self
-            .predicate
-            .evaluate_in(input.data(), input.split().unwrap_or(partition))?;
-        let out = input.filter(&mask)?;
+        let state = local_mut::<FilterLocal>(local, "Filter")?;
+        let partition = input.split().unwrap_or(state.partition);
+        let out = match state.select.as_mut() {
+            None => input.filter(&self.predicate.evaluate_in(input.data(), partition)?)?,
+            Some(select) => match select.mask(input, partition)? {
+                None => input.clone(),
+                Some(mask) => input.filter(&mask)?,
+            },
+        };
         if out.num_rows() == 0 {
             return Ok(OperatorOutput::NeedMoreInput(None));
         }

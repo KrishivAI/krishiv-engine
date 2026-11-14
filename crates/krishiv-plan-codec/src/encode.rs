@@ -15,7 +15,7 @@ use krishiv_exec::aggregate::{
 use krishiv_exec::physical::{
     AggregatePlan, ExchangeFilterPlan, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme,
     JoinDistribution, JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan,
-    ProbeSelect, ProjectItemPlan, Residual, ScanFilter, ScanNode, ScanRuntimeFilter,
+    ProbeRowStage, ProbeSelect, ProjectItemPlan, Residual, ScanFilter, ScanNode, ScanRuntimeFilter,
     SortMergeJoinPlan, SubqueryPlan, SubqueryValueKind, WritePlan,
 };
 use krishiv_exec::planner::ExplainNode;
@@ -273,11 +273,13 @@ impl Encoder {
                 layout: l,
                 predicate,
                 subqueries,
+                row_stage,
             } => Kind::Filter(pb::FilterNode {
                 input: self.node_index(input)?,
                 layout: layout(l),
                 predicate: self.expr(predicate)?,
                 subqueries: self.subqueries(subqueries)?,
+                row_stage: row_stage.as_ref().map(probe_row_stage),
             }),
             PhysNode::Project {
                 input,
@@ -544,17 +546,7 @@ impl Encoder {
                     })
                 })
                 .transpose()?,
-            row_stage: select.row_stage.as_ref().map(|r| pb::ProbeRowStage {
-                scan: r.scan.0,
-                columns: r
-                    .columns
-                    .iter()
-                    .map(|c| pb::ProbeFilterColumn {
-                        id: c.id.0,
-                        column: c.column as u64,
-                    })
-                    .collect(),
-            }),
+            row_stage: select.row_stage.as_ref().map(probe_row_stage),
             columns: select
                 .columns
                 .iter()
@@ -927,6 +919,21 @@ fn scan_filter(f: &ScanRuntimeFilter, nested: &Cell<bool>) -> pb::ScanRuntimeFil
         id: f.id.0,
         column: Some(column_path(&f.column)),
         key_type: arrow_bytes(&f.key_type, nested),
+    }
+}
+
+/// A scan's row stage run by an operator above it (a probe or a filter).
+fn probe_row_stage(r: &ProbeRowStage) -> pb::ProbeRowStage {
+    pb::ProbeRowStage {
+        scan: r.scan.0,
+        columns: r
+            .columns
+            .iter()
+            .map(|c| pb::ProbeFilterColumn {
+                id: c.id.0,
+                column: c.column as u64,
+            })
+            .collect(),
     }
 }
 

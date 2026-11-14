@@ -384,6 +384,13 @@ pub enum PhysNode {
         predicate: Arc<Expr>,
         /// The subqueries `predicate` reads.
         subqueries: Vec<SubqueryPlan>,
+        /// The runtime-filter row stage of the scan below (through
+        /// column-only projections) that this filter runs in its own mask
+        /// (design P2-E3 U1): the scan drops no row itself, and the kept
+        /// rows are copied once. Only on a filter without subqueries whose
+        /// predicate is deterministic; the columns are this filter's input
+        /// columns.
+        row_stage: Option<ProbeRowStage>,
     },
     /// Columns of `input` and computed columns.
     Project {
@@ -844,15 +851,17 @@ pub struct ProbeFilter {
     pub predicate: Arc<Expr>,
 }
 
-/// A scan's runtime-filter row stage run by a hash probe above it
-/// ([`ProbeSelect::row_stage`]): the scan drops no row itself, and the
-/// probe evaluates the stage the scan's driver built (same filters,
-/// counters and switch-off).
+/// A scan's runtime-filter row stage run by an operator above it: a hash
+/// probe ([`ProbeSelect::row_stage`], design P2-E3 U2) or a `Filter`
+/// (the `row_stage` of [`PhysNode::Filter`], U1). The scan drops no row itself,
+/// and the operator evaluates the stage the scan's driver built (same
+/// filters, counters and switch-off).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProbeRowStage {
     /// The scan.
     pub scan: ScanId,
-    /// Each runtime filter of the scan with its column in the probe input.
+    /// Each runtime filter of the scan with its column in the operator's
+    /// input.
     pub columns: Vec<ProbeFilterColumn>,
 }
 
@@ -1018,7 +1027,7 @@ plan_data!(enum PhysNode {
     Scan(scan),
     OneRow,
     Range(range),
-    Filter { input, layout, predicate, subqueries },
+    Filter { input, layout, predicate, subqueries, row_stage },
     Project { input, layout, items, nullable, subqueries },
     Limit { input, offset, limit },
     ReplicateRows { input, layout, count, subqueries },

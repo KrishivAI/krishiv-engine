@@ -166,10 +166,10 @@ fn run(t: &Tpch, q: &str) -> (Result<Vec<String>, KrishivError>, u64) {
     });
     let (out, query) = super::run_in(&plan, &root);
     let ops = &query.metrics().operators;
-    // A scan's runtime-filter row stage under a hash probe runs in the
-    // probe (design P2-E3 U2): a scan the plan hands its stage to a probe
-    // reports the rows before the stage, and the rows it kept are out -
-    // dropped.
+    // A scan's runtime-filter row stage may run in the hash probe (design
+    // P2-E3 U2) or the `Filter` (U1) above it: a scan the plan hands its
+    // stage to reports the rows before the stage, and the rows it kept are
+    // out - dropped.
     let handed = handed_scans(&plan);
     let scanned = ops
         .values()
@@ -199,7 +199,7 @@ fn run(t: &Tpch, q: &str) -> (Result<Vec<String>, KrishivError>, u64) {
 
 /// The node ids (pre-order over the plan's roots, as `EXPLAIN ANALYZE`
 /// numbers them) of the scans whose row stage a hash probe evaluates
-/// (`HashJoin.select.row_stage`).
+/// (`HashJoin.select.row_stage`) or a `Filter` (`Filter.row_stage`, U1).
 fn handed_scans(plan: &Runnable) -> HashSet<u32> {
     let mut handed = HashSet::new();
     let mut scans = Vec::new();
@@ -212,6 +212,11 @@ fn handed_scans(plan: &Runnable) -> HashSet<u32> {
                     if let Some(r) = j.select.as_ref().and_then(|s| s.row_stage.as_ref()) {
                         handed.insert(r.scan);
                     }
+                }
+                PhysNode::Filter {
+                    row_stage: Some(r), ..
+                } => {
+                    handed.insert(r.scan);
                 }
                 PhysNode::Scan(s) => scans.push((next, s.id)),
                 _ => {}

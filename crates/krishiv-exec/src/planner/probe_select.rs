@@ -19,11 +19,14 @@
 //!   evaluates (a top-level column target) reaches the probe's input. The
 //!   scan still builds and restarts it (instantiation hands it over); the
 //!   probe evaluates it over the same rows.
+//! - **The row stage into a `Filter`** ([`fuse_filter_row_stage`], design
+//!   P2-E3 U1): the same move for a `Filter` over such a scan, so the rows
+//!   both keep are copied once (`krishiv.exec.filterRowStage`).
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use krishiv_common::config::{ConfigValue, EXEC_JOIN_FUSE_PROBE_SELECT};
+use krishiv_common::config::{ConfigValue, EXEC_FILTER_ROW_STAGE, EXEC_JOIN_FUSE_PROBE_SELECT};
 use krishiv_plan::{Expr, is_deterministic, may_raise};
 
 use super::build::{Planned, Planner, has_subquery};
@@ -87,6 +90,16 @@ impl Planner<'_> {
         self.cx
             .config
             .get(&EXEC_JOIN_FUSE_PROBE_SELECT)
+            .and_then(ConfigValue::as_bool)
+            .unwrap_or(true)
+    }
+
+    /// `krishiv.exec.filterRowStage`: whether a scan's row stage may move
+    /// into the `Filter` above it. Off, the scan keeps it.
+    pub(super) fn fuse_filter_row_stage(&self) -> bool {
+        self.cx
+            .config
+            .get(&EXEC_FILTER_ROW_STAGE)
             .and_then(ConfigValue::as_bool)
             .unwrap_or(true)
     }
@@ -209,16 +222,20 @@ fn take_filter_input(
     Some(detail)
 }
 
-/// Hands each scan under `roots` its runtime filters, and a hash probe the row stage of a scan below (`probe_select`).
+/// Hands each scan under `roots` its runtime filters, and a hash probe
+/// (`probe`) or a `Filter` (`filter`) the row stage of a scan below.
 pub(super) fn attach_runtime_filters<'a>(
     filters: &mut HashMap<ScanId, Vec<ScanRuntimeFilter>>,
-    fuse: bool,
+    Fuse { probe, filter }: Fuse,
     roots: impl IntoIterator<Item = &'a mut PhysNode>,
 ) {
     let mut stack: Vec<&mut PhysNode> = roots.into_iter().collect();
     while let Some(n) = stack.pop() {
-        if fuse {
+        if probe {
             fuse_row_stage(n, filters);
+        }
+        if filter {
+            fuse_filter_row_stage(n, filters);
         }
         if let PhysNode::Scan(s) = n
             && let Some(f) = filters.remove(&s.id)
@@ -227,6 +244,16 @@ pub(super) fn attach_runtime_filters<'a>(
         }
         stack.extend(n.children_mut());
     }
+}
+
+/// Which operators may run a scan's row stage
+/// ([`attach_runtime_filters`]).
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Fuse {
+    /// A hash probe (U2, `krishiv.exec.join.fuseProbeSelect`).
+    pub(super) probe: bool,
+    /// A `Filter` (U1, `krishiv.exec.filterRowStage`).
+    pub(super) filter: bool,
 }
 
 /// Hands the row stage of the runtime-filtered scan under `node`'s probe
@@ -241,19 +268,68 @@ pub(super) fn fuse_row_stage(
     let PhysNode::HashJoin(j) = node else {
         return;
     };
-    let width = probe_width(&j.probe);
-    let Some(width) = width else {
+    let Some(stage) = row_stage_below(&j.probe, filters) else {
         return;
     };
-    let (n, map, _) = below_projections(&j.probe, width);
+    j.select
+        .get_or_insert(ProbeSelect {
+            filter: None,
+            row_stage: None,
+            columns: None,
+        })
+        .row_stage = Some(stage);
+}
+
+/// Hands the row stage of the runtime-filtered scan under `node` (a
+/// `Filter`, through column-only projections) to that filter (design
+/// P2-E3 U1), when every filter it evaluates reaches the filter's input.
+/// The predicate then sees either every row the scan read or only the rows
+/// the stage kept (`operators::select`), so a filter with subqueries or a
+/// nondeterministic predicate, whose values could depend on which, is not
+/// fused. A predicate that may raise is: an error then comes from a row
+/// the scan read, as in Spark, where the runtime filter is a conjunct
+/// after the query's own.
+pub(super) fn fuse_filter_row_stage(
+    node: &mut PhysNode,
+    filters: &HashMap<ScanId, Vec<ScanRuntimeFilter>>,
+) {
+    let PhysNode::Filter {
+        input,
+        predicate,
+        subqueries,
+        row_stage,
+        ..
+    } = node
+    else {
+        return;
+    };
+    if row_stage.is_some()
+        || !subqueries.is_empty()
+        || has_subquery(predicate)
+        || !is_deterministic(predicate)
+    {
+        return;
+    }
+    *row_stage = row_stage_below(input, filters);
+}
+
+/// The row stage of the runtime-filtered scan under `input` (through
+/// column-only projections), with each filter's column in `input`'s
+/// output: `None` when `input` is not that shape, the scan has no runtime
+/// filter, or a filter the stage evaluates (a top-level column target)
+/// does not reach `input`'s output.
+fn row_stage_below(
+    input: &PhysNode,
+    filters: &HashMap<ScanId, Vec<ScanRuntimeFilter>>,
+) -> Option<ProbeRowStage> {
+    let width = probe_width(input)?;
+    let (n, map, _) = below_projections(input, width);
     let PhysNode::Scan(s) = n else {
-        return;
+        return None;
     };
-    let Some(list) = filters.get(&s.id).filter(|l| !l.is_empty()) else {
-        return;
-    };
+    let list = filters.get(&s.id).filter(|l| !l.is_empty())?;
     if s.row_id {
-        return;
+        return None;
     }
     let mut columns = Vec::new();
     for f in list {
@@ -261,25 +337,17 @@ pub(super) fn fuse_row_stage(
             // The row stage evaluates top-level columns only.
             continue;
         }
-        let Some(k) = s.projection.iter().position(|p| *p == f.column) else {
-            return;
-        };
-        let Some(column) = map.iter().position(|&c| c == k) else {
-            return;
-        };
+        let k = s.projection.iter().position(|p| *p == f.column)?;
+        let column = map.iter().position(|&c| c == k)?;
         columns.push(ProbeFilterColumn { id: f.id, column });
     }
     if columns.is_empty() {
-        return;
+        return None;
     }
-    let id = s.id;
-    j.select
-        .get_or_insert(ProbeSelect {
-            filter: None,
-            row_stage: None,
-            columns: None,
-        })
-        .row_stage = Some(ProbeRowStage { scan: id, columns });
+    Some(ProbeRowStage {
+        scan: s.id,
+        columns,
+    })
 }
 
 /// The number of columns `n` outputs, through column-only projections down
@@ -300,6 +368,7 @@ mod tests {
 
     fn filter_over_one_row() -> PhysNode {
         PhysNode::Filter {
+            row_stage: None,
             input: Box::new(PhysNode::OneRow),
             layout: Vec::new(),
             predicate: Arc::new(Expr::literal(Literal::Boolean(true))),

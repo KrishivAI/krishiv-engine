@@ -89,6 +89,7 @@ fn the_header_lists_exactly_the_features_in_use() {
     assert!(plan_features(&zero).is_empty());
     assert_eq!(message("aggregate_filter").features, ["aggregate_filter"]);
     assert_eq!(message("fused_probe").features, ["fused_probe"]);
+    assert_eq!(message("filter_runtime").features, ["filter_runtime"]);
     assert_eq!(message("session_zone_name").features, ["session_zone_name"]);
     assert_eq!(
         message("legacy_charset_switches").features,
@@ -140,6 +141,7 @@ fn a_feature_in_a_subquery_plan_counts() {
         .find(|(n, _)| n == "window_ranking")
         .unwrap();
     let plan = plan_of(PhysNode::Filter {
+        row_stage: None,
         input: Box::new(PhysNode::OneRow),
         layout: Vec::new(),
         predicate: inventory::predicate(),
@@ -259,6 +261,7 @@ fn legacy_statistical_aggregate_needs_a_moment_aggregate() {
     // ... and in a subquery plan ...
     let subquery = plan_of_env(
         PhysNode::Filter {
+            row_stage: None,
             input: Box::new(PhysNode::OneRow),
             layout: Vec::new(),
             predicate: inventory::predicate(),
@@ -647,6 +650,23 @@ fn a_reader_without_a_feature_refuses_the_plan_naming_it() {
         err,
         CodecError::UnsupportedFeatures {
             missing: vec!["fused_probe".to_owned()]
+        }
+    );
+    // A reader without `filter_runtime` refuses a filter that runs a scan's
+    // row stage (the scan below it drops no row itself).
+    let bytes = encode(
+        &cases()
+            .into_iter()
+            .find(|(n, _)| n == "filter_runtime")
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    let err = decode_with(&bytes, &Limits::default(), &ReaderFeatures::only([])).unwrap_err();
+    assert_eq!(
+        err,
+        CodecError::UnsupportedFeatures {
+            missing: vec!["filter_runtime".to_owned()]
         }
     );
     // A reader without `shared_subplan` refuses a plan with shared plans.
@@ -1064,6 +1084,7 @@ fn only_udf_plans_need_rust_udf_and_every_expression_position_counts() {
     // A UDF in a filter predicate needs the feature; a built-in does not.
     for (predicate, wants) in [(&udf_expr, true), (&builtin_expr, false)] {
         let plan = plan_of(PhysNode::Filter {
+            row_stage: None,
             input: Box::new(PhysNode::OneRow),
             layout: Vec::new(),
             predicate: std::sync::Arc::clone(predicate),
@@ -1369,6 +1390,7 @@ fn a_nested_type_only_in_an_arrow_field_needs_the_feature() {
     let plans = [
         // A subquery's value type.
         plan_of(PhysNode::Filter {
+            row_stage: None,
             input: Box::new(PhysNode::OneRow),
             layout: Vec::new(),
             predicate: inventory::predicate(),
@@ -1449,6 +1471,7 @@ fn subquery_in_values_with_a_udf_need_rust_udf() {
         )),
     }));
     let plan = plan_of(krishiv_exec::physical::PhysNode::Filter {
+        row_stage: None,
         input: Box::new(krishiv_exec::physical::PhysNode::OneRow),
         layout: Vec::new(),
         predicate: subquery,

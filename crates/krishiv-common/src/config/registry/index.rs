@@ -55,6 +55,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("spark.sql.session.timeZone", &SESSION_TIME_ZONE),
     ("krishiv.connect.maxSessions", &CONNECT_MAX_SESSIONS),
     ("krishiv.exec.agg.directKeys", &EXEC_AGG_DIRECT_KEYS),
+    ("krishiv.exec.filterRowStage", &EXEC_FILTER_ROW_STAGE),
     ("krishiv.exec.join.buildSide", &EXEC_JOIN_BUILD_SIDE),
     ("krishiv.exec.join.radixBits", &EXEC_JOIN_RADIX_BITS),
     ("krishiv.exec.join.rowLayout", &EXEC_JOIN_ROW_LAYOUT),

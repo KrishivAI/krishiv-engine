@@ -248,6 +248,7 @@ fn a_shared_subexpression_is_stored_once() {
     // `a > 10 AND a IS NOT NULL`: the column, the literal and three calls.
     let predicate = inventory::predicate();
     let plan = plan_of(PhysNode::Filter {
+        row_stage: None,
         input: Box::new(PhysNode::OneRow),
         layout: Vec::new(),
         predicate: Arc::clone(&predicate),
@@ -268,6 +269,7 @@ fn a_deep_expression_is_not_encoded_recursively() {
         );
     }
     let plan = plan_of(PhysNode::Filter {
+        row_stage: None,
         input: Box::new(PhysNode::OneRow),
         layout: Vec::new(),
         predicate: e,
@@ -509,6 +511,7 @@ fn unresolved_expressions_are_refused() {
     ];
     for e in unresolved {
         let plan = plan_of(PhysNode::Filter {
+            row_stage: None,
             input: Box::new(PhysNode::OneRow),
             layout: Vec::new(),
             predicate: Arc::new(e),
@@ -646,6 +649,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             n if n.starts_with("hash_join_right") => POST_MIGRATION_READER_VERSION,
             "hash_join_existence"
             | "fused_probe"
+            | "filter_runtime"
             | "hash_join_full_outer"
             | "hash_join_single_match"
             | "nested_loop_existence"
@@ -1277,6 +1281,7 @@ fn limits_bound_expression_depth() {
         );
     }
     let plan = plan_of(PhysNode::Filter {
+        row_stage: None,
         input: Box::new(PhysNode::OneRow),
         layout: Vec::new(),
         predicate: e,

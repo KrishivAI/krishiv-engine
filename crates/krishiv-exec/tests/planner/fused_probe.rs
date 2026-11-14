@@ -26,6 +26,7 @@ fn unfused(plan: &Runnable) -> Runnable {
         {
             let probe = std::mem::replace(&mut *j.probe, PhysNode::OneRow);
             let filtered = PhysNode::Filter {
+                row_stage: None,
                 input: Box::new(probe),
                 layout: f.layout.clone(),
                 predicate: f.predicate,

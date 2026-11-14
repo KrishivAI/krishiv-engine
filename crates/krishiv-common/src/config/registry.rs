@@ -2,7 +2,8 @@
 //! The config entries. Add new entries here and to [`REGISTRY`].
 
 use super::registry_join::{
-    EXEC_JOIN_FUSE_PROBE_SELECT, EXEC_JOIN_IDLE_SPILL_AFTER, EXEC_JOIN_ROW_LAYOUT,
+    EXEC_FILTER_ROW_STAGE, EXEC_JOIN_FUSE_PROBE_SELECT, EXEC_JOIN_IDLE_SPILL_AFTER,
+    EXEC_JOIN_ROW_LAYOUT,
 };
 use std::borrow::Cow;
 use std::time::Duration;
@@ -62,6 +63,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_JOIN_SMJ_BUFFER_BYTES,
     &EXEC_JOIN_SHARED_BROADCAST_BYTES,
     &EXEC_JOIN_FUSE_PROBE_SELECT,
+    &EXEC_FILTER_ROW_STAGE,
     &EXEC_JOIN_IDLE_SPILL_AFTER,
     &EXEC_SEED,
     &EXEC_SORT_HASH_BUCKETS,

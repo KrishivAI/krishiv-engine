@@ -730,6 +730,90 @@ fn a_scan_waits_only_for_a_filter_from_another_table() {
     );
 }
 
+/// The `Filter`s whose node runs a scan's row stage (design P2-E3 U1).
+fn filter_row_stages(node: &krishiv_exec::physical::PhysNode) -> usize {
+    use krishiv_exec::physical::PhysNode;
+    usize::from(matches!(
+        node,
+        PhysNode::Filter {
+            row_stage: Some(_),
+            ..
+        }
+    )) + node
+        .children()
+        .into_iter()
+        .map(filter_row_stages)
+        .sum::<usize>()
+}
+
+/// A `Filter` over a runtime-filtered scan runs the scan's row stage (one
+/// copy of the rows both keep, design P2-E3 U1); the rows are those of the
+/// plan with the stage in the scan and of the plan without runtime filters,
+/// and the stage's counters still count the rows it dropped. First with the
+/// probe fusion (U2) off, then with it on and an expression projection
+/// between the filter and the probe, which keeps U2 from taking the filter.
+#[test]
+fn the_filter_above_a_scan_runs_its_row_stage() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut rng = 29;
+    write(dir.path(), "big.parquet", &table(&mut rng, 4000, 4000, 5));
+    write(dir.path(), "small.parquet", &table(&mut rng, 300, 4000, 5));
+    let sources = [
+        ("big", vec!["big.parquet".to_owned()]),
+        ("small", vec!["small.parquet".to_owned()]),
+    ];
+    let mut t = parquet_files(dir.path(), &sources, true, &rt);
+    let queries = [
+        (
+            "SELECT b.v, s.v FROM big b JOIN small s ON b.k64 = s.k64 WHERE b.v > 10",
+            false,
+        ),
+        (
+            "SELECT x.kk, x.w, s.v FROM (SELECT k64 AS kk, v * 2 AS w FROM big WHERE v > 10) x \
+             JOIN small s ON x.kk = s.k64",
+            true,
+        ),
+    ];
+    // A Bloom filter on any build, evaluated on rows in windows of 64.
+    let mut mode = MODES[2].1.to_vec();
+    mode.push(("krishiv.runtimeFilter.adaptive.minRows", "64"));
+    let mut in_scan_mode = mode.clone();
+    in_scan_mode.push(("krishiv.exec.filterRowStage", "false"));
+    for (q, probe_fusion) in queries {
+        let probe = (
+            "krishiv.exec.join.fuseProbeSelect",
+            if probe_fusion { "true" } else { "false" },
+        );
+        let mut mode = mode.clone();
+        mode.push(probe);
+        let mut in_scan_mode = in_scan_mode.clone();
+        in_scan_mode.push(probe);
+        configured(&mut t, MODES[0].1);
+        let mut none = rows(&run(&t.plan_sql(q).unwrap()).0);
+        none.sort();
+        configured(&mut t, &in_scan_mode);
+        let plan = t.plan_sql(q).unwrap();
+        assert_eq!(filter_row_stages(plan.plan.root()), 0, "{plan}");
+        let (out, in_scan) = run(&plan);
+        let mut scan = rows(&out);
+        scan.sort();
+        configured(&mut t, &mode);
+        let plan = t.plan_sql(q).unwrap();
+        assert_eq!(filter_row_stages(plan.plan.root()), 1, "{plan}");
+        let (out, in_filter) = run(&plan);
+        let mut filter = rows(&out);
+        filter.sort();
+        assert_eq!(filter, none, "{q}\n{plan}");
+        assert_eq!(scan, none, "{q}");
+        assert!(in_scan.rows_dropped > 0, "{q}: {in_scan:?}");
+        assert!(in_filter.rows_dropped > 0, "{q}: {in_filter:?}\n{plan}");
+    }
+}
+
 /// `ORDER BY ... LIMIT` queries whose rows have one right answer: `v` breaks
 /// every tie. The first key is what a top-N bounds: NULLs on either side,
 /// NaN and signed zeros, decimals, strings, an `OFFSET`, a filter, and more

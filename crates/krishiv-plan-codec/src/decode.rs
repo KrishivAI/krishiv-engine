@@ -404,6 +404,23 @@ fn usizes(v: &[u64]) -> Result<Vec<usize>> {
     v.iter().map(|i| usize_of(*i)).collect()
 }
 
+/// A scan's row stage run by an operator above it (a probe or a filter).
+fn probe_row_stage(r: &pb::ProbeRowStage) -> Result<ProbeRowStage> {
+    Ok(ProbeRowStage {
+        scan: ScanId(r.scan),
+        columns: r
+            .columns
+            .iter()
+            .map(|c| {
+                Ok(ProbeFilterColumn {
+                    id: FilterId(c.id),
+                    column: usize_of(c.column)?,
+                })
+            })
+            .collect::<Result<_>>()?,
+    })
+}
+
 fn layout(v: &[u64]) -> Vec<AttrId> {
     v.iter().map(|a| AttrId(*a)).collect()
 }
@@ -515,6 +532,7 @@ impl Decoder {
                 layout: layout(&f.layout),
                 predicate: self.expr_ref(f.predicate)?,
                 subqueries: self.subqueries(&f.subqueries)?,
+                row_stage: f.row_stage.as_ref().map(probe_row_stage).transpose()?,
             },
             Kind::Project(p) => PhysNode::Project {
                 input: self.boxed(p.input)?,
@@ -725,25 +743,7 @@ impl Decoder {
                 })
             })
             .transpose()?;
-        let row_stage = s
-            .row_stage
-            .as_ref()
-            .map(|r| {
-                Ok::<_, CodecError>(ProbeRowStage {
-                    scan: ScanId(r.scan),
-                    columns: r
-                        .columns
-                        .iter()
-                        .map(|c| {
-                            Ok(ProbeFilterColumn {
-                                id: FilterId(c.id),
-                                column: usize_of(c.column)?,
-                            })
-                        })
-                        .collect::<Result<_>>()?,
-                })
-            })
-            .transpose()?;
+        let row_stage = s.row_stage.as_ref().map(probe_row_stage).transpose()?;
         if filter.is_none() && row_stage.is_none() {
             return Err(corrupt("a probe selection that selects nothing"));
         }

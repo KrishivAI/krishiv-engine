@@ -130,7 +130,11 @@ fn probe_filter(probe: &SchemaRef, f: &ProbeFilter, env: &EvalEnv) -> Result<Arc
 /// for the copy of a selective row stage's rows (design P2-E3 U2): `None`
 /// when it reads every column or none, or does not compile over them (the
 /// copy then holds every column; results are the same either way).
-fn narrow_probe_filter(probe: &SchemaRef, f: &ProbeFilter, env: &EvalEnv) -> Option<Narrow> {
+pub(super) fn narrow_probe_filter(
+    probe: &SchemaRef,
+    f: &ProbeFilter,
+    env: &EvalEnv,
+) -> Option<Narrow> {
     let mut read = HashSet::new();
     read_columns(&f.predicate, &mut read);
     let columns: Vec<usize> = (0..f.layout.len())

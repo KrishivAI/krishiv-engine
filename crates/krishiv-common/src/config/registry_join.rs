@@ -20,6 +20,22 @@ pub static EXEC_JOIN_ROW_LAYOUT: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// Run a scan's runtime-filter row stage in the `Filter` above it (design
+/// P2-E3 U1).
+pub static EXEC_FILTER_ROW_STAGE: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.filterRowStage",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Internal: a scan's runtime filters drop rows in the filter directly above the \
+          scan, together with that filter's own condition, so the kept rows are copied once \
+          instead of twice. Results are the same either way; turn it off to keep the \
+          runtime filters in the scan.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
 /// Fuse a filter and a scan's row stage into the hash probe above them
 /// (design P2-E3 U2).
 pub static EXEC_JOIN_FUSE_PROBE_SELECT: ConfigEntry = ConfigEntry {

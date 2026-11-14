@@ -1281,6 +1281,21 @@ fn join_idle_spill_after_parses_and_defaults() {
 }
 
 #[test]
+fn filter_row_stage_defaults_on_and_parses() {
+    let mut config = Config::new();
+    assert_eq!(
+        config.get(&EXEC_FILTER_ROW_STAGE),
+        Some(&ConfigValue::Bool(true))
+    );
+    assert!(config.set("krishiv.exec.filterRowStage", "maybe").is_err());
+    config.set("krishiv.exec.filterRowStage", "false").unwrap();
+    assert_eq!(
+        config.get(&EXEC_FILTER_ROW_STAGE),
+        Some(&ConfigValue::Bool(false))
+    );
+}
+
+#[test]
 fn fuse_probe_select_defaults_on_and_parses() {
     let mut config = Config::new();
     assert_eq!(

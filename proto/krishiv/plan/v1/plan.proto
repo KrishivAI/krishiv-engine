@@ -246,6 +246,11 @@ message FilterNode {
   repeated uint64 layout = 2;
   uint32 predicate = 3;
   repeated SubqueryPlan subqueries = 4;
+  // The runtime-filter row stage of the scan below that the filter runs in
+  // its own mask (design P2-E3 U1); the columns are the filter's input
+  // columns.
+  // feature: filter_runtime
+  optional ProbeRowStage row_stage = 5;
 }
 
 message ProjectNode {

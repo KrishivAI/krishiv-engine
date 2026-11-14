@@ -87,6 +87,7 @@ use crate::window::{GroupLimitPlan, WindowGroupLimit};
 
 mod detached;
 mod distributed;
+mod filter;
 mod order;
 mod python_eval;
 pub(crate) use detached::{Detached, LoopRun};
@@ -1023,6 +1024,16 @@ impl Instantiation<'_> {
                 layout,
                 predicate,
                 subqueries,
+                row_stage: Some(stage),
+            } if subqueries.is_empty() => {
+                self.filter_with_row_stage(input, layout, predicate, stage)
+            }
+            PhysNode::Filter {
+                input,
+                layout,
+                predicate,
+                subqueries,
+                ..
             } => self.with_subqueries(input, subqueries, |input, v| {
                 filter_op(input, layout, predicate, v)
             }),

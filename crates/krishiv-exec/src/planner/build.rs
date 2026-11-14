@@ -33,7 +33,7 @@ use krishiv_plan::{
 
 use super::eval::{self, EvalEnv, PhysExpr};
 use super::explain::ExplainNode;
-use super::probe_select::attach_runtime_filters;
+use super::probe_select::{Fuse, attach_runtime_filters};
 use super::properties::{Distribution, Placement, range_keys};
 use super::python_udf::has_python_udf;
 use super::runtime_filter::{Settings, Site, column_type, kept, key_source, renamed};
@@ -113,7 +113,10 @@ fn plan_once(
         .map(|(key, _)| key.clone())
         .collect();
     let mut shared = std::mem::take(&mut planner.shared);
-    let fuse = planner.fuse_probe_select();
+    let fuse = Fuse {
+        probe: planner.fuse_probe_select(),
+        filter: planner.fuse_filter_row_stage(),
+    };
     attach_runtime_filters(
         &mut planner.scan_filters,
         fuse,
@@ -1218,6 +1221,7 @@ impl<'a> Planner<'a> {
             layout,
             ("Filter", predicate.to_string()),
             |input, layout, subqueries| PhysNode::Filter {
+                row_stage: None,
                 input,
                 layout,
                 predicate: e,

@@ -52,7 +52,7 @@ partials merge with `KeyFilter::merge` under the publishing join's options (`Val
 partitioned join's Bloom size is planned (`KeyFilterOptions::bloom_bytes`, P2-T177 unit 2) and dropped at
 instantiation when the filter has one producer partition.
 Runtime filters (P2-T163): `operators/runtime_filter.rs` the per-scan `RuntimeFilters` list and the row stage
-(adaptive switch-off; a scan can hand its drivers' stages to the hash probe above it, `RuntimeFilters::hand_to_consumer`); `planner/runtime_filter.rs` legal targets (sites) and the cost model. A scan's pipeline
+(adaptive switch-off; a scan can hand its drivers' stages to the hash probe or the `Filter` above it, `RuntimeFilters::hand_to_consumer`); `planner/runtime_filter.rs` legal targets (sites) and the cost model. A scan's pipeline
 starts after the pipelines publishing the filters worth the wait (`scan_waits`: not when the build reads the scan's
 own table, unless it is far smaller) unless they run with or after it (`runner.rs`, `with_filter_order`); no driver
 ever waits on a filter's value. A `TopN` offers the first key of its last row the same way (`PhysNode::TopN::bound`, `ValueService::tighten`, design P2-T063): never where a filter below may raise or a nondeterministic plan sits below.
@@ -100,6 +100,8 @@ source as `TaskSpec::exchanges` says; `exchange_schemas` gives a fragmenter each
 `planner/probe_select.rs` (design P2-E3 U2) fuses a `Filter` (nothing may raise: predicate, keys, residual) and a
 scan's row stage below a hash probe's column-only projections into `HashJoinPlan::select` (codec feature `fused_probe`);
 the probe (`join/probe.rs`) encodes the selected rows' keys and gathers by composed ids; `EXPLAIN` prints `probe filter:` on the join.
+The same file moves a scan's row stage into a `Filter` over it (design P2-E3 U1, `PhysNode::Filter::row_stage`, codec feature
+`filter_runtime`, `krishiv.exec.filterRowStage`): `physical/instantiate/filter.rs` hands it over and the `Filter` evaluates it with its predicate through `RowSelect`.
 `planner/properties.rs` (P2-T174) the ADR 0012 property pass: required distributions and provided placements (by
 attribute id); `Exchange` nodes (`Hash` on the routing hash, `Single`, `Broadcast`, `RoundRobin`, `Range`) are inserted
 only where a requirement is unmet, plus one hash exchange for every `DISTRIBUTE BY` (`Planner::repartition`: key expressions computed below, dropped above, so they are evaluated as Spark's shuffle evaluates them); on one worker instantiation lowers each exchange into the operators around it.

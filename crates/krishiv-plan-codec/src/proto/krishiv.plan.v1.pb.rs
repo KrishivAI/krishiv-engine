@@ -323,6 +323,12 @@ pub struct FilterNode {
     pub predicate: u32,
     #[prost(message, repeated, tag = "4")]
     pub subqueries: ::prost::alloc::vec::Vec<SubqueryPlan>,
+    /// The runtime-filter row stage of the scan below that the filter runs in
+    /// its own mask (design P2-E3 U1); the columns are the filter's input
+    /// columns.
+    /// feature: filter_runtime
+    #[prost(message, optional, tag = "5")]
+    pub row_stage: ::core::option::Option<ProbeRowStage>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ProjectNode {

@@ -130,6 +130,7 @@ registry! {
     (exchange_source, ExchangeSource, POST_MIGRATION_READER_VERSION, Semantic, "The `ExchangeSource` node: a plan fragment's read of an exchange another stage wrote (distributed stages)."),
     (existence_join, ExistenceJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `Existence` join type (Spark's `ExistenceJoin`: `EXISTS` and `IN` outside a filter conjunct), hash or nested loop."),
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
+    (filter_runtime, FilterRuntime, POST_MIGRATION_READER_VERSION, Optimization, "A `Filter` that runs the runtime-filter row stage of the scan below it in its own mask (`FilterNode.row_stage`, design P2-E3 U1), so the rows both keep are copied once; without it the planner leaves the row stage in the scan."),
     (fused_probe, FusedProbe, POST_MIGRATION_READER_VERSION, Optimization, "A hash join's probe selection (`HashJoinPlan.select`, design P2-E3 U2): a filter and a scan's runtime-filter row stage fused into the probe, which joins the selected rows by id; without it the planner keeps the `Filter` node and the scan's own row stage."),
     (generate, Generate, POST_MIGRATION_READER_VERSION, Semantic, "The `Generate` node (`explode`, `posexplode`, `inline` and their `_outer` forms)."),
     (geo_types, GeoTypes, POST_MIGRATION_READER_VERSION, Semantic, "The `GEOMETRY` and `GEOGRAPHY` types, with their SRID."),
@@ -422,6 +423,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
                     Feature::PartitionedWrites
                 }
             }),
+            PhysNode::Filter {
+                row_stage: Some(_), ..
+            } => Some(Feature::FilterRuntime),
             PhysNode::OneRow
             | PhysNode::Filter { .. }
             | PhysNode::Project { .. }

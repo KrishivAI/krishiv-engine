@@ -833,10 +833,29 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
         (
             "filter",
             PhysNode::Filter {
+                row_stage: None,
                 input: boxed(scan()),
                 layout: vec![AttrId(1), AttrId(2)],
                 predicate: predicate(),
                 subqueries: vec![subquery()],
+            },
+        ),
+        (
+            // The scan `scan()` hands the filter the row stage of runtime
+            // filter 3 on `a`, its input column 0 (design P2-E3 U1).
+            "filter_runtime",
+            PhysNode::Filter {
+                input: boxed(scan()),
+                layout: vec![AttrId(1), AttrId(2)],
+                predicate: predicate(),
+                subqueries: Vec::new(),
+                row_stage: Some(ProbeRowStage {
+                    scan: ScanId(7),
+                    columns: vec![ProbeFilterColumn {
+                        id: FilterId(3),
+                        column: 0,
+                    }],
+                }),
             },
         ),
         ("project", project),
