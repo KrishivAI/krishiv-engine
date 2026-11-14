@@ -307,9 +307,18 @@ fn equal(a: &Arc<LogicalPlan>, b: &Arc<LogicalPlan>) -> bool {
 }
 
 /// Whether `body` is deterministic, holds no outer reference and a pipeline
-/// breaker.
+/// breaker. An unseeded `TABLESAMPLE` is not shared: Spark plans one
+/// `SampleExec`, with its own seed, per reference.
 pub(crate) fn worth_sharing(body: &Arc<LogicalPlan>) -> bool {
-    deterministic(body) && !has_outer(body) && has_breaker(body)
+    deterministic(body) && !has_outer(body) && has_breaker(body) && !has_unseeded_sample(body)
+}
+
+pub(crate) fn has_unseeded_sample(plan: &Arc<LogicalPlan>) -> bool {
+    let mut found = false;
+    walk(plan, &mut |p| {
+        found |= matches!(p.node, PlanNode::Sample { seed: None, .. });
+    });
+    found
 }
 
 fn has_outer(plan: &Arc<LogicalPlan>) -> bool {
