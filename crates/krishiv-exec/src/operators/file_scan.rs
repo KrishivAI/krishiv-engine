@@ -649,9 +649,18 @@ fn table_request(scan: &FileScan, p: &ScanPushdowns) -> Result<TableRequest> {
         .partition_columns
         .iter()
         .map(|f| {
-            scan.table
-                .field_with_name(f.name())
-                .map_or_else(|_| Arc::clone(f), |t| Arc::new(t.clone()))
+            scan.table.field_with_name(f.name()).map_or_else(
+                |_| Arc::clone(f),
+                |t| {
+                    // The listing's mark of a column a user schema typed
+                    // (how its values read) stays on the table's field.
+                    let mut metadata = t.metadata().clone();
+                    if let Some(mark) = f.metadata().get(krishiv_io::PARTITION_VALUE_KEY) {
+                        metadata.insert(krishiv_io::PARTITION_VALUE_KEY.to_owned(), mark.clone());
+                    }
+                    Arc::new(t.clone().with_metadata(metadata))
+                },
+            )
         })
         .collect();
     let partition_of = |c: &ColumnPath| {

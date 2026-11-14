@@ -391,6 +391,57 @@ pub fn file_values(path: &Path, columns: usize) -> Result<Vec<Option<String>>> {
 /// `INTERNAL_ERROR` when the value does not read as the type: discovery
 /// inferred the type from the same values.
 pub fn constant_column(field: &Field, value: Option<&str>, rows: usize) -> Result<ArrayRef> {
+    // A column a user schema typed reads its values as Spark converts them
+    // (`user_value`): a value that does not read is NULL here, as under
+    // `validatePartitionColumns=false` (listing refused it otherwise).
+    let converted;
+    let value = match super::user_value::user_value_mode(field) {
+        None => value,
+        Some(unscaled) => {
+            use super::user_value::UserPartitionValue as V;
+            match super::user_value::user_partition_value(field, value, unscaled) {
+                V::Null | V::Invalid => None,
+                V::Text(t) => {
+                    converted = t;
+                    Some(converted.as_str())
+                }
+                V::Unsupported => {
+                    return Err(internal(format!(
+                        "partition value {value:?} as {}: not read as a user type",
+                        field.data_type()
+                    )));
+                }
+            }
+        }
+    };
+    match field.data_type() {
+        DataType::Binary => {
+            return Ok(Arc::new(arrow_array::BinaryArray::from(vec![
+                value.map(
+                    str::as_bytes
+                );
+                rows
+            ])));
+        }
+        DataType::LargeBinary => {
+            return Ok(Arc::new(arrow_array::LargeBinaryArray::from(vec![
+                value
+                    .map(
+                        str::as_bytes
+                    );
+                rows
+            ])));
+        }
+        DataType::BinaryView => {
+            return Ok(Arc::new(arrow_array::BinaryViewArray::from(vec![
+                value.map(
+                    str::as_bytes
+                );
+                rows
+            ])));
+        }
+        _ => {}
+    }
     let strings = StringArray::from(vec![value; rows]);
     if field.data_type() == &DataType::Utf8 {
         return Ok(Arc::new(strings));

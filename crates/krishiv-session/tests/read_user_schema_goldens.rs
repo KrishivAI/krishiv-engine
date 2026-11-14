@@ -21,28 +21,6 @@ use serde_json::{Value, json};
 /// Cases not matched yet, with the reason; each must still differ from Spark.
 const KNOWN_GAPS: &[(&str, &str)] = &[
     (
-        "typed parquet k=1.5 as INT",
-        "review 2: a partition value converts as Spark's PartitioningUtils",
-    ),
-    ("typed parquet k= 1 as INT", "review 2"),
-    ("typed parquet k=1.5 as DECIMAL(5,2)", "review 2"),
-    ("typed parquet k=1,2 as BOOLEAN", "review 2"),
-    ("typed parquet k=1,1.5,-12 as DECIMAL(5,2)", "review 2"),
-    ("typed parquet k=1,1.5,-12 as DECIMAL(10,0)", "review 2"),
-    ("typed parquet k=1,2 as BINARY", "review 2"),
-    ("typed parquet k=1,2 as TIMESTAMP", "review 2"),
-    (
-        "typed parquet k=abc as INT, validatePartitionColumns=false",
-        "review 3",
-    ),
-    (
-        "typed parquet k=1.5 as INT, validatePartitionColumns=false",
-        "review 3",
-    ),
-    ("text partitioned, schema line,k", "review 4"),
-    ("duplicate column", "review 5"),
-    ("duplicate column, other case", "review 5"),
-    (
         "duplicate column, other case, caseSensitive=true",
         "review 5",
     ),

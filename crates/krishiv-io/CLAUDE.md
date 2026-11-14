@@ -46,6 +46,7 @@ Paths are relative to this crate.
 - `src/io/mod.rs` `IoContext` and `IoScheduler`, the only path to object stores; `src/io/cache.rs` metadata cache; `src/io/latency.rs` (P2-T104) the remote-store read-latency histogram (power-of-two µs buckets) in `IoCounters::read_latency`; `src/io/distinct_samples.rs` (P2-T164 U6) the planner's distinct-value samples of file columns, keyed by the sampled files' `CacheKey`s (versions), the column and the row budget, bounded in entries (`IoScheduler::distinct_samples`)
 - `src/io/inferred.rs` `InferredSchemas`: the schemas formats inferred, per format, parsed options and file keys (store, path, size, version), next to the metadata cache, so a later query over the same file versions does not infer again (CSV/JSON `inferSchema` reads every row); bounded in file keys, oldest first; exec's `FileReads` goes through `infer_schema_cached`
 - `src/schema_map.rs` `SchemaMapper`; `src/options.rs` typed format options
+- `src/partition/user_value.rs` a partition value read as a user schema's type, as Spark 4.2.0's `PartitioningUtils` converts it (Java parses per type; decimals by unscaled digits on vectorized readers); a field marked `krishiv.partition_value` makes `constant_column` read its values so; unpinned readings are refused
 - `src/runtime_filter/mod.rs` runtime filters and their key normalization
 - `src/parquet/mod.rs` `ParquetFormat`; `src/parquet/decode.rs` and `write.rs` the reader and writer
 - `src/scan_gate.rs` `ScanGate`, admission of the decode working sets of a query's scan streams (ADR 0007)
