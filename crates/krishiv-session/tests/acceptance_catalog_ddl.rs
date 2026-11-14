@@ -132,8 +132,10 @@ fn sql_19_create_table_over_partitioned_files_reads_the_schema_and_the_partition
     assert_eq!(rows(&s, "SHOW PARTITIONS pt").len(), 1);
     assert_eq!(rows(&s, "SELECT id FROM pt ORDER BY id"), [vec![some("2")]]);
     assert!(
-        location.join("p=x").is_dir(),
-        "the files of an external table stay"
+        std::fs::read_dir(location.join("p=x"))
+            .unwrap()
+            .any(|f| f.is_ok_and(|f| f.path().extension().is_some_and(|e| e == "parquet"))),
+        "the data files of an external table stay"
     );
 }
 

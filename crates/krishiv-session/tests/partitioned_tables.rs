@@ -2308,7 +2308,12 @@ fn drop_partition_of_an_external_table_forgets_it_and_keeps_its_files() {
         rows(&s, "select cast(x as string) from e order by x"),
         ["2"]
     );
-    assert!(ext.path().join("p=1").is_dir(), "the files stay");
+    assert!(
+        std::fs::read_dir(ext.path().join("p=1"))
+            .unwrap()
+            .any(|f| f.is_ok_and(|f| f.path().extension().is_some_and(|e| e == "parquet"))),
+        "the data files stay"
+    );
     // A missing spec is still reported, and IF EXISTS over nothing changes nothing.
     assert_eq!(
         class(&s, "alter table e drop partition (p=9)"),
