@@ -15,18 +15,18 @@ arrow-schema.workspace = true
 thiserror = { workspace = true, optional = true }
 # `executor`: file footers are read on a thread of their own (catalog.rs).
 futures = { workspace = true, features = ["alloc", "executor"] }
-krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
-krishiv-exec = { path = "../krishiv-exec", version = "=0.2.0" }
-krishiv-functions = { path = "../krishiv-functions", version = "=0.2.0" }
-krishiv-io = { path = "../krishiv-io", version = "=0.2.0" }
-krishiv-kernels = { path = "../krishiv-kernels", version = "=0.2.0" }
-krishiv-memory = { path = "../krishiv-memory", version = "=0.2.0" }
-krishiv-optimizer = { path = "../krishiv-optimizer", version = "=0.2.0" }
-krishiv-plan = { path = "../krishiv-plan", version = "=0.2.0" }
-krishiv-plan-codec = { path = "../krishiv-plan-codec", version = "=0.2.0" }
-krishiv-sql = { path = "../krishiv-sql", version = "=0.2.0" }
-krishiv-types = { path = "../krishiv-types", version = "=0.2.0" }
-krishiv-udf-sdk = { path = "../krishiv-udf-sdk", version = "=0.2.0" }
+krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
+krishiv-exec = { path = "../krishiv-exec", version = "=0.2.1" }
+krishiv-functions = { path = "../krishiv-functions", version = "=0.2.1" }
+krishiv-io = { path = "../krishiv-io", version = "=0.2.1" }
+krishiv-kernels = { path = "../krishiv-kernels", version = "=0.2.1" }
+krishiv-memory = { path = "../krishiv-memory", version = "=0.2.1" }
+krishiv-optimizer = { path = "../krishiv-optimizer", version = "=0.2.1" }
+krishiv-plan = { path = "../krishiv-plan", version = "=0.2.1" }
+krishiv-plan-codec = { path = "../krishiv-plan-codec", version = "=0.2.1" }
+krishiv-sql = { path = "../krishiv-sql", version = "=0.2.1" }
+krishiv-types = { path = "../krishiv-types", version = "=0.2.1" }
+krishiv-udf-sdk = { path = "../krishiv-udf-sdk", version = "=0.2.1" }
 # The `EXPLAIN VERBOSE` JSON document; OIDC token and JWK set parsing (`auth/jose.rs`).
 serde = { workspace = true, features = ["std"] }
 serde_json = { workspace = true, features = ["std"] }
@@ -61,7 +61,7 @@ object_store = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
 bytes.workspace = true
-krishiv-plan = { path = "../krishiv-plan", version = "=0.2.0", features = ["testing"] }
+krishiv-plan = { path = "../krishiv-plan", version = "=0.2.1", features = ["testing"] }
 arrow-select.workspace = true
 futures = { workspace = true, features = ["alloc", "executor"] }
 insta.workspace = true

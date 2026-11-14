@@ -20,7 +20,7 @@ table = df.toArrow()  # a pyarrow.Table
 - Actions (`collect`, `show`, `toArrow`, `toPandas`, `count`) run the query in-process with the GIL released.
 - A DataFrame implements the Arrow PyCapsule interface, so `pa.table(df)`, `polars.DataFrame(df)` and
   `duckdb.from_arrow(df)` read the result without copying.
-- pyarrow is optional (`pip install "krishiv[pyarrow]"`); `toPandas` also needs pandas (`krishiv[pandas]`).
+- pyarrow is a required dependency (since 0.2.1; `krishiv[pyarrow]` still works as an alias); `toPandas` also needs pandas (`krishiv[pandas]`).
 - `df.profile()` (or `krishiv.ui(df)`) returns a viewer of the query's profile; in a notebook it renders itself.
 - Test your PySpark code without a JVM: `krishiv.testing` has `assertDataFrameEqual`, `assertSchemaEqual` and a
   pytest fixture (`pytest_plugins = ["krishiv.testing.pytest_plugin"]`, then use the `krishiv_session` fixture).

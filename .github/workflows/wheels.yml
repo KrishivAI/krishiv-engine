@@ -41,7 +41,7 @@ env:
   CARGO_INCREMENTAL: 0
   # maturin build flags per flavour; `dist` is the LTO + stripped profile of the workspace Cargo.toml.
   ABI3_ARGS: --profile dist --locked
-  FT_ARGS: --profile dist --locked --no-default-features --features mimalloc
+  FT_ARGS: --profile dist --locked --no-default-features --features mimalloc,cloud
   # The shipped CPU levels (see README.md, "Supported CPUs").
   X86_RUSTFLAGS: -C target-cpu=x86-64-v3
   ARM_RUSTFLAGS: -C target-cpu=neoverse-n1
@@ -86,6 +86,15 @@ jobs:
           for w in dist/*.whl; do unzip -l "$w" | grep -q 'krishiv/_cpu_level$'; done
       - uses: $/.github/actions/setup-uv
         if: matrix.libc == 'manylinux'
+      # The cloud-store test reads and writes s3:// against MinIO: the bucket is a directory of its data dir.
+      - name: S3 emulator (MinIO)
+        if: matrix.libc == 'manylinux'
+        run: |
+          mkdir -p "$RUNNER_TEMP/minio/krishiv-test"
+          docker run -d --rm --name krishiv-wheel-minio -p 127.0.0.1:9000:9000 --user "$(id -u):$(id -g)" \
+            -v "$RUNNER_TEMP/minio:/data" cgr.dev/chainguard/minio server /data
+          for _ in $(seq 1 60); do curl -s -o /dev/null --max-time 2 http://127.0.0.1:9000/minio/health/live && break; sleep 1; done
+          echo "KRISHIV_TEST_S3_ENDPOINT=http://127.0.0.1:9000" >> "$GITHUB_ENV"
       - name: Test (manylinux, on the runner)
         if: matrix.libc == 'manylinux'
         env:

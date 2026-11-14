@@ -675,7 +675,7 @@ jobs:
             coverage: true
           - name: cp314t
             python: "3.14t"
-            maturin_args: "--no-default-features --features mimalloc"
+            maturin_args: "--no-default-features --features mimalloc,cloud"
             wheel_tag: cp314t
             coverage: false
     name: wheels (${{ matrix.name }})

@@ -133,6 +133,25 @@ Each step is a hard stop for agents; the maintainer runs it and approves its env
 5. **Yank the old 0.1 releases** once 0.2.0 is verified: PyPI `krishiv` 0.1.0; crates.io `krishiv` 0.1.0-nightly.202607030148 and `krishiv-common` 0.1.0 (`cargo yank --version <v> <crate>`). See below.
 6. **GitHub Release** for `v0.2.0`, with the CHANGELOG 0.2.0 section as its notes.
 
+## Publish tag (a `.github`-only fix after tagging)
+
+A release commit sometimes needs a fix under `.github/` only (a workflow, a script) after it is tagged. **Never move
+or delete the release tag** (`v0.2.0`): a published tag is permanent.
+
+1. Make one commit that changes only files under `.github/`, directly on the release commit (not on `main`).
+2. Tag it `vX.Y.Z-publishN` (for 0.2.0: `v0.2.0-publish`, `-publish2`, `-publish3`) and push the tag.
+3. Dispatch the publish workflows (`publish-pypi.yml`, `publish-crates.yml`, and `publish-testpypi.yml` for a
+   rehearsal) on that tag. `.github/scripts/require-green-nightly.sh` accepts exactly one `.github`-only commit on a
+   parent that a green scheduled nightly covers; any second commit, or a commit that touches other paths, is refused.
+
+Two things learned from 0.2.0:
+
+- **crates.io rate-limits new crate names** (HTTP 429, "try again after <date>"). `publish-crates.yml` waits until
+  the stated time and retries each crate (up to 40 attempts, a 330-minute job limit); a crate already published is
+  skipped, so a failed run can also be dispatched again.
+- **0.2.0's bare `pip install krishiv` had no pyarrow**, and `collect()` needs it. From 0.2.1 pyarrow is a
+  required dependency; `krishiv[pyarrow]` stays as an alias.
+
 ## Yanking a bad release (owner only)
 
 Every step is a hard stop for agents; the maintainer runs them. Yanking hides a version from new resolves and
@@ -163,6 +182,19 @@ Owner decision 2026-11-07 (default adopted): a minor release every **6 weeks**.
   record the 0.3 dates in `STATUS.md` the day 0.2 ships. A slipped release does not move the next one: the train
   keeps its dates and the next minor takes what is ready.
 - Breaking changes (docs/concepts/stability.md) go into a minor only, with the changelog "Breaking" heading.
+
+## Docs (every minor release)
+
+Owner decision 2026-11-14: the live docs of each minor version are read from a branch `docs/0.X`, not from a tag, so a
+docs fix for a released version needs no new release. After the tag `v0.X.0` is pushed and the release is verified:
+
+1. **Cut the branch** `docs/0.X` from the tag `v0.X.0` and protect it like `main` (PRs only, docs CI runs on it).
+   Docs-only fixes for that version are PRs to `docs/0.X`; patch releases (`v0.X.Z`) are merged into it.
+2. **Register the version** in krishiv-internal `site/docs-plugin.json`: add
+   `engine/0.X = Krishiv Engine 0.X | docs @ docs/0.X`, mark it latest, and leave `engine/next` on `main` (staging only).
+3. **Deploy** with `site/deploy.sh`.
+4. **Check** the version switcher lists the new version as latest and that the previous version still serves its own
+   pages.
 
 ## Before any release
 

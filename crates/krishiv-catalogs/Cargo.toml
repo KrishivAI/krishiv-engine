@@ -16,9 +16,9 @@ workspace = true
 hive = ["dep:thrift", "dep:krishiv-plan", "dep:krishiv-types", "dep:tokio"]
 
 [dependencies]
-krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
-krishiv-plan = { path = "../krishiv-plan", version = "=0.2.0", optional = true }
-krishiv-types = { path = "../krishiv-types", version = "=0.2.0", optional = true }
+krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
+krishiv-plan = { path = "../krishiv-plan", version = "=0.2.1", optional = true }
+krishiv-types = { path = "../krishiv-types", version = "=0.2.1", optional = true }
 tracing.workspace = true
 thrift = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt"], optional = true }

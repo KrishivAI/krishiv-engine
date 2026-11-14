@@ -9,8 +9,6 @@ on:
   schedule:
     # Off the hour: the top of the hour is when scheduled runs are delayed or dropped most.
     - cron: "23 22 * * *"
-    # One-off extra runs on 2026-11-13 for the v0.2.0 release (binaries.yml and release.yml still need a green scheduled nightly; publishing no longer does); remove after.
-    - cron: "17 8,10 13 11 *"
   workflow_dispatch:
 
 permissions:

@@ -1,11 +1,14 @@
 [package]
 name = "krishiv-mcp"
 description = "MCP adapter"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 publish = true
 
 [lints]
@@ -14,10 +17,10 @@ workspace = true
 [dependencies]
 rmcp = { workspace = true, features = ["server", "transport-io"] }
 futures.workspace = true
-krishiv-functions = { path = "../krishiv-functions", version = "=0.2.0" }
-krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
-krishiv-session = { path = "../krishiv-session", version = "=0.2.0" }
-krishiv-sql = { path = "../krishiv-sql", version = "=0.2.0" }
+krishiv-functions = { path = "../krishiv-functions", version = "=0.2.1" }
+krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
+krishiv-session = { path = "../krishiv-session", version = "=0.2.1" }
+krishiv-sql = { path = "../krishiv-sql", version = "=0.2.1" }
 serde_json = { workspace = true, features = ["std"] }
 # The `mcp_stdio` conformance shim serves stdio from a plain binary (not a
 # test harness), so its stdout carries only JSON-RPC.

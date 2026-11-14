@@ -16,9 +16,9 @@ arrow-array.workspace = true
 arrow-ipc.workspace = true
 arrow-schema.workspace = true
 futures = { workspace = true, features = ["std"] }
-krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
-krishiv-exec = { path = "../krishiv-exec", version = "=0.2.0" }
-krishiv-udf-sandbox = { path = "../krishiv-udf-sandbox", version = "=0.2.0" }
+krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
+krishiv-exec = { path = "../krishiv-exec", version = "=0.2.1" }
+krishiv-udf-sandbox = { path = "../krishiv-udf-sandbox", version = "=0.2.1" }
 serde_json = { workspace = true, features = ["std"] }
 tempfile.workspace = true
 tracing = { workspace = true, features = ["std"] }

@@ -1,11 +1,14 @@
 [package]
 name = "krishiv-store"
 description = "Object-store layer shared by the Krishiv engine and platform: URLs, store building, credentials (ADR 0044)"
+readme = "README.md"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 # Meant to be published (ADR 0044); stays unpublished until the owner's first release of it.
 publish = true
 
@@ -14,7 +17,7 @@ workspace = true
 
 # krishiv-common and object_store only (layer L1, ADR 0044).
 [dependencies]
-krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
+krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
 # Bearer header of `hf://` reads; only with `cloud`.
 http = { workspace = true, optional = true }
 object_store.workspace = true
