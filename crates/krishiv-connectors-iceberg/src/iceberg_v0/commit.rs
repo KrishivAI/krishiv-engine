@@ -378,10 +378,10 @@ impl Loop<'_> {
                         // step 1).
                         self.searching = true;
                         let m = self.refresh().await?;
-                        if self.found(&m).is_some() {
+                        self.searching = false;
+                        if self.found(&m)?.is_some() {
                             return Ok(m);
                         }
-                        self.searching = false;
                         self.resolve(&m);
                         self.check_rebase(&m)?;
                         current = m;
@@ -450,7 +450,7 @@ impl Loop<'_> {
                 // A failed probe is "still unknown" (§7.2.1 step 1).
                 continue;
             };
-            if self.found(&m).is_some() {
+            if self.found(&m)?.is_some() {
                 return Ok(Probe::Found(m));
             }
             self.resolve(&m);
@@ -461,19 +461,49 @@ impl Loop<'_> {
         Ok(Probe::StillUnknown)
     }
 
-    /// This write's snapshot in `m`: its id, or its write key in a summary
-    /// (§7.3 step 1; the snapshot list of a `snapshots=all` load holds the
-    /// branch's ancestry and every other snapshot).
-    fn found<'m>(&self, m: &'m TableMetadata) -> Option<&'m Snapshot> {
-        m.snapshots()
-            .find(|s| {
-                s.snapshot_id() == self.snapshot_id
-                    || s.summary()
+    /// This write's snapshot in `m` (§7.3 step 1; the snapshot list of a
+    /// `snapshots=all` load holds the branch's ancestry and every other
+    /// snapshot), deterministically: the snapshot of this write's id when it
+    /// carries this write's key, else the lowest id carrying the key (a
+    /// replayed write, R:S1).
+    ///
+    /// # Errors
+    /// `KRISHIV_ICEBERG_COMMIT_CONFLICT` when this write's snapshot id is
+    /// taken by a snapshot of another (or no) write key and the key is
+    /// nowhere (R:N3): never "committed".
+    fn found<'m>(&self, m: &'m TableMetadata) -> Result<Option<&'m Snapshot>, End> {
+        let ours = |s: &Snapshot| {
+            s.summary()
+                .additional_properties
+                .get(WRITE_ID_PROP)
+                .is_some_and(|w| w == self.ids.write_id)
+        };
+        let by_id = m.snapshot_by_id(self.snapshot_id).map(AsRef::as_ref);
+        if let Some(s) = by_id.filter(|s| ours(s)) {
+            return Ok(Some(s));
+        }
+        let by_key = m
+            .snapshots()
+            .map(AsRef::as_ref)
+            .filter(|s| ours(s))
+            .min_by_key(|s| s.snapshot_id());
+        match (by_key, by_id) {
+            (Some(s), _) => Ok(Some(s)),
+            (None, None) => Ok(None),
+            (None, Some(taken)) => Err(self.conflict(
+                m,
+                "snapshot id",
+                format!(
+                    "snapshot {} in the table belongs to another write ({}).",
+                    self.snapshot_id,
+                    taken
+                        .summary()
                         .additional_properties
                         .get(WRITE_ID_PROP)
-                        .is_some_and(|w| w == self.ids.write_id)
-            })
-            .map(AsRef::as_ref)
+                        .map_or("no write id", String::as_str)
+                ),
+            )),
+        }
     }
 
     /// The branch's head in `m` (`Some(None)`: no such branch), as
@@ -522,32 +552,43 @@ impl Loop<'_> {
         };
         match problem {
             None => Ok(()),
-            Some((check, message)) => Err(End::Error(
-                KrishivIcebergCommitConflict {
-                    table: self.table.name(),
-                    snapshot_id: self.snapshot_id.to_string(),
-                    conflicting_snapshot_id: self
-                        .head(m)
-                        .flatten()
-                        .map_or_else(|| "none".to_owned(), |id| id.to_string()),
-                    check: check.to_owned(),
-                    message,
-                }
-                .into(),
-            )),
+            Some((check, message)) => Err(self.conflict(m, check, message)),
         }
+    }
+
+    /// `KRISHIV_ICEBERG_COMMIT_CONFLICT` against `m`'s branch head.
+    fn conflict(&self, m: &TableMetadata, check: &str, message: String) -> End {
+        End::Error(
+            KrishivIcebergCommitConflict {
+                table: self.table.name(),
+                snapshot_id: self.snapshot_id.to_string(),
+                conflicting_snapshot_id: self
+                    .head(m)
+                    .flatten()
+                    .map_or_else(|| "none".to_owned(), |id| id.to_string()),
+                check: check.to_owned(),
+                message,
+            }
+            .into(),
+        )
     }
 
     /// §7.4 committed: keep the found snapshot's list and the manifests it
     /// lists; delete every other list and manifest of this write; never a
-    /// data file. Without the snapshot (it cannot be read back) nothing is
-    /// deleted, as Java.
+    /// data file, never a list any snapshot of `m` names. Without the
+    /// snapshot (it cannot be read back) nothing is deleted, as Java; nor
+    /// when it is another id's (a replayed write) while a request of this
+    /// one is unresolved and may still land (R:S1).
     async fn clean_committed(&self, m: &TableMetadata, new: &NewManifests) {
-        let Some(found) = self.found(m) else {
+        let Ok(Some(found)) = self.found(m) else {
             return;
         };
+        if found.snapshot_id() != self.snapshot_id && !self.unresolved.is_empty() {
+            return;
+        }
         let keep = found.manifest_list();
-        for list in self.lists.iter().filter(|l| l.as_str() != keep) {
+        let named: HashSet<&str> = m.snapshots().map(|s| s.manifest_list()).collect();
+        for list in self.lists.iter().filter(|l| !named.contains(l.as_str())) {
             let _ = self.cx.io.delete(list).await;
         }
         let Ok(listed) = read_manifest_files(
