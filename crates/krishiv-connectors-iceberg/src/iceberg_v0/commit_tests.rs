@@ -817,22 +817,53 @@ fn an_apply_delayed_past_the_budget_is_state_unknown_and_deletes_nothing() {
     c.check(&[INIT, MINE]);
 }
 
-/// `commit.retry.total-timeout-ms` bounds the loop, probe waits included.
+/// `commit.retry.total-timeout-ms` bounds the loop, probe waits included:
+/// the first request's probes pass the timeout (7 s of 5), its resend is
+/// still sent (Java's `Tasks`: only a failure after the first stops at the
+/// timeout, review N1), and the resend's first probe wait ends the budget.
 #[test]
 fn the_total_timeout_bounds_the_probes() {
     let mut c = case_with(2, &[("commit.retry.total-timeout-ms", "5000")]);
-    c.cat.script(&[Fault::Held]);
+    c.cat.script(&[Fault::Held, Fault::Held]);
     let e = c.run().unwrap_err();
     assert_eq!(
         e.error_class(),
         ErrorClass::KrishivIcebergCommitStateUnknown
     );
-    assert_eq!(c.cat.requests(), 1);
-    assert_eq!(c.waits(), [1000, 2000, 4000]);
+    assert_eq!(c.cat.requests(), 2);
+    assert_eq!(c.waits(), [1000, 2000, 4000, 100]);
     assert!(exists(&c.list(1)) && exists(&c.manifest()) && exists(&c.data()));
     c.check(&[INIT]);
     assert_eq!(c.cat.land_held(), 1);
     c.check(&[INIT, MINE]);
+}
+
+/// Review N1: a first failure after the total timeout is retried once, as
+/// Java's `Tasks.runTaskWithRetry` (`durationMs > maxDurationMs && attempt >
+/// 1`); a second one ends the loop. Here every request is a known conflict
+/// (a foreign commit before each), so the write fails after two requests.
+#[test]
+fn a_first_failure_after_the_total_timeout_is_retried_once() {
+    let mut c = case_with(2, &[("commit.retry.total-timeout-ms", "0")]);
+    // The first retry wait (100 ms) passes the 0 ms budget.
+    for n in 1..=2 {
+        c.cat.on(
+            When::BeforeRequest(n),
+            c.foreign(
+                &format!("t{n}.parquet"),
+                940 + i64::try_from(n).unwrap(),
+                "main",
+            ),
+        );
+    }
+    let e = c.run().unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergCommitFailed,
+        "{e}"
+    );
+    assert_eq!(c.cat.requests(), 2);
+    assert_eq!(c.waits(), [100]);
 }
 
 /// §10 36a: a resend answered 401 says nothing about the first request,

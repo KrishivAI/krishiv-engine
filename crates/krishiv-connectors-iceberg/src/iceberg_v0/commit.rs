@@ -44,11 +44,12 @@
 //!   `COMMIT_STATUS_CHECKS_MIN_WAIT_MS` (1 s), `COMMIT_STATUS_CHECKS_MAX_WAIT_MS`
 //!   (60 s). Waits are Java's `Tasks.runTaskWithRetry` backoff: after the n-th
 //!   failure `min(min-wait * 2^(n-1), max-wait)` plus a jitter below a tenth of
-//!   it. The total time counts from the first request: a wait is skipped and
-//!   the budget ends once `COMMIT_TOTAL_RETRY_TIME_MS` has passed, so a
-//!   first failure after the timeout retries no more (not yet checked against
-//!   Java's `Tasks.runTaskWithRetry`, which may allow one retry there; the
-//!   source was not readable in the review sessions, review N1). A property
+//!   it. The total time counts from the first request. Once
+//!   `COMMIT_TOTAL_RETRY_TIME_MS` has passed, a probe or refresh wait ends the
+//!   budget, and so does the retry wait after any request but the first: a
+//!   first failure after the timeout is still retried once, as Java's
+//!   `Tasks.runTaskWithRetry` (`durationMs > maxDurationMs && attempt > 1`;
+//!   review N1, read in apache-iceberg 1.12.0). A property
 //!   that is not a number is `KRISHIV_UNSUPPORTED_FEATURE` (Java:
 //!   `NumberFormatException`), before any request.
 //! - **Outcomes and cleanup** (§7.4): committed → the table's new metadata;
@@ -450,7 +451,10 @@ impl Loop<'_> {
     }
 
     /// Before every request but the first: the request count and the time
-    /// left, then the retry wait.
+    /// left, then the retry wait. As Java's `Tasks.runTaskWithRetry`
+    /// (`attempt >= maxAttempts || (durationMs > maxDurationMs && attempt >
+    /// 1)`), the total timeout ends the loop only once a second request has
+    /// failed: a first failure after it is still retried (review N1).
     async fn before_request(&mut self) -> Result<(), End> {
         if self.requests == 0 {
             return Ok(());
@@ -458,16 +462,32 @@ impl Loop<'_> {
         if self.requests > self.budget.num_retries {
             return Err(End::Exhausted);
         }
-        self.wait(self.budget.retry, self.requests).await
-    }
-
-    /// Waits the `n`-th wait of `backoff`, unless the total timeout has passed.
-    async fn wait(&mut self, backoff: Backoff, n: u32) -> Result<(), End> {
-        let elapsed = u64::try_from(self.cx.clock.now_ms() - self.start_ms).unwrap_or(0);
-        if elapsed > self.budget.total_ms {
+        if self.requests > 1 && self.timed_out() {
             return Err(End::Exhausted);
         }
+        self.sleep(self.budget.retry, self.requests).await;
+        Ok(())
+    }
+
+    /// Whether `COMMIT_TOTAL_RETRY_TIME_MS` has passed since the first
+    /// request.
+    fn timed_out(&self) -> bool {
+        let elapsed = u64::try_from(self.cx.clock.now_ms() - self.start_ms).unwrap_or(0);
+        elapsed > self.budget.total_ms
+    }
+
+    /// Sleeps the `n`-th wait of `backoff`.
+    async fn sleep(&self, backoff: Backoff, n: u32) {
         self.cx.clock.sleep(backoff.wait(n, self.cx.clock)).await;
+    }
+
+    /// A probe's or refresh's `n`-th wait, unless the total timeout has
+    /// passed.
+    async fn wait(&mut self, backoff: Backoff, n: u32) -> Result<(), End> {
+        if self.timed_out() {
+            return Err(End::Exhausted);
+        }
+        self.sleep(backoff, n).await;
         Ok(())
     }
 
