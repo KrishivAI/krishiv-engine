@@ -536,6 +536,11 @@ pub struct TaskContext {
     /// The first partition id of the driver's pipeline-group member (the
     /// offset of a `UNION ALL` child).
     partition_base: u32,
+    /// The first partition id an operator numbers its input's partitions
+    /// from: its `UNION ALL` branch's below the union, the union's first
+    /// branch's above it (Spark's child partition index; see
+    /// `Pipeline::origins`). The member's own base for a source or sink.
+    numbering_base: u32,
 }
 
 impl fmt::Debug for TaskContext {
@@ -568,6 +573,7 @@ impl TaskContext {
             partition: 0,
             lane: None,
             partition_base: 0,
+            numbering_base: 0,
         }
     }
 
@@ -596,7 +602,24 @@ impl TaskContext {
     #[must_use]
     pub(crate) fn with_partition_base(mut self, base: u32) -> Self {
         self.partition_base = base;
+        self.numbering_base = base;
         self
+    }
+
+    /// The same context for an operator that numbers its input's
+    /// partitions from `base` (see [`Self::numbering_base`]).
+    #[must_use]
+    pub(crate) fn with_numbering_base(mut self, base: u32) -> Self {
+        self.numbering_base = base;
+        self
+    }
+
+    /// The first partition id this operator numbers its input's partitions
+    /// from: a partition (or split) id minus this is Spark's partition index
+    /// of the operator's input, so a sample in a `UNION ALL` branch draws as
+    /// the branch's own `SampleExec` does.
+    pub(crate) fn numbering_base(&self) -> u32 {
+        self.numbering_base
     }
 
     /// The first partition id of this driver's pipeline-group member: the

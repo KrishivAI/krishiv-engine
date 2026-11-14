@@ -9,7 +9,7 @@
 //! one batch into one partition, as `local[1]` does; `range(0, 1000, 1, 4)`
 //! is four slices of 250 rows in both engines, whatever the thread count;
 //! `UNION ALL` numbers its inputs' partitions one after another, as Spark's
-//! `UnionRDD`. The fixture's Parquet tables are registered as in-memory
+//! `UnionRDD`, while a sample inside a branch numbers the branch's own. The fixture's Parquet tables are registered as in-memory
 //! tables of the same rows in the same order (one partition, as Spark's one
 //! small file), and again through a Parquet file Krishiv wrote; `pq3`
 //! (`repartition(3)`'s round-robin rows in three files) is not reproduced.
@@ -293,6 +293,171 @@ fn a_sampled_plan_round_trips_through_the_codec() {
         if case["name"] == "view_10pct_seed7" || case["partitions"].as_u64() == Some(4) {
             let sql = case["sql"].as_str().unwrap();
             assert_eq!(ids(&s, sql), want(case), "{sql}");
+        }
+    }
+}
+
+/// The sorted first column of `df`'s rows.
+fn frame_ids(df: &krishiv_session::DataFrame) -> Vec<i64> {
+    let mut out: Vec<i64> = block_on(df.collect())
+        .unwrap()
+        .iter()
+        .flat_map(|b| b.column(0).as_primitive::<Int64Type>().values().to_vec())
+        .collect();
+    out.sort_unstable();
+    out
+}
+
+/// A frame derived from an unseeded sample plans its own `SampleExec` and
+/// draws again, as in Spark 4.2.0: `df.select("id")` of `SELECT id FROM t
+/// TABLESAMPLE (10 PERCENT)` returned other rows than `df` in 10 runs of 10
+/// (Codex on #761, round 4: run `~/krishiv-data/tmp/opus-3/r4/p12.out`).
+#[test]
+fn a_frame_derived_from_an_unseeded_sample_draws_again() {
+    use krishiv_session::functions::col;
+    let s = session(1);
+    let df = block_on(s.sql("SELECT id FROM t TABLESAMPLE (10 PERCENT)")).unwrap();
+    let first = frame_ids(&df);
+    // Twenty derived frames: some draw another seed (1 in 1000 each would not).
+    let other = (0..20).any(|_| frame_ids(&df.select([col("id")])) != first);
+    assert!(other);
+}
+
+/// A cached unseeded sample is the cache entry of every plan of the same
+/// shape, as Spark's `CacheManager` matches an unseeded `Sample` (Spark
+/// 4.2.0: a separate `spark.sql` of the same text and its `select` read the
+/// cached rows, 5 runs of 5; run `~/krishiv-data/tmp/opus-3/r4/p3.out`).
+#[test]
+fn a_cached_unseeded_sample_serves_the_same_statement() {
+    use krishiv_session::functions::col;
+    let s = session(1);
+    let sql = "SELECT id FROM t TABLESAMPLE (10 PERCENT)";
+    let cached = block_on(s.sql(sql)).unwrap().cache();
+    let first = frame_ids(&cached);
+    for _ in 0..5 {
+        let fresh = block_on(s.sql(sql)).unwrap();
+        assert_eq!(frame_ids(&fresh), first);
+        assert_eq!(frame_ids(&fresh.select([col("id")])), first);
+    }
+}
+
+/// A sample inside a `UNION ALL` branch numbers its own input's partitions:
+/// both branches of one seed draw the same rows (Spark 4.2.0: 226 rows, each
+/// half the 113 of the single sample, over a view and a Parquet file; run
+/// `~/krishiv-data/tmp/opus-3/r4/p12.out`; Codex on #761, round 4).
+#[test]
+fn a_sample_below_union_all_numbers_its_own_partitions() {
+    let single = "SELECT id FROM t TABLESAMPLE (10 PERCENT) REPEATABLE (7)";
+    let union = format!("{single} UNION ALL {single}");
+    for threads in [1, 4] {
+        let s = session(threads);
+        let one = ids(&s, single);
+        if threads == 1 {
+            assert_eq!(one.len(), 113);
+        }
+        let mut twice: Vec<i64> = one.iter().flat_map(|&v| [v, v]).collect();
+        twice.sort_unstable();
+        assert_eq!(ids(&s, &union), twice, "{threads} threads");
+        let pq = "SELECT id FROM pq1 TABLESAMPLE (10 PERCENT) REPEATABLE (7)";
+        let one = ids(&s, pq);
+        let mut twice: Vec<i64> = one.iter().flat_map(|&v| [v, v]).collect();
+        twice.sort_unstable();
+        assert_eq!(
+            ids(&s, &format!("{pq} UNION ALL {pq}")),
+            twice,
+            "{threads} threads"
+        );
+    }
+}
+
+/// A sample over a `UNION ALL` that is itself the second branch of another
+/// numbers the inner union's partitions from 0 (Spark 4.2.0, `local[1]`,
+/// one Parquet file of ids 0..999: 215 rows, the inner union's two
+/// partitions drawing seeds 7 and 8; with the outer branch, 3 rows more;
+/// run `~/krishiv-data/tmp/opus-3/r4/p2c.out`). Over `range` views Spark
+/// zips the union's single partitions into one (`p2b.out`: 204 rows), which
+/// Krishiv does not do (a separate difference).
+#[test]
+fn a_sample_over_a_nested_union_numbers_the_inner_unions_partitions() {
+    let s = session(1);
+    let inner = "SELECT * FROM (SELECT id FROM pq1 UNION ALL SELECT id FROM pq1) \
+                 TABLESAMPLE (10 PERCENT) REPEATABLE (7)";
+    let sampled = ids(&s, inner);
+    assert_eq!(sampled.len(), 215);
+    assert_eq!(
+        sampled[..12],
+        [10, 11, 13, 20, 21, 24, 25, 27, 36, 39, 42, 56]
+    );
+    let mut outer = vec![0, 1, 2];
+    outer.extend(&sampled);
+    outer.sort_unstable();
+    assert_eq!(
+        ids(
+            &s,
+            &format!("SELECT id FROM pq1 WHERE id < 3 UNION ALL {inner}")
+        ),
+        outer
+    );
+}
+
+/// A sample above `explode` over a file scan: the generator keeps each
+/// batch's split, so the scan under it reads whole partitions too and
+/// `REPEATABLE` keeps its rows at any thread count (Codex on #761, round 4).
+/// Spark 4.2.0 over one Parquet file of ids 0..999 (`local[1]`): 204 rows,
+/// the first ten 5, 6, 10, 12, 13, 19, 21, 28, 29, 30 (run
+/// `~/krishiv-data/tmp/opus-3/r4/p12.out`).
+#[test]
+fn a_sample_over_explode_over_files_repeats_at_any_thread_count() {
+    let tmp = tempfile::tempdir().unwrap();
+    let one = tmp.path().join("one");
+    let one = one.to_str().unwrap().to_owned();
+    let multi = tmp.path().join("multi");
+    let multi = multi.to_str().unwrap().to_owned();
+    let writer = session(1);
+    let df = block_on(writer.sql("SELECT id FROM range(0, 1000)")).unwrap();
+    block_on(df.write().parquet(&one)).unwrap();
+    for i in 0..6 {
+        let df = block_on(writer.sql(&format!(
+            "SELECT id FROM range({}, {})",
+            i * 20_000,
+            (i + 1) * 20_000
+        )))
+        .unwrap();
+        block_on(df.write().mode("append").parquet(&multi)).unwrap();
+    }
+    let sql = |table: &str| {
+        format!(
+            "SELECT * FROM (SELECT explode(array(id, id)) AS x FROM {table}) \
+             TABLESAMPLE (10 PERCENT) REPEATABLE (7)"
+        )
+    };
+    let s = session(1);
+    run(
+        &s,
+        &format!("CREATE TEMPORARY VIEW one(id BIGINT) USING parquet OPTIONS (path '{one}')"),
+    );
+    let got = ids(&s, &sql("one"));
+    assert_eq!(got.len(), 204);
+    assert_eq!(got[..10], [5, 6, 10, 12, 13, 19, 21, 28, 29, 30]);
+    // Six files cut into partitions: each partition draws one stream, read
+    // whole by one driver.
+    let split = |threads| {
+        let s = session(threads);
+        run(&s, "SET spark.sql.files.maxPartitionBytes=65536");
+        run(&s, "SET spark.sql.files.openCostInBytes=0");
+        run(
+            &s,
+            &format!(
+                "CREATE TEMPORARY VIEW multi(id BIGINT) USING parquet OPTIONS (path '{multi}')"
+            ),
+        );
+        s
+    };
+    let serial = ids(&split(1), &sql("multi"));
+    for threads in [2, 4, 8] {
+        let s = split(threads);
+        for _ in 0..3 {
+            assert_eq!(ids(&s, &sql("multi")), serial, "{threads} threads");
         }
     }
 }

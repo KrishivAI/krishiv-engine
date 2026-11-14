@@ -1917,8 +1917,13 @@ fn sampled_scans(input: &PhysNode, out: &mut HashSet<ScanId>) {
         PhysNode::Scan(s) => {
             out.insert(s.id);
         }
+        // The operators that tag their output with the input batch's split
+        // (`with_split(input.split())`); an `Expand` or anything past an
+        // exchange or a breaker numbers its own partitions.
         PhysNode::Filter { input, .. }
         | PhysNode::Project { input, .. }
+        | PhysNode::Generate { input, .. }
+        | PhysNode::ReplicateRows { input, .. }
         | PhysNode::Sample { input, .. } => sampled_scans(input, out),
         PhysNode::Union { inputs } => inputs.iter().for_each(|i| sampled_scans(i, out)),
         _ => {}

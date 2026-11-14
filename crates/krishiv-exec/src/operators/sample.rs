@@ -107,6 +107,10 @@ pub struct Sample {
 /// One driver's partition and its splits' streams.
 struct SampleLocal {
     partition: u32,
+    /// The first partition id of the sample's input
+    /// ([`TaskContext::numbering_base`]): a split or partition id minus this
+    /// is the input's partition index (a `UNION ALL` branch's own).
+    base: u32,
     streams: HashMap<u32, XorShiftRandom>,
 }
 
@@ -153,6 +157,7 @@ impl Operator for Sample {
     fn local_state(&self, ctx: &TaskContext) -> Result<LocalState> {
         Ok(Box::new(SampleLocal {
             partition: ctx.partition(),
+            base: ctx.numbering_base(),
             streams: HashMap::new(),
         }))
     }
@@ -163,7 +168,10 @@ impl Operator for Sample {
             return Ok(OperatorOutput::NeedMoreInput(None));
         }
         let local = local_mut::<SampleLocal>(local, "Sample")?;
-        let split = input.split().unwrap_or(local.partition);
+        let split = input
+            .split()
+            .unwrap_or(local.partition)
+            .wrapping_sub(local.base);
         let mask = self.mask(local, split, input.num_rows());
         let out = input.filter(&mask)?;
         if out.num_rows() == 0 {
@@ -185,6 +193,7 @@ mod tests {
     fn fresh() -> SampleLocal {
         SampleLocal {
             partition: 0,
+            base: 0,
             streams: HashMap::new(),
         }
     }
