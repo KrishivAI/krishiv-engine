@@ -991,7 +991,7 @@ fn outcome_of(name: &str, case: Case, want: &Value) -> Result<(), String> {
     {
         o.remove("action_result");
     }
-    if matches(&got, want, false, "") {
+    if matches(&got, want, &[], "") {
         Ok(())
     } else {
         Err(format!("{name}: got {got}\n   want {want}"))
