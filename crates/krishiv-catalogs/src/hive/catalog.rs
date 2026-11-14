@@ -425,12 +425,45 @@ fn spark_partition_columns(
         .collect()
 }
 
+/// A declared `CHAR`/`VARCHAR` type string as the analyzer will read it, or `None` if it is not one it should be given.
+/// The analyzer parses it recursively, once per nesting level, and the string is only metadata (it passes the schema's
+/// own limits), so a catalog could send one thousands of levels deep: it is bounded here, to the nesting a type may
+/// have and a length no real type reaches.
+fn bounded_declared(declared: &str) -> Option<String> {
+    const MAX_LEN: usize = 4096;
+    if declared.len() > MAX_LEN {
+        return None;
+    }
+    let (mut depth, mut deepest) = (0_usize, 0_usize);
+    for c in declared.chars() {
+        match c {
+            '<' => {
+                depth += 1;
+                deepest = deepest.max(depth);
+            }
+            '>' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    (deepest <= DataType::MAX_NESTING_DEPTH).then(|| declared.to_ascii_lowercase())
+}
+
 /// A Hive column: its type string as a Krishiv type, `CHAR(n)`/`VARCHAR(n)` as a string that keeps its declared form.
-fn hive_column(field: &FieldSchema, relation: &str) -> Result<TableColumn, KrishivError> {
+fn hive_column(
+    field: &FieldSchema,
+    catalog: &str,
+    relation: &str,
+) -> Result<TableColumn, KrishivError> {
     let declared = field.type_name.trim().to_ascii_lowercase();
     if declared.starts_with("varchar(") || declared.starts_with("char(") {
         let mut column = TableColumn::new(&field.name, DataType::String, true);
-        column.char_varchar = Some(declared);
+        column.char_varchar = Some(bounded_declared(&declared).ok_or_else(|| {
+            fault(
+                catalog,
+                relation,
+                "a CHAR/VARCHAR type string is too long or too deeply nested",
+            )
+        })?);
         return Ok(column);
     }
     let data_type = parse_data_type(&field.type_name).map_err(|_| {
@@ -474,12 +507,16 @@ fn spark_table(
     let mut comments = BTreeMap::new();
     for f in schema.fields() {
         let mut column = TableColumn::new(f.name(), f.data_type().clone(), f.nullable());
-        column.char_varchar = f
+        if let Some(declared) = f
             .metadata()
             .as_map()
             .get(CHAR_VARCHAR_KEY)
             .and_then(|v| v.as_str())
-            .map(str::to_ascii_lowercase);
+        {
+            column.char_varchar = Some(bounded_declared(declared).ok_or_else(|| {
+                damaged("a CHAR/VARCHAR type string is too long or too deeply nested")
+            })?);
+        }
         columns.push(column);
         if let Some(c) = f.metadata().comment() {
             comments.insert(f.name().to_owned(), c.to_owned());
@@ -559,7 +596,7 @@ fn convert(
         let mut columns = Vec::new();
         let mut comments = BTreeMap::new();
         for f in sd.cols.iter().chain(&table.partition_keys) {
-            columns.push(hive_column(f, relation)?);
+            columns.push(hive_column(f, catalog, relation)?);
             if let Some(c) = f.comment.as_ref().filter(|c| !c.is_empty()) {
                 comments.insert(f.name.clone(), c.clone());
             }
@@ -1229,5 +1266,55 @@ mod tests {
         assert_eq!(c.list_databases().unwrap(), ["default"]);
         assert_eq!(c.list_databases().unwrap(), ["default"]);
         server.join().unwrap();
+    }
+
+    /// The analyzer parses a declared type recursively: a catalog's must not be able to nest it past what a type can.
+    #[test]
+    fn a_declared_char_varchar_type_that_is_too_deep_or_too_long_is_a_catalog_fault() {
+        let wrapped =
+            |depth: usize| format!("{}varchar(5){}", "array<".repeat(depth), ">".repeat(depth));
+        let schema = |declared: &str| {
+            format!(
+                r#"{{"type":"struct","fields":[{{"name":"c","type":"string","nullable":true,"metadata":{{"__CHAR_VARCHAR_TYPE_STRING":"{declared}"}}}}]}}"#
+            )
+        };
+        let load = |declared: &str| {
+            let json = schema(declared);
+            let (address, server) = serving(spark(&[("spark.sql.sources.schema", json.as_str())]));
+            let r = catalog(&address).load("web", "events");
+            server.join().unwrap();
+            r
+        };
+        // As deep as a type may be: kept, in lower case.
+        let ok = load(&wrapped(DataType::MAX_NESTING_DEPTH))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            ok.meta.columns[0].char_varchar.as_deref(),
+            Some(wrapped(DataType::MAX_NESTING_DEPTH).as_str())
+        );
+        // One deeper, thousands deeper, and far too long: refused, with no stack overflow.
+        for bad in [
+            wrapped(DataType::MAX_NESTING_DEPTH + 1),
+            wrapped(5_000),
+            format!("varchar({})", "9".repeat(5_000)),
+        ] {
+            let e = load(&bad).unwrap_err();
+            assert_eq!(e.error_class(), ErrorClass::KrishivCatalogFailure);
+        }
+    }
+
+    #[test]
+    fn a_hive_varchar_column_string_is_bounded_too() {
+        // A length that is a few thousand digits: no real type, and the analyzer would copy it around.
+        let long: &'static str =
+            Box::leak(format!("varchar({})", "9".repeat(5_000)).into_boxed_str());
+        let mut t = Fake::hive();
+        t.cols = vec![("c", long, "")];
+        t.partitions = Vec::new();
+        let (address, server) = serving(t);
+        let e = catalog(&address).load("web", "events").unwrap_err();
+        server.join().unwrap();
+        assert_eq!(e.error_class(), ErrorClass::KrishivCatalogFailure);
     }
 }

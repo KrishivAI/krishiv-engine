@@ -13,8 +13,9 @@
 
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
+use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -195,7 +196,7 @@ impl HmsClient {
             config.max_elements,
         ));
         budget.begin_until(deadline);
-        let addresses = resolve_within(config.address.clone(), deadline, |a| {
+        let addresses = resolve_within(config.address.clone(), deadline, resolver_gate(), |a| {
             a.to_socket_addrs().map(Iterator::collect)
         })?;
         let stream = connect_any(&addresses, deadline)?;
@@ -422,11 +423,53 @@ impl HmsClient {
     }
 }
 
+/// The lookups in flight. A lookup that outlives its call keeps its thread until the resolver returns, so during a DNS
+/// outage the threads would pile up: the gate refuses a new lookup, at once, while too many are still running.
+#[derive(Debug)]
+pub(crate) struct ResolverGate {
+    in_flight: AtomicUsize,
+    cap: usize,
+}
+
+impl ResolverGate {
+    pub(crate) fn new(cap: usize) -> Arc<Self> {
+        Arc::new(Self {
+            in_flight: AtomicUsize::new(0),
+            cap,
+        })
+    }
+
+    /// A permit for one lookup, kept until the lookup finishes; `None` when `cap` are running.
+    fn permit(self: &Arc<Self>) -> Option<ResolverPermit> {
+        self.in_flight
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                (n < self.cap).then_some(n + 1)
+            })
+            .ok()
+            .map(|_| ResolverPermit(Arc::clone(self)))
+    }
+}
+
+struct ResolverPermit(Arc<ResolverGate>);
+
+impl Drop for ResolverPermit {
+    fn drop(&mut self) {
+        self.0.in_flight.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// The process-wide gate: eight lookups at a time is far more than a healthy resolver ever has in flight.
+fn resolver_gate() -> &'static Arc<ResolverGate> {
+    static GATE: OnceLock<Arc<ResolverGate>> = OnceLock::new();
+    GATE.get_or_init(|| ResolverGate::new(8))
+}
+
 /// Resolves `address` within `deadline`: a literal `ip:port` needs no lookup, and a name is looked up on a thread of
 /// its own so a stalled resolver cannot hold the call past the deadline (the thread ends when the resolver returns).
 fn resolve_within(
     address: String,
     deadline: Instant,
+    gate: &Arc<ResolverGate>,
     resolver: impl FnOnce(&str) -> io::Result<Vec<SocketAddr>> + Send + 'static,
 ) -> Result<Vec<SocketAddr>> {
     if let Ok(literal) = address.parse::<SocketAddr>() {
@@ -438,8 +481,15 @@ fn resolve_within(
         .ok_or_else(|| {
             HmsError::Failed("out of time before resolving the metastore address".to_owned())
         })?;
+    let Some(permit) = gate.permit() else {
+        return Err(HmsError::Failed(
+            "too many metastore address lookups are still running".to_owned(),
+        ));
+    };
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
+        // Held until the lookup returns, whether or not the call is still waiting for it.
+        let _permit = permit;
         // The receiver may have given up: nothing to do about that.
         let _ = sender.send(resolver(&address));
     });
@@ -945,6 +995,7 @@ mod tests {
         let e = resolve_within(
             "metastore.example:9083".to_owned(),
             Instant::now() + Duration::from_millis(200),
+            &ResolverGate::new(8),
             |_| {
                 thread::sleep(Duration::from_secs(3));
                 Ok(Vec::new())
@@ -967,6 +1018,7 @@ mod tests {
         let literal = resolve_within(
             "127.0.0.1:9083".to_owned(),
             Instant::now() + Duration::from_secs(1),
+            &ResolverGate::new(8),
             |_| panic!("a literal address is not looked up"),
         )
         .unwrap();
@@ -974,6 +1026,7 @@ mod tests {
         let e = resolve_within(
             "nope.invalid:1".to_owned(),
             Instant::now() + Duration::from_secs(1),
+            &ResolverGate::new(8),
             |_| Err(io::Error::other("no such host")),
         )
         .unwrap_err();
@@ -984,6 +1037,7 @@ mod tests {
         let none = resolve_within(
             "x.invalid:1".to_owned(),
             Instant::now() + Duration::from_secs(1),
+            &ResolverGate::new(8),
             |_| Ok(Vec::new()),
         )
         .unwrap_err();
@@ -1017,5 +1071,62 @@ mod tests {
             "{out_of_time:?}"
         );
         drop(server);
+    }
+
+    /// During a DNS outage the lookups outlive their calls: only `cap` threads may be stuck at once, and a call that
+    /// would need another fails at once rather than adding a thread.
+    #[test]
+    fn stalled_lookups_are_bounded_and_the_gate_frees_when_they_return() {
+        let gate = ResolverGate::new(2);
+        let release = Arc::new(std::sync::Barrier::new(3));
+        let stalled = |release: Arc<std::sync::Barrier>| {
+            move |_: &str| -> io::Result<Vec<SocketAddr>> {
+                release.wait();
+                Ok(Vec::new())
+            }
+        };
+        for _ in 0..2 {
+            let e = resolve_within(
+                "a.example:1".to_owned(),
+                Instant::now() + Duration::from_millis(100),
+                &gate,
+                stalled(Arc::clone(&release)),
+            )
+            .unwrap_err();
+            assert!(
+                matches!(&e, HmsError::Failed(m) if m.contains("timed out")),
+                "{e:?}"
+            );
+        }
+        // Both lookups are still stuck: a third is refused at once, without a thread.
+        let started = Instant::now();
+        let e = resolve_within(
+            "b.example:1".to_owned(),
+            Instant::now() + Duration::from_secs(5),
+            &gate,
+            |_| Ok(Vec::new()),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&e, HmsError::Failed(m) if m.contains("too many")),
+            "{e:?}"
+        );
+        assert!(started.elapsed() < Duration::from_millis(500));
+        // When the stuck lookups return, their permits come back.
+        release.wait();
+        let ok = (0..50).find_map(|_| {
+            resolve_within(
+                "c.example:1".to_owned(),
+                Instant::now() + Duration::from_secs(2),
+                &gate,
+                |_| Ok(vec!["127.0.0.1:1".parse().unwrap()]),
+            )
+            .ok()
+            .or_else(|| {
+                thread::sleep(Duration::from_millis(20));
+                None
+            })
+        });
+        assert_eq!(ok, Some(vec!["127.0.0.1:1".parse::<SocketAddr>().unwrap()]));
     }
 }
