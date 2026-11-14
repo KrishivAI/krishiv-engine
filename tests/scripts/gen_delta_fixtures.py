@@ -40,6 +40,7 @@ import shutil
 import sys
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Any
 
 from pyspark.sql import SparkSession
 
@@ -111,10 +112,11 @@ def typed(v: object) -> object:
         return {"timestamp": v.isoformat()}
     if isinstance(v, date):
         return {"date": v.isoformat()}
-    if hasattr(v, "asDict"):
-        return {"struct": {k: typed(x) for k, x in v.asDict(recursive=False).items()}}
-    if hasattr(v, "metadata") and hasattr(v, "value"):
-        return {"variant": {"metadata": bytes(v.metadata).hex(), "value": bytes(v.value).hex()}}
+    row: Any = v  # a PySpark Row or VariantVal: duck-typed below
+    if hasattr(row, "asDict"):
+        return {"struct": {k: typed(x) for k, x in row.asDict(recursive=False).items()}}
+    if hasattr(row, "metadata") and hasattr(row, "value"):
+        return {"variant": {"metadata": bytes(row.metadata).hex(), "value": bytes(row.value).hex()}}
     if isinstance(v, list):
         return [typed(x) for x in v]
     raise TypeError(f"no typed form for {type(v)}")
@@ -136,10 +138,11 @@ def oracle_error(e: Exception, path: str) -> dict:
             break
         except Exception:
             java = java.getCause()
-    if java is None and hasattr(e, "getCondition"):
-        record["condition"] = e.getCondition()
-        record["sqlstate"] = e.getSqlState()
-        params = e.getMessageParameters() or {}
+    spark: Any = e  # a PySparkException: duck-typed
+    if java is None and hasattr(spark, "getCondition"):
+        record["condition"] = spark.getCondition()
+        record["sqlstate"] = spark.getSqlState()
+        params = spark.getMessageParameters() or {}
         record["parameters"] = {k: v.replace(path, "<path>") for k, v in params.items()}
     message = java.getMessage() if java is not None else str(e)
     record["message"] = (message or "").splitlines()[0].replace(path, "<path>")[:600]
