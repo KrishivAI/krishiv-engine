@@ -12,7 +12,7 @@ Nothing yet.
 
 ## 0.2.1
 
-A patch release: packaging and documentation only, no engine changes.
+A patch release: packaging, documentation and the fixes found by acceptance testing of 0.2.0. The fixes are listed from their changelog fragments when the release is assembled (`cargo xtask changelog assemble 0.2.1`).
 
 ### Changed
 
