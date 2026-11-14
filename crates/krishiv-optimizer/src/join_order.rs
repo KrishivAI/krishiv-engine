@@ -218,6 +218,11 @@ pub(crate) fn reorder(
         notes: Vec::new(),
         reads: Some(reads::Reads::of_query(root)),
     };
+    // Every `WITH` definition is known before a tree reads it: a `CteRef`
+    // inside a tree is estimated from its definition, as a `Shift` instance
+    // of the same body is (`ShareCte` turns the one into the other, and a
+    // second optimization must order the tree the same way).
+    r.est.plan(root);
     let out = r.positional(root);
     (out, r.notes)
 }

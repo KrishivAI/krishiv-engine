@@ -544,10 +544,14 @@ impl FileReads {
                 .is_some_and(|v| v.trim().eq_ignore_ascii_case("true"));
             let mut merged: Option<SchemaRef> = None;
             for file in &files {
-                let one = format
-                    .infer_schema(&self.io, std::slice::from_ref(file), &options)
-                    .await
-                    .map_err(|e| e.into_error(&file.display_path()))?;
+                let one = krishiv_io::infer_schema_cached(
+                    format.as_ref(),
+                    &self.io,
+                    std::slice::from_ref(file),
+                    &options,
+                )
+                .await
+                .map_err(|e| e.into_error(&file.display_path()))?;
                 merged = Some(match merged {
                     None => one,
                     Some(m) => merge_schemas(&m, &one, case_sensitive)?,
@@ -559,8 +563,7 @@ impl FileReads {
                 })
             })?
         } else {
-            format
-                .infer_schema(&self.io, &files, &options)
+            krishiv_io::infer_schema_cached(format.as_ref(), &self.io, &files, &options)
                 .await
                 .map_err(|e| e.into_error(&files[0].display_path()))?
         };

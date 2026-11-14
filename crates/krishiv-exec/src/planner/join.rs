@@ -306,7 +306,15 @@ impl Planner<'_> {
         // runtime filters to the probe side's scans.
         let mut published = Vec::new();
         let mut runtime_filters = Vec::new();
-        if join_type.drops_unmatched_probe() && !merge {
+        // `GroupKeyCode`'s encoding join (design P2b D2 section 2.3): a
+        // dimension joined by `<=>` on its keys with their numbered
+        // dictionary, which holds every key tuple the dimension has, so a
+        // filter would drop nothing and cost a probe per row.
+        let encodes = !keys.is_empty()
+            && keys.iter().all(|k| k.2)
+            && (krishiv_optimizer::is_group_code_dictionary(&logical.0)
+                || krishiv_optimizer::is_group_code_dictionary(&logical.1));
+        if join_type.drops_unmatched_probe() && !merge && !encodes {
             let key_types: Vec<_> = probe_keys
                 .iter()
                 .map(|&k| probe.schema.field(k).data_type().clone())
