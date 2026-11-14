@@ -142,6 +142,12 @@
     ],
     "sqlState" : "53400"
   },
+  "KRISHIV_PYTHON_WORKER_EXITED" : {
+    "message" : [
+      "Python worker exited unexpectedly (crashed): <reason>. The next query starts a new worker. If a UDF ran out of memory, raise \"krishiv.python.worker.memoryLimit\"."
+    ],
+    "sqlState" : "38000"
+  },
   "KRISHIV_QUERY_ABORTED_OUT_OF_MEMORY" : {
     "message" : [
       "The query was aborted to free memory for other work: it held <heldBytes> bytes, the most of any query, and spilling did not free enough memory in time. Increase \"krishiv.memory.limit\" or run fewer concurrent queries."
