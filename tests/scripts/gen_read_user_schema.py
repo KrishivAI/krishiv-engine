@@ -66,6 +66,25 @@ def layout(spark, root):
     # CSV, no header, and text.
     write_text(f"{root}/csv/a.csv", "1,x\n2,y\n")
     write_text(f"{root}/txt/a.txt", "line1\nline2\n")
+    # Review cases: a partition column also in the data files at other positions and cases, typed partition values.
+    for k in ("1", "2"):
+        spark.sql(f"SELECT 'in{k}' AS k, 'v{k}' AS v").coalesce(1).write.parquet(f"{root}/kfirst/p/k={k}")
+        spark.sql(f"SELECT 'a{k}' AS a, 'in{k}' AS k, 'v{k}' AS v").coalesce(1).write.parquet(f"{root}/kmid/p/k={k}")
+        spark.sql(f"SELECT 'in{k}' AS K, 'v{k}' AS v").coalesce(1).write.parquet(f"{root}/kupper/p/k={k}")
+        write_text(f"{root}/jkfirst/p/k={k}/a.json", f'{{"k":"in{k}","v":"v{k}"}}\n')
+        write_text(f"{root}/tp/p/k={k}/a.txt", f"x{k}\n")
+    for tree, k in (("pfrac", "1.5"), ("pspace", " 1"), ("pplus", "+1"), ("pzeros", "007")):
+        spark.sql("SELECT 'v' AS v").coalesce(1).write.parquet(f"{root}/{tree}/p/k={k}")
+    for name, values in (
+        ("pbool", ("true", "FALSE")),
+        ("pdate", ("2024-01-02",)),
+        ("pdef", ("__HIVE_DEFAULT_PARTITION__", "1")),
+        ("pdec", ("1", "1.5", "-12")),
+        ("pdbl", ("1.5", "-2", "1e3")),
+    ):
+        for k in values:
+            spark.sql(f"SELECT 'v{k}' AS v").coalesce(1).write.parquet(f"{root}/{name}/p/k={k}")
+            write_text(f"{root}/{name}c/p/k={k}/f.csv", f"v{k}\n")
 
 
 def schema_json(df):
@@ -401,6 +420,107 @@ def cases(spark, root):
         "sql view csv partitioned with k int",
         "CREATE TEMPORARY VIEW v5 (v STRING, w STRING, k INT) USING csv OPTIONS (path pc/p)",
         sql_view("v5", "v STRING, w STRING, k INT", "csv", "pc/p"),
+    )
+    # 7. Review cases (KN-1 review): rules the cases above do not tell apart.
+    for tree, label in (("kfirst", "k first"), ("kmid", "k in the middle"), ("kupper", "K upper-case")):
+        add(
+            f"overlap parquet {label}, no schema",
+            f"parquet {tree}/p (data files hold k too), no user schema",
+            lambda tree=tree: spark.read.parquet(p(f"{tree}/p")),
+        )
+    add(
+        "overlap parquet K upper-case, no schema, caseSensitive=true",
+        "parquet kupper/p no user schema caseSensitive=true",
+        lambda: spark.read.parquet(p("kupper/p")),
+        {"spark.sql.caseSensitive": "true"},
+    )
+    add(
+        "overlap json k first, no schema",
+        "json jkfirst/p (records hold k too), no user schema",
+        lambda: spark.read.json(p("jkfirst/p")),
+    )
+    add(
+        "overlap parquet k first, schema k,v",
+        "parquet kfirst/p k STRING, v STRING",
+        read("parquet", "kfirst/p", "k STRING, v STRING"),
+    )
+    add(
+        "user K upper-case, caseSensitive=true",
+        "parquet pp1/p K BIGINT, v STRING caseSensitive=true",
+        read("parquet", "pp1/p", "K BIGINT, v STRING"),
+        {"spark.sql.caseSensitive": "true"},
+    )
+    typed = [
+        ("pfrac", "k=1.5", "INT"),
+        ("pspace", "k= 1", "INT"),
+        ("pplus", "k=+1", "INT"),
+        ("pzeros", "k=007", "INT"),
+        ("pfrac", "k=1.5", "DOUBLE"),
+        ("pfrac", "k=1.5", "DECIMAL(5,2)"),
+        ("pbool", "k=true,FALSE", "BOOLEAN"),
+        ("pp1", "k=1,2", "BOOLEAN"),
+        ("pdate", "k=2024-01-02", "DATE"),
+        ("pp1", "k=1,2", "DATE"),
+        ("pdef", "k=default,1", "INT"),
+        ("pdec", "k=1,1.5,-12", "DECIMAL(5,2)"),
+        ("pdec", "k=1,1.5,-12", "DECIMAL(10,0)"),
+        ("pdbl", "k=1.5,-2,1e3", "DOUBLE"),
+        ("pdbl", "k=1.5,-2,1e3", "FLOAT"),
+        ("pp1", "k=1,2", "BINARY"),
+        ("pp1", "k=1,2", "TINYINT"),
+        ("pp1", "k=1,2", "TIMESTAMP"),
+    ]
+    for tree, values, ty in typed:
+        add(
+            f"typed parquet {values} as {ty}",
+            f"parquet {tree}/p schema v STRING, k {ty}",
+            read("parquet", f"{tree}/p", f"v STRING, k {ty}"),
+        )
+    for tree, values, ty in (
+        ("pdecc", "k=1,1.5,-12", "DECIMAL(5,2)"),
+        ("pboolc", "k=true,FALSE", "BOOLEAN"),
+        ("pdblc", "k=1.5,-2,1e3", "DOUBLE"),
+    ):
+        add(
+            f"typed csv {values} as {ty}",
+            f"csv {tree}/p schema v STRING, k {ty}",
+            read("csv", f"{tree}/p", f"v STRING, k {ty}"),
+        )
+    add(
+        "typed parquet k=abc as INT, validatePartitionColumns=false",
+        "parquet pp/p schema v STRING, k INT validatePartitionColumns=false",
+        read("parquet", "pp/p", "v STRING, k INT"),
+        {"spark.sql.sources.validatePartitionColumns": "false"},
+    )
+    add(
+        "typed parquet k=1.5 as INT, validatePartitionColumns=false",
+        "parquet pfrac/p schema v STRING, k INT validatePartitionColumns=false",
+        read("parquet", "pfrac/p", "v STRING, k INT"),
+        {"spark.sql.sources.validatePartitionColumns": "false"},
+    )
+    add("text partitioned, schema line", "text tp/p schema line STRING", read("text", "tp/p", "line STRING"))
+    add(
+        "text partitioned, schema line,k",
+        "text tp/p schema line STRING, k INT",
+        read("text", "tp/p", "line STRING, k INT"),
+    )
+    add("duplicate column", "parquet pp1/p schema v STRING, v STRING", read("parquet", "pp1/p", "v STRING, v STRING"))
+    add(
+        "duplicate column, other case",
+        "parquet pp1/p schema v STRING, V STRING",
+        read("parquet", "pp1/p", "v STRING, V STRING"),
+    )
+    add(
+        "duplicate column, other case, caseSensitive=true",
+        "parquet pp1/p schema v STRING, V STRING caseSensitive=true",
+        read("parquet", "pp1/p", "v STRING, V STRING"),
+        {"spark.sql.caseSensitive": "true"},
+    )
+    add(
+        "parquet name case differs, both upper, caseSensitive=true",
+        "parquet pqcase A INT, B STRING caseSensitive=true",
+        read("parquet", "pqcase", "A INT, B STRING"),
+        {"spark.sql.caseSensitive": "true"},
     )
     return out
 

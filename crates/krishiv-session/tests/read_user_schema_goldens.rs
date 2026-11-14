@@ -21,6 +21,47 @@ use serde_json::{Value, json};
 /// Cases not matched yet, with the reason; each must still differ from Spark.
 const KNOWN_GAPS: &[(&str, &str)] = &[
     (
+        "overlap parquet k first, no schema",
+        "review 1: an overlapped data column must keep its position",
+    ),
+    ("overlap parquet k in the middle, no schema", "review 1"),
+    ("overlap parquet K upper-case, no schema", "review 1"),
+    (
+        "overlap parquet K upper-case, no schema, caseSensitive=true",
+        "review 1: names compare under spark.sql.caseSensitive",
+    ),
+    ("overlap json k first, no schema", "review 1"),
+    (
+        "typed parquet k=1.5 as INT",
+        "review 2: a partition value converts as Spark's PartitioningUtils",
+    ),
+    ("typed parquet k= 1 as INT", "review 2"),
+    ("typed parquet k=1.5 as DECIMAL(5,2)", "review 2"),
+    ("typed parquet k=1,2 as BOOLEAN", "review 2"),
+    ("typed parquet k=1,1.5,-12 as DECIMAL(5,2)", "review 2"),
+    ("typed parquet k=1,1.5,-12 as DECIMAL(10,0)", "review 2"),
+    ("typed parquet k=1,2 as BINARY", "review 2"),
+    ("typed parquet k=1,2 as TIMESTAMP", "review 2"),
+    (
+        "typed parquet k=abc as INT, validatePartitionColumns=false",
+        "review 3",
+    ),
+    (
+        "typed parquet k=1.5 as INT, validatePartitionColumns=false",
+        "review 3",
+    ),
+    ("text partitioned, schema line,k", "review 4"),
+    ("duplicate column", "review 5"),
+    ("duplicate column, other case", "review 5"),
+    (
+        "duplicate column, other case, caseSensitive=true",
+        "review 5",
+    ),
+    (
+        "parquet name case differs, both upper, caseSensitive=true",
+        "review 6",
+    ),
+    (
         "json wrong types FAILFAST",
         "a JSON string for an INT field fails without the CANNOT_PARSE_JSON_FIELD cause (krishiv-io json/convert.rs \
          parses the string as a number; its own test expects no cause): class and rows match",
@@ -132,6 +173,164 @@ fn layout(s: &Session, root: &Path) {
     for (path, text) in files {
         write_text(&root.join(path), text);
     }
+    review_layout(s, root);
+}
+
+/// The trees of the review cases (section 7 of the generator).
+fn review_layout(s: &Session, root: &Path) {
+    for k in ["1", "2"] {
+        let at = |tree: &str| root.join(format!("{tree}/p/k={k}"));
+        parquet(
+            s,
+            &format!("SELECT 'in{k}' AS k, 'v{k}' AS v"),
+            &at("kfirst"),
+        );
+        parquet(
+            s,
+            &format!("SELECT 'a{k}' AS a, 'in{k}' AS k, 'v{k}' AS v"),
+            &at("kmid"),
+        );
+        parquet(
+            s,
+            &format!("SELECT 'in{k}' AS K, 'v{k}' AS v"),
+            &at("kupper"),
+        );
+        write_text(
+            &at("jkfirst").join("a.json"),
+            &format!("{{\"k\":\"in{k}\",\"v\":\"v{k}\"}}\n"),
+        );
+        write_text(&at("tp").join("a.txt"), &format!("x{k}\n"));
+    }
+    for (tree, k) in [
+        ("pfrac", "1.5"),
+        ("pspace", " 1"),
+        ("pplus", "+1"),
+        ("pzeros", "007"),
+    ] {
+        parquet(s, "SELECT 'v' AS v", &root.join(format!("{tree}/p/k={k}")));
+    }
+    let typed: [(&str, &[&str]); 5] = [
+        ("pbool", &["true", "FALSE"]),
+        ("pdate", &["2024-01-02"]),
+        ("pdef", &["__HIVE_DEFAULT_PARTITION__", "1"]),
+        ("pdec", &["1", "1.5", "-12"]),
+        ("pdbl", &["1.5", "-2", "1e3"]),
+    ];
+    for (name, values) in typed {
+        for k in values {
+            parquet(
+                s,
+                &format!("SELECT 'v{k}' AS v"),
+                &root.join(format!("{name}/p/k={k}")),
+            );
+            write_text(
+                &root.join(format!("{name}c/p/k={k}/f.csv")),
+                &format!("v{k}\n"),
+            );
+        }
+    }
+}
+
+/// The review cases (section 7 of the generator), in its order.
+fn review_cases(add: &mut impl FnMut(String, Read)) {
+    for (tree, label) in [
+        ("kfirst", "k first"),
+        ("kmid", "k in the middle"),
+        ("kupper", "K upper-case"),
+    ] {
+        add(
+            format!("overlap parquet {label}, no schema"),
+            no_schema("parquet", &format!("{tree}/p")),
+        );
+    }
+    add(
+        "overlap parquet K upper-case, no schema, caseSensitive=true".into(),
+        no_schema("parquet", "kupper/p"),
+    );
+    add(
+        "overlap json k first, no schema".into(),
+        no_schema("json", "jkfirst/p"),
+    );
+    add(
+        "overlap parquet k first, schema k,v".into(),
+        read("parquet", "kfirst/p", "k STRING, v STRING"),
+    );
+    add(
+        "user K upper-case, caseSensitive=true".into(),
+        read("parquet", "pp1/p", "K BIGINT, v STRING"),
+    );
+    let typed = [
+        ("pfrac", "k=1.5", "INT"),
+        ("pspace", "k= 1", "INT"),
+        ("pplus", "k=+1", "INT"),
+        ("pzeros", "k=007", "INT"),
+        ("pfrac", "k=1.5", "DOUBLE"),
+        ("pfrac", "k=1.5", "DECIMAL(5,2)"),
+        ("pbool", "k=true,FALSE", "BOOLEAN"),
+        ("pp1", "k=1,2", "BOOLEAN"),
+        ("pdate", "k=2024-01-02", "DATE"),
+        ("pp1", "k=1,2", "DATE"),
+        ("pdef", "k=default,1", "INT"),
+        ("pdec", "k=1,1.5,-12", "DECIMAL(5,2)"),
+        ("pdec", "k=1,1.5,-12", "DECIMAL(10,0)"),
+        ("pdbl", "k=1.5,-2,1e3", "DOUBLE"),
+        ("pdbl", "k=1.5,-2,1e3", "FLOAT"),
+        ("pp1", "k=1,2", "BINARY"),
+        ("pp1", "k=1,2", "TINYINT"),
+        ("pp1", "k=1,2", "TIMESTAMP"),
+    ];
+    for (tree, values, ty) in typed {
+        add(
+            format!("typed parquet {values} as {ty}"),
+            read(
+                "parquet",
+                &format!("{tree}/p"),
+                &format!("v STRING, k {ty}"),
+            ),
+        );
+    }
+    for (tree, values, ty) in [
+        ("pdecc", "k=1,1.5,-12", "DECIMAL(5,2)"),
+        ("pboolc", "k=true,FALSE", "BOOLEAN"),
+        ("pdblc", "k=1.5,-2,1e3", "DOUBLE"),
+    ] {
+        add(
+            format!("typed csv {values} as {ty}"),
+            read("csv", &format!("{tree}/p"), &format!("v STRING, k {ty}")),
+        );
+    }
+    add(
+        "typed parquet k=abc as INT, validatePartitionColumns=false".into(),
+        read("parquet", "pp/p", "v STRING, k INT"),
+    );
+    add(
+        "typed parquet k=1.5 as INT, validatePartitionColumns=false".into(),
+        read("parquet", "pfrac/p", "v STRING, k INT"),
+    );
+    add(
+        "text partitioned, schema line".into(),
+        read("text", "tp/p", "line STRING"),
+    );
+    add(
+        "text partitioned, schema line,k".into(),
+        read("text", "tp/p", "line STRING, k INT"),
+    );
+    add(
+        "duplicate column".into(),
+        read("parquet", "pp1/p", "v STRING, v STRING"),
+    );
+    add(
+        "duplicate column, other case".into(),
+        read("parquet", "pp1/p", "v STRING, V STRING"),
+    );
+    add(
+        "duplicate column, other case, caseSensitive=true".into(),
+        read("parquet", "pp1/p", "v STRING, V STRING"),
+    );
+    add(
+        "parquet name case differs, both upper, caseSensitive=true".into(),
+        read("parquet", "pqcase", "A INT, B STRING"),
+    );
 }
 
 /// How a case reads.
@@ -496,6 +695,7 @@ fn cases() -> Vec<(String, Read)> {
             },
         );
     }
+    review_cases(&mut add);
     out
 }
 

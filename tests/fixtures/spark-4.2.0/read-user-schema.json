@@ -2293,6 +2293,872 @@
     "dataType": "\"INT\"",
     "value": "'abc'"
    }
+  },
+  {
+   "name": "overlap parquet k first, no schema",
+   "input": "parquet kfirst/p (data files hold k too), no user schema",
+   "schema": [
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "v1"
+    ],
+    [
+     "2",
+     "v2"
+    ]
+   ]
+  },
+  {
+   "name": "overlap parquet k in the middle, no schema",
+   "input": "parquet kmid/p (data files hold k too), no user schema",
+   "schema": [
+    {
+     "name": "a",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "a1",
+     "1",
+     "v1"
+    ],
+    [
+     "a2",
+     "2",
+     "v2"
+    ]
+   ]
+  },
+  {
+   "name": "overlap parquet K upper-case, no schema",
+   "input": "parquet kupper/p (data files hold k too), no user schema",
+   "schema": [
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "v1"
+    ],
+    [
+     "2",
+     "v2"
+    ]
+   ]
+  },
+  {
+   "name": "overlap parquet K upper-case, no schema, caseSensitive=true",
+   "input": "parquet kupper/p no user schema caseSensitive=true",
+   "conf": {
+    "spark.sql.caseSensitive": "true"
+   },
+   "schema": [
+    {
+     "name": "K",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "in1",
+     "v1",
+     "1"
+    ],
+    [
+     "in2",
+     "v2",
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "overlap json k first, no schema",
+   "input": "json jkfirst/p (records hold k too), no user schema",
+   "schema": [
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "1",
+     "v1"
+    ],
+    [
+     "2",
+     "v2"
+    ]
+   ]
+  },
+  {
+   "name": "overlap parquet k first, schema k,v",
+   "input": "parquet kfirst/p k STRING, v STRING",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "user K upper-case, caseSensitive=true",
+   "input": "parquet pp1/p K BIGINT, v STRING caseSensitive=true",
+   "conf": {
+    "spark.sql.caseSensitive": "true"
+   },
+   "schema": [
+    {
+     "name": "K",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     null,
+     "v1",
+     "1"
+    ],
+    [
+     null,
+     "v2",
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=1.5 as INT",
+   "input": "parquet pfrac/p schema v STRING, k INT",
+   "error_class": "INVALID_PARTITION_VALUE",
+   "message_parameters": {
+    "columnName": "`k`",
+    "dataType": "\"INT\"",
+    "value": "'1.5'"
+   }
+  },
+  {
+   "name": "typed parquet k= 1 as INT",
+   "input": "parquet pspace/p schema v STRING, k INT",
+   "error_class": "INVALID_PARTITION_VALUE",
+   "message_parameters": {
+    "columnName": "`k`",
+    "dataType": "\"INT\"",
+    "value": "' 1'"
+   }
+  },
+  {
+   "name": "typed parquet k=+1 as INT",
+   "input": "parquet pplus/p schema v STRING, k INT",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     "1"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=007 as INT",
+   "input": "parquet pzeros/p schema v STRING, k INT",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     "7"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=1.5 as DOUBLE",
+   "input": "parquet pfrac/p schema v STRING, k DOUBLE",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "double",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     "1.5"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=1.5 as DECIMAL(5,2)",
+   "input": "parquet pfrac/p schema v STRING, k DECIMAL(5,2)",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "decimal(5,2)",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     "0.15"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=true,FALSE as BOOLEAN",
+   "input": "parquet pbool/p schema v STRING, k BOOLEAN",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "boolean",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "vFALSE",
+     "false"
+    ],
+    [
+     "vtrue",
+     "true"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=1,2 as BOOLEAN",
+   "input": "parquet pp1/p schema v STRING, k BOOLEAN",
+   "error_class": "INVALID_PARTITION_VALUE",
+   "message_parameters": {
+    "columnName": "`k`",
+    "dataType": "\"BOOLEAN\"",
+    "value": "'1'"
+   }
+  },
+  {
+   "name": "typed parquet k=2024-01-02 as DATE",
+   "input": "parquet pdate/p schema v STRING, k DATE",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "date",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v2024-01-02",
+     "2024-01-02"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=1,2 as DATE",
+   "input": "parquet pp1/p schema v STRING, k DATE",
+   "error_class": "INVALID_PARTITION_VALUE",
+   "message_parameters": {
+    "columnName": "`k`",
+    "dataType": "\"DATE\"",
+    "value": "'1'"
+   }
+  },
+  {
+   "name": "typed parquet k=default,1 as INT",
+   "input": "parquet pdef/p schema v STRING, k INT",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v__HIVE_DEFAULT_PARTITION__",
+     null
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=1,1.5,-12 as DECIMAL(5,2)",
+   "input": "parquet pdec/p schema v STRING, k DECIMAL(5,2)",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "decimal(5,2)",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v-12",
+     "-0.12"
+    ],
+    [
+     "v1",
+     "0.01"
+    ],
+    [
+     "v1.5",
+     "0.15"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=1,1.5,-12 as DECIMAL(10,0)",
+   "input": "parquet pdec/p schema v STRING, k DECIMAL(10,0)",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "decimal(10,0)",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v-12",
+     "-12"
+    ],
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v1.5",
+     "15"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=1.5,-2,1e3 as DOUBLE",
+   "input": "parquet pdbl/p schema v STRING, k DOUBLE",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "double",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v-2",
+     "-2.0"
+    ],
+    [
+     "v1.5",
+     "1.5"
+    ],
+    [
+     "v1e3",
+     "1000.0"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=1.5,-2,1e3 as FLOAT",
+   "input": "parquet pdbl/p schema v STRING, k FLOAT",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "float",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v-2",
+     "-2.0"
+    ],
+    [
+     "v1.5",
+     "1.5"
+    ],
+    [
+     "v1e3",
+     "1000.0"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=1,2 as BINARY",
+   "input": "parquet pp1/p schema v STRING, k BINARY",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "binary",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=1,2 as TINYINT",
+   "input": "parquet pp1/p schema v STRING, k TINYINT",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "tinyint",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=1,2 as TIMESTAMP",
+   "input": "parquet pp1/p schema v STRING, k TIMESTAMP",
+   "error_class": "INVALID_PARTITION_VALUE",
+   "message_parameters": {
+    "columnName": "`k`",
+    "dataType": "\"TIMESTAMP\"",
+    "value": "'1'"
+   }
+  },
+  {
+   "name": "typed csv k=1,1.5,-12 as DECIMAL(5,2)",
+   "input": "csv pdecc/p schema v STRING, k DECIMAL(5,2)",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "decimal(5,2)",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v-12",
+     "-12.00"
+    ],
+    [
+     "v1",
+     "1.00"
+    ],
+    [
+     "v1.5",
+     "1.50"
+    ]
+   ]
+  },
+  {
+   "name": "typed csv k=true,FALSE as BOOLEAN",
+   "input": "csv pboolc/p schema v STRING, k BOOLEAN",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "boolean",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "vFALSE",
+     "false"
+    ],
+    [
+     "vtrue",
+     "true"
+    ]
+   ]
+  },
+  {
+   "name": "typed csv k=1.5,-2,1e3 as DOUBLE",
+   "input": "csv pdblc/p schema v STRING, k DOUBLE",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "double",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v-2",
+     "-2.0"
+    ],
+    [
+     "v1.5",
+     "1.5"
+    ],
+    [
+     "v1e3",
+     "1000.0"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=abc as INT, validatePartitionColumns=false",
+   "input": "parquet pp/p schema v STRING, k INT validatePartitionColumns=false",
+   "conf": {
+    "spark.sql.sources.validatePartitionColumns": "false"
+   },
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     "1"
+    ],
+    [
+     "v2",
+     "2"
+    ],
+    [
+     "vabc",
+     null
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=1.5 as INT, validatePartitionColumns=false",
+   "input": "parquet pfrac/p schema v STRING, k INT validatePartitionColumns=false",
+   "conf": {
+    "spark.sql.sources.validatePartitionColumns": "false"
+   },
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     null
+    ]
+   ]
+  },
+  {
+   "name": "text partitioned, schema line",
+   "input": "text tp/p schema line STRING",
+   "schema": [
+    {
+     "name": "line",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "x1",
+     "1"
+    ],
+    [
+     "x2",
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "text partitioned, schema line,k",
+   "input": "text tp/p schema line STRING, k INT",
+   "schema": [
+    {
+     "name": "line",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "x1",
+     "1"
+    ],
+    [
+     "x2",
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "duplicate column",
+   "input": "parquet pp1/p schema v STRING, v STRING",
+   "error_class": "COLUMN_ALREADY_EXISTS",
+   "message_parameters": {
+    "columnName": "`v`"
+   }
+  },
+  {
+   "name": "duplicate column, other case",
+   "input": "parquet pp1/p schema v STRING, V STRING",
+   "error_class": "COLUMN_ALREADY_EXISTS",
+   "message_parameters": {
+    "columnName": "`v`"
+   }
+  },
+  {
+   "name": "duplicate column, other case, caseSensitive=true",
+   "input": "parquet pp1/p schema v STRING, V STRING caseSensitive=true",
+   "conf": {
+    "spark.sql.caseSensitive": "true"
+   },
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "V",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "int",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v1",
+     null,
+     "1"
+    ],
+    [
+     "v2",
+     null,
+     "2"
+    ]
+   ]
+  },
+  {
+   "name": "parquet name case differs, both upper, caseSensitive=true",
+   "input": "parquet pqcase A INT, B STRING caseSensitive=true",
+   "conf": {
+    "spark.sql.caseSensitive": "true"
+   },
+   "schema": [
+    {
+     "name": "A",
+     "type": "int",
+     "nullable": true
+    },
+    {
+     "name": "B",
+     "type": "string",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     null,
+     "x"
+    ]
+   ]
   }
  ]
 }
