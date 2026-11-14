@@ -58,7 +58,7 @@ use std::pin::{Pin, pin};
 use std::sync::Arc;
 use std::task::Poll;
 
-use crate::pool::{Class, Consumer, Denied, Group, GroupKind, Node};
+use crate::pool::{Class, Consumer, DEFAULT_PRIORITY, Denied, Group, GroupKind, Node};
 use crate::spill::{OwnerId, SpillTicket};
 use std::time::Instant;
 
@@ -582,12 +582,19 @@ impl Round {
         }
     }
 
-    /// The query furthest above its fair share that is not aborted and holds
-    /// memory; ties go to the requester's own query.
+    /// The query of the lowest priority, then the furthest above its fair share, that is not
+    /// aborted and holds memory; ties go to the requester's own query.
     fn abort_victim(&self, plan: &Plan, own: Option<&Arc<Node>>) -> Option<Arc<Node>> {
         let key = |g: &Arc<Node>| {
             let is_own = own.is_some_and(|o| Arc::ptr_eq(o, g));
-            (plan.excess(Some(g)), g.reserved(), is_own)
+            // The lowest priority first (`Reverse`), then the furthest above its share.
+            let priority = g.group.as_ref().map_or(DEFAULT_PRIORITY, |x| x.priority);
+            (
+                std::cmp::Reverse(priority),
+                plan.excess(Some(g)),
+                g.reserved(),
+                is_own,
+            )
         };
         plan.groups
             .iter()

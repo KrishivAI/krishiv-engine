@@ -141,3 +141,41 @@ async fn system_queries_shows_the_group_and_the_queued_time() {
             >= 0
     );
 }
+
+#[tokio::test]
+async fn the_group_sets_the_workload_class() {
+    use arrow_array::cast::AsArray;
+    let path = write_file(
+        "class",
+        r#"{
+  "rootGroups": [{"name": "root", "hardConcurrencyLimit": 4, "maxQueued": 4, "priority": 7,
+                  "workloadClass": "background"}],
+  "defaultGroup": "root"
+}"#,
+    );
+    let rt = EngineRuntime::builder()
+        .config("krishiv.workload.resourceGroups.file", path)
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let s = Session::builder()
+        .runtime(rt)
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    s.sql("select 1")
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .collect()
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let batches = s
+        .sql("select workload_class from system.queries where resource_group is not null")
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .collect()
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        batches[0].column(0).as_string::<i32>().value(0),
+        "background"
+    );
+}

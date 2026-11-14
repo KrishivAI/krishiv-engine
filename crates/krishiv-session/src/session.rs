@@ -1725,13 +1725,16 @@ impl Session {
             self.state.queries.session_id(),
             &log_id,
         ));
-        let pool = self
-            .state
-            .memory
-            .child(&crate::system::pool_name(&log_id), permit.memory_budget());
+        let pool = self.state.memory.child_with_priority(
+            &crate::system::pool_name(&log_id),
+            permit.memory_budget(),
+            permit
+                .priority()
+                .unwrap_or(krishiv_memory::DEFAULT_PRIORITY),
+        );
         let query = QueryContext::new(
             id,
-            WorkloadClass::Interactive,
+            permit.class().unwrap_or(WorkloadClass::Interactive),
             ExecConfig {
                 detailed_metrics: detailed,
                 ..ExecConfig::from_config(&env.config)

@@ -643,3 +643,46 @@ fn two_cohort_askers_never_wait_for_each_other() {
         drop((a, b));
     });
 }
+
+/// Two queries of different priority and a requester that needs memory neither will spill: the
+/// victim is the lower priority in every interleaving, though the other query is larger.
+/// The victim's driver releases once it sees the abort, racing the requester's wait.
+#[test]
+fn abort_picks_the_lowest_priority_under_races() {
+    model(|| {
+        let root = pool(9, 1);
+        let low = root.child_pool_with_priority("low", None, 10);
+        let high = root.child_pool_with_priority("high", None, 90);
+        let lid = low.register("op", None);
+        let hid = high.register("op", None);
+        low.try_reserve(lid, 2).unwrap();
+        high.try_reserve(hid, 5).unwrap();
+        let victim = {
+            let low = Arc::clone(&low);
+            thread::spawn(move || {
+                while low.check_aborted().is_ok() {
+                    thread::yield_now();
+                }
+                low.release(lid, 2);
+            })
+        };
+        let asker = root.child_pool("asker", None);
+        let aid = asker.register("op", None);
+        // The abort is the only way to room for the request; the victim's release funds it.
+        assert!(block_on(asker.reserve(aid, 3)).is_ok());
+        victim.join().unwrap();
+        assert!(
+            low.check_aborted().is_err(),
+            "the low priority query is the victim"
+        );
+        // A victim with no driver of its own may release before the arbitrator counts it as
+        // pending, so a second abort is allowed; but it is never the higher priority query
+        // alone: whenever `high` is aborted, `low` was aborted first.
+        let aborts = root.stats().aborts;
+        assert!(aborts >= 1, "the request needed an abort");
+        assert!(
+            aborts >= 2 || high.check_aborted().is_ok(),
+            "one abort is the lowest priority query, never the larger higher priority one"
+        );
+    });
+}

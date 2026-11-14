@@ -127,7 +127,10 @@ impl AdmissionController for ResourceGroups {
                     })??
                 }
             };
-            let permit = Permit::with_slot(slot).with_group(group);
+            let mut permit = Permit::with_slot(slot).with_group(group);
+            if let Some((priority, class)) = self.shared.leaf_traits(leaf) {
+                permit = permit.with_priority(priority).with_class(class);
+            }
             Ok(match budget {
                 Some(bytes) => permit.with_memory_budget(bytes),
                 None => permit,
