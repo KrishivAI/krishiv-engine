@@ -9,7 +9,7 @@
 //! space; [`query_summary`] keeps only the operation and the names of the
 //! tables the statement reads or writes.
 
-use crate::lexer::{Sym, Token, TokenKind, tokenize, unquote_ident};
+use crate::lexer::{Sym, Token, TokenKind, tokenize, unescape_string, unquote_ident};
 
 /// The most table names a summary lists.
 const MAX_TARGETS: usize = 5;
@@ -39,23 +39,33 @@ pub fn mask_literals(sql: &str) -> String {
 /// text a generated output name can carry, so a caller that masks literals can mask those names too.
 #[must_use]
 pub fn string_literal_bodies(sql: &str) -> Vec<String> {
-    let mut out = Vec::new();
+    let mut out: Vec<String> = Vec::new();
     for t in tokenize(sql) {
         let text = t.span.text(sql);
-        let body = match t.kind {
-            TokenKind::String | TokenKind::DoubleQuoted => {
-                // a raw string (`r'..'`) carries its prefix in the token, like the parser's unescape
-                let quoted = text.strip_prefix(['r', 'R']).unwrap_or(text);
-                quoted.get(1..quoted.len().saturating_sub(1))
-            }
-            TokenKind::DollarString => text.strip_prefix('$').and_then(|rest| {
-                let tag = rest.find('$')? + 2;
-                text.get(tag..text.len().checked_sub(tag)?)
-            }),
-            _ => None,
+        let bodies: Vec<String> = match t.kind {
+            // Every decoding the session settings allow, as `redact` does: the analyzer names an output by the
+            // decoded text (`'\u0068i'` is named `hi`), and a raw string (`r'..'`) carries its prefix in the token.
+            TokenKind::String | TokenKind::DoubleQuoted => vec![
+                unescape_string(text, true, false),
+                unescape_string(text, true, true),
+                unescape_string(text, false, false),
+                unescape_string(text, false, true),
+            ],
+            TokenKind::DollarString => text
+                .strip_prefix('$')
+                .and_then(|rest| {
+                    let tag = rest.find('$')? + 2;
+                    text.get(tag..text.len().checked_sub(tag)?)
+                })
+                .map(str::to_owned)
+                .into_iter()
+                .collect(),
+            _ => Vec::new(),
         };
-        if let Some(b) = body.filter(|b| !b.is_empty()) {
-            out.push(b.to_owned());
+        for b in bodies {
+            if !b.is_empty() && !out.contains(&b) {
+                out.push(b);
+            }
         }
     }
     out
@@ -207,6 +217,11 @@ mod tests {
             string_literal_bodies("SELECT r'hunter2', R\"abc\", 'x' FROM t"),
             ["hunter2", "abc", "x"]
         );
+    }
+
+    #[test]
+    fn escaped_bodies_are_decoded() {
+        assert!(string_literal_bodies("SELECT '\\u0068unter2'").contains(&"hunter2".to_owned()));
     }
 
     #[test]

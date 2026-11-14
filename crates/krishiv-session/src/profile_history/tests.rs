@@ -425,6 +425,7 @@ fn mask_word_replaces_whole_words_only() {
         "?, alias, a_b, ?"
     );
     assert_eq!(super::mask_word("x", "hunter2"), "x");
+    assert_eq!(super::mask_word("x", ""), "x");
 }
 
 #[test]

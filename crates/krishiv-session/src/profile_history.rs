@@ -416,7 +416,7 @@ fn stored(e: HistoryEntry, mask: bool) -> Option<StoredProfile> {
 /// Then every whole-word occurrence of a string literal's text (`names`), which a generated output name carries.
 fn mask_plan(node: &mut krishiv_exec::profile::ProfileNode, names: &[String]) {
     let mut detail = krishiv_sql::mask_literals(&node.detail);
-    for name in names {
+    for name in names.iter().filter(|n| !n.is_empty()) {
         detail = mask_word(&detail, name);
     }
     node.detail = detail;
@@ -427,6 +427,9 @@ fn mask_plan(node: &mut krishiv_exec::profile::ProfileNode, names: &[String]) {
 
 /// `text` with each occurrence of `word` that is not part of a longer word replaced by `?`.
 fn mask_word(text: &str, word: &str) -> String {
+    if word.is_empty() {
+        return text.to_owned();
+    }
     let is_word = |c: char| c.is_alphanumeric() || c == '_';
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
