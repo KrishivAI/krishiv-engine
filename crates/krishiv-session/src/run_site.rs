@@ -54,7 +54,7 @@ pub(crate) fn resolve_sites(stream: RecordBatchStream, env: &QueryEnv) -> Record
 /// [`sql_context`] for a run-time error, with the context's `summary` set
 /// to the `== SQL ==` block, as Spark's `SQLQueryContext.summary` is: the
 /// surfaces that render an error without the statement's text (a Python
-/// DataFrame action, a Spark Connect client) show it from there.
+/// DataFrame action) show it from there.
 fn runtime_context(
     error: KrishivError,
     text: &RedactedSql,

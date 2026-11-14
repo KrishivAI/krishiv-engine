@@ -572,24 +572,26 @@ def test_sql_error_text_marks_the_span(spark: SparkSession) -> None:
 
 def test_runtime_error_text_marks_the_span(spark: SparkSession) -> None:
     # RS-14: an ANSI run-time error raised by an action shows the span that raised it, as an analysis error does.
-    spark.sql("SET spark.sql.ansi.enabled = true")
+    ansi = spark.conf.get("spark.sql.ansi.enabled", "true")
+    spark.conf.set("spark.sql.ansi.enabled", "true")
     spark.sql("CREATE OR REPLACE TEMPORARY VIEW rs14 AS SELECT 'abc' AS a")
-    for sql, summary in [
-        (
-            "select cast('abc' as int)",
-            "\n== SQL (line 1, position 8) ==\nselect cast('abc' as int)\n       ^^^^^^^^^^^^^^^^^^",
-        ),
-        ("select 1/0", "\n== SQL (line 1, position 8) ==\nselect 1/0\n       ^^^"),
-        (
-            "select cast(a as int) from rs14",
-            "\n== SQL (line 1, position 8) ==\nselect cast(a as int) from rs14\n       ^^^^^^^^^^^^^^",
-        ),
-    ]:
-        with pytest.raises(errors.PySparkException) as raised:
-            spark.sql(sql).collect()
-        e = raised.value
-        assert "== SQL" not in e.getMessage(), sql
-        assert str(e) == e.getMessage() + summary, sql
+    try:
+        for sql, caret in [
+            ("select cast('abc' as int)", "^" * 18),
+            ("select 1/0", "^^^"),
+            ("select cast(a as int) from rs14", "^" * 14),
+        ]:
+            with pytest.raises(errors.PySparkException) as raised:
+                spark.sql(sql).collect()
+            e = raised.value
+            summary = f"== SQL (line 1, position 8) ==\n{sql}\n       {caret}"
+            assert "== SQL" not in e.getMessage(), sql
+            assert str(e) == e.getMessage() + "\n" + summary, sql
+            (qc,) = e.getQueryContext()
+            assert qc.summary() == summary, sql
+    finally:
+        spark.sql("DROP VIEW IF EXISTS rs14")
+        spark.conf.set("spark.sql.ansi.enabled", ansi)
 
 
 def test_sql_error_text_counts_lines_and_characters(spark: SparkSession) -> None:
