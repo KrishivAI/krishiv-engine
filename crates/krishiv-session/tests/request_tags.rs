@@ -340,3 +340,28 @@ async fn a_request_tag_selects_the_resource_group() {
         assert_eq!(groups.counts(group), Some((1, 0)), "{group} runs one query");
     }
 }
+
+#[tokio::test]
+async fn refused_and_replayed_statements_keep_their_request_tags() {
+    let s = Session::new().unwrap_or_else(|e| panic!("{e}"));
+    // A statement that fails analysis never reaches admission.
+    let refused = s
+        .sql_with(
+            "select nope from nowhere",
+            QueryOptions::new().tags(["bad"]),
+        )
+        .await;
+    assert!(refused.is_err());
+    let batches = s
+        .sql("select count(*) from system.queries where tags['bad'] is not null")
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .collect()
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let n = batches[0]
+        .column(0)
+        .as_primitive::<arrow_array::types::Int64Type>()
+        .value(0);
+    assert_eq!(n, 1, "the refused statement's row carries its request tag");
+}

@@ -560,9 +560,12 @@ impl Session {
         error: &KrishivError,
     ) -> String {
         let policy = crate::system::TextPolicy::from_config(&self.state.conf.snapshot());
-        self.state
+        let id = self
+            .state
             .queries
-            .record_refused(policy, text, class, error, self.operation_id())
+            .record_refused(policy, text, class, error, self.operation_id());
+        self.state.queries.add_request_tags(&id, &self.request_tags);
+        id
     }
 }
 

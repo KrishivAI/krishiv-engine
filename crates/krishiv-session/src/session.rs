@@ -522,6 +522,7 @@ impl Session {
                 error,
                 self.operation_id(),
             );
+            self.state.queries.add_request_tags(&id, &self.request_tags);
             // Ended by `cancel`/`interrupt_all` while it was analyzed (`action.rs`).
             if let Some(reason) = cancelled {
                 self.state.queries.note_cancel_reason(&id, reason);
