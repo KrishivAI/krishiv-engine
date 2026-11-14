@@ -12,6 +12,8 @@ krishiv-exec
 krishiv-plan-codec
 krishiv-sql
 krishiv-session
+krishiv-connect
+krishiv-connect-server
 krishiv-ui-assets
 krishiv-server
 krishiv

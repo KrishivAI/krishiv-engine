@@ -1,2 +1,9 @@
-self-hosted-runner:
-  labels: []
+# actionlint config (pr-policy.yml runs it on every PR). Local `uses:` lines here are written `$/.github/...`
+# (checked by xtask/tests/policy.rs); actionlint does not know that form, so those errors are ignored.
+# Shell steps are not linted by shellcheck (`actionlint -shellcheck=`): the repo has no shellcheck gate and
+# the existing steps carry style findings; the gate is for invalid workflow syntax, expressions and `needs`.
+paths:
+  ".github/workflows/**/*.yml":
+    ignore:
+      - '"\$/\.github/'
+      - 'reusable workflow call "\$/\.github/'

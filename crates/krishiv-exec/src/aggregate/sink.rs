@@ -1443,6 +1443,11 @@ impl Sink for HashAggregate {
         "HashAggregate"
     }
 
+    /// Tables merge in driver-partition order whatever the combine order.
+    fn lane_safe(&self) -> bool {
+        true
+    }
+
     fn global_state(&self, ctx: &TaskContext) -> Result<GlobalState> {
         let config = ctx.query().config();
         let threads = ctx.executor().parallelism();
