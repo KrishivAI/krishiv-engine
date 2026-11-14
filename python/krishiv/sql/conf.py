@@ -4,14 +4,20 @@
 from __future__ import annotations
 
 from krishiv import _native
-from krishiv.errors import SparkNoSuchElementException, not_expected_type
+from typing import TYPE_CHECKING
+
+from krishiv.errors import SparkNoSuchElementException, not_expected_type, not_implemented
+
+if TYPE_CHECKING:
+    from krishiv.sql.session import SparkSession
 
 _UNSET = object()
 
 
 class RuntimeConfig:
-    def __init__(self, session: _native.Session) -> None:
+    def __init__(self, session: _native.Session, spark: SparkSession | None = None) -> None:
         self._session = session
+        self._spark = spark
 
     def get(self, key: str, default: object = _UNSET) -> str | None:
         value = self._session.conf_get(key)
@@ -35,3 +41,16 @@ class RuntimeConfig:
 
     def unset(self, key: str) -> None:
         self._session.conf_unset(key)
+
+    def isModifiable(self, key: str) -> bool:
+        """Whether the configuration ``key`` can be changed at run time (``spark.conf.set``)."""
+        if not isinstance(key, str):
+            raise not_expected_type("key", "str", key)
+        return self._session.conf_is_modifiable(key)
+
+    @property
+    def getAll(self) -> dict[str, str]:
+        """Every configuration that has a value in this session (a property, as in PySpark)."""
+        if self._spark is None:
+            raise not_implemented("RuntimeConfig.getAll on a configuration without a session")
+        return {row[0]: row[1] for row in self._spark.sql("SET").collect()}

@@ -641,7 +641,8 @@ def test_empty_dataframe(spark: SparkSession, capsys: Any) -> None:
     assert capsys.readouterr().out.splitlines() == [
         "root",
         " |-- name: string (nullable = true)",
-        " |-- age: int (nullable = true)",
+        " |-- age: integer (nullable = true)",
+        "",
     ]
     assert spark.emptyDataFrame("name STRING, age INT").columns == ["name", "age"]
     with pytest.raises(errors.PySparkTypeError):
@@ -650,16 +651,17 @@ def test_empty_dataframe(spark: SparkSession, capsys: Any) -> None:
 
 def test_catalog(spark: SparkSession) -> None:
     assert spark.catalog.currentDatabase() == "default"
-    assert spark.catalog.listDatabases().collect() == [Row("default")]
+    assert [d.name for d in spark.catalog.listDatabases()] == ["default"]
     assert spark.catalog.tableExists("no_such_table") is False
     spark.range(2).createOrReplaceTempView("two")
     try:
         assert spark.catalog.tableExists("two") is True
-        tables = spark.catalog.listTables().collect()
-        assert [r.name for r in tables] == ["two"]
-        assert tables[0].asDict() == {
+        tables = spark.catalog.listTables()
+        assert [t.name for t in tables] == ["two"]
+        assert tables[0]._asdict() == {
             "name": "two",
-            "database": "default",
+            "catalog": None,
+            "namespace": [],
             "description": None,
             "tableType": "TEMPORARY",
             "isTemporary": True,
@@ -834,7 +836,7 @@ def test_catalog_hides_dataframe_tables(spark: SparkSession) -> None:
     [arrow_name] = set(spark._native.temp_table_names()) - before
     df.createOrReplaceTempView("visible_view")
     try:
-        names = [r.name for r in spark.catalog.listTables().collect()]
+        names = [t.name for t in spark.catalog.listTables()]
         assert "visible_view" in names
         assert not any(n.lower().startswith("__krishiv_arrow_") for n in names)
         assert spark.catalog.tableExists("visible_view")

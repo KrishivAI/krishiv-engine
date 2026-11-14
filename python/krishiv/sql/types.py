@@ -487,6 +487,12 @@ class StructType(DataType):
     def fieldNames(self) -> list[str]:
         return list(self.names)
 
+    def treeString(self, level: int | None = None) -> str:
+        """The schema as the indented tree ``printSchema`` prints, to ``level`` levels (all by default)."""
+        lines = ["root"]
+        _tree_fields(self, " |", 1, level if level is not None else 2**31 - 1, lines)
+        return "\n".join(lines) + "\n"
+
     def simpleString(self) -> str:
         return "struct<" + ",".join(f.simpleString() for f in self.fields) + ">"
 
@@ -868,3 +874,30 @@ class _DdlParser:
         if re.fullmatch(r"\d+", tok):
             return int(tok)
         raise ValueError(tok)
+
+
+def _tree_type_name(t: DataType) -> str:
+    """The type as ``printSchema`` names it (Spark's ``typeName``: ``integer``, ``long``, ``decimal(5,2)``)."""
+    if isinstance(t, ArrayType | MapType | StructType):
+        return t.typeName()
+    value = t.jsonValue()
+    return value if isinstance(value, str) else t.typeName()
+
+
+def _tree_type(t: DataType, label: str, nullable_note: str, prefix: str, depth: int, limit: int, out: list[str]) -> None:
+    out.append(f"{prefix}-- {label}: {_tree_type_name(t)}{nullable_note}")
+    if depth >= limit:
+        return
+    child = prefix + "    |"
+    if isinstance(t, StructType):
+        _tree_fields(t, child, depth + 1, limit, out)
+    elif isinstance(t, ArrayType):
+        _tree_type(t.elementType, "element", f" (containsNull = {str(t.containsNull).lower()})", child, depth + 1, limit, out)
+    elif isinstance(t, MapType):
+        _tree_type(t.keyType, "key", "", child, depth + 1, limit, out)
+        _tree_type(t.valueType, "value", f" (valueContainsNull = {str(t.valueContainsNull).lower()})", child, depth + 1, limit, out)
+
+
+def _tree_fields(struct: StructType, prefix: str, depth: int, limit: int, out: list[str]) -> None:
+    for f in struct.fields:
+        _tree_type(f.dataType, f.name, f" (nullable = {str(f.nullable).lower()})", prefix, depth, limit, out)

@@ -29,6 +29,12 @@ _TEMPLATES = {
         "information, see SPARK-5063."
     ),
     "CANNOT_SET_TOGETHER": "<arg_list> should not be set together.",
+    "CANNOT_BE_EMPTY": "At least one <item> must be specified.",
+    "CANNOT_CONVERT_TYPE": "Cannot convert <from_type> into <to_type>.",
+    "TOO_MANY_VALUES": "Expected <expected> values for `<item>`, got <actual>.",
+    "NO_ACTIVE_OR_DEFAULT_SESSION": (
+        "No active or default Spark session found. Please create a new Spark session before running the code."
+    ),
     "NOT_EXPECTED_TYPE": "Argument `<arg_name>` should be <expected_type>, got <arg_type>.",
     "CANNOT_CONVERT_COLUMN_INTO_BOOL": (
         "Cannot convert column into bool: please use '&' for 'and', '|' for 'or', "

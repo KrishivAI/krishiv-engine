@@ -89,7 +89,53 @@ def rows_of(table: Any) -> list[Row]:
 
 
 def _column_values(column: Any) -> list[Any]:
+    if _has_duplicate_struct_fields(column.type):
+        # ``to_pylist`` raises on a struct with duplicate field names: walk the arrays by position instead.
+        return _by_position(column.combine_chunks() if hasattr(column, "combine_chunks") else column, column.type)
     return [_value(v, column.type) for v in column.to_pylist()]
+
+
+def _has_duplicate_struct_fields(arrow_type: Any) -> bool:
+    import pyarrow as pa
+
+    if pa.types.is_struct(arrow_type):
+        names = [arrow_type.field(i).name for i in range(arrow_type.num_fields)]
+        return len(set(names)) != len(names) or any(
+            _has_duplicate_struct_fields(arrow_type.field(i).type) for i in range(arrow_type.num_fields)
+        )
+    if pa.types.is_map(arrow_type):
+        return _has_duplicate_struct_fields(arrow_type.key_type) or _has_duplicate_struct_fields(arrow_type.item_type)
+    if pa.types.is_list(arrow_type) or pa.types.is_large_list(arrow_type) or pa.types.is_fixed_size_list(arrow_type):
+        return _has_duplicate_struct_fields(arrow_type.value_type)
+    return False
+
+
+def _by_position(array: Any, arrow_type: Any) -> list[Any]:
+    """``array`` as PySpark Python values, struct fields read by position (so duplicate names survive)."""
+    import pyarrow as pa
+
+    if not _has_duplicate_struct_fields(arrow_type):
+        return [_value(v, arrow_type) for v in array.to_pylist()]
+    if pa.types.is_struct(arrow_type):
+        fields = [arrow_type.field(i) for i in range(arrow_type.num_fields)]
+        children = [_by_position(array.field(i), f.type) for i, f in enumerate(fields)]
+        names = [f.name for f in fields]
+        valid = array.is_valid().to_pylist()
+        return [
+            _create_row(names, [c[j] for c in children]) if ok else None for j, ok in enumerate(valid)
+        ]
+    if pa.types.is_map(arrow_type):
+        out: list[Any] = []
+        for scalar in array:
+            if not scalar.is_valid:
+                out.append(None)
+                continue
+            entries = scalar.values
+            keys = _by_position(entries.field(0), arrow_type.key_type)
+            vals = _by_position(entries.field(1), arrow_type.item_type)
+            out.append(dict(zip(keys, vals, strict=True)))
+        return out
+    return [None if not scalar.is_valid else _by_position(scalar.values, arrow_type.value_type) for scalar in array]
 
 
 def _value(value: Any, arrow_type: Any) -> Any:

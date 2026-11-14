@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from krishiv.errors import PySparkAttributeError, PySparkValueError
+from krishiv.errors import PySparkAttributeError, PySparkTypeError, PySparkValueError
 
 
 class Row(tuple[Any, ...]):
@@ -22,10 +22,28 @@ class Row(tuple[Any, ...]):
             return row
         return tuple.__new__(cls, args)
 
-    def asDict(self) -> dict[str, Any]:
+    def asDict(self, recursive: bool = False) -> dict[str, Any]:
+        """The row as a dict; ``recursive`` also turns nested rows (in lists, dicts and rows) into dicts.
+
+        With duplicate field names one of the duplicates is picked (the last), as PySpark.
+        """
         if not hasattr(self, "__fields__"):
-            raise PySparkValueError("Cannot convert a Row class into dict")
+            raise PySparkTypeError(
+                errorClass="CANNOT_CONVERT_TYPE",
+                messageParameters={"from_type": "Row", "to_type": "dict"},
+            )
+        if recursive:
+            return dict(zip(self.__fields__, (_conv(o) for o in self), strict=True))
         return dict(zip(self.__fields__, self, strict=True))
+
+    def __call__(self, *args: Any) -> Row:
+        """``Row("a", "b")(1, 2)``: a row class (names only) builds rows with those field names."""
+        if len(args) > len(self):
+            raise PySparkValueError(
+                errorClass="TOO_MANY_VALUES",
+                messageParameters={"expected": str(len(self)), "item": "fields", "actual": str(len(args))},
+            )
+        return _create_row(list(self), list(args))
 
     def __contains__(self, item: object) -> bool:
         """Like PySpark: on a named row, ``in`` tests the field names."""
@@ -59,6 +77,16 @@ class Row(tuple[Any, ...]):
         if hasattr(self, "__fields__"):
             return "Row(" + ", ".join(f"{k}={v!r}" for k, v in zip(self.__fields__, self, strict=True)) + ")"
         return f"<Row({', '.join(repr(v) for v in self)})>"
+
+
+def _conv(obj: Any) -> Any:
+    if isinstance(obj, Row):
+        return obj.asDict(True)
+    if isinstance(obj, list):
+        return [_conv(o) for o in obj]
+    if isinstance(obj, dict):
+        return {k: _conv(v) for k, v in obj.items()}
+    return obj
 
 
 def _create_row(fields: list[str] | None, values: list[Any]) -> Row:

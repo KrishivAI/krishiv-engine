@@ -131,6 +131,35 @@ impl PyDataFrame {
         }
     }
 
+    /// The rollup of `cols`, for `GroupedData.agg` (`DataFrame.rollup`).
+    fn rollup(&self, cols: Vec<PyColumn>) -> PyGroupedData {
+        PyGroupedData {
+            inner: self.inner.rollup(columns(cols)),
+            owned: self.owned.clone(),
+        }
+    }
+
+    /// The cube of `cols`, for `GroupedData.agg` (`DataFrame.cube`).
+    fn cube(&self, cols: Vec<PyColumn>) -> PyGroupedData {
+        PyGroupedData {
+            inner: self.inner.cube(columns(cols)),
+            owned: self.owned.clone(),
+        }
+    }
+
+    /// The grouping `sets` over `keys`, for `GroupedData.agg` (`DataFrame.groupingSets`).
+    fn grouping_sets(&self, sets: Vec<Vec<PyColumn>>, keys: Vec<PyColumn>) -> PyGroupedData {
+        PyGroupedData {
+            inner: self.inner.grouping_sets(
+                sets.into_iter()
+                    .map(columns)
+                    .map(Iterator::collect::<Vec<_>>),
+                columns(keys),
+            ),
+            owned: self.owned.clone(),
+        }
+    }
+
     fn agg(&self, cols: Vec<PyColumn>) -> Self {
         self.derive(self.inner.agg(columns(cols)))
     }

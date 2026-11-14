@@ -13,11 +13,13 @@ from typing import TYPE_CHECKING, Any
 from krishiv import _native
 from krishiv.errors import (
     AnalysisException,
+    PySparkRuntimeError,
     PySparkValueError,
     not_expected_type,
     not_implemented,
     unsupported_feature,
 )
+from krishiv.sql.catalog import CatalogMetadata, Column, Database, Function, Table
 from krishiv.sql.conf import RuntimeConfig
 from krishiv.sql.dataframe import DataFrame
 from krishiv.sql.readwriter import DataFrameReader
@@ -101,7 +103,7 @@ class SparkSession:
 
     def __init__(self, native: _native.Session, config: list[tuple[str, str]] | None = None) -> None:
         self._native = native
-        self._conf = RuntimeConfig(native)
+        self._conf = RuntimeConfig(native, self)
         # The options the session was built with: `newSession` starts from them.
         self._config = list(config or [])
 
@@ -313,7 +315,7 @@ class SparkSession:
         >>> df.printSchema()
         root
          |-- name: string (nullable = true)
-         |-- age: int (nullable = true)
+         |-- age: integer (nullable = true)
         >>> df.count()
         0
         """
@@ -374,6 +376,93 @@ class SparkSession:
         timestamp_type = self._conf.get("spark.sql.timestampType", "TIMESTAMP_LTZ") or "TIMESTAMP_LTZ"
         timestamp_ntz = timestamp_type.strip().upper() == "TIMESTAMP_NTZ"
         return self._from_rows(valued, infer_schema(valued, names, timestamp_ntz), verify, Row)
+
+    @classmethod
+    def getActiveSession(cls) -> SparkSession | None:
+        """The session ``getOrCreate`` made and ``stop`` has not ended, or ``None``."""
+        with _lock:
+            return _active
+
+    @classmethod
+    def active(cls) -> SparkSession:
+        """The active session; fails with ``NO_ACTIVE_OR_DEFAULT_SESSION`` when there is none, as PySpark."""
+        session = cls.getActiveSession()
+        if session is None:
+            raise PySparkRuntimeError(errorClass="NO_ACTIVE_OR_DEFAULT_SESSION", messageParameters={})
+        return session
+
+    @property
+    def sparkContext(self) -> Any:
+        """Not available: there is no ``SparkContext`` (RDDs and the JVM) in an embedded session."""
+        raise not_implemented("SparkSession.sparkContext (no SparkContext in an embedded session)")
+
+    @property
+    def readStream(self) -> Any:
+        """Not available: streaming reads are not part of 0.2 (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("SparkSession.readStream (streaming)")
+
+    @property
+    def streams(self) -> Any:
+        """Not available: streaming queries are not part of 0.2 (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("SparkSession.streams (streaming)")
+
+    @property
+    def tvf(self) -> Any:
+        """Not available: the ``TableValuedFunction`` namespace (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("SparkSession.tvf")
+
+    @property
+    def udtf(self) -> Any:
+        """Not available: user-defined table functions (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("SparkSession.udtf")
+
+    @property
+    def dataSource(self) -> Any:
+        """Not available: Python data sources (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("SparkSession.dataSource")
+
+    @property
+    def profile(self) -> Any:
+        """Not available: UDF profiling (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("SparkSession.profile")
+
+    def addArtifacts(self, *path: str, pyfile: bool = False, archive: bool = False, file: bool = False) -> None:
+        """Not available: artifacts belong to Spark Connect sessions (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("SparkSession.addArtifacts")
+
+    addArtifact = addArtifacts
+
+    def copyFromLocalToFs(self, local_path: str, dest_path: str) -> None:
+        """Not available: artifacts belong to Spark Connect sessions (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("SparkSession.copyFromLocalToFs")
+
+    def interruptAll(self) -> list[str]:
+        """Not available: running operations cannot be interrupted by id (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("SparkSession.interruptAll")
+
+    def interruptTag(self, tag: str) -> list[str]:
+        """Not available: operation tags (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("SparkSession.interruptTag")
+
+    def interruptOperation(self, op_id: str) -> list[str]:
+        """Not available: running operations cannot be interrupted by id (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("SparkSession.interruptOperation")
+
+    def addTag(self, tag: str) -> None:
+        """Not available: operation tags (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("SparkSession.addTag")
+
+    def removeTag(self, tag: str) -> None:
+        """Not available: operation tags (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("SparkSession.removeTag")
+
+    def getTags(self) -> set[str]:
+        """Not available: operation tags (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("SparkSession.getTags")
+
+    def clearTags(self) -> None:
+        """Not available: operation tags (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("SparkSession.clearTags")
 
     def stop(self) -> None:
         """Ends this session; the next ``getOrCreate`` makes a new one."""
@@ -543,6 +632,19 @@ def _verify_row(struct: StructType, values: list[Any]) -> None:
             )
 
 
+_CATALOG = "spark_catalog"
+
+
+def _like(name: str, pattern: str) -> bool:
+    """Spark's catalog name patterns: ``*`` matches any run, ``|`` separates alternatives; case-insensitive."""
+    import re
+
+    return any(
+        re.fullmatch(".*".join(re.escape(part) for part in alt.strip().split("*")), name, re.IGNORECASE)
+        for alt in pattern.split("|")
+    )
+
+
 class Catalog:
     """The catalog of temporary views, as ``pyspark.sql.catalog.Catalog``.
 
@@ -557,13 +659,68 @@ class Catalog:
         """The temporary tables and views, without those holding ``createDataFrame`` data."""
         return [n for n in self._session._native.temp_table_names() if not _native.Session.is_dataframe_table(n)]
 
+    def currentCatalog(self) -> str:
+        """The current catalog: always ``spark_catalog`` (there is no other)."""
+        return _CATALOG
+
+    def setCurrentCatalog(self, catalogName: str) -> None:
+        """Only ``spark_catalog`` exists."""
+        if not isinstance(catalogName, str):
+            raise not_expected_type("catalogName", "str", catalogName)
+        if catalogName != _CATALOG:
+            raise AnalysisException(
+                f"[CATALOG_NOT_FOUND] The catalog `{catalogName}` not found. Consider to set the SQL config "
+                f"`spark.sql.catalog.{catalogName}` to a catalog plugin. SQLSTATE: 42P08",
+                errorClass="CATALOG_NOT_FOUND",
+                sqlState="42P08",
+            )
+
+    def listCatalogs(self, pattern: str | None = None) -> list[CatalogMetadata]:
+        """The catalogs: just ``spark_catalog``."""
+        if pattern is not None and not isinstance(pattern, str):
+            raise not_expected_type("pattern", "str", pattern)
+        found = [CatalogMetadata(_CATALOG, None)]
+        return [c for c in found if pattern is None or _like(c.name, pattern)]
+
     def currentDatabase(self) -> str:
         """The current database: always ``default`` (there is no other)."""
         return "default"
 
-    def listDatabases(self) -> DataFrame:
-        """The databases: just ``default``."""
-        return self._session.createDataFrame([("default",)], ["name"])
+    def setCurrentDatabase(self, dbName: str) -> None:
+        """Only ``default`` exists, so any other name fails with ``SCHEMA_NOT_FOUND``."""
+        self._check_database(dbName)
+
+    def _check_database(self, dbName: str) -> None:
+        if not isinstance(dbName, str):
+            raise not_expected_type("dbName", "str", dbName)
+        if dbName.lower() != "default":
+            raise AnalysisException(
+                f"[SCHEMA_NOT_FOUND] The schema `{_CATALOG}`.`{dbName}` cannot be found. Verify the spelling and correctness of "
+                "the schema and catalog.\nIf you did not qualify the name with a catalog, verify the "
+                "current_schema() output, or qualify the name with the correct catalog.\nTo tolerate the error on "
+                "drop use DROP SCHEMA IF EXISTS. SQLSTATE: 42704",
+                errorClass="SCHEMA_NOT_FOUND",
+                messageParameters={"schemaName": f"`{_CATALOG}`.`{dbName}`"},
+                sqlState="42704",
+            )
+
+    def listDatabases(self, pattern: str | None = None) -> list[Database]:
+        """The databases: just ``default``, as a list of :class:`Database` (as PySpark)."""
+        if pattern is not None and not isinstance(pattern, str):
+            raise not_expected_type("pattern", "str", pattern)
+        found = [Database("default", _CATALOG, "default database", "")]
+        return [d for d in found if pattern is None or _like(d.name, pattern)]
+
+    def getDatabase(self, dbName: str) -> Database:
+        """The database ``dbName`` (only ``default`` exists)."""
+        self._check_database(dbName)
+        return Database("default", _CATALOG, "default database", "")
+
+    def databaseExists(self, dbName: str) -> bool:
+        """Whether the database ``dbName`` exists (only ``default`` does)."""
+        if not isinstance(dbName, str):
+            raise not_expected_type("dbName", "str", dbName)
+        return dbName.lower() == "default"
 
     def tableExists(self, tableName: str, dbName: str | None = None) -> bool:
         """Whether the temporary view ``tableName`` exists."""
@@ -572,20 +729,115 @@ class Catalog:
         names = self._user_tables()
         return any(n.lower() == tableName.lower() for n in names)
 
-    def listTables(self, dbName: str | None = None) -> DataFrame:
-        """The temporary views as a DataFrame of ``(name, database,
-        description, tableType, isTemporary)`` rows.
+    def listTables(self, dbName: str | None = None, pattern: str | None = None) -> list[Table]:
+        """The temporary views, as a list of :class:`Table` (as PySpark)."""
+        if dbName is not None:
+            self._check_database(dbName)
+        if pattern is not None and not isinstance(pattern, str):
+            raise not_expected_type("pattern", "str", pattern)
+        return [
+            Table(n, None, [], None, "TEMPORARY", True)
+            for n in self._user_tables()
+            if pattern is None or _like(n, pattern)
+        ]
 
-        .. note:: The engine has no catalogs or namespaces, so this is the
-            classic five-column shape rather than Spark 4.x's namespaced one.
-        """
-        if dbName is not None and not isinstance(dbName, str):
-            raise not_expected_type("dbName", "str", dbName)
-        rows = [(n, "default", None, "TEMPORARY", True) for n in self._user_tables()]
-        return self._session.createDataFrame(
-            rows,
-            "name string, database string, description string, tableType string, isTemporary boolean",
+    def listViews(self, dbName: str | None = None, pattern: str | None = None) -> list[Table]:
+        """The temporary views (every table is one), as :meth:`listTables`."""
+        return self.listTables(dbName, pattern)
+
+    def getTable(self, tableName: str) -> Table:
+        """The table or view ``tableName``; ``TABLE_OR_VIEW_NOT_FOUND`` when there is none."""
+        if not isinstance(tableName, str):
+            raise not_expected_type("tableName", "str", tableName)
+        for t in self.listTables():
+            if t.name.lower() == tableName.lower():
+                return t
+        self._session.table(tableName).schema  # noqa: B018  # raises the engine's TABLE_OR_VIEW_NOT_FOUND
+        raise AnalysisException(
+            f"[TABLE_OR_VIEW_NOT_FOUND] The table or view `{tableName}` cannot be found. SQLSTATE: 42P01",
+            errorClass="TABLE_OR_VIEW_NOT_FOUND",
+            sqlState="42P01",
         )
+
+    def listColumns(self, tableName: str, dbName: str | None = None) -> list[Column]:
+        """The columns of ``tableName``, as a list of :class:`Column` (as PySpark)."""
+        if not isinstance(tableName, str):
+            raise not_expected_type("tableName", "str", tableName)
+        if dbName is not None:
+            self._check_database(dbName)
+        return [
+            Column(name, None, dtype, nullable, False, False, False)
+            for name, dtype, nullable in self._session.table(tableName)._df.schema()
+        ]
+
+    def _function_rows(self) -> list[str]:
+        return [r[0] for r in self._session.sql("SHOW FUNCTIONS").collect()]
+
+    def listFunctions(self, dbName: str | None = None, pattern: str | None = None) -> list[Function]:
+        """The functions the engine knows, as a list of :class:`Function` (built-ins have no
+        class name; the description is empty)."""
+        if dbName is not None:
+            self._check_database(dbName)
+        if pattern is not None and not isinstance(pattern, str):
+            raise not_expected_type("pattern", "str", pattern)
+        return [
+            Function(n, None, None, None, "", True)
+            for n in self._function_rows()
+            if pattern is None or _like(n, pattern)
+        ]
+
+    def functionExists(self, functionName: str, dbName: str | None = None) -> bool:
+        """Whether the function ``functionName`` exists."""
+        if not isinstance(functionName, str):
+            raise not_expected_type("functionName", "str", functionName)
+        if dbName is not None:
+            self._check_database(dbName)
+        try:
+            self._session.sql(f"DESCRIBE FUNCTION {functionName}").collect()
+        except AnalysisException:
+            return False
+        return True
+
+    def getFunction(self, functionName: str) -> Function:
+        """The function ``functionName``; ``UNRESOLVED_ROUTINE`` when there is none."""
+        if not isinstance(functionName, str):
+            raise not_expected_type("functionName", "str", functionName)
+        rows = self._session.sql(f"DESCRIBE FUNCTION {functionName}").collect()
+        text = "\n".join(str(r[0]) for r in rows)
+        return Function(functionName, None, None, text or None, "", True)
+
+    def createTable(
+        self,
+        tableName: str,
+        path: str | None = None,
+        source: str | None = None,
+        schema: StructType | None = None,
+        description: str | None = None,
+        **options: str,
+    ) -> DataFrame:
+        """Creates a table over the files at ``path`` (an external table) as a temporary view
+        and returns it. ``schema`` and ``description`` are not supported yet."""
+        if not isinstance(tableName, str):
+            raise not_expected_type("tableName", "str", tableName)
+        if schema is not None:
+            raise not_implemented("Catalog.createTable with a schema (the reader takes no user schema yet)")
+        if path is None:
+            raise not_implemented("Catalog.createTable without a path (managed tables)")
+        reader = self._session.read.format(source or "parquet").options(**options)
+        df = reader.load(path)
+        df.createOrReplaceTempView(tableName)
+        return df
+
+    def createExternalTable(
+        self, tableName: str, path: str | None = None, source: str | None = None, schema: StructType | None = None, **options: str
+    ) -> DataFrame:
+        """An alias for :meth:`createTable` (deprecated since 2.2.0 in PySpark)."""
+        warnings.warn("createExternalTable is deprecated since Spark 2.2.0, use createTable instead.", FutureWarning, stacklevel=2)
+        return self.createTable(tableName, path, source, schema, **options)
+
+    def recoverPartitions(self, tableName: str) -> None:
+        """Not available: tables are not partitioned (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("Catalog.recoverPartitions")
 
     def dropTempView(self, viewName: str) -> bool:
         """Drops the temporary view ``viewName``; whether it existed."""
