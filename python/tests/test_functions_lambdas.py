@@ -201,3 +201,36 @@ def test_udtf_stubs_take_pysparks_keywords() -> None:
 def test_random_is_rand_by_another_name(df: DataFrame) -> None:
     assert one(df, F.random(1)) == one(df, F.rand(1))
     assert isinstance(one(df, F.random()), float)
+
+
+def _unsupported_names() -> list[str]:
+    import inspect
+
+    out = []
+    for name, fn in vars(F).items():
+        if inspect.isfunction(fn) and fn.__module__ == F.__name__:
+            try:
+                src = inspect.getsource(fn)
+            except OSError:
+                continue
+            if "raise not_implemented(" in src:
+                out.append(name)
+    return sorted(out)
+
+
+@pytest.mark.parametrize("name", _unsupported_names())
+def test_every_unsupported_name_raises_not_implemented(name: str) -> None:
+    import inspect
+
+    sig = inspect.signature(getattr(F, name))
+    args = [
+        "n"
+        for p in sig.parameters.values()
+        if p.default is inspect.Parameter.empty and p.kind is p.POSITIONAL_OR_KEYWORD
+    ]
+    with pytest.raises(NotImplementedError):
+        getattr(F, name)(*args)
+
+
+def test_stack_builds_its_call() -> None:
+    assert isinstance(F.stack(F.lit(2), F.lit(1), F.lit(2)), Column)

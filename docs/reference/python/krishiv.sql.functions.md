@@ -876,7 +876,7 @@ Calls the registry function `current_schema`.
 def current_time(precision: int | None=None) -> Column
 ```
 
-Not available: the TIME type has no Python mapping yet (P2-T181).
+Not available: the TIME type has no Python mapping yet.
 
 ### `current_timestamp`
 
@@ -1988,7 +1988,7 @@ A calendar interval; an omitted field is zero.
 def make_time(hour: ColumnOrName, minute: ColumnOrName, second: ColumnOrName) -> Column
 ```
 
-Not available: the TIME type has no Python mapping yet (P2-T181).
+Not available: the TIME type has no Python mapping yet.
 
 ### `make_timestamp`
 
@@ -3044,7 +3044,7 @@ Calls the registry function `sqrt`.
 def st_asbinary(geo: ColumnOrName, endianness: ColumnOrName | None=None) -> Column
 ```
 
-Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181).
+Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet.
 
 ### `st_geogfromwkb`
 
@@ -3052,7 +3052,7 @@ Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181).
 def st_geogfromwkb(wkb: ColumnOrName) -> Column
 ```
 
-Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181).
+Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet.
 
 ### `st_geomfromwkb`
 
@@ -3060,7 +3060,7 @@ Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181).
 def st_geomfromwkb(wkb: ColumnOrName, srid: Any=None) -> Column
 ```
 
-Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181).
+Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet.
 
 ### `st_setsrid`
 
@@ -3068,7 +3068,7 @@ Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181).
 def st_setsrid(geo: ColumnOrName, srid: Any) -> Column
 ```
 
-Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181).
+Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet.
 
 ### `st_srid`
 
@@ -3076,7 +3076,7 @@ Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181).
 def st_srid(geo: ColumnOrName) -> Column
 ```
 
-Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181).
+Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet.
 
 ### `stack`
 
@@ -3292,7 +3292,7 @@ Calls the registry function `time_bucket`.
 def time_diff(unit: ColumnOrName, start: ColumnOrName, end: ColumnOrName) -> Column
 ```
 
-Not available: the TIME type has no Python mapping yet (P2-T181).
+Not available: the TIME type has no Python mapping yet.
 
 ### `time_from_micros`
 
@@ -3300,7 +3300,7 @@ Not available: the TIME type has no Python mapping yet (P2-T181).
 def time_from_micros(col: ColumnOrName) -> Column
 ```
 
-Not available: the TIME type has no Python mapping yet (P2-T181).
+Not available: the TIME type has no Python mapping yet.
 
 ### `time_from_millis`
 
@@ -3308,7 +3308,7 @@ Not available: the TIME type has no Python mapping yet (P2-T181).
 def time_from_millis(col: ColumnOrName) -> Column
 ```
 
-Not available: the TIME type has no Python mapping yet (P2-T181).
+Not available: the TIME type has no Python mapping yet.
 
 ### `time_from_seconds`
 
@@ -3316,7 +3316,7 @@ Not available: the TIME type has no Python mapping yet (P2-T181).
 def time_from_seconds(col: ColumnOrName) -> Column
 ```
 
-Not available: the TIME type has no Python mapping yet (P2-T181).
+Not available: the TIME type has no Python mapping yet.
 
 ### `time_to_micros`
 
@@ -3324,7 +3324,7 @@ Not available: the TIME type has no Python mapping yet (P2-T181).
 def time_to_micros(col: ColumnOrName) -> Column
 ```
 
-Not available: the TIME type has no Python mapping yet (P2-T181).
+Not available: the TIME type has no Python mapping yet.
 
 ### `time_to_millis`
 
@@ -3332,7 +3332,7 @@ Not available: the TIME type has no Python mapping yet (P2-T181).
 def time_to_millis(col: ColumnOrName) -> Column
 ```
 
-Not available: the TIME type has no Python mapping yet (P2-T181).
+Not available: the TIME type has no Python mapping yet.
 
 ### `time_to_seconds`
 
@@ -3340,7 +3340,7 @@ Not available: the TIME type has no Python mapping yet (P2-T181).
 def time_to_seconds(col: ColumnOrName) -> Column
 ```
 
-Not available: the TIME type has no Python mapping yet (P2-T181).
+Not available: the TIME type has no Python mapping yet.
 
 ### `time_trunc`
 
@@ -3348,7 +3348,7 @@ Not available: the TIME type has no Python mapping yet (P2-T181).
 def time_trunc(unit: ColumnOrName, time: ColumnOrName) -> Column
 ```
 
-Not available: the TIME type has no Python mapping yet (P2-T181).
+Not available: the TIME type has no Python mapping yet.
 
 ### `timestamp_add`
 
@@ -3460,7 +3460,7 @@ Calls the registry function `to_number`.
 def to_time(str: ColumnOrName, format: ColumnOrName | None=None) -> Column
 ```
 
-Not available: the TIME type has no Python mapping yet (P2-T181).
+Not available: the TIME type has no Python mapping yet.
 
 ### `to_timestamp`
 
@@ -3732,7 +3732,7 @@ Calls the registry function `try_to_number`.
 def try_to_time(str: ColumnOrName, format: ColumnOrName | None=None) -> Column
 ```
 
-Not available: the TIME type has no Python mapping yet (P2-T181).
+Not available: the TIME type has no Python mapping yet.
 
 ### `try_to_timestamp`
 

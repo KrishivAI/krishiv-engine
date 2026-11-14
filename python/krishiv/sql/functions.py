@@ -608,85 +608,85 @@ def window_time(windowColumn: ColumnOrName) -> Column:
 
 
 def current_time(precision: int | None = None) -> Column:
-    """Not available: the TIME type has no Python mapping yet (P2-T181)."""
+    """Not available: the TIME type has no Python mapping yet."""
     raise not_implemented("F.current_time (the TIME type has no Python mapping yet (P2-T181))")
 
 
 def make_time(hour: ColumnOrName, minute: ColumnOrName, second: ColumnOrName) -> Column:
-    """Not available: the TIME type has no Python mapping yet (P2-T181)."""
+    """Not available: the TIME type has no Python mapping yet."""
     raise not_implemented("F.make_time (the TIME type has no Python mapping yet (P2-T181))")
 
 
 def time_diff(unit: ColumnOrName, start: ColumnOrName, end: ColumnOrName) -> Column:
-    """Not available: the TIME type has no Python mapping yet (P2-T181)."""
+    """Not available: the TIME type has no Python mapping yet."""
     raise not_implemented("F.time_diff (the TIME type has no Python mapping yet (P2-T181))")
 
 
 def time_from_micros(col: ColumnOrName) -> Column:
-    """Not available: the TIME type has no Python mapping yet (P2-T181)."""
+    """Not available: the TIME type has no Python mapping yet."""
     raise not_implemented("F.time_from_micros (the TIME type has no Python mapping yet (P2-T181))")
 
 
 def time_from_millis(col: ColumnOrName) -> Column:
-    """Not available: the TIME type has no Python mapping yet (P2-T181)."""
+    """Not available: the TIME type has no Python mapping yet."""
     raise not_implemented("F.time_from_millis (the TIME type has no Python mapping yet (P2-T181))")
 
 
 def time_from_seconds(col: ColumnOrName) -> Column:
-    """Not available: the TIME type has no Python mapping yet (P2-T181)."""
+    """Not available: the TIME type has no Python mapping yet."""
     raise not_implemented("F.time_from_seconds (the TIME type has no Python mapping yet (P2-T181))")
 
 
 def time_to_micros(col: ColumnOrName) -> Column:
-    """Not available: the TIME type has no Python mapping yet (P2-T181)."""
+    """Not available: the TIME type has no Python mapping yet."""
     raise not_implemented("F.time_to_micros (the TIME type has no Python mapping yet (P2-T181))")
 
 
 def time_to_millis(col: ColumnOrName) -> Column:
-    """Not available: the TIME type has no Python mapping yet (P2-T181)."""
+    """Not available: the TIME type has no Python mapping yet."""
     raise not_implemented("F.time_to_millis (the TIME type has no Python mapping yet (P2-T181))")
 
 
 def time_to_seconds(col: ColumnOrName) -> Column:
-    """Not available: the TIME type has no Python mapping yet (P2-T181)."""
+    """Not available: the TIME type has no Python mapping yet."""
     raise not_implemented("F.time_to_seconds (the TIME type has no Python mapping yet (P2-T181))")
 
 
 def time_trunc(unit: ColumnOrName, time: ColumnOrName) -> Column:
-    """Not available: the TIME type has no Python mapping yet (P2-T181)."""
+    """Not available: the TIME type has no Python mapping yet."""
     raise not_implemented("F.time_trunc (the TIME type has no Python mapping yet (P2-T181))")
 
 
 def to_time(str: ColumnOrName, format: ColumnOrName | None = None) -> Column:
-    """Not available: the TIME type has no Python mapping yet (P2-T181)."""
+    """Not available: the TIME type has no Python mapping yet."""
     raise not_implemented("F.to_time (the TIME type has no Python mapping yet (P2-T181))")
 
 
 def try_to_time(str: ColumnOrName, format: ColumnOrName | None = None) -> Column:
-    """Not available: the TIME type has no Python mapping yet (P2-T181)."""
+    """Not available: the TIME type has no Python mapping yet."""
     raise not_implemented("F.try_to_time (the TIME type has no Python mapping yet (P2-T181))")
 
 
 def st_asbinary(geo: ColumnOrName, endianness: ColumnOrName | None = None) -> Column:
-    """Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)."""
+    """Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet."""
     raise not_implemented("F.st_asbinary (GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181))")
 
 
 def st_geogfromwkb(wkb: ColumnOrName) -> Column:
-    """Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)."""
+    """Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet."""
     raise not_implemented("F.st_geogfromwkb (GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181))")
 
 
 def st_geomfromwkb(wkb: ColumnOrName, srid: Any = None) -> Column:
-    """Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)."""
+    """Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet."""
     raise not_implemented("F.st_geomfromwkb (GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181))")
 
 
 def st_setsrid(geo: ColumnOrName, srid: Any) -> Column:
-    """Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)."""
+    """Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet."""
     raise not_implemented("F.st_setsrid (GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181))")
 
 
 def st_srid(geo: ColumnOrName) -> Column:
-    """Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)."""
+    """Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet."""
     raise not_implemented("F.st_srid (GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181))")

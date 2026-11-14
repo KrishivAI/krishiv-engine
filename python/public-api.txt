@@ -107,7 +107,7 @@ WindowSpec.def partition_by(self, cols: list[Column]) -> WindowSpec
 WindowSpec.def range_between(self, start: int, end: int) -> WindowSpec
 WindowSpec.def rows_between(self, start: int, end: int) -> WindowSpec
 __all__
-__all__ = ['AnonymousPythonUdf', 'ArrowStream', 'Column', 'DataFrame', 'GroupedData', 'Session', 'WindowSpec', '__allocator__', '__version__', '_udf_pool_shutdown', '_udf_runner_conf', 'call_function', 'col', 'count_distinct', 'count_star', 'expr', 'lit', 'map_literal']
+__all__ = ['AnonymousPythonUdf', 'ArrowStream', 'Column', 'DataFrame', 'GroupedData', 'Session', 'WindowSpec', '__allocator__', '__version__', '_udf_pool_shutdown', '_udf_runner_conf', 'call_function', 'col', 'count_distinct', 'count_star', 'expr', 'lambda_function', 'lit', 'map_literal']
 class AnonymousPythonUdf()
 class ArrowStream()
 class Column()
@@ -120,9 +120,9 @@ def col(name: str) -> Column
 def count_distinct(cols: list[Column]) -> Column
 def count_star() -> Column
 def expr(text: str) -> Column
+def lambda_function(params: list[str], body: Column) -> Column
 def lit(value: object) -> Column
 def map_literal(pairs: list[tuple[str, str]]) -> Column
-def lambda_function(params: list[str], body: Column) -> Column
 ## errors.py
 DataFrameQueryContext.def __init__(self, callSite: str='', summary: str='') -> None
 DataFrameQueryContext.def callSite(self) -> str
@@ -197,16 +197,19 @@ __all__
 __all__ = ['Catalog', 'Column', 'DataFrame', 'DataFrameNaFunctions', 'DataFrameReader', 'DataFrameStatFunctions', 'DataFrameWriter', 'DataFrameWriterV2', 'GroupedData', 'Row', 'RuntimeConfig', 'SparkSession', 'UDFRegistration', 'Window', 'WindowSpec', 'functions', 'types']
 ## sql/_generated_functions.py
 __all__
-__all__ = ['abs', 'acos', 'acosh', 'add_months', 'aes_decrypt', 'aes_encrypt', 'approx_count_distinct', 'approx_percentile', 'array', 'array_append', 'array_compact', 'array_contains', 'array_distinct', 'array_except', 'array_insert', 'array_intersect', 'array_join', 'array_max', 'array_min', 'array_position', 'array_prepend', 'array_remove', 'array_repeat', 'array_size', 'array_union', 'arrays_overlap', 'arrays_zip', 'ascii', 'asin', 'asinh', 'assert_true', 'atan', 'atan2', 'atanh', 'avg', 'base64', 'bin', 'bit_and', 'bit_count', 'bit_get', 'bit_length', 'bit_or', 'bit_xor', 'bitwiseNOT', 'bitwise_not', 'bool_and', 'bool_or', 'bround', 'btrim', 'cardinality', 'cbrt', 'ceil', 'ceiling', 'char', 'char_length', 'character_length', 'coalesce', 'collation', 'collect_list', 'collect_set', 'concat_ws', 'contains', 'conv', 'corr', 'cos', 'cosh', 'cot', 'count_if', 'covar_pop', 'covar_samp', 'crc32', 'create_map', 'csc', 'cume_dist', 'curdate', 'current_catalog', 'current_database', 'current_date', 'current_path', 'current_schema', 'current_timestamp', 'current_timezone', 'current_user', 'date_add', 'date_diff', 'date_format', 'date_from_unix_date', 'date_part', 'date_sub', 'date_trunc', 'dateadd', 'datediff', 'datepart', 'day', 'dayname', 'dayofmonth', 'dayofweek', 'dayofyear', 'decode', 'degrees', 'dense_rank', 'e', 'element_at', 'elt', 'encode', 'endswith', 'equal_null', 'exp', 'expm1', 'extract', 'factorial', 'find_in_set', 'first', 'first_value', 'flatten', 'floor', 'format_number', 'format_string', 'from_json', 'from_unixtime', 'from_utc_timestamp', 'get', 'get_json_object', 'getbit', 'greatest', 'hash', 'hex', 'hour', 'hypot', 'ifnull', 'initcap', 'input_file_block_length', 'input_file_block_start', 'input_file_name', 'instr', 'is_valid_utf8', 'is_variant_null', 'isnan', 'isnotnull', 'isnull', 'json_array_length', 'json_object_keys', 'json_tuple', 'kurtosis', 'lag', 'last', 'last_day', 'last_value', 'lcase', 'lead', 'least', 'left', 'length', 'levenshtein', 'listagg', 'ln', 'localtimestamp', 'locate', 'log10', 'log1p', 'log2', 'lower', 'lpad', 'ltrim', 'make_date', 'make_timestamp', 'make_timestamp_ltz', 'make_timestamp_ntz', 'make_valid_utf8', 'map_concat', 'map_contains_key', 'map_entries', 'map_from_arrays', 'map_from_entries', 'map_keys', 'map_values', 'mask', 'max', 'md5', 'mean', 'median', 'min', 'minute', 'mode', 'monotonically_increasing_id', 'month', 'monthname', 'months_between', 'named_struct', 'nanvl', 'negative', 'next_day', 'now', 'nth_value', 'ntile', 'nullif', 'nullifzero', 'nvl', 'nvl2', 'octet_length', 'overlay', 'parse_json', 'parse_url', 'percent_rank', 'percentile', 'percentile_approx', 'pi', 'pmod', 'position', 'positive', 'pow', 'printf', 'quarter', 'quote', 'radians', 'raise_error', 'rand', 'randn', 'randstr', 'rank', 'regexp', 'regexp_count', 'regexp_extract', 'regexp_extract_all', 'regexp_instr', 'regexp_like', 'regexp_replace', 'regexp_substr', 'regr_avgx', 'regr_avgy', 'regr_count', 'regr_intercept', 'regr_r2', 'regr_slope', 'regr_sxx', 'regr_sxy', 'regr_syy', 'repeat', 'replace', 'reverse', 'right', 'rint', 'round', 'row_number', 'rpad', 'rtrim', 'schema_of_json', 'schema_of_variant', 'sec', 'second', 'sequence', 'session_user', 'sha', 'sha1', 'sha2', 'shiftLeft', 'shiftRight', 'shiftRightUnsigned', 'shiftleft', 'shiftright', 'shiftrightunsigned', 'shuffle', 'sign', 'signum', 'sin', 'sinh', 'size', 'skewness', 'slice', 'sort_array', 'soundex', 'spark_partition_id', 'split', 'split_part', 'sqrt', 'startswith', 'std', 'stddev', 'stddev_pop', 'stddev_samp', 'str_to_map', 'struct', 'substr', 'substring', 'substring_index', 'sum', 'tan', 'tanh', 'time_bucket', 'timestamp_micros', 'timestamp_millis', 'timestamp_seconds', 'toDegrees', 'toRadians', 'to_binary', 'to_char', 'to_date', 'to_json', 'to_number', 'to_timestamp', 'to_timestamp_ltz', 'to_timestamp_ntz', 'to_unix_timestamp', 'to_utc_timestamp', 'to_varchar', 'to_variant_object', 'translate', 'trim', 'trunc', 'try_add', 'try_aes_decrypt', 'try_avg', 'try_divide', 'try_element_at', 'try_make_timestamp', 'try_make_timestamp_ltz', 'try_make_timestamp_ntz', 'try_mod', 'try_multiply', 'try_parse_json', 'try_parse_url', 'try_subtract', 'try_sum', 'try_to_binary', 'try_to_date', 'try_to_number', 'try_to_timestamp', 'try_url_decode', 'try_validate_utf8', 'try_variant_get', 'typeof', 'ucase', 'unbase64', 'unhex', 'uniform', 'unix_date', 'unix_micros', 'unix_millis', 'unix_seconds', 'upper', 'url_decode', 'url_encode', 'user', 'uuid', 'validate_utf8', 'var_pop', 'var_samp', 'variance', 'variant_get', 'version', 'weekday', 'weekofyear', 'width_bucket', 'xxhash64', 'year', 'zeroifnull']
+__all__ = ['abs', 'acos', 'acosh', 'add_months', 'aes_decrypt', 'aes_encrypt', 'any_value', 'approxCountDistinct', 'approx_count_distinct', 'approx_percentile', 'array', 'array_agg', 'array_append', 'array_compact', 'array_contains', 'array_distinct', 'array_except', 'array_insert', 'array_intersect', 'array_join', 'array_max', 'array_min', 'array_position', 'array_prepend', 'array_remove', 'array_repeat', 'array_size', 'array_union', 'arrays_overlap', 'arrays_zip', 'ascii', 'asin', 'asinh', 'assert_true', 'atan', 'atan2', 'atanh', 'avg', 'base64', 'bin', 'bit_and', 'bit_count', 'bit_get', 'bit_length', 'bit_or', 'bit_xor', 'bitmap_and_agg', 'bitmap_bit_position', 'bitmap_bucket_number', 'bitmap_construct_agg', 'bitmap_count', 'bitmap_or_agg', 'bitwiseNOT', 'bitwise_not', 'bool_and', 'bool_or', 'bround', 'btrim', 'cardinality', 'cbrt', 'ceil', 'ceiling', 'char', 'char_length', 'character_length', 'chr', 'coalesce', 'collate', 'collation', 'collect_list', 'collect_set', 'concat_ws', 'contains', 'conv', 'corr', 'cos', 'cosh', 'cot', 'count_if', 'count_min_sketch', 'covar_pop', 'covar_samp', 'crc32', 'create_map', 'csc', 'cume_dist', 'curdate', 'current_catalog', 'current_database', 'current_date', 'current_path', 'current_schema', 'current_timestamp', 'current_timezone', 'current_user', 'date_add', 'date_diff', 'date_format', 'date_from_unix_date', 'date_part', 'date_sub', 'date_trunc', 'dateadd', 'datediff', 'datepart', 'day', 'dayname', 'dayofmonth', 'dayofweek', 'dayofyear', 'decode', 'degrees', 'dense_rank', 'e', 'element_at', 'elt', 'encode', 'endswith', 'equal_null', 'every', 'exp', 'expm1', 'extract', 'factorial', 'find_in_set', 'first', 'first_value', 'flatten', 'floor', 'format_number', 'format_string', 'from_csv', 'from_json', 'from_unixtime', 'from_utc_timestamp', 'from_xml', 'get', 'get_json_object', 'getbit', 'greatest', 'grouping', 'grouping_id', 'hash', 'hex', 'histogram_numeric', 'hll_sketch_agg', 'hll_sketch_estimate', 'hll_union', 'hll_union_agg', 'hour', 'hypot', 'ifnull', 'ilike', 'initcap', 'input_file_block_length', 'input_file_block_start', 'input_file_name', 'instr', 'is_valid_utf8', 'is_valid_variant', 'is_variant_null', 'isnan', 'isnotnull', 'isnull', 'java_method', 'json_array_length', 'json_object_keys', 'json_tuple', 'kll_merge_agg_bigint', 'kll_merge_agg_double', 'kll_merge_agg_float', 'kll_sketch_agg_bigint', 'kll_sketch_agg_double', 'kll_sketch_agg_float', 'kll_sketch_get_n_bigint', 'kll_sketch_get_n_double', 'kll_sketch_get_n_float', 'kll_sketch_get_quantile_bigint', 'kll_sketch_get_quantile_double', 'kll_sketch_get_quantile_float', 'kll_sketch_get_rank_bigint', 'kll_sketch_get_rank_double', 'kll_sketch_get_rank_float', 'kll_sketch_merge_bigint', 'kll_sketch_merge_double', 'kll_sketch_merge_float', 'kll_sketch_to_string_bigint', 'kll_sketch_to_string_double', 'kll_sketch_to_string_float', 'kurtosis', 'lag', 'last', 'last_day', 'last_value', 'lcase', 'lead', 'least', 'left', 'length', 'levenshtein', 'like', 'listagg', 'ln', 'localtimestamp', 'locate', 'log10', 'log1p', 'log2', 'lower', 'lpad', 'ltrim', 'make_date', 'make_timestamp', 'make_timestamp_ltz', 'make_timestamp_ntz', 'make_valid_utf8', 'map_concat', 'map_contains_key', 'map_entries', 'map_from_arrays', 'map_from_entries', 'map_keys', 'map_values', 'mask', 'max', 'max_by', 'md5', 'mean', 'median', 'min', 'min_by', 'minute', 'mode', 'monotonically_increasing_id', 'month', 'monthname', 'months_between', 'named_struct', 'nanvl', 'negate', 'negative', 'next_day', 'now', 'nth_value', 'ntile', 'nullif', 'nullifzero', 'nvl', 'nvl2', 'octet_length', 'overlay', 'parse_json', 'parse_url', 'percent_rank', 'percentile', 'percentile_approx', 'pi', 'pmod', 'position', 'positive', 'pow', 'power', 'printf', 'quarter', 'quote', 'radians', 'raise_error', 'rand', 'randn', 'random', 'randstr', 'rank', 'reflect', 'regexp', 'regexp_count', 'regexp_extract', 'regexp_extract_all', 'regexp_instr', 'regexp_like', 'regexp_replace', 'regexp_substr', 'regr_avgx', 'regr_avgy', 'regr_count', 'regr_intercept', 'regr_r2', 'regr_slope', 'regr_sxx', 'regr_sxy', 'regr_syy', 'repeat', 'replace', 'reverse', 'right', 'rint', 'rlike', 'round', 'row_number', 'rpad', 'rtrim', 'schema_of_csv', 'schema_of_json', 'schema_of_variant', 'schema_of_variant_agg', 'schema_of_xml', 'sec', 'second', 'sentences', 'sequence', 'session_user', 'session_window', 'sha', 'sha1', 'sha2', 'shiftLeft', 'shiftRight', 'shiftRightUnsigned', 'shiftleft', 'shiftright', 'shiftrightunsigned', 'shuffle', 'sign', 'signum', 'sin', 'sinh', 'size', 'skewness', 'slice', 'some', 'sort_array', 'soundex', 'spark_partition_id', 'split', 'split_part', 'sqrt', 'startswith', 'std', 'stddev', 'stddev_pop', 'stddev_samp', 'str_to_map', 'string_agg', 'struct', 'substr', 'substring', 'substring_index', 'sum', 'tan', 'tanh', 'theta_difference', 'theta_intersection', 'theta_intersection_agg', 'theta_sketch_agg', 'theta_sketch_estimate', 'theta_union', 'theta_union_agg', 'time_bucket', 'timestamp_add', 'timestamp_diff', 'timestamp_micros', 'timestamp_millis', 'timestamp_seconds', 'toDegrees', 'toRadians', 'to_binary', 'to_char', 'to_csv', 'to_date', 'to_json', 'to_number', 'to_timestamp', 'to_timestamp_ltz', 'to_timestamp_ntz', 'to_unix_timestamp', 'to_utc_timestamp', 'to_varchar', 'to_variant_object', 'to_xml', 'translate', 'trim', 'trunc', 'try_add', 'try_aes_decrypt', 'try_avg', 'try_divide', 'try_element_at', 'try_make_timestamp', 'try_make_timestamp_ltz', 'try_make_timestamp_ntz', 'try_mod', 'try_multiply', 'try_parse_json', 'try_parse_url', 'try_reflect', 'try_subtract', 'try_sum', 'try_to_binary', 'try_to_date', 'try_to_number', 'try_to_timestamp', 'try_url_decode', 'try_validate_utf8', 'try_variant_get', 'tuple_difference_double', 'tuple_difference_integer', 'tuple_difference_theta_double', 'tuple_difference_theta_integer', 'tuple_intersection_agg_double', 'tuple_intersection_agg_integer', 'tuple_intersection_double', 'tuple_intersection_integer', 'tuple_intersection_theta_double', 'tuple_intersection_theta_integer', 'tuple_sketch_agg_double', 'tuple_sketch_agg_integer', 'tuple_sketch_estimate_double', 'tuple_sketch_estimate_integer', 'tuple_sketch_summary_double', 'tuple_sketch_summary_integer', 'tuple_sketch_theta_double', 'tuple_sketch_theta_integer', 'tuple_union_agg_double', 'tuple_union_agg_integer', 'tuple_union_double', 'tuple_union_integer', 'tuple_union_theta_double', 'tuple_union_theta_integer', 'typeof', 'ucase', 'unbase64', 'unhex', 'uniform', 'unix_date', 'unix_micros', 'unix_millis', 'unix_seconds', 'upper', 'url_decode', 'url_encode', 'user', 'uuid', 'validate_utf8', 'var_pop', 'var_samp', 'variance', 'variant_get', 'version', 'weekday', 'weekofyear', 'width_bucket', 'xpath', 'xpath_boolean', 'xpath_double', 'xpath_float', 'xpath_int', 'xpath_long', 'xpath_number', 'xpath_short', 'xpath_string', 'xxhash64', 'year', 'zeroifnull']
 def abs(col: ColumnOrName) -> Column
 def acos(col: ColumnOrName) -> Column
 def acosh(col: ColumnOrName) -> Column
 def add_months(start: ColumnOrName, months: ColumnOrName | int) -> Column
 def aes_decrypt(input: ColumnOrName, key: ColumnOrName, mode: ColumnOrName | None=None, padding: ColumnOrName | None=None, aad: ColumnOrName | None=None) -> Column
 def aes_encrypt(input: ColumnOrName, key: ColumnOrName, mode: ColumnOrName | None=None, padding: ColumnOrName | None=None, iv: ColumnOrName | None=None, aad: ColumnOrName | None=None) -> Column
+def any_value(col: ColumnOrName, ignoreNulls: bool | Column | None=None) -> Column
+def approxCountDistinct(col: ColumnOrName, rsd: Column | float | None=None) -> Column
 def approx_count_distinct(col: ColumnOrName, rsd: Column | float | None=None) -> Column
 def approx_percentile(col: ColumnOrName, percentage: Column | float, accuracy: Column | int=10000) -> Column
 def array(*cols: ColumnOrName) -> Column
+def array_agg(col: ColumnOrName) -> Column
 def array_append(col: ColumnOrName, value: Any) -> Column
 def array_compact(col: ColumnOrName) -> Column
 def array_contains(col: ColumnOrName, value: Any) -> Column
@@ -241,6 +244,12 @@ def bit_get(col: ColumnOrName, pos: ColumnOrName) -> Column
 def bit_length(col: ColumnOrName) -> Column
 def bit_or(col: ColumnOrName) -> Column
 def bit_xor(col: ColumnOrName) -> Column
+def bitmap_and_agg(col: ColumnOrName) -> Column
+def bitmap_bit_position(col: ColumnOrName) -> Column
+def bitmap_bucket_number(col: ColumnOrName) -> Column
+def bitmap_construct_agg(col: ColumnOrName) -> Column
+def bitmap_count(col: ColumnOrName) -> Column
+def bitmap_or_agg(col: ColumnOrName) -> Column
 def bitwiseNOT(col: ColumnOrName) -> Column
 def bitwise_not(col: ColumnOrName) -> Column
 def bool_and(col: ColumnOrName) -> Column
@@ -254,7 +263,9 @@ def ceiling(col: ColumnOrName, scale: Column | int | None=None) -> Column
 def char(col: ColumnOrName) -> Column
 def char_length(str: ColumnOrName) -> Column
 def character_length(str: ColumnOrName) -> Column
+def chr(n: ColumnOrName) -> Column
 def coalesce(*cols: ColumnOrName) -> Column
+def collate(col: ColumnOrName, collation: str) -> Column
 def collation(col: ColumnOrName) -> Column
 def collect_list(col: ColumnOrName) -> Column
 def collect_set(col: ColumnOrName) -> Column
@@ -266,6 +277,7 @@ def cos(col: ColumnOrName) -> Column
 def cosh(col: ColumnOrName) -> Column
 def cot(col: ColumnOrName) -> Column
 def count_if(col: ColumnOrName) -> Column
+def count_min_sketch(col: ColumnOrName, eps: Column | float, confidence: Column | float, seed: Column | int | None=None) -> Column
 def covar_pop(col1: ColumnOrName, col2: ColumnOrName) -> Column
 def covar_samp(col1: ColumnOrName, col2: ColumnOrName) -> Column
 def crc32(col: ColumnOrName) -> Column
@@ -305,6 +317,7 @@ def elt(*inputs: ColumnOrName) -> Column
 def encode(col: ColumnOrName, charset: str) -> Column
 def endswith(str: ColumnOrName, suffix: ColumnOrName) -> Column
 def equal_null(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def every(col: ColumnOrName) -> Column
 def exp(col: ColumnOrName) -> Column
 def expm1(col: ColumnOrName) -> Column
 def extract(field: Column, source: ColumnOrName) -> Column
@@ -316,31 +329,64 @@ def flatten(col: ColumnOrName) -> Column
 def floor(col: ColumnOrName, scale: Column | int | None=None) -> Column
 def format_number(col: ColumnOrName, d: int) -> Column
 def format_string(format: str, *cols: ColumnOrName) -> Column
+def from_csv(col: ColumnOrName, schema: Column | str, options: dict[str, str] | None=None) -> Column
 def from_json(col: ColumnOrName, schema: Column | str, options: dict[str, str] | None=None) -> Column
 def from_unixtime(timestamp: ColumnOrName, format: str='yyyy-MM-dd HH:mm:ss') -> Column
 def from_utc_timestamp(timestamp: ColumnOrName, tz: Column | str) -> Column
+def from_xml(col: ColumnOrName, schema: Column | str, options: dict[str, str] | None=None) -> Column
 def get(col: ColumnOrName, index: ColumnOrName | int) -> Column
 def get_json_object(col: ColumnOrName, path: str) -> Column
 def getbit(col: ColumnOrName, pos: ColumnOrName) -> Column
 def greatest(*cols: ColumnOrName) -> Column
+def grouping(col: ColumnOrName) -> Column
+def grouping_id(*cols: ColumnOrName) -> Column
 def hash(*cols: ColumnOrName) -> Column
 def hex(col: ColumnOrName) -> Column
+def histogram_numeric(col: ColumnOrName, nBins: Column) -> Column
+def hll_sketch_agg(col: ColumnOrName, lgConfigK: Column | int | None=None) -> Column
+def hll_sketch_estimate(col: ColumnOrName) -> Column
+def hll_union(col1: ColumnOrName, col2: ColumnOrName, allowDifferentLgConfigK: bool | None=None) -> Column
+def hll_union_agg(col: ColumnOrName, allowDifferentLgConfigK: bool | Column | None=None) -> Column
 def hour(col: ColumnOrName) -> Column
 def hypot(col1: ColumnOrName | float, col2: ColumnOrName | float) -> Column
 def ifnull(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def ilike(str: ColumnOrName, pattern: ColumnOrName, escapeChar: Column | None=None) -> Column
 def initcap(col: ColumnOrName) -> Column
 def input_file_block_length() -> Column
 def input_file_block_start() -> Column
 def input_file_name() -> Column
 def instr(str: ColumnOrName, substr: str | Column) -> Column
 def is_valid_utf8(str: ColumnOrName) -> Column
+def is_valid_variant(v: ColumnOrName) -> Column
 def is_variant_null(v: ColumnOrName) -> Column
 def isnan(col: ColumnOrName) -> Column
 def isnotnull(col: ColumnOrName) -> Column
 def isnull(col: ColumnOrName) -> Column
+def java_method(*cols: ColumnOrName) -> Column
 def json_array_length(col: ColumnOrName) -> Column
 def json_object_keys(col: ColumnOrName) -> Column
 def json_tuple(col: ColumnOrName, *fields: str) -> Column
+def kll_merge_agg_bigint(col: ColumnOrName, k: Column | int | None=None) -> Column
+def kll_merge_agg_double(col: ColumnOrName, k: Column | int | None=None) -> Column
+def kll_merge_agg_float(col: ColumnOrName, k: Column | int | None=None) -> Column
+def kll_sketch_agg_bigint(col: ColumnOrName, k: Column | int | None=None) -> Column
+def kll_sketch_agg_double(col: ColumnOrName, k: Column | int | None=None) -> Column
+def kll_sketch_agg_float(col: ColumnOrName, k: Column | int | None=None) -> Column
+def kll_sketch_get_n_bigint(col: ColumnOrName) -> Column
+def kll_sketch_get_n_double(col: ColumnOrName) -> Column
+def kll_sketch_get_n_float(col: ColumnOrName) -> Column
+def kll_sketch_get_quantile_bigint(sketch: ColumnOrName, rank: ColumnOrName) -> Column
+def kll_sketch_get_quantile_double(sketch: ColumnOrName, rank: ColumnOrName) -> Column
+def kll_sketch_get_quantile_float(sketch: ColumnOrName, rank: ColumnOrName) -> Column
+def kll_sketch_get_rank_bigint(sketch: ColumnOrName, quantile: ColumnOrName) -> Column
+def kll_sketch_get_rank_double(sketch: ColumnOrName, quantile: ColumnOrName) -> Column
+def kll_sketch_get_rank_float(sketch: ColumnOrName, quantile: ColumnOrName) -> Column
+def kll_sketch_merge_bigint(left: ColumnOrName, right: ColumnOrName) -> Column
+def kll_sketch_merge_double(left: ColumnOrName, right: ColumnOrName) -> Column
+def kll_sketch_merge_float(left: ColumnOrName, right: ColumnOrName) -> Column
+def kll_sketch_to_string_bigint(col: ColumnOrName) -> Column
+def kll_sketch_to_string_double(col: ColumnOrName) -> Column
+def kll_sketch_to_string_float(col: ColumnOrName) -> Column
 def kurtosis(col: ColumnOrName) -> Column
 def lag(col: ColumnOrName, offset: int=1, default: Any | None=None) -> Column
 def last(col: ColumnOrName, ignorenulls: bool=False) -> Column
@@ -352,6 +398,7 @@ def least(*cols: ColumnOrName) -> Column
 def left(str: ColumnOrName, len: ColumnOrName) -> Column
 def length(col: ColumnOrName) -> Column
 def levenshtein(left: ColumnOrName, right: ColumnOrName, threshold: int | Column | None=None) -> Column
+def like(str: ColumnOrName, pattern: ColumnOrName, escapeChar: Column | None=None) -> Column
 def listagg(col: ColumnOrName, delimiter: Column | str | None=None) -> Column
 def ln(col: ColumnOrName) -> Column
 def localtimestamp() -> Column
@@ -376,10 +423,12 @@ def map_keys(col: ColumnOrName) -> Column
 def map_values(col: ColumnOrName) -> Column
 def mask(col: ColumnOrName, upperChar: ColumnOrName | None=None, lowerChar: ColumnOrName | None=None, digitChar: ColumnOrName | None=None, otherChar: ColumnOrName | None=None) -> Column
 def max(col: ColumnOrName) -> Column
+def max_by(col: ColumnOrName, ord: ColumnOrName, k: int | None=None) -> Column
 def md5(col: ColumnOrName) -> Column
 def mean(col: ColumnOrName) -> Column
 def median(col: ColumnOrName) -> Column
 def min(col: ColumnOrName) -> Column
+def min_by(col: ColumnOrName, ord: ColumnOrName, k: int | None=None) -> Column
 def minute(col: ColumnOrName) -> Column
 def mode(col: ColumnOrName, deterministic: bool=False) -> Column
 def monotonically_increasing_id() -> Column
@@ -388,6 +437,7 @@ def monthname(col: ColumnOrName) -> Column
 def months_between(date1: ColumnOrName, date2: ColumnOrName, roundOff: bool=True) -> Column
 def named_struct(*cols: ColumnOrName) -> Column
 def nanvl(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def negate(col: ColumnOrName) -> Column
 def negative(col: ColumnOrName) -> Column
 def next_day(date: ColumnOrName, dayOfWeek: str) -> Column
 def now() -> Column
@@ -409,6 +459,7 @@ def pmod(dividend: ColumnOrName | float, divisor: ColumnOrName | float) -> Colum
 def position(substr: ColumnOrName, str: ColumnOrName, start: ColumnOrName | None=None) -> Column
 def positive(col: ColumnOrName) -> Column
 def pow(col1: ColumnOrName | float, col2: ColumnOrName | float) -> Column
+def power(col1: ColumnOrName | float, col2: ColumnOrName | float) -> Column
 def printf(format: ColumnOrName, *cols: ColumnOrName) -> Column
 def quarter(col: ColumnOrName) -> Column
 def quote(col: ColumnOrName) -> Column
@@ -416,8 +467,10 @@ def radians(col: ColumnOrName) -> Column
 def raise_error(errMsg: Column | str) -> Column
 def rand(seed: int | None=None) -> Column
 def randn(seed: int | None=None) -> Column
+def random(seed: int | None=None) -> Column
 def randstr(length: int | Column, seed: int | Column | None=None) -> Column
 def rank() -> Column
+def reflect(*cols: ColumnOrName) -> Column
 def regexp(str: ColumnOrName, regexp: ColumnOrName) -> Column
 def regexp_count(str: ColumnOrName, regexp: ColumnOrName) -> Column
 def regexp_extract(str: ColumnOrName, pattern: str, idx: int) -> Column
@@ -440,16 +493,22 @@ def replace(src: ColumnOrName, search: ColumnOrName, replace: ColumnOrName | Non
 def reverse(col: ColumnOrName) -> Column
 def right(str: ColumnOrName, len: ColumnOrName) -> Column
 def rint(col: ColumnOrName) -> Column
+def rlike(str: ColumnOrName, regexp: ColumnOrName) -> Column
 def round(col: ColumnOrName, scale: Column | int | None=None) -> Column
 def row_number() -> Column
 def rpad(col: ColumnOrName, len: Column | int, pad: Column | str) -> Column
 def rtrim(col: ColumnOrName, trim: ColumnOrName | None=None) -> Column
+def schema_of_csv(csv: Column | str, options: dict[str, str] | None=None) -> Column
 def schema_of_json(json: Column | str, options: dict[str, str] | None=None) -> Column
 def schema_of_variant(v: ColumnOrName) -> Column
+def schema_of_variant_agg(v: ColumnOrName) -> Column
+def schema_of_xml(xml: Column | str, options: dict[str, str] | None=None) -> Column
 def sec(col: ColumnOrName) -> Column
 def second(col: ColumnOrName) -> Column
+def sentences(string: ColumnOrName, language: ColumnOrName | None=None, country: ColumnOrName | None=None) -> Column
 def sequence(start: ColumnOrName, stop: ColumnOrName, step: ColumnOrName | None=None) -> Column
 def session_user() -> Column
+def session_window(timeColumn: ColumnOrName, gapDuration: Column | str) -> Column
 def sha(col: ColumnOrName) -> Column
 def sha1(col: ColumnOrName) -> Column
 def sha2(col: ColumnOrName, numBits: int) -> Column
@@ -467,6 +526,7 @@ def sinh(col: ColumnOrName) -> Column
 def size(col: ColumnOrName) -> Column
 def skewness(col: ColumnOrName) -> Column
 def slice(x: ColumnOrName, start: ColumnOrName | int, length: ColumnOrName | int) -> Column
+def some(col: ColumnOrName) -> Column
 def sort_array(col: ColumnOrName, asc: bool=True) -> Column
 def soundex(col: ColumnOrName) -> Column
 def spark_partition_id() -> Column
@@ -479,6 +539,7 @@ def stddev(col: ColumnOrName) -> Column
 def stddev_pop(col: ColumnOrName) -> Column
 def stddev_samp(col: ColumnOrName) -> Column
 def str_to_map(text: ColumnOrName, pairDelim: ColumnOrName | None=None, keyValueDelim: ColumnOrName | None=None) -> Column
+def string_agg(col: ColumnOrName, delimiter: Column | str | None=None) -> Column
 def struct(*cols: ColumnOrName) -> Column
 def substr(str: ColumnOrName, pos: ColumnOrName, len: ColumnOrName | None=None) -> Column
 def substring(str: ColumnOrName, pos: ColumnOrName | int, len: ColumnOrName | int) -> Column
@@ -486,7 +547,16 @@ def substring_index(str: ColumnOrName, delim: str, count: int) -> Column
 def sum(col: ColumnOrName) -> Column
 def tan(col: ColumnOrName) -> Column
 def tanh(col: ColumnOrName) -> Column
+def theta_difference(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def theta_intersection(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def theta_intersection_agg(col: ColumnOrName) -> Column
+def theta_sketch_agg(col: ColumnOrName, lgNomEntries: Column | int | None=None) -> Column
+def theta_sketch_estimate(col: ColumnOrName) -> Column
+def theta_union(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None=None) -> Column
+def theta_union_agg(col: ColumnOrName, lgNomEntries: Column | int | None=None) -> Column
 def time_bucket(bucket_size: Column, ts: ColumnOrName, origin: Column | None=None) -> Column
+def timestamp_add(unit: str, quantity: ColumnOrName, ts: ColumnOrName) -> Column
+def timestamp_diff(unit: str, start: ColumnOrName, end: ColumnOrName) -> Column
 def timestamp_micros(col: ColumnOrName) -> Column
 def timestamp_millis(col: ColumnOrName) -> Column
 def timestamp_seconds(col: ColumnOrName) -> Column
@@ -494,6 +564,7 @@ def toDegrees(col: ColumnOrName) -> Column
 def toRadians(col: ColumnOrName) -> Column
 def to_binary(col: ColumnOrName, format: ColumnOrName | None=None) -> Column
 def to_char(col: ColumnOrName, format: ColumnOrName) -> Column
+def to_csv(col: ColumnOrName, options: dict[str, str] | None=None) -> Column
 def to_date(col: ColumnOrName, format: str | None=None) -> Column
 def to_json(col: ColumnOrName, options: dict[str, str] | None=None) -> Column
 def to_number(col: ColumnOrName, format: ColumnOrName) -> Column
@@ -504,6 +575,7 @@ def to_unix_timestamp(timestamp: ColumnOrName, format: ColumnOrName | None=None)
 def to_utc_timestamp(timestamp: ColumnOrName, tz: Column | str) -> Column
 def to_varchar(col: ColumnOrName, format: ColumnOrName) -> Column
 def to_variant_object(col: ColumnOrName) -> Column
+def to_xml(col: ColumnOrName, options: dict[str, str] | None=None) -> Column
 def translate(srcCol: ColumnOrName, matching: str, replace: str) -> Column
 def trim(col: ColumnOrName, trim: ColumnOrName | None=None) -> Column
 def trunc(date: ColumnOrName, format: str) -> Column
@@ -519,6 +591,7 @@ def try_mod(left: ColumnOrName, right: ColumnOrName) -> Column
 def try_multiply(left: ColumnOrName, right: ColumnOrName) -> Column
 def try_parse_json(col: ColumnOrName) -> Column
 def try_parse_url(url: ColumnOrName, partToExtract: ColumnOrName, key: ColumnOrName | None=None) -> Column
+def try_reflect(*cols: ColumnOrName) -> Column
 def try_subtract(left: ColumnOrName, right: ColumnOrName) -> Column
 def try_sum(col: ColumnOrName) -> Column
 def try_to_binary(col: ColumnOrName, format: ColumnOrName | None=None) -> Column
@@ -528,6 +601,30 @@ def try_to_timestamp(col: ColumnOrName, format: ColumnOrName | None=None) -> Col
 def try_url_decode(str: ColumnOrName) -> Column
 def try_validate_utf8(str: ColumnOrName) -> Column
 def try_variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Column
+def tuple_difference_double(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def tuple_difference_integer(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def tuple_difference_theta_double(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def tuple_difference_theta_integer(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def tuple_intersection_agg_double(col: ColumnOrName, mode: Column | str | None=None) -> Column
+def tuple_intersection_agg_integer(col: ColumnOrName, mode: Column | str | None=None) -> Column
+def tuple_intersection_double(col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None=None) -> Column
+def tuple_intersection_integer(col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None=None) -> Column
+def tuple_intersection_theta_double(col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None=None) -> Column
+def tuple_intersection_theta_integer(col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None=None) -> Column
+def tuple_sketch_agg_double(key: ColumnOrName, summary: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
+def tuple_sketch_agg_integer(key: ColumnOrName, summary: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
+def tuple_sketch_estimate_double(col: ColumnOrName) -> Column
+def tuple_sketch_estimate_integer(col: ColumnOrName) -> Column
+def tuple_sketch_summary_double(col: ColumnOrName, mode: Column | str | None=None) -> Column
+def tuple_sketch_summary_integer(col: ColumnOrName, mode: Column | str | None=None) -> Column
+def tuple_sketch_theta_double(col: ColumnOrName) -> Column
+def tuple_sketch_theta_integer(col: ColumnOrName) -> Column
+def tuple_union_agg_double(col: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
+def tuple_union_agg_integer(col: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
+def tuple_union_double(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
+def tuple_union_integer(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
+def tuple_union_theta_double(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
+def tuple_union_theta_integer(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
 def typeof(col: ColumnOrName) -> Column
 def ucase(str: ColumnOrName) -> Column
 def unbase64(col: ColumnOrName) -> Column
@@ -551,21 +648,33 @@ def version() -> Column
 def weekday(col: ColumnOrName) -> Column
 def weekofyear(col: ColumnOrName) -> Column
 def width_bucket(v: ColumnOrName, min: ColumnOrName, max: ColumnOrName, numBucket: ColumnOrName | int) -> Column
+def xpath(xml: ColumnOrName, path: ColumnOrName) -> Column
+def xpath_boolean(xml: ColumnOrName, path: ColumnOrName) -> Column
+def xpath_double(xml: ColumnOrName, path: ColumnOrName) -> Column
+def xpath_float(xml: ColumnOrName, path: ColumnOrName) -> Column
+def xpath_int(xml: ColumnOrName, path: ColumnOrName) -> Column
+def xpath_long(xml: ColumnOrName, path: ColumnOrName) -> Column
+def xpath_number(xml: ColumnOrName, path: ColumnOrName) -> Column
+def xpath_short(xml: ColumnOrName, path: ColumnOrName) -> Column
+def xpath_string(xml: ColumnOrName, path: ColumnOrName) -> Column
 def xxhash64(*cols: ColumnOrName) -> Column
 def year(col: ColumnOrName) -> Column
 def zeroifnull(col: ColumnOrName) -> Column
 ## sql/_generated_functions.pyi
 __all__
-__all__ = ['abs', 'acos', 'acosh', 'add_months', 'aes_decrypt', 'aes_encrypt', 'approx_count_distinct', 'approx_percentile', 'array', 'array_append', 'array_compact', 'array_contains', 'array_distinct', 'array_except', 'array_insert', 'array_intersect', 'array_join', 'array_max', 'array_min', 'array_position', 'array_prepend', 'array_remove', 'array_repeat', 'array_size', 'array_union', 'arrays_overlap', 'arrays_zip', 'ascii', 'asin', 'asinh', 'assert_true', 'atan', 'atan2', 'atanh', 'avg', 'base64', 'bin', 'bit_and', 'bit_count', 'bit_get', 'bit_length', 'bit_or', 'bit_xor', 'bitwiseNOT', 'bitwise_not', 'bool_and', 'bool_or', 'bround', 'btrim', 'cardinality', 'cbrt', 'ceil', 'ceiling', 'char', 'char_length', 'character_length', 'coalesce', 'collation', 'collect_list', 'collect_set', 'concat_ws', 'contains', 'conv', 'corr', 'cos', 'cosh', 'cot', 'count_if', 'covar_pop', 'covar_samp', 'crc32', 'create_map', 'csc', 'cume_dist', 'curdate', 'current_catalog', 'current_database', 'current_date', 'current_path', 'current_schema', 'current_timestamp', 'current_timezone', 'current_user', 'date_add', 'date_diff', 'date_format', 'date_from_unix_date', 'date_part', 'date_sub', 'date_trunc', 'dateadd', 'datediff', 'datepart', 'day', 'dayname', 'dayofmonth', 'dayofweek', 'dayofyear', 'decode', 'degrees', 'dense_rank', 'e', 'element_at', 'elt', 'encode', 'endswith', 'equal_null', 'exp', 'expm1', 'extract', 'factorial', 'find_in_set', 'first', 'first_value', 'flatten', 'floor', 'format_number', 'format_string', 'from_json', 'from_unixtime', 'from_utc_timestamp', 'get', 'get_json_object', 'getbit', 'greatest', 'hash', 'hex', 'hour', 'hypot', 'ifnull', 'initcap', 'input_file_block_length', 'input_file_block_start', 'input_file_name', 'instr', 'is_valid_utf8', 'is_variant_null', 'isnan', 'isnotnull', 'isnull', 'json_array_length', 'json_object_keys', 'json_tuple', 'kurtosis', 'lag', 'last', 'last_day', 'last_value', 'lcase', 'lead', 'least', 'left', 'length', 'levenshtein', 'listagg', 'ln', 'localtimestamp', 'locate', 'log10', 'log1p', 'log2', 'lower', 'lpad', 'ltrim', 'make_date', 'make_timestamp', 'make_timestamp_ltz', 'make_timestamp_ntz', 'make_valid_utf8', 'map_concat', 'map_contains_key', 'map_entries', 'map_from_arrays', 'map_from_entries', 'map_keys', 'map_values', 'mask', 'max', 'md5', 'mean', 'median', 'min', 'minute', 'mode', 'monotonically_increasing_id', 'month', 'monthname', 'months_between', 'named_struct', 'nanvl', 'negative', 'next_day', 'now', 'nth_value', 'ntile', 'nullif', 'nullifzero', 'nvl', 'nvl2', 'octet_length', 'overlay', 'parse_json', 'parse_url', 'percent_rank', 'percentile', 'percentile_approx', 'pi', 'pmod', 'position', 'positive', 'pow', 'printf', 'quarter', 'quote', 'radians', 'raise_error', 'rand', 'randn', 'randstr', 'rank', 'regexp', 'regexp_count', 'regexp_extract', 'regexp_extract_all', 'regexp_instr', 'regexp_like', 'regexp_replace', 'regexp_substr', 'regr_avgx', 'regr_avgy', 'regr_count', 'regr_intercept', 'regr_r2', 'regr_slope', 'regr_sxx', 'regr_sxy', 'regr_syy', 'repeat', 'replace', 'reverse', 'right', 'rint', 'round', 'row_number', 'rpad', 'rtrim', 'schema_of_json', 'schema_of_variant', 'sec', 'second', 'sequence', 'session_user', 'sha', 'sha1', 'sha2', 'shiftLeft', 'shiftRight', 'shiftRightUnsigned', 'shiftleft', 'shiftright', 'shiftrightunsigned', 'shuffle', 'sign', 'signum', 'sin', 'sinh', 'size', 'skewness', 'slice', 'sort_array', 'soundex', 'spark_partition_id', 'split', 'split_part', 'sqrt', 'startswith', 'std', 'stddev', 'stddev_pop', 'stddev_samp', 'str_to_map', 'struct', 'substr', 'substring', 'substring_index', 'sum', 'tan', 'tanh', 'time_bucket', 'timestamp_micros', 'timestamp_millis', 'timestamp_seconds', 'toDegrees', 'toRadians', 'to_binary', 'to_char', 'to_date', 'to_json', 'to_number', 'to_timestamp', 'to_timestamp_ltz', 'to_timestamp_ntz', 'to_unix_timestamp', 'to_utc_timestamp', 'to_varchar', 'to_variant_object', 'translate', 'trim', 'trunc', 'try_add', 'try_aes_decrypt', 'try_avg', 'try_divide', 'try_element_at', 'try_make_timestamp', 'try_make_timestamp_ltz', 'try_make_timestamp_ntz', 'try_mod', 'try_multiply', 'try_parse_json', 'try_parse_url', 'try_subtract', 'try_sum', 'try_to_binary', 'try_to_date', 'try_to_number', 'try_to_timestamp', 'try_url_decode', 'try_validate_utf8', 'try_variant_get', 'typeof', 'ucase', 'unbase64', 'unhex', 'uniform', 'unix_date', 'unix_micros', 'unix_millis', 'unix_seconds', 'upper', 'url_decode', 'url_encode', 'user', 'uuid', 'validate_utf8', 'var_pop', 'var_samp', 'variance', 'variant_get', 'version', 'weekday', 'weekofyear', 'width_bucket', 'xxhash64', 'year', 'zeroifnull']
+__all__ = ['abs', 'acos', 'acosh', 'add_months', 'aes_decrypt', 'aes_encrypt', 'any_value', 'approxCountDistinct', 'approx_count_distinct', 'approx_percentile', 'array', 'array_agg', 'array_append', 'array_compact', 'array_contains', 'array_distinct', 'array_except', 'array_insert', 'array_intersect', 'array_join', 'array_max', 'array_min', 'array_position', 'array_prepend', 'array_remove', 'array_repeat', 'array_size', 'array_union', 'arrays_overlap', 'arrays_zip', 'ascii', 'asin', 'asinh', 'assert_true', 'atan', 'atan2', 'atanh', 'avg', 'base64', 'bin', 'bit_and', 'bit_count', 'bit_get', 'bit_length', 'bit_or', 'bit_xor', 'bitmap_and_agg', 'bitmap_bit_position', 'bitmap_bucket_number', 'bitmap_construct_agg', 'bitmap_count', 'bitmap_or_agg', 'bitwiseNOT', 'bitwise_not', 'bool_and', 'bool_or', 'bround', 'btrim', 'cardinality', 'cbrt', 'ceil', 'ceiling', 'char', 'char_length', 'character_length', 'chr', 'coalesce', 'collate', 'collation', 'collect_list', 'collect_set', 'concat_ws', 'contains', 'conv', 'corr', 'cos', 'cosh', 'cot', 'count_if', 'count_min_sketch', 'covar_pop', 'covar_samp', 'crc32', 'create_map', 'csc', 'cume_dist', 'curdate', 'current_catalog', 'current_database', 'current_date', 'current_path', 'current_schema', 'current_timestamp', 'current_timezone', 'current_user', 'date_add', 'date_diff', 'date_format', 'date_from_unix_date', 'date_part', 'date_sub', 'date_trunc', 'dateadd', 'datediff', 'datepart', 'day', 'dayname', 'dayofmonth', 'dayofweek', 'dayofyear', 'decode', 'degrees', 'dense_rank', 'e', 'element_at', 'elt', 'encode', 'endswith', 'equal_null', 'every', 'exp', 'expm1', 'extract', 'factorial', 'find_in_set', 'first', 'first_value', 'flatten', 'floor', 'format_number', 'format_string', 'from_csv', 'from_json', 'from_unixtime', 'from_utc_timestamp', 'from_xml', 'get', 'get_json_object', 'getbit', 'greatest', 'grouping', 'grouping_id', 'hash', 'hex', 'histogram_numeric', 'hll_sketch_agg', 'hll_sketch_estimate', 'hll_union', 'hll_union_agg', 'hour', 'hypot', 'ifnull', 'ilike', 'initcap', 'input_file_block_length', 'input_file_block_start', 'input_file_name', 'instr', 'is_valid_utf8', 'is_valid_variant', 'is_variant_null', 'isnan', 'isnotnull', 'isnull', 'java_method', 'json_array_length', 'json_object_keys', 'json_tuple', 'kll_merge_agg_bigint', 'kll_merge_agg_double', 'kll_merge_agg_float', 'kll_sketch_agg_bigint', 'kll_sketch_agg_double', 'kll_sketch_agg_float', 'kll_sketch_get_n_bigint', 'kll_sketch_get_n_double', 'kll_sketch_get_n_float', 'kll_sketch_get_quantile_bigint', 'kll_sketch_get_quantile_double', 'kll_sketch_get_quantile_float', 'kll_sketch_get_rank_bigint', 'kll_sketch_get_rank_double', 'kll_sketch_get_rank_float', 'kll_sketch_merge_bigint', 'kll_sketch_merge_double', 'kll_sketch_merge_float', 'kll_sketch_to_string_bigint', 'kll_sketch_to_string_double', 'kll_sketch_to_string_float', 'kurtosis', 'lag', 'last', 'last_day', 'last_value', 'lcase', 'lead', 'least', 'left', 'length', 'levenshtein', 'like', 'listagg', 'ln', 'localtimestamp', 'locate', 'log10', 'log1p', 'log2', 'lower', 'lpad', 'ltrim', 'make_date', 'make_timestamp', 'make_timestamp_ltz', 'make_timestamp_ntz', 'make_valid_utf8', 'map_concat', 'map_contains_key', 'map_entries', 'map_from_arrays', 'map_from_entries', 'map_keys', 'map_values', 'mask', 'max', 'max_by', 'md5', 'mean', 'median', 'min', 'min_by', 'minute', 'mode', 'monotonically_increasing_id', 'month', 'monthname', 'months_between', 'named_struct', 'nanvl', 'negate', 'negative', 'next_day', 'now', 'nth_value', 'ntile', 'nullif', 'nullifzero', 'nvl', 'nvl2', 'octet_length', 'overlay', 'parse_json', 'parse_url', 'percent_rank', 'percentile', 'percentile_approx', 'pi', 'pmod', 'position', 'positive', 'pow', 'power', 'printf', 'quarter', 'quote', 'radians', 'raise_error', 'rand', 'randn', 'random', 'randstr', 'rank', 'reflect', 'regexp', 'regexp_count', 'regexp_extract', 'regexp_extract_all', 'regexp_instr', 'regexp_like', 'regexp_replace', 'regexp_substr', 'regr_avgx', 'regr_avgy', 'regr_count', 'regr_intercept', 'regr_r2', 'regr_slope', 'regr_sxx', 'regr_sxy', 'regr_syy', 'repeat', 'replace', 'reverse', 'right', 'rint', 'rlike', 'round', 'row_number', 'rpad', 'rtrim', 'schema_of_csv', 'schema_of_json', 'schema_of_variant', 'schema_of_variant_agg', 'schema_of_xml', 'sec', 'second', 'sentences', 'sequence', 'session_user', 'session_window', 'sha', 'sha1', 'sha2', 'shiftLeft', 'shiftRight', 'shiftRightUnsigned', 'shiftleft', 'shiftright', 'shiftrightunsigned', 'shuffle', 'sign', 'signum', 'sin', 'sinh', 'size', 'skewness', 'slice', 'some', 'sort_array', 'soundex', 'spark_partition_id', 'split', 'split_part', 'sqrt', 'startswith', 'std', 'stddev', 'stddev_pop', 'stddev_samp', 'str_to_map', 'string_agg', 'struct', 'substr', 'substring', 'substring_index', 'sum', 'tan', 'tanh', 'theta_difference', 'theta_intersection', 'theta_intersection_agg', 'theta_sketch_agg', 'theta_sketch_estimate', 'theta_union', 'theta_union_agg', 'time_bucket', 'timestamp_add', 'timestamp_diff', 'timestamp_micros', 'timestamp_millis', 'timestamp_seconds', 'toDegrees', 'toRadians', 'to_binary', 'to_char', 'to_csv', 'to_date', 'to_json', 'to_number', 'to_timestamp', 'to_timestamp_ltz', 'to_timestamp_ntz', 'to_unix_timestamp', 'to_utc_timestamp', 'to_varchar', 'to_variant_object', 'to_xml', 'translate', 'trim', 'trunc', 'try_add', 'try_aes_decrypt', 'try_avg', 'try_divide', 'try_element_at', 'try_make_timestamp', 'try_make_timestamp_ltz', 'try_make_timestamp_ntz', 'try_mod', 'try_multiply', 'try_parse_json', 'try_parse_url', 'try_reflect', 'try_subtract', 'try_sum', 'try_to_binary', 'try_to_date', 'try_to_number', 'try_to_timestamp', 'try_url_decode', 'try_validate_utf8', 'try_variant_get', 'tuple_difference_double', 'tuple_difference_integer', 'tuple_difference_theta_double', 'tuple_difference_theta_integer', 'tuple_intersection_agg_double', 'tuple_intersection_agg_integer', 'tuple_intersection_double', 'tuple_intersection_integer', 'tuple_intersection_theta_double', 'tuple_intersection_theta_integer', 'tuple_sketch_agg_double', 'tuple_sketch_agg_integer', 'tuple_sketch_estimate_double', 'tuple_sketch_estimate_integer', 'tuple_sketch_summary_double', 'tuple_sketch_summary_integer', 'tuple_sketch_theta_double', 'tuple_sketch_theta_integer', 'tuple_union_agg_double', 'tuple_union_agg_integer', 'tuple_union_double', 'tuple_union_integer', 'tuple_union_theta_double', 'tuple_union_theta_integer', 'typeof', 'ucase', 'unbase64', 'unhex', 'uniform', 'unix_date', 'unix_micros', 'unix_millis', 'unix_seconds', 'upper', 'url_decode', 'url_encode', 'user', 'uuid', 'validate_utf8', 'var_pop', 'var_samp', 'variance', 'variant_get', 'version', 'weekday', 'weekofyear', 'width_bucket', 'xpath', 'xpath_boolean', 'xpath_double', 'xpath_float', 'xpath_int', 'xpath_long', 'xpath_number', 'xpath_short', 'xpath_string', 'xxhash64', 'year', 'zeroifnull']
 def abs(col: ColumnOrName) -> Column
 def acos(col: ColumnOrName) -> Column
 def acosh(col: ColumnOrName) -> Column
 def add_months(start: ColumnOrName, months: ColumnOrName | int) -> Column
 def aes_decrypt(input: ColumnOrName, key: ColumnOrName, mode: ColumnOrName | None=None, padding: ColumnOrName | None=None, aad: ColumnOrName | None=None) -> Column
 def aes_encrypt(input: ColumnOrName, key: ColumnOrName, mode: ColumnOrName | None=None, padding: ColumnOrName | None=None, iv: ColumnOrName | None=None, aad: ColumnOrName | None=None) -> Column
+def any_value(col: ColumnOrName, ignoreNulls: bool | Column | None=None) -> Column
+def approxCountDistinct(col: ColumnOrName, rsd: Column | float | None=None) -> Column
 def approx_count_distinct(col: ColumnOrName, rsd: Column | float | None=None) -> Column
 def approx_percentile(col: ColumnOrName, percentage: Column | float, accuracy: Column | int=10000) -> Column
 def array(*cols: ColumnOrName) -> Column
+def array_agg(col: ColumnOrName) -> Column
 def array_append(col: ColumnOrName, value: Any) -> Column
 def array_compact(col: ColumnOrName) -> Column
 def array_contains(col: ColumnOrName, value: Any) -> Column
@@ -600,6 +709,12 @@ def bit_get(col: ColumnOrName, pos: ColumnOrName) -> Column
 def bit_length(col: ColumnOrName) -> Column
 def bit_or(col: ColumnOrName) -> Column
 def bit_xor(col: ColumnOrName) -> Column
+def bitmap_and_agg(col: ColumnOrName) -> Column
+def bitmap_bit_position(col: ColumnOrName) -> Column
+def bitmap_bucket_number(col: ColumnOrName) -> Column
+def bitmap_construct_agg(col: ColumnOrName) -> Column
+def bitmap_count(col: ColumnOrName) -> Column
+def bitmap_or_agg(col: ColumnOrName) -> Column
 def bitwiseNOT(col: ColumnOrName) -> Column
 def bitwise_not(col: ColumnOrName) -> Column
 def bool_and(col: ColumnOrName) -> Column
@@ -613,7 +728,9 @@ def ceiling(col: ColumnOrName, scale: Column | int | None=None) -> Column
 def char(col: ColumnOrName) -> Column
 def char_length(str: ColumnOrName) -> Column
 def character_length(str: ColumnOrName) -> Column
+def chr(n: ColumnOrName) -> Column
 def coalesce(*cols: ColumnOrName) -> Column
+def collate(col: ColumnOrName, collation: str) -> Column
 def collation(col: ColumnOrName) -> Column
 def collect_list(col: ColumnOrName) -> Column
 def collect_set(col: ColumnOrName) -> Column
@@ -625,6 +742,7 @@ def cos(col: ColumnOrName) -> Column
 def cosh(col: ColumnOrName) -> Column
 def cot(col: ColumnOrName) -> Column
 def count_if(col: ColumnOrName) -> Column
+def count_min_sketch(col: ColumnOrName, eps: Column | float, confidence: Column | float, seed: Column | int | None=None) -> Column
 def covar_pop(col1: ColumnOrName, col2: ColumnOrName) -> Column
 def covar_samp(col1: ColumnOrName, col2: ColumnOrName) -> Column
 def crc32(col: ColumnOrName) -> Column
@@ -664,6 +782,7 @@ def elt(*inputs: ColumnOrName) -> Column
 def encode(col: ColumnOrName, charset: str) -> Column
 def endswith(str: ColumnOrName, suffix: ColumnOrName) -> Column
 def equal_null(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def every(col: ColumnOrName) -> Column
 def exp(col: ColumnOrName) -> Column
 def expm1(col: ColumnOrName) -> Column
 def extract(field: Column, source: ColumnOrName) -> Column
@@ -675,31 +794,64 @@ def flatten(col: ColumnOrName) -> Column
 def floor(col: ColumnOrName, scale: Column | int | None=None) -> Column
 def format_number(col: ColumnOrName, d: int) -> Column
 def format_string(format: str, *cols: ColumnOrName) -> Column
+def from_csv(col: ColumnOrName, schema: Column | str, options: dict[str, str] | None=None) -> Column
 def from_json(col: ColumnOrName, schema: Column | str, options: dict[str, str] | None=None) -> Column
 def from_unixtime(timestamp: ColumnOrName, format: str='yyyy-MM-dd HH:mm:ss') -> Column
 def from_utc_timestamp(timestamp: ColumnOrName, tz: Column | str) -> Column
+def from_xml(col: ColumnOrName, schema: Column | str, options: dict[str, str] | None=None) -> Column
 def get(col: ColumnOrName, index: ColumnOrName | int) -> Column
 def get_json_object(col: ColumnOrName, path: str) -> Column
 def getbit(col: ColumnOrName, pos: ColumnOrName) -> Column
 def greatest(*cols: ColumnOrName) -> Column
+def grouping(col: ColumnOrName) -> Column
+def grouping_id(*cols: ColumnOrName) -> Column
 def hash(*cols: ColumnOrName) -> Column
 def hex(col: ColumnOrName) -> Column
+def histogram_numeric(col: ColumnOrName, nBins: Column) -> Column
+def hll_sketch_agg(col: ColumnOrName, lgConfigK: Column | int | None=None) -> Column
+def hll_sketch_estimate(col: ColumnOrName) -> Column
+def hll_union(col1: ColumnOrName, col2: ColumnOrName, allowDifferentLgConfigK: bool | None=None) -> Column
+def hll_union_agg(col: ColumnOrName, allowDifferentLgConfigK: bool | Column | None=None) -> Column
 def hour(col: ColumnOrName) -> Column
 def hypot(col1: ColumnOrName | float, col2: ColumnOrName | float) -> Column
 def ifnull(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def ilike(str: ColumnOrName, pattern: ColumnOrName, escapeChar: Column | None=None) -> Column
 def initcap(col: ColumnOrName) -> Column
 def input_file_block_length() -> Column
 def input_file_block_start() -> Column
 def input_file_name() -> Column
 def instr(str: ColumnOrName, substr: str | Column) -> Column
 def is_valid_utf8(str: ColumnOrName) -> Column
+def is_valid_variant(v: ColumnOrName) -> Column
 def is_variant_null(v: ColumnOrName) -> Column
 def isnan(col: ColumnOrName) -> Column
 def isnotnull(col: ColumnOrName) -> Column
 def isnull(col: ColumnOrName) -> Column
+def java_method(*cols: ColumnOrName) -> Column
 def json_array_length(col: ColumnOrName) -> Column
 def json_object_keys(col: ColumnOrName) -> Column
 def json_tuple(col: ColumnOrName, *fields: str) -> Column
+def kll_merge_agg_bigint(col: ColumnOrName, k: Column | int | None=None) -> Column
+def kll_merge_agg_double(col: ColumnOrName, k: Column | int | None=None) -> Column
+def kll_merge_agg_float(col: ColumnOrName, k: Column | int | None=None) -> Column
+def kll_sketch_agg_bigint(col: ColumnOrName, k: Column | int | None=None) -> Column
+def kll_sketch_agg_double(col: ColumnOrName, k: Column | int | None=None) -> Column
+def kll_sketch_agg_float(col: ColumnOrName, k: Column | int | None=None) -> Column
+def kll_sketch_get_n_bigint(col: ColumnOrName) -> Column
+def kll_sketch_get_n_double(col: ColumnOrName) -> Column
+def kll_sketch_get_n_float(col: ColumnOrName) -> Column
+def kll_sketch_get_quantile_bigint(sketch: ColumnOrName, rank: ColumnOrName) -> Column
+def kll_sketch_get_quantile_double(sketch: ColumnOrName, rank: ColumnOrName) -> Column
+def kll_sketch_get_quantile_float(sketch: ColumnOrName, rank: ColumnOrName) -> Column
+def kll_sketch_get_rank_bigint(sketch: ColumnOrName, quantile: ColumnOrName) -> Column
+def kll_sketch_get_rank_double(sketch: ColumnOrName, quantile: ColumnOrName) -> Column
+def kll_sketch_get_rank_float(sketch: ColumnOrName, quantile: ColumnOrName) -> Column
+def kll_sketch_merge_bigint(left: ColumnOrName, right: ColumnOrName) -> Column
+def kll_sketch_merge_double(left: ColumnOrName, right: ColumnOrName) -> Column
+def kll_sketch_merge_float(left: ColumnOrName, right: ColumnOrName) -> Column
+def kll_sketch_to_string_bigint(col: ColumnOrName) -> Column
+def kll_sketch_to_string_double(col: ColumnOrName) -> Column
+def kll_sketch_to_string_float(col: ColumnOrName) -> Column
 def kurtosis(col: ColumnOrName) -> Column
 def lag(col: ColumnOrName, offset: int=1, default: Any | None=None) -> Column
 def last(col: ColumnOrName, ignorenulls: bool=False) -> Column
@@ -711,6 +863,7 @@ def least(*cols: ColumnOrName) -> Column
 def left(str: ColumnOrName, len: ColumnOrName) -> Column
 def length(col: ColumnOrName) -> Column
 def levenshtein(left: ColumnOrName, right: ColumnOrName, threshold: int | Column | None=None) -> Column
+def like(str: ColumnOrName, pattern: ColumnOrName, escapeChar: Column | None=None) -> Column
 def listagg(col: ColumnOrName, delimiter: Column | str | None=None) -> Column
 def ln(col: ColumnOrName) -> Column
 def localtimestamp() -> Column
@@ -735,10 +888,12 @@ def map_keys(col: ColumnOrName) -> Column
 def map_values(col: ColumnOrName) -> Column
 def mask(col: ColumnOrName, upperChar: ColumnOrName | None=None, lowerChar: ColumnOrName | None=None, digitChar: ColumnOrName | None=None, otherChar: ColumnOrName | None=None) -> Column
 def max(col: ColumnOrName) -> Column
+def max_by(col: ColumnOrName, ord: ColumnOrName, k: int | None=None) -> Column
 def md5(col: ColumnOrName) -> Column
 def mean(col: ColumnOrName) -> Column
 def median(col: ColumnOrName) -> Column
 def min(col: ColumnOrName) -> Column
+def min_by(col: ColumnOrName, ord: ColumnOrName, k: int | None=None) -> Column
 def minute(col: ColumnOrName) -> Column
 def mode(col: ColumnOrName, deterministic: bool=False) -> Column
 def monotonically_increasing_id() -> Column
@@ -747,6 +902,7 @@ def monthname(col: ColumnOrName) -> Column
 def months_between(date1: ColumnOrName, date2: ColumnOrName, roundOff: bool=True) -> Column
 def named_struct(*cols: ColumnOrName) -> Column
 def nanvl(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def negate(col: ColumnOrName) -> Column
 def negative(col: ColumnOrName) -> Column
 def next_day(date: ColumnOrName, dayOfWeek: str) -> Column
 def now() -> Column
@@ -768,6 +924,7 @@ def pmod(dividend: ColumnOrName | float, divisor: ColumnOrName | float) -> Colum
 def position(substr: ColumnOrName, str: ColumnOrName, start: ColumnOrName | None=None) -> Column
 def positive(col: ColumnOrName) -> Column
 def pow(col1: ColumnOrName | float, col2: ColumnOrName | float) -> Column
+def power(col1: ColumnOrName | float, col2: ColumnOrName | float) -> Column
 def printf(format: ColumnOrName, *cols: ColumnOrName) -> Column
 def quarter(col: ColumnOrName) -> Column
 def quote(col: ColumnOrName) -> Column
@@ -775,8 +932,10 @@ def radians(col: ColumnOrName) -> Column
 def raise_error(errMsg: Column | str) -> Column
 def rand(seed: int | None=None) -> Column
 def randn(seed: int | None=None) -> Column
+def random(seed: int | None=None) -> Column
 def randstr(length: int | Column, seed: int | Column | None=None) -> Column
 def rank() -> Column
+def reflect(*cols: ColumnOrName) -> Column
 def regexp(str: ColumnOrName, regexp: ColumnOrName) -> Column
 def regexp_count(str: ColumnOrName, regexp: ColumnOrName) -> Column
 def regexp_extract(str: ColumnOrName, pattern: str, idx: int) -> Column
@@ -799,16 +958,22 @@ def replace(src: ColumnOrName, search: ColumnOrName, replace: ColumnOrName | Non
 def reverse(col: ColumnOrName) -> Column
 def right(str: ColumnOrName, len: ColumnOrName) -> Column
 def rint(col: ColumnOrName) -> Column
+def rlike(str: ColumnOrName, regexp: ColumnOrName) -> Column
 def round(col: ColumnOrName, scale: Column | int | None=None) -> Column
 def row_number() -> Column
 def rpad(col: ColumnOrName, len: Column | int, pad: Column | str) -> Column
 def rtrim(col: ColumnOrName, trim: ColumnOrName | None=None) -> Column
+def schema_of_csv(csv: Column | str, options: dict[str, str] | None=None) -> Column
 def schema_of_json(json: Column | str, options: dict[str, str] | None=None) -> Column
 def schema_of_variant(v: ColumnOrName) -> Column
+def schema_of_variant_agg(v: ColumnOrName) -> Column
+def schema_of_xml(xml: Column | str, options: dict[str, str] | None=None) -> Column
 def sec(col: ColumnOrName) -> Column
 def second(col: ColumnOrName) -> Column
+def sentences(string: ColumnOrName, language: ColumnOrName | None=None, country: ColumnOrName | None=None) -> Column
 def sequence(start: ColumnOrName, stop: ColumnOrName, step: ColumnOrName | None=None) -> Column
 def session_user() -> Column
+def session_window(timeColumn: ColumnOrName, gapDuration: Column | str) -> Column
 def sha(col: ColumnOrName) -> Column
 def sha1(col: ColumnOrName) -> Column
 def sha2(col: ColumnOrName, numBits: int) -> Column
@@ -826,6 +991,7 @@ def sinh(col: ColumnOrName) -> Column
 def size(col: ColumnOrName) -> Column
 def skewness(col: ColumnOrName) -> Column
 def slice(x: ColumnOrName, start: ColumnOrName | int, length: ColumnOrName | int) -> Column
+def some(col: ColumnOrName) -> Column
 def sort_array(col: ColumnOrName, asc: bool=True) -> Column
 def soundex(col: ColumnOrName) -> Column
 def spark_partition_id() -> Column
@@ -838,6 +1004,7 @@ def stddev(col: ColumnOrName) -> Column
 def stddev_pop(col: ColumnOrName) -> Column
 def stddev_samp(col: ColumnOrName) -> Column
 def str_to_map(text: ColumnOrName, pairDelim: ColumnOrName | None=None, keyValueDelim: ColumnOrName | None=None) -> Column
+def string_agg(col: ColumnOrName, delimiter: Column | str | None=None) -> Column
 def struct(*cols: ColumnOrName) -> Column
 def substr(str: ColumnOrName, pos: ColumnOrName, len: ColumnOrName | None=None) -> Column
 def substring(str: ColumnOrName, pos: ColumnOrName | int, len: ColumnOrName | int) -> Column
@@ -845,7 +1012,16 @@ def substring_index(str: ColumnOrName, delim: str, count: int) -> Column
 def sum(col: ColumnOrName) -> Column
 def tan(col: ColumnOrName) -> Column
 def tanh(col: ColumnOrName) -> Column
+def theta_difference(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def theta_intersection(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def theta_intersection_agg(col: ColumnOrName) -> Column
+def theta_sketch_agg(col: ColumnOrName, lgNomEntries: Column | int | None=None) -> Column
+def theta_sketch_estimate(col: ColumnOrName) -> Column
+def theta_union(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None=None) -> Column
+def theta_union_agg(col: ColumnOrName, lgNomEntries: Column | int | None=None) -> Column
 def time_bucket(bucket_size: Column, ts: ColumnOrName, origin: Column | None=None) -> Column
+def timestamp_add(unit: str, quantity: ColumnOrName, ts: ColumnOrName) -> Column
+def timestamp_diff(unit: str, start: ColumnOrName, end: ColumnOrName) -> Column
 def timestamp_micros(col: ColumnOrName) -> Column
 def timestamp_millis(col: ColumnOrName) -> Column
 def timestamp_seconds(col: ColumnOrName) -> Column
@@ -853,6 +1029,7 @@ def toDegrees(col: ColumnOrName) -> Column
 def toRadians(col: ColumnOrName) -> Column
 def to_binary(col: ColumnOrName, format: ColumnOrName | None=None) -> Column
 def to_char(col: ColumnOrName, format: ColumnOrName) -> Column
+def to_csv(col: ColumnOrName, options: dict[str, str] | None=None) -> Column
 def to_date(col: ColumnOrName, format: str | None=None) -> Column
 def to_json(col: ColumnOrName, options: dict[str, str] | None=None) -> Column
 def to_number(col: ColumnOrName, format: ColumnOrName) -> Column
@@ -863,6 +1040,7 @@ def to_unix_timestamp(timestamp: ColumnOrName, format: ColumnOrName | None=None)
 def to_utc_timestamp(timestamp: ColumnOrName, tz: Column | str) -> Column
 def to_varchar(col: ColumnOrName, format: ColumnOrName) -> Column
 def to_variant_object(col: ColumnOrName) -> Column
+def to_xml(col: ColumnOrName, options: dict[str, str] | None=None) -> Column
 def translate(srcCol: ColumnOrName, matching: str, replace: str) -> Column
 def trim(col: ColumnOrName, trim: ColumnOrName | None=None) -> Column
 def trunc(date: ColumnOrName, format: str) -> Column
@@ -878,6 +1056,7 @@ def try_mod(left: ColumnOrName, right: ColumnOrName) -> Column
 def try_multiply(left: ColumnOrName, right: ColumnOrName) -> Column
 def try_parse_json(col: ColumnOrName) -> Column
 def try_parse_url(url: ColumnOrName, partToExtract: ColumnOrName, key: ColumnOrName | None=None) -> Column
+def try_reflect(*cols: ColumnOrName) -> Column
 def try_subtract(left: ColumnOrName, right: ColumnOrName) -> Column
 def try_sum(col: ColumnOrName) -> Column
 def try_to_binary(col: ColumnOrName, format: ColumnOrName | None=None) -> Column
@@ -887,6 +1066,30 @@ def try_to_timestamp(col: ColumnOrName, format: ColumnOrName | None=None) -> Col
 def try_url_decode(str: ColumnOrName) -> Column
 def try_validate_utf8(str: ColumnOrName) -> Column
 def try_variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Column
+def tuple_difference_double(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def tuple_difference_integer(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def tuple_difference_theta_double(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def tuple_difference_theta_integer(col1: ColumnOrName, col2: ColumnOrName) -> Column
+def tuple_intersection_agg_double(col: ColumnOrName, mode: Column | str | None=None) -> Column
+def tuple_intersection_agg_integer(col: ColumnOrName, mode: Column | str | None=None) -> Column
+def tuple_intersection_double(col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None=None) -> Column
+def tuple_intersection_integer(col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None=None) -> Column
+def tuple_intersection_theta_double(col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None=None) -> Column
+def tuple_intersection_theta_integer(col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None=None) -> Column
+def tuple_sketch_agg_double(key: ColumnOrName, summary: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
+def tuple_sketch_agg_integer(key: ColumnOrName, summary: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
+def tuple_sketch_estimate_double(col: ColumnOrName) -> Column
+def tuple_sketch_estimate_integer(col: ColumnOrName) -> Column
+def tuple_sketch_summary_double(col: ColumnOrName, mode: Column | str | None=None) -> Column
+def tuple_sketch_summary_integer(col: ColumnOrName, mode: Column | str | None=None) -> Column
+def tuple_sketch_theta_double(col: ColumnOrName) -> Column
+def tuple_sketch_theta_integer(col: ColumnOrName) -> Column
+def tuple_union_agg_double(col: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
+def tuple_union_agg_integer(col: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
+def tuple_union_double(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
+def tuple_union_integer(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
+def tuple_union_theta_double(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
+def tuple_union_theta_integer(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
 def typeof(col: ColumnOrName) -> Column
 def ucase(str: ColumnOrName) -> Column
 def unbase64(col: ColumnOrName) -> Column
@@ -910,6 +1113,15 @@ def version() -> Column
 def weekday(col: ColumnOrName) -> Column
 def weekofyear(col: ColumnOrName) -> Column
 def width_bucket(v: ColumnOrName, min: ColumnOrName, max: ColumnOrName, numBucket: ColumnOrName | int) -> Column
+def xpath(xml: ColumnOrName, path: ColumnOrName) -> Column
+def xpath_boolean(xml: ColumnOrName, path: ColumnOrName) -> Column
+def xpath_double(xml: ColumnOrName, path: ColumnOrName) -> Column
+def xpath_float(xml: ColumnOrName, path: ColumnOrName) -> Column
+def xpath_int(xml: ColumnOrName, path: ColumnOrName) -> Column
+def xpath_long(xml: ColumnOrName, path: ColumnOrName) -> Column
+def xpath_number(xml: ColumnOrName, path: ColumnOrName) -> Column
+def xpath_short(xml: ColumnOrName, path: ColumnOrName) -> Column
+def xpath_string(xml: ColumnOrName, path: ColumnOrName) -> Column
 def xxhash64(*cols: ColumnOrName) -> Column
 def year(col: ColumnOrName) -> Column
 def zeroifnull(col: ColumnOrName) -> Column
@@ -933,12 +1145,14 @@ Column.def __mul__(self, other: Any) -> Column
 Column.def __ne__(self, other: object) -> Column
 Column.def __neg__(self) -> Column
 Column.def __or__(self, other: Any) -> Column
+Column.def __pow__(self, other: Any) -> Column
 Column.def __radd__(self, other: Any) -> Column
 Column.def __rand__(self, other: Any) -> Column
 Column.def __repr__(self) -> str
 Column.def __rmod__(self, other: Any) -> Column
 Column.def __rmul__(self, other: Any) -> Column
 Column.def __ror__(self, other: Any) -> Column
+Column.def __rpow__(self, other: Any) -> Column
 Column.def __rsub__(self, other: Any) -> Column
 Column.def __rtruediv__(self, other: Any) -> Column
 Column.def __sub__(self, other: Any) -> Column
@@ -1077,24 +1291,81 @@ __all__
 __all__ = [*_HAND_WRITTEN, *_generated_functions.__all__]
 column
 countDistinct
+def aggregate(col: ColumnOrName, initialValue: ColumnOrName, merge: Callable[[Column, Column], Column], finish: Callable[[Column], Column] | None=None) -> Column
+def array_sort(col: ColumnOrName, comparator: Callable[[Column, Column], Column] | None=None) -> Column
+def arrow_udtf(cls: Any=None, *, returnType: Any=None) -> Any
 def asc(col: ColumnOrName) -> Column
+def asc_nulls_first(col: ColumnOrName) -> Column
+def asc_nulls_last(col: ColumnOrName) -> Column
+def broadcast(df: DataFrame) -> DataFrame
+def bucket(numBuckets: Any, col: ColumnOrName) -> Column
 def call_function(funcName: str, *cols: Any) -> Column
+def call_udf(udfName: str, *cols: ColumnOrName) -> Column
 def col(col: str) -> Column
 def concat(*cols: ColumnOrName) -> Column
 def convert_timezone(sourceTz: Column | None, targetTz: Column, sourceTs: ColumnOrName) -> Column
 def count(col: ColumnOrName) -> Column
 def count_distinct(col: ColumnOrName, *cols: ColumnOrName) -> Column
+def current_time(precision: int | None=None) -> Column
+def days(col: ColumnOrName) -> Column
 def desc(col: ColumnOrName) -> Column
+def desc_nulls_first(col: ColumnOrName) -> Column
+def desc_nulls_last(col: ColumnOrName) -> Column
+def exists(col: ColumnOrName, f: Callable[[Column], Column]) -> Column
+def explode(col: ColumnOrName) -> Column
+def explode_outer(col: ColumnOrName) -> Column
 def expr(str: str) -> Column
+def filter(col: ColumnOrName, f: Callable[..., Column]) -> Column
+def forall(col: ColumnOrName, f: Callable[[Column], Column]) -> Column
+def hours(col: ColumnOrName) -> Column
+def inline(col: ColumnOrName) -> Column
+def inline_outer(col: ColumnOrName) -> Column
+def listagg_distinct(col: ColumnOrName, delimiter: Any=None) -> Column
 def lit(col: Any) -> Column
 def log(arg1: ColumnOrName | float, arg2: ColumnOrName | None=None) -> Column
 def make_dt_interval(days: ColumnOrName | None=None, hours: ColumnOrName | None=None, mins: ColumnOrName | None=None, secs: ColumnOrName | None=None) -> Column
 def make_interval(years: ColumnOrName | None=None, months: ColumnOrName | None=None, weeks: ColumnOrName | None=None, days: ColumnOrName | None=None, hours: ColumnOrName | None=None, mins: ColumnOrName | None=None, secs: ColumnOrName | None=None) -> Column
+def make_time(hour: ColumnOrName, minute: ColumnOrName, second: ColumnOrName) -> Column
 def make_ym_interval(years: ColumnOrName | None=None, months: ColumnOrName | None=None) -> Column
+def map_filter(col: ColumnOrName, f: Callable[[Column, Column], Column]) -> Column
+def map_zip_with(col1: ColumnOrName, col2: ColumnOrName, f: Callable[[Column, Column, Column], Column]) -> Column
+def months(col: ColumnOrName) -> Column
+def posexplode(col: ColumnOrName) -> Column
+def posexplode_outer(col: ColumnOrName) -> Column
+def product(col: ColumnOrName) -> Column
+def reduce(col: ColumnOrName, initialValue: ColumnOrName, merge: Callable[[Column, Column], Column], finish: Callable[[Column], Column] | None=None) -> Column
+def st_asbinary(geo: ColumnOrName, endianness: ColumnOrName | None=None) -> Column
+def st_geogfromwkb(wkb: ColumnOrName) -> Column
+def st_geomfromwkb(wkb: ColumnOrName, srid: Any=None) -> Column
+def st_setsrid(geo: ColumnOrName, srid: Any) -> Column
+def st_srid(geo: ColumnOrName) -> Column
+def stack(*cols: ColumnOrName) -> Column
+def string_agg_distinct(col: ColumnOrName, delimiter: Any=None) -> Column
+def sumDistinct(col: ColumnOrName) -> Column
+def sum_distinct(col: ColumnOrName) -> Column
+def time_diff(unit: ColumnOrName, start: ColumnOrName, end: ColumnOrName) -> Column
+def time_from_micros(col: ColumnOrName) -> Column
+def time_from_millis(col: ColumnOrName) -> Column
+def time_from_seconds(col: ColumnOrName) -> Column
+def time_to_micros(col: ColumnOrName) -> Column
+def time_to_millis(col: ColumnOrName) -> Column
+def time_to_seconds(col: ColumnOrName) -> Column
+def time_trunc(unit: ColumnOrName, time: ColumnOrName) -> Column
+def to_time(str: ColumnOrName, format: ColumnOrName | None=None) -> Column
+def transform(col: ColumnOrName, f: Callable[..., Column]) -> Column
+def transform_keys(col: ColumnOrName, f: Callable[[Column, Column], Column]) -> Column
+def transform_values(col: ColumnOrName, f: Callable[[Column, Column], Column]) -> Column
 def try_make_interval(years: ColumnOrName | None=None, months: ColumnOrName | None=None, weeks: ColumnOrName | None=None, days: ColumnOrName | None=None, hours: ColumnOrName | None=None, mins: ColumnOrName | None=None, secs: ColumnOrName | None=None) -> Column
+def try_to_time(str: ColumnOrName, format: ColumnOrName | None=None) -> Column
 def udf(f: Any=None, returnType: DataType | str=StringType(), *, useArrow: bool | None=None) -> Any
+def udtf(cls: Any=None, *, returnType: Any=None, useArrow: bool | None=None) -> Any
 def unix_timestamp(timestamp: ColumnOrName | None=None, format: str='yyyy-MM-dd HH:mm:ss') -> Column
+def unwrap_udt(col: ColumnOrName) -> Column
 def when(condition: Column, value: Any) -> Column
+def window(timeColumn: ColumnOrName, windowDuration: str, slideDuration: str | None=None, startTime: str | None=None) -> Column
+def window_time(windowColumn: ColumnOrName) -> Column
+def years(col: ColumnOrName) -> Column
+def zip_with(left: ColumnOrName, right: ColumnOrName, f: Callable[[Column, Column], Column]) -> Column
 ## sql/group.py
 GroupedData.def __init__(self, native: _native.GroupedData, df: DataFrame) -> None
 GroupedData.def agg(self, *exprs: Column | dict[str, str]) -> DataFrame
