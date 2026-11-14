@@ -35,6 +35,33 @@ const KNOWN_GAPS: &[(&str, &str)] = &[
     ),
 ];
 
+/// Cases Spark reads but the engine refuses with `KRISHIV_UNSUPPORTED_FEATURE` (checked: never another result).
+const REFUSED: &[(&str, &str)] = &[
+    (
+        "typed parquet k=1.5 as DECIMAL(5,2)",
+        "Parquet's vectorized reader shows the unscaled digits (0.15) but filters on the value (1.5): only a \
+         decimal written at the column's scale reads alike both ways",
+    ),
+    ("typed parquet k=1,1.5,-12 as DECIMAL(5,2)", "as above"),
+    ("typed parquet k=1,1.5,-12 as DECIMAL(10,0)", "as above"),
+    (
+        "typed parquet k=1.5 as DECIMAL(5,2), where k = 1.5",
+        "as above: Spark keeps the row, shown as 0.15",
+    ),
+    (
+        "typed parquet k=1.5 as DECIMAL(5,2), where k = 0.15",
+        "as above: Spark drops the row",
+    ),
+    (
+        "typed parquet k=2024 as DATE",
+        "Spark reads a bare year as January 1st; date shapes other than yyyy-MM-dd are not pinned",
+    ),
+    (
+        "typed parquet k=2024 as TIMESTAMP",
+        "as above, and a readable timestamp needs the session zone at the scan",
+    ),
+];
+
 fn fixture() -> Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/spark-4.2.0/read-user-schema.json");
@@ -156,6 +183,15 @@ fn review_layout(s: &Session, root: &Path) {
         write_text(&at("tp").join("a.txt"), &format!("x{k}\n"));
     }
     for (tree, k) in [
+        ("pyear", "2024"),
+        ("pabc", "abc"),
+        ("pdec2", "1.50"),
+        ("pdec2", "-3.25"),
+        ("pone", "1"),
+    ] {
+        parquet(s, "SELECT 'v' AS v", &root.join(format!("{tree}/p/k={k}")));
+    }
+    for (tree, k) in [
         ("pfrac", "1.5"),
         ("pspace", " 1"),
         ("pplus", "+1"),
@@ -221,9 +257,9 @@ fn review_cases(add: &mut impl FnMut(String, Read)) {
         ("pfrac", "k=1.5", "DOUBLE"),
         ("pfrac", "k=1.5", "DECIMAL(5,2)"),
         ("pbool", "k=true,FALSE", "BOOLEAN"),
-        ("pp1", "k=1,2", "BOOLEAN"),
+        ("pone", "k=1", "BOOLEAN"),
         ("pdate", "k=2024-01-02", "DATE"),
-        ("pp1", "k=1,2", "DATE"),
+        ("pone", "k=1", "DATE"),
         ("pdef", "k=default,1", "INT"),
         ("pdec", "k=1,1.5,-12", "DECIMAL(5,2)"),
         ("pdec", "k=1,1.5,-12", "DECIMAL(10,0)"),
@@ -231,7 +267,7 @@ fn review_cases(add: &mut impl FnMut(String, Read)) {
         ("pdbl", "k=1.5,-2,1e3", "FLOAT"),
         ("pp1", "k=1,2", "BINARY"),
         ("pp1", "k=1,2", "TINYINT"),
-        ("pp1", "k=1,2", "TIMESTAMP"),
+        ("pone", "k=1", "TIMESTAMP"),
     ];
     for (tree, values, ty) in typed {
         add(
@@ -261,6 +297,47 @@ fn review_cases(add: &mut impl FnMut(String, Read)) {
         "typed parquet k=1.5 as INT, validatePartitionColumns=false".into(),
         read("parquet", "pfrac/p", "v STRING, k INT"),
     );
+    for (tree, values, ty) in [
+        ("pyear", "k=2024", "DATE"),
+        ("pyear", "k=2024", "TIMESTAMP"),
+        ("pabc", "k=abc", "DATE"),
+        ("pabc", "k=abc", "TIMESTAMP"),
+        ("pdec2", "k=1.50,-3.25", "DECIMAL(5,2)"),
+    ] {
+        add(
+            format!("typed parquet {values} as {ty}"),
+            read(
+                "parquet",
+                &format!("{tree}/p"),
+                &format!("v STRING, k {ty}"),
+            ),
+        );
+    }
+    for (name, tree, condition) in [
+        (
+            "typed parquet k=1.5 as DECIMAL(5,2), where k = 1.5",
+            "pfrac/p",
+            "k = 1.5",
+        ),
+        (
+            "typed parquet k=1.5 as DECIMAL(5,2), where k = 0.15",
+            "pfrac/p",
+            "k = 0.15",
+        ),
+        (
+            "typed parquet k=1.50,-3.25 as DECIMAL(5,2), where k = 1.5",
+            "pdec2/p",
+            "k = 1.5",
+        ),
+    ] {
+        add(
+            name.into(),
+            Read::Where(
+                Box::new(read("parquet", tree, "v STRING, k DECIMAL(5,2)")),
+                condition,
+            ),
+        );
+    }
     add(
         "text partitioned, schema line".into(),
         read("text", "tp/p", "line STRING"),
@@ -298,6 +375,8 @@ enum Read {
         built: bool,
         options: Vec<(&'static str, &'static str)>,
     },
+    /// The read, then a filter.
+    Where(Box<Read>, &'static str),
     /// `CREATE TEMPORARY VIEW v (cols) USING format OPTIONS (path ..)` then `SELECT * FROM v`.
     View {
         name: &'static str,
@@ -332,7 +411,7 @@ fn with(r: Read, opts: &[(&'static str, &'static str)]) -> Read {
             built,
             options: opts.to_vec(),
         },
-        view @ Read::View { .. } => view,
+        other => other,
     }
 }
 
@@ -672,7 +751,7 @@ fn base_path(r: Read, base: &str) -> Read {
                 options,
             }
         }
-        view @ Read::View { .. } => view,
+        other => other,
     }
 }
 
@@ -721,6 +800,7 @@ fn frame(s: &Session, root: &Path, r: &Read) -> Result<DataFrame, KrishivError> 
             }
             Ok(reader.format(format).load([abs(path)]))
         }
+        Read::Where(r, condition) => frame(s, root, r)?.filter_expr(condition),
         Read::View {
             name,
             columns,
@@ -857,6 +937,13 @@ fn reads_with_a_user_schema_match_spark() {
             s.conf().unset(k).unwrap();
         }
         let ok = matches(want, &got);
+        if REFUSED.iter().any(|(n, _)| n == name) {
+            // An explicit refusal, never a silent other result.
+            if got.get("error_class") != Some(&json!("KRISHIV_UNSUPPORTED_FEATURE")) {
+                failures.push(format!("{name} must be refused\n  got  {got}"));
+            }
+            continue;
+        }
         let gap = KNOWN_GAPS.iter().any(|(n, _)| n == name);
         match (ok, gap) {
             (false, false) => failures.push(format!("{name}\n  want {want}\n  got  {got}")),

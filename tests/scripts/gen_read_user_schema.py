@@ -73,6 +73,10 @@ def layout(spark, root):
         spark.sql(f"SELECT 'in{k}' AS K, 'v{k}' AS v").coalesce(1).write.parquet(f"{root}/kupper/p/k={k}")
         write_text(f"{root}/jkfirst/p/k={k}/a.json", f'{{"k":"in{k}","v":"v{k}"}}\n')
         write_text(f"{root}/tp/p/k={k}/a.txt", f"x{k}\n")
+    # One value per tree where a case expects INVALID_PARTITION_VALUE: with several bad values, which one Spark
+    # names follows its listing order, which varies between runs.
+    for tree, k in (("pyear", "2024"), ("pabc", "abc"), ("pdec2", "1.50"), ("pdec2", "-3.25"), ("pone", "1")):
+        spark.sql("SELECT 'v' AS v").coalesce(1).write.parquet(f"{root}/{tree}/p/k={k}")
     for tree, k in (("pfrac", "1.5"), ("pspace", " 1"), ("pplus", "+1"), ("pzeros", "007")):
         spark.sql("SELECT 'v' AS v").coalesce(1).write.parquet(f"{root}/{tree}/p/k={k}")
     for name, values in (
@@ -458,9 +462,9 @@ def cases(spark, root):
         ("pfrac", "k=1.5", "DOUBLE"),
         ("pfrac", "k=1.5", "DECIMAL(5,2)"),
         ("pbool", "k=true,FALSE", "BOOLEAN"),
-        ("pp1", "k=1,2", "BOOLEAN"),
+        ("pone", "k=1", "BOOLEAN"),
         ("pdate", "k=2024-01-02", "DATE"),
-        ("pp1", "k=1,2", "DATE"),
+        ("pone", "k=1", "DATE"),
         ("pdef", "k=default,1", "INT"),
         ("pdec", "k=1,1.5,-12", "DECIMAL(5,2)"),
         ("pdec", "k=1,1.5,-12", "DECIMAL(10,0)"),
@@ -468,7 +472,7 @@ def cases(spark, root):
         ("pdbl", "k=1.5,-2,1e3", "FLOAT"),
         ("pp1", "k=1,2", "BINARY"),
         ("pp1", "k=1,2", "TINYINT"),
-        ("pp1", "k=1,2", "TIMESTAMP"),
+        ("pone", "k=1", "TIMESTAMP"),
     ]
     for tree, values, ty in typed:
         add(
@@ -497,6 +501,34 @@ def cases(spark, root):
         "parquet pfrac/p schema v STRING, k INT validatePartitionColumns=false",
         read("parquet", "pfrac/p", "v STRING, k INT"),
         {"spark.sql.sources.validatePartitionColumns": "false"},
+    )
+    # Second review pass: date shapes, and Parquet decimals whose written scale is or is not the column's.
+    for tree, values, ty in (
+        ("pyear", "k=2024", "DATE"),
+        ("pyear", "k=2024", "TIMESTAMP"),
+        ("pabc", "k=abc", "DATE"),
+        ("pabc", "k=abc", "TIMESTAMP"),
+        ("pdec2", "k=1.50,-3.25", "DECIMAL(5,2)"),
+    ):
+        add(
+            f"typed parquet {values} as {ty}",
+            f"parquet {tree}/p schema v STRING, k {ty}",
+            read("parquet", f"{tree}/p", f"v STRING, k {ty}"),
+        )
+    add(
+        "typed parquet k=1.5 as DECIMAL(5,2), where k = 1.5",
+        "parquet pfrac/p schema v STRING, k DECIMAL(5,2) filter k = 1.5",
+        lambda: read("parquet", "pfrac/p", "v STRING, k DECIMAL(5,2)")().where("k = 1.5"),
+    )
+    add(
+        "typed parquet k=1.5 as DECIMAL(5,2), where k = 0.15",
+        "parquet pfrac/p schema v STRING, k DECIMAL(5,2) filter k = 0.15",
+        lambda: read("parquet", "pfrac/p", "v STRING, k DECIMAL(5,2)")().where("k = 0.15"),
+    )
+    add(
+        "typed parquet k=1.50,-3.25 as DECIMAL(5,2), where k = 1.5",
+        "parquet pdec2/p schema v STRING, k DECIMAL(5,2) filter k = 1.5",
+        lambda: read("parquet", "pdec2/p", "v STRING, k DECIMAL(5,2)")().where("k = 1.5"),
     )
     add("text partitioned, schema line", "text tp/p schema line STRING", read("text", "tp/p", "line STRING"))
     add(

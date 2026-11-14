@@ -2638,8 +2638,8 @@
    ]
   },
   {
-   "name": "typed parquet k=1,2 as BOOLEAN",
-   "input": "parquet pp1/p schema v STRING, k BOOLEAN",
+   "name": "typed parquet k=1 as BOOLEAN",
+   "input": "parquet pone/p schema v STRING, k BOOLEAN",
    "error_class": "INVALID_PARTITION_VALUE",
    "message_parameters": {
     "columnName": "`k`",
@@ -2670,8 +2670,8 @@
    ]
   },
   {
-   "name": "typed parquet k=1,2 as DATE",
-   "input": "parquet pp1/p schema v STRING, k DATE",
+   "name": "typed parquet k=1 as DATE",
+   "input": "parquet pone/p schema v STRING, k DATE",
    "error_class": "INVALID_PARTITION_VALUE",
    "message_parameters": {
     "columnName": "`k`",
@@ -2878,8 +2878,8 @@
    ]
   },
   {
-   "name": "typed parquet k=1,2 as TIMESTAMP",
-   "input": "parquet pp1/p schema v STRING, k TIMESTAMP",
+   "name": "typed parquet k=1 as TIMESTAMP",
+   "input": "parquet pone/p schema v STRING, k TIMESTAMP",
    "error_class": "INVALID_PARTITION_VALUE",
    "message_parameters": {
     "columnName": "`k`",
@@ -3028,6 +3028,157 @@
     [
      "v",
      null
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=2024 as DATE",
+   "input": "parquet pyear/p schema v STRING, k DATE",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "date",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     "2024-01-01"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=2024 as TIMESTAMP",
+   "input": "parquet pyear/p schema v STRING, k TIMESTAMP",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "timestamp",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     "2024-01-01 00:00:00"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=abc as DATE",
+   "input": "parquet pabc/p schema v STRING, k DATE",
+   "error_class": "INVALID_PARTITION_VALUE",
+   "message_parameters": {
+    "columnName": "`k`",
+    "dataType": "\"DATE\"",
+    "value": "'abc'"
+   }
+  },
+  {
+   "name": "typed parquet k=abc as TIMESTAMP",
+   "input": "parquet pabc/p schema v STRING, k TIMESTAMP",
+   "error_class": "INVALID_PARTITION_VALUE",
+   "message_parameters": {
+    "columnName": "`k`",
+    "dataType": "\"TIMESTAMP\"",
+    "value": "'abc'"
+   }
+  },
+  {
+   "name": "typed parquet k=1.50,-3.25 as DECIMAL(5,2)",
+   "input": "parquet pdec2/p schema v STRING, k DECIMAL(5,2)",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "decimal(5,2)",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     "-3.25"
+    ],
+    [
+     "v",
+     "1.50"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=1.5 as DECIMAL(5,2), where k = 1.5",
+   "input": "parquet pfrac/p schema v STRING, k DECIMAL(5,2) filter k = 1.5",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "decimal(5,2)",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     "0.15"
+    ]
+   ]
+  },
+  {
+   "name": "typed parquet k=1.5 as DECIMAL(5,2), where k = 0.15",
+   "input": "parquet pfrac/p schema v STRING, k DECIMAL(5,2) filter k = 0.15",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "decimal(5,2)",
+     "nullable": true
+    }
+   ],
+   "rows": []
+  },
+  {
+   "name": "typed parquet k=1.50,-3.25 as DECIMAL(5,2), where k = 1.5",
+   "input": "parquet pdec2/p schema v STRING, k DECIMAL(5,2) filter k = 1.5",
+   "schema": [
+    {
+     "name": "v",
+     "type": "string",
+     "nullable": true
+    },
+    {
+     "name": "k",
+     "type": "decimal(5,2)",
+     "nullable": true
+    }
+   ],
+   "rows": [
+    [
+     "v",
+     "1.50"
     ]
    ]
   },

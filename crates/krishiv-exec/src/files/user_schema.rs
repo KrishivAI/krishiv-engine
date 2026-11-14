@@ -56,9 +56,9 @@ pub(super) struct UserPartitions {
     /// `spark.sql.sources.validatePartitionColumns` (default true): a value
     /// that does not read is `INVALID_PARTITION_VALUE`, else NULL.
     pub(super) validate: bool,
-    /// The format reads decimals of partition values by their unscaled
-    /// digits (Spark's vectorized Parquet and ORC readers).
-    pub(super) unscaled_decimals: bool,
+    /// The format is one Spark reads vectorized (Parquet, ORC): a decimal
+    /// partition value reads only when written at the column's scale.
+    pub(super) exact_scale_decimals: bool,
 }
 
 /// The schema of a read with the user's `schema` and the partition columns
@@ -121,7 +121,7 @@ pub(super) fn user_schema_columns<'a>(
         let data_type = named.data_type();
         let field = krishiv_io::user_partition_field(
             data_type.to_arrow_field(named.name(), true),
-            rules.unscaled_decimals,
+            rules.exact_scale_decimals,
         );
         let mut checked: HashSet<&str> = HashSet::new();
         for (_, segs) in discovered {
@@ -130,7 +130,7 @@ pub(super) fn user_schema_columns<'a>(
                 continue;
             }
             use krishiv_io::UserPartitionValue as V;
-            match krishiv_io::user_partition_value(&field, value, rules.unscaled_decimals) {
+            match krishiv_io::user_partition_value(&field, value, rules.exact_scale_decimals) {
                 V::Null | V::Text(_) => {}
                 V::Invalid if !rules.validate => {}
                 V::Invalid => {
@@ -215,7 +215,7 @@ mod tests {
             infer: true,
             case_sensitive,
             validate,
-            unscaled_decimals: false,
+            exact_scale_decimals: false,
         }
     }
 

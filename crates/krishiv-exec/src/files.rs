@@ -554,7 +554,7 @@ impl FileReads {
                 infer,
                 case_sensitive: self.case_sensitive(),
                 validate: self.validates_partition_columns(),
-                unscaled_decimals: matches!(format.name(), "parquet" | "orc"),
+                exact_scale_decimals: matches!(format.name(), "parquet" | "orc"),
             };
             let (schema, partition_columns, data) = user_schema_columns(user, &discovered, rules)?;
             check_user_schema(format.name(), &data)?;

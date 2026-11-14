@@ -9,29 +9,32 @@
 //! |---|---|
 //! | `tinyint`..`bigint` | `Integer.parseInt` / `Long.parseLong`: an optional sign and digits (`+1`, `007` read; `1.5`, ` 1` do not) |
 //! | `float`, `double` | `Double.parseDouble` (`1.5`, `-2`, `1e3`) |
-//! | `decimal(p,s)` | the value's `BigDecimal`; Parquet's vectorized reader then takes its *unscaled* digits at scale `s` (`1.5` as `decimal(5,2)` is `0.15`), a row-based reader (CSV) its value (`1.50`) |
+//! | `decimal(p,s)` | the value's `BigDecimal`; a row-based reader (CSV) reads its value (`1.5` as `decimal(5,2)` is `1.50`); Parquet's vectorized reader shows its *unscaled* digits at scale `s` (`0.15`) but filters on the value, so only a value written at the column's scale (`1.50`) reads alike both ways there |
 //! | `boolean` | `true` / `false`, any case |
-//! | `date` | `yyyy-MM-dd` (`1` does not read) |
+//! | `date` | `yyyy-MM-dd`; `1` and `abc` do not read, `2024` does (as `2024-01-01`, not pinned here: refused) |
 //! | `binary` | the value's UTF-8 bytes |
-//! | `timestamp` | `1` does not read |
+//! | `timestamp` | `1` and `abc` do not read; readable shapes (`2024`) need the session zone: refused |
 //!
 //! A value that does not read is `INVALID_PARTITION_VALUE`, or NULL under
 //! `spark.sql.sources.validatePartitionColumns=false`. Values whose reading
 //! the goldens do not pin (Java's `NaN`, `Infinity`, `1d`, padded numbers,
-//! a `tinyint` past its range, decimals that do not fit, readable
-//! timestamps) and other types are refused, never cast another way.
+//! a `tinyint` past its range, decimals that do not fit, a decimal on a
+//! vectorized reader not written at the column's scale, date shapes other
+//! than `yyyy-MM-dd`, readable timestamps) and other types are refused, never
+//! cast another way.
 
 use arrow_schema::{DataType, Field};
 
 /// Field-metadata key on a partition column whose values read as a user
-/// type: [`USER_VALUE`] or [`USER_VALUE_UNSCALED`]. [`super::discover::constant_column`]
+/// type: [`USER_VALUE`] or [`USER_VALUE_EXACT_SCALE`]. [`super::discover::constant_column`]
 /// reads such a column's values through [`user_partition_value`].
 pub const PARTITION_VALUE_KEY: &str = "krishiv.partition_value";
 /// [`PARTITION_VALUE_KEY`]: Spark's conversion of a user type.
 pub const USER_VALUE: &str = "user";
-/// [`PARTITION_VALUE_KEY`]: as [`USER_VALUE`], decimals by their unscaled
-/// digits (Spark's vectorized Parquet and ORC readers).
-pub const USER_VALUE_UNSCALED: &str = "user_unscaled";
+/// [`PARTITION_VALUE_KEY`]: as [`USER_VALUE`], decimals only when written at
+/// the column's scale (Spark's vectorized Parquet and ORC readers show their
+/// unscaled digits but filter on their value; the two agree only then).
+pub const USER_VALUE_EXACT_SCALE: &str = "user_exact_scale";
 
 /// One partition value read as a user type.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,12 +52,12 @@ pub enum UserPartitionValue {
 
 /// `field` marked to read its partition values as a user type.
 #[must_use]
-pub fn user_partition_field(field: Field, unscaled_decimals: bool) -> Field {
+pub fn user_partition_field(field: Field, exact_scale_decimals: bool) -> Field {
     let mut metadata = field.metadata().clone();
     metadata.insert(
         PARTITION_VALUE_KEY.to_owned(),
-        if unscaled_decimals {
-            USER_VALUE_UNSCALED
+        if exact_scale_decimals {
+            USER_VALUE_EXACT_SCALE
         } else {
             USER_VALUE
         }
@@ -63,8 +66,8 @@ pub fn user_partition_field(field: Field, unscaled_decimals: bool) -> Field {
     field.with_metadata(metadata)
 }
 
-/// Whether `field` reads its values as a user type, and whether decimals by
-/// unscaled digits.
+/// Whether `field` reads its values as a user type, and whether decimals only
+/// at the column's scale.
 #[must_use]
 pub fn user_value_mode(field: &Field) -> Option<bool> {
     match field
@@ -73,19 +76,19 @@ pub fn user_value_mode(field: &Field) -> Option<bool> {
         .map(String::as_str)
     {
         Some(USER_VALUE) => Some(false),
-        Some(USER_VALUE_UNSCALED) => Some(true),
+        Some(USER_VALUE_EXACT_SCALE) => Some(true),
         _ => None,
     }
 }
 
 /// `value` (`None` for the default partition) read as `field`'s type, as
-/// Spark reads a partition value as a user type; `unscaled_decimals` for a
+/// Spark reads a partition value as a user type; `exact_scale_decimals` for a
 /// vectorized reader.
 #[must_use]
 pub fn user_partition_value(
     field: &Field,
     value: Option<&str>,
-    unscaled_decimals: bool,
+    exact_scale_decimals: bool,
 ) -> UserPartitionValue {
     use UserPartitionValue as V;
     let Some(v) = value else {
@@ -100,6 +103,12 @@ pub fn user_partition_value(
         | DataType::Binary
         | DataType::BinaryView
         | DataType::LargeBinary => text(),
+        // Java also reads non-ASCII digits (`١`): not pinned.
+        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
+            if v.chars().any(|c| !c.is_ascii() && c.is_numeric()) =>
+        {
+            V::Unsupported
+        }
         DataType::Int8 | DataType::Int16 | DataType::Int32 => match java_int(v, 32) {
             None => V::Invalid,
             Some(n) if fits(n, field.data_type()) => text(),
@@ -119,7 +128,7 @@ pub fn user_partition_value(
         DataType::Decimal32(p, s)
         | DataType::Decimal64(p, s)
         | DataType::Decimal128(p, s)
-        | DataType::Decimal256(p, s) => decimal(v, *p, *s, unscaled_decimals),
+        | DataType::Decimal256(p, s) => decimal(v, *p, *s, exact_scale_decimals),
         DataType::Boolean => {
             if v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("false") {
                 V::Text(v.to_ascii_lowercase())
@@ -130,29 +139,33 @@ pub fn user_partition_value(
         DataType::Date32 => {
             if iso_date(v) {
                 text()
-            } else if v.bytes().all(|b| b.is_ascii_digit() || b == b'-') && !v.contains("--") {
-                // `1`, `2024`, `2024-1-2`: `1` is pinned as invalid; the
-                // other shapes a SQL cast would take are not pinned.
-                if v.contains('-') {
-                    V::Unsupported
-                } else {
-                    V::Invalid
-                }
-            } else {
+            } else if unreadable_date(v) {
                 V::Invalid
+            } else {
+                // `2024`, `2024-1-2`, `2024-01-02 03:04`: shapes Spark may
+                // read that the goldens do not pin.
+                V::Unsupported
             }
         }
         DataType::Timestamp(..) => {
-            if v.len() >= 10 && iso_date(&v[..10]) {
-                // Readable as a timestamp in the session zone, which the
-                // scan does not have.
-                V::Unsupported
-            } else {
+            if unreadable_date(v) {
                 V::Invalid
+            } else {
+                // Readable as a timestamp in the session zone, which the
+                // scan does not have, or not pinned.
+                V::Unsupported
             }
         }
         _ => V::Unsupported,
     }
+}
+
+/// A value Spark 4.2.0 is pinned not to read as a date or timestamp: up to
+/// three ASCII digits (`1`; four or more are a year), or ASCII letters only
+/// (`abc`).
+fn unreadable_date(v: &str) -> bool {
+    (!v.is_empty() && v.len() < 4 && v.bytes().all(|b| b.is_ascii_digit()))
+        || (!v.is_empty() && v.bytes().all(|b| b.is_ascii_alphabetic()))
 }
 
 /// Java's `Integer.parseInt` / `Long.parseLong` (`bits` 32 or 64): an
@@ -241,9 +254,9 @@ fn iso_date(v: &str) -> bool {
 }
 
 /// A decimal partition value: Java's `BigDecimal` of `v`, at the column's
-/// precision and scale, by its value (row readers) or by its unscaled digits
-/// (`unscaled`, vectorized readers).
-fn decimal(v: &str, precision: u8, scale: i8, unscaled: bool) -> UserPartitionValue {
+/// precision and scale, by its value; with `exact_scale` (vectorized readers)
+/// only a value written at the column's scale.
+fn decimal(v: &str, precision: u8, scale: i8, exact_scale: bool) -> UserPartitionValue {
     use UserPartitionValue as V;
     if !plain_number(v) {
         return if java_double_only(v) {
@@ -266,20 +279,17 @@ fn decimal(v: &str, precision: u8, scale: i8, unscaled: bool) -> UserPartitionVa
     };
     let (int, frac) = body.split_once('.').unwrap_or((body, ""));
     let sign = if negative { "-" } else { "" };
-    let (int, frac) = if unscaled {
-        // The unscaled digits, read at the column's scale.
-        let digits = format!("{int}{frac}");
-        let digits = digits.trim_start_matches('0');
-        let padded = format!("{digits:0>width$}", width = scale + 1);
-        let (i, f) = padded.split_at(padded.len() - scale);
-        (i.to_owned(), f.to_owned())
-    } else {
-        if frac.len() > scale {
-            // Rounding to the column's scale: not pinned.
-            return V::Unsupported;
-        }
-        (int.to_owned(), format!("{frac:0<scale$}"))
-    };
+    if exact_scale && frac.len() != scale {
+        // A vectorized reader shows the unscaled digits at the column's scale
+        // but filters on the value: they differ unless the written scale is
+        // the column's, and neither can be reproduced as one value.
+        return V::Unsupported;
+    }
+    if frac.len() > scale {
+        // Rounding to the column's scale: not pinned.
+        return V::Unsupported;
+    }
+    let (int, frac) = (int.to_owned(), format!("{frac:0<scale$}"));
     let int = int.trim_start_matches('0');
     if int.len() + scale > usize::from(precision) {
         return V::Unsupported;
@@ -338,25 +348,38 @@ mod tests {
     }
 
     #[test]
-    fn decimals_read_by_value_or_by_unscaled_digits() {
+    fn decimals_read_by_value_and_only_at_their_scale_on_vectorized_readers() {
+        use UserPartitionValue::{Invalid, Unsupported};
         let d52 = DataType::Decimal128(5, 2);
-        // Parquet (vectorized): the unscaled digits at the column's scale.
-        assert_eq!(read(d52.clone(), "1", true), text("0.01"));
-        assert_eq!(read(d52.clone(), "1.5", true), text("0.15"));
-        assert_eq!(read(d52.clone(), "-12", true), text("-0.12"));
-        assert_eq!(read(DataType::Decimal128(10, 0), "1.5", true), text("15"));
+        // Parquet (vectorized): only a value written at the column's scale,
+        // where its shown and filtered values agree.
+        assert_eq!(read(d52.clone(), "1.50", true), text("1.50"));
+        assert_eq!(read(d52.clone(), "-3.25", true), text("-3.25"));
+        assert_eq!(read(d52.clone(), "1.5", true), Unsupported);
+        assert_eq!(read(d52.clone(), "1", true), Unsupported);
+        assert_eq!(read(DataType::Decimal128(10, 0), "-12", true), text("-12"));
+        assert_eq!(read(DataType::Decimal128(10, 0), "1.5", true), Unsupported);
         // CSV (rows): the value.
         assert_eq!(read(d52.clone(), "1", false), text("1.00"));
         assert_eq!(read(d52.clone(), "1.5", false), text("1.50"));
         assert_eq!(read(d52.clone(), "-12", false), text("-12.00"));
-        assert_eq!(
-            read(d52.clone(), "1.555", false),
-            UserPartitionValue::Unsupported
-        );
-        assert_eq!(
-            read(d52.clone(), "12345", false),
-            UserPartitionValue::Unsupported
-        );
-        assert_eq!(read(d52, "x", false), UserPartitionValue::Invalid);
+        assert_eq!(read(d52.clone(), "1.555", false), Unsupported);
+        assert_eq!(read(d52.clone(), "12345", false), Unsupported);
+        assert_eq!(read(d52, "x", false), Invalid);
+    }
+
+    #[test]
+    fn dates_and_timestamps_are_invalid_only_in_pinned_shapes() {
+        use UserPartitionValue::{Invalid, Unsupported};
+        let ts = DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None);
+        for t in [DataType::Date32, ts] {
+            assert_eq!(read(t.clone(), "1", false), Invalid);
+            assert_eq!(read(t.clone(), "abc", false), Invalid);
+            // Spark reads `2024` as 2024-01-01: not pinned here, refused.
+            assert_eq!(read(t.clone(), "2024", false), Unsupported);
+            assert_eq!(read(t.clone(), "2024-1-2", false), Unsupported);
+            assert_eq!(read(t, "a1", false), Unsupported);
+        }
+        assert_eq!(read(DataType::Int32, "١", false), Unsupported);
     }
 }
