@@ -142,8 +142,11 @@ def tokens(spark, rng):
     return cases
 
 
-# (name, file text, read options, schema DDL or None to infer, selected columns or None)
-READS: list[tuple[str, str | None, dict[str, str], str | None, list[str] | None]] = [
+# (name, file text, read options, schema DDL or None to infer, selected columns or None[, session conf])
+READS: list[
+    tuple[str, str | None, dict[str, str], str | None, list[str] | None]
+    | tuple[str, str | None, dict[str, str], str | None, list[str] | None, dict[str, str]]
+] = [
     (
         "header",
         'i,s,d\n1,x,2020-01-01\n\n   \n2,"y,z",2020-01-02\n',
