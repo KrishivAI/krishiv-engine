@@ -1,8 +1,5 @@
 {
   "cases": {
-    "depends-on-command": [
-      12
-    ],
     "fn-array": [
       86
     ]

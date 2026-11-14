@@ -534,6 +534,16 @@ impl<'a> Estimator<'a> {
                     .extend(states.iter().map(|c| (c.id, AttrStats::guess(rows))));
                 out
             }
+            // Spark's `OneRowRelation.computeStats` (`basicLogicalOperators.scala:2154`):
+            // so an inline table, an `Expand` over it, is one row per `VALUES` row.
+            PlanNode::OneRowRelation => RelStats::unknown(1.0, ids()),
+            PlanNode::Range {
+                start,
+                end,
+                step,
+                output,
+                ..
+            } => range(*start, *end, *step, output.id),
             _ => RelStats::unknown(DEFAULT_ROWS, ids()),
         }
     }
@@ -781,6 +791,49 @@ fn union(
         from_statistics: false,
         unfiltered_rows: 0.0,
     }
+}
+
+/// `range(start, end, step)` as Spark's `Range.computeStats`
+/// (`basicLogicalOperators.scala:1077-1086, 1121-1135`, Spark 4.2.0): exactly
+/// `numElements` rows, `id` with that many distinct values, no nulls, and its
+/// first and last values as bounds while the count fits a `long`. Spark's
+/// `numElements` is negative for a range that runs against its step
+/// (`range(5, 0)`: -5); an estimate holds 0 rows there.
+fn range(start: i64, end: i64, step: i64, id: AttrId) -> RelStats {
+    let (start, end, step) = (i128::from(start), i128::from(end), i128::from(step));
+    let span = end - start;
+    let elements = if step == 0 {
+        0
+    } else if span % step == 0 || (end > start) != (step > 0) {
+        span / step
+    } else {
+        span / step + 1
+    }
+    .max(0);
+    #[expect(clippy::cast_precision_loss, reason = "an estimate")]
+    let rows = elements as f64;
+    let mut est = RelStats::unknown(rows, [id]);
+    let bounds = i64::try_from(elements).ok().filter(|&n| n > 0).map(|n| {
+        let last = start + i128::from(n - 1) * step;
+        #[expect(clippy::cast_precision_loss, reason = "a bound of an estimate")]
+        let (first, last) = (start as f64, last as f64);
+        if step > 0 {
+            (first, last)
+        } else {
+            (last, first)
+        }
+    });
+    est.cols.insert(
+        id,
+        AttrStats {
+            ndv: rows.max(1.0),
+            null_frac: 0.0,
+            min: bounds.map(|b| b.0),
+            max: bounds.map(|b| b.1),
+            source: StatSource::Provided,
+        },
+    );
+    est
 }
 
 /// Every row of `est` once per projection, over the columns `output`.

@@ -1117,3 +1117,40 @@ fn a_filter_narrows_every_rename_of_its_column() {
         "c0 = c1",
     );
 }
+
+/// Spark's leaf statistics: `OneRowRelation` is one row
+/// (`basicLogicalOperators.scala:2154`), so an inline table (an `Expand` over
+/// it) is one row per `VALUES` row; `Range` is exact (`:1121-1135`).
+/// Without these a 4-row `VALUES` was costed as 4,000,000 rows and never
+/// broadcast (`research/p3/hash-join-match-order.md`).
+#[test]
+fn one_row_relation_inline_tables_and_ranges_are_exact() {
+    let e = Estimated::of("SELECT 1", |p| matches!(p.node, PlanNode::OneRowRelation));
+    close(e.rows(), 1.0, "OneRowRelation");
+    let e = Estimated::of(
+        "SELECT * FROM VALUES (0, 0), (0, 1), (1, 0), (1, 1) AS z(c, n)",
+        |p| matches!(p.node, PlanNode::Expand { .. }),
+    );
+    close(e.rows(), 4.0, "inline table");
+
+    let range = |sql: &str| Estimated::of(sql, |p| matches!(p.node, PlanNode::Range { .. }));
+    let e = range("SELECT * FROM range(10)");
+    close(e.rows(), 10.0, "range(10)");
+    let id = e.col("id");
+    assert!(id.ndv_known(), "{id:?}");
+    close(id.ndv, 10.0, "ndv");
+    assert_eq!((id.min, id.max, id.null_frac), (Some(0.0), Some(9.0), 0.0));
+    let e = range("SELECT * FROM range(0, 10, 3)");
+    close(e.rows(), 4.0, "step 3");
+    let id = e.col("id");
+    assert_eq!((id.min, id.max), (Some(0.0), Some(9.0)));
+    let e = range("SELECT * FROM range(10, 0, -3)");
+    close(e.rows(), 4.0, "step -3");
+    let id = e.col("id");
+    assert_eq!((id.min, id.max), (Some(1.0), Some(10.0)));
+    let e = range("SELECT * FROM range(5, 0)");
+    close(e.rows(), 0.0, "empty");
+    // The full i64 span has more elements than an i64 holds.
+    let e = range("SELECT * FROM range(-9223372036854775808, 9223372036854775807)");
+    close(e.rows(), 1.844_674_407_370_955_2e19 - 1.0, "full span");
+}
