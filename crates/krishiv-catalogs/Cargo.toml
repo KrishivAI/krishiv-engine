@@ -11,6 +11,11 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+# The Hive metastore catalog (Thrift client). Off by default: the default build carries no Thrift runtime.
+hive = ["dep:thrift"]
+
 [dependencies]
 krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
 tracing.workspace = true
+thrift = { workspace = true, optional = true }
