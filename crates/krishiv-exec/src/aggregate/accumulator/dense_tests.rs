@@ -9,8 +9,12 @@
 //! one group and many.
 
 use super::*;
-use arrow_array::types::{Decimal64Type, IntervalYearMonthType, TimestampMicrosecondType};
-use arrow_array::{Date32Array, Float64Array, Int8Array, Int32Array, PrimitiveArray};
+use arrow_array::types::{
+    Decimal64Type, DurationMicrosecondType, IntervalYearMonthType, TimestampMicrosecondType,
+};
+use arrow_array::{
+    Date32Array, Float64Array, Int8Array, Int16Array, Int32Array, PrimitiveArray, UInt64Array,
+};
 use proptest::prelude::*;
 
 /// `(group, value, valid)`.
@@ -32,8 +36,10 @@ fn rows(groups: u32) -> impl Strategy<Value = Vec<Row>> {
 }
 
 /// The argument types: each integer-like carrier `dense::native_ints` reads.
-const TYPES: [DataType; 9] = [
+const TYPES: [DataType; 11] = [
     DataType::Int64,
+    DataType::Int16,
+    DataType::Duration(TimeUnit::Microsecond),
     DataType::Float64,
     DataType::Int32,
     DataType::Int8,
@@ -58,12 +64,26 @@ fn column(t: &DataType, junk: &[Row], rows: &[Row]) -> ArrayRef {
         #[expect(clippy::cast_precision_loss, reason = "test values")]
         DataType::Float64 => Arc::new(Float64Array::new(
             all.iter()
-                .map(|r| if r.1 == 0 { -0.0 } else { r.1 as f64 / 3.0 })
+                .map(|r| match r.1 {
+                    0 => -0.0,
+                    i64::MAX => f64::NAN,
+                    i64::MIN => f64::NEG_INFINITY,
+                    x if x == i64::MAX / 2 + 1 => f64::INFINITY,
+                    x => x as f64 / 3.0,
+                })
                 .collect(),
             Some(nulls),
         )),
         DataType::Int32 => Arc::new(Int32Array::new(
             all.iter().map(|r| r.1 as i32).collect(),
+            Some(nulls),
+        )),
+        DataType::Int16 => Arc::new(Int16Array::new(
+            all.iter().map(|r| r.1 as i16).collect(),
+            Some(nulls),
+        )),
+        DataType::Duration(_) => Arc::new(PrimitiveArray::<DurationMicrosecondType>::new(
+            all.iter().map(|r| r.1).collect(),
             Some(nulls),
         )),
         DataType::Int8 => Arc::new(Int8Array::new(
@@ -102,7 +122,7 @@ fn column(t: &DataType, junk: &[Row], rows: &[Row]) -> ArrayRef {
 fn functions(t: &DataType) -> Vec<AggregateFunction> {
     match t {
         DataType::Float64 => vec![AggregateFunction::Sum, AggregateFunction::Avg],
-        DataType::Int64 | DataType::Int32 | DataType::Int8 => vec![
+        DataType::Int64 | DataType::Int32 | DataType::Int16 | DataType::Int8 => vec![
             AggregateFunction::Min,
             AggregateFunction::Max,
             AggregateFunction::Count,
@@ -132,11 +152,27 @@ fn acc(f: &AggregateFunction, t: &DataType, ansi: bool, masked: bool, two: bool)
 
 type Outcome = (Vec<ArrayRef>, std::result::Result<ArrayRef, String>);
 
+/// A double column as its bit patterns, every NaN as one (an add of two
+/// NaNs keeps either operand's sign, as the compiler orders them), so -0.0
+/// differs from 0.0; any other column as it is.
+fn bits(a: ArrayRef) -> ArrayRef {
+    match a.as_primitive_opt::<Float64Type>() {
+        Some(f) => Arc::new(UInt64Array::new(
+            f.values()
+                .iter()
+                .map(|v| if v.is_nan() { f64::NAN } else { *v }.to_bits())
+                .collect(),
+            f.nulls().cloned(),
+        )),
+        None => a,
+    }
+}
+
 fn outcome(a: &Accumulator, groups: u32) -> Outcome {
     let ids: Vec<u32> = (0..groups).collect();
     (
-        a.state(&ids).unwrap(),
-        a.evaluate(&ids).map_err(|e| e.to_string()),
+        a.state(&ids).unwrap().into_iter().map(bits).collect(),
+        a.evaluate(&ids).map(bits).map_err(|e| e.to_string()),
     )
 }
 
@@ -148,6 +184,19 @@ fn fold(
     ansi: bool,
     masked: bool,
     two: bool,
+    groups: u32,
+    batches: &[(Vec<Row>, Vec<Row>)],
+) -> std::result::Result<Accumulator, String> {
+    fold_weighted(f, t, (ansi, masked, two), 0, groups, batches)
+}
+
+/// [`fold`] with weights `mode`: 0 `Const(1)`, 1 a column of ones, 2
+/// `Const(3)`.
+fn fold_weighted(
+    f: &AggregateFunction,
+    t: &DataType,
+    (ansi, masked, two): (bool, bool, bool),
+    mode: u8,
     groups: u32,
     batches: &[(Vec<Row>, Vec<Row>)],
 ) -> std::result::Result<Accumulator, String> {
@@ -167,8 +216,12 @@ fn fold(
             Arc::new(BooleanArray::from(vec![true; rows.len()])),
             column(t, &[], &other),
         ];
-        a.update(&ids, &cols, &Weights::Const(1))
-            .map_err(|e| e.to_string())?;
+        let w = match mode {
+            0 => Weights::Const(1),
+            1 => Weights::Column(Int64Array::from(vec![1; rows.len()])),
+            _ => Weights::Const(3),
+        };
+        a.update(&ids, &cols, &w).map_err(|e| e.to_string())?;
     }
     Ok(a)
 }
@@ -187,6 +240,7 @@ proptest! {
         groups in prop_oneof![Just(1_u32), 2..20_u32],
         batches in prop::collection::vec((rows(1), rows(1)), 1..4),
         regroup in any::<u32>(),
+        mode in 0..3_u8,
     ) {
         // Group ids drawn for `groups`, from the generated rows' values.
         let batches: Vec<(Vec<Row>, Vec<Row>)> = batches
@@ -205,8 +259,8 @@ proptest! {
                         continue;
                     }
                     for ansi in [true, false] {
-                        let dense = fold(&f, t, ansi, false, two, groups, &batches);
-                        let per_row = fold(&f, t, ansi, true, two, groups, &batches);
+                        let dense = fold_weighted(&f, t, (ansi, false, two), mode, groups, &batches);
+                        let per_row = fold_weighted(&f, t, (ansi, true, two), mode, groups, &batches);
                         match (dense, per_row) {
                             (Ok(d), Ok(p)) => prop_assert_eq!(
                                 outcome(&d, groups), outcome(&p, groups),
@@ -335,5 +389,39 @@ fn all_null_batch_leaves_groups_unset() {
                 "{f:?}"
             );
         }
+    }
+}
+
+/// `count(NULL)` over an untyped NULL column counts nothing, dense or not.
+#[test]
+fn count_of_an_untyped_null_column() {
+    for groups in [1_u32, 3] {
+        let mut outs = Vec::new();
+        for masked in [false, true] {
+            let mut a = acc(
+                &AggregateFunction::Count,
+                &DataType::Null,
+                true,
+                masked,
+                false,
+            );
+            a.resize(groups as usize);
+            let ids: Vec<u32> = (0..5).map(|i| i % groups).collect();
+            let cols: Vec<ArrayRef> = vec![
+                Arc::new(arrow_array::NullArray::new(5)),
+                Arc::new(BooleanArray::from(vec![true; 5])),
+            ];
+            a.update(&ids, &cols, &Weights::Const(1)).unwrap();
+            outs.push(outcome(&a, groups));
+        }
+        assert_eq!(outs[0], outs[1]);
+        let counts = outs[0].1.as_ref().unwrap();
+        assert!(
+            counts
+                .as_primitive::<Int64Type>()
+                .values()
+                .iter()
+                .all(|&c| c == 0)
+        );
     }
 }

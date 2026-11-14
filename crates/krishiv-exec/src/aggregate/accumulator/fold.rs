@@ -128,6 +128,11 @@ impl Accumulator {
         // Raw rows of weight 1 (or partial states), no mask, no running
         // window: the dense kernels of `dense.rs` apply.
         let dense = run.is_none() && mask.is_none() && (state || is_unit(w));
+        // The native integer-like values of a dense `min`/`max` argument.
+        let native = args
+            .first()
+            .filter(|_| dense && matches!(self.kind, Kind::MinMax { .. }))
+            .and_then(|a| dense::native_ints(a));
         match (&mut self.kind, state) {
             // Handled at the top of `fold`.
             (Kind::Udf(_), _) => return Err(internal("an aggregate UDF fold".to_owned())),
@@ -416,10 +421,11 @@ impl Accumulator {
                     ..
                 },
                 _,
-            ) if dense && dense::native_ints(args[0]).is_some() => {
-                if let Some(v) = dense::native_ints(args[0]) {
-                    dense::extremum(*max, groups, &v, first, vals, set);
-                }
+            ) if native.is_some() => {
+                let Some(v) = native.as_ref() else {
+                    return Err(internal("a dense min/max without values".to_owned()));
+                };
+                dense::extremum(*max, groups, v, first, vals, set);
             }
             (
                 Kind::MinMax {
