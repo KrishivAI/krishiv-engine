@@ -321,6 +321,9 @@ pub(crate) struct ClaimRules<'a> {
     pub(crate) role_claim: &'a str,
     /// Allowed clock difference, in seconds.
     pub(crate) skew_secs: u64,
+    /// The longest lifetime a token may have, in seconds (P3-T061 Q4): `exp - iat`, or
+    /// `exp - now` for a token without `iat`.
+    pub(crate) max_lifetime_secs: u64,
 }
 
 /// Who a valid token names.
@@ -331,6 +334,9 @@ pub(crate) struct Identity {
     pub(crate) principal: String,
     /// The role claim's values.
     pub(crate) groups: Vec<String>,
+    /// The `jti` claim, for the audit record (never enforced: bearer tokens are bearer; the
+    /// lifetime cap is the replay control, P3-T061 §2).
+    pub(crate) token_id: Option<String>,
 }
 
 /// Checks the claims of a token whose signature was verified, at `now` (seconds since the Unix
@@ -352,7 +358,11 @@ pub(crate) fn check_claims(
         clippy::cast_precision_loss,
         reason = "seconds since 1970 fit an f64 exactly"
     )]
-    let (now, skew) = (now as f64, rules.skew_secs as f64);
+    let (now, skew, max_lifetime) = (
+        now as f64,
+        rules.skew_secs as f64,
+        rules.max_lifetime_secs as f64,
+    );
     let date = |name: &str| match claims.0.get(name) {
         None => Ok(None),
         Some(v) => v
@@ -367,6 +377,14 @@ pub(crate) fn check_claims(
     }
     if date("nbf")?.is_some_and(|nbf| now + skew < nbf) {
         return Err(JoseError::Invalid("not valid yet"));
+    }
+    // The lifetime cap (P3-T061 §2, Q4): from `iat` when the token has one (and `iat` may not
+    // be in the future), else from now, so leaving `iat` out cannot stretch a token's life.
+    match date("iat")? {
+        Some(iat) if iat > now + skew => return Err(JoseError::Invalid("issued in the future")),
+        Some(iat) if exp - iat > max_lifetime => return Err(JoseError::Invalid("lifetime")),
+        None if exp - now > max_lifetime + skew => return Err(JoseError::Invalid("lifetime")),
+        _ => {}
     }
     if claims.opt_str("iss")? != Some(rules.issuer) {
         return Err(JoseError::Invalid("issuer"));
@@ -394,7 +412,16 @@ pub(crate) fn check_claims(
             .ok_or(JoseError::Invalid("role claim"))?,
         Some(_) => return Err(JoseError::Invalid("role claim")),
     };
-    Ok(Identity { principal, groups })
+    let token_id = match claims.0.get("jti") {
+        None => None,
+        Some(Value::String(j)) if is_name(j) => Some(j.clone()),
+        Some(_) => return Err(JoseError::Invalid("jti")),
+    };
+    Ok(Identity {
+        principal,
+        groups,
+        token_id,
+    })
 }
 
 /// A usable principal name: non-empty, at most [`MAX_PRINCIPAL_BYTES`], no control or format

@@ -43,6 +43,7 @@ fn rules() -> ClaimRules<'static> {
         principal_claim: "sub",
         role_claim: "groups",
         skew_secs: 60,
+        max_lifetime_secs: 24 * 3600,
     }
 }
 
@@ -484,4 +485,103 @@ fn oidc_needs_the_feature() {
     assert!(e.to_string().contains("`oidc` feature"), "{e}");
     let e = super::AuthConfig::from_settings([("krishiv.auth.oidc.clockSkew", "5s")]).unwrap_err();
     assert!(e.to_string().contains("issuer"), "{e}");
+}
+
+/// P3-T061 I1 (Q4): `exp - iat` above the cap is refused, and so is `exp - now` when `iat` is
+/// left out (leaving it out cannot stretch a token's life); `iat` in the future is refused.
+#[test]
+fn lifetime_over_max_rejected() {
+    let day = 24 * 3600;
+    let with = |f: &dyn Fn(&mut serde_json::Map<String, Value>)| {
+        let mut v = good();
+        if let Value::Object(m) = &mut v {
+            f(m);
+        }
+        check(&v)
+    };
+    assert!(
+        with(&|m| {
+            m.insert("iat".into(), json!(NOW - 10));
+        })
+        .is_ok()
+    );
+    assert!(
+        with(&|m| {
+            m.insert("iat".into(), json!(NOW - 10));
+            m.insert("exp".into(), json!(NOW - 10 + day));
+        })
+        .is_ok(),
+        "exactly the cap"
+    );
+    for (iat, exp, why) in [
+        (Some(NOW - 10), NOW - 10 + day + 1, "one second over"),
+        (Some(NOW - 1000), NOW + 30 * day, "a month"),
+        (None, NOW + day + 61, "no iat: from now, past the skew"),
+        (Some(NOW + 61), NOW + 120, "issued in the future"),
+    ] {
+        let r = with(&|m| {
+            m.insert("exp".into(), json!(exp));
+            match iat {
+                Some(i) => m.insert("iat".into(), json!(i)),
+                None => m.remove("iat"),
+            };
+        });
+        assert!(matches!(r, Err(JoseError::Invalid(_))), "{why}: {r:?}");
+    }
+    assert!(
+        with(&|m| {
+            m.insert("exp".into(), json!(NOW + day + 30));
+        })
+        .is_ok(),
+        "no iat, within the skew"
+    );
+    assert!(
+        with(&|m| {
+            m.insert("iat".into(), json!("now"));
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn missing_exp_rejected() {
+    let mut v = good();
+    if let Value::Object(m) = &mut v {
+        m.remove("exp");
+    }
+    assert!(matches!(check(&v), Err(JoseError::Invalid("no exp"))));
+}
+
+/// The `jti` is carried for the audit record; one that is not a usable name is refused.
+#[test]
+fn jti_is_carried() {
+    let mut v = good();
+    assert_eq!(check(&v).expect("valid").token_id, None);
+    if let Value::Object(m) = &mut v {
+        m.insert("jti".into(), json!("t-123"));
+    }
+    assert_eq!(check(&v).expect("valid").token_id.as_deref(), Some("t-123"));
+    for bad in [json!(7), json!(""), json!("a\u{0}b"), json!(["x"])] {
+        if let Value::Object(m) = &mut v {
+            m.insert("jti".into(), bad.clone());
+        }
+        assert!(matches!(check(&v), Err(JoseError::Invalid("jti"))), "{bad}");
+    }
+}
+
+#[test]
+fn max_lifetime_setting() {
+    let mut c = OidcConfig::default();
+    assert_eq!(c.max_lifetime, Duration::from_hours(24));
+    assert!(
+        c.apply("krishiv.auth.oidc.maxLifetime", "1h")
+            .expect("known")
+    );
+    assert_eq!(c.max_lifetime, Duration::from_hours(1));
+    for bad in ["25h", "30s", "0s", "x"] {
+        assert!(
+            c.apply("krishiv.auth.oidc.maxLifetime", bad).is_err(),
+            "{bad}"
+        );
+    }
 }

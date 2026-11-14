@@ -10,6 +10,7 @@ use krishiv_common::error::KrishivError;
 use krishiv_common::principal::Principal;
 use krishiv_common::secret::SecretString;
 use sha2::{Digest, Sha256};
+use std::time::SystemTime;
 
 use super::Role;
 use super::config::{SPARK_TOKEN_KEY, SPARK_TOKEN_NAME, TokenSpec};
@@ -28,6 +29,7 @@ struct Entry {
     digest: [u8; 32],
     principal: Principal,
     role: Role,
+    expires: Option<SystemTime>,
 }
 
 /// The configured static tokens, as digests.
@@ -44,9 +46,24 @@ impl StaticTokens {
     /// bytes or longer than 16 KiB, holds anything but visible ASCII, or is the same as another token's secret, or when two tokens give one principal
     /// different roles.
     pub fn build(specs: &[TokenSpec]) -> Result<Self, KrishivError> {
+        Self::build_at(specs, SystemTime::now())
+    }
+
+    /// [`Self::build`] at `now`: a token already expired then refuses startup.
+    ///
+    /// # Errors
+    /// As [`Self::build`].
+    pub(crate) fn build_at(specs: &[TokenSpec], now: SystemTime) -> Result<Self, KrishivError> {
         let mut entries: Vec<(Entry, &str)> = Vec::with_capacity(specs.len());
         for spec in specs {
             let key = secret_key(&spec.name);
+            if spec.expires.is_some_and(|e| now >= e) {
+                return Err(invalid(
+                    &format!("krishiv.auth.principals.{}.expires", spec.principal),
+                    "",
+                    &format!("token `{}` has expired", spec.name),
+                ));
+            }
             let secret: SecretString = spec.secret.resolve(&key)?;
             let len = secret.expose_secret().len();
             if len < MIN_SECRET_BYTES {
@@ -103,6 +120,7 @@ impl StaticTokens {
                     digest,
                     principal,
                     role: spec.role,
+                    expires: spec.expires,
                 },
                 &spec.name,
             ));
@@ -131,6 +149,18 @@ impl StaticTokens {
         let (found, _) = self.find(presented);
         let e = self.entries.get(found?)?;
         Some((&e.principal, e.role))
+    }
+
+    /// [`Self::lookup`], and whether the token has expired at `now`.
+    #[must_use]
+    pub(crate) fn lookup_at(
+        &self,
+        presented: &str,
+        now: SystemTime,
+    ) -> Option<(&Principal, Role, bool)> {
+        let (found, _) = self.find(presented);
+        let e = self.entries.get(found?)?;
+        Some((&e.principal, e.role, e.expires.is_some_and(|x| now >= x)))
     }
 
     /// The index of the entry `presented` matches, and how many digests were compared to find

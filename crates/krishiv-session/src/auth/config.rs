@@ -8,6 +8,7 @@
 //! krishiv.auth.tokens.<name>.principal = prometheus                (required)
 //! krishiv.auth.tokens.<name>.kind      = user | service            (default user)
 //! krishiv.auth.tokens.<name>.role      = viewer | operator | admin (required)
+//!   (a token whose kind is service also needs krishiv.auth.principals.<principal>.expires)
 //! spark.connect.authenticate.token     = <token> | env:.. | file:.. (Spark's key: one admin token)
 //! krishiv.auth.sparkTokenPrincipal     = spark                     (that token's principal)
 //! krishiv.auth.failureThrottle.maxFailures = 20                    (per peer address and window)
@@ -31,7 +32,7 @@
 //! setting never leaves a server open.
 
 use std::collections::BTreeMap;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use krishiv_common::error::KrishivError;
 use krishiv_common::principal::PrincipalKind;
@@ -69,6 +70,9 @@ pub struct TokenSpec {
     pub kind: PrincipalKind,
     /// The role.
     pub role: Role,
+    /// When the token stops working: `krishiv.auth.principals.<principal>.expires`. Required
+    /// for a service principal (P3-T061 Q5).
+    pub expires: Option<SystemTime>,
 }
 
 /// Failure throttling (threat model T-A4).
@@ -245,6 +249,7 @@ impl AuthConfig {
                 principal: f.principal.ok_or_else(|| missing("principal"))?,
                 kind: f.kind.unwrap_or(PrincipalKind::User),
                 role: f.role.ok_or_else(|| missing("role"))?,
+                expires: None,
                 name,
             });
         }
@@ -256,11 +261,28 @@ impl AuthConfig {
                 principal: spark_principal,
                 kind: PrincipalKind::User,
                 role: Role::Admin,
+                expires: None,
             });
         }
         mtls.validate()?;
         oidc.validate()?;
         principals.validate()?;
+        for t in &mut tokens {
+            t.expires = principals.get(&t.principal).and_then(|r| r.expires);
+            // A shared secret for a machine is the credential most likely to be forgotten in a
+            // config file for years: it must say when it stops working (P3-T061 Q5).
+            if t.kind == PrincipalKind::Service && t.expires.is_none() {
+                return Err(invalid(
+                    &format!("{PREFIX}principals.{}.expires", t.principal),
+                    "",
+                    &format!(
+                        "token `{}` names service principal `{}`: a static service token needs \
+                         an expiry date",
+                        t.name, t.principal
+                    ),
+                ));
+            }
+        }
         // Each list once, whole, so a key given twice keeps its last value.
         let mut roles = RoleLists::default();
         for (role, (key, raw)) in role_lists {

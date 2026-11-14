@@ -58,6 +58,7 @@ fn two_tokens(dir: &Path) -> AuthConfig {
         ("krishiv.auth.tokens.prom.principal", "prometheus"),
         ("krishiv.auth.tokens.prom.kind", "service"),
         ("krishiv.auth.tokens.prom.role", "Viewer"),
+        ("krishiv.auth.principals.prometheus.expires", "2999-01-01"),
     ])
     .unwrap()
 }
@@ -794,4 +795,51 @@ fn config_reads_principal_rights() {
     let err = config(&[("krishiv.auth.principals.portal.secret", "env:X")])
         .expect_err("credentials stay under krishiv.auth.tokens");
     assert!(invalid_config(&err), "{err}");
+}
+
+/// P3-T061 Q5: a static token of a service principal needs `expires`; one already past refuses
+/// startup; one that passes its date while the server runs fails as expired, without counting
+/// toward the throttle, and never agrees with a client certificate.
+#[test]
+fn static_service_tokens_need_an_expiry() {
+    let dir = tempfile::tempdir().unwrap();
+    let b = secret_file(dir.path(), "b", TOKEN_B, 0o400);
+    let service = |extra: &[(&str, &str)]| {
+        let mut pairs = vec![
+            ("krishiv.auth.tokens.prom.secret", b.as_str()),
+            ("krishiv.auth.tokens.prom.principal", "prometheus"),
+            ("krishiv.auth.tokens.prom.kind", "service"),
+            ("krishiv.auth.tokens.prom.role", "viewer"),
+        ];
+        pairs.extend_from_slice(extra);
+        config(&pairs)
+    };
+    let err = service(&[]).expect_err("no expiry");
+    assert!(invalid_config(&err), "{err}");
+    assert!(
+        err.to_string()
+            .contains("krishiv.auth.principals.prometheus.expires"),
+        "{err}"
+    );
+
+    let past = service(&[("krishiv.auth.principals.prometheus.expires", "2001-01-01")])
+        .expect("the config itself is valid");
+    let err = ServerAuth::new(&past).expect_err("expired at startup");
+    assert!(invalid_config(&err), "{err}");
+    assert!(err.to_string().contains("has expired"), "{err}");
+
+    // Built before its date, used after it.
+    let then = std::time::UNIX_EPOCH + Duration::from_secs(900_000_000);
+    let tokens = StaticTokens::build_at(&past.tokens, then).unwrap();
+    let mut live = past;
+    live.tokens.clear();
+    let auth = ServerAuth::new(&live).unwrap().with_tokens(tokens);
+    let now = Instant::now();
+    let c = Credentials::new(peer(3), Surface::Connect).with_bearer(TOKEN_B);
+    for _ in 0..30 {
+        assert_eq!(
+            auth.authenticate_at(&c, now).unwrap_err(),
+            AuthFailure::Expired
+        );
+    }
 }

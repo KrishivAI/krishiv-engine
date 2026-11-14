@@ -93,6 +93,14 @@ impl ServerAuth {
         Self::build(config, Some(oidc))
     }
 
+    /// This chain with `tokens` in place of the configured ones (tests: tokens built at
+    /// another time).
+    #[cfg(test)]
+    pub(crate) fn with_tokens(mut self, tokens: StaticTokens) -> Self {
+        self.tokens = tokens;
+        self
+    }
+
     /// The OIDC verifier (tests).
     #[cfg(test)]
     #[cfg(feature = "oidc")]
@@ -184,8 +192,10 @@ impl ServerAuth {
     ) -> Result<Authenticated, AuthFailure> {
         // A token longer than any credential this server issues is refused unhashed.
         let token = token.filter(|t| t.len() <= MAX_TOKEN_BYTES);
-        match token.and_then(|t| self.tokens.lookup(t)) {
-            Some((principal, role)) => Ok(Authenticated::new(
+        match token.and_then(|t| self.tokens.lookup_at(t, std::time::SystemTime::now())) {
+            // The right token past its date: not a guess, so the throttle does not count it.
+            Some((_, _, true)) => Err(self.fail(credentials, Method::Token, AuthFailure::Expired)),
+            Some((principal, role, false)) => Ok(Authenticated::new(
                 principal.clone(),
                 Some(role),
                 Method::Token,
@@ -261,9 +271,10 @@ impl ServerAuth {
                     Err(f) => Err(f),
                 }
             }
-            (Some(t), _) if t.len() <= MAX_TOKEN_BYTES => {
-                Ok(self.tokens.lookup(t).is_some_and(|(p, _)| p.name == name))
-            }
+            (Some(t), _) if t.len() <= MAX_TOKEN_BYTES => Ok(self
+                .tokens
+                .lookup_at(t, std::time::SystemTime::now())
+                .is_some_and(|(p, _, expired)| !expired && p.name == name)),
             _ => Ok(false),
         }
     }
@@ -386,7 +397,7 @@ impl ServerAuth {
             krishiv_common::principal::PrincipalKind::User,
         );
         principal.groups = identity.groups;
-        Authenticated::new(principal, role, Method::Oidc)
+        Authenticated::new(principal, role, Method::Oidc).with_token_id(identity.token_id)
     }
 
     /// The bearer token of a request that goes to OIDC without a client certificate: the one

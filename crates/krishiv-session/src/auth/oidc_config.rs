@@ -10,6 +10,7 @@
 //! krishiv.auth.oidc.roleClaim           = groups                    (its values are matched against the lists below)
 //! krishiv.auth.oidc.roles.{viewer,operator,admin} = a, b           (role-claim values by role)
 //! krishiv.auth.oidc.clockSkew           = 60s                       (0s to 5m)
+//! krishiv.auth.oidc.maxLifetime         = 24h                       (1m to 24h; `exp - iat`, or `exp - now` without `iat`)
 //! krishiv.auth.oidc.jwksRefresh         = 10m                       (1m to 24h)
 //! krishiv.auth.oidc.allowInsecureIssuer = false                     (http:// issuer and JWKS; tests only)
 //! ```
@@ -51,8 +52,10 @@ pub struct OidcConfig {
     pub role_claim: String,
     /// `krishiv.auth.oidc.roles.*`: role-claim values by role.
     pub roles: RoleLists,
-    /// Allowed clock difference for `exp` and `nbf`.
+    /// Allowed clock difference for `exp`, `nbf` and `iat`.
     pub clock_skew: Duration,
+    /// The longest lifetime a token may have (P3-T061 Q4).
+    pub max_lifetime: Duration,
     /// How often the JWK set is fetched again.
     pub jwks_refresh: Duration,
     /// `http://` issuer and JWK set locations are allowed (tests only).
@@ -70,6 +73,7 @@ impl Default for OidcConfig {
             role_claim: "groups".to_owned(),
             roles: RoleLists::default(),
             clock_skew: Duration::from_mins(1),
+            max_lifetime: Duration::from_hours(24),
             jwks_refresh: Duration::from_mins(10),
             allow_insecure_issuer: false,
         }
@@ -118,6 +122,13 @@ impl OidcConfig {
                 self.clock_skew = parse_duration(key, raw)?;
                 if self.clock_skew > Duration::from_mins(5) {
                     return Err(invalid(key, raw, "must be between 0s and 5m"));
+                }
+            }
+            "maxLifetime" => {
+                self.max_lifetime = parse_duration(key, raw)?;
+                if !(Duration::from_mins(1)..=Duration::from_hours(24)).contains(&self.max_lifetime)
+                {
+                    return Err(invalid(key, raw, "must be between 1m and 24h"));
                 }
             }
             "jwksRefresh" => {

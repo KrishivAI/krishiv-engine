@@ -272,6 +272,8 @@ pub struct Authenticated {
     pub role: Option<Role>,
     /// How it authenticated.
     pub method: Method,
+    /// The credential's own id (an OIDC token's `jti`), for the audit record; never enforced.
+    pub token_id: Option<String>,
 }
 
 impl Authenticated {
@@ -282,7 +284,15 @@ impl Authenticated {
             principal,
             role,
             method,
+            token_id: None,
         }
+    }
+
+    /// This result with the credential's id `token_id`.
+    #[must_use]
+    pub fn with_token_id(mut self, token_id: Option<String>) -> Self {
+        self.token_id = token_id;
+        self
     }
 }
 
