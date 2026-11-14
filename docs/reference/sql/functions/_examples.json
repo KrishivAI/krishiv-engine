@@ -1646,8 +1646,10 @@
     ]
   },
   "filter#2": {
-    "class": "INVALID_LAMBDA_FUNCTION_CALL.NUM_ARGS_MISMATCH",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "[2,3]"
+    ]
   },
   "filter#3": {
     "ok": true,
@@ -4421,8 +4423,10 @@
     ]
   },
   "reverse#2": {
-    "class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "[3,4,1,2]"
+    ]
   },
   "reverse#3": {
     "ok": true,
@@ -4570,8 +4574,10 @@
     ]
   },
   "schema_of_xml#2": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "STRUCT<a: ARRAY<BIGINT>>"
+    ]
   },
   "sec#1": {
     "ok": true,
@@ -4616,12 +4622,16 @@
     ]
   },
   "sequence#3": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "[2018-01-01,2018-02-01,2018-03-01]"
+    ]
   },
   "sequence#4": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "[2018-01-01,2018-02-01,2018-03-01]"
+    ]
   },
   "session_user#1": {
     "volatile": true
@@ -5456,16 +5466,22 @@
     ]
   },
   "to_char#7": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "U3BhcmsgU1FM"
+    ]
   },
   "to_char#8": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "537061726B2053514C"
+    ]
   },
   "to_char#9": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "abc"
+    ]
   },
   "to_csv#1": {
     "ok": true,
@@ -5670,16 +5686,22 @@
     ]
   },
   "to_varchar#7": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "U3BhcmsgU1FM"
+    ]
   },
   "to_varchar#8": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "537061726B2053514C"
+    ]
   },
   "to_varchar#9": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "abc"
+    ]
   },
   "to_variant_object#1": {
     "ok": true,

@@ -59,6 +59,13 @@ pub(super) const NAMES: &[&str] = &[
 /// Binds the character function `name`.
 pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyResult {
     let listed = listed(NAMES, name)?;
+    if listed == "reverse"
+        && let Some(binding) = args
+            .first()
+            .and_then(|a| super::array_shape::reverse_binding(&a.data_type()))
+    {
+        return Some((listed, Ok(binding)));
+    }
     let shape = shape(args);
     let ansi = opts.ansi;
     let ctx = opts.kernel;

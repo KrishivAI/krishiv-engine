@@ -577,10 +577,18 @@ fn schema_of_xml_errors_and_from_xml_of_it() {
         class_of(&s, "select schema_of_xml('<p/>', map('a', 1))"),
         ErrorClass::InvalidOptionsNonStringType
     );
+    // `samplingRatio` and the like are accepted by `schema_of_xml` (no effect on an inferred schema); an option still unimplemented is refused.
+    assert_eq!(
+        run(
+            &s,
+            "select schema_of_xml('<p/>', map('samplingRatio', '0.5'))"
+        ),
+        run(&s, "select schema_of_xml('<p/>')")
+    );
     assert_eq!(
         class_of(
             &s,
-            "select schema_of_xml('<p/>', map('samplingRatio', '0.5'))"
+            "select schema_of_xml('<p/>', map('rowValidationXSDPath', 'x.xsd'))"
         ),
         ErrorClass::KrishivUnsupportedFeature
     );

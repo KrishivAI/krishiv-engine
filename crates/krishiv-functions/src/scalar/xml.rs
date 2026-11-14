@@ -74,15 +74,8 @@ enum Mode {
 /// XML source options (lower case) that Spark defines and this module does not
 /// implement.
 const UNIMPLEMENTED: &[&str] = &[
-    "samplingratio",
-    "excludeattribute",
     "treatemptyvaluesasnulls",
-    "columnnameofcorruptrecord",
-    "charset",
-    "wildcardcolname",
     "rowvalidationxsdpath",
-    "ignorenamespace",
-    "locale",
     "arrayelementname",
     "nanvalue",
     "positiveinf",
@@ -106,6 +99,10 @@ struct Opts {
     infer_schema: bool,
     /// `schema_of_xml`: infer decimals for numbers with a fraction.
     prefers_decimal: bool,
+    /// `schema_of_xml`: ignore attributes (an element with attributes and a text is its text).
+    exclude_attribute: bool,
+    /// `schema_of_xml`: element and attribute names lose their namespace prefix (`ns:a` is `a`).
+    ignore_namespace: bool,
     /// `to_xml`: refuse element and attribute names that are not XML names.
     validate_name: bool,
     date: Option<DateTimePattern>,
@@ -126,6 +123,8 @@ impl Opts {
             indent: None,
             infer_schema: true,
             prefers_decimal: false,
+            exclude_attribute: false,
+            ignore_namespace: false,
             validate_name: true,
             date: None,
             time: None,
@@ -166,7 +165,15 @@ impl Opts {
                     };
                 }
                 "attributeprefix" => o.attribute_prefix = v.clone(),
-                "valuetag" => o.value_tag = v.clone(),
+                "valuetag" => {
+                    if v.is_empty() {
+                        return Err(unsupported(
+                            func,
+                            "an empty valueTag (Spark: 'valueTag' option should not be empty string)",
+                        ));
+                    }
+                    o.value_tag = v.clone();
+                }
                 "rowtag" => o.row_tag = v.clone(),
                 "nullvalue" => o.null_value = Some(v.clone()),
                 "ignoresurroundingspaces" => {
@@ -182,6 +189,33 @@ impl Opts {
                 "declaration" | "encoding" => {}
                 "inferschema" => o.infer_schema = flag(v, func, "inferSchema")?,
                 "prefersdecimal" => o.prefers_decimal = flag(v, func, "prefersDecimal")?,
+                // Read by the schema inference only: `from_xml` would have to skip attributes too.
+                "excludeattribute" if func == "schema_of_xml" => {
+                    o.exclude_attribute = flag(v, func, "excludeAttribute")?;
+                }
+                "ignorenamespace" if func == "schema_of_xml" => {
+                    o.ignore_namespace = flag(v, func, "ignoreNamespace")?;
+                }
+                // `samplingRatio` must be a number above 0 (Spark: `requirement failed: samplingRatio (x) should be greater than 0`).
+                "samplingratio" if func == "schema_of_xml" => match v.trim().parse::<f64>() {
+                    Ok(r) if r > 0.0 && r.is_finite() => {}
+                    _ => {
+                        return Err(unsupported(
+                            func,
+                            &format!("samplingRatio {v} (it must be a number above 0)"),
+                        ));
+                    }
+                },
+                // Accepted by Spark's XML source and without effect on an inferred schema (Spark 4.2.0 run).
+                "columnnameofcorruptrecord" | "wildcardcolname" | "charset" | "locale"
+                    if func == "schema_of_xml" => {}
+                "samplingratio"
+                | "columnnameofcorruptrecord"
+                | "wildcardcolname"
+                | "charset"
+                | "locale"
+                | "ignorenamespace"
+                | "excludeattribute" => return Err(unsupported(func, &format!("option {k}"))),
                 "validatename" => o.validate_name = flag(v, func, "validateName")?,
                 // Names Spark's XML source defines and this module does not
                 // implement: refused, not silently ignored.
@@ -1304,10 +1338,10 @@ fn infer_leaf(raw: &str, o: &Opts) -> T {
     T::Str
 }
 
-/// `(precision, scale)` of a plain decimal text (`1.5`, `-.25`), else `None`.
+/// `(precision, scale)` of a plain decimal text (`1.5`, `-.25`, an integer beyond `long`), else `None`.
 fn decimal_shape(text: &str) -> Option<(u32, u32)> {
     let body = text.strip_prefix(['+', '-']).unwrap_or(text);
-    let (int, frac) = body.split_once('.')?;
+    let (int, frac) = body.split_once('.').unwrap_or((body, ""));
     if !int.bytes().all(|b| b.is_ascii_digit()) || !frac.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
@@ -1319,31 +1353,48 @@ fn decimal_shape(text: &str) -> Option<(u32, u32)> {
 }
 
 /// The type both `a` and `b` can be read as.
-fn merge(a: T, b: T) -> T {
+fn merge(a: T, b: T, tag: &str) -> T {
     match (a, b) {
         (T::Null, x) | (x, T::Null) => x,
         (x, y) if x == y => x,
-        // A decimal that meets another number is read as a double.
-        (T::Long, T::Double)
-        | (T::Double, T::Long)
-        | (T::Decimal(..), T::Long | T::Double | T::Decimal(..))
-        | (T::Long | T::Double, T::Decimal(..)) => T::Double,
+        (T::Long | T::Decimal(..), T::Double) | (T::Double, T::Long | T::Decimal(..)) => T::Double,
+        // Decimals (a `long` counts as DECIMAL(20,0)) widen to the scale and integer digits of the larger: `1.5` and `2` give
+        // DECIMAL(21,1); past 38 digits they are a double.
+        (T::Decimal(p1, s1), T::Decimal(p2, s2)) => widen_decimal(p1, s1, p2, s2),
+        (T::Decimal(p, s), T::Long) | (T::Long, T::Decimal(p, s)) => widen_decimal(p, s, 20, 0),
         (T::Date, T::Timestamp) | (T::Timestamp, T::Date) => T::Timestamp,
-        (T::Array(x), T::Array(y)) => T::Array(Box::new(merge(*x, *y))),
-        (T::Array(x), y) | (y, T::Array(x)) => T::Array(Box::new(merge(*x, y))),
-        (T::Struct(x), T::Struct(y)) => T::Struct(merge_fields(x, y)),
+        (T::Array(x), T::Array(y)) => T::Array(Box::new(merge(*x, *y, tag))),
+        (T::Array(x), y) | (y, T::Array(x)) => T::Array(Box::new(merge(*x, y, tag))),
+        (T::Struct(x), T::Struct(y)) => T::Struct(merge_fields(x, y, tag)),
+        // An element with attributes or children meets one that is a bare value: the value joins the struct as its value tag.
+        (T::Struct(x), y) | (y, T::Struct(x))
+            if x.iter().any(|(n, _)| n.eq_ignore_ascii_case(tag)) =>
+        {
+            T::Struct(merge_fields(x, vec![(tag.to_owned(), y)], tag))
+        }
         _ => T::Str,
+    }
+}
+
+/// The decimal both can be read as: the larger scale and the larger count of integer digits, a double past 38 digits.
+fn widen_decimal(p1: u32, s1: u32, p2: u32, s2: u32) -> T {
+    let scale = s1.max(s2);
+    let range = (p1 - s1).max(p2 - s2);
+    if range + scale > 38 {
+        T::Double
+    } else {
+        T::Decimal(range + scale, scale)
     }
 }
 
 /// The union of two field lists; names match without regard to case and the
 /// first spelling stays.
-fn merge_fields(mut a: Vec<(String, T)>, b: Vec<(String, T)>) -> Vec<(String, T)> {
+fn merge_fields(mut a: Vec<(String, T)>, b: Vec<(String, T)>, tag: &str) -> Vec<(String, T)> {
     for (name, t) in b {
         match a.iter().position(|(n, _)| n.eq_ignore_ascii_case(&name)) {
             Some(i) => {
                 let old = std::mem::replace(&mut a[i].1, T::Null);
-                a[i].1 = merge(old, t);
+                a[i].1 = merge(old, t, tag);
             }
             None => a.push((name, t)),
         }
@@ -1355,37 +1406,53 @@ fn merge_fields(mut a: Vec<(String, T)>, b: Vec<(String, T)>) -> Vec<(String, T)
 /// children (repeated children are arrays).
 fn infer_elem(e: &Elem, o: &Opts, root: bool) -> T {
     let text_blank = e.text.trim().is_empty();
-    if e.attrs.is_empty() && e.children.is_empty() && !root {
+    let attrs: &[(String, String)] = if o.exclude_attribute { &[] } else { &e.attrs };
+    let local = |n: &str| -> String {
+        if o.ignore_namespace {
+            n.rsplit_once(':').map_or(n, |(_, l)| l).to_owned()
+        } else {
+            n.to_owned()
+        }
+    };
+    if attrs.is_empty() && e.children.is_empty() && !root {
         return infer_leaf(&e.text, o);
     }
     let mut fields: Vec<(String, T)> = Vec::new();
-    for (k, v) in &e.attrs {
+    for (k, v) in attrs {
         fields = merge_fields(
             fields,
-            vec![(format!("{}{k}", o.attribute_prefix), infer_leaf(v, o))],
+            vec![(
+                format!("{}{}", o.attribute_prefix, local(k)),
+                infer_leaf(v, o),
+            )],
+            &o.value_tag,
         );
     }
     if !text_blank {
-        fields = merge_fields(fields, vec![(o.value_tag.clone(), infer_leaf(&e.text, o))]);
+        fields = merge_fields(
+            fields,
+            vec![(o.value_tag.clone(), infer_leaf(&e.text, o))],
+            &o.value_tag,
+        );
     }
     let mut seen: Vec<(String, T, usize)> = Vec::new();
     for c in &e.children {
         let t = infer_elem(c, o, false);
         match seen
             .iter()
-            .position(|(n, _, _)| n.eq_ignore_ascii_case(&c.name))
+            .position(|(n, _, _)| n.eq_ignore_ascii_case(&local(&c.name)))
         {
             Some(i) => {
                 let old = std::mem::replace(&mut seen[i].1, T::Null);
-                seen[i].1 = merge(old, t);
+                seen[i].1 = merge(old, t, &o.value_tag);
                 seen[i].2 += 1;
             }
-            None => seen.push((c.name.clone(), t, 1)),
+            None => seen.push((local(&c.name), t, 1)),
         }
     }
     for (name, t, n) in seen {
         let t = if n > 1 { T::Array(Box::new(t)) } else { t };
-        fields = merge_fields(fields, vec![(name, t)]);
+        fields = merge_fields(fields, vec![(name, t)], &o.value_tag);
     }
     T::Struct(fields)
 }
