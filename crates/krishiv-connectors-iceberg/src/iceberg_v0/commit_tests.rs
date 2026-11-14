@@ -1484,7 +1484,6 @@ fn a_v1_to_v3_upgrade_is_a_conflict() {
     c.check(&[INIT]);
 }
 
-/// A small deterministic generator (splitmix64) for the schedule sweep.
 /// `commit.manifest.min-count-to-merge` 2: the write's first attempt merges
 /// its new manifest with the base's.
 const MERGE: &[(&str, &str)] = &[("commit.manifest.min-count-to-merge", "2")];
@@ -1525,7 +1524,18 @@ fn a_merged_first_attempt_commits_and_drops_the_absorbed_manifest() {
 /// are deleted, the new manifest kept.
 #[test]
 fn a_conflict_after_a_merged_first_attempt_lists_the_unmerged_manifests() {
-    let mut c = case_with(2, MERGE);
+    conflict_after_a_merged_first_attempt(2);
+}
+
+/// The same on v3 (review of the merge, nit 5): the second attempt's list
+/// takes fresh row ids for the new manifest, and the rows read back.
+#[test]
+fn a_conflict_after_a_merged_first_attempt_on_v3() {
+    conflict_after_a_merged_first_attempt(3);
+}
+
+fn conflict_after_a_merged_first_attempt(version: u8) {
+    let mut c = case_with(version, MERGE);
     c.cat
         .on(When::BeforeRequest(1), c.foreign("f.parquet", 900, "main"));
     let m = c.run().unwrap();
@@ -1598,6 +1608,7 @@ fn an_unknown_merged_attempt_keeps_its_merged_manifest() {
     c.check(&[INIT, MINE]);
 }
 
+/// A small deterministic generator (splitmix64) for the schedule sweep.
 struct Seeded(u64);
 
 impl Seeded {

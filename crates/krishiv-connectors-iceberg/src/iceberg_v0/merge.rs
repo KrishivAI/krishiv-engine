@@ -41,6 +41,12 @@
 //!   manifests merged by this attempt (0 on later ones), where Java's counter
 //!   accumulates over its attempts until the commit.
 //!
+//! Not done (divergences): Java's `apply` also drops delete files older than
+//! every live data file (`dropDeleteFilesOlderThan(minDataSequenceNumber)`),
+//! so its append may rewrite delete manifests; Krishiv lists them unchanged.
+//! The table's rows are the same; the layout and summary may differ.
+//! `ManifestFilterManager` was not read, so that rewrite is unverified.
+//!
 //! Manifests are not rolled at the target size while written (Java's
 //! `RollingManifestWriter`): `write_new_manifests` writes one per spec.
 
