@@ -284,8 +284,21 @@ impl Parser<'_> {
         if self.case_column_at == Some(self.pos) || !self.when_ahead() {
             return Ok(None);
         }
+        // The enclosing `CASE` part, when this `CASE` is in its brackets.
+        let part = self
+            .case_part
+            .filter(|(start, _)| self.depth_since(*start) == 0)
+            .map(|(_, part)| part);
         let at = self.checkpoint();
         match self.case_expr() {
+            // The nested reading took every word that could close the
+            // enclosing part (`THEN case + 1 WHEN false THEN 2 END FROM t`):
+            // the enclosing `CASE` cannot end, so ANTLR's full-context
+            // prediction takes the column (Spark `('case + 1)`).
+            Ok(_) if part.is_some_and(|part| !self.part_closer_after(0, part)) => {
+                self.restore(at);
+                Ok(None)
+            }
             Ok(kind) => {
                 self.commit(at);
                 Ok(Some(kind))

@@ -703,3 +703,41 @@ fn not_closer_chains_parse_in_linear_time() {
     // about 10^10 token visits.
     assert!(started.elapsed().as_secs() < 10);
 }
+
+/// A `CASE` that may be a column inside a `CASE` branch is the nested `CASE`
+/// expression only when the enclosing `CASE` can still close after it; when
+/// the nested reading would take the enclosing branches and `END`, it is the
+/// column (Codex on #761, round 4). Each lowered plan is the shape Spark
+/// 4.2.0's `parsePlan` gives (run 2026-11-14,
+/// `~/krishiv-data/tmp/opus-3/r4/p5.out`).
+#[test]
+fn a_case_column_inside_a_case_branch_leaves_the_enclosing_case_whole() {
+    use krishiv_plan::SourceId;
+    for (sql, want) in [
+        (
+            "SELECT CASE WHEN true THEN case + 1 WHEN false THEN 2 END FROM t",
+            "Project [CASE WHEN true THEN (case + 1) WHEN false THEN 2 END] | +- Read t",
+        ),
+        (
+            "SELECT CASE WHEN true THEN case + 1 WHEN false THEN 2 ELSE 3 END FROM t",
+            "Project [CASE WHEN true THEN (case + 1) WHEN false THEN 2 ELSE 3 END] | +- Read t",
+        ),
+        (
+            "SELECT CASE WHEN true THEN case + 1 ELSE 3 END FROM t",
+            "Project [CASE WHEN true THEN (case + 1) ELSE 3 END] | +- Read t",
+        ),
+        (
+            "SELECT CASE WHEN true THEN case + 1 WHEN false THEN 2 END END FROM t",
+            "Project [CASE WHEN true THEN CASE WHEN (positive(1) == false) THEN 2 END END] | +- Read t",
+        ),
+        (
+            "SELECT case + 1 WHEN 2 THEN 3 END FROM t",
+            "Project [CASE WHEN (positive(1) == 2) THEN 3 END] | +- Read t",
+        ),
+    ] {
+        let plan = krishiv_sql::parse_and_lower(sql, &ParserOptions::default(), SourceId(0))
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+        let got = plan.root().to_string().replace('\n', " | ");
+        assert_eq!(got.trim_end_matches([' ', '|']), want, "{sql}");
+    }
+}
