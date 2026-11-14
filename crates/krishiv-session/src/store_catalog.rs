@@ -1568,6 +1568,85 @@ mod tests {
         assert!(c.store.table("db", "t").unwrap().comment.is_none());
     }
 
+    /// The tests every catalog shares (`krishiv_plan::analyzer::contract`): this one is the first to meet them.
+    #[test]
+    fn the_store_catalog_meets_the_write_contract() {
+        let f = fixture();
+        block_on(krishiv_plan::analyzer::contract::write_contract(&f.catalog)).unwrap();
+        block_on(krishiv_plan::analyzer::contract::capabilities_agree(
+            &f.catalog,
+        ))
+        .unwrap();
+    }
+
+    /// A catalog that is not what it says: the contract has to be able to tell.
+    struct Wrapped<'c> {
+        inner: &'c StoreCatalog,
+        /// Reports the same epoch whatever happens.
+        frozen_epoch: bool,
+        /// Declares `writes: false` while offering the write half.
+        liar: bool,
+    }
+
+    impl Catalog for Wrapped<'_> {
+        fn name(&self) -> &str {
+            self.inner.name()
+        }
+        fn epoch(&self) -> u64 {
+            if self.frozen_epoch {
+                0
+            } else {
+                self.inner.epoch()
+            }
+        }
+        fn capabilities(&self) -> CatalogCapabilities {
+            let mut caps = self.inner.capabilities();
+            if self.liar {
+                caps = CatalogCapabilities::default();
+            }
+            caps
+        }
+        fn as_write(&self) -> Option<&dyn CatalogWrite> {
+            self.inner.as_write()
+        }
+        fn load_table<'a>(
+            &'a self,
+            id: &'a TableIdent,
+            version: Option<TableVersion>,
+            form: NameForm,
+        ) -> BoxFuture<'a, Result<Option<TableMeta>, KrishivError>> {
+            self.inner.load_table(id, version, form)
+        }
+    }
+
+    #[test]
+    fn the_contract_tells_a_catalog_that_is_not_what_it_says() {
+        use krishiv_plan::analyzer::contract::{capabilities_agree, write_contract};
+        let f = fixture();
+        let liar = Wrapped {
+            inner: &f.catalog,
+            frozen_epoch: false,
+            liar: true,
+        };
+        let why = block_on(capabilities_agree(&liar)).unwrap_err();
+        assert!(
+            why.contains("writes is false but as_write() is Some"),
+            "{why}"
+        );
+
+        let f = fixture();
+        let frozen = Wrapped {
+            inner: &f.catalog,
+            frozen_epoch: true,
+            liar: false,
+        };
+        let why = block_on(write_contract(&frozen)).unwrap_err();
+        assert!(
+            why.starts_with("namespaces:") && why.contains("epoch"),
+            "{why}"
+        );
+    }
+
     fn rename(c: &StoreCatalog, from: &str, to: &str) -> Result<(), KrishivError> {
         block_on(c.rename_table(&ident("db", from), &ident("db", to)))
     }
