@@ -431,6 +431,7 @@ pub struct krishiv_session::spark_catalog::Catalog<'a>
 impl krishiv_session::spark_catalog::Catalog<'_>
 pub async fn krishiv_session::spark_catalog::Catalog<'_>::cache_table(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::spark_catalog::Catalog<'_>::clear_cache(&self)
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::create_table(&self, &str, core::option::Option<&str>, core::option::Option<&str>, core::option::Option<&str>, &[(&str, &str)]) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::spark_catalog::Catalog<'_>::current_catalog(&self) -> alloc::string::String
 pub fn krishiv_session::spark_catalog::Catalog<'_>::current_database(&self) -> alloc::string::String
 pub fn krishiv_session::spark_catalog::Catalog<'_>::database_exists(&self, &str) -> bool

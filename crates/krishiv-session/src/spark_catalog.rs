@@ -524,6 +524,79 @@ impl Catalog<'_> {
         self.run(&format!("CACHE TABLE {}", quoted(name))).await
     }
 
+    /// `spark.catalog.createTable(name, source, schema, description, options)`: creates a table of the data
+    /// source `source` (`spark.sql.sources.default` when `None`). `schema` is a DDL column list
+    /// (`"a INT, b STRING"`); without one a data source table takes its schema from its files. A `path`
+    /// option makes the table external, at that location, as Spark's `CatalogImpl` does; the other options
+    /// become the table's `OPTIONS`.
+    ///
+    /// # Errors
+    /// The statement's: `TABLE_OR_VIEW_ALREADY_EXISTS`, `DATA_SOURCE_NOT_FOUND`, a parse error in `schema`.
+    pub async fn create_table(
+        &self,
+        name: &str,
+        source: Option<&str>,
+        schema: Option<&str>,
+        description: Option<&str>,
+        options: &[(&str, &str)],
+    ) -> Result<(), KrishivError> {
+        let mut sql = format!("CREATE TABLE {}", quoted(name));
+        let given = schema.filter(|s| !s.trim().is_empty());
+        let location = options
+            .iter()
+            .rev()
+            .find(|(k, _)| k.eq_ignore_ascii_case("path"))
+            .map(|(_, v)| *v);
+        // A data source table without a schema takes it from its files (Spark infers it when it creates the
+        // table); `CREATE TABLE` here wants columns, so they are read from the files first.
+        let inferred = match (given, source, location) {
+            (None, Some(source), Some(location)) => {
+                Some(self.infer_columns(source, location).await?)
+            }
+            _ => None,
+        };
+        if let Some(schema) = given.map(str::to_owned).or(inferred) {
+            sql.push_str(&format!(" ({schema})"));
+        }
+        if let Some(source) = source {
+            sql.push_str(&format!(" USING {}", quote(source)));
+        }
+        let literal = |v: &str| format!("'{}'", v.replace('\\', "\\\\").replace('\'', "\\'"));
+        let (path, rest): (Vec<_>, Vec<_>) = options
+            .iter()
+            .partition(|(k, _)| k.eq_ignore_ascii_case("path"));
+        if !rest.is_empty() {
+            let list: Vec<String> = rest
+                .iter()
+                .map(|(k, v)| format!("{} {}", quote(k), literal(v)))
+                .collect();
+            sql.push_str(&format!(" OPTIONS ({})", list.join(", ")));
+        }
+        if let Some((_, location)) = path.last() {
+            sql.push_str(&format!(" LOCATION {}", literal(location)));
+        }
+        if let Some(description) = description {
+            sql.push_str(&format!(" COMMENT {}", literal(description)));
+        }
+        self.run(&sql).await
+    }
+
+    /// The column list (`` `a` INT, `b` STRING ``) of the files at `location`, read as `source`.
+    async fn infer_columns(&self, source: &str, location: &str) -> Result<String, KrishivError> {
+        let by_path = format!(
+            "SELECT * FROM {}.{}",
+            quote(source),
+            quote(location.strip_prefix("file:").unwrap_or(location))
+        );
+        let schema = self.session.sql(&by_path).await?.schema().await?;
+        let mut columns = Vec::with_capacity(schema.fields().len());
+        for field in schema.fields() {
+            let ty = krishiv_types::DataType::from_arrow_field(field)?;
+            columns.push(format!("{} {}", quote(field.name()), ty.catalog_string()));
+        }
+        Ok(columns.join(", "))
+    }
+
     /// Whether the table or view `name` is cached (`spark.catalog.isCached`).
     ///
     /// # Errors

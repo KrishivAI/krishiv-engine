@@ -174,6 +174,63 @@ fn functions_list_get_exists() {
 }
 
 #[test]
+fn create_table_managed_with_a_schema_and_external_from_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    let c = s.catalog();
+    block_on(c.create_table(
+        "m",
+        Some("parquet"),
+        Some("a INT, b STRING"),
+        Some("a managed table"),
+        &[],
+    ))
+    .unwrap();
+    let t = c.get_table("m").unwrap();
+    assert_eq!(t.table_type, "MANAGED");
+    assert_eq!(t.description.as_deref(), Some("a managed table"));
+    let cols = block_on(c.list_columns("m")).unwrap();
+    assert_eq!(
+        cols.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+        ["a", "b"]
+    );
+    // a second create is the statement's error
+    assert_eq!(
+        block_on(c.create_table("m", Some("parquet"), Some("a INT"), None, &[]))
+            .unwrap_err()
+            .error_class()
+            .name(),
+        "TABLE_OR_VIEW_ALREADY_EXISTS"
+    );
+    // an external table over files written by another table: its schema comes from the files
+    run(&s, "INSERT INTO m VALUES (1, 'x'), (2, 'y')");
+    let location = dir.path().join("m");
+    let path = location.to_str().unwrap();
+    block_on(c.create_table("ext", Some("parquet"), None, None, &[("path", path)])).unwrap();
+    assert_eq!(c.get_table("ext").unwrap().table_type, "EXTERNAL");
+    let rows = block_on(async {
+        s.sql("SELECT concat_ws('|', a, b) FROM ext ORDER BY a")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(arrow_array::RecordBatch::num_rows)
+            .sum::<usize>(),
+        2
+    );
+    let cols = block_on(c.list_columns("ext")).unwrap();
+    assert_eq!(
+        cols.iter()
+            .map(|c| (c.name.as_str(), c.data_type.as_str()))
+            .collect::<Vec<_>>(),
+        [("a", "int"), ("b", "string")]
+    );
+}
+
+#[test]
 fn drop_views_and_refresh() {
     let dir = tempfile::tempdir().unwrap();
     let s = session(dir.path());
