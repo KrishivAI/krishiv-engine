@@ -105,7 +105,7 @@ non-abi3 build (disable the default `abi3-py311` crate feature but keep `mimallo
 cd python
 uv venv --python 3.14t .venv-314t && uv pip install --python .venv-314t/bin/python maturin pytest
 . .venv-314t/bin/activate
-maturin develop --no-default-features --features mimalloc   # or: maturin build ...
+maturin develop --no-default-features --features mimalloc,cloud   # or: maturin build ...
 # (mimalloc is a default feature; keep it when turning the defaults off)
 ```
 
