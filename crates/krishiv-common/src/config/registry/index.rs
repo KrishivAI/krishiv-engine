@@ -64,6 +64,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.session.memoryLimit", &SESSION_MEMORY_LIMIT),
     ("spark.sql.binaryOutputStyle", &BINARY_OUTPUT_STYLE),
     ("spark.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
+    ("krishiv.connect.maxPlanDepth", &CONNECT_MAX_PLAN_DEPTH),
     ("krishiv.io.cache.memoryBytes", &IO_CACHE_MEMORY_BYTES),
     ("krishiv.memory.residentGuard", &MEMORY_RESIDENT_GUARD),
     ("krishiv.resultCache.maxBytes", &RESULT_CACHE_MAX_BYTES),
@@ -71,6 +72,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("spark.sql.shuffle.partitions", &SHUFFLE_PARTITIONS_HINT),
     ("krishiv.exec.sort.hashBuckets", &EXEC_SORT_HASH_BUCKETS),
     ("krishiv.io.coalesceWasteBytes", &IO_COALESCE_WASTE_BYTES),
+    ("krishiv.io.local.allowedRoots", &IO_LOCAL_ALLOWED_ROOTS),
     ("krishiv.io.metadataCacheBytes", &IO_METADATA_CACHE_BYTES),
     ("krishiv.io.multipartPartBytes", &IO_MULTIPART_PART_BYTES),
     ("krishiv.optimizer.joinDpLimit", &JOIN_DP_LIMIT),
@@ -301,6 +303,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.exec.join.sharedBroadcastBytes",
         &EXEC_JOIN_SHARED_BROADCAST_BYTES,
+    ),
+    (
+        "krishiv.io.objectStore.allowedPrefixes",
+        &IO_OBJECT_STORE_ALLOWED_PREFIXES,
     ),
     (
         "krishiv.io.parquet.bloomFilter.enabled",

@@ -1,3 +1,7 @@
+---
+description: "Sample notebooks and datasets to try Krishiv on."
+---
+
 # Notebooks and sample data
 
 Three notebooks in [`docs/notebooks`](https://github.com/KrishivAI/krishiv-engine/tree/main/docs/notebooks) walk through the quickstart's ideas on generated order data:

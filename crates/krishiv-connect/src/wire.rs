@@ -35,8 +35,9 @@
 use std::ops::Deref;
 
 use krishiv_common::error::{
-    ConnectInvalidPlanCannotParse, ConnectInvalidPlanPlanSizeLargerThanMax,
-    FailedToParseTooComplex, KrishivError, KrishivUnsupportedFeature,
+    ConnectInvalidPlanCannotParse, ConnectInvalidPlanInvalidOneOfFieldNotSupported,
+    ConnectInvalidPlanPlanSizeLargerThanMax, FailedToParseTooComplex, KrishivError,
+    KrishivUnsupportedFeature,
 };
 use prost::Message;
 
@@ -51,6 +52,11 @@ use crate::stack::{INLINE_LEVELS, on_deep_stack};
 /// operator), as does an expression, so this allows about 500 chained
 /// operators or nested expressions.
 pub const MAX_NESTING: usize = 1024;
+
+/// The largest cap `krishiv.connect.maxPlanDepth` can raise the limit to. The decode thread's
+/// stack is fixed (16 MiB release, 64 MiB debug, about 3 KiB a level in debug), so a larger
+/// value could let prost overflow it; a configured value above this is lowered to it.
+pub const MAX_NESTING_LIMIT: usize = 4096;
 
 /// The most bytes of a message accepted: Spark's default maximum inbound
 /// gRPC message size (`spark.connect.grpc.maxInboundMessageSize`).
@@ -132,6 +138,109 @@ impl<M: Message + Default + Send + Scrub> Drop for Decoded<M> {
     }
 }
 
+/// The Spark Connect protocol version a client speaks. A client declaring 4.2 or older is refused
+/// the fields 4.3 added (`FIELDS_SINCE_4_3`); the other version steps are not gated yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum ClientVersion {
+    /// Spark 3.5.x.
+    V3_5,
+    /// Spark 4.0.x.
+    V4_0,
+    /// Spark 4.1.x.
+    V4_1,
+    /// Spark 4.2.x.
+    V4_2,
+    /// Spark 4.3.x and newer: every field the superset decoder knows. The default profile.
+    #[default]
+    V4_3,
+}
+
+impl ClientVersion {
+    /// The version in a request's `client_type` (`... spark/4.2.1`): the last whitespace-separated
+    /// token that starts with `spark/`, read as `<major>.<minor>`. Versions past 4.3 map to 4.3. `None` when there is no such token, so the caller
+    /// can fall back to the fields present, then to the default profile.
+    #[must_use]
+    pub fn from_client_type(client_type: &str) -> Option<Self> {
+        let rest = client_type
+            .split_whitespace()
+            .rev()
+            .find_map(|t| t.strip_prefix("spark/"))?;
+        let mut parts = rest.split(['.', ' ', '-']);
+        let major: u32 = parts.next()?.parse().ok()?;
+        let minor: u32 = parts.next()?.parse().ok()?;
+        match (major, minor) {
+            (0..=3, _) => Some(Self::V3_5),
+            (4, 0) => Some(Self::V4_0),
+            (4, 1) => Some(Self::V4_1),
+            (4, 2) => Some(Self::V4_2),
+            _ => Some(Self::V4_3),
+        }
+    }
+}
+
+/// How to decode: the client's declared version and the deepest nesting accepted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DecodeOptions {
+    /// The version the client declares ([`ClientVersion`]).
+    pub version: ClientVersion,
+    /// The deepest message nesting accepted (`krishiv.connect.maxPlanDepth`); a plan nested one
+    /// level deeper is rejected with `FAILED_TO_PARSE_TOO_COMPLEX`.
+    pub max_nesting: usize,
+}
+
+impl Default for DecodeOptions {
+    fn default() -> Self {
+        Self {
+            version: ClientVersion::default(),
+            max_nesting: MAX_NESTING,
+        }
+    }
+}
+
+impl DecodeOptions {
+    /// The options for a client declaring `version`, with the depth cap from `config`
+    /// (`krishiv.connect.maxPlanDepth`).
+    #[must_use]
+    pub fn from_config(config: &krishiv_common::config::Config, version: ClientVersion) -> Self {
+        let max_nesting = config
+            .get(&krishiv_common::config::CONNECT_MAX_PLAN_DEPTH)
+            .and_then(krishiv_common::config::ConfigValue::as_int)
+            .and_then(|v| usize::try_from(v).ok())
+            .filter(|&v| v > 0)
+            .map_or(MAX_NESTING, |v| v.min(MAX_NESTING_LIMIT));
+        Self {
+            version,
+            max_nesting,
+        }
+    }
+}
+
+/// Fields the 4.3 protos added to messages that exist in 4.2 (message name, field number, the
+/// field's name upper-cased, as Spark prints a oneof arm): a client declaring 4.2 or older that
+/// sends one gets `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SUPPORTED` (SQLSTATE 56K00).
+/// `Relation.zip`, the nanosecond timestamp literals and types, and the SCD2 track-history lists;
+/// the manifest check pins the 4.2.1 -> 4.3 delta to exactly these. The `SCD_TYPE_2` enum value is
+/// not detectable by this walk; it only appears inside `pipeline_command`, which translation
+/// refuses whole. Only 4.3 additions are gated so far: a per-field first-version table for the
+/// 3.5 -> 4.2 steps (and the 3.5 against 4.0 additivity diff) is still to do.
+const FIELDS_SINCE_4_3: &[(&str, u32, &str)] = &[
+    ("Relation", 48, "ZIP"),
+    ("Expression.Literal", 29, "TIMESTAMP_NTZ_NANOS"),
+    ("Expression.Literal", 30, "TIMESTAMP_LTZ_NANOS"),
+    ("DataType", 29, "TIMESTAMP_NTZ_NANOS"),
+    ("DataType", 30, "TIMESTAMP_LTZ_NANOS"),
+    (
+        "PipelineCommand.DefineFlow.AutoCdcFlowDetails",
+        11,
+        "TRACK_HISTORY_COLUMN_LIST",
+    ),
+    (
+        "PipelineCommand.DefineFlow.AutoCdcFlowDetails",
+        12,
+        "TRACK_HISTORY_EXCEPT_COLUMN_LIST",
+    ),
+];
+
 /// Decodes a [`Plan`].
 ///
 /// # Errors
@@ -141,7 +250,19 @@ impl<M: Message + Default + Send + Scrub> Drop for Decoded<M> {
 /// Spark Connect 4.3 does not define, `CONNECT_INVALID_PLAN.CANNOT_PARSE` for
 /// malformed bytes.
 pub fn decode_plan(bytes: &[u8]) -> Result<Decoded<Plan>, KrishivError> {
-    decode(layout::PLAN, bytes)
+    decode_plan_with(bytes, &DecodeOptions::default())
+}
+
+/// Decodes a [`Plan`] with `options`: the client's declared version and the depth cap.
+///
+/// # Errors
+/// As [`decode_plan`], and `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SUPPORTED` for a field
+/// `version` does not define.
+pub fn decode_plan_with(
+    bytes: &[u8],
+    options: &DecodeOptions,
+) -> Result<Decoded<Plan>, KrishivError> {
+    decode(layout::PLAN, bytes, options)
 }
 
 /// Decodes a [`Relation`]; see [`decode_plan`] for the errors.
@@ -149,7 +270,18 @@ pub fn decode_plan(bytes: &[u8]) -> Result<Decoded<Plan>, KrishivError> {
 /// # Errors
 /// As [`decode_plan`].
 pub fn decode_relation(bytes: &[u8]) -> Result<Decoded<Relation>, KrishivError> {
-    decode(layout::RELATION, bytes)
+    decode_relation_with(bytes, &DecodeOptions::default())
+}
+
+/// Decodes a [`Relation`] with `options`; see [`decode_plan_with`].
+///
+/// # Errors
+/// As [`decode_plan_with`].
+pub fn decode_relation_with(
+    bytes: &[u8],
+    options: &DecodeOptions,
+) -> Result<Decoded<Relation>, KrishivError> {
+    decode(layout::RELATION, bytes, options)
 }
 
 /// Decodes an [`Expression`]; see [`decode_plan`] for the errors.
@@ -157,7 +289,18 @@ pub fn decode_relation(bytes: &[u8]) -> Result<Decoded<Relation>, KrishivError> 
 /// # Errors
 /// As [`decode_plan`].
 pub fn decode_expression(bytes: &[u8]) -> Result<Decoded<Expression>, KrishivError> {
-    decode(layout::EXPRESSION, bytes)
+    decode_expression_with(bytes, &DecodeOptions::default())
+}
+
+/// Decodes an [`Expression`] with `options`; see [`decode_plan_with`].
+///
+/// # Errors
+/// As [`decode_plan_with`].
+pub fn decode_expression_with(
+    bytes: &[u8],
+    options: &DecodeOptions,
+) -> Result<Decoded<Expression>, KrishivError> {
+    decode(layout::EXPRESSION, bytes, options)
 }
 
 /// The request message of a `SparkConnectService` RPC: a root the decoder
@@ -181,14 +324,26 @@ pub(crate) mod sealed {
 /// # Errors
 /// As [`decode_plan`].
 pub fn decode_request<M: Request>(bytes: &[u8]) -> Result<Decoded<M>, KrishivError> {
-    decode(M::ROOT, bytes)
+    decode_request_with(bytes, &DecodeOptions::default())
+}
+
+/// [`decode_request`] with the client's version and the configured depth cap.
+///
+/// # Errors
+/// As [`decode_plan`].
+pub fn decode_request_with<M: Request>(
+    bytes: &[u8],
+    options: &DecodeOptions,
+) -> Result<Decoded<M>, KrishivError> {
+    decode(M::ROOT, bytes, options)
 }
 
 fn decode<M: Message + Default + Send + Scrub>(
     root: u16,
     bytes: &[u8],
+    options: &DecodeOptions,
 ) -> Result<Decoded<M>, KrishivError> {
-    let deep = check(root, bytes)? > INLINE_LEVELS;
+    let deep = check(root, bytes, options)? > INLINE_LEVELS;
     // The one call of prost's decoder: the walk above bounded it.
     #[expect(
         clippy::disallowed_methods,
@@ -214,6 +369,11 @@ enum Reject {
     TooDeep,
     /// A field number message `message` (an id) does not define.
     UnknownField {
+        message: u16,
+        number: u32,
+    },
+    /// A field newer than the version the client declared.
+    NotInVersion {
         message: u16,
         number: u32,
     },
@@ -249,6 +409,24 @@ impl From<Reject> for KrishivError {
                 ),
             }
             .into(),
+            Reject::NotInVersion { message, number } => {
+                let name = layout::MESSAGES
+                    .get(usize::from(message))
+                    .map_or("?", |m| m.name);
+                ConnectInvalidPlanInvalidOneOfFieldNotSupported {
+                    full_name: format!("spark.connect.{name}"),
+                    name: FIELDS_SINCE_4_3
+                        .iter()
+                        .find(|&&(n, num, _)| {
+                            num == number
+                                && Some(n)
+                                    == layout::MESSAGES.get(usize::from(message)).map(|m| m.name)
+                        })
+                        .map_or_else(|| format!("field {number}"), |&(_, _, f)| f.to_owned()),
+                    number: number.to_string(),
+                }
+                .into()
+            }
             Reject::Malformed(why) => malformed(why),
         }
     }
@@ -267,7 +445,7 @@ fn malformed(why: &str) -> KrishivError {
 }
 
 /// Walks `bytes`; returns the deepest nesting.
-fn check(root: u16, bytes: &[u8]) -> Result<usize, KrishivError> {
+fn check(root: u16, bytes: &[u8], options: &DecodeOptions) -> Result<usize, KrishivError> {
     scan(
         &layout::MESSAGES,
         root,
@@ -276,7 +454,9 @@ fn check(root: u16, bytes: &[u8]) -> Result<usize, KrishivError> {
             bytes: MAX_PLAN_BYTES,
             messages: MAX_MESSAGES,
             decoded: MAX_DECODED_BYTES,
-            nesting: MAX_NESTING,
+            // The ceiling holds however the options were built.
+            nesting: options.max_nesting.min(MAX_NESTING_LIMIT),
+            version: options.version,
         },
     )
     .map_err(KrishivError::from)
@@ -288,6 +468,7 @@ struct Limits {
     messages: usize,
     decoded: usize,
     nesting: usize,
+    version: ClientVersion,
 }
 
 /// A message being walked: its id and where its bytes end.
@@ -338,7 +519,15 @@ fn scan(table: &[Layout], root: u16, buf: &[u8], limits: &Limits) -> Result<usiz
                     .ok()
                     .map(|i| m.fields[i].1)
             })
+            .or_else(|| {
+                // A field 4.0 deleted that a 3.5 client still sends: read past it (prost skips it).
+                (limits.version == ClientVersion::V3_5 && is_legacy_3_5(table, message, number))
+                    .then_some(Field::Bytes)
+            })
             .ok_or(Reject::UnknownField { message, number })?;
+        if limits.version < ClientVersion::V4_3 && is_newer_than_declared(table, message, number) {
+            return Err(Reject::NotInVersion { message, number });
+        }
         let cost = match wire_type {
             0 => {
                 varint(field, &mut pos)?;
@@ -430,6 +619,31 @@ fn skip(buf: &[u8], pos: usize, n: usize) -> Result<usize, Reject> {
         .ok_or(Reject::Malformed(
             "a field runs past the end of its message",
         ))
+}
+
+/// Fields Spark 4.0 deleted (reserved) that a 3.5 client still sends, as (message name, field
+/// number): `CachedLocalRelation.userId` and `.sessionId`, which 4.0 removed because the server
+/// must use the active session and user. The one decoder follows 4.3 and 4.0 ignores them, so a
+/// client declaring 3.5 may send them; every other client gets them refused as undefined fields.
+/// The 3.5 -> 4.0 diff of the vendored protos is checked by `check_proto_manifest.py`
+/// (`additivity_problems`): this is its only non-additive change.
+const LEGACY_3_5_FIELDS: &[(&str, u32)] = &[("CachedLocalRelation", 1), ("CachedLocalRelation", 2)];
+
+fn is_legacy_3_5(table: &[Layout], message: u16, number: u32) -> bool {
+    table.get(usize::from(message)).is_some_and(|m| {
+        LEGACY_3_5_FIELDS
+            .iter()
+            .any(|&(name, n)| n == number && name == m.name)
+    })
+}
+
+/// Whether field `number` of message `message` is one of [`FIELDS_SINCE_4_3`].
+fn is_newer_than_declared(table: &[Layout], message: u16, number: u32) -> bool {
+    table.get(usize::from(message)).is_some_and(|m| {
+        FIELDS_SINCE_4_3
+            .iter()
+            .any(|&(name, n, _)| n == number && name == m.name)
+    })
 }
 
 /// Reads a varint of at most 10 bytes at `*pos` and advances past it.

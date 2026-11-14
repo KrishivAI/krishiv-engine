@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Generate the Spark 4.2.0 error-class fixtures (P2-T003, ADR 0008).
+"""Generate the Spark error-class fixtures (P2-T003, P3 PR-64, ADR 0008).
 
-Nothing is transcribed: both outputs come from a REAL Spark 4.2.0 (the image pinned in
-bench/baselines/docker-compose.yml, run as a one-off throw-away container):
+Nothing is transcribed: every output comes from a REAL Spark release run as a one-off throw-away container
+(the 4.2.0 image pinned in bench/baselines/docker-compose.yml; the 4.2.1 and 4.3.0 images pinned below):
 
-1. `crates/krishiv-common/vendored/spark-error-conditions.json` is `error/error-conditions.json` read
-   verbatim out of the `spark-common-utils` jar (Apache-2.0, see NOTICE). `build.rs` generates the
-   registry from it.
+1. `crates/krishiv-common/vendored/spark-error-conditions.json` (Spark 4.3.0) and
+   `.../spark-error-conditions-4.2.1.json` (Spark 4.2.1) are `error/error-conditions.json` read verbatim
+   out of each release's `spark-common-utils` jar (Apache-2.0, see NOTICE). `build.rs` generates the
+   registry from both: the union of the classes, each release's own text kept per class.
 2. `tests/fixtures/spark-4.2.0/error-classes/render.json` holds SAMPLES leaf classes whose parameters
    are filled with awkward values (quotes, `$`, backslashes, `<angle>` text, unicode, newlines). Each
    is raised as a real `SparkException(errorClass, params)` in `spark-shell`
@@ -29,7 +30,18 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-JAR = "/opt/spark/jars/spark-common-utils_2.13-4.2.0.jar"
+JAR = "/opt/spark/jars/spark-common-utils_2.13-{version}.jar"
+# Releases whose registry is vendored: version -> (image pinned by digest, vendored file).
+VENDORED = {
+    "4.3.0": (
+        "apache/spark:4.3.0@sha256:3dedc5c8665a6f472e2f0a3a828207a79a30785090ef325d3af219cb90a73d63",
+        "spark-error-conditions.json",
+    ),
+    "4.2.1": (
+        "apache/spark:4.2.1@sha256:0cb70cf0193ec81c93c6c47078208512bbe659dd9dc89535dd2773826f0ea2bf",
+        "spark-error-conditions-4.2.1.json",
+    ),
+}
 ENTRY = "error/error-conditions.json"
 PLACEHOLDER = re.compile(r"<([a-zA-Z0-9_-]+)>")
 
@@ -72,7 +84,7 @@ VALUES = [
 
 def image() -> str:
     compose = (ROOT / "bench/baselines/docker-compose.yml").read_text(encoding="utf-8")
-    m = re.search(r"image:\s*(apache/spark:4\.2\.0@sha256:[0-9a-f]{64})", compose)
+    m = re.search(r"(apache/spark:4\.2\.0@sha256:[0-9a-f]{64})", compose)
     if not m:
         raise SystemExit("pinned Spark 4.2.0 image not found in docker-compose.yml")
     return m.group(1)
@@ -101,18 +113,31 @@ def leaves(doc: dict) -> dict[str, str]:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--container", help="reuse this running Spark 4.2.0 container")
+    ap.add_argument("--container", help="reuse this running Spark 4.2.0 container (the render fixture only)")
     args = ap.parse_args()
     if args.container:
         base = ["docker", "exec", "-i", args.container]
     else:
         base = ["docker", "run", "--rm", "-i", "--entrypoint", "", image()]
 
-    extract = f"import zipfile,sys;sys.stdout.buffer.write(zipfile.ZipFile('{JAR}').read('{ENTRY}'))"
+    for version, (img, name) in VENDORED.items():
+        jar = JAR.format(version=version)
+        extract = f"import zipfile,sys;sys.stdout.buffer.write(zipfile.ZipFile('{jar}').read('{ENTRY}'))"
+        vendored = subprocess.run(
+            ["docker", "run", "--rm", "-i", "--entrypoint", "", img, "python3", "-c", extract],
+            capture_output=True,
+            check=True,
+        ).stdout
+        json.loads(vendored)  # valid JSON, or fail before writing
+        (ROOT / "crates/krishiv-common/vendored" / name).write_bytes(vendored)
+        print(f"vendored Spark {version} registry -> {name}", file=sys.stderr)
+
+    extract = (
+        f"import zipfile,sys;sys.stdout.buffer.write(zipfile.ZipFile('{JAR.format(version='4.2.0')}').read('{ENTRY}'))"
+    )
     raw = subprocess.run([*base, "python3", "-c", extract], capture_output=True, check=True).stdout
     doc = json.loads(raw)
     table = leaves(doc)
-    (ROOT / "crates/krishiv-common/vendored/spark-error-conditions.json").write_bytes(raw)
 
     cases = []
     for i, name in enumerate(SAMPLES):

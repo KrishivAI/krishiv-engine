@@ -1,3 +1,7 @@
+---
+description: "EXPLAIN ANALYZE: per-operator cost of a query."
+---
+
 # EXPLAIN ANALYZE and EXPLAIN VERBOSE
 
 Two query-debugging statements that Spark does not have. Spark's own
