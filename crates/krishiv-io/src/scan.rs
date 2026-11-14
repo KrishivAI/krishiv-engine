@@ -65,6 +65,17 @@ pub struct ScanOptions {
     pub needs: MetadataNeeds,
 }
 
+impl ScanOptions {
+    /// Whether these options skip a file that failed with `e`: a corrupt file under
+    /// [`ignore_corrupt_files`](Self::ignore_corrupt_files), a missing one under
+    /// [`ignore_missing_files`](Self::ignore_missing_files).
+    #[must_use]
+    pub fn skips(&self, e: &KrishivError) -> bool {
+        (self.ignore_corrupt_files && is_class(e, CORRUPT))
+            || (self.ignore_missing_files && is_class(e, MISSING))
+    }
+}
+
 impl Default for ScanOptions {
     fn default() -> Self {
         Self::from_config(&Config::new())
@@ -316,8 +327,7 @@ impl ScanStream {
     }
 
     fn ignored(&self, e: &KrishivError) -> bool {
-        let skip = (self.options.ignore_corrupt_files && is_class(e, CORRUPT))
-            || (self.options.ignore_missing_files && is_class(e, MISSING));
+        let skip = self.options.skips(e);
         if skip {
             tracing::warn!(path = self.file.display_path(), error = %e, "skipped the rest of a file");
         }

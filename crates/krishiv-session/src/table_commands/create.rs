@@ -83,6 +83,15 @@ impl Session {
             .into());
         }
         let mut options = options_of(refuse_secret_options(&t.options, original)?, original);
+        // Stored store options redirect every later read of the table: a server-scoped key
+        // (endpoint, region, account, key file) is `Manage` on the cluster, asked before the
+        // table is stored (P3-T067b); readers are not asked again.
+        self.authorize_store_options(
+            krishiv_sql::StatementClass::Ddl,
+            &self.state.conf.snapshot(),
+            options.keys().map(String::as_str),
+        )
+        .await?;
         let properties = options_of(&t.tblproperties, original);
         // A `path` option is the table's location, as in Spark.
         let path_key = options
@@ -123,6 +132,7 @@ impl Session {
             column_stats: BTreeMap::new(),
             incarnation: 0,
             data_version: 0,
+            stamp: 0,
         };
         let layout = LayoutRequest {
             partition_by: &partition_names,
@@ -529,6 +539,7 @@ impl Session {
             column_stats: BTreeMap::new(),
             incarnation: 0,
             data_version: 0,
+            stamp: 0,
         };
         let mode = if t.if_not_exists {
             CreateMode::IfNotExists

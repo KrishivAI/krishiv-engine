@@ -359,3 +359,41 @@ fn a_session_with_a_live_operation_is_busy_and_never_swept() {
     assert_eq!(m.busy(), 0);
     assert_eq!(m.sweep(), 1);
 }
+
+#[test]
+fn an_ended_detached_operation_does_not_keep_shutdown_waiting() {
+    // Review M1 (PR-15a): a reattachable operation that finished and whose
+    // client went away stays registered until released, but shutdown must
+    // not wait `shutdownTimeout` for it.
+    use crate::operation::{Operation, plan_digest};
+    let m = manager(SessionLimits::default());
+    let entry = m.get_or_create(&alice(), ID, None, "u").expect("create");
+    let op = Arc::new(Operation::new(
+        krishiv_session::QueryId::parse(ID).expect("id"),
+        plan_digest(b"p"),
+        Arc::from(Vec::new()),
+        true,
+    ));
+    entry.operations().register(&op, 10).expect("register");
+    let generation = op.replay().attach(None);
+    assert!(op.finish());
+    assert_eq!(m.busy(), 1, "an attached client still reads its responses");
+    op.replay().detach(generation);
+    assert_eq!(m.busy(), 0, "ended and detached: nothing left to finish");
+    assert_eq!(
+        entry.operations().len(),
+        1,
+        "still registered until released"
+    );
+    // An interrupted one nobody reads does not count either.
+    let other = Arc::new(Operation::new(
+        krishiv_session::QueryId::parse("00112233-4455-6677-8899-aabbccddeeff").expect("id"),
+        plan_digest(b"q"),
+        Arc::from(Vec::new()),
+        true,
+    ));
+    entry.operations().register(&other, 10).expect("register");
+    assert_eq!(m.busy(), 1, "a running operation keeps shutdown waiting");
+    assert!(other.cancel());
+    assert_eq!(m.busy(), 0);
+}

@@ -437,7 +437,8 @@ jobs:
 
   # The Spark golden ratchet for other Spark versions (P3-T090): the upstream goldens of the tag are fetched
   # here (they are not committed, only v4.2.0 is), the baseline of failing statements is committed under
-  # `tests/spark-golden/profiles/<tag>/`.
+  # `tests/spark-golden/profiles/<tag>/`, with the phase gate's result rate and a floor (`gate.json`); each
+  # version's rate against its gate is in the job summary.
   golden-profiles:
     if: github.repository == 'KrishivAI/krishiv-engine'
     runs-on: ubuntu-latest
@@ -456,10 +457,25 @@ jobs:
         uses: $/.github/actions/install-tool
         with:
           tool: sccache@0.18.0
-      - name: Fetch the Spark v4.3.0, v4.1.4, v4.0.5 and v3.5.9 goldens
-        run: "for t in v4.3.0 v4.1.4 v4.0.5 v3.5.9; do bash tests/scripts/import_spark_golden.sh $t; done"
+      - name: Fetch the Spark v4.3.0, v4.2.1, v4.1.4, v4.0.5 and v3.5.9 goldens
+        run: "for t in v4.3.0 v4.2.1 v4.1.4 v4.0.5 v3.5.9; do bash tests/scripts/import_spark_golden.sh $t; done"
       - name: Golden ratchet per Spark version
         run: "cargo test -p krishiv-testkit --release --locked --test golden_profiles -- --ignored"
+
+  # The vendored Spark Connect protos still equal apache/spark at their tags (P3-T010).
+  connect-proto-upstream:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 tests/scripts/check_proto_manifest.py --upstream
 
   # cargo-fuzz targets (`fuzz/`), one hour each: the reusable `fuzz.yml`
   # (regression replay, cached corpus, crash triage). The weekly long run is

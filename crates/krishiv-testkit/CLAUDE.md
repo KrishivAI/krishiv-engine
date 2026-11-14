@@ -9,7 +9,7 @@ the `SQLQueryTestSuite` golden runner over `tests/spark-golden/<tag>/` (`.sql.ou
 three-number report, exclusion manifest `tests/spark-golden/exclusions.json`; `cargo xtask golden` writes
 `target/golden-report.json`; `--engine sql-parse` measures the `krishiv-sql` parser on the DQL statements,
 `golden::sql_parse`; `--engine session` runs every statement through `krishiv-session`, `golden::session_engine`),
-the frozen statement-level baseline, one file per key (`golden::known_failures`): `tests/spark-golden/known-failures.json`
+the other Spark releases' baselines `tests/spark-golden/profiles/<tag>/` (v4.3.0, v4.2.1, v4.1.4, v4.0.5, v3.5.9; nightly `golden-profiles`, test `golden_profiles`) each with `gate.json` (the phase gate's result rate and a ratchet floor, shown in the job summary), the frozen statement-level baseline, one file per key (`golden::known_failures`): `tests/spark-golden/known-failures.json`
 holds only the format version, Spark tag and freeze date; `known-failures-categories/<category>.json` one category
 each (unsupported feature with its plan task, divergence with ADR 0023, or bug with its owner) with the classification
 rules that assign it (`golden::classify`; each rule has an `order`, rules are tried in ascending order across all

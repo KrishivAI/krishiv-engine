@@ -245,6 +245,39 @@ pub struct AlterRules {
     pub reshape: bool,
 }
 
+impl AlterRules {
+    /// The rules of a file-source table: no type changes, no rename or drop
+    /// of a column, no reordering and no tightening. The builders loosen them.
+    #[must_use]
+    pub fn new(case_sensitive: bool) -> Self {
+        Self {
+            case_sensitive,
+            ..Self::default()
+        }
+    }
+
+    /// These rules with `widening` as the accepted type changes.
+    #[must_use]
+    pub fn with_widening(mut self, widening: TypeWidening) -> Self {
+        self.widening = widening;
+        self
+    }
+
+    /// These rules for a format whose columns do (or do not) carry ids.
+    #[must_use]
+    pub fn with_column_ids(mut self, column_ids: bool) -> Self {
+        self.column_ids = column_ids;
+        self
+    }
+
+    /// These rules for a format that can (or cannot) move and relax columns.
+    #[must_use]
+    pub fn with_reshape(mut self, reshape: bool) -> Self {
+        self.reshape = reshape;
+        self
+    }
+}
+
 /// The table `changes` apply to.
 #[derive(Debug, Clone, Copy)]
 pub struct AlterInput<'a> {
@@ -416,6 +449,11 @@ impl Alter<'_> {
                 column_name: quoted(name),
             }
             .into());
+        }
+        // A column placed among the others shifts what a positional format reads (a CSV row's tokens),
+        // so it needs the same rule as moving one; appending before the partition columns does not.
+        if position.is_some() && !self.rules.reshape {
+            return Err(self.table_operation("ADD COLUMN ... FIRST | AFTER"));
         }
         let at = self.insertion_point(position.as_ref())?;
         let mut column = TableColumn::new(name, data_type.clone(), *nullable);
@@ -621,12 +659,10 @@ mod tests {
     }
 
     fn full() -> AlterRules {
-        AlterRules {
-            widening: TypeWidening::Iceberg,
-            column_ids: true,
-            reshape: true,
-            ..AlterRules::default()
-        }
+        AlterRules::new(false)
+            .with_widening(TypeWidening::Iceberg)
+            .with_column_ids(true)
+            .with_reshape(true)
     }
 
     fn run(changes: &[TableChange], rules: AlterRules) -> Result<AlteredTable, KrishivError> {
@@ -1010,6 +1046,26 @@ mod tests {
             flat,
         );
         assert_eq!(class, ErrorClass::UnsupportedFeatureTableOperation);
+    }
+
+    #[test]
+    fn a_column_added_among_the_others_needs_the_reshape_rule() {
+        let flat = AlterRules {
+            reshape: false,
+            ..full()
+        };
+        for position in [ColumnPosition::First, ColumnPosition::After("a".into())] {
+            let e = run(&[add("c", Some(position.clone()))], flat).unwrap_err();
+            assert_eq!(
+                e.error_class(),
+                ErrorClass::UnsupportedFeatureTableOperation
+            );
+            assert!(e.to_string().contains("ADD COLUMN"), "{e}");
+            run(&[add("c", Some(position))], full()).unwrap();
+        }
+        // Appending (before the partition columns) shifts nothing and stays allowed.
+        let t = run(&[add("c", None)], flat).unwrap();
+        assert_eq!(names(&t), ["a", "b", "c", "p"]);
     }
 
     #[test]
