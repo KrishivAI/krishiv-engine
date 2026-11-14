@@ -97,8 +97,8 @@ Paths are relative to this crate.
 
 ## Tests owned by later PRs (note §5)
 PR-26b (the pool and the worker module): the positive numpy/pandas/pyarrow run with threads, `udf_clean_env_and_fds`
-(the descriptor half), `sandbox_off_warns` and `sandbox_unavailable_refuses` through the pool's config. "Another session's artifacts" and "the spill root" are the same rule as the `outside`
-case here.
+(the descriptor half), `sandbox_off_warns` and `sandbox_unavailable_refuses` through the pool's config. "Another
+session's artifacts" and "the spill root" are the same rule as the `outside` case here.
 
 ## ADRs (in `../krishiv-internal/adr/`)
 0022 (UDF isolation), 0029 (`unsafe` placement), 0046 (N1: client code is admin-only in server mode until this
