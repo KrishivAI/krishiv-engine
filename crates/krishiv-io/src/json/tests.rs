@@ -1072,6 +1072,57 @@ fn dropped_records_keep_their_row_index_across_splits() {
 }
 
 #[test]
+fn comment_prefixed_arrays_number_each_row_across_splits() {
+    // With allowComments a comment before a top-level array does not hide
+    // it: a split that starts later counts its rows as the main loop does.
+    let text = "/* c */[{\"a\":0},{\"a\":1}]\n/* d */ []\n{\"a\":2}\n";
+    let bytes = text.as_bytes();
+    let schema = ddl("a int");
+    let req = row_indexed(&schema);
+    let size = bytes.len() as u64;
+    let o = options(&serde_json::json!({ "allowComments": "true" }));
+    let indexes = |range: ByteRange| -> Vec<(i64, i32)> {
+        let got = read_split(bytes, &o, &req, range).expect("read");
+        let mut seen = Vec::new();
+        for b in &got {
+            let a = b.column(0).as_primitive::<Int32Type>();
+            let idx = b.column_by_name(ROW_INDEX_COLUMN).expect("row index");
+            let idx = idx.as_primitive::<Int64Type>();
+            seen.extend((0..b.num_rows()).map(|i| (idx.value(i), a.value(i))));
+        }
+        seen
+    };
+    let want = vec![(0, 0), (1, 1), (2, 2)];
+    assert_eq!(indexes(ByteRange::new(0, size)), want);
+    for cut in 1..size {
+        let mut halves = indexes(ByteRange::new(0, cut));
+        halves.extend(indexes(ByteRange::new(cut, size)));
+        halves.sort_unstable();
+        assert_eq!(halves, want, "cut at {cut}");
+    }
+}
+
+#[test]
+fn a_large_list_column_reads_with_large_offsets() {
+    // A caller's schema may hold a LargeList; it builds like a List.
+    let item = Arc::new(Field::new("element", DataType::Int64, true));
+    let schema: SchemaRef = Arc::new(Schema::new(vec![Field::new(
+        "xs",
+        DataType::LargeList(item),
+        true,
+    )]));
+    let o = options(&serde_json::json!({}));
+    let text = "{\"xs\":[1,2]}\n{\"xs\":null}\n{\"xs\":[]}\n{\"xs\":[3]}\n";
+    let got = read(text.as_bytes(), &o, &ScanRequest::all(Arc::clone(&schema))).expect("read");
+    let col = got[0].column(0).as_list::<i64>();
+    assert_eq!(col.len(), 4);
+    assert!(col.is_null(1));
+    assert_eq!(col.value_offsets(), &[0, 2, 2, 2, 3]);
+    let items = col.values().as_primitive::<Int64Type>();
+    assert_eq!(items.values(), &[1, 2, 3]);
+}
+
+#[test]
 fn top_level_arrays_number_each_row_across_splits() {
     // Each object of a top-level array is its own row with its own index; a
     // split that starts later counts the array lines before it the same way.

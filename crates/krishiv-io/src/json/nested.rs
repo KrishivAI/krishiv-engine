@@ -23,7 +23,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_array::{ArrayRef, ListArray, MapArray, StructArray, new_null_array};
+use arrow_array::{ArrayRef, LargeListArray, ListArray, MapArray, StructArray, new_null_array};
 use arrow_buffer::{NullBuffer, OffsetBuffer};
 use arrow_schema::{DataType, Field, Fields};
 use krishiv_common::error::KrishivError;
@@ -310,14 +310,31 @@ pub(crate) fn build(dt: &DataType, vals: Vec<NVal>) -> Result<ArrayRef, KrishivE
             )
         }
         DataType::List(element) => {
-            let (offsets, valid, items) = flatten(vals, |v| match v {
+            let (lengths, valid, items) = flatten(vals, |v| match v {
                 NVal::List(items) => Some(items),
                 _ => None,
-            })?;
+            });
+            let offsets = i32_offsets(lengths, items.len())?;
             let child = build(element.data_type(), items)?;
             Arc::new(
                 ListArray::try_new(Arc::clone(element), offsets, child, nulls(&valid))
                     .map_err(arrow)?,
+            )
+        }
+        DataType::LargeList(element) => {
+            let (lengths, valid, items) = flatten(vals, |v| match v {
+                NVal::List(items) => Some(items),
+                _ => None,
+            });
+            let child = build(element.data_type(), items)?;
+            Arc::new(
+                LargeListArray::try_new(
+                    Arc::clone(element),
+                    OffsetBuffer::from_lengths(lengths),
+                    child,
+                    nulls(&valid),
+                )
+                .map_err(arrow)?,
             )
         }
         DataType::Map(entries, sorted) => {
@@ -327,10 +344,11 @@ pub(crate) fn build(dt: &DataType, vals: Vec<NVal>) -> Result<ArrayRef, KrishivE
             let (Some(kf), Some(vf)) = (kv.first(), kv.get(1)) else {
                 return Err(internal("a map without key and value fields"));
             };
-            let (offsets, valid, pairs) = flatten(vals, |v| match v {
+            let (lengths, valid, pairs) = flatten(vals, |v| match v {
                 NVal::Map(pairs) => Some(pairs),
                 _ => None,
-            })?;
+            });
+            let offsets = i32_offsets(lengths, pairs.len())?;
             let (keys, values): (Vec<NVal>, Vec<NVal>) = pairs
                 .into_iter()
                 .map(|(k, v)| (NVal::Leaf(Val::Text(k)), v))
@@ -367,14 +385,12 @@ pub(crate) fn build(dt: &DataType, vals: Vec<NVal>) -> Result<ArrayRef, KrishivE
     })
 }
 
-/// List-like values flattened: offsets, validity per value, the items.
-type Flat<T> = (OffsetBuffer<i32>, Vec<bool>, Vec<T>);
+/// List-like values flattened: the length and validity of each value, the
+/// items.
+type Flat<T> = (Vec<usize>, Vec<bool>, Vec<T>);
 
-/// The offsets, validity and flattened items of list-like values.
-fn flatten<T>(
-    vals: Vec<NVal>,
-    items_of: impl Fn(NVal) -> Option<Vec<T>>,
-) -> Result<Flat<T>, KrishivError> {
+/// The lengths, validity and flattened items of list-like values.
+fn flatten<T>(vals: Vec<NVal>, items_of: impl Fn(NVal) -> Option<Vec<T>>) -> Flat<T> {
     let mut lengths = Vec::with_capacity(vals.len());
     let mut valid = Vec::with_capacity(vals.len());
     let mut out = Vec::new();
@@ -391,12 +407,20 @@ fn flatten<T>(
             }
         }
     }
-    if i32::try_from(out.len()).is_err() {
+    (lengths, valid, out)
+}
+
+/// 32-bit offsets of `lengths` (totalling `total` items).
+///
+/// # Errors
+/// Internal error past 2^31 items in one batch.
+fn i32_offsets(lengths: Vec<usize>, total: usize) -> Result<OffsetBuffer<i32>, KrishivError> {
+    if i32::try_from(total).is_err() {
         return Err(internal(
             "a JSON array column over 2^31 elements in one batch",
         ));
     }
-    Ok((OffsetBuffer::from_lengths(lengths), valid, out))
+    Ok(OffsetBuffer::from_lengths(lengths))
 }
 
 /// The null buffer of `valid`, or none when every row is valid.

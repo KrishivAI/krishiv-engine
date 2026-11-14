@@ -638,9 +638,17 @@ pub(crate) fn parse_next(
 
 /// The rows a record of a line before the split counts, as the main loop
 /// counts them: one per element of a top-level array of objects (none for
-/// `[]`), else one (a record, malformed or not).
+/// `[]`), else one (a record, malformed or not). The first value byte is
+/// found past comments too, when `allowComments` is on.
 fn prefix_rows(line: &str, syntax: Syntax) -> i64 {
-    if !line.trim_start().starts_with('[') {
+    let mut c = Cur {
+        b: line.as_bytes(),
+        pos: 0,
+        base: 0,
+        syntax,
+    };
+    c.skip_gap();
+    if c.at() != Some(b'[') {
         return 1;
     }
     match parse_line(line, syntax) {
