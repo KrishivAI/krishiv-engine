@@ -77,6 +77,8 @@ mod catalog;
 mod catalog_write;
 mod char_varchar;
 mod coerce;
+#[cfg(any(test, feature = "testing"))]
+pub mod contract;
 mod exprs;
 mod table_change;
 

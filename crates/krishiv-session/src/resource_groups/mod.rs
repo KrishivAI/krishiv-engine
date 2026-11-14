@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Resource groups (P3-T003, `design/P3-T003-workload-management.md`): an
-//! [`AdmissionController`] that routes each query to a leaf group by selector, runs it when the
+//! Resource groups: an [`AdmissionController`] that routes each query to a leaf group by selector, runs it when the
 //! group and its ancestors have room, queues it when they do not (refusing past `maxQueued`),
 //! and dispatches queued queries by each parent's scheduling policy.
 //!

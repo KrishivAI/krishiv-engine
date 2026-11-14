@@ -43,6 +43,7 @@ pub(crate) mod interval;
 mod keys;
 pub(crate) mod literal;
 mod pipe;
+mod pipeline;
 mod relation;
 mod sample;
 mod script;
@@ -197,6 +198,17 @@ pub(crate) fn statement(mut s: &Statement, sql: &str, opts: ParserOptions) -> R 
             Statement::CreateView(v) => return query(&v.query, sql, opts),
             Statement::CreateFunction(f) => return Checker { sql, opts }.create_function(f),
             Statement::CreateTable(t) => return Checker { sql, opts }.create_table(t),
+            Statement::CreatePipelineDataset(c) => {
+                return Checker { sql, opts }.pipeline_dataset(c);
+            }
+            Statement::CreateFlow(f) => return Checker { sql, opts }.create_flow(f),
+            Statement::InsertDirectory(d) => return Checker { sql, opts }.insert_directory(d),
+            Statement::LoadData(l) => {
+                let checker = Checker { sql, opts };
+                checker.ddl_name(&l.table)?;
+                checker.partition_values(l.partition.as_ref())?;
+                return Ok(());
+            }
             Statement::DeclareVariable(v) => {
                 // Neither a type nor a default: Spark rejects the declaration
                 // after parsing, with `INVALID_SQL_SYNTAX` at the statement.

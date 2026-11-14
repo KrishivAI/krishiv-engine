@@ -1947,3 +1947,5 @@ mod owned_directory_tests;
 mod writes;
 
 mod create;
+
+mod pipeline;

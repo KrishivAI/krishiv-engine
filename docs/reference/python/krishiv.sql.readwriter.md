@@ -57,6 +57,15 @@ def options(self, **options: object) -> DataFrameReader
 def parquet(self, *paths: str) -> DataFrame
 ```
 
+### `schema`
+
+```python
+def schema(self, schema: object) -> DataFrameReader
+```
+
+Refused with `KRISHIV_UNSUPPORTED_FEATURE`: reads do not carry a
+user schema yet, and dropping it would read every column as text.
+
 ## `DataFrameWriter`
 
 ```python
