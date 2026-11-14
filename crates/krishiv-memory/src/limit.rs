@@ -31,6 +31,35 @@ pub fn default_limit() -> Option<usize> {
     }))
 }
 
+/// The root-pool limit for an explicit `krishiv.memory.limit` of `explicit`
+/// bytes: `explicit` itself, unless it is above [`effective_memory_limit`].
+/// Then the pool could grow past what the kernel allows and the process would
+/// be OOM-killed without an error before the engine ever spills, so the limit
+/// is [`default_limit`] instead, with a warning.
+pub fn explicit_limit(explicit: usize) -> usize {
+    let fitted = fitted_limit(explicit, effective_memory_limit());
+    if fitted != explicit {
+        tracing::warn!(
+            target: "krishiv::memory",
+            requested = explicit,
+            limit = fitted,
+            "krishiv.memory.limit is above the memory this process may use (cgroup limit or \
+             physical memory); using {DEFAULT_LIMIT_PERCENT}% of that instead"
+        );
+    }
+    fitted
+}
+
+/// [`explicit_limit`] against an `effective` memory limit (tests).
+fn fitted_limit(explicit: usize, effective: Option<u64>) -> usize {
+    match effective {
+        Some(bytes) if explicit as u64 > bytes => {
+            usize::try_from(bytes / 100 * DEFAULT_LIMIT_PERCENT).unwrap_or(usize::MAX)
+        }
+        _ => explicit,
+    }
+}
+
 /// The memory this process may use: the tightest cgroup limit, else the
 /// physical memory. `None` if neither can be read (non-Linux platforms).
 pub fn effective_memory_limit() -> Option<u64> {
@@ -166,6 +195,20 @@ mod tests {
         );
         assert_eq!(meminfo_total("MemFree: 1 kB"), None);
         assert_eq!(meminfo_total("MemTotal: 12 MB"), None);
+    }
+
+    /// db-benchmark 1e8 q10: `krishiv.memory.limit=24g` in a 20 GiB cgroup let
+    /// the pool grow until the kernel killed the process without an error.
+    #[test]
+    fn an_explicit_limit_above_the_effective_limit_is_fitted_to_it() {
+        let gib = 1_usize << 30;
+        let cap = 20_u64 << 30;
+        assert_eq!(fitted_limit(24 * gib, Some(cap)), 16 * gib);
+        // At or below the effective limit the setting stands, even above 80%.
+        assert_eq!(fitted_limit(18 * gib, Some(cap)), 18 * gib);
+        assert_eq!(fitted_limit(20 * gib, Some(cap)), 20 * gib);
+        // Nothing readable: the setting stands.
+        assert_eq!(fitted_limit(24 * gib, None), 24 * gib);
     }
 
     #[test]

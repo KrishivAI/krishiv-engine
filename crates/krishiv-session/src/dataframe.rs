@@ -1774,9 +1774,19 @@ impl DataFrame {
         // A view over files keeps listing them: files added or changed
         // later show up in the next query.
         // (Not a lazy checkpoint of one: its rows were taken at the analysis above.)
-        if let (PlanNode::Read(source @ ReadSource::Files { .. }), false) =
-            (&self.plan.node, checkpoint::has_lazy_checkpoint(&self.keep))
-        {
+        // Nor a cached one: the view keeps the frame's plan, so its reads match the cache entry,
+        // as Spark's view over a persisted frame reads the cached data.
+        self.session.register_pending_caches().await;
+        let cached = self
+            .session
+            .state
+            .cache
+            .would_substitute(&analysis.analyzed);
+        if let (PlanNode::Read(source @ ReadSource::Files { .. }), false, false) = (
+            &self.plan.node,
+            checkpoint::has_lazy_checkpoint(&self.keep),
+            cached,
+        ) {
             self.session.state.catalog.put(
                 name,
                 TempTable::Files {

@@ -179,6 +179,11 @@ Storage levels: `_2`/`_3` replication and `OFF_HEAP` are accepted and reported a
 the engine's memory or one local spill file. Spilled and `DISK_ONLY` entries are scratch data in the spill
 directory (`krishiv.spill.*`), deleted with the entry or at the next start after a crash.
 
+A temporary view over a file read (`spark.read.parquet(p).createOrReplaceTempView("x")`) lists its files again
+at every query, so files added later show up. When the frame was persisted before the view was made, the view
+keeps the frame's plan instead and reads the cached rows, as in Spark. A view made before `persist()` is not
+matched to the entry: queries over it read the files (same rows, no cache), where Spark reads the cache.
+
 ## Checkpoint files and where a checkpoint lives
 
 `DataFrame.checkpoint()` writes the rows under `spark.checkpoint.dir` as a Krishiv spill-format file
