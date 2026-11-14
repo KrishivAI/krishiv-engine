@@ -398,3 +398,69 @@ fn invalid_metrics_fail_the_action_with_spark_classes() {
         "INVALID_OBSERVED_METRICS.NON_AGGREGATE_FUNC_ARG_IS_ATTRIBUTE"
     );
 }
+
+/// The states a driver retained after it ended and the table that merges them are charged to the
+/// pool too: the drivers' own states fit, their merge does not.
+#[test]
+fn retained_states_and_the_merge_are_charged_to_the_memory_pool() {
+    let s = Session::builder()
+        .config("krishiv.memory.limit", "2200kb")
+        .build()
+        .unwrap();
+    let obs = Observation::new();
+    let df = s
+        .range(0, 200_000, 1, Some(2))
+        .observe(&obs, [expr("collect_list(id)").unwrap().alias("l")])
+        .unwrap();
+    let ran = block_on(df.count());
+    let got = obs.get_timeout(Duration::from_secs(10));
+    let e = ran
+        .err()
+        .or(got.err())
+        .expect("the limit is exceeded by the retained states plus their merge");
+    assert_eq!(e.error_class().name(), "UNABLE_TO_ACQUIRE_MEMORY", "{e}");
+}
+
+/// One observation whose metrics fail to finalize does not take the others' with it, and the
+/// failure reaches the Connect sink instead of leaving it silently unset.
+#[test]
+fn a_failed_observation_reaches_the_sink_beside_the_good_ones() {
+    let s = Session::new().unwrap();
+    s.conf().set("spark.sql.ansi.enabled", "true").unwrap();
+    let sink = krishiv_session::ObservedSink::new();
+    let df = base(&s)
+        .observe_named("good", [count(lit(1)).alias("n")])
+        .observe_named(
+            "bad",
+            [expr("count(1) / (count(1) - 3)").unwrap().alias("r")],
+        )
+        .with_observed_sink(&sink);
+    block_on(df.count()).unwrap();
+    let all = sink.take().expect("the action finished");
+    assert_eq!(metrics(all["good"].as_ref().unwrap())["n"], 3);
+    let e = all["bad"].as_ref().expect_err("the metric's own error");
+    assert_eq!(e.error_class().name(), "DIVIDE_BY_ZERO", "{e}");
+}
+
+/// An observed frame registered as a temporary view completes its `Observation` when the view is
+/// read through `Session::table` or SQL.
+#[test]
+fn a_temp_view_of_an_observed_frame_completes_the_observation() {
+    let s = Session::new().unwrap();
+    let obs = Observation::new();
+    let df = base(&s).observe(&obs, [count(lit(1)).alias("n")]).unwrap();
+    block_on(df.create_or_replace_temp_view("v")).unwrap();
+    assert_eq!(block_on(s.table("v").count()).unwrap(), 3);
+    assert_eq!(
+        metrics(&obs.get_timeout(Duration::from_secs(10)).unwrap().unwrap())["n"],
+        3
+    );
+    let obs = Observation::new();
+    let df = base(&s).observe(&obs, [count(lit(1)).alias("n")]).unwrap();
+    block_on(df.create_or_replace_temp_view("w")).unwrap();
+    block_on(async { s.sql("SELECT * FROM w").await.unwrap().count().await }).unwrap();
+    assert_eq!(
+        metrics(&obs.get_timeout(Duration::from_secs(10)).unwrap().unwrap())["n"],
+        3
+    );
+}

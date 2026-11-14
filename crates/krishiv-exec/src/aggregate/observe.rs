@@ -68,11 +68,21 @@ impl Finalizer {
 
     /// The metrics' row over `partials`, the states of every driver of the
     /// instance: the aggregates' zero state if there are none.
-    pub(crate) fn finalize(&self, partials: &[RecordBatch]) -> Result<RecordBatch> {
+    ///
+    /// The merge table is charged to `reservation` as it grows.
+    pub(crate) fn finalize(
+        &self,
+        partials: &[RecordBatch],
+        reservation: &mut Reservation,
+    ) -> Result<RecordBatch> {
         let mut table = AggTable::new(&self.core, &HashSeed::new(None))?;
         for states in partials {
             let p = table.prepare(&Batch::new(states.clone()), true)?;
+            let want = table.projected(&p);
+            reservation.try_grow(want.saturating_sub(reservation.size()))?;
             table.apply(&p)?;
+            let over = table.memory_size().saturating_sub(reservation.size());
+            reservation.try_grow(over)?;
         }
         let results = table.output_batch(&[0])?;
         let out = self.post.project(&Batch::new(results), 0)?;
@@ -162,8 +172,9 @@ impl Local {
             return Ok(());
         }
         let states = self.table.state_batch(&[0])?;
-        self.query.observe_partial(&self.finalizer, states);
-        Ok(())
+        // The states move to the query's own charge: release the driver's first.
+        self.reservation.shrink(self.reservation.size());
+        self.query.observe_partial(&self.finalizer, states)
     }
 }
 

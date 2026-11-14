@@ -229,6 +229,9 @@ pub struct QueryContext {
     /// The partial states of each observing node (`Dataset.observe`), by name
     /// and the planner's instance number (see [`Self::observe_partial`]).
     observed: Mutex<BTreeMap<(String, u32), Observed>>,
+    /// The memory consumer that holds the retained partial states of `observed` (charged to the
+    /// pool, so a variable-size metric such as `collect_list` cannot outgrow the query's limit).
+    observed_memory: Mutex<Option<Reservation>>,
     finished: AtomicBool,
     finished_event: Event,
     /// Blocking closures in flight; the query ends only once they have.
@@ -277,6 +280,7 @@ impl QueryContext {
             spills: Mutex::new(BTreeMap::new()),
             scan_gate: OnceLock::new(),
             observed: Mutex::new(BTreeMap::new()),
+            observed_memory: Mutex::new(None),
             finished: AtomicBool::new(false),
             finished_event: Event::default(),
             blocking: AtomicUsize::new(0),
@@ -286,12 +290,22 @@ impl QueryContext {
 
     /// A driver's partial states of an observation: its task metric, sent
     /// when the driver's input ended (or was abandoned). The states of one
-    /// instance of the node merge in [`Self::observed`].
+    /// instance of the node merge in [`Self::observed`]. The retained states
+    /// are charged to the query's pool.
+    ///
+    /// # Errors
+    /// `UNABLE_TO_ACQUIRE_MEMORY` when the pool cannot hold them.
     pub(crate) fn observe_partial(
         &self,
         finalizer: &Arc<crate::aggregate::Finalizer>,
         states: arrow_array::RecordBatch,
-    ) {
+    ) -> Result<()> {
+        let bytes = states.get_array_memory_size();
+        {
+            let mut held = lock(&self.observed_memory);
+            let reservation = held.get_or_insert_with(|| self.observed_consumer().reservation());
+            reservation.try_grow(bytes)?;
+        }
         lock(&self.observed)
             .entry((finalizer.name().to_owned(), finalizer.instance()))
             .or_insert_with(|| Observed {
@@ -300,6 +314,11 @@ impl QueryContext {
             })
             .partials
             .push(states);
+        Ok(())
+    }
+
+    fn observed_consumer(&self) -> Arc<ConsumerHandle> {
+        ConsumerHandle::register(Arc::clone(&self.pool), "observed-metrics", None)
     }
 
     /// The observations (`Dataset.observe`) of the query so far: each name's
@@ -310,15 +329,34 @@ impl QueryContext {
     /// Spark.
     ///
     /// # Errors
-    /// A metric's own error (finalizing runs its expressions).
+    /// A metric's own error (finalizing runs its expressions), or
+    /// `UNABLE_TO_ACQUIRE_MEMORY` (the first one, by name).
     #[doc(hidden)]
     pub fn observed(&self) -> Result<BTreeMap<String, arrow_array::RecordBatch>> {
+        self.observed_each()
+            .into_iter()
+            .map(|(n, r)| Ok((n, r?)))
+            .collect()
+    }
+
+    /// [`Self::observed`] with each observation's own outcome: one whose
+    /// finalization fails does not take the others with it.
+    #[doc(hidden)]
+    pub fn observed_each(&self) -> BTreeMap<String, Result<arrow_array::RecordBatch>> {
         let all = lock(&self.observed);
         // Keys sort by name then instance: the last one of a name overwrites.
         let last: BTreeMap<&String, &Observed> =
             all.iter().map(|((name, _), o)| (name, o)).collect();
+        let consumer = self.observed_consumer();
         last.into_iter()
-            .map(|(name, o)| Ok((name.clone(), o.finalizer.finalize(&o.partials)?)))
+            .map(|(name, o)| {
+                // The merge table is charged while it lives.
+                let mut reservation = consumer.reservation();
+                (
+                    name.clone(),
+                    o.finalizer.finalize(&o.partials, &mut reservation),
+                )
+            })
             .collect()
     }
 

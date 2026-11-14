@@ -76,14 +76,26 @@ impl DataFrame {
         out
     }
 
-    /// The observations and sinks this frame carries, for the query's env.
-    pub(super) fn observers(&self) -> Observers {
+    /// The observations and sinks this frame carries, and those of the temporary views it reads
+    /// (`through_views`), for the query's env.
+    pub(super) fn observers_through(
+        &self,
+        through_views: Vec<Arc<dyn std::any::Any + Send + Sync>>,
+    ) -> Observers {
         let mut out = Observers::default();
         for k in &self.keep {
             if let Ok(shared) = Arc::clone(k).downcast::<Shared>() {
                 out.observations.push(shared);
             } else if let Ok(sink) = Arc::clone(k).downcast::<SinkSlot>() {
                 out.sinks.push(sink);
+            }
+        }
+        // A view's own sinks belong to the frame that made it, not to this query.
+        for k in through_views {
+            if let Ok(shared) = k.downcast::<Shared>()
+                && !out.observations.iter().any(|o| Arc::ptr_eq(o, &shared))
+            {
+                out.observations.push(shared);
             }
         }
         out
@@ -98,12 +110,13 @@ pub(crate) struct Observers {
 }
 
 /// The state of an [`ObservedSink`].
-pub(crate) type SinkSlot = Mutex<Option<BTreeMap<String, RecordBatch>>>;
+pub(crate) type SinkSlot = Mutex<Option<BTreeMap<String, Result<RecordBatch, KrishivError>>>>;
 
 /// Where an action leaves the metrics of the observed nodes of its plan, by
-/// name (one row each): set when the result was read to its end without an
-/// error, replaced by each later action (Spark Connect: the last action
-/// wins, a failed query sends none). For the Connect server.
+/// name (one row each, or the error finalizing that observation raised):
+/// set when the result was read to its end without an error, replaced by
+/// each later action (Spark Connect: the last action wins, a failed query
+/// sends none). For the Connect server.
 #[doc(hidden)]
 #[derive(Clone, Default)]
 pub struct ObservedSink {
@@ -124,9 +137,10 @@ impl ObservedSink {
     }
 
     /// The metrics the last successful action left, once; `None` when no
-    /// action has finished without an error.
+    /// action has finished without an error. An observation whose own
+    /// metrics failed to finalize is an `Err` beside the others' rows.
     #[must_use]
-    pub fn take(&self) -> Option<BTreeMap<String, RecordBatch>> {
+    pub fn take(&self) -> Option<BTreeMap<String, Result<RecordBatch, KrishivError>>> {
         self.slot
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -170,25 +184,26 @@ impl Delivering {
             return;
         };
         // On the carriers a caller reads (decimals, intervals), as the action's rows are.
-        let observed = self.query.observed().and_then(|all| {
-            all.into_iter()
-                .map(|(name, row)| Ok((name, crate::carrier::client_batch(&row)?)))
-                .collect::<Result<BTreeMap<_, _>, KrishivError>>()
-        });
-        if self.finished
-            && let Ok(all) = &observed
-        {
+        let observed: BTreeMap<String, Result<RecordBatch, KrishivError>> = self
+            .query
+            .observed_each()
+            .into_iter()
+            .map(|(name, row)| {
+                let row = row.and_then(|row| crate::carrier::client_batch(&row));
+                (name, row)
+            })
+            .collect();
+        if self.finished {
             for sink in sinks {
-                *sink.lock().unwrap_or_else(PoisonError::into_inner) = Some(all.clone());
+                *sink.lock().unwrap_or_else(PoisonError::into_inner) = Some(observed.clone());
             }
         }
         for o in observations {
-            o.complete(
-                observed
-                    .as_ref()
-                    .map(|all| all.get(o.name()))
-                    .map_err(Clone::clone),
-            );
+            o.complete(match observed.get(o.name()) {
+                Some(Ok(row)) => Ok(Some(row)),
+                Some(Err(e)) => Err(e.clone()),
+                None => Ok(None),
+            });
         }
     }
 }
