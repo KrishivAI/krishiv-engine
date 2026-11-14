@@ -172,7 +172,78 @@ message Node {
     ExchangeSourceNode exchange_source = 25;
     // feature: python_udf
     PythonEvalNode python_eval = 26;
+    // feature: python_udf_relations
+    PythonMapNode python_map = 27;
+    // feature: python_udf_relations
+    PythonGroupMapNode python_group_map = 28;
+    // feature: python_udf_relations
+    PythonCoGroupMapNode python_co_group_map = 29;
+    // feature: python_udf_relations
+    PythonAggregateNode python_aggregate = 30;
   }
+}
+
+// feature: python_udf_relations
+// `mapInPandas` / `mapInArrow`: each partition of `input` sent to a Python
+// UDF task.
+message PythonMapNode {
+  uint32 input = 1;
+  PythonRelation udf = 2;
+}
+
+// feature: python_udf_relations
+// A grouped map over `input` clustered and sorted by the key columns.
+message PythonGroupMapNode {
+  uint32 input = 1;
+  repeated uint64 keys = 2;
+  PythonRelation udf = 3;
+}
+
+// feature: python_udf_relations
+// A cogrouped map over both relations in one stream, sorted by the key
+// columns then the side column.
+message PythonCoGroupMapNode {
+  uint32 input = 1;
+  repeated uint64 keys = 2;
+  uint64 side = 3;
+  PythonRelation udf = 4;
+}
+
+// feature: python_udf_relations
+// An aggregate of grouped-aggregate Python UDF calls over `input` clustered
+// and sorted by the key columns (`keys`: a collated key's comparison key);
+// each group shows its first row's `key_values`.
+message PythonAggregateNode {
+  uint32 input = 1;
+  repeated uint64 layout = 2;
+  repeated uint64 keys = 3;
+  repeated PythonCall calls = 4;
+  repeated uint64 key_values = 5;
+}
+
+// feature: python_udf_relations
+// The Python UDF of a relation node: by name and version, the columns of its
+// frames per side, and its declared result.
+message PythonRelation {
+  PythonUdfFunction udf = 1;
+  repeated PythonFrameSide sides = 2;
+  repeated PythonOutputColumn output = 3;
+  // Whether the UDF is deterministic (Spark's `udfDeterministic`).
+  bool deterministic = 4;
+}
+
+// feature: python_udf_relations
+message PythonFrameSide {
+  repeated uint64 columns = 1;
+  repeated string names = 2;
+  repeated DataType types = 3;
+}
+
+// feature: python_udf_relations
+message PythonOutputColumn {
+  string name = 1;
+  DataType data_type = 2;
+  bool nullable = 3;
 }
 
 // feature: python_udf
@@ -365,6 +436,8 @@ enum GeneratorKind {
   GENERATOR_KIND_INLINE = 3;
   // feature: variant_explode
   GENERATOR_KIND_VARIANT_EXPLODE = 4;
+  // feature: python_udf_relations
+  GENERATOR_KIND_PYTHON_UDTF = 5;
 }
 
 // feature: expand

@@ -612,6 +612,15 @@ impl Encoder {
         }
     }
 
+    /// A relation node's Python UDF (by identity) and declared columns.
+    fn python_udf(&mut self, udf: &crate::PythonUdfRef, output: &[BoundColumn], bias: u64) {
+        self.debug(udf);
+        self.num(output.len() as u64);
+        for c in output {
+            self.bound(c, bias);
+        }
+    }
+
     /// Writes `plan` as the digest of its encoding, computed once per node.
     fn plan(&mut self, plan: &LogicalPlan, bias: u64) {
         if self.semantic
@@ -898,6 +907,63 @@ impl Encoder {
                     self.order(o, bias);
                 }
                 self.plan(input, bias);
+            }
+            PlanNode::MapPartitions {
+                input,
+                udf,
+                output,
+                barrier,
+            } => {
+                self.tag("MapPartitions");
+                self.python_udf(udf, output, bias);
+                self.flag(*barrier);
+                self.plan(input, bias);
+            }
+            PlanNode::GroupMap {
+                input,
+                keys,
+                udf,
+                output,
+            } => {
+                self.tag("GroupMap");
+                self.exprs(keys, bias);
+                self.python_udf(udf, output, bias);
+                self.plan(input, bias);
+            }
+            PlanNode::CoGroupMap {
+                left,
+                right,
+                left_keys,
+                right_keys,
+                udf,
+                output,
+            } => {
+                self.tag("CoGroupMap");
+                self.exprs(left_keys, bias);
+                self.exprs(right_keys, bias);
+                self.python_udf(udf, output, bias);
+                self.plan(left, bias);
+                self.plan(right, bias);
+            }
+            PlanNode::PythonTableFunction {
+                args,
+                table_arg,
+                udf,
+                output,
+            } => {
+                self.tag("PythonTableFunction");
+                self.exprs(args, bias);
+                self.python_udf(udf, output, bias);
+                self.flag(table_arg.is_some());
+                if let Some(t) = table_arg {
+                    self.exprs(&t.partition_by, bias);
+                    self.num(t.order_by.len() as u64);
+                    for o in &t.order_by {
+                        self.order(o, bias);
+                    }
+                    self.flag(t.single_partition);
+                    self.plan(&t.input, bias);
+                }
             }
             PlanNode::ReplicateRows { input, count } => {
                 self.tag("ReplicateRows");
@@ -1737,6 +1803,58 @@ mod tests {
                     })),
                 ),
                 (
+                    "map-partitions",
+                    node(PlanNode::MapPartitions {
+                        input: base(),
+                        udf: py(crate::PythonEvalType::MapArrowIter),
+                        output: vec![bound(2, "x")],
+                        barrier: true,
+                    }),
+                ),
+                (
+                    "group-map",
+                    node(PlanNode::GroupMap {
+                        input: base(),
+                        keys: vec![a()],
+                        udf: py(crate::PythonEvalType::GroupedMapArrow),
+                        output: vec![bound(2, "x")],
+                    }),
+                ),
+                (
+                    "cogroup-map",
+                    node(PlanNode::CoGroupMap {
+                        left: base(),
+                        right: base(),
+                        left_keys: vec![a()],
+                        right_keys: vec![a()],
+                        udf: py(crate::PythonEvalType::CogroupedMapArrow),
+                        output: vec![bound(2, "x")],
+                    }),
+                ),
+                (
+                    "python-table-function",
+                    node(PlanNode::PythonTableFunction {
+                        args: vec![lit(1)],
+                        table_arg: Some(crate::TableArg {
+                            input: base(),
+                            partition_by: vec![a()],
+                            order_by: vec![crate::SortOrder::asc(a())],
+                            single_partition: false,
+                        }),
+                        udf: py(crate::PythonEvalType::ArrowUdtf),
+                        output: vec![bound(2, "x")],
+                    }),
+                ),
+                (
+                    "python-table-function-no-table",
+                    node(PlanNode::PythonTableFunction {
+                        args: vec![lit(1)],
+                        table_arg: None,
+                        udf: py(crate::PythonEvalType::TableUdf),
+                        output: vec![bound(2, "x")],
+                    }),
+                ),
+                (
                     "read-table-options",
                     node(PlanNode::Read(ReadSource::Table {
                         name: vec!["t".into()],
@@ -1758,6 +1876,17 @@ mod tests {
             if let Some(other) = seen.insert(h, name.clone()) {
                 panic!("{name} hashes like {other}");
             }
+        }
+    }
+
+    /// A Python UDF reference of a relation node.
+    fn py(eval_type: crate::PythonEvalType) -> crate::PythonUdfRef {
+        crate::PythonUdfRef {
+            name: "f".into(),
+            version: 1,
+            eval_type,
+            thread_safe: true,
+            deterministic: true,
         }
     }
 

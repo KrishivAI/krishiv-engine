@@ -45,6 +45,10 @@ variants!(
     ReplicateRows,
     Generate,
     PythonEval,
+    PythonMap,
+    PythonGroupMap,
+    PythonCoGroupMap,
+    PythonAggregate,
     Expand,
     Sort,
     TopN,
@@ -75,6 +79,10 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::ReplicateRows { .. } => Variant::ReplicateRows,
         PhysNode::Generate { .. } => Variant::Generate,
         PhysNode::PythonEval { .. } => Variant::PythonEval,
+        PhysNode::PythonMap { .. } => Variant::PythonMap,
+        PhysNode::PythonGroupMap { .. } => Variant::PythonGroupMap,
+        PhysNode::PythonCoGroupMap { .. } => Variant::PythonCoGroupMap,
+        PhysNode::PythonAggregate { .. } => Variant::PythonAggregate,
         PhysNode::UnionLoop { .. } => Variant::UnionLoop,
         PhysNode::LoopRef { .. } => Variant::LoopRef,
         PhysNode::Expand { .. } => Variant::Expand,
@@ -609,6 +617,12 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "exchange_source"
             | "rust_udf"
             | "python_udf"
+            | "python_map"
+            | "python_group_map"
+            | "python_cogroup_map"
+            | "python_aggregate"
+            | "python_udtf_generate"
+            | "python_eval_types"
             | "rust_udaf"
             | "nested_types"
             | "struct_field"

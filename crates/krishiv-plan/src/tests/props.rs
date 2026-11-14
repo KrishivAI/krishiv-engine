@@ -1103,6 +1103,55 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
             site!(w, *id += 1);
             false
         }
+        PlanNode::MapPartitions {
+            input,
+            udf,
+            output,
+            barrier,
+        } => {
+            site!(w, udf.version += 1);
+            site!(w, *barrier = !*barrier);
+            m_plan(input, w) || output.iter_mut().any(|c| m_bound(c, w))
+        }
+        PlanNode::GroupMap {
+            input,
+            keys,
+            udf,
+            output,
+        } => {
+            site!(w, udf.version += 1);
+            m_plan(input, w) || m_exprs(keys, w) || output.iter_mut().any(|c| m_bound(c, w))
+        }
+        PlanNode::CoGroupMap {
+            left,
+            right,
+            left_keys,
+            right_keys,
+            udf,
+            output,
+        } => {
+            site!(w, udf.version += 1);
+            m_plan(left, w)
+                || m_plan(right, w)
+                || m_exprs(left_keys, w)
+                || m_exprs(right_keys, w)
+                || output.iter_mut().any(|c| m_bound(c, w))
+        }
+        PlanNode::PythonTableFunction {
+            args,
+            table_arg,
+            udf,
+            output,
+        } => {
+            site!(w, udf.version += 1);
+            site!(w, *table_arg = None);
+            m_exprs(args, w)
+                || output.iter_mut().any(|c| m_bound(c, w))
+                || table_arg.as_mut().is_some_and(|t| {
+                    site!(w, t.single_partition = !t.single_partition);
+                    m_plan(&mut t.input, w) || m_exprs(&mut t.partition_by, w)
+                })
+        }
         PlanNode::UnionLoop {
             id,
             anchor,

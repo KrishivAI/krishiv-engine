@@ -89,6 +89,7 @@ mod detached;
 mod distributed;
 mod order;
 mod python_eval;
+mod python_relation;
 pub(crate) use detached::{Detached, LoopRun};
 mod join;
 use distributed::planned_schema_holds;
@@ -923,6 +924,10 @@ impl Instantiation<'_> {
     fn untagged(&mut self, n: &PhysNode) -> Result<Built> {
         match n {
             PhysNode::PythonEval { .. } => self.python_eval(n),
+            PhysNode::PythonMap { .. }
+            | PhysNode::PythonGroupMap { .. }
+            | PhysNode::PythonCoGroupMap { .. }
+            | PhysNode::PythonAggregate { .. } => self.python_relation(n),
             PhysNode::Scan(s) => self.scan(s),
             PhysNode::Range(r) => {
                 let source = Arc::new(crate::operators::Range::new(

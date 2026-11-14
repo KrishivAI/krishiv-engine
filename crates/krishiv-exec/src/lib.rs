@@ -97,6 +97,7 @@ mod pipeline;
 pub mod planner;
 pub mod profile;
 pub mod python_eval;
+pub mod python_relation;
 // Row layout (P2-T157): the join's key index (P2-T158) and the aggregate's
 // row tables (P2-T159); the key-page prototypes inside stay behind the
 // `row-table-prototype` feature.

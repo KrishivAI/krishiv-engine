@@ -39,6 +39,7 @@ mod orient;
 mod probe_select;
 mod properties;
 pub(crate) mod pushdown;
+mod python_relation;
 mod python_udf;
 mod runtime_filter;
 pub(crate) mod subquery;

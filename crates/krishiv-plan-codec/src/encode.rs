@@ -334,6 +334,51 @@ impl Encoder {
                     })
                     .collect::<Result<_>>()?,
             }),
+            PhysNode::PythonMap { input, udf } => Kind::PythonMap(pb::PythonMapNode {
+                input: self.node_index(input)?,
+                udf: Some(self.python_relation(udf)?),
+            }),
+            PhysNode::PythonGroupMap { input, keys, udf } => {
+                Kind::PythonGroupMap(pb::PythonGroupMapNode {
+                    input: self.node_index(input)?,
+                    keys: indexes(keys),
+                    udf: Some(self.python_relation(udf)?),
+                })
+            }
+            PhysNode::PythonCoGroupMap {
+                input,
+                keys,
+                side,
+                udf,
+            } => Kind::PythonCoGroupMap(pb::PythonCoGroupMapNode {
+                input: self.node_index(input)?,
+                keys: indexes(keys),
+                side: u64::try_from(*side).map_err(|_| {
+                    CodecError::Unsupported("a side column out of range".to_owned())
+                })?,
+                udf: Some(self.python_relation(udf)?),
+            }),
+            PhysNode::PythonAggregate {
+                input,
+                layout: l,
+                keys,
+                key_values,
+                calls,
+            } => Kind::PythonAggregate(pb::PythonAggregateNode {
+                input: self.node_index(input)?,
+                layout: layout(l),
+                keys: indexes(keys),
+                key_values: indexes(key_values),
+                calls: calls
+                    .iter()
+                    .map(|c| {
+                        Ok(pb::PythonCall {
+                            call: self.expr(&c.call)?,
+                            output: c.output.0,
+                        })
+                    })
+                    .collect::<Result<_>>()?,
+            }),
             PhysNode::Generate {
                 input,
                 layout: l,
@@ -351,6 +396,7 @@ impl Encoder {
                     krishiv_plan::GeneratorKind::VariantExplode => {
                         pb::GeneratorKind::VariantExplode
                     }
+                    krishiv_plan::GeneratorKind::PythonUdtf => pb::GeneratorKind::PythonUdtf,
                 }
                 .into(),
                 outer: *outer,
@@ -740,6 +786,48 @@ impl Encoder {
         Ok(pb::Expr {
             origin: origin(e.origin),
             kind: Some(kind),
+        })
+    }
+
+    /// A Python relation node's UDF, frame sides and declared result.
+    fn python_relation(
+        &self,
+        r: &krishiv_exec::physical::PythonRelationPlan,
+    ) -> Result<pb::PythonRelation> {
+        Ok(pb::PythonRelation {
+            udf: Some(pb::PythonUdfFunction {
+                name: r.udf.name.clone(),
+                version: u64::from(r.udf.version),
+                eval_type: r.udf.eval_type.code(),
+                thread_safe: r.udf.thread_safe,
+            }),
+            deterministic: r.udf.deterministic,
+            sides: r
+                .sides
+                .iter()
+                .map(|s| {
+                    Ok(pb::PythonFrameSide {
+                        columns: indexes(&s.columns),
+                        names: s.names.clone(),
+                        types: s
+                            .types
+                            .iter()
+                            .map(|t| spark_type(t, &self.nested))
+                            .collect::<Result<_>>()?,
+                    })
+                })
+                .collect::<Result<_>>()?,
+            output: r
+                .output
+                .iter()
+                .map(|c| {
+                    Ok(pb::PythonOutputColumn {
+                        name: c.name.clone(),
+                        data_type: Some(spark_type(&c.data_type, &self.nested)?),
+                        nullable: c.nullable,
+                    })
+                })
+                .collect::<Result<_>>()?,
         })
     }
 

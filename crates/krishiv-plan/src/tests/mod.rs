@@ -19,6 +19,7 @@ mod nodes;
 mod pivot;
 mod prefix_cache;
 mod props;
+mod python_relations;
 mod rewrite;
 mod secrets;
 mod setops;

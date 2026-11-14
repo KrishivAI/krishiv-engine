@@ -952,6 +952,10 @@ impl Resolver<'_> {
             | PlanNode::ReplicateRows { .. }
             | PlanNode::Expand { .. }
             | PlanNode::Range { .. }
+            | PlanNode::MapPartitions { .. }
+            | PlanNode::GroupMap { .. }
+            | PlanNode::CoGroupMap { .. }
+            | PlanNode::PythonTableFunction { .. }
             | PlanNode::JoinHint { .. } => self.leaf_node(p, env),
         }
     }
@@ -1131,6 +1135,15 @@ impl Resolver<'_> {
             | PlanNode::UnionLoop { .. }
             | PlanNode::UnionLoopRef { .. }
             | PlanNode::Window { .. } => Err(unsupported("a plan shape", o)),
+            // Resolved-only nodes: the front ends that build them (Connect,
+            // design P3-T014 PR-26d) resolve their inputs first.
+            PlanNode::MapPartitions { .. }
+            | PlanNode::GroupMap { .. }
+            | PlanNode::CoGroupMap { .. }
+            | PlanNode::PythonTableFunction { .. } => Err(unsupported(
+                "a Python UDF relation in an unresolved plan",
+                o,
+            )),
         }
     }
 

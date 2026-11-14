@@ -113,6 +113,10 @@ pub(crate) fn plan_tag(node: &PlanNode) -> u8 {
         PlanNode::Generate { .. } => 33,
         PlanNode::PipeOperator { .. } => 34,
         PlanNode::Repartition { .. } => 35,
+        PlanNode::MapPartitions { .. } => 36,
+        PlanNode::GroupMap { .. } => 37,
+        PlanNode::CoGroupMap { .. } => 38,
+        PlanNode::PythonTableFunction { .. } => 39,
     }
 }
 
@@ -648,6 +652,13 @@ impl<'k, 'a> Encoder<'k, 'a> {
         }
     }
 
+    /// A relation node's Python UDF and its declared result columns.
+    fn python_udf(&mut self, udf: &crate::PythonUdfRef, output: &[BoundColumn]) {
+        self.function_id(&udf.function_id());
+        self.len(output.len());
+        output.iter().for_each(|c| self.bound(c));
+    }
+
     fn bytes(&mut self, b: &[u8]) {
         self.len(b.len());
         self.put(b);
@@ -1030,6 +1041,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                     crate::GeneratorKind::PosExplode => 1,
                     crate::GeneratorKind::Inline => 2,
                     crate::GeneratorKind::VariantExplode => 3,
+                    crate::GeneratorKind::PythonUdtf => 4,
                 });
                 self.u8(u8::from(*outer));
                 self.expr(arg);
@@ -1047,6 +1059,50 @@ impl<'k, 'a> Encoder<'k, 'a> {
             PlanNode::TableFunction { name, args } => {
                 self.str(name);
                 self.exprs(args);
+            }
+            PlanNode::MapPartitions {
+                udf,
+                output,
+                barrier,
+                ..
+            } => {
+                self.python_udf(udf, output);
+                self.u8(u8::from(*barrier));
+            }
+            PlanNode::GroupMap {
+                keys, udf, output, ..
+            } => {
+                self.exprs(keys);
+                self.python_udf(udf, output);
+            }
+            PlanNode::CoGroupMap {
+                left_keys,
+                right_keys,
+                udf,
+                output,
+                ..
+            } => {
+                self.exprs(left_keys);
+                self.exprs(right_keys);
+                self.python_udf(udf, output);
+            }
+            PlanNode::PythonTableFunction {
+                args,
+                table_arg,
+                udf,
+                output,
+            } => {
+                self.exprs(args);
+                match table_arg {
+                    None => self.u8(0),
+                    Some(t) => {
+                        self.u8(1);
+                        self.exprs(&t.partition_by);
+                        self.orders(&t.order_by);
+                        self.u8(u8::from(t.single_partition));
+                    }
+                }
+                self.python_udf(udf, output);
             }
             PlanNode::Range {
                 start,
