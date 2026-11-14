@@ -532,6 +532,13 @@ impl Decoder {
                 offset: l.offset,
                 limit: l.limit,
             },
+            Kind::CollectMetrics(m) => PhysNode::CollectMetrics {
+                input: self.boxed(m.input)?,
+                name: m.name.clone(),
+                measure: self.boxed(m.measure)?,
+                instance: m.instance,
+                limit: m.limit,
+            },
             Kind::ReplicateRows(r) => PhysNode::ReplicateRows {
                 input: self.boxed(r.input)?,
                 layout: layout(&r.layout),

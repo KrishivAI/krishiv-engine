@@ -13,6 +13,7 @@
 | [`krishiv.sql.functions`](krishiv.sql.functions.md) | `pyspark.sql.functions`: column builders. A function resolves by name in the engine's |
 | [`krishiv.sql.group`](krishiv.sql.group.md) | `GroupedData`: a DataFrame grouped by key columns, as `pyspark.sql.GroupedData`. |
 | [`krishiv.sql.na`](krishiv.sql.na.md) | `DataFrameNaFunctions` (`DataFrame.na`): handling of missing data, as `pyspark.sql.DataFrameNaFunctions`. |
+| [`krishiv.sql.observation`](krishiv.sql.observation.md) | `Observation`: named metrics of a DataFrame, collected as an action runs (`pyspark.sql.Observation`, 4.2). |
 | [`krishiv.sql.pandas`](krishiv.sql.pandas.md) | `pyspark.sql.pandas`: the pandas and Arrow vectorized UDFs (`krishiv.sql.pandas.functions`). |
 | [`krishiv.sql.pandas.functions`](krishiv.sql.pandas.functions.md) | `pyspark.sql.pandas.functions`: `pandas_udf` and `arrow_udf`. |
 | [`krishiv.sql.profile_view`](krishiv.sql.profile_view.md) | An offline viewer for `krishiv.query-profile` documents. |

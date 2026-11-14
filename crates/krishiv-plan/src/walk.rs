@@ -200,6 +200,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::WithCte { .. }
                 | PlanNode::JoinHint { .. }
                 | PlanNode::Repartition { .. }
+                | PlanNode::CollectMetrics { .. }
                 | PlanNode::Expand { .. }
                 | PlanNode::Window { .. }
                 | PlanNode::ReplicateRows { .. } => true,
@@ -434,6 +435,11 @@ impl Teardown {
             | PlanNode::Repartition {
                 input,
                 exprs: params,
+            }
+            | PlanNode::CollectMetrics {
+                input,
+                metrics: params,
+                ..
             } => {
                 self.plans.push(input);
                 self.exprs.extend(params);

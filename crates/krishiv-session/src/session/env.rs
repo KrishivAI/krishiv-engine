@@ -123,6 +123,9 @@ pub(crate) struct QueryEnv {
     pub(crate) identifier_spans: Arc<[krishiv_sql::ast::Span]>,
     /// The `IDENTIFIER(..)` text each of `identifier_spans` replaced (empty for `CACHE TABLE`).
     pub(crate) identifier_written: Arc<[String]>,
+    /// The observations and sinks of the frame the query runs (`Dataset.observe`): every run of
+    /// the query, whatever the action, completes them (`run_on_query_logged`).
+    pub(crate) observers: Arc<crate::dataframe::Observers>,
 }
 
 /// A batch query's result rows: insert-only, so a weight other than 1 is a

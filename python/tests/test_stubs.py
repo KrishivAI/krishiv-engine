@@ -87,6 +87,7 @@ def test_native_stub_matches_runtime() -> None:
         "WindowSpec",
         "ArrowStream",
         "AnonymousPythonUdf",
+        "Observation",
     }
     for cls_name, methods in classes.items():
         runtime = getattr(krishiv_native, cls_name)

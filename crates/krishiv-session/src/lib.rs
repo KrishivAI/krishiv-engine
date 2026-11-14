@@ -70,6 +70,7 @@ pub mod logging;
 mod memory_table;
 mod monitor;
 mod nested_value;
+mod observation;
 #[cfg(feature = "telemetry-otlp")]
 pub mod otlp;
 mod partitions;
@@ -111,7 +112,7 @@ pub use column::Column;
 pub use conf::RuntimeConf;
 pub use dataframe::{
     DataFrame, DataFrameReader, DataFrameWriter, DataFrameWriterV2, ExplainMode, GroupedData,
-    JoinType, StorageLevel,
+    JoinType, ObservedSink, StorageLevel,
 };
 pub use explain::Estimate;
 pub use explain_graph::{
@@ -132,6 +133,7 @@ pub use krishiv_udf_sdk::{
     ReturnField, ScalarUdf, Signature, StateField, UdfArg, UdfError, UdfInputType, UdfLibrary,
     UdfProperties,
 };
+pub use observation::Observation;
 pub use profile::{ExplainVerbose, OptimizerStep, VERBOSE_FORMAT, VERBOSE_VERSION};
 pub use python_udfs::{ANONYMOUS_VERSION_BIT, PythonUdfDef, PythonUdfEntry, PythonUdfLibrary};
 pub use runtime::{EngineRuntime, EngineRuntimeBuilder};

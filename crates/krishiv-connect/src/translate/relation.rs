@@ -95,6 +95,11 @@ impl Translator<'_> {
             RelType::WithColumns(w) => self.with_columns(w)?,
             RelType::Range(r) => self.range(r)?,
             RelType::SetOp(s) => self.set_op(s, origin_of(rel))?,
+            RelType::CollectMetrics(c) => PlanNode::CollectMetrics {
+                input: self.input("CollectMetrics", c.input.as_deref())?,
+                name: c.name.clone(),
+                metrics: self.expressions(&c.metrics)?,
+            },
             other => {
                 return Err(unsupported_variant(
                     "spark.connect.Relation",

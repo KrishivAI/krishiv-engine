@@ -117,12 +117,24 @@
     ],
     "sqlState" : "42501"
   },
+  "KRISHIV_NO_OBSERVE_BEFORE_GET" : {
+    "message" : [
+      "The observation <name> was read before a DataFrame was observed with it. Call `DataFrame.observe` with it first. (PySpark's `NO_OBSERVE_BEFORE_GET`.)"
+    ],
+    "sqlState" : "42K0E"
+  },
   "KRISHIV_OBJECT_STORE_REQUEST_FAILED" : {
     "message" : [
       "Reading the file <path> failed: the object store did not complete the request after <attempts> attempt(s): <reason>. This is a storage failure, not a corrupt file, so it is never skipped by \"ignoreCorruptFiles\". Retry the query, or check the store's availability and permissions."
     ],
     "sqlState" : "58030",
     "audience" : "operator"
+  },
+  "KRISHIV_OBSERVATION_REUSED" : {
+    "message" : [
+      "The observation <name> already observes a DataFrame: an Observation can be used with a DataFrame only once. (PySpark's `REUSE_OBSERVATION`.)"
+    ],
+    "sqlState" : "42K0E"
   },
   "KRISHIV_OPERATION_LIMIT" : {
     "message" : [

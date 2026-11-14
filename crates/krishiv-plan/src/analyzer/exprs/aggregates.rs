@@ -44,7 +44,13 @@ impl Resolver<'_> {
         let mut checked: Vec<Bound> = kids[..filter_at.min(kids.len())].to_vec();
         checked.extend(orders.iter().cloned());
         if !window_fn {
-            call_checks(entry, e, &checked, filter_at.min(checked.len()))?;
+            call_checks(
+                entry,
+                e,
+                &checked,
+                filter_at.min(checked.len()),
+                self.observing,
+            )?;
         }
         let wrong_arity = || {
             AnalysisError::new(
@@ -285,7 +291,13 @@ impl Resolver<'_> {
         let mut checked: Vec<Bound> = kids[..filter_at.min(kids.len())].to_vec();
         checked.extend(orders.iter().cloned());
         if !window_fn {
-            call_checks(entry, e, &checked, filter_at.min(checked.len()))?;
+            call_checks(
+                entry,
+                e,
+                &checked,
+                filter_at.min(checked.len()),
+                self.observing,
+            )?;
         }
         // The value and the delimiter, implicitly cast (Spark's arity
         // check, then `listagg`'s own delimiter checks in the registry).
@@ -617,7 +629,7 @@ impl Resolver<'_> {
         }
         // The nesting and window checks see the filter and the ordering key
         // too (a filter sits between the arguments and the ordering keys).
-        call_checks(entry, e, kids, kids.len())?;
+        call_checks(entry, e, kids, kids.len(), self.observing)?;
         let filter = kids.get(n).filter(|_| f.filter.is_some());
         let wstart = kids.len() - f.within_group.len();
         // The lowered call's SQL as Spark quotes it in errors: `name(args)`

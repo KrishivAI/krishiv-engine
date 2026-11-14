@@ -1330,6 +1330,7 @@ impl Session {
             row: Arc::default(),
             identifier_spans: Arc::default(),
             identifier_written: Arc::default(),
+            observers: Arc::default(),
             cache_generation,
             cache_cap,
             sql_functions,
@@ -1868,11 +1869,14 @@ impl Session {
                     inner: stream,
                     fold: pending.0.take(),
                 };
-                Ok((
+                // The one place every run of a query passes (reads, writes, metrics, profiles):
+                // the observations of the frame complete when the stream ends, fails or drops.
+                let stream = crate::dataframe::deliver(
                     Box::pin(stream.map(|b| b.and_then(into_record_batch))),
-                    query,
-                    row_id,
-                ))
+                    Arc::clone(&query),
+                    &env.observers,
+                );
+                Ok((stream, query, row_id))
             }
         }
     }

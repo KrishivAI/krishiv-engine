@@ -188,6 +188,7 @@ fn kept_order(node: &PhysNode, order: &[OrderKey], layout: &[AttrId]) -> Vec<Ord
         PhysNode::Project { .. }
         | PhysNode::Filter { .. }
         | PhysNode::Limit { .. }
+        | PhysNode::CollectMetrics { .. }
         | PhysNode::Window { .. }
         | PhysNode::WindowGroupLimit { .. } => order
             .iter()
@@ -308,6 +309,12 @@ pub(crate) struct Planner<'a> {
     loops: HashMap<u32, SchemaRef>,
     /// Build-side projections requested and applied (`build_project`).
     pub(crate) moves: super::build_project::Moves,
+    /// Nesting depth of the relations whose rows are never read (under a
+    /// `LIMIT 0`): `observe` plans no node there.
+    pub(super) unobserved: u32,
+    /// The rank the next observing node takes (`PhysNode::CollectMetrics::instance`), in plan
+    /// order.
+    pub(super) observers: u32,
 }
 
 impl<'a> Planner<'a> {
@@ -342,6 +349,8 @@ impl<'a> Planner<'a> {
             scan_filters: HashMap::new(),
             loops: HashMap::new(),
             moves: super::build_project::Moves::default(),
+            unobserved: 0,
+            observers: 0,
         }
     }
 
@@ -523,14 +532,24 @@ impl<'a> Planner<'a> {
             }
             PlanNode::Limit { input, limit } => {
                 let n = limit_value(limit)?;
+                // Spark replaces what a `LIMIT 0` reads with an empty
+                // relation, so an `observe` under it reports nothing.
+                self.unobserved += u32::from(n == 0);
                 // `LIMIT n OFFSET m` is the limit over the offset: skip, then keep.
-                match &input.node {
+                let planned = match &input.node {
                     PlanNode::Offset { input, offset } => {
                         self.limit(input, limit_value(offset)?, n)
                     }
                     _ => self.limit(input, 0, n),
-                }
+                };
+                self.unobserved -= u32::from(n == 0);
+                planned
             }
+            PlanNode::CollectMetrics {
+                input,
+                name,
+                metrics,
+            } => self.collect_metrics(input, name, metrics),
             PlanNode::Offset { input, offset } => self.limit(input, limit_value(offset)?, u64::MAX),
             PlanNode::Sort {
                 input,
@@ -781,7 +800,11 @@ impl<'a> Planner<'a> {
             }
             return Ok(Self::skip_rows(top, skip, n));
         }
-        let input = self.plan(input)?;
+        let mut input = self.plan(input)?;
+        // Spark counts the rows an observed relation was pulled for: the rows a limit above takes.
+        if let Some(total) = skip.checked_add(n) {
+            super::observe::cap_observed(&mut input.node, total);
+        }
         // Each partition keeps at most `skip + n` rows before the gather;
         // the skip applies only after it.
         let input = if input.placement.satisfies(Distribution::Single) {

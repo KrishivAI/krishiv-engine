@@ -31,6 +31,9 @@ use crate::session::{QueryEnv, RecordBatchStream, Session, WriteTarget, read_fil
 pub(crate) mod checkpoint;
 mod fill_stream;
 mod geo_gate;
+mod observe;
+pub use observe::ObservedSink;
+pub(crate) use observe::{Observers, deliver};
 mod traced;
 
 pub(crate) use fill_stream::{CacheFill, FillKind};
@@ -1050,6 +1053,13 @@ impl DataFrame {
         if let Some(t) = text {
             env.set_text(t);
         }
+        let through_views = analyzed
+            .views
+            .iter()
+            .filter(|v| v.security == krishiv_plan::analyzer::views::ViewSecurity::Temporary)
+            .flat_map(|v| self.session.state.catalog.view_keeps(&v.name))
+            .collect();
+        env.observers = Arc::new(self.observers_through(through_views));
         let analysis = Arc::new(Analysis {
             env: Arc::new(env),
             analyzed: Arc::new(analyzed),
@@ -1804,6 +1814,11 @@ impl DataFrame {
             .state
             .catalog
             .put_view(name, expanded, columns, pins, new_pins);
+        // A query that reads the view runs its observed nodes: it completes the same observations.
+        self.session
+            .state
+            .catalog
+            .set_view_keeps(name, self.observation_handles());
         self.session.state.cache.forget_table(name);
         Ok(())
     }

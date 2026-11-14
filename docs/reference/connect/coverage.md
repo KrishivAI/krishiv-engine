@@ -5,7 +5,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Relation.rel_type
 
-62 arms: 7 done, 6 partial, 45 missing, 4 out of scope.
+62 arms: 8 done, 6 partial, 44 missing, 4 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -36,7 +36,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 26 | to_schema | missing |  | lowering: Project of by-name Cast and reorder (Spark's Dataset.to) | P3-T012 | 4 |
 | 27 | repartition_by_expression | missing |  | Repartition (hash or range) | P3-T012 | 3 |
 | 28 | map_partitions | missing |  | new MapPartitions (Python, T014) | P3-T014 | 6 |
-| 29 | collect_metrics | missing |  | new CollectMetrics (T084) | P3-T084 | 6 |
+| 29 | collect_metrics | done |  | CollectMetrics (observe); the server returns ObservedMetrics after the action | P3-T084 | 6 |
 | 30 | parse | missing |  | lowering: Project of from_json / from_csv over a string relation | P3-T012 | 4 |
 | 31 | group_map | missing |  | new GroupMap (applyInPandas, T014) | P3-T014 | 6 |
 | 32 | co_group_map | missing |  | new CoGroupMap (T014) | P3-T014 | 6 |

@@ -35,6 +35,7 @@ mod join;
 mod late_fetch;
 mod ndv_sample;
 pub(crate) mod nodes;
+mod observe;
 mod orient;
 mod probe_select;
 mod properties;

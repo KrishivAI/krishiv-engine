@@ -619,7 +619,7 @@ impl Resolver<'_> {
                     return self.quantile_call(&entry, e, f, &kids, n, window_fn);
                 }
                 if !window_fn {
-                    call_checks(&entry, e, &kids, n)?;
+                    call_checks(&entry, e, &kids, n, self.observing)?;
                 }
                 // `struct(a, ...)`: children with names keep them (a column
                 // contributes its name, a struct field its field name), so a

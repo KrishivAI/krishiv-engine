@@ -163,6 +163,7 @@ Each row links to the full description in [known differences](../concepts/known-
 | [The relation cache is per session](../concepts/known-differences.md#the-relation-cache-is-per-session) |
 | [Checkpoint files and where a checkpoint lives](../concepts/known-differences.md#checkpoint-files-and-where-a-checkpoint-lives) |
 | [`krishiv server` (Spark Connect)](../concepts/known-differences.md#krishiv-server-spark-connect) |
+| [`Dataset.observe`: where the counts differ from Spark's (follow-up P3-T084c)](../concepts/known-differences.md#datasetobserve-where-the-counts-differ-from-sparks-follow-up-p3-t084c) |
 
 ## Where it runs
 

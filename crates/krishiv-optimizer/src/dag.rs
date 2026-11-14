@@ -121,6 +121,7 @@ pub(crate) fn with_input(node: &Arc<LogicalPlan>, input: Arc<LogicalPlan>) -> Ar
         | PlanNode::Shift { input: slot, .. }
         | PlanNode::JoinHint { input: slot, .. }
         | PlanNode::Repartition { input: slot, .. }
+        | PlanNode::CollectMetrics { input: slot, .. }
         | PlanNode::Window { input: slot, .. }
         | PlanNode::Generate { input: slot, .. }
         | PlanNode::ReplicateRows { input: slot, .. } => *slot = input,

@@ -1693,6 +1693,36 @@ pub(crate) fn udf_call() -> PhysNode {
     }
 }
 
+/// `Dataset.observe` (`observe`): a scan whose rows pass through a
+/// `CollectMetrics` whose measure is `Project(Aggregate(OneRow))`.
+pub(crate) fn collect_metrics() -> PhysNode {
+    let aggregates = vec![aggregate_exprs().remove(0)];
+    PhysNode::CollectMetrics {
+        input: boxed(scan()),
+        name: "obs".to_owned(),
+        instance: 1,
+        limit: Some(5),
+        measure: boxed(PhysNode::Project {
+            input: boxed(PhysNode::Aggregate {
+                input: boxed(PhysNode::OneRow),
+                aggregate: AggregatePlan {
+                    group_by: Vec::new(),
+                    distinct: vec![false],
+                    aggregates,
+                    output: AggregateOutput::Final,
+                },
+            }),
+            layout: vec![AttrId(9)],
+            items: vec![ProjectItemPlan::Column {
+                index: 0,
+                name: Some("n".to_owned()),
+            }],
+            nullable: None,
+            subqueries: Vec::new(),
+        }),
+    }
+}
+
 /// A Python UDF call (`python_udf`): a `PythonEval` appending the call's
 /// column, read by the projection above it. The call references the UDF by
 /// name and registration version only.
@@ -1916,6 +1946,7 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
     out.push(("expressions".to_owned(), plan_of(expressions())));
     out.push(("rust_udf".to_owned(), plan_of(udf_call())));
     out.push(("python_udf".to_owned(), plan_of(python_eval())));
+    out.push(("observe".to_owned(), plan_of(collect_metrics())));
     out.push(("rust_udaf".to_owned(), plan_of(udaf_call())));
     // The expression environment flag the `legacy_statistical_aggregate`
     // feature is about: the same root as `one_row`, under a session with

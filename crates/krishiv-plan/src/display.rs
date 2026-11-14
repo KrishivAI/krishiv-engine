@@ -356,6 +356,14 @@ impl Display for NodeLine<'_> {
             }
             PlanNode::PipeOperator { .. } => f.write_str("PipeOperator"),
             PlanNode::Repartition { exprs, .. } => write!(f, "Repartition ({})", List(exprs)),
+            PlanNode::CollectMetrics { name, metrics, .. } => {
+                write!(
+                    f,
+                    "CollectMetrics {} ({})",
+                    Name(std::slice::from_ref(name)),
+                    List(metrics)
+                )
+            }
             PlanNode::JoinHint { strategy, .. } => {
                 write!(f, "JoinHint (strategy={})", strategy.name())
             }

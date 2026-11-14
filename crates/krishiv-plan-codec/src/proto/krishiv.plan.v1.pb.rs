@@ -145,7 +145,7 @@ pub struct ExplainNode {
 pub struct Node {
     #[prost(
         oneof = "node::Kind",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 21, 24, 25, 26"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 21, 24, 25, 26, 27"
     )]
     pub kind: ::core::option::Option<node::Kind>,
 }
@@ -217,7 +217,30 @@ pub mod node {
         /// feature: python_udf
         #[prost(message, tag = "26")]
         PythonEval(super::PythonEvalNode),
+        /// feature: observe
+        #[prost(message, tag = "27")]
+        CollectMetrics(super::CollectMetricsNode),
     }
+}
+/// feature: observe
+/// `Dataset.observe`: the rows of `input` pass through unchanged while the
+/// metrics (`measure`, a plan over no relation: `OneRow` stands for the input's
+/// rows) are folded into an observation named `name`.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CollectMetricsNode {
+    #[prost(uint32, tag = "1")]
+    pub input: u32,
+    #[prost(string, tag = "2")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "3")]
+    pub measure: u32,
+    /// The planner's rank of this node among the plan's observing nodes, in plan
+    /// order: of several nodes with one name the highest is the observation's.
+    #[prost(uint32, tag = "4")]
+    pub instance: u32,
+    /// At most this many rows are folded (a `LIMIT` above takes no more).
+    #[prost(uint64, optional, tag = "5")]
+    pub limit: ::core::option::Option<u64>,
 }
 /// feature: python_udf
 /// The rows of `input`, then one column per Python UDF call over every row.

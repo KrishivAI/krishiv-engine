@@ -113,6 +113,7 @@ pub(crate) fn plan_tag(node: &PlanNode) -> u8 {
         PlanNode::Generate { .. } => 33,
         PlanNode::PipeOperator { .. } => 34,
         PlanNode::Repartition { .. } => 35,
+        PlanNode::CollectMetrics { .. } => 36,
     }
 }
 
@@ -900,6 +901,10 @@ impl<'k, 'a> Encoder<'k, 'a> {
             | PlanNode::PipeOperator { .. }
             | PlanNode::Distinct { .. } => {}
             PlanNode::Repartition { exprs, .. } => self.exprs(exprs),
+            PlanNode::CollectMetrics { name, metrics, .. } => {
+                self.str(name);
+                self.exprs(metrics);
+            }
             PlanNode::JoinHint { strategy, .. } => {
                 self.str(strategy.name());
             }

@@ -47,6 +47,7 @@ fn kinds_of_node(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
         PlanNode::Hint { .. } => "PlanNode::Hint",
         PlanNode::PipeOperator { .. } => "PlanNode::PipeOperator",
         PlanNode::Repartition { .. } => "PlanNode::Repartition",
+        PlanNode::CollectMetrics { .. } => "PlanNode::CollectMetrics",
         PlanNode::JoinHint { .. } => "PlanNode::JoinHint",
         PlanNode::Union { .. } => "PlanNode::Union",
         PlanNode::Distinct { .. } => "PlanNode::Distinct",
@@ -236,6 +237,14 @@ fn slice_ops() -> Vec<(&'static str, LogicalPlan)> {
         ),
         ("cast", df(1).project(vec![c("a").cast(DataType::Long)])),
         ("col.alias", df(1).project(vec![c("a").alias("b")])),
+        (
+            "observe",
+            LogicalPlan::new(PlanNode::CollectMetrics {
+                input: Arc::new(df(1)),
+                name: "m".to_owned(),
+                metrics: vec![Arc::new(Expr::function("count", vec![c("a")]))],
+            }),
+        ),
     ]
 }
 

@@ -55,6 +55,11 @@ _TEMPLATES = {
     "NOT_NUMERIC_COLUMNS": (
         "Numeric aggregation function can only be applied on numeric columns, got <invalid_columns>."
     ),
+    "NOT_LIST_OF_COLUMN": "Argument `<arg_name>` should be a list[Column], got <arg_type>.",
+    "REUSE_OBSERVATION": "An Observation can be used with a DataFrame only once.",
+    "NO_OBSERVE_BEFORE_GET": "Should observe by calling `DataFrame.observe` before `get`.",
+    "VALUE_NOT_NON_EMPTY_STR": "Value for `<arg_name>` must be a non-empty string, got '<arg_value>'.",
+    "CANNOT_BE_EMPTY": "At least one <item> must be specified.",
     "VALUE_NOT_POSITIVE": "Value for `<arg_name>` must be positive, got '<arg_value>'.",
     "NEGATIVE_VALUE": "Value for `<arg_name>` must be greater than or equal to 0, got '<arg_value>'.",
     "ARGUMENT_REQUIRED": "Argument `<arg_name>` is required when <condition>.",

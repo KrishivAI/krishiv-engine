@@ -16,6 +16,7 @@ mod function_call_forms;
 mod inventory;
 mod json_tuple;
 mod nodes;
+mod observe;
 mod pivot;
 mod prefix_cache;
 mod props;

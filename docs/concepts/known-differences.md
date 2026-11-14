@@ -254,3 +254,29 @@ do not see it, as in Spark. `system.caches` lists the session's live checkpoints
   Setting a key the registry marks admin-only answers `KRISHIV_INSUFFICIENT_PERMISSIONS` (42501, gRPC
   `PERMISSION_DENIED`) for a non-admin role (no role exists before authentication, so the local user is the admin).
 - **Interrupt by tag** fails with `UNSUPPORTED_FEATURE.INTERRUPT_TYPE` until operation tags can be interrupted.
+
+## `Dataset.observe`: where the counts differ from Spark's (follow-up P3-T084c)
+
+`DataFrame::observe` / PySpark `Observation` match Spark 4.2.0 on every case of
+`tests/fixtures/spark-4.2.0/observe-goldens.json` except the ones below
+(`crates/krishiv-session/tests/observe_goldens.rs` pins them in `KNOWN_GAPS`, each must still fail there, so a
+fix removes the line). A `LIMIT` (and so `take`, `first`, `show`) directly above the observed node,
+or above projections only, counts exactly the rows it takes, as Spark's `CollectMetricsExec` counts the rows
+its consumer pulled; the cap is one budget per node instance, so over several partitions the rows
+counted are the first the racing drivers hand over (Spark's are partition 0's: a `sum` metric can differ).
+
+- **Limit not last, or a filter in between:** `observe(..).limit(n).count()`, a limit under a join, or a filter between the observed node and the limit: Spark's per-partition `LocalLimit` can pull up to `n` rows per partition, and a filter changes how many rows the node saw per row taken; the engine applies one global cap of `n` rows counted at the node. Not yet backed by a golden (P3-T084c).
+- **Sort and limit:** `df.observe(..).orderBy(..).limit(n)` reads every row in the engine (`n` = the input);
+  Spark's `TakeOrderedAndProject` pulls a partition-dependent subset (20 of 1000 in the golden).
+- **ANSI `sum` overflow:** Spark's metric aggregate returns the saturated `9223372036854775807` for a long
+  `sum` that overflows under ANSI; the engine raises `ARITHMETIC_OVERFLOW`. With ANSI off both wrap.
+- **Scalar subquery in a metric:** Spark runs it; the engine refuses it with `KRISHIV_UNSUPPORTED_FEATURE`.
+- **Empty relation above:** `observe(..).where(false)` (Spark prunes the node; `{}`) counts the rows read.
+  Only `LIMIT 0` prunes. Streaming frames are not refused as Spark refuses them.
+- **Connect:** struct, map and interval metric values are refused when the server builds the
+  `ObservedMetrics` literal (after the rows were sent); a name with no plan id reports `plan_id` 0.
+- **Cancelled actions:** a dropped result stream completes the observation with `{}` or the rows
+  folded before the drivers stopped (Spark: a partial value); a failed finalization of a metric is what `get`
+  raises.
+- **`Observation.get` blocks** a thread; do not call it from async code on a runtime thread.
+- **Result cache:** a plan that observes is never served from the result cache (every action runs it).
