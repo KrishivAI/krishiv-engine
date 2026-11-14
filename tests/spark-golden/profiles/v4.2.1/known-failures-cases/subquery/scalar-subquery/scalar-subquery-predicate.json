@@ -1,0 +1,11 @@
+{
+  "cases": {
+    "depends-on-command": [
+      36,
+      37,
+      38
+    ]
+  },
+  "file": "subquery/scalar-subquery/scalar-subquery-predicate",
+  "format_version": 1
+}

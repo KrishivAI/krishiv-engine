@@ -176,6 +176,8 @@ rust-embed = { version = "8.13", default-features = false }
 utoipa = { version = "6.0", default-features = false }
 rmcp = { version = "3.5.1", default-features = false }
 rustls = { version = "0.23", default-features = false }
+# OIDC JWT signatures (krishiv-session `oidc`); already in the tree as rustls's crypto provider.
+aws-lc-rs = { version = "1.18.2", default-features = false, features = ["aws-lc-sys"] }
 tracing = { version = "0.1.44", default-features = false }
 tracing-subscriber = { version = "0.3.23", default-features = false }
 opentelemetry = { version = "0.33.1", default-features = false }

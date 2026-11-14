@@ -1,0 +1,15 @@
+{
+  "cases": {
+    "sql-commands": [
+      36,
+      61,
+      67,
+      69,
+      88,
+      103,
+      112
+    ]
+  },
+  "file": "scripting/randomly_generated_scripts",
+  "format_version": 1
+}

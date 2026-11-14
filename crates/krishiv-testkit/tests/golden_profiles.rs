@@ -6,7 +6,11 @@
 //! committed is the baseline of failing statements, `tests/spark-golden/profiles/<tag>/` (the same layout as
 //! `tests/spark-golden/known-failures*`): a statement that newly fails is a regression, a listed statement
 //! that passes is only reported, because these baselines are not refreshed by every PR that improves the
-//! engine. Refresh one, any time, with
+//! engine. Each profile also has `gate.json`: the phase gate's result rate for that version
+//! (`result_target_percent`: 4.3 and 4.2.1 90, 4.0 and 4.1 85, 3.5 80) and a floor, the rate the last refresh
+//! measured (`result_floor_per_mille`, rounded down): the run must not fall below the floor, and the job
+//! summary shows each version's rate against its target, so the golden tail (plan row GT) is sized from data.
+//! Refresh one, any time, with
 //! `cargo run --release -p krishiv-testkit --bin golden-report -- --engine session --tag <tag> --ratchet update
 //!  --known-failures tests/spark-golden/profiles/<tag>/known-failures.json`.
 #![forbid(unsafe_code)]
@@ -59,6 +63,55 @@ fn report_newly_passing(tag: &str, ratchet: &krishiv_testkit::golden::known_fail
     }
 }
 
+/// The gate file of a profile: the target result rate of the phase gate, and the floor the ratchet enforces.
+struct Gate {
+    target_percent: u64,
+    floor_per_mille: u64,
+}
+
+fn load_gate(tag: &str) -> Result<Gate, Box<dyn std::error::Error>> {
+    let path = baseline_path(tag).with_file_name("gate.json");
+    let doc: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
+    assert_eq!(doc["format_version"], 1, "{}", path.display());
+    let field = |name: &str| {
+        doc[name]
+            .as_u64()
+            .ok_or_else(|| format!("{}: `{name}` must be a number", path.display()))
+    };
+    Ok(Gate {
+        target_percent: field("result_target_percent")?,
+        floor_per_mille: field("result_floor_per_mille")?,
+    })
+}
+
+/// The rate against the gate, to the job summary (`$GITHUB_STEP_SUMMARY`) and stderr; a passing test's output is
+/// hidden in CI.
+#[expect(
+    clippy::print_stderr,
+    reason = "a local run's note; CI reads the job summary"
+)]
+fn report_rate(tag: &str, passed: u64, total: u64, gate: &Gate) {
+    use std::io::Write;
+    let per_mille = passed * 1000 / total.max(1);
+    let line = format!(
+        "{tag}: result {passed} / {total} = {}.{}% (gate {}%, floor {}.{}%; {} statements to the gate)",
+        per_mille / 10,
+        per_mille % 10,
+        gate.target_percent,
+        gate.floor_per_mille / 10,
+        gate.floor_per_mille % 10,
+        (gate.target_percent * total)
+            .div_ceil(100)
+            .saturating_sub(passed),
+    );
+    eprintln!("{line}");
+    if let Ok(path) = std::env::var("GITHUB_STEP_SUMMARY")
+        && let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(path)
+    {
+        let _ = writeln!(f, "- {line}");
+    }
+}
+
 fn matches_the_baseline(tag: &str) -> R {
     let dir = GoldenSet::tag_dir(tag);
     assert!(
@@ -73,6 +126,7 @@ fn matches_the_baseline(tag: &str) -> R {
     let manifest = ExclusionManifest::load(&ExclusionManifest::default_path())?;
     assert!(manifest.frozen, "the exclusion manifest is frozen");
     let set = GoldenSet::scan(&dir)?;
+    let manifest = manifest.restricted_to(&set);
     let mut engine = SessionEngine::new().map_err(|e| e.message)?;
     let result = run(&mut engine, &set, &manifest)?;
     assert!(result.failed_files.is_empty(), "{:?}", result.failed_files);
@@ -88,6 +142,16 @@ fn matches_the_baseline(tag: &str) -> R {
     assert!(
         timeouts.is_empty(),
         "harness timeouts, not baseline failures: {timeouts:?}"
+    );
+    let gate = load_gate(tag)?;
+    let (_, _, rate) = krishiv_testkit::golden::report::totals(&result);
+    report_rate(tag, rate.passed, rate.total, &gate);
+    assert!(
+        rate.passed * 1000 >= gate.floor_per_mille * rate.total,
+        "{tag}: the result rate {} / {} fell below the floor of {} per mille in gate.json",
+        rate.passed,
+        rate.total,
+        gate.floor_per_mille
     );
     let ratchet = known.check(&result);
     // Another version's baseline is not refreshed by every PR that improves the engine (the 4.2 baseline is:
@@ -108,6 +172,12 @@ fn matches_the_baseline(tag: &str) -> R {
 #[ignore = "needs the fetched v4.3.0 goldens: the nightly golden-profiles job runs it with --ignored"]
 fn spark_4_3_0_matches_its_baseline() -> R {
     matches_the_baseline("v4.3.0")
+}
+
+#[test]
+#[ignore = "needs the fetched v4.2.1 goldens: the nightly golden-profiles job runs it with --ignored"]
+fn spark_4_2_1_matches_its_baseline() -> R {
+    matches_the_baseline("v4.2.1")
 }
 
 #[test]

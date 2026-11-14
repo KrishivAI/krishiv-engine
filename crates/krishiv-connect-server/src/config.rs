@@ -30,7 +30,7 @@
 
 use std::borrow::Cow;
 
-use krishiv_common::config::{SettableBy, lookup};
+use krishiv_common::config::{SettableBy, lookup, resolve_alternative};
 use krishiv_common::error::{
     CannotModifyStaticConfig, ConnectInvalidPlanInvalidOneOfFieldNotSet,
     InvalidConfValueRequirement, KrishivError, KrishivInsufficientPermissions, SqlConfNotFound,
@@ -237,7 +237,7 @@ pub fn is_redacted(key: &str, value: Option<&str>) -> bool {
 
 /// The value `key` was set to, if it was (not a registered default).
 fn explicit(conf: &RuntimeConf, key: &str) -> Option<String> {
-    let canonical = lookup(key).map_or(key, |e| e.key);
+    let canonical = lookup(resolve_alternative(key)).map_or(key, |e| e.key);
     conf.entries()
         .into_iter()
         .find(|(k, _)| k == canonical)

@@ -121,6 +121,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &IO_METADATA_CACHE_BYTES,
     &IO_CACHE_ENABLED,
     &IO_CACHE_PATH,
+    &IO_LOCAL_ALLOWED_ROOTS,
+    &IO_OBJECT_STORE_ALLOWED_PREFIXES,
     &IO_CACHE_DISK_BYTES,
     &IO_CACHE_BLOCK_BYTES,
     &IO_CACHE_MEMORY_BYTES,
@@ -1174,6 +1176,49 @@ pub static IO_CACHE_PATH: ConfigEntry = ConfigEntry {
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.local.allowedRoots`.
+pub static IO_LOCAL_ALLOWED_ROOTS: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.local.allowedRoots",
+    value_type: ValueType::String,
+    default: None,
+    doc: "Server mode (authentication configured): a comma-separated list of absolute paths of \
+          existing local directories (a path holding a comma cannot be listed) that reads and \
+          writes by path may use, for every role, admin included. A path is \
+          compared after `.`, `..` and symbolic links are resolved, and a glob or directory \
+          read below a root fails at a link out of every root. Unset or empty: no local path is \
+          allowed in server mode. Embedded use is not confined by path; set there, the key only \
+          makes listings refuse links out of the roots.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.objectStore.allowedPrefixes`.
+pub static IO_OBJECT_STORE_ALLOWED_PREFIXES: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.objectStore.allowedPrefixes",
+    value_type: ValueType::String,
+    default: None,
+    doc: "Server mode (authentication configured) only: a comma-separated list of object-store \
+          prefixes (`s3://bucket/prefix`, `gs://bucket`, \
+          `abfss://container@account.dfs.core.windows.net/prefix`; an Azure prefix names its \
+          account host) that reads and writes by path may use, for every role, admin included. \
+          A prefix matches whole key segments (`s3://b/data` does not match \
+          `s3://b/data2`) and holds no glob character; `s3` and `s3a` name the same store; a \
+          path holding `%`, `?` or `#` is never allowed, so `?` globs are refused. It is the one \
+          opt-in for the server's own (ambient) credentials and for `http(s)://` locations, which \
+          are refused unless listed. Any `fs.*` store option but an inline access key, secret, \
+          token or SAS (so endpoints, regions, accounts, key files, the GCS key JSON and tuning \
+          keys alike), per read, on a table or set in a session, needs admin; a \
+          table's options stored by an admin are not asked about again when others read or \
+          insert. Unset or empty: no object-store path \
+          is allowed. Embedded use and a server without authentication do not read it.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.2.0",
     spark_alias: None,
 };
 
