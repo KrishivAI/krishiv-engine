@@ -85,6 +85,10 @@ const TIMESTAMP_UNIT_FUNCTIONS: &[&str] = &[
 /// Spark's `unitInUnitToUnit`.
 const UNIT_TO_UNIT: &[&str] = &["SECOND", "MINUTE", "HOUR", "DAY", "MONTH", "YEAR"];
 
+/// Words that follow a `NOT` read as a column: no operand of `NOT` starts
+/// with them (`NOT IS NULL`, `WHEN y < not THEN not ELSE not END`).
+const BRANCH_END: &[&str] = &["IS", "AND", "OR", "THEN", "ELSE", "END"];
+
 const INTERVAL_UNITS: &[&str] = &[
     "NANOSECOND",
     "NANOSECONDS",
@@ -245,14 +249,18 @@ impl Parser<'_> {
     /// Whether the `NOT` here is a column, as Spark reads `SELECT NOT`,
     /// `NOT = 1`, `NOT.x`, `NOT::INT` and `NOT[0]`: no operand can follow
     /// it (a postfix operator does instead). `+` and `-` do
-    /// (`NOT + 1` is `NOT (+1)`).
+    /// (`NOT + 1` is `NOT (+1)`). Nor can `IS`, `AND`, `OR` or the end of a
+    /// `CASE` branch (`NOT IS NULL`, `WHEN y < not THEN`),
+    /// and before `->` it is a lambda parameter.
     fn not_is_column(&self) -> bool {
         let operand_sign = self.sym_at(1, Sym::Plus) || self.sym_at(1, Sym::Minus);
         !operand_sign
             && (self.reserved_as_column()
                 || self.sym_at(1, Sym::Dot)
                 || self.sym_at(1, Sym::DoubleColon)
-                || self.sym_at(1, Sym::LBracket))
+                || self.sym_at(1, Sym::LBracket)
+                || self.sym_at(1, Sym::Arrow)
+                || (!self.opts.enforce_reserved_keywords && self.any_kw_at(1, BRANCH_END)))
     }
 
     fn exists_follows(&self) -> bool {
@@ -1010,19 +1018,20 @@ impl Parser<'_> {
         {
             return Ok(e);
         }
+        // `x -> body`, also when `x` is a keyword that starts a primary
+        // (`true -> true`, `current_date -> current_date - 1`).
+        if self.sym_at(1, Sym::Arrow) && self.is_ident_at(0, true) {
+            let params = vec![self.any_ident()?];
+            self.bump();
+            let body = boxed(self.expr()?);
+            return Ok(self.mk(ExprKind::Lambda { params, body }, start));
+        }
         let special = self.class(0) & PRIMARY_WORD != 0 || self.single_string_at(1);
         if self.kind(0) == Some(TokenKind::Word)
             && special
             && let Some(e) = self.keyword_primary(start)?
         {
             return Ok(e);
-        }
-        // `x -> body`
-        if self.sym_at(1, Sym::Arrow) && self.is_ident_at(0, true) {
-            let params = vec![self.any_ident()?];
-            self.bump();
-            let body = boxed(self.expr()?);
-            return Ok(self.mk(ExprKind::Lambda { params, body }, start));
         }
         let mut parts = vec![];
         // `functionName`: any word but structural ones, or only `LEFT`,
@@ -1039,7 +1048,7 @@ impl Parser<'_> {
         // `CASE` are columns, as ANTLR reads them (`1 + NOT a`).
         let keyword_column = !self.opts.enforce_reserved_keywords
             && (self.kw_at(0, "NOT") || (self.kw_at(0, "CASE") && self.case_is_column()));
-        if (reserved_call || keyword_column || self.reserved_as_column())
+        if (reserved_call || keyword_column || self.reserved_column_here())
             && !self.is_ident_at(0, false)
         {
             parts.push(self.keyword_ident());
@@ -1103,7 +1112,33 @@ impl Parser<'_> {
     fn case_is_column(&self) -> bool {
         let alias_then_end =
             self.kind(1) == Some(TokenKind::Word) && !self.kw_at(1, "WHEN") && self.item_end_at(2);
-        !self.opts.enforce_reserved_keywords && (self.reserved_as_column() || alias_then_end)
+        !self.opts.enforce_reserved_keywords
+            && (self.reserved_as_column()
+                || alias_then_end
+                || self.any_kw_at(1, &["THEN", "ELSE", "END"])
+                || (self.reserved_column_here() && !self.when_ahead()))
+    }
+
+    /// Whether a `WHEN` follows at this bracket depth before the bracket or
+    /// the statement ends, so a `CASE` here can be a `CASE` expression
+    /// (`CASE - x WHEN 1 THEN ...`; `(case, y) -> case - y` is a column).
+    fn when_ahead(&self) -> bool {
+        let mut depth = 0usize;
+        let mut n = 1;
+        while let Some(kind) = self.kind(n) {
+            match kind {
+                TokenKind::Sym(Sym::LParen | Sym::LBracket) => depth += 1,
+                TokenKind::Sym(Sym::RParen | Sym::RBracket) => match depth.checked_sub(1) {
+                    Some(d) => depth = d,
+                    None => return false,
+                },
+                TokenKind::Sym(Sym::Comma | Sym::Semi) if depth == 0 => return false,
+                TokenKind::Word if depth == 0 && self.kw_at(n, "WHEN") => return true,
+                _ => {}
+            }
+            n += 1;
+        }
+        false
     }
 
     /// Whether the reserved word here is a column, because no keyword
@@ -1129,6 +1164,33 @@ impl Parser<'_> {
             .contains(&s),
             Some(_) => false,
         }
+    }
+
+    /// Whether the reserved word starting a primary is a column, as Spark
+    /// reads every keyword unless keywords are enforced: no keyword reading
+    /// of it continues with the next token, which here may also be `-`, a
+    /// field or element access, `]`, an infix keyword or a `CASE` branch
+    /// keyword (`left - right`, `all.a`, `on[0]`, `a[from]`, `from IS NULL`,
+    /// `WHEN x < right THEN`: the bodies of lambdas whose parameters are
+    /// keywords).
+    fn reserved_column_here(&self) -> bool {
+        const FOLLOW: &[&str] = &[
+            "AND", "OR", "IS", "IN", "NOT", "BETWEEN", "LIKE", "ILIKE", "RLIKE", "REGEXP", "DIV",
+            "WHEN", "THEN", "ELSE", "END",
+        ];
+        if self.reserved_as_column() {
+            return true;
+        }
+        if self.opts.enforce_reserved_keywords || self.kind(0) != Some(TokenKind::Word) {
+            return false;
+        }
+        self.sym_at(1, Sym::Minus)
+            || self.sym_at(1, Sym::Dot)
+            || self.sym_at(1, Sym::LBracket)
+            || self.sym_at(1, Sym::DoubleColon)
+            || self.sym_at(1, Sym::RBracket)
+            || self.sym_at(1, Sym::NullSafeEq)
+            || self.any_kw_at(1, FOLLOW)
     }
 
     /// The current word as an identifier, whatever it is.
@@ -1544,7 +1606,10 @@ impl Parser<'_> {
     #[inline(never)]
     fn function_call(&mut self, name: ObjectName, start: usize) -> PR<Expr> {
         self.expect_sym(Sym::LParen)?;
-        let quantifier = if self.kw_at(0, "ALL") && self.sym_at(1, Sym::RParen) {
+        // `f(all)` and `f(distinct)` are calls with the column as their
+        // argument (keywords are identifiers unless enforced).
+        let lone_distinct = !self.opts.enforce_reserved_keywords && self.kw_at(0, "DISTINCT");
+        let quantifier = if (self.kw_at(0, "ALL") || lone_distinct) && self.sym_at(1, Sym::RParen) {
             None
         } else {
             self.set_quantifier()
@@ -1757,8 +1822,18 @@ impl Parser<'_> {
 
     /// `INTERVAL` followed by a value (`intervalValue`: an integer, a
     /// decimal or a string).
+    /// A signed number with no unit after it is no interval unless keywords
+    /// are enforced: `interval - 1` is the column `interval` minus one, as
+    /// Spark reads it.
     fn interval_follows(&self) -> bool {
-        self.interval_value_len(1).is_some()
+        let Some(len) = self.interval_value_len(1) else {
+            return false;
+        };
+        let signed_number = (self.sym_at(1, Sym::Plus) || self.sym_at(1, Sym::Minus))
+            && matches!(self.kind(2), Some(TokenKind::Number(_)));
+        !signed_number
+            || self.opts.enforce_reserved_keywords
+            || self.any_kw_at(1 + len, INTERVAL_UNITS)
     }
 
     /// `[+|-] (integer | decimal | string)` at offset `n`: its length in
