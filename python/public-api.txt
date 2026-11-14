@@ -45,6 +45,7 @@ Column.def with_field(self, name: str, value: Column) -> Column
 DataFrame.def agg(self, cols: list[Column]) -> DataFrame
 DataFrame.def alias(self, alias: str) -> DataFrame
 DataFrame.def cache(self) -> DataFrame
+DataFrame.def checkpoint(self, eager: bool=...) -> DataFrame
 DataFrame.def col(self, name: str) -> Column
 DataFrame.def count(self) -> int
 DataFrame.def create_or_replace_temp_view(self, name: str) -> None
@@ -61,6 +62,7 @@ DataFrame.def intersect_all(self, other: DataFrame) -> DataFrame
 DataFrame.def is_cached(self) -> bool
 DataFrame.def join(self, other: DataFrame, on: Column | None=..., using: list[str] | None=..., how: str=...) -> DataFrame
 DataFrame.def limit(self, n: int) -> DataFrame
+DataFrame.def local_checkpoint(self, eager: bool=..., level: tuple[bool, bool, bool, bool, int] | None=...) -> DataFrame
 DataFrame.def offset(self, n: int) -> DataFrame
 DataFrame.def order_by(self, cols: list[Column]) -> DataFrame
 DataFrame.def persist(self, use_disk: bool, use_memory: bool, use_offheap: bool, deserialized: bool, replication: int) -> DataFrame
@@ -68,6 +70,7 @@ DataFrame.def sample(self, with_replacement: bool, fraction: float, seed: int) -
 DataFrame.def schema(self) -> list[tuple[str, str, bool]]
 DataFrame.def select(self, cols: list[Column]) -> DataFrame
 DataFrame.def select_expr(self, exprs: list[str]) -> DataFrame
+DataFrame.def storage_level(self) -> tuple[bool, bool, bool, bool, int]
 DataFrame.def subtract(self, other: DataFrame) -> DataFrame
 DataFrame.def to_df(self, names: list[str]) -> DataFrame
 DataFrame.def union(self, other: DataFrame) -> DataFrame
@@ -1000,6 +1003,7 @@ DataFrame.def agg(self, *exprs: Column) -> DataFrame
 DataFrame.def alias(self, alias: str) -> DataFrame
 DataFrame.def approxQuantile(self, col: str | list[str] | tuple[str, ...], probabilities: list[float] | tuple[float, ...], relativeError: float) -> list[Any]
 DataFrame.def cache(self) -> DataFrame
+DataFrame.def checkpoint(self, eager: bool=True) -> DataFrame
 DataFrame.def coalesce(self, numPartitions: int) -> DataFrame
 DataFrame.def collect(self) -> list[Row]
 DataFrame.def corr(self, col1: str, col2: str, method: str | None=None) -> float
@@ -1027,6 +1031,7 @@ DataFrame.def intersect(self, other: DataFrame) -> DataFrame
 DataFrame.def intersectAll(self, other: DataFrame) -> DataFrame
 DataFrame.def join(self, other: DataFrame, on: str | list[str] | Column | list[Column] | None=None, how: str | None=None) -> DataFrame
 DataFrame.def limit(self, num: int) -> DataFrame
+DataFrame.def localCheckpoint(self, eager: bool=True, storageLevel: StorageLevel | None=None) -> DataFrame
 DataFrame.def melt(self, ids: ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...], values: ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...] | None, variableColumnName: str, valueColumnName: str) -> DataFrame
 DataFrame.def offset(self, num: int) -> DataFrame
 DataFrame.def orderBy(self, *cols: ColumnsOrNames, ascending: bool | list[bool]=True) -> DataFrame
@@ -1141,6 +1146,7 @@ DataFrameReader.def load(self, path: str | list[str] | None=None, format: str | 
 DataFrameReader.def option(self, key: str, value: object) -> DataFrameReader
 DataFrameReader.def options(self, **options: object) -> DataFrameReader
 DataFrameReader.def parquet(self, *paths: str) -> DataFrame
+DataFrameReader.def schema(self, schema: object) -> DataFrameReader
 DataFrameWriter.def __init__(self, df: DataFrame) -> None
 DataFrameWriter.def bucketBy(self, numBuckets: int, col: str | list[str] | tuple[str, ...], *cols: str) -> DataFrameWriter
 DataFrameWriter.def csv(self, path: str, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, **options: object) -> None

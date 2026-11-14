@@ -1,3 +1,7 @@
+---
+description: "Where Krishiv behaviour deliberately differs from Spark."
+---
+
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Known differences from Spark
 
@@ -160,6 +164,33 @@ A SQL function, scalar or table, evaluates in the `spark.sql.ansi.enabled` mode 
 - An aggregate or window call in a scalar function argument reads its operator's mode.
 - Only `spark.sql.ansi.enabled` is captured; Spark captures every SQL configuration.
 
+## The relation cache is per session
+
+Spark's `CacheManager` lives in the `SharedState` of a `SparkContext` (believed shared by every session of it, not
+yet confirmed against a Spark run): a frame cached in one session reads as cached, and is reused, in another.
+Krishiv keeps `cache()` / `persist()` registrations and their data per session (owner decision 2026-11-12, design
+P3-T083 §3.7), because each session can have its own memory pool (`krishiv.session.memoryLimit`) and a shared
+entry would charge one tenant for another's cache. `isCached` and `storageLevel` in one session do not see a
+`cache()` made in another, and closing a session drops its entries (memory and spill files). Invalidation does
+cross sessions: a write or `REFRESH TABLE` in one session drops what every session cached over the table, as in
+Spark. To be revisited with multi-tenant resource groups (P3-T003).
+
+Storage levels: `_2`/`_3` replication and `OFF_HEAP` are accepted and reported as asked, but one copy is kept, in
+the engine's memory or one local spill file. Spilled and `DISK_ONLY` entries are scratch data in the spill
+directory (`krishiv.spill.*`), deleted with the entry or at the next start after a crash.
+
+## Checkpoint files and where a checkpoint lives
+
+`DataFrame.checkpoint()` writes the rows under `spark.checkpoint.dir` as a Krishiv spill-format file
+and, unlike Spark, deletes the file when the result and every frame derived from it are gone (Spark
+keeps reliable checkpoint files by default, and nothing in Krishiv reads them back from another
+process). The rows are also held by the session, in its relation store (memory-accounted), so a
+reliable checkpoint holds a memory copy; `localCheckpoint(storageLevel=...)` accepts a level but holds
+the rows in the session's memory whatever it is. With `eager = false` the rows are taken when the
+result is first analyzed (its first action, or the first call that needs its schema), not at its
+first job. A checkpoint is not a cache entry: `is_cached`, `CLEAR CACHE`, `REFRESH` and `unpersist`
+do not see it, as in Spark. `system.caches` lists the session's live checkpoints in a `checkpoint` row.
+
 ## `krishiv server` (Spark Connect)
 
 - **The Connect listener binds `127.0.0.1` by default.** Spark binds every interface when
@@ -171,9 +202,55 @@ A SQL function, scalar or table, evaluates in the `spark.sql.ansi.enabled` mode 
   in Spark. Clients pick random session ids, so this does not happen in practice. A session id another principal holds
   answers `INVALID_HANDLE.SESSION_NOT_FOUND`.
 - **An idle session running a query is kept.** Spark releases a session by its last access alone; Krishiv also keeps
-  one whose query is still running.
+  one whose query is still running or whose results are still being sent.
 - **A request over `spark.connect.grpc.maxInboundMessageSize` is refused with `OUT_OF_RANGE`**, read from the message
   length before the body; Spark (grpc-java) answers `RESOURCE_EXHAUSTED`.
 - **`krishiv.connect.session.idleTimeout`** replaces `spark.connect.session.manager.defaultSessionTimeout`, whose
   "never" is `-1`; Krishiv's is `0s`. `krishiv server` refuses Spark's key, and any other `spark.connect.*` key it
   does not read, rather than ignore it.
+- **Too many operations in one session** fail with `KRISHIV_OPERATION_LIMIT` (`RESOURCE_EXHAUSTED`) past
+  `krishiv.connect.maxOperationsPerSession`; Spark has no such cap.
+- **An invalid operation tag** fails with `KRISHIV_INVALID_OPERATION_TAG` (SQLSTATE 22023) and Spark's message; Spark
+  sends an `INTERNAL` status without an error class.
+- **Results arrive in the engine's batches** (4,096 rows by default), cut further at Spark's
+  `spark.connect.grpc.arrow.maxBatchSize` and `spark.sql.execution.arrow.maxRecordsPerBatch` but never merged.
+- **Timestamps are labelled UTC when `spark.sql.session.timeZone` is unset**; Spark labels them with the JVM's zone.
+  The instants are the same.
+- **Geometry, geography and variant columns** get Spark's Arrow shape at the top level of a result only, not inside a
+  struct, array or map.
+- **The `metrics` response of ExecutePlan is empty** until the operator tree is wired through.
+- **A reattachable operation's query pauses** once `krishiv.connect.execute.aheadBytes` (64 MiB) of its responses are
+  unread, whether or not a client is attached; Spark keeps producing and buffers every unread response.
+- **A new operation can wait for admission.** Each operation reserves its worst case (`aheadBytes` plus, reattachable,
+  `krishiv.connect.execute.retryBufferSize`) of `krishiv.connect.maxResponseBytes` (1 GiB) before its first response,
+  until it is released, abandoned or ends; past the cap a new `ExecutePlan` waits (its stream sends nothing yet) until
+  one does. Running operations never wait on it. Spark has no such cap. A server refuses to start with a cap below one
+  operation's worst case (`KRISHIV_INVALID_CONFIG_VALUE`). There is no per-principal share yet, so one principal's
+  open operations can hold the whole cap.
+- **Column metadata travels in the `schema` response only**: Spark 4.3 also writes each field's user metadata into
+  the Arrow schema of every result batch (`SPARK::metadata::json`); Krishiv's batches carry none.
+- **ReleaseExecute without a release type** fails with `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SET`; Spark throws
+  an `UnsupportedOperationException` without an error class.
+- **AnalyzePlan.** An `UNSPECIFIED` explain mode fails with `CONNECT_INVALID_PLAN.INVALID_ENUM`, and `json_to_ddl` of a
+  type that is not a struct with `INVALID_SCHEMA.NON_STRUCT_TYPE`; Spark sends `INTERNAL` without an error class for
+  both. `persist`, `unpersist` and `get_storage_level` fail with
+  `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SUPPORTED` until DataFrame caching lands. `input_files` lists the paths
+  the file scans read, qualified (`file:/data/t`), not the files under them, and nothing for a catalog table (Spark
+  lists the files of a file-backed table). `same_semantics` and `semantic_hash` ignore column and alias names and
+  subquery aliases, as Spark's canonicalization does, but not Spark's other rewrites: plans that differ only in the
+  order of commutative operands (`a + b` and `b + a`), in a projection that only renames or repeats the input's
+  columns, or in join hints are not the same in Krishiv and are in Spark. `semantic_hash` values are Krishiv's own
+  (equal for plans `same_semantics` calls equal, within one server), not Spark's. `ddl_parse` refuses the clauses only
+  a table schema takes (`DEFAULT`, `GENERATED`), and its parse errors are those of the text as a data type, where Spark
+  reports the table-schema parse. `spark_version` is the session profile's release line (`4.2.0`).
+- **Config.** Secret-looking keys and values (Spark 4.3's `spark.redaction.regex` default) are hidden for 4.2 sessions
+  too; Spark 4.2 shows them. The pattern is the default only (Spark reads `spark.redaction.regex` from the startup
+  configuration). Krishiv also hides what its own secret classifier finds, where Spark 4.3 shows it: keys such as
+  `fs.azure.account.key.<account>`, `sasl.jaas.config` or `*.apiKey`, and values with credentials in a URL
+  (`postgres://user:password@host`). `set` of a key without a value fails with `INVALID_CONF_VALUE.REQUIREMENT`, and a request without an
+  operation with `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SET`; Spark sends `INTERNAL` without an error class.
+  `is_modifiable` answers `true` for a key outside the engine's registry, where Spark answers `false` for a key it does
+  not know. `get_all` lists a registered key under its Spark name when it has one, else under its `krishiv.*` name.
+  Setting a key the registry marks admin-only answers `KRISHIV_INSUFFICIENT_PERMISSIONS` (42501, gRPC
+  `PERMISSION_DENIED`) for a non-admin role (no role exists before authentication, so the local user is the admin).
+- **Interrupt by tag** fails with `UNSUPPORTED_FEATURE.INTERRUPT_TYPE` until operation tags can be interrupted.

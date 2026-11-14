@@ -28,6 +28,12 @@ Cases whose analyzed plan Spark reports as non-deterministic or clock/environmen
 ordering, content-hashed ids, no randomness); the run fails rather than commit generator-side failures
 or local paths/hostnames.
 
+Spark 3.5.x servers: the 4.x Connect client hangs on a 3.5 server (even `SELECT 1`), so run the generator with a
+matching client (`uv run --no-project --python 3.11 --with "pyspark[connect]==3.5.9" --with "numpy<2"
+--with "pyarrow<17" --with "pandas<2.3" --with "protobuf<5" python tests/scripts/gen_function_matrix.py ...`). 3.5's
+`start-connect-server.sh` daemonizes (no `--wait`) and needs `--packages org.apache.spark:spark-connect_2.12:3.5.9`;
+keep the container alive with `tail -F /opt/spark/logs/*.out`.
+
 Usage (from repo root; take the bench lock, start Spark, stop it afterwards; see bench/README.md):
 
     docker compose -f bench/baselines/docker-compose.yml up -d spark
@@ -65,6 +71,8 @@ QUERY_TIMEOUT_S = 60
 
 # Seeds for registry entries that carry no examples (inputs only; expectations still come from Spark).
 SUPPLEMENTAL_SEEDS = {
+    # An operator without examples on 3.5 (4.x registers `Between` as a function with examples).
+    "between": ["SELECT 0.5 between 0.1 AND 1.0", "SELECT 'b' between 'a' AND 'c'"],
     "bigint": ["SELECT bigint('42')", "SELECT bigint(4.5D)"],
     "binary": ["SELECT binary('abc')"],
     "boolean": ["SELECT boolean('true')", "SELECT boolean(0)"],
@@ -684,13 +692,13 @@ def collect(df, F, types: list[str]) -> tuple[list, list, list | None, str | Non
 
     def arrow(cols):
         try:
-            return df.select(*cols).toArrow()
+            return to_arrow(df.select(*cols))
         except ValueError as e:
             if "non-nullable" not in str(e):
                 raise
             # Spark declared a column non-nullable yet returned NULL (recorded in `schema`); the
             # client's Arrow cast rejects that, so re-select through an opaque nullable wrapper.
-            return df.select(*[F.when(F.rand(0) >= 0, c) for c in cols]).toArrow()
+            return to_arrow(df.select(*[F.when(F.rand(0) >= 0, c) for c in cols]))
 
     try:
         table, typed_reason = arrow([e for e, _ in text] + raw), None
@@ -719,6 +727,15 @@ def collect(df, F, types: list[str]) -> tuple[list, list, list | None, str | Non
         tc = [encode_typed(cols[n + i]) for i in range(n)]
         typed = [list(r) for r in zip(*tc, strict=True)] if n else [[] for _ in range(table.num_rows)]
     return rows, kinds, typed, typed_reason
+
+
+def to_arrow(df):
+    """`DataFrame.toArrow` exists from pyspark 4.0; a 3.5 client (for a 3.5 server) uses the client."""
+    if hasattr(df, "toArrow"):
+        return df.toArrow()
+    client = df._session.client
+    table, _ = client.to_table(df._plan.to_proto(client))
+    return table
 
 
 class Watchdog:
@@ -780,11 +797,19 @@ def run_case(spark, F, sql: str, nondet: bool) -> dict:
     return result
 
 
+# Every created session stays referenced until the process exits. pyspark 3.5's `SparkSession.__del__` calls
+# `client.close()`, which joins the client's reattach thread pool; when the garbage collector runs it inside one
+# of that pool's own worker threads the join waits on itself and the run hangs for good (server idle, client
+# blocked in `to_table`). Kept alive, a session is only finalized at exit, on the main thread.
+_SESSIONS: list = []
+
+
 class Session:
     def __init__(self, remote: str):
         from pyspark.sql import SparkSession
 
         self.spark = SparkSession.builder.remote(remote).create()
+        _SESSIONS.append(self.spark)
         self.conf: dict[str, str] = {}
 
     def apply(self, conf: dict[str, str]):
@@ -844,19 +869,22 @@ def spark_shell(container: str, script: str, data: str = "") -> list[str]:
         subprocess.run(
             ["docker", "exec", "-i", container, "sh", "-c", f"cat > {path}"], input=text, text=True, check=True
         )
-    cmd = [
-        "docker",
-        "exec",
-        container,
-        "sh",
-        "-c",
-        "/opt/spark/bin/spark-shell --master 'local[1]' --driver-memory 2g -I /tmp/krishiv_script.scala "
-        "2>/dev/null; rm -f /tmp/krishiv_script.scala /tmp/krishiv_cases.jsonl",
-    ]
-    out = subprocess.run(cmd, capture_output=True, text=True, timeout=3600, check=True).stdout
-    lines = [line for line in out.splitlines() if line.startswith("@@")]
+    # `-I FILE` runs silently on some releases (4.0.5): then the same script is fed on stdin, where the REPL
+    # prefixes a prompt to some lines (`scala> @@END`).
+    shell = "/opt/spark/bin/spark-shell --master 'local[1]' --driver-memory 2g"
+    for how in (f"{shell} -I /tmp/krishiv_script.scala", f"{shell} < /tmp/krishiv_script.scala"):
+        cmd = ["docker", "exec", container, "sh", "-c", f"{how}; true"]
+        run = subprocess.run(cmd, capture_output=True, text=True, timeout=3600, check=True)
+        out, err = run.stdout, run.stderr
+        lines = [m.group(1) for line in out.splitlines() if (m := re.match(r"^(?:scala> )*(@@.*)$", line))]
+        if "@@END" in lines:
+            break
+    subprocess.run(
+        ["docker", "exec", container, "sh", "-c", "rm -f /tmp/krishiv_script.scala /tmp/krishiv_cases.jsonl"],
+        check=False,
+    )
     if "@@END" not in lines:
-        raise SystemExit("spark-shell script did not complete:\n" + out[-2000:])
+        raise SystemExit("spark-shell script did not complete:\n" + out[-2000:] + "\nstderr:\n" + err[-2000:])
     return lines
 
 
@@ -910,7 +938,14 @@ def self_check(out: Path, by_family: dict) -> None:
         if c[m].get("error", {}).get("error_class", "").startswith(("CLIENT.", "GENERATOR."))
     ]
     if bad:
-        raise SystemExit(f"generator-side failures must not be committed: {bad[:20]}")
+        detail = {}
+        for cases in by_family.values():
+            for c in cases:
+                for m, _ in MODES:
+                    err = c[m].get("error", {})
+                    if f"{c['id']}/{m}" in bad[:3]:
+                        detail[f"{c['id']}/{m}"] = (c.get("sql"), err.get("error_class"), err.get("message", "")[:300])
+        raise SystemExit(f"generator-side failures must not be committed: {bad[:20]}\nfirst three: {detail}")
     leaks = [
         f"{c['id']}/{m}"
         for cases in by_family.values()
@@ -928,6 +963,28 @@ def self_check(out: Path, by_family: dict) -> None:
             hits = [w for w in words if re.search(r"\b" + re.escape(w) + r"\b", text)]
             if hits:
                 raise SystemExit(f"{f}: contains local host/user name {hits}")
+
+
+def pyspark_major() -> int:
+    import pyspark
+
+    return int(pyspark.__version__.split(".")[0])
+
+
+def is_unreadable_type(res: dict) -> bool:
+    """A pyspark 3.x client's failure to read a year-month interval column: `KeyError: 21` (Arrow type id 21)."""
+    err = res.get("error", {})
+    return err.get("error_class") == "CLIENT.KeyError" and err.get("message") == "21"
+
+
+def outcome_of(res: dict) -> str:
+    """What one mode of a case gave, for the manifest's list of cases a 3.x client could not read."""
+    err = res.get("error")
+    if err:
+        return err["error_class"]
+    if "nondeterministic" in res:
+        return "nondeterministic"
+    return "result"
 
 
 def main() -> int:
@@ -962,7 +1019,16 @@ def main() -> int:
     if missing:
         raise SystemExit("every SHOW FUNCTIONS name must be in the registry dump")
     names = shown if not args.only else sorted(set(args.only.split(",")) & set(shown))
-    render_conf = {k: main_session.conf.get(k) for k in RENDER_CONF_KEYS}
+
+    def read_conf(k: str) -> str | None:
+        try:
+            return main_session.conf.get(k)
+        except Exception as e:  # a release that lacks the key (`binaryOutputStyle` is 4.0+): unset there
+            if "SQL_CONF_NOT_FOUND" in str(e):
+                return None
+            raise
+
+    render_conf = {k: read_conf(k) for k in RENDER_CONF_KEYS}
     base_conf = dict(sorted({TZ: BASE_TZ, **{k: v for k, v in render_conf.items() if v is not None}}.items()))
     unset_conf = sorted(k for k, v in render_conf.items() if v is None)
 
@@ -991,20 +1057,25 @@ def main() -> int:
     fn_rows = []
     timeouts = []
     dropped_parse = 0
+    client_unsupported: list[dict] = []
+    old_client = pyspark_major() < 4
     work = Path(args.work) if args.work else None
     if work:
         work.mkdir(parents=True, exist_ok=True)
     for idx, name in enumerate(names):
         fn = by_name[name]
         family = family_of(fn)
-        done = work / (hashlib.sha256(name.encode()).hexdigest()[:16] + ".json") if work else None
+        cache_key = hashlib.sha256(f"{name}|pyspark{pyspark_major()}".encode()).hexdigest()[:16]
+        done = work / (cache_key + ".json") if work else None
         if done and done.exists():
             saved = json.loads(done.read_text(encoding="utf-8"))
             by_family.setdefault(family, []).extend(saved["cases"])
             fn_rows.append(saved["row"])
             dropped_parse += saved["dropped"]
+            client_unsupported.extend(saved.get("client_unsupported", []))
             continue
         dropped_before = dropped_parse
+        unsupported_before = len(client_unsupported)
         cases = planned[name]
         sess = Session(args.remote)
         try:
@@ -1027,6 +1098,31 @@ def main() -> int:
             if ":" in c["kind"] and all(is_parse_error(c[m]) for m, _ in MODES):
                 dropped_parse += 1  # a substitution the parser rejects says nothing about the function
                 continue
+            # Only the one failure a pyspark 3.x client is known to raise for a type it cannot read (the Arrow type
+            # id of a year-month interval, 21, missing from its type table). Any other CLIENT.* error is a generator
+            # defect and is left for self_check to refuse.
+            bad_client = [m for m, _ in MODES if is_unreadable_type(c[m])]
+            generator_failed = any(
+                c[m].get("error", {}).get("error_class", "").startswith(("GENERATOR.", "CLIENT."))
+                and not is_unreadable_type(c[m])
+                for m, _ in MODES
+            )
+            if old_client and bad_client and not generator_failed:
+                # A pyspark 3.x client cannot read some types a 3.5 server returns (e.g. year-month intervals):
+                # that says nothing about Spark, so the case is left out and listed in the manifest, with what each
+                # mode gave (the loader needs both modes of a case, so a half case cannot stay). A generator
+                # failure in the other mode is never hidden this way: self_check still refuses it.
+                err = c[bad_client[0]]["error"]
+                client_unsupported.append(
+                    {
+                        "id": c["id"],
+                        "sql": c["sql"],
+                        "error": err["error_class"],
+                        "message": err["message"],
+                        "modes": {m: outcome_of(c[m]) for m, _ in MODES},
+                    }
+                )
+                continue
             if c["ansi_off"] == c["ansi_on"]:
                 c["ansi_off"] = {"same_as": "ansi_on"}
             kept.append(c)
@@ -1047,7 +1143,13 @@ def main() -> int:
         if done:
             done.write_text(
                 json.dumps(
-                    {"cases": cases, "row": fn_rows[-1], "dropped": dropped_parse - dropped_before}, ensure_ascii=False
+                    {
+                        "cases": cases,
+                        "row": fn_rows[-1],
+                        "dropped": dropped_parse - dropped_before,
+                        "client_unsupported": client_unsupported[unsupported_before:],
+                    },
+                    ensure_ascii=False,
                 ),
                 encoding="utf-8",
             )
@@ -1097,6 +1199,11 @@ def main() -> int:
         "families": families,
         "functions": fn_rows,
     }
+    if client_unsupported:
+        for d in client_unsupported:
+            if LOCAL_PATH.search(d["message"]) or LOCAL_PATH.search(d["sql"]):
+                raise SystemExit(f"{d['id']}: a local path in the client-unsupported list")
+        manifest["dropped_client_unsupported"] = sorted(client_unsupported, key=lambda d: d["id"])
     write_json(out / "manifest.json", manifest)
     self_check(out, by_family)
     print(

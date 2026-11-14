@@ -980,6 +980,48 @@ pub fn is_store_option(key: &str) -> bool {
     key.len() > 3 && key.as_bytes()[..3].eq_ignore_ascii_case(b"fs.")
 }
 
+/// Whether `key` is a store option that only a principal with `Manage` on the cluster may set
+/// in server mode, per read, on a table or in a session (P3-T067b). That is every `fs.*` key
+/// except the inline credentials that only authenticate (access keys, secrets, session tokens,
+/// Azure keys and SAS tokens, the Hugging Face token). The others choose where a store connects
+/// (endpoints, regions, accounts, proxies; the inline GCS service-account JSON too, whose
+/// `gcs_base_url` object_store follows) or which local file it opens (key files), and a store
+/// built from them could send the server's own credentials, or its requests, elsewhere.
+/// Matched ASCII case-insensitively, as the stores look keys up.
+#[must_use]
+pub fn is_server_scoped_option(key: &str) -> bool {
+    is_store_option(key) && !is_inline_credential_key(key)
+}
+
+/// A credential given inline that only authenticates: it chooses no host and no file. (A GCS
+/// key file names a file; the inline GCS JSON can name a host.)
+fn is_inline_credential_key(key: &str) -> bool {
+    (is_credential_key(key)
+        && !key.eq_ignore_ascii_case(GCS_KEYFILE)
+        && !key.eq_ignore_ascii_case(GCS_KEY))
+        || key.eq_ignore_ascii_case(HF_TOKEN)
+}
+
+/// Checks an S3 region before object_store formats it into the S3 and STS host names
+/// (`sts.{region}.amazonaws.com`): lower-case letters, digits and `-`, at most 32 bytes, so no
+/// region can name another host.
+#[cfg(feature = "cloud")]
+fn checked_region(key: &str, region: String) -> Result<String> {
+    let valid = !region.is_empty()
+        && region.len() <= 32
+        && region
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    if valid {
+        return Ok(region);
+    }
+    Err(invalid_option(
+        key,
+        "an S3 region holds only lower-case letters, digits and `-` (at most 32)",
+    )
+    .into())
+}
+
 /// Finds `key` in the per-read `options`, ASCII case-insensitively.
 #[cfg(feature = "cloud")]
 fn find_option<'a>(
@@ -1276,10 +1318,10 @@ fn s3_store(
             builder = builder.with_token(token.expose_secret());
         }
     }
-    if let Some(region) =
-        text(config, options, S3_ENDPOINT_REGION)?.or(text(config, options, S3_REGION)?)
-    {
-        builder = builder.with_region(region);
+    if let Some(region) = text(config, options, S3_ENDPOINT_REGION)? {
+        builder = builder.with_region(checked_region(S3_ENDPOINT_REGION, region)?);
+    } else if let Some(region) = text(config, options, S3_REGION)? {
+        builder = builder.with_region(checked_region(S3_REGION, region)?);
     }
     if let Some(path_style) = path_style {
         builder = builder.with_virtual_hosted_style_request(!path_style);

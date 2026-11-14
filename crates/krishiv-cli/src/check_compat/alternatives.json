@@ -1,9 +1,19 @@
 {
+ "approx_top_k": "exact top k, one row per value: SELECT x, count(*) AS c FROM t GROUP BY x ORDER BY c DESC LIMIT k (a full count, not a sketch)",
+ "histogram_numeric": "GROUP BY width_bucket(col, min, max, n) with count(*) gives equal-width bucket counts (bucket numbers, not bin centres; col = max lands in bucket n+1); Spark's adaptive bins are not reproduced",
  "hll_sketch_agg": "approx_count_distinct(expr) returns the estimate directly; serialized HyperLogLog sketches are not available",
  "hll_sketch_estimate": "approx_count_distinct(expr) over the raw column returns the estimate; serialized HyperLogLog sketches are not available",
  "java_method": "Krishiv has no JVM to call into; register a UDF instead (see the Native Rust UDFs reference)",
+ "kll_sketch_agg_bigint": "percentile_approx(col, p) returns the quantile directly; serialized KLL sketches are not available",
+ "kll_sketch_agg_double": "percentile_approx(col, p) returns the quantile directly; serialized KLL sketches are not available",
+ "kll_sketch_agg_float": "percentile_approx(col, p) returns the quantile directly; serialized KLL sketches are not available",
+ "kll_sketch_get_quantile_bigint": "percentile_approx(col, p) over the raw column returns the quantile; serialized KLL sketches are not available",
+ "kll_sketch_get_quantile_double": "percentile_approx(col, p) over the raw column returns the quantile; serialized KLL sketches are not available",
+ "kll_sketch_get_quantile_float": "percentile_approx(col, p) over the raw column returns the quantile; serialized KLL sketches are not available",
  "reflect": "Krishiv has no JVM to call into; register a UDF instead (see the Native Rust UDFs reference)",
+ "sentences": "for the words of one sentence: regexp_extract_all(str, '[A-Za-z0-9_]+', 0); Spark's sentence and word break rules are not reproduced",
  "theta_sketch_agg": "approx_count_distinct(expr) returns a distinct-count estimate; Theta sketches are not available",
  "theta_sketch_estimate": "approx_count_distinct(expr) over the raw column returns a distinct-count estimate; Theta sketches are not available",
- "try_reflect": "Krishiv has no JVM to call into; register a UDF instead (see the Native Rust UDFs reference)"
+ "try_reflect": "Krishiv has no JVM to call into; register a UDF instead (see the Native Rust UDFs reference)",
+ "window": "tumbling windows, start only and whole seconds: group by timestamp_seconds(floor(unix_timestamp(ts) / N) * N) for N seconds; no window struct or end column"
 }
