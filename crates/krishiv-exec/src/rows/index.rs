@@ -135,7 +135,7 @@ const SALTED_LOAD_DEN: usize = 5;
 
 /// Slots of a salted directory for `n` keys at load ≤ 4/5.
 fn salted_slots(n: usize) -> usize {
-    n.saturating_add(n / SALTED_LOAD_NUM)
+    n.saturating_add(n.div_ceil(SALTED_LOAD_NUM))
         .checked_next_power_of_two()
         .unwrap_or(usize::MAX)
         .max(MIN_SLOTS)
@@ -492,7 +492,8 @@ fn grow_salted(old: &[u64], g: impl Fn(u32) -> u64) -> Result<Vec<u64>> {
 /// its salt, so their cache misses overlap before the chunk is resolved in
 /// order. It reads only the first slot: on a probe that mostly misses the salt
 /// test is well predicted, where walking the run takes the `s == 0` branch a
-/// second time, about even at load 1/2 (TPC-DS q72). An empty slot of salt 0
+/// second time, about even at load 1/2 (TPC-DS q72; measured before the
+/// directory moved to load up to 4/5). An empty slot of salt 0
 /// prefetches row 0, a harmless hint.
 fn prefetch_chunk(slots: &[u64], gs: &[u64], src: &impl RowSource) {
     let mask = slots.len() - 1;
