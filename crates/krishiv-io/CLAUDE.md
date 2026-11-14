@@ -44,6 +44,7 @@ Paths are relative to this crate.
 - `src/stats.rs` statistics and sound pruning (`TriState`); `src/split.rs` Spark split planner
 - `src/scan.rs` `ScanStream`; `src/write.rs` `FileWriter`; `src/commit.rs` save modes and `_SUCCESS`
 - `src/io/mod.rs` `IoContext` and `IoScheduler`, the only path to object stores; `src/io/cache.rs` metadata cache; `src/io/latency.rs` (P2-T104) the remote-store read-latency histogram (power-of-two µs buckets) in `IoCounters::read_latency`; `src/io/distinct_samples.rs` (P2-T164 U6) the planner's distinct-value samples of file columns, keyed by the sampled files' `CacheKey`s (versions), the column and the row budget, bounded in entries (`IoScheduler::distinct_samples`)
+- `src/io/inferred.rs` `InferredSchemas`: the schemas formats inferred, per format, parsed options and file keys (store, path, size, version), next to the metadata cache, so a later query over the same file versions does not infer again (CSV/JSON `inferSchema` reads every row); bounded in file keys, oldest first; exec's `FileReads` goes through `infer_schema_cached`
 - `src/schema_map.rs` `SchemaMapper`; `src/options.rs` typed format options
 - `src/runtime_filter/mod.rs` runtime filters and their key normalization
 - `src/parquet/mod.rs` `ParquetFormat`; `src/parquet/decode.rs` and `write.rs` the reader and writer

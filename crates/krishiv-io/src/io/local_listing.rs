@@ -53,6 +53,9 @@ const STORE: &str = "SettledLocalFileSystem";
 #[derive(Debug, Default)]
 pub struct SettledLocalFileSystem {
     inner: LocalFileSystem,
+    /// Server-mode confinement (ADR 0046 §3a): a listing that meets a link whose target lies
+    /// outside every one of these (canonical) directories fails instead of following it.
+    roots: Option<Arc<[PathBuf]>>,
 }
 
 impl SettledLocalFileSystem {
@@ -60,6 +63,18 @@ impl SettledLocalFileSystem {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A store whose listings never follow a link out of `roots` (canonical directories, as
+    /// `std::fs::canonicalize` gives them): a glob or directory read below a root that meets
+    /// such a link fails with a permission error, so a link planted inside a root cannot
+    /// expose files outside it. Paths themselves are checked by the access policy.
+    #[must_use]
+    pub fn confined(roots: Vec<PathBuf>) -> Self {
+        Self {
+            inner: LocalFileSystem::default(),
+            roots: Some(roots.into()),
+        }
     }
 }
 
@@ -128,6 +143,7 @@ fn gone(e: &std::io::Error) -> bool {
 /// scheduler retries after a wait. `cancelled` ends the walk with an error too.
 fn walk_with(
     root: &FsPath,
+    roots: Option<&[PathBuf]>,
     cancelled: &AtomicBool,
     mut between: impl FnMut(),
 ) -> StoreResult<Vec<ObjectMeta>> {
@@ -135,7 +151,7 @@ fn walk_with(
     let mut vanished = false;
     for _ in 0..SETTLE_PASSES {
         out.clear();
-        let pass = walk_once(root, cancelled, &mut between, &mut out)?;
+        let pass = walk_once(root, roots, cancelled, &mut between, &mut out)?;
         if !pass.vanished && !pass.moved {
             return Ok(out);
         }
@@ -158,6 +174,7 @@ fn walk_with(
 /// left out, and a directory that cannot be read is an error.
 fn walk_once(
     root: &FsPath,
+    roots: Option<&[PathBuf]>,
     cancelled: &AtomicBool,
     between: &mut impl FnMut(),
     out: &mut Vec<ObjectMeta>,
@@ -228,6 +245,18 @@ fn walk_once(
                 Err(e) if file_type.is_dir() => return Err(io_err(e)),
                 Err(_) => continue,
             };
+            if file_type.is_symlink()
+                && let Some(roots) = roots
+                && !std::fs::canonicalize(&path)
+                    .is_ok_and(|t| roots.iter().any(|r| t.starts_with(r)))
+            {
+                // The link's name is not shown: which entries lead out of the roots is not the
+                // reader's to learn.
+                return Err(io_err(std::io::Error::new(
+                    ErrorKind::PermissionDenied,
+                    "the listing met a link out of the allowed roots",
+                )));
+            }
             if m.is_dir() {
                 if file_type.is_symlink() && above.contains(&id_of(&m)) {
                     return Err(io_err(std::io::Error::other(format!(
@@ -414,7 +443,8 @@ impl ObjectStore for SettledLocalFileSystem {
         };
         let cancelled = Arc::new(AtomicBool::new(false));
         let guard = CancelOnDrop(Arc::clone(&cancelled));
-        let walk = move || walk_with(&root, &cancelled, || {});
+        let roots = self.roots.clone();
+        let walk = move || walk_with(&root, roots.as_deref(), &cancelled, || {});
         futures::stream::once(async move {
             let _guard = guard;
             match tokio::runtime::Handle::try_current() {
@@ -463,7 +493,7 @@ mod tests {
     use super::*;
 
     fn names(dir: &FsPath, between: impl FnMut()) -> Vec<String> {
-        let mut out: Vec<String> = walk_with(dir, &AtomicBool::new(false), between)
+        let mut out: Vec<String> = walk_with(dir, None, &AtomicBool::new(false), between)
             .unwrap()
             .into_iter()
             .map(|m| m.location.filename().unwrap().to_owned())
@@ -624,7 +654,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("f0"), b"1").unwrap();
         let mut n = 0;
-        let e = walk_with(tmp.path(), &AtomicBool::new(false), || {
+        let e = walk_with(tmp.path(), None, &AtomicBool::new(false), || {
             std::fs::write(tmp.path().join(format!("f{}", n + 1)), b"1").unwrap();
             std::fs::remove_file(tmp.path().join(format!("f{n}"))).unwrap();
             n += 1;
@@ -641,7 +671,7 @@ mod tests {
         std::fs::write(tmp.path().join("a"), b"1").unwrap();
         let cancelled = Arc::new(AtomicBool::new(false));
         drop(CancelOnDrop(Arc::clone(&cancelled)));
-        let e = walk_with(tmp.path(), &cancelled, || {}).unwrap_err();
+        let e = walk_with(tmp.path(), None, &cancelled, || {}).unwrap_err();
         assert!(e.to_string().contains("dropped"), "{e}");
     }
 
@@ -650,7 +680,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("f"), b"1").unwrap();
         std::os::unix::fs::symlink(tmp.path().join("f/x"), tmp.path().join("l")).unwrap();
-        walk_with(tmp.path(), &AtomicBool::new(false), || {}).unwrap_err();
+        walk_with(tmp.path(), None, &AtomicBool::new(false), || {}).unwrap_err();
     }
 
     #[test]
@@ -677,7 +707,7 @@ mod tests {
         // A directory is an error.
         std::fs::create_dir(shut.join("sub")).unwrap();
         mode(0o444);
-        let walked = walk_with(tmp.path(), &AtomicBool::new(false), || {});
+        let walked = walk_with(tmp.path(), None, &AtomicBool::new(false), || {});
         mode(0o755);
         walked.unwrap_err();
     }
@@ -712,7 +742,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir(tmp.path().join("d")).unwrap();
         std::os::unix::fs::symlink(tmp.path(), tmp.path().join("d/up")).unwrap();
-        let e = walk_with(tmp.path(), &AtomicBool::new(false), || {}).unwrap_err();
+        let e = walk_with(tmp.path(), None, &AtomicBool::new(false), || {}).unwrap_err();
         assert!(e.to_string().contains("a link back"), "{e}");
     }
 
@@ -939,5 +969,47 @@ mod range_read_tests {
             .expect("inline")
             .unwrap();
         assert_eq!(&got[1][..], &data[4..8]);
+    }
+
+    /// A confined store's listing fails at a link out of its roots (file or directory, met
+    /// directly or below a directory) and follows links that stay inside them.
+    #[cfg(unix)]
+    #[test]
+    fn a_confined_walk_refuses_links_out_of_its_roots() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(tmp.path()).unwrap();
+        let root = base.join("root");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(root.join("inner")).unwrap();
+        std::fs::create_dir_all(outside.join("k=1")).unwrap();
+        std::fs::write(root.join("inner/a.csv"), "1").unwrap();
+        std::fs::write(outside.join("k=1/s.csv"), "3").unwrap();
+        std::os::unix::fs::symlink(root.join("inner"), root.join("in_link")).unwrap();
+        let roots = [root.clone()];
+        let walk = |dir: &FsPath| walk_with(dir, Some(&roots), &AtomicBool::new(false), || {});
+        assert_eq!(
+            walk(&root).unwrap().len(),
+            2,
+            "a link inside the root is followed"
+        );
+
+        std::os::unix::fs::symlink(outside.join("k=1"), root.join("k=1")).unwrap();
+        let e = walk(&root).unwrap_err();
+        assert!(
+            e.to_string().contains("a link out of the allowed roots"),
+            "{e}"
+        );
+        assert!(!e.to_string().contains("k=1"), "the link is not named: {e}");
+        std::fs::remove_file(root.join("k=1")).unwrap();
+
+        std::os::unix::fs::symlink(outside.join("k=1/s.csv"), root.join("inner/s.csv")).unwrap();
+        assert!(walk(&root).is_err(), "a file link out of the root");
+        assert!(
+            walk(&root.join("inner")).is_err(),
+            "met below the listed directory too"
+        );
+        // Unconfined, the same tree lists the linked file.
+        let all = walk_with(&root, None, &AtomicBool::new(false), || {}).unwrap();
+        assert_eq!(all.len(), 4);
     }
 }

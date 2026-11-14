@@ -12,6 +12,8 @@ pub struct DataFrameWriter {
     pub(super) format: String,
     pub(super) mode: String,
     pub(super) options: BTreeMap<String, OptionValue>,
+    /// The stored options of the table this writer writes (`table_options`).
+    pub(super) table_options: BTreeMap<String, OptionValue>,
     pub(super) partition_by: Vec<String>,
     /// `bucketBy`: the bucket count and columns.
     pub(super) bucket_by: Option<(i32, Vec<String>)>,
@@ -23,6 +25,13 @@ pub struct DataFrameWriter {
 }
 
 impl DataFrameWriter {
+    /// Marks every option set so far as the stored options of the table written: not asked
+    /// about again by the write's access check (they were when they were stored, P3-T067b).
+    pub(crate) fn options_are_the_tables(mut self) -> Self {
+        self.table_options = self.options.clone();
+        self
+    }
+
     /// What to do when the path exists (Spark's save modes, ASCII
     /// case-insensitive): `errorifexists` (also `error`, `default`; the
     /// default) fails with `PATH_ALREADY_EXISTS`, `ignore` writes nothing,
@@ -159,6 +168,7 @@ impl DataFrameWriter {
             mode: self.mode,
             path: OptionValue::from_user("path", path),
             options: self.options,
+            table_options: self.table_options,
             partition_by: self.partition_by,
         };
         let df = self.df;

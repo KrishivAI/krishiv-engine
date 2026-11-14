@@ -1554,6 +1554,7 @@ impl DataFrame {
             format: "parquet".to_owned(),
             mode: "error".to_owned(),
             options: BTreeMap::new(),
+            table_options: BTreeMap::new(),
             partition_by: Vec::new(),
             bucket_by: None,
             sort_by: None,
@@ -1842,8 +1843,18 @@ impl GroupedData {
     /// ```
     #[must_use]
     pub fn agg(&self, aggregates: impl IntoIterator<Item = Column>) -> DataFrame {
-        let keys: Vec<Arc<Expr>> = self.keys.iter().cloned().map(Arc::new).collect();
-        let mut output = keys.clone();
+        use krishiv_plan::ExprNode;
+        // The output keeps `expr AS name`; the grouping expressions are the bare
+        // `expr`, as `GROUP BY expr` in SQL: an alias is not an input column.
+        let mut output: Vec<Arc<Expr>> = self.keys.iter().cloned().map(Arc::new).collect();
+        let keys: Vec<Arc<Expr>> = self
+            .keys
+            .iter()
+            .map(|k| match &k.node {
+                ExprNode::Alias { expr, .. } => Arc::clone(expr),
+                _ => Arc::new(k.clone()),
+            })
+            .collect();
         output.extend(aggregates.into_iter().map(|c| Arc::new(c.expr)));
         let grouping = match &self.sets {
             Sets::GroupBy => Grouping::GroupBy(keys),

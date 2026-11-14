@@ -54,6 +54,10 @@ impl DataFrame {
                     a.env.statement_class,
                     self.session.operation_id(),
                 );
+                self.session
+                    .state
+                    .queries
+                    .add_request_tags(&id, &self.session.request_tags);
                 *a.env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
                 let replayed = crate::result_cache::replay(batches);
                 return Ok(if edge {

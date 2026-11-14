@@ -17,6 +17,14 @@ use krishiv_types::{DataType, DayTimeField, Metadata, StructField, YearMonthFiel
 /// # Errors
 /// The error of a field whose Spark type cannot be read.
 pub fn proto_schema(schema: &Schema) -> Result<pb::DataType, KrishivError> {
+    proto_type(&DataType::Struct(spark_schema(schema)?))
+}
+
+/// The result schema as Spark's `StructType`.
+///
+/// # Errors
+/// The error of a field whose Spark type cannot be read.
+pub fn spark_schema(schema: &Schema) -> Result<krishiv_types::StructType, KrishivError> {
     let fields = schema
         .fields()
         .iter()
@@ -31,7 +39,7 @@ pub fn proto_schema(schema: &Schema) -> Result<pb::DataType, KrishivError> {
             Ok(StructField::new(f.name(), t, f.is_nullable()).with_metadata(metadata))
         })
         .collect::<Result<Vec<_>, KrishivError>>()?;
-    proto_type(&DataType::Struct(krishiv_types::StructType::new(fields)))
+    Ok(krishiv_types::StructType::new(fields))
 }
 
 fn kind(kind: Kind) -> pb::DataType {

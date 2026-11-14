@@ -31,6 +31,9 @@ use crate::session::RecordBatchStream;
 pub(crate) struct Who {
     pub(crate) session_id: String,
     pub(crate) trace_id: Option<String>,
+    /// The caller's span the trace came with: the spans below are its children.
+    #[cfg(feature = "telemetry-otlp")]
+    pub(crate) remote: Option<crate::system::RemoteParent>,
     pub(crate) principal: String,
     pub(crate) tenant: Option<String>,
 }
@@ -39,9 +42,13 @@ impl Who {
     /// The identity of `state`'s session at this moment (the trace context can change between
     /// statements).
     pub(crate) fn of(state: &crate::session::SessionState) -> Self {
+        // One read: the trace id and the remote parent come from the same trace.
+        let trace = state.queries.trace();
         Self {
             session_id: state.session_id.clone(),
-            trace_id: state.queries.trace_id(),
+            trace_id: trace.as_ref().map(|t| t.trace_id.clone()),
+            #[cfg(feature = "telemetry-otlp")]
+            remote: trace,
             principal: state.principal.name.clone(),
             tenant: state.principal.tenant.clone(),
         }
@@ -59,7 +66,31 @@ impl Who {
         if let Some(t) = &self.trace_id {
             span.record("krishiv.trace_id", t.as_str());
         }
+        #[cfg(feature = "telemetry-otlp")]
+        if let Some(remote) = &self.remote {
+            use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+            if let Some(ctx) = remote_context(remote) {
+                // Best effort: without an OpenTelemetry layer this does nothing.
+                let _ = span.set_parent(ctx);
+            }
+        }
     }
+}
+
+/// The OpenTelemetry context of a caller's span, so the engine's span joins the caller's trace.
+#[cfg(feature = "telemetry-otlp")]
+fn remote_context(remote: &crate::system::RemoteParent) -> Option<opentelemetry::Context> {
+    use opentelemetry::trace::{
+        SpanContext, SpanId, TraceContextExt as _, TraceFlags, TraceId, TraceState,
+    };
+    let span_context = SpanContext::new(
+        TraceId::from_hex(&remote.trace_id).ok()?,
+        SpanId::from_hex(&remote.span_id).ok()?,
+        TraceFlags::new(remote.flags),
+        true,
+        TraceState::default(),
+    );
+    Some(opentelemetry::Context::new().with_remote_span_context(span_context))
 }
 
 /// What a span says about one statement. The attributes are built when the
@@ -328,6 +359,8 @@ mod tests {
             let span = plain_span(&Who {
                 session_id: "s".to_owned(),
                 trace_id: None,
+                #[cfg(feature = "telemetry-otlp")]
+                remote: None,
                 principal: "p".to_owned(),
                 tenant: None,
             });

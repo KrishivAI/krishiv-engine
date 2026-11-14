@@ -1,0 +1,11 @@
+{
+  "cases": {
+    "parser-pipe-collate": [
+      5,
+      6,
+      7
+    ]
+  },
+  "file": "listagg-collations",
+  "format_version": 1
+}

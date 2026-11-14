@@ -24,7 +24,7 @@ fn peer(last: u8) -> SocketAddr {
 }
 
 /// A secret file with `contents` and `mode`.
-fn secret_file(dir: &Path, name: &str, contents: &str, mode: u32) -> String {
+pub(super) fn secret_file(dir: &Path, name: &str, contents: &str, mode: u32) -> String {
     let path = dir.join(name);
     let mut f = std::fs::File::create(&path).unwrap();
     f.write_all(contents.as_bytes()).unwrap();

@@ -442,7 +442,11 @@ macro_rules! builder_as {
 
 /// Appends `scalar` `rows` times. Struct builders need an entry per child for every row, null
 /// rows included; list and map builders do not.
-fn append_scalar(scalar: &Scalar, builder: &mut dyn ArrayBuilder, rows: usize) -> KernelResult<()> {
+pub(crate) fn append_scalar(
+    scalar: &Scalar,
+    builder: &mut dyn ArrayBuilder,
+    rows: usize,
+) -> KernelResult<()> {
     let what = &scalar.data_type();
     match scalar {
         Scalar::Integer(v) | Scalar::IntervalYearMonth(v) => {
