@@ -56,6 +56,46 @@ fn principal_of<T>(request: &Request<T>, default: &Principal) -> Principal {
         .unwrap_or_else(|| default.clone())
 }
 
+/// The trace headers of a request (`traceparent`, `baggage`): untrusted text, read once before
+/// the request body is taken (a non-ASCII value is no header at all).
+struct Inbound {
+    traceparent: Option<String>,
+    baggage: Option<String>,
+}
+
+impl Inbound {
+    fn of(metadata: &tonic::metadata::MetadataMap) -> Self {
+        let text = |name: &str| {
+            metadata
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned)
+        };
+        Self {
+            traceparent: text("traceparent"),
+            baggage: text("baggage"),
+        }
+    }
+}
+
+/// Tells the engine session who is calling (`system.sessions`: transport, client type, user) and,
+/// for a request that runs a query, which trace it belongs to: the session's next queries carry
+/// the request's `traceparent` and `baggage` (a request without a `traceparent` clears an earlier
+/// one; a malformed one is ignored, never an error, design P3-T068). Client-asserted: shown, never
+/// used as an identity.
+fn observe(entry: &SessionEntry, client_type: Option<&str>, inbound: Option<&Inbound>) {
+    let session = entry.session();
+    if let Some(inbound) = inbound {
+        session.set_inbound_trace(inbound.traceparent.as_deref(), inbound.baggage.as_deref());
+    }
+    session.set_client_info(
+        krishiv_session::Transport::Connect,
+        client_type,
+        Some(entry.client_user_id()),
+        Some(entry.server_side_id()),
+    );
+}
+
 /// Krishiv's Spark Connect service over a [`SessionManager`].
 #[derive(Debug)]
 pub struct ConnectService {
@@ -156,6 +196,7 @@ impl SparkConnectService for ConnectService {
     ) -> Result<Response<Self::ExecutePlanStream>, Status> {
         self.admit()?;
         let principal = principal_of(&request, &self.local);
+        let inbound = Inbound::of(request.metadata());
         let request = request.into_inner();
         let entry = self.session(
             &principal,
@@ -163,6 +204,7 @@ impl SparkConnectService for ConnectService {
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
+        observe(&entry, request.client_type.as_deref(), Some(&inbound));
         // An abandoned id is refused (Spark's `createExecuteHolder`, v4.3.0
         // lines 105-120); a live one is attached to by `execute_plan`.
         if let Some(id) = &request.operation_id
@@ -189,6 +231,7 @@ impl SparkConnectService for ConnectService {
     ) -> Result<Response<pb::AnalyzePlanResponse>, Status> {
         self.admit()?;
         let principal = principal_of(&request, &self.local);
+        let inbound = Inbound::of(request.metadata());
         let request = request.into_inner();
         let entry = self.session(
             &principal,
@@ -196,6 +239,7 @@ impl SparkConnectService for ConnectService {
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
+        observe(&entry, request.client_type.as_deref(), Some(&inbound));
         analyze::analyze_plan(&entry, &request, &self.limits)
             .await
             .map(Response::new)
@@ -217,6 +261,7 @@ impl SparkConnectService for ConnectService {
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
+        observe(&entry, request.client_type.as_deref(), None);
         config::config(&entry, &request, &principal, config::role_of(&principal))
             .map(Response::new)
             .map_err(|e| status_of(&e))
@@ -251,6 +296,7 @@ impl SparkConnectService for ConnectService {
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
+        observe(&entry, request.client_type.as_deref(), None);
         interrupt::interrupt(&entry, &request)
             .map(Response::new)
             .map_err(|e| status_of(&e))
