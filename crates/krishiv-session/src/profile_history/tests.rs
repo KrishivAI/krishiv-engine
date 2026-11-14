@@ -610,11 +610,11 @@ fn a_dropped_file_write_is_recorded_cancelled_or_finished_never_lost_or_doubled(
     let session = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
     let mut recorded_writes = 0;
     for polls in (0..40_u64).step_by(3) {
-        let df = block_on(session.sql("SELECT id FROM range(0, 10)")).unwrap();
+        let df = block_on(session.sql("SELECT id FROM range(0, 50000000)")).unwrap();
         let target = out.path().join(format!("t{polls}"));
         let mut write = Box::pin(df.write().parquet(target.to_str().unwrap()));
-        // Poll `polls` times, a millisecond apart, then drop the future wherever it stands.
-
+        // Poll `polls` times, a millisecond apart, then drop the future wherever it stands. 50 million rows take
+        // longer than any poll count here, so a drop always catches the query in flight.
         for _ in 0..polls {
             if write.as_mut().now_or_never().is_some() {
                 break;
