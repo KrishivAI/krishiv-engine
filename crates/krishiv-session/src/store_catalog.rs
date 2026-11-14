@@ -396,47 +396,49 @@ impl CatalogWrite for StoreCatalog {
     ) -> BoxFuture<'a, Result<(), KrishivError>> {
         Box::pin(async move {
             let name = self.namespace(namespace)?;
-            let checked = if cascade {
+            // The directories to delete are decided here, once, before the metadata changes, and
+            // are the only ones deleted after it: `drop_namespace_matching` drops only if the
+            // namespace still holds exactly these entries, so nothing found later (a table made
+            // again meanwhile, a directory that appeared) can be deleted.
+            let (checked, dirs) = if cascade {
                 let held = self.store.tables_in(&name);
+                let mut dirs = Vec::new();
                 for table in &held {
-                    deletable_dir(table)?;
+                    dirs.extend(deletable_dir(table)?);
                 }
-                Some(held)
+                (Some(held), dirs)
             } else {
-                None
+                (None, Vec::new())
             };
-            let tables =
-                match self
-                    .store
-                    .drop_namespace_matching(&name, cascade, checked.as_deref())
-                {
-                    Ok(tables) => tables,
-                    Err(DropNamespaceError::Missing) => {
-                        return Err(SchemaNotFound {
-                            schema_name: format!("`{name}`"),
-                        }
-                        .into());
+            match self
+                .store
+                .drop_namespace_matching(&name, cascade, checked.as_deref())
+            {
+                Ok(_dropped) => {}
+                Err(DropNamespaceError::Missing) => {
+                    return Err(SchemaNotFound {
+                        schema_name: format!("`{name}`"),
                     }
-                    Err(DropNamespaceError::NotEmpty) => {
-                        return Err(SchemaNotEmpty {
-                            schema_name: format!("`{name}`"),
-                        }
-                        .into());
+                    .into());
+                }
+                Err(DropNamespaceError::NotEmpty) => {
+                    return Err(SchemaNotEmpty {
+                        schema_name: format!("`{name}`"),
                     }
-                    Err(DropNamespaceError::Default) => {
-                        return Err(self.unsupported("dropping the default namespace"));
-                    }
-                    Err(DropNamespaceError::Changed) => {
-                        return Err(internal(format!(
-                            "`{name}` was changed by another statement while this one ran; retry"
-                        )));
-                    }
-                };
+                    .into());
+                }
+                Err(DropNamespaceError::Default) => {
+                    return Err(self.unsupported("dropping the default namespace"));
+                }
+                Err(DropNamespaceError::Changed) => {
+                    return Err(internal(format!(
+                        "`{name}` was changed by another statement while this one ran; retry"
+                    )));
+                }
+            };
             let mut first = None;
-            for table in &tables {
-                let removed =
-                    deletable_dir(table).and_then(|dir| dir.map_or(Ok(()), |dir| remove_dir(&dir)));
-                if let Err(e) = removed {
+            for dir in &dirs {
+                if let Err(e) = remove_dir(dir) {
                     first.get_or_insert(e);
                 }
             }
@@ -1296,6 +1298,45 @@ mod tests {
         assert!(block_on(c.create_table(info("db", "t"), CreateMode::ErrorIfExists)).is_err());
         assert!(!block_on(c.create_table(info("db", "t"), CreateMode::IgnoreIfExists)).unwrap());
         assert!(dir.join("keep").exists());
+    }
+
+    #[test]
+    fn a_cascading_namespace_drop_deletes_exactly_the_directories_it_checked() {
+        let f = fixture();
+        let c = &f.catalog;
+        block_on(c.create_namespace(&ns("db"), NamespaceInfo::default())).unwrap();
+        block_on(c.create_table(info("db", "m"), CreateMode::ErrorIfExists)).unwrap();
+        block_on(c.create_table(info("db", "gone"), CreateMode::ErrorIfExists)).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let mut external = info("db", "ext");
+        external.location = Some(outside.path().display().to_string());
+        block_on(c.create_table(external, CreateMode::ErrorIfExists)).unwrap();
+        std::fs::write(outside.path().join("f"), b"x").unwrap();
+        let managed = managed_location(f.warehouse.path(), "db", "m");
+        std::fs::write(managed.join("part"), b"x").unwrap();
+        // One managed table's directory is already gone: nothing is looked up for it afterwards.
+        let gone = managed_location(f.warehouse.path(), "db", "gone");
+        std::fs::remove_dir_all(&gone).unwrap();
+
+        block_on(c.drop_namespace(&ns("db"), true)).unwrap();
+        assert!(!c.store.has_namespace("db"));
+        assert!(
+            !managed.exists(),
+            "a managed table's files go with the namespace"
+        );
+        assert!(
+            outside.path().join("f").exists(),
+            "an external table's never"
+        );
+        assert!(!gone.exists());
+        // A directory made at a dropped table's path after the checks is not deleted by this call: the
+        // set to delete was fixed first (here, a namespace dropped without cascade deletes nothing).
+        block_on(c.create_namespace(&ns("db"), NamespaceInfo::default())).unwrap();
+        block_on(c.create_table(info("db", "n"), CreateMode::ErrorIfExists)).unwrap();
+        let kept = managed_location(f.warehouse.path(), "db", "n");
+        let e = block_on(c.drop_namespace(&ns("db"), false)).unwrap_err();
+        assert_eq!(class(&e), ErrorClass::SchemaNotEmpty);
+        assert!(kept.is_dir() && c.store.table("db", "n").is_some());
     }
 
     #[test]
