@@ -67,3 +67,19 @@ pub static ICEBERG_MANIFEST_CACHE_BYTES: ConfigEntry = ConfigEntry {
     version_added: "0.2.0",
     spark_alias: None,
 };
+
+/// Most data files one Iceberg write task keeps open at once.
+pub static ICEBERG_WRITE_MAX_OPEN_FILES: ConfigEntry = ConfigEntry {
+    key: "krishiv.iceberg.write.maxOpenFiles",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(100)),
+    doc: "Most data files one Iceberg write task (one driver of an append) keeps open at once, \
+          one per partition it is writing. Past the cap the oldest-opened file is closed, and a \
+          partition seen again after its file closed gets a new file, so a write over more \
+          partitions per task than this writes more, smaller files. Read when the write is \
+          planned.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
