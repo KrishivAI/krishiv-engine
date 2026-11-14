@@ -33,6 +33,7 @@ session = ["dep:krishiv-session", "dep:krishiv-common", "dep:arrow-array", "dep:
 [dev-dependencies]
 krishiv-session = { path = "../krishiv-session" }
 krishiv-exec = { path = "../krishiv-exec" }
+tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "macros", "time"] }
 
 [lints]

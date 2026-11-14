@@ -180,6 +180,16 @@ impl fmt::Debug for FormatOptions {
     }
 }
 
+impl FormatOptions {
+    /// Whether `other` reads as these options do: the same format and the
+    /// same values (session fallbacks included) and ignored options.
+    pub(crate) fn same_read(&self, other: &Self) -> bool {
+        std::ptr::eq(self.schema, other.schema)
+            && self.values == other.values
+            && self.ignored == other.ignored
+    }
+}
+
 impl OptionSchema {
     /// The spec of `name` (case-insensitive).
     #[must_use]

@@ -93,8 +93,8 @@ pub use consumer::{ConsumerHandle, GrantCredit, SpillStats, SpillWriting};
 pub use error::MemoryError;
 pub use limit::{DEFAULT_LIMIT_PERCENT, FALLBACK_LIMIT, default_limit, effective_memory_limit};
 pub use pool::{
-    ArbitrationStats, DEFAULT_SPILL_SCRATCH_RESERVE, MemoryConfig, PoolEntry, PoolSnapshot,
-    TreePool,
+    ArbitrationStats, DEFAULT_PRIORITY, DEFAULT_SPILL_SCRATCH_RESERVE, MAX_PRIORITY, MemoryConfig,
+    PoolEntry, PoolSnapshot, TreePool,
 };
 pub use relation::{RelationHash, RelationLease, RelationRef, RelationStore};
 pub use release::{
@@ -126,6 +126,18 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     /// A child pool, optionally with its own limit. Children of the root
     /// are queries.
     fn child(&self, name: &str, limit: Option<usize>) -> Arc<dyn MemoryPool>;
+    /// [`child`](Self::child) for a query with an abort `priority` (0 to 100; [`DEFAULT_PRIORITY`]
+    /// for `child`): when the pool is exhausted the lowest priority is aborted first, then the
+    /// query furthest above its fair share. A pool without arbitration ignores it.
+    fn child_with_priority(
+        &self,
+        name: &str,
+        limit: Option<usize>,
+        priority: u8,
+    ) -> Arc<dyn MemoryPool> {
+        let _ = priority;
+        self.child(name, limit)
+    }
     /// Registers a consumer of this pool; use the id with this pool only.
     /// `spill` is held weakly: `None`, or a dropped hook, means the consumer
     /// cannot be asked to spill. A driver's consumers pass a signal from

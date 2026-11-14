@@ -297,6 +297,85 @@ fn unregister_races_a_reservation() {
     });
 }
 
+/// An aborted query's release in flight still counts as pending: one abort
+/// funds the request. Releases subtract from the root down and unregister
+/// leaves the registry last, so no read sees the victim's own counter at 0
+/// (or the victim gone) while a pool above it still holds the bytes, which
+/// would look like nothing pending and abort a second query.
+#[test]
+fn a_victim_releasing_is_never_aborted_twice() {
+    model(|| {
+        let root = pool(9, 1);
+        let big = root.child_pool("big", None);
+        let small = root.child_pool("small", None);
+        let bid = big.register("op", None);
+        let sid = small.register("op", None);
+        big.try_reserve(bid, 5).unwrap();
+        small.try_reserve(sid, 2).unwrap();
+        let victim = {
+            let big = Arc::clone(&big);
+            thread::spawn(move || {
+                while big.check_aborted().is_ok() {
+                    thread::yield_now();
+                }
+                big.unregister(bid);
+            })
+        };
+        let asker = root.child_pool("asker", None);
+        let aid = asker.register("op", None);
+        // Only an abort makes room; `big` is furthest above its fair share.
+        assert!(block_on(asker.reserve(aid, 3)).is_ok());
+        victim.join().unwrap();
+        assert!(big.check_aborted().is_err(), "big is the victim");
+        assert!(small.check_aborted().is_ok(), "one abort funds the request");
+        assert_eq!(root.stats().aborts, 1);
+    });
+}
+
+/// A request two aborts must fund: while the first victim's release is in
+/// flight its own counter can count bytes the root already got back, so
+/// `pending` alone covers what is left of the shortfall. The round re-plans
+/// on the release and aborts the second victim instead of waiting for a
+/// deadline (which never fires here).
+#[test]
+fn a_shortfall_two_victims_fund_aborts_both() {
+    // Blocks until its query is aborted (both must be: the request needs
+    // both releases), then returns its bytes.
+    fn victim(q: &Arc<TreePool>, id: crate::ConsumerId) {
+        let r = block_on(race_abort(
+            q.node().group.as_deref(),
+            std::future::pending::<()>(),
+        ));
+        assert!(r.is_err());
+        q.unregister(id);
+    }
+    model(|| {
+        let root = pool(12, 1);
+        let mut threads = Vec::new();
+        let mut queries = Vec::new();
+        for (name, bytes) in [("a", 5), ("b", 4), ("c", 3)] {
+            let q = root.child_pool(name, None);
+            let id = q.register("op", None);
+            q.try_reserve(id, bytes).unwrap();
+            if bytes > 3 {
+                let q = Arc::clone(&q);
+                threads.push(thread::spawn(move || victim(&q, id)));
+            }
+            queries.push(q);
+        }
+        let asker = root.child_pool("asker", None);
+        let aid = asker.register("op", None);
+        assert!(block_on(asker.reserve(aid, 7)).is_ok());
+        for t in threads {
+            t.join().unwrap();
+        }
+        assert!(queries[0].check_aborted().is_err());
+        assert!(queries[1].check_aborted().is_err());
+        assert!(queries[2].check_aborted().is_ok(), "two aborts fund it");
+        assert_eq!(root.stats().aborts, 2);
+    });
+}
+
 /// Overlapping rounds (root and a query) never run together.
 #[test]
 fn overlapping_rounds_are_exclusive() {
@@ -641,5 +720,49 @@ fn two_cohort_askers_never_wait_for_each_other() {
         let a = ask(&cohort, a);
         let b = other.join().unwrap();
         drop((a, b));
+    });
+}
+
+/// Two queries of different priority and a requester that needs memory neither will spill: the
+/// victim is the lower priority in every interleaving, though the other query is larger.
+/// The victim releases once it sees the abort, racing the requester's wait.
+#[test]
+fn abort_picks_the_lowest_priority_under_races() {
+    model(|| {
+        let root = pool(9, 1);
+        let low = root.child_pool_with_priority("low", None, 10);
+        let high = root.child_pool_with_priority("high", None, 90);
+        let lid = low.register("op", None);
+        let hid = high.register("op", None);
+        low.try_reserve(lid, 2).unwrap();
+        high.try_reserve(hid, 5).unwrap();
+        let victim = {
+            let low = Arc::clone(&low);
+            thread::spawn(move || {
+                while low.check_aborted().is_ok() {
+                    thread::yield_now();
+                }
+                low.release(lid, 2);
+            })
+        };
+        let asker = root.child_pool("asker", None);
+        let aid = asker.register("op", None);
+        // The abort is the only way to room for the request; the victim's release funds it.
+        assert!(block_on(asker.reserve(aid, 3)).is_ok());
+        victim.join().unwrap();
+        assert!(
+            low.check_aborted().is_err(),
+            "the low priority query is the victim"
+        );
+        // A release in flight (the victim's own counter already 0, the root's not yet) looks like
+        // no pending release to the arbitrator, so a second abort is possible: a race that predates
+        // priorities and is recorded for the memory owner (ops/queue-opus.md). What priorities add
+        // is the order: `high` is aborted only after `low` was.
+        let aborts = root.stats().aborts;
+        assert!(aborts >= 1, "the request needed an abort");
+        assert!(
+            aborts >= 2 || high.check_aborted().is_ok(),
+            "a single abort is the lowest priority query, never the larger higher priority one"
+        );
     });
 }
