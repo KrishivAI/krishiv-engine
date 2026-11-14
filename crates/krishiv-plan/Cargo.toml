@@ -23,6 +23,8 @@ krishiv-kernels = { path = "../krishiv-kernels", version = "=0.2.0" }
 krishiv-udf-sdk = { path = "../krishiv-udf-sdk", version = "=0.2.0" }
 krishiv-types = { path = "../krishiv-types", version = "=0.2.0" }
 thiserror.workspace = true
+# One trace event per privilege check (`analyzer/access.rs`, target `krishiv::authorize`).
+tracing.workspace = true
 twox-hash = { workspace = true, features = ["xxhash3_128"] }
 
 [features]

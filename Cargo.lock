@@ -2558,6 +2558,7 @@ dependencies = [
  "proptest",
  "serde_json",
  "thiserror",
+ "tracing",
  "twox-hash",
 ]
 

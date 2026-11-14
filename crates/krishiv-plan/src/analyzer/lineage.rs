@@ -45,6 +45,7 @@ use krishiv_common::error::KrishivError;
 use super::AnalyzedPlan;
 
 mod exprs;
+pub mod schema;
 mod walk;
 
 /// Where a value comes from: a column of a catalog table, of files read by path, or of a view that is
