@@ -84,7 +84,7 @@ DataFrame.def write_table(self, insert_into: bool, table: str, format: str | Non
 DataFrame.def write_to_table(self, table: str, mode: str, provider: str | None=..., options: list[tuple[str, str]] | None=..., properties: list[tuple[str, str]] | None=..., partitioned_by: list[str] | None=..., cluster_by: list[str] | None=..., condition: str | None=...) -> None
 GroupedData.def agg(self, cols: list[Column]) -> DataFrame
 Observation.@property def name(self) -> str
-Observation.def __init__(self, name: str | None=...) -> None
+Observation.def __new__(cls, name: str | None=...) -> Observation
 Observation.def get(self) -> ArrowStream
 Session.@staticmethod def is_dataframe_table(name: str) -> bool
 Session.def __new__(cls, config: list[tuple[str, str]] | None=...) -> Session

@@ -76,6 +76,16 @@ impl DataFrame {
         out
     }
 
+    /// The `Observation` handles this frame keeps (not its other keep-alive handles, such as the
+    /// lease of a script result, which a view must not hold).
+    pub(super) fn observation_handles(&self) -> Vec<Arc<dyn std::any::Any + Send + Sync>> {
+        self.keep
+            .iter()
+            .filter(|k| Arc::clone(k).downcast::<Shared>().is_ok())
+            .cloned()
+            .collect()
+    }
+
     /// The observations and sinks this frame carries, and those of the temporary views it reads
     /// (`through_views`), for the query's env.
     pub(super) fn observers_through(
