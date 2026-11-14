@@ -1556,3 +1556,54 @@ fn inference_reserves_what_its_readers_hold() {
         .into_error("f.csv");
     assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory);
 }
+
+/// A read with no columns (`count()`) does not tokenize, as Spark's
+/// `UnivocityParser.parse` returns an empty row for every line when column
+/// pruning is on: values the tokenizer refuses and malformed records are
+/// counted in every mode. Without pruning they are parsed again. Expected
+/// counts from a Spark 4.2.0 run of the same file.
+#[test]
+fn a_read_of_no_columns_counts_lines_as_spark() {
+    let text = "a,b\n1,x\n\n#c\n2,yyyyyyyy\n3,\"q\"w\"\n4\n5,6,7\n   \n";
+    let schema = int_schema();
+    let none = ScanRequest::new(Arc::clone(&schema), Vec::new());
+    let count = |extra: &[(&str, &str)]| -> Result<usize, KrishivError> {
+        let mut m = serde_json::json!({"header": "true", "comment": "#"});
+        for (k, v) in extra {
+            m[*k] = Value::from(*v);
+        }
+        let batches = read(text.as_bytes(), &options(&m), &none)?;
+        Ok(batches.iter().map(RecordBatch::num_rows).sum())
+    };
+    for extra in [
+        &[][..],
+        &[("maxCharsPerColumn", "3")],
+        &[("unescapedQuoteHandling", "RAISE_ERROR")],
+        &[("mode", "FAILFAST")],
+        &[("mode", "DROPMALFORMED")],
+        &[("maxColumns", "2")],
+    ] {
+        assert_eq!(count(extra).expect("count"), 5, "{extra:?}");
+    }
+    let off = ("columnPruning", "false");
+    assert!(count(&[off, ("mode", "FAILFAST")]).is_err());
+    assert!(count(&[off, ("maxCharsPerColumn", "3")]).is_err());
+    assert_eq!(count(&[off, ("mode", "DROPMALFORMED")]).expect("count"), 3);
+    // Every split boundary counts each line once, the header only in the
+    // first split.
+    let size = text.len() as u64;
+    for cut in 1..size {
+        let o = options(&serde_json::json!({"header": "true", "comment": "#"}));
+        let rows: usize = [ByteRange::new(0, cut), ByteRange::new(cut, size)]
+            .into_iter()
+            .map(|s| {
+                read_split(text.as_bytes(), &o, &none, s)
+                    .expect("split")
+                    .iter()
+                    .map(RecordBatch::num_rows)
+                    .sum::<usize>()
+            })
+            .sum();
+        assert_eq!(rows, 5, "cut {cut}");
+    }
+}
