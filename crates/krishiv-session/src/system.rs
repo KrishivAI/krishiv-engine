@@ -1222,6 +1222,13 @@ impl QueryLog {
         tags
     }
 
+    /// Sets the trace id of row `id` (a statement with a trace of its own).
+    pub(crate) fn set_row_trace(&self, id: &str, trace_id: Option<String>) {
+        self.history.update(&self.session_id, id, |row| {
+            row.trace_id = trace_id;
+        });
+    }
+
     /// Adds the statement's request tags, as `(tag, "")` pairs, to the tags of row `id`.
     pub(crate) fn add_request_tags(&self, id: &str, tags: &[Arc<str>]) {
         if tags.is_empty() {

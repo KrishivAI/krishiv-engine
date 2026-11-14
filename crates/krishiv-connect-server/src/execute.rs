@@ -212,6 +212,16 @@ async fn until_cancelled<T>(
 /// (Spark's `SparkConnectExecutePlanHandler`, v4.3.0 lines 47-60).
 ///
 /// # Errors
+/// The trace headers of an `ExecutePlan` request (`traceparent`, `baggage`): untrusted text the
+/// engine parses and bounds ([`QueryOptions::inbound_trace`]); either may be absent.
+#[derive(Debug, Clone, Default)]
+pub struct InboundTrace {
+    /// The `traceparent` header value.
+    pub traceparent: Option<String>,
+    /// The `baggage` header value.
+    pub baggage: Option<String>,
+}
+
 /// Before the first response: `INVALID_HANDLE.FORMAT` for an operation id
 /// that is not a UUID, `KRISHIV_INVALID_OPERATION_TAG`, the refusals of
 /// [`Operations::register`], `INVALID_CURSOR.NOT_REATTACHABLE` for the live
@@ -224,12 +234,18 @@ pub async fn execute_plan(
     request: &wire::Decoded<pb::ExecutePlanRequest>,
     limits: &ExecuteLimits,
     budget: &ResponseBudget,
+    inbound: &InboundTrace,
 ) -> Result<ResponseStream, KrishivError> {
     let id = match &request.operation_id {
         Some(text) => krishiv_session::QueryId::parse(text)?,
         None => new_operation_id()?,
     };
     let tags = validate_tags(&request.tags)?;
+    // The request's tags and trace go to the engine's queries of this operation, per request.
+    let query_options = QueryOptions::new()
+        .operation_id(id.as_str())
+        .tags(tags.iter())
+        .inbound_trace(inbound.traceparent.as_deref(), inbound.baggage.as_deref());
     let opts = options(request);
     let op = Arc::new(
         Operation::new(
@@ -260,7 +276,7 @@ pub async fn execute_plan(
     let prepared = until_cancelled(&op, async {
         // Decompression (up to `maxPlanSize`) runs off the async workers.
         let logical = request_plan(session, plan, limits).await?;
-        let df = session.from_plan_with(&logical, QueryOptions::new().operation_id(id.as_str()))?;
+        let df = session.from_plan_with(&logical, query_options)?;
         let schema = df.schema().await?;
         Ok((df, schema))
     })

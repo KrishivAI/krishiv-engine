@@ -1044,6 +1044,7 @@ impl core::marker::StructuralPartialEq for krishiv_session::QueryId
 #[non_exhaustive] pub struct krishiv_session::QueryOptions
 impl krishiv_session::QueryOptions
 pub fn krishiv_session::QueryOptions::deadline(self, core::time::Duration) -> Self
+pub fn krishiv_session::QueryOptions::inbound_trace(self, core::option::Option<&str>, core::option::Option<&str>) -> Self
 pub fn krishiv_session::QueryOptions::new() -> Self
 pub fn krishiv_session::QueryOptions::operation_id(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn krishiv_session::QueryOptions::tags<I, T>(self, I) -> Self where I: core::iter::traits::collect::IntoIterator<Item = T>, T: core::convert::AsRef<str>

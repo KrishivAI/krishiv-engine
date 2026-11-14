@@ -111,6 +111,7 @@ impl Session {
             operation: None,
             deadline: None,
             request_tags: Arc::from([]),
+            inbound_trace: None,
             state: Arc::new(SessionState {
                 conf: Arc::new(seed.conf),
                 catalog: Arc::new(seed.catalog),
@@ -447,6 +448,11 @@ impl Session {
             operation,
             deadline: options.deadline.or(self.deadline),
             request_tags: options.request_tags.into(),
+            inbound_trace: options.inbound_trace.map(|(tp, _)| {
+                tp.as_deref()
+                    .and_then(crate::trace_context::parse_remote_parent)
+                    .map(Arc::new)
+            }),
         };
         Ok(handle)
     }

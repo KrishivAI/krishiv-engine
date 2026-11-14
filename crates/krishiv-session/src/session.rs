@@ -117,6 +117,9 @@ pub struct Session {
     pub(crate) deadline: Option<std::time::Duration>,
     /// The statement's request tags ([`crate::QueryOptions::tags`]).
     pub(crate) request_tags: Arc<[Arc<str>]>,
+    /// The trace of the request that started the statement ([`crate::QueryOptions::inbound_trace`]):
+    /// `Some(None)` is a request without a valid one (no trace), `None` means the session's.
+    pub(crate) inbound_trace: Option<Option<Arc<crate::trace_context::RemoteParent>>>,
 }
 
 impl fmt::Debug for Session {
@@ -500,7 +503,7 @@ impl Session {
                 let seq = session.state.statements.fetch_add(1, Ordering::Relaxed);
                 use tracing::Instrument as _;
                 let trace = crate::telemetry::QueryTrace::of(seq, &text);
-                let span = trace.prepare_span(&crate::telemetry::Who::of(&session.state));
+                let span = trace.prepare_span(&crate::telemetry::Who::of(&session));
                 session
                     .sql_here_marked(&text, marker)
                     .instrument(span)
@@ -1655,6 +1658,26 @@ impl Session {
         tagging
     }
 
+    /// The trace a statement started now belongs to: its request's
+    /// ([`crate::QueryOptions::inbound_trace`]) when it has one, else the session's.
+    pub(crate) fn trace_now(&self) -> Option<crate::trace_context::RemoteParent> {
+        match &self.inbound_trace {
+            Some(t) => t.as_deref().cloned(),
+            None => self.state.queries.trace(),
+        }
+    }
+
+    /// Stamps the history row `id` with what this statement adds to it: its request tags and, when
+    /// it has its own trace, the trace id.
+    pub(crate) fn stamp_row(&self, id: &str) {
+        self.state.queries.add_request_tags(id, &self.request_tags);
+        if self.inbound_trace.is_some() {
+            self.state
+                .queries
+                .set_row_trace(id, self.trace_now().map(|t| t.trace_id));
+        }
+    }
+
     /// The principal and tags of a statement started now, for cancel by tag.
     pub(crate) fn tagging(&self) -> crate::action::Tagging {
         crate::action::Tagging {
@@ -1740,9 +1763,7 @@ impl Session {
         )?;
         crate::action::note_row(&log_id);
         // The request tags join the row's tags at once, so a queued query shows them too.
-        self.state
-            .queries
-            .add_request_tags(&log_id, &self.request_tags);
+        self.stamp_row(&log_id);
         *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
         let permit = self.admit(&log_id, env, exempt).await?;
         Ok(Admitted::new(Arc::clone(&self.state), log_id, permit))

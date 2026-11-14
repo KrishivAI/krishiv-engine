@@ -41,9 +41,11 @@ pub(crate) struct Who {
 impl Who {
     /// The identity of `state`'s session at this moment (the trace context can change between
     /// statements).
-    pub(crate) fn of(state: &crate::session::SessionState) -> Self {
-        // One read: the trace id and the remote parent come from the same trace.
-        let trace = state.queries.trace();
+    pub(crate) fn of(session: &crate::session::Session) -> Self {
+        let state = &session.state;
+        // One read: the trace id and the remote parent come from the same trace (the
+        // statement's request's, else the session's).
+        let trace = session.trace_now();
         Self {
             session_id: state.session_id.clone(),
             trace_id: trace.as_ref().map(|t| t.trace_id.clone()),

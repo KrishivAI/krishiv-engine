@@ -54,10 +54,7 @@ impl DataFrame {
                     a.env.statement_class,
                     self.session.operation_id(),
                 );
-                self.session
-                    .state
-                    .queries
-                    .add_request_tags(&id, &self.session.request_tags);
+                self.session.stamp_row(&id);
                 *a.env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
                 let replayed = crate::result_cache::replay(batches);
                 return Ok(if edge {
@@ -103,7 +100,7 @@ impl DataFrame {
 
     /// The span of one action: the statement's, or the engine's alone.
     fn span(&self) -> tracing::Span {
-        let who = crate::telemetry::Who::of(&self.session.state);
+        let who = crate::telemetry::Who::of(&self.session);
         self.trace
             .as_ref()
             .map_or_else(|| crate::telemetry::plain_span(&who), |t| t.span(&who))

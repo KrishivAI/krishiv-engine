@@ -133,6 +133,7 @@ pub struct QueryOptions {
     pub(crate) operation_id: Option<String>,
     pub(crate) deadline: Option<std::time::Duration>,
     pub(crate) request_tags: Vec<Arc<str>>,
+    pub(crate) inbound_trace: Option<(Option<String>, Option<String>)>,
 }
 
 impl QueryOptions {
@@ -160,6 +161,17 @@ impl QueryOptions {
     /// statement can tighten the session's limit, never loosen it.
     pub fn deadline(mut self, limit: std::time::Duration) -> Self {
         self.deadline = Some(limit);
+        self
+    }
+
+    /// Gives the statement's queries the trace context of the request that started them: the
+    /// W3C `traceparent` and `baggage` header values, either absent. Per request, unlike
+    /// [`crate::Session::set_inbound_trace`], which sets the session's: concurrent requests of one
+    /// session each keep their own. The headers are untrusted and never fail anything: a missing
+    /// or malformed `traceparent` means no trace for these queries (the session's own trace, if
+    /// any, is not used either). The baggage is accepted for symmetry and not kept per request yet.
+    pub fn inbound_trace(mut self, traceparent: Option<&str>, baggage: Option<&str>) -> Self {
+        self.inbound_trace = Some((traceparent.map(str::to_owned), baggage.map(str::to_owned)));
         self
     }
 
