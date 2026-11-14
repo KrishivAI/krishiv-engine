@@ -14,6 +14,7 @@ use crate::store::{CatalogStore, CatalogTable};
 
 /// Spark's `Database`.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Database {
     /// The namespace's name.
     pub name: String,
@@ -27,6 +28,7 @@ pub struct Database {
 
 /// Spark's `Table`.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Table {
     /// The table's name.
     pub name: String,
@@ -44,6 +46,7 @@ pub struct Table {
 
 /// Spark's `Column`.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Column {
     /// The column's name.
     pub name: String,
@@ -63,6 +66,7 @@ pub struct Column {
 
 /// Spark's `Function`.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Function {
     /// The function's name.
     pub name: String,
@@ -217,7 +221,7 @@ impl Catalog<'_> {
     /// # Errors
     /// The statement's: `CATALOG_NOT_FOUND` for an unknown catalog.
     pub async fn set_current_catalog(&self, name: &str) -> Result<(), KrishivError> {
-        self.run(&format!("SET CATALOG {}", quote(name))).await
+        self.run(&format!("SET CATALOG {}", quoted(name))).await
     }
 
     /// The catalogs, sorted.
@@ -237,7 +241,7 @@ impl Catalog<'_> {
     /// # Errors
     /// `SCHEMA_NOT_FOUND` for an unknown namespace.
     pub async fn set_current_database(&self, name: &str) -> Result<(), KrishivError> {
-        self.run(&format!("USE {}", quote(name))).await
+        self.run(&format!("USE {}", quoted(name))).await
     }
 
     fn database_of(&self, name: &str, meta: &crate::store::NamespaceMeta) -> Database {
@@ -296,6 +300,14 @@ impl Catalog<'_> {
     }
 
     fn lookup_database(&self, name: &str) -> Result<Database, KrishivError> {
+        // `db` or `spark_catalog.db`, as Spark's `resolveNamespace` accepts it.
+        let p = parts(name);
+        let bare = match p.as_slice() {
+            [db] => db.clone(),
+            [cat, db] if cat.eq_ignore_ascii_case(crate::catalog::CATALOG) => db.clone(),
+            _ => name.to_owned(),
+        };
+        let name = bare.as_str();
         let want = self.fold(name);
         self.session
             .state
@@ -764,7 +776,8 @@ impl Catalog<'_> {
         if let Some((_, location)) = path.last() {
             sql.push_str(&format!(" LOCATION {}", literal(location)));
         }
-        if let Some(description) = description {
+        // Spark maps an empty description to no comment.
+        if let Some(description) = description.filter(|d| !d.is_empty()) {
             sql.push_str(&format!(" COMMENT {}", literal(description)));
         }
         self.run(&sql).await

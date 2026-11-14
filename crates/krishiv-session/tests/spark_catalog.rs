@@ -443,3 +443,26 @@ fn an_external_table_over_partitioned_files_keeps_its_partition_columns() {
         .collect();
     assert_eq!(got, [("id", false), ("p", true)]);
 }
+
+#[test]
+fn identifiers_are_parsed_and_an_empty_description_is_no_comment() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE DATABASE db1");
+    let c = s.catalog();
+    // a quoted identifier, and `spark_catalog.db1`, name the namespace
+    block_on(c.set_current_database("`db1`")).unwrap();
+    assert_eq!(c.current_database(), "db1");
+    block_on(c.set_current_database("default")).unwrap();
+    assert_eq!(
+        block_on(c.get_database("spark_catalog.db1")).unwrap().name,
+        "db1"
+    );
+    assert!(
+        block_on(c.list_tables(Some("spark_catalog.db1"), None))
+            .unwrap()
+            .is_empty()
+    );
+    block_on(c.create_table("t", Some("parquet"), Some("a INT"), Some(""), &[])).unwrap();
+    assert_eq!(block_on(c.get_table("t")).unwrap().description, None);
+}

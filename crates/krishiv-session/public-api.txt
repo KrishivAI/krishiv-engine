@@ -459,7 +459,7 @@ pub fn krishiv_session::spark_catalog::Catalog<'a>::clone(&self) -> krishiv_sess
 impl<'a> core::fmt::Debug for krishiv_session::spark_catalog::Catalog<'a>
 pub fn krishiv_session::spark_catalog::Catalog<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'a> core::marker::Copy for krishiv_session::spark_catalog::Catalog<'a>
-pub struct krishiv_session::spark_catalog::Column
+#[non_exhaustive] pub struct krishiv_session::spark_catalog::Column
 pub krishiv_session::spark_catalog::Column::data_type: alloc::string::String
 pub krishiv_session::spark_catalog::Column::description: core::option::Option<alloc::string::String>
 pub krishiv_session::spark_catalog::Column::is_bucket: bool
@@ -475,7 +475,7 @@ pub fn krishiv_session::spark_catalog::Column::eq(&self, &krishiv_session::spark
 impl core::fmt::Debug for krishiv_session::spark_catalog::Column
 pub fn krishiv_session::spark_catalog::Column::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for krishiv_session::spark_catalog::Column
-pub struct krishiv_session::spark_catalog::Database
+#[non_exhaustive] pub struct krishiv_session::spark_catalog::Database
 pub krishiv_session::spark_catalog::Database::catalog: alloc::string::String
 pub krishiv_session::spark_catalog::Database::description: core::option::Option<alloc::string::String>
 pub krishiv_session::spark_catalog::Database::location_uri: alloc::string::String
@@ -488,7 +488,7 @@ pub fn krishiv_session::spark_catalog::Database::eq(&self, &krishiv_session::spa
 impl core::fmt::Debug for krishiv_session::spark_catalog::Database
 pub fn krishiv_session::spark_catalog::Database::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for krishiv_session::spark_catalog::Database
-pub struct krishiv_session::spark_catalog::Function
+#[non_exhaustive] pub struct krishiv_session::spark_catalog::Function
 pub krishiv_session::spark_catalog::Function::catalog: core::option::Option<alloc::string::String>
 pub krishiv_session::spark_catalog::Function::class_name: alloc::string::String
 pub krishiv_session::spark_catalog::Function::description: core::option::Option<alloc::string::String>
@@ -503,7 +503,7 @@ pub fn krishiv_session::spark_catalog::Function::eq(&self, &krishiv_session::spa
 impl core::fmt::Debug for krishiv_session::spark_catalog::Function
 pub fn krishiv_session::spark_catalog::Function::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for krishiv_session::spark_catalog::Function
-pub struct krishiv_session::spark_catalog::Table
+#[non_exhaustive] pub struct krishiv_session::spark_catalog::Table
 pub krishiv_session::spark_catalog::Table::catalog: core::option::Option<alloc::string::String>
 pub krishiv_session::spark_catalog::Table::description: core::option::Option<alloc::string::String>
 pub krishiv_session::spark_catalog::Table::is_temporary: bool
