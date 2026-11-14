@@ -1290,3 +1290,135 @@ fn a_v1_to_v3_upgrade_is_a_conflict() {
     assert!(!exists(&c.list(1)) && !exists(&c.manifest()) && !exists(&c.data()));
     c.check(&[INIT]);
 }
+
+/// A small deterministic generator (splitmix64) for the schedule sweep.
+struct Seeded(u64);
+
+impl Seeded {
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    }
+
+    /// Uniform in `0..n`.
+    fn below(&mut self, n: usize) -> usize {
+        usize::try_from(self.next() % u64::try_from(n).unwrap()).unwrap()
+    }
+
+    fn when(&mut self) -> When {
+        match self.below(3) {
+            0 => When::BeforeRequest(1 + self.below(5)),
+            1 => When::AfterRequest(1 + self.below(5)),
+            _ => When::BeforeLoad(1 + self.below(20)),
+        }
+    }
+}
+
+/// One generated schedule: a fault per request, up to three foreign commits
+/// (on `main` or `dev`) at random points, failing loads, and held requests
+/// landed at a random point or after the run.
+fn sweep_one(seed: u64) {
+    let mut g = Seeded(seed);
+    let mut c = case();
+    let faults: Vec<Fault> = (0..5)
+        .map(|_| match g.below(11) {
+            0 => Fault::LostResponse,
+            1 => Fault::DelayedApply(g.below(8)),
+            2 => Fault::Held,
+            3 => Fault::Conflict409,
+            4 => Fault::Stale400,
+            5 => Fault::DuplicateId400,
+            6 => Fault::Unauthorized401,
+            7 => Fault::ServerErrorBeforeApply,
+            8 => Fault::Duplicated,
+            _ => Fault::Answer,
+        })
+        .collect();
+    c.cat.script(&faults);
+    let mut main_foreign = Vec::new();
+    for n in 0..g.below(4) {
+        let id = 980 + i64::try_from(n).unwrap();
+        let name = format!("s{n}.parquet");
+        let branch = if g.below(3) == 0 { "dev" } else { "main" };
+        if branch == "main" {
+            main_foreign.push((id, format!("{id}|1|{name}")));
+        }
+        c.cat.on(g.when(), c.foreign(&name, id, branch));
+    }
+    c.cat.fail_loads(g.below(3) * g.below(4));
+    if g.below(2) == 0 {
+        c.cat.land_held_at(g.when());
+    }
+    let schedule = format!("seed {seed}: {faults:?}");
+    let out = c.run();
+    // Files the write produced before any late delivery.
+    let data = exists(&c.data());
+    let manifest = exists(&c.manifest());
+    let list1 = exists(&c.list(1));
+    let ours_now = |c: &Case| {
+        c.cat.metadata().0.snapshots().any(|s| {
+            s.summary().additional_properties.get(WRITE_ID_PROP) == Some(&OUR_KEY.to_owned())
+        })
+    };
+    match &out {
+        Ok(m) => {
+            assert!(m.snapshot_by_id(OURS).is_some(), "{schedule}");
+            assert!(
+                data && manifest,
+                "{schedule}: a committed write's file deleted"
+            );
+        }
+        Err(e) if e.error_class() == ErrorClass::KrishivIcebergCommitStateUnknown => {
+            assert!(
+                data && manifest && list1,
+                "{schedule}: an unresolved write deleted a file: {e}"
+            );
+        }
+        Err(e) => {
+            assert!(!ours_now(&c), "{schedule}: failed but committed: {e}");
+        }
+    }
+    c.cat.land_held();
+    // Delayed requests still pending land on later loads.
+    for _ in 0..10 {
+        let _ = c.env.rt.block_on(c.cat.load(true));
+    }
+    if let Err(e) = &out
+        && e.error_class() != ErrorClass::KrishivIcebergCommitStateUnknown
+    {
+        assert!(
+            !ours_now(&c),
+            "{schedule}: a known failure landed later: {e}"
+        );
+    }
+    let (m, _) = c.cat.metadata();
+    let mut expected: Vec<String> = vec![INIT.to_owned()];
+    expected.extend(
+        main_foreign
+            .iter()
+            .filter(|(id, _)| m.snapshot_by_id(*id).is_some())
+            .map(|(_, row)| row.clone()),
+    );
+    if ours_now(&c) {
+        expected.push(MINE.to_owned());
+    }
+    expected.sort_by_key(|r| r.split('|').next().unwrap().parse::<i64>().unwrap());
+    let expected: Vec<&str> = expected.iter().map(String::as_str).collect();
+    c.check(&expected);
+}
+
+/// R:S3: generated schedules (seeded, on virtual time). After each: the
+/// write in at most one snapshot; committed → its files there; a known
+/// failure → never in the table, even after late deliveries; unknown →
+/// nothing deleted; and once every held or delayed request has landed,
+/// every live file listed once and the rows those of the commits that are
+/// in the table, read through SQL and iceberg-rust's planning.
+#[test]
+fn generated_schedules_keep_the_invariants() {
+    for seed in 0..300 {
+        sweep_one(seed);
+    }
+}
