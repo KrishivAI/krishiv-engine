@@ -280,6 +280,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_MAX_INBOUND_MESSAGE_SIZE,
     ),
     (
+        "krishiv.iceberg.commit.maxIntervening",
+        &ICEBERG_COMMIT_MAX_INTERVENING,
+    ),
+    (
         "krishiv.optimizer.ndvSampling.enabled",
         &NDV_SAMPLING_ENABLED,
     ),

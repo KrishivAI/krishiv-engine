@@ -1382,6 +1382,29 @@ fn iceberg_write_max_open_files_parses_and_defaults() {
     assert_eq!(ICEBERG_WRITE_MAX_OPEN_FILES.scope, Scope::Session);
 }
 
+/// PR-36b: the bound on the history an Iceberg commit validates.
+#[test]
+fn iceberg_commit_max_intervening_parses_and_defaults() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        c.get(&ICEBERG_COMMIT_MAX_INTERVENING)
+            .and_then(ConfigValue::as_int)
+    };
+    assert_eq!(get(&c), Some(1000));
+    c.set("krishiv.iceberg.commit.maxIntervening", "5").unwrap();
+    assert_eq!(get(&c), Some(5));
+    assert!(c.set("krishiv.iceberg.commit.maxIntervening", "0").is_err());
+    assert!(
+        c.set("krishiv.iceberg.commit.maxIntervening", "-1")
+            .is_err()
+    );
+    assert!(
+        c.set("krishiv.iceberg.commit.maxIntervening", "many")
+            .is_err()
+    );
+    assert_eq!(ICEBERG_COMMIT_MAX_INTERVENING.scope, Scope::Session);
+}
+
 /// P3-T021: the Delta log pool and the catalog parse limits.
 #[test]
 fn delta_and_catalog_limit_entries_parse_and_default() {
