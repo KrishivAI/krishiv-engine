@@ -796,17 +796,11 @@ impl EngineRuntime {
     }
 }
 
-/// Whether `key` belongs to the runtime rather than to a session: a
-/// cluster-scope entry, or one of the keys fixed when the runtime's
-/// components are built (`krishiv.memory.*`, `krishiv.spill.*`,
-/// `krishiv.io.*`).
+/// Whether `key` belongs to the runtime rather than to a session: a cluster-scope entry (the
+/// memory pool, the spill directory and the I/O scheduler are built from them). A session-scope
+/// key is the session's, whatever its prefix.
 pub(crate) fn runtime_owned(key: &str) -> bool {
-    lookup(key).is_some_and(|entry| {
-        entry.scope == krishiv_common::config::Scope::Cluster
-            || crate::conf::BUILD_TIME
-                .iter()
-                .any(|p| entry.key.starts_with(p))
-    })
+    lookup(key).is_some_and(|entry| entry.scope == krishiv_common::config::Scope::Cluster)
 }
 
 #[cfg(test)]

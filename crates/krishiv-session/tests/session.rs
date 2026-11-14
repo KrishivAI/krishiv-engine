@@ -1467,3 +1467,41 @@ fn cte_precedence_policy_set_validates_values() {
     );
     assert_eq!(long(shadow), 1);
 }
+
+/// SQL-23: the session-scope `krishiv.io.*` keys are taken by `SET`, read back, and apply per
+/// session; `krishiv.session.memoryLimit` is fixed when the session is built.
+#[test]
+fn session_scope_io_keys_can_be_set_and_read_back() {
+    let s = Session::new().unwrap();
+    for (key, value) in [
+        ("krishiv.io.strictOptions", "true"),
+        ("krishiv.io.lateMaterialization", "off"),
+        ("krishiv.io.parquet.pageIndex.enabled", "false"),
+        ("krishiv.io.parquet.bloomFilter.enabled", "false"),
+        ("krishiv.io.parquet.dictionaryFilter.enabled", "false"),
+        ("krishiv.io.prefetchBytes", "8mb"),
+    ] {
+        block_on(s.sql(&format!("SET {key} = {value}")))
+            .unwrap_or_else(|e| panic!("SET {key}: {e}"));
+        assert_eq!(
+            s.conf().get(key).unwrap_or_default().to_lowercase(),
+            value,
+            "{key} reads back"
+        );
+    }
+    // The same keys set another session's value untouched.
+    let other = Session::new().unwrap();
+    assert_ne!(
+        other
+            .conf()
+            .get("krishiv.io.prefetchBytes")
+            .unwrap_or_default(),
+        "8mb"
+    );
+    // Fixed at build: a builder option sets it, `SET` does not.
+    let e = block_on(s.sql("SET krishiv.session.memoryLimit = 1g")).unwrap_err();
+    assert_eq!(e.error_class().name(), "CANNOT_MODIFY_STATIC_CONFIG");
+    // Cluster-scope keys stay static.
+    let e = block_on(s.sql("SET krishiv.io.maxConcurrentRequests = 8")).unwrap_err();
+    assert_eq!(e.error_class().name(), "CANNOT_MODIFY_STATIC_CONFIG");
+}
