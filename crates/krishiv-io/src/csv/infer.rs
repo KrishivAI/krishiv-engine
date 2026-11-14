@@ -2,10 +2,13 @@
 //! Schema inference (Spark's `CSVInferSchema`), with `samplingRatio`
 //! reproducing Spark's row sampling.
 
+use std::ops::Range;
 use std::sync::Arc;
 
 use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
+use bytes::Bytes;
 use futures::future::BoxFuture;
+use futures::{StreamExt, TryStreamExt};
 use krishiv_kernels::datetime_pattern::{DateTimePattern, Purpose};
 use krishiv_kernels::text::{java_parse_double, java_parse_long};
 
@@ -104,7 +107,7 @@ struct Infer<'a> {
     o: &'a CsvOptions,
     dt: &'a Datetimes,
     /// The strict date pattern (`dateFormat`, else `yyyy-MM-dd`).
-    date: DateTimePattern,
+    date: &'a DateTimePattern,
 }
 
 impl Infer<'_> {
@@ -286,7 +289,7 @@ pub fn ddl_of_string(csv: &str, options: &FormatOptions) -> FormatResult<String>
     let inf = Infer {
         o: &opts,
         dt: &dt,
-        date,
+        date: &date,
     };
     let mut syntax = opts.syntax.clone();
     // The lines are not split already (as for file lines): the whole
@@ -324,13 +327,7 @@ async fn for_each_line(
     o: &CsvOptions,
     mut f: impl FnMut(&[u8], u64) -> FormatResult<bool>,
 ) -> FormatResult<()> {
-    let codec = crate::text::codec::Codec::of_path(file.path.as_ref());
-    let range = if codec.is_some() {
-        ByteRange::whole(file.size)
-    } else {
-        range
-    };
-    let mut r = LineReader::new(file.size, range, true, o.line_sep.clone()).compressed(codec);
+    let mut r = line_reader(file, range, o);
     loop {
         match r.next_line()? {
             ReadChunk::End => return Ok(()),
@@ -348,6 +345,134 @@ async fn for_each_line(
                 r.push(&need, &bytes)?;
             }
         }
+    }
+}
+
+/// The lines of `range` of `file`; a compressed file is read whole.
+fn line_reader(file: &FileRef, range: ByteRange, o: &CsvOptions) -> LineReader {
+    let codec = crate::text::codec::Codec::of_path(file.path.as_ref());
+    let range = if codec.is_some() {
+        ByteRange::whole(file.size)
+    } else {
+        range
+    };
+    LineReader::new(file.size, range, true, o.line_sep.clone()).compressed(codec)
+}
+
+/// What every partition's type inference reads, owned so that a partition
+/// can run on the I/O runtime's blocking threads.
+struct Shared {
+    opts: CsvOptions,
+    dt: Datetimes,
+    date: DateTimePattern,
+    /// Tokenizes one line (a line is a whole record without `multiLine`).
+    tok: Tokenizer,
+    /// The first line, dropped wherever it repeats when `header` is on.
+    first_line: String,
+}
+
+impl Shared {
+    fn infer(&self) -> Infer<'_> {
+        Infer {
+            o: &self.opts,
+            dt: &self.dt,
+            date: &self.date,
+        }
+    }
+}
+
+/// The type inference of one partition: its splits' lines in order, sampled
+/// as Spark samples the partition.
+struct Part {
+    /// The splits not started yet, in order.
+    splits: std::collections::VecDeque<(FileRef, ByteRange)>,
+    /// The split being read and its file.
+    reading: Option<(FileRef, LineReader)>,
+    sampler: Option<Sampler>,
+    types: Vec<T>,
+}
+
+impl Part {
+    /// Infers lines until the reader needs bytes (the file and range, which
+    /// [`Self::push`] hands over) or the partition is done (`None`).
+    fn run(&mut self, sh: &Shared) -> FormatResult<Option<(FileRef, Range<u64>)>> {
+        let inf = sh.infer();
+        let mut tokens = Vec::new();
+        loop {
+            let Some((file, r)) = &mut self.reading else {
+                let Some((file, range)) = self.splits.pop_front() else {
+                    return Ok(None);
+                };
+                let r = line_reader(&file, range, &sh.opts);
+                self.reading = Some((file, r));
+                continue;
+            };
+            match r.next_line()? {
+                ReadChunk::End => self.reading = None,
+                ReadChunk::NeedData(need) => return Ok(Some((file.clone(), need))),
+                ReadChunk::Line(bytes, at) => {
+                    if let Some(sm) = &mut self.sampler
+                        && !sm.take()
+                    {
+                        continue;
+                    }
+                    let bytes = if at == 0 {
+                        bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes)
+                    } else {
+                        &bytes[..]
+                    };
+                    let line = sh.opts.charset.decode(bytes);
+                    if (sh.opts.header && *line == *sh.first_line) || skip_line(&sh.opts, &line) {
+                        continue;
+                    }
+                    tokens.clear();
+                    if sh.tok.record(&line, 0, &mut tokens).is_ok() {
+                        inf.row(&mut self.types, &tokens);
+                    }
+                }
+            }
+        }
+    }
+
+    fn push(&mut self, range: &Range<u64>, bytes: &Bytes) -> FormatResult<()> {
+        match &mut self.reading {
+            Some((_, r)) => r.push(range, bytes),
+            None => Err(FormatError::Other(internal("bytes for no split"))),
+        }
+    }
+}
+
+/// The types of one partition. With an I/O runtime the inference runs on its
+/// blocking threads, one hop per chunk read, so partitions infer in parallel;
+/// without one it runs on the caller's task.
+async fn infer_part(io: &IoContext, sh: &Arc<Shared>, mut part: Part) -> FormatResult<Vec<T>> {
+    loop {
+        let need = match io.runtime() {
+            Some(rt) => {
+                let sh = Arc::clone(sh);
+                let (back, need) = rt
+                    .spawn_blocking(move || {
+                        let need = part.run(&sh);
+                        (part, need)
+                    })
+                    .await
+                    .map_err(|e| {
+                        FormatError::Other(internal(format!("CSV inference failed: {e}")))
+                    })?;
+                part = back;
+                need?
+            }
+            None => part.run(sh)?,
+        };
+        let Some((file, need)) = need else {
+            return Ok(part.types);
+        };
+        let got = io.get_ranges(&file, std::slice::from_ref(&need)).await?;
+        let bytes = got
+            .into_iter()
+            .next()
+            .ok_or_else(|| FormatError::Other(internal("no bytes for a range")))?;
+        part.push(&need, &bytes)?;
     }
 }
 
@@ -469,7 +594,7 @@ pub(crate) fn infer<'a>(
         let inf = Infer {
             o: &opts,
             dt: &dt,
-            date,
+            date: &date,
         };
         let infer_types = o.bool("inferSchema").unwrap_or(false);
         let ratio = sampling_ratio(o)?;
@@ -551,35 +676,40 @@ pub(crate) fn infer<'a>(
             names = column_names(&opts, &tokens);
             types = vec![T::Null; names.len()];
             if infer_types {
-                let mut merged = vec![T::Null; names.len()];
+                let sh = Arc::new(Shared {
+                    opts: opts.clone(),
+                    dt: Datetimes::new(o, Purpose::Parse)?,
+                    date: date.clone(),
+                    tok: line_tok,
+                    first_line,
+                });
+                let width = names.len();
+                let mut jobs = Vec::with_capacity(parts.len());
                 for p in &parts {
-                    let mut sampler = (ratio <= 0.99).then(|| Sampler::new(ratio, p.index));
-                    let mut part = vec![T::Null; names.len()];
-                    for s in &p.splits {
-                        let file = &files[s.file];
-                        for_each_line(io, file, s.range, &opts, |bytes, at| {
-                            if let Some(sm) = &mut sampler
-                                && !sm.take()
-                            {
-                                return Ok(true);
-                            }
-                            let bytes = if at == 0 {
-                                bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes)
-                            } else {
-                                bytes
-                            };
-                            let line = opts.charset.decode(bytes).into_owned();
-                            if (opts.header && line == first_line) || skip_line(&opts, &line) {
-                                return Ok(true);
-                            }
-                            if let Some(t) = tokenize(&line) {
-                                inf.row(&mut part, &t);
-                            }
-                            Ok(true)
-                        })
-                        .await?;
-                    }
-                    for (m, t) in merged.iter_mut().zip(&part) {
+                    jobs.push(Part {
+                        splits: p
+                            .splits
+                            .iter()
+                            .map(|s| (files[s.file].clone(), s.range))
+                            .collect(),
+                        reading: None,
+                        sampler: (ratio <= 0.99).then(|| Sampler::new(ratio, p.index)),
+                        types: vec![T::Null; width],
+                    });
+                }
+                let lanes = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+                // In partition order, merged in that order (as before).
+                let typed: Vec<Vec<T>> = futures::stream::iter(jobs)
+                    .map(|part| {
+                        let sh = Arc::clone(&sh);
+                        async move { infer_part(io, &sh, part).await }
+                    })
+                    .buffered(lanes)
+                    .try_collect()
+                    .await?;
+                let mut merged = vec![T::Null; width];
+                for part in &typed {
+                    for (m, t) in merged.iter_mut().zip(part) {
                         *m = compatible(*m, *t);
                     }
                 }
