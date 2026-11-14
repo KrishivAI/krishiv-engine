@@ -40,3 +40,23 @@ SHOW TBLPROPERTIES t ('k')
   key: string, value: string
 SHOW CURRENT SCHEMA
   catalog: string, namespace: string
+EXPLAIN SELECT a FROM t
+  plan: string
+EXPLAIN EXTENDED SELECT a FROM t
+  plan: string
+EXPLAIN SET
+  plan: string
+SET
+  key: string, value: string
+SET -v
+  key: string, value: string, meaning: string, Since version: string
+SET spark.sql.ansi.enabled
+  key: string, value: string
+SET spark.sql.ansi.enabled = true
+  key: string, value: string
+SET TIME ZONE 'UTC'
+  key: string, value: string
+RESET spark.sql.ansi.enabled
+  (no columns)
+RESET
+  (no columns)

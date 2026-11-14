@@ -156,7 +156,10 @@ fn json_shape() {
     assert!(e.to_json().contains("\"explain\":\"ANALYZE\""));
     let e = block_on(s.analyze("EXPLAIN SELECT a FROM t")).unwrap();
     assert!(e.to_json().contains("\"explain\":\"PLAN\""));
-    assert!(e.output_schema.is_empty() && e.lineage.is_empty());
+    // EXPLAIN returns one `plan` string (review m1), and has no lineage.
+    let names: Vec<&str> = e.output_schema.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["plan"]);
+    assert!(e.lineage.is_empty());
     assert_eq!(super::string("\t\r\u{1}"), "\"\\t\\r\\u0001\"");
 }
 

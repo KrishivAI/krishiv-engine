@@ -638,6 +638,7 @@ jobs:
         run: cargo install rustdoc-md --version 0.2.0 --locked
       - name: SQL, Python, Rust and configuration pages match the generators
         run: |
+          cargo xtask docs-analyze --check --base origin/main
           cargo xtask docs-sql --check
           cargo xtask docs-examples --check
           cargo xtask docs-python --check

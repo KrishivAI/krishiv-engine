@@ -94,7 +94,7 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "explain":"PLAN",
 "partial":false,
 "securables":[],
-"output_schema":[],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
 "lineage":[],
 "filters":[],
 "warnings":[]}
@@ -105,7 +105,7 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "explain":"PLAN",
 "partial":false,
 "securables":[],
-"output_schema":[],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
 "lineage":[],
 "filters":[],
 "warnings":[]}
@@ -116,7 +116,7 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "explain":"PLAN",
 "partial":false,
 "securables":[],
-"output_schema":[],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
 "lineage":[],
 "filters":[],
 "warnings":[]}
@@ -127,7 +127,7 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "explain":"PLAN",
 "partial":false,
 "securables":[],
-"output_schema":[],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
 "lineage":[],
 "filters":[],
 "warnings":[]}
@@ -138,7 +138,7 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "explain":"PLAN",
 "partial":false,
 "securables":[],
-"output_schema":[],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
 "lineage":[],
 "filters":[],
 "warnings":[]}
@@ -149,7 +149,7 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "explain":"PLAN",
 "partial":false,
 "securables":[],
-"output_schema":[],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
 "lineage":[],
 "filters":[],
 "warnings":[]}
@@ -160,7 +160,7 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "explain":"PLAN",
 "partial":false,
 "securables":[],
-"output_schema":[],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
 "lineage":[],
 "filters":[],
 "warnings":[]}
@@ -171,7 +171,7 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "explain":"PLAN",
 "partial":false,
 "securables":[],
-"output_schema":[],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
 "lineage":[],
 "filters":[],
 "warnings":[]}
@@ -182,7 +182,7 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "explain":"ANALYZE",
 "partial":false,
 "securables":[],
-"output_schema":[],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
 "lineage":[],
 "filters":[],
 "warnings":[]}
@@ -193,7 +193,7 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "explain":"ANALYZE",
 "partial":false,
 "securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"MODIFY","columns":[]}],
-"output_schema":[],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
 "lineage":[],
 "filters":[],
 "warnings":[]}
@@ -204,7 +204,7 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "explain":"ANALYZE",
 "partial":false,
 "securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"DROP","columns":[]}],
-"output_schema":[],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
 "lineage":[],
 "filters":[],
 "warnings":[]}
@@ -215,7 +215,7 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "explain":"ANALYZE",
 "partial":false,
 "securables":[],
-"output_schema":[],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
 "lineage":[],
 "filters":[],
 "warnings":[]}
@@ -226,7 +226,7 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "explain":"ANALYZE",
 "partial":false,
 "securables":[{"kind":"system","name":["cluster"],"display":"system `cluster`","privilege":"MANAGE","columns":[]}],
-"output_schema":[],
+"output_schema":[{"ordinal":0,"name":"plan","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
 "lineage":[],
 "filters":[],
 "warnings":[]}
@@ -237,7 +237,8 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "explain":null,
 "partial":false,
 "securables":[],
-"output_schema":[],
+"output_schema":[{"ordinal":0,"name":"key","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":1,"name":"value","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
 "lineage":[],
 "filters":[],
 "warnings":[]}
@@ -248,7 +249,10 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "explain":null,
 "partial":false,
 "securables":[],
-"output_schema":[],
+"output_schema":[{"ordinal":0,"name":"key","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":1,"name":"value","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":2,"name":"meaning","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":3,"name":"Since version","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
 "lineage":[],
 "filters":[],
 "warnings":[]}
@@ -259,7 +263,8 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "explain":null,
 "partial":false,
 "securables":[],
-"output_schema":[],
+"output_schema":[{"ordinal":0,"name":"key","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":1,"name":"value","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
 "lineage":[],
 "filters":[],
 "warnings":[]}
@@ -270,7 +275,8 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "explain":null,
 "partial":false,
 "securables":[],
-"output_schema":[],
+"output_schema":[{"ordinal":0,"name":"key","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":1,"name":"value","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
 "lineage":[],
 "filters":[],
 "warnings":[]}
@@ -281,7 +287,8 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "explain":null,
 "partial":false,
 "securables":[],
-"output_schema":[],
+"output_schema":[{"ordinal":0,"name":"key","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":1,"name":"value","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
 "lineage":[],
 "filters":[],
 "warnings":[]}

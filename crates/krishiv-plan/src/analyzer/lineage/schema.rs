@@ -10,12 +10,21 @@
 //! [`FilterKind`], [`Privilege`], [`Securable`] kinds, by exhaustive matches); the statement classes and the
 //! analysis-level warning codes are listed here and checked against the session's enums by its tests.
 //!
-//! Versioning: a field added within v1 is optional (never `required`), a value added to an enum is
-//! additive; removing either, or changing a meaning, is `krishiv.analyze.v2`.
+//! Versioning: the published file lets v1 grow. No object closes its members (no `additionalProperties`),
+//! so a reader ignores a member it does not know; `required` lists the members v1 has had from the start,
+//! and a member added within v1 is optional (never `required`); an enum may gain values, so a reader accepts
+//! one it does not know. Removing a member or a value, adding a `required` entry, closing an object or
+//! changing a meaning is `krishiv.analyze.v2` (`cargo xtask docs-analyze --check` refuses it). The
+//! session's golden validator stays strict: it checks [`analyze_v1`], which has no unknown member.
+//!
+//! Not listed: the directory of a managed table. A run of `DROP TABLE`, `TRUNCATE TABLE` or `INSERT` on a
+//! managed table also checks `MODIFY` (and `CREATE`) on the table's directory, but only when the
+//! directory exists and on its resolved path, so listing it would take file-system I/O and would not be
+//! deterministic.
 
 use std::fmt::Write as _;
 
-use super::{FilterKind, LineageWarning, Transform};
+use super::{FilterKind, Leaf, LineageWarning, Transform};
 use crate::analyzer::{Privilege, Securable};
 
 /// The `schema_version` value.
@@ -122,6 +131,51 @@ pub fn securable_name(securable: &Securable) -> Vec<String> {
     }
 }
 
+/// The leaf forms, as [`leaf_key`] names them: `(key, description, the name is one string)`.
+pub const LEAF_FORMS: [(&str, &str, bool); 3] = [
+    ("table", "A catalog table's name parts.", false),
+    (
+        "path",
+        "Files read by path: the redacted path, as the 42501 denial prints it.",
+        true,
+    ),
+    (
+        "view",
+        "A view that is not expanded (a DEFINER view): its name parts; nothing under it is shown.",
+        false,
+    ),
+];
+
+/// The JSON key of a leaf's form (an exhaustive match: a new form does not compile until it is named).
+#[must_use]
+pub const fn leaf_key(leaf: &Leaf) -> &'static str {
+    match leaf {
+        Leaf::Table { .. } => "table",
+        Leaf::Path { .. } => "path",
+        Leaf::View { .. } => "view",
+    }
+}
+
+/// A leaf's name: its name parts, or one string (a path's redacted URL; see [`LEAF_FORMS`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeafName<'a> {
+    /// A table's or view's name parts.
+    Parts(&'a [String]),
+    /// A path's redacted text.
+    Text(&'a str),
+}
+
+/// A leaf's name and column.
+#[must_use]
+pub fn leaf_name(leaf: &Leaf) -> (LeafName<'_>, &str) {
+    match leaf {
+        Leaf::Table { name, column } | Leaf::View { name, column } => {
+            (LeafName::Parts(name), column)
+        }
+        Leaf::Path { url, column } => (LeafName::Text(url), column),
+    }
+}
+
 /// One shape of a JSON value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -140,7 +194,9 @@ pub enum Shape {
     Nullable(Box<Self>),
     /// An array of the inner shape.
     Array(Box<Self>),
-    /// An object with exactly these fields (all required in v1; none other allowed).
+    /// An object with these fields, each `required` (every one has been in v1 from the start). The
+    /// published schema does not close it (a reader ignores a member it does not know); the session's
+    /// golden validator does.
     Object(Vec<Field>),
     /// Exactly one of these shapes.
     OneOf(Vec<Self>),
@@ -173,7 +229,7 @@ fn nullable(shape: Shape) -> Shape {
     Shape::Nullable(Box::new(shape))
 }
 
-/// The three leaf forms, each with `extra` fields first.
+/// The leaf forms ([`LEAF_FORMS`]), each with `extra` fields first.
 fn leaves(extra: &[Field], tail: &[Field]) -> Shape {
     let column = || {
         field(
@@ -182,27 +238,19 @@ fn leaves(extra: &[Field], tail: &[Field]) -> Shape {
             Shape::String,
         )
     };
-    let forms = [
-        field(
-            "table",
-            "A catalog table's name parts.",
-            array(Shape::String),
-        ),
-        field(
-            "path",
-            "Files read by path: the redacted path, as the 42501 denial prints it.",
-            Shape::String,
-        ),
-        field(
-            "view",
-            "A view that is not expanded (a DEFINER view): its name parts; nothing under it is shown.",
-            array(Shape::String),
-        ),
-    ];
     Shape::OneOf(
-        forms
+        LEAF_FORMS
             .into_iter()
-            .map(|leaf| {
+            .map(|(key, description, text)| {
+                let leaf = field(
+                    key,
+                    description,
+                    if text {
+                        Shape::String
+                    } else {
+                        array(Shape::String)
+                    },
+                );
                 let mut fields = extra.to_vec();
                 fields.push(leaf);
                 fields.push(column());
@@ -310,12 +358,15 @@ pub fn analyze_v1() -> Shape {
         ),
         field(
             "securables",
-            "What the statement needs, in first-use order: reads (with columns), then targets.",
+            "What the statement needs, in first-use order: reads (with columns), then targets. Not listed: a \
+             managed table's directory, which a run of DROP TABLE, TRUNCATE TABLE or INSERT also checks \
+             only when it exists, on its resolved path.",
             array(securable),
         ),
         field(
             "output_schema",
-            "The result columns: a query's analyzed output, a SHOW/DESCRIBE command's result; else empty.",
+            "The result columns: a query's analyzed output; a SHOW, DESCRIBE, EXPLAIN, SET or RESET command's \
+             result (RESET and SET PATH: none); empty for writes, DDL and other commands.",
             array(output),
         ),
         field(
@@ -325,7 +376,7 @@ pub fn analyze_v1() -> Shape {
         ),
         field(
             "filters",
-            "The columns that decide which rows or groups, sorted.",
+            "The columns that decide which rows or groups, sorted by kind in the listed order, then by leaf.",
             array(leaves(&[filter_kind], &[])),
         ),
         field(
@@ -376,7 +427,12 @@ pub fn json_schema() -> String {
             J::Str(
                 "What Session::analyze returns as JSON (Analysis::to_json): a statement's class, the securables it \
                  needs, its output schema, column lineage and filter columns. Generated by `cargo xtask docs-analyze` \
-                 from krishiv_plan::analyzer::lineage::schema; additive within v1."
+                 from krishiv_plan::analyzer::lineage::schema. Additive within v1: members and enum values may \
+                 be added, so a reader ignores members it does not know and accepts enum values it does not \
+                 know; `required` lists the members v1 has had from the start. Not listed among the \
+                 securables: a managed table's directory, which a run of DROP TABLE, TRUNCATE TABLE or INSERT \
+                 also checks only when the directory exists, on its resolved path (not deterministic without \
+                 file-system I/O)."
                     .to_owned(),
             ),
         ),
@@ -393,7 +449,6 @@ pub fn json_schema() -> String {
 /// A JSON value with ordered members.
 enum J {
     Str(String),
-    Bool(bool),
     Int(u64),
     Arr(Vec<J>),
     Obj(Vec<(&'static str, J)>),
@@ -403,7 +458,6 @@ impl J {
     fn write(&self, out: &mut String, indent: usize) {
         match self {
             Self::Str(s) => write_str(out, s),
-            Self::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
             Self::Int(n) => {
                 let _ = write!(out, "{n}");
             }
@@ -411,7 +465,7 @@ impl J {
                 // Arrays of scalars stay on one line.
                 if items
                     .iter()
-                    .all(|i| matches!(i, Self::Str(_) | Self::Int(_) | Self::Bool(_)))
+                    .all(|i| matches!(i, Self::Str(_) | Self::Int(_)))
                 {
                     out.push('[');
                     for (n, item) in items.iter().enumerate() {
@@ -504,8 +558,8 @@ fn to_json(shape: &Shape, description: Option<&'static str>) -> J {
         Shape::Object(fields) => {
             m.push(("type", J::Str("object".to_owned())));
             let names: Vec<&'static str> = fields.iter().map(|f| f.name).collect();
+            // Not closed (no `additionalProperties`): v1 may add members.
             m.push(("required", strings(&names)));
-            m.push(("additionalProperties", J::Bool(false)));
             m.push((
                 "properties",
                 J::Obj(
@@ -609,6 +663,64 @@ mod tests {
         assert_eq!(securable_name(&all[0]), ["c", "d", "t"]);
         assert_eq!(securable_name(&all[3]), ["/p"]);
         assert_eq!(securable_name(&all[6]), ["s"]);
+        let leaves = [
+            Leaf::Table {
+                name: vec!["t".to_owned()],
+                column: "a".to_owned(),
+            },
+            Leaf::Path {
+                url: "/p".to_owned(),
+                column: "a".to_owned(),
+            },
+            Leaf::View {
+                name: vec!["v".to_owned()],
+                column: "a".to_owned(),
+            },
+        ];
+        let keys: Vec<&str> = leaves.iter().map(leaf_key).collect();
+        let forms: Vec<&str> = LEAF_FORMS.iter().map(|f| f.0).collect();
+        assert_eq!(keys, forms);
+        for (leaf, (_, _, text)) in leaves.iter().zip(LEAF_FORMS) {
+            assert_eq!(matches!(leaf_name(leaf).0, LeafName::Text(_)), text);
+        }
+    }
+
+    /// Every value a closed list of the description holds is one the session can emit, and the other way
+    /// round: the `transform` and filter `kind` enums are the names of every variant.
+    #[test]
+    fn emitted_values_are_in_the_closed_lists() {
+        fn enums(shape: &Shape, at: &str, out: &mut Vec<(String, Vec<&'static str>)>) {
+            match shape {
+                Shape::Enum(values) => out.push((at.to_owned(), values.clone())),
+                Shape::Nullable(s) | Shape::Array(s) => enums(s, at, out),
+                Shape::Object(fields) => {
+                    for f in fields {
+                        enums(&f.shape, &format!("{at}.{}", f.name), out);
+                    }
+                }
+                Shape::OneOf(shapes) => {
+                    for s in shapes {
+                        enums(s, at, out);
+                    }
+                }
+                Shape::String | Shape::Boolean | Shape::Count | Shape::Const(_) => {}
+            }
+        }
+        let mut all = Vec::new();
+        enums(&analyze_v1(), "$", &mut all);
+        let of = |at: &str| {
+            all.iter()
+                .find(|(p, _)| p == at)
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default()
+        };
+        let transforms: Vec<&str> = TRANSFORMS.iter().map(|t| t.name()).collect();
+        assert_eq!(of("$.lineage.transform"), transforms);
+        let kinds: Vec<&str> = FILTER_KINDS.iter().map(|k| k.name()).collect();
+        assert_eq!(of("$.filters.kind"), kinds);
+        assert_eq!(of("$.securables.kind"), SECURABLE_KINDS);
+        assert_eq!(of("$.securables.privilege"), privilege_names());
+        assert_eq!(of("$.warnings"), WARNING_CODES);
     }
 
     #[test]
@@ -617,7 +729,8 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(v["$id"], SCHEMA_ID);
         assert_eq!(v["properties"]["schema_version"]["const"], SCHEMA_VERSION);
-        assert_eq!(v["additionalProperties"], false);
+        // No object is closed, so v1 may grow.
+        assert!(!text.contains("additionalProperties"));
         let required: Vec<&str> = v["required"]
             .as_array()
             .unwrap()

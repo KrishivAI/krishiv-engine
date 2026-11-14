@@ -7,6 +7,11 @@
 //! invoked, nothing spills. Reads go through the session's access policy as on a run (a denied read fails
 //! with the same 42501); targets are listed, not authorized.
 //!
+//! Not listed: the directory of a managed table. A run of `DROP TABLE`, `TRUNCATE TABLE` or `INSERT` on a
+//! managed table also checks `MODIFY` (and for `INSERT`, `CREATE`) on the table's directory, but only when
+//! the directory exists and on its resolved path; listing it would take file-system I/O and would not be
+//! deterministic. The integration test `securables_equal_what_a_run_authorizes` pins these cases.
+//!
 //! [`Analysis::to_json`] writes the `krishiv.analyze.v1` document
 //! (`docs/reference/analyze/krishiv.analyze.v1.schema.json`, described by
 //! `krishiv_plan::analyzer::lineage::schema`). It is deterministic: securables in first-use order, lineage
@@ -19,15 +24,22 @@
 //! reports what `statement_queries` gives today (its source query), not the subqueries of its `ON`,
 //! clause conditions or `SET` values; `EXECUTE IMMEDIATE` is always `SESSION`.
 //!
-//! Output schema and lineage are a query's (`Statement::Query`); a `SHOW`/`DESCRIBE` command has its
-//! result schema ([`command_schema`]) and no lineage; any other statement (`EXPLAIN`, writes, DDL) has
-//! neither, but its reads are listed.
+//! Output schema and lineage are a query's (`Statement::Query`). A `SHOW`, `DESCRIBE`, `EXPLAIN`, `SET` or
+//! `RESET` command has the result columns the session returns for it ([`command_schema`]; `RESET` and
+//! `SET PATH` have none) and no lineage. Any other statement (writes, DDL) has neither, but its reads are
+//! listed.
+//!
+//! Provisional: every command column is reported nullable. Spark's command attributes are mostly
+//! non-null; pinning them at the Spark tags is a spark-semantics follow-up, and the command frames and
+//! [`command_schema`] then change together.
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 use krishiv_common::error::KrishivError;
-use krishiv_plan::analyzer::lineage::schema::{SCHEMA_VERSION, securable_kind, securable_name};
+use krishiv_plan::analyzer::lineage::schema::{
+    LeafName, SCHEMA_VERSION, leaf_key, leaf_name, securable_kind, securable_name,
+};
 use krishiv_plan::analyzer::lineage::{
     ColumnLineage, FilterKind, Leaf, LineageWarning, Source, lineage,
 };
@@ -37,7 +49,7 @@ use krishiv_sql::ast::Statement;
 use krishiv_types::DataType;
 
 use crate::access::StatementInfo;
-use crate::session::Session;
+use crate::session::{Session, internal};
 
 mod command_schema;
 #[cfg(test)]
@@ -54,7 +66,8 @@ pub struct Analysis {
     pub info: StatementInfo,
     /// Whether its reads are not fully known: then it is not provably read-only.
     pub partial: bool,
-    /// The result columns (a query's, a `SHOW`/`DESCRIBE` command's; else empty).
+    /// The result columns: a query's, or a `SHOW`, `DESCRIBE`, `EXPLAIN`, `SET` or `RESET` command's (see
+    /// the module doc); else empty.
     pub output_schema: Vec<OutputColumn>,
     /// Per output ordinal of a query, its sources and transform (else empty).
     pub lineage: Vec<ColumnLineage>,
@@ -127,9 +140,13 @@ impl AnalysisWarning {
     ];
 
     /// The warning of `code` (`LineageWarning` is non-exhaustive in another crate, so it maps by its
-    /// code; the schema's tests keep every lineage code among [`Self::ALL`]'s).
-    fn of_lineage(w: LineageWarning) -> Option<Self> {
-        Self::ALL.into_iter().find(|a| a.code() == w.code())
+    /// code; the schema's tests keep every lineage code among [`Self::ALL`]'s). An unknown code is an
+    /// internal error, never a dropped warning.
+    fn of_lineage(w: LineageWarning) -> Result<Self, KrishivError> {
+        Self::ALL
+            .into_iter()
+            .find(|a| a.code() == w.code())
+            .ok_or_else(|| internal(format!("lineage warning {} has no analysis code", w.code())))
     }
 }
 
@@ -139,7 +156,8 @@ impl Session {
     /// targets, listed), its output schema, column lineage and filter columns (see [`Analysis`]).
     ///
     /// ```
-    /// #     /// # use arrow_schema::{DataType, Field, Schema};
+    /// # use std::sync::Arc;
+    /// # use arrow_schema::{DataType, Field, Schema};
     /// use krishiv_session::Session;
     ///
     /// let s = Session::new()?;
@@ -235,8 +253,8 @@ impl Analysis {
             warnings: l
                 .warnings
                 .into_iter()
-                .filter_map(AnalysisWarning::of_lineage)
-                .collect(),
+                .map(AnalysisWarning::of_lineage)
+                .collect::<Result<_, _>>()?,
         })
     }
 
@@ -350,16 +368,15 @@ fn leaf_members_first(e: &mut String, leaf: &Leaf) {
     leaf_fields(e, leaf, true);
 }
 
+/// The key and name come from `krishiv-plan`'s exhaustive matches ([`leaf_key`], [`leaf_name`]), so a
+/// new leaf form is named in the schema description before it can be written.
 fn leaf_fields(e: &mut String, leaf: &Leaf, first: bool) {
-    let parts = |p: &[String]| list(p.iter().map(|s| string(s)));
-    let (key, value, column) = match leaf {
-        Leaf::Table { name, column } => ("table", parts(name), column),
-        Leaf::Path { url, column } => ("path", string(url), column),
-        Leaf::View { name, column } => ("view", parts(name), column),
-        // `Leaf` is non-exhaustive in another crate: a new kind prints as opaque until named here.
-        _ => ("opaque", "null".to_owned(), &String::new()),
+    let (name, column) = leaf_name(leaf);
+    let value = match name {
+        LeafName::Parts(parts) => list(parts.iter().map(|s| string(s))),
+        LeafName::Text(text) => string(text),
     };
-    member(e, key, &value, first);
+    member(e, leaf_key(leaf), &value, first);
     member(e, "column", &string(column), false);
 }
 

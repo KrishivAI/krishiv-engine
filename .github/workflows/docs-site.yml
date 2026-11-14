@@ -13,6 +13,7 @@ on:
       - "crates/krishiv-cli/src/check_compat/functions.json"
       - "crates/krishiv-functions/**"
       - "crates/krishiv-common/**"
+      - "crates/krishiv-plan/src/analyzer/lineage/schema.rs"
       - "crates/krishiv-connect/**"
       - "xtask/src/connect_coverage.rs"
       - "tests/connect/**"
@@ -83,12 +84,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The analyze schema is checked to be additive over the base branch's file.
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: 1.99.1
       - name: Pages match their generators, examples rerun
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
+          cargo xtask docs-analyze --check --base "${BASE:-origin/main}"
           cargo xtask docs-sql --check
           cargo xtask connect-coverage --check
           python3 tests/scripts/gen_compat_matrix.py --check

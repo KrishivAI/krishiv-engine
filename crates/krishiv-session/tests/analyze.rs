@@ -2,7 +2,7 @@
 //! `Session::analyze` and the `krishiv.analyze.v1` JSON (P3-T063 N1b): goldens over the parser corpus and the
 //! TPC-DS queries (each checked against the schema description), the schema file, the command result
 //! schemas, `partial` statements, the `Manage`-on-cluster target of `ADMIN`, denials and redaction. The
-//! securables match what a run asks the policy for (`analyze_authorize.rs`).
+//! securables match what a run asks `authorize()` for, both ways (`securables_equal_what_a_run_authorizes`).
 #![cfg(test)]
 
 mod analyze_support;
@@ -136,6 +136,15 @@ fn schema_vocabularies_match_the_session() {
         StatementClass::Session,
         StatementClass::Admin,
     ];
+    // An exhaustive match: a sixth class does not compile until it is listed above.
+    let listed = |c: StatementClass| match c {
+        StatementClass::Read
+        | StatementClass::Write
+        | StatementClass::Ddl
+        | StatementClass::Session
+        | StatementClass::Admin => classes.contains(&c),
+    };
+    assert!(classes.iter().all(|c| listed(*c)));
     let names: Vec<&str> = classes.iter().map(|c| c.name()).collect();
     assert_eq!(names, STATEMENT_CLASSES);
     let codes: Vec<&str> = AnalysisWarning::ALL.iter().map(|w| w.code()).collect();
@@ -143,7 +152,8 @@ fn schema_vocabularies_match_the_session() {
 }
 
 /// The result schema of every `SHOW`/`DESCRIBE` command kind (the corpus has one statement per kind,
-/// `krishiv-sql`'s classify test checks it), with the column names and types the command returns.
+/// `krishiv-sql`'s classify test checks it) and of the `EXPLAIN`, `SET` and `RESET` forms, with the column
+/// names and types the command returns (`RESET` and `SET PATH`: none).
 #[test]
 fn command_output_schemas() {
     let s = corpus_ready();
@@ -163,6 +173,16 @@ fn command_output_schemas() {
             "DESCRIBE TABLE EXTENDED t AS JSON",
             "SHOW TBLPROPERTIES t ('k')",
             "SHOW CURRENT SCHEMA",
+            "EXPLAIN SELECT a FROM t",
+            "EXPLAIN EXTENDED SELECT a FROM t",
+            "EXPLAIN SET",
+            "SET",
+            "SET -v",
+            "SET spark.sql.ansi.enabled",
+            "SET spark.sql.ansi.enabled = true",
+            "SET TIME ZONE 'UTC'",
+            "RESET spark.sql.ansi.enabled",
+            "RESET",
         ]
         .map(str::to_owned),
     );
@@ -184,13 +204,16 @@ fn command_output_schemas() {
                 continue;
             }
         };
-        assert!(!a.output_schema.is_empty(), "{sql}");
         let cols: Vec<String> = a
             .output_schema
             .iter()
             .map(|c| format!("{}: {}", c.name, c.data_type.simple_string()))
             .collect();
-        writeln!(out, "{sql}\n  {}", cols.join(", ")).unwrap();
+        if cols.is_empty() {
+            writeln!(out, "{sql}\n  (no columns)").unwrap();
+        } else {
+            writeln!(out, "{sql}\n  {}", cols.join(", ")).unwrap();
+        }
         // The command's own frame has the same names and types.
         let run = block_on(df.schema()).unwrap();
         let ran: Vec<String> = run
@@ -461,8 +484,17 @@ fn warehouse_free(s: &str) -> String {
 /// statement whose analysis is complete and that runs: recorded at the `authorize()` call (the
 /// `krishiv::authorize` event), not by a policy double, and with folded-case duplicates as one.
 ///
+/// Both ways (N1b review M3): what analyze itself asks `authorize()` is also recorded, and it asks no more
+/// than the run does and nothing it does not list.
+///
 /// The snapshot pins the known differences: a run of `DROP TABLE`, `INSERT` and `TRUNCATE` on a managed
-/// table also asks for its directory (`table_commands/files.rs`), which analyze does not list yet.
+/// table also asks for its directory (`table_commands/files.rs`), which analyze does not list: the check
+/// runs only when the directory exists, on its resolved path (documented in the `analyze` module doc and
+/// the schema description).
+///
+/// The event stream is not every policy question: `system.*` tables' `Monitor` row filter
+/// (`monitor.rs`) calls the policy's `check` directly, bypassing `authorize()`. It filters rows, it is
+/// not a requirement, so analyze does not list it and this test does not see it.
 #[test]
 fn securables_equal_what_a_run_authorizes() {
     static ONCE: std::sync::Once = std::sync::Once::new();
@@ -476,9 +508,12 @@ fn securables_equal_what_a_run_authorizes() {
             .build()
             .unwrap();
         corpus_session(&s);
+        // The setup's own questions are not the statement's.
+        asked_by(&principal);
         let Ok(a) = block_on(s.analyze(&sql)) else {
             continue;
         };
+        let analyze_asked = asked_by(&principal);
         if a.partial {
             continue;
         }
@@ -493,12 +528,21 @@ fn securables_equal_what_a_run_authorizes() {
                 )
             })
             .collect();
-        asked_by(&principal);
+        assert!(
+            analyze_asked.is_subset(&analyzed),
+            "{label}: {sql}\n  analyze asked but did not list: {:?}",
+            analyze_asked.difference(&analyzed).collect::<Vec<_>>()
+        );
         if block_on(s.sql(&sql)).is_err() {
             continue;
         }
         let ran = asked_by(&principal);
         compared += 1;
+        assert!(
+            analyze_asked.is_subset(&ran),
+            "{label}: {sql}\n  analyze asked more than the run: {:?}",
+            analyze_asked.difference(&ran).collect::<Vec<_>>()
+        );
         if analyzed != ran {
             let only_analyze: Vec<_> = analyzed.difference(&ran).collect();
             let only_run: Vec<_> = ran.difference(&analyzed).collect();
