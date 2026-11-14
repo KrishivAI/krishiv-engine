@@ -473,6 +473,12 @@ fn mask_aliases_hides_every_alias_name() {
 }
 
 #[test]
+fn mask_aliases_keeps_no_text_of_a_name_with_a_hash_digit_run() {
+    let masked = super::mask_aliases("Project [x AS prefix#1hunter2#12, a#3]");
+    assert!(!masked.contains("hunter2"), "{masked}");
+}
+
+#[test]
 fn a_file_write_of_a_literal_projection_is_masked() {
     let dir = tempfile::tempdir().unwrap();
     let out = tempfile::tempdir().unwrap();

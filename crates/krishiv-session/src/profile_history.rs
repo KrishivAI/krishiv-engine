@@ -444,14 +444,22 @@ fn mask_aliases(text: &str) -> String {
         let name_start = at + " AS ".len();
         out.push_str(&rest[..name_start]);
         rest = &rest[name_start..];
-        // The name ends at the first `#` that starts a numeric id.
-        let end = rest.match_indices('#').find_map(|(i, _)| {
-            rest[i + 1..]
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_ascii_digit())
-                .then_some(i)
-        });
+        // The name ends at the last `#<digits>` id before the next alias: a literal's text can hold `#1abc`, so the
+        // first `#<digit>` is not the id. An id is followed by a non-identifier character or the end. Taking the last
+        // one may mask more than the name (the safe error), never less.
+        let segment = rest.find(" AS ").unwrap_or(rest.len());
+        let end = rest[..segment]
+            .match_indices('#')
+            .filter_map(|(i, _)| {
+                let digits = rest[i + 1..]
+                    .chars()
+                    .take_while(char::is_ascii_digit)
+                    .count();
+                let after = rest[i + 1 + digits..].chars().next();
+                (digits > 0 && after.is_none_or(|c| !(c.is_alphanumeric() || c == '_')))
+                    .then_some(i)
+            })
+            .next_back();
         if let Some(end) = end {
             out.push('?');
             rest = &rest[end..];

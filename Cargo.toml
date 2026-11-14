@@ -115,6 +115,9 @@ async-trait = { version = "0.1.89", default-features = false }
 # For object_store's `if_unmodified_since` precondition, and the zone type of the Delta
 # evaluator's partition timestamps (chrono 0.4.45 comes with Arrow/object_store, ADR 0028).
 chrono = { version = "0.4.42", default-features = false }
+# Hive metastore client of `krishiv-catalogs` (feature `hive`): the plain runtime only. With default features off it adds
+# `varint-rs` and a second `ordered-float` to the tree; `hive_metastore` (volo/pilota) would add 28 crates (P3-T020b).
+thrift = { version = "0.25", default-features = false }
 tokio = { version = "1.53", default-features = false }
 tonic = { version = "0.14.6", default-features = false }
 # Test clients of the Connect server only (dev-dependency).
@@ -161,6 +164,10 @@ memchr = { version = "2.8", default-features = false }
 # XML reader for `from_xml`; already in the lock file through the object-store stack.
 quick-xml = { version = "0.41", default-features = false }
 jiff = { version = "0.2.38", default-features = false }
+# ICU4X collation sort keys and case mapping for the ICU collations (ADR 0043 s5); compiled data only behind `collations-icu`.
+icu_collator = { version = "2.4", default-features = false }
+icu_locale_core = { version = "2.4", default-features = false }
+icu_casemap = { version = "2.4", default-features = false }
 slatedb = { version = "0.17", default-features = false }
 foyer = { version = "0.22.6", default-features = false }
 # Lock-step pin: the connector uses `internal-api` items, which are unstable across
@@ -201,9 +208,15 @@ proptest = { version = "1.9", default-features = false }
 prost-reflect = { version = "0.16.5", default-features = false }
 # Concurrency model checking (dev-dependency only, under `--cfg loom`).
 loom = { version = "0.7", default-features = false }
-# Self-removing test directories (dev-dependency only).
+# Safe system calls: spill-file page-cache hints (krishiv-memory) and the UDF sandbox's prctl, setsid and rlimits.
 rustix = { version = "=1.1.6", default-features = false, features = ["fs", "process", "std"] }
+# Self-removing test directories (dev-dependency only).
 tempfile = { version = "3.27", default-features = false }
+# UDF worker sandbox (P3-T014b, `krishiv-udf-sandbox` only): Landlock rulesets, seccomp-bpf filters, and
+# the libc syscall and socket constants the filters name.
+landlock = { version = "=0.4.7", default-features = false }
+seccompiler = { version = "=0.5.0", default-features = false }
+libc = { version = "0.2.186", default-features = false }
 thiserror = { version = "2.0", default-features = false }
 serde = { version = "1.0.229", default-features = false }
 serde_json = { version = "1.0.154", default-features = false }

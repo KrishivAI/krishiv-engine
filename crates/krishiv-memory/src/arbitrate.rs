@@ -58,7 +58,7 @@ use std::pin::{Pin, pin};
 use std::sync::Arc;
 use std::task::Poll;
 
-use crate::pool::{Class, Consumer, Denied, Group, GroupKind, Node};
+use crate::pool::{Class, Consumer, DEFAULT_PRIORITY, Denied, Group, GroupKind, Node};
 use crate::spill::{OwnerId, SpillTicket};
 use std::time::Instant;
 
@@ -229,7 +229,7 @@ enum Step {
 enum Waited {
     Step(Step),
     /// All tickets completed ([`Until::Tickets`]), or something changed
-    /// ([`Until::Change`]): re-plan.
+    /// ([`Until::Pending`], [`Until::Change`]): re-plan.
     TicketsDone,
     Deadline,
 }
@@ -239,8 +239,12 @@ enum Waited {
 enum Until {
     /// Once every ticket completed.
     Tickets,
-    /// Only on a grant or the deadline.
-    Grant,
+    /// While pending releases cover the shortfall: at the first release or
+    /// abort the caller re-plans. A release reaches the root before the
+    /// aborted query's own counter, so `pending` can count bytes the binding
+    /// already got back; re-planning then finds the rest of the shortfall
+    /// still to fund (another abort) instead of waiting out the deadline.
+    Pending,
     /// At the first release, credit taken, ticket or abort: the caller
     /// re-plans.
     Change,
@@ -280,6 +284,10 @@ impl Plan {
                 .saturating_add(self.writing)
                 .saturating_add(self.holding)
                 >= shortfall
+    }
+    /// Releases of already-aborted queries alone cover `shortfall`.
+    fn covered_by_pending(&self, shortfall: usize) -> bool {
+        self.pending > 0 && self.pending >= shortfall
     }
     fn excess(&self, group: Option<&Arc<Node>>) -> usize {
         group.map_or(0, |g| g.reserved().saturating_sub(self.fair_share))
@@ -547,8 +555,20 @@ impl Round {
             let consumers = self.consumers_within(&binding);
             let plan = self.plan(&binding, &consumers);
             let shortfall = binding.shortfall(need, self.class());
-            if plan.pending > 0 && plan.pending >= shortfall {
-                match self.wait(slot, deadline, Vec::new(), Until::Grant).await? {
+            if shortfall == 0 {
+                // Released since the refused attempt (the victim's release
+                // may have funded it): ask again before aborting anything.
+                // Each pass re-reads the counters only; a shortfall of 0
+                // means room was free at that read, so this cannot spin
+                // without other reservations (fast path or rounds) taking
+                // that room each time.
+                continue;
+            }
+            if plan.covered_by_pending(shortfall) {
+                match self
+                    .wait(slot, deadline, Vec::new(), Until::Pending)
+                    .await?
+                {
                     Waited::Step(s) => return Ok(s),
                     Waited::Deadline => return Err(self.exhausted(&binding)),
                     Waited::TicketsDone => continue,
@@ -582,12 +602,19 @@ impl Round {
         }
     }
 
-    /// The query furthest above its fair share that is not aborted and holds
-    /// memory; ties go to the requester's own query.
+    /// The query of the lowest priority, then the furthest above its fair share, that is not
+    /// aborted and holds memory; ties go to the requester's own query.
     fn abort_victim(&self, plan: &Plan, own: Option<&Arc<Node>>) -> Option<Arc<Node>> {
         let key = |g: &Arc<Node>| {
             let is_own = own.is_some_and(|o| Arc::ptr_eq(o, g));
-            (plan.excess(Some(g)), g.reserved(), is_own)
+            // The lowest priority first (`Reverse`), then the furthest above its share.
+            let priority = g.group.as_ref().map_or(DEFAULT_PRIORITY, |x| x.priority);
+            (
+                std::cmp::Reverse(priority),
+                plan.excess(Some(g)),
+                g.reserved(),
+                is_own,
+            )
         };
         plan.groups
             .iter()
@@ -674,10 +701,16 @@ impl Round {
             };
             // The caller planned before this listener existed: a grant
             // settled in between notified no one, so check it again now.
-            if until == Until::Change {
+            if matches!(until, Until::Pending | Until::Change) {
                 let (binding, need) = short;
                 let plan = self.plan(&binding, &self.consumers_within(&binding));
-                if !plan.covered_by_releases(binding.shortfall(need, self.class())) {
+                let shortfall = binding.shortfall(need, self.class());
+                let covered = if until == Until::Pending {
+                    plan.covered_by_pending(shortfall)
+                } else {
+                    plan.covered_by_releases(shortfall)
+                };
+                if !covered {
                     return Ok(Waited::TicketsDone);
                 }
             }
@@ -710,7 +743,7 @@ impl Round {
                 }
             })
             .await;
-            if woke && until == Until::Change {
+            if woke && matches!(until, Until::Pending | Until::Change) {
                 return Ok(match self.step(slot)? {
                     Step::Short(..) => Waited::TicketsDone,
                     s => Waited::Step(s),
