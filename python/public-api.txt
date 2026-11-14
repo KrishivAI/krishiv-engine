@@ -1147,6 +1147,7 @@ DataFrameReader.def load(self, path: str | list[str] | None=None, format: str | 
 DataFrameReader.def option(self, key: str, value: object) -> DataFrameReader
 DataFrameReader.def options(self, **options: object) -> DataFrameReader
 DataFrameReader.def parquet(self, *paths: str) -> DataFrame
+DataFrameReader.def schema(self, schema: object) -> DataFrameReader
 DataFrameWriter.def __init__(self, df: DataFrame) -> None
 DataFrameWriter.def bucketBy(self, numBuckets: int, col: str | list[str] | tuple[str, ...], *cols: str) -> DataFrameWriter
 DataFrameWriter.def csv(self, path: str, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, **options: object) -> None
