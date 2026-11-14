@@ -123,6 +123,11 @@ pub(crate) struct QueryEnv {
     pub(crate) identifier_spans: Arc<[krishiv_sql::ast::Span]>,
     /// The `IDENTIFIER(..)` text each of `identifier_spans` replaced (empty for `CACHE TABLE`).
     pub(crate) identifier_written: Arc<[String]>,
+    /// The salt of the statement's unseeded `TABLESAMPLE` seeds
+    /// ([`PlanningContext::sample_salt`](krishiv_exec::planner::PlanningContext::sample_salt)):
+    /// drawn once per DataFrame and kept when it is analyzed again, so its
+    /// actions sample the same rows.
+    pub(crate) sample_salt: u64,
 }
 
 /// A batch query's result rows: insert-only, so a weight other than 1 is a

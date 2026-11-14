@@ -143,6 +143,7 @@ fn ends_in_sort(n: &PhysNode) -> bool {
             PhysNode::Project { input, .. }
             | PhysNode::Filter { input, .. }
             | PhysNode::LateFetch { input, .. }
+            | PhysNode::Sample { input, .. }
             | PhysNode::Limit { input, .. } => n = input,
             _ => return false,
         }
@@ -188,6 +189,7 @@ fn kept_order(node: &PhysNode, order: &[OrderKey], layout: &[AttrId]) -> Vec<Ord
         PhysNode::Project { .. }
         | PhysNode::Filter { .. }
         | PhysNode::Limit { .. }
+        | PhysNode::Sample { .. }
         | PhysNode::Window { .. }
         | PhysNode::WindowGroupLimit { .. } => order
             .iter()
@@ -308,6 +310,8 @@ pub(crate) struct Planner<'a> {
     loops: HashMap<u32, SchemaRef>,
     /// Build-side projections requested and applied (`build_project`).
     pub(crate) moves: super::build_project::Moves,
+    /// The unseeded samples planned so far (each draws its own seed).
+    unseeded_samples: u64,
 }
 
 impl<'a> Planner<'a> {
@@ -342,6 +346,7 @@ impl<'a> Planner<'a> {
             scan_filters: HashMap::new(),
             loops: HashMap::new(),
             moves: super::build_project::Moves::default(),
+            unseeded_samples: 0,
         }
     }
 
@@ -492,10 +497,14 @@ impl<'a> Planner<'a> {
                 }
                 let (scans_from, filters_from) = (self.next_scan, self.next_filter);
                 let planned = self.plan(&def)?;
-                self.copies.entry(r.source.clone()).or_default().push(Copy {
-                    scans: scans_from..self.next_scan,
-                    filters: filters_from..self.next_filter,
-                });
+                // An unseeded sample is never shared: as Spark inlines the
+                // definition, each reference samples with its own seed.
+                if !krishiv_optimizer::plan_has_unseeded_sample(&def) {
+                    self.copies.entry(r.source.clone()).or_default().push(Copy {
+                        scans: scans_from..self.next_scan,
+                        filters: filters_from..self.next_filter,
+                    });
+                }
                 // Exactly the definition's columns, under this reference's
                 // attributes.
                 let source: Vec<BoundColumn> = r
@@ -553,6 +562,21 @@ impl<'a> Planner<'a> {
             PlanNode::ReplicateRows { input, count } => {
                 let input = self.plan(input)?;
                 self.replicate(input, count)
+            }
+            PlanNode::Sample {
+                input,
+                bounds,
+                seed,
+            } => {
+                let input = self.plan(input)?;
+                let seed = match seed {
+                    Some(seed) => *seed,
+                    None => {
+                        self.unseeded_samples += 1;
+                        unseeded_sample_seed(self.cx.sample_salt, self.unseeded_samples)
+                    }
+                };
+                Ok(sample(input, bounds.lower, bounds.upper, seed))
             }
             PlanNode::Generate {
                 input,
@@ -1744,3 +1768,45 @@ mod attach_tests;
 
 mod util;
 pub(crate) use util::*;
+
+/// `TABLESAMPLE` over `input` (Spark's `SampleExec`) with its resolved
+/// seed. Rows still pass in order, but which ones depends on every row below
+/// reaching the sample: no runtime filter or top-N bound reaches through it.
+fn sample(input: Planned, lower: f64, upper: f64, seed: i64) -> Planned {
+    let schema = Arc::clone(&input.schema);
+    let layout = input.layout.clone();
+    let mut planned = input.wrap(
+        |input| PhysNode::Sample {
+            input,
+            lower,
+            upper,
+            seed,
+        },
+        schema,
+        layout,
+        ("Sample", format!("{lower:?}, {upper:?}, false, {seed}")),
+    );
+    planned.sites.clear();
+    planned
+}
+
+/// The seed of the `n`th unseeded sample, in `0..1000` as Spark's
+/// `(math.random * 1000).toLong`: from the query's sample salt
+/// ([`PlanningContext::sample_salt`](super::PlanningContext::sample_salt)),
+/// so every plan of one DataFrame draws the same seeds, as Spark's executed
+/// plan of one Dataset does; without a salt, from the process's random
+/// hasher keys.
+fn unseeded_sample_seed(salt: Option<u64>, n: u64) -> i64 {
+    use std::hash::BuildHasher as _;
+    let draw = match salt {
+        // SplitMix64's finalizer of the salt and the sample's number.
+        Some(salt) => {
+            let mut z = salt ^ n.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            z ^ (z >> 31)
+        }
+        None => std::collections::hash_map::RandomState::new().hash_one(n),
+    };
+    (draw % 1000).cast_signed()
+}

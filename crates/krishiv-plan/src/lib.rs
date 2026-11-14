@@ -85,6 +85,7 @@
 //! | `PlanNode::Distinct` | U | - | - |
 //! | `PlanNode::SetOp` | U | - | - |
 //! | `PlanNode::ReplicateRows` | R | - | - |
+//! | `PlanNode::Sample` | U, R | - | - |
 //! | `PlanNode::Pivot` | U | - | - |
 //! | `PlanNode::Unpivot` | U | - | - |
 //! | `PlanNode::Expand` | R | - | - |
@@ -169,8 +170,8 @@ pub fn generate_qualifier(index: usize, aliased: bool) -> String {
 
 pub use plan::{
     ALIAS_PART_SEP, Cte, CteRef, GeneratorKind, Grouping, IR_VERSION, JoinCondition, JoinKind,
-    JoinStrategy, LogicalPlan, PivotValue, Plan, PlanNode, ReadSource, Scan, SetOperation, SqlArgs,
-    TABLE_FUNCTION_NAME_SEP, TableVersion, UnpivotColumnSet, generator_arg,
+    JoinStrategy, LogicalPlan, PivotValue, Plan, PlanNode, ReadSource, SampleBounds, Scan,
+    SetOperation, SqlArgs, TABLE_FUNCTION_NAME_SEP, TableVersion, UnpivotColumnSet, generator_arg,
     without_generated_marker,
 };
 pub use raises::{conjuncts, exact_decimal, is_deterministic, may_raise, runs_on_any_row};
