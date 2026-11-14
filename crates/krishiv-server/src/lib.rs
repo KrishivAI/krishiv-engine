@@ -2,7 +2,8 @@
 //! Admin and UI API server (layer L6).
 //!
 //! Serves the embedded SPA at `/` and the versioned REST surface under
-//! `/api/v1`. Binds loopback by default (ADR 0024); auth arrives later.
+//! `/api/v1`. Binds loopback by default (ADR 0024); guarded routes ask a
+//! [`guard::Guard`] (P3-T002).
 
 #![forbid(unsafe_code)]
 
@@ -24,8 +25,11 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub mod metrics;
 
 pub mod admin;
+pub mod guard;
 pub mod internal;
 
+#[cfg(feature = "session")]
+pub mod session_guard;
 #[cfg(feature = "session")]
 pub mod session_source;
 

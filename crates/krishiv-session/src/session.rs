@@ -1343,6 +1343,11 @@ impl Session {
         env: &QueryEnv,
         text: Option<&RedactedSql>,
     ) -> Result<AnalyzedPlan, KrishivError> {
+        // A store setting this session redirected (endpoint, region, account) could send the
+        // server's credentials to another host:
+        // asked once per analysis, before any table or file is read (P3-T067b).
+        self.authorize_store_options(StatementClass::Read, &env.config, std::iter::empty())
+            .await?;
         // Temporary views over queries inline as subqueries, so the
         // analyzer sees one plan however the view was made.
         let next_source = || self.next_source_id();

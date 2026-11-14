@@ -1,0 +1,10 @@
+{
+  "format_version": 1,
+  "result_target_percent": 85,
+  "result_floor_per_mille": 957,
+  "measured": {
+    "passed": 11992,
+    "total": 12520,
+    "on": "2026-11-13"
+  }
+}

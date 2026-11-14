@@ -103,7 +103,25 @@ pub(crate) fn url_secret_ranges(url: &str) -> Vec<Range<usize>> {
         // is exempt: `hf://user:secret@datasets/...` still has its userinfo redacted.
         let userinfo_scheme =
             !(url[..i].eq_ignore_ascii_case("hf") && url[start..].starts_with("datasets/"));
-        if let Some(at) = url[start..auth_end].rfind('@').filter(|_| userinfo_scheme) {
+        // `abfs[s]://<container>@<account host>/...` and `wasb[s]://...`: the `@` separates the
+        // container from the account (Azure keys and SAS tokens are separate options, never in
+        // the URL). Only that shape is exempt: an `@` past the authority, or a `:` before it,
+        // keeps the usual redaction.
+        let azure = ["abfs", "abfss", "wasb", "wasbs"]
+            .iter()
+            .any(|s| url[..i].eq_ignore_ascii_case(s));
+        let authority = url[start..auth_end]
+            .find('/')
+            .map_or(auth_end, |e| start + e);
+        let azure_container = azure
+            && url[start..authority]
+                .find('@')
+                .is_some_and(|at| at > 0 && !url[start..start + at].contains(':'))
+            && !url[authority..auth_end].contains('@');
+        if let Some(at) = url[start..auth_end]
+            .rfind('@')
+            .filter(|_| userinfo_scheme && !azure_container)
+        {
             let userinfo = start..start + at;
             match url[userinfo.clone()].find(':') {
                 Some(colon) => push(&mut out, start + colon + 1..userinfo.end),
