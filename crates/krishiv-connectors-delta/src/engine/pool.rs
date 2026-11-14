@@ -171,9 +171,9 @@ impl LogPool {
     }
 
     /// Runs `f` on a pool thread once a slot is free. The wait for the slot ends early with
-    /// `OPERATION_CANCELED` when `cancelled` completes (a token's or a query's cancellation). A call that has started is always awaited to
-    /// its real outcome: it may have put a commit, and a commit that landed must not be reported
-    /// as cancelled. It still ends soon after a cancel, because every handler call checks the
+    /// `OPERATION_CANCELED` when `cancelled` completes (a token's or a query's cancellation). A
+    /// call that has started is always awaited to its real outcome: it may have put a commit, and
+    /// a commit that landed must not be reported as cancelled. It still ends soon after a cancel, because every handler call checks the
     /// token first and reads race it.
     ///
     /// # Errors

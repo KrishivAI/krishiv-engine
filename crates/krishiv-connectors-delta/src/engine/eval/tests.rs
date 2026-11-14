@@ -1113,6 +1113,18 @@ fn partition_timestamp_grammar() {
             "2024-01-15T12:30:45Z",
         ),
         ("2024-01-15 12:30:45 Zulu", None, "2024-01-15T12:30:45Z"),
+        // Spaced `GMT`, and `UTC` over a fixed and a named reader zone: still UTC.
+        ("2024-01-15 12:30:45 GMT", None, "2024-01-15T12:30:45Z"),
+        (
+            "2024-01-15 12:30:45 UTC",
+            Some("+05:30"),
+            "2024-01-15T12:30:45Z",
+        ),
+        (
+            "2024-01-15 12:30:45 UTC",
+            Some("America/New_York"),
+            "2024-01-15T12:30:45Z",
+        ),
         // A zone name from the zone database (`jiff`'s bundled tzdata), as the kernel resolves
         // it with chrono-tz (`embedded_iana_timezone_with_default_options`): the value's zone
         // wins over the reader zone; CET in winter (+01:00) and summer (+02:00).
