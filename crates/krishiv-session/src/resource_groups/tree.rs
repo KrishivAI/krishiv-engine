@@ -184,6 +184,54 @@ impl Shared {
         self.lock().nodes.get(leaf).and_then(|n| n.per_query_memory)
     }
 
+    /// One row per group, parents before their children (`system.resource_groups`).
+    pub(super) fn rows(&self) -> Vec<GroupRow> {
+        let tree = self.lock();
+        tree.nodes
+            .iter()
+            .map(|n| GroupRow {
+                group_id: n.id.clone(),
+                parent_id: n.parent.map(|p| tree.nodes[p].id.clone()),
+                scheduling_policy: match n.policy {
+                    Policy::WeightedFair => "weighted_fair",
+                    Policy::QueryPriority => "query_priority",
+                },
+                scheduling_weight: i32::try_from(n.weight).unwrap_or(i32::MAX),
+                priority: i32::from(n.priority),
+                workload_class: n.class.as_str(),
+                hard_concurrency_limit: i64::try_from(n.hard).unwrap_or(i64::MAX),
+                max_queued: i64::try_from(n.max_queued).unwrap_or(i64::MAX),
+                soft_memory_limit_bytes: n
+                    .soft_memory
+                    .map(|b| i64::try_from(b).unwrap_or(i64::MAX)),
+                per_query_memory_limit_bytes: n
+                    .per_query_memory
+                    .map(|b| i64::try_from(b).unwrap_or(i64::MAX)),
+                scan_quota_bytes: n
+                    .scan_quota
+                    .map(|q| i64::try_from(q.bytes).unwrap_or(i64::MAX)),
+                scan_quota_period_s: n
+                    .scan_quota
+                    .map(|q| i64::try_from(q.period_ms / 1000).unwrap_or(i64::MAX)),
+                running: i64::try_from(n.running).unwrap_or(i64::MAX),
+                queued: i64::try_from(n.queued).unwrap_or(i64::MAX),
+                memory_reserved_bytes: i64::try_from(
+                    n.reserved
+                        .iter()
+                        .map(|(_, r)| r.load(Ordering::Relaxed))
+                        .sum::<usize>(),
+                )
+                .unwrap_or(i64::MAX),
+                scan_bytes_in_window: n
+                    .scan_quota
+                    .map(|_| i64::try_from(n.scan_used).unwrap_or(i64::MAX)),
+                scan_window_resets_at_ms: n
+                    .scan_quota
+                    .map(|_| i64::try_from(n.window_end_ms).unwrap_or(i64::MAX)),
+            })
+            .collect()
+    }
+
     /// `(running, queued)` of a group, by dotted id.
     pub(super) fn counts(&self, id: &str) -> Option<(usize, usize)> {
         self.lock()
@@ -192,6 +240,28 @@ impl Shared {
             .find(|n| n.id == id)
             .map(|n| (n.running, n.queued))
     }
+}
+
+/// One group of the tree as `system.resource_groups` shows it.
+#[derive(Debug, Clone)]
+pub struct GroupRow {
+    pub(crate) group_id: String,
+    pub(crate) parent_id: Option<String>,
+    pub(crate) scheduling_policy: &'static str,
+    pub(crate) scheduling_weight: i32,
+    pub(crate) priority: i32,
+    pub(crate) workload_class: &'static str,
+    pub(crate) hard_concurrency_limit: i64,
+    pub(crate) max_queued: i64,
+    pub(crate) soft_memory_limit_bytes: Option<i64>,
+    pub(crate) per_query_memory_limit_bytes: Option<i64>,
+    pub(crate) scan_quota_bytes: Option<i64>,
+    pub(crate) scan_quota_period_s: Option<i64>,
+    pub(crate) running: i64,
+    pub(crate) queued: i64,
+    pub(crate) memory_reserved_bytes: i64,
+    pub(crate) scan_bytes_in_window: Option<i64>,
+    pub(crate) scan_window_resets_at_ms: Option<i64>,
 }
 
 /// The result of asking a group for a slot.

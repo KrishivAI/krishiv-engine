@@ -89,6 +89,8 @@ pub struct EngineRuntime {
     /// session of the runtime so the group limits hold across them (`None` when the key is unset:
     /// every query is admitted at once).
     pub(crate) admission: Option<Arc<dyn crate::admission::AdmissionController>>,
+    /// The same controller as `admission`, kept by its own type for `system.resource_groups`.
+    pub(crate) resource_groups: Option<Arc<crate::resource_groups::ResourceGroups>>,
     /// The sessions, live and recently ended (`system.sessions`).
     pub(crate) sessions: Arc<crate::sessions::SessionRegistry>,
     /// The session actions running now, cancellable before their query exists.
@@ -265,7 +267,7 @@ impl EngineRuntime {
             Arc::new(ResultCache::default())
         };
         let invalidation = crate::cache::Invalidation::new(Arc::clone(&results));
-        let admission = match config
+        let resource_groups = match config
             .get(&krishiv_common::config::WORKLOAD_RESOURCE_GROUPS_FILE)
             .and_then(krishiv_common::config::ConfigValue::as_str)
         {
@@ -275,11 +277,13 @@ impl EngineRuntime {
                     .unwrap_or(usize::MAX);
                 Some(Arc::new(crate::resource_groups::ResourceGroups::from_file(
                     path, total,
-                )?)
-                    as Arc<dyn crate::admission::AdmissionController>)
+                )?))
             }
             None => None,
         };
+        let admission = resource_groups
+            .clone()
+            .map(|g| g as Arc<dyn crate::admission::AdmissionController>);
         let runtime = Self {
             pairs,
             config: Arc::new(config),
@@ -300,6 +304,7 @@ impl EngineRuntime {
             live: Mutex::new(LiveSet::default()),
             sessions: Arc::default(),
             admission,
+            resource_groups,
             actions: Arc::default(),
             io,
             private,
