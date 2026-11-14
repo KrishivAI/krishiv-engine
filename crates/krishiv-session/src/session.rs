@@ -1667,7 +1667,12 @@ impl Session {
         queued.open = false;
         match admitted {
             Ok(permit) => {
-                self.state.queries.mark_started(log_id, permit.group());
+                let queued_ns = permit
+                    .slot::<crate::resource_groups::GroupSlot>()
+                    .map_or(0, crate::resource_groups::GroupSlot::queued_ns);
+                self.state
+                    .queries
+                    .mark_started(log_id, permit.group(), queued_ns);
                 Ok(permit)
             }
             Err(error) => {

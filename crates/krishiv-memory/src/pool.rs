@@ -210,14 +210,14 @@ impl Shared {
     }
 }
 
-/// What a group's subtree is: the top of a group is a child of the root or
-/// of a tenant pool ([`TreePool::tenant`]).
 /// The abort priority of a query made with [`MemoryPool::child`].
 pub const DEFAULT_PRIORITY: u8 = 50;
 
 /// The highest abort priority; a larger value is lowered to it.
 pub const MAX_PRIORITY: u8 = 100;
 
+/// What a group's subtree is: the top of a group is a child of the root or
+/// of a tenant pool ([`TreePool::tenant`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GroupKind {
     /// A query: arbitrates, can be aborted.

@@ -50,6 +50,11 @@ impl QueryStart {
         }
     }
 
+    /// Bytes the query's own I/O context has read since [`Self::capture`].
+    pub(crate) fn bytes_read_since(&self) -> u64 {
+        IoCounters::get(&self.io.counters().bytes_read).saturating_sub(self.bytes_read)
+    }
+
     /// Folds the query's metrics with the deltas since [`Self::capture`]:
     /// the one fold of this query. `error` is the stream's terminal error,
     /// if any; otherwise the query's own error decides the outcome (none is
@@ -213,6 +218,7 @@ impl QueryFold {
     /// query reports every task ended. Releasing it at once would let the next query start
     /// beside work still using the first one's slot and memory.
     pub(crate) fn finish_cancelled(mut self, error: Option<&KrishivError>) {
+        self.report_usage();
         let permit = std::mem::replace(&mut self._permit, Permit::unlimited());
         let query = Arc::clone(&self.query);
         let state = Arc::clone(&self.state);
@@ -233,6 +239,7 @@ impl QueryFold {
     /// As [`Self::finish_cancelled`] for a query dropped while `submit` was still running:
     /// `setup` reports when the submit task is done and whether it started the query.
     pub(crate) fn finish_after_setup(mut self, setup: tokio::sync::oneshot::Receiver<bool>) {
+        self.report_usage();
         let permit = std::mem::replace(&mut self._permit, Permit::unlimited());
         let query = Arc::clone(&self.query);
         let state = Arc::clone(&self.state);
@@ -248,7 +255,16 @@ impl QueryFold {
         ));
     }
 
+    /// Reports the bytes the query scanned to its resource group's scan quota (charged when the
+    /// slot drops); a permit without a group slot has nowhere to report.
+    fn report_usage(&self) {
+        if let Some(slot) = self._permit.slot::<crate::resource_groups::GroupSlot>() {
+            slot.add_bytes_read(self.start.bytes_read_since());
+        }
+    }
+
     pub(crate) fn finish(self, error: Option<&KrishivError>) {
+        self.report_usage();
         self.start.fold(
             &self.state,
             &self.query,

@@ -189,3 +189,61 @@ fn the_shipped_example_tree_loads() {
     krishiv_session::resource_groups::ResourceGroups::from_file(path, 8 << 30)
         .unwrap_or_else(|e| panic!("{e}"));
 }
+
+#[tokio::test]
+async fn a_queued_query_shows_its_wait_in_queued_ns() {
+    use arrow_array::cast::AsArray;
+    let path = write_file(
+        "queued",
+        r#"{"rootGroups": [{"name": "root", "hardConcurrencyLimit": 1, "maxQueued": 2}],
+            "defaultGroup": "root"}"#,
+    );
+    let rt = EngineRuntime::builder()
+        .config("krishiv.workload.resourceGroups.file", path)
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let a = Session::builder()
+        .runtime(std::sync::Arc::clone(&rt))
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let b = Session::builder()
+        .runtime(rt)
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let held = a
+        .sql("select 1")
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .execute_stream()
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let b2 = b.clone();
+    let waiter = tokio::spawn(async move {
+        b2.sql("select 2")
+            .await
+            .unwrap_or_else(|e| panic!("{e}"))
+            .collect()
+            .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    drop(held);
+    waiter
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let batches = b
+        .sql("select max(queued_ns) from system.queries where resource_group is not null")
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .collect()
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let waited = batches[0]
+        .column(0)
+        .as_primitive::<arrow_array::types::Int64Type>()
+        .value(0);
+    assert!(
+        waited >= 100_000_000,
+        "queued for about 200 ms, saw {waited} ns"
+    );
+}

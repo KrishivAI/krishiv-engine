@@ -1775,7 +1775,7 @@ pub static WORKLOAD_RESOURCE_GROUPS_FILE: ConfigEntry = ConfigEntry {
     default: None,
     doc: "Path of the resource group file (JSON in the shape of Trino's `resource-groups.json`, \
           restricted to the subset Krishiv supports): the group tree, its concurrency, queue, \
-          memory and scan limits, and the selectors that route a query to a group. Read when \
+          per-query memory and scan limits, and the selectors that route a query to a group. Read when \
           the engine starts; a malformed file stops the start with \
           `KRISHIV_RESOURCE_GROUP_CONFIG_INVALID`. When unset, every query is admitted at once.",
     scope: Scope::Cluster,

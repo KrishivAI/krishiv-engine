@@ -646,7 +646,7 @@ fn two_cohort_askers_never_wait_for_each_other() {
 
 /// Two queries of different priority and a requester that needs memory neither will spill: the
 /// victim is the lower priority in every interleaving, though the other query is larger.
-/// The victim's driver releases once it sees the abort, racing the requester's wait.
+/// The victim releases once it sees the abort, racing the requester's wait.
 #[test]
 fn abort_picks_the_lowest_priority_under_races() {
     model(|| {
@@ -675,14 +675,15 @@ fn abort_picks_the_lowest_priority_under_races() {
             low.check_aborted().is_err(),
             "the low priority query is the victim"
         );
-        // A victim with no driver of its own may release before the arbitrator counts it as
-        // pending, so a second abort is allowed; but it is never the higher priority query
-        // alone: whenever `high` is aborted, `low` was aborted first.
+        // A release in flight (the victim's own counter already 0, the root's not yet) looks like
+        // no pending release to the arbitrator, so a second abort is possible: a race that predates
+        // priorities and is recorded for the memory owner (ops/queue-opus.md). What priorities add
+        // is the order: `high` is aborted only after `low` was.
         let aborts = root.stats().aborts;
         assert!(aborts >= 1, "the request needed an abort");
         assert!(
             aborts >= 2 || high.check_aborted().is_ok(),
-            "one abort is the lowest priority query, never the larger higher priority one"
+            "a single abort is the lowest priority query, never the larger higher priority one"
         );
     });
 }

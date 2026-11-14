@@ -1140,12 +1140,11 @@ impl QueryLog {
     }
 
     /// Stamps the start of live row `id`: admission let it run.
-    pub(crate) fn mark_started(&self, id: &str, group: Option<&str>) {
+    pub(crate) fn mark_started(&self, id: &str, group: Option<&str>, queued_ns: u64) {
         self.history.update(&self.session_id, id, |row| {
             row.started_ms = Some(now_ms());
-            // Time from submission to admission: what the controller held the query.
-            row.queued_ns =
-                Some(i64::try_from(row.submitted_at.elapsed().as_nanos()).unwrap_or(i64::MAX));
+            // What the controller held the query in its queue (0 when it started at once).
+            row.queued_ns = Some(i64::try_from(queued_ns).unwrap_or(i64::MAX));
             row.resource_group = group.map(str::to_owned);
         });
     }
@@ -1459,7 +1458,7 @@ impl Session {
     /// The permit of a query that reads only `system.*` (never queued behind the load it
     /// inspects): it starts at once, so its row has a start time.
     pub(crate) fn exempt_permit(&self, log_id: &str) -> crate::admission::Permit {
-        self.state.queries.mark_started(log_id, None);
+        self.state.queries.mark_started(log_id, None, 0);
         crate::admission::Permit::unlimited()
     }
 

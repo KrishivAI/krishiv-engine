@@ -13,7 +13,7 @@
         {"name": "batch", "hardConcurrencyLimit": 6, "maxQueued": 100, "schedulingWeight": 1,
          "priority": 30, "workloadClass": "batch"},
         {"name": "background", "hardConcurrencyLimit": 2, "maxQueued": 100, "schedulingWeight": 1,
-         "priority": 10, "workloadClass": "background", "softMemoryLimit": "25%"}
+         "priority": 10, "workloadClass": "background"}
       ]
     }
   ],
