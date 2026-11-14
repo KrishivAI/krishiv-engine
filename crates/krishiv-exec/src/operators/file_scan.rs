@@ -109,6 +109,9 @@ pub struct FileScan {
     partition_columns: Arc<[FieldRef]>,
     /// The smallest morsel: `spark.sql.files.openCostInBytes`.
     min_morsel_bytes: u64,
+    /// `spark.sql.caseSensitive`: table columns find file columns by exact
+    /// name (Spark's Parquet reader), unless the pushdown maps otherwise.
+    case_sensitive: bool,
 }
 
 impl std::fmt::Debug for FileScan {
@@ -143,7 +146,16 @@ impl FileScan {
             partitions: Partitions::Plan(splits),
             partition_columns: Arc::from([]),
             min_morsel_bytes: splits.open_cost_in_bytes,
+            case_sensitive: false,
         }
+    }
+
+    /// The same scan with table columns matched to file columns by exact
+    /// name (`spark.sql.caseSensitive=true`); the default folds case.
+    #[must_use]
+    pub fn with_case_sensitive(mut self, case_sensitive: bool) -> Self {
+        self.case_sensitive = case_sensitive;
+        self
     }
 
     /// The same scan with `columns` as its partition columns: the last
@@ -705,7 +717,15 @@ fn table_request(scan: &FileScan, p: &ScanPushdowns) -> Result<TableRequest> {
     request.limit = p.limit.filter(|_| p.filters.is_empty());
     request.metadata_cols = p.metadata;
     request.metadata_cols.row_index |= p.row_id;
-    request.mapping = p.mapping.clone();
+    request.mapping = match &p.mapping {
+        // A pushdown that names no mapping takes the session's case rule.
+        krishiv_io::FieldMapping::ByName {
+            case_sensitive: false,
+        } if scan.case_sensitive => krishiv_io::FieldMapping::ByName {
+            case_sensitive: true,
+        },
+        other => other.clone(),
+    };
     let decoded = Arc::clone(SchemaMapper::new(&request, data_table, "")?.output_schema());
     let (mapped, layout) = if partition_fields.is_empty() {
         (decoded, Vec::new())

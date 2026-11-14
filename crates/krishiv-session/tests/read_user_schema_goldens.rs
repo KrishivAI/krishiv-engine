@@ -21,14 +21,6 @@ use serde_json::{Value, json};
 /// Cases not matched yet, with the reason; each must still differ from Spark.
 const KNOWN_GAPS: &[(&str, &str)] = &[
     (
-        "duplicate column, other case, caseSensitive=true",
-        "review 5",
-    ),
-    (
-        "parquet name case differs, both upper, caseSensitive=true",
-        "review 6",
-    ),
-    (
         "json wrong types FAILFAST",
         "a JSON string for an INT field fails without the CANNOT_PARSE_JSON_FIELD cause (krishiv-io json/convert.rs \
          parses the string as a number; its own test expects no cause): class and rows match",
@@ -40,11 +32,6 @@ const KNOWN_GAPS: &[(&str, &str)] = &[
     (
         "json nested struct field absent from data",
         "the JSON reader has flat types only (KRISHIV_UNSUPPORTED_FEATURE for a struct column)",
-    ),
-    (
-        "parquet name case differs, caseSensitive=true",
-        "spark.sql.caseSensitive does not reach the file scan's column mapping (krishiv-io FieldMapping::ByName is \
-         always case-insensitive)",
     ),
 ];
 

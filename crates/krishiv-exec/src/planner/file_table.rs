@@ -113,6 +113,11 @@ impl FileTable {
             options,
             scan_options,
             SplitConfig::from_config(config, worker_slots),
+        )
+        .with_case_sensitive(
+            config
+                .get_unregistered("spark.sql.caseSensitive")
+                .is_some_and(|v| v.trim().eq_ignore_ascii_case("true")),
         );
         Ok(Self {
             scan,
