@@ -567,6 +567,18 @@ impl Lowerer {
 
     pub(super) fn factor(&mut self, tf: &TableFactor) -> R<LogicalPlan> {
         let plan = self.factor_relation(tf)?;
+        // Spark's `visitTableName` samples the aliased table (`'Sample` over
+        // `'SubqueryAlias`); an aliased query is sampled under its alias.
+        if matches!(tf.kind, TableFactorKind::Table { .. }) {
+            let plan = match &tf.alias {
+                None => plan,
+                Some(a) => self.with_alias(plan, a, tf.span),
+            };
+            return match &tf.sample {
+                Some(sample) => self.sample(plan, sample),
+                None => Ok(plan),
+            };
+        }
         let plan = match &tf.sample {
             Some(sample) => self.sample(plan, sample)?,
             None => plan,

@@ -107,8 +107,11 @@ fn errors_match_spark() {
 fn quirks_parse_as_spark() {
     // `REPEATABLE (abc)` is a table alias with a column alias, unseeded.
     let p = plan("SELECT * FROM t TABLESAMPLE (10 PERCENT) REPEATABLE (abc)");
-    assert!(p.contains("Sample 0.0, 0.1, false\n"), "{p}");
-    assert!(p.contains("SubqueryAlias REPEATABLE"), "{p}");
+    // Spark's order: the sample above the alias (`'Sample ... +-
+    // 'SubqueryAlias REPEATABLE +- 'UnresolvedSubqueryColumnAliases [abc]`).
+    let sample = p.find("Sample 0.0, 0.1, false\n");
+    let alias = p.find("SubqueryAlias REPEATABLE");
+    assert!(sample.is_some() && alias.is_some() && sample < alias, "{p}");
     // `ROWS` is a limit, its seed ignored.
     for sql in [
         "SELECT * FROM t TABLESAMPLE (10 ROWS) REPEATABLE (3)",
