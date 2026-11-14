@@ -69,3 +69,36 @@ def test_delta_rejects_a_missing_addition(tmp_path, monkeypatch):
         "relations.proto: missing added line 'Zip zip = 48;' (x1)",
         "relations.proto: missing added line 'message Zip {' (x1)",
     ]
+
+
+def test_upstream_check_compares_each_file_with_its_tag():
+    seen = []
+
+    def serve(url):
+        seen.append(url)
+        # Serve the vendored file itself, except for one that is "changed upstream".
+        name = url.rsplit("/", 1)[1]
+        tag = url.split("/spark/")[1].split("/")[0]
+        ver = next(v for v, t in m.TAGS.items() if t == tag)
+        body = (m.PROTO / ver / "spark" / "connect" / name).read_bytes()
+        return body + b"//changed\n" if (tag, name) == ("v4.3.0", "relations.proto") else body
+
+    assert m.upstream_problems(serve) == ["4.3/relations.proto: differs from apache/spark v4.3.0"]
+    assert len(seen) == sum(len(v["files"]) for v in m.collect().values())
+
+    def down(url):
+        raise OSError("offline")
+
+    assert all("cannot fetch" in p for p in m.upstream_problems(down))
+
+
+def test_every_version_only_adds_to_the_one_before_except_the_listed_removals():
+    assert m.additivity_problems() == []
+
+
+def test_additivity_flags_an_unlisted_removal(monkeypatch):
+    monkeypatch.setattr(m, "ALLOWED_REMOVALS", {})
+    assert m.additivity_problems() == [
+        "3.5 -> 4.0: removed ('relations.proto', 'CachedLocalRelation', 1) ('', 'string', 'userId')",
+        "3.5 -> 4.0: removed ('relations.proto', 'CachedLocalRelation', 2) ('', 'string', 'sessionId')",
+    ]

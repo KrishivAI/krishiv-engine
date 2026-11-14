@@ -5,6 +5,12 @@
     ],
     "sqlState" : "58030"
   },
+  "KRISHIV_CATALOG_LIMIT_EXCEEDED" : {
+    "message" : [
+      "<source> exceeds <limit> (<value>), so it was not loaded. A legitimate table or catalog this large needs <config>."
+    ],
+    "sqlState" : "54000"
+  },
   "KRISHIV_COMMIT_LOG_CORRUPT" : {
     "message" : [
       "The commit log of <root> cannot be read: <reason>. Nothing was changed; a missing or damaged entry under \"_krishiv_log\" needs the directory restored from a copy."
@@ -68,6 +74,12 @@
     ],
     "sqlState" : "22023"
   },
+  "KRISHIV_INVALID_OPERATION_TAG" : {
+    "message" : [
+      "<reason>"
+    ],
+    "sqlState" : "22023"
+  },
   "KRISHIV_INVALID_PROFILE_DOCUMENT" : {
     "message" : [
       "The <document> document is invalid: <reason>."
@@ -105,6 +117,12 @@
     "sqlState" : "58030",
     "audience" : "operator"
   },
+  "KRISHIV_OPERATION_LIMIT" : {
+    "message" : [
+      "Cannot start a new operation: <limitName> allows at most <limit> live operations per session. Wait for one to finish or release it (ReleaseExecute, or interrupt it in the client), or raise \"<limitName>\"."
+    ],
+    "sqlState" : "53400"
+  },
   "KRISHIV_QUERY_ABORTED_OUT_OF_MEMORY" : {
     "message" : [
       "The query was aborted to free memory for other work: it held <heldBytes> bytes, the most of any query, and spilling did not free enough memory in time. Increase \"krishiv.memory.limit\" or run fewer concurrent queries."
@@ -140,6 +158,31 @@
       "The temporary view name <relationName> is reserved: names starting with <prefix> (in any letter case) are reserved for internal snapshots. Choose a different name."
     ],
     "sqlState" : "42602"
+  },
+  "KRISHIV_RESOURCE_GROUP_CONFIG_INVALID" : {
+    "message" : [
+      "The resource group file is invalid at <path>: <reason>."
+    ],
+    "sqlState" : "22023",
+    "audience" : "operator"
+  },
+  "KRISHIV_RESOURCE_GROUP_QUEUE_FULL" : {
+    "message" : [
+      "The resource group <group> already has <maxQueued> queued queries, so this query is refused. Retry later, or raise \"maxQueued\" of the group."
+    ],
+    "sqlState" : "53400"
+  },
+  "KRISHIV_RESOURCE_GROUP_QUOTA_EXHAUSTED" : {
+    "message" : [
+      "The resource group <group> has used its scan quota for the current window, so this query is refused. The quota resets at <resetAt>."
+    ],
+    "sqlState" : "53400"
+  },
+  "KRISHIV_SESSION_LIMIT" : {
+    "message" : [
+      "Cannot open a new session: <limitName> allows at most <limit> live sessions. Release a session (ReleaseSession, or spark.stop() in the client) or raise \"<limitName>\"."
+    ],
+    "sqlState" : "53400"
   },
   "KRISHIV_SPILL_CAP_EXCEEDED" : {
     "message" : [

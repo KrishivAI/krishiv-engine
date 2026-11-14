@@ -2,7 +2,8 @@
 //! Admin and UI API server (layer L6).
 //!
 //! Serves the embedded SPA at `/` and the versioned REST surface under
-//! `/api/v1`. Binds loopback by default (ADR 0024); auth arrives later.
+//! `/api/v1`. Binds loopback by default (ADR 0024); guarded routes ask a
+//! [`guard::Guard`] (P3-T002).
 
 #![forbid(unsafe_code)]
 
@@ -23,8 +24,12 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[cfg(feature = "metrics-prometheus")]
 pub mod metrics;
 
+pub mod admin;
+pub mod guard;
 pub mod internal;
 
+#[cfg(feature = "session")]
+pub mod session_guard;
 #[cfg(feature = "session")]
 pub mod session_source;
 
@@ -71,6 +76,16 @@ pub fn router() -> Router {
         .route("/api/", any(api_not_found))
         .route("/api/{*rest}", any(api_not_found))
         .fallback(assets)
+}
+
+/// The admin API without the web UI: [`router`] with no asset fallback (a
+/// server built or configured without the UI serves no page).
+pub fn api_router() -> Router {
+    Router::new()
+        .route("/api/v1/version", get(version))
+        .route("/api", any(api_not_found))
+        .route("/api/", any(api_not_found))
+        .route("/api/{*rest}", any(api_not_found))
 }
 
 /// Serves on an already-bound listener until the future is dropped.
