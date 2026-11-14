@@ -161,6 +161,10 @@ memchr = { version = "2.8", default-features = false }
 # XML reader for `from_xml`; already in the lock file through the object-store stack.
 quick-xml = { version = "0.41", default-features = false }
 jiff = { version = "0.2.38", default-features = false }
+# ICU4X collation sort keys and case mapping for the ICU collations (ADR 0043 s5); compiled data only behind `collations-icu`.
+icu_collator = { version = "2.4", default-features = false }
+icu_locale_core = { version = "2.4", default-features = false }
+icu_casemap = { version = "2.4", default-features = false }
 slatedb = { version = "0.17", default-features = false }
 foyer = { version = "0.22.6", default-features = false }
 # Lock-step pin: the connector uses `internal-api` items, which are unstable across

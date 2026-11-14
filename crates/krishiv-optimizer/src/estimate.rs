@@ -496,10 +496,11 @@ impl<'a> Estimator<'a> {
                         .source
                         .iter()
                         .zip(&r.output)
-                        .map(|(s, o)| {
-                            let c = est.cols.get(s).cloned();
-                            (o.id, c.unwrap_or_else(|| AttrStats::guess(est.rows)))
-                        })
+                        // A column the definition's estimate does not hold
+                        // (a window's output) stays unknown, as under a
+                        // `Shift`: `ShareCte` turning one into the other
+                        // must not change the estimate.
+                        .filter_map(|(s, o)| est.cols.get(s).map(|c| (o.id, c.clone())))
                         .collect(),
                     from_statistics: est.from_statistics,
                     unfiltered_rows: est.unfiltered_rows,
