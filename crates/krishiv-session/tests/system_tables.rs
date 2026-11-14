@@ -683,6 +683,7 @@ fn show_tables_in_system_lists_the_tables() {
             "metrics",
             "operators",
             "queries",
+            "resource_groups",
             "sessions"
         ]
     );
@@ -935,6 +936,7 @@ fn use_system_shows_no_default_database() {
             "metrics",
             "operators",
             "queries",
+            "resource_groups",
             "sessions"
         ]
     );

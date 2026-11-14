@@ -297,3 +297,62 @@ async fn a_spent_scan_quota_refuses_the_next_query() {
         ErrorClass::KrishivResourceGroupQuotaExhausted.name()
     );
 }
+
+#[tokio::test]
+async fn system_resource_groups_lists_the_tree_with_its_counters() {
+    use arrow_array::Array;
+    use arrow_array::cast::AsArray;
+    let path = write_file(
+        "table",
+        r#"{"rootGroups": [{"name": "root", "hardConcurrencyLimit": 4, "maxQueued": 8, "priority": 60,
+              "subGroups": [{"name": "etl", "hardConcurrencyLimit": 2, "maxQueued": 4,
+                             "workloadClass": "batch", "scanQuota": 1000000, "scanQuotaPeriod": "1h"}]}],
+            "defaultGroup": "root.etl"}"#,
+    );
+    let rt = EngineRuntime::builder()
+        .config("krishiv.workload.resourceGroups.file", path)
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let s = Session::builder()
+        .runtime(rt)
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let held = s
+        .sql("select 1")
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .execute_stream()
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let batches = s
+        .sql(
+            "select group_id, parent_id, state, workload_class, hard_concurrency_limit, running, \
+             scan_quota_bytes from system.resource_groups order by group_id",
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .collect()
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let b = &batches[0];
+    assert_eq!(b.num_rows(), 2);
+    let ids = b.column(0).as_string::<i32>();
+    assert_eq!((ids.value(0), ids.value(1)), ("root", "root.etl"));
+    assert!(b.column(1).is_null(0), "the root has no parent");
+    assert_eq!(b.column(1).as_string::<i32>().value(1), "root");
+    assert_eq!(b.column(2).as_string::<i32>().value(0), "active");
+    assert_eq!(b.column(3).as_string::<i32>().value(1), "batch");
+    let long = |i: usize, r: usize| {
+        b.column(i)
+            .as_primitive::<arrow_array::types::Int64Type>()
+            .value(r)
+    };
+    assert_eq!((long(4, 0), long(4, 1)), (4, 2));
+    assert_eq!(
+        (long(5, 0), long(5, 1)),
+        (1, 1),
+        "the held query counts up to the root"
+    );
+    assert!(b.column(6).is_null(0) && long(6, 1) == 1_000_000);
+    drop(held);
+}

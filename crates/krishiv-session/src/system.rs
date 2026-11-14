@@ -43,13 +43,14 @@ const SCHEMA_VERSION: &str = "1";
 const LOCAL_WORKER: &str = "local";
 
 /// Every table of the catalog.
-const TABLES: [&str; 7] = [
+const TABLES: [&str; 8] = [
     "capabilities",
     "caches",
     "memory",
     "metrics",
     "operators",
     "queries",
+    "resource_groups",
     "sessions",
 ];
 
@@ -276,6 +277,26 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("sqlstate", Text, true),
             ("error_message", Text, true),
             ("partial", Flag, false),
+        ],
+        "resource_groups" => vec![
+            ("group_id", Text, false),
+            ("parent_id", Text, true),
+            ("state", Text, false),
+            ("scheduling_policy", Text, false),
+            ("scheduling_weight", Int, false),
+            ("priority", Int, false),
+            ("workload_class", Text, false),
+            ("hard_concurrency_limit", Long, false),
+            ("max_queued", Long, false),
+            ("soft_memory_limit_bytes", Long, true),
+            ("per_query_memory_limit_bytes", Long, true),
+            ("scan_quota_bytes", Long, true),
+            ("scan_quota_period_s", Long, true),
+            ("running", Long, false),
+            ("queued", Long, false),
+            ("memory_reserved_bytes", Long, false),
+            ("scan_bytes_in_window", Long, true),
+            ("scan_window_resets_at", Time, true),
         ],
         "sessions" => crate::sessions::layout(),
         _ => return None,
@@ -547,6 +568,42 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
     if table.eq_ignore_ascii_case("sessions") {
         return crate::sessions::columns(sources);
     }
+    if table.eq_ignore_ascii_case("resource_groups") {
+        // Group names often name tenants: only a caller with `Monitor` on `system` lists them.
+        // (The design's own-groups view for other callers is not built yet.)
+        let rows = match (&sources.groups, sources.monitor.sees_all()) {
+            (Some(groups), true) => groups.rows(),
+            _ => Vec::new(),
+        };
+        let micros = |ms: Option<i64>| ms.map(|m| m.saturating_mul(1000));
+        return vec![
+            text(rows.iter().map(|r| Some(r.group_id.as_str()))),
+            text(rows.iter().map(|r| r.parent_id.as_deref())),
+            text(rows.iter().map(|_| Some("active"))),
+            text(rows.iter().map(|r| Some(r.scheduling_policy))),
+            Arc::new(Int32Array::from_iter(
+                rows.iter().map(|r| Some(r.scheduling_weight)),
+            )),
+            Arc::new(Int32Array::from_iter(rows.iter().map(|r| Some(r.priority)))),
+            text(rows.iter().map(|r| Some(r.workload_class))),
+            long(rows.iter().map(|r| Some(r.hard_concurrency_limit))),
+            long(rows.iter().map(|r| Some(r.max_queued))),
+            long(rows.iter().map(|r| r.soft_memory_limit_bytes)),
+            long(rows.iter().map(|r| r.per_query_memory_limit_bytes)),
+            long(rows.iter().map(|r| r.scan_quota_bytes)),
+            long(rows.iter().map(|r| r.scan_quota_period_s)),
+            long(rows.iter().map(|r| Some(r.running))),
+            long(rows.iter().map(|r| Some(r.queued))),
+            long(rows.iter().map(|r| Some(r.memory_reserved_bytes))),
+            long(rows.iter().map(|r| r.scan_bytes_in_window)),
+            Arc::new(
+                TimestampMicrosecondArray::from_iter(
+                    rows.iter().map(|r| micros(r.scan_window_resets_at_ms)),
+                )
+                .with_timezone("UTC"),
+            ),
+        ];
+    }
     if table.eq_ignore_ascii_case("queries") {
         let rows = sources.queries.snapshot(sources.monitor.sees_all());
         let micros = |ms: Option<i64>| ms.map(|m| m.saturating_mul(1000));
@@ -672,6 +729,8 @@ pub(crate) struct Sources {
     pub(crate) monitor: Arc<Monitor>,
     /// The runtime's sessions.
     pub(crate) sessions: Arc<crate::sessions::SessionView>,
+    /// The resource group controller (`krishiv.workload.resourceGroups.file`), when one is set.
+    pub(crate) groups: Option<Arc<crate::resource_groups::ResourceGroups>>,
 }
 
 pub(crate) use crate::monitor::Monitor;
@@ -1388,7 +1447,7 @@ impl Catalog for SystemCatalog {
             if !id.namespace.is_empty() {
                 return Ok(None);
             }
-            if ["queries", "operators", "sessions"]
+            if ["queries", "operators", "sessions", "resource_groups"]
                 .iter()
                 .any(|t| id.name.eq_ignore_ascii_case(t))
             {
@@ -1710,6 +1769,7 @@ mod tests {
                 Arc::new(krishiv_plan::analyzer::AllowAll),
             )),
             sessions: Arc::default(),
+            groups: None,
         };
         assert!(provider("capabilities", &sources).unwrap().is_some());
         assert!(provider("nope", &sources).unwrap().is_none());

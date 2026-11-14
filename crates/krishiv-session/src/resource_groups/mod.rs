@@ -28,7 +28,7 @@ use config::Config;
 use tree::{Admitted, Refusal, Shared};
 
 pub use select::tag_matches;
-pub use tree::GroupSlot;
+pub use tree::{GroupRow, GroupSlot};
 
 /// The admission controller for a resource group tree.
 #[derive(Debug)]
@@ -80,6 +80,13 @@ impl ResourceGroups {
             })
         })?;
         Self::from_json(&json, total_memory)
+    }
+
+    /// One row per group of the tree, parents first, with the counters now (the source of
+    /// `system.resource_groups`).
+    #[must_use]
+    pub fn rows(&self) -> Vec<GroupRow> {
+        self.shared.rows()
     }
 
     /// `(running, queued)` queries of the group `id` (a dotted path such as `root.etl`).

@@ -580,6 +580,11 @@ pub fn krishiv_session::functions::min(krishiv_session::Column) -> krishiv_sessi
 pub fn krishiv_session::functions::python_udf_call(&krishiv_session::PythonUdfDef, u32, impl core::iter::traits::collect::IntoIterator<Item = krishiv_session::Column>) -> core::result::Result<krishiv_session::Column, krishiv_common::error::KrishivError>
 pub fn krishiv_session::functions::sum(krishiv_session::Column) -> krishiv_session::Column
 pub mod krishiv_session::resource_groups
+pub struct krishiv_session::resource_groups::GroupRow
+impl core::clone::Clone for krishiv_session::resource_groups::GroupRow
+pub fn krishiv_session::resource_groups::GroupRow::clone(&self) -> krishiv_session::resource_groups::GroupRow
+impl core::fmt::Debug for krishiv_session::resource_groups::GroupRow
+pub fn krishiv_session::resource_groups::GroupRow::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct krishiv_session::resource_groups::GroupSlot
 impl krishiv_session::resource_groups::GroupSlot
 pub fn krishiv_session::resource_groups::GroupSlot::add_bytes_read(&self, u64)
@@ -594,6 +599,7 @@ impl krishiv_session::resource_groups::ResourceGroups
 pub fn krishiv_session::resource_groups::ResourceGroups::counts(&self, &str) -> core::option::Option<(usize, usize)>
 pub fn krishiv_session::resource_groups::ResourceGroups::from_file(&str, usize) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 pub fn krishiv_session::resource_groups::ResourceGroups::from_json(&str, usize) -> core::result::Result<Self, krishiv_common::error::KrishivError>
+pub fn krishiv_session::resource_groups::ResourceGroups::rows(&self) -> alloc::vec::Vec<krishiv_session::resource_groups::GroupRow>
 pub fn krishiv_session::resource_groups::ResourceGroups::with_clock(&str, usize, alloc::sync::Arc<(dyn core::ops::function::Fn() -> u64 + core::marker::Send + core::marker::Sync)>) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 impl core::fmt::Debug for krishiv_session::resource_groups::ResourceGroups
 pub fn krishiv_session::resource_groups::ResourceGroups::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
