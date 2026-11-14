@@ -80,6 +80,7 @@
 //! | `PlanNode::Hint` | U | - | - |
 //! | `PlanNode::PipeOperator` | U | - | - |
 //! | `PlanNode::Repartition` | U, R | - | - |
+//! | `PlanNode::CollectMetrics` | U, R | - | `observe` |
 //! | `PlanNode::JoinHint` | R | - | - |
 //! | `PlanNode::Union` | U, R | - | - |
 //! | `PlanNode::Distinct` | U | - | - |

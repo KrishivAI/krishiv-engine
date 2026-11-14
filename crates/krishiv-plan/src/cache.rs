@@ -821,6 +821,16 @@ impl Encoder {
                 self.exprs(exprs, bias);
                 self.plan(input, bias);
             }
+            PlanNode::CollectMetrics {
+                input,
+                name,
+                metrics,
+            } => {
+                self.tag("CollectMetrics");
+                self.text(name);
+                self.exprs(metrics, bias);
+                self.plan(input, bias);
+            }
             PlanNode::JoinHint { input, strategy } => {
                 self.tag("JoinHint");
                 self.debug(strategy);

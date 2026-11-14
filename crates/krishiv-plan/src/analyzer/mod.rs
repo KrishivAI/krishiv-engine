@@ -98,6 +98,7 @@ mod hof;
 mod instance;
 mod intervals;
 pub(crate) mod legacy;
+mod observe;
 mod ops;
 mod pivot;
 pub(crate) mod prefix;
