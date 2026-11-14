@@ -4,7 +4,7 @@ description: "Task-by-task guides for migrating, checking, deploying and diagnos
 
 # Guides
 
-Each guide solves one task and is written for someone who already ran the [Quickstart](../get-started/quickstart.md).
+Each guide solves one task and is written for someone who already ran the [Quickstart](../get-started/index.md).
 Moving a Spark job? Start with [Migrate a PySpark job](pyspark-migration.md) and run
 [check-compat](check-compat.md) over your project first. Choosing where Krishiv runs: [Deployment](deploy.md)
 (embedded, single-node, distributed). To work with it interactively, see

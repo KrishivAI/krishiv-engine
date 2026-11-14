@@ -20,7 +20,7 @@ import sys
 import traceback
 
 DOCS = pathlib.Path("docs")
-PAGES = [DOCS / "get-started" / "quickstart.md", DOCS / "guides" / "pyspark-migration.md"]
+PAGES = [DOCS / "get-started" / "index.md", DOCS / "guides" / "pyspark-migration.md"]
 BLOCK = re.compile(r"(<!-- no-run -->\n)?```(?:python|py)\b[^\n]*\n(.*?)```", re.S)
 
 
