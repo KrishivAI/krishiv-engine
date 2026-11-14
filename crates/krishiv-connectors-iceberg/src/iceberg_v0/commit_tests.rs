@@ -31,6 +31,7 @@ use super::append::{NewManifests, WRITE_ID_PROP, WriteIds, prepare_attempt, writ
 use super::append_tests::{MAX, create, file, iceberg_rust_files, ids, rows};
 use super::commit::{CommitClock, CommitContext, CommitOutcome, CommitTable, commit_append};
 use super::provider_tests::{Env, env};
+use super::scan::read_manifest_files;
 
 /// One commit request's body.
 type Request = (Vec<TableRequirement>, Vec<TableUpdate>);
@@ -1484,6 +1485,119 @@ fn a_v1_to_v3_upgrade_is_a_conflict() {
 }
 
 /// A small deterministic generator (splitmix64) for the schedule sweep.
+/// `commit.manifest.min-count-to-merge` 2: the write's first attempt merges
+/// its new manifest with the base's.
+const MERGE: &[(&str, &str)] = &[("commit.manifest.min-count-to-merge", "2")];
+
+impl Case {
+    /// The manifests the list at `list` names.
+    fn listed(&self, list: &str) -> Vec<String> {
+        let io = self.env.reg.file_io();
+        let version = self.base.format_version() as u8;
+        self.env
+            .rt
+            .block_on(read_manifest_files(&io, list, version, MAX))
+            .unwrap()
+            .into_iter()
+            .map(|m| m.manifest_path)
+            .collect()
+    }
+}
+
+/// A merged first attempt that commits: its list names the merged manifest
+/// alone; the new manifest it absorbed is deleted, the merged one and the
+/// data file kept.
+#[test]
+fn a_merged_first_attempt_commits_and_drops_the_absorbed_manifest() {
+    let mut c = case_with(2, MERGE);
+    c.run().unwrap();
+    assert_eq!(c.new.merged.len(), 1);
+    let merged = c.new.merged[0].clone();
+    assert_eq!(c.listed(&c.list(1)), std::slice::from_ref(&merged));
+    assert!(exists(&merged) && exists(&c.list(1)) && exists(&c.data()));
+    assert!(!exists(&c.manifest()));
+    c.check(&[INIT, MINE]);
+}
+
+/// A conflict after a merged first attempt: the second attempt lists the
+/// unmerged manifests (the new one first, then the foreign head's) and
+/// merges nothing; on commit the first attempt's list and merged manifest
+/// are deleted, the new manifest kept.
+#[test]
+fn a_conflict_after_a_merged_first_attempt_lists_the_unmerged_manifests() {
+    let mut c = case_with(2, MERGE);
+    c.cat
+        .on(When::BeforeRequest(1), c.foreign("f.parquet", 900, "main"));
+    let m = c.run().unwrap();
+    assert_eq!(m.snapshot_by_id(OURS).unwrap().manifest_list(), c.list(2));
+    assert_eq!(c.new.merged.len(), 1);
+    let listed = c.listed(&c.list(2));
+    assert_eq!(listed[0], c.manifest());
+    assert!(!listed.contains(&c.new.merged[0]), "{listed:?}");
+    assert!(!exists(&c.new.merged[0]) && !exists(&c.list(1)));
+    assert!(exists(&c.manifest()) && exists(&c.data()));
+    c.check(&[INIT, MINE, "900|1|f.parquet"]);
+}
+
+/// A known failure of a merged first attempt deletes its merged manifest
+/// with everything else.
+#[test]
+fn a_known_failure_deletes_the_merged_manifest() {
+    let mut c = case_with(2, MERGE);
+    c.cat.script(&[Fault::Unauthorized401]);
+    c.run().unwrap_err();
+    assert_eq!(c.new.merged.len(), 1);
+    assert!(!exists(&c.new.merged[0]) && !exists(&c.manifest()) && !exists(&c.data()));
+    assert!(!exists(&c.list(1)));
+    // A base manifest is never deleted.
+    let base = c
+        .base
+        .current_snapshot()
+        .unwrap()
+        .manifest_list()
+        .to_owned();
+    assert!(c.listed(&base).iter().all(|m| exists(m)));
+    c.check(&[INIT]);
+}
+
+/// An unknown answer to a merged first attempt, a later known failure: the
+/// merged manifest is kept with everything else, and when a rollback lets
+/// the held first attempt land, it reads back.
+#[test]
+fn an_unknown_merged_attempt_keeps_its_merged_manifest() {
+    let mut c = case_with(1, MERGE);
+    c.cat.script(&[Fault::Held]);
+    c.cat
+        .on(When::BeforeLoad(1), c.foreign("f1.parquet", 961, "main"));
+    for n in 2..=5 {
+        c.cat.on(
+            When::BeforeRequest(n),
+            c.foreign(
+                &format!("f{n}.parquet"),
+                960 + i64::try_from(n).unwrap(),
+                "main",
+            ),
+        );
+    }
+    let e = c.run().unwrap_err();
+    assert!(e.message().contains("files were kept"), "{e}");
+    assert_eq!(c.new.merged.len(), 1);
+    let merged = c.new.merged[0].clone();
+    assert!(exists(&merged) && exists(&c.manifest()) && exists(&c.data()));
+    let base = c.base.current_snapshot_id().unwrap();
+    let back = rollback(base);
+    c.env.rt.block_on(async {
+        let (m, _) = c.cat.metadata();
+        let request = back(m).await;
+        c.cat.state.lock().unwrap().land(&request).ok().unwrap();
+    });
+    assert_eq!(c.cat.land_held(), 1);
+    let (m, _) = c.cat.metadata();
+    assert_eq!(m.snapshot_by_id(OURS).unwrap().manifest_list(), c.list(1));
+    assert_eq!(c.listed(&c.list(1)), [merged]);
+    c.check(&[INIT, MINE]);
+}
+
 struct Seeded(u64);
 
 impl Seeded {
@@ -1514,7 +1628,10 @@ impl Seeded {
 /// landed at a random point or after the run.
 fn sweep_one(seed: u64, version: u8) {
     let mut g = Seeded(seed);
-    let mut c = case_with(version, &[]);
+    // One schedule in three merges on the first attempt (from the seed, so
+    // the other draws, and the schedules, stay as they were).
+    let merging = seed.is_multiple_of(3);
+    let mut c = case_with(version, if merging { MERGE } else { &[] });
     let mut faults: Vec<Fault> = (0..5)
         .map(|_| match g.below(11) {
             0 => Fault::LostResponse,
@@ -1571,11 +1688,17 @@ fn sweep_one(seed: u64, version: u8) {
     if rolled && !roll_after {
         c.cat.on(g.when(), rollback(base));
     }
-    let schedule = format!("seed {seed}: {faults:?}, rollback {rolled}");
+    let schedule = format!("seed {seed}: {faults:?}, rollback {rolled}, merging {merging}");
     let out = c.run();
+    assert_eq!(
+        c.new.merged.len(),
+        usize::from(merging),
+        "{schedule}: merged only on the first attempt"
+    );
     // Files the write produced before any late delivery.
     let data = exists(&c.data());
     let manifest = exists(&c.manifest());
+    let merged = c.new.merged.iter().all(|m| exists(m));
     let list1 = exists(&c.list(1));
     let ours_now = |c: &Case| {
         c.cat.metadata().0.snapshots().any(|s| {
@@ -1584,15 +1707,20 @@ fn sweep_one(seed: u64, version: u8) {
     };
     match &out {
         Ok(m) => {
-            assert!(m.snapshot_by_id(OURS).is_some(), "{schedule}");
+            let s = m.snapshot_by_id(OURS);
+            assert!(s.is_some(), "{schedule}");
+            // Every manifest the committed list names exists (a merged
+            // first attempt's list names the merged manifest, not the new
+            // one it absorbed).
+            let listed = s.map(|s| c.listed(s.manifest_list())).unwrap_or_default();
             assert!(
-                data && manifest,
+                data && listed.iter().all(|p| exists(p)),
                 "{schedule}: a committed write's file deleted"
             );
         }
         Err(e) if e.error_class() == ErrorClass::KrishivIcebergCommitStateUnknown => {
             assert!(
-                data && manifest && list1,
+                data && manifest && merged && list1,
                 "{schedule}: an unresolved write deleted a file: {e}"
             );
         }
@@ -1602,7 +1730,10 @@ fn sweep_one(seed: u64, version: u8) {
         }
         Err(e) => {
             if e.message().contains("files were kept") {
-                assert!(data && manifest, "{schedule}: kept files deleted: {e}");
+                assert!(
+                    data && manifest && merged,
+                    "{schedule}: kept files deleted: {e}"
+                );
             }
             assert!(
                 rolled || !ours_now(&c),

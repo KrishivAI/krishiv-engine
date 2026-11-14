@@ -298,7 +298,7 @@ pub(crate) fn check_size(
 
 /// The bytes of the metadata file at `location`, refused before the read when
 /// the store reports more than `max` bytes (and after it, if the store lied).
-async fn read_capped(
+pub(crate) async fn read_capped(
     io: &FileIO,
     what: &str,
     location: &str,

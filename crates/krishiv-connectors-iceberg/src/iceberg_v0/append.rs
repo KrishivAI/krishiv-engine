@@ -7,28 +7,31 @@
 //! (§7) does, and on a conflict calls [`prepare_attempt`] again on the
 //! refreshed metadata with the same manifests and snapshot id.
 //!
-//! As Java's `SnapshotProducer`/`FastAppend` (apache-iceberg 1.12.0):
+//! As Java's `SnapshotProducer`/`MergeAppend` (apache-iceberg 1.12.0):
 //! - one manifest per partition spec, at `<metadata dir>/<commit uuid>-m<n>.avro`;
 //!   entries `ADDED` with the write's snapshot id and null (inherited)
 //!   sequence numbers, so the manifests are valid on any base;
 //! - the list at `<metadata dir>/snap-<snapshot id>-<attempt>-<commit uuid>.avro`,
-//!   the new manifests first, then the base snapshot's, unchanged; the new
-//!   manifests reset to an unassigned sequence number and no `first_row_id`
-//!   before each attempt (§7.3 step 1), so the list writer assigns them;
+//!   the new manifests first, then the base snapshot's data manifests, then
+//!   its delete manifests, merged on the first attempt (`merge.rs`, design
+//!   note §6.2); the new manifests reset to an unassigned sequence number and
+//!   no `first_row_id` before each attempt (§7.3 step 1), so the list writer
+//!   assigns them;
 //! - the sequence number is the table's `last-sequence-number` + 1 (v1: 0);
 //!   v3 takes `first-row-id` from the table's `next-row-id` and `added-rows`
 //!   from what the list writer assigned;
 //! - the summary: `operation` `append`, iceberg-rust's added-* counts and
 //!   partition summaries (`write.summary.partition-limit`), the `total-*` values
 //!   from the parent's (each left out when the parent lacks it; from 0 without
-//!   a parent), `engine-name`/`engine-version`, `krishiv.write-id` and
-//!   `krishiv.query-id`;
+//!   a parent), Java's `manifests-created`/`manifests-kept`/`manifests-replaced`
+//!   (`buildManifestCountSummary`), `engine-name`/`engine-version`,
+//!   `krishiv.write-id` and `krishiv.query-id`;
 //! - requirements `assert-table-uuid` and `assert-ref-snapshot-id` (the base,
 //!   or null for a ref that does not exist yet); updates `add-snapshot` and
 //!   `set-snapshot-ref`, the branch keeping its retention.
 //!
-//! Manifests are not split at `commit.manifest.target-size-bytes` and not
-//! merged (`commit.manifest-merge.enabled`) yet: PR-36a's later commit.
+//! Manifests are not split at `commit.manifest.target-size-bytes` while
+//! written (Java's `RollingManifestWriter`): one per spec.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -43,6 +46,7 @@ use iceberg::{TableRequirement, TableUpdate};
 use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
 
 use super::data_file::check_partition;
+use super::merge::{MergeConfig, MergeContext, arrange};
 use super::scan::{read_manifest_files, snapshot_refs};
 use super::storage::from_iceberg;
 
@@ -57,6 +61,15 @@ const CHANGED_PARTITION_COUNT: &str = "changed-partition-count";
 
 /// Java's `SnapshotSummary.PARTITION_SUMMARY_PROP`.
 const PARTITION_SUMMARIES_INCLUDED: &str = "partition-summaries-included";
+
+/// Java's `SnapshotSummary.CREATED_MANIFESTS_COUNT`.
+pub(crate) const MANIFESTS_CREATED: &str = "manifests-created";
+
+/// Java's `SnapshotSummary.KEPT_MANIFESTS_COUNT`.
+pub(crate) const MANIFESTS_KEPT: &str = "manifests-kept";
+
+/// Java's `SnapshotSummary.REPLACED_MANIFESTS_COUNT`.
+pub(crate) const MANIFESTS_REPLACED: &str = "manifests-replaced";
 
 /// The summary key of a write's idempotency key (ADR 0014 item 5).
 pub(crate) const WRITE_ID_PROP: &str = "krishiv.write-id";
@@ -121,6 +134,10 @@ pub(crate) struct NewManifests {
     /// The locations of the data files the manifests list, deleted when the
     /// write fails with every outcome known (design note §7.4).
     pub(crate) data_files: Vec<String>,
+    /// The merged manifests written by any attempt (only the first merges,
+    /// `merge.rs`): kept when the committed list names them, else deleted
+    /// with the attempt's other files (design note §7.4).
+    pub(crate) merged: Vec<String>,
     /// Attempts prepared so far (Java's `SnapshotProducer.attempt`).
     attempts: u32,
 }
@@ -211,6 +228,7 @@ pub(crate) async fn write_new_manifests(
         manifests,
         added,
         data_files,
+        merged: Vec::new(),
         attempts: 0,
     })
 }
@@ -321,12 +339,46 @@ pub(crate) async fn prepare_attempt(
         FormatVersion::V2 | FormatVersion::V3 => metadata.last_sequence_number() + 1,
     };
     let first_row_id = metadata.next_row_id();
+    // Merging runs on the first attempt only (`merge.rs`); its properties are
+    // read then and never again.
+    let merge = if new.attempts == 0 {
+        Some(MergeConfig::from_properties(metadata.properties())?)
+    } else {
+        None
+    };
+    let fresh: Vec<ManifestFile> = new
+        .manifests
+        .iter()
+        .cloned()
+        .map(|mut m| {
+            m.sequence_number = UNASSIGNED_SEQUENCE_NUMBER;
+            m.min_sequence_number = UNASSIGNED_SEQUENCE_NUMBER;
+            m.first_row_id = None;
+            m
+        })
+        .collect();
+    let dir = metadata_dir(metadata);
+    let next = new.manifests.len() + new.merged.len();
+    let arranged = arrange(
+        &mut MergeContext {
+            io,
+            metadata,
+            snapshot_id,
+            prefix: format!("{dir}/{}-m", new.commit_uuid),
+            next,
+            merged: &mut new.merged,
+            max_metadata_bytes,
+        },
+        fresh,
+        base_manifests,
+        merge,
+    )
+    .await?;
     new.attempts += 1;
     let attempt = new.attempts;
     let path = format!(
         "{}/snap-{snapshot_id}-{attempt}-{}.avro",
-        metadata_dir(metadata),
-        new.commit_uuid
+        dir, new.commit_uuid
     );
     let file = io
         .new_output(&path)
@@ -345,13 +397,19 @@ pub(crate) async fn prepare_attempt(
             Some(first_row_id),
         ),
     };
-    let fresh = new.manifests.iter().cloned().map(|mut m| {
-        m.sequence_number = UNASSIGNED_SEQUENCE_NUMBER;
-        m.min_sequence_number = UNASSIGNED_SEQUENCE_NUMBER;
-        m.first_row_id = None;
-        m
-    });
-    list.add_manifests(fresh.chain(base_manifests))
+    // Java's `buildManifestCountSummary`: a manifest of this snapshot is
+    // created, one of another snapshot kept (an unassigned id is neither).
+    let created = arranged
+        .manifests
+        .iter()
+        .filter(|m| m.added_snapshot_id == snapshot_id)
+        .count();
+    let kept = arranged
+        .manifests
+        .iter()
+        .filter(|m| m.added_snapshot_id != snapshot_id && m.added_snapshot_id != -1)
+        .count();
+    list.add_manifests(arranged.manifests.into_iter())
         .map_err(from_iceberg)?;
     let next_row_id = list.next_row_id();
     list.close().await.map_err(from_iceberg)?;
@@ -379,6 +437,9 @@ pub(crate) async fn prepare_attempt(
         };
         props.insert(total.to_owned(), after.to_string());
     }
+    props.insert(MANIFESTS_CREATED.to_owned(), created.to_string());
+    props.insert(MANIFESTS_KEPT.to_owned(), kept.to_string());
+    props.insert(MANIFESTS_REPLACED.to_owned(), arranged.replaced.to_string());
     props.insert("engine-name".to_owned(), "krishiv".to_owned());
     props.insert(
         "engine-version".to_owned(),

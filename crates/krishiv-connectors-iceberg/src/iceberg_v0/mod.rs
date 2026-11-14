@@ -9,6 +9,7 @@ pub(crate) mod deletes;
 pub(crate) mod eq_deletes;
 pub(crate) mod lazy;
 pub(crate) mod manifest_cache;
+pub(crate) mod merge;
 pub(crate) mod provider;
 pub(crate) mod scan;
 pub(crate) mod sink;
@@ -33,6 +34,8 @@ mod delete_tests;
 mod dst_tests;
 #[cfg(test)]
 mod evolution_tests;
+#[cfg(test)]
+mod merge_tests;
 #[cfg(test)]
 mod provider_tests;
 #[cfg(test)]
