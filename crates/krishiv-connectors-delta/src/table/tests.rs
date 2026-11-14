@@ -143,3 +143,99 @@ fn partition_values_parse_as_the_kernel_does() {
     );
     assert!(partition_scalar(Some(&"x".to_owned()), &DataType::INTEGER).is_err());
 }
+
+/// Every comparison operator, `IS NOT NULL`, and the shapes that translate to nothing: an empty
+/// `IN` or `OR`, an `IN` under a collation, a nested path through a non-struct.
+#[test]
+fn every_operator_and_the_empty_shapes() {
+    let s = schema();
+    let id = || Expr::column(["id"]);
+    let five = || Expr::literal(5_i64);
+    for (op, want) in [
+        (CmpOp::Eq, Pred::eq(id(), five())),
+        (CmpOp::NotEq, Pred::ne(id(), five())),
+        (CmpOp::Lt, Pred::lt(id(), five())),
+        (CmpOp::LtEq, Pred::le(id(), five())),
+        (CmpOp::Gt, Pred::gt(id(), five())),
+        (CmpOp::GtEq, Pred::ge(id(), five())),
+    ] {
+        assert_eq!(
+            to_kernel(&PushdownExpr::cmp(col("id"), op, ScalarValue::Int64(5)), &s),
+            Some(want),
+            "{op:?}"
+        );
+    }
+    assert_eq!(
+        to_kernel(&PushdownExpr::IsNotNull(col("p")), &s),
+        Some(Pred::is_not_null(Expr::column(["p"])))
+    );
+    let empty_in = PushdownExpr::In {
+        column: col("id"),
+        values: vec![],
+        collation: Collation::Utf8Binary,
+    };
+    let collated_in = PushdownExpr::In {
+        column: col("p"),
+        values: vec![ScalarValue::Utf8("a".into())],
+        collation: Collation::Other("UTF8_LCASE".into()),
+    };
+    let through_leaf = PushdownExpr::eq(
+        ColumnPath(vec!["id".into(), "x".into()]),
+        ScalarValue::Int32(1),
+    );
+    for e in [
+        empty_in,
+        collated_in,
+        through_leaf,
+        PushdownExpr::Or(vec![]),
+        PushdownExpr::And(vec![eq("f", ScalarValue::Float64(1.0))]),
+        PushdownExpr::IsNull(col("nope")),
+        PushdownExpr::IsNotNull(col("nope")),
+    ] {
+        assert_eq!(to_kernel(&e, &s), None, "{e:?}");
+    }
+    // An OR of what all translates is exact and kept.
+    assert_eq!(
+        to_kernel(
+            &PushdownExpr::Or(vec![
+                eq("id", ScalarValue::Int64(1)),
+                eq("id", ScalarValue::Int64(2))
+            ]),
+            &s
+        ),
+        Some(Pred::or_from([
+            Pred::eq(id(), Expr::literal(1_i64)),
+            Pred::eq(id(), Expr::literal(2_i64)),
+        ]))
+    );
+}
+
+/// A map column takes the engine's canonical key and value types and its `entries` name.
+#[test]
+fn a_map_field_takes_the_engines_types() {
+    use delta_kernel::schema::{ArrayType, MapType};
+    let field = StructField::nullable(
+        "m",
+        DataType::Map(Box::new(MapType::new(
+            DataType::STRING,
+            DataType::Array(Box::new(ArrayType::new(
+                DataType::decimal(10, 2).unwrap(),
+                true,
+            ))),
+            true,
+        ))),
+    );
+    let f = engine_field(&field, "t").unwrap();
+    let arrow_schema::DataType::Map(entries, _) = f.data_type() else {
+        panic!("{f:?}");
+    };
+    assert_eq!(entries.name(), "entries");
+    let arrow_schema::DataType::Struct(kv) = entries.data_type() else {
+        panic!("{entries:?}");
+    };
+    assert_eq!(kv[0].data_type(), &arrow_schema::DataType::Utf8View);
+    let arrow_schema::DataType::List(e) = kv[1].data_type() else {
+        panic!("{kv:?}");
+    };
+    assert_eq!(e.data_type(), &arrow_schema::DataType::Decimal64(10, 2));
+}

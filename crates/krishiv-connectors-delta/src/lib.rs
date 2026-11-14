@@ -11,7 +11,7 @@
 //! `Metadata::{configuration, partition_columns}`, `StructField::physical_name` and the
 //! `TableFeature` and `ColumnMappingMode` types ([`features`], [`table`]); PR-37 adds the
 //! create-table builder and `update_deletion_vectors`. [`features`] also reads the text of the
-//! kernel's "Feature '<name>' is not supported" refusal (pinned by a test).
+//! kernel's `"Feature '<name>' is not supported"` refusal (pinned by a test).
 //!
 //! # Error classes
 //! Delta's own classes are vendored from delta-spark 4.4.1 into `krishiv-common`

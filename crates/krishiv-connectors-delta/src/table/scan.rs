@@ -272,51 +272,63 @@ impl DeltaScanSource {
         let mut dv_memory = local.memory.split(0).unguarded();
         let mut request;
         let req = if unit.dv.has_vector() {
-            // Reserved from the descriptor's cardinality before the vector is decoded, at the
-            // peak: the deleted rows (8 B each), `RowSelection::excluding`'s filtered copy of them
-            // (8 B) and its ranges (16 B per range, at most one more than the rows).
-            let name = self.inner.name.clone();
-            let cardinality = unit
-                .dv
-                .cardinality()
-                .map_err(|err| from_kernel(&err, &name))?
-                .unwrap_or(0);
-            let slots = usize::try_from(cardinality)
-                .unwrap_or(usize::MAX)
-                .saturating_add(1);
-            let peak = slots.saturating_mul(DV_PEAK_BYTES_PER_ROW);
-            dv_memory.try_grow(peak)?;
-            let dv = unit.dv.clone();
-            let root = engine.table_root().clone();
-            let deleted = engine
-                .delta_blocking(move |e| {
-                    dv.get_row_indexes(e, &root)
-                        .map_err(|err| from_kernel(&err, &name))
-                })
-                .await??
-                .unwrap_or_default();
-            let meta = engine
-                .io()
-                .read_metadata(fmt.as_ref(), &file, MetadataNeeds::default(), &options)
-                .await?;
-            let rows = meta
-                .statistics()
-                .rows
-                .exact()
-                .copied()
-                .or(unit.records)
-                .ok_or_else(|| {
-                    unsupported("a Delta deletion vector on a file of unknown row count")
-                })?;
-            let selection = RowSelection::excluding(rows, deleted);
-            // What stays held while the file is read: the selection's range vector, whose
-            // capacity `RowSelection::excluding` sizes for one more range than deleted rows,
-            // however few ranges a contiguous delete leaves.
-            let kept = slots.saturating_mul(RANGE_BYTES);
-            dv_memory.shrink(dv_memory.size().saturating_sub(kept));
-            request = self.request.clone();
-            request.selection = Some(selection);
-            &request
+            'dv: {
+                // Reserved from the descriptor's cardinality before the vector is decoded, at the
+                // peak: the deleted rows (8 B each), `RowSelection::excluding`'s filtered copy of them
+                // (8 B) and its ranges (16 B per range, at most one more than the rows).
+                let name = self.inner.name.clone();
+                let cardinality = unit
+                    .dv
+                    .cardinality()
+                    .map_err(|err| from_kernel(&err, &name))?
+                    .unwrap_or(0);
+                let slots = usize::try_from(cardinality)
+                    .unwrap_or(usize::MAX)
+                    .saturating_add(1);
+                let peak = slots.saturating_mul(DV_PEAK_BYTES_PER_ROW);
+                dv_memory.try_grow(peak)?;
+                let dv = unit.dv.clone();
+                let root = engine.table_root().clone();
+                let deleted = engine
+                    .delta_blocking(move |e| {
+                        dv.get_row_indexes(e, &root)
+                            .map_err(|err| from_kernel(&err, &name))
+                    })
+                    .await??
+                    .unwrap_or_default();
+                let meta = match engine
+                    .io()
+                    .read_metadata(fmt.as_ref(), &file, MetadataNeeds::default(), &options)
+                    .await
+                {
+                    Ok(meta) => meta,
+                    // A missing or corrupt file the scan options skip: no selection, and the file's
+                    // own open below applies the same rule, as for a file without a DV.
+                    Err(e) if self.inner.scan_options.skips(&e) => {
+                        dv_memory.shrink(dv_memory.size());
+                        break 'dv &self.request;
+                    }
+                    Err(e) => return Err(e),
+                };
+                let rows = meta
+                    .statistics()
+                    .rows
+                    .exact()
+                    .copied()
+                    .or(unit.records)
+                    .ok_or_else(|| {
+                        unsupported("a Delta deletion vector on a file of unknown row count")
+                    })?;
+                let selection = RowSelection::excluding(rows, deleted);
+                // What stays held while the file is read: the selection's range vector, whose
+                // capacity `RowSelection::excluding` sizes for one more range than deleted rows,
+                // however few ranges a contiguous delete leaves.
+                let kept = slots.saturating_mul(RANGE_BYTES);
+                dv_memory.shrink(dv_memory.size().saturating_sub(kept));
+                request = self.request.clone();
+                request.selection = Some(selection);
+                &request
+            }
         } else {
             &self.request
         };

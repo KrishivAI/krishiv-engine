@@ -857,3 +857,39 @@ fn a_deletion_vector_is_reserved_before_it_is_decoded() {
     );
     assert_eq!(env.query_pool.reserved(), 0);
 }
+
+/// A data file with a deletion vector that is gone is skipped under
+/// `spark.sql.files.ignoreMissingFiles`, as one without a vector is, and fails the scan without it
+/// (Codex on #744: the vector's metadata read ran before the scan's skip rule).
+#[test]
+fn a_missing_file_with_a_deletion_vector_follows_ignore_missing_files() {
+    let env = Env::fixture("deletion-vectors");
+    let table = env.open().unwrap();
+    let gone = table.units().iter().find(|u| u.dv.has_vector()).unwrap();
+    std::fs::remove_file(env.dir.join(&gone.path)).unwrap();
+    let e = env
+        .try_run(table.delta_scan().build(ScanPushdowns::default()).unwrap())
+        .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::FailedReadFileFileNotExist,
+        "{e}"
+    );
+    let mut config = Config::new();
+    config
+        .set("spark.sql.files.ignoreMissingFiles", "true")
+        .unwrap();
+    let skipping = env
+        .rt
+        .block_on(DeltaTable::open(env.engine.clone(), None, &config))
+        .unwrap();
+    let batches = env.run(
+        skipping
+            .delta_scan()
+            .build(ScanPushdowns::default())
+            .unwrap(),
+    );
+    let all = spark_rows("deletion-vectors").unwrap().1.len();
+    let got = rows(&batches, &skipping.schema()).len();
+    assert!(got < all, "{got} of {all} rows");
+}

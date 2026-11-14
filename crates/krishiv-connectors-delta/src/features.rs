@@ -147,7 +147,7 @@ pub fn row_tracking_refused(table: &str) -> KrishivError {
 /// The Krishiv error for `error`, raised while opening a snapshot of `table`: the kernel's
 /// refusals of a catalog-managed table (no catalog version given) and of a reader feature it
 /// does not support become this module's classes; anything else maps as
-/// [`from_kernel`](crate::error::from_kernel).
+/// [`from_kernel`].
 #[must_use]
 pub fn snapshot_error(error: &KernelError, table: &str) -> KrishivError {
     match error.without_backtrace() {
