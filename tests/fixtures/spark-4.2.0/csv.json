@@ -1325,6 +1325,401 @@ null,
 "select": null
 },
 {
+"conf": {
+"spark.sql.caseSensitive": "false"
+},
+"file": "QSxCCjEsMgo=",
+"inferred": null,
+"name": "enforceSchema false upper caseSensitive=false",
+"options": {
+"enforceSchema": "false",
+"header": "true"
+},
+"rows": [
+[
+"1",
+"2"
+]
+],
+"schema": "a int, b int",
+"select": null
+},
+{
+"conf": {
+"spark.sql.caseSensitive": "false"
+},
+"file": "QSxCCjEsMgo=",
+"inferred": null,
+"name": "enforceSchema false upper select b caseSensitive=false",
+"options": {
+"enforceSchema": "false",
+"header": "true"
+},
+"rows": [
+[
+"2"
+]
+],
+"schema": "a int, b int",
+"select": [
+"b"
+]
+},
+{
+"conf": {
+"spark.sql.caseSensitive": "false"
+},
+"count": 1,
+"file": "QSxCCjEsMgo=",
+"inferred": null,
+"name": "enforceSchema false upper count caseSensitive=false",
+"options": {
+"enforceSchema": "false",
+"header": "true"
+},
+"schema": "a int, b int",
+"select": []
+},
+{
+"conf": {
+"spark.sql.caseSensitive": "false"
+},
+"file": "YSxiCjEsMgo=",
+"inferred": null,
+"name": "enforceSchema false lower caseSensitive=false",
+"options": {
+"enforceSchema": "false",
+"header": "true"
+},
+"rows": [
+[
+"1",
+"2"
+]
+],
+"schema": "a int, b int",
+"select": null
+},
+{
+"conf": {
+"spark.sql.caseSensitive": "false"
+},
+"file": "w4ksYgoxLDIK",
+"inferred": null,
+"name": "enforceSchema false non-ascii caseSensitive=false",
+"options": {
+"enforceSchema": "false",
+"header": "true"
+},
+"rows": [
+[
+"1",
+"2"
+]
+],
+"schema": "`é` int, b int",
+"select": null
+},
+{
+"conf": {
+"spark.sql.caseSensitive": "false"
+},
+"error": [
+"FAILED_READ_FILE.NO_HINT"
+],
+"file": "QSxYCjEsMgo=",
+"inferred": null,
+"name": "enforceSchema false other column caseSensitive=false",
+"options": {
+"enforceSchema": "false",
+"header": "true"
+},
+"schema": "a int, b int",
+"select": null
+},
+{
+"conf": {
+"spark.sql.caseSensitive": "false"
+},
+"file": "QSxYCjEsMgo=",
+"inferred": null,
+"name": "enforceSchema false other column select a caseSensitive=false",
+"options": {
+"enforceSchema": "false",
+"header": "true"
+},
+"rows": [
+[
+"1"
+]
+],
+"schema": "a int, b int",
+"select": [
+"a"
+]
+},
+{
+"conf": {
+"spark.sql.caseSensitive": "false"
+},
+"error": [
+"FAILED_READ_FILE.NO_HINT"
+],
+"file": "QSxYCjEsMgo=",
+"inferred": null,
+"name": "enforceSchema false other column select b caseSensitive=false",
+"options": {
+"enforceSchema": "false",
+"header": "true"
+},
+"schema": "a int, b int",
+"select": [
+"b"
+]
+},
+{
+"conf": {
+"spark.sql.caseSensitive": "false"
+},
+"file": "YSxiLGMKMSwyLDMK",
+"inferred": null,
+"name": "enforceSchema false wide header select a caseSensitive=false",
+"options": {
+"enforceSchema": "false",
+"header": "true"
+},
+"rows": [
+[
+"1"
+]
+],
+"schema": "a int, b int",
+"select": [
+"a"
+]
+},
+{
+"conf": {
+"spark.sql.caseSensitive": "false"
+},
+"error": [
+"FAILED_READ_FILE.NO_HINT"
+],
+"file": "YixhCjEsMgo=",
+"inferred": null,
+"name": "enforceSchema false swapped select b caseSensitive=false",
+"options": {
+"enforceSchema": "false",
+"header": "true"
+},
+"schema": "a int, b int",
+"select": [
+"b"
+]
+},
+{
+"conf": {
+"spark.sql.caseSensitive": "true"
+},
+"error": [
+"FAILED_READ_FILE.NO_HINT"
+],
+"file": "QSxCCjEsMgo=",
+"inferred": null,
+"name": "enforceSchema false upper caseSensitive=true",
+"options": {
+"enforceSchema": "false",
+"header": "true"
+},
+"schema": "a int, b int",
+"select": null
+},
+{
+"conf": {
+"spark.sql.caseSensitive": "true"
+},
+"error": [
+"FAILED_READ_FILE.NO_HINT"
+],
+"file": "QSxCCjEsMgo=",
+"inferred": null,
+"name": "enforceSchema false upper select b caseSensitive=true",
+"options": {
+"enforceSchema": "false",
+"header": "true"
+},
+"schema": "a int, b int",
+"select": [
+"b"
+]
+},
+{
+"conf": {
+"spark.sql.caseSensitive": "true"
+},
+"count": 1,
+"file": "QSxCCjEsMgo=",
+"inferred": null,
+"name": "enforceSchema false upper count caseSensitive=true",
+"options": {
+"enforceSchema": "false",
+"header": "true"
+},
+"schema": "a int, b int",
+"select": []
+},
+{
+"conf": {
+"spark.sql.caseSensitive": "true"
+},
+"file": "YSxiCjEsMgo=",
+"inferred": null,
+"name": "enforceSchema false lower caseSensitive=true",
+"options": {
+"enforceSchema": "false",
+"header": "true"
+},
+"rows": [
+[
+"1",
+"2"
+]
+],
+"schema": "a int, b int",
+"select": null
+},
+{
+"conf": {
+"spark.sql.caseSensitive": "true"
+},
+"error": [
+"FAILED_READ_FILE.NO_HINT"
+],
+"file": "w4ksYgoxLDIK",
+"inferred": null,
+"name": "enforceSchema false non-ascii caseSensitive=true",
+"options": {
+"enforceSchema": "false",
+"header": "true"
+},
+"schema": "`é` int, b int",
+"select": null
+},
+{
+"conf": {
+"spark.sql.caseSensitive": "true"
+},
+"error": [
+"FAILED_READ_FILE.NO_HINT"
+],
+"file": "QSxYCjEsMgo=",
+"inferred": null,
+"name": "enforceSchema false other column caseSensitive=true",
+"options": {
+"enforceSchema": "false",
+"header": "true"
+},
+"schema": "a int, b int",
+"select": null
+},
+{
+"conf": {
+"spark.sql.caseSensitive": "true"
+},
+"error": [
+"FAILED_READ_FILE.NO_HINT"
+],
+"file": "QSxYCjEsMgo=",
+"inferred": null,
+"name": "enforceSchema false other column select a caseSensitive=true",
+"options": {
+"enforceSchema": "false",
+"header": "true"
+},
+"schema": "a int, b int",
+"select": [
+"a"
+]
+},
+{
+"conf": {
+"spark.sql.caseSensitive": "true"
+},
+"error": [
+"FAILED_READ_FILE.NO_HINT"
+],
+"file": "QSxYCjEsMgo=",
+"inferred": null,
+"name": "enforceSchema false other column select b caseSensitive=true",
+"options": {
+"enforceSchema": "false",
+"header": "true"
+},
+"schema": "a int, b int",
+"select": [
+"b"
+]
+},
+{
+"conf": {
+"spark.sql.caseSensitive": "true"
+},
+"file": "YSxiLGMKMSwyLDMK",
+"inferred": null,
+"name": "enforceSchema false wide header select a caseSensitive=true",
+"options": {
+"enforceSchema": "false",
+"header": "true"
+},
+"rows": [
+[
+"1"
+]
+],
+"schema": "a int, b int",
+"select": [
+"a"
+]
+},
+{
+"conf": {
+"spark.sql.caseSensitive": "true"
+},
+"error": [
+"FAILED_READ_FILE.NO_HINT"
+],
+"file": "YixhCjEsMgo=",
+"inferred": null,
+"name": "enforceSchema false swapped select b caseSensitive=true",
+"options": {
+"enforceSchema": "false",
+"header": "true"
+},
+"schema": "a int, b int",
+"select": [
+"b"
+]
+},
+{
+"conf": {
+"spark.sql.csv.parser.columnPruning.enabled": "false"
+},
+"error": [
+"FAILED_READ_FILE.NO_HINT"
+],
+"file": "QSxYCjEsMgo=",
+"inferred": null,
+"name": "enforceSchema false no pruning",
+"options": {
+"enforceSchema": "false",
+"header": "true"
+},
+"schema": "a int, b int",
+"select": [
+"a"
+]
+},
+{
 "file": "dgogMQoxIAorMQoxLjAKMHgxMAoyMTQ3NDgzNjQ4Ci0wCjEyNwotMTI5Cg==",
 "inferred": "struct<v:string>",
 "name": "integers",

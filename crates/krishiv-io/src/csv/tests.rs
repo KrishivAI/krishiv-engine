@@ -28,7 +28,7 @@ use super::tokenizer::Tokenizer;
 use crate::format::{Decoder, Encoder, FileFormat, FileMetadata, Step};
 use crate::io::{ByteRange, FileRef, IoConfig, IoScheduler, StoreId};
 use crate::options::FormatOptions;
-use crate::request::{ColumnPath, ROW_INDEX_COLUMN, ScanRequest};
+use crate::request::{ColumnPath, FieldMapping, ROW_INDEX_COLUMN, ScanRequest};
 use crate::text::{Datetimes, TextMetadata};
 
 const GOLDEN: &str = include_str!("../../../../tests/fixtures/spark-4.2.0/csv.json");
@@ -61,6 +61,21 @@ fn b64(s: &str) -> Vec<u8> {
 }
 
 fn options(map: &Value) -> FormatOptions {
+    options_under(map, &Value::Null)
+}
+
+/// Options `map` under the session settings `conf` (a golden case's `conf`).
+fn options_under(map: &Value, conf: &Value) -> FormatOptions {
+    let mut config = Config::new();
+    if let Some(c) = conf.as_object() {
+        for (k, v) in c {
+            if k != "spark.sql.caseSensitive" {
+                config
+                    .set(k, v.as_str().expect("conf value"))
+                    .expect("conf");
+            }
+        }
+    }
     let mut user = BTreeMap::new();
     if let Some(m) = map.as_object() {
         for (k, v) in m {
@@ -72,7 +87,7 @@ fn options(map: &Value) -> FormatOptions {
     }
     CsvFormat
         .options()
-        .parse(&user, &Config::new())
+        .parse(&user, &config)
         .expect("options parse")
         .0
 }
@@ -124,6 +139,11 @@ fn ddl(s: &str) -> SchemaRef {
     parts.push(&s[start..]);
     for p in parts {
         let (n, t) = p.trim().split_once(' ').expect("name type");
+        // A quoted name (`é`, which Spark's DDL lexer needs quoted).
+        let n = n
+            .strip_prefix('`')
+            .and_then(|n| n.strip_suffix('`'))
+            .unwrap_or(n);
         fields.push(Field::new(n, ddl_type(t.trim()), true));
     }
     Arc::new(Schema::new(fields))
@@ -479,7 +499,9 @@ fn reads_match_spark() {
     for case in g["reads"].as_array().expect("reads") {
         let name = case["name"].as_str().expect("name");
         let bytes = b64(case["file"].as_str().expect("file"));
-        let o = options(&case["options"]);
+        let conf = case.get("conf").unwrap_or(&Value::Null);
+        let o = options_under(&case["options"], conf);
+        let case_sensitive = conf["spark.sql.caseSensitive"].as_str() == Some("true");
         let schema = match case["schema"].as_str() {
             Some(s) => ddl(s),
             None => match infer(&bytes, &o) {
@@ -510,7 +532,9 @@ fn reads_match_spark() {
                 .map(|f| ColumnPath::new(f.name()))
                 .collect(),
         };
-        let req = ScanRequest::new(Arc::clone(&schema), projection);
+        let mut req = ScanRequest::new(Arc::clone(&schema), projection);
+        // The session's case rule reaches a file read as the request's mapping.
+        req.mapping = FieldMapping::ByName { case_sensitive };
         let got = read(&bytes, &o, &req);
         match (got, case.get("error"), case.get("count"), case.get("rows")) {
             (Ok(b), None, Some(count), _) => {

@@ -249,6 +249,39 @@ READS += [
     ("enforceSchema false order", "A,b\n1,2\n", {"header": "true", "enforceSchema": "false"}, "b int, a int", None),
     ("enforceSchema false count", "a\n1\n", {"header": "true", "enforceSchema": "false"}, "a int, b int", None),
     ("enforceSchema true", "x,y\n1,2\n", {"header": "true"}, "a int, b int", None),
+    # The header check (Spark's `CSVHeaderChecker`): names under `spark.sql.caseSensitive` (exact, else after
+    # Java's `toLowerCase`), and with column pruning only the selected columns, each at its own header position.
+    *[
+        (
+            f"enforceSchema false {n} caseSensitive={cs}",
+            t,
+            {"header": "true", "enforceSchema": "false"},
+            sch,
+            sel,
+            {"spark.sql.caseSensitive": cs},
+        )
+        for cs in ["false", "true"]
+        for n, t, sch, sel in [
+            ("upper", "A,B\n1,2\n", "a int, b int", None),
+            ("upper select b", "A,B\n1,2\n", "a int, b int", ["b"]),
+            ("upper count", "A,B\n1,2\n", "a int, b int", []),
+            ("lower", "a,b\n1,2\n", "a int, b int", None),
+            ("non-ascii", "\u00c9,b\n1,2\n", "`\u00e9` int, b int", None),
+            ("other column", "A,X\n1,2\n", "a int, b int", None),
+            ("other column select a", "A,X\n1,2\n", "a int, b int", ["a"]),
+            ("other column select b", "A,X\n1,2\n", "a int, b int", ["b"]),
+            ("wide header select a", "a,b,c\n1,2,3\n", "a int, b int", ["a"]),
+            ("swapped select b", "b,a\n1,2\n", "a int, b int", ["b"]),
+        ]
+    ],
+    (
+        "enforceSchema false no pruning",
+        "A,X\n1,2\n",
+        {"header": "true", "enforceSchema": "false"},
+        "a int, b int",
+        ["a"],
+        {"spark.sql.csv.parser.columnPruning.enabled": "false"},
+    ),
     ("integers", "v\n 1\n1 \n+1\n1.0\n0x10\n2147483648\n-0\n127\n-129\n", {"header": "true"}, None, None),
     (
         "integer types",
@@ -352,7 +385,18 @@ READS += [
 
 
 def read_case(spark, root, case):
-    name, text, opts, schema, select = case
+    name, text, opts, schema, select = case[:5]
+    conf = case[5] if len(case) > 5 else {}
+    for k, v in conf.items():
+        spark.conf.set(k, v)
+    try:
+        return read_case_under_conf(spark, root, name, text, opts, schema, select, conf)
+    finally:
+        for k in conf:
+            spark.conf.unset(k)
+
+
+def read_case_under_conf(spark, root, name, text, opts, schema, select, conf):
     path = os.path.join(root, re.sub(r"[^a-z0-9]+", "_", name.lower()))
     os.makedirs(path)
     if text is None:
@@ -364,6 +408,8 @@ def read_case(spark, root, case):
     with open(os.path.join(path, "part.csv"), "wb") as f:
         f.write(data)
     out = {"name": name, "file": base64.b64encode(data).decode(), "options": opts, "schema": schema, "select": select}
+    if conf:
+        out["conf"] = conf
     try:
         reader = spark.read.options(**opts)
         if schema is not None:
