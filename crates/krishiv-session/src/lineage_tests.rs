@@ -111,6 +111,7 @@ fn lineage_view_in_sql_function_body() {
 #[test]
 fn lineage_reads_the_analyzed_plan_not_the_optimized_one() {
     let s = session();
+    let mut compared = 0;
     for (sql, want) in [
         (
             "SELECT base.a FROM base JOIN other ON base.a = other.a WHERE base.a > 5",
@@ -130,8 +131,12 @@ fn lineage_reads_the_analyzed_plan_not_the_optimized_one() {
             plan: optimized,
             ..(*a).clone()
         };
+        // The optimized plan may have no lineage (an `Err` is also a different answer), but at least one
+        // case must have one, so the comparison runs.
         if let Ok(m) = lineage(&swapped) {
             assert_ne!(filters(&m), want, "{sql}: the optimizer changed nothing");
+            compared += 1;
         }
     }
+    assert!(compared > 0, "no optimized plan had a lineage to compare");
 }

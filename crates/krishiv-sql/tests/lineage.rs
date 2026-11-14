@@ -32,7 +32,7 @@ fn col(name: &str, t: &str) -> TableColumn {
     }
 }
 
-/// `t(a, b, c, arr)` and `u(a, x)` in `spark_catalog.default`.
+/// `t(a, b, c, arr)`, `u(a, x)` and `w(big, s, st)` in `spark_catalog.default`.
 fn catalog() -> MemoryCatalog {
     MemoryCatalog::new("spark_catalog")
         .with_table(
@@ -50,6 +50,16 @@ fn catalog() -> MemoryCatalog {
             &["default"],
             "u",
             vec![col("a", "int"), col("x", "int")],
+            None,
+        )
+        .with_table(
+            &["default"],
+            "w",
+            vec![
+                col("big", "bigint"),
+                col("s", "string"),
+                col("st", "struct<p:int,q:string>"),
+            ],
             None,
         )
 }
@@ -270,6 +280,35 @@ fn set_operations_read_both_sides() {
     // A user's semi join is no set operation: the right side only decides the rows.
     let l = of("SELECT a FROM t LEFT SEMI JOIN u ON t.a = u.a");
     assert_eq!(columns(&l), ["a: [t.a] -> identity"]);
+}
+
+/// The `DISTINCT` rewrite is recognized over widened sides (`INT` against `BIGINT`: the widening is a projection
+/// under the join, so its condition still compares bare columns) and over string and struct columns: a change of
+/// the condition's shape fails here instead of losing the right side's columns.
+#[test]
+fn set_operations_read_both_sides_of_widened_string_and_struct_columns() {
+    for op in ["INTERSECT", "EXCEPT"] {
+        let sql = format!("SELECT a FROM t {op} SELECT big FROM w");
+        assert_eq!(
+            columns(&of(&sql)),
+            ["a: [t.a, w.big] -> expression"],
+            "{sql}"
+        );
+        let sql = format!("SELECT big FROM w {op} SELECT a FROM t");
+        assert_eq!(
+            columns(&of(&sql)),
+            ["big: [t.a, w.big] -> expression"],
+            "{sql}"
+        );
+        let sql = format!("SELECT c FROM t {op} SELECT s FROM w");
+        assert_eq!(columns(&of(&sql)), ["c: [t.c, w.s] -> identity"], "{sql}");
+        let sql = format!("SELECT st FROM w {op} SELECT named_struct('p', a, 'q', c) FROM t");
+        assert_eq!(
+            columns(&of(&sql)),
+            ["st: [t.a, t.c, w.st] -> expression"],
+            "{sql}"
+        );
+    }
 }
 
 #[test]
