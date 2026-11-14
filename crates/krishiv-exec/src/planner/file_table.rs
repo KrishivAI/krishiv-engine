@@ -286,6 +286,7 @@ fn merge(mut acc: FileStatistics, s: &FileStatistics) -> FileStatistics {
             return false;
         };
         c.null_count = add(&c.null_count, &o.null_count);
+        c.compressed_bytes = add(&c.compressed_bytes, &o.compressed_bytes);
         c.min = pick(&c.min, &o.min, Ordering::Less);
         c.max = pick(&c.max, &o.max, Ordering::Greater);
         true

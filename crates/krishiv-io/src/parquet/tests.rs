@@ -1885,6 +1885,26 @@ fn compressed_column_sizes_cover_every_leaf() {
                 .read_metadata(&ParquetFormat, &file, MetadataNeeds::default(), &o),
         )
         .unwrap();
+    let any: &dyn std::any::Any = &*meta;
+    let pm = any.downcast_ref::<super::ParquetMetadata>().unwrap();
+    for (i, rg) in pm.row_groups.iter().enumerate() {
+        let size = |leaf: usize| {
+            u64::try_from(footer.row_group(i).column(leaf).compressed_size()).unwrap()
+        };
+        let sizes: Vec<_> = rg
+            .statistics
+            .columns
+            .iter()
+            .map(|c| c.compressed_bytes.clone())
+            .collect();
+        assert_eq!(
+            sizes,
+            [
+                crate::Precision::Exact(size(0)),
+                crate::Precision::Exact(size(1))
+            ]
+        );
+    }
     let st = meta.statistics();
     let k = st.column(&ColumnPath(vec!["k".into()])).unwrap();
     assert_eq!(k.compressed_bytes, crate::Precision::Exact(expected(0)));
