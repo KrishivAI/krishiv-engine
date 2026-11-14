@@ -1,5 +1,5 @@
 [
-  {"oneof": "Relation.rel_type", "field": "read", "number": 2, "status": "partial", "refused": "DataSource.schema, predicates (JDBC) and is_streaming", "target": "Read(ReadSource::{Table,Files}); user schema on ReadSource::Files; predicates → JDBC partitions (refuse as Spark does for non-JDBC formats: PREDICATES_NOT_SUPPORTED_FOR_DATA_SOURCE)", "task": "P3-T012", "group": 1},
+  {"oneof": "Relation.rel_type", "field": "read", "number": 2, "status": "partial", "refused": "predicates (JDBC) and is_streaming", "target": "Read(ReadSource::{Table,Files}); DataSource.schema (DDL or JSON) → ReadSource::Files::schema; predicates → JDBC partitions (refuse as Spark does for non-JDBC formats: PREDICATES_NOT_SUPPORTED_FOR_DATA_SOURCE)", "task": "P3-T012", "group": 1},
   {"oneof": "Relation.rel_type", "field": "project", "number": 3, "status": "done", "refused": "", "target": "Project; missing input → OneRowRelation", "task": "P3-T012", "group": 1},
   {"oneof": "Relation.rel_type", "field": "filter", "number": 4, "status": "done", "refused": "", "target": "Filter", "task": "P2-T091a", "group": 0},
   {"oneof": "Relation.rel_type", "field": "join", "number": 5, "status": "partial", "refused": "join_data_type (joinWith, typed)", "target": "Join; join_data_type is Scala joinWith only → unsupported row", "task": "P3-T012", "group": 1},

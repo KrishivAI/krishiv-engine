@@ -36,7 +36,6 @@ const UNSUPPORTED: &[(&str, ErrorClass)] = &[
         "literals_array",
         ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported,
     ),
-    ("read_schema_string", ErrorClass::KrishivUnsupportedFeature),
     (
         "select_expr",
         ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported,

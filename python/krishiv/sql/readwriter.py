@@ -11,21 +11,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from krishiv.errors import PySparkValueError, not_expected_type, unsupported_feature
+from krishiv.errors import PySparkTypeError, PySparkValueError, not_expected_type
 from krishiv.sql.column import Column
 from krishiv.sql.dataframe import DataFrame
+from krishiv.sql.types import StructType
 
 if TYPE_CHECKING:
     from krishiv.sql.session import SparkSession
-
-
-#: What a read with a user schema is refused as, until reads carry one: a
-#: schema that were dropped would read every column as text without a word
-#: (acceptance issue KN-1). SQL takes the columns today.
-_READ_SCHEMA = (
-    "a user schema on spark.read (DataFrameReader.schema or schema=); declare the columns in SQL "
-    "instead: CREATE TEMPORARY VIEW v (<columns>) USING <format> OPTIONS (path '<path>')"
-)
 
 
 class DataFrameReader:
@@ -33,15 +25,32 @@ class DataFrameReader:
         self._session = session
         self._format = "parquet"
         self._options: list[tuple[str, str]] = []
+        # The user's schema as (JSON of a StructType, DDL string): one of them, or neither.
+        self._schema: tuple[str | None, str | None] = (None, None)
 
     def format(self, source: str) -> DataFrameReader:
         self._format = source
         return self
 
-    def schema(self, schema: object) -> DataFrameReader:
-        """Refused with ``KRISHIV_UNSUPPORTED_FEATURE``: reads do not carry a
-        user schema yet, and dropping it would read every column as text."""
-        raise unsupported_feature(_READ_SCHEMA)
+    def schema(self, schema: StructType | str) -> DataFrameReader:
+        """The input schema: a :class:`StructType` or a DDL string (``"a INT,
+        b STRING"``). The files are read as its columns, never inferred; as in
+        Spark, partition columns found under the path come last (one the schema
+        names takes its type) and every column reads as nullable."""
+        if isinstance(schema, StructType):
+            self._schema = (schema.json(), None)
+        elif isinstance(schema, str):
+            self._schema = (None, schema)
+        else:
+            raise PySparkTypeError(
+                errorClass="NOT_EXPECTED_TYPE",
+                messageParameters={
+                    "arg_name": "schema",
+                    "expected_type": "str or struct type",
+                    "arg_type": type(schema).__name__,
+                },
+            )
+        return self
 
     def option(self, key: str, value: object) -> DataFrameReader:
         self._options.append((key, _option_text(value)))
@@ -55,13 +64,16 @@ class DataFrameReader:
     def load(self, path: str | list[str] | None = None, format: str | None = None, **options: object) -> DataFrame:
         if format is not None:
             self.format(format)
-        if options.pop("schema", None) is not None:
-            raise unsupported_feature(_READ_SCHEMA)
+        schema = options.pop("schema", None)
+        if schema is not None:
+            self.schema(schema)  # ty: ignore[invalid-argument-type]
         self.options(**options)
         if path is None:
             raise not_expected_type("path", "str or list of str", path)
         paths = [path] if isinstance(path, str) else list(path)
-        return DataFrame(self._session._native.read(self._format, paths, self._options), self._session)
+        schema_json, schema_ddl = self._schema
+        native = self._session._native.read(self._format, paths, self._options, schema_json, schema_ddl)
+        return DataFrame(native, self._session)
 
     def parquet(self, *paths: str) -> DataFrame:
         return self.load(list(paths), format="parquet")

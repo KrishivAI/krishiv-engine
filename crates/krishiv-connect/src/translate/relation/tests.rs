@@ -129,21 +129,55 @@ fn file_read_options_and_paths_are_classified_once() {
 }
 
 #[test]
-fn a_streaming_read_a_schema_and_predicates_are_unsupported() {
+fn a_user_schema_reads_as_ddl_or_json() {
+    let with = |schema: &str| {
+        data_source(read::DataSource {
+            format: Some("csv".into()),
+            paths: vec!["/a".into()],
+            schema: Some(schema.into()),
+            ..read::DataSource::default()
+        })
+    };
+    // A DDL column list, nullability kept in the IR (the read reports
+    // every column nullable).
+    let PlanNode::Read(ReadSource::Files {
+        schema: Some(ddl), ..
+    }) = node(&with("a INT NOT NULL, b STRING"))
+    else {
+        panic!("no schema")
+    };
+    assert_eq!(
+        ddl.fields()
+            .iter()
+            .map(|f| (f.name(), f.data_type().simple_string(), f.nullable()))
+            .collect::<Vec<_>>(),
+        [
+            ("a", "int".to_owned(), false),
+            ("b", "string".to_owned(), true)
+        ]
+    );
+    // PySpark sends a StructType as its JSON form.
+    let json = r#"{"fields":[{"metadata":{},"name":"a","nullable":false,"type":"integer"},{"metadata":{},"name":"b","nullable":true,"type":"string"}],"type":"struct"}"#;
+    let PlanNode::Read(ReadSource::Files {
+        schema: Some(from_json),
+        ..
+    }) = node(&with(json))
+    else {
+        panic!("no schema")
+    };
+    assert_eq!(from_json, ddl);
+    assert_eq!(show(&with("a INT")), "Read csv [/a] schema struct<a:int>\n");
+    // Neither form: the parser's error.
+    assert_eq!(code(&with("a INT,,")), ErrorClass::ParseSyntaxError);
+}
+
+#[test]
+fn a_streaming_read_and_predicates_are_unsupported() {
     let mut streaming = read_files(Some("parquet"), &["/a"]);
     if let Some(RelType::Read(r)) = &mut streaming.rel_type {
         r.is_streaming = true;
     }
     assert!(message(&streaming).contains("is_streaming"));
-    let schema = data_source(read::DataSource {
-        schema: Some("a INT".into()),
-        ..read::DataSource::default()
-    });
-    assert!(
-        message(&schema).contains("Read.DataSource.schema"),
-        "{}",
-        message(&schema)
-    );
     // The client sends an empty schema string when none is given.
     let empty = data_source(read::DataSource {
         format: Some("parquet".into()),
@@ -880,8 +914,9 @@ fn secrets_in_read_options_reach_no_printer_key_or_error() {
         ..
     })) = &mut with_schema.rel_type
     {
-        d.schema = Some("a INT".into());
+        d.schema = Some("a INT,,".into());
     }
+    // A schema that does not parse.
     assert!(!fails(translate(&with_schema)).to_string().contains(CANARY));
     // The printed plan still names the options.
     assert!(

@@ -1,4 +1,6 @@
 ---
 source: crates/krishiv-connect/tests/goldens.rs
 ---
-[KRISHIV_UNSUPPORTED_FEATURE] The feature reads with a user-specified schema (spark.connect.Read.DataSource.schema) is not supported by Krishiv yet. SQLSTATE: 0A000
+Read parquet [/data/p] schema struct<a:int,b:string>
+-- plan ids --
+Read plan_id=0

@@ -93,7 +93,7 @@ Session.def conf_unset(self, key: str) -> None
 Session.def create_dataframe(self, data: object) -> DataFrame
 Session.def drop_temp_view(self, name: str) -> bool
 Session.def metrics(self) -> list[dict[str, object]]
-Session.def read(self, format: str, paths: list[str], options: list[tuple[str, str]] | None=...) -> DataFrame
+Session.def read(self, format: str, paths: list[str], options: list[tuple[str, str]] | None=..., schema_json: str | None=..., schema_ddl: str | None=...) -> DataFrame
 Session.def refresh_files(self) -> None
 Session.def refresh_table(self, name: str) -> None
 Session.def register_python_udf(self, name: str, eval_type: int, return_type: str, deterministic: bool, thread_safe: bool, wrapper: object) -> int
@@ -1146,7 +1146,7 @@ DataFrameReader.def load(self, path: str | list[str] | None=None, format: str | 
 DataFrameReader.def option(self, key: str, value: object) -> DataFrameReader
 DataFrameReader.def options(self, **options: object) -> DataFrameReader
 DataFrameReader.def parquet(self, *paths: str) -> DataFrame
-DataFrameReader.def schema(self, schema: object) -> DataFrameReader
+DataFrameReader.def schema(self, schema: StructType | str) -> DataFrameReader
 DataFrameWriter.def __init__(self, df: DataFrame) -> None
 DataFrameWriter.def bucketBy(self, numBuckets: int, col: str | list[str] | tuple[str, ...], *cols: str) -> DataFrameWriter
 DataFrameWriter.def csv(self, path: str, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, **options: object) -> None

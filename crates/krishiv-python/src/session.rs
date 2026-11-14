@@ -112,19 +112,40 @@ impl PySession {
         !is_arrow_table(name) && self.inner.drop_temp_view(name)
     }
 
-    /// The DataFrame reading the files `paths` as `format`, with `options`.
-    #[pyo3(signature = (format, paths, options=None))]
+    /// The DataFrame reading the files `paths` as `format`, with `options`
+    /// and the user's schema, if any: `schema_json` a struct type's JSON form
+    /// (`StructType.json()`), or `schema_ddl` a DDL string (`"a INT"`), as
+    /// PySpark's `DataFrameReader.schema` hands either to Spark.
+    #[pyo3(signature = (format, paths, options=None, schema_json=None, schema_ddl=None))]
     fn read(
         &self,
+        py: Python<'_>,
         format: &str,
         paths: Vec<String>,
         options: Option<Vec<(String, String)>>,
-    ) -> PyDataFrame {
+        schema_json: Option<&str>,
+        schema_ddl: Option<&str>,
+    ) -> PyResult<PyDataFrame> {
         let mut reader = self.inner.read().format(format);
         for (key, value) in options.unwrap_or_default() {
             reader = reader.option(&key, &value);
         }
-        PyDataFrame::new(reader.load(paths))
+        if let Some(json) = schema_json {
+            match krishiv_types::DataType::from_json(json) {
+                Ok(krishiv_types::DataType::Struct(s)) => reader = reader.schema(s),
+                Ok(other) => {
+                    return Err(pyo3::exceptions::PyTypeError::new_err(format!(
+                        "a read schema must be a StructType, not {}",
+                        other.simple_string()
+                    )));
+                }
+                Err(e) => return Err(to_py(py, &e)),
+            }
+        }
+        if let Some(ddl) = schema_ddl {
+            reader = reader.schema_ddl(ddl).map_err(|e| to_py(py, &e))?;
+        }
+        Ok(PyDataFrame::new(reader.load(paths)))
     }
 
     /// A DataFrame of the Arrow data `data` (any object implementing the

@@ -212,13 +212,12 @@ impl Translator<'_> {
                 options: typed(&t.options),
             },
             ReadType::DataSource(d) => {
-                if d.schema.as_deref().is_some_and(|s| !s.is_empty()) {
-                    return Err(unsupported_field(
-                        "Read.DataSource",
-                        "schema",
-                        "reads with a user-specified schema",
-                    ));
-                }
+                let schema = d
+                    .schema
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .map(read_schema)
+                    .transpose()?;
                 if !d.predicates.is_empty() {
                     return Err(unsupported_field(
                         "Read.DataSource",
@@ -237,7 +236,7 @@ impl Translator<'_> {
                         .map(|p| OptionValue::from_user("path", p.as_str()))
                         .collect(),
                     options: typed(&d.options),
-                    schema: None,
+                    schema,
                 }
             }
         }))
@@ -461,6 +460,26 @@ impl Translator<'_> {
             input: self.input("WithColumns", w.input.as_deref())?,
             columns,
         })
+    }
+}
+
+/// A read's user schema as the client sends it (`Read.DataSource.schema`):
+/// a `StructType`'s JSON form (PySpark sends `schema.json()`), or a DDL
+/// column list (`"a INT, b STRING NOT NULL"`), read as the fields of a
+/// `STRUCT<...>` type, which has the same column grammar.
+fn read_schema(text: &str) -> Result<krishiv_types::StructType> {
+    let parsed = if text.trim_start().starts_with('{') {
+        krishiv_types::DataType::from_json(text)?
+    } else {
+        krishiv_types::parse_data_type(&format!("struct<{text}>"))?
+    };
+    match parsed {
+        krishiv_types::DataType::Struct(s) => Ok(s),
+        other => Err(krishiv_common::error::InvalidSchemaNonStructType {
+            input_schema: format!("\"{}\"", other.sql()),
+            data_type: format!("\"{}\"", other.sql()),
+        }
+        .into()),
     }
 }
 
