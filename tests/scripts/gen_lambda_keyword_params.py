@@ -55,6 +55,10 @@ SHAPES = [
     "(y, K) -> abs(K)",
     "(y, K) -> K OR y",
     "(y, K) -> K = y",
+    "(y, K) -> CASE WHEN K IS NULL THEN 1 WHEN y > 0 THEN 2 END",
+    "(y, K) -> CASE WHEN K - y > 0 THEN 1 WHEN y > 0 THEN 2 END",
+    "(y, K) -> CASE K - 1 WHEN 0 THEN 1 END",
+    "(y, K) -> CASE y WHEN K - 1 THEN 1 WHEN 2 THEN 2 END",
 ]
 
 SCRIPT = """

@@ -14,7 +14,7 @@ use crate::ast::{
     Truth, UnaryOp, VariantPath, VariantPathPart, VariantPathPartKind, WhenClause, WindowFrame,
     WindowRef, WindowSpec,
 };
-use crate::keywords::{NOT_FUNCTION_WORD, PRIMARY_WORD, RESERVED_WORD};
+use crate::keywords::{CLAUSE_WORD, NOT_FUNCTION_WORD, PRIMARY_WORD, RESERVED_WORD};
 use crate::lexer::{Sym, TokenKind, unescape_string};
 
 /// Binding powers, loosest first; prefix `NOT` and unary operators bind as
@@ -260,7 +260,52 @@ impl Parser<'_> {
                 || self.sym_at(1, Sym::DoubleColon)
                 || self.sym_at(1, Sym::LBracket)
                 || self.sym_at(1, Sym::Arrow)
-                || (!self.opts.enforce_reserved_keywords && self.any_kw_at(1, BRANCH_END)))
+                || (!self.opts.enforce_reserved_keywords
+                    && self.any_kw_at(1, BRANCH_END)
+                    && !self.not_ends_select_item()))
+    }
+
+    /// Whether `NOT <word>` here can be a whole select item, the word a
+    /// column: at the item's top level, with the item's end or a bare alias
+    /// and the end after the word. ANTLR then takes the operator (`SELECT
+    /// NOT END` is `NOT end`, `SELECT NOT AND x` is `NOT and AS x`); where no
+    /// alias can follow (`WHERE NOT IS NULL`, a lambda body, `NOT AND x AS
+    /// y`) `NOT` is the column.
+    fn not_ends_select_item(&self) -> bool {
+        let Some(start) = self.item_start else {
+            return false;
+        };
+        let mut depth = 0i64;
+        for t in self.toks.get(start..self.pos).unwrap_or_default() {
+            match t.kind {
+                TokenKind::Sym(Sym::LParen | Sym::LBracket) => depth += 1,
+                TokenKind::Sym(Sym::RParen | Sym::RBracket) => depth -= 1,
+                _ => {}
+            }
+        }
+        depth == 0 && self.item_ends_after(2)
+    }
+
+    /// Whether the select item can end at offset `n`, or after a bare alias
+    /// there.
+    fn item_ends_after(&self, n: usize) -> bool {
+        let ends = |n: usize| {
+            self.item_end_at(n)
+                || self.kw_at(n, "FROM")
+                || (self.kind(n) == Some(TokenKind::Word) && self.class(n) & CLAUSE_WORD != 0)
+        };
+        let alias = matches!(self.kind(n), Some(TokenKind::Word | TokenKind::QuotedIdent));
+        ends(n) || (alias && ends(n + 1))
+    }
+
+    /// Whether the token before the cursor is the keyword `kw`.
+    fn kw_before(&self, kw: &str) -> bool {
+        self.pos
+            .checked_sub(1)
+            .and_then(|i| self.toks.get(i))
+            .is_some_and(|t| {
+                t.kind == TokenKind::Word && crate::keywords::is_kw(t.span.text(self.src), kw)
+            })
     }
 
     fn exists_follows(&self) -> bool {
@@ -1112,33 +1157,39 @@ impl Parser<'_> {
     fn case_is_column(&self) -> bool {
         let alias_then_end =
             self.kind(1) == Some(TokenKind::Word) && !self.kw_at(1, "WHEN") && self.item_end_at(2);
-        !self.opts.enforce_reserved_keywords
-            && (self.reserved_as_column()
-                || alias_then_end
-                || self.any_kw_at(1, &["THEN", "ELSE", "END"])
-                || (self.reserved_column_here() && !self.when_ahead()))
+        !self.opts.enforce_reserved_keywords && (self.reserved_as_column() || alias_then_end)
     }
 
-    /// Whether a `WHEN` follows at this bracket depth before the bracket or
-    /// the statement ends, so a `CASE` here can be a `CASE` expression
-    /// (`CASE - x WHEN 1 THEN ...`; `(case, y) -> case - y` is a column).
-    fn when_ahead(&self) -> bool {
-        let mut depth = 0usize;
-        let mut n = 1;
-        while let Some(kind) = self.kind(n) {
-            match kind {
-                TokenKind::Sym(Sym::LParen | Sym::LBracket) => depth += 1,
-                TokenKind::Sym(Sym::RParen | Sym::RBracket) => match depth.checked_sub(1) {
-                    Some(d) => depth = d,
-                    None => return false,
-                },
-                TokenKind::Sym(Sym::Comma | Sym::Semi) if depth == 0 => return false,
-                TokenKind::Word if depth == 0 && self.kw_at(n, "WHEN") => return true,
-                _ => {}
-            }
-            n += 1;
+    /// Whether `CASE` here may be either a `CASE` expression or a column:
+    /// the next token continues both (`CASE - x WHEN ...` against
+    /// `case - y`, `CASE from - 1 WHEN ...` against `case FROM t`), so
+    /// `case_or_column` tries the expression first.
+    fn case_may_be_column(&self) -> bool {
+        !self.kw_at(1, "WHEN") && self.reserved_column_here()
+    }
+
+    /// `CASE` that may be a column: the `CASE` expression if it parses, as
+    /// ANTLR's prediction takes it, else `None` and `CASE` is a column
+    /// (`(case, y) -> case - y`, `CASE WHEN case IS NULL THEN ...`, `ON
+    /// t.id = case - 1 WHEN MATCHED`).
+    fn case_or_column(&mut self) -> PR<Option<ExprKind>> {
+        // The operand of a simple `CASE` is the column: its `WHEN` belongs
+        // to the enclosing `CASE` (`CASE case - 1 WHEN 0 THEN 1 END`).
+        if self.kw_before("CASE") {
+            return Ok(None);
         }
-        false
+        let at = self.checkpoint();
+        match self.case_expr() {
+            Ok(kind) => {
+                self.commit(at);
+                Ok(Some(kind))
+            }
+            Err(Fail::Fatal(e)) => Err(Fail::Fatal(e)),
+            Err(Fail::Syntax) => {
+                self.restore(at);
+                Ok(None)
+            }
+        }
     }
 
     /// Whether the reserved word here is a column, because no keyword
@@ -1184,6 +1235,11 @@ impl Parser<'_> {
         if self.opts.enforce_reserved_keywords || self.kind(0) != Some(TokenKind::Word) {
             return false;
         }
+        // The operand of a `NOT` that ends a select item (`SELECT NOT AND x`
+        // is `NOT and AS x`; see `not_ends_select_item`).
+        if self.kw_before("NOT") && self.any_kw_at(0, BRANCH_END) && self.item_ends_after(1) {
+            return true;
+        }
         self.sym_at(1, Sym::Minus)
             || self.sym_at(1, Sym::Dot)
             || self.sym_at(1, Sym::LBracket)
@@ -1217,6 +1273,11 @@ impl Parser<'_> {
         } else if is("TRUE") || is("FALSE") {
             self.bump();
             ExprKind::Literal(Literal::Boolean(is("TRUE")))
+        } else if is("CASE") && self.case_may_be_column() {
+            match self.case_or_column()? {
+                Some(kind) => kind,
+                None => return Ok(None),
+            }
         } else if is("CASE") && !self.case_is_column() {
             self.case_expr()?
         } else if (is("CAST") || is("TRY_CAST")) && call {
@@ -1416,11 +1477,45 @@ impl Parser<'_> {
     #[inline(never)]
     fn case_expr(&mut self) -> PR<ExprKind> {
         self.bump();
+        // `CASE when - 1 WHEN 0 THEN ...`: a `WHEN` that may be a column
+        // starts the operand when the searched form does not parse (the
+        // searched form's error stands when neither does).
+        if self.kw_at(0, "WHEN") && self.reserved_column_here() {
+            let at = self.checkpoint();
+            match self.case_branches(None) {
+                Err(Fail::Syntax) => {}
+                done => {
+                    self.commit(at);
+                    return done;
+                }
+            }
+            let failed = self.checkpoint();
+            self.restore(at);
+            let at = self.checkpoint();
+            let operand = match self.expr() {
+                Ok(e) => Some(boxed(e)),
+                Err(Fail::Fatal(e)) => return Err(Fail::Fatal(e)),
+                Err(Fail::Syntax) => None,
+            };
+            if operand.is_some()
+                && let Ok(kind) = self.case_branches(operand)
+            {
+                self.commit(at);
+                return Ok(kind);
+            }
+            self.restore(failed);
+            return self.fail();
+        }
         let operand = if self.kw_at(0, "WHEN") {
             None
         } else {
             Some(boxed(self.expr()?))
         };
+        self.case_branches(operand)
+    }
+
+    /// The `WHEN ... THEN ...` branches, `ELSE` and `END` of a `CASE`.
+    fn case_branches(&mut self, operand: Option<Box<Expr>>) -> PR<ExprKind> {
         let mut branches = vec![];
         while self.kw_at(0, "WHEN") {
             let start = self.start();
@@ -1606,14 +1701,17 @@ impl Parser<'_> {
     #[inline(never)]
     fn function_call(&mut self, name: ObjectName, start: usize) -> PR<Expr> {
         self.expect_sym(Sym::LParen)?;
-        // `f(all)` and `f(distinct)` are calls with the column as their
-        // argument (keywords are identifiers unless enforced).
-        let lone_distinct = !self.opts.enforce_reserved_keywords && self.kw_at(0, "DISTINCT");
-        let quantifier = if (self.kw_at(0, "ALL") || lone_distinct) && self.sym_at(1, Sym::RParen) {
-            None
-        } else {
-            self.set_quantifier()
-        };
+        // `f(all)`, `f(distinct)` and `f(distinct, x)` pass the column
+        // (keywords are identifiers unless enforced).
+        let column_quantifier = !self.opts.enforce_reserved_keywords
+            && self.any_kw_at(0, &["ALL", "DISTINCT"])
+            && (self.sym_at(1, Sym::RParen) || self.sym_at(1, Sym::Comma));
+        let quantifier =
+            if (self.kw_at(0, "ALL") && self.sym_at(1, Sym::RParen)) || column_quantifier {
+                None
+            } else {
+                self.set_quantifier()
+            };
         let args = self.function_args(false)?;
         let f = self.call_tail(name, quantifier, args, start)?;
         Ok(self.mk(ExprKind::Function(Box::new(f)), start))
@@ -1822,18 +1920,16 @@ impl Parser<'_> {
 
     /// `INTERVAL` followed by a value (`intervalValue`: an integer, a
     /// decimal or a string).
-    /// A signed number with no unit after it is no interval unless keywords
-    /// are enforced: `interval - 1` is the column `interval` minus one, as
-    /// Spark reads it.
+    /// A signed number with no unit after it is no interval: `interval - 1`
+    /// is the column `interval` minus one, as Spark reads it (`INTERVAL` is
+    /// not reserved even when keywords are enforced).
     fn interval_follows(&self) -> bool {
         let Some(len) = self.interval_value_len(1) else {
             return false;
         };
         let signed_number = (self.sym_at(1, Sym::Plus) || self.sym_at(1, Sym::Minus))
             && matches!(self.kind(2), Some(TokenKind::Number(_)));
-        !signed_number
-            || self.opts.enforce_reserved_keywords
-            || self.any_kw_at(1 + len, INTERVAL_UNITS)
+        !signed_number || self.any_kw_at(1 + len, INTERVAL_UNITS)
     }
 
     /// `[+|-] (integer | decimal | string)` at offset `n`: its length in

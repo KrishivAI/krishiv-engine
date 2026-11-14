@@ -124,3 +124,152 @@ fn keywords_in_operand_position_are_columns() {
         );
     }
 }
+
+/// A keyword before `-`, `.`, `[`, `]`, an infix keyword or a `CASE`
+/// branch keyword is a column; `NOT` before IS, AND, OR, THEN, ELSE or END
+/// is a column unless the operator can end a select item (`SELECT NOT
+/// END`, `SELECT NOT AND x`); `CASE` that may be a column is the `CASE`
+/// expression when it parses. Each lowered plan is the shape Spark 4.2.0's
+/// parser gives (SQL-3; the review rows of
+/// `ops/reviews/2026-11-14-opus-3-sql3-lambda-keywords-diff.md`).
+#[test]
+fn keywords_read_as_columns_as_spark_reads_them() {
+    use krishiv_plan::SourceId;
+    for (sql, want) in [
+        (
+            r#"SELECT NOT END"#,
+            r#"Project [(NOT END)] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT NOT THEN"#,
+            r#"Project [(NOT THEN)] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT NOT ELSE"#,
+            r#"Project [(NOT ELSE)] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT NOT AND"#,
+            r#"Project [(NOT AND)] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT NOT OR"#,
+            r#"Project [(NOT OR)] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT NOT AND x"#,
+            r#"Project [(NOT AND) AS x] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT NOT AND x FROM t"#,
+            r#"Project [(NOT AND) AS x] | +- Read t"#,
+        ),
+        (
+            r#"SELECT a, NOT AND x FROM t"#,
+            r#"Project [a, (NOT AND) AS x] | +- Read t"#,
+        ),
+        (
+            r#"SELECT NOT OR x"#,
+            r#"Project [(NOT OR) AS x] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT NOT IS NULL"#,
+            r#"Project [(NOT IS) AS NULL] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT NOT AND x AS y"#,
+            r#"Project [(NOT and x) AS y] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT NOT IS NULL AS y"#,
+            r#"Project [isnull(NOT) AS y] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT NOT IS NOT NULL"#,
+            r#"Project [isnotnull(NOT)] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT a FROM t WHERE NOT AND x"#,
+            r#"Project [a] | +- Filter (NOT and x) |    +- Read t"#,
+        ),
+        (
+            r#"SELECT a FROM t ORDER BY NOT AND x"#,
+            r#"Sort [(NOT and x) ASC NULLS FIRST], true | +- Project [a] |    +- Read t"#,
+        ),
+        (
+            r#"SELECT a FROM t GROUP BY NOT AND x"#,
+            r#"Aggregate [(NOT and x)], [a] | +- Read t"#,
+        ),
+        (
+            r#"SELECT CASE WHEN NOT IS NULL THEN 1 END"#,
+            r#"Project [CASE WHEN isnull(NOT) THEN 1 END] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT CASE - x WHEN 1 THEN 2 END"#,
+            r#"Project [CASE WHEN ((- x) == 1) THEN 2 END] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT CASE NOT x WHEN true THEN 2 END"#,
+            r#"Project [CASE WHEN ((NOT x) == true) THEN 2 END] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT CASE - 1"#,
+            r#"Project [(CASE - 1)] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT count(DISTINCT, x)"#,
+            r#"Project [count(DISTINCT, x)] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT count(ALL, x)"#,
+            r#"Project [count(ALL, x)] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT count(DISTINCT)"#,
+            r#"Project [count(DISTINCT)] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT count(DISTINCT x)"#,
+            r#"Project [count(DISTINCT x)] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT case.a, from - 1, left - right, on[0], a[from], from IS NULL"#,
+            r#"Project [case.a, (from - 1), (left - right), __subscript(on, 0), __subscript(a, from), isnull(from)] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT INTERVAL - 1"#,
+            r#"Project [(INTERVAL - 1)] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT INTERVAL -1 DAY"#,
+            r#"Project [INTERVAL '-1' DAY] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT x FROM t WHERE case - 1 > 0"#,
+            r#"Project [x] | +- Filter ((case - 1) > 0) |    +- Read t"#,
+        ),
+        (
+            r#"SELECT CASE WHEN a THEN CASE - 1 WHEN 0 THEN 1 END END"#,
+            r#"Project [CASE WHEN a THEN CASE WHEN (-1 == 0) THEN 1 END END] | +- OneRowRelation"#,
+        ),
+    ] {
+        let plan = krishiv_sql::parse_and_lower(sql, &ParserOptions::default(), SourceId(0))
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+        let got = plan.root().to_string().replace('\n', " | ");
+        assert_eq!(got.trim_end_matches([' ', '|']), want, "{sql}");
+    }
+    // A simple `CASE`'s operand in `MERGE ... ON` and a lambda.
+    for sql in [
+        "MERGE INTO t USING s ON t.id = case - 1 WHEN MATCHED THEN DELETE",
+        "SELECT transform(array(1), (case, y) -> CASE case - 1 WHEN 0 THEN 1 END)",
+    ] {
+        krishiv_sql::parse_statement(sql, &ParserOptions::default())
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+    }
+    // `INTERVAL` is not reserved when keywords are enforced.
+    let ansi = ParserOptions {
+        enforce_reserved_keywords: true,
+        ..ParserOptions::default()
+    };
+    krishiv_sql::parse_query("SELECT INTERVAL - 1", &ansi).unwrap();
+}

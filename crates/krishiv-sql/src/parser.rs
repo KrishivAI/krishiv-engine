@@ -156,6 +156,9 @@ pub(crate) struct Parser<'s> {
     /// How many select items enclose the cursor (Spark's `NamedExpression` ancestors): a
     /// backquoted name there may be a column regex.
     in_named: usize,
+    /// Where the expression of the innermost select-list item starts: an
+    /// alias may follow the expression there (see `Parser::not_is_column`).
+    item_start: Option<usize>,
     /// How many script statements enclose the cursor (compounds, branches and loop bodies).
     script_depth: usize,
     /// The first error Spark raises after parsing (in `AstBuilder`) that
@@ -665,6 +668,7 @@ impl<'s> Parser<'s> {
             markers,
             in_script: 0,
             in_named: 0,
+            item_start: None,
             script_depth: 0,
             deferred: None,
             cast_types: vec![],

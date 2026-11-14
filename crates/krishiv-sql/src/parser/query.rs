@@ -863,7 +863,9 @@ impl Parser<'_> {
     /// A select item of a select list: its names may be column regexes.
     pub(super) fn named_item(&mut self) -> PR<SelectItem> {
         self.in_named += 1;
+        let outer = self.item_start.replace(self.pos);
         let item = self.select_item();
+        self.item_start = outer;
         self.in_named -= 1;
         item
     }
