@@ -17,7 +17,7 @@ over `krishiv-io`'s `IoContext`, the process registry of registration names, `ic
 scheduler's I/O runtime, error mapping both ways (a Krishiv error keeps its class through iceberg-rust) ·
 `types.rs` Iceberg → Spark types (Iceberg's `TypeToSparkType`, apache-iceberg 1.12.0) · `table.rs`
 `IcebergTable` (load from a metadata location, schema, `snapshots`/`manifests` as Arrow 60, `snapshot(VersionSpec)`,
-`plan`) · `provider.rs` `IcebergTableProvider` (design note §3.1): a pinned snapshot's data files as the file list
+`plan`; crate-private `with_committer`, the `CommitTable` its providers append through) · `provider.rs` `IcebergTableProvider` (design note §3.1): a pinned snapshot's data files as the file list
 of `krishiv-exec`'s `FileScan` (Parquet, Spark split planning), columns by field id with Java's positional fallback
 for files without ids (`FieldMapping::FieldIdOr`; under `schema.name-mapping.default` by the mapping's names instead, `types.rs` `parse_name_mapping`, strict as Java: `names` required, no name twice at a level; PR-25c. Equality delete files ignore the mapping, as Java's delete loader does), identity-partition
 columns constant in every file's spec read from the manifest (`FileConstants`, FC S4), a mixed-spec identity
@@ -25,7 +25,7 @@ column that a file of an identity spec lacks refused (footers of the files a sca
 filters pruning files through `Pruner` when the scan is built (still applied above), deletes assigned (`DeleteIndex::for_data_file`)
 to the files that survive pruning when the scan is built, `statistics` (`stats.rs`), `scan_units` and the scan's
 `EXPLAIN` text (`Snapshot: <id>, DataFiles: <read>/<total>, DeleteFiles: [position=, dv=, equality=]`, through
-`ScanPushdown::explain`, a krishiv-exec hook); `types.rs` also builds the Arrow table schema carrying every Iceberg id ·
+`ScanPushdown::explain`, a krishiv-exec hook); with a committer and opened at the current version it declares `BATCH_WRITE` (appends only) and `writer` returns `sink.rs`'s sink over a `WriteTarget` (the committer, the metadata pinned at open, `krishiv.iceberg.write.maxOpenFiles` read at open); `types.rs` also builds the Arrow table schema carrying every Iceberg id ·
 `lazy.rs` `DeleteState`: the deletes of one built scan, loaded on its first batch (`DeleteSource` wraps the file
 scan's source, takes the query's pool in `global_state`, awaits the load, then applies equality deletes; position
 deletes and DVs reach the file scan as `LazySelections`); charged to a `ConsumerHandle` of the query's pool, so a
@@ -54,7 +54,7 @@ later) and `CommitClock` (time and jitter, injected): an unknown outcome probed 
 the branch moved; own-key search (snapshot id or `krishiv.write-id`) before every rebase; per-request outcomes;
 rebase across v2 → v3 only (other format changes and a replaced table `KRISHIV_ICEBERG_COMMIT_CONFLICT`); Iceberg's
 `commit.retry.*` budget and Java's `Tasks` backoff; `KRISHIV_ICEBERG_COMMIT_FAILED` / `_STATE_UNKNOWN`; §7.4 cleanup.
-No production `CommitTable` or `CommitClock` yet (the sink step). Tests `commit_tests.rs` (DST: `TestCatalog`
+No production `CommitTable` yet (PR-17's catalog clients); the production clock is `sink.rs`'s `IoClock`. Tests `commit_tests.rs` (DST: `TestCatalog`
 applies requests as `append_tests` does, with scripted faults per request and foreign writers at chosen points,
 on virtual time; the §10 36a cases; table invariants and the store's files checked after each case)
 · `write.rs` (PR-36a) `DataFileWriter`, one task's data files for an append (distribution `none`): batches of the
@@ -71,7 +71,18 @@ retry never reuses a failed attempt's names; tests `write_tests.rs`
 (tuples against iceberg-rust's transforms over the rows read back, footers' field ids, rollover, the open-file cap,
 an append of the written files read back, failed writes and an injected upload failure leaving no file, a dropped
 abort, two attempts, memory pressure and the reservation released, list and map ids from a sliced batch)
-· `deletes.rs` reads each position
+· `sink.rs` (PR-36a) `IcebergWriteSink`, an append as `krishiv-exec`'s `FileWriteSink`: one `DataFileWriter` per
+driver on a task of its own behind a bounded channel (`Blocked` while full; not counted as the query's blocking work,
+whose counter is private to krishiv-exec, so an aborting task may outlive the query briefly), `combine` finishes,
+`finalize` gathers every driver's files, tells each task to keep or delete them, then `write_new_manifests` and
+`commit_append` against the base pinned at open with `request.write_id` (else a fresh UUID) and the query id; data
+files and manifests deleted on any failure before the commit loop starts, its §7.4 rules after; the input schema
+checked against the table's columns (`KRISHIV_UNSUPPORTED_FEATURE`), a NULL in a required position
+`NOT_NULL_ASSERT_VIOLATION` with Spark's `AssertNotNull` path; attempt ids from `unique_u64` (a per-process counter
+under a keyed bijective mix); `IoClock` (wall time, sleeps on the I/O runtime); tests `sink_tests.rs` (appends into an
+unpartitioned and a partitioned table by two drivers read back through SQL, a second append, the write id in the
+summary, a NULL in a required column and a cancelled write leaving no file, commit or memory, the capability check,
+a schema mismatch) · `deletes.rs` reads each position
 delete file once per scan (`file_path IN` row-group pruning, rows of other files dropped, order not trusted) and each
 DV by range, into one `RowSelection` per data file (unbounded, so a wrong `record_count` never drops rows; positions
 past the end delete nothing, as Java); positions charged per batch · `eq_deletes.rs` reads each equality

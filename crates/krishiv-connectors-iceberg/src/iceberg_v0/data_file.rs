@@ -196,10 +196,6 @@ pub(crate) fn partition_tuple(
 
 /// What one written data file contributes to its manifest entry.
 #[derive(Debug, Clone)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the Iceberg sink of PR-36a (later step) reads it")
-)]
 pub(crate) struct WrittenDataFile {
     /// Its full location.
     pub(crate) location: String,
@@ -226,10 +222,6 @@ pub(crate) struct WrittenDataFile {
 /// An internal error when a bound names a column `schema` does not have as a
 /// primitive, or cannot be read as that column's type: the metrics came from
 /// this schema, so that is a bug.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the Iceberg sink of PR-36a (later step) calls it")
-)]
 pub(crate) fn data_file(
     file: &WrittenDataFile,
     schema: &SchemaRef,
