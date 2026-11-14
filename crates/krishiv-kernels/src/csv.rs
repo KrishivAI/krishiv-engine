@@ -293,8 +293,11 @@ impl Tokenizer {
         }
         let rest = text.get(pos..)?;
         if let Some(q) = self.s.quote {
-            let mut buf = [0; 4];
-            if memchr::memmem::find(rest.as_bytes(), q.encode_utf8(&mut buf).as_bytes()).is_some() {
+            let quoted = match u8::try_from(q) {
+                Ok(b) if b.is_ascii() => memchr::memchr(b, rest.as_bytes()).is_some(),
+                _ => rest.contains(q),
+            };
+            if quoted {
                 return None;
             }
         }
