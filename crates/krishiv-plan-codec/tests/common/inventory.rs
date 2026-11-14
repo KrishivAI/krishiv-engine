@@ -2363,7 +2363,24 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         ]));
         PhysNode::Scan(scan)
     };
+    // A scan of a local relation, named by hash (no data in the plan).
+    let local_relation_source = {
+        use arrow_schema::{Field, Schema};
+        let mut scan = file_scan();
+        scan.scan.source = ReadSource::Local(krishiv_plan::LocalRelation::from_decoded(
+            std::sync::Arc::new(Schema::new(vec![
+                Field::new("a", arrow_schema::DataType::Int32, false),
+                Field::new("b", arrow_schema::DataType::Utf8, true),
+            ])),
+            [0x5a; 32],
+            2,
+            1_000,
+            4_096,
+        ));
+        PhysNode::Scan(scan)
+    };
     vec![
+        ("local_relation_source", local_relation_source),
         ("file_source_schema", file_source_schema),
         ("interval_literals", interval_literals),
         ("options_map_literal", options_map),

@@ -64,6 +64,8 @@ pub mod functions;
 mod history;
 mod identifier_clause;
 mod introspection;
+#[cfg(feature = "unstable-ir")]
+mod local_relation;
 mod locals;
 #[cfg(feature = "telemetry-logs")]
 pub mod logging;

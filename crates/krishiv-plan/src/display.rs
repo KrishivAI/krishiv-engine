@@ -229,6 +229,26 @@ struct NodeLine<'a>(&'a LogicalPlan);
 impl Display for NodeLine<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match &self.0.node {
+            // Spark's `LocalRelation [a#1, b#2]`; the row count is Krishiv's
+            // own, as for an inline table.
+            PlanNode::Read(ReadSource::Local(l)) => {
+                f.write_str("LocalRelation [")?;
+                for (i, field) in l.schema().fields().iter().enumerate() {
+                    write!(f, "{}{}", sep(i), field.name())?;
+                }
+                write!(f, "] ({} rows)", l.rows())
+            }
+            PlanNode::Scan(scan) if matches!(scan.source, ReadSource::Local(_)) => {
+                f.write_str("LocalRelation [")?;
+                for (i, c) in scan.output.iter().enumerate() {
+                    write!(f, "{}{}#{}", sep(i), c.name, c.id.0)?;
+                }
+                f.write_str("]")?;
+                if let ReadSource::Local(l) = &scan.source {
+                    write!(f, " ({} rows)", l.rows())?;
+                }
+                Ok(())
+            }
             PlanNode::Read(source) => write!(f, "Read {}", SourceText(source)),
             PlanNode::OneRowRelation => f.write_str("OneRowRelation"),
             PlanNode::Sql { query, args } => {
@@ -564,6 +584,11 @@ impl Display for SourceText<'_> {
                     }
                 }
                 options
+            }
+            // Printed by the node line, which has the columns.
+            ReadSource::Local(l) => {
+                write!(f, "LocalRelation ({} rows)", l.rows())?;
+                return Ok(());
             }
         };
         if !options.is_empty() {

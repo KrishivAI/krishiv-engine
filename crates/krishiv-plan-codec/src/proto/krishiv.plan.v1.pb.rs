@@ -1117,7 +1117,7 @@ pub struct RowStageSettings {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ReadSource {
-    #[prost(oneof = "read_source::Kind", tags = "1, 2")]
+    #[prost(oneof = "read_source::Kind", tags = "1, 2, 3")]
     pub kind: ::core::option::Option<read_source::Kind>,
 }
 /// Nested message and enum types in `ReadSource`.
@@ -1128,6 +1128,9 @@ pub mod read_source {
         Table(super::TableSource),
         #[prost(message, tag = "2")]
         Files(super::FilesSource),
+        /// feature: local_relation_source
+        #[prost(message, tag = "3")]
+        Local(super::LocalSource),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1155,6 +1158,25 @@ pub struct FilesSource {
     /// The schema the user declared (a struct type); absent: inferred.
     #[prost(message, optional, tag = "4")]
     pub schema: ::core::option::Option<DataType>,
+}
+/// Arrow data a plan reads (Spark's LocalRelation), named by content hash. The
+/// data is never in the plan: it lives in the session's relation store of the
+/// process that runs the plan, found by `hash`; a process without it fails.
+/// feature: local_relation_source
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct LocalSource {
+    /// SHA-256 content hash (32 bytes).
+    #[prost(bytes = "vec", tag = "1")]
+    pub hash: ::prost::alloc::vec::Vec<u8>,
+    /// Arrow IPC `Schema` flatbuffer of the stored batches.
+    #[prost(bytes = "vec", tag = "2")]
+    pub schema: ::prost::alloc::vec::Vec<u8>,
+    #[prost(uint64, tag = "3")]
+    pub rows: u64,
+    #[prost(uint64, tag = "4")]
+    pub batches: u64,
+    #[prost(uint64, tag = "5")]
+    pub bytes: u64,
 }
 /// A data source option: plain text or a reference to a secret. An inline
 /// secret or a URL carrying credentials is not encodable (ADR 0038).

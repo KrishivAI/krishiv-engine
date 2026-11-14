@@ -1091,6 +1091,13 @@ fn m_source(s: &mut ReadSource, w: &mut Walk) -> bool {
             name: paths.iter().map(ToString::to_string).collect(),
             options: options.clone(),
         },
+        ReadSource::Local(l) => ReadSource::Local(crate::LocalRelation::from_decoded(
+            std::sync::Arc::clone(l.schema()),
+            [7; 32],
+            l.batches(),
+            l.rows() + 1,
+            l.bytes(),
+        )),
     };
     site!(w, *s = other);
     match s {
@@ -1101,6 +1108,8 @@ fn m_source(s: &mut ReadSource, w: &mut Walk) -> bool {
             options,
             ..
         } => m_string(format, w) || m_values(paths, w) || m_options(options, w),
+        // Nothing inside to mutate: the hash and counts are the whole value.
+        ReadSource::Local(_) => false,
     }
 }
 
