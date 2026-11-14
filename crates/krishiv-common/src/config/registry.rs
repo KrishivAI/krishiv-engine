@@ -887,7 +887,7 @@ pub static EXPERIMENTAL_RUNTIME_FILTER_BLOOM_AT_SCALE: ConfigEntry = ConfigEntry
           Bloom filter with caps of 20,000,000 keys and 32 MiB instead of `krishiv.runtimeFilter.bloom.maxItems` \
           and `krishiv.runtimeFilter.bloom.maxBytes`, when those are lower. Results do not change.",
     scope: Scope::Session,
-    settable_by: SettableBy::User,
+    settable_by: SettableBy::Admin,
     version_added: "0.2.0",
     spark_alias: None,
 };
