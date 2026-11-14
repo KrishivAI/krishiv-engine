@@ -171,6 +171,10 @@ impl PyDataFrame {
         self.derive(self.inner.order_by(columns(cols)))
     }
 
+    fn sort_within_partitions(&self, cols: Vec<PyColumn>) -> Self {
+        self.derive(self.inner.sort_within_partitions(columns(cols)))
+    }
+
     fn limit(&self, n: i32) -> Self {
         self.derive(self.inner.limit(n))
     }
@@ -217,10 +221,6 @@ impl PyDataFrame {
 
     fn to_df(&self, names: Vec<String>) -> Self {
         self.derive(self.inner.to_df(names))
-    }
-
-    fn sample(&self, with_replacement: bool, fraction: f64, seed: i64) -> Self {
-        self.derive(self.inner.sample(with_replacement, fraction, seed))
     }
 
     fn unpivot(

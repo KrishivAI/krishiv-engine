@@ -610,6 +610,26 @@ impl DataFrame {
         })
     }
 
+    /// Sorts each partition by `keys` without ordering the partitions (PySpark's
+    /// `sortWithinPartitions`, SQL's `SORT BY`).
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// let df = s.table("t").sort_within_partitions(["a"]);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    #[must_use]
+    pub fn sort_within_partitions(
+        &self,
+        keys: impl IntoIterator<Item = impl Into<Column>>,
+    ) -> Self {
+        self.derive(PlanNode::Sort {
+            input: Arc::clone(&self.plan),
+            order: keys.into_iter().map(|k| k.into().sort_order()).collect(),
+            global: false,
+        })
+    }
+
     /// The same as [`Self::order_by`] (PySpark's `sort`).
     ///
     /// ```
@@ -807,9 +827,9 @@ impl DataFrame {
         })
     }
 
-    /// A sample of the rows (PySpark's `sample`). The engine cannot
-    /// sample yet: the returned frame fails its first action with
-    /// `KRISHIV_UNSUPPORTED_FEATURE`, as do the schema and the plans.
+    /// A sample of the rows (PySpark's `sample`). The engine has no sample plan node, so this
+    /// frame fails its first action with `KRISHIV_UNSUPPORTED_FEATURE`; the Python layer builds
+    /// sampling from `rand(seed)` (a filter on the draw) and does not call this.
     ///
     /// ```
     /// # let s = krishiv_session::Session::new()?;
@@ -818,7 +838,7 @@ impl DataFrame {
     /// ```
     ///
     /// # Errors
-    /// `KRISHIV_UNSUPPORTED_FEATURE`: sampling is not supported yet.
+    /// `KRISHIV_UNSUPPORTED_FEATURE`: there is no sample plan node.
     #[must_use]
     pub fn sample(&self, _with_replacement: bool, _fraction: f64, _seed: i64) -> Self {
         Self::invalid(

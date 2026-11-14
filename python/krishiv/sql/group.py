@@ -8,6 +8,7 @@ equivalents build. ``pivot`` builds the plan node SQL's ``PIVOT`` lowers to.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
 from krishiv import _native
@@ -76,6 +77,30 @@ class GroupedData:
         |  Bob|       5|
         +-----+--------+
         """
+        result = self._agg(*exprs)
+        if self._pivoted:
+            self._analyze_now(result)
+        return result
+
+    def _analyze_now(self, result: DataFrame) -> None:
+        """Spark analyses a pivot when ``agg`` is called, so its errors come from there; the message of the
+        non-aggregate error names the column as written (the engine's relation name is not Spark's)."""
+        from krishiv.errors import PySparkException
+
+        try:
+            _ = result.schema
+        except PySparkException as error:
+            if error.getCondition() == "_LEGACY_ERROR_TEMP_1006":
+                text = re.sub(r"'__krishiv_\w+?\.", "'", error.getMessage())
+                raise type(error)(
+                    text,
+                    errorClass=error.getCondition(),
+                    messageParameters=error.getMessageParameters(),
+                    sqlState=error.getSqlState(),
+                ) from None
+            raise
+
+    def _agg(self, *exprs: Column | dict[str, str]) -> DataFrame:
         from krishiv.sql.dataframe import DataFrame
 
         if not exprs:
@@ -227,7 +252,7 @@ class GroupedData:
         |2013|30000|  NULL|
         +----+-----+------+
         """
-        from krishiv.errors import UnsupportedOperationException
+        from krishiv.errors import AnalysisException
 
         if not isinstance(pivot_col, str):
             raise not_expected_type("pivot_col", "str", pivot_col)
@@ -238,10 +263,11 @@ class GroupedData:
                 if not isinstance(v, bool | int | float | str):
                     raise not_expected_type("values", "list of bool, int, float or str", v)
         if self._pivoted:
-            raise UnsupportedOperationException(
-                "[UNSUPPORTED_OPERATION] Repeated PIVOT operation is not supported.",
-                errorClass="UNSUPPORTED_OPERATION",
-                messageParameters={"operation": "Repeated PIVOT operation"},
+            raise AnalysisException(
+                "[REPEATED_CLAUSE] The PIVOT clause may be used at most once per SUBQUERY operation. SQLSTATE: 42614",
+                errorClass="REPEATED_CLAUSE",
+                messageParameters={"clause": "PIVOT", "operation": "SUBQUERY"},
+                sqlState="42614",
             )
         column = F.col(pivot_col)
         literals = [F.lit(v) for v in values] if values else self._distinct_values(pivot_col)

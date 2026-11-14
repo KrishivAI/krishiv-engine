@@ -66,10 +66,10 @@ DataFrame.def local_checkpoint(self, eager: bool=..., level: tuple[bool, bool, b
 DataFrame.def offset(self, n: int) -> DataFrame
 DataFrame.def order_by(self, cols: list[Column]) -> DataFrame
 DataFrame.def persist(self, use_disk: bool, use_memory: bool, use_offheap: bool, deserialized: bool, replication: int) -> DataFrame
-DataFrame.def sample(self, with_replacement: bool, fraction: float, seed: int) -> DataFrame
 DataFrame.def schema(self) -> list[tuple[str, str, bool]]
 DataFrame.def select(self, cols: list[Column]) -> DataFrame
 DataFrame.def select_expr(self, exprs: list[str]) -> DataFrame
+DataFrame.def sort_within_partitions(self, cols: list[Column]) -> DataFrame
 DataFrame.def storage_level(self) -> tuple[bool, bool, bool, bool, int]
 DataFrame.def subtract(self, other: DataFrame) -> DataFrame
 DataFrame.def to_df(self, names: list[str]) -> DataFrame

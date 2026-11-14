@@ -28,6 +28,8 @@ from krishiv.sql.column import Column
 if TYPE_CHECKING:
     from krishiv.sql.dataframe import DataFrame
 
+#: The most rows ``freqItems`` reads for a column: it counts them in the driver, one Python step per row.
+FREQ_ITEMS_MAX_ROWS = 10_000_000
 _INT_MAX = 2**31 - 1
 _LONG_MIN, _LONG_MAX = -(2**63), 2**63 - 1
 _NUMERIC = ("tinyint", "smallint", "int", "bigint", "float", "double")
@@ -217,9 +219,8 @@ def approx_quantile(
             errorClass="CANNOT_BE_EMPTY",
             messageParameters={"item": "probabilities"},
         )
-    dtypes = dict(df.dtypes)
     for name in columns:
-        dtype = dtypes.get(name)
+        dtype = _dtype_of(df, name)
         if dtype is not None and not _is_numeric(dtype):
             raise _require(
                 f"Quantile calculation for column {name} with data type {_spark_type(dtype)} is not supported."
@@ -241,8 +242,18 @@ def approx_quantile(
     return result
 
 
+def _dtype_of(df: DataFrame, name: str) -> str | None:
+    """The type of column ``name``, matched as the session's resolver matches names (case-insensitively
+    unless ``spark.sql.caseSensitive`` is on); ``None`` when it is not a top-level column."""
+    case_sensitive = (df.sparkSession.conf.get("spark.sql.caseSensitive", "false") or "false").lower() == "true"
+    for column, dtype in df.dtypes:
+        if column == name or (not case_sensitive and column.lower() == name.lower()):
+            return dtype
+    return None
+
+
 def _require_numeric(df: DataFrame, name: str, what: str) -> None:
-    dtype = dict(df.dtypes).get(name)
+    dtype = _dtype_of(df, name)
     if dtype is not None and not _is_numeric(dtype):
         raise _require(f"Currently {what} calculation for columns with dataType {dtype} not supported.")
 
@@ -325,7 +336,12 @@ def frequent_items(df: DataFrame, cols: list[str], support: float) -> DataFrame:
         fields.append(StructField(f"{name}_freqItems", ArrayType(column.schema.fields[0].dataType, True), False))
         counts: dict[Any, int] = {}
         originals: dict[Any, Any] = {}
-        for (value,) in column.toLocalIterator():
+        for rows_read, (value,) in enumerate(column.toLocalIterator(), start=1):
+            if rows_read > FREQ_ITEMS_MAX_ROWS:
+                raise unsupported_feature(
+                    f"DataFrame.freqItems over more than {FREQ_ITEMS_MAX_ROWS} rows (it counts in the driver, "
+                    "one Python step per row)"
+                )
             _count_item(counts, originals, value, size)
         result.append(list(originals.values()))
         plain = plain and all(v is None or isinstance(v, bool | int | float | str) for v in originals.values())
@@ -379,6 +395,10 @@ def stratified_sample(df: DataFrame, strata: Column, fractions: list[tuple[Any, 
     """``sampleBy``: a row is kept when its ``rand(seed)`` draw is below its stratum's fraction (0 for a stratum
     that is not listed); every row consumes one draw whatever its stratum, as Spark's."""
     fraction: Column | None = None
+    # Spark looks the stratum up in a typed map: a string column matches only string keys, any other only
+    # numbers (SQL's `=` would coerce `'1'` and `1`).
+    kind = df.select(strata.alias("__krishiv_stratum")).dtypes[0][1]
+    fractions = [(k, f) for k, f in fractions if isinstance(k, str) == (kind == "string")]
     for stratum, wanted in fractions:
         hit = strata == F.lit(stratum)
         fraction = F.when(hit, F.lit(wanted)) if fraction is None else fraction.when(hit, F.lit(wanted))
@@ -388,8 +408,9 @@ def stratified_sample(df: DataFrame, strata: Column, fractions: list[tuple[Any, 
 
 
 def random_split(df: DataFrame, weights: list[float], seed: int) -> list[DataFrame]:
-    """``randomSplit``: the rows ordered by every sortable column (so a split does not depend on the input
-    order), each split the rows whose one shared draw falls in its slice of the normalised weights."""
+    """``randomSplit``: the rows ordered within each partition by every sortable column (so a split does not
+    depend on the input order), each split the rows whose one shared draw falls in its slice of the normalised
+    weights."""
     total = sum(weights)
     if not total > 0.0:
         shown = ",".join(_java_double(float(w)) for w in weights)
@@ -398,7 +419,10 @@ def random_split(df: DataFrame, weights: list[float], seed: int) -> list[DataFra
     for w in weights:
         bounds.append(bounds[-1] + w / total)
     sortable = [n for n, t in df.dtypes if "map<" not in t and not t.startswith("map") and t != "variant"]
-    ordered = df.orderBy(*[F.col(_quote(n)) for n in sortable]) if sortable else df.cache()
+    # Spark sorts within each partition (no exchange); a column list of none is cached instead.
+    ordered = (
+        df._new(df._df.sort_within_partitions([F.col(_quote(n))._c for n in sortable])) if sortable else df.cache()
+    )
     return [sample_range(ordered, lo, hi, seed) for lo, hi in pairwise(bounds)]
 
 

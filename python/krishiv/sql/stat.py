@@ -45,6 +45,10 @@ def _pivot_max_values(session: SparkSession) -> int:
         return PIVOT_MAX_VALUES_DEFAULT
 
 
+def _scala_double(value: Any) -> str:
+    return _stats._java_double(float(value))
+
+
 def _check_names(**names: Any) -> None:
     for arg_name, value in names.items():
         if not isinstance(value, str):
@@ -183,6 +187,7 @@ class DataFrameStatFunctions:
                 )
             wanted.append((stratum, float(fraction)))
         if not all(0.0 <= fraction <= 1.0 for _, fraction in wanted):
-            raise IllegalArgumentException(f"Fractions must be in [0, 1], but got {fractions}.")
+            shown = ", ".join(f"{k} -> {_scala_double(v)}" for k, v in fractions.items())
+            raise IllegalArgumentException(f"requirement failed: Fractions must be in [0, 1], but got Map({shown}).")
         sampled_seed = seed if seed is not None else random.randint(0, sys.maxsize)
         return _stats.stratified_sample(self.df, strata, wanted, int(sampled_seed))

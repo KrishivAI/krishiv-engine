@@ -469,8 +469,14 @@ def test_pivot_null_value_column_and_cast_values(spark: SparkSession) -> None:
 def test_pivot_aggregate_over_the_pivot_and_group_columns(earnings: DataFrame) -> None:
     counted = earnings.groupBy("year").pivot("course", ["Java", "dotNET"]).agg(F.count("course")).sort("year")
     assert table(counted) == [(2012, 1, 2), (2013, 1, 1)]
-    with pytest.raises(errors.UnsupportedOperationException):  # an aggregate over a grouping column is refused
-        earnings.groupBy("year").pivot("course", ["Java"]).agg(F.max("year")).collect()
+    # an aggregate that reads a grouping column still groups by it
+    kept = earnings.groupBy("year").pivot("course", ["Java"]).agg(F.max("year")).sort("year")
+    assert kept.columns == ["year", "Java"]
+    assert table(kept) == [(2012, 2012), (2013, 2013)]
+    mixed_in = (
+        earnings.groupBy("year").pivot("course", ["Java", "dotNET"]).agg(F.sum(F.col("earnings") * F.col("year")))
+    )
+    assert table(mixed_in.sort("year")) == [(2012, 20000 * 2012, 15000 * 2012), (2013, 30000 * 2013, 48000 * 2013)]
 
 
 def test_pivot_limit_and_errors(spark: SparkSession) -> None:
@@ -482,5 +488,54 @@ def test_pivot_limit_and_errors(spark: SparkSession) -> None:
     assert df.groupBy("g").pivot("p", [0, 1, 2, 3]).sum("x").columns == ["g", "0", "1", "2", "3"]
     with pytest.raises(errors.AnalysisException):
         df.groupBy("g").pivot("nope", [1]).sum("x").collect()
-    with pytest.raises(errors.UnsupportedOperationException, match="Repeated PIVOT"):
+    with pytest.raises(errors.AnalysisException) as repeated:
         df.groupBy("g").pivot("p", [1]).pivot("p", [1])
+    assert repeated.value.getCondition() == "REPEATED_CLAUSE"
+    assert repeated.value.getSqlState() == "42614"
+
+
+def test_pivot_aggregate_errors_come_from_agg(earnings: DataFrame) -> None:
+    grouped = earnings.groupBy("year").pivot("course", ["Java"])
+    with pytest.raises(errors.AnalysisException) as star:
+        grouped.agg(F.count("*"))
+    assert star.value.getCondition() == "INVALID_USAGE_OF_STAR_OR_REGEX"
+    with pytest.raises(errors.AnalysisException) as plain:
+        grouped.agg(F.col("earnings"))
+    assert plain.value.getCondition() == "_LEGACY_ERROR_TEMP_1006"
+    assert "__krishiv" not in str(plain.value)
+    assert "'earnings'" in str(plain.value)
+
+
+def test_free_items_guard(spark: SparkSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    from krishiv.sql import _stats
+
+    monkeypatch.setattr(_stats, "FREQ_ITEMS_MAX_ROWS", 3)
+    df = spark.range(5)
+    with pytest.raises(errors.UnsupportedOperationException, match="more than 3 rows"):
+        df.freqItems(["id"])
+    assert df.limit(3).freqItems(["id"]).count() == 1
+
+
+def test_type_checks_resolve_names_case_insensitively(spark: SparkSession) -> None:
+    df = spark.createDataFrame([("a", 1)], "s string, n int")
+    with pytest.raises(
+        errors.IllegalArgumentException, match="correlation calculation for columns with dataType string"
+    ):
+        df.corr("n", "S")
+    with pytest.raises(errors.IllegalArgumentException, match="covariance calculation"):
+        df.cov("S", "n")
+    with pytest.raises(errors.IllegalArgumentException, match="column S with data type StringType"):
+        df.approxQuantile("S", [0.5], 0.0)
+
+
+def test_sample_by_matches_strata_by_type(spark: SparkSession) -> None:
+    df = spark.createDataFrame([("1",), ("2",)], "k string")
+    assert df.sampleBy("k", {1: 1.0}, 1).count() == 0
+    assert df.sampleBy("k", {"1": 1.0}, 1).count() == 1
+    numbers = spark.createDataFrame([(1,), (2,)], "k int")
+    assert numbers.sampleBy("k", {"1": 1.0}, 1).count() == 0
+    with pytest.raises(
+        errors.IllegalArgumentException,
+        match=r"requirement failed: Fractions must be in \[0, 1\], but got Map\(a -> 1.5\).",
+    ):
+        df.sampleBy("k", {"a": 1.5}, 1)

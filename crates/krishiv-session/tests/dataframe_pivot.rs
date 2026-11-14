@@ -10,7 +10,7 @@ use arrow_array::{Array, Int32Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use futures::executor::block_on;
 use krishiv_session::Session;
-use krishiv_session::functions::{col, count, lit, max, sum};
+use krishiv_session::functions::{col, count, count_star, lit, max, sum};
 
 type R<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
@@ -106,13 +106,47 @@ fn an_aggregate_may_read_the_pivot_column_and_names_use_the_aggregate() -> R {
 }
 
 #[test]
-fn an_aggregate_reading_a_grouping_column_is_refused() -> R {
+fn an_aggregate_reading_a_grouping_column_keeps_the_grouping() -> R {
+    let s = session()?;
+    let df = s
+        .table("t")
+        .group_by(["year"])
+        .pivot(col("course"), [lit("Java"), lit("dotNET")])
+        .agg([sum(col("earnings") * col("year"))]);
+    let got = shown(&block_on(df.collect())?);
+    assert_eq!(got.0, ["year", "Java", "dotNET"]);
+    assert_eq!(got.1, ["2012|40240|30180", "2013|60390|NULL"]);
+    let max_year = s
+        .table("t")
+        .group_by(["year"])
+        .pivot(col("course"), [lit("Java")])
+        .agg([max(col("year"))]);
+    assert_eq!(
+        shown(&block_on(max_year.collect())?).1,
+        ["2012|2012", "2013|2013"]
+    );
+    Ok(())
+}
+
+#[test]
+fn count_star_is_refused_as_spark_refuses_it() -> R {
     let s = session()?;
     let df = s
         .table("t")
         .group_by(["year"])
         .pivot(col("course"), [lit("Java")])
-        .agg([max(col("year"))]);
-    assert!(block_on(df.collect()).is_err());
+        .agg([count_star()]);
+    let Err(e) = block_on(df.collect()) else {
+        return Err("count(*) under pivot did not fail".into());
+    };
+    assert_eq!(e.error_class().name(), "INVALID_USAGE_OF_STAR_OR_REGEX");
+    Ok(())
+}
+
+#[test]
+fn sort_within_partitions_keeps_the_rows() -> R {
+    let s = session()?;
+    let rows = block_on(s.table("t").sort_within_partitions(["earnings"]).collect())?;
+    assert_eq!(rows.iter().map(RecordBatch::num_rows).sum::<usize>(), 4);
     Ok(())
 }

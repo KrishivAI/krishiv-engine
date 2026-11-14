@@ -422,6 +422,8 @@ _BY_PREFIX: tuple[tuple[str, type[PySparkException]], ...] = (
     ("INCONSISTENT_BEHAVIOR_CROSS_VERSION", SparkUpgradeException),
     ("INVALID_ARRAY_INDEX", ArrayIndexOutOfBoundsException),
     ("INVALID_PARAMETER_VALUE", IllegalArgumentException),
+    # Spark's legacy analysis errors (`_LEGACY_ERROR_TEMP_1xxx`) are `AnalysisException`s.
+    ("_LEGACY_ERROR_TEMP_1", AnalysisException),
     ("PARSE_", ParseException),
     ("UNSUPPORTED_DATATYPE", ParseException),
     ("INVALID_SQL_SYNTAX", ParseException),
