@@ -52,6 +52,8 @@ fn targets(sql: &str) -> Vec<String> {
 fn each_statement_shape_needs_its_privileges() {
     let cases: &[(&str, &[&str])] = &[
         ("SELECT 1", &[]),
+        // `EXPLAIN FORMAT JSON` analyzes its statement and runs nothing.
+        ("EXPLAIN FORMAT JSON DROP TABLE t", &[]),
         ("CREATE TABLE db.t (x INT)", &["Create ParentOf(db.t)"]),
         (
             "CREATE TABLE t (x INT) USING parquet LOCATION '/p'",

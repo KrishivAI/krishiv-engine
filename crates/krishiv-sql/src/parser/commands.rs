@@ -77,11 +77,9 @@ impl Parser<'_> {
                 "FORMAT" if self.kw_at(1, "JSON") => {
                     // `FORMAT JSON PHYSICAL` is reserved for a plan tree.
                     if self.kw_at(2, "PHYSICAL") {
-                        let span = match (self.tok(0), self.tok(2)) {
-                            (Some(a), Some(b)) => Span::new(a.span.start, b.span.end),
-                            _ => self.span_from(start),
-                        };
-                        return Self::fatal(error::explain_json_physical(span));
+                        let end = self.tok(2).map_or(self.src.len(), |t| t.span.end);
+                        let from = self.tok(0).map_or(end, |t| t.span.start);
+                        return Self::fatal(error::explain_json_physical(Span::new(from, end)));
                     }
                     self.bump();
                     Some(ExplainMode::Json)
