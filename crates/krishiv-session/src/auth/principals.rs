@@ -2,12 +2,14 @@
 //! The rights of named principals (design P3-T061 §3, amendment A2).
 //!
 //! Credentials stay where T002 put them (`krishiv.auth.tokens.*`, certificates, OIDC); what a
-//! principal may do beyond its role is set by its name, whatever method authenticated it:
+//! principal may do beyond its role is set by its name. Privileges apply only to a principal of
+//! kind service (a static token of kind service, or a client certificate not listed as a user),
+//! so an OIDC user or a user certificate carrying the same name never holds them:
 //!
 //! ```text
 //! krishiv.auth.principals.<name>.privileges  = impersonate          (closed list; default none)
 //! krishiv.auth.principals.<name>.impersonates = alice, team-*, group:analysts
-//! krishiv.auth.principals.<name>.expires      = 2027-03-01           (UTC date; refused from then on)
+//! krishiv.auth.principals.<name>.expires      = 2027-03-01           (UTC date: a static token stops working, and the privileges end)
 //! ```
 //!
 //! `impersonates` lists the end users the principal may act for: a name, a glob with `*`, or
@@ -75,7 +77,8 @@ pub struct PrincipalRights {
     pub privileges: Vec<PrincipalPrivilege>,
     /// Whom it may impersonate (meaningful with [`PrincipalPrivilege::Impersonate`]).
     pub impersonates: Vec<ImpersonationTarget>,
-    /// When its credentials stop working (the start of a UTC day), if set.
+    /// When its static tokens stop working and its privileges end (the start of a UTC day), if
+    /// set.
     pub expires: Option<SystemTime>,
 }
 

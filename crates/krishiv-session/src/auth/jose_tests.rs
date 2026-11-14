@@ -552,7 +552,8 @@ fn missing_exp_rejected() {
     assert!(matches!(check(&v), Err(JoseError::Invalid("no exp"))));
 }
 
-/// The `jti` is carried for the audit record; one that is not a usable name is refused.
+/// The `jti` is carried for the audit record; one that is not a usable name is dropped (the
+/// token is still valid: `jti` is never enforced).
 #[test]
 fn jti_is_carried() {
     let mut v = good();
@@ -565,7 +566,7 @@ fn jti_is_carried() {
         if let Value::Object(m) = &mut v {
             m.insert("jti".into(), bad.clone());
         }
-        assert!(matches!(check(&v), Err(JoseError::Invalid("jti"))), "{bad}");
+        assert_eq!(check(&v).expect("valid").token_id, None, "{bad}");
     }
 }
 

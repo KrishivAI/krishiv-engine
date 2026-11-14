@@ -292,3 +292,72 @@ fn assertion_settings_are_checked_at_startup() {
         std::time::Duration::from_mins(5)
     );
 }
+
+/// An assertion issuer and audience equal to the OIDC ones would make every assertion a login
+/// token for the end user (review M4): refused at startup.
+#[test]
+fn assertion_config_equal_to_oidc_refused() {
+    let same = config(&[
+        ("krishiv.auth.oidc.issuer", ISSUER),
+        ("krishiv.auth.oidc.audience", AUDIENCE),
+    ]);
+    assert!(same.is_err());
+    let other_audience = config(&[
+        ("krishiv.auth.oidc.issuer", ISSUER),
+        ("krishiv.auth.oidc.audience", "krishiv"),
+    ]);
+    assert!(other_audience.is_ok());
+}
+
+/// The audit record of a signed impersonation names the assertion's `jti` but holds no token
+/// text: neither the compact assertion nor its signature (review m6).
+#[test]
+fn audit_record_has_no_assertion_text() {
+    use std::sync::{Arc, Mutex, PoisonError};
+    #[derive(Clone, Default)]
+    struct Sink(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Sink {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let (auth, _) = server();
+    let sink = Sink::default();
+    let writer = sink.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .with_writer(move || writer.clone())
+        .finish();
+    let good = signed(&claims("alice", &json!({"sub": "portal"})));
+    let bad = signed(&claims("alice", &json!({"sub": "nobody"})));
+    tracing::subscriber::with_default(subscriber, || {
+        assert!(present(&auth, &caller("portal"), &good).is_ok());
+        assert!(present(&auth, &caller("portal"), &bad).is_err());
+    });
+    let logged = String::from_utf8(
+        sink.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone(),
+    )
+    .unwrap_or_default();
+    for want in [
+        "assertion_jti=\"assert-1\"",
+        "jti=\"caller-jti\"",
+        "reason_code=\"actor_mismatch\"",
+    ] {
+        assert!(logged.contains(want), "{want} in {logged}");
+    }
+    for t in [&good, &bad] {
+        let signature = t.rsplit('.').next().unwrap_or_default();
+        assert!(!logged.contains(t.as_str()), "{logged}");
+        assert!(!logged.contains(signature), "{logged}");
+    }
+}

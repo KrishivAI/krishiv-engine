@@ -104,17 +104,70 @@ fn end_user_role_applies_not_caller_role() {
         .expect("allowed by group");
     assert_eq!(both.role, Some(Role::Admin));
     assert_eq!(both.principal.groups, ["analysts", "dbas"]);
-    // A viewer caller cannot lower anything either: the end user's role, whatever the caller's.
+    // The groups are the caller's claim, so the caller's own role caps them (review M2): a
+    // viewer front end claiming `dbas` makes a viewer, never an admin.
     let low = caller("portal", Role::Viewer, Method::Token);
-    let op = auth
+    let claimed_admin = vec!["analysts".to_owned(), "dbas".to_owned()];
+    for groups in [vec!["analysts".to_owned()], claimed_admin.clone()] {
+        let capped = auth
+            .impersonate(
+                &low,
+                Surface::Connect,
+                loopback(),
+                &ActAs::new("dave").with_groups(groups),
+            )
+            .expect("allowed");
+        assert_eq!(capped.role, Some(Role::Viewer));
+    }
+    let mid = caller("portal", Role::Operator, Method::Token);
+    let capped = auth
         .impersonate(
-            &low,
+            &mid,
             Surface::Connect,
             loopback(),
-            &ActAs::new("dave").with_groups(vec!["analysts".to_owned()]),
+            &ActAs::new("dave").with_groups(claimed_admin),
         )
         .expect("allowed");
-    assert_eq!(op.role, Some(Role::Operator));
+    assert_eq!(capped.role, Some(Role::Operator));
+}
+
+/// Rights belong to service principals (review M1): a user that carries a service's name, from
+/// OIDC or a user certificate, does not inherit `impersonate`.
+#[test]
+fn user_named_like_a_service_cannot_impersonate() {
+    let auth = server(&[]);
+    for method in [Method::Oidc, Method::Mtls, Method::Token] {
+        let user = Authenticated::new(
+            Principal::new("portal", PrincipalKind::User),
+            Some(Role::Admin),
+            method,
+        );
+        assert!(denied(auth.impersonate(
+            &user,
+            Surface::Connect,
+            loopback(),
+            &ActAs::new("alice")
+        )));
+    }
+}
+
+/// `krishiv.auth.principals.<name>.expires` ends the privileges for every method (review M3).
+#[test]
+fn expired_principal_cannot_impersonate() {
+    let auth = server(&[("krishiv.auth.principals.portal.expires", "2001-01-01")]);
+    let by_cert = caller("portal", Role::Admin, Method::Mtls);
+    assert!(denied(auth.impersonate(
+        &by_cert,
+        Surface::Connect,
+        loopback(),
+        &ActAs::new("alice")
+    )));
+    let later = server(&[("krishiv.auth.principals.portal.expires", "2999-01-01")]);
+    assert!(
+        later
+            .impersonate(&by_cert, Surface::Connect, loopback(), &ActAs::new("alice"))
+            .is_ok()
+    );
 }
 
 #[test]
@@ -227,16 +280,23 @@ fn malformed_requests_and_other_tenants_refused() {
         .impersonate(&in_t, Surface::Connect, loopback(), &ActAs::new("alice"))
         .expect("allowed");
     assert_eq!(same.principal.tenant.as_deref(), Some("t1"));
-    // A caller outside every tenant may name the end user's.
-    let named = auth
-        .impersonate(
-            &portal(),
+    // Naming the caller's own tenant is the same request.
+    assert!(
+        auth.impersonate(
+            &in_t,
             Surface::Connect,
             loopback(),
-            &ActAs::new("alice").with_tenant("t2"),
+            &ActAs::new("alice").with_tenant("t1")
         )
-        .expect("allowed");
-    assert_eq!(named.principal.tenant.as_deref(), Some("t2"));
+        .is_ok()
+    );
+    // A caller outside every tenant cannot place the end user in one (review m1).
+    assert!(denied(auth.impersonate(
+        &portal(),
+        Surface::Connect,
+        loopback(),
+        &ActAs::new("alice").with_tenant("t2"),
+    )));
 }
 
 /// The I/O secret resolver and block-cache scopes key on the principal's name and tenant, so
@@ -245,14 +305,11 @@ fn malformed_requests_and_other_tenants_refused() {
 fn block_cache_not_shared_across_tenants_via_impersonation() {
     let auth = server(&[]);
     let act = |user: &str, tenant: &str| {
-        auth.impersonate(
-            &portal(),
-            Surface::Connect,
-            loopback(),
-            &ActAs::new(user).with_tenant(tenant),
-        )
-        .expect("allowed")
-        .principal
+        let mut front = portal();
+        front.principal.tenant = Some(tenant.to_owned());
+        auth.impersonate(&front, Surface::Connect, loopback(), &ActAs::new(user))
+            .expect("allowed")
+            .principal
     };
     let a1 = act("alice", "t1");
     assert_ne!(a1.id(), act("alice", "t2").id());
@@ -336,6 +393,9 @@ fn audit_event_has_no_token_text() {
             ActAs::new("carol").with_groups(vec!["analysts".to_owned(), secret_group.to_owned()]);
         let _ = auth.impersonate(&portal(), Surface::Connect, loopback(), &act);
         let _ = auth.impersonate(&portal(), Surface::Connect, remote(), &ActAs::new("bob"));
+        // A caller-supplied name with a line break is never written (review m2).
+        let forged = ActAs::new("mallory\nkrishiv::audit decision=allowed");
+        let _ = auth.impersonate(&portal(), Surface::Connect, loopback(), &forged);
     });
     let logged = String::from_utf8(
         sink.0
@@ -357,5 +417,7 @@ fn audit_event_has_no_token_text() {
         assert!(logged.contains(want), "{want} in {logged}");
     }
     assert!(!logged.contains(secret_group), "{logged}");
+    assert!(!logged.contains("mallory"), "{logged}");
+    assert!(logged.contains("malformed=true"), "{logged}");
     assert!(!logged.contains("analysts"), "{logged}");
 }

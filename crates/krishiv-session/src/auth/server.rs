@@ -321,7 +321,7 @@ impl ServerAuth {
             #[cfg(feature = "oidc")]
             (Some(t), _) if self.oidc.is_some() && jose::looks_like_jws(t) => {
                 match self.verify_oidc(t, now, false) {
-                    Ok(Some(id)) => Ok(id.principal == name),
+                    Ok(Some(id)) => Ok(id.act.is_none() && id.principal == name),
                     Ok(None) => Err(AuthFailure::Unavailable),
                     Err(AuthFailure::Invalid) => Ok(false),
                     Err(f) => Err(f),
@@ -375,6 +375,7 @@ impl ServerAuth {
             caller,
             Channel::Plain(peer),
             act_as,
+            std::time::SystemTime::now(),
         );
         self.audit(caller, surface, peer, Some(act_as), None, decision)
     }
@@ -401,11 +402,20 @@ impl ServerAuth {
         peer: std::net::SocketAddr,
         assertion: &str,
     ) -> Result<(ActAs, Authenticated), KrishivError> {
-        let (act_as, assertion_id) = match self.verify_assertion(caller, assertion).await {
+        // The caller's own standing first (review m3): a caller that may not impersonate never
+        // makes the server verify an assertion or fetch its keys.
+        let checked = match impersonation::may_impersonate(
+            &self.principals,
+            caller,
+            std::time::SystemTime::now(),
+        ) {
+            Ok(()) => self.verify_assertion(caller, assertion).await,
+            Err(denial) => Err(denial),
+        };
+        let (act_as, assertion_id) = match checked {
             Ok(found) => found,
             Err(denial) => {
-                self.audit(caller, surface, peer, None, None, Decision::Denied(denial))?;
-                return Err(denial.error());
+                return Err(self.refuse(caller, surface, peer, denial));
             }
         };
         let decision = impersonation::decide(
@@ -414,6 +424,7 @@ impl ServerAuth {
             caller,
             Channel::Signed,
             &act_as,
+            std::time::SystemTime::now(),
         );
         let end_user = self.audit(
             caller,
@@ -424,6 +435,20 @@ impl ServerAuth {
             decision,
         )?;
         Ok((act_as, end_user))
+    }
+
+    /// Audits and counts a refusal that came before any [`ActAs`] was known; the error.
+    fn refuse(
+        &self,
+        caller: &Authenticated,
+        surface: Surface,
+        peer: std::net::SocketAddr,
+        denial: Denial,
+    ) -> KrishivError {
+        match self.audit(caller, surface, peer, None, None, Decision::Denied(denial)) {
+            Err(e) => e,
+            Ok(_) => denial.error(),
+        }
     }
 
     /// The [`ActAs`] a signed assertion names for `caller`, and its `jti`.
@@ -501,11 +526,14 @@ impl ServerAuth {
             target: "krishiv::audit",
             listener = surface.as_str(),
             caller = %caller.principal.name,
-            end_user = act_as.map(|a| tracing::field::display(&a.user)),
+            // Caller-supplied names are written only once they are known to be well formed
+            // (review m2): no control characters, bounded length.
+            end_user = act_as
+                .filter(|a| a.is_well_formed())
+                .map(|a| tracing::field::display(&a.user)),
+            malformed = act_as.is_some_and(|a| !a.is_well_formed()),
             groups_hash = act_as.map(|a| impersonation::groups_hash(&a.groups)),
-            tenant = act_as
-                .and_then(|a| a.tenant.as_deref())
-                .or(caller.principal.tenant.as_deref()),
+            tenant = caller.principal.tenant.as_deref(),
             decision = outcome,
             reason_code = reason,
             jti = caller.token_id.as_deref(),
@@ -602,6 +630,13 @@ impl ServerAuth {
         now: Instant,
     ) -> Result<Authenticated, AuthFailure> {
         match verdict {
+            // A delegated token (RFC 8693 `act`) is refused as a login (review M4): acting for
+            // someone goes through `impersonate_signed`, with its privilege, allowlist and audit.
+            Ok(Some(identity)) if identity.act.is_some() => {
+                tracing::debug!(target: "krishiv::auth", reason = "delegated token", "OIDC token refused");
+                self.record_failure(credentials, now);
+                Err(self.fail(credentials, Method::Oidc, AuthFailure::Invalid))
+            }
             Ok(Some(identity)) => Ok(self.oidc_principal(identity)),
             // Only `authenticate` asks to wait; reaching here without waiting is a refusal.
             Ok(None) => Err(self.fail(credentials, Method::Oidc, AuthFailure::Unavailable)),

@@ -659,3 +659,18 @@ fn a_token_without_kid_needs_exactly_one_fitting_key() {
     let no_kid = token(&json!({"alg": "RS256"}), &claims(), rs256(rsa()));
     assert_eq!(auth(&server, &no_kid).unwrap_err(), AuthFailure::Invalid);
 }
+
+/// A delegated token (RFC 8693 `act`) is no login (review M4): acting for someone goes through
+/// the impersonation rules, and a certificate's bearer with `act` never agrees.
+#[test]
+fn delegated_token_is_refused_as_a_login() {
+    let source = Source::new(vec![Ok(jwks(&[rsa_jwk(rsa(), "k1")]))]);
+    let server = server(&source, &[]);
+    let mut delegated = claims();
+    delegated["act"] = json!({"sub": "portal"});
+    let t = token(&rs_header("k1"), &delegated, rs256(rsa()));
+    assert_eq!(auth(&server, &t), Err(AuthFailure::Invalid));
+    // The same token without `act` logs in.
+    let t = token(&rs_header("k1"), &claims(), rs256(rsa()));
+    assert!(auth(&server, &t).is_ok());
+}

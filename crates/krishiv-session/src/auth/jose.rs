@@ -425,10 +425,11 @@ pub(crate) fn check_claims(
             .ok_or(JoseError::Invalid("role claim"))?,
         Some(_) => return Err(JoseError::Invalid("role claim")),
     };
+    // `jti` is recorded, never enforced (§2): one that is not a usable name is dropped, not
+    // refused, so it cannot reach the audit record and does not break an issuer.
     let token_id = match claims.0.get("jti") {
-        None => None,
         Some(Value::String(j)) if is_name(j) => Some(j.clone()),
-        Some(_) => return Err(JoseError::Invalid("jti")),
+        _ => None,
     };
     let act = match claims.0.get("act") {
         None => None,

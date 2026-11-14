@@ -278,6 +278,23 @@ impl AuthConfig {
         mtls.validate()?;
         oidc.validate()?;
         impersonation.validate()?;
+        // An assertion the OIDC verifier would also accept could log in as the end user
+        // directly, past the impersonation rules (review M4).
+        if impersonation.assertion.is_on()
+            && impersonation.assertion.issuer == oidc.issuer
+            && impersonation.assertion.audience == oidc.audience
+        {
+            return Err(invalid(
+                "krishiv.auth.impersonation.assertion.audience",
+                impersonation
+                    .assertion
+                    .audience
+                    .as_deref()
+                    .unwrap_or_default(),
+                "the assertion issuer and audience must not both equal krishiv.auth.oidc.*: an \
+                 assertion would also be a login token",
+            ));
+        }
         principals.validate()?;
         for t in &mut tokens {
             t.expires = principals.get(&t.principal).and_then(|r| r.expires);

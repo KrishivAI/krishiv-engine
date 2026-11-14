@@ -17,12 +17,17 @@
 //! it becomes the same [`ActAs`] (see `ServerAuth::impersonate_signed`). The rules (§4.2):
 //!
 //! 1. Asking for nothing but one's own name is no impersonation and needs no right. Anything
-//!    else needs `impersonate` (`krishiv.auth.principals.<caller>.privileges`): without it the
-//!    request is refused, not ignored, so a misconfigured front end shows at once.
+//!    else needs `impersonate` (`krishiv.auth.principals.<caller>.privileges`) on a caller of
+//!    kind service, whose `expires` has not passed: without it the request is refused, not
+//!    ignored, so a misconfigured front end shows at once. Only service principals impersonate
+//!    (a static token of kind service, or a client certificate not listed in
+//!    `mtls.userPrincipals`), so an OIDC user or a user certificate that happens to carry a
+//!    service's name never inherits its rights.
 //! 2. The end user must match the caller's `impersonates` list.
 //! 3. No chaining, no escalation: a caller that is itself acting for someone is refused, and the
 //!    end user's role comes from the impersonation role lists by its groups (default viewer),
-//!    never from the caller's role. The lists are a namespace of their own (A3): an end user's
+//!    capped at the caller's own role: the groups are the caller's claim, and a `group:<g>`
+//!    allowlist entry trusts that claim as far as the caller is trusted. The lists are a namespace of their own (A3): an end user's
 //!    group can never be named like a certificate principal or an OIDC role-claim value.
 //! 4. The result keeps the caller as `Principal::delegated_by`, for the audit and the system
 //!    tables; the tenant is the caller's (an end user cannot be placed in another tenant).
@@ -37,6 +42,7 @@
 //! every later call.
 
 use std::net::SocketAddr;
+use std::time::SystemTime;
 
 use krishiv_common::error::KrishivError;
 use krishiv_common::principal::{Principal, PrincipalKind};
@@ -88,6 +94,14 @@ impl ActAs {
     pub fn with_tenant(mut self, tenant: impl Into<String>) -> Self {
         self.tenant = Some(tenant.into());
         self
+    }
+
+    /// Whether the name, groups and tenant are usable names, and the groups not too many.
+    pub(crate) fn is_well_formed(&self) -> bool {
+        is_name(&self.user)
+            && self.groups.len() <= MAX_GROUPS
+            && self.groups.iter().all(|g| is_name(g))
+            && self.tenant.as_deref().is_none_or(is_name)
     }
 
     /// Whether it asks for nothing but `caller` itself (rule 1: no right needed).
@@ -205,6 +219,8 @@ pub enum Denial {
     AssertionUnavailable,
     /// A signed assertion whose `act.sub` is not the caller.
     ActorMismatch,
+    /// The caller's `krishiv.auth.principals.<name>.expires` has passed.
+    Expired,
 }
 
 impl Denial {
@@ -222,6 +238,7 @@ impl Denial {
             Self::BadAssertion => "bad_assertion",
             Self::AssertionUnavailable => "assertion_unavailable",
             Self::ActorMismatch => "actor_mismatch",
+            Self::Expired => "expired",
         }
     }
 
@@ -251,13 +268,38 @@ pub(crate) enum Channel {
     Signed,
 }
 
-/// Rules 1-5 for `caller` (already authenticated) asking, over `channel`, to act as `act_as`.
+/// Whether `caller` may ask to act for anyone at `now`: it acts for no one itself, is a
+/// service principal (review M1: a user named like a service, from OIDC or a user
+/// certificate, never inherits its rights), holds `impersonate` and its
+/// `krishiv.auth.principals.<name>.expires` has not passed (review M3).
+pub(crate) fn may_impersonate(
+    principals: &PrincipalTable,
+    caller: &Authenticated,
+    now: SystemTime,
+) -> Result<(), Denial> {
+    let me = &caller.principal;
+    if me.delegated_by.is_some() {
+        return Err(Denial::Chained);
+    }
+    let rights = principals
+        .get(&me.name)
+        .filter(|r| r.has(PrincipalPrivilege::Impersonate) && me.kind == PrincipalKind::Service)
+        .ok_or(Denial::NoPrivilege)?;
+    if rights.expired_at(now) {
+        return Err(Denial::Expired);
+    }
+    Ok(())
+}
+
+/// Rules 1-5 for `caller` (already authenticated) asking, over `channel`, to act as `act_as`
+/// at `now`.
 pub(crate) fn decide(
     principals: &PrincipalTable,
     config: &ImpersonationConfig,
     caller: &Authenticated,
     channel: Channel,
     act_as: &ActAs,
+    now: SystemTime,
 ) -> Decision {
     let me = &caller.principal;
     if me.delegated_by.is_some() {
@@ -266,8 +308,8 @@ pub(crate) fn decide(
     if act_as.is_self(me) {
         return Decision::Itself;
     }
-    if !principals.has(&me.name, PrincipalPrivilege::Impersonate) {
-        return Decision::Denied(Denial::NoPrivilege);
+    if let Err(denial) = may_impersonate(principals, caller, now) {
+        return Decision::Denied(denial);
     }
     let trusted = match channel {
         Channel::Plain(peer) => caller.method == Method::Mtls || peer.ip().is_loopback(),
@@ -276,21 +318,14 @@ pub(crate) fn decide(
     if !trusted {
         return Decision::Denied(Denial::UntrustedChannel);
     }
-    let well_formed = is_name(&act_as.user)
-        && act_as.groups.len() <= MAX_GROUPS
-        && act_as.groups.iter().all(|g| is_name(g))
-        && act_as.tenant.as_deref().is_none_or(is_name);
-    if !well_formed {
+    if !act_as.is_well_formed() {
         return Decision::Denied(Denial::Malformed);
     }
-    let tenant = match (&me.tenant, &act_as.tenant) {
-        (Some(mine), Some(theirs)) if mine != theirs => {
-            return Decision::Denied(Denial::OtherTenant);
-        }
-        (Some(mine), _) => Some(mine.clone()),
-        // A caller outside every tenant names the end user's.
-        (None, theirs) => theirs.clone(),
-    };
+    // The end user is in the caller's tenant; a caller outside every tenant cannot place it in
+    // one (review m1: the allowlist names users without tenants, so it cannot say which).
+    if act_as.tenant.is_some() && act_as.tenant != me.tenant {
+        return Decision::Denied(Denial::OtherTenant);
+    }
     let allowed = principals
         .get(&me.name)
         .is_some_and(|r| r.may_impersonate(&act_as.user, &act_as.groups));
@@ -300,11 +335,14 @@ pub(crate) fn decide(
     let mut principal =
         Principal::new(act_as.user.clone(), PrincipalKind::User).with_delegator(me.name.clone());
     principal.groups.clone_from(&act_as.groups);
-    principal.tenant = tenant;
-    let role = config.role_of(&act_as.groups);
+    principal.tenant.clone_from(&me.tenant);
+    // The groups are the caller's claim, so the role they give is capped at the caller's own
+    // (review M2): impersonating never yields more than the caller has.
+    let role = caller
+        .role
+        .map(|own| own.min(config.role_of(&act_as.groups)));
     Decision::Allowed(
-        Authenticated::new(principal, Some(role), caller.method)
-            .with_token_id(caller.token_id.clone()),
+        Authenticated::new(principal, role, caller.method).with_token_id(caller.token_id.clone()),
     )
 }
 
