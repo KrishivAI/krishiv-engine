@@ -70,6 +70,8 @@ pub struct EngineRuntime {
     session_seq: AtomicU64,
     /// The `system.queries` rows of every session.
     pub(crate) history: Arc<QueryHistory>,
+    /// The persisted profiles of finished queries (`krishiv.history.path`, P3-T051); `None` when unset.
+    pub(crate) profile_history: Option<Arc<crate::profile_history::ProfileHistory>>,
     /// The result cache: the process-wide one for a private runtime (sessions
     /// built alone share it, as before), a store of its own for a supplied
     /// runtime (ADR 0037 §6 holds per runtime).
@@ -259,6 +261,27 @@ impl EngineRuntime {
             .and_then(krishiv_common::config::ConfigValue::as_int)
             .and_then(|n| usize::try_from(n).ok())
             .unwrap_or(crate::history::DEFAULT_CAPACITY);
+        let profile_history = match config
+            .get(&krishiv_common::config::HISTORY_PATH)
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .filter(|p| !p.is_empty())
+        {
+            Some(dir) => {
+                let max = config
+                    .get(&krishiv_common::config::HISTORY_MAX_BYTES)
+                    .and_then(krishiv_common::config::ConfigValue::as_size)
+                    .unwrap_or(256 << 20);
+                Some(Arc::new(crate::profile_history::ProfileHistory::open(
+                    std::path::Path::new(&dir),
+                    max,
+                    config
+                        .get(&krishiv_common::config::HISTORY_LITERALS)
+                        .and_then(|v| v.as_str().map(|m| m != "keep"))
+                        .unwrap_or(true),
+                )?))
+            }
+            None => None,
+        };
         let results = if private {
             Arc::clone(crate::result_cache::global())
         } else {
@@ -292,6 +315,7 @@ impl EngineRuntime {
             query_index: AtomicU64::new(0),
             session_seq: AtomicU64::new(0),
             history: Arc::new(QueryHistory::new(capacity)),
+            profile_history,
             catalog_store: Arc::new(InMemoryCatalogStore::with_hub(Arc::clone(&invalidation))),
             invalidation,
             warehouse: Arc::new(Warehouse::default()),
@@ -732,6 +756,12 @@ impl EngineRuntime {
     /// gauge holds the runtime itself, so the runtime can end.
     fn register_gauges(&self) -> Result<(), KrishivError> {
         let metrics = &self.metrics;
+        if let Some(history) = &self.profile_history {
+            let history = Arc::clone(history);
+            metrics.add_gauge("krishiv.history.write_failures", Vec::new(), move || {
+                Some(history.failures())
+            })?;
+        }
         {
             let memory = Arc::clone(&self.memory_tree);
             metrics.add_gauge("krishiv.memory.reserved", Vec::new(), move || {

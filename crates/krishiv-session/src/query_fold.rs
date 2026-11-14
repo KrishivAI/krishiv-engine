@@ -35,6 +35,11 @@ pub(crate) struct QueryStart {
 }
 
 impl QueryStart {
+    /// Time since the query started.
+    pub(crate) fn elapsed(&self) -> std::time::Duration {
+        self.started.elapsed()
+    }
+
     pub(crate) fn capture(state: &SessionState, io: &krishiv_io::IoContext) -> Self {
         let totals = state.io.totals();
         let own = io.counters();
@@ -217,6 +222,20 @@ pub(crate) struct QueryFold {
     /// The statement's operation id, held until the query's stream ends, so
     /// a running query keeps its id taken even after its DataFrame drops.
     pub(crate) _operation: Option<Arc<crate::history::Operation>>,
+    /// What the persisted history needs of the query, kept only when `krishiv.history.path` is set.
+    pub(crate) history: Option<HistoryJob>,
+}
+
+/// The plan and who ran the query, held until the query ends, for the persisted history.
+pub(crate) struct HistoryJob {
+    pub(crate) plan: krishiv_exec::planner::PhysicalPlan,
+    pub(crate) sql: Option<String>,
+    /// Whether the query ran with detailed metrics (probe lengths and the like).
+    pub(crate) detailed: bool,
+    /// Where the entry waits for a file write's commit, when it is one.
+    pub(crate) hold: Option<Arc<crate::profile_history::HistoryHold>>,
+    pub(crate) identity: krishiv_exec::profile::ProfileIdentity,
+    pub(crate) trace: Option<serde_json::Value>,
 }
 
 impl QueryFold {
@@ -284,8 +303,9 @@ impl QueryFold {
         drop(permit);
     }
 
-    pub(crate) fn finish(self, error: Option<&KrishivError>) {
+    pub(crate) fn finish(mut self, error: Option<&KrishivError>) {
         self.report_usage();
+        self.record_history(error);
         self.start.fold(
             &self.state,
             &self.query,
@@ -293,6 +313,48 @@ impl QueryFold {
             self.metrics_on,
             &self.log_id,
         );
+    }
+
+    /// Queues the query's profile for the persisted history: the queue send is all the query pays; the profile is built and written on the history thread.
+    fn record_history(&mut self, error: Option<&KrishivError>) {
+        // The plan moves into the entry: the one copy of it is the one taken when the query started.
+        let (Some(job), Some(store)) = (self.history.take(), &self.state.runtime.profile_history)
+        else {
+            return;
+        };
+        let stored = self.query.error();
+        let (status, error_class) = Status::from_error(error.or(stored.as_ref()));
+        let metrics = self.query.metrics();
+        let wall = if metrics.wall_time.is_zero() {
+            self.start.elapsed()
+        } else {
+            metrics.wall_time
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+        let entry = crate::profile_history::HistoryEntry {
+            query_id: self.log_id.clone(),
+            finished_at_ms: now,
+            state: match status {
+                Status::Succeeded => "finished",
+                Status::Failed => "failed",
+                Status::Cancelled => "cancelled",
+                Status::Denied => "denied",
+            },
+            error_class,
+            sql: job.sql,
+            detailed: job.detailed,
+            duration_ns: i64::try_from(wall.as_nanos()).unwrap_or(i64::MAX),
+            plan: job.plan,
+            metrics,
+            identity: job.identity,
+            trace: job.trace,
+        };
+        match &job.hold {
+            Some(hold) => hold.offer(entry, store),
+            None => store.record(entry),
+        }
     }
 }
 

@@ -1330,6 +1330,33 @@ fn fuse_probe_select_defaults_on_and_parses() {
 }
 
 #[test]
+fn history_entries_parse_and_default() {
+    let mut c = Config::new();
+    assert_eq!(c.get(&HISTORY_PATH), None);
+    assert_eq!(
+        c.get(&HISTORY_MAX_BYTES).and_then(ConfigValue::as_size),
+        Some(256 << 20)
+    );
+    c.set("krishiv.history.maxBytes", "50m").unwrap();
+    c.set("krishiv.history.path", "/var/lib/krishiv/history")
+        .unwrap();
+    assert_eq!(
+        c.get(&HISTORY_MAX_BYTES).and_then(ConfigValue::as_size),
+        Some(50 << 20)
+    );
+    assert!(c.set("krishiv.history.maxBytes", "lots").is_err());
+    assert_eq!(
+        c.get(&HISTORY_LITERALS)
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .as_deref(),
+        Some("mask")
+    );
+    c.set("krishiv.history.literals", "keep").unwrap();
+    assert!(c.set("krishiv.history.literals", "some").is_err());
+    assert_eq!(HISTORY_PATH.scope, Scope::Cluster);
+}
+
+#[test]
 fn python_worker_entries_parse_and_default() {
     let mut c = Config::new();
     let get = |c: &Config| {

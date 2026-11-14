@@ -58,6 +58,8 @@ rustls = { workspace = true, optional = true, features = ["aws_lc_rs", "std", "t
 tracing-subscriber = { workspace = true, optional = true, features = ["registry", "std"] }
 # The local file system as a store (`fs`); no other store features.
 object_store = { workspace = true, features = ["fs"] }
+# The persisted query history (`profile_history.rs`): Parquet segments of finished queries' profiles.
+parquet = { workspace = true, features = ["arrow"] }
 
 [dev-dependencies]
 bytes.workspace = true
@@ -65,7 +67,6 @@ krishiv-plan = { path = "../krishiv-plan", version = "=0.2.0", features = ["test
 arrow-select.workspace = true
 futures = { workspace = true, features = ["alloc", "executor"] }
 insta.workspace = true
-parquet = { workspace = true, features = ["arrow"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tracing-subscriber = { workspace = true, features = ["registry", "std", "fmt", "json"] }

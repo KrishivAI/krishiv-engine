@@ -84,6 +84,9 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &MEMORY_RESIDENT_GUARD,
     &SESSION_MEMORY_LIMIT,
     &SYSTEM_QUERIES_CAPACITY,
+    &HISTORY_PATH,
+    &HISTORY_LITERALS,
+    &HISTORY_MAX_BYTES,
     &UI_ENABLED,
     &SYSTEM_QUERY_TEXT_MAX_BYTES,
     &SYSTEM_QUERY_TEXT_LITERALS,
@@ -635,6 +638,54 @@ pub static SYSTEM_QUERIES_CAPACITY: ConfigEntry = ConfigEntry {
     version_added: "0.2.0",
     spark_alias: None,
     settable_by: SettableBy::Startup,
+};
+
+/// Where finished queries' profiles are kept (P3-T051).
+pub static HISTORY_PATH: ConfigEntry = ConfigEntry {
+    key: "krishiv.history.path",
+    value_type: ValueType::String,
+    default: None,
+    doc: "A directory where the engine keeps one compact profile for every finished query, as \
+          Parquet files, so `system.queries` history survives a restart and a stored profile can \
+          be opened later. A profile has the plan, the operators' counters and the query's \
+          identity, and no result data; literals are masked unless `krishiv.history.literals` \
+          is `keep`. Every query that reached execution is stored, as the engine metrics count \
+          them: a statement refused in parsing, analysis or an access check is not. Writing happens after the result stream \
+          ends and never fails the query; a failed write is counted in \
+          `krishiv_history_write_failures`. When unset, nothing is stored.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// Whether the persisted history keeps literals (P3-T051).
+pub static HISTORY_LITERALS: ConfigEntry = ConfigEntry {
+    key: "krishiv.history.literals",
+    value_type: ValueType::Enum(&["keep", "mask"]),
+    default: Some(ConfigValue::String(Cow::Borrowed("mask"))),
+    doc: "`mask` (the default) replaces every string and number literal with `?` in the \
+          statement text and in the plan lines of the profiles stored under \
+          `krishiv.history.path`, so a stored profile carries no data values. `keep` stores \
+          them as `EXPLAIN ANALYZE` prints them. Credentials in a statement are redacted either \
+          way.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// Most bytes the profile history keeps (P3-T051).
+pub static HISTORY_MAX_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.history.maxBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(256 << 20)),
+    doc: "Most bytes the profile history under `krishiv.history.path` keeps. When a new file \
+          takes the store past this, the oldest files go first, so the newest queries stay.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
 };
 
 /// Whether `krishiv server` serves the web UI backend (design T133).

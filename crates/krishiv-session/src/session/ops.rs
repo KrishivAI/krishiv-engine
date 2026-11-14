@@ -244,6 +244,17 @@ impl Session {
             Some(admitted) => admitted,
             None => self.admit_query(env, false).await?,
         });
+        // The query's profile waits here for the commit below.
+        let hold: Arc<crate::profile_history::HistoryHold> = Arc::default();
+        // Dropped with the future (a cancelled write), it records the held entry as cancelled.
+        let hold_guard = crate::profile_history::HoldGuard::new(
+            Arc::clone(&hold),
+            self.state.runtime.profile_history.clone(),
+        );
+        let held_env = QueryEnv {
+            history_hold: Some(Arc::clone(&hold)),
+            ..env.clone()
+        };
         let written = async {
             let job = job_uuid();
             // Every name of the write is resolved relative to the directory
@@ -297,7 +308,7 @@ impl Session {
             })?;
             let worker = self.worker(env);
             let (rows, _, row_id) = self
-                .run_on_query_logged(&plan, worker, env, false, admitted.take())
+                .run_on_query_logged(&plan, worker, &held_env, false, admitted.take())
                 .await?;
             let mut rows = crate::run_site::resolve_sites(rows, env);
             let mut batches = Vec::new();
@@ -366,13 +377,15 @@ impl Session {
         }
         // A store error after the anchor is open may be a link swapped into
         // the path: the audited denial is what the caller sees then.
-        if written.is_err()
-            && let Err(denied) = crate::access::still_physical(self, &at)
-            && denied.error_class().name() == "KRISHIV_INSUFFICIENT_PERMISSIONS"
-        {
-            return Err(denied);
+        let denied = (written.is_err())
+            .then(|| crate::access::still_physical(self, &at).err())
+            .flatten()
+            .filter(|d| d.error_class().name() == "KRISHIV_INSUFFICIENT_PERMISSIONS");
+        hold_guard.settle(denied.as_ref().or(written.as_ref().err()));
+        match denied {
+            Some(denied) => Err(denied),
+            None => written,
         }
-        written
     }
 
     /// The store a directory write at `at` goes through: for a local path

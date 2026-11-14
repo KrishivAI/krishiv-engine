@@ -9,7 +9,7 @@
 //! space; [`query_summary`] keeps only the operation and the names of the
 //! tables the statement reads or writes.
 
-use crate::lexer::{Sym, Token, TokenKind, tokenize, unquote_ident};
+use crate::lexer::{Sym, Token, TokenKind, tokenize, unescape_string, unquote_ident};
 
 /// The most table names a summary lists.
 const MAX_TARGETS: usize = 5;
@@ -33,6 +33,74 @@ pub fn sanitize_query_text(sql: &str) -> String {
 #[must_use]
 pub fn mask_literals(sql: &str) -> String {
     sanitized(sql, usize::MAX)
+}
+
+/// Hands over a finished run of adjacent string tokens as the one literal the parser joins it into, once: a
+/// prefix of the run is never a name, so no intermediate text is kept (a long run would cost quadratic memory).
+fn flush(run: &mut [String; 4], run_len: usize, push: &mut impl FnMut(String)) {
+    for acc in run.iter_mut() {
+        let joined = std::mem::take(acc);
+        if run_len > 1 {
+            push(joined);
+        }
+    }
+}
+
+/// The bodies of the string literals in `sql` (quotes and dollar tags removed, escapes left as written): the
+/// text a generated output name can carry, so a caller that masks literals can mask those names too.
+#[must_use]
+pub fn string_literal_bodies(sql: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |b: String| {
+        if !b.is_empty() && !out.contains(&b) {
+            out.push(b);
+        }
+    };
+    // Adjacent string tokens are one literal to the parser (`'a' 'b'` is `ab`): the run's joined text per decoding.
+    let mut run: [String; 4] = Default::default();
+    let mut run_len = 0usize;
+    for t in tokenize(sql) {
+        let text = t.span.text(sql);
+        if matches!(t.kind, TokenKind::Comment | TokenKind::UnclosedComment)
+            || text.trim().is_empty()
+        {
+            continue;
+        }
+        // Every decoding the session settings allow, as `redact` does: the analyzer names an output by the
+        // decoded text (`'\u0068i'` is named `hi`), and a raw string (`r'..'`) carries its prefix in the token.
+        let bodies: Vec<String> = match t.kind {
+            TokenKind::String | TokenKind::DoubleQuoted => vec![
+                unescape_string(text, true, false),
+                unescape_string(text, true, true),
+                unescape_string(text, false, false),
+                unescape_string(text, false, true),
+            ],
+            TokenKind::DollarString => {
+                let body = text
+                    .strip_prefix('$')
+                    .and_then(|rest| {
+                        let tag = rest.find('$')? + 2;
+                        text.get(tag..text.len().checked_sub(tag)?)
+                    })
+                    .map(str::to_owned)
+                    .unwrap_or_default();
+                vec![body; 4]
+            }
+            _ => Vec::new(),
+        };
+        if bodies.is_empty() {
+            flush(&mut run, run_len, &mut push);
+            run_len = 0;
+            continue;
+        }
+        run_len += 1;
+        for (acc, b) in run.iter_mut().zip(bodies) {
+            push(b.clone());
+            acc.push_str(&b);
+        }
+    }
+    flush(&mut run, run_len, &mut push);
+    out
 }
 
 fn sanitized(sql: &str, limit: usize) -> String {
@@ -174,6 +242,39 @@ pub fn query_summary(sql: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raw_string_bodies_drop_the_prefix_and_quotes() {
+        assert_eq!(
+            string_literal_bodies("SELECT r'hunter2', R\"abc\", 'x' FROM t"),
+            ["hunter2", "abc", "x"]
+        );
+    }
+
+    #[test]
+    fn escaped_bodies_are_decoded() {
+        assert!(string_literal_bodies("SELECT '\\u0068unter2'").contains(&"hunter2".to_owned()));
+    }
+
+    #[test]
+    fn adjacent_strings_join_and_dollar_bodies_are_kept() {
+        let b = string_literal_bodies("SELECT 'hunter' /* c */ 'two', $t$dol$t$ $t$lar$t$, 1");
+        assert!(b.contains(&"huntertwo".to_owned()), "{b:?}");
+        assert!(b.contains(&"hunter".to_owned()) && b.contains(&"two".to_owned()));
+        assert!(b.contains(&"dollar".to_owned()), "{b:?}");
+        assert!(!string_literal_bodies("SELECT 'a', 'b'").contains(&"ab".to_owned()));
+    }
+
+    #[test]
+    fn a_long_run_of_adjacent_strings_keeps_one_joined_candidate() {
+        let sql = format!("SELECT {}AS s", "'x' ".repeat(5_000));
+        let b = string_literal_bodies(&sql);
+        assert!(
+            b.contains(&"x".repeat(5_000)),
+            "the whole run is a candidate"
+        );
+        assert!(b.len() <= 3, "no prefix of the run is kept: {}", b.len());
+    }
 
     #[test]
     fn literals_are_removed() {
