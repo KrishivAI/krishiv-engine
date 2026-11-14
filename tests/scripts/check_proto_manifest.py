@@ -174,7 +174,10 @@ def additivity_problems(chain=("3.5", "4.0", "4.1", "4.2", "4.2.1", "4.3")) -> l
     return problems
 
 
-RAW = "https://raw.githubusercontent.com/apache/spark/{tag}/sql/connect/common/src/main/protobuf/spark/connect/{name}"
+RAW = "https://raw.githubusercontent.com/apache/spark/{tag}/{root}/src/main/protobuf/spark/connect/{name}"
+# Spark 3.5 kept Connect under connector/connect; 4.0 moved it to sql/connect.
+ROOTS = {"3.5": "connector/connect/common"}
+DEFAULT_ROOT = "sql/connect/common"
 
 
 def upstream_problems(fetch=None) -> list[str]:
@@ -189,7 +192,7 @@ def upstream_problems(fetch=None) -> list[str]:
     for ver, tag in TAGS.items():
         for f in sorted((PROTO / ver / "spark" / "connect").glob("*.proto")):
             try:
-                body = fetch(RAW.format(tag=tag, name=f.name))
+                body = fetch(RAW.format(tag=tag, root=ROOTS.get(ver, DEFAULT_ROOT), name=f.name))
             except OSError as e:
                 problems.append(f"{ver}/{f.name}: cannot fetch {tag}: {e}")
                 continue

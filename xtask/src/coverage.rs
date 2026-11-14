@@ -643,6 +643,10 @@ pub fn run_coverage(root: &Path, flags: &[&str]) -> Result<(), String> {
     };
     let mut test = base(&["nextest", "--locked", "--no-tests=pass", "--no-report"]);
     test.args(package_args(&packages));
+    // One failing test must not hide the rest of the workspace's coverage (a failure stopped the run at
+    // 672 of 8,008 tests), and the resident-set bound tests measure the process they run in, which the
+    // instrumentation inflates past the bound (peak 152 MB against 147 MB): they run in the normal jobs.
+    test.args(["--no-fail-fast", "-E", "not binary(memory_bound)"]);
     if all {
         test.arg("--all-features");
     }
