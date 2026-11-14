@@ -490,7 +490,10 @@ async fn a_one_sided_cogroup_key_over_two_batches_gets_one_empty_frame_first() {
 #[tokio::test]
 async fn an_aggregate_lane_gets_one_group_per_key() {
     let r = rig(
-        RelationShape::Aggregate { keys: vec![0] },
+        RelationShape::Aggregate {
+            keys: vec![0],
+            key_values: vec![0],
+        },
         Yield::Count,
         limits(0, 16),
         64 << 20,
@@ -498,6 +501,39 @@ async fn an_aggregate_lane_gets_one_group_per_key() {
     drive(&r, vec![rows(&[5, 5, 7], None)]).await.unwrap();
     assert_eq!(r.shared.log(), ["B0:2", "G", "B0:1", "G", "E"]);
     done(r);
+}
+
+/// An aggregate shows as many key values as it compares keys: a plan
+/// that says otherwise is refused, not run with misaligned keys.
+#[test]
+fn an_aggregate_with_key_values_unlike_its_keys_is_refused() {
+    let lane = RelationLane {
+        name: "f".to_owned(),
+        udf: Arc::new(Fake {
+            shared: Arc::new(Shared::default()),
+            yields: Yield::Count,
+        }),
+        sides: vec![vec![
+            column(0, ArrowType::Int32),
+            column(1, ArrowType::Int64),
+        ]],
+        names: vec![vec!["k".to_owned(), "v".to_owned()]],
+        client: vec![ArrowType::Int64],
+    };
+    let err = RelationSink::try_new(
+        input(false),
+        RelationShape::Aggregate {
+            keys: vec![0],
+            key_values: Vec::new(),
+        },
+        vec![lane],
+        Arc::new(Schema::new(vec![Field::new("n", ArrowType::Int64, true)])),
+        limits(0, 16),
+        None,
+    )
+    .err()
+    .unwrap();
+    assert!(err.to_string().contains("key values"), "{err}");
 }
 
 #[tokio::test]
@@ -752,7 +788,10 @@ async fn an_aggregate_task_yielding_another_number_of_values_than_groups_fails()
     // Too many values fail as soon as they outnumber the groups.
     for (yields, values) in [(Yield::CountTwice, " values"), (Yield::Nothing, "0 values")] {
         let r = rig(
-            RelationShape::Aggregate { keys: vec![0] },
+            RelationShape::Aggregate {
+                keys: vec![0],
+                key_values: vec![0],
+            },
             yields,
             limits(0, 16),
             64 << 20,
@@ -805,7 +844,10 @@ async fn a_weighted_batch_is_refused() {
 #[tokio::test]
 async fn an_aggregate_waits_for_its_slowest_lane_without_spinning() {
     let mut r = rig(
-        RelationShape::Aggregate { keys: vec![0] },
+        RelationShape::Aggregate {
+            keys: vec![0],
+            key_values: vec![0],
+        },
         Yield::Count,
         limits(0, 16),
         64 << 20,
@@ -827,7 +869,10 @@ async fn an_aggregate_waits_for_its_slowest_lane_without_spinning() {
     };
     r.sink = RelationSink::try_new(
         input(false),
-        RelationShape::Aggregate { keys: vec![0] },
+        RelationShape::Aggregate {
+            keys: vec![0],
+            key_values: vec![0],
+        },
         vec![lane(&r.shared, "f"), lane(&slow, "g")],
         Arc::new(Schema::new(vec![
             Field::new("k", ArrowType::Int32, true),

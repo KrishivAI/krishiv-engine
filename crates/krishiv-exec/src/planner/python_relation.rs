@@ -387,6 +387,10 @@ impl Planner<'_> {
             .split_at_checked(keys.len())
             .ok_or_else(|| internal("Python aggregate key arity"))?;
         let (planned, key_columns) = self.with_columns(planned, key_exprs)?;
+        // A collated key groups by its comparison key; each group shows its
+        // first row's key (Spark's `GroupedIterator` key at v4.2.0). The
+        // collation rewrite leaves this aggregate alone for that.
+        let (planned, compared) = self.compared(planned, key_exprs, &key_columns)?;
         let prepared = self.prepare(&[])?;
         // Each call as the node runs it: over the arguments' columns.
         let mut run = Vec::with_capacity(calls.len());
@@ -413,7 +417,7 @@ impl Planner<'_> {
                 .with_origin(call.origin),
             ));
         }
-        let sorted = self.clustered_and_sorted(planned, &key_columns, &[])?;
+        let sorted = self.clustered_and_sorted(planned, &compared, &[])?;
         let mut layout: Vec<AttrId> = key_columns
             .iter()
             .map(|&c| sorted.column_attr(c))
@@ -447,13 +451,14 @@ impl Planner<'_> {
             .collect::<Vec<_>>()
             .join(", ");
         let input_layout = sorted.layout.clone();
-        let keys_at = key_columns.clone();
+        let key_values = key_columns.clone();
         let schema = Arc::new(Schema::new(fields));
         let node = sorted.wrap(
             |input| PhysNode::PythonAggregate {
                 input,
                 layout: input_layout,
-                keys: keys_at,
+                keys: compared,
+                key_values,
                 calls: plans,
             },
             schema,

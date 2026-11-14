@@ -42,9 +42,18 @@ impl Instantiation<'_> {
                     side: *side,
                 },
             ),
-            PhysNode::PythonAggregate { input, keys, .. } => {
-                (input, RelationShape::Aggregate { keys: keys.clone() })
-            }
+            PhysNode::PythonAggregate {
+                input,
+                keys,
+                key_values,
+                ..
+            } => (
+                input,
+                RelationShape::Aggregate {
+                    keys: keys.clone(),
+                    key_values: key_values.clone(),
+                },
+            ),
             _ => return Err(internal("not a Python relation node".to_owned())),
         };
         let input = self.node(input)?;
@@ -63,10 +72,10 @@ impl Instantiation<'_> {
             }
             PhysNode::PythonAggregate {
                 layout,
-                keys,
+                key_values,
                 calls,
                 ..
-            } => self.aggregate_lanes(&input.schema, layout, keys, calls, &conf)?,
+            } => self.aggregate_lanes(&input.schema, layout, key_values, calls, &conf)?,
             _ => return Err(internal("not a Python relation node".to_owned())),
         };
         let sink = RelationSink::try_new(

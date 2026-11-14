@@ -94,10 +94,14 @@ pub enum RelationShape {
         side: usize,
     },
     /// As [`Self::Grouped`]; each lane's task yields one value per group,
-    /// and the output is the group's keys then one column per lane.
+    /// and the output is the values of `key_values` in the group's first
+    /// row, then one column per lane.
     Aggregate {
-        /// The key columns.
+        /// The columns groups are compared by (a collated key's comparison
+        /// key).
         keys: Vec<usize>,
+        /// The key columns the output shows, as many as `keys`.
+        key_values: Vec<usize>,
     },
 }
 
@@ -105,9 +109,9 @@ impl RelationShape {
     fn keys(&self) -> Option<&[usize]> {
         match self {
             Self::Map => None,
-            Self::Grouped { keys } | Self::CoGrouped { keys, .. } | Self::Aggregate { keys } => {
-                Some(keys)
-            }
+            Self::Grouped { keys }
+            | Self::CoGrouped { keys, .. }
+            | Self::Aggregate { keys, .. } => Some(keys),
         }
     }
 }
@@ -218,8 +222,13 @@ impl RelationSink {
             None => None,
         };
         let key_schema = match &shape {
-            RelationShape::Aggregate { keys } => {
-                let fields: Vec<Field> = keys
+            RelationShape::Aggregate { keys, key_values } => {
+                if key_values.len() != keys.len() {
+                    return Err(internal(
+                        "a Python aggregate's key values do not match its keys".to_owned(),
+                    ));
+                }
+                let fields: Vec<Field> = key_values
                     .iter()
                     .map(|&k| {
                         input
@@ -712,14 +721,14 @@ impl RelationSink {
         let data = input.data();
         let (runs, last) = self.runs(data, d.current.as_ref())?;
         let keys = match (&self.shape, &self.key_schema) {
-            (RelationShape::Aggregate { keys }, Some(schema)) => {
+            (RelationShape::Aggregate { key_values, .. }, Some(schema)) => {
                 let starts: Vec<u32> = runs
                     .iter()
                     .filter(|r| r.new_group)
                     .map(|r| u32::try_from(r.start))
                     .collect::<std::result::Result<_, _>>()
                     .map_err(|_| internal("a batch over u32 rows".to_owned()))?;
-                pair::key_rows(data, keys, schema, &starts)?
+                pair::key_rows(data, key_values, schema, &starts)?
             }
             _ => None,
         };

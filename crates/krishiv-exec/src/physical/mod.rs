@@ -455,14 +455,17 @@ pub enum PhysNode {
     },
     /// An aggregate whose calls are all grouped-aggregate Python UDFs, over
     /// `input` clustered by the key columns and sorted by them: per group,
-    /// the keys, then one value per call.
+    /// the values of `key_values` in its first row, then one value per call.
     PythonAggregate {
         /// The input.
         input: Box<PhysNode>,
         /// The attribute of each input column.
         layout: Vec<AttrId>,
-        /// The key columns of `input`.
+        /// The columns of `input` groups are compared by: the keys, or a
+        /// collated key's comparison key.
         keys: Vec<usize>,
+        /// The key columns of `input` the output shows, as many as `keys`.
+        key_values: Vec<usize>,
         /// The calls, in output column order after the keys.
         calls: Vec<PythonCallPlan>,
     },
@@ -1071,7 +1074,7 @@ plan_data!(enum PhysNode {
     PythonMap { input, udf },
     PythonGroupMap { input, keys, udf },
     PythonCoGroupMap { input, keys, side, udf },
-    PythonAggregate { input, layout, keys, calls },
+    PythonAggregate { input, layout, keys, key_values, calls },
     Generate { input, layout, kind, outer, arg, subqueries },
     Expand { input, layout, projections, nullable, subqueries },
     Sort { input, keys },

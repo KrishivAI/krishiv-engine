@@ -362,11 +362,13 @@ impl Encoder {
                 input,
                 layout: l,
                 keys,
+                key_values,
                 calls,
             } => Kind::PythonAggregate(pb::PythonAggregateNode {
                 input: self.node_index(input)?,
                 layout: layout(l),
                 keys: indexes(keys),
+                key_values: indexes(key_values),
                 calls: calls
                     .iter()
                     .map(|c| {

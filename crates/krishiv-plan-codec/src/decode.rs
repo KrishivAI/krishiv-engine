@@ -571,6 +571,7 @@ impl Decoder {
                 input: self.boxed(p.input)?,
                 layout: layout(&p.layout),
                 keys: usizes(&p.keys)?,
+                key_values: usizes(&p.key_values)?,
                 calls: p
                     .calls
                     .iter()

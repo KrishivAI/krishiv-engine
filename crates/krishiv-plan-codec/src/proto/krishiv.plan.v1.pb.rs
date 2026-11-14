@@ -268,7 +268,8 @@ pub struct PythonCoGroupMapNode {
 }
 /// feature: python_udf_relations
 /// An aggregate of grouped-aggregate Python UDF calls over `input` clustered
-/// and sorted by the key columns.
+/// and sorted by the key columns (`keys`: a collated key's comparison key);
+/// each group shows its first row's `key_values`.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PythonAggregateNode {
     #[prost(uint32, tag = "1")]
@@ -279,6 +280,8 @@ pub struct PythonAggregateNode {
     pub keys: ::prost::alloc::vec::Vec<u64>,
     #[prost(message, repeated, tag = "4")]
     pub calls: ::prost::alloc::vec::Vec<PythonCall>,
+    #[prost(uint64, repeated, tag = "5")]
+    pub key_values: ::prost::alloc::vec::Vec<u64>,
 }
 /// feature: python_udf_relations
 /// The Python UDF of a relation node: by name and version, the columns of its

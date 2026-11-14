@@ -694,6 +694,35 @@ fn a_python_aggregate_yields_one_row_per_group() {
     assert!(rows.contains(&"5|1".to_owned()), "{rows:?}");
 }
 
+/// `SELECT k, udaf(b) ... GROUP BY k` of a `UTF8_LCASE` key: `K` and `k`
+/// are one group (Spark's `ArrowAggregatePythonExec` cuts groups with a
+/// `GroupedIterator` comparing keys by the collation, v4.2.0), and the key
+/// shown is a value of the group's own (its first row's), not the
+/// comparison key. The collation rewrite leaves the aggregate to the Python
+/// aggregate's planner, so no `any_value(k)` sits beside the UDAF.
+#[test]
+fn a_python_aggregate_groups_a_collated_key_by_its_collation() {
+    let env = env();
+    let (input, cols) = input(
+        &env,
+        "SELECT CASE WHEN b < 50 THEN 'K' ELSE 'k' END COLLATE UTF8_LCASE AS k, b FROM t",
+    );
+    let node = LogicalPlan::new(PlanNode::Aggregate {
+        input,
+        grouping: Grouping::GroupBy(vec![col(&cols[0])]),
+        aggregates: vec![col(&cols[0]), alias(udaf(&cols[1]), 950, "n")],
+    });
+    let out = run_with(&env, node, Some(Arc::new(Runtime::default()))).unwrap();
+    let rows = lines(&out);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert!(rows[0] == "K|10" || rows[0] == "k|10", "{rows:?}");
+    let key_type = out[0].schema().field(0).data_type().clone();
+    assert!(
+        matches!(key_type, ArrowType::Utf8 | ArrowType::Utf8View),
+        "the key column is the key's own, not its comparison key: {key_type}"
+    );
+}
+
 /// A scalar Python UDF call `plus1(arg)`.
 fn plus1(arg: Arc<Expr>) -> Arc<Expr> {
     Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(

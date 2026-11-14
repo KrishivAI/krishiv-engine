@@ -211,12 +211,14 @@ message PythonCoGroupMapNode {
 
 // feature: python_udf_relations
 // An aggregate of grouped-aggregate Python UDF calls over `input` clustered
-// and sorted by the key columns.
+// and sorted by the key columns (`keys`: a collated key's comparison key);
+// each group shows its first row's `key_values`.
 message PythonAggregateNode {
   uint32 input = 1;
   repeated uint64 layout = 2;
   repeated uint64 keys = 3;
   repeated PythonCall calls = 4;
+  repeated uint64 key_values = 5;
 }
 
 // feature: python_udf_relations

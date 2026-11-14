@@ -1827,6 +1827,7 @@ pub(crate) fn python_relations() -> Vec<(&'static str, PhysNode)> {
                 input: boxed(scan()),
                 layout: vec![AttrId(1), AttrId(2)],
                 keys: vec![0],
+                key_values: vec![1],
                 calls: vec![
                     krishiv_exec::physical::PythonCallPlan {
                         call: call(T::GroupedAggArrow),
