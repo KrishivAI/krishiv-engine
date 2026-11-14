@@ -21,7 +21,9 @@ work=$(mktemp -d)
 "$python" -m venv "$work/venv"
 py="$work/venv/bin/python"
 "$py" -m pip install --quiet --upgrade pip
-"$py" -m pip install --quiet "$dist"/*.whl pytest
+# --no-deps: the wheel requires pyarrow, which has no musllinux wheel and would build from source (an hour);
+# pyarrow comes from the binary-only loop below, and the smoke falls back to count() without it.
+"$py" -m pip install --quiet --no-deps "$dist"/*.whl pytest
 # Versions come from python/ci-interop-constraints.txt, the same pins ci.yml
 # and nightly.yml use, so every wheel leg tests against one known set.
 # pandas and numpy: the pandas_udf tests and the PySpark UDF conformance tests (T059 unit 3a); a missing wheel skips them.
