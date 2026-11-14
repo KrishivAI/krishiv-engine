@@ -118,6 +118,9 @@ pub(crate) struct NewManifests {
     pub(crate) manifests: Vec<ManifestFile>,
     /// The summary of the added files (added-* and partition summaries).
     pub(crate) added: HashMap<String, String>,
+    /// The locations of the data files the manifests list, deleted when the
+    /// write fails with every outcome known (design note §7.4).
+    pub(crate) data_files: Vec<String>,
     /// Attempts prepared so far (Java's `SnapshotProducer.attempt`).
     attempts: u32,
 }
@@ -140,6 +143,10 @@ pub(crate) async fn write_new_manifests(
 ) -> Result<NewManifests, KrishivError> {
     let schema = Arc::clone(metadata.current_schema());
     let dir = metadata_dir(metadata);
+    let data_files = files
+        .iter()
+        .map(|(_, f)| f.file_path().to_owned())
+        .collect();
     let mut by_spec: BTreeMap<i32, Vec<DataFile>> = BTreeMap::new();
     for (spec_id, f) in files {
         by_spec.entry(spec_id).or_default().push(f);
@@ -203,6 +210,7 @@ pub(crate) async fn write_new_manifests(
         commit_uuid: commit_uuid.to_owned(),
         manifests,
         added,
+        data_files,
         attempts: 0,
     })
 }
