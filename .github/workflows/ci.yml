@@ -599,6 +599,69 @@ jobs:
           CARGO_PROFILE_DEV_OVERFLOW_CHECKS: "false"
         run: cargo +nightly-2026-08-12 miri test -p krishiv-python --test stream_ffi --locked
 
+  # krishiv-udf-sandbox's suite inside a default Docker container (crate CLAUDE.md, "Tests owned
+  # by later PRs"): Docker's default seccomp profile decides whether Landlock and seccomp are
+  # reachable for a worker started in a container. The binaries are built on the runner and run
+  # in the runner's own OS image (same glibc), pinned by digest, with no extra capabilities and
+  # no seccomp or AppArmor override. `CI` is set, so the probe also asserts Landlock ABI 6+.
+  udf-sandbox-docker:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Path gate
+        id: gate
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          run=true
+          if [ "$EVENT" = "pull_request" ]; then
+            if ! git diff --name-only "$BASE_SHA...$HEAD_SHA" \
+              | grep -qE '^(crates/krishiv-udf-sandbox/|crates/krishiv-common/|\.github/workflows/ci\.yml$|Cargo\.(toml|lock)$|rust-toolchain\.toml$)'; then
+              run=false
+            fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "udf-sandbox-docker: run=$run"
+      - uses: $/.github/actions/setup-rust
+        if: steps.gate.outputs.run == 'true'
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.gate.outputs.run == 'true'
+      - name: Build the test binaries
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/sbx"
+          cargo test -p krishiv-udf-sandbox --no-run --locked --message-format=json \
+            | jq -r 'select(.reason == "compiler-artifact" and .profile.test == true and .executable != null) | .executable' \
+            | while read -r exe; do cp "$exe" "$RUNNER_TEMP/sbx/"; done
+          ls "$RUNNER_TEMP/sbx"
+          test "$(ls "$RUNNER_TEMP/sbx" | wc -l)" -ge 2
+      - name: Run them in a default container
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          # The digest pins ubuntu:26.04, the image ubuntu-latest runs (same glibc as the build).
+          docker run --rm -e CI=1 -v "$RUNNER_TEMP/sbx:/t:ro" \
+            ubuntu@sha256:6a06111c3b0a8600feadb270aec771dc239bf407b25625f93f44ab00e11f4d3c \
+            bash -euo pipefail -c '
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get -o Acquire::Retries=3 update -qq
+              apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends python3 > /dev/null
+              cd /tmp
+              for t in /t/*; do echo "== $t"; "$t"; done'
+
   # Budget measurement (pull requests only). This job only measures and uploads
   # `budgets-current.json`; the label-aware gate (`budgets` below)
   # compares it with the measurement main-measure.yml made on main for the
