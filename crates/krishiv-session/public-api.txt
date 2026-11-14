@@ -935,6 +935,7 @@ impl core::marker::StructuralPartialEq for krishiv_session::ExplainVerbose
 pub struct krishiv_session::GroupedData
 impl krishiv_session::GroupedData
 pub fn krishiv_session::GroupedData::agg(&self, impl core::iter::traits::collect::IntoIterator<Item = krishiv_session::Column>) -> krishiv_session::DataFrame
+pub fn krishiv_session::GroupedData::pivot(&self, krishiv_session::Column, impl core::iter::traits::collect::IntoIterator<Item = krishiv_session::Column>) -> krishiv_session::GroupedData
 impl core::clone::Clone for krishiv_session::GroupedData
 pub fn krishiv_session::GroupedData::clone(&self) -> krishiv_session::GroupedData
 impl core::fmt::Debug for krishiv_session::GroupedData

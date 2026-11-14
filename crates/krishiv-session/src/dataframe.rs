@@ -31,6 +31,7 @@ use crate::session::{QueryEnv, RecordBatchStream, Session, WriteTarget, read_fil
 pub(crate) mod checkpoint;
 mod fill_stream;
 mod geo_gate;
+mod pivot;
 mod traced;
 
 pub(crate) use fill_stream::{CacheFill, FillKind};
@@ -485,6 +486,7 @@ impl DataFrame {
             df: self.clone(),
             keys: keys.into_iter().map(|k| k.into().expr).collect(),
             sets,
+            pivot: None,
         }
     }
 
@@ -1829,6 +1831,8 @@ pub struct GroupedData {
     df: DataFrame,
     keys: Vec<Expr>,
     sets: Sets,
+    /// Set by [`GroupedData::pivot`].
+    pivot: Option<pivot::Pivoting>,
 }
 
 impl GroupedData {
@@ -1844,6 +1848,9 @@ impl GroupedData {
     #[must_use]
     pub fn agg(&self, aggregates: impl IntoIterator<Item = Column>) -> DataFrame {
         use krishiv_plan::ExprNode;
+        if let Some(p) = &self.pivot {
+            return self.pivot_agg(p, aggregates.into_iter().collect());
+        }
         // The output keeps `expr AS name`; the grouping expressions are the bare
         // `expr`, as `GROUP BY expr` in SQL: an alias is not an input column.
         let mut output: Vec<Arc<Expr>> = self.keys.iter().cloned().map(Arc::new).collect();

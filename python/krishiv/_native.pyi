@@ -150,6 +150,7 @@ class DataFrame:
 
 @final
 class GroupedData:
+    def pivot(self, col: Column, values: list[Column]) -> GroupedData: ...
     def agg(self, cols: list[Column]) -> DataFrame: ...
 
 @final
