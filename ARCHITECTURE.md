@@ -59,7 +59,7 @@ holds that crate's invariants, and the module docs (`//!`) at the top of the nam
 | Layer | Crates |
 |---|---|
 | L0 | `krishiv-common` (errors, config registry, redaction, secrets), `krishiv-alloc` |
-| L1 | `krishiv-types` (data types, `Batch`), `krishiv-memory` (pools, spill files), `krishiv-store` (object-store URLs, settings, store building), `krishiv-udf-sdk`, `krishiv-connector-sdk`, `krishiv-udf-sandbox` (the Python UDF workers' Landlock/seccomp sandbox) |
+| L1 | `krishiv-types` (data types, `Batch`), `krishiv-memory` (pools, spill files), `krishiv-store` (object-store URLs, settings, store building), `krishiv-udf-sdk`, `krishiv-connector-sdk`, `krishiv-udf-sandbox` (the Python UDF workers' Landlock/seccomp sandbox), `krishiv-arrow-bridge` (temporary: moves iceberg-rust's Arrow 58 values to Arrow 60 over the C Data Interface) |
 | L2 | `krishiv-kernels`, `krishiv-functions` (registry and bindings), `krishiv-io` (formats, scan, runtime filters) |
 | L3 | `krishiv-sql`, `krishiv-plan`, `krishiv-optimizer` |
 | L4 | `krishiv-exec`, `krishiv-plan-codec`, `krishiv-state`, `krishiv-stream` |

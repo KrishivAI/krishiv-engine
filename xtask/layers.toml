@@ -10,6 +10,7 @@ krishiv-common = 0
 krishiv-alloc = 0
 krishiv-types = 1
 krishiv-memory = 1
+krishiv-arrow-bridge = 1
 krishiv-udf-sdk = 1
 krishiv-connector-sdk = 1
 krishiv-store = 1

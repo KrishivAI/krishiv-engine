@@ -582,7 +582,7 @@ jobs:
           run=true
           if [ "$EVENT" = "pull_request" ]; then
             if ! git diff --name-only "$BASE_SHA...$HEAD_SHA" \
-              | grep -qE '^(crates/krishiv-kernels/|crates/krishiv-python/|crates/krishiv-common/|\.github/workflows/ci\.yml$|Cargo\.(toml|lock)$|rust-toolchain\.toml$)'; then
+              | grep -qE '^(crates/krishiv-kernels/|crates/krishiv-python/|crates/krishiv-arrow-bridge/|crates/krishiv-common/|\.github/workflows/ci\.yml$|Cargo\.(toml|lock)$|rust-toolchain\.toml$)'; then
               run=false
             fi
           fi
@@ -600,6 +600,9 @@ jobs:
       - name: Miri (Arrow C stream bridge of krishiv-python)
         if: steps.gate.outputs.run == 'true'
         run: cargo +nightly-2026-08-12 miri test -p krishiv-python --test stream_ffi --locked
+      - name: Miri (Arrow 58 to 60 bridge, krishiv-arrow-bridge)
+        if: steps.gate.outputs.run == 'true'
+        run: cargo +nightly-2026-08-12 miri test -p krishiv-arrow-bridge --locked
       # Wheels are dist builds (release settings, no overflow checks): hostile producer
       # headers must be rejected before arrow-rs computes with them, not by a
       # debug-build overflow panic.

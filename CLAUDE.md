@@ -96,8 +96,8 @@ New crate → add it to `xtask/layers.toml` and root `Cargo.toml`, and write its
   Murmur3 seed 42.
 - **Cargo features are additive only**; behaviour flags are runtime config `krishiv.*` / `krishiv.experimental.*`
   (ADR 0027).
-- **`unsafe` only** in krishiv-memory, krishiv-kernels and FFI crates (krishiv-python, SDK bridges), each block with
-  `// SAFETY:`; everything else `#![forbid(unsafe_code)]` (ADR 0029).
+- **`unsafe` only** in krishiv-memory, krishiv-kernels and FFI crates (krishiv-python, SDK bridges, the temporary
+  krishiv-arrow-bridge), each block with `// SAFETY:`; everything else `#![forbid(unsafe_code)]` (ADR 0029).
 - No `unwrap`/`expect`/`panic` in library code; `thiserror` errors with a Spark error class + SQLSTATE from
   the generated registry (`crates/krishiv-common/vendored/`, the union of Spark 4.2.1 and 4.3.0); no `anyhow` in libraries.
 - On-disk formats carry a version; N reads N−1 (ADR 0026). Public surfaces change only via ADR.
