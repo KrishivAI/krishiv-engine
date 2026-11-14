@@ -31,7 +31,7 @@ const ROWS: i64 = 1 << 16;
 const JAN_2024: i64 = 1_704_067_200_000_000;
 
 fn zones(c: &mut Criterion) {
-    // Trip times spread over the year (a clock change in March and October).
+    // Local times spread over 2024 (a clock change in March and October).
     let ntz = TimestampMicrosecondArray::from_iter_values(
         (0..ROWS).map(|i| JAN_2024 + (i * 481_211_011) % (366 * 86_400_000_000)),
     );

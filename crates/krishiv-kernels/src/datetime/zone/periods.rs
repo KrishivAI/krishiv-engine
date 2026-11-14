@@ -101,7 +101,9 @@ impl Periods {
                 return Some(offset);
             }
             // A gap at this period's end: the local time is past the end
-            // with this offset and before it with the next one.
+            // with this offset and before it with the next one. This assumes
+            // no later period holds the local time either, true of every
+            // zone in the database (`table_matches_jiff_in_every_zone`).
             if utc >= end
                 && let Some(&next) = self.offsets.get(i + 1)
                 && local - i64::from(next) < end
@@ -137,10 +139,19 @@ mod tests {
     }
 
     fn check(name: &str, zone: &TimeZone, table: &Periods, utc: i64, local: i64) {
-        if let Some(got) = table.offset_at_utc(utc) {
-            assert_eq!(got, jiff_at_utc(zone, utc), "{name}: offset at UTC {utc}");
+        // Inside the range the table must answer, or the fast path is lost.
+        if (FROM..TO).contains(&utc) {
+            let got = table.offset_at_utc(utc);
+            assert_eq!(
+                got,
+                Some(jiff_at_utc(zone, utc)),
+                "{name}: offset at UTC {utc}"
+            );
         }
-        if let Some(got) = table.offset_for_local(local) {
+        if (FROM + SWING..TO - SWING).contains(&local) {
+            let got = table.offset_for_local(local);
+            assert!(got.is_some(), "{name}: no table answer for local {local}");
+            let got = got.unwrap_or_default();
             if is_nuuk_2023(name, local) {
                 // `jiff` reads a fold here that its own `to_offset` and Java do
                 // not have (`nuuk_follows_java_where_jiff_reads_a_fold`).
