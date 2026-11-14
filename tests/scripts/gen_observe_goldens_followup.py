@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# ruff: noqa: E501, SIM115, B023
 """Follow-up Dataset.observe goldens (P3-T084, follow-up 2026-11-14). Real Spark 4.2.0 run, never transcribed.
 
 Sections (each case records a plan description, params, and what Spark did):
@@ -114,7 +115,7 @@ def with_timeout(f, secs=15):
     def run():
         try:
             box["v"] = f()
-        except BaseException as e:  # noqa: BLE001
+        except BaseException as e:
             box["e"] = e
 
     t = threading.Thread(target=run, daemon=True)
@@ -128,7 +129,11 @@ def with_timeout(f, secs=15):
 def getres(o, secs=10):
     st, v = with_timeout(lambda: o.get, secs)
     if st == "ok":
-        return {"get": "ok", "metrics": {k: norm(x) for k, x in v.items()}, "types": {k: type(x).__name__ for k, x in v.items()}}
+        return {
+            "get": "ok",
+            "metrics": {k: norm(x) for k, x in v.items()},
+            "types": {k: type(x).__name__ for k, x in v.items()},
+        }
     if st == "blocked":
         return {"get": "blocked"}
     return {"get": "error", **err(v)}
@@ -159,7 +164,7 @@ def reg(section, name, desc, params, result):
 def safe(section, name, desc, params, f):
     try:
         r = f()
-    except BaseException as e:  # noqa: BLE001
+    except BaseException as e:
         r = {"outcome": "error", **err(e)}
     reg(section, name, desc, params, r)
 
@@ -186,7 +191,7 @@ def obs_run(build, action, reps=REPS, plan_of=lambda d: d):
         df = build(*os_)
         try:
             res = norm(action(df))
-        except BaseException as e:  # noqa: BLE001
+        except BaseException as e:
             res = {"error": err(e)}
         runs.append({"action": res, "observed": [getres(o, 6) for o in os_ if _registered(o)]})
         if plan is None:
@@ -272,10 +277,12 @@ def mk_cases():
     add(
         "union_of_limit_branches",
         "observe(A:range P).limit(n) UNION ALL observe(B:range P).limit(n), each branch observed below its own limit",
-        lambda p, n, o1, o2: rng(p)
-        .observe(o1, F.count(F.lit(1)).alias("n"))
-        .limit(n)
-        .union(rng(p).observe(o2, F.count(F.lit(1)).alias("n")).limit(n)),
+        lambda p, n, o1, o2: (
+            rng(p)
+            .observe(o1, F.count(F.lit(1)).alias("n"))
+            .limit(n)
+            .union(rng(p).observe(o2, F.count(F.lit(1)).alias("n")).limit(n))
+        ),
     )
     add(
         "union_of_limit_branches_then_observe",
@@ -305,7 +312,11 @@ if MODE == "classic" or CONNECT:
                             spark.conf.set("spark.sql.autoBroadcastJoinThreshold", "-1")
                             spark.conf.set("spark.sql.join.preferSortMergeJoin", "true")
                         try:
-                            r = obs_run(lambda o1, o2: build(p, n, o1, o2), af, plan_of=(lambda d: d.groupBy().count()) if an == "count" else (lambda d: d))
+                            r = obs_run(
+                                lambda o1, o2: build(p, n, o1, o2),
+                                af,
+                                plan_of=(lambda d: d.groupBy().count()) if an == "count" else (lambda d: d),
+                            )
                         finally:
                             spark.conf.unset("spark.sql.autoBroadcastJoinThreshold")
                             spark.conf.unset("spark.sql.join.preferSortMergeJoin")
@@ -330,7 +341,7 @@ def ansi_case(name, desc, params, df_fn, exprs_fn, ansi, reps=5, build_ansi=None
                 spark.conf.set("spark.sql.ansi.enabled", ansi)  # run under `ansi`
                 try:
                     r = norm(d.count() if action == "count" else len(d.collect()))
-                except BaseException as e:  # noqa: BLE001
+                except BaseException as e:
                     r = {"error": err(e)}
                 runs.append({"action": r, **getres(o, 6)})
         finally:
@@ -351,60 +362,108 @@ def rint(p):
 
 
 def rdec(p):
-    return lambda: spark.range(0, 2, 1, p).select(F.expr("cast(99999999999999999999999999999999999999 as decimal(38,0))").alias("v"))
+    return lambda: spark.range(0, 2, 1, p).select(
+        F.expr("cast(99999999999999999999999999999999999999 as decimal(38,0))").alias("v")
+    )
 
 
 for ansi in ("true", "false"):
     for p in (1, 2):
         tag = f"ansi_{ansi}/P{p}"
         ansi_case(
-            f"sum_bigint_overflow/{tag}", f"observe(sum(v)) over bigint rows MAX-1 and MAX, {p} partition(s), count() action",
-            {"ansi": ansi, "partitions": p}, rbig(p), lambda: [F.sum("v").alias("s")], ansi,
+            f"sum_bigint_overflow/{tag}",
+            f"observe(sum(v)) over bigint rows MAX-1 and MAX, {p} partition(s), count() action",
+            {"ansi": ansi, "partitions": p},
+            rbig(p),
+            lambda: [F.sum("v").alias("s")],
+            ansi,
         )
         ansi_case(
-            f"avg_bigint/{tag}", f"observe(avg(v)) over bigint rows MAX-1 and MAX, {p} partition(s)",
-            {"ansi": ansi, "partitions": p}, rbig(p), lambda: [F.avg("v").alias("a")], ansi,
+            f"avg_bigint/{tag}",
+            f"observe(avg(v)) over bigint rows MAX-1 and MAX, {p} partition(s)",
+            {"ansi": ansi, "partitions": p},
+            rbig(p),
+            lambda: [F.avg("v").alias("a")],
+            ansi,
         )
         ansi_case(
-            f"sum_int_no_overflow/{tag}", f"observe(sum(v)) over int rows 3 x 2147483647 (result bigint), {p} partition(s)",
-            {"ansi": ansi, "partitions": p}, rint(p), lambda: [F.sum("v").alias("s"), F.avg("v").alias("a")], ansi,
+            f"sum_int_no_overflow/{tag}",
+            f"observe(sum(v)) over int rows 3 x 2147483647 (result bigint), {p} partition(s)",
+            {"ansi": ansi, "partitions": p},
+            rint(p),
+            lambda: [F.sum("v").alias("s"), F.avg("v").alias("a")],
+            ansi,
         )
         ansi_case(
-            f"sum_decimal_overflow/{tag}", f"observe(sum(v)) over 2 x decimal(38,0) 10^38-1, {p} partition(s)",
-            {"ansi": ansi, "partitions": p}, rdec(p), lambda: [F.sum("v").alias("s")], ansi,
+            f"sum_decimal_overflow/{tag}",
+            f"observe(sum(v)) over 2 x decimal(38,0) 10^38-1, {p} partition(s)",
+            {"ansi": ansi, "partitions": p},
+            rdec(p),
+            lambda: [F.sum("v").alias("s")],
+            ansi,
         )
         ansi_case(
-            f"avg_decimal_overflow/{tag}", f"observe(avg(v)) over 2 x decimal(38,0) 10^38-1, {p} partition(s)",
-            {"ansi": ansi, "partitions": p}, rdec(p), lambda: [F.avg("v").alias("a")], ansi,
+            f"avg_decimal_overflow/{tag}",
+            f"observe(avg(v)) over 2 x decimal(38,0) 10^38-1, {p} partition(s)",
+            {"ansi": ansi, "partitions": p},
+            rdec(p),
+            lambda: [F.avg("v").alias("a")],
+            ansi,
         )
         ansi_case(
-            f"try_sum_bigint_overflow/{tag}", f"observe(try_sum(v)) over bigint MAX-1, MAX, {p} partition(s)",
-            {"ansi": ansi, "partitions": p}, rbig(p), lambda: [F.try_sum("v").alias("s")], ansi,
+            f"try_sum_bigint_overflow/{tag}",
+            f"observe(try_sum(v)) over bigint MAX-1, MAX, {p} partition(s)",
+            {"ansi": ansi, "partitions": p},
+            rbig(p),
+            lambda: [F.try_sum("v").alias("s")],
+            ansi,
         )
         ansi_case(
-            f"add_in_metric_overflow/{tag}", f"observe(max(v)+1 ) over bigint MAX, {p} partition(s): non-aggregate Add overflows",
-            {"ansi": ansi, "partitions": p}, rbig(p), lambda: [(F.max("v") + 2).alias("p")], ansi,
+            f"add_in_metric_overflow/{tag}",
+            f"observe(max(v)+1 ) over bigint MAX, {p} partition(s): non-aggregate Add overflows",
+            {"ansi": ansi, "partitions": p},
+            rbig(p),
+            lambda: [(F.max("v") + 2).alias("p")],
+            ansi,
         )
 
 # EvalMode is baked into the aggregate expression when the Column is built, not read at action time.
 ansi_case(
-    "evalmode_built_off_run_on/P1", "Column built with ansi=false, action runs with ansi=true", {"build_ansi": "false", "run_ansi": "true", "partitions": 1},
-    rbig(1), lambda: [F.sum("v").alias("s")], "true", build_ansi="false",
+    "evalmode_built_off_run_on/P1",
+    "Column built with ansi=false, action runs with ansi=true",
+    {"build_ansi": "false", "run_ansi": "true", "partitions": 1},
+    rbig(1),
+    lambda: [F.sum("v").alias("s")],
+    "true",
+    build_ansi="false",
 )
 ansi_case(
-    "evalmode_built_on_run_off/P1", "Column built with ansi=true, action runs with ansi=false", {"build_ansi": "true", "run_ansi": "false", "partitions": 1},
-    rbig(1), lambda: [F.sum("v").alias("s")], "false", build_ansi="true",
+    "evalmode_built_on_run_off/P1",
+    "Column built with ansi=true, action runs with ansi=false",
+    {"build_ansi": "true", "run_ansi": "false", "partitions": 1},
+    rbig(1),
+    lambda: [F.sum("v").alias("s")],
+    "false",
+    build_ansi="true",
 )
 ansi_case(
     "evalmode_sql_string_built_off_run_on/P1",
     "F.expr('sum(v)') built with ansi=false, action runs with ansi=true",
     {"build_ansi": "false", "run_ansi": "true", "partitions": 1},
-    rbig(1), lambda: [F.expr("sum(v)").alias("s")], "true", build_ansi="false",
+    rbig(1),
+    lambda: [F.expr("sum(v)").alias("s")],
+    "true",
+    build_ansi="false",
 )
 # Same overflow but the action itself also runs the aggregate: shows the action does not hide the metric failure
 ansi_case(
-    "sum_bigint_overflow_collect/ansi_true/P2", "as sum_bigint_overflow P2 but collect() action", {"ansi": "true", "partitions": 2, "action": "collect"},
-    rbig(2), lambda: [F.sum("v").alias("s")], "true", action="collect",
+    "sum_bigint_overflow_collect/ansi_true/P2",
+    "as sum_bigint_overflow P2 but collect() action",
+    {"ansi": "true", "partitions": 2, "action": "collect"},
+    rbig(2),
+    lambda: [F.sum("v").alias("s")],
+    "true",
+    action="collect",
 )
 
 # ---------------------------------------------------------------- 3. proven-empty shapes
@@ -416,7 +475,7 @@ def empty_case(name, desc, build, action=lambda d: d.count(), classic_plan=True)
         d = build(o)
         try:
             res = norm(action(d))
-        except BaseException as e:  # noqa: BLE001
+        except BaseException as e:
             res = {"error": err(e)}
         out = {"action": res, **getres(o, 8)}
         if not CONNECT:
@@ -427,7 +486,9 @@ def empty_case(name, desc, build, action=lambda d: d.count(), classic_plan=True)
             with contextlib.suppress(Exception):
                 out["jvm_get_row"] = str(o._jo.getRow()).replace("\n", " ")[:120]
         else:
-            out["connect_flows"] = [[n, norm_flow(m)] for n, m in d.executionInfo.flows] if getattr(d, "executionInfo", None) else None
+            out["connect_flows"] = (
+                [[n, norm_flow(m)] for n, m in d.executionInfo.flows] if getattr(d, "executionInfo", None) else None
+            )
         return out
 
     safe("empty_shapes", name, desc, {}, f)
@@ -447,33 +508,110 @@ def OBS(o, df=None):
 
 empty_case("where_lit_false_above", "observe(range).where(lit(False))", lambda o: OBS(o).where(F.lit(False)))
 empty_case("where_false_sql_above", "observe(range).where('false')", lambda o: OBS(o).where("false"))
-empty_case("where_lit_null_above", "observe(range).where(lit(None).cast(boolean))", lambda o: OBS(o).where(F.lit(None).cast("boolean")))
+empty_case(
+    "where_lit_null_above",
+    "observe(range).where(lit(None).cast(boolean))",
+    lambda o: OBS(o).where(F.lit(None).cast("boolean")),
+)
 empty_case("where_1_eq_0_above", "observe(range).where('1 = 0')", lambda o: OBS(o).where("1 = 0"))
-empty_case("where_contradiction_above", "observe(range).where(v > 5 AND v < 0)  (not constant-foldable: data-dependent)", lambda o: OBS(o).where("v > 5 and v < 0"))
-empty_case("where_v_null_and_notnull_above", "observe(range).where(v IS NULL AND v IS NOT NULL)", lambda o: OBS(o).where("v is null and v is not null"))
-empty_case("where_lit_false_below", "range.where(lit(False)).observe  (empty below the node)", lambda o: OBS(o, base3().where(F.lit(False))))
+empty_case(
+    "where_contradiction_above",
+    "observe(range).where(v > 5 AND v < 0)  (not constant-foldable: data-dependent)",
+    lambda o: OBS(o).where("v > 5 and v < 0"),
+)
+empty_case(
+    "where_v_null_and_notnull_above",
+    "observe(range).where(v IS NULL AND v IS NOT NULL)",
+    lambda o: OBS(o).where("v is null and v is not null"),
+)
+empty_case(
+    "where_lit_false_below",
+    "range.where(lit(False)).observe  (empty below the node)",
+    lambda o: OBS(o, base3().where(F.lit(False))),
+)
 empty_case("limit0_above", "observe(range).limit(0)", lambda o: OBS(o).limit(0))
 empty_case("limit0_below", "range.limit(0).observe(n)", lambda o: OBS(o, base3().limit(0)))
 empty_case("filter_false_then_limit", "observe(range).where(false).limit(5)", lambda o: OBS(o).where("false").limit(5))
-empty_case("two_step_filter_false", "observe(range).where(v>1).where(false)", lambda o: OBS(o).where("v > 1").where("false"))
-empty_case("project_where_false_above", "observe(range).select(v+1).where(false)", lambda o: OBS(o).select((F.col("v") + 1).alias("w")).where("false"))
-empty_case("sort_where_false_above", "observe(range).orderBy(v).where(false)", lambda o: OBS(o).orderBy("v").where("false"))
-empty_case("groupby_where_false_above", "observe(range).where(false).groupBy(v).count()", lambda o: OBS(o).where("false").groupBy("v").count())
-empty_case("global_agg_where_false_above", "observe(range).where(false).agg(count(1))  (global aggregate keeps one row)", lambda o: OBS(o).where("false").agg(F.count(F.lit(1)).alias("c")), action=lambda d: d.collect())
-empty_case("inner_join_empty_local", "observe(range) JOIN (empty LocalRelation) ON v (inner join with empty side)", lambda o: OBS(o).join(spark.range(0, 3).where("false").toDF("v"), "v"))
-empty_case("inner_join_filtered_empty", "observe(range) JOIN range.where(false)", lambda o: OBS(o).join(base3().where("false"), "v"))
-empty_case("left_join_empty_right", "observe(range) LEFT JOIN range.where(false)  (left side must survive)", lambda o: OBS(o).join(base3().where("false"), "v", "left"))
-empty_case("right_join_empty_left_observed", "range.where(false) RIGHT JOIN observe(range)", lambda o: base3().where("false").join(OBS(o), "v", "right"))
-empty_case("left_semi_empty_right", "observe(range) LEFT SEMI JOIN range.where(false)", lambda o: OBS(o).join(base3().where("false"), "v", "left_semi"))
-empty_case("left_anti_empty_right", "observe(range) LEFT ANTI JOIN range.where(false)  (anti with empty right = left)", lambda o: OBS(o).join(base3().where("false"), "v", "left_anti"))
-empty_case("union_with_empty", "observe(range) UNION ALL range.where(false)", lambda o: OBS(o).union(base3().where("false")))
-empty_case("union_empty_first", "range.where(false) UNION ALL observe(range)", lambda o: base3().where("false").union(OBS(o)))
-empty_case("union_both_empty_above", "(observe(range).where(false)) UNION ALL range.where(false)", lambda o: OBS(o).where("false").union(base3().where("false")))
-empty_case("intersect_empty", "observe(range) INTERSECT range.where(false)", lambda o: OBS(o).intersect(base3().where("false")))
-empty_case("except_empty_right", "observe(range) EXCEPT range.where(false)", lambda o: OBS(o).exceptAll(base3().where("false")))
-empty_case("sample_fraction0", "observe(range).sample(0.0)  (not proven empty at plan time)", lambda o: OBS(o).sample(0.0, 1))
-empty_case("collect_empty_pruned", "observe(range).where(false) with collect()", lambda o: OBS(o).where("false"), action=lambda d: d.collect())
+empty_case(
+    "two_step_filter_false", "observe(range).where(v>1).where(false)", lambda o: OBS(o).where("v > 1").where("false")
+)
+empty_case(
+    "project_where_false_above",
+    "observe(range).select(v+1).where(false)",
+    lambda o: OBS(o).select((F.col("v") + 1).alias("w")).where("false"),
+)
+empty_case(
+    "sort_where_false_above", "observe(range).orderBy(v).where(false)", lambda o: OBS(o).orderBy("v").where("false")
+)
+empty_case(
+    "groupby_where_false_above",
+    "observe(range).where(false).groupBy(v).count()",
+    lambda o: OBS(o).where("false").groupBy("v").count(),
+)
+empty_case(
+    "global_agg_where_false_above",
+    "observe(range).where(false).agg(count(1))  (global aggregate keeps one row)",
+    lambda o: OBS(o).where("false").agg(F.count(F.lit(1)).alias("c")),
+    action=lambda d: d.collect(),
+)
+empty_case(
+    "inner_join_empty_local",
+    "observe(range) JOIN (empty LocalRelation) ON v (inner join with empty side)",
+    lambda o: OBS(o).join(spark.range(0, 3).where("false").toDF("v"), "v"),
+)
+empty_case(
+    "inner_join_filtered_empty",
+    "observe(range) JOIN range.where(false)",
+    lambda o: OBS(o).join(base3().where("false"), "v"),
+)
+empty_case(
+    "left_join_empty_right",
+    "observe(range) LEFT JOIN range.where(false)  (left side must survive)",
+    lambda o: OBS(o).join(base3().where("false"), "v", "left"),
+)
+empty_case(
+    "right_join_empty_left_observed",
+    "range.where(false) RIGHT JOIN observe(range)",
+    lambda o: base3().where("false").join(OBS(o), "v", "right"),
+)
+empty_case(
+    "left_semi_empty_right",
+    "observe(range) LEFT SEMI JOIN range.where(false)",
+    lambda o: OBS(o).join(base3().where("false"), "v", "left_semi"),
+)
+empty_case(
+    "left_anti_empty_right",
+    "observe(range) LEFT ANTI JOIN range.where(false)  (anti with empty right = left)",
+    lambda o: OBS(o).join(base3().where("false"), "v", "left_anti"),
+)
+empty_case(
+    "union_with_empty", "observe(range) UNION ALL range.where(false)", lambda o: OBS(o).union(base3().where("false"))
+)
+empty_case(
+    "union_empty_first", "range.where(false) UNION ALL observe(range)", lambda o: base3().where("false").union(OBS(o))
+)
+empty_case(
+    "union_both_empty_above",
+    "(observe(range).where(false)) UNION ALL range.where(false)",
+    lambda o: OBS(o).where("false").union(base3().where("false")),
+)
+empty_case(
+    "intersect_empty", "observe(range) INTERSECT range.where(false)", lambda o: OBS(o).intersect(base3().where("false"))
+)
+empty_case(
+    "except_empty_right", "observe(range) EXCEPT range.where(false)", lambda o: OBS(o).exceptAll(base3().where("false"))
+)
+empty_case(
+    "sample_fraction0", "observe(range).sample(0.0)  (not proven empty at plan time)", lambda o: OBS(o).sample(0.0, 1)
+)
+empty_case(
+    "collect_empty_pruned",
+    "observe(range).where(false) with collect()",
+    lambda o: OBS(o).where("false"),
+    action=lambda d: d.collect(),
+)
 empty_case("cache_then_where_false", "observe(range).cache().where(false)", lambda o: OBS(o).cache().where("false"))
+
 
 # first action pruned, second action not: classic first-wins vs connect last-wins interplay
 def _two():
@@ -486,7 +624,13 @@ def _two():
     return {"first_action_pruned": r1, "after_first": g1, "second_action": r2, "after_second": g2}
 
 
-safe("empty_shapes", "first_action_pruned_then_normal", "d=observe(range); d.where(false).count() then d.count() same Observation", {}, _two)
+safe(
+    "empty_shapes",
+    "first_action_pruned_then_normal",
+    "d=observe(range); d.where(false).count() then d.count() same Observation",
+    {},
+    _two,
+)
 
 # ---------------------------------------------------------------- 4. streaming
 
@@ -496,8 +640,15 @@ def stream_df():
 
 
 safe(
-    "streaming", "observation_object", "rate stream .observe(Observation(), count)", {"api": "observe(Observation, ...)"},
-    lambda: {"outcome": "ok_unexpected"} if stream_df().observe(Observation("m"), F.count(F.lit(1)).alias("c")) is not None else {},
+    "streaming",
+    "observation_object",
+    "rate stream .observe(Observation(), count)",
+    {"api": "observe(Observation, ...)"},
+    lambda: (
+        {"outcome": "ok_unexpected"}
+        if stream_df().observe(Observation("m"), F.count(F.lit(1)).alias("c")) is not None
+        else {}
+    ),
 )
 
 
@@ -508,7 +659,13 @@ def _stream_action():
     return {"outcome": "ok_unexpected"}
 
 
-safe("streaming", "observation_object_then_start", "rate stream .observe(Observation) then writeStream.start", {"api": "observe(Observation, ...)"}, _stream_action)
+safe(
+    "streaming",
+    "observation_object_then_start",
+    "rate stream .observe(Observation) then writeStream.start",
+    {"api": "observe(Observation, ...)"},
+    _stream_action,
+)
 
 
 def _stream_string():
@@ -521,12 +678,20 @@ def _stream_string():
         "outcome": "ok",
         "has_observedMetrics_in_progress": bool(prog),
         "observedMetrics_keys": sorted(prog[-1]["observedMetrics"].keys()) if prog else None,
-        "metric_names": sorted(prog[-1]["observedMetrics"]["sm"].asDict().keys()) if prog and "sm" in prog[-1]["observedMetrics"] else None,
+        "metric_names": sorted(prog[-1]["observedMetrics"]["sm"].asDict().keys())
+        if prog and "sm" in prog[-1]["observedMetrics"]
+        else None,
         "note": "per-microbatch values are scheduling-dependent and not recorded",
     }
 
 
-safe("streaming", "string_name_observe_runs", "rate stream .observe('sm', count, max) writeStream memory 6s; metrics in StreamingQueryProgress.observedMetrics", {"api": "observe(str, ...)"}, _stream_string)
+safe(
+    "streaming",
+    "string_name_observe_runs",
+    "rate stream .observe('sm', count, max) writeStream memory 6s; metrics in StreamingQueryProgress.observedMetrics",
+    {"api": "observe(str, ...)"},
+    _stream_string,
+)
 
 # ---------------------------------------------------------------- 5. value types
 
@@ -546,39 +711,108 @@ def types_case(name, desc, expr_sql):
 
 
 T = [
-    ("struct", "struct(max(i) AS mx, min(i) AS mn, collect_list(k) AS l)", [("v", "struct(max(i) as mx, min(i) as mn, collect_list(k) as l)")]),
-    ("struct_with_null_field", "struct(max(x), cast(null as string))", [("v", "struct(max(x) as mx, cast(null as string) as ns)")]),
-    ("struct_nested", "struct(struct(max(i)) AS inner, array(min(i)) AS arr)", [("v", "named_struct('inner', named_struct('a', max(i)), 'arr', array(min(i)))")]),
+    (
+        "struct",
+        "struct(max(i) AS mx, min(i) AS mn, collect_list(k) AS l)",
+        [("v", "struct(max(i) as mx, min(i) as mn, collect_list(k) as l)")],
+    ),
+    (
+        "struct_with_null_field",
+        "struct(max(x), cast(null as string))",
+        [("v", "struct(max(x) as mx, cast(null as string) as ns)")],
+    ),
+    (
+        "struct_nested",
+        "struct(struct(max(i)) AS inner, array(min(i)) AS arr)",
+        [("v", "named_struct('inner', named_struct('a', max(i)), 'arr', array(min(i)))")],
+    ),
     ("map_string_int", "map('a', max(i), 'b', min(i))", [("v", "map('a', max(i), 'b', min(i))")]),
-    ("map_with_null_value", "map('a', max(x), 'b', cast(null as double))", [("v", "map('a', cast(null as double), 'b', max(x))")]),
+    (
+        "map_with_null_value",
+        "map('a', max(x), 'b', cast(null as double))",
+        [("v", "map('a', cast(null as double), 'b', max(x))")],
+    ),
     ("map_int_key", "map(1, max(k))", [("v", "map(1, max(k))")]),
-    ("map_agg", "map_from_arrays(collect_list(k), collect_list(i))", [("v", "map_from_arrays(collect_list(k), collect_list(i))")]),
-    ("map_empty", "map_from_arrays(collect_list(k), collect_list(i)) over zero rows", [("v", "map_from_arrays(collect_list(k), collect_list(i))")]),
+    (
+        "map_agg",
+        "map_from_arrays(collect_list(k), collect_list(i))",
+        [("v", "map_from_arrays(collect_list(k), collect_list(i))")],
+    ),
+    (
+        "map_empty",
+        "map_from_arrays(collect_list(k), collect_list(i)) over zero rows",
+        [("v", "map_from_arrays(collect_list(k), collect_list(i))")],
+    ),
     ("array_int", "collect_list(i)", [("v", "collect_list(i)")]),
-    ("array_with_null", "collect_list(x) (nulls skipped) and array(max(x), null)", [("a", "collect_list(x)"), ("b", "array(max(x), cast(null as double))")]),
+    (
+        "array_with_null",
+        "collect_list(x) (nulls skipped) and array(max(x), null)",
+        [("a", "collect_list(x)"), ("b", "array(max(x), cast(null as double))")],
+    ),
     ("array_of_struct", "collect_list(struct(i, k))", [("v", "collect_list(struct(i, k))")]),
-    ("array_nan", "array(cast('NaN' as double), cast(-0.0 as double), max(x))", [("v", "array(cast('NaN' as double), cast('-Infinity' as double), max(x))")]),
+    (
+        "array_nan",
+        "array(cast('NaN' as double), cast(-0.0 as double), max(x))",
+        [("v", "array(cast('NaN' as double), cast('-Infinity' as double), max(x))")],
+    ),
     ("array_empty", "collect_list(i) over zero rows", [("v", "collect_list(i)")]),
     ("binary_max", "max(bin)  (non-UTF-8 bytes)", [("v", "max(bin)")]),
     ("binary_first_lit", "first(X'FF00FE')", [("v", "first(X'FF00FE')")]),
     ("binary_collect", "collect_list(bin)", [("v", "collect_list(bin)")]),
-    ("interval_daytime", "max(make_dt_interval(0, 0, 0, i))  (INTERVAL DAY TO SECOND)", [("v", "max(make_dt_interval(i, 0, 0, 0))")]),
+    (
+        "interval_daytime",
+        "max(make_dt_interval(0, 0, 0, i))  (INTERVAL DAY TO SECOND)",
+        [("v", "max(make_dt_interval(i, 0, 0, 0))")],
+    ),
     ("interval_daytime_sum", "sum(make_dt_interval(i,1,2,3.5))", [("v", "sum(make_dt_interval(i, 1, 2, 3.5))")]),
-    ("interval_yearmonth", "max(make_ym_interval(0, i))  (INTERVAL YEAR TO MONTH)", [("v", "max(make_ym_interval(0, i))")]),
+    (
+        "interval_yearmonth",
+        "max(make_ym_interval(0, i))  (INTERVAL YEAR TO MONTH)",
+        [("v", "max(make_ym_interval(0, i))")],
+    ),
     ("interval_yearmonth_sum", "sum(make_ym_interval(1, i))", [("v", "sum(make_ym_interval(1, i))")]),
-    ("interval_calendar", "first(make_interval(0, 0, 0, i, 1, 2, 3.5))  (CalendarIntervalType)", [("v", "first(make_interval(0, 0, 0, i, 1, 2, 3.5))")]),
-    ("interval_literal_dt", "first(INTERVAL '1 02:03:04.5' DAY TO SECOND)", [("v", "first(INTERVAL '1 02:03:04.5' DAY TO SECOND)")]),
+    (
+        "interval_calendar",
+        "first(make_interval(0, 0, 0, i, 1, 2, 3.5))  (CalendarIntervalType)",
+        [("v", "first(make_interval(0, 0, 0, i, 1, 2, 3.5))")],
+    ),
+    (
+        "interval_literal_dt",
+        "first(INTERVAL '1 02:03:04.5' DAY TO SECOND)",
+        [("v", "first(INTERVAL '1 02:03:04.5' DAY TO SECOND)")],
+    ),
     ("decimal", "sum(cast(i as decimal(10,2)))", [("v", "sum(cast(i as decimal(10,2)))")]),
     ("date", "max(date'2024-02-29' + i)", [("v", "max(date'2024-02-29' + i)")]),
-    ("timestamp", "max(timestamp'2024-03-10 01:59:59Z' + make_dt_interval(0,0,0,i))", [("v", "max(timestamp'2024-03-10 01:59:59Z' + make_dt_interval(0,0,0,i))")]),
-    ("timestamp_ntz", "max(timestamp_ntz'2024-03-10 01:59:59.123456' )", [("v", "max(timestamp_ntz'2024-03-10 01:59:59.123456')")]),
-    ("long_max", "max(cast(9223372036854775807 as bigint)) and min(-9223372036854775808)", [("a", "max(cast(9223372036854775807 as bigint))"), ("b", "min(cast(-9223372036854775808 as bigint))")]),
-    ("boolean_null_string", "bool_and(i > 0), max(cast(null as string)), first(k)", [("a", "bool_and(i > 0)"), ("b", "max(cast(null as string))"), ("c", "first(k)")]),
-    ("float_special", "max(cast('NaN' as float)), min(cast('-Infinity' as double))", [("a", "max(cast('NaN' as float))"), ("b", "min(cast('-Infinity' as double))")]),
+    (
+        "timestamp",
+        "max(timestamp'2024-03-10 01:59:59Z' + make_dt_interval(0,0,0,i))",
+        [("v", "max(timestamp'2024-03-10 01:59:59Z' + make_dt_interval(0,0,0,i))")],
+    ),
+    (
+        "timestamp_ntz",
+        "max(timestamp_ntz'2024-03-10 01:59:59.123456' )",
+        [("v", "max(timestamp_ntz'2024-03-10 01:59:59.123456')")],
+    ),
+    (
+        "long_max",
+        "max(cast(9223372036854775807 as bigint)) and min(-9223372036854775808)",
+        [("a", "max(cast(9223372036854775807 as bigint))"), ("b", "min(cast(-9223372036854775808 as bigint))")],
+    ),
+    (
+        "boolean_null_string",
+        "bool_and(i > 0), max(cast(null as string)), first(k)",
+        [("a", "bool_and(i > 0)"), ("b", "max(cast(null as string))"), ("c", "first(k)")],
+    ),
+    (
+        "float_special",
+        "max(cast('NaN' as float)), min(cast('-Infinity' as double))",
+        [("a", "max(cast('NaN' as float))"), ("b", "min(cast('-Infinity' as double))")],
+    ),
     ("unicode", "max('日本語 é 😀')", [("v", "max('日本語 é 😀')")]),
 ]
 for nm, desc, ex in T:
     if nm in ("map_empty", "array_empty"):
+
         def f(ex=ex):
             o = Observation()
             d = spark.sql("select 1 as i, 'a' as k where 1=0").observe(o, *[F.expr(s).alias(a) for a, s in ex])
