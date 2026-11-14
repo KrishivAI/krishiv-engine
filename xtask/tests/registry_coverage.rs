@@ -139,7 +139,7 @@ fn engine_raised_set_of_this_repo_is_a_small_subset_of_the_catalog() {
     )
     .unwrap();
     let catalog = parse_error_classes(&json).unwrap();
-    assert!(catalog.len() > 1_900, "full Spark 4.2.0 catalog is loaded");
+    assert!(catalog.len() > 1_900, "full Spark 4.3.0 catalog is loaded");
     let in_use = raised(&catalog, &collect_engine(root));
     // A detector that matched the whole catalog (the bug this guards
     // against) would far exceed this bound; the engine's raised set grows
