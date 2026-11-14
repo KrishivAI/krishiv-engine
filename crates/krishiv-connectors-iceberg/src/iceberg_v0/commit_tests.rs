@@ -1288,6 +1288,33 @@ fn a_replaced_table_is_a_conflict() {
     c.check(&[INIT]);
 }
 
+/// Re-review nit 4: a conflict found while a request is still unresolved is
+/// `KRISHIV_ICEBERG_COMMIT_STATE_UNKNOWN` naming the conflict, without the
+/// conflict error's "files removed" text, and nothing is deleted.
+#[test]
+fn a_conflict_while_unresolved_names_it_and_deletes_nothing() {
+    let mut c = case();
+    c.cat.script(&[Fault::Held]);
+    let update: TableUpdate = serde_json::from_value(serde_json::json!({
+        "action": "assign-uuid",
+        "uuid": "0b8f1e0c-1d2e-4f3a-9b4c-5d6e7f809a1b",
+    }))
+    .unwrap();
+    c.cat.on(
+        When::BeforeRequest(2),
+        Box::new(move |_| Box::pin(async move { (vec![], vec![update]) })),
+    );
+    let e = c.run().unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergCommitStateUnknown,
+        "{e}"
+    );
+    assert!(e.message().contains("UUID"), "{e}");
+    assert!(!e.message().contains("removed"), "{e}");
+    assert!(exists(&c.list(1)) && exists(&c.manifest()) && exists(&c.data()));
+}
+
 /// R:S2, §7.3 step 4a.0: a v1 → v3 upgrade under an append is a conflict
 /// (only v2 → v3 is rebased; Java reuses its manifests across any upgrade,
 /// a divergence toward refusal).
@@ -1363,7 +1390,14 @@ fn sweep_one(seed: u64) {
         }
         c.cat.on(g.when(), c.foreign(&name, id, branch));
     }
-    c.cat.fail_loads(g.below(3) * g.below(4));
+    // One schedule in four fails 4-8 loads, enough to outlast a conflict's
+    // refresh (B1's shape: a conflict, then no successful load).
+    let failing = if g.below(4) == 0 {
+        4 + g.below(5)
+    } else {
+        g.below(3)
+    };
+    c.cat.fail_loads(failing);
     if g.below(2) == 0 {
         c.cat.land_held_at(g.when());
     }

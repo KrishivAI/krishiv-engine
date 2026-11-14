@@ -583,7 +583,8 @@ fn a_write_cancelled_during_its_commit_deletes_nothing() {
     );
     assert!(out.is_err());
     assert_eq!(settled(&pool), 0);
-    // Give any (wrong) background delete time to run.
+    // Give any (wrong) background delete time to run. A fixed wait cannot
+    // fail spuriously, but a delete slower than this would pass unseen.
     std::thread::sleep(Duration::from_millis(500));
     let files = parquet_files(&env, false);
     assert_eq!(files.len(), 1, "{files:?}");

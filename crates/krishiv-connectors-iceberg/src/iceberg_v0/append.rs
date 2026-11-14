@@ -226,6 +226,12 @@ pub(crate) struct WriteIds<'a> {
     /// key match under another id only after (`commit.rs`, R:S1); a key
     /// found under another id means "this write is in the table", and this
     /// execution's files are then orphans.
+    ///
+    /// The key is matched over every snapshot of the table, not only the
+    /// branch's ancestry, so a key is one write to one branch: a caller must
+    /// never reuse it for a write to another branch (re-review nit 2; only
+    /// `main` is written today, and branch writes, PR-36d, must either keep
+    /// this or restrict the match to the target branch's ancestry).
     pub(crate) write_id: &'a str,
     /// The query that wrote, when known.
     pub(crate) query_id: Option<&'a str>,

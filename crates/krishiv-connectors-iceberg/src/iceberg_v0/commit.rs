@@ -44,8 +44,13 @@
 //!   `COMMIT_STATUS_CHECKS_MIN_WAIT_MS` (1 s), `COMMIT_STATUS_CHECKS_MAX_WAIT_MS`
 //!   (60 s). Waits are Java's `Tasks.runTaskWithRetry` backoff: after the n-th
 //!   failure `min(min-wait * 2^(n-1), max-wait)` plus a jitter below a tenth of
-//!   it. A property that is not a number is `KRISHIV_UNSUPPORTED_FEATURE`
-//!   (Java: `NumberFormatException`), before any request.
+//!   it. The total time counts from the first request: a wait is skipped and
+//!   the budget ends once `COMMIT_TOTAL_RETRY_TIME_MS` has passed, so a
+//!   first failure after the timeout retries no more (not yet checked against
+//!   Java's `Tasks.runTaskWithRetry`, which may allow one retry there; the
+//!   source was not readable in the review sessions, review N1). A property
+//!   that is not a number is `KRISHIV_UNSUPPORTED_FEATURE` (Java:
+//!   `NumberFormatException`), before any request.
 //! - **Outcomes and cleanup** (§7.4): committed → the table's new metadata;
 //!   the manifest lists of every other attempt and the manifests the found
 //!   snapshot does not list are deleted, never a data file. Every outcome known
@@ -240,6 +245,10 @@ pub(crate) async fn commit_append(
 enum End {
     /// The budget (requests or time) ran out.
     Exhausted,
+    /// A conflict with the table (§7.3), kept apart so that a run with a
+    /// request still unresolved names it without the error's "files removed"
+    /// text (review nit 4).
+    Conflict(Box<KrishivIcebergCommitConflict>),
     /// An error; its own request's outcome (if any) known.
     Error(KrishivError),
 }
@@ -578,19 +587,16 @@ impl Loop<'_> {
 
     /// `KRISHIV_ICEBERG_COMMIT_CONFLICT` against `m`'s branch head.
     fn conflict(&self, m: &TableMetadata, check: &str, message: String) -> End {
-        End::Error(
-            KrishivIcebergCommitConflict {
-                table: self.table.name(),
-                snapshot_id: self.snapshot_id.to_string(),
-                conflicting_snapshot_id: self
-                    .head(m)
-                    .flatten()
-                    .map_or_else(|| "none".to_owned(), |id| id.to_string()),
-                check: check.to_owned(),
-                message,
-            }
-            .into(),
-        )
+        End::Conflict(Box::new(KrishivIcebergCommitConflict {
+            table: self.table.name(),
+            snapshot_id: self.snapshot_id.to_string(),
+            conflicting_snapshot_id: self
+                .head(m)
+                .flatten()
+                .map_or_else(|| "none".to_owned(), |id| id.to_string()),
+            check: check.to_owned(),
+            message,
+        }))
     }
 
     /// §7.4 committed: keep the found snapshot's list and the manifests it
@@ -637,6 +643,10 @@ impl Loop<'_> {
                     "the retry budget ran out after {} requests, the last answered with: {}",
                     self.requests, self.last_answer
                 ),
+                End::Conflict(c) => format!(
+                    "a conflict with the table at snapshot {} ({}): {}",
+                    c.conflicting_snapshot_id, c.check, c.message
+                ),
                 End::Error(e) => e.to_string(),
             };
             return KrishivIcebergCommitStateUnknown {
@@ -657,6 +667,7 @@ impl Loop<'_> {
                 reason: self.last_answer.clone(),
             }
             .into(),
+            End::Conflict(c) => (*c).into(),
             End::Error(e) => e,
         }
     }
