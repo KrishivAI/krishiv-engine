@@ -134,17 +134,28 @@ fn table(
 
 fn writer(env: &Env, m: &TableMetadata, max_open: usize) -> DataFileWriter {
     let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    writer_in(env, m, max_open, 7, &pool)
+}
+
+/// A writer of attempt `attempt_id` of partition 3 charging `pool`.
+fn writer_in(
+    env: &Env,
+    m: &TableMetadata,
+    max_open: usize,
+    attempt_id: u64,
+    pool: &Arc<dyn MemoryPool>,
+) -> DataFileWriter {
     let id = pool.register("write", None);
     DataFileWriter::new(
         m,
         &env.reg,
         TaskIds {
             partition_id: 3,
-            task_id: 7,
+            attempt_id,
             write_id: "w1",
         },
         max_open,
-        Reservation::new(pool, id),
+        Reservation::new(Arc::clone(pool), id),
     )
     .unwrap()
 }
@@ -495,7 +506,7 @@ fn parquet_settings_from_the_table_properties() {
             &env.reg,
             TaskIds {
                 partition_id: 0,
-                task_id: 0,
+                attempt_id: 0,
                 write_id: "w",
             },
             100,
@@ -660,7 +671,8 @@ fn failed_upload_deletes_the_finished_files() {
     let store = Arc::new(FailThird(object_store::local::LocalFileSystem::new()));
     let env = env_on(store, krishiv_io::IoConfig::default());
     let m = table(&env, "t", &[], &[("write.target-file-size-bytes", "1")]);
-    let w = writer(&env, &m, DEFAULT_MAX_OPEN_FILES);
+    let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    let w = writer_in(&env, &m, DEFAULT_MAX_OPEN_FILES, 7, &pool);
     let e = env.rt.block_on(async {
         let mut w = w;
         let r = w.write(&rows_batch(0, 3_500)).await;
@@ -675,6 +687,7 @@ fn failed_upload_deletes_the_finished_files() {
     let e = e.unwrap_err().to_string();
     assert!(e.contains("00003-7-w1-00003.parquet"), "{e}");
     assert_eq!(parquet_files(env.dir.path()), Vec::<String>::new());
+    assert_eq!(pool.reserved(), 0);
 }
 
 /// The local file system refusing writes of files named `*-00003.parquet`.
@@ -743,6 +756,425 @@ impl object_store::ObjectStore for FailThird {
         >,
     ) -> futures::stream::BoxStream<'static, object_store::Result<object_store::path::Path>> {
         self.0.delete_stream(locations)
+    }
+
+    fn list(
+        &self,
+        prefix: Option<&object_store::path::Path>,
+    ) -> futures::stream::BoxStream<'static, object_store::Result<object_store::ObjectMeta>> {
+        self.0.list(prefix)
+    }
+
+    async fn list_with_delimiter(
+        &self,
+        prefix: Option<&object_store::path::Path>,
+    ) -> object_store::Result<object_store::ListResult> {
+        self.0.list_with_delimiter(prefix).await
+    }
+
+    async fn copy_opts(
+        &self,
+        from: &object_store::path::Path,
+        to: &object_store::path::Path,
+        options: object_store::CopyOptions,
+    ) -> object_store::Result<()> {
+        self.0.copy_opts(from, to, options).await
+    }
+}
+
+/// Two attempts of one task (attempt ids 7 and 8, Java's `taskAttemptId`)
+/// name their files apart, so the failed attempt's abort never deletes the
+/// retry's files.
+#[test]
+fn attempts_of_one_task_name_their_files_apart() {
+    let env = env();
+    let m = table(&env, "t", &[], &[]);
+    let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    let mut failed = writer_in(&env, &m, DEFAULT_MAX_OPEN_FILES, 7, &pool);
+    let retry = writer_in(&env, &m, DEFAULT_MAX_OPEN_FILES, 8, &pool);
+    env.rt.block_on(failed.write(&rows_batch(0, 10))).unwrap();
+    let files = write_all(&env, retry, &[rows_batch(0, 10)]);
+    env.rt.block_on(failed.abort());
+    assert_eq!(files.len(), 1);
+    assert!(files[0].location.ends_with("/00003-8-w1-00001.parquet"));
+    assert_eq!(
+        parquet_files(env.dir.path()),
+        [local(&files[0].location).to_owned()]
+    );
+}
+
+/// An `abort` dropped while its first delete is pending, then the writer
+/// dropped: every finished file is still deleted.
+#[test]
+fn abort_dropped_midway_still_deletes_every_file() {
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let store = Arc::new(GatedDeletes(
+        object_store::local::LocalFileSystem::new(),
+        Arc::clone(&gate),
+    ));
+    let env = env_on(store, krishiv_io::IoConfig::default());
+    let m = table(&env, "t", &[], &[("write.target-file-size-bytes", "1")]);
+    let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    let mut w = writer_in(&env, &m, DEFAULT_MAX_OPEN_FILES, 7, &pool);
+    env.rt.block_on(w.write(&rows_batch(0, 2_500))).unwrap();
+    assert_eq!(parquet_files(env.dir.path()).len(), 2);
+    env.rt.block_on(async move {
+        let mut abort = Box::pin(w.abort());
+        let polled =
+            std::future::poll_fn(|cx| std::task::Poll::Ready(abort.as_mut().poll(cx).is_ready()))
+                .await;
+        assert!(!polled, "the first delete waits on the gate");
+        drop(abort);
+    });
+    gate.add_permits(1_000);
+    for _ in 0..500 {
+        if parquet_files(env.dir.path()).is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(parquet_files(env.dir.path()), Vec::<String>::new());
+}
+
+/// The reservation is back to 0 after `finish` and after `abort`.
+#[test]
+fn reservation_released_after_finish_and_abort() {
+    let env = env();
+    let m = table(&env, "t", &[("day", Transform::Day)], &[]);
+    let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    let mut w = writer_in(&env, &m, DEFAULT_MAX_OPEN_FILES, 7, &pool);
+    env.rt.block_on(w.write(&rows_batch(0, 3_000))).unwrap();
+    assert!(pool.reserved() > 0, "open files hold memory");
+    env.rt.block_on(w.finish()).unwrap();
+    assert_eq!(pool.reserved(), 0);
+    let mut w = writer_in(&env, &m, DEFAULT_MAX_OPEN_FILES, 8, &pool);
+    env.rt.block_on(w.write(&rows_batch(0, 3_000))).unwrap();
+    env.rt.block_on(w.abort());
+    assert_eq!(pool.reserved(), 0);
+}
+
+/// Rows whose encoded row group outgrows a small pool: the writer flushes
+/// (more row groups than the row-group size alone gives), ships the bytes and
+/// still writes every row, then releases everything.
+#[test]
+fn memory_pressure_flushes_and_still_writes_every_row() {
+    let env = env();
+    let m = table(
+        &env,
+        "t",
+        &[("day", Transform::Day)],
+        &[("write.parquet.compression-codec", "uncompressed")],
+    );
+    let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig {
+        limit: Some(24 << 20),
+        ..MemoryConfig::default()
+    });
+    let mut w = writer_in(&env, &m, DEFAULT_MAX_OPEN_FILES, 7, &pool);
+    let n = 240_000;
+    let files = env.rt.block_on(async {
+        for start in (0..n).step_by(20_000) {
+            w.write(&noisy_batch(start, 20_000)).await.unwrap();
+        }
+        w.finish().await.unwrap()
+    });
+    assert_eq!(pool.reserved(), 0);
+    assert_eq!(files.len(), 3);
+    assert_eq!(files.iter().map(|f| f.rows).sum::<u64>(), n.cast_unsigned());
+    for f in &files {
+        let file = std::fs::File::open(local(&f.location)).unwrap();
+        let b = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        assert!(b.metadata().num_row_groups() > 1, "{}", f.location);
+        assert_eq!(read(&f.location).num_rows() as u64, f.rows);
+    }
+}
+
+/// [`rows_batch`]'s shape with long names that do not repeat (they defeat
+/// dictionary encoding).
+fn noisy_batch(start: i64, n: usize) -> RecordBatch {
+    let b = rows_batch(start, n);
+    let names: Vec<String> = (start..start + n as i64)
+        .map(|i| {
+            let mut x = i.cast_unsigned().wrapping_mul(0x9e37_79b9_7f4a_7c15);
+            (0..6)
+                .map(|_| {
+                    x ^= x >> 29;
+                    x = x.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+                    format!("{x:016x}")
+                })
+                .collect()
+        })
+        .collect();
+    let mut columns = b.columns().to_vec();
+    columns[1] = Arc::new(StringViewArray::from(names));
+    RecordBatch::try_new(b.schema(), columns).unwrap()
+}
+
+/// id long (1), xs list<int> (2, element 3), m map<string, int> (4, key 5,
+/// value 6).
+fn nested_schema() -> IcebergSchema {
+    use iceberg::spec::{ListType, MapType};
+    IcebergSchema::builder()
+        .with_fields(vec![
+            NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+            NestedField::optional(
+                2,
+                "xs",
+                Type::List(ListType::new(
+                    NestedField::list_element(3, Type::Primitive(PrimitiveType::Int), false).into(),
+                )),
+            )
+            .into(),
+            NestedField::optional(
+                4,
+                "m",
+                Type::Map(MapType::new(
+                    NestedField::map_key_element(5, Type::Primitive(PrimitiveType::String)).into(),
+                    NestedField::map_value_element(6, Type::Primitive(PrimitiveType::Int), false)
+                        .into(),
+                )),
+            )
+            .into(),
+        ])
+        .build()
+        .unwrap()
+}
+
+/// `dt` without field metadata at any depth.
+fn strip(dt: &A) -> A {
+    let field = |f: &arrow_schema::FieldRef| {
+        Arc::new(
+            f.as_ref()
+                .clone()
+                .with_metadata(HashMap::new())
+                .with_data_type(strip(f.data_type())),
+        )
+    };
+    match dt {
+        A::List(f) => A::List(field(f)),
+        A::Map(f, sorted) => A::Map(field(f), *sorted),
+        A::Struct(fs) => A::Struct(fs.iter().map(field).collect()),
+        other => other.clone(),
+    }
+}
+
+/// List and map columns of a sliced batch without field ids: the element,
+/// key and value ids reach the footer and the values read back.
+#[test]
+fn list_and_map_columns_of_a_sliced_batch() {
+    use arrow_array::builder::{Int32Builder, ListBuilder, MapBuilder, StringViewBuilder};
+    let env = env();
+    let creation = TableCreation::builder()
+        .name("nested".to_owned())
+        .schema(nested_schema())
+        .build();
+    let m = env.rt.block_on(async {
+        env.catalog
+            .create_table(&NamespaceIdent::new("db".to_owned()), creation)
+            .await
+            .unwrap()
+            .metadata()
+            .clone()
+    });
+    let target = super::types::arrow_schema(m.current_schema()).unwrap();
+    let mut xs = ListBuilder::new(Int32Builder::new());
+    let mut map = MapBuilder::new(None, StringViewBuilder::new(), Int32Builder::new());
+    for i in 0..6_i32 {
+        for j in 0..i {
+            xs.values().append_value(i * 10 + j);
+            map.keys().append_value(format!("k{j}"));
+            map.values().append_value(i + j);
+        }
+        xs.append(i != 2);
+        map.append(i != 3).unwrap();
+    }
+    let (xs, map) = (xs.finish(), map.finish());
+    let xs: ArrayRef = Arc::new(
+        arrow_array::ListArray::try_new(
+            match strip(target.field(1).data_type()) {
+                A::List(f) => f,
+                other => panic!("{other}"),
+            },
+            xs.offsets().clone(),
+            Arc::clone(xs.values()),
+            xs.nulls().cloned(),
+        )
+        .unwrap(),
+    );
+    let map: ArrayRef = Arc::new(
+        arrow_array::MapArray::try_new(
+            match strip(target.field(2).data_type()) {
+                A::Map(f, _) => f,
+                other => panic!("{other}"),
+            },
+            map.offsets().clone(),
+            map.entries().clone(),
+            map.nulls().cloned(),
+            false,
+        )
+        .unwrap(),
+    );
+    let schema = Schema::new(
+        target
+            .fields()
+            .iter()
+            .map(|f| {
+                f.as_ref()
+                    .clone()
+                    .with_metadata(HashMap::new())
+                    .with_data_type(strip(f.data_type()))
+            })
+            .collect::<Vec<_>>(),
+    );
+    let ids: ArrayRef = Arc::new(Int64Array::from((0..6).collect::<Vec<i64>>()));
+    let batch = RecordBatch::try_new(Arc::new(schema), vec![ids, xs, map])
+        .unwrap()
+        .slice(1, 4);
+    let files = write_all(
+        &env,
+        writer(&env, &m, DEFAULT_MAX_OPEN_FILES),
+        std::slice::from_ref(&batch),
+    );
+    assert_eq!(files.len(), 1);
+    let with_ids: Vec<(String, i32)> = footer_ids(&files[0].location)
+        .into_iter()
+        .filter(|(_, id)| *id >= 0)
+        .collect();
+    // The catalog assigns fresh ids: expect the table's.
+    let ts = m.current_schema();
+    let id = |name: &str| ts.field_by_name(name).unwrap().id;
+    let (element, key, value) = match (
+        ts.field_by_name("xs").unwrap().field_type.as_ref(),
+        ts.field_by_name("m").unwrap().field_type.as_ref(),
+    ) {
+        (Type::List(l), Type::Map(mt)) => (l.element_field.id, mt.key_field.id, mt.value_field.id),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        with_ids,
+        [
+            ("id".to_owned(), id("id")),
+            ("xs".to_owned(), id("xs")),
+            ("xs.list.element".to_owned(), element),
+            ("m".to_owned(), id("m")),
+            ("m.entries.key".to_owned(), key),
+            ("m.entries.value".to_owned(), value),
+        ]
+    );
+    let back = read(&files[0].location);
+    assert_eq!(back.num_rows(), 4);
+    let render = |b: &RecordBatch| -> Vec<String> {
+        let xs = b.column(1).as_list::<i32>();
+        let m = b.column(2).as_map();
+        (0..b.num_rows())
+            .map(|r| {
+                let list = if xs.is_null(r) {
+                    "NULL".to_owned()
+                } else {
+                    format!("{:?}", xs.value(r).as_primitive::<Int32Type>().values())
+                };
+                let map = if m.is_null(r) {
+                    "NULL".to_owned()
+                } else {
+                    let e = m.value(r);
+                    let k = arrow_cast_strings(e.column(0));
+                    let v = e.column(1).as_primitive::<Int32Type>().values().to_vec();
+                    format!("{k:?}={v:?}")
+                };
+                format!(
+                    "{}|{list}|{map}",
+                    b.column(0).as_primitive::<Int64Type>().value(r)
+                )
+            })
+            .collect()
+    };
+    assert_eq!(render(&back), render(&batch));
+}
+
+fn arrow_cast_strings(a: &ArrayRef) -> Vec<String> {
+    match a.data_type() {
+        A::Utf8View => a
+            .as_string_view()
+            .iter()
+            .map(|s| s.unwrap_or("NULL").to_owned())
+            .collect(),
+        A::Utf8 => a
+            .as_string::<i32>()
+            .iter()
+            .map(|s| s.unwrap_or("NULL").to_owned())
+            .collect(),
+        other => panic!("{other}"),
+    }
+}
+
+/// The local file system whose deletes wait for a permit of the gate.
+#[derive(Debug)]
+struct GatedDeletes(
+    object_store::local::LocalFileSystem,
+    Arc<tokio::sync::Semaphore>,
+);
+
+impl std::fmt::Display for GatedDeletes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "GatedDeletes")
+    }
+}
+
+#[async_trait::async_trait]
+impl object_store::ObjectStore for GatedDeletes {
+    async fn put_opts(
+        &self,
+        location: &object_store::path::Path,
+        payload: object_store::PutPayload,
+        opts: object_store::PutOptions,
+    ) -> object_store::Result<object_store::PutResult> {
+        self.0.put_opts(location, payload, opts).await
+    }
+
+    async fn put_multipart_opts(
+        &self,
+        location: &object_store::path::Path,
+        opts: object_store::PutMultipartOptions,
+    ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
+        self.0.put_multipart_opts(location, opts).await
+    }
+
+    async fn get_opts(
+        &self,
+        location: &object_store::path::Path,
+        options: object_store::GetOptions,
+    ) -> object_store::Result<object_store::GetResult> {
+        self.0.get_opts(location, options).await
+    }
+
+    async fn get_ranges(
+        &self,
+        location: &object_store::path::Path,
+        ranges: &[std::ops::Range<u64>],
+    ) -> object_store::Result<Vec<bytes::Bytes>> {
+        self.0.get_ranges(location, ranges).await
+    }
+
+    fn delete_stream(
+        &self,
+        locations: futures::stream::BoxStream<
+            'static,
+            object_store::Result<object_store::path::Path>,
+        >,
+    ) -> futures::stream::BoxStream<'static, object_store::Result<object_store::path::Path>> {
+        use futures::StreamExt;
+        let gate = Arc::clone(&self.1);
+        let gated = locations
+            .then(move |l| {
+                let gate = Arc::clone(&gate);
+                async move {
+                    if let Ok(p) = gate.acquire().await {
+                        p.forget();
+                    }
+                    l
+                }
+            })
+            .boxed();
+        self.0.delete_stream(gated)
     }
 
     fn list(

@@ -54,9 +54,12 @@ multiple of 1,000 rows once `write.target-file-size-bytes` is reached (Java's `R
 from `write.parquet.{compression-codec,row-group-size-bytes,page-size-bytes}` (gzip when unset, Java's fallback; the level is not applied;
 `write.format.default` other than parquet, `uuid`/`fixed`/`variant` columns refused), Java's file names and partition
 directories, a `WrittenDataFile` per file (`file_metrics`, no `split_offsets`); open uploads and the encoders' memory
-charged to one `Reservation`; `finish` failing, `abort` and drop delete the finished files; tests `write_tests.rs`
+charged to one `Reservation`; `finish` failing, `abort` (cancellation-safe: a dropped abort leaves the rest to drop)
+and drop delete the finished files; `TaskIds::attempt_id` must be unique per attempt (Java's `taskAttemptId`), so a
+retry never reuses a failed attempt's names; tests `write_tests.rs`
 (tuples against iceberg-rust's transforms over the rows read back, footers' field ids, rollover, the open-file cap,
-an append of the written files read back, failed writes and an injected upload failure leaving no file)
+an append of the written files read back, failed writes and an injected upload failure leaving no file, a dropped
+abort, two attempts, memory pressure and the reservation released, list and map ids from a sliced batch)
 · `deletes.rs` reads each position
 delete file once per scan (`file_path IN` row-group pruning, rows of other files dropped, order not trusted) and each
 DV by range, into one `RowSelection` per data file (unbounded, so a wrong `record_count` never drops rows; positions

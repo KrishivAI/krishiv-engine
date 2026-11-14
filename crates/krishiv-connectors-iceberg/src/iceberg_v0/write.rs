@@ -4,39 +4,62 @@
 //! ([`arrow_schema`]) in, Parquet files with the table's field ids out, each
 //! described by a [`WrittenDataFile`] for its manifest entry.
 //!
+//! Java references are apache-iceberg 1.12.0 classes and methods (no line
+//! numbers verified).
+//!
 //! - **Partitioning.** Each row's partition key is computed from the default
 //!   spec's fields ([`partition_value`] over the source column; a null source
 //!   or `void` gives a null value, a transform Krishiv cannot compute fails the
-//!   write). Rows are grouped by key and taken per key. A spec whose fields
-//!   are all `void` (an unpartitioned one included) does no per-row work.
-//!   The per-row cost is one `ScalarValue` per partition field and row.
-//! - **Fanout** (Java's `FanoutDataWriter` shape): one open file per key, at
-//!   most `max_open_files` open (Krishiv's own cap, design note §6.1; Java's
-//!   fanout writer has none), the oldest-opened closed first; a key seen
-//!   again after its file closed gets a new file. A file rolls over to a new
-//!   one when, at a multiple of 1,000 rows, its size reaches
-//!   `write.target-file-size-bytes` (Java's `RollingFileWriter`:
-//!   `ROWS_DIVISOR` = 1000, `length >= targetFileSize`).
-//! - **Parquet settings** from the table properties, as Java's `Parquet`
-//!   write builder reads them (`TableProperties` and `Parquet.java` at
-//!   apache-iceberg-1.12.0): `write.parquet.compression-codec` is the codec,
-//!   `gzip` when the table does not set it (Java's fallback
-//!   `PARQUET_COMPRESSION_DEFAULT`; Java writes `zstd` into the properties of
-//!   the tables it creates since 1.4, `PARQUET_COMPRESSION_DEFAULT_SINCE_1_4_0`,
-//!   and iceberg-rust 0.11's `zstd` fallback differs from Java's),
-//!   `write.parquet.row-group-size-bytes` (128 MiB) the row-group size
-//!   (`parquet.block.size`), `write.parquet.page-size-bytes` (1 MiB) the page
-//!   size; timestamps are INT64 microseconds, never rebased. The codec's
-//!   level (`write.parquet.compression-level`) is not applied: the Parquet
-//!   writer has no level option (zstd writes level 3, parquet-mr's default).
-//!   `write.format.default` other than `parquet` is refused.
-//! - **Names and locations:** [`file_name`] with a counter per task from 1
-//!   (Java's `OutputFileFactory`), placed by [`DataLocations::location`] for
-//!   the file's partition tuple.
+//!   write). Rows are grouped by key (floats as Java's `Float.equals`:
+//!   NaN payloads one key, -0.0 and 0.0 two) and taken per key. A spec whose
+//!   fields are all `void` (an unpartitioned one included) does no per-row
+//!   work. The per-row cost is one `ScalarValue` per partition field and row
+//!   (a string source is copied), the key bytes in one reused buffer.
+//! - **Fanout** (Java's `FanoutWriter` shape): one open file per key, at most
+//!   `max_open_files` open, the oldest-opened closed first; a key seen again
+//!   after its file closed gets a new file. The cap is Krishiv's own (design
+//!   note §6.1); Java's `FanoutWriter` has none. With more keys per batch
+//!   than the cap (say 150 bucket keys and the cap 100), every batch closes
+//!   and reopens each key, a new small file per key per batch: such writes
+//!   want `hash` distribution (a later step).
+//! - **Rollover** as Java's `RollingFileWriter.shouldRollToNewFile`:
+//!   `currentFileRows % ROWS_DIVISOR == 0 && currentWriter.length() >=
+//!   targetFileSizeInBytes`, `ROWS_DIVISOR` = 1000, the target
+//!   `write.target-file-size-bytes` (`TableProperties.
+//!   WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT`, 512 MiB). Java deletes an empty
+//!   file on close; this writer opens a file only for rows, so none is empty.
+//! - **Parquet settings** from the table properties, as Java's
+//!   `Parquet.WriteBuilder` reads them (`TableProperties`):
+//!   `write.parquet.compression-codec` is the codec, `gzip` when the table
+//!   does not set it (`PARQUET_COMPRESSION_DEFAULT`; Java writes `zstd`,
+//!   `PARQUET_COMPRESSION_DEFAULT_SINCE_1_4_0`, only into the properties of
+//!   the tables it creates; iceberg-rust 0.11's fallback `zstd` differs).
+//!   Names as `Parquet.toCodec` (`CompressionCodecName.valueOf` of the upper
+//!   case; otherwise "Unsupported compression codec: " + codec); `lzo`, which
+//!   Java accepts, is refused (a divergence: Krishiv cannot write it).
+//!   `write.parquet.row-group-size-bytes` (`PARQUET_ROW_GROUP_SIZE_BYTES_DEFAULT`,
+//!   128 MiB) is the row-group size (`parquet.block.size`),
+//!   `write.parquet.page-size-bytes` (`PARQUET_PAGE_SIZE_BYTES_DEFAULT`,
+//!   1 MiB) the page size; timestamps are INT64 microseconds, never rebased.
+//!   `write.parquet.compression-level` (`PARQUET_COMPRESSION_LEVEL_DEFAULT`
+//!   null, the codec's own) is not applied: the Parquet writer has no level
+//!   option (zstd writes level 3, parquet-mr's default). Neither are
+//!   `write.parquet.dict-size-bytes`, `page-row-limit` nor the bloom-filter
+//!   properties. `write.format.default` (`DEFAULT_FILE_FORMAT_DEFAULT`
+//!   `parquet`) other than `parquet` is refused.
+//! - **Names and locations:** [`file_name`], Java's `OutputFileFactory`
+//!   (`"%05d-%d-%s-%05d%s"` over partition id, task attempt id, operation id
+//!   and `fileCount.incrementAndGet()` from 0, so the first file is 1), placed
+//!   by [`DataLocations::location`] for the file's partition tuple. The
+//!   attempt id must be unique per attempt ([`TaskIds::attempt_id`]).
 //! - **Abort:** [`DataFileWriter::finish`] failing, [`DataFileWriter::abort`]
 //!   and a drop before `finish` abort the open uploads (nothing becomes
 //!   visible) and delete the files already finished (a drop deletes in a
-//!   task spawned on the current runtime).
+//!   task spawned on the current runtime, else the I/O runtime). An abort
+//!   dropped midway leaves what it did not delete to the drop. A close
+//!   cancelled after the store completed the upload leaves an unreferenced
+//!   file (in no manifest); an open upload dropped outside a runtime is not
+//!   aborted (`Upload`'s drop).
 //!
 //! Columns of type `uuid` or `fixed` are refused: Java writes them as
 //! `FIXED_LEN_BYTE_ARRAY`, the Spark schema carries them as string and
@@ -78,7 +101,7 @@ use crate::plan::types::{IcebergType, SchemaField, Transform};
 pub(crate) const DEFAULT_MAX_OPEN_FILES: usize = 100;
 
 /// `write.target-file-size-bytes` and its default (Java's
-/// `WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT`, 512 MiB).
+/// `TableProperties.WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT`, 512 MiB).
 pub(crate) const TARGET_FILE_SIZE: &str = "write.target-file-size-bytes";
 const TARGET_FILE_SIZE_DEFAULT: i64 = 512 * 1024 * 1024;
 /// `write.parquet.compression-codec` and Java's fallback when a table does
@@ -99,14 +122,18 @@ const FILE_FORMAT: &str = "write.format.default";
 /// `RollingFileWriter.ROWS_DIVISOR`).
 const ROWS_DIVISOR: u64 = 1000;
 
-/// Who writes: the task's partition and task ids and the write's id, which
-/// name its files ([`file_name`]).
+/// Who writes: the task's partition id, the attempt's id and the write's
+/// id, which name its files ([`file_name`]).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TaskIds<'a> {
     /// The task's partition id.
     pub(crate) partition_id: u32,
-    /// The task id.
-    pub(crate) task_id: u64,
+    /// The id of this attempt of the task, unique per attempt (Java's
+    /// `OutputFileFactory.builderFor(table, partitionId, taskId)` gets Spark's
+    /// `taskAttemptId`). Never a stable task index: a retried attempt would
+    /// write the failed attempt's names, and that attempt's abort could then
+    /// delete the files the retry commits.
+    pub(crate) attempt_id: u64,
     /// The write's id (Java's operation id).
     pub(crate) write_id: &'a str,
 }
@@ -152,7 +179,7 @@ pub(crate) struct DataFileWriter {
     target_file_bytes: u64,
     max_open_files: usize,
     partition_id: u32,
-    task_id: u64,
+    attempt_id: u64,
     write_id: String,
     /// Files opened so far (the last file's number).
     files: u32,
@@ -236,7 +263,7 @@ impl DataFileWriter {
             options,
             max_open_files: max_open_files.max(1),
             partition_id: ids.partition_id,
-            task_id: ids.task_id,
+            attempt_id: ids.attempt_id,
             write_id: ids.write_id.to_owned(),
             files: 0,
             open: Vec::new(),
@@ -260,7 +287,9 @@ impl DataFileWriter {
         }
         if self.fields.iter().all(|f| f.source.is_none()) {
             let values = vec![None; self.fields.len()];
-            return self.write_group(&key_bytes(&values), &values, &batch).await;
+            let mut key = Vec::new();
+            key_bytes(&values, &mut key);
+            return self.write_group(&key, &values, &batch).await;
         }
         for (key, values, rows) in self.groups(&batch)? {
             let slice = if rows.len() == batch.num_rows() {
@@ -298,17 +327,22 @@ impl DataFileWriter {
         self.abort_files().await;
     }
 
+    /// Cancellation-safe: a file leaves `open` or `finished` only once its
+    /// abort or delete is done (an upload dropped midway aborts on its own
+    /// drop), and `done` is set last, so a dropped abort leaves the rest to
+    /// [`Drop`].
     async fn abort_files(&mut self) {
-        self.done = true;
-        for f in std::mem::take(&mut self.open) {
+        while let Some(f) = self.open.pop() {
             f.upload.abort().await;
         }
-        for f in std::mem::take(&mut self.finished) {
+        while let Some(f) = self.finished.last() {
             // Best effort: a file left behind is not in any manifest.
             let _ = self.io.delete_pinned(&f.store, &f.at.path).await;
+            self.finished.pop();
         }
         let held = self.mem.size();
         self.mem.shrink(held);
+        self.done = true;
     }
 
     /// `batch` under the table's Arrow schema (field ids included).
@@ -356,6 +390,7 @@ impl DataFileWriter {
         let mut index: HashMap<Vec<u8>, usize> = HashMap::new();
         let mut groups = Vec::new();
         let mut values = Vec::with_capacity(self.fields.len());
+        let mut key = Vec::new();
         for row in 0..batch.num_rows() {
             values.clear();
             for (f, chain) in self.fields.iter().zip(&sources) {
@@ -368,12 +403,13 @@ impl DataFileWriter {
                 };
                 values.push(value);
             }
-            let key = key_bytes(&values);
-            let at = match index.get(&key) {
+            key.clear();
+            key_bytes(&values, &mut key);
+            let at = match index.get(key.as_slice()) {
                 Some(at) => *at,
                 None => {
                     index.insert(key.clone(), groups.len());
-                    groups.push((key, values.clone(), Vec::new()));
+                    groups.push((key.clone(), values.clone(), Vec::new()));
                     groups.len() - 1
                 }
             };
@@ -432,7 +468,12 @@ impl DataFileWriter {
             .files
             .checked_add(1)
             .ok_or_else(|| internal("too many files in one task".to_owned()))?;
-        let name = file_name(self.partition_id, self.task_id, &self.write_id, self.files);
+        let name = file_name(
+            self.partition_id,
+            self.attempt_id,
+            &self.write_id,
+            self.files,
+        );
         let partition = partition_tuple(&self.spec, &self.schema, values)?;
         let location = self
             .locations
@@ -441,7 +482,7 @@ impl DataFileWriter {
         let store = self.io.pin(&at.store)?;
         let seed = format!(
             "{}/{}/{}/{}",
-            self.write_id, self.partition_id, self.task_id, self.files
+            self.write_id, self.partition_id, self.attempt_id, self.files
         );
         let encoder = ParquetFormat
             .writer(
@@ -757,8 +798,7 @@ fn value_at(chain: &[ArrayRef], row: usize) -> Result<Option<ScalarValue>, Krish
 /// A partition key as bytes: equal tuples give equal bytes. Floats compare by
 /// bits with every NaN made one NaN, as Java's `Float.equals`/`Double.equals`
 /// (`floatToIntBits` collapses NaN payloads; -0.0 and 0.0 stay apart).
-fn key_bytes(values: &[Option<ScalarValue>]) -> Vec<u8> {
-    let mut out = Vec::new();
+fn key_bytes(values: &[Option<ScalarValue>], out: &mut Vec<u8>) {
     for v in values {
         let mut put = |tag: u8, bytes: &[u8]| {
             out.push(tag);
@@ -786,7 +826,6 @@ fn key_bytes(values: &[Option<ScalarValue>]) -> Vec<u8> {
             Some(other) => put(11, format!("{other:?}").as_bytes()),
         }
     }
-    out
 }
 
 /// `array` with the type `target`: the same data with the target's nested
@@ -884,7 +923,13 @@ fn internal(message: String) -> KrishivError {
 mod key_tests {
     use krishiv_io::ScalarValue;
 
-    use super::key_bytes;
+    use super::key_bytes as into;
+
+    fn key_bytes(values: &[Option<ScalarValue>]) -> Vec<u8> {
+        let mut out = Vec::new();
+        into(values, &mut out);
+        out
+    }
 
     #[test]
     fn nan_payloads_are_one_key_and_signed_zeros_two() {
