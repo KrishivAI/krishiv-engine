@@ -179,6 +179,19 @@ fn functions_list_get_exists() {
     assert!(block_on(c.function_exists("abs")).unwrap());
     assert!(block_on(c.function_exists("TWICE")).unwrap());
     assert!(!block_on(c.function_exists("no_such_fn")).unwrap());
+    // a qualified name names a stored function of that namespace, never a built-in or a temporary one
+    assert!(!block_on(c.function_exists("nosuchdb.abs")).unwrap());
+    assert!(!block_on(c.function_exists("default.abs")).unwrap());
+    assert!(!block_on(c.function_exists("default.twice")).unwrap());
+    run(
+        &s,
+        "CREATE FUNCTION default.stored_fn(x INT) RETURNS INT RETURN x + 1",
+    );
+    assert!(block_on(c.function_exists("default.stored_fn")).unwrap());
+    assert!(block_on(c.function_exists("spark_catalog.default.stored_fn")).unwrap());
+    let f = block_on(c.get_function("default.stored_fn")).unwrap();
+    assert_eq!(f.namespace, Some(vec!["default".to_owned()]));
+    assert!(!f.is_temporary);
     let f = block_on(c.get_function("abs")).unwrap();
     assert_eq!((f.catalog, f.namespace, f.is_temporary), (None, None, true));
     assert!(

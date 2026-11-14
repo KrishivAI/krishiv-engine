@@ -577,17 +577,49 @@ impl Catalog<'_> {
     /// `UNRESOLVED_ROUTINE`.
     pub async fn get_function(&self, name: &str) -> Result<Function, KrishivError> {
         self.authorize_as("SHOW FUNCTIONS").await?;
-        let last = parts(name).pop().unwrap_or_default().to_lowercase();
-        self.functions(None)
+        let not_found = || -> KrishivError {
+            krishiv_common::error::UnresolvedRoutine {
+                routine_name: quoted(name),
+                search_path: crate::catalog::search_path(),
+            }
+            .into()
+        };
+        let p = parts(name);
+        // `f` is a built-in, a temporary or a stored function of the current namespace; `db.f` and
+        // `spark_catalog.db.f` name a stored function of that namespace only.
+        let (database, last) = match p.as_slice() {
+            [f] => (None, f.to_lowercase()),
+            [db, f] => (Some(db.as_str()), f.to_lowercase()),
+            [cat, db, f] if cat.eq_ignore_ascii_case(crate::catalog::CATALOG) => {
+                (Some(db.as_str()), f.to_lowercase())
+            }
+            _ => return Err(not_found()),
+        };
+        let Some(db) = database else {
+            return self
+                .functions(None)
+                .into_iter()
+                .find(|f| f.name == last)
+                .ok_or_else(not_found);
+        };
+        let db = self.lookup_database(db).map_err(|_| not_found())?.name;
+        self.session
+            .state
+            .catalog
+            .store
+            .functions()
+            .in_namespace(&db)
             .into_iter()
-            .find(|f| f.name == last)
-            .ok_or_else(|| {
-                krishiv_common::error::UnresolvedRoutine {
-                    routine_name: quoted(name),
-                    search_path: crate::catalog::search_path(),
-                }
-                .into()
+            .find(|f| f.to_lowercase() == last)
+            .map(|f| Function {
+                name: f,
+                catalog: Some(crate::catalog::CATALOG.to_owned()),
+                namespace: Some(vec![db.clone()]),
+                description: None,
+                class_name: String::new(),
+                is_temporary: false,
             })
+            .ok_or_else(not_found)
     }
 
     /// Whether the function exists.
