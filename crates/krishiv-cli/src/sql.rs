@@ -478,7 +478,7 @@ fn print_result(
 ) -> Result<(), String> {
     let cap = args.max_rows.unwrap_or(usize::MAX);
     let c = collect_rows(df, session, cap)?;
-    if c.names.is_empty() {
+    if c.names.is_empty() && c.rows.is_empty() {
         // A statement without a result (DDL, SET of nothing): no empty table and no `0 rows`.
         return Ok(());
     }
@@ -491,7 +491,10 @@ fn print_result(
     )
     .map_err(|e| format!("cannot write output: {e}"))?;
     if c.truncated {
-        // stdout keeps its shape for pipes; the cut is said on stderr (agent mode reports it in its footer).
+        // stdout keeps its shape for pipes; the cut is said on stderr (agent mode reports it in its footer). Flush
+        // first so the notice does not appear above the table it describes.
+        out.flush()
+            .map_err(|e| format!("cannot write output: {e}"))?;
         let _ = writeln!(
             io::stderr(),
             "warning: output cut at --max-rows {cap}; more rows exist"
