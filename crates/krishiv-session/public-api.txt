@@ -572,6 +572,7 @@ pub fn krishiv_session::functions::count(krishiv_session::Column) -> krishiv_ses
 pub fn krishiv_session::functions::count_distinct(impl core::iter::traits::collect::IntoIterator<Item = krishiv_session::Column>) -> krishiv_session::Column
 pub fn krishiv_session::functions::count_star() -> krishiv_session::Column
 pub fn krishiv_session::functions::expr(&str) -> core::result::Result<krishiv_session::Column, krishiv_common::error::KrishivError>
+pub fn krishiv_session::functions::lambda<S: core::convert::Into<alloc::string::String>>(impl core::iter::traits::collect::IntoIterator<Item = S>, krishiv_session::Column) -> krishiv_session::Column
 pub fn krishiv_session::functions::lit(impl krishiv_session::functions::IntoLiteral) -> krishiv_session::Column
 pub fn krishiv_session::functions::lit_null() -> krishiv_session::Column
 pub fn krishiv_session::functions::map_literal(alloc::vec::Vec<(alloc::string::String, alloc::string::String)>) -> krishiv_session::Column

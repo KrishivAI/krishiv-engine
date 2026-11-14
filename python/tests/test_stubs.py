@@ -113,6 +113,7 @@ def test_native_stub_matches_runtime() -> None:
         "col",
         "lit",
         "map_literal",
+        "lambda_function",
         "expr",
         "call_function",
         "count_star",
