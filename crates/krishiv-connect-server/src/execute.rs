@@ -769,9 +769,10 @@ fn settle(op: &Operation, errors: &SessionErrors, outcome: Result<(), Stop>) {
             op.replay().finish(None);
         }
         Err(Stop::Failed(e)) => {
-            // Failed now, or finished before (its last response failed):
-            // the error stands; an interrupt that came first wins.
-            let error = if op.fail() || !op.is_cancelled() {
+            // Failed now, or finished before (its last response failed:
+            // failed after all, so GetStatus agrees with the stream); an
+            // interrupt that came first wins.
+            let error = if op.fail() || op.fail_finished() {
                 e
             } else {
                 OperationCanceled {}.into()

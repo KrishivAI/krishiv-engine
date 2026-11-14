@@ -442,3 +442,41 @@ fn a_released_operation_is_never_tombstoned_as_abandoned() {
     assert!(entry.operations().is_empty());
     assert!(other.is_cancelled());
 }
+
+#[test]
+fn an_abandon_racing_the_finish_records_the_winner() {
+    // PR-15c merge review L1: the abandoned operation is remembered with the
+    // state its close left, the one it reports itself.
+    use crate::operation::{Operation, OperationState, plan_digest};
+    const OP: &str = "00112233-4455-6677-8899-aabbccddeeff";
+    let m = manager(SessionLimits::default());
+    let entry = m.get_or_create(&alice(), ID, None, "u").expect("create");
+    let key = SessionManager::key(&alice(), ID);
+    for _ in 0..1_000 {
+        let op = Arc::new(Operation::new(
+            krishiv_session::QueryId::parse(OP).expect("id"),
+            plan_digest(b"p"),
+            Arc::from(Vec::new()),
+            true,
+        ));
+        entry.operations().register(&op, 10).expect("register");
+        let generation = op.replay().attach(None);
+        op.replay().detach(generation);
+        let barrier = std::sync::Barrier::new(2);
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                barrier.wait();
+                assert!(m.abandon(&key, &entry, &op, Duration::ZERO));
+            });
+            s.spawn(|| {
+                barrier.wait();
+                op.finish();
+            });
+        });
+        let own = match op.state() {
+            OperationState::Succeeded => OperationState::Succeeded,
+            _ => OperationState::Cancelled,
+        };
+        assert_eq!(entry.operations().state_of(OP), Some(own));
+    }
+}

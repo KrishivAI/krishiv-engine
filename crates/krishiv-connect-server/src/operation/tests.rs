@@ -345,3 +345,42 @@ async fn close_stops_the_encoder_of_a_finished_operation() {
     late.close();
     late.closed().await;
 }
+
+/// PR-15c merge review L1: a query finishing while its operation is
+/// released or its session closed is remembered with the state the close's
+/// compare-and-swap left, the one the operation itself reports.
+#[test]
+fn a_release_racing_the_finish_records_the_winner() {
+    type Path = fn(&Operations, &Arc<Operation>);
+    let paths: [(&str, Path); 2] = [
+        ("release_all", |ops, o| {
+            ops.close_and_remove(o);
+        }),
+        ("close_all", |ops, _| {
+            ops.close_all();
+        }),
+    ];
+    for (name, path) in paths {
+        for _ in 0..2_000 {
+            let ops = Operations::default();
+            let o = op(A, b"p");
+            ops.register(&o, 10).unwrap();
+            let barrier = std::sync::Barrier::new(2);
+            std::thread::scope(|s| {
+                s.spawn(|| {
+                    barrier.wait();
+                    path(&ops, &o);
+                });
+                s.spawn(|| {
+                    barrier.wait();
+                    o.finish();
+                });
+            });
+            assert_eq!(
+                ops.state_of(A),
+                Some(o.final_state()),
+                "{name}: recorded as the operation ended"
+            );
+        }
+    }
+}

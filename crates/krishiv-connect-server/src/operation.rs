@@ -433,6 +433,21 @@ impl Operation {
         }
     }
 
+    /// Turns a finished operation into a failed one: its last response
+    /// (`result_complete`) could not be buffered after [`Self::finish`]
+    /// decided the end, so its stream ends with an error and `GetStatus`
+    /// must not say `SUCCEEDED`. Whether it is failed now: `false` when a
+    /// cancel won before the finish.
+    pub fn fail_finished(&self) -> bool {
+        match self
+            .state
+            .compare_exchange(FINISHED, FAILED, Ordering::AcqRel, Ordering::Acquire)
+        {
+            Ok(_) => true,
+            Err(now) => now == FAILED,
+        }
+    }
+
     /// Records that the operation's encoder stopped: an interrupted
     /// operation is `CANCELLED` from now on rather than `TERMINATING`.
     pub fn mark_ended(&self) {
@@ -699,19 +714,25 @@ impl Operations {
         }
     }
 
+    /// Closes `op`, then removes it if it is still the registered operation
+    /// of its id (ReleaseExecute `release_all`). Closed first, so the state
+    /// it is remembered with is the one the close's compare-and-swap left:
+    /// a query that finished just before is `SUCCEEDED`, not `CANCELLED`.
+    pub fn close_and_remove(&self, op: &Arc<Operation>) -> bool {
+        op.close();
+        self.remove(op)
+    }
+
     /// Removes and closes every live operation (the session is released;
-    /// Spark's `removeAllExecutionsForSession`). Returns them.
+    /// Spark's `removeAllExecutionsForSession`). Returns them. Each is
+    /// closed before its final state is recorded (as
+    /// [`Self::close_and_remove`]); closing takes no lock of this map.
     pub fn close_all(&self) -> Vec<Arc<Operation>> {
-        let ops: Vec<Arc<Operation>> = {
-            let mut live = self.lock();
-            let ops: Vec<Arc<Operation>> = live.drain().map(|(_, op)| op).collect();
-            for op in &ops {
-                self.record_ended(op);
-            }
-            ops
-        };
+        let mut live = self.lock();
+        let ops: Vec<Arc<Operation>> = live.drain().map(|(_, op)| op).collect();
         for op in &ops {
             op.close();
+            self.record_ended(op);
         }
         ops
     }

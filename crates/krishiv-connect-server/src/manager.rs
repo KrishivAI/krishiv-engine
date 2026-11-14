@@ -571,13 +571,25 @@ impl SessionManager {
             return false;
         }
         {
-            // The removal (under the operations' lock, as a release takes
-            // it) and the tombstone are one step under the manager's lock:
-            // a racing reattach that no longer finds the operation reads
-            // `is_abandoned` after it, so it finds it abandoned rather than
-            // unknown (Spark's lines 158-166). Lock order: manager, then
+            // The close, the removal (under the operations' lock, as a
+            // release takes it) and the tombstone are one step under the
+            // manager's lock: a racing reattach that no longer finds the
+            // operation reads `is_abandoned` after it, so it finds it
+            // abandoned rather than unknown (Spark's lines 158-166). One a
+            // release removed first is left alone. Closed before it is
+            // removed, so the state it is remembered with is the one the
+            // close's compare-and-swap left (a query that finished just
+            // before stays `SUCCEEDED`). Lock order: manager, then
             // operations (as `sweep`).
             let mut inner = self.lock();
+            let registered = entry
+                .operations()
+                .get(op.id().as_str())
+                .is_some_and(|o| Arc::ptr_eq(&o, op));
+            if !registered {
+                return false;
+            }
+            op.close();
             if !entry.operations().remove(op) {
                 return false;
             }
@@ -594,10 +606,9 @@ impl SessionManager {
             operation = op.id().as_str(),
             "abandoned a detached Connect operation"
         );
-        // A reattach between the check above and the close below is closed
-        // with it (its retry sees OPERATION_ABANDONED): Spark's
+        // A reattach between the expiry check and the close was closed with
+        // it (its retry sees OPERATION_ABANDONED): Spark's
         // `periodicMaintenance` has the same window.
-        op.close();
         true
     }
 

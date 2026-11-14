@@ -643,3 +643,18 @@ fn the_digest_of_a_deep_plan_fits_a_small_stack() {
         .unwrap();
     assert_eq!(digest, expected);
 }
+
+#[test]
+fn a_last_response_that_fails_after_the_finish_is_failed() {
+    // PR-15c merge review L2: `result_complete` could not be buffered after
+    // `finish()` decided the end; the stream ends with the error, so
+    // GetStatus must say FAILED, not SUCCEEDED.
+    use crate::operation::OperationState;
+    let op = running_op();
+    assert!(op.finish());
+    super::settle(&op, &errors(), Err(super::Stop::Failed(failure())));
+    let status = end_of(&op).unwrap();
+    assert!(status.message().contains("INTERNAL_ERROR"), "{status:?}");
+    assert_eq!(op.state(), OperationState::Failed);
+    assert!(!op.cancel());
+}
