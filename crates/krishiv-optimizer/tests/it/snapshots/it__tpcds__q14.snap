@@ -1,6 +1,5 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
-assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Limit 100
@@ -50,13 +49,13 @@ Limit 100
             :  :           :           +- Project [d_date_sk#1524]
             :  :           :              +- Filter (((d_year#1530 == 2001) and (d_moy#1532 == 11)) and isnotnull(d_date_sk#1524))
             :  :           :                 +- Scan spark_catalog.default.date_dim [d_date_sk#1524, d_year#1530, d_moy#1532] (shared #4)
-            :  :           +- Project [ss_item_sk#3050 AS ss_item_sk#1552]
+            :  :           +- Project [ss_item_sk#3050 AS ss_item_sk#1552] (shared #5)
             :  :              +- Shift +1698
             :  :                 +- Project [i_item_sk#0 AS ss_item_sk#1352]
             :  :                    +- Join Inner, (((i_brand_id#7 == brand_id#749) and (i_class_id#9 == class_id#750)) and (i_category_id#11 == category_id#751))
-            :  :                       :- Filter (((isnotnull(i_brand_id#7) and isnotnull(i_class_id#9)) and isnotnull(i_category_id#11)) and isnotnull(i_item_sk#0))
-            :  :                       :  +- Scan spark_catalog.default.item [i_item_sk#0, i_brand_id#7, i_class_id#9, i_category_id#11] (shared #5)
-            :  :                       +- Shift +676 (shared #6)
+            :  :                       :- Filter ((isnotnull(i_brand_id#7) and isnotnull(i_class_id#9)) and isnotnull(i_category_id#11))
+            :  :                       :  +- Scan spark_catalog.default.item [i_item_sk#0, i_brand_id#7, i_class_id#9, i_category_id#11] (shared #6)
+            :  :                       +- Shift +676
             :  :                          +- Aggregate [brand_id#73, class_id#74, category_id#75], [brand_id#73, class_id#74, category_id#75]
             :  :                             +- Join LeftSemi, (((brand_id#73 <=> i_brand_id#345) and (class_id#74 <=> i_class_id#347)) and (category_id#75 <=> i_category_id#349))
             :  :                                :- Aggregate [brand_id#73, class_id#74, category_id#75], [brand_id#73, class_id#74, category_id#75]
@@ -64,7 +63,7 @@ Limit 100
             :  :                                :     :- Project [i_brand_id#7 AS brand_id#73, i_class_id#9 AS class_id#74, i_category_id#11 AS category_id#75]
             :  :                                :     :  +- Join Inner, (ss_item_sk#24 == i_item_sk#0)
             :  :                                :     :     :- Filter (((isnotnull(i_item_sk#0) and isnotnull(i_brand_id#7)) and isnotnull(i_class_id#9)) and isnotnull(i_category_id#11))
-            :  :                                :     :     :  +- Shared #5, printed above
+            :  :                                :     :     :  +- Shared #6, printed above
             :  :                                :     :     +- Project [ss_item_sk#24]
             :  :                                :     :        +- Join Inner, (ss_sold_date_sk#22 == d_date_sk#45)
             :  :                                :     :           :- Filter (isnotnull(ss_item_sk#24) and isnotnull(ss_sold_date_sk#22))
@@ -76,7 +75,7 @@ Limit 100
             :  :                                :        +- Project [i_brand_id#7, i_class_id#9, i_category_id#11]
             :  :                                :           +- Join Inner, (cs_item_sk#91 == i_item_sk#0)
             :  :                                :              :- Filter isnotnull(i_item_sk#0)
-            :  :                                :              :  +- Shared #5, printed above
+            :  :                                :              :  +- Shared #6, printed above
             :  :                                :              +- Project [cs_item_sk#91]
             :  :                                :                 +- Join Inner, (cs_sold_date_sk#76 == d_date_sk#110)
             :  :                                :                    :- Filter (isnotnull(cs_item_sk#91) and isnotnull(cs_sold_date_sk#76))
@@ -89,7 +88,7 @@ Limit 100
             :  :                                   +- Project [i_brand_id#7, i_class_id#9, i_category_id#11]
             :  :                                      +- Join Inner, (ws_item_sk#279 == i_item_sk#0)
             :  :                                         :- Filter isnotnull(i_item_sk#0)
-            :  :                                         :  +- Shared #5, printed above
+            :  :                                         :  +- Shared #6, printed above
             :  :                                         +- Project [ws_item_sk#279]
             :  :                                            +- Join Inner, (ws_sold_date_sk#276 == d_date_sk#310)
             :  :                                               :- Filter (isnotnull(ws_item_sk#279) and isnotnull(ws_sold_date_sk#276))
@@ -117,13 +116,7 @@ Limit 100
             :              :                 +- Filter (((d_year#1530 == 2001) and (d_moy#1532 == 11)) and isnotnull(d_date_sk#1524))
             :              :                    +- Shared #4, printed above
             :              +- Shift +67
-            :                 +- Project [ss_item_sk#3050 AS ss_item_sk#1552]
-            :                    +- Shift +1698
-            :                       +- Project [i_item_sk#0 AS ss_item_sk#1352]
-            :                          +- Join Inner, (((i_brand_id#7 == brand_id#749) and (i_class_id#9 == class_id#750)) and (i_category_id#11 == category_id#751))
-            :                             :- Filter (((isnotnull(i_brand_id#7) and isnotnull(i_class_id#9)) and isnotnull(i_category_id#11)) and isnotnull(i_item_sk#0))
-            :                             :  +- Shared #5, printed above
-            :                             +- Shared #6, printed above
+            :                 +- Shared #5, printed above
             +- Filter (CAST(sales#1688 AS DECIMAL(32,6)) > CAST(scalar-subquery AS DECIMAL(32,6)))
                :  +- Shift +134
                :     +- Shared #1, printed above
@@ -143,10 +136,4 @@ Limit 100
                         :                 +- Filter (((d_year#1530 == 2001) and (d_moy#1532 == 11)) and isnotnull(d_date_sk#1524))
                         :                    +- Shared #4, printed above
                         +- Shift +134
-                           +- Project [ss_item_sk#3050 AS ss_item_sk#1552]
-                              +- Shift +1698
-                                 +- Project [i_item_sk#0 AS ss_item_sk#1352]
-                                    +- Join Inner, (((i_brand_id#7 == brand_id#749) and (i_class_id#9 == class_id#750)) and (i_category_id#11 == category_id#751))
-                                       :- Filter (((isnotnull(i_brand_id#7) and isnotnull(i_class_id#9)) and isnotnull(i_category_id#11)) and isnotnull(i_item_sk#0))
-                                       :  +- Shared #5, printed above
-                                       +- Shared #6, printed above
+                           +- Shared #5, printed above

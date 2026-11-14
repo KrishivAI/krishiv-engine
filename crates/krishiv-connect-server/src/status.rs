@@ -165,7 +165,9 @@ pub(crate) fn exception_classes(class: ErrorClass) -> &'static [&'static str] {
         ("ARTIFACT_ALREADY_EXISTS", SPARK_RUNTIME_EXCEPTION),
         ("INVALID_ARTIFACT_PATH", SPARK_RUNTIME_EXCEPTION),
         ("INTERNAL_ERROR", SPARK_EXCEPTION),
-        ("OPERATION_CANCELED", SPARK_EXCEPTION),
+        // Spark's `ExecuteThreadRunner` throws a `SparkSQLException`
+        // (v4.3.0, lines 105 and 175): PySpark raises `UnknownException`.
+        ("OPERATION_CANCELED", SPARK_SQL_EXCEPTION),
         ("CAST_INVALID_INPUT", SPARK_NUMBER_FORMAT_EXCEPTION),
         (
             "INCONSISTENT_BEHAVIOR_CROSS_VERSION",

@@ -10,6 +10,7 @@
 
 mod archive;
 mod bundle;
+mod check_compat;
 mod common;
 mod complete;
 mod deadline;
@@ -47,6 +48,9 @@ struct Cli {
 
 #[derive(clap::Subcommand)]
 enum Command {
+    /// Report Spark functions in `.py`, `.sql` and `.ipynb` files that Krishiv does not fully support.
+    #[command(name = "check-compat")]
+    CheckCompat(check_compat::CheckArgs),
     /// Run SQL from `-e`, `-f` or stdin and print the result.
     Sql(sql::SqlArgs),
     /// Collect a redacted diagnostic archive.
@@ -66,7 +70,7 @@ enum Command {
         #[arg(long)]
         allow_root: bool,
     },
-    /// Serve Spark Connect (port 15002) and the admin API (port 8080; the web UI with `ui`).
+    /// Run Krishiv single-node: serve Spark Connect (port 15002) and the admin API (port 8080; the web UI with `ui`).
     #[cfg(feature = "server")]
     Server(server::ServerArgs),
 }
@@ -117,6 +121,7 @@ fn run() {
     krishiv::maybe_init_tokio_console();
     let cli = Cli::parse();
     match cli.command {
+        Command::CheckCompat(args) => std::process::exit(check_compat::run(&args)),
         Command::Sql(args) => std::process::exit(sql::run(&args)),
         Command::DebugBundle(args) => std::process::exit(bundle::run(&args)),
         #[cfg(feature = "mcp")]

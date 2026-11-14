@@ -13,10 +13,15 @@
 use std::sync::Arc;
 
 use axum::Router;
+use axum::extract::Request;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use krishiv_exec::{MetricsSnapshot, prometheus};
+
+#[cfg(test)]
+use crate::guard::same_secret;
+use crate::guard::{Access, Guard, GuardRequest, GuardSurface, Refusal, TokenGuard, peer_of};
 
 /// Provides the snapshot a scrape renders: called once per `GET
 /// /metrics`, on the request task. Must be cheap: [`MetricsSnapshot`] is
@@ -60,31 +65,44 @@ fn unauthorized() -> Response {
         .into_response()
 }
 
-/// Whether `a` and `b` are equal, in time that depends only on their lengths.
-fn same_secret(a: &[u8], b: &[u8]) -> bool {
-    let mut diff = a.len() ^ b.len();
-    for i in 0..a.len().max(b.len()) {
-        diff |= usize::from(a.get(i).copied().unwrap_or(0) ^ b.get(i).copied().unwrap_or(0));
-    }
-    // `black_box` keeps the compiler from turning the fold into an early exit. The length is not
-    // secret from a timing observer; the token's bytes are not revealed by the time taken.
-    std::hint::black_box(diff) == 0
+/// The token of the first `Authorization: Bearer <token>` header (scheme ignoring ASCII case, one
+/// space, the rest verbatim), and whether an `Authorization` header was there without one.
+fn bearer(headers: &HeaderMap) -> (Option<&str>, bool) {
+    let Some(value) = headers.get(header::AUTHORIZATION) else {
+        return (None, false);
+    };
+    let token = value.to_str().ok().and_then(|v| {
+        let (scheme, presented) = v.split_once(' ')?;
+        scheme.eq_ignore_ascii_case("Bearer").then_some(presented)
+    });
+    (token, token.is_none())
 }
 
 /// Whether `headers` carry `Authorization: Bearer <token>` for exactly `token`. An empty `token`
 /// matches nothing: a misconfigured guard refuses everyone.
+#[cfg(test)]
 fn bearer_matches(headers: &HeaderMap, token: &str) -> bool {
-    if token.is_empty() {
-        return false;
-    }
-    headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| {
-            let (scheme, presented) = v.split_once(' ')?;
-            scheme.eq_ignore_ascii_case("Bearer").then_some(presented)
-        })
-        .is_some_and(|presented| same_secret(presented.as_bytes(), token.as_bytes()))
+    !token.is_empty()
+        && bearer(headers)
+            .0
+            .is_some_and(|presented| same_secret(presented.as_bytes(), token.as_bytes()))
+}
+
+/// A refusal as `/metrics` answers it: JSON, no detail.
+fn refused(refusal: Refusal) -> Response {
+    let (status, body) = match refusal {
+        Refusal::Unauthenticated => return unauthorized(),
+        Refusal::Denied => (StatusCode::FORBIDDEN, "{\"error\":\"forbidden\"}"),
+        Refusal::Unavailable => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "{\"error\":\"unavailable\"}",
+        ),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "{\"error\":\"misconfigured\"}",
+        ),
+    };
+    (status, [(header::CONTENT_TYPE, "application/json")], body).into_response()
 }
 
 /// The admin/UI router with `GET /metrics`: the exposition of
@@ -111,20 +129,38 @@ pub fn router_with_metrics_auth(
 /// router (`krishiv server`'s admin router); auth as
 /// [`router_with_metrics_auth`].
 pub fn metrics_route(enabled: bool, snapshot: SnapshotProvider, token: Option<&str>) -> Router {
+    let guard = token.map(|t| Arc::new(TokenGuard::new(t)) as Arc<dyn Guard>);
+    metrics_route_guarded(enabled, snapshot, guard)
+}
+
+/// The `/metrics` route behind `guard` ([`Access::Metrics`]: every role scrapes, ADR 0046 §3c),
+/// or open with `None`. A refusal takes no snapshot; a disabled `/metrics` is a 404 whatever the
+/// request carries.
+pub fn metrics_route_guarded(
+    enabled: bool,
+    snapshot: SnapshotProvider,
+    guard: Option<Arc<dyn Guard>>,
+) -> Router {
     let router = Router::new();
     if !enabled {
         return router.route("/metrics", get(metrics_disabled));
     }
-    let token: Option<Arc<str>> = token.map(Arc::from);
     router.route(
         "/metrics",
-        get(move |headers: HeaderMap| {
-            let (snapshot, token) = (Arc::clone(&snapshot), token.clone());
+        get(move |request: Request| {
+            let (snapshot, guard) = (Arc::clone(&snapshot), guard.clone());
             async move {
-                match token {
-                    Some(t) if !bearer_matches(&headers, &t) => unauthorized(),
-                    _ => metrics(snapshot).await.into_response(),
+                if let Some(guard) = guard {
+                    let (token, malformed) = bearer(request.headers());
+                    let check = GuardRequest::new(GuardSurface::Metrics, Access::Metrics)
+                        .with_token(token)
+                        .with_malformed(malformed)
+                        .with_peer(peer_of(request.extensions()));
+                    if let Err(refusal) = guard.check(check).await {
+                        return refused(refusal);
+                    }
                 }
+                metrics(snapshot).await.into_response()
             }
         }),
     )
@@ -133,15 +169,6 @@ pub fn metrics_route(enabled: bool, snapshot: SnapshotProvider, token: Option<&s
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn secrets_compare_by_content_and_length() {
-        assert!(same_secret(b"abc", b"abc"));
-        assert!(!same_secret(b"abc", b"abx"));
-        assert!(!same_secret(b"abc", b"abcd"));
-        assert!(!same_secret(b"abcd", b"abc"));
-        assert!(same_secret(b"", b""));
-    }
 
     #[test]
     fn only_a_bearer_header_for_the_exact_token_matches() {

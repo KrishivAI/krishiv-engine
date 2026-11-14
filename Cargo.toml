@@ -77,9 +77,16 @@ arrow-schema = { version = "60", default-features = false }
 arrow-select = { version = "60", default-features = false }
 arrow-string = { version = "60", default-features = false }
 arrow-ord = { version = "60", default-features = false }
+# The Delta connector's evaluator (P3-T021 design note section 3.3): arithmetic and Kleene logic.
+arrow-arith = { version = "60", default-features = false }
+# Already built through arrow-json; named for the Delta evaluator's casts.
+arrow-cast = { version = "60", default-features = false }
 arrow-row = { version = "60", default-features = false }
 arrow-data = { version = "60", default-features = false }
 arrow-ipc = { version = "60", default-features = false }
+# The Delta connector's JsonHandler (commit files, `parse_json`, the commit write; P3-T021
+# design note section 3.2); brings arrow-cast.
+arrow-json = { version = "60", default-features = false }
 arrow-flight = { version = "60", default-features = false }
 parquet = { version = "60", default-features = false }
 # object_store is pinned to the version delta_kernel 0.30 builds against (ADR 0028
@@ -90,6 +97,9 @@ parquet = { version = "60", default-features = false }
 # the default build. OpenSSL stays banned (deny.toml). On a bump, re-list
 # `ClientConfigKey` in krishiv-store's `http_clients.rs` `KEYS` (it is non-exhaustive).
 object_store = { version = "=0.14.2", default-features = false }
+# Table URLs of the Delta connector (the kernel's `Url`); already in the tree through
+# object_store and delta_kernel.
+url = { version = "2.5", default-features = false, features = ["std"] }
 # Header types for the Hugging Face bearer token (T195); already in the tree through
 # object_store's reqwest. Only under krishiv-io/cloud.
 http = { version = "1", default-features = false }
@@ -102,8 +112,8 @@ apache-avro = { version = "=0.22.0", default-features = false, features = ["bzip
 # Implementing `object_store::ObjectStore` (an `async_trait` trait) for store
 # wrappers; already in the tree through object_store itself.
 async-trait = { version = "0.1.89", default-features = false }
-# Only for object_store's `if_unmodified_since` precondition (chrono 0.4.45 comes
-# with Arrow/object_store, ADR 0028).
+# For object_store's `if_unmodified_since` precondition, and the zone type of the Delta
+# evaluator's partition timestamps (chrono 0.4.45 comes with Arrow/object_store, ADR 0028).
 chrono = { version = "0.4.42", default-features = false }
 tokio = { version = "1.53", default-features = false }
 tonic = { version = "0.14.6", default-features = false }
@@ -153,7 +163,10 @@ quick-xml = { version = "0.41", default-features = false }
 jiff = { version = "0.2.38", default-features = false }
 slatedb = { version = "0.17", default-features = false }
 foyer = { version = "0.22.6", default-features = false }
-delta_kernel = { version = "0.30", default-features = false }
+# Lock-step pin: the connector uses `internal-api` items, which are unstable across
+# minors (P3-T021 design note section 7); a bump reviews the items listed in the
+# connector's crate docs.
+delta_kernel = { version = "=0.30.1", default-features = false }
 iceberg = { version = "0.10.1", default-features = false }
 rdkafka = { version = "0.39", default-features = false }
 wasmtime = { version = "49", default-features = false }

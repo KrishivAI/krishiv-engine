@@ -77,7 +77,15 @@ impl Session {
             ),
             None => runtime.memory(),
         };
-        let cache = RelationCache::on(&memory, &runtime.invalidation);
+        let cache = RelationCache::on(
+            &memory,
+            &runtime.invalidation,
+            Some(crate::cache::CacheDisk {
+                executor: Arc::clone(&runtime.executor),
+                spill: Arc::clone(&runtime.spill),
+                config: krishiv_memory::SpillConfig::from_config(&runtime.config),
+            }),
+        );
         let io = Arc::clone(&runtime.io);
         let cwd = seed.cwd.unwrap_or_else(|| {
             std::env::current_dir()
@@ -97,7 +105,7 @@ impl Session {
                 SessionFunctions::new(Arc::clone(&udfs)).with_python(Arc::clone(&python_udfs)),
             ) as Arc<dyn FunctionRegistry>,
         };
-        Session {
+        let session = Session {
             locals: Arc::from([]),
             operation: None,
             deadline: None,
@@ -105,6 +113,7 @@ impl Session {
                 conf: Arc::new(seed.conf),
                 catalog: Arc::new(seed.catalog),
                 cache,
+                analyzer: krishiv_plan::analyzer::CachingAnalyzer::new(),
                 variables: Arc::new(seed.variables),
                 profile: parts.profile,
                 principal: parts.principal,
@@ -118,6 +127,7 @@ impl Session {
                 commit_log_probes: Mutex::new(HashMap::new()),
                 number: runtime.next_session(),
                 closed: AtomicBool::new(false),
+                activity: crate::sessions::Activity::default(),
                 runtime,
                 memory,
                 relations: seed.relations,
@@ -132,7 +142,13 @@ impl Session {
                 statements: AtomicU64::new(0),
                 sql_sources: AtomicU32::new(seed.sql_sources),
             }),
-        }
+        };
+        session
+            .state
+            .runtime
+            .sessions
+            .register(session.state.number, Arc::downgrade(&session.state));
+        session
     }
 
     /// A new session on the same runtime, run by the same principal under
@@ -262,7 +278,8 @@ impl Session {
     /// `OPERATION_CANCELED`, and it takes no new statement
     /// (`INVALID_HANDLE.SESSION_CLOSED`). Dropping a session's handles does
     /// not cancel anything: an open result stream keeps its session alive.
-    /// Returns the number of queries cancelled; closing again is a no-op.
+    /// Statements it is still analyzing or planning end too. Returns the
+    /// number of queries and statements it ended; closing again is a no-op.
     ///
     /// ```
     /// let s = krishiv_session::Session::new()?;
@@ -275,10 +292,48 @@ impl Session {
         if self.state.closed.swap(true, Ordering::AcqRel) {
             return 0;
         }
+        // The session's cached relations go with it: their memory, and the
+        // spill scopes of those on disk (once no cancelled query reads them).
+        self.state.cache.close();
         // Under the runtime's registry lock: a query that registers after
         // this is refused there (`EngineRuntime::attach`), so none slips
         // between the flag and the cancellation.
-        self.state.runtime.cancel_session(self.state.number)
+        let n = self
+            .state
+            .runtime
+            .cancel_session(self.state.number, crate::CancelReason::ClientGone);
+        self.state.runtime.sessions.retire(self.state.number, || {
+            crate::sessions::SessionRow::of(
+                &self.state,
+                Some(crate::sessions::End::Closed("release_session")),
+                0,
+            )
+        });
+        n
+    }
+
+    /// Says which front end opened this session and what its client reported
+    /// (`system.sessions.transport`, `client_type`, `client_user_id`,
+    /// `server_session_id`). The first non-empty client type and user id are
+    /// kept. All of it is client-asserted: shown, never used as an identity.
+    pub fn set_client_info(
+        &self,
+        transport: crate::Transport,
+        client_type: Option<&str>,
+        client_user_id: Option<&str>,
+        server_session_id: Option<&str>,
+    ) {
+        let a = &self.state.activity;
+        a.set_transport(transport);
+        a.set_client(client_type, client_user_id, server_session_id);
+        a.touch();
+    }
+
+    /// The idle timeout `system.sessions.idle_timeout_ms` shows for this
+    /// session (`None`: the server default). The sweep that enforces it is the
+    /// server's, through [`EngineRuntime::expire_session`].
+    pub fn set_idle_timeout_ms(&self, ms: Option<i64>) {
+        self.state.activity.set_idle_timeout_ms(ms);
     }
 
     /// The session's id: a UUIDv7 minted when it was made, the id
@@ -331,6 +386,7 @@ impl Session {
         if self.state.closed.load(Ordering::Acquire) {
             return Err(self.closed_error());
         }
+        self.state.activity.touch();
         Ok(())
     }
 
@@ -438,9 +494,11 @@ impl Session {
     /// too): its stream ends with
     /// `OPERATION_CANCELED` at its next batch boundary (a query whose
     /// execution has not begun fails as it begins), and
-    /// `system.queries.cancel_reason` shows `user`. Whether a running query
-    /// was cancelled: `false` for an unknown id, a query that ended or one
-    /// of another session.
+    /// `system.queries.cancel_reason` shows `user`. A statement named `id`
+    /// that is still being analyzed or planned ends with `OPERATION_CANCELED`
+    /// before its query exists. Whether a running query or statement was
+    /// cancelled: `false` for an unknown id, one that ended or one of another
+    /// session.
     ///
     /// ```
     /// let s = krishiv_session::Session::new()?;
@@ -460,7 +518,10 @@ impl Session {
     }
 
     /// Cancels every running query of this session (Spark Connect's
-    /// `Interrupt` of type `ALL`) and returns their ids.
+    /// `Interrupt` of type `ALL`) and returns their ids. Every action of the
+    /// session still being analyzed or planned ends too, including ones that
+    /// run no query (`schema`, `explain`, `estimate`); those the caller gave
+    /// no operation id are ended but not listed.
     pub fn interrupt_all(&self) -> Vec<crate::QueryId> {
         let number = self.state.number;
         self.state

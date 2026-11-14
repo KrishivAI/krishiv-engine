@@ -653,6 +653,12 @@ impl ProbeOp {
 }
 
 impl Operator for ProbeOp {
+    // A hash probe always needs a flush barrier (`needs_flush`), which already keeps its
+    // pipeline at one driver; the grace join's state is not lane-ordered, so it says no.
+    fn lane_safe(&self) -> bool {
+        false
+    }
+
     fn name(&self) -> &'static str {
         "HashJoinProbe"
     }
@@ -676,7 +682,11 @@ impl Operator for ProbeOp {
                         )
                     })?),
                 };
-                Some(RowSelect::new(spec.predicate.clone(), stage))
+                Some(RowSelect::new(
+                    spec.predicate.clone(),
+                    spec.narrow.clone(),
+                    stage,
+                ))
             }
         };
         let dep = ctx

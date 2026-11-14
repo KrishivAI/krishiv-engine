@@ -7,7 +7,8 @@
 The Spark Connect gRPC server: the tonic service, the session manager keyed by (authenticated principal, session
 id), the limits applied before admission, and graceful shutdown. Decoding and translation stay in `krishiv-connect`;
 the admin HTTP server (`/healthz`, `/readyz`, `/metrics`, UI) is `krishiv-server`; the process around both is
-`krishiv server` in `krishiv-cli`.
+`krishiv server` in `krishiv-cli`, which runs Krishiv single-node (deployment modes: embedded, single-node,
+distributed; clients connect over Spark Connect).
 
 ## Key files
 Paths are relative to this crate.
@@ -40,7 +41,7 @@ Paths are relative to this crate.
   warnings, redaction for both profiles (Spark's pattern plus `krishiv_common::secret`'s classifier and URL
   credentials), `SettableBy` (`check_settable`; `role_of` makes every principal admin until T002)
 - `src/interrupt.rs` `Interrupt` (design §3.7): `ALL` and `OPERATION_ID` through the session's operations and
-  `Session::cancel`/`interrupt_all`; an interrupted operation stays registered (Spark keeps the `ExecuteHolder`), so a
+  `Session::cancel` per reported id; an interrupted operation stays registered (Spark keeps the `ExecuteHolder`), so a
   reattach gets `OPERATION_CANCELED`; `TAG` is `UNSUPPORTED_FEATURE.INTERRUPT_TYPE` until T064
 - `src/operation.rs` `Operation` (one per `ExecutePlan`: id, plan digest, tags, reattachable, its `Replay`, one
   atomic state: running, then finished or cancelled by compare-and-swap; `close` = Spark's `ExecuteHolder.close`)
@@ -99,7 +100,8 @@ Paths are relative to this crate.
   below one operation's worst case (`ExecuteLimits::validate`). Dropping a non-reattachable operation's stream (seen at once) cancels its
   query and removes it; a reattachable one detaches and stays until `release_all`, its session's release, or
   `detachedTimeout` (then tombstoned: `OPERATION_ABANDONED`). Live operations, detached or finished but unreleased,
-  keep a session busy.
+  keep a session from the idle sweep; shutdown waits only for operations still running or read by an attached
+  client (`Operation::is_active`).
 - **Artifacts never leave their session's directory**: names are validated before any file exists, every path is
   resolved segment by segment from a directory descriptor with `O_NOFOLLOW`, installs use `linkat` (no replace), and
   every byte is counted against the quota before it is written. A released, swept or shut-down session removes its

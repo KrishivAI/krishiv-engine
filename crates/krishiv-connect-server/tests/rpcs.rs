@@ -311,6 +311,26 @@ async fn analyze_explain_tree_string_and_flags() {
         panic!("is local");
     };
     assert!(!l.is_local);
+    // Codex review (#738): SQL text is parsed during analysis, so a SQL
+    // `VALUES` is not an inline table when `is_local` asks (Spark's answer
+    // for it is to be checked against 4.2/4.3 before this changes).
+    for query in [
+        "VALUES (1), (2)",
+        "SELECT * FROM VALUES (1), (2)",
+        "SELECT 1",
+    ] {
+        let AResult::IsLocal(l) = analyzed(
+            &run,
+            Analyze::IsLocal(Box::new(areq::IsLocal {
+                plan: Some(sql(query)),
+            })),
+        )
+        .await
+        else {
+            panic!("is local");
+        };
+        assert!(!l.is_local, "{query}");
+    }
     let AResult::IsStreaming(st) = analyzed(
         &run,
         Analyze::IsStreaming(Box::new(areq::IsStreaming { plan: Some(plan) })),

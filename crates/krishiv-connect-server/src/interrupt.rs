@@ -13,7 +13,7 @@
 //! `interrupted_ids` lists only operations this call interrupted (not one
 //! cancelled before or one that had sent its last response). A cancelled
 //! operation's stream ends with `OPERATION_CANCELED`; its engine query is
-//! cancelled through the session (`Session::cancel`, `Session::interrupt_all`)
+//! cancelled through the session (`Session::cancel`, one per reported id)
 //! so it stops at its next batch boundary and returns its memory.
 //!
 //! Either way the operation stays in the session's map, as Spark keeps the
@@ -46,13 +46,16 @@ pub fn interrupt(
     let kind = InterruptType::try_from(request.interrupt_type);
     let interrupted = match kind {
         Ok(InterruptType::All) => {
+            // Only the operations it reports (Spark's
+            // `SessionHolder.interruptAll`): one registered after the
+            // snapshot keeps running.
             let mut ids = Vec::new();
             for op in entry.operations().all() {
                 if op.cancel() {
+                    entry.session().cancel(op.id());
                     ids.push(op.id().as_str().to_owned());
                 }
             }
-            entry.session().interrupt_all();
             ids
         }
         Ok(InterruptType::Tag) => {

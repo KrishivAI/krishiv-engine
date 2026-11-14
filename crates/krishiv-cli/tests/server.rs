@@ -125,8 +125,8 @@ fn start(spill: &std::path::Path) -> Running {
     start_with(spill, &[])
 }
 
-/// [`start`] with extra `--conf key=value` settings.
-fn start_with(spill: &std::path::Path, confs: &[&str]) -> Running {
+/// [`start`] with more `--conf KEY=VALUE` settings.
+fn start_with(spill: &std::path::Path, conf: &[String]) -> Running {
     let mut child = krishiv()
         // `--allow-root`: CI containers may run as root.
         .args([
@@ -139,7 +139,7 @@ fn start_with(spill: &std::path::Path, confs: &[&str]) -> Running {
         ])
         .args(["--conf", "krishiv.metrics.enabled=true", "--conf"])
         .arg(format!("krishiv.spill.dir={}", spill.display()))
-        .args(confs.iter().flat_map(|c| ["--conf", c]))
+        .args(conf.iter().flat_map(|c| ["--conf", c.as_str()]))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -167,12 +167,18 @@ fn start_with(spill: &std::path::Path, confs: &[&str]) -> Running {
 }
 
 fn http_get(addr: &str, path: &str) -> String {
+    http_get_as(addr, path, None)
+}
+
+/// `GET path` with `Authorization: Bearer token` when `token` is given.
+fn http_get_as(addr: &str, path: &str, token: Option<&str>) -> String {
     let mut s = TcpStream::connect(addr).expect("connect");
     s.set_read_timeout(Some(Duration::from_secs(10)))
         .expect("timeout");
+    let auth = token.map_or(String::new(), |t| format!("Authorization: Bearer {t}\r\n"));
     write!(
         s,
-        "GET {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"
+        "GET {path} HTTP/1.1\r\nHost: x\r\n{auth}Connection: close\r\n\r\n"
     )
     .expect("write");
     let mut out = String::new();
@@ -259,7 +265,8 @@ fn pyspark_with(confs: &[&str], script: &str) {
     std::fs::write(&file, script).expect("script");
     let python =
         std::env::var("KRISHIV_TEST_PYSPARK_PYTHON").unwrap_or_else(|_| "python3".to_owned());
-    let run = start_with(spill.path(), confs);
+    let confs: Vec<String> = confs.iter().map(|c| (*c).to_owned()).collect();
+    let run = start_with(spill.path(), &confs);
     let out = Command::new(python)
         .arg(&file)
         .env("SPARK_REMOTE", format!("sc://{}", run.connect))
@@ -286,19 +293,28 @@ fn sc_localhost_runs_spark_range_collect() {
 
 /// Design P3-T011a §5 `pyspark_minimal_reattach`: the stock client asks
 /// for a reattachable execution, gets `ResultComplete`, sends
-/// `ReleaseExecute` after the responses, and logs no error.
+/// `ReleaseExecute` after the responses, and logs no warning or error.
+/// The Connect logger (`pyspark.sql.connect.logging`) is disabled unless
+/// `SPARK_CONNECT_LOG_LEVEL` is set when it is imported; a failed release
+/// is a warning there (`reattach.py`, "ReleaseExecute failed").
 #[test]
 #[ignore = "needs a Python with pyspark-client 4.3.0 or 4.2.1 (KRISHIV_TEST_PYSPARK_PYTHON); CI hosts have none"]
 fn pyspark_minimal_reattach() {
     pyspark(
-        "import io, logging\n\
+        "import logging, os\n\
+         os.environ['SPARK_CONNECT_LOG_LEVEL'] = 'warning'\n\
+         from pyspark.sql.connect.logging import logger\n\
+         records = []\n\
+         class Keep(logging.Handler):\n\
+         \x20   def emit(self, record):\n\
+         \x20       records.append(record)\n\
+         logger.addHandler(Keep())\n\
          from pyspark.sql import SparkSession\n\
-         log = io.StringIO()\n\
-         logging.getLogger('pyspark').addHandler(logging.StreamHandler(log))\n\
          s = SparkSession.builder.getOrCreate()\n\
          assert [r.id for r in s.range(10).collect()] == list(range(10))\n\
          s.stop()\n\
-         assert 'ERROR' not in log.getvalue() and 'Traceback' not in log.getvalue(), log.getvalue()\n",
+         bad = [r.getMessage() for r in records if r.levelno >= logging.WARNING]\n\
+         assert not bad, bad\n",
     );
 }
 
@@ -410,4 +426,53 @@ fn idle_client_survives_keepalive() {
          assert s.range(2).count() == 2\n\
          s.stop()\n",
     );
+}
+
+#[test]
+fn an_inline_auth_secret_is_refused_and_not_echoed() {
+    let out = krishiv()
+        .args(["server", "--port", "0", "--connect-port", "0", "--conf"])
+        .arg("krishiv.auth.tokens.a.secret=inline-canary-secret-0123456789abcdef")
+        .output()
+        .expect("run krishiv server");
+    assert_eq!(out.status.code(), Some(1));
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!all.contains("inline-canary-secret"), "{all}");
+    assert!(!all.contains("Spark Connect on"), "{all}");
+}
+
+#[cfg(unix)]
+#[test]
+fn configured_tokens_guard_the_admin_routes() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let token = "prometheus-scrape-token-0123456789abcdef";
+    let path = dir.path().join("prom");
+    std::fs::write(&path, token).expect("write secret");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    let conf = [
+        format!("krishiv.auth.tokens.prom.secret=file:{}", path.display()),
+        "krishiv.auth.tokens.prom.principal=prometheus".to_owned(),
+        "krishiv.auth.tokens.prom.role=viewer".to_owned(),
+    ];
+    let server = start_with(dir.path(), &conf);
+    let none = http_get(&server.admin, "/metrics");
+    assert!(none.starts_with("HTTP/1.1 401"), "{none}");
+    let scrape = http_get_as(&server.admin, "/metrics", Some(token));
+    assert!(scrape.starts_with("HTTP/1.1 200"), "{scrape}");
+    // A viewer sees no other principal's work in the UI's data routes (the route exists only
+    // with the `ui` feature).
+    let ui = http_get_as(&server.admin, "/api/internal/queries", Some(token));
+    let expected = if cfg!(feature = "ui") {
+        "HTTP/1.1 403"
+    } else {
+        "HTTP/1.1 404"
+    };
+    assert!(ui.starts_with(expected), "{ui}");
+    let probe = http_get(&server.admin, "/healthz");
+    assert!(probe.starts_with("HTTP/1.1 200"), "{probe}");
 }
