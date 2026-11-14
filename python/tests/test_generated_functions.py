@@ -16,6 +16,7 @@ import pytest
 from _pyspark_signatures import PYSPARK_SIGNATURES
 
 from krishiv import _native, errors
+from krishiv.errors import UnsupportedOperationException
 from krishiv.sql import DataFrame, SparkSession
 from krishiv.sql import _generated_functions as G
 from krishiv.sql import functions as F
@@ -31,7 +32,11 @@ REGISTRY_NAME = {
     "bitwiseNOT": "~",
     "create_map": "map",
     "mean": "avg",
+    "negate": "negative",
     "pow": "power",
+    "approxCountDistinct": "approx_count_distinct",
+    "timestamp_add": "timestampadd",
+    "timestamp_diff": "timestampdiff",
     "shiftLeft": "shiftleft",
     "shiftRight": "shiftright",
     "shiftRightUnsigned": "shiftrightunsigned",
@@ -102,7 +107,7 @@ def test_names_and_parameters_are_pysparks() -> None:
 
 
 def test_registered_functions_pyspark_lacks_are_not_exported() -> None:
-    for name in ("power", "mod", "if"):
+    for name in ("mod", "if"):
         assert not hasattr(F, name), name
     for name in ("count", "log", "ln"):
         assert callable(getattr(F, name))
@@ -166,6 +171,11 @@ def test_every_wrapper_builds_its_registry_call(name: str, recorded: None) -> No
     expected = [a for _, args in samples for a in args]
     if name in REVERSED:
         expected.reverse()
+    if name in G._ENGINE_UNSUPPORTED:
+        # In Spark's catalog but not implemented: the call fails at once with the engine's error.
+        with pytest.raises(UnsupportedOperationException, match="KRISHIV_UNSUPPORTED_FEATURE"):
+            fn(*values)
+        return
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", FutureWarning)
         assert fn(*values)._c == ("call", REGISTRY_NAME.get(name, name), tuple(expected))

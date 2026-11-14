@@ -7,10 +7,6 @@
 
 use super::Row;
 
-/// The reason the lambda functions have no wrapper: the Python `Column`
-/// API cannot build lambdas yet.
-const NO_LAMBDA: &str = "takes a lambda; the Python `Column` API cannot build lambdas yet";
-
 /// Registry names that need no wrapper, with the reason.
 pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     ("&", "operator: `Column.bitwiseAND`"),
@@ -20,10 +16,6 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     (">>", "operator"),
     (">>>", "operator"),
     ("if", "no PySpark function"),
-    (
-        "stack",
-        "generator: rewritten by the analyzer, no PySpark function",
-    ),
     ("make_time", "TIME has no Python mapping yet (P2-T181)"),
     ("time", "TIME has no Python mapping yet (P2-T181)"),
     ("current_time", "TIME has no Python mapping yet (P2-T181)"),
@@ -144,30 +136,6 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "the analyzer's `substring_index` over `UTF8_LCASE` strings",
     ),
     (
-        "explode",
-        "generator: a `Generate` node, not a DataFrame function yet",
-    ),
-    (
-        "explode_outer",
-        "generator: a `Generate` node, not a DataFrame function yet",
-    ),
-    (
-        "posexplode",
-        "generator: a `Generate` node, not a DataFrame function yet",
-    ),
-    (
-        "posexplode_outer",
-        "generator: a `Generate` node, not a DataFrame function yet",
-    ),
-    (
-        "inline",
-        "generator: a `Generate` node, not a DataFrame function yet",
-    ),
-    (
-        "inline_outer",
-        "generator: a `Generate` node, not a DataFrame function yet",
-    ),
-    (
         "variant_explode",
         "generator: a `Generate` node, not a DataFrame function yet",
     ),
@@ -175,28 +143,10 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "variant_explode_outer",
         "generator: a `Generate` node, not a DataFrame function yet",
     ),
-    (
-        "timestampadd",
-        "parsed from `TIMESTAMPADD(unit, n, ts)`; PySpark names it `timestamp_add`",
-    ),
-    (
-        "timestampdiff",
-        "parsed from `TIMESTAMPDIFF(unit, a, b)`; PySpark names it `timestamp_diff`",
-    ),
     ("mod", "no PySpark function"),
     ("any", "no PySpark function"),
-    ("any_value", "no PySpark function"),
-    (
-        "array_agg",
-        "ANSI spelling of `collect_list`; SQL-only, like Spark's naming",
-    ),
-    ("random", "an alias of `rand`; no PySpark function"),
-    ("chr", "no PySpark function; use `char`"),
-    ("every", "no PySpark function"),
     ("len", "no PySpark function; use `length`"),
     ("luhn_check", "no PySpark function"),
-    ("max_by", "no PySpark function"),
-    ("min_by", "no PySpark function"),
     (
         "percentile_cont",
         "ordered-set aggregate: SQL-only, needs WITHIN GROUP (ORDER BY ...)",
@@ -205,7 +155,6 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "percentile_disc",
         "ordered-set aggregate: SQL-only, needs WITHIN GROUP (ORDER BY ...)",
     ),
-    ("some", "no PySpark function"),
     ("vector_cosine_similarity", "no PySpark function in 4.2"),
     ("vector_inner_product", "no PySpark function in 4.2"),
     ("vector_l2_distance", "no PySpark function in 4.2"),
@@ -261,36 +210,8 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "timestamp",
         "cast-named function; the analyzer rewrites the call to a cast",
     ),
-    (
-        "string_agg",
-        "an alias of `listagg`; SQL-only, like `array_agg`",
-    ),
     ("vector_avg", "no PySpark function; SQL only"),
     ("vector_sum", "no PySpark function; SQL only"),
-    (
-        "schema_of_csv",
-        "PySpark's `options` map parameter has no wrapper support yet; SQL only",
-    ),
-    (
-        "from_csv",
-        "PySpark's `options` map parameter has no wrapper support yet; SQL only",
-    ),
-    (
-        "to_csv",
-        "PySpark's `options` map parameter has no wrapper support yet; SQL only",
-    ),
-    (
-        "schema_of_xml",
-        "PySpark's `options` map parameter has no wrapper support yet; SQL only",
-    ),
-    (
-        "from_xml",
-        "PySpark's `options` map parameter has no wrapper support yet; SQL only",
-    ),
-    (
-        "to_xml",
-        "PySpark's `options` map parameter has no wrapper support yet; SQL only",
-    ),
     ("space", "no PySpark function"),
     (
         "mean",
@@ -300,25 +221,78 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "pow",
         "an alias of `power`; the exported `pow` is a row that sends `power`",
     ),
-    ("transform", NO_LAMBDA),
-    ("filter", NO_LAMBDA),
-    ("exists", NO_LAMBDA),
-    ("forall", NO_LAMBDA),
-    ("aggregate", NO_LAMBDA),
-    ("reduce", NO_LAMBDA),
-    ("zip_with", NO_LAMBDA),
-    ("map_filter", NO_LAMBDA),
-    ("map_zip_with", NO_LAMBDA),
-    ("transform_keys", NO_LAMBDA),
-    ("transform_values", NO_LAMBDA),
-    (
-        "array_sort",
-        "takes an optional lambda; the Python `Column` API cannot build lambdas yet",
-    ),
 ];
+
+/// Catalog-only names the analyzer handles itself (`like`/`ilike`/`rlike` become the operators,
+/// `grouping`/`grouping_id` are rewritten over grouping sets), so their wrappers send the call.
+pub(super) const ANALYZER_HANDLED: &[&str] = &["like", "ilike", "rlike", "grouping", "grouping_id"];
 
 /// Registry names whose wrapper is written by hand in `functions.py`.
 pub(super) const HANDWRITTEN: &[(&str, &str)] = &[
+    ("explode", "generator: written by hand in `functions.py`"),
+    (
+        "explode_outer",
+        "generator: written by hand in `functions.py`",
+    ),
+    ("posexplode", "generator: written by hand in `functions.py`"),
+    (
+        "posexplode_outer",
+        "generator: written by hand in `functions.py`",
+    ),
+    ("inline", "generator: written by hand in `functions.py`"),
+    (
+        "inline_outer",
+        "generator: written by hand in `functions.py`",
+    ),
+    ("stack", "generator: written by hand in `functions.py`"),
+    (
+        "transform",
+        "takes a Python lambda: written by hand in `functions.py`, which turns it into a SQL lambda",
+    ),
+    (
+        "filter",
+        "takes a Python lambda: written by hand in `functions.py`, which turns it into a SQL lambda",
+    ),
+    (
+        "exists",
+        "takes a Python lambda: written by hand in `functions.py`, which turns it into a SQL lambda",
+    ),
+    (
+        "forall",
+        "takes a Python lambda: written by hand in `functions.py`, which turns it into a SQL lambda",
+    ),
+    (
+        "aggregate",
+        "takes a Python lambda: written by hand in `functions.py`, which turns it into a SQL lambda",
+    ),
+    (
+        "reduce",
+        "takes a Python lambda: written by hand in `functions.py`, which turns it into a SQL lambda",
+    ),
+    (
+        "zip_with",
+        "takes a Python lambda: written by hand in `functions.py`, which turns it into a SQL lambda",
+    ),
+    (
+        "map_filter",
+        "takes a Python lambda: written by hand in `functions.py`, which turns it into a SQL lambda",
+    ),
+    (
+        "map_zip_with",
+        "takes a Python lambda: written by hand in `functions.py`, which turns it into a SQL lambda",
+    ),
+    (
+        "transform_keys",
+        "takes a Python lambda: written by hand in `functions.py`, which turns it into a SQL lambda",
+    ),
+    (
+        "transform_values",
+        "takes a Python lambda: written by hand in `functions.py`, which turns it into a SQL lambda",
+    ),
+    (
+        "array_sort",
+        "takes a Python lambda: written by hand in `functions.py`, which turns it into a SQL lambda",
+    ),
     (
         "make_ym_interval",
         "an omitted field is `lit(0)`, wherever it falls, so `None` can't just drop it",
@@ -352,7 +326,7 @@ const S: &str = "str: ColumnOrName";
 
 /// Every PySpark function that has a registry counterpart.
 pub(super) fn rows() -> Vec<Row> {
-    let mut rows = Vec::new();
+    let mut rows = super::table_catalog::rows();
     for name in [
         "cume_dist",
         "curdate",
@@ -712,6 +686,7 @@ pub(super) fn rows() -> Vec<Row> {
         ),
         Row::new("ntile", "n: int"),
         Row::new("rand", "seed: int = None"),
+        Row::new("random", "seed: int = None"),
         Row::new("randn", "seed: int = None"),
         Row::new(
             "randstr",
