@@ -104,6 +104,29 @@ repeated values raise `INVALID_ARRAY_INDEX` with ANSI on and leave NULL cells wi
 - a NULL pivot value for a binary or collated pivot column: Spark 4.2 compares it with the other values in a sorted
   map (and fails), earlier versions look it up in a hash map.
 
+## `describe`, `summary`, `freqItems` and sampling in Python
+
+- `describe`, `summary` and `freqItems` evaluate when called (one engine aggregate, or a read of the column) and
+  return a local DataFrame; Spark builds a lazy plan. The values, formats and errors are Spark's. A percentile is
+  the engine's approximate percentile with Spark's accuracy of 10000, which is the exact nearest rank up to 10000
+  rows. `freqItems` runs Spark's counting algorithm over the column in row order, so it is exact on one partition;
+  the order of the items is not Spark's hash order. `approxQuantile` with a `relativeError` above 0 may differ from
+  Spark's Greenwald-Khanna summary in the last rank; `relativeError=0` is exact. `approxQuantile` with an empty
+  `probabilities` raises `CANNOT_BE_EMPTY` (Spark fails with a `NullPointerException`).
+- `sample`, `randomSplit` and `sampleBy` draw one number per row from Spark's `XORShiftRandom` (`rand(seed)`) and
+  keep the rows Spark keeps for the same seed when the input is one partition read in the same order. After a
+  shuffle (`repartition`) or on an input Krishiv splits differently from Spark (file splits) the rows differ; the
+  counts and the disjoint-and-complete property of `randomSplit` hold.
+- `df.sample(0.3, seed=1)`: PySpark (3.5 to 4.2) drops the seed of this call form and samples at random. Krishiv
+  honours it, so the result is deterministic.
+- `sample(withReplacement=True, ...)` fails with `KRISHIV_UNSUPPORTED_FEATURE`: Spark draws each row's copies from a
+  Poisson distribution (commons-math `Well19937c`) seeded per partition, which is not reproduced, and a different
+  multiset of rows would be a silent difference.
+- `GroupedData.pivot` fails with `KRISHIV_UNSUPPORTED_FEATURE` when an aggregate reads one of the grouping columns
+  (`groupBy("a").pivot("b").agg(max("a"))`): the pivot groups by the columns nobody reads.
+- A single `pivot` with `values=[]` computes the values (as Spark Connect), where classic PySpark gives no pivot
+  columns.
+
 ## Inferred join filters differ from Spark's
 Spark's `InferFiltersFromConstraints` adds filters to the inputs of a join from the join condition and the filters
 below it. Krishiv adds the same `isnotnull` on nullable join keys, and moves comparisons with a literal, literal `IN`

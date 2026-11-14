@@ -519,12 +519,7 @@ def test_agg_dict(spark: SparkSession) -> None:
         df.groupBy("name").agg("age")  # ty: ignore[invalid-argument-type]
 
 
-def test_pivot_is_unsupported(df: DataFrame) -> None:
-    with pytest.raises(errors.UnsupportedOperationException) as bad:
-        df.groupBy("name").pivot("name")
-    assert bad.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
-    with pytest.raises(errors.UnsupportedOperationException):
-        df.groupBy("name").pivot("name", ["Alice"])
+def test_pivot_checks_its_arguments(df: DataFrame) -> None:
     with pytest.raises(errors.PySparkTypeError):
         df.groupBy("name").pivot(1)  # ty: ignore[invalid-argument-type]
     with pytest.raises(errors.PySparkTypeError):

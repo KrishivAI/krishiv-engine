@@ -3,10 +3,8 @@
 
 Each test follows an example from the PySpark documentation of ``DataFrameNaFunctions``,
 ``DataFrameStatFunctions`` and the matching ``DataFrame`` methods, with the documented output.
-Where the engine cannot run something yet (``sample`` and the variance, covariance, correlation,
-percentile and frequent-items aggregates), the test asserts the engine's own
-``KRISHIV_UNSUPPORTED_FEATURE`` error instead of emulating the result: those assertions are the ones
-to turn into the documented outputs when the engine gains the feature.
+The statistics and sampling methods are also checked against Spark 4.2.0 goldens in
+``test_stats_sampling.py``.
 
 String columns built from Python rows or pyarrow ``string`` columns are Arrow
 ``Utf8`` columns while string literals arrive as ``Utf8View``; the physical
@@ -18,7 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import doctest
-import sys
+import math
 import textwrap
 from collections.abc import Generator
 from typing import Any
@@ -911,50 +909,28 @@ def test_crosstab_argument_errors(spark: SparkSession) -> None:
 # sampleBy -----------------------------------------------------------------------------------
 
 
-@pytest.fixture
-def sampled_calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple[bool, float, int]]:
-    """``DataFrame.sample`` (the engine cannot sample yet) replaced by a recorder that keeps every row."""
-    calls: list[tuple[bool, float, int]] = []
-
-    def sample(self: DataFrame, withReplacement: bool, fraction: float, seed: int) -> DataFrame:
-        calls.append((withReplacement, fraction, seed))
-        return self
-
-    monkeypatch.setattr(DataFrame, "sample", sample)
-    return calls
-
-
-def test_sample_by_samples_each_stratum_and_unions_them(
-    spark: SparkSession, sampled_calls: list[tuple[bool, float, int]]
-) -> None:
+def test_sample_by_samples_each_stratum(spark: SparkSession) -> None:
     df = frame(spark, {"k": [0, 0, 1, 2, None, 1], "v": ["a", "b", "c", "d", "e", "f"]})
-    out = df.sampleBy("k", {0: 0.1, 1: 0.5}, seed=11)
+    out = df.sampleBy("k", {0: 1.0, 1: 1.0}, seed=11)
     assert out.columns == ["k", "v"]
     assert rows(out) == [(0, "a"), (0, "b"), (1, "c"), (1, "f")]  # stratum 2 and the null key are in no sample
-    assert sampled_calls == [(False, 0.1, 11), (False, 0.5, 11)]
+    assert rows(df.sampleBy("k", {0: 0.0, 1: 0.0}, seed=11)) == []
 
 
-def test_sample_by_is_reproducible_with_a_seed(
-    spark: SparkSession, sampled_calls: list[tuple[bool, float, int]]
-) -> None:
-    df = frame(spark, {"k": ["x", "y"]})
-    first = df.stat.sampleBy(F.col("k"), {"x": 1.0, "y": 0.25}, 3)
-    again = df.stat.sampleBy("k", {"x": 1.0, "y": 0.25}, 3)
+def test_sample_by_is_reproducible_with_a_seed(spark: SparkSession) -> None:
+    df = spark.range(200).select((F.col("id") % 2).alias("k"), F.col("id"))
+    first = df.stat.sampleBy(F.col("k"), {0: 0.3, 1: 0.6}, 3)
+    again = df.stat.sampleBy("k", {0: 0.3, 1: 0.6}, 3)
     assert rows(first) == rows(again)
-    assert sampled_calls == [(False, 1.0, 3), (False, 0.25, 3)] * 2
-    sampled_calls.clear()
-    df.sampleBy("k", {"x": 0.5, "y": 0.5})
-    (seed,) = {call[2] for call in sampled_calls}  # without a seed one is drawn, and shared by the strata
-    assert 0 <= seed <= sys.maxsize
+    assert rows(df.sampleBy("k", {0: 0.3, 1: 0.6}, 4)) != rows(first)
+    fresh = df.sampleBy("k", {0: 0.5, 1: 0.5})  # a seed is drawn, and fixed for this DataFrame
+    assert rows(fresh) == rows(fresh)
 
 
-def test_sample_by_keeps_the_fractions_it_was_given(
-    spark: SparkSession, sampled_calls: list[tuple[bool, float, int]]
-) -> None:
+def test_sample_by_keeps_the_fractions_it_was_given(spark: SparkSession) -> None:
     fractions = {1: 1, "a": 0}
     frame(spark, {"k": [1, 2]}).sampleBy("k", fractions, 1)  # ty: ignore[invalid-argument-type]
     assert fractions == {1: 1, "a": 0}
-    assert sampled_calls[0] == (False, 1.0, 1)
 
 
 def test_sample_by_without_fractions_is_empty(spark: SparkSession) -> None:
@@ -1002,16 +978,6 @@ def test_sample_by_fractions_must_be_in_the_unit_interval(spark: SparkSession, f
         frame(spark, {"k": [1]}).sampleBy("k", {1: "x"})  # ty: ignore[invalid-argument-type]
 
 
-def test_sample_by_example_fails_with_the_engines_sample_error(spark: SparkSession) -> None:
-    # The documented outputs (4 and 9 rows, then 33) need the engine's ``sample``.
-    dataset = spark.range(0, 100, 1, 5).select((F.col("id") % 3).alias("key"))
-    sampled = dataset.sampleBy("key", fractions={0: 0.1, 1: 0.2}, seed=0)  # lazy: the error is the action's
-    with unsupported("DataFrame.sample"):
-        sampled.groupBy("key").count().orderBy("key").show()
-    with unsupported("DataFrame.sample"):
-        dataset.sampleBy(F.col("key"), fractions={2: 1.0}, seed=0).count()
-
-
 # describe, summary, corr, cov, freqItems, approxQuantile -------------------------------------
 
 
@@ -1023,25 +989,39 @@ def measures(spark: SparkSession) -> DataFrame:
     )
 
 
-def test_describe_examples_fail_with_the_engines_error(measures: DataFrame) -> None:
-    with unsupported("DataFrame.describe"):
-        measures.describe(["age"])
-    with unsupported("DataFrame.describe"):
-        measures.describe(["age", "weight", "height"])
-    with unsupported("DataFrame.describe"):
-        measures.describe("age", "weight")
-    with unsupported("DataFrame.describe"):
-        measures.describe()
+def test_describe_examples(measures: DataFrame) -> None:
+    assert [tuple(r) for r in measures.describe(["age"]).collect()] == [
+        ("count", "3"),
+        ("mean", "12.0"),
+        ("stddev", "1.0"),
+        ("min", "11"),
+        ("max", "13"),
+    ]
+    assert measures.describe(["age", "weight", "height"]).columns == ["summary", "age", "weight", "height"]
+    assert measures.describe("age", "weight").columns == ["summary", "age", "weight"]
+    assert measures.describe().columns == ["summary", "name", "age", "weight", "height"]
 
 
-def test_summary_examples_fail_with_the_engines_error(measures: DataFrame) -> None:
+def test_summary_examples(measures: DataFrame) -> None:
     numbers = measures.select("age", "weight", "height")
-    with unsupported("DataFrame.summary"):
-        numbers.summary()
-    with unsupported("DataFrame.summary"):
-        numbers.summary("count", "min", "25%", "75%", "max")
-    with unsupported("DataFrame.summary"):
-        numbers.summary(["count", "max"])
+    assert [r[0] for r in numbers.summary().collect()] == [
+        "count",
+        "mean",
+        "stddev",
+        "min",
+        "25%",
+        "50%",
+        "75%",
+        "max",
+    ]
+    assert [tuple(r) for r in numbers.summary("count", "min", "25%", "75%", "max").collect()] == [
+        ("count", "3", "3", "3"),
+        ("min", "11", "37.8", "142.2"),
+        ("25%", "11", "37.8", "142.2"),
+        ("75%", "13", "44.1", "150.5"),
+        ("max", "13", "44.1", "150.5"),
+    ]
+    assert numbers.summary(["count", "max"]).count() == 2
 
 
 def test_describe_and_summary_argument_errors(measures: DataFrame) -> None:
@@ -1053,18 +1033,14 @@ def test_describe_and_summary_argument_errors(measures: DataFrame) -> None:
         measures.summary([1])  # ty: ignore[invalid-argument-type]
 
 
-def test_corr_and_cov_examples_fail_with_the_engines_error(spark: SparkSession) -> None:
+def test_corr_and_cov_examples(spark: SparkSession) -> None:
     df = spark.createDataFrame([(1, 12), (10, 1), (19, 8)], ["c1", "c2"])
     bigger = spark.createDataFrame([(11, 12), (10, 11), (9, 10)], ["small", "bigger"])
-    for call, feature in [
-        (lambda: df.corr("c1", "c2"), "DataFrame.corr"),
-        (lambda: bigger.corr("small", "bigger"), "DataFrame.corr"),
-        (lambda: df.stat.corr("c1", "c2", "pearson"), "DataFrame.corr"),
-        (lambda: df.cov("c1", "c2"), "DataFrame.cov"),
-        (lambda: bigger.stat.cov("small", "bigger"), "DataFrame.cov"),
-    ]:
-        with unsupported(feature):
-            call()
+    assert df.corr("c1", "c2") == pytest.approx(-0.3592106040535498)
+    assert bigger.corr("small", "bigger") == pytest.approx(1.0)
+    assert df.stat.corr("c1", "c2", "pearson") == df.corr("c1", "c2")
+    assert df.cov("c1", "c2") == pytest.approx(-18.0)
+    assert bigger.stat.cov("small", "bigger") == pytest.approx(1.0)
 
 
 def test_corr_and_cov_argument_errors(spark: SparkSession) -> None:
@@ -1075,58 +1051,59 @@ def test_corr_and_cov_argument_errors(spark: SparkSession) -> None:
         df.cov("c1", ["c2"])  # ty: ignore[invalid-argument-type]
     with fails(errors.PySparkValueError, "VALUE_NOT_PEARSON", arg_name="method", arg_value="spearman"):
         df.corr("c1", "c2", "spearman")
-    # A falsy method is the default "pearson" (as PySpark's `if not method`), so "" reaches the engine.
-    with unsupported("DataFrame.corr"):
-        df.corr("c1", "c2", "")
+    # A falsy method is the default "pearson" (as PySpark's `if not method`).
+    assert math.isnan(df.corr("c1", "c2", ""))
 
 
-def test_freq_items_example_fails_with_the_engines_error(spark: SparkSession) -> None:
+def test_freq_items_example(spark: SparkSession) -> None:
     df = spark.createDataFrame([(1, 11), (1, 11), (3, 10), (4, 8), (4, 8)], ["c1", "c2"])
-    with unsupported("DataFrame.freqItems"):
-        df.freqItems(["c1", "c2"])
-    with unsupported("DataFrame.freqItems"):
-        df.stat.freqItems(("c1",), 0.5)
+    row = df.freqItems(["c1", "c2"]).collect()[0]
+    assert sorted(row["c1_freqItems"]) == [1, 3, 4]
+    assert sorted(row["c2_freqItems"]) == [8, 10, 11]
+    assert sorted(df.stat.freqItems(("c1",), 0.5).collect()[0][0]) == [1, 4]
     with fails(
         errors.PySparkTypeError, "NOT_EXPECTED_TYPE", arg_name="cols", expected_type="list or tuple", arg_type="str"
     ):
         df.freqItems("c1")  # ty: ignore[invalid-argument-type]
 
 
-def test_freq_items_bad_support_and_columns_reach_the_engines_error(spark: SparkSession) -> None:
-    # PySpark checks only the `cols` container client-side and hands the rest to the engine
-    # (`if not support: support = 0.01`), so with no sketch every call past the check fails
-    # with the engine's own error.
+def test_freq_items_bad_support_and_columns(spark: SparkSession) -> None:
     df = spark.createDataFrame([(1, 11), (1, 11)], ["c1", "c2"])
-    with unsupported("DataFrame.freqItems"):
-        df.freqItems(["c1"], "x")  # ty: ignore[invalid-argument-type]
-    with unsupported("DataFrame.freqItems"):
-        df.freqItems(["c1"], -1)
-    with unsupported("DataFrame.freqItems"):
+    with pytest.raises(errors.PySparkTypeError):
         df.freqItems(["c1", 1])  # ty: ignore[invalid-argument-type]
+    with pytest.raises(errors.IllegalArgumentException, match="Support must be in"):
+        df.freqItems(["c1"], -1)
 
 
 @pytest.mark.parametrize(
-    ("data", "names", "column", "probabilities", "error"),
+    ("data", "names", "column", "probabilities", "error", "expected"),
     [
-        ([(1,), (2,), (3,), (4,), (5,)], ["values"], "values", [0.0, 0.5, 1.0], 0.05),
-        ([(1, 10), (2, 20), (3, 30)], ["col1", "col2"], ["col1", "col2"], [0.0, 0.5, 1.0], 0.05),
-        ([(1,), (None,), (3,), (4,), (None,)], ["values"], "values", [0.0, 0.5, 1.0], 0.05),
-        ([(1,), (2,), (3,), (4,), (5,)], ["values"], "values", [0.0, 0.2, 1.0], 0.1),
+        ([(1,), (2,), (3,), (4,), (5,)], ["values"], "values", [0.0, 0.5, 1.0], 0.05, [1.0, 3.0, 5.0]),
+        (
+            [(1, 10), (2, 20), (3, 30)],
+            ["col1", "col2"],
+            ["col1", "col2"],
+            [0.0, 0.5, 1.0],
+            0.05,
+            [[1.0, 2.0, 3.0], [10.0, 20.0, 30.0]],
+        ),
+        ([(1,), (None,), (3,), (4,), (None,)], ["values"], "values", [0.0, 0.5, 1.0], 0.05, [1.0, 3.0, 4.0]),
+        ([(1,), (2,), (3,), (4,), (5,)], ["values"], "values", [0.0, 0.2, 1.0], 0.1, [1.0, 1.0, 5.0]),
     ],
 )
-def test_approx_quantile_examples_fail_with_the_engines_error(
+def test_approx_quantile_examples(
     spark: SparkSession,
     data: list[tuple[Any, ...]],
     names: list[str],
     column: Any,
     probabilities: list[float],
     error: float,
+    expected: list[Any],
 ) -> None:
     df = spark.createDataFrame(data, names)
-    with unsupported("DataFrame.approxQuantile"):
-        df.approxQuantile(column, probabilities, error)
-    with unsupported("DataFrame.approxQuantile"):
-        df.stat.approxQuantile(tuple(column) if isinstance(column, list) else column, tuple(probabilities), error)
+    assert df.approxQuantile(column, probabilities, error) == expected
+    got = df.stat.approxQuantile(tuple(column) if isinstance(column, list) else column, tuple(probabilities), error)
+    assert got == expected
 
 
 @pytest.mark.parametrize(
@@ -1203,10 +1180,3 @@ def test_error_messages_are_pysparks(typed: DataFrame) -> None:
         with pytest.raises(errors.PySparkException) as info:
             call()
         assert str(info.value) == message
-
-
-def test_unsupported_errors_carry_the_sql_state(spark: SparkSession) -> None:
-    with pytest.raises(errors.UnsupportedOperationException) as info:
-        spark.createDataFrame([(1, 2)], ["a", "b"]).cov("a", "b")
-    assert info.value.getSqlState() == "0A000"
-    assert "[KRISHIV_UNSUPPORTED_FEATURE]" in str(info.value)
