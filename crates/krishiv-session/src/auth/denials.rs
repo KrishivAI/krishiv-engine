@@ -69,7 +69,7 @@ impl DeniedCounts {
     /// Counts one denial on `surface` of the privilege named as `Privilege`'s `Display` writes it
     /// (the `privilege` parameter of `KRISHIV_INSUFFICIENT_PERMISSIONS`); an unknown name counts
     /// nothing.
-    pub fn record_named(&self, surface: Surface, privilege: &str) {
+    pub(crate) fn record_named(&self, surface: Surface, privilege: &str) {
         if let Some(p) = PRIVILEGES.iter().find(|p| p.to_string() == privilege) {
             self.record(surface, *p);
         }

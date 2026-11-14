@@ -512,7 +512,8 @@ pub const CATALOGUE: &[MetricDef] = &[
         labels: &[SURFACE_LABEL, AUTH_METHOD_LABEL],
         description: "Requests to `krishiv server` refused as unauthenticated (a missing, \
                       malformed, wrong or expired credential) or throttled, by listener and \
-                      the method tried. Zero series without authentication configured.",
+                      the method tried. Served only by `krishiv server` with authentication \
+                      configured.",
         since: "0.2.0",
         source: MetricSource::Scrape,
     },
@@ -523,7 +524,7 @@ pub const CATALOGUE: &[MetricDef] = &[
         labels: &[SURFACE_LABEL, PRIVILEGE_LABEL],
         description: "Access checks of `krishiv server` callers refused with \
                       `KRISHIV_INSUFFICIENT_PERMISSIONS`, by listener and the privilege asked \
-                      for.",
+                      for. Served only by `krishiv server` with authentication configured.",
         since: "0.2.0",
         source: MetricSource::Scrape,
     },

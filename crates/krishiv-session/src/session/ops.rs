@@ -351,8 +351,11 @@ impl Session {
             }
         }
         // A store error after the anchor is open may be a link swapped into
-        // the path: the audited denial is what the caller sees then.
-        if written.is_err()
+        // the path: the audited denial is what the caller sees then. A denial
+        // is already audited (and counted): it is not asked about again.
+        if written
+            .as_ref()
+            .is_err_and(|e| e.error_class().name() != "KRISHIV_INSUFFICIENT_PERMISSIONS")
             && let Err(denied) = crate::access::still_physical(self, &at)
             && denied.error_class().name() == "KRISHIV_INSUFFICIENT_PERMISSIONS"
         {

@@ -176,7 +176,7 @@ impl Session {
         // The runtime's starting configuration, validated when it was built
         // (for a private runtime, the builder's configuration).
         let config = Config::clone(&runtime.config);
-        Self::on_runtime(runtime, config, parts)
+        inherit_denials(self, Self::on_runtime(runtime, config, parts))
     }
 
     /// [`Self::new_session`] acting for `principal` under `policy` instead of this session's
@@ -281,7 +281,10 @@ impl Session {
         // A `close` that ran while the copy was made wins: no live clone of
         // a closed session.
         self.check_open()?;
-        Ok(Self::seeded(Arc::clone(&state.runtime), parts, seed))
+        Ok(inherit_denials(
+            self,
+            Self::seeded(Arc::clone(&state.runtime), parts, seed),
+        ))
     }
 
     /// The runtime this session runs on.
@@ -523,6 +526,15 @@ struct Seed {
     /// The working directory relative paths resolve against; `None` takes
     /// the process's.
     cwd: Option<String>,
+}
+
+/// `to`, counting its denials where `from` counts them (`new_session` and `clone_session` keep
+/// the principal, so they keep the server's denial counter too).
+fn inherit_denials(from: &Session, to: Session) -> Session {
+    if let Some((counts, surface)) = from.state.denials.get() {
+        to.count_denials(Arc::clone(counts), *surface);
+    }
+    to
 }
 
 #[cfg(test)]

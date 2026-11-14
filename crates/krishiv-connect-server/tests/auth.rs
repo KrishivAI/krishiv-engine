@@ -22,9 +22,11 @@ use krishiv_connect_server::{
     ConnectAuth, ConnectServer, ConnectServerConfig, SessionLimits, SessionManager, role_sessions,
 };
 use krishiv_session::BoxFuture;
+use krishiv_session::Privilege;
 use krishiv_session::Session;
 use krishiv_session::auth::{
     AuthConfig, AuthFailure, Authenticated, Authenticator, Credentials, Method, Role, ServerAuth,
+    Surface,
 };
 use prost::Message;
 use tokio::net::TcpListener;
@@ -39,6 +41,8 @@ const OPERATOR: &str = "operator-token-0123456789abcdefghijklmnopqrstu";
 
 struct Running {
     manager: Arc<SessionManager>,
+    /// The denial counter the sessions and the no-role refusal count into.
+    denials: Arc<krishiv_session::auth::DeniedCounts>,
     channel: Channel,
     _stop: oneshot::Sender<()>,
     _dir: tempfile::TempDir,
@@ -90,17 +94,18 @@ async fn start_with(auth: Arc<dyn Authenticator>, dir: tempfile::TempDir) -> Run
                 .to_string(),
         )
         .expect("allowed roots");
+    let denials = Arc::new(krishiv_session::auth::DeniedCounts::new());
     let factory = role_sessions(
         Session::new().expect("session"),
         &config,
-        Arc::new(krishiv_session::auth::DeniedCounts::new()),
+        Arc::clone(&denials),
     )
     .expect("factory");
     let manager = Arc::new(SessionManager::new(factory, SessionLimits::default()));
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
     let server = ConnectServer::new(Arc::clone(&manager), ConnectServerConfig::default())
-        .with_auth(ConnectAuth::new(auth));
+        .with_auth(ConnectAuth::new(auth).with_denials(Arc::clone(&denials)));
     let (stop, stopped) = oneshot::channel::<()>();
     tokio::spawn(server.serve(listener, async {
         let _ = stopped.await;
@@ -112,6 +117,7 @@ async fn start_with(auth: Arc<dyn Authenticator>, dir: tempfile::TempDir) -> Run
         .expect("connect");
     Running {
         manager,
+        denials,
         channel,
         _stop: stop,
         _dir: dir,
@@ -403,6 +409,8 @@ async fn sessions_get_the_role_policy_and_the_path_confinement() {
     .expect_err("confined");
     assert_eq!(s.code(), Code::PermissionDenied);
     assert_eq!(error_class(&s), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+    // ADR 0046 §8: the session counted it once, under `connect` and the privilege asked for.
+    assert_eq!(denied(&run), [(Surface::Connect, Privilege::Select, 1)]);
     // Inside the roots the same read gets past the policy (the file does not exist).
     let inside = run._dir.path().join("data").join("missing.parquet");
     let s = execute(
@@ -453,6 +461,18 @@ async fn a_caller_with_no_role_gets_no_session() {
     .expect_err("no role");
     assert_eq!(s.code(), Code::PermissionDenied);
     assert_eq!(run.manager.counts().live, 0);
+    // Each refusal is one denial of `BROWSE` on `connect`.
+    assert_eq!(denied(&run), [(Surface::Connect, Privilege::Browse, 2)]);
+}
+
+/// The non-zero denial counters.
+fn denied(run: &Running) -> Vec<(Surface, Privilege, u64)> {
+    run.denials
+        .counts()
+        .into_iter()
+        .filter(|c| c.count > 0)
+        .map(|c| (c.surface, c.privilege, c.count))
+        .collect()
 }
 
 /// Sends `body` (a message that is no `ExecutePlanRequest`: field 1 as a varint where a
