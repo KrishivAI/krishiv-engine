@@ -11,6 +11,7 @@ use krishiv_common::error::KrishivError;
 use crate::catalog::{GLOBAL_NAMESPACE, global_key};
 use crate::session::Session;
 use crate::store::{CatalogStore, CatalogTable};
+use krishiv_plan::analyzer::Privilege;
 
 /// Spark's `Database`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,9 +144,22 @@ fn unsupported_schema() -> KrishivError {
     .into()
 }
 
-/// A SQL string literal of `v`: backslashes and single quotes escaped.
-fn literal(v: &str) -> String {
-    format!("'{}'", v.replace('\\', "\\\\").replace('\'', "\\'"))
+/// A SQL string literal of `v`: backslashes and single quotes escaped. Under
+/// `spark.sql.parser.escapedStringLiterals` the parser keeps backslashes as written, so a value holding a
+/// backslash or a quote cannot be written back exactly: that is refused rather than silently changed.
+fn literal(v: &str, escaped_strings: bool) -> Result<String, KrishivError> {
+    if escaped_strings && v.contains(['\\', '\'']) {
+        return Err(krishiv_common::error::KrishivUnsupportedFeature {
+            feature:
+                "a value holding a quote or backslash under spark.sql.parser.escapedStringLiterals"
+                    .to_owned(),
+        }
+        .into());
+    }
+    Ok(format!(
+        "'{}'",
+        v.replace('\\', "\\\\").replace('\'', "\\'")
+    ))
 }
 
 fn quote(part: &str) -> String {
@@ -221,7 +235,7 @@ impl Catalog<'_> {
     /// # Errors
     /// The statement's: `CATALOG_NOT_FOUND` for an unknown catalog.
     pub async fn set_current_catalog(&self, name: &str) -> Result<(), KrishivError> {
-        self.run(&format!("SET CATALOG {}", quoted(name))).await
+        self.run(&format!("USE {}", quoted(name))).await
     }
 
     /// The catalogs, sorted.
@@ -391,7 +405,26 @@ impl Catalog<'_> {
         let catalog = &self.session.state.catalog;
         let mut permanent = Vec::new();
         let mut temporary = Vec::new();
-        if database.is_some_and(|d| d.eq_ignore_ascii_case(GLOBAL_NAMESPACE)) {
+        // `system` is a read-only catalog of tables with no namespaces: after `USE system`, or for `IN system`,
+        // its tables are listed (as `SHOW TABLES` does), not the session catalog's.
+        let in_system = match database {
+            Some(d) => crate::system::is_system(d),
+            None => crate::system::is_system(&catalog.current_catalog()),
+        };
+        if in_system {
+            for t in crate::system::table_names() {
+                if keep(t) {
+                    permanent.push(Table {
+                        name: (*t).to_owned(),
+                        catalog: Some(crate::system::SYSTEM.to_owned()),
+                        namespace: Some(Vec::new()),
+                        description: None,
+                        table_type: "MANAGED".to_owned(),
+                        is_temporary: false,
+                    });
+                }
+            }
+        } else if database.is_some_and(|d| d.eq_ignore_ascii_case(GLOBAL_NAMESPACE)) {
             // Spark lists the global views and the session's local ones for `global_temp`, as
             // `SHOW TABLES IN global_temp` does.
             for n in catalog.global_names() {
@@ -541,6 +574,17 @@ impl Catalog<'_> {
                 }
                 .into()
             })?;
+        if t.view.is_some() {
+            // As `DESCRIBE TABLE`: a permanent view's columns need `Browse` on the view itself.
+            self.session
+                .authorize_view(
+                    &t.namespace,
+                    &t.name,
+                    Privilege::Browse,
+                    &self.session.query_env(),
+                )
+                .await?;
+        }
         let in_list = |list: &[String], c: &str| list.iter().any(|x| x.eq_ignore_ascii_case(c));
         Ok(t.columns
             .iter()
@@ -595,6 +639,23 @@ impl Catalog<'_> {
             if keep(n) {
                 out.push(Function {
                     name: n.to_owned(),
+                    catalog: None,
+                    namespace: None,
+                    description: None,
+                    class_name: String::new(),
+                    is_temporary: true,
+                });
+            }
+        }
+        // Native UDFs and UDAFs registered on the session resolve in SQL, so they are listed as well.
+        for n in self.session.state.udfs.names() {
+            if keep(&n)
+                && !out[builtin..]
+                    .iter()
+                    .any(|f| f.name.eq_ignore_ascii_case(&n))
+            {
+                out.push(Function {
+                    name: n,
                     catalog: None,
                     namespace: None,
                     description: None,
@@ -727,6 +788,7 @@ impl Catalog<'_> {
         description: Option<&str>,
         options: &[(&str, &str)],
     ) -> Result<(), KrishivError> {
+        let escaped = self.session.query_env().parser.escaped_string_literals;
         let mut sql = format!("CREATE TABLE {}", quoted(name));
         let given = schema.filter(|s| !s.trim().is_empty());
         if let Some(schema) = given {
@@ -745,7 +807,7 @@ impl Catalog<'_> {
         );
         let inferred = match (given, source.or(default_source.as_deref()), location) {
             (None, Some(source), Some(location)) => {
-                Some(self.infer_columns(source, location).await?)
+                Some(self.infer_columns(source, location, options).await?)
             }
             _ => None,
         };
@@ -759,10 +821,10 @@ impl Catalog<'_> {
             .iter()
             .partition(|(k, _)| k.eq_ignore_ascii_case("path"));
         if !rest.is_empty() {
-            let list: Vec<String> = rest
+            let list = rest
                 .iter()
-                .map(|(k, v)| format!("{} {}", quote(k), literal(v)))
-                .collect();
+                .map(|(k, v)| Ok(format!("{} {}", quote(k), literal(v, escaped)?)))
+                .collect::<Result<Vec<String>, KrishivError>>()?;
             sql.push_str(&format!(" OPTIONS ({})", list.join(", ")));
         }
         if let (Some((_, location)), true) = (path.last(), given.is_none()) {
@@ -774,11 +836,11 @@ impl Catalog<'_> {
             }
         }
         if let Some((_, location)) = path.last() {
-            sql.push_str(&format!(" LOCATION {}", literal(location)));
+            sql.push_str(&format!(" LOCATION {}", literal(location, escaped)?));
         }
         // Spark maps an empty description to no comment.
         if let Some(description) = description.filter(|d| !d.is_empty()) {
-            sql.push_str(&format!(" COMMENT {}", literal(description)));
+            sql.push_str(&format!(" COMMENT {}", literal(description, escaped)?));
         }
         self.run(&sql).await
     }
@@ -813,18 +875,29 @@ impl Catalog<'_> {
         }
     }
 
-    /// The column list (`` `a` INT, `b` STRING ``) of the files at `location`, read as `source`.
-    async fn infer_columns(&self, source: &str, location: &str) -> Result<String, KrishivError> {
-        let by_path = format!(
-            "SELECT * FROM {}.{}",
-            quote(source),
-            quote(location.strip_prefix("file:").unwrap_or(location))
-        );
-        let schema = self.session.sql(&by_path).await?.schema().await?;
+    /// The column list (`` `a` INT, `b` STRING ``) of the files at `location`, read as `source` with the table's
+    /// `options` (a CSV `header` or `delimiter` changes the columns), as the table will read them.
+    async fn infer_columns(
+        &self,
+        source: &str,
+        location: &str,
+        options: &[(&str, &str)],
+    ) -> Result<String, KrishivError> {
+        let mut reader = self.session.read().format(source);
+        for (k, v) in options {
+            if !k.eq_ignore_ascii_case("path") {
+                reader = reader.option(k, v);
+            }
+        }
+        let schema = reader
+            .load([location.strip_prefix("file:").unwrap_or(location)])
+            .schema()
+            .await?;
         let mut columns = Vec::with_capacity(schema.fields().len());
         for field in schema.fields() {
             let ty = krishiv_types::DataType::from_arrow_field(field)?;
-            columns.push(format!("{} {}", quote(field.name()), ty.catalog_string()));
+            // `sql()` quotes nested field names (`struct<`a b`:int>`); `catalog_string()` does not.
+            columns.push(format!("{} {}", quote(field.name()), ty.sql()));
         }
         Ok(columns.join(", "))
     }
@@ -863,7 +936,9 @@ impl Catalog<'_> {
     /// # Errors
     /// The statement's.
     pub async fn refresh_by_path(&self, path: &str) -> Result<(), KrishivError> {
-        self.run(&format!("REFRESH {}", literal(path))).await
+        let escaped = self.session.query_env().parser.escaped_string_literals;
+        self.run(&format!("REFRESH {}", literal(path, escaped)?))
+            .await
     }
 
     /// `ALTER TABLE name RECOVER PARTITIONS` (`MSCK REPAIR TABLE`).

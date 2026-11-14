@@ -466,3 +466,140 @@ fn identifiers_are_parsed_and_an_empty_description_is_no_comment() {
     block_on(c.create_table("t", Some("parquet"), Some("a INT"), Some(""), &[])).unwrap();
     assert_eq!(block_on(c.get_table("t")).unwrap().description, None);
 }
+
+/// Denies `Browse` and `Select` (which implies it) on a permanent view only; tables stay readable.
+#[derive(Debug)]
+struct NoViewBrowse;
+
+impl AccessPolicy for NoViewBrowse {
+    fn version(&self) -> PolicyVersion {
+        PolicyVersion(1)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _principal: &'a Principal,
+        securable: &'a Securable,
+        privilege: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        let decision = if matches!(securable, Securable::View(_))
+            && matches!(privilege, Privilege::Browse | Privilege::Select)
+        {
+            AccessDecision::Deny {
+                reason: "no view browse".to_owned(),
+            }
+        } else {
+            AccessDecision::Allow
+        };
+        Box::pin(std::future::ready(Ok(decision)))
+    }
+}
+
+#[test]
+fn list_columns_of_a_permanent_view_needs_browse_on_the_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = EngineRuntime::builder().build().unwrap();
+    let open = |policy: Option<Arc<dyn AccessPolicy>>| {
+        let mut b = Session::builder()
+            .runtime(Arc::clone(&rt))
+            .principal(Principal::new("pat", PrincipalKind::User));
+        if let Some(p) = policy {
+            b = b.access_policy(p);
+        }
+        let s = b.build().unwrap();
+        s.conf()
+            .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+            .unwrap();
+        s
+    };
+    let admin = open(None);
+    run(&admin, "CREATE TABLE t (a INT) USING parquet");
+    run(&admin, "CREATE VIEW v AS SELECT a FROM t");
+    let s = open(Some(Arc::new(NoViewBrowse)));
+    let sql = block_on(s.sql("DESCRIBE TABLE v")).unwrap_err();
+    assert_eq!(sql.error_class().name(), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+    let c = s.catalog();
+    let e = block_on(c.list_columns("v")).unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+    // the table itself is still browsable
+    assert_eq!(block_on(c.list_columns("t")).unwrap().len(), 1);
+}
+
+#[test]
+fn create_table_without_a_schema_reads_the_files_with_the_given_options() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    let c = s.catalog();
+    let data = dir.path().join("people");
+    std::fs::create_dir(&data).unwrap();
+    std::fs::write(data.join("p.csv"), "name;age\nann;3\nbob;4\n").unwrap();
+    let path = data.to_str().unwrap();
+    block_on(c.create_table(
+        "people",
+        Some("csv"),
+        None,
+        None,
+        &[("path", path), ("header", "true"), ("delimiter", ";")],
+    ))
+    .unwrap();
+    let cols = block_on(c.list_columns("people")).unwrap();
+    assert_eq!(
+        cols.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+        ["name", "age"]
+    );
+}
+
+#[test]
+fn an_inferred_nested_field_name_is_quoted() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE TABLE src (s STRUCT<`a b`: INT>) USING parquet");
+    run(&s, "INSERT INTO src SELECT named_struct('a b', 1)");
+    let c = s.catalog();
+    let path = dir.path().join("src");
+    block_on(c.create_table(
+        "ext",
+        Some("parquet"),
+        None,
+        None,
+        &[("path", path.to_str().unwrap())],
+    ))
+    .unwrap();
+    let cols = block_on(c.list_columns("ext")).unwrap();
+    assert_eq!(cols.len(), 1);
+    assert!(cols[0].data_type.contains("a b"), "{}", cols[0].data_type);
+}
+
+#[test]
+fn the_system_catalog_lists_its_tables() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    let c = s.catalog();
+    run(&s, "CREATE TABLE plain (a INT) USING parquet");
+    let in_system = block_on(c.list_tables(Some("system"), None)).unwrap();
+    assert!(
+        in_system.iter().any(|t| t.name == "sessions"),
+        "{in_system:?}"
+    );
+    assert!(!in_system.iter().any(|t| t.name == "plain"));
+    block_on(c.set_current_catalog("system")).unwrap();
+    let bare = block_on(c.list_tables(None, None)).unwrap();
+    assert!(bare.iter().any(|t| t.name == "sessions"), "{bare:?}");
+    assert!(!bare.iter().any(|t| t.name == "plain"));
+}
+
+#[test]
+fn values_the_parser_cannot_read_back_are_refused_not_changed() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    s.conf()
+        .set("spark.sql.parser.escapedStringLiterals", "true")
+        .unwrap();
+    let c = s.catalog();
+    let e = block_on(c.create_table("q", Some("parquet"), Some("a INT"), Some("it's"), &[]))
+        .unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+    assert!(!block_on(c.table_exists("q")).unwrap());
+    let e = block_on(c.refresh_by_path("C:\\data")).unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+}

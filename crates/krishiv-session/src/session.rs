@@ -146,7 +146,7 @@ pub(crate) struct SessionState {
     base_functions: Option<Arc<dyn FunctionRegistry>>,
     /// The session's registered UDFs, shared with the registry above and
     /// the workers running its plans.
-    udfs: Arc<UdfLibrary>,
+    pub(crate) udfs: Arc<UdfLibrary>,
     /// The session's Python UDFs (P2-T059), shared with the registry above:
     /// plans name them by name and version only.
     pub(crate) python_udfs: Arc<crate::python_udfs::PythonUdfLibrary>,
