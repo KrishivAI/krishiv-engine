@@ -72,11 +72,16 @@ impl Budget {
 
     /// Starts a call: a fresh deadline and fresh budgets, nothing tripped.
     pub(crate) fn begin(&self) {
+        self.begin_until(Instant::now() + self.request_timeout);
+    }
+
+    /// Starts a call that must end by `deadline`: one established before the call waited for a connection, so the
+    /// wait and the call share it.
+    pub(crate) fn begin_until(&self, deadline: Instant) {
         *self
             .deadline
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            Instant::now() + self.request_timeout;
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = deadline;
         self.bytes_left.store(self.max_bytes, Ordering::Release);
         self.elements_left
             .store(self.max_elements, Ordering::Release);

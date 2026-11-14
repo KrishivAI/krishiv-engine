@@ -16,7 +16,8 @@
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::time::Instant;
 
 use krishiv_common::error::{
     KrishivCatalogFailure, KrishivCatalogLimitExceeded, KrishivError, KrishivUnsupportedFeature,
@@ -62,8 +63,15 @@ struct Inner {
     config: HmsConfig,
     max_columns: usize,
     policy: Arc<dyn LocationPolicy + Send + Sync>,
-    client: Mutex<Option<HmsClient>>,
+    pool: Mutex<Pool>,
+    available: Condvar,
     epoch: AtomicU64,
+}
+
+/// The connections: the idle ones, and how many exist (idle, in use or being made).
+struct Pool {
+    idle: Vec<HmsClient>,
+    open: usize,
 }
 
 /// A Hive metastore as a catalog named `name`.
@@ -126,7 +134,11 @@ impl HiveCatalog {
                 config,
                 max_columns,
                 policy,
-                client: Mutex::new(None),
+                pool: Mutex::new(Pool {
+                    idle: Vec::new(),
+                    open: 0,
+                }),
+                available: Condvar::new(),
                 epoch: AtomicU64::new(0),
             }),
         }
@@ -177,25 +189,56 @@ impl HiveCatalog {
         }
     }
 
-    /// Runs `call` on the one connection, connecting first if there is none. A failure drops the connection.
+    /// Runs `call` on a connection: an idle one, a new one while fewer than `max_connections` exist, or one that is
+    /// freed within the deadline. The deadline is set before the wait and is the call's own, so waiting and calling
+    /// together never take longer than `krishiv.catalog.requestTimeout`. A connection that failed is not kept.
     fn with_client<T>(
         &self,
         call: impl FnOnce(&mut HmsClient) -> Result<T, HmsError>,
     ) -> Result<T, HmsError> {
-        let mut guard = self
-            .inner
-            .client
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        let mut client = match guard.take() {
-            Some(client) => client,
-            None => HmsClient::connect(&self.inner.config)?,
+        let inner = &*self.inner;
+        let deadline = Instant::now() + inner.config.request_timeout;
+        let idle = {
+            let mut pool = inner.pool.lock().unwrap_or_else(PoisonError::into_inner);
+            loop {
+                if let Some(client) = pool.idle.pop() {
+                    break Some(client);
+                }
+                if pool.open < inner.config.max_connections.max(1) {
+                    pool.open += 1;
+                    break None;
+                }
+                let Some(left) = deadline.checked_duration_since(Instant::now()) else {
+                    return Err(HmsError::Failed(
+                        "timed out waiting for a metastore connection".to_owned(),
+                    ));
+                };
+                pool = inner
+                    .available
+                    .wait_timeout(pool, left)
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .0;
+            }
         };
-        let result = call(&mut client);
-        // Only a connection that worked is kept.
-        if result.is_ok() {
-            *guard = Some(client);
+        let client = match idle {
+            Some(client) => Ok(client),
+            None => HmsClient::connect_until(&inner.config, deadline),
+        };
+        let (result, client) = match client {
+            Ok(mut client) => {
+                client.within(deadline);
+                let result = call(&mut client);
+                (result, Some(client))
+            }
+            Err(e) => (Err(e), None),
+        };
+        let mut pool = inner.pool.lock().unwrap_or_else(PoisonError::into_inner);
+        match (&result, client) {
+            (Ok(_), Some(client)) => pool.idle.push(client),
+            _ => pool.open = pool.open.saturating_sub(1),
         }
+        drop(pool);
+        inner.available.notify_one();
         result
     }
 
@@ -340,6 +383,13 @@ fn spark_schema_json(
         return Ok(Some(whole.clone()));
     }
     let Some(parts) = properties.get("spark.sql.sources.schema.numParts") else {
+        // No schema at all is the metastore's columns; pieces of one are a damaged property, not that.
+        if properties
+            .keys()
+            .any(|k| k.starts_with("spark.sql.sources.schema."))
+        {
+            return Err("schema fragments are present but numParts is not");
+        }
         return Ok(None);
     };
     let parts: usize = parts
@@ -448,6 +498,21 @@ fn spark_table(
     }))
 }
 
+/// The fields nested under a type: struct fields (and what is under them), and what is under an array or a map.
+/// `krishiv.catalog.maxColumns` counts them, as the design says, so a table cannot hide its width in a struct.
+fn nested_fields(t: &DataType) -> usize {
+    match t {
+        DataType::Struct(s) => s
+            .fields()
+            .iter()
+            .map(|f| 1 + nested_fields(f.data_type()))
+            .sum(),
+        DataType::Array(a) => nested_fields(a.element_type()),
+        DataType::Map(m) => nested_fields(m.key_type()) + nested_fields(m.value_type()),
+        _ => 0,
+    }
+}
+
 fn convert(
     catalog: &str,
     relation: &str,
@@ -506,8 +571,12 @@ fn convert(
             .collect();
         (columns, comments, keys)
     };
-    if columns.len() > max_columns {
-        return Err(Converted::Columns(columns.len()));
+    let width: usize = columns
+        .iter()
+        .map(|c| 1 + nested_fields(&c.data_type))
+        .sum();
+    if width > max_columns {
+        return Err(Converted::Columns(width));
     }
     let meta = TableMeta {
         ident: TableIdent {
@@ -1052,5 +1121,113 @@ mod tests {
             text.contains("4 columns") && text.contains("krishiv.catalog.maxColumns"),
             "{text}"
         );
+    }
+
+    /// `krishiv.catalog.maxColumns` counts nested fields too: a struct, or one under an array or a map, cannot hide
+    /// a table's width.
+    #[test]
+    fn nested_fields_count_toward_the_column_limit() {
+        // s: struct<a:int,b:struct<c:int,d:int>> is 1 + (1 + (1 + 2)) = 5 columns; arr<struct<x,y>> is 1 + 2 = 3.
+        let table = || Fake {
+            cols: vec![
+                ("s", "struct<a:int,b:struct<c:int,d:int>>", ""),
+                ("arr", "array<struct<x:int,y:int>>", ""),
+                ("m", "map<string,struct<k:int>>", ""),
+            ],
+            partitions: Vec::new(),
+            ..Fake::hive()
+        };
+        let width = 5 + 3 + 2;
+        let load = |max: usize| {
+            let (address, server) = serving(table());
+            let c = HiveCatalog::new(
+                "hms",
+                cfg(&address),
+                max,
+                Arc::new(RemoteLocationPolicy::default()),
+            );
+            let r = c.load("web", "events");
+            server.join().unwrap();
+            r
+        };
+        assert!(load(width).unwrap().is_some());
+        let e = load(width - 1).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::KrishivCatalogLimitExceeded);
+        assert!(e.to_string().contains(&format!("{width} columns")), "{e}");
+    }
+
+    /// Pieces of a schema property without `numParts` are a damaged property, not "no schema".
+    #[test]
+    fn schema_fragments_without_a_part_count_are_a_catalog_fault() {
+        for props in [
+            vec![("spark.sql.sources.schema.part.0", "{\"type\":\"struct\"")],
+            vec![("spark.sql.sources.schema.numPartCols", "1")],
+        ] {
+            let (address, server) = serving(spark(&props));
+            let e = catalog(&address).load("web", "events").unwrap_err();
+            server.join().unwrap();
+            assert_eq!(
+                e.error_class(),
+                ErrorClass::KrishivCatalogFailure,
+                "{props:?}"
+            );
+        }
+    }
+
+    /// The deadline is set before the wait for a connection: two loads of a stalled metastore through one connection
+    /// take about one timeout together, not two.
+    #[test]
+    fn callers_waiting_for_a_connection_share_the_deadline_of_the_call() {
+        use std::net::TcpListener;
+        use std::thread;
+        use std::time::{Duration, Instant};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        let held = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            thread::sleep(Duration::from_secs(3));
+            drop(stream);
+        });
+        let config = HmsConfig {
+            request_timeout: Duration::from_millis(400),
+            max_connections: 1,
+            ..HmsConfig::new(&address)
+        };
+        let c = HiveCatalog::new(
+            "hms",
+            config,
+            10_000,
+            Arc::new(RemoteLocationPolicy::default()),
+        );
+        let started = Instant::now();
+        let callers: Vec<_> = (0..3)
+            .map(|_| {
+                let c = c.clone();
+                thread::spawn(move || c.list_databases())
+            })
+            .collect();
+        for caller in callers {
+            let e = caller.join().unwrap().unwrap_err();
+            assert_eq!(e.error_class(), ErrorClass::KrishivCatalogFailure);
+        }
+        let waited = started.elapsed();
+        assert!(
+            waited < Duration::from_millis(900),
+            "three callers took {waited:?}"
+        );
+        held.join().unwrap();
+    }
+
+    /// A free connection is reused: two calls, one connection.
+    #[test]
+    fn a_connection_that_worked_is_reused() {
+        let (address, server) = serve(2, |method, seq, o| {
+            reply_with(o, method, seq, |o| strings_field(o, 0, &["default"]))
+        });
+        let c = catalog(&address);
+        assert_eq!(c.list_databases().unwrap(), ["default"]);
+        assert_eq!(c.list_databases().unwrap(), ["default"]);
+        server.join().unwrap();
     }
 }

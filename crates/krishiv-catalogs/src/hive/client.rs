@@ -14,7 +14,7 @@
 use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use thrift::protocol::{
     TBinaryInputProtocol, TBinaryOutputProtocol, TFieldIdentifier, TInputProtocol,
@@ -33,6 +33,8 @@ pub struct HmsConfig {
     pub address: String,
     /// Longest one call may take, connect to last byte (`krishiv.catalog.requestTimeout`).
     pub request_timeout: Duration,
+    /// Most connections open at once; a call waits for one within its deadline.
+    pub max_connections: usize,
     /// Most bytes one call may read (`krishiv.catalog.maxMetadataBytes`).
     pub max_message_bytes: usize,
     /// Most decoded elements (list items and map entries) one call may produce.
@@ -51,6 +53,7 @@ impl HmsConfig {
         Self {
             address: address.into(),
             request_timeout: Duration::from_secs(30),
+            max_connections: 4,
             max_message_bytes: 256 << 20,
             max_elements: 1_000_000,
             max_string_bytes: 16 << 20,
@@ -150,6 +153,8 @@ pub struct HmsClient {
     input: Box<dyn TInputProtocol + Send>,
     output: Box<dyn TOutputProtocol + Send>,
     budget: Arc<Budget>,
+    /// The deadline the next call must meet, set by [`HmsClient::within`]; otherwise a fresh one.
+    deadline: Option<Instant>,
     sequence: i32,
 }
 
@@ -174,12 +179,20 @@ impl HmsClient {
     /// # Errors
     /// [`HmsError::Failed`] when the address does not resolve or cannot be reached in time.
     pub fn connect(config: &HmsConfig) -> Result<Self> {
+        Self::connect_until(config, Instant::now() + config.request_timeout)
+    }
+
+    /// Connects, within `deadline` (set before the caller waited for anything).
+    ///
+    /// # Errors
+    /// [`HmsError::Failed`] when the address does not resolve or cannot be reached in time.
+    pub fn connect_until(config: &HmsConfig, deadline: Instant) -> Result<Self> {
         let budget = Arc::new(Budget::new(
             config.request_timeout,
             config.max_message_bytes,
             config.max_elements,
         ));
-        budget.begin();
+        budget.begin_until(deadline);
         let address = config
             .address
             .to_socket_addrs()
@@ -228,6 +241,7 @@ impl HmsClient {
             input: Box::new(input),
             output: Box::new(output),
             budget,
+            deadline: None,
             sequence: 0,
         })
     }
@@ -313,6 +327,11 @@ impl HmsClient {
         }
     }
 
+    /// The next call must end by `deadline`.
+    pub fn within(&mut self, deadline: Instant) {
+        self.deadline = Some(deadline);
+    }
+
     /// What the call ran into, named: a limit the budget remembers beats the protocol error it came out as.
     fn classify(&self, e: HmsError) -> HmsError {
         self.budget.tripped().map_or(e, HmsError::Limit)
@@ -323,7 +342,10 @@ impl HmsClient {
         method: &str,
         args: impl FnOnce(&mut dyn TOutputProtocol) -> thrift::Result<()>,
     ) -> Result<()> {
-        self.budget.begin();
+        match self.deadline.take() {
+            Some(deadline) => self.budget.begin_until(deadline),
+            None => self.budget.begin(),
+        }
         self.sequence = self.sequence.wrapping_add(1);
         let sequence = self.sequence;
         let o = &mut *self.output;
