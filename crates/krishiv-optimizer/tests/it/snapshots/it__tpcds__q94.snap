@@ -1,34 +1,34 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
-assertion_line: 106
+assertion_line: 107
 expression: optimized.root().to_string()
 ---
 Limit 100
 +- Sort [order count#159 ASC NULLS FIRST], true
    +- Aggregate [], [count(DISTINCT ws_order_number#17) AS order count#159, sum(ws_ext_ship_cost#28) AS total shipping cost#160, sum(ws_net_profit#33) AS total net profit#161]
-      +- Join LeftAnti, (ws_order_number#17 == wr_order_number#148)
-         :- Project [ws_order_number#17, ws_ext_ship_cost#28, ws_net_profit#33]
-         :  +- Join LeftSemi, ((ws_order_number#17 == ws_order_number#118) and (NOT (ws_warehouse_sk#15 == ws_warehouse_sk#116)))
-         :     :- Project [ws_warehouse_sk#15, ws_order_number#17, ws_ext_ship_cost#28, ws_net_profit#33]
-         :     :  +- Join Inner, (ws_ship_addr_sk#11 == ca_address_sk#62)
-         :     :     :- Project [ca_address_sk#62]
-         :     :     :  +- Filter ((ca_state#70 == 'IL') and isnotnull(ca_address_sk#62))
-         :     :     :     +- Scan spark_catalog.default.customer_address [ca_address_sk#62, ca_state#70]
-         :     :     +- Project [ws_ship_addr_sk#11, ws_warehouse_sk#15, ws_order_number#17, ws_ext_ship_cost#28, ws_net_profit#33]
-         :     :        +- Join Inner, (ws_web_site_sk#13 == web_site_sk#75)
-         :     :           :- Project [web_site_sk#75]
-         :     :           :  +- Filter ((web_company_name#89 == 'pri') and isnotnull(web_site_sk#75))
-         :     :           :     +- Scan spark_catalog.default.web_site [web_site_sk#75, web_company_name#89]
-         :     :           +- Project [ws_ship_addr_sk#11, ws_web_site_sk#13, ws_warehouse_sk#15, ws_order_number#17, ws_ext_ship_cost#28, ws_net_profit#33]
-         :     :              +- Join Inner, (ws_ship_date_sk#2 == d_date_sk#34)
-         :     :                 :- Filter (((isnotnull(ws_ship_date_sk#2) and isnotnull(ws_ship_addr_sk#11)) and isnotnull(ws_web_site_sk#13)) and isnotnull(ws_order_number#17))
-         :     :                 :  +- Scan spark_catalog.default.web_sales [ws_ship_date_sk#2, ws_ship_addr_sk#11, ws_web_site_sk#13, ws_warehouse_sk#15, ws_order_number#17, ws_ext_ship_cost#28, ws_net_profit#33] (shared #1)
-         :     :                 +- Project [d_date_sk#34]
-         :     :                    +- Filter (((d_date#36 >= DATE '1999-02-01') and (d_date#36 <= DATE '1999-04-02')) and isnotnull(d_date_sk#34))
-         :     :                       +- Scan spark_catalog.default.date_dim [d_date_sk#34, d_date#36]
-         :     +- Project [ws_warehouse_sk#116, ws_order_number#118]
-         :        +- Shift +101
-         :           +- Filter isnotnull(ws_order_number#17)
-         :              +- Shared #1, printed above
-         +- Filter isnotnull(wr_order_number#148)
-            +- Scan spark_catalog.default.web_returns [wr_order_number#148]
+      +- Project [ws_order_number#17, ws_ext_ship_cost#28, ws_net_profit#33]
+         +- Join LeftSemi, ((ws_order_number#17 == ws_order_number#118) and (NOT (ws_warehouse_sk#15 == ws_warehouse_sk#116)))
+            :- Join LeftAnti, (ws_order_number#17 == wr_order_number#148)
+            :  :- Project [ws_warehouse_sk#15, ws_order_number#17, ws_ext_ship_cost#28, ws_net_profit#33]
+            :  :  +- Join Inner, (ws_ship_addr_sk#11 == ca_address_sk#62)
+            :  :     :- Project [ca_address_sk#62]
+            :  :     :  +- Filter ((ca_state#70 == 'IL') and isnotnull(ca_address_sk#62))
+            :  :     :     +- Scan spark_catalog.default.customer_address [ca_address_sk#62, ca_state#70]
+            :  :     +- Project [ws_ship_addr_sk#11, ws_warehouse_sk#15, ws_order_number#17, ws_ext_ship_cost#28, ws_net_profit#33]
+            :  :        +- Join Inner, (ws_web_site_sk#13 == web_site_sk#75)
+            :  :           :- Project [web_site_sk#75]
+            :  :           :  +- Filter ((web_company_name#89 == 'pri') and isnotnull(web_site_sk#75))
+            :  :           :     +- Scan spark_catalog.default.web_site [web_site_sk#75, web_company_name#89]
+            :  :           +- Project [ws_ship_addr_sk#11, ws_web_site_sk#13, ws_warehouse_sk#15, ws_order_number#17, ws_ext_ship_cost#28, ws_net_profit#33]
+            :  :              +- Join Inner, (ws_ship_date_sk#2 == d_date_sk#34)
+            :  :                 :- Filter (((isnotnull(ws_ship_date_sk#2) and isnotnull(ws_ship_addr_sk#11)) and isnotnull(ws_web_site_sk#13)) and isnotnull(ws_order_number#17))
+            :  :                 :  +- Scan spark_catalog.default.web_sales [ws_ship_date_sk#2, ws_ship_addr_sk#11, ws_web_site_sk#13, ws_warehouse_sk#15, ws_order_number#17, ws_ext_ship_cost#28, ws_net_profit#33] (shared #1)
+            :  :                 +- Project [d_date_sk#34]
+            :  :                    +- Filter (((d_date#36 >= DATE '1999-02-01') and (d_date#36 <= DATE '1999-04-02')) and isnotnull(d_date_sk#34))
+            :  :                       +- Scan spark_catalog.default.date_dim [d_date_sk#34, d_date#36]
+            :  +- Filter isnotnull(wr_order_number#148)
+            :     +- Scan spark_catalog.default.web_returns [wr_order_number#148]
+            +- Project [ws_warehouse_sk#116, ws_order_number#118]
+               +- Shift +101
+                  +- Filter isnotnull(ws_order_number#17)
+                     +- Shared #1, printed above

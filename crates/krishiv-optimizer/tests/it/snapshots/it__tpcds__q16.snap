@@ -1,34 +1,34 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
-assertion_line: 106
+assertion_line: 107
 expression: optimized.root().to_string()
 ---
 Limit 100
 +- Sort [order count#167 ASC NULLS FIRST], true
    +- Aggregate [], [count(DISTINCT cs_order_number#17) AS order count#167, sum(cs_ext_ship_cost#28) AS total shipping cost#168, sum(cs_net_profit#33) AS total net profit#169]
-      +- Join LeftAnti, (cs_order_number#17 == cr_order_number#156)
-         :- Project [cs_order_number#17, cs_ext_ship_cost#28, cs_net_profit#33]
-         :  +- Join LeftSemi, ((cs_order_number#17 == cs_order_number#123) and (NOT (cs_warehouse_sk#14 == cs_warehouse_sk#120)))
-         :     :- Project [cs_warehouse_sk#14, cs_order_number#17, cs_ext_ship_cost#28, cs_net_profit#33]
-         :     :  +- Join Inner, (cs_ship_addr_sk#10 == ca_address_sk#62)
-         :     :     :- Project [ca_address_sk#62]
-         :     :     :  +- Filter ((ca_state#70 == 'GA') and isnotnull(ca_address_sk#62))
-         :     :     :     +- Scan spark_catalog.default.customer_address [ca_address_sk#62, ca_state#70]
-         :     :     +- Project [cs_ship_addr_sk#10, cs_warehouse_sk#14, cs_order_number#17, cs_ext_ship_cost#28, cs_net_profit#33]
-         :     :        +- Join Inner, (cs_call_center_sk#11 == cc_call_center_sk#75)
-         :     :           :- Project [cc_call_center_sk#75]
-         :     :           :  +- Filter ((cc_county#100 == 'Williamson County') and isnotnull(cc_call_center_sk#75))
-         :     :           :     +- Scan spark_catalog.default.call_center [cc_call_center_sk#75, cc_county#100]
-         :     :           +- Project [cs_ship_addr_sk#10, cs_call_center_sk#11, cs_warehouse_sk#14, cs_order_number#17, cs_ext_ship_cost#28, cs_net_profit#33]
-         :     :              +- Join Inner, (cs_ship_date_sk#2 == d_date_sk#34)
-         :     :                 :- Filter (((isnotnull(cs_ship_date_sk#2) and isnotnull(cs_ship_addr_sk#10)) and isnotnull(cs_call_center_sk#11)) and isnotnull(cs_order_number#17))
-         :     :                 :  +- Scan spark_catalog.default.catalog_sales [cs_ship_date_sk#2, cs_ship_addr_sk#10, cs_call_center_sk#11, cs_warehouse_sk#14, cs_order_number#17, cs_ext_ship_cost#28, cs_net_profit#33] (shared #1)
-         :     :                 +- Project [d_date_sk#34]
-         :     :                    +- Filter (((d_date#36 >= DATE '2002-02-01') and (d_date#36 <= DATE '2002-04-02')) and isnotnull(d_date_sk#34))
-         :     :                       +- Scan spark_catalog.default.date_dim [d_date_sk#34, d_date#36]
-         :     +- Project [cs_warehouse_sk#120, cs_order_number#123]
-         :        +- Shift +106
-         :           +- Filter isnotnull(cs_order_number#17)
-         :              +- Shared #1, printed above
-         +- Filter isnotnull(cr_order_number#156)
-            +- Scan spark_catalog.default.catalog_returns [cr_order_number#156]
+      +- Project [cs_order_number#17, cs_ext_ship_cost#28, cs_net_profit#33]
+         +- Join LeftSemi, ((cs_order_number#17 == cs_order_number#123) and (NOT (cs_warehouse_sk#14 == cs_warehouse_sk#120)))
+            :- Join LeftAnti, (cs_order_number#17 == cr_order_number#156)
+            :  :- Project [cs_warehouse_sk#14, cs_order_number#17, cs_ext_ship_cost#28, cs_net_profit#33]
+            :  :  +- Join Inner, (cs_ship_addr_sk#10 == ca_address_sk#62)
+            :  :     :- Project [ca_address_sk#62]
+            :  :     :  +- Filter ((ca_state#70 == 'GA') and isnotnull(ca_address_sk#62))
+            :  :     :     +- Scan spark_catalog.default.customer_address [ca_address_sk#62, ca_state#70]
+            :  :     +- Project [cs_ship_addr_sk#10, cs_warehouse_sk#14, cs_order_number#17, cs_ext_ship_cost#28, cs_net_profit#33]
+            :  :        +- Join Inner, (cs_call_center_sk#11 == cc_call_center_sk#75)
+            :  :           :- Project [cc_call_center_sk#75]
+            :  :           :  +- Filter ((cc_county#100 == 'Williamson County') and isnotnull(cc_call_center_sk#75))
+            :  :           :     +- Scan spark_catalog.default.call_center [cc_call_center_sk#75, cc_county#100]
+            :  :           +- Project [cs_ship_addr_sk#10, cs_call_center_sk#11, cs_warehouse_sk#14, cs_order_number#17, cs_ext_ship_cost#28, cs_net_profit#33]
+            :  :              +- Join Inner, (cs_ship_date_sk#2 == d_date_sk#34)
+            :  :                 :- Filter (((isnotnull(cs_ship_date_sk#2) and isnotnull(cs_ship_addr_sk#10)) and isnotnull(cs_call_center_sk#11)) and isnotnull(cs_order_number#17))
+            :  :                 :  +- Scan spark_catalog.default.catalog_sales [cs_ship_date_sk#2, cs_ship_addr_sk#10, cs_call_center_sk#11, cs_warehouse_sk#14, cs_order_number#17, cs_ext_ship_cost#28, cs_net_profit#33] (shared #1)
+            :  :                 +- Project [d_date_sk#34]
+            :  :                    +- Filter (((d_date#36 >= DATE '2002-02-01') and (d_date#36 <= DATE '2002-04-02')) and isnotnull(d_date_sk#34))
+            :  :                       +- Scan spark_catalog.default.date_dim [d_date_sk#34, d_date#36]
+            :  +- Filter isnotnull(cr_order_number#156)
+            :     +- Scan spark_catalog.default.catalog_returns [cr_order_number#156]
+            +- Project [cs_warehouse_sk#120, cs_order_number#123]
+               +- Shift +106
+                  +- Filter isnotnull(cs_order_number#17)
+                     +- Shared #1, printed above
