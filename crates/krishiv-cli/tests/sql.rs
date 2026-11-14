@@ -186,6 +186,71 @@ fn unknown_table_and_missing_file_fail() {
 }
 
 #[test]
+fn a_statement_without_a_result_prints_nothing() {
+    // RS-9: DDL used to print an empty box and `0 rows`.
+    let o = krishiv(
+        &[
+            "sql",
+            "-o",
+            "table",
+            "-e",
+            "CREATE TEMPORARY VIEW v AS SELECT 1 AS a",
+        ],
+        None,
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    assert_eq!(out(&o), "", "a DDL statement prints nothing");
+
+    let o = krishiv(
+        &[
+            "sql",
+            "-o",
+            "table",
+            "-e",
+            "CREATE TEMPORARY VIEW v AS SELECT 1 AS a; SELECT a FROM v",
+        ],
+        None,
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let t = out(&o);
+    assert_eq!(t.matches(" row").count(), 1, "one result table only: {t}");
+    assert!(!t.contains("0 rows"), "{t}");
+    assert!(t.contains("| 1 |"), "{t}");
+}
+
+#[test]
+fn max_rows_says_when_it_cut_the_output() {
+    // RS-11: the table footer read `2 rows`, as if that were the whole result.
+    let q = "select a from values (1), (2), (3), (4), (5) as t(a) order by a";
+    let o = krishiv(&["sql", "-o", "table", "--max-rows", "2", "-e", q], None);
+    assert!(o.status.success(), "{}", err(&o));
+    let t = out(&o);
+    assert!(
+        t.contains("| 1 |") && t.contains("| 2 |") && !t.contains("| 3 |"),
+        "{t}"
+    );
+    assert!(
+        t.trim_end().ends_with("2 rows"),
+        "stdout keeps its shape: {t}"
+    );
+    assert!(
+        err(&o).contains("more rows exist"),
+        "the cut is reported on stderr: {}",
+        err(&o)
+    );
+
+    // Exactly at the cap nothing was cut, so nothing is said.
+    let o = krishiv(&["sql", "-o", "csv", "--max-rows", "5", "-e", q], None);
+    assert!(o.status.success(), "{}", err(&o));
+    assert!(!err(&o).contains("more rows exist"), "{}", err(&o));
+
+    // Machine formats get the same notice on stderr and an unchanged stdout.
+    let o = krishiv(&["sql", "-o", "csv", "--max-rows", "2", "-e", q], None);
+    assert_eq!(out(&o), "a\n1\n2\n");
+    assert!(err(&o).contains("more rows exist"), "{}", err(&o));
+}
+
+#[test]
 fn timing_goes_to_stderr() {
     let o = krishiv(
         &["sql", "--timing", "-o", "csv", "-e", "select 1 as a"],
