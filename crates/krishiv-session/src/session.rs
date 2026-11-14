@@ -1823,7 +1823,15 @@ impl Session {
                         hold: env.history_hold.clone(),
                         identity: krishiv_exec::profile::ProfileIdentity {
                             principal: who.principal,
-                            tags: self.state.queries.tags().into_iter().collect(),
+                            // The tags the query's own row holds (request tags included, and not changed by a
+                            // `set_tag` while it waited), as `system.queries` shows them.
+                            tags: self
+                                .state
+                                .queries
+                                .row_tags(&row_id)
+                                .unwrap_or_else(|| self.state.queries.tags())
+                                .into_iter()
+                                .collect(),
                         },
                         trace: Some(trace),
                     }

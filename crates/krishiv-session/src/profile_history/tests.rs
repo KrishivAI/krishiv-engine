@@ -466,9 +466,9 @@ fn concatenated_and_punctuated_literal_names_are_masked() {
 fn mask_aliases_hides_every_alias_name() {
     assert_eq!(
         super::mask_aliases("Project [hunter 2 AS hunter 2#12, a AS b#3, c]"),
-        "Project [hunter 2 AS ?#12, a AS ?#3, c]"
+        "Project [hunter 2 AS ?]"
     );
-    assert_eq!(super::mask_aliases("x AS y"), "x AS y");
+    assert_eq!(super::mask_aliases("x AS y"), "x AS ?");
     assert_eq!(super::mask_aliases("no alias"), "no alias");
 }
 
@@ -476,6 +476,23 @@ fn mask_aliases_hides_every_alias_name() {
 fn mask_aliases_keeps_no_text_of_a_name_with_a_hash_digit_run() {
     let masked = super::mask_aliases("Project [x AS prefix#1hunter2#12, a#3]");
     assert!(!masked.contains("hunter2"), "{masked}");
+}
+
+#[test]
+fn a_file_write_of_a_literal_holding_as_and_a_hash_is_masked() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let rt = runtime(dir.path(), "64m");
+    let session = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    let df = block_on(session.sql("SELECT 'hunterx AS y#1hunterz' FROM range(0, 5)")).unwrap();
+    block_on(df.write().parquet(out.path().join("t").to_str().unwrap())).unwrap();
+    rt.profile_history.as_ref().unwrap().flush();
+    let stored = read_history(dir.path()).unwrap();
+    assert!(!stored.is_empty());
+    for q in stored {
+        assert!(!q.profile.contains("hunterx"), "{}", q.profile);
+        assert!(!q.profile.contains("hunterz"), "{}", q.profile);
+    }
 }
 
 #[test]
@@ -620,4 +637,20 @@ fn a_dropped_file_write_is_recorded_cancelled_or_finished_never_lost_or_doubled(
             .all(|q| ["finished", "cancelled"].contains(&q.state.as_str()))
     );
     assert_eq!(rt.profile_history.as_ref().unwrap().failures(), 0);
+}
+
+#[test]
+fn the_stored_profile_holds_the_tags_of_the_queries_own_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = runtime(dir.path(), "64m");
+    let session = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    let df = block_on(session.sql_with("SELECT 1", crate::QueryOptions::new().tags(["job-42"])))
+        .unwrap();
+    block_on(df.collect()).unwrap();
+    rt.profile_history.as_ref().unwrap().flush();
+    let stored = read_history(dir.path()).unwrap();
+    assert!(
+        stored.iter().any(|q| q.profile.contains("job-42")),
+        "a request tag was not stored"
+    );
 }
