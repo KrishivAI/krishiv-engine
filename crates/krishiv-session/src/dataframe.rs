@@ -1296,12 +1296,23 @@ impl DataFrame {
     /// # Errors
     /// As [`Self::collect`].
     pub async fn count(&self) -> Result<u64, KrishivError> {
-        let mut stream = self.execute_stream().await?;
-        let mut rows = 0_u64;
-        while let Some(batch) = stream.next().await {
-            rows += batch?.num_rows() as u64;
-        }
-        Ok(rows)
+        // Spark's `Dataset.count` is `groupBy().count()`: an aggregate over
+        // the plan, so the optimizer prunes the columns no row needs (a CSV
+        // or JSON scan then parses no value).
+        let batches = self.agg([crate::functions::count_star()]).collect().await?;
+        let rows = batches
+            .iter()
+            .filter(|b| b.num_rows() > 0)
+            .find_map(|b| {
+                b.column(0)
+                    .as_any()
+                    .downcast_ref::<arrow_array::Int64Array>()
+                    .map(|a| a.value(0))
+            })
+            .ok_or_else(|| {
+                crate::session::internal("count(*) returned no BIGINT row".to_owned())
+            })?;
+        u64::try_from(rows).map_err(|_| crate::session::internal("negative count(*)".to_owned()))
     }
 
     /// Caches this frame's rows (PySpark's `cache`, at

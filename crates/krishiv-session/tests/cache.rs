@@ -265,7 +265,14 @@ fn a_refused_reservation_runs_uncached_not_failed() {
         .unwrap();
     register(&s, "t", (0..4096).collect());
     let df = s.table("t").cache();
-    assert_eq!(block_on(df.count()).unwrap(), 4096);
+    // `collect`, not `count`: `count` is an aggregate, whose own state a
+    // one-byte pool refuses too.
+    let rows: usize = block_on(df.collect())
+        .unwrap()
+        .iter()
+        .map(arrow_array::RecordBatch::num_rows)
+        .sum();
+    assert_eq!(rows, 4096);
     assert!(block_on(df.is_cached()).unwrap());
     assert_eq!(s.cache_reserved(), 0);
 }

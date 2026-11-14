@@ -13,8 +13,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use krishiv_plan::{
-    BoundColumn, Expr, ExprNode, Grouping, JoinCondition, LogicalPlan, PlanNode, ResolvedExpr,
-    Scan, SubqueryKind,
+    BoundColumn, Expr, ExprNode, Grouping, JoinCondition, LogicalPlan, PlanNode, ReadSource,
+    ResolvedExpr, Scan, SubqueryKind,
 };
 
 use crate::expr::{Attrs, column, output_of, references_into};
@@ -227,7 +227,11 @@ impl Rewrite<'_> {
                     .filter(|c| req.contains(&c.id))
                     .cloned()
                     .collect();
-                if output.is_empty() {
+                // A file scan may read no column: its batches carry only a
+                // row count, as Spark's empty `requiredSchema` (a CSV or JSON
+                // reader then parses no value for `count()`). Other sources
+                // keep one column so the row count survives.
+                if output.is_empty() && !matches!(scan.source, ReadSource::Files { .. }) {
                     output.extend(scan.output.first().cloned());
                 }
                 replace(
