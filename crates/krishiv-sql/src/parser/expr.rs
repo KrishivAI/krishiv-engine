@@ -269,22 +269,23 @@ impl Parser<'_> {
     /// [`BRANCH_END`]) is the operator with that word as a column operand,
     /// as ANTLR takes it when the operator reading can go on after the
     /// word; otherwise `NOT` is the column and the word continues it.
-    /// - A word that closes the current `CASE` part does so: the operator
-    ///   reading needs a second closer after it (`ELSE not END` is the
-    ///   column, `THEN not END END` the operator).
+    /// - A word that closes the current `CASE` part does so unless the
+    ///   operator reading goes on: a second closer or a continuation after
+    ///   it (`ELSE not END` is the column, `THEN not END END` and `THEN NOT
+    ///   end IS NULL END` the operator).
     /// - At a select item's top level the item may end after the word or
     ///   after a bare alias (`SELECT NOT END`, `SELECT NOT AND x`).
-    /// - Elsewhere the operator when an expression may end after the word
-    ///   (`WHERE NOT END`, `x -> NOT AND`, `WHEN NOT END THEN`), the column
-    ///   when an operand or a predicate follows (`WHERE NOT IS NULL`,
-    ///   `WHERE NOT AND x`).
+    /// - Elsewhere the operator when an expression may end or go on after
+    ///   the word (`WHERE NOT END`, `x -> NOT AND`, `WHEN NOT END THEN`,
+    ///   `NOT IS IN (1)`, `NOT END[0]`), the column when only the word's own
+    ///   reading continues (`WHERE NOT IS NULL`, `WHERE NOT AND x`).
     fn not_takes_operand(&self, w: usize) -> bool {
         let part = self
             .case_part
             .filter(|(start, _)| self.depth_since(*start) == 0);
         if let Some((_, part)) = part {
             if self.any_kw_at(w, part.closers()) {
-                return self.any_kw_at(w + 1, part.closers());
+                return self.any_kw_at(w + 1, part.closers()) || self.expr_continues_at(w + 1);
             }
         } else if self
             .item_start
@@ -293,7 +294,22 @@ impl Parser<'_> {
         {
             return true;
         }
-        self.expr_may_end_at(w + 1)
+        self.expr_may_end_at(w + 1) || self.expr_continues_at(w + 1)
+    }
+
+    /// Whether the token at offset `n` continues an expression before it: a
+    /// field or element access, `::`, `COLLATE`, `DIV` or a predicate (`IS
+    /// NULL`, `IN`, `BETWEEN`, `LIKE`, ..., also after `NOT`).
+    fn expr_continues_at(&self, n: usize) -> bool {
+        const PREDICATES: &[&str] = &["IN", "BETWEEN", "LIKE", "ILIKE", "RLIKE", "REGEXP"];
+        const IS_TAIL: &[&str] = &["NULL", "NOT", "TRUE", "FALSE", "UNKNOWN", "DISTINCT"];
+        self.sym_at(n, Sym::Dot)
+            || self.sym_at(n, Sym::LBracket)
+            || self.sym_at(n, Sym::DoubleColon)
+            || self.any_kw_at(n, PREDICATES)
+            || self.any_kw_at(n, &["COLLATE", "DIV"])
+            || (self.kw_at(n, "IS") && self.any_kw_at(n + 1, IS_TAIL))
+            || (self.kw_at(n, "NOT") && self.any_kw_at(n + 1, PREDICATES))
     }
 
     /// The bracket depth of the cursor relative to the token `start`.
@@ -1531,9 +1547,10 @@ impl Parser<'_> {
     fn case_expr(&mut self) -> PR<ExprKind> {
         let key = self.pos;
         match self.case_memo.get(&key) {
-            Some(CaseMemo::Parsed(kind, end)) => {
-                let kind = kind.clone();
-                self.pos = *end;
+            Some(CaseMemo::Parsed(kind, end, height)) => {
+                let (kind, end, height) = (kind.clone(), *end, *height);
+                self.grow(height)?;
+                self.pos = end;
                 return Ok(kind);
             }
             Some(&CaseMemo::Failed {
@@ -1552,12 +1569,12 @@ impl Parser<'_> {
         }
         let deferred = self.deferred.is_some();
         let outer = self.case_part.take();
-        let done = self.case_expr_uncached();
+        let done = self.measured(Self::case_expr_uncached);
         self.case_part = outer;
         match &done {
-            Ok(kind) if self.deferred.is_some() == deferred => {
-                self.case_memo
-                    .insert(key, CaseMemo::Parsed(kind.clone(), self.pos));
+            Ok((kind, height)) if self.deferred.is_some() == deferred => {
+                let memo = CaseMemo::Parsed(kind.clone(), self.pos, *height);
+                self.case_memo.insert(key, memo);
             }
             Err(Fail::Syntax) => {
                 let memo = CaseMemo::Failed {
@@ -1569,7 +1586,7 @@ impl Parser<'_> {
             }
             _ => {}
         }
-        done
+        done.map(|(kind, _)| kind)
     }
 
     /// Runs `f` with `part` as the current `CASE` part.

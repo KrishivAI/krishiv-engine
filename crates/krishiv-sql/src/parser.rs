@@ -211,8 +211,9 @@ impl CasePart {
 
 /// The outcome of reading a `CASE` expression at a token position.
 pub(crate) enum CaseMemo {
-    /// It parsed to this expression, ending before this token.
-    Parsed(crate::ast::ExprKind, usize),
+    /// It parsed to this expression, ending before this token, its tree
+    /// reaching this many levels below the `CASE`.
+    Parsed(crate::ast::ExprKind, usize, usize),
     /// It failed; the furthest failure and its recovery hints.
     Failed {
         far: usize,

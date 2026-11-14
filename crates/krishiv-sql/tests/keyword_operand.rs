@@ -286,6 +286,58 @@ fn not_takes_a_keyword_operand_where_spark_does() {
     use krishiv_plan::SourceId;
     for (sql, want) in [
         (
+            r#"SELECT 1 FROM t WHERE NOT IS IN (1)"#,
+            r#"Project [1] | +- Filter (NOT (IS IN (1))) |    +- Read t"#,
+        ),
+        (
+            r#"SELECT 1 FROM t WHERE NOT AND IS NULL"#,
+            r#"Project [1] | +- Filter (NOT isnull(AND)) |    +- Read t"#,
+        ),
+        (
+            r#"SELECT 1 FROM t WHERE NOT END BETWEEN 1 AND 2"#,
+            r#"Project [1] | +- Filter (NOT (END BETWEEN 1 AND 2)) |    +- Read t"#,
+        ),
+        (
+            r#"SELECT 1 FROM t WHERE NOT IS.a"#,
+            r#"Project [1] | +- Filter (NOT IS.a) |    +- Read t"#,
+        ),
+        (
+            r#"SELECT 1 FROM t WHERE NOT END[0]"#,
+            r#"Project [1] | +- Filter (NOT __subscript(END, 0)) |    +- Read t"#,
+        ),
+        (
+            r#"SELECT transform(array(1), x -> NOT END IS NULL)"#,
+            r#"Project [transform(array(1), (x) -> (NOT isnull(END)))] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT 1 FROM t WHERE NOT OR LIKE 'a'"#,
+            r#"Project [1] | +- Filter (NOT (OR like 'a')) |    +- Read t"#,
+        ),
+        (
+            r#"SELECT CASE WHEN a THEN NOT END IS NULL END"#,
+            r#"Project [CASE WHEN a THEN (NOT isnull(END)) END] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT 1 FROM t WHERE NOT IS NOT NULL"#,
+            r#"Project [1] | +- Filter isnotnull(NOT) |    +- Read t"#,
+        ),
+        (
+            r#"SELECT 1 FROM t WHERE NOT END NOT IN (1)"#,
+            r#"Project [1] | +- Filter (NOT (NOT (END IN (1)))) |    +- Read t"#,
+        ),
+        (
+            r#"SELECT 1 FROM t WHERE NOT AND DIV 2"#,
+            r#"Project [1] | +- Filter (NOT (AND div 2)) |    +- Read t"#,
+        ),
+        (
+            r#"SELECT 1 FROM t WHERE NOT END::int"#,
+            r#"Project [1] | +- Filter (NOT CAST(END AS INT)) |    +- Read t"#,
+        ),
+        (
+            r#"SELECT CASE WHEN a THEN 1 ELSE NOT END.x END"#,
+            r#"Project [CASE WHEN a THEN 1 ELSE (NOT END.x) END] | +- OneRowRelation"#,
+        ),
+        (
             r#"SELECT 1 FROM t WHERE NOT END"#,
             r#"Project [1] | +- Filter (NOT END) |    +- Read t"#,
         ),
