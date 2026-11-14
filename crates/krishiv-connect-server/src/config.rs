@@ -60,10 +60,10 @@ pub(crate) enum ConfigRole {
 /// with none is a viewer. With authentication off every request is the local user on a
 /// loopback listener (design P3-T001 §3.6), which is the admin.
 ///
-/// TODO(P3-T002 follow-up): move [`check_settable`] into the session's `AccessPolicy` path,
-/// so SQL `SET` (`Session::sql`) and Connect's `SqlCommand` (T012) take the same gate as this
-/// RPC (ADR 0046 rejects listener-local checks), and hide `Startup` and `Admin` keys from
-/// `get_all` for viewers and operators.
+/// SQL `SET` takes the same gate through the session's policy (`Manage` on the cluster for an
+/// `admin` key). TODO(P3-T002 follow-up): have this RPC ask the session's policy too instead
+/// of [`check_settable`] (ADR 0046 rejects listener-local checks), and hide `Startup` and
+/// `Admin` keys from `get_all` for viewers and operators.
 #[must_use]
 pub(crate) fn role_of(caller: &Authenticated) -> ConfigRole {
     match (caller.method, caller.role) {

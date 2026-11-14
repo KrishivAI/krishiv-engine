@@ -105,9 +105,24 @@ impl Session {
         crate::access::audit(self, class, r)
     }
 
-    /// `SET key = ..` of a server-scoped store key is `Manage` on the cluster (P3-T067b); any
-    /// other key passes. Asked before the value is stored, so a refused `SET` changes nothing.
-    pub(crate) async fn authorize_set_store_key(&self, key: &str) -> Result<(), KrishivError> {
+    /// `SET key = ..` (or `RESET key`) of a key only an administrator may change is `Manage`
+    /// on the cluster (ADR 0046 §3): a registry key settable by `admin` (its Spark alias too),
+    /// or a server-scoped store key (P3-T067b). Any other key passes. Asked before the value
+    /// is stored, so a refused `SET` changes nothing. A `startup` key is refused by the
+    /// configuration itself, for every principal (`CANNOT_MODIFY_STATIC_CONFIG`).
+    pub(crate) async fn authorize_set_key(&self, key: &str) -> Result<(), KrishivError> {
+        if krishiv_common::config::lookup(key)
+            .is_some_and(|e| e.settable_by == krishiv_common::config::SettableBy::Admin)
+        {
+            let r = authorize(
+                &*self.state.policy,
+                &self.state.principal,
+                &Securable::System("cluster".to_owned()),
+                Privilege::Manage,
+            )
+            .await;
+            return crate::access::audit(self, StatementClass::Session, r);
+        }
         if !krishiv_io::is_server_scoped_option(key) {
             return Ok(());
         }

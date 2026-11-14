@@ -60,6 +60,10 @@ const MATRIX: &[(&str, Role)] = &[
     ("SELECT id FROM range(3)", Role::Viewer),
     // Session class.
     ("SET spark.sql.shuffle.partitions = 4", Role::Viewer),
+    // A key settable by `admin` only (ADR 0046 §3): `Manage` on the cluster, for `SET` and
+    // `RESET key` alike.
+    ("SET krishiv.exec.targetPartitionBytes = 64m", Role::Admin),
+    ("RESET krishiv.exec.targetPartitionBytes", Role::Admin),
     ("USE default", Role::Viewer),
     // Metadata (Browse).
     ("SHOW TABLES", Role::Viewer),
