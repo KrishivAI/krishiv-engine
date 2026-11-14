@@ -12,6 +12,7 @@ mod fused_probe;
 mod idle;
 mod merge;
 mod payload_rows;
+mod release;
 mod runtime_filter;
 mod skew;
 mod tpch;
