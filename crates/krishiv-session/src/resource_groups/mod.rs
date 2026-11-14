@@ -18,13 +18,16 @@ mod tests;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use krishiv_common::error::{InternalError, KrishivError, KrishivResourceGroupQueueFull};
+use krishiv_common::error::{
+    InternalError, KrishivError, KrishivResourceGroupConfigInvalid, KrishivResourceGroupQueueFull,
+};
 use krishiv_plan::analyzer::BoxFuture;
 
 use crate::admission::{AdmissionController, Permit, QueryRequest};
 use config::Config;
 use tree::{Admitted, Refusal, Shared};
 
+pub use select::tag_matches;
 pub use tree::GroupSlot;
 
 /// The admission controller for a resource group tree.
@@ -61,6 +64,22 @@ impl ResourceGroups {
         let config = config::parse(json, total_memory)?;
         let shared = Shared::new(&config.roots, now_ms);
         Ok(Self { config, shared })
+    }
+
+    /// Builds the controller from the group file at `path` (`krishiv.workload.resourceGroups.file`).
+    ///
+    /// # Errors
+    ///
+    /// `KRISHIV_RESOURCE_GROUP_CONFIG_INVALID` when the file cannot be read, and as
+    /// [`ResourceGroups::from_json`] otherwise.
+    pub fn from_file(path: &str, total_memory: usize) -> Result<Self, KrishivError> {
+        let json = std::fs::read_to_string(path).map_err(|e| {
+            KrishivError::from(KrishivResourceGroupConfigInvalid {
+                path: path.to_owned(),
+                reason: format!("cannot read the file: {}", e.kind()),
+            })
+        })?;
+        Self::from_json(&json, total_memory)
     }
 
     /// `(running, queued)` queries of the group `id` (a dotted path such as `root.etl`).
@@ -109,7 +128,10 @@ impl AdmissionController for ResourceGroups {
                     })??
                 }
             };
-            let permit = Permit::with_slot(slot);
+            let mut permit = Permit::with_slot(slot).with_group(group);
+            if let Some((priority, class)) = self.shared.leaf_traits(leaf) {
+                permit = permit.with_priority(priority).with_class(class);
+            }
             Ok(match budget {
                 Some(bytes) => permit.with_memory_budget(bytes),
                 None => permit,
