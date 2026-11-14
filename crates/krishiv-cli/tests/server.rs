@@ -342,6 +342,63 @@ fn pyspark_stream_cap_reattach() {
     );
 }
 
+/// Design P3-T011a §3.9 with the stock client: `addArtifacts` of a Python
+/// file succeeds, the same file again is a no-op, other bytes under the same
+/// name are `ARTIFACT_ALREADY_EXISTS`, and a cached blob answers
+/// `ArtifactStatus`.
+#[test]
+#[ignore = "needs a Python with pyspark-client 4.3.0 or 4.2.1 (KRISHIV_TEST_PYSPARK_PYTHON); CI hosts have none"]
+fn pyspark_add_artifacts_pyfile() {
+    pyspark(
+        "import os, tempfile\n\
+         from pyspark.sql import SparkSession\n\
+         from pyspark.errors import SparkRuntimeException\n\
+         s = SparkSession.builder.getOrCreate()\n\
+         d = tempfile.mkdtemp()\n\
+         p = os.path.join(d, 'helper_mod.py')\n\
+         open(p, 'w').write('def f():\\n    return 1\\n')\n\
+         s.addArtifacts(p, pyfile=True)\n\
+         s.addArtifacts(p, pyfile=True)\n\
+         open(p, 'w').write('def f():\\n    return 2\\n')\n\
+         try:\n\
+         \x20   s.addArtifacts(p, pyfile=True)\n\
+         \x20   raise AssertionError('no error')\n\
+         except SparkRuntimeException as e:\n\
+         \x20   assert e.getCondition() == 'ARTIFACT_ALREADY_EXISTS', e\n\
+         h = s._client._artifact_manager.cache_artifact(b'x' * 100000)\n\
+         assert s._client._artifact_manager.is_cached_artifact(h)\n\
+         assert not s._client._artifact_manager.is_cached_artifact('0' * 64)\n\
+         s.stop()\n",
+    );
+}
+
+/// Design P3-T011a §3.10 with the stock client: a failing query's status
+/// carries an `errorId`, the client fetches the details (`FetchErrorDetails`;
+/// its server stack trace is then the root error's class line, without
+/// frames), and raises the exception with the class and parameters.
+#[test]
+#[ignore = "needs a Python with pyspark-client 4.3.0 or 4.2.1 (KRISHIV_TEST_PYSPARK_PYTHON); CI hosts have none"]
+fn pyspark_fetches_error_details() {
+    pyspark(
+        "from pyspark.sql import SparkSession\n\
+         from pyspark.errors import AnalysisException\n\
+         s = SparkSession.builder.getOrCreate()\n\
+         try:\n\
+         \x20   s.range(3).select('nope').collect()\n\
+         \x20   raise AssertionError('no error')\n\
+         except AnalysisException as e:\n\
+         \x20   assert e.getCondition().startswith('UNRESOLVED_COLUMN'), e.getCondition()\n\
+         \x20   assert e.getMessageParameters().get('objectName') == '`nope`', e.getMessageParameters()\n\
+         \x20   assert e.getStackTrace() == 'org.apache.spark.sql.AnalysisException', e.getStackTrace()\n\
+         s.conf.set('spark.sql.connect.enrichError.enabled', 'false')\n\
+         try:\n\
+         \x20   s.range(3).select('nope').collect()\n\
+         except AnalysisException as e:\n\
+         \x20   assert e.getStackTrace() is None, e.getStackTrace()\n\
+         s.stop()\n",
+    );
+}
+
 #[test]
 #[ignore = "needs SqlCommand (P3-T012) and a Python with pyspark-client (KRISHIV_TEST_PYSPARK_PYTHON)"]
 fn server_sessions_are_isolated() {

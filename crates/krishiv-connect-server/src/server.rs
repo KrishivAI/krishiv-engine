@@ -31,6 +31,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tonic::transport::Server;
 use tonic::transport::server::{Connected, TcpConnectInfo};
 
+use crate::artifacts::ArtifactLimits;
 use crate::execute::ResponseBudget;
 use crate::manager::SessionManager;
 use crate::operation::ExecuteLimits;
@@ -75,6 +76,8 @@ pub struct ConnectServerConfig {
     pub shutdown_timeout: Duration,
     /// The limits of `ExecutePlan`.
     pub execute: ExecuteLimits,
+    /// The artifact quotas (`krishiv.connect.artifacts.*`).
+    pub artifacts: ArtifactLimits,
 }
 
 impl Default for ConnectServerConfig {
@@ -91,6 +94,7 @@ impl Default for ConnectServerConfig {
             maintenance_interval: Duration::from_secs(30),
             shutdown_timeout: Duration::from_secs(30),
             execute: ExecuteLimits::default(),
+            artifacts: ArtifactLimits::default(),
         }
     }
 }
@@ -142,6 +146,7 @@ impl ConnectServerConfig {
                 .unwrap_or(d.maintenance_interval),
             shutdown_timeout: duration(&SERVER_SHUTDOWN_TIMEOUT).unwrap_or(d.shutdown_timeout),
             execute: ExecuteLimits::from_config(config),
+            artifacts: ArtifactLimits::from_config(config),
         }
     }
 }
@@ -211,7 +216,8 @@ impl ConnectServer {
     ///
     /// # Errors
     /// `KRISHIV_INVALID_CONFIG_VALUE` before serving when the `ExecutePlan`
-    /// limits do not fit together ([`ExecuteLimits::validate`]);
+    /// limits do not fit together ([`ExecuteLimits::validate`]) or the
+    /// artifact limits do not ([`ArtifactLimits::validate`]);
     /// `INTERNAL_ERROR` for a transport failure.
     pub async fn serve(
         self,
@@ -225,9 +231,12 @@ impl ConnectServer {
             budget,
         } = self;
         config.execute.validate()?;
+        config.artifacts.validate()?;
         let service = ConnectService::new(Arc::clone(&manager), Arc::clone(&draining))
             .with_limits(config.execute.clone())
-            .with_budget(budget);
+            .with_budget(budget)
+            .with_artifacts(config.artifacts.clone());
+        let artifacts = Arc::clone(service.artifacts());
         let service = SparkConnectServiceServer::from_arc(Arc::new(service))
             .max_decoding_message_size(config.max_inbound_message_size)
             .max_encoding_message_size(config.max_inbound_message_size);
@@ -307,6 +316,9 @@ impl ConnectServer {
             }
         };
         manager.close_all();
+        // The artifact root goes before `serve` returns: a removal queued on
+        // the blocking pool may never run once the runtime is dropped.
+        artifacts.shutdown().await;
         result.map_err(|e| transport_error(&e))
     }
 }

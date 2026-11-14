@@ -28,6 +28,7 @@ use tonic::transport::Channel;
 
 use super::ResponseBudget;
 use super::hooks::{self, Fault};
+use crate::operation::OperationState;
 use crate::{ConnectServer, ConnectServerConfig, SessionEntry, SessionLimits, SessionManager};
 
 const SESSION: &str = "8f0e4c55-5ad0-4d1e-9a3c-3a1b0b2c7d10";
@@ -229,6 +230,11 @@ async fn an_encoder_panic_ends_a_non_reattachable_stream_with_internal_error() {
     let e = end.expect_err("the stream fails");
     assert_eq!(error_class(&e), "INTERNAL_ERROR");
     eventually("the operation leaves", || entry.operations().is_empty()).await;
+    assert_eq!(
+        entry.operations().state_of(&op),
+        Some(OperationState::Failed),
+        "GetStatus agrees with the stream"
+    );
     eventually("the budget returns", || {
         run.budget.available() == run.budget.cap()
     })
@@ -263,6 +269,7 @@ async fn an_encoder_panic_ends_a_reattachable_operation_with_internal_error() {
     assert_eq!(error_class(&end.expect_err("fails")), "INTERNAL_ERROR");
     let live = entry.operations().get(&op).expect("kept until released");
     assert!(!live.is_active(), "settled: shutdown does not wait for it");
+    assert_eq!(live.state(), OperationState::Failed);
     release_all(&run, &op).await;
     assert!(entry.operations().is_empty());
     eventually("the budget returns", || {
@@ -330,4 +337,34 @@ async fn a_release_during_plan_preparation_cancels_it() {
     assert!(run.entry().operations().is_empty(), "nothing leaks");
     assert_eq!(run.budget.available(), run.budget.cap());
     assert_eq!(run.entry().session().running_queries(), 0);
+}
+
+#[test]
+fn an_encoder_that_unwinds_after_an_interrupt_is_cancelled() {
+    // The guard settles like any failure: an interrupt that came first wins.
+    let op = Arc::new(crate::operation::Operation::new(
+        crate::operation::new_operation_id().expect("id"),
+        [0; 32],
+        Arc::from(Vec::new()),
+        true,
+    ));
+    let errors = Arc::new(crate::errors::SessionErrors::new(
+        Session::new().expect("session").conf(),
+    ));
+    assert!(op.cancel());
+    drop(super::Unsettled {
+        op: Some(Arc::clone(&op)),
+        errors,
+    });
+    assert_eq!(op.state(), OperationState::Cancelled);
+    let g = op.replay().attach(None);
+    match op.replay().next(g, 1, true) {
+        crate::operation::replay::Next::Finished(Some(status)) => {
+            assert!(
+                status.message().contains("OPERATION_CANCELED"),
+                "{status:?}"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
 }

@@ -14,6 +14,8 @@ the logical-plan IR of `krishiv-plan`. The server (P3-T011, P3-T012) extends thi
 - `src/translate/mod.rs` `translate_*` entry points, `command_not_supported` (commands are 56K00 until T012); `src/translate/relation.rs` and `expression.rs` (IR building)
 - `src/translate/literal.rs` literals; `src/translate/names.rs` names and plan-id origins
 - `src/translate/errors.rs` `KRISHIV_UNSUPPORTED_FEATURE` and `CONNECT_INVALID_PLAN.*` errors
+- `src/artifact.rs` `parse_artifact_name`: `AddArtifacts` names (prefixes, segments, fragments), fuzzed by
+  `connect_artifact_name` in `fuzz/`
 - `src/arrow.rs` result columns Spark sends in another Arrow shape than the engine holds (geometry/geography)
 - `tests/fuzz_regressions.rs` fuzz findings (inputs that once ran out of memory) must end in a typed error
 - `src/coverage.rs` (P3-T012a) the coverage table: an exhaustive `match` per `oneof` (Relation, Expression, Command, Catalog, Literal, DataType) with a row per arm (status, refused fields, IR target, task, group), so a regenerated proto with a new arm does not compile until it has a row; `src/bin/connect-coverage-dump.rs` prints it as JSON for `cargo xtask connect-coverage [--check]`, which writes `docs/reference/connect/coverage.md` and `tests/connect/coverage.json` (CI checks them in the docs-site job). Update the row in the same commit that translates an arm; `tests/coverage.rs` fails when a row disagrees with the translator

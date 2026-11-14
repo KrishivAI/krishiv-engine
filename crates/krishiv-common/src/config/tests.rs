@@ -1302,6 +1302,26 @@ fn fuse_probe_select_defaults_on_and_parses() {
 }
 
 #[test]
+fn path_confinement_entries_default_to_empty_and_are_startup_only() {
+    let mut c = Config::new();
+    for entry in [&IO_LOCAL_ALLOWED_ROOTS, &IO_OBJECT_STORE_ALLOWED_PREFIXES] {
+        assert_eq!(c.get(entry), None, "{}", entry.key);
+        assert_eq!(entry.scope, Scope::Cluster, "{}", entry.key);
+        assert_eq!(entry.settable_by, SettableBy::Startup, "{}", entry.key);
+    }
+    c.set(
+        "krishiv.io.objectStore.allowedPrefixes",
+        "s3://lake/data, gs://shared",
+    )
+    .unwrap();
+    assert_eq!(
+        c.get(&IO_OBJECT_STORE_ALLOWED_PREFIXES)
+            .and_then(ConfigValue::as_str),
+        Some("s3://lake/data, gs://shared")
+    );
+}
+
+#[test]
 fn connect_max_plan_depth_defaults_and_rejects_non_positive() {
     let mut c = Config::new();
     assert_eq!(
@@ -1531,6 +1551,40 @@ fn connect_reattach_entries_parse_default_and_take_sparks_names() {
         k.set(key, &d.get(e).map(ToString::to_string).unwrap_or_default())
             .unwrap();
         assert_eq!(k.get(e), d.get(e), "{key}");
+    }
+}
+
+#[test]
+fn connect_artifact_quotas_parse_and_default() {
+    let d = Config::new();
+    let size = |c: &Config, e| c.get(e).and_then(ConfigValue::as_size);
+    // Design P3-T011a §3.9: 1 GiB per session, 256 MiB per artifact.
+    assert_eq!(size(&d, &CONNECT_ARTIFACTS_MAX_BYTES), Some(1 << 30));
+    assert_eq!(
+        size(&d, &CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES),
+        Some(256 << 20)
+    );
+    let mut c = Config::new();
+    c.set("krishiv.connect.artifacts.maxBytes", "2m").unwrap();
+    c.set("krishiv.connect.artifacts.maxArtifactBytes", "64k")
+        .unwrap();
+    assert_eq!(size(&c, &CONNECT_ARTIFACTS_MAX_BYTES), Some(2 << 20));
+    assert_eq!(
+        size(&c, &CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES),
+        Some(64 << 10)
+    );
+    assert!(c.set("krishiv.connect.artifacts.maxBytes", "-1").is_err());
+    assert!(
+        c.set("krishiv.connect.artifacts.maxArtifactBytes", "lots")
+            .is_err()
+    );
+    for e in [
+        &CONNECT_ARTIFACTS_MAX_BYTES,
+        &CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES,
+        &CONNECT_ARTIFACTS_MAX_TOTAL_BYTES,
+    ] {
+        assert_eq!(e.settable_by, SettableBy::Startup, "{}", e.key);
+        assert!(e.spark_alias.is_none(), "{}", e.key);
     }
 }
 

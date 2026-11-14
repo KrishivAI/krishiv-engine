@@ -254,6 +254,43 @@ do not see it, as in Spark. `system.caches` lists the session's live checkpoints
   Setting a key the registry marks admin-only answers `KRISHIV_INSUFFICIENT_PERMISSIONS` (42501, gRPC
   `PERMISSION_DENIED`) for a non-admin role (no role exists before authentication, so the local user is the admin).
 - **Interrupt by tag** fails with `UNSUPPORTED_FEATURE.INTERRUPT_TYPE` until operation tags can be interrupted.
+- **AddArtifacts.** Names are checked before anything is written and more strictly than Spark: one of the prefixes
+  `cache/`, `pyfiles/`, `archives/` or `files/`, `/`-separated, without empty, `.` or `..` segments, `\`, control or
+  invisible formatting characters, at most 32 segments of at most 255 bytes; a `cache/` name is one segment of ASCII
+  letters and digits. Anything else is `INVALID_ARTIFACT_PATH` (Spark accepts an unknown prefix as a plain file and
+  turns `\` into a separator). `jars/` and `classes/` (no JVM) and `forward_to_fs/` (no Hadoop file system) fail with
+  `KRISHIV_UNSUPPORTED_FEATURE`. Each session may hold `krishiv.connect.artifacts.maxBytes` (1 GiB) of artifacts and
+  one artifact `krishiv.connect.artifacts.maxArtifactBytes` (256 MiB); past either,
+  `KRISHIV_ARTIFACT_LIMIT` (`RESOURCE_EXHAUSTED`); Spark has no cap. Each segment of a name (the file and every
+  directory it may need) counts 4 KiB rather than each artifact, and all sessions together may hold
+  `krishiv.connect.artifacts.maxTotalBytes` (16 GiB). A broken chunk sequence (too many or too few chunks, a chunk
+  with no artifact begun, a new chunked artifact before the last chunk, a wrong `total_bytes`) fails with
+  `KRISHIV_INVALID_ARTIFACT_TRANSFER` where Spark sends `INTERNAL` without an error class. A `batch` sent while a
+  chunked artifact is still open fails the same way, which Spark accepts (the stock client never sends one). A
+  chunked artifact of one chunk is accepted (Spark fails it). An artifact that collides with one already stored fails with
+  `ARTIFACT_ALREADY_EXISTS` as in Spark, also when the name holds a directory or a link. Archives are stored, not
+  unpacked, until Python UDFs use them.
+- **FetchErrorDetails** sends no stack trace (Spark sends the JVM's): there is no JVM, and a Rust backtrace would
+  expose server internals. A client that asks for the server stack trace gets the root error's class line only. The
+  causes of an error are sent with the parameters of server-internal error classes redacted, as their own status would
+  be. Errors of a Connect `Sql` relation carry no SQL query context yet.
+- **CloneSession.** The clone gets copies of the configuration, temporary views, temporary functions, variables,
+  current catalog and namespace, and the session's artifacts (charged to the clone's
+  `krishiv.connect.artifacts.maxBytes` and to `maxTotalBytes`; a copy that does not fit fails with
+  `KRISHIV_ARTIFACT_LIMIT` and creates no session). Differences from Spark: Rust UDFs (`register_udf`) are shared
+  with the clone rather than copied; global temporary views are per session in Krishiv, so the clone gets a copy and
+  the two diverge (Spark shares them); cached relations are not copied (Spark's cache is shared by both sessions); a
+  clone counts against `krishiv.connect.maxSessions` and `maxSessionsPerPrincipal` (`KRISHIV_SESSION_LIMIT`), which
+  Spark does not check; a target id another principal holds answers `INVALID_HANDLE.SESSION_NOT_FOUND`; and a
+  target created by a racing request while the clone is made fails with
+  `INVALID_CLONE_SESSION_REQUEST.TARGET_SESSION_ID_ALREADY_EXISTS` where Spark returns the racing session.
+- **GetStatus** ignores request and operation extensions: Krishiv has no `spark.connect.extensions.getStatus.classes`
+  plugins. A session remembers the final state of at most 1,000 ended operations, each for 30 minutes after its last
+  lookup; Spark keeps every one for the 30 minutes. Operation ids are matched in their canonical UUID form, so an
+  upper-case spelling finds the operation; Spark keys them by the string as sent. Which state Spark reports in a few
+  cases has not been checked against Spark yet: Krishiv reports `CANCELLED` for an `ExecutePlan` whose client went
+  away during analysis, `FAILED` for one that failed there, and `TERMINATING` for an interrupted operation that has
+  not stopped yet.
 - **`ml_command.clean_cache` answers with no result.** PySpark sends it when its process exits; Krishiv has no ML
   cache, so the operation succeeds with no response (only `result_complete` when reattachable). Spark sends an
   `ml_command_result`, whose content for this command is not verified; PySpark ignores it. Its operation id is not

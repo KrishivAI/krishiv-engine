@@ -11,10 +11,11 @@ publish = false
 [package.metadata]
 cargo-fuzz = true
 
-# `capsule_import` includes crates/krishiv-python/src/stream/ffi.rs by path, which is what
-# uses these two; cargo-machete cannot see through the path include.
+# `capsule_import` includes crates/krishiv-python/src/stream/ffi.rs by path (arrow-data,
+# krishiv-common) and `jwt_parse` includes krishiv-session's auth/jose.rs (serde, serde_json);
+# cargo-machete cannot see through a path include.
 [package.metadata.cargo-machete]
-ignored = ["arrow-data", "krishiv-common"]
+ignored = ["arrow-data", "krishiv-common", "serde", "serde_json"]
 
 [dependencies]
 libfuzzer-sys = "0.4.10"
@@ -37,6 +38,8 @@ krishiv-sql = { path = "../crates/krishiv-sql" }
 krishiv-types = { path = "../crates/krishiv-types" }
 krishiv-testkit = { path = "../crates/krishiv-testkit" }
 object_store = { version = "=0.14.2", default-features = false }
+serde = { version = "1.0.229", default-features = false, features = ["std"] }
+serde_json = { version = "1.0.154", default-features = false, features = ["std"] }
 tokio = { version = "1.53", default-features = false, features = ["rt", "rt-multi-thread", "time"] }
 
 [[bin]]
@@ -54,8 +57,29 @@ doc = false
 bench = false
 
 [[bin]]
+name = "connect_artifact_name"
+path = "fuzz_targets/connect_artifact_name.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "parquet_read"
 path = "fuzz_targets/parquet_read.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cert_names"
+path = "fuzz_targets/cert_names.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "jwt_parse"
+path = "fuzz_targets/jwt_parse.rs"
 test = false
 doc = false
 bench = false

@@ -17,8 +17,24 @@ Paths are relative to this crate.
 - `src/service.rs` `ConnectService`, Krishiv's implementation: `ExecutePlan`, `ReattachExecute` / `ReleaseExecute`
   (design P3-T011a §3.8: resume after `last_response_id`, `release_until` trims, `release_all` closes; the server's
   `ResponseBudget`), `ReleaseSession`, `AnalyzePlan`, `Config`,
-  `Interrupt`; the other RPCs are `UNIMPLEMENTED` until PR-15; a draining server answers `UNAVAILABLE` ("server
-  shutting down")
+  `Interrupt`, `AddArtifacts`, `ArtifactStatus`, `FetchErrorDetails`, `CloneSession`, `GetStatus` (all twelve RPCs);
+  `ExecutePlan` (until its encoder starts), `AnalyzePlan` and `Config` hold the session's statement gate shared; a
+  draining server answers `UNAVAILABLE` ("server shutting down"); an error after the
+  session is known goes through `entry.errors().status` (it gets an `errorId`), one before it through `status_of`
+- `src/artifacts.rs` `AddArtifacts` / `ArtifactStatus` (design §3.9): the chunk protocol and CRC-32 (`crc32`), names
+  from `krishiv_connect::artifact` checked before any file, the privilege gate `config::check_add_artifact`, the
+  per-session quota (`krishiv.connect.artifacts.maxBytes`, `maxArtifactBytes`, `ARTIFACT_OVERHEAD` per name segment)
+  and the server-wide one (`maxTotalBytes`, checked `>= maxArtifactBytes` at startup)
+  counted before each write, `Transfer` (runs on the blocking pool; dropping it removes what it staged and returns its
+  quota), `SessionArtifacts` (per session: directory, `cache/<hash>` blobs in the pool as `connect_artifacts`,
+  `cached(hash)` for T012; a blob's pool reservation covers its whole capacity; the installed files are indexed, and
+  `snapshot` / `copy_from` copy them to a clone, counted against its quota and `maxTotalBytes` first), `ArtifactStore` (the server's root,
+  created on first use, removed by the awaited `shutdown` that `serve` calls after closing the sessions); `src/artifacts/dir.rs` the
+  private root and session directories, `O_EXCL | O_NOFOLLOW` staging, `linkat` install (never replaces), every name
+  resolved per segment from a directory descriptor without following links; removal on the blocking pool
+- `src/errors.rs` `SessionErrors` (design §3.10): `errorId` on every status sent on a session unless
+  `spark.sql.connect.enrichError.enabled=false`, the per-session cache (20, 60 s after last access, given out once),
+  `details` (cause chain ≤ 5, each error in its client-safe form, query contexts, no stack trace)
 - `src/analyze.rs` `AnalyzePlan` (design §3.5): every arm over the translated, analyzed plan (never run);
   `same_semantics`/`semantic_hash` from `krishiv_plan::semantic_plan_hash` (names and subquery aliases erased) of
   the analyzed plan; the cache arms are 56K00 until PR-47; `src/analyze/types.rs` ports of `StructType.treeString`, `toDDL` and the planner's
@@ -30,8 +46,11 @@ Paths are relative to this crate.
   `Session::cancel` per reported id; an interrupted operation stays registered (Spark keeps the `ExecuteHolder`), so a
   reattach gets `OPERATION_CANCELED`; `TAG` is `UNSUPPORTED_FEATURE.INTERRUPT_TYPE` until T064
 - `src/operation.rs` `Operation` (one per `ExecutePlan`: id, plan digest, tags, reattachable, its `Replay`, one
-  atomic state: running, then finished or cancelled by compare-and-swap; `close` = Spark's `ExecuteHolder.close`)
-  and `Operations`, the per-session map in `SessionEntry` (`krishiv.connect.maxOperationsPerSession`,
+  atomic state: running, then finished, failed or cancelled by compare-and-swap, plus `ended` once its encoder
+  stopped; `state()` for GetStatus: cancelled and not ended is `Terminating`; `close` = Spark's `ExecuteHolder.close`)
+  and `Operations`, the per-session map in `SessionEntry` (an operation that leaves it is remembered with its final
+  state: LRU, `ENDED_OPERATIONS_KEPT` 1,000, `ENDED_OPERATION_WINDOW` 30 min after the last lookup; recorded under the
+  live lock, so a lookup always finds it in one of the two) (`krishiv.connect.maxOperationsPerSession`,
   `KRISHIV_OPERATION_LIMIT`; the same plan under a live id is `Admitted::Existing`); `ExecuteLimits` (`aheadBytes`,
   plan and batch sizes, retry buffer, sender caps, detach timeout, maintenance interval, `maxResponseBytes`); tag
   checks (`KRISHIV_INVALID_OPERATION_TAG`)
@@ -61,7 +80,7 @@ Paths are relative to this crate.
 - `src/status.rs` `status_of`: a `KrishivError` as Spark's gRPC status (`INTERNAL`, `google.rpc.ErrorInfo` with
   `classes`, `sqlState`, `errorClass`, `messageParameters`; `ErrorUtils.buildStatusFromThrowable`, v4.3.0);
   `exception_classes` picks the Java class list PySpark's `convert_exception` reads (Spark's own for the Connect
-  classes, else the Python facade's class/SQLSTATE rules); `KRISHIV_SESSION_LIMIT` and `KRISHIV_OPERATION_LIMIT`
+  classes, else the Python facade's class/SQLSTATE rules); `KRISHIV_SESSION_LIMIT`, `KRISHIV_OPERATION_LIMIT`, `KRISHIV_ARTIFACT_LIMIT`
   are `RESOURCE_EXHAUSTED`
 - `src/manager.rs` `SessionManager` (Spark's `SparkConnectSessionManager`): get-or-create / lookup / release, tombstones
   (LRU, no expiry), abandoned-operation tombstones and `abandon_detached` (Spark's execution maintenance; an
@@ -69,17 +88,37 @@ Paths are relative to this crate.
   released one stays `OPERATION_NOT_FOUND`), `SESSION_CHANGED` on a changed server-side id, the idle sweep (skips a session running a query or
   holding a live operation; `busy()` is what shutdown waits for), `krishiv.connect.maxSessions` /
   `maxSessionsPerPrincipal`
+- `src/manager/clone.rs` `SessionManager::clone_session` (design §3.11): target checks (`INVALID_CLONE_SESSION_REQUEST.*`,
+  42K04, sent as `SparkSQLException`; another principal's id `SESSION_NOT_FOUND`; the session caps), the source's
+  gate held exclusively around `Session::clone_session` and the artifact snapshot, the artifact copy on the blocking
+  pool without the gate, the clone published only when complete (`Unpublished` closes it otherwise)
+- `src/get_status.rs` `GetStatus` (design §3.12): absent → none, empty → live ∪ ended, ids deduplicated in order,
+  unknown → `UNKNOWN`; extensions ignored
 - `src/server.rs` `ConnectServer::serve`: HTTP/2 limits, connection cap, sweeper and abandon tasks, shutdown order
 - `tests/server.rs`, `tests/execute.rs`, `tests/rpcs.rs` (AnalyzePlan, Config, Interrupt), `tests/reattach.rs`
-  (replay, reattach, caps, detach, races) end to end over a raw tonic client; `src/execute/fault_tests.rs` the same
-  with the test-only fault points (encoder panic, cancel or release during plan preparation)
+  (replay, reattach, caps, detach, races), `tests/artifacts.rs` (AddArtifacts, ArtifactStatus, FetchErrorDetails,
+  quotas, links, client drops, T-C8), `tests/clone_status.rs` (CloneSession, GetStatus, the clone vs concurrent
+  statements race) end to end over a raw tonic client; `src/execute/fault_tests.rs` the same with the test-only
+  fault points (encoder panic, cancel or release during plan preparation)
 
 ## Invariants
 - **Sessions are keyed by the authenticated principal**, never by `UserContext.user_id` (ADR 0046 §5, threat model
   T-A8); a session id another principal holds is `INVALID_HANDLE.SESSION_NOT_FOUND`, the same answer as unknown.
   Until T002 the principal is a request extension set by the auth layer, else the local user (loopback only).
 - **No lock across an `await`**, and none while a session is built or closed: the manager's mutex guards map
-  lookups and inserts only. Lock order: the manager's, then a session's `Operations` (never the reverse). A racing create of the same key keeps the first and closes the loser.
+  lookups and inserts only. Lock order: the manager's, then a session's `Operations` (never the reverse). A racing create of the same key keeps the first and closes the loser. The one exception
+  is each session's statement gate (`SessionEntry::shared`, a tokio `RwLock`): an RPC holds only its own session's
+  gate and takes no other lock while waiting for it; `CloneSession` holds the source's exclusively only around the
+  synchronous copy (never across the artifact copy or a stream), so it cannot deadlock and never waits on a client.
+  The gate is fair (write-preferring): a clone queued behind a slow `ExecutePlan` setup (`df.schema()` listing many
+  files) holds back every later `Config`, `AnalyzePlan` and `ExecutePlan` of that session until that setup ends:
+  head-of-line blocking, not a deadlock. Commands (T012) that change session state must run under the shared gate,
+  and their side effects must not run in the encoder (after the gate is dropped).
+- **Cached artifact blobs copied to a clone are reserved twice in the pool** while both sessions hold them (the
+  `Bytes` are shared): deliberate, conservative accounting (review L4); a tight pool can refuse such a clone.
+- **GetStatus and the operation states follow design §3.12, not Spark's handler** (unverified, not in the vendored
+  sources): a setup failure is `FAILED`, a setup whose RPC was dropped is `CANCELLED`, an interrupt whose encoder still
+  runs is `TERMINATING`.
 - **Decode only through `wire`** (`#![deny(clippy::disallowed_methods)]`): the codec is the one decode path.
 - Shutdown: draining flag (new RPCs `UNAVAILABLE`, `/readyz` 503), stop accepting, queries get
   `krishiv.server.shutdownTimeout`, then every session is closed (queries cancelled). The engine runtime is dropped
@@ -95,6 +134,10 @@ Paths are relative to this crate.
   `detachedTimeout` (then tombstoned: `OPERATION_ABANDONED`). Live operations, detached or finished but unreleased,
   keep a session from the idle sweep; shutdown waits only for operations still running or read by an attached
   client (`Operation::is_active`).
+- **Artifacts never leave their session's directory**: names are validated before any file exists, every path is
+  resolved segment by segment from a directory descriptor with `O_NOFOLLOW`, installs use `linkat` (no replace), and
+  every byte is counted against the quota before it is written. A released, swept or shut-down session removes its
+  directory; the root goes with the service.
 - `#![forbid(unsafe_code)]`; no `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
 
 ## ADRs (in `../krishiv-internal/adr/`)

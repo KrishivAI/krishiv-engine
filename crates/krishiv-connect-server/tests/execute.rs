@@ -23,7 +23,8 @@ use krishiv_connect::proto::v4_3::execute_plan_response::ResponseType;
 use krishiv_connect::proto::v4_3::plan::OpType;
 use krishiv_connect::proto::v4_3::relation::RelType;
 use krishiv_connect_server::{
-    ConnectServer, ConnectServerConfig, ExecuteLimits, SessionLimits, SessionManager,
+    ConnectServer, ConnectServerConfig, ExecuteLimits, OperationState, SessionLimits,
+    SessionManager,
 };
 use krishiv_session::Session;
 use prost::Message;
@@ -1062,11 +1063,16 @@ async fn ml_clean_cache_succeeds_with_nothing_to_clean() {
         .get_or_create(&Principal::local_user(), SESSION, None, "u")
         .expect("session");
     // Not reattachable: no response, the stream ends OK.
-    let responses = collect(&run.channel, request(clean_cache()))
+    let first = "00112233-4455-6677-8899-aabbccddee02";
+    let responses = collect(&run.channel, with_id(request(clean_cache()), first))
         .await
         .expect("clean_cache");
     assert!(responses.is_empty(), "{} responses", responses.len());
     eventually("the operation leaves", || entry.operations().is_empty()).await;
+    assert_eq!(
+        entry.operations().state_of(first),
+        Some(OperationState::Succeeded)
+    );
 
     // Reattachable: only `ResultComplete`, then it reattaches and releases
     // like any other operation.
@@ -1085,6 +1091,10 @@ async fn ml_clean_cache_succeeds_with_nothing_to_clean() {
     assert_eq!(responses[0].operation_id, id);
     assert_eq!(responses[0].session_id, SESSION);
     assert_eq!(entry.operations().len(), 1, "kept until released");
+    assert_eq!(
+        entry.operations().state_of(id),
+        Some(OperationState::Succeeded)
+    );
     let mut again = stream(
         &run.channel,
         "ReattachExecute",
@@ -1117,6 +1127,10 @@ async fn ml_clean_cache_succeeds_with_nothing_to_clean() {
     .expect("release all");
     assert_eq!(released.operation_id.as_deref(), Some(id));
     assert!(entry.operations().is_empty());
+    assert_eq!(
+        entry.operations().state_of(id),
+        Some(OperationState::Succeeded)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -71,6 +71,7 @@ use tokio::sync::{Semaphore, TryAcquireError};
 use tonic::Status;
 
 use self::arrow::EncodeSettings;
+use crate::errors::SessionErrors;
 use crate::manager::SessionEntry;
 use crate::operation::replay::{Held, uuid_text};
 use crate::operation::{
@@ -78,7 +79,6 @@ use crate::operation::{
     validate_tags,
 };
 use crate::sender::{self, SenderCaps};
-use crate::status::status_of;
 
 /// The default of `spark.connect.session.resultChunking.maxChunkSize`
 /// (`(0.9 × 128 MiB).toInt`, Spark 4.1+).
@@ -155,7 +155,10 @@ impl ResponseBudget {
 }
 
 /// Removes its operation from the session when dropped, unless kept: the
-/// operation failed before its stream started.
+/// operation ended before its stream started, cancelled (its RPC was
+/// dropped) unless [`Registered::fail`] marked it failed. Spark's state for
+/// either is **unverified** (its `SparkConnectGetStatusHandler` was not
+/// read); this follows design P3-T011a §3.12.
 struct Registered {
     operations: Arc<Operations>,
     op: Option<Arc<Operation>>,
@@ -167,11 +170,20 @@ impl Registered {
     fn keep(mut self) {
         self.op = None;
     }
+
+    /// The setup failed (GetStatus: `FAILED`); the operation is removed.
+    fn fail(self) {
+        if let Some(op) = &self.op {
+            op.fail();
+        }
+    }
 }
 
 impl Drop for Registered {
     fn drop(&mut self) {
         if let Some(op) = self.op.take() {
+            // Not failed: interrupted by `close` (GetStatus: CANCELLED).
+            op.mark_ended();
             op.close();
             self.operations.remove(&op);
         }
@@ -215,6 +227,27 @@ async fn until_cancelled<T>(
     }
 }
 
+/// The outcome of an operation's preparation. A preparation error settles
+/// like a query error, by the state's one compare-and-swap: failed first,
+/// the error (GetStatus `FAILED`); an interrupt that reported the operation
+/// first, `OPERATION_CANCELED` (GetStatus `CANCELLED`). Either way the
+/// operation leaves its session. (A dropped RPC drops `registered`:
+/// `CANCELLED`.)
+fn settle_preparation<T>(
+    op: &Operation,
+    registered: Registered,
+    prepared: Result<T, KrishivError>,
+) -> Result<(T, Registered), KrishivError> {
+    match prepared {
+        Ok(ready) => Ok((ready, registered)),
+        Err(e) if op.fail() => {
+            registered.fail();
+            Err(e)
+        }
+        Err(_) => Err(OperationCanceled {}.into()),
+    }
+}
+
 /// Starts `request` on the session `entry`; with the id of a live
 /// operation running the same plan, attaches to it from the start instead
 /// (Spark's `SparkConnectExecutePlanHandler`, v4.3.0 lines 47-60).
@@ -255,7 +288,13 @@ pub async fn execute_plan(
             return Err(InvalidCursorNotReattachable {}.into());
         }
         let caps = SenderCaps::of(&live, limits);
-        return Ok(sender::attach(live, operations, 0, caps));
+        return Ok(sender::attach(
+            live,
+            operations,
+            Arc::clone(entry.errors()),
+            0,
+            caps,
+        ));
     }
     let registered = Registered {
         operations: Arc::clone(&operations),
@@ -264,8 +303,9 @@ pub async fn execute_plan(
     let session = entry.session();
     let empty = pb::Plan::default();
     let plan = request.plan.as_ref().unwrap_or(&empty);
-    let work = if is_ml_clean_cache(plan) {
-        Work::NoResult
+    let conf = session.conf();
+    let (work, registered) = if is_ml_clean_cache(plan) {
+        (Work::NoResult, registered)
     } else {
         let prepared = until_cancelled(&op, async {
             #[cfg(test)]
@@ -275,27 +315,19 @@ pub async fn execute_plan(
             let df =
                 session.from_plan_with(&logical, QueryOptions::new().operation_id(id.as_str()))?;
             let schema = df.schema().await?;
-            Ok((df, schema))
+            let schema_response = schema::proto_schema(&schema)?;
+            Ok((df, schema, schema_response))
         })
         .await;
-        // A preparation error settles like a query error: an interrupt that
-        // reported this operation first turns it into `OPERATION_CANCELED`.
-        let (df, schema) = match prepared {
-            Ok(ready) => ready,
-            Err(e) => {
-                return Err(if op.finish() {
-                    e
-                } else {
-                    OperationCanceled {}.into()
-                });
-            }
-        };
-        Work::Query(Box::new(Query {
-            schema_response: schema::proto_schema(&schema)?,
-            settings: encode_settings(&session.conf(), limits, opts.chunking),
+        let ((df, schema, schema_response), registered) =
+            settle_preparation(&op, registered, prepared)?;
+        let query = Query {
             df,
             schema,
-        }))
+            schema_response,
+            settings: encode_settings(&conf, limits, opts.chunking),
+        };
+        (Work::Query(Box::new(query)), registered)
     };
 
     let sender = Sender {
@@ -313,10 +345,17 @@ pub async fn execute_plan(
         op: Arc::clone(&op),
         session_id: request.session_id.clone(),
         server_side_session_id: entry.server_side_id().to_owned(),
+        errors: Arc::clone(entry.errors()),
     };
     // Attached before the encoder starts: the operation is never detached
     // before its first stream.
-    let stream = sender::attach(Arc::clone(&op), operations, 0, SenderCaps::of(&op, limits));
+    let stream = sender::attach(
+        Arc::clone(&op),
+        operations,
+        Arc::clone(entry.errors()),
+        0,
+        SenderCaps::of(&op, limits),
+    );
     registered.keep();
     tokio::spawn(encode(sender, work));
     Ok(stream)
@@ -551,6 +590,8 @@ struct Sender {
     op: Arc<Operation>,
     session_id: String,
     server_side_session_id: String,
+    /// The session's errors: a failure ends the stream with an `errorId`.
+    errors: Arc<SessionErrors>,
 }
 
 impl Sender {
@@ -662,19 +703,24 @@ impl Work {
 /// catches every `Throwable` of the execution and sends it as the stream's
 /// error (`ExecuteThreadRunner.execute`, v4.3.0 lines 122-160); Krishiv
 /// sends `INTERNAL_ERROR`, or `OPERATION_CANCELED` after an interrupt.
-struct Unsettled(Option<Arc<Operation>>);
+struct Unsettled {
+    op: Option<Arc<Operation>>,
+    errors: Arc<SessionErrors>,
+}
 
 impl Unsettled {
+    /// Settles the operation with `outcome`; its encoder has stopped.
     fn settle(mut self, outcome: Result<(), Stop>) {
-        if let Some(op) = self.0.take() {
-            settle(&op, outcome);
+        if let Some(op) = self.op.take() {
+            settle(&op, &self.errors, outcome);
+            op.mark_ended();
         }
     }
 }
 
 impl Drop for Unsettled {
     fn drop(&mut self) {
-        if let Some(op) = self.0.take() {
+        if let Some(op) = self.op.take() {
             tracing::error!(
                 target: "krishiv::connect",
                 operation = op.id().as_str(),
@@ -683,14 +729,19 @@ impl Drop for Unsettled {
             let error = InternalError {
                 message: "the response encoder of the operation stopped unexpectedly".to_owned(),
             };
-            settle(&op, Err(Stop::Failed(error.into())));
+            // FAILED, or CANCELLED when an interrupt came first.
+            settle(&op, &self.errors, Err(Stop::Failed(error.into())));
+            op.mark_ended();
         }
     }
 }
 
 async fn encode(sender: Sender, work: Work) {
     let op = Arc::clone(&sender.op);
-    let guard = Unsettled(Some(Arc::clone(&op)));
+    let guard = Unsettled {
+        op: Some(Arc::clone(&op)),
+        errors: Arc::clone(&sender.errors),
+    };
     // A close or an interrupt is seen at once, also while the encoder
     // waits for admission, the query's first batch, a budget or memory.
     let outcome = tokio::select! {
@@ -709,7 +760,7 @@ async fn encode(sender: Sender, work: Work) {
 /// before its error is recorded; an interrupt that came first wins, and the
 /// stream ends with `OPERATION_CANCELED` instead of the error (Spark's
 /// `ExecuteThreadRunner.execute`, v4.3.0 lines 149-180).
-fn settle(op: &Operation, outcome: Result<(), Stop>) {
+fn settle(op: &Operation, errors: &SessionErrors, outcome: Result<(), Stop>) {
     match outcome {
         // `produce` finished the stream after its last response.
         Ok(()) => {}
@@ -718,12 +769,14 @@ fn settle(op: &Operation, outcome: Result<(), Stop>) {
             op.replay().finish(None);
         }
         Err(Stop::Failed(e)) => {
-            let error = if op.finish() {
+            // Failed now, or finished before (its last response failed):
+            // the error stands; an interrupt that came first wins.
+            let error = if op.fail() || !op.is_cancelled() {
                 e
             } else {
                 OperationCanceled {}.into()
             };
-            op.replay().finish(Some(status_of(&error)));
+            op.replay().finish(Some(errors.status(&error)));
         }
     }
 }

@@ -142,19 +142,25 @@ async fn release_session_frees_state() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn rpcs_of_later_tasks_are_unimplemented() {
+async fn an_unknown_rpc_is_unimplemented() {
     let run = start(ConnectServerConfig::default(), SessionLimits::default()).await;
-    let e = unary::<_, pb::FetchErrorDetailsResponse>(
+    // GetStatus only looks a session up: an unknown one is not created.
+    let e = unary::<_, pb::GetStatusResponse>(
         &run.channel,
-        "FetchErrorDetails",
-        pb::FetchErrorDetailsRequest {
+        "GetStatus",
+        pb::GetStatusRequest {
             session_id: ID.to_owned(),
             ..Default::default()
         },
     )
     .await
     .unwrap_err();
-    assert_eq!(e.code(), Code::Unimplemented);
+    assert_eq!(e.code(), Code::Internal);
+    assert!(
+        e.message().contains("INVALID_HANDLE.SESSION_NOT_FOUND"),
+        "{e:?}"
+    );
+    assert_eq!(run.manager.counts().live, 0);
     let e = unary::<_, pb::ReleaseSessionResponse>(&run.channel, "NoSuchRpc", release(ID, false))
         .await
         .unwrap_err();
@@ -539,10 +545,9 @@ fn decoded<T: krishiv_connect::wire::Request>() -> krishiv_connect::wire::Decode
     krishiv_connect::wire::decode_request::<T>(&T::default().encode_to_vec()).expect("decode")
 }
 
-/// Every RPC a later task implements answers `UNIMPLEMENTED` naming the RPC,
-/// and `UNAVAILABLE` once the server drains.
+/// Every RPC answers `UNAVAILABLE` once the server drains.
 #[tokio::test]
-async fn every_placeholder_rpc_is_unimplemented_until_the_server_drains() {
+async fn every_rpc_is_unavailable_once_the_server_drains() {
     use krishiv_connect_server::service::SparkConnectService;
     use tonic::Request;
     let manager = Arc::new(SessionManager::from_base(
@@ -553,23 +558,11 @@ async fn every_placeholder_rpc_is_unimplemented_until_the_server_drains() {
     let service =
         krishiv_connect_server::ConnectService::new(Arc::clone(&manager), Arc::clone(&draining));
     assert!(Arc::ptr_eq(service.manager(), &manager));
-    for (drain, code) in [(false, Code::Unimplemented), (true, Code::Unavailable)] {
-        draining.store(drain, Ordering::Release);
+    // No artifact directory until an artifact is written.
+    assert!(service.artifacts().root_path().is_none());
+    {
+        draining.store(true, Ordering::Release);
         let results: Vec<(&str, tonic::Status)> = vec![
-            (
-                "ArtifactStatus",
-                service
-                    .artifact_status(Request::new(decoded()))
-                    .await
-                    .unwrap_err(),
-            ),
-            (
-                "FetchErrorDetails",
-                service
-                    .fetch_error_details(Request::new(decoded()))
-                    .await
-                    .unwrap_err(),
-            ),
             (
                 "CloneSession",
                 service
@@ -585,9 +578,17 @@ async fn every_placeholder_rpc_is_unimplemented_until_the_server_drains() {
                     .unwrap_err(),
             ),
         ];
-        if drain {
-            // The RPCs T011a and PR-11b implement refuse too while draining.
+        {
+            // The other RPCs refuse too while draining.
             for e in [
+                service
+                    .artifact_status(Request::new(decoded()))
+                    .await
+                    .unwrap_err(),
+                service
+                    .fetch_error_details(Request::new(decoded()))
+                    .await
+                    .unwrap_err(),
                 service
                     .analyze_plan(Request::new(decoded()))
                     .await
@@ -619,15 +620,8 @@ async fn every_placeholder_rpc_is_unimplemented_until_the_server_drains() {
             assert_eq!(e.code(), Code::Unavailable);
         }
         for (rpc, status) in results {
-            assert_eq!(status.code(), code, "{rpc}");
-            if drain {
-                assert_eq!(status.message(), "server shutting down", "{rpc}");
-            } else {
-                assert_eq!(
-                    status.message(),
-                    format!("{rpc} is not supported by this server yet")
-                );
-            }
+            assert_eq!(status.code(), Code::Unavailable, "{rpc}");
+            assert_eq!(status.message(), "server shutting down", "{rpc}");
         }
     }
 }

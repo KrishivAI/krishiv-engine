@@ -13,6 +13,7 @@
 #![deny(clippy::disallowed_methods)]
 
 pub mod arrow;
+pub mod artifact;
 pub mod coverage;
 pub mod proto;
 mod stack;

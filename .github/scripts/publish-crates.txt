@@ -2,6 +2,7 @@ krishiv-common
 krishiv-types
 krishiv-kernels
 krishiv-udf-sdk
+krishiv-udf-sandbox
 krishiv-functions
 krishiv-memory
 krishiv-store

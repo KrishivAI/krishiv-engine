@@ -10,13 +10,19 @@
 //! an unknown id gets. Which ids were used in the last 30 minutes is the
 //! engine's operation table (`Session::from_plan_with`), shared with SQL.
 //!
+//! An operation that leaves the map keeps its final state for
+//! [`ENDED_OPERATION_WINDOW`] after its last lookup (Spark's
+//! `SessionHolder.inactiveOperations`, `expireAfterAccess` of
+//! `spark.connect.session.inactiveOperations.cacheExpiration`), at most
+//! [`ENDED_OPERATIONS_KEPT`] of them per session: `GetStatus` answers from it.
+//!
 //! The map's lock guards lookups, inserts and removals only; nothing awaits
-//! under it.
+//! under it. Lock order: the live map, then the ended one.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use krishiv_common::config::{
     CONNECT_EXECUTE_AHEAD_BYTES, CONNECT_EXECUTE_DETACHED_TIMEOUT,
@@ -232,6 +238,38 @@ pub fn plan_digest(plan_bytes: &[u8]) -> [u8; 32] {
 const RUNNING: u8 = 0;
 const FINISHED: u8 = 1;
 const CANCELLED: u8 = 2;
+const FAILED: u8 = 3;
+
+/// How long an ended operation's final state is kept after its last lookup
+/// (Spark's `spark.connect.session.inactiveOperations.cacheExpiration`, 30
+/// minutes, the window the engine's operation table also keeps an id taken).
+pub const ENDED_OPERATION_WINDOW: Duration = Duration::from_secs(30 * 60);
+
+/// The most ended operations one session remembers; the least recently used
+/// goes first (a Krishiv bound: Spark's cache has none).
+pub const ENDED_OPERATIONS_KEPT: usize = 1000;
+
+/// What `GetStatus` reports for an operation (design P3-T011a §3.12;
+/// `GetStatusResponse.OperationStatus.OperationState` without `UNKNOWN`
+/// and `UNSPECIFIED`). **Unverified against Spark**: how Spark maps an
+/// operation's `ExecuteStatus` and `TerminationReason`
+/// (`ExecuteHolder.scala:348-355`) to these states is in its
+/// `SparkConnectGetStatusHandler`, which was not read: `TERMINATING` for an
+/// interrupt whose encoder still runs, `CANCELLED` for one removed while
+/// running, `FAILED` for a setup failure follow the design, not Spark.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum OperationState {
+    /// Running (or waiting for admission).
+    Running,
+    /// Interrupted; its encoder has not stopped yet.
+    Terminating,
+    /// Produced its whole result.
+    Succeeded,
+    /// Failed.
+    Failed,
+    /// Interrupted, released or abandoned before it finished.
+    Cancelled,
+}
 
 /// One `ExecutePlan` (Spark's `ExecuteHolder`).
 #[derive(Debug)]
@@ -243,9 +281,12 @@ pub struct Operation {
     /// Its responses and attached senders (Spark's
     /// `ExecuteResponseObserver`).
     replay: Replay,
-    /// [`RUNNING`], then [`FINISHED`] or [`CANCELLED`], each set once by a
-    /// compare-and-swap (Spark's `ExecuteThreadRunner` state).
+    /// [`RUNNING`], then [`FINISHED`], [`FAILED`] or [`CANCELLED`], each
+    /// set once by a compare-and-swap (Spark's `ExecuteThreadRunner`
+    /// state).
     state: AtomicU8,
+    /// Set once its encoder stopped (or it never started one).
+    ended: AtomicBool,
     /// Whether the encoder waits for the client ([`Self::is_waiting_for_client`]).
     waiting: AtomicBool,
     cancel: Notify,
@@ -276,6 +317,7 @@ impl Operation {
             reattachable,
             replay: Replay::new(retry, reattachable),
             state: AtomicU8::new(RUNNING),
+            ended: AtomicBool::new(false),
             waiting: AtomicBool::new(false),
             cancel: Notify::new(),
             closed: Notify::new(),
@@ -379,6 +421,47 @@ impl Operation {
         }
     }
 
+    /// Ends the operation as failed, unless it was cancelled or finished
+    /// first. Whether it is failed: `false` when a cancel or the finish won.
+    pub fn fail(&self) -> bool {
+        match self
+            .state
+            .compare_exchange(RUNNING, FAILED, Ordering::AcqRel, Ordering::Acquire)
+        {
+            Ok(_) => true,
+            Err(now) => now == FAILED,
+        }
+    }
+
+    /// Records that the operation's encoder stopped: an interrupted
+    /// operation is `CANCELLED` from now on rather than `TERMINATING`.
+    pub fn mark_ended(&self) {
+        self.ended.store(true, Ordering::Release);
+    }
+
+    /// The operation's state for `GetStatus`.
+    #[must_use]
+    pub fn state(&self) -> OperationState {
+        match self.state.load(Ordering::Acquire) {
+            FINISHED => OperationState::Succeeded,
+            FAILED => OperationState::Failed,
+            CANCELLED if self.ended.load(Ordering::Acquire) => OperationState::Cancelled,
+            CANCELLED => OperationState::Terminating,
+            _ => OperationState::Running,
+        }
+    }
+
+    /// The state it is remembered with once it left its session's map.
+    /// Every path that removes an operation closes it (release, abandon,
+    /// a closed stream, a released session), which interrupts one still
+    /// running: running or terminating, it ends cancelled.
+    fn final_state(&self) -> OperationState {
+        match self.state() {
+            OperationState::Running | OperationState::Terminating => OperationState::Cancelled,
+            s => s,
+        }
+    }
+
     /// Whether [`Self::cancel`] interrupted the operation.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
@@ -434,6 +517,58 @@ pub enum Admitted {
     Existing(Arc<Operation>),
 }
 
+/// The final states of a session's ended operations: least recently used
+/// first, each with the time of its last use.
+#[derive(Debug, Default)]
+struct Ended {
+    by_id: HashMap<QueryId, (u64, Instant, OperationState)>,
+    order: BTreeMap<u64, QueryId>,
+    next: u64,
+}
+
+impl Ended {
+    /// Drops the entries unused for [`ENDED_OPERATION_WINDOW`] at `now`
+    /// (the order is the order of use, so they are at the front).
+    fn prune(&mut self, now: Instant) {
+        while let Some((&seq, id)) = self.order.first_key_value() {
+            let expired = self.by_id.get(id).is_none_or(|(s, at, _)| {
+                *s != seq || now.saturating_duration_since(*at) >= ENDED_OPERATION_WINDOW
+            });
+            if !expired {
+                break;
+            }
+            if let Some(id) = self.order.remove(&seq)
+                && self.by_id.get(&id).is_some_and(|(s, _, _)| *s == seq)
+            {
+                self.by_id.remove(&id);
+            }
+        }
+    }
+
+    fn put(&mut self, id: QueryId, state: OperationState, now: Instant) {
+        if let Some((old, _, _)) = self.by_id.remove(&id) {
+            self.order.remove(&old);
+        }
+        self.next += 1;
+        self.order.insert(self.next, id.clone());
+        self.by_id.insert(id, (self.next, now, state));
+        while self.by_id.len() > ENDED_OPERATIONS_KEPT {
+            let Some((_, oldest)) = self.order.pop_first() else {
+                break;
+            };
+            self.by_id.remove(&oldest);
+        }
+    }
+
+    /// The state of `id`, refreshed (a lookup is a use).
+    fn get(&mut self, id: &QueryId, now: Instant) -> Option<OperationState> {
+        self.prune(now);
+        let state = self.by_id.get(id)?.2;
+        self.put(id.clone(), state, now);
+        Some(state)
+    }
+}
+
 /// The encoder of an operation waits for its client while this lives
 /// ([`Operation::waiting_for_client`]).
 pub(crate) struct WaitingForClient<'a>(&'a Operation);
@@ -444,15 +579,74 @@ impl Drop for WaitingForClient<'_> {
     }
 }
 
-/// The live operations of one session.
+/// The live operations of one session, and the final states of the ones
+/// that ended.
 #[derive(Debug, Default)]
 pub struct Operations {
     live: Mutex<HashMap<QueryId, Arc<Operation>>>,
+    ended: Mutex<Ended>,
 }
 
 impl Operations {
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<QueryId, Arc<Operation>>> {
         self.live.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn lock_ended(&self) -> std::sync::MutexGuard<'_, Ended> {
+        self.ended.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The state of operation `id` (any text; one that is not a UUID is
+    /// unknown): live, else ended within the window; `None` when unknown.
+    #[must_use]
+    pub fn state_of(&self, id: &str) -> Option<OperationState> {
+        self.state_of_at(id, Instant::now())
+    }
+
+    fn state_of_at(&self, id: &str, now: Instant) -> Option<OperationState> {
+        let id = QueryId::parse(id).ok()?;
+        // The live map first: an operation is recorded as ended while the
+        // live lock is held, so it is always in one of the two.
+        let live = self.lock().get(&id).map(Arc::clone);
+        match live {
+            Some(op) => Some(op.state()),
+            None => self.lock_ended().get(&id, now),
+        }
+    }
+
+    /// Every operation the session knows: the live ones and those ended
+    /// within the window, each once.
+    #[must_use]
+    pub fn known(&self) -> Vec<(QueryId, OperationState)> {
+        self.known_at(Instant::now())
+    }
+
+    fn known_at(&self, now: Instant) -> Vec<(QueryId, OperationState)> {
+        let mut out: Vec<(QueryId, OperationState)> = self
+            .lock()
+            .values()
+            .map(|op| (op.id().clone(), op.state()))
+            .collect();
+        let mut ended = self.lock_ended();
+        ended.prune(now);
+        let live: std::collections::HashSet<QueryId> =
+            out.iter().map(|(id, _)| id.clone()).collect();
+        out.extend(
+            ended
+                .order
+                .values()
+                .filter(|id| !live.contains(*id))
+                .filter_map(|id| ended.by_id.get(id).map(|(_, _, s)| (id.clone(), *s))),
+        );
+        out
+    }
+
+    /// Records `op` as ended (called with the live lock held).
+    fn record_ended(&self, op: &Operation) {
+        let now = Instant::now();
+        let mut ended = self.lock_ended();
+        ended.prune(now);
+        ended.put(op.id().clone(), op.final_state(), now);
     }
 
     /// Registers `op`, or finds the live operation of its id running the
@@ -498,6 +692,7 @@ impl Operations {
         let mut live = self.lock();
         if live.get(op.id()).is_some_and(|o| Arc::ptr_eq(o, op)) {
             live.remove(op.id());
+            self.record_ended(op);
             true
         } else {
             false
@@ -507,7 +702,14 @@ impl Operations {
     /// Removes and closes every live operation (the session is released;
     /// Spark's `removeAllExecutionsForSession`). Returns them.
     pub fn close_all(&self) -> Vec<Arc<Operation>> {
-        let ops: Vec<Arc<Operation>> = self.lock().drain().map(|(_, op)| op).collect();
+        let ops: Vec<Arc<Operation>> = {
+            let mut live = self.lock();
+            let ops: Vec<Arc<Operation>> = live.drain().map(|(_, op)| op).collect();
+            for op in &ops {
+                self.record_ended(op);
+            }
+            ops
+        };
         for op in &ops {
             op.close();
         }

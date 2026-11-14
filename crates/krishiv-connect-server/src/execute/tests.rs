@@ -422,7 +422,7 @@ fn end_of(op: &crate::operation::Operation) -> Option<tonic::Status> {
 #[test]
 fn a_failed_operation_is_finished_before_its_error_is_sent() {
     let op = running_op();
-    super::settle(&op, Err(super::Stop::Failed(failure())));
+    super::settle(&op, &errors(), Err(super::Stop::Failed(failure())));
     let status = end_of(&op).unwrap();
     assert!(status.message().contains("INTERNAL_ERROR"), "{status:?}");
     // Its error is recorded: an interrupt now interrupts nothing.
@@ -432,7 +432,7 @@ fn a_failed_operation_is_finished_before_its_error_is_sent() {
 #[test]
 fn a_closed_operation_finishes_its_stream() {
     let op = running_op();
-    super::settle(&op, Err(super::Stop::Gone));
+    super::settle(&op, &errors(), Err(super::Stop::Gone));
     assert!(end_of(&op).is_none());
     assert!(!op.cancel());
 }
@@ -443,11 +443,101 @@ fn an_interrupt_before_the_end_wins_over_the_error() {
     // OPERATION_CANCELED (`ExecuteThreadRunner.scala:150-178`).
     let op = running_op();
     assert!(op.cancel());
-    super::settle(&op, Err(super::Stop::Failed(failure())));
+    super::settle(&op, &errors(), Err(super::Stop::Failed(failure())));
     let status = end_of(&op).unwrap();
     assert!(
         status.message().contains("OPERATION_CANCELED"),
         "{status:?}"
+    );
+}
+
+/// A session's error cache, for `settle`.
+fn errors() -> crate::errors::SessionErrors {
+    crate::errors::SessionErrors::new(krishiv_session::Session::new().unwrap().conf())
+}
+
+/// Review M1: a setup that fails is `FAILED`; one whose RPC was dropped
+/// (the client cancelled during analysis) is `CANCELLED`.
+#[test]
+fn a_setup_failure_is_failed_and_a_dropped_setup_cancelled() {
+    use crate::operation::{OperationState, Operations};
+    let operations = Arc::new(Operations::default());
+    let failed = Arc::new(running_op());
+    operations.register(&failed, 10).unwrap();
+    let id = failed.id().as_str().to_owned();
+    super::Registered {
+        operations: Arc::clone(&operations),
+        op: Some(Arc::clone(&failed)),
+    }
+    .fail();
+    assert!(operations.is_empty());
+    assert_eq!(operations.state_of(&id), Some(OperationState::Failed));
+
+    let operations = Arc::new(Operations::default());
+    let dropped = Arc::new(running_op());
+    operations.register(&dropped, 10).unwrap();
+    drop(super::Registered {
+        operations: Arc::clone(&operations),
+        op: Some(Arc::clone(&dropped)),
+    });
+    assert!(operations.is_empty());
+    assert_eq!(
+        operations.state_of(dropped.id().as_str()),
+        Some(OperationState::Cancelled)
+    );
+    assert!(dropped.replay().is_closed());
+}
+
+/// An interrupt during preparation: `OPERATION_CANCELED`, GetStatus
+/// `CANCELLED`; a preparation error: the error, GetStatus `FAILED`.
+#[tokio::test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "#[tokio::test] blocks on its own runtime"
+)]
+async fn an_interrupt_during_preparation_is_cancelled_and_an_error_failed() {
+    use crate::operation::{OperationState, Operations};
+    use krishiv_common::error::ErrorClass;
+    let operations = Arc::new(Operations::default());
+    let op = Arc::new(running_op());
+    operations.register(&op, 10).unwrap();
+    let registered = super::Registered {
+        operations: Arc::clone(&operations),
+        op: Some(Arc::clone(&op)),
+    };
+    // Interrupt reaches it while it is analysed.
+    let interrupter = {
+        let op = Arc::clone(&op);
+        tokio::spawn(async move {
+            tokio::task::yield_now().await;
+            op.cancel()
+        })
+    };
+    let prepared = super::until_cancelled(&op, std::future::pending::<Result<(), _>>()).await;
+    assert!(interrupter.await.unwrap(), "the interrupt reported it");
+    let e = super::settle_preparation(&op, registered, prepared)
+        .err()
+        .unwrap();
+    assert_eq!(e.error_class(), ErrorClass::OperationCanceled);
+    assert!(operations.is_empty());
+    assert_eq!(
+        operations.state_of(op.id().as_str()),
+        Some(OperationState::Cancelled)
+    );
+
+    let failing = Arc::new(running_op());
+    operations.register(&failing, 10).unwrap();
+    let registered = super::Registered {
+        operations: Arc::clone(&operations),
+        op: Some(Arc::clone(&failing)),
+    };
+    let e = super::settle_preparation::<()>(&failing, registered, Err(failure()))
+        .err()
+        .unwrap();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    assert_eq!(
+        operations.state_of(failing.id().as_str()),
+        Some(OperationState::Failed)
     );
 }
 

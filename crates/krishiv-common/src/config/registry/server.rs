@@ -236,6 +236,43 @@ pub static CONNECT_MAX_RESPONSE_BYTES: ConfigEntry = startup(
     None,
 );
 
+/// Bytes of artifacts one Connect session may hold.
+pub static CONNECT_ARTIFACTS_MAX_BYTES: ConfigEntry = startup(
+    "krishiv.connect.artifacts.maxBytes",
+    ValueType::Size,
+    ConfigValue::Size(1024 * MIB),
+    "Most bytes of artifacts (`AddArtifacts`: Python files, archives, files and cached local \
+     relations) one Spark Connect session may hold, on disk and in memory together. A chunk \
+     that would pass it is refused before it is written (`KRISHIV_ARTIFACT_LIMIT`, \
+     `RESOURCE_EXHAUSTED`) and the artifact it belongs to is discarded. Released with the \
+     session.",
+    None,
+);
+
+/// Bytes of one artifact.
+pub static CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES: ConfigEntry = startup(
+    "krishiv.connect.artifacts.maxArtifactBytes",
+    ValueType::Size,
+    ConfigValue::Size(256 * MIB),
+    "Most bytes of one Spark Connect artifact (`AddArtifacts`). A larger artifact is refused \
+     (`KRISHIV_ARTIFACT_LIMIT`, `RESOURCE_EXHAUSTED`) before its bytes past the cap are \
+     written; what was written is removed.",
+    None,
+);
+
+/// Bytes of artifacts all Connect sessions together may hold.
+pub static CONNECT_ARTIFACTS_MAX_TOTAL_BYTES: ConfigEntry = startup(
+    "krishiv.connect.artifacts.maxTotalBytes",
+    ValueType::Size,
+    ConfigValue::Size(16 * 1024 * MIB),
+    "Most bytes of artifacts all Spark Connect sessions of the server may hold together, on \
+     disk and in memory (each session is also capped by `krishiv.connect.artifacts.maxBytes`). \
+     A chunk that would pass it is refused before it is written (`KRISHIV_ARTIFACT_LIMIT`, \
+     `RESOURCE_EXHAUSTED`). Must be at least `krishiv.connect.artifacts.maxArtifactBytes` \
+     (checked at startup).",
+    None,
+);
+
 /// Open Connect connections.
 pub static CONNECT_MAX_CONNECTIONS: ConfigEntry = startup(
     "krishiv.connect.maxConnections",
