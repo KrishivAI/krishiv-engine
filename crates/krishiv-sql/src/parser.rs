@@ -159,6 +159,17 @@ pub(crate) struct Parser<'s> {
     /// Where the expression of the innermost select-list item starts: an
     /// alias may follow the expression there (see `Parser::not_is_column`).
     item_start: Option<usize>,
+    /// The part of the innermost `CASE` being read and where it starts: the
+    /// words that close it decide whether `NOT <word>` is the operator
+    /// (see `Parser::not_takes_operand`).
+    case_part: Option<(usize, CasePart)>,
+    /// What reading a `CASE` expression from a token position gave, so a
+    /// speculative `CASE` (`Parser::case_or_column`) is read once per
+    /// position and backtracking stays linear.
+    case_memo: HashMap<usize, CaseMemo>,
+    /// The `CASE` token a simple `CASE`'s operand must read as a column,
+    /// set while that operand is read again (`CASE case - 1 WHEN 0 ...`).
+    case_column_at: Option<usize>,
     /// How many script statements enclose the cursor (compounds, branches and loop bodies).
     script_depth: usize,
     /// The first error Spark raises after parsing (in `AstBuilder`) that
@@ -171,6 +182,43 @@ pub(crate) struct Parser<'s> {
     /// Reading the bodies of a multi-table insert: `INSERT INTO|OVERWRITE`
     /// starts the next clause, never an implicit alias.
     insert_bodies: bool,
+}
+
+/// A part of a `CASE` expression.
+#[derive(Clone, Copy)]
+pub(crate) enum CasePart {
+    /// A simple `CASE`'s operand.
+    Operand,
+    /// A `WHEN` condition.
+    Condition,
+    /// A `THEN` result.
+    Result,
+    /// The `ELSE` result.
+    Else,
+}
+
+impl CasePart {
+    /// The words that end the part.
+    pub(crate) fn closers(self) -> &'static [&'static str] {
+        match self {
+            Self::Operand => &["WHEN"],
+            Self::Condition => &["THEN"],
+            Self::Result => &["WHEN", "ELSE", "END"],
+            Self::Else => &["END"],
+        }
+    }
+}
+
+/// The outcome of reading a `CASE` expression at a token position.
+pub(crate) enum CaseMemo {
+    /// It parsed to this expression, ending before this token.
+    Parsed(crate::ast::ExprKind, usize),
+    /// It failed; the furthest failure and its recovery hints.
+    Failed {
+        far: usize,
+        matched: Option<(usize, Sym, Close)>,
+        missing: Option<(usize, &'static str)>,
+    },
 }
 
 /// Parses one query statement (`query ;* EOF`).
@@ -669,6 +717,9 @@ impl<'s> Parser<'s> {
             in_script: 0,
             in_named: 0,
             item_start: None,
+            case_part: None,
+            case_memo: HashMap::new(),
+            case_column_at: None,
             script_depth: 0,
             deferred: None,
             cast_types: vec![],

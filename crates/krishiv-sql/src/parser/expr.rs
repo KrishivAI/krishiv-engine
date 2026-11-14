@@ -6,7 +6,7 @@
 //! `IN`, `LIKE`, `IS`, ...), comparison, `|`, `^`, `&`, shifts, `+ - ||`,
 //! `* / % DIV`, unary `- + ~`, postfix `[i]`, `.field`, `::type`.
 
-use super::{Close, Fail, PR, Parser, QUERY_START};
+use super::{CaseMemo, CasePart, Checkpoint, Close, Fail, PR, Parser, QUERY_START};
 use crate::ast::{
     BinaryOp, Expr, ExprKind, FrameBound, FrameBoundKind, FrameUnits, Function, FunctionArg, Ident,
     Interval, IntervalValue, LikeQuantifier, Literal, NullTreatment, NumKind, ObjectName,
@@ -262,19 +262,42 @@ impl Parser<'_> {
                 || self.sym_at(1, Sym::Arrow)
                 || (!self.opts.enforce_reserved_keywords
                     && self.any_kw_at(1, BRANCH_END)
-                    && !self.not_ends_select_item()))
+                    && !self.not_takes_operand(1)))
     }
 
-    /// Whether `NOT <word>` here can be a whole select item, the word a
-    /// column: at the item's top level, with the item's end or a bare alias
-    /// and the end after the word. ANTLR then takes the operator (`SELECT
-    /// NOT END` is `NOT end`, `SELECT NOT AND x` is `NOT and AS x`); where no
-    /// alias can follow (`WHERE NOT IS NULL`, a lambda body, `NOT AND x AS
-    /// y`) `NOT` is the column.
-    fn not_ends_select_item(&self) -> bool {
-        let Some(start) = self.item_start else {
-            return false;
-        };
+    /// Whether the `NOT` before the word at offset `w` (one of
+    /// [`BRANCH_END`]) is the operator with that word as a column operand,
+    /// as ANTLR takes it when the operator reading can go on after the
+    /// word; otherwise `NOT` is the column and the word continues it.
+    /// - A word that closes the current `CASE` part does so: the operator
+    ///   reading needs a second closer after it (`ELSE not END` is the
+    ///   column, `THEN not END END` the operator).
+    /// - At a select item's top level the item may end after the word or
+    ///   after a bare alias (`SELECT NOT END`, `SELECT NOT AND x`).
+    /// - Elsewhere the operator when an expression may end after the word
+    ///   (`WHERE NOT END`, `x -> NOT AND`, `WHEN NOT END THEN`), the column
+    ///   when an operand or a predicate follows (`WHERE NOT IS NULL`,
+    ///   `WHERE NOT AND x`).
+    fn not_takes_operand(&self, w: usize) -> bool {
+        let part = self
+            .case_part
+            .filter(|(start, _)| self.depth_since(*start) == 0);
+        if let Some((_, part)) = part {
+            if self.any_kw_at(w, part.closers()) {
+                return self.any_kw_at(w + 1, part.closers());
+            }
+        } else if self
+            .item_start
+            .is_some_and(|start| self.depth_since(start) == 0)
+            && self.item_ends_after(w + 1)
+        {
+            return true;
+        }
+        self.expr_may_end_at(w + 1)
+    }
+
+    /// The bracket depth of the cursor relative to the token `start`.
+    fn depth_since(&self, start: usize) -> i64 {
         let mut depth = 0i64;
         for t in self.toks.get(start..self.pos).unwrap_or_default() {
             match t.kind {
@@ -283,7 +306,26 @@ impl Parser<'_> {
                 _ => {}
             }
         }
-        depth == 0 && self.item_ends_after(2)
+        depth
+    }
+
+    /// Whether the token at offset `n` may follow a complete expression:
+    /// the end of a list or statement, a clause, a `CASE` keyword, `AND`,
+    /// `OR`, `AS` or a binary operator.
+    fn expr_may_end_at(&self, n: usize) -> bool {
+        use Sym::{
+            Amp, Caret, Concat, Eq, Ge, Gt, Le, Lt, Minus, Neq, NullSafeEq, Percent, Pipe, Plus,
+            RBracket, Slash, Star,
+        };
+        const WORDS: &[&str] = &["FROM", "THEN", "ELSE", "END", "WHEN", "AND", "OR", "AS"];
+        self.item_end_at(n)
+            || self.any_kw_at(n, WORDS)
+            || (self.kind(n) == Some(TokenKind::Word) && self.class(n) & CLAUSE_WORD != 0)
+            || matches!(self.kind(n), Some(TokenKind::Sym(s)) if [
+                Amp, Caret, Concat, Eq, Ge, Gt, Le, Lt, Minus, Neq, NullSafeEq, Percent, Pipe,
+                Plus, RBracket, Slash, Star,
+            ]
+            .contains(&s))
     }
 
     /// Whether the select item can end at offset `n`, or after a bare alias
@@ -1173,9 +1215,7 @@ impl Parser<'_> {
     /// (`(case, y) -> case - y`, `CASE WHEN case IS NULL THEN ...`, `ON
     /// t.id = case - 1 WHEN MATCHED`).
     fn case_or_column(&mut self) -> PR<Option<ExprKind>> {
-        // The operand of a simple `CASE` is the column: its `WHEN` belongs
-        // to the enclosing `CASE` (`CASE case - 1 WHEN 0 THEN 1 END`).
-        if self.kw_before("CASE") {
+        if self.case_column_at == Some(self.pos) {
             return Ok(None);
         }
         let at = self.checkpoint();
@@ -1186,9 +1226,22 @@ impl Parser<'_> {
             }
             Err(Fail::Fatal(e)) => Err(Fail::Fatal(e)),
             Err(Fail::Syntax) => {
-                self.restore(at);
+                self.restore_keeping_far(at);
                 Ok(None)
             }
+        }
+    }
+
+    /// Rewinds to `at` after a failed speculative read, keeping its furthest
+    /// failure when that is further than any before: Spark reports the
+    /// furthest token any reading reached.
+    fn restore_keeping_far(&mut self, at: Checkpoint) {
+        let (far, matched, missing) = (self.far, self.matched, self.missing);
+        self.restore(at);
+        if far > self.far {
+            self.far = far;
+            self.matched = matched;
+            self.missing = missing;
         }
     }
 
@@ -1235,9 +1288,9 @@ impl Parser<'_> {
         if self.opts.enforce_reserved_keywords || self.kind(0) != Some(TokenKind::Word) {
             return false;
         }
-        // The operand of a `NOT` that ends a select item (`SELECT NOT AND x`
-        // is `NOT and AS x`; see `not_ends_select_item`).
-        if self.kw_before("NOT") && self.any_kw_at(0, BRANCH_END) && self.item_ends_after(1) {
+        // The operand of a `NOT` that takes it (`SELECT NOT AND x` is `NOT
+        // and AS x`, `WHERE NOT END`; see `not_takes_operand`).
+        if self.kw_before("NOT") && self.any_kw_at(0, BRANCH_END) && self.not_takes_operand(0) {
             return true;
         }
         self.sym_at(1, Sym::Minus)
@@ -1476,6 +1529,58 @@ impl Parser<'_> {
 
     #[inline(never)]
     fn case_expr(&mut self) -> PR<ExprKind> {
+        let key = self.pos;
+        match self.case_memo.get(&key) {
+            Some(CaseMemo::Parsed(kind, end)) => {
+                let kind = kind.clone();
+                self.pos = *end;
+                return Ok(kind);
+            }
+            Some(&CaseMemo::Failed {
+                far,
+                matched,
+                missing,
+            }) => {
+                if far > self.far {
+                    self.far = far;
+                    self.matched = matched;
+                    self.missing = missing;
+                }
+                return Err(Fail::Syntax);
+            }
+            None => {}
+        }
+        let deferred = self.deferred.is_some();
+        let outer = self.case_part.take();
+        let done = self.case_expr_uncached();
+        self.case_part = outer;
+        match &done {
+            Ok(kind) if self.deferred.is_some() == deferred => {
+                self.case_memo
+                    .insert(key, CaseMemo::Parsed(kind.clone(), self.pos));
+            }
+            Err(Fail::Syntax) => {
+                let memo = CaseMemo::Failed {
+                    far: self.far,
+                    matched: self.matched,
+                    missing: self.missing,
+                };
+                self.case_memo.insert(key, memo);
+            }
+            _ => {}
+        }
+        done
+    }
+
+    /// Runs `f` with `part` as the current `CASE` part.
+    fn in_case_part<T>(&mut self, part: CasePart, f: impl FnOnce(&mut Self) -> T) -> T {
+        let outer = self.case_part.replace((self.pos, part));
+        let out = f(self);
+        self.case_part = outer;
+        out
+    }
+
+    fn case_expr_uncached(&mut self) -> PR<ExprKind> {
         self.bump();
         // `CASE when - 1 WHEN 0 THEN ...`: a `WHEN` that may be a column
         // starts the operand when the searched form does not parse (the
@@ -1492,7 +1597,7 @@ impl Parser<'_> {
             let failed = self.checkpoint();
             self.restore(at);
             let at = self.checkpoint();
-            let operand = match self.expr() {
+            let operand = match self.in_case_part(CasePart::Operand, Self::expr) {
                 Ok(e) => Some(boxed(e)),
                 Err(Fail::Fatal(e)) => return Err(Fail::Fatal(e)),
                 Err(Fail::Syntax) => None,
@@ -1506,12 +1611,34 @@ impl Parser<'_> {
             self.restore(failed);
             return self.fail();
         }
-        let operand = if self.kw_at(0, "WHEN") {
-            None
-        } else {
-            Some(boxed(self.expr()?))
-        };
-        self.case_branches(operand)
+        if self.kw_at(0, "WHEN") {
+            return self.case_branches(None);
+        }
+        // A `CASE` that starts the operand is read as one; when that leaves
+        // no `WHEN` (`CASE case - 1 WHEN 0 THEN 1 END` in a lambda over
+        // `case`), it is the column instead.
+        let operand_start = self.pos;
+        let at = self.checkpoint();
+        let operand = self.in_case_part(CasePart::Operand, Self::expr)?;
+        let case_first = self.toks.get(operand_start).is_some_and(|t| {
+            t.kind == TokenKind::Word && crate::keywords::is_kw(t.span.text(self.src), "CASE")
+        });
+        if !self.kw_at(0, "WHEN") && case_first {
+            let first = self.checkpoint();
+            self.restore(at);
+            let outer = self.case_column_at.replace(operand_start);
+            let again = self.in_case_part(CasePart::Operand, Self::expr);
+            self.case_column_at = outer;
+            if let Ok(operand) = again
+                && self.kw_at(0, "WHEN")
+            {
+                return self.case_branches(Some(boxed(operand)));
+            }
+            self.restore(first);
+            return self.case_branches(Some(boxed(operand)));
+        }
+        self.commit(at);
+        self.case_branches(Some(boxed(operand)))
     }
 
     /// The `WHEN ... THEN ...` branches, `ELSE` and `END` of a `CASE`.
@@ -1520,9 +1647,9 @@ impl Parser<'_> {
         while self.kw_at(0, "WHEN") {
             let start = self.start();
             self.bump();
-            let condition = self.expr()?;
+            let condition = self.in_case_part(CasePart::Condition, Self::expr)?;
             self.expect_kw("THEN")?;
-            let result = self.expr()?;
+            let result = self.in_case_part(CasePart::Result, Self::expr)?;
             branches.push(WhenClause {
                 condition,
                 result,
@@ -1533,7 +1660,7 @@ impl Parser<'_> {
             return self.fail();
         }
         let else_result = if self.eat_kw("ELSE") {
-            Some(boxed(self.expr()?))
+            Some(boxed(self.in_case_part(CasePart::Else, Self::expr)?))
         } else {
             None
         };

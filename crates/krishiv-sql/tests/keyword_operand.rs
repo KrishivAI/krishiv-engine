@@ -273,3 +273,126 @@ fn keywords_read_as_columns_as_spark_reads_them() {
     };
     krishiv_sql::parse_query("SELECT INTERVAL - 1", &ansi).unwrap();
 }
+
+/// `NOT <word>` outside a select item, and a `CASE` that starts a simple
+/// `CASE`'s operand: the operator wherever an expression may end after the
+/// word (`WHERE NOT END`, `x -> NOT AND`, `WHEN NOT END THEN`), the column
+/// when the word closes the `CASE` part or an operand follows (`ELSE NOT
+/// END`, `WHERE NOT IS NULL`). Each plan is the shape Spark 4.2.0's parser
+/// gives (the re-review rows of
+/// `ops/reviews/2026-11-14-opus-3-sql3-lambda-keywords-diff.md`).
+#[test]
+fn not_takes_a_keyword_operand_where_spark_does() {
+    use krishiv_plan::SourceId;
+    for (sql, want) in [
+        (
+            r#"SELECT 1 FROM t WHERE NOT END"#,
+            r#"Project [1] | +- Filter (NOT END) |    +- Read t"#,
+        ),
+        (
+            r#"SELECT 1 FROM t WHERE NOT THEN"#,
+            r#"Project [1] | +- Filter (NOT THEN) |    +- Read t"#,
+        ),
+        (
+            r#"SELECT 1 FROM t WHERE NOT AND"#,
+            r#"Project [1] | +- Filter (NOT AND) |    +- Read t"#,
+        ),
+        (
+            r#"SELECT 1 FROM t WHERE NOT OR"#,
+            r#"Project [1] | +- Filter (NOT OR) |    +- Read t"#,
+        ),
+        (
+            r#"SELECT 1 FROM t WHERE NOT IS"#,
+            r#"Project [1] | +- Filter (NOT IS) |    +- Read t"#,
+        ),
+        (
+            r#"SELECT transform(array(1), x -> NOT END)"#,
+            r#"Project [transform(array(1), (x) -> (NOT END))] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT transform(array(1), x -> NOT AND)"#,
+            r#"Project [transform(array(1), (x) -> (NOT AND))] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT CASE WHEN NOT END THEN 1 END"#,
+            r#"Project [CASE WHEN (NOT END) THEN 1 END] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT CASE WHEN NOT AND THEN 1 END"#,
+            r#"Project [CASE WHEN (NOT AND) THEN 1 END] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT 1 FROM t ORDER BY NOT END"#,
+            r#"Sort [(NOT END) ASC NULLS FIRST], true | +- Project [1] |    +- Read t"#,
+        ),
+        (
+            r#"SELECT (NOT END)"#,
+            r#"Project [(NOT END)] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT 1 FROM t WHERE NOT IS NULL"#,
+            r#"Project [1] | +- Filter isnull(NOT) |    +- Read t"#,
+        ),
+        (
+            r#"SELECT transform(array(1), x -> NOT IS NULL)"#,
+            r#"Project [transform(array(1), (x) -> isnull(NOT))] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT 1 FROM t WHERE NOT AND x"#,
+            r#"Project [1] | +- Filter (NOT and x) |    +- Read t"#,
+        ),
+        (
+            r#"SELECT CASE WHEN NOT THEN x END"#,
+            r#"Project [CASE WHEN NOT THEN x END] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT CASE WHEN a THEN NOT END END"#,
+            r#"Project [CASE WHEN a THEN (NOT END) END] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT CASE CASE - 1 WHEN 0 THEN 1 END WHEN 1 THEN 'a' END"#,
+            r#"Project [CASE WHEN (CASE WHEN (-1 == 0) THEN 1 END == 1) THEN 'a' END] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT 1 FROM t WHERE NOT END AND x"#,
+            r#"Project [1] | +- Filter ((NOT END) and x) |    +- Read t"#,
+        ),
+        (
+            r#"SELECT CASE WHEN a THEN 1 ELSE NOT END END"#,
+            r#"Project [CASE WHEN a THEN 1 ELSE (NOT END) END] | +- OneRowRelation"#,
+        ),
+        (
+            r#"SELECT CASE WHEN a THEN 1 ELSE NOT END"#,
+            r#"Project [CASE WHEN a THEN 1 ELSE NOT END] | +- OneRowRelation"#,
+        ),
+    ] {
+        let plan = krishiv_sql::parse_and_lower(sql, &ParserOptions::default(), SourceId(0))
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+        let got = plan.root().to_string().replace('\n', " | ");
+        assert_eq!(got.trim_end_matches([' ', '|']), want, "{sql}");
+    }
+    // After a failed `CASE` reading, the error is at the furthest token
+    // any reading reached, as in Spark.
+    let sql = "SELECT transform(array(1), case -> case - 1 WHEN 0 THEN 1)";
+    let e = parse_query(sql, &ParserOptions::default()).unwrap_err();
+    assert_eq!((e.span.start, e.span.end), (57, 58), "{sql}");
+}
+
+/// A `CASE` that may be a column is read once per position: a long chain of
+/// them parses in linear time (each try of the `CASE` reading used to
+/// re-read every later one, doubling the time per term).
+#[test]
+fn chains_of_case_columns_parse_in_linear_time() {
+    let terms = vec!["case"; 256].join(" - ");
+    for sql in [
+        format!("SELECT transform(array(1), case -> {terms})"),
+        format!("SELECT x FROM t WHERE {terms} > 0"),
+        format!("SELECT {}1", "CASE WHEN - ".repeat(64)),
+    ] {
+        let started = std::time::Instant::now();
+        let _ = parse_query(&sql, &ParserOptions::default());
+        // Generous: linear parsing takes milliseconds; the old doubling
+        // would never finish.
+        assert!(started.elapsed().as_secs() < 30, "{}", &sql[..40]);
+    }
+}
