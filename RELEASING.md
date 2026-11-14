@@ -183,6 +183,19 @@ Owner decision 2026-11-07 (default adopted): a minor release every **6 weeks**.
   keeps its dates and the next minor takes what is ready.
 - Breaking changes (docs/concepts/stability.md) go into a minor only, with the changelog "Breaking" heading.
 
+## Docs (every minor release)
+
+Owner decision 2026-11-14: the live docs of each minor version are read from a branch `docs/0.X`, not from a tag, so a
+docs fix for a released version needs no new release. After the tag `v0.X.0` is pushed and the release is verified:
+
+1. **Cut the branch** `docs/0.X` from the tag `v0.X.0` and protect it like `main` (PRs only, docs CI runs on it).
+   Docs-only fixes for that version are PRs to `docs/0.X`; patch releases (`v0.X.Z`) are merged into it.
+2. **Register the version** in krishiv-internal `site/docs-plugin.json`: add
+   `engine/0.X = Krishiv Engine 0.X | docs @ docs/0.X`, mark it latest, and leave `engine/next` on `main` (staging only).
+3. **Deploy** with `site/deploy.sh`.
+4. **Check** the version switcher lists the new version as latest and that the previous version still serves its own
+   pages.
+
 ## Before any release
 
 - `ui/scripts/sync-assets.sh` refreshes the committed UI assets
