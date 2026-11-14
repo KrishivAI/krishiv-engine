@@ -973,6 +973,8 @@ message ReadSource {
   oneof kind {
     TableSource table = 1;
     FilesSource files = 2;
+    // feature: local_relation_source
+    LocalSource local = 3;
   }
 }
 
@@ -988,6 +990,20 @@ message FilesSource {
   // feature: file_source_schema
   // The schema the user declared (a struct type); absent: inferred.
   DataType schema = 4;
+}
+
+// Arrow data a plan reads (Spark's LocalRelation), named by content hash. The
+// data is never in the plan: it lives in the session's relation store of the
+// process that runs the plan, found by `hash`; a process without it fails.
+// feature: local_relation_source
+message LocalSource {
+  // SHA-256 content hash (32 bytes).
+  bytes hash = 1;
+  // Arrow IPC `Schema` flatbuffer of the stored batches.
+  bytes schema = 2;
+  uint64 rows = 3;
+  uint64 batches = 4;
+  uint64 bytes = 5;
 }
 
 // A data source option: plain text or a reference to a secret. An inline

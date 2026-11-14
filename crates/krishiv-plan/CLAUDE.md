@@ -13,6 +13,7 @@ decoder in `krishiv-connect`, native DataFrame APIs) lower into the IR.
 ## Key files
 Paths are relative to this crate.
 - `src/plan.rs` relation nodes (`LogicalPlan`); `src/expr.rs` expression nodes
+- `src/local.rs` `LocalRelation`, the carrier of `ReadSource::Local` (Spark's `LocalRelation`): the content hash, counts and an optional `RelationLease` over the session's `krishiv_memory::RelationStore` (the batches live there once; built only from a lease, or by hash after a codec decode); `Debug` never prints values; equality ignores the lease. The analyzer resolves a `Read(Local)` to a `Scan` over its Arrow schema's columns (no catalog lookup, no securable; prefix-cache cacheable)
 - `src/origin.rs` origins (excluded from the encoding); `src/literal.rs` literal values; `src/function.rs` function references
 - `src/encode.rs` canonical encoding and `StructuralHash`; `src/dag.rs` DAG-aware equality and transforms
 - `src/walk.rs` child mapping and tree rewrites; `src/display.rs` pretty-printer (insta snapshots)

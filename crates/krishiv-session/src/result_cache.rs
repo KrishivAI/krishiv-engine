@@ -399,6 +399,10 @@ fn survey(plan: &Arc<LogicalPlan>) -> Found {
                 if let PlanNode::Scan(s) = &p.node {
                     match &s.source {
                         ReadSource::Table { name, .. } => found.tables.push(name.clone()),
+                        // Content-addressed input: no file or table dependency.
+                        ReadSource::Local(_) => {}
+                        // Files by path, and any source added later, are assumed
+                        // to read files.
                         _ => found.files = true,
                     }
                 }

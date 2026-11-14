@@ -703,6 +703,16 @@ impl<'k, 'a> Encoder<'k, 'a> {
         }
     }
 
+    /// An Arrow schema as names, Spark types and nullability (never data).
+    fn arrow_schema(&mut self, schema: &arrow_schema::Schema) {
+        self.len(schema.fields().len());
+        for f in schema.fields() {
+            self.str(f.name());
+            self.str(&crate::local::type_text(f));
+            self.bool(f.is_nullable());
+        }
+    }
+
     fn data_type(&mut self, t: &krishiv_types::DataType) {
         self.str(&t.simple_string());
     }
@@ -1103,6 +1113,13 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.u8(1);
                 self.strs(name);
                 self.options(options);
+            }
+            ReadSource::Local(l) => {
+                self.u8(3);
+                self.put(l.relation().hash.as_bytes());
+                self.arrow_schema(l.schema());
+                self.len(l.batches());
+                self.put(&l.rows().to_le_bytes());
             }
             ReadSource::Files {
                 format,

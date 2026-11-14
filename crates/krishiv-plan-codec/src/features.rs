@@ -146,6 +146,7 @@ registry! {
     (legacy_statistical_aggregate, LegacyStatisticalAggregate, POST_MIGRATION_READER_VERSION, Semantic, "The `legacy_statistical_aggregate` expression environment flag (`spark.sql.legacy.statisticalAggregate`): the sample moment aggregates give NaN instead of NULL where Spark divides by zero."),
     (legacy_time_parser, LegacyTimeParser, POST_MIGRATION_READER_VERSION, Semantic, "The `legacy_time_parser` expression environment flag (`spark.sql.legacy.timeParserPolicy=LEGACY`): the datetime pattern functions use `SimpleDateFormat`, and the JSON, CSV and XML functions the lenient `FastDateFormat`."),
     (limit_offset, LimitOffset, 3, Semantic, "A `Limit` that skips leading rows (a nonzero offset)."),
+    (local_relation_source, LocalRelationSource, POST_MIGRATION_READER_VERSION, Semantic, "A read of Arrow data held in the session's relation store (`ReadSource::Local`, Spark's `LocalRelation`), named by content hash; the data is not in the plan. A reader without it has no way to read the relation."),
     (map_key_dedup_policy, MapKeyDedupPolicy, POST_MIGRATION_READER_VERSION, Semantic, "The session's map-key dedup policy (`LAST_WIN`); without it a worker keeps the first value on duplicate map keys."),
     (mode_regr_bit_listagg_aggs, ModeRegrBitListaggAggs, POST_MIGRATION_READER_VERSION, Semantic, "The `mode`, regression (`regr_*`), bitwise (`bit_and`, `bit_or`, `bit_xor`), `listagg`/`string_agg` and `try_sum`/`try_avg` aggregates."),
     (moment_aggregates, MomentAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The moment aggregates (`stddev_samp`, `stddev_pop`, `var_samp`, `var_pop`, `skewness`, `kurtosis`, `corr`, `covar_samp`, `covar_pop`)."),
@@ -243,6 +244,8 @@ pub enum Construct<'a> {
     NestedLiteralType,
     /// The schema a file read declares (`ReadSource::Files.schema`).
     FileSourceSchema,
+    /// A scan of a local relation (`ReadSource::Local`).
+    LocalRelationSource,
     /// A declared schema's struct type, written as one nested type (so
     /// `nested_types` is listed with `file_source_schema`).
     SchemaType,
@@ -491,6 +494,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         Construct::WriteColumnTypes => Some(Feature::WriteColumnTypes),
         Construct::NestedLiteralType | Construct::SchemaType => Some(Feature::NestedTypes),
         Construct::FileSourceSchema => Some(Feature::FileSourceSchema),
+        Construct::LocalRelationSource => Some(Feature::LocalRelationSource),
         Construct::ProbeSelect => Some(Feature::FusedProbe),
         Construct::Generator(kind) => match kind {
             krishiv_plan::GeneratorKind::VariantExplode => Some(Feature::VariantExplode),
@@ -710,12 +714,11 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
                 .iter()
                 .for_each(|field| visit_arrow_field(field, f));
         }
-        PhysNode::Scan(scan) | PhysNode::LateFetch { scan, .. } => {
-            if let krishiv_plan::ReadSource::Files {
+        PhysNode::Scan(scan) | PhysNode::LateFetch { scan, .. } => match &scan.scan.source {
+            krishiv_plan::ReadSource::Files {
                 schema: Some(schema),
                 ..
-            } = &scan.scan.source
-            {
+            } => {
                 f(Construct::FileSourceSchema);
                 f(Construct::SchemaType);
                 schema
@@ -723,7 +726,19 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
                     .iter()
                     .for_each(|x| visit_type(x.data_type(), f));
             }
-        }
+            // The stored batches' Arrow schema travels in the plan, so its
+            // fields are classified like any schema the plan writes.
+            krishiv_plan::ReadSource::Local(l) => {
+                f(Construct::LocalRelationSource);
+                l.schema()
+                    .fields()
+                    .iter()
+                    .for_each(|field| visit_arrow_field(field, f));
+            }
+            // Inferred file reads and table reads need nothing here (the
+            // encoder refuses a table read it cannot write).
+            _ => {}
+        },
         PhysNode::OneRow
         | PhysNode::SharedRead { .. }
         | PhysNode::UnionLoop { .. }

@@ -1324,6 +1324,13 @@ fn read_source(source: &ReadSource, nested: &Cell<bool>) -> Result<pb::ReadSourc
                 .map(|s| spark_type(&DataType::Struct(s.clone()), nested))
                 .transpose()?,
         }),
+        ReadSource::Local(l) => Kind::Local(pb::LocalSource {
+            hash: l.relation().hash.as_bytes().to_vec(),
+            schema: flagged_schema_bytes(l.schema(), nested),
+            rows: l.rows(),
+            batches: l.batches() as u64,
+            bytes: l.bytes(),
+        }),
         _ => {
             return Err(CodecError::Unsupported(
                 "a read source this version does not know".to_owned(),

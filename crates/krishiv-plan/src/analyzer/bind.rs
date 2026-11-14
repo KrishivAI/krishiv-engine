@@ -215,6 +215,9 @@ fn visit<'a>(
                 PlanNode::Read(source @ ReadSource::Files { .. }) => {
                     found.push(Found::Files(source, p.origin));
                 }
+                // `Read(Local)` falls to the wildcard below on purpose:
+                // content-addressed data in the session's store has nothing
+                // to load and no securable to check.
                 // A plan resolved elsewhere is checked like a fresh one.
                 PlanNode::Scan(s) => match &s.source {
                     ReadSource::Table { name, options } => {
@@ -230,6 +233,7 @@ fn visit<'a>(
                     source @ ReadSource::Files { .. } => {
                         found.push(Found::FileScan(source, &s.output, p.origin));
                     }
+                    ReadSource::Local(_) => {}
                 },
                 PlanNode::WithCte { input, ctes } => {
                     p.for_each_expr(&mut |e| next.push((Node::Expr(e), Arc::clone(env))));

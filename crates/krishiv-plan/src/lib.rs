@@ -113,9 +113,13 @@
 //! | `ResolvedExpr::StateInput` | R | - | - |
 //! | `ResolvedExpr::EvalMode` | R | - | - |
 //!
+//! `ReadSource::Local` (Spark's `LocalRelation`, see [`LocalRelation`]) is a
+//! `PlanNode::Read` of data held in the session's relation store; it resolves
+//! to a `PlanNode::Scan` and is not a node of its own.
+//!
 //! Not in v1 (spec 13 §9; added with the features that need them):
 //! `Generate`, `Hint`, `Pivot`, `Command`,
-//! `Extension`, `ToDF`, `Offset`, `Deduplicate`, `LocalRelation` and `Range`
+//! `Extension`, `ToDF`, `Offset`, `Deduplicate` and `Range`
 //! relations; lambda, extract-value and extension expressions.
 
 #![forbid(unsafe_code)]
@@ -128,6 +132,7 @@ mod encode;
 mod expr;
 pub mod function;
 mod literal;
+mod local;
 mod origin;
 mod partial;
 mod plan;
@@ -150,6 +155,7 @@ pub use expr::{
 };
 pub use function::{Builtin, FunctionId, FunctionKind, PythonEvalType, QuantifiedLike};
 pub use literal::{DayTimeField, Literal, YearMonthField};
+pub use local::LocalRelation;
 pub use origin::{Origin, PlanId, SourceId, Span};
 pub use partial::partial_state_columns;
 /// The qualifier prefix of the columns a select-list generator adds: an

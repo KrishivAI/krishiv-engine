@@ -1461,6 +1461,22 @@ fn read_source(m: &pb::ReadSource) -> Result<ReadSource> {
                 Some(_) => return Err(corrupt("a declared file schema that is not a struct")),
             }
         }
+        Kind::Local(l) => {
+            let hash: [u8; 32] = l
+                .hash
+                .as_slice()
+                .try_into()
+                .map_err(|_| corrupt("a local relation hash that is not 32 bytes"))?;
+            let batches = usize::try_from(l.batches)
+                .map_err(|_| corrupt("a local relation batch count that does not fit"))?;
+            ReadSource::Local(krishiv_plan::LocalRelation::from_decoded(
+                schema_from(&l.schema)?,
+                hash,
+                batches,
+                l.rows,
+                l.bytes,
+            ))
+        }
     })
 }
 

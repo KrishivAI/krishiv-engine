@@ -672,6 +672,10 @@ pub enum ReadSource {
         /// [`ReadSource::with_schema`].
         schema: Option<krishiv_types::StructType>,
     },
+    /// Arrow data held in the session's relation store (Spark's
+    /// `LocalRelation`). Built only from a lease; the analyzer resolves it
+    /// to a [`Scan`] with the Arrow schema's columns.
+    Local(crate::LocalRelation),
 }
 
 impl ReadSource {
@@ -706,7 +710,7 @@ impl ReadSource {
                 options,
                 schema: Some(schema),
             },
-            table @ Self::Table { .. } => table,
+            other @ (Self::Table { .. } | Self::Local(_)) => other,
         }
     }
 }

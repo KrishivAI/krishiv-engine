@@ -633,7 +633,8 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "aggregate_percentiles"
             | "options_map_literal"
             | "nested_literals"
-            | "file_source_schema" => 6,
+            | "file_source_schema"
+            | "local_relation_source" => 6,
             // Features added after the version was frozen: above every
             // sequential format version.
             n if n.starts_with("time_")

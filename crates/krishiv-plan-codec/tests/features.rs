@@ -2281,3 +2281,96 @@ fn a_declared_file_schema_that_is_not_a_struct_is_corrupt() {
     assert!(seen);
     corrupt(&m, "a declared file schema that is not a struct");
 }
+
+// ---- local relation scans (local_relation_source) --------------------------
+
+fn local_source_mut(m: &mut pb::PhysicalPlan, f: impl Fn(&mut pb::LocalSource)) -> bool {
+    let mut seen = false;
+    for node in &mut m.nodes {
+        if let Some(pb::node::Kind::Scan(s)) = &mut node.kind
+            && let Some(pb::ReadSource {
+                kind: Some(pb::read_source::Kind::Local(l)),
+            }) = &mut s.source
+        {
+            f(l);
+            seen = true;
+        }
+    }
+    seen
+}
+
+#[test]
+fn a_local_relation_scan_needs_its_feature() {
+    let m = message("local_relation_source");
+    assert_eq!(Feature::LocalRelationSource.kind(), FeatureKind::Semantic);
+    assert_eq!(m.features, ["local_relation_source"]);
+    let bytes = m.encode_to_vec();
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &ReaderFeatures::only([])).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["local_relation_source".to_owned()]
+        }
+    );
+    let reader = ReaderFeatures::only([Feature::LocalRelationSource]);
+    let plan = decode_with(&bytes, &Limits::default(), &reader).unwrap();
+    assert_eq!(encode(&plan).unwrap(), bytes);
+    assert_eq!(
+        feature_of(Construct::LocalRelationSource),
+        Some(Feature::LocalRelationSource)
+    );
+}
+
+/// The plan carries the hash and counts, never rows, and decodes without a lease.
+#[test]
+fn a_decoded_local_relation_holds_the_hash_and_counts_and_no_lease() {
+    let bytes = message("local_relation_source").encode_to_vec();
+    let plan = decode(&bytes).unwrap();
+    let mut found = false;
+    let mut stack = vec![plan.root()];
+    while let Some(n) = stack.pop() {
+        if let PhysNode::Scan(s) = n
+            && let krishiv_plan::ReadSource::Local(l) = &s.scan.source
+        {
+            assert_eq!(l.relation().hash.as_bytes(), &[0x5a; 32]);
+            assert_eq!((l.batches(), l.rows(), l.bytes()), (2, 1_000, 4_096));
+            assert!(l.lease().is_none());
+            assert_eq!(l.schema().fields().len(), 2);
+            found = true;
+        }
+        stack.extend(n.children());
+    }
+    assert!(found);
+}
+
+#[test]
+fn a_local_relation_hash_of_the_wrong_length_is_corrupt() {
+    let mut m = message("local_relation_source");
+    assert!(local_source_mut(&mut m, |l| l.hash.truncate(5)));
+    corrupt(&m, "a local relation hash that is not 32 bytes");
+}
+
+#[test]
+fn a_local_relation_with_a_nested_column_lists_the_type_feature_too() {
+    use arrow_schema::{DataType as A, Field, Schema};
+    let mut scan = inventory::file_scan();
+    scan.scan.source = krishiv_plan::ReadSource::Local(krishiv_plan::LocalRelation::from_decoded(
+        std::sync::Arc::new(Schema::new(vec![Field::new(
+            "xs",
+            A::List(std::sync::Arc::new(Field::new("item", A::Int32, true))),
+            true,
+        )])),
+        [1; 32],
+        1,
+        1,
+        1,
+    ));
+    let m = to_message(&plan_of(PhysNode::Scan(scan))).unwrap();
+    assert_eq!(m.features, ["local_relation_source", "nested_types"]);
+    let only_local = ReaderFeatures::only([Feature::LocalRelationSource]);
+    assert_eq!(
+        decode_with(&m.encode_to_vec(), &Limits::default(), &only_local).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["nested_types".to_owned()]
+        }
+    );
+}

@@ -1237,6 +1237,7 @@ impl Session {
                 u64::try_from(self.state.runtime.executor.parallelism().max(1)).unwrap_or(1)
             },
             runtime: self.state.runtime.executor.io_handle().clone(),
+            relations: Arc::clone(&self.state.relations),
         };
         let catalog = Arc::new(QueryCatalog::new(
             Arc::clone(&self.state.catalog),
