@@ -439,33 +439,32 @@ fn temporal_binding(
     ))
 }
 
-/// A step's `(months, days, micros)`: a year-month interval is months; a day-time one splits into whole days and the
-/// remainder; a calendar interval is its three fields.
-fn read_step(
-    x: &Inputs<'_>,
-    kind: StepKind,
-    row: usize,
-) -> Result<Option<(i64, i64, i64)>, KrishivError> {
+/// A step as `(months, days, micros)`.
+type Step = (i64, i64, i64);
+
+/// Every row's step as `(months, days, micros)` (`None` for a NULL step): a year-month interval is months; a day-time one splits into
+/// whole days and the remainder; a calendar interval is its three fields. Read once per batch.
+fn read_steps(x: &Inputs<'_>, kind: StepKind) -> Result<Vec<Option<Step>>, KrishivError> {
     use arrow_array::types::{DurationMicrosecondType, IntervalYearMonthType};
     let col = x.column(2)?;
     Ok(match kind {
-        StepKind::YearMonth => {
-            let a = col.as_primitive::<IntervalYearMonthType>();
-            a.is_valid(row).then(|| (i64::from(a.value(row)), 0, 0))
-        }
-        StepKind::DayTime => {
-            let a = col.as_primitive::<DurationMicrosecondType>();
-            a.is_valid(row).then(|| {
-                let m = a.value(row);
-                (0, m / MICROS_PER_DAY, m % MICROS_PER_DAY)
-            })
-        }
+        StepKind::YearMonth => col
+            .as_primitive::<IntervalYearMonthType>()
+            .iter()
+            .map(|v| v.map(|m| (i64::from(m), 0, 0)))
+            .collect(),
+        StepKind::DayTime => col
+            .as_primitive::<DurationMicrosecondType>()
+            .iter()
+            .map(|v| v.map(|m| (0, m / MICROS_PER_DAY, m % MICROS_PER_DAY)))
+            .collect(),
         StepKind::Calendar => {
             let c = krishiv_types::calendar::Calendars::of(col.as_ref()).ok_or_else(|| {
                 internal("a sequence step that is not a calendar interval".to_owned())
             })?;
-            c.get(row)
-                .map(|v| (i64::from(v.months), i64::from(v.days), v.micros))
+            c.iter()
+                .map(|v| v.map(|v| (i64::from(v.months), i64::from(v.days), v.micros)))
+                .collect()
         }
     })
 }
@@ -491,12 +490,13 @@ fn temporal_sequence(
         _ => None,
     };
     let (starts, stops) = (longs(x, 0)?, longs(x, 1)?);
+    let steps = kind.map(|k| read_steps(x, k)).transpose()?;
     let mut offsets: Vec<i32> = vec![0];
     let mut valid = Vec::with_capacity(x.rows());
     let mut values: Vec<i64> = Vec::new();
     for row in 0..x.rows() {
-        let step = match kind {
-            Some(k) => read_step(x, k, row)?,
+        let step = match &steps {
+            Some(all) => all[row],
             None => Some((0, 0, 0)),
         };
         let (Some(start), Some(stop), Some(step)) = (starts[row], stops[row], step) else {
@@ -521,30 +521,48 @@ fn temporal_sequence(
             }
             .into());
         }
-        // The direction is the one from start to stop; the step must move that way (a step of mixed signs by its total, a month as 30
-        // days), except that equal bounds give one element for any step a timestamp takes.
-        let total = i128::from(months) * 30 * i128::from(MICROS_PER_DAY)
-            + i128::from(days) * i128::from(MICROS_PER_DAY)
-            + i128::from(micros);
-        let up = start <= stop;
-        let moves = if start == stop {
-            !is_date || total != 0 || months != 0 || days != 0
-        } else if up {
-            total > 0
+        // The direction is the one from start to stop; the step must move that way, its sign being that of its first non-zero field
+        // (months, then days, then microseconds), except that equal bounds give one element for any step a timestamp takes.
+        let sign = if months != 0 {
+            months.signum()
+        } else if days != 0 {
+            days.signum()
         } else {
-            total < 0
+            micros.signum()
         };
-        if !moves {
+        let up = start <= stop;
+        if !(start == stop || (up && sign > 0) || (!up && sign < 0)) {
             return Err(LegacyErrorTemp3243 {
                 start: start.to_string(),
                 stop: stop.to_string(),
                 step: if months != 0 && days == 0 && micros == 0 {
                     months.to_string()
                 } else {
-                    (days * MICROS_PER_DAY + micros).to_string()
+                    (i128::from(days) * i128::from(MICROS_PER_DAY) + i128::from(micros)).to_string()
                 },
             }
             .into());
+        }
+        // A step of days and microseconds only has its length up front, so a huge result fails before any element is built
+        // (`1 microsecond` over a year is `numberOfElements` 31449600000001); a month step cannot reach the limit.
+        if months == 0 {
+            let step = i128::from(days) * i128::from(MICROS_PER_DAY) + i128::from(micros);
+            let unit = if is_date {
+                i128::from(MICROS_PER_DAY)
+            } else {
+                1
+            };
+            let span = (i128::from(stop) - i128::from(start)) * unit;
+            let count = if step == 0 { 1 } else { span / step + 1 };
+            if count > i128::try_from(MAX_ARRAY_LENGTH).unwrap_or(i128::MAX) {
+                return Err(CollectionSizeLimitExceededParameter {
+                    function_name: "`sequence`".to_owned(),
+                    parameter: "`count`".to_owned(),
+                    number_of_elements: count.to_string(),
+                    max_rounded_array_length: MAX_ARRAY_LENGTH.to_string(),
+                }
+                .into());
+            }
         }
         // Whole-day steps over dates have their length from the micros (`(stop - start) / step + 1`), as Spark computes it before
         // taking the elements: `1 day 12 hours` from Jan 1 to Jan 5 gives Jan 1, Jan 2, Jan 4.

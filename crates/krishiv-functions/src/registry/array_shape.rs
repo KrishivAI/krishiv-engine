@@ -12,7 +12,7 @@
 
 use krishiv_common::error::{
     DatatypeMismatchSequenceWrongInputTypes, DatatypeMismatchUnexpectedInputType, KrishivError,
-    KrishivUnsupportedFeature, WrongNumArgsWithoutSuggestion,
+    WrongNumArgsWithoutSuggestion,
 };
 use krishiv_types::{ArrayType, DataType};
 
@@ -224,18 +224,6 @@ fn sequence(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
             DataType::Array(ArrayType::new(t, false).into()),
             c.any_nullable(),
         ));
-    }
-    let temporal = |t: Option<&DataType>| {
-        matches!(
-            t,
-            Some(DataType::Date | DataType::Timestamp | DataType::TimestampNtz)
-        )
-    };
-    if temporal(c.data_type(0)) || temporal(c.data_type(1)) {
-        return Err(KrishivUnsupportedFeature {
-            feature: "sequence over dates or timestamps".to_owned(),
-        }
-        .into());
     }
     Err(DatatypeMismatchSequenceWrongInputTypes {
         sql_expr: call_sql("sequence", c),

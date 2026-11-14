@@ -15,6 +15,7 @@ const FILES: &[&str] = &[
     "sequence_timestamps",
     "sequence_tz",
     "sequence_calendar",
+    "sequence_errors",
 ];
 
 /// `file#n` (1-based statement number) the engine does not match yet; each is a Spark quirk or a missing feature named in the
@@ -63,19 +64,35 @@ fn is_error(output: &str) -> bool {
     output.starts_with("org.apache.") || output.starts_with("java.") || output.starts_with("scala.")
 }
 
-fn render(s: &Session, sql: &str) -> Result<Vec<String>, String> {
-    let wrapped = format!("SELECT CAST(x AS STRING) FROM ({sql}) AS t(x)");
-    let df = block_on(s.sql(&wrapped)).map_err(|e| e.to_string())?;
-    let batches = block_on(df.collect()).map_err(|e| e.to_string())?;
+fn render(s: &Session, sql: &str) -> Result<Vec<String>, krishiv_common::error::KrishivError> {
+    // Every column is cast to a string (a tab joins them), so a statement of any width is compared as Spark prints it.
+    let width = block_on(block_on(s.sql(sql))?.schema())?.fields().len();
+    let names: Vec<String> = (0..width).map(|i| format!("c{i}")).collect();
+    let casts: Vec<String> = names
+        .iter()
+        .map(|n| format!("CAST({n} AS STRING)"))
+        .collect();
+    let wrapped = format!(
+        "SELECT {} FROM ({sql}) AS t({})",
+        casts.join(", "),
+        names.join(", ")
+    );
+    let df = block_on(s.sql(&wrapped))?;
+    let batches = block_on(df.collect())?;
     let mut rows = Vec::new();
     for b in &batches {
-        let col = b.column(0).as_string_view();
-        for i in 0..col.len() {
-            rows.push(if col.is_null(i) {
-                "NULL".to_owned()
-            } else {
-                col.value(i).to_owned()
-            });
+        for i in 0..b.num_rows() {
+            let cells: Vec<String> = (0..width)
+                .map(|c| {
+                    let col = b.column(c).as_string_view();
+                    if col.is_null(i) {
+                        "NULL".to_owned()
+                    } else {
+                        col.value(i).to_owned()
+                    }
+                })
+                .collect();
+            rows.push(cells.join("\t"));
         }
     }
     Ok(rows)
@@ -96,7 +113,18 @@ fn sequence_over_dates_and_timestamps_follows_the_spark_runs() {
             }
             let got = render(&s, &case.sql);
             let ok = if is_error(&case.output) {
-                got.is_err()
+                // A failure, and when Spark names an error class the same class (a `_LEGACY_ERROR_TEMP_*` or an unclassified Java
+                // exception is checked as a failure only).
+                let want = case
+                    .output
+                    .lines()
+                    .find_map(|l| l.strip_prefix("errorClass: "))
+                    .map(|c| c.trim().to_owned());
+                match (&got, want) {
+                    (Err(e), Some(c)) if !c.starts_with("_LEGACY") => e.error_class().name() == c,
+                    (Err(_), _) => true,
+                    _ => false,
+                }
             } else {
                 match &got {
                     Ok(rows) => rows.join("\n") == case.output,

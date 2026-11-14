@@ -198,7 +198,7 @@ impl Opts {
                 }
                 // `samplingRatio` must be a number above 0 (Spark: `requirement failed: samplingRatio (x) should be greater than 0`).
                 "samplingratio" if func == "schema_of_xml" => match v.trim().parse::<f64>() {
-                    Ok(r) if r > 0.0 => {}
+                    Ok(r) if r > 0.0 && r.is_finite() => {}
                     _ => {
                         return Err(unsupported(
                             func,
