@@ -1085,3 +1085,149 @@ fn ansi_overflow_in_metrics_matches_spark() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
     assert!(fixed.is_empty(), "remove from ANSI_GAPS: {fixed:?}");
 }
+
+// ---- limits above or below the node (`limit_counts`, P3-T084c) ----
+
+/// `range(0, 1000)` as `v` in `p` partitions.
+fn rows(s: &Session, p: u32) -> DataFrame {
+    s.range(0, 1000, 1, Some(p))
+        .select_expr(["id as v"])
+        .unwrap()
+}
+
+/// What the observations of `shape` hold after one action: the counted rows of each node.
+fn limit_counts(shape: &str, p: u32, limit: i32, collect: bool) -> Vec<i64> {
+    let s = session();
+    let (oa, ob) = (
+        Observation::named("a").unwrap(),
+        Observation::named("b").unwrap(),
+    );
+    let base = rows(&s, p);
+    let obs = |df: &DataFrame, o: &Observation| df.observe(o, [n()]).unwrap();
+    let lim = limit;
+    let desc = || [col("v").desc()];
+    let df = match shape {
+        "observe_limit" => obs(&base, &oa).limit(lim),
+        "observe_filter_limit" => obs(&base, &oa).filter_expr("v % 2 = 0").unwrap().limit(lim),
+        "observe_selective_filter_limit" => obs(&base, &oa)
+            .filter_expr("v % 100 = 0")
+            .unwrap()
+            .limit(lim),
+        "limit_then_observe" => obs(&base.limit(lim), &oa),
+        "observe_sort_limit" => obs(&base, &oa).order_by(desc()).limit(lim),
+        "sort_observe_limit" => obs(&base.order_by(desc()), &oa).limit(lim),
+        "observe_offset_limit" => obs(&base, &oa).offset(3).limit(lim),
+        "observe_union_limit" => obs(&base, &oa).union(&rows(&s, p)).limit(lim),
+        "union_of_limit_branches" => obs(&base, &oa)
+            .limit(lim)
+            .union(&obs(&rows(&s, p), &ob).limit(lim)),
+        "union_of_limit_branches_then_observe" => {
+            obs(&base.limit(lim).union(&rows(&s, p).limit(lim)), &oa)
+        }
+        "join_observe_left_limit" => obs(&base, &oa)
+            .join_using(&rows(&s, p), ["v"], JoinType::Inner)
+            .limit(lim),
+        "join_observe_right_limit" => rows(&s, p)
+            .join_using(&obs(&base, &oa), ["v"], JoinType::Inner)
+            .limit(lim),
+        other => panic!("unknown shape {other}"),
+    };
+    if collect {
+        block_on(df.collect()).unwrap();
+    } else {
+        block_on(df.count()).unwrap();
+    }
+    let n_of = |o: &Observation| {
+        o.get_timeout(Duration::from_millis(300))
+            .ok()
+            .flatten()
+            .map(|r| r.column(0).as_primitive::<Int64Type>().value(0))
+    };
+    [n_of(&oa), n_of(&ob)].into_iter().flatten().collect()
+}
+
+/// The shapes and partition counts the engine does not match for every limit and action, with
+/// why. A shape listed for `p` must still differ somewhere there (a fix removes the line).
+const LIMIT_GAPS: &[(&str, u32, &str)] = &[
+    ("observe_limit", 4, PER_PARTITION),
+    ("observe_limit", 16, PER_PARTITION),
+    ("observe_filter_limit", 1, FILTER_BETWEEN),
+    ("observe_filter_limit", 4, FILTER_BETWEEN),
+    ("observe_filter_limit", 16, FILTER_BETWEEN),
+    ("observe_selective_filter_limit", 1, FILTER_BETWEEN),
+    ("observe_selective_filter_limit", 4, FILTER_BETWEEN),
+    ("observe_selective_filter_limit", 16, FILTER_BETWEEN),
+    ("observe_offset_limit", 4, PER_PARTITION),
+    ("observe_offset_limit", 16, PER_PARTITION),
+    ("observe_union_limit", 1, UNION_BELOW),
+    ("observe_union_limit", 4, UNION_BELOW),
+    ("observe_union_limit", 16, UNION_BELOW),
+    ("union_of_limit_branches", 4, PER_PARTITION),
+    ("union_of_limit_branches", 16, PER_PARTITION),
+    ("join_observe_left_limit", 1, JOIN_BELOW),
+    ("join_observe_left_limit", 4, JOIN_BELOW),
+    ("join_observe_left_limit", 16, JOIN_BELOW),
+];
+
+const PER_PARTITION: &str = "Spark's count() runs a LocalLimit(n) on every partition (P x n rows, capped by the partition), collect() scans partitions incrementally (CollectLimit); the engine counts one global budget of n";
+const FILTER_BETWEEN: &str = "a filter between the node and the limit multiplies the rows pulled by the selectivity (Spark pulls whole batches of a partition's LocalLimit); the engine's cap stops at the filter and counts every row";
+const UNION_BELOW: &str = "the engine's limit cap does not cross a union, so the observed branch reads all its rows; Spark's LocalLimit pulls only what it takes";
+const JOIN_BELOW: &str = "the engine's limit cap does not cross a join, so the streamed observed side reads everything; Spark's join keeps the streamed side lazy";
+
+const LIMIT_SHAPES: &[&str] = &[
+    "observe_limit",
+    "observe_filter_limit",
+    "observe_selective_filter_limit",
+    "limit_then_observe",
+    "observe_sort_limit",
+    "sort_observe_limit",
+    "observe_offset_limit",
+    "observe_union_limit",
+    "union_of_limit_branches",
+    "union_of_limit_branches_then_observe",
+    "join_observe_left_limit",
+    "join_observe_right_limit",
+];
+
+/// Whether the engine's counts for `shape` at `p` partitions equal Spark's for every limit and action.
+fn limit_shape_matches(want: &Value, shape: &str, p: u32) -> Result<(), String> {
+    for limit in [5, 100] {
+        for (collect, action) in [(false, "count"), (true, "collect")] {
+            let key = format!("{shape}/P{p}/n{limit}/{action}");
+            let mut expected: Vec<i64> = want[&key]["runs"][0]["observed"]
+                .as_array()
+                .ok_or_else(|| format!("{key}: not in the fixture"))?
+                .iter()
+                .filter_map(|m| m["metrics"]["n"].as_i64())
+                .collect();
+            let mut got = limit_counts(shape, p, limit, collect);
+            expected.sort_unstable();
+            got.sort_unstable();
+            if got != expected {
+                return Err(format!("{key}: got {got:?}, Spark {expected:?}"));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn limit_counts_match_spark_where_they_can() {
+    let want = followup("classic", "limit_counts");
+    let mut report = Vec::new();
+    for shape in LIMIT_SHAPES {
+        for p in [1_u32, 4, 16] {
+            let result = limit_shape_matches(&want, shape, p);
+            let gap = LIMIT_GAPS.iter().any(|(s, q, _)| s == shape && *q == p);
+            match (&result, gap) {
+                (Err(why), false) => report.push(format!("unexpected: {why}")),
+                (Ok(()), true) => report.push(format!(
+                    "{shape}/P{p} now matches: remove it from LIMIT_GAPS"
+                )),
+                (Err(why), true) => eprintln!("known gap {shape}/P{p}: {why}"),
+                (Ok(()), false) => eprintln!("match {shape}/P{p}"),
+            }
+        }
+    }
+    assert!(report.is_empty(), "{}", report.join("\n"));
+}

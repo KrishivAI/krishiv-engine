@@ -265,9 +265,35 @@ or above projections only, counts exactly the rows it takes, as Spark's `Collect
 its consumer pulled; the cap is one budget per node instance, so over several partitions the rows
 counted are the first the racing drivers hand over (Spark's are partition 0's: a `sum` metric can differ).
 
-- **Limit not last, or a filter in between:** `observe(..).limit(n).count()`, a limit under a join, or a filter between the observed node and the limit: Spark's per-partition `LocalLimit` can pull up to `n` rows per partition, and a filter changes how many rows the node saw per row taken; the engine applies one global cap of `n` rows counted at the node. Not yet backed by a golden (P3-T084c).
-- **Sort and limit:** `df.observe(..).orderBy(..).limit(n)` reads every row in the engine (`n` = the input);
-  Spark's `TakeOrderedAndProject` pulls a partition-dependent subset (20 of 1000 in the golden).
+- **Limit not last, or a filter in between:** Spark counts the rows its limit operator *pulled* through the node, and
+  which limit operator runs depends on the action (`observe-goldens-followup.json`, `limit_counts`, run on Spark 4.2.0,
+  `range(0,1000,1,P)`, every case stable over 3 runs). `count()` plans `GlobalLimit <- Exchange <- LocalLimit` and
+  scans *every* partition (each pulls `min(n, partition rows)`: P x n); `collect()`/`take` scans one partition, then
+  `ceil(1.5 * missing * scanned / got)` more, at most 4 x the scanned. The engine applies one global cap of `n` rows
+  at the node (through projections only). Counts, `n = 5` / `n = 100`, count() then collect():
+
+  | shape | P = 1 | P = 4 | P = 16 | engine |
+  |---|---|---|---|---|
+  | `observe.limit(n)` | 5, 5 / 100, 100 | 20, 5 / 400, 100 | 80, 5 / 1000, 125 | P = 1 only (else 5 / 100) |
+  | `limit(n).observe` | n | n | n | matches |
+  | `observe.filter(v%2=0).limit(n)` | 9 / 199 | 36, 9 / 796, 199 | 152, 9 / 1000, 312 | reads 1000 (750 at P16) |
+  | `observe.filter(v%100=0).limit(n)` | 401 / 1000 | 1000, 500 / 1000 | 1000, 437 / 1000 | reads 1000 |
+  | `observe.offset(3).limit(n)` | n + 3 | 32, 8 / 412, 103 | 128, 8 / 1000, 125 | P = 1 only |
+  | `observe.orderBy(v desc).limit(n)` (TakeOrderedAndProject) | 1000 | 1000 | 1000 | matches |
+  | `orderBy(v desc).observe.limit(n)` | n | n | n | matches |
+  | `observe.union(range).limit(n)` | as `observe.limit(n)` | | | reads everything |
+  | `observe(A).limit(n) UNION ALL observe(B).limit(n)` | n, n | 20, 20 / 400, 400 | 80, 80 / 1000, 1000 | P = 1 only |
+  | `(limit(n) UNION ALL limit(n)).observe` | 2n | 2n | 2n | matches |
+  | observed side streamed through a broadcast join, `limit(n)` above | as `observe.limit(n)` (collect: Connect gives P x n) | | | reads everything |
+  | observed build side of a join | 1000 | 1000 | 1000 | matches |
+
+  The runner (`observe_goldens.rs`, `limit_counts_match_spark_where_they_can`) asserts every row marked "matches" and the
+  P = 1 cases, and pins the rest in `LIMIT_GAPS` with the reason; they must still differ, so a fix removes the line.
+  Emulating the per-partition `LocalLimit` and `CollectLimit`'s incremental scan is not planned: the numbers are plan- and
+  AQE-dependent (the post-shuffle partition count changes them), so only the deterministic shapes are matched.
+- **Sort and limit:** `df.observe(..).orderBy(..).limit(n)` counts every row, as Spark's `TakeOrderedAndProject` does
+  for a descending sort (1000). The first fixture's ascending `orderBy(id)` over a range gave 20 of 1000 in Spark (a
+  partition-dependent count the engine does not reproduce: `observation_through_sort_limit_topn` in `KNOWN_GAPS`).
 - **ANSI `sum` overflow:** modelled on Spark's mechanism (`AggregatingAccumulator`): an overflow inside one task's
   partition fails the action with `ARITHMETIC_OVERFLOW`; an overflow when the tasks' buffers are merged drops *that task's
   whole buffer* and the action succeeds (Spark merges in task-completion order, so which task survives varies from run to
@@ -286,6 +312,12 @@ counted are the first the racing drivers hand over (Spark's are partition 0's: a
 - **Connect:** struct, map, array, binary and day-time interval metrics go out as Spark's `ObservedMetrics` literal forms
   (year-month and calendar intervals too: Spark's Python client raises `UNSUPPORTED_LITERAL` for those, the server sends them);
   a name with no plan id reports `plan_id` 0. A calendar-interval metric cannot be built yet (the engine has no aggregate over it).
+- **Streaming:** the engine has no streaming `DataFrame` yet (a Connect `Read` with `is_streaming` is refused when it is translated,
+  `UNSUPPORTED_FEATURE`), so there is nothing for `observe(Observation, ...)` to refuse. Spark refuses it at `observe()`: classic
+  `IllegalArgumentException` (no class) "Observation does not support streaming Datasets.This is because ..." (sic, no space);
+  Connect `UNSUPPORTED_OPERATION` "Streaming DataFrame with Observation is not supported."; `observe("name", ...)` on a stream is
+  allowed and reports per micro-batch in `StreamingQueryProgress.observedMetrics`
+  (`observe-goldens-followup.json`, `streaming`). Both belong to the streaming plan row, not here.
 - **Cancelled actions:** a dropped result stream completes the observation with `{}` or the rows
   folded before the drivers stopped (Spark: a partial value); a failed finalization of a metric is what `get`
   raises.
