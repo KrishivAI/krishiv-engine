@@ -253,6 +253,37 @@ fn sequence(
     Ok(Arc::new(list))
 }
 
+/// `reverse(array)`: the elements in the opposite order, NULL elements kept in place, NULL for a NULL array (the string and
+/// binary forms are in `chars`).
+pub(super) fn reverse_binding(t: &DataType) -> Option<Binding> {
+    let DataType::List(f) = t else {
+        return None;
+    };
+    let field = Arc::clone(f);
+    Some(Binding::new(t.clone(), move |x: &Inputs<'_>| {
+        reverse(x, &field)
+    }))
+}
+
+fn reverse(x: &Inputs<'_>, field: &Arc<Field>) -> Result<ArrayRef, KrishivError> {
+    let c = x.column(0)?;
+    let list = list_of(&c, "reverse")?;
+    let mut rows = Vec::with_capacity(x.rows());
+    for row in 0..x.rows() {
+        if list.is_null(row) {
+            rows.push(None);
+            continue;
+        }
+        let (first, size) = span(list, row);
+        let mut picks = Vec::with_capacity(size);
+        for at in (first..first + size).rev() {
+            picks.push(Some(index(at)?));
+        }
+        rows.push(Some(picks));
+    }
+    rebuild(field, list.values(), &rows, "reverse", MAX_ARRAY_LENGTH)
+}
+
 /// `slice(arr, start, length)`.
 fn slice(x: &Inputs<'_>, field: &Arc<Field>) -> Result<ArrayRef, KrishivError> {
     let c = x.column(0)?;

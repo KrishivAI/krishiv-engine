@@ -386,6 +386,36 @@ fn to_number(name: &'static str, args: &[BindArg], try_: bool) -> Result<Binding
     }))
 }
 
+/// `to_char(binary, 'hex' | 'base64' | 'utf-8')` / `to_varchar`: Spark's `ToCharacter` over a binary is `Hex`, `Base64` or `Decode(.., 'utf-8')`
+/// chosen by the format literal (lower-cased and trimmed); the analyzer already refused any other format.
+fn to_char_binary(
+    args: &[BindArg],
+    charsets: krishiv_kernels::string::CharsetOptions,
+) -> Result<Binding, KrishivError> {
+    let format = literal_format(&args[1])?;
+    let Some(format) = format else {
+        // A NULL format: every row is NULL.
+        return Ok(Binding::new(DataType::Utf8, |x: &Inputs<'_>| {
+            Ok(string_array(&vec![None; x.rows()]))
+        }));
+    };
+    match format.to_lowercase().trim_matches(|c: char| c <= ' ') {
+        "hex" => hex(&args[0].data_type()).ok_or_else(|| bad_types("to_char", args)),
+        "base64" => Ok(Binding::new(DataType::Utf8, |x: &Inputs<'_>| {
+            Ok(Arc::new(krishiv_kernels::string::base64(&x.binaries(0)?, true)?) as ArrayRef)
+        })),
+        "utf-8" => Ok(Binding::new(DataType::Utf8, move |x: &Inputs<'_>| {
+            let charset = krishiv_kernels::string::StrOperand::<i32>::Scalar(Some("utf-8"));
+            Ok(Arc::new(krishiv_kernels::string::decode_with(
+                x.bin(0)?.operand(),
+                charset,
+                charsets,
+            )?) as ArrayRef)
+        })),
+        _ => Err(bad_types("to_char", args)),
+    }
+}
+
 /// `to_char(x, format)` / `to_varchar`: a decimal by an Oracle pattern (a
 /// mismatch raises `INVALID_FORMAT.MISMATCH_INPUT`).
 fn to_char(args: &[BindArg]) -> Result<Binding, KrishivError> {
@@ -458,6 +488,9 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
         ("to_number", [n, f]) if is_string(n) && is_string(f) => to_number(listed, args, false),
         ("try_to_number", [n, f]) if is_string(n) && is_string(f) => to_number(listed, args, true),
         ("to_char" | "to_varchar", [DataType::Decimal128(..), f]) if is_string(f) => to_char(args),
+        ("to_char" | "to_varchar", [b, f]) if is_binary(b) && is_string(f) => {
+            to_char_binary(args, opts.charsets)
+        }
         _ => return Some((listed, Err(bad_types(listed, args)))),
     };
     Some((listed, binding))

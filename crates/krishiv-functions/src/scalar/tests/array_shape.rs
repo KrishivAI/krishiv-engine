@@ -62,3 +62,40 @@ fn unsupported_shapes_do_not_bind() {
         .is_err()
     );
 }
+
+#[test]
+fn reverse_of_an_array_reverses_the_elements_and_keeps_nulls_and_empty_arrays() {
+    use arrow_array::builder::{Int32Builder, ListBuilder};
+    let mut b = ListBuilder::new(Int32Builder::new());
+    for row in [
+        Some(vec![Some(2), Some(1), Some(4), Some(3)]),
+        Some(vec![Some(1), None, Some(3)]),
+        Some(vec![]),
+        None,
+    ] {
+        match row {
+            Some(v) => {
+                for x in v {
+                    b.values().append_option(x);
+                }
+                b.append(true);
+            }
+            None => b.append(false),
+        }
+    }
+    let list: ArrayRef = Arc::new(b.finish());
+    let f = bind_with("reverse", &[&list], &BindOptions::new());
+    assert_eq!(f.return_type(), list.data_type());
+    let out = f.invoke(&[col(&list)], 4).unwrap();
+    let out = out.as_list::<i32>();
+    let ints = |row: usize| -> Vec<Option<i32>> {
+        out.value(row)
+            .as_primitive::<arrow_array::types::Int32Type>()
+            .iter()
+            .collect()
+    };
+    assert_eq!(ints(0), [Some(3), Some(4), Some(1), Some(2)]);
+    assert_eq!(ints(1), [Some(3), None, Some(1)]);
+    assert!(ints(2).is_empty());
+    assert!(out.is_null(3));
+}
