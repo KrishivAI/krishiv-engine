@@ -234,6 +234,13 @@ pub struct CollectMetricsNode {
     pub name: ::prost::alloc::string::String,
     #[prost(uint32, tag = "3")]
     pub measure: u32,
+    /// The planner's rank of this node among the plan's observing nodes, in plan
+    /// order: of several nodes with one name the highest is the observation's.
+    #[prost(uint32, tag = "4")]
+    pub instance: u32,
+    /// At most this many rows are folded (a `LIMIT` above takes no more).
+    #[prost(uint64, optional, tag = "5")]
+    pub limit: ::core::option::Option<u64>,
 }
 /// feature: python_udf
 /// The rows of `input`, then one column per Python UDF call over every row.

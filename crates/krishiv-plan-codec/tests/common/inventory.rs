@@ -1700,6 +1700,8 @@ pub(crate) fn collect_metrics() -> PhysNode {
     PhysNode::CollectMetrics {
         input: boxed(scan()),
         name: "obs".to_owned(),
+        instance: 1,
+        limit: Some(5),
         measure: boxed(PhysNode::Project {
             input: boxed(PhysNode::Aggregate {
                 input: boxed(PhysNode::OneRow),

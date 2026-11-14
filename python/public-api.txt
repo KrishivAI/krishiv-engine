@@ -63,6 +63,7 @@ DataFrame.def is_cached(self) -> bool
 DataFrame.def join(self, other: DataFrame, on: Column | None=..., using: list[str] | None=..., how: str=...) -> DataFrame
 DataFrame.def limit(self, n: int) -> DataFrame
 DataFrame.def local_checkpoint(self, eager: bool=..., level: tuple[bool, bool, bool, bool, int] | None=...) -> DataFrame
+DataFrame.def observe(self, observation: Observation, metrics: list[Column]) -> DataFrame
 DataFrame.def offset(self, n: int) -> DataFrame
 DataFrame.def order_by(self, cols: list[Column]) -> DataFrame
 DataFrame.def persist(self, use_disk: bool, use_memory: bool, use_offheap: bool, deserialized: bool, replication: int) -> DataFrame
@@ -82,6 +83,9 @@ DataFrame.def write(self, format: str, mode: str, path: str, options: list[tuple
 DataFrame.def write_table(self, insert_into: bool, table: str, format: str | None, mode: str, options: list[tuple[str, str]] | None=..., partition_by: list[str] | None=..., bucket_by: tuple[int, list[str]] | None=..., sort_by: list[str] | None=...) -> None
 DataFrame.def write_to_table(self, table: str, mode: str, provider: str | None=..., options: list[tuple[str, str]] | None=..., properties: list[tuple[str, str]] | None=..., partitioned_by: list[str] | None=..., cluster_by: list[str] | None=..., condition: str | None=...) -> None
 GroupedData.def agg(self, cols: list[Column]) -> DataFrame
+Observation.@property def name(self) -> str
+Observation.def __init__(self, name: str | None=...) -> None
+Observation.def get(self) -> ArrowStream
 Session.@staticmethod def is_dataframe_table(name: str) -> bool
 Session.def __new__(cls, config: list[tuple[str, str]] | None=...) -> Session
 Session.def cache_reserved(self) -> int
@@ -107,12 +111,13 @@ WindowSpec.def partition_by(self, cols: list[Column]) -> WindowSpec
 WindowSpec.def range_between(self, start: int, end: int) -> WindowSpec
 WindowSpec.def rows_between(self, start: int, end: int) -> WindowSpec
 __all__
-__all__ = ['AnonymousPythonUdf', 'ArrowStream', 'Column', 'DataFrame', 'GroupedData', 'Session', 'WindowSpec', '__allocator__', '__version__', '_udf_pool_shutdown', '_udf_runner_conf', 'call_function', 'col', 'count_distinct', 'count_star', 'expr', 'lit', 'map_literal']
+__all__ = ['AnonymousPythonUdf', 'ArrowStream', 'Column', 'DataFrame', 'GroupedData', 'Observation', 'Session', 'WindowSpec', '__allocator__', '__version__', '_udf_pool_shutdown', '_udf_runner_conf', 'call_function', 'col', 'count_distinct', 'count_star', 'expr', 'lit', 'map_literal']
 class AnonymousPythonUdf()
 class ArrowStream()
 class Column()
 class DataFrame()
 class GroupedData()
+class Observation()
 class Session()
 class WindowSpec()
 def call_function(name: str, args: list[Column]) -> Column
@@ -193,7 +198,7 @@ def not_implemented(feature: str) -> PySparkNotImplementedError
 def unsupported_feature(feature: str) -> UnsupportedOperationException
 ## sql/__init__.py
 __all__
-__all__ = ['Catalog', 'Column', 'DataFrame', 'DataFrameNaFunctions', 'DataFrameReader', 'DataFrameStatFunctions', 'DataFrameWriter', 'DataFrameWriterV2', 'GroupedData', 'Row', 'RuntimeConfig', 'SparkSession', 'UDFRegistration', 'Window', 'WindowSpec', 'functions', 'types']
+__all__ = ['Catalog', 'Column', 'DataFrame', 'DataFrameNaFunctions', 'DataFrameReader', 'DataFrameStatFunctions', 'DataFrameWriter', 'DataFrameWriterV2', 'GroupedData', 'Observation', 'Row', 'RuntimeConfig', 'SparkSession', 'UDFRegistration', 'Window', 'WindowSpec', 'functions', 'types']
 ## sql/_generated_functions.py
 __all__
 __all__ = ['abs', 'acos', 'acosh', 'add_months', 'aes_decrypt', 'aes_encrypt', 'approx_count_distinct', 'approx_percentile', 'array', 'array_append', 'array_compact', 'array_contains', 'array_distinct', 'array_except', 'array_insert', 'array_intersect', 'array_join', 'array_max', 'array_min', 'array_position', 'array_prepend', 'array_remove', 'array_repeat', 'array_size', 'array_union', 'arrays_overlap', 'arrays_zip', 'ascii', 'asin', 'asinh', 'assert_true', 'atan', 'atan2', 'atanh', 'avg', 'base64', 'bin', 'bit_and', 'bit_count', 'bit_get', 'bit_length', 'bit_or', 'bit_xor', 'bitwiseNOT', 'bitwise_not', 'bool_and', 'bool_or', 'bround', 'btrim', 'cardinality', 'cbrt', 'ceil', 'ceiling', 'char', 'char_length', 'character_length', 'coalesce', 'collation', 'collect_list', 'collect_set', 'concat_ws', 'contains', 'conv', 'corr', 'cos', 'cosh', 'cot', 'count_if', 'covar_pop', 'covar_samp', 'crc32', 'create_map', 'csc', 'cume_dist', 'curdate', 'current_catalog', 'current_database', 'current_date', 'current_path', 'current_schema', 'current_timestamp', 'current_timezone', 'current_user', 'date_add', 'date_diff', 'date_format', 'date_from_unix_date', 'date_part', 'date_sub', 'date_trunc', 'dateadd', 'datediff', 'datepart', 'day', 'dayname', 'dayofmonth', 'dayofweek', 'dayofyear', 'decode', 'degrees', 'dense_rank', 'e', 'element_at', 'elt', 'encode', 'endswith', 'equal_null', 'exp', 'expm1', 'extract', 'factorial', 'find_in_set', 'first', 'first_value', 'flatten', 'floor', 'format_number', 'format_string', 'from_json', 'from_unixtime', 'from_utc_timestamp', 'get', 'get_json_object', 'getbit', 'greatest', 'hash', 'hex', 'hour', 'hypot', 'ifnull', 'initcap', 'input_file_block_length', 'input_file_block_start', 'input_file_name', 'instr', 'is_valid_utf8', 'is_variant_null', 'isnan', 'isnotnull', 'isnull', 'json_array_length', 'json_object_keys', 'json_tuple', 'kurtosis', 'lag', 'last', 'last_day', 'last_value', 'lcase', 'lead', 'least', 'left', 'length', 'levenshtein', 'listagg', 'ln', 'localtimestamp', 'locate', 'log10', 'log1p', 'log2', 'lower', 'lpad', 'ltrim', 'make_date', 'make_timestamp', 'make_timestamp_ltz', 'make_timestamp_ntz', 'make_valid_utf8', 'map_concat', 'map_contains_key', 'map_entries', 'map_from_arrays', 'map_from_entries', 'map_keys', 'map_values', 'mask', 'max', 'md5', 'mean', 'median', 'min', 'minute', 'mode', 'monotonically_increasing_id', 'month', 'monthname', 'months_between', 'named_struct', 'nanvl', 'negative', 'next_day', 'now', 'nth_value', 'ntile', 'nullif', 'nullifzero', 'nvl', 'nvl2', 'octet_length', 'overlay', 'parse_json', 'parse_url', 'percent_rank', 'percentile', 'percentile_approx', 'pi', 'pmod', 'position', 'positive', 'pow', 'printf', 'quarter', 'quote', 'radians', 'raise_error', 'rand', 'randn', 'randstr', 'rank', 'regexp', 'regexp_count', 'regexp_extract', 'regexp_extract_all', 'regexp_instr', 'regexp_like', 'regexp_replace', 'regexp_substr', 'regr_avgx', 'regr_avgy', 'regr_count', 'regr_intercept', 'regr_r2', 'regr_slope', 'regr_sxx', 'regr_sxy', 'regr_syy', 'repeat', 'replace', 'reverse', 'right', 'rint', 'round', 'row_number', 'rpad', 'rtrim', 'schema_of_json', 'schema_of_variant', 'sec', 'second', 'sequence', 'session_user', 'sha', 'sha1', 'sha2', 'shiftLeft', 'shiftRight', 'shiftRightUnsigned', 'shiftleft', 'shiftright', 'shiftrightunsigned', 'shuffle', 'sign', 'signum', 'sin', 'sinh', 'size', 'skewness', 'slice', 'sort_array', 'soundex', 'spark_partition_id', 'split', 'split_part', 'sqrt', 'startswith', 'std', 'stddev', 'stddev_pop', 'stddev_samp', 'str_to_map', 'struct', 'substr', 'substring', 'substring_index', 'sum', 'tan', 'tanh', 'time_bucket', 'timestamp_micros', 'timestamp_millis', 'timestamp_seconds', 'toDegrees', 'toRadians', 'to_binary', 'to_char', 'to_date', 'to_json', 'to_number', 'to_timestamp', 'to_timestamp_ltz', 'to_timestamp_ntz', 'to_unix_timestamp', 'to_utc_timestamp', 'to_varchar', 'to_variant_object', 'translate', 'trim', 'trunc', 'try_add', 'try_aes_decrypt', 'try_avg', 'try_divide', 'try_element_at', 'try_make_timestamp', 'try_make_timestamp_ltz', 'try_make_timestamp_ntz', 'try_mod', 'try_multiply', 'try_parse_json', 'try_parse_url', 'try_subtract', 'try_sum', 'try_to_binary', 'try_to_date', 'try_to_number', 'try_to_timestamp', 'try_url_decode', 'try_validate_utf8', 'try_variant_get', 'typeof', 'ucase', 'unbase64', 'unhex', 'uniform', 'unix_date', 'unix_micros', 'unix_millis', 'unix_seconds', 'upper', 'url_decode', 'url_encode', 'user', 'uuid', 'validate_utf8', 'var_pop', 'var_samp', 'variance', 'variant_get', 'version', 'weekday', 'weekofyear', 'width_bucket', 'xxhash64', 'year', 'zeroifnull']
@@ -1033,6 +1038,7 @@ DataFrame.def join(self, other: DataFrame, on: str | list[str] | Column | list[C
 DataFrame.def limit(self, num: int) -> DataFrame
 DataFrame.def localCheckpoint(self, eager: bool=True, storageLevel: StorageLevel | None=None) -> DataFrame
 DataFrame.def melt(self, ids: ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...], values: ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...] | None, variableColumnName: str, valueColumnName: str) -> DataFrame
+DataFrame.def observe(self, observation: Observation | str, *exprs: Column) -> DataFrame
 DataFrame.def offset(self, num: int) -> DataFrame
 DataFrame.def orderBy(self, *cols: ColumnsOrNames, ascending: bool | list[bool]=True) -> DataFrame
 DataFrame.def persist(self, storageLevel: StorageLevel=StorageLevel.MEMORY_AND_DISK) -> DataFrame
@@ -1111,6 +1117,14 @@ DataFrameNaFunctions.def drop(self, how: str | None='any', thresh: int | None=No
 DataFrameNaFunctions.def fill(self, value: Any, subset: Any=None) -> DataFrame
 DataFrameNaFunctions.def replace(self, to_replace: Any, value: Any=_NO_VALUE, subset: Any=None) -> DataFrame
 class DataFrameNaFunctions()
+## sql/observation.py
+Observation.@property def get(self) -> dict[str, Any]
+Observation.@property def name(self) -> str
+Observation.def __init__(self, name: str | None=None) -> None
+Observation.def __repr__(self) -> str
+__all__
+__all__ = ['Observation']
+class Observation()
 ## sql/pandas/functions.py
 ArrowUDFType.GROUPED_AGG
 ArrowUDFType.GROUPED_AGG_ITER

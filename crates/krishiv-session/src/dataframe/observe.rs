@@ -44,6 +44,7 @@ impl DataFrame {
     /// As [`Self::observe`] with a name and no handle (Spark's
     /// `Dataset.observe(String, ...)`): the metrics are computed with the
     /// query and reported to whoever reads the query's observations.
+    #[doc(hidden)]
     #[must_use]
     pub fn observe_named(
         &self,
@@ -63,28 +64,37 @@ impl DataFrame {
     /// This frame, reporting the metrics of its observed nodes to `sink` when
     /// an action's result has been read to its end (Spark Connect's
     /// `ObservedMetrics`; the server has no [`Observation`] handles).
+    ///
+    /// For the Connect server: not part of the engine's embedding API.
+    #[doc(hidden)]
     #[must_use]
     pub fn with_observed_sink(&self, sink: &ObservedSink) -> Self {
         let mut out = self.clone();
         out.keep.push(Arc::clone(&sink.slot) as _);
+        // The analysis made so far did not carry the sink.
+        out.analysis = Arc::default();
         out
     }
 
-    /// The sinks this frame carries.
-    pub(super) fn sinks(&self) -> Vec<Arc<SinkSlot>> {
-        self.keep
-            .iter()
-            .filter_map(|k| Arc::clone(k).downcast::<SinkSlot>().ok())
-            .collect()
+    /// The observations and sinks this frame carries, for the query's env.
+    pub(super) fn observers(&self) -> Observers {
+        let mut out = Observers::default();
+        for k in &self.keep {
+            if let Ok(shared) = Arc::clone(k).downcast::<Shared>() {
+                out.observations.push(shared);
+            } else if let Ok(sink) = Arc::clone(k).downcast::<SinkSlot>() {
+                out.sinks.push(sink);
+            }
+        }
+        out
     }
+}
 
-    /// The observation handles this frame carries.
-    pub(super) fn observations(&self) -> Vec<Arc<Shared>> {
-        self.keep
-            .iter()
-            .filter_map(|k| Arc::clone(k).downcast::<Shared>().ok())
-            .collect()
-    }
+/// What a frame's runs report their observed metrics to.
+#[derive(Default)]
+pub(crate) struct Observers {
+    observations: Vec<Arc<Shared>>,
+    sinks: Vec<Arc<SinkSlot>>,
 }
 
 /// The state of an [`ObservedSink`].
@@ -93,7 +103,8 @@ pub(crate) type SinkSlot = Mutex<Option<BTreeMap<String, RecordBatch>>>;
 /// Where an action leaves the metrics of the observed nodes of its plan, by
 /// name (one row each): set when the result was read to its end without an
 /// error, replaced by each later action (Spark Connect: the last action
-/// wins, a failed query sends none).
+/// wins, a failed query sends none). For the Connect server.
+#[doc(hidden)]
 #[derive(Clone, Default)]
 pub struct ObservedSink {
     slot: Arc<SinkSlot>,
@@ -125,42 +136,45 @@ impl ObservedSink {
 
 /// `stream`, completing `observers` from `query`'s observations when it ends,
 /// fails or is dropped (Spark completes them whether the action succeeded or
-/// not); the first action wins.
-pub(super) fn deliver(
+/// not); the first action wins. The one hook every run of a query passes.
+pub(crate) fn deliver(
     stream: RecordBatchStream,
     query: Arc<QueryContext>,
-    observers: Vec<Arc<Shared>>,
-    sinks: Vec<Arc<SinkSlot>>,
+    observers: &Observers,
 ) -> RecordBatchStream {
-    if observers.is_empty() && sinks.is_empty() {
+    if observers.observations.is_empty() && observers.sinks.is_empty() {
         return stream;
     }
     Box::pin(Delivering {
         inner: stream,
         query,
-        observers,
-        sinks,
+        observers: Some((observers.observations.clone(), observers.sinks.clone())),
         finished: false,
     })
 }
 
+/// The observations and sinks a stream completes.
+type Targets = (Vec<Arc<Shared>>, Vec<Arc<SinkSlot>>);
+
 struct Delivering {
     inner: RecordBatchStream,
     query: Arc<QueryContext>,
-    observers: Vec<Arc<Shared>>,
-    sinks: Vec<Arc<SinkSlot>>,
+    observers: Option<Targets>,
     /// The stream ended without an error.
     finished: bool,
 }
 
 impl Delivering {
     fn complete(&mut self) {
-        let observers = std::mem::take(&mut self.observers);
-        let sinks = std::mem::take(&mut self.sinks);
-        if observers.is_empty() && sinks.is_empty() {
+        let Some((observations, sinks)) = self.observers.take() else {
             return;
-        }
-        let observed = self.query.observed();
+        };
+        // On the carriers a caller reads (decimals, intervals), as the action's rows are.
+        let observed = self.query.observed().and_then(|all| {
+            all.into_iter()
+                .map(|(name, row)| Ok((name, crate::carrier::client_batch(&row)?)))
+                .collect::<Result<BTreeMap<_, _>, KrishivError>>()
+        });
         if self.finished
             && let Ok(all) = &observed
         {
@@ -168,9 +182,13 @@ impl Delivering {
                 *sink.lock().unwrap_or_else(PoisonError::into_inner) = Some(all.clone());
             }
         }
-        let observed = observed.unwrap_or_default();
-        for o in observers {
-            o.complete(observed.get(o.name()));
+        for o in observations {
+            o.complete(
+                observed
+                    .as_ref()
+                    .map(|all| all.get(o.name()))
+                    .map_err(Clone::clone),
+            );
         }
     }
 }

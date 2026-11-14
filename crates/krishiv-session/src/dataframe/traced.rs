@@ -69,12 +69,11 @@ impl DataFrame {
             // The execution span stays open while the rows are produced and read: it closes when
             // the result stream is dropped, not when `run` returns the stream.
             let exec = tracing::info_span!("krishiv.execute");
-            let (stream, query) = self
+            let stream = self
                 .session
-                .run_with_query(&physical, &a.env)
+                .run(&physical, &a.env)
                 .instrument(exec.clone())
                 .await?;
-            let stream = super::observe::deliver(stream, query, self.observations(), self.sinks());
             let stream = crate::telemetry::hold_span(stream, exec);
             let stream = fill.fill(stream, &self.session.state.cache);
             let stream = match result {

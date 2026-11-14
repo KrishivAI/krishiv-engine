@@ -314,10 +314,14 @@ impl Encoder {
                 input,
                 name,
                 measure,
+                instance,
+                limit,
             } => Kind::CollectMetrics(pb::CollectMetricsNode {
                 input: self.node_index(input)?,
                 name: name.clone(),
                 measure: self.node_index(measure)?,
+                instance: *instance,
+                limit: *limit,
             }),
             PhysNode::ReplicateRows {
                 input,

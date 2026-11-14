@@ -79,6 +79,18 @@ fn violation(metric: &Arc<Expr>) -> Option<Violation> {
     None
 }
 
+/// Whether `e` holds a subquery expression.
+fn has_subquery(e: &Arc<Expr>) -> bool {
+    let mut stack = vec![Arc::clone(e)];
+    while let Some(e) = stack.pop() {
+        if matches!(e.node, ExprNode::Subquery { .. }) {
+            return true;
+        }
+        e.for_each_child(&mut |k| stack.push(Arc::clone(k)));
+    }
+    false
+}
+
 impl Resolver<'_> {
     /// Resolves `metrics` over `input` as a global aggregate would and
     /// keeps the node with them bound; its output is the input's.
@@ -92,9 +104,10 @@ impl Resolver<'_> {
     ) -> Result<Rel, AnalysisError> {
         let o = p.origin;
         let c = self.child(input, env)?;
-        self.observing = true;
+        // Restored, not cleared: a metric's own subquery may observe too.
+        let outer = std::mem::replace(&mut self.observing, true);
         let items = self.select_items(&c, metrics, env, "CollectMetrics");
-        self.observing = false;
+        self.observing = outer;
         let items = items?;
         let zone = self.ctx.conf.session_zone;
         let shown = |b: &super::exprs::Bound| format!("\"{}\"", pretty(&b.shown(), zone));
@@ -141,6 +154,16 @@ impl Resolver<'_> {
                 }
             };
             return Err(AnalysisError::new(e, o));
+        }
+        // Spark accepts a scalar subquery in a metric; the engine does not run one beside the
+        // rows that pass through, and says so rather than failing inside the planner.
+        if items.iter().any(|b| has_subquery(&b.expr)) {
+            return Err(AnalysisError::new(
+                krishiv_common::error::KrishivUnsupportedFeature {
+                    feature: "a subquery in an observed metric (Dataset.observe)".to_owned(),
+                },
+                o,
+            ));
         }
         // One relation per name: the same relation (its canonical
         // representative) may appear again, another may not.

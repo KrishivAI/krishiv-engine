@@ -29,6 +29,9 @@ impl Planner<'_> {
         name: &str,
         metrics: &[Arc<Expr>],
     ) -> Result<Planned> {
+        // Numbered before its input's nodes: Spark's plan order is pre-order.
+        let instance = self.observers;
+        self.observers += 1;
         let planned = self.plan(input)?;
         if self.unobserved > 0 {
             return Ok(planned);
@@ -52,6 +55,8 @@ impl Planner<'_> {
                 input,
                 name: name.to_owned(),
                 measure: Box::new(measured.node),
+                instance,
+                limit: None,
             },
             schema,
             layout,
@@ -60,5 +65,20 @@ impl Planner<'_> {
         // A filter below would change which rows the metrics count.
         out.sites.clear();
         Ok(out)
+    }
+}
+
+/// Caps the rows the observing nodes of `node` fold at `rows`, through the operators that pass
+/// every row on (a projection, another observing node): a `LIMIT` above takes no more than
+/// that, and Spark's `CollectMetricsExec` counts the rows its consumer pulled. A filter, sort,
+/// join or any operator that changes which rows arrive ends the search.
+pub(super) fn cap_observed(node: &mut PhysNode, rows: u64) {
+    match node {
+        PhysNode::Project { input, .. } => cap_observed(input, rows),
+        PhysNode::CollectMetrics { input, limit, .. } => {
+            *limit = Some(limit.map_or(rows, |l| l.min(rows)));
+            cap_observed(input, rows);
+        }
+        _ => {}
     }
 }

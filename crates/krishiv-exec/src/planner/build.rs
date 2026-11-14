@@ -312,6 +312,9 @@ pub(crate) struct Planner<'a> {
     /// Nesting depth of the relations whose rows are never read (under a
     /// `LIMIT 0`): `observe` plans no node there.
     pub(super) unobserved: u32,
+    /// The rank the next observing node takes (`PhysNode::CollectMetrics::instance`), in plan
+    /// order.
+    pub(super) observers: u32,
 }
 
 impl<'a> Planner<'a> {
@@ -347,6 +350,7 @@ impl<'a> Planner<'a> {
             loops: HashMap::new(),
             moves: super::build_project::Moves::default(),
             unobserved: 0,
+            observers: 0,
         }
     }
 
@@ -796,7 +800,11 @@ impl<'a> Planner<'a> {
             }
             return Ok(Self::skip_rows(top, skip, n));
         }
-        let input = self.plan(input)?;
+        let mut input = self.plan(input)?;
+        // Spark counts the rows an observed relation was pulled for: the rows a limit above takes.
+        if let Some(total) = skip.checked_add(n) {
+            super::observe::cap_observed(&mut input.node, total);
+        }
         // Each partition keeps at most `skip + n` rows before the gather;
         // the skip applies only after it.
         let input = if input.placement.satisfies(Distribution::Single) {

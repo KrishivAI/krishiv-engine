@@ -13,6 +13,13 @@
 //!   forever, as Spark's does; [`Observation::get_timeout`] bounds the wait.
 //!   Before `observe` bound the handle it fails
 //!   (`KRISHIV_NO_OBSERVE_BEFORE_GET`; PySpark's `NO_OBSERVE_BEFORE_GET`).
+//! - **Blocking.** `get` waits on a condition variable: do not call it from async code on a
+//!   runtime thread (a current-thread runtime that also drives the action would deadlock); call
+//!   it from a plain thread, or after the action's future has been awaited.
+//! - A failed finalization of the metrics (a metric that raises) is what `get` returns as its
+//!   error, as Spark's `get` rethrows it.
+//! - **Counts follow Spark's** except where `docs/concepts/known-differences.md` lists a gap
+//!   (a `LIMIT` above a sort, an empty relation above the node).
 //! - The value is one row, a [`RecordBatch`] of one row whose columns are
 //!   the metrics, named as written (`count(1)`, `max(v)` when not aliased);
 //!   where the observed plan never ran its node (a `LIMIT 0` above it) the
@@ -34,8 +41,8 @@ enum State {
     Unbound,
     /// Bound; no action has finished.
     Waiting,
-    /// The first action finished.
-    Done(RecordBatch),
+    /// The first action finished, with the metrics or the error finalizing them raised.
+    Done(Result<RecordBatch, KrishivError>),
 }
 
 /// What the frames and the handle share.
@@ -72,13 +79,13 @@ impl Shared {
 
     /// An action finished: `row` is the metrics of the observed node, if it
     /// ran. Only the first action completes the observation.
-    pub(crate) fn complete(&self, row: Option<&RecordBatch>) {
+    pub(crate) fn complete(&self, row: Result<Option<&RecordBatch>, KrishivError>) {
         let mut state = self.lock();
         if matches!(*state, State::Waiting) {
-            *state = State::Done(
+            *state = State::Done(row.map(|row| {
                 row.cloned()
-                    .unwrap_or_else(|| RecordBatch::new_empty(Arc::new(Schema::empty()))),
-            );
+                    .unwrap_or_else(|| RecordBatch::new_empty(Arc::new(Schema::empty())))
+            }));
             self.done.notify_all();
         }
     }
@@ -120,10 +127,7 @@ impl Observation {
     /// An observation named by a fresh UUID (Spark's `Observation()`).
     #[must_use]
     pub fn new() -> Self {
-        // Unique within the process, which is all a plan's names need.
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Self::of(format!("observation-{n}"))
+        Self::of(crate::session::job_uuid())
     }
 
     /// An observation named `name` (Spark's `Observation(name)`): the name
@@ -164,7 +168,8 @@ impl Observation {
     /// without columns.
     ///
     /// # Errors
-    /// `KRISHIV_NO_OBSERVE_BEFORE_GET` when no frame was observed with it.
+    /// `KRISHIV_NO_OBSERVE_BEFORE_GET` when no frame was observed with it; the error that
+    /// finalizing the metrics raised.
     pub fn get(&self) -> Result<RecordBatch, KrishivError> {
         self.wait(None)?
             .ok_or_else(|| unreachable_wait(&self.shared.name))
@@ -190,7 +195,7 @@ impl Observation {
                     }
                     .into());
                 }
-                State::Done(row) => return Ok(Some(row.clone())),
+                State::Done(row) => return row.clone().map(Some),
                 State::Waiting => {}
             }
             state = match deadline {

@@ -436,6 +436,15 @@ pub enum PhysNode {
         name: String,
         /// The metrics' computation over the input's columns.
         measure: Box<PhysNode>,
+        /// The planner's rank of this node among the plan's observing
+        /// nodes, in plan order (Spark's `CollectMetricsExec.collect` lets
+        /// the last of a name win). Plan data, so every worker numbers the
+        /// instances alike.
+        instance: u32,
+        /// At most this many rows are folded: a `LIMIT` above (through
+        /// row-for-row operators only) takes no more, and Spark counts the
+        /// rows its consumer pulled.
+        limit: Option<u64>,
     },
     /// Each row of `input` `count` times (`INTERSECT ALL`, `EXCEPT ALL`).
     ReplicateRows {
@@ -1037,7 +1046,7 @@ plan_data!(enum PhysNode {
     Filter { input, layout, predicate, subqueries },
     Project { input, layout, items, nullable, subqueries },
     Limit { input, offset, limit },
-    CollectMetrics { input, name, measure },
+    CollectMetrics { input, name, measure, instance, limit },
     ReplicateRows { input, layout, count, subqueries },
     PythonEval { input, layout, calls },
     Generate { input, layout, kind, outer, arg, subqueries },
@@ -1161,6 +1170,7 @@ impl PhysNode {
     /// that is not a child (it reads no relation), listed for the codec and
     /// the feature scan.
     #[must_use]
+    #[doc(hidden)]
     pub fn measure(&self) -> Option<&PhysNode> {
         match self {
             Self::CollectMetrics { measure, .. } => Some(measure),

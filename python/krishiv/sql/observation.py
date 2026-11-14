@@ -68,7 +68,8 @@ class Observation:
 
     @property
     def name(self) -> str:
-        """The name keying the metrics in the plan (not in PySpark's public API; kept for the Connect translation)."""
+        """The name keying the metrics in the plan. A Krishiv extension: PySpark 4.2's ``Observation`` has only
+        ``get``."""
         return self._native.name
 
     @property

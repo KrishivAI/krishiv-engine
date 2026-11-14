@@ -226,9 +226,9 @@ pub struct QueryContext {
     /// The scans' decode working sets (`krishiv_io::ScanGate`), made on
     /// first use with a budget of a quarter of the query's memory limit.
     scan_gate: OnceLock<Arc<krishiv_io::ScanGate>>,
-    /// The partial states of each observation (`Dataset.observe`), by name
-    /// and instance (see [`Self::observe_partial`]).
-    observed: Mutex<BTreeMap<String, Vec<Observed>>>,
+    /// The partial states of each observing node (`Dataset.observe`), by name
+    /// and the planner's instance number (see [`Self::observe_partial`]).
+    observed: Mutex<BTreeMap<(String, u32), Observed>>,
     finished: AtomicBool,
     finished_event: Event,
     /// Blocking closures in flight; the query ends only once they have.
@@ -292,18 +292,14 @@ impl QueryContext {
         finalizer: &Arc<crate::aggregate::Finalizer>,
         states: arrow_array::RecordBatch,
     ) {
-        let mut all = lock(&self.observed);
-        let instances = all.entry(finalizer.name().to_owned()).or_default();
-        match instances
-            .iter_mut()
-            .find(|o| o.finalizer.instance() == finalizer.instance())
-        {
-            Some(o) => o.partials.push(states),
-            None => instances.push(Observed {
+        lock(&self.observed)
+            .entry((finalizer.name().to_owned(), finalizer.instance()))
+            .or_insert_with(|| Observed {
                 finalizer: Arc::clone(finalizer),
-                partials: vec![states],
-            }),
-        }
+                partials: Vec::new(),
+            })
+            .partials
+            .push(states);
     }
 
     /// The observations (`Dataset.observe`) of the query so far: each name's
@@ -315,15 +311,15 @@ impl QueryContext {
     ///
     /// # Errors
     /// A metric's own error (finalizing runs its expressions).
+    #[doc(hidden)]
     pub fn observed(&self) -> Result<BTreeMap<String, arrow_array::RecordBatch>> {
         let all = lock(&self.observed);
-        let mut out = BTreeMap::new();
-        for (name, instances) in all.iter() {
-            if let Some(last) = instances.iter().max_by_key(|o| o.finalizer.instance()) {
-                out.insert(name.clone(), last.finalizer.finalize(&last.partials)?);
-            }
-        }
-        Ok(out)
+        // Keys sort by name then instance: the last one of a name overwrites.
+        let last: BTreeMap<&String, &Observed> =
+            all.iter().map(|((name, _), o)| (name, o)).collect();
+        last.into_iter()
+            .map(|(name, o)| Ok((name.clone(), o.finalizer.finalize(&o.partials)?)))
+            .collect()
     }
 
     /// The query id.

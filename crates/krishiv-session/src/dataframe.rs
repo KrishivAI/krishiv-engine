@@ -33,6 +33,7 @@ mod fill_stream;
 mod geo_gate;
 mod observe;
 pub use observe::ObservedSink;
+pub(crate) use observe::{Observers, deliver};
 mod traced;
 
 pub(crate) use fill_stream::{CacheFill, FillKind};
@@ -1052,6 +1053,7 @@ impl DataFrame {
         if let Some(t) = text {
             env.set_text(t);
         }
+        env.observers = Arc::new(self.observers());
         let analysis = Arc::new(Analysis {
             env: Arc::new(env),
             analyzed: Arc::new(analyzed),

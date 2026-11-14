@@ -28,7 +28,7 @@ from krishiv.sql.column import Column, _literal, _named
 from krishiv.sql.functions import first as _first
 from krishiv.sql.group import GroupedData
 from krishiv.sql.na import _NO_VALUE, DataFrameNaFunctions
-from krishiv.sql.observation import Observation, _non_empty, _pyspark_error
+from krishiv.sql.observation import Observation, _pyspark_error
 from krishiv.sql.profile_view import ProfileView
 from krishiv.sql.row import Row
 from krishiv.sql.stat import DataFrameStatFunctions
@@ -440,10 +440,13 @@ class DataFrame:
             raise PySparkTypeError(
                 errorClass="NOT_LIST_OF_COLUMN", messageParameters={"arg_name": "exprs", "arg_type": "tuple"}
             )
-        if isinstance(observation, str):
-            _non_empty(observation)
-            observation = Observation(observation)
         try:
+            if isinstance(observation, str):
+                # The engine's analysis refuses an empty name (INVALID_OBSERVED_METRICS.MISSING_NAME, as
+                # classic Spark's string form does), so no client-side check here.
+                named = Observation.__new__(Observation)
+                named._native = _native.Observation(observation)
+                observation = named
             return self._new(self._df.observe(observation._native, [c._c for c in exprs]))
         except PySparkException as e:
             raise _pyspark_error(e) from e

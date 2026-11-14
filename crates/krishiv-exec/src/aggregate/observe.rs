@@ -15,10 +15,21 @@
 //!
 //! Two instances of one name in a plan (a self-join of an observed
 //! relation) do not add up: the last one's states are the observation's
-//! (Spark's `CollectMetricsExec.collect` keeps the last).
+//! (Spark's `CollectMetricsExec.collect` keeps the last). The rank of an
+//! instance is plan data (`PhysNode::CollectMetrics::instance`, set by the
+//! planner), so workers that each instantiate a part of the plan agree on it.
+//!
+//! A `LIMIT` above (through row-for-row operators) caps what is folded at the
+//! rows it takes (`limit`, one budget for the instance's drivers): Spark
+//! counts the rows its consumer pulled, not the batches a pull read. The
+//! states are charged to the query's memory pool through the driver's
+//! consumer, so a `collect_list` metric over a large input fails with
+//! `UNABLE_TO_ACQUIRE_MEMORY` instead of growing without bound.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use krishiv_memory::Reservation;
 
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
@@ -32,16 +43,12 @@ use crate::hash::HashSeed;
 use crate::operator::{LocalState, Operator, OperatorOutput};
 use crate::operators::{Project, local_mut};
 
-/// Orders the instances of a plan (instantiation is one thread, in plan
-/// order): the highest is the last in the plan.
-static INSTANCES: AtomicU64 = AtomicU64::new(0);
-
 /// Turns the partial states of one observation into its row.
 #[derive(Debug)]
 pub(crate) struct Finalizer {
     name: String,
     /// This instance's place among the plan's.
-    instance: u64,
+    instance: u32,
     /// Merges the states of the drivers and gives the aggregates' results.
     core: Arc<AggCore>,
     /// The metrics over those results, one column each.
@@ -55,7 +62,7 @@ impl Finalizer {
     }
 
     /// The instance's rank in its plan.
-    pub(crate) fn instance(&self) -> u64 {
+    pub(crate) fn instance(&self) -> u32 {
         self.instance
     }
 
@@ -84,6 +91,10 @@ pub(crate) struct CollectMetrics {
     /// The partial aggregate (no keys).
     core: Arc<AggCore>,
     finalizer: Arc<Finalizer>,
+    /// The rows a `LIMIT` above takes, if one does.
+    limit: Option<u64>,
+    /// Rows folded so far, over the instance's drivers (counts against `limit`).
+    taken: AtomicU64,
 }
 
 impl CollectMetrics {
@@ -91,8 +102,14 @@ impl CollectMetrics {
     /// arguments (`pre_schema`: its output, or `schema` without it),
     /// `partial` is the global aggregate's plan, `post` computes the
     /// metrics from its results.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the operator's plan data and builders"
+    )]
     pub(crate) fn try_new(
         name: &str,
+        instance: u32,
+        limit: Option<u64>,
         schema: SchemaRef,
         pre: Option<Arc<Project>>,
         partial: super::AggregateSpec,
@@ -109,7 +126,7 @@ impl CollectMetrics {
         let post = post(&merge.output_schema)?;
         let finalizer = Arc::new(Finalizer {
             name: name.to_owned(),
-            instance: INSTANCES.fetch_add(1, Ordering::Relaxed),
+            instance,
             core: merge,
             post,
         });
@@ -118,6 +135,8 @@ impl CollectMetrics {
             pre,
             core,
             finalizer,
+            limit,
+            taken: AtomicU64::new(0),
         }))
     }
 }
@@ -129,6 +148,11 @@ struct Local {
     finalizer: Arc<Finalizer>,
     partition: u32,
     sent: bool,
+    /// The table's bytes, charged to the driver's consumer.
+    reservation: Reservation,
+    /// The rows of the input batch being folded, when a retry after `NeedMemory` must not
+    /// claim them from the budget again.
+    claimed: Option<usize>,
 }
 
 impl Local {
@@ -153,6 +177,26 @@ impl Drop for Local {
     }
 }
 
+impl CollectMetrics {
+    /// How many of `rows` just read count: all, or what is left of the limit above's budget.
+    fn claim(&self, rows: usize) -> usize {
+        let Some(cap) = self.limit else {
+            return rows;
+        };
+        let mut got = 0;
+        // `try_update` retries the closure on contention, so `got` is the last attempt's.
+        let _ = self
+            .taken
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |taken| {
+                got = usize::try_from(cap.saturating_sub(taken))
+                    .unwrap_or(usize::MAX)
+                    .min(rows);
+                Some(taken.saturating_add(got as u64))
+            });
+        got
+    }
+}
+
 impl Operator for CollectMetrics {
     fn lane_safe(&self) -> bool {
         true
@@ -173,6 +217,8 @@ impl Operator for CollectMetrics {
             finalizer: Arc::clone(&self.finalizer),
             partition: ctx.partition(),
             sent: false,
+            reservation: ctx.consumer().reservation(),
+            claimed: None,
         }))
     }
 
@@ -181,16 +227,45 @@ impl Operator for CollectMetrics {
         if input.num_rows() == 0 {
             return Ok(OperatorOutput::NeedMoreInput(None));
         }
+        let take = match l.claimed {
+            Some(take) => take,
+            None => self.claim(input.num_rows()),
+        };
+        if take == 0 {
+            // A limit above has all the rows it takes: these are not counted.
+            return Ok(OperatorOutput::NeedMoreInput(Some(input.clone())));
+        }
+        l.claimed = Some(take);
+        let counted = if take < input.num_rows() {
+            Some(input.slice(0, take)?)
+        } else {
+            None
+        };
+        let seen = counted.as_ref().unwrap_or(input);
         let args;
         let folded = match &self.pre {
             Some(pre) => {
-                args = pre.project(input, l.partition)?;
+                args = pre.project(seen, l.partition)?;
                 &args
             }
-            None => input,
+            None => seen,
         };
         let p = l.table.prepare(folded, false)?;
+        let want = l.table.projected(&p);
+        let need = want.saturating_sub(l.reservation.size());
+        if need > 0 && l.reservation.try_grow(need).is_err() {
+            return Ok(OperatorOutput::NeedMemory { bytes: need });
+        }
         l.table.apply(&p)?;
+        l.claimed = None;
+        // A fold that outgrew its projection is charged now.
+        let keep = l.table.memory_size();
+        let over = keep.saturating_sub(l.reservation.size());
+        if over > 0 {
+            l.reservation.try_grow(over)?;
+        }
+        l.reservation
+            .shrink(l.reservation.size().saturating_sub(keep));
         Ok(OperatorOutput::NeedMoreInput(Some(input.clone())))
     }
 

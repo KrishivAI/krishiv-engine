@@ -1039,8 +1039,10 @@ impl Instantiation<'_> {
                 input,
                 name,
                 measure,
+                instance,
+                limit,
             } => self.with_subqueries(input, &[], |input, v| {
-                collect_metrics_op(name, measure, input, v)
+                collect_metrics_op(name, *instance, *limit, measure, input, v)
             }),
             PhysNode::ReplicateRows {
                 input,
@@ -1704,6 +1706,8 @@ pub(crate) fn expand_op(
 /// shape of `measure` is what `planner/observe.rs` makes.
 pub(crate) fn collect_metrics_op(
     name: &str,
+    instance: u32,
+    limit: Option<u64>,
     measure: &PhysNode,
     schema: &SchemaRef,
     v: &Values<'_>,
@@ -1730,8 +1734,13 @@ pub(crate) fn collect_metrics_op(
     else {
         return Err(bad());
     };
-    if !subqueries.is_empty()
-        || !plan.group_by.is_empty()
+    if !subqueries.is_empty() {
+        return Err(krishiv_common::error::KrishivUnsupportedFeature {
+            feature: "a subquery in an observed metric (Dataset.observe)".to_owned(),
+        }
+        .into());
+    }
+    if !plan.group_by.is_empty()
         || plan.output != AggregateOutput::Final
         || plan.distinct.iter().any(|d| *d)
     {
@@ -1759,6 +1768,8 @@ pub(crate) fn collect_metrics_op(
     let merge = final_of(&partial)?;
     CollectMetrics::try_new(
         name,
+        instance,
+        limit,
         Arc::clone(schema),
         pre,
         aggregate_spec(&pre_schema, &partial, v.env, None),

@@ -554,14 +554,16 @@ async fn produce(
     // metrics (a follow-up); until then the list is empty.
     metrics.metrics = Some(Metrics::default());
     sender.send(metrics).await?;
-    // The observed nodes' metrics follow the SQL metrics; a query that ended
-    // in an error never gets here, so it sends none.
+    // The observed nodes' metrics follow the SQL metrics, all in one response as Spark sends
+    // them; a query that ended in an error never gets here, so it sends none.
+    let mut all = Vec::new();
     for (name, row) in sink.take().unwrap_or_default() {
         let plan_id = plan_ids.get(&name).copied().unwrap_or(0);
+        all.push(observed::observed_metrics(&name, plan_id, &row)?);
+    }
+    if !all.is_empty() {
         let mut response = sender.response(None);
-        response
-            .observed_metrics
-            .push(observed::observed_metrics(&name, plan_id, &row)?);
+        response.observed_metrics = all;
         sender.send(response).await?;
     }
     if sender.op.reattachable() {
