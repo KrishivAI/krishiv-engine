@@ -14,12 +14,19 @@ use super::{
 };
 
 mod python;
-pub use python::{ARROW_MAX_RECORDS_PER_BATCH, PYTHON_UDF_ARROW_ENABLED, PYTHON_UDF_THREADS};
+pub use python::{
+    ARROW_MAX_RECORDS_PER_BATCH, PYTHON_UDF_ARROW_ENABLED, PYTHON_UDF_THREADS,
+    PYTHON_WORKER_ALLOW_FORK, PYTHON_WORKER_EXECUTABLES, PYTHON_WORKER_IDLE_TIMEOUT,
+    PYTHON_WORKER_MAX_PER_SESSION, PYTHON_WORKER_MAX_TOTAL, PYTHON_WORKER_MEMORY_LIMIT,
+    UDF_SANDBOX,
+};
 mod lakehouse;
 mod optimizer;
 mod result_cache;
 mod server;
-pub use lakehouse::{CATALOG_MAX_COLUMNS, CATALOG_MAX_METADATA_BYTES, DELTA_LOG_THREADS};
+pub use lakehouse::{
+    CATALOG_MAX_COLUMNS, CATALOG_MAX_METADATA_BYTES, CATALOG_REQUEST_TIMEOUT, DELTA_LOG_THREADS,
+};
 pub use optimizer::{
     EXPERIMENTAL_GROUP_KEY_CODE_FORCE, GROUP_KEY_CODE, LATE_PAYLOAD_JOIN, SHARE_REPEATED_SUBTREES,
     SUBQUERY_AS_WINDOW,
@@ -96,6 +103,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
     &SHARE_REPEATED_SUBTREES,
     &SPILL_DIR,
+    &WORKLOAD_RESOURCE_GROUPS_FILE,
     &SPILL_MAX_BYTES,
     &SPILL_COMPRESSION,
     &SPILL_ZSTD_LEVEL,
@@ -116,6 +124,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &DELTA_LOG_THREADS,
     &CATALOG_MAX_METADATA_BYTES,
     &CATALOG_MAX_COLUMNS,
+    &CATALOG_REQUEST_TIMEOUT,
     &IO_COALESCE_BYTES,
     &IO_COALESCE_WASTE_BYTES,
     &IO_COALESCE_WASTE_DIVISOR,
@@ -169,6 +178,13 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &ARROW_MAX_RECORDS_PER_BATCH,
     &PYTHON_UDF_ARROW_ENABLED,
     &PYTHON_UDF_THREADS,
+    &UDF_SANDBOX,
+    &PYTHON_WORKER_EXECUTABLES,
+    &PYTHON_WORKER_IDLE_TIMEOUT,
+    &PYTHON_WORKER_MAX_PER_SESSION,
+    &PYTHON_WORKER_MAX_TOTAL,
+    &PYTHON_WORKER_MEMORY_LIMIT,
+    &PYTHON_WORKER_ALLOW_FORK,
     &JOIN_ENUMERATOR,
     &JOIN_DP_LIMIT,
     &NDV_SAMPLING_ENABLED,
@@ -1828,3 +1844,19 @@ pub static SHARE_CTE_INSTANCES: ConfigEntry = ConfigEntry {
 
 mod index;
 pub use index::INDEX;
+
+/// `krishiv.workload.resourceGroups.file`.
+pub static WORKLOAD_RESOURCE_GROUPS_FILE: ConfigEntry = ConfigEntry {
+    key: "krishiv.workload.resourceGroups.file",
+    value_type: ValueType::String,
+    default: None,
+    doc: "Path of the resource group file (JSON in the shape of Trino's `resource-groups.json`, \
+          restricted to the subset Krishiv supports): the group tree, its concurrency, queue, \
+          per-query memory and scan limits, and the selectors that route a query to a group. Read when \
+          the engine starts; a malformed file stops the start with \
+          `KRISHIV_RESOURCE_GROUP_CONFIG_INVALID`. When unset, every query is admitted at once.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};

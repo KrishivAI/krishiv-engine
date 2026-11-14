@@ -1345,6 +1345,70 @@ fn late_payload_join_defaults_on_and_parses() {
 }
 
 #[test]
+fn python_worker_entries_parse_and_default() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        (
+            c.get(&UDF_SANDBOX)
+                .and_then(ConfigValue::as_str)
+                .map(str::to_owned),
+            c.get(&PYTHON_WORKER_EXECUTABLES)
+                .and_then(ConfigValue::as_str)
+                .map(str::to_owned),
+            c.get(&PYTHON_WORKER_IDLE_TIMEOUT)
+                .and_then(ConfigValue::as_duration),
+            c.get(&PYTHON_WORKER_MAX_PER_SESSION)
+                .and_then(ConfigValue::as_int),
+            c.get(&PYTHON_WORKER_MAX_TOTAL)
+                .and_then(ConfigValue::as_int),
+            c.get(&PYTHON_WORKER_MEMORY_LIMIT)
+                .and_then(ConfigValue::as_size),
+            c.get(&PYTHON_WORKER_ALLOW_FORK)
+                .and_then(ConfigValue::as_bool),
+        )
+    };
+    assert_eq!(
+        get(&c),
+        (
+            Some("on".into()),
+            Some("python3".into()),
+            Some(std::time::Duration::from_secs(60)),
+            Some(8),
+            Some(64),
+            Some(1 << 30),
+            Some(false)
+        )
+    );
+    c.set("krishiv.udf.sandbox", "OFF").unwrap();
+    c.set(
+        "krishiv.python.worker.executables",
+        "/opt/py311/bin/python3, /opt/py314/bin/python3",
+    )
+    .unwrap();
+    c.set("krishiv.python.worker.idleTimeout", "5min").unwrap();
+    c.set("krishiv.python.worker.maxPerSession", "2").unwrap();
+    c.set("krishiv.python.worker.maxTotal", "16").unwrap();
+    c.set("krishiv.python.worker.memoryLimit", "4g").unwrap();
+    c.set("krishiv.python.worker.sandbox.allowFork", "true")
+        .unwrap();
+    assert_eq!(
+        get(&c),
+        (
+            Some("off".into()),
+            Some("/opt/py311/bin/python3, /opt/py314/bin/python3".into()),
+            Some(std::time::Duration::from_secs(300)),
+            Some(2),
+            Some(16),
+            Some(4 << 30),
+            Some(true)
+        )
+    );
+    assert!(c.set("krishiv.udf.sandbox", "maybe").is_err());
+    assert!(c.set("krishiv.python.worker.maxPerSession", "0").is_err());
+    assert!(c.set("krishiv.python.worker.memoryLimit", "lots").is_err());
+}
+
+#[test]
 fn path_confinement_entries_default_to_empty_and_are_startup_only() {
     let mut c = Config::new();
     for entry in [&IO_LOCAL_ALLOWED_ROOTS, &IO_OBJECT_STORE_ALLOWED_PREFIXES] {
@@ -1475,6 +1539,23 @@ fn server_entries_parse_default_and_take_sparks_names() {
         SettableBy::Startup
     );
     assert_eq!(CONNECT_PORT.settable_by, SettableBy::Startup);
+}
+
+/// P3-T020b: one catalog request is bounded, 30 s by default, fixed at startup.
+#[test]
+fn the_catalog_request_timeout_defaults_parses_and_rejects() {
+    use std::time::Duration;
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        c.get(&CATALOG_REQUEST_TIMEOUT)
+            .and_then(ConfigValue::as_duration)
+    };
+    assert_eq!(get(&c), Some(Duration::from_secs(30)));
+    c.set("krishiv.catalog.requestTimeout", "5s").unwrap();
+    assert_eq!(get(&c), Some(Duration::from_secs(5)));
+    assert!(c.set("krishiv.catalog.requestTimeout", "soon").is_err());
+    assert_eq!(CATALOG_REQUEST_TIMEOUT.scope, Scope::Cluster);
+    assert_eq!(CATALOG_REQUEST_TIMEOUT.settable_by, SettableBy::Startup);
 }
 
 #[test]
