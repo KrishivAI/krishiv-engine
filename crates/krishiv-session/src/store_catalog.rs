@@ -29,9 +29,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    DataSourceNotFound, InternalError, KrishivError, LocationAlreadyExists, SchemaAlreadyExists,
-    SchemaNotEmpty, SchemaNotFound, TableOrViewAlreadyExists, TableOrViewNotFound,
-    UnsupportedFeatureCatalogOperation,
+    DataSourceNotFound, InternalError, KrishivError, LegacyErrorTemp1073, LocationAlreadyExists,
+    SchemaAlreadyExists, SchemaNotEmpty, SchemaNotFound, TableOrViewAlreadyExists,
+    TableOrViewNotFound, UnsupportedFeatureCatalogOperation,
 };
 use krishiv_common::names::check_column_name_duplication;
 use krishiv_plan::TableVersion;
@@ -660,16 +660,95 @@ impl CatalogWrite for StoreCatalog {
         })
     }
 
+    /// Renames a table within its namespace, as `ALTER TABLE .. RENAME TO` does: a table never changes namespace
+    /// (Spark's session catalog refuses it, so `rename_across_namespaces` is off). A managed table's directory moves
+    /// first, then the metadata; a failure in between puts the directory back and restores the entry. The move is
+    /// checked first (inside the warehouse, no link), and the entry swapped is the one that was checked.
     fn rename_table<'a>(
         &'a self,
         from: &'a TableIdent,
         to: &'a TableIdent,
     ) -> BoxFuture<'a, Result<(), KrishivError>> {
         Box::pin(async move {
-            // A managed table's directory moves with the rename, which `Session::rename_table` still does
-            // (log first, then the metadata, rolled back on failure); it moves here with the fold.
-            let _ = (from, to);
-            Err(self.unsupported("renaming a table"))
+            let (namespace, name) = self.table(from)?;
+            let (to_namespace, to_name) = self.table(to)?;
+            check_new_name(&to_namespace)?;
+            check_new_name(&to_name)?;
+            if !self.store.has_namespace(&to_namespace) {
+                return Err(SchemaNotFound {
+                    schema_name: format!("`{to_namespace}`"),
+                }
+                .into());
+            }
+            let table = self
+                .store
+                .table(&namespace, &name)
+                .ok_or_else(|| Self::not_found(from))?;
+            if table.view.is_some() {
+                return Err(self.unsupported("renaming a view as a table"));
+            }
+            if to_namespace != namespace {
+                return Err(LegacyErrorTemp1073 {
+                    db: namespace,
+                    new_db: to_namespace,
+                }
+                .into());
+            }
+            if self.store.table(&to_namespace, &to_name).is_some() {
+                return Err(TableOrViewAlreadyExists {
+                    relation_name: to.to_string(),
+                }
+                .into());
+            }
+            let mut renamed = (*table).clone();
+            renamed.namespace.clone_from(&to_namespace);
+            renamed.name.clone_from(&to_name);
+            let source_dir = deletable_dir(&table)?;
+            if table.managed {
+                renamed.location = managed_location(&self.warehouse, &to_namespace, &to_name);
+                renamed.root.clone_from(&self.warehouse);
+                // Partitions inside the table's directory move with it.
+                for p in &mut renamed.layout.partitions {
+                    if let Ok(rest) = p.location.strip_prefix(&table.location) {
+                        p.location = renamed.location.join(rest);
+                    }
+                }
+                if let (Some(source), Some(parent)) = (&source_dir, renamed.location.parent()) {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        internal(format!("cannot create {}: {e}", parent.display()))
+                    })?;
+                    std::fs::rename(source, &renamed.location).map_err(|e| {
+                        internal(format!(
+                            "cannot move {} to {}: {e}",
+                            source.display(),
+                            renamed.location.display()
+                        ))
+                    })?;
+                }
+            }
+            let moved_to = renamed.location.clone();
+            let put_back = |dir_moved: bool| {
+                if dir_moved && let Some(source) = &source_dir {
+                    let _ = std::fs::rename(&moved_to, source);
+                }
+            };
+            let dir_moved = table.managed && source_dir.is_some();
+            // The entry that was checked, and no other.
+            if self.store.drop_table_entry(&table).is_none() {
+                put_back(dir_moved);
+                return Err(concurrent(from));
+            }
+            if let Err(e) = self
+                .store
+                .create_table(renamed, StoreCreateMode::ErrorIfExists)
+            {
+                let _ = self
+                    .store
+                    .create_table((*table).clone(), StoreCreateMode::Replace);
+                put_back(dir_moved);
+                return Err(e);
+            }
+            Ok(())
         })
     }
 }
@@ -1489,10 +1568,169 @@ mod tests {
         assert!(c.store.table("db", "t").unwrap().comment.is_none());
     }
 
+    fn rename(c: &StoreCatalog, from: &str, to: &str) -> Result<(), KrishivError> {
+        block_on(c.rename_table(&ident("db", from), &ident("db", to)))
+    }
+
     #[test]
-    fn a_rename_is_refused_until_the_directory_move_is_folded_in() {
+    fn a_renamed_managed_table_keeps_its_files_columns_partitions_and_comments() {
         let f = fixture();
-        let e = block_on(f.catalog.rename_table(&ident("db", "a"), &ident("db", "b"))).unwrap_err();
+        let c = &f.catalog;
+        block_on(c.create_namespace(&ns("db"), NamespaceInfo::default())).unwrap();
+        let mut commented = info("db", "old");
+        commented.comment = Some("hello".into());
+        block_on(c.create_table(commented, CreateMode::ErrorIfExists)).unwrap();
+        let from_dir = managed_location(f.warehouse.path(), "db", "old");
+        let partition = from_dir.join("p=1");
+        std::fs::create_dir_all(&partition).unwrap();
+        std::fs::write(partition.join("part-0.parquet"), b"x").unwrap();
+        // The table tracks the partition it has, under its own directory.
+        let current = c.store.table("db", "old").unwrap();
+        let mut with_partition = (*current).clone();
+        with_partition
+            .layout
+            .partitions
+            .push(crate::store::CatalogPartition {
+                spec: vec![("p".to_owned(), "1".to_owned())],
+                location: partition,
+                parameters: BTreeMap::new(),
+                created_ms: 0,
+                stats: None,
+            });
+        assert!(c.store.replace_table(&current, with_partition));
+        let before = load(c, &ident("db", "old")).unwrap();
+        let epoch = c.epoch();
+
+        rename(c, "OLD", "new").unwrap();
+
+        assert!(c.epoch() > epoch, "a rename bumps the epoch");
+        assert!(
+            load(c, &ident("db", "old")).is_none(),
+            "the old name is gone"
+        );
+        let after = load(c, &ident("db", "new")).unwrap();
+        assert_eq!(after.columns, before.columns, "the same columns");
+        assert_ne!(
+            after.version, before.version,
+            "a renamed entry is a new version"
+        );
+        let to_dir = managed_location(f.warehouse.path(), "db", "new");
+        assert!(!from_dir.exists());
+        assert!(
+            to_dir.join("p=1").join("part-0.parquet").exists(),
+            "the files moved"
+        );
+        let moved = c.store.table("db", "new").unwrap();
+        assert_eq!(moved.location, to_dir);
+        assert_eq!(moved.layout.partitions[0].location, to_dir.join("p=1"));
+        assert_eq!(moved.layout.partition_columns, ["p"]);
+        assert_eq!(moved.comment.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn an_external_tables_data_stays_where_it_is() {
+        let f = fixture();
+        let c = &f.catalog;
+        block_on(c.create_namespace(&ns("db"), NamespaceInfo::default())).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let mut external = info("db", "ext");
+        external.location = Some(outside.path().display().to_string());
+        block_on(c.create_table(external, CreateMode::ErrorIfExists)).unwrap();
+        std::fs::write(outside.path().join("f"), b"x").unwrap();
+        rename(c, "ext", "moved").unwrap();
+        assert!(outside.path().join("f").exists());
+        let t = c.store.table("db", "moved").unwrap();
+        assert!(!t.managed);
+        assert_eq!(t.location, outside.path());
+    }
+
+    #[test]
+    fn a_rename_the_session_catalog_refuses_is_refused_with_its_class() {
+        let f = fixture();
+        let c = &f.catalog;
+        block_on(c.create_namespace(&ns("db"), NamespaceInfo::default())).unwrap();
+        block_on(c.create_namespace(&ns("other"), NamespaceInfo::default())).unwrap();
+        block_on(c.create_table(info("db", "a"), CreateMode::ErrorIfExists)).unwrap();
+        block_on(c.create_table(info("db", "b"), CreateMode::ErrorIfExists)).unwrap();
+        let a_dir = managed_location(f.warehouse.path(), "db", "a");
+        let epoch = c.epoch();
+
+        let exists = rename(c, "a", "b").unwrap_err();
+        assert_eq!(class(&exists), ErrorClass::TableOrViewAlreadyExists);
+        let missing = rename(c, "nope", "z").unwrap_err();
+        assert_eq!(class(&missing), ErrorClass::TableOrViewNotFound);
+        for bad in ["..", "a b", ""] {
+            let e = rename(c, "a", bad).unwrap_err();
+            assert!(
+                matches!(
+                    class(&e),
+                    ErrorClass::InvalidAttributeNameSyntax
+                        | ErrorClass::InvalidSchemaOrRelationName
+                ),
+                "{bad:?}: {e}"
+            );
+        }
+        // A table never changes namespace (Spark's session catalog, `_LEGACY_ERROR_TEMP_1073`).
+        let across = block_on(c.rename_table(&ident("db", "a"), &ident("other", "a"))).unwrap_err();
+        assert_eq!(class(&across), ErrorClass::LegacyErrorTemp1073);
+        let no_ns = block_on(c.rename_table(&ident("db", "a"), &ident("nope", "a"))).unwrap_err();
+        assert_eq!(class(&no_ns), ErrorClass::SchemaNotFound);
+        assert!(!c.capabilities().rename_across_namespaces);
+
+        assert_eq!(c.epoch(), epoch, "nothing changed");
+        assert!(a_dir.is_dir() && c.store.table("db", "a").is_some());
+    }
+
+    /// The target directory is in the way: the move fails before any metadata changes and nothing is lost.
+    #[test]
+    fn a_rename_whose_files_cannot_move_changes_nothing() {
+        let f = fixture();
+        let c = &f.catalog;
+        block_on(c.create_namespace(&ns("db"), NamespaceInfo::default())).unwrap();
+        block_on(c.create_table(info("db", "a"), CreateMode::ErrorIfExists)).unwrap();
+        let from_dir = managed_location(f.warehouse.path(), "db", "a");
+        std::fs::write(from_dir.join("f"), b"x").unwrap();
+        let target = managed_location(f.warehouse.path(), "db", "z");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("other-statements-file"), b"x").unwrap();
+        let before = load(c, &ident("db", "a")).unwrap();
+
+        let e = rename(c, "a", "z").unwrap_err();
+
+        assert_eq!(class(&e), ErrorClass::InternalError);
+        assert!(e.to_string().contains("cannot move"), "{e}");
+        assert!(
+            from_dir.join("f").exists(),
+            "the source files are where they were"
+        );
+        assert!(
+            target.join("other-statements-file").exists(),
+            "and the other directory is untouched"
+        );
+        assert_eq!(load(c, &ident("db", "a")).unwrap(), before);
+        assert!(load(c, &ident("db", "z")).is_none());
+    }
+
+    #[test]
+    fn a_view_is_not_renamed_as_a_table_and_a_changed_table_is_a_retry() {
+        let f = fixture();
+        let c = &f.catalog;
+        block_on(c.create_namespace(&ns("db"), NamespaceInfo::default())).unwrap();
+        block_on(c.create_table(info("db", "v"), CreateMode::ErrorIfExists)).unwrap();
+        let current = c.store.table("db", "v").unwrap();
+        let mut view = (*current).clone();
+        view.view = Some(crate::store::ViewDef {
+            sql: "SELECT 1".into(),
+            namespace: "db".into(),
+            path: Vec::new(),
+            query_columns: Vec::new(),
+            identifier_spans: Vec::new(),
+            written: "SELECT 1".into(),
+            schema_mode: None,
+        });
+        assert!(c.store.replace_table(&current, view));
+        let e = rename(c, "v", "w").unwrap_err();
         assert_eq!(class(&e), ErrorClass::UnsupportedFeatureCatalogOperation);
+        assert!(c.store.table("db", "v").is_some());
     }
 }
