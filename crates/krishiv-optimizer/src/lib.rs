@@ -54,6 +54,7 @@ mod constraints;
 mod cse;
 mod dag;
 mod eager;
+mod empty;
 mod estimate;
 mod expr;
 mod fold;
@@ -106,10 +107,11 @@ pub const MAX_ITERATIONS: usize = 100;
 type Rule = fn(Arc<LogicalPlan>) -> Arc<LogicalPlan>;
 
 /// The rewrite batch, in order, with the rules' names.
-const REWRITE: [(&str, Rule); 7] = [
+const REWRITE: [(&str, Rule); 8] = [
     ("RemoveAlias", project::remove_alias),
     ("CollapseRepartition", repartition::collapse),
     ("ConstantFolding", fold_node),
+    ("PruneObservedEmpty", empty::prune),
     ("PushDownFilter", pushdown::push_filter),
     ("PushDownJoinCondition", pushdown::push_join_condition),
     ("CollapseProject", project::collapse),

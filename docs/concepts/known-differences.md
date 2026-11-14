@@ -271,8 +271,12 @@ counted are the first the racing drivers hand over (Spark's are partition 0's: a
 - **ANSI `sum` overflow:** Spark's metric aggregate returns the saturated `9223372036854775807` for a long
   `sum` that overflows under ANSI; the engine raises `ARITHMETIC_OVERFLOW`. With ANSI off both wrap.
 - **Scalar subquery in a metric:** Spark runs it; the engine refuses it with `KRISHIV_UNSUPPORTED_FEATURE`.
-- **Empty relation above:** `observe(..).where(false)` (Spark prunes the node; `{}`) counts the rows read.
-  Only `LIMIT 0` prunes. Streaming frames are not refused as Spark refuses them.
+- **Empty relation above:** a relation proven empty (a filter that folds to `false` or NULL, `LIMIT 0`, and what
+  Spark's `PropagateEmptyRelation` carries that through: project, sort, keyed aggregate, inner or semi join with an
+  empty side, a union of empties, ...) drops the observed nodes inside it, as Spark does (`{}`); an empty input below the
+  node, an outer join's preserved side and a union with a live branch keep it (`n = 0`). Not matched: a cached frame
+  (`observe(..).cache().where(false)`: the engine fills the cache before the filter prunes it) and `sample` (not supported).
+  Spark's classic Python `get` raises a JVM `AssertionError` for a pruned node (an upstream defect); the engine returns `{}` as Connect does.
 - **Connect:** struct, map and interval metric values are refused when the server builds the
   `ObservedMetrics` literal (after the rows were sent); a name with no plan id reports `plan_id` 0.
 - **Cancelled actions:** a dropped result stream completes the observation with `{}` or the rows

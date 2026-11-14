@@ -76,6 +76,16 @@ const KNOWN_GAPS: &[(&str, &str)] = &[
 /// what depends on which of the parallel drivers' rows a `LIMIT` takes).
 const SUBSET_METRICS: &[&str] = &["limit_big_range"];
 
+/// The follow-up fixture (`observe-goldens-followup.json`, P3-T084c): section `section`, leg `leg`.
+fn followup(leg: &str, section: &str) -> Value {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/spark-4.2.0/observe-goldens-followup.json"
+    );
+    let all: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    all[leg][section].clone()
+}
+
 fn fixture() -> Value {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -781,4 +791,187 @@ fn classic_goldens_match_spark() {
         fixed.is_empty(),
         "these known gaps now match Spark: remove them from KNOWN_GAPS: {fixed:?}"
     );
+}
+
+// ---- proven-empty shapes (`empty_shapes`, P3-T084c) ----
+
+/// `range(0, 6)` as `v`, in two partitions (the generator's `base3`).
+fn base3(s: &Session) -> DataFrame {
+    s.range(0, 6, 1, Some(2)).select_expr(["id as v"]).unwrap()
+}
+
+fn never(df: &DataFrame) -> DataFrame {
+    df.filter_expr("false").unwrap()
+}
+
+/// `build(observed base3)` run with `count()`; or `build` given the unobserved frame when the
+/// case observes inside (`inside`).
+fn empty_run(s: &Session, build: impl FnOnce(&DataFrame) -> DataFrame) -> Value {
+    let o = Observation::named("m").unwrap();
+    let observed = base3(s).observe(&o, [n()]).unwrap();
+    let result = counted(&build(&observed));
+    merged(json!({"action_result": result}), got(&o))
+}
+
+fn empty_inside(_s: &Session, inner: &DataFrame) -> Value {
+    let o = Observation::named("m").unwrap();
+    let observed = inner.observe(&o, [n()]).unwrap();
+    merged(json!({"action_result": counted(&observed)}), got(&o))
+}
+
+fn empty_cases() -> Vec<(&'static str, Case)> {
+    vec![
+        ("where_lit_false_above", |s| {
+            empty_run(s, |d| d.filter(lit(false)))
+        }),
+        ("where_false_sql_above", |s| empty_run(s, never)),
+        ("where_lit_null_above", |s| {
+            empty_run(s, |d| d.filter(e("cast(null as boolean)")))
+        }),
+        ("where_1_eq_0_above", |s| {
+            empty_run(s, |d| d.filter_expr("1 = 0").unwrap())
+        }),
+        ("where_contradiction_above", |s| {
+            empty_run(s, |d| d.filter_expr("v > 5 and v < 0").unwrap())
+        }),
+        ("where_v_null_and_notnull_above", |s| {
+            empty_run(s, |d| d.filter_expr("v is null and v is not null").unwrap())
+        }),
+        ("where_lit_false_below", |s| {
+            empty_inside(s, &never(&base3(s)))
+        }),
+        ("limit0_above", |s| empty_run(s, |d| d.limit(0))),
+        ("limit0_below", |s| empty_inside(s, &base3(s).limit(0))),
+        ("filter_false_then_limit", |s| {
+            empty_run(s, |d| never(d).limit(5))
+        }),
+        ("two_step_filter_false", |s| {
+            empty_run(s, |d| never(&d.filter_expr("v > 1").unwrap()))
+        }),
+        ("project_where_false_above", |s| {
+            empty_run(s, |d| never(&d.select_expr(["v + 1 as w"]).unwrap()))
+        }),
+        ("sort_where_false_above", |s| {
+            empty_run(s, |d| never(&d.order_by([col("v")])))
+        }),
+        ("groupby_where_false_above", |s| {
+            empty_run(s, |d| never(d).group_by([col("v")]).agg([count(lit(1))]))
+        }),
+        ("global_agg_where_false_above", |s| {
+            empty_run(s, |d| never(d).agg([count(lit(1)).alias("c")]))
+        }),
+        ("inner_join_empty_local", |s| {
+            empty_run(s, |d| {
+                d.join_using(&never(&base3(s)), ["v"], JoinType::Inner)
+            })
+        }),
+        ("inner_join_filtered_empty", |s| {
+            empty_run(s, |d| {
+                d.join_using(&never(&base3(s)), ["v"], JoinType::Inner)
+            })
+        }),
+        ("left_join_empty_right", |s| {
+            empty_run(s, |d| {
+                d.join_using(&never(&base3(s)), ["v"], JoinType::LeftOuter)
+            })
+        }),
+        ("right_join_empty_left_observed", |s| {
+            let o = Observation::named("m").unwrap();
+            let observed = base3(s).observe(&o, [n()]).unwrap();
+            let df = never(&base3(s)).join_using(&observed, ["v"], JoinType::RightOuter);
+            merged(json!({"action_result": counted(&df)}), got(&o))
+        }),
+        ("left_semi_empty_right", |s| {
+            empty_run(s, |d| {
+                d.join_using(&never(&base3(s)), ["v"], JoinType::LeftSemi)
+            })
+        }),
+        ("left_anti_empty_right", |s| {
+            empty_run(s, |d| {
+                d.join_using(&never(&base3(s)), ["v"], JoinType::LeftAnti)
+            })
+        }),
+        ("union_with_empty", |s| {
+            empty_run(s, |d| d.union(&never(&base3(s))))
+        }),
+        ("union_empty_first", |s| {
+            let o = Observation::named("m").unwrap();
+            let observed = base3(s).observe(&o, [n()]).unwrap();
+            let df = never(&base3(s)).union(&observed);
+            merged(json!({"action_result": counted(&df)}), got(&o))
+        }),
+        ("union_both_empty_above", |s| {
+            empty_run(s, |d| never(d).union(&never(&base3(s))))
+        }),
+        ("intersect_empty", |s| {
+            empty_run(s, |d| d.intersect(&never(&base3(s))))
+        }),
+        ("except_empty_right", |s| {
+            empty_run(s, |d| d.except_all(&never(&base3(s))))
+        }),
+        ("sample_fraction0", |s| {
+            empty_run(s, |d| d.sample(false, 0.0, 1))
+        }),
+        ("collect_empty_pruned", |s| {
+            let o = Observation::named("m").unwrap();
+            let observed = base3(s).observe(&o, [n()]).unwrap();
+            block_on(never(&observed).collect()).unwrap();
+            got(&o)
+        }),
+        ("cache_then_where_false", |s| {
+            empty_run(s, |d| never(&d.cache()))
+        }),
+    ]
+}
+
+/// Empty shapes the engine does not prune like Spark yet (each must still fail).
+const EMPTY_GAPS: &[(&str, &str)] = &[
+    (
+        "sample_fraction0",
+        "the engine has no DataFrame.sample (KRISHIV_UNSUPPORTED_FEATURE)",
+    ),
+    (
+        "cache_then_where_false",
+        "the engine fills a cache entry (running the observed plan) before the filter prunes it; Spark's cache substitution comes first and the node is pruned with the empty relation",
+    ),
+];
+
+#[test]
+fn empty_shapes_match_spark() {
+    // Classic Spark raises an AssertionError in `get` for a pruned node (an upstream defect);
+    // Connect returns `{}`, which is what the engine returns: the Connect leg is the reference.
+    let want = followup("connect", "empty_shapes");
+    let mut failures = Vec::new();
+    let mut fixed = Vec::new();
+    for (name, case) in empty_cases() {
+        let expected = &want[name];
+        let mut exp = json!({"get": expected["get"], "metrics": expected["metrics"]});
+        if expected["action"].is_number() {
+            exp["action_result"] = expected["action"].clone();
+        }
+        let gap = EMPTY_GAPS.iter().any(|(g, _)| *g == name);
+        match (outcome_of(name, case, &exp), gap) {
+            (Err(why), false) => failures.push(why),
+            (Ok(()), true) => fixed.push(name),
+            _ => {}
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert!(fixed.is_empty(), "remove from EMPTY_GAPS: {fixed:?}");
+}
+
+/// `outcome`, comparing the action's count only where the fixture has one (a collect's rows are not).
+fn outcome_of(name: &str, case: Case, want: &Value) -> Result<(), String> {
+    let mut got =
+        std::panic::catch_unwind(|| case(&session())).map_err(|_| format!("{name}: panicked"))?;
+    if want.get("action_result").is_none()
+        && let Some(o) = got.as_object_mut()
+    {
+        o.remove("action_result");
+    }
+    if matches(&got, want, false, "") {
+        Ok(())
+    } else {
+        Err(format!("{name}: got {got}\n   want {want}"))
+    }
 }
