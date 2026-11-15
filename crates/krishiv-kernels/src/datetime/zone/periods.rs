@@ -174,6 +174,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "builds the table of every zone in the database, hours under miri"
+    )]
     fn table_matches_jiff_in_every_zone() {
         let names = jiff::tz::db().available();
         let mut zones = 0;

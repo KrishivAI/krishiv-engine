@@ -74,7 +74,7 @@ mod periods;
 /// A zone of the bundled database with its offsets from 1900 to 2100 as a
 /// table, built on first use and shared by clones (the zone cache of
 /// [`resolve_zone`] is per thread, so per resolving thread), so per-row offset
-/// lookups are a binary search ([`periods`]). Dereferences to the `jiff`
+/// lookups are a binary search (module `periods`). Dereferences to the `jiff`
 /// zone.
 #[derive(Debug, Clone)]
 pub struct Region {
