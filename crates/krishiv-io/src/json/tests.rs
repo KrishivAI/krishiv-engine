@@ -36,7 +36,7 @@ use crate::options::FormatOptions;
 use crate::request::{ROW_INDEX_COLUMN, ScanRequest};
 use crate::text::TextMetadata;
 
-fn options(map: &serde_json::Value) -> FormatOptions {
+pub(super) fn options(map: &serde_json::Value) -> FormatOptions {
     let mut user = BTreeMap::new();
     if let Some(m) = map.as_object() {
         for (k, v) in m {
@@ -188,7 +188,7 @@ fn read_split(
     }
 }
 
-fn read(
+pub(super) fn read(
     bytes: &[u8],
     o: &FormatOptions,
     req: &ScanRequest,
@@ -212,7 +212,7 @@ fn row_indexed(schema: &SchemaRef) -> ScanRequest {
     req
 }
 
-fn classes_of(e: &KrishivError) -> Vec<ErrorClass> {
+pub(super) fn classes_of(e: &KrishivError) -> Vec<ErrorClass> {
     std::iter::once(e)
         .chain(e.causes())
         .map(KrishivError::error_class)
@@ -244,7 +244,7 @@ fn in_memory_file(bytes: &[u8], name: &str) -> (Arc<IoScheduler>, FileRef) {
     (sched, file)
 }
 
-fn infer(bytes: &[u8], o: &FormatOptions) -> Result<SchemaRef, KrishivError> {
+pub(super) fn infer(bytes: &[u8], o: &FormatOptions) -> Result<SchemaRef, KrishivError> {
     infer_named(bytes, "f.json", o)
 }
 
@@ -312,9 +312,12 @@ fn tokenizer_reads_flat_values() {
         )
     );
     assert_eq!(o.fields[6], ("u".to_owned(), JVal::Str("é☃".to_owned())));
-    assert!(matches!(o.fields[7].1, JVal::Nested(_)));
-    assert!(matches!(o.fields[8].1, JVal::Nested(_)));
-    assert!(matches!(o.fields[9].1, JVal::Nested(_)));
+    // Nested values carry their members and their span in the record.
+    let line = r#"{"n":null,"t":true,"f":false,"i":-12,"d":1.5e3,"s":"a\"b\\c\/d\be\ff\ng\rh\ti","u":"é☃","e":{},"a":[1],"z":{} }"#;
+    assert!(matches!(&o.fields[7].1, JVal::Object(m, sp) if m.is_empty() && sp.text(line) == "{}"));
+    assert!(matches!(&o.fields[8].1, JVal::Array(items, sp)
+        if items == &[JVal::Num("1".to_owned(), false)] && sp.text(line) == "[1]"));
+    assert!(matches!(&o.fields[9].1, JVal::Object(m, _) if m.is_empty()));
     // Surrogate pairs and lone surrogates.
     let top = parse_line(r#"{"s":"Aß𝄞"}"#, s).expect("surrogates");
     let Top::Object(o) = top else {
@@ -324,13 +327,17 @@ fn tokenizer_reads_flat_values() {
     assert!(parse_line("{\"s\":\"\\uD83D\"}", s).is_err());
     assert!(parse_line("{\"s\":\"\\uDE00\"}", s).is_err());
     assert!(parse_line("{\"s\":\"\\u12\"}", s).is_err());
-    // Duplicates: the last wins.
+    // Duplicates are kept as written (a read takes the last; a map keeps
+    // both).
     let Top::Object(o) = parse_line(r#"{"a":1,"a":2}"#, s).expect("dup") else {
         panic!("object")
     };
     assert_eq!(
         o.fields,
-        vec![("a".to_owned(), JVal::Num("2".to_owned(), false))]
+        vec![
+            ("a".to_owned(), JVal::Num("1".to_owned(), false)),
+            ("a".to_owned(), JVal::Num("2".to_owned(), false))
+        ]
     );
     // Empty objects and blank input.
     assert!(matches!(
@@ -338,9 +345,16 @@ fn tokenizer_reads_flat_values() {
         Ok(Top::Object(o)) if o.fields.is_empty()
     ));
     assert!(parse_line("  ", s).is_err());
-    // Trailing text and structural defects are malformed.
+    // Text after a line's value is never read, as in Spark
+    // (`golden_tests`: "text after a record").
+    for ok in [r#"{"a":1} {"b":2}"#, r#"{"a":1}x"#, r#"{"a":1},"#] {
+        assert!(
+            matches!(parse_line(ok, s), Ok(Top::Object(o)) if o.fields.len() == 1),
+            "{ok:?}"
+        );
+    }
+    // Structural defects are malformed.
     for bad in [
-        r#"{"a":1} {"b":2}"#,
         r#"{"a":1,}"#,
         r#"{"a"}"#,
         r#"{"a":}"#,
@@ -351,16 +365,15 @@ fn tokenizer_reads_flat_values() {
         r#"{"a":1e}"#,
         r#"{"a":t}"#,
         r#"{"a":nul}"#,
-        r#"{"a":1}x"#,
         r#"{"a":"x"#,
         r#"{"a":'x'}"#,
         "{a:1}",
     ] {
         assert!(parse_line(bad, s).is_err(), "{bad:?} is malformed");
     }
-    // Top-level arrays and scalars parse (the decoder treats them as
-    // malformed records, not tokenizer failures).
-    assert!(matches!(parse_line("[1]", s), Ok(Top::Other(_))));
+    // Top-level arrays and scalars parse (the decoder reads an array's
+    // objects as rows and treats anything else as a malformed record).
+    assert!(matches!(parse_line("[1]", s), Ok(Top::Array(_))));
     assert!(matches!(parse_line("42", s), Ok(Top::Other(_))));
 }
 
@@ -475,7 +488,7 @@ fn parse_modes_and_the_corrupt_column() {
             ErrorClass::MalformedRecordInParsingWithoutSuggestion,
         ]
     );
-    // A value that cannot convert fails the same way.
+    // A value of the wrong token fails the same way, with its cause.
     let e = read(
         b"{\"a\":\"bad\"}\n",
         &o,
@@ -487,6 +500,7 @@ fn parse_modes_and_the_corrupt_column() {
         [
             ErrorClass::FailedReadFileNoHint,
             ErrorClass::MalformedRecordInParsingWithoutSuggestion,
+            ErrorClass::CannotParseJsonField,
         ]
     );
     // A value of the wrong kind carries its classified cause.
@@ -517,10 +531,45 @@ fn parse_modes_and_the_corrupt_column() {
 }
 
 #[test]
+fn a_top_level_array_reads_one_batch_at_a_time() {
+    // One record holding more rows than a batch: its rows go out over
+    // several steps, never as one oversized batch; a partial array keeps
+    // every row with the record's text.
+    let n = crate::text::BATCH_ROWS * 2 + 5;
+    let mut text = String::from("[");
+    for i in 0..n {
+        if i > 0 {
+            text.push(',');
+        }
+        text.push_str(&format!("{{\"a\":{i}}}"));
+    }
+    text.push_str("]\n{\"a\":-1}\n");
+    let schema = ddl("a int, _corrupt_record string");
+    let o = options(&serde_json::json!({}));
+    let got = read(text.as_bytes(), &o, &ScanRequest::all(Arc::clone(&schema))).expect("read");
+    assert!(got.iter().all(|b| b.num_rows() <= crate::text::BATCH_ROWS));
+    let rows = rows_of(&got);
+    assert_eq!(rows.len(), n + 1);
+    assert_eq!(
+        rows[n - 1][0].as_deref(),
+        Some(format!("{}", n - 1).as_str())
+    );
+    assert_eq!(rows[n], [Some("-1".to_owned()), None]);
+    let partial = "[{\"a\":\"bad\"},{\"a\":1}]\n";
+    let got = read(partial.as_bytes(), &o, &ScanRequest::all(schema)).expect("partial");
+    assert_eq!(
+        rows_of(&got),
+        [
+            vec![None, Some(partial.trim_end().to_owned())],
+            vec![Some("1".to_owned()), Some(partial.trim_end().to_owned())],
+        ]
+    );
+}
+
+#[test]
 fn top_level_arrays_and_scalars_are_malformed() {
     use ErrorClass::{
         FailedReadFileNoHint as NoHint, InvalidJsonRootField as Root,
-        MalformedRecordInParsingCannotParseJsonArraysAsStructs as Arrays,
         MalformedRecordInParsingWithoutSuggestion as Without,
     };
     let schema = ddl("a int, _corrupt_record string");
@@ -536,9 +585,13 @@ fn top_level_arrays_and_scalars_are_malformed() {
         ]
     );
     let fail = options(&serde_json::json!({"mode": "FAILFAST"}));
+    // Spark classifies no cause for these; only a `null` root is
+    // INVALID_JSON_ROOT_FIELD (`golden_tests` holds every mode).
     let e = read(b"[1,2]\n", &fail, &req).expect_err("array");
-    assert_eq!(classes_of(&e), [NoHint, Without, Arrays]);
+    assert_eq!(classes_of(&e), [NoHint, Without]);
     let e = read(b"42\n", &fail, &req).expect_err("scalar");
+    assert_eq!(classes_of(&e), [NoHint, Without]);
+    let e = read(b"null\n", &fail, &req).expect_err("null");
     assert_eq!(classes_of(&e), [NoHint, Without, Root]);
     let drop = options(&serde_json::json!({"mode": "DROPMALFORMED"}));
     let got = read(b"[1,2]\n{\"a\":1}\n", &drop, &req).expect("read");
@@ -583,35 +636,33 @@ fn all_flat_types_read() {
             Some("2020-01-02T03:04:05.123456+00:00".into()),
         ]
     );
-    assert_eq!(rows[1][0], Some("true".into()));
+    // Each type reads only its own JSON tokens (Spark's JacksonParser): a
+    // string is never a boolean or an integer, but `NaN`/`Infinity` strings
+    // are doubles; a number in a string column is its text.
+    assert_eq!(rows[1][0], None);
+    assert_eq!(rows[1][1], None);
     assert_eq!(rows[1][5], Some("NaN".into()));
     assert_eq!(rows[1][6], Some("Infinity".into()));
+    assert_eq!(rows[1][7], Some("1.00".into()));
     assert_eq!(rows[1][9], Some("3".into()));
     assert_eq!(rows[1][10], None);
-    // Numeric `1` reads as boolean `true`; `1.0` never reads as an integer:
-    // the record is malformed in every mode.
-    assert_eq!(rows[2][0], Some("true".into()));
+    // A number is never a boolean, a boolean never an integer, and `1.0`
+    // never an integer.
+    assert_eq!(rows[2][0], None);
+    assert_eq!(rows[2][1], None);
     assert_eq!(rows[2][3], None);
-    assert_eq!(rows[2][1], Some("1".into()));
 }
 
 #[test]
 fn boolean_strings_and_numbers_follow_spark_rules() {
-    // Only `true`/`false` (any case) read as booleans: anything else is a
-    // malformed record, as in the CSV converter and Spark's JacksonParser.
-    // Numbers read as `!= 0` (`NaN` reads `true`, as `NaN != 0` in Java).
+    // Only the JSON tokens `true` and `false` read as booleans (Spark
+    // 4.2's JacksonParser; `tests/fixtures/spark-4.2.0/json.json`): strings
+    // and numbers are malformed records.
     let schema = ddl("b boolean, _corrupt_record string");
     let permissive = options(&serde_json::json!({}));
     for (text, want) in [
-        ("{\"b\":\"true\"}\n", Some("true")),
-        ("{\"b\":\"TRUE\"}\n", Some("true")),
-        ("{\"b\":\"False\"}\n", Some("false")),
         ("{\"b\":true}\n", Some("true")),
-        ("{\"b\":1}\n", Some("true")),
-        ("{\"b\":0}\n", Some("false")),
-        ("{\"b\":0.0}\n", Some("false")),
-        ("{\"b\":1.5}\n", Some("true")),
-        ("{\"b\":NaN}\n", Some("true")),
+        ("{\"b\":false}\n", Some("false")),
     ] {
         let got = read(
             text.as_bytes(),
@@ -622,10 +673,14 @@ fn boolean_strings_and_numbers_follow_spark_rules() {
         assert_eq!(rows_of(&got)[0][0].as_deref(), want, "{text:?}");
     }
     for text in [
+        "{\"b\":\"true\"}\n",
+        "{\"b\":\"TRUE\"}\n",
         "{\"b\":\"yes\"}\n",
         "{\"b\":\"1\"}\n",
         "{\"b\":\"\"}\n",
-        "{\"b\":\"TRUE \"}\n",
+        "{\"b\":1}\n",
+        "{\"b\":0.0}\n",
+        "{\"b\":NaN}\n",
     ] {
         let got = read(
             text.as_bytes(),
@@ -653,8 +708,9 @@ fn boolean_strings_and_numbers_follow_spark_rules() {
             &ScanRequest::all(Arc::clone(&schema)),
         )
         .expect_err("malformed failfast");
+        // The wrong token adds its cause, CANNOT_PARSE_JSON_FIELD.
         assert_eq!(
-            classes_of(&e),
+            classes_of(&e)[..2],
             [
                 ErrorClass::FailedReadFileNoHint,
                 ErrorClass::MalformedRecordInParsingWithoutSuggestion,
@@ -687,7 +743,8 @@ fn primitives_as_string_reads_scalars_as_text() {
             vec![None, None, None, None, Some("{\"a\":oops}".into())],
         ]
     );
-    // A nested value in a string column reads as its compact JSON text.
+    // A nested value in a string column reads as its exact JSON text
+    // (Spark's `spark.sql.json.enableExactStringParsing`, on by default).
     let got = read(
         b"{\"a\":[1, {\"b\": \"x y\"}]}\n",
         &o,
@@ -697,7 +754,7 @@ fn primitives_as_string_reads_scalars_as_text() {
     assert_eq!(
         rows_of(&got),
         [vec![
-            Some("[1,{\"b\":\"x y\"}]".into()),
+            Some("[1, {\"b\": \"x y\"}]".into()),
             None,
             None,
             None,
@@ -721,8 +778,8 @@ fn primitives_as_string_reads_scalars_as_text() {
 }
 
 #[test]
-fn nested_data_is_malformed_and_nested_schemas_are_unsupported() {
-    use ErrorClass::{KrishivUnsupportedFeature as Unsupported, UnsupportedDataTypeForDatasource};
+fn nested_values_in_scalar_columns_are_malformed() {
+    use ErrorClass::UnsupportedDataTypeForDatasource;
     let o = options(&serde_json::json!({}));
     // A nested value in a non-string column is a malformed record, not a failed scan:
     // PERMISSIVE keeps the good fields plus the raw record in the corrupt
@@ -784,6 +841,7 @@ fn nested_data_is_malformed_and_nested_schemas_are_unsupported() {
         [
             ErrorClass::FailedReadFileNoHint,
             ErrorClass::MalformedRecordInParsingWithoutSuggestion,
+            ErrorClass::CannotParseJsonField,
         ]
     );
     // Unrequested nested fields are pruned away, not an error.
@@ -794,14 +852,22 @@ fn nested_data_is_malformed_and_nested_schemas_are_unsupported() {
     )
     .expect("pruned");
     assert_eq!(rows_of(&got), [vec![Some("1".into())]]);
-    // A nested requested schema is refused at open and at write planning.
+    // A nested requested schema reads (`golden_tests` holds the cases);
+    // the writer still refuses one at write planning.
     let nested = Arc::new(Schema::new(vec![Field::new(
         "n",
         DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
         true,
     )]));
-    let e = read(b"{}\n", &o, &ScanRequest::all(Arc::clone(&nested))).expect_err("nested");
-    assert_eq!(e.error_class(), Unsupported);
+    let got = read(
+        b"{\"n\":[1,null]}\n{}\n",
+        &o,
+        &ScanRequest::all(Arc::clone(&nested)),
+    )
+    .expect("nested read");
+    let list = got[0].column(0).as_list::<i32>();
+    assert_eq!(list.value(0).len(), 2);
+    assert!(list.is_null(1));
     let batch = RecordBatch::new_empty(nested);
     let e = encode(&batch, &o).expect_err("nested write");
     assert_eq!(e.error_class(), UnsupportedDataTypeForDatasource);
@@ -886,12 +952,13 @@ fn inference_follows_spark_rules() {
     );
     // Longs widen to doubles, numbers and booleans widen to strings,
     // timestamp-like strings stay strings unless `inferTimestamp` is set,
-    // null columns stay strings.
+    // null columns stay strings; fields are sorted by name, as Spark sorts
+    // them.
     let s = infer(data.as_bytes(), &options(&serde_json::json!({}))).expect("infer");
     assert_eq!(
         schema_string(&s),
-        "struct<long:Float64,dbl:Float64,str:Utf8View,b:Utf8View,\
-         ts:Utf8View,n:Utf8View>"
+        "struct<b:Utf8View,dbl:Float64,long:Float64,n:Utf8View,\
+         str:Utf8View,ts:Utf8View>"
     );
     let s = infer(
         data.as_bytes(),
@@ -900,8 +967,8 @@ fn inference_follows_spark_rules() {
     .expect("infer");
     assert_eq!(
         schema_string(&s),
-        "struct<long:Float64,dbl:Float64,str:Utf8View,b:Utf8View,\
-         ts:Timestamp(µs, \"UTC\"),n:Utf8View>"
+        "struct<b:Utf8View,dbl:Float64,long:Float64,n:Utf8View,\
+         str:Utf8View,ts:Timestamp(µs, \"UTC\")>"
     );
     // prefersDecimal infers decimals.
     let s = infer(
@@ -911,7 +978,7 @@ fn inference_follows_spark_rules() {
     .expect("infer");
     let dec = s.field_with_name("long").expect("long");
     assert_eq!(dec.data_type(), &DataType::Decimal128(21, 1));
-    // dropFieldIfAllNull drops the null column; field order is by first appearance.
+    // dropFieldIfAllNull drops the null column; fields are sorted by name.
     let s = infer(
         b"{\"b\":1,\"a\":2}\n{\"a\":3,\"c\":4}\n",
         &options(&serde_json::json!({"dropFieldIfAllNull": "true"})),
@@ -922,7 +989,7 @@ fn inference_follows_spark_rules() {
             .iter()
             .map(|f| f.name().clone())
             .collect::<Vec<_>>(),
-        ["b", "a", "c"]
+        ["a", "b", "c"]
     );
     let s = infer(
         "{\"n\":null}\n".as_bytes(),
@@ -944,11 +1011,19 @@ fn inference_follows_spark_rules() {
     // An empty file infers an empty schema.
     let s = infer(b"", &options(&serde_json::json!({}))).expect("infer");
     assert!(s.fields().is_empty());
-    // Malformed lines shape nothing, nested fields are refused.
+    // A malformed line adds the corrupt-record column (PERMISSIVE); nested
+    // fields infer structs and arrays.
     let s = infer(b"nope\n{\"a\":1}\n", &options(&serde_json::json!({}))).expect("infer");
-    assert_eq!(s.fields().len(), 1);
-    let e = infer(b"{\"a\":{\"b\":1}}\n", &options(&serde_json::json!({}))).expect_err("nested");
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert_eq!(
+        schema_string(&s),
+        "struct<_corrupt_record:Utf8View,a:Int64>"
+    );
+    let s = infer(b"{\"a\":{\"b\":[1]}}\n", &options(&serde_json::json!({}))).expect("nested");
+    assert!(matches!(s.field(0).data_type(), DataType::Struct(_)));
+    // Types nested past Krishiv's limit (32) are refused.
+    let deep = format!("{{\"a\":{}1{}}}\n", "[".repeat(40), "]".repeat(40));
+    let e = infer(deep.as_bytes(), &options(&serde_json::json!({}))).expect_err("too deep");
+    assert_eq!(e.error_class(), ErrorClass::FailedToParseTooComplex);
     // multiLine inference reads the whole file.
     let s = infer(
         b"{\n\"a\": 1,\n\"b\": \"x\"\n}\n{\n\"a\": 2.5\n}\n",
@@ -994,6 +1069,97 @@ fn dropped_records_keep_their_row_index_across_splits() {
     halves.extend(indexes(ByteRange::new(18, size)));
     halves.sort_unstable();
     assert_eq!(halves, want);
+}
+
+#[test]
+fn comment_prefixed_arrays_number_each_row_across_splits() {
+    // With allowComments a comment before a top-level array does not hide
+    // it: a split that starts later counts its rows as the main loop does.
+    let text = "/* c */[{\"a\":0},{\"a\":1}]\n/* d */ []\n{\"a\":2}\n";
+    let bytes = text.as_bytes();
+    let schema = ddl("a int");
+    let req = row_indexed(&schema);
+    let size = bytes.len() as u64;
+    let o = options(&serde_json::json!({ "allowComments": "true" }));
+    let indexes = |range: ByteRange| -> Vec<(i64, i32)> {
+        let got = read_split(bytes, &o, &req, range).expect("read");
+        let mut seen = Vec::new();
+        for b in &got {
+            let a = b.column(0).as_primitive::<Int32Type>();
+            let idx = b.column_by_name(ROW_INDEX_COLUMN).expect("row index");
+            let idx = idx.as_primitive::<Int64Type>();
+            seen.extend((0..b.num_rows()).map(|i| (idx.value(i), a.value(i))));
+        }
+        seen
+    };
+    let want = vec![(0, 0), (1, 1), (2, 2)];
+    assert_eq!(indexes(ByteRange::new(0, size)), want);
+    for cut in 1..size {
+        let mut halves = indexes(ByteRange::new(0, cut));
+        halves.extend(indexes(ByteRange::new(cut, size)));
+        halves.sort_unstable();
+        assert_eq!(halves, want, "cut at {cut}");
+    }
+}
+
+#[test]
+fn a_large_list_column_reads_with_large_offsets() {
+    // A caller's schema may hold a LargeList; it builds like a List.
+    let item = Arc::new(Field::new("element", DataType::Int64, true));
+    let schema: SchemaRef = Arc::new(Schema::new(vec![Field::new(
+        "xs",
+        DataType::LargeList(item),
+        true,
+    )]));
+    let o = options(&serde_json::json!({}));
+    let text = "{\"xs\":[1,2]}\n{\"xs\":null}\n{\"xs\":[]}\n{\"xs\":[3]}\n";
+    let got = read(text.as_bytes(), &o, &ScanRequest::all(Arc::clone(&schema))).expect("read");
+    let col = got[0].column(0).as_list::<i64>();
+    assert_eq!(col.len(), 4);
+    assert!(col.is_null(1));
+    assert_eq!(col.value_offsets(), &[0, 2, 2, 2, 3]);
+    let items = col.values().as_primitive::<Int64Type>();
+    assert_eq!(items.values(), &[1, 2, 3]);
+}
+
+#[test]
+fn top_level_arrays_number_each_row_across_splits() {
+    // Each object of a top-level array is its own row with its own index; a
+    // split that starts later counts the array lines before it the same way.
+    let text =
+        "[{\"a\":0},{\"a\":1}]\n[]\n{\"a\":2}\n[{\"a\":3},{\"a\":4},{\"a\":5}]\n[1]\n{\"a\":7}\n";
+    let bytes = text.as_bytes();
+    let schema = ddl("a int");
+    let req = row_indexed(&schema);
+    let size = bytes.len() as u64;
+    for mode in ["PERMISSIVE", "DROPMALFORMED"] {
+        let o = options(&serde_json::json!({ "mode": mode }));
+        let indexes = |range: ByteRange| -> Vec<(i64, Option<i32>)> {
+            let got = read_split(bytes, &o, &req, range).expect("read");
+            let mut seen = Vec::new();
+            for b in &got {
+                let a = b.column(0).as_primitive::<Int32Type>();
+                let idx = b.column_by_name(ROW_INDEX_COLUMN).expect("row index");
+                let idx = idx.as_primitive::<Int64Type>();
+                seen.extend(
+                    (0..b.num_rows()).map(|i| (idx.value(i), (!a.is_null(i)).then(|| a.value(i)))),
+                );
+            }
+            seen
+        };
+        let mut want: Vec<(i64, Option<i32>)> = (0..6).map(|i| (i64::from(i), Some(i))).collect();
+        if mode == "PERMISSIVE" {
+            want.push((6, None));
+        }
+        want.push((7, Some(7)));
+        assert_eq!(indexes(ByteRange::new(0, size)), want, "{mode}");
+        for cut in 1..size {
+            let mut halves = indexes(ByteRange::new(0, cut));
+            halves.extend(indexes(ByteRange::new(cut, size)));
+            halves.sort_unstable();
+            assert_eq!(halves, want, "{mode} cut at {cut}");
+        }
+    }
 }
 
 #[test]
@@ -1756,4 +1922,33 @@ fn decimals_are_written_from_both_carriers() {
             "{\"d\":1.50}\n{\"d\":-2.75}\n"
         );
     }
+}
+
+#[test]
+fn failfast_raises_the_json_value_and_record_type_classes() {
+    // Each class engine code raises for a JSON value or record, named here so
+    // the registry-coverage check sees a test for it.
+    let o = options(&serde_json::json!({ "mode": "FAILFAST" }));
+    let raised = |text: &str, schema: &str| -> Vec<ErrorClass> {
+        let e = read(text.as_bytes(), &o, &ScanRequest::all(ddl(schema))).expect_err("fails");
+        classes_of(&e)
+    };
+    // An empty string is not a value of an int column.
+    assert!(
+        raised("{\"a\":\"\"}\n", "a int").contains(&ErrorClass::EmptyJsonFieldValue),
+        "EMPTY_JSON_FIELD_VALUE"
+    );
+    // A string that is not a float, for a double column.
+    assert!(
+        raised("{\"a\":\"abc\"}\n", "a double")
+            .contains(&ErrorClass::MalformedRecordInParsingCannotParseStringAsDatatype),
+        "MALFORMED_RECORD_IN_PARSING.CANNOT_PARSE_STRING_AS_DATATYPE"
+    );
+    // Inference over a record that is not an object.
+    let e = infer(b"1\n", &o).expect_err("fails");
+    assert!(
+        classes_of(&e).contains(&ErrorClass::InvalidJsonRecordType),
+        "INVALID_JSON_RECORD_TYPE: {:?}",
+        classes_of(&e)
+    );
 }

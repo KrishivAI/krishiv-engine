@@ -113,10 +113,11 @@ pub(crate) fn plan_tag(node: &PlanNode) -> u8 {
         PlanNode::Generate { .. } => 33,
         PlanNode::PipeOperator { .. } => 34,
         PlanNode::Repartition { .. } => 35,
-        PlanNode::MapPartitions { .. } => 36,
-        PlanNode::GroupMap { .. } => 37,
-        PlanNode::CoGroupMap { .. } => 38,
-        PlanNode::PythonTableFunction { .. } => 39,
+        PlanNode::Sample { .. } => 36,
+        PlanNode::MapPartitions { .. } => 37,
+        PlanNode::GroupMap { .. } => 38,
+        PlanNode::CoGroupMap { .. } => 39,
+        PlanNode::PythonTableFunction { .. } => 40,
     }
 }
 
@@ -932,6 +933,12 @@ impl<'k, 'a> Encoder<'k, 'a> {
             }
             PlanNode::ReplicateRows { count, .. } => {
                 self.expr(count);
+            }
+            PlanNode::Sample { bounds, seed, .. } => {
+                self.i64(bounds.lower.to_bits().cast_signed());
+                self.i64(bounds.upper.to_bits().cast_signed());
+                self.bool(seed.is_some());
+                self.i64(seed.unwrap_or(0));
             }
             PlanNode::Offset { offset, .. } => {
                 self.expr(offset);

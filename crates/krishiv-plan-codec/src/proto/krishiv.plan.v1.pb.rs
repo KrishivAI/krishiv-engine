@@ -145,7 +145,7 @@ pub struct ExplainNode {
 pub struct Node {
     #[prost(
         oneof = "node::Kind",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 21, 24, 25, 26, 27, 28, 29, 30"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 21, 24, 25, 26, 27, 28, 29, 30, 31"
     )]
     pub kind: ::core::option::Option<node::Kind>,
 }
@@ -217,19 +217,38 @@ pub mod node {
         /// feature: python_udf
         #[prost(message, tag = "26")]
         PythonEval(super::PythonEvalNode),
-        /// feature: python_udf_relations
+        /// feature: sample
         #[prost(message, tag = "27")]
-        PythonMap(super::PythonMapNode),
+        Sample(super::SampleNode),
         /// feature: python_udf_relations
         #[prost(message, tag = "28")]
-        PythonGroupMap(super::PythonGroupMapNode),
+        PythonMap(super::PythonMapNode),
         /// feature: python_udf_relations
         #[prost(message, tag = "29")]
-        PythonCoGroupMap(super::PythonCoGroupMapNode),
+        PythonGroupMap(super::PythonGroupMapNode),
         /// feature: python_udf_relations
         #[prost(message, tag = "30")]
+        PythonCoGroupMap(super::PythonCoGroupMapNode),
+        /// feature: python_udf_relations
+        #[prost(message, tag = "31")]
         PythonAggregate(super::PythonAggregateNode),
     }
+}
+/// feature: sample
+/// `TABLESAMPLE` (Spark's Bernoulli `SampleExec`): each row of input
+/// partition `i` takes the next draw of `XORShiftRandom(seed + i)` and is
+/// kept when it falls in `[lower, upper)`. The seed is always resolved (an
+/// unseeded sample's is drawn when the plan is built).
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct SampleNode {
+    #[prost(uint32, tag = "1")]
+    pub input: u32,
+    #[prost(double, tag = "2")]
+    pub lower: f64,
+    #[prost(double, tag = "3")]
+    pub upper: f64,
+    #[prost(int64, tag = "4")]
+    pub seed: i64,
 }
 /// feature: python_udf_relations
 /// `mapInPandas` / `mapInArrow`: each partition of `input` sent to a Python

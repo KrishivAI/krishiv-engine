@@ -75,6 +75,25 @@ pub const TABLE_FUNCTION_NAME_SEP: char = '\u{1f}';
 /// holds, so a quoted alias with a dot in it stays one part.
 pub const ALIAS_PART_SEP: char = '\u{1e}';
 
+/// The kept range `[lower, upper)` of a [`PlanNode::Sample`]'s draws,
+/// compared bit for bit (so a plan stays `Eq`).
+#[derive(Debug, Clone, Copy)]
+pub struct SampleBounds {
+    /// Inclusive lower bound (Spark's `lowerBound`).
+    pub lower: f64,
+    /// Exclusive upper bound (Spark's `upperBound`).
+    pub upper: f64,
+}
+
+impl PartialEq for SampleBounds {
+    fn eq(&self, other: &Self) -> bool {
+        self.lower.to_bits() == other.lower.to_bits()
+            && self.upper.to_bits() == other.upper.to_bits()
+    }
+}
+
+impl Eq for SampleBounds {}
+
 /// The relation node kinds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -238,6 +257,20 @@ pub enum PlanNode {
         input: Arc<LogicalPlan>,
         /// The partitioning expressions.
         exprs: Vec<Arc<Expr>>,
+    },
+    /// `TABLESAMPLE (x PERCENT)` or `(BUCKET x OUT OF y)`: Spark's `Sample`
+    /// without replacement (Bernoulli). Each row of input partition `i`
+    /// takes one draw of `XORShiftRandom(seed + i)` and is kept when
+    /// `lower <= x < upper`; no draw when `upper - lower <= 0`. The output
+    /// is the input's attributes. Rewrites never move a filter or a
+    /// projection across it, and never drop it.
+    Sample {
+        /// Input.
+        input: Arc<LogicalPlan>,
+        /// The kept range of the draw.
+        bounds: SampleBounds,
+        /// The `REPEATABLE` seed; `None` draws one per physical plan.
+        seed: Option<i64>,
     },
     /// A join strategy hint on a relation (Spark's `ResolvedHint`): a join
     /// this relation is a side of prefers `strategy`. Rows pass through.
@@ -1070,6 +1103,7 @@ impl LogicalPlan {
             | PlanNode::Pivot { input, .. }
             | PlanNode::Unpivot { input, .. }
             | PlanNode::Window { input, .. }
+            | PlanNode::Sample { input, .. }
             | PlanNode::ReplicateRows { input, .. }
             | PlanNode::MapPartitions { input, .. }
             | PlanNode::GroupMap { input, .. } => f(input),
@@ -1129,6 +1163,7 @@ impl LogicalPlan {
             | PlanNode::Pivot { input, .. }
             | PlanNode::Unpivot { input, .. }
             | PlanNode::Window { input, .. }
+            | PlanNode::Sample { input, .. }
             | PlanNode::ReplicateRows { input, .. }
             | PlanNode::MapPartitions { input, .. }
             | PlanNode::GroupMap { input, .. } => f(input),
@@ -1169,6 +1204,7 @@ impl LogicalPlan {
             | PlanNode::JoinHint { .. }
             | PlanNode::Union { .. }
             | PlanNode::SetOp { .. }
+            | PlanNode::Sample { .. }
             | PlanNode::MapPartitions { .. }
             | PlanNode::Distinct { .. } => {}
             PlanNode::Hint { params, .. } | PlanNode::Repartition { exprs: params, .. } => {
@@ -1269,6 +1305,7 @@ impl LogicalPlan {
             | PlanNode::JoinHint { .. }
             | PlanNode::Union { .. }
             | PlanNode::SetOp { .. }
+            | PlanNode::Sample { .. }
             | PlanNode::MapPartitions { .. }
             | PlanNode::Distinct { .. } => {}
             PlanNode::Hint { params, .. } | PlanNode::Repartition { exprs: params, .. } => {
@@ -1385,6 +1422,7 @@ impl LogicalPlan {
                 | PlanNode::WithCte { input, .. }
                 | PlanNode::JoinHint { input, .. }
                 | PlanNode::Repartition { input, .. }
+                | PlanNode::Sample { input, .. }
                 | PlanNode::ReplicateRows { input, .. } => p = input,
                 PlanNode::Union { inputs, .. } => {
                     let mut out = inputs.first()?.resolved_output()?;
@@ -1633,9 +1671,26 @@ impl LogicalPlan {
 impl PartialEq for LogicalPlan {
     fn eq(&self, other: &Self) -> bool {
         dag::eq(Node::Plan(self), Node::Plan(other), || {
-            self.origin == other.origin && self.node == other.node
+            self.origin == other.origin
+                && std::mem::discriminant(&self.node) == std::mem::discriminant(&other.node)
+                && children_eq(self, other)
+                && self.node == other.node
         })
     }
+}
+
+/// Whether the children of two nodes of one kind are equal, pair by pair.
+/// Compared before the nodes' fields, so the derived `PlanNode` comparison
+/// (a large frame in an unoptimised build) finds each child pair already
+/// equal in the walk's memo instead of recursing: a chain of
+/// [`MAX_DEPTH`](crate::MAX_DEPTH) nodes needs only this small frame per
+/// level.
+fn children_eq(a: &LogicalPlan, b: &LogicalPlan) -> bool {
+    let mut left = Vec::new();
+    a.for_each_child(&mut |c| left.push(c));
+    let mut right = Vec::new();
+    b.for_each_child(&mut |c| right.push(c));
+    left.len() == right.len() && left.iter().zip(&right).all(|(l, r)| l == r)
 }
 
 impl Eq for LogicalPlan {}

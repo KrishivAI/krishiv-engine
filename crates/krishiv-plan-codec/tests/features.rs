@@ -2152,3 +2152,25 @@ fn the_python_udf_relation_kinds_need_their_feature() {
         );
     }
 }
+
+/// A `TABLESAMPLE` plan lists `sample` (a semantic feature: no plan without
+/// the node keeps the same rows), and a reader without it refuses the plan
+/// naming the feature.
+#[test]
+fn a_sample_needs_its_feature() {
+    assert_eq!(message("sample").features, ["sample"]);
+    assert_eq!(Feature::Sample.kind(), FeatureKind::Semantic);
+    let bytes = message("sample").encode_to_vec();
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::Sample),
+    );
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["sample".to_owned()]
+        }
+    );
+}

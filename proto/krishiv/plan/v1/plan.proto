@@ -172,15 +172,29 @@ message Node {
     ExchangeSourceNode exchange_source = 25;
     // feature: python_udf
     PythonEvalNode python_eval = 26;
+    // feature: sample
+    SampleNode sample = 27;
     // feature: python_udf_relations
-    PythonMapNode python_map = 27;
+    PythonMapNode python_map = 28;
     // feature: python_udf_relations
-    PythonGroupMapNode python_group_map = 28;
+    PythonGroupMapNode python_group_map = 29;
     // feature: python_udf_relations
-    PythonCoGroupMapNode python_co_group_map = 29;
+    PythonCoGroupMapNode python_co_group_map = 30;
     // feature: python_udf_relations
-    PythonAggregateNode python_aggregate = 30;
+    PythonAggregateNode python_aggregate = 31;
   }
+}
+
+// feature: sample
+// `TABLESAMPLE` (Spark's Bernoulli `SampleExec`): each row of input
+// partition `i` takes the next draw of `XORShiftRandom(seed + i)` and is
+// kept when it falls in `[lower, upper)`. The seed is always resolved (an
+// unseeded sample's is drawn when the plan is built).
+message SampleNode {
+  uint32 input = 1;
+  double lower = 2;
+  double upper = 3;
+  int64 seed = 4;
 }
 
 // feature: python_udf_relations

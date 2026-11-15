@@ -66,6 +66,7 @@ variants!(
     LateFetch,
     UnionLoop,
     LoopRef,
+    Sample,
 );
 
 fn variant_of(node: &PhysNode) -> Variant {
@@ -100,6 +101,7 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::ExchangeSource { .. } => Variant::ExchangeSource,
         PhysNode::SharedRead { .. } => Variant::SharedRead,
         PhysNode::LateFetch { .. } => Variant::LateFetch,
+        PhysNode::Sample { .. } => Variant::Sample,
     }
 }
 
@@ -617,6 +619,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "exchange_source"
             | "rust_udf"
             | "python_udf"
+            | "sample"
             | "python_map"
             | "python_group_map"
             | "python_cogroup_map"
@@ -813,6 +816,33 @@ fn a_corrupt_shared_plan_is_refused() {
         matches!(&err, CodecError::Corrupt(e) if e.contains("a shared plan read before it is listed")),
         "{err:?}"
     );
+}
+
+#[test]
+fn a_sample_survives_the_wire_and_corrupt_bounds_are_refused() {
+    use pb::node::Kind;
+    let (_, plan) = cases().into_iter().find(|(n, _)| n == "sample").unwrap();
+    assert_eq!(round_trip(&plan), plan);
+    let edit = |f: &dyn Fn(&mut pb::SampleNode)| {
+        let mut m = message("sample");
+        for node in &mut m.nodes {
+            if let Some(Kind::Sample(s)) = &mut node.kind {
+                f(s);
+            }
+        }
+        m
+    };
+    corrupt(&edit(&|s| s.lower = 0.5), "not a range of draws");
+    corrupt(&edit(&|s| s.lower = -0.1), "not a range of draws");
+    corrupt(&edit(&|s| s.upper = f64::NAN), "not a range of draws");
+    // `TABLESAMPLE (-0.00001 PERCENT)`: Spark keeps the negative fraction as
+    // the upper bound over a lower bound of zero, an empty range of draws.
+    let empty = edit(&|s| {
+        s.lower = 0.0;
+        s.upper = -1e-7;
+    });
+    let plan = decode(&empty.encode_to_vec()).unwrap();
+    assert_eq!(round_trip(&plan), plan);
 }
 
 #[test]

@@ -306,6 +306,17 @@ impl Encoder {
                 limit: *limit,
                 offset: *offset,
             }),
+            PhysNode::Sample {
+                input,
+                lower,
+                upper,
+                seed,
+            } => Kind::Sample(pb::SampleNode {
+                input: self.node_index(input)?,
+                lower: *lower,
+                upper: *upper,
+                seed: *seed,
+            }),
             PhysNode::ReplicateRows {
                 input,
                 layout: l,

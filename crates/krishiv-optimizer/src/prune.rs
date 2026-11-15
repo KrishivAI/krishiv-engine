@@ -126,6 +126,8 @@ impl Graph {
             // read above it: Spark evaluates them under `count(*)` too.
             | PlanNode::Repartition { input, .. }
             | PlanNode::Generate { input, .. }
+            // Spark prunes columns below a sample; its rows stay.
+            | PlanNode::Sample { input, .. }
             | PlanNode::ReplicateRows { input, .. } => {
                 let mut need = req.clone();
                 p.for_each_expr(&mut |e| references_into(e, &mut need));
