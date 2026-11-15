@@ -670,6 +670,7 @@ pub(crate) fn collect_ids(plan: &LogicalPlan, out: &mut Attrs) -> bool {
         | PlanNode::WithCte { input, .. }
         | PlanNode::JoinHint { input, .. }
         | PlanNode::Repartition { input, .. }
+        | PlanNode::Sample { input, .. }
         | PlanNode::ReplicateRows { input, .. } => collect_ids(input, out),
         PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => {
             collect_ids(input, out)

@@ -189,6 +189,8 @@ pub(crate) struct SessionState {
     /// while expanding a view point into the view's text, not the outer
     /// statement's (`SourceId(0)` stays the outer statement's).
     sql_sources: AtomicU32,
+    /// Where this session counts its denials (a server's sessions, `Session::count_denials`).
+    pub(crate) denials: std::sync::OnceLock<(Arc<crate::auth::DeniedCounts>, crate::auth::Surface)>,
 }
 
 impl Drop for SessionState {
@@ -622,7 +624,13 @@ impl Session {
         )?;
         match statement {
             Statement::Query(q) => {
-                let plan = self.lower_identified(&q, &env, redacted)?;
+                let plan = self.lower_identified(&q, &env, redacted).map_err(|e| {
+                    crate::execute_immediate::unbound_markers(
+                        e,
+                        query,
+                        env.parser.double_quoted_identifiers,
+                    )
+                })?;
                 let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
                 df.analyzed_in_with_text(env, Some(redacted)).await?;
                 Ok(df)
@@ -651,7 +659,15 @@ impl Session {
             }
             Statement::DropFunction(f) => self.exec_drop_function(&f).await,
             Statement::CreateTable(t) => {
-                Box::pin(self.exec_create_table(&t, query, &env.identifier_spans)).await
+                Box::pin(self.exec_create_table(&t, query, &env.identifier_spans))
+                    .await
+                    .map_err(|e| {
+                        crate::execute_immediate::unbound_markers(
+                            e,
+                            query,
+                            env.parser.double_quoted_identifiers,
+                        )
+                    })
             }
             Statement::CreateTableLike(t) => Box::pin(self.exec_create_table_like(&t, query)).await,
             Statement::DropTable(d) => self.exec_drop_table(&d).await,
@@ -674,9 +690,15 @@ impl Session {
                 self.exec_alter_view(&a, query, ids).await
             }
             Statement::AlterTable(a) => Box::pin(self.exec_alter_table(&a, query)).await,
-            Statement::Insert(i) => {
-                Box::pin(self.exec_insert(&i, query, &env.identifier_spans)).await
-            }
+            Statement::Insert(i) => Box::pin(self.exec_insert(&i, query, &env.identifier_spans))
+                .await
+                .map_err(|e| {
+                    crate::execute_immediate::unbound_markers(
+                        e,
+                        query,
+                        env.parser.double_quoted_identifiers,
+                    )
+                }),
             Statement::Truncate(t) => self.exec_truncate(&t).await,
             Statement::Script(c) => {
                 let off =
@@ -691,6 +713,13 @@ impl Session {
                 Box::pin(self.exec_script(&c, query, redacted)).await
             }
             Statement::Analyze(a) => Box::pin(self.exec_analyze(&a, query)).await,
+            Statement::CreatePipelineDataset(c) => Self::exec_create_pipeline_dataset(&c),
+            Statement::CreateFlow(f) => self.exec_create_flow(&f),
+            Statement::LoadData(l) => self.exec_load_data(&l),
+            // The path write belongs to the session's write path: it has no plan node to lower to yet.
+            Statement::InsertDirectory(_) => {
+                Err(unsupported_statement("INSERT OVERWRITE DIRECTORY"))
+            }
             Statement::AddResource(_) => Err(unsupported_statement("ADD JAR | FILE | ARCHIVE")),
             Statement::ListResource(_) => Err(unsupported_statement("LIST JAR | FILE | ARCHIVE")),
             Statement::Delete(d) => {
@@ -1334,6 +1363,10 @@ impl Session {
             cache_cap,
             sql_functions,
             functions_version,
+            sample_salt: {
+                use std::hash::BuildHasher as _;
+                std::collections::hash_map::RandomState::new().hash_one(0_u8)
+            },
         }
     }
 
@@ -1565,6 +1598,7 @@ impl Session {
         };
         let cx = PlanningContext::new(tables, Arc::clone(&env.config))
             .with_query_start(start)
+            .with_sample_salt(env.sample_salt)
             .with_user(self.state.principal.name.as_str())
             .with_udfs(Arc::clone(&self.state.udfs));
         let physical = self.state.planner.plan(&optimized, &cx)?;

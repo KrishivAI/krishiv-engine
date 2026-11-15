@@ -50,13 +50,13 @@ sequence(start, stop, step)
 ```sql
 -- sequence, example 3
 > SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), interval 1 month);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+[2018-01-01,2018-02-01,2018-03-01]
 ```
 
 ```sql
 -- sequence, example 4
 > SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), interval '0-1' year to month);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+[2018-01-01,2018-02-01,2018-03-01]
 ```
 
 ## Version history
