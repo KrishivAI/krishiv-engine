@@ -68,3 +68,47 @@ pub(crate) fn partition_keys(location: &Path) -> Result<Vec<String>, KrishivErro
 fn listing_error(dir: &Path, e: &std::io::Error) -> KrishivError {
     crate::partitions::internal(format!("cannot list {}: {e}", dir.display()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::partition_keys;
+
+    #[test]
+    fn a_missing_path_or_a_plain_file_has_no_partition_keys() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert!(
+            partition_keys(&dir.path().join("absent"))
+                .expect("absent")
+                .is_empty()
+        );
+        let file = dir.path().join("f.parquet");
+        std::fs::write(&file, b"x").expect("write");
+        assert!(partition_keys(&file).expect("file").is_empty());
+    }
+
+    #[test]
+    fn a_repeated_key_ends_the_descent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(dir.path().join("a=1").join("A=2").join("b=3")).expect("mkdir");
+        assert_eq!(
+            partition_keys(dir.path()).expect("keys"),
+            vec!["a".to_owned()]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_directory_is_an_error_not_an_unpartitioned_table() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let locked = dir.path().join("a=1");
+        std::fs::create_dir(&locked).expect("mkdir");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+        let readable = std::fs::read_dir(&locked).is_ok(); // root ignores the mode
+        let result = partition_keys(dir.path());
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).expect("restore");
+        if !readable {
+            assert!(result.is_err());
+        }
+    }
+}
