@@ -137,6 +137,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &IO_CACHE_ENABLED,
     &IO_CACHE_PATH,
     &IO_LOCAL_ALLOWED_ROOTS,
+    &ACCESS_PROVIDER,
     &IO_OBJECT_STORE_ALLOWED_PREFIXES,
     &IO_CACHE_DISK_BYTES,
     &IO_CACHE_BLOCK_BYTES,
@@ -1205,6 +1206,25 @@ pub static IO_CACHE_PATH: ConfigEntry = ConfigEntry {
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.access.provider`.
+pub static ACCESS_PROVIDER: ConfigEntry = ConfigEntry {
+    key: "krishiv.access.provider",
+    value_type: ValueType::String,
+    default: None,
+    doc: "Server mode: the access-policy provider that decides data securables (tables, views, \
+          columns, namespaces, functions, paths, secrets, connections; P3-T062). `grants`: \
+          `GRANT`/`REVOKE` decide them, and the role matrix keeps deciding the server's own \
+          objects; an admin passes every data check. `roles`: the role matrix decides \
+          everything. Unset: `grants` when authentication is configured, otherwise `roles`. \
+          `catalog`, `external` and provider lists are refused until they are available. Path \
+          confinement (`krishiv.io.local.allowedRoots`, `krishiv.io.objectStore.allowedPrefixes`) \
+          applies first under every provider.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.2.0",
     spark_alias: None,
 };
 

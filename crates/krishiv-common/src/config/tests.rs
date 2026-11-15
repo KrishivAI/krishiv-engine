@@ -1394,6 +1394,19 @@ fn python_worker_entries_parse_and_default() {
 }
 
 #[test]
+fn access_provider_is_unset_and_startup_only() {
+    let mut c = Config::new();
+    assert_eq!(c.get(&ACCESS_PROVIDER), None);
+    assert_eq!(ACCESS_PROVIDER.scope, Scope::Cluster);
+    assert_eq!(ACCESS_PROVIDER.settable_by, SettableBy::Startup);
+    c.set("krishiv.access.provider", "grants").unwrap();
+    assert_eq!(
+        c.get(&ACCESS_PROVIDER).and_then(ConfigValue::as_str),
+        Some("grants")
+    );
+}
+
+#[test]
 fn path_confinement_entries_default_to_empty_and_are_startup_only() {
     let mut c = Config::new();
     for entry in [&IO_LOCAL_ALLOWED_ROOTS, &IO_OBJECT_STORE_ALLOWED_PREFIXES] {

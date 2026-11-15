@@ -92,7 +92,8 @@ fn required(securable: &Securable, privilege: Privilege, udf_min_role: Role) -> 
     match privilege {
         Privilege::Browse => Some(Role::Viewer),
         Privilege::Select => match securable {
-            Securable::Table(t)
+            // A column is read as its table is (P3-T062).
+            Securable::Table(t) | Securable::Column { table: t, .. }
                 if t.catalog.eq_ignore_ascii_case(SYSTEM_CATALOG)
                     && VIEWER_SYSTEM_TABLES
                         .iter()

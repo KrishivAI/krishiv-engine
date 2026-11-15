@@ -120,6 +120,7 @@ impl Session {
                 profile: parts.profile,
                 principal: parts.principal,
                 policy: parts.policy,
+                grants: parts.grants,
                 functions,
                 base_functions,
                 udfs,
@@ -181,6 +182,7 @@ impl Session {
             profile: state.profile,
             principal: Arc::clone(&state.principal),
             policy: Arc::clone(&state.policy),
+            grants: state.grants.clone(),
             functions: state.base_functions.clone(),
             admission: Some(Arc::clone(&state.admission)),
         };
@@ -232,6 +234,7 @@ impl Session {
             profile: state.profile,
             principal: Arc::clone(&state.principal),
             policy: Arc::clone(&state.policy),
+            grants: state.grants.clone(),
             functions: state.base_functions.clone(),
             admission: Some(Arc::clone(&state.admission)),
         };

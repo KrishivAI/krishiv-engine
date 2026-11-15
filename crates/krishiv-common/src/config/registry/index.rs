@@ -26,6 +26,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.spill.maxBytes", &SPILL_MAX_BYTES),
     ("spark.sql.ansi.enabled", &ANSI_ENABLED),
     ("spark.sql.path.enabled", &SQL_PATH_ENABLED),
+    ("krishiv.access.provider", &ACCESS_PROVIDER),
     ("krishiv.agent.gateBytes", &AGENT_GATE_BYTES),
     ("krishiv.connect.address", &CONNECT_ADDRESS),
     ("krishiv.metrics.enabled", &METRICS_ENABLED),

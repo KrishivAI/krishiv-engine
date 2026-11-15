@@ -280,11 +280,21 @@ impl Session {
                 if checked.contains(&securable) {
                     continue;
                 }
+                // A policy that decides columns is asked here only whether the name may be seen;
+                // the table's rows are asked per column after analysis. A stored view is still
+                // asked `Select` as a whole (column grants on views are not supported).
+                let privilege = if self.state.policy.column_level()
+                    && matches!(securable, Securable::Table(_))
+                {
+                    Privilege::Browse
+                } else {
+                    Privilege::Select
+                };
                 let r = authorize(
                     &*self.state.policy,
                     &self.state.principal,
                     &securable,
-                    Privilege::Select,
+                    privilege,
                 )
                 .await;
                 audit(self, StatementClass::Read, r)?;
@@ -368,7 +378,7 @@ impl Session {
     }
 
     /// The securables `object` stands for: as written, then folded.
-    fn securables_of(
+    pub(crate) fn securables_of(
         &self,
         object: TargetObject<'_>,
         env: &QueryEnv,
@@ -907,6 +917,14 @@ impl AccessPolicy for PathPrefixPolicy {
         }
         self.inner.check(principal, securable, privilege)
     }
+
+    fn column_level(&self) -> bool {
+        self.inner.column_level()
+    }
+
+    fn denied(&self, principal: &Principal, securable: &Securable, privilege: Privilege) {
+        self.inner.denied(principal, securable, privilege);
+    }
 }
 
 /// A policy that allows `Select` as `inner` decides and denies every other
@@ -960,6 +978,14 @@ impl AccessPolicy for ReadOnlyPolicy {
             })));
         }
         self.inner.check(principal, securable, privilege)
+    }
+
+    fn column_level(&self) -> bool {
+        self.inner.column_level()
+    }
+
+    fn denied(&self, principal: &Principal, securable: &Securable, privilege: Privilege) {
+        self.inner.denied(principal, securable, privilege);
     }
 }
 

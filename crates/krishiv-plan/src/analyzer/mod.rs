@@ -1046,6 +1046,7 @@ async fn analyze_with(
         .filter(|e| e.fingerprint.as_ref() == Some(&context));
     let (root, output, securables, warnings, output_declared, output_comments, entry, warm_started) =
         resolve::resolve(plan, ctx, &bindings, warm.as_deref(), slot.is_some())?;
+    access::authorize_columns(ctx, &securables, plan.root().origin).await?;
     unexecutable::check(&root, ctx.conf.time_type)?;
     let resolved = Plan::try_new(root).map_err(|e| AnalysisError::new(e, plan.root().origin))?;
     if let Some((slot, starts)) = slot {

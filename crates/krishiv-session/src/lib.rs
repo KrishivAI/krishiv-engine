@@ -61,6 +61,7 @@ mod execute_immediate;
 mod explain;
 mod explain_graph;
 pub mod functions;
+pub mod grants;
 mod history;
 mod identifier_clause;
 mod introspection;

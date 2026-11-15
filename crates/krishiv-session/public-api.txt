@@ -580,6 +580,98 @@ pub fn krishiv_session::functions::max(krishiv_session::Column) -> krishiv_sessi
 pub fn krishiv_session::functions::min(krishiv_session::Column) -> krishiv_session::Column
 pub fn krishiv_session::functions::python_udf_call(&krishiv_session::PythonUdfDef, u32, impl core::iter::traits::collect::IntoIterator<Item = krishiv_session::Column>) -> core::result::Result<krishiv_session::Column, krishiv_common::error::KrishivError>
 pub fn krishiv_session::functions::sum(krishiv_session::Column) -> krishiv_session::Column
+pub mod krishiv_session::grants
+#[non_exhaustive] pub enum krishiv_session::grants::AccessProvider
+pub krishiv_session::grants::AccessProvider::Grants
+pub krishiv_session::grants::AccessProvider::Roles
+impl core::clone::Clone for krishiv_session::grants::AccessProvider
+pub fn krishiv_session::grants::AccessProvider::clone(&self) -> krishiv_session::grants::AccessProvider
+impl core::cmp::Eq for krishiv_session::grants::AccessProvider
+impl core::cmp::PartialEq for krishiv_session::grants::AccessProvider
+pub fn krishiv_session::grants::AccessProvider::eq(&self, &krishiv_session::grants::AccessProvider) -> bool
+impl core::fmt::Debug for krishiv_session::grants::AccessProvider
+pub fn krishiv_session::grants::AccessProvider::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for krishiv_session::grants::AccessProvider
+impl core::marker::StructuralPartialEq for krishiv_session::grants::AccessProvider
+#[non_exhaustive] pub enum krishiv_session::grants::DecidedBy
+pub krishiv_session::grants::DecidedBy::Grants
+pub krishiv_session::grants::DecidedBy::Roles
+impl krishiv_session::grants::DecidedBy
+pub const fn krishiv_session::grants::DecidedBy::as_str(self) -> &'static str
+impl core::clone::Clone for krishiv_session::grants::DecidedBy
+pub fn krishiv_session::grants::DecidedBy::clone(&self) -> krishiv_session::grants::DecidedBy
+impl core::cmp::Eq for krishiv_session::grants::DecidedBy
+impl core::cmp::PartialEq for krishiv_session::grants::DecidedBy
+pub fn krishiv_session::grants::DecidedBy::eq(&self, &krishiv_session::grants::DecidedBy) -> bool
+impl core::fmt::Debug for krishiv_session::grants::DecidedBy
+pub fn krishiv_session::grants::DecidedBy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for krishiv_session::grants::DecidedBy
+pub fn krishiv_session::grants::DecidedBy::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for krishiv_session::grants::DecidedBy
+impl core::marker::StructuralPartialEq for krishiv_session::grants::DecidedBy
+#[non_exhaustive] pub struct krishiv_session::grants::DeniedCount
+pub krishiv_session::grants::DeniedCount::count: u64
+pub krishiv_session::grants::DeniedCount::privilege: krishiv_plan::analyzer::catalog::Privilege
+pub krishiv_session::grants::DeniedCount::provider: krishiv_session::grants::DecidedBy
+impl core::clone::Clone for krishiv_session::grants::DeniedCount
+pub fn krishiv_session::grants::DeniedCount::clone(&self) -> krishiv_session::grants::DeniedCount
+impl core::cmp::Eq for krishiv_session::grants::DeniedCount
+impl core::cmp::PartialEq for krishiv_session::grants::DeniedCount
+pub fn krishiv_session::grants::DeniedCount::eq(&self, &krishiv_session::grants::DeniedCount) -> bool
+impl core::fmt::Debug for krishiv_session::grants::DeniedCount
+pub fn krishiv_session::grants::DeniedCount::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for krishiv_session::grants::DeniedCount
+impl core::marker::StructuralPartialEq for krishiv_session::grants::DeniedCount
+pub struct krishiv_session::grants::FileGrantStore
+impl krishiv_session::grants::FileGrantStore
+pub fn krishiv_session::grants::FileGrantStore::open(impl core::convert::Into<std::path::PathBuf>) -> core::result::Result<Self, krishiv_common::error::KrishivError>
+pub fn krishiv_session::grants::FileGrantStore::path(&self) -> &std::path::Path
+impl core::fmt::Debug for krishiv_session::grants::FileGrantStore
+pub fn krishiv_session::grants::FileGrantStore::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl krishiv_session::grants::GrantStore for krishiv_session::grants::FileGrantStore
+pub struct krishiv_session::grants::GrantStateHandle(_)
+impl core::clone::Clone for krishiv_session::grants::GrantStateHandle
+pub fn krishiv_session::grants::GrantStateHandle::clone(&self) -> krishiv_session::grants::GrantStateHandle
+impl core::cmp::Eq for krishiv_session::grants::GrantStateHandle
+impl core::cmp::PartialEq for krishiv_session::grants::GrantStateHandle
+pub fn krishiv_session::grants::GrantStateHandle::eq(&self, &krishiv_session::grants::GrantStateHandle) -> bool
+impl core::default::Default for krishiv_session::grants::GrantStateHandle
+pub fn krishiv_session::grants::GrantStateHandle::default() -> krishiv_session::grants::GrantStateHandle
+impl core::fmt::Debug for krishiv_session::grants::GrantStateHandle
+pub fn krishiv_session::grants::GrantStateHandle::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::grants::GrantStateHandle
+pub struct krishiv_session::grants::Grants
+impl krishiv_session::grants::Grants
+pub fn krishiv_session::grants::Grants::denied_counts(&self) -> alloc::vec::Vec<krishiv_session::grants::DeniedCount>
+pub fn krishiv_session::grants::Grants::epoch(&self) -> u64
+pub fn krishiv_session::grants::Grants::new(alloc::sync::Arc<dyn krishiv_session::grants::GrantStore>) -> alloc::sync::Arc<Self>
+impl core::fmt::Debug for krishiv_session::grants::Grants
+pub fn krishiv_session::grants::Grants::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct krishiv_session::grants::GrantsPolicy
+impl krishiv_session::grants::GrantsPolicy
+pub fn krishiv_session::grants::GrantsPolicy::decided_by(&krishiv_plan::analyzer::catalog::Securable) -> krishiv_session::grants::DecidedBy
+pub fn krishiv_session::grants::GrantsPolicy::grants(&self) -> &alloc::sync::Arc<krishiv_session::grants::Grants>
+pub fn krishiv_session::grants::GrantsPolicy::is_admin(&self) -> bool
+pub fn krishiv_session::grants::GrantsPolicy::new(alloc::sync::Arc<krishiv_session::grants::Grants>, alloc::sync::Arc<dyn krishiv_plan::analyzer::catalog::AccessPolicy>, bool) -> Self
+impl core::fmt::Debug for krishiv_session::grants::GrantsPolicy
+pub fn krishiv_session::grants::GrantsPolicy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl krishiv_plan::analyzer::catalog::AccessPolicy for krishiv_session::grants::GrantsPolicy
+pub fn krishiv_session::grants::GrantsPolicy::check<'a>(&'a self, &'a krishiv_common::principal::Principal, &'a krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege) -> futures_core::future::BoxFuture<'a, core::result::Result<krishiv_plan::analyzer::catalog::AccessDecision, krishiv_common::error::KrishivError>>
+pub fn krishiv_session::grants::GrantsPolicy::column_level(&self) -> bool
+pub fn krishiv_session::grants::GrantsPolicy::denied(&self, &krishiv_common::principal::Principal, &krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege)
+pub fn krishiv_session::grants::GrantsPolicy::version(&self) -> krishiv_plan::analyzer::catalog::PolicyVersion
+pub struct krishiv_session::grants::MemoryGrantStore
+impl krishiv_session::grants::MemoryGrantStore
+pub fn krishiv_session::grants::MemoryGrantStore::new() -> Self
+impl core::default::Default for krishiv_session::grants::MemoryGrantStore
+pub fn krishiv_session::grants::MemoryGrantStore::default() -> krishiv_session::grants::MemoryGrantStore
+impl core::fmt::Debug for krishiv_session::grants::MemoryGrantStore
+pub fn krishiv_session::grants::MemoryGrantStore::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl krishiv_session::grants::GrantStore for krishiv_session::grants::MemoryGrantStore
+pub trait krishiv_session::grants::GrantStore: core::marker::Send + core::marker::Sync
+impl krishiv_session::grants::GrantStore for krishiv_session::grants::FileGrantStore
+impl krishiv_session::grants::GrantStore for krishiv_session::grants::MemoryGrantStore
+pub fn krishiv_session::grants::access_provider(&krishiv_common::config::Config, bool) -> core::result::Result<krishiv_session::grants::AccessProvider, krishiv_common::error::KrishivError>
 pub mod krishiv_session::resource_groups
 pub struct krishiv_session::resource_groups::GroupSlot
 impl krishiv_session::resource_groups::GroupSlot
@@ -601,6 +693,7 @@ pub fn krishiv_session::resource_groups::ResourceGroups::fmt(&self, &mut core::f
 impl krishiv_session::AdmissionController for krishiv_session::resource_groups::ResourceGroups
 pub fn krishiv_session::resource_groups::ResourceGroups::admit<'a>(&'a self, &'a krishiv_session::QueryRequest) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<krishiv_session::Permit, krishiv_common::error::KrishivError>>
 pub fn krishiv_session::resource_groups::ResourceGroups::uses_estimate(&self) -> bool
+pub fn krishiv_session::resource_groups::tag_matches(&str, &str, &str) -> bool
 #[non_exhaustive] pub enum krishiv_session::CancelReason
 pub krishiv_session::CancelReason::Admin
 pub krishiv_session::CancelReason::ClientGone
@@ -965,6 +1058,8 @@ impl core::fmt::Debug for krishiv_session::PathPrefixPolicy
 pub fn krishiv_session::PathPrefixPolicy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl krishiv_plan::analyzer::catalog::AccessPolicy for krishiv_session::PathPrefixPolicy
 pub fn krishiv_session::PathPrefixPolicy::check<'a>(&'a self, &'a krishiv_common::principal::Principal, &'a krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<krishiv_plan::analyzer::catalog::AccessDecision, krishiv_common::error::KrishivError>>
+pub fn krishiv_session::PathPrefixPolicy::column_level(&self) -> bool
+pub fn krishiv_session::PathPrefixPolicy::denied(&self, &krishiv_common::principal::Principal, &krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege)
 pub fn krishiv_session::PathPrefixPolicy::version(&self) -> krishiv_plan::analyzer::catalog::PolicyVersion
 pub struct krishiv_session::Permit
 impl krishiv_session::Permit
@@ -1069,6 +1164,8 @@ impl core::fmt::Debug for krishiv_session::ReadOnlyPolicy
 pub fn krishiv_session::ReadOnlyPolicy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl krishiv_plan::analyzer::catalog::AccessPolicy for krishiv_session::ReadOnlyPolicy
 pub fn krishiv_session::ReadOnlyPolicy::check<'a>(&'a self, &'a krishiv_common::principal::Principal, &'a krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<krishiv_plan::analyzer::catalog::AccessDecision, krishiv_common::error::KrishivError>>
+pub fn krishiv_session::ReadOnlyPolicy::column_level(&self) -> bool
+pub fn krishiv_session::ReadOnlyPolicy::denied(&self, &krishiv_common::principal::Principal, &krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege)
 pub fn krishiv_session::ReadOnlyPolicy::version(&self) -> krishiv_plan::analyzer::catalog::PolicyVersion
 pub struct krishiv_session::RuntimeConf
 impl krishiv_session::RuntimeConf
@@ -1146,6 +1243,7 @@ pub fn krishiv_session::SessionBuilder::build(self) -> core::result::Result<kris
 pub fn krishiv_session::SessionBuilder::config(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn krishiv_session::SessionBuilder::executor(self, alloc::sync::Arc<dyn krishiv_exec::executor::Executor>) -> Self
 pub fn krishiv_session::SessionBuilder::functions(self, alloc::sync::Arc<dyn krishiv_plan::analyzer::catalog::FunctionRegistry>) -> Self
+pub fn krishiv_session::SessionBuilder::grants(self, alloc::sync::Arc<krishiv_session::grants::GrantsPolicy>) -> Self
 pub fn krishiv_session::SessionBuilder::principal(self, krishiv_common::principal::Principal) -> Self
 pub fn krishiv_session::SessionBuilder::profile(self, krishiv_functions::signature::SparkProfile) -> Self
 pub fn krishiv_session::SessionBuilder::runtime(self, alloc::sync::Arc<krishiv_session::EngineRuntime>) -> Self
@@ -1251,5 +1349,4 @@ pub fn krishiv_session::dot_of_profile(&krishiv_exec::profile::QueryProfile) -> 
 pub fn krishiv_session::mermaid_of_plan(&krishiv_exec::planner::explain::ExplainNode) -> alloc::string::String
 pub fn krishiv_session::mermaid_of_profile(&krishiv_exec::profile::QueryProfile) -> alloc::string::String
 pub fn krishiv_session::register_build_features(&[(&str, bool)])
-pub fn krishiv_session::resource_groups::tag_matches(&str, &str, &str) -> bool
 pub type krishiv_session::RecordBatchStream = futures_core::stream::BoxStream<'static, core::result::Result<arrow_array::record_batch::RecordBatch, krishiv_common::error::KrishivError>>
