@@ -16,6 +16,7 @@ use krishiv_types::batch::Batch;
 use crate::error::Result;
 use crate::operator::Sink;
 use crate::operators::{MemoryScan, ScanPushdown, SpilledScan};
+use crate::planner::row_level::{RowLevelOperation, RowLevelTable};
 use crate::planner::write::{TableCapabilities, WriteRequest};
 
 /// A table the executor can read: the scan factory the planner pushes
@@ -63,6 +64,14 @@ pub trait TableProvider: Send + Sync + fmt::Debug {
             feature: format!("a writer for {self:?}"),
         }
         .into())
+    }
+
+    /// The table as `op` changes it (`DELETE`, `UPDATE`, `MERGE`; design
+    /// `P3-PR-DML-row-level.md`), at the version this provider reads. The default offers
+    /// none: the statement is refused as Spark refuses it for a v1 table.
+    fn row_level(&self, op: RowLevelOperation) -> Option<Arc<dyn RowLevelTable>> {
+        let _ = op;
+        None
     }
 }
 

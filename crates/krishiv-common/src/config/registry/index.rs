@@ -219,6 +219,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &LEGACY_TIME_PARSER_POLICY,
     ),
     (
+        "spark.sql.unionOutputPartitioning",
+        &UNION_OUTPUT_PARTITIONING,
+    ),
+    (
         "krishiv.connect.execute.aheadBytes",
         &CONNECT_EXECUTE_AHEAD_BYTES,
     ),
@@ -273,6 +277,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.legacy.timeParserPolicy",
         &LEGACY_TIME_PARSER_POLICY,
+    ),
+    (
+        "krishiv.sql.unionOutputPartitioning",
+        &UNION_OUTPUT_PARTITIONING,
     ),
     (
         "krishiv.io.parquet.pageIndex.enabled",

@@ -896,15 +896,44 @@ fn a_seeded_random_above_a_generator_draws_by_split_not_by_driver() {
     }
 }
 
-/// Two reads of one shared CTE number their splits apart: the stored batches carry no split tag of the
-/// pipeline that produced them, so ids drawn per split stay unique across the readers.
+/// Two reads of one shared CTE, each in its own `UNION ALL` branch, number
+/// their partitions from 0: the ids repeat across the branches. Spark 4.2.0
+/// (`local[1]` and `local[4]`, the probe `cte_two_reads*` beside
+/// `tests/fixtures/spark-4.2.0/union-partition-ids.json`): 1001 distinct ids
+/// of 2002 rows, each branch 0 to 1000. One compute thread reads each copy
+/// of the stored batches on one driver, as Spark reads the one partition.
 #[test]
-fn two_reads_of_a_shared_cte_draw_ids_from_distinct_splits() {
-    let s = Session::new().unwrap();
-    let q = "WITH t AS (SELECT id, rand() AS r FROM range(0, 1000, 1, 4) UNION ALL SELECT count(*), rand() FROM range(10)) \
-             SELECT count(DISTINCT m) FROM (SELECT monotonically_increasing_id() AS m FROM t \
-             UNION ALL SELECT monotonically_increasing_id() AS m FROM t)";
-    assert_eq!(column(rows(&s, q)), vec!["2002"]);
+fn two_reads_of_a_shared_cte_in_two_branches_repeat_ids_as_spark() {
+    let executor = krishiv_exec::TokioExecutor::new(&krishiv_exec::ExecutorConfig {
+        compute_threads: 1,
+        io_threads: 1,
+        blocking_threads: 1,
+        io_blocking_threads: 2,
+    })
+    .unwrap();
+    let s = Session::builder().executor(executor).build().unwrap();
+    let t = "WITH t AS (SELECT id, rand() AS r FROM range(0, 1000, 1, 4) UNION ALL \
+             SELECT count(*), rand() FROM range(10)) ";
+    let q = format!(
+        "{t}SELECT count(DISTINCT m), count(*) FROM (SELECT monotonically_increasing_id() AS m FROM t \
+         UNION ALL SELECT monotonically_increasing_id() AS m FROM t)"
+    );
+    assert_eq!(
+        rows(&s, &q),
+        vec![vec!["1001".to_owned(), "2002".to_owned()]]
+    );
+    let q = format!(
+        "{t}SELECT b, count(DISTINCT m), count(*), min(m), max(m) FROM (SELECT 1 AS b, \
+         monotonically_increasing_id() AS m FROM t UNION ALL SELECT 2 AS b, \
+         monotonically_increasing_id() AS m FROM t) GROUP BY b ORDER BY b"
+    );
+    let want = |b: &str| -> Vec<String> {
+        [b, "1001", "1001", "0", "1000"]
+            .iter()
+            .map(|v| (*v).to_owned())
+            .collect()
+    };
+    assert_eq!(rows(&s, &q), vec![want("1"), want("2")]);
 }
 
 /// Spark 4.2.0 (krishiv-internal `research/spark/seed-by-split/probe.{py,out}`): split `i` of a `range` draws from

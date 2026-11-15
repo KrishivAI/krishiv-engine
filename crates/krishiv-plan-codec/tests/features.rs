@@ -2174,3 +2174,47 @@ fn a_sample_needs_its_feature() {
         }
     );
 }
+
+#[test]
+fn a_reader_without_table_write_refuses_a_table_write_naming_it() {
+    for name in [
+        "table_write",
+        "table_write_by_filter",
+        "table_write_row_level",
+    ] {
+        let plan = cases().into_iter().find(|(n, _)| n == name).unwrap().1;
+        let bytes = encode(&plan).unwrap();
+        assert_eq!(decode(&bytes).unwrap(), plan, "{name}");
+        let err = decode_with(&bytes, &Limits::default(), &ReaderFeatures::only([])).unwrap_err();
+        let CodecError::UnsupportedFeatures { missing } = err else {
+            panic!("{name}: {err:?}");
+        };
+        assert!(
+            missing.contains(&"table_write".to_owned()),
+            "{name}: {missing:?}"
+        );
+    }
+}
+
+#[test]
+fn a_table_write_never_carries_an_inline_secret() {
+    use krishiv_exec::physical::TableWriteRequest;
+    let mut root = cases()
+        .into_iter()
+        .find(|(n, _)| n == "table_write")
+        .unwrap()
+        .1
+        .root()
+        .clone();
+    let PhysNode::TableWrite { request, .. } = &mut root else {
+        panic!("not a table write");
+    };
+    let TableWriteRequest::Write(w) = request else {
+        panic!("not a write");
+    };
+    w.options
+        .insert("fs.s3a.secret.key".to_owned(), "abc".to_owned());
+    let err = encode(&plan_of(root)).unwrap_err();
+    assert!(matches!(err, CodecError::Unsupported(_)), "{err:?}");
+    assert!(!err.to_string().contains("abc"), "{err}");
+}
