@@ -123,6 +123,7 @@ value_types!(
     krishiv_plan::Scan,
     krishiv_plan::AttrId,
     krishiv_plan::GeneratorKind,
+    krishiv_plan::PythonUdfRef,
     // Scan and runtime-filter descriptions.
     krishiv_io::ColumnPath,
     krishiv_io::FilterId,

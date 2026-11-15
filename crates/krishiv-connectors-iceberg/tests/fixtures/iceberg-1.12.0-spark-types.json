@@ -1,0 +1,87 @@
+[
+  {"iceberg": "boolean", "spark": "boolean", "error": null, "source": "spark/v4.1/spark/src/main/java/org/apache/iceberg/spark/TypeToSparkType.java:126"},
+  {"iceberg": "int", "spark": "integer", "error": null, "source": "TypeToSparkType.java:128"},
+  {"iceberg": "long", "spark": "long", "error": null, "source": "TypeToSparkType.java:130"},
+  {"iceberg": "float", "spark": "float", "error": null, "source": "TypeToSparkType.java:132"},
+  {"iceberg": "double", "spark": "double", "error": null, "source": "TypeToSparkType.java:134"},
+  {"iceberg": "decimal(10,2)", "spark": "decimal(10,2)", "error": null, "source": "TypeToSparkType.java:160"},
+  {"iceberg": "decimal(38,0)", "spark": "decimal(38,0)", "error": null, "source": "TypeToSparkType.java:160"},
+  {"iceberg": "date", "spark": "date", "error": null, "source": "TypeToSparkType.java:136"},
+  {"iceberg": "time", "spark": null, "error": "java.lang.UnsupportedOperationException: Spark does not support time fields", "source": "TypeToSparkType.java:138"},
+  {"iceberg": "timestamp", "spark": "timestamp_ntz", "error": null, "source": "TypeToSparkType.java:140-146"},
+  {"iceberg": "timestamptz", "spark": "timestamp", "error": null, "source": "TypeToSparkType.java:140-146"},
+  {"iceberg": "timestamp_ns", "spark": null, "error": "java.lang.UnsupportedOperationException: Cannot convert unsupported type to Spark: timestamp_ns", "source": "TypeToSparkType.java:165-167 (TypeID.TIMESTAMP_NANO has no case; falls to default)"},
+  {"iceberg": "timestamptz_ns", "spark": null, "error": "java.lang.UnsupportedOperationException: Cannot convert unsupported type to Spark: timestamptz_ns", "source": "TypeToSparkType.java:165-167"},
+  {"iceberg": "string", "spark": "string", "error": null, "source": "TypeToSparkType.java:147"},
+  {"iceberg": "uuid", "spark": "string", "error": null, "source": "TypeToSparkType.java:149-151"},
+  {"iceberg": "fixed[16]", "spark": "binary", "error": null, "source": "TypeToSparkType.java:152"},
+  {"iceberg": "binary", "spark": "binary", "error": null, "source": "TypeToSparkType.java:154"},
+  {"iceberg": "variant", "spark": "variant", "error": null, "source": "TypeToSparkType.java:118-121"},
+  {"iceberg": "unknown", "spark": "void", "error": null, "source": "TypeToSparkType.java:163-164"},
+  {"iceberg": "geometry(OGC:CRS84)", "spark": "geometry(OGC:CRS84)", "error": null, "source": "TypeToSparkType.java:171-176; spark v4.1.0 GeometryType.scala:82"},
+  {"iceberg": "geometry(EPSG:4326)", "spark": "geometry(EPSG:4326)", "error": null, "source": "TypeToSparkType.java:171-176 (accepted only if Spark's CartesianSpatialReferenceSystemMapper knows the CRS; otherwise SparkIllegalArgumentException ST_INVALID_CRS_VALUE)"},
+  {"iceberg": "geometry(NOT:A_CRS)", "spark": null, "error": "org.apache.spark.SparkIllegalArgumentException: [ST_INVALID_CRS_VALUE] (crs = NOT:A_CRS); assumes the CRS is unknown to Spark's mapper", "source": "TypeToSparkType.java:171-176; spark v4.1.0 GeometryType.scala:221-225"},
+  {"iceberg": "geography(OGC:CRS84, spherical)", "spark": "geography(OGC:CRS84, SPHERICAL)", "error": null, "source": "TypeToSparkType.java:178-182,184-195; spark v4.1.0 GeographyType.scala:86"},
+  {"iceberg": "geography(OGC:CRS84, vincenty)", "spark": null, "error": "java.lang.UnsupportedOperationException: Spark does not support geography edge algorithm: VINCENTY", "source": "TypeToSparkType.java:187-194"},
+  {"iceberg": "geography(EPSG:3857, spherical)", "spark": null, "error": "org.apache.spark.SparkIllegalArgumentException: [ST_INVALID_CRS_VALUE] (crs = EPSG:3857); Spark recognizes only OGC:CRS84 for geography", "source": "TypeToSparkType.java:178-182"},
+  {
+    "iceberg": {"type": "struct", "fields": [
+      {"id": 1, "name": "a", "required": true, "type": "int"},
+      {"id": 2, "name": "b", "required": false, "type": "string", "doc": "the b column"}
+    ]},
+    "spark": {"type": "struct", "fields": [
+      {"name": "a", "type": "integer", "nullable": false, "metadata": {}},
+      {"name": "b", "type": "string", "nullable": true, "metadata": {"comment": "the b column"}}
+    ]},
+    "error": null,
+    "source": "TypeToSparkType.java:69-101 (nullable = field.isOptional(); doc -> withComment; field id NOT stored in metadata)"
+  },
+  {
+    "iceberg": {"type": "list", "element-id": 3, "element": "long", "element-required": true},
+    "spark": {"type": "array", "elementType": "long", "containsNull": false},
+    "error": null,
+    "source": "TypeToSparkType.java:108-111"
+  },
+  {
+    "iceberg": {"type": "list", "element-id": 3, "element": "long", "element-required": false},
+    "spark": {"type": "array", "elementType": "long", "containsNull": true},
+    "error": null,
+    "source": "TypeToSparkType.java:108-111"
+  },
+  {
+    "iceberg": {"type": "map", "key-id": 4, "key": "string", "value-id": 5, "value": "double", "value-required": true},
+    "spark": {"type": "map", "keyType": "string", "valueType": "double", "valueContainsNull": false},
+    "error": null,
+    "source": "TypeToSparkType.java:113-116 (Iceberg map keys are always required)"
+  },
+  {
+    "iceberg": {"type": "map", "key-id": 4, "key": "string", "value-id": 5, "value": "double", "value-required": false},
+    "spark": {"type": "map", "keyType": "string", "valueType": "double", "valueContainsNull": true},
+    "error": null,
+    "source": "TypeToSparkType.java:113-116"
+  },
+  {
+    "iceberg": {"type": "struct", "fields": [
+      {"id": 1, "name": "xs", "required": true, "type": {"type": "list", "element-id": 2, "element": {"type": "struct", "fields": [
+        {"id": 3, "name": "k", "required": true, "type": "timestamptz"},
+        {"id": 4, "name": "v", "required": false, "type": {"type": "map", "key-id": 5, "key": "string", "value-id": 6, "value": "decimal(5,1)", "value-required": true}}
+      ]}, "element-required": false}},
+      {"id": 7, "name": "u", "required": false, "type": "uuid", "doc": "id"}
+    ]},
+    "spark": {"type": "struct", "fields": [
+      {"name": "xs", "type": {"type": "array", "elementType": {"type": "struct", "fields": [
+        {"name": "k", "type": "timestamp", "nullable": false, "metadata": {}},
+        {"name": "v", "type": {"type": "map", "keyType": "string", "valueType": "decimal(5,1)", "valueContainsNull": false}, "nullable": true, "metadata": {}}
+      ]}, "containsNull": true}, "nullable": false, "metadata": {}},
+      {"name": "u", "type": "string", "nullable": true, "metadata": {"comment": "id"}}
+    ]},
+    "error": null,
+    "source": "TypeToSparkType.java:69-116 (mixed nullability, nested)"
+  },
+  {
+    "iceberg": {"type": "list", "element-id": 2, "element": "time", "element-required": true},
+    "spark": null,
+    "error": "java.lang.UnsupportedOperationException: Spark does not support time fields",
+    "source": "TypeToSparkType.java:138-139 (error propagates from a nested element)"
+  }
+]
