@@ -130,6 +130,10 @@ impl Project {
 }
 
 impl Operator for Project {
+    fn keeps_partitioning(&self) -> bool {
+        true
+    }
+
     fn lane_safe(&self) -> bool {
         true
     }
@@ -143,16 +147,14 @@ impl Operator for Project {
     }
 
     fn local_state(&self, ctx: &TaskContext) -> Result<LocalState> {
-        Ok(Box::new(PartitionState {
-            partition: ctx.partition(),
-        }))
+        Ok(Box::new(PartitionState::of(ctx)))
     }
 
     fn execute(&self, input: &Batch, local: &mut LocalState) -> Result<OperatorOutput> {
         if input.num_rows() == 0 {
             return Ok(OperatorOutput::NeedMoreInput(None));
         }
-        let partition = local_mut::<PartitionState>(local, "Project")?.partition;
+        let partition = local_mut::<PartitionState>(local, "Project")?.index(input.split());
         Ok(OperatorOutput::NeedMoreInput(Some(
             self.project(input, partition)?,
         )))
@@ -178,9 +180,7 @@ impl Project {
                         .get(*index)
                         .map(Arc::clone)
                         .ok_or_else(|| internal(format!("project index {index} out of range"))),
-                    ProjectItem::Expr { expr, .. } => {
-                        expr.evaluate_in(data, input.split().unwrap_or(partition))
-                    }
+                    ProjectItem::Expr { expr, .. } => expr.evaluate_in(data, partition),
                 }
             })
             .collect::<Result<Vec<_>>>()?;

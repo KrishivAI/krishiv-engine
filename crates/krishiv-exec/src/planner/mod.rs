@@ -42,6 +42,7 @@ mod properties;
 pub(crate) mod pushdown;
 mod python_relation;
 mod python_udf;
+mod row_level;
 mod runtime_filter;
 pub(crate) mod subquery;
 mod table;
@@ -60,6 +61,10 @@ pub(crate) use build::concat_schemas;
 pub use explain::ExplainNode;
 pub use file_table::FileTable;
 pub use ndv_sample::{SampleOptions, SampleOutcome, SampleResult};
+pub use row_level::{
+    CardinalityRule, RowIdScan, RowLevelCapabilities, RowLevelCounts, RowLevelOperation,
+    RowLevelTable, RowLevelWrite,
+};
 pub use table::{
     MemoryTable, MemoryTables, ProviderStatistics, SpilledTable, TableProvider,
     TableProviderResolver,

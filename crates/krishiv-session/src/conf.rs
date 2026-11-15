@@ -10,12 +10,10 @@ use krishiv_common::error::{
 use krishiv_kernels::cast::FixedOffset;
 use krishiv_kernels::datetime::{resolve_zone, zone_id};
 
-/// Prefixes of entries read once, when the session is built (memory pool,
-/// spill directory, I/O scheduler): setting them later would not apply,
-/// so it fails like a static config.
-pub(crate) const BUILD_TIME: &[&str] = &["krishiv.memory.", "krishiv.spill.", "krishiv.io."];
-
-/// Session keys fixed when the session is built (its memory pool).
+/// Session-scope keys fixed when the session is built (its memory pool): `SET` of one fails like
+/// a static config, a builder option sets it. Every other session-scope key is read per query, so
+/// `SET` takes it, whatever its prefix (SQL-23: the `krishiv.io.*` format-option fallbacks and
+/// `krishiv.io.prefetchBytes` are read from each query's configuration snapshot).
 const SESSION_BUILD_TIME: &[&str] = &["krishiv.session.memoryLimit"];
 
 /// The configuration of a session, shared by its clones. Queries read an
@@ -325,11 +323,7 @@ pub(crate) fn get(config: &Config, key: &str) -> Option<String> {
 /// Whether `key` can change after the session is built.
 pub(crate) fn is_modifiable(key: &str) -> bool {
     match lookup(key) {
-        Some(entry) => {
-            entry.scope == Scope::Session
-                && !BUILD_TIME.iter().any(|p| entry.key.starts_with(p))
-                && !SESSION_BUILD_TIME.contains(&entry.key)
-        }
+        Some(entry) => entry.scope == Scope::Session && !SESSION_BUILD_TIME.contains(&entry.key),
         None => true,
     }
 }

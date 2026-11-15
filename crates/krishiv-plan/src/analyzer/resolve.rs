@@ -236,6 +236,8 @@ pub(super) struct Resolver<'a> {
     pub(super) pending_nondeterministic: Option<AnalysisError>,
     /// Binding the metrics of an `observe` (Spark checks them in `CheckAnalysis`, not as an aggregate).
     pub(super) observing: bool,
+    /// The ids of the `Range` leaves resolved so far: a later one with the same id gets a fresh one.
+    range_ids: std::collections::HashSet<AttrId>,
     /// The attributes that hold a `CHAR(n)` / `VARCHAR(n)` column, by id, with the catalog string they were
     /// declared with (see `char_varchar`).
     pub(super) declared: HashMap<AttrId, Arc<str>>,
@@ -293,6 +295,7 @@ pub(super) fn resolve(
         fn_path: Vec::new(),
         sql_calls: 0,
         pending_nondeterministic: None,
+        range_ids: std::collections::HashSet::new(),
         declared: HashMap::new(),
         comments: HashMap::new(),
     };
@@ -375,6 +378,7 @@ fn first_free_id(root: &LogicalPlan) -> Result<u64, AnalysisError> {
         match node {
             Node::Plan(p) => match &p.node {
                 PlanNode::Scan(s) => s.output.iter().for_each(&mut bump),
+                PlanNode::Range { output, .. } => bump(output),
                 PlanNode::CteRef(r) => r.output.iter().for_each(&mut bump),
                 PlanNode::Shift { offset, .. } => shifts = shifts.saturating_add(*offset),
                 // The `exists` column is defined by the join alone: an
@@ -1115,9 +1119,19 @@ impl Resolver<'_> {
             } => {
                 // A built `Range` (the DataFrame API, Spark Connect) carries
                 // an id of its builder's choosing, which two ranges of one
-                // plan share; the leaf gets this analysis's own fresh id.
+                // plan share: the first keeps its id (so a plan analysed
+                // before and stored, as a temporary view's, still names it
+                // above the leaf, SQL-25), a later one with the same id gets
+                // this analysis's own fresh id (past every id the plan holds).
+                let id = if self.range_ids.insert(output.id) {
+                    output.id
+                } else {
+                    let id = self.fresh();
+                    self.range_ids.insert(id);
+                    id
+                };
                 let col = BoundColumn {
-                    id: self.fresh(),
+                    id,
                     ..output.clone()
                 };
                 let node = PlanNode::Range {

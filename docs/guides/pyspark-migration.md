@@ -8,7 +8,7 @@ description: "Move a PySpark job to Krishiv: unsupported functions, workarounds 
 
 Krishiv keeps the PySpark API: `krishiv.session()` returns a `SparkSession`-style object, and `spark.sql`, `spark.read`,
 DataFrames and `pyspark.sql.functions`-style functions behave as in Spark. This page lists what differs and what to do.
-The tables below are generated from the same data `krishiv check-compat` reads, so they cannot drift from it.
+The tables below are generated from the compatibility data, so they cannot drift from it.
 
 Krishiv needs Python 3.11 or newer, the floor of the Spark 4.3 Python client; the examples here run on 3.11 to 3.14.
 
@@ -30,14 +30,9 @@ out = df.groupBy("region").agg(F.sum("amount").alias("revenue")).orderBy("region
 assert [tuple(r) for r in out.collect()] == [("east", 15.5), ("west", 20.0)]
 ```
 
-## Step 2: scan your project
+## Step 2: find the functions your code calls
 
-`krishiv check-compat` reads `.py`, `.sql` and `.ipynb` files without running them and lists the functions below that
-your code calls (see [check-compat](check-compat.md)).
-
-```bash
-krishiv check-compat .
-```
+Search your project for the function names in the tables below. The `krishiv check-compat` scanner that automates this is not part of 0.2.0 (see [check-compat](check-compat.md)).
 
 ## Spark functions Krishiv does not run yet (94)
 
@@ -169,7 +164,7 @@ Each row links to the full description in [known differences](../concepts/known-
 ## Where it runs
 
 Krishiv has three deployment modes: embedded (in your Python process, as above), single-node and distributed.
-Single-node is one `krishiv server` process that PySpark and other clients reach over Spark Connect; see [Deployment](deploy.md).
+Single-node, one `krishiv server` process that PySpark and other clients reach over Spark Connect, is in development: 0.2 has the server's web UI and admin API, not Spark Connect. See [Deployment](deploy.md).
 
 ## Step 3: check the result
 
