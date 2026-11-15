@@ -32,7 +32,7 @@ use krishiv_common::error::{
 };
 use krishiv_common::names::check_column_name_duplication;
 use krishiv_plan::Literal;
-use krishiv_plan::analyzer::{Privilege, Securable, authorize};
+use krishiv_plan::analyzer::{Privilege, authorize};
 use krishiv_sql::StatementClass;
 use krishiv_sql::ast::{AlterTableAction, BucketSpec, Expr, PartitionSpec, PartitionWithLocation};
 use krishiv_types::DataType;
@@ -1471,10 +1471,8 @@ impl Session {
         path: &Path,
         privilege: Privilege,
     ) -> Result<(), KrishivError> {
-        let securable = Securable::Path(krishiv_common::secret::OptionValue::from_user(
-            "path",
-            path.display().to_string(),
-        ));
+        // The form every check of a table's directories uses (`Session::local_dir_securable`).
+        let securable = self.local_dir_securable(path)?;
         let r = authorize(
             &*self.state.policy,
             &self.state.principal,

@@ -1,0 +1,210 @@
+// SPDX-License-Identifier: Apache-2.0
+//! One path form for a managed table's directory (T063 N1c): every statement that asks the policy about the
+//! directory asks in the form `df.write` and `PathPrefixPolicy` use (`file:/a/b`, links resolved), so one
+//! prefix rule gives the same answer for `INSERT`, `INSERT OVERWRITE`, `TRUNCATE` and `DROP TABLE` of the
+//! same table, with the warehouse given with `file:` or without, and `CREATE TABLE`, CTAS, `saveAsTable`,
+//! `ALTER TABLE .. RENAME` and partition DDL under a `PathPrefixPolicy` of the warehouse run.
+#![cfg(test)]
+
+use std::path::Path;
+use std::sync::Arc;
+
+use futures::executor::block_on;
+use krishiv_common::error::KrishivError;
+use krishiv_plan::analyzer::{BoxFuture, PolicyVersion};
+use krishiv_session::{
+    AccessDecision, AccessPolicy, AllowAll, EngineRuntime, PathPrefixPolicy, Principal,
+    PrincipalKind, Privilege, Securable, Session,
+};
+
+const DENIED: &str = "KRISHIV_INSUFFICIENT_PERMISSIONS";
+
+/// One rule on path text: a path starting with `prefix` gets `inside`, any other path the opposite;
+/// everything that is not a path is allowed.
+struct PrefixRule {
+    prefix: String,
+    inside: bool,
+}
+
+impl AccessPolicy for PrefixRule {
+    fn version(&self) -> PolicyVersion {
+        PolicyVersion(1)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _: &'a Principal,
+        securable: &'a Securable,
+        _: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        let decision = match securable {
+            Securable::Path(p) => {
+                let under = p.as_plain().is_some_and(|t| t.starts_with(&self.prefix));
+                if under == self.inside {
+                    AccessDecision::Allow
+                } else {
+                    AccessDecision::Deny {
+                        reason: "path rule".to_owned(),
+                    }
+                }
+            }
+            _ => AccessDecision::Allow,
+        };
+        Box::pin(std::future::ready(Ok(decision)))
+    }
+}
+
+/// An unrestricted owner and a subject under `policy`, sharing one runtime (so one catalog and warehouse),
+/// both with the warehouse `warehouse` as written.
+fn sessions(warehouse: &str, policy: Arc<dyn AccessPolicy>) -> (Session, Session) {
+    let rt = EngineRuntime::builder().build().unwrap();
+    let owner = Session::builder()
+        .runtime(Arc::clone(&rt))
+        .principal(Principal::new("owner", PrincipalKind::User))
+        .access_policy(Arc::new(AllowAll))
+        .build()
+        .unwrap();
+    let subject = Session::builder()
+        .runtime(rt)
+        .principal(Principal::new("ana", PrincipalKind::User))
+        .access_policy(policy)
+        .build()
+        .unwrap();
+    for s in [&owner, &subject] {
+        s.conf().set("spark.sql.warehouse.dir", warehouse).unwrap();
+    }
+    (owner, subject)
+}
+
+fn run(s: &Session, sql: &str) -> Result<(), KrishivError> {
+    block_on(async { s.sql(sql).await?.collect().await.map(|_| ()) })
+}
+
+fn outcome(r: Result<(), KrishivError>) -> String {
+    match r {
+        Ok(()) => "ok".to_owned(),
+        Err(e) => e.error_class().name().to_owned(),
+    }
+}
+
+/// The subject's answer for each statement on the managed table `t`, which the owner creates (with a row)
+/// before each one.
+fn answers(warehouse: &str, policy: Arc<dyn AccessPolicy>) -> Vec<(&'static str, String)> {
+    let (owner, subject) = sessions(warehouse, policy);
+    let statements = [
+        ("insert", "INSERT INTO t VALUES (2)"),
+        ("insert overwrite", "INSERT OVERWRITE t VALUES (3)"),
+        ("truncate", "TRUNCATE TABLE t"),
+        ("drop", "DROP TABLE t"),
+    ];
+    statements
+        .into_iter()
+        .map(|(label, sql)| {
+            run(&owner, "CREATE TABLE IF NOT EXISTS t (a INT) USING parquet").unwrap();
+            run(&owner, "INSERT INTO t VALUES (1)").unwrap();
+            (label, outcome(run(&subject, sql)))
+        })
+        .collect()
+}
+
+fn all(expected: &str) -> Vec<(&'static str, String)> {
+    ["insert", "insert overwrite", "truncate", "drop"]
+        .into_iter()
+        .map(|l| (l, expected.to_owned()))
+        .collect()
+}
+
+/// The warehouse, created, with its links resolved (the form the rule is written against).
+fn warehouse(tmp: &Path) -> std::path::PathBuf {
+    let wh = tmp.join("wh");
+    std::fs::create_dir_all(&wh).unwrap();
+    wh.canonicalize().unwrap()
+}
+
+/// The warehouse as written: plain or with `file:`.
+fn written(wh: &Path, with_scheme: bool) -> String {
+    if with_scheme {
+        format!("file:{}", wh.display())
+    } else {
+        wh.display().to_string()
+    }
+}
+
+#[test]
+fn one_prefix_rule_allows_every_statement_on_the_table_directory() {
+    for with_scheme in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let wh = warehouse(tmp.path());
+        let rule = PrefixRule {
+            prefix: format!("file:{}/t", wh.display()),
+            inside: true,
+        };
+        assert_eq!(
+            answers(&written(&wh, with_scheme), Arc::new(rule)),
+            all("ok"),
+            "warehouse with file: {with_scheme}"
+        );
+    }
+}
+
+#[test]
+fn one_prefix_rule_denies_every_statement_on_the_table_directory() {
+    for with_scheme in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let wh = warehouse(tmp.path());
+        let rule = PrefixRule {
+            prefix: format!("file:{}/t", wh.display()),
+            inside: false,
+        };
+        assert_eq!(
+            answers(&written(&wh, with_scheme), Arc::new(rule)),
+            all(DENIED),
+            "warehouse with file: {with_scheme}"
+        );
+    }
+}
+
+/// `PathPrefixPolicy` over the warehouse allows the statements on its tables; over another root it denies
+/// all of them.
+#[test]
+fn a_path_prefix_policy_gives_one_answer_for_a_managed_table() {
+    for with_scheme in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let wh = warehouse(tmp.path());
+        let other = tmp.path().join("other");
+        std::fs::create_dir(&other).unwrap();
+        let inside = PathPrefixPolicy::new([&wh], Arc::new(AllowAll)).unwrap();
+        let outside = PathPrefixPolicy::new([&other], Arc::new(AllowAll)).unwrap();
+        let at = written(&wh, with_scheme);
+        assert_eq!(answers(&at, Arc::new(inside)), all("ok"), "{at}");
+        assert_eq!(answers(&at, Arc::new(outside)), all(DENIED), "{at}");
+    }
+}
+
+/// The directory checks of the statements that create, move or add a managed directory use the same form:
+/// under a `PathPrefixPolicy` of the warehouse they run.
+#[test]
+fn creates_renames_and_partitions_in_the_warehouse_pass_a_path_prefix_policy() {
+    for with_scheme in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let wh = warehouse(tmp.path());
+        let policy = PathPrefixPolicy::new([&wh], Arc::new(AllowAll)).unwrap();
+        let (_, s) = sessions(&written(&wh, with_scheme), Arc::new(policy));
+        for sql in [
+            "CREATE TABLE c (a INT) USING parquet",
+            "CREATE TABLE ctas USING parquet AS SELECT 1 AS a",
+            "ALTER TABLE c RENAME TO c2",
+            "CREATE TABLE p (a INT, k INT) USING parquet PARTITIONED BY (k)",
+            "ALTER TABLE p ADD PARTITION (k = 1)",
+            "INSERT INTO p PARTITION (k = 2) VALUES (5)",
+            "ALTER TABLE p PARTITION (k = 1) RENAME TO PARTITION (k = 3)",
+            "ALTER TABLE p DROP PARTITION (k = 2)",
+        ] {
+            assert_eq!(outcome(run(&s, sql)), "ok", "{sql} (file: {with_scheme})");
+        }
+        let df = block_on(s.sql("SELECT 1 AS a")).unwrap();
+        block_on(df.write().save_as_table("saved")).unwrap();
+        assert!(wh.join("saved").is_dir());
+        assert!(wh.join("c2").is_dir() && !wh.join("c").exists());
+    }
+}
