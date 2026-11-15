@@ -943,12 +943,14 @@ fn writes_go_to_the_directory_a_link_names_and_are_checked_there() {
     let df = block_on(s.sql("SELECT 1 AS a")).unwrap();
     let e = block_on(df.write().parquet(root.join("link/o").to_str().unwrap())).unwrap_err();
     assert_eq!(e.error_class().name(), DENIED);
-    // The denial names the directory the write would have gone to.
+    // The policy is asked about the directory the write would have gone to, but the denial names the
+    // path as written: it never shows where a link points.
     assert!(
         e.to_string()
-            .contains(&format!("{}/o", outside.canonicalize().unwrap().display())),
+            .contains(&format!("'file:{}/link/o'", root.display())),
         "{e}"
     );
+    assert!(!e.to_string().contains("outside"), "{e}");
     assert!(!outside.join("o").exists());
 }
 

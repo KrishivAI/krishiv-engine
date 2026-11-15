@@ -615,41 +615,54 @@ fn folded(ident: &TableIdent) -> TableIdent {
     }
 }
 
+/// A path as an access check sees it: `at`, resolved (links followed), is what the policy is asked
+/// about, the audit record names and the statement uses; `shown`, the path as the caller wrote it with
+/// `.` and `..` folded from the text only (`LocalPaths::locate`), is what a denial the caller sees names.
+/// Nothing read from the file system reaches `shown`, so a denial cannot tell a link's target or whether
+/// anything exists.
+#[derive(Debug, Clone)]
+pub(crate) struct Checked {
+    /// The resolved path.
+    pub(crate) at: LocatedPath,
+    /// The caller's text, `..` folded, qualified (`file:/...`).
+    pub(crate) shown: String,
+}
+
 /// `at` (a local path, `file:/...`, as `LocalPaths::locate` gives it: `.` and `..` already folded in the
 /// text, as every read and write folds them) with the symbolic links of its existing part resolved: the
-/// directory a write really goes to. An object-store path is returned as it is.
+/// directory a write really goes to. An object-store path is returned as it is. `at.display` is the
+/// [`Checked::shown`] text.
 ///
 /// # Errors
-/// `KRISHIV_INSUFFICIENT_PERMISSIONS` for `privilege` on `at` (audited as `class`) when the path cannot be
-/// resolved: an unsearchable directory, a dangling link or a link loop on it. That is the answer a policy
-/// gives a path it denies, so a caller cannot tell from it what is on the disk (no existence oracle).
+/// `KRISHIV_INSUFFICIENT_PERMISSIONS` for `privilege` on the shown path (audited as `class`) when the
+/// path cannot be resolved: an unsearchable directory, a dangling link or a link loop on it. That is the
+/// answer a policy gives a path it denies, with the same text (no existence oracle).
 pub(crate) fn physical(
     session: &Session,
     at: LocatedPath,
     privilege: Privilege,
     class: StatementClass,
-) -> Result<LocatedPath, KrishivError> {
+) -> Result<Checked, KrishivError> {
+    let shown = at.display.clone();
     let Some(local) = at.display.strip_prefix("file:") else {
-        return Ok(at);
+        return Ok(Checked { at, shown });
     };
     let Some(parts) = canonical_parts(Path::new(local)) else {
-        return Err(unresolved(
-            session,
-            class,
-            &as_if_missing(Path::new(local)).unwrap_or(at.display),
-            privilege,
-        ));
+        return Err(unresolved(session, class, &shown, privilege));
     };
-    Ok(LocatedPath {
-        store: at.store,
-        path: object_store::path::Path::from_iter(parts.iter().map(String::as_str)),
-        display: format!("file:/{}", parts.join("/")),
+    Ok(Checked {
+        at: LocatedPath {
+            store: at.store,
+            path: object_store::path::Path::from_iter(parts.iter().map(String::as_str)),
+            display: format!("file:/{}", parts.join("/")),
+        },
+        shown,
     })
 }
 
 /// The local directory `path` (absolute) in the one form every check of a table's directories asks:
 /// `.` and `..` folded in the text (`LocalPaths::locate`, as reads and writes fold them), then
-/// [`physical`]. The result's `display` is `file:` and the canonical path.
+/// [`physical`]. The result's `at.display` is `file:` and the canonical path.
 ///
 /// # Errors
 /// `KRISHIV_UNSUPPORTED_FEATURE` (audited) for a relative or non-UTF-8 path: that depends on the text
@@ -659,7 +672,7 @@ pub(crate) fn canonical_dir(
     path: &Path,
     privilege: Privilege,
     class: StatementClass,
-) -> Result<LocatedPath, KrishivError> {
+) -> Result<Checked, KrishivError> {
     let lexical = lexical_dir(path).inspect_err(|e| log_denial(session, class, e))?;
     physical(session, lexical, privilege, class)
 }
@@ -680,38 +693,40 @@ pub(crate) fn lexical_dir(path: &Path) -> Result<LocatedPath, KrishivError> {
         .locate(text)
 }
 
-/// The text a denial of the absolute path `local` names when `local` cannot be resolved: what [`physical`]
-/// would give if the entry that fails were missing. The longest prefix that resolves, resolved, and the rest
-/// appended as written (every error walked past, as for a missing entry), so the denial and its audit record
-/// read the same whether the entry is missing, unsearchable, a dangling link or a loop, with or without a
-/// link above it (no existence oracle). `None` if no prefix resolves (then the caller names it as written).
-fn as_if_missing(local: &Path) -> Option<String> {
-    let mut existing = local.to_path_buf();
-    let mut rest = Vec::new();
-    let resolved = loop {
-        if let Ok(resolved) = std::fs::canonicalize(&existing) {
-            break rest
-                .iter()
-                .rev()
-                .fold(resolved, |p: PathBuf, part| p.join(part));
+/// Asks the policy each of `privileges` on the resolved path `checked.at`, auditing each answer with that
+/// path (the record stays on the server), and returns a denial naming `checked.shown`, the caller's text.
+pub(crate) async fn authorize_checked(
+    session: &Session,
+    checked: &Checked,
+    privileges: &[Privilege],
+    class: StatementClass,
+) -> Result<(), KrishivError> {
+    let asked = Securable::Path(OptionValue::from_user("path", checked.at.display.clone()));
+    for privilege in privileges {
+        let r = authorize(
+            &*session.state.policy,
+            &session.state.principal,
+            &asked,
+            *privilege,
+        )
+        .await;
+        if let Err(e) = audit(session, class, r) {
+            if e.error_class() == ErrorClass::KrishivInsufficientPermissions {
+                let shown = Securable::Path(OptionValue::from_user("path", checked.shown.clone()));
+                return Err(insufficient_permissions(
+                    &session.state.principal,
+                    &shown,
+                    *privilege,
+                ));
+            }
+            return Err(e);
         }
-        rest.push(existing.file_name()?.to_owned());
-        if !existing.pop() {
-            return None;
-        }
-    };
-    let parts = resolved
-        .components()
-        .filter_map(|c| match c {
-            Component::Normal(p) => Some(p.to_str()),
-            _ => None,
-        })
-        .collect::<Option<Vec<_>>>()?;
-    Some(format!("file:/{}", parts.join("/")))
+    }
+    Ok(())
 }
 
-/// The denial of `privilege` on the path `display` that cannot be resolved: the same 42501 a policy's
-/// denial gives, with the audit record a denial writes.
+/// The denial of `privilege` on the path `display` (the caller's text) that cannot be resolved: the same
+/// 42501 a policy's denial gives, with the audit record a denial writes.
 ///
 /// `privilege` is the first one the caller would ask: a policy denying a missing path denies that one
 /// first too, unless it grants it and denies a later one, which a caller sees only on paths inside its
@@ -745,25 +760,25 @@ fn canonical_parts(local: &Path) -> Option<Vec<String>> {
         .collect()
 }
 
-/// Fails closed (`KRISHIV_INSUFFICIENT_PERMISSIONS`) when `at`, a path
-/// [`physical`] resolved and the policy allowed, now resolves elsewhere (a
-/// symbolic link was swapped into it) or no longer resolves.
-pub(crate) fn still_physical(session: &Session, at: &LocatedPath) -> Result<(), KrishivError> {
-    let now = physical(
-        session,
-        at.clone(),
-        Privilege::Modify,
-        StatementClass::Write,
-    )?;
-    if now.display == at.display {
+/// Fails closed (`KRISHIV_INSUFFICIENT_PERMISSIONS`, naming `checked.shown`) when `checked.at`, a path
+/// [`physical`] resolved and the policy allowed, now resolves elsewhere (a symbolic link was swapped
+/// into it) or no longer resolves.
+pub(crate) fn still_physical(session: &Session, checked: &Checked) -> Result<(), KrishivError> {
+    let deny = || {
+        unresolved(
+            session,
+            StatementClass::Write,
+            &checked.shown,
+            Privilege::Modify,
+        )
+    };
+    let Some(local) = checked.at.display.strip_prefix("file:") else {
         return Ok(());
+    };
+    match canonical_parts(Path::new(local)) {
+        Some(parts) if format!("file:/{}", parts.join("/")) == checked.at.display => Ok(()),
+        _ => Err(deny()),
     }
-    Err(unresolved(
-        session,
-        StatementClass::Write,
-        &now.display,
-        Privilege::Modify,
-    ))
 }
 
 /// Allows paths only under the given root directories, and delegates every

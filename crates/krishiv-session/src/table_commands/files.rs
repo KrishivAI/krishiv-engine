@@ -18,8 +18,8 @@ impl Session {
     /// the same for its files), in the one form every check of a table's directories takes: `file:` and
     /// the canonical absolute path, with `.` and `..` folded in the text as reads and writes fold them,
     /// then the links of its existing part resolved, the part that does not exist yet appended
-    /// (`access::canonical_dir`, the write path's rule). Returns that canonical path: the caller acts on
-    /// it, not on `path`.
+    /// (`access::canonical_dir`, the write path's rule). Returns that canonical path, which the caller acts
+    /// on (not `path`), and the text a denial names (`path` as written, `..` folded from the text only).
     ///
     /// # Errors
     /// `KRISHIV_UNSUPPORTED_FEATURE` (audited) for a relative or non-UTF-8 path, before the policy is
@@ -30,13 +30,14 @@ impl Session {
         path: &Path,
         privileges: &[Privilege],
         class: StatementClass,
-    ) -> Result<PathBuf, KrishivError> {
+    ) -> Result<CheckedDir, KrishivError> {
         let first = privileges.first().copied().unwrap_or(Privilege::Modify);
-        let at = crate::access::canonical_dir(self, path, first, class)?;
-        let securable = Securable::Path(OptionValue::from_user("path", at.display.clone()));
-        self.authorize_securable(&securable, privileges, class)
-            .await?;
-        Ok(local_of(&at.display))
+        let checked = crate::access::canonical_dir(self, path, first, class)?;
+        crate::access::authorize_checked(self, &checked, privileges, class).await?;
+        Ok(CheckedDir {
+            path: local_of(&checked.at.display),
+            shown: checked.shown,
+        })
     }
 
     /// Asks `CREATE` on a table's `location` as CREATE TABLE asks it: a managed table's directory (and an
@@ -47,7 +48,7 @@ impl Session {
         &self,
         location: &Path,
         managed: bool,
-    ) -> Result<Option<PathBuf>, KrishivError> {
+    ) -> Result<Option<CheckedDir>, KrishivError> {
         let (create, class) = (&[Privilege::Create], StatementClass::Ddl);
         match location.to_str() {
             Some(text) if !managed && !location.is_absolute() => {
@@ -79,6 +80,7 @@ impl Session {
     pub(crate) fn create_checked_dir(
         &self,
         checked: &Path,
+        shown: &str,
         privilege: Privilege,
         class: StatementClass,
     ) -> Result<(), KrishivError> {
@@ -103,12 +105,7 @@ impl Session {
                     if let Ok(now) = now {
                         remove_made(made, &now);
                     }
-                    return Err(crate::access::unresolved(
-                        self,
-                        class,
-                        &format!("file:{}", checked.display()),
-                        privilege,
-                    ));
+                    return Err(crate::access::unresolved(self, class, shown, privilege));
                 }
             }
         }
@@ -129,11 +126,12 @@ impl Session {
     pub(crate) fn move_checked_dir(
         &self,
         source: &Path,
-        target: &Path,
+        target: &CheckedDir,
         class: StatementClass,
     ) -> Result<(), KrishivError> {
+        let (shown, target) = (&target.shown, &target.path);
         if let Some(parent) = target.parent() {
-            self.create_checked_dir(parent, Privilege::Create, class)?;
+            self.create_checked_dir(parent, parent_text(shown), Privilege::Create, class)?;
         }
         std::fs::rename(source, target)
             .map_err(|e| fs_failed("cannot move a directory", source, Some(target), &e))?;
@@ -154,7 +152,7 @@ impl Session {
             return Err(crate::access::unresolved(
                 self,
                 class,
-                &format!("file:{}", target.display()),
+                shown,
                 Privilege::Create,
             ));
         }
@@ -245,7 +243,7 @@ impl Session {
         }
         self.authorize_path(&canonical, &[Privilege::Modify], StatementClass::Write)
             .await
-            .map(Some)
+            .map(|c| Some(c.path))
     }
 }
 
@@ -299,6 +297,35 @@ fn dir_identity(path: &Path) -> Option<(u64, u64)> {
     {
         let _ = path;
         None
+    }
+}
+
+/// A local directory as [`Session::authorize_path`] checked it: `path`, canonical, is the one to act on;
+/// `shown` is the caller's text (`..` folded from the text only) that a denial names.
+#[derive(Debug, Clone)]
+pub(crate) struct CheckedDir {
+    /// The canonical path the policy allowed.
+    pub(crate) path: PathBuf,
+    /// The text a denial names (`file:/...`).
+    pub(crate) shown: String,
+}
+
+impl CheckedDir {
+    /// The parent directory, with the parent of the shown text.
+    pub(crate) fn parent(&self) -> Option<CheckedDir> {
+        Some(CheckedDir {
+            path: self.path.parent()?.to_path_buf(),
+            shown: parent_text(&self.shown).to_owned(),
+        })
+    }
+}
+
+/// `shown` without its last `/segment` (`file:/` stays).
+fn parent_text(shown: &str) -> &str {
+    match shown.rfind('/') {
+        Some(i) if shown[..i].ends_with(':') => &shown[..=i],
+        Some(i) => &shown[..i],
+        None => shown,
     }
 }
 
@@ -369,6 +396,7 @@ mod tests {
         let mkdir = session
             .create_checked_dir(
                 &root.join("file-secret/sub"),
+                "file:/x",
                 krishiv_plan::analyzer::Privilege::Create,
                 krishiv_sql::StatementClass::Ddl,
             )
@@ -376,7 +404,10 @@ mod tests {
         let moved = session
             .move_checked_dir(
                 &root.join("missing-secret"),
-                &root.join("target-secret"),
+                &super::CheckedDir {
+                    path: root.join("target-secret"),
+                    shown: "file:/x".to_owned(),
+                },
                 krishiv_sql::StatementClass::Ddl,
             )
             .unwrap_err();

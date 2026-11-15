@@ -466,8 +466,8 @@ fn seen(r: Result<(), KrishivError>) -> String {
     }
 }
 
-/// `<dir>/d` made as each kind of entry a path cannot be resolved through, and as nothing: a missing
-/// directory, an unsearchable one (skipped when the test runs as root, which searches it anyway), a
+/// `<dir>/d` made as each kind of entry a path cannot be resolved through, as a directory and as
+/// nothing: a missing directory, an existing one, an unsearchable one (skipped when the test runs as root, which searches it anyway), a
 /// dangling link and a link loop. `probe` gets `<written>/d/x` (`written` is `dir` or a link to it).
 fn each_unresolvable_kind(
     dir: &Path,
@@ -477,8 +477,15 @@ fn each_unresolvable_kind(
     use std::os::unix::fs::PermissionsExt;
     let d = dir.join("d");
     let mut out = Vec::new();
-    for kind in ["missing", "unsearchable", "dangling link", "link loop"] {
+    for kind in [
+        "missing",
+        "existing",
+        "unsearchable",
+        "dangling link",
+        "link loop",
+    ] {
         match kind {
+            "existing" => std::fs::create_dir(&d).unwrap(),
             "unsearchable" => {
                 std::fs::create_dir(&d).unwrap();
                 std::fs::create_dir(d.join("inner")).unwrap();
@@ -498,6 +505,8 @@ fn each_unresolvable_kind(
         out.push((kind.to_owned(), probe(&at.display().to_string())));
         if kind == "unsearchable" {
             std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o700)).unwrap();
+            std::fs::remove_dir_all(&d).unwrap();
+        } else if kind == "existing" {
             std::fs::remove_dir_all(&d).unwrap();
         } else if kind != "missing" {
             std::fs::remove_file(&d).unwrap();
@@ -774,12 +783,13 @@ impl tracing::Subscriber for AuditLines {
     fn exit(&self, _: &tracing::span::Id) {}
 }
 
-/// With a link above the part that cannot be resolved (`<tmp>/wh/o -> <tmp>/outside`, the entry
-/// `<tmp>/outside/d`), the denial a caller sees and the audit record it leaves are the same text whether
-/// `d` is missing, unsearchable, a dangling link or a loop: the path is named as a missing one's is
-/// (the part that resolves, resolved, and the rest appended), never as written.
+/// With a link on the path (`<tmp>/wh/o -> <tmp>/outside`, the entry `<tmp>/outside/d`), a denied write
+/// to `<tmp>/wh/o/d/x` names the path as written (`..` folded from the text only), never the link's
+/// target, and the same text whether `d` exists, is missing, unsearchable, a dangling link or a loop:
+/// nothing read from the disk reaches the caller. The policy is asked, and the server-side audit record
+/// names, the resolved path.
 #[test]
-fn an_unresolvable_path_behind_a_link_is_named_as_a_missing_one_is() {
+fn a_denial_names_the_path_as_written_and_the_audit_the_resolved_one() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().canonicalize().unwrap();
     std::fs::create_dir_all(root.join("wh")).unwrap();
@@ -788,6 +798,7 @@ fn an_unresolvable_path_behind_a_link_is_named_as_a_missing_one_is() {
     let audit = AuditLines::default();
     // Nothing else in this binary sets a global subscriber (nextest runs each test in its own process).
     let _ = tracing::subscriber::set_global_default(audit.clone());
+    let mut records = Vec::new();
     let answers = each_unresolvable_kind(&root.join("outside"), &root.join("wh/o"), |path| {
         let s = Session::builder()
             .principal(Principal::new("audited", PrincipalKind::User))
@@ -799,19 +810,26 @@ fn an_unresolvable_path_behind_a_link_is_named_as_a_missing_one_is() {
         }));
         // The checks may run on the runtime's threads: the subscriber is process-wide, and only this
         // test's principal is kept.
-        let records: Vec<String> = std::mem::take(&mut *audit.0.lock().unwrap())
+        let mine: Vec<String> = std::mem::take(&mut *audit.0.lock().unwrap())
             .into_iter()
             .filter(|r| r.contains("principal=audited"))
             .collect();
-        assert!(!records.is_empty(), "no audit record for {path}");
-        format!("{answer}\naudit: {}", records.join("\n"))
+        assert!(!mine.is_empty(), "no audit record for {path}");
+        records.push(mine.join("\n"));
+        answer
     });
     let (_, missing) = &answers[0];
+    let written = format!("'file:{}/wh/o/d/x'", root.display());
     assert!(missing.starts_with(DENIED), "{missing}");
-    assert!(missing.contains("/outside/d/x"), "{missing}");
+    assert!(missing.contains(&written), "{missing}");
     for (kind, answer) in &answers {
         assert_eq!(answer, missing, "{kind}");
+        assert!(!answer.contains("outside"), "{kind}: {answer}");
     }
+    let (kind, _) = &answers[1];
+    assert_eq!(kind, "existing");
+    let resolved = format!("'file:{}/outside/d/x'", root.display());
+    assert!(records[1].contains(&resolved), "{}", records[1]);
 }
 
 /// Swaps `<table>/a=1` for a link to `<tmp>/outside` (which holds a planted `b=2`) the first time the

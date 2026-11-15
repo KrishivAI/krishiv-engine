@@ -774,6 +774,7 @@ impl Session {
         let env = self.query_env();
         let locate = |p: &Path| {
             self.locate_write_path(&format!("file:{}", p.display()), &BTreeMap::new(), &env)
+                .map(|c| c.at)
         };
         let at = locate(root)?;
         let below = |p: &Path| -> Result<Option<String>, KrishivError> {
@@ -875,8 +876,9 @@ impl Session {
             return Ok(());
         }
         let env = self.query_env();
-        let at =
-            self.locate_write_path(&format!("file:{}", root.display()), &BTreeMap::new(), &env)?;
+        let at = self
+            .locate_write_path(&format!("file:{}", root.display()), &BTreeMap::new(), &env)?
+            .at;
         let log = CommitLog::new(
             &env.io,
             at.store.clone(),
@@ -1060,7 +1062,8 @@ impl Session {
         // log then lists nothing below the old directory). A failed move puts the log back.
         self.relog_partitions(&table.location, &[(source.clone(), Some(target.clone()))])
             .await?;
-        if let Err(e) = self.move_checked_dir(&checked_source, &checked_target, StatementClass::Ddl)
+        if let Err(e) =
+            self.move_checked_dir(&checked_source.path, &checked_target, StatementClass::Ddl)
         {
             if let Err(undo) = self
                 .relog_partitions(&table.location, &[(target.clone(), Some(source.clone()))])
@@ -1082,7 +1085,8 @@ impl Session {
         self.state
             .cache
             .invalidate_table(&format!("{}.{}", table.namespace, table.name));
-        if let Err(e) = self.move_checked_dir(&checked_target, &checked_source, StatementClass::Ddl)
+        if let Err(e) =
+            self.move_checked_dir(&checked_target.path, &checked_source, StatementClass::Ddl)
         {
             tracing::warn!(error = %e, "a partition rename that lost its catalog swap could not move its directory back");
             return Err(e);
@@ -1430,16 +1434,21 @@ impl Session {
         // The directories made are the canonical ones checked, each verified after the mkdir.
         let mut created: Vec<&Path> = Vec::new();
         for dir in &checked {
-            if dir.is_dir() {
+            if dir.path.is_dir() {
                 continue;
             }
-            if let Err(e) = self.create_checked_dir(dir, Privilege::Create, StatementClass::Ddl) {
+            if let Err(e) = self.create_checked_dir(
+                &dir.path,
+                &dir.shown,
+                Privilege::Create,
+                StatementClass::Ddl,
+            ) {
                 for dir in created {
                     let _ = std::fs::remove_dir(dir);
                 }
                 return Err(e);
             }
-            created.push(dir);
+            created.push(&dir.path);
         }
         changed.layout.partitions.extend(added);
         changed.data_changed();
@@ -1447,7 +1456,10 @@ impl Session {
     }
 
     /// `CREATE` on a partition directory the command makes or registers: the canonical path checked.
-    async fn authorize_dir(&self, path: &Path) -> Result<PathBuf, KrishivError> {
+    async fn authorize_dir(
+        &self,
+        path: &Path,
+    ) -> Result<crate::table_commands::CheckedDir, KrishivError> {
         self.authorize_dir_for(path, Privilege::Create).await
     }
 
@@ -1459,7 +1471,7 @@ impl Session {
         &self,
         path: &Path,
         privilege: Privilege,
-    ) -> Result<PathBuf, KrishivError> {
+    ) -> Result<crate::table_commands::CheckedDir, KrishivError> {
         self.authorize_path(path, &[privilege], StatementClass::Ddl)
             .await
     }

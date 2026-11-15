@@ -311,7 +311,12 @@ impl Session {
         if table.managed
             && let Some(checked) = &checked
         {
-            self.create_checked_dir(checked, Privilege::Create, StatementClass::Ddl)?;
+            self.create_checked_dir(
+                &checked.path,
+                &checked.shown,
+                Privilege::Create,
+                StatementClass::Ddl,
+            )?;
         }
         // Tables are never replaced, so nothing comes back from the store to clean up.
         self.state.catalog.store.create_table(table, mode)?;
@@ -407,16 +412,26 @@ impl Session {
             // then the directory itself, verified again (a link swapped in after the check makes nothing
             // that stays outside; the writer re-checks every path it writes).
             if let Some(parent) = checked.parent() {
-                self.create_checked_dir(parent, Privilege::Create, StatementClass::Write)?;
+                self.create_checked_dir(
+                    &parent.path,
+                    &parent.shown,
+                    Privilege::Create,
+                    StatementClass::Write,
+                )?;
             }
-            let owned = OwnedDirectory::create(checked.clone()).map_err(|e| match e {
+            let owned = OwnedDirectory::create(checked.path.clone()).map_err(|e| match e {
                 OwnedDirectoryError::Exists => KrishivError::from(LocationAlreadyExists {
                     identifier: quoted(&table.namespace, &table.name),
                     location: table.location.display().to_string(),
                 }),
                 OwnedDirectoryError::Io(message) => internal(message),
             })?;
-            self.create_checked_dir(&checked, Privilege::Create, StatementClass::Write)?;
+            self.create_checked_dir(
+                &checked.path,
+                &checked.shown,
+                Privilege::Create,
+                StatementClass::Write,
+            )?;
             Some(owned)
         } else {
             None

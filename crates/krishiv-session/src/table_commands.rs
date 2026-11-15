@@ -1325,7 +1325,7 @@ impl Session {
                 .await?;
             let source = source.unwrap_or_else(|| table.location.clone());
             self.move_checked_dir(&source, &target, StatementClass::Ddl)?;
-            moved = Some((target, source));
+            moved = Some((target.path, source));
         }
         self.state
             .cache
@@ -1810,6 +1810,7 @@ pub(crate) fn now_ms() -> i64 {
 }
 
 mod files;
+pub(crate) use files::CheckedDir;
 use files::remove_dir;
 mod location;
 use location::qualified_namespace_location;
