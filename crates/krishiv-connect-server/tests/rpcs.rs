@@ -814,6 +814,61 @@ async fn config_set_silent_and_static_keys() {
     );
 }
 
+/// Authentication off: the local user of the loopback listener sets and unsets admin-only keys
+/// (by name and by Spark alias) and server-scoped store keys, as SQL `SET` lets it (the base
+/// session's policy allows everything).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_the_local_user_sets_admin_keys() {
+    let run = start().await;
+    config(
+        &run,
+        OpType::Set(creq::Set {
+            pairs: vec![
+                kv("krishiv.resultCache.ttl", Some("1m")),
+                kv("spark.sql.autoBroadcastJoinThreshold", Some("1")),
+                kv("fs.s3a.endpoint", Some("http://minio.local:9000")),
+            ],
+            silent: None,
+        }),
+    )
+    .await
+    .expect("the local user may set admin keys");
+    let got = config(
+        &run,
+        OpType::GetOption(creq::GetOption {
+            keys: keys(&[
+                "krishiv.resultCache.ttl",
+                "spark.sql.autoBroadcastJoinThreshold",
+                "fs.s3a.endpoint",
+            ]),
+        }),
+    )
+    .await
+    .expect("get");
+    let values: Vec<_> = got.pairs.iter().map(|p| p.value.as_deref()).collect();
+    assert_eq!(
+        values,
+        [Some("1min"), Some("1"), Some("http://minio.local:9000")]
+    );
+    config(
+        &run,
+        OpType::Unset(creq::Unset {
+            keys: keys(&["krishiv.resultCache.ttl"]),
+        }),
+    )
+    .await
+    .expect("the local user may unset an admin key");
+    assert_eq!(
+        run.entry()
+            .session()
+            .conf()
+            .get("krishiv.resultCache.ttl")
+            .as_deref(),
+        Some("1d"),
+        "unset: back to the default"
+    );
+}
+
 /// T-C8: a planted secret never comes back from `Config`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_redaction() {
