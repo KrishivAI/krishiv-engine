@@ -1159,9 +1159,10 @@ mod tests {
             assert_eq!(plain(bad), None, "{bad:?}");
         }
     }
+
     #[test]
     fn decimal_digit_limit_and_exponent_bound() {
-        // 76 digits fit an i256; 77 do not (the bound is `> 76`).
+        // The parser refuses more than 76 digits (the bound is `> 76`), though 10^76 itself would fit an i256.
         let d76 = format!("1{}", "0".repeat(75));
         assert!(parse_decimal(&d76).and_then(|d| d.to_scale(0)).is_some());
         let d77 = format!("1{}", "0".repeat(76));

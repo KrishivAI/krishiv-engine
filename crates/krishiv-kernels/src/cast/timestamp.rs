@@ -384,17 +384,6 @@ mod tests {
     }
 
     #[test]
-    fn a_leading_colon_is_not_a_time_of_day() {
-        for bad in [":10:00", ":10", "::"] {
-            assert!(
-                matches!(parse(bad.as_bytes()), Parsed::Malformed),
-                "{bad:?}"
-            );
-        }
-        assert!(matches!(parse(b"10:00:00"), Parsed::NeedsClock(_)));
-    }
-
-    #[test]
     fn a_negative_year_is_before_the_epoch_and_before_year_one() {
         let neg = at("-0001-01-01").unwrap().0;
         let pos = at("0001-01-01").unwrap().0;

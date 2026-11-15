@@ -528,6 +528,7 @@ mod tests {
         let nulls = to_time(&text, Some(&fmts), false).unwrap();
         assert_eq!(nulls.null_count(), 2);
     }
+
     #[test]
     fn a_meridiem_must_be_am_or_pm_and_every_unit_parses() {
         assert_eq!(parse_time("10:30 XX"), None);
