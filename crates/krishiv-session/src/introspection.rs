@@ -943,7 +943,8 @@ impl Session {
             .system_table_columns(table, env)
             .await?
             .iter()
-            .map(|(name, ty)| vec![s(name), s(ty.catalog_string()), s("")])
+            // No comments: NULL, as `describeSchema` appends `getComment().orNull`.
+            .map(|(name, ty)| vec![s(name), s(ty.catalog_string()), None])
             .collect();
         self.ordered_frame(cols::DESCRIBE_TABLE, &[], rows).await
     }
@@ -1034,7 +1035,8 @@ impl Session {
                         vec![
                             s(n),
                             s(shown_type(&declared, n, t)),
-                            s(c.clone().unwrap_or_default()),
+                            // `describeSchema` (`tables.scala:615`): `getComment().orNull`.
+                            c.clone(),
                         ]
                     })
                     .collect();
@@ -1053,7 +1055,7 @@ impl Session {
                             s(c.char_varchar
                                 .clone()
                                 .unwrap_or_else(|| c.data_type.catalog_string())),
-                            s(c.comment.clone().unwrap_or_default()),
+                            c.comment.clone(),
                         ]
                     }));
                 }
