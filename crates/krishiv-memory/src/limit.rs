@@ -25,10 +25,12 @@ const V1_UNLIMITED_FROM: u64 = 1 << 62;
 /// [`effective_memory_limit`], else [`FALLBACK_LIMIT`]. Always `Some`; pass
 /// `limit: None` in [`crate::MemoryConfig`] for an unbounded pool.
 pub fn default_limit() -> Option<usize> {
-    Some(effective_memory_limit().map_or(FALLBACK_LIMIT, |bytes| {
-        let limit = bytes / 100 * DEFAULT_LIMIT_PERCENT;
-        usize::try_from(limit).unwrap_or(usize::MAX)
-    }))
+    Some(effective_memory_limit().map_or(FALLBACK_LIMIT, share_of))
+}
+
+/// [`DEFAULT_LIMIT_PERCENT`] of an effective limit of `bytes`.
+fn share_of(bytes: u64) -> usize {
+    usize::try_from(bytes / 100 * DEFAULT_LIMIT_PERCENT).unwrap_or(usize::MAX)
 }
 
 /// The root-pool limit for an explicit `krishiv.memory.limit` of `explicit`
@@ -53,9 +55,7 @@ pub fn explicit_limit(explicit: usize) -> usize {
 /// [`explicit_limit`] against an `effective` memory limit (tests).
 fn fitted_limit(explicit: usize, effective: Option<u64>) -> usize {
     match effective {
-        Some(bytes) if explicit as u64 > bytes => {
-            usize::try_from(bytes / 100 * DEFAULT_LIMIT_PERCENT).unwrap_or(usize::MAX)
-        }
+        Some(bytes) if explicit as u64 > bytes => share_of(bytes),
         _ => explicit,
     }
 }
@@ -203,7 +203,8 @@ mod tests {
     fn an_explicit_limit_above_the_effective_limit_is_fitted_to_it() {
         let gib = 1_usize << 30;
         let cap = 20_u64 << 30;
-        assert_eq!(fitted_limit(24 * gib, Some(cap)), 16 * gib);
+        assert_eq!(fitted_limit(24 * gib, Some(cap)), share_of(cap));
+        assert!(share_of(cap) > 15 * gib && share_of(cap) <= 16 * gib);
         // At or below the effective limit the setting stands, even above 80%.
         assert_eq!(fitted_limit(18 * gib, Some(cap)), 18 * gib);
         assert_eq!(fitted_limit(20 * gib, Some(cap)), 20 * gib);
