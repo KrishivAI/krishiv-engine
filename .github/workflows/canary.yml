@@ -1,22 +1,28 @@
 # SPDX-License-Identifier: Apache-2.0
-# CI canary (owner-approved 2026-11-15): the nightly `ci` run on main already executes the full PR check set
-# (its `schedule` event adds the heavy jobs). This daily job checks that the latest scheduled run on main
+# CI canary (owner-approved 2026-11-15): the nightly run on main (nightly.yml, which calls ci.yml) executes the full
+# PR check set (its `schedule` event adds the heavy jobs). This daily job checks that the latest scheduled run on main
 # passed and ran recently, and alerts when it did not. Alerts go to ntfy when the repository secret
 # NTFY_TOPIC is set; the job summary always says what it found.
 name: canary
 
 on:
   schedule:
-    # 13:00 UTC: scheduled ci runs on main start about 10:00-11:00 UTC.
+    # 13:00 UTC: the scheduled nightly run on main starts about 02:00 UTC and ends well before this.
     - cron: "0 13 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: canary
+  cancel-in-progress: false
+
 jobs:
   check-nightly:
+    if: github.repository == 'KrishivAI/krishiv-engine'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       actions: read
     env:
@@ -27,10 +33,10 @@ jobs:
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
-      - name: Latest scheduled ci run on main
+      - name: Latest scheduled nightly run on main
         id: run
         run: |
-          run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --event schedule \
+          run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow nightly.yml --branch main --event schedule \
             --limit 1 --json conclusion,createdAt,url,status \
             -q '.[0] | "\(.status) \(.conclusion // "none") \(.createdAt) \(.url)"') || run="query-failed"
           echo "run=$run" >> "$GITHUB_OUTPUT"
