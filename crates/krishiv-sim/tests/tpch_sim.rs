@@ -1003,6 +1003,8 @@ struct Tight {
     store: Arc<dyn ObjectStore>,
     limit: usize,
     dir: PathBuf,
+    /// Names each `worker()` call's spill directory (the client's context
+    /// is built by one of these calls too): nothing else reads it.
     hosts: AtomicUsize,
     writes: Arc<AtomicUsize>,
 }
@@ -1030,11 +1032,21 @@ impl HostSetup for Tight {
 const GROUPS: &str = "SELECT l_orderkey, l_partkey, sum(l_quantity) AS q, count(*) AS c, \
                       max(l_extendedprice) AS m FROM lineitem GROUP BY l_orderkey, l_partkey";
 
-/// [`GROUPS`] on one worker (two drivers of a fused aggregate) and on two
-/// workers, every task and the root stage under `limit` bytes and spilling;
-/// returns (unlimited rows, one worker's, the cluster's, spill files
-/// written).
-fn tight(seed: u64, limit: usize) -> (Vec<String>, Vec<String>, Vec<String>, usize) {
+/// What [`tight`] saw: the unlimited rows, then each limited run's rows and
+/// the spill files it wrote.
+struct Tightened {
+    want: Vec<String>,
+    local: (Vec<String>, usize),
+    cluster: (Vec<String>, usize),
+}
+
+/// [`GROUPS`] under `limit` bytes on one worker (two drivers of a fused
+/// aggregate) and on two workers. On the cluster the final aggregate is the
+/// root stage (no gather above it): one task on the client, two drivers
+/// under the limit and the client's spill scopes; the worker tasks (partial
+/// aggregate, exchange write) run under the limit too, but spill, if at
+/// all, through the shuffle writer, which no scope counts.
+fn tight(seed: u64, limit: usize) -> Tightened {
     let store = store();
     let dir = tempfile::Builder::new()
         .prefix("krishiv-sim-spill-")
@@ -1081,32 +1093,43 @@ fn tight(seed: u64, limit: usize) -> (Vec<String>, Vec<String>, Vec<String>, usi
             let spilling = worker
                 .clone()
                 .with_spill_scopes(Arc::new(Spills::open(&client_dir, &client_writes)?));
+            let before = client_writes.load(Ordering::Relaxed);
             let local = rows(seed, &plain, &plan, &spilling, &small, 1).await?;
+            let between = client_writes.load(Ordering::Relaxed);
             let cluster = rows(seed, &coordinator, &plan, &spilling, &small, 2).await?;
+            let after = client_writes.load(Ordering::Relaxed);
             assert_eq!(small.reserved(), 0, "seed {seed}: memory still held");
-            *result.lock().unwrap() = Some((want, local, cluster));
+            *result.lock().unwrap() = Some(Tightened {
+                want,
+                local: (local, between - before),
+                cluster: (cluster, after - between),
+            });
             Ok(())
         },
     )
     .unwrap_or_else(|e| panic!("seed {seed}: {e}"));
-    let (want, local, cluster) = out.lock().unwrap().take().unwrap();
-    (want, local, cluster, writes.load(Ordering::Relaxed))
+    out.lock().unwrap().take().unwrap()
 }
 
 /// A grouped aggregate whose tables do not fit spills, on one worker and on
 /// the cluster, and gives the unlimited run's rows: no memory error when
 /// drivers end and combine while others still fold (the combined tables
-/// stay spillable, #792). The one-worker run's interleaving is fixed (it
-/// spills alike under every seed), so two limits vary its pressure; the
-/// seed varies the cluster's message timing and with it how much each task
-/// spills.
+/// stay spillable, #792). Both runs must spill. The one-worker run's
+/// interleaving is fixed (it spills alike under every seed: 56 files at
+/// 4 MiB, 76 at 2 MiB), so two limits vary its pressure; the seed varies
+/// the cluster's message timing and with it how much the root stage spills.
 #[test]
 fn a_spilling_aggregate_matches_under_every_seed() {
     for (seed, limit) in [(0, 4 << 20), (1, 2 << 20), (2, 4 << 20), (3, 2 << 20)] {
-        let (want, local, cluster, writes) = tight(seed, limit);
-        assert!(writes > 0, "seed {seed}: nothing spilled");
-        assert_eq!(local.len(), want.len(), "seed {seed}: one worker");
-        assert!(local == want, "seed {seed}: one worker's rows differ");
-        assert!(cluster == want, "seed {seed}: the cluster's rows differ");
+        let Tightened {
+            want,
+            local,
+            cluster,
+        } = tight(seed, limit);
+        assert!(local.1 > 0, "seed {seed}: one worker spilled nothing");
+        assert!(cluster.1 > 0, "seed {seed}: the cluster spilled nothing");
+        assert_eq!(local.0.len(), want.len(), "seed {seed}: one worker");
+        assert!(local.0 == want, "seed {seed}: one worker's rows differ");
+        assert!(cluster.0 == want, "seed {seed}: the cluster's rows differ");
     }
 }
