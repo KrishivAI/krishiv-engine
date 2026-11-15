@@ -423,7 +423,7 @@ fn to_decimal(v: Num, p: u8, s: i8) -> Result<Option<i128>, text::BigDec> {
         // `Decimal(d)` takes `Double.toString`'s digits; read them without the text.
         Num::Float(f, _) => {
             let Some(d) = text::java_shortest(f) else {
-                // NaN / infinity: NULL in every mode.
+                // NaN / infinity: NULL in every mode (`java_shortest` is `None` for nothing else).
                 return Ok(None);
             };
             d.to_scale(scale)
