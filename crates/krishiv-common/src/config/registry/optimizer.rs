@@ -30,7 +30,7 @@ pub static SEMI_ANTI_JOIN_ORDER: ConfigEntry = ConfigEntry {
           cannot raise, and only when every input is estimated from statistics. Results are the same either way; `false` turns it off.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
-    version_added: "0.1.0",
+    version_added: "0.3.0",
     spark_alias: None,
 };
 

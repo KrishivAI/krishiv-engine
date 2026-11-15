@@ -563,6 +563,25 @@ impl Partials {
         }
     }
 
+    /// Drops the Bloom filters' hashes and shrinks the reservations to what
+    /// is left; returns the bytes freed. A build asked to spill sheds this
+    /// optional memory before it writes a table (review of the raised Bloom
+    /// caps, M1): at 20 M keys the hashes are up to 160 MB a driver.
+    fn shed_hashes(&mut self) -> usize {
+        let held: usize = self.memory.iter().map(Reservation::size).sum();
+        for b in self.builders.iter_mut().flatten() {
+            b.drop_hashes();
+        }
+        let mut extra = held.saturating_sub(self.heap_bytes());
+        let freed = extra;
+        for m in &mut self.memory {
+            let s = extra.min(m.size());
+            m.shrink(s);
+            extra -= s;
+        }
+        freed - extra
+    }
+
     fn merge(&mut self, other: Self) {
         for (dst, src) in self.builders.iter_mut().zip(other.builders) {
             *dst = match (dst.take(), src) {
@@ -1345,10 +1364,12 @@ impl Sink for BuildSink {
     ) -> BoxFuture<'a, Result<usize>> {
         Box::pin(async move {
             let l = local_mut(local)?;
-            if self.0.spill.is_none() {
-                return Ok(0);
+            // The optional Bloom hashes go before any table is written.
+            let shed = l.runtime.shed_hashes();
+            if shed >= target || self.0.spill.is_none() {
+                return Ok(shed);
             }
-            let chosen = choose(&l.parts, l.spilled.load(Ordering::Acquire), target);
+            let chosen = choose(&l.parts, l.spilled.load(Ordering::Acquire), target - shed);
             for &p in &chosen {
                 l.spilled.fetch_or(1 << p, Ordering::AcqRel);
             }
@@ -1357,7 +1378,7 @@ impl Sink for BuildSink {
                 .await?;
             l.file_bytes += written;
             l.signal.set_spillable_bytes(mem_bytes(&l.parts));
-            Ok(freed)
+            Ok(freed + shed)
         })
     }
 
@@ -1500,6 +1521,39 @@ mod tests {
             krishiv_io::FilterForm::HashSet(2000),
             "no exact set published"
         );
+    }
+
+    /// A build asked to spill sheds its Bloom hashes first: the
+    /// reservation shrinks to the distinct keys, and the exact set is still
+    /// published.
+    #[test]
+    fn shedding_the_hashes_frees_their_memory_and_keeps_the_keys() {
+        let mut f = filter();
+        f.options.max_values = 100;
+        let shared = vec![f.clone()];
+        let keys: ArrayRef = Arc::new(Int64Array::from_iter_values(
+            (0..2000).map(|i: i64| i * 1_000_003),
+        ));
+        let mut p = Partials {
+            builders: vec![krishiv_io::KeyFilterBuilder::new(
+                DataType::Int64,
+                f.options,
+            )],
+            memory: vec![reservation(1 << 24)],
+        };
+        p.add_keys(&shared, &[Arc::clone(&keys)], None);
+        let before = p.memory[0].size();
+        assert_eq!(before, p.heap_bytes(), "hashes not reserved");
+        let freed = p.shed_hashes();
+        assert!(freed > 0, "nothing shed");
+        assert_eq!(p.memory[0].size(), before - freed);
+        assert_eq!(p.memory[0].size(), p.heap_bytes(), "reservation != heap");
+        assert_eq!(p.shed_hashes(), 0, "shed twice");
+        publish(&publisher(&f), &shared, p, &mut reservation(1 << 20));
+        let FilterSnapshot::Final(k) = f.filter.published().snapshot.clone() else {
+            unreachable!("not published")
+        };
+        assert_eq!(k.form(), krishiv_io::FilterForm::HashSet(2000));
     }
 
     /// Without memory for the hashes the Bloom is dropped; without memory

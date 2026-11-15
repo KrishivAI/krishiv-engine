@@ -1035,8 +1035,9 @@ fn a_partitioned_build_plans_its_bloom_size() {
 /// `krishiv.runtimeFilter.bloom.atScale` (gap ledger §4 item 13):
 /// a scan estimated at least 20x the build plans its Bloom filter past a
 /// lower `bloom.maxItems`; a scan below that ratio keeps the cap; results
-/// never change. Caps are scaled down: a 100-key cap, builds of 150 (probe
-/// 4,000 rows: 26x) and 600 rows (6.7x).
+/// never change; left on by default, an explicitly set cap still binds.
+/// Caps are scaled down: a 100-key cap, builds of 150 (probe 4,000 rows:
+/// 26x) and 600 rows (6.7x).
 #[test]
 fn bloom_at_scale_raises_the_cap_only_for_a_large_probe() {
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -1060,7 +1061,7 @@ fn bloom_at_scale_raises_the_cap_only_for_a_large_probe() {
         ("krishiv.runtimeFilter.exactSet.maxValues", "0"),
         ("krishiv.runtimeFilter.bloom.maxItems", "100"),
         ("krishiv.runtimeFilter.adaptive.maxPassPercent", "100"),
-        // On by default: the "off" plans turn it off.
+        // On by default; the "off" plans turn it off.
         ("krishiv.runtimeFilter.bloom.atScale", "false"),
     ];
     let on = ("krishiv.runtimeFilter.bloom.atScale", "true");
@@ -1089,4 +1090,10 @@ fn bloom_at_scale_raises_the_cap_only_for_a_large_probe() {
             assert!(c.rows_dropped > c_off.rows_dropped, "{c:?} {c_off:?}");
         }
     }
+    // On by default (not set): the explicitly set 100-key cap still binds.
+    let defaulted: Vec<_> = base.iter().copied().filter(|(k, _)| *k != on.0).collect();
+    configured(&mut t, &defaulted);
+    let q = "SELECT b.v FROM big b JOIN few s ON b.k64 = s.k64";
+    let plan = t.plan_sql(q).unwrap();
+    assert!(!plan.to_string().contains("(bloom)"), "{plan}");
 }

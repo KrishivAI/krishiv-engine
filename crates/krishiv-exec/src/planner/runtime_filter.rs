@@ -96,7 +96,11 @@ pub(crate) struct Settings {
     bloom_max_items: u64,
     bloom_max_bytes: usize,
     min_application_rows: u64,
-    bloom_at_scale: bool,
+    /// `krishiv.runtimeFilter.bloom.atScale` raises the key cap, the
+    /// size cap: on, unless the key is on only by default and an admin
+    /// set that cap (an explicit cap is a limit the default does not lift).
+    at_scale_items: bool,
+    at_scale_bytes: bool,
     row: RowStageSettings,
 }
 
@@ -120,6 +124,11 @@ impl Settings {
                 .and_then(|v| u64::try_from(v).ok())
                 .unwrap_or(d)
         };
+        let at_scale = config
+            .get(&RUNTIME_FILTER_BLOOM_AT_SCALE)
+            .and_then(ConfigValue::as_bool)
+            .unwrap_or(true);
+        let at_scale_explicit = config.is_set(&RUNTIME_FILTER_BLOOM_AT_SCALE);
         let percent = count(&RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT, 90).min(100);
         #[expect(clippy::cast_precision_loss, reason = "a percentage")]
         let max_pass_rate = percent as f64 / 100.0;
@@ -140,10 +149,10 @@ impl Settings {
                 .and_then(|v| usize::try_from(v).ok())
                 .unwrap_or(8 << 20),
             min_application_rows: count(&RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS, 1_000_000),
-            bloom_at_scale: config
-                .get(&RUNTIME_FILTER_BLOOM_AT_SCALE)
-                .and_then(ConfigValue::as_bool)
-                .unwrap_or(true),
+            at_scale_items: at_scale
+                && (at_scale_explicit || !config.is_set(&RUNTIME_FILTER_BLOOM_MAX_ITEMS)),
+            at_scale_bytes: at_scale
+                && (at_scale_explicit || !config.is_set(&RUNTIME_FILTER_BLOOM_MAX_BYTES)),
             row: RowStageSettings {
                 min_rows: count(&RUNTIME_FILTER_ADAPTIVE_MIN_ROWS, 65_536).max(1),
                 max_pass_rate,
@@ -232,9 +241,13 @@ impl Planner<'_> {
                 // plans its Bloom with the larger caps; with R4's prefetching
                 // probe a Bloom past the caches still pays there.
                 let mut s = s;
-                if s.bloom_at_scale && site.scan_rows >= BLOOM_AT_SCALE_RATIO * build_rows {
-                    s.bloom_max_items = s.bloom_max_items.max(BLOOM_AT_SCALE_MAX_ITEMS);
-                    s.bloom_max_bytes = s.bloom_max_bytes.max(BLOOM_AT_SCALE_MAX_BYTES);
+                if site.scan_rows >= BLOOM_AT_SCALE_RATIO * build_rows {
+                    if s.at_scale_items {
+                        s.bloom_max_items = s.bloom_max_items.max(BLOOM_AT_SCALE_MAX_ITEMS);
+                    }
+                    if s.at_scale_bytes {
+                        s.bloom_max_bytes = s.bloom_max_bytes.max(BLOOM_AT_SCALE_MAX_BYTES);
+                    }
                 }
                 // A build whose estimate is a guess over an aggregate's
                 // output (`HAVING`) plans its Bloom filter anyway: the build

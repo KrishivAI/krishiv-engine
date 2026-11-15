@@ -3,7 +3,7 @@
 //! `\x1f`-separated). Used by `build.rs`; compiled into the library only for its tests.
 
 /// The LLVM option that keeps jumps off 32-byte boundaries (x86-64).
-const BRANCH_ALIGN: &str = "-x86-branches-within-32B-boundaries";
+const BRANCH_ALIGN: &str = "x86-branches-within-32B-boundaries";
 
 /// The values of every `-C <name>=<value>` codegen option in the flags, in order, in each of
 /// rustc's spellings: `-C name=v`, `-Cname=v`, `--codegen name=v` and `--codegen=name=v`.
@@ -39,7 +39,8 @@ pub(crate) fn target_cpu(encoded_flags: &str) -> String {
 pub(crate) fn branch_align(encoded_flags: &str) -> &'static str {
     let mut on = false;
     for value in codegen_values(encoded_flags, "llvm-args") {
-        for opt in value.split_whitespace() {
+        // LLVM takes its options with one dash or two.
+        for opt in value.split_whitespace().map(|o| o.trim_start_matches('-')) {
             if opt == BRANCH_ALIGN {
                 on = true;
             } else if let Some(v) = opt
