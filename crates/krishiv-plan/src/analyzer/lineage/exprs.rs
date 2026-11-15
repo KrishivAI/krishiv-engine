@@ -98,8 +98,10 @@ impl Walker<'_> {
                 // function's own step is `window` (an aggregate's `sum(a) OVER ()` too); its arguments keep the
                 // transform they bring (`sum(s) OVER ()` of an aggregated `s` stays `aggregate`).
                 let upstream = self.window_arguments(&w.function, offset)?;
+                // A function past `aggregate` (a UDF's `opaque`) keeps its step, unless a key brings a stronger one
+                // (an unexpanded view's `view`): the strongest path wins.
                 let transform = if f.transform > Transform::Aggregate {
-                    f.transform
+                    f.transform.max(keys.transform)
                 } else {
                     Transform::Window.max(keys.transform).max(upstream)
                 };

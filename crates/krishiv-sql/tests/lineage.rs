@@ -688,6 +688,21 @@ fn lineage_definer_view_is_leaf() {
     assert_eq!(lineage(&b).unwrap().columns, l.columns);
 }
 
+/// A window over a UDF keeps the strongest transform of its keys: an unexpanded view's `view` beats `opaque`.
+#[test]
+fn a_window_over_a_udf_keeps_a_definer_view_key() {
+    let sql = "SELECT sum(my_udf(u.x)) OVER (PARTITION BY v.k) AS w \
+               FROM (SELECT a AS k FROM t WHERE b > 0) v JOIN u ON v.k = u.a";
+    let l = lineage(&with_view(sql, ViewSecurity::Definer)).unwrap();
+    assert_eq!(
+        columns(&l),
+        ["w: [u.x, view:spark_catalog.default.v.k] -> view"]
+    );
+    // Without the view, the UDF's `opaque` stays.
+    let o = of("SELECT sum(my_udf(a)) OVER (PARTITION BY b) AS w FROM t");
+    assert_eq!(columns(&o), ["w: [t.a, t.b] -> opaque"]);
+}
+
 #[test]
 fn a_view_not_expanded_that_is_not_found_fails_closed() {
     // A `DEFINER` entry whose (alias, origin) no node in the plan carries fails closed, even with stale
