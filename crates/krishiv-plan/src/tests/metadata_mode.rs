@@ -2,7 +2,8 @@
 //! The read privilege of one analysis (ADR 0046 §3b, P3 PR-14c): an analysis that runs the plan asks
 //! `Select` on every table, view and path it reads; a metadata analysis (`AnalysisMode::Metadata`:
 //! schema, tree string, semantic hash) asks `Browse`. Other privileges (`Usage` on a secret scope,
-//! `Manage` for a server-scoped store option) are asked as before, and nothing resolved in one mode
+//! `Manage` for a server-scoped store option) are asked as before; a read by path asks `Select` in
+//! both modes (inference reads file contents: CSV header names, JSON keys); and nothing resolved in one mode
 //! is reused by the other (the context fingerprint differs, so the prefix cache misses).
 
 use std::collections::BTreeMap;
@@ -22,9 +23,11 @@ use crate::analyzer::{
 };
 use crate::{LogicalPlan, Plan, PlanNode, ReadSource};
 
-/// A viewer: `Browse` on everything, every other privilege denied. Records every question.
+/// A viewer: `Browse` on everything, every other privilege denied (but `Select` on paths when
+/// `paths`). Records every question.
 #[derive(Default)]
 struct Viewer {
+    paths: bool,
     asked: Mutex<Vec<(String, Privilege)>>,
 }
 
@@ -49,7 +52,9 @@ impl AccessPolicy for Viewer {
             .lock()
             .unwrap()
             .push((securable.to_string(), privilege));
-        let decision = if privilege == Privilege::Browse {
+        let path_read =
+            self.paths && privilege == Privilege::Select && matches!(securable, Securable::Path(_));
+        let decision = if privilege == Privilege::Browse || path_read {
             AccessDecision::Allow
         } else {
             AccessDecision::Deny {
@@ -155,13 +160,6 @@ fn a_metadata_analysis_reads_with_browse() {
         "{:?}",
         table.securables
     );
-    let path = run(&DefaultAnalyzer, files(&[]), &c).unwrap();
-    assert_eq!(path.output[0].name, "a");
-    assert!(
-        path.securables
-            .iter()
-            .any(|s| matches!(s.securable, Securable::Path(_)) && s.privilege == Privilege::Browse)
-    );
     // Only `Browse` was asked: never `Select`.
     let asked = viewer.asked();
     assert!(!asked.is_empty());
@@ -172,9 +170,42 @@ fn a_metadata_analysis_reads_with_browse() {
 }
 
 #[test]
+fn a_read_by_path_asks_select_even_for_metadata() {
+    // A path has no stored schema: inferring one reads the files (CSV header names, JSON keys), so
+    // `Browse` would show a viewer file contents.
+    let viewer = Arc::new(Viewer::default());
+    let c = ctx(&viewer, AnalysisMode::Metadata);
+    let r = run(&DefaultAnalyzer, files(&[]), &c);
+    assert!(denied(&r), "{r:?}");
+    assert!(
+        viewer
+            .asked()
+            .iter()
+            .all(|(s, p)| s.starts_with("path ") && *p == Privilege::Select),
+        "{:?}",
+        viewer.asked()
+    );
+    // With `Select` on the path it analyzes, and reports the path as `Select`.
+    let reader = Arc::new(Viewer {
+        paths: true,
+        ..Viewer::default()
+    });
+    let c = ctx(&reader, AnalysisMode::Metadata);
+    let a = run(&DefaultAnalyzer, files(&[]), &c).unwrap();
+    assert!(
+        a.securables
+            .iter()
+            .any(|s| matches!(s.securable, Securable::Path(_)) && s.privilege == Privilege::Select)
+    );
+}
+
+#[test]
 fn other_privileges_are_asked_as_before() {
     // A secret reference in the options still needs `Usage` on its scope, which a viewer lacks.
-    let viewer = Arc::new(Viewer::default());
+    let viewer = Arc::new(Viewer {
+        paths: true,
+        ..Viewer::default()
+    });
     let c = ctx(&viewer, AnalysisMode::Metadata);
     let secret = OptionValue::reference("prod", "key");
     let r = run(&DefaultAnalyzer, files(&[("token", secret)]), &c);

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Metadata analysis (ADR 0046 §3b, P3 PR-14c): the analysis of a frame whose plan is never run, for
-//! Connect `AnalyzePlan` (schema, tree string, `is_local`, semantic hash, same semantics). Its table,
-//! view and path reads ask `Browse` instead of `Select` (`AnalysisMode::Metadata`), so a viewer sees
-//! the schema of what it may not read.
+//! Connect `AnalyzePlan` (schema, tree string, `is_local`, semantic hash, same semantics). Its catalog
+//! table and view reads ask `Browse` instead of `Select` (`AnalysisMode::Metadata`), so a viewer sees
+//! the stored schema of what it may not read. Reads by path keep `Select`: a path has no stored schema,
+//! and inference reads file contents (CSV `header=true` names are the file's first line).
 //!
 //! No reuse across privileges: a metadata analysis is never kept in the frame (`DataFrame::analysis`,
 //! which every action reads, holds only `Select`-checked analyses), and its context fingerprint carries
@@ -19,8 +20,9 @@ use krishiv_plan::analyzer::{AnalysisMode, AnalyzedPlan};
 use super::DataFrame;
 
 impl DataFrame {
-    /// The result's schema, as [`Self::schema`], for a caller that only shows it: every table, view
-    /// and path the plan reads needs `Browse` (metadata), not `Select` (ADR 0046 §3b). The analysis is
+    /// The result's schema, as [`Self::schema`], for a caller that only shows it: every catalog table
+    /// and view the plan reads needs `Browse` (metadata), not `Select` (ADR 0046 §3b); a read by path
+    /// still needs `Select` (its schema is inferred from file contents). The analysis is
     /// not kept, so a later action analyzes again and asks `Select`.
     ///
     /// ```

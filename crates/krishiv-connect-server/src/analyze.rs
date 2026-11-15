@@ -23,8 +23,10 @@
 //!
 //! Access (ADR 0046 §3b): `schema`, `tree_string`, `is_local`, `is_streaming`,
 //! `semantic_hash` and `same_semantics` analyze for metadata
-//! (`DataFrame::schema_for_metadata` / `analyzed_for_metadata`): every table,
-//! view and path the plan reads needs `Browse`, so a viewer may ask them.
+//! (`DataFrame::schema_for_metadata` / `analyzed_for_metadata`): every catalog
+//! table and view the plan reads needs `Browse`, so a viewer may ask them. A
+//! read by path keeps `Select`: its schema is inferred from file contents (CSV
+//! `header=true` column names are the file's first line).
 //! `input_files` lists paths and keeps `Select`. `explain` keeps `Select` too:
 //! it plans the query, and planning samples distinct values of file columns
 //! (rows) and its `cost` mode prints statistics, which are data (follow-up).

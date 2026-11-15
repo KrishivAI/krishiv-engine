@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Metadata analysis (ADR 0046 §3b, P3 PR-14c): `DataFrame::schema_for_metadata` asks `Browse` on
-//! every table, view and path a plan reads, where `schema`, actions and `explain` ask `Select`. A
-//! viewer-like policy (`Browse` allowed, `Select` denied) sees the schema of a table, a temporary
-//! view, a permanent view and files inside the allowed roots, never outside them, and never reads
-//! rows: no metadata analysis is reused by a later action of the same frame or session.
+//! every catalog table and view a plan reads, where `schema`, actions and `explain` ask `Select`. A
+//! viewer-like policy (`Browse` allowed, `Select` denied) sees the stored schema of a table, a
+//! temporary view, a permanent view and a permanent table, and never reads rows: no metadata
+//! analysis is reused by a later action of the same frame or session. A read by path keeps
+//! `Select` even for metadata (inference reads file contents: CSV `header=true` names are the
+//! file's first line), and `PathPrefixPolicy` refuses paths outside its roots for every role.
 #![cfg(test)]
 
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
@@ -162,20 +164,19 @@ fn setup(role: u8) -> (Arc<Roles>, Session, Fixture) {
     )
 }
 
-fn frames(s: &Session, f: &Fixture) -> Vec<(&'static str, DataFrame)> {
+fn frames(s: &Session) -> Vec<(&'static str, DataFrame)> {
     vec![
         ("table", s.table("t")),
         ("temporary view", s.table("tv")),
         ("permanent view", s.table("pv")),
         ("permanent table", s.table("p")),
-        ("path inside the roots", s.read().parquet([&f.inside])),
     ]
 }
 
 #[test]
 fn a_viewer_sees_schemas_and_never_rows() {
-    let (policy, s, f) = setup(VIEWER);
-    for (name, df) in frames(&s, &f) {
+    let (policy, s, _fixture) = setup(VIEWER);
+    for (name, df) in frames(&s) {
         policy.take();
         let schema = block_on(df.schema_for_metadata())
             .unwrap_or_else(|e| panic!("{name}: schema_for_metadata: {e}"));
@@ -211,19 +212,65 @@ fn a_viewer_sees_schemas_and_never_rows() {
 }
 
 #[test]
-fn paths_outside_the_roots_are_refused_for_metadata_too() {
-    let (_, s, f) = setup(VIEWER);
-    let outside = s.read().parquet([&f.outside]);
-    assert_eq!(class(block_on(outside.schema_for_metadata())), DENIED);
-    let escaped = format!("{}/../../outside/data", f.inside);
-    let escaped = s.read().parquet([&escaped]);
-    assert_eq!(class(block_on(escaped.schema_for_metadata())), DENIED);
+fn a_read_by_path_needs_select_for_metadata_too() {
+    let escaped = |f: &Fixture| format!("{}/../../outside/data", f.inside);
+    // Viewer: inside the roots too (asked as `Select` on the path), and outside them.
+    let (policy, s, f) = setup(VIEWER);
+    let inside = s.read().parquet([&f.inside]);
+    assert_eq!(class(block_on(inside.schema_for_metadata())), DENIED);
+    let asked = policy.take();
+    assert!(
+        asked
+            .iter()
+            .any(|(s, p)| s.starts_with("path ") && *p == Privilege::Select),
+        "{asked:?}"
+    );
+    assert!(
+        asked.iter().all(|(_, p)| *p == Privilege::Select),
+        "{asked:?}"
+    );
+    for path in [f.outside.clone(), escaped(&f)] {
+        let df = s.read().parquet([&path]);
+        assert_eq!(class(block_on(df.schema_for_metadata())), DENIED, "{path}");
+    }
+    // Operator: inside the roots only.
+    let (_, s, f) = setup(OPERATOR);
+    let inside = block_on(s.read().parquet([&f.inside]).schema_for_metadata()).unwrap();
+    assert_eq!(inside.field(0).name(), "a");
+    for path in [f.outside.clone(), escaped(&f)] {
+        let df = s.read().parquet([&path]);
+        assert_eq!(class(block_on(df.schema_for_metadata())), DENIED, "{path}");
+    }
+}
+
+#[test]
+fn a_viewer_cannot_read_a_csv_header_through_its_schema() {
+    // Why a path keeps `Select` for metadata: with `header=true` the column names a schema shows are
+    // the file's first line, so `Browse` on a path would show a viewer file contents.
+    let csv =
+        |s: &Session, path: &str| s.read().format("csv").option("header", "true").load([path]);
+    for (role, expected) in [(VIEWER, DENIED), (OPERATOR, "OK")] {
+        let (_, s, f) = setup(role);
+        let dir = std::path::Path::new(&f.inside).with_file_name("secrets");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("s.csv"), "first_line_secret,b\n1,2\n").unwrap();
+        let path = dir.to_str().unwrap().to_owned();
+        let r = block_on(csv(&s, &path).schema_for_metadata());
+        if role == OPERATOR {
+            // What a viewer would have seen: the first line, as column names.
+            let schema = r.as_ref().unwrap();
+            assert_eq!(schema.field(0).name(), "first_line_secret");
+        } else if let Err(e) = &r {
+            assert!(!e.to_string().contains("first_line_secret"), "{e}");
+        }
+        assert_eq!(class(r), expected);
+    }
 }
 
 #[test]
 fn an_operator_run_after_a_metadata_analysis_is_checked_with_select() {
-    let (policy, s, f) = setup(OPERATOR);
-    for (name, df) in frames(&s, &f) {
+    let (policy, s, _fixture) = setup(OPERATOR);
+    for (name, df) in frames(&s) {
         policy.take();
         block_on(df.schema_for_metadata()).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert!(

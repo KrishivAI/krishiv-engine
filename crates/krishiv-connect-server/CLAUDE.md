@@ -21,7 +21,7 @@ Paths are relative to this crate.
   shutting down")
 - `src/analyze.rs` `AnalyzePlan` (design §3.5): every arm over the translated, analyzed plan (never run);
   `same_semantics`/`semantic_hash` from `krishiv_plan::semantic_plan_hash` (names and subquery aliases erased) of
-  the analyzed plan; the cache arms are 56K00 until PR-47; access (ADR 0046 §3b): `schema`, `tree_string`, `is_local`, `is_streaming`, `semantic_hash`, `same_semantics` analyze for metadata (`Browse`), `input_files` and `explain` keep `Select` (explain plans the query, which samples rows; `tests/analyze_access.rs`); `src/analyze/types.rs` ports of `StructType.treeString`, `toDDL` and the planner's
+  the analyzed plan; the cache arms are 56K00 until PR-47; access (ADR 0046 §3b): `schema`, `tree_string`, `is_local`, `is_streaming`, `semantic_hash`, `same_semantics` analyze for metadata (`Browse` on catalog tables and views; reads by path keep `Select`, inference reads file contents), `input_files` and `explain` keep `Select` (explain plans the query, which samples rows; `tests/analyze_access.rs`); `src/analyze/types.rs` ports of `StructType.treeString`, `toDDL` and the planner's
   `parseDatatypeString`
 - `src/config.rs` `Config` (design §3.6) over `RuntimeConf`: the seven operations, `silent`, Spark's per-key
   warnings, redaction for both profiles (Spark's pattern plus `krishiv_common::secret`'s classifier and URL

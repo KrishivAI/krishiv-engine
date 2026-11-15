@@ -608,14 +608,15 @@ pub enum AnalysisMode {
     #[default]
     Execute,
     /// The plan is never run (Connect `AnalyzePlan` schema, tree string, semantic hash): every
-    /// table, view and path read asks `Browse`. Such an analysis must never be kept where a later
+    /// catalog table and view read asks `Browse` (their schema is stored). A read by path still asks
+    /// `Select`: inferring its schema reads file contents (CSV header names, JSON keys). Such an analysis must never be kept where a later
     /// run could reuse it; its context fingerprint differs from an `Execute` one, so no cache keyed
     /// by the fingerprint (the prefix cache) serves one mode's resolution to the other.
     Metadata,
 }
 
 impl AnalysisMode {
-    /// The privilege a table, view or path read asks in this mode. Other privileges (`Usage` on a
+    /// The privilege a catalog table or view read asks in this mode (a path always asks `Select`). Other privileges (`Usage` on a
     /// secret scope, `Manage` for a server-scoped store option) do not change with the mode.
     #[must_use]
     pub fn read_privilege(self) -> Privilege {
