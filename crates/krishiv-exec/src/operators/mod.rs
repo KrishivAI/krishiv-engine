@@ -37,6 +37,7 @@ mod project;
 mod range;
 mod replicate;
 mod runtime_filter;
+mod sample;
 mod scan;
 pub(crate) mod select;
 mod sort;
@@ -62,6 +63,7 @@ pub use replicate::ReplicateRows;
 pub(crate) use runtime_filter::RowStage;
 pub(crate) use runtime_filter::ScanRows;
 pub use runtime_filter::{RowStageSettings, RuntimeFilters};
+pub use sample::Sample;
 pub(crate) use scan::scan_metadata;
 pub use scan::{
     FileSelections, FilterPushdown, MemoryScan, PushedFilter, ScanPushdown, ScanPushdowns, TakeRows,

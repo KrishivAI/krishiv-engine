@@ -988,6 +988,7 @@ impl DataFrame {
             env.copy_text_from(&a.env);
             env.statement_class = a.env.statement_class;
             env.row = Arc::clone(&a.env.row);
+            env.sample_salt = a.env.sample_salt;
         }
         if let Some(a) = cached
             && !a.analyzed.reads_files
