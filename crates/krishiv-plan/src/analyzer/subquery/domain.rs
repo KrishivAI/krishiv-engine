@@ -349,7 +349,7 @@ impl Rewriter {
             .iter()
             .zip(&keys)
             .map(|(d, k)| {
-                boolean(
+                keyed_boolean(
                     Builtin::EqNullSafe,
                     vec![col_expr(d, Origin::UNKNOWN), Arc::clone(k)],
                 )
@@ -503,7 +503,7 @@ impl Rewriter {
                 .zip(domain_columns(domain, b));
             for (x, y) in pairs {
                 let args = vec![col_expr(&x, Origin::UNKNOWN), col_expr(&y, Origin::UNKNOWN)];
-                cond.push(boolean(Builtin::EqNullSafe, args));
+                cond.push(keyed_boolean(Builtin::EqNullSafe, args));
             }
         }
         let cond = cond

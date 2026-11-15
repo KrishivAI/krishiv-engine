@@ -1802,3 +1802,18 @@ fn nvl2_column_names_show_the_arguments_as_written() {
         assert_eq!(names, [want], "{sql}");
     }
 }
+
+/// A correlated scalar subquery counting rows that match the outer row on a `UTF8_LCASE` column
+/// goes through the domain rewrite, whose `<=>` joins compare the keys (Spark 4.2.0: a=2, b=0).
+#[test]
+fn correlated_count_over_a_collated_equality_compares_keys() {
+    let got = run(
+        "SELECT concat(x.c, ':', cast((SELECT count(*) FROM VALUES \
+         (cast('A' AS STRING COLLATE UTF8_LCASE)), (cast('a' AS STRING COLLATE UTF8_LCASE)) y(d) \
+         WHERE y.d = x.c) AS STRING)) \
+         FROM VALUES (cast('a' AS STRING COLLATE UTF8_LCASE)), (cast('b' AS STRING COLLATE UTF8_LCASE)) x(c) \
+         ORDER BY 1",
+    )
+    .unwrap();
+    assert_eq!(got, ["a:2", "b:0"]);
+}

@@ -445,6 +445,58 @@ fn call(op: Builtin, args: Vec<Arc<Expr>>, data_type: DataType, nullable: bool) 
     ))))
 }
 
+/// `boolean` over the comparison keys of collated string operands: the guard refuses a
+/// comparison of collated strings, and the rewrites here compare columns the analyzer never
+/// saw as a `==` (a domain's values against a subquery's keys). Both sides become
+/// `__collation_key(x, 'type')` when either is a collated string with a key, as the analyzer's
+/// own keyed comparison does.
+pub(super) fn keyed_boolean(op: Builtin, args: Vec<Arc<Expr>>) -> Arc<Expr> {
+    let collated = args
+        .iter()
+        .any(|a| matches!(typed(a).0, Some(DataType::CollatedString(c)) if !c.is_utf8_binary()));
+    let id = krishiv_functions::registry::builtins().lookup(
+        "__collation_key",
+        SparkProfile::ALL.into_iter().max().unwrap_or_default(),
+    );
+    let krishiv_functions::registry::Lookup::Found(def) = id else {
+        return boolean(op, args);
+    };
+    if !collated {
+        return boolean(op, args);
+    }
+    let keyed = args
+        .into_iter()
+        .map(|a| {
+            let Some(t) = typed(&a).0 else { return a };
+            let origin = a.origin;
+            let name = Arc::new(
+                Expr::new(ExprNode::Literal(Literal::String(t.sql()))).with_origin(origin),
+            );
+            let nullable = typed(&a).1;
+            Arc::new(
+                Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                    ResolvedFunction {
+                        id: FunctionId::Registry {
+                            name: def.name.to_owned(),
+                            id: def.id,
+                        },
+                        kind: FunctionKind::Scalar,
+                        args: vec![a, name],
+                        distinct: false,
+                        filter: None,
+                        within_group: Vec::new(),
+                        data_type: t.collation_key_type(),
+                        nullable,
+                        deterministic: true,
+                    },
+                )))
+                .with_origin(origin),
+            )
+        })
+        .collect();
+    boolean(op, keyed)
+}
+
 pub(super) fn boolean(op: Builtin, args: Vec<Arc<Expr>>) -> Arc<Expr> {
     let nullable = op != Builtin::IsNull && args.iter().any(|a| typed(a).1);
     call(op, args, DataType::Boolean, nullable)
