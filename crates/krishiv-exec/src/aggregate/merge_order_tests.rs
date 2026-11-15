@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Order-sensitive aggregates (`first`, `last`, the ties of `max_by` and
-//! `min_by`, float `max`/`min` of `0.0` and `-0.0`) across drivers follow
-//! the driver-partition order whatever order the drivers combine in, and
-//! whether or not the aggregate spilled: the answer never depends on memory.
+//! `min_by`, float `max`/`min` of `0.0` and `-0.0`, `percentile_approx`)
+//! across drivers follow the driver-partition order whatever order the
+//! drivers combine in, and whether or not the aggregate spilled: the answer
+//! never depends on memory.
 #![cfg(not(loom))]
 #![expect(
     clippy::disallowed_methods,
@@ -41,19 +42,44 @@ enum Mode {
     /// 0 and `-0.0` in the others: the zeros tie, so the sign says which
     /// partition's value was kept.
     Zeros,
+    /// `(key, percentile_approx(v, 0.5, 100), percentile_approx(v, 0.9,
+    /// 100))` as `f64` bits over [`SPREAD_KEYS`] groups of many rows each,
+    /// so the summaries compress and their merge is not symmetric.
+    Percentiles,
 }
+
+/// The groups of [`Mode::Percentiles`]; each partition gives each
+/// [`SPREAD_ROWS`] values.
+const SPREAD_KEYS: i64 = 4;
+const SPREAD_ROWS: i64 = 6_000;
 
 /// Partition `p`'s rows for `mode`: keys `0..KEYS`, then the order column
 /// counting from `p * 10_000` (or the zero of [`Mode::Zeros`]).
 fn input(mode: Mode, p: u32) -> Batch {
-    if !matches!(mode, Mode::Zeros) {
-        return batch(false, i64::from(p) * 10_000, 0..KEYS);
-    }
-    let zero = if p == 0 { 0.0 } else { -0.0 };
-    let cols: Vec<ArrayRef> = vec![
-        Arc::new(Int64Array::from_iter_values(0..KEYS)),
-        Arc::new(Float64Array::from_iter_values((0..KEYS).map(|_| zero))),
-    ];
+    let cols: Vec<ArrayRef> = match mode {
+        Mode::Picks | Mode::By => return batch(false, i64::from(p) * 10_000, 0..KEYS),
+        Mode::Zeros => {
+            let zero = if p == 0 { 0.0 } else { -0.0 };
+            vec![
+                Arc::new(Int64Array::from_iter_values(0..KEYS)),
+                Arc::new(Float64Array::from_iter_values((0..KEYS).map(|_| zero))),
+            ]
+        }
+        Mode::Percentiles => {
+            let n = SPREAD_KEYS * SPREAD_ROWS;
+            // Partitions overlap and interleave: partition p's values are
+            // a scrambled 0..n shifted by p * n / 2.
+            let shift = f64::from(p) * (n / 2) as f64;
+            vec![
+                Arc::new(Int64Array::from_iter_values(
+                    (0..n).map(|i| i % SPREAD_KEYS),
+                )),
+                Arc::new(Float64Array::from_iter_values(
+                    (0..n).map(|i| ((i * 7_919) % n) as f64 + shift),
+                )),
+            ]
+        }
+    };
     Batch::new(RecordBatch::try_new(zeros_schema(), cols).unwrap())
 }
 
@@ -117,6 +143,15 @@ async fn run(mode: Mode, rows: bool, order: &[u32], spilled: &[u32]) -> Vec<[i64
             ],
             Mode::By => vec![by(AggregateFunction::MaxBy), by(AggregateFunction::MinBy)],
             Mode::Zeros => vec![zero(AggregateFunction::Max), zero(AggregateFunction::Min)],
+            Mode::Percentiles => [0.5, 0.9]
+                .map(|q| {
+                    zero(AggregateFunction::PercentileApprox {
+                        percentages: vec![q],
+                        array: false,
+                        accuracy: 100,
+                    })
+                })
+                .to_vec(),
         },
         output: AggregateOutput::Final,
         ansi: true,
@@ -150,7 +185,7 @@ async fn run(mode: Mode, rows: bool, order: &[u32], spilled: &[u32]) -> Vec<[i64
         let d = b.data();
         let col = |i: usize| -> Vec<i64> {
             let c = d.column(i);
-            if i > 0 && matches!(mode, Mode::Zeros) {
+            if i > 0 && matches!(mode, Mode::Zeros | Mode::Percentiles) {
                 let f = c.as_primitive::<Float64Type>();
                 f.values()
                     .iter()
@@ -242,4 +277,15 @@ fn only_float_extrema_observe_merge_order() {
         DataType::Float64,
         "s"
     )));
+}
+
+/// `percentile_approx`'s Greenwald-Khanna merge is not symmetric (the
+/// answer moves within its error with the merge order): its states merge
+/// in partition order, as the disk phase merges them, so spilling does not
+/// change the answer.
+#[tokio::test]
+async fn percentile_approx_does_not_depend_on_memory() {
+    let reference = run(Mode::Percentiles, true, &[0, 1, 2], &[0, 1, 2]).await;
+    assert_eq!(reference.len(), usize::try_from(SPREAD_KEYS).unwrap());
+    same_in_every_run(Mode::Percentiles, &reference).await;
 }
