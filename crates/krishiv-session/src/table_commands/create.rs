@@ -303,7 +303,8 @@ impl Session {
             .into());
         }
         let location = table.location.clone();
-        self.authorize_path(&location, &[Privilege::Create], StatementClass::Ddl)
+        let securable = self.location_securable(&location, table.managed)?;
+        self.authorize_securable(&securable, &[Privilege::Create], StatementClass::Ddl)
             .await?;
         // Spark creates the directory of a managed table only; an external table's location is
         // made by its first write.

@@ -1472,7 +1472,7 @@ impl Session {
         privilege: Privilege,
     ) -> Result<(), KrishivError> {
         // The form `authorize_path` asks a table's directory in, so one rule answers both alike.
-        let securable = crate::table_commands::dir_securable(path);
+        let securable = crate::table_commands::dir_securable(path)?;
         let r = authorize(
             &*self.state.policy,
             &self.state.principal,

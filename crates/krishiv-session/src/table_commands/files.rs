@@ -15,23 +15,55 @@ use crate::store::CatalogTable;
 
 impl Session {
     /// Asks the session's policy about the local directory `path` for each privilege (the writer does
-    /// the same for its files). It is asked as a `file:` path, the form every read and write by path
-    /// takes, so a confining policy (`PathPrefixPolicy`) compares it with its local roots rather than
-    /// reading it as an object-store key. Text that is not an absolute path is asked as written: a
-    /// location already qualified (`file:/..`, `s3a://..`, from `ALTER TABLE .. SET LOCATION`) must
-    /// not get a second prefix, and a relative path stays refused.
+    /// the same for its files), in the one form [`dir_securable`] gives every check of a table's
+    /// directories: `file:` and the canonical absolute path, the path a write to it goes to.
+    ///
+    /// # Errors
+    /// `KRISHIV_UNSUPPORTED_FEATURE` for a path that cannot be made canonical (relative, unresolvable,
+    /// non-UTF-8), before the policy is asked; `KRISHIV_INSUFFICIENT_PERMISSIONS` for a denial.
     pub(super) async fn authorize_path(
         &self,
         path: &Path,
         privileges: &[Privilege],
         class: StatementClass,
     ) -> Result<(), KrishivError> {
-        let securable = dir_securable(path);
+        let securable = dir_securable(path)?;
+        self.authorize_securable(&securable, privileges, class)
+            .await
+    }
+
+    /// The securable of a table's `location` as CREATE TABLE asks it: a managed table's directory (and an
+    /// external local location) by [`dir_securable`], a relative external location after qualifying it
+    /// against the working directory as its writes do, and an object-store location in its qualified form.
+    pub(super) fn location_securable(
+        &self,
+        location: &Path,
+        managed: bool,
+    ) -> Result<Securable, KrishivError> {
+        match location.to_str() {
+            Some(text) if !managed && !location.is_absolute() => {
+                let qualified = self.qualify_path(text)?;
+                match qualified.strip_prefix("file:") {
+                    Some(local) => dir_securable(Path::new(local)),
+                    None => Ok(Securable::Path(OptionValue::from_user("path", qualified))),
+                }
+            }
+            _ => dir_securable(location),
+        }
+    }
+
+    /// Asks the session's policy about `securable` for each privilege, auditing each answer.
+    pub(super) async fn authorize_securable(
+        &self,
+        securable: &Securable,
+        privileges: &[Privilege],
+        class: StatementClass,
+    ) -> Result<(), KrishivError> {
         for privilege in privileges {
             let r = authorize(
                 &*self.state.policy,
                 &self.state.principal,
-                &securable,
+                securable,
                 *privilege,
             )
             .await;
@@ -102,15 +134,18 @@ impl Session {
 }
 
 /// The path securable of the local directory `path`, in the one form every check of a table's
-/// directories uses ([`Session::authorize_path`], the partition DDL of `partitions.rs`): `file:<path>`
-/// for an absolute path, the text as written otherwise (see `authorize_path`).
-pub(crate) fn dir_securable(path: &Path) -> Securable {
-    let text = if path.is_absolute() {
-        format!("file:{}", path.display())
-    } else {
-        path.display().to_string()
-    };
-    Securable::Path(OptionValue::from_user("path", text))
+/// directories uses ([`Session::authorize_path`], the partition DDL of `partitions.rs`): `file:` and the
+/// canonical absolute path, with `.`, `..` and the links of its existing part resolved and the part that
+/// does not exist yet appended (`access::physical`, the rule the write path uses). So one rule answers
+/// CREATE, INSERT and DROP of a directory alike, however the warehouse was written.
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` for a relative path (also a `file:` or other scheme kept in the text: a
+/// local directory is expected), one that cannot be resolved (an I/O error, a link loop, a dangling link)
+/// and a non-UTF-8 one. It never reaches the policy as written (fail closed).
+pub(crate) fn dir_securable(path: &Path) -> Result<Securable, KrishivError> {
+    let text = crate::access::canonical_file_path(path)?;
+    Ok(Securable::Path(OptionValue::from_user("path", text)))
 }
 
 /// Deletes a managed table's directory; a directory that is already gone

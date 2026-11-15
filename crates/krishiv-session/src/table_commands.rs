@@ -36,7 +36,7 @@ use krishiv_common::error::{
 };
 use krishiv_common::names::check_column_name_duplication;
 use krishiv_common::secret::OptionValue;
-use krishiv_plan::analyzer::{Privilege, TableColumn};
+use krishiv_plan::analyzer::{Privilege, Securable, TableColumn};
 use krishiv_sql::StatementClass;
 use krishiv_sql::ast::{
     AlterColumnAction, AlterNamespace, AlterNamespaceAction, AlterTable, AlterTableAction,
@@ -809,9 +809,11 @@ impl Session {
         let provider = self.provider_of(Some(short_provider(&written)))?;
         // The policy is asked before the path is looked at, so a denial never tells whether it exists.
         for path in paths.iter().filter_map(OptionValue::as_plain) {
+            // Asked in the qualified form a read by path asks (`TargetObject::Path`): it is read, not
+            // written, so it is not resolved as a table's directory is.
             let qualified = self.qualify_path(path)?;
-            self.authorize_path(
-                Path::new(&qualified),
+            self.authorize_securable(
+                &Securable::Path(OptionValue::from_user("path", qualified)),
                 &[Privilege::Select],
                 StatementClass::Ddl,
             )

@@ -617,23 +617,54 @@ fn folded(ident: &TableIdent) -> TableIdent {
 
 /// `at` (a local path, `file:/...`) with the symbolic links of its
 /// existing part resolved: the directory a write really goes to.
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` for a local path [`canonical_parts`] cannot make canonical.
 pub(crate) fn physical(at: LocatedPath) -> Result<LocatedPath, KrishivError> {
     let Some(local) = at.display.strip_prefix("file:") else {
         return Ok(at);
     };
-    let resolved = resolve_links(Path::new(local)).ok_or_else(|| unplaceable("this path"))?;
-    let parts = resolved
-        .components()
-        .filter_map(|c| match c {
-            Component::Normal(p) => Some(p.to_str().ok_or_else(|| unplaceable("non-UTF-8 paths"))),
-            _ => None,
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let parts = canonical_parts(Path::new(local))?;
     Ok(LocatedPath {
         store: at.store,
-        path: object_store::path::Path::from_iter(parts.iter().copied()),
+        path: object_store::path::Path::from_iter(parts.iter().map(String::as_str)),
         display: format!("file:/{}", parts.join("/")),
     })
+}
+
+/// The local directory `local` in the one form every check of it asks: `file:` and its canonical absolute
+/// path, as [`physical`] makes the path a write goes to.
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` for a path [`canonical_parts`] cannot make canonical: the policy is never
+/// asked about it (fail closed).
+pub(crate) fn canonical_file_path(local: &Path) -> Result<String, KrishivError> {
+    Ok(format!("file:/{}", canonical_parts(local)?.join("/")))
+}
+
+/// The components of the absolute local path `local` with `.`, `..` and every symbolic link resolved in the
+/// part of it that exists, and the part that does not exist yet appended as written (it holds no link and no
+/// `..`, see [`resolve_links`]).
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` for a relative path, one that cannot be resolved (an I/O error, a link
+/// loop, a dangling link) and a non-UTF-8 one.
+fn canonical_parts(local: &Path) -> Result<Vec<String>, KrishivError> {
+    if !local.is_absolute() {
+        return Err(unplaceable("relative paths"));
+    }
+    let resolved = resolve_links(local).ok_or_else(|| unplaceable("this path"))?;
+    resolved
+        .components()
+        .filter_map(|c| match c {
+            Component::Normal(p) => Some(
+                p.to_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| unplaceable("non-UTF-8 paths")),
+            ),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Fails closed (`KRISHIV_INSUFFICIENT_PERMISSIONS`) when `at`, a path
@@ -920,14 +951,30 @@ fn resolve_links(path: &Path) -> Option<PathBuf> {
     let mut existing = path.to_path_buf();
     let mut rest = Vec::new();
     loop {
-        if let Ok(resolved) = std::fs::canonicalize(&existing) {
-            return Some(rest.iter().rev().fold(resolved, |p, part| p.join(part)));
+        match std::fs::canonicalize(&existing) {
+            Ok(resolved) => return Some(rest.iter().rev().fold(resolved, |p, part| p.join(part))),
+            // Only a name that is not there at all is kept as written (below a file it cannot be there
+            // either; the write then fails as a storage error). A dangling link (its own entry exists), a
+            // link loop or an unreadable directory fails closed.
+            Err(e)
+                if absent(&e)
+                    && std::fs::symlink_metadata(&existing).is_err_and(|m| absent(&m)) => {}
+            Err(_) => return None,
         }
+        // `None` for a missing part ending in `..`: it is not resolved against a directory that is not there.
         rest.push(existing.file_name()?.to_owned());
         if !existing.pop() {
             return None;
         }
     }
+}
+
+/// Whether `e` says the entry is not there: missing, or below a file.
+fn absent(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+    )
 }
 
 impl AccessPolicy for PathPrefixPolicy {
@@ -1135,4 +1182,56 @@ fn calls_secret(t: &str) -> bool {
                 .get(i + 1)
                 .is_some_and(|k| k.kind == TokenKind::Sym(Sym::LParen))
     })
+}
+
+#[cfg(test)]
+mod canonical_path_tests {
+    use std::path::Path;
+
+    use super::canonical_file_path;
+
+    fn refused(path: &Path) -> bool {
+        canonical_file_path(path)
+            .is_err_and(|e| e.error_class().name() == "KRISHIV_UNSUPPORTED_FEATURE")
+    }
+
+    #[test]
+    fn resolves_links_and_dot_dot_in_the_existing_part_and_appends_the_rest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().canonicalize().unwrap().join("real");
+        std::fs::create_dir(&real).unwrap();
+        std::fs::create_dir(tmp.path().join("x")).unwrap();
+        std::os::unix::fs::symlink(&real, tmp.path().join("link")).unwrap();
+        let expected = format!("file:{}/new/t", real.display());
+        for written in [
+            real.join("new/t"),
+            tmp.path().join("link/new/t"),
+            tmp.path().join("x/../link/./new/t"),
+        ] {
+            assert_eq!(
+                canonical_file_path(&written).unwrap(),
+                expected,
+                "{written:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fails_closed_on_paths_it_cannot_make_canonical() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::os::unix::fs::symlink(dir.join("nowhere"), dir.join("dangling")).unwrap();
+        std::os::unix::fs::symlink(dir.join("loop"), dir.join("loop")).unwrap();
+        for path in [
+            Path::new("relative/wh"),
+            Path::new("file:/wh"),
+            Path::new("s3a://bucket/wh"),
+            &dir.join("dangling/t"),
+            &dir.join("dangling"),
+            &dir.join("loop/t"),
+            &dir.join("missing/../t"),
+        ] {
+            assert!(refused(path), "{path:?} was not refused");
+        }
+    }
 }

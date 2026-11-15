@@ -209,3 +209,209 @@ fn creates_renames_and_partitions_in_the_warehouse_pass_a_path_prefix_policy() {
         assert!(wh.join("c2").is_dir() && !wh.join("c").exists());
     }
 }
+
+/// Every statement that asks about a managed table's directory, each run by the subject in a fresh
+/// runtime after the owner's setup (`""` for none).
+const DIRECTORY_STATEMENTS: [(&str, &str, &str); 7] = [
+    ("create", "", "CREATE TABLE c (a INT) USING parquet"),
+    (
+        "ctas",
+        "",
+        "CREATE TABLE ctas USING parquet AS SELECT 1 AS a",
+    ),
+    (
+        "insert",
+        "CREATE TABLE t (a INT) USING parquet",
+        "INSERT INTO t VALUES (2)",
+    ),
+    (
+        "truncate",
+        "CREATE TABLE t (a INT) USING parquet",
+        "TRUNCATE TABLE t",
+    ),
+    (
+        "drop",
+        "CREATE TABLE t (a INT) USING parquet",
+        "DROP TABLE t",
+    ),
+    (
+        "rename",
+        "CREATE TABLE t (a INT) USING parquet",
+        "ALTER TABLE t RENAME TO t2",
+    ),
+    (
+        "add partition",
+        "CREATE TABLE p (a INT, k INT) USING parquet PARTITIONED BY (k)",
+        "ALTER TABLE p ADD PARTITION (k = 1)",
+    ),
+];
+
+/// The subject's answer for each of [`DIRECTORY_STATEMENTS`]: `layout` makes a fresh warehouse under a new
+/// temporary directory and returns the warehouse as written and the policy to ask.
+fn directory_answers(
+    layout: impl Fn(&Path) -> (String, Arc<dyn AccessPolicy>),
+) -> Vec<(&'static str, String)> {
+    DIRECTORY_STATEMENTS
+        .into_iter()
+        .map(|(label, setup, sql)| {
+            let tmp = tempfile::tempdir().unwrap();
+            let (at, policy) = layout(tmp.path());
+            let (owner, subject) = sessions(&at, policy);
+            if !setup.is_empty() {
+                run(&owner, setup).unwrap();
+                if label != "add partition" {
+                    run(&owner, "INSERT INTO t VALUES (1)").unwrap();
+                }
+            }
+            (label, outcome(run(&subject, sql)))
+        })
+        .collect()
+}
+
+fn every_directory_statement(expected: &str) -> Vec<(&'static str, String)> {
+    DIRECTORY_STATEMENTS
+        .into_iter()
+        .map(|(l, _, _)| (l, expected.to_owned()))
+        .collect()
+}
+
+/// `<tmp>/real/wh` (created) and the link `<tmp>/link` to `<tmp>/real`: the real warehouse (links
+/// resolved) and the warehouse reached through the link.
+fn linked_warehouse(tmp: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let real = tmp.join("real");
+    std::fs::create_dir_all(real.join("wh")).unwrap();
+    std::os::unix::fs::symlink(&real, tmp.join("link")).unwrap();
+    (
+        real.join("wh").canonicalize().unwrap(),
+        tmp.join("link").join("wh"),
+    )
+}
+
+/// Under a warehouse reached through a symbolic link, one prefix rule written on the real directory gives
+/// one answer, allow or deny, for every statement on a managed table's directory: each asks the canonical
+/// path (links and `..` resolved), the path the write goes to.
+#[test]
+fn a_linked_warehouse_gets_one_answer_from_a_rule_on_the_real_directory() {
+    for inside in [true, false] {
+        for with_scheme in [false, true] {
+            let answers = directory_answers(|tmp| {
+                let (real, link) = linked_warehouse(tmp);
+                let rule = PrefixRule {
+                    prefix: format!("file:{}/", real.display()),
+                    inside,
+                };
+                (written(&link, with_scheme), Arc::new(rule))
+            });
+            let expected = if inside { "ok" } else { DENIED };
+            assert_eq!(
+                answers,
+                every_directory_statement(expected),
+                "inside {inside}, file: {with_scheme}"
+            );
+        }
+    }
+}
+
+/// The same with a `PathPrefixPolicy` whose root is given as the link path: its root is made canonical
+/// when it is built, so it matches the canonical paths the statements ask.
+#[test]
+fn a_path_prefix_root_given_through_the_link_matches_every_statement() {
+    let allowed = directory_answers(|tmp| {
+        let (_, link) = linked_warehouse(tmp);
+        let policy = PathPrefixPolicy::new([&link], Arc::new(AllowAll)).unwrap();
+        (written(&link, false), Arc::new(policy))
+    });
+    assert_eq!(allowed, every_directory_statement("ok"));
+    let denied = directory_answers(|tmp| {
+        let (_, link) = linked_warehouse(tmp);
+        let other = tmp.join("other");
+        std::fs::create_dir(&other).unwrap();
+        std::os::unix::fs::symlink(&other, tmp.join("other-link")).unwrap();
+        let policy = PathPrefixPolicy::new([tmp.join("other-link")], Arc::new(AllowAll)).unwrap();
+        (written(&link, false), Arc::new(policy))
+    });
+    assert_eq!(denied, every_directory_statement(DENIED));
+}
+
+/// A `..` in the configured warehouse is resolved before any statement asks: a rule (and a
+/// `PathPrefixPolicy`) on the real directory answers every statement alike.
+#[test]
+fn a_dot_dot_in_the_warehouse_is_resolved_for_every_statement() {
+    let dotted = |tmp: &Path| {
+        std::fs::create_dir_all(tmp.join("x")).unwrap();
+        std::fs::create_dir_all(tmp.join("wh")).unwrap();
+        (
+            tmp.join("wh").canonicalize().unwrap(),
+            tmp.join("x").join("..").join("wh"),
+        )
+    };
+    let by_rule = directory_answers(|tmp| {
+        let (real, at) = dotted(tmp);
+        let rule = PrefixRule {
+            prefix: format!("file:{}/", real.display()),
+            inside: true,
+        };
+        (written(&at, true), Arc::new(rule))
+    });
+    assert_eq!(by_rule, every_directory_statement("ok"));
+    let by_prefix = directory_answers(|tmp| {
+        let (real, at) = dotted(tmp);
+        let policy = PathPrefixPolicy::new([&real], Arc::new(AllowAll)).unwrap();
+        (written(&at, false), Arc::new(policy))
+    });
+    assert_eq!(by_prefix, every_directory_statement("ok"));
+}
+
+/// Records every path the policy is asked about, and denies a path that is not a canonical `file:/` path.
+struct PathLog(std::sync::Mutex<Vec<String>>);
+
+impl AccessPolicy for PathLog {
+    fn version(&self) -> PolicyVersion {
+        PolicyVersion(1)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _: &'a Principal,
+        securable: &'a Securable,
+        _: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        let decision = match securable {
+            Securable::Path(p) => {
+                let text = p.as_plain().unwrap_or("<not plain>").to_owned();
+                let ok = text.starts_with("file:/");
+                self.0.lock().unwrap().push(text);
+                if ok {
+                    AccessDecision::Allow
+                } else {
+                    AccessDecision::Deny {
+                        reason: "not a canonical local path".to_owned(),
+                    }
+                }
+            }
+            _ => AccessDecision::Allow,
+        };
+        Box::pin(std::future::ready(Ok(decision)))
+    }
+}
+
+/// A relative warehouse is refused before the policy is asked: the path never reaches it as written.
+#[test]
+fn a_relative_warehouse_is_refused_not_passed_to_the_policy() {
+    let name = format!("krishiv-relative-wh-{}", std::process::id());
+    for sql in [
+        "CREATE TABLE c (a INT) USING parquet",
+        "CREATE TABLE ctas USING parquet AS SELECT 1 AS a",
+    ] {
+        let log = Arc::new(PathLog(std::sync::Mutex::new(Vec::new())));
+        let (_, subject) = sessions(&name, Arc::clone(&log) as Arc<dyn AccessPolicy>);
+        let e = run(&subject, sql).unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "KRISHIV_UNSUPPORTED_FEATURE",
+            "{sql}: {e}"
+        );
+        assert_eq!(*log.0.lock().unwrap(), Vec::<String>::new(), "{sql}");
+        assert!(!Path::new(&name).exists(), "{sql} made the directory");
+    }
+}
