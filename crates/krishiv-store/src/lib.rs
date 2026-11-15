@@ -35,6 +35,7 @@
 #![forbid(unsafe_code)]
 
 mod credentials;
+pub mod egress;
 mod error;
 mod http_clients;
 mod id;
