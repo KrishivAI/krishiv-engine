@@ -14,7 +14,8 @@ a built-in. Aggregate UDFs implement `AggregateUdf` and are registered with `reg
 ## A complete example
 
 The code needs only the `krishiv` crate (`cargo add krishiv`); Arrow types come from `krishiv::arrow`. Both
-examples on this page are compiled and run in CI (`crates/krishiv/tests/docs_rust_udfs.rs`).
+examples on this page have a copy that is compiled and run in CI (`crates/krishiv/tests/docs_rust_udfs.rs`); change the
+two together.
 
 ```rust
 use std::sync::{Arc, OnceLock};
@@ -234,6 +235,7 @@ session.sql("SELECT k, total(v) FROM t GROUP BY k").await?;
   `merge(states, groups)` folds partial states (the columns `state` returned, possibly from another worker or a
   spill file); `state(groups)` and `evaluate(groups)` return one row per group and must not change anything.
   An empty group evaluates to the aggregate of no rows.
+  The `Total` example above returns 0 for a group with no non-NULL rows, where the built-in `sum` returns NULL.
 - **What the engine does.** `FILTER (WHERE ...)` rows and, with the default `NullHandling::Strict`, rows with a
   NULL argument never reach `update`. `DISTINCT` is allowed unless `properties()` sets `distinct = false`, which
   makes `f(DISTINCT x)` `INVALID_SQL_SYNTAX.FUNCTION_WITH_UNSUPPORTED_SYNTAX`. Results and states are checked

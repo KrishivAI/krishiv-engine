@@ -32,7 +32,7 @@ RUSTFLAGS="--cfg tokio_unstable" cargo install krishiv-cli --features tokio-cons
 KRISHIV_TOKIO_CONSOLE=1 krishiv sql -e 'SELECT ...'
 ```
 
-The subscriber listens on `127.0.0.1:6669`; without `KRISHIV_TOKIO_CONSOLE` it stays closed.
+The subscriber listens on `127.0.0.1:6669`; unless `KRISHIV_TOKIO_CONSOLE=1` is set it stays closed.
 
 Then point the console at the process:
 

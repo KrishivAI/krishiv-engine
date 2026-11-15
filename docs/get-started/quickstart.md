@@ -80,6 +80,7 @@ use krishiv::arrow::datatypes::{DataType, Field, Schema};
 use krishiv::functions::col;
 use krishiv::Session;
 
+fn main() -> Result<(), Box<dyn std::error::Error>> {
 let session = Session::new()?;
 let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
 let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![3, 1, 2]))])?;
@@ -87,6 +88,8 @@ session.register_batches("t", schema, vec![batch])?;
 
 let df = session.table("t").order_by([col("a").desc()]).limit(2);
 let rows: Vec<RecordBatch> = futures::executor::block_on(df.collect())?;
+Ok(())
+}
 ```
 
 To print a `TIMESTAMP` column with `arrow-cast`'s `array_value_to_string`, enable the `chrono-tz` feature of

@@ -36,7 +36,7 @@ Status per surface. Anything not listed here is unknown and not supported.
 | Subqueries (scalar, IN, EXISTS, correlated) | partial | Common shapes are supported; remaining gaps appear as failures in the golden suite. |
 | DDL and DML (CREATE/INSERT/DELETE on file-backed tables and views) | partial | Statements the golden suite covers are counted in its pass rates. |
 | `bucketBy` on writes | not yet | Fails with a clear unsupported-feature error. |
-| DataFrameWriterV2 (`writeTo`) | partial | `create` and `append` work. `createOrReplace` and `replace` fail as REPLACE TABLE AS SELECT does, and `overwritePartitions` always fails with KRISHIV_UNSUPPORTED_FEATURE. |
+| DataFrameWriterV2 (`writeTo`) | partial | `create` and `append` work in a Python session. `createOrReplace` and `replace` fail as REPLACE TABLE AS SELECT does; `overwrite(condition)` and `overwritePartitions` always fail with KRISHIV_UNSUPPORTED_FEATURE; `partitionedBy` and `clusterBy` fail when the write runs. Spark Connect clients cannot use `writeTo` yet. |
 | Spark version | partial | Krishiv 0.2 runs as Spark 4.2 only; Spark 3.5, 4.0 and 4.1 behaviour is not selectable yet. |
 
 ## Spark Connect
@@ -51,7 +51,7 @@ Status per surface. Anything not listed here is unknown and not supported.
 | --- | --- | --- |
 | Rust UDFs | supported |  |
 | Python `@udf` and scalar `pandas_udf` / `arrow_udf` | supported |  |
-| Grouped-aggregate and iterator `pandas_udf`, `applyInPandas`, `mapInPandas` | not yet | Fail with NOT_IMPLEMENTED (eval types 202 and 204 for the first two). |
+| Grouped-aggregate and iterator `pandas_udf`, `applyInPandas`, `mapInPandas` | not yet | The two `pandas_udf` forms fail with NOT_IMPLEMENTED (eval types 202 and 204); `applyInPandas` and `mapInPandas` do not exist on `DataFrame` and raise `AttributeError`. |
 
 ## Spark golden suite
 

@@ -23,4 +23,4 @@ Once it runs, pick the next step by what you came to do:
 - **macOS:** arm64 (Apple silicon).
 - **Windows:** there is no Windows wheel; use WSL2 and install the Linux wheel.
 - **Older x86-64 CPUs** (no AVX2): install `krishiv-compat` instead of `krishiv`. It is the same package and imports
-  as `krishiv`; install one of the two, not both. It covers Linux x86-64 only.
+  as `krishiv`; install one of the two, not both. It covers glibc Linux x86-64 only (no musl or arm64 build).

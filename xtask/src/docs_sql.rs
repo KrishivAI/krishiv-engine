@@ -225,8 +225,6 @@ fn kind_name(kind: FunctionKind) -> &'static str {
     }
 }
 
-/// Names Spark lists as functions that Krishiv's parser and analyzer own as syntax (operators and
-/// keywords), so the function registry has no entry for them.
 /// Whether a function takes or returns the `TIME` type, which Spark 4.2.0 gates behind
 /// `spark.sql.timeType.enabled` (SQL-2): its name says so, or an example writes a `TIME` literal.
 fn uses_time_type(name: &str, examples: &[(String, String)]) -> bool {
@@ -239,12 +237,14 @@ fn uses_time_type(name: &str, examples: &[(String, String)]) -> bool {
         lower.match_indices("time").any(|(i, _)| {
             let before = lower[..i].chars().next_back();
             let after = lower[i + 4..].trim_start();
-            !before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+            !before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '\'')
                 && after.starts_with('\'')
         })
     })
 }
 
+/// Names Spark lists as functions that Krishiv's parser and analyzer own as syntax (operators and
+/// keywords), so the function registry has no entry for them.
 fn is_syntax(name: &str) -> bool {
     !name.starts_with(|c: char| c.is_ascii_alphabetic())
         || matches!(
@@ -319,9 +319,9 @@ fn page(
     let examples = parse_examples(&doc.examples);
     if implemented && uses_time_type(&doc.name, &examples) {
         m.push_str(
-            "**Note.** The `TIME` type is off by default in Spark 4.2.0 and in Krishiv: set \
-             `spark.sql.timeType.enabled` to `true` first, or this function fails with \
-             `UNSUPPORTED_TIME_TYPE`.\n\n",
+            "**Note.** The `TIME` type is off by default in Spark 4.2.0 and in Krishiv. Examples that use \
+             it fail with `UNSUPPORTED_TIME_TYPE` until `spark.sql.timeType.enabled` is set to \
+             `true`.\n\n",
         );
     }
     if doc.name == "version" && implemented {
@@ -482,7 +482,7 @@ pub fn render() -> Result<BTreeMap<PathBuf, String>, String> {
     let _ = write!(
         gap,
         "{} Spark 4.2.0 functions have no Krishiv implementation yet; calling one fails with \
-         `UNRESOLVED_ROUTINE`. Each links to its page.\n\n",
+         `KRISHIV_UNSUPPORTED_FEATURE`. Each links to its page.\n\n",
         missing.len()
     );
     for n in &missing {

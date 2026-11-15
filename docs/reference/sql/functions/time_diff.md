@@ -6,7 +6,7 @@ Gets the difference between the times in the specified units.
 
 **Applies to:** Krishiv 0.2.0 and above. Spark: 4.1 and later.
 
-**Note.** The `TIME` type is off by default in Spark 4.2.0 and in Krishiv: set `spark.sql.timeType.enabled` to `true` first, or this function fails with `UNSUPPORTED_TIME_TYPE`.
+**Note.** The `TIME` type is off by default in Spark 4.2.0 and in Krishiv. Examples that use it fail with `UNSUPPORTED_TIME_TYPE` until `spark.sql.timeType.enabled` is set to `true`.
 
 ## Syntax
 
