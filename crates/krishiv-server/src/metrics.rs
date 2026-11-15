@@ -21,7 +21,9 @@ use krishiv_exec::{MetricsSnapshot, prometheus};
 
 #[cfg(test)]
 use crate::guard::same_secret;
-use crate::guard::{Access, Guard, GuardRequest, GuardSurface, Refusal, TokenGuard, peer_of};
+use crate::guard::{
+    Access, Guard, GuardRequest, GuardSurface, Refusal, TokenGuard, peer_leaf_of, peer_of,
+};
 
 /// Provides the snapshot a scrape renders: called once per `GET
 /// /metrics`, on the request task. Must be cheap: [`MetricsSnapshot`] is
@@ -155,7 +157,8 @@ pub fn metrics_route_guarded(
                     let check = GuardRequest::new(GuardSurface::Metrics, Access::Metrics)
                         .with_token(token)
                         .with_malformed(malformed)
-                        .with_peer(peer_of(request.extensions()));
+                        .with_peer(peer_of(request.extensions()))
+                        .with_peer_leaf(peer_leaf_of(request.extensions()));
                     if let Err(refusal) = guard.check(check).await {
                         return refused(refusal);
                     }
