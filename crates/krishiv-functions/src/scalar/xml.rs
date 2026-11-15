@@ -248,8 +248,9 @@ fn flag(v: &str, func: &str, name: &str) -> Result<bool, KrishivError> {
     } else if v.eq_ignore_ascii_case("false") {
         Ok(false)
     } else {
-        // `schema_of_xml` (Spark 4.2.0 run): `_LEGACY_ERROR_TEMP_2147` naming the option; the other functions keep the refusal.
-        if func == "schema_of_xml" {
+        // `schema_of_xml` (Spark 4.2.0 runs, goldens #15 and #165): `_LEGACY_ERROR_TEMP_2147` naming the option; the other options and
+        // functions keep the refusal (Spark gives `prefersDecimal` a classless exception, and nothing is recorded for the rest).
+        if func == "schema_of_xml" && matches!(name, "excludeAttribute" | "inferSchema") {
             return Err(krishiv_common::error::LegacyErrorTemp2147 {
                 param_name: name.to_owned(),
             }
@@ -1452,14 +1453,15 @@ fn infer_elem(e: &Elem, o: &Opts, root: bool) -> T {
     for c in &e.children {
         let t = infer_elem(c, o, false);
         let name = local(&c.name);
-        match index.get(&name.to_lowercase()) {
+        let key = name.to_lowercase();
+        match index.get(&key) {
             Some(&i) => {
                 let old = std::mem::replace(&mut seen[i].1, T::Null);
                 seen[i].1 = merge(old, t, &o.value_tag);
                 seen[i].2 += 1;
             }
             None => {
-                index.insert(name.to_lowercase(), seen.len());
+                index.insert(key, seen.len());
                 seen.push((name, t, 1));
             }
         }
