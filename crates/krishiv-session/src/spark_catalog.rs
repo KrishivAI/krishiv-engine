@@ -230,21 +230,26 @@ impl Catalog<'_> {
         self.session.state.catalog.current_catalog()
     }
 
-    /// Makes `name` the current catalog.
+    /// Makes `name` the current catalog. A catalog's name matches whatever its case, in either `spark.sql.caseSensitive`
+    /// mode, as the SQL `USE` does. (Divergence: Spark 4.2 resets the namespace to `default` when the name differs
+    /// from the current catalog's only in case; here the current namespace is kept.)
     ///
     /// # Errors
-    /// The statement's: `CATALOG_NOT_FOUND` for an unknown catalog.
+    /// `CATALOG_NOT_FOUND` for a name that is not a catalog (a namespace's name is not one).
     pub async fn set_current_catalog(&self, name: &str) -> Result<(), KrishivError> {
         // `USE <name>` would switch the namespace for a namespace's name: the catalog is checked first.
-        let wanted = self.fold(name);
-        if !self.list_catalogs().iter().any(|c| self.fold(c) == wanted) {
+        let Some(known) = self
+            .list_catalogs()
+            .into_iter()
+            .find(|c| c.eq_ignore_ascii_case(name))
+        else {
             return Err(krishiv_common::error::CatalogNotFound {
                 catalog_name: krishiv_common::names::to_sql_id(name)?,
                 config: format!("\"spark.sql.catalog.{name}\""),
             }
             .into());
-        }
-        self.run(&format!("USE {}", quoted(&wanted))).await
+        };
+        self.run(&format!("USE {}", quoted(&known))).await
     }
 
     /// The catalogs, sorted.

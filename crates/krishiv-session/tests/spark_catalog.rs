@@ -608,6 +608,12 @@ fn an_unknown_catalog_is_catalog_not_found_and_a_database_name_is_not_a_catalog(
         before,
         "a refused call changes nothing"
     );
+    // A catalog's name matches whatever its case, also with `spark.sql.caseSensitive` on.
+    s.conf().set("spark.sql.caseSensitive", "true").unwrap();
+    block_on(c.set_current_catalog("SYSTEM")).unwrap();
+    assert_eq!(c.current_catalog(), "system");
+    block_on(c.set_current_catalog("Spark_Catalog")).unwrap();
+    assert_eq!(c.current_catalog(), "spark_catalog");
     let e = block_on(c.set_current_catalog("nope")).unwrap_err();
     assert!(
         e.to_string().contains(
