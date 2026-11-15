@@ -74,6 +74,7 @@ mod monitor;
 mod nested_value;
 #[cfg(feature = "telemetry-otlp")]
 pub mod otlp;
+mod partition_keys;
 mod partitions;
 mod plan_round_trip;
 mod profile;
@@ -87,6 +88,7 @@ mod runtime;
 mod scripting;
 mod session;
 mod sessions;
+pub mod spark_catalog;
 mod sql_functions;
 mod sql_path;
 mod store;
