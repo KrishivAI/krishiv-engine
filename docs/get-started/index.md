@@ -10,7 +10,7 @@ minutes and needs Python 3.11 or newer.
 
 Once it runs, pick the next step by what you came to do:
 
-- Moving an existing Spark job: [migrate a PySpark job](../guides/pyspark-migration.md), and scan your code first with
-  [check-compat](../guides/check-compat.md).
+- Moving an existing Spark job: [migrate a PySpark job](../guides/pyspark-migration.md), and check its functions
+  against the [compatibility data](../concepts/compatibility.md).
 - Trying it on sample data: the [notebooks and datasets](../guides/notebooks-and-datasets.md).
 - Running it somewhere other than your Python process: [deployment](../guides/deploy.md).

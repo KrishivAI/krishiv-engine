@@ -84,7 +84,7 @@ use crate::aggregate::{AggregateExpr, AggregateOutput};
 use crate::error::Result;
 use crate::join::JoinType;
 use crate::operators::{FetchSlot, RowStageSettings, SortKey};
-use crate::planner::ExplainNode;
+use crate::planner::{ExplainNode, RowLevelOperation, RowLevelWrite, WriteMode, WriteRequest};
 use crate::window::{GroupLimitPlan, WindowPlan};
 
 /// A scan of a plan, numbered by the planner.
@@ -613,6 +613,22 @@ pub enum PhysNode {
         /// in plans that predate the `write_plan` feature.
         write: Option<WritePlan>,
     },
+    /// The rows of `input` written into a table provider's sink (design
+    /// `P3-PR-DML-row-level.md` §7): `table` names the provider as a scan
+    /// does, and is resolved when the plan is instantiated, through the
+    /// worker's [`TableProviderResolver`](crate::planner::TableProviderResolver),
+    /// into [`TableProvider::writer`](crate::planner::TableProvider::writer)
+    /// or the [`rewriter`](crate::planner::RowLevelTable::rewriter) of its
+    /// row-level table. The sink commits when it finalizes; the node
+    /// returns no rows.
+    TableWrite {
+        /// The rows to write.
+        input: Box<PhysNode>,
+        /// The table, as the provider resolver names it.
+        table: Scan,
+        /// What the write asks of the table.
+        request: TableWriteRequest,
+    },
     /// Moves rows between partitions.
     Exchange(ExchangePlan),
     /// The rows a task reads from the exchange `id`, written by the tasks
@@ -1076,6 +1092,60 @@ plan_data!(struct ExprEnv {
     legacy_time_parser,
     binary_output_style
 });
+/// What a [`PhysNode::TableWrite`] asks of its table.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TableWriteRequest {
+    /// A write: [`TableProvider::writer`](crate::planner::TableProvider::writer).
+    Write(WriteRequest),
+    /// A copy-on-write rewrite: the [`rewriter`](crate::planner::RowLevelTable::rewriter)
+    /// of the table's row-level table for the statement.
+    RowLevel(RowLevelWrite),
+}
+
+impl TableWriteRequest {
+    /// The schema of the rows the sink receives.
+    #[must_use]
+    pub fn input_schema(&self) -> &SchemaRef {
+        match self {
+            Self::Write(w) => &w.input_schema,
+            Self::RowLevel(r) => &r.input_schema,
+        }
+    }
+
+    /// The target as Spark's errors print it.
+    #[must_use]
+    pub fn table_name(&self) -> &str {
+        match self {
+            Self::Write(w) => &w.table_name,
+            Self::RowLevel(r) => &r.table_name,
+        }
+    }
+}
+
+plan_data!(
+    enum TableWriteRequest {
+        Write(w),
+        RowLevel(r),
+    }
+);
+plan_data!(
+    enum WriteMode {
+        Append,
+        Truncate,
+        OverwriteByFilter(filter),
+        OverwriteDynamic,
+    }
+);
+plan_data!(struct WriteRequest { mode, table_name, input_schema, options, write_id });
+plan_data!(
+    enum RowLevelOperation {
+        Delete,
+        Update,
+        Merge,
+    }
+);
+plan_data!(struct RowLevelWrite { op, table_name, input_schema, touched, read_filter, options, write_id });
+
 plan_data!(enum PhysNode {
     Scan(scan),
     OneRow,
@@ -1103,6 +1173,7 @@ plan_data!(enum PhysNode {
     NestedLoopJoin(join),
     Union { inputs },
     WriteFiles { input, write },
+    TableWrite { input, table, request },
     Exchange(exchange),
     ExchangeSource { id, partitioning, schema },
     SharedRead { id, layout },
@@ -1202,7 +1273,8 @@ impl PhysNode {
             | Self::PythonGroupMap { input, .. }
             | Self::PythonCoGroupMap { input, .. }
             | Self::PythonAggregate { input, .. }
-            | Self::WriteFiles { input, .. } => vec![input.as_ref()],
+            | Self::WriteFiles { input, .. }
+            | Self::TableWrite { input, .. } => vec![input.as_ref()],
             Self::Exchange(e) => vec![e.input.as_ref()],
             Self::HashJoin(j) => vec![j.probe.as_ref(), j.build.as_ref()],
             Self::SortMergeJoin(j) => vec![j.probe.as_ref(), j.build.as_ref()],
@@ -1253,7 +1325,8 @@ impl PhysNode {
             | Self::PythonGroupMap { input, .. }
             | Self::PythonCoGroupMap { input, .. }
             | Self::PythonAggregate { input, .. }
-            | Self::WriteFiles { input, .. } => vec![input.as_mut()],
+            | Self::WriteFiles { input, .. }
+            | Self::TableWrite { input, .. } => vec![input.as_mut()],
             Self::Exchange(e) => vec![e.input.as_mut()],
             Self::HashJoin(j) => vec![j.probe.as_mut(), j.build.as_mut()],
             Self::SortMergeJoin(j) => vec![j.probe.as_mut(), j.build.as_mut()],
@@ -1484,22 +1557,11 @@ impl PhysicalPlan {
         // gather to whoever commits (design P2-T178 §2.5): on several
         // workers each task writes its own files; on one worker the gather
         // lowers into nothing.
-        let mut next = 0_u64;
-        let mut stack: Vec<&PhysNode> = std::iter::once(&root)
-            .chain(self.shared.iter().map(|s| &s.plan))
-            .collect();
-        while let Some(n) = stack.pop() {
-            match n {
-                PhysNode::Exchange(e) => next = next.max(e.id.0.saturating_add(1)),
-                PhysNode::ExchangeSource { id, .. } => next = next.max(id.0.saturating_add(1)),
-                _ => {}
-            }
-            stack.extend(n.children());
-        }
+        let next = next_exchange_id(&root, &self.shared);
         Ok(Self {
             schema: WritePlan::result_schema(),
             root: Arc::new(PhysNode::Exchange(ExchangePlan {
-                id: ExchangeId(next),
+                id: next,
                 input: Box::new(PhysNode::WriteFiles {
                     input: Box::new(root),
                     write: Some(write),
@@ -1513,6 +1575,48 @@ impl PhysicalPlan {
             warnings: self.warnings,
             env: self.env,
         })
+    }
+
+    /// The plan writing this plan's rows into the table `table` names, as `request` asks
+    /// ([`PhysNode::TableWrite`]): its result has no rows and no columns. The rows are gathered
+    /// into one task first, so the table's sink commits once; on one worker the gather lowers
+    /// into nothing. One task therefore writes every row: a table whose writes should spread
+    /// over tasks (each writing files, one commit after) needs a commit step of its own.
+    #[must_use]
+    pub fn into_table_write(self, table: Scan, request: TableWriteRequest) -> Self {
+        let root = Arc::unwrap_or_clone(self.root);
+        let next = next_exchange_id(&root, &self.shared);
+        let explain = ExplainNode::new(
+            "TableWrite",
+            format!(
+                "{} ({})",
+                request.table_name(),
+                match &request {
+                    TableWriteRequest::Write(w) => w.mode.operation().to_owned(),
+                    TableWriteRequest::RowLevel(r) => r.op.name().to_owned(),
+                }
+            ),
+            vec![self.explain],
+        );
+        let input_schema = Arc::clone(&self.schema);
+        Self {
+            schema: Arc::new(Schema::empty()),
+            root: Arc::new(PhysNode::TableWrite {
+                input: Box::new(PhysNode::Exchange(ExchangePlan {
+                    id: next,
+                    input: Box::new(root),
+                    partitioning: Partitioning::Single,
+                    filters: Vec::new(),
+                    schema: Some(input_schema),
+                })),
+                table,
+                request,
+            }),
+            shared: self.shared,
+            explain,
+            warnings: self.warnings,
+            env: self.env,
+        }
     }
 
     /// The same plan with `warnings` added.
@@ -1537,6 +1641,23 @@ impl fmt::Display for PhysicalPlan {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.explain_all().fmt(f)
     }
+}
+
+/// An exchange id no exchange of `root` or `shared` uses.
+fn next_exchange_id(root: &PhysNode, shared: &[SharedPlan]) -> ExchangeId {
+    let mut next = 0_u64;
+    let mut stack: Vec<&PhysNode> = std::iter::once(root)
+        .chain(shared.iter().map(|s| &s.plan))
+        .collect();
+    while let Some(n) = stack.pop() {
+        match n {
+            PhysNode::Exchange(e) => next = next.max(e.id.0.saturating_add(1)),
+            PhysNode::ExchangeSource { id, .. } => next = next.max(id.0.saturating_add(1)),
+            _ => {}
+        }
+        stack.extend(n.children());
+    }
+    ExchangeId(next)
 }
 
 /// The node [`PhysicalPlan::explain_all`] prints above a plan with shared

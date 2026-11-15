@@ -4,7 +4,7 @@ description: "The three deployment modes: embedded, single-node and distributed.
 
 # Deployment
 
-| Mode | Status |
+| Mode | Status in 0.2 |
 |---|---|
 | Embedded: `pip install krishiv`, the engine runs inside your Python process | Runs today |
 | Single-node: one `krishiv server` process that clients reach over Spark Connect | In development |
@@ -12,25 +12,25 @@ description: "The three deployment modes: embedded, single-node and distributed.
 
 ## Embedded
 
-Nothing to deploy: import the package. Supported CPUs are x86-64-v3 (Intel Haswell or AMD Zen and newer) and Armv8.2
-(AWS Graviton2 or newer, Apple silicon). On an older x86-64 CPU install `krishiv-compat` instead (the same package,
-imports as `krishiv`; install one of the two, not both). An unsupported CPU is detected at import time and reported by
-name instead of crashing.
+Nothing to deploy: import the package. Krishiv 0.2 is on PyPI (`pip install "krishiv[pyarrow]"`). Supported CPUs are
+x86-64-v3 (Intel Haswell or AMD Zen and newer) and Armv8.2 (AWS Graviton2 or newer, Apple silicon). On an older x86-64
+CPU install `krishiv-compat` instead (the same package, imports as `krishiv`; install one of the two, not both). An
+unsupported CPU is detected at import time and reported by name instead of crashing.
 
-Memory use is bounded by `krishiv.*` settings (see [configuration](../reference/config/index.md)); operators spill to disk when the
-limit is reached.
-
-Nothing has been published to PyPI or crates.io yet. Until the first release, build the wheel from the repository
-(`maturin build` in `python/`).
+Memory use is bounded by `krishiv.*` settings (see [configuration](../reference/config/index.md)); operators spill to
+disk when the limit is reached.
 
 ## Single-node
 
-One process, started with `krishiv server` (a build with the `server` feature), runs the engine and serves Spark Connect; clients connect to it with a
-Spark Connect client such as PySpark. It listens on `127.0.0.1` port `15002` by default (`krishiv.connect.port`, see
-[configuration](../reference/config/index.md)). Where it differs from Spark see
+In 0.2, `krishiv server` serves the web UI and the admin API only. The Spark Connect part is in development and is not
+part of 0.2: when it ships, one process started with `krishiv server` will also serve Spark Connect, and PySpark will
+connect to it on `127.0.0.1` port `15002` by default (`krishiv.connect.port`, see
+[configuration](../reference/config/index.md)). The behaviour it will have is described in
 [known differences](../concepts/known-differences.md#krishiv-server-spark-connect).
 
 ### Authentication, roles and TLS
+
+These settings belong to the single-node server. The Spark Connect listener and its settings are not part of 0.2.
 
 Without authentication settings the server binds loopback only, and the admin port (`/metrics`, the web UI) prints a
 random token at start. To serve another address, configure at least one method with `--conf` (these settings are
@@ -39,7 +39,8 @@ read by the server itself and never become session configuration):
 - **Tokens:** `krishiv.auth.tokens.<name>.secret` (an `env:` or `file:` reference; a file readable by group or others
   is refused), `.principal`, `.role` (`viewer`, `operator` or `admin`). Spark's `spark.connect.authenticate.token` is
   one admin token.
-- **OIDC:** `krishiv.auth.oidc.issuer`, `audience` and the role lists `krishiv.auth.oidc.roles.*`.
+- **OIDC:** `krishiv.auth.oidc.issuer`, `audience` and the role lists `krishiv.auth.oidc.roles.*`. No released build
+  enables the `oidc` feature, so a build refuses these settings at start-up until it does.
 - **Client certificates:** `krishiv.auth.clientCertificates` (`optional` or `required`), `krishiv.auth.clientCa`,
   `krishiv.auth.mtls.principalFrom`, and the role lists `krishiv.auth.roles.*`.
 

@@ -62,6 +62,7 @@ fn first_column(t: &TempTable) -> &str {
     match t {
         TempTable::Files { columns, .. }
         | TempTable::Memory { columns, .. }
+        | TempTable::Provider { columns, .. }
         | TempTable::View { columns, .. } => &columns[0].name,
     }
 }

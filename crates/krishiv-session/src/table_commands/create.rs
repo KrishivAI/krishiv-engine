@@ -480,6 +480,7 @@ impl Session {
             let columns = match &*entry {
                 crate::catalog::TempTable::Memory { columns, .. }
                 | crate::catalog::TempTable::Files { columns, .. }
+                | crate::catalog::TempTable::Provider { columns, .. }
                 | crate::catalog::TempTable::View { columns, .. } => columns,
             };
             (
@@ -777,6 +778,52 @@ impl Session {
         self.with_locals(Vec::new())
             .analyze_variable_query(&sql)
             .await?;
+        // A table whose provider offers a row-level table runs the statement (PR-DML).
+        let op = match operation {
+            "DELETE" => Some(krishiv_exec::planner::RowLevelOperation::Delete),
+            "UPDATE TABLE" => Some(krishiv_exec::planner::RowLevelOperation::Update),
+            _ => None,
+        };
+        if let Some(op) = op {
+            let alias = alias.map_or_else(|| name.name.clone(), |a| a.value.clone());
+            let assignments: Vec<super::row_level::Assignment> = changes
+                .targets
+                .iter()
+                .zip(changes.values)
+                .map(|(target, value)| {
+                    // `SET t.c = ..`: the qualifier names the target (its alias or table name).
+                    let mut parts: Vec<&str> =
+                        target.parts.iter().map(|p| p.value.as_str()).collect();
+                    if parts.len() > 1
+                        && (parts[0].eq_ignore_ascii_case(&alias)
+                            || parts[0].eq_ignore_ascii_case(&name.name))
+                    {
+                        parts.remove(0);
+                    }
+                    super::row_level::Assignment {
+                        column: parts.join("."),
+                        value: (!crate::command::is_bare_default(value)).then(|| slice(value)),
+                    }
+                })
+                .collect();
+            let condition = changes.condition.map(slice);
+            if let Some(done) = self
+                .run_row_level(
+                    op,
+                    &name.quoted(),
+                    &alias,
+                    condition.as_deref(),
+                    &assignments,
+                )
+                .await?
+            {
+                // The table's data changed: what read it is stale (as after an `INSERT`).
+                self.state.catalog.store.bump();
+                self.forget_column_stats(&name);
+                self.forget_cached(&name);
+                return Ok(done);
+            }
+        }
         Err(UnsupportedFeatureTableOperation {
             table_name: name.quoted(),
             operation: operation.to_owned(),
