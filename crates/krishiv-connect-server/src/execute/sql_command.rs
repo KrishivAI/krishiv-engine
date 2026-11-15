@@ -83,7 +83,7 @@ pub(super) struct Answer {
 pub(super) async fn run(
     session: &Session,
     command: &pb::SqlCommand,
-    id: &str,
+    options: QueryOptions,
     max_batch_size: usize,
 ) -> Result<Answer, KrishivError> {
     let relation = sql_command_relation(command)?;
@@ -98,10 +98,7 @@ pub(super) async fn run(
         }
         .into());
     }
-    match session
-        .sql_command_with(&sql.query, QueryOptions::new().operation_id(id))
-        .await?
-    {
+    match session.sql_command_with(&sql.query, options).await? {
         SqlOutcome::Query(_) => Ok(Answer {
             relation,
             is_command: false,

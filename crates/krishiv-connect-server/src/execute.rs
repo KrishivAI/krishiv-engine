@@ -294,8 +294,13 @@ pub async fn execute_plan(
                 }
                 .into());
             };
-            let answer =
-                sql_command::run(session, &command, id.as_str(), limits.max_batch_size).await?;
+            let answer = sql_command::run(
+                session,
+                &command,
+                query_options.clone(),
+                limits.max_batch_size,
+            )
+            .await?;
             return Ok(Prepared::Command(answer));
         }
         // Decompression (up to `maxPlanSize`) runs off the async workers.

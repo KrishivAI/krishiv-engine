@@ -60,7 +60,7 @@ Paths are relative to this crate.
   `aheadBytes` + retry buffer, reserved before the first response, held until close), then pushing into the
   operation's `Replay` under the ahead budget (`krishiv.connect.execute.aheadBytes`) and memory consumer
   `connect_responses` (the Arrow payload is `Bytes`, shared with the copy sent), the
-  response order (schema, batches, metrics, `ResultComplete` when reattachable); commands are 56K00 until T012;
+  response order (schema, batches, metrics, `ResultComplete` when reattachable); `sql_command` (`spark.sql()`) runs as a command (tags and trace carried), other commands are 56K00 until T012;
   `request_plan` (shared with `AnalyzePlan`) translates twice when the plan holds local relations: the first pass records
   them, `Session::local_relation` builds them (cached ones are `NOT_FOUND_CACHED_LOCAL_RELATION` until the artifact
   store lands), the second pass resolves them (`krishiv-connect` CLAUDE.md);
