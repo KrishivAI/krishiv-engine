@@ -32,6 +32,22 @@ pub(crate) fn reads_stored_table(
     })
 }
 
+/// Whether the analyzed `plan` reads the files at `path` (a Delta table read by path), the path
+/// compared without a trailing `/`.
+#[cfg(feature = "delta")]
+pub(crate) fn reads_files_at(plan: &LogicalPlan, path: &str) -> bool {
+    let mut scans = Vec::new();
+    collect_scans(plan, &mut scans);
+    let want = path.trim_end_matches('/');
+    scans.iter().any(|scan| match &scan.source {
+        ReadSource::Files { paths, .. } => paths.iter().any(|p| {
+            p.as_plain()
+                .is_some_and(|t| t.trim_end_matches('/') == want)
+        }),
+        _ => false,
+    })
+}
+
 /// The scans of `plan` and of the subqueries in its expressions.
 ///
 /// Expressions are DAGs (the analyzer shares a subexpression by `Arc`, as a

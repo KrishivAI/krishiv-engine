@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Delta tables in DDL (P3-T021 PR-08b part 2): `CREATE TABLE t [(columns)] USING delta
-//! LOCATION 'p'` over an existing Delta table (its columns and partitioning from the log),
-//! `CREATE TEMPORARY VIEW v USING delta OPTIONS (path 'p')`, and the refusals of every Delta
-//! write and DDL until PR-37a.
+//! LOCATION 'p'` over an existing Delta table (its columns and partitioning from the log), a new
+//! Delta table where there is none (PR-37a: version 0 of the declared columns; CTAS goes through
+//! `create_table_from` and `delta_writes.rs`), `CREATE TEMPORARY VIEW v USING delta OPTIONS
+//! (path 'p')`, and the refusals of the Delta DDL not supported yet (`ALTER`, `CREATE TABLE
+//! LIKE`, `TRUNCATE`, bucketing).
 //!
 //! What Spark + delta-spark 4.4.1 does with each statement is recorded in
 //! `tests/fixtures/delta-4.4.1/SESSION.json`: a column list must match the log
 //! (`DELTA_CREATE_TABLE_SCHEME_MISMATCH`), and so must the partitioning
-//! (`DELTA_CREATE_TABLE_WITH_DIFFERENT_PARTITIONING`, checked after the schema). The writes
-//! (`INSERT`, CTAS, `CREATE` without a location or over a location without a Delta table,
-//! `ALTER`) succeed in Spark; Krishiv refuses each by name as
-//! `UNSUPPORTED_FEATURE.TABLE_OPERATION`. So are `TBLPROPERTIES` and options other than `path`
+//! (`DELTA_CREATE_TABLE_WITH_DIFFERENT_PARTITIONING`, checked after the schema). `ALTER` succeeds
+//! in Spark; Krishiv refuses it by name as `UNSUPPORTED_FEATURE.TABLE_OPERATION`. So are
+//! `TBLPROPERTIES` and options other than `path`
 //! on a `CREATE` over an existing table: delta-spark compares them with the log's
 //! configuration, a rule no probe has pinned yet.
 
@@ -143,17 +144,13 @@ impl Session {
         located: bool,
     ) -> Result<(), KrishivError> {
         let quoted = name.quoted();
-        if t.as_query.is_some() {
-            return Err(delta_write_refused(quoted, "CREATE TABLE AS SELECT"));
-        }
-        if !located {
-            return Err(delta_write_refused(
-                quoted,
-                "CREATE TABLE without LOCATION (a new Delta table)",
-            ));
-        }
         if t.bucket.is_some() {
             return Err(delta_write_refused(quoted, "CREATE TABLE ... CLUSTERED BY"));
+        }
+        if !located {
+            return self
+                .create_new_delta_table(table, specified, name, partition_names, mode)
+                .await;
         }
         // The location is read before it is registered.
         self.authorize_path(&table.location, &[Privilege::Select], StatementClass::Ddl)
@@ -166,10 +163,9 @@ impl Session {
             .shape(&source, format!("{}.{}", name.namespace, name.name))
             .await?;
         if !shape.existing {
-            return Err(delta_write_refused(
-                quoted,
-                "CREATE TABLE over a location without a Delta table (a new Delta table)",
-            ));
+            return self
+                .create_new_delta_table(table, specified, name, partition_names, mode)
+                .await;
         }
         if !specified.is_empty() {
             let differences = schema_differences(&shape.columns, specified);
@@ -236,6 +232,78 @@ impl Session {
             ..TableLayout::default()
         };
         self.add_table(table, mode, false).await
+    }
+
+    /// `CREATE TABLE t [(columns)] USING delta [PARTITIONED BY (..)] [LOCATION 'p']` where no
+    /// Delta table is: version 0 of a new table with the declared columns, partitioning and
+    /// properties (the kernel's table-features protocol, design section 2.1), then the catalog
+    /// entry.
+    ///
+    /// # Errors
+    /// The kernel's create errors (an unsupported property); storage errors.
+    async fn create_new_delta_table(
+        &self,
+        mut table: CatalogTable,
+        specified: &[StoreColumn],
+        name: &TableName,
+        partition_names: &[String],
+        mode: CreateMode,
+    ) -> Result<(), KrishivError> {
+        // A table whose name already exists is the store's error, before anything is written.
+        if mode == CreateMode::IfNotExists
+            && self
+                .state
+                .catalog
+                .store
+                .table(&name.namespace, &name.name)
+                .is_some()
+        {
+            return Ok(());
+        }
+        if self
+            .state
+            .catalog
+            .store
+            .table(&name.namespace, &name.name)
+            .is_some()
+        {
+            return Err(krishiv_common::error::TableOrViewAlreadyExists {
+                relation_name: name.quoted(),
+            }
+            .into());
+        }
+        if specified.is_empty() {
+            // delta-spark creates a table of no columns; the kernel needs one.
+            return Err(delta_write_refused(
+                name.quoted(),
+                "CREATE TABLE without columns where there is no Delta table",
+            ));
+        }
+        self.authorize_path(&table.location, &[Privilege::Create], StatementClass::Ddl)
+            .await?;
+        let fields: Vec<_> = specified
+            .iter()
+            .map(|c| c.data_type.to_arrow_field(&c.name, c.nullable))
+            .collect();
+        let schema = std::sync::Arc::new(arrow_schema::Schema::new(fields));
+        let source =
+            super::delta_source(&self.qualify_path(&table.location.display().to_string())?);
+        let env = self.query_env();
+        let new = env.catalog.delta.new_table(
+            &source,
+            &schema,
+            partition_names.to_vec(),
+            table.properties.clone(),
+            Some(format!("{}.{}", name.namespace, name.name)),
+        )?;
+        super::delta_writes::create_local_root(&source)?;
+        new.create_empty(&crate::session::job_uuid()).await?;
+        table.columns = specified.to_vec();
+        table.layout = TableLayout {
+            partition_columns: partition_names.to_vec(),
+            ..TableLayout::default()
+        };
+        self.add_table(table, mode, true).await
     }
 
     /// `CREATE TEMPORARY VIEW v USING delta OPTIONS (path 'p')`: a read of the Delta table at

@@ -261,6 +261,40 @@ impl DeltaReads {
         })
     }
 
+    /// The table a `CREATE TABLE .. USING delta` or a first `save` creates at the location
+    /// `source` names, with the columns of `schema` partitioned by `partition_columns`.
+    ///
+    /// # Errors
+    /// As [`Self::root_of`]; a column type Delta has no type for.
+    pub(crate) fn new_table(
+        &self,
+        source: &ReadSource,
+        schema: &arrow_schema::SchemaRef,
+        partition_columns: Vec<String>,
+        properties: std::collections::BTreeMap<String, String>,
+        name: Option<String>,
+    ) -> Result<krishiv_connectors_delta::write::NewDeltaTable, KrishivError> {
+        let (store, root) = self.root_of(source)?;
+        let engine = self.engine(store, root)?;
+        krishiv_connectors_delta::write::NewDeltaTable::new(
+            engine,
+            schema,
+            partition_columns,
+            properties,
+            name,
+        )
+    }
+
+    /// Whether the location `source` names holds a Delta table.
+    ///
+    /// # Errors
+    /// As [`Self::root_of`]; storage errors listing the log.
+    pub(crate) async fn exists(&self, source: &ReadSource) -> Result<bool, KrishivError> {
+        let (store, root) = self.root_of(source)?;
+        let engine = self.engine(store, root)?;
+        has_delta_log(&engine).await
+    }
+
     /// The provider of the table `source` reads, opened before planning.
     ///
     /// # Errors
