@@ -1,1 +1,0 @@
-The SQL function reference says which functions need `spark.sql.timeType.enabled` (the `TIME` type), explains that `version()` has no git revision, and lists the 94 functions not implemented yet on one page (SQL-2, SQL-8, SQL-10).
