@@ -204,6 +204,20 @@ pub(crate) struct CatalogTable {
 }
 
 impl CatalogTable {
+    /// A table's columns are nullable at every level, nested elements, values and fields too: Spark stores a
+    /// file-source table's schema `asNullable` whatever the DDL or the query said (4.2.0 run:
+    /// `CREATE TABLE t (s STRUCT<x: INT NOT NULL>) USING parquet` and `CTAS SELECT array(1) a` keep no
+    /// `NOT NULL`), as the files may hold NULLs. A view keeps its query's types.
+    fn make_nullable(&mut self) {
+        if self.view.is_some() {
+            return;
+        }
+        for c in &mut self.columns {
+            c.nullable = true;
+            c.data_type = c.data_type.as_nullable();
+        }
+    }
+
     /// The table's version for `CatalogWrite::alter_table` (see [`stamp`](Self::stamp)).
     pub(crate) fn version(&self) -> krishiv_plan::TableVersion {
         krishiv_plan::TableVersion(i64::try_from(self.stamp).unwrap_or(i64::MAX))
@@ -693,6 +707,7 @@ impl CatalogStore for InMemoryCatalogStore {
         let changed = format!("{}.{}", key.0, key.1);
         // The epoch moves under the state lock on every create, so each created entry gets its own value.
         let mut table = table;
+        table.make_nullable();
         table.incarnation = self.epoch.fetch_add(1, Ordering::AcqRel) + 1;
         table.stamp = table.incarnation;
         state.tables.insert(key, Arc::new(table));
@@ -716,6 +731,7 @@ impl CatalogStore for InMemoryCatalogStore {
         let changed = format!("{}.{}", key.0, key.1);
         // The same table, changed: it keeps its incarnation.
         let mut table = table;
+        table.make_nullable();
         table.incarnation = expected.incarnation;
         table.data_version = table.data_version.max(expected.data_version);
         table.stamp = self.epoch.fetch_add(1, Ordering::AcqRel) + 1;
