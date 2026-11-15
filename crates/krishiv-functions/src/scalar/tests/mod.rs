@@ -617,6 +617,7 @@ mod predicate;
 mod random;
 mod r#struct;
 mod text;
+mod time_window;
 mod url;
 mod variant;
 mod vector;

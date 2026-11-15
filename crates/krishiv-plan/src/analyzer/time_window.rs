@@ -1,0 +1,797 @@
+// SPDX-License-Identifier: Apache-2.0
+//! SQL `window(...)` and `session_window(...)`: Spark's `TimeWindowing` and `SessionWindowing` rules
+//! (`ResolveTimeWindows.scala`, `TimeWindowResolution.scala`), as a rewrite of the lowered SQL plan before
+//! Bind checks its functions.
+//!
+//! A single-input node (project, filter, aggregate, sort) whose expressions hold one distinct window call
+//! gets a new input and reads the window as the column `window` (`session_window`):
+//!
+//! * `window(ts, window[, slide[, start]])`: `Generate[explode(__time_windows(ts, ..))] AS window` over the input. The
+//!   call (see `krishiv-functions` `scalar/time_window.rs`) holds the windows of `ts` that contain it, so a
+//!   NULL time and a time in no window leave no row, as Spark's `IS NOT NULL` / `start <= ts < end` filters
+//!   do. Durations are parsed here, as `TimeWindow.parseExpression` does, and checked as
+//!   `TimeWindow.checkInputDataTypes` does.
+//! * `session_window(ts, gap)` as a grouping key of a plain `GROUP BY`: Spark merges the rows whose
+//!   `[ts, ts + gap)` ranges touch (`MergingSessionsExec`). Here: the rows with a NULL time or a gap of zero
+//!   or less are filtered; a running maximum of the earlier ranges' ends, per the other grouping keys,
+//!   numbers the sessions (a new session starts when `ts` is past that end); the session's start and end
+//!   are the minimum and maximum over its rows; the aggregate groups by that struct.
+//! * `session_window` anywhere else (a `WHERE`, a select item, inside a grouping expression): one range per
+//!   row, `named_struct('start', ts, 'end', ts + gap)`, with the same filter.
+//!
+//! More than one distinct window call in one node is `_LEGACY_ERROR_TEMP_1039`; a window call in a
+//! `HAVING` or `ORDER BY` over an aggregate cannot find its input there
+//! (`MISSING_ATTRIBUTES.RESOLVED_ATTRIBUTE_MISSING_FROM_INPUT`). A window call whose time column is itself
+//! a window, `window_time(..)` and the DataFrame form stay unsupported.
+
+use std::ops::ControlFlow;
+use std::sync::Arc;
+
+use krishiv_common::error::{
+    CannotParseInterval, DatatypeMismatchParameterConstraintViolation,
+    DatatypeMismatchValueOutOfRange, InternalError, LegacyErrorTemp1039, LegacyErrorTemp1207,
+    LegacyErrorTemp3231, MissingAggregation, MissingAttributesResolvedAttributeMissingFromInput,
+    WrongNumArgsWithoutSuggestion,
+};
+use krishiv_types::DataType;
+use krishiv_types::interval_parse::parse_string;
+
+use super::AnalysisError;
+use super::bind::unsupported;
+use super::exprs::SPARK_DOC_ROOT;
+use crate::walk::{Node, visit_distinct};
+use crate::{
+    Builtin, CastMode, Expr, ExprNode, FrameBound, FrameUnits, FunctionCall, GeneratorKind,
+    Grouping, Literal, LogicalPlan, NullOrdering, Plan, PlanNode, SortDirection, SortOrder, Star,
+    WindowExpr, WindowFrame, WindowSpec, WindowSpecRef,
+};
+
+const WINDOW: &str = "window";
+const SESSION: &str = "session_window";
+const MICROS_PER_DAY: i64 = 86_400_000_000;
+
+/// Whether `e` is an unqualified call of `name` (`window` or `session_window`).
+fn call_of<'a>(e: &'a Expr, name: &str) -> Option<&'a FunctionCall> {
+    match &e.node {
+        ExprNode::Function(f) if f.qualifier.is_empty() && f.name.eq_ignore_ascii_case(name) => {
+            Some(f)
+        }
+        _ => None,
+    }
+}
+
+fn is_window_call(e: &Expr) -> bool {
+    call_of(e, WINDOW).is_some() || call_of(e, SESSION).is_some()
+}
+
+/// Spark's `window_time` is registered as the scalar `__window_time` (the catalog's row is an aggregate).
+const WINDOW_TIME: &str = "window_time";
+const WINDOW_TIME_SCALAR: &str = "__window_time";
+
+/// Whether anything under `root` (subqueries included) calls `window` or `session_window`.
+fn has_calls(root: &Arc<LogicalPlan>) -> bool {
+    visit_distinct(Node::Plan(root), |n| match n {
+        Node::Expr(e) if is_window_call(e) || call_of(e, WINDOW_TIME).is_some() => {
+            ControlFlow::Break(())
+        }
+        _ => ControlFlow::Continue(()),
+    })
+    .is_break()
+}
+
+/// The window calls in `e`, outside subqueries, outermost first.
+fn collect(e: &Arc<Expr>, out: &mut Vec<Arc<Expr>>) {
+    if is_window_call(e) {
+        out.push(Arc::clone(e));
+    }
+    e.for_each_child(&mut |c| collect(c, out));
+}
+
+/// The structural identity of an expression (origins excluded).
+fn key(e: &Arc<Expr>, origin: crate::Origin) -> Result<crate::StructuralHash, AnalysisError> {
+    let plan = LogicalPlan::new(PlanNode::OneRowRelation).project(vec![(**e).clone()]);
+    Plan::try_new(plan)
+        .map(|p| p.structural_hash())
+        .map_err(|err| AnalysisError::new(err, origin))
+}
+
+/// Rewrites the lowered plan `root` (see the module documentation); a plan with no window call is returned
+/// as it is.
+pub(super) fn rewrite(root: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, AnalysisError> {
+    if !has_calls(&root) {
+        return Ok(root);
+    }
+    rewrite_plan(root)
+}
+
+fn rewrite_plan(root: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, AnalysisError> {
+    root.transform_up(&mut |p| {
+        let p = p.map_expressions(rewrite_subqueries)?;
+        let p = rename_window_time(p)?;
+        node(p)
+    })
+}
+
+/// `p` with its `window_time(w)` calls renamed to the scalar, a select item that is one named as Spark
+/// names it (`window_time(window)`).
+fn rename_window_time(p: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, AnalysisError> {
+    let mut any = false;
+    p.for_each_expr(&mut |e| any = any || has_window_time(e));
+    if !any {
+        return Ok(p);
+    }
+    let named = matches!(
+        p.node,
+        PlanNode::Project { .. } | PlanNode::Aggregate { .. }
+    );
+    p.map_expressions(|e| {
+        let item = if named && call_of(&e, WINDOW_TIME).is_some() {
+            let text = match call_of(&e, WINDOW_TIME).and_then(|f| f.args.first()) {
+                Some(a) => match &a.node {
+                    ExprNode::Column(c) => Some(c.name.join(".")),
+                    _ => None,
+                },
+                None => None,
+            };
+            text.map(|t| format!("{WINDOW_TIME}({t})"))
+        } else {
+            None
+        };
+        let origin = e.origin;
+        let renamed = e.transform_up(&mut |x| match &x.node {
+            ExprNode::Function(f)
+                if f.qualifier.is_empty() && f.name.eq_ignore_ascii_case(WINDOW_TIME) =>
+            {
+                let mut f = f.clone();
+                WINDOW_TIME_SCALAR.clone_into(&mut f.name);
+                Ok::<_, AnalysisError>(Arc::new(
+                    Expr::new(ExprNode::Function(f)).with_origin(x.origin),
+                ))
+            }
+            _ => Ok(x),
+        })?;
+        Ok(match item {
+            Some(name) => alias(Arc::unwrap_or_clone(renamed), &name, origin),
+            None => renamed,
+        })
+    })
+}
+
+fn has_window_time(e: &Arc<Expr>) -> bool {
+    call_of(e, WINDOW_TIME).is_some() || {
+        let mut any = false;
+        e.for_each_child(&mut |c| any = any || has_window_time(c));
+        any
+    }
+}
+
+/// `e` with the plans of its subqueries rewritten.
+fn rewrite_subqueries(e: Arc<Expr>) -> Result<Arc<Expr>, AnalysisError> {
+    e.transform_up(&mut |x| match &x.node {
+        ExprNode::Subquery { kind, plan } if has_calls(plan) => {
+            let plan = rewrite_plan(Arc::clone(plan))?;
+            Ok(Arc::new(
+                Expr::new(ExprNode::Subquery {
+                    kind: kind.clone(),
+                    plan,
+                })
+                .with_origin(x.origin),
+            ))
+        }
+        _ => Ok(x),
+    })
+}
+
+fn col(name: &str, origin: crate::Origin) -> Arc<Expr> {
+    Arc::new(Expr::column([name]).with_origin(origin))
+}
+
+fn lit_long(v: i64) -> Expr {
+    Expr::literal(Literal::Long(v))
+}
+
+fn alias(e: Expr, name: &str, origin: crate::Origin) -> Arc<Expr> {
+    Arc::new(
+        Expr::new(ExprNode::Alias {
+            expr: Arc::new(e),
+            name: name.to_owned(),
+        })
+        .with_origin(origin),
+    )
+}
+
+fn star(origin: crate::Origin) -> Arc<Expr> {
+    Arc::new(
+        Expr::new(ExprNode::Star(Star {
+            qualifier: Vec::new(),
+            except: Vec::new(),
+            replace: Vec::new(),
+            position: None,
+            regex: None,
+            plan_id: None,
+        }))
+        .with_origin(origin),
+    )
+}
+
+fn project(
+    input: Arc<LogicalPlan>,
+    exprs: Vec<Arc<Expr>>,
+    origin: crate::Origin,
+) -> Arc<LogicalPlan> {
+    Arc::new(LogicalPlan::new(PlanNode::Project { input, exprs }).with_origin(origin))
+}
+
+/// Whether `p` is the `QUALIFY` filter lowering builds: the wrapped predicate over the select list's
+/// projection.
+fn qualify_over_project(p: &LogicalPlan) -> Option<(&Arc<LogicalPlan>, &Arc<Expr>)> {
+    match &p.node {
+        PlanNode::Filter { input, predicate }
+            if call_of(predicate, "qualify").is_some()
+                && matches!(input.node, PlanNode::Project { .. }) =>
+        {
+            Some((input, predicate))
+        }
+        _ => None,
+    }
+}
+
+/// Whether `e` calls `window_time` (renamed) anywhere (outside subqueries).
+fn calls_window_time(e: &Arc<Expr>) -> bool {
+    call_of(e, WINDOW_TIME_SCALAR).is_some() || {
+        let mut any = false;
+        e.for_each_child(&mut |c| any = any || calls_window_time(c));
+        any
+    }
+}
+
+/// The distinct window calls of `found` that are not the time column of another: the operator's windows.
+fn outermost(
+    found: &[Arc<Expr>],
+    origin: crate::Origin,
+) -> Result<(Vec<Arc<Expr>>, Vec<crate::StructuralHash>), AnalysisError> {
+    let mut inner = Vec::new();
+    for c in found {
+        if let Some(f) = call_of(c, WINDOW)
+            && let Some(a) = f.args.first()
+            && call_of(a, WINDOW).is_some()
+        {
+            inner.push(key(a, origin)?);
+        }
+    }
+    let mut keys = Vec::new();
+    let mut calls = Vec::new();
+    for c in found {
+        let k = key(c, origin)?;
+        if !keys.contains(&k) && !inner.contains(&k) {
+            keys.push(k);
+            calls.push(Arc::clone(c));
+        }
+    }
+    Ok((calls, keys))
+}
+
+/// `p` with its window calls read from a new input (see the module documentation).
+fn node(p: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, AnalysisError> {
+    if !matches!(
+        p.node,
+        PlanNode::Project { .. }
+            | PlanNode::Filter { .. }
+            | PlanNode::Aggregate { .. }
+            | PlanNode::Sort { .. }
+    ) {
+        return Ok(p);
+    }
+    let mut found = Vec::new();
+    p.for_each_expr(&mut |e| collect(e, &mut found));
+    if found.is_empty() {
+        return Ok(p);
+    }
+    let origin = p.origin;
+    let (calls, keys) = outermost(&found, origin)?;
+    if calls.len() > 1 {
+        return Err(AnalysisError::new(LegacyErrorTemp1039 {}, origin));
+    }
+    let call = Arc::clone(&calls[0]);
+    let wkey = keys[0];
+    let Some(f) = call_of(&call, WINDOW).or_else(|| call_of(&call, SESSION)) else {
+        return Ok(p);
+    };
+    if f.distinct || f.filter.is_some() || !f.within_group.is_empty() || !f.arg_names.is_empty() {
+        return Err(unsupported("a modified window call", origin));
+    }
+    // `window_time(window)` of a grouped window is not a grouping key or an aggregate.
+    let mut grouped_window_time = false;
+    if let PlanNode::Aggregate { aggregates, .. } = &p.node {
+        grouped_window_time = aggregates.iter().any(calls_window_time);
+    }
+    if grouped_window_time {
+        return Err(AnalysisError::new(
+            MissingAggregation {
+                expression: "\"window_time(window)\"".to_owned(),
+                expression_any_value: "\"any_value(window_time(window))\"".to_owned(),
+            },
+            origin,
+        ));
+    }
+    // A window call in a `HAVING` or `ORDER BY` over an aggregate: the rewrite adds the window below the
+    // operator, where the aggregate's input is not visible.
+    let over_aggregate = |input: &Arc<LogicalPlan>| match &input.node {
+        PlanNode::Aggregate { .. } => true,
+        PlanNode::Filter { input, .. } => matches!(input.node, PlanNode::Aggregate { .. }),
+        _ => false,
+    };
+    let reads_aggregate = match &p.node {
+        PlanNode::Filter { input, .. } => matches!(input.node, PlanNode::Aggregate { .. }),
+        PlanNode::Sort { input, .. } => over_aggregate(input),
+        _ => false,
+    };
+    if reads_aggregate {
+        let time = f.args.first().map_or_else(String::new, |a| match &a.node {
+            ExprNode::Column(c) => c.name.join("."),
+            _ => String::new(),
+        });
+        return Err(AnalysisError::new(
+            MissingAttributesResolvedAttributeMissingFromInput {
+                missing_attributes: format!("\"{time}\""),
+                input: String::new(),
+                operator: "Project".to_owned(),
+            },
+            origin,
+        ));
+    }
+    let is_time = call_of(&call, WINDOW).is_some();
+    let name = if is_time { WINDOW } else { SESSION };
+    let replace = |e: Arc<Expr>| -> Result<Arc<Expr>, AnalysisError> {
+        e.transform_up(&mut |x| {
+            if is_window_call(&x) && key(&x, origin)? == wkey {
+                Ok(col(name, x.origin))
+            } else {
+                Ok(x)
+            }
+        })
+    };
+    // The relation the window is added to: the `QUALIFY` filter's window goes below the select list's
+    // projection (Spark adds it below the filter, and the projection's outputs follow it).
+    let qualify = qualify_over_project(&p).map(|(project, _)| Arc::clone(project));
+    let base = match &qualify {
+        Some(project) => only_input(project),
+        None => only_input(&p),
+    }
+    .ok_or_else(|| unsupported("a window over several inputs", origin))?;
+    let input = if is_time {
+        time_window_input(base, f, origin)?
+    } else {
+        session_input(&p, base, f, wkey, origin)?
+    };
+    let Some(project) = qualify else {
+        let with_input = p.map_children(|_| Ok::<_, AnalysisError>(Arc::clone(&input)))?;
+        return with_input.map_expressions(replace);
+    };
+    let PlanNode::Project { exprs, .. } = &project.node else {
+        return Ok(p);
+    };
+    let mut selected = vec![col(name, origin)];
+    selected.extend(exprs.iter().cloned());
+    let widened = Arc::new(
+        LogicalPlan::new(PlanNode::Project {
+            input,
+            exprs: selected,
+        })
+        .with_origin(project.origin),
+    );
+    let with_input = p.map_children(|_| Ok::<_, AnalysisError>(Arc::clone(&widened)))?;
+    with_input.map_expressions(replace)
+}
+
+/// The only input of `p`.
+fn only_input(p: &LogicalPlan) -> Option<&Arc<LogicalPlan>> {
+    let mut kids = Vec::new();
+    p.for_each_child(&mut |c| kids.push(c));
+    match kids.as_slice() {
+        [one] => Some(one),
+        _ => None,
+    }
+}
+
+/// The text of an argument for an error's `sqlExpr`.
+fn shown(f: &FunctionCall) -> String {
+    format!("\"{}(..)\"", f.name)
+}
+
+/// One duration argument as microseconds (`TimeWindow.parseExpression`).
+fn duration(e: &Expr, origin: crate::Origin) -> Result<i64, AnalysisError> {
+    match &e.node {
+        ExprNode::Literal(Literal::String(s)) => {
+            let (cal, _) = parse_string(s).map_err(|_| {
+                AnalysisError::new(
+                    CannotParseInterval {
+                        interval_string: format!("'{s}'"),
+                    },
+                    origin,
+                )
+            })?;
+            if cal.months != 0 {
+                return Err(AnalysisError::new(
+                    LegacyErrorTemp3231 {
+                        interval: s.clone(),
+                    },
+                    origin,
+                ));
+            }
+            i64::from(cal.days)
+                .checked_mul(MICROS_PER_DAY)
+                .and_then(|d| d.checked_add(cal.micros))
+                .ok_or_else(|| {
+                    AnalysisError::new(
+                        InternalError {
+                            message: "arithmetic overflow".to_owned(),
+                        },
+                        origin,
+                    )
+                })
+        }
+        ExprNode::Literal(Literal::Integer(i)) => Ok(i64::from(*i)),
+        ExprNode::Literal(Literal::Long(l)) => Ok(*l),
+        _ => Err(AnalysisError::new(LegacyErrorTemp1207 {}, origin)),
+    }
+}
+
+/// `LATERAL VIEW explode(__time_windows(ts, window, slide, start)) t AS window` over `base`, for the
+/// window call `f`.
+fn time_window_input(
+    base: &Arc<LogicalPlan>,
+    f: &FunctionCall,
+    origin: crate::Origin,
+) -> Result<Arc<LogicalPlan>, AnalysisError> {
+    if !(2..=4).contains(&f.args.len()) {
+        return Err(AnalysisError::new(
+            WrongNumArgsWithoutSuggestion {
+                function_name: "`window`".to_owned(),
+                expected_num: "[2, 3, 4]".to_owned(),
+                actual_num: f.args.len().to_string(),
+                docroot: SPARK_DOC_ROOT.to_owned(),
+            },
+            origin,
+        ));
+    }
+    // `window(window(ts, ..), ..)`: the outer window reads the inner one's `window_time`.
+    if let Some(inner) = call_of(&f.args[0], WINDOW) {
+        let inner_input =
+            single_window(base, inner, "__tw_inner", (*inner.args[0]).clone(), origin)?;
+        let time = Expr::function(WINDOW_TIME_SCALAR, vec![Expr::column(["__tw_inner"])]);
+        return single_window(&inner_input, f, WINDOW, time, origin);
+    }
+    single_window(base, f, WINDOW, (*f.args[0]).clone(), origin)
+}
+
+/// One window column `name` over `base`: the windows of `time` under the durations of `f`.
+fn single_window(
+    base: &Arc<LogicalPlan>,
+    f: &FunctionCall,
+    name: &str,
+    time: Expr,
+    origin: crate::Origin,
+) -> Result<Arc<LogicalPlan>, AnalysisError> {
+    if !(2..=4).contains(&f.args.len()) {
+        return Err(AnalysisError::new(
+            WrongNumArgsWithoutSuggestion {
+                function_name: "`window`".to_owned(),
+                expected_num: "[2, 3, 4]".to_owned(),
+                actual_num: f.args.len().to_string(),
+                docroot: SPARK_DOC_ROOT.to_owned(),
+            },
+            origin,
+        ));
+    }
+    if call_of(&time, WINDOW).is_some() {
+        return Err(unsupported("windows nested more than one level", origin));
+    }
+    let window = duration(&f.args[1], origin)?;
+    let slide = match f.args.get(2) {
+        Some(a) => duration(a, origin)?,
+        None => window,
+    };
+    let start = match f.args.get(3) {
+        Some(a) => duration(a, origin)?,
+        None => 0,
+    };
+    let expr = shown(f);
+    let range = |name: &str, value: i64| {
+        AnalysisError::new(
+            DatatypeMismatchValueOutOfRange {
+                expr_name: format!("`{name}`"),
+                value_range: format!("(0, {}]", i64::MAX),
+                current_value: format!("{value}L"),
+                sql_expr: expr.clone(),
+            },
+            origin,
+        )
+    };
+    let constraint = |l: (&str, i64), op: &str, r: (&str, i64)| {
+        AnalysisError::new(
+            DatatypeMismatchParameterConstraintViolation {
+                left_expr_name: format!("`{}`", l.0),
+                left_expr_value: format!("{}L", l.1),
+                constraint: op.to_owned(),
+                right_expr_name: format!("`{}`", r.0),
+                right_expr_value: format!("{}L", r.1),
+                sql_expr: expr.clone(),
+            },
+            origin,
+        )
+    };
+    if window <= 0 {
+        return Err(range("window_duration", window));
+    }
+    if slide <= 0 {
+        return Err(range("slide_duration", slide));
+    }
+    if slide > window {
+        return Err(constraint(
+            ("slide_duration", slide),
+            "<=",
+            ("window_duration", window),
+        ));
+    }
+    if start.unsigned_abs() >= slide.unsigned_abs() {
+        return Err(constraint(
+            ("abs(start_time)", start.abs()),
+            "<",
+            ("slide_duration", slide),
+        ));
+    }
+    let windows = Expr::function(
+        "__time_windows",
+        vec![time, lit_long(window), lit_long(slide), lit_long(start)],
+    )
+    .with_origin(origin);
+    Ok(Arc::new(
+        LogicalPlan::new(PlanNode::Generate {
+            input: Arc::clone(base),
+            kind: GeneratorKind::Explode,
+            outer: false,
+            arg: Arc::new(windows),
+            output: Vec::new(),
+            names: vec![name.to_owned()],
+            qualifier: None,
+        })
+        .with_origin(origin),
+    ))
+}
+
+/// The input of `p` with the session window: see the module documentation.
+fn session_input(
+    p: &Arc<LogicalPlan>,
+    input: &Arc<LogicalPlan>,
+    f: &FunctionCall,
+    wkey: crate::StructuralHash,
+    origin: crate::Origin,
+) -> Result<Arc<LogicalPlan>, AnalysisError> {
+    if f.args.len() != 2 {
+        return Err(AnalysisError::new(
+            WrongNumArgsWithoutSuggestion {
+                function_name: "`session_window`".to_owned(),
+                expected_num: "2".to_owned(),
+                actual_num: f.args.len().to_string(),
+                docroot: SPARK_DOC_ROOT.to_owned(),
+            },
+            origin,
+        ));
+    }
+    let time = (*f.args[0]).clone();
+    let gap = Expr::new(ExprNode::Cast {
+        expr: Arc::clone(&f.args[1]),
+        to: DataType::CalendarInterval,
+        mode: CastMode::Default,
+    })
+    .with_origin(origin);
+    let end = Expr::function(Builtin::Add.name(), vec![time.clone(), gap]).with_origin(origin);
+    // The grouping key that is the session window itself merges the rows' ranges.
+    let direct = match &p.node {
+        PlanNode::Aggregate { grouping, .. } => {
+            let exprs: &[Arc<Expr>] = match grouping {
+                Grouping::GroupBy(e) | Grouping::Rollup(e) | Grouping::Cube(e) => e,
+                Grouping::GroupingSets { exprs, .. } => exprs,
+            };
+            let at = exprs
+                .iter()
+                .position(|e| is_window_call(e) && key(e, origin).is_ok_and(|k| k == wkey));
+            at.map(|i| (i, grouping))
+        }
+        _ => None,
+    };
+    let Some((at, grouping)) = direct else {
+        // One range per row.
+        let range = Expr::function(
+            "named_struct",
+            vec![
+                Expr::literal(Literal::String("start".to_owned())),
+                time.clone(),
+                Expr::literal(Literal::String("end".to_owned())),
+                end,
+            ],
+        )
+        .with_origin(origin);
+        let with = project(
+            Arc::clone(input),
+            vec![alias(range, SESSION, origin), star(origin)],
+            origin,
+        );
+        let s = |f: &str| Expr::column([SESSION, f]);
+        let keep = Expr::function(
+            Builtin::And.name(),
+            vec![
+                Expr::function(Builtin::IsNotNull.name(), vec![time]),
+                Expr::function(Builtin::Gt.name(), vec![s("end"), s("start")]),
+            ],
+        )
+        .with_origin(origin);
+        return Ok(Arc::new(
+            LogicalPlan::new(PlanNode::Filter {
+                input: with,
+                predicate: Arc::new(keep),
+            })
+            .with_origin(origin),
+        ));
+    };
+    let Grouping::GroupBy(exprs) = grouping else {
+        return Err(AnalysisError::new(
+            InternalError {
+                message: "Grouping Session should not be null.".to_owned(),
+            },
+            origin,
+        ));
+    };
+    let others: Vec<Arc<Expr>> = exprs
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != at)
+        .map(|(_, e)| Arc::clone(e))
+        .collect();
+    if others.iter().any(|e| match &e.node {
+        ExprNode::Literal(_) => true,
+        ExprNode::Column(c) => c.name.len() == 1 && c.name[0].eq_ignore_ascii_case("all"),
+        _ => false,
+    }) {
+        return Err(unsupported(
+            "session_window with a positional or ALL grouping key",
+            origin,
+        ));
+    }
+    let (start, end_col, prev, id) = ("__sw_start", "__sw_end", "__sw_prev", "__sw_id");
+    let ordered = vec![SortOrder {
+        expr: col(start, origin),
+        direction: SortDirection::Ascending,
+        nulls: NullOrdering::NullsFirst,
+    }];
+    let over = |function: Expr, partition: Vec<Arc<Expr>>, order: Vec<SortOrder>, frame| {
+        Expr::new(ExprNode::Window(WindowExpr {
+            function: Arc::new(function),
+            window: WindowSpecRef::Spec(WindowSpec {
+                partition_by: partition,
+                order_by: order,
+                frame,
+            }),
+        }))
+        .with_origin(origin)
+    };
+    let seen = Some(WindowFrame {
+        units: FrameUnits::Rows,
+        lower: FrameBound::UnboundedPreceding,
+        upper: FrameBound::Offset(Arc::new(Expr::function(
+            Builtin::Negative.name(),
+            vec![Expr::literal(Literal::Integer(1))],
+        ))),
+    });
+    let running = Some(WindowFrame::running(FrameUnits::Rows));
+    // Rows with a time and a positive range.
+    let ranged = project(
+        Arc::clone(input),
+        vec![
+            star(origin),
+            alias(time, start, origin),
+            alias(end, end_col, origin),
+        ],
+        origin,
+    );
+    let keep = Expr::function(
+        Builtin::And.name(),
+        vec![
+            Expr::function(Builtin::IsNotNull.name(), vec![Expr::column([start])]),
+            Expr::function(
+                Builtin::Gt.name(),
+                vec![Expr::column([end_col]), Expr::column([start])],
+            ),
+        ],
+    )
+    .with_origin(origin);
+    let kept = Arc::new(
+        LogicalPlan::new(PlanNode::Filter {
+            input: ranged,
+            predicate: Arc::new(keep),
+        })
+        .with_origin(origin),
+    );
+    // The latest end of the earlier rows of the partition.
+    let before = project(
+        kept,
+        vec![
+            star(origin),
+            alias(
+                over(
+                    Expr::function("max", vec![Expr::column([end_col])]),
+                    others.clone(),
+                    ordered.clone(),
+                    seen,
+                ),
+                prev,
+                origin,
+            ),
+        ],
+        origin,
+    );
+    // The session number: the sessions started so far.
+    let fresh = Expr::function(
+        "when",
+        vec![
+            Expr::function(
+                Builtin::Or.name(),
+                vec![
+                    Expr::function(Builtin::IsNull.name(), vec![Expr::column([prev])]),
+                    Expr::function(
+                        Builtin::Gt.name(),
+                        vec![Expr::column([start]), Expr::column([prev])],
+                    ),
+                ],
+            ),
+            Expr::literal(Literal::Integer(1)),
+            Expr::literal(Literal::Integer(0)),
+        ],
+    );
+    let numbered = project(
+        before,
+        vec![
+            star(origin),
+            alias(
+                over(
+                    Expr::function("sum", vec![fresh]),
+                    others.clone(),
+                    ordered,
+                    running,
+                ),
+                id,
+                origin,
+            ),
+        ],
+        origin,
+    );
+    // The session's range: its first start and its last end.
+    let mut by_session = others;
+    by_session.push(col(id, origin));
+    let range = Expr::function(
+        "named_struct",
+        vec![
+            Expr::literal(Literal::String("start".to_owned())),
+            over(
+                Expr::function("min", vec![Expr::column([start])]),
+                by_session.clone(),
+                Vec::new(),
+                None,
+            ),
+            Expr::literal(Literal::String("end".to_owned())),
+            over(
+                Expr::function("max", vec![Expr::column([end_col])]),
+                by_session,
+                Vec::new(),
+                None,
+            ),
+        ],
+    )
+    .with_origin(origin);
+    Ok(project(
+        numbered,
+        vec![alias(range, SESSION, origin), star(origin)],
+        origin,
+    ))
+}

@@ -70,6 +70,14 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "internal: array_distinct, union, intersect and except by collation keys",
     ),
     (
+        "__window_time",
+        "internal: `window_time(w)`, which the analyzer renames the calls to",
+    ),
+    (
+        "__time_windows",
+        "internal: the windows of a row, built by the analyzer for `window(ts, ...)`",
+    ),
+    (
         "__collation_key",
         "internal: the comparison key of a collated value",
     ),
