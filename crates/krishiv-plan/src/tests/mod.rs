@@ -15,6 +15,7 @@ mod files;
 mod function_call_forms;
 mod inventory;
 mod json_tuple;
+mod lineage;
 mod nodes;
 mod pivot;
 mod prefix_cache;
