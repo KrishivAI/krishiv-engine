@@ -14,8 +14,24 @@ use crate::ast::{BucketOn, SampleMethodKind, SampleType, TableSample};
 const ROUNDING_EPSILON: f64 = 1e-6;
 
 impl Checker<'_> {
-    /// A sample's checks, in `withSample`'s order.
+    /// A sample's checks, in `withSample`'s order, then its seed's.
     pub(super) fn sample(&self, s: &TableSample) -> R {
+        self.sample_method(s)?;
+        match &s.seed {
+            // Spark reads the seed with `toLong`: a longer one is an
+            // unclassified `NumberFormatException` ("For input string"),
+            // refused here as unsupported.
+            Some(seed) if seed.parse::<i64>().is_err() => Err(at(
+                krishiv_common::error::KrishivUnsupportedFeature {
+                    feature: format!("REPEATABLE seed {seed} (the largest is 9223372036854775807)"),
+                },
+                s.span,
+            )),
+            _ => Ok(()),
+        }
+    }
+
+    fn sample_method(&self, s: &TableSample) -> R {
         let Some(method) = &s.method else {
             return Err(at(LegacyErrorTemp0014 {}, s.span));
         };
@@ -66,7 +82,8 @@ impl Checker<'_> {
                     }
                     .into()
                 };
-                Err(at(error, method.span))
+                // At the whole sample, as Spark points (`tablesample.json`).
+                Err(at(error, s.span))
             }
             SampleMethodKind::Bucket {
                 numerator,
@@ -83,7 +100,7 @@ impl Checker<'_> {
                         return self.fraction(n / d, s);
                     }
                 };
-                Err(at(unsupported(target), method.span))
+                Err(at(unsupported(target), s.span))
             }
         }
     }

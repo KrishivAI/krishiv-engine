@@ -36,8 +36,8 @@ impl Parser<'_> {
             let name = p.object_name()?;
             // `AS 'class' [USING {JAR | FILE | ARCHIVE} 'path', ...]`: a
             // function implemented by a JVM class, which the engine has no
-            // runtime for.
-            if temporary && p.kw_at(0, "AS") {
+            // runtime for. Spark parses it permanent or temporary.
+            if p.kw_at(0, "AS") {
                 p.pos += 1;
                 p.string_lit().ok_or(Fail::Syntax)?;
                 if p.eat_kw("USING") {
@@ -53,7 +53,9 @@ impl Parser<'_> {
                 }
                 let span = p.span_from(start);
                 p.command_end()?;
-                p.temp_function_qualifier(&name, span)?;
+                if temporary {
+                    p.temp_function_qualifier(&name, span)?;
+                }
                 return Self::fatal(error::unsupported_function_class(span));
             }
             p.expect_sym(Sym::LParen)?;

@@ -65,6 +65,30 @@ def aes_encrypt(input: ColumnOrName, key: ColumnOrName, mode: ColumnOrName | Non
 
 Calls the registry function `aes_encrypt`.
 
+### `aggregate`
+
+```python
+def aggregate(col: ColumnOrName, initialValue: ColumnOrName, merge: Callable[[Column, Column], Column], finish: Callable[[Column], Column] | None=None) -> Column
+```
+
+Folds the array `col` from `initialValue` with `merge(acc, element)`, then `finish(acc)` if given.
+
+### `any_value`
+
+```python
+def any_value(col: ColumnOrName, ignoreNulls: bool | Column | None=None) -> Column
+```
+
+Calls the registry function `any_value`.
+
+### `approxCountDistinct`
+
+```python
+def approxCountDistinct(col: ColumnOrName, rsd: Column | float | None=None) -> Column
+```
+
+Deprecated alias; calls the registry function `approx_count_distinct`.
+
 ### `approx_count_distinct`
 
 ```python
@@ -88,6 +112,14 @@ def array(*cols: ColumnOrName) -> Column
 ```
 
 Calls the registry function `array`.
+
+### `array_agg`
+
+```python
+def array_agg(col: ColumnOrName) -> Column
+```
+
+Calls the registry function `array_agg`.
 
 ### `array_append`
 
@@ -209,6 +241,15 @@ def array_size(col: ColumnOrName) -> Column
 
 Calls the registry function `array_size`.
 
+### `array_sort`
+
+```python
+def array_sort(col: ColumnOrName, comparator: Callable[[Column, Column], Column] | None=None) -> Column
+```
+
+The array `col` sorted ascending (nulls last), or by `comparator(left, right)`, which returns a negative
+integer, 0 or a positive integer.
+
 ### `array_union`
 
 ```python
@@ -233,11 +274,35 @@ def arrays_zip(*cols: ColumnOrName) -> Column
 
 Calls the registry function `arrays_zip`.
 
+### `arrow_udtf`
+
+```python
+def arrow_udtf(cls: Any=None, *, returnType: Any=None) -> Any
+```
+
+Not available: table UDFs (UDTF) are not implemented.
+
 ### `asc`
 
 ```python
 def asc(col: ColumnOrName) -> Column
 ```
+
+### `asc_nulls_first`
+
+```python
+def asc_nulls_first(col: ColumnOrName) -> Column
+```
+
+A sort expression: `col` ascending, nulls first.
+
+### `asc_nulls_last`
+
+```python
+def asc_nulls_last(col: ColumnOrName) -> Column
+```
+
+A sort expression: `col` ascending, nulls last.
 
 ### `ascii`
 
@@ -367,6 +432,54 @@ def bit_xor(col: ColumnOrName) -> Column
 
 Calls the registry function `bit_xor`.
 
+### `bitmap_and_agg`
+
+```python
+def bitmap_and_agg(col: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `bitmap_bit_position`
+
+```python
+def bitmap_bit_position(col: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `bitmap_bucket_number`
+
+```python
+def bitmap_bucket_number(col: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `bitmap_construct_agg`
+
+```python
+def bitmap_construct_agg(col: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `bitmap_count`
+
+```python
+def bitmap_count(col: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `bitmap_or_agg`
+
+```python
+def bitmap_or_agg(col: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
 ### `bitwiseNOT`
 
 ```python
@@ -399,6 +512,14 @@ def bool_or(col: ColumnOrName) -> Column
 
 Calls the registry function `bool_or`.
 
+### `broadcast`
+
+```python
+def broadcast(df: DataFrame) -> DataFrame
+```
+
+Marks `df` as small enough for a broadcast join (`df.hint("broadcast")`).
+
 ### `bround`
 
 ```python
@@ -415,6 +536,14 @@ def btrim(str: ColumnOrName, trim: ColumnOrName | None=None) -> Column
 
 Calls the registry function `btrim`.
 
+### `bucket`
+
+```python
+def bucket(numBuckets: Any, col: ColumnOrName) -> Column
+```
+
+Not available: partitioning transforms are not implemented.
+
 ### `call_function`
 
 ```python
@@ -422,6 +551,14 @@ def call_function(funcName: str, *cols: Any) -> Column
 ```
 
 A call of the registered function `funcName`.
+
+### `call_udf`
+
+```python
+def call_udf(udfName: str, *cols: ColumnOrName) -> Column
+```
+
+A call of the function `udfName` (a registered UDF or any registered function) on `cols`.
 
 ### `cardinality`
 
@@ -479,6 +616,14 @@ def character_length(str: ColumnOrName) -> Column
 
 Calls the registry function `character_length`.
 
+### `chr`
+
+```python
+def chr(n: ColumnOrName) -> Column
+```
+
+Calls the registry function `chr`.
+
 ### `coalesce`
 
 ```python
@@ -494,6 +639,14 @@ def col(col: str) -> Column
 ```
 
 The column named `col` (`a`, `t.a`, `*`).
+
+### `collate`
+
+```python
+def collate(col: ColumnOrName, collation: str) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `collation`
 
@@ -613,6 +766,14 @@ def count_if(col: ColumnOrName) -> Column
 
 Calls the registry function `count_if`.
 
+### `count_min_sketch`
+
+```python
+def count_min_sketch(col: ColumnOrName, eps: Column | float, confidence: Column | float, seed: Column | int | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
 ### `covar_pop`
 
 ```python
@@ -708,6 +869,14 @@ def current_schema() -> Column
 ```
 
 Calls the registry function `current_schema`.
+
+### `current_time`
+
+```python
+def current_time(precision: int | None=None) -> Column
+```
+
+Not available: the TIME type has no Python mapping yet.
 
 ### `current_timestamp`
 
@@ -853,6 +1022,14 @@ def dayofyear(col: ColumnOrName) -> Column
 
 Calls the registry function `dayofyear`.
 
+### `days`
+
+```python
+def days(col: ColumnOrName) -> Column
+```
+
+Not available: partitioning transforms are not implemented.
+
 ### `decode`
 
 ```python
@@ -882,6 +1059,22 @@ Calls the registry function `dense_rank`.
 ```python
 def desc(col: ColumnOrName) -> Column
 ```
+
+### `desc_nulls_first`
+
+```python
+def desc_nulls_first(col: ColumnOrName) -> Column
+```
+
+A sort expression: `col` descending, nulls first.
+
+### `desc_nulls_last`
+
+```python
+def desc_nulls_last(col: ColumnOrName) -> Column
+```
+
+A sort expression: `col` descending, nulls last.
 
 ### `e`
 
@@ -931,6 +1124,22 @@ def equal_null(col1: ColumnOrName, col2: ColumnOrName) -> Column
 
 Calls the registry function `equal_null`.
 
+### `every`
+
+```python
+def every(col: ColumnOrName) -> Column
+```
+
+Calls the registry function `every`.
+
+### `exists`
+
+```python
+def exists(col: ColumnOrName, f: Callable[[Column], Column]) -> Column
+```
+
+Whether `f(element)` holds for at least one element of the array `col`.
+
 ### `exp`
 
 ```python
@@ -938,6 +1147,22 @@ def exp(col: ColumnOrName) -> Column
 ```
 
 Calls the registry function `exp`.
+
+### `explode`
+
+```python
+def explode(col: ColumnOrName) -> Column
+```
+
+One row per element of the array (or entry of the map) `col`.
+
+### `explode_outer`
+
+```python
+def explode_outer(col: ColumnOrName) -> Column
+```
+
+As `explode`, and a null or empty `col` gives one row of nulls.
 
 ### `expm1`
 
@@ -971,6 +1196,14 @@ def factorial(col: ColumnOrName) -> Column
 ```
 
 Calls the registry function `factorial`.
+
+### `filter`
+
+```python
+def filter(col: ColumnOrName, f: Callable[..., Column]) -> Column
+```
+
+The elements of the array `col` for which `f(element)` or `f(element, index)` holds.
 
 ### `find_in_set`
 
@@ -1012,6 +1245,14 @@ def floor(col: ColumnOrName, scale: Column | int | None=None) -> Column
 
 Calls the registry function `floor`.
 
+### `forall`
+
+```python
+def forall(col: ColumnOrName, f: Callable[[Column], Column]) -> Column
+```
+
+Whether `f(element)` holds for every element of the array `col`.
+
 ### `format_number`
 
 ```python
@@ -1027,6 +1268,14 @@ def format_string(format: str, *cols: ColumnOrName) -> Column
 ```
 
 Calls the registry function `format_string`.
+
+### `from_csv`
+
+```python
+def from_csv(col: ColumnOrName, schema: Column | str, options: dict[str, str] | None=None) -> Column
+```
+
+Calls the registry function `from_csv`.
 
 ### `from_json`
 
@@ -1051,6 +1300,14 @@ def from_utc_timestamp(timestamp: ColumnOrName, tz: Column | str) -> Column
 ```
 
 Calls the registry function `from_utc_timestamp`.
+
+### `from_xml`
+
+```python
+def from_xml(col: ColumnOrName, schema: Column | str, options: dict[str, str] | None=None) -> Column
+```
+
+Calls the registry function `from_xml`.
 
 ### `get`
 
@@ -1084,6 +1341,22 @@ def greatest(*cols: ColumnOrName) -> Column
 
 Calls the registry function `greatest`.
 
+### `grouping`
+
+```python
+def grouping(col: ColumnOrName) -> Column
+```
+
+Calls the registry function `grouping`.
+
+### `grouping_id`
+
+```python
+def grouping_id(*cols: ColumnOrName) -> Column
+```
+
+Calls the registry function `grouping_id`.
+
 ### `hash`
 
 ```python
@@ -1100,6 +1373,46 @@ def hex(col: ColumnOrName) -> Column
 
 Calls the registry function `hex`.
 
+### `histogram_numeric`
+
+```python
+def histogram_numeric(col: ColumnOrName, nBins: Column) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `hll_sketch_agg`
+
+```python
+def hll_sketch_agg(col: ColumnOrName, lgConfigK: Column | int | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `hll_sketch_estimate`
+
+```python
+def hll_sketch_estimate(col: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `hll_union`
+
+```python
+def hll_union(col1: ColumnOrName, col2: ColumnOrName, allowDifferentLgConfigK: bool | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `hll_union_agg`
+
+```python
+def hll_union_agg(col: ColumnOrName, allowDifferentLgConfigK: bool | Column | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
 ### `hour`
 
 ```python
@@ -1107,6 +1420,14 @@ def hour(col: ColumnOrName) -> Column
 ```
 
 Calls the registry function `hour`.
+
+### `hours`
+
+```python
+def hours(col: ColumnOrName) -> Column
+```
+
+Not available: partitioning transforms are not implemented.
 
 ### `hypot`
 
@@ -1124,6 +1445,14 @@ def ifnull(col1: ColumnOrName, col2: ColumnOrName) -> Column
 
 Calls the registry function `ifnull`.
 
+### `ilike`
+
+```python
+def ilike(str: ColumnOrName, pattern: ColumnOrName, escapeChar: Column | None=None) -> Column
+```
+
+Calls the registry function `ilike`.
+
 ### `initcap`
 
 ```python
@@ -1131,6 +1460,22 @@ def initcap(col: ColumnOrName) -> Column
 ```
 
 Calls the registry function `initcap`.
+
+### `inline`
+
+```python
+def inline(col: ColumnOrName) -> Column
+```
+
+One row per struct of the array of structs `col`, one column per field.
+
+### `inline_outer`
+
+```python
+def inline_outer(col: ColumnOrName) -> Column
+```
+
+As `inline`, and a null or empty `col` gives one row of nulls.
 
 ### `input_file_block_length`
 
@@ -1172,6 +1517,14 @@ def is_valid_utf8(str: ColumnOrName) -> Column
 
 Calls the registry function `is_valid_utf8`.
 
+### `is_valid_variant`
+
+```python
+def is_valid_variant(v: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
 ### `is_variant_null`
 
 ```python
@@ -1204,6 +1557,14 @@ def isnull(col: ColumnOrName) -> Column
 
 Calls the registry function `isnull`.
 
+### `java_method`
+
+```python
+def java_method(*cols: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
 ### `json_array_length`
 
 ```python
@@ -1227,6 +1588,174 @@ def json_tuple(col: ColumnOrName, *fields: str) -> Column
 ```
 
 Calls the registry function `json_tuple`.
+
+### `kll_merge_agg_bigint`
+
+```python
+def kll_merge_agg_bigint(col: ColumnOrName, k: Column | int | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `kll_merge_agg_double`
+
+```python
+def kll_merge_agg_double(col: ColumnOrName, k: Column | int | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `kll_merge_agg_float`
+
+```python
+def kll_merge_agg_float(col: ColumnOrName, k: Column | int | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `kll_sketch_agg_bigint`
+
+```python
+def kll_sketch_agg_bigint(col: ColumnOrName, k: Column | int | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `kll_sketch_agg_double`
+
+```python
+def kll_sketch_agg_double(col: ColumnOrName, k: Column | int | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `kll_sketch_agg_float`
+
+```python
+def kll_sketch_agg_float(col: ColumnOrName, k: Column | int | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `kll_sketch_get_n_bigint`
+
+```python
+def kll_sketch_get_n_bigint(col: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `kll_sketch_get_n_double`
+
+```python
+def kll_sketch_get_n_double(col: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `kll_sketch_get_n_float`
+
+```python
+def kll_sketch_get_n_float(col: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `kll_sketch_get_quantile_bigint`
+
+```python
+def kll_sketch_get_quantile_bigint(sketch: ColumnOrName, rank: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `kll_sketch_get_quantile_double`
+
+```python
+def kll_sketch_get_quantile_double(sketch: ColumnOrName, rank: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `kll_sketch_get_quantile_float`
+
+```python
+def kll_sketch_get_quantile_float(sketch: ColumnOrName, rank: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `kll_sketch_get_rank_bigint`
+
+```python
+def kll_sketch_get_rank_bigint(sketch: ColumnOrName, quantile: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `kll_sketch_get_rank_double`
+
+```python
+def kll_sketch_get_rank_double(sketch: ColumnOrName, quantile: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `kll_sketch_get_rank_float`
+
+```python
+def kll_sketch_get_rank_float(sketch: ColumnOrName, quantile: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `kll_sketch_merge_bigint`
+
+```python
+def kll_sketch_merge_bigint(left: ColumnOrName, right: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `kll_sketch_merge_double`
+
+```python
+def kll_sketch_merge_double(left: ColumnOrName, right: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `kll_sketch_merge_float`
+
+```python
+def kll_sketch_merge_float(left: ColumnOrName, right: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `kll_sketch_to_string_bigint`
+
+```python
+def kll_sketch_to_string_bigint(col: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `kll_sketch_to_string_double`
+
+```python
+def kll_sketch_to_string_double(col: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `kll_sketch_to_string_float`
+
+```python
+def kll_sketch_to_string_float(col: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `kurtosis`
 
@@ -1316,6 +1845,14 @@ def levenshtein(left: ColumnOrName, right: ColumnOrName, threshold: int | Column
 
 Calls the registry function `levenshtein`.
 
+### `like`
+
+```python
+def like(str: ColumnOrName, pattern: ColumnOrName, escapeChar: Column | None=None) -> Column
+```
+
+Calls the registry function `like`.
+
 ### `listagg`
 
 ```python
@@ -1323,6 +1860,14 @@ def listagg(col: ColumnOrName, delimiter: Column | str | None=None) -> Column
 ```
 
 Calls the registry function `listagg`.
+
+### `listagg_distinct`
+
+```python
+def listagg_distinct(col: ColumnOrName, delimiter: Any=None) -> Column
+```
+
+Not available: DISTINCT aggregates have no Column builder yet.
 
 ### `lit`
 
@@ -1437,6 +1982,14 @@ def make_interval(years: ColumnOrName | None=None, months: ColumnOrName | None=N
 
 A calendar interval; an omitted field is zero.
 
+### `make_time`
+
+```python
+def make_time(hour: ColumnOrName, minute: ColumnOrName, second: ColumnOrName) -> Column
+```
+
+Not available: the TIME type has no Python mapping yet.
+
 ### `make_timestamp`
 
 ```python
@@ -1501,6 +2054,14 @@ def map_entries(col: ColumnOrName) -> Column
 
 Calls the registry function `map_entries`.
 
+### `map_filter`
+
+```python
+def map_filter(col: ColumnOrName, f: Callable[[Column, Column], Column]) -> Column
+```
+
+The entries of the map `col` for which `f(key, value)` holds.
+
 ### `map_from_arrays`
 
 ```python
@@ -1533,6 +2094,14 @@ def map_values(col: ColumnOrName) -> Column
 
 Calls the registry function `map_values`.
 
+### `map_zip_with`
+
+```python
+def map_zip_with(col1: ColumnOrName, col2: ColumnOrName, f: Callable[[Column, Column, Column], Column]) -> Column
+```
+
+The maps `col1` and `col2` merged by key with `f(key, value1, value2)`.
+
 ### `mask`
 
 ```python
@@ -1548,6 +2117,14 @@ def max(col: ColumnOrName) -> Column
 ```
 
 Calls the registry function `max`.
+
+### `max_by`
+
+```python
+def max_by(col: ColumnOrName, ord: ColumnOrName, k: int | None=None) -> Column
+```
+
+Calls the registry function `max_by`.
 
 ### `md5`
 
@@ -1580,6 +2157,14 @@ def min(col: ColumnOrName) -> Column
 ```
 
 Calls the registry function `min`.
+
+### `min_by`
+
+```python
+def min_by(col: ColumnOrName, ord: ColumnOrName, k: int | None=None) -> Column
+```
+
+Calls the registry function `min_by`.
 
 ### `minute`
 
@@ -1621,6 +2206,14 @@ def monthname(col: ColumnOrName) -> Column
 
 Calls the registry function `monthname`.
 
+### `months`
+
+```python
+def months(col: ColumnOrName) -> Column
+```
+
+Not available: partitioning transforms are not implemented.
+
 ### `months_between`
 
 ```python
@@ -1644,6 +2237,14 @@ def nanvl(col1: ColumnOrName, col2: ColumnOrName) -> Column
 ```
 
 Calls the registry function `nanvl`.
+
+### `negate`
+
+```python
+def negate(col: ColumnOrName) -> Column
+```
+
+Calls the registry function `negative`.
 
 ### `negative`
 
@@ -1789,6 +2390,22 @@ def pmod(dividend: ColumnOrName | float, divisor: ColumnOrName | float) -> Colum
 
 Calls the registry function `pmod`.
 
+### `posexplode`
+
+```python
+def posexplode(col: ColumnOrName) -> Column
+```
+
+As `explode`, with the position of the element (`pos`, `col`; `pos`, `key`, `value`).
+
+### `posexplode_outer`
+
+```python
+def posexplode_outer(col: ColumnOrName) -> Column
+```
+
+As `posexplode`, and a null or empty `col` gives one row of nulls.
+
 ### `position`
 
 ```python
@@ -1813,6 +2430,14 @@ def pow(col1: ColumnOrName | float, col2: ColumnOrName | float) -> Column
 
 Calls the registry function `power`.
 
+### `power`
+
+```python
+def power(col1: ColumnOrName | float, col2: ColumnOrName | float) -> Column
+```
+
+Calls the registry function `power`.
+
 ### `printf`
 
 ```python
@@ -1820,6 +2445,14 @@ def printf(format: ColumnOrName, *cols: ColumnOrName) -> Column
 ```
 
 Calls the registry function `printf`.
+
+### `product`
+
+```python
+def product(col: ColumnOrName) -> Column
+```
+
+Not available: the engine has no `product` aggregate.
 
 ### `quarter`
 
@@ -1869,6 +2502,14 @@ def randn(seed: int | None=None) -> Column
 
 Calls the registry function `randn`.
 
+### `random`
+
+```python
+def random(seed: int | None=None) -> Column
+```
+
+Calls the registry function `random`.
+
 ### `randstr`
 
 ```python
@@ -1884,6 +2525,22 @@ def rank() -> Column
 ```
 
 Calls the registry function `rank`.
+
+### `reduce`
+
+```python
+def reduce(col: ColumnOrName, initialValue: ColumnOrName, merge: Callable[[Column, Column], Column], finish: Callable[[Column], Column] | None=None) -> Column
+```
+
+An alias of `aggregate`.
+
+### `reflect`
+
+```python
+def reflect(*cols: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `regexp`
 
@@ -2061,6 +2718,14 @@ def rint(col: ColumnOrName) -> Column
 
 Calls the registry function `rint`.
 
+### `rlike`
+
+```python
+def rlike(str: ColumnOrName, regexp: ColumnOrName) -> Column
+```
+
+Calls the registry function `rlike`.
+
 ### `round`
 
 ```python
@@ -2093,6 +2758,14 @@ def rtrim(col: ColumnOrName, trim: ColumnOrName | None=None) -> Column
 
 Calls the registry function `rtrim`.
 
+### `schema_of_csv`
+
+```python
+def schema_of_csv(csv: Column | str, options: dict[str, str] | None=None) -> Column
+```
+
+Calls the registry function `schema_of_csv`.
+
 ### `schema_of_json`
 
 ```python
@@ -2108,6 +2781,22 @@ def schema_of_variant(v: ColumnOrName) -> Column
 ```
 
 Calls the registry function `schema_of_variant`.
+
+### `schema_of_variant_agg`
+
+```python
+def schema_of_variant_agg(v: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `schema_of_xml`
+
+```python
+def schema_of_xml(xml: Column | str, options: dict[str, str] | None=None) -> Column
+```
+
+Calls the registry function `schema_of_xml`.
 
 ### `sec`
 
@@ -2125,6 +2814,14 @@ def second(col: ColumnOrName) -> Column
 
 Calls the registry function `second`.
 
+### `sentences`
+
+```python
+def sentences(string: ColumnOrName, language: ColumnOrName | None=None, country: ColumnOrName | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
 ### `sequence`
 
 ```python
@@ -2140,6 +2837,14 @@ def session_user() -> Column
 ```
 
 Calls the registry function `session_user`.
+
+### `session_window`
+
+```python
+def session_window(timeColumn: ColumnOrName, gapDuration: Column | str) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `sha`
 
@@ -2277,6 +2982,14 @@ def slice(x: ColumnOrName, start: ColumnOrName | int, length: ColumnOrName | int
 
 Calls the registry function `slice`.
 
+### `some`
+
+```python
+def some(col: ColumnOrName) -> Column
+```
+
+Calls the registry function `some`.
+
 ### `sort_array`
 
 ```python
@@ -2324,6 +3037,54 @@ def sqrt(col: ColumnOrName) -> Column
 ```
 
 Calls the registry function `sqrt`.
+
+### `st_asbinary`
+
+```python
+def st_asbinary(geo: ColumnOrName, endianness: ColumnOrName | None=None) -> Column
+```
+
+Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet.
+
+### `st_geogfromwkb`
+
+```python
+def st_geogfromwkb(wkb: ColumnOrName) -> Column
+```
+
+Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet.
+
+### `st_geomfromwkb`
+
+```python
+def st_geomfromwkb(wkb: ColumnOrName, srid: Any=None) -> Column
+```
+
+Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet.
+
+### `st_setsrid`
+
+```python
+def st_setsrid(geo: ColumnOrName, srid: Any) -> Column
+```
+
+Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet.
+
+### `st_srid`
+
+```python
+def st_srid(geo: ColumnOrName) -> Column
+```
+
+Not available: GEOMETRY and GEOGRAPHY have no Python mapping yet.
+
+### `stack`
+
+```python
+def stack(*cols: ColumnOrName) -> Column
+```
+
+Separates `cols[1:]` into `cols[0]` rows (`cols[0]` is the row count, a literal column).
 
 ### `startswith`
 
@@ -2373,6 +3134,22 @@ def str_to_map(text: ColumnOrName, pairDelim: ColumnOrName | None=None, keyValue
 
 Calls the registry function `str_to_map`.
 
+### `string_agg`
+
+```python
+def string_agg(col: ColumnOrName, delimiter: Column | str | None=None) -> Column
+```
+
+Calls the registry function `string_agg`.
+
+### `string_agg_distinct`
+
+```python
+def string_agg_distinct(col: ColumnOrName, delimiter: Any=None) -> Column
+```
+
+Not available: DISTINCT aggregates have no Column builder yet.
+
 ### `struct`
 
 ```python
@@ -2413,6 +3190,22 @@ def sum(col: ColumnOrName) -> Column
 
 Calls the registry function `sum`.
 
+### `sumDistinct`
+
+```python
+def sumDistinct(col: ColumnOrName) -> Column
+```
+
+Not available: DISTINCT aggregates have no Column builder yet.
+
+### `sum_distinct`
+
+```python
+def sum_distinct(col: ColumnOrName) -> Column
+```
+
+Not available: DISTINCT aggregates have no Column builder yet.
+
 ### `tan`
 
 ```python
@@ -2429,6 +3222,62 @@ def tanh(col: ColumnOrName) -> Column
 
 Calls the registry function `tanh`.
 
+### `theta_difference`
+
+```python
+def theta_difference(col1: ColumnOrName, col2: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `theta_intersection`
+
+```python
+def theta_intersection(col1: ColumnOrName, col2: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `theta_intersection_agg`
+
+```python
+def theta_intersection_agg(col: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `theta_sketch_agg`
+
+```python
+def theta_sketch_agg(col: ColumnOrName, lgNomEntries: Column | int | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `theta_sketch_estimate`
+
+```python
+def theta_sketch_estimate(col: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `theta_union`
+
+```python
+def theta_union(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `theta_union_agg`
+
+```python
+def theta_union_agg(col: ColumnOrName, lgNomEntries: Column | int | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
 ### `time_bucket`
 
 ```python
@@ -2436,6 +3285,86 @@ def time_bucket(bucket_size: Column, ts: ColumnOrName, origin: Column | None=Non
 ```
 
 Calls the registry function `time_bucket`.
+
+### `time_diff`
+
+```python
+def time_diff(unit: ColumnOrName, start: ColumnOrName, end: ColumnOrName) -> Column
+```
+
+Not available: the TIME type has no Python mapping yet.
+
+### `time_from_micros`
+
+```python
+def time_from_micros(col: ColumnOrName) -> Column
+```
+
+Not available: the TIME type has no Python mapping yet.
+
+### `time_from_millis`
+
+```python
+def time_from_millis(col: ColumnOrName) -> Column
+```
+
+Not available: the TIME type has no Python mapping yet.
+
+### `time_from_seconds`
+
+```python
+def time_from_seconds(col: ColumnOrName) -> Column
+```
+
+Not available: the TIME type has no Python mapping yet.
+
+### `time_to_micros`
+
+```python
+def time_to_micros(col: ColumnOrName) -> Column
+```
+
+Not available: the TIME type has no Python mapping yet.
+
+### `time_to_millis`
+
+```python
+def time_to_millis(col: ColumnOrName) -> Column
+```
+
+Not available: the TIME type has no Python mapping yet.
+
+### `time_to_seconds`
+
+```python
+def time_to_seconds(col: ColumnOrName) -> Column
+```
+
+Not available: the TIME type has no Python mapping yet.
+
+### `time_trunc`
+
+```python
+def time_trunc(unit: ColumnOrName, time: ColumnOrName) -> Column
+```
+
+Not available: the TIME type has no Python mapping yet.
+
+### `timestamp_add`
+
+```python
+def timestamp_add(unit: str, quantity: ColumnOrName, ts: ColumnOrName) -> Column
+```
+
+Calls the registry function `timestampadd`.
+
+### `timestamp_diff`
+
+```python
+def timestamp_diff(unit: str, start: ColumnOrName, end: ColumnOrName) -> Column
+```
+
+Calls the registry function `timestampdiff`.
 
 ### `timestamp_micros`
 
@@ -2493,6 +3422,14 @@ def to_char(col: ColumnOrName, format: ColumnOrName) -> Column
 
 Calls the registry function `to_char`.
 
+### `to_csv`
+
+```python
+def to_csv(col: ColumnOrName, options: dict[str, str] | None=None) -> Column
+```
+
+Calls the registry function `to_csv`.
+
 ### `to_date`
 
 ```python
@@ -2516,6 +3453,14 @@ def to_number(col: ColumnOrName, format: ColumnOrName) -> Column
 ```
 
 Calls the registry function `to_number`.
+
+### `to_time`
+
+```python
+def to_time(str: ColumnOrName, format: ColumnOrName | None=None) -> Column
+```
+
+Not available: the TIME type has no Python mapping yet.
 
 ### `to_timestamp`
 
@@ -2572,6 +3517,38 @@ def to_variant_object(col: ColumnOrName) -> Column
 ```
 
 Calls the registry function `to_variant_object`.
+
+### `to_xml`
+
+```python
+def to_xml(col: ColumnOrName, options: dict[str, str] | None=None) -> Column
+```
+
+Calls the registry function `to_xml`.
+
+### `transform`
+
+```python
+def transform(col: ColumnOrName, f: Callable[..., Column]) -> Column
+```
+
+The array `col` with `f(element)` or `f(element, index)` of each element.
+
+### `transform_keys`
+
+```python
+def transform_keys(col: ColumnOrName, f: Callable[[Column, Column], Column]) -> Column
+```
+
+The map `col` with the keys `f(key, value)`.
+
+### `transform_values`
+
+```python
+def transform_values(col: ColumnOrName, f: Callable[[Column, Column], Column]) -> Column
+```
+
+The map `col` with the values `f(key, value)`.
 
 ### `translate`
 
@@ -2701,6 +3678,14 @@ def try_parse_url(url: ColumnOrName, partToExtract: ColumnOrName, key: ColumnOrN
 
 Calls the registry function `try_parse_url`.
 
+### `try_reflect`
+
+```python
+def try_reflect(*cols: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
 ### `try_subtract`
 
 ```python
@@ -2741,6 +3726,14 @@ def try_to_number(col: ColumnOrName, format: ColumnOrName) -> Column
 
 Calls the registry function `try_to_number`.
 
+### `try_to_time`
+
+```python
+def try_to_time(str: ColumnOrName, format: ColumnOrName | None=None) -> Column
+```
+
+Not available: the TIME type has no Python mapping yet.
+
 ### `try_to_timestamp`
 
 ```python
@@ -2772,6 +3765,198 @@ def try_variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Col
 ```
 
 Calls the registry function `try_variant_get`.
+
+### `tuple_difference_double`
+
+```python
+def tuple_difference_double(col1: ColumnOrName, col2: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `tuple_difference_integer`
+
+```python
+def tuple_difference_integer(col1: ColumnOrName, col2: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `tuple_difference_theta_double`
+
+```python
+def tuple_difference_theta_double(col1: ColumnOrName, col2: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `tuple_difference_theta_integer`
+
+```python
+def tuple_difference_theta_integer(col1: ColumnOrName, col2: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `tuple_intersection_agg_double`
+
+```python
+def tuple_intersection_agg_double(col: ColumnOrName, mode: Column | str | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `tuple_intersection_agg_integer`
+
+```python
+def tuple_intersection_agg_integer(col: ColumnOrName, mode: Column | str | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `tuple_intersection_double`
+
+```python
+def tuple_intersection_double(col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `tuple_intersection_integer`
+
+```python
+def tuple_intersection_integer(col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `tuple_intersection_theta_double`
+
+```python
+def tuple_intersection_theta_double(col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `tuple_intersection_theta_integer`
+
+```python
+def tuple_intersection_theta_integer(col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `tuple_sketch_agg_double`
+
+```python
+def tuple_sketch_agg_double(key: ColumnOrName, summary: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `tuple_sketch_agg_integer`
+
+```python
+def tuple_sketch_agg_integer(key: ColumnOrName, summary: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `tuple_sketch_estimate_double`
+
+```python
+def tuple_sketch_estimate_double(col: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `tuple_sketch_estimate_integer`
+
+```python
+def tuple_sketch_estimate_integer(col: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `tuple_sketch_summary_double`
+
+```python
+def tuple_sketch_summary_double(col: ColumnOrName, mode: Column | str | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `tuple_sketch_summary_integer`
+
+```python
+def tuple_sketch_summary_integer(col: ColumnOrName, mode: Column | str | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `tuple_sketch_theta_double`
+
+```python
+def tuple_sketch_theta_double(col: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `tuple_sketch_theta_integer`
+
+```python
+def tuple_sketch_theta_integer(col: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `tuple_union_agg_double`
+
+```python
+def tuple_union_agg_double(col: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `tuple_union_agg_integer`
+
+```python
+def tuple_union_agg_integer(col: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `tuple_union_double`
+
+```python
+def tuple_union_double(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `tuple_union_integer`
+
+```python
+def tuple_union_integer(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `tuple_union_theta_double`
+
+```python
+def tuple_union_theta_double(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `tuple_union_theta_integer`
+
+```python
+def tuple_union_theta_integer(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
 
 ### `typeof`
 
@@ -2805,6 +3990,14 @@ a pandas UDF, `pa.Array -> pa.Array` an Arrow UDF). Calling the result gives a C
 
 Only the Arrow paths are implemented: a UDF Spark would run pickled (`useArrow=False`) runs Arrow-batched
 with a warning (a documented divergence).
+
+### `udtf`
+
+```python
+def udtf(cls: Any=None, *, returnType: Any=None, useArrow: bool | None=None) -> Any
+```
+
+Not available: table UDFs (UDTF) are not implemented.
 
 ### `unbase64`
 
@@ -2871,6 +4064,14 @@ def unix_timestamp(timestamp: ColumnOrName | None=None, format: str='yyyy-MM-dd 
 The current Unix time in seconds, or `timestamp` parsed with `format`.
 
 Without `timestamp` the call has no arguments (as in PySpark): the default `format` is not a timestamp.
+
+### `unwrap_udt`
+
+```python
+def unwrap_udt(col: ColumnOrName) -> Column
+```
+
+Not available: user-defined types are not implemented.
 
 ### `upper`
 
@@ -3008,6 +4209,94 @@ def width_bucket(v: ColumnOrName, min: ColumnOrName, max: ColumnOrName, numBucke
 
 Calls the registry function `width_bucket`.
 
+### `window`
+
+```python
+def window(timeColumn: ColumnOrName, windowDuration: str, slideDuration: str | None=None, startTime: str | None=None) -> Column
+```
+
+Not available: time windows through the Column API are not implemented.
+
+### `window_time`
+
+```python
+def window_time(windowColumn: ColumnOrName) -> Column
+```
+
+Not available: time windows through the Column API are not implemented.
+
+### `xpath`
+
+```python
+def xpath(xml: ColumnOrName, path: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `xpath_boolean`
+
+```python
+def xpath_boolean(xml: ColumnOrName, path: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `xpath_double`
+
+```python
+def xpath_double(xml: ColumnOrName, path: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `xpath_float`
+
+```python
+def xpath_float(xml: ColumnOrName, path: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `xpath_int`
+
+```python
+def xpath_int(xml: ColumnOrName, path: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `xpath_long`
+
+```python
+def xpath_long(xml: ColumnOrName, path: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `xpath_number`
+
+```python
+def xpath_number(xml: ColumnOrName, path: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `xpath_short`
+
+```python
+def xpath_short(xml: ColumnOrName, path: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
+### `xpath_string`
+
+```python
+def xpath_string(xml: ColumnOrName, path: ColumnOrName) -> Column
+```
+
+Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+
 ### `xxhash64`
 
 ```python
@@ -3024,6 +4313,14 @@ def year(col: ColumnOrName) -> Column
 
 Calls the registry function `year`.
 
+### `years`
+
+```python
+def years(col: ColumnOrName) -> Column
+```
+
+Not available: partitioning transforms are not implemented.
+
 ### `zeroifnull`
 
 ```python
@@ -3031,3 +4328,11 @@ def zeroifnull(col: ColumnOrName) -> Column
 ```
 
 Calls the registry function `zeroifnull`.
+
+### `zip_with`
+
+```python
+def zip_with(left: ColumnOrName, right: ColumnOrName, f: Callable[[Column, Column], Column]) -> Column
+```
+
+The arrays `left` and `right` merged element by element with `f(l, r)`.

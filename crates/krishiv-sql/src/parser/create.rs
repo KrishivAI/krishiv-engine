@@ -49,6 +49,11 @@ impl Parser<'_> {
     pub(super) fn create_command_inner(&mut self) -> PR<Statement> {
         let start = self.start();
         self.expect_kw("CREATE")?;
+        // `OR` is followed by `REPLACE` only: the error stands at the word after it.
+        if self.kw_at(0, "OR") && !self.kw_at(1, "REPLACE") && self.tok(1).is_some() {
+            self.pos += 1;
+            return self.fail();
+        }
         let or_replace = if self.kw_at(0, "OR") && self.kw_at(1, "REPLACE") {
             self.pos += 2;
             true
@@ -73,6 +78,15 @@ impl Parser<'_> {
         let temporary = self.eat_kw("TEMP") || self.eat_kw("TEMPORARY");
         if self.kw_at(0, "FUNCTION") {
             return self.create_function_command(start, false, temporary);
+        }
+        if !temporary && self.kw_at(0, "FLOW") {
+            return self.create_flow_command(start);
+        }
+        if !temporary
+            && ((self.kw_at(0, "MATERIALIZED") && self.kw_at(1, "VIEW"))
+                || (self.kw_at(0, "STREAMING") && self.kw_at(1, "TABLE")))
+        {
+            return self.create_pipeline_dataset_command(start);
         }
         let external = self.eat_kw("EXTERNAL");
         if self.kw_at(0, "TABLE") {
@@ -344,6 +358,81 @@ impl Parser<'_> {
     ) -> PR<Statement> {
         self.nested(|p| {
             p.expect_kw("TABLE")?;
+            p.create_table_after_keyword(start, or_replace, temporary, external)
+        })
+    }
+
+    /// `CREATE MATERIALIZED VIEW | STREAMING TABLE [IF NOT EXISTS] name [(columns)] [clauses] [AS query]`,
+    /// after the `CREATE` at `start`: the `CREATE TABLE` clauses over a pipeline dataset.
+    pub(super) fn create_pipeline_dataset_command(&mut self, start: usize) -> PR<Statement> {
+        self.nested(|p| {
+            let kind = if p.eat_kw("MATERIALIZED") {
+                p.expect_kw("VIEW")?;
+                PipelineDatasetKind::MaterializedView
+            } else {
+                p.expect_kw("STREAMING")?;
+                p.expect_kw("TABLE")?;
+                PipelineDatasetKind::StreamingTable
+            };
+            if p.kw_at(0, "LIKE") {
+                return p.fail();
+            }
+            match p.create_table_after_keyword(start, false, false, false)? {
+                Statement::CreateTable(table) => {
+                    let span = table.span;
+                    Ok(Statement::CreatePipelineDataset(Box::new(
+                        CreatePipelineDataset {
+                            kind,
+                            table: *table,
+                            span,
+                        },
+                    )))
+                }
+                _ => p.fail(),
+            }
+        })
+    }
+
+    /// `CREATE FLOW name [COMMENT '...'] AS INSERT ...`, after the `CREATE` at `start`.
+    pub(super) fn create_flow_command(&mut self, start: usize) -> PR<Statement> {
+        self.nested(|p| {
+            p.expect_kw("FLOW")?;
+            let name = p.ddl_name()?;
+            let comment = if p.eat_kw("COMMENT") {
+                Some(p.string_after()?)
+            } else {
+                None
+            };
+            p.expect_kw("AS")?;
+            let clause_start = p.start();
+            p.expect_kw("INSERT")?;
+            let clause = p.insert_clause(clause_start, false)?;
+            let insert_span = p.span_from(clause_start);
+            let span = p.span_from(start);
+            p.command_end()?;
+            Ok(Statement::CreateFlow(Box::new(CreateFlow {
+                name,
+                comment,
+                insert: Insert {
+                    source: None,
+                    clauses: vec![clause],
+                    span: insert_span,
+                },
+                span,
+            })))
+        })
+    }
+
+    /// The part of `CREATE TABLE` after the `TABLE` keyword.
+    fn create_table_after_keyword(
+        &mut self,
+        start: usize,
+        or_replace: bool,
+        temporary: bool,
+        external: bool,
+    ) -> PR<Statement> {
+        let p = self;
+        {
             let if_not_exists =
                 if !or_replace && p.kw_at(0, "IF") && p.kw_at(1, "NOT") && p.kw_at(2, "EXISTS") {
                     p.pos += 3;
@@ -551,7 +640,7 @@ impl Parser<'_> {
                 duplicate_clause,
                 span,
             })))
-        })
+        }
     }
 
     /// A `CREATE TABLE` element: a table constraint, or a column

@@ -392,6 +392,8 @@ impl Walker<'_> {
             PlanNode::Limit { input, .. }
             | PlanNode::Offset { input, .. }
             | PlanNode::JoinHint { input, .. }
+            // `TABLESAMPLE` keeps some input rows, by a draw that reads no column.
+            | PlanNode::Sample { input, .. }
             | PlanNode::ReplicateRows { input, .. } => Ok(Rule::Same(self.plan(input, offset)?)),
             PlanNode::SubqueryAlias { input, alias, .. } => self.alias(p, input, alias, offset),
             PlanNode::WithCte { input, ctes } => {
