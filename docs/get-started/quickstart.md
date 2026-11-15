@@ -6,7 +6,7 @@ description: "Install the Python package and run your first SQL and DataFrame qu
 
 <!-- The code blocks equal the Quickstart section of the repository README (a test checks it); CI runs the README's. -->
 
-Nothing is published to PyPI yet: build the wheel from the repository (`maturin build`) and install it. Once released:
+Krishiv 0.2 is on PyPI (you can also build the wheel from the repository with `maturin build`):
 
 ```bash
 pip install krishiv

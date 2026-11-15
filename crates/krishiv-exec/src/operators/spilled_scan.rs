@@ -55,6 +55,8 @@ struct SpilledLocal {
     executor: Arc<dyn Executor>,
     rows: ScanRows,
     partition: u32,
+    /// The first partition id of the driver's group member.
+    base: u32,
     started: bool,
     done: bool,
 }
@@ -107,7 +109,9 @@ impl SpilledScan {
             if piece.num_rows() == 0 {
                 break;
             }
-            let mask = filter.evaluate_in(piece.data(), local.partition)?;
+            // Spark's partition index: a `UNION ALL` branch numbers its own.
+            let mask =
+                filter.evaluate_in(piece.data(), local.partition.wrapping_sub(local.base))?;
             piece = piece.filter(&mask)?;
         }
         if piece.num_rows() > 0
@@ -192,6 +196,7 @@ impl Source for SpilledScan {
             executor: Arc::clone(ctx.executor()),
             rows,
             partition: ctx.partition(),
+            base: ctx.partition_base(),
             started: false,
             done: false,
         }))

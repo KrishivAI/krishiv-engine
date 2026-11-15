@@ -229,6 +229,9 @@ do not see it, as in Spark. `system.caches` lists the session's live checkpoints
 
 ## `krishiv server` (Spark Connect)
 
+> The Spark Connect server is not part of the 0.2 release; `krishiv server` in 0.2 serves the web UI and admin API
+> only. The behaviour below is what the Spark Connect server is built to do, and it does not apply to 0.2.
+
 - **The Connect listener binds `127.0.0.1` by default.** Spark binds every interface when
   `spark.connect.grpc.binding.address` is unset. A non-loopback address needs authentication, so `krishiv server`
   refuses to start on one until authentication is configured.

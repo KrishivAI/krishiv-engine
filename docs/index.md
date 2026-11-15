@@ -1,18 +1,19 @@
 ---
-description: "Krishiv is a Rust-native, Spark-compatible engine for batch SQL, DataFrames and streaming, with no JVM."
+description: "Krishiv is a Rust-native, Spark-compatible engine for batch SQL and DataFrames, in process and with no JVM."
 ---
 
 # Krishiv documentation
 
-Krishiv is a Rust-native, Apache Spark-compatible compute engine: batch SQL, DataFrames, streaming and incrementally
-maintained views on one vectorized, Arrow-native engine, with no JVM. Keep the PySpark and Spark SQL you already
-write.
+Krishiv is a Rust-native, Apache Spark-compatible compute engine for batch SQL and DataFrames. It runs in your
+process, on one vectorized, Arrow-native engine, with no JVM. Keep the PySpark and Spark SQL you already write.
 
-> Krishiv 0.2 is released on PyPI and crates.io. APIs can change before 1.0.
+> **Krishiv 0.2 is the embedded core.** In-process batch SQL and DataFrames from Python and Rust. Streaming,
+> incremental views, Spark Connect and distributed execution are not in this release. The APIs are not stable yet.
 
 ## Install
 
-Install with `pip install krishiv`; the [Quickstart](get-started/quickstart.md) has the steps.
+Krishiv 0.2 is on PyPI: `pip install krishiv`. The [Quickstart](get-started/quickstart.md) has the steps.
+You can also build the wheel from the repository (`maturin build` in `python/`).
 
 ## Where to start
 
