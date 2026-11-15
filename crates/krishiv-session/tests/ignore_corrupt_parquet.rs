@@ -5,7 +5,7 @@
 //! `spark.sql.parquet.mergeSchema`. Expected answers: a Spark 4.2.0 run
 //! (`spark-shell`, `local[1]`) over the same layout, a 1,000-row file of
 //! `id BIGINT, s STRING` written by Spark, cut to half its length or by its
-//! last 3 bytes.
+//! last 3 bytes (`tests/scripts/ignore_corrupt_parquet.scala`).
 #![cfg(test)]
 
 use std::path::{Path, PathBuf};
