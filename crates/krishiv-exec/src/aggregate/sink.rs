@@ -1576,9 +1576,12 @@ impl Sink for HashAggregate {
         inner.tables.insert(at, (partition, table, reservation));
         // The last driver's signal stays live through `finalize`.
         let spillable = self.core.spec.spill.is_some();
-        signal.set_spillable_bytes(if spillable { held(&inner) } else { 0 });
         if let Some(c) = &g.spill_combined {
+            // The tables are the combined consumer's: its hook offers them.
+            signal.set_spillable_bytes(0);
             c.hook.set_spillable_bytes(held(&inner));
+        } else {
+            signal.set_spillable_bytes(if spillable { held(&inner) } else { 0 });
         }
         Ok(())
     }
@@ -1651,11 +1654,16 @@ impl Sink for HashAggregate {
             let mut combined = {
                 let mut inner = lock(&g.inner);
                 g.combined.store(0, AtomicOrdering::Relaxed);
+                // Under the lock: a `combine` after it publishes its own.
+                if let Some(c) = g
+                    .spill_combined
+                    .as_ref()
+                    .filter(|_| !inner.tables.is_empty())
+                {
+                    c.hook.set_spillable_bytes(0);
+                }
                 std::mem::take(&mut inner.tables)
             };
-            if let Some(c) = g.spill_combined.as_ref().filter(|_| !combined.is_empty()) {
-                c.hook.set_spillable_bytes(0);
-            }
             let freed_combined: usize = combined.iter().map(|(_, _, r)| r.size()).sum();
             let own = if l.table.not_worth_spilling() {
                 None
@@ -1724,7 +1732,10 @@ impl Sink for HashAggregate {
                     inner.spill_asked = true;
                     return Ok(0);
                 }
-                if inner.busy || g.done.get().is_some() {
+                // A write of the combined tables' hook is in flight: its
+                // runs are not in `runs` yet, and a free job would start
+                // the disk phase without them.
+                if inner.busy || inner.hook_writing || g.done.get().is_some() {
                     return Ok(0);
                 }
                 let before = held(&inner);

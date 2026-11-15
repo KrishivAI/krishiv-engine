@@ -15,9 +15,9 @@
 //! With a spill scope, [`CombinedSpill`] gives the combined tables a
 //! consumer of their own whose hook ([`crate::output_spill`]) writes them
 //! as spill runs on a task of its own, as a running driver's spill would.
-//! Once `finalize` begins ([`Inner::finalizing`]) the hook frees nothing:
+//! Once `finalize` begins (`Inner::finalizing`) the hook frees nothing:
 //! the finalizing driver's own hook serves the tables from then on. A
-//! `finalize` waits for a hook write in progress ([`Inner::hook_writing`]),
+//! `finalize` waits for a hook write in progress (`Inner::hook_writing`),
 //! so it sees the tables either in memory or as runs, never neither.
 
 use std::sync::atomic::Ordering as AtomicOrdering;
@@ -74,7 +74,7 @@ struct CombinedSpill {
     executor: Arc<dyn Executor>,
 }
 
-/// Clears [`Inner::hook_writing`] and wakes a waiting `finalize`, on every
+/// Clears `Inner::hook_writing` and wakes a waiting `finalize`, on every
 /// path (a cancelled query drops the spill mid-write).
 struct Writing(Arc<Global>);
 
@@ -93,17 +93,20 @@ impl SpillUnread for CombinedSpill {
             };
             let tables = {
                 let mut inner = lock(&g.inner);
-                if inner.finalizing || inner.tables.is_empty() {
+                // The finalize state owns the tables once `finalize` began
+                // (or a free job or the disk phase took over).
+                if inner.finalizing || inner.busy || inner.disk || inner.tables.is_empty() {
                     return Ok(0);
                 }
                 inner.hook_writing = true;
                 g.combined.store(0, AtomicOrdering::Relaxed);
+                // Under the lock: a `combine` after it publishes its own.
+                if let Some(c) = &g.spill_combined {
+                    c.hook.set_spillable_bytes(0);
+                }
                 std::mem::take(&mut inner.tables)
             };
             let writing = Writing(Arc::clone(&g));
-            if let Some(c) = &g.spill_combined {
-                c.hook.set_spillable_bytes(0);
-            }
             let freed: usize = tables.iter().map(|(_, _, r)| r.size()).sum();
             let s = self.spiller.clone();
             let guard = s.query.blocking_started();
@@ -111,7 +114,8 @@ impl SpillUnread for CombinedSpill {
             // released (`ConsumerHandle::spilling`). No arbitration inside:
             // the writes run on the blocking pool, their scratch a sync grow.
             let _spilling = s.consumer.spilling();
-            let runs = run_blocking(&*self.executor, move || {
+            let query = Arc::clone(&s.query);
+            let written = run_blocking(&*self.executor, move || {
                 let _guard = guard;
                 let mut runs = Vec::with_capacity(tables.len());
                 for (p, t, mut r) in tables {
@@ -120,7 +124,16 @@ impl SpillUnread for CombinedSpill {
                 }
                 Ok(runs)
             })
-            .await?;
+            .await;
+            let runs = match written {
+                Ok(runs) => runs,
+                Err(e) => {
+                    // The tables are gone: the query fails before `finalize`
+                    // (waiting on this write) can run on what is left.
+                    query.fail(e.clone());
+                    return Err(e);
+                }
+            };
             lock(&g.inner).runs.extend(runs);
             drop(writing);
             Ok(freed)

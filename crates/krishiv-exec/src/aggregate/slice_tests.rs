@@ -541,3 +541,120 @@ async fn combined_tables_spill_when_a_round_asks_them() {
     drop((sl, sg, src, g, coordinator));
     assert_eq!(root.reserved(), 0, "memory still held");
 }
+
+/// While the combined tables' hook writes them, the last driver's
+/// `spill_global` frees nothing: a free job would start the disk phase
+/// before the hook's runs reach `runs`, and those groups would be lost.
+/// Every group of both drivers comes back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spill_global_waits_out_a_combined_tables_write() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::mpsc;
+    let dir = tempfile::Builder::new()
+        .prefix("krishiv-slice-")
+        .tempdir()
+        .unwrap();
+    let manager = krishiv_memory::SpillManager::open(&krishiv_memory::SpillConfig {
+        dir: dir.path().join("spill"),
+        ..krishiv_memory::SpillConfig::default()
+    })
+    .unwrap();
+    let scope = manager.scope().unwrap();
+    // The first spill writer (the hook's) says so and waits for `release`.
+    let (entered_tx, entered_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let gate = std::sync::Mutex::new((entered_tx, release_rx));
+    let calls = AtomicUsize::new(0);
+    scope.set_test_writer_hook(Arc::new(move || {
+        if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            let g = gate.lock().unwrap();
+            g.0.send(()).unwrap();
+            g.1.recv().unwrap();
+        }
+    }));
+    let root = TreePool::with_clock(
+        &MemoryConfig {
+            quantum: 16 << 10,
+            ..MemoryConfig::default()
+        },
+        Arc::new(TokioClock),
+    );
+    let pool: Arc<dyn MemoryPool> = root.child("q", Some(64 << 20));
+    let q = QueryContext::new(
+        QueryId(1),
+        WorkloadClass::Batch,
+        ExecConfig::default(),
+        pool,
+    );
+    let executor: Arc<dyn Executor> =
+        TokioExecutor::new(&crate::ExecutorConfig::default()).unwrap();
+    let task = || {
+        TaskContext::new(
+            Arc::clone(&q),
+            Arc::clone(&executor),
+            SpillOwner::new(),
+            OperatorId(0),
+            "agg",
+        )
+    };
+    let spec = AggregateSpec {
+        spill: Some(scope),
+        ..spec(false)
+    };
+    let agg = HashAggregate::new(spec).unwrap();
+    let coordinator = task();
+    let g = Sink::global_state(&*agg, &coordinator).unwrap();
+    // Driver D (the last) folds its keys; driver B folds others, combines
+    // and ends.
+    let (b, d) = (task(), task());
+    let mut ld = Sink::local_state(&*agg, &d, &g).unwrap();
+    let mut lb = Sink::local_state(&*agg, &b, &g).unwrap();
+    let ok = |s: SinkStatus| assert!(matches!(s, SinkStatus::NeedMoreInput));
+    ok(agg
+        .sink(batch(false, 0, 0..ROWS as i64), &mut ld, &g)
+        .unwrap());
+    ok(agg
+        .sink(
+            batch(false, 10_000, ROWS as i64..2 * ROWS as i64),
+            &mut lb,
+            &g,
+        )
+        .unwrap());
+    agg.combine(lb, &g).unwrap();
+    drop(b);
+    // A request in the query that only a spill funds: the hook takes B's
+    // table and its write stops at the gate.
+    let pool = Arc::clone(q.pool());
+    let mut ballast = ConsumerHandle::register(Arc::clone(&pool), "ballast", None).reservation();
+    let free = match ballast.try_grow(usize::MAX >> 1) {
+        Err(krishiv_memory::MemoryError::Exhausted { available, .. }) => available,
+        other => panic!("{other:?}"),
+    };
+    ballast.try_grow(free).unwrap();
+    let mut wants = ConsumerHandle::register(pool, "wants", None).reservation();
+    let asked = tokio::spawn(async move { wants.grow(64 << 10).await.map(|()| wants) });
+    tokio::task::spawn_blocking(move || entered_rx.recv().unwrap())
+        .await
+        .unwrap();
+    // D combines and, as the last driver, services a spill request.
+    agg.combine(ld, &g).unwrap();
+    assert_eq!(
+        agg.spill_global(&g, 1, &d).await.unwrap(),
+        0,
+        "a free job ran while the hook wrote"
+    );
+    release_tx.send(()).unwrap();
+    let wants = asked.await.unwrap().unwrap();
+    drop((wants, ballast));
+    agg.finalize(&g, &d).await.unwrap();
+    let src = d.with_dependency(Arc::clone(&g));
+    let sg = Source::global_state(&*agg, &src).unwrap();
+    let mut sl = Source::local_state(&*agg, &src, &sg).unwrap();
+    let mut groups = 0;
+    while let Some(out) = agg.get_data(&mut sl, &sg).await.unwrap() {
+        groups += out.data().num_rows();
+    }
+    assert_eq!(groups, 2 * ROWS);
+    drop((sl, sg, src, g, coordinator));
+    assert_eq!(root.reserved(), 0, "memory still held");
+}

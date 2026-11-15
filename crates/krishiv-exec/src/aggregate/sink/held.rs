@@ -40,8 +40,8 @@ pub(super) fn shrink_to(r: &mut Reservation, keep: usize) {
 }
 
 /// Moves the combined tables' bytes to the spilling driver's consumer
-/// (another driver's, combined into the global state, without passing
-/// through the pool) and marks that consumer as writing until the returned
+/// (from the combined tables' own consumer, or with no spill scope another
+/// driver's, without passing through the pool) and marks that consumer as writing until the returned
 /// guard drops: until the tables are freed, their bytes count as about to
 /// be released, so another driver's round that cannot spill waits for them
 /// instead of failing (`ConsumerHandle::spilling`). Take it only for a
