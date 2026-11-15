@@ -809,32 +809,37 @@ fn check_nested_ids(
     }
 }
 
-#[test]
-fn column_mapping_writes_physical_names_and_field_ids() {
+/// The kernel schema of the footer of the data file at `path` (relative to the table root).
+fn footer_schema(env: &Env, path: &str) -> delta_kernel::schema::SchemaRef {
     use delta_kernel::ParquetHandler as _;
-    let env = Env::fixture("write-features/column-mapping");
-    let table = env.open().unwrap();
-    env.write(&table, WriteMode::Append, vec![one_row(&table)], &[])
-        .unwrap();
-    let add = &adds(&env.log(env.latest()))[0];
-    let path = env.dir.join(add["path"].as_str().unwrap());
+    let path = env.dir.join(path);
     let size = std::fs::metadata(&path).unwrap().len();
     let meta = delta_kernel::FileMeta {
         location: Url::from_file_path(&path).unwrap(),
         last_modified: 0,
         size,
     };
-    let footer = env
-        .rt
+    env.rt
         .block_on(
             env.engine
                 .delta_blocking(move |e| e.parquet().read_parquet_footer(&meta)),
         )
         .unwrap()
+        .unwrap()
+        .schema
+}
+
+#[test]
+fn column_mapping_writes_physical_names_and_field_ids() {
+    let env = Env::fixture("write-features/column-mapping");
+    let table = env.open().unwrap();
+    env.write(&table, WriteMode::Append, vec![one_row(&table)], &[])
         .unwrap();
+    let add = &adds(&env.log(env.latest()))[0];
+    let footer = footer_schema(&env, add["path"].as_str().unwrap());
     let schema = env.open().unwrap().snapshot().schema();
     let mut checked = Vec::new();
-    check_field_ids(&schema, &footer.schema, "", &mut checked);
+    check_field_ids(&schema, &footer, "", &mut checked);
     // `id`, `s` and the nested `s.x`, each with its own id and physical name.
     assert!(checked.len() >= 3, "{checked:?}");
     assert!(checked.iter().any(|p| p == "s.x"), "{checked:?}");
@@ -842,4 +847,5 @@ fn column_mapping_writes_physical_names_and_field_ids() {
     assert_eq!(ids(&env.read(&env.open().unwrap())), vec![1, 2]);
 }
 
+mod readback;
 mod streaming;

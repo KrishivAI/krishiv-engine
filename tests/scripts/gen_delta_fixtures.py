@@ -23,6 +23,9 @@ then copy ``$OUT/*`` to ``tests/fixtures/delta-4.4.1/``. Each table's ``EXPECTED
 records the rows Spark reads back (ordered by ``id``) and the files of ``_delta_log``, so the
 consuming test checks what the oracle wrote, never a hand-written value.
 
+``... /out readback /in`` has Spark read the Krishiv-written tables under ``/in``
+(``tests/fixtures/delta-4.4.1/krishiv-written/``) and records ``READBACK.json`` there.
+
 PR-08b's read-path tables (``scan_tables``) are written by ``... /out scan`` (only those, so the
 checkpoint tables keep their bytes): deletion vectors, column mapping ``name`` and ``id`` (a
 rename, a nested rename and a drop), type widening (``int`` to ``bigint`` and ``float`` to
@@ -988,8 +991,67 @@ def write_feature_tables(spark: SparkSession, out: str) -> None:
         f.write("\n")
 
 
-def main(out: str, which: str = "checkpoint") -> None:
+def readback(spark: SparkSession, out: str, src: str) -> None:
+    """Spark reads the Krishiv-written tables under ``src`` (``krishiv-written/``, made by the
+    connector's ``write_readback_tables``): per table its rows as ``to_json(struct(*))`` by
+    ``id``, ``DESCRIBE HISTORY`` (version and operation), the protocol, a data-skipping count
+    (``id >= 2``) and an append of its own, made on a copy under ``out``. Writes
+    ``out/READBACK.json``."""
+    from pyspark.sql.functions import col, struct, to_json
+
+    tables: dict = {}
+    for name in sorted(os.listdir(src)):
+        path = os.path.join(src, name)
+        if not os.path.isdir(os.path.join(path, "_delta_log")):
+            continue
+        record: dict = {"error": None}
+        try:
+            df = spark.read.format("delta").load(path)
+            record["rows"] = [
+                r[0] for r in df.orderBy("id").select(to_json(struct(*[col(c) for c in df.columns]))).collect()
+            ]
+            record["count_id_ge_2"] = df.where("id >= 2").count()
+            history = spark.sql(f"DESCRIBE HISTORY delta.`{path}`").orderBy("version").collect()
+            record["history"] = [{"version": h["version"], "operation": h["operation"]} for h in history]
+            record["protocol"] = protocol(path)
+        except Exception as e:  # the oracle's error is the record
+            record["error"] = oracle_error(e, path)
+            tables[name] = record
+            continue
+        copy = os.path.join(out, name)
+        shutil.copytree(path, copy)
+        try:
+            df.orderBy("id").limit(1).write.format("delta").mode("append").save(copy)
+            record["spark_append"] = {
+                "error": None,
+                "rows": spark.read.format("delta").load(copy).count(),
+                "protocol": protocol(copy),
+            }
+        except Exception as e:
+            record["spark_append"] = {"error": oracle_error(e, copy)}
+        tables[name] = record
+    with open(os.path.join(out, "READBACK.json"), "w") as f:
+        json.dump(
+            {
+                "format_version": FORMAT_VERSION,
+                "generator": "tests/scripts/gen_delta_fixtures.py readback",
+                "spark": spark.version,
+                "delta_spark": "4.4.1",
+                "tables": tables,
+            },
+            f,
+            indent=1,
+            sort_keys=True,
+        )
+        f.write("\n")
+
+
+def main(out: str, which: str = "checkpoint", src: str = "") -> None:
     spark = session()
+    if which == "readback":
+        readback(spark, out, src)
+        spark.stop()
+        return
     if which == "writes":
         stats_table(spark, out)
         write_modes(spark, out)
@@ -1045,4 +1107,4 @@ def main(out: str, which: str = "checkpoint") -> None:
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:3])
+    main(*sys.argv[1:4])

@@ -567,10 +567,13 @@ fn physical(
         .fields()
         .iter()
         .map(|f| {
-            slice
+            let c = slice
                 .column_by_name(f.name())
-                .cloned()
-                .ok_or_else(|| internal(&format!("the column {} is not written", f.name())))
+                .ok_or_else(|| internal(&format!("the column {} is not written", f.name())))?;
+            // The kernel's logical schema labels nested fields with their column-mapping
+            // metadata; the rows' types differ only in labels.
+            crate::engine::relabel::relabel(c, f.data_type())
+                .map_err(|e| internal(&format!("the column {}: {e}", f.name())))
         })
         .collect::<Result<Vec<_>, _>>()?;
     let input = RecordBatch::try_new(Arc::clone(&part.input_schema), columns)

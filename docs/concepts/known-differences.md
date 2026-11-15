@@ -301,7 +301,9 @@ Krishiv writes Delta tables through `delta_kernel` and its own writer (`krishiv-
 `tests/fixtures/delta-4.4.1/`); these parts of the log differ:
 
 - **Protocol.** A table Krishiv creates carries the table-features protocol (reader 3, writer 7)
-  where delta-spark writes (1, 2) for a table with no features.
+  where delta-spark writes (1, 2) for a table with no features. Spark 4.2 with delta-spark 4.4.1
+  reads such tables and appends to them, keeping the protocol
+  (`tests/fixtures/delta-4.4.1/krishiv-written/READBACK.json`).
 - **Operation names.** A CTAS commit records the kernel's `CREATE TABLE` (delta-spark: `CREATE TABLE
   AS SELECT`) with the kernel's parameters; a v1 `saveAsTable` overwrite of an existing table is
   recorded as `WRITE` (delta-spark: `CREATE OR REPLACE TABLE AS SELECT`).
