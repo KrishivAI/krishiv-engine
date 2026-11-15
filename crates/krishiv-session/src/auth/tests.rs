@@ -645,6 +645,7 @@ fn failure_logs_never_contain_the_token() {
     let sink = Sink::default();
     let writer = sink.clone();
     let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
         .with_max_level(tracing::Level::TRACE)
         .with_writer(move || writer.clone())
         .finish();

@@ -26,6 +26,7 @@ libfuzzer_sys::fuzz_target!(|data: &[u8]| {
                         principal_claim: "sub",
                         role_claim: "groups",
                         skew_secs: 60,
+                        max_lifetime_secs: 24 * 3600,
                     };
                     if let Ok(id) = jose::check_claims(&jws.claims, &rules, 1_800_000_000) {
                         assert!(!id.principal.is_empty());

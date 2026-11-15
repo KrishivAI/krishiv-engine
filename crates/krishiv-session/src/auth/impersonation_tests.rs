@@ -383,6 +383,7 @@ fn audit_event_has_no_token_text() {
     let sink = Sink::default();
     let writer = sink.clone();
     let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
         .with_max_level(tracing::Level::TRACE)
         .with_writer(move || writer.clone())
         .finish();
