@@ -232,8 +232,9 @@ message RowLevelWriteRequest {
   string table_name = 2;
   // The rows the sink receives (Arrow IPC `Schema` flatbuffer).
   bytes input_schema = 3;
-  // The files the rewrite replaces.
-  repeated string touched = 4;
+  // The files the rewrite replaces (encoded file references, the values of
+  // `_krishiv_row_file`).
+  repeated bytes touched = 4;
   // The statement's condition (an expression table index); absent: every row was read.
   optional uint32 read_filter = 5;
   // Plain text only, as `TableWriteRequest.options`.

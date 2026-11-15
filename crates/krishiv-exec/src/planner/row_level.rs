@@ -120,7 +120,7 @@ pub struct RowLevelWrite {
     pub input_schema: SchemaRef,
     /// The files the rewrite replaces: values of `_krishiv_row_file` (the scan's encoded file
     /// references), each once.
-    pub touched: Vec<String>,
+    pub touched: Vec<Vec<u8>>,
     /// The statement's condition, for the table's conflict check (`None`: every row was read).
     pub read_filter: Option<Arc<Expr>>,
     /// The statement's options (`WITH (...)`), keys as written.
@@ -136,7 +136,7 @@ impl RowLevelWrite {
         op: RowLevelOperation,
         table_name: impl Into<String>,
         input_schema: SchemaRef,
-        touched: Vec<String>,
+        touched: Vec<Vec<u8>>,
         read_filter: Option<Arc<Expr>>,
     ) -> Self {
         Self {
@@ -168,7 +168,7 @@ pub trait RowLevelTable: Send + Sync + fmt::Debug {
     ///
     /// # Errors
     /// Errors opening the table; a file not in the snapshot.
-    fn scan_files(&self, files: &[String]) -> Result<Arc<dyn ScanPushdown>>;
+    fn scan_files(&self, files: &[Vec<u8>]) -> Result<Arc<dyn ScanPushdown>>;
 
     /// The sink of a copy-on-write rewrite. Its finalize commits atomically, with
     /// `request.write_id` as the idempotency key: `request.touched` are removed and the files
@@ -231,9 +231,10 @@ impl RowIdScan {
             ));
         }
         let mut fields: Vec<FieldRef> = table.fields().iter().cloned().collect();
+        // The type the file scan's row id column has (`FileScan::with_row_id`).
         fields.push(Arc::new(Field::new(
             ROW_FILE_COLUMN,
-            DataType::Binary,
+            DataType::BinaryView,
             false,
         )));
         fields.push(Arc::new(Field::new(

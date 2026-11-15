@@ -292,9 +292,10 @@ pub struct RowLevelWriteRequest {
     /// The rows the sink receives (Arrow IPC `Schema` flatbuffer).
     #[prost(bytes = "vec", tag = "3")]
     pub input_schema: ::prost::alloc::vec::Vec<u8>,
-    /// The files the rewrite replaces.
-    #[prost(string, repeated, tag = "4")]
-    pub touched: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// The files the rewrite replaces (encoded file references, the values of
+    /// `_krishiv_row_file`).
+    #[prost(bytes = "vec", repeated, tag = "4")]
+    pub touched: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
     /// The statement's condition (an expression table index); absent: every row was read.
     #[prost(uint32, optional, tag = "5")]
     pub read_filter: ::core::option::Option<u32>,

@@ -1137,7 +1137,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                     RowLevelOperation::Delete,
                     "`t`",
                     written_schema(),
-                    vec!["part-0.parquet".to_owned()],
+                    vec![b"part-0.parquet".to_vec()],
                     Some(predicate()),
                 )),
             },
