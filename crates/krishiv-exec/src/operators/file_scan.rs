@@ -1252,7 +1252,7 @@ impl FileScanSource {
             return Ok(Vec::new());
         }
         if let Some(constants) = &self.constants {
-            let values = constants.get(&file.path).ok_or_else(|| {
+            let values = constants.get(&file.store, &file.path).ok_or_else(|| {
                 internal(format!(
                     "no constant column values for {}",
                     file.display_path()

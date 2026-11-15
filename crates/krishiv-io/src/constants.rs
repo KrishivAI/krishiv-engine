@@ -6,7 +6,7 @@
 //!
 //! A scan given [`FileConstants`] reads those columns from them, never from
 //! the files, exactly as it reads Hive partition columns from the directories:
-//! the values are carried with the file (keyed by its path), so a distributed
+//! the values are carried with the file (keyed by its store and path), so a distributed
 //! task's files find theirs however the splits were cut.
 
 use std::collections::HashMap;
@@ -21,6 +21,7 @@ use arrow_schema::{DataType, Field, TimeUnit};
 use krishiv_kernels::cast::{CastMode, CastOptions, FixedOffset, cast};
 use object_store::path::Path;
 
+use crate::StoreId;
 use crate::error::{Result, internal};
 use crate::request::ScalarValue;
 
@@ -28,7 +29,7 @@ use crate::request::ScalarValue;
 /// constant columns (see the module docs).
 #[derive(Debug, Clone, Default)]
 pub struct FileConstants {
-    by_path: HashMap<Path, Arc<[ScalarValue]>>,
+    by_file: HashMap<(StoreId, Path), Arc<[ScalarValue]>>,
 }
 
 impl FileConstants {
@@ -38,27 +39,30 @@ impl FileConstants {
         Self::default()
     }
 
-    /// Sets the values of the file at `path` (one per constant column).
-    pub fn insert(&mut self, path: Path, values: Vec<ScalarValue>) {
-        self.by_path.insert(path, values.into());
+    /// Sets the values of the file at `path` in `store` (one per constant
+    /// column). Two stores may hold the same path: the store is part of the key.
+    pub fn insert(&mut self, store: StoreId, path: Path, values: Vec<ScalarValue>) {
+        self.by_file.insert((store, path), values.into());
     }
 
-    /// The values of the file at `path`.
+    /// The values of the file at `path` in `store`.
     #[must_use]
-    pub fn get(&self, path: &Path) -> Option<&[ScalarValue]> {
-        self.by_path.get(path).map(AsRef::as_ref)
+    pub fn get(&self, store: &StoreId, path: &Path) -> Option<&[ScalarValue]> {
+        self.by_file
+            .get(&(store.clone(), path.clone()))
+            .map(AsRef::as_ref)
     }
 
     /// How many files have values.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.by_path.len()
+        self.by_file.len()
     }
 
     /// Whether no file has values.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.by_path.is_empty()
+        self.by_file.is_empty()
     }
 }
 
@@ -119,7 +123,18 @@ pub fn scalar_column(field: &Field, value: &ScalarValue, rows: usize) -> Result<
     };
     let out = cast(&natural, target, &opts)
         .map_err(|e| internal(format!("constant {value:?} as {target}: {e}")))?;
-    if out.null_count() != 0 {
+    // The cast must be exact: a float with a fraction to an integer, or a
+    // long past a double's 53 bits, would come back as another value. Every
+    // row is the same value, so one row tells.
+    let exact = || -> Result<bool> {
+        if out.is_empty() {
+            return Ok(true);
+        }
+        let back = cast(&out.slice(0, 1), natural.data_type(), &opts)
+            .map_err(|e| internal(format!("constant {value:?} as {target}: {e}")))?;
+        Ok(back.to_data() == natural.slice(0, 1).to_data())
+    };
+    if out.null_count() != 0 || !exact()? {
         return Err(internal(format!("constant {value:?} is not a {target}")));
     }
     Ok(out)
@@ -134,17 +149,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn constants_are_keyed_by_path() {
+    fn constants_are_keyed_by_store_and_path() {
+        let (a, b) = (StoreId::new("s3://a"), StoreId::new("s3://b"));
+        let x = || Path::from("t/x.parquet");
         let mut c = FileConstants::new();
         assert!(c.is_empty());
-        c.insert(Path::from("a/x.parquet"), vec![ScalarValue::Int32(1)]);
-        c.insert(Path::from("a/y.parquet"), vec![ScalarValue::Null]);
-        assert_eq!(c.len(), 2);
-        assert!(matches!(
-            c.get(&Path::from("a/x.parquet")),
-            Some([ScalarValue::Int32(1)])
-        ));
-        assert!(c.get(&Path::from("a/z.parquet")).is_none());
+        c.insert(a.clone(), x(), vec![ScalarValue::Int32(7)]);
+        // The same path in another store is another file.
+        c.insert(b.clone(), x(), vec![ScalarValue::Int32(9)]);
+        c.insert(
+            a.clone(),
+            Path::from("t/y.parquet"),
+            vec![ScalarValue::Null],
+        );
+        assert_eq!(c.len(), 3);
+        assert!(matches!(c.get(&a, &x()), Some([ScalarValue::Int32(7)])));
+        assert!(matches!(c.get(&b, &x()), Some([ScalarValue::Int32(9)])));
+        assert!(c.get(&a, &Path::from("t/z.parquet")).is_none());
+        assert!(c.get(&StoreId::new("s3://c"), &x()).is_none());
     }
 
     #[test]
@@ -178,6 +200,14 @@ mod tests {
             1,
         );
         assert!(e.is_err());
+        // Nor is a value the cast would round.
+        let lossy = |dt: DataType, v: ScalarValue| {
+            scalar_column(&Field::new("c", dt, true), &v, 2).is_err()
+        };
+        assert!(lossy(DataType::Int64, ScalarValue::Float64(1.5)));
+        assert!(lossy(DataType::Float64, ScalarValue::Int64((1 << 53) + 1)));
+        assert!(!lossy(DataType::Int64, ScalarValue::Float64(2.0)));
+        assert!(!lossy(DataType::Float64, ScalarValue::Int64(1 << 53)));
     }
 
     /// Every scalar kind builds its column, strings and binaries in the view,

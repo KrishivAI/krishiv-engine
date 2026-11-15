@@ -518,6 +518,40 @@ fn partition_projection_per_transform() {
     assert!(!k(&PushdownExpr::IsNull(col("s"))));
 }
 
+/// `truncate[10]` of an int wraps as Java's does: `i32::MIN` lands at
+/// `2147483646`. A file with that partition holds rows below 0 and above
+/// `i32::MIN + 1`; a literal in the wrap window prunes nothing by range.
+#[test]
+fn truncate_int_partitions_wrap_near_the_minimum() {
+    use ScalarValue as S;
+    let fields = [field(1, "x", IcebergType::Int)];
+    let specs = spec(vec![pfield(
+        1000,
+        1,
+        Transform::Truncate(10),
+        IcebergType::Int,
+    )]);
+    let wrapped = transform::apply(
+        Transform::Truncate(10),
+        &IcebergType::Int,
+        &S::Int32(i32::MIN),
+    );
+    assert_eq!(wrapped, Some(S::Int32(2_147_483_646)));
+    let f = partitioned(vec![value(&S::Int32(2_147_483_646), &IcebergType::Int)]);
+    let k = |op, v| keeps(&fields, &specs, &f, &cmp("x", op, S::Int32(v)));
+    assert!(k(CmpOp::Lt, 0));
+    assert!(k(CmpOp::LtEq, -5));
+    assert!(k(CmpOp::Eq, i32::MIN));
+    // A literal in the window wraps too: no range pruning from it.
+    let normal = partitioned(vec![value(&S::Int32(20), &IcebergType::Int)]);
+    let n = |op, v| keeps(&fields, &specs, &normal, &cmp("x", op, S::Int32(v)));
+    assert!(n(CmpOp::Gt, i32::MIN + 1));
+    assert!(n(CmpOp::Lt, 25));
+    // Away from the window the projection still prunes.
+    assert!(!n(CmpOp::Lt, 10));
+    assert!(!n(CmpOp::Gt, 30));
+}
+
 /// Old Java writers computed pre-epoch time partitions toward zero: a value
 /// written as day 0 for a timestamp of -1 µs must still be found.
 #[test]

@@ -431,6 +431,16 @@ async fn plan_prunes_and_time_travels() {
         table = tx.commit(&catalog).await.unwrap();
         let s = table.metadata().current_snapshot().unwrap();
         snapshots.push((s.snapshot_id(), s.timestamp_ms()));
+        // The next commit takes a later millisecond, so time travel by
+        // timestamp has one answer (the commit time is the wall clock's).
+        let after = s.timestamp_ms();
+        while std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+            <= after
+        {
+            tokio::task::yield_now().await;
+        }
     }
     let location = table.metadata_location().unwrap().to_owned();
     let t = IcebergTable::load(&reg, &location, "db", "t")

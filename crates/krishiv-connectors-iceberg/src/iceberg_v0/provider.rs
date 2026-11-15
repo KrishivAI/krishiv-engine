@@ -442,7 +442,7 @@ fn constants(
                 Some(PartitionValue::Unreadable) | None => return Err(bad()),
             });
         }
-        out.insert(f.path.clone(), values);
+        out.insert(f.store.clone(), f.path.clone(), values);
     }
     Ok((fields, out))
 }

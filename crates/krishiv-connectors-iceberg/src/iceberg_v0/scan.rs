@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use futures::{StreamExt, TryStreamExt};
-use iceberg::io::FileIO;
+use iceberg::io::{FileIO, FileRead};
 use iceberg::spec::{
     DataContentType, DataFileFormat, FormatVersion, Literal, Manifest, ManifestContentType,
     ManifestList, ManifestStatus, NestedField, PrimitiveLiteral, PrimitiveType, Schema,
@@ -280,8 +280,11 @@ pub(crate) fn check_size(
 }
 
 /// The bytes of the metadata file at `location`, refused before the read when
-/// the store reports more than `max` bytes (and after it, if the store lied).
-async fn read_capped(
+/// its declared size (a manifest list's `manifest_length`) or the store's
+/// size is more than `max` bytes. Only that many bytes are ever fetched: a
+/// range read of the version the store listed, so a file larger than declared
+/// cannot make the read collect more.
+pub(super) async fn read_capped(
     io: &FileIO,
     what: &str,
     location: &str,
@@ -294,7 +297,8 @@ async fn read_capped(
         None => input.metadata().await.map_err(from_iceberg)?.size,
     };
     check_size(what, location, size, max)?;
-    let bytes = input.read().await.map_err(from_iceberg)?;
+    let reader = input.reader().await.map_err(from_iceberg)?;
+    let bytes = reader.read(0..size).await.map_err(from_iceberg)?;
     check_size(what, location, bytes.len() as u64, max)?;
     Ok(bytes)
 }
@@ -542,30 +546,34 @@ pub(crate) async fn plan(
         .filter(|m| m.may_have_live_files() && pruner.manifest_may_match(m))
         .collect();
     let manifests_pruned = manifests_total - kept.len();
-    let per_manifest: Vec<Vec<LiveEntry>> = futures::stream::iter(kept.iter())
-        .map(|m| manifest_entries(io, m, env.max_metadata_bytes))
-        .buffered(MANIFEST_CONCURRENCY)
-        .try_collect()
-        .await?;
     let mut out = ScanPlan {
         snapshot_id: snapshot.snapshot_id,
         manifests_total,
         manifests_pruned,
         ..ScanPlan::default()
     };
-    for entry in per_manifest.into_iter().flatten() {
-        match entry {
-            LiveEntry::Data(d) => {
-                if pruner.file_may_match(&d.file) {
-                    out.tasks.push(FileScanTask {
-                        file: Arc::new(d),
-                        residual: predicate.cloned(),
-                    });
-                } else {
-                    out.files_pruned += 1;
+    // Each manifest's entries are pruned as its read completes (in manifest
+    // order), so only the files kept stay in memory, not every entry read.
+    let mut per_manifest = std::pin::pin!(
+        futures::stream::iter(kept.iter())
+            .map(|m| manifest_entries(io, m, env.max_metadata_bytes))
+            .buffered(MANIFEST_CONCURRENCY)
+    );
+    while let Some(entries) = per_manifest.try_next().await? {
+        for entry in entries {
+            match entry {
+                LiveEntry::Data(d) => {
+                    if pruner.file_may_match(&d.file) {
+                        out.tasks.push(FileScanTask {
+                            file: Arc::new(d),
+                            residual: predicate.cloned(),
+                        });
+                    } else {
+                        out.files_pruned += 1;
+                    }
                 }
+                LiveEntry::Delete(d) => out.delete_files.push(Arc::new(d)),
             }
-            LiveEntry::Delete(d) => out.delete_files.push(Arc::new(d)),
         }
     }
     Ok(out)

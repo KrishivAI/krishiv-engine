@@ -512,3 +512,32 @@ fn arrow_schema_carries_nested_field_ids() {
         (Some("6"), Some("7"))
     );
 }
+
+/// A manifest read fetches only its declared length: a file larger than its
+/// manifest list says cannot make the read collect more (it is cut there and
+/// fails to parse); one smaller fails the read; either size past the cap is
+/// refused before any byte is read.
+#[tokio::test]
+async fn capped_reads_fetch_at_most_the_declared_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_sched, reg) = local(dir.path());
+    let io = reg.file_io();
+    let loc = format!("file://{}/m/big.avro", dir.path().display());
+    io.new_output(&loc)
+        .unwrap()
+        .write(bytes::Bytes::from(vec![7u8; 4096]))
+        .await
+        .unwrap();
+    let read = |declared, max| super::scan::read_capped(&io, "manifest", &loc, declared, max);
+    assert_eq!(read(Some(10), 100).await.unwrap().len(), 10);
+    assert_eq!(read(None, 8192).await.unwrap().len(), 4096);
+    let e = read(Some(5000), 8192).await.unwrap_err();
+    assert!(!e.to_string().is_empty());
+    for (declared, max) in [(Some(200), 100), (None, 100)] {
+        let e = read(declared, max).await.unwrap_err();
+        assert!(
+            e.to_string().contains("KRISHIV_CATALOG_LIMIT_EXCEEDED"),
+            "{e}"
+        );
+    }
+}

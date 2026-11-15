@@ -491,6 +491,17 @@ fn project(pf: &PartitionFieldInfo, source: &IcebergType, op: Op<'_>, facts: &Fa
             let Some(fv) = f(v) else {
                 return true;
             };
+            // `truncate` of an int or long wraps as Java's arithmetic does: a
+            // value within `W` of the type's minimum lands near its maximum,
+            // so the transform is monotone only away from that window.
+            let wrap = wrapped_window(t, source);
+            if wrap.is_some() && !matches!(op, CmpOp::Eq | CmpOp::NotEq) && wraps(v, &fv) {
+                return true;
+            }
+            let wrapped_kept = || {
+                wrap.as_ref()
+                    .is_some_and(|w| facts.may_match(Op::Cmp(CmpOp::Gt, w)))
+            };
             match (t, op) {
                 (Transform::Bucket(_), CmpOp::Eq) => facts.may_match(Op::Cmp(CmpOp::Eq, &fv)),
                 (Transform::Bucket(_), _) | (_, CmpOp::NotEq) => true,
@@ -500,7 +511,7 @@ fn project(pf: &PartitionFieldInfo, source: &IcebergType, op: Op<'_>, facts: &Fa
                 (_, CmpOp::Lt | CmpOp::LtEq) => {
                     let hi = widened(t, &fv);
                     let top = hi.last().unwrap_or(&fv);
-                    facts.may_match(Op::Cmp(CmpOp::LtEq, top))
+                    facts.may_match(Op::Cmp(CmpOp::LtEq, top)) || wrapped_kept()
                 }
                 (_, CmpOp::Gt | CmpOp::GtEq) => facts.may_match(Op::Cmp(CmpOp::GtEq, &fv)),
             }
@@ -521,6 +532,31 @@ fn project(pf: &PartitionFieldInfo, source: &IcebergType, op: Op<'_>, facts: &Fa
             }
             _ => true,
         },
+    }
+}
+
+/// For `truncate[W]` of an int or long, the value every wrapped partition value
+/// lies above (`MAX - W`: a source value within `W` of the minimum truncates to
+/// above it); `None` for other transforms and types.
+fn wrapped_window(t: Transform, source: &IcebergType) -> Option<ScalarValue> {
+    let Transform::Truncate(w) = t else {
+        return None;
+    };
+    match source {
+        IcebergType::Int => Some(ScalarValue::Int32(
+            i32::MAX.saturating_sub(i32::try_from(w).ok()?),
+        )),
+        IcebergType::Long => Some(ScalarValue::Int64(i64::MAX - i64::from(w))),
+        _ => None,
+    }
+}
+
+/// Whether the truncation `fv` of the integer `v` wrapped (landed above it).
+fn wraps(v: &ScalarValue, fv: &ScalarValue) -> bool {
+    match (v, fv) {
+        (ScalarValue::Int32(v), ScalarValue::Int32(fv)) => fv > v,
+        (ScalarValue::Int64(v), ScalarValue::Int64(fv)) => fv > v,
+        _ => false,
     }
 }
 
