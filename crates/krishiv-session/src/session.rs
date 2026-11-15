@@ -1845,30 +1845,14 @@ impl Session {
                 _permit: permit,
                 _operation: self.operation.clone(),
                 history: self.state.runtime.profile_history.as_ref().map(|_| {
-                    let who = crate::telemetry::Who::of(&self.state);
-                    let mut trace = serde_json::json!({ "session_id": who.session_id });
-                    if let (Some(t), Some(o)) = (&who.trace_id, trace.as_object_mut()) {
-                        o.insert("trace_id".to_owned(), t.clone().into());
-                    }
-                    crate::query_fold::HistoryJob {
-                        plan: physical.clone(),
-                        sql: env.text.as_deref().map(str::to_owned),
+                    crate::query_fold::HistoryJob::of(
+                        &self.state,
+                        &row_id,
+                        physical,
+                        env.text.as_deref(),
                         detailed,
-                        hold: env.history_hold.clone(),
-                        identity: krishiv_exec::profile::ProfileIdentity {
-                            principal: who.principal,
-                            // The tags the query's own row holds (request tags included, and not changed by a
-                            // `set_tag` while it waited), as `system.queries` shows them.
-                            tags: self
-                                .state
-                                .queries
-                                .row_tags(&row_id)
-                                .unwrap_or_else(|| self.state.queries.tags())
-                                .into_iter()
-                                .collect(),
-                        },
-                        trace: Some(trace),
-                    }
+                        env.history_hold.clone(),
+                    )
                 }),
             }),
             None,

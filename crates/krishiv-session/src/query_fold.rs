@@ -238,6 +238,42 @@ pub(crate) struct HistoryJob {
     pub(crate) trace: Option<serde_json::Value>,
 }
 
+impl HistoryJob {
+    /// The job for the query whose `system.queries` row is `row_id`.
+    pub(crate) fn of(
+        state: &SessionState,
+        row_id: &str,
+        plan: &krishiv_exec::planner::PhysicalPlan,
+        sql: Option<&str>,
+        detailed: bool,
+        hold: Option<Arc<crate::profile_history::HistoryHold>>,
+    ) -> Self {
+        let who = crate::telemetry::Who::of(state);
+        let mut trace = serde_json::json!({ "session_id": who.session_id });
+        if let (Some(t), Some(o)) = (&who.trace_id, trace.as_object_mut()) {
+            o.insert("trace_id".to_owned(), t.clone().into());
+        }
+        Self {
+            plan: plan.clone(),
+            sql: sql.map(str::to_owned),
+            detailed,
+            hold,
+            identity: krishiv_exec::profile::ProfileIdentity {
+                principal: who.principal,
+                // The tags the query's own row holds (request tags included, and not changed by a `set_tag`
+                // while it waited), as `system.queries` shows them.
+                tags: state
+                    .queries
+                    .row_tags(row_id)
+                    .unwrap_or_else(|| state.queries.tags())
+                    .into_iter()
+                    .collect(),
+            },
+            trace: Some(trace),
+        }
+    }
+}
+
 impl QueryFold {
     /// As [`Self::finish`] for a query that was cancelled (its stream failed or was dropped):
     /// cancelling only signals the drivers, which stop at their next cancellation point, and
