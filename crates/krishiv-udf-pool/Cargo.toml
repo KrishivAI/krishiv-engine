@@ -1,6 +1,8 @@
 [package]
 name = "krishiv-udf-pool"
 description = "Krishiv's isolated Python UDF worker pool: sandboxed worker processes, memfd transport and lifecycle"
+readme = "README.md"
+keywords.workspace = true
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

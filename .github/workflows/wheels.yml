@@ -292,12 +292,13 @@ jobs:
         with:
           name: wheels-macos-arm64-abi3
           path: dist
+      - uses: $/.github/actions/setup-uv
       - name: Install and smoke
         run: |
           sw_vers
-          python3.12 -m venv venv
-          venv/bin/python -m pip install --quiet --upgrade pip
-          venv/bin/python -m pip install --quiet "$(ls dist/*.whl | head -1)[pyarrow]"
+          uv python install 3.12
+          uv venv --python 3.12 venv
+          uv pip install --python venv/bin/python --quiet "$(ls dist/*.whl | head -1)[pyarrow]"
           venv/bin/python -c 'import krishiv; print(krishiv.build_info()); r = krishiv.session().sql("SELECT 1").collect(); print(r); assert len(r) == 1'
 
   # Every wheel's size, measured (artifact `wheel-sizes`; from main-measure.yml

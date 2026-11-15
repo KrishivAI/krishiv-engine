@@ -1,6 +1,8 @@
 [package]
 name = "krishiv-session"
 description = "Krishiv sessions: SQL and DataFrames over the engine"
+readme = "README.md"
+keywords.workspace = true
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

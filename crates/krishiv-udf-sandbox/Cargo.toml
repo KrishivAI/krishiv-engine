@@ -1,6 +1,8 @@
 [package]
 name = "krishiv-udf-sandbox"
 description = "OS sandbox for Krishiv's Python UDF workers: Landlock, seccomp and rlimits applied by a trampoline before exec"
+readme = "README.md"
+keywords.workspace = true
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -12,7 +12,7 @@ write.
 
 ## Install
 
-Install with `pip install "krishiv[pyarrow]"`; the [Quickstart](get-started/quickstart.md) has the steps.
+Install with `pip install krishiv`; the [Quickstart](get-started/quickstart.md) has the steps.
 
 ## Where to start
 

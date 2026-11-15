@@ -41,10 +41,16 @@ def test_cloud_urls_are_built_into_the_wheel(spark: SparkSession, url: str) -> N
         "fs.s3a.secret.key": "s",
         "fs.s3a.endpoint.region": "us-east-1",
         "fs.s3a.connection.maximum": "1",
+        "fs.gs.storage.root.url": "http://127.0.0.1:9",
+        "fs.azure.endpoint": "http://127.0.0.1:9/krishiv",
+        "fs.azure.account.name": "krishiv",
+        "fs.azure.account.key": "a2V5",
+        "fs.hf.endpoint": "http://127.0.0.1:9",
+        "fs.hf.token": "not-a-token",
     }.items():
         spark.conf.set(key, value)
     with pytest.raises(Exception) as err:  # noqa: PT011 - the class depends on the store; the text is what matters
-        spark.read.parquet(url).collect()
+        spark.read.parquet(url).count()  # count needs no pyarrow (musllinux has none)
     assert "KRISHIV_UNSUPPORTED_FEATURE" not in str(err.value), err.value
 
 
