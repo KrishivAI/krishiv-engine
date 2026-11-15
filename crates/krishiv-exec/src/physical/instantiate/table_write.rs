@@ -118,3 +118,66 @@ fn same_storage(a: &arrow_schema::DataType, b: &arrow_schema::DataType) -> bool 
         _ => a == b,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow_schema::{DataType as T, Field, Fields};
+
+    use super::same_storage;
+
+    fn list(t: T) -> Arc<Field> {
+        Arc::new(Field::new("item", t, true))
+    }
+
+    #[test]
+    fn carriers_of_one_storage_match_and_others_do_not() {
+        assert!(same_storage(&T::Utf8, &T::Utf8View));
+        assert!(!same_storage(&T::Utf8, &T::Binary));
+        assert!(same_storage(&T::LargeBinary, &T::BinaryView));
+        assert!(!same_storage(&T::Binary, &T::Int32));
+        assert!(same_storage(&T::Decimal64(10, 2), &T::Decimal128(10, 2)));
+        assert!(!same_storage(&T::Decimal128(10, 2), &T::Decimal128(10, 3)));
+        assert!(same_storage(
+            &T::List(list(T::Utf8)),
+            &T::LargeList(list(T::Utf8View))
+        ));
+        assert!(!same_storage(
+            &T::List(list(T::Int32)),
+            &T::List(list(T::Int64))
+        ));
+        let a = T::Struct(Fields::from(vec![Field::new("x", T::Utf8, true)]));
+        let b = T::Struct(Fields::from(vec![Field::new("y", T::Utf8View, false)]));
+        let c = T::Struct(Fields::from(vec![
+            Field::new("x", T::Utf8, true),
+            Field::new("z", T::Int32, true),
+        ]));
+        assert!(same_storage(&a, &b));
+        assert!(!same_storage(&a, &c));
+        let entries = |v: T| {
+            Arc::new(Field::new(
+                "entries",
+                T::Struct(Fields::from(vec![
+                    Field::new("key", T::Int32, false),
+                    Field::new("value", v, true),
+                ])),
+                false,
+            ))
+        };
+        assert!(same_storage(
+            &T::Map(entries(T::Utf8), false),
+            &T::Map(entries(T::LargeUtf8), true)
+        ));
+        assert!(same_storage(
+            &T::FixedSizeList(list(T::Utf8), 2),
+            &T::FixedSizeList(list(T::Utf8View), 2)
+        ));
+        assert!(!same_storage(
+            &T::FixedSizeList(list(T::Utf8), 2),
+            &T::FixedSizeList(list(T::Utf8), 3)
+        ));
+        assert!(same_storage(&T::Int64, &T::Int64));
+        assert!(!same_storage(&T::Int64, &T::Int32));
+    }
+}

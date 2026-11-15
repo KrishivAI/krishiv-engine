@@ -551,4 +551,86 @@ mod tests {
         )]));
         assert!(RowIdScan::new(Arc::new(Named(clash))).is_err());
     }
+
+    #[test]
+    fn a_reordered_scan_reads_its_columns_in_the_asked_order_and_passes_the_rest_through() {
+        use futures::FutureExt as _;
+        use krishiv_memory::{MemoryConfig, MemoryPool as _, SpillOwner, TreePool};
+
+        use crate::{
+            ExecConfig, ExecutorConfig, OperatorId, QueryContext, QueryId, TaskContext,
+            TokioExecutor, WorkloadClass,
+        };
+        let scan = RowIdScan::new(Arc::new(Taking::default())).unwrap();
+        let source = scan
+            .build(ScanPushdowns {
+                projection: Some(vec![
+                    ColumnPath::new(ROW_POSITION_COLUMN),
+                    ColumnPath::new("a"),
+                ]),
+                ..ScanPushdowns::default()
+            })
+            .unwrap();
+        let root = TreePool::new(&MemoryConfig::default());
+        let q = QueryContext::new(
+            QueryId(1),
+            WorkloadClass::Batch,
+            ExecConfig::default(),
+            root.child("q", None),
+        );
+        let exec = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
+        let ctx = TaskContext::new(q, exec, SpillOwner::new(), OperatorId(0), "op");
+        let global = source.global_state(&ctx).unwrap();
+        assert_eq!(source.name(), "MemoryScan");
+        assert_eq!(source.max_parallelism(&global), 1);
+        assert_eq!(source.partitions(&global), 1);
+        let _ = source.deterministic_split(&global);
+        assert!(source.runtime_filters().is_empty());
+        let _ = source.reports_positions();
+        let _ = source.extra_metrics();
+        let mut local = source.local_state(&ctx, &global).unwrap();
+        let batch = source
+            .get_data(&mut local, &global)
+            .now_or_never()
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let data = batch.data();
+        assert_eq!(data.schema().field(0).name(), ROW_POSITION_COLUMN);
+        assert_eq!(
+            data.column(0)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .values(),
+            &[0, 1]
+        );
+        assert_eq!(
+            data.column(1)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .values(),
+            &[1, 2]
+        );
+        let _ = source.position(&local);
+        let _ = source.morsels_claimed(&local);
+        assert!(
+            source
+                .get_data(&mut local, &global)
+                .now_or_never()
+                .unwrap()
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn operations_name_themselves_as_sparks_errors_do() {
+        assert_eq!(RowLevelOperation::Delete.name(), "DELETE");
+        assert_eq!(RowLevelOperation::Update.name(), "UPDATE");
+        assert_eq!(RowLevelOperation::Merge.name(), "MERGE INTO");
+        let c = RowLevelCapabilities::copy_on_write(CardinalityRule::SparkMergeCardinality);
+        assert!(!c.merge_on_read);
+    }
 }

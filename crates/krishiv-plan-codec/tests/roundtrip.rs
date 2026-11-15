@@ -1583,3 +1583,49 @@ fn on_write(t: &mut pb::TableWriteNode, f: impl Fn(&mut pb::TableWriteRequest)) 
         f(w);
     }
 }
+
+/// Every write mode and row-level operation a `TableWrite` carries comes back as it went.
+#[test]
+fn every_table_write_mode_and_operation_round_trips() {
+    use krishiv_exec::physical::TableWriteRequest;
+    use krishiv_exec::planner::{RowLevelOperation, WriteMode};
+    let mut plans = Vec::new();
+    for (name, plan) in cases() {
+        let PhysNode::TableWrite {
+            input,
+            table,
+            request,
+        } = plan.root().clone()
+        else {
+            continue;
+        };
+        let with = |request: TableWriteRequest| {
+            plan_of(PhysNode::TableWrite {
+                input: input.clone(),
+                table: table.clone(),
+                request,
+            })
+        };
+        match (name.as_str(), request) {
+            ("table_write", TableWriteRequest::Write(w)) => {
+                for mode in [WriteMode::Truncate, WriteMode::OverwriteDynamic] {
+                    let mut w = w.clone();
+                    w.mode = mode;
+                    plans.push(with(TableWriteRequest::Write(w)));
+                }
+            }
+            ("table_write_row_level", TableWriteRequest::RowLevel(r)) => {
+                for op in [RowLevelOperation::Update, RowLevelOperation::Merge] {
+                    let mut r = r.clone();
+                    r.op = op;
+                    plans.push(with(TableWriteRequest::RowLevel(r)));
+                }
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(plans.len(), 4);
+    for plan in plans {
+        assert_eq!(format!("{:?}", round_trip(&plan)), format!("{plan:?}"));
+    }
+}
