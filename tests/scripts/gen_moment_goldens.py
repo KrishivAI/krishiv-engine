@@ -135,20 +135,35 @@ def bits(v):
     return struct.pack(">d", v).hex()
 
 
+def schema_of(df):
+    return [{"name": f.name, "type": f.dataType.simpleString(), "nullable": f.nullable} for f in df.schema.fields]
+
+
+def error_of(e):
+    """The Spark error identity: class, SQLSTATE and message parameters (the first line when it is no Spark error)."""
+    cond = getattr(e, "getErrorClass", lambda: None)()
+    if not cond:
+        return {"error": str(e).split("\n")[0][:200]}
+    state = getattr(e, "getSqlState", lambda: None)()
+    params = getattr(e, "getMessageParameters", lambda: None)() or {}
+    return {"error": cond, "sqlstate": state, "parameters": dict(sorted(params.items()))}
+
+
 def cell(spark, fn):
     args = "y, x" if fn in PAIR_FNS else "x"
     try:
-        v = spark.sql(f"select {fn}({args}) from t").collect()[0][0]
+        df = spark.sql(f"select {fn}({args}) from t")
+        v = df.collect()[0][0]
     except Exception as e:
-        cond = getattr(e, "getErrorClass", lambda: None)() or str(e).split("\n")[0][:200]
-        return {"error": cond}
+        return error_of(e)
+    out = {"schema": schema_of(df)}
     if v is None:
-        return {"null": True}
+        return {**out, "null": True}
     if isinstance(v, Decimal):  # regr_avgx/avgy over decimal columns: Average gives a decimal
-        return {"decimal": str(v)}
+        return {**out, "decimal": str(v)}
     if isinstance(v, int):  # regr_count
-        return {"long": v}
-    return {"hex": bits(v), "text": repr(v)}
+        return {**out, "long": v}
+    return {**out, "hex": bits(v), "text": repr(v)}
 
 
 def slices(n, p):

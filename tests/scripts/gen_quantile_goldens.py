@@ -48,13 +48,13 @@ REPEATS = 2
 U = "((id * 2654435761 + 12345) % 1000003)"
 W = f"({U} * 7919 % 10000019)"
 DISTS = {
-    "uniform_int": (U, "int"),
-    "repeated": (f"({U} % 17)", "int"),
+    "uniform_int": (f"cast({U} as int)", "int"),
+    "repeated": (f"cast({U} % 17 as int)", "int"),
     "asc": ("id", "bigint"),
     "desc": ("(N - 1 - id)", "bigint"),
     "double": (f"({U} / 997.0D)", "double"),
     "decimal": (f"cast(cast({W} as decimal(14,0)) / 100 as decimal(12,2))", "decimal(12,2)"),
-    "with_nulls": (f"(case when id % 10 = 3 then null else {U} end)", "int"),
+    "with_nulls": (f"(case when id % 10 = 3 then null else cast({U} as int) end)", "int"),
 }
 
 
