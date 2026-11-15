@@ -69,6 +69,7 @@
 //! catalog functions exist before P3).
 
 mod access;
+pub mod access_control;
 mod aggregate_text;
 mod analytics;
 mod bind;

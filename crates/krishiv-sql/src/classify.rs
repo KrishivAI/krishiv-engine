@@ -174,11 +174,17 @@ pub fn classify(statement: &Statement) -> StatementClass {
             // cluster-scope: CLEAR CACHE drops the cached data of every session.
             CacheKind::Clear => StatementClass::Admin,
         },
+        // `SHOW GRANTS` lists the caller's own grants (another principal's need `Monitor`,
+        // checked when it runs): it changes nothing.
+        Statement::AccessControl(a) if a.command.is_read() => StatementClass::Read,
         // REFRESH invalidates metadata and file listings cached for every
         // session; ADD JAR/FILE/ARCHIVE loads code and files into the
         // process.
-        // cluster-scope: shared caches and process-wide code loading.
-        Statement::Refresh(_) | Statement::AddResource(_) => StatementClass::Admin,
+        // cluster-scope: shared caches, process-wide code loading, and the grants and roles
+        // that decide every principal's access (P3-T062).
+        Statement::Refresh(_) | Statement::AddResource(_) | Statement::AccessControl(_) => {
+            StatementClass::Admin
+        }
     }
 }
 
@@ -285,7 +291,8 @@ pub fn statement_queries(statement: &Statement) -> Option<Vec<&Query>> {
         | Statement::Repair(_)
         | Statement::AddResource(_)
         | Statement::LoadData(_)
-        | Statement::ListResource(_) => Vec::new(),
+        | Statement::ListResource(_)
+        | Statement::AccessControl(_) => Vec::new(),
     })
 }
 
@@ -392,7 +399,9 @@ pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
         | Statement::ExecuteImmediate(_)
         | Statement::CreateView(_)
         | Statement::DropView(_)
-        | Statement::ListResource(_) => Vec::new(),
+        | Statement::ListResource(_)
+        // Checked by the grants themselves when they run (P3-T062).
+        | Statement::AccessControl(_) => Vec::new(),
         // A temporary function is the session's own; a stored one is catalog
         // state: creating it needs `CREATE` on its namespace (replacing it
         // also `DROP` on it), dropping it `DROP` on it.
