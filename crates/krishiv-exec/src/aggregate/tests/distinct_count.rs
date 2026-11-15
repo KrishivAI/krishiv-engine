@@ -254,3 +254,33 @@ fn covers_only_a_grouped_single_distinct_count() {
     let two = spec(&s, vec![0], vec![agg(&Count, 1, &s), agg(&Count, 1, &s)]);
     assert!(!covers(&two, &[true, true]));
 }
+
+/// The counter's reservations refused part-way through the merge tasks
+/// (after `n` grants, while counting a partition or while merging one into
+/// the shared shards): the partition refused is left to `finalize`, whole,
+/// and the rows equal the old plan's; the pool is empty after each run.
+#[tokio::test]
+async fn refused_count_memory_mid_merge_counts_the_same() {
+    use crate::aggregate::distinct::{DistinctCountNode, PENDING_MERGES, REFUSE_AFTER};
+    use std::sync::atomic::Ordering::Relaxed;
+    let (s, b) = gen_input(30_000, 3_000, 256);
+    let (sp, flags) = shape(&s, true, 1);
+    let old = distinct_plan_with(scan(&s, b.clone()), sp.clone(), &flags, false).unwrap();
+    let want = rows(&exec_with(old, Opts::default(), true).await.unwrap().0);
+    let o = Opts {
+        slots: 4,
+        ..Opts::default()
+    };
+    for grants in [0, 1, 2, 3, 5, 8, 13, 21, 34, 55] {
+        REFUSE_AFTER.store(grants, Relaxed);
+        let op = DistinctCount::with_pairs(&sp, &flags, |p| {
+            HashAggregate::with_row_mode(p, rowtable::Mode::Grow)
+        })
+        .unwrap();
+        let plan = DistinctCountNode::new(scan(&s, b.clone()), op);
+        let got = rows(&exec_with(plan, o, true).await.unwrap().0);
+        REFUSE_AFTER.store(usize::MAX, Relaxed);
+        assert_eq!(got, want, "refused after {grants} grants");
+    }
+    assert!(PENDING_MERGES.load(Relaxed) > 0, "no merge was refused");
+}

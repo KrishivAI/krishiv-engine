@@ -463,6 +463,23 @@ impl HashAggregate {
         l.table.memory_size().saturating_add(combined) >= missing
     }
 
+    /// What a spill of this driver's state would free, as `sink` reports it
+    /// to the driver's spill signal (`None`: the aggregate does not spill).
+    /// A breaker over several aggregates reports their sum.
+    pub(super) fn spillable_local(&self, l: &LocalState) -> Option<usize> {
+        self.core.spec.spill.as_ref()?;
+        let l = l.downcast_ref::<Local>()?;
+        let combined = global(&l.global).map_or(0, |g| g.combined.load(AtomicOrdering::Relaxed));
+        Some(l.table.memory_size() + combined)
+    }
+
+    /// What a spill of the combined tables would free, as `combine` reports
+    /// it (`None`: the aggregate does not spill).
+    pub(super) fn spillable_global(&self, g: &GlobalState) -> Option<usize> {
+        self.core.spec.spill.as_ref()?;
+        Some(held(&lock(&global(g).ok()?.inner)))
+    }
+
     fn spiller(&self, ctx: &TaskContext) -> Option<Spiller> {
         Some(Spiller {
             core: Arc::clone(&self.core),

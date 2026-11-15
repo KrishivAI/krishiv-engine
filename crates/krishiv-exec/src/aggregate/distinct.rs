@@ -22,11 +22,16 @@
 //! counter's keys are the result.
 //!
 //! No second hash aggregation reads the pairs, and the pairs carry no
-//! states. Both tables spill as any aggregate's do. The counter itself
-//! (at most one entry per key) does not spill; its memory is reserved
-//! before each insert where the pool allows (a merge task refused it still
-//! counts the radix partition in hand, then leaves the rest to `finalize`,
-//! which waits for its memory).
+//! states. Both tables spill as any aggregate's do.
+//!
+//! **Memory.** The counter does not spill. Its bound is one entry per
+//! distinct key, the key table's bound. Every byte it holds is reserved
+//! before it is used: a merge task counts a radix partition all or nothing
+//! into partition-local shards, reserving their growth before each insert,
+//! then reserves each shared shard's growth before merging into it. A
+//! refused count leaves the partition (and the rest of the table) to
+//! `finalize`; a refused merge keeps the unmerged local shards, still
+//! reserved, for `finalize`, which waits for memory through arbitration.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -37,7 +42,7 @@ use arrow_row::Rows;
 use arrow_schema::{DataType, SchemaRef};
 use futures::future::BoxFuture;
 use krishiv_common::error::KrishivError;
-use krishiv_memory::{ConsumerHandle, Reservation};
+use krishiv_memory::{ConsumerHandle, Reservation, SpillSignal};
 use krishiv_types::batch::Batch;
 
 use super::rowtable::RowTable;
@@ -59,6 +64,36 @@ const COUNT_ROWS: usize = 4096;
 /// Tests: partitions the merge hook counted (nextest runs a test per process).
 #[cfg(test)]
 pub(super) static HOOK_PARTS: AtomicUsize = AtomicUsize::new(0);
+
+/// Tests: grants of the counter's non-waiting reservations left before
+/// they are refused (`usize::MAX`: never refused by the test).
+#[cfg(test)]
+pub(super) static REFUSE_AFTER: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+/// Tests: local shards a refused merge left to `finalize`.
+#[cfg(test)]
+pub(super) static PENDING_MERGES: AtomicUsize = AtomicUsize::new(0);
+
+/// Grows `r` by `bytes` without waiting; `true` if the pool refuses (tests
+/// also refuse after [`REFUSE_AFTER`] grants).
+fn refused(r: &mut Reservation, bytes: usize) -> bool {
+    #[cfg(test)]
+    {
+        let left = REFUSE_AFTER.load(Ordering::Relaxed);
+        if left == 0 {
+            return true;
+        }
+        if left != usize::MAX {
+            REFUSE_AFTER.store(left - 1, Ordering::Relaxed);
+        }
+    }
+    r.try_grow(bytes).is_err()
+}
+
+/// Shrinks `r` to `keep` bytes.
+fn shrink_to(r: &mut Reservation, keep: usize) {
+    r.shrink(r.size().saturating_sub(keep));
+}
 
 /// The shard of key hash `h`.
 fn shard_of(h: u64) -> usize {
@@ -82,6 +117,31 @@ impl Shard {
         let bytes = rows.iter().map(|&i| e.row(i).len()).sum();
         self.keys.projected_size(rows.len(), bytes)
             + grown(&self.counts, rows.len()) * size_of::<i64>()
+    }
+
+    /// Bytes after merging `piece` into this shard (each key new at worst).
+    fn merge_projected(&self, piece: &Shard) -> usize {
+        let n = piece.keys.len();
+        let bytes = (0..n).map(|i| piece.keys.row(i).len()).sum();
+        self.keys.projected_size(n, bytes) + grown(&self.counts, n) * size_of::<i64>()
+    }
+
+    /// Adds `piece`'s counts to this shard's.
+    fn merge_from(&mut self, piece: &Shard) -> Result<()> {
+        let n = piece.keys.len();
+        let bytes = (0..n).map(|i| piece.keys.row(i).len()).sum();
+        self.keys.reserve(n, bytes);
+        self.counts.reserve(n);
+        for (i, (&h, &c)) in piece.keys.hashes().iter().zip(&piece.counts).enumerate() {
+            let (id, new) = self.keys.insert_hashed(piece.keys.row(i), h)?;
+            if new {
+                self.counts.push(0);
+            }
+            if let Some(d) = self.counts.get_mut(id as usize) {
+                *d += c;
+            }
+        }
+        Ok(())
     }
 
     /// Inserts `rows` of `e`; a pair whose values are all non-NULL counts.
@@ -129,14 +189,21 @@ pub(crate) struct PairCounter {
     encoder: KeyEncoder,
     seed: HashSeed,
     shards: Vec<Mutex<Shard>>,
-    /// Bytes the shards hold.
-    bytes: AtomicUsize,
-    /// Reservations covering `bytes` (one per counting call).
+    /// Reservations covering exactly what the shards grew by.
     held: Mutex<Vec<Reservation>>,
+    /// Counted radix partitions whose merge into the shards was refused
+    /// memory: their local shards with the reservation covering them,
+    /// merged by `finalize` (which can wait for memory).
+    pending: Mutex<Vec<(Vec<Shard>, Reservation)>>,
     consumer: Arc<ConsumerHandle>,
     /// A merge task was refused memory: the next tasks publish their pairs
-    /// for `finalize`, which can wait for memory.
+    /// for `finalize`.
     short: AtomicBool,
+}
+
+/// Bytes of `pieces`.
+fn pieces_bytes(pieces: &[Shard]) -> usize {
+    pieces.iter().map(Shard::bytes).sum()
 }
 
 impl PairCounter {
@@ -146,8 +213,8 @@ impl PairCounter {
             encoder: KeyEncoder::new(types)?,
             seed,
             shards: (0..SHARDS).map(|_| Mutex::new(Shard::default())).collect(),
-            bytes: AtomicUsize::new(0),
             held: Mutex::new(Vec::new()),
+            pending: Mutex::new(Vec::new()),
             consumer,
             short: AtomicBool::new(false),
         })
@@ -193,76 +260,134 @@ impl PairCounter {
             .ok_or_else(|| internal("counter shard out of range".to_owned()))
     }
 
-    /// Counts a batch of pairs, growing `r` (never waiting) by each shard's
-    /// projected growth first. Returns `false` if the pool refused some of
-    /// it (the pairs are counted all the same: at most this batch over).
-    fn count_now(&self, b: &RecordBatch, r: &mut Reservation) -> Result<bool> {
-        let e = self.encode_pairs(b)?;
-        let mut ok = true;
-        for (s, rows) in e.by_shard.iter().enumerate() {
-            if rows.is_empty() {
-                continue;
-            }
-            let mut shard = lock(self.shard(s)?);
-            let before = shard.bytes();
-            let delta = shard.projected(&e, rows).saturating_sub(before);
-            if r.try_grow(delta).is_err() {
-                ok = false;
-            }
-            shard.insert(&e, rows)?;
-            self.grew(before, shard.bytes());
-        }
-        Ok(ok)
-    }
-
-    fn grew(&self, before: usize, after: usize) {
-        if after >= before {
-            self.bytes.fetch_add(after - before, Ordering::Relaxed);
-        } else {
-            self.bytes.fetch_sub(before - after, Ordering::Relaxed);
-        }
-    }
-
     /// Counts a finished final-phase table of distinct pairs (the merge
-    /// hook, on the blocking pool), one radix partition at a time, freeing
-    /// each. After a partition whose memory was refused it stops: the
-    /// partitions left are published and counted by `finalize`.
+    /// hook, on the blocking pool), one radix partition at a time, each all
+    /// or nothing: the partition is counted into partition-local shards
+    /// whose growth is reserved before each insert, then merged into the
+    /// shared shards and freed. A partition refused memory while counted is
+    /// left in the table, with every partition after it, for `finalize` to
+    /// count from the output; one refused while merged keeps its unmerged
+    /// local shards (still reserved) for `finalize` to merge.
     ///
     /// # Errors
     /// Cancellation; decoding or encoding errors.
     pub(crate) fn count_table(&self, t: &mut RowTable, query: &QueryContext) -> Result<()> {
-        if self.short.load(Ordering::Acquire) {
-            return Ok(());
-        }
-        let mut r = self.consumer.reservation();
         for p in 0..t.part_count() {
+            if self.short.load(Ordering::Acquire) {
+                return Ok(());
+            }
             let len = t.part_len(p);
             if len == 0 {
                 continue;
             }
-            let mut ok = true;
+            let mut local: Vec<Shard> = (0..SHARDS).map(|_| Shard::default()).collect();
+            let mut r = self.consumer.reservation();
             for start in (0..len).step_by(COUNT_ROWS) {
                 query.check_cancelled()?;
                 let ids = t.part_ids(p, start..(start + COUNT_ROWS).min(len));
-                ok &= self.count_now(&t.output_batch(&ids)?, &mut r)?;
+                let e = self.encode_pairs(&t.output_batch(&ids)?)?;
+                let mut grow = 0;
+                for (piece, rows) in local.iter().zip(&e.by_shard) {
+                    if !rows.is_empty() {
+                        grow += piece.projected(&e, rows).saturating_sub(piece.bytes());
+                    }
+                }
+                if refused(&mut r, grow) {
+                    // Nothing of this partition reached the shards: the
+                    // local shards and their reservation go here.
+                    self.short.store(true, Ordering::Release);
+                    return Ok(());
+                }
+                for (piece, rows) in local.iter_mut().zip(&e.by_shard) {
+                    if !rows.is_empty() {
+                        piece.insert(&e, rows)?;
+                    }
+                }
+                shrink_to(&mut r, pieces_bytes(&local));
             }
+            // Counted: the partition's pairs are no longer needed.
             t.release_part(p);
             #[cfg(test)]
             HOOK_PARTS.fetch_add(1, Ordering::Relaxed);
-            if !ok {
+            if let Some(rest) = self.merge_now(local, r)? {
+                lock(&self.pending).push(rest);
                 self.short.store(true, Ordering::Release);
-                break;
+                return Ok(());
             }
         }
-        self.settle(r);
+        Ok(())
+    }
+
+    /// Merges counted local shards (covered by `r`) into the shared ones,
+    /// reserving each shard's growth first (never waiting). Returns the
+    /// local shards not merged, with their reservation, if one was refused.
+    fn merge_now(
+        &self,
+        mut local: Vec<Shard>,
+        mut r: Reservation,
+    ) -> Result<Option<(Vec<Shard>, Reservation)>> {
+        for s in 0..local.len() {
+            let Some(piece) = local.get_mut(s) else { break };
+            if piece.keys.is_empty() {
+                continue;
+            }
+            let mut shard = lock(self.shard(s)?);
+            let before = shard.bytes();
+            let delta = shard.merge_projected(piece).saturating_sub(before);
+            if refused(&mut r, delta) {
+                drop(shard);
+                // Shards before `s` are merged (and empty): keep the
+                // places so each piece still lands in its own shard.
+                shrink_to(&mut r, pieces_bytes(&local));
+                return Ok(Some((local, r)));
+            }
+            shard.merge_from(piece)?;
+            let grew = shard.bytes().saturating_sub(before);
+            drop(shard);
+            let moved = r.split(grew.min(r.size()));
+            lock(&self.held).push(moved);
+            *piece = Shard::default();
+            shrink_to(&mut r, pieces_bytes(&local));
+        }
+        Ok(None)
+    }
+
+    /// Merges the local shards the merge tasks could not, waiting for the
+    /// memory (in `finalize`: no task counts at the same time).
+    async fn merge_pending(&self) -> Result<()> {
+        let pending = std::mem::take(&mut *lock(&self.pending));
+        #[cfg(test)]
+        PENDING_MERGES.fetch_add(pending.len(), Ordering::Relaxed);
+        for (mut local, mut r) in pending {
+            for s in 0..local.len() {
+                let delta = {
+                    let Some(piece) = local.get(s) else { break };
+                    if piece.keys.is_empty() {
+                        continue;
+                    }
+                    let shard = lock(self.shard(s)?);
+                    shard.merge_projected(piece).saturating_sub(shard.bytes())
+                };
+                r.grow(delta).await.map_err(KrishivError::from)?;
+                let Some(piece) = local.get_mut(s) else { break };
+                let mut shard = lock(self.shard(s)?);
+                let before = shard.bytes();
+                shard.merge_from(piece)?;
+                let grew = shard.bytes().saturating_sub(before);
+                drop(shard);
+                let moved = r.split(grew.min(r.size()));
+                lock(&self.held).push(moved);
+                *piece = Shard::default();
+                shrink_to(&mut r, pieces_bytes(&local));
+            }
+        }
         Ok(())
     }
 
     /// Counts a batch of pairs read from the output, waiting for each
-    /// shard's memory (in `finalize`: no task counts at the same time).
+    /// shard's growth (in `finalize`: no task counts at the same time).
     async fn count_waiting(&self, b: &RecordBatch) -> Result<()> {
         let e = self.encode_pairs(b)?;
-        let mut r = self.consumer.reservation();
         for (s, rows) in e.by_shard.iter().enumerate() {
             if rows.is_empty() {
                 continue;
@@ -271,35 +396,14 @@ impl PairCounter {
                 let shard = lock(self.shard(s)?);
                 shard.projected(&e, rows).saturating_sub(shard.bytes())
             };
+            let mut r = self.consumer.reservation();
             r.grow(delta).await.map_err(KrishivError::from)?;
             let mut shard = lock(self.shard(s)?);
             let before = shard.bytes();
             shard.insert(&e, rows)?;
-            self.grew(before, shard.bytes());
-        }
-        self.settle(r);
-        Ok(())
-    }
-
-    /// Keeps of `r` what the shards hold beyond the reservations kept so far.
-    fn settle(&self, mut r: Reservation) {
-        let mut held = lock(&self.held);
-        let have: usize = held.iter().map(Reservation::size).sum();
-        let actual = self.bytes.load(Ordering::Relaxed);
-        let excess = (have + r.size()).saturating_sub(actual);
-        r.shrink(excess.min(r.size()));
-        if r.size() > 0 {
-            held.push(r);
-        }
-    }
-
-    /// Reserves, waiting, what merge tasks counted past their reservations.
-    async fn pay_debt(&self) -> Result<()> {
-        let have: usize = lock(&self.held).iter().map(Reservation::size).sum();
-        let debt = self.bytes.load(Ordering::Relaxed).saturating_sub(have);
-        if debt > 0 {
-            let mut r = self.consumer.reservation();
-            r.grow(debt).await.map_err(KrishivError::from)?;
+            let grew = shard.bytes().saturating_sub(before);
+            drop(shard);
+            shrink_to(&mut r, grew);
             lock(&self.held).push(r);
         }
         Ok(())
@@ -510,11 +614,36 @@ struct Local {
     /// The batch the key table applied while the pairs table was refused
     /// memory: the retry applies it to the pairs only.
     keys_done: Option<BatchId>,
+    /// The driver's spill signal: it gets the sum of both tables'
+    /// spillable bytes (each sub-aggregate writes only its own).
+    signal: Arc<SpillSignal>,
 }
 
 fn local(l: &mut LocalState) -> Result<&mut Local> {
     l.downcast_mut::<Local>()
         .ok_or_else(|| internal("wrong local state for DistinctCount".to_owned()))
+}
+
+impl DistinctCount {
+    /// Reports both tables' spillable bytes, summed, to the driver's signal.
+    fn report_local(&self, l: &Local) {
+        let keys = match (&self.keys, &l.keys) {
+            (Some(k), Some(lk)) => k.spillable_local(lk),
+            _ => Some(0),
+        };
+        if let (Some(a), Some(b)) = (keys, self.pairs.spillable_local(&l.pairs)) {
+            l.signal.set_spillable_bytes(a + b);
+        }
+    }
+
+    /// The combined tables' spillable bytes of both aggregates, summed.
+    fn spillable_global(&self, g: &Global) -> Option<usize> {
+        let keys = match (&self.keys, &g.keys) {
+            (Some(k), Some(gk)) => k.spillable_global(gk)?,
+            _ => 0,
+        };
+        Some(keys + self.pairs.spillable_global(&g.pairs)?)
+    }
 }
 
 impl Sink for DistinctCount {
@@ -560,6 +689,7 @@ impl Sink for DistinctCount {
             pairs: Sink::local_state(&*self.pairs, ctx, &g.pairs)?,
             keys,
             keys_done: None,
+            signal: Arc::clone(ctx.consumer().signal()),
         }))
     }
 
@@ -572,16 +702,21 @@ impl Sink for DistinctCount {
         {
             match k.sink(input.clone(), lk, gk)? {
                 SinkStatus::NeedMoreInput => l.keys_done = Some(id),
-                other => return Ok(other),
+                other => {
+                    self.report_local(l);
+                    return Ok(other);
+                }
             }
         }
-        match self.pairs.sink(input, &mut l.pairs, &g.pairs)? {
+        let status = match self.pairs.sink(input, &mut l.pairs, &g.pairs)? {
             SinkStatus::NeedMoreInput => {
                 l.keys_done = None;
-                Ok(SinkStatus::NeedMoreInput)
+                SinkStatus::NeedMoreInput
             }
-            other => Ok(other),
-        }
+            other => other,
+        };
+        self.report_local(l);
+        Ok(status)
     }
 
     fn combine(&self, l: LocalState, g: &GlobalState) -> Result<()> {
@@ -594,11 +729,20 @@ impl Sink for DistinctCount {
                 "DistinctCount: input ended with a batch applied to the keys only".to_owned(),
             ));
         }
-        let Local { pairs, keys, .. } = *l;
+        let Local {
+            pairs,
+            keys,
+            signal,
+            ..
+        } = *l;
         if let (Some(k), Some(lk), Some(gk)) = (&self.keys, keys, &g.keys) {
             k.combine(lk, gk)?;
         }
-        self.pairs.combine(pairs, &g.pairs)
+        self.pairs.combine(pairs, &g.pairs)?;
+        if let Some(bytes) = self.spillable_global(g) {
+            signal.set_spillable_bytes(bytes);
+        }
+        Ok(())
     }
 
     fn finalize<'a>(
@@ -608,11 +752,18 @@ impl Sink for DistinctCount {
     ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             let g = global(g)?;
+            if let Some(bytes) = self.spillable_global(g) {
+                ctx.consumer().signal().set_spillable_bytes(bytes);
+            }
             if let (Some(k), Some(gk)) = (&self.keys, &g.keys) {
                 k.finalize(gk, ctx).await?;
             }
+            // The pairs' combined tables are what is left to spill.
+            if let Some(bytes) = self.pairs.spillable_global(&g.pairs) {
+                ctx.consumer().signal().set_spillable_bytes(bytes);
+            }
             self.pairs.finalize(&g.pairs, ctx).await?;
-            g.counter.pay_debt().await?;
+            g.counter.merge_pending().await?;
             // What the merge tasks did not count: read and count it here.
             let mut reader = Source::local_state(&*self.pairs, ctx, &g.pairs)?;
             while let Some(b) = self.pairs.get_data(&mut reader, &g.pairs).await? {
@@ -636,6 +787,7 @@ impl Sink for DistinctCount {
                 freed += k.spill(lk, target, ctx).await?;
             }
             freed += self.pairs.spill(&mut l.pairs, target, ctx).await?;
+            self.report_local(l);
             Ok(freed)
         })
     }
@@ -653,6 +805,9 @@ impl Sink for DistinctCount {
                 freed += k.spill_global(gk, target, ctx).await?;
             }
             freed += self.pairs.spill_global(&g.pairs, target, ctx).await?;
+            if let Some(bytes) = self.spillable_global(g) {
+                ctx.consumer().signal().set_spillable_bytes(bytes);
+            }
             Ok(freed)
         })
     }
