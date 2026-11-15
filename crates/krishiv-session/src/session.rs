@@ -1923,12 +1923,8 @@ impl Session {
                 Err(error)
             }
             Ok(stream) => {
-                let stream = MetricStream {
-                    inner: stream,
-                    fold: pending.0.take(),
-                };
-                // The one place every run of a query passes (reads, writes, metrics, profiles):
-                // the observations of the frame complete when the stream ends, fails or drops.
+                let (inner, fold) = (stream, pending.0.take());
+                let stream = MetricStream { inner, fold };
                 let stream = crate::dataframe::deliver(
                     Box::pin(stream.map(|b| b.and_then(into_record_batch))),
                     Arc::clone(&query),
