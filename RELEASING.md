@@ -76,7 +76,7 @@ To publish after the owner's go: confirm `CHANGELOG.md` and the version, then
 Actions, "Publish to TestPyPI", "Run workflow" on `main` (or the tag), and
 approve the `testpypi` deployment. Verify the install from TestPyPI in a clean
 venv: `pip install --index-url https://test.pypi.org/simple/ --extra-index-url
-https://pypi.org/simple/ "krishiv[pyarrow]==0.2.0"`.
+https://pypi.org/simple/ "krishiv[pyarrow]==0.2.1"`.
 
 ## Release artifacts (manual, publishes nothing)
 
@@ -122,16 +122,16 @@ crates.io keywords and description (drop `datafusion`), the PyPI classifier, the
 - **Signed tags:** the owner creates the release tag signed, `git tag -s v0.2.0 -m "krishiv 0.2.0"`, and checks it with
   `git verify-tag v0.2.0` before pushing it. Agents never tag.
 
-## The 0.2.0 release, step by step (owner only)
+## The 0.2.1 release, step by step (owner only)
 
 Each step is a hard stop for agents; the maintainer runs it and approves its environment.
 
-1. **Merge** the release PR on a green main, after the P2b gate is approved. Then tag `v0.2.0` on that commit and push the tag.
-2. **TestPyPI:** in Actions, run "Publish to TestPyPI" on the tag. Approve the `testpypi` environment, then install from TestPyPI in a clean virtualenv: `pip install -i https://test.pypi.org/simple/ krishiv==0.2.0` (and `krishiv-compat`), and run the quickstart.
-3. **PyPI:** run "Publish to PyPI" (`publish-pypi.yml`) on the tag and approve the `pypi` environment. Check <https://pypi.org/p/krishiv> and `pip install krishiv==0.2.0`.
+1. **Merge** the release PR on a green main, after the P2b gate is approved. Then tag `v0.2.1` on that commit and push the tag.
+2. **TestPyPI:** in Actions, run "Publish to TestPyPI" on the tag. Approve the `testpypi` environment, then install from TestPyPI in a clean virtualenv: `pip install -i https://test.pypi.org/simple/ krishiv==0.2.1` (and `krishiv-compat`), and run the quickstart.
+3. **PyPI:** run "Publish to PyPI" (`publish-pypi.yml`) on the tag and approve the `pypi` environment. Check <https://pypi.org/p/krishiv> and `pip install krishiv==0.2.1`.
 4. **crates.io:** run "Publish to crates.io" (`publish-crates.yml`) on the tag and approve the `crates-io` environment. It publishes the 24 crates of `.github/scripts/publish-crates.txt` in that order. A crate already at 0.2.1 is skipped, so a failed run can be dispatched again. Check `cargo add krishiv@0.2.1` in a scratch project.
-5. **Yank the old 0.1 releases** once 0.2.0 is verified: PyPI `krishiv` 0.1.0; crates.io `krishiv` 0.1.0-nightly.202607030148 and `krishiv-common` 0.1.0 (`cargo yank --version <v> <crate>`). See below.
-6. **GitHub Release** for `v0.2.0`, with the CHANGELOG 0.2.0 section as its notes.
+5. **Yank the old 0.1 releases** once 0.2.1 is verified: PyPI `krishiv` 0.1.0; crates.io `krishiv` 0.1.0-nightly.202607030148 and `krishiv-common` 0.1.0 (`cargo yank --version <v> <crate>`). See below.
+6. **GitHub Release** for `v0.2.1`, with the CHANGELOG 0.2.1 section as its notes.
 
 ## Publish tag (a `.github`-only fix after tagging)
 

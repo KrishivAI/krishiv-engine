@@ -6,13 +6,13 @@ description: "Install the Python package and run your first SQL and DataFrame qu
 
 <!-- The code blocks equal the Quickstart section of the repository README (a test checks it); CI runs the README's. -->
 
-Nothing is published to PyPI yet: build the wheel from the repository (`maturin build`) and install it with the same extras. Once released, install with pyarrow for the Arrow results:
+Nothing is published to PyPI yet: build the wheel from the repository (`maturin build`) and install it. Once released:
 
 ```bash
-pip install "krishiv[pyarrow]"
+pip install krishiv
 ```
 
-Krishiv needs Python 3.11 or newer (the floor of the Spark 4.3 Python client); the examples run on 3.11 to 3.14. The `pyarrow` extra is needed for `collect()` and `toArrow()`, which return Arrow data.
+Krishiv needs Python 3.11 or newer (the floor of the Spark 4.3 Python client); the examples run on 3.11 to 3.14. `pyarrow` is installed with it (a required dependency since 0.2.1); `collect()` and `toArrow()` return Arrow data.
 
 SQL and DataFrames:
 

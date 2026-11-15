@@ -42,6 +42,9 @@ def test_cloud_urls_are_built_into_the_wheel(spark: SparkSession, url: str) -> N
         "fs.s3a.endpoint.region": "us-east-1",
         "fs.s3a.connection.maximum": "1",
         "fs.gs.storage.root.url": "http://127.0.0.1:9",
+        # Without a credential the GCS store looks for the developer's Google login or the cloud metadata server
+        # (a real network call with retries); an unauthenticated, empty key keeps the lookup local.
+        "fs.gs.auth.service.account.json": '{"private_key":"","private_key_id":"","client_email":"x@y","disable_oauth":true}',
         "fs.azure.endpoint": "http://127.0.0.1:9/krishiv",
         "fs.azure.account.name": "krishiv",
         "fs.azure.account.key": "a2V5",
