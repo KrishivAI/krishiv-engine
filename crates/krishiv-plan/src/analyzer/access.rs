@@ -50,6 +50,15 @@ pub async fn authorize(
     privilege: Privilege,
 ) -> Result<(), KrishivError> {
     let denied = || insufficient_permissions(principal, securable, privilege);
+    // What is asked, before any answer: the analyze API's securables are checked against these
+    // events (P3-T063 m3). The securable prints as the denial text does (redacted, ADR 0038).
+    tracing::trace!(
+        target: "krishiv::authorize",
+        principal = %principal.name,
+        privilege = %privilege,
+        securable = %securable,
+        "authorize"
+    );
     if privilege.changes() {
         match policy.check(principal, securable, Privilege::Select).await {
             // A write-only principal (reads denied) may still write.

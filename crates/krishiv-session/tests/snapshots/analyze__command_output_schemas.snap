@@ -1,0 +1,62 @@
+---
+source: crates/krishiv-session/tests/analyze.rs
+expression: out
+---
+SHOW CATALOGS
+  catalog: string not null
+SHOW TABLES
+  namespace: string not null, tableName: string not null, isTemporary: boolean not null
+SHOW TABLE EXTENDED LIKE 't*'
+  namespace: string not null, tableName: string not null, isTemporary: boolean not null, information: string not null
+SHOW VIEWS IN d
+  namespace: string not null, viewName: string not null, isTemporary: boolean not null
+SHOW COLUMNS IN t
+  col_name: string not null
+SHOW FUNCTIONS
+  (refused by the session)
+SHOW DATABASES
+  namespace: string not null
+SHOW CREATE TABLE t
+  createtab_stmt: string not null
+SHOW TBLPROPERTIES t
+  key: string not null, value: string not null
+SHOW PARTITIONS pt
+  partition: string not null
+SHOW CURRENT NAMESPACE
+  catalog: string not null, namespace: string not null
+DESCRIBE TABLE t
+  col_name: string not null, data_type: string not null, comment: string
+DESCRIBE FUNCTION abs
+  (refused by the session)
+DESCRIBE DATABASE d
+  info_name: string not null, info_value: string
+DESCRIBE QUERY SELECT a, b FROM t
+  col_name: string not null, data_type: string not null, comment: string
+DESCRIBE TABLE t a
+  info_name: string not null, info_value: string not null
+DESCRIBE TABLE EXTENDED t AS JSON
+  json_metadata: string not null
+SHOW TBLPROPERTIES t ('k')
+  key: string not null, value: string not null
+SHOW CURRENT SCHEMA
+  catalog: string not null, namespace: string not null
+EXPLAIN SELECT a FROM t
+  plan: string
+EXPLAIN EXTENDED SELECT a FROM t
+  plan: string
+EXPLAIN SET
+  plan: string
+SET
+  key: string not null, value: string not null
+SET -v
+  key: string not null, value: string not null, meaning: string not null, Since version: string not null
+SET spark.sql.ansi.enabled
+  key: string not null, value: string not null
+SET spark.sql.ansi.enabled = true
+  key: string not null, value: string not null
+SET TIME ZONE 'UTC'
+  key: string not null, value: string not null
+RESET spark.sql.ansi.enabled
+  (no columns)
+RESET
+  (no columns)
