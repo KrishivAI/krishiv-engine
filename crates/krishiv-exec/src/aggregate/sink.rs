@@ -673,8 +673,9 @@ struct Run {
     /// ([`u32::MAX`] for runs of many partitions, which keep their
     /// insertion order). Runs merge grouped by hash partition, runs of
     /// one partition in this order, so order-sensitive aggregates
-    /// (`collect_*`, the vector ones) merge partitions in partition-index
-    /// order whatever thread spilled first.
+    /// ([`is_order_sensitive`]: `collect_*`, the vector ones, `first`,
+    /// `last`, the ties of `max_by`/`min_by`) merge partitions in
+    /// partition-index order whatever thread spilled first.
     partition: u32,
 }
 

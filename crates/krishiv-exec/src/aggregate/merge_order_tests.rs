@@ -149,10 +149,12 @@ async fn first_and_last_follow_partition_order_spilled_or_not() {
     same_in_every_run(true, &reference).await;
 }
 
-/// The ties of `max_by`/`min_by` break the same way in every run.
+/// The ties of `max_by`/`min_by` keep the last row to arrive (Spark's
+/// `MaxMinBy`), the last partition's, in every run.
 #[tokio::test]
 async fn max_by_and_min_by_ties_do_not_depend_on_memory() {
     let reference = run(false, true, &[0, 1, 2], &[0, 1, 2]).await;
-    assert_eq!(reference.len(), 512);
+    let want: Vec<[i64; 3]> = (0..KEYS).map(|k| [k, 20_000 + k, 20_000 + k]).collect();
+    assert_eq!(reference, want);
     same_in_every_run(false, &reference).await;
 }
