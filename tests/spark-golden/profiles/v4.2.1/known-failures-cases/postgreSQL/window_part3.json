@@ -1,0 +1,9 @@
+{
+  "cases": {
+    "generators": [
+      24
+    ]
+  },
+  "file": "postgreSQL/window_part3",
+  "format_version": 1
+}

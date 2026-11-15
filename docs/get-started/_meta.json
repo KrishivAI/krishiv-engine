@@ -1,1 +1,4 @@
-{ "quickstart": "Quickstart" }
+{
+  "index": "Get started",
+  "quickstart": "Quickstart"
+}

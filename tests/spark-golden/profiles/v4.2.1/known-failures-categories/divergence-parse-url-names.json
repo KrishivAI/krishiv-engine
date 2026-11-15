@@ -1,0 +1,14 @@
+{
+  "adr": "0023",
+  "category": "divergence-parse-url-names",
+  "format_version": 1,
+  "kind": "divergence",
+  "rules": [
+    {
+      "file": "^url-functions$",
+      "order": 470,
+      "query": "parse_url"
+    }
+  ],
+  "summary": "parse_url's auto-generated column name prints the URL literal through the redacting display, so its user-info shows as *********(redacted) where Spark prints it (ADR 0038 redaction by construction; owner decision 2026-11-06). The values match; only the schema line differs."
+}

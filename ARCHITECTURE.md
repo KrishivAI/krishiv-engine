@@ -59,11 +59,11 @@ holds that crate's invariants, and the module docs (`//!`) at the top of the nam
 | Layer | Crates |
 |---|---|
 | L0 | `krishiv-common` (errors, config registry, redaction, secrets), `krishiv-alloc` |
-| L1 | `krishiv-types` (data types, `Batch`), `krishiv-memory` (pools, spill files), `krishiv-store` (object-store URLs, settings, store building), `krishiv-udf-sdk`, `krishiv-connector-sdk`, `krishiv-arrow-bridge` (temporary: moves iceberg-rust's Arrow 58 values to Arrow 60 over the C Data Interface) |
+| L1 | `krishiv-types` (data types, `Batch`), `krishiv-memory` (pools, spill files), `krishiv-store` (object-store URLs, settings, store building), `krishiv-udf-sdk`, `krishiv-connector-sdk`, `krishiv-udf-sandbox` (the Python UDF workers' Landlock/seccomp sandbox), `krishiv-arrow-bridge` (temporary: moves iceberg-rust's Arrow 58 values to Arrow 60 over the C Data Interface) |
 | L2 | `krishiv-kernels`, `krishiv-functions` (registry and bindings), `krishiv-io` (formats, scan, runtime filters) |
 | L3 | `krishiv-sql`, `krishiv-plan`, `krishiv-optimizer` |
 | L4 | `krishiv-exec`, `krishiv-plan-codec`, `krishiv-state`, `krishiv-stream` |
-| L5 | `krishiv-session`, `krishiv-shuffle`, `krishiv-scheduler`, `krishiv-connectors-{kafka,iceberg,delta,cdc}` |
+| L5 | `krishiv-session`, `krishiv-udf-pool` (the server's sandboxed Python UDF worker processes), `krishiv-shuffle`, `krishiv-scheduler`, `krishiv-connectors-{kafka,iceberg,delta,cdc}` |
 | L6 | `krishiv-connect`, `krishiv-flight-sql`, `krishiv-mcp`, `krishiv-server`, `krishiv-python`, `krishiv-ui-assets` |
 | L7 | `krishiv` (facade), `krishiv-cli`, `krishiv-bench-runner`; test crates `krishiv-testkit`, `krishiv-sim` |
 
@@ -82,7 +82,7 @@ the four connector crates.
 | Type coercion | `crates/krishiv-plan/src/analyzer/coerce.rs`; cast kernels in `crates/krishiv-kernels/src/cast/` |
 | Data types and the Arrow mapping | `crates/krishiv-types/src/data_type.rs`, `arrow.rs`, `ddl.rs` |
 | Config keys | `crates/krishiv-common/src/config/registry.rs` (`REGISTRY` and the sorted `INDEX`); lookup and parsing in `config/mod.rs`; per-session values in `crates/krishiv-session/src/conf.rs` |
-| Error classes | `crates/krishiv-common/vendored/spark-error-conditions.json` (Spark's, vendored) and `krishiv-error-classes.json` (`KRISHIV_*`), compiled by `crates/krishiv-common/build.rs` into typed constructors |
+| Error classes | `crates/krishiv-common/vendored/spark-error-conditions.json` (Spark 4.3.0), `spark-error-conditions-4.2.1.json` (vendored; the classes are their union, `ErrorClass::message_template_for(SparkRelease)` gives each release's text) and `krishiv-error-classes.json` (`KRISHIV_*`), compiled by `crates/krishiv-common/build.rs` into typed constructors |
 | Spark-version profiles | `SparkProfile` (3.5, 4.0, 4.1, 4.2) in `crates/krishiv-functions/src/signature.rs`; set with `SessionBuilder::profile`; kernel version in `crates/krishiv-kernels/src/version.rs` |
 | Plan codec and its feature flags | `crates/krishiv-plan-codec/src/features.rs` (registry, `feature_of`), `proto/krishiv/plan/v1/plan.proto`, `tools/plan-protogen/`; goldens in `crates/krishiv-plan-codec/tests/golden/` |
 | Memory pool, reservations, spill | `crates/krishiv-memory/src/` (`pool.rs`, `reservation.rs`, `spill.rs`, `spillfile/`); the driver side in `crates/krishiv-exec/src/driver.rs` |
@@ -132,7 +132,7 @@ Do not edit these by hand; each names its generator.
 |---|---|
 | `crates/krishiv-plan-codec/src/proto/krishiv.plan.v1.pb.rs` | `tools/plan-protogen` (`--write`; CI runs `--check`) |
 | `crates/krishiv-connect/src/proto/` | `tools/connect-protogen` |
-| `crates/krishiv-common/vendored/spark-error-conditions.json` | `tests/scripts/gen_error_classes.py` |
+| `crates/krishiv-common/vendored/spark-error-conditions.json`, `spark-error-conditions-4.2.1.json` | `tests/scripts/gen_error_classes.py` |
 | `crates/krishiv-functions/vendored/spark-functions.tsv` | `tests/scripts/gen_function_registry.py` |
 | `tests/fixtures/spark-*/` and `tests/fixtures/analysis/` (one file per function or coercion file) | the `tests/scripts/gen_*.py` scripts and `KRISHIV_UPDATE_MANIFEST=1` |
 | `tests/spark-golden/v4.2.0/` | `tests/scripts/import_spark_golden.sh` |

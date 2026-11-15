@@ -116,13 +116,18 @@ pub async fn serve_capped(
             max_connections.clamp(1, Semaphore::MAX_PERMITS),
         )),
     };
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown)
-        .await
+    // The peer address rides on every request for the authentication throttle.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<crate::guard::PeerAddr>(),
+    )
+    .with_graceful_shutdown(shutdown)
+    .await
 }
 
 /// A listener whose connections each hold a permit until they close.
-struct CappedListener {
+#[derive(Debug)]
+pub struct CappedListener {
     inner: TcpListener,
     permits: Arc<Semaphore>,
 }

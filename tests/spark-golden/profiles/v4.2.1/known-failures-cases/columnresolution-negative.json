@@ -1,0 +1,9 @@
+{
+  "cases": {
+    "depends-on-command": [
+      35
+    ]
+  },
+  "file": "columnresolution-negative",
+  "format_version": 1
+}

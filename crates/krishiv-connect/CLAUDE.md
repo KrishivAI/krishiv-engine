@@ -8,10 +8,10 @@ Spark Connect (protocols 3.5, 4.0, 4.1, 4.2, 4.3; one 4.3 superset decoder): the
 the logical-plan IR of `krishiv-plan`. The server (P3-T011, P3-T012) extends this decoder; it does not replace it.
 
 ## Key files
-- `src/wire.rs` the only decode path (`wire::decode_*`; `decode_request` for any RPC request, the `Request` trait the
-  generated layout implements): size, count, depth and field-version checks
+- `src/wire.rs` the only decode path (`wire::decode_*`, `decode_*_with(bytes, &DecodeOptions)`; `decode_request` for any RPC request, the `Request` trait the
+  generated layout implements): size, count, depth (`krishiv.connect.maxPlanDepth`) and field-version checks
 - `src/proto/mod.rs` versioned generated protos; `src/proto/v4_3/spark.connect.pb.rs` generated messages (4.2 is kept only for the golden descriptor) (do not edit)
-- `src/translate/mod.rs` `translate_*` entry points; `src/translate/relation.rs` and `expression.rs` (IR building)
+- `src/translate/mod.rs` `translate_*` entry points, `command_not_supported` (commands are 56K00 until T012); `src/translate/relation.rs` and `expression.rs` (IR building)
 - `src/translate/literal.rs` literals; `src/translate/names.rs` names and plan-id origins
 - `src/translate/errors.rs` `KRISHIV_UNSUPPORTED_FEATURE` and `CONNECT_INVALID_PLAN.*` errors
 - `src/arrow.rs` result columns Spark sends in another Arrow shape than the engine holds (geometry/geography)

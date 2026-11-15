@@ -1,0 +1,12 @@
+{
+  "cases": {
+    "depends-on-command": [
+      6
+    ],
+    "query-features": [
+      5
+    ]
+  },
+  "file": "alias-resolution-edge-cases",
+  "format_version": 1
+}

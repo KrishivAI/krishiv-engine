@@ -52,10 +52,15 @@ impl Session {
             env.statement_class,
             self.operation_id(),
         )?;
-        let index =
-            self.state
-                .runtime
-                .reserve(self.state.number, self.state.queries.session_id(), &row);
+        self.state
+            .queries
+            .add_request_tags(&row, &self.request_tags);
+        let index = self.state.runtime.reserve_tagged(
+            self.state.number,
+            self.state.queries.session_id(),
+            &row,
+            self.tagging_of_row(&row),
+        );
         let pool = self
             .state
             .memory
@@ -78,7 +83,7 @@ impl Session {
         };
         // A failed attach drops `run`, which closes the row.
         self.attach(&ctx, &row, &env.config)?;
-        self.state.queries.mark_started(&row);
+        self.state.queries.mark_started(&row, None, 0);
         Ok(run)
     }
 }
@@ -90,7 +95,7 @@ impl Session {
     ///
     /// # Errors
     /// `UNABLE_TO_ACQUIRE_MEMORY` when the relation store cannot hold the rows.
-    pub(super) async fn script_result(
+    pub(crate) async fn script_result(
         &self,
         schema: SchemaRef,
         batches: Vec<RecordBatch>,
@@ -105,8 +110,12 @@ impl Session {
         let batches = batches
             .into_iter()
             .map(|b| {
-                RecordBatch::try_new(Arc::clone(&schema), b.columns().to_vec())
-                    .map_err(|e| crate::session::internal(e.to_string()))
+                RecordBatch::try_new_with_options(
+                    Arc::clone(&schema),
+                    b.columns().to_vec(),
+                    &arrow_array::RecordBatchOptions::new().with_row_count(Some(b.num_rows())),
+                )
+                .map_err(|e| crate::session::internal(e.to_string()))
             })
             .collect::<Result<Vec<_>, KrishivError>>()?;
         let (schema, batches) = if repeated {
@@ -117,8 +126,12 @@ impl Session {
             let batches = batches
                 .into_iter()
                 .map(|b| {
-                    RecordBatch::try_new(Arc::clone(&renamed), b.columns().to_vec())
-                        .map_err(|e| crate::session::internal(e.to_string()))
+                    RecordBatch::try_new_with_options(
+                        Arc::clone(&renamed),
+                        b.columns().to_vec(),
+                        &arrow_array::RecordBatchOptions::new().with_row_count(Some(b.num_rows())),
+                    )
+                    .map_err(|e| crate::session::internal(e.to_string()))
                 })
                 .collect::<Result<Vec<_>, KrishivError>>()?;
             (renamed, batches)

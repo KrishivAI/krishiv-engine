@@ -54,6 +54,39 @@ fn markdown_of(json: &Path, out: &Path) -> Result<String, String> {
     Ok(tidy(&text))
 }
 
+/// Rewrites a rustdoc intra-doc link whose target is an item path (`[`name`](ScalarUdf::name)`) to
+/// its label: the converter copies the path through as if it were a file, and the link checker of
+/// the docs (`tests/scripts/check_docs_links.py`) rightly rejects it.
+fn drop_item_links(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(open) = rest.find("](") {
+        let (head, tail) = rest.split_at(open);
+        let after = &tail[2..];
+        let item = after.find(')').and_then(|end| {
+            let target = &after[..end];
+            let is_item = target.contains("::")
+                && target
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '_' || c == ':');
+            head.rfind('[')
+                .filter(|_| is_item)
+                .map(|open_label| (open_label, end))
+        });
+        if let Some((open_label, end)) = item {
+            out.push_str(&head[..open_label]);
+            out.push_str(&head[open_label + 1..]);
+            rest = &after[end + 1..];
+        } else {
+            out.push_str(head);
+            out.push_str("](");
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Drops the converter's version banner (the format version changes with the nightly, not the API).
 fn tidy(text: &str) -> String {
     let mut lines = text.lines().peekable();
@@ -65,7 +98,7 @@ fn tidy(text: &str) -> String {
             }
             continue;
         }
-        out.push(l);
+        out.push(drop_item_links(l));
     }
     format!("{}\n", out.join("\n").trim())
 }
@@ -172,6 +205,19 @@ mod tests {
     fn tidy_drops_the_banner_and_the_blank_lines_after_it() {
         let t = tidy("# Crate Documentation\n\n**Format Version:** 57\n\n# Module `x`\n\nBody\n");
         assert_eq!(t, "# Module `x`\n\nBody\n");
+    }
+
+    #[test]
+    fn item_path_links_become_their_label_and_file_links_stay() {
+        assert_eq!(
+            drop_item_links(
+                "by [`name`](ScalarUdf::name) and [`v`](ScalarUdf::version) only, see [a](b.md#c) [x](Y::z"
+            ),
+            "by `name` and `v` only, see [a](b.md#c) [x](Y::z"
+        );
+        // A link whose `)` is on the next line, or an item link with no label bracket, is left alone.
+        assert_eq!(drop_item_links("see [`a`](B::c"), "see [`a`](B::c");
+        assert_eq!(drop_item_links("](A::b) and é[é](É::é)"), "](A::b) and éé");
     }
 
     #[test]

@@ -1,0 +1,10 @@
+{
+  "cases": {
+    "depends-on-command": [
+      8,
+      12
+    ]
+  },
+  "file": "subquery/subquery-offset",
+  "format_version": 1
+}

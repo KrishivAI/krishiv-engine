@@ -1,0 +1,1079 @@
+{
+ "format_version": 1,
+ "generator": "tests/scripts/gen_spark43_coverage_goldens.py",
+ "spark_version": "4.3.0",
+ "cases": [
+  {
+   "id": "fn_collect_union",
+   "area": "function",
+   "setup": [],
+   "sql": "select collect_union(x) from values (array(1,2)),(array(2,3)) as t(x)",
+   "mode": "rows",
+   "rows": [
+    [
+     "[1, 2, 3]"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "fn_collect_union_nulls",
+   "area": "function",
+   "setup": [],
+   "sql": "select collect_union(x) from values (array(1,null)),(null),(array(null,2)) as t(x)",
+   "mode": "rows",
+   "rows": [
+    [
+     "[1, 2]"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "fn_collect_union_empty",
+   "area": "function",
+   "setup": [],
+   "sql": "select collect_union(x) from values (array(1)) as t(x) where false",
+   "mode": "rows",
+   "rows": [
+    [
+     "[]"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "fn_to_base32",
+   "area": "function",
+   "setup": [],
+   "sql": "select to_base32(cast('abc' as binary)), to_base32(cast('' as binary)), to_base32(cast(null as binary))",
+   "mode": "rows",
+   "rows": [
+    [
+     "MFRGG===",
+     "",
+     null
+    ]
+   ],
+   "ncols": 3,
+   "wrapped": true
+  },
+  {
+   "id": "fn_from_base32",
+   "area": "function",
+   "setup": [],
+   "sql": "select cast(from_base32('MFRGG===') as string), from_base32(cast(null as string))",
+   "mode": "rows",
+   "rows": [
+    [
+     "abc",
+     null
+    ]
+   ],
+   "ncols": 2,
+   "wrapped": true
+  },
+  {
+   "id": "fn_from_base32_invalid",
+   "area": "function",
+   "setup": [],
+   "sql": "select from_base32('!!!')",
+   "mode": "rows",
+   "rows": [
+    [
+     ""
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "fn_variant_insert",
+   "area": "function",
+   "setup": [],
+   "sql": "select variant_insert(parse_json('{\"a\":1}'), '$.b', parse_json('2'))",
+   "mode": "rows",
+   "rows": [
+    [
+     "{\"a\":1,\"b\":2}"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "fn_variant_insert_nested_missing",
+   "area": "function",
+   "setup": [],
+   "sql": "select variant_insert(parse_json('{\"a\":1}'), '$.b.c', parse_json('2'))",
+   "mode": "rows",
+   "rows": [
+    [
+     "{\"a\":1,\"b\":{\"c\":2}}"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "fn_try_variant_insert",
+   "area": "function",
+   "setup": [],
+   "sql": "select try_variant_insert(parse_json('{\"a\":1}'), '$.b.c', parse_json('2')), try_variant_insert(parse_json('[1]'), '$.b', parse_json('2'))",
+   "mode": "rows",
+   "rows": [
+    [
+     "{\"a\":1,\"b\":{\"c\":2}}",
+     null
+    ]
+   ],
+   "ncols": 2,
+   "wrapped": true
+  },
+  {
+   "id": "fn_variant_array_append",
+   "area": "function",
+   "setup": [],
+   "sql": "select variant_array_append(parse_json('[1,2]'), '$', parse_json('3'))",
+   "mode": "rows",
+   "rows": [
+    [
+     "[1,2,3]"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "fn_variant_array_append_nested",
+   "area": "function",
+   "setup": [],
+   "sql": "select variant_array_append(parse_json('{\"a\":[1]}'), '$.a', parse_json('2'))",
+   "mode": "rows",
+   "rows": [
+    [
+     "{\"a\":[1,2]}"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "fn_try_variant_array_append",
+   "area": "function",
+   "setup": [],
+   "sql": "select try_variant_array_append(parse_json('{\"a\":1}'), '$.a', parse_json('3')), try_variant_array_append(parse_json('[1]'), '$', parse_json('3'))",
+   "mode": "rows",
+   "rows": [
+    [
+     null,
+     "[1,3]"
+    ]
+   ],
+   "ncols": 2,
+   "wrapped": true
+  },
+  {
+   "id": "fn_variant_strip_nulls",
+   "area": "function",
+   "setup": [],
+   "sql": "select variant_strip_nulls(parse_json('{\"a\":null,\"b\":[1,null],\"c\":{\"d\":null}}'))",
+   "mode": "rows",
+   "rows": [
+    [
+     "{\"b\":[1],\"c\":{}}"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "fn_variant_strip_nulls_scalar",
+   "area": "function",
+   "setup": [],
+   "sql": "select variant_strip_nulls(parse_json('null')), variant_strip_nulls(parse_json('1'))",
+   "mode": "rows",
+   "rows": [
+    [
+     null,
+     "1"
+    ]
+   ],
+   "ncols": 2,
+   "wrapped": true
+  },
+  {
+   "id": "fn_try_variant_set",
+   "area": "function",
+   "setup": [],
+   "sql": "select try_variant_set(parse_json('{\"a\":1}'), '$.a', parse_json('5')), try_variant_set(parse_json('{\"a\":1}'), '$.b.c', parse_json('5'))",
+   "mode": "rows",
+   "rows": [
+    [
+     "{\"a\":5}",
+     "{\"a\":1,\"b\":{\"c\":5}}"
+    ]
+   ],
+   "ncols": 2,
+   "wrapped": true
+  },
+  {
+   "id": "fn_localtime",
+   "area": "function",
+   "setup": [],
+   "sql": "select typeof(localtime()), typeof(localtime(3)), typeof(localtime(0))",
+   "mode": "rows",
+   "rows": [
+    [
+     "time(6)",
+     "time(3)",
+     "time(0)"
+    ]
+   ],
+   "ncols": 3,
+   "wrapped": true
+  },
+  {
+   "id": "fn_localtime_precision_error",
+   "area": "function",
+   "setup": [],
+   "sql": "select localtime(10)",
+   "mode": "rows",
+   "error_class": "DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
+  },
+  {
+   "id": "fn_time_disabled",
+   "area": "function",
+   "setup": [],
+   "sql": "select time'12:34:56'",
+   "mode": "rows",
+   "rows": [
+    [
+     "12:34:56"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "fn_time_precision_9_disabled",
+   "area": "function",
+   "setup": [],
+   "sql": "select cast(time'12:34:56.123456789' as time(9))",
+   "mode": "rows",
+   "error_class": "UNSUPPORTED_TIME_TYPE"
+  },
+  {
+   "id": "fn_timestamp_nanos_disabled",
+   "area": "function",
+   "setup": [],
+   "sql": "select current_timestamp(9)",
+   "mode": "rows",
+   "error_class": "FEATURE_NOT_ENABLED"
+  },
+  {
+   "id": "fn_time_precision_9",
+   "area": "function",
+   "setup": [
+    "set spark.sql.timeType.enabled=true"
+   ],
+   "sql": "select cast(cast(time'12:34:56.123456789' as time(9)) as string)",
+   "mode": "rows",
+   "rows": [
+    [
+     "12:34:56.123456789"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "fn_time_precision_6",
+   "area": "function",
+   "setup": [
+    "set spark.sql.timeType.enabled=true"
+   ],
+   "sql": "select cast(cast(time'12:34:56.123456789' as time(6)) as string), cast(cast('10:00:00' as time(3)) as string)",
+   "mode": "rows",
+   "rows": [
+    [
+     "12:34:56.123456",
+     "10:00:00"
+    ]
+   ],
+   "ncols": 2,
+   "wrapped": true
+  },
+  {
+   "id": "fn_time_precision_0",
+   "area": "function",
+   "setup": [
+    "set spark.sql.timeType.enabled=true"
+   ],
+   "sql": "select cast(cast(time'12:34:56.999999999' as time(0)) as string)",
+   "mode": "rows",
+   "rows": [
+    [
+     "12:34:56"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "fn_time_typeof_precisions",
+   "area": "function",
+   "setup": [
+    "set spark.sql.timeType.enabled=true"
+   ],
+   "sql": "select typeof(cast('10:00:00' as time(9))), typeof(cast('10:00:00' as time(3))), typeof(time'01:02:03')",
+   "mode": "rows",
+   "rows": [
+    [
+     "time(9)",
+     "time(3)",
+     "time(6)"
+    ]
+   ],
+   "ncols": 3,
+   "wrapped": true
+  },
+  {
+   "id": "fn_timestamp_ntz_to_time",
+   "area": "function",
+   "setup": [
+    "set spark.sql.timeType.enabled=true"
+   ],
+   "sql": "select cast(cast(timestamp_ntz'2024-01-02 03:04:05.123456' as time(6)) as string)",
+   "mode": "rows",
+   "rows": [
+    [
+     "03:04:05.123456"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "fn_timestamp_ntz_to_time_9",
+   "area": "function",
+   "setup": [
+    "set spark.sql.timeType.enabled=true",
+    "set spark.sql.timestampNanosTypes.enabled=true"
+   ],
+   "sql": "select cast(cast(timestamp_ntz'2024-01-02 03:04:05.123456789' as time(9)) as string)",
+   "mode": "rows",
+   "rows": [
+    [
+     "03:04:05.123456789"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "fn_time_to_timestamp_ntz_nanos",
+   "area": "function",
+   "setup": [
+    "set spark.sql.timeType.enabled=true",
+    "set spark.sql.timestampNanosTypes.enabled=true"
+   ],
+   "sql": "select cast(time'12:34:56.789' as timestamp_ntz(9))",
+   "mode": "rows",
+   "error_class": "UNSUPPORTED_OPERATION"
+  },
+  {
+   "id": "fn_current_timestamp_precision",
+   "area": "function",
+   "setup": [],
+   "sql": "select typeof(current_timestamp(3)), typeof(current_timestamp(6))",
+   "mode": "rows",
+   "error_class": "INVALID_TIMESTAMP_PRECISION"
+  },
+  {
+   "id": "fn_current_timestamp_precision_9",
+   "area": "function",
+   "setup": [
+    "set spark.sql.timestampNanosTypes.enabled=true"
+   ],
+   "sql": "select typeof(current_timestamp(9))",
+   "mode": "rows",
+   "rows": [
+    [
+     "timestamp_ltz(9)"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "fn_localtime_9",
+   "area": "function",
+   "setup": [
+    "set spark.sql.timeType.enabled=true"
+   ],
+   "sql": "select typeof(localtime(9))",
+   "mode": "rows",
+   "rows": [
+    [
+     "time(9)"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "beh_ceil_double_overflow",
+   "area": "behaviour",
+   "setup": [],
+   "sql": "select ceil(9223372036854775807.5d)",
+   "mode": "rows",
+   "error_class": "ARITHMETIC_OVERFLOW"
+  },
+  {
+   "id": "beh_floor_double_overflow",
+   "area": "behaviour",
+   "setup": [],
+   "sql": "select floor(cast(-9.3e18 as double))",
+   "mode": "rows",
+   "error_class": "ARITHMETIC_OVERFLOW"
+  },
+  {
+   "id": "beh_ceil_decimal_wide",
+   "area": "behaviour",
+   "setup": [],
+   "sql": "select ceil(cast(9223372036854775807 as decimal(19,0)) + 0.5)",
+   "mode": "rows",
+   "rows": [
+    [
+     "9223372036854775808"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "beh_ceil_in_range",
+   "area": "behaviour",
+   "setup": [],
+   "sql": "select ceil(1.2d), floor(-1.2d), ceil(cast(null as double)), ceil(cast('NaN' as double))",
+   "mode": "rows",
+   "rows": [
+    [
+     "2",
+     "-2",
+     null,
+     "0"
+    ]
+   ],
+   "ncols": 4,
+   "wrapped": true
+  },
+  {
+   "id": "beh_grouping_sets_empty_input",
+   "area": "behaviour",
+   "setup": [],
+   "sql": "select count(*) from (select 1 as a where false) group by grouping sets (())",
+   "mode": "rows",
+   "rows": [
+    [
+     "0"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "beh_grouping_sets_empty_sum",
+   "area": "behaviour",
+   "setup": [],
+   "sql": "select sum(a), count(a) from (select 1 as a where false) group by grouping sets (())",
+   "mode": "rows",
+   "rows": [
+    [
+     null,
+     "0"
+    ]
+   ],
+   "ncols": 2,
+   "wrapped": true
+  },
+  {
+   "id": "beh_grouping_sets_empty_with_key",
+   "area": "behaviour",
+   "setup": [],
+   "sql": "select a, count(*) from (select 1 as a where false) group by grouping sets ((a), ())",
+   "mode": "rows",
+   "rows": [],
+   "ncols": 2,
+   "wrapped": true
+  },
+  {
+   "id": "beh_rollup_empty_input",
+   "area": "behaviour",
+   "setup": [],
+   "sql": "select a, count(*) from (select 1 as a where false) group by rollup(a)",
+   "mode": "rows",
+   "rows": [],
+   "ncols": 2,
+   "wrapped": true
+  },
+  {
+   "id": "beh_plain_aggregate_empty",
+   "area": "behaviour",
+   "setup": [],
+   "sql": "select count(*), sum(a) from (select 1 as a where false)",
+   "mode": "rows",
+   "rows": [
+    [
+     "0",
+     null
+    ]
+   ],
+   "ncols": 2,
+   "wrapped": true
+  },
+  {
+   "id": "beh_group_by_empty_parens",
+   "area": "behaviour",
+   "setup": [],
+   "sql": "select count(*) from (select 1 a where false) group by ()",
+   "mode": "rows",
+   "error_class": "PARSE_SYNTAX_ERROR"
+  },
+  {
+   "id": "fix_in_subquery_null_hit",
+   "area": "fix",
+   "setup": [],
+   "sql": "select 1 where 1 in (select cast(null as int) union all select 1)",
+   "mode": "rows",
+   "rows": [
+    [
+     "1"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "fix_in_subquery_null_miss",
+   "area": "fix",
+   "setup": [],
+   "sql": "select count(*) from values (1) as a(x) where 2 in (select cast(null as int) union all select 1)",
+   "mode": "rows",
+   "rows": [
+    [
+     "0"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "fix_in_subquery_null_projected",
+   "area": "fix",
+   "setup": [],
+   "sql": "select x, x in (select y from values (1),(cast(null as int)) as b(y)) as r from values (1),(2) as a(x)",
+   "mode": "rows",
+   "rows": [
+    [
+     "1",
+     "true"
+    ],
+    [
+     "2",
+     "false"
+    ]
+   ],
+   "ncols": 2,
+   "wrapped": true
+  },
+  {
+   "id": "fix_not_in_subquery_null",
+   "area": "fix",
+   "setup": [],
+   "sql": "select x from values (1),(2),(3) as a(x) where x not in (select cast(null as int) union all select 1)",
+   "mode": "rows",
+   "rows": [],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "fix_in_subquery_null_left",
+   "area": "fix",
+   "setup": [],
+   "sql": "select x from values (1),(cast(null as int)) as a(x) where x in (select y from values (1),(2) as b(y))",
+   "mode": "rows",
+   "rows": [
+    [
+     "1"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "fix_pivot_duplicate_values",
+   "area": "fix",
+   "setup": [],
+   "sql": "select * from (select * from values ('a',1),('a',2),('b',3) as t(k,v)) pivot (sum(v) for k in ('a','b','a'))",
+   "mode": "rows",
+   "rows": [
+    [
+     "3",
+     "3",
+     "3"
+    ]
+   ],
+   "ncols": 3,
+   "wrapped": true
+  },
+  {
+   "id": "fix_pivot_duplicate_alias",
+   "area": "fix",
+   "setup": [],
+   "sql": "select * from (select * from values ('a',1),('b',3) as t(k,v)) pivot (sum(v) as s for k in ('a' as x,'b' as x))",
+   "mode": "rows",
+   "rows": [
+    [
+     "1",
+     "3"
+    ]
+   ],
+   "ncols": 2,
+   "wrapped": true
+  },
+  {
+   "id": "fix_cte_nondeterministic_pushdown",
+   "area": "fix",
+   "setup": [],
+   "sql": "with c as (select id, rand(1) r from range(10)) select count(*) from c where r < 2 and r > -1",
+   "mode": "rows",
+   "rows": [
+    [
+     "10"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "fix_cte_nondeterministic_two_refs",
+   "area": "fix",
+   "setup": [],
+   "sql": "with c as (select id, rand(3) r from range(6)) select count(*) from c a join c b on a.id = b.id where a.r < 2",
+   "mode": "rows",
+   "rows": [
+    [
+     "6"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "fix_join_null_safe_equality",
+   "area": "fix",
+   "setup": [],
+   "sql": "select a.x from values (1),(null) as a(x) join values (1),(null) as b(x) on a.x <=> b.x and a.x is not null",
+   "mode": "rows",
+   "rows": [
+    [
+     "1"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "fix_join_null_safe_full",
+   "area": "fix",
+   "setup": [],
+   "sql": "select a.x, b.x from values (1),(null) as a(x) full join values (1),(null) as b(x) on a.x <=> b.x",
+   "mode": "rows",
+   "rows": [
+    [
+     null,
+     null
+    ],
+    [
+     "1",
+     "1"
+    ]
+   ],
+   "ncols": 2,
+   "wrapped": true
+  },
+  {
+   "id": "fix_join_or_null",
+   "area": "fix",
+   "setup": [],
+   "sql": "select count(*) from values (1),(null) as a(x) join values (1),(null) as b(x) on a.x = b.x or a.x is null",
+   "mode": "rows",
+   "rows": [
+    [
+     "3"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "fix_insert_struct_by_position",
+   "area": "fix",
+   "setup": [
+    "create table s1 (a struct<x:int,y:string>) using parquet",
+    "insert into s1 values (named_struct('x', 1, 'y', 'u'))",
+    "create table s2 (a struct<y:string,x:int>) using parquet"
+   ],
+   "sql": "insert into s2 (a) select a from s1",
+   "mode": "rows",
+   "error_class": "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST"
+  },
+  {
+   "id": "fix_insert_struct_by_position_legacy",
+   "area": "fix",
+   "setup": [
+    "set spark.sql.storeAssignmentPolicy=LEGACY",
+    "create table s1 (a struct<x:int,y:string>) using parquet",
+    "insert into s1 values (named_struct('x', 1, 'y', 'u'))",
+    "create table s2 (a struct<y:string,x:int>) using parquet",
+    "insert into s2 (a) select a from s1"
+   ],
+   "sql": "select a.x, a.y from s2",
+   "mode": "rows",
+   "rows": [
+    [
+     null,
+     "1"
+    ]
+   ],
+   "ncols": 2,
+   "wrapped": true
+  },
+  {
+   "id": "fix_insert_struct_in_array",
+   "area": "fix",
+   "setup": [
+    "create table a1 (v array<struct<x:int,y:string>>) using parquet",
+    "insert into a1 values (array(named_struct('x', 1, 'y', 'u')))",
+    "create table a2 (v array<struct<y:string,x:int>>) using parquet"
+   ],
+   "sql": "insert into a2 (v) select v from a1",
+   "mode": "rows",
+   "error_class": "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST"
+  },
+  {
+   "id": "fix_insert_struct_in_map",
+   "area": "fix",
+   "setup": [
+    "create table m1 (v map<string,struct<x:int,y:string>>) using parquet",
+    "insert into m1 values (map('k', named_struct('x', 1, 'y', 'u')))",
+    "create table m2 (v map<string,struct<y:string,x:int>>) using parquet"
+   ],
+   "sql": "insert into m2 (v) select v from m1",
+   "mode": "rows",
+   "error_class": "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST"
+  },
+  {
+   "id": "syn_rebalance_clause",
+   "area": "syntax",
+   "setup": [],
+   "sql": "select * from range(3) rebalance",
+   "mode": "rows",
+   "rows": [
+    [
+     "0"
+    ],
+    [
+     "1"
+    ],
+    [
+     "2"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "syn_rebalance_hint",
+   "area": "syntax",
+   "setup": [],
+   "sql": "select /*+ REBALANCE(2) */ * from range(3)",
+   "mode": "rows",
+   "rows": [
+    [
+     "0"
+    ],
+    [
+     "1"
+    ],
+    [
+     "2"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "syn_rebalance_advisory",
+   "area": "syntax",
+   "setup": [],
+   "sql": "select /*+ REBALANCE(2, id) */ * from range(3)",
+   "mode": "rows",
+   "rows": [
+    [
+     "0"
+    ],
+    [
+     "1"
+    ],
+    [
+     "2"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "syn_comment_on_column",
+   "area": "syntax",
+   "setup": [
+    "create table tbl (id int, name string) using parquet"
+   ],
+   "sql": "comment on column tbl.name is 'the name'",
+   "mode": "rows",
+   "rows": [],
+   "ncols": 0
+  },
+  {
+   "id": "syn_comment_on_column_describe",
+   "area": "syntax",
+   "setup": [
+    "create table tbl (id int, name string) using parquet",
+    "comment on column tbl.name is 'the name'"
+   ],
+   "sql": "describe tbl",
+   "mode": "rows",
+   "rows": [
+    [
+     "id",
+     "int",
+     null
+    ],
+    [
+     "name",
+     "string",
+     "the name"
+    ]
+   ],
+   "ncols": 3,
+   "wrapped": false
+  },
+  {
+   "id": "syn_comment_on_column_missing",
+   "area": "syntax",
+   "setup": [
+    "create table tbl (id int, name string) using parquet"
+   ],
+   "sql": "comment on column tbl.nope is 'x'",
+   "mode": "rows",
+   "error_class": "UNRESOLVED_COLUMN.WITH_SUGGESTION"
+  },
+  {
+   "id": "syn_show_tables_as_json",
+   "area": "syntax",
+   "setup": [
+    "create table tbl (id int, name string) using parquet"
+   ],
+   "sql": "show tables as json",
+   "mode": "schema",
+   "columns": [
+    "json_metadata"
+   ]
+  },
+  {
+   "id": "syn_show_table_extended_as_json",
+   "area": "syntax",
+   "setup": [
+    "create table tbl (id int, name string) using parquet"
+   ],
+   "sql": "show table extended like 'tbl' as json",
+   "mode": "schema",
+   "columns": [
+    "json_metadata"
+   ]
+  },
+  {
+   "id": "syn_show_partitions_as_json",
+   "area": "syntax",
+   "setup": [
+    "create table pt (id int, p int) using parquet partitioned by (p)",
+    "insert into pt values (1, 7)"
+   ],
+   "sql": "show partitions pt as json",
+   "mode": "schema",
+   "columns": [
+    "json_metadata"
+   ]
+  },
+  {
+   "id": "syn_show_columns_plain",
+   "area": "syntax",
+   "setup": [
+    "create table tbl (id int, name string) using parquet"
+   ],
+   "sql": "show columns in tbl",
+   "mode": "rows",
+   "rows": [
+    [
+     "id"
+    ],
+    [
+     "name"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": false
+  },
+  {
+   "id": "syn_time_travel_at_version",
+   "area": "syntax",
+   "setup": [
+    "create table tbl (id int, name string) using parquet"
+   ],
+   "sql": "select * from tbl@v1",
+   "mode": "rows",
+   "error_class": "UNSUPPORTED_FEATURE.TIME_TRAVEL"
+  },
+  {
+   "id": "syn_time_travel_at_timestamp",
+   "area": "syntax",
+   "setup": [
+    "create table tbl (id int, name string) using parquet"
+   ],
+   "sql": "select * from tbl@20240101000000000",
+   "mode": "rows",
+   "error_class": "UNSUPPORTED_FEATURE.TIME_TRAVEL"
+  },
+  {
+   "id": "syn_time_travel_clause_and_at",
+   "area": "syntax",
+   "setup": [
+    "create table tbl (id int, name string) using parquet"
+   ],
+   "sql": "select * from tbl@v1 version as of 1",
+   "mode": "rows",
+   "error_class": "MULTIPLE_TIME_TRAVEL_SPEC"
+  },
+  {
+   "id": "syn_insert_replace_where",
+   "area": "syntax",
+   "setup": [
+    "create table tbl (id int, name string) using parquet"
+   ],
+   "sql": "insert into tbl replace where id = 1 values (1, 'a')",
+   "mode": "rows",
+   "error_class": "UNSUPPORTED_FEATURE.TABLE_OPERATION"
+  },
+  {
+   "id": "syn_insert_replace_where_columns",
+   "area": "syntax",
+   "setup": [
+    "create table tbl (id int, name string) using parquet"
+   ],
+   "sql": "insert into tbl (id, name) replace where id = 1 values (1, 'a')",
+   "mode": "rows",
+   "error_class": "UNSUPPORTED_FEATURE.TABLE_OPERATION"
+  },
+  {
+   "id": "syn_update_with_options",
+   "area": "syntax",
+   "setup": [
+    "create table tbl (id int, name string) using parquet"
+   ],
+   "sql": "update tbl with ('k' = 'v') set name = 'x' where id = 1",
+   "mode": "rows",
+   "error_class": "UNSUPPORTED_FEATURE.TABLE_OPERATION"
+  },
+  {
+   "id": "syn_delete_with_options",
+   "area": "syntax",
+   "setup": [
+    "create table tbl (id int, name string) using parquet"
+   ],
+   "sql": "delete from tbl with ('k' = 'v') where id = 1",
+   "mode": "rows",
+   "error_class": "UNSUPPORTED_FEATURE.TABLE_OPERATION"
+  },
+  {
+   "id": "syn_merge_with_options",
+   "area": "syntax",
+   "setup": [
+    "create table tbl (id int, name string) using parquet",
+    "create temporary view src as select 1 as id, 'z' as name"
+   ],
+   "sql": "merge into tbl with ('k' = 'v') using src on tbl.id = src.id when matched then update set name = src.name",
+   "mode": "rows",
+   "error_class": "UNSUPPORTED_FEATURE.TABLE_OPERATION"
+  },
+  {
+   "id": "syn_bin_by",
+   "area": "syntax",
+   "setup": [
+    "create temporary view t as select * from values (1, 10), (2, 20), (3, 30) as t(k, v)"
+   ],
+   "sql": "select k, count(*) from t bin by k width 10",
+   "mode": "rows",
+   "error_class": "PARSE_SYNTAX_ERROR"
+  },
+  {
+   "id": "syn_scalar_udf_in_tvf_argument",
+   "area": "syntax",
+   "setup": [],
+   "sql": "select * from range(1, 4, 1, abs(-2))",
+   "mode": "rows",
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ],
+    [
+     "3"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  },
+  {
+   "id": "syn_scalar_subquery_in_tvf_argument",
+   "area": "syntax",
+   "setup": [],
+   "sql": "select * from range((select 2))",
+   "mode": "rows",
+   "error_class": "NON_FOLDABLE_ARGUMENT"
+  },
+  {
+   "id": "syn_scalar_function_in_tvf_argument",
+   "area": "syntax",
+   "setup": [],
+   "sql": "select * from explode(array(abs(-1), length('ab')))",
+   "mode": "rows",
+   "rows": [
+    [
+     "1"
+    ],
+    [
+     "2"
+    ]
+   ],
+   "ncols": 1,
+   "wrapped": true
+  }
+ ]
+}

@@ -18,7 +18,7 @@ Task / spec / ADRs:
 
 - [ ] Commits are signed off (`git commit -s`, DCO) and follow Conventional Commits.
 - [ ] Source files carry `SPDX-License-Identifier: Apache-2.0`.
-- [ ] Tests written first and meaningful; docs updated in the same PR; `CHANGELOG` is generated (do not edit it).
+- [ ] Tests written first and meaningful; docs updated in the same PR; a `changelog.d/<pr>.<type>.md` fragment added (or the `no-changelog` label); do not edit `CHANGELOG.md`.
 - [ ] Every `unsafe` block has a `// SAFETY:` argument; lint exceptions use `#[expect(..., reason = "...")]`, never `allow`.
 - [ ] Errors carry a Spark error class and SQLSTATE from the registry (no ad-hoc strings).
 - [ ] Spark-observable behaviour: expectations come from executing Spark in the `krishiv-bench` container, never transcribed.
