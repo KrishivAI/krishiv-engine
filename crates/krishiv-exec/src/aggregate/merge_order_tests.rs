@@ -2,8 +2,10 @@
 //! Order-sensitive aggregates (`first`, `last`, the ties of `max_by` and
 //! `min_by`, float `max`/`min` of `0.0` and `-0.0`, `percentile_approx`)
 //! across drivers follow the driver-partition order whatever order the
-//! drivers combine in, and whether or not the aggregate spilled: the answer
-//! never depends on memory.
+//! drivers combine in, and whether or not each driver's table spilled before
+//! it combined. Known gaps, not covered here: a driver that spills part-way
+//! through its input, the two-phase partial aggregate (it flushes or bypasses
+//! by memory), and a final phase over an exchange (fetch order).
 #![cfg(not(loom))]
 #![expect(
     clippy::disallowed_methods,
@@ -287,5 +289,33 @@ fn only_float_extrema_observe_merge_order() {
 async fn percentile_approx_does_not_depend_on_memory() {
     let reference = run(Mode::Percentiles, true, &[0, 1, 2], &[0, 1, 2]).await;
     assert_eq!(reference.len(), usize::try_from(SPREAD_KEYS).unwrap());
+    // Within the summary's error of the exact rank (relative error 1 /
+    // accuracy), so an answer wrong alike in every run fails too.
+    for row in &reference {
+        let mut values: Vec<f64> = (0..3)
+            .flat_map(|p| {
+                let b = input(Mode::Percentiles, p);
+                let d = b.data();
+                let k = d.column(0).as_primitive::<Int64Type>().clone();
+                let v = d.column(1).as_primitive::<Float64Type>().clone();
+                (0..d.num_rows())
+                    .filter(|&r| k.value(r) == row[0])
+                    .map(|r| v.value(r))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        values.sort_by(f64::total_cmp);
+        let n = values.len() as f64;
+        for (q, bits) in [(0.5, row[1]), (0.9, row[2])] {
+            let got = f64::from_bits(bits.cast_unsigned());
+            let rank = values.partition_point(|&v| v < got) as f64;
+            let slack = n / 100.0 + 1.0;
+            assert!(
+                (rank - q * n).abs() <= slack,
+                "key {}: percentile {q} = {got} at rank {rank} of {n}",
+                row[0]
+            );
+        }
+    }
     same_in_every_run(Mode::Percentiles, &reference).await;
 }
