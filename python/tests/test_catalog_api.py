@@ -1,0 +1,93 @@
+# SPDX-License-Identifier: Apache-2.0
+"""``spark.catalog`` returns lists of the records ``pyspark.sql.catalog`` defines, not DataFrames (PY-026)."""
+
+from __future__ import annotations
+
+import pytest
+
+from krishiv.errors import AnalysisException
+from krishiv.sql import SparkSession
+from krishiv.sql.catalog import CatalogMetadata, Column, Database, Function, Table
+
+pa = pytest.importorskip("pyarrow")
+
+
+@pytest.fixture
+def spark() -> SparkSession:
+    return SparkSession.builder.create()
+
+
+def test_list_tables_is_a_list_of_table_records(spark: SparkSession) -> None:
+    spark.sql("CREATE TEMPORARY VIEW v AS SELECT 1 AS a, 'x' AS b")
+    tables = spark.catalog.listTables()
+    assert isinstance(tables, list)
+    [v] = [t for t in tables if t.name == "v"]
+    assert isinstance(v, Table)
+    assert v == Table(name="v", catalog=None, namespace=[], description=None, tableType="TEMPORARY", isTemporary=True)
+    assert v._fields == ("name", "catalog", "namespace", "description", "tableType", "isTemporary")
+
+
+def test_create_dataframe_tables_stay_hidden(spark: SparkSession) -> None:
+    spark.createDataFrame([(1,)], ["a"])
+    assert spark.catalog.listTables() == []
+
+
+def test_get_table_and_exists(spark: SparkSession) -> None:
+    spark.sql("CREATE TEMPORARY VIEW v AS SELECT 1 AS a")
+    assert spark.catalog.getTable("v").name == "v"
+    assert spark.catalog.tableExists("v")
+    assert spark.catalog.tableExists("V")
+    assert not spark.catalog.tableExists("nope")
+    with pytest.raises(AnalysisException) as e:
+        spark.catalog.getTable("nope")
+    assert "TABLE_OR_VIEW_NOT_FOUND" in str(e.value)
+
+
+def test_databases_and_current(spark: SparkSession) -> None:
+    dbs = spark.catalog.listDatabases()
+    assert [d.name for d in dbs] == ["default"]
+    assert isinstance(dbs[0], Database)
+    assert dbs[0]._fields == ("name", "catalog", "description", "locationUri")
+    assert spark.catalog.currentDatabase() == "default"
+    assert spark.catalog.databaseExists("default")
+    assert not spark.catalog.databaseExists("nope")
+    assert spark.catalog.getDatabase("default").catalog == "spark_catalog"
+    assert [d.name for d in spark.catalog.listDatabases("def*")] == ["default"]
+    assert spark.catalog.listDatabases("zzz*") == []
+
+
+def test_catalogs(spark: SparkSession) -> None:
+    assert spark.catalog.currentCatalog() == "spark_catalog"
+    assert CatalogMetadata(name="spark_catalog", description=None) in spark.catalog.listCatalogs()
+    spark.catalog.setCurrentCatalog("SPARK_CATALOG")
+    with pytest.raises(AnalysisException) as e:
+        spark.catalog.setCurrentCatalog("no_such_catalog")
+    assert "CATALOG_NOT_FOUND" in str(e.value)
+    assert spark.catalog.currentCatalog() == "spark_catalog"
+
+
+def test_list_columns(spark: SparkSession) -> None:
+    spark.sql("CREATE TEMPORARY VIEW v AS SELECT 1 AS a, 'x' AS b")
+    cols = spark.catalog.listColumns("v")
+    assert [c.name for c in cols] == ["a", "b"]
+    assert all(isinstance(c, Column) for c in cols)
+    assert cols[0].dataType == "int"
+    assert cols[0]._fields == ("name", "description", "dataType", "nullable", "isPartition", "isBucket", "isCluster")
+
+
+def test_functions(spark: SparkSession) -> None:
+    assert spark.catalog.functionExists("abs")
+    assert not spark.catalog.functionExists("no_such_function")
+    f = spark.catalog.getFunction("abs")
+    assert isinstance(f, Function)
+    assert f.name == "abs"
+    assert f.isTemporary
+    assert any(x.name == "abs" for x in spark.catalog.listFunctions())
+    assert [x.name for x in spark.catalog.listFunctions(pattern="abs")] == ["abs"]
+    with pytest.raises(AnalysisException):
+        spark.catalog.getFunction("no_such_function")
+
+
+def test_argument_types_are_checked(spark: SparkSession) -> None:
+    with pytest.raises(TypeError):
+        spark.catalog.getTable(1)  # type: ignore[arg-type]

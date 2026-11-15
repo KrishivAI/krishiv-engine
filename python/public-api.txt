@@ -1125,6 +1125,39 @@ def xpath_string(xml: ColumnOrName, path: ColumnOrName) -> Column
 def xxhash64(*cols: ColumnOrName) -> Column
 def year(col: ColumnOrName) -> Column
 def zeroifnull(col: ColumnOrName) -> Column
+## sql/catalog.py
+CatalogMetadata.description: str | None
+CatalogMetadata.name: str
+Column.dataType: str
+Column.description: str | None
+Column.isBucket: bool
+Column.isCluster: bool
+Column.isPartition: bool
+Column.name: str
+Column.nullable: bool
+Database.catalog: str | None
+Database.description: str | None
+Database.locationUri: str
+Database.name: str
+Function.catalog: str | None
+Function.className: str
+Function.description: str | None
+Function.isTemporary: bool
+Function.name: str
+Function.namespace: list[str] | None
+Table.catalog: str | None
+Table.description: str | None
+Table.isTemporary: bool
+Table.name: str
+Table.namespace: list[str] | None
+Table.tableType: str
+__all__
+__all__ = ['CatalogMetadata', 'Column', 'Database', 'Function', 'Table']
+class CatalogMetadata(NamedTuple)
+class Column(NamedTuple)
+class Database(NamedTuple)
+class Function(NamedTuple)
+class Table(NamedTuple)
 ## sql/column.py
 Column.astype
 Column.def __add__(self, other: Any) -> Column
@@ -1463,14 +1496,25 @@ class Row(tuple[Any, ...])
 Catalog.def __init__(self, session: SparkSession) -> None
 Catalog.def cacheTable(self, tableName: str, storageLevel: StorageLevel | None=None) -> None
 Catalog.def clearCache(self) -> None
+Catalog.def currentCatalog(self) -> str
 Catalog.def currentDatabase(self) -> str
+Catalog.def databaseExists(self, dbName: str) -> bool
 Catalog.def dropTempView(self, viewName: str) -> bool
+Catalog.def functionExists(self, functionName: str, dbName: str | None=None) -> bool
+Catalog.def getDatabase(self, dbName: str) -> Database
+Catalog.def getFunction(self, functionName: str) -> Function
+Catalog.def getTable(self, tableName: str) -> Table
 Catalog.def isCached(self, tableName: str) -> bool
-Catalog.def listDatabases(self) -> DataFrame
-Catalog.def listTables(self, dbName: str | None=None) -> DataFrame
+Catalog.def listCatalogs(self, pattern: str | None=None) -> list[CatalogMetadata]
+Catalog.def listColumns(self, tableName: str, dbName: str | None=None) -> list[Column]
+Catalog.def listDatabases(self, pattern: str | None=None) -> list[Database]
+Catalog.def listFunctions(self, dbName: str | None=None, pattern: str | None=None) -> list[Function]
+Catalog.def listTables(self, dbName: str | None=None, pattern: str | None=None) -> list[Table]
 Catalog.def refreshByPath(self, path: str) -> None
 Catalog.def refreshTable(self, tableName: str) -> DataFrame
 Catalog.def registerFunction(self, name: str, f: Any, returnType: Any=None) -> Any
+Catalog.def setCurrentCatalog(self, catalogName: str) -> None
+Catalog.def setCurrentDatabase(self, dbName: str) -> None
 Catalog.def tableExists(self, tableName: str, dbName: str | None=None) -> bool
 Catalog.def uncacheTable(self, tableName: str) -> None
 SPARK_VERSION
