@@ -980,3 +980,45 @@ fn shared_peak_never_exceeds_the_pool_when_consumers_hand_bytes_over() {
         stats.peak_held()
     );
 }
+
+/// `fair_cancellation` (P3-T003): when spills cannot make room the lowest priority is aborted
+/// first, not the largest query.
+#[tokio::test(start_paused = true)]
+async fn the_lowest_priority_is_aborted_before_the_largest_query() {
+    let root = new_root(8 * MIB);
+    let big = root.child_with_priority("big", None, 50);
+    let small = root.child_with_priority("small", None, 10);
+    let asker = root.child_with_priority("asker", None, 50);
+    let (_s1, big_driver) = Spiller::new(&big, "sort", 5 * MIB).spawn(NO_SPILL);
+    let (_s2, small_driver) = Spiller::new(&small, "sort", 2 * MIB).spawn(NO_SPILL);
+
+    let mut a = holder(&asker, "hash-build", 0);
+    a.grow(3 * MIB).await.unwrap();
+
+    let e = small_driver.await.unwrap().unwrap_err();
+    assert_eq!(e, MemoryError::Aborted { held: 2 * MIB });
+    assert!(small.check_aborted().is_err());
+    assert!(
+        big.check_aborted().is_ok(),
+        "the larger, higher-priority query survives"
+    );
+    assert_eq!(root.stats().aborts, 1);
+    drop(big_driver);
+}
+
+/// Equal priorities keep today's order: the query furthest above its share goes first.
+#[tokio::test(start_paused = true)]
+async fn equal_priorities_abort_the_largest_query() {
+    let root = new_root(8 * MIB);
+    let big = root.child_with_priority("big", None, 30);
+    let small = root.child_with_priority("small", None, 30);
+    let asker = root.child("asker", None);
+    let (_s1, big_driver) = Spiller::new(&big, "sort", 5 * MIB).spawn(NO_SPILL);
+    let (_s2, _small_driver) = Spiller::new(&small, "sort", 2 * MIB).spawn(NO_SPILL);
+
+    let mut a = holder(&asker, "hash-build", 0);
+    a.grow(3 * MIB).await.unwrap();
+
+    assert!(big_driver.await.unwrap().is_err());
+    assert!(big.check_aborted().is_err() && small.check_aborted().is_ok());
+}

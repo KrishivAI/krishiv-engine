@@ -115,6 +115,8 @@ pub struct Session {
     pub(crate) operation: Option<Arc<crate::history::Operation>>,
     /// The statement's own time limit ([`crate::QueryOptions::deadline`]).
     pub(crate) deadline: Option<std::time::Duration>,
+    /// The statement's request tags ([`crate::QueryOptions::tags`]).
+    pub(crate) request_tags: Arc<[Arc<str>]>,
 }
 
 impl fmt::Debug for Session {
@@ -520,6 +522,7 @@ impl Session {
                 error,
                 self.operation_id(),
             );
+            self.state.queries.add_request_tags(&id, &self.request_tags);
             // Ended by `cancel`/`interrupt_all` while it was analyzed (`action.rs`).
             if let Some(reason) = cancelled {
                 self.state.queries.note_cancel_reason(&id, reason);
@@ -619,7 +622,13 @@ impl Session {
         )?;
         match statement {
             Statement::Query(q) => {
-                let plan = self.lower_identified(&q, &env, redacted)?;
+                let plan = self.lower_identified(&q, &env, redacted).map_err(|e| {
+                    crate::execute_immediate::unbound_markers(
+                        e,
+                        query,
+                        env.parser.double_quoted_identifiers,
+                    )
+                })?;
                 let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
                 df.analyzed_in_with_text(env, Some(redacted)).await?;
                 Ok(df)
@@ -648,7 +657,15 @@ impl Session {
             }
             Statement::DropFunction(f) => self.exec_drop_function(&f).await,
             Statement::CreateTable(t) => {
-                Box::pin(self.exec_create_table(&t, query, &env.identifier_spans)).await
+                Box::pin(self.exec_create_table(&t, query, &env.identifier_spans))
+                    .await
+                    .map_err(|e| {
+                        crate::execute_immediate::unbound_markers(
+                            e,
+                            query,
+                            env.parser.double_quoted_identifiers,
+                        )
+                    })
             }
             Statement::CreateTableLike(t) => Box::pin(self.exec_create_table_like(&t, query)).await,
             Statement::DropTable(d) => self.exec_drop_table(&d).await,
@@ -671,9 +688,15 @@ impl Session {
                 self.exec_alter_view(&a, query, ids).await
             }
             Statement::AlterTable(a) => Box::pin(self.exec_alter_table(&a, query)).await,
-            Statement::Insert(i) => {
-                Box::pin(self.exec_insert(&i, query, &env.identifier_spans)).await
-            }
+            Statement::Insert(i) => Box::pin(self.exec_insert(&i, query, &env.identifier_spans))
+                .await
+                .map_err(|e| {
+                    crate::execute_immediate::unbound_markers(
+                        e,
+                        query,
+                        env.parser.double_quoted_identifiers,
+                    )
+                }),
             Statement::Truncate(t) => self.exec_truncate(&t).await,
             Statement::Script(c) => {
                 let off =
@@ -688,6 +711,13 @@ impl Session {
                 Box::pin(self.exec_script(&c, query, redacted)).await
             }
             Statement::Analyze(a) => Box::pin(self.exec_analyze(&a, query)).await,
+            Statement::CreatePipelineDataset(c) => Self::exec_create_pipeline_dataset(&c),
+            Statement::CreateFlow(f) => self.exec_create_flow(&f),
+            Statement::LoadData(l) => self.exec_load_data(&l),
+            // The path write belongs to the session's write path: it has no plan node to lower to yet.
+            Statement::InsertDirectory(_) => {
+                Err(unsupported_statement("INSERT OVERWRITE DIRECTORY"))
+            }
             Statement::AddResource(_) => Err(unsupported_statement("ADD JAR | FILE | ARCHIVE")),
             Statement::ListResource(_) => Err(unsupported_statement("LIST JAR | FILE | ARCHIVE")),
             Statement::Delete(d) => {
@@ -1136,9 +1166,10 @@ impl Session {
         let (tx, rx) = tokio::sync::oneshot::channel();
         // Registered from here on: `cancel` and `interrupt_all` reach the
         // action during analysis and planning too (`action.rs`).
-        let action = self.state.runtime.actions.begin(
+        let action = self.state.runtime.actions.begin_tagged(
             self.state.number,
             self.operation_id().map(crate::QueryId::as_str),
+            self.tagging(),
         );
         let reason = action.reason();
         let task = self.state.runtime.executor.spawn(
@@ -1330,6 +1361,10 @@ impl Session {
             cache_cap,
             sql_functions,
             functions_version,
+            sample_salt: {
+                use std::hash::BuildHasher as _;
+                std::collections::hash_map::RandomState::new().hash_one(0_u8)
+            },
         }
     }
 
@@ -1561,6 +1596,7 @@ impl Session {
         };
         let cx = PlanningContext::new(tables, Arc::clone(&env.config))
             .with_query_start(start)
+            .with_sample_salt(env.sample_salt)
             .with_user(self.state.principal.name.as_str())
             .with_udfs(Arc::clone(&self.state.udfs));
         let physical = self.state.planner.plan(&optimized, &cx)?;
@@ -1632,6 +1668,33 @@ impl Session {
         Ok((crate::run_site::resolve_sites(stream, env), query))
     }
 
+    /// The tags a query started now carries: the session's, then the statement's request tags as
+    /// `(tag, "")` pairs (a key appears once; design P3-T064 §4.3).
+    pub(crate) fn effective_tags(&self) -> Vec<(String, String)> {
+        let mut tags = self.state.queries.tags_now();
+        crate::action::merge_request_tags(&mut tags, &self.request_tags);
+        tags
+    }
+
+    /// [`Self::tagging`] with the tags row `log_id` was recorded with, so a `set_tag` while the
+    /// query waited for admission does not change what cancel by tag sees.
+    pub(crate) fn tagging_of_row(&self, log_id: &str) -> crate::action::Tagging {
+        let mut tagging = self.tagging();
+        if let Some(tags) = self.state.queries.row_tags(log_id) {
+            tagging.tags = tags.into();
+        }
+        tagging
+    }
+
+    /// The principal and tags of a statement started now, for cancel by tag.
+    pub(crate) fn tagging(&self) -> crate::action::Tagging {
+        crate::action::Tagging {
+            principal: Arc::from(self.state.principal.name.as_str()),
+            tags: self.effective_tags().into(),
+            request_tags: Arc::clone(&self.request_tags),
+        }
+    }
+
     /// Asks the admission controller for a permit for the query whose
     /// `system.queries` row is `log_id`. A controller that answers at once
     /// leaves the row `running`; one that waits shows it `queued`. A refusal
@@ -1649,7 +1712,7 @@ impl Session {
         }
         let request = QueryRequest {
             principal: Arc::clone(&self.state.principal),
-            tags: self.state.queries.tags_now(),
+            tags: self.effective_tags(),
             class: WorkloadClass::Interactive,
             source: None,
             statement_class: None,
@@ -1676,7 +1739,12 @@ impl Session {
         queued.open = false;
         match admitted {
             Ok(permit) => {
-                self.state.queries.mark_started(log_id);
+                let queued_ns = permit
+                    .slot::<crate::resource_groups::GroupSlot>()
+                    .map_or(0, crate::resource_groups::GroupSlot::queued_ns);
+                self.state
+                    .queries
+                    .mark_started(log_id, permit.group(), queued_ns);
                 Ok(permit)
             }
             Err(error) => {
@@ -1701,6 +1769,11 @@ impl Session {
             env.statement_class,
             self.operation_id(),
         )?;
+        crate::action::note_row(&log_id);
+        // The request tags join the row's tags at once, so a queued query shows them too.
+        self.state
+            .queries
+            .add_request_tags(&log_id, &self.request_tags);
         *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
         let permit = self.admit(&log_id, env, exempt).await?;
         Ok(Admitted::new(Arc::clone(&self.state), log_id, permit))
@@ -1729,18 +1802,22 @@ impl Session {
                 .into_parts(),
         };
         self.state.activity.query_started();
-        let id = QueryId(self.state.runtime.reserve(
+        let id = QueryId(self.state.runtime.reserve_tagged(
             self.state.number,
             self.state.queries.session_id(),
             &log_id,
+            self.tagging_of_row(&log_id),
         ));
-        let pool = self
-            .state
-            .memory
-            .child(&crate::system::pool_name(&log_id), permit.memory_budget());
+        let pool = self.state.memory.child_with_priority(
+            &crate::system::pool_name(&log_id),
+            permit.memory_budget(),
+            permit
+                .priority()
+                .unwrap_or(krishiv_memory::DEFAULT_PRIORITY),
+        );
         let query = QueryContext::new(
             id,
-            WorkloadClass::Interactive,
+            permit.class().unwrap_or(WorkloadClass::Interactive),
             ExecConfig {
                 detailed_metrics: detailed,
                 ..ExecConfig::from_config(&env.config)

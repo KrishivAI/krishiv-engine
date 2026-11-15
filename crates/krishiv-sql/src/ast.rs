@@ -176,6 +176,14 @@ pub enum Statement {
     AddResource(AddResource),
     /// `LIST JAR|FILE|ARCHIVE [...]`.
     ListResource(ListResource),
+    /// `CREATE MATERIALIZED VIEW` or `CREATE STREAMING TABLE`.
+    CreatePipelineDataset(Box<CreatePipelineDataset>),
+    /// `CREATE FLOW name AS INSERT ...`.
+    CreateFlow(Box<CreateFlow>),
+    /// `LOAD DATA ... INTO TABLE ...`.
+    LoadData(Box<LoadData>),
+    /// `INSERT OVERWRITE [LOCAL] DIRECTORY ...`.
+    InsertDirectory(Box<InsertDirectory>),
 }
 
 impl Statement {
@@ -220,6 +228,10 @@ impl Statement {
             Self::Repair(r) => r.span,
             Self::AddResource(r) => r.span,
             Self::ListResource(r) => r.span,
+            Self::CreatePipelineDataset(c) => c.span,
+            Self::CreateFlow(c) => c.span,
+            Self::LoadData(l) => l.span,
+            Self::InsertDirectory(i) => i.span,
         }
     }
 }
@@ -766,3 +778,6 @@ pub use query_nodes::*;
 
 mod ddl_nodes;
 pub use ddl_nodes::*;
+
+mod pipeline_nodes;
+pub use pipeline_nodes::*;

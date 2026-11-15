@@ -313,27 +313,7 @@ impl Interp<'_> {
                         (k.collect(), r)
                     })
                     .collect();
-                keyed.sort_by(|(a, _), (b, _)| {
-                    for ((x, y), o) in a.iter().zip(b).zip(order) {
-                        let c = match (x, y) {
-                            (V::Null, V::Null) => std::cmp::Ordering::Equal,
-                            (V::Null, _) => match o.nulls {
-                                NullOrdering::NullsFirst => std::cmp::Ordering::Less,
-                                NullOrdering::NullsLast => std::cmp::Ordering::Greater,
-                            },
-                            (_, V::Null) => match o.nulls {
-                                NullOrdering::NullsFirst => std::cmp::Ordering::Greater,
-                                NullOrdering::NullsLast => std::cmp::Ordering::Less,
-                            },
-                            _ if o.direction == SortDirection::Descending => y.cmp(x),
-                            _ => x.cmp(y),
-                        };
-                        if c.is_ne() {
-                            return c;
-                        }
-                    }
-                    std::cmp::Ordering::Equal
-                });
+                keyed.sort_by(|(a, _), (b, _)| compare(a, b, order));
                 Rel {
                     cols: rel.cols,
                     rows: keyed.into_iter().map(|(_, r)| r).collect(),
@@ -398,6 +378,61 @@ impl Interp<'_> {
                     first.rows.extend(r.rows);
                 }
                 first
+            }
+            // `row_number()` only: each partition's rows in order, numbered from 1.
+            PlanNode::Window {
+                input,
+                exprs,
+                partition_by,
+                order_by,
+            } => {
+                let rel = self.plan(input, outer);
+                let ix = index(&rel.cols);
+                for e in exprs {
+                    let ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) = &e.node else {
+                        panic!("window output {e:?}")
+                    };
+                    let ExprNode::Window(w) = &expr.node else {
+                        panic!("window expression {expr:?}")
+                    };
+                    let ExprNode::Resolved(ResolvedExpr::Function(f)) = &w.function.node else {
+                        panic!("window function")
+                    };
+                    assert_eq!(f.id.name(), "row_number", "unsupported window function");
+                }
+                let mut keyed: Vec<(Vec<V>, Vec<V>, Vec<V>)> = rel
+                    .rows
+                    .into_iter()
+                    .map(|r| {
+                        let part: Vec<V> = partition_by
+                            .iter()
+                            .map(|e| self.eval(e, &ix, &r, outer))
+                            .collect();
+                        let key: Vec<V> = order_by
+                            .iter()
+                            .map(|o| self.eval(&o.expr, &ix, &r, outer))
+                            .collect();
+                        (part, key, r)
+                    })
+                    .collect();
+                keyed.sort_by(|(pa, a, _), (pb, b, _)| {
+                    pa.cmp(pb).then_with(|| compare(a, b, order_by))
+                });
+                let mut rows = Vec::with_capacity(keyed.len());
+                let mut n = 0;
+                let mut last: Option<Vec<V>> = None;
+                for (part, _, mut r) in keyed {
+                    if last.as_ref() != Some(&part) {
+                        n = 0;
+                        last = Some(part);
+                    }
+                    n += 1;
+                    r.extend(exprs.iter().map(|_| V::int(n)));
+                    rows.push(r);
+                }
+                let mut cols = rel.cols;
+                cols.extend(exprs.iter().map(|e| output(e)));
+                Rel { cols, rows }
             }
             PlanNode::Shift { input, offset } => {
                 let mut rel = self.plan(input, outer);
@@ -792,6 +827,29 @@ impl Interp<'_> {
             other => panic!("unsupported expression {other:?}"),
         }
     }
+}
+
+/// Sort keys `a` against `b` under `order`.
+fn compare(a: &[V], b: &[V], order: &[krishiv_plan::SortOrder]) -> std::cmp::Ordering {
+    for ((x, y), o) in a.iter().zip(b).zip(order) {
+        let c = match (x, y) {
+            (V::Null, V::Null) => std::cmp::Ordering::Equal,
+            (V::Null, _) => match o.nulls {
+                NullOrdering::NullsFirst => std::cmp::Ordering::Less,
+                NullOrdering::NullsLast => std::cmp::Ordering::Greater,
+            },
+            (_, V::Null) => match o.nulls {
+                NullOrdering::NullsFirst => std::cmp::Ordering::Greater,
+                NullOrdering::NullsLast => std::cmp::Ordering::Less,
+            },
+            _ if o.direction == SortDirection::Descending => y.cmp(x),
+            _ => x.cmp(y),
+        };
+        if c.is_ne() {
+            return c;
+        }
+    }
+    std::cmp::Ordering::Equal
 }
 
 fn output(e: &Expr) -> AttrId {

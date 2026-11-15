@@ -36,7 +36,7 @@ fn every_committed_matrix_loads_under_its_own_version() {
     }
     seen.sort();
     // The releases of the 4.2/4.3 profiles are always there; the older ones join as their matrices are generated.
-    for must in ["4.2.0", "4.2.1", "4.3.0"] {
+    for must in ["3.5.9", "4.2.0", "4.2.1", "4.3.0"] {
         assert!(
             seen.iter().any(|v| v == must),
             "no matrix for Spark {must}: {seen:?}"

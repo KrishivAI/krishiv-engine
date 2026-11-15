@@ -56,6 +56,12 @@ pub(crate) struct Pipeline {
     pub(crate) operators: Vec<(OperatorId, Arc<dyn Operator>)>,
     /// Per operator: the breaker sink whose finalized state it reads.
     pub(crate) operator_inputs: Vec<Option<OperatorId>>,
+    /// Per operator: the pipeline whose first partition id it numbers its
+    /// input's partitions from. Below a `UNION ALL` that is the operator's
+    /// own branch (each branch numbers its partitions from 0, as Spark's
+    /// child RDD does); above it, the union's first branch (the union's
+    /// partitions follow one another, as `UnionRDD`'s).
+    pub(crate) origins: Vec<usize>,
     pub(crate) sink: (OperatorId, Arc<dyn Sink>),
     /// Pipelines that must finalize first.
     pub(crate) deps: Vec<usize>,
@@ -76,6 +82,7 @@ struct Draft {
     second_input: Option<OperatorId>,
     operators: Vec<(OperatorId, Arc<dyn Operator>)>,
     operator_inputs: Vec<Option<OperatorId>>,
+    origins: Vec<usize>,
     sink: (OperatorId, Arc<dyn Sink>),
     deps: Vec<usize>,
     preserve_order: bool,
@@ -134,6 +141,7 @@ impl PipelineBuilder {
             second_input: None,
             operators: Vec::new(),
             operator_inputs: Vec::new(),
+            origins: Vec::new(),
             sink: (id, result),
             deps: Vec::new(),
             preserve_order: false,
@@ -232,10 +240,12 @@ impl PipelineBuilder {
             let draft = &mut self.drafts[i];
             draft.operators.push((id, Arc::clone(&op)));
             draft.operator_inputs.push(None);
+            draft.origins.push(last);
         }
         let draft = &mut self.drafts[last];
         draft.operators.push((id, op));
         draft.operator_inputs.push(None);
+        draft.origins.push(last);
         id
     }
 
@@ -304,6 +314,7 @@ impl PipelineBuilder {
             second_input: None,
             operators: Vec::new(),
             operator_inputs: Vec::new(),
+            origins: Vec::new(),
             sink: (id, sink),
             deps: Vec::new(),
             preserve_order: false,
@@ -373,6 +384,7 @@ impl PipelineBuilder {
                 second_input: None,
                 operators: Vec::new(),
                 operator_inputs: Vec::new(),
+                origins: Vec::new(),
                 sink: sink.clone(),
                 deps: deps.clone(),
                 preserve_order: order,
@@ -405,6 +417,7 @@ impl PipelineBuilder {
                     source,
                     operators: d.operators,
                     operator_inputs: d.operator_inputs,
+                    origins: d.origins,
                     sink: d.sink,
                     deps: d.deps,
                     preserve_order: d.preserve_order,

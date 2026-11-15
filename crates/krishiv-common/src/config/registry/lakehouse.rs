@@ -2,6 +2,8 @@
 //! The config entries of the lakehouse connectors: the Delta log pool and the catalog parse
 //! limits (P3-T021 design note section 3.2, P3 lakehouse design section 5.6).
 
+use std::time::Duration;
+
 use super::MIB;
 use crate::config::{ConfigEntry, ConfigValue, Scope, SettableBy, ValueType};
 
@@ -45,6 +47,20 @@ pub static CATALOG_MAX_COLUMNS: ConfigEntry = ConfigEntry {
     doc: "Most columns, nested fields included, of a table schema a lakehouse connector accepts \
           from table metadata (a Delta `metaData` schema string, an Iceberg schema). A wider one \
           fails the load with `KRISHIV_CATALOG_LIMIT_EXCEEDED`.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
+/// How long one catalog call may take before it fails.
+pub static CATALOG_REQUEST_TIMEOUT: ConfigEntry = ConfigEntry {
+    key: "krishiv.catalog.requestTimeout",
+    value_type: ValueType::Duration,
+    default: Some(ConfigValue::Duration(Duration::from_secs(30))),
+    doc: "Longest one request to an external catalog (Hive metastore, Unity Catalog, Iceberg REST) \
+          may take, connect and response included. A stalled catalog fails the call with \
+          `KRISHIV_CATALOG_FAILURE` naming the catalog. Redirects from a catalog are never followed.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.2.0",

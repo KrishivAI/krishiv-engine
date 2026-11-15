@@ -58,6 +58,40 @@ tokio::task_local! {
 /// The `query_id` an error names for an action the caller gave no id.
 const NOT_STARTED: &str = "(not started)";
 
+/// Who runs a statement and the tags its queries carry, fixed when it starts: what cancel by tag
+/// looks at (design P3-T064 §4.5).
+#[derive(Debug, Clone)]
+pub(crate) struct Tagging {
+    /// The name of the principal of the session that runs it.
+    pub(crate) principal: Arc<str>,
+    /// The session's tags, then the request tags as `(tag, "")` pairs (a key appears once).
+    pub(crate) tags: Arc<[(String, String)]>,
+    /// The request tags among them (exact-match interrupts).
+    pub(crate) request_tags: Arc<[Arc<str>]>,
+}
+
+impl Tagging {
+    /// No principal and no tags (a statement nothing selects by tag).
+    #[cfg(test)]
+    pub(crate) fn none() -> Self {
+        Self {
+            principal: Arc::from(""),
+            tags: Arc::from([]),
+            request_tags: Arc::from([]),
+        }
+    }
+}
+
+/// Adds the request tags `request` to `tags` as `(tag, "")` pairs, skipping a tag whose key is
+/// already there (a session tag of the same key, or a repeated request tag).
+pub(crate) fn merge_request_tags(tags: &mut Vec<(String, String)>, request: &[Arc<str>]) {
+    for t in request {
+        if !tags.iter().any(|(k, _)| k == &**t) {
+            tags.push((t.to_string(), String::new()));
+        }
+    }
+}
+
 /// One running action of a session.
 #[derive(Debug)]
 pub(crate) struct Action {
@@ -66,6 +100,8 @@ pub(crate) struct Action {
     /// The caller's operation id, if it gave one (the id `Session::cancel`
     /// names it by).
     operation: Option<Arc<str>>,
+    /// Who runs it and the tags its queries carry, fixed at the start.
+    tagging: Tagging,
     /// The action this one runs inside, if any (a nested `on_executor`).
     parent: Option<Arc<Action>>,
     /// Taken after `EngineRuntime::live` when both are held, never together
@@ -83,6 +119,9 @@ struct State {
     handed_over: bool,
     /// The `system.queries` rows reserved under the action or a nested one.
     rows: Vec<HandedOver>,
+    /// The `system.queries` row an action that gave no operation id minted before its query
+    /// reserved (admission), so a cancel can name it ([`note_row`]).
+    noted_row: Option<Arc<str>>,
 }
 
 impl Action {
@@ -141,11 +180,23 @@ impl Actions {
     /// Registers an action of session `session`, named `operation` when the
     /// caller gave an id, inside the current action if there is one (so call
     /// it on the caller's task); it leaves the registry when the guard drops.
+    #[cfg(test)]
     pub(crate) fn begin(self: &Arc<Self>, session: u64, operation: Option<&str>) -> ActionGuard {
+        self.begin_tagged(session, operation, Tagging::none())
+    }
+
+    /// [`Self::begin`] for an action whose queries carry `tagging`.
+    pub(crate) fn begin_tagged(
+        self: &Arc<Self>,
+        session: u64,
+        operation: Option<&str>,
+        tagging: Tagging,
+    ) -> ActionGuard {
         let (reason, _) = watch::channel(None);
         let action = Arc::new(Action {
             session,
             operation: operation.map(Arc::from),
+            tagging,
             parent: CURRENT.try_with(Arc::clone).ok(),
             state: Mutex::new(State::default()),
             reason,
@@ -171,12 +222,31 @@ impl Actions {
         reason: CancelReason,
         pick: &impl Fn(u64, &str) -> bool,
     ) -> ActionsCancelled {
+        self.cancel_matching(reason, &|a: &Action| {
+            pick(a.session, a.operation.as_deref().unwrap_or(""))
+        })
+    }
+
+    /// As [`Self::cancel_where`], picking by the action's session number and tagging.
+    pub(crate) fn cancel_tagged(
+        &self,
+        reason: CancelReason,
+        pick: &impl Fn(u64, &Tagging) -> bool,
+    ) -> ActionsCancelled {
+        self.cancel_matching(reason, &|a: &Action| pick(a.session, &a.tagging))
+    }
+
+    fn cancel_matching(
+        &self,
+        reason: CancelReason,
+        pick: &impl Fn(&Action) -> bool,
+    ) -> ActionsCancelled {
         let picked: Vec<Arc<Action>> = self
             .live
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .values()
-            .filter(|a| pick(a.session, a.operation.as_deref().unwrap_or("")))
+            .filter(|a| pick(a))
             .cloned()
             .collect();
         let mut out = ActionsCancelled::default();
@@ -188,7 +258,7 @@ impl Actions {
                 // row yet). An action with rows is reported by the registry, through them.
                 if state.rows.is_empty() {
                     out.ended += 1;
-                    if let Some(id) = &action.operation {
+                    if let Some(id) = action.operation.as_ref().or(state.noted_row.as_ref()) {
                         out.ids.push(Arc::clone(id));
                     }
                 }
@@ -272,6 +342,15 @@ impl Drop for ActionGuard {
 /// Hands the current action (if it is of session `session`) and its ancestors
 /// over to the reservation of row `row`: the reason one of them was already
 /// cancelled with, if any, which the reservation keeps as pending.
+/// Records the `system.queries` row the current action minted (a query waiting for admission has
+/// a row but is not reserved yet), so cancelling the action names the row when the caller gave
+/// no operation id. A no-op outside an action.
+pub(crate) fn note_row(row: &str) {
+    let _ = CURRENT.try_with(|action| {
+        action.lock().noted_row = Some(Arc::from(row));
+    });
+}
+
 pub(crate) fn hand_over(session: u64, row: &str) -> Option<CancelReason> {
     CURRENT
         .try_with(|action| {
