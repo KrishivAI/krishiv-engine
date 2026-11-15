@@ -55,6 +55,8 @@ struct Env {
     rt: tokio::runtime::Runtime,
     query_pool: Arc<dyn MemoryPool>,
     engine: DeltaEngine,
+    /// The metrics of the last query run.
+    metrics: std::sync::Mutex<Option<krishiv_exec::QueryMetrics>>,
 }
 
 impl Env {
@@ -66,6 +68,19 @@ impl Env {
         Self::at(tmp, dir)
     }
 
+    /// An empty table root, the query's memory limited to `limit` bytes.
+    fn with_limit(limit: usize) -> Self {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("t");
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = MemoryConfig {
+            limit: Some(limit),
+            quantum: 64 << 10,
+            ..MemoryConfig::default()
+        };
+        Self::at_with(tmp, dir, &config)
+    }
+
     /// A copy of the oracle table `name` (a path under the fixtures).
     fn fixture(name: &str) -> Self {
         let tmp = tempfile::tempdir().unwrap();
@@ -75,6 +90,10 @@ impl Env {
     }
 
     fn at(tmp: tempfile::TempDir, dir: PathBuf) -> Self {
+        Self::at_with(tmp, dir, &MemoryConfig::default())
+    }
+
+    fn at_with(tmp: tempfile::TempDir, dir: PathBuf, memory: &MemoryConfig) -> Self {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -86,7 +105,7 @@ impl Env {
             id.clone(),
             Arc::new(krishiv_io::SettledLocalFileSystem::new()),
         );
-        let root = TreePool::new(&MemoryConfig::default());
+        let root = TreePool::new(memory);
         let query_pool = root.child("query", None);
         let process: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
         sched.attach_memory(&process);
@@ -107,6 +126,7 @@ impl Env {
             rt,
             query_pool,
             engine,
+            metrics: std::sync::Mutex::new(None),
         }
     }
 
@@ -144,9 +164,21 @@ impl Env {
         batches: Vec<RecordBatch>,
         options: &[(&str, &str)],
     ) -> Result<(), KrishivError> {
+        self.write_as(provider, mode, batches, options, &super::files::file_uuid())
+    }
+
+    /// [`Self::write`] with the write id `write_id`.
+    fn write_as(
+        &self,
+        provider: &dyn TableProvider,
+        mode: WriteMode,
+        batches: Vec<RecordBatch>,
+        options: &[(&str, &str)],
+        write_id: &str,
+    ) -> Result<(), KrishivError> {
         let schema = batches[0].schema();
         let mut request = WriteRequest::new(mode, "`t`", Arc::clone(&schema));
-        request.write_id = Some(super::files::file_uuid());
+        request.write_id = Some(write_id.to_owned());
         for (k, v) in options {
             request.options.insert((*k).to_owned(), (*v).to_owned());
         }
@@ -199,6 +231,7 @@ impl Env {
                 }
             }
             query.finished().await;
+            *self.metrics.lock().unwrap() = Some(query.metrics());
             first.map_or(Ok(out), Err)
         })
     }
@@ -706,11 +739,79 @@ fn delta_write_refusals() {
     assert!(refused.len() >= 10, "{refused:?}");
 }
 
+/// Every field of `logical` is in `written` under its physical name with its column-mapping id
+/// as the Parquet field id, at every level: struct in struct, and the structs inside array
+/// elements and map keys and values.
+fn check_field_ids(
+    logical: &delta_kernel::schema::StructType,
+    written: &delta_kernel::schema::StructType,
+    path: &str,
+    checked: &mut Vec<String>,
+) {
+    use delta_kernel::schema::{ColumnMetadataKey, MetadataValue};
+    use delta_kernel::table_features::ColumnMappingMode;
+    let num = |v: Option<&MetadataValue>| match v {
+        Some(MetadataValue::Number(n)) => Some(*n),
+        Some(MetadataValue::String(s)) => s.parse().ok(),
+        _ => None,
+    };
+    for field in logical.fields() {
+        let name = format!("{path}{}", field.name());
+        let physical = field.physical_name(ColumnMappingMode::Name);
+        assert_ne!(physical, field.name(), "{name} has a physical name");
+        let w = written
+            .field(physical)
+            .unwrap_or_else(|| panic!("{name} as {physical} in {written:?}"));
+        let want = num(field.get_config_value(&ColumnMetadataKey::ColumnMappingId));
+        assert!(want.is_some(), "{name}: {field:?}");
+        assert_eq!(
+            num(w.get_config_value(&ColumnMetadataKey::ParquetFieldId)),
+            want,
+            "{name}"
+        );
+        checked.push(name.clone());
+        check_nested_ids(
+            field.data_type(),
+            w.data_type(),
+            &format!("{name}."),
+            checked,
+        );
+    }
+}
+
+fn check_nested_ids(
+    logical: &delta_kernel::schema::DataType,
+    written: &delta_kernel::schema::DataType,
+    path: &str,
+    checked: &mut Vec<String>,
+) {
+    use delta_kernel::schema::DataType;
+    match (logical, written) {
+        (DataType::Struct(l), DataType::Struct(w)) => check_field_ids(l, w, path, checked),
+        (DataType::Array(l), DataType::Array(w)) => {
+            check_nested_ids(
+                l.element_type(),
+                w.element_type(),
+                &format!("{path}element."),
+                checked,
+            );
+        }
+        (DataType::Map(l), DataType::Map(w)) => {
+            check_nested_ids(l.key_type(), w.key_type(), &format!("{path}key."), checked);
+            check_nested_ids(
+                l.value_type(),
+                w.value_type(),
+                &format!("{path}value."),
+                checked,
+            );
+        }
+        _ => {}
+    }
+}
+
 #[test]
 fn column_mapping_writes_physical_names_and_field_ids() {
     use delta_kernel::ParquetHandler as _;
-    use delta_kernel::schema::{ColumnMetadataKey, MetadataValue};
-    use delta_kernel::table_features::ColumnMappingMode;
     let env = Env::fixture("write-features/column-mapping");
     let table = env.open().unwrap();
     env.write(&table, WriteMode::Append, vec![one_row(&table)], &[])
@@ -732,22 +833,13 @@ fn column_mapping_writes_physical_names_and_field_ids() {
         .unwrap()
         .unwrap();
     let schema = env.open().unwrap().snapshot().schema();
-    for field in schema.fields() {
-        let physical = field.physical_name(ColumnMappingMode::Name);
-        let written = footer
-            .schema
-            .field(physical)
-            .unwrap_or_else(|| panic!("{physical} in {:?}", footer.schema));
-        let want = field.get_config_value(&ColumnMetadataKey::ColumnMappingId);
-        let got = written.get_config_value(&ColumnMetadataKey::ParquetFieldId);
-        let num = |v: Option<&MetadataValue>| match v {
-            Some(MetadataValue::Number(n)) => Some(*n),
-            Some(MetadataValue::String(s)) => s.parse().ok(),
-            _ => None,
-        };
-        assert!(num(want).is_some(), "{field:?}");
-        assert_eq!(num(got), num(want), "{field:?}");
-    }
+    let mut checked = Vec::new();
+    check_field_ids(&schema, &footer.schema, "", &mut checked);
+    // `id`, `s` and the nested `s.x`, each with its own id and physical name.
+    assert!(checked.len() >= 3, "{checked:?}");
+    assert!(checked.iter().any(|p| p == "s.x"), "{checked:?}");
     // Krishiv reads its own file back under the table's logical names.
     assert_eq!(ids(&env.read(&env.open().unwrap())), vec![1, 2]);
 }
+
+mod streaming;

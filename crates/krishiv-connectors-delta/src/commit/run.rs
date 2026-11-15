@@ -479,7 +479,10 @@ pub(super) fn remove_actions(r: &StagedRemoves) -> Result<Vec<FileAction>, Krish
     Ok(out)
 }
 
-fn map_row(m: &MapArray, row: usize) -> Result<HashMap<String, Option<String>>, KrishivError> {
+pub(crate) fn map_row(
+    m: &MapArray,
+    row: usize,
+) -> Result<HashMap<String, Option<String>>, KrishivError> {
     let entry = m.value(row);
     let keys = strings(entry.column(0))?;
     let values = strings(entry.column(1))?;

@@ -254,6 +254,26 @@ impl DeltaEngine {
         }
     }
 
+    /// This engine with a fresh token of its own, cancelled by nothing: the work after a
+    /// commit has landed (the checkpoint), which neither the statement's cancellation nor its
+    /// end may cut short.
+    #[must_use]
+    pub(crate) fn detached(&self) -> Self {
+        let s = &self.shared;
+        Self {
+            shared: Arc::new(Shared {
+                io: s.io.clone(),
+                store: s.store.clone(),
+                root: s.root.clone(),
+                handle: s.handle.clone(),
+                limits: s.limits,
+                cancel: Cancel::Token(Arc::new(CancellationToken::new())),
+                listed: std::sync::Mutex::default(),
+            }),
+            pool: self.pool,
+        }
+    }
+
     /// The table root (ends with `/`).
     #[must_use]
     pub fn table_root(&self) -> &Url {
@@ -268,6 +288,16 @@ impl DeltaEngine {
     /// The parse limits.
     pub(crate) fn limits(&self) -> &DeltaLimits {
         &self.shared.limits
+    }
+
+    /// Fails with the kernel's `Cancelled` once this engine's cancellation fired.
+    pub(crate) fn check_cancelled(&self) -> KernelResult<()> {
+        self.shared.check_cancelled()
+    }
+
+    /// The runtime the engine bridges to (detached clean-ups and checkpoints run there).
+    pub(crate) fn handle(&self) -> &Handle {
+        &self.shared.handle
     }
 
     /// Completes once this engine's cancellation fired.

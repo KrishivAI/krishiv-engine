@@ -1,29 +1,93 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The data files of one write (design note P3-T021 section 4.1, "Data files" and "Adds"):
-//! rows grouped by partition, each group bound to the transaction's write state
-//! ([`BoundWriteContext`]), turned into the physical schema by the kernel's
-//! `logical_to_physical` expression (physical names and Parquet field ids under column mapping),
-//! written as one Parquet file under the context's `write_dir`, and described by one add row
-//! with Krishiv's own statistics ([`super::stats`]).
+//! The data files of one write (design note P3-T021 section 4.1, "Data files" and "Adds"),
+//! written while the rows arrive: each driver of the write owns a [`DriverWriter`], which keeps
+//! one open file per partition it has seen and rolls it over at `maxRecordsPerFile` and at the
+//! target file size ([`FileLimits`]).
 //!
-//! Runs on the log pool (the Parquet handler's put and the evaluator are kernel calls).
+//! - Each partition is bound once to the transaction's write state ([`BoundWriteContext`]); its
+//!   rows are turned into the physical schema by the kernel's `logical_to_physical` expression
+//!   (physical names and Parquet field ids under column mapping) and streamed through the
+//!   Parquet encoder into a multipart upload under the context's `write_dir`. A file buffers at
+//!   most the row group being built and the upload's parts; every byte of it is held in the
+//!   driver's reservation, and [`DriverWriter::flush`] (the sink's spill) encodes and ships the
+//!   buffered row groups when memory is short.
+//! - Each file is described by one add row with Krishiv's own statistics ([`super::stats`]),
+//!   accumulated over its batches.
+//! - Files are invisible until the commit names them. A write that fails before its commit
+//!   deletes the files it finished and aborts its open uploads ([`DriverWriter::abort`]), best
+//!   effort; a file left behind is an orphan no snapshot reads (as a failed delta-spark task's
+//!   files are).
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::{Array, ArrayRef, RecordBatch, StructArray};
+use arrow_row::{RowConverter, SortField};
 use arrow_schema::{Field, Schema, SchemaRef};
-use delta_kernel::expressions::{MapData, Scalar};
+use delta_kernel::expressions::{MapData, PredicateRef, Scalar};
 use delta_kernel::schema::{DataType, MapType, StructType};
 use delta_kernel::transaction::{BoundWriteContext, WriteState};
-use delta_kernel::{EngineData, EvaluationHandler as _, ParquetHandler as _};
+use delta_kernel::{EvaluationHandler as _, ExpressionEvaluator};
 use krishiv_common::error::{InternalError, KrishivError};
+use krishiv_io::Encoder;
+use krishiv_io::io::Upload;
+use krishiv_memory::Reservation;
+use object_store::path::Path;
+use url::Url;
 
-use super::stats::file_stats;
+use super::stats::StatsAccumulator;
 use crate::engine::eval::create_many;
-use crate::engine::schema::{scalar_at, to_arrow_schema};
+use crate::engine::relabel::relabel_batch;
+use crate::engine::schema::scalar_at;
 use crate::engine::{DeltaEngine, KrishivEngineData};
 use crate::error::from_kernel;
+
+/// The target size of a data file (delta-spark leaves it to Spark's task output; 128 MiB is
+/// the `delta.targetFileSize` default of its optimized writes). A `krishiv.delta.*` key for it
+/// is a follow-up.
+pub(crate) const DEFAULT_TARGET_FILE_BYTES: u64 = 128 * 1024 * 1024;
+
+/// Rows written between two checks of the target file size.
+const ROLLOVER_ROWS: usize = 1024;
+
+/// When a data file is full.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FileLimits {
+    /// Delta's `maxRecordsPerFile` write option; 0 = unlimited.
+    pub(crate) max_records: u64,
+    /// Roll over once the encoder produced this many bytes; 0 = never.
+    pub(crate) target_bytes: u64,
+}
+
+impl Default for FileLimits {
+    fn default() -> Self {
+        Self {
+            max_records: 0,
+            target_bytes: DEFAULT_TARGET_FILE_BYTES,
+        }
+    }
+}
+
+/// What the files of one write are written against, made once per write.
+pub(crate) struct Plan {
+    /// The kernel's write state of the transaction.
+    pub(crate) state: Arc<WriteState>,
+    /// The kernel's stats schema of the transaction.
+    pub(crate) stats_schema: Arc<StructType>,
+    /// The table's logical columns in the kernel's Arrow form.
+    pub(crate) logical: SchemaRef,
+    /// The logical partition columns, in the table's order.
+    pub(crate) partition_columns: Vec<String>,
+    /// Whether the table supports deletion vectors (`tightBounds`).
+    pub(crate) tight_bounds: bool,
+    /// The table, for messages.
+    pub(crate) table: String,
+    /// When a file is full.
+    pub(crate) limits: FileLimits,
+    /// `replaceWhere`'s constraint: every row's partition values satisfy the predicate (its
+    /// text for the message), with the table's logical schema.
+    pub(crate) check: Option<(PredicateRef, String, Arc<StructType>)>,
+}
 
 /// What one write produced: its add rows (in the kernel's `add_files_schema`, `stats` holding
 /// Krishiv's statistics) and its metrics.
@@ -37,158 +101,495 @@ pub(crate) struct Written {
     pub(crate) rows: u64,
     /// Bytes written.
     pub(crate) bytes: u64,
-    /// The physical partition values of each partition written (the same map once per
-    /// partition).
+    /// The physical partition values of each partition written (once per partition).
     pub(crate) partitions: Vec<HashMap<String, Option<String>>>,
     /// The logical partition values of each partition written, in the partition columns'
-    /// order.
+    /// order (once per partition).
     pub(crate) partition_values: Vec<Vec<Scalar>>,
+    /// The files, for a failed write's clean-up.
+    pub(crate) paths: Vec<Path>,
 }
 
-/// What the files of one write are written against.
-pub(crate) struct Layout<'a> {
-    /// The table's logical schema.
-    pub(crate) schema: &'a StructType,
-    /// The logical partition columns, in the table's order.
-    pub(crate) partition_columns: &'a [String],
-    /// The kernel's write state of the transaction.
-    pub(crate) state: Arc<WriteState>,
-    /// The kernel's stats schema of the transaction.
-    pub(crate) stats_schema: &'a StructType,
-    /// Whether the table supports deletion vectors (`tightBounds`).
-    pub(crate) tight_bounds: bool,
-    /// The table, for messages.
-    pub(crate) table: &'a str,
-}
-
-/// Writes `batches` (rows of the table's logical columns, in its order) as data files.
-///
-/// # Errors
-/// The kernel's partition-value and write-state errors; the evaluator's; storage errors.
-pub(crate) fn write_files(
-    e: &DeltaEngine,
-    layout: &Layout<'_>,
-    batches: &[RecordBatch],
-) -> Result<Written, KrishivError> {
-    let table = layout.table;
-    let kernel = |err: &delta_kernel::KernelError| from_kernel(err, table);
-    let logical: SchemaRef = Arc::new(to_arrow_schema(layout.schema).map_err(|e| kernel(&e))?);
-    let mut groups: Vec<(Vec<Scalar>, Vec<RecordBatch>)> = Vec::new();
-    let mut keys: HashMap<String, usize> = HashMap::new();
-    for batch in batches {
-        if batch.num_rows() == 0 {
-            continue;
-        }
-        let batch = conform(batch, &logical)?;
-        if layout.partition_columns.is_empty() {
-            match groups.first_mut() {
-                Some((_, b)) => b.push(batch),
-                None => groups.push((Vec::new(), vec![batch])),
+impl Written {
+    /// Adds `other`'s files; a partition both wrote is kept once.
+    pub(crate) fn merge(&mut self, other: Self) {
+        self.adds.extend(other.adds);
+        self.files += other.files;
+        self.rows += other.rows;
+        self.bytes += other.bytes;
+        self.paths.extend(other.paths);
+        for (physical, logical) in other.partitions.into_iter().zip(other.partition_values) {
+            if !self.partitions.contains(&physical) {
+                self.partitions.push(physical);
+                self.partition_values.push(logical);
             }
-            continue;
         }
-        let columns = layout
-            .partition_columns
-            .iter()
-            .map(|p| {
-                batch
-                    .column_by_name(p)
-                    .cloned()
-                    .ok_or_else(|| internal(&format!("the partition column {p} is not written")))
-            })
-            .collect::<Result<Vec<ArrayRef>, _>>()?;
-        let mut rows_of: Vec<(usize, Vec<u32>)> = Vec::new();
+    }
+}
+
+/// A batch's rows of one partition: its key (the row format of its values), its logical
+/// values and the rows.
+type Group = (Vec<u8>, Vec<Scalar>, RecordBatch);
+
+/// One partition a driver writes: its binding, evaluator and open file.
+struct Partition {
+    ctx: BoundWriteContext,
+    evaluator: Arc<dyn ExpressionEvaluator>,
+    input_schema: SchemaRef,
+    values: Vec<Scalar>,
+    file: Option<OpenFile>,
+}
+
+/// A file being written.
+struct OpenFile {
+    encoder: Box<dyn Encoder>,
+    upload: Upload,
+    url: Url,
+    path: Path,
+    schema: SchemaRef,
+    rows: u64,
+    stats: StatsAccumulator,
+}
+
+impl OpenFile {
+    /// Bytes it holds in memory: the encoder's buffers and the upload's parts.
+    fn held(&self) -> usize {
+        self.encoder
+            .buffered_bytes()
+            .saturating_add(usize::try_from(self.upload.held_bytes()).unwrap_or(usize::MAX))
+    }
+
+    fn display(&self) -> String {
+        self.url.to_string()
+    }
+
+    async fn drain(&mut self) -> Result<(), KrishivError> {
+        while let Some(bytes) = self.encoder.take_bytes() {
+            self.upload.write(bytes).await?;
+        }
+        Ok(())
+    }
+}
+
+/// One driver's files (see the module docs).
+pub(crate) struct DriverWriter {
+    engine: DeltaEngine,
+    mem: Reservation,
+    /// Bytes held past the reservation after the last batch (the pool refused them): the next
+    /// batch asks for them first.
+    pub(crate) deficit: usize,
+    /// The first error of a batch written on the driver's behalf.
+    pub(crate) failed: Option<KrishivError>,
+    /// The partition key encoder (the partition columns' row format).
+    converter: Option<RowConverter>,
+    partitions: HashMap<Vec<u8>, Partition>,
+    done: Written,
+}
+
+impl std::fmt::Debug for DriverWriter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DriverWriter")
+            .field("partitions", &self.partitions.len())
+            .field("files", &self.done.files)
+            .finish_non_exhaustive()
+    }
+}
+
+impl DriverWriter {
+    /// A writer holding its memory in `mem` (the driver's consumer).
+    pub(crate) fn new(engine: DeltaEngine, mem: Reservation) -> Self {
+        Self {
+            engine,
+            mem,
+            deficit: 0,
+            failed: None,
+            converter: None,
+            partitions: HashMap::new(),
+            done: Written::default(),
+        }
+    }
+
+    /// The reservation, for the sink's `try_grow` before a batch.
+    pub(crate) fn reservation(&mut self) -> &mut Reservation {
+        &mut self.mem
+    }
+
+    /// Bytes held by the open files.
+    fn held(&self) -> usize {
+        self.partitions
+            .values()
+            .filter_map(|p| p.file.as_ref())
+            .map(OpenFile::held)
+            .fold(0, usize::saturating_add)
+    }
+
+    /// Writes `batch` (rows of the table's logical columns, in its order), then fits the
+    /// reservation to what the open files hold.
+    ///
+    /// # Errors
+    /// `replaceWhere`'s constraint; the kernel's partition-value and write-state errors; the
+    /// evaluator's; encode and storage errors.
+    pub(crate) async fn write(
+        &mut self,
+        plan: &Plan,
+        batch: &RecordBatch,
+    ) -> Result<(), KrishivError> {
+        if batch.num_rows() > 0 {
+            let batch = conform(batch, &plan.logical)?;
+            if let Some((pred, text, schema)) = &plan.check {
+                super::sink::check_filter(
+                    &self.engine,
+                    schema,
+                    &plan.partition_columns,
+                    std::slice::from_ref(&batch),
+                    pred,
+                    text,
+                    &plan.table,
+                )?;
+            }
+            for (key, values, rows) in self.groups(plan, batch)? {
+                self.write_group(plan, key, values, &rows).await?;
+            }
+        }
+        self.settle().await
+    }
+
+    /// The rows of `batch` by partition: key, logical values and rows.
+    fn groups(&mut self, plan: &Plan, batch: RecordBatch) -> Result<Vec<Group>, KrishivError> {
+        if plan.partition_columns.is_empty() {
+            return Ok(vec![(Vec::new(), Vec::new(), batch)]);
+        }
+        let table = plan.table.as_str();
+        let columns =
+            plan.partition_columns
+                .iter()
+                .map(|p| {
+                    batch.column_by_name(p).cloned().ok_or_else(|| {
+                        internal(&format!("the partition column {p} is not written"))
+                    })
+                })
+                .collect::<Result<Vec<ArrayRef>, _>>()?;
+        if self.converter.is_none() {
+            let fields = columns
+                .iter()
+                .map(|c| SortField::new(c.data_type().clone()))
+                .collect();
+            self.converter = Some(
+                RowConverter::new(fields)
+                    .map_err(|e| internal(&format!("the partition key format: {e}")))?,
+            );
+        }
+        let converter = self
+            .converter
+            .as_ref()
+            .ok_or_else(|| internal("no partition key format"))?;
+        let keys = converter
+            .convert_columns(&columns)
+            .map_err(|e| internal(&format!("the partition keys: {e}")))?;
+        // One entry per partition of the batch, in first-seen order.
+        let mut index: HashMap<&[u8], usize> = HashMap::new();
+        let mut groups: Vec<(usize, Vec<u32>)> = Vec::new();
         for row in 0..batch.num_rows() {
+            let key = keys.row(row);
+            let at = u32::try_from(row).map_err(|_| internal("a batch row past u32"))?;
+            match index.get(key.as_ref()) {
+                Some(&g) => groups[g].1.push(at),
+                None => {
+                    index.insert(key.data(), groups.len());
+                    groups.push((row, vec![at]));
+                }
+            }
+        }
+        let kernel = |err: &delta_kernel::KernelError| from_kernel(err, table);
+        let single = groups.len() == 1;
+        let mut out = Vec::with_capacity(groups.len());
+        for (first, rows) in groups {
             let values = columns
                 .iter()
-                .map(|c| scalar_at(c.as_ref(), row))
+                .map(|c| scalar_at(c.as_ref(), first))
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| kernel(&e))?;
-            let key = format!("{values:?}");
-            let group = match keys.get(&key) {
-                Some(g) => *g,
-                None => {
-                    groups.push((values, Vec::new()));
-                    keys.insert(key, groups.len() - 1);
-                    groups.len() - 1
-                }
+            let key = keys.row(first).as_ref().to_vec();
+            let part = if single {
+                batch.clone()
+            } else {
+                let indices = arrow_array::UInt32Array::from(rows);
+                arrow_select::take::take_record_batch(&batch, &indices)
+                    .map_err(|e| internal(&format!("grouping rows by partition: {e}")))?
             };
-            let index = u32::try_from(row).map_err(|_| internal("a batch row past u32"))?;
-            match rows_of.iter_mut().find(|(g, _)| *g == group) {
-                Some((_, rows)) => rows.push(index),
-                None => rows_of.push((group, vec![index])),
+            out.push((key, values, part));
+        }
+        Ok(out)
+    }
+
+    /// Writes one partition's rows, opening and rolling over its files.
+    async fn write_group(
+        &mut self,
+        plan: &Plan,
+        key: Vec<u8>,
+        values: Vec<Scalar>,
+        rows: &RecordBatch,
+    ) -> Result<(), KrishivError> {
+        let table = plan.table.as_str();
+        if !self.partitions.contains_key(&key) {
+            let part = self.bind(plan, values).await?;
+            self.partitions.insert(key.clone(), part);
+        }
+        let Some(part) = self.partitions.get_mut(&key) else {
+            return Err(internal("a partition that was just bound is missing"));
+        };
+        let mut offset = 0;
+        while offset < rows.num_rows() {
+            self.engine
+                .check_cancelled()
+                .map_err(|e| from_kernel(&e, table))?;
+            let room = match (plan.limits.max_records, &part.file) {
+                (0, _) | (_, None) => usize::MAX,
+                (max, Some(f)) => usize::try_from(max.saturating_sub(f.rows)).unwrap_or(usize::MAX),
+            };
+            let room = if plan.limits.max_records > 0 && part.file.is_none() {
+                usize::try_from(plan.limits.max_records).unwrap_or(usize::MAX)
+            } else {
+                room
+            };
+            let step = if plan.limits.target_bytes > 0 {
+                ROLLOVER_ROWS
+            } else {
+                usize::MAX
+            };
+            let n = room.min(step).min(rows.num_rows() - offset).max(1);
+            let slice = rows.slice(offset, n);
+            offset += n;
+            let physical = physical(part, &slice, table)?;
+            if part.file.is_none() {
+                part.file = Some(open(&self.engine, &part.ctx, physical.schema()).await?);
+            }
+            let Some(f) = part.file.as_mut() else {
+                return Err(internal("a file that was just opened is missing"));
+            };
+            f.stats.update(&physical, &plan.stats_schema)?;
+            let physical = relabel_batch(&physical, Arc::clone(&f.schema))
+                .map_err(|e| internal(&format!("a data file's rows: {e}")))?;
+            let display = f.display();
+            f.encoder
+                .write(&physical)
+                .map_err(|e| e.into_error(&display))?;
+            f.rows += n as u64;
+            f.drain().await?;
+            let full = (plan.limits.max_records > 0 && f.rows >= plan.limits.max_records)
+                || (plan.limits.target_bytes > 0
+                    && f.encoder.written_bytes() >= plan.limits.target_bytes);
+            if full && let Some(f) = part.file.take() {
+                let add = close(plan, &part.ctx, f).await?;
+                self.done.push(add);
             }
         }
-        for (group, rows) in rows_of {
-            let indices = arrow_array::UInt32Array::from(rows);
-            let taken = arrow_select::take::take_record_batch(&batch, &indices)
-                .map_err(|e| internal(&format!("grouping rows by partition: {e}")))?;
-            groups[group].1.push(taken);
-        }
+        Ok(())
     }
-    let mut written = Written::default();
-    for (values, batches) in groups {
-        let mut builder = layout.state.write_context_builder();
-        if !layout.partition_columns.is_empty() {
-            written.partition_values.push(values.clone());
-            let map: HashMap<String, Scalar> = layout
-                .partition_columns
-                .iter()
-                .cloned()
-                .zip(values)
-                .collect();
-            builder = builder.with_partition_values(map);
-        }
-        let ctx = builder.build().map_err(|e| kernel(&e))?;
-        let data = arrow_select::concat::concat_batches(&logical, &batches)
-            .map_err(|e| internal(&format!("concatenating a partition's rows: {e}")))?;
-        let add = write_one(e, layout, &ctx, &data)?;
-        written.files += 1;
-        written.rows += data.num_rows() as u64;
-        written.bytes += add.1;
-        written
-            .partitions
-            .push(ctx.physical_partition_values().clone());
-        written.adds.push(add.0);
+
+    /// Binds a partition's values to the write state (a kernel call: on the log pool).
+    async fn bind(&mut self, plan: &Plan, values: Vec<Scalar>) -> Result<Partition, KrishivError> {
+        let state = Arc::clone(&plan.state);
+        let columns = plan.partition_columns.clone();
+        let table = plan.table.clone();
+        let engine = self.engine.clone();
+        engine
+            .delta_blocking(move |e| bind(e, &state, &columns, values, &table))
+            .await?
     }
-    Ok(written)
+
+    /// Fits the reservation to the bytes the open files hold: shrinks it, or grows it; when
+    /// the pool refuses, encodes and ships the buffered row groups first, and what is still
+    /// refused is the next batch's [`deficit`](Self::deficit).
+    async fn settle(&mut self) -> Result<(), KrishivError> {
+        let held = self.held();
+        let size = self.mem.size();
+        if held <= size {
+            self.mem.shrink(size - held);
+            return Ok(());
+        }
+        if self.mem.try_grow(held - size).is_ok() {
+            return Ok(());
+        }
+        self.flush().await?;
+        let held = self.held();
+        let size = self.mem.size();
+        if held <= size {
+            self.mem.shrink(size - held);
+        } else if self.mem.try_grow(held - size).is_err() {
+            self.deficit = held - size;
+        }
+        Ok(())
+    }
+
+    /// Encodes the buffered row groups of every open file and waits for their parts to be
+    /// uploaded (the sink's spill); returns the bytes given back.
+    ///
+    /// # Errors
+    /// Encode and upload errors.
+    pub(crate) async fn flush(&mut self) -> Result<usize, KrishivError> {
+        for p in self.partitions.values_mut() {
+            if let Some(f) = p.file.as_mut() {
+                let display = f.display();
+                f.encoder.flush().map_err(|e| e.into_error(&display))?;
+                f.drain().await?;
+                f.upload.wait_idle().await?;
+            }
+        }
+        let held = self.held();
+        let size = self.mem.size();
+        let freed = size.saturating_sub(held);
+        self.mem.shrink(freed);
+        Ok(freed)
+    }
+
+    /// Ends every open file and returns what this driver wrote; its memory is given back.
+    ///
+    /// # Errors
+    /// Encode and upload errors (the caller then aborts the write).
+    pub(crate) async fn finish(&mut self, plan: &Plan) -> Result<Written, KrishivError> {
+        let mut keys: Vec<Vec<u8>> = self.partitions.keys().cloned().collect();
+        keys.sort();
+        for key in keys {
+            let Some(part) = self.partitions.get_mut(&key) else {
+                continue;
+            };
+            if let Some(f) = part.file.take() {
+                let add = close(plan, &part.ctx, f).await?;
+                self.done.push(add);
+            }
+        }
+        let mut written = std::mem::take(&mut self.done);
+        for part in self.partitions.values() {
+            if !plan.partition_columns.is_empty() {
+                written
+                    .partitions
+                    .push(part.ctx.physical_partition_values().clone());
+                written.partition_values.push(part.values.clone());
+            }
+        }
+        let size = self.mem.size();
+        self.mem.shrink(size);
+        Ok(written)
+    }
+
+    /// Abandons the write: the open uploads are aborted and the finished files deleted, best
+    /// effort; the memory is given back.
+    pub(crate) async fn abort(&mut self) {
+        for (_, p) in self.partitions.drain() {
+            if let Some(f) = p.file {
+                f.upload.abort().await;
+            }
+        }
+        let paths = std::mem::take(&mut self.done.paths);
+        delete_files(&self.engine, &paths).await;
+        let size = self.mem.size();
+        self.mem.shrink(size);
+    }
 }
 
-/// Writes one partition's rows as one file and returns its add row and size.
-fn write_one(
+/// A partition's binding, evaluator and logical input schema.
+fn bind(
     e: &DeltaEngine,
-    layout: &Layout<'_>,
-    ctx: &BoundWriteContext,
-    data: &RecordBatch,
-) -> Result<(RecordBatch, u64), KrishivError> {
-    let table = layout.table;
+    state: &Arc<WriteState>,
+    partition_columns: &[String],
+    values: Vec<Scalar>,
+    table: &str,
+) -> Result<Partition, KrishivError> {
     let kernel = |err: &delta_kernel::KernelError| from_kernel(err, table);
-    let logical_data = ctx.logical_data_schema();
-    let input_schema: SchemaRef = Arc::new(to_arrow_schema(logical_data).map_err(|e| kernel(&e))?);
-    let columns = logical_data
+    let mut builder = state.write_context_builder();
+    if !partition_columns.is_empty() {
+        let map: HashMap<String, Scalar> = partition_columns
+            .iter()
+            .cloned()
+            .zip(values.iter().cloned())
+            .collect();
+        builder = builder.with_partition_values(map);
+    }
+    let ctx = builder.build().map_err(|err| kernel(&err))?;
+    let logical_data = Arc::clone(ctx.logical_data_schema());
+    let input_schema: SchemaRef = Arc::new(
+        crate::engine::schema::to_arrow_schema(&logical_data).map_err(|err| kernel(&err))?,
+    );
+    let evaluator = e
+        .evaluation()
+        .new_expression_evaluator(
+            logical_data,
+            ctx.logical_to_physical(),
+            DataType::Struct(Box::new(ctx.physical_data_schema().as_ref().clone())),
+        )
+        .map_err(|err| kernel(&err))?;
+    Ok(Partition {
+        ctx,
+        evaluator,
+        input_schema,
+        values,
+        file: None,
+    })
+}
+
+/// Deletes the data files `paths` of a failed write, best effort.
+pub(crate) async fn delete_files(engine: &DeltaEngine, paths: &[Path]) {
+    for path in paths {
+        if let Err(e) = engine.io().delete(engine.store(), path).await {
+            tracing::warn!(error = %e, %path, "could not delete a data file of a failed Delta write");
+        }
+    }
+}
+
+/// One closed file: its add row, size and path.
+struct Closed {
+    add: RecordBatch,
+    rows: u64,
+    size: u64,
+    path: Path,
+}
+
+impl Written {
+    fn push(&mut self, c: Closed) {
+        self.adds.push(c.add);
+        self.files += 1;
+        self.rows += c.rows;
+        self.bytes += c.size;
+        self.paths.push(c.path);
+    }
+}
+
+/// `slice` of a partition's logical rows in the physical schema.
+fn physical(
+    part: &Partition,
+    slice: &RecordBatch,
+    table: &str,
+) -> Result<RecordBatch, KrishivError> {
+    let kernel = |err: &delta_kernel::KernelError| from_kernel(err, table);
+    let columns = part
+        .input_schema
         .fields()
+        .iter()
         .map(|f| {
-            data.column_by_name(f.name())
+            slice
+                .column_by_name(f.name())
                 .cloned()
                 .ok_or_else(|| internal(&format!("the column {} is not written", f.name())))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let input = RecordBatch::try_new(Arc::clone(&input_schema), columns)
+    let input = RecordBatch::try_new(Arc::clone(&part.input_schema), columns)
         .map_err(|e| internal(&format!("a write's logical rows: {e}")))?;
-    let evaluator = e
-        .evaluation()
-        .new_expression_evaluator(
-            Arc::clone(logical_data),
-            ctx.logical_to_physical(),
-            DataType::Struct(Box::new(ctx.physical_data_schema().as_ref().clone())),
-        )
-        .map_err(|e| kernel(&e))?;
-    let physical = evaluator
+    let out = part
+        .evaluator
         .evaluate(&KrishivEngineData::new(input))
         .map_err(|e| kernel(&e))?;
-    let physical = KrishivEngineData::from_engine_data(physical)
+    Ok(KrishivEngineData::from_engine_data(out)
         .map_err(|e| kernel(&e))?
-        .into_batch();
+        .into_batch())
+}
+
+/// Opens a new file of `ctx`'s partition for rows of `schema`.
+async fn open(
+    engine: &DeltaEngine,
+    ctx: &BoundWriteContext,
+    schema: SchemaRef,
+) -> Result<OpenFile, KrishivError> {
     let name = format!(
         "part-00000-{}.c000{}",
         file_uuid(),
@@ -198,15 +599,55 @@ fn write_one(
         .write_dir()
         .join(&name)
         .map_err(|err| internal(&format!("the data file {name}: {err}")))?;
-    let stats = file_stats(&physical, layout.stats_schema, layout.tight_bounds)?;
-    let one: Box<dyn EngineData> = Box::new(KrishivEngineData::new(physical));
-    let size = e
-        .parquet()
-        .write_parquet_file(url.clone(), Box::new(std::iter::once(Ok(one))))
-        .map_err(|e| kernel(&e))?;
-    let path = ctx.resolve_file_path(&url).map_err(|e| kernel(&e))?;
-    let row = add_row(ctx, &path, size, stats, table)?;
-    Ok((row, size))
+    let path = engine.root().confine(&url)?;
+    let format = crate::engine::columnar::format()?;
+    let options = crate::engine::columnar::format_options()?;
+    let encoder = format
+        .writer(engine.io(), Arc::clone(&schema), &options)
+        .await
+        .map_err(|e| e.into_error(url.as_str()))?;
+    let upload = engine.io().upload(engine.store(), path.clone())?;
+    Ok(OpenFile {
+        encoder,
+        upload,
+        url,
+        path,
+        schema,
+        rows: 0,
+        stats: StatsAccumulator::default(),
+    })
+}
+
+/// Ends `f` and describes it.
+async fn close(
+    plan: &Plan,
+    ctx: &BoundWriteContext,
+    mut f: OpenFile,
+) -> Result<Closed, KrishivError> {
+    let table = plan.table.as_str();
+    let kernel = |err: &delta_kernel::KernelError| from_kernel(err, table);
+    f.drain().await?;
+    let OpenFile {
+        encoder,
+        mut upload,
+        url,
+        path,
+        rows,
+        stats,
+        ..
+    } = f;
+    let done = encoder.finish().map_err(|e| e.into_error(url.as_str()))?;
+    upload.write(done.tail).await?;
+    let size = upload.finish().await?;
+    let stats = stats.finish(&plan.stats_schema, plan.tight_bounds)?;
+    let relative = ctx.resolve_file_path(&url).map_err(|e| kernel(&e))?;
+    let add = add_row(ctx, &relative, size, stats, table)?;
+    Ok(Closed {
+        add,
+        rows,
+        size,
+        path,
+    })
 }
 
 /// The add row of one file: path, partition values, size, modification time, and the

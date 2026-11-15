@@ -46,7 +46,7 @@ use arrow_array::RecordBatch;
 use delta_kernel::expressions::PredicateRef;
 
 pub use self::run::commit;
-pub(crate) use self::run::{write_id_row, write_id_schema};
+pub(crate) use self::run::{map_row, write_id_row, write_id_schema};
 use self::winner::FileAction;
 
 /// The commitInfo tag holding a write's id.

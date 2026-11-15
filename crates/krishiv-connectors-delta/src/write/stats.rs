@@ -13,8 +13,8 @@
 //!   `c.isNull` on the nested field);
 //! - min and max skip NULLs; a column with no non-NULL value has none (NULL here, omitted by the
 //!   JSON);
-//! - strings: the min is cut to a 32-character prefix (`truncateMinStringAgg`, `:866-883`), the
-//!   max is cut and given a tie-breaker (`truncateMaxStringAgg`, `:889-923`), both counted in
+//! - strings: the min is cut to its first 32 code points (`substring(min(c), 0, 32)`, `:296-298`),
+//!   the max is cut and given a tie-breaker (`truncateMaxStringAgg`, `:889-923`), counted in
 //!   UTF-16 units as on the JVM (`spark.databricks.io.skipping.stringPrefixLength`, default 32);
 //! - `tightBounds = true` only on a table that supports deletion vectors (`:286-290`), NULL
 //!   (omitted) otherwise.
@@ -41,20 +41,16 @@ const UTF8_MAX: [u16; 2] = [0xDBFF, 0xDFFF];
 /// `ASCII_MAX_CHARACTER`.
 const ASCII_MAX: u16 = 0x7F;
 
-/// delta-spark's `truncateMinStringAgg(prefixLen)`: the input when it has at most `prefix`
-/// UTF-16 units, else its first `prefix` units (one more when they would split a surrogate
-/// pair).
+/// The string min bound delta-spark writes: `substring(min(c), 0, prefixLen)`
+/// (`StatisticsCollection.scala:296-298`), Spark's `substring`, which counts code points
+/// (`UTF8String.substringSQL`): the input when it has at most `prefix` characters, else its first
+/// `prefix` characters (`truncateMinStringAgg`, the UTF-16 form, is not on this path).
 #[must_use]
 pub fn truncate_min(input: &str, prefix: usize) -> Option<String> {
-    let units: Vec<u16> = input.encode_utf16().collect();
-    if units.len() <= prefix {
-        return Some(input.to_owned());
+    match input.char_indices().nth(prefix) {
+        None => Some(input.to_owned()),
+        Some((at, _)) => Some(input[..at].to_owned()),
     }
-    if prefix == 0 {
-        return None;
-    }
-    let cut = min_cut(&units, prefix);
-    String::from_utf16(&units[..cut]).ok()
 }
 
 fn min_cut(units: &[u16], prefix: usize) -> usize {
@@ -112,42 +108,175 @@ pub fn file_stats(
     schema: &StructType,
     tight_bounds: bool,
 ) -> Result<StructArray, KrishivError> {
-    let root = Column {
-        fields: batch.schema().fields().clone(),
-        columns: batch.columns().to_vec(),
-        nulls: None,
-    };
-    let mut fields = Vec::new();
-    let mut arrays: Vec<ArrayRef> = Vec::new();
-    for f in schema.fields() {
-        let out_type = to_arrow_type(f.data_type()).map_err(|e| internal(&e.to_string()))?;
-        let array: ArrayRef = match f.name().as_str() {
-            "numRecords" => Arc::new(Int64Array::from(vec![rows(batch.num_rows())?])),
-            "nullCount" => Arc::new(nested(&root, struct_of(f.data_type())?, &Stat::NullCount)?),
-            "minValues" => Arc::new(nested(&root, struct_of(f.data_type())?, &Stat::Min)?),
-            "maxValues" => Arc::new(nested(&root, struct_of(f.data_type())?, &Stat::Max)?),
-            "tightBounds" => Arc::new(BooleanArray::from(vec![tight_bounds.then_some(true)])),
-            other => {
-                return Err(internal(&format!(
-                    "an unknown field {other} in the kernel's stats schema"
-                )));
-            }
+    let mut acc = StatsAccumulator::default();
+    acc.update(batch, schema)?;
+    acc.finish(schema, tight_bounds)
+}
+
+/// Raw rows merged at once when a file's batches reach this many.
+const MERGE_EVERY: usize = 64;
+
+/// The statistics of one file accumulated over the batches it is written from: per batch a raw
+/// row (row count, NULL counts, uncut bounds), merged every [`MERGE_EVERY`] batches and when the
+/// file ends. A cut string bound of the merged rows equals the cut bound of the whole file (a
+/// prefix keeps the order and the max's tie-breaker is applied once, to the uncut max).
+#[derive(Debug, Default)]
+pub(crate) struct StatsAccumulator {
+    raw: Vec<StructArray>,
+}
+
+impl StatsAccumulator {
+    /// Adds the rows of `batch` (physical columns).
+    pub(crate) fn update(
+        &mut self,
+        batch: &RecordBatch,
+        schema: &StructType,
+    ) -> Result<(), KrishivError> {
+        let root = Column {
+            fields: batch.schema().fields().clone(),
+            columns: batch.columns().to_vec(),
+            nulls: None,
         };
-        let _ = out_type;
-        fields.push(arrow_schema::Field::new(
-            f.name(),
-            array.data_type().clone(),
-            true,
-        ));
-        arrays.push(array);
+        let mut fields = Vec::new();
+        let mut arrays: Vec<ArrayRef> = Vec::new();
+        for f in schema.fields() {
+            let array: ArrayRef = match f.name().as_str() {
+                "numRecords" => Arc::new(Int64Array::from(vec![rows(batch.num_rows())?])),
+                "nullCount" => Arc::new(nested(
+                    &root,
+                    struct_of(f.data_type())?,
+                    Stat::NullCount,
+                    false,
+                )?),
+                "minValues" => {
+                    Arc::new(nested(&root, struct_of(f.data_type())?, Stat::Min, false)?)
+                }
+                "maxValues" => {
+                    Arc::new(nested(&root, struct_of(f.data_type())?, Stat::Max, false)?)
+                }
+                "tightBounds" => continue,
+                other => {
+                    return Err(internal(&format!(
+                        "an unknown field {other} in the kernel's stats schema"
+                    )));
+                }
+            };
+            fields.push(arrow_schema::Field::new(
+                f.name(),
+                array.data_type().clone(),
+                true,
+            ));
+            arrays.push(array);
+        }
+        let row = StructArray::try_new(Fields::from(fields), arrays, None)
+            .map_err(|e| internal(&format!("the stats row: {e}")))?;
+        self.raw.push(row);
+        if self.raw.len() >= MERGE_EVERY {
+            let merged = self.merge(schema, None)?;
+            self.raw = vec![merged];
+        }
+        Ok(())
     }
-    StructArray::try_new(Fields::from(fields), arrays, None)
-        .map_err(|e| internal(&format!("the stats row: {e}")))
+
+    /// The file's statistics: one row of `schema`, the bounds cut as delta-spark cuts them.
+    pub(crate) fn finish(
+        mut self,
+        schema: &StructType,
+        tight_bounds: bool,
+    ) -> Result<StructArray, KrishivError> {
+        if self.raw.is_empty() {
+            return Err(internal("the stats of a file with no rows"));
+        }
+        self.merge(schema, Some(tight_bounds))
+    }
+
+    /// The raw rows as one: raw when `finish` is `None`, else the final row (with
+    /// `tightBounds`).
+    fn merge(
+        &mut self,
+        schema: &StructType,
+        finish: Option<bool>,
+    ) -> Result<StructArray, KrishivError> {
+        let refs: Vec<&dyn Array> = self.raw.iter().map(|r| r as &dyn Array).collect();
+        let all = arrow_select::concat::concat(&refs)
+            .map_err(|e| internal(&format!("merging stats rows: {e}")))?;
+        let all = all
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| internal("merged stats rows that are not a struct"))?;
+        let root = Column {
+            fields: all.fields().clone(),
+            columns: all.columns().to_vec(),
+            nulls: None,
+        };
+        let done = finish.is_some();
+        let mut fields = Vec::new();
+        let mut arrays: Vec<ArrayRef> = Vec::new();
+        for f in schema.fields() {
+            let array: ArrayRef = match f.name().as_str() {
+                "numRecords" => {
+                    let n = root.column("numRecords")?;
+                    Arc::new(Int64Array::from(vec![sum(n)?]))
+                }
+                "nullCount" => Arc::new(nested(
+                    &root.level("nullCount")?,
+                    struct_of(f.data_type())?,
+                    Stat::Sum,
+                    done,
+                )?),
+                "minValues" => Arc::new(nested(
+                    &root.level("minValues")?,
+                    struct_of(f.data_type())?,
+                    Stat::Min,
+                    done,
+                )?),
+                "maxValues" => Arc::new(nested(
+                    &root.level("maxValues")?,
+                    struct_of(f.data_type())?,
+                    Stat::Max,
+                    done,
+                )?),
+                "tightBounds" => match finish {
+                    Some(tight) => Arc::new(BooleanArray::from(vec![tight.then_some(true)])),
+                    None => continue,
+                },
+                other => {
+                    return Err(internal(&format!(
+                        "an unknown field {other} in the kernel's stats schema"
+                    )));
+                }
+            };
+            fields.push(arrow_schema::Field::new(
+                f.name(),
+                array.data_type().clone(),
+                true,
+            ));
+            arrays.push(array);
+        }
+        StructArray::try_new(Fields::from(fields), arrays, None)
+            .map_err(|e| internal(&format!("the stats row: {e}")))
+    }
+}
+
+/// The sum of an Int64 column's values.
+fn sum(column: &ArrayRef) -> Result<i64, KrishivError> {
+    let c = column
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .ok_or_else(|| internal("a stats count that is not a long"))?;
+    c.iter()
+        .flatten()
+        .try_fold(0_i64, i64::checked_add)
+        .ok_or_else(|| internal("a stats count that does not fit a long"))
 }
 
 /// Which statistic a struct of the stats schema holds.
+#[derive(Clone, Copy)]
 enum Stat {
+    /// The NULLs of the data.
     NullCount,
+    /// The sum of raw NULL counts.
+    Sum,
     Min,
     Max,
 }
@@ -160,6 +289,30 @@ struct Column {
     nulls: Option<NullBuffer>,
 }
 
+impl Column {
+    fn column(&self, name: &str) -> Result<&ArrayRef, KrishivError> {
+        self.fields
+            .iter()
+            .position(|d| d.name() == name)
+            .map(|i| &self.columns[i])
+            .ok_or_else(|| internal(&format!("the stats column {name} is missing")))
+    }
+
+    /// The struct column `name` as a level.
+    fn level(&self, name: &str) -> Result<Self, KrishivError> {
+        let s = self
+            .column(name)?
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| internal(&format!("the stats column {name} is not a struct")))?;
+        Ok(Self {
+            fields: s.fields().clone(),
+            columns: s.columns().to_vec(),
+            nulls: None,
+        })
+    }
+}
+
 fn struct_of(t: &DataType) -> Result<&StructType, KrishivError> {
     match t {
         DataType::Struct(s) => Ok(s),
@@ -169,27 +322,29 @@ fn struct_of(t: &DataType) -> Result<&StructType, KrishivError> {
     }
 }
 
-/// One row of `schema`, the statistic `stat` of each of its leaves over `data`.
-fn nested(data: &Column, schema: &StructType, stat: &Stat) -> Result<StructArray, KrishivError> {
+/// One row of `schema`, the statistic `stat` of each of its leaves over `data`; bounds are cut
+/// and written as delta-spark writes them when `finish`, kept as they are otherwise.
+fn nested(
+    data: &Column,
+    schema: &StructType,
+    stat: Stat,
+    finish: bool,
+) -> Result<StructArray, KrishivError> {
     let mut fields = Vec::new();
     let mut arrays: Vec<ArrayRef> = Vec::new();
     for f in schema.fields() {
-        let i = data
-            .fields
-            .iter()
-            .position(|d| d.name() == f.name())
-            .ok_or_else(|| {
-                internal(&format!(
-                    "the stats column {} is not among the written columns",
-                    f.name()
-                ))
-            })?;
-        let column = &data.columns[i];
+        let column = data.column(f.name()).map_err(|_| {
+            internal(&format!(
+                "the stats column {} is not among the written columns",
+                f.name()
+            ))
+        })?;
         let nulls = NullBuffer::union(data.nulls.as_ref(), column.logical_nulls().as_ref());
         let out_type = to_arrow_type(f.data_type()).map_err(|e| internal(&e.to_string()))?;
+        let counts = matches!(stat, Stat::NullCount | Stat::Sum);
         let array: ArrayRef = match (f.data_type(), column.data_type()) {
             (DataType::Struct(child), ArrowType::Struct(child_fields))
-                if !matches!(stat, Stat::NullCount) || is_struct_count(child) =>
+                if !counts || is_struct_count(child) =>
             {
                 let s = column
                     .as_any()
@@ -200,15 +355,16 @@ fn nested(data: &Column, schema: &StructType, stat: &Stat) -> Result<StructArray
                     columns: s.columns().to_vec(),
                     nulls,
                 };
-                Arc::new(nested(&level, child, stat)?)
+                Arc::new(nested(&level, child, stat, finish)?)
             }
             _ => match stat {
                 Stat::NullCount => {
                     let n = nulls.as_ref().map_or(0, NullBuffer::null_count);
                     Arc::new(Int64Array::from(vec![rows(n)?]))
                 }
-                Stat::Min => extreme(column, nulls.as_ref(), false, &out_type)?,
-                Stat::Max => extreme(column, nulls.as_ref(), true, &out_type)?,
+                Stat::Sum => Arc::new(Int64Array::from(vec![sum(column)?])),
+                Stat::Min => extreme(column, nulls.as_ref(), false, &out_type, finish)?,
+                Stat::Max => extreme(column, nulls.as_ref(), true, &out_type, finish)?,
             },
         };
         fields.push(arrow_schema::Field::new(
@@ -228,13 +384,14 @@ fn is_struct_count(s: &StructType) -> bool {
 }
 
 /// The smallest (or, with `max`, the largest) value of `column` among the rows `nulls` leaves
-/// valid, as a one-row array of `out`; NULL when there is none. Strings are cut as delta-spark
-/// cuts them.
+/// valid, as a one-row array of `out`; NULL when there is none. With `finish`, strings are cut
+/// as delta-spark cuts them and floats written as it writes them.
 fn extreme(
     column: &ArrayRef,
     nulls: Option<&NullBuffer>,
     max: bool,
     out: &ArrowType,
+    finish: bool,
 ) -> Result<ArrayRef, KrishivError> {
     let cmp = arrow_ord::ord::make_comparator(column, column, SortOptions::default())
         .map_err(|e| internal(&format!("comparing a stats column: {e}")))?;
@@ -258,6 +415,9 @@ fn extreme(
     let one = column.slice(at, 1);
     let one = arrow_cast::cast(&one, out)
         .map_err(|e| internal(&format!("a stats value as {out}: {e}")))?;
+    if !finish {
+        return Ok(one);
+    }
     if let Some(text) = non_finite(&one) {
         // Jackson writes a non-finite double as a string (`"NaN"`, `"Infinity"`), as
         // delta-spark's stats hold it (`tests/fixtures/delta-4.4.1/write-stats`); the value
@@ -332,8 +492,8 @@ fn internal(message: &str) -> KrishivError {
 mod tests {
     use super::*;
 
-    /// delta-spark's own cases (`StatsCollectionSuite` "truncateMaxStringAgg" and
-    /// "truncateMinStringAgg"), prefix 32 unless named.
+    /// delta-spark's own cases (`StatsCollectionSuite` "truncateMaxStringAgg"), and the min's
+    /// `substring`, prefix 32 unless named.
     #[test]
     fn string_bounds_are_cut_as_delta_spark_cuts_them() {
         let a32 = "a".repeat(32);
@@ -371,7 +531,13 @@ mod tests {
         assert_eq!(truncate_max(&tail, 32).as_deref(), Some(tail.as_str()));
         // A prefix of 0 keeps only the empty string.
         assert_eq!(truncate_min("", 0).as_deref(), Some(""));
-        assert_eq!(truncate_min("abc", 0), None);
+        // The min counts code points (Spark's `substring`): 20 supplementary characters fit
+        // a prefix of 32 whole, where 32 UTF-16 units would keep 16.
+        let wide = "\u{1f600}".repeat(20);
+        assert_eq!(truncate_min(&wide, 32).as_deref(), Some(wide.as_str()));
+        let wider = "\u{1f600}".repeat(40);
+        assert_eq!(truncate_min(&wider, 32), Some("\u{1f600}".repeat(32)));
+        assert_eq!(truncate_min("abc", 0).as_deref(), Some(""));
         assert_eq!(truncate_max("abc", 0), None);
     }
 }

@@ -4,20 +4,30 @@
 //! returns for a Delta table, and [`NewDeltaTable`], the provider of a table a `CREATE TABLE ..
 //! USING delta [AS SELECT]` creates.
 //!
-//! A write buffers its rows under the query's memory (the sink is not spillable: a write larger
-//! than the query's memory fails with the memory class), and when the sink finalizes:
-//! 1. builds a kernel transaction on the snapshot the statement read (for a create, the
-//!    kernel's `create_table` with the table-features protocol) and takes its write state;
-//! 2. writes one Parquet file per partition ([`files`]), with Krishiv's statistics ([`stats`]);
-//! 3. selects the files the mode removes from the kernel's scan metadata: every live file
-//!    (truncate), the files of the partitions the filter selects (`replaceWhere`, a static
-//!    partition overwrite) or of the partitions written (dynamic partition overwrite);
-//! 4. commits through the commit loop ([`crate::commit::commit`]) with the write's id, Delta's
-//!    `WRITE` operation, its parameters and metrics; a create commits version 0 in one
-//!    transaction (the loop does not apply: a lost race means the table now exists);
-//! 5. writes a checkpoint when the commits since the last one reach `delta.checkpointInterval`
-//!    (default 10, delta-spark's `DeltaConfig.scala:480-485`); a failed checkpoint never fails
-//!    the statement.
+//! A write streams: each driver writes its rows as they arrive ([`files`]): one open Parquet
+//! file per partition it has seen, rolled over at `maxRecordsPerFile` and at a target size,
+//! buffering at most a row group and the upload's parts, all held in the driver's reservation
+//! (the sink spills by encoding and shipping the buffered row groups). The first driver to need
+//! it builds the write's kernel transaction on the snapshot the statement read (for a create,
+//! the kernel's `create_table` with the table-features protocol) and takes its write state.
+//! When the sink finalizes it:
+//! 1. ends every driver's open files, with Krishiv's statistics ([`stats`]);
+//! 2. selects the files the mode removes from the kernel's scan metadata and checks each
+//!    exactly against the predicate (only TRUE removes): every live file (truncate), the
+//!    files of the partitions the filter selects (`replaceWhere`, a static partition
+//!    overwrite) or of the partitions written (dynamic partition overwrite);
+//! 3. commits through the commit loop ([`crate::commit::commit`]) with the write's id, Delta's
+//!    `WRITE` operation, its parameters and metrics; a create commits version 0 in its one
+//!    transaction, and a lost race or a failure reads version 0: this write's id there means it
+//!    landed;
+//! 4. starts a checkpoint when the commits since the last one reach `delta.checkpointInterval`
+//!    (default 10, delta-spark's `DeltaConfig.scala:480-485`), detached from the statement: a
+//!    failed or cut-short checkpoint is logged and counted ([`checkpoint_failures`]), never
+//!    raised.
+//!
+//! Data files are invisible until the commit. A write that fails before its commit (or whose
+//! create surely did not land) deletes its files, best effort; a cancelled driver's files are
+//! deleted in the background. A file left behind is an orphan no snapshot reads.
 //!
 //! # Refusals (before any file is written)
 //! - Krishiv's writer allow-list ([`crate::features::check_write`]).
@@ -33,6 +43,8 @@
 //!   its parameters are the kernel's.
 //! - `isDynamicPartitionOverwrite` is the string `"true"` (the kernel's parameters are strings).
 //! - Files are named `part-00000-<uuid>.c000.snappy.parquet` for every task.
+//! - The target file size is a constant 128 MiB (a `krishiv.delta.*` key is a follow-up).
+//! - Checkpoints are written without the `.crc` and V2 checkpoints without sidecars.
 //! - `DELTA_REPLACE_WHERE_MISMATCH`'s nested message names the constraint by the filter's text,
 //!   where delta-spark prints its expression tree.
 
@@ -41,7 +53,7 @@ pub mod filter;
 pub(crate) mod sink;
 pub mod stats;
 
-pub use self::sink::{DeltaWriteSink, NewDeltaTable};
+pub use self::sink::{DeltaWriteSink, NewDeltaTable, checkpoint_failures};
 
 /// The internal write option a session sets when the statement reads the table it writes
 /// (`INSERT INTO t SELECT .. FROM t`): the commit then is not a blind append and is checked as
