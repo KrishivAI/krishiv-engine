@@ -73,7 +73,7 @@ SELECT (a, b) FROM t
 SELECT a LIKE ANY ('x', 'y') FROM t
   => Project [a LIKE ANY ('x', 'y')] | +- Read t | 
 SELECT ? FROM t
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature parameter markers is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..8
+  => [UNBOUND_SQL_PARAMETER] Found the unbound parameter: _7. Please, fix `args` and provide a mapping of the parameter to either a SQL literal or collection constructor functions such as `map()`, `array()`, `struct()`. SQLSTATE: 42P02 @ 7..8
 SELECT INTERVAL 1 DAY FROM t
   => Project [INTERVAL '1' DAY] | +- Read t | 
 SELECT TIMESTAMP '2020-01-01 00:00:00' FROM t

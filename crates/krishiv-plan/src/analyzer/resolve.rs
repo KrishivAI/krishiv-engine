@@ -669,6 +669,7 @@ impl Resolver<'_> {
                 | PlanNode::Limit { .. }
                 | PlanNode::Offset { .. }
                 | PlanNode::Repartition { .. }
+                | PlanNode::Sample { .. }
         );
         let plan = Arc::new(LogicalPlan::new(node).with_origin(origin));
         let mut r = self.wrap(plan, origin.plan_id, out, kids);
@@ -954,6 +955,7 @@ impl Resolver<'_> {
             | PlanNode::PartialAggregate { .. }
             | PlanNode::Shift { .. }
             | PlanNode::ReplicateRows { .. }
+            | PlanNode::Sample { .. }
             | PlanNode::Expand { .. }
             | PlanNode::Range { .. }
             | PlanNode::JoinHint { .. } => self.leaf_node(p, env),
@@ -1066,6 +1068,22 @@ impl Resolver<'_> {
                 projections,
                 output,
             } => self.expand_node(o, input, projections, output, env),
+            // Spark's `Sample`: the input's output, columns pass through.
+            PlanNode::Sample {
+                input,
+                bounds,
+                seed,
+            } => {
+                let c = self.child(input, env)?;
+                let node = PlanNode::Sample {
+                    input: Arc::clone(&c.plan),
+                    bounds: *bounds,
+                    seed: *seed,
+                };
+                let mut r = self.make(o, node, c.out.to_vec(), &[&c]);
+                r.widen = Some(Arc::new(Widen::Through { child: c }));
+                Ok(r)
+            }
             PlanNode::JoinHint { input, strategy } => {
                 let c = self.child(input, env)?;
                 let node = PlanNode::JoinHint {
