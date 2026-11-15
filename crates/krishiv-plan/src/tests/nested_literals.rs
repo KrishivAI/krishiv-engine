@@ -299,3 +299,42 @@ fn identity_text_of_an_empty_array_names_its_element_type() {
         crate::display::identity_string(&b)
     );
 }
+
+/// Identity text names the whole nested type, so an empty map of another type, or an array or
+/// struct whose type differs only in nullability, is not the same expression (a `GROUP BY` key
+/// must not match a select item of another type).
+#[test]
+fn identity_text_of_nested_literals_names_the_whole_type() {
+    let map = |k: DataType, v: DataType| {
+        Expr::from(Literal::key_value_map(MapType::new(k, v, true), vec![]).unwrap())
+    };
+    let (a, b) = (
+        map(DataType::String, DataType::Integer),
+        map(DataType::String, DataType::Long),
+    );
+    assert_eq!(a.to_string(), b.to_string());
+    assert_ne!(
+        crate::display::identity_string(&a),
+        crate::display::identity_string(&b)
+    );
+    let array = |nullable: bool| {
+        Expr::from(Literal::array(ArrayType::new(DataType::Integer, nullable), vec![]).unwrap())
+    };
+    assert_ne!(
+        crate::display::identity_string(&array(true)),
+        crate::display::identity_string(&array(false))
+    );
+    let strukt = |nullable: bool| {
+        Expr::from(
+            Literal::struct_value(
+                StructType::new([StructField::new("a", DataType::Integer, nullable)]),
+                vec![Literal::Integer(1)],
+            )
+            .unwrap(),
+        )
+    };
+    assert_ne!(
+        crate::display::identity_string(&strukt(true)),
+        crate::display::identity_string(&strukt(false))
+    );
+}

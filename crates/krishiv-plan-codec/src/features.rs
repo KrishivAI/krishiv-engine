@@ -316,6 +316,35 @@ fn indeterminate_field(field: &arrow_schema::Field) -> bool {
         .is_some_and(|tag| tag.contains("collate null"))
 }
 
+/// The constructs of a source a plan reads or writes: a declared file schema, or the stored
+/// batches of a local relation. Inferred file reads and table reads need nothing here (the
+/// encoder refuses a table read it cannot write).
+fn visit_read_source<'a>(source: &'a krishiv_plan::ReadSource, f: &mut impl FnMut(Construct<'a>)) {
+    match source {
+        krishiv_plan::ReadSource::Files {
+            schema: Some(schema),
+            ..
+        } => {
+            f(Construct::FileSourceSchema);
+            f(Construct::SchemaType);
+            schema
+                .fields()
+                .iter()
+                .for_each(|x| visit_type(x.data_type(), f));
+        }
+        // The stored batches' Arrow schema travels in the plan, so its fields are classified like
+        // any schema the plan writes.
+        krishiv_plan::ReadSource::Local(l) => {
+            f(Construct::LocalRelationSource);
+            l.schema()
+                .fields()
+                .iter()
+                .for_each(|field| visit_arrow_field(field, f));
+        }
+        _ => {}
+    }
+}
+
 /// `field`, its type and every field and type inside it as constructs: the
 /// tag of a field at any depth can name a collated type.
 fn visit_arrow_field<'a>(field: &'a arrow_schema::Field, f: &mut impl FnMut(Construct<'a>)) {
@@ -718,11 +747,16 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
             }
         }
         // The request's schema is classified by field, as an exchange's is.
-        PhysNode::TableWrite { request, .. } => request
-            .input_schema()
-            .fields()
-            .iter()
-            .for_each(|field| visit_arrow_field(field, f)),
+        // The target's source is written too (`TableRef.source`), so it is classified as a
+        // scan's is.
+        PhysNode::TableWrite { request, table, .. } => {
+            visit_read_source(&table.source, f);
+            request
+                .input_schema()
+                .fields()
+                .iter()
+                .for_each(|field| visit_arrow_field(field, f));
+        }
         // A reduce fragment may name a type only in the schema it reads
         // (a sort by column index above it), so the schema is classified
         // by field, as the plan's output schema is.
@@ -737,31 +771,9 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
                 .iter()
                 .for_each(|field| visit_arrow_field(field, f));
         }
-        PhysNode::Scan(scan) | PhysNode::LateFetch { scan, .. } => match &scan.scan.source {
-            krishiv_plan::ReadSource::Files {
-                schema: Some(schema),
-                ..
-            } => {
-                f(Construct::FileSourceSchema);
-                f(Construct::SchemaType);
-                schema
-                    .fields()
-                    .iter()
-                    .for_each(|x| visit_type(x.data_type(), f));
-            }
-            // The stored batches' Arrow schema travels in the plan, so its
-            // fields are classified like any schema the plan writes.
-            krishiv_plan::ReadSource::Local(l) => {
-                f(Construct::LocalRelationSource);
-                l.schema()
-                    .fields()
-                    .iter()
-                    .for_each(|field| visit_arrow_field(field, f));
-            }
-            // Inferred file reads and table reads need nothing here (the
-            // encoder refuses a table read it cannot write).
-            _ => {}
-        },
+        PhysNode::Scan(scan) | PhysNode::LateFetch { scan, .. } => {
+            visit_read_source(&scan.scan.source, f);
+        }
         PhysNode::OneRow
         | PhysNode::SharedRead { .. }
         | PhysNode::UnionLoop { .. }
