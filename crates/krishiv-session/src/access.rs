@@ -168,15 +168,18 @@ pub(crate) fn audit<T>(
 /// an access check fails closed because it cannot name what a statement
 /// touches (`KRISHIV_UNSUPPORTED_FEATURE`).
 ///
-/// It is the one record of a refusal (review M4): a provider only counts it. `provider` is
-/// `grants` when the session has the grants provider, `policy` otherwise; `policy_epoch` is the
-/// policy's version (the grants epoch mixed in); the query id is the enclosing span's.
+/// It is the one record of a refusal (review M4): a provider only counts it. `provider` is the
+/// `krishiv_access_denied_total` label of who decided: with the grants provider `grants` or
+/// `roles` (the role matrix decides `System(..)` and the `system` catalog), without it `roles`;
+/// `policy_epoch` is the policy's version (the grants epoch mixed in); the query id is the
+/// enclosing span's.
 fn log_denial(session: &Session, class: StatementClass, e: &KrishivError) {
     let provider = if session.state.grants.is_some() {
-        "grants"
+        crate::grants::denial_provider(e)
     } else {
-        "policy"
-    };
+        crate::grants::DecidedBy::Roles
+    }
+    .as_str();
     tracing::warn!(
         target: "krishiv::audit",
         principal = %session.state.principal.name,

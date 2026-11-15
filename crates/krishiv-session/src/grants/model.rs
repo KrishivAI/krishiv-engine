@@ -149,6 +149,17 @@ impl ObjectKey {
         self.lineage().iter().any(|k| k.same(grant, case_sensitive))
     }
 
+    /// Whether this is a column key of the relation `relation` (see [`Self::same`]).
+    pub(crate) fn is_column_of(&self, relation: &Self, case_sensitive: bool) -> bool {
+        self.kind == KeyKind::Column
+            && relation.kind == KeyKind::Relation
+            && ObjectKey::new(
+                KeyKind::Relation,
+                self.parts[..self.parts.len().saturating_sub(1)].to_vec(),
+            )
+            .same(relation, case_sensitive)
+    }
+
     /// This key with the leading parts `from` replaced by `to` when it is `from` or under it
     /// (a rename moves the object's keys and its columns').
     pub(crate) fn renamed(&self, from: &Self, to: &Self, case_sensitive: bool) -> Option<Self> {
@@ -317,16 +328,10 @@ impl GrantState {
         let grantees = self.effective(principal);
         if privilege == Privilege::Browse {
             return self.covering(&grantees, key, cs).next().is_some()
-                || (key.kind == KeyKind::Relation
-                    && self.grants.iter().any(|g| {
-                        grantees.contains(&g.grantee)
-                            && g.object.kind == KeyKind::Column
-                            && ObjectKey::new(
-                                KeyKind::Relation,
-                                g.object.parts[..g.object.parts.len().saturating_sub(1)].to_vec(),
-                            )
-                            .same(key, cs)
-                    }));
+                || self
+                    .grants
+                    .iter()
+                    .any(|g| grantees.contains(&g.grantee) && g.object.is_column_of(key, cs));
         }
         self.covering(&grantees, key, cs)
             .any(|g| g.privilege == privilege)

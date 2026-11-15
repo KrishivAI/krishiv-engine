@@ -4,7 +4,9 @@
 //!
 //! Who may change a grant (note §2.2): an admin, an owner of the object (or a parent), or a holder
 //! of the privilege there `WITH GRANT OPTION`; a grant never exceeds the grantor's own rights
-//! (`ALL PRIVILEGES` needs the authority for each). `REVOKE` takes the same authority. Role
+//! (`ALL PRIVILEGES` needs the authority for each). `REVOKE` takes the same authority, and each
+//! row it removes must be the caller's own grant, on an object it owns, or the caller an admin; a
+//! table-level revoke takes the grantee's column grants on the table with it. Role
 //! changes other than `CREATE ROLE` need an admin or the role's creator. Every refusal is
 //! `KRISHIV_INSUFFICIENT_PERMISSIONS` naming only what the statement wrote, and reads the same
 //! whether the object or role exists or not.
@@ -363,12 +365,24 @@ impl Session {
                     missing_role(&s.0, grantees, admin, || {
                         self.refuse(policy, &securable, Privilege::Manage)
                     })?;
+                    // A table-level revoke also takes the grantee's column grants of that
+                    // privilege on the table (Unity Catalog's behaviour).
                     let matches = |g: &GrantRow| {
                         grantees.contains(&g.grantee)
-                            && rows
-                                .iter()
-                                .any(|(k, p)| g.object.same(k, cs) && g.privilege == *p)
+                            && rows.iter().any(|(k, p)| {
+                                g.privilege == *p
+                                    && (g.object.same(k, cs) || g.object.is_column_of(k, cs))
+                            })
                     };
+                    // Only the grant's grantor, an owner of its object (or a parent) or an admin
+                    // revokes it; one row the caller may not revoke refuses the whole statement.
+                    if !admin
+                        && let Some(g) = s.0.grants.iter().find(|g| {
+                            matches(g) && g.granted_by != me && !s.0.owns(&principal, &g.object, cs)
+                        })
+                    {
+                        return Err(self.refuse(policy, &securable, g.privilege));
+                    }
                     if *grant_option_only {
                         s.0.grants
                             .iter_mut()

@@ -118,3 +118,54 @@ fn the_provider_follows_the_config() {
         assert!(e.to_string().contains(unit), "{value}: {e}");
     }
 }
+
+#[test]
+fn a_denial_names_the_provider_that_decided_it() {
+    let principal = Principal::new("ana", PrincipalKind::User);
+    let of = |securable: &Securable| {
+        denial_provider(&krishiv_plan::analyzer::insufficient_permissions(
+            &principal,
+            securable,
+            Privilege::Select,
+        ))
+    };
+    assert_eq!(of(&table("spark_catalog")), DecidedBy::Grants);
+    assert_eq!(of(&table("SYSTEM")), DecidedBy::Roles);
+    assert_eq!(of(&table("sys`tem")), DecidedBy::Grants);
+    assert_eq!(
+        of(&Securable::System("cluster".to_owned())),
+        DecidedBy::Roles
+    );
+    assert_eq!(
+        of(&Securable::Namespace(vec![
+            "system".to_owned(),
+            "x".to_owned()
+        ])),
+        DecidedBy::Roles
+    );
+    let column = |catalog: &str, column: &str| Securable::Column {
+        table: TableIdent {
+            catalog: catalog.to_owned(),
+            namespace: vec![],
+            name: "t".to_owned(),
+        },
+        column: column.to_owned(),
+    };
+    assert_eq!(of(&column("system", "a")), DecidedBy::Roles);
+    // A column name that reads like the rest of the text decides nothing.
+    assert_eq!(
+        of(&column("spark_catalog", "x` of table `system")),
+        DecidedBy::Grants
+    );
+    assert_eq!(
+        of(&Securable::Path(
+            krishiv_common::secret::OptionValue::from_user("path", "/system/x")
+        )),
+        DecidedBy::Grants
+    );
+    let other: KrishivError = krishiv_common::error::KrishivUnsupportedFeature {
+        feature: "x".to_owned(),
+    }
+    .into();
+    assert_eq!(denial_provider(&other), DecidedBy::Grants);
+}

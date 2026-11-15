@@ -442,6 +442,53 @@ impl AccessPolicy for GrantsPolicy {
     }
 }
 
+/// Who decided the refusal `e` of a session with the grants provider, read back from the
+/// securable it names (as [`GrantsPolicy::decided_by`] routes it), so the audit record's
+/// `provider` is the counter's label. A refusal that names no securable (an access check failing
+/// closed) is the grants provider's.
+pub(crate) fn denial_provider(e: &KrishivError) -> DecidedBy {
+    let Some((_, securable)) = e
+        .message_parameters()
+        .iter()
+        .find(|(name, _)| *name == "securable")
+    else {
+        return DecidedBy::Grants;
+    };
+    if securable.starts_with("system ") {
+        return DecidedBy::Roles;
+    }
+    let catalog = ["table ", "view ", "namespace ", "function "]
+        .iter()
+        .find_map(|kind| securable.strip_prefix(kind))
+        .or_else(|| {
+            // `column `c` of table `cat`...`: skip the column's quoted name.
+            let (_, rest) = first_quoted(securable.strip_prefix("column ")?)?;
+            rest.strip_prefix(" of table ")
+        })
+        .and_then(first_quoted);
+    match catalog {
+        Some((name, _)) if crate::system::is_system(&name) => DecidedBy::Roles,
+        _ => DecidedBy::Grants,
+    }
+}
+
+/// The first `` `quoted` `` identifier of `text` (a doubled backtick is one) and what follows it.
+fn first_quoted(text: &str) -> Option<(String, &str)> {
+    let mut chars = text.strip_prefix('`')?.char_indices().peekable();
+    let mut name = String::new();
+    while let Some((i, c)) = chars.next() {
+        if c != '`' {
+            name.push(c);
+        } else if chars.peek().is_some_and(|(_, n)| *n == '`') {
+            chars.next();
+            name.push('`');
+        } else {
+            return Some((name, &text[1 + i + 1..]));
+        }
+    }
+    None
+}
+
 /// The access provider a server configures (`krishiv.access.provider`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]

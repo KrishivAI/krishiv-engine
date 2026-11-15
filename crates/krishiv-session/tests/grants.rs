@@ -402,3 +402,75 @@ fn without_grants_the_statements_are_refused() {
     let policy = Arc::new(GrantsPolicy::new(grants, Arc::new(AllowAll), false));
     assert!(Session::builder().grants(policy).build().is_err());
 }
+
+#[test]
+fn a_table_revoke_takes_the_column_grants_with_it() {
+    let w = World::new();
+    table(&w, "t");
+    let (root, ana, bob) = (w.admin(), w.user("ana"), w.user("bob"));
+    ok(&root, "GRANT SELECT (a) ON t TO user:ana");
+    ok(&root, "GRANT SELECT (b) ON t TO user:ana");
+    ok(&root, "GRANT SELECT (a) ON t TO user:bob");
+    // A column revoke takes only that column.
+    ok(&root, "REVOKE SELECT (a) ON t FROM user:ana");
+    denied(&ana, "SELECT a FROM t");
+    assert_eq!(ok(&ana, "SELECT b FROM t"), 1);
+    // A table revoke takes the grantee's column grants on the table (Unity's behaviour), and
+    // only the grantee's.
+    ok(&root, "REVOKE SELECT ON t FROM user:ana");
+    denied(&ana, "SELECT b FROM t");
+    assert_eq!(ok(&bob, "SELECT a FROM t"), 1);
+    ok(&root, "GRANT SELECT (a, b) ON t TO user:ana");
+    ok(&root, "REVOKE ALL PRIVILEGES ON t FROM user:ana");
+    denied(&ana, "SELECT a FROM t");
+    denied(&ana, "DESCRIBE TABLE t");
+    // `GRANT OPTION FOR` on the table clears the columns' flags too.
+    ok(&root, "GRANT SELECT (a) ON t TO user:ana WITH GRANT OPTION");
+    ok(&root, "REVOKE GRANT OPTION FOR SELECT ON t FROM user:ana");
+    assert_eq!(ok(&ana, "SELECT a FROM t"), 1);
+    denied(&ana, "GRANT SELECT (a) ON t TO user:carl");
+}
+
+#[test]
+fn only_the_grantor_the_owner_or_an_admin_revokes() {
+    let w = World::new();
+    table(&w, "t");
+    let (root, ana, bob, carl) = (w.admin(), w.user("ana"), w.user("bob"), w.user("carl"));
+    ok(&root, "GRANT SELECT ON t TO user:ana WITH GRANT OPTION");
+    ok(&ana, "GRANT SELECT ON t TO user:bob");
+    ok(&root, "GRANT SELECT ON t TO user:carl");
+    // A grant-option holder cannot revoke an admin's grant, nor another holder's.
+    denied(&ana, "REVOKE SELECT ON t FROM user:carl");
+    assert_eq!(ok(&carl, "SELECT * FROM t"), 1);
+    ok(&root, "GRANT SELECT ON t TO user:carl WITH GRANT OPTION");
+    denied(&carl, "REVOKE SELECT ON t FROM user:bob");
+    denied(&carl, "REVOKE GRANT OPTION FOR SELECT ON t FROM user:ana");
+    denied(&carl, "REVOKE SELECT ON t FROM user:ana");
+    assert_eq!(ok(&bob, "SELECT * FROM t"), 1);
+    assert_eq!(ok(&ana, "SELECT * FROM t"), 1);
+    // A refusal changes nothing, even for the rows the caller did grant.
+    ok(&carl, "GRANT SELECT ON t TO user:dee");
+    denied(&carl, "REVOKE SELECT ON t FROM user:dee, user:bob");
+    assert_eq!(ok(&w.user("dee"), "SELECT * FROM t"), 1);
+    // The grantor may.
+    ok(&ana, "REVOKE SELECT ON t FROM user:bob");
+    denied(&bob, "SELECT * FROM t");
+    // An admin may revoke anyone's.
+    ok(&root, "REVOKE SELECT ON t FROM user:carl");
+    denied(&carl, "SELECT * FROM t");
+    // The owner may revoke a grant an admin made on its object.
+    ok(&root, "GRANT CREATE ON SCHEMA default TO user:ana");
+    let wh = w.dir.path().join("wh");
+    ok(
+        &root,
+        &format!(
+            "GRANT ALL PRIVILEGES ON PATH 'file:{}' TO user:ana",
+            wh.display()
+        ),
+    );
+    ok(&ana, "CREATE TABLE mine (a INT) USING parquet");
+    ok(&root, "GRANT SELECT ON mine TO user:bob");
+    assert_eq!(ok(&bob, "SELECT * FROM mine"), 0);
+    ok(&ana, "REVOKE SELECT ON mine FROM user:bob");
+    denied(&bob, "SELECT * FROM mine");
+}
