@@ -145,7 +145,7 @@ impl Session {
                     }
                     .into());
                 }
-                self.authorize_set_store_key(key).await?;
+                self.authorize_set_key(key).await?;
                 // The assignment sets through the session configuration,
                 // so validation and error classes are its own; the row
                 // shows the value as written, as in Spark.
@@ -210,8 +210,8 @@ impl Session {
     /// Spark.
     pub(crate) async fn exec_reset(&self, r: &Reset) -> Result<DataFrame, KrishivError> {
         match &r.key {
-            None => self.state.conf.reset(),
-            Some(key) => self.conf().unset(key)?,
+            None => self.state.conf.reset(), // every key it set passed `SET`'s check
+            Some(key) => self.unset_key(key).await?,
         }
         self.empty_frame().await
     }

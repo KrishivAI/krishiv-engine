@@ -28,6 +28,15 @@ both off (the default) nothing differs. See [result cache](../reference/result-c
 what is cached, when entries go, and the one staleness the cache accepts (a change made outside the
 engine, until the entry expires or `REFRESH TABLE`).
 
+## Writers leave a `_krishiv_log` directory
+
+A write to a plain directory records each commit in `<path>/_krishiv_log/` (one `<version>.json` per commit), so that
+concurrent writers cannot both take a version and Krishiv readers see only committed files. Spark commits by
+writing files under their final names plus `_SUCCESS`. The underscore prefix hides the directory from Krishiv and
+Spark readers, but other tools that list the directory see it. `krishiv.sql.files.commitProtocol=NONE` selects
+Spark's plain commit for a new directory; a directory that already has a log keeps being written through it, so
+do not delete the log from a table you still append to.
+
 ## A malformed value of a Spark config key fails at `SET`
 
 A Spark key that Krishiv maps to a typed setting (for example
@@ -228,6 +237,9 @@ first job. A checkpoint is not a cache entry: `is_cached`, `CLEAR CACHE`, `REFRE
 do not see it, as in Spark. `system.caches` lists the session's live checkpoints in a `checkpoint` row.
 
 ## `krishiv server` (Spark Connect)
+
+> The Spark Connect server is not part of the 0.2 release; `krishiv server` in 0.2 serves the web UI and admin API
+> only. The behaviour below is what the Spark Connect server is built to do, and it does not apply to 0.2.
 
 - **The Connect listener binds `127.0.0.1` by default.** Spark binds every interface when
   `spark.connect.grpc.binding.address` is unset. A non-loopback address needs authentication, so `krishiv server`

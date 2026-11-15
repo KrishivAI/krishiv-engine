@@ -1,6 +1,5 @@
 ---
 source: crates/krishiv-session/tests/explain.rs
-assertion_line: 242
 expression: "logical_and_physical(&s, 18)"
 ---
 == Parsed Logical Plan ==
@@ -61,7 +60,7 @@ Limit 100
 TopN 100, [o_totalprice#11 DESC NULLS LAST, o_orderdate#12 ASC NULLS FIRST]
 +- Exchange SinglePartition
    +- LocalTopN 100, [o_totalprice#11 DESC NULLS LAST, o_orderdate#12 ASC NULLS FIRST]
-      +- Project [c_name#1, c_custkey#0, o_orderkey#8, o_orderdate#12, o_totalprice#11, sum(l_quantity#21)#4611686018427387946 AS sum(l_quantity)#50]
+      +- Project [c_name#1, c_custkey#0, o_orderkey#8, o_orderdate#12, o_totalprice#11, sum(l_quantity#21)#51 AS sum(l_quantity)#50]
          +- HashAggregate keys=[c_name#1, c_custkey#0, o_orderkey#8, o_orderdate#12, o_totalprice#11], functions=[sum(l_quantity#21)]
             +- Exchange hashpartitioning(c_name#1, c_custkey#0, o_orderkey#8, o_orderdate#12, o_totalprice#11)
                +- PartialHashAggregate keys=[c_name#1, c_custkey#0, o_orderkey#8, o_orderdate#12, o_totalprice#11], functions=[sum(l_quantity#21)]
@@ -78,7 +77,7 @@ TopN 100, [o_totalprice#11 DESC NULLS LAST, o_orderdate#12 ASC NULLS FIRST]
                      +- BroadcastExchange
                         +- Project [l_orderkey#33]
                            +- Filter (sum(l_quantity)#49 > 300.00)
-                              +- Project [l_orderkey#33, sum(l_quantity#37)#4611686018427387943 AS sum(l_quantity)#49]
+                              +- Project [l_orderkey#33, sum(l_quantity#37)#52 AS sum(l_quantity)#49]
                                  +- HashAggregate keys=[l_orderkey#33], functions=[sum(l_quantity#37)]
                                     +- Exchange hashpartitioning(l_orderkey#33)
                                        +- PartialHashAggregate keys=[l_orderkey#33], functions=[sum(l_quantity#37)]

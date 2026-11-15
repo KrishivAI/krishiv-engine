@@ -2101,6 +2101,58 @@ fn a_python_udf_needs_its_feature() {
     );
 }
 
+/// The Python UDF relation nodes, the Python UDTF generator and every eval
+/// type past the scalar ones list `python_udf_relations` (semantic: no plan
+/// without them computes the same rows); a reader without it refuses each
+/// plan naming it, and a scalar-only plan does not list it.
+#[test]
+fn the_python_udf_relation_kinds_need_their_feature() {
+    assert_eq!(Feature::PythonUdfRelations.kind(), FeatureKind::Semantic);
+    // The declared `ARRAY<STRING>` result is a nested type.
+    for name in ["python_map", "python_group_map", "python_cogroup_map"] {
+        assert_eq!(
+            message(name).features,
+            ["nested_types", "python_udf_relations"],
+            "{name}"
+        );
+    }
+    assert_eq!(
+        message("python_udtf_generate").features,
+        ["generate", "python_udf", "python_udf_relations"]
+    );
+    for name in ["python_aggregate", "python_eval_types"] {
+        assert_eq!(
+            message(name).features,
+            ["python_udf", "python_udf_relations"],
+            "{name}"
+        );
+    }
+    assert_eq!(message("python_udf").features, ["python_udf"]);
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::PythonUdfRelations),
+    );
+    for name in [
+        "python_map",
+        "python_group_map",
+        "python_cogroup_map",
+        "python_aggregate",
+        "python_udtf_generate",
+        "python_eval_types",
+    ] {
+        let bytes = message(name).encode_to_vec();
+        assert_eq!(
+            decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+            CodecError::UnsupportedFeatures {
+                missing: vec!["python_udf_relations".to_owned()]
+            },
+            "{name}"
+        );
+    }
+}
+
 /// A `TABLESAMPLE` plan lists `sample` (a semantic feature: no plan without
 /// the node keeps the same rows), and a reader without it refuses the plan
 /// naming the feature.
@@ -2121,4 +2173,48 @@ fn a_sample_needs_its_feature() {
             missing: vec!["sample".to_owned()]
         }
     );
+}
+
+#[test]
+fn a_reader_without_table_write_refuses_a_table_write_naming_it() {
+    for name in [
+        "table_write",
+        "table_write_by_filter",
+        "table_write_row_level",
+    ] {
+        let plan = cases().into_iter().find(|(n, _)| n == name).unwrap().1;
+        let bytes = encode(&plan).unwrap();
+        assert_eq!(decode(&bytes).unwrap(), plan, "{name}");
+        let err = decode_with(&bytes, &Limits::default(), &ReaderFeatures::only([])).unwrap_err();
+        let CodecError::UnsupportedFeatures { missing } = err else {
+            panic!("{name}: {err:?}");
+        };
+        assert!(
+            missing.contains(&"table_write".to_owned()),
+            "{name}: {missing:?}"
+        );
+    }
+}
+
+#[test]
+fn a_table_write_never_carries_an_inline_secret() {
+    use krishiv_exec::physical::TableWriteRequest;
+    let mut root = cases()
+        .into_iter()
+        .find(|(n, _)| n == "table_write")
+        .unwrap()
+        .1
+        .root()
+        .clone();
+    let PhysNode::TableWrite { request, .. } = &mut root else {
+        panic!("not a table write");
+    };
+    let TableWriteRequest::Write(w) = request else {
+        panic!("not a write");
+    };
+    w.options
+        .insert("fs.s3a.secret.key".to_owned(), "abc".to_owned());
+    let err = encode(&plan_of(root)).unwrap_err();
+    assert!(matches!(err, CodecError::Unsupported(_)), "{err:?}");
+    assert!(!err.to_string().contains("abc"), "{err}");
 }

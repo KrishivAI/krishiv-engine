@@ -577,10 +577,18 @@ fn schema_of_xml_errors_and_from_xml_of_it() {
         class_of(&s, "select schema_of_xml('<p/>', map('a', 1))"),
         ErrorClass::InvalidOptionsNonStringType
     );
+    // `samplingRatio` and the like are accepted by `schema_of_xml` (no effect on an inferred schema); an option still unimplemented is refused.
+    assert_eq!(
+        run(
+            &s,
+            "select schema_of_xml('<p/>', map('samplingRatio', '0.5'))"
+        ),
+        run(&s, "select schema_of_xml('<p/>')")
+    );
     assert_eq!(
         class_of(
             &s,
-            "select schema_of_xml('<p/>', map('samplingRatio', '0.5'))"
+            "select schema_of_xml('<p/>', map('rowValidationXSDPath', 'x.xsd'))"
         ),
         ErrorClass::KrishivUnsupportedFeature
     );
@@ -689,19 +697,32 @@ fn to_xml_wraps_inner_arrays_in_item_elements() {
 #[test]
 fn option_values_and_schemas() {
     let s = session();
-    // Spark refuses a flag that is not true or false; an unknown mode reads as PERMISSIVE.
-    for options in [
-        "'ignoreSurroundingSpaces', 'maybe'",
-        "'inferSchema', 'maybe'",
-        "'prefersDecimal', 'maybe'",
-        "'validateName', 'maybe'",
+    // Spark refuses a flag that is not true or false (`_LEGACY_ERROR_TEMP_2147`, golden schema_of_xml#165); an unknown mode reads as PERMISSIVE.
+    for (options, class) in [
+        (
+            "'ignoreSurroundingSpaces', 'maybe'",
+            ErrorClass::KrishivUnsupportedFeature,
+        ),
+        ("'inferSchema', 'maybe'", ErrorClass::LegacyErrorTemp2147),
+        (
+            "'excludeAttribute', 'maybe'",
+            ErrorClass::LegacyErrorTemp2147,
+        ),
+        (
+            "'prefersDecimal', 'maybe'",
+            ErrorClass::KrishivUnsupportedFeature,
+        ),
+        (
+            "'validateName', 'maybe'",
+            ErrorClass::KrishivUnsupportedFeature,
+        ),
     ] {
         assert_eq!(
             class_of(
                 &s,
                 &format!("select schema_of_xml('<p><a>1</a></p>', map({options}))")
             ),
-            ErrorClass::KrishivUnsupportedFeature,
+            class,
             "{options}"
         );
     }

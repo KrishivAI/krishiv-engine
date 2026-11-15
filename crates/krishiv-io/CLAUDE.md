@@ -10,7 +10,10 @@ typed format options, and the scan/write drivers (`ScanStream`, `FileWriter`) th
 
 ## Layout (P2-T117)
 `format.rs` FileFormat/FileMetadata/Decoder/Encoder/Capabilities + `AsyncDecoder`/`PushReadAt` bridge ·
-`request.rs` ScanRequest, PushdownExpr, RowSelection, ColumnPath, `project_schema`/`project_batch` · `stats.rs` statistics and
+`request.rs` ScanRequest, PushdownExpr, RowSelection, ColumnPath, `project_schema`/`project_batch`, `FieldMapping`
+(`FieldIdOr(WithoutFieldIds)`: by id, a file with no id read by position or refused, Iceberg) · `constants.rs`
+`FileConstants` (typed per-file constant columns keyed by path: Iceberg identity partitions, Delta partition
+values) and `scalar_column` · `stats.rs` statistics and
 sound `prune` (TriState) · `options.rs` OptionSchema/FormatOptions (unknown-option warning, strict mode,
 secrets) · `schema_map.rs` SchemaMapper (case rules, field ids, Delta column mapping, widening, predicate
 re-typing) · `split.rs` Spark split planning (goldens: `tests/fixtures/spark-4.2.0/file-splits.json`) ·
