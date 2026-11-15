@@ -356,3 +356,188 @@ fn own_bytes_counts_a_slices_rows() {
         "slice: {slice} of {whole}"
     );
 }
+
+/// A driver that spilled advertises 0 spillable bytes; another driver then
+/// combines its table and ends, charging it to a consumer no one can ask to
+/// spill. When the first driver's next batch is refused, its signal counts
+/// the combined tables again, so its self-spill (which writes them) is
+/// asked for them: otherwise arbitration finds nothing to spill and the
+/// query fails with `UNABLE_TO_ACQUIRE_MEMORY` (the intermittent failure
+/// of `krishiv-session` `metrics_registry::a_spilling_query_folds_spill_totals`).
+#[tokio::test]
+async fn a_refused_batch_counts_tables_combined_since_the_last_spill() {
+    use krishiv_memory::Spillable as _;
+    let dir = tempfile::Builder::new()
+        .prefix("krishiv-slice-")
+        .tempdir()
+        .unwrap();
+    let manager = krishiv_memory::SpillManager::open(&krishiv_memory::SpillConfig {
+        dir: dir.path().join("spill"),
+        ..krishiv_memory::SpillConfig::default()
+    })
+    .unwrap();
+    let root = TreePool::new(&MemoryConfig {
+        quantum: 16 << 10,
+        ..MemoryConfig::default()
+    });
+    let pool: Arc<dyn MemoryPool> = root.child("q", Some(64 << 20));
+    let q = QueryContext::new(
+        QueryId(1),
+        WorkloadClass::Batch,
+        ExecConfig::default(),
+        pool,
+    );
+    let executor: Arc<dyn Executor> = TokioExecutor::deterministic(1).unwrap();
+    let task = || {
+        TaskContext::new(
+            Arc::clone(&q),
+            Arc::clone(&executor),
+            SpillOwner::new(),
+            OperatorId(0),
+            "agg",
+        )
+    };
+    let (a, b) = (task(), task());
+    let spec = AggregateSpec {
+        spill: Some(manager.scope().unwrap()),
+        ..spec(false)
+    };
+    let agg = HashAggregate::new(spec).unwrap();
+    let g = Sink::global_state(&*agg, &a).unwrap();
+    // Driver A folds a batch of new keys, then spills its table.
+    let mut la = Sink::local_state(&*agg, &a, &g).unwrap();
+    let first = batch(false, 0, 0..ROWS as i64);
+    assert!(matches!(
+        agg.sink(first, &mut la, &g).unwrap(),
+        SinkStatus::NeedMoreInput
+    ));
+    assert!(agg.spill(&mut la, usize::MAX, &a).await.unwrap() > 0);
+    let signal = Arc::clone(a.consumer().signal());
+    assert_eq!(signal.spillable_bytes(), 0);
+    // Driver B folds its own keys, combines and ends.
+    let before = root.reserved();
+    let mut lb = Sink::local_state(&*agg, &b, &g).unwrap();
+    let second = batch(false, 10_000, ROWS as i64..2 * ROWS as i64);
+    assert!(matches!(
+        agg.sink(second, &mut lb, &g).unwrap(),
+        SinkStatus::NeedMoreInput
+    ));
+    agg.combine(lb, &g).unwrap();
+    drop(b);
+    let combined = root.reserved() - before;
+    assert!(combined > 0);
+    // Nearly no room left: A's next batch of new keys is refused whole.
+    let mut ballast =
+        ConsumerHandle::register(Arc::clone(a.query().pool()), "ballast", None).reservation();
+    let free = match ballast.try_grow(usize::MAX >> 1) {
+        Err(krishiv_memory::MemoryError::Exhausted { available, .. }) => available,
+        other => panic!("{other:?}"),
+    };
+    ballast.try_grow(free - (64 << 10)).unwrap();
+    let third = batch(false, 20_000, 2 * ROWS as i64..3 * ROWS as i64);
+    assert!(matches!(
+        agg.sink(third, &mut la, &g).unwrap(),
+        SinkStatus::NeedMemory { .. }
+    ));
+    assert!(
+        signal.spillable_bytes() >= combined,
+        "A's signal advertises {} bytes; B combined {combined}",
+        signal.spillable_bytes()
+    );
+    // A's spill writes the combined tables.
+    let held = root.reserved();
+    let freed = agg.spill(&mut la, usize::MAX, &a).await.unwrap();
+    assert!(freed >= combined, "freed {freed} of {combined}");
+    assert!(root.reserved() < held);
+    drop((la, g, ballast, a));
+}
+
+/// A driver combines its table and ends while the other drivers still run:
+/// the table is charged to the combined tables' own consumer, whose hook
+/// spills it on request. A request in the same query that only that table
+/// can fund is granted (before, the table sat on the ended driver's
+/// consumer with no spill hook, and the request failed with
+/// `UNABLE_TO_ACQUIRE_MEMORY`), and `finalize` reads the spilled run.
+#[tokio::test]
+async fn combined_tables_spill_when_a_round_asks_them() {
+    let dir = tempfile::Builder::new()
+        .prefix("krishiv-slice-")
+        .tempdir()
+        .unwrap();
+    let manager = krishiv_memory::SpillManager::open(&krishiv_memory::SpillConfig {
+        dir: dir.path().join("spill"),
+        ..krishiv_memory::SpillConfig::default()
+    })
+    .unwrap();
+    let root = TreePool::with_clock(
+        &MemoryConfig {
+            quantum: 16 << 10,
+            ..MemoryConfig::default()
+        },
+        Arc::new(TokioClock),
+    );
+    let pool: Arc<dyn MemoryPool> = root.child("q", Some(64 << 20));
+    let q = QueryContext::new(
+        QueryId(1),
+        WorkloadClass::Batch,
+        ExecConfig::default(),
+        pool,
+    );
+    let executor: Arc<dyn Executor> = TokioExecutor::deterministic(1).unwrap();
+    let task = || {
+        TaskContext::new(
+            Arc::clone(&q),
+            Arc::clone(&executor),
+            SpillOwner::new(),
+            OperatorId(0),
+            "agg",
+        )
+    };
+    let spec = AggregateSpec {
+        spill: Some(manager.scope().unwrap()),
+        ..spec(false)
+    };
+    let agg = HashAggregate::new(spec).unwrap();
+    let coordinator = task();
+    let g = Sink::global_state(&*agg, &coordinator).unwrap();
+    // Driver B folds new keys, combines and ends.
+    let b = task();
+    let mut lb = Sink::local_state(&*agg, &b, &g).unwrap();
+    let keys = batch(false, 0, 0..ROWS as i64);
+    assert!(matches!(
+        agg.sink(keys, &mut lb, &g).unwrap(),
+        SinkStatus::NeedMoreInput
+    ));
+    agg.combine(lb, &g).unwrap();
+    drop(b);
+    let combined = root.reserved();
+    assert!(combined > 0);
+    // Another consumer of the query fills the pool, then asks for half the
+    // combined table's bytes more: only spilling that table makes room.
+    let pool = q.pool();
+    let mut ballast = ConsumerHandle::register(Arc::clone(pool), "ballast", None).reservation();
+    let free = match ballast.try_grow(usize::MAX >> 1) {
+        Err(krishiv_memory::MemoryError::Exhausted { available, .. }) => available,
+        other => panic!("{other:?}"),
+    };
+    ballast.try_grow(free).unwrap();
+    let mut wants = ConsumerHandle::register(Arc::clone(pool), "wants", None).reservation();
+    tokio::time::timeout(Duration::from_secs(30), wants.grow(combined / 2))
+        .await
+        .expect("the round waited out its deadline")
+        .expect("the combined table was not spilled");
+    drop((wants, ballast));
+    // Every group comes back from the spilled run.
+    let fin = task();
+    agg.finalize(&g, &fin).await.unwrap();
+    let src = fin.with_dependency(Arc::clone(&g));
+    let sg = Source::global_state(&*agg, &src).unwrap();
+    let mut sl = Source::local_state(&*agg, &src, &sg).unwrap();
+    let mut groups = 0;
+    while let Some(out) = agg.get_data(&mut sl, &sg).await.unwrap() {
+        groups += out.data().num_rows();
+    }
+    assert_eq!(groups, ROWS);
+    drop((sl, sg, src, g, coordinator));
+    assert_eq!(root.reserved(), 0, "memory still held");
+}
