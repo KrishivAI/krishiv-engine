@@ -50,6 +50,9 @@ Paths are relative to this crate.
   operation's `Replay` under the ahead budget (`krishiv.connect.execute.aheadBytes`) and memory consumer
   `connect_responses` (the Arrow payload is `Bytes`, shared with the copy sent), the
   response order (schema, batches, metrics, `ResultComplete` when reattachable); commands are 56K00 until T012;
+  `request_plan` (shared with `AnalyzePlan`) translates twice when the plan holds local relations: the first pass records
+  them, `Session::local_relation` builds them (cached ones are `NOT_FOUND_CACHED_LOCAL_RELATION` until the artifact
+  store lands), the second pass resolves them (`krishiv-connect` CLAUDE.md);
   `src/execute/arrow.rs` Spark's Arrow shapes, batch limits, IPC streams, codecs and chunks;
   `src/execute/schema.rs` the `schema` response (`DataTypeProtoConverter.toConnectProtoType`)
 - `src/codec.rs` `WireCodec`: requests decode only through `wire::decode_request` (bounded size, count, depth, fields)

@@ -1032,3 +1032,269 @@ async fn large_row_result() {
         .expect("utf8");
     assert_eq!(s.value(0).len(), 65_536);
 }
+
+// ---- local relations, schemas, qualifiers and expression strings (P3-T012a part 2b) --------
+
+/// An Arrow IPC stream of `(id: Int64, name: Utf8)` rows, as PySpark's `createDataFrame` sends.
+fn people_ipc() -> Vec<u8> {
+    use arrow_array::{Int64Array, StringArray};
+    use arrow_schema::{DataType, Field, Schema};
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, true),
+        Field::new("name", DataType::Utf8, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int64Array::from(vec![1, 2, 3])),
+            Arc::new(StringArray::from(vec![Some("a"), None, Some("c")])),
+        ],
+    )
+    .expect("batch");
+    let mut out = Vec::new();
+    {
+        let mut w = arrow_ipc::writer::StreamWriter::try_new(&mut out, &schema).expect("writer");
+        w.write(&batch).expect("write");
+        w.finish().expect("finish");
+    }
+    out
+}
+
+fn local(data: Option<Vec<u8>>, schema: Option<&str>) -> pb::Relation {
+    relation(RelType::LocalRelation(pb::LocalRelation {
+        data,
+        schema: schema.map(str::to_owned),
+    }))
+}
+
+/// The one Arrow batch of a small result.
+fn rows(responses: &[pb::ExecutePlanResponse]) -> RecordBatch {
+    let mut all: Vec<RecordBatch> = batches(responses)
+        .iter()
+        .flat_map(|b| read_ipc(&b.data))
+        .collect();
+    assert_eq!(all.len(), 1, "a small result is one batch");
+    all.remove(0)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_local_relation_is_collected() {
+    let run = start().await;
+    let r = collect(&run.channel, request(root(local(Some(people_ipc()), None))))
+        .await
+        .expect("runs");
+    let got = rows(&r);
+    assert_eq!(got.num_rows(), 3);
+    assert_eq!(got.schema().field(0).name(), "id");
+    assert_eq!(got.schema().field(1).name(), "name");
+    // The batches live once, in the session's store, held by the plan's lease.
+    let again = collect(&run.channel, request(root(local(Some(people_ipc()), None))))
+        .await
+        .expect("runs again");
+    assert_eq!(rows(&again).num_rows(), 3);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_local_relation_applies_its_schema_eagerly() {
+    let run = start().await;
+    // The user schema renames by position and casts `id` to int.
+    let r = collect(
+        &run.channel,
+        request(root(local(Some(people_ipc()), Some("a INT, b STRING")))),
+    )
+    .await
+    .expect("runs");
+    let got = rows(&r);
+    assert_eq!(got.schema().field(0).name(), "a");
+    assert_eq!(
+        got.schema().field(0).data_type(),
+        &arrow_schema::DataType::Int32
+    );
+    assert_eq!(got.num_rows(), 3);
+    // A schema of a different column count fails while the plan is built.
+    let e = collect(
+        &run.channel,
+        request(root(local(Some(people_ipc()), Some("a INT")))),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error_class(&e), "NUM_COLUMNS_MISMATCH");
+    // A schema alone is an empty relation; neither is invalid.
+    let empty = collect(
+        &run.channel,
+        request(root(local(None, Some("a INT, b STRING")))),
+    )
+    .await
+    .expect("runs");
+    assert_eq!(rows(&empty).num_rows(), 0);
+    let e = collect(&run.channel, request(root(local(None, None))))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error_class(&e),
+        "CONNECT_INVALID_PLAN.SCHEMA_REQUIRED_FOR_LOCAL_RELATION"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cached_local_relation_without_its_artifact_is_not_found() {
+    let run = start().await;
+    let cached = relation(RelType::CachedLocalRelation(pb::CachedLocalRelation {
+        hash: "0123abcd".to_owned(),
+    }));
+    let e = collect(&run.channel, request(root(cached)))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error_class(&e),
+        "CONNECT_INVALID_PLAN.NOT_FOUND_CACHED_LOCAL_RELATION"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_local_relations_join_in_one_plan() {
+    let run = start().await;
+    let join = relation(RelType::Join(Box::new(pb::Join {
+        left: Some(Box::new(local(Some(people_ipc()), None))),
+        right: Some(Box::new(local(
+            Some(people_ipc()),
+            Some("id2 BIGINT, n2 STRING"),
+        ))),
+        join_type: pb::join::JoinType::Cross as i32,
+        ..Default::default()
+    })));
+    let r = collect(&run.channel, request(root(join)))
+        .await
+        .expect("runs");
+    assert_eq!(rows(&r).num_rows(), 9);
+}
+
+fn column(name: &str) -> pb::Expression {
+    pb::Expression {
+        common: None,
+        expr_type: Some(pb::expression::ExprType::UnresolvedAttribute(
+            pb::expression::UnresolvedAttribute {
+                unparsed_identifier: name.to_owned(),
+                plan_id: None,
+                is_metadata_column: None,
+            },
+        )),
+    }
+}
+
+fn expression_string(text: &str) -> pb::Expression {
+    pb::Expression {
+        common: None,
+        expr_type: Some(pb::expression::ExprType::ExpressionString(
+            pb::expression::ExpressionString {
+                expression: text.to_owned(),
+            },
+        )),
+    }
+}
+
+fn project(input: pb::Relation, exprs: Vec<pb::Expression>) -> pb::Relation {
+    relation(RelType::Project(Box::new(pb::Project {
+        input: Some(Box::new(input)),
+        expressions: exprs,
+    })))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_expression_string_runs_as_select_expr() {
+    let run = start().await;
+    let plan = project(
+        local(Some(people_ipc()), None),
+        vec![expression_string("id * 10 AS tens")],
+    );
+    let r = collect(&run.channel, request(root(plan)))
+        .await
+        .expect("runs");
+    let got = rows(&r);
+    assert_eq!(got.schema().field(0).name(), "tens");
+    let values = got
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow_array::Int64Array>()
+        .expect("longs");
+    assert_eq!(values.values().to_vec(), vec![10, 20, 30]);
+    let e = collect(
+        &run.channel,
+        request(root(project(
+            local(Some(people_ipc()), None),
+            vec![expression_string("id +")],
+        ))),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error_class(&e), "PARSE_SYNTAX_ERROR");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_subquery_alias_qualifier_qualifies_the_columns() {
+    let run = start().await;
+    let aliased = |qualifier: &[&str]| {
+        relation(RelType::SubqueryAlias(Box::new(pb::SubqueryAlias {
+            input: Some(Box::new(local(Some(people_ipc()), None))),
+            alias: "t".to_owned(),
+            qualifier: qualifier.iter().map(|q| (*q).to_owned()).collect(),
+        })))
+    };
+    // `db.t.id` and `t.id` both name the column of `db.t`.
+    for column_name in ["db.t.id", "t.id", "id"] {
+        let r = collect(
+            &run.channel,
+            request(root(project(aliased(&["db"]), vec![column(column_name)]))),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{column_name}: {e}"));
+        assert_eq!(rows(&r).num_rows(), 3, "{column_name}");
+    }
+    // The qualifier is not a prefix of another relation's name.
+    let e = collect(
+        &run.channel,
+        request(root(project(aliased(&["db"]), vec![column("other.t.id")]))),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error_class(&e), "UNRESOLVED_COLUMN.WITH_SUGGESTION");
+    // Without a qualifier `db.t.id` does not resolve.
+    let e = collect(
+        &run.channel,
+        request(root(project(aliased(&[]), vec![column("db.t.id")]))),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error_class(&e).starts_with("UNRESOLVED_COLUMN"),
+        "{}",
+        error_class(&e)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_data_source_schema_declares_the_columns() {
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("t.csv");
+    std::fs::write(&path, "1,x\n2,y\n").expect("write");
+    let read = relation(RelType::Read(pb::Read {
+        is_streaming: false,
+        read_type: Some(pb::read::ReadType::DataSource(pb::read::DataSource {
+            format: Some("csv".to_owned()),
+            schema: Some("n INT, s STRING".to_owned()),
+            paths: vec![path.to_string_lossy().into_owned()],
+            ..Default::default()
+        })),
+    }));
+    let run = start().await;
+    let r = collect(&run.channel, request(root(read)))
+        .await
+        .expect("runs");
+    let got = rows(&r);
+    assert_eq!(got.schema().field(0).name(), "n");
+    assert_eq!(
+        got.schema().field(0).data_type(),
+        &arrow_schema::DataType::Int32
+    );
+    assert_eq!(got.num_rows(), 2);
+}

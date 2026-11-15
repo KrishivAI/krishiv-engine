@@ -44,8 +44,8 @@ use arrow_schema::SchemaRef;
 use futures::StreamExt;
 use krishiv_common::error::{
     ConnectInvalidPlanInvalidEnum, ConnectInvalidPlanInvalidOneOfFieldNotSet,
-    ConnectInvalidPlanPlanSizeLargerThanMax, InvalidCursorNotReattachable, KrishivError,
-    OperationCanceled,
+    ConnectInvalidPlanNotFoundCachedLocalRelation, ConnectInvalidPlanPlanSizeLargerThanMax,
+    InvalidCursorNotReattachable, KrishivError, OperationCanceled,
 };
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::execute_plan_request::request_option::RequestOption;
@@ -54,7 +54,9 @@ use krishiv_connect::proto::v4_3::execute_plan_response::{
 };
 use krishiv_connect::proto::v4_3::plan::OpType;
 use krishiv_connect::proto::v4_3::plan::compressed_operation::OpType as CompressedOpType;
-use krishiv_connect::translate::{TranslateConf, command_not_supported, translate_relation};
+use krishiv_connect::translate::{
+    LocalRelations, LocalRequest, TranslateConf, command_not_supported, translate_relation,
+};
 use krishiv_connect::wire;
 use krishiv_memory::ConsumerHandle;
 use krishiv_session::{DataFrame, QueryOptions, RecordBatchStream};
@@ -259,7 +261,7 @@ pub async fn execute_plan(
     let plan = request.plan.as_ref().unwrap_or(&empty);
     let prepared = until_cancelled(&op, async {
         // Decompression (up to `maxPlanSize`) runs off the async workers.
-        let logical = request_plan(session, plan, limits).await?;
+        let logical = request_plan(entry, plan, limits).await?;
         let df = session.from_plan_with(&logical, QueryOptions::new().operation_id(id.as_str()))?;
         let schema = df.schema().await?;
         Ok((df, schema))
@@ -313,15 +315,18 @@ pub async fn execute_plan(
 /// # Errors
 /// The decompression, decoding and translation errors.
 pub(crate) async fn request_plan(
-    session: &krishiv_session::Session,
+    entry: &SessionEntry,
     plan: &pb::Plan,
     limits: &ExecuteLimits,
 ) -> Result<krishiv_plan::Plan, KrishivError> {
+    let session = entry.session();
     let translate = TranslateConf {
         default_data_source: session
             .conf()
             .get("spark.sql.sources.default")
             .unwrap_or_else(|| TranslateConf::default().default_data_source),
+        parser: session.parser_options(),
+        local_relations: LocalRelations::default(),
     };
     let decompressed = match &plan.op_type {
         Some(OpType::CompressedOperation(c)) => {
@@ -340,7 +345,56 @@ pub(crate) async fn request_plan(
         }
         _ => None,
     };
-    translate_plan(plan, decompressed.as_deref(), &translate)
+    // The local relations (`createDataFrame`) are built by an async pre-pass, as the translator is
+    // synchronous: a first translation records what the plan needs, the relations are built, and a
+    // second translation uses them. A plan without any is translated once.
+    let collecting = LocalRelations::collecting();
+    let first = TranslateConf {
+        local_relations: collecting.clone(),
+        ..translate.clone()
+    };
+    let logical = translate_plan(plan, decompressed.as_deref(), &first)?;
+    let requests = collecting.requests();
+    if requests.is_empty() {
+        return Ok(logical);
+    }
+    drop(logical);
+    let mut built = Vec::with_capacity(requests.len());
+    for request in requests {
+        built.push(build_local_relation(entry, request).await?);
+    }
+    let second = TranslateConf {
+        local_relations: LocalRelations::resolved(built),
+        ..translate
+    };
+    translate_plan(plan, decompressed.as_deref(), &second)
+}
+
+/// The relation of one request of the translator's first pass: an inline one through
+/// `Session::local_relation` (the IPC data decoded, a user schema applied eagerly, the batches
+/// held once in the session's relation store); a cached one through the artifact store.
+///
+/// The artifact store is not on this branch (T011/T015b), so no hash is ever found:
+/// `CONNECT_INVALID_PLAN.NOT_FOUND_CACHED_LOCAL_RELATION`, as Spark's block read of an unknown
+/// `cache/<hash>` (golden-pending: Spark's `CANNOT_FIND_CACHED_LOCAL_RELATION` for a hash the
+/// artifact manager never registered).
+async fn build_local_relation(
+    entry: &SessionEntry,
+    request: LocalRequest,
+) -> Result<krishiv_plan::LocalRelation, KrishivError> {
+    match request {
+        LocalRequest::Inline { data, schema } => {
+            entry
+                .session()
+                .local_relation(data.as_deref(), schema)
+                .await
+        }
+        LocalRequest::Cached { hash } => Err(ConnectInvalidPlanNotFoundCachedLocalRelation {
+            hash,
+            session_u_u_i_d: entry.server_side_id().to_owned(),
+        }
+        .into()),
+    }
 }
 
 /// The plan as the engine's IR: a ROOT relation translated, a compressed

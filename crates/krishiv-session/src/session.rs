@@ -868,7 +868,15 @@ impl Session {
         Ok(Column::new((*lowered).clone()))
     }
 
+    /// This session's parser options, from its configuration. Public under `unstable-ir`, for a
+    /// Connect server that parses `Expression.expression_string` while it translates a plan.
+    #[cfg(feature = "unstable-ir")]
+    pub fn parser_options(&self) -> ParserOptions {
+        parser_options(&self.state.conf.snapshot())
+    }
+
     /// This session's parser options, from its configuration.
+    #[cfg(not(feature = "unstable-ir"))]
     pub(crate) fn parser_options(&self) -> ParserOptions {
         parser_options(&self.state.conf.snapshot())
     }

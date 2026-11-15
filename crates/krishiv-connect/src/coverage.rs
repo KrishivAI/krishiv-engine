@@ -96,7 +96,7 @@ pub fn all() -> Vec<Coverage> {
 }
 
 oneof! { relation, RELATION_ROWS, relation::RelType, "Relation.rel_type";
-    Read => ("read", 2, Partial, "DataSource.schema, predicates (JDBC) and is_streaming", "Read(ReadSource::{Table,Files}); user schema on ReadSource::Files; predicates → JDBC partitions (refuse as Spark does for non-JDBC formats: PREDICATES_NOT_SUPPORTED_FOR_DATA_SOURCE)", "P3-T012", 1),
+    Read => ("read", 2, Partial, "DataSource.predicates (JDBC) and is_streaming", "Read(ReadSource::{Table,Files}); DataSource.schema → ReadSource::Files schema (DDL or JSON, a non-struct is INVALID_SCHEMA_NON_STRUCT_TYPE); predicates → JDBC partitions (refuse as Spark does for non-JDBC formats: PREDICATES_NOT_SUPPORTED_FOR_DATA_SOURCE)", "P3-T012", 1),
     Project => ("project", 3, Done, "", "Project; missing input → OneRowRelation", "P3-T012", 1),
     Filter => ("filter", 4, Done, "", "Filter", "P2-T091a", 0),
     Join => ("join", 5, Partial, "join_data_type (joinWith, typed)", "Join; join_data_type is Scala joinWith only → unsupported row", "P3-T012", 1),
@@ -105,12 +105,12 @@ oneof! { relation, RELATION_ROWS, relation::RelType, "Relation.rel_type";
     Limit => ("limit", 8, Done, "", "Limit", "P2-T091a", 0),
     Aggregate => ("aggregate", 9, Partial, "GROUP_TYPE_PIVOT", "Aggregate; pivot → Pivot (exists)", "P3-T012", 2),
     Sql => ("sql", 10, Partial, "DataFrame arguments (with_relations)", "Sql; the with_relations form (#41) for DataFrame arguments", "P3-T012", 4),
-    LocalRelation => ("local_relation", 11, Missing, "", "InlineTable from the Arrow IPC data plus the DDL or JSON schema (createDataFrame); a size limit on the data", "P3-T012", 1),
+    LocalRelation => ("local_relation", 11, Done, "", "Read(ReadSource::Local) from the Arrow IPC data plus the DDL or JSON schema (createDataFrame), built by the host before translation (TranslateConf::local_relations); no data and no schema is SCHEMA_REQUIRED_FOR_LOCAL_RELATION; the inline size is bounded by the gRPC message limit", "P3-T012a", 1),
     Sample => ("sample", 12, Missing, "", "new Sample (Bernoulli/Poisson with seed, Spark's XORShiftRandom order)", "P3-T012", 3),
     Offset => ("offset", 13, Done, "", "Offset", "P2-T091a", 0),
     Deduplicate => ("deduplicate", 14, Missing, "", "lowering: Distinct (all columns) or Aggregate with first per non-key column; within_watermark → P4", "P3-T012", 3),
     Range => ("range", 15, Done, "", "Range", "P2-T091a", 0),
-    SubqueryAlias => ("subquery_alias", 16, Partial, "qualifier", "SubqueryAlias with the qualifier", "P3-T012", 1),
+    SubqueryAlias => ("subquery_alias", 16, Done, "", "SubqueryAlias; the qualifier and the alias are the alias parts joined by ALIAS_PART_SEP", "P3-T012", 1),
     Repartition => ("repartition", 17, Missing, "", "Repartition (round robin / coalesce)", "P3-T012", 3),
     ToDf => ("to_df", 18, Missing, "", "lowering: Project of Alias (positional)", "P3-T012", 4),
     WithColumnsRenamed => ("with_columns_renamed", 19, Missing, "", "lowering: Project", "P3-T012", 4),
@@ -130,7 +130,7 @@ oneof! { relation, RELATION_ROWS, relation::RelType, "Relation.rel_type";
     WithWatermark => ("with_watermark", 33, OutOfScope, "", "P4", "", 0),
     ApplyInPandasWithState => ("apply_in_pandas_with_state", 34, OutOfScope, "", "P4", "", 0),
     HtmlString => ("html_string", 35, Missing, "", "as show_string, HTML form", "P3-T012", 4),
-    CachedLocalRelation => ("cached_local_relation", 36, Missing, "", "InlineTable from the artifact cache (AddArtifacts cache/<hash>, T011); errors NOT_FOUND_CACHED_LOCAL_RELATION", "P3-T083", 7),
+    CachedLocalRelation => ("cached_local_relation", 36, Partial, "hashes in the artifact store (AddArtifacts cache/<hash> is not stored yet: every hash is NOT_FOUND_CACHED_LOCAL_RELATION)", "Read(ReadSource::Local) through the same host request as local_relation; the artifact lookup is the host's", "P3-T083", 7),
     CachedRemoteRelation => ("cached_remote_relation", 37, Missing, "", "the session's cached-DataFrame registry (T083)", "P3-T083", 7),
     CommonInlineUserDefinedTableFunction => ("common_inline_user_defined_table_function", 38, Missing, "", "TableFunction with a Python UDTF (T014)", "P3-T014", 6),
     AsOfJoin => ("as_of_join", 39, Missing, "", "new AsOfJoin, shared with the ASOF JOIN SQL syntax", "P3-T012", 8),
@@ -161,10 +161,10 @@ oneof! { relation, RELATION_ROWS, relation::RelType, "Relation.rel_type";
 }
 
 oneof! { expression, EXPRESSION_ROWS, expression::ExprType, "Expression.expr_type";
-    Literal => ("literal", 1, Partial, "Array, Map, Struct, SpecializedArray, Time", "Literal/TypedLiteral; nested literals after the IR literal supports them; nanosecond timestamps are refused until the types exist", "P3-T012", 1),
+    Literal => ("literal", 1, Partial, "Time", "Literal/TypedLiteral; nested literals are Literal::{Array,KeyValueMap,Struct}; nanosecond timestamps are refused until the types exist", "P3-T012", 1),
     UnresolvedAttribute => ("unresolved_attribute", 2, Partial, "is_metadata_column", "Column; metadata columns (_metadata) → the scan's metadata columns", "P3-T012", 1),
     UnresolvedFunction => ("unresolved_function", 3, Partial, "is_user_defined_function (qualified names) and is_internal", "Function with qualifier; internal functions map to Spark's internal names where Krishiv has them, otherwise 56K00-style refusal naming the function", "P3-T012", 1),
-    ExpressionString => ("expression_string", 4, Missing, "", "the SQL expression parser + analyzer lowering that select_expr/expr() use (krishiv-session)", "P3-T012", 1),
+    ExpressionString => ("expression_string", 4, Done, "", "krishiv_sql::parse_and_lower_named_expression, as Session::select_expr and Session::expr (parser options from TranslateConf)", "P3-T012a", 1),
     UnresolvedStar => ("unresolved_star", 5, Done, "", "Star", "P2-T091a", 0),
     Alias => ("alias", 6, Partial, "metadata and several names", "Alias; several names → MultiAlias (exists)", "P3-T012", 1),
     Cast => ("cast", 7, Done, "", "Cast", "P2-T091a", 0),
@@ -265,11 +265,11 @@ oneof! { literal, LITERAL_ROWS, expression::literal::LiteralType, "Expression.Li
     CalendarInterval => ("calendar_interval", 19, Done, "", "Literal / TypedLiteral", "P2-T091a", 1),
     YearMonthInterval => ("year_month_interval", 20, Done, "", "Literal / TypedLiteral", "P2-T091a", 1),
     DayTimeInterval => ("day_time_interval", 21, Done, "", "Literal / TypedLiteral", "P2-T091a", 1),
-    Array => ("array", 22, Missing, "", "nested and TIME literals wait for IR values", "P3-T012", 1),
-    Map => ("map", 23, Missing, "", "nested and TIME literals wait for IR values", "P3-T012", 1),
-    Struct => ("struct", 24, Missing, "", "nested and TIME literals wait for IR values", "P3-T012", 1),
-    SpecializedArray => ("specialized_array", 25, Missing, "", "nested and TIME literals wait for IR values", "P3-T012", 1),
-    Time => ("time", 26, Missing, "", "nested and TIME literals wait for IR values", "P3-T012", 1),
+    Array => ("array", 22, Done, "", "Literal::{Array,KeyValueMap,Struct}; the type is the root data_type, else the message\'s own type fields", "P3-T012a", 1),
+    Map => ("map", 23, Done, "", "Literal::{Array,KeyValueMap,Struct}; the type is the root data_type, else the message\'s own type fields", "P3-T012a", 1),
+    Struct => ("struct", 24, Done, "", "Literal::{Array,KeyValueMap,Struct}; the type is the root data_type, else the message\'s own type fields", "P3-T012a", 1),
+    SpecializedArray => ("specialized_array", 25, Done, "", "Literal::{Array,KeyValueMap,Struct}; the type is the root data_type, else the message\'s own type fields", "P3-T012a", 1),
+    Time => ("time", 26, Missing, "", "TIME literals wait for an IR value", "P3-T012", 1),
     TimestampNtzNanos => ("timestamp_ntz_nanos", 29, Missing, "", "no IR type for nanosecond timestamps", "P3-T012", 1),
     TimestampLtzNanos => ("timestamp_ltz_nanos", 30, Missing, "", "no IR type for nanosecond timestamps", "P3-T012", 1),
 }

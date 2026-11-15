@@ -311,6 +311,25 @@ async fn analyze_explain_tree_string_and_flags() {
         panic!("is local");
     };
     assert!(!l.is_local);
+    // A `LocalRelation` (`createDataFrame`) is local; a projection over one is not.
+    let local = pb::Plan {
+        op_type: Some(PlanOp::Root(Box::new(pb::Relation {
+            common: None,
+            rel_type: Some(RelType::LocalRelation(pb::LocalRelation {
+                data: None,
+                schema: Some("a INT".to_owned()),
+            })),
+        }))),
+    };
+    let AResult::IsLocal(l) = analyzed(
+        &run,
+        Analyze::IsLocal(Box::new(areq::IsLocal { plan: Some(local) })),
+    )
+    .await
+    else {
+        panic!("is local");
+    };
+    assert!(l.is_local);
     // Codex review (#738): SQL text is parsed during analysis, so a SQL
     // `VALUES` is not an inline table when `is_local` asks (Spark's answer
     // for it is to be checked against 4.2/4.3 before this changes).

@@ -76,9 +76,14 @@
 mod errors;
 mod expression;
 mod literal;
+mod local;
 mod names;
 mod relation;
+mod schema;
 mod types;
+
+pub use local::{LocalRelations, LocalRequest};
+pub use schema::{parse_datatype_string, parse_local_schema, parse_table_schema};
 
 use krishiv_common::error::{FailedToParseTooComplex, KrishivError};
 use krishiv_plan::{Expr, MAX_DEPTH, Plan};
@@ -97,6 +102,11 @@ type Result<T> = std::result::Result<T, KrishivError>;
 pub struct TranslateConf {
     /// The format of a read that names none: `spark.sql.sources.default`.
     pub default_data_source: String,
+    /// The session settings that change how SQL text parses; an
+    /// `ExpressionString` (`expr()`, `selectExpr`) is parsed with them.
+    pub parser: krishiv_sql::ParserOptions,
+    /// The local relations of the plan (`createDataFrame`), built by the host.
+    pub local_relations: LocalRelations,
 }
 
 impl Default for TranslateConf {
@@ -104,6 +114,8 @@ impl Default for TranslateConf {
     fn default() -> Self {
         Self {
             default_data_source: "parquet".to_owned(),
+            parser: krishiv_sql::ParserOptions::default(),
+            local_relations: LocalRelations::default(),
         }
     }
 }
@@ -205,6 +217,8 @@ pub(crate) struct Translator<'c> {
     nodes: usize,
     /// Threads started so far for subtrees past [`INLINE_LEVELS`].
     hops: usize,
+    /// Local relations met so far: the ordinal of the next one's request.
+    locals: usize,
 }
 
 /// The most threads one translation starts for deep subtrees. A plan needs
@@ -221,6 +235,7 @@ impl<'c> Translator<'c> {
             depth: 0,
             nodes: 0,
             hops: 0,
+            locals: 0,
         }
     }
 
