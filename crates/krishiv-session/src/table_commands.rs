@@ -1809,6 +1809,7 @@ pub(crate) fn now_ms() -> i64 {
 }
 
 mod files;
+pub(crate) use files::dir_securable;
 use files::remove_dir;
 mod location;
 use location::qualified_namespace_location;

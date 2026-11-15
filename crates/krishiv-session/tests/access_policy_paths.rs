@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! One path form for a managed table's directory (T063 N1c): every statement that asks the policy about the
-//! directory asks in the form `df.write` and `PathPrefixPolicy` use (`file:/a/b`, links resolved), so one
-//! prefix rule gives the same answer for `INSERT`, `INSERT OVERWRITE`, `TRUNCATE` and `DROP TABLE` of the
-//! same table, with the warehouse given with `file:` or without, and `CREATE TABLE`, CTAS, `saveAsTable`,
-//! `ALTER TABLE .. RENAME` and partition DDL under a `PathPrefixPolicy` of the warehouse run.
+//! One path form for a managed table's directory (T063 N1c, after #773): every statement that asks the
+//! policy about a table's directories asks in the `file:/a/b` form `df.write` and `PathPrefixPolicy` use,
+//! so one prefix rule gives the same answer for `INSERT`, `INSERT OVERWRITE`, `TRUNCATE` and `DROP TABLE`
+//! of the same table (allow and deny), with the warehouse given with `file:` or without, and `CREATE
+//! TABLE`, CTAS, `saveAsTable`, `ALTER TABLE .. RENAME` and partition DDL under a `PathPrefixPolicy` of
+//! the warehouse run. `path_confinement.rs` covers the admin role matrix of the same directories.
 #![cfg(test)]
 
 use std::path::Path;

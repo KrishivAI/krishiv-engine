@@ -26,12 +26,7 @@ impl Session {
         privileges: &[Privilege],
         class: StatementClass,
     ) -> Result<(), KrishivError> {
-        let text = if path.is_absolute() {
-            format!("file:{}", path.display())
-        } else {
-            path.display().to_string()
-        };
-        let securable = Securable::Path(OptionValue::from_user("path", text));
+        let securable = dir_securable(path);
         for privilege in privileges {
             let r = authorize(
                 &*self.state.policy,
@@ -104,6 +99,18 @@ impl Session {
             .await?;
         Ok(Some(canonical))
     }
+}
+
+/// The path securable of the local directory `path`, in the one form every check of a table's
+/// directories uses ([`Session::authorize_path`], the partition DDL of `partitions.rs`): `file:<path>`
+/// for an absolute path, the text as written otherwise (see `authorize_path`).
+pub(crate) fn dir_securable(path: &Path) -> Securable {
+    let text = if path.is_absolute() {
+        format!("file:{}", path.display())
+    } else {
+        path.display().to_string()
+    };
+    Securable::Path(OptionValue::from_user("path", text))
 }
 
 /// Deletes a managed table's directory; a directory that is already gone
