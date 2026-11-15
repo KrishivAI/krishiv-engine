@@ -12,6 +12,7 @@ use krishiv_common::error::KrishivError;
 pub(crate) fn is_partition_dir_name(name: &str) -> bool {
     !name.starts_with('.')
         && !(name.starts_with('_') && !name.contains('='))
+        && !name.ends_with("._COPYING_")
         && name.split_once('=').is_some_and(|(k, _)| !k.is_empty())
 }
 
@@ -46,7 +47,7 @@ pub(crate) fn partition_keys(location: &Path) -> Result<Vec<String>, KrishivErro
             let e = e.map_err(|e| listing_error(&dir, &e))?;
             let name = e.file_name().to_string_lossy().into_owned();
             if is_partition_dir_name(&name)
-                && e.path().is_dir()
+                && is_dir(&e.path())?
                 && next.as_ref().is_none_or(|(_, p)| e.path() < *p)
             {
                 let key = name
@@ -63,6 +64,16 @@ pub(crate) fn partition_keys(location: &Path) -> Result<Vec<String>, KrishivErro
         dir = path;
     }
     Ok(keys)
+}
+
+/// Whether `path` is a directory (links followed). An entry that vanished since the listing is not one; any other
+/// failure to stat it is an error, not a reason to skip it.
+fn is_dir(path: &Path) -> Result<bool, KrishivError> {
+    match std::fs::metadata(path) {
+        Ok(m) => Ok(m.is_dir()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(listing_error(path, &e)),
+    }
 }
 
 fn listing_error(dir: &Path, e: &std::io::Error) -> KrishivError {
@@ -84,6 +95,14 @@ mod tests {
         let file = dir.path().join("f.parquet");
         std::fs::write(&file, b"x").expect("write");
         assert!(partition_keys(&file).expect("file").is_empty());
+    }
+
+    #[test]
+    fn a_copying_directory_is_not_a_partition_level() {
+        use super::is_partition_dir_name;
+        assert!(!is_partition_dir_name("a=1._COPYING_"));
+        assert!(is_partition_dir_name("a=1"));
+        assert!(is_partition_dir_name("_p=10"));
     }
 
     #[test]

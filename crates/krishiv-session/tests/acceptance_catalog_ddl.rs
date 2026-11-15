@@ -355,6 +355,18 @@ fn sql_19_an_underscore_prefixed_key_value_directory_is_a_partition() {
             .any(|r| r[0].as_deref() == Some("# Partition Information")),
         "{c:?}"
     );
+    assert!(
+        c.iter().any(|r| r[0].as_deref() == Some("_p")),
+        "the partition column is _p: {c:?}"
+    );
+    // As in Spark, the partitions of a table over existing files are tracked once `MSCK REPAIR TABLE` finds them.
+    run(&s, "MSCK REPAIR TABLE pt");
+    let data = rows(&s, "SELECT id, `_p` FROM pt");
+    assert_eq!(
+        data,
+        vec![vec![Some("1".to_owned()), Some("10".to_owned())]],
+        "{data:?}"
+    );
 }
 
 #[test]
