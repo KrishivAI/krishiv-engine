@@ -1391,10 +1391,10 @@ impl Display for Literal {
                 data_type,
                 elements,
             } => {
-                // Two empty arrays of other element types are different values: identity text
-                // names the type (the Spark-facing text stays `ARRAY()`).
-                if elements.is_empty() && IDENTITY.with(std::cell::Cell::get) {
-                    write!(f, "ARRAY<{}>(", data_type.element_type().sql())?;
+                // Arrays of other element types (or nullability) are different values, empty or
+                // not: identity text carries the whole type (the Spark-facing text stays `ARRAY(`).
+                if IDENTITY.with(std::cell::Cell::get) {
+                    write!(f, "ARRAY<{data_type:?}>(")?;
                 } else {
                     f.write_str("ARRAY(")?;
                 }
@@ -1406,8 +1406,14 @@ impl Display for Literal {
                 }
                 f.write_str(")")
             }
-            Self::KeyValueMap { entries, .. } => {
-                f.write_str("MAP(")?;
+            Self::KeyValueMap { data_type, entries } => {
+                // As for arrays: identity text names the map type, so two empty maps of other
+                // types never compare equal (the Spark-facing text stays `MAP(`).
+                if IDENTITY.with(std::cell::Cell::get) {
+                    write!(f, "MAP<{data_type:?}>(")?;
+                } else {
+                    f.write_str("MAP(")?;
+                }
                 for (i, (k, v)) in entries.iter().enumerate() {
                     if i > 0 {
                         f.write_str(", ")?;
@@ -1417,7 +1423,12 @@ impl Display for Literal {
                 f.write_str(")")
             }
             Self::Struct { data_type, fields } => {
-                f.write_str("NAMED_STRUCT(")?;
+                // As for arrays: identity text names the struct type, nullability included.
+                if IDENTITY.with(std::cell::Cell::get) {
+                    write!(f, "NAMED_STRUCT<{data_type:?}>(")?;
+                } else {
+                    f.write_str("NAMED_STRUCT(")?;
+                }
                 for (i, (field, v)) in data_type.fields().iter().zip(fields).enumerate() {
                     if i > 0 {
                         f.write_str(", ")?;

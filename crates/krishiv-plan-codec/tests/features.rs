@@ -2471,6 +2471,43 @@ fn a_reader_without_table_write_refuses_a_table_write_naming_it() {
 }
 
 #[test]
+fn a_table_write_to_a_declared_schema_source_lists_the_schema_features() {
+    use krishiv_types::{DataType, StructField, StructType};
+    let mut root = cases()
+        .into_iter()
+        .find(|(n, _)| n == "table_write")
+        .unwrap()
+        .1
+        .root()
+        .clone();
+    let PhysNode::TableWrite { table, .. } = &mut root else {
+        panic!("not a table write");
+    };
+    let schema = StructType::new([StructField::new("a", DataType::Integer, true)]);
+    table.source = krishiv_plan::ReadSource::files(
+        "csv".to_owned(),
+        vec![krishiv_common::secret::OptionValue::from_user(
+            "path",
+            "file:/tmp/t",
+        )],
+        Default::default(),
+    )
+    .with_schema(schema);
+    let bytes = encode(&plan_of(root)).unwrap();
+    // The written source carries the schema, so a reader without the feature must refuse
+    // the plan, not infer the columns again.
+    let err = decode_with(&bytes, &Limits::default(), &ReaderFeatures::only([])).unwrap_err();
+    let CodecError::UnsupportedFeatures { missing } = err else {
+        panic!("{err:?}");
+    };
+    assert!(
+        missing.contains(&"file_source_schema".to_owned()),
+        "{missing:?}"
+    );
+    assert!(decode(&bytes).is_ok());
+}
+
+#[test]
 fn a_table_write_never_carries_an_inline_secret() {
     use krishiv_exec::physical::TableWriteRequest;
     let mut root = cases()
