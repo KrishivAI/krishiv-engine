@@ -5,6 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use krishiv_common::error::KrishivError;
+use krishiv_common::secret::OptionValue;
 use krishiv_plan::analyzer::{Privilege, Securable, authorize};
 use krishiv_sql::StatementClass;
 
@@ -13,32 +14,29 @@ use crate::session::Session;
 use crate::store::CatalogTable;
 
 impl Session {
-    /// Asks the session's policy about the local directory `path` for each privilege, in the one form of
-    /// [`Session::local_dir_securable`] (the form the writer asks about its files in); a directory that
-    /// cannot be put in that form is refused before the policy is asked.
+    /// Asks the session's policy about the local directory `path` for each privilege (the writer does
+    /// the same for its files). It is asked as a `file:` path, the form every read and write by path
+    /// takes, so a confining policy (`PathPrefixPolicy`) compares it with its local roots rather than
+    /// reading it as an object-store key. Text that is not an absolute path is asked as written: a
+    /// location already qualified (`file:/..`, `s3a://..`, from `ALTER TABLE .. SET LOCATION`) must
+    /// not get a second prefix, and a relative path stays refused.
     pub(super) async fn authorize_path(
         &self,
         path: &Path,
         privileges: &[Privilege],
         class: StatementClass,
     ) -> Result<(), KrishivError> {
-        let securable = self.local_dir_securable(path)?;
-        self.authorize_securable(&securable, privileges, class)
-            .await
-    }
-
-    /// Asks the session's policy about `securable` for each privilege, auditing a denial.
-    pub(super) async fn authorize_securable(
-        &self,
-        securable: &Securable,
-        privileges: &[Privilege],
-        class: StatementClass,
-    ) -> Result<(), KrishivError> {
+        let text = if path.is_absolute() {
+            format!("file:{}", path.display())
+        } else {
+            path.display().to_string()
+        };
+        let securable = Securable::Path(OptionValue::from_user("path", text));
         for privilege in privileges {
             let r = authorize(
                 &*self.state.policy,
                 &self.state.principal,
-                securable,
+                &securable,
                 *privilege,
             )
             .await;

@@ -426,39 +426,6 @@ impl Session {
         Ok((at.store.clone(), None))
     }
 
-    /// The path securable of the local directory `dir` (a managed table's directory, a partition
-    /// directory): the one form every check of such a directory asks the policy about, and the form
-    /// `df.write` and `INSERT` ask about their target in ([`Self::locate_write_path`]) and
-    /// [`PathPrefixPolicy`](crate::PathPrefixPolicy) compares: `file:/a/b`, qualified against the
-    /// session's working directory, `.` and `..` resolved in the text, then the symbolic links of its
-    /// existing part resolved ([`crate::access::physical`]). So one prefix rule gives the same answer
-    /// for `INSERT`, `DROP TABLE` and `TRUNCATE` of the same table, whether the warehouse was given
-    /// with `file:` or without.
-    ///
-    /// # Errors
-    /// Fails closed (`KRISHIV_UNSUPPORTED_FEATURE`, the statement does not run) for a directory that
-    /// cannot be put in that form: a non-UTF-8 name, a URL of another scheme or host, a path whose
-    /// links cannot be resolved. A raw form is never passed to the policy.
-    pub(crate) fn local_dir_securable(
-        &self,
-        dir: &std::path::Path,
-    ) -> Result<Securable, KrishivError> {
-        let text = dir.to_str().ok_or_else(|| {
-            KrishivError::from(KrishivUnsupportedFeature {
-                feature: "access checks on non-UTF-8 paths".to_owned(),
-            })
-        })?;
-        let at = LocalPaths::new(StoreId::new(LOCAL_STORE), self.state.cwd.clone()).locate(text)?;
-        let at = crate::access::physical(at)?;
-        if !at.display.starts_with("file:/") {
-            return Err(KrishivUnsupportedFeature {
-                feature: "access checks on this path".to_owned(),
-            }
-            .into());
-        }
-        Ok(Securable::Path(OptionValue::from_user("path", at.display)))
-    }
-
     /// `path` in the qualified form reads and writes use (`file:/a/b`),
     /// which the access policy is asked about.
     pub(crate) fn qualify_path(&self, path: &str) -> Result<String, KrishivError> {
