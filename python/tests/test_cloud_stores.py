@@ -16,8 +16,6 @@ import pytest
 
 from krishiv.sql import SparkSession
 
-pa = pytest.importorskip("pyarrow")
-
 ENDPOINT = os.environ.get("KRISHIV_TEST_S3_ENDPOINT")
 
 
@@ -52,6 +50,7 @@ def test_cloud_urls_are_built_into_the_wheel(spark: SparkSession, url: str) -> N
 
 @pytest.mark.skipif(not ENDPOINT, reason="KRISHIV_TEST_S3_ENDPOINT is not set")
 def test_s3_round_trip_against_an_emulator(spark: SparkSession) -> None:
+    pa = pytest.importorskip("pyarrow")  # the offline test above must still run where pyarrow is absent (musllinux)
     options: dict[str, Any] = {
         "fs.s3a.endpoint": ENDPOINT,
         "fs.s3a.access.key": "minioadmin",

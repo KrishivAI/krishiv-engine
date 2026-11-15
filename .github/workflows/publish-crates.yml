@@ -80,7 +80,8 @@ jobs:
               grep -q '429 Too Many Requests' "$log" || exit 1
               [ "$attempt" -lt 40 ] || exit 1
               after=$(grep -oE 'try again after [^.]+GMT' "$log" | head -1 | sed 's/try again after //')
-              wait=$(( $( date -d "$after" +%s 2>/dev/null || echo $(( $(date +%s) + 600 )) ) - $(date +%s) + 20 ))
+              # An empty or unparsable date (`date -d ""` is midnight today) falls back to ten minutes.
+              if [ -n "$after" ] && until=$(date -d "$after" +%s 2>/dev/null); then wait=$(( until - $(date +%s) + 20 )); else wait=600; fi
               [ "$wait" -gt 20 ] || wait=60
               echo "rate limited on $crate (attempt $attempt): waiting ${wait}s until $after"
               sleep "$wait"
