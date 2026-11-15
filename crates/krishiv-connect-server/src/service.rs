@@ -232,15 +232,10 @@ impl SparkConnectService for ConnectService {
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
-        config::config(
-            &entry,
-            &request,
-            &caller.principal,
-            config::role_of(&caller),
-        )
-        .await
-        .map(Response::new)
-        .map_err(|e| status_of(&e))
+        config::config(&entry, &request)
+            .await
+            .map(Response::new)
+            .map_err(|e| status_of(&e))
     }
 
     async fn add_artifacts(

@@ -117,6 +117,9 @@ impl Session {
     /// is stored, so a refused `SET` changes nothing. A `startup` key is refused by the
     /// configuration itself, for every principal (`CANNOT_MODIFY_STATIC_CONFIG`).
     ///
+    /// Public for server adapters that set configuration outside SQL (Spark Connect's `Config`
+    /// RPC), so they ask exactly what `SET` asks; not meant as user API.
+    ///
     /// # Errors
     /// `KRISHIV_INSUFFICIENT_PERMISSIONS` (42501) when the principal lacks `Manage`; the
     /// denial is audited and counted like every other.

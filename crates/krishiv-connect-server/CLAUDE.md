@@ -25,7 +25,7 @@ Paths are relative to this crate.
   `parseDatatypeString`
 - `src/config.rs` `Config` (design §3.6) over `RuntimeConf`: the seven operations, `silent`, Spark's per-key
   warnings, redaction for both profiles (Spark's pattern plus `krishiv_common::secret`'s classifier and URL
-  credentials), `SettableBy` (a `set`/`unset` first asks the session's policy as SQL `SET` does, `Session::authorize_set_key`: admin keys and server-scoped store keys need `Manage`, refusals audited and counted; then `check_settable`; `role_of` is the caller's authenticated role, no role a viewer, the local user of an unauthenticated server the admin)
+  credentials), who may `set`/`unset` a key (a `Startup` key is `CANNOT_MODIFY_STATIC_CONFIG` for everyone, `check_static`; any other key asks the session's policy as SQL `SET` does, `Session::authorize_set_key`: admin keys and server-scoped store keys need `Manage`, refusals audited and counted; no listener-local role check, ADR 0046)
 - `src/interrupt.rs` `Interrupt` (design §3.7): `ALL` and `OPERATION_ID` through the session's operations and
   `Session::cancel` per reported id; an interrupted operation stays registered (Spark keeps the `ExecuteHolder`), so a
   reattach gets `OPERATION_CANCELED`; `TAG` is `UNSUPPORTED_FEATURE.INTERRUPT_TYPE` until T064
