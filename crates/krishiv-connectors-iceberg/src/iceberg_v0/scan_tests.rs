@@ -267,6 +267,16 @@ fn transforms_match_iceberg_rust() {
             ScalarValue::Binary(vec![0, 1, 2, 3]),
         ),
         (
+            Datum::fixed([0u8, 1, 2, 3]),
+            IcebergType::Fixed(4),
+            ScalarValue::Binary(vec![0, 1, 2, 3]),
+        ),
+        (
+            Datum::uuid_from_str("f79c3e09-677c-4bbd-a479-3f349cb785e7").unwrap(),
+            IcebergType::Uuid,
+            ScalarValue::Utf8("f79c3e09-677c-4bbd-a479-3f349cb785e7".to_owned()),
+        ),
+        (
             Datum::decimal_from_str("14.20").unwrap(),
             IcebergType::Decimal {
                 precision: 38,
@@ -332,6 +342,39 @@ fn transforms_match_iceberg_rust() {
         }
     }
     assert!(compared >= 50, "{compared}");
+    // The spec's uuid bucket hash (appendix B), from the reader's string form.
+    let uuid = ScalarValue::Utf8("f79c3e09-677c-4bbd-a479-3f349cb785e7".to_owned());
+    assert_eq!(
+        apply_transform(
+            Transform::Bucket(i32::MAX as u32),
+            &IcebergType::Uuid,
+            &uuid
+        ),
+        Some(ScalarValue::Int32(1_488_055_340 & i32::MAX))
+    );
+    // A string that is not a uuid, a void transform and a type that bucket does
+    // not hash give no value (nothing is pruned).
+    for bad in [
+        "f79c3e09677c4bbda4793f349cb785e7",
+        "f79c3e09-677c-4bbd-a479-3f349cb785zz",
+    ] {
+        let v = ScalarValue::Utf8(bad.to_owned());
+        assert_eq!(
+            apply_transform(Transform::Bucket(16), &IcebergType::Uuid, &v),
+            None,
+            "{bad}"
+        );
+    }
+    let one = ScalarValue::Int32(1);
+    assert_eq!(
+        apply_transform(Transform::Void, &IcebergType::Int, &one),
+        None
+    );
+    let t = ScalarValue::Boolean(true);
+    assert_eq!(
+        apply_transform(Transform::Bucket(16), &IcebergType::Boolean, &t),
+        None
+    );
 }
 
 /// A table with two appends through iceberg-rust's in-memory catalog: planning

@@ -179,4 +179,51 @@ mod tests {
         );
         assert!(e.is_err());
     }
+
+    /// Every scalar kind builds its column, strings and binaries in the view,
+    /// large or plain form the field asks for.
+    #[test]
+    fn scalar_columns_of_every_kind() {
+        let col = |dt: DataType, v: ScalarValue| {
+            let a = scalar_column(&Field::new("c", dt.clone(), true), &v, 2)
+                .unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(
+                (a.data_type(), a.len(), a.null_count()),
+                (&dt, 2, 0),
+                "{v:?}"
+            );
+            a
+        };
+        assert!(
+            col(DataType::Boolean, ScalarValue::Boolean(true))
+                .as_boolean()
+                .value(1)
+        );
+        col(DataType::Int8, ScalarValue::Int8(-1));
+        col(DataType::Int16, ScalarValue::Int16(300));
+        col(DataType::Float32, ScalarValue::Float32(1.5));
+        col(DataType::Float64, ScalarValue::Float64(-2.5));
+        col(DataType::Date32, ScalarValue::Date32(17_486));
+        // A narrower field takes the value by a lossless cast.
+        col(DataType::Int32, ScalarValue::Int16(7));
+        let s = || ScalarValue::Utf8("x".to_owned());
+        assert_eq!(col(DataType::Utf8, s()).as_string::<i32>().value(1), "x");
+        assert_eq!(
+            col(DataType::LargeUtf8, s()).as_string::<i64>().value(0),
+            "x"
+        );
+        let b = || ScalarValue::Binary(vec![1, 2]);
+        assert_eq!(
+            col(DataType::Binary, b()).as_binary::<i32>().value(1),
+            [1, 2]
+        );
+        assert_eq!(
+            col(DataType::LargeBinary, b()).as_binary::<i64>().value(0),
+            [1, 2]
+        );
+        assert_eq!(
+            col(DataType::BinaryView, b()).as_binary_view().value(1),
+            [1, 2]
+        );
+    }
 }
