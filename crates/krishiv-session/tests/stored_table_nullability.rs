@@ -98,6 +98,24 @@ fn ctas_and_save_as_table_store_every_level_nullable() {
     })
     .unwrap();
     assert_eq!(schema(&s, "t4"), ["a: array<int>"]);
+    // Appending a query whose element is never NULL leaves the table's types alone.
+    block_on(async {
+        s.sql("SELECT array(2) a")
+            .await?
+            .write()
+            .mode("append")
+            .save_as_table("t4")
+            .await
+    })
+    .unwrap();
+    assert_eq!(schema(&s, "t4"), ["a: array<int>"]);
+    assert_eq!(
+        collect(&s, "SELECT * FROM t4")
+            .iter()
+            .map(RecordBatch::num_rows)
+            .sum::<usize>(),
+        2
+    );
     // The table holds the NULLs its type now allows.
     collect(
         &s,
@@ -134,6 +152,16 @@ fn ddl_not_null_is_dropped_at_every_level() {
     collect(&s, "ALTER TABLE t2 ADD COLUMNS (n STRUCT<y: INT NOT NULL>)");
     assert_eq!(
         schema(&s, "t2"),
+        [
+            "i: int",
+            "s: struct<x: int>",
+            "a: array<int>",
+            "n: struct<y: int>"
+        ]
+    );
+    collect(&s, "ALTER TABLE t2 RENAME TO t5");
+    assert_eq!(
+        schema(&s, "t5"),
         [
             "i: int",
             "s: struct<x: int>",

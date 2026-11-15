@@ -207,9 +207,13 @@ impl CatalogTable {
     /// A table's columns are nullable at every level, nested elements, values and fields too: Spark stores a
     /// file-source table's schema `asNullable` whatever the DDL or the query said (4.2.0 run:
     /// `CREATE TABLE t (s STRUCT<x: INT NOT NULL>) USING parquet` and `CTAS SELECT array(1) a` keep no
-    /// `NOT NULL`), as the files may hold NULLs. A view keeps its query's types.
+    /// `NOT NULL`), as the files may hold NULLs. A view keeps its query's types, and so would a table of another
+    /// provider (none exists in this store yet).
     fn make_nullable(&mut self) {
-        if self.view.is_some() {
+        let file_source = crate::table_commands::PROVIDERS
+            .iter()
+            .any(|p| p.eq_ignore_ascii_case(&self.provider));
+        if self.view.is_some() || !file_source {
             return;
         }
         for c in &mut self.columns {
