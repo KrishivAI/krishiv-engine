@@ -49,6 +49,8 @@ pub use credentials::{
     CredentialScope, CredentialSource, DEFAULT_REFRESH_SKEW, RefreshingProvider, ScopedCredential,
 };
 pub use error::Result;
+#[cfg(feature = "cloud")]
+pub use http_clients::DataOnlyClients;
 pub use http_clients::SharedHttpClients;
 #[cfg(feature = "cloud")]
 pub use http_clients::policy::{PolicyConnector, Redirects};

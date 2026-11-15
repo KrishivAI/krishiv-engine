@@ -285,14 +285,21 @@ async fn lookup(host: &str) -> Result<Vec<IpAddr>, Box<dyn std::error::Error + S
 pub(crate) struct PolicyService {
     client: reqwest::Client,
     scope: EgressScope,
+    /// Whether the provider literals pass (clients of stores with ambient credential providers).
+    provider_literals: bool,
 }
 
 #[async_trait::async_trait]
 impl HttpService for PolicyService {
     async fn call(&self, req: HttpRequest) -> Result<HttpResponse, HttpError> {
         let host = req.uri().host().unwrap_or_default();
+        let checked = if self.provider_literals {
+            self.scope.permits_request_literal(host)
+        } else {
+            self.scope.check_redirect(host)
+        };
         if literal_ip(host).is_some()
-            && let Err(refusal) = self.scope.permits_request_literal(host)
+            && let Err(refusal) = checked
         {
             return Err(HttpError::new(HttpErrorKind::Connect, refusal));
         }
@@ -308,6 +315,7 @@ pub struct PolicyConnector {
     redirects: Redirects,
     proxy: Option<String>,
     answers: Option<Answers>,
+    provider_literals: bool,
 }
 
 impl std::fmt::Debug for PolicyConnector {
@@ -329,7 +337,16 @@ impl PolicyConnector {
             redirects,
             proxy,
             answers: None,
+            provider_literals: true,
         }
+    }
+
+    /// The same connector whose clients never admit the provider literals: for stores with no
+    /// ambient credential providers, whose every request is a data request (review 58a1 B2).
+    #[must_use]
+    pub fn without_provider_literals(mut self) -> Self {
+        self.provider_literals = false;
+        self
     }
 
     /// The same connector resolving through fixed answers instead of DNS (tests).
@@ -348,10 +365,11 @@ impl PolicyConnector {
     /// The fingerprint component of its clients (§5.2).
     pub(crate) fn fingerprint(&self) -> String {
         format!(
-            "{}:{:?}:{}",
+            "{}:{:?}:{}:{}",
             self.scope.fingerprint(),
             self.redirects,
-            self.proxy.is_some()
+            self.proxy.is_some(),
+            self.provider_literals
         )
     }
 
@@ -376,6 +394,7 @@ impl HttpConnector for PolicyConnector {
         Ok(HttpClient::new(PolicyService {
             client: self.reqwest_client(options)?,
             scope: self.scope.clone(),
+            provider_literals: self.provider_literals,
         }))
     }
 }

@@ -793,6 +793,29 @@ fn build(
     // Configuration errors keep their class; only builder failures become
     // `KRISHIV_OBJECT_STORE_REQUEST_FAILED` (converted in each scheme
     // builder below).
+    // Every configured endpoint, from the startup settings or per read, passes the egress rule
+    // with no provider exemption before a store is built (design P3-T067 §5.2; review 58a1 B2):
+    // the clients of S3, GCS and Azure admit the provider literals for their ambient credential
+    // calls, so no data request may target one.
+    if let Some(clients) = clients {
+        for key in [
+            S3_ENDPOINT,
+            GCS_STORAGE_ROOT_URL,
+            GCS_ENDPOINT,
+            AZURE_ENDPOINT,
+            HF_ENDPOINT,
+        ] {
+            if let Some(endpoint) = text(config, options, key)?
+                && clients.check_endpoint(&endpoint).is_err()
+            {
+                return Err(invalid_option(
+                    key,
+                    "the egress policy refuses this endpoint's address (private address)",
+                )
+                .into());
+            }
+        }
+    }
     let path_style = match url.scheme {
         ObjectScheme::S3 => path_style_access(config, options)?,
         _ => None,
@@ -879,7 +902,7 @@ fn hf_store(
         .with_url(base)
         .with_client_options(client);
     if let Some(clients) = egress {
-        builder = builder.with_http_connector(clients.clone());
+        builder = builder.with_http_connector(clients.data_only());
     }
     builder
         .build()
@@ -928,8 +951,9 @@ fn http_store(
     let mut builder = HttpBuilder::new()
         .with_url(url.store_id.key())
         .with_client_options(object_store::ClientOptions::new().with_allow_http(plain));
+    // No ambient credential providers here: the data-only clients (review 58a1 B2).
     if let Some(clients) = clients {
-        builder = builder.with_http_connector(clients.clone());
+        builder = builder.with_http_connector(clients.data_only());
     }
     builder
         .build()

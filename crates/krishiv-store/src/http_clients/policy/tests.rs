@@ -418,3 +418,103 @@ async fn noncanonical_literal_request_refused() {
         "nothing reached the server"
     );
 }
+
+/// Review B2: the provider literals are admitted only on the clients of stores that have
+/// ambient credential providers; a data read of a metadata URL is refused before it is dialled,
+/// while the S3 client still reaches the instance-metadata literal.
+#[tokio::test]
+async fn data_read_of_provider_literal_refused() {
+    use crate::{StoreRegistry, parse_object_url};
+    let policy = EgressPolicy::new(
+        PrivateAddresses::Deny,
+        Vec::new(),
+        ProviderEndpoints::from_env(|_| None),
+    );
+    let clients = SharedHttpClients::with_egress(PolicyConnector::new(
+        policy.scope::<_, &str>([]),
+        Redirects::Checked,
+        None,
+    ));
+    let registry =
+        StoreRegistry::new(Arc::new(std::collections::BTreeMap::<String, String>::new()))
+            .with_http_clients(clients.clone());
+    for location in [
+        "https://169.254.169.254/latest/meta-data/iam/security-credentials/role",
+        "https://169.254.170.2/v2/credentials/x",
+        "https://[fd00:ec2::254]/latest/meta-data/",
+    ] {
+        let url = parse_object_url(location).unwrap();
+        let store = registry.store(&url).unwrap();
+        let started = std::time::Instant::now();
+        let err = store.get(&url.key).await.unwrap_err();
+        assert!(
+            error_chain(&err).contains("private address"),
+            "{location}: {err}"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "{location}: dialled"
+        );
+    }
+    // The credential path keeps the provider literals (N1).
+    let client = clients
+        .connect(&ClientOptions::new().with_allow_http(true))
+        .unwrap();
+    let request = http::Request::builder()
+        .uri("http://10.0.0.9:9/x")
+        .body(object_store::client::HttpRequestBody::empty())
+        .unwrap();
+    assert!(error_chain(&client.execute(request).await.unwrap_err()).contains("private address"));
+    let request = http::Request::builder()
+        .uri("http://169.254.169.254:9/latest/api/token")
+        .body(object_store::client::HttpRequestBody::empty())
+        .unwrap();
+    let err = client.execute(request).await.unwrap_err();
+    assert!(!error_chain(&err).contains("private address"), "{err}");
+}
+
+/// Review B2: an S3, GCS or Azure endpoint (startup or per read) at an address the rule refuses
+/// fails when the store is built, so the provider-literal admission of those clients never
+/// carries a data request.
+#[test]
+fn store_endpoint_at_provider_literal_refused_at_build() {
+    use crate::{StoreRegistry, parse_object_url};
+    let policy = EgressPolicy::new(
+        PrivateAddresses::Deny,
+        Vec::new(),
+        ProviderEndpoints::from_env(|_| None),
+    );
+    let clients = SharedHttpClients::with_egress(PolicyConnector::new(
+        policy.scope::<_, &str>([]),
+        Redirects::Checked,
+        None,
+    ));
+    for (scheme_url, key, endpoint) in [
+        ("s3://b/k", "fs.s3a.endpoint", "http://169.254.169.254"),
+        ("s3://b/k", "fs.s3a.endpoint", "http://2852039166:80"),
+        (
+            "gs://b/k",
+            "fs.gs.storage.root.url",
+            "http://169.254.169.254",
+        ),
+        (
+            "abfss://c@a.dfs.core.windows.net/k",
+            "fs.azure.endpoint",
+            "http://169.254.169.254",
+        ),
+    ] {
+        let settings: std::collections::BTreeMap<String, String> =
+            [(key.to_owned(), endpoint.to_owned())].into();
+        let registry = StoreRegistry::new(Arc::new(settings)).with_http_clients(clients.clone());
+        let err = registry
+            .store(&parse_object_url(scheme_url).unwrap())
+            .err()
+            .unwrap_or_else(|| panic!("{key}={endpoint} built"));
+        let text = err.to_string();
+        assert!(text.contains("egress"), "{key}: {text}");
+        assert!(
+            !text.contains("169.254") && !text.contains("2852039166"),
+            "{text}"
+        );
+    }
+}
