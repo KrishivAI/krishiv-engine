@@ -2336,9 +2336,12 @@ dependencies = [
  "krishiv-common",
  "krishiv-plan",
  "krishiv-types",
+ "reqwest",
+ "serde_json",
  "thrift",
  "tokio",
  "tracing",
+ "url",
 ]
 
 [[package]]
