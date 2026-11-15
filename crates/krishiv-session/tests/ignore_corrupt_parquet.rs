@@ -271,41 +271,60 @@ fn the_read_option_takes_precedence_over_the_session_conf() {
 
 /// Only Parquet without `mergeSchema` infers from the first file alone, so
 /// only there does a skipped inference error become `UNABLE_TO_INFER_SCHEMA`.
-/// CSV infers from every file: Spark 4.2.0 skips the corrupt one and keeps
-/// the rows decoded before the cut (1,474 rows summing to 611,601 over the
-/// fixtures `tests/fixtures/spark-4.2.0/ignore-corrupt-csv/`, its own gzip
-/// CSV of 1,000 rows and that file cut to half its length). Krishiv's CSV
-/// inference does not skip yet (known gap: the "RS-26 follow-up, text
-/// inference" row of `ops/queue-opus-b1.md`; when it lands this test expects
-/// Spark's rows): the error stands, and is not turned into
-/// `UNABLE_TO_INFER_SCHEMA`.
+/// CSV infers from every file: Spark 4.2.0 keeps the lines its codec decoded
+/// before the cut, in inference and in the scan (1,474 rows summing to
+/// 611,601 over the fixtures `tests/fixtures/spark-4.2.0/ignore-corrupt-csv/`,
+/// its own gzip CSV of 1,000 rows and that file cut to half its length), with
+/// and without `inferSchema`, in either file order. Without the key the read
+/// fails with `FAILED_READ_FILE.NO_HINT`.
 #[test]
-fn a_csv_inference_error_is_not_read_as_an_empty_inference() {
+fn a_broken_gzip_csv_keeps_the_lines_decoded_before_the_cut() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/spark-4.2.0/ignore-corrupt-csv");
     let good = std::fs::read(fixtures.join("good.csv.gz")).unwrap();
     let cut = std::fs::read(fixtures.join("truncated.csv.gz")).unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let s = Session::new().unwrap();
-    block_on(s.sql("SET spark.sql.files.ignoreCorruptFiles = true")).unwrap();
     for (name, files) in [
         ("good_bad", [("a.csv.gz", &good), ("b.csv.gz", &cut)]),
         ("bad_good", [("a.csv.gz", &cut), ("b.csv.gz", &good)]),
     ] {
         let files: Vec<(&str, &[u8])> = files.iter().map(|(n, b)| (*n, b.as_slice())).collect();
         let dir = layout(tmp.path(), name, &files);
-        let df = s
-            .read()
-            .format("csv")
-            .option("header", "true")
-            .option("inferSchema", "true")
-            .load([dir.to_str().unwrap()]);
-        let got = block_on(async {
-            df.create_or_replace_temp_view("c").await?;
-            s.sql("SELECT count(*) FROM c").await?.collect().await
-        });
-        let class = got.err().map(|e| e.error_class().name().to_owned());
-        assert_eq!(class.as_deref(), Some("FAILED_READ_FILE.NO_HINT"), "{name}");
+        for ignore in [true, false] {
+            block_on(s.sql(&format!(
+                "SET spark.sql.files.ignoreCorruptFiles = {ignore}"
+            )))
+            .unwrap();
+            for infer in ["true", "false"] {
+                let df = s
+                    .read()
+                    .format("csv")
+                    .option("header", "true")
+                    .option("inferSchema", infer)
+                    .load([dir.to_str().unwrap()]);
+                let got = block_on(async {
+                    df.create_or_replace_temp_view("c").await?;
+                    s.sql("SELECT count(*), CAST(sum(id) AS BIGINT) FROM c")
+                        .await?
+                        .collect()
+                        .await
+                });
+                let case = format!("{name} ignore={ignore} inferSchema={infer}");
+                match got {
+                    Ok(b) if ignore => {
+                        let count = b[0].column(0).as_primitive::<Int64Type>().value(0);
+                        let sum = b[0].column(1).as_primitive::<Int64Type>().value(0);
+                        assert_eq!((count, sum), (1474, 611_601), "{case}");
+                    }
+                    Ok(_) => panic!("{case}: read without the key"),
+                    Err(e) => {
+                        assert!(!ignore, "{case}: {e}");
+                        assert_eq!(e.error_class().name(), "FAILED_READ_FILE.NO_HINT", "{case}");
+                    }
+                }
+            }
+        }
     }
 }
 
