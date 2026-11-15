@@ -14,14 +14,22 @@ use crate::session::Session;
 use crate::store::CatalogTable;
 
 impl Session {
-    /// Asks the session's policy about `path` for each privilege (the writer does the same for its files).
+    /// Asks the session's policy about the local directory `path` for each privilege (the writer does
+    /// the same for its files). It is asked as a `file:` path, the form every read and write by path
+    /// takes, so a confining policy (`PathPrefixPolicy`) compares it with its local roots rather than
+    /// reading it as an object-store key; a relative path is asked as written (and refused by it).
     pub(super) async fn authorize_path(
         &self,
         path: &Path,
         privileges: &[Privilege],
         class: StatementClass,
     ) -> Result<(), KrishivError> {
-        let securable = Securable::Path(OptionValue::from_user("path", path.display().to_string()));
+        let text = if path.is_absolute() {
+            format!("file:{}", path.display())
+        } else {
+            path.display().to_string()
+        };
+        let securable = Securable::Path(OptionValue::from_user("path", text));
         for privilege in privileges {
             let r = authorize(
                 &*self.state.policy,
