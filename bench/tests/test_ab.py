@@ -279,6 +279,28 @@ def test_run_ab_writes_both_sides_into_the_result(tmp_path: Path, monkeypatch: p
     assert rec["queries"]["q01"]["status"] == "ok"
     assert rec["summary"]["queries_ok"] == 1
     assert "B/A geomean" in ab.markdown(rec)
+    assert "build_mismatch" not in rec  # one runner cannot report its build: nothing to compare
+
+
+def test_run_ab_records_and_prints_a_build_mismatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    data = tmp_path / "data"
+    ds = data / "tpch-duckdb" / "sf1"
+    ds.mkdir(parents=True)
+    pq.write_table(pa.table({"a": [1]}), ds / "t.parquet")
+    plain = {"profile": "dist", "target-cpu": "x86-64-v3", "branch-align": "off"}
+    a_runner = make_runner(tmp_path, "a-runner", plain)
+    b_runner = make_runner(tmp_path, "b-runner", {**plain, "branch-align": "32B"})
+    monkeypatch.setenv("KRISHIV_DATA", str(data))
+    monkeypatch.setattr(ab, "load_queries", lambda *_, **__: [q()])
+    monkeypatch.setattr(ab, "wait_idle", lambda: None)
+    out = ab.run_ab(1, "tpch-duckdb", str(a_runner), str(b_runner), [], [], reps=1)
+    rec = json.loads(out.read_text())
+    assert "branch_align A=off B=32B" in rec["build_mismatch"]
+    assert "**Warning:** A and B runners are built differently" in ab.markdown(rec)
+    assert "warning: A and B runners are built differently" in capsys.readouterr().out
 
 
 def test_summary_geomean_and_ci_use_the_b_over_a_direction():

@@ -4,9 +4,13 @@
 
 use std::path::Path;
 
+#[path = "src/build_flags.rs"]
+mod build_flags;
+
 fn main() {
     println!("cargo:rerun-if-env-changed=CARGO_ENCODED_RUSTFLAGS");
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=src/build_flags.rs");
     // OUT_DIR is <target>[/<triple>]/<profile dir>/build/<package>-<hash>/out, or with the
     // newer layout (nightly, so under `cargo llvm-cov --branch`) .../build/<package>/<hash>/out:
     // the profile is the directory holding the `build` ancestor.
@@ -27,41 +31,10 @@ fn main() {
     let flags = std::env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default();
     println!(
         "cargo:rustc-env=KRISHIV_BUILD_TARGET_CPU={}",
-        target_cpu(&flags)
+        build_flags::target_cpu(&flags)
     );
     println!(
         "cargo:rustc-env=KRISHIV_BUILD_BRANCH_ALIGN={}",
-        branch_align(&flags)
+        build_flags::branch_align(&flags)
     );
-}
-
-/// `32B` when the rustc flags pass LLVM `-x86-branches-within-32B-boundaries` (no jump crosses
-/// or ends on a 32-byte boundary, so builds of one commit stop differing by code placement on
-/// cores with the JCC erratum), else `off`.
-fn branch_align(encoded_flags: &str) -> &'static str {
-    if encoded_flags
-        .split('\u{1f}')
-        .any(|a| a.ends_with("-x86-branches-within-32B-boundaries"))
-    {
-        "32B"
-    } else {
-        "off"
-    }
-}
-
-/// The last `target-cpu` named in `\x1f`-separated rustc flags, or `default`.
-fn target_cpu(encoded_flags: &str) -> String {
-    let mut cpu = "default".to_owned();
-    let mut args = encoded_flags.split('\u{1f}');
-    while let Some(a) = args.next() {
-        let value = if a == "-C" || a == "-Ctarget-cpu" {
-            args.next().unwrap_or_default()
-        } else {
-            a.strip_prefix("-C").unwrap_or(a)
-        };
-        if let Some(v) = value.strip_prefix("target-cpu=") {
-            v.clone_into(&mut cpu);
-        }
-    }
-    cpu
 }

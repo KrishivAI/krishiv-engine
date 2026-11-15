@@ -73,7 +73,7 @@ returns all rows, `teardown()`; optional `begin_measure()/end_measure()` bracket
   runner-side seconds, `run` dumps the result to Parquet (outside the timed region) and returns the rows for correctness checks.
   Build (always `dist` at the shipped x86-64-v3 level; the runner refuses to start on a CPU without it), with branch alignment on x86-64:
   `RUSTFLAGS='-C target-cpu=x86-64-v3 -C llvm-args=-x86-branches-within-32B-boundaries' cargo build --profile dist -p krishiv-bench-runner` (on arm64: `-C target-cpu=neoverse-n1`, no alignment flag).
-  The alignment flag keeps jumps off 32-byte boundaries: on Intel cores with the JCC erratum (the laptop) plain builds of one commit differ by up to 3% on the TPC-H geomean from code placement alone, and two aligned builds agree to 0.01%; elsewhere it is neutral (research `gap-ledger.md` §4 item 11). Shipped binaries do not use it yet.
+  The alignment flag keeps jumps off 32-byte boundaries: on Intel cores with the JCC erratum (the laptop) four plain builds of one commit spread 2.9% in user cycles on six scan-bound TPC-H queries from code placement alone, and two aligned builds agree to 0.01%; on Ice Lake and Zen 2 it was neutral (research `gap-ledger.md` §4 item 11). Shipped binaries do not use it yet.
   The result's engine `config` records `build_profile`, `target_cpu` and `branch_align` (from `krishiv-bench-runner --build-info`). Override the path with `$KRISHIV_BENCH_RUNNER`.
 - `polars` (lazy `scan_parquet` + `SQLContext`), `datafusion` (datafusion-python, fair spill pool), `spark-local` (Spark 4.2 `local[N]`, AQE on,
   `shuffle.partitions` = cores) and `sail` (pysail Spark Connect server on loopback, pinned pyspark client): used by `reproduce`, hosted by
@@ -236,7 +236,7 @@ fails. `--time`: a paired ABBA (`ab`) of the `--good` build against the probed b
 the range of candidates. The `--bad` commit must reproduce the problem or the run stops. Holds the bench lock. Output
 `$KRISHIV_DATA/results/<ts>_bisect_<suite>_<query>.json`.
 Build settings come from the environment: export the same `RUSTFLAGS` as for the ABBA builds (for example
-`-C target-cpu=x86-64-v3`) before running, or the probed runners are compiled for a different target.
+`-C target-cpu=x86-64-v3 -C llvm-args=-x86-branches-within-32B-boundaries`) before running, or the probed runners are compiled for a different target.
 
 ## Differential flamegraph (`flamediff`)
 

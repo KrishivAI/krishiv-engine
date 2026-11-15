@@ -61,6 +61,8 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(test)]
+mod build_flags;
 mod checksum;
 mod load;
 
