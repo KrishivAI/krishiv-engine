@@ -21,7 +21,7 @@ use krishiv_types::batch::Batch;
 
 use super::sink::resumes_at;
 use super::*;
-use crate::operator::SinkStatus;
+use crate::operator::{GlobalState, SinkStatus};
 use crate::{
     ExecConfig, Executor, OperatorId, QueryContext, QueryId, Sink, Source, TaskContext, TokioClock,
     TokioExecutor, WorkloadClass,
@@ -657,4 +657,368 @@ async fn spill_global_waits_out_a_combined_tables_write() {
     assert_eq!(groups, 2 * ROWS);
     drop((sl, sg, src, g, coordinator));
     assert_eq!(root.reserved(), 0, "memory still held");
+}
+
+/// The pool refuses the scratch of the combined tables' hook write (here:
+/// another consumer takes the memory as the writer starts). The write
+/// frees nothing and is no error: the tables go back to the hook, which
+/// offers them again, so a later round spills them, and `finalize` reads
+/// every group. Before, the refusal failed the query.
+#[tokio::test]
+async fn a_combined_tables_write_refused_scratch_keeps_the_tables() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let dir = tempfile::Builder::new()
+        .prefix("krishiv-slice-")
+        .tempdir()
+        .unwrap();
+    let manager = krishiv_memory::SpillManager::open(&krishiv_memory::SpillConfig {
+        dir: dir.path().join("spill"),
+        ..krishiv_memory::SpillConfig::default()
+    })
+    .unwrap();
+    let scope = manager.scope().unwrap();
+    let root = TreePool::with_clock(
+        &MemoryConfig {
+            quantum: 16 << 10,
+            ..MemoryConfig::default()
+        },
+        Arc::new(TokioClock),
+    );
+    let pool: Arc<dyn MemoryPool> = root.child("q", Some(64 << 20));
+    let q = QueryContext::new(
+        QueryId(1),
+        WorkloadClass::Batch,
+        ExecConfig::default(),
+        pool,
+    );
+    // The first writer's start takes every free byte of the query.
+    let grab_reservation = || {
+        ConsumerHandle::register(Arc::clone(q.pool()), "grab", None)
+            .reservation()
+            .for_spill_scratch()
+    };
+    let grab = Arc::new(std::sync::Mutex::new(grab_reservation()));
+    let calls = Arc::new(AtomicUsize::new(0));
+    {
+        let (grab, calls) = (Arc::clone(&grab), Arc::clone(&calls));
+        scope.set_test_writer_hook(Arc::new(move || {
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                // Scratch grants are exact and may take the pool's
+                // spill-scratch floor: halve down to one byte.
+                let mut g = grab.lock().unwrap();
+                let mut n = 1usize << 40;
+                while n > 0 {
+                    if g.try_grow(n).is_err() {
+                        n /= 2;
+                    }
+                }
+            }
+        }));
+    }
+    let executor: Arc<dyn Executor> = TokioExecutor::deterministic(1).unwrap();
+    let task = || {
+        TaskContext::new(
+            Arc::clone(&q),
+            Arc::clone(&executor),
+            SpillOwner::new(),
+            OperatorId(0),
+            "agg",
+        )
+    };
+    let spec = AggregateSpec {
+        spill: Some(scope),
+        ..spec(false)
+    };
+    let agg = HashAggregate::new(spec).unwrap();
+    let coordinator = task();
+    let g = Sink::global_state(&*agg, &coordinator).unwrap();
+    let b = task();
+    let mut lb = Sink::local_state(&*agg, &b, &g).unwrap();
+    assert!(matches!(
+        agg.sink(batch(false, 0, 0..ROWS as i64), &mut lb, &g)
+            .unwrap(),
+        SinkStatus::NeedMoreInput
+    ));
+    agg.combine(lb, &g).unwrap();
+    drop(b);
+    let combined = root.reserved();
+    let pool = q.pool();
+    let mut ballast = ConsumerHandle::register(Arc::clone(pool), "ballast", None).reservation();
+    let free = match ballast.try_grow(usize::MAX >> 1) {
+        Err(krishiv_memory::MemoryError::Exhausted { available, .. }) => available,
+        other => panic!("{other:?}"),
+    };
+    ballast.try_grow(free).unwrap();
+    // Round 1: the hook's write is refused its scratch; nothing is freed.
+    // (Without abort: with nothing spillable left, the round would abort
+    // the query instead.)
+    let mut wants = ConsumerHandle::register(Arc::clone(pool), "wants", None).reservation();
+    let first = tokio::time::timeout(
+        Duration::from_secs(30),
+        wants.grow_without_abort(combined / 2),
+    )
+    .await
+    .expect("round 1 waited out its deadline");
+    assert!(
+        matches!(first, Err(krishiv_memory::MemoryError::Exhausted { .. })),
+        "{first:?}"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "the hook did not write");
+    q.check_cancelled()
+        .expect("the refused write failed the query");
+    // The grab lets go; round 2 spills the tables the hook offers again.
+    drop(std::mem::replace(
+        &mut *grab.lock().unwrap(),
+        grab_reservation(),
+    ));
+    tokio::time::timeout(Duration::from_secs(30), wants.grow(combined / 2))
+        .await
+        .expect("round 2 waited out its deadline")
+        .expect("the kept tables were not offered again");
+    assert!(calls.load(Ordering::SeqCst) > 1, "round 2 wrote no run");
+    drop((wants, ballast));
+    let fin = task();
+    agg.finalize(&g, &fin).await.unwrap();
+    let src = fin.with_dependency(Arc::clone(&g));
+    let sg = Source::global_state(&*agg, &src).unwrap();
+    let mut sl = Source::local_state(&*agg, &src, &sg).unwrap();
+    let mut groups = 0;
+    while let Some(out) = agg.get_data(&mut sl, &sg).await.unwrap() {
+        groups += out.data().num_rows();
+    }
+    assert_eq!(groups, ROWS);
+    drop((sl, sg, src, g, coordinator, grab));
+    assert_eq!(root.reserved(), 0, "memory still held");
+}
+
+/// One query whose aggregate spills to a scope of its own, with driver B's
+/// table combined (B ended), as the combined-tables hook tests need it.
+struct Combined {
+    _dir: tempfile::TempDir,
+    root: Arc<TreePool>,
+    q: Arc<QueryContext>,
+    executor: Arc<dyn Executor>,
+    agg: Arc<HashAggregate>,
+    g: Option<GlobalState>,
+    coordinator: Option<TaskContext>,
+}
+
+impl Combined {
+    /// `max_bytes` caps the spill files (`None`: the default cap); `hook`
+    /// runs at each writer's start.
+    fn new(max_bytes: Option<u64>, hook: Arc<dyn Fn() + Send + Sync>) -> Self {
+        let dir = tempfile::Builder::new()
+            .prefix("krishiv-slice-")
+            .tempdir()
+            .unwrap();
+        let manager = krishiv_memory::SpillManager::open(&krishiv_memory::SpillConfig {
+            dir: dir.path().join("spill"),
+            max_bytes: max_bytes.unwrap_or(krishiv_memory::SpillConfig::default().max_bytes),
+            ..krishiv_memory::SpillConfig::default()
+        })
+        .unwrap();
+        let scope = manager.scope().unwrap();
+        scope.set_test_writer_hook(hook);
+        let root = TreePool::with_clock(
+            &MemoryConfig {
+                quantum: 16 << 10,
+                ..MemoryConfig::default()
+            },
+            Arc::new(TokioClock),
+        );
+        let pool: Arc<dyn MemoryPool> = root.child("q", Some(64 << 20));
+        let q = QueryContext::new(
+            QueryId(1),
+            WorkloadClass::Batch,
+            ExecConfig::default(),
+            pool,
+        );
+        let executor: Arc<dyn Executor> =
+            TokioExecutor::new(&crate::ExecutorConfig::default()).unwrap();
+        let agg = HashAggregate::new(AggregateSpec {
+            spill: Some(scope),
+            ..spec(false)
+        })
+        .unwrap();
+        let mut c = Self {
+            _dir: dir,
+            root,
+            q,
+            executor,
+            agg,
+            g: None,
+            coordinator: None,
+        };
+        let coordinator = c.task();
+        let g = Sink::global_state(&*c.agg, &coordinator).unwrap();
+        let b = c.task();
+        let mut lb = Sink::local_state(&*c.agg, &b, &g).unwrap();
+        assert!(matches!(
+            c.agg
+                .sink(batch(false, 0, 0..ROWS as i64), &mut lb, &g)
+                .unwrap(),
+            SinkStatus::NeedMoreInput
+        ));
+        c.agg.combine(lb, &g).unwrap();
+        c.g = Some(g);
+        c.coordinator = Some(coordinator);
+        c
+    }
+
+    fn task(&self) -> TaskContext {
+        TaskContext::new(
+            Arc::clone(&self.q),
+            Arc::clone(&self.executor),
+            SpillOwner::new(),
+            OperatorId(0),
+            "agg",
+        )
+    }
+
+    fn g(&self) -> &GlobalState {
+        self.g.as_ref().unwrap()
+    }
+
+    /// Fills the query's pool, then asks in the background for `bytes`
+    /// that only a spill of the combined tables funds.
+    fn ask(
+        &self,
+        bytes: usize,
+    ) -> (
+        krishiv_memory::Reservation,
+        tokio::task::JoinHandle<Result<krishiv_memory::Reservation, krishiv_memory::MemoryError>>,
+    ) {
+        let pool = self.q.pool();
+        let mut ballast = ConsumerHandle::register(Arc::clone(pool), "ballast", None).reservation();
+        let free = match ballast.try_grow(usize::MAX >> 1) {
+            Err(krishiv_memory::MemoryError::Exhausted { available, .. }) => available,
+            other => panic!("{other:?}"),
+        };
+        ballast.try_grow(free).unwrap();
+        let mut wants = ConsumerHandle::register(Arc::clone(pool), "wants", None).reservation();
+        let asked = tokio::spawn(async move { wants.grow(bytes).await.map(|()| wants) });
+        (ballast, asked)
+    }
+
+    /// Finalizes on `fin` and counts the groups read back.
+    async fn groups(&self, fin: TaskContext) -> crate::error::Result<usize> {
+        self.agg.finalize(self.g(), &fin).await?;
+        let src = fin.with_dependency(Arc::clone(self.g()));
+        let sg = Source::global_state(&*self.agg, &src)?;
+        let mut sl = Source::local_state(&*self.agg, &src, &sg)?;
+        let mut groups = 0;
+        while let Some(out) = self.agg.get_data(&mut sl, &sg).await? {
+            groups += out.data().num_rows();
+        }
+        Ok(groups)
+    }
+
+    /// Drops the query's states; returns what the pool still holds.
+    fn end(mut self) -> usize {
+        self.g = None;
+        self.coordinator = None;
+        let root = Arc::clone(&self.root);
+        drop(self);
+        root.reserved()
+    }
+}
+
+/// A gate for the first spill writer: it says so and waits for `release`.
+fn writer_gate() -> (
+    Arc<dyn Fn() + Send + Sync>,
+    std::sync::mpsc::Receiver<()>,
+    std::sync::mpsc::Sender<()>,
+) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel::<()>();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let gate = std::sync::Mutex::new((entered_tx, release_rx));
+    let calls = AtomicUsize::new(0);
+    let hook = Arc::new(move || {
+        if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            let g = gate.lock().unwrap();
+            g.0.send(()).unwrap();
+            let _ = g.1.recv();
+        }
+    });
+    (hook, entered_rx, release_tx)
+}
+
+async fn entered(rx: std::sync::mpsc::Receiver<()>) {
+    tokio::task::spawn_blocking(move || rx.recv().unwrap())
+        .await
+        .unwrap();
+}
+
+/// A `finalize` that starts while the combined tables' hook writes them
+/// waits for the write, then reads the runs it wrote: every group.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn finalize_waits_out_a_combined_tables_write() {
+    let (hook, entered_rx, release) = writer_gate();
+    let c = Arc::new(Combined::new(None, hook));
+    let (ballast, asked) = c.ask(64 << 10);
+    entered(entered_rx).await;
+    let fin = c.task();
+    let finalizing = {
+        let c = Arc::clone(&c);
+        tokio::spawn(async move { c.groups(fin).await })
+    };
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!finalizing.is_finished(), "finalize ran during the write");
+    release.send(()).unwrap();
+    let wants = asked.await.unwrap().expect("the write freed nothing");
+    drop((wants, ballast));
+    assert_eq!(finalizing.await.unwrap().unwrap(), ROWS);
+    let c = Arc::into_inner(c).unwrap();
+    assert_eq!(c.end(), 0, "memory still held");
+}
+
+/// A query cancelled while the combined tables' hook writes them ends
+/// with an empty pool.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancel_during_a_combined_tables_write_leaves_the_pool_empty() {
+    let (hook, entered_rx, release) = writer_gate();
+    let c = Combined::new(None, hook);
+    let (ballast, asked) = c.ask(64 << 10);
+    entered(entered_rx).await;
+    c.q.cancel();
+    release.send(()).unwrap();
+    let wants = tokio::time::timeout(Duration::from_secs(30), asked)
+        .await
+        .expect("the request outlived the cancel")
+        .unwrap();
+    drop((wants, ballast));
+    assert!(
+        c.groups(c.task()).await.is_err(),
+        "a cancelled query finished"
+    );
+    // As the runner does at query end: the hook's write runs out first.
+    c.q.blocking_done().await;
+    assert_eq!(c.end(), 0, "memory still held");
+}
+
+/// A hook write that fails (the spill cap refuses the file) fails the
+/// query, and its `finalize` with it: no result short of the lost groups.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failing_combined_tables_write_fails_the_query() {
+    let c = Combined::new(Some(1), Arc::new(|| {}));
+    let (ballast, asked) = c.ask(64 << 10);
+    let wants = tokio::time::timeout(Duration::from_secs(30), asked)
+        .await
+        .expect("the request waited out its deadline")
+        .unwrap();
+    drop((wants, ballast));
+    // The write drops the tables it lost before the query is failed.
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while c.q.check_cancelled().is_ok() {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the query did not fail");
+    assert!(
+        c.groups(c.task()).await.is_err(),
+        "finalize read a short result"
+    );
+    assert_eq!(c.end(), 0, "memory still held");
 }

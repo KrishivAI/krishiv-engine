@@ -24,10 +24,11 @@ use std::sync::atomic::Ordering as AtomicOrdering;
 use std::sync::{Arc, Weak};
 
 use futures::future::BoxFuture;
-use krishiv_memory::ConsumerHandle;
+use krishiv_common::error::ErrorClass;
+use krishiv_memory::{ConsumerHandle, Reservation};
 
-use super::held::lend_headroom;
-use super::{Global, Spiller};
+use super::held::{lend_headroom, regrow};
+use super::{Global, Run, Spiller, Table, held};
 use crate::context::TaskContext;
 use crate::error::Result;
 use crate::executor::{Executor, run_blocking};
@@ -74,6 +75,15 @@ struct CombinedSpill {
     executor: Arc<dyn Executor>,
 }
 
+/// What a hook write did: the runs written, the bytes their tables held,
+/// and the tables kept in memory because the pool refused a run's scratch.
+#[derive(Default)]
+struct Written {
+    runs: Vec<Run>,
+    freed: usize,
+    kept: Vec<(u32, Table, Reservation)>,
+}
+
 /// Clears `Inner::hook_writing` and wakes a waiting `finalize`, on every
 /// path (a cancelled query drops the spill mid-write).
 struct Writing(Arc<Global>);
@@ -107,7 +117,6 @@ impl SpillUnread for CombinedSpill {
                 std::mem::take(&mut inner.tables)
             };
             let writing = Writing(Arc::clone(&g));
-            let freed: usize = tables.iter().map(|(_, _, r)| r.size()).sum();
             let s = self.spiller.clone();
             let guard = s.query.blocking_started();
             // Until the memory written is freed, it counts as about to be
@@ -117,16 +126,33 @@ impl SpillUnread for CombinedSpill {
             let query = Arc::clone(&s.query);
             let written = run_blocking(&*self.executor, move || {
                 let _guard = guard;
-                let mut runs = Vec::with_capacity(tables.len());
-                for (p, t, mut r) in tables {
-                    lend_headroom(&mut r);
-                    runs.push(s.write_run(&t, 0, 0, p)?);
+                let mut out = Written::default();
+                let mut tables = tables.into_iter();
+                while let Some((p, t, mut r)) = tables.next() {
+                    let size = r.size();
+                    let lent = lend_headroom(&mut r);
+                    match s.write_run(&t, 0, 0, p) {
+                        Ok(run) => {
+                            out.runs.push(run);
+                            out.freed += size;
+                        }
+                        Err(e) if e.error_class() == ErrorClass::UnableToAcquireMemory => {
+                            // A refused scratch frees nothing and is no
+                            // error (as `output_spill::refused`): this
+                            // table and the rest go back, still in memory.
+                            regrow(&mut r, lent);
+                            out.kept.push((p, t, r));
+                            out.kept.extend(tables);
+                            break;
+                        }
+                        Err(e) => return Err(e),
+                    }
                 }
-                Ok(runs)
+                Ok(out)
             })
             .await;
-            let runs = match written {
-                Ok(runs) => runs,
+            let out = match written {
+                Ok(out) => out,
                 Err(e) => {
                     // The tables are gone: the query fails before `finalize`
                     // (waiting on this write) can run on what is left.
@@ -134,7 +160,24 @@ impl SpillUnread for CombinedSpill {
                     return Err(e);
                 }
             };
-            lock(&g.inner).runs.extend(runs);
+            {
+                let mut inner = lock(&g.inner);
+                inner.runs.extend(out.runs);
+                if !out.kept.is_empty() {
+                    // `finalize` waits for this write, so it has not begun:
+                    // the kept tables are the hook's to offer again. Tables
+                    // merge in driver-partition order.
+                    for (p, t, r) in out.kept {
+                        g.combined.fetch_add(r.size(), AtomicOrdering::Relaxed);
+                        let at = inner.tables.partition_point(|(q, _, _)| *q < p);
+                        inner.tables.insert(at, (p, t, r));
+                    }
+                    if let Some(c) = &g.spill_combined {
+                        c.hook.set_spillable_bytes(held(&inner));
+                    }
+                }
+            }
+            let freed = out.freed;
             drop(writing);
             Ok(freed)
         })

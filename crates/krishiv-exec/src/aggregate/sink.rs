@@ -1612,6 +1612,9 @@ impl Sink for HashAggregate {
                 }
                 written.await;
             }
+            // A failed hook write lost the tables it took: the query failed,
+            // and no result may be read without them.
+            ctx.query().check_cancelled()?;
             if let Some(c) = &g.spill_combined {
                 c.hook.set_spillable_bytes(0);
             }
