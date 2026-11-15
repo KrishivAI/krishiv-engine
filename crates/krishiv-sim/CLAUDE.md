@@ -13,16 +13,17 @@ Paths are relative to this crate.
 - `src/cluster.rs` `Coordinator`: a `krishiv_exec::Scheduler` that ships fragments and task descriptors to workers, retries a failed task as its next attempt, runs the root stage, records a trace, releases each job's map outputs
 - `src/worker.rs` `serve` (one worker host: own executor, pool, tables via `HostSetup`, one exchange and one
   `BroadcastTables` per job, so a broadcast join's table is built once per host and job, capped by the task's
-  `krishiv.exec.join.sharedBroadcastBytes`) and `HostSetup`
+  `krishiv.exec.join.sharedBroadcastBytes`) and `HostSetup` (`task_memory`: each task's pool limit, default none)
 - `src/exchange.rs` `HostExchange` (writes to the host's `LocalShuffle`, reads map partition `m` from worker `m mod W`, remotely over TCP), `Fault`
 - `src/wire.rs` the length-prefixed request/reply messages; `src/task.rs` the `krishiv.task.v1alpha` task descriptor
   (with the file splits the coordinator dealt, `Coordinator::deal_scans`; relation batches are refused)
 - `tests/tpch_sim.rs` TPC-H on two workers with dealt scans equals one worker; same seed, same trace; a killed map
-  task reruns; a two-worker write names files as Spark does and commits once; a file changed after listing fails; a nested grouping key is refused before any task runs; `krishiv.exec.join.sharedBroadcastBytes` reaches the workers (shared builds uncapped, every build falls back under a one-byte cap)
+  task reruns; a two-worker write names files as Spark does and commits once; a file changed after listing fails; a nested grouping key is refused before any task runs; `krishiv.exec.join.sharedBroadcastBytes` reaches the workers (shared builds uncapped, every build falls back under a one-byte cap); a grouped aggregate under a 2 or 4 MiB limit spills (tasks and root stage, counted by a spill-writer hook) and matches the unlimited rows on one worker and on the cluster
 
 ## Extension points
 - New scenario: a test calling `simulate` with its own `HostSetup` (which must share nothing between hosts but the object store, and write-only observers such as a log `HostSetup::released` appends to: per released job and host, the broadcast builds and fallbacks).
 - New fault: a field of `ClusterConfig` honoured by `HostExchange` or the worker.
+- Memory pressure: `HostSetup::task_memory` plus spill scopes from `HostSetup::worker` (`tpch_sim.rs` `Tight`); the client's root stage takes the pool and context the test passes.
 
 ## Invariants
 - Every run is reproducible from its seed: hosts use `TokioExecutor::deterministic` on turmoil's current-thread runtimes and memory pools on `TokioClock`; no wall clock, threads or ambient randomness.

@@ -18,6 +18,7 @@ use std::collections::BTreeMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash as _, Hasher as _};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use arrow_array::{Array as _, Int64Array, RecordBatch, StringViewArray};
@@ -25,7 +26,7 @@ use futures::StreamExt as _;
 use futures::future::BoxFuture;
 use krishiv_common::config::Config;
 use krishiv_common::error::KrishivError;
-use krishiv_exec::physical::{PhysicalPlan, SplitFileRef, WorkerContext, WritePlan};
+use krishiv_exec::physical::{PhysicalPlan, SpillScopes, SplitFileRef, WorkerContext, WritePlan};
 use krishiv_exec::planner::{
     DefaultPlanner, FileTable, MemoryTables, PhysicalPlanner, PlanningContext, ProviderStatistics,
 };
@@ -41,7 +42,7 @@ use krishiv_io::{
 use krishiv_io::{
     FileFormat, FileRef, FormatOptions, IoConfig, IoScheduler, MetadataNeeds, StoreId,
 };
-use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+use krishiv_memory::{MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillScope, TreePool};
 use krishiv_plan::analyzer::testing::context;
 use krishiv_plan::analyzer::{
     AnalysisContext, Analyzer as _, DefaultAnalyzer, MemoryCatalog, ResolutionConf, TableColumn,
@@ -964,4 +965,148 @@ fn a_shared_broadcast_cap_on_the_wire_makes_the_tasks_build_their_own() {
     let (capped_builds, capped_fallbacks) = per_job(jobs[1]);
     assert!(capped_builds > 0, "{released:?}");
     assert_eq!(capped_fallbacks, capped_builds, "{released:?}");
+}
+
+/// Spill scopes from one manager, counting the spill files written.
+#[derive(Debug)]
+struct Spills {
+    manager: SpillManager,
+    writes: Arc<AtomicUsize>,
+}
+
+impl Spills {
+    fn open(dir: &Path, writes: &Arc<AtomicUsize>) -> Result<Self, KrishivError> {
+        Ok(Self {
+            manager: SpillManager::open(&SpillConfig {
+                dir: dir.to_path_buf(),
+                ..SpillConfig::default()
+            })?,
+            writes: Arc::clone(writes),
+        })
+    }
+}
+
+impl SpillScopes for Spills {
+    fn scope(&self) -> Result<SpillScope, KrishivError> {
+        let scope = self.manager.scope()?;
+        let writes = Arc::clone(&self.writes);
+        scope.set_test_writer_hook(Arc::new(move || {
+            writes.fetch_add(1, Ordering::Relaxed);
+        }));
+        Ok(scope)
+    }
+}
+
+/// `Setup` whose tasks run under `limit` bytes each and spill into a
+/// directory of the host's own.
+struct Tight {
+    store: Arc<dyn ObjectStore>,
+    limit: usize,
+    dir: PathBuf,
+    hosts: AtomicUsize,
+    writes: Arc<AtomicUsize>,
+}
+
+impl HostSetup for Tight {
+    fn worker(&self) -> BoxFuture<'static, Result<WorkerContext, KrishivError>> {
+        let base = Setup(Arc::clone(&self.store)).worker();
+        let host = self.hosts.fetch_add(1, Ordering::Relaxed);
+        let dir = self.dir.join(format!("host-{host}"));
+        let writes = Arc::clone(&self.writes);
+        Box::pin(async move {
+            let spills = Spills::open(&dir, &writes)?;
+            Ok(base.await?.with_spill_scopes(Arc::new(spills)))
+        })
+    }
+
+    fn task_memory(&self) -> Option<usize> {
+        Some(self.limit)
+    }
+}
+
+/// Many groups (about one per row at SF 0.01), so the final aggregate's
+/// tables outgrow a small pool; order-insensitive aggregates, so every
+/// driver interleaving gives the same rows.
+const GROUPS: &str = "SELECT l_orderkey, l_partkey, sum(l_quantity) AS q, count(*) AS c, \
+                      max(l_extendedprice) AS m FROM lineitem GROUP BY l_orderkey, l_partkey";
+
+/// [`GROUPS`] on one worker (two drivers of a fused aggregate) and on two
+/// workers, every task and the root stage under `limit` bytes and spilling;
+/// returns (unlimited rows, one worker's, the cluster's, spill files
+/// written).
+fn tight(seed: u64, limit: usize) -> (Vec<String>, Vec<String>, Vec<String>, usize) {
+    let store = store();
+    let dir = tempfile::Builder::new()
+        .prefix("krishiv-sim-spill-")
+        .tempdir()
+        .unwrap();
+    let writes = Arc::new(AtomicUsize::new(0));
+    let config = ClusterConfig {
+        sim: SimConfig::with_seed(seed),
+        workers: 2,
+        partitions: 4,
+        slots: 2,
+        fault: None,
+    };
+    let setup = Tight {
+        store: Arc::clone(&store),
+        limit,
+        dir: dir.path().to_path_buf(),
+        hosts: AtomicUsize::new(0),
+        writes: Arc::clone(&writes),
+    };
+    let out = Arc::new(Mutex::new(None));
+    let result = Arc::clone(&out);
+    let client_dir = dir.path().join("client");
+    let client_writes = Arc::clone(&writes);
+    simulate(
+        config,
+        Arc::new(setup),
+        move |coordinator: Coordinator, worker: WorkerContext| async move {
+            let tpch = open(store).await?;
+            coordinator.deal_scans(dealer(&tpch, 256 << 10));
+            let plan = tpch.plan_sql(GROUPS).await?;
+            let executor: Arc<dyn Executor> = TokioExecutor::deterministic(config.slots)?;
+            let plain = QueryRunner::new(executor);
+            let big: Arc<dyn MemoryPool> =
+                TreePool::with_clock(&MemoryConfig::default(), Arc::new(TokioClock));
+            let want = rows(seed, &plain, &plan, &worker, &big, 0).await?;
+            let small: Arc<dyn MemoryPool> = TreePool::with_clock(
+                &MemoryConfig {
+                    limit: Some(limit),
+                    ..MemoryConfig::default()
+                },
+                Arc::new(TokioClock),
+            );
+            let spilling = worker
+                .clone()
+                .with_spill_scopes(Arc::new(Spills::open(&client_dir, &client_writes)?));
+            let local = rows(seed, &plain, &plan, &spilling, &small, 1).await?;
+            let cluster = rows(seed, &coordinator, &plan, &spilling, &small, 2).await?;
+            assert_eq!(small.reserved(), 0, "seed {seed}: memory still held");
+            *result.lock().unwrap() = Some((want, local, cluster));
+            Ok(())
+        },
+    )
+    .unwrap_or_else(|e| panic!("seed {seed}: {e}"));
+    let (want, local, cluster) = out.lock().unwrap().take().unwrap();
+    (want, local, cluster, writes.load(Ordering::Relaxed))
+}
+
+/// A grouped aggregate whose tables do not fit spills, on one worker and on
+/// the cluster, and gives the unlimited run's rows: no memory error when
+/// drivers end and combine while others still fold (the combined tables
+/// stay spillable, #792). The one-worker run's interleaving is fixed (it
+/// spills alike under every seed), so two limits vary its pressure; the
+/// seed varies the cluster's message timing and with it how much each task
+/// spills.
+#[test]
+fn a_spilling_aggregate_matches_under_every_seed() {
+    for (seed, limit) in [(0, 4 << 20), (1, 2 << 20), (2, 4 << 20), (3, 2 << 20)] {
+        let (want, local, cluster, writes) = tight(seed, limit);
+        assert!(writes > 0, "seed {seed}: nothing spilled");
+        assert_eq!(local.len(), want.len(), "seed {seed}: one worker");
+        assert!(local == want, "seed {seed}: one worker's rows differ");
+        assert!(cluster == want, "seed {seed}: the cluster's rows differ");
+    }
 }
