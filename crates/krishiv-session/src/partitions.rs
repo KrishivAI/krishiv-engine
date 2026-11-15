@@ -53,7 +53,7 @@ fn unsupported(feature: &str) -> KrishivError {
     .into()
 }
 
-fn internal(message: String) -> KrishivError {
+pub(crate) fn internal(message: String) -> KrishivError {
     InternalError { message }.into()
 }
 
@@ -370,7 +370,7 @@ fn list_partition_dirs(
         let Ok(n) = entry.file_name().into_string() else {
             continue;
         };
-        if n.contains('=') && !n.starts_with(['.', '_']) {
+        if crate::partition_keys::is_partition_dir_name(&n) {
             names.push((n, entry.path()));
         }
     }
@@ -1206,9 +1206,10 @@ impl Session {
     /// 3. only the files that entry removed are deleted (a writer that committed into the partition after it keeps
     ///    its files), then the directories left empty. An I/O error there leaves files no read lists.
     ///
-    /// `PURGE` changes nothing (no trash). Refused: an external table (Spark keeps its files and stops reading
-    /// them; reads here refuse a directory the catalog does not know) and a partition registered away from its
-    /// default directory (reads never list it, and its directory may hold anything).
+    /// `PURGE` changes nothing (no trash). An external table's partitions are dropped from the catalog only and
+    /// no file is touched (Spark keeps its files and stops reading them; `MSCK REPAIR TABLE` registers them
+    /// again). Refused: a managed table's partition registered away from its default directory (reads never list
+    /// it, and its directory may hold anything).
     pub(crate) async fn drop_partitions(
         &self,
         table: &Arc<CatalogTable>,
@@ -1276,9 +1277,11 @@ impl Session {
             return Ok(());
         }
         if !table.managed {
-            return Err(unsupported(
-                "ALTER TABLE ... DROP PARTITION of an external table",
-            ));
+            // An external table's files are not the catalog's to delete: Spark drops the partitions' metadata only (SQL-19).
+            return match self.swap_without(table, name, &hit) {
+                Swap::Done => Ok(()),
+                Swap::Lost | Swap::Gone => Err(crate::table_commands::concurrent_change(name)),
+            };
         }
         if let Some(p) = gone
             .iter()
