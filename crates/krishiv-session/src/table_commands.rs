@@ -1311,6 +1311,7 @@ impl Session {
             }
             // Authorized before any file moves: the source must be deletable and the target creatable.
             self.deletable_dir(table).await?;
+            self.allow_managed_location(&renamed.namespace, &renamed.name, &renamed.location);
             self.authorize_path(&renamed.location, &[Privilege::Create], StatementClass::Ddl)
                 .await?;
             if let Some(parent) = renamed.location.parent() {

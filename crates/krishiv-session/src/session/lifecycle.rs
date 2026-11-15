@@ -150,7 +150,7 @@ impl Session {
             }),
         };
         if let Some(grants) = &session.state.grants {
-            grants.bind_conf(&session.state.conf);
+            grants.bind_catalog(&session.state.catalog.store);
         }
         session
             .state

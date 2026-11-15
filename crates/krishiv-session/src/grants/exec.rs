@@ -100,11 +100,17 @@ impl Session {
         };
         let _ddl = policy.grants().ddl().await;
         let before = match &change {
-            OwnerChange::Created(s) => self.object_exists(s, env).await,
-            OwnerChange::Dropped(_) | OwnerChange::Renamed { .. } => None,
+            OwnerChange::Created(s) | OwnerChange::Renamed { to: s, .. } => {
+                self.object_exists(s, env).await
+            }
+            OwnerChange::Dropped(_) => None,
         };
+        // A new object (or a rename's new name, with the managed location it moves to) is the
+        // statement's own while it runs.
         let creating = match (&change, before) {
-            (OwnerChange::Created(s), Some(false)) => ObjectKey::of(s),
+            (OwnerChange::Created(s) | OwnerChange::Renamed { to: s, .. }, Some(false)) => {
+                ObjectKey::of(s)
+            }
             _ => None,
         };
         let _creating = creating.map(|k| policy.creating(k));
@@ -352,7 +358,7 @@ impl Session {
             } => {
                 let (securable, columns) = self.grant_securable(object, env).await?;
                 let rows = self.grant_rows(policy, &securable, &columns, privileges)?;
-                let cs = policy.case_sensitive();
+                let cs = ObjectKey::of(&securable).is_none_or(|k| policy.exact_for(&k));
                 store.update(&mut |s: &mut GrantStateHandle| {
                     missing_role(&s.0, grantees, admin, || {
                         self.refuse(policy, &securable, Privilege::Manage)
@@ -419,7 +425,7 @@ impl Session {
                     &state.0,
                     key.as_ref(),
                     who.as_ref(),
-                    policy.case_sensitive(),
+                    key.as_ref().is_none_or(|k| policy.exact_for(k)),
                 );
                 self.ordered_frame(
                     &[
@@ -541,7 +547,7 @@ impl Session {
         let Some(key) = ObjectKey::of(securable).and_then(super::physical_key) else {
             return Err(refuse_all());
         };
-        let cs = policy.case_sensitive();
+        let cs = policy.exact_for(&key);
         let state = policy.grants().store().snapshot();
         let mut out = Vec::new();
         for (privilege, columns) in expand(privileges) {
@@ -715,8 +721,12 @@ impl Session {
         env: &QueryEnv,
     ) -> Result<(), KrishivError> {
         let me = self.state.principal.name.clone();
-        let cs = policy.case_sensitive();
         let key = |s: &Securable| ObjectKey::of(s);
+        let cs = match change {
+            OwnerChange::Created(s)
+            | OwnerChange::Dropped(s)
+            | OwnerChange::Renamed { to: s, .. } => key(s).is_none_or(|k| policy.exact_for(&k)),
+        };
         let edit: Box<dyn Fn(&mut GrantState) + Send> = match change {
             OwnerChange::Created(s) => {
                 let after = self.object_exists(s, env).await;
