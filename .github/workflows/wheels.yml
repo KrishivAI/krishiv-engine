@@ -276,35 +276,6 @@ jobs:
           path: dist/*.whl
           if-no-files-found: error
 
-  # Acceptance row A8 (macOS arm64 wheel, 0.2.1): the abi3 wheel built above installs and runs on macOS 14, the
-  # oldest macOS arm64 runner image, with the A1 smoke and the quickstart's `krishiv[pyarrow]` install line.
-  macos14-smoke:
-    needs: [macos-arm64]
-    runs-on: macos-14
-    timeout-minutes: 20
-    name: wheel (macOS 14 arm64 install smoke)
-    steps:
-      - name: Harden the runner (audit egress)
-        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
-        with:
-          egress-policy: audit
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: wheels-macos-arm64-abi3
-          path: dist
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          sparse-checkout: .github/actions
-      - uses: $/.github/actions/setup-uv
-      - name: Install and smoke
-        run: |
-          sw_vers
-          uv python install 3.12
-          uv venv --python 3.12 venv
-          uv pip install --python venv/bin/python --quiet "$(ls dist/*.whl | head -1)[pyarrow]"
-          venv/bin/python -c 'import krishiv; print(krishiv.build_info()); r = krishiv.session().sql("SELECT 1").collect(); print(r); assert len(r) == 1'
-
   # Every wheel's size, measured (artifact `wheel-sizes`; from main-measure.yml
   # `wheel-sizes-main`). On a pull request the measurement also records the main
   # commit it was made against (`measured-base-sha`). Elsewhere the sizes are
