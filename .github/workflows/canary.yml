@@ -23,6 +23,10 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
     steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
       - name: Latest scheduled ci run on main
         id: run
         run: |
@@ -54,13 +58,15 @@ jobs:
           if [ -n "$problem" ]; then echo "::error::CI canary: $problem"; else echo "CI canary: nightly ci on main is green."; fi
       - name: Alert on ntfy
         if: steps.run.outputs.problem != ''
+        env:
+          PROBLEM: ${{ steps.run.outputs.problem }}
         run: |
           if [ -z "$NTFY_TOPIC" ]; then
-            echo "::warning::NTFY_TOPIC is not set; no push alert sent. Summary: ${{ steps.run.outputs.problem }}"
+            echo "::warning::NTFY_TOPIC is not set; no push alert sent. Summary: $PROBLEM"
             exit 0
           fi
           curl -fsS --max-time 20 -H "Title: krishiv-engine CI canary" -H "Priority: high" \
-            -d "${{ steps.run.outputs.problem }}" "https://ntfy.sh/$NTFY_TOPIC"
+            -d "$PROBLEM" "https://ntfy.sh/$NTFY_TOPIC"
       - name: Fail the canary run
         if: steps.run.outputs.problem != ''
         run: exit 1
