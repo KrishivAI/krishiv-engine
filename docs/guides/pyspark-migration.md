@@ -168,7 +168,7 @@ Each row links to the full description in [known differences](../concepts/known-
 ## Where it runs
 
 Krishiv has three deployment modes: embedded (in your Python process, as above), single-node and distributed.
-Single-node is one `krishiv server` process that PySpark and other clients reach over Spark Connect; see [Deployment](deploy.md).
+Single-node, one `krishiv server` process that PySpark and other clients reach over Spark Connect, is in development and is not part of 0.2; see [Deployment](deploy.md).
 
 ## Step 3: check the result
 
