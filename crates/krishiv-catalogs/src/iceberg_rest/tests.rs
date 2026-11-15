@@ -136,6 +136,23 @@ fn parent_namespaces_and_a_custom_separator() {
 
 #[test]
 fn missing_names_are_none() {
+    let no_such =
+        |kind: &str| format!(r#"{{"error": {{"message": "m", "type": "{kind}", "code": 404}}}}"#);
+    let (table, namespace) = (
+        no_such("NoSuchTableException"),
+        no_such("NoSuchNamespaceException"),
+    );
+    let server = serve(move |r| match path(r) {
+        "/v1/config" => Reply::Json(200, CONFIG.into()),
+        "/v1/namespaces/db/tables/t" => Reply::Json(404, table.clone()),
+        _ => Reply::Json(404, namespace.clone()),
+    });
+    let client = client_with(config_for(&server));
+    assert!(client.load_table(&ns(&["db"]), "t").unwrap().is_none());
+    assert!(client.list_tables(&ns(&["db"])).unwrap().is_none());
+    assert!(client.list_namespaces(&ns(&["db"])).unwrap().is_none());
+
+    // The `NoSuch*` answer must fit the call: "no such table" does not prove a namespace absent.
     let server = serve(|r| match path(r) {
         "/v1/config" => Reply::Json(200, CONFIG.into()),
         _ => Reply::Json(
@@ -145,8 +162,8 @@ fn missing_names_are_none() {
     });
     let client = client_with(config_for(&server));
     assert!(client.load_table(&ns(&["db"]), "t").unwrap().is_none());
-    assert!(client.list_tables(&ns(&["db"])).unwrap().is_none());
-    assert!(client.list_namespaces(&ns(&["db"])).unwrap().is_none());
+    let e = client.list_tables(&ns(&["db"])).unwrap_err();
+    assert_eq!(class(&e), ErrorClass::KrishivCatalogFailure);
 
     // A 404 that is not the catalog's `NoSuch*` answer (a proxy, a wrong prefix) is no proof of absence.
     for body in [

@@ -61,6 +61,16 @@ pub trait LocationPolicy {
     /// # Errors
     /// The [`LocationRule`] that refused `location`.
     fn check(&self, location: &str) -> Result<(), LocationRule>;
+
+    /// Passes a bare scheme (`s3`, `abfss`), as an Iceberg storage-credential prefix names one (T067 §4.1): may
+    /// this catalog's locations use it at all? The default checks a placeholder location of that scheme, which a
+    /// policy that confines hosts or buckets should override.
+    ///
+    /// # Errors
+    /// The [`LocationRule`] that refused the scheme.
+    fn check_scheme(&self, scheme: &str) -> Result<(), LocationRule> {
+        self.check(&format!("{}://scheme-prefix/", scheme.to_ascii_lowercase()))
+    }
 }
 
 /// The schemes a remote catalog may name by default: the object stores Krishiv reads.
@@ -102,6 +112,17 @@ impl RemoteLocationPolicy {
 }
 
 impl LocationPolicy for RemoteLocationPolicy {
+    fn check_scheme(&self, scheme: &str) -> Result<(), LocationRule> {
+        let scheme = scheme.to_ascii_lowercase();
+        if scheme == "file" {
+            return Err(LocationRule::FileFromRemoteCatalog);
+        }
+        if !self.schemes.contains(&scheme) {
+            return Err(LocationRule::SchemeNotAllowed);
+        }
+        Ok(())
+    }
+
     fn check(&self, location: &str) -> Result<(), LocationRule> {
         if location.trim().is_empty() {
             return Err(LocationRule::Empty);
@@ -159,21 +180,41 @@ pub fn check_location(
     location: &str,
     policy: &dyn LocationPolicy,
 ) -> Result<(), KrishivError> {
-    policy.check(location).map_err(|rule| {
-        tracing::warn!(
-            target: "krishiv::catalog",
-            catalog,
-            table = relation_name,
-            rule = rule.name(),
-            "a catalog returned a location Krishiv refuses"
-        );
-        KrishivCatalogLocationRefused {
-            catalog: format!("`{}`", catalog.replace('`', "``")),
-            relation_name: relation_name.to_owned(),
-            rule: rule.name().to_owned(),
-        }
-        .into()
-    })
+    policy
+        .check(location)
+        .map_err(|rule| refused(catalog, relation_name, rule))
+}
+
+/// As [`check_location`], for a bare scheme (an Iceberg storage-credential prefix such as `s3`;
+/// [`LocationPolicy::check_scheme`]).
+///
+/// # Errors
+/// `KRISHIV_CATALOG_LOCATION_REFUSED`, as [`check_location`].
+pub fn check_scheme(
+    catalog: &str,
+    relation_name: &str,
+    scheme: &str,
+    policy: &dyn LocationPolicy,
+) -> Result<(), KrishivError> {
+    policy
+        .check_scheme(scheme)
+        .map_err(|rule| refused(catalog, relation_name, rule))
+}
+
+fn refused(catalog: &str, relation_name: &str, rule: LocationRule) -> KrishivError {
+    tracing::warn!(
+        target: "krishiv::catalog",
+        catalog,
+        table = relation_name,
+        rule = rule.name(),
+        "a catalog returned a location Krishiv refuses"
+    );
+    KrishivCatalogLocationRefused {
+        catalog: format!("`{}`", catalog.replace('`', "``")),
+        relation_name: relation_name.to_owned(),
+        rule: rule.name().to_owned(),
+    }
+    .into()
 }
 
 #[cfg(test)]
@@ -244,6 +285,18 @@ mod tests {
     #[test]
     fn a_dot_inside_a_name_is_not_an_escape() {
         assert_eq!(rule("s3://bucket/a..b/c...d/.hidden"), Ok(()));
+    }
+
+    #[test]
+    fn a_bare_scheme_is_checked_against_the_allowed_schemes() {
+        let p = RemoteLocationPolicy::default();
+        assert_eq!(p.check_scheme("S3"), Ok(()));
+        assert_eq!(p.check_scheme("abfss"), Ok(()));
+        assert_eq!(
+            p.check_scheme("file"),
+            Err(LocationRule::FileFromRemoteCatalog)
+        );
+        assert_eq!(p.check_scheme("http"), Err(LocationRule::SchemeNotAllowed));
     }
 
     #[test]

@@ -13,7 +13,8 @@
 //! - **Refusals.** A table whose `read-restrictions` impose anything is refused (`KRISHIV_UNSUPPORTED_FEATURE`, T067
 //!   §4.1: Krishiv cannot apply them yet, and the spec says such a reader must fail), as is one whose `config` says
 //!   `scan-planning-mode=server`.
-//! - **Limits.** Each call has one `request_timeout`, a paged listing included (all its pages share it); listings
+//! - **Limits.** Each call has one `request_timeout`, the first call's config fetch and every page of a listing
+//!   included; listings
 //!   stop at `max_pages` and `max_list_entries` and refuse a page token the server repeats or one past 4 KiB.
 //! - **Names.** An empty, `.` or `..` namespace level or table name is refused before a URL is built, and any path
 //!   the URL parser would rewrite is refused (it would address another resource).
@@ -44,7 +45,7 @@ use super::encode::{
 use super::error::{RestError, RestLimit, quoted};
 use super::transport::{Request, Transport};
 use super::types::{self, CatalogConfig, LoadedTable, Page, StorageCredential, TableIdent};
-use crate::location::{LocationPolicy, check_location};
+use crate::location::{LocationPolicy, check_location, check_scheme};
 
 /// The endpoint `loadCredentials` is advertised as.
 const LOAD_CREDENTIALS: &str = "GET /v1/{prefix}/namespaces/{namespace}/tables/{table}/credentials";
@@ -75,6 +76,11 @@ pub(crate) fn join(base: &Url, segments: &[&str]) -> Result<Url, RestError> {
     }
     Ok(url)
 }
+
+/// The 404 types that mean a namespace does not exist.
+const NO_SUCH_NAMESPACE: &[&str] = &["NoSuchNamespaceException"];
+/// The 404 types that mean a table (or its namespace) does not exist.
+const NO_SUCH_TABLE: &[&str] = &["NoSuchTableException", "NoSuchNamespaceException"];
 
 /// The longest `next-page-token` accepted; a token is an opaque cursor, not a payload.
 const MAX_PAGE_TOKEN_BYTES: usize = 4096;
@@ -110,7 +116,7 @@ fn is_bare_scheme(prefix: &str) -> bool {
 }
 
 /// Checks a storage-credential prefix: a full URL or bucket prefix like any location, a bare scheme prefix by
-/// whether the policy allows that scheme (checked on a placeholder location of that scheme).
+/// whether the policy allows that scheme ([`LocationPolicy::check_scheme`]).
 fn check_prefix(
     catalog: &str,
     what: &str,
@@ -118,8 +124,7 @@ fn check_prefix(
     policy: &dyn LocationPolicy,
 ) -> Result<(), KrishivError> {
     if is_bare_scheme(prefix) {
-        let probe = format!("{}://scheme-prefix/", prefix.to_ascii_lowercase());
-        check_location(catalog, what, &probe, policy)
+        check_scheme(catalog, what, prefix, policy)
     } else {
         check_location(catalog, what, prefix, policy)
     }
@@ -221,13 +226,15 @@ impl RestClient {
     }
 
     /// One GET within `deadline`: a token, the request, one retry after a 401 when the token can be renewed.
-    /// `Ok(None)` is a 404 whose `ErrorModel` says the namespace, table or view does not exist; any other 404 (a
-    /// proxy, a wrong prefix) is an error.
+    /// `Ok(None)` is a 404 whose `ErrorModel` type is one of `absent` (the `NoSuch*` answers that fit this call);
+    /// any other 404 (a proxy, a wrong prefix, an HTML page) is an error. Stricter than Java, whose handlers read
+    /// every 404 of a table call as "no such table".
     fn get(
         &self,
         url: &Url,
         headers: &[(&'static str, String)],
         deadline: Instant,
+        absent: &[&str],
     ) -> Result<Option<Value>, RestError> {
         let mut retried = false;
         loop {
@@ -247,7 +254,7 @@ impl RestClient {
                 }
                 404 if types::error_model(&response.body)
                     .0
-                    .is_some_and(|k| k.starts_with("NoSuch")) =>
+                    .is_some_and(|k| absent.contains(&k.as_str())) =>
                 {
                     Ok(None)
                 }
@@ -266,7 +273,7 @@ impl RestClient {
     }
 
     /// The server's configuration, fetched on first use.
-    fn server(&self) -> Result<Arc<Server>, KrishivError> {
+    fn server(&self, deadline: Instant) -> Result<Arc<Server>, KrishivError> {
         let slot = || {
             self.server
                 .lock()
@@ -284,7 +291,7 @@ impl RestClient {
                 url.query_pairs_mut().append_pair("warehouse", w);
             }
             let value = self
-                .get(&url, &[], self.deadline())?
+                .get(&url, &[], deadline, &[])?
                 .ok_or(RestError::Status {
                     status: 404,
                     kind: Some("NoSuchWarehouseException".to_owned()),
@@ -331,7 +338,7 @@ impl RestClient {
     /// # Errors
     /// The `/v1/config` call failed.
     pub fn catalog_config(&self) -> Result<CatalogConfig, KrishivError> {
-        Ok(self.server()?.config.clone())
+        Ok(self.server(self.deadline())?.config.clone())
     }
 
     fn url(&self, server: &Server, tail: &[&str]) -> Result<Url, RestError> {
@@ -348,10 +355,9 @@ impl RestClient {
         &self,
         base: &Url,
         parse: impl Fn(Value) -> Result<Page<T>, RestError>,
+        deadline: Instant,
     ) -> Result<Option<Vec<T>>, RestError> {
         let limits = &self.config.limits;
-        // One deadline for the whole listing, so many fast pages cannot hold a call longer than one request.
-        let deadline = self.deadline();
         let mut out = Vec::new();
         let mut token: Option<String> = None;
         let mut seen = HashSet::new();
@@ -360,7 +366,7 @@ impl RestClient {
             if let Some(t) = &token {
                 url.query_pairs_mut().append_pair("pageToken", t);
             }
-            let Some(value) = self.get(&url, &[], deadline)? else {
+            let Some(value) = self.get(&url, &[], deadline, NO_SUCH_NAMESPACE)? else {
                 return if token.is_none() {
                     Ok(None)
                 } else {
@@ -403,7 +409,9 @@ impl RestClient {
         &self,
         parent: &[String],
     ) -> Result<Option<Vec<Vec<String>>>, KrishivError> {
-        let server = self.server()?;
+        // One deadline for the whole call: the config fetch on first use, every page, the token.
+        let deadline = self.deadline();
+        let server = self.server(deadline)?;
         let what = relation(parent, None);
         let run = || -> Result<Option<Vec<Vec<String>>>, RestError> {
             check_names(parent, None)?;
@@ -413,7 +421,7 @@ impl RestClient {
                     namespace_query(parent, &server.separator).map_err(RestError::Protocol)?;
                 url.query_pairs_mut().append_pair("parent", &value);
             }
-            self.pages(&url, types::namespaces_page)
+            self.pages(&url, types::namespaces_page, deadline)
         };
         run().map_err(self.fail(&what))
     }
@@ -426,13 +434,15 @@ impl RestClient {
         &self,
         namespace: &[String],
     ) -> Result<Option<Vec<TableIdent>>, KrishivError> {
-        let server = self.server()?;
+        // One deadline for the whole call: the config fetch on first use, every page, the token.
+        let deadline = self.deadline();
+        let server = self.server(deadline)?;
         let what = relation(namespace, None);
         let run = || -> Result<Option<Vec<TableIdent>>, RestError> {
             check_namespace(namespace, None)?;
             let ns = namespace_path(namespace, &server.separator);
             let url = self.url(&server, &["namespaces", &ns, "tables"])?;
-            self.pages(&url, types::tables_page)
+            self.pages(&url, types::tables_page, deadline)
         };
         run().map_err(self.fail(&what))
     }
@@ -448,7 +458,9 @@ impl RestClient {
         namespace: &[String],
         table: &str,
     ) -> Result<Option<LoadedTable>, KrishivError> {
-        let server = self.server()?;
+        // One deadline for the whole call: the config fetch on first use, every page, the token.
+        let deadline = self.deadline();
+        let server = self.server(deadline)?;
         let what = relation(namespace, Some(table));
         let run = || -> Result<Option<LoadedTable>, RestError> {
             check_namespace(namespace, Some(table))?;
@@ -463,7 +475,7 @@ impl RestClient {
             } else {
                 Vec::new()
             };
-            self.get(&url, &headers, self.deadline())?
+            self.get(&url, &headers, deadline, NO_SUCH_TABLE)?
                 .map(LoadedTable::from_json)
                 .transpose()
         };
@@ -513,7 +525,9 @@ impl RestClient {
         namespace: &[String],
         table: &str,
     ) -> Result<Option<Vec<StorageCredential>>, KrishivError> {
-        let server = self.server()?;
+        // One deadline for the whole call: the config fetch on first use, every page, the token.
+        let deadline = self.deadline();
+        let server = self.server(deadline)?;
         let what = relation(namespace, Some(table));
         if !server.config.supports(LOAD_CREDENTIALS) {
             return Err(KrishivUnsupportedFeature {
@@ -532,7 +546,7 @@ impl RestClient {
                 &server,
                 &["namespaces", &ns, "tables", &name, "credentials"],
             )?;
-            self.get(&url, &[], self.deadline())?
+            self.get(&url, &[], deadline, NO_SUCH_TABLE)?
                 .map(types::credentials)
                 .transpose()
         };
