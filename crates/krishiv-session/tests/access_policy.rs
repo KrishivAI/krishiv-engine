@@ -767,6 +767,8 @@ fn a_directory_swapped_during_the_write_is_denied_and_cleaned_up() {
     };
     let policy = PathPrefixPolicy::new([&root], Arc::new(AllowAll)).unwrap();
     let s = session(Arc::new(policy));
+    let counts = Arc::new(krishiv_session::auth::DeniedCounts::new());
+    s.count_denials(Arc::clone(&counts), krishiv_session::auth::Surface::Connect);
     let df = block_on(s.sql("SELECT id FROM range(0, 20000, 1, 1)")).unwrap();
     let result = block_on(
         df.write()
@@ -778,6 +780,9 @@ fn a_directory_swapped_during_the_write_is_denied_and_cleaned_up() {
         "the swap happened during the write"
     );
     assert_eq!(class(result), DENIED);
+    // One refusal, one denial counted: the error path does not ask about an audited denial again.
+    let denied: u64 = counts.counts().iter().map(|c| c.count).sum();
+    assert_eq!(denied, 1);
     assert_eq!(tree(&outside), before, "nothing changed outside the root");
     // Files written before the swap are in the renamed directory, inside
     // the root; the link now at `out` cannot be followed to remove them.
@@ -2010,12 +2015,15 @@ fn browse_on_a_view_shows_its_schema_not_its_text_or_rows() {
     ] {
         block_on(async { s.sql(sql).await?.collect().await }).unwrap();
     }
-    // Exactly the schema: names and types (comment empty, as in Spark 4.2.0's
-    // `view-schema-evolution.sql.out`), no row carrying the view's text or its literal.
+    // Exactly the schema: names and types (comment NULL: the golden file `view-schema-evolution.sql.out` prints it empty
+    // only because Spark's DESCRIBE text formatting does), no row carrying the view's text or its literal.
     let row = |c: &[&str]| c.iter().map(|v| (*v).to_owned()).collect::<Vec<_>>();
     assert_eq!(
         cells(&s, "DESCRIBE TABLE pv"),
-        [row(&["a", "int", ""]), row(&["secret_literal", "int", ""])]
+        [
+            row(&["a", "int", "NULL"]),
+            row(&["secret_literal", "int", "NULL"])
+        ]
     );
     assert_eq!(
         cells(&s, "SHOW COLUMNS IN pv"),

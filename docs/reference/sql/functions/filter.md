@@ -35,7 +35,7 @@ filter(expr, func)
 ```sql
 -- filter, example 2
 > SELECT filter(array(0, 2, 3), (x, i) -> x > i);
-Error: INVALID_LAMBDA_FUNCTION_CALL.NUM_ARGS_MISMATCH
+[2,3]
 ```
 
 ```sql
