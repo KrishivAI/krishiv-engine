@@ -265,6 +265,16 @@ impl DeltaEngine {
         &self.shared.root
     }
 
+    /// The parse limits.
+    pub(crate) fn limits(&self) -> &DeltaLimits {
+        &self.shared.limits
+    }
+
+    /// Completes once this engine's cancellation fired.
+    pub(crate) async fn cancelled(&self) {
+        self.shared.cancel.cancelled().await;
+    }
+
     /// The query's I/O.
     #[must_use]
     pub fn io(&self) -> &IoContext {
