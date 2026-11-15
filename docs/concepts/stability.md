@@ -36,5 +36,4 @@ Krishiv follows [semantic versioning](https://semver.org). While the major versi
 ## Checks
 
 - `public-api` (nightly): the snapshot diff above.
-- `semver-checks` (nightly): `cargo-semver-checks` against the last released version. It is **non-blocking**
-  until the 0.2 release exists to compare against, and **blocking** after that.
+- `semver-checks` (nightly): `cargo-semver-checks` against the last released version.
