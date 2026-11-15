@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Order-sensitive aggregates (`first`, `last`, the ties of `max_by` and
-//! `min_by`, float `max`/`min` of `0.0` and `-0.0`) across drivers follow the driver-partition order whatever order
-//! the drivers combine in, and whether or not the aggregate spilled: the
-//! answer never depends on memory.
+//! `min_by`, float `max`/`min` of `0.0` and `-0.0`) across drivers follow
+//! the driver-partition order whatever order the drivers combine in, and
+//! whether or not the aggregate spilled: the answer never depends on memory.
 #![cfg(not(loom))]
 #![expect(
     clippy::disallowed_methods,

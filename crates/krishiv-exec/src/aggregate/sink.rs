@@ -1286,8 +1286,8 @@ impl HashAggregate {
             return self.must_free(inner, ctx, 0);
         }
         let tables = &mut inner.tables;
-        // Order-sensitive aggregates merge in driver-partition order (see
-        // [`Run::partition`]), not biggest-first.
+        // Aggregates that observe order ([`observes_order`]) merge in
+        // driver-partition order (see [`Run::partition`]), not biggest-first.
         let ordered = self.core.spec.aggregates.iter().any(observes_order);
         if !ordered
             && inner.merged == 0

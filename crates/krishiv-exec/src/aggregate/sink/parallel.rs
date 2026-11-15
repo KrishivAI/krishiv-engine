@@ -157,7 +157,7 @@ impl HashAggregate {
             }
             let mut tables = std::mem::take(&mut inner.tables);
             // The default path's merge order: the largest table first,
-            // unless an order-sensitive aggregate needs partition order.
+            // unless an aggregate that observes order needs partition order.
             let ordered = self.core.spec.aggregates.iter().any(observes_order);
             if !ordered && let Some(big) = (0..tables.len()).max_by_key(|&i| tables[i].1.len()) {
                 tables.swap(0, big);
