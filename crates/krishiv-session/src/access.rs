@@ -222,9 +222,21 @@ pub(crate) fn audit<T>(
 /// an access check fails closed because it cannot name what a statement
 /// touches (`KRISHIV_UNSUPPORTED_FEATURE`).
 fn log_denial(session: &Session, class: StatementClass, e: &KrishivError) {
+    if e.error_class() == ErrorClass::KrishivInsufficientPermissions
+        && let Some((counts, surface)) = session.state.denials.get()
+        && let Some((_, privilege)) = e
+            .message_parameters()
+            .iter()
+            .find(|(name, _)| *name == "privilege")
+    {
+        counts.record_named(*surface, privilege);
+    }
+    // ADR 0046 §5: the client's own `user_id` is recorded, marked unverified, never used.
+    let client_user_id = session.state.activity.client_user_id();
     tracing::warn!(
         target: "krishiv::audit",
         principal = %session.state.principal.name,
+        client_user_id_unverified = client_user_id.as_deref(),
         statement_class = class.name(),
         error_class = e.error_class().name(),
         denial = %e,
@@ -233,6 +245,17 @@ fn log_denial(session: &Session, class: StatementClass, e: &KrishivError) {
 }
 
 impl Session {
+    /// Counts every `KRISHIV_INSUFFICIENT_PERMISSIONS` denial of this session into `counts`
+    /// under `surface` from now on (a server's sessions: `krishiv_auth_denied_total`, ADR 0046
+    /// §8). Set once; a second call changes nothing and returns `false`.
+    pub fn count_denials(
+        &self,
+        counts: Arc<crate::auth::DeniedCounts>,
+        surface: crate::auth::Surface,
+    ) -> bool {
+        self.state.denials.set((counts, surface)).is_ok()
+    }
+
     /// Checks what `statement` (of `class`) writes, creates or drops, and
     /// what it reads without a query, before it runs; an `ADMIN` statement
     /// needs `Manage` on the cluster (ADR 0046 §4). Names are located as analysis locates
@@ -335,6 +358,29 @@ impl Session {
             }
         }
         Ok(views)
+    }
+
+    /// Checks that this session's principal holds `privilege` on `securable` under the
+    /// session's policy, outside any statement: what a server checks for a request before it
+    /// runs one (the Connect request classes of ADR 0046 §3b). Fails closed as every check
+    /// does, and a denial writes one `krishiv::audit` record with `class`.
+    ///
+    /// # Errors
+    /// `KRISHIV_INSUFFICIENT_PERMISSIONS` (42501) when the policy does not allow it.
+    pub async fn authorize_privilege(
+        &self,
+        securable: &Securable,
+        privilege: Privilege,
+        class: StatementClass,
+    ) -> Result<(), KrishivError> {
+        let r = authorize(
+            &*self.state.policy,
+            &self.state.principal,
+            securable,
+            privilege,
+        )
+        .await;
+        audit(self, class, r)
     }
 
     /// `privilege` on the permanent view `namespace.name`, besides the table-named check made

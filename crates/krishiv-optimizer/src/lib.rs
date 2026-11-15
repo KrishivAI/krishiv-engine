@@ -91,6 +91,7 @@ use krishiv_plan::{
 };
 use krishiv_udf_sdk::UdfLibrary;
 
+pub use collation_keys::key_if_collated as collation_key;
 pub use group_code::{could_code_group_keys, is_group_code_dictionary};
 pub use group_limit::{
     DEFAULT_WINDOW_GROUP_LIMIT_THRESHOLD, RankLikeFunction, WindowGroupLimit,
@@ -908,7 +909,8 @@ pub(crate) fn groups_by_columns(g: &Grouping) -> bool {
     }
 }
 
-/// Whether every expression of `plan` (subquery plans included) is deterministic: a shared plan that is not is
+/// Whether every expression of `plan` (subquery plans included) and every Python relation UDF it runs is
+/// deterministic: a shared plan that is not is
 /// run again, with its readers, when its output is lost (P2-T198).
 #[must_use]
 pub fn plan_is_deterministic(plan: &Arc<LogicalPlan>) -> bool {

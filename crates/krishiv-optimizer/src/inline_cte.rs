@@ -172,8 +172,8 @@ fn has_outer(plan: &Arc<LogicalPlan>) -> bool {
     found
 }
 
-/// Whether every expression of `plan` (subquery plans included) is
-/// deterministic.
+/// Whether every expression of `plan` (subquery plans included) and every
+/// Python relation UDF it runs is deterministic.
 pub(crate) fn deterministic(plan: &Arc<LogicalPlan>) -> bool {
     let mut seen = HashSet::new();
     let mut stack = vec![Arc::clone(plan)];
@@ -185,6 +185,7 @@ pub(crate) fn deterministic(plan: &Arc<LogicalPlan>) -> bool {
         if !seen.insert(Arc::as_ptr(&p)) {
             continue;
         }
+        ok &= krishiv_plan::python_relation_is_deterministic(&p.node);
         p.for_each_expr(&mut |e| ok &= is_deterministic(e));
         p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
     }

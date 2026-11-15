@@ -54,7 +54,7 @@ use arrow_array::{Array, ArrayRef, RecordBatch, RecordBatchOptions};
 use arrow_schema::{DataType as ArrowType, Field, Schema, SchemaRef};
 use futures::future::BoxFuture;
 use futures::task::noop_waker_ref;
-use krishiv_common::error::KrishivError;
+use krishiv_common::error::{KrishivError, KrishivUdfNotAvailable};
 use krishiv_memory::{Reservation, SpillScope};
 use krishiv_plan::PythonEvalType;
 use krishiv_types::DataType;
@@ -95,6 +95,24 @@ pub trait UdfRuntime: Send + Sync + fmt::Debug {
     /// `KRISHIV_UDF_NOT_AVAILABLE` when this runtime has no such
     /// `(name, version)`; any other error fails the query.
     fn prepare(&self, spec: &UdfCallSpec) -> Result<Arc<dyn PreparedUdf>>;
+
+    /// The relation call site of `spec` (design P3-T085 §3.2): map,
+    /// grouped, cogrouped and aggregate kinds. The default has none.
+    ///
+    /// # Errors
+    /// `KRISHIV_UDF_NOT_AVAILABLE` when this runtime has no such
+    /// `(name, version)` or runs no relation kind; any other error fails the
+    /// query.
+    fn prepare_relation(
+        &self,
+        spec: &crate::python_relation::RelationCallSpec,
+    ) -> Result<Arc<dyn crate::python_relation::PreparedRelationUdf>> {
+        Err(KrishivUdfNotAvailable {
+            name: spec.name.clone(),
+            version: spec.version.to_string(),
+        }
+        .into())
+    }
 }
 
 /// One prepared call site.

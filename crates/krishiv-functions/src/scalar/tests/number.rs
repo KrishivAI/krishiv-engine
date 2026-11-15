@@ -502,3 +502,48 @@ fn format_number_int_values_and_null_formats() {
         super::owned(&[None])
     );
 }
+
+/// SQL-6: `to_char` and `to_varchar` over a binary (Spark 4.2.0: `hex` upper case, `base64`, `utf-8`).
+#[test]
+fn to_char_of_a_binary_by_hex_base64_and_utf8() {
+    use arrow_array::BinaryArray;
+    let data: ArrayRef = Arc::new(BinaryArray::from(vec![
+        Some(&b"Spark SQL"[..]),
+        Some(&b"abc"[..]),
+        None,
+    ]));
+    let run = |name: &str, format: &str| -> Vec<Option<String>> {
+        let fmt: ArrayRef = Arc::new(StringArray::from(vec![Some(format)]));
+        let f = bind_scalar(
+            name,
+            &[
+                BindArg::Column {
+                    ty: data.data_type().clone(),
+                    nullable: true,
+                },
+                BindArg::Literal(Arc::clone(&fmt)),
+            ],
+            &BindOptions::new(),
+        )
+        .unwrap();
+        let out = f.invoke(&[col(&data), lit(&fmt)], 3).unwrap();
+        out.as_string::<i32>()
+            .iter()
+            .map(|s| s.map(str::to_owned))
+            .collect()
+    };
+    assert_eq!(
+        run("to_char", "hex"),
+        [
+            Some("537061726B2053514C".to_owned()),
+            Some("616263".to_owned()),
+            None
+        ]
+    );
+    assert_eq!(run("to_varchar", " HEX ")[1].as_deref(), Some("616263"));
+    assert_eq!(
+        run("to_char", "utf-8"),
+        [Some("Spark SQL".to_owned()), Some("abc".to_owned()), None]
+    );
+    assert_eq!(run("to_char", "base64")[1].as_deref(), Some("YWJj"));
+}

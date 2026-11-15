@@ -505,13 +505,14 @@ impl Walker<'_> {
             } => {
                 let mut out = self.plan(input, offset)?.to_vec();
                 let a = self.value(arg, offset)?;
-                // Every built-in generator: its columns come from the argument. (PR-26a or PR-26c adds the
-                // Python UDTF's row.)
+                // Every generator's columns come from its argument. A Python UDTF's argument is the call
+                // itself, already `opaque` (with its warning) from its arguments.
                 let transform = match kind {
                     GeneratorKind::Explode
                     | GeneratorKind::PosExplode
                     | GeneratorKind::Inline
-                    | GeneratorKind::VariantExplode => a.transform.max(Transform::Generated),
+                    | GeneratorKind::VariantExplode
+                    | GeneratorKind::PythonUdtf => a.transform.max(Transform::Generated),
                 };
                 if let Some(id) = generator_arg(arg) {
                     let id = shifted(id, offset)?;
@@ -552,6 +553,70 @@ impl Walker<'_> {
                     .collect::<Result<_, _>>()
                     .map(Rule::New)
             }
+            // The Python UDF relations (P3-T085): the function sees whole rows and yields any rows, so every
+            // output column is `opaque` over every column it was given; grouping keys are `group_by` filters.
+            PlanNode::MapPartitions {
+                input,
+                udf: _,
+                output,
+                barrier: _,
+            } => {
+                let rows = self.plan(input, offset)?;
+                let value = self.opaque(rows.iter().map(|(_, i)| i));
+                self.opaque_columns(output, &value, offset)
+            }
+            PlanNode::GroupMap {
+                input,
+                keys,
+                udf: _,
+                output,
+            } => {
+                let rows = self.plan(input, offset)?;
+                for k in keys {
+                    self.filter_by(FilterKind::GroupBy, k, offset)?;
+                }
+                let value = self.opaque(rows.iter().map(|(_, i)| i));
+                self.opaque_columns(output, &value, offset)
+            }
+            PlanNode::CoGroupMap {
+                left,
+                right,
+                left_keys,
+                right_keys,
+                udf: _,
+                output,
+            } => {
+                let l = self.plan(left, offset)?;
+                let r = self.plan(right, offset)?;
+                for k in left_keys.iter().chain(right_keys) {
+                    self.filter_by(FilterKind::GroupBy, k, offset)?;
+                }
+                let value = self.opaque(l.iter().chain(r.iter()).map(|(_, i)| i));
+                self.opaque_columns(output, &value, offset)
+            }
+            PlanNode::PythonTableFunction {
+                args,
+                table_arg,
+                udf: _,
+                output,
+            } => {
+                let mut values = Vec::with_capacity(args.len());
+                for a in args {
+                    values.push(self.value(a, offset)?);
+                }
+                if let Some(t) = table_arg {
+                    let rows = self.plan(&t.input, offset)?;
+                    values.extend(rows.iter().map(|(_, i)| Arc::clone(i)));
+                    for e in &t.partition_by {
+                        self.filter_by(FilterKind::Window, e, offset)?;
+                    }
+                    for o in &t.order_by {
+                        self.filter_by(FilterKind::Window, &o.expr, offset)?;
+                    }
+                }
+                let value = self.opaque(values.iter());
+                self.opaque_columns(output, &value, offset)
+            }
             PlanNode::Read(_)
             | PlanNode::Sql { .. }
             | PlanNode::WithColumns { .. }
@@ -564,6 +629,33 @@ impl Walker<'_> {
             | PlanNode::TableFunction { .. }
             | PlanNode::Distinct { .. } => Err(internal("an unresolved relation")),
         }
+    }
+
+    /// The value of a user-defined function over `inputs`: their sources, `opaque` (and its warning).
+    fn opaque<'a>(&mut self, inputs: impl Iterator<Item = &'a Info>) -> Info {
+        self.warnings.insert(LineageWarning::LineageOpaqueUdf);
+        let mut value = literal();
+        for i in inputs {
+            value = merge(&value, i);
+        }
+        Arc::new(ColInfo {
+            sources: value.sources.clone(),
+            transform: value.transform.max(Transform::Opaque),
+        })
+    }
+
+    /// Every column of `output` with the value `value`.
+    fn opaque_columns(
+        &self,
+        output: &[crate::BoundColumn],
+        value: &Info,
+        offset: u64,
+    ) -> Result<Rule, KrishivError> {
+        output
+            .iter()
+            .map(|c| Ok((shifted(c.id, offset)?, Arc::clone(value))))
+            .collect::<Result<_, _>>()
+            .map(Rule::New)
     }
 
     /// A join: both sides pass through (the left only for semi and anti joins, plus the `exists` column of

@@ -190,3 +190,146 @@ fn nodes_an_analyzed_plan_never_holds_are_internal_errors() {
         ErrorClass::InternalError
     );
 }
+
+/// A Python UDF of `eval_type` (P3-T085 relations).
+fn python_udf(eval_type: crate::PythonEvalType) -> crate::PythonUdfRef {
+    crate::PythonUdfRef {
+        name: "f".to_owned(),
+        version: 1,
+        eval_type,
+        thread_safe: true,
+        deterministic: true,
+    }
+}
+
+#[test]
+fn python_udf_relations_are_opaque_over_every_input_column() {
+    use crate::analyzer::lineage::{FilterKind, LineageWarning};
+    use crate::{BoundColumn, GeneratorKind, PythonEvalType, TableArg};
+
+    let a = analyze(LogicalPlan::table(["t"]));
+    let column = |b: &BoundColumn| {
+        Arc::new(Expr::new(ExprNode::Resolved(crate::ResolvedExpr::Column(
+            b.clone(),
+        ))))
+    };
+    let x = column(&a.output[0]);
+    let out = |id: u64| BoundColumn {
+        id: crate::AttrId(id),
+        name: format!("o{id}"),
+        data_type: DataType::Long,
+        nullable: true,
+    };
+    let outputs = vec![out(100), out(101)];
+    type Build<'a> = Box<dyn Fn(Arc<LogicalPlan>) -> LogicalPlan + 'a>;
+    let nodes: Vec<(&str, Build<'_>, bool)> = vec![
+        (
+            "map",
+            Box::new(|input| {
+                LogicalPlan::new(PlanNode::MapPartitions {
+                    input,
+                    udf: python_udf(PythonEvalType::MapArrowIter),
+                    output: outputs.clone(),
+                    barrier: false,
+                })
+            }),
+            false,
+        ),
+        (
+            "group map",
+            Box::new(|input| {
+                LogicalPlan::new(PlanNode::GroupMap {
+                    input,
+                    keys: vec![Arc::clone(&x)],
+                    udf: python_udf(PythonEvalType::GroupedMapArrow),
+                    output: outputs.clone(),
+                })
+            }),
+            true,
+        ),
+        (
+            "cogroup map",
+            Box::new(|input| {
+                LogicalPlan::new(PlanNode::CoGroupMap {
+                    left: Arc::clone(&input),
+                    right: input,
+                    left_keys: vec![Arc::clone(&x)],
+                    right_keys: vec![Arc::clone(&x)],
+                    udf: python_udf(PythonEvalType::CogroupedMapArrow),
+                    output: outputs.clone(),
+                })
+            }),
+            true,
+        ),
+        (
+            "table function",
+            Box::new(|input| {
+                LogicalPlan::new(PlanNode::PythonTableFunction {
+                    args: vec![Arc::new(Expr::from(crate::Literal::Integer(1)))],
+                    table_arg: Some(TableArg {
+                        input,
+                        partition_by: vec![Arc::clone(&x)],
+                        order_by: Vec::new(),
+                        single_partition: false,
+                    }),
+                    udf: python_udf(PythonEvalType::ArrowUdtf),
+                    output: outputs.clone(),
+                })
+            }),
+            false,
+        ),
+    ];
+    for (what, build, grouped) in &nodes {
+        let p = AnalyzedPlan {
+            output: outputs.clone(),
+            ..with_root(&a, build)
+        };
+        let l = lineage(&p).unwrap();
+        assert_eq!(l.columns.len(), 2, "{what}");
+        for col in &l.columns {
+            assert_eq!(col.transform, Transform::Opaque, "{what}");
+            assert_eq!(col.sources.len(), 2, "{what}: both of t's columns");
+        }
+        assert!(
+            l.warnings.contains(&LineageWarning::LineageOpaqueUdf),
+            "{what}"
+        );
+        let kinds: Vec<FilterKind> = l.filters.iter().map(|(k, _)| *k).collect();
+        assert_eq!(kinds.contains(&FilterKind::GroupBy), *grouped, "{what}");
+    }
+
+    // A Python UDTF under LATERAL: the call over `x` is the generator's argument.
+    let call = Arc::new(Expr::new(ExprNode::Resolved(
+        crate::ResolvedExpr::Function(crate::ResolvedFunction {
+            id: python_udf(PythonEvalType::ArrowUdtf).function_id(),
+            kind: crate::FunctionKind::Generator,
+            args: vec![Arc::clone(&x)],
+            distinct: false,
+            filter: None,
+            within_group: Vec::new(),
+            data_type: DataType::Long,
+            nullable: true,
+            deterministic: true,
+        }),
+    )));
+    let udtf = with_root(&a, |input| {
+        LogicalPlan::new(PlanNode::Generate {
+            input,
+            kind: GeneratorKind::PythonUdtf,
+            outer: false,
+            arg: call,
+            output: vec![out(102)],
+            names: vec!["o102".to_owned()],
+            qualifier: None,
+        })
+    });
+    let p = AnalyzedPlan {
+        output: [a.output, vec![out(102)]].concat(),
+        ..udtf
+    };
+    let l = lineage(&p).unwrap();
+    let generated = &l.columns[2];
+    assert_eq!(generated.transform, Transform::Opaque);
+    assert_eq!(generated.sources.len(), 1, "the UDTF's argument x");
+    assert!(l.warnings.contains(&LineageWarning::LineageOpaqueUdf));
+}
