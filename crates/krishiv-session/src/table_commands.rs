@@ -843,6 +843,8 @@ impl Session {
         } else {
             columns
         };
+        // A view with no `path` has no files to list: it stays an empty relation of its declared columns.
+        let has_files = !paths.is_empty();
         let source = krishiv_plan::ReadSource::Files {
             format: provider,
             paths,
@@ -862,9 +864,9 @@ impl Session {
                 // A view reads its files as a read by path does, partition directories included, so no registered
                 // partition set stands in for the listing (an empty one read nothing from a partitioned directory:
                 // RS-8). A declared column list is the schema as given and is not inferred again.
-                known: false,
+                known: !has_files,
                 permanent: false,
-                partitions: None,
+                partitions: (!has_files).then(Default::default),
             },
         );
         // A replaced view must not keep serving the rows of the old one.

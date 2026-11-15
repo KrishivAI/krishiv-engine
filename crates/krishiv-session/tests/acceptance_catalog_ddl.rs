@@ -311,3 +311,22 @@ fn rs_8_a_view_with_declared_columns_over_a_partitioned_directory_reads_every_ro
     // the declared type is the view's type, not the files' (`INT` in the parquet files)
     assert_eq!(rows(&s, "DESCRIBE dv")[0][1], some("bigint"));
 }
+
+#[test]
+fn a_view_without_a_path_stays_an_empty_relation_of_its_declared_columns() {
+    // `CREATE TEMPORARY VIEW zt3(f3 INT) USING parquet` has no files to list or infer from (the Spark join goldens).
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE OR REPLACE TEMPORARY VIEW zt3 (f3 INT) USING parquet",
+    );
+    assert_eq!(rows(&s, "SELECT * FROM zt3").len(), 0);
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT * FROM (VALUES (53)) AS v(f2) LEFT JOIN zt3 ON f2 = f3"
+        ),
+        [[Some("53".to_owned()), None]]
+    );
+}
