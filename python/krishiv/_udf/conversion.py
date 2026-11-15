@@ -26,7 +26,7 @@ import functools
 from typing import TYPE_CHECKING, Any, Callable, List, Optional, Sequence, Union, overload
 
 from krishiv._udf import types as pyspark  # krishiv: `pyspark._NoValue`
-from krishiv.errors import PySparkTypeError, PySparkValueError
+from krishiv._udf._host import PySparkTypeError, PySparkValueError
 from krishiv._udf.pandas_types import (
     _dedup_names,
     _deduplicate_field_names,
@@ -302,7 +302,7 @@ class PandasToArrowConversion:
         import pyarrow as pa
         import pandas as pd
 
-        from krishiv.errors import PySparkTypeError, PySparkValueError
+        from krishiv._udf._host import PySparkTypeError, PySparkValueError
         from krishiv._udf.pandas_types import to_arrow_type, _create_converter_from_pandas
 
         # Handle empty schema (0 columns)
