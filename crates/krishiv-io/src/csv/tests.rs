@@ -85,14 +85,23 @@ fn options_under(map: &Value, conf: &Value) -> FormatOptions {
             );
         }
     }
-    // As a worker parses them: the driver's conf fallbacks carried as
-    // options, parsed against an empty configuration.
-    let carried = CsvFormat.options().with_conf_fallbacks(&user, &config);
-    CsvFormat
-        .options()
+    // As a worker parses them (the driver's conf fallbacks carried as
+    // options, parsed against an empty configuration); the driver, parsing
+    // against the session, must read the same CSV options.
+    let schema = CsvFormat.options();
+    let carried = schema.with_conf_fallbacks(&user, &config);
+    let worker = schema
         .parse(&carried, &Config::new())
         .expect("options parse")
-        .0
+        .0;
+    let driver = schema.parse(&user, &config).expect("options parse").0;
+    let csv = |o: &FormatOptions| CsvOptions::new(o, false).map(|c| format!("{c:?}")).ok();
+    assert_eq!(
+        csv(&driver),
+        csv(&worker),
+        "driver and worker options differ"
+    );
+    worker
 }
 
 /// An arrow type from a Spark DDL type name.
@@ -1615,4 +1624,10 @@ fn column_pruning_conf_counts_only_without_multi_line() {
         ));
         assert!(!pruning(&[("columnPruning", "false")], carried));
     }
+    // Known divergence: the conf key given as a read option is applied
+    // (Spark ignores a conf key among read options).
+    assert!(!pruning(
+        &[("spark.sql.csv.parser.columnPruning.enabled", "false")],
+        false
+    ));
 }
