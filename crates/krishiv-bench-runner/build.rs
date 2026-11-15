@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Records the cargo profile and the `target-cpu` this runner is built with, so a bench result
-//! can say what it measured (`krishiv-bench-runner --build-info`).
+//! Records the cargo profile, the `target-cpu` and the x86-64 branch alignment this runner is
+//! built with, so a bench result can say what it measured (`krishiv-bench-runner --build-info`).
 
 use std::path::Path;
 
@@ -29,6 +29,24 @@ fn main() {
         "cargo:rustc-env=KRISHIV_BUILD_TARGET_CPU={}",
         target_cpu(&flags)
     );
+    println!(
+        "cargo:rustc-env=KRISHIV_BUILD_BRANCH_ALIGN={}",
+        branch_align(&flags)
+    );
+}
+
+/// `32B` when the rustc flags pass LLVM `-x86-branches-within-32B-boundaries` (no jump crosses
+/// or ends on a 32-byte boundary, so builds of one commit stop differing by code placement on
+/// cores with the JCC erratum), else `off`.
+fn branch_align(encoded_flags: &str) -> &'static str {
+    if encoded_flags
+        .split('\u{1f}')
+        .any(|a| a.ends_with("-x86-branches-within-32B-boundaries"))
+    {
+        "32B"
+    } else {
+        "off"
+    }
 }
 
 /// The last `target-cpu` named in `\x1f`-separated rustc flags, or `default`.

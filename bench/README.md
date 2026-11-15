@@ -71,8 +71,10 @@ returns all rows, `teardown()`; optional `begin_measure()/end_measure()` bracket
 - `krishiv`: drives `krishiv-bench-runner` (`dist`-profile build of `krishiv-session` like the shipped artifacts and DuckDB's optimized build, bench-only crate, not the public CLI) over a stdin/stdout
   line protocol until the Python facade can execute queries. Tables are Parquet views registered at `setup()`; `timed_run` reports
   runner-side seconds, `run` dumps the result to Parquet (outside the timed region) and returns the rows for correctness checks.
-  Build (always `dist` at the shipped x86-64-v3 level; the runner refuses to start on a CPU without it):
-  `RUSTFLAGS='-C target-cpu=x86-64-v3' cargo build --profile dist -p krishiv-bench-runner` (on arm64: `-C target-cpu=neoverse-n1`). The result's engine `config` records `build_profile` and `target_cpu` (from `krishiv-bench-runner --build-info`). Override the path with `$KRISHIV_BENCH_RUNNER`.
+  Build (always `dist` at the shipped x86-64-v3 level; the runner refuses to start on a CPU without it), with branch alignment on x86-64:
+  `RUSTFLAGS='-C target-cpu=x86-64-v3 -C llvm-args=-x86-branches-within-32B-boundaries' cargo build --profile dist -p krishiv-bench-runner` (on arm64: `-C target-cpu=neoverse-n1`, no alignment flag).
+  The alignment flag keeps jumps off 32-byte boundaries: on Intel cores with the JCC erratum (the laptop) plain builds of one commit differ by up to 3% on the TPC-H geomean from code placement alone, and two aligned builds agree to 0.01%; elsewhere it is neutral (research `gap-ledger.md` §4 item 11). Shipped binaries do not use it yet.
+  The result's engine `config` records `build_profile`, `target_cpu` and `branch_align` (from `krishiv-bench-runner --build-info`). Override the path with `$KRISHIV_BENCH_RUNNER`.
 - `polars` (lazy `scan_parquet` + `SQLContext`), `datafusion` (datafusion-python, fair spill pool), `spark-local` (Spark 4.2 `local[N]`, AQE on,
   `shuffle.partitions` = cores) and `sail` (pysail Spark Connect server on loopback, pinned pyspark client): used by `reproduce`, hosted by
   `worker.py` (one process session per engine). Versions are pinned in `pyproject.toml`/`uv.lock`; Java 21 must be on `PATH` for Spark.
@@ -261,7 +263,7 @@ Reads `$KRISHIV_DATA/results/*_abba_*.json`; other kinds and unreadable files ar
 
 ## Krishiv vs DuckDB, interleaved ABBA (P2-T142)
 ```bash
-RUSTFLAGS='-C target-cpu=x86-64-v3' cargo build --profile dist -p krishiv-bench-runner
+RUSTFLAGS='-C target-cpu=x86-64-v3 -C llvm-args=-x86-branches-within-32B-boundaries' cargo build --profile dist -p krishiv-bench-runner
 KRISHIV_BENCH_RUNNER=${CARGO_TARGET_DIR:-../target}/dist/krishiv-bench-runner \
   uv run krishiv-bench abba --sf 10 --dataset tpch-duckdb --reps 3 --threads 8 --memory-limit 12g
   uv run krishiv-bench abba --suite clickbench --threads 12   # 43 queries over $KRISHIV_DATA/clickbench/hits.parquet
@@ -352,10 +354,11 @@ profiles maps to a kind other than `other` (the report lists the ones that do no
 Compares two Krishiv builds (for example `main` against a PR branch), or two configs of one build, with the `abba` protocol.
 `--runner PATH` (on `run`, `abba`, `reproduce`) picks the runner binary and wins over `$KRISHIV_BENCH_RUNNER`.
 ```bash
-# build both runners at the shipped x86-64-v3 level (each in its own target dir), then compare; ratio = B / A, below 1 means B is faster
+# build both runners alike, at the shipped x86-64-v3 level with branch alignment (each in its own target dir), then compare;
+# ratio = B / A, below 1 means B is faster. `ab` warns when the two runners' --build-info differ.
 git worktree add ../main-build origin/main && git worktree add ../pr-build my-branch
-(cd ../main-build && RUSTFLAGS="-C target-cpu=x86-64-v3" CARGO_TARGET_DIR=$HOME/target/ab-main cargo build --profile dist -p krishiv-bench-runner)
-(cd ../pr-build   && RUSTFLAGS="-C target-cpu=x86-64-v3" CARGO_TARGET_DIR=$HOME/target/ab-pr cargo build --profile dist -p krishiv-bench-runner)
+(cd ../main-build && RUSTFLAGS="-C target-cpu=x86-64-v3 -C llvm-args=-x86-branches-within-32B-boundaries" CARGO_TARGET_DIR=$HOME/target/ab-main cargo build --profile dist -p krishiv-bench-runner)
+(cd ../pr-build   && RUSTFLAGS="-C target-cpu=x86-64-v3 -C llvm-args=-x86-branches-within-32B-boundaries" CARGO_TARGET_DIR=$HOME/target/ab-pr cargo build --profile dist -p krishiv-bench-runner)
 uv run krishiv-bench ab --suite tpch --sf 10 --dataset tpch-duckdb --reps 3 --queries q01,q03,q09 \
   --a-runner $HOME/target/ab-main/dist/krishiv-bench-runner --a-sha "$(git -C ../main-build rev-parse HEAD)" \
   --b-runner $HOME/target/ab-pr/dist/krishiv-bench-runner   --b-sha "$(git -C ../pr-build rev-parse HEAD)"
