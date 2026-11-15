@@ -20,6 +20,7 @@ use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
 use serde_json::{Value, json};
 use url::Url;
 
+use super::hook_store::HookStore;
 use super::run::{delay, remove_actions};
 use super::winner::FileAction;
 use super::*;
@@ -49,10 +50,16 @@ struct Env {
     dir: PathBuf,
     rt: tokio::runtime::Runtime,
     engine: DeltaEngine,
+    hooks: Arc<HookStore>,
+    token: Arc<CancellationToken>,
 }
 
 impl Env {
     fn new() -> Self {
+        Self::with_limits(DeltaLimits::default())
+    }
+
+    fn with_limits(limits: DeltaLimits) -> Self {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("t");
         copy_dir(&fixture(), &dir);
@@ -63,10 +70,9 @@ impl Env {
             .unwrap();
         let sched = IoScheduler::new(IoConfig::default());
         let id = StoreId::new("file");
-        sched.register_whole_listing_store(
-            id.clone(),
-            Arc::new(krishiv_io::SettledLocalFileSystem::new()),
-        );
+        let hooks = HookStore::new(Arc::new(krishiv_io::SettledLocalFileSystem::new()));
+        sched.register_whole_listing_store(id.clone(), Arc::clone(&hooks) as _);
+        let token = Arc::new(CancellationToken::new());
         let process: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
         sched.attach_memory(&process);
         let pool: &'static LogPool = Box::leak(Box::new(LogPool::new(2)));
@@ -75,8 +81,8 @@ impl Env {
             id,
             Url::from_directory_path(&dir).unwrap(),
             rt.handle().clone(),
-            DeltaLimits::default(),
-            Arc::new(CancellationToken::new()),
+            limits,
+            Arc::clone(&token),
             pool,
         )
         .unwrap();
@@ -85,6 +91,8 @@ impl Env {
             dir,
             rt,
             engine,
+            hooks,
+            token,
         }
     }
 
@@ -223,20 +231,20 @@ fn add_schema() -> delta_kernel::schema::StructType {
 
 /// One added file in partition `p` (the other partition columns NULL).
 fn add(path: &str, p: Option<&str>) -> RecordBatch {
+    add_values(path, &[("p", p), ("n", None), ("d", None), ("ts", None)])
+}
+
+/// One added file with partition values `values`.
+fn add_values(path: &str, values: &[(&str, Option<&str>)]) -> RecordBatch {
     let schema = add_schema();
     let values = MapData::try_new(
         MapType::new(DataType::STRING, DataType::STRING, true),
-        [
-            ("p", p.map(str::to_owned)),
-            ("n", None),
-            ("d", None),
-            ("ts", None),
-        ]
-        .into_iter()
-        .map(|(k, v)| {
+        values.iter().map(|(k, v)| {
             (
-                Scalar::String(k.to_owned()),
-                v.map_or(Scalar::Null(DataType::STRING), Scalar::String),
+                Scalar::String((*k).to_owned()),
+                v.map_or(Scalar::Null(DataType::STRING), |v| {
+                    Scalar::String(v.to_owned())
+                }),
             )
         }),
     )
@@ -253,6 +261,27 @@ fn add(path: &str, p: Option<&str>) -> RecordBatch {
         ]],
     )
     .unwrap()
+}
+
+/// Another writer's blind append in partition `p`, as a commit file's actions.
+fn other_append(path: &str, p: &str) -> Vec<Value> {
+    vec![
+        json!({"commitInfo": {"operation": "WRITE", "isBlindAppend": true}}),
+        json!({"add": {"path": path, "partitionValues": {"p": p, "n": null, "d": null, "ts": null},
+            "size": 1, "modificationTime": 1, "dataChange": true}}),
+    ]
+}
+
+/// The table's own metaData action with `partitionColumns` replaced.
+fn metadata_partitioned_by(columns: &[&str]) -> Value {
+    let mut m = std::fs::read_to_string(fixture().join("_delta_log/00000000000000000000.json"))
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .find(|a| a.get("metaData").is_some())
+        .unwrap();
+    m["metaData"]["partitionColumns"] = json!(columns);
+    m
 }
 
 fn staged(write_id: &str, adds: Vec<RecordBatch>, read_set: ReadSet) -> StagedCommit {
@@ -534,10 +563,10 @@ fn metadata_protocol_and_app_id_winners() {
     assert_eq!(c, ErrorClass::DeltaConcurrentTransaction);
 }
 
-/// The answer to a commit that landed is lost, and a second writer commits before the retry:
-/// the retry finds its own write id and does not append twice.
+/// A statement retried from its old snapshot after its commit landed finds its own write id
+/// among the winners and does not append twice.
 #[test]
-fn delta_commit_response_lost() {
+fn a_retried_commit_finds_its_own_landing() {
     let env = Env::new();
     let s = env.snapshot();
     let first = staged("w", vec![add("w.parquet", Some("x"))], ReadSet::default());
@@ -554,38 +583,6 @@ fn delta_commit_response_lost() {
     let retried = env.commit(&s, first).unwrap();
     assert_eq!((retried.version, retried.found_by_landed_check), (2, true));
     assert_eq!(env.latest(), 3);
-}
-
-/// A loser checks every winner up to the last commit file, not only the first: here the first
-/// winner does not conflict and the second does.
-#[test]
-fn delta_rebuild_at_checked_version() {
-    let env = Env::new();
-    let s = env.snapshot();
-    env.commit(
-        &s,
-        staged("a", vec![add("a.parquet", Some("z"))], ReadSet::default()),
-    )
-    .unwrap();
-    env.commit(
-        &s,
-        staged("b", vec![add("b.parquet", Some("x"))], ReadSet::default()),
-    )
-    .unwrap();
-    let (c, m) = class(env.commit(
-        &s,
-        staged("c", vec![add("c.parquet", Some("q"))], reads_partition("x")),
-    ));
-    assert_eq!(c, ErrorClass::DeltaConcurrentAppendWithPartitionHint, "{m}");
-    assert!(m.contains("committed at version 3"), "{m}");
-    // A loser that does not conflict commits after the last checked version.
-    let ok = env
-        .commit(
-            &s,
-            staged("d", vec![add("d.parquet", Some("q"))], reads_partition("q")),
-        )
-        .unwrap();
-    assert_eq!(ok.version, 4);
 }
 
 #[test]
@@ -609,7 +606,7 @@ fn the_attempt_bound_is_deltas_max_commit_attempts() {
     assert_eq!(c, ErrorClass::DeltaMaxCommitRetriesExceeded, "{m}");
     assert!(m.contains("it has been tried 1 times"), "{m}");
     assert!(m.contains("Commit started at version: 2"), "{m}");
-    assert!(m.contains("Commit failed at version: 3"), "{m}");
+    assert!(m.contains("Commit failed at version: 2"), "{m}");
     assert!(
         m.contains("Number of actions attempted to commit: 2"),
         "{m}"
@@ -649,4 +646,374 @@ fn an_oracle_tables_writer_protocol_is_read_from_its_snapshot() {
     let p = WriteProtocol::of(&env.snapshot());
     assert_eq!((p.min_writer_version, p.invariants_in_use), (2, false));
     assert!(check_write("t", &p).is_ok());
+}
+
+/// The answer to a put that landed is lost, and a second writer commits before the landed
+/// check: the check finds this write's commit and nothing is appended twice
+/// (`delta_commit_response_lost`).
+#[test]
+fn delta_commit_response_lost() {
+    let env = Env::new();
+    let s = env.snapshot();
+    let dir = env.dir.clone();
+    env.hooks
+        .on_put("_delta_log/00000000000000000002.json", true, move || {
+            let text: String = other_append("o.parquet", "y")
+                .iter()
+                .map(|a| format!("{a}\n"))
+                .collect();
+            std::fs::write(dir.join("_delta_log/00000000000000000003.json"), text).unwrap();
+        });
+    let c = env
+        .commit(
+            &s,
+            staged("w", vec![add("w.parquet", Some("x"))], ReadSet::default()),
+        )
+        .unwrap();
+    assert_eq!(
+        (c.version, c.attempts, c.found_by_landed_check),
+        (2, 1, true)
+    );
+    assert_eq!(env.latest(), 3);
+    let ours = env.log(2);
+    assert!(ours.iter().any(|a| a["add"]["path"] == "w.parquet"));
+}
+
+/// A put that fails before writing: the landed check finds nothing and the failure is raised.
+#[test]
+fn a_failed_put_that_did_not_land_is_raised() {
+    let env = Env::new();
+    let s = env.snapshot();
+    env.hooks
+        .on_put("_delta_log/00000000000000000002.json", false, || {});
+    let e = env
+        .commit(
+            &s,
+            staged("w", vec![add("w.parquet", Some("x"))], ReadSet::default()),
+        )
+        .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::TaskWriteFailed, "{e}");
+    assert_eq!(env.latest(), 1);
+}
+
+/// The landed check reads more than one chunk of commits (four under test).
+#[test]
+fn the_landed_check_reads_every_chunk() {
+    let env = Env::new();
+    let s = env.snapshot();
+    for v in 2..=7 {
+        env.write_commit(v, &other_append(&format!("o{v}.parquet"), "y"));
+    }
+    env.hooks
+        .on_put("_delta_log/00000000000000000008.json", true, || {});
+    let c = env
+        .commit(
+            &s,
+            staged("w", vec![add("w.parquet", Some("x"))], ReadSet::default()),
+        )
+        .unwrap();
+    assert_eq!((c.version, c.found_by_landed_check), (8, true));
+    assert_eq!(env.latest(), 8);
+}
+
+/// A writer that commits after the loser read the winners, before its rebuild: the rebuild is
+/// at the last checked version, so that commit is checked on the next round
+/// (`delta_rebuild_at_checked_version`).
+#[test]
+fn delta_rebuild_at_checked_version() {
+    let env = Env::new();
+    let s = env.snapshot();
+    env.commit(
+        &s,
+        staged("a", vec![add("a.parquet", Some("z"))], ReadSet::default()),
+    )
+    .unwrap();
+    let dir = env.dir.clone();
+    env.hooks
+        .on_missing_head("_delta_log/00000000000000000003.json", move || {
+            let text: String = other_append("late.parquet", "x")
+                .iter()
+                .map(|a| format!("{a}\n"))
+                .collect();
+            std::fs::write(dir.join("_delta_log/00000000000000000003.json"), text).unwrap();
+        });
+    let (c, m) = class(env.commit(
+        &s,
+        staged("c", vec![add("c.parquet", Some("q"))], reads_partition("x")),
+    ));
+    assert_eq!(c, ErrorClass::DeltaConcurrentAppendWithPartitionHint, "{m}");
+    assert!(m.contains("committed at version 3"), "{m}");
+    assert_eq!(env.latest(), 3);
+}
+
+/// Every winner up to the last commit file is checked, not only the first.
+#[test]
+fn every_winner_is_checked() {
+    let env = Env::new();
+    let s = env.snapshot();
+    env.write_commit(2, &other_append("a.parquet", "z"));
+    env.write_commit(3, &other_append("b.parquet", "x"));
+    let (c, m) = class(env.commit(
+        &s,
+        staged("c", vec![add("c.parquet", Some("q"))], reads_partition("x")),
+    ));
+    assert_eq!(c, ErrorClass::DeltaConcurrentAppendWithPartitionHint, "{m}");
+    assert!(m.contains("committed at version 3"), "{m}");
+    let ok = env
+        .commit(
+            &s,
+            staged("d", vec![add("d.parquet", Some("q"))], reads_partition("q")),
+        )
+        .unwrap();
+    assert_eq!(ok.version, 4);
+}
+
+#[test]
+fn the_time_bound_is_checked_after_a_lost_race() {
+    let env = Env::new();
+    let s = env.snapshot();
+    env.write_commit(2, &other_append("a.parquet", "z"));
+    let limits = RetryLimits {
+        timeout: std::time::Duration::ZERO,
+        ..fast()
+    };
+    let (c, m) = class(env.commit_with(
+        &s,
+        staged("b", vec![add("b.parquet", Some("z"))], ReadSet::default()),
+        limits,
+    ));
+    assert_eq!(c, ErrorClass::DeltaMaxCommitRetriesExceeded, "{m}");
+    assert!(m.contains("tried 1 times"), "{m}");
+}
+
+#[test]
+fn a_cancelled_query_stops_waiting_between_attempts() {
+    let env = Env::new();
+    let s = env.snapshot();
+    env.write_commit(2, &other_append("a.parquet", "z"));
+    let token = Arc::clone(&env.token);
+    let cancel = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        token.cancel();
+    });
+    let limits = RetryLimits {
+        backoff_min: std::time::Duration::from_secs(60),
+        backoff_max: std::time::Duration::from_secs(60),
+        ..fast()
+    };
+    let started = std::time::Instant::now();
+    let (c, _) = class(env.commit_with(
+        &s,
+        staged("b", vec![add("b.parquet", Some("z"))], ReadSet::default()),
+        limits,
+    ));
+    cancel.join().unwrap();
+    assert_eq!(c, ErrorClass::OperationCanceled);
+    assert!(started.elapsed() < std::time::Duration::from_secs(20));
+    assert_eq!(env.latest(), 2);
+}
+
+/// Hints list the partition columns in the table's `partitionColumns` order, not schema order.
+#[test]
+fn hints_follow_the_partition_column_order() {
+    let env = Env::new();
+    env.write_commit(
+        2,
+        &[
+            json!({"commitInfo": {"operation": "REPLACE"}}),
+            metadata_partitioned_by(&["n", "p", "d", "ts"]),
+        ],
+    );
+    let s = env.snapshot();
+    env.commit(
+        &s,
+        staged("a", vec![add("a.parquet", Some("x"))], ReadSet::default()),
+    )
+    .unwrap();
+    let (c, m) = class(env.commit(
+        &s,
+        staged("b", vec![add("b.parquet", Some("y"))], whole_table()),
+    ));
+    assert_eq!(c, ErrorClass::DeltaConcurrentAppendWithPartitionHint, "{m}");
+    assert!(m.contains("[n=null, p=x, d=null, ts=null]"), "{m}");
+}
+
+/// On an unpartitioned table any add conflicts with a reader, without a hint; two removes of one
+/// file conflict without a hint too.
+#[test]
+fn an_unpartitioned_table_conflicts_without_hints() {
+    let env = Env::new();
+    env.write_commit(
+        2,
+        &[
+            json!({"commitInfo": {"operation": "REPLACE"}}),
+            metadata_partitioned_by(&[]),
+        ],
+    );
+    let s = env.snapshot();
+    env.commit(
+        &s,
+        staged("a", vec![add_values("a.parquet", &[])], ReadSet::default()),
+    )
+    .unwrap();
+    let reader = ReadSet {
+        predicates: reads_partition("x").predicates,
+        ..ReadSet::default()
+    };
+    let (c, m) = class(env.commit(&s, staged("b", vec![add_values("b.parquet", &[])], reader)));
+    assert_eq!(c, ErrorClass::DeltaConcurrentAppendWithoutHint, "{m}");
+    assert!(
+        m.contains("a concurrent WRITE added data to table delta.`t` committed at version 3"),
+        "{m}"
+    );
+}
+
+/// A NULL partition value matches `p IS NULL` and not `p = 'x'` (NULL is not TRUE).
+#[test]
+fn null_partition_values_match_only_true_predicates() {
+    let is_null = ReadSet {
+        predicates: vec![Arc::new(Predicate::is_null(Expression::column(["p"])))],
+        ..ReadSet::default()
+    };
+    let env = Env::new();
+    let s = env.snapshot();
+    env.commit(
+        &s,
+        staged("a", vec![add("a.parquet", None)], ReadSet::default()),
+    )
+    .unwrap();
+    let (c, m) = class(env.commit(&s, staged("b", vec![add("b.parquet", None)], is_null)));
+    assert_eq!(c, ErrorClass::DeltaConcurrentAppendWithPartitionHint, "{m}");
+    assert!(m.contains("[p=null, n=null, d=null, ts=null]"), "{m}");
+    let ok = env
+        .commit(
+            &s,
+            staged("c", vec![add("c.parquet", Some("x"))], reads_partition("x")),
+        )
+        .unwrap();
+    assert_eq!(ok.version, 3);
+}
+
+/// A legacy (1, 2) table implies `appendOnly` and `invariants`: a winner protocol without
+/// `invariants` drops it, one listing both and `domainMetadata` upgrades the table and the
+/// loser commits on it.
+#[test]
+fn legacy_protocols_compare_with_their_implied_features() {
+    let info = json!({"commitInfo": {"operation": "UPGRADE PROTOCOL"}});
+    let env = Env::new();
+    let s = env.snapshot();
+    env.write_commit(
+        2,
+        &[
+            info.clone(),
+            json!({"protocol": {"minReaderVersion": 1, "minWriterVersion": 7,
+                "writerFeatures": ["appendOnly", "domainMetadata"]}}),
+        ],
+    );
+    let (c, _) = class(env.commit(
+        &s,
+        staged("b", vec![add("b.parquet", Some("x"))], ReadSet::default()),
+    ));
+    assert_eq!(c, ErrorClass::DeltaProtocolChanged);
+
+    let env = Env::new();
+    let s = env.snapshot();
+    env.write_commit(
+        2,
+        &[
+            info,
+            json!({"protocol": {"minReaderVersion": 1, "minWriterVersion": 7,
+                "writerFeatures": ["appendOnly", "invariants", "domainMetadata"]}}),
+        ],
+    );
+    let ok = env
+        .commit(
+            &s,
+            staged("b", vec![add("b.parquet", Some("x"))], ReadSet::default()),
+        )
+        .unwrap();
+    assert_eq!(ok.version, 3);
+}
+
+#[test]
+fn implied_features_of_each_legacy_version() {
+    use super::conflict::supported_features;
+    let names = |r, w, wf: Option<&[&str]>| {
+        let wf: Option<Vec<String>> = wf.map(|f| f.iter().map(|s| (*s).to_owned()).collect());
+        supported_features(r, w, None, wf.as_deref())
+            .into_iter()
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(1, 2, None), ["appendOnly", "invariants"]);
+    assert_eq!(
+        names(1, 2, None),
+        names(1, 7, Some(&["appendOnly", "invariants"]))
+    );
+    assert_eq!(
+        names(2, 5, None),
+        [
+            "appendOnly",
+            "changeDataFeed",
+            "checkConstraints",
+            "columnMapping",
+            "generatedColumns",
+            "invariants"
+        ]
+    );
+    assert!(names(1, 6, None).contains(&"identityColumns".to_owned()));
+}
+
+/// Winner parsing: the first commitInfo and protocol win, unknown actions are skipped, and a line
+/// that is not JSON, a file action without a path or a protocol without versions fail.
+#[test]
+fn winner_parsing() {
+    use super::winner::parse;
+    let env = Env::new();
+    let text = "{\"commitInfo\":{\"operation\":\"A\"}}\n{\"commitInfo\":{\"operation\":\"B\"}}\n\
+                {\"protocol\":{\"minReaderVersion\":1,\"minWriterVersion\":2}}\n\
+                {\"protocol\":{\"minReaderVersion\":3,\"minWriterVersion\":7}}\n\
+                {\"cdc\":{\"path\":\"c\"}}\n{\"unknownAction\":{}}\n\n\
+                {\"remove\":{\"path\":\"r\",\"partitionValues\":{\"p\":null}}}\n";
+    let w = parse(&env.engine, 5, text.as_bytes(), "t").unwrap();
+    assert_eq!(w.operation(), "A");
+    assert_eq!(w.protocol.as_ref().unwrap().min_writer_version, 2);
+    assert_eq!(w.removes[0].path, "r");
+    assert_eq!(w.removes[0].partition_values["p"], None);
+    assert!(w.adds.is_empty());
+    assert!(
+        w.conflicting_commit()
+            .starts_with("\nConflicting commit: {")
+    );
+    assert!(w.conflicting_commit().contains("\"version\":5"));
+    let none = parse(&env.engine, 5, b"{\"add\":{\"path\":\"a\"}}\n", "t").unwrap();
+    assert_eq!(
+        (none.operation(), none.conflicting_commit()),
+        ("TRANSACTION".to_owned(), String::new())
+    );
+    for bad in [
+        "not json\n",
+        "[1]\n",
+        "{\"add\":{\"size\":1}}\n",
+        "{\"protocol\":{\"minReaderVersion\":1}}\n",
+    ] {
+        let e = parse(&env.engine, 5, bad.as_bytes(), "t").unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::InternalError, "{bad}");
+    }
+}
+
+/// A winner over `krishiv.catalog.maxMetadataBytes` fails the commit with the limit's class.
+#[test]
+fn a_winner_over_the_metadata_limit_fails_the_commit() {
+    let env = Env::with_limits(DeltaLimits {
+        max_metadata_bytes: 4096,
+        ..DeltaLimits::default()
+    });
+    let s = env.snapshot();
+    let big = json!({"commitInfo": {"operation": "WRITE", "pad": "x".repeat(5000)}});
+    env.write_commit(2, &[big]);
+    let (c, _) = class(env.commit(
+        &s,
+        staged("b", vec![add("b.parquet", Some("x"))], ReadSet::default()),
+    ));
+    assert_eq!(c, ErrorClass::KrishivCatalogLimitExceeded);
 }

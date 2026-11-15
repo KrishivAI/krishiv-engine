@@ -5,7 +5,8 @@
 //!
 //! 1. **Protocol.** A winner protocol is checked against Krishiv's reader and writer
 //!    allow-lists; a current transaction that also changes the protocol, or a winner that drops
-//!    features, is `DELTA_PROTOCOL_CHANGED`.
+//!    a feature, is `DELTA_PROTOCOL_CHANGED`. Features are compared as Delta compares them
+//!    (`TableFeature.isProtocolRemovingFeatures`): a legacy protocol's implied features count.
 //! 2. **Metadata.** Any winner `metaData` is `DELTA_METADATA_CHANGED`, except an identity
 //!    high-water-mark update when the current transaction changes no metadata (the strict
 //!    legacy rule `checkNoMetadataUpdates`, without its row-tracking exception).
@@ -13,18 +14,20 @@
 //! 4. **App ids.** A winner `txn` for an app id the transaction read is
 //!    `DELTA_CONCURRENT_TRANSACTION`.
 //! 5. Row tracking is refused for writes in P3 (the writer allow-list), so it has no step here.
-//! 6. **Append.** Unless the current transaction is a blind append, every winner add is checked:
-//!    on a whole-table read or an unpartitioned table any add conflicts; otherwise an add whose
-//!    partition values satisfy a read predicate does → `DELTA_CONCURRENT_APPEND`.
-//! 7. **Delete-read.** A winner remove of a file the transaction read, or any winner remove after
-//!    a whole-table read → `DELTA_CONCURRENT_DELETE_READ`.
+//! 6. **Append.** Unless the current transaction is a blind append, every winner add is checked
+//!    (at Serializable a blind-append winner's adds too): on a whole-table read or an
+//!    unpartitioned table any add conflicts; otherwise an add whose partition values satisfy a
+//!    read predicate does → `DELTA_CONCURRENT_APPEND`.
+//! 7. **Delete-read.** A winner remove of a file the transaction read (with the read file's
+//!    partition as the hint), or else any winner remove after a whole-table read (no hint) →
+//!    `DELTA_CONCURRENT_DELETE_READ`.
 //! 8. **Delete-delete.** A path both removed → `DELTA_CONCURRENT_DELETE_DELETE`.
 //!
 //! The hint subclasses follow Delta's `getPrettyPartitionMessage`: `[col=value, …]` over every
-//! partition column in schema order (`null` for a missing or NULL value), from the winner's add
-//! for an append, the transaction's read file for a delete-read and its own remove for a
-//! delete-delete; no hint for an unpartitioned table, an empty value map or a whole-table
-//! delete-read.
+//! partition column in the table's `partitionColumns` order (`null` for a missing or NULL
+//! value), from the winner's add for an append, the transaction's read file for a delete-read
+//! and its own remove for a delete-delete; no hint for an unpartitioned table or an empty value
+//! map.
 //!
 //! # Known differences
 //! - `<conflictingCommit>` prints the winner's `commitInfo` as the log holds it plus its
@@ -35,10 +38,10 @@
 //! - A read predicate that cannot be evaluated on a file's partition values (a value that does
 //!   not parse) counts as a match: wider is safe.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
-use arrow_array::Array as _;
+use arrow_array::{Array as _, BooleanArray, RecordBatch};
 use delta_kernel::EvaluationHandler;
 use delta_kernel::expressions::{PredicateRef, Scalar};
 use delta_kernel::schema::{DataType, StructField, StructType};
@@ -49,21 +52,16 @@ use krishiv_common::error::{
     DeltaConcurrentTransaction, DeltaMetadataChanged, DeltaProtocolChanged, KrishivError,
 };
 
-use super::ReadSet;
 use super::winner::{FileAction, ProtocolAction, WinningCommit};
-use crate::engine::KrishivEngineData;
+use super::{PartitionValues, ReadSet};
 use crate::engine::eval::KrishivEvaluationHandler;
+use crate::engine::{DeltaLimits, KrishivEngineData};
 use crate::features::{ReadProtocol, WriteProtocol, check_read, check_write};
 use crate::table::partition_scalar;
 
 /// `<docLink>` of the conflict classes (`DeltaErrors.generateDocsLink` with
 /// `/concurrency-control.html`).
 pub const DOC_LINK: &str = "https://docs.delta.io/latest/concurrency-control.html";
-
-/// `<additionalInfo>` of `DELTA_PROTOCOL_CHANGED` when the winner is version 0.
-pub const EMPTY_DIRECTORY_HINT: &str = "This happens when multiple writers are writing to an \
-                                        empty directory. Creating the table ahead of time will \
-                                        avoid this conflict. ";
 
 /// A partition column: its name, the key its values are stored under and its type.
 #[derive(Debug, Clone, PartialEq)]
@@ -77,62 +75,352 @@ pub struct PartitionColumn {
 }
 
 /// The transaction being committed, as the checker sees it.
-#[derive(Debug)]
-pub struct CurrentTxn<'a> {
+#[derive(Debug, Clone)]
+pub struct CurrentTxn {
     /// The table's name or path, for messages.
-    pub table: &'a str,
+    pub table: String,
     /// The protocol and configuration of the snapshot it read.
-    pub read_protocol: &'a WriteProtocol,
-    /// The table's partition columns, in schema order.
-    pub partition_columns: &'a [PartitionColumn],
+    pub read_protocol: WriteProtocol,
+    /// The table's partition columns, in its `partitionColumns` order.
+    pub partition_columns: Vec<PartitionColumn>,
     /// What it read.
-    pub read_set: &'a ReadSet,
+    pub read_set: ReadSet,
     /// The files it removes.
-    pub removes: &'a [FileAction],
+    pub removes: Vec<FileAction>,
     /// Whether it writes a `metaData` action.
     pub changes_metadata: bool,
     /// Whether it writes a `protocol` action.
     pub changes_protocol: bool,
     /// The domains it writes.
-    pub domains: &'a [String],
+    pub domains: Vec<String>,
     /// Whether it is a blind append (only adds, no read of the table).
     pub blind_append: bool,
+    /// The parse limits of the evaluator.
+    pub limits: DeltaLimits,
 }
 
-/// Checks the transaction `txn` against the winning commit `winner` (see the module docs).
-///
-/// # Errors
-/// The conflict's class, or the allow-lists' refusal of a winner protocol.
-pub fn check(txn: &CurrentTxn<'_>, winner: &WinningCommit) -> Result<(), KrishivError> {
-    check_protocol(txn, winner)?;
-    if winner.metadata_changed && !(winner.identity_only_metadata_update() && !txn.changes_metadata)
-    {
-        return Err(DeltaMetadataChanged {
-            table_name: txn.table.to_owned(),
-            conflicting_commit: winner.conflicting_commit(),
-            doc_link: DOC_LINK.to_owned(),
+/// A transaction's checker: what every winner is checked against, indexed once.
+#[derive(Debug)]
+pub struct Checker {
+    txn: CurrentTxn,
+    read_files: HashMap<String, PartitionValues>,
+    removed: HashMap<String, PartitionValues>,
+    read_features: BTreeSet<String>,
+    partition_schema: Arc<StructType>,
+    handler: KrishivEvaluationHandler,
+}
+
+impl Checker {
+    /// The checker of `txn`.
+    #[must_use]
+    pub fn new(txn: CurrentTxn) -> Self {
+        let index = |files: &[FileAction]| {
+            files
+                .iter()
+                .map(|f| (f.path.clone(), f.partition_values.clone()))
+                .collect()
+        };
+        let read = &txn.read_protocol;
+        let read_features = supported_features(
+            i64::from(read.read.min_reader_version),
+            i64::from(read.min_writer_version),
+            read.read.reader_features.as_deref(),
+            read.read.writer_features.as_deref(),
+        );
+        let partition_schema =
+            Arc::new(StructType::new_unchecked(txn.partition_columns.iter().map(
+                |c| StructField::nullable(c.name.clone(), c.data_type.clone()),
+            )));
+        Self {
+            read_files: index(&txn.read_set.files),
+            removed: index(&txn.removes),
+            read_features,
+            partition_schema,
+            handler: KrishivEvaluationHandler::new(txn.limits),
+            txn,
         }
-        .into());
     }
-    let domains_supported = txn
-        .read_protocol
-        .read
-        .writer_features
-        .iter()
-        .flatten()
-        .any(|f| f == "domainMetadata");
-    if domains_supported && txn.domains.iter().any(|d| winner.domains.contains(d)) {
-        return Err(concurrent_transaction(winner));
+
+    /// The transaction.
+    #[must_use]
+    pub fn txn(&self) -> &CurrentTxn {
+        &self.txn
     }
-    if winner
-        .app_ids
-        .iter()
-        .any(|id| txn.read_set.app_ids.contains(id))
-    {
-        return Err(concurrent_transaction(winner));
+
+    /// Checks the transaction against the winning commit `winner` (see the module docs).
+    ///
+    /// # Errors
+    /// The conflict's class, or the allow-lists' refusal of a winner protocol.
+    pub fn check(&self, winner: &WinningCommit) -> Result<(), KrishivError> {
+        let txn = &self.txn;
+        self.check_protocol(winner)?;
+        if winner.metadata_changed
+            && !(winner.identity_only_metadata_update() && !txn.changes_metadata)
+        {
+            return Err(DeltaMetadataChanged {
+                table_name: txn.table.clone(),
+                conflicting_commit: winner.conflicting_commit(),
+                doc_link: DOC_LINK.to_owned(),
+            }
+            .into());
+        }
+        if self.read_features.contains("domainMetadata")
+            && txn.domains.iter().any(|d| winner.domains.contains(d))
+        {
+            return Err(concurrent_transaction(winner));
+        }
+        if winner
+            .app_ids
+            .iter()
+            .any(|id| txn.read_set.app_ids.contains(id))
+        {
+            return Err(concurrent_transaction(winner));
+        }
+        self.check_appends(winner)?;
+        self.check_deletes(winner)
     }
-    check_appends(txn, winner)?;
-    check_deletes(txn, winner)
+
+    fn check_protocol(&self, winner: &WinningCommit) -> Result<(), KrishivError> {
+        let Some(p) = &winner.protocol else {
+            return Ok(());
+        };
+        let txn = &self.txn;
+        let read = &txn.read_protocol.read;
+        let winner_read = ReadProtocol {
+            min_reader_version: i32::try_from(p.min_reader_version).unwrap_or(i32::MAX),
+            reader_features: p.reader_features.clone(),
+            writer_features: p.writer_features.clone(),
+            configuration: read.configuration.clone(),
+        };
+        check_read(&txn.table, &winner_read)?;
+        check_write(
+            &txn.table,
+            &WriteProtocol {
+                read: winner_read,
+                min_writer_version: i32::try_from(p.min_writer_version).unwrap_or(i32::MAX),
+                invariants_in_use: txn.read_protocol.invariants_in_use,
+            },
+        )?;
+        if txn.changes_protocol || self.drops_features(p) {
+            return Err(DeltaProtocolChanged {
+                additional_info: String::new(),
+                conflicting_commit: winner.conflicting_commit(),
+                doc_link: DOC_LINK.to_owned(),
+            }
+            .into());
+        }
+        Ok(())
+    }
+
+    /// Whether `winner` lacks a feature the read protocol supports, implied ones included.
+    fn drops_features(&self, winner: &ProtocolAction) -> bool {
+        let kept = supported_features(
+            winner.min_reader_version,
+            winner.min_writer_version,
+            winner.reader_features.as_deref(),
+            winner.writer_features.as_deref(),
+        );
+        !self.read_features.is_subset(&kept)
+    }
+
+    fn check_appends(&self, winner: &WinningCommit) -> Result<(), KrishivError> {
+        let txn = &self.txn;
+        if txn.blind_append || winner.adds.is_empty() {
+            return Ok(());
+        }
+        let conflicting = if txn.read_set.whole_table || txn.partition_columns.is_empty() {
+            winner.adds.first()
+        } else {
+            self.first_matching(&winner.adds)
+        };
+        let Some(add) = conflicting else {
+            return Ok(());
+        };
+        let (operation, table_name, version, doc_link) = self.parameters(winner);
+        Err(match self.pretty_partition(&add.partition_values) {
+            Some(partition_values) => DeltaConcurrentAppendWithPartitionHint {
+                operation,
+                table_name,
+                version,
+                partition_values,
+                doc_link,
+            }
+            .into(),
+            None => DeltaConcurrentAppendWithoutHint {
+                operation,
+                table_name,
+                version,
+                doc_link,
+            }
+            .into(),
+        })
+    }
+
+    fn check_deletes(&self, winner: &WinningCommit) -> Result<(), KrishivError> {
+        let overlap = winner
+            .removes
+            .iter()
+            .find_map(|r| self.read_files.get(&r.path));
+        let whole_table_hit = !winner.removes.is_empty() && self.txn.read_set.whole_table;
+        if overlap.is_some() || whole_table_hit {
+            let (operation, table_name, version, doc_link) = self.parameters(winner);
+            return Err(match overlap.and_then(|pv| self.pretty_partition(pv)) {
+                Some(partition_values) => DeltaConcurrentDeleteReadWithPartitionHint {
+                    operation,
+                    table_name,
+                    version,
+                    partition_values,
+                    doc_link,
+                }
+                .into(),
+                None => DeltaConcurrentDeleteReadWithoutHint {
+                    operation,
+                    table_name,
+                    version,
+                    doc_link,
+                }
+                .into(),
+            });
+        }
+        if let Some(pv) = winner
+            .removes
+            .iter()
+            .find_map(|r| self.removed.get(&r.path))
+        {
+            let (operation, table_name, version, doc_link) = self.parameters(winner);
+            return Err(match self.pretty_partition(pv) {
+                Some(partition_values) => DeltaConcurrentDeleteDeleteWithPartitionHint {
+                    operation,
+                    table_name,
+                    version,
+                    partition_values,
+                    doc_link,
+                }
+                .into(),
+                None => DeltaConcurrentDeleteDeleteWithoutHint {
+                    operation,
+                    table_name,
+                    version,
+                    doc_link,
+                }
+                .into(),
+            });
+        }
+        Ok(())
+    }
+
+    /// `<operation>`, `<tableName>`, `<version>` and `<docLink>` of the file-level classes.
+    fn parameters(&self, winner: &WinningCommit) -> (String, String, String, String) {
+        (
+            winner.operation(),
+            self.txn.table.clone(),
+            winner.version.to_string(),
+            DOC_LINK.to_owned(),
+        )
+    }
+
+    /// Delta's `getPrettyPartitionMessage`.
+    fn pretty_partition(&self, values: &PartitionValues) -> Option<String> {
+        let columns = &self.txn.partition_columns;
+        if columns.is_empty() || values.is_empty() {
+            return None;
+        }
+        let parts: Vec<String> = columns
+            .iter()
+            .map(|c| {
+                let v = values
+                    .get(&c.physical)
+                    .and_then(Option::as_deref)
+                    .unwrap_or("null");
+                format!("{}={v}", c.name)
+            })
+            .collect();
+        Some(format!("[{}]", parts.join(", ")))
+    }
+
+    /// The first add whose partition values satisfy a read predicate (TRUE only: a NULL result
+    /// does not match, as Delta's `filterFileList` keeps only TRUE). The adds' values are one
+    /// batch; an add whose values do not parse, or a predicate that fails to evaluate, counts
+    /// as a match.
+    fn first_matching<'w>(&self, adds: &'w [FileAction]) -> Option<&'w FileAction> {
+        let predicates = &self.txn.read_set.predicates;
+        if predicates.is_empty() {
+            return None;
+        }
+        let mut rows = Vec::with_capacity(adds.len());
+        let mut parsed = Vec::with_capacity(adds.len());
+        for add in adds {
+            let row: Result<Vec<Scalar>, _> = self
+                .txn
+                .partition_columns
+                .iter()
+                .map(|c| {
+                    partition_scalar(
+                        add.partition_values
+                            .get(&c.physical)
+                            .and_then(Option::as_ref),
+                        &c.data_type,
+                    )
+                })
+                .collect();
+            match row {
+                Ok(row) => {
+                    parsed.push(true);
+                    rows.push(row);
+                }
+                // An unparseable value matches: no later add can come first.
+                Err(_) => {
+                    parsed.push(false);
+                    break;
+                }
+            }
+        }
+        let matched = self.evaluate(predicates, rows);
+        // Every add before an unparseable one parsed, so add `i` is row `i`.
+        for (row, (add, ok)) in adds.iter().zip(parsed).enumerate() {
+            if !ok || matched.as_ref().is_none_or(|m| m[row]) {
+                return Some(add);
+            }
+        }
+        None
+    }
+
+    /// Per row, whether some predicate is TRUE; `None` when evaluation fails.
+    fn evaluate(&self, predicates: &[PredicateRef], rows: Vec<Vec<Scalar>>) -> Option<Vec<bool>> {
+        if rows.is_empty() {
+            return Some(Vec::new());
+        }
+        let n = rows.len();
+        let batch = self
+            .handler
+            .create_many(Arc::clone(&self.partition_schema), rows)
+            .ok()?;
+        let mut any = vec![false; n];
+        for p in predicates {
+            let column = self.holds(p, batch.as_ref())?;
+            for (i, hit) in any.iter_mut().enumerate() {
+                *hit |= column.is_valid(i) && column.value(i);
+            }
+        }
+        Some(any)
+    }
+
+    fn holds(
+        &self,
+        predicate: &PredicateRef,
+        batch: &dyn delta_kernel::EngineData,
+    ) -> Option<BooleanArray> {
+        let evaluator = self
+            .handler
+            .new_predicate_evaluator(Arc::clone(&self.partition_schema), Arc::clone(predicate))
+            .ok()?;
+        let out = evaluator.evaluate(batch).ok()?;
+        let out: &RecordBatch = KrishivEngineData::batch_of(out.as_ref()).ok()?;
+        out.column(0)
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .cloned()
+    }
 }
 
 fn concurrent_transaction(winner: &WinningCommit) -> KrishivError {
@@ -143,239 +431,39 @@ fn concurrent_transaction(winner: &WinningCommit) -> KrishivError {
     .into()
 }
 
-fn check_protocol(txn: &CurrentTxn<'_>, winner: &WinningCommit) -> Result<(), KrishivError> {
-    let Some(p) = &winner.protocol else {
-        return Ok(());
-    };
-    let read = &txn.read_protocol.read;
-    let winner_read = ReadProtocol {
-        min_reader_version: i32::try_from(p.min_reader_version).unwrap_or(i32::MAX),
-        reader_features: p.reader_features.clone(),
-        writer_features: p.writer_features.clone(),
-        configuration: read.configuration.clone(),
-    };
-    check_read(txn.table, &winner_read)?;
-    check_write(
-        txn.table,
-        &WriteProtocol {
-            read: winner_read,
-            min_writer_version: i32::try_from(p.min_writer_version).unwrap_or(i32::MAX),
-            invariants_in_use: txn.read_protocol.invariants_in_use,
-        },
-    )?;
-    if txn.changes_protocol || drops_features(txn.read_protocol, p) {
-        let additional_info = if winner.version == 0 && winner.commit_info.is_some() {
-            EMPTY_DIRECTORY_HINT.to_owned()
-        } else {
-            String::new()
-        };
-        return Err(DeltaProtocolChanged {
-            additional_info,
-            conflicting_commit: winner.conflicting_commit(),
-            doc_link: DOC_LINK.to_owned(),
-        }
-        .into());
-    }
-    Ok(())
-}
-
-/// Whether `winner` removes a feature or lowers a version of the protocol `read`
-/// (`TableFeature.isProtocolRemovingFeatures`).
-fn drops_features(read: &WriteProtocol, winner: &ProtocolAction) -> bool {
-    if winner.min_reader_version < i64::from(read.read.min_reader_version)
-        || winner.min_writer_version < i64::from(read.min_writer_version)
-    {
-        return true;
-    }
-    let kept: Vec<&str> = winner.features().collect();
-    read.read
-        .reader_features
-        .iter()
-        .chain(&read.read.writer_features)
-        .flatten()
-        .any(|f| !kept.contains(&f.as_str()))
-}
-
-fn check_appends(txn: &CurrentTxn<'_>, winner: &WinningCommit) -> Result<(), KrishivError> {
-    if txn.blind_append || winner.adds.is_empty() {
-        return Ok(());
-    }
-    let conflicting = if txn.read_set.whole_table || txn.partition_columns.is_empty() {
-        winner.adds.first()
+/// Every feature a protocol supports, the ones its legacy versions imply included
+/// (delta-spark's `implicitlyAndExplicitlySupportedFeatures`, `TableFeature.scala:470-497`).
+#[must_use]
+pub fn supported_features(
+    min_reader: i64,
+    min_writer: i64,
+    reader_features: Option<&[String]>,
+    writer_features: Option<&[String]>,
+) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    if min_writer >= 7 {
+        out.extend(writer_features.into_iter().flatten().cloned());
     } else {
-        winner
-            .adds
-            .iter()
-            .find(|add| matches_read_predicates(txn, &add.partition_values))
-    };
-    let Some(add) = conflicting else {
-        return Ok(());
-    };
-    let (operation, table_name, version, doc_link) = parameters(txn, winner);
-    Err(match pretty_partition(txn, &add.partition_values) {
-        Some(partition_values) => DeltaConcurrentAppendWithPartitionHint {
-            operation,
-            table_name,
-            version,
-            partition_values,
-            doc_link,
-        }
-        .into(),
-        None => DeltaConcurrentAppendWithoutHint {
-            operation,
-            table_name,
-            version,
-            doc_link,
-        }
-        .into(),
-    })
-}
-
-fn check_deletes(txn: &CurrentTxn<'_>, winner: &WinningCommit) -> Result<(), KrishivError> {
-    let read: HashMap<&str, &HashMap<String, Option<String>>> = txn
-        .read_set
-        .files
-        .iter()
-        .map(|f| (f.path.as_str(), &f.partition_values))
-        .collect();
-    let overlap = winner
-        .removes
-        .iter()
-        .find_map(|r| read.get(r.path.as_str()).copied());
-    let whole_table_hit = !winner.removes.is_empty() && txn.read_set.whole_table;
-    if overlap.is_some() || whole_table_hit {
-        let (operation, table_name, version, doc_link) = parameters(txn, winner);
-        let hint = overlap.and_then(|pv| pretty_partition(txn, pv));
-        return Err(match hint {
-            Some(partition_values) => DeltaConcurrentDeleteReadWithPartitionHint {
-                operation,
-                table_name,
-                version,
-                partition_values,
-                doc_link,
-            }
-            .into(),
-            None => DeltaConcurrentDeleteReadWithoutHint {
-                operation,
-                table_name,
-                version,
-                doc_link,
-            }
-            .into(),
-        });
+        let implied: &[(i64, &str)] = &[
+            (2, "appendOnly"),
+            (2, "invariants"),
+            (3, "checkConstraints"),
+            (4, "changeDataFeed"),
+            (4, "generatedColumns"),
+            (5, "columnMapping"),
+            (6, "identityColumns"),
+        ];
+        out.extend(
+            implied
+                .iter()
+                .filter(|(v, _)| min_writer >= *v)
+                .map(|(_, f)| (*f).to_owned()),
+        );
     }
-    let removed: HashMap<&str, &HashMap<String, Option<String>>> = txn
-        .removes
-        .iter()
-        .map(|f| (f.path.as_str(), &f.partition_values))
-        .collect();
-    if let Some(pv) = winner
-        .removes
-        .iter()
-        .find_map(|r| removed.get(r.path.as_str()).copied())
-    {
-        let (operation, table_name, version, doc_link) = parameters(txn, winner);
-        return Err(match pretty_partition(txn, pv) {
-            Some(partition_values) => DeltaConcurrentDeleteDeleteWithPartitionHint {
-                operation,
-                table_name,
-                version,
-                partition_values,
-                doc_link,
-            }
-            .into(),
-            None => DeltaConcurrentDeleteDeleteWithoutHint {
-                operation,
-                table_name,
-                version,
-                doc_link,
-            }
-            .into(),
-        });
+    if min_reader >= 3 {
+        out.extend(reader_features.into_iter().flatten().cloned());
+    } else if min_reader >= 2 {
+        out.insert("columnMapping".to_owned());
     }
-    Ok(())
-}
-
-/// `<operation>`, `<tableName>`, `<version>` and `<docLink>` of the file-level classes.
-fn parameters(txn: &CurrentTxn<'_>, winner: &WinningCommit) -> (String, String, String, String) {
-    (
-        winner.operation(),
-        txn.table.to_owned(),
-        winner.version.to_string(),
-        DOC_LINK.to_owned(),
-    )
-}
-
-/// Delta's `getPrettyPartitionMessage`.
-fn pretty_partition(
-    txn: &CurrentTxn<'_>,
-    values: &HashMap<String, Option<String>>,
-) -> Option<String> {
-    if txn.partition_columns.is_empty() || values.is_empty() {
-        return None;
-    }
-    let parts: Vec<String> = txn
-        .partition_columns
-        .iter()
-        .map(|c| {
-            let v = values
-                .get(&c.physical)
-                .and_then(Option::as_deref)
-                .unwrap_or("null");
-            format!("{}={v}", c.name)
-        })
-        .collect();
-    Some(format!("[{}]", parts.join(", ")))
-}
-
-/// Whether some read predicate holds on the partition values `values` (TRUE only; a NULL
-/// result does not match, as Delta's `filterFileList` keeps only TRUE). A value that does not
-/// parse or a predicate that fails to evaluate counts as a match.
-fn matches_read_predicates(txn: &CurrentTxn<'_>, values: &HashMap<String, Option<String>>) -> bool {
-    let predicates = &txn.read_set.predicates;
-    if predicates.is_empty() {
-        return false;
-    }
-    let schema =
-        Arc::new(StructType::new_unchecked(txn.partition_columns.iter().map(
-            |c| StructField::nullable(c.name.clone(), c.data_type.clone()),
-        )));
-    let row: Result<Vec<Scalar>, _> = txn
-        .partition_columns
-        .iter()
-        .map(|c| {
-            partition_scalar(
-                values.get(&c.physical).and_then(Option::as_ref),
-                &c.data_type,
-            )
-        })
-        .collect();
-    let Ok(row) = row else {
-        return true;
-    };
-    let handler = KrishivEvaluationHandler::new(crate::engine::DeltaLimits::default());
-    let Ok(batch) = handler.create_many(Arc::clone(&schema), vec![row]) else {
-        return true;
-    };
-    predicates
-        .iter()
-        .any(|p| holds(&handler, &schema, p, batch.as_ref()).unwrap_or(true))
-}
-
-fn holds(
-    handler: &KrishivEvaluationHandler,
-    schema: &Arc<StructType>,
-    predicate: &PredicateRef,
-    batch: &dyn delta_kernel::EngineData,
-) -> Option<bool> {
-    let evaluator = handler
-        .new_predicate_evaluator(Arc::clone(schema), Arc::clone(predicate))
-        .ok()?;
-    let out = evaluator.evaluate(batch).ok()?;
-    let out = KrishivEngineData::batch_of(out.as_ref()).ok()?;
-    let column = out
-        .column(0)
-        .as_any()
-        .downcast_ref::<arrow_array::BooleanArray>()?;
-    Some(column.len() == 1 && column.is_valid(0) && column.value(0))
+    out
 }

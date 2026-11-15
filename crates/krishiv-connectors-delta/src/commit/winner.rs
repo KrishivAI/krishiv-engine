@@ -6,7 +6,8 @@
 //! against `krishiv.catalog.maxMetadataBytes` before it is read, and each line's nesting against
 //! the depth limit before it is parsed. A line that is not an action Krishiv reads (`cdc`,
 //! `checkpointMetadata`, an unknown action) is skipped, as Delta skips actions its checker does
-//! not look at.
+//! not look at. A line that is not a JSON object, a file action without a path and a protocol
+//! without its versions are `INTERNAL_ERROR`: a winner Krishiv cannot read fails the commit.
 
 use std::collections::HashMap;
 
@@ -210,9 +211,14 @@ pub fn parse(
                         commit.commit_info.get_or_insert(info);
                     }
                 }
-                "add" => commit.adds.push(file_action(&body)),
-                "remove" => commit.removes.push(file_action(&body)),
-                "protocol" => commit.protocol = Some(protocol(&body)),
+                "add" => commit.adds.push(file_action(&body, source)?),
+                "remove" => commit.removes.push(file_action(&body, source)?),
+                "protocol" => {
+                    // The first, as Delta's `collectFirst`.
+                    if commit.protocol.is_none() {
+                        commit.protocol = Some(protocol(&body, source)?);
+                    }
+                }
                 "metaData" => commit.metadata_changed = true,
                 "domainMetadata" => {
                     if let Some(d) = body.get("domain").and_then(Value::as_str) {
@@ -231,7 +237,7 @@ pub fn parse(
     Ok(commit)
 }
 
-fn file_action(body: &Value) -> FileAction {
+fn file_action(body: &Value, source: &str) -> Result<FileAction, KrishivError> {
     let partition_values = body
         .get("partitionValues")
         .and_then(Value::as_object)
@@ -241,17 +247,17 @@ fn file_action(body: &Value) -> FileAction {
                 .collect()
         })
         .unwrap_or_default();
-    FileAction {
-        path: body
-            .get("path")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned(),
+    let path = body
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| internal(&format!("commit {source} has a file action without a path")))?;
+    Ok(FileAction {
+        path: path.to_owned(),
         partition_values,
-    }
+    })
 }
 
-fn protocol(body: &Value) -> ProtocolAction {
+fn protocol(body: &Value, source: &str) -> Result<ProtocolAction, KrishivError> {
     let names = |key: &str| {
         body.get(key).and_then(Value::as_array).map(|a| {
             a.iter()
@@ -260,18 +266,17 @@ fn protocol(body: &Value) -> ProtocolAction {
                 .collect()
         })
     };
-    ProtocolAction {
-        min_reader_version: body
-            .get("minReaderVersion")
+    let version = |key: &str| {
+        body.get(key)
             .and_then(Value::as_i64)
-            .unwrap_or(1),
-        min_writer_version: body
-            .get("minWriterVersion")
-            .and_then(Value::as_i64)
-            .unwrap_or(1),
+            .ok_or_else(|| internal(&format!("commit {source} has a protocol without {key}")))
+    };
+    Ok(ProtocolAction {
+        min_reader_version: version("minReaderVersion")?,
+        min_writer_version: version("minWriterVersion")?,
         reader_features: names("readerFeatures"),
         writer_features: names("writerFeatures"),
-    }
+    })
 }
 
 fn internal(message: &str) -> KrishivError {

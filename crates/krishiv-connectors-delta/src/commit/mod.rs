@@ -13,16 +13,18 @@
 //!    id means the commit landed; otherwise each is checked in order ([`conflict`]), and the
 //!    transaction is built again on the snapshot **at the last checked version**, never at the
 //!    latest one, so a commit that lands meanwhile is checked on the next round.
-//! 4. A retryable I/O failure, or an error from the kernel's commit (which can come after the
-//!    commit file was written), first runs the **landed check**: the commits from the read
-//!    version on are searched for this write's id. Found means success. Not found: a retryable
-//!    failure is retried on the same snapshot, any other error is raised. The landed check runs
-//!    on the log pool, so a query cancelled by then raises `OPERATION_CANCELED` without it: the
-//!    commit's outcome is then unknown (a put that started always ran to its end).
+//! 4. Any other failure of an attempt (a store failure, or an error from the kernel's commit,
+//!    which can come after the commit file was written) first runs the **landed check**: the
+//!    commits from the read version on are searched for this write's id. Found means success;
+//!    not found raises the failure, as Delta raises a store failure (a kernel error before the
+//!    put is deterministic, so retrying it would only spin). The landed check runs on the log
+//!    pool, so a query cancelled by then raises `OPERATION_CANCELED` without it: the commit's
+//!    outcome is then unknown (a put that started always ran to its end).
 //!
 //! Attempts are bounded by Delta's `spark.databricks.delta.maxCommitAttempts` (attempts = max +
-//! 1, as Delta counts) and a total time ([`RetryLimits`]); exhausting either is
-//! `DELTA_MAX_COMMIT_RETRIES_EXCEEDED` with Delta's parameters. Between conflicted attempts the
+//! 1, as Delta counts) and a total time ([`RetryLimits`]), checked after each lost race before
+//! its winners are checked; exhausting either is `DELTA_MAX_COMMIT_RETRIES_EXCEEDED` with
+//! Delta's parameters (the failed version is the one last attempted). Between conflicted attempts the
 //! loop waits 100 ms to 60 s, doubling, with jitter; the wait ends early when the query is
 //! cancelled.
 //!
@@ -171,5 +173,7 @@ pub struct Committed {
 /// Partition values by physical name.
 pub type PartitionValues = HashMap<String, Option<String>>;
 
+#[cfg(test)]
+mod hook_store;
 #[cfg(test)]
 mod tests;

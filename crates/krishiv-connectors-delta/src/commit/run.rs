@@ -18,7 +18,7 @@ use krishiv_common::error::{
     DeltaMaxCommitRetriesExceeded, InternalError, KrishivError, OperationCanceled,
 };
 
-use super::conflict::{self, CurrentTxn, PartitionColumn};
+use super::conflict::{Checker, CurrentTxn, PartitionColumn};
 use super::winner::{self, FileAction};
 use super::{Committed, RetryLimits, StagedCommit, StagedRemoves, WRITE_ID_TAG};
 use crate::engine::eval::create_many;
@@ -26,15 +26,31 @@ use crate::engine::{DeltaEngine, KrishivEngineData};
 use crate::error::from_kernel;
 use crate::features::{WriteProtocol, check_write};
 
-/// Winners read per log-pool call; more are read on the next round.
+/// Winners read per log-pool call; more are read on the next round (small under test, so the
+/// tests cross a chunk boundary).
+#[cfg(not(test))]
 const WINNERS_PER_READ: usize = 1000;
+#[cfg(test)]
+const WINNERS_PER_READ: usize = 4;
 
 /// What one attempt came to.
 enum Outcome {
-    Committed { version: u64, since_checkpoint: u64 },
+    Committed {
+        version: u64,
+        since_checkpoint: u64,
+    },
     Conflicted(u64),
-    Retryable(KrishivError),
+    /// A retryable I/O failure or an error from the kernel's commit; the commit file may have
+    /// been written.
     Failed(KrishivError),
+}
+
+/// What the winners of a lost race came to.
+enum Round {
+    /// One of them is this write's commit.
+    Landed(u64),
+    /// None conflicts; the last checked version.
+    Clear(u64),
 }
 
 /// What every attempt shares.
@@ -46,6 +62,11 @@ struct Prepared {
 }
 
 /// Commits `staged` on `snapshot`, the snapshot its statement read (see the parent module).
+///
+/// The attempt and time bounds are checked after each lost race, before its winners are
+/// checked: the time bound can be overshot by one attempt and its winner reads. Dropping the
+/// returned future leaves an attempt that started running on the log pool to its end, and its
+/// outcome is then not reported.
 ///
 /// # Errors
 /// The writer allow-list's refusals; a conflict's class; `DELTA_MAX_COMMIT_RETRIES_EXCEEDED`;
@@ -69,39 +90,35 @@ pub async fn commit(
         .concat();
     let read_version = snapshot.version();
     let blind_append = removes.is_empty() && !staged.read_set.reads_table();
+    let mut read_set = staged.read_set.clone();
+    // Files read with no partition predicate and no whole-table read: as a whole-table read
+    // (wider is safe; Delta's scans always register a predicate).
+    if !read_set.files.is_empty() && read_set.predicates.is_empty() {
+        read_set.whole_table = true;
+    }
+    let checker = Arc::new(Checker::new(CurrentTxn {
+        table: staged.table.clone(),
+        read_protocol,
+        partition_columns,
+        read_set,
+        removes,
+        changes_metadata: false,
+        changes_protocol: false,
+        domains: Vec::new(),
+        blind_append,
+        limits: *engine.limits(),
+    }));
     let prepared = Arc::new(Prepared {
         engine_info: format!("krishiv {}", env!("CARGO_PKG_VERSION")),
         blind_append,
         read_version,
         staged,
     });
-    let txn = CurrentTxn {
-        table: &prepared.staged.table,
-        read_protocol: &read_protocol,
-        partition_columns: &partition_columns,
-        read_set: &prepared.staged.read_set,
-        removes: &removes,
-        changes_metadata: false,
-        changes_protocol: false,
-        domains: &[],
-        blind_append,
-    };
     let start_version = read_version + 1;
-    let mut attempt_version = start_version;
     let mut snapshot = snapshot;
     let mut attempts: u64 = 0;
     let mut conflicts: u32 = 0;
     loop {
-        if attempts > limits.max_attempts || (attempts > 0 && started.elapsed() > limits.timeout) {
-            return Err(retries_exceeded(
-                attempts,
-                start_version,
-                attempt_version,
-                &prepared,
-                &removes,
-                started,
-            ));
-        }
         attempts += 1;
         let (p, s) = (Arc::clone(&prepared), Arc::clone(&snapshot));
         let outcome = engine.delta_blocking(move |e| attempt(e, s, &p)).await??;
@@ -118,38 +135,32 @@ pub async fn commit(
                 });
             }
             Outcome::Conflicted(version) => {
-                let table = prepared.staged.table.clone();
-                let winners = engine
-                    .delta_blocking(move |e| {
-                        winner::read_from(e, version, WINNERS_PER_READ, &table)
-                    })
+                let out_of_attempts =
+                    attempts > limits.max_attempts || started.elapsed() > limits.timeout;
+                let (c, p) = (Arc::clone(&checker), Arc::clone(&prepared));
+                let round = engine
+                    .delta_blocking(move |e| check_winners(e, version, &c, &p, out_of_attempts))
                     .await??;
-                let Some(last) = winners.last().map(|w| w.version) else {
-                    return Err(internal(&format!(
-                        "the commit at version {version} conflicted but no commit file is there"
-                    )));
-                };
-                for w in &winners {
-                    if w.tag(WRITE_ID_TAG) == Some(prepared.staged.write_id.as_str()) {
-                        return Ok(landed(w.version, attempts));
+                let last = match round {
+                    Round::Landed(v) => return Ok(landed(v, attempts)),
+                    Round::Clear(_) if out_of_attempts => {
+                        return Err(retries_exceeded(
+                            attempts,
+                            start_version,
+                            version,
+                            &prepared,
+                            checker.txn().removes.len(),
+                            started,
+                        ));
                     }
-                    conflict::check(&txn, w)?;
-                }
+                    Round::Clear(last) => last,
+                };
                 snapshot = snapshot_at(engine, last, &prepared.staged.table).await?;
-                attempt_version = last + 1;
-                conflicts = conflicts.saturating_add(1);
-                backoff(engine, &limits, &prepared.staged.write_id, conflicts).await?;
-            }
-            Outcome::Retryable(error) => {
-                if let Some(v) = landed_check(engine, &prepared).await? {
-                    return Ok(landed(v, attempts));
-                }
-                // The commit file was not written: the same transaction again.
-                drop(error);
                 conflicts = conflicts.saturating_add(1);
                 backoff(engine, &limits, &prepared.staged.write_id, conflicts).await?;
             }
             Outcome::Failed(error) => {
+                // Delta raises a store failure too; only a commit that landed is a success.
                 return match landed_check(engine, &prepared).await? {
                     Some(v) => Ok(landed(v, attempts)),
                     None => Err(error),
@@ -157,6 +168,35 @@ pub async fn commit(
             }
         }
     }
+}
+
+/// The winners of the race lost at `version`, on the log pool: this write's commit among any
+/// of them is a landing; otherwise, unless `skip_checks`, each is checked in order.
+fn check_winners(
+    e: &DeltaEngine,
+    version: u64,
+    checker: &Checker,
+    p: &Prepared,
+    skip_checks: bool,
+) -> Result<Round, KrishivError> {
+    let winners = winner::read_from(e, version, WINNERS_PER_READ, &p.staged.table)?;
+    let Some(last) = winners.last().map(|w| w.version) else {
+        return Err(internal(&format!(
+            "the commit at version {version} conflicted but no commit file is there"
+        )));
+    };
+    if let Some(w) = winners
+        .iter()
+        .find(|w| w.tag(WRITE_ID_TAG) == Some(p.staged.write_id.as_str()))
+    {
+        return Ok(Round::Landed(w.version));
+    }
+    if !skip_checks {
+        for w in &winners {
+            checker.check(w)?;
+        }
+    }
+    Ok(Round::Clear(last))
 }
 
 fn landed(version: u64, attempts: u64) -> Committed {
@@ -207,7 +247,7 @@ fn attempt(e: &DeltaEngine, snapshot: SnapshotRef, p: &Prepared) -> Result<Outco
             since_checkpoint: c.post_commit_stats().commits_since_checkpoint,
         },
         Ok(CommitResult::Conflicted(c)) => Outcome::Conflicted(c.conflict_version()),
-        Ok(CommitResult::Retryable(r)) => Outcome::Retryable(kernel(&r.error)),
+        Ok(CommitResult::Retryable(r)) => Outcome::Failed(kernel(&r.error)),
         Err(err) => Outcome::Failed(kernel(&err)),
     })
 }
@@ -290,12 +330,12 @@ fn retries_exceeded(
     start_version: u64,
     fail_version: u64,
     p: &Prepared,
-    removes: &[FileAction],
+    removes: usize,
     started: Instant,
 ) -> KrishivError {
     let adds: usize = p.staged.adds.iter().map(RecordBatch::num_rows).sum();
     // The adds, the removes and the commitInfo.
-    let actions = adds + removes.len() + 1;
+    let actions = adds + removes + 1;
     DeltaMaxCommitRetriesExceeded {
         num_attempts: attempts.to_string(),
         start_version: start_version.to_string(),
@@ -351,26 +391,22 @@ fn partition_columns(
     let mode = tc.column_mapping_mode();
     let schema = snapshot.schema();
     let names = tc.metadata().partition_columns();
-    schema
-        .fields()
-        .filter(|f| names.iter().any(|n| n == f.name()))
-        .map(|f| {
+    // In the table's `partitionColumns` order, as Delta's `partitionSchema`.
+    names
+        .iter()
+        .map(|n| {
+            let f = schema.field(n).ok_or_else(|| {
+                internal(&format!(
+                    "the partition column {n} of {table} is not in its schema"
+                ))
+            })?;
             Ok(PartitionColumn {
                 name: f.name().clone(),
                 physical: f.physical_name(mode).to_owned(),
                 data_type: f.data_type().clone(),
             })
         })
-        .collect::<Result<Vec<_>, KrishivError>>()
-        .and_then(|columns| {
-            if columns.len() == names.len() {
-                Ok(columns)
-            } else {
-                Err(internal(&format!(
-                    "a partition column of {table} is not in its schema"
-                )))
-            }
-        })
+        .collect()
 }
 
 /// The removed files of `r`: their paths and partition values.

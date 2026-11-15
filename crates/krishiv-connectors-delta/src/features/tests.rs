@@ -323,3 +323,31 @@ fn an_invariant_in_use_refuses_the_write() {
     legacy.min_writer_version = 1;
     assert!(check_write("t", &legacy).is_ok());
 }
+
+#[test]
+fn invariants_are_found_at_any_depth() {
+    use delta_kernel::schema::{ArrayType, DataType, MapType, MetadataValue, StructField};
+    let invariant = || {
+        StructField::nullable("x", DataType::LONG).with_metadata([(
+            INVARIANTS_KEY,
+            MetadataValue::String("{\"expression\":{\"expression\":\"x > 0\"}}".to_owned()),
+        )])
+    };
+    let nested = DataType::try_struct_type([invariant()]).unwrap();
+    let in_array = StructType::new_unchecked([StructField::nullable(
+        "a",
+        ArrayType::new(nested.clone(), true),
+    )]);
+    let in_map = StructType::new_unchecked([StructField::nullable(
+        "m",
+        MapType::new(DataType::STRING, nested, true),
+    )]);
+    let none = StructType::new_unchecked([StructField::nullable("x", DataType::LONG)]);
+    assert!(has_invariants(&in_array));
+    assert!(has_invariants(&in_map));
+    assert!(!has_invariants(&none));
+    assert_eq!(
+        check_write("t", &writer(0, &[])).unwrap_err().error_class(),
+        ErrorClass::DeltaInvalidProtocolVersion
+    );
+}
