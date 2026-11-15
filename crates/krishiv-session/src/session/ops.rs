@@ -24,7 +24,7 @@ impl Session {
             stores,
         )
         .locate_with_options(text, options)?;
-        crate::access::physical(at)
+        crate::access::physical(self, at, Privilege::Modify, StatementClass::Write)
     }
 
     /// A write's options, before its target is located: locating builds the

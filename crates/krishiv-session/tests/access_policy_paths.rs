@@ -415,3 +415,320 @@ fn a_relative_warehouse_is_refused_not_passed_to_the_policy() {
         assert!(!Path::new(&name).exists(), "{sql} made the directory");
     }
 }
+
+/// Allows the first `allowed` path questions and denies every later one; everything that is not a path
+/// is allowed. With `allowed = 1` a `CREATE TABLE ... LOCATION` passes its statement pre-check (the
+/// location as written) and is denied at the directory check, so what that check answers is visible.
+struct FirstPaths {
+    allowed: usize,
+    asked: std::sync::atomic::AtomicUsize,
+}
+
+impl FirstPaths {
+    fn new(allowed: usize) -> Arc<Self> {
+        Arc::new(Self {
+            allowed,
+            asked: std::sync::atomic::AtomicUsize::new(0),
+        })
+    }
+}
+
+impl AccessPolicy for FirstPaths {
+    fn version(&self) -> PolicyVersion {
+        PolicyVersion(1)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _: &'a Principal,
+        securable: &'a Securable,
+        _: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        let decision = match securable {
+            Securable::Path(_)
+                if self.asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= self.allowed =>
+            {
+                AccessDecision::Deny {
+                    reason: "path".to_owned(),
+                }
+            }
+            _ => AccessDecision::Allow,
+        };
+        Box::pin(std::future::ready(Ok(decision)))
+    }
+}
+
+/// The error text, with the class: what a caller sees.
+fn seen(r: Result<(), KrishivError>) -> String {
+    match r {
+        Ok(()) => "ok".to_owned(),
+        Err(e) => format!("{}: {e}", e.error_class().name()),
+    }
+}
+
+/// `<dir>/d` made as each kind of entry a path cannot be resolved through, and as nothing: a missing
+/// directory, an unsearchable one (skipped when the test runs as root, which searches it anyway), a
+/// dangling link and a link loop.
+fn each_unresolvable_kind(
+    dir: &Path,
+    mut probe: impl FnMut(&str) -> String,
+) -> Vec<(String, String)> {
+    use std::os::unix::fs::PermissionsExt;
+    let d = dir.join("d");
+    let mut out = Vec::new();
+    for kind in ["missing", "unsearchable", "dangling link", "link loop"] {
+        match kind {
+            "unsearchable" => {
+                std::fs::create_dir(&d).unwrap();
+                std::fs::create_dir(d.join("inner")).unwrap();
+                std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o000)).unwrap();
+                if std::fs::read_dir(&d).is_ok() {
+                    // Root: the directory is searchable after all.
+                    std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o700)).unwrap();
+                    std::fs::remove_dir_all(&d).unwrap();
+                    continue;
+                }
+            }
+            "dangling link" => std::os::unix::fs::symlink(dir.join("nowhere"), &d).unwrap(),
+            "link loop" => std::os::unix::fs::symlink(&d, &d).unwrap(),
+            _ => {}
+        }
+        out.push((kind.to_owned(), probe(&format!("{}/x", d.display()))));
+        if kind == "unsearchable" {
+            std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o700)).unwrap();
+            std::fs::remove_dir_all(&d).unwrap();
+        } else if kind != "missing" {
+            std::fs::remove_file(&d).unwrap();
+        }
+    }
+    out
+}
+
+/// A path the session cannot resolve (unsearchable, a dangling link, a loop) is denied exactly as the
+/// policy denies a missing one: the same 42501 text, so the answer never tells what is on disk. For a
+/// write by path and for `CREATE TABLE ... LOCATION`.
+#[test]
+fn an_unresolvable_path_is_denied_as_a_missing_one_is() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().canonicalize().unwrap();
+    let writes = each_unresolvable_kind(&dir, |path| {
+        let s = Session::builder()
+            .principal(Principal::new("ana", PrincipalKind::User))
+            .access_policy(FirstPaths::new(0))
+            .build()
+            .unwrap();
+        seen(block_on(async {
+            s.sql("SELECT 1 AS a").await?.write().parquet(path).await
+        }))
+    });
+    let creates = each_unresolvable_kind(&dir, |path| {
+        let s = Session::builder()
+            .principal(Principal::new("ana", PrincipalKind::User))
+            .access_policy(FirstPaths::new(1))
+            .build()
+            .unwrap();
+        seen(run(
+            &s,
+            &format!("CREATE TABLE e (a INT) USING parquet LOCATION '{path}'"),
+        ))
+    });
+    for (what, answers) in [("write", writes), ("create", creates)] {
+        let (_, missing) = &answers[0];
+        assert!(missing.starts_with(DENIED), "{what}: {missing}");
+        for (kind, answer) in &answers {
+            assert_eq!(answer, missing, "{what}: {kind}");
+        }
+    }
+}
+
+/// `..` after a link is folded in the text first, as reads and writes fold it (`LocalPaths::locate`),
+/// then links are resolved: with the warehouse `<tmp>/data/l/../wh` and `l -> <tmp>/mnt/x`, every
+/// statement asks about (and CREATE makes) `<tmp>/data/wh/..`, never `<tmp>/mnt/wh/..`.
+#[test]
+fn a_dot_dot_after_a_link_is_folded_as_writes_fold_it() {
+    let layout = |tmp: &Path, inside: bool| {
+        let tmp = tmp.canonicalize().unwrap();
+        for d in ["data/wh", "mnt/x", "mnt/wh"] {
+            std::fs::create_dir_all(tmp.join(d)).unwrap();
+        }
+        std::os::unix::fs::symlink(tmp.join("mnt/x"), tmp.join("data/l")).unwrap();
+        let rule = PrefixRule {
+            prefix: format!("file:{}/data/wh/", tmp.display()),
+            inside,
+        };
+        (
+            format!("{}/data/l/../wh", tmp.display()),
+            Arc::new(rule) as Arc<dyn AccessPolicy>,
+        )
+    };
+    assert_eq!(
+        directory_answers(|tmp| layout(tmp, true)),
+        every_directory_statement("ok")
+    );
+    assert_eq!(
+        directory_answers(|tmp| layout(tmp, false)),
+        every_directory_statement(DENIED)
+    );
+    let tmp = tempfile::tempdir().unwrap();
+    let (at, policy) = layout(tmp.path(), true);
+    let (_, s) = sessions(&at, policy);
+    run(&s, "CREATE TABLE made (a INT) USING parquet").unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    assert!(root.join("data/wh/made").is_dir());
+    assert!(!root.join("mnt/wh/made").exists());
+}
+
+/// A location whose `..` climbs back out of a link (`<wh>/o -> <tmp>/outside`) gets one answer whether the
+/// directory it names behind the link exists or not: the check never resolves `..` on the disk.
+#[test]
+fn a_location_climbing_out_of_a_link_does_not_tell_what_is_behind_it() {
+    let answer = |behind_exists: bool| {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("wh")).unwrap();
+        std::fs::create_dir_all(root.join("outside")).unwrap();
+        if behind_exists {
+            std::fs::create_dir(root.join("outside/maybe")).unwrap();
+        }
+        std::os::unix::fs::symlink(root.join("outside"), root.join("wh/o")).unwrap();
+        let rule = PrefixRule {
+            prefix: format!("file:{}/wh/", root.display()),
+            inside: true,
+        };
+        let (_, s) = sessions(&format!("{}/wh", root.display()), Arc::new(rule));
+        let location = format!("{}/wh/o/maybe/../../x", root.display());
+        seen(run(
+            &s,
+            &format!("CREATE TABLE e (a INT) USING parquet LOCATION '{location}'"),
+        ))
+    };
+    assert_eq!(answer(true), answer(false));
+    assert_eq!(answer(false), "ok");
+}
+
+/// Swaps the warehouse `<tmp>/wh` for a link to `<tmp>/outside` the first time it is asked about a
+/// path under it, and allows everything: the race between a directory check and the mkdir.
+struct SwapOnCheck {
+    root: std::path::PathBuf,
+    done: std::sync::atomic::AtomicBool,
+}
+
+impl AccessPolicy for SwapOnCheck {
+    fn version(&self) -> PolicyVersion {
+        PolicyVersion(1)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _: &'a Principal,
+        securable: &'a Securable,
+        _: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        let wh = format!("file:{}/wh/", self.root.display());
+        if let Securable::Path(p) = securable
+            && p.as_plain().is_some_and(|t| t.starts_with(&wh))
+            && !self.done.swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            std::fs::rename(self.root.join("wh"), self.root.join("wh-old")).unwrap();
+            std::os::unix::fs::symlink(self.root.join("outside"), self.root.join("wh")).unwrap();
+        }
+        Box::pin(std::future::ready(Ok(AccessDecision::Allow)))
+    }
+}
+
+/// A link swapped into the warehouse between the directory check and the mkdir: CREATE and CTAS make
+/// nothing outside it and fail with 42501.
+#[test]
+fn a_link_swapped_in_after_the_check_creates_nothing_outside() {
+    for sql in [
+        "CREATE TABLE t (a INT) USING parquet",
+        "CREATE TABLE t USING parquet AS SELECT 1 AS a",
+    ] {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        std::fs::create_dir_all(root.join("wh")).unwrap();
+        std::fs::create_dir_all(root.join("outside")).unwrap();
+        let policy = SwapOnCheck {
+            root: root.clone(),
+            done: std::sync::atomic::AtomicBool::new(false),
+        };
+        let (_, s) = sessions(&format!("{}/wh", root.display()), Arc::new(policy));
+        assert_eq!(outcome(run(&s, sql)), DENIED, "{sql}");
+        assert_eq!(
+            std::fs::read_dir(root.join("outside")).unwrap().count(),
+            0,
+            "{sql} made a directory outside"
+        );
+    }
+}
+
+/// A warehouse that is a dangling link or a link loop: CREATE is denied as the policy denies (42501),
+/// not refused with another class.
+#[test]
+fn a_dangling_or_looping_warehouse_is_denied() {
+    for looping in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let wh = root.join("wh");
+        if looping {
+            std::os::unix::fs::symlink(&wh, &wh).unwrap();
+        } else {
+            std::os::unix::fs::symlink(root.join("nowhere"), &wh).unwrap();
+        }
+        let (_, s) = sessions(&wh.display().to_string(), Arc::new(AllowAll));
+        for sql in [
+            "CREATE TABLE c (a INT) USING parquet",
+            "CREATE TABLE ctas USING parquet AS SELECT 1 AS a",
+        ] {
+            assert_eq!(outcome(run(&s, sql)), DENIED, "{sql} (loop: {looping})");
+        }
+    }
+}
+
+/// A link inside the warehouse that points out of it (`<wh>/ns.db -> <tmp>/outside`): under a
+/// `PathPrefixPolicy` of the warehouse, a table created through it is denied and nothing is made there.
+#[test]
+fn a_link_escaping_the_warehouse_is_denied() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let wh = root.join("wh");
+    std::fs::create_dir_all(&wh).unwrap();
+    std::fs::create_dir_all(root.join("outside")).unwrap();
+    let policy = PathPrefixPolicy::new([&wh], Arc::new(AllowAll)).unwrap();
+    let (owner, s) = sessions(&wh.display().to_string(), Arc::new(policy));
+    run(&owner, "CREATE DATABASE ns").unwrap();
+    if wh.join("ns.db").is_dir() {
+        std::fs::remove_dir(wh.join("ns.db")).unwrap();
+    }
+    std::os::unix::fs::symlink(root.join("outside"), wh.join("ns.db")).unwrap();
+    for sql in [
+        "CREATE TABLE ns.c (a INT) USING parquet",
+        "CREATE TABLE ns.ctas USING parquet AS SELECT 1 AS a",
+    ] {
+        assert_eq!(outcome(run(&s, sql)), DENIED, "{sql}");
+    }
+    assert_eq!(std::fs::read_dir(root.join("outside")).unwrap().count(), 0);
+}
+
+/// A `file://host/...` location naming another host is refused as reads and writes refuse it, never
+/// checked as the local path `/...`.
+#[test]
+fn a_file_url_with_a_host_is_refused() {
+    let log = Arc::new(PathLog(std::sync::Mutex::new(Vec::new())));
+    let tmp = tempfile::tempdir().unwrap();
+    let (_, s) = sessions(
+        &tmp.path().display().to_string(),
+        Arc::clone(&log) as Arc<dyn AccessPolicy>,
+    );
+    let e = run(
+        &s,
+        "CREATE TABLE e (a INT) USING parquet LOCATION 'file://evil/a'",
+    )
+    .unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE", "{e}");
+    assert!(
+        !log.0.lock().unwrap().iter().any(|p| p == "file:/evil/a"),
+        "{:?}",
+        log.0.lock().unwrap()
+    );
+}

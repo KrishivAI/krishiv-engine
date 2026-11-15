@@ -1301,6 +1301,8 @@ impl Session {
         let mut renamed = table.clone();
         renamed.namespace.clone_from(&to.namespace);
         renamed.name.clone_from(&to.name);
+        // The canonical directories moved (to, from), to move back on a failure.
+        let mut moved: Option<(PathBuf, PathBuf)> = None;
         if table.managed {
             let warehouse = self.warehouse_dir()?;
             renamed.location = managed_location(&warehouse, &to.namespace, &to.name);
@@ -1311,31 +1313,44 @@ impl Session {
                     p.location = renamed.location.join(rest);
                 }
             }
-            // Authorized before any file moves: the source must be deletable and the target creatable.
-            self.deletable_dir(table).await?;
-            self.authorize_path(&renamed.location, &[Privilege::Create], StatementClass::Ddl)
+            // Authorized before any file moves: the source must be deletable and the target creatable. The
+            // move acts on the canonical paths checked; the target's parents are made level by level and
+            // verified, and the target is verified again after the move (moved back if a link was swapped
+            // in). Not closed: a swap between that last verification and the move itself.
+            let source = self.deletable_dir(table).await?;
+            let target = self
+                .authorize_path(&renamed.location, &[Privilege::Create], StatementClass::Ddl)
                 .await?;
-            if let Some(parent) = renamed.location.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| internal(format!("cannot create {}: {e}", parent.display())))?;
+            if let Some(parent) = target.parent() {
+                self.create_checked_dir(parent, Privilege::Create, StatementClass::Ddl)?;
             }
-            std::fs::rename(&table.location, &renamed.location).map_err(|e| {
+            let source = source.unwrap_or_else(|| table.location.clone());
+            std::fs::rename(&source, &target).map_err(|e| {
                 internal(format!(
                     "cannot move {} to {}: {e}",
                     table.location.display(),
                     renamed.location.display()
                 ))
             })?;
+            if std::fs::canonicalize(&target).ok().as_ref() != Some(&target) {
+                let _ = std::fs::rename(&target, &source);
+                return Err(crate::access::unresolved(
+                    self,
+                    StatementClass::Ddl,
+                    &format!("file:{}", target.display()),
+                    Privilege::Create,
+                ));
+            }
+            moved = Some((target, source));
         }
-        let moved_to = renamed.location.clone();
         self.state
             .cache
             .invalidate_table(&format!("{}.{}", table.namespace, table.name));
         store.drop_table(&table.namespace, &table.name);
         if let Err(e) = store.create_table(renamed, CreateMode::ErrorIfExists) {
             let _ = store.create_table(table.clone(), CreateMode::Replace);
-            if table.managed {
-                let _ = std::fs::rename(&moved_to, &table.location);
+            if let Some((target, source)) = moved {
+                let _ = std::fs::rename(target, source);
             }
             return Err(e);
         }
@@ -1811,7 +1826,6 @@ pub(crate) fn now_ms() -> i64 {
 }
 
 mod files;
-pub(crate) use files::dir_securable;
 use files::remove_dir;
 mod location;
 use location::qualified_namespace_location;

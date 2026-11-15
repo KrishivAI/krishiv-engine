@@ -15,41 +15,96 @@ use crate::store::CatalogTable;
 
 impl Session {
     /// Asks the session's policy about the local directory `path` for each privilege (the writer does
-    /// the same for its files), in the one form [`dir_securable`] gives every check of a table's
-    /// directories: `file:` and the canonical absolute path, the path a write to it goes to.
+    /// the same for its files), in the one form every check of a table's directories takes: `file:` and
+    /// the canonical absolute path, with `.` and `..` folded in the text as reads and writes fold them,
+    /// then the links of its existing part resolved, the part that does not exist yet appended
+    /// (`access::canonical_dir`, the write path's rule). Returns that canonical path: the caller acts on
+    /// it, not on `path`.
     ///
     /// # Errors
-    /// `KRISHIV_UNSUPPORTED_FEATURE` for a path that cannot be made canonical (relative, unresolvable,
-    /// non-UTF-8), before the policy is asked; `KRISHIV_INSUFFICIENT_PERMISSIONS` for a denial.
-    pub(super) async fn authorize_path(
+    /// `KRISHIV_UNSUPPORTED_FEATURE` (audited) for a relative or non-UTF-8 path, before the policy is
+    /// asked; `KRISHIV_INSUFFICIENT_PERMISSIONS` for a denial and for a path that cannot be resolved (the
+    /// same answer, see `access::physical`).
+    pub(crate) async fn authorize_path(
         &self,
         path: &Path,
         privileges: &[Privilege],
         class: StatementClass,
-    ) -> Result<(), KrishivError> {
-        let securable = dir_securable(path)?;
+    ) -> Result<PathBuf, KrishivError> {
+        let first = privileges.first().copied().unwrap_or(Privilege::Modify);
+        let at = crate::access::canonical_dir(self, path, first, class)?;
+        let securable = Securable::Path(OptionValue::from_user("path", at.display.clone()));
         self.authorize_securable(&securable, privileges, class)
-            .await
+            .await?;
+        Ok(local_of(&at.display))
     }
 
-    /// The securable of a table's `location` as CREATE TABLE asks it: a managed table's directory (and an
-    /// external local location) by [`dir_securable`], a relative external location after qualifying it
-    /// against the working directory as its writes do, and an object-store location in its qualified form.
-    pub(super) fn location_securable(
+    /// Asks `CREATE` on a table's `location` as CREATE TABLE asks it: a managed table's directory (and an
+    /// external local location) as [`Self::authorize_path`] does, a relative external location after
+    /// qualifying it against the working directory as its writes do, and an object-store location in its
+    /// qualified form. Returns the canonical local path checked (`None` for an object store).
+    pub(super) async fn authorize_location(
         &self,
         location: &Path,
         managed: bool,
-    ) -> Result<Securable, KrishivError> {
+    ) -> Result<Option<PathBuf>, KrishivError> {
+        let (create, class) = (&[Privilege::Create], StatementClass::Ddl);
         match location.to_str() {
             Some(text) if !managed && !location.is_absolute() => {
                 let qualified = self.qualify_path(text)?;
                 match qualified.strip_prefix("file:") {
-                    Some(local) => dir_securable(Path::new(local)),
-                    None => Ok(Securable::Path(OptionValue::from_user("path", qualified))),
+                    Some(local) => self
+                        .authorize_path(Path::new(local), create, class)
+                        .await
+                        .map(Some),
+                    None => {
+                        let securable = Securable::Path(OptionValue::from_user("path", qualified));
+                        self.authorize_securable(&securable, create, class).await?;
+                        Ok(None)
+                    }
                 }
             }
-            _ => dir_securable(location),
+            _ => self.authorize_path(location, create, class).await.map(Some),
         }
+    }
+
+    /// Makes the directory `checked` (a canonical path [`Self::authorize_path`] allowed) and the missing
+    /// directories above it one level at a time, each verified to still resolve to itself once it exists.
+    /// A link swapped in on the way (after the check) is refused with 42501 for `privilege` and the
+    /// directory just made through it is removed, so nothing stays outside the checked path.
+    ///
+    /// Not closed: between the verification of one level and the mkdir of the next, a swap makes one
+    /// empty directory outside, which the next verification finds and removes (best effort).
+    pub(crate) fn create_checked_dir(
+        &self,
+        checked: &Path,
+        privilege: Privilege,
+        class: StatementClass,
+    ) -> Result<(), KrishivError> {
+        let mut at = PathBuf::new();
+        for part in checked.components() {
+            at.push(part);
+            let made = match std::fs::create_dir(&at) {
+                Ok(()) => true,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => false,
+                Err(e) => return Err(internal(format!("cannot create {}: {e}", at.display()))),
+            };
+            match std::fs::canonicalize(&at) {
+                Ok(now) if now == at => {}
+                now => {
+                    if made && let Ok(now) = now {
+                        let _ = std::fs::remove_dir(now);
+                    }
+                    return Err(crate::access::unresolved(
+                        self,
+                        class,
+                        &format!("file:{}", checked.display()),
+                        privilege,
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Asks the session's policy about `securable` for each privilege, auditing each answer.
@@ -103,7 +158,8 @@ impl Session {
         if !table.managed {
             return Ok(None);
         }
-        let location = &table.location;
+        // `..` folded in the text first, as every other check and the writes fold it.
+        let location = &local_of(&crate::access::lexical_dir(&table.location)?.display);
         let meta = match location.symlink_metadata() {
             Ok(m) => m,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -114,8 +170,7 @@ impl Session {
                 )));
             }
         };
-        let root = table
-            .root
+        let root = local_of(&crate::access::lexical_dir(&table.root)?.display)
             .canonicalize()
             .map_err(|e| internal(format!("cannot resolve the warehouse: {e}")))?;
         let canonical = location
@@ -128,24 +183,14 @@ impl Session {
             )));
         }
         self.authorize_path(&canonical, &[Privilege::Modify], StatementClass::Write)
-            .await?;
-        Ok(Some(canonical))
+            .await
+            .map(Some)
     }
 }
 
-/// The path securable of the local directory `path`, in the one form every check of a table's
-/// directories uses ([`Session::authorize_path`], the partition DDL of `partitions.rs`): `file:` and the
-/// canonical absolute path, with `.`, `..` and the links of its existing part resolved and the part that
-/// does not exist yet appended (`access::physical`, the rule the write path uses). So one rule answers
-/// CREATE, INSERT and DROP of a directory alike, however the warehouse was written.
-///
-/// # Errors
-/// `KRISHIV_UNSUPPORTED_FEATURE` for a relative path (also a `file:` or other scheme kept in the text: a
-/// local directory is expected), one that cannot be resolved (an I/O error, a link loop, a dangling link)
-/// and a non-UTF-8 one. It never reaches the policy as written (fail closed).
-pub(crate) fn dir_securable(path: &Path) -> Result<Securable, KrishivError> {
-    let text = crate::access::canonical_file_path(path)?;
-    Ok(Securable::Path(OptionValue::from_user("path", text)))
+/// The local path of a `file:/...` display.
+fn local_of(display: &str) -> PathBuf {
+    PathBuf::from(display.strip_prefix("file:").unwrap_or(display))
 }
 
 /// Deletes a managed table's directory; a directory that is already gone

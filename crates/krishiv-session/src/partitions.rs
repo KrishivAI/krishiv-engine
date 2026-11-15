@@ -32,7 +32,7 @@ use krishiv_common::error::{
 };
 use krishiv_common::names::check_column_name_duplication;
 use krishiv_plan::Literal;
-use krishiv_plan::analyzer::{Privilege, authorize};
+use krishiv_plan::analyzer::Privilege;
 use krishiv_sql::StatementClass;
 use krishiv_sql::ast::{AlterTableAction, BucketSpec, Expr, PartitionSpec, PartitionWithLocation};
 use krishiv_types::DataType;
@@ -1435,52 +1435,45 @@ impl Session {
             .into());
         }
         // Every check first, then the directories: a failure removes the ones this command created.
+        let mut checked = Vec::with_capacity(added.len());
         for p in &added {
-            self.authorize_dir(&p.location).await?;
+            checked.push(self.authorize_dir(&p.location).await?);
         }
+        // The directories made are the canonical ones checked, each verified after the mkdir.
         let mut created: Vec<&Path> = Vec::new();
-        for p in &added {
-            if p.location.is_dir() {
+        for dir in &checked {
+            if dir.is_dir() {
                 continue;
             }
-            if let Err(e) = std::fs::create_dir_all(&p.location) {
+            if let Err(e) = self.create_checked_dir(dir, Privilege::Create, StatementClass::Ddl) {
                 for dir in created {
                     let _ = std::fs::remove_dir(dir);
                 }
-                return Err(internal(format!(
-                    "cannot create {}: {e}",
-                    p.location.display()
-                )));
+                return Err(e);
             }
-            created.push(&p.location);
+            created.push(dir);
         }
         changed.layout.partitions.extend(added);
         changed.data_changed();
         Ok(changed)
     }
 
-    /// `CREATE` on a partition directory the command makes or registers.
-    async fn authorize_dir(&self, path: &Path) -> Result<(), KrishivError> {
+    /// `CREATE` on a partition directory the command makes or registers: the canonical path checked.
+    async fn authorize_dir(&self, path: &Path) -> Result<PathBuf, KrishivError> {
         self.authorize_dir_for(path, Privilege::Create).await
     }
 
     /// `privilege` on a partition directory: `CREATE` where the command makes or registers one, `MODIFY` where it
-    /// deletes or moves away the files in one (as TRUNCATE and INSERT ask of the paths they change).
+    /// deletes or moves away the files in one (as TRUNCATE and INSERT ask of the paths they change). Asked in the
+    /// form `authorize_path` asks a table's directory in (the canonical path, returned), so one rule answers both
+    /// alike.
     async fn authorize_dir_for(
         &self,
         path: &Path,
         privilege: Privilege,
-    ) -> Result<(), KrishivError> {
-        // The form `authorize_path` asks a table's directory in, so one rule answers both alike.
-        let securable = crate::table_commands::dir_securable(path)?;
-        let r = authorize(
-            &*self.state.policy,
-            &self.state.principal,
-            &securable,
-            privilege,
-        )
-        .await;
-        crate::access::audit(self, StatementClass::Ddl, r)
+    ) -> Result<PathBuf, KrishivError> {
+        self.authorize_path(path, &[privilege], StatementClass::Ddl)
+            .await
     }
 
     /// Registers the partitions a successful write committed files to (`dirs`, as

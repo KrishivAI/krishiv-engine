@@ -302,15 +302,16 @@ impl Session {
             }
             .into());
         }
-        let location = table.location.clone();
-        let securable = self.location_securable(&location, table.managed)?;
-        self.authorize_securable(&securable, &[Privilege::Create], StatementClass::Ddl)
+        let checked = self
+            .authorize_location(&table.location, table.managed)
             .await?;
         // Spark creates the directory of a managed table only; an external table's location is
-        // made by its first write.
-        if table.managed {
-            std::fs::create_dir_all(&location)
-                .map_err(|e| internal(format!("cannot create {}: {e}", location.display())))?;
+        // made by its first write. The directory made is the canonical one checked, verified level by
+        // level, so a link swapped in after the check makes nothing outside it.
+        if table.managed
+            && let Some(checked) = &checked
+        {
+            self.create_checked_dir(checked, Privilege::Create, StatementClass::Ddl)?;
         }
         // Tables are never replaced, so nothing comes back from the store to clean up.
         self.state.catalog.store.create_table(table, mode)?;
@@ -394,24 +395,29 @@ impl Session {
         // An external location keeps `errorifexists`: a CTAS never replaces files already there.
         // The policy is asked about the destination first: a denied CTAS must not create the warehouse or
         // the table directory on the way to being refused (the writer asks again for the files it writes).
-        if table.managed {
-            self.authorize_path(
-                &table.location,
-                &[Privilege::Modify, Privilege::Create],
-                StatementClass::Write,
-            )
-            .await?;
-        }
         let owned = if table.managed {
-            Some(
-                OwnedDirectory::create(table.location.clone()).map_err(|e| match e {
-                    OwnedDirectoryError::Exists => KrishivError::from(LocationAlreadyExists {
-                        identifier: quoted(&table.namespace, &table.name),
-                        location: table.location.display().to_string(),
-                    }),
-                    OwnedDirectoryError::Io(message) => internal(message),
-                })?,
-            )
+            let checked = self
+                .authorize_path(
+                    &table.location,
+                    &[Privilege::Modify, Privilege::Create],
+                    StatementClass::Write,
+                )
+                .await?;
+            // The canonical directory checked is the one made: its parents level by level, each verified,
+            // then the directory itself, verified again (a link swapped in after the check makes nothing
+            // that stays outside; the writer re-checks every path it writes).
+            if let Some(parent) = checked.parent() {
+                self.create_checked_dir(parent, Privilege::Create, StatementClass::Write)?;
+            }
+            let owned = OwnedDirectory::create(checked.clone()).map_err(|e| match e {
+                OwnedDirectoryError::Exists => KrishivError::from(LocationAlreadyExists {
+                    identifier: quoted(&table.namespace, &table.name),
+                    location: table.location.display().to_string(),
+                }),
+                OwnedDirectoryError::Io(message) => internal(message),
+            })?;
+            self.create_checked_dir(&checked, Privilege::Create, StatementClass::Write)?;
+            Some(owned)
         } else {
             None
         };
