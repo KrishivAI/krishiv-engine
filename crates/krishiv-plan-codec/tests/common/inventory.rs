@@ -2346,6 +2346,8 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         ),
         (
             // A vector column on the `FixedSizeList` carrier (design P3-T075): the argument type of a count.
+            // Hand-built: the planner types an aggregate argument from its Spark type, so it only ever emits a
+            // plain list. The case keeps the defensive feature (header, refusal, bytes) tested.
             "vector_carrier_aggregate",
             PhysNode::Aggregate {
                 input: Box::new(PhysNode::Scan(file_scan())),

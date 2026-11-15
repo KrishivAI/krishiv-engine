@@ -309,3 +309,42 @@ fn a_udf_receives_a_vector_column_as_a_plain_list() {
         .collect();
     assert_eq!(kinds, [1, 1, 1]);
 }
+
+/// A vector column carried through a sort under a memory limit small enough to spill (design P3-T075, review M2):
+/// the rows come back whole and in order. A list is no grouping or join key in the engine, so the carrier is
+/// never hashed as one (`array_functions_over_a_vector_column_match_a_list_column` checks the refusal).
+#[test]
+fn a_vector_column_survives_a_spilling_sort() {
+    const ROWS: u16 = 60_000;
+    const N: usize = 16;
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("spill"); // the session creates it, mode 0700
+    let s = Session::builder()
+        .config("krishiv.spill.dir", dir.to_str().unwrap())
+        .config("krishiv.memory.limit", "3m")
+        .build()
+        .unwrap();
+    // Row i starts with ROWS - i, so the sort reverses the input.
+    let data: Vec<Vec<f32>> = (0..ROWS)
+        .map(|i| {
+            let mut r = vec![0.0; N];
+            r[0] = f32::from(ROWS - i);
+            r
+        })
+        .collect();
+    let refs: Vec<&[f32]> = data.iter().map(Vec::as_slice).collect();
+    vector_table(&s, "big", i32::try_from(N).unwrap(), &refs);
+
+    let got: Vec<Vec<f32>> = rows(&s, "SELECT v FROM big ORDER BY v[0]")
+        .iter()
+        .flat_map(|b| {
+            let l = b.column(0).as_list::<i32>();
+            (0..l.len())
+                .map(|i| l.value(i).as_primitive::<Float32Type>().values().to_vec())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let mut want = data.clone();
+    want.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert_eq!(got, want);
+}
