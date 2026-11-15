@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Order-sensitive aggregates (`first`, `last`, the ties of `max_by` and
-//! `min_by`) across drivers follow the driver-partition order whatever order
+//! `min_by`, float `max`/`min` of `0.0` and `-0.0`) across drivers follow the driver-partition order whatever order
 //! the drivers combine in, and whether or not the aggregate spilled: the
 //! answer never depends on memory.
 #![cfg(not(loom))]
@@ -12,8 +12,11 @@
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::Int64Type;
+use arrow_array::types::{Float64Type, Int64Type};
+use arrow_array::{ArrayRef, Float64Array, Int64Array, RecordBatch};
+use arrow_schema::{Field, Schema};
 use krishiv_memory::{MemoryConfig, MemoryPool, SpillOwner, TreePool};
+use krishiv_types::batch::Batch;
 
 use arrow_schema::DataType;
 
@@ -27,12 +30,44 @@ use crate::{
 
 const KEYS: i64 = 512;
 
-/// Drivers of partitions `order` (in that combine order) each fold keys
-/// `0..KEYS` with the order column counting from `partition * 10_000`;
-/// the drivers in `spilled` spill their table before they combine.
-/// Returns `(key, first o, last o)` with `picks`, else `(key, max_by(o, k),
-/// min_by(o, k))` (every row of a group ties on `k`), sorted.
-async fn run(picks: bool, rows: bool, order: &[u32], spilled: &[u32]) -> Vec<[i64; 3]> {
+/// What [`run`] aggregates.
+#[derive(Clone, Copy)]
+enum Mode {
+    /// `(key, first o, last o)`.
+    Picks,
+    /// `(key, max_by(o, k), min_by(o, k))`: every row of a group ties on `k`.
+    By,
+    /// `(key, max(z), min(z))` as `f64` bits, where `z` is `0.0` in partition
+    /// 0 and `-0.0` in the others: the zeros tie, so the sign says which
+    /// partition's value was kept.
+    Zeros,
+}
+
+/// Partition `p`'s rows for `mode`: keys `0..KEYS`, then the order column
+/// counting from `p * 10_000` (or the zero of [`Mode::Zeros`]).
+fn input(mode: Mode, p: u32) -> Batch {
+    if !matches!(mode, Mode::Zeros) {
+        return batch(false, i64::from(p) * 10_000, 0..KEYS);
+    }
+    let zero = if p == 0 { 0.0 } else { -0.0 };
+    let cols: Vec<ArrayRef> = vec![
+        Arc::new(Int64Array::from_iter_values(0..KEYS)),
+        Arc::new(Float64Array::from_iter_values((0..KEYS).map(|_| zero))),
+    ];
+    Batch::new(RecordBatch::try_new(zeros_schema(), cols).unwrap())
+}
+
+fn zeros_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Int64, false),
+        Field::new("z", DataType::Float64, false),
+    ]))
+}
+
+/// Drivers of partitions `order` (in that combine order) each fold
+/// [`input`]; the drivers in `spilled` spill their table before they
+/// combine. Returns the rows `mode` describes, sorted.
+async fn run(mode: Mode, rows: bool, order: &[u32], spilled: &[u32]) -> Vec<[i64; 3]> {
     let dir = tempfile::Builder::new()
         .prefix("krishiv-merge-order-")
         .tempdir()
@@ -67,20 +102,21 @@ async fn run(picks: bool, rows: bool, order: &[u32], spilled: &[u32]) -> Vec<[i6
     };
     let pick = |f| AggregateExpr::new(f, 2, DataType::Int64, "p");
     let by = |f| AggregateExpr::by(f, (2, 0), (DataType::Int64, DataType::Int64), "b");
+    let zero = |f| AggregateExpr::new(f, 1, DataType::Float64, "z");
     let agg = HashAggregate::new(AggregateSpec {
-        input: batch(false, 0, 0..1).data().schema(),
+        input: input(mode, 0).data().schema(),
         group_by: vec![0],
-        aggregates: if picks {
-            vec![
+        aggregates: match mode {
+            Mode::Picks => vec![
                 pick(AggregateFunction::First {
                     ignore_nulls: false,
                 }),
                 pick(AggregateFunction::Last {
                     ignore_nulls: false,
                 }),
-            ]
-        } else {
-            vec![by(AggregateFunction::MaxBy), by(AggregateFunction::MinBy)]
+            ],
+            Mode::By => vec![by(AggregateFunction::MaxBy), by(AggregateFunction::MinBy)],
+            Mode::Zeros => vec![zero(AggregateFunction::Max), zero(AggregateFunction::Min)],
         },
         output: AggregateOutput::Final,
         ansi: true,
@@ -95,7 +131,7 @@ async fn run(picks: bool, rows: bool, order: &[u32], spilled: &[u32]) -> Vec<[i6
     for &p in order {
         let d = task().with_partition(p);
         let mut l = Sink::local_state(&*agg, &d, &g).unwrap();
-        let b = batch(false, i64::from(p) * 10_000, 0..KEYS);
+        let b = input(mode, p);
         assert!(matches!(
             agg.sink(b, &mut l, &g).unwrap(),
             SinkStatus::NeedMoreInput
@@ -112,9 +148,20 @@ async fn run(picks: bool, rows: bool, order: &[u32], spilled: &[u32]) -> Vec<[i6
     let mut out = Vec::new();
     while let Some(b) = agg.get_data(&mut sl, &sg).await.unwrap() {
         let d = b.data();
-        let col = |i: usize| d.column(i).as_primitive::<Int64Type>().clone();
+        let col = |i: usize| -> Vec<i64> {
+            let c = d.column(i);
+            if i > 0 && matches!(mode, Mode::Zeros) {
+                let f = c.as_primitive::<Float64Type>();
+                f.values()
+                    .iter()
+                    .map(|v| v.to_bits().cast_signed())
+                    .collect()
+            } else {
+                c.as_primitive::<Int64Type>().values().to_vec()
+            }
+        };
         let cols: Vec<_> = (0..3).map(col).collect();
-        out.extend((0..d.num_rows()).map(|r| std::array::from_fn(|i| cols[i].value(r))));
+        out.extend((0..d.num_rows()).map(|r| std::array::from_fn(|i| cols[i][r])));
     }
     out.sort_unstable();
     drop((sl, sg, src, g));
@@ -123,12 +170,12 @@ async fn run(picks: bool, rows: bool, order: &[u32], spilled: &[u32]) -> Vec<[i6
 }
 
 /// Every combine order, spilled or not, in either table layout gives
-/// `reference`'s rows (`picks` as [`run`]).
-async fn same_in_every_run(picks: bool, reference: &[[i64; 3]]) {
+/// `reference`'s rows (`mode` as [`run`]).
+async fn same_in_every_run(mode: Mode, reference: &[[i64; 3]]) {
     for rows in [true, false] {
         for order in [[0, 1, 2], [2, 1, 0], [1, 2, 0]] {
             for spilled in [&[][..], &[1], &[0, 2]] {
-                let got = run(picks, rows, &order, spilled).await;
+                let got = run(mode, rows, &order, spilled).await;
                 assert!(
                     got == reference,
                     "row layout {rows}, combine order {order:?}, spilled {spilled:?}: {:?}",
@@ -143,18 +190,56 @@ async fn same_in_every_run(picks: bool, reference: &[[i64; 3]]) {
 /// phase's order: every table spilled).
 #[tokio::test]
 async fn first_and_last_follow_partition_order_spilled_or_not() {
-    let reference = run(true, true, &[0, 1, 2], &[0, 1, 2]).await;
+    let reference = run(Mode::Picks, true, &[0, 1, 2], &[0, 1, 2]).await;
     let want: Vec<[i64; 3]> = (0..KEYS).map(|k| [k, k, 20_000 + k]).collect();
     assert_eq!(reference, want);
-    same_in_every_run(true, &reference).await;
+    same_in_every_run(Mode::Picks, &reference).await;
 }
 
 /// The ties of `max_by`/`min_by` keep the last row to arrive (Spark's
 /// `MaxMinBy`), the last partition's, in every run.
 #[tokio::test]
 async fn max_by_and_min_by_ties_do_not_depend_on_memory() {
-    let reference = run(false, true, &[0, 1, 2], &[0, 1, 2]).await;
+    let reference = run(Mode::By, true, &[0, 1, 2], &[0, 1, 2]).await;
     let want: Vec<[i64; 3]> = (0..KEYS).map(|k| [k, 20_000 + k, 20_000 + k]).collect();
     assert_eq!(reference, want);
-    same_in_every_run(false, &reference).await;
+    same_in_every_run(Mode::By, &reference).await;
+}
+
+/// Spark 4.2.0 keeps the first zero of a `0.0`/`-0.0` tie in input order,
+/// across partitions too (`max` and `min` of `[0.0, -0.0]` in two partitions
+/// are `0.0`, of `[-0.0, 0.0]` `-0.0`): partition 0's `0.0`, in every run.
+#[tokio::test]
+async fn float_max_and_min_zero_ties_follow_partition_order() {
+    let reference = run(Mode::Zeros, true, &[0, 1, 2], &[0, 1, 2]).await;
+    let plus = 0.0f64.to_bits().cast_signed();
+    let want: Vec<[i64; 3]> = (0..KEYS).map(|k| [k, plus, plus]).collect();
+    assert_eq!(reference, want);
+    same_in_every_run(Mode::Zeros, &reference).await;
+}
+
+/// Only `max`/`min` over a float (or a struct or array holding one) observe
+/// the merge order; other types have no ties between distinct values.
+#[test]
+fn only_float_extrema_observe_merge_order() {
+    let f = |t: DataType| Arc::new(Field::new("x", t, true));
+    let max = |t| AggregateExpr::new(AggregateFunction::Max, 0, t, "m");
+    let min = |t| AggregateExpr::new(AggregateFunction::Min, 0, t, "m");
+    assert!(observes_order(&max(DataType::Float64)));
+    assert!(observes_order(&min(DataType::Float32)));
+    assert!(observes_order(&max(DataType::Struct(
+        vec![f(DataType::Int32), f(DataType::Float64)].into()
+    ))));
+    assert!(observes_order(&min(DataType::List(f(DataType::Struct(
+        vec![f(DataType::Float32)].into()
+    ))))));
+    assert!(!observes_order(&max(DataType::Int64)));
+    assert!(!observes_order(&min(DataType::Utf8)));
+    assert!(!observes_order(&max(DataType::List(f(DataType::Int32)))));
+    assert!(!observes_order(&AggregateExpr::new(
+        AggregateFunction::Sum,
+        0,
+        DataType::Float64,
+        "s"
+    )));
 }

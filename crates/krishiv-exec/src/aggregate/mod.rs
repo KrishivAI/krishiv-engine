@@ -866,6 +866,29 @@ pub fn is_order_sensitive(f: &AggregateFunction) -> bool {
     )
 }
 
+/// Whether `a`'s merges must run in partition-index order: an
+/// [order-sensitive](is_order_sensitive) function, or `max`/`min` over a
+/// float (or a struct or array holding one). `0.0` and `-0.0` compare equal
+/// and a tie keeps the held value, so the zero's sign is the first one seen;
+/// Spark 4.2.0 keeps the first in input order, across partitions too.
+pub fn observes_order(a: &AggregateExpr) -> bool {
+    is_order_sensitive(&a.function)
+        || (matches!(a.function, AggregateFunction::Min | AggregateFunction::Max)
+            && holds_float(&a.arg_type))
+}
+
+/// Whether `t` is a float or nests one.
+fn holds_float(t: &DataType) -> bool {
+    match t {
+        DataType::Float16 | DataType::Float32 | DataType::Float64 => true,
+        DataType::Struct(fields) => fields.iter().any(|f| holds_float(f.data_type())),
+        DataType::List(f) | DataType::LargeList(f) | DataType::FixedSizeList(f, _) => {
+            holds_float(f.data_type())
+        }
+        _ => false,
+    }
+}
+
 /// `decimal(p, s)` on the carrier of the input type `like` (design
 /// P2-T160): `Decimal64` when `like` is `Decimal64` and `p <= 18`, else
 /// `Decimal128`. Inputs on the canonical carrier by precision give results
