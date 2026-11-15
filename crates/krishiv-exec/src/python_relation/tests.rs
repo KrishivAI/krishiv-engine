@@ -1460,25 +1460,30 @@ async fn a_leftover_joined_with_the_next_batch_stays_reserved_when_the_copy_is_r
     let g = r.sink.global_state(&r.ctx).unwrap();
     let mut l = r.sink.local_state(&r.ctx, &g).unwrap();
     // Four rows: fewer than a frame, held as the leftover.
-    let status = r.sink.sink(rows(&[1, 2, 3, 4], None), &mut l, &g).unwrap();
+    let leftover = rows(&[1, 2, 3, 4], None);
+    let leftover_bytes = leftover.data().get_array_memory_size();
+    let status = r.sink.sink(leftover, &mut l, &g).unwrap();
     assert!(matches!(status, SinkStatus::NeedMoreInput), "{status:?}");
     let keys: Vec<i32> = (0..1000).collect();
     let batch = rows(&keys, None);
     let bytes = batch.data().get_array_memory_size();
-    // The pool keeps room for the batch, not for a copy of it.
+    // The pool keeps room for exactly the batch, not one byte of a copy.
     let mut hog = r.ctx.consumer().reservation();
     let mut step = 1 << 20;
-    while step >= 64 {
+    while step >= 1 {
         if hog.try_grow(step).is_err() {
             step /= 2;
         }
     }
-    hog.shrink(bytes + (3 << 10));
+    hog.shrink(bytes);
     let status = r.sink.sink(batch, &mut l, &g).unwrap();
     assert!(matches!(status, SinkStatus::NeedMoreInput), "{status:?}");
     // The batch's rows wait in the frames and the backlog: reserved.
     let held = r.root.reserved() - hog.size();
     assert!(held >= bytes, "{held} of {bytes} bytes reserved");
+    // Nothing beyond the two input batches is reserved: the 6-row copy was
+    // refused, and its sources' reservations stand in for it.
+    assert_eq!(held, bytes + leftover_bytes, "the copy got a reservation");
     drop(hog);
     r.shared.open_gate();
     r.sink.combine(l, &g).unwrap();

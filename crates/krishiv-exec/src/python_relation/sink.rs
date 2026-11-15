@@ -490,9 +490,11 @@ impl RelationSink {
             let copy = arrow_select::concat::concat_batches(&self.input, &held)
                 .map_err(|e| internal(format!("held Python UDF rows: {e}")))?;
             // A leftover joined with the rows that fill its frame (`feed`
-            // adds no more than that): at most `maxRecordsPerBatch` rows,
-            // or, without that limit, the rows of the group (or side) held
-            // across input batches. The copy holds them now: its slices
+            // adds no more than that): at most `maxRecordsPerBatch` rows.
+            // Without that limit `feed` adds whole runs: with only
+            // `maxBytesPerBatch` the copy is the leftover plus the next
+            // run (up to a whole input batch), and with neither limit the
+            // rows of the group (or side) held across input batches. The copy holds them now: its slices
             // share a reservation of its own, and the batches it was cut
             // from are freed with their other slices (carried on, a long
             // group would keep every batch it spans). If the pool refuses
