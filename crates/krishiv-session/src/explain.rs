@@ -489,7 +489,7 @@ fn render(mode: ExplainMode, parsed: &str, p: &Planned, stats: &ProviderStatisti
 
 /// Spark's `FORMATTED`: the outline with operator ids (children first),
 /// then `(id) Name` with the node's arguments.
-/// The ids the planner and the common-subexpression pass give their own columns start at 2^32 and 2^62, far above the
+/// The ids the planner and the common-subexpression pass give their own columns start at 2^62 (the planner) and 2^32 (the common-subexpression pass), far above the
 /// plan's; in the text they follow the plan's largest id in order of first
 /// appearance (`sum(amount#1)#4`, as Spark prints `sum(amount#1)#12L`),
 /// never `#4611686018427387904` (PY-008).
@@ -669,5 +669,7 @@ mod dense_ids_tests {
             "HashAggregate(sum(amount#1)#8 AS revenue#2)\nx#9 y#8 z#7"
         );
         assert_eq!(dense_ids("a#1 b#22"), "a#1 b#22");
+        // the common-subexpression pass starts at 2^32
+        assert_eq!(dense_ids("a#1 b#4294967296 c#4294967297"), "a#1 b#2 c#3");
     }
 }
