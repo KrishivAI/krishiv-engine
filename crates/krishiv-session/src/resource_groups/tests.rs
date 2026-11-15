@@ -703,3 +703,91 @@ fn a_queued_query_in_a_removed_group_still_runs() {
     drop((b2, third));
     assert_eq!(rg.counts("root.b"), None);
 }
+
+// ---- replace (T066: a new document written over the group file) -------------------------------
+
+fn group_file(text: &str) -> (tempfile::TempDir, String) {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let path = dir.path().join("groups.json");
+    std::fs::write(&path, text).unwrap_or_else(|e| panic!("{e}"));
+    let path = path.to_string_lossy().into_owned();
+    (dir, path)
+}
+
+fn class_of(e: &KrishivError) -> ErrorClass {
+    e.error_class()
+}
+
+#[test]
+fn a_replace_writes_the_file_and_swaps_the_tree() {
+    let (_dir, path) = group_file(&two_leaves(1));
+    let rg = ResourceGroups::from_file(&path, MEM).unwrap_or_else(|e| panic!("{e}"));
+    let old = rg.etag();
+    assert_eq!(ResourceGroups::file_etag(&path), Some(old.clone()));
+    rg.replace_file(&path, &two_leaves(4), &old)
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_ne!(rg.etag(), old);
+    assert_eq!(ResourceGroups::file_etag(&path), Some(rg.etag()));
+    let on_disk = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(on_disk, two_leaves(4));
+    let a = rg.rows().into_iter().find(|r| r.group_id == "root.a");
+    assert_eq!(a.map(|r| r.hard_concurrency_limit), Some(4));
+    // no temporary file is left beside it
+    let left = std::fs::read_dir(
+        std::path::Path::new(&path)
+            .parent()
+            .unwrap_or_else(|| panic!("dir")),
+    )
+    .unwrap_or_else(|e| panic!("{e}"))
+    .count();
+    assert_eq!(left, 1);
+}
+
+#[test]
+fn a_replace_with_a_stale_etag_or_an_edited_file_changes_nothing() {
+    let (_dir, path) = group_file(&two_leaves(1));
+    let rg = ResourceGroups::from_file(&path, MEM).unwrap_or_else(|e| panic!("{e}"));
+    let etag = rg.etag();
+    let e = rg.replace_file(&path, &two_leaves(4), "0000").unwrap_err();
+    assert_eq!(class_of(&e), ErrorClass::KrishivAdminPreconditionFailed);
+    assert!(e.to_string().contains("stale_etag"), "{e}");
+    // a hand edit of the file since it was loaded
+    std::fs::write(&path, two_leaves(2)).unwrap_or_else(|e| panic!("{e}"));
+    let e = rg.replace_file(&path, &two_leaves(4), &etag).unwrap_err();
+    assert_eq!(class_of(&e), ErrorClass::KrishivAdminPreconditionFailed);
+    assert!(e.to_string().contains("file_changed"), "{e}");
+    assert_eq!(rg.etag(), etag);
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}")),
+        two_leaves(2)
+    );
+}
+
+#[test]
+fn a_replace_refuses_a_link_a_read_only_file_and_an_invalid_document() {
+    let (dir, path) = group_file(&two_leaves(1));
+    let rg = ResourceGroups::from_file(&path, MEM).unwrap_or_else(|e| panic!("{e}"));
+    let etag = rg.etag();
+    // invalid document: the file stays
+    let e = rg.replace_file(&path, "{}", &etag).unwrap_err();
+    assert_eq!(class_of(&e), ErrorClass::KrishivResourceGroupConfigInvalid);
+    assert_eq!(rg.etag(), etag);
+    // a symbolic link (a mounted ConfigMap)
+    let link = dir.path().join("link.json");
+    std::os::unix::fs::symlink(&path, &link).unwrap_or_else(|e| panic!("{e}"));
+    let link = link.to_string_lossy().into_owned();
+    let via_link = ResourceGroups::from_file(&link, MEM).unwrap_or_else(|e| panic!("{e}"));
+    let e = via_link
+        .replace_file(&link, &two_leaves(4), &via_link.etag())
+        .unwrap_err();
+    assert_eq!(class_of(&e), ErrorClass::KrishivResourceGroupConfigReadOnly);
+    // a read-only file
+    let mut perms = std::fs::metadata(&path)
+        .unwrap_or_else(|e| panic!("{e}"))
+        .permissions();
+    perms.set_readonly(true);
+    std::fs::set_permissions(&path, perms).unwrap_or_else(|e| panic!("{e}"));
+    let e = rg.replace_file(&path, &two_leaves(4), &etag).unwrap_err();
+    assert_eq!(class_of(&e), ErrorClass::KrishivResourceGroupConfigReadOnly);
+    assert_eq!(rg.etag(), etag);
+}

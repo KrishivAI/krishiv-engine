@@ -8,6 +8,7 @@
 //! asserts, so they route queries but never limit a tenant: use `user` / `userGroup` for that.
 
 mod config;
+mod replace;
 mod select;
 mod tree;
 
@@ -37,6 +38,8 @@ pub struct ResourceGroups {
     loaded: RwLock<Arc<Loaded>>,
     total_memory: usize,
     shared: Arc<Shared>,
+    /// One replace of the group file at a time.
+    replacing: std::sync::Mutex<()>,
 }
 
 /// The document the tree was last built from.
@@ -50,17 +53,23 @@ struct Loaded {
     loaded_at_ms: u64,
 }
 
+/// A document as canonical JSON and its SHA-256 (hex): the same document always gives the same pair.
+fn canonical(json: &str) -> (String, String) {
+    // `serde_json` keeps object keys sorted, so the same document always prints the same.
+    let document = serde_json::from_str::<serde_json::Value>(json)
+        .map_or_else(|_| json.to_owned(), |v| v.to_string());
+    let etag = Sha256::digest(document.as_bytes())
+        .iter()
+        .fold(String::new(), |mut hex, b| {
+            let _ = write!(hex, "{b:02x}");
+            hex
+        });
+    (document, etag)
+}
+
 impl Loaded {
     fn new(json: &str, config: Config, now_ms: u64) -> Self {
-        // `serde_json` keeps object keys sorted, so the same document always prints the same.
-        let document = serde_json::from_str::<serde_json::Value>(json)
-            .map_or_else(|_| json.to_owned(), |v| v.to_string());
-        let etag = Sha256::digest(document.as_bytes())
-            .iter()
-            .fold(String::new(), |mut hex, b| {
-                let _ = write!(hex, "{b:02x}");
-                hex
-            });
+        let (document, etag) = canonical(json);
         Self {
             config,
             document,
@@ -101,6 +110,7 @@ impl ResourceGroups {
             loaded: RwLock::new(loaded),
             total_memory,
             shared,
+            replacing: std::sync::Mutex::new(()),
         })
     }
 
