@@ -365,13 +365,21 @@ fn delta_v1_save_as_table_overwrite() {
     )
     .unwrap_err();
     let theirs = &step("save_as_table_overwrite_other_schema")["error"];
-    assert!(
-        e.error_class()
-            .name()
-            .starts_with(theirs["condition"].as_str().unwrap()),
+    assert_eq!(
+        e.error_class().name(),
+        theirs["condition"].as_str().unwrap(),
         "{e}"
     );
     assert_eq!(e.sql_state(), theirs["sqlstate"].as_str());
+    assert_eq!(
+        e.to_string(),
+        format!(
+            "{} SQLSTATE: {}",
+            theirs["message"].as_str().unwrap(),
+            theirs["sqlstate"].as_str().unwrap()
+        ),
+        "the oracle's text"
+    );
 
     // No partitionBy: the table keeps its partitioning, as delta-spark keeps it.
     block_on(

@@ -489,7 +489,12 @@ impl Session {
                 super::delta_source(&self.qualify_path(&table.location.display().to_string())?);
             // delta-spark refuses a CTAS into a location that holds anything, a Delta table
             // included (`WRITES.json` `ctas_existing_location`).
-            let occupied = std::fs::read_dir(&table.location).is_ok_and(|mut d| d.next().is_some());
+            let location = table.location.clone();
+            let occupied = tokio::task::spawn_blocking(move || {
+                std::fs::read_dir(&location).is_ok_and(|mut d| d.next().is_some())
+            })
+            .await
+            .map_err(|e| internal(format!("reading a Delta location: {e}")))?;
             if !table.managed && (occupied || env.catalog.delta.exists(&source).await?) {
                 let krishiv_plan::ReadSource::Files { paths, .. } = &source else {
                     return Err(internal("a Delta location that is not a path".to_owned()));

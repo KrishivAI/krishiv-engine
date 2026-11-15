@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 use krishiv_common::error::{
-    DeltaMetadataMismatchSchemaMismatch, KrishivError, KrishivUnsupportedFeature,
+    DeltaMetadataMismatch, KrishivError, KrishivUnsupportedFeature,
     UnsupportedFeatureTableOperation,
 };
 use krishiv_common::secret::OptionValue;
@@ -126,7 +126,7 @@ impl Session {
                 partition_by,
                 properties,
             } => {
-                create_local_root(&source)?;
+                create_local_root(&source).await?;
                 let a = df.action_analysis().await?;
                 let columns: Vec<TableColumn> = a
                     .analyzed
@@ -252,7 +252,10 @@ impl Session {
                 .find(|(key, _)| key.eq_ignore_ascii_case(k))
                 .map(|(_, v)| v.clone())
         };
-        if option("overwriteSchema").is_some_and(|v| v.eq_ignore_ascii_case("true"))
+        // On a new path delta-spark simply creates the table; only replacing an existing
+        // table's schema is refused.
+        if exists
+            && option("overwriteSchema").is_some_and(|v| v.eq_ignore_ascii_case("true"))
             && mode == SaveMode::Overwrite
         {
             return Err(replace_refused(quoted, "overwriteSchema"));
@@ -378,36 +381,9 @@ impl Session {
                     && krishiv_types::DataType::from_arrow_field(f).is_ok_and(|t| t == c.data_type)
             });
         if !same {
-            let tree = |cols: Vec<(&str, &krishiv_types::DataType, bool)>| {
-                crate::introspection::tree_string(&cols)
-            };
-            let given: Vec<TableColumn> = schema
-                .fields()
-                .iter()
-                .map(|f| {
-                    Ok(TableColumn::new(
-                        f.name().clone(),
-                        krishiv_types::DataType::from_arrow_field(f)?,
-                        f.is_nullable(),
-                    ))
-                })
-                .collect::<Result<_, KrishivError>>()?;
-            return Err(DeltaMetadataMismatchSchemaMismatch {
-                id: String::new(),
-                table_schema: tree(
-                    columns
-                        .iter()
-                        .map(|c| (c.name.as_str(), &c.data_type, c.nullable))
-                        .collect(),
-                ),
-                data_schema: tree(
-                    given
-                        .iter()
-                        .map(|c| (c.name.as_str(), &c.data_type, c.nullable))
-                        .collect(),
-                ),
-            }
-            .into());
+            // delta-spark raises the parent class bare, with no parameters
+            // (`tests/fixtures/delta-4.4.1/WRITES.json` `save_as_table_overwrite_other_schema`).
+            return Err(DeltaMetadataMismatch {}.into());
         }
         let aligned = self.delta_by_name(df, &columns, &quoted).await?;
         self.write_delta(
@@ -532,18 +508,31 @@ fn plain_options(
 }
 
 /// Makes the local directory a new table at `source` is created in (the kernel's create wants
-/// the table root to exist); nothing for an object store.
-pub(crate) fn create_local_root(source: &ReadSource) -> Result<(), KrishivError> {
+/// the table root to exist), on the blocking pool; nothing for an object store.
+pub(crate) async fn create_local_root(source: &ReadSource) -> Result<(), KrishivError> {
     let ReadSource::Files { paths, .. } = source else {
         return Ok(());
     };
-    for p in paths {
-        if let Some(local) = p.as_plain().and_then(|t| t.strip_prefix("file:")) {
+    let locals: Vec<String> = paths
+        .iter()
+        .filter_map(|p| {
+            p.as_plain()
+                .and_then(|t| t.strip_prefix("file:"))
+                .map(str::to_owned)
+        })
+        .collect();
+    if locals.is_empty() {
+        return Ok(());
+    }
+    tokio::task::spawn_blocking(move || {
+        for local in &locals {
             std::fs::create_dir_all(local)
                 .map_err(|e| internal(format!("cannot create {local}: {e}")))?;
         }
-    }
-    Ok(())
+        Ok(())
+    })
+    .await
+    .map_err(|e| internal(format!("creating a Delta table's directory: {e}")))?
 }
 
 /// The table's columns from a provider's schema.

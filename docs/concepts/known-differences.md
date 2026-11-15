@@ -293,3 +293,31 @@ do not see it, as in Spark. `system.caches` lists the session's live checkpoints
   Setting a key the registry marks admin-only answers `KRISHIV_INSUFFICIENT_PERMISSIONS` (42501, gRPC
   `PERMISSION_DENIED`) for a non-admin role (no role exists before authentication, so the local user is the admin).
 - **Interrupt by tag** fails with `UNSUPPORTED_FEATURE.INTERRUPT_TYPE` until operation tags can be interrupted.
+
+## Delta Lake writes
+
+Krishiv writes Delta tables through `delta_kernel` and its own writer (`krishiv-connectors-delta`,
+`src/write/`). The rows, partition values and statistics match delta-spark 4.4.1 (the oracle in
+`tests/fixtures/delta-4.4.1/`); these parts of the log differ:
+
+- **Protocol.** A table Krishiv creates carries the table-features protocol (reader 3, writer 7)
+  where delta-spark writes (1, 2) for a table with no features.
+- **Operation names.** A CTAS commit records the kernel's `CREATE TABLE` (delta-spark: `CREATE TABLE
+  AS SELECT`) with the kernel's parameters; a v1 `saveAsTable` overwrite of an existing table is
+  recorded as `WRITE` (delta-spark: `CREATE OR REPLACE TABLE AS SELECT`).
+- **commitInfo fields.** `isBlindAppend` is omitted when false (the kernel owns the field);
+  `isDynamicPartitionOverwrite` is the string `"true"`, not a boolean; a `replaceWhere` writes no
+  `numDeletedRows`; `partitionBy` is always `"[]"`.
+- **Constraint text.** The nested `DELTA_VIOLATE_CONSTRAINT_WITH_VALUES` message of a
+  `replaceWhere` mismatch names the constraint by the filter's text, where delta-spark prints its
+  expression tree.
+- **Float bounds.** Statistics order floats by Arrow's total order: a file holding both `-0.0`
+  and `0.0` keeps the other one as its bound (both are written as `0.0`).
+- **Files.** Data files are named `part-00000-<uuid>.c000.snappy.parquet` for every task and roll
+  over at `maxRecordsPerFile` and at a fixed 128 MiB.
+- **Checkpoints.** A checkpoint after a commit is written without the `.crc` file, and a V2
+  checkpoint without sidecars; it runs after the statement returns, and a failure is logged,
+  never raised.
+- **Refused.** `replaceWhere` on data columns, schema evolution (`mergeSchema`), `overwriteSchema`
+  on an existing table and every replace (RTAS, `REPLACE TABLE`, `createOrReplace`) are refused by
+  name.

@@ -296,7 +296,7 @@ impl Session {
             table.properties.clone(),
             Some(format!("{}.{}", name.namespace, name.name)),
         )?;
-        super::delta_writes::create_local_root(&source)?;
+        super::delta_writes::create_local_root(&source).await?;
         new.create_empty(&crate::session::job_uuid()).await?;
         table.columns = specified.to_vec();
         table.layout = TableLayout {
