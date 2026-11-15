@@ -154,8 +154,10 @@ pub(crate) struct NewManifests {
 /// what a failed or dropped write left.
 ///
 /// # Errors
-/// `KRISHIV_UNSUPPORTED_FEATURE` when `commit.manifest.target-size-bytes`
-/// does not parse (`MergeConfig`); an internal error for a file of a spec the table lacks or whose partition
+/// `KRISHIV_UNSUPPORTED_FEATURE` when `commit.manifest.target-size-bytes`,
+/// `commit.manifest.min-count-to-merge` or `commit.manifest-merge.enabled`
+/// does not parse (`MergeConfig`, read here before any manifest, as Java's
+/// `SnapshotProducer`/`MergeAppend` constructors parse them); an internal error for a file of a spec the table lacks or whose partition
 /// tuple does not fit its spec ([`check_partition`], checked before any
 /// iceberg-rust call, which would panic); iceberg-rust's write failures, with
 /// their Krishiv class when the storage raised one.

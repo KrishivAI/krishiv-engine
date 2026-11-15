@@ -4,7 +4,8 @@
 //! transcription of its loop (`java_layout`, the length of a manifest being
 //! iceberg-rust's encoding of the entries so far), Java's
 //! `manifestWriterCount`/`divide` groups at the 14,999 / 15,000 / 25,000 /
-//! 45,001-file boundaries, the names and the written-path list the sink cleans
+//! 45,001-file boundaries (15,000 and 45,001 written), a failed later
+//! manifest's paths, the names and the written-path list the sink cleans
 //! up, and rolled manifests committed, merged and planned back.
 
 use std::sync::Arc;
@@ -21,13 +22,14 @@ use super::append::{
     MANIFESTS_CREATED, MANIFESTS_KEPT, MANIFESTS_REPLACED, NewManifests, prepare_attempt,
     write_new_manifests,
 };
-use super::append_tests::{MAX, commit, create, iceberg_rust_files, ids, now};
+use super::append_tests::{MAX, commit, create, iceberg_rust_files, ids, now, walk};
 use super::data_file::partition_tuple;
 use super::merge::{MANIFEST_MIN_MERGE_COUNT, MANIFEST_TARGET_SIZE_BYTES};
-use super::provider_tests::{Env, env};
+use super::provider_tests::{Env, env, env_on};
 use super::rolling::{
     MIN_FILE_GROUP_SIZE, ROWS_DIVISOR, WRITER_POOL, divide, manifest_writer_count,
 };
+use super::write_tests::FailSuffix;
 
 const ID: i64 = 901;
 
@@ -71,10 +73,15 @@ fn files(m: &TableMetadata, tag: char, n: usize) -> Vec<(i32, DataFile)> {
 
 /// The length of a manifest of `files` as iceberg-rust writes it (in memory).
 fn encoded(env: &Env, m: &TableMetadata, files: &[DataFile]) -> i64 {
+    encoded_as(env, m, files, ID)
+}
+
+/// [`encoded`] under the snapshot id `id`.
+fn encoded_as(env: &Env, m: &TableMetadata, files: &[DataFile], id: i64) -> i64 {
     let io = FileIO::new_with_memory();
     let mut w = ManifestWriterBuilder::new(
         io.new_output("memory:///oracle.avro").unwrap(),
-        Some(ID),
+        Some(id),
         Arc::clone(m.current_schema()),
         m.default_partition_spec().as_ref().clone(),
     )
@@ -278,6 +285,48 @@ fn rolls_where_javas_loop_rolls() {
     assert_eq!(at(l500 + 1), 750);
 }
 
+/// Entries of uneven size (files 500..700 with 2,000-character paths), so
+/// the length is far from a line and the search falls back to halving: the
+/// split points still equal Java's loop at targets around each candidate.
+#[test]
+fn uneven_entries_roll_where_javas_loop_rolls() {
+    let env = env();
+    let t = create(&env, 2);
+    let m0 = t.metadata().clone();
+    let mut fs = files(&m0, 'a', 1_400);
+    for (i, (_, f)) in fs.iter_mut().enumerate().take(700).skip(500) {
+        let mut b = DataFileBuilder::default();
+        b.content(DataContentType::Data)
+            .file_path(format!(
+                "file:///data/{}/u{i:06}.parquet",
+                "p".repeat(2_000)
+            ))
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(f.file_size_in_bytes())
+            .record_count(f.record_count())
+            .partition(f.partition().clone())
+            .partition_spec_id(0);
+        *f = b.build().unwrap();
+    }
+    let plain: Vec<DataFile> = fs.iter().map(|(_, f)| f.clone()).collect();
+    let mut targets = vec![1];
+    for k in [250, 500, 750, 1_000, 1_250] {
+        let l = encoded(&env, &m0, &plain[..k]);
+        targets.extend([l - 1, l, l + 1]);
+    }
+    for target in targets {
+        let m = with(&m0, &[(MANIFEST_TARGET_SIZE_BYTES, target.to_string())]);
+        let java = java_layout(&env, &m, &plain, target);
+        let (new, _) = write(&env, &m, fs.clone());
+        assert_eq!(counts(&env, &new), java, "target {target}");
+        let mut at = 0;
+        for (mf, n) in new.manifests.iter().zip(&java) {
+            assert_eq!(mf.manifest_length, encoded(&env, &m, &plain[at..at + n]));
+            at += n;
+        }
+    }
+}
+
 /// The first writer is lazy: no files, no manifest; a roll needs a 251st
 /// entry, so 250 and 500 files are full manifests and 251 leaves one entry.
 #[test]
@@ -330,18 +379,76 @@ fn unparseable_target_writes_nothing() {
     assert!(written.is_empty());
 }
 
-/// Groups: 14,999 files are one group; 15,000 two of 7,500; 25,000 three
-/// (8,334, 8,334, 8,332); 45,001 four (the pool, `WRITER_POOL`) of 11,251 but
-/// the last 11,248. Each rolled apart, in group order.
+/// A failure on a later manifest of a spec (the store refuses `-m1`) fails
+/// the write with every started path in `written`, the refused one too:
+/// each path is recorded before its file is created, so deleting `written`
+/// (as the sink does) leaves no manifest behind.
+#[test]
+fn a_failed_later_manifest_leaves_every_started_path_in_written() {
+    let store = Arc::new(FailSuffix(
+        object_store::local::LocalFileSystem::new(),
+        "uuid-fail-m1.avro",
+    ));
+    let env = env_on(store, krishiv_io::IoConfig::default());
+    let t = create(&env, 2);
+    let m = with(
+        t.metadata(),
+        &[(MANIFEST_TARGET_SIZE_BYTES, "1".to_owned())],
+    );
+    let io = env.reg.file_io();
+    let mut written = Vec::new();
+    let e = env
+        .rt
+        .block_on(write_new_manifests(
+            &io,
+            &m,
+            files(&m, 'a', 600),
+            ID,
+            "uuid-fail",
+            &mut written,
+        ))
+        .unwrap_err();
+    assert!(e.to_string().contains("uuid-fail-m1.avro"), "{e}");
+    let names: Vec<&str> = written
+        .iter()
+        .map(|p| p.rsplit('/').next().unwrap())
+        .collect();
+    assert_eq!(names, ["uuid-fail-m0.avro", "uuid-fail-m1.avro"]);
+    let left = || -> Vec<String> {
+        walk(env.dir.path())
+            .into_iter()
+            .filter(|p| p.contains("uuid-fail-m"))
+            .collect()
+    };
+    assert_eq!(left().len(), 1, "{:?}", left());
+    env.rt.block_on(async {
+        for p in &written {
+            io.delete(p).await.unwrap();
+        }
+    });
+    assert!(left().is_empty(), "{:?}", left());
+}
+
+/// Groups: 14,999 files are one group and 25,000 three (8,334, 8,334,
+/// 8,332), checked on the group sizes; 15,000 (the first two-group count, two
+/// of 7,500) and 45,001 (four, the pool `WRITER_POOL`, of 11,251 but the last
+/// 11,248) written end to end, each group rolled apart, in group order.
 #[test]
 fn groups_at_the_writer_count_boundaries() {
+    let sizes = |n: usize| -> Vec<usize> {
+        divide(vec![(); n], manifest_writer_count(WRITER_POOL, n))
+            .iter()
+            .map(Vec::len)
+            .collect()
+    };
+    assert_eq!(sizes(14_999), [14_999]);
+    assert_eq!(sizes(15_000), [7_500, 7_500]);
+    assert_eq!(sizes(25_000), [8_334, 8_334, 8_332]);
+    assert_eq!(sizes(45_001), [11_251, 11_251, 11_251, 11_248]);
     let env = env();
     let t = create(&env, 2);
     let m = t.metadata().clone();
-    assert_eq!(layout_at_one_byte(&env, &m, 14_999), rolled(59, 249));
     assert_eq!(layout_at_one_byte(&env, &m, 15_000), rolled(60, 0));
-    let three = [rolled(33, 84), rolled(33, 84), rolled(33, 82)].concat();
-    assert_eq!(layout_at_one_byte(&env, &m, 25_000), three);
     let four = [rolled(45, 1), rolled(45, 1), rolled(45, 1), rolled(44, 248)].concat();
     assert_eq!(layout_at_one_byte(&env, &m, 45_001), four);
 }
@@ -390,11 +497,10 @@ fn rolled_manifests_commit_and_merge() {
     let t = create(&env, 2);
     let loc0 = t.metadata_location().unwrap().to_owned();
     let m0 = t.metadata().clone();
-    // 240 entries under snapshot 901: below 250 entries under the write's
-    // own ids (their snapshot id takes a byte less per entry), so the
-    // manifests roll at 250.
-    let plain: Vec<DataFile> = files(&m0, 'a', 240).into_iter().map(|(_, f)| f).collect();
-    let target = encoded(&env, &m0, &plain);
+    // The length of the second append's first 250 entries under its own
+    // snapshot id: its manifests (and the third's, same id width) roll at 250.
+    let plain: Vec<DataFile> = files(&m0, 'b', 250).into_iter().map(|(_, f)| f).collect();
+    let target = encoded_as(&env, &m0, &plain, 12);
     let m0 = with(
         &m0,
         &[
@@ -473,4 +579,48 @@ fn rolled_manifests_commit_and_merge() {
     assert_eq!(summary(&m3, MANIFESTS_KEPT), "2");
     assert_eq!(summary(&m3, "total-data-files"), "861");
     assert_eq!(iceberg_rust_files(&env, &m3, &loc3).len(), 861);
+}
+
+/// The probe cost (review finding 1): one 10,000-file group written at the
+/// default target (no roll) and at a target reached near 8,000 entries,
+/// timed against iceberg-rust writing the same entries once. Ignored: run
+/// with `--run-ignored only` and read the printed times.
+#[test]
+#[ignore = "timing only"]
+fn probe_cost_on_a_10k_group() {
+    let env = env();
+    let t = create(&env, 2);
+    let m0 = t.metadata().clone();
+    let fs = files(&m0, 'a', 10_000);
+    let plain: Vec<DataFile> = fs.iter().map(|(_, f)| f.clone()).collect();
+    let io = env.reg.file_io();
+    let once = |name: &str| {
+        let start = std::time::Instant::now();
+        let mut w = ManifestWriterBuilder::new(
+            io.new_output(env.at(name)).unwrap(),
+            Some(ID),
+            Arc::clone(m0.current_schema()),
+            m0.default_partition_spec().as_ref().clone(),
+        )
+        .build_v2_data();
+        for f in &plain {
+            w.add_file(f.clone(), UNASSIGNED_SEQUENCE_NUMBER).unwrap();
+        }
+        env.rt.block_on(w.write_manifest_file()).unwrap();
+        start.elapsed()
+    };
+    let base = once("plain.avro");
+    let near_8000 = encoded(&env, &m0, &plain[..7_900]);
+    for (label, target) in [("default", 8 * 1024 * 1024), ("roll@8000", near_8000)] {
+        let m = with(&m0, &[(MANIFEST_TARGET_SIZE_BYTES, target.to_string())]);
+        let start = std::time::Instant::now();
+        let (new, _) = write(&env, &m, fs.clone());
+        let took = start.elapsed();
+        println!(
+            "{label}: {:?} for {:?} entries, {:.2}x one plain write ({base:?})",
+            took,
+            counts(&env, &new),
+            took.as_secs_f64() / base.as_secs_f64()
+        );
+    }
 }
