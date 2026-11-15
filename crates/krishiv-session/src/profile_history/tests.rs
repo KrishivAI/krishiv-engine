@@ -419,29 +419,32 @@ fn trim_ignores_a_segment_another_engine_removed() {
     assert_eq!(left, ["history-0000000000003-a-000003.parquet"]);
 }
 
-#[cfg(unix)]
 #[test]
-fn a_segment_removed_between_the_listing_and_its_size_is_skipped() {
+fn a_segment_that_is_gone_or_not_a_regular_file_has_no_size() {
     let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("history-0000000000001-a-000001.parquet");
     write_segment(
         dir.path(),
-        "history-0000000000002-a-000002.parquet",
-        &[row(2, "y".repeat(5_000))],
+        "history-0000000000001-a-000001.parquet",
+        &[row(1, "x".repeat(5_000))],
     )
     .unwrap();
-    // A dangling link is listed by `read_dir` and gone when its size is read, as a segment trimmed by another engine is.
-    std::os::unix::fs::symlink(
-        dir.path().join("nowhere"),
-        dir.path().join("history-0000000000001-a-000001.parquet"),
-    )
-    .unwrap();
-    let listed = super::list_segments(dir.path()).unwrap();
-    assert_eq!(listed.len(), 1);
-    assert!(
-        listed[0]
-            .0
-            .ends_with("history-0000000000002-a-000002.parquet")
+    assert_eq!(
+        super::segment_len(&file).unwrap(),
+        Some(std::fs::metadata(&file).unwrap().len())
     );
+    // Removed after the directory was listed: gone, not an error.
+    std::fs::remove_file(&file).unwrap();
+    assert_eq!(super::segment_len(&file).unwrap(), None);
+    // A directory is not a segment, and neither is a link (never followed, so a loop cannot fail the listing).
+    assert_eq!(super::segment_len(dir.path()).unwrap(), None);
+    #[cfg(unix)]
+    {
+        let link = dir.path().join("history-0000000000002-a-000002.parquet");
+        std::os::unix::fs::symlink(&link, &link).unwrap();
+        assert_eq!(super::segment_len(&link).unwrap(), None);
+        assert!(super::list_segments(dir.path()).unwrap().is_empty());
+    }
 }
 
 #[test]

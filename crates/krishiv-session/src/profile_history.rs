@@ -502,6 +502,17 @@ fn write_segment(dir: &Path, name: &str, rows: &[StoredProfile]) -> Result<(), S
     written
 }
 
+/// The size of the segment file at `path`; `None` when it is gone (another engine trimmed it) or is not a regular file
+/// (a link is never followed, so its target's size is never counted and a loop cannot fail the listing).
+fn segment_len(path: &Path) -> std::io::Result<Option<u64>> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_file() => Ok(Some(meta.len())),
+        Ok(_) => Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 /// The segments of `dir`, oldest first, with their sizes.
 fn list_segments(dir: &Path) -> std::io::Result<Vec<(PathBuf, u64)>> {
     let mut out = Vec::new();
@@ -512,10 +523,8 @@ fn list_segments(dir: &Path) -> std::io::Result<Vec<(PathBuf, u64)>> {
         if name.starts_with(PREFIX) && name.ends_with(SUFFIX) {
             // Another engine's trim can remove a segment after the listing: it is gone, not an error.
             let path = entry.path();
-            match std::fs::metadata(&path) {
-                Ok(meta) => out.push((path, meta.len())),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(e),
+            if let Some(len) = segment_len(&path)? {
+                out.push((path, len));
             }
         }
     }
