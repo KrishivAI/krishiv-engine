@@ -51,6 +51,7 @@ from .resources import evict_page_cache
 from .runner import cold_record, git_info, load_queries, machine_info
 
 REFERENCE = "duckdb"
+KRISHIV_UNVERIFIED = "unverified: DuckDB gave no answer; the other engines are checked against these rows"
 DEFAULT_ENGINES = ["krishiv", "duckdb", "polars", "datafusion", "sail", "spark-local"]
 SUITE_DATASET = {"tpch": "tpch-duckdb", "tpcds": "tpcds", "clickbench": "clickbench"}
 
@@ -341,6 +342,7 @@ def sequential_query(
     cache: RefCache | None = None,
     suite: str = "",
     cold_root: Path | None = None,
+    krishiv_reference: bool = False,
 ) -> tuple[dict, dict[str, dict]]:
     """One query, one engine alive at a time (DuckDB, then Krishiv, then the rest): a fresh worker per engine inside
     its own memory cgroup runs the verified answer, one untimed run through the timed path (its checksum is the
@@ -349,7 +351,10 @@ def sequential_query(
 
     With a ``cache`` the reference engine's answer, samples, CPU and peak are read from it when the same query over the
     same data was measured before with this version, threads, memory and sample count, and stored after a fresh run;
-    the other engines are always run and checked against the cached rows."""
+    the other engines are always run and checked against the cached rows.
+
+    ``krishiv_reference``: when DuckDB gives no answer (out of memory, timeout), Krishiv is still timed, marked
+    unverified, and the later engines are checked against Krishiv's rows instead of failing untimed."""
     load_before = loadavg()
     order = [REFERENCE] + [n for n in ("krishiv",) if n in names and n != REFERENCE]
     order += [n for n in names if n not in order]
@@ -391,6 +396,12 @@ def sequential_query(
                 if name == REFERENCE:
                     nrows = result_rows(qm[REFERENCE], rows[name])
                     verdicts[name] = {"status": "ok"}
+                elif REFERENCE not in rows and krishiv_reference and name == "krishiv":
+                    nrows = result_rows(qm[name], rows[name])
+                    verdicts[name] = {"status": "ok", "note": KRISHIV_UNVERIFIED}
+                elif REFERENCE not in rows and krishiv_reference and verdicts.get("krishiv", {}).get("status") == "ok":
+                    verdicts[name] = judge(name, rows[name], rows["krishiv"], qm, {})
+                    verdicts[name]["reference"] = "krishiv (DuckDB gave no answer)"
                 elif REFERENCE not in rows:
                     verdicts[name] = _fail("error", "no DuckDB reference result")
                 else:
@@ -507,6 +518,7 @@ def run_reproduce(
     reference_cache: bool = True,
     refresh_reference: bool = False,
     cold: bool = False,
+    krishiv_reference: bool = False,
 ) -> Path:
     names = engines or DEFAULT_ENGINES
     if REFERENCE not in names:
@@ -551,6 +563,7 @@ def run_reproduce(
                 "timeout_s": timeout_s,
                 "mode": "sequential: one engine alive at a time" if sequential else "interleaved",
                 "worker_cgroup_gb": cap_gb,
+                "krishiv_reference": krishiv_reference,
             },
             "theirs": {"runs": runs, "timeout_s": their_timeout_s, "source": pub["source"]},
             "cache_policy": (
@@ -570,7 +583,19 @@ def run_reproduce(
             for qm in queries:
                 qid = qm[REFERENCE].id
                 ent, infos = sequential_query(
-                    qm, names, ds, threads, memory_gb, cap_gb, 2 * reps, timeout_s, profile, cache, suite, cold_root
+                    qm,
+                    names,
+                    ds,
+                    threads,
+                    memory_gb,
+                    cap_gb,
+                    2 * reps,
+                    timeout_s,
+                    profile,
+                    cache,
+                    suite,
+                    cold_root,
+                    krishiv_reference,
                 )
                 for n, info in infos.items():
                     record["engines"].setdefault(n, info)

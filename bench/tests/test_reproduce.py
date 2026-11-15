@@ -589,6 +589,30 @@ def test_sequential_query_without_a_reference_answer_fails_the_others_and_times_
     assert all("median_s" not in e for e in entry["engines"].values())
 
 
+def test_sequential_query_checks_against_krishiv_when_asked_and_duckdb_has_no_answer(monkeypatch, tiny):
+    rows = [(1,), (2,)]
+    engines = {
+        "duckdb": lambda: Scripted("duckdb", setup_exc=EngineCrashed("worker died")),
+        "krishiv": lambda: Scripted("krishiv", rows, checksum=True),
+        "polars-streaming": lambda: Scripted("polars-streaming", rows, checksum=True),
+        "spark-connect": lambda: Scripted("spark-connect", [(1,), (3,)]),
+    }
+    names = ["duckdb", "krishiv", "polars-streaming", "spark-connect"]
+    Scripted.instances = []
+    monkeypatch.setattr(reproduce, "ProcessEngine", lambda run_name, *a, **k: engines[run_name]())
+    qm = {n: q("SELECT a FROM t") for n in names}
+    entry, _ = reproduce.sequential_query(qm, names, tiny, 1, 1, None, 2, 60, krishiv_reference=True)
+    got = entry["engines"]
+    assert got["krishiv"]["status"] == "ok"
+    assert got["krishiv"]["note"].startswith("unverified")
+    assert len(got["krishiv"]["samples_s"]) == 2
+    assert got["polars-streaming"]["status"] == "ok"
+    assert got["polars-streaming"]["reference"].startswith("krishiv")
+    assert len(got["polars-streaming"]["samples_s"]) == 2
+    assert got["spark-connect"]["status"] == "mismatch"
+    assert "median_s" not in got["spark-connect"]
+
+
 def test_sequential_query_runs_polars_again_with_the_streaming_engine_after_a_crash(monkeypatch, tiny):
     rows = [(1,), (2,)]
     entry, _ = _sequential(
