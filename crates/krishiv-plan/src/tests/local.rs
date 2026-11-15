@@ -187,3 +187,14 @@ fn display_names_the_columns_and_rows() {
     // Spark-format text is golden-pending; the row count is Krishiv's own.
     insta::assert_snapshot!(analyzed.plan.root().to_string(), @"LocalRelation [a#0, b#1] (2 rows)");
 }
+
+#[test]
+fn different_content_of_the_same_shape_is_not_equal() {
+    let store = RelationStore::new();
+    let (a, b) = (relation(&store, &[1, 2]), relation(&store, &[1, 3]));
+    assert_ne!(a, b);
+    let (pa, pb) = (plan(read(&a)), plan(read(&b)));
+    assert!(!pa.structurally_eq(&pb));
+    assert_ne!(pa.canonical_encoding(), pb.canonical_encoding());
+    assert_ne!(normalized_plan_hash(&pa), normalized_plan_hash(&pb));
+}

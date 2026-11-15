@@ -85,7 +85,18 @@ fn nulls_inside_carry_their_type() {
         ArrayType::new(DataType::Integer, true),
         vec![Literal::Integer(1), Literal::Null(Some(DataType::Integer))],
     );
-    assert!(ok.is_ok());
+    let Literal::Array {
+        elements,
+        data_type,
+    } = ok.unwrap()
+    else {
+        panic!("not an array");
+    };
+    assert_eq!(
+        elements,
+        vec![Literal::Integer(1), Literal::Null(Some(DataType::Integer))]
+    );
+    assert_eq!(*data_type, ArrayType::new(DataType::Integer, true));
     // An untyped null, a null of another type, and a null where the type
     // forbids one are refused.
     for (contains_null, element) in [
@@ -263,4 +274,28 @@ fn debug_and_data_type_of_nested_literals() {
     };
     assert!(format!("{interval:?}").starts_with("CalendarInterval"));
     assert_eq!(interval.data_type(), Some(DataType::CalendarInterval));
+}
+
+#[test]
+fn an_options_only_map_is_not_a_nested_member() {
+    let e = Literal::array(
+        ArrayType::new(
+            DataType::Map(MapType::new(DataType::String, DataType::String, false).into()),
+            false,
+        ),
+        vec![Literal::Map(vec![("k".to_owned(), "v".to_owned())])],
+    )
+    .unwrap_err();
+    assert_eq!(class(&e), "INTERNAL_ERROR");
+}
+
+#[test]
+fn identity_text_of_an_empty_array_names_its_element_type() {
+    let empty = |t: DataType| Expr::from(Literal::array(ArrayType::new(t, true), vec![]).unwrap());
+    let (a, b) = (empty(DataType::Integer), empty(DataType::Long));
+    assert_eq!(a.to_string(), b.to_string());
+    assert_ne!(
+        crate::display::identity_string(&a),
+        crate::display::identity_string(&b)
+    );
 }

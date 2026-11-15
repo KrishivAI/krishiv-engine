@@ -1314,8 +1314,17 @@ impl Display for Literal {
             ),
             // Nested values print as the constructor call that builds them;
             // Spark's own text is golden-pending (design P3-T012a note, 5).
-            Self::Array { elements, .. } => {
-                f.write_str("ARRAY(")?;
+            Self::Array {
+                data_type,
+                elements,
+            } => {
+                // Two empty arrays of other element types are different values: identity text
+                // names the type (the Spark-facing text stays `ARRAY()`).
+                if elements.is_empty() && IDENTITY.with(std::cell::Cell::get) {
+                    write!(f, "ARRAY<{}>(", data_type.element_type().sql())?;
+                } else {
+                    f.write_str("ARRAY(")?;
+                }
                 for (i, e) in elements.iter().enumerate() {
                     if i > 0 {
                         f.write_str(", ")?;
