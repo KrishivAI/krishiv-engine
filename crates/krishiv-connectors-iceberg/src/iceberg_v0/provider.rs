@@ -74,7 +74,7 @@ impl IcebergTableProvider {
     /// errors of [`IcebergTable::plan`]; `KRISHIV_UNSUPPORTED_FEATURE` for a
     /// snapshot with delete files (naming the first), a data file that is not
     /// Parquet, or a file that lacks a column its spec partitions by identity
-    /// when other files' specs do not (see [`refuse_missing_mixed_identity`]);
+    /// when other files' specs do not (`refuse_missing_mixed_identity`);
     /// `INTERNAL_ERROR` for a partition value that does not decode.
     pub async fn open(
         table: &IcebergTable,
