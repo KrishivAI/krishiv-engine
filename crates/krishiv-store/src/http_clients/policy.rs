@@ -35,7 +35,7 @@ use object_store::client::{
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use reqwest::redirect;
 
-use crate::egress::{EgressScope, literal_ip};
+use crate::egress::EgressScope;
 
 /// object_store's own default user agent (`client/mod.rs` 88), kept so servers see the same.
 const DEFAULT_USER_AGENT: &str = "object_store/0.14.2";
@@ -298,9 +298,9 @@ impl HttpService for PolicyService {
         } else {
             self.scope.check_redirect(host)
         };
-        if literal_ip(host).is_some()
-            && let Err(refusal) = checked
-        {
+        // Names pass here (the egress resolver checks what they resolve to); literals in any
+        // spelling, and hosts no URL parser reads as either, are checked now.
+        if let Err(refusal) = checked {
             return Err(HttpError::new(HttpErrorKind::Connect, refusal));
         }
         self.client.call(req).await

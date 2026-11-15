@@ -456,6 +456,17 @@ async fn data_read_of_provider_literal_refused() {
             "{location}: dialled"
         );
     }
+    // A store with ambient credential providers still builds on the same cache.
+    assert!(
+        registry
+            .store(&parse_object_url("s3://bucket/key").unwrap())
+            .is_ok()
+    );
+    assert!(
+        registry
+            .store(&parse_object_url("gs://bucket/key").unwrap())
+            .is_ok()
+    );
     // The credential path keeps the provider literals (N1).
     let client = clients
         .connect(&ClientOptions::new().with_allow_http(true))

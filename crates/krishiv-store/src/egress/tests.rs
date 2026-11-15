@@ -313,3 +313,74 @@ fn noncanonical_ipv4_literals_recognised() {
     assert_eq!(literal_ip("s3.amazonaws.com"), None);
     assert_eq!(literal_ip("1x.example"), None);
 }
+
+/// Re-check of review 58a1: every refused host form gives a refusal from the startup check
+/// (`check_endpoint`), the request-time check (`permits_request_literal`) and the redirect check,
+/// in an IPv4 or IPv6 spelling, bracketed or not.
+#[test]
+fn every_refused_form_refused_at_startup_and_request_time() {
+    let scope = deny(&[], &[("IDENTITY_ENDPOINT", "http://localhost:1/x")]).scope::<_, &str>([]);
+    // (host as written, whether it is a provider literal object_store's own requests may use)
+    for (host, provider) in [
+        ("2130706433", false),
+        ("2852039166", true),
+        ("0x7f.0.0.1", false),
+        ("0xa9fea9fe", true),
+        ("0177.0.0.1", false),
+        ("127.1", false),
+        ("10.1", false),
+        ("127.0.0.1.", false),
+        ("::ffff:127.1", false),
+        ("::ffff:7f00:1", false),
+        // The mapped spellings of the metadata address are no provider literal: object_store
+        // never writes them, so they are refused even for its own requests.
+        ("[::ffff:169.254.169.254]", false),
+        ("0:0:0:0:0:ffff:a9fe:a9fe", false),
+    ] {
+        let bracketed = if host.contains(':') && !host.starts_with('[') {
+            format!("[{host}]")
+        } else {
+            host.to_owned()
+        };
+        for endpoint in [
+            format!("http://{bracketed}:80/latest"),
+            format!("https://{bracketed}/"),
+            bracketed.clone(),
+        ] {
+            assert_eq!(
+                scope.check_endpoint(&endpoint),
+                Err(EgressRefusal::PrivateAddress),
+                "startup: {endpoint}"
+            );
+        }
+        for request_host in [host, bracketed.as_str()] {
+            // A data request (no provider exemption) and a redirect hop are refused for every
+            // form; a store-built request is refused unless it names a provider literal.
+            assert!(
+                scope.check_redirect(request_host).is_err(),
+                "redirect: {request_host}"
+            );
+            assert_eq!(
+                scope.permits_request_literal(request_host).is_ok(),
+                provider,
+                "request: {request_host}"
+            );
+        }
+    }
+    // Names are names: resolved and checked by the resolver.
+    for name in ["s3.amazonaws.com", "storage.googleapis.com", "1x.example"] {
+        assert!(
+            scope.check_endpoint(&format!("https://{name}/")).is_ok(),
+            "{name}"
+        );
+        assert!(scope.permits_request_literal(name).is_ok(), "{name}");
+    }
+    // The allow policy refuses nothing, malformed or not.
+    let allow = EgressPolicy::new(
+        PrivateAddresses::Allow,
+        Vec::new(),
+        ProviderEndpoints::default(),
+    )
+    .scope::<_, &str>([]);
+    assert!(allow.check_endpoint("http://[::ffff:127.1]/").is_ok());
+}

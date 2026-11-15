@@ -366,14 +366,28 @@ pub fn literal_ip(host: &str) -> Option<IpAddr> {
     if let Ok(ip) = host.parse::<IpAddr>() {
         return Some(ip);
     }
-    if host.contains(':') {
-        return None;
-    }
-    match url::Host::parse(host) {
+    let parsed = if host.contains(':') {
+        url::Host::parse(&format!("[{host}]"))
+    } else {
+        url::Host::parse(host)
+    };
+    match parsed {
         Ok(url::Host::Ipv4(v4)) => Some(IpAddr::V4(v4)),
         Ok(url::Host::Ipv6(v6)) => Some(IpAddr::V6(v6)),
         _ => None,
     }
+}
+
+/// Whether `host` is neither an address nor a host name the URL parser accepts: an IPv6-like
+/// host that is not an address (`::ffff:127.1`), or a number-shaped IPv4 host out of range. No
+/// request can be dialled to it, so the checks refuse it rather than leave it to the resolver.
+fn malformed(host: &str) -> bool {
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    let bare = bare.split('%').next().unwrap_or(bare);
+    if bare.is_empty() || literal_ip(bare).is_some() {
+        return false;
+    }
+    bare.contains(':') || url::Host::parse(bare).is_err()
 }
 
 /// Whether the egress rule applies (`krishiv.io.egress.privateAddresses`).
@@ -521,6 +535,9 @@ impl EgressScope {
     /// # Errors
     /// [`EgressRefusal::PrivateAddress`] for a refused literal.
     pub fn check_endpoint(&self, endpoint: &str) -> Result<(), EgressRefusal> {
+        if self.policy.enforced() && host_of(endpoint).as_deref().is_some_and(malformed) {
+            return Err(EgressRefusal::PrivateAddress);
+        }
         match host_of(endpoint).as_deref().and_then(literal_ip) {
             Some(ip) if !self.permits(None, ip) => Err(EgressRefusal::PrivateAddress),
             _ => Ok(()),
@@ -534,6 +551,9 @@ impl EgressScope {
     /// # Errors
     /// [`EgressRefusal::PrivateAddress`] for a refused literal.
     pub fn permits_request_literal(&self, host: &str) -> Result<(), EgressRefusal> {
+        if self.policy.enforced() && malformed(host) {
+            return Err(EgressRefusal::PrivateAddress);
+        }
         match literal_ip(host) {
             Some(ip)
                 if !self.permits(None, ip) && !self.policy.providers.literals.contains(&ip) =>
@@ -554,6 +574,9 @@ impl EgressScope {
     pub fn check_redirect(&self, host: &str) -> Result<(), EgressRefusal> {
         if !self.policy.enforced() {
             return Ok(());
+        }
+        if malformed(host) {
+            return Err(EgressRefusal::PrivateAddress);
         }
         match literal_ip(host) {
             Some(ip) if self.permits(None, ip) => Ok(()),
