@@ -329,3 +329,35 @@ fn a_union_of_global_aggregates_is_one_partition() {
         assert_eq!(got, ["6,0", "4,1"], "{threads} threads");
     }
 }
+
+/// A union of two one-slice ranges probing a broadcast build: the probe needs
+/// a flush, so the union's branches run together. Spark makes the union one
+/// partition and draws one stream above the join (`bhj_above` in the
+/// fixture: mono 0..7, one `rand(42)` stream); Krishiv keeps the plain
+/// numbering for a group whose members run together (a known gap,
+/// `numbering.rs`), so each branch draws its own stream and the rows are the
+/// same on every run at any thread count.
+#[test]
+fn a_coalescible_union_under_a_join_probe_stays_deterministic() {
+    let doc = fixture();
+    let dir = tempfile::tempdir().unwrap();
+    let sql = "SELECT /*+ BROADCAST(d) */ u.id, monotonically_increasing_id() m, rand(42) r \
+               FROM (SELECT id FROM s1 UNION ALL SELECT id FROM s2) u JOIN d ON u.id = d.id";
+    let mut first: Option<Vec<String>> = None;
+    for threads in [1, 2, 4, 8] {
+        let s = session(&doc, "probe.scala", threads, dir.path());
+        run(
+            &s,
+            "CREATE TEMPORARY VIEW d AS SELECT id FROM range(0, 20, 1, 1)",
+        );
+        for attempt in 0..5 {
+            let mut got = rows(&s, sql);
+            got.sort();
+            assert_eq!(got.len(), 8);
+            match &first {
+                None => first = Some(got),
+                Some(want) => assert_eq!(&got, want, "{threads} threads, run {attempt}"),
+            }
+        }
+    }
+}

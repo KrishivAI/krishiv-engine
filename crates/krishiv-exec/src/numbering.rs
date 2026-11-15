@@ -15,6 +15,13 @@
 //!
 //! The index of id `p` for operator `k` of member `m` is
 //! `p - numbering_base(m, k)`; this module computes the bases.
+//!
+//! Coalescing applies only to a group whose members run one after another
+//! (`runner.rs` `members_run_in_turn`). Known gap: when a shared operator
+//! needs a flush (a hash-join probe above the union), the members run
+//! together and the union keeps the plain numbering, deterministic but not
+//! Spark's one stream (Spark 4.2.0 `bhj_above`: mono 0..7 across both
+//! branches).
 
 use std::cell::RefCell;
 use std::collections::HashMap;

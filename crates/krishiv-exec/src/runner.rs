@@ -561,7 +561,17 @@ fn start_group(
             fans: &m.pipeline.fans,
         })
         .collect();
-    let numbering = Numbering::new(&shapes, query.config().union_output_partitioning);
+    // A coalesced union's branches share index 0's streams above it, so they
+    // must run in turn (Spark's one task). A group whose members run together
+    // (a shared operator needs a flush, e.g. a hash-join probe above the
+    // union) keeps the plain numbering, which gives each member its own
+    // streams: deterministic, though not Spark's one stream (known gap,
+    // `numbering.rs`).
+    let sequential = started.len() < 2 || members_run_in_turn(&started);
+    let numbering = Numbering::new(
+        &shapes,
+        query.config().union_output_partitioning && sequential,
+    );
     // The group's sink is above every fan-in of the first member.
     let top = shapes.first().map_or(
         Origin {
@@ -688,11 +698,15 @@ struct GroupStart {
 /// over a sorted child) sees nondeterministic rows. A flush barrier waits
 /// for every driver's arrival, so a group sharing one stays concurrent.
 fn fan_in_is_sequential(group: &GroupStart) -> bool {
-    group.members.len() > 1
-        && group
-            .members
-            .iter()
-            .all(|m| m.pipeline.operators.iter().all(|(_, op)| !op.needs_flush()))
+    group.members.len() > 1 && members_run_in_turn(&group.members)
+}
+
+/// Whether no operator of `members` needs a cross-driver flush (see
+/// [`fan_in_is_sequential`]).
+fn members_run_in_turn(members: &[MemberStart]) -> bool {
+    members
+        .iter()
+        .all(|m| m.pipeline.operators.iter().all(|(_, op)| !op.needs_flush()))
 }
 
 /// The barriers of `member`'s operators.
