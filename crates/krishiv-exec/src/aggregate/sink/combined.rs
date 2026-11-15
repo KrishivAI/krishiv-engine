@@ -19,20 +19,24 @@
 //! the finalizing driver's own hook serves the tables from then on. A
 //! `finalize` waits for a hook write in progress (`Inner::hook_writing`),
 //! so it sees the tables either in memory or as runs, never neither.
+//!
+//! A write the pool refuses its scratch frees nothing and is no error (as
+//! any spill's, [`crate::output_spill::refused`]): the tables not written
+//! go back, in driver-partition order, and the hook offers them again; the
+//! bytes it reports freed are only those of the runs it wrote.
 
 use std::sync::atomic::Ordering as AtomicOrdering;
 use std::sync::{Arc, Weak};
 
 use futures::future::BoxFuture;
-use krishiv_common::error::ErrorClass;
 use krishiv_memory::{ConsumerHandle, Reservation};
 
-use super::held::{lend_headroom, regrow};
+use super::held::{lend_headroom_above, regrow};
 use super::{Global, Run, Spiller, Table, held};
 use crate::context::TaskContext;
 use crate::error::Result;
 use crate::executor::{Executor, run_blocking};
-use crate::output_spill::{OutputSpill, SpillUnread};
+use crate::output_spill::{OutputSpill, SpillUnread, is_refusal};
 use crate::sync::lock;
 
 /// The consumer of the combined tables and its spill hook.
@@ -125,18 +129,19 @@ impl SpillUnread for CombinedSpill {
             let _spilling = s.consumer.spilling();
             let query = Arc::clone(&s.query);
             let written = run_blocking(&*self.executor, move || {
-                let _guard = guard;
                 let mut out = Written::default();
                 let mut tables = tables.into_iter();
                 while let Some((p, t, mut r)) = tables.next() {
                     let size = r.size();
-                    let lent = lend_headroom(&mut r);
+                    // Only the headroom above the table: a table kept by an
+                    // earlier refused write may have lost it already.
+                    let lent = lend_headroom_above(&mut r, t.memory_size());
                     match s.write_run(&t, 0, 0, p) {
                         Ok(run) => {
                             out.runs.push(run);
                             out.freed += size;
                         }
-                        Err(e) if e.error_class() == ErrorClass::UnableToAcquireMemory => {
+                        Err(e) if is_refusal(&e) => {
                             // A refused scratch frees nothing and is no
                             // error (as `output_spill::refused`): this
                             // table and the rest go back, still in memory.
@@ -148,11 +153,14 @@ impl SpillUnread for CombinedSpill {
                         Err(e) => return Err(e),
                     }
                 }
-                Ok(out)
+                // The guard drops after the kept tables (tuple order): the
+                // query's blocking count stays up until their memory is
+                // back with the hook's state, or freed.
+                Ok((out, guard))
             })
             .await;
-            let out = match written {
-                Ok(out) => out,
+            let (out, _guard) = match written {
+                Ok(written) => written,
                 Err(e) => {
                     // The tables are gone: the query fails before `finalize`
                     // (waiting on this write) can run on what is left.

@@ -807,6 +807,16 @@ impl Combined {
     /// `max_bytes` caps the spill files (`None`: the default cap); `hook`
     /// runs at each writer's start.
     fn new(max_bytes: Option<u64>, hook: Arc<dyn Fn() + Send + Sync>) -> Self {
+        Self::with_tables(max_bytes, hook, &[(0, 0)])
+    }
+
+    /// As [`new`](Self::new), with one combined table per `(partition,
+    /// first)`: keys `0..ROWS`, the order column counting from `first`.
+    fn with_tables(
+        max_bytes: Option<u64>,
+        hook: Arc<dyn Fn() + Send + Sync>,
+        tables: &[(u32, i64)],
+    ) -> Self {
         let dir = tempfile::Builder::new()
             .prefix("krishiv-slice-")
             .tempdir()
@@ -822,6 +832,9 @@ impl Combined {
         let root = TreePool::with_clock(
             &MemoryConfig {
                 quantum: 16 << 10,
+                // The process's resident set is not under test: an earlier
+                // query of the same test would shift the pool's room.
+                resident_guard: false,
                 ..MemoryConfig::default()
             },
             Arc::new(TokioClock),
@@ -850,19 +863,26 @@ impl Combined {
             coordinator: None,
         };
         let coordinator = c.task();
-        let g = Sink::global_state(&*c.agg, &coordinator).unwrap();
-        let b = c.task();
-        let mut lb = Sink::local_state(&*c.agg, &b, &g).unwrap();
+        c.g = Some(Sink::global_state(&*c.agg, &coordinator).unwrap());
+        c.coordinator = Some(coordinator);
+        for &(partition, first) in tables {
+            c.combine(partition, first);
+        }
+        c
+    }
+
+    /// A driver of `partition` folds keys `0..ROWS` (order from `first`),
+    /// combines and ends.
+    fn combine(&self, partition: u32, first: i64) {
+        let d = self.task().with_partition(partition);
+        let mut l = Sink::local_state(&*self.agg, &d, self.g()).unwrap();
         assert!(matches!(
-            c.agg
-                .sink(batch(false, 0, 0..ROWS as i64), &mut lb, &g)
+            self.agg
+                .sink(batch(false, first, 0..ROWS as i64), &mut l, self.g())
                 .unwrap(),
             SinkStatus::NeedMoreInput
         ));
-        c.agg.combine(lb, &g).unwrap();
-        c.g = Some(g);
-        c.coordinator = Some(coordinator);
-        c
+        self.agg.combine(l, self.g()).unwrap();
     }
 
     fn task(&self) -> TaskContext {
@@ -902,15 +922,24 @@ impl Combined {
 
     /// Finalizes on `fin` and counts the groups read back.
     async fn groups(&self, fin: TaskContext) -> crate::error::Result<usize> {
+        Ok(self.rows(fin).await?.len())
+    }
+
+    /// Finalizes on `fin`: `(key, count, sum, first o, last o)`, sorted.
+    async fn rows(&self, fin: TaskContext) -> crate::error::Result<Vec<[i64; 5]>> {
         self.agg.finalize(self.g(), &fin).await?;
         let src = fin.with_dependency(Arc::clone(self.g()));
         let sg = Source::global_state(&*self.agg, &src)?;
         let mut sl = Source::local_state(&*self.agg, &src, &sg)?;
-        let mut groups = 0;
+        let mut rows = Vec::new();
         while let Some(out) = self.agg.get_data(&mut sl, &sg).await? {
-            groups += out.data().num_rows();
+            let d = out.data();
+            let col = |i: usize| d.column(i).as_primitive::<Int64Type>().clone();
+            let cols = [col(0), col(1), col(2), col(4), col(5)];
+            rows.extend((0..d.num_rows()).map(|r| cols.each_ref().map(|c| c.value(r))));
         }
-        Ok(groups)
+        rows.sort_unstable();
+        Ok(rows)
     }
 
     /// Drops the query's states; returns what the pool still holds.
@@ -944,8 +973,15 @@ fn writer_gate() -> (
     (hook, entered_rx, release_tx)
 }
 
+/// Waits (30 s at most) for `f`.
+async fn within<T>(f: impl std::future::Future<Output = T>) -> T {
+    tokio::time::timeout(Duration::from_secs(30), f)
+        .await
+        .expect("waited out the test's deadline")
+}
+
 async fn entered(rx: std::sync::mpsc::Receiver<()>) {
-    tokio::task::spawn_blocking(move || rx.recv().unwrap())
+    within(tokio::task::spawn_blocking(move || rx.recv().unwrap()))
         .await
         .unwrap();
 }
@@ -963,12 +999,17 @@ async fn finalize_waits_out_a_combined_tables_write() {
         let c = Arc::clone(&c);
         tokio::spawn(async move { c.groups(fin).await })
     };
+    // An early signal only: the groups read below are what show that
+    // `finalize` waited.
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(!finalizing.is_finished(), "finalize ran during the write");
     release.send(()).unwrap();
-    let wants = asked.await.unwrap().expect("the write freed nothing");
+    let wants = within(asked)
+        .await
+        .unwrap()
+        .expect("the write freed nothing");
     drop((wants, ballast));
-    assert_eq!(finalizing.await.unwrap().unwrap(), ROWS);
+    assert_eq!(within(finalizing).await.unwrap().unwrap(), ROWS);
     let c = Arc::into_inner(c).unwrap();
     assert_eq!(c.end(), 0, "memory still held");
 }
@@ -993,7 +1034,7 @@ async fn a_cancel_during_a_combined_tables_write_leaves_the_pool_empty() {
         "a cancelled query finished"
     );
     // As the runner does at query end: the hook's write runs out first.
-    c.q.blocking_done().await;
+    within(c.q.blocking_done()).await;
     assert_eq!(c.end(), 0, "memory still held");
 }
 
@@ -1021,4 +1062,113 @@ async fn a_failing_combined_tables_write_fails_the_query() {
         "finalize read a short result"
     );
     assert_eq!(c.end(), 0, "memory still held");
+}
+
+/// Four combined tables (driver partitions 0, 2 and 3, then 1 combining
+/// while the hook writes): the write finishes partition 0's table, the
+/// pool refuses partition 2's scratch. The hook reports partition 0's bytes
+/// freed, keeps partitions 2 and 3 (not yet tried) and puts them back
+/// beside partition 1's in partition order; every group (key, count, sum) is that of a run that
+/// never spilled. (Not `first`/`last`: the in-memory row-table merge and the
+/// spilled runs order the drivers' tables differently, a defect of its own,
+/// `ops/queue-opus.md`.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_write_refused_part_way_keeps_the_tables_it_did_not_write() {
+    let tables = [(0, 0), (2, 20_000), (3, 30_000)];
+    let unspilled = Combined::with_tables(None, Arc::new(|| {}), &tables);
+    unspilled.combine(1, 10_000);
+    let unordered = |rows: Vec<[i64; 5]>| {
+        rows.into_iter()
+            .map(|r| [r[0], r[1], r[2]])
+            .collect::<Vec<_>>()
+    };
+    let expected = unordered(unspilled.rows(unspilled.task()).await.unwrap());
+    assert_eq!(unspilled.end(), 0);
+    // Extra writers (`parts.rs` helpers) may still start partition 2's run
+    // if the request takes partition 0's freed bytes only after the run
+    // began: their credit covers the scratch, nothing is refused, and the
+    // try proves nothing (its result is still checked). Repeat until one
+    // is refused.
+    for _ in 0..20 {
+        if refused_part_way(&tables, &expected, &unordered).await {
+            return;
+        }
+    }
+    panic!("no try refused partition 2's scratch");
+}
+
+/// One try of [`a_write_refused_part_way_keeps_the_tables_it_did_not_write`]:
+/// whether the hook's write was refused part-way (partition 0's run only).
+async fn refused_part_way(
+    tables: &[(u32, i64)],
+    expected: &[[i64; 3]],
+    unordered: &dyn Fn(Vec<[i64; 5]>) -> Vec<[i64; 3]>,
+) -> bool {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    // The first writer after partition 0's run (the first writer of
+    // partition 2's) stops at the gate.
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel::<()>();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let gate = std::sync::Mutex::new((entered_tx, release_rx));
+    let agg = Arc::new(std::sync::OnceLock::<std::sync::Weak<HashAggregate>>::new());
+    let fired = AtomicBool::new(false);
+    let hook = {
+        let agg = Arc::clone(&agg);
+        Arc::new(move || {
+            let ran = agg
+                .get()
+                .and_then(std::sync::Weak::upgrade)
+                .is_some_and(|a| a.metrics().spill_runs >= 1);
+            if ran && !fired.swap(true, Ordering::SeqCst) {
+                let g = gate.lock().unwrap();
+                g.0.send(()).unwrap();
+                let _ = g.1.recv();
+            }
+        })
+    };
+    let c = Combined::with_tables(None, hook, tables);
+    agg.set(Arc::downgrade(&c.agg)).unwrap();
+    let held = c.root.reserved();
+    // About one table's bytes: partition 0's run funds the request, and
+    // partition 2's starts with no room for extra writers.
+    let (ballast, asked) = c.ask(held / tables.len() - (64 << 10));
+    entered(entered_rx).await;
+    // Partition 1 combines mid-write (with the ballast's room); then every
+    // free byte, the scratch floor included, is taken, so the gated writer
+    // is refused.
+    drop(ballast);
+    c.combine(1, 10_000);
+    let mut grab = ConsumerHandle::register(Arc::clone(c.q.pool()), "grab", None)
+        .reservation()
+        .for_spill_scratch();
+    let mut n = 1usize << 40;
+    while n > 0 {
+        if grab.try_grow(n).is_err() {
+            n /= 2;
+        }
+    }
+    release_tx.send(()).unwrap();
+    let wants = within(asked)
+        .await
+        .unwrap()
+        .expect("partition 0's run freed nothing");
+    // The grab holds until the hook's write ended.
+    within(c.q.blocking_done()).await;
+    drop((wants, grab));
+    let refused = c.agg.metrics().spill_runs == 1;
+    if refused {
+        // Three tables still in memory (`held` was three): partitions 2
+        // and 3 kept, partition 1's; partition 2's lent headroom may not
+        // be back.
+        let in_memory = c.root.reserved();
+        assert!(in_memory > held * 5 / 6, "{in_memory} of {held}");
+    }
+    let got = c.rows(c.task()).await.unwrap();
+    // Driver-partition order: `first` from partition 0, `last` from 3.
+    for r in &got {
+        assert_eq!([r[3], r[4]], [r[0], 30_000 + r[0]], "{r:?}");
+    }
+    assert_eq!(unordered(got), expected);
+    assert_eq!(c.end(), 0, "memory still held");
+    refused
 }

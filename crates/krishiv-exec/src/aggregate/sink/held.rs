@@ -69,6 +69,15 @@ pub(super) fn lend_headroom(r: &mut Reservation) -> usize {
     lent
 }
 
+/// [`lend_headroom`] of only what `r` holds above `used` bytes (0 once a
+/// refused write could not take the headroom back): never bytes the table
+/// still occupies.
+pub(super) fn lend_headroom_above(r: &mut Reservation, used: usize) -> usize {
+    let lent = HEADROOM.min(r.size().saturating_sub(used));
+    r.shrink(lent);
+    lent
+}
+
 /// Takes back `lent` bytes of headroom after spill I/O, if the pool still
 /// has them (the next `reserve_to` asks again otherwise).
 pub(super) fn regrow(r: &mut Reservation, lent: usize) {
