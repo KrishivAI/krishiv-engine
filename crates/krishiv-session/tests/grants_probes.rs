@@ -877,3 +877,212 @@ fn r7_owner_lifecycle_and_views_by_dataframe() {
     expect(&ana, "SELECT a FROM va", true, &mut bad);
     assert!(bad.is_empty(), "{bad:#?}");
 }
+
+// ---- re-check 2 probes (reviewer, head bf69afc39) ----
+
+fn rows_of(s: &Session, sql: &str) -> String {
+    match block_on(async { s.sql(sql).await?.collect().await }) {
+        Ok(b) => {
+            let mut v = Vec::new();
+            for batch in &b {
+                for c in batch.columns() {
+                    v.push(format!(
+                        "{:?}",
+                        arrow_array::cast::as_primitive_array::<arrow_array::types::Int32Type>(c)
+                            .values()
+                    ));
+                }
+            }
+            format!("OK {v:?}")
+        }
+        Err(e) => format!("ERR {}", e.error_class().name()),
+    }
+}
+
+#[test]
+fn q1_table_named_like_a_namespace_dir() {
+    let w = World::new();
+    let (root, ana) = (w.admin(), w.user("ana"));
+    let wh = w.dir.path().join("wh");
+    ok(&root, "GRANT CREATE ON SCHEMA default TO user:ana");
+    let mut bad = Vec::new();
+    // ana first: her table's managed directory is <wh>/x.db.
+    expect(
+        &ana,
+        "CREATE TABLE `x.db` (a INT) USING parquet",
+        false,
+        &mut bad,
+    );
+    show(&root, "CREATE NAMESPACE x");
+    show(&root, "CREATE TABLE x.secret (a INT) USING parquet");
+    show(&root, "INSERT INTO x.secret VALUES (42)");
+    eprintln!(
+        "RECHECK2 dirs: {:?}",
+        std::fs::read_dir(&wh).map(|d| d
+            .filter_map(Result::ok)
+            .map(|e| e.file_name())
+            .collect::<Vec<_>>())
+    );
+    let p = wh.join("x.db").join("secret");
+    expect(
+        &ana,
+        &format!("SELECT * FROM parquet.`{}`", p.display()),
+        true,
+        &mut bad,
+    );
+    eprintln!(
+        "RECHECK2 q1 read: {}",
+        rows_of(&ana, &format!("SELECT * FROM parquet.`{}`", p.display()))
+    );
+    expect(&ana, "DROP TABLE `x.db`", false, &mut bad);
+    eprintln!(
+        "RECHECK2 q1 after drop, root reads x.secret: {}",
+        rows_of(&root, "SELECT * FROM x.secret")
+    );
+    assert!(bad.is_empty(), "{bad:#?}");
+}
+
+#[test]
+fn q2_twins_after_grant_across_namespaces_and_views() {
+    let w = World::new();
+    let (root, ana) = (w.admin(), w.user("ana"));
+    let mut bad = Vec::new();
+    ok(&root, "CREATE TABLE ct (a INT) USING parquet");
+    ok(&root, "INSERT INTO ct VALUES (1)");
+    ok(&root, "GRANT SELECT ON TABLE ct TO user:ana");
+    ok(&root, "SET spark.sql.caseSensitive=true");
+    ok(&root, "CREATE TABLE CT (a INT) USING parquet");
+    ok(&root, "INSERT INTO CT VALUES (9)");
+    let anacs = w.user("ana");
+    ok(&anacs, "SET spark.sql.caseSensitive=true");
+    expect(&anacs, "SELECT * FROM CT", true, &mut bad);
+    eprintln!(
+        "RECHECK2 q2 ana default CT: {}",
+        rows_of(&ana, "SELECT * FROM CT")
+    );
+    // namespaces
+    show(&root, "CREATE NAMESPACE db");
+    show(&root, "CREATE NAMESPACE DB");
+    show(&root, "CREATE TABLE db.t (a INT) USING parquet");
+    show(&root, "INSERT INTO db.t VALUES (1)");
+    show(&root, "CREATE TABLE DB.t (a INT) USING parquet");
+    show(&root, "INSERT INTO DB.t VALUES (9)");
+    ok(&root, "GRANT SELECT ON TABLE db.t TO user:ana");
+    ok(&root, "GRANT SELECT ON SCHEMA db TO user:ana");
+    expect(&anacs, "SELECT * FROM DB.t", true, &mut bad);
+    eprintln!(
+        "RECHECK2 q2 ana default DB.t: {}",
+        rows_of(&ana, "SELECT * FROM DB.t")
+    );
+    // view twin of a table
+    show(&root, "CREATE TABLE vt (a INT) USING parquet");
+    show(&root, "CREATE VIEW VT AS SELECT 9 AS a");
+    ok(&root, "GRANT SELECT ON TABLE vt TO user:ana");
+    expect(&anacs, "SELECT * FROM VT", true, &mut bad);
+    eprintln!(
+        "RECHECK2 q2 ana default VT: {}",
+        rows_of(&ana, "SELECT * FROM VT")
+    );
+    show(&root, "CREATE VIEW vv AS SELECT 1 AS a");
+    show(&root, "CREATE TABLE VV (a INT) USING parquet");
+    show(&root, "INSERT INTO VV VALUES (9)");
+    ok(&root, "GRANT SELECT ON VIEW vv TO user:ana");
+    expect(&anacs, "SELECT * FROM VV", true, &mut bad);
+    eprintln!(
+        "RECHECK2 q2 ana default VV: {}",
+        rows_of(&ana, "SELECT * FROM VV")
+    );
+    assert!(bad.is_empty(), "{bad:#?}");
+}
+
+#[test]
+fn q3_managed_dirs_do_not_reach_siblings() {
+    let w = World::new();
+    let (root, ana) = (w.admin(), w.user("ana"));
+    let wh = w.dir.path().join("wh");
+    ok(&root, "GRANT CREATE ON SCHEMA default TO user:ana");
+    ok(&root, "CREATE TABLE abc (a INT) USING parquet");
+    ok(&root, "INSERT INTO abc VALUES (42)");
+    let mut bad = Vec::new();
+    expect(
+        &ana,
+        "CREATE TABLE ab (a INT) USING parquet",
+        false,
+        &mut bad,
+    );
+    expect(&ana, "INSERT INTO ab VALUES (1)", false, &mut bad);
+    expect(
+        &ana,
+        &format!("SELECT * FROM parquet.`{}`", wh.join("abc").display()),
+        true,
+        &mut bad,
+    );
+    expect(
+        &ana,
+        &format!("SELECT * FROM parquet.`{}/ab/../abc`", wh.display()),
+        true,
+        &mut bad,
+    );
+    expect(
+        &ana,
+        &format!("SELECT * FROM parquet.`{}`", wh.join("ab").display()),
+        false,
+        &mut bad,
+    );
+    // A column grant does not open the directory.
+    table(&w, "t");
+    ok(&root, "GRANT SELECT (a) ON t TO user:ana");
+    expect(
+        &ana,
+        &format!("SELECT * FROM parquet.`{}`", wh.join("t").display()),
+        true,
+        &mut bad,
+    );
+    // An admin's external table inside ana's managed directory.
+    let sub = wh.join("ab").join("sub");
+    show(
+        &root,
+        &format!(
+            "CREATE TABLE vic (a INT) USING parquet LOCATION '{}'",
+            sub.display()
+        ),
+    );
+    show(&root, "INSERT INTO vic VALUES (7)");
+    eprintln!(
+        "RECHECK2 q3 ana reads vic's dir: {}",
+        rows_of(&ana, &format!("SELECT * FROM parquet.`{}`", sub.display()))
+    );
+    // r2-m1: the external table's location is not ana's, though inside her directory.
+    denied(&ana, &format!("SELECT * FROM parquet.`{}`", sub.display()));
+    denied(
+        &ana,
+        &format!(
+            "SELECT * FROM parquet.`{}`",
+            sub.join("..").join("sub").display()
+        ),
+    );
+    // Her own directory still reads.
+    expect(
+        &ana,
+        &format!("SELECT * FROM parquet.`{}`", wh.join("ab").display()),
+        false,
+        &mut bad,
+    );
+    // ana renames onto a dropped table's name.
+    ok(&root, "CREATE TABLE gone (a INT) USING parquet");
+    ok(&root, "INSERT INTO gone VALUES (5)");
+    ok(&root, "GRANT SELECT ON TABLE gone TO user:bob");
+    ok(&root, "DROP TABLE gone");
+    expect(
+        &ana,
+        "CREATE TABLE mine (a INT) USING parquet",
+        false,
+        &mut bad,
+    );
+    expect(&ana, "ALTER TABLE mine RENAME TO gone", false, &mut bad);
+    let bob = w.user("bob");
+    expect(&bob, "SELECT * FROM gone", true, &mut bad);
+    expect(&ana, "INSERT INTO gone VALUES (3)", false, &mut bad);
+    expect(&ana, "DROP TABLE gone", false, &mut bad);
+    assert!(bad.is_empty(), "{bad:#?}");
+}

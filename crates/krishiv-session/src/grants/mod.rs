@@ -26,6 +26,7 @@
 //! ownership (review m8: principals are keyed by name).
 
 mod exec;
+mod index;
 mod model;
 mod store;
 
@@ -176,6 +177,8 @@ pub struct GrantsPolicy {
     /// warehouse directory belongs to (set by the session that uses the policy; without it
     /// names match exactly and no directory belongs to a table: the stricter rules).
     catalog: std::sync::OnceLock<Arc<crate::store::InMemoryCatalogStore>>,
+    /// The catalog's lookup tables, rebuilt when it changes.
+    index: index::IndexCache,
     /// Keys this session's running statement is creating (the new object; a managed location
     /// the statement makes for it): allowed until it ends (review open point 2).
     creating: Arc<std::sync::Mutex<Vec<ObjectKey>>>,
@@ -213,6 +216,7 @@ impl GrantsPolicy {
             system,
             admin,
             catalog: std::sync::OnceLock::new(),
+            index: index::IndexCache::default(),
             creating: Arc::default(),
         }
     }
@@ -252,11 +256,9 @@ impl GrantsPolicy {
     /// object, or none yet). Any other catalog, a function's twin unknown, or no catalog bound:
     /// exactly. Never from a session's `spark.sql.caseSensitive`.
     pub(crate) fn exact_for(&self, key: &ObjectKey) -> bool {
-        use crate::store::CatalogStore as _;
         let Some(store) = self.catalog.get() else {
             return true;
         };
-        let p = &key.parts;
         if key.kind == model::KeyKind::Function {
             // Functions resolve case-insensitively in every mode.
             return false;
@@ -264,50 +266,23 @@ impl GrantsPolicy {
         if !matches!(
             key.kind,
             model::KeyKind::Namespace | model::KeyKind::Relation | model::KeyKind::Column
-        ) || p.first().is_none_or(|c| c != crate::catalog::CATALOG)
+        ) || key
+            .parts
+            .first()
+            .is_none_or(|c| c != crate::catalog::CATALOG)
         {
             return true;
         }
-        let Some(ns) = p.get(1) else {
-            // The catalog itself.
-            return false;
-        };
-        let namespaces: Vec<String> = store
-            .namespaces()
-            .into_iter()
-            .map(|(n, _)| n)
-            .filter(|n| n.eq_ignore_ascii_case(ns))
-            .collect();
-        if namespaces.len() > 1 || p.len() > 4 {
-            return true;
-        }
-        let Some(name) = p.get(2) else {
-            return false;
-        };
-        let tables: Vec<Arc<crate::store::CatalogTable>> = namespaces
-            .iter()
-            .flat_map(|n| store.tables_in(n))
-            .filter(|t| t.name.eq_ignore_ascii_case(name))
-            .collect();
-        if tables.len() > 1 {
-            return true;
-        }
-        let Some(column) = p.get(3) else {
-            return false;
-        };
-        tables.first().is_some_and(|t| {
-            t.columns
-                .iter()
-                .filter(|c| c.name.eq_ignore_ascii_case(column))
-                .count()
-                > 1
-        })
+        self.index.get(store).has_twin(key)
     }
 
-    /// Whether `principal` may use the warehouse directory `key` (a local path) as the managed
-    /// table it belongs to allows (review R2): reading it needs `Select` on the table, anything
-    /// else `Modify` or `Drop` there (its owner holds both). An explicit location never belongs
-    /// to a table here, so it still needs a path grant.
+    /// Whether `principal` may use the local path `key` as the table whose directory holds it
+    /// allows (review R2): the most specific table location containing it decides, so an
+    /// external table's location inside another table's managed directory stays that table's
+    /// (review re-check 2 r2-m1). A managed table's directory follows its table: reading needs
+    /// `Select` there, anything else `Modify` or `Drop` (an owner holds both). An external
+    /// table's location (and what is under it) is left to path grants. The lookup is a
+    /// precomputed table (no catalog walk, no filesystem call per check).
     fn managed_location_allows(
         &self,
         state: &model::GrantState,
@@ -315,42 +290,23 @@ impl GrantsPolicy {
         key: &ObjectKey,
         privilege: Privilege,
     ) -> bool {
-        use crate::store::CatalogStore as _;
         let Some(store) = self.catalog.get() else {
             return false;
         };
-        for (ns, _) in store.namespaces() {
-            for t in store.tables_in(&ns) {
-                if !t.managed || t.view.is_some() {
-                    continue;
-                }
-                let text = format!("file:{}", t.location.display());
-                let path =
-                    Securable::Path(krishiv_common::secret::OptionValue::from_user("path", text));
-                let Some(dir) = ObjectKey::of(&path).and_then(physical_key) else {
-                    continue;
-                };
-                if !key.covered_by(&dir, true) {
-                    continue;
-                }
-                let relation = ObjectKey::new(
-                    model::KeyKind::Relation,
-                    vec![
-                        crate::catalog::CATALOG.to_owned(),
-                        t.namespace.clone(),
-                        t.name.clone(),
-                    ],
-                );
-                let exact = self.exact_for(&relation);
-                return if privilege == Privilege::Select {
-                    state.allows(principal, &relation, Privilege::Select, exact)
-                } else {
-                    state.allows(principal, &relation, Privilege::Modify, exact)
-                        || state.allows(principal, &relation, Privilege::Drop, exact)
-                };
-            }
+        let index = self.index.get(store);
+        let Some((relation, managed)) = index.owner_of_dir(key) else {
+            return false;
+        };
+        if !managed {
+            // An external location is left to path grants.
+            return false;
         }
-        false
+        let exact = self.exact_for(relation);
+        if privilege == Privilege::Select {
+            return state.allows(principal, relation, Privilege::Select, exact);
+        }
+        state.allows(principal, relation, Privilege::Modify, exact)
+            || state.allows(principal, relation, Privilege::Drop, exact)
     }
 
     /// The shared grants.
