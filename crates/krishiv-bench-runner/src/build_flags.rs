@@ -77,6 +77,7 @@ mod tests {
                 "-C",
                 "llvm-args=-foo -x86-branches-within-32B-boundaries -bar",
             ]),
+            enc(&["-C", "llvm-args=--x86-branches-within-32B-boundaries"]),
         ] {
             assert_eq!(branch_align(&f), "32B", "{f:?}");
         }
