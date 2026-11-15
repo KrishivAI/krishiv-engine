@@ -3,7 +3,8 @@
 //! Iceberg's `TypeToSparkType` at apache-iceberg 1.12.0, Spark 4.1 module
 //! (`research/p3/t022a-iceberg-spark-types.md`). Field nullability is the field's
 //! `optional`, a list's `containsNull` its element's, a map's `valueContainsNull`
-//! its value's; a doc becomes the `comment` metadata; field ids are not carried.
+//! its value's; a doc becomes the `comment` metadata; field ids are not carried by the Spark
+//! schema, only by the Arrow table schema a scan maps files onto ([`arrow_schema`]).
 //! This is the Spark 4.x mapping (Spark 3.5 has no `variant`). Column default values
 //! (format v3) are refused until Spark's `EXISTS_DEFAULT` / `CURRENT_DEFAULT` metadata
 //! and the fill of missing columns exist.
@@ -101,4 +102,60 @@ pub(crate) fn spark_schema(schema: &Schema) -> Result<StructType, KrishivError> 
             .map(|f| spark_field(f))
             .collect::<Result<Vec<_>, _>>()?,
     ))
+}
+
+/// The Arrow form of [`spark_schema`] (the table schema a scan maps files
+/// onto), with every field's Iceberg id in its [`krishiv_io::FIELD_ID_KEY`]
+/// metadata, nested fields included, so files are read by id.
+///
+/// # Errors
+/// As [`spark_type`].
+pub(crate) fn arrow_schema(schema: &Schema) -> Result<arrow_schema::SchemaRef, KrishivError> {
+    let spark = spark_schema(schema)?;
+    let fields: Vec<arrow_schema::Field> = spark
+        .fields()
+        .iter()
+        .zip(schema.as_struct().fields())
+        .map(|(s, f)| {
+            with_ids(
+                s.data_type().to_arrow_field(s.name(), s.nullable()),
+                f.id,
+                &f.field_type,
+            )
+        })
+        .collect();
+    Ok(std::sync::Arc::new(arrow_schema::Schema::new(fields)))
+}
+
+/// `field` (the Arrow form of an Iceberg field of type `ty`) with `id` and
+/// the ids of its nested fields.
+fn with_ids(field: arrow_schema::Field, id: i32, ty: &Type) -> arrow_schema::Field {
+    use arrow_schema::DataType as A;
+    use std::sync::Arc;
+    let child = |f: &arrow_schema::FieldRef, n: &NestedField| {
+        Arc::new(with_ids(f.as_ref().clone(), n.id, &n.field_type))
+    };
+    let data_type = match (field.data_type(), ty) {
+        (A::Struct(children), Type::Struct(s)) if children.len() == s.fields().len() => A::Struct(
+            children
+                .iter()
+                .zip(s.fields())
+                .map(|(c, n)| child(c, n))
+                .collect(),
+        ),
+        (A::List(e), Type::List(l)) => A::List(child(e, &l.element_field)),
+        (A::Map(entries, sorted), Type::Map(m)) => match entries.data_type() {
+            A::Struct(kv) if kv.len() == 2 => A::Map(
+                Arc::new(entries.as_ref().clone().with_data_type(A::Struct(
+                    vec![child(&kv[0], &m.key_field), child(&kv[1], &m.value_field)].into(),
+                ))),
+                *sorted,
+            ),
+            _ => field.data_type().clone(),
+        },
+        _ => field.data_type().clone(),
+    };
+    let mut metadata = field.metadata().clone();
+    metadata.insert(krishiv_io::FIELD_ID_KEY.to_owned(), id.to_string());
+    field.with_data_type(data_type).with_metadata(metadata)
 }
