@@ -968,10 +968,17 @@ async fn a_sliding_frame_folds_from_the_file_on_a_full_pool() {
     use FrameBound::Offset;
     use FrameUnits::Rows;
     let frame = between(Rows, Offset(-2), Offset(1));
-    alternating_sizes_from_a_full_pool(
+    let counters = alternating_sizes_from_a_full_pool(
         300,
         vec![(agg(Sum, Some(3)), frame), (agg(Count, None), frame)],
         false,
     )
     .await;
+    assert!(
+        counters
+            .file_folds
+            .load(std::sync::atomic::Ordering::Relaxed)
+            > 0,
+        "the frames folded from the file"
+    );
 }

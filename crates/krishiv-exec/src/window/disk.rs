@@ -755,9 +755,9 @@ fn framed(f: &WindowFunctionPlan) -> Result<bool> {
 
 /// The bytes evaluating a batch of `rows` rows holds out of the flush phase's
 /// headroom: the functions `stream.rs` evaluates, and for each of the others
-/// its output and the keys it reads, and for an aggregate over a frame the
-/// states of its frames' folds from the file, its fallback when the frames'
-/// batches do not fit ([`fold_from_file`]). What they hold beyond that is
+/// its output and the keys it reads, and the states of the frames' folds
+/// from the file of the aggregate over a frame whose folds hold most, the
+/// fallback when the frames' batches do not fit ([`fold_from_file`]). What they hold beyond that is
 /// charged as they go (see the [module docs](self)).
 pub(super) fn headroom(env: &Env, rows: usize) -> Result<usize> {
     let plan = &env.plan;
@@ -770,11 +770,12 @@ pub(super) fn headroom(env: &Env, rows: usize) -> Result<usize> {
     for f in &plan.functions {
         if framed(f)? {
             others += 1;
-            // A frame from the partition's start is one fold ([`Prefix`]), never folded from the file.
+            // A frame from the partition's start is one fold ([`Prefix`]), never folded from the file. One
+            // function folds at a time, and gives its states back before the next: the largest is what is held.
             if let WindowFunction::Aggregate(a) = &f.function
                 && f.frame.lower != FrameBound::UnboundedPreceding
             {
-                folds = folds.saturating_add(fold_state_bytes(a, env)?);
+                folds = folds.max(fold_state_bytes(a, env)?);
             }
             let (lower, upper) = key_readers(f);
             key_copies += usize::from(lower) + usize::from(upper);
