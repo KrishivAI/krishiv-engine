@@ -1066,12 +1066,12 @@ async fn a_failing_combined_tables_write_fails_the_query() {
 
 /// Four combined tables (driver partitions 0, 2 and 3, then 1 combining
 /// while the hook writes): the write finishes partition 0's table, the
-/// pool refuses partition 2's scratch. The hook reports partition 0's bytes
-/// freed, keeps partitions 2 and 3 (not yet tried) and puts them back
-/// beside partition 1's in partition order; every group (key, count, sum) is that of a run that
-/// never spilled. (Not `first`/`last`: the in-memory row-table merge and the
-/// spilled runs order the drivers' tables differently, a defect of its own,
-/// `ops/queue-opus.md`.)
+/// pool refuses partition 2's scratch. The hook keeps partitions 2 and 3
+/// (3 not yet tried) and puts them back beside partition 1's; every group
+/// (key, count, sum) is that of a run that never spilled, and `first`/`last`
+/// follow driver-partition order. (Not compared with the unspilled run:
+/// its in-memory row-table merge orders the drivers' tables the other way,
+/// a defect of its own, `ops/queue-opus.md`.)
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_write_refused_part_way_keeps_the_tables_it_did_not_write() {
     let tables = [(0, 0), (2, 20_000), (3, 30_000)];
@@ -1137,6 +1137,12 @@ async fn refused_part_way(
     // free byte, the scratch floor included, is taken, so the gated writer
     // is refused.
     drop(ballast);
+    // The request is funded (partition 0's run or the ballast) before the
+    // grab, so its round never sees the grabbed pool.
+    let wants = within(asked)
+        .await
+        .unwrap()
+        .expect("the request was not funded");
     c.combine(1, 10_000);
     let mut grab = ConsumerHandle::register(Arc::clone(c.q.pool()), "grab", None)
         .reservation()
@@ -1148,10 +1154,6 @@ async fn refused_part_way(
         }
     }
     release_tx.send(()).unwrap();
-    let wants = within(asked)
-        .await
-        .unwrap()
-        .expect("partition 0's run freed nothing");
     // The grab holds until the hook's write ended.
     within(c.q.blocking_done()).await;
     drop((wants, grab));
