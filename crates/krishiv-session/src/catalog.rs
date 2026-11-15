@@ -76,10 +76,6 @@ pub(crate) enum TempTable {
     },
     /// Any table provider under a hidden name: a row-level statement's target at the version the
     /// statement read, with its row id (`RowIdScan`).
-    #[expect(
-        dead_code,
-        reason = "built by the row-level planner, the next commit of PR-DML"
-    )]
     Provider {
         columns: Vec<TableColumn>,
         table: Arc<dyn TableProvider>,

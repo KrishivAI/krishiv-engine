@@ -778,6 +778,42 @@ impl Session {
         self.with_locals(Vec::new())
             .analyze_variable_query(&sql)
             .await?;
+        // A table whose provider offers a row-level table runs the statement (PR-DML).
+        let op = match operation {
+            "DELETE" => Some(krishiv_exec::planner::RowLevelOperation::Delete),
+            "UPDATE TABLE" => Some(krishiv_exec::planner::RowLevelOperation::Update),
+            _ => None,
+        };
+        if let Some(op) = op {
+            let assignments: Vec<super::row_level::Assignment> = changes
+                .targets
+                .iter()
+                .zip(changes.values)
+                .map(|(target, value)| super::row_level::Assignment {
+                    column: target
+                        .parts
+                        .iter()
+                        .map(|p| p.value.clone())
+                        .collect::<Vec<_>>()
+                        .join("."),
+                    value: (!crate::command::is_bare_default(value)).then(|| slice(value)),
+                })
+                .collect();
+            let alias = alias.map_or_else(|| name.name.clone(), |a| a.value.clone());
+            let condition = changes.condition.map(slice);
+            if let Some(done) = self
+                .run_row_level(
+                    op,
+                    &name.quoted(),
+                    &alias,
+                    condition.as_deref(),
+                    &assignments,
+                )
+                .await?
+            {
+                return Ok(done);
+            }
+        }
         Err(UnsupportedFeatureTableOperation {
             table_name: name.quoted(),
             operation: operation.to_owned(),

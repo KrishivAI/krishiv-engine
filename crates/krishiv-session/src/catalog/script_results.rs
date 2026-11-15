@@ -42,10 +42,6 @@ impl SessionCatalog {
     /// Adds the hidden table `table`, read through its provider, and returns its name, which no SQL
     /// text spells: a row-level statement's target at the version the statement read. Like a
     /// script result it goes once nothing but the catalog holds the returned entry.
-    #[expect(
-        dead_code,
-        reason = "used by the row-level planner, the next commit of PR-DML"
-    )]
     pub(crate) fn put_hidden_provider(
         &self,
         columns: Vec<TableColumn>,
