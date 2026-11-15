@@ -221,6 +221,9 @@ pub enum Denial {
     ActorMismatch,
     /// The caller's `krishiv.auth.principals.<name>.expires` has passed.
     Expired,
+    /// Plain act-as metadata beside a signed assertion that names someone else, other groups
+    /// or another tenant (the transport's check, design P3-T061 §4.1).
+    MetadataMismatch,
 }
 
 impl Denial {
@@ -239,6 +242,7 @@ impl Denial {
             Self::AssertionUnavailable => "assertion_unavailable",
             Self::ActorMismatch => "actor_mismatch",
             Self::Expired => "expired",
+            Self::MetadataMismatch => "metadata_mismatch",
         }
     }
 

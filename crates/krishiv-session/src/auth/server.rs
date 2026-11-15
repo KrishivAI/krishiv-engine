@@ -486,6 +486,20 @@ impl ServerAuth {
         Ok((act_as, end_user))
     }
 
+    /// Audits and counts a refusal the transport makes itself (act-as metadata it cannot read,
+    /// or plain metadata that disagrees with the assertion beside it): one `krishiv::audit`
+    /// record and one denied count, as [`ServerAuth::impersonate`]'s refusals.
+    #[must_use]
+    pub fn refuse_impersonation(
+        &self,
+        caller: &Authenticated,
+        surface: Surface,
+        peer: std::net::SocketAddr,
+        denial: Denial,
+    ) -> KrishivError {
+        self.refuse(caller, surface, peer, denial)
+    }
+
     /// Audits and counts a refusal that came before any [`ActAs`] was known; the error.
     fn refuse(
         &self,

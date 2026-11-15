@@ -214,12 +214,15 @@ pub fn status_of(error: &KrishivError) -> Status {
     };
     // Spark sends INTERNAL for every SparkThrowable; a session limit is a
     // refusal before admission (threat model T-D4), RESOURCE_EXHAUSTED; an
-    // authorization refusal is PERMISSION_DENIED (ADR 0046 §8).
+    // authorization refusal is PERMISSION_DENIED (ADR 0046 §8), and so is a refused
+    // act-as request (P3-T061 §4.2 rule 1).
     let code = match class {
         ErrorClass::KrishivSessionLimit | ErrorClass::KrishivOperationLimit => {
             Code::ResourceExhausted
         }
-        ErrorClass::KrishivInsufficientPermissions => Code::PermissionDenied,
+        ErrorClass::KrishivInsufficientPermissions | ErrorClass::KrishivAuthImpersonationDenied => {
+            Code::PermissionDenied
+        }
         _ => Code::Internal,
     };
     let message = abbreviate(&error.to_string(), MAX_MESSAGE);

@@ -37,7 +37,13 @@ Paths are relative to this crate.
   `UNAVAILABLE`, no peer address refused, a caller with no role `PERMISSION_DENIED` (42501, audited) before any
   session; the result rides in the request extensions (`ConnectAuth::caller` fails closed without it); auth off =
   the local user. `role_sessions` is the production session factory (`PathPrefixPolicy(RolePolicy(role))`; each session counts its denials into the server's `DeniedCounts` under `connect`, as does the no-role refusal with `ConnectAuth::with_denials`). `SessionOwner` (method, kind, tenant, name,
-  no groups) is the session key. `check_rpc` / `check_command`: the §3b class of every RPC and `Command` arm,
+  `delegated_by`; no groups, except an impersonated principal's, which pin its act-as identity) is the session key.
+  `src/auth/act_as.rs` (P3-T061 I2/I3, note amendment A12) trusted impersonation, per RPC in the layer: only
+  `x-krishiv-act-as-user` (+ `-groups`, `-tenant`, URL-encoded) or `x-krishiv-act-as-token` asks, never
+  `UserContext.user_id`; decided by `ServerAuth::impersonate` / `impersonate_signed` from the connection's own peer
+  (`ConnectAuth::with_impersonation`; without it, or with authentication off, act-as is refused); unreadable metadata,
+  or plain metadata that disagrees with the assertion beside it, is refused through `refuse_impersonation`; every
+  refusal `KRISHIV_AUTH_IMPERSONATION_DENIED`, `PERMISSION_DENIED`; `tests/impersonation.rs`. `check_rpc` / `check_command`: the §3b class of every RPC and `Command` arm,
   no wildcard arm (a new proto arm fails to compile); `enforce` asks the session's policy for a
   `Check::Privilege` (`Session::authorize_privilege`, one `krishiv::audit` record per denial); `tests/auth.rs`
 - `src/operation.rs` `Operation` (one per `ExecutePlan`: id, plan digest, tags, reattachable, its `Replay`, one
@@ -86,6 +92,9 @@ Paths are relative to this crate.
 - **Sessions are keyed by the authenticated caller's `SessionOwner`**, never by `UserContext.user_id` (ADR 0046
   §5, threat model T-A8); a session id another owner holds is `INVALID_HANDLE.SESSION_NOT_FOUND`, the same answer
   as unknown. Groups are not in the key; the method is (a token and an OIDC subject of one name are two owners).
+  An impersonated principal's key also holds its delegator and its groups (P3-T061 A4, rule 5): alice through a
+  front end, alice herself and alice through another front end are three owners, and a changed act-as identity
+  finds no session.
 - **A session's policy is its caller's role at creation, for life**: a caller whose role differs never gets that
   session; it is closed without a tombstone and the lookup goes on as for a free id (a create builds a new one,
   a client that saw the old id gets `INVALID_HANDLE.SESSION_CHANGED`, an RPC that creates nothing

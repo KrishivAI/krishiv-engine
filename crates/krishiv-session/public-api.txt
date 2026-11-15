@@ -201,6 +201,7 @@ pub krishiv_session::auth::Denial::BadAssertion
 pub krishiv_session::auth::Denial::Chained
 pub krishiv_session::auth::Denial::Expired
 pub krishiv_session::auth::Denial::Malformed
+pub krishiv_session::auth::Denial::MetadataMismatch
 pub krishiv_session::auth::Denial::NoPrivilege
 pub krishiv_session::auth::Denial::NotAllowed
 pub krishiv_session::auth::Denial::OtherTenant
@@ -642,6 +643,7 @@ pub fn krishiv_session::auth::ServerAuth::impersonation_counts(&self) -> krishiv
 pub fn krishiv_session::auth::ServerAuth::is_enabled(&self) -> bool
 pub fn krishiv_session::auth::ServerAuth::metrics(&self) -> krishiv_exec::metrics::registry::MetricsSnapshot
 pub fn krishiv_session::auth::ServerAuth::new(&krishiv_session::auth::AuthConfig) -> core::result::Result<Self, krishiv_common::error::KrishivError>
+pub fn krishiv_session::auth::ServerAuth::refuse_impersonation(&self, &krishiv_session::auth::Authenticated, krishiv_session::auth::Surface, core::net::socket_addr::SocketAddr, krishiv_session::auth::Denial) -> krishiv_common::error::KrishivError
 impl core::fmt::Debug for krishiv_session::auth::ServerAuth
 pub fn krishiv_session::auth::ServerAuth::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl krishiv_session::auth::Authenticator for krishiv_session::auth::ServerAuth
