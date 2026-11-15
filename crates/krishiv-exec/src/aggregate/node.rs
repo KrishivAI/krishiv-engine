@@ -7,7 +7,7 @@ use std::sync::Arc;
 use arrow_schema::SchemaRef;
 use krishiv_memory::SpillScope;
 
-use super::distinct::{DistinctCount, DistinctCountNode, covers};
+use super::distinct::{DistinctChoice, DistinctCount, DistinctCountNode, covers};
 use super::{
     AggInput, AggregateExpr, AggregateOutput, AggregateSpec, HashAggregate, PartialAggregate,
     unsupported,
@@ -92,7 +92,9 @@ pub fn distinct_plan(
 /// [`distinct_plan`] with `krishiv.exec.agg.distinctCountAtMerge` set to
 /// `count_at_merge`: a single `count(DISTINCT)` in a `GROUP BY` then runs as
 /// one breaker that counts each distinct pair where its tables merge
-/// (`aggregate/distinct.rs`); every other spec keeps the two aggregations.
+/// (`aggregate/distinct.rs`) when its pipelines run more than one driver;
+/// on one driver there is no parallel merge to count at, so it keeps the
+/// two aggregations, as every other spec does.
 ///
 /// # Errors
 /// As [`distinct_plan`].
@@ -134,12 +136,14 @@ pub fn distinct_plan_with(
     let Some(dargs) = dargs.map(<[usize]>::to_vec) else {
         return Ok(AggregateNode::new(input, HashAggregate::new(spec)?));
     };
-    if count_at_merge && covers(&spec, distinct) {
-        return Ok(DistinctCountNode::new(
-            input,
+    let at_merge = if count_at_merge && covers(&spec, distinct) {
+        Some(DistinctCountNode::new(
+            Arc::clone(&input),
             DistinctCount::new(&spec, distinct)?,
-        ));
-    }
+        ))
+    } else {
+        None
+    };
     let k = spec.group_by.len();
     let first = AggregateSpec {
         group_by: spec.group_by.iter().chain(&dargs).copied().collect(),
@@ -180,7 +184,11 @@ pub fn distinct_plan_with(
         ..spec
     };
     let inner = AggregateNode::new(input, HashAggregate::new(first)?);
-    Ok(AggregateNode::new(inner, HashAggregate::new(second)?))
+    let series = AggregateNode::new(inner, HashAggregate::new(second)?);
+    Ok(match at_merge {
+        Some(at_merge) => DistinctChoice::new(at_merge, series),
+        None => series,
+    })
 }
 
 /// Whether `a` and `b` hold the same column indices, in any order.

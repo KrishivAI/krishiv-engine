@@ -89,9 +89,15 @@ impl QueryRunner {
     ) -> Result<BoxStream<'static, Result<Batch>>> {
         let capacity = query.config().result_buffer_per_slot * self.executor.parallelism();
         let channel = Channel::new(capacity);
+        let parallelism = if query.config().deterministic_order {
+            DETERMINISTIC_LOGICAL_PARTITIONS
+        } else {
+            self.executor.parallelism()
+        };
         let mut b = PipelineBuilder::new(Arc::new(ResultSink {
             channel: Arc::clone(&channel),
-        }));
+        }))
+        .with_parallelism(parallelism);
         plan.build_pipelines(&mut b)?;
         let (pipelines, names) = b.finish()?;
         let mut member: HashMap<OperatorId, Vec<u32>> = HashMap::new();

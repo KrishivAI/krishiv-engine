@@ -64,7 +64,14 @@ async fn both(
     o: Opts,
 ) -> (Vec<String>, Vec<String>) {
     let old = || distinct_plan_with(scan(s, b.to_vec()), sp.clone(), flags, false).unwrap();
-    let new = || distinct_plan_with(scan(s, b.to_vec()), sp.clone(), flags, true).unwrap();
+    // The counted plan itself, whatever the slots (`distinct_plan_with`
+    // keeps the old plan on one).
+    let new = || {
+        crate::aggregate::distinct::DistinctCountNode::new(
+            scan(s, b.to_vec()),
+            DistinctCount::new(sp, flags).unwrap(),
+        ) as Arc<dyn ExecNode>
+    };
     let (want, _) = exec_each(old, o).await;
     let (got, _) = exec_each(new, o).await;
     (got, want)
@@ -103,6 +110,37 @@ async fn one_thread_and_many_drivers_agree() {
         let (got, want) = both(&s, &b, &sp, &flags, o).await;
         assert_eq!(got, want, "{slots} slots");
     }
+}
+
+/// `distinct_plan_with(.., true)` counts at the merge only when a pipeline
+/// runs more than one driver: one slot runs the two aggregations, four
+/// run `DistinctCount`; the rows are the same.
+#[tokio::test]
+async fn one_slot_keeps_the_two_aggregations() {
+    let (s, b) = gen_input(20_000, 2_000, 256);
+    let (sp, flags) = shape(&s, true, 3);
+    let mut seen = Vec::new();
+    for slots in [1, 4] {
+        let o = Opts {
+            slots,
+            seed: None,
+            ..Opts::default()
+        };
+        let plan = distinct_plan_with(scan(&s, b.clone()), sp.clone(), &flags, true).unwrap();
+        let (out, m) = exec_with(plan, o, true).await.unwrap();
+        let names: Vec<&str> = m.operators.values().map(|e| e.name.as_ref()).collect();
+        let counted = names.iter().filter(|n| **n == "DistinctCount").count();
+        let series = names.iter().filter(|n| **n == "HashAggregate").count();
+        seen.push((slots, counted, series));
+        let (want, _) = exec_each(
+            || distinct_plan_with(scan(&s, b.clone()), sp.clone(), &flags, false).unwrap(),
+            o,
+        )
+        .await;
+        assert_eq!(rows(&out), want, "{slots} slots");
+    }
+    // A breaker is named once as a sink and once as a source.
+    assert_eq!(seen, vec![(1, 0, 4), (4, 2, 0)]);
 }
 
 #[tokio::test]
@@ -257,11 +295,14 @@ fn covers_only_a_grouped_single_distinct_count() {
 
 /// The counter's reservations refused part-way through the merge tasks
 /// (after `n` grants, while counting a partition or while merging one into
-/// the shared shards): the partition refused is left to `finalize`, whole,
-/// and the rows equal the old plan's; the pool is empty after each run.
+/// the shared shards, or its chunk scratch): the partition refused is left
+/// to `finalize`, whole, and the rows equal the old plan's; the pool is
+/// empty after each run.
 #[tokio::test]
 async fn refused_count_memory_mid_merge_counts_the_same() {
-    use crate::aggregate::distinct::{DistinctCountNode, PENDING_MERGES, REFUSE_AFTER};
+    use crate::aggregate::distinct::{
+        DistinctCountNode, PENDING_MERGES, REFUSE_AFTER, SCRATCH_REFUSALS,
+    };
     use std::sync::atomic::Ordering::Relaxed;
     let (s, b) = gen_input(30_000, 3_000, 256);
     let (sp, flags) = shape(&s, true, 1);
@@ -283,4 +324,8 @@ async fn refused_count_memory_mid_merge_counts_the_same() {
         assert_eq!(got, want, "refused after {grants} grants");
     }
     assert!(PENDING_MERGES.load(Relaxed) > 0, "no merge was refused");
+    assert!(
+        SCRATCH_REFUSALS.load(Relaxed) > 0,
+        "no chunk scratch was refused"
+    );
 }

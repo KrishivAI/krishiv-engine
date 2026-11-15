@@ -24,6 +24,13 @@
 //! No second hash aggregation reads the pairs, and the pairs carry no
 //! states. Both tables spill as any aggregate's do.
 //!
+//! **Chosen by parallelism.** [`DistinctChoice`] picks this plan when its
+//! pipelines are built, and only when they run more than one driver
+//! (`PipelineBuilder::parallelism`: the executor's slots, or a constant
+//! under `krishiv.deterministicOrder`). On one driver it builds the two
+//! aggregations in series: every row would go into two tables here, with
+//! no parallel merge to win that back.
+//!
 //! **Memory.** The counter does not spill. Its bound is one entry per
 //! distinct key, the key table's bound. Every byte it holds is reserved
 //! before it is used: a merge task counts a radix partition all or nothing
@@ -32,6 +39,9 @@
 //! refused count leaves the partition (and the rest of the table) to
 //! `finalize`; a refused merge keeps the unmerged local shards, still
 //! reserved, for `finalize`, which waits for memory through arbitration.
+//! A chunk's scratch (up to [`COUNT_ROWS`] decoded pairs and their
+//! encoding) is reserved on the same consumer as it is made and released
+//! after the chunk; a refusal there takes the refused-count path.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -69,6 +79,10 @@ pub(super) static HOOK_PARTS: AtomicUsize = AtomicUsize::new(0);
 /// they are refused (`usize::MAX`: never refused by the test).
 #[cfg(test)]
 pub(super) static REFUSE_AFTER: AtomicUsize = AtomicUsize::new(usize::MAX);
+
+/// Tests: chunk scratch reservations refused while counting a partition.
+#[cfg(test)]
+pub(super) static SCRATCH_REFUSALS: AtomicUsize = AtomicUsize::new(0);
 
 /// Tests: local shards a refused merge left to `finalize`.
 #[cfg(test)]
@@ -180,6 +194,18 @@ impl Encoded {
     fn row(&self, i: u32) -> &[u8] {
         self.rows.row(i as usize).data()
     }
+
+    /// Bytes this encoding holds.
+    fn bytes(&self) -> usize {
+        self.rows.size()
+            + self.hashes.capacity() * size_of::<u64>()
+            + self.valid.as_ref().map_or(0, |v| v.buffer().capacity())
+            + self
+                .by_shard
+                .iter()
+                .map(|r| size_of::<Vec<u32>>() + r.capacity() * size_of::<u32>())
+                .sum::<usize>()
+    }
 }
 
 /// The per-key counts of distinct pairs, shared by the final phase's tasks.
@@ -263,7 +289,9 @@ impl PairCounter {
     /// Counts a finished final-phase table of distinct pairs (the merge
     /// hook, on the blocking pool), one radix partition at a time, each all
     /// or nothing: the partition is counted into partition-local shards
-    /// whose growth is reserved before each insert, then merged into the
+    /// whose growth is reserved before each insert (a chunk's decoded pairs
+    /// and their encoding are reserved too, until the chunk is counted),
+    /// then merged into the
     /// shared shards and freed. A partition refused memory while counted is
     /// left in the table, with every partition after it, for `finalize` to
     /// count from the output; one refused while merged keeps its unmerged
@@ -282,10 +310,29 @@ impl PairCounter {
             }
             let mut local: Vec<Shard> = (0..SHARDS).map(|_| Shard::default()).collect();
             let mut r = self.consumer.reservation();
+            // One chunk's scratch (its decoded pairs, then their encoding),
+            // reserved as it is made and released after the chunk; refused,
+            // the partition stays whole, as for the shards' growth.
+            let mut scratch = self.consumer.reservation();
             for start in (0..len).step_by(COUNT_ROWS) {
                 query.check_cancelled()?;
                 let ids = t.part_ids(p, start..(start + COUNT_ROWS).min(len));
-                let e = self.encode_pairs(&t.output_batch(&ids)?)?;
+                let batch = t.output_batch(&ids)?;
+                if refused(&mut scratch, batch.get_array_memory_size()) {
+                    #[cfg(test)]
+                    SCRATCH_REFUSALS.fetch_add(1, Ordering::Relaxed);
+                    self.short.store(true, Ordering::Release);
+                    return Ok(());
+                }
+                let e = self.encode_pairs(&batch)?;
+                if refused(&mut scratch, e.bytes()) {
+                    #[cfg(test)]
+                    SCRATCH_REFUSALS.fetch_add(1, Ordering::Relaxed);
+                    self.short.store(true, Ordering::Release);
+                    return Ok(());
+                }
+                drop(batch);
+                shrink_to(&mut scratch, e.bytes());
                 let mut grow = 0;
                 for (piece, rows) in local.iter().zip(&e.by_shard) {
                     if !rows.is_empty() {
@@ -303,6 +350,8 @@ impl PairCounter {
                         piece.insert(&e, rows)?;
                     }
                 }
+                drop(e);
+                shrink_to(&mut scratch, 0);
                 shrink_to(&mut r, pieces_bytes(&local));
             }
             // Counted: the partition's pairs are no longer needed.
@@ -929,5 +978,34 @@ impl ExecNode for DistinctCountNode {
         let id = b.child_pipeline(sink, Arc::clone(&self.input))?;
         b.set_breaker_source(Arc::clone(&self.op) as Arc<dyn Source>, id)
             .map(drop)
+    }
+}
+
+/// A covered `count(DISTINCT)` plan chosen when its pipelines are built:
+/// counted at the merge ([`DistinctCountNode`]) when a pipeline runs more
+/// than one driver, else the two aggregations in series. On one driver
+/// every input row would go into two tables (pairs and keys) with no
+/// parallel merge to win that back (ClickBench q10 1.2x slower on one
+/// thread).
+#[derive(Debug)]
+pub(crate) struct DistinctChoice {
+    at_merge: Arc<DistinctCountNode>,
+    series: Arc<dyn ExecNode>,
+}
+
+impl DistinctChoice {
+    /// `at_merge` or `series`, the same aggregation over the same input.
+    pub(crate) fn new(at_merge: Arc<DistinctCountNode>, series: Arc<dyn ExecNode>) -> Arc<Self> {
+        Arc::new(Self { at_merge, series })
+    }
+}
+
+impl ExecNode for DistinctChoice {
+    fn build_pipelines(self: Arc<Self>, b: &mut PipelineBuilder) -> Result<()> {
+        if b.parallelism() == Some(1) {
+            Arc::clone(&self.series).build_pipelines(b)
+        } else {
+            Arc::clone(&self.at_merge).build_pipelines(b)
+        }
     }
 }
