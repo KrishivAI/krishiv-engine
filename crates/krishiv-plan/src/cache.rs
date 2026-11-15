@@ -904,6 +904,23 @@ impl Encoder {
                 self.expr(count, bias);
                 self.plan(input, bias);
             }
+            PlanNode::Sample {
+                input,
+                bounds,
+                seed,
+            } => {
+                self.tag("Sample");
+                self.num(bounds.lower.to_bits());
+                self.num(bounds.upper.to_bits());
+                match seed {
+                    Some(s) => {
+                        self.tag("seed");
+                        self.num(s.cast_unsigned());
+                    }
+                    None => self.tag("unseeded"),
+                }
+                self.plan(input, bias);
+            }
             PlanNode::Generate {
                 input,
                 kind,

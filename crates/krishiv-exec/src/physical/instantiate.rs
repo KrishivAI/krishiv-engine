@@ -71,8 +71,8 @@ use crate::loops::UnionLoopSource;
 use crate::operator::{Operator, Sink, Source};
 use crate::operators::{
     Expand, FileWrite, FileWriteSink, Filter, FilterPushdown, Generate, LateFetch, NullOf,
-    Predicate, Project, ProjectItem, PushedFilter, ReplicateRows, RuntimeFilters, ScanPushdown,
-    ScanPushdowns, Sort, SortKey, TopN,
+    Predicate, Project, ProjectItem, PushedFilter, ReplicateRows, RuntimeFilters, Sample,
+    ScanPushdown, ScanPushdowns, Sort, SortKey, TopN,
 };
 use crate::pipeline::{ExecNode, PipelineBuilder};
 use crate::planner::TableProviderResolver;
@@ -454,6 +454,7 @@ fn instantiate_with_schemas(
             range_ordered: range_ordered_evals(plan.roots(), Some(plan.root())),
             salts: HashMap::new(),
             stages: HashMap::new(),
+            partition_ordered: HashSet::new(),
         };
         for root in plan.roots() {
             cx.declare_filters(root)?;
@@ -534,6 +535,9 @@ struct Instantiation<'a> {
     salts: HashMap<super::SharedId, u64>,
     /// Each scan's runtime filters, for the probe it may hand its row stage.
     stages: HashMap<ScanId, RuntimeFilters>,
+    /// The scans a `Sample` reads through split-keeping nodes: each reads
+    /// its partitions whole and tags them ([`ScanPushdowns::partition_order`]).
+    partition_ordered: HashSet<ScanId>,
 }
 
 /// A shared plan's body and the sink that keeps its rows; every reader's pipeline depends on this one.
@@ -1086,6 +1090,17 @@ impl Instantiation<'_> {
                     built
                 })
             }
+            PhysNode::Sample {
+                input,
+                lower,
+                upper,
+                seed,
+            } => {
+                sampled_scans(input, &mut self.partition_ordered);
+                let input = self.node(input)?;
+                let op = Sample::new(Arc::clone(&input.schema), *lower, *upper, *seed);
+                Ok(operator(input, op))
+            }
             PhysNode::Sort { input, keys } => {
                 let buckets = hash_buckets(input, keys);
                 let input = self.node(input)?;
@@ -1302,6 +1317,7 @@ impl Instantiation<'_> {
             filters,
             dynamic,
             row_id: s.row_id,
+            partition_order: self.partition_ordered.contains(&s.id),
             metadata: crate::operators::scan_metadata(&s.scan),
             ..ScanPushdowns::default()
         })?;
@@ -1891,6 +1907,26 @@ pub(crate) struct Unbuilt;
 impl ExecNode for Unbuilt {
     fn build_pipelines(self: Arc<Self>, _b: &mut PipelineBuilder) -> Result<()> {
         Err(internal("a validation-only plan node was run".to_owned()))
+    }
+}
+
+/// The scans `input` (a sample's input) reads through nodes that keep each
+/// batch's split: a sample's draws follow those scans' partitions.
+fn sampled_scans(input: &PhysNode, out: &mut HashSet<ScanId>) {
+    match input {
+        PhysNode::Scan(s) => {
+            out.insert(s.id);
+        }
+        // The operators that tag their output with the input batch's split
+        // (`with_split(input.split())`); an `Expand` or anything past an
+        // exchange or a breaker numbers its own partitions.
+        PhysNode::Filter { input, .. }
+        | PhysNode::Project { input, .. }
+        | PhysNode::Generate { input, .. }
+        | PhysNode::ReplicateRows { input, .. }
+        | PhysNode::Sample { input, .. } => sampled_scans(input, out),
+        PhysNode::Union { inputs } => inputs.iter().for_each(|i| sampled_scans(i, out)),
+        _ => {}
     }
 }
 

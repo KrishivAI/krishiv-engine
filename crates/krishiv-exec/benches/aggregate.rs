@@ -32,6 +32,12 @@
 //!   instructions per row = instructions / (N * 2^20)); `AGG_BENCH_REPS_CASE=few|many`
 //!   runs `grouped_sum_{64,262144}_keys_rows` instead.
 //!
+//! - `aggregate/fold_{sum,min,max,count,avg}_{0,64}_keys[_nulls]`: one
+//!   aggregate of a `bigint` column over 1 Mi rows, ungrouped (0 keys) or
+//!   over 64 keys, without NULLs or with every 8th row NULL: the per-row fold
+//!   cost of `sum`, `min`, `max`, `count(v)` and `avg` (gap ledger §4 item 15,
+//!   the dense fold kernels).
+//!
 //! `AGG_BENCH_THREADS=N` runs them (but the spill one) on `N` worker
 //! threads in the shipped (non-deterministic) mode instead: thread-local
 //! tables that abandon, and the parallel final phase.
@@ -287,6 +293,50 @@ fn input(keys: u64) -> Vec<Batch> {
             Batch::new(RecordBatch::try_new(schema(), cols).expect("batch"))
         })
         .collect()
+}
+
+/// `ROWS` rows of a nullable `v = i` (NULL on every 8th row when `nulls`),
+/// `k` a scrambled key in `0..keys.max(1)`.
+fn fold_input(keys: u64, nulls: bool) -> Vec<Batch> {
+    let s = Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Int64, false),
+        Field::new("v", DataType::Int64, true),
+    ]));
+    input(keys.max(1))
+        .into_iter()
+        .map(|b| {
+            let b = b.data();
+            let v = b
+                .column(1)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("v");
+            let v: Int64Array = v
+                .iter()
+                .map(|x| x.filter(|x| !nulls || x % 8 != 0))
+                .collect();
+            let cols: Vec<ArrayRef> = vec![Arc::clone(b.column(0)), Arc::new(v)];
+            Batch::new(RecordBatch::try_new(Arc::clone(&s), cols).expect("batch"))
+        })
+        .collect()
+}
+
+/// `f(v)` over [`fold_input`], grouped by `k` unless `keys` is 0.
+fn fold_plan(batches: &[Batch], keys: u64, f: AggregateFunction) -> Arc<dyn ExecNode> {
+    let s = batches.first().expect("rows").schema();
+    let spec = AggregateSpec {
+        input: Arc::clone(&s),
+        group_by: if keys == 0 { vec![] } else { vec![0] },
+        aggregates: vec![AggregateExpr::new(f, 1, DataType::Int64, "a")],
+        output: AggregateOutput::Final,
+        ansi: true,
+        spill: None,
+        require_unit_weights: false,
+        legacy_statistical: false,
+        udafs: None,
+    };
+    let scan = Arc::new(Scan(Batches::new(s, batches.to_vec())));
+    AggregateNode::new(scan, HashAggregate::new(spec).expect("spec"))
 }
 
 /// `(k1, k2, s, v)`: `k1` in `0..512`, `k2` in `0..512` (together about
@@ -604,6 +654,27 @@ fn bench(c: &mut Criterion) {
             g.bench_function(format!("{name}{suffix}"), |b| {
                 b.iter(|| black_box(run(&runner, &caller, make(), 1 << 30, mode)));
             });
+        }
+    }
+    for keys in [0u64, 64] {
+        for nulls in [false, true] {
+            let batches = fold_input(keys, nulls);
+            let tail = if nulls { "_nulls" } else { "" };
+            for (name, f) in [
+                ("sum", AggregateFunction::Sum),
+                ("min", AggregateFunction::Min),
+                ("max", AggregateFunction::Max),
+                ("count", AggregateFunction::Count),
+                ("avg", AggregateFunction::Avg),
+            ] {
+                let mode = Mode { rows: true, seeded };
+                g.bench_function(format!("fold_{name}_{keys}_keys{tail}"), |b| {
+                    b.iter(|| {
+                        let p = fold_plan(&batches, keys, f.clone());
+                        black_box(run(&runner, &caller, p, 1 << 30, mode))
+                    });
+                });
+            }
         }
     }
     g.bench_function("q01_shape_rows", |b| {
