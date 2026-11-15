@@ -4,16 +4,16 @@ expression: differences
 ---
 DropTable: DROP TABLE IF EXISTS t
   analyze only: []
-  run only: [("MODIFY", "path '<warehouse>/t'")]
+  run only: [("MODIFY", "path 'file:<warehouse>/t'")]
 DropTable: DROP TABLE IDENTIFIER('t')
   analyze only: []
-  run only: [("MODIFY", "path '<warehouse>/t'")]
+  run only: [("MODIFY", "path 'file:<warehouse>/t'")]
 Insert: INSERT INTO t SELECT * FROM s
   analyze only: []
   run only: [("CREATE", "path 'file:<warehouse>/t'"), ("MODIFY", "path 'file:<warehouse>/t'")]
 Truncate: TRUNCATE TABLE t
   analyze only: []
-  run only: [("MODIFY", "path '<warehouse>/t'")]
+  run only: [("MODIFY", "path 'file:<warehouse>/t'")]
 ExecuteImmediate: EXECUTE IMMEDIATE 'DROP TABLE t'
   analyze only: []
-  run only: [("MODIFY", "path '<warehouse>/t'")]
+  run only: [("MODIFY", "path 'file:<warehouse>/t'")]

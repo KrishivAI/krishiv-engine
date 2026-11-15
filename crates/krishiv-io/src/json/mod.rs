@@ -1,18 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Spark's JSON format: [`JsonFormat`], a flat-object tokenizer and decoder
-//! with Spark's options and parse modes, schema inference with Spark's
-//! `samplingRatio` semantics, and an encoder with Spark's value renderings.
+//! Spark's JSON format: [`JsonFormat`], a tokenizer and decoder with Spark's
+//! options and parse modes, schema inference with Spark's `samplingRatio`
+//! semantics (`infer.rs`), and an encoder with Spark's value renderings.
 //!
-//! Only flat schemas are supported: a nested object or array in the
-//! requested schema is `KRISHIV_UNSUPPORTED_FEATURE`. A nested value in the
-//! *data* is a malformed record (nulls plus the raw record in PERMISSIVE,
-//! dropped in DROPMALFORMED, failed in FAILFAST). Files in the Hadoop codecs
-//! (`.gz`, `.deflate`, `.bz2`, `.lz4`, `.snappy`) read and write as in Spark (`text/codec.rs`).
+//! Reads hold structs, arrays and maps (`nested.rs`, with Spark's partial
+//! results) as well as scalars; inference finds structs and arrays, with
+//! fields sorted by name as Spark sorts them. Top-level arrays of objects
+//! read as one row per element. Writes are flat only: a nested column is
+//! `UNSUPPORTED_DATA_TYPE_FOR_DATASOURCE`. Checked against Spark 4.2.0 in
+//! `golden_tests.rs`. Files in the Hadoop codecs (`.gz`, `.deflate`, `.bz2`,
+//! `.lz4`, `.snappy`) read and write as in Spark (`text/codec.rs`).
 
 mod convert;
 mod decode;
 mod encode;
 mod infer;
+mod nested;
 mod options;
 
 use std::sync::Arc;
@@ -127,5 +130,7 @@ impl FileFormat for JsonFormat {
     }
 }
 
+#[cfg(test)]
+mod golden_tests;
 #[cfg(test)]
 mod tests;

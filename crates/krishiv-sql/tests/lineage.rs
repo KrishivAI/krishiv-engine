@@ -353,6 +353,17 @@ fn generate_explode() {
     );
 }
 
+/// `TABLESAMPLE` keeps rows by a draw that reads no column: lineage and filters pass through.
+#[test]
+fn tablesample_passes_lineage_through() {
+    let l = of("SELECT a + 1 AS a1, b FROM t TABLESAMPLE (50 PERCENT) REPEATABLE (7) WHERE b > 0");
+    assert_eq!(
+        columns(&l),
+        ["a1: [t.a] -> expression", "b: [t.b] -> identity"]
+    );
+    assert_eq!(filters(&l), ["filter t.b"]);
+}
+
 #[test]
 fn range_is_generated() {
     let l = of("SELECT id, id + 1 AS n FROM range(3)");
@@ -692,6 +703,14 @@ fn lineage_definer_view_is_leaf() {
 #[test]
 fn a_window_over_a_udf_keeps_a_definer_view_key() {
     let sql = "SELECT sum(my_udf(u.x)) OVER (PARTITION BY v.k) AS w \
+               FROM (SELECT a AS k FROM t WHERE b > 0) v JOIN u ON v.k = u.a";
+    let l = lineage(&with_view(sql, ViewSecurity::Definer)).unwrap();
+    assert_eq!(
+        columns(&l),
+        ["w: [u.x, view:spark_catalog.default.v.k] -> view"]
+    );
+    // An ORDER BY key brings `view` too.
+    let sql = "SELECT sum(my_udf(u.x)) OVER (ORDER BY v.k) AS w \
                FROM (SELECT a AS k FROM t WHERE b > 0) v JOIN u ON v.k = u.a";
     let l = lineage(&with_view(sql, ViewSecurity::Definer)).unwrap();
     assert_eq!(
