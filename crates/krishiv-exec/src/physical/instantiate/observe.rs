@@ -18,6 +18,14 @@ pub(crate) fn collect_metrics_op(
             "the metrics of observation {name} have an unexpected plan"
         ))
     };
+    // A Python UDF anywhere in the metrics (in an argument, over a result, or as an aggregate)
+    // plans a stage the observing operator does not run.
+    if has_python_eval(measure) {
+        return Err(krishiv_common::error::KrishivUnsupportedFeature {
+            feature: "a Python UDF in an observed metric (Dataset.observe)".to_owned(),
+        }
+        .into());
+    }
     let PhysNode::Project {
         input: aggregate,
         layout: post_layout,
@@ -99,8 +107,10 @@ pub(crate) fn collect_metrics_op(
 /// Whether `node` or a node below it is a `PythonEval`.
 fn has_python_eval(node: &PhysNode) -> bool {
     match node {
-        PhysNode::PythonEval { .. } => true,
-        PhysNode::Project { input, .. } => has_python_eval(input),
+        PhysNode::PythonEval { .. } | PhysNode::PythonAggregate { .. } => true,
+        PhysNode::Project { input, .. } | PhysNode::Aggregate { input, .. } => {
+            has_python_eval(input)
+        }
         _ => false,
     }
 }
