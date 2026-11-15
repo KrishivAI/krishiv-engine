@@ -581,6 +581,87 @@ async fn a_one_sided_cogroup_key_over_two_batches_gets_one_empty_frame_first() {
     }
 }
 
+/// A grouped aggregate's group goes to its task uncut, whatever
+/// `maxRecordsPerBatch` and `maxBytesPerBatch` say: Spark's
+/// `ArrowAggregatePythonExec` runs an `ArrowPythonWithNamedArgumentRunner`,
+/// a `BasicPythonArrowInput` (ArrowPythonRunner.scala L78-91, L122 at
+/// v4.2.0), whose `writeNextBatchToArrowStream` writes each group's rows
+/// as one batch (PythonArrowInput.scala L126-156), unlike the
+/// `BatchedPythonArrowInput` and `GroupedPythonArrowInput` of the other
+/// kinds, which cut by both limits.
+#[tokio::test]
+async fn an_aggregate_group_is_never_cut_by_the_batch_limits() {
+    let r = rig(
+        RelationShape::Aggregate {
+            keys: vec![0],
+            key_values: vec![0],
+        },
+        Yield::Count,
+        RelationLimits {
+            max_rows: 4,
+            max_bytes: 16,
+            window: 16,
+        },
+        64 << 20,
+    );
+    drive(&r, vec![rows(&[1; 10], None), rows(&[2, 2, 2], None)])
+        .await
+        .unwrap();
+    assert_eq!(r.shared.log(), ["B0:10", "G", "B0:3", "G", "E"]);
+    done(r);
+}
+
+/// Counts the rows it is evaluated over; reads column 1 (`v BIGINT`).
+#[derive(Debug)]
+struct Counted {
+    rows: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl ScalarExpr for Counted {
+    fn data_type(&self) -> ArrowType {
+        ArrowType::Int64
+    }
+
+    fn nullable(&self) -> bool {
+        true
+    }
+
+    fn evaluate(&self, batch: &RecordBatch) -> crate::error::Result<ArrayRef> {
+        self.rows.fetch_add(batch.num_rows(), Ordering::SeqCst);
+        Ok(Arc::clone(batch.column(1)))
+    }
+}
+
+/// With `maxBytesPerBatch` set, the frame columns evaluated to size the
+/// frames are the frames' columns: each row is evaluated once, not once to
+/// size its frame and again to build it.
+#[tokio::test]
+async fn sized_frames_reuse_the_columns_evaluated_to_size_them() {
+    let evaluated = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let r = rig_columns(
+        RelationLimits {
+            max_rows: 5,
+            max_bytes: 1 << 20,
+            window: 8,
+        },
+        64 << 20,
+        &[
+            (column(0, ArrowType::Int32), "k"),
+            (
+                Arc::new(Counted {
+                    rows: Arc::clone(&evaluated),
+                }),
+                "v",
+            ),
+        ],
+    );
+    let keys: Vec<i32> = (0..10).collect();
+    drive(&r, vec![rows(&keys, None)]).await.unwrap();
+    assert_eq!(r.shared.log(), ["B0:5", "B0:5", "E"]);
+    assert_eq!(evaluated.load(Ordering::SeqCst), 10);
+    done(r);
+}
+
 #[tokio::test]
 async fn an_aggregate_lane_gets_one_group_per_key() {
     let r = rig(
@@ -1341,6 +1422,31 @@ async fn a_peer_ending_with_fewer_values_fails_the_phase_instead_of_hanging() {
     done(r);
 }
 
+/// Lane `f` yields one value per group, lane `g` none: the error names
+/// `g` and its count, not `f`, whose count was right (it is checked
+/// first).
+#[tokio::test]
+async fn a_short_lane_is_named_not_the_right_lane_beside_it() {
+    let shape = RelationShape::Aggregate {
+        keys: vec![0],
+        key_values: vec![0],
+    };
+    let mut r = rig(shape, Yield::Count, limits(0, DEFAULT_WINDOW), 64 << 20);
+    let short = Arc::new(Shared::default());
+    r.sink = two_lane_aggregate(
+        [(&r.shared, Yield::Count), (&short, Yield::Nothing)],
+        DEFAULT_WINDOW,
+        None,
+    );
+    let err = tokio::time::timeout(Duration::from_secs(10), drive(&r, vec![groups(50)]))
+        .await
+        .expect("the query hung")
+        .unwrap_err();
+    let text = err.to_string();
+    assert!(text.contains("0 values for 50 groups"), "{text}");
+    done(r);
+}
+
 /// A peer failing while the fast lane waits for it: its error, no hang.
 #[tokio::test]
 async fn a_peer_failing_while_the_fast_lane_waits_gives_the_peer_s_error() {
@@ -1533,10 +1639,12 @@ async fn finalize_drains_results_before_waiting_for_frame_copies() {
 }
 
 /// A batch of two groups: the first group's frame is taken while the
-/// second waits in the backlog, which still holds its share of the batch's
-/// reservation (the slices keep the batch's buffers).
+/// second waits in the backlog. The second group's rows are a slice of the
+/// batch, which keeps all of the batch's buffers alive: the batch stays
+/// reserved whole until its last slice is dropped, not by the share of
+/// its rows.
 #[tokio::test]
-async fn a_batch_s_later_group_keeps_its_share_of_the_input_reservation() {
+async fn a_batch_s_later_group_keeps_the_whole_input_reservation() {
     let r = rig(
         RelationShape::Grouped { keys: vec![0] },
         Yield::Nothing,
@@ -1566,7 +1674,7 @@ async fn a_batch_s_later_group_keeps_its_share_of_the_input_reservation() {
     assert_eq!(r.shared.log(), ["B0:10000"]);
     assert_eq!(super::sink::queued(&mut l).unwrap(), (vec![1], 1));
     assert!(
-        r.root.reserved() >= bytes / 2,
+        r.root.reserved() >= bytes,
         "{} of {bytes} bytes reserved",
         r.root.reserved()
     );
