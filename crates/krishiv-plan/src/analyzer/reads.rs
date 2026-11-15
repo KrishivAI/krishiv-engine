@@ -29,8 +29,13 @@ pub(super) struct Reads {
     pub(super) columns: BTreeSet<String>,
 }
 
-/// The reads of `root` per [`Bindings::securables`] entry (see the module docs).
-pub(super) fn column_reads(root: &LogicalPlan, b: &Bindings) -> Vec<Reads> {
+/// The reads of `root` per [`Bindings::securables`] entry (see the module docs). `hinted` is
+/// what the plan's hints read before they were removed ([`hint_reads`]).
+pub(super) fn column_reads(
+    root: &LogicalPlan,
+    b: &Bindings,
+    hinted: &(HashSet<u64>, bool),
+) -> Vec<Reads> {
     let mut by_name: HashMap<Vec<String>, Vec<usize>> = HashMap::new();
     for bound in b.tables.values() {
         if let BoundTable::Found { meta, securable } = bound {
@@ -44,13 +49,24 @@ pub(super) fn column_reads(root: &LogicalPlan, b: &Bindings) -> Vec<Reads> {
         by_name.entry(name.clone()).or_default().push(*securable);
     }
     let mut walk = Walk::default();
+    walk.refs.extend(hinted.0.iter().copied());
+    walk.unproven |= hinted.1;
     walk.plan(root);
     match root.resolved_output() {
         Some(out) => walk.refs.extend(out.iter().map(|c| c.id.0)),
         None => walk.unproven = true,
     }
     walk.close();
-    let mut reads = vec![Reads::default(); b.securables.len()];
+    // Every use starts as a whole-row read and narrows only when a scan of it is attributed
+    // (review r-m3): a use no scan accounts for asks the table.
+    let mut reads = vec![
+        Reads {
+            whole: true,
+            columns: BTreeSet::new(),
+        };
+        b.securables.len()
+    ];
+    let mut attributed = vec![false; b.securables.len()];
     for scan in &walk.scans {
         let Some(securables) = by_name.get(&scan.name) else {
             // A table scan Bind did not bind: no column can be attributed.
@@ -64,7 +80,11 @@ pub(super) fn column_reads(root: &LogicalPlan, b: &Bindings) -> Vec<Reads> {
             .map(|(_, name)| name)
             .collect();
         for &i in securables {
-            if let Some(r) = reads.get_mut(i) {
+            if let (Some(r), Some(seen)) = (reads.get_mut(i), attributed.get_mut(i)) {
+                if !*seen {
+                    *seen = true;
+                    r.whole = false;
+                }
                 r.whole |= read.is_empty();
                 r.columns.extend(read.iter().map(|c| (*c).clone()));
             }
@@ -76,6 +96,34 @@ pub(super) fn column_reads(root: &LogicalPlan, b: &Bindings) -> Vec<Reads> {
         }
     }
     reads
+}
+
+/// The attributes the partitioning hints of `plan` name (`REPARTITION(3, b)`,
+/// `REPARTITION_BY_RANGE(b)`, `df.hint("repartition", b)`), read before hint resolution drops
+/// them (review r-m1: as `DISTRIBUTE BY b` asks for b); `true` when a parameter holds an
+/// unresolved column (then every read is whole rows).
+pub(super) fn hint_reads(plan: &LogicalPlan) -> (HashSet<u64>, bool) {
+    let mut ids = HashSet::new();
+    let mut unproven = false;
+    let _ = crate::walk::visit_distinct(crate::walk::Node::Plan(plan), |n| {
+        if let crate::walk::Node::Plan(p) = n
+            && let PlanNode::Hint { params, .. } = &p.node
+        {
+            let mut stack: Vec<&crate::Expr> = params.iter().map(AsRef::as_ref).collect();
+            while let Some(e) = stack.pop() {
+                match &e.node {
+                    ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) => {
+                        ids.insert(c.id.0);
+                    }
+                    ExprNode::Column(_) | ExprNode::Star(_) => unproven = true,
+                    _ => {}
+                }
+                e.for_each_child(&mut |c| stack.push(c));
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    });
+    (ids, unproven)
 }
 
 /// One scan of a table: its name parts and its columns (attribute id as seen from the root,

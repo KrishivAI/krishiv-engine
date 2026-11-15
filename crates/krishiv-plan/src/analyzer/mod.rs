@@ -1054,9 +1054,10 @@ async fn analyze_with(
         output_comments,
         entry,
         warm_started,
+        hinted,
     ) = resolve::resolve(plan, ctx, &bindings, warm.as_deref(), slot.is_some())?;
     // What each table read reads, from the final plan (P3-T062 review B1).
-    let reads = reads::column_reads(&root, &bindings);
+    let reads = reads::column_reads(&root, &bindings, &hinted);
     for (used, read) in securables.iter_mut().zip(&reads) {
         used.columns.clone_from(&read.columns);
     }

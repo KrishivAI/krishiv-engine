@@ -248,6 +248,7 @@ type Resolved = (
     Vec<Option<String>>,
     Option<super::prefix::PrefixEntry>,
     bool,
+    (std::collections::HashSet<u64>, bool),
 );
 
 pub(super) fn resolve(
@@ -310,6 +311,8 @@ pub(super) fn resolve(
     } else {
         None
     };
+    // What the hints read, before they are dropped (P3-T062 review r-m1).
+    let hinted = super::reads::hint_reads(&rel.plan);
     // Hints name relations of their resolved subtree.
     let (root, warnings) = super::hints::resolve(&rel.plan, ctx.conf.case_sensitive)?;
     // Subqueries to joins, after everything resolved (P2-T071c).
@@ -354,6 +357,7 @@ pub(super) fn resolve(
         comments,
         entry,
         r.warm_started,
+        hinted,
     ))
 }
 
