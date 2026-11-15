@@ -211,9 +211,9 @@ impl QueryCatalog {
     }
 }
 
-#[cfg(feature = "delta")]
 /// How Delta errors name the table a scan of `key` reads: a permanent table by its
 /// `namespace.table` (delta-spark's catalog form); a path or a temporary view by the path.
+#[cfg(feature = "delta")]
 fn delta_name(key: &FilesKey) -> Option<String> {
     match key {
         FilesKey::Table(k) | FilesKey::Reference { key: k, .. } if k.contains('.') => {

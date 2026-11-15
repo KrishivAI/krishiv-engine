@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Without the `delta` feature, `delta` is not a data source: every Delta read and DDL fails as
-//! before P3-T021 PR-08b part 2: Spark's `DATA_SOURCE_NOT_FOUND` (42K02) naming it, or the
-//! refusal that came first before (a data-source view without declared columns).
+//! before P3-T021 PR-08b part 2: Spark's `DATA_SOURCE_NOT_FOUND` (42K02) naming it.
 #![cfg(all(test, not(feature = "delta")))]
 
 use futures::executor::block_on;
@@ -27,8 +26,8 @@ fn delta_is_not_a_data_source_without_the_feature() {
         let e = block_on(async { s.sql(&sql).await?.collect().await }).unwrap_err();
         not_found(&e);
     }
-    // A data-source view without declared columns is refused before its source is looked up,
-    // as it was before the feature existed.
+    // A data-source view without declared columns looks its source up to infer them, so it
+    // fails the same way.
     let e = block_on(async {
         s.sql(&format!(
             "CREATE TEMPORARY VIEW v USING delta OPTIONS (path '{path}')"
@@ -38,11 +37,7 @@ fn delta_is_not_a_data_source_without_the_feature() {
         .await
     })
     .unwrap_err();
-    assert_eq!(
-        e.error_class(),
-        ErrorClass::KrishivUnsupportedFeature,
-        "{e}"
-    );
+    not_found(&e);
     // `delta`.`path` stays a table name: no such table.
     let e = block_on(async {
         s.sql(&format!("SELECT * FROM delta.`{path}`"))

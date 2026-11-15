@@ -354,8 +354,9 @@ async fn metrics_serves_every_sourced_catalogue_metric() {
     );
     let parsed = parse(body(&response)).unwrap();
     for def in CATALOGUE {
-        // The Delta gauges are emitted by builds with the session's `delta` feature, which this
-        // test's session is built without (their catalogue text says so).
+        // The Delta gauges are emitted only when the session is built with its `delta` feature
+        // (their catalogue text says so), which PR builds of this test leave off; skip them in
+        // every build so the check does not depend on the feature set.
         if def.name.starts_with("krishiv.delta.") {
             continue;
         }
