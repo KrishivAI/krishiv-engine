@@ -2335,6 +2335,7 @@ version = "0.2.0"
 dependencies = [
  "krishiv-common",
  "krishiv-plan",
+ "krishiv-store",
  "krishiv-types",
  "thrift",
  "tokio",
@@ -2866,8 +2867,10 @@ dependencies = [
  "bytes",
  "futures",
  "http",
+ "humantime",
  "krishiv-common",
  "object_store",
+ "reqwest",
  "tokio",
 ]
 

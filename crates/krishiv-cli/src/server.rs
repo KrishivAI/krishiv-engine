@@ -21,8 +21,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use krishiv_common::config::{
-    CONNECT_ADDRESS, CONNECT_PORT, Config, ConfigValue, METRICS_ENABLED, SERVER_ALLOW_CORE_DUMPS,
-    SERVER_METRICS_PUBLIC, UI_ENABLED,
+    CONNECT_ADDRESS, CONNECT_PORT, Config, ConfigValue, IO_EGRESS_PRIVATE_ADDRESSES,
+    METRICS_ENABLED, SERVER_ALLOW_CORE_DUMPS, SERVER_METRICS_PUBLIC, UI_ENABLED,
 };
 use krishiv_connect_server::{
     ConnectServer, ConnectServerConfig, SessionLimits, SessionManager, host,
@@ -96,6 +96,15 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
             return Err(format!("{k} is not supported by krishiv server{hint}"));
         }
         builder = builder.config(k, v);
+    }
+    // The egress policy (design P3-T067 §5.1): a server allows only globally routable
+    // destinations unless the admin chose otherwise.
+    if !args
+        .conf
+        .iter()
+        .any(|(k, _)| k == IO_EGRESS_PRIVATE_ADDRESSES.key)
+    {
+        builder = builder.config(IO_EGRESS_PRIVATE_ADDRESSES.key, "deny");
     }
     let host = match args.host {
         Some(h) => h,

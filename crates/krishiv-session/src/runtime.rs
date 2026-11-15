@@ -99,6 +99,9 @@ pub struct EngineRuntime {
     /// id, so sessions with different settings never share a store or a cache
     /// entry (`krishiv_store::StoreRegistry`).
     pub(crate) io: Arc<IoScheduler>,
+    /// The egress policy fixed at startup (design P3-T067 §5): the store clients apply it, and
+    /// catalog clients (HMS, REST) take their own scopes of it.
+    egress: Arc<krishiv_io::egress::EgressPolicy>,
     /// Whether the runtime was built for one session that owns it (the
     /// default builder), or supplied by the host.
     private: bool,
@@ -198,6 +201,54 @@ impl EngineRuntimeBuilder {
 }
 
 impl EngineRuntime {
+    /// The runtime's I/O scheduler; with an enforcing egress policy its stores connect only
+    /// through policy clients scoped to the admin-set store endpoints (design P3-T067 §5.2).
+    fn io_scheduler(
+        config: &Config,
+        executor: &Arc<dyn Executor>,
+        egress: &Arc<krishiv_io::egress::EgressPolicy>,
+    ) -> Result<Arc<IoScheduler>, KrishivError> {
+        // Checked in every build: a refused admin endpoint fails startup.
+        let store_scope = crate::egress::store_scope(egress, config)?;
+        let io_config = IoConfig::from_config(config);
+        let handle = executor.io_handle().clone();
+        if !egress.enforced() {
+            return Ok(IoScheduler::with_runtime(io_config, handle));
+        }
+        #[cfg(feature = "cloud")]
+        {
+            let proxy = crate::egress::egress_proxy(config);
+            if proxy.is_some() {
+                tracing::info!(
+                    "egress policy: policy clients send through krishiv.io.egress.proxy; the \
+                     proxy decides where requests may go"
+                );
+            }
+            let clients =
+                krishiv_io::SharedHttpClients::with_egress(krishiv_io::PolicyConnector::new(
+                    store_scope,
+                    krishiv_io::Redirects::Checked,
+                    proxy,
+                ));
+            Ok(IoScheduler::with_runtime_and_http_clients(
+                io_config, handle, clients,
+            ))
+        }
+        // Without `cloud` no remote store is built, so no store request leaves the process.
+        #[cfg(not(feature = "cloud"))]
+        {
+            let _ = store_scope;
+            Ok(IoScheduler::with_runtime(io_config, handle))
+        }
+    }
+
+    /// The egress policy fixed at startup (design P3-T067 §5): catalog clients scope it to
+    /// their own declared hosts.
+    #[must_use]
+    pub fn egress_policy(&self) -> &Arc<krishiv_io::egress::EgressPolicy> {
+        &self.egress
+    }
+
     /// A builder with the defaults.
     pub fn builder() -> EngineRuntimeBuilder {
         EngineRuntimeBuilder {
@@ -229,8 +280,10 @@ impl EngineRuntime {
             None => TokioExecutor::new(&ExecutorConfig::default().with_config(&config))?,
         };
         let memory_tree = TreePool::new(&MemoryConfig::from_config(&config));
-        let io =
-            IoScheduler::with_runtime(IoConfig::from_config(&config), executor.io_handle().clone());
+        // The egress policy (design P3-T067 §5): fixed at startup; in force when
+        // `krishiv.io.egress.privateAddresses = deny` (the server's default).
+        let egress = crate::egress::egress_policy(&config, |k| std::env::var(k).ok())?;
+        let io = Self::io_scheduler(&config, &executor, &egress)?;
         io.attach_memory(&(Arc::<TreePool>::clone(&memory_tree) as Arc<dyn MemoryPool>));
         // With `krishiv.io.local.allowedRoots` set (server mode), listings never follow a link
         // out of the roots (ADR 0046 §3a): the policy checks the paths as written, the store
@@ -302,6 +355,7 @@ impl EngineRuntime {
             admission,
             actions: Arc::default(),
             io,
+            egress,
             private,
         };
         runtime.register_gauges()?;

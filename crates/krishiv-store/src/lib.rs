@@ -50,6 +50,8 @@ pub use credentials::{
 };
 pub use error::Result;
 pub use http_clients::SharedHttpClients;
+#[cfg(feature = "cloud")]
+pub use http_clients::policy::{PolicyConnector, Redirects};
 pub use id::StoreId;
 pub use policy::StorePolicy;
 pub use refreshing::RefreshingStore;

@@ -1427,6 +1427,32 @@ fn path_confinement_entries_default_to_empty_and_are_startup_only() {
 }
 
 #[test]
+fn egress_entries_are_startup_only_and_parse() {
+    let mut c = Config::new();
+    for entry in [
+        &IO_EGRESS_PRIVATE_ADDRESSES,
+        &IO_EGRESS_ALLOWED_CIDRS,
+        &IO_EGRESS_PROXY,
+    ] {
+        assert_eq!(c.get(entry), None, "{}", entry.key);
+        assert_eq!(entry.scope, Scope::Cluster, "{}", entry.key);
+        assert_eq!(entry.settable_by, SettableBy::Startup, "{}", entry.key);
+    }
+    c.set("krishiv.io.egress.privateAddresses", "deny").unwrap();
+    assert!(
+        c.set("krishiv.io.egress.privateAddresses", "maybe")
+            .is_err()
+    );
+    c.set("krishiv.io.egress.allowedCidrs", "10.0.0.0/8")
+        .unwrap();
+    assert_eq!(
+        c.get(&IO_EGRESS_ALLOWED_CIDRS)
+            .and_then(ConfigValue::as_str),
+        Some("10.0.0.0/8")
+    );
+}
+
+#[test]
 fn connect_max_plan_depth_defaults_and_rejects_non_positive() {
     let mut c = Config::new();
     assert_eq!(

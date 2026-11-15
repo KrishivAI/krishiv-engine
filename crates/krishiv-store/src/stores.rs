@@ -803,8 +803,14 @@ fn build(
         ObjectScheme::Azure => azure_store(config, options, url, scope, clients),
         ObjectScheme::Http => http_store(url, clients),
         // The token is a default header, which the shared clients' fingerprint does not see:
-        // this store always builds its own client.
-        ObjectScheme::HuggingFace => hf_store(config, options, url),
+        // this store builds its own client, a policy client when the cache enforces the egress
+        // policy (built uncached: default headers are never shared).
+        ObjectScheme::HuggingFace => hf_store(
+            config,
+            options,
+            url,
+            clients.filter(|c| c.enforces_egress()),
+        ),
     }
 }
 
@@ -819,6 +825,7 @@ fn hf_store(
     config: &dyn StoreSettings,
     options: &BTreeMap<String, OptionValue>,
     url: &ParsedUrl,
+    egress: Option<&SharedHttpClients>,
 ) -> Result<Arc<dyn ObjectStore>> {
     use object_store::http::HttpBuilder;
     let endpoint =
@@ -868,9 +875,13 @@ fn hf_store(
         headers.insert(http::header::AUTHORIZATION, value);
         client = client.with_default_headers(headers);
     }
-    HttpBuilder::new()
+    let mut builder = HttpBuilder::new()
         .with_url(base)
-        .with_client_options(client)
+        .with_client_options(client);
+    if let Some(clients) = egress {
+        builder = builder.with_http_connector(clients.clone());
+    }
+    builder
         .build()
         .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
         .map_err(|e| store_failed(&url.display, 1, &e.to_string()))

@@ -139,6 +139,9 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &IO_LOCAL_ALLOWED_ROOTS,
     &ACCESS_PROVIDER,
     &IO_OBJECT_STORE_ALLOWED_PREFIXES,
+    &IO_EGRESS_PRIVATE_ADDRESSES,
+    &IO_EGRESS_ALLOWED_CIDRS,
+    &IO_EGRESS_PROXY,
     &IO_CACHE_DISK_BYTES,
     &IO_CACHE_BLOCK_BYTES,
     &IO_CACHE_MEMORY_BYTES,
@@ -1265,6 +1268,54 @@ pub static IO_OBJECT_STORE_ALLOWED_PREFIXES: ConfigEntry = ConfigEntry {
           table's options stored by an admin are not asked about again when others read or \
           insert. Unset or empty: no object-store path \
           is allowed. Embedded use and a server without authentication do not read it.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.egress.privateAddresses` (design P3-T067 §5.1).
+pub static IO_EGRESS_PRIVATE_ADDRESSES: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.egress.privateAddresses",
+    value_type: ValueType::Enum(&["allow", "deny"]),
+    default: None,
+    doc: "Whether the server's outbound connections for catalogs and data (catalog APIs, token \
+          endpoints, object-store requests, metastore connections) may reach addresses that are \
+          not globally routable. `deny` (the server-mode default when unset) allows only \
+          globally routable unicast addresses (IANA special-purpose registries), the networks of \
+          `krishiv.io.egress.allowedCidrs`, and private (RFC 1918, unique-local) or loopback \
+          addresses of a host an administrator declared, by its exact name and only for the \
+          client that owns it; link-local addresses (cloud metadata) never pass by name. The \
+          rule is checked after DNS resolution and on every redirect hop. `allow` (the embedded \
+          default) applies no rule.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.egress.allowedCidrs` (design P3-T067 §5.1).
+pub static IO_EGRESS_ALLOWED_CIDRS: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.egress.allowedCidrs",
+    value_type: ValueType::String,
+    default: None,
+    doc: "A comma-separated list of networks (`10.20.0.0/16`, `fd12:3456::/48`) the egress \
+          policy always allows, for every client. The only way to open a link-local address. \
+          Unset: none.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.egress.proxy` (design P3-T067 §5.2).
+pub static IO_EGRESS_PROXY: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.egress.proxy",
+    value_type: ValueType::String,
+    default: None,
+    doc: "An HTTP(S) proxy URL every egress-policy client sends through; the proxy then decides \
+          where requests may go (logged at startup). Unset: the policy clients use no proxy, \
+          environment proxy variables included.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.2.0",
