@@ -29,8 +29,8 @@
 //! `SET PATH` have none) and no lineage. Any other statement (writes, DDL) has neither, but its reads are
 //! listed.
 //!
-//! The command columns' nullability is Spark 4.2.0's ([`command_schema`]). The frames the commands return
-//! are built from literal rows and do not carry it yet (a follow-up).
+//! The command columns' nullability is Spark 4.2.0's ([`command_schema`]); the frames the commands return
+//! are built from the same column tables, so they carry the same nullability.
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -50,7 +50,7 @@ use krishiv_types::DataType;
 use crate::access::StatementInfo;
 use crate::session::{Session, internal};
 
-mod command_schema;
+pub(crate) mod command_schema;
 #[cfg(test)]
 mod tests;
 

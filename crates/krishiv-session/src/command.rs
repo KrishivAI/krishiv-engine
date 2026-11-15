@@ -44,6 +44,7 @@ use krishiv_sql::ast::{
 };
 use krishiv_types::DataType;
 
+use crate::analyze::command_schema::{self as cols, CommandColumn};
 pub(crate) use crate::arrow_values::{arrow_field_value, arrow_value, declared_value};
 use crate::catalog::{CATALOG, NAMESPACE, TempTable};
 use crate::catalog::{is_global_key, is_reserved_view_name, reserved_temp_view_name};
@@ -80,7 +81,7 @@ impl Session {
                 // Every explicitly set key (the frame sorts by key).
                 let rows = self.state.conf.explicit_entries();
                 self.string_frame(
-                    &["key", "value"],
+                    cols::SET,
                     rows.into_iter()
                         .map(|(key, value)| vec![Some(key), Some(value)])
                         .collect(),
@@ -107,8 +108,7 @@ impl Session {
                         ]
                     })
                     .collect();
-                self.string_frame(&["key", "value", "meaning", "Since version"], rows)
-                    .await
+                self.string_frame(cols::SET_VERBOSE, rows).await
             }
             SetKind::Show { key, .. } => {
                 let value = self
@@ -116,11 +116,8 @@ impl Session {
                     .conf
                     .value(key)
                     .unwrap_or_else(|| UNDEFINED.to_owned());
-                self.string_frame(
-                    &["key", "value"],
-                    vec![vec![Some(key.clone()), Some(value)]],
-                )
-                .await
+                self.string_frame(cols::SET, vec![vec![Some(key.clone()), Some(value)]])
+                    .await
             }
             SetKind::Assign {
                 key,
@@ -151,7 +148,7 @@ impl Session {
                 // shows the value as written, as in Spark.
                 self.conf().set(key, value)?;
                 self.string_frame(
-                    &["key", "value"],
+                    cols::SET,
                     vec![vec![Some(key.clone()), Some(value.clone())]],
                 )
                 .await
@@ -170,7 +167,7 @@ impl Session {
                 };
                 self.conf().set(TIME_ZONE_KEY, &value)?;
                 self.string_frame(
-                    &["key", "value"],
+                    cols::SET,
                     vec![vec![Some(TIME_ZONE_KEY.to_owned()), Some(value)]],
                 )
                 .await
@@ -1551,7 +1548,7 @@ impl Session {
                         Some(self.state.catalog.current_namespace()),
                     ]
                 };
-                self.string_frame(&["catalog", "namespace"], vec![row])
+                self.string_frame(cols::SHOW_CURRENT_NAMESPACE, vec![row])
                     .await
             }
             krishiv_sql::ast::ShowKind::Catalogs { pattern, .. } => {
@@ -1560,7 +1557,7 @@ impl Session {
                     .filter(|n| crate::introspection::keep(pattern.as_ref(), n))
                     .map(|n| vec![Some(n.to_owned())])
                     .collect();
-                self.ordered_frame(&["catalog"], &[], rows).await
+                self.ordered_frame(cols::SHOW_CATALOGS, &[], rows).await
             }
             _ => self.exec_show_catalog(s, original).await,
         }
@@ -1569,11 +1566,29 @@ impl Session {
     /// A frame of the string columns `columns` with `rows` (`None` is
     /// NULL), as Spark's `SET` commands return. Rows come out ordered by
     /// `key`, as in Spark.
+    ///
+    /// Each column is as nullable as `columns` says (the tables of
+    /// `analyze::command_schema`, Spark 4.2.0's), whatever the rows hold: a
+    /// nullable column gets an empty branch of typed NULLs, and a NULL in a
+    /// non-null column is an internal error rather than a frame whose
+    /// schema says otherwise.
     pub(crate) async fn string_frame(
         &self,
-        columns: &[&str],
+        columns: &[CommandColumn],
         rows: Vec<Vec<Option<String>>>,
     ) -> Result<DataFrame, KrishivError> {
+        for row in &rows {
+            if let Some(c) = columns
+                .iter()
+                .zip(row)
+                .find(|(c, v)| !c.nullable && v.is_none())
+            {
+                return Err(crate::session::internal(format!(
+                    "a NULL in the non-null command column {}",
+                    c.0.name
+                )));
+            }
+        }
         let one = || {
             DataFrame::new(
                 self.clone(),
@@ -1585,21 +1600,30 @@ impl Session {
                 columns
                     .iter()
                     .zip(values.iter())
-                    .map(|(&name, value)| match value {
-                        Some(value) => lit(value.as_str()).alias(name),
-                        None => lit_null().cast(DataType::String).alias(name),
+                    .map(|(c, value)| match value {
+                        Some(value) => lit(value.as_str()).alias(c.name),
+                        None => lit_null().cast(DataType::String).alias(c.name),
                     }),
             )
         };
-        let df = if rows.is_empty() {
-            // No rows: one placeholder row with the schema, limited to
-            // nothing, so the columns read as non-nullable strings.
-            row(&vec![Some(String::new()); columns.len()]).limit(0)
-        } else if rows.len() == 1 {
-            row(&rows[0])
+        // No rows: one placeholder row with the schema, limited to nothing. Its
+        // nullable columns are NULL, so a union with it reads them as nullable
+        // (a union's column is nullable where any input's is).
+        let placeholder: Vec<Option<String>> = columns
+            .iter()
+            .map(|c| (!c.nullable).then(String::new))
+            .collect();
+        let mut inputs: Vec<Arc<LogicalPlan>> =
+            rows.iter().map(|r| Arc::clone(&row(r).plan)).collect();
+        if inputs.is_empty() || columns.iter().any(|c| c.nullable) {
+            inputs.push(Arc::clone(&row(&placeholder).limit(0).plan));
+        }
+        let df = if inputs.len() == 1 {
+            let only = inputs.pop().ok_or_else(|| {
+                crate::session::internal("a command frame without rows".to_owned())
+            })?;
+            DataFrame::new(self.clone(), only)
         } else {
-            let inputs: Vec<Arc<LogicalPlan>> =
-                rows.iter().map(|r| Arc::clone(&row(r).plan)).collect();
             DataFrame::new(
                 self.clone(),
                 Arc::new(LogicalPlan::new(PlanNode::Union {
@@ -1611,7 +1635,7 @@ impl Session {
         };
         // Rows come out ordered by key: unions read in any order, so the
         // frame sorts.
-        let df = if columns.contains(&"key") {
+        let df = if columns.iter().any(|c| c.name == "key") {
             df.order_by([col("key")])
         } else {
             df // callers without a `key` column pass at most one row

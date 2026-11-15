@@ -1693,7 +1693,7 @@ impl Session {
         let rows = names.into_iter().map(|n| vec![Some(n)]).collect();
         // A union of rows keeps no order, so sort the frame itself.
         Ok(self
-            .string_frame(&["partition"], rows)
+            .string_frame(crate::analyze::command_schema::SHOW_PARTITIONS, rows)
             .await?
             .order_by([col("partition")]))
     }
