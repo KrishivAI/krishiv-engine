@@ -127,7 +127,7 @@ crates.io keywords and description (drop `datafusion`), the PyPI classifier, the
 Each step is a hard stop for agents; the maintainer runs it and approves its environment.
 
 1. **Merge** the release PR on a green main, after the P2b gate is approved. Then tag `v0.2.1` on that commit and push the tag.
-2. **TestPyPI:** in Actions, run "Publish to TestPyPI" on the tag. Approve the `testpypi` environment, then install from TestPyPI in a clean virtualenv: `pip install -i https://test.pypi.org/simple/ krishiv==0.2.1` (and `krishiv-compat`), and run the quickstart.
+2. **TestPyPI:** in Actions, run "Publish to TestPyPI" on the tag. Approve the `testpypi` environment, then install from TestPyPI in a clean virtualenv: `pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ krishiv==0.2.1` (dependencies such as pyarrow come from PyPI) (and `krishiv-compat`), and run the quickstart.
 3. **PyPI:** run "Publish to PyPI" (`publish-pypi.yml`) on the tag and approve the `pypi` environment. Check <https://pypi.org/p/krishiv> and `pip install krishiv==0.2.1`.
 4. **crates.io:** run "Publish to crates.io" (`publish-crates.yml`) on the tag and approve the `crates-io` environment. It publishes the 24 crates of `.github/scripts/publish-crates.txt` in that order. A crate already at 0.2.1 is skipped, so a failed run can be dispatched again. Check `cargo add krishiv@0.2.1` in a scratch project.
 5. **Yank the old 0.1 releases** once 0.2.1 is verified: PyPI `krishiv` 0.1.0; crates.io `krishiv` 0.1.0-nightly.202607030148 and `krishiv-common` 0.1.0 (`cargo yank --version <v> <crate>`). See below.
@@ -141,8 +141,10 @@ or delete the release tag** (`v0.2.0`): a published tag is permanent.
 1. Make one commit that changes only files under `.github/`, directly on the release commit (not on `main`).
 2. Tag it `vX.Y.Z-publishN` (for 0.2.0: `v0.2.0-publish`, `-publish2`, `-publish3`) and push the tag.
 3. Dispatch the publish workflows (`publish-pypi.yml`, `publish-crates.yml`, and `publish-testpypi.yml` for a
-   rehearsal) on that tag. `.github/scripts/require-green-nightly.sh` accepts exactly one `.github`-only commit on a
-   parent that a green scheduled nightly covers; any second commit, or a commit that touches other paths, is refused.
+   rehearsal) on that tag. `.github/scripts/require-green-nightly.sh` (called by `release.yml` and `binaries.yml`, the
+   artifact workflows; `publish-crates.yml` runs `ci.yml` on the ref instead and does not call it) accepts exactly one
+   `.github`-only commit whose parent a green scheduled nightly covers; any second commit, a commit that touches
+   other paths, or a file list too long to check (300 files) is refused.
 
 Two things learned from 0.2.0:
 

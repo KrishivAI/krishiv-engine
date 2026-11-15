@@ -34,11 +34,17 @@ case "$status" in
   identical | ahead) echo "the scheduled run covers $GITHUB_SHA ($status)" ;;
   *)
     # A publish tag (RELEASING.md "Publish tag"): exactly one commit that changes only files under .github/,
-    # directly on the commit the green run covers.
-    tag=$(gh api "repos/$GITHUB_REPOSITORY/compare/$run_sha...$GITHUB_SHA" --jq '[.status, .ahead_by, .behind_by, ([.files[].filename | select(startswith(".github/") | not)] | length)] | @tsv')
-    IFS=$'\t' read -r tag_status ahead behind outside <<<"$tag"
-    if [ "$tag_status" = ahead ] && [ "$ahead" = 1 ] && [ "$behind" = 0 ] && [ "$outside" = 0 ]; then
-      echo "$GITHUB_SHA is one .github-only commit on $run_sha, which the scheduled run covers"
+    # whose parent the green run covers.
+    # The fix commit's own parent must be covered by the green run (an ancestor of, or equal to, run_sha), so the fix
+    # may sit on the release commit even after main has moved on. The file list is paginated at 300: refuse longer.
+    tag=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" --jq '[(.parents | length), (.parents[0].sha // ""), ([.files[].filename | select(startswith(".github/") | not)] | length), (.files | length)] | @tsv')
+    IFS=$'\t' read -r nparents parent outside nfiles <<<"$tag"
+    covered=""
+    if [ "$nparents" = 1 ]; then
+      covered=$(gh api "repos/$GITHUB_REPOSITORY/compare/$parent...$run_sha" --jq .status)
+    fi
+    if [ "$nparents" = 1 ] && { [ "$covered" = identical ] || [ "$covered" = ahead ]; } && [ "$outside" = 0 ] && [ "$nfiles" -lt 300 ]; then
+      echo "$GITHUB_SHA is one .github-only commit on $parent, which the scheduled run ($run_sha) covers"
     else
       echo "::error::the latest green scheduled run ($run_sha) does not include $GITHUB_SHA ($status); wait for the next nightly run"
       exit 1

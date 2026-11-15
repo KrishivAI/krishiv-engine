@@ -6,7 +6,7 @@ Krishiv runs inside your process: no cluster and no JVM. Queries follow Spark's 
 error classes, execute vectorized on Apache Arrow, and return Arrow record batches.
 
 ```bash
-cargo add krishiv
+cargo add krishiv futures
 ```
 
 ```rust

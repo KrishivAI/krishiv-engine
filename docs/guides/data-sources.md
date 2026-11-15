@@ -69,6 +69,7 @@ for key, value in {
     "fs.s3a.secret.key": "minioadmin",
 }.items():
     spark.conf.set(key, value)
+spark.sql("select 1 as id, 'a' as kind").write.parquet("s3://my-bucket/events/")
 spark.read.parquet("s3://my-bucket/events/").show()
 ```
 
