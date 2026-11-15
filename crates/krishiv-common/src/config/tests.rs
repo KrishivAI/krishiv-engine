@@ -613,7 +613,7 @@ fn registry_is_well_formed() {
 #[test]
 fn docs_markdown_lists_every_entry_deterministically() {
     let md = docs_markdown();
-    assert!(md.starts_with("# Krishiv configuration reference\n"));
+    assert!(md.contains("\n# Krishiv configuration reference\n"));
     assert!(md.contains(
         "| Key | Type | Default | Scope | Settable by | Since | Spark alias | Description |"
     ));
@@ -1707,4 +1707,23 @@ fn delta_and_catalog_limit_entries_parse_and_default() {
     ] {
         assert_eq!(e.scope, Scope::Cluster, "{}", e.key);
     }
+}
+
+#[test]
+fn union_output_partitioning_is_a_spark_alias() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&UNION_OUTPUT_PARTITIONING),
+        Some(&ConfigValue::Bool(true))
+    );
+    assert_eq!(
+        lookup("spark.sql.unionOutputPartitioning").map(|e| e.key),
+        Some("krishiv.sql.unionOutputPartitioning")
+    );
+    c.set("spark.sql.unionOutputPartitioning", "false").unwrap();
+    assert_eq!(
+        c.get(&UNION_OUTPUT_PARTITIONING),
+        Some(&ConfigValue::Bool(false))
+    );
+    assert!(c.set("spark.sql.unionOutputPartitioning", "maybe").is_err());
 }

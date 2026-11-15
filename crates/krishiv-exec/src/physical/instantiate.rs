@@ -89,6 +89,7 @@ mod distributed;
 mod order;
 mod python_eval;
 mod python_relation;
+mod table_write;
 pub(crate) use detached::{Detached, LoopRun};
 mod join;
 use distributed::planned_schema_holds;
@@ -1285,6 +1286,11 @@ impl Instantiation<'_> {
                 })
             }
             PhysNode::WriteFiles { input, write } => self.write_files(input, write),
+            PhysNode::TableWrite {
+                input,
+                table,
+                request,
+            } => self.table_write(input, table, request),
             // See the module docs: the operators around an exchange
             // implement it on one worker.
             PhysNode::Exchange(e) if e.partitioning == Partitioning::Broadcast => self.broadcast(e),
