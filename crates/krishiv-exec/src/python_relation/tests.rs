@@ -54,6 +54,9 @@ struct Shared {
     /// While set, `send` waits while this many results are not read (a
     /// runtime whose output pipe is full takes no more frames).
     out_cap: std::sync::Mutex<Option<usize>>,
+    /// While set, `send` wakes `next` only when the frame gave a result or
+    /// ended the task (a runtime that signals its reader only on output).
+    quiet: AtomicBool,
 }
 
 /// Polls of a task's `next` that only a busy loop reaches.
@@ -174,6 +177,7 @@ impl UdfTask for Task {
                 .into());
             }
             let mut s = self.state.lock().unwrap();
+            let before = s.out.len();
             match frame {
                 Frame::Batch { batch, .. } => {
                     s.rows += i64::try_from(batch.num_rows()).unwrap();
@@ -212,8 +216,11 @@ impl UdfTask for Task {
                     s.ended = true;
                 }
             }
+            let output = s.out.len() != before || s.ended;
             drop(s);
-            self.ready.wake();
+            if output || !self.shared.quiet.load(Ordering::SeqCst) {
+                self.ready.wake();
+            }
             Ok(())
         })
     }
@@ -1073,13 +1080,23 @@ async fn an_aggregate_waits_for_its_slowest_lane_without_spinning() {
     done(r);
 }
 
-/// An aggregate whose fast lane would fill the pool with values before the
-/// slow lane's first is reserved: no group can be joined, and the lane
-/// queues are not spillable, so the slow lane's value would wait for memory
-/// only its peer holds. A lane reads no result while it holds more values
-/// than a running peer that has frames to take, so here it holds at most
-/// one result batch past the gated lane, which always gets its value's
-/// memory. (A deep window: the stall as first seen.)
+/// An aggregate whose fast lane, with enough groups, would fill the pool
+/// with values before the slow lane's first is reserved: no group can be
+/// joined, and the lane queues are not spillable, so the slow lane's value
+/// would wait for memory only its peer holds. A lane reads no result while it holds more values
+/// than a running peer that has frames to take, so while the gated lane
+/// has frames the fast one holds one result batch past it (checked before
+/// the gate opens). (A deep window: the stall as first seen.)
+///
+/// Once the gate opens, the gated lane takes its whole window at once, so
+/// it has no frame left to take and the hold ends: past that point the
+/// bound is the results of the at most `window` frames each lane already
+/// took, and the two lanes share the pool, which writes stored groups out
+/// when it is full. The test checks the hold, not the pool: an unheld fast
+/// lane reads every value before the gate opens (`taken` would be
+/// `groups`, not 1), so the groups are kept few enough that `finalize`
+/// takes a fraction of a second and the short timeout catches a stall, not
+/// a slow runner.
 #[tokio::test]
 async fn a_fast_aggregate_lane_waits_for_its_peers_instead_of_filling_the_pool() {
     let dir = tempfile::tempdir().unwrap();
@@ -1125,7 +1142,7 @@ async fn a_fast_aggregate_lane_waits_for_its_peers_instead_of_filling_the_pool()
     .unwrap();
     let g = r.sink.global_state(&r.ctx).unwrap();
     let mut l = r.sink.local_state(&r.ctx, &g).unwrap();
-    let groups = 12_000;
+    let groups = 3000;
     let keys: Vec<i32> = (0..groups).collect();
     let status = r.sink.sink(rows(&keys, None), &mut l, &g).unwrap();
     assert!(matches!(status, SinkStatus::NeedMoreInput), "{status:?}");
@@ -1134,8 +1151,8 @@ async fn a_fast_aggregate_lane_waits_for_its_peers_instead_of_filling_the_pool()
     r.sink.combine(l, &g).unwrap();
     slow.open_gate();
     // The open slow lane takes its whole deep window at once, so the hold
-    // ends and the two lanes share the pool: slower, never stuck.
-    tokio::time::timeout(Duration::from_secs(40), r.sink.finalize(&g, &r.ctx))
+    // ends and the two lanes share the pool: never stuck.
+    tokio::time::timeout(Duration::from_secs(10), r.sink.finalize(&g, &r.ctx))
         .await
         .unwrap()
         .unwrap();
@@ -1250,6 +1267,49 @@ async fn a_peer_batching_values_across_groups_never_hangs_the_fast_lane() {
         .unwrap();
     assert_eq!(r.shared.taken.load(Ordering::SeqCst), 100);
     assert_eq!(slow.taken.load(Ordering::SeqCst), 3);
+    done(r);
+}
+
+/// The "took its last frame" wake. The peer, gated, has frames it has not
+/// taken, so the fast lane is held after its first value, its runtime
+/// stops taking frames and its window stops the feed. The gate opens: in
+/// one poll the held lane parks first, then the peer takes its last frames
+/// without yielding (it batches 40 groups) and its runtime signals its
+/// reader only on output. Only the peer's wake as it took its last frame
+/// polls the held lane again; else nothing does and the query hangs.
+#[tokio::test]
+async fn a_quiet_peer_taking_its_last_frame_releases_the_fast_lane() {
+    let shape = RelationShape::Aggregate {
+        keys: vec![0],
+        key_values: vec![0],
+    };
+    let mut r = rig(shape, Yield::Count, limits(0, DEFAULT_WINDOW), 64 << 20);
+    *r.shared.out_cap.lock().unwrap() = Some(1);
+    let slow = Arc::new(Shared::default());
+    slow.closed.store(true, Ordering::SeqCst);
+    slow.quiet.store(true, Ordering::SeqCst);
+    r.sink = two_lane_aggregate(
+        [(&r.shared, Yield::Count), (&slow, Yield::Coalesce(40))],
+        DEFAULT_WINDOW,
+        None,
+    );
+    let g = r.sink.global_state(&r.ctx).unwrap();
+    let mut l = r.sink.local_state(&r.ctx, &g).unwrap();
+    let SinkStatus::Blocked(wait) = r.sink.sink(groups(100), &mut l, &g).unwrap() else {
+        panic!("the windows are full");
+    };
+    assert_eq!(r.shared.taken.load(Ordering::SeqCst), 1);
+    slow.open_gate();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        wait.await;
+        r.sink.combine(l, &g).unwrap();
+        r.sink.finalize(&g, &r.ctx).await.unwrap();
+    })
+    .await
+    .expect("the query hung");
+    assert_eq!(r.shared.taken.load(Ordering::SeqCst), 100);
+    assert_eq!(slow.taken.load(Ordering::SeqCst), 3);
+    drop(g);
     done(r);
 }
 

@@ -72,7 +72,8 @@ pub(super) struct LaneIo {
     /// The rows of [`Self::outputs`] and [`Self::refused`], kept as they
     /// change (a peer's hold reads it on every result).
     rows: usize,
-    /// The pump ended: the task yielded its last result or failed.
+    /// The task's output ended, or the pump ended (its last result or a
+    /// failure).
     stopped: bool,
     /// The pump waiting while a peer holds the lane back, woken when a
     /// peer yields, takes its last frame or stops.
@@ -101,6 +102,7 @@ impl LaneIo {
     /// `rows` rows of the results taken by the driver (the front batch
     /// sliced or popped by the caller).
     pub(super) fn took(&mut self, rows: usize) {
+        debug_assert!(rows <= self.rows, "took {rows} of {} rows", self.rows);
         self.rows = self.rows.saturating_sub(rows);
     }
 }
@@ -342,6 +344,15 @@ fn pump(task: Box<dyn UdfTask>, peers: Peers, index: usize) -> BoxFuture<'static
                 })
                 .await;
                 let Some(batch) = task.next().await? else {
+                    // The output ended: it yields no more rows, so it holds
+                    // no peer back, even before its send side finished.
+                    // `UdfTask::next` ends only once `End` was processed,
+                    // so the send side is about to finish; a runtime that
+                    // ended early while a send hangs (a write to a dead
+                    // worker that blocks) would otherwise hold every peer
+                    // with more rows, a hang instead of the mismatch.
+                    lock(&io).stopped = true;
+                    wake_peers(&peers, index);
                     return Ok(());
                 };
                 let bytes = batch.get_array_memory_size();
