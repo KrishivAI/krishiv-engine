@@ -44,13 +44,12 @@ use krishiv_sql::ast::{
 };
 use krishiv_types::DataType;
 
-use crate::analyze::command_schema::{self as cols, CommandColumn};
+use crate::analyze::command_schema as cols;
 pub(crate) use crate::arrow_values::{arrow_field_value, arrow_value, declared_value};
 use crate::catalog::{CATALOG, NAMESPACE, TempTable};
 use crate::catalog::{is_global_key, is_reserved_view_name, reserved_temp_view_name};
 use crate::column::Column;
 use crate::dataframe::DataFrame;
-use crate::functions::{col, lit, lit_null};
 use crate::session::{QueryEnv, Session};
 use crate::sql_functions::{Entry, one_row_project};
 use crate::store::{CatalogStore, StoredFunction};
@@ -1562,88 +1561,6 @@ impl Session {
             _ => self.exec_show_catalog(s, original).await,
         }
     }
-
-    /// A frame of the string columns `columns` with `rows` (`None` is
-    /// NULL), as Spark's `SET` commands return. Rows come out ordered by
-    /// `key`, as in Spark.
-    ///
-    /// Each column is as nullable as `columns` says (the tables of
-    /// `analyze::command_schema`, Spark 4.2.0's), whatever the rows hold: a
-    /// nullable column gets an empty branch of typed NULLs, and a NULL in a
-    /// non-null column is an internal error rather than a frame whose
-    /// schema says otherwise.
-    pub(crate) async fn string_frame(
-        &self,
-        columns: &[CommandColumn],
-        rows: Vec<Vec<Option<String>>>,
-    ) -> Result<DataFrame, KrishivError> {
-        for row in &rows {
-            if let Some(c) = columns
-                .iter()
-                .zip(row)
-                .find(|(c, v)| !c.nullable && v.is_none())
-            {
-                return Err(crate::session::internal(format!(
-                    "a NULL in the non-null command column {}",
-                    c.0.name
-                )));
-            }
-        }
-        let one = || {
-            DataFrame::new(
-                self.clone(),
-                Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
-            )
-        };
-        let row = |values: &[Option<String>]| {
-            one().select(
-                columns
-                    .iter()
-                    .zip(values.iter())
-                    .map(|(c, value)| match value {
-                        Some(value) => lit(value.as_str()).alias(c.name),
-                        None => lit_null().cast(DataType::String).alias(c.name),
-                    }),
-            )
-        };
-        // No rows: one placeholder row with the schema, limited to nothing. Its
-        // nullable columns are NULL, so a union with it reads them as nullable
-        // (a union's column is nullable where any input's is).
-        let placeholder: Vec<Option<String>> = columns
-            .iter()
-            .map(|c| (!c.nullable).then(String::new))
-            .collect();
-        let mut inputs: Vec<Arc<LogicalPlan>> =
-            rows.iter().map(|r| Arc::clone(&row(r).plan)).collect();
-        if inputs.is_empty() || columns.iter().any(|c| c.nullable) {
-            inputs.push(Arc::clone(&row(&placeholder).limit(0).plan));
-        }
-        let df = if inputs.len() == 1 {
-            let only = inputs.pop().ok_or_else(|| {
-                crate::session::internal("a command frame without rows".to_owned())
-            })?;
-            DataFrame::new(self.clone(), only)
-        } else {
-            DataFrame::new(
-                self.clone(),
-                Arc::new(LogicalPlan::new(PlanNode::Union {
-                    inputs,
-                    by_name: false,
-                    allow_missing_columns: false,
-                })),
-            )
-        };
-        // Rows come out ordered by key: unions read in any order, so the
-        // frame sorts.
-        let df = if columns.iter().any(|c| c.name == "key") {
-            df.order_by([col("key")])
-        } else {
-            df // callers without a `key` column pass at most one row
-        };
-        let env = self.query_env();
-        df.analyzed_in(env).await?;
-        Ok(df)
-    }
 }
 
 /// How often `CREATE FUNCTION` checks a body again after a concurrent change.
@@ -2019,6 +1936,8 @@ pub(crate) fn contains_subquery(e: &Expr) -> bool {
         )
     })
 }
+
+mod frames;
 
 #[cfg(test)]
 mod tests;
