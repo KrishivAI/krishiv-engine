@@ -14,10 +14,16 @@
 //! roles transitively) on the securable or a parent allows; nothing else does (no `DENY`, Q2).
 //! An owner (the creator, Q4) holds every privilege with the grant option. Reads are decided per
 //! column ([`AccessPolicy::column_level`]): `Browse` on a table needs any grant on it (a column
-//! grant included), its rows `Select` per referenced column. Each refusal writes one
-//! `krishiv::audit` record (`principal`, `securable`, `privilege`, `decision`, `provider`,
-//! `policy_epoch`; the query id is the enclosing `krishiv.sql`/`krishiv.query` span's) and counts
-//! toward [`Grants::denied_counts`] (`krishiv_access_denied_total{privilege,provider}`).
+//! grant included), its rows `Select` per column the final plan reads. Each refusal is counted
+//! here ([`Grants::denied_counts`], `krishiv_access_denied_total{privilege,provider}`, the
+//! canonical per-provider counter); the one `krishiv::audit` record is the session's
+//! (`access::log_denial`, with `provider` and `policy_epoch`; the query id is the enclosing
+//! `krishiv.sql`/`krishiv.query` span's).
+//!
+//! Names match as the catalog resolves them (review M1): exactly under
+//! `spark.sql.caseSensitive=true`, ignoring ASCII case otherwise; keys keep the catalog's
+//! spelling and are never folded. A user and a service principal of one name share grants and
+//! ownership (review m8: principals are keyed by name).
 
 mod exec;
 mod model;
@@ -88,6 +94,10 @@ pub struct DeniedCount {
 /// [`GrantsPolicy`].
 pub struct Grants {
     store: Arc<dyn GrantStore>,
+    /// Serialises the statements that create, drop or rename objects with the ownership records
+    /// they change (review B2, B3, m4): an object's existence is read before and after the
+    /// change under it, so only the statement that created an object owns it.
+    ddl: tokio::sync::Mutex<()>,
     /// Indexed by `provider * COUNTED.len() + privilege`.
     denied: [AtomicU64; 2 * COUNTED.len()],
 }
@@ -106,6 +116,7 @@ impl Grants {
     pub fn new(store: Arc<dyn GrantStore>) -> Arc<Self> {
         Arc::new(Self {
             store,
+            ddl: tokio::sync::Mutex::new(()),
             denied: std::array::from_fn(|_| AtomicU64::new(0)),
         })
     }
@@ -149,6 +160,10 @@ impl Grants {
     pub(crate) fn store(&self) -> &dyn GrantStore {
         &*self.store
     }
+
+    pub(crate) async fn ddl(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.ddl.lock().await
+    }
 }
 
 /// One session's policy: grants for data securables, `system` for the rest, admin passes every
@@ -157,6 +172,26 @@ pub struct GrantsPolicy {
     grants: Arc<Grants>,
     system: Arc<dyn AccessPolicy>,
     admin: bool,
+    /// The session's configuration, for `spark.sql.caseSensitive` (set by the session that
+    /// uses the policy; without it names match exactly, the stricter rule).
+    conf: std::sync::OnceLock<Arc<crate::conf::ConfStore>>,
+    /// Keys this session's running statement is creating (the new object; a managed location
+    /// the statement makes for it): allowed until it ends (review open point 2).
+    creating: Arc<std::sync::Mutex<Vec<ObjectKey>>>,
+}
+
+/// Clears [`GrantsPolicy::creating`] when the creating statement ends (one runs at a time: the
+/// grants' DDL lock).
+pub(crate) struct Creating {
+    keys: Arc<std::sync::Mutex<Vec<ObjectKey>>>,
+}
+
+impl Drop for Creating {
+    fn drop(&mut self) {
+        if let Ok(mut keys) = self.keys.lock() {
+            keys.clear();
+        }
+    }
 }
 
 impl std::fmt::Debug for GrantsPolicy {
@@ -176,7 +211,46 @@ impl GrantsPolicy {
             grants,
             system,
             admin,
+            conf: std::sync::OnceLock::new(),
+            creating: Arc::default(),
         }
+    }
+
+    /// Allows `key` to this session until the guard drops: the object (or its managed location)
+    /// the running statement creates.
+    pub(crate) fn creating(&self, key: ObjectKey) -> Creating {
+        self.also_creating(key);
+        Creating {
+            keys: Arc::clone(&self.creating),
+        }
+    }
+
+    /// Adds `key` to what the running statement creates (cleared with its [`Creating`]).
+    pub(crate) fn also_creating(&self, key: ObjectKey) {
+        if let Ok(mut keys) = self.creating.lock() {
+            keys.push(key);
+        }
+    }
+
+    /// Whether the running statement is creating the relation `key`.
+    pub(crate) fn is_creating(&self, key: &ObjectKey) -> bool {
+        let cs = self.case_sensitive();
+        self.creating
+            .lock()
+            .is_ok_and(|keys| keys.iter().any(|k| k.same(key, cs)))
+    }
+
+    /// Ties the policy to its session's configuration (the first session wins).
+    pub(crate) fn bind_conf(&self, conf: &Arc<crate::conf::ConfStore>) {
+        let _ = self.conf.set(Arc::clone(conf));
+    }
+
+    /// Whether names match exactly (`spark.sql.caseSensitive`).
+    pub(crate) fn case_sensitive(&self) -> bool {
+        self.conf.get().is_none_or(|c| {
+            crate::conf::get(&c.snapshot(), "spark.sql.caseSensitive")
+                .is_some_and(|v| v.eq_ignore_ascii_case("true"))
+        })
     }
 
     /// The shared grants.
@@ -196,6 +270,12 @@ impl GrantsPolicy {
     pub fn decided_by(securable: &Securable) -> DecidedBy {
         match securable {
             Securable::System(_) => DecidedBy::Roles,
+            // The reserved `system` catalog's namespaces and functions (review m1).
+            Securable::Namespace(n) | Securable::Function(n)
+                if n.first().is_some_and(|c| crate::system::is_system(c)) =>
+            {
+                DecidedBy::Roles
+            }
             Securable::Table(t) | Securable::View(t) | Securable::Column { table: t, .. }
                 if crate::system::is_system(&t.catalog) =>
             {
@@ -221,21 +301,52 @@ impl GrantsPolicy {
         if self.admin {
             return AccessDecision::Allow;
         }
-        let Some(key) = ObjectKey::of(securable) else {
+        let Some(key) = ObjectKey::of(securable).and_then(physical_key) else {
             return deny("the securable has no grant key");
         };
+        let cs = self.case_sensitive();
+        // The object the running statement creates, its columns and its managed location: the
+        // creator will own it (only set when the statement is really creating it).
+        if self
+            .creating
+            .lock()
+            .is_ok_and(|keys| keys.iter().any(|k| key.covered_by(k, cs)))
+        {
+            return AccessDecision::Allow;
+        }
         if self
             .grants
             .store
             .snapshot()
             .0
-            .allows(principal, &key, privilege)
+            .allows(principal, &key, privilege, cs)
         {
             AccessDecision::Allow
         } else {
             deny("no grant")
         }
     }
+}
+
+/// `key` with a local path's symbolic links resolved (review M2): a path grant is matched on
+/// the file the read really opens, the form `PathPrefixPolicy` confinement compares, so a link
+/// inside a granted directory never reaches outside it. `None` (denied) for a local path that
+/// does not resolve or holds `%` (percent-encoded text would not be decoded the way the
+/// comparison reads it). Other keys are returned as they are.
+pub(crate) fn physical_key(key: ObjectKey) -> Option<ObjectKey> {
+    let Some(local) = (key.kind == model::KeyKind::Path)
+        .then(|| key.parts.first().and_then(|p| p.strip_prefix("file://")))
+        .flatten()
+    else {
+        return Some(key);
+    };
+    if local.contains('%') {
+        return None;
+    }
+    let resolved = crate::access::resolve_links(std::path::Path::new(local))?;
+    let text = resolved.to_str()?;
+    let normal = model::path_key(text)?;
+    Some(ObjectKey::new(model::KeyKind::Path, vec![normal]))
 }
 
 /// `version` mixed with `epoch` so that a change of either changes the result (multiplying by
@@ -272,17 +383,8 @@ impl AccessPolicy for GrantsPolicy {
         if provider == DecidedBy::Roles {
             self.system.denied(principal, securable, privilege);
         }
+        // Counted only: the session writes the one audit record (review M4).
         self.grants.count(provider, privilege);
-        tracing::warn!(
-            target: "krishiv::audit",
-            principal = %principal.name,
-            securable = %securable,
-            privilege = %privilege,
-            decision = "deny",
-            provider = provider.as_str(),
-            policy_epoch = self.grants.epoch(),
-            "access policy denial"
-        );
     }
 }
 

@@ -32,10 +32,12 @@ use krishiv_common::redact::RedactedSql;
 
 use crate::{DataFrame, Session};
 
-/// An object a statement creates (it gets an owner) or drops (its grants and owner go).
+/// An object a statement creates (it gets an owner if the statement really created it), drops
+/// (its grants and owner go) or renames (they move to the new name).
 pub(crate) enum OwnerChange {
     Created(Securable),
     Dropped(Securable),
+    Renamed { from: Securable, to: Securable },
 }
 
 fn now_ms() -> i64 {
@@ -71,12 +73,82 @@ impl Session {
         query: &str,
         redacted: &RedactedSql,
     ) -> Result<DataFrame, KrishivError> {
-        let owner_change = self.owner_change(&statement, &env);
-        let df = Box::pin(self.run_statement_here(statement, env, query, redacted)).await?;
-        if let Some(change) = &owner_change {
-            self.apply_owner_change(change)?;
+        let Some(change) = self.owner_change(&statement, &env) else {
+            return Box::pin(self.run_statement_here(statement, env, query, redacted)).await;
+        };
+        let check = env.clone();
+        self.with_owner_change(change, &check, async move {
+            Box::pin(self.run_statement_here(statement, env, query, redacted)).await
+        })
+        .await
+    }
+
+    /// Runs `run`, a statement that makes `change`, and keeps the ownership records in step
+    /// (review B2, B3, m4): under the grants' DDL lock, the object's existence is read before and
+    /// after, so only a statement that really created an object owns it (a no-op `IF NOT EXISTS`
+    /// takes nothing), a drop clears what was under the name, and a rename moves it. While a
+    /// new object is being created, its own keys (and a managed location the statement makes for
+    /// it) are allowed to this session (review open point 2).
+    pub(crate) async fn with_owner_change<T>(
+        &self,
+        change: OwnerChange,
+        env: &QueryEnv,
+        run: impl std::future::Future<Output = Result<T, KrishivError>>,
+    ) -> Result<T, KrishivError> {
+        let Some(policy) = self.grants_policy().cloned() else {
+            return run.await;
+        };
+        let _ddl = policy.grants().ddl().await;
+        let before = match &change {
+            OwnerChange::Created(s) => self.object_exists(s, env).await,
+            OwnerChange::Dropped(_) | OwnerChange::Renamed { .. } => None,
+        };
+        let creating = match (&change, before) {
+            (OwnerChange::Created(s), Some(false)) => ObjectKey::of(s),
+            _ => None,
+        };
+        let _creating = creating.map(|k| policy.creating(k));
+        let out = run.await?;
+        self.apply_owner_change(&policy, &change, before, env)
+            .await?;
+        Ok(out)
+    }
+
+    /// Whether `securable` exists, as the catalog resolves its name; `None` when it cannot be
+    /// told (then no owner is recorded: the object is the admins' until granted).
+    pub(crate) async fn object_exists(
+        &self,
+        securable: &Securable,
+        env: &QueryEnv,
+    ) -> Option<bool> {
+        let cs = env.analysis.conf.case_sensitive;
+        match securable {
+            Securable::Table(t) | Securable::View(t) => {
+                let catalog = env.analysis.catalogs.catalog(&t.catalog)?;
+                let form = krishiv_plan::analyzer::NameForm {
+                    case_sensitive: cs,
+                    qualified: true,
+                    temporary_only: false,
+                };
+                catalog
+                    .load_table(t, None, form)
+                    .await
+                    .ok()
+                    .map(|m| m.is_some())
+            }
+            Securable::Namespace(n) => match n.as_slice() {
+                [catalog, namespace] if catalog == crate::catalog::CATALOG => {
+                    use crate::store::CatalogStore as _;
+                    let store = &self.state.catalog.store;
+                    Some(
+                        store.has_namespace(namespace)
+                            || (!cs && store.has_namespace(&namespace.to_lowercase())),
+                    )
+                }
+                _ => None,
+            },
+            _ => None,
         }
-        Ok(df)
     }
 
     /// The grants policy of this session, if it has one.
@@ -84,8 +156,84 @@ impl Session {
         self.state.grants.as_ref()
     }
 
-    /// The securable `object` names, located as analysis locates a read.
-    fn grant_securable(
+    /// The securable `object` names, located as analysis locates a read, in the catalog's
+    /// spelling (review M1, A2): an existing table or view as the catalog returns it (with its
+    /// columns), anything else as the catalog's create path would spell it (folded to lower case
+    /// unless `spark.sql.caseSensitive`).
+    async fn grant_securable(
+        &self,
+        object: &GrantObject,
+        env: &QueryEnv,
+    ) -> Result<(Securable, Vec<String>), KrishivError> {
+        let securable = self.written_securable(object, env)?;
+        let cs = env.analysis.conf.case_sensitive;
+        let fold_tail = |parts: &[String]| -> Vec<String> {
+            parts
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    if i == 0 || cs {
+                        p.clone()
+                    } else {
+                        p.to_lowercase()
+                    }
+                })
+                .collect()
+        };
+        Ok(match securable {
+            Securable::Table(t) | Securable::View(t) => {
+                let view = matches!(object, GrantObject::View(_));
+                let found = match env.analysis.catalogs.catalog(&t.catalog) {
+                    Some(c) => {
+                        let form = krishiv_plan::analyzer::NameForm {
+                            case_sensitive: cs,
+                            qualified: true,
+                            temporary_only: false,
+                        };
+                        c.load_table(&t, None, form).await.ok().flatten()
+                    }
+                    None => None,
+                };
+                let (ident, columns) = match found {
+                    Some(meta) => (
+                        meta.ident.clone(),
+                        meta.columns.iter().map(|c| c.name.clone()).collect(),
+                    ),
+                    None => (
+                        TableIdent {
+                            catalog: t.catalog.clone(),
+                            namespace: fold_tail(
+                                &std::iter::once(String::new())
+                                    .chain(t.namespace.iter().cloned())
+                                    .collect::<Vec<_>>(),
+                            )
+                            .into_iter()
+                            .skip(1)
+                            .collect(),
+                            name: fold_tail(&[String::new(), t.name.clone()])
+                                .pop()
+                                .unwrap_or_default(),
+                        },
+                        Vec::new(),
+                    ),
+                };
+                (
+                    if view {
+                        Securable::View(ident)
+                    } else {
+                        Securable::Table(ident)
+                    },
+                    columns,
+                )
+            }
+            Securable::Namespace(n) => (Securable::Namespace(fold_tail(&n)), Vec::new()),
+            Securable::Function(n) => (Securable::Function(fold_tail(&n)), Vec::new()),
+            other => (other, Vec::new()),
+        })
+    }
+
+    /// The securable `object` names as written, located as analysis locates a read.
+    fn written_securable(
         &self,
         object: &GrantObject,
         env: &QueryEnv,
@@ -164,10 +312,14 @@ impl Session {
                 grantees,
                 with_grant_option,
             } => {
-                let securable = self.grant_securable(object, env)?;
-                let rows = self.grant_rows(policy, &securable, privileges)?;
+                let (securable, columns) = self.grant_securable(object, env).await?;
+                let rows = self.grant_rows(policy, &securable, &columns, privileges)?;
                 let at = now_ms();
                 store.update(&mut |s: &mut GrantStateHandle| {
+                    // A role that does not exist would go to whoever creates it (review M3).
+                    missing_role(&s.0, grantees, admin, || {
+                        self.refuse(policy, &securable, Privilege::Manage)
+                    })?;
                     for (key, privilege) in &rows {
                         for grantee in grantees {
                             let row = s.0.grants.iter_mut().find(|g| {
@@ -198,14 +350,18 @@ impl Session {
                 object,
                 grantees,
             } => {
-                let securable = self.grant_securable(object, env)?;
-                let rows = self.grant_rows(policy, &securable, privileges)?;
+                let (securable, columns) = self.grant_securable(object, env).await?;
+                let rows = self.grant_rows(policy, &securable, &columns, privileges)?;
+                let cs = policy.case_sensitive();
                 store.update(&mut |s: &mut GrantStateHandle| {
+                    missing_role(&s.0, grantees, admin, || {
+                        self.refuse(policy, &securable, Privilege::Manage)
+                    })?;
                     let matches = |g: &GrantRow| {
                         grantees.contains(&g.grantee)
                             && rows
                                 .iter()
-                                .any(|(k, p)| g.object == *k && g.privilege == *p)
+                                .any(|(k, p)| g.object.same(k, cs) && g.privilege == *p)
                     };
                     if *grant_option_only {
                         s.0.grants
@@ -220,16 +376,19 @@ impl Session {
                 self.command_done().await
             }
             AccessCommand::ShowGrants { object, grantee } => {
-                let key =
-                    match object {
-                        Some(o) => {
-                            let securable = self.grant_securable(o, env)?;
-                            Some(ObjectKey::of(&securable).ok_or_else(|| {
-                                self.refuse(policy, &securable, Privilege::Browse)
-                            })?)
-                        }
-                        None => None,
-                    };
+                let key = match object {
+                    Some(o) => {
+                        let (securable, _) = self.grant_securable(o, env).await?;
+                        Some(
+                            ObjectKey::of(&securable)
+                                .and_then(super::physical_key)
+                                .ok_or_else(|| {
+                                    self.refuse(policy, &securable, Privilege::Browse)
+                                })?,
+                        )
+                    }
+                    None => None,
+                };
                 let state = store.snapshot();
                 let mine = state.0.effective(&principal);
                 let system = Securable::System(crate::system::SYSTEM.to_owned());
@@ -256,7 +415,12 @@ impl Session {
                     }
                     None => Some(mine),
                 };
-                let rows = show_rows(&state.0, key.as_ref(), who.as_ref());
+                let rows = show_rows(
+                    &state.0,
+                    key.as_ref(),
+                    who.as_ref(),
+                    policy.case_sensitive(),
+                );
                 self.ordered_frame(
                     &[
                         "principal",
@@ -365,6 +529,7 @@ impl Session {
         &self,
         policy: &GrantsPolicy,
         securable: &Securable,
+        known_columns: &[String],
         privileges: &GrantPrivileges,
     ) -> Result<Vec<(ObjectKey, Privilege)>, KrishivError> {
         let principal = &self.state.principal;
@@ -373,9 +538,10 @@ impl Session {
         if GrantsPolicy::decided_by(securable) != super::DecidedBy::Grants {
             return Err(refuse_all());
         }
-        let Some(key) = ObjectKey::of(securable) else {
+        let Some(key) = ObjectKey::of(securable).and_then(super::physical_key) else {
             return Err(refuse_all());
         };
+        let cs = policy.case_sensitive();
         let state = policy.grants().store().snapshot();
         let mut out = Vec::new();
         for (privilege, columns) in expand(privileges) {
@@ -385,14 +551,25 @@ impl Session {
                 columns
                     .iter()
                     .map(|c| {
+                        // The column in the table's spelling when the table has it.
+                        let spelled = known_columns
+                            .iter()
+                            .find(|k| {
+                                if cs {
+                                    *k == c
+                                } else {
+                                    k.eq_ignore_ascii_case(c)
+                                }
+                            })
+                            .unwrap_or(c);
                         let mut parts = key.parts.clone();
-                        parts.push(c.to_lowercase());
+                        parts.push(spelled.clone());
                         ObjectKey::new(KeyKind::Column, parts)
                     })
                     .collect()
             };
             for k in keys {
-                if !policy.is_admin() && !state.0.may_grant(principal, &k, privilege) {
+                if !policy.is_admin() && !state.0.may_grant(principal, &k, privilege, cs) {
                     return Err(self.refuse(policy, securable, privilege));
                 }
                 out.push((k, privilege));
@@ -427,6 +604,18 @@ impl Session {
             Statement::DropPermanentView(d) => (O::View(&d.name), false),
             Statement::DropNamespace(d) => (O::Namespace(&d.name), false),
             Statement::DropFunction(f) if !f.temporary => (O::Function(&f.name), false),
+            Statement::AlterTable(a) => match &a.action {
+                krishiv_sql::ast::AlterTableAction::RenameTo { name, .. } => {
+                    return self.renamed(O::Table(&a.table), name, false, env);
+                }
+                _ => return None,
+            },
+            Statement::AlterView(a) => match &a.action {
+                krishiv_sql::ast::AlterViewAction::RenameTo { name, .. } => {
+                    return self.renamed(O::View(&a.name), name, true, env);
+                }
+                _ => return None,
+            },
             _ => return None,
         };
         let securable = self.securables_of(object, env).ok()?.into_iter().next()?;
@@ -437,36 +626,167 @@ impl Session {
         })
     }
 
-    /// Records `change` after its statement succeeded: the creator owns a new object (an object
-    /// that already had an owner keeps it, so `IF NOT EXISTS` takes nothing); a dropped object's
-    /// owner and every grant on it or under it go, so a later object of the same name starts
-    /// with none.
-    pub(crate) fn apply_owner_change(&self, change: &OwnerChange) -> Result<(), KrishivError> {
+    /// Allows the managed location `location` of the table `namespace.name` of the session
+    /// catalog to the running statement when it is creating that table and the location does
+    /// not exist yet (review open point 2: `CREATE` on the namespace covers the directory the
+    /// engine chooses; an explicit `LOCATION` stays a path that needs a grant). Confinement still
+    /// applies: it wraps the grants.
+    pub(crate) fn allow_managed_location(
+        &self,
+        namespace: &str,
+        name: &str,
+        location: &std::path::Path,
+    ) {
         let Some(policy) = self.grants_policy() else {
-            return Ok(());
+            return;
         };
+        let relation = ObjectKey::new(
+            KeyKind::Relation,
+            vec![
+                crate::catalog::CATALOG.to_owned(),
+                namespace.to_owned(),
+                name.to_owned(),
+            ],
+        );
+        if location.exists() || !location.is_absolute() || !policy.is_creating(&relation) {
+            return;
+        }
+        let text = format!("file:{}", location.display());
+        let path = Securable::Path(krishiv_common::secret::OptionValue::from_user("path", text));
+        if let Some(key) = ObjectKey::of(&path).and_then(super::physical_key) {
+            policy.also_creating(key);
+        }
+    }
+
+    /// The creation of the table a DataFrame writer names (`saveAsTable`, `writeTo(..).create()`),
+    /// when grants are on.
+    pub(crate) fn created_table(&self, table: &str, env: &QueryEnv) -> Option<OwnerChange> {
+        self.grants_policy()?;
+        let parts: Vec<String> = krishiv_sql::parse_multipart_identifier(table, &env.parser)
+            .ok()?
+            .parts
+            .into_iter()
+            .map(|p| p.value)
+            .collect();
+        let ident = table_ident(&*env.analysis.catalogs, &parts)?;
+        Some(OwnerChange::Created(Securable::Table(ident)))
+    }
+
+    /// The rename of `object` to `to` (an unqualified new name stays in the object's namespace,
+    /// as Spark's session catalog renames).
+    fn renamed(
+        &self,
+        object: krishiv_sql::TargetObject<'_>,
+        to: &krishiv_sql::ast::DdlName,
+        view: bool,
+        env: &QueryEnv,
+    ) -> Option<OwnerChange> {
+        let from = self.securables_of(object, env).ok()?.into_iter().next()?;
+        let (Securable::Table(old) | Securable::View(old)) = &from else {
+            return None;
+        };
+        let parts = crate::access::ddl_parts(to, env).ok()?;
+        let new = match parts.as_slice() {
+            [name] => TableIdent {
+                name: name.clone(),
+                ..old.clone()
+            },
+            _ => table_ident(&*env.analysis.catalogs, &parts)?,
+        };
+        let to = if view {
+            Securable::View(new)
+        } else {
+            Securable::Table(new)
+        };
+        Some(OwnerChange::Renamed { from, to })
+    }
+
+    /// Records `change` after its statement succeeded (under the DDL lock, see
+    /// [`Self::with_owner_change`]): the creator owns an object that did not exist `before` and
+    /// does now, and anything left under its name (an object dropped out of band) goes; a
+    /// dropped object's owner and every grant on it or under it go, so a later object of the same
+    /// name starts with none; a rename moves them, clearing what was under the new name. The
+    /// change and the epoch bump are one store update.
+    async fn apply_owner_change(
+        &self,
+        policy: &GrantsPolicy,
+        change: &OwnerChange,
+        before: Option<bool>,
+        env: &QueryEnv,
+    ) -> Result<(), KrishivError> {
         let me = self.state.principal.name.clone();
-        let (OwnerChange::Created(s) | OwnerChange::Dropped(s)) = change;
-        let Some(key) = ObjectKey::of(s) else {
-            return Ok(());
+        let cs = policy.case_sensitive();
+        let key = |s: &Securable| ObjectKey::of(s);
+        let edit: Box<dyn Fn(&mut GrantState) + Send> = match change {
+            OwnerChange::Created(s) => {
+                let after = self.object_exists(s, env).await;
+                let (Some(false), Some(true), Some(k)) = (before, after, key(s)) else {
+                    return Ok(());
+                };
+                Box::new(move |state| {
+                    state.owners.retain(|o, _| !o.covered_by(&k, cs));
+                    state.grants.retain(|g| !g.object.covered_by(&k, cs));
+                    state.owners.insert(k.clone(), me.clone());
+                })
+            }
+            OwnerChange::Dropped(s) => {
+                if self.object_exists(s, env).await == Some(true) {
+                    return Ok(());
+                }
+                let Some(k) = key(s) else {
+                    return Ok(());
+                };
+                Box::new(move |state| {
+                    state.owners.retain(|o, _| !o.covered_by(&k, cs));
+                    state.grants.retain(|g| !g.object.covered_by(&k, cs));
+                })
+            }
+            OwnerChange::Renamed { from, to } => {
+                let (Some(from_key), Some(to_key)) = (key(from), key(to)) else {
+                    return Ok(());
+                };
+                // A rename that did not happen moves nothing; one that cannot be told clears
+                // the old name (its records never follow a name to another object).
+                let moved = self.object_exists(to, env).await == Some(true)
+                    && self.object_exists(from, env).await != Some(true);
+                let still_there = self.object_exists(from, env).await == Some(true);
+                if still_there {
+                    return Ok(());
+                }
+                Box::new(move |state| {
+                    state.owners.retain(|o, _| !o.covered_by(&to_key, cs));
+                    state.grants.retain(|g| !g.object.covered_by(&to_key, cs));
+                    let owners = std::mem::take(&mut state.owners);
+                    for (o, owner) in owners {
+                        match o.renamed(&from_key, &to_key, cs) {
+                            Some(n) if moved => {
+                                state.owners.insert(n, owner);
+                            }
+                            Some(_) => {}
+                            None => {
+                                state.owners.insert(o, owner);
+                            }
+                        }
+                    }
+                    let grants = std::mem::take(&mut state.grants);
+                    for mut g in grants {
+                        match g.object.renamed(&from_key, &to_key, cs) {
+                            Some(n) if moved => {
+                                g.object = n;
+                                state.grants.push(g);
+                            }
+                            Some(_) => {}
+                            None => state.grants.push(g),
+                        }
+                    }
+                })
+            }
         };
         policy
             .grants()
             .store()
             .update(&mut |state: &mut GrantStateHandle| {
-                match change {
-                    OwnerChange::Created(_) => {
-                        state
-                            .0
-                            .owners
-                            .entry(key.clone())
-                            .or_insert_with(|| me.clone());
-                    }
-                    OwnerChange::Dropped(_) => {
-                        state.0.owners.retain(|k, _| !k.covered_by(&key));
-                        state.0.grants.retain(|g| !g.object.covered_by(&key));
-                    }
-                }
+                edit(&mut state.0);
                 Ok(())
             })?;
         Ok(())
@@ -479,8 +799,9 @@ fn show_rows(
     state: &GrantState,
     key: Option<&ObjectKey>,
     who: Option<&BTreeSet<Grantee>>,
+    cs: bool,
 ) -> Vec<Vec<Option<String>>> {
-    let on = |k: &ObjectKey| key.is_none_or(|key| key.covered_by(k) || k.covered_by(key));
+    let on = |k: &ObjectKey| key.is_none_or(|key| key.covered_by(k, cs) || k.covered_by(key, cs));
     let mut rows = Vec::new();
     for (k, owner) in &state.owners {
         let grantee = Grantee::User(owner.clone());
@@ -516,6 +837,28 @@ fn show_rows(
         ]);
     }
     rows
+}
+
+/// Refuses a grant to or revoke from a `role:` that does not exist (review M3): an admin learns
+/// it is missing (`KRISHIV_ROLE_NOT_FOUND`), anyone else gets `refused` (no existence oracle).
+fn missing_role(
+    state: &GrantState,
+    grantees: &[Grantee],
+    admin: bool,
+    refused: impl Fn() -> KrishivError,
+) -> Result<(), KrishivError> {
+    for g in grantees {
+        if let Grantee::Role(role) = g
+            && !state.roles.contains_key(role)
+        {
+            return Err(if admin {
+                KrishivRoleNotFound { role: quote(role) }.into()
+            } else {
+                refused()
+            });
+        }
+    }
+    Ok(())
 }
 
 fn quote(name: &str) -> String {

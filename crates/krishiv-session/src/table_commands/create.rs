@@ -303,6 +303,9 @@ impl Session {
             .into());
         }
         let location = table.location.clone();
+        if table.managed {
+            self.allow_managed_location(&table.namespace, &table.name, &location);
+        }
         self.authorize_path(&location, &[Privilege::Create], StatementClass::Ddl)
             .await?;
         // Spark creates the directory of a managed table only; an external table's location is
@@ -394,6 +397,7 @@ impl Session {
         // The policy is asked about the destination first: a denied CTAS must not create the warehouse or
         // the table directory on the way to being refused (the writer asks again for the files it writes).
         if table.managed {
+            self.allow_managed_location(&table.namespace, &table.name, &table.location);
             self.authorize_path(
                 &table.location,
                 &[Privilege::Modify, Privilege::Create],

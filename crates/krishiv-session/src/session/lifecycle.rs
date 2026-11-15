@@ -149,6 +149,9 @@ impl Session {
                 sql_sources: AtomicU32::new(seed.sql_sources),
             }),
         };
+        if let Some(grants) = &session.state.grants {
+            grants.bind_conf(&session.state.conf);
+        }
         session
             .state
             .runtime

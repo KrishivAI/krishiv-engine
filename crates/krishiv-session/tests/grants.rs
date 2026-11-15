@@ -376,7 +376,9 @@ fn denials_are_counted_by_privilege_and_provider() {
             .find(|c| c.privilege == privilege && c.provider == provider)
             .map_or(0, |c| c.count)
     };
-    assert!(count(Privilege::Browse, DecidedBy::Grants) >= 1);
+    // A read refused at Bind (asked as Browse) is counted as the SELECT it needs (review m6).
+    assert_eq!(count(Privilege::Select, DecidedBy::Grants), 1);
+    assert_eq!(count(Privilege::Browse, DecidedBy::Grants), 0);
     assert_eq!(count(Privilege::Select, DecidedBy::Roles), 1);
 }
 

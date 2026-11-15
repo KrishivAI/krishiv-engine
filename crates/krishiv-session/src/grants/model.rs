@@ -56,16 +56,12 @@ impl KeyKind {
     }
 }
 
-/// A normalised securable: names folded to lower case (Spark's catalogs are case-insensitive;
-/// see the report's amendment on case-sensitive analysis), paths normalised.
+/// A securable as a grant key: names in the catalog's spelling (never folded; they match as the
+/// catalog resolves them, see [`Self::same`]), paths normalised.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct ObjectKey {
     pub(crate) kind: KeyKind,
     pub(crate) parts: Vec<String>,
-}
-
-fn fold(parts: &[String]) -> Vec<String> {
-    parts.iter().map(|p| p.to_lowercase()).collect()
 }
 
 impl ObjectKey {
@@ -80,19 +76,19 @@ impl ObjectKey {
             let mut parts = vec![t.catalog.clone()];
             parts.extend(t.namespace.iter().cloned());
             parts.push(t.name.clone());
-            fold(&parts)
+            parts
         };
         Some(match securable {
             Securable::Table(t) | Securable::View(t) => Self::new(KeyKind::Relation, relation(t)),
             Securable::Column { table, column } => {
                 let mut parts = relation(table);
-                parts.push(column.to_lowercase());
+                parts.push(column.clone());
                 Self::new(KeyKind::Column, parts)
             }
-            Securable::Function(n) if !n.is_empty() => Self::new(KeyKind::Function, fold(n)),
-            Securable::Namespace(n) if !n.is_empty() => Self::new(KeyKind::Namespace, fold(n)),
+            Securable::Function(n) if !n.is_empty() => Self::new(KeyKind::Function, n.clone()),
+            Securable::Namespace(n) if !n.is_empty() => Self::new(KeyKind::Namespace, n.clone()),
             Securable::Path(p) => Self::new(KeyKind::Path, vec![path_key(&p.to_string())?]),
-            Securable::Connection(c) => Self::new(KeyKind::Connection, vec![c.to_lowercase()]),
+            Securable::Connection(c) => Self::new(KeyKind::Connection, vec![c.clone()]),
             Securable::Secret { scope } => Self::new(KeyKind::Secret, vec![scope.clone()]),
             _ => return None,
         })
@@ -120,9 +116,29 @@ impl ObjectKey {
         out
     }
 
-    /// Whether a grant on `grant` covers this key: one of its [lineage](Self::lineage), or for a
-    /// path a prefix of whole segments.
-    pub(crate) fn covered_by(&self, grant: &Self) -> bool {
+    /// Whether `other` names the same object: the same kind and parts, compared as the catalog
+    /// resolves names (exactly when `case_sensitive`, ignoring ASCII case otherwise; catalog
+    /// object names only: paths, connections and secret scopes always exactly).
+    pub(crate) fn same(&self, other: &Self, case_sensitive: bool) -> bool {
+        let folds = !case_sensitive
+            && matches!(
+                self.kind,
+                KeyKind::Namespace | KeyKind::Relation | KeyKind::Column | KeyKind::Function
+            );
+        self.kind == other.kind
+            && self.parts.len() == other.parts.len()
+            && self.parts.iter().zip(&other.parts).all(|(a, b)| {
+                if folds {
+                    a.eq_ignore_ascii_case(b)
+                } else {
+                    a == b
+                }
+            })
+    }
+
+    /// Whether a grant on `grant` covers this key: one of its [lineage](Self::lineage) (see
+    /// [`Self::same`]), or for a path a prefix of whole segments.
+    pub(crate) fn covered_by(&self, grant: &Self, case_sensitive: bool) -> bool {
         if self.kind == KeyKind::Path {
             return grant.kind == KeyKind::Path
                 && match (self.parts.first(), grant.parts.first()) {
@@ -130,7 +146,18 @@ impl ObjectKey {
                     _ => false,
                 };
         }
-        self.lineage().contains(grant)
+        self.lineage().iter().any(|k| k.same(grant, case_sensitive))
+    }
+
+    /// This key with the leading parts `from` replaced by `to` when it is `from` or under it
+    /// (a rename moves the object's keys and its columns').
+    pub(crate) fn renamed(&self, from: &Self, to: &Self, case_sensitive: bool) -> Option<Self> {
+        if self.kind == KeyKind::Path || !self.covered_by(from, case_sensitive) {
+            return None;
+        }
+        let mut parts = to.parts.clone();
+        parts.extend(self.parts.iter().skip(from.parts.len()).cloned());
+        Some(Self::new(self.kind, parts))
     }
 
     /// The key as `SHOW GRANTS` prints it (parts joined by `.`; a path as is).
@@ -256,10 +283,10 @@ impl GrantState {
     }
 
     /// Whether `principal` owns `key` or one of its parents.
-    pub(crate) fn owns(&self, principal: &Principal, key: &ObjectKey) -> bool {
+    pub(crate) fn owns(&self, principal: &Principal, key: &ObjectKey, cs: bool) -> bool {
         self.owners
             .iter()
-            .any(|(k, owner)| *owner == principal.name && key.covered_by(k))
+            .any(|(k, owner)| *owner == principal.name && key.covered_by(k, cs))
     }
 
     /// The rows of `grantees` that cover `key`.
@@ -267,10 +294,11 @@ impl GrantState {
         &'a self,
         grantees: &'a BTreeSet<Grantee>,
         key: &'a ObjectKey,
+        cs: bool,
     ) -> impl Iterator<Item = &'a GrantRow> + 'a {
         self.grants
             .iter()
-            .filter(move |g| grantees.contains(&g.grantee) && key.covered_by(&g.object))
+            .filter(move |g| grantees.contains(&g.grantee) && key.covered_by(&g.object, cs))
     }
 
     /// Whether `principal` holds `privilege` on `key` (note §2.1): an owner holds everything; a
@@ -281,22 +309,26 @@ impl GrantState {
         principal: &Principal,
         key: &ObjectKey,
         privilege: Privilege,
+        cs: bool,
     ) -> bool {
-        if self.owns(principal, key) {
+        if self.owns(principal, key, cs) {
             return true;
         }
         let grantees = self.effective(principal);
         if privilege == Privilege::Browse {
-            return self.covering(&grantees, key).next().is_some()
+            return self.covering(&grantees, key, cs).next().is_some()
                 || (key.kind == KeyKind::Relation
                     && self.grants.iter().any(|g| {
                         grantees.contains(&g.grantee)
                             && g.object.kind == KeyKind::Column
-                            && g.object.parts[..g.object.parts.len().saturating_sub(1)]
-                                == key.parts[..]
+                            && ObjectKey::new(
+                                KeyKind::Relation,
+                                g.object.parts[..g.object.parts.len().saturating_sub(1)].to_vec(),
+                            )
+                            .same(key, cs)
                     }));
         }
-        self.covering(&grantees, key)
+        self.covering(&grantees, key, cs)
             .any(|g| g.privilege == privilege)
     }
 
@@ -307,12 +339,13 @@ impl GrantState {
         principal: &Principal,
         key: &ObjectKey,
         privilege: Privilege,
+        cs: bool,
     ) -> bool {
-        if self.owns(principal, key) {
+        if self.owns(principal, key, cs) {
             return true;
         }
         let grantees = self.effective(principal);
-        self.covering(&grantees, key)
+        self.covering(&grantees, key, cs)
             .any(|g| g.privilege == privilege && g.with_grant_option)
     }
 
@@ -384,7 +417,9 @@ mod tests {
     #[test]
     fn lineage_runs_to_the_catalog() {
         let key = table("C", "S", "T");
-        assert_eq!(key.parts, ["c", "s", "t"]);
+        assert_eq!(key.parts, ["C", "S", "T"]);
+        assert!(key.same(&table("c", "s", "t"), false));
+        assert!(!key.same(&table("c", "s", "t"), true));
         let names: Vec<(KeyKind, String)> = key
             .lineage()
             .into_iter()
@@ -393,9 +428,9 @@ mod tests {
         assert_eq!(
             names,
             [
-                (KeyKind::Relation, "c.s.t".to_owned()),
-                (KeyKind::Namespace, "c.s".to_owned()),
-                (KeyKind::Namespace, "c".to_owned()),
+                (KeyKind::Relation, "C.S.T".to_owned()),
+                (KeyKind::Namespace, "C.S".to_owned()),
+                (KeyKind::Namespace, "C".to_owned()),
             ]
         );
     }
