@@ -153,7 +153,7 @@ pub(crate) struct SessionState {
     base_functions: Option<Arc<dyn FunctionRegistry>>,
     /// The session's registered UDFs, shared with the registry above and
     /// the workers running its plans.
-    udfs: Arc<UdfLibrary>,
+    pub(crate) udfs: Arc<UdfLibrary>,
     /// The session's Python UDFs (P2-T059), shared with the registry above:
     /// plans name them by name and version only.
     pub(crate) python_udfs: Arc<crate::python_udfs::PythonUdfLibrary>,
@@ -1505,39 +1505,6 @@ impl Session {
                 None => Ok(views),
             }
         })
-    }
-
-    /// The schema binding of each stored view `reads` inlined (`view_schema`): its query analyzed alone, inner
-    /// views first. Returns the evolved entries to store once the whole query analyzed, and the renames of reads.
-    ///
-    /// # Errors
-    /// What [`crate::view_schema::check_read`] raises.
-    async fn check_stored_views(
-        &self,
-        reads: &[crate::view_schema::StoredRead],
-        env: &QueryEnv,
-    ) -> Result<crate::view_schema::StoredViewChecks, KrishivError> {
-        let compensation = crate::view_schema::compensation(&env.config);
-        let mut synced = Vec::new();
-        let mut renames = Vec::new();
-        for read in reads {
-            // A view whose query does not analyze alone is left to the outer query.
-            let Ok(plan) = Plan::try_new(crate::view_schema::apply_renames(&read.query, &renames))
-            else {
-                continue;
-            };
-            let Ok(analyzed) = DefaultAnalyzer.analyze(&plan, &env.analysis).await else {
-                continue;
-            };
-            let case_sensitive = env.analysis.conf.case_sensitive;
-            let check =
-                crate::view_schema::check_read(read, &analyzed, case_sensitive, compensation)?;
-            if let Some(changed) = check.changed {
-                synced.push((Arc::clone(&read.entry), changed));
-            }
-            renames.extend(check.rename);
-        }
-        Ok((synced, renames))
     }
 
     /// The physical plan of `analyzed`, once the files it scans are

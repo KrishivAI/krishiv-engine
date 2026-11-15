@@ -198,33 +198,6 @@ fn one_query_reads_one_snapshot_and_the_next_query_the_new_one() {
     assert_eq!(count(&s), [[Value::from(3)]]);
 }
 
-/// The oracle's `DESCRIBE` rows with a NULL comment as the empty string: Krishiv's `DESCRIBE`
-/// prints a missing comment as `""` for every table, Spark as NULL (a known difference of
-/// `DESCRIBE`, not of Delta tables).
-fn comments_as_empty(rows: &Value) -> Value {
-    Value::from(
-        rows.as_array()
-            .unwrap()
-            .iter()
-            .map(|r| {
-                Value::from(
-                    r.as_array()
-                        .unwrap()
-                        .iter()
-                        .map(|c| {
-                            if c.is_null() {
-                                Value::from("")
-                            } else {
-                                c.clone()
-                            }
-                        })
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .collect::<Vec<_>>(),
-    )
-}
-
 #[test]
 fn a_catalog_table_without_columns_takes_the_logs() {
     let t = Table::copy("session-table");
@@ -236,7 +209,7 @@ fn a_catalog_table_without_columns_takes_the_logs() {
     .unwrap();
     let describe = session_record("describe");
     let got = rows_of(&block_on(block_on(s.sql("DESCRIBE d")).unwrap().collect()).unwrap());
-    assert_eq!(Value::from(got), comments_as_empty(&describe["rows"]));
+    assert_eq!(Value::from(got), describe["rows"].clone());
     assert_eq!(
         Value::from(query(&s, "SELECT * FROM d ORDER BY id")),
         session_record("select")["rows"]
@@ -256,7 +229,7 @@ fn a_catalog_table_without_columns_takes_the_logs() {
     let got = rows_of(&block_on(block_on(s.sql("DESCRIBE same2")).unwrap().collect()).unwrap());
     assert_eq!(
         Value::from(got),
-        comments_as_empty(&session_record("describe_matching_columns")["rows"])
+        session_record("describe_matching_columns")["rows"].clone()
     );
 }
 
