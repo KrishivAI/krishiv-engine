@@ -173,6 +173,125 @@ async fn an_overwrite_conflicts_with_a_later_commit() {
 }
 
 #[tokio::test]
+async fn a_snapshot_at_a_version_is_that_version_not_the_newest() {
+    let s = setup();
+    let l = log(&s);
+    l.commit(None, &entry("a", CommitMode::Append, &["f1", "f2"], &[]))
+        .await
+        .unwrap();
+    l.commit(
+        Some(0),
+        &entry("b", CommitMode::Overwrite, &["f3"], &["f1", "f2"]),
+    )
+    .await
+    .unwrap();
+    l.commit(Some(1), &entry("c", CommitMode::Append, &["f4"], &[]))
+        .await
+        .unwrap();
+    let at0 = l.snapshot_at(0).await.unwrap();
+    assert_eq!((at0.version, names(&at0)), (Some(0), vec!["f1", "f2"]));
+    let at1 = l.snapshot_at(1).await.unwrap();
+    assert_eq!((at1.version, names(&at1)), (Some(1), vec!["f3"]));
+    // The newest is the path read.
+    assert_eq!(l.snapshot_at(2).await.unwrap(), l.snapshot().await.unwrap());
+    assert_eq!(names(&l.snapshot().await.unwrap()), ["f3", "f4"]);
+}
+
+#[tokio::test]
+async fn a_snapshot_at_a_version_the_log_does_not_reach_is_corruption_not_the_newest() {
+    let s = setup();
+    let l = log(&s);
+    // No log at all.
+    let e = l.snapshot_at(0).await.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivCommitLogCorrupt);
+    l.commit(None, &entry("a", CommitMode::Append, &["f1"], &[]))
+        .await
+        .unwrap();
+    assert!(l.snapshot_at(0).await.is_ok());
+    // A catalog entry that pins a version the log never wrote must not silently read an older one.
+    let e = l.snapshot_at(1).await.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivCommitLogCorrupt);
+    assert!(e.to_string().contains("version 1 does not exist"), "{e}");
+    assert_eq!(
+        l.snapshot_at(u64::MAX).await.unwrap_err().error_class(),
+        ErrorClass::KrishivCommitLogCorrupt
+    );
+}
+
+#[tokio::test]
+async fn a_snapshot_at_a_version_after_a_checkpoint_uses_it_and_one_before_replays_the_entries() {
+    let s = setup();
+    let l = log(&s);
+    let mut base = None;
+    for i in 0..(CHECKPOINT_EVERY + 5) {
+        let v = l
+            .commit(
+                base,
+                &entry(
+                    &format!("w{i}"),
+                    CommitMode::Append,
+                    &[&format!("f{i:03}")],
+                    &[],
+                ),
+            )
+            .await
+            .unwrap();
+        base = Some(v);
+    }
+    let before = CHECKPOINT_EVERY - 3;
+    let after = CHECKPOINT_EVERY + 2;
+    let at_before = l.snapshot_at(before).await.unwrap();
+    assert_eq!(at_before.files.len(), usize::try_from(before + 1).unwrap());
+    let at_after = l.snapshot_at(after).await.unwrap();
+    assert_eq!(at_after.files.len(), usize::try_from(after + 1).unwrap());
+    // With the entries the checkpoint covers gone, a version after it still reads, and one before it is corrupt.
+    for v in 0..CHECKPOINT_EVERY {
+        s.inner
+            .delete(&Path::from(format!("t/_krishiv_log/{v:020}.json")))
+            .await
+            .unwrap();
+    }
+    assert_eq!(l.snapshot_at(after).await.unwrap(), at_after);
+    assert_eq!(
+        l.snapshot_at(before).await.unwrap_err().error_class(),
+        ErrorClass::KrishivCommitLogCorrupt
+    );
+}
+
+/// A version between two checkpoints is read from the older one, not reported corrupt because the newest is past it.
+#[tokio::test]
+async fn a_snapshot_at_a_version_between_two_checkpoints_starts_from_the_older_one() {
+    let s = setup();
+    let l = log(&s);
+    let mut base = None;
+    for i in 0..(2 * CHECKPOINT_EVERY + 3) {
+        let v = l
+            .commit(
+                base,
+                &entry(
+                    &format!("w{i}"),
+                    CommitMode::Append,
+                    &[&format!("f{i:03}")],
+                    &[],
+                ),
+            )
+            .await
+            .unwrap();
+        base = Some(v);
+    }
+    let between = CHECKPOINT_EVERY + 4;
+    let expected = l.snapshot_at(between).await.unwrap();
+    // The entries the older checkpoint covers are pruned, as a retention job would.
+    for v in 0..CHECKPOINT_EVERY {
+        s.inner
+            .delete(&Path::from(format!("t/_krishiv_log/{v:020}.json")))
+            .await
+            .unwrap();
+    }
+    assert_eq!(l.snapshot_at(between).await.unwrap(), expected);
+}
+
+#[tokio::test]
 async fn a_checkpoint_bounds_replay_and_equals_the_full_replay() {
     let s = setup();
     let l = log(&s);

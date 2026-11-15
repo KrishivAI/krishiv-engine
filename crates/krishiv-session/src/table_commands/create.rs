@@ -132,6 +132,7 @@ impl Session {
             column_stats: BTreeMap::new(),
             incarnation: 0,
             data_version: 0,
+            stamp: 0,
         };
         if is_delta_table(&table) {
             let located = location_text.is_some();
@@ -550,6 +551,7 @@ impl Session {
             column_stats: BTreeMap::new(),
             incarnation: 0,
             data_version: 0,
+            stamp: 0,
         };
         if is_delta_table(&table) {
             return Err(delta_write_refused(name.quoted(), "CREATE TABLE LIKE"));

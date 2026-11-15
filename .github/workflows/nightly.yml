@@ -196,7 +196,18 @@ jobs:
       # nightly after all tests pass ("functions have mismatched data", then a stack dump), as it
       # did every night from 2026-10-26 (the probe PR #440 ran the four variants: only
       # `--no-branch` completes). Branch coverage returns when the LLVM bug is fixed.
+      # The Python UDF worker interpreter of krishiv-udf-pool's tests, as in CI's `test` job (the
+      # crate's coverage floor assumes real workers ran).
+      - uses: $/.github/actions/setup-uv
+      - name: UDF worker interpreter
+        run: |
+          uv venv --python 3.12 "$RUNNER_TEMP/udf-python"
+          uv pip install --python "$RUNNER_TEMP/udf-python/bin/python" \
+            "pyspark-client==4.2.1" "pyarrow==26.0.1" "pandas==3.1.1" "numpy==2.5.4"
       - run: cargo xtask coverage --all-features --html --no-branch
+        env:
+          KRISHIV_TEST_UDF_PYTHON: ${{ runner.temp }}/udf-python/bin/python
+          KRISHIV_UDF_POOL_REQUIRED: "1"
       - name: Per-crate summary
         run: cargo xtask coverage-summary --markdown | tee -a "$GITHUB_STEP_SUMMARY"
       # The newest coverage-report artifact is the previous nightly's (this run uploads its own
@@ -388,6 +399,8 @@ jobs:
           tool: sccache@0.18.0
       - name: Golden ratchet through the wire format
         run: "cargo test -p krishiv-testkit --release --locked --test golden_ratchet serialize_through_matches_the_frozen_baseline -- --ignored"
+      - name: ICU collation goldens (collations-icu)
+        run: "cargo test -p krishiv-testkit --release --locked --features collations-icu --test golden_icu"
 
   # Object stores against throw-away emulators (P2-T084): krishiv-io's S3 (MinIO) and Azure (Azurite) round trips,
   # then TPC-H SF1 uploaded to MinIO and read back over `s3a://`, equal to the local answers. The script names and

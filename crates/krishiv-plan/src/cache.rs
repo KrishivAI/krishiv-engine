@@ -904,6 +904,23 @@ impl Encoder {
                 self.expr(count, bias);
                 self.plan(input, bias);
             }
+            PlanNode::Sample {
+                input,
+                bounds,
+                seed,
+            } => {
+                self.tag("Sample");
+                self.num(bounds.lower.to_bits());
+                self.num(bounds.upper.to_bits());
+                match seed {
+                    Some(s) => {
+                        self.tag("seed");
+                        self.num(s.cast_unsigned());
+                    }
+                    None => self.tag("unseeded"),
+                }
+                self.plan(input, bias);
+            }
             PlanNode::Generate {
                 input,
                 kind,
@@ -1834,6 +1851,7 @@ mod tests {
             reads_files: false,
             timings: crate::analyzer::AnalysisTimings::default(),
             warnings: Vec::new(),
+            views: Vec::new(),
         };
         let base = CacheKey::of(&analyzed("a", 7));
         assert_ne!(CacheKey::of(&analyzed("b", 7)), base, "principals");
