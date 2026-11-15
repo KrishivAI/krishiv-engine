@@ -234,3 +234,33 @@ fn the_hash_keeps_nullability_and_every_field_of_the_type() {
     assert_ne!(hash_of(wide("x")), hash_of(wide("y")));
     assert_eq!(hash_of(wide("x")), hash_of(wide("x")));
 }
+
+#[test]
+fn debug_and_data_type_of_nested_literals() {
+    let arr = ints(&[1]);
+    let map = Literal::key_value_map(
+        MapType::new(DataType::String, DataType::Integer, true),
+        vec![(Literal::String("a".to_owned()), Literal::Integer(1))],
+    )
+    .unwrap();
+    let st_type = StructType::new([StructField::new("a", DataType::Integer, false)]);
+    let st = Literal::struct_value(st_type.clone(), vec![Literal::Integer(1)]).unwrap();
+    assert!(format!("{arr:?}").starts_with("Array"));
+    assert!(format!("{map:?}").starts_with("KeyValueMap"));
+    assert!(format!("{st:?}").starts_with("Struct"));
+    assert_eq!(
+        arr.data_type(),
+        Some(DataType::Array(
+            ArrayType::new(DataType::Integer, true).into()
+        ))
+    );
+    assert!(matches!(map.data_type(), Some(DataType::Map(_))));
+    assert_eq!(st.data_type(), Some(DataType::Struct(st_type)));
+    let interval = Literal::CalendarInterval {
+        months: 1,
+        days: 2,
+        micros: 3,
+    };
+    assert!(format!("{interval:?}").starts_with("CalendarInterval"));
+    assert_eq!(interval.data_type(), Some(DataType::CalendarInterval));
+}
