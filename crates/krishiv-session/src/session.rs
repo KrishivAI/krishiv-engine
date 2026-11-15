@@ -1337,6 +1337,9 @@ impl Session {
             sql: Some(Arc::new(Frontend { options: parser })),
             files: Some(files),
             variables: Arc::clone(&variables),
+            // `DataFrame::analyzed_for_metadata` / `schema_for_metadata` switch one analysis to
+            // `Metadata`; every other analysis may run the plan.
+            mode: krishiv_plan::analyzer::AnalysisMode::Execute,
         };
         // The epoch the query's catalog reads at: entries it loads are at
         // least as new.
@@ -1443,9 +1446,16 @@ impl Session {
         // Analysis checks every read: its denials are the reads' denials.
         let mut analyzed = crate::access::audit(self, StatementClass::Read, analyzed)?;
         // Spark's `ViewSyncSchemaToMetaStore`: once the query analyzed, evolved views store their new schema. A
-        // concurrent change of the view wins (its entry is no longer the one the read found).
-        for (found, changed) in synced {
-            crate::store::CatalogStore::replace_table(&*self.state.catalog.store, &found, changed);
+        // concurrent change of the view wins (its entry is no longer the one the read found). A metadata
+        // analysis (`Browse` only) changes nothing in the catalog: the next run stores it.
+        if env.analysis.mode == krishiv_plan::analyzer::AnalysisMode::Execute {
+            for (found, changed) in synced {
+                crate::store::CatalogStore::replace_table(
+                    &*self.state.catalog.store,
+                    &found,
+                    changed,
+                );
+            }
         }
         // The view side table: where each view the query and its functions' bodies inlined landed.
         inlined.extend(env.sql_functions.body_views());
@@ -1457,7 +1467,7 @@ impl Session {
                     .securables
                     .push(krishiv_plan::analyzer::SecurableUse {
                         securable,
-                        privilege: krishiv_plan::analyzer::Privilege::Select,
+                        privilege: env.analysis.mode.read_privilege(),
                         columns: std::collections::BTreeSet::new(),
                     });
             }

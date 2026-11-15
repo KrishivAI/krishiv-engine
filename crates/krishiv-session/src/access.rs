@@ -244,7 +244,9 @@ impl Session {
     /// them is read: permanent views are inlined before binding, so the analyzer never asks about
     /// them. Each name is asked as the analyzer asks about a table (as written, then folded, whether
     /// or not it exists, so a denial cannot tell a view from a missing name), then a permanent view
-    /// is asked as a view. Returns the views, for the securables the analysis reports.
+    /// is asked as a view. Each is asked the analysis' read privilege (`Select`; `Browse` for a
+    /// metadata analysis, `AnalysisMode::Metadata`). Returns the views, for the securables the
+    /// analysis reports.
     pub(crate) async fn authorize_reads(
         &self,
         reads: &[crate::catalog::ReadCandidate],
@@ -284,7 +286,7 @@ impl Session {
                     &*self.state.policy,
                     &self.state.principal,
                     &securable,
-                    Privilege::Select,
+                    env.analysis.mode.read_privilege(),
                 )
                 .await;
                 audit(self, StatementClass::Read, r)?;

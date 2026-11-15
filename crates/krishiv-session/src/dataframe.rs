@@ -31,6 +31,7 @@ use crate::session::{QueryEnv, RecordBatchStream, Session, WriteTarget, read_fil
 pub(crate) mod checkpoint;
 mod fill_stream;
 mod geo_gate;
+mod metadata;
 mod traced;
 
 pub(crate) use fill_stream::{CacheFill, FillKind};
@@ -160,6 +161,16 @@ pub enum ExplainMode {
 pub(crate) struct Analysis {
     pub(crate) env: Arc<QueryEnv>,
     pub(crate) analyzed: Arc<AnalyzedPlan>,
+}
+
+/// The schema a client sees of `analyzed`'s output: names, Arrow types and nullability.
+fn client_schema_of(analyzed: &AnalyzedPlan) -> SchemaRef {
+    let fields: Vec<_> = analyzed
+        .output
+        .iter()
+        .map(|c| c.data_type.to_arrow_field(c.name.clone(), c.nullable))
+        .collect();
+    crate::carrier::client_schema(&Schema::new(fields))
 }
 
 /// A lazy query: its rows are computed by actions (`collect`,
@@ -1106,14 +1117,7 @@ impl DataFrame {
     }
 
     async fn schema_here(&self) -> Result<SchemaRef, KrishivError> {
-        let a = self.analysis().await?;
-        let fields: Vec<_> = a
-            .analyzed
-            .output
-            .iter()
-            .map(|c| c.data_type.to_arrow_field(c.name.clone(), c.nullable))
-            .collect();
-        Ok(crate::carrier::client_schema(&Schema::new(fields)))
+        Ok(client_schema_of(&self.analysis().await?.analyzed))
     }
 
     /// Runs the query; its result rows, in batches. Dropping the stream
