@@ -700,9 +700,11 @@ fn fold(ident: &TableIdent, case_sensitive: bool) -> TableIdent {
     }
 }
 
-/// Asks the policy about `securable` once per query; a denial or any policy
-/// error fails closed, without the policy's reason or error text, and row
-/// filters and column masks are rejected until they can be applied.
+/// Asks the policy about the read of `securable` (a table, view or path) once per query, as the
+/// analysis' [`AnalysisMode::read_privilege`](super::AnalysisMode::read_privilege) (`Select`, or
+/// `Browse` for a metadata analysis); a denial or any policy error fails closed, without the
+/// policy's reason or error text, and row filters and column masks on a `Select` are rejected
+/// until they can be applied.
 async fn authorize(
     ctx: &AnalysisContext,
     b: &mut Bindings,
@@ -710,7 +712,15 @@ async fn authorize(
     securable: Securable,
     origin: Origin,
 ) -> Result<usize, AnalysisError> {
-    authorize_as(ctx, b, checked, securable, Privilege::Select, origin).await
+    authorize_as(
+        ctx,
+        b,
+        checked,
+        securable,
+        ctx.mode.read_privilege(),
+        origin,
+    )
+    .await
 }
 
 /// `USAGE` on each secret scope in `scopes` (E12).

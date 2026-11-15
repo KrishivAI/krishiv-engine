@@ -1833,6 +1833,7 @@ mod tests {
             policy: PolicyVersion(7),
             files: false,
             variables: 0,
+            mode: crate::analyzer::AnalysisMode::Execute,
         };
         let analyzed = |principal: &str, policy: u64| crate::analyzer::AnalyzedPlan {
             plan: plan.clone(),
