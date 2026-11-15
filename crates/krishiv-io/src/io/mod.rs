@@ -465,6 +465,14 @@ impl IoScheduler {
         })
     }
 
+    /// The I/O runtime requests run on ([`Self::with_runtime`]), if any:
+    /// what a library that spawns its own I/O tasks (iceberg-rust's
+    /// `Runtime`) is handed, so its work stays off the compute workers.
+    #[must_use]
+    pub fn runtime(&self) -> Option<&tokio::runtime::Handle> {
+        self.runtime.as_ref()
+    }
+
     /// The HTTP clients stores registered on this scheduler share (see
     /// [`crate::query_registry`]).
     #[must_use]
