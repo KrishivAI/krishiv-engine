@@ -114,16 +114,38 @@ impl GrantStore for MemoryGrantStore {
 pub struct FileGrantStore {
     path: PathBuf,
     cell: Cell,
+    /// The exclusive lock on `<file>.lock`, held while the store is open (review m2): a second
+    /// opener (another process) would keep a snapshot of its own and lose writes.
+    _lock: std::fs::File,
 }
 
 impl FileGrantStore {
-    /// Opens the store at `path`, creating an empty one when the file does not exist.
+    /// Opens the store at `path`, creating an empty one when the file does not exist, and holds
+    /// an exclusive lock on `<path>.lock` until it is dropped.
     ///
     /// # Errors
     /// `KRISHIV_GRANTS_STORE_FAILURE` for a file that cannot be read, is malformed or has a newer
-    /// format version.
+    /// format version, and when the store is already open (in this or another process).
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, KrishivError> {
         let path = path.into();
+        let mut lock_name = path.as_os_str().to_os_string();
+        lock_name.push(".lock");
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let lock = options
+            .open(PathBuf::from(lock_name))
+            .map_err(|e| failure("open", &e.kind().to_string()))?;
+        lock.try_lock().map_err(|e| match e {
+            std::fs::TryLockError::WouldBlock => {
+                failure("open", "the store is already open in another process")
+            }
+            std::fs::TryLockError::Error(e) => failure("open", &e.kind().to_string()),
+        })?;
         let state = match std::fs::metadata(&path) {
             Ok(meta) if meta.len() > MAX_FILE_BYTES => {
                 return Err(failure("read", "the file is larger than 64 MiB"));
@@ -142,6 +164,7 @@ impl FileGrantStore {
                 current: RwLock::new(Arc::new(GrantStateHandle(state))),
                 writer: Mutex::new(()),
             },
+            _lock: lock,
         })
     }
 
@@ -187,21 +210,35 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), KrishivError> {
     let name = path
         .file_name()
         .ok_or_else(|| failure("written", "the path names no file"))?;
+    // A fresh name, created exclusively (review m2): a file or link planted at a fixed name is
+    // never followed or reused, and the new file gets its mode.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let mut tmp_name = name.to_os_string();
-    tmp_name.push(".tmp");
+    tmp_name.push(format!(
+        ".tmp.{}.{}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     let tmp = dir.join(tmp_name);
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
         options.mode(0o600);
     }
     let mut file = options.open(&tmp).map_err(io)?;
-    file.write_all(bytes).map_err(io)?;
-    file.sync_all().map_err(io)?;
-    drop(file);
-    std::fs::rename(&tmp, path).map_err(io)?;
+    let written = file
+        .write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .and_then(|()| {
+            drop(file);
+            std::fs::rename(&tmp, path)
+        });
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(io(e));
+    }
     #[cfg(unix)]
     std::fs::File::open(dir)
         .and_then(|d| d.sync_all())
@@ -452,6 +489,9 @@ mod tests {
             Err(failure("updated", "test"))
         });
         assert!(e.is_err());
+        // One opener at a time (review m2).
+        assert!(FileGrantStore::open(&path).is_err());
+        drop(store);
         let reopened = FileGrantStore::open(&path).unwrap();
         assert_eq!(*reopened.snapshot(), *s);
         #[cfg(unix)]
@@ -460,7 +500,9 @@ mod tests {
             let mode = std::fs::metadata(&path).unwrap().permissions().mode();
             assert_eq!(mode & 0o077, 0, "{mode:o}");
         }
+        drop(reopened);
         std::fs::write(&path, b"{").unwrap();
-        assert!(FileGrantStore::open(&path).is_err());
+        let e = FileGrantStore::open(&path).unwrap_err();
+        assert!(e.to_string().contains("malformed"), "{e}");
     }
 }
