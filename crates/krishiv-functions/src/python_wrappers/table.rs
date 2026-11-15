@@ -120,6 +120,10 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "the analyzer's `find_in_set` over `UTF8_LCASE` strings",
     ),
     (
+        "__icu_case",
+        "the analyzer's upper/lower over strings of an ICU collation",
+    ),
+    (
         "__trim_collated",
         "the analyzer's trim family over `UTF8_LCASE` and `_RTRIM` strings",
     ),

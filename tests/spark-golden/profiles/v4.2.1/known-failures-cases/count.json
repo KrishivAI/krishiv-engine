@@ -1,0 +1,10 @@
+{
+  "cases": {
+    "nested-interval-types": [
+      1,
+      2
+    ]
+  },
+  "file": "count",
+  "format_version": 1
+}

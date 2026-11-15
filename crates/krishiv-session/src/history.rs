@@ -132,6 +132,7 @@ fn java_uuid(text: &str) -> Option<Arc<str>> {
 pub struct QueryOptions {
     pub(crate) operation_id: Option<String>,
     pub(crate) deadline: Option<std::time::Duration>,
+    pub(crate) request_tags: Vec<Arc<str>>,
 }
 
 impl QueryOptions {
@@ -159,6 +160,20 @@ impl QueryOptions {
     /// statement can tighten the session's limit, never loosen it.
     pub fn deadline(mut self, limit: std::time::Duration) -> Self {
         self.deadline = Some(limit);
+        self
+    }
+
+    /// Tags the statement's queries with the request tags `tags` (Spark Connect's
+    /// `ExecutePlanRequest.tags`: opaque strings, already validated by the caller). They last for
+    /// these queries only; each shows in `system.queries.tags` as the pair `(tag, "")` beside the
+    /// session's tags, is what a resource group's `clientTags` selector sees, and
+    /// [`crate::Session::interrupt_tag`] cancels by exact match.
+    pub fn tags<I, T>(mut self, tags: I) -> Self
+    where
+        I: IntoIterator<Item = T>,
+        T: AsRef<str>,
+    {
+        self.request_tags = tags.into_iter().map(|t| Arc::from(t.as_ref())).collect();
         self
     }
 }

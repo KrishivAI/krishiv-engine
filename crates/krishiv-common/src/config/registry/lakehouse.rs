@@ -3,6 +3,8 @@
 //! limits (P3-T021 design note section 3.2, P3 lakehouse design section 5.6) and the Iceberg
 //! manifest cache (P3-T026 design note section 2.3).
 
+use std::time::Duration;
+
 use super::MIB;
 use crate::config::{ConfigEntry, ConfigValue, Scope, SettableBy, ValueType};
 
@@ -97,6 +99,20 @@ pub static ICEBERG_COMMIT_MAX_INTERVENING: ConfigEntry = ConfigEntry {
           validate nothing and ignore it. Read when the write is planned.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
+/// How long one catalog call may take before it fails.
+pub static CATALOG_REQUEST_TIMEOUT: ConfigEntry = ConfigEntry {
+    key: "krishiv.catalog.requestTimeout",
+    value_type: ValueType::Duration,
+    default: Some(ConfigValue::Duration(Duration::from_secs(30))),
+    doc: "Longest one request to an external catalog (Hive metastore, Unity Catalog, Iceberg REST) \
+          may take, connect and response included. A stalled catalog fails the call with \
+          `KRISHIV_CATALOG_FAILURE` naming the catalog. Redirects from a catalog are never followed.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.2.0",
     spark_alias: None,
 };

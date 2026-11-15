@@ -4,21 +4,34 @@
 //! implementation of it, [`ConnectService`].
 //!
 //! T001 implements the session RPCs (`ReleaseSession`) and what every RPC
-//! shares (the principal, the draining refusal). `ExecutePlan`,
-//! `AnalyzePlan`, `Config`, `Interrupt` and the rest answer `UNIMPLEMENTED`
-//! until T011a.
+//! shares (the principal, the draining refusal). T011a (PR-11a) adds
+//! `ExecutePlan` (`crate::execute`), `ReattachExecute` and `ReleaseExecute`
+//! (with the replay buffer, sender caps and detach of PR-15a, design
+//! P3-T011a §3.8). PR-11b adds `AnalyzePlan` (`crate::analyze`), `Config`
+//! (`crate::config`) and `Interrupt` (`crate::interrupt`); the rest answer
+//! `UNIMPLEMENTED` until PR-15.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use krishiv_common::error::{
+    ConnectInvalidPlanInvalidOneOfFieldNotSet, InvalidCursorNotReattachable,
+    InvalidHandleOperationAbandoned, InvalidHandleOperationNotFound, KrishivError,
+};
 use krishiv_common::principal::Principal;
 use krishiv_connect::proto::v4_3 as pb;
+use krishiv_connect::proto::v4_3::release_execute_request::Release;
 use krishiv_connect::wire::Decoded;
 use tonic::codegen::BoxStream;
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::codec::WireCodec;
-use crate::manager::SessionManager;
+use crate::execute::ResponseBudget;
+use crate::manager::{SessionEntry, SessionManager};
+use crate::operation::ExecuteLimits;
+use crate::sender::{self, SenderCaps};
+use crate::status::status_of;
+use crate::{analyze, config, execute, interrupt};
 
 /// The generated server side of `spark.connect.SparkConnectService`.
 #[expect(
@@ -49,6 +62,8 @@ pub struct ConnectService {
     manager: Arc<SessionManager>,
     draining: Arc<AtomicBool>,
     local: Principal,
+    limits: ExecuteLimits,
+    budget: ResponseBudget,
 }
 
 impl ConnectService {
@@ -60,7 +75,31 @@ impl ConnectService {
             manager,
             draining,
             local: Principal::local_user(),
+            budget: ResponseBudget::new(ExecuteLimits::default().max_response_bytes),
+            limits: ExecuteLimits::default(),
         }
+    }
+
+    /// This service with the `ExecutePlan` limits `limits` (and a response
+    /// budget of `limits.max_response_bytes`).
+    #[must_use]
+    pub fn with_limits(mut self, limits: ExecuteLimits) -> Self {
+        self.budget = ResponseBudget::new(limits.max_response_bytes);
+        self.limits = limits;
+        self
+    }
+
+    /// This service sharing the server's response budget `budget`.
+    #[must_use]
+    pub fn with_budget(mut self, budget: ResponseBudget) -> Self {
+        self.budget = budget;
+        self
+    }
+
+    /// The server's response budget (`krishiv.connect.maxResponseBytes`).
+    #[must_use]
+    pub fn response_budget(&self) -> &ResponseBudget {
+        &self.budget
     }
 
     /// The session manager.
@@ -80,6 +119,22 @@ impl ConnectService {
         }
     }
 
+    /// The session `session_id` of `principal`, created if needed, its
+    /// server-side id checked against the client's (the get-or-create RPCs
+    /// of design P3-T011a §2.1).
+    fn session(
+        &self,
+        principal: &Principal,
+        session_id: &str,
+        observed: Option<&str>,
+        user: Option<&pb::UserContext>,
+    ) -> Result<Arc<SessionEntry>, Status> {
+        let user = user.map_or("", |u| u.user_id.as_str());
+        self.manager
+            .get_or_create(principal, session_id, observed, user)
+            .map_err(|e| status_of(&e))
+    }
+
     fn unimplemented(&self, rpc: &str) -> Status {
         match self.admit() {
             Err(s) => s,
@@ -92,25 +147,79 @@ impl SparkConnectService for ConnectService {
     type ExecutePlanStream = BoxStream<pb::ExecutePlanResponse>;
     type ReattachExecuteStream = BoxStream<pb::ExecutePlanResponse>;
 
+    /// Spark's `SparkConnectExecutePlanHandler`: the session is looked up
+    /// or created (its server-side id checked), the operation started
+    /// (`crate::execute`).
     async fn execute_plan(
         &self,
-        _request: Request<Decoded<pb::ExecutePlanRequest>>,
+        request: Request<Decoded<pb::ExecutePlanRequest>>,
     ) -> Result<Response<Self::ExecutePlanStream>, Status> {
-        Err(self.unimplemented("ExecutePlan"))
+        self.admit()?;
+        let principal = principal_of(&request, &self.local);
+        let request = request.into_inner();
+        let entry = self.session(
+            &principal,
+            &request.session_id,
+            request.client_observed_server_side_session_id.as_deref(),
+            request.user_context.as_ref(),
+        )?;
+        // An abandoned id is refused (Spark's `createExecuteHolder`, v4.3.0
+        // lines 105-120); a live one is attached to by `execute_plan`.
+        if let Some(id) = &request.operation_id
+            && entry.operations().get(id).is_none()
+            && self
+                .manager
+                .is_abandoned(&principal, &request.session_id, id)
+        {
+            return Err(status_of(
+                &InvalidHandleOperationAbandoned { handle: id.clone() }.into(),
+            ));
+        }
+        let stream = execute::execute_plan(&entry, &request, &self.limits, &self.budget)
+            .await
+            .map_err(|e| status_of(&e))?;
+        Ok(Response::new(stream))
     }
 
+    /// Spark's `SparkConnectAnalyzeHandler`: the session is looked up or
+    /// created, the plan translated and analyzed (`crate::analyze`).
     async fn analyze_plan(
         &self,
-        _request: Request<Decoded<pb::AnalyzePlanRequest>>,
+        request: Request<Decoded<pb::AnalyzePlanRequest>>,
     ) -> Result<Response<pb::AnalyzePlanResponse>, Status> {
-        Err(self.unimplemented("AnalyzePlan"))
+        self.admit()?;
+        let principal = principal_of(&request, &self.local);
+        let request = request.into_inner();
+        let entry = self.session(
+            &principal,
+            &request.session_id,
+            request.client_observed_server_side_session_id.as_deref(),
+            request.user_context.as_ref(),
+        )?;
+        analyze::analyze_plan(&entry, &request, &self.limits)
+            .await
+            .map(Response::new)
+            .map_err(|e| status_of(&e))
     }
 
+    /// Spark's `SparkConnectConfigHandler`: the session is looked up or
+    /// created (`crate::config`).
     async fn config(
         &self,
-        _request: Request<Decoded<pb::ConfigRequest>>,
+        request: Request<Decoded<pb::ConfigRequest>>,
     ) -> Result<Response<pb::ConfigResponse>, Status> {
-        Err(self.unimplemented("Config"))
+        self.admit()?;
+        let principal = principal_of(&request, &self.local);
+        let request = request.into_inner();
+        let entry = self.session(
+            &principal,
+            &request.session_id,
+            request.client_observed_server_side_session_id.as_deref(),
+            request.user_context.as_ref(),
+        )?;
+        config::config(&entry, &request, &principal, config::role_of(&principal))
+            .map(Response::new)
+            .map_err(|e| status_of(&e))
     }
 
     async fn add_artifacts(
@@ -127,25 +236,131 @@ impl SparkConnectService for ConnectService {
         Err(self.unimplemented("ArtifactStatus"))
     }
 
+    /// Spark's `SparkConnectInterruptHandler`: the session is looked up or
+    /// created (`crate::interrupt`).
     async fn interrupt(
         &self,
-        _request: Request<Decoded<pb::InterruptRequest>>,
+        request: Request<Decoded<pb::InterruptRequest>>,
     ) -> Result<Response<pb::InterruptResponse>, Status> {
-        Err(self.unimplemented("Interrupt"))
+        self.admit()?;
+        let principal = principal_of(&request, &self.local);
+        let request = request.into_inner();
+        let entry = self.session(
+            &principal,
+            &request.session_id,
+            request.client_observed_server_side_session_id.as_deref(),
+            request.user_context.as_ref(),
+        )?;
+        interrupt::interrupt(&entry, &request)
+            .map(Response::new)
+            .map_err(|e| status_of(&e))
     }
 
+    /// Spark's `SparkConnectReattachExecuteHandler` (v4.3.0 lines 30-66)
+    /// and `SparkConnectExecutionManager.reattachExecuteHolder` (lines
+    /// 227-252): the session is looked up (its server-side id checked); an
+    /// unknown operation is `INVALID_HANDLE.OPERATION_ABANDONED` when it was
+    /// abandoned, else `OPERATION_NOT_FOUND`; one that is not reattachable
+    /// is `INVALID_CURSOR.NOT_REATTACHABLE`; `last_response_id` must name a
+    /// response it produced (`INVALID_CURSOR.POSITION_NOT_FOUND`). A new
+    /// sender then resumes after it, and the sender attached before ends
+    /// with `INVALID_CURSOR.DISCONNECTED`.
     async fn reattach_execute(
         &self,
-        _request: Request<Decoded<pb::ReattachExecuteRequest>>,
+        request: Request<Decoded<pb::ReattachExecuteRequest>>,
     ) -> Result<Response<Self::ReattachExecuteStream>, Status> {
-        Err(self.unimplemented("ReattachExecute"))
+        self.admit()?;
+        let principal = principal_of(&request, &self.local);
+        let request = request.into_inner();
+        let entry = self
+            .manager
+            .get(
+                &principal,
+                &request.session_id,
+                request.client_observed_server_side_session_id.as_deref(),
+            )
+            .map_err(|e| status_of(&e))?;
+        let Some(op) = entry.operations().get(&request.operation_id) else {
+            let handle = request.operation_id.clone();
+            let error: KrishivError =
+                if self
+                    .manager
+                    .is_abandoned(&principal, &request.session_id, &request.operation_id)
+                {
+                    InvalidHandleOperationAbandoned { handle }.into()
+                } else {
+                    InvalidHandleOperationNotFound { handle }.into()
+                };
+            return Err(status_of(&error));
+        };
+        if !op.reattachable() {
+            return Err(status_of(&InvalidCursorNotReattachable {}.into()));
+        }
+        // Looked up before attaching: an unknown id leaves the attached
+        // sender alone (`ExecuteHolder.runGrpcResponseSender`, lines 192-198).
+        let after = match &request.last_response_id {
+            Some(id) => op.replay().index_of(id).map_err(|e| status_of(&e))?,
+            None => 0,
+        };
+        let caps = SenderCaps::of(&op, &self.limits);
+        Ok(Response::new(sender::attach(
+            op,
+            Arc::clone(entry.operations()),
+            after,
+            caps,
+        )))
     }
 
+    /// Spark's `SparkConnectReleaseExecuteHandler` (v4.3.0 lines 31-69): the
+    /// session is looked up without the server-side id check; an unknown
+    /// operation is a success without `operation_id`. `release_all` removes
+    /// and closes the operation (no tombstone); `release_until` drops its
+    /// buffered responses up to the id, `INVALID_CURSOR.POSITION_NOT_FOUND`
+    /// for an id it never produced.
     async fn release_execute(
         &self,
-        _request: Request<Decoded<pb::ReleaseExecuteRequest>>,
+        request: Request<Decoded<pb::ReleaseExecuteRequest>>,
     ) -> Result<Response<pb::ReleaseExecuteResponse>, Status> {
-        Err(self.unimplemented("ReleaseExecute"))
+        self.admit()?;
+        let principal = principal_of(&request, &self.local);
+        let request = request.into_inner();
+        let entry = self
+            .manager
+            .get(&principal, &request.session_id, None)
+            .map_err(|e| status_of(&e))?;
+        let mut response = pb::ReleaseExecuteResponse {
+            session_id: request.session_id.clone(),
+            server_side_session_id: entry.server_side_id().to_owned(),
+            operation_id: None,
+        };
+        if let Some(op) = entry.operations().get(&request.operation_id) {
+            if !op.reattachable() {
+                return Err(status_of(&InvalidCursorNotReattachable {}.into()));
+            }
+            response.operation_id = Some(op.id().as_str().to_owned());
+            match &request.release {
+                Some(Release::ReleaseAll(_)) => {
+                    entry.operations().remove(&op);
+                    op.close();
+                }
+                Some(Release::ReleaseUntil(until)) => {
+                    op.replay()
+                        .release_until(&until.response_id)
+                        .map_err(|e| status_of(&e))?;
+                }
+                // Spark throws a classless UnsupportedOperationException.
+                None => {
+                    return Err(status_of(
+                        &ConnectInvalidPlanInvalidOneOfFieldNotSet {
+                            full_name: "spark.connect.ReleaseExecuteRequest".to_owned(),
+                            name: "RELEASE_NOT_SET".to_owned(),
+                        }
+                        .into(),
+                    ));
+                }
+            }
+        }
+        Ok(Response::new(response))
     }
 
     /// Spark's `SparkConnectReleaseSessionHandler`: an unknown session is a

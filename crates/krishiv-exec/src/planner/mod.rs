@@ -59,7 +59,8 @@ pub use explain::ExplainNode;
 pub use file_table::FileTable;
 pub use ndv_sample::{SampleOptions, SampleOutcome, SampleResult};
 pub use table::{
-    MemoryTable, MemoryTables, ProviderStatistics, TableProvider, TableProviderResolver,
+    MemoryTable, MemoryTables, ProviderStatistics, SpilledTable, TableProvider,
+    TableProviderResolver,
 };
 pub use write::{TableCapabilities, WriteMode, WriteRequest};
 

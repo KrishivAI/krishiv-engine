@@ -115,6 +115,8 @@ pub struct Session {
     pub(crate) operation: Option<Arc<crate::history::Operation>>,
     /// The statement's own time limit ([`crate::QueryOptions::deadline`]).
     pub(crate) deadline: Option<std::time::Duration>,
+    /// The statement's request tags ([`crate::QueryOptions::tags`]).
+    pub(crate) request_tags: Arc<[Arc<str>]>,
 }
 
 impl fmt::Debug for Session {
@@ -160,7 +162,9 @@ pub(crate) struct SessionState {
     /// The session's number on its runtime.
     pub(crate) number: u64,
     /// Set by [`Session::close`]: the session takes no new statement.
-    closed: AtomicBool,
+    pub(crate) closed: AtomicBool,
+    /// What `system.sessions` shows that changes per call.
+    pub(crate) activity: crate::sessions::Activity,
     /// The session's memory pool: the runtime's root, or a pool of its own
     /// under the root (`krishiv.session.memoryLimit`).
     pub(crate) memory: Arc<dyn MemoryPool>,
@@ -189,6 +193,13 @@ pub(crate) struct SessionState {
 
 impl Drop for SessionState {
     fn drop(&mut self) {
+        self.runtime.sessions.retire(self.number, || {
+            crate::sessions::SessionRow::of(
+                self,
+                Some(crate::sessions::End::Closed("client_gone")),
+                0,
+            )
+        });
         self.runtime.forget_session(self.number);
     }
 }
@@ -484,8 +495,8 @@ impl Session {
         let (session, text) = (self.clone(), query.to_owned());
         let row: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
         let marker = Arc::clone(&row);
-        let result = self
-            .on_executor(async move {
+        let (result, cancelled) = self
+            .on_executor_reasoned(async move {
                 let seq = session.state.statements.fetch_add(1, Ordering::Relaxed);
                 use tracing::Instrument as _;
                 let trace = crate::telemetry::QueryTrace::of(seq, &text);
@@ -504,13 +515,18 @@ impl Session {
         if let Err(error) = &result
             && row.lock().unwrap_or_else(PoisonError::into_inner).is_none()
         {
-            self.state.queries.record_refused(
+            let id = self.state.queries.record_refused(
                 crate::system::TextPolicy::from_config(&self.state.conf.snapshot()),
                 Some(krishiv_sql::redact_sql(query).as_str()),
                 None,
                 error,
                 self.operation_id(),
             );
+            self.state.queries.add_request_tags(&id, &self.request_tags);
+            // Ended by `cancel`/`interrupt_all` while it was analyzed (`action.rs`).
+            if let Some(reason) = cancelled {
+                self.state.queries.note_cancel_reason(&id, reason);
+            }
         }
         result
     }
@@ -884,9 +900,9 @@ impl Session {
                 table: Arc::new(table),
             },
         );
-        // Replacing a table drops what was cached from the old one, as
-        // replacing a temporary view does in Spark.
-        self.state.cache.invalidate_table(name);
+        // Replacing a table drops what was cached from the old one, and the
+        // registrations over it, as replacing a temporary view does in Spark.
+        self.state.cache.forget_table(name);
         Ok(())
     }
 
@@ -982,7 +998,7 @@ impl Session {
             return false;
         }
         let dropped = self.state.catalog.drop_table(name);
-        self.state.cache.invalidate_table(name);
+        self.state.cache.forget_table(name);
         dropped
     }
 
@@ -1008,7 +1024,7 @@ impl Session {
     /// # Ok::<(), krishiv_common::error::KrishivError>(())
     /// ```
     pub fn uncache_table(&self, name: &str) {
-        self.state.cache.invalidate_table(name);
+        self.state.cache.forget_table(name);
     }
 
     /// Drops the cached relations reading the table `name` (Spark's
@@ -1109,17 +1125,39 @@ impl Session {
         &self,
         work: impl Future<Output = Result<T, KrishivError>> + Send + 'static,
     ) -> Result<T, KrishivError> {
+        // Boxed: the work is held once, not in both futures (`clippy::large_futures` at the callers).
+        self.on_executor_reasoned(Box::pin(work)).await.0
+    }
+
+    /// [`Self::on_executor`], also returning the reason the action was ended
+    /// with before any query of it was reserved, if it was (for the row of a
+    /// statement that ended before its query existed).
+    pub(crate) async fn on_executor_reasoned<T: Send + 'static>(
+        &self,
+        work: impl Future<Output = Result<T, KrishivError>> + Send + 'static,
+    ) -> (Result<T, KrishivError>, Option<crate::CancelReason>) {
         let (tx, rx) = tokio::sync::oneshot::channel();
+        // Registered from here on: `cancel` and `interrupt_all` reach the
+        // action during analysis and planning too (`action.rs`).
+        let action = self.state.runtime.actions.begin_tagged(
+            self.state.number,
+            self.operation_id().map(crate::QueryId::as_str),
+            self.tagging(),
+        );
+        let reason = action.reason();
         let task = self.state.runtime.executor.spawn(
             WorkloadClass::Interactive,
             Box::pin(async move {
                 // The caller may be gone; its result is then not needed.
-                let _ = tx.send(work.await);
+                let _ = tx.send(action.run(work).await);
             }),
         );
         let _abort = AbortOnDrop(task);
-        rx.await
-            .map_err(|_| internal("a session task ended without a result".to_owned()))?
+        let result = match rx.await {
+            Ok(result) => result,
+            Err(_) => Err(internal("a session task ended without a result".to_owned())),
+        };
+        (result, reason.ended_with())
     }
 
     /// A fresh DataFrame plan id.
@@ -1215,6 +1253,7 @@ impl Session {
                 io: Arc::clone(&self.state.io),
                 relations: Arc::clone(&self.state.cache),
                 metrics: Arc::clone(&self.state.runtime.metrics),
+                sessions: self.state.runtime.session_view(),
                 monitor: Arc::new(crate::system::Monitor::new(
                     Arc::clone(&self.state.principal),
                     Arc::clone(&self.state.policy),
@@ -1307,10 +1346,15 @@ impl Session {
         env: &QueryEnv,
         text: Option<&RedactedSql>,
     ) -> Result<AnalyzedPlan, KrishivError> {
+        // A store setting this session redirected (endpoint, region, account) could send the
+        // server's credentials to another host:
+        // asked once per analysis, before any table or file is read (P3-T067b).
+        self.authorize_store_options(StatementClass::Read, &env.config, std::iter::empty())
+            .await?;
         // Temporary views over queries inline as subqueries, so the
         // analyzer sees one plan however the view was made.
         let next_source = || self.next_source_id();
-        let expansion = crate::catalog::expand_views(
+        let mut expansion = crate::catalog::expand_views(
             &self.state.catalog,
             plan,
             env.analysis.conf.case_sensitive,
@@ -1332,6 +1376,7 @@ impl Session {
                 }),
             }),
         )?;
+        let mut inlined = std::mem::take(&mut expansion.views);
         // A permanent view is inlined before binding, so the analyzer never asks the
         // policy about it: ask here, before any read and before the text of a stored view
         // can fail, so a principal who may not read it learns nothing from it.
@@ -1371,6 +1416,9 @@ impl Session {
         for (found, changed) in synced {
             crate::store::CatalogStore::replace_table(&*self.state.catalog.store, &found, changed);
         }
+        // The view side table: where each view the query and its functions' bodies inlined landed.
+        inlined.extend(env.sql_functions.body_views());
+        analyzed.views = krishiv_plan::analyzer::views::locate_views(analyzed.plan.root(), inlined);
         for view in views {
             let securable = krishiv_plan::analyzer::Securable::View(view);
             if !analyzed.securables.iter().any(|s| s.securable == securable) {
@@ -1588,6 +1636,33 @@ impl Session {
         Ok((crate::run_site::resolve_sites(stream, env), query))
     }
 
+    /// The tags a query started now carries: the session's, then the statement's request tags as
+    /// `(tag, "")` pairs (a key appears once; design P3-T064 §4.3).
+    pub(crate) fn effective_tags(&self) -> Vec<(String, String)> {
+        let mut tags = self.state.queries.tags_now();
+        crate::action::merge_request_tags(&mut tags, &self.request_tags);
+        tags
+    }
+
+    /// [`Self::tagging`] with the tags row `log_id` was recorded with, so a `set_tag` while the
+    /// query waited for admission does not change what cancel by tag sees.
+    pub(crate) fn tagging_of_row(&self, log_id: &str) -> crate::action::Tagging {
+        let mut tagging = self.tagging();
+        if let Some(tags) = self.state.queries.row_tags(log_id) {
+            tagging.tags = tags.into();
+        }
+        tagging
+    }
+
+    /// The principal and tags of a statement started now, for cancel by tag.
+    pub(crate) fn tagging(&self) -> crate::action::Tagging {
+        crate::action::Tagging {
+            principal: Arc::from(self.state.principal.name.as_str()),
+            tags: self.effective_tags().into(),
+            request_tags: Arc::clone(&self.request_tags),
+        }
+    }
+
     /// Asks the admission controller for a permit for the query whose
     /// `system.queries` row is `log_id`. A controller that answers at once
     /// leaves the row `running`; one that waits shows it `queued`. A refusal
@@ -1605,8 +1680,10 @@ impl Session {
         }
         let request = QueryRequest {
             principal: Arc::clone(&self.state.principal),
-            tags: self.state.queries.tags_now(),
+            tags: self.effective_tags(),
             class: WorkloadClass::Interactive,
+            source: None,
+            statement_class: None,
             estimate: env.catalog.estimate(),
         };
         let controller = Arc::clone(&self.state.admission);
@@ -1630,7 +1707,12 @@ impl Session {
         queued.open = false;
         match admitted {
             Ok(permit) => {
-                self.state.queries.mark_started(log_id);
+                let queued_ns = permit
+                    .slot::<crate::resource_groups::GroupSlot>()
+                    .map_or(0, crate::resource_groups::GroupSlot::queued_ns);
+                self.state
+                    .queries
+                    .mark_started(log_id, permit.group(), queued_ns);
                 Ok(permit)
             }
             Err(error) => {
@@ -1655,6 +1737,11 @@ impl Session {
             env.statement_class,
             self.operation_id(),
         )?;
+        crate::action::note_row(&log_id);
+        // The request tags join the row's tags at once, so a queued query shows them too.
+        self.state
+            .queries
+            .add_request_tags(&log_id, &self.request_tags);
         *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
         let permit = self.admit(&log_id, env, exempt).await?;
         Ok(Admitted::new(Arc::clone(&self.state), log_id, permit))
@@ -1682,18 +1769,23 @@ impl Session {
                 .await?
                 .into_parts(),
         };
-        let id = QueryId(self.state.runtime.reserve(
+        self.state.activity.query_started();
+        let id = QueryId(self.state.runtime.reserve_tagged(
             self.state.number,
             self.state.queries.session_id(),
             &log_id,
+            self.tagging_of_row(&log_id),
         ));
-        let pool = self
-            .state
-            .memory
-            .child(&crate::system::pool_name(&log_id), permit.memory_budget());
+        let pool = self.state.memory.child_with_priority(
+            &crate::system::pool_name(&log_id),
+            permit.memory_budget(),
+            permit
+                .priority()
+                .unwrap_or(krishiv_memory::DEFAULT_PRIORITY),
+        );
         let query = QueryContext::new(
             id,
-            WorkloadClass::Interactive,
+            permit.class().unwrap_or(WorkloadClass::Interactive),
             ExecConfig {
                 detailed_metrics: detailed,
                 ..ExecConfig::from_config(&env.config)

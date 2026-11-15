@@ -1,0 +1,22 @@
+{
+ "created_by": "CREATE TABLE delta.`{p}` (id BIGINT, v VARIANT) USING delta TBLPROPERTIES ('delta.enableVariantShredding' = 'true')",
+ "delta_spark": "4.4.1",
+ "format_version": 1,
+ "generator": "tests/scripts/gen_delta_fixtures.py",
+ "protocol": {
+  "minReaderVersion": 3,
+  "minWriterVersion": 7,
+  "readerFeatures": [
+   "variantType",
+   "variantShredding-preview"
+  ],
+  "writerFeatures": [
+   "variantType",
+   "variantShredding-preview",
+   "invariants",
+   "appendOnly"
+  ]
+ },
+ "refused": true,
+ "spark": "4.2.0"
+}

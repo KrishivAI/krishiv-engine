@@ -1,0 +1,16 @@
+{
+  "cases": {
+    "query-features": [
+      7,
+      28,
+      39,
+      99,
+      101,
+      114,
+      115,
+      141
+    ]
+  },
+  "file": "join-lateral",
+  "format_version": 1
+}

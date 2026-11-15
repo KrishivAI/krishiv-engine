@@ -1,0 +1,12 @@
+{
+  "cases": {
+    "fn-json": [
+      121
+    ],
+    "fn-url-xml-csv": [
+      122
+    ]
+  },
+  "file": "timestampNTZ/timestamp-ansi",
+  "format_version": 1
+}

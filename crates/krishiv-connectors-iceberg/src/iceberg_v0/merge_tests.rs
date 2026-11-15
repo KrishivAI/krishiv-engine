@@ -79,6 +79,7 @@ impl Table {
                 files,
                 id,
                 &format!("uuid-{id}"),
+                &mut Vec::new(),
             ))
             .unwrap()
     }

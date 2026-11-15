@@ -1,0 +1,17 @@
+{
+  "category": "test-udfs",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "file": "^(udf|udaf|udtf)/",
+      "order": 60
+    },
+    {
+      "detail": "Cannot resolve routine `(udf|udaf|vol|booleq|boolne)`",
+      "order": 70
+    }
+  ],
+  "summary": "the suite's Python/Scala test UDFs (udf/, udaf/, udtf/ folders)",
+  "task": "P2-T059"
+}

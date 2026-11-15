@@ -563,7 +563,7 @@ fn written_files_append_and_read_back() {
         .collect();
     let io = env.reg.file_io();
     let attempt = env.rt.block_on(async {
-        let mut new = write_new_manifests(&io, &m0, entries, 501, "uuid-501")
+        let mut new = write_new_manifests(&io, &m0, entries, 501, "uuid-501", &mut Vec::new())
             .await
             .unwrap();
         prepare_attempt(&io, &m0, &mut new, ids("w1"), now(&m0), MAX)
@@ -668,7 +668,10 @@ fn dropped_writer_deletes_its_files() {
 /// finished before it are deleted.
 #[test]
 fn failed_upload_deletes_the_finished_files() {
-    let store = Arc::new(FailThird(object_store::local::LocalFileSystem::new()));
+    let store = Arc::new(FailSuffix(
+        object_store::local::LocalFileSystem::new(),
+        "-00003.parquet",
+    ));
     let env = env_on(store, krishiv_io::IoConfig::default());
     let m = table(&env, "t", &[], &[("write.target-file-size-bytes", "1")]);
     let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
@@ -690,13 +693,17 @@ fn failed_upload_deletes_the_finished_files() {
     assert_eq!(pool.reserved(), 0);
 }
 
-/// The local file system refusing writes of files named `*-00003.parquet`.
+/// The local file system refusing writes of files whose path ends with the
+/// suffix (`-00003.parquet` here; `rolling_tests` refuses a manifest).
 #[derive(Debug)]
-struct FailThird(object_store::local::LocalFileSystem);
+pub(super) struct FailSuffix(
+    pub(super) object_store::local::LocalFileSystem,
+    pub(super) &'static str,
+);
 
-impl std::fmt::Display for FailThird {
+impl std::fmt::Display for FailSuffix {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "FailThird")
+        write!(f, "FailSuffix({})", self.1)
     }
 }
 
@@ -708,14 +715,14 @@ fn refused(location: &object_store::path::Path) -> object_store::Error {
 }
 
 #[async_trait::async_trait]
-impl object_store::ObjectStore for FailThird {
+impl object_store::ObjectStore for FailSuffix {
     async fn put_opts(
         &self,
         location: &object_store::path::Path,
         payload: object_store::PutPayload,
         opts: object_store::PutOptions,
     ) -> object_store::Result<object_store::PutResult> {
-        if location.as_ref().ends_with("-00003.parquet") {
+        if location.as_ref().ends_with(self.1) {
             return Err(refused(location));
         }
         self.0.put_opts(location, payload, opts).await
@@ -726,7 +733,7 @@ impl object_store::ObjectStore for FailThird {
         location: &object_store::path::Path,
         opts: object_store::PutMultipartOptions,
     ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
-        if location.as_ref().ends_with("-00003.parquet") {
+        if location.as_ref().ends_with(self.1) {
             return Err(refused(location));
         }
         self.0.put_multipart_opts(location, opts).await

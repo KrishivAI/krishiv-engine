@@ -649,6 +649,12 @@ pub fn run_coverage(root: &Path, flags: &[&str]) -> Result<(), String> {
     if branch {
         test.arg("--branch");
     }
+    // cargo-llvm-cov's default profile name has `%p`, so nextest's one process per test leaves one profile
+    // per test (about 7,300 for the workspace) and fills the disk. `%8m` merges every process's counters
+    // online into at most 8 files per binary. A name set by the caller wins.
+    if std::env::var_os("LLVM_PROFILE_FILE_NAME").is_none() {
+        test.env("LLVM_PROFILE_FILE_NAME", "krishiv-%8m.profraw");
+    }
     run(test, "cargo llvm-cov nextest")?;
     let report = |extra: &[&str], out: &Path| {
         let mut c = base(&["report"]);

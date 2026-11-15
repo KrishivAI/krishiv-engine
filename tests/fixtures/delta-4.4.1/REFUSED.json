@@ -1,0 +1,60 @@
+{
+ "catalog-managed": {
+  "not_created": [
+   {
+    "condition": "DELTA_UNSUPPORTED_CATALOG_MANAGED_TABLE_CREATION",
+    "message": "[DELTA_UNSUPPORTED_CATALOG_MANAGED_TABLE_CREATION] Creating a catalog-managed table using delta is unsupported.",
+    "parameters": {},
+    "sql": "CREATE TABLE delta.`{p}` (id BIGINT) USING delta TBLPROPERTIES ('delta.feature.catalogManaged' = 'supported')",
+    "sqlstate": "0AKDC"
+   }
+  ]
+ },
+ "coordinated-commits": {
+  "not_created": [
+   {
+    "condition": "DELTA_MUST_SET_ALL_COORDINATED_COMMITS_CONFS_IN_COMMAND",
+    "message": "[DELTA_MUST_SET_ALL_COORDINATED_COMMITS_CONFS_IN_COMMAND] During CREATE, either both coordinated commits configurations (\"delta.coordinatedCommits.commitCoordinator-preview\", \"delta.coordinatedCommits.commitCoordinatorConf-preview\") are set in the command or neither of them. Missing: \"delta.coordinatedCommits.commitCoordinatorConf-preview\". Please specify this configuration in the TBLPROPERTIES clause or remove the other configuration, and then retry the command again.",
+    "parameters": {
+     "command": "CREATE",
+     "configuration": "delta.coordinatedCommits.commitCoordinatorConf-preview"
+    },
+    "sql": "CREATE TABLE delta.`{p}` (id BIGINT) USING delta TBLPROPERTIES ('delta.coordinatedCommits.commitCoordinator-preview' = 'in-memory')",
+    "sqlstate": "42616"
+   },
+   {
+    "jvm_class": "java.lang.ClassNotFoundException",
+    "message": "An error occurred while calling o39.sql.",
+    "sql": "CREATE TABLE delta.`{p}` (id BIGINT) USING delta TBLPROPERTIES ('delta.coordinatedCommits.commitCoordinator-preview' = 'in-memory', 'delta.coordinatedCommits.commitCoordinatorConf-preview' = '{{}}')"
+   }
+  ]
+ },
+ "geospatial": {
+  "not_created": [
+   {
+    "condition": "DELTA_GEOSPATIAL_NOT_SUPPORTED",
+    "message": "[DELTA_GEOSPATIAL_NOT_SUPPORTED] Geospatial types are not supported in this version of Delta Lake.",
+    "parameters": {},
+    "sql": "CREATE TABLE delta.`{p}` (id BIGINT, g GEOMETRY(4326)) USING delta",
+    "sqlstate": "0AKDC"
+   }
+  ]
+ },
+ "variant-shredding": {
+  "created_by": "CREATE TABLE delta.`{p}` (id BIGINT, v VARIANT) USING delta TBLPROPERTIES ('delta.enableVariantShredding' = 'true')",
+  "protocol": {
+   "minReaderVersion": 3,
+   "minWriterVersion": 7,
+   "readerFeatures": [
+    "variantType",
+    "variantShredding-preview"
+   ],
+   "writerFeatures": [
+    "variantType",
+    "variantShredding-preview",
+    "invariants",
+    "appendOnly"
+   ]
+  }
+ }
+}

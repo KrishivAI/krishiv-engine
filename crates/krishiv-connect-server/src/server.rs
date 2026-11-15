@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The gRPC listener (design P3-T001 §3.3, §3.4): HTTP/2 limits set before
 //! any request is read, a connection cap on the accept loop, the idle
-//! sweeper, and graceful shutdown.
+//! sweeper, the abandoned-operation maintenance, and graceful shutdown.
 //!
 //! Shutdown: once the shutdown future resolves the server is draining (new
 //! RPCs get `UNAVAILABLE`, no new connection is accepted), running queries
@@ -31,7 +31,9 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tonic::transport::Server;
 use tonic::transport::server::{Connected, TcpConnectInfo};
 
+use crate::execute::ResponseBudget;
 use crate::manager::SessionManager;
+use crate::operation::ExecuteLimits;
 use crate::service::{ConnectService, SparkConnectServiceServer};
 
 /// The listener's settings. The defaults are Spark 4.3.0's where Spark has
@@ -71,6 +73,8 @@ pub struct ConnectServerConfig {
     /// How long running queries may finish after shutdown starts
     /// (`krishiv.server.shutdownTimeout`, 30 s).
     pub shutdown_timeout: Duration,
+    /// The limits of `ExecutePlan`.
+    pub execute: ExecuteLimits,
 }
 
 impl Default for ConnectServerConfig {
@@ -86,6 +90,7 @@ impl Default for ConnectServerConfig {
             handshake_timeout: Duration::from_secs(10),
             maintenance_interval: Duration::from_secs(30),
             shutdown_timeout: Duration::from_secs(30),
+            execute: ExecuteLimits::default(),
         }
     }
 }
@@ -136,6 +141,7 @@ impl ConnectServerConfig {
             maintenance_interval: duration(&CONNECT_SESSION_MAINTENANCE_INTERVAL)
                 .unwrap_or(d.maintenance_interval),
             shutdown_timeout: duration(&SERVER_SHUTDOWN_TIMEOUT).unwrap_or(d.shutdown_timeout),
+            execute: ExecuteLimits::from_config(config),
         }
     }
 }
@@ -161,6 +167,7 @@ pub struct ConnectServer {
     manager: Arc<SessionManager>,
     draining: Arc<AtomicBool>,
     config: ConnectServerConfig,
+    budget: ResponseBudget,
 }
 
 impl ConnectServer {
@@ -170,8 +177,16 @@ impl ConnectServer {
         Self {
             manager,
             draining: Arc::new(AtomicBool::new(false)),
+            budget: ResponseBudget::new(config.execute.max_response_bytes),
             config,
         }
+    }
+
+    /// The server's response budget (`krishiv.connect.maxResponseBytes`),
+    /// shared with the service it serves.
+    #[must_use]
+    pub fn response_budget(&self) -> &ResponseBudget {
+        &self.budget
     }
 
     /// The flag that is set once shutdown starts (`/readyz` answers 503
@@ -195,6 +210,8 @@ impl ConnectServer {
     /// the listener is stopped.
     ///
     /// # Errors
+    /// `KRISHIV_INVALID_CONFIG_VALUE` before serving when the `ExecutePlan`
+    /// limits do not fit together ([`ExecuteLimits::validate`]);
     /// `INTERNAL_ERROR` for a transport failure.
     pub async fn serve(
         self,
@@ -205,8 +222,12 @@ impl ConnectServer {
             manager,
             draining,
             config,
+            budget,
         } = self;
-        let service = ConnectService::new(Arc::clone(&manager), Arc::clone(&draining));
+        config.execute.validate()?;
+        let service = ConnectService::new(Arc::clone(&manager), Arc::clone(&draining))
+            .with_limits(config.execute.clone())
+            .with_budget(budget);
         let service = SparkConnectServiceServer::from_arc(Arc::new(service))
             .max_decoding_message_size(config.max_inbound_message_size)
             .max_encoding_message_size(config.max_inbound_message_size);
@@ -229,6 +250,11 @@ impl ConnectServer {
         let _sweeper = AbortOnDrop(tokio::spawn(sweep_loop(
             Arc::clone(&manager),
             config.maintenance_interval,
+        )));
+        let _abandoner = AbortOnDrop(tokio::spawn(abandon_loop(
+            Arc::clone(&manager),
+            config.execute.maintenance_interval,
+            config.execute.detached_timeout,
         )));
         let incoming = capped(listener, config.max_connections, config.handshake_timeout);
         let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
@@ -300,9 +326,10 @@ fn transport_error(e: &dyn std::fmt::Display) -> KrishivError {
     .into()
 }
 
-/// Waits until no session runs a query, or `deadline` passed.
+/// Waits until no session runs a query or holds a live operation (a stream
+/// still sending its last responses), or `deadline` passed.
 async fn queries_done(manager: &SessionManager, deadline: tokio::time::Instant) {
-    while manager.running_queries() > 0 && tokio::time::Instant::now() < deadline {
+    while manager.busy() > 0 && tokio::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
@@ -313,6 +340,18 @@ async fn sweep_loop(manager: Arc<SessionManager>, every: Duration) {
     loop {
         tick.tick().await;
         manager.sweep();
+    }
+}
+
+/// Spark's execution maintenance (`SparkConnectExecutionManager`, v4.3.0
+/// lines 315-362): every `every`, operations detached for `timeout` are
+/// abandoned.
+async fn abandon_loop(manager: Arc<SessionManager>, every: Duration, timeout: Duration) {
+    let mut tick = tokio::time::interval(every.max(Duration::from_millis(10)));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tick.tick().await;
+        manager.abandon_detached(timeout);
     }
 }
 

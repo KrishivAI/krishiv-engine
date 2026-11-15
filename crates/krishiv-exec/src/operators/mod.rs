@@ -40,6 +40,7 @@ mod runtime_filter;
 mod scan;
 pub(crate) mod select;
 mod sort;
+mod spilled_scan;
 mod union;
 
 pub use expand::{Expand, NullOf};
@@ -69,6 +70,7 @@ pub use scan::{
 use scan::{ScanGlobal, ScanLocal};
 pub use sort::{DEFAULT_MAX_MERGE_FAN_IN, Sort, SortKey, SortMetrics, TopN};
 pub(crate) use sort::{KeyEncoder, blocking, data_bytes, owned_rows};
+pub use spilled_scan::SpilledScan;
 pub use union::UnionAlign;
 
 use crate::error::{Result, internal};
