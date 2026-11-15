@@ -239,8 +239,8 @@ impl Catalog<'_> {
         let wanted = self.fold(name);
         if !self.list_catalogs().iter().any(|c| self.fold(c) == wanted) {
             return Err(krishiv_common::error::CatalogNotFound {
-                catalog_name: format!("`{name}`"),
-                config: "\"spark.sql.catalog.<name>\"".to_owned(),
+                catalog_name: krishiv_common::names::to_sql_id(name)?,
+                config: format!("\"spark.sql.catalog.{name}\""),
             }
             .into());
         }

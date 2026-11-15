@@ -608,6 +608,13 @@ fn an_unknown_catalog_is_catalog_not_found_and_a_database_name_is_not_a_catalog(
         before,
         "a refused call changes nothing"
     );
+    let e = block_on(c.set_current_catalog("nope")).unwrap_err();
+    assert!(
+        e.to_string().contains(
+            "The catalog `nope` not found. Consider to set the SQL config \"spark.sql.catalog.nope\" to a catalog plugin."
+        ),
+        "{e}"
+    );
 }
 
 #[test]
