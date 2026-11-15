@@ -281,6 +281,24 @@ fn filter_keeps_true_elements() {
     );
 }
 
+/// SQL-4: `filter` with the element index, `(x, i) -> ...` (Spark 4.2.0: `[2, 3]`).
+#[test]
+fn filter_takes_the_element_index() {
+    let s = session();
+    assert_eq!(
+        strings(&s, "filter(array(0, 2, 3), (x, i) -> x > i)", ""),
+        [Some("[2, 3]".to_owned())]
+    );
+    assert_eq!(
+        strings(&s, "filter(array(10, 20, 30, 40), (x, i) -> i % 2 = 0)", ""),
+        [Some("[10, 30]".to_owned())]
+    );
+    assert_eq!(
+        strings(&s, "filter(array(5, NULL, 7), (x, i) -> i > 0)", ""),
+        [Some("[null, 7]".to_owned())]
+    );
+}
+
 #[test]
 fn exists_and_forall_fold_the_marks() {
     let s = session();
@@ -474,13 +492,13 @@ fn constant_lambdas_of_the_wrong_type_are_rejected() {
 #[test]
 fn lambda_shapes_are_checked() {
     let s = session();
-    // `transform` takes one or two variables, the others exactly one.
+    // `transform` and `filter` take one or two variables, the others exactly one.
     let e = error(&s, "SELECT transform(ys, (a, b, c) -> a) FROM t");
     assert_eq!(
         e.error_class(),
         ErrorClass::InvalidLambdaFunctionCallNumArgsMismatch
     );
-    let e = error(&s, "SELECT filter(ys, (a, b) -> a) FROM t");
+    let e = error(&s, "SELECT filter(ys, (a, b, c) -> a) FROM t");
     assert_eq!(
         e.error_class(),
         ErrorClass::InvalidLambdaFunctionCallNumArgsMismatch
