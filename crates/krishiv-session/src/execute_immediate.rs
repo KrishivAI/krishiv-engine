@@ -528,6 +528,34 @@ fn civil(micros: i64) -> String {
     )
 }
 
+/// A statement that reached analysis with parameter markers still in it (no arguments bound) fails as
+/// Spark's does: `INVALID_QUERY_MIXED_QUERY_PARAMETERS` when it writes both `?` and `:name`, else
+/// `UNBOUND_SQL_PARAMETER` for the first marker (`_` and the 0-based character offset of a `?`, the
+/// name of a `:name`). Any other error is returned as it is.
+pub(crate) fn unbound_markers(
+    error: KrishivError,
+    sql: &str,
+    double_quoted_identifiers: bool,
+) -> KrishivError {
+    if error.error_class() != krishiv_common::error::ErrorClass::UnboundSqlParameter {
+        return error;
+    }
+    let markers = krishiv_sql::parameter_markers(sql, double_quoted_identifiers);
+    let named = markers.iter().filter(|m| m.name.is_some()).count();
+    if named > 0 && named < markers.len() {
+        return InvalidQueryMixedQueryParameters {}.into();
+    }
+    match markers.first() {
+        Some(m) => UnboundSqlParameter {
+            name: m.name.clone().unwrap_or_else(|| {
+                format!("_{}", sql.get(..m.start).map_or(0, |p| p.chars().count()))
+            }),
+        }
+        .into(),
+        None => error,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

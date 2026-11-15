@@ -161,7 +161,8 @@ impl Hof {
         if position == 2 && matches!(self, Self::Aggregate | Self::Reduce) {
             return (2, 2);
         }
-        if position == 1 && matches!(self, Self::Transform) {
+        // `transform` and `filter` take an optional element index: `(x, i) -> ...`.
+        if position == 1 && matches!(self, Self::Transform | Self::Filter) {
             return (1, 2);
         }
         match self {
@@ -528,14 +529,14 @@ impl Resolver<'_> {
             });
         };
         match h {
-            Hof::Transform => {
+            Hof::Transform | Hof::Filter => {
                 let (element, contains) = array_element(0);
                 var(params[0].clone(), element, contains);
                 if params.len() == 2 {
                     var(params[1].clone(), DataType::Integer, false);
                 }
             }
-            Hof::Filter | Hof::Exists | Hof::ForAll => {
+            Hof::Exists | Hof::ForAll => {
                 let (element, contains) = array_element(0);
                 var(params[0].clone(), element, contains);
             }

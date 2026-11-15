@@ -124,5 +124,27 @@ fn each_denial_leaves_one_audit_record() {
             !r.contains("deny-all"),
             "the policy's reason stays out: {r}"
         );
+        assert!(
+            !r.contains("client_user_id_unverified"),
+            "no client id reported, none recorded: {r}"
+        );
     }
+
+    // ADR 0046 §5: a client's own `user_id` is recorded beside the principal, marked
+    // unverified (review N6).
+    s.set_client_info(
+        krishiv_session::Transport::Connect,
+        None,
+        Some("dana"),
+        None,
+    );
+    block_on(s.sql("SELECT * FROM t")).unwrap_err();
+    let records = take();
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert!(records[0].contains("principal=ana "), "{}", records[0]);
+    assert!(
+        records[0].contains("client_user_id_unverified=dana "),
+        "{}",
+        records[0]
+    );
 }

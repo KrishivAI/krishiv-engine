@@ -27,3 +27,5 @@ krishiv.io.bytes.read counter By [op,store_kind] -> krishiv_io_bytes_read_bytes_
 krishiv.io.request.duration histogram s [op,store_kind] -> krishiv_io_request_duration_seconds
 krishiv.exec.driver.stalls counter 1 [] -> krishiv_exec_driver_stalls_total
 krishiv.build.info gauge 1 [version,git_sha] -> krishiv_build_info
+krishiv.auth.failed counter {request} [surface=connect|admin|metrics|ui,method=token|oidc|mtls|throttle|none] -> krishiv_auth_failed_total
+krishiv.auth.denied counter {request} [surface=connect|admin|metrics|ui,privilege=SELECT|MODIFY|CREATE|DROP|MONITOR|USAGE|BROWSE|OPERATE|MANAGE|IMPERSONATE] -> krishiv_auth_denied_total
