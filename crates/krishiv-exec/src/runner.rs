@@ -39,9 +39,10 @@ use crate::error::{Result, cancelled, internal};
 use crate::executor::{Executor, TaskHandle};
 use crate::metrics::OperatorEntry;
 use crate::morsel::{Barrier, Baton, CombineOrder, Countdown};
+use crate::numbering::{MemberShape, Numbering};
 use crate::operator::{GlobalState, Source};
 use crate::physical::{PhysicalPlan, WorkerContext, instantiate};
-use crate::pipeline::{ExecNode, Pipeline, PipelineBuilder};
+use crate::pipeline::{ExecNode, Origin, Pipeline, PipelineBuilder};
 use crate::sync::{Mutex, lock};
 
 /// Plans in, running queries out (spec 13 §4). Embedded and single-node:
@@ -535,25 +536,46 @@ fn start_group(
             source_global,
             drivers,
             base_partition: base,
+            span: span as u64,
             operator_bases: Vec::new(),
             lanes: lane_count.map(|n| (base, n)),
         });
     }
-    // Each operator numbers partitions from the first id of its origin
-    // pipeline (`Pipeline::origins`): its own member below a `UNION ALL`,
-    // the union's first member above it.
-    let bases: HashMap<usize, u32> = started
+    // Each operator numbers partitions from its origin (`Pipeline::origins`):
+    // its own member below a `UNION ALL`, the union's numbering above it
+    // (`numbering.rs`).
+    let shapes: Vec<MemberShape<'_>> = started
         .iter()
-        .filter_map(|m| Some((usize::try_from(m.pipeline.index).ok()?, m.base_partition)))
+        .map(|m| MemberShape {
+            pipeline: usize::try_from(m.pipeline.index).unwrap_or(usize::MAX),
+            base: u64::from(m.base_partition),
+            span: m.span,
+            single_source: m.pipeline.source.1.single_partition(&m.source_global),
+            origins: &m.pipeline.origins,
+            keeps: m
+                .pipeline
+                .operators
+                .iter()
+                .map(|(_, op)| op.keeps_partitioning())
+                .collect(),
+            fans: &m.pipeline.fans,
+        })
         .collect();
-    for m in &mut started {
-        let own = m.base_partition;
-        m.operator_bases = m
-            .pipeline
-            .origins
-            .iter()
-            .map(|o| bases.get(o).copied().unwrap_or(own))
-            .collect();
+    let numbering = Numbering::new(&shapes, query.config().union_output_partitioning);
+    // The group's sink is above every fan-in of the first member.
+    let top = shapes.first().map_or(
+        Origin {
+            pipeline: 0,
+            level: 0,
+        },
+        |m| Origin {
+            pipeline: m.pipeline,
+            level: m.fans.len(),
+        },
+    );
+    let bases: Vec<Vec<u32>> = shapes.iter().map(|m| numbering.bases(m, top)).collect();
+    for (m, bases) in started.iter_mut().zip(bases) {
+        m.operator_bases = bases;
     }
     // The members whose rows have a source order (an ordered source, and
     // no operator that emits after a cross-driver flush, where a driver
@@ -597,6 +619,8 @@ struct MemberStart {
     drivers: usize,
     /// The first scheduler-assigned partition id of its drivers.
     base_partition: u32,
+    /// The partition ids it takes (see `start_group`).
+    span: u64,
     /// Per operator: the first partition id it numbers partitions from.
     operator_bases: Vec<u32>,
     /// `(first partition id, lane count)` when its drivers are logical partitions.

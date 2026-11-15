@@ -155,6 +155,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT,
     &RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
     &WINDOW_GROUP_LIMIT_THRESHOLD,
+    &UNION_OUTPUT_PARTITIONING,
     &CONNECT_MAX_PLAN_DEPTH,
     &LATE_FETCH_MAX_ROWS,
     &CTE_RECURSION_LEVEL_LIMIT,
@@ -1472,6 +1473,22 @@ pub static WINDOW_GROUP_LIMIT_THRESHOLD: ConfigEntry = ConfigEntry {
     settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.optimizer.windowGroupLimitThreshold"),
+};
+
+/// `spark.sql.unionOutputPartitioning`.
+pub static UNION_OUTPUT_PARTITIONING: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.unionOutputPartitioning",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "A UNION ALL whose inputs are each a single partition (a one-slice range, a LIMIT) is \
+          one partition, its inputs read in turn, as Spark's UnionExec reports its output \
+          partitioning: partition-indexed functions above it (spark_partition_id, rand with a \
+          seed, monotonically_increasing_id) see index 0 and one stream. Off: the union's \
+          partitions follow one another, one per input partition.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.unionOutputPartitioning"),
 };
 
 /// `krishiv.connect.maxPlanDepth`.

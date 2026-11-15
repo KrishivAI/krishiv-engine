@@ -103,11 +103,32 @@ pub(crate) fn no_state() -> LocalState {
 }
 
 /// Per-driver local state of an operator evaluating row expressions: the
-/// driver's partition index (see [`TaskContext::partition`](crate::context::TaskContext::partition)).
+/// driver's partition id (see [`TaskContext::partition`](crate::context::TaskContext::partition))
+/// and the id its input's partitions are numbered from.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PartitionState {
-    /// The driver's partition index.
+    /// The driver's partition id.
     pub(crate) partition: u32,
+    /// [`TaskContext::numbering_base`](crate::context::TaskContext::numbering_base).
+    pub(crate) base: u32,
+}
+
+impl PartitionState {
+    /// The state of the operator `ctx` belongs to.
+    pub(crate) fn of(ctx: &crate::context::TaskContext) -> Self {
+        Self {
+            partition: ctx.partition(),
+            base: ctx.numbering_base(),
+        }
+    }
+
+    /// Spark's partition index of a batch tagged `split` (the driver's
+    /// partition when untagged): a stateful function's stream, as the
+    /// operator hosting it is initialised (`UNION ALL` branches number
+    /// their own partitions).
+    pub(crate) fn index(&self, split: Option<u32>) -> u32 {
+        split.unwrap_or(self.partition).wrapping_sub(self.base)
+    }
 }
 
 #[cfg(all(test, not(loom)))]

@@ -89,6 +89,7 @@ mod loops;
 mod map_keys;
 mod metrics;
 mod morsel;
+mod numbering;
 mod operator;
 mod operators;
 mod output_spill;

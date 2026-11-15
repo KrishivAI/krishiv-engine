@@ -85,6 +85,11 @@ pub struct ExecConfig {
     /// hashes take a fixed seed (a constant unless
     /// `krishiv.exec.seed` names one) (`krishiv.deterministicOrder`).
     pub deterministic_order: bool,
+    /// A `UNION ALL` of inputs that are each one partition (Spark's
+    /// `SinglePartition`) is one partition: its inputs run in turn at index
+    /// 0 (`krishiv.sql.unionOutputPartitioning`, Spark's
+    /// `spark.sql.unionOutputPartitioning`).
+    pub union_output_partitioning: bool,
 }
 
 /// The key-hash seed of `krishiv.deterministicOrder` when `krishiv.exec.seed`
@@ -111,6 +116,7 @@ impl Default for ExecConfig {
             shared_broadcast_bytes: None,
             join_idle_spill_after: Duration::from_secs(1),
             deterministic_order: false,
+            union_output_partitioning: true,
         }
     }
 }
@@ -163,6 +169,10 @@ impl ExecConfig {
             .get(&krishiv_common::config::DETERMINISTIC_ORDER)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
             .unwrap_or(false);
+        let union_output_partitioning = config
+            .get(&krishiv_common::config::UNION_OUTPUT_PARTITIONING)
+            .and_then(krishiv_common::config::ConfigValue::as_bool)
+            .unwrap_or(true);
         // Under `krishiv.deterministicOrder` the key hashes are seeded too
         // (`krishiv.exec.seed` when set, else a fixed seed): spill partitions
         // follow the seeded hash, so a random seed per query would order the
@@ -184,6 +194,7 @@ impl ExecConfig {
             join_merge_buffer_bytes,
             shared_broadcast_bytes,
             join_idle_spill_after,
+            union_output_partitioning,
             ..Self::default()
         }
     }

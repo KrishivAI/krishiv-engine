@@ -20,6 +20,7 @@ use super::local_mut;
 use crate::context::TaskContext;
 use crate::error::Result;
 use crate::operator::{LocalState, Operator, OperatorOutput};
+use crate::sync::{Mutex, lock};
 
 /// Spark's `XORShiftRandom`: the seed hashed with Scala's
 /// `MurmurHash3.bytesHash`, then a 64-bit xorshift register.
@@ -94,24 +95,26 @@ fn mix_last(h: u32, k: u32) -> u32 {
 /// seeded `rand` reads it) come from one stream seeded `seed + partition`.
 /// Every source that tags splits reads a split whole on one driver, in
 /// order (a file scan under a sample reads whole partitions,
-/// [`ScanPushdowns::partition_order`](super::ScanPushdowns::partition_order)),
-/// so each driver keeps the streams of the splits it reads.
+/// [`ScanPushdowns::partition_order`](super::ScanPushdowns::partition_order)).
+/// The streams are the operator's, by partition index: above a coalesced
+/// `UNION ALL` the branches run in turn at index 0 and continue one stream,
+/// as Spark's one task does.
 #[derive(Debug)]
 pub struct Sample {
     schema: SchemaRef,
     lower: f64,
     upper: f64,
     seed: i64,
+    streams: Mutex<HashMap<u32, XorShiftRandom>>,
 }
 
-/// One driver's partition and its splits' streams.
+/// One driver's partition.
 struct SampleLocal {
     partition: u32,
     /// The first partition id of the sample's input
     /// ([`TaskContext::numbering_base`]): a split or partition id minus this
     /// is the input's partition index (a `UNION ALL` branch's own).
     base: u32,
-    streams: HashMap<u32, XorShiftRandom>,
 }
 
 impl Sample {
@@ -123,14 +126,15 @@ impl Sample {
             lower,
             upper,
             seed,
+            streams: Mutex::new(HashMap::new()),
         })
     }
 
     /// The keep mask of `rows` rows of `partition`, drawn in order.
-    fn mask(&self, local: &mut SampleLocal, partition: u32, rows: usize) -> BooleanArray {
+    fn mask(&self, partition: u32, rows: usize) -> BooleanArray {
         let seed = self.seed;
-        let rng = local
-            .streams
+        let mut streams = lock(&self.streams);
+        let rng = streams
             .entry(partition)
             .or_insert_with(|| XorShiftRandom::new(seed.wrapping_add(i64::from(partition))));
         let keep = BooleanBuffer::collect_bool(rows, |_| {
@@ -158,7 +162,6 @@ impl Operator for Sample {
         Ok(Box::new(SampleLocal {
             partition: ctx.partition(),
             base: ctx.numbering_base(),
-            streams: HashMap::new(),
         }))
     }
 
@@ -172,7 +175,7 @@ impl Operator for Sample {
             .split()
             .unwrap_or(local.partition)
             .wrapping_sub(local.base);
-        let mask = self.mask(local, split, input.num_rows());
+        let mask = self.mask(split, input.num_rows());
         let out = input.filter(&mask)?;
         if out.num_rows() == 0 {
             return Ok(OperatorOutput::NeedMoreInput(None));
@@ -189,14 +192,6 @@ impl Operator for Sample {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn fresh() -> SampleLocal {
-        SampleLocal {
-            partition: 0,
-            base: 0,
-            streams: HashMap::new(),
-        }
-    }
 
     fn fixture() -> serde_json::Value {
         serde_json::from_str(include_str!(
@@ -253,7 +248,7 @@ mod tests {
             let mask = if upper - lower <= 0.0 {
                 BooleanArray::from(vec![false; 1000])
             } else {
-                s.mask(&mut fresh(), 0, 1000)
+                s.mask(0, 1000)
             };
             let ids: Vec<i64> = (0..1000_usize)
                 .filter(|&i| mask.value(i))
@@ -276,11 +271,10 @@ mod tests {
     #[test]
     fn a_partition_stream_continues_across_batches() {
         let schema = Arc::new(arrow_schema::Schema::empty());
-        let whole = Sample::new(Arc::clone(&schema), 0.0, 0.5, 3).mask(&mut fresh(), 2, 1000);
+        let whole = Sample::new(Arc::clone(&schema), 0.0, 0.5, 3).mask(2, 1000);
         let split = Sample::new(schema, 0.0, 0.5, 3);
-        let mut local = fresh();
-        let a = split.mask(&mut local, 2, 500);
-        let b = split.mask(&mut local, 2, 500);
+        let a = split.mask(2, 500);
+        let b = split.mask(2, 500);
         let joined: Vec<bool> = a.iter().chain(b.iter()).map(Option::unwrap).collect();
         let whole: Vec<bool> = whole.iter().map(Option::unwrap).collect();
         assert_eq!(joined, whole);

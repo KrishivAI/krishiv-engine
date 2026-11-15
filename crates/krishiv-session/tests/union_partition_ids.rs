@@ -1,0 +1,331 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Partition-indexed expressions around `UNION ALL` against
+//! `tests/fixtures/spark-4.2.0/union-partition-ids.json` (real Spark 4.2.0
+//! runs at `local[1]` and `local[4]`).
+//!
+//! Spark initialises a nondeterministic expression with the partition index
+//! of the operator that hosts it: inside a branch that is the branch's own
+//! index (`UnionRDD` iterates the child's own partition), above the union
+//! the union's (branch 2 numbered after branch 1). A union whose children
+//! are all `SinglePartition` (a one-slice `range`, a `LIMIT`) is one
+//! partition (`spark.sql.unionOutputPartitioning`, `UnionExec`'s
+//! `comparePartitioning`): its children run one after another at index 0,
+//! and an expression above it sees one stream.
+//!
+//! Rows are compared exactly, in Spark's `collect()` order, at 1, 2, 4 and 8
+//! compute threads, except the shapes listed in [`skip_reason`] and
+//! [`one_thread_only`].
+#![cfg(test)]
+
+use arrow_array::cast::AsArray;
+use arrow_array::types::{Int32Type, Int64Type};
+use arrow_array::{Array, ArrayRef};
+use arrow_schema::DataType;
+use futures::executor::block_on;
+use krishiv_exec::{ExecutorConfig, TokioExecutor};
+use krishiv_session::Session;
+use serde_json::Value;
+
+fn fixture() -> Value {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/spark-4.2.0/union-partition-ids.json");
+    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+fn run(s: &Session, sql: &str) {
+    block_on(async { s.sql(sql).await?.collect().await }).unwrap_or_else(|e| panic!("{sql}: {e}"));
+}
+
+/// A session at `threads` compute threads with `script`'s views; the
+/// one-file Parquet tables `p1a`, `p1b` written under `dir`.
+fn session(doc: &Value, script: &str, threads: usize, dir: &std::path::Path) -> Session {
+    let executor = TokioExecutor::new(&ExecutorConfig {
+        compute_threads: threads,
+        io_threads: 1,
+        blocking_threads: threads,
+        io_blocking_threads: 2,
+    })
+    .unwrap();
+    let s = Session::builder().executor(executor).build().unwrap();
+    for (name, range) in doc["views"][script].as_object().unwrap() {
+        let range = range.as_str().unwrap();
+        run(
+            &s,
+            &format!("CREATE TEMPORARY VIEW {name} AS SELECT id FROM {range}"),
+        );
+    }
+    // Spark's `spark.range(a, b).coalesce(1).write.parquet`: one file.
+    for (name, range) in [("p1a", "range(0, 6, 1, 1)"), ("p1b", "range(10, 14, 1, 1)")] {
+        let path = dir.join(name);
+        let path = path.to_str().unwrap();
+        if !std::path::Path::new(path).exists() {
+            let df = block_on(s.sql(&format!("SELECT id FROM {range}"))).unwrap();
+            block_on(df.write().parquet(path)).unwrap();
+        }
+        run(
+            &s,
+            &format!(
+                "CREATE TEMPORARY VIEW {name}(id BIGINT) USING parquet OPTIONS (path '{path}')"
+            ),
+        );
+    }
+    s
+}
+
+/// Java's `Double.toString`: plain digits in `[1e-3, 1e7)`, else
+/// scientific with at least one fraction digit.
+fn java_double(v: f64) -> String {
+    let a = v.abs();
+    if v == 0.0 || (1e-3..1e7).contains(&a) {
+        let s = format!("{v}");
+        if s.contains('.') { s } else { format!("{s}.0") }
+    } else {
+        let s = format!("{v:e}");
+        let (m, e) = s.split_once('e').unwrap();
+        let m = if m.contains('.') {
+            m.to_owned()
+        } else {
+            format!("{m}.0")
+        };
+        format!("{m}E{e}")
+    }
+}
+
+/// One value as Spark's `Row.toSeq.map(_.toString)` prints it.
+fn cell(c: &ArrayRef, i: usize) -> String {
+    if c.is_null(i) {
+        return "null".to_owned();
+    }
+    match c.data_type() {
+        DataType::Int32 => c.as_primitive::<Int32Type>().value(i).to_string(),
+        DataType::Int64 => c.as_primitive::<Int64Type>().value(i).to_string(),
+        DataType::Float64 => {
+            java_double(c.as_primitive::<arrow_array::types::Float64Type>().value(i))
+        }
+        DataType::Utf8 => c.as_string::<i32>().value(i).to_owned(),
+        DataType::LargeUtf8 => c.as_string::<i64>().value(i).to_owned(),
+        DataType::Utf8View => c.as_string_view().value(i).to_owned(),
+        DataType::List(_) => {
+            let l = c.as_list::<i32>().value(i);
+            let items: Vec<String> = (0..l.len()).map(|j| cell(&l, j)).collect();
+            format!("ArraySeq({})", items.join(", "))
+        }
+        t => panic!("unexpected type {t}"),
+    }
+}
+
+fn rows(s: &Session, sql: &str) -> Vec<String> {
+    let batches = block_on(async { s.sql(sql).await?.collect().await })
+        .unwrap_or_else(|e| panic!("{sql}: {e}"));
+    let mut out = Vec::new();
+    for b in &batches {
+        for i in 0..b.num_rows() {
+            let row: Vec<String> = b.columns().iter().map(|c| cell(c, i)).collect();
+            out.push(row.join(","));
+        }
+    }
+    out
+}
+
+/// Shapes not compared, with the reason.
+fn skip_reason(tag: &str) -> Option<&'static str> {
+    if tag.starts_with("c_pq3.") || tag.starts_with("g.pq3_") || tag.starts_with("g.pq1_pq3") {
+        // Spark packs the three small files by `defaultParallelism` (and
+        // `minPartitionNum`), and `repartition(3)` puts rows in files at
+        // random: neither the partitions nor the rows of a file are
+        // reproduced by Krishiv's writer and scan.
+        return Some("three-file Parquet layout");
+    }
+    if tag.contains(".ifn.") || tag.contains(".ifbs.") || tag.contains(".ifbl.") {
+        // The file names (random UUIDs) and sizes are Spark's own files.
+        return Some("file name and size of Spark's files");
+    }
+    if tag == "f2.repartition3_both" {
+        // `DISTRIBUTE BY` on both sides: AQE coalesced each shuffle to one
+        // partition in that run (Spark's hash-partitioned union is
+        // unverified, semantics.md); on one worker Krishiv lowers the
+        // exchange away and the range's slices keep their indexes.
+        return Some("AQE-coalesced hash exchange");
+    }
+    None
+}
+
+/// Whether two printed rows are equal, a `randn` value within one ulp:
+/// Krishiv's `randn` differs from Spark's `nextGaussian` in the last bit for
+/// some streams (seed 45: `0.7400395449950131` against `...132`), a
+/// difference of the function, not of the partition numbering.
+fn same_row(tag: &str, got: &str, want: &str) -> bool {
+    if got == want {
+        return true;
+    }
+    if !tag.contains("randn") {
+        return false;
+    }
+    let (g, w): (Vec<&str>, Vec<&str>) = (got.split(',').collect(), want.split(',').collect());
+    g.len() == w.len()
+        && g.iter().zip(&w).all(|(g, w)| {
+            g == w
+                || matches!((g.parse::<f64>(), w.parse::<f64>()), (Ok(a), Ok(b))
+                    if a.to_bits().abs_diff(b.to_bits()) <= 1)
+        })
+}
+
+/// Shapes compared at one compute thread only: Spark's partitions follow
+/// its own layout rules here (`local[1]`), which Krishiv matches with one
+/// driver per pipeline.
+fn one_thread_only(tag: &str) -> bool {
+    // A file scan's and `VALUES`' partitions follow the thread count (and
+    // Spark's `defaultParallelism`); an aggregate's or exchange's output
+    // partitions are AQE-coalesced to one in Spark, a driver each in Krishiv.
+    tag.starts_with("c_pq1.")
+        || tag.starts_with("g.pq1_pq1")
+        || tag == "f.values"
+        || tag == "f2.agg_children"
+}
+
+/// Whether Spark's row order is not defined by the plan (an aggregate's
+/// groups): compared sorted.
+fn sorted(tag: &str) -> bool {
+    tag == "f2.agg_children"
+}
+
+fn check(threads: &[usize], filter: impl Fn(&str) -> bool) {
+    let doc = fixture();
+    let dir = tempfile::tempdir().unwrap();
+    let mut failures = Vec::new();
+    let mut checked = 0;
+    for &threads in threads {
+        let mut sessions: std::collections::HashMap<String, Session> =
+            std::collections::HashMap::new();
+        for case in doc["cases"].as_array().unwrap() {
+            let tag = case["tag"].as_str().unwrap();
+            if skip_reason(tag).is_some() || !filter(tag) {
+                continue;
+            }
+            if threads > 1 && one_thread_only(tag) {
+                continue;
+            }
+            let script = case["script"].as_str().unwrap();
+            let s = sessions
+                .entry(script.to_owned())
+                .or_insert_with(|| session(&doc, script, threads, dir.path()));
+            let conf = case["conf"].as_object().unwrap();
+            for (k, v) in conf {
+                run(s, &format!("SET {k}={}", v.as_str().unwrap()));
+            }
+            let sql = case["sql"].as_str().unwrap();
+            let mut got = rows(s, sql);
+            let mut want: Vec<String> = case["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r.as_str().unwrap().to_owned())
+                .collect();
+            if sorted(tag) {
+                got.sort();
+                want.sort();
+            }
+            let same =
+                got.len() == want.len() && got.iter().zip(&want).all(|(g, w)| same_row(tag, g, w));
+            if !same {
+                failures.push(format!(
+                    "{tag} at {threads} threads: {sql}\n  want {want:?}\n  got  {got:?}"
+                ));
+            }
+            for k in conf.keys() {
+                run(s, &format!("RESET {k}"));
+            }
+            checked += 1;
+        }
+    }
+    assert!(checked > 0);
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// The expressions below and above a union of one-slice ranges, multi-slice
+/// ranges and one-file Parquet tables.
+#[test]
+fn expressions_around_a_union_match_spark() {
+    check(&[1, 2, 4, 8], |t| {
+        t.starts_with("a_single.") || t.starts_with("b_") || t.starts_with("c_")
+    });
+}
+
+/// Nested unions: a leaf of a flattened union and an expression over an
+/// inner union inside an outer branch.
+#[test]
+fn nested_unions_match_spark() {
+    check(&[1, 2, 4, 8], |t| t.starts_with("e_"));
+}
+
+/// When Spark makes a union one partition (`f`, `f2`), and the same with
+/// `spark.sql.unionOutputPartitioning` off (`f2off`).
+#[test]
+fn union_coalescing_matches_spark() {
+    check(&[1, 2, 4, 8], |t| t.starts_with("f."));
+    check(&[1, 2, 4, 8], |t| t.starts_with("f2"));
+}
+
+/// `TABLESAMPLE ... REPEATABLE` below and above a union.
+#[test]
+fn samples_around_a_union_match_spark() {
+    check(&[1, 2, 4, 8], |t| t.starts_with("g."));
+}
+
+/// Over two ranges of one slice each, a sample above the union draws one
+/// stream (Spark 4.2.0, `local[1]`: 204 rows; run
+/// `~/krishiv-data/tmp/opus-3/r4/p2b.out`).
+#[test]
+fn a_sample_over_a_union_of_single_ranges_draws_one_stream() {
+    let doc = fixture();
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(&doc, "probe.scala", 1, dir.path());
+    run(
+        &s,
+        "CREATE TEMPORARY VIEW t AS SELECT id FROM range(0, 1000)",
+    );
+    let got = rows(
+        &s,
+        "SELECT * FROM (SELECT id FROM t UNION ALL SELECT id FROM t) \
+         TABLESAMPLE (10 PERCENT) REPEATABLE (7)",
+    );
+    assert_eq!(got.len(), 204);
+    let mut ids: Vec<i64> = got.iter().map(|r| r.parse().unwrap()).collect();
+    ids.sort_unstable();
+    assert_eq!(ids[..12], [11, 11, 13, 20, 25, 27, 31, 36, 37, 39, 42, 44]);
+}
+
+#[test]
+fn java_doubles_print_as_spark_does() {
+    assert_eq!(java_double(0.619_189_370_225_301), "0.619189370225301");
+    assert_eq!(java_double(1.0), "1.0");
+    assert_eq!(java_double(0.000_12), "1.2E-4");
+    assert_eq!(java_double(-0.000_1), "-1.0E-4");
+}
+
+/// Two global aggregates are each Spark's `SinglePartition` (the final
+/// `HashAggregate` over the `SinglePartition` exchange), so their union is
+/// one partition: an expression above it sees index 0 and one stream. This
+/// follows `UnionExec.comparePartitioning` (semantics.md, section f); the
+/// fixture has no run of this exact shape.
+#[test]
+fn a_union_of_global_aggregates_is_one_partition() {
+    let doc = fixture();
+    let dir = tempfile::tempdir().unwrap();
+    for threads in [1, 4] {
+        let s = session(&doc, "probe.scala", threads, dir.path());
+        let got = rows(
+            &s,
+            "SELECT c, spark_partition_id() p, monotonically_increasing_id() m FROM \
+             (SELECT count(*) c FROM m1 UNION ALL SELECT count(*) c FROM m2)",
+        );
+        assert_eq!(got, ["6,0,0", "4,0,1"], "{threads} threads");
+        run(&s, "SET spark.sql.unionOutputPartitioning=false");
+        let got = rows(
+            &s,
+            "SELECT c, spark_partition_id() p FROM \
+             (SELECT count(*) c FROM m1 UNION ALL SELECT count(*) c FROM m2)",
+        );
+        assert_eq!(got, ["6,0", "4,1"], "{threads} threads");
+    }
+}

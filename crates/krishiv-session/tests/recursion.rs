@@ -896,15 +896,23 @@ fn a_seeded_random_above_a_generator_draws_by_split_not_by_driver() {
     }
 }
 
-/// Two reads of one shared CTE number their splits apart: the stored batches carry no split tag of the
-/// pipeline that produced them, so ids drawn per split stay unique across the readers.
+/// Two reads of one shared CTE: the stored batches carry no split tag of the pipeline that produced them, so
+/// the ids each read draws stay unique within it. Each read sits in its own `UNION ALL` branch, which numbers its
+/// own partitions from 0 as Spark's does (Spark 4.2.0 `b_multi.mono.below`: the ids of two branches repeat;
+/// `union_partition_ids.rs`).
 #[test]
 fn two_reads_of_a_shared_cte_draw_ids_from_distinct_splits() {
     let s = Session::new().unwrap();
     let q = "WITH t AS (SELECT id, rand() AS r FROM range(0, 1000, 1, 4) UNION ALL SELECT count(*), rand() FROM range(10)) \
-             SELECT count(DISTINCT m) FROM (SELECT monotonically_increasing_id() AS m FROM t \
-             UNION ALL SELECT monotonically_increasing_id() AS m FROM t)";
-    assert_eq!(column(rows(&s, q)), vec!["2002"]);
+             SELECT b, count(DISTINCT m), count(*) FROM (SELECT 1 AS b, monotonically_increasing_id() AS m FROM t \
+             UNION ALL SELECT 2 AS b, monotonically_increasing_id() AS m FROM t) GROUP BY b ORDER BY b";
+    assert_eq!(
+        rows(&s, q),
+        vec![
+            vec!["1".to_owned(), "1001".to_owned(), "1001".to_owned()],
+            vec!["2".to_owned(), "1001".to_owned(), "1001".to_owned()]
+        ]
+    );
 }
 
 /// Spark 4.2.0 (krishiv-internal `research/spark/seed-by-split/probe.{py,out}`): split `i` of a `range` draws from

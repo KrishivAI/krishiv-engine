@@ -39,7 +39,7 @@ impl ReplicateRows {
 struct Cursor {
     batch_size: usize,
     /// The driver's partition: `count` evaluates stateful functions in it.
-    partition: u32,
+    partition: super::PartitionState,
     /// The input's counts, while some of its copies are still to emit.
     counts: Option<Int64Array>,
     /// The row being copied.
@@ -64,7 +64,7 @@ impl Operator for ReplicateRows {
     fn local_state(&self, ctx: &TaskContext) -> Result<LocalState> {
         Ok(Box::new(Cursor {
             batch_size: ctx.query().config().batch_size.max(1),
-            partition: ctx.partition(),
+            partition: super::PartitionState::of(ctx),
             counts: None,
             row: 0,
             emitted: 0,
@@ -81,7 +81,7 @@ impl Operator for ReplicateRows {
                 }
                 let v = self
                     .count
-                    .evaluate_in(input.data(), input.split().unwrap_or(cur.partition))?;
+                    .evaluate_in(input.data(), cur.partition.index(input.split()))?;
                 let c = v
                     .as_primitive_opt::<Int64Type>()
                     .ok_or_else(|| internal("a replication count is not BIGINT".to_owned()))?

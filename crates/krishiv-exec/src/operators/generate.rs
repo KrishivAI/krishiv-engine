@@ -135,7 +135,7 @@ fn generated_fields(kind: GeneratorKind, outer: bool, ty: &DataType) -> Result<V
 /// functions in it) and the input batch's elements still to emit.
 struct Cursor {
     batch_size: usize,
-    partition: u32,
+    partition: super::PartitionState,
     pending: Option<Pending>,
 }
 
@@ -276,7 +276,7 @@ impl Operator for Generate {
     fn local_state(&self, ctx: &TaskContext) -> Result<LocalState> {
         Ok(Box::new(Cursor {
             batch_size: ctx.query().config().batch_size.max(1),
-            partition: ctx.partition(),
+            partition: super::PartitionState::of(ctx),
             pending: None,
         }))
     }
@@ -291,7 +291,7 @@ impl Operator for Generate {
                 }
                 let arg = self
                     .arg
-                    .evaluate_in(input.data(), input.split().unwrap_or(cur.partition))?;
+                    .evaluate_in(input.data(), cur.partition.index(input.split()))?;
                 Pending {
                     elements: Elements::of(self.kind, &arg)?,
                     row: 0,

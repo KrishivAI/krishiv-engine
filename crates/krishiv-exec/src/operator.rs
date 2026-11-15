@@ -80,6 +80,14 @@ pub trait Source: Send + Sync {
     fn partitions(&self, global: &GlobalState) -> usize {
         self.max_parallelism(global)
     }
+    /// Whether the source's output is Spark's `SinglePartition` (a
+    /// one-slice `range` of at least one row): a `UNION ALL` whose inputs
+    /// all are runs them as one partition (`spark.sql.unionOutputPartitioning`).
+    /// Default `false` (Spark's `UnknownPartitioning`: a file scan, `VALUES`).
+    fn single_partition(&self, global: &GlobalState) -> bool {
+        let _ = global;
+        false
+    }
     /// One driver's state.
     ///
     /// # Errors
@@ -237,6 +245,13 @@ pub trait Operator: Send + Sync {
     /// Drivers flush in parallel, so the operator shares out the work
     /// itself. Default: `false`.
     fn needs_flush(&self) -> bool {
+        false
+    }
+    /// Whether the operator's output keeps its input's Spark partitioning
+    /// (`ProjectExec`, `FilterExec`, a `LIMIT`'s single partition), so a
+    /// `SinglePartition` input stays one (see [`Source::single_partition`]).
+    /// Default `false`.
+    fn keeps_partitioning(&self) -> bool {
         false
     }
     /// This driver's input ended: publish what [`flush`](Self::flush) needs
