@@ -145,15 +145,26 @@ fn analysis_error_lines_count_from_the_file_start() {
 /// A run-time error shows the SQL span that raised it, as an analysis error
 /// does (RS-14): a cast and a division in a constant query, the same over a
 /// temporary view's column, and a statement past the first line of a file.
+/// Both output paths: `--format table` and agent mode (stdout piped, no
+/// `--format`).
 #[test]
 fn runtime_errors_show_their_sql_span() {
+    for format in [Some("table"), None] {
+        runtime_errors_show_their_sql_span_in(format);
+    }
+}
+
+fn runtime_errors_show_their_sql_span_in(format: Option<&str>) {
     let ansi = ["--conf", "spark.sql.ansi.enabled=true"];
     let run = |sql: &str| {
         let mut args = vec!["sql"];
         args.extend(ansi);
+        if let Some(f) = format {
+            args.extend(["--format", f]);
+        }
         args.extend(["-e", sql]);
         let o = krishiv(&args, None);
-        assert_eq!(o.status.code(), Some(1), "{sql}");
+        assert_eq!(o.status.code(), Some(1), "{sql} ({format:?})");
         err(&o)
     };
     let e = run("select cast('abc' as int)");

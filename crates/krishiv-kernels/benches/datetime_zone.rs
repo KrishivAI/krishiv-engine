@@ -17,7 +17,7 @@ use std::hint::black_box;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::TimestampMicrosecondType;
-use arrow_array::{StringArray, TimestampMicrosecondArray};
+use arrow_array::{Array, StringArray, TimestampMicrosecondArray};
 use arrow_schema::{DataType, TimeUnit};
 use criterion::{Criterion, criterion_group, criterion_main};
 use krishiv_kernels::cast::{CastMode, CastOptions, TimeZoneRules, cast};
@@ -44,6 +44,7 @@ fn zones(c: &mut Criterion) {
             mode: CastMode::Ansi,
             time_zone: zone,
         };
+        check(&ntz, &hours, &ltz, &opts, name);
         c.bench_function(&format!("ntz_to_timestamp/{name}"), |b| {
             b.iter(|| cast(black_box(&ntz), &ltz, &opts).unwrap());
         });
@@ -55,6 +56,33 @@ fn zones(c: &mut Criterion) {
             });
         });
     }
+}
+
+/// Untimed: both operations give a value for every row, and the first row
+/// (local 2024-01-01T00:00, an hour boundary) is the instant the zone maps it
+/// to: 2023-12-31T23:00Z in Stockholm (UTC+1 in winter), itself in UTC.
+fn check(
+    ntz: &TimestampMicrosecondArray,
+    hours: &StringArray,
+    ltz: &DataType,
+    opts: &CastOptions<'_>,
+    name: &str,
+) {
+    let want = match name {
+        "Europe/Stockholm" => JAN_2024 - 3_600_000_000,
+        _ => JAN_2024,
+    };
+    let instants = cast(ntz, ltz, opts).unwrap();
+    let instants = instants.as_primitive::<TimestampMicrosecondType>();
+    assert_eq!(
+        (instants.len(), instants.null_count()),
+        (ntz.len(), 0),
+        "{name}"
+    );
+    assert_eq!(instants.value(0), want, "{name}");
+    let trunc = trunc_timestamp(hours, instants, opts.time_zone, true).unwrap();
+    assert_eq!((trunc.len(), trunc.null_count()), (ntz.len(), 0), "{name}");
+    assert_eq!(trunc.value(0), want, "{name}");
 }
 
 criterion_group!(benches, zones);
