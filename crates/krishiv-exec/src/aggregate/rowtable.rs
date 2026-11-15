@@ -1671,12 +1671,25 @@ fn buckets_for(cap: usize) -> usize {
     }
 }
 
+/// Reserves `part`'s rows and accumulators for `groups` groups, plus one
+/// merge chunk of `chunk` rows (at most `groups`).
+fn reserve_part(part: &mut Part, groups: usize, chunk: usize, stride: usize) {
+    let n = groups.saturating_add(groups.min(chunk));
+    part.rows.reserve(n.saturating_mul(stride));
+    for a in &mut part.accs {
+        a.reserve(n);
+    }
+}
+
 /// One final-phase task: radix partitions `parts` of every input table.
 #[derive(Debug, Clone)]
 pub(crate) struct FinalTask {
     pub(crate) parts: Range<usize>,
     /// Estimated groups (merged sketches, capped by the rows).
     pub(crate) groups: usize,
+    /// The estimate of each partition of `parts`, in order (`groups` is
+    /// their sum), for [`RowTable::presize_parts`].
+    pub(crate) part_groups: Vec<usize>,
 }
 
 /// Groups per final-phase task the radix bits aim for: a task's index and
@@ -1731,8 +1744,16 @@ pub(crate) fn final_tasks(tables: &[&RowTable]) -> Vec<FinalTask> {
         .map(|start| {
             let parts = start..start + width;
             let rows: usize = est[parts.clone()].iter().map(|e| e.0).sum();
-            let groups = est[parts.clone()].iter().map(|e| e.1).sum();
-            (rows, FinalTask { parts, groups })
+            let part_groups: Vec<usize> = est[parts.clone()].iter().map(|e| e.1).collect();
+            let groups = part_groups.iter().sum();
+            (
+                rows,
+                FinalTask {
+                    parts,
+                    groups,
+                    part_groups,
+                },
+            )
         })
         .filter(|(rows, _)| *rows > 0)
         .map(|(_, t)| t)
@@ -1763,6 +1784,52 @@ impl RowTable {
     /// join's size rule, [`FLAT_MAX_BYTES`].
     fn salted_merge(groups: usize) -> bool {
         buckets_for(groups).saturating_mul(BUCKET_BYTES) > FLAT_MAX_BYTES
+    }
+
+    /// Reserves the row pages and accumulators of a merge table's
+    /// partitions `start..start + groups.len()` for `groups[i]` groups each,
+    /// so they are allocated once instead of growing by doubling (q18 at
+    /// SF100: the merge's doubling was 47% of `RawVec::finish_grow`'s
+    /// cycles, mostly page faults; `research/perf-parity/q18-presize-s0`).
+    /// A one-partition table takes the sum. Each page also gets room for
+    /// one merge chunk of `chunk` rows (at most its own estimate):
+    /// [`apply_merge`](Self::apply_merge) reserves a whole chunk as new
+    /// rows, which past an exact page would double it at the end. Long
+    /// string keys (the heap) still grow as they come: their size is not
+    /// estimated.
+    pub(crate) fn presize_parts(&mut self, start: usize, groups: &[usize], chunk: usize) {
+        let stride = self.stride;
+        if let [only] = self.parts.as_mut_slice() {
+            reserve_part(only, groups.iter().sum(), chunk, stride);
+            return;
+        }
+        for (part, &n) in self.parts.iter_mut().skip(start).zip(groups) {
+            reserve_part(part, n, chunk, stride);
+        }
+    }
+
+    /// The bytes [`presize_parts`](Self::presize_parts) adds to an empty
+    /// table.
+    pub(crate) fn projected_parts(&self, groups: &[usize], chunk: usize) -> usize {
+        // Per partition, as `presize_parts` reserves (an accumulator's
+        // capacity rounds up per vector).
+        let sum: usize = groups.iter().sum();
+        let one = [sum];
+        let each: &[usize] = if self.parts.len() == 1 { &one } else { groups };
+        let Some(empty) = self.parts.first() else {
+            return 0;
+        };
+        each.iter()
+            .map(|&g| {
+                let n = g.saturating_add(g.min(chunk));
+                let accs: usize = empty
+                    .accs
+                    .iter()
+                    .map(|a| a.projected(n, None, None).saturating_sub(a.size()))
+                    .sum();
+                n.saturating_mul(self.stride).saturating_add(accs)
+            })
+            .sum()
     }
 
     /// [`memory_size`](Self::memory_size) after [`presize`](Self::presize).
