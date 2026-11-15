@@ -153,11 +153,12 @@ fn take_values(state: &Lane, n: usize, memory: &mut Vec<Reservation>) -> Result<
         parts.push(Arc::clone(front.column(0)).slice(0, len));
         want -= len;
         if len == front.num_rows() {
-            if let Some((_, r)) = q.outputs.pop_front() {
+            if let Some((_, r)) = q.pop_output() {
                 memory.push(r);
             }
         } else {
             *front = front.slice(len, front.num_rows() - len);
+            q.took(len);
         }
     }
     let refs: Vec<&dyn Array> = parts.iter().map(AsRef::as_ref).collect();

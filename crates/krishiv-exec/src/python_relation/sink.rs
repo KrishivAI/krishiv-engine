@@ -47,8 +47,8 @@
 //! is taken, so the retry is exact. In `finalize` a refused map or grouped
 //! result is stored as the others, written to a spill file when the pool
 //! is full; an aggregate's refused value waits for its memory while the
-//! other lanes move, which hold at most one result past it (a lane ahead
-//! of a running peer reads no more, `lane.rs`). A stored result's bytes pass to the store's
+//! other lanes move, which hold at most one result batch past it while it
+//! has frames to take (`lane.rs`, Peers). A stored result's bytes pass to the store's
 //! reservation through the consumer's credit, never counted twice.
 //!
 //! **Errors and cancellation.** The first failure of a task fails the
@@ -632,7 +632,7 @@ impl RelationSink {
             );
         }
         for (lane, state) in self.lanes.iter().zip(&d.lanes) {
-            let next = lock(&state.io).outputs.pop_front();
+            let next = lock(&state.io).pop_output();
             if let Some((batch, memory)) = next {
                 return Ok(Some((self.output(lane, &batch)?, vec![memory])));
             }
@@ -1095,7 +1095,10 @@ impl Sink for RelationSink {
             consumer: Arc::clone(consumer),
             store: self.store.local_state(ctx, &g.store)?,
             driver: Driver {
-                lanes: Lane::group(self.lanes.iter().map(|_| consumer.reservation())),
+                lanes: Lane::group(
+                    self.lanes.iter().map(|_| consumer.reservation()),
+                    matches!(self.shape, RelationShape::Aggregate { .. }),
+                ),
                 ready: None,
                 partition: ctx.partition(),
                 current: None,

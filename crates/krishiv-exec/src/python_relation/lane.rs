@@ -18,10 +18,20 @@
 //! **Peers.** An aggregate's lanes yield one value per group and a group is
 //! stored only once every lane has its value (`pair.rs`), so a lane's values
 //! past its peers' cannot be released, nor spilled. A lane therefore reads
-//! no result while it holds more rows than a peer whose task still runs:
-//! it waits on its own task, holding at most one result past the others,
-//! and a slower lane's value never waits for memory its peers pin. A lane
-//! of a map or grouped shape has no peers.
+//! no result while it holds more rows than a peer whose task still runs
+//! *and still has frames it has not taken*: it waits on its own task,
+//! holding at most one result batch past that peer, so the peer's values
+//! do not wait for memory this lane pins. A peer that took every frame it
+//! was given may need later frames before it yields (a runtime batching
+//! values across groups); holding back then would stop this lane's task
+//! taking frames, fill its window and so stop the frames to every lane, a
+//! hang. So the hold lasts only while the peer has frames to take, and is
+//! released (the waiting pump woken) when it took its last one, yielded or
+//! stopped; the pool then decides (a spill, or a classed error), never a
+//! hang. The lane with the fewest rows is never held, and a lane is held
+//! only by a peer with strictly fewer rows, so the holds form no cycle.
+//! Only an aggregate's lanes are peers ([`Lane::group`]): a map or grouped
+//! shape's results are stored one lane at a time.
 
 use std::collections::VecDeque;
 use std::future::poll_fn;
@@ -59,10 +69,13 @@ pub(super) struct LaneIo {
     /// An empty reservation of the driver's consumer, the results' are
     /// split from.
     pub(super) memory: Reservation,
-    /// The task yielded its last result.
-    ended: bool,
-    /// The pump waiting while the lane is ahead of a peer, woken when a
-    /// peer yields or ends.
+    /// The rows of [`Self::outputs`] and [`Self::refused`], kept as they
+    /// change (a peer's hold reads it on every result).
+    rows: usize,
+    /// The pump ended: the task yielded its last result or failed.
+    stopped: bool,
+    /// The pump waiting while a peer holds the lane back, woken when a
+    /// peer yields, takes its last frame or stops.
     waiting: Option<Waker>,
 }
 
@@ -76,14 +89,19 @@ impl LaneIo {
         !self.outputs.is_empty() || self.refused.is_some()
     }
 
-    /// The rows of the results not taken by the driver, the refused one's
-    /// with them.
-    fn rows(&self) -> usize {
-        self.outputs
-            .iter()
-            .map(|(b, _)| b.num_rows())
-            .sum::<usize>()
-            + self.refused.as_ref().map_or(0, RecordBatch::num_rows)
+    /// The next result, taken by the driver.
+    pub(super) fn pop_output(&mut self) -> Option<(RecordBatch, Reservation)> {
+        let next = self.outputs.pop_front();
+        if let Some((b, _)) = &next {
+            self.took(b.num_rows());
+        }
+        next
+    }
+
+    /// `rows` rows of the results taken by the driver (the front batch
+    /// sliced or popped by the caller).
+    pub(super) fn took(&mut self, rows: usize) {
+        self.rows = self.rows.saturating_sub(rows);
     }
 }
 
@@ -110,9 +128,19 @@ pub(super) struct Lane {
 
 impl Lane {
     /// The lanes of one driver, one per reservation, whose results reserve
-    /// in that reservation's consumer; each reads no result while it holds
-    /// more rows than a peer still running.
-    pub(super) fn group(memories: impl IntoIterator<Item = Reservation>) -> Vec<Self> {
+    /// in that reservation's consumer. With `peered` (an aggregate's lanes)
+    /// each reads no result while it holds more rows than a peer still
+    /// running that has frames to take; else every lane is alone.
+    pub(super) fn group(
+        memories: impl IntoIterator<Item = Reservation>,
+        peered: bool,
+    ) -> Vec<Self> {
+        if !peered {
+            return memories
+                .into_iter()
+                .flat_map(|memory| Self::group([memory], true))
+                .collect();
+        }
         let peers: Peers = memories
             .into_iter()
             .map(|memory| {
@@ -122,7 +150,8 @@ impl Lane {
                     outputs: VecDeque::new(),
                     refused: None,
                     memory,
-                    ended: false,
+                    rows: 0,
+                    stopped: false,
                     waiting: None,
                 }))
             })
@@ -199,7 +228,10 @@ impl Lane {
     /// The refused result, if any, taken without a reservation (its
     /// caller stores it at once, writing it out when the pool is full).
     pub(super) fn take_refused_unreserved(&self) -> Option<RecordBatch> {
-        lock(&self.io).refused.take()
+        let mut q = lock(&self.io);
+        let batch = q.refused.take()?;
+        q.took(batch.num_rows());
+        Some(batch)
     }
 
     /// The future that reserves the refused result, if any, waiting for
@@ -222,24 +254,30 @@ impl Lane {
     }
 }
 
-/// Whether lane `index` holds more rows than a peer whose task still runs.
-/// Each queue is locked alone, so two lanes asking at once never deadlock.
-fn ahead(peers: &[Arc<Mutex<LaneIo>>], index: usize) -> bool {
-    let Some(own) = peers.get(index).map(|io| lock(io).rows()) else {
+/// Whether lane `index` holds more rows than a peer whose task still runs
+/// and has frames it has not taken (a peer waiting for input never holds
+/// it back, see the module doc). Each queue is locked alone, so two lanes
+/// asking at once never deadlock.
+fn held_back(peers: &[Arc<Mutex<LaneIo>>], index: usize) -> bool {
+    let Some(own) = peers.get(index).map(|io| lock(io).rows) else {
         return false;
     };
     peers.iter().enumerate().any(|(i, io)| {
         let q = lock(io);
-        i != index && !q.ended && q.rows() < own
+        i != index && !q.stopped && q.in_flight() > 0 && q.rows < own
     })
 }
 
-/// Wakes every peer of lane `index` waiting for it to yield or end.
+/// Wakes every peer of lane `index` waiting for it to yield, take its last
+/// frame or stop; each waker is taken under the peer's lock and woken
+/// after it is released.
 fn wake_peers(peers: &[Arc<Mutex<LaneIo>>], index: usize) {
     for (i, io) in peers.iter().enumerate() {
-        if i != index
-            && let Some(w) = lock(io).waiting.take()
-        {
+        if i == index {
+            continue;
+        }
+        let waker = lock(io).waiting.take();
+        if let Some(w) = waker {
             w.wake();
         }
     }
@@ -269,7 +307,15 @@ fn pump(task: Box<dyn UdfTask>, peers: Peers, index: usize) -> BoxFuture<'static
                 .await;
                 let end = matches!(frame, Frame::End);
                 task.send(frame).await?;
-                lock(&io).sending = None;
+                let idle = {
+                    let mut q = lock(&io);
+                    q.sending = None;
+                    q.in_flight() == 0
+                };
+                if idle {
+                    // A peer held back by this lane's frames moves on.
+                    wake_peers(&peers, index);
+                }
                 if end {
                     return Ok::<(), KrishivError>(());
                 }
@@ -278,15 +324,16 @@ fn pump(task: Box<dyn UdfTask>, peers: Peers, index: usize) -> BoxFuture<'static
         let receive = async {
             loop {
                 // Not woken while refused: whoever reserves the refused
-                // batch polls the pump next. Ahead of a peer: woken when a
-                // peer yields or ends (the waker is set before the check,
-                // so a peer that moves after it wakes this pump).
+                // batch polls the pump next. Held back by a peer: woken
+                // when a peer yields, takes its last frame or stops (the
+                // waker is set before the check, so a peer that moves
+                // after it wakes this pump).
                 poll_fn(|cx| {
                     if lock(&io).refused.is_some() {
                         return Poll::Pending;
                     }
                     lock(&io).waiting = Some(cx.waker().clone());
-                    if ahead(&peers, index) {
+                    if held_back(&peers, index) {
                         Poll::Pending
                     } else {
                         lock(&io).waiting = None;
@@ -295,13 +342,12 @@ fn pump(task: Box<dyn UdfTask>, peers: Peers, index: usize) -> BoxFuture<'static
                 })
                 .await;
                 let Some(batch) = task.next().await? else {
-                    lock(&io).ended = true;
-                    wake_peers(&peers, index);
                     return Ok(());
                 };
                 let bytes = batch.get_array_memory_size();
                 {
                     let mut q = lock(&io);
+                    q.rows += batch.num_rows();
                     let mut r = q.memory.split(0);
                     if r.try_grow(bytes).is_ok() {
                         q.outputs.push_back((batch, r));
@@ -312,6 +358,10 @@ fn pump(task: Box<dyn UdfTask>, peers: Peers, index: usize) -> BoxFuture<'static
                 wake_peers(&peers, index);
             }
         };
-        futures::future::try_join(send, receive).await.map(drop)
+        let outcome = futures::future::try_join(send, receive).await.map(drop);
+        // Ended or failed: this lane holds no peer back any more.
+        lock(&io).stopped = true;
+        wake_peers(&peers, index);
+        outcome
     })
 }

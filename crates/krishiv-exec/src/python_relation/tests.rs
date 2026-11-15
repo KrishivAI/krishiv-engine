@@ -22,7 +22,7 @@ use krishiv_common::error::{ErrorClass, InternalError};
 use krishiv_memory::{MemoryConfig, MemoryPool, SpillOwner, TreePool};
 use krishiv_types::batch::Batch;
 
-use super::sink::{InputColumn, RelationLimits};
+use super::sink::{DEFAULT_WINDOW, InputColumn, RelationLimits};
 use super::{Frame, PreparedRelationUdf, RelationLane, RelationShape, RelationSink, UdfTask};
 use crate::operator::{Sink, SinkStatus};
 use crate::operators::ScalarExpr;
@@ -51,6 +51,9 @@ struct Shared {
     taken: std::sync::atomic::AtomicUsize,
     /// Polls of `next`: past [`SPUN`] the task fails, so a busy loop ends.
     polls: std::sync::atomic::AtomicUsize,
+    /// While set, `send` waits while this many results are not read (a
+    /// runtime whose output pipe is full takes no more frames).
+    out_cap: std::sync::Mutex<Option<usize>>,
 }
 
 /// Polls of a task's `next` that only a busy loop reaches.
@@ -80,6 +83,9 @@ enum Yield {
     CountTwice,
     /// Each batch back this many times.
     Burst(usize),
+    /// As `Count`, the values of this many groups yielded together (a
+    /// runtime batching its results across groups); the rest at the end.
+    Coalesce(usize),
 }
 
 struct Fake {
@@ -95,6 +101,7 @@ impl PreparedRelationUdf for Fake {
             yields: self.yields,
             state: std::sync::Mutex::new(TaskState::default()),
             ready: AtomicWaker::new(),
+            drained: AtomicWaker::new(),
         }))
     }
 }
@@ -104,6 +111,8 @@ struct TaskState {
     out: VecDeque<RecordBatch>,
     rows: i64,
     ended: bool,
+    /// `Coalesce`: the values not yielded yet.
+    held: Vec<i64>,
 }
 
 struct Task {
@@ -111,6 +120,8 @@ struct Task {
     yields: Yield,
     state: std::sync::Mutex<TaskState>,
     ready: AtomicWaker,
+    /// Woken as `next` takes a result (`Shared::out_cap`).
+    drained: AtomicWaker,
 }
 
 impl Drop for Task {
@@ -120,18 +131,23 @@ impl Drop for Task {
 }
 
 fn count(n: i64) -> RecordBatch {
+    counts(vec![n])
+}
+
+fn counts(n: Vec<i64>) -> RecordBatch {
     let schema = Arc::new(Schema::new(vec![Field::new("n", ArrowType::Int64, true)]));
-    RecordBatch::try_new(
-        schema,
-        vec![Arc::new(Int64Array::from(vec![n])) as ArrayRef],
-    )
-    .unwrap()
+    RecordBatch::try_new(schema, vec![Arc::new(Int64Array::from(n)) as ArrayRef]).unwrap()
 }
 
 impl UdfTask for Task {
     fn send(&self, frame: Frame) -> BoxFuture<'_, crate::error::Result<()>> {
         Box::pin(async move {
             poll_fn(|cx| {
+                self.drained.register(cx.waker());
+                let cap = *self.shared.out_cap.lock().unwrap();
+                if cap.is_some_and(|c| self.state.lock().unwrap().out.len() >= c) {
+                    return Poll::Pending;
+                }
                 self.shared.gate.register(cx.waker());
                 let full = (*self.shared.admit.lock().unwrap())
                     .is_some_and(|n| self.shared.log.lock().unwrap().len() >= n);
@@ -164,7 +180,7 @@ impl UdfTask for Task {
                     let copies = match self.yields {
                         Yield::Twice => 2,
                         Yield::Burst(n) => n,
-                        Yield::Nothing | Yield::Count | Yield::CountTwice => 0,
+                        Yield::Nothing | Yield::Count | Yield::CountTwice | Yield::Coalesce(_) => 0,
                     };
                     for _ in 0..copies {
                         s.out.push_back(batch.clone());
@@ -178,10 +194,23 @@ impl UdfTask for Task {
                             s.out.push_back(count(n));
                             s.out.push_back(count(n));
                         }
+                        Yield::Coalesce(groups) => {
+                            s.held.push(n);
+                            if s.held.len() >= groups {
+                                let values = std::mem::take(&mut s.held);
+                                s.out.push_back(counts(values));
+                            }
+                        }
                         _ => {}
                     }
                 }
-                Frame::End => s.ended = true,
+                Frame::End => {
+                    if !s.held.is_empty() {
+                        let values = std::mem::take(&mut s.held);
+                        s.out.push_back(counts(values));
+                    }
+                    s.ended = true;
+                }
             }
             drop(s);
             self.ready.wake();
@@ -202,6 +231,7 @@ impl UdfTask for Task {
             match s.out.pop_front() {
                 Some(b) => {
                     self.shared.taken.fetch_add(1, Ordering::SeqCst);
+                    self.drained.wake();
                     Poll::Ready(Ok(Some(b)))
                 }
                 None if s.ended => Poll::Ready(Ok(None)),
@@ -325,7 +355,7 @@ fn rig_in(
     let names = || vec!["k".to_owned(), "v".to_owned()];
     let sides = if cogroup { 2 } else { 1 };
     let (client, output) = match yields {
-        Yield::Count | Yield::CountTwice => (
+        Yield::Count | Yield::CountTwice | Yield::Coalesce(_) => (
             vec![ArrowType::Int64],
             match shape {
                 RelationShape::Aggregate { .. } => vec![
@@ -1047,8 +1077,9 @@ async fn an_aggregate_waits_for_its_slowest_lane_without_spinning() {
 /// slow lane's first is reserved: no group can be joined, and the lane
 /// queues are not spillable, so the slow lane's value would wait for memory
 /// only its peer holds. A lane reads no result while it holds more values
-/// than a peer still running, so it holds at most one result past the
-/// others and the slow lane always gets its value's memory.
+/// than a running peer that has frames to take, so here it holds at most
+/// one result batch past the gated lane, which always gets its value's
+/// memory. (A deep window: the stall as first seen.)
 #[tokio::test]
 async fn a_fast_aggregate_lane_waits_for_its_peers_instead_of_filling_the_pool() {
     let dir = tempfile::tempdir().unwrap();
@@ -1102,14 +1133,187 @@ async fn a_fast_aggregate_lane_waits_for_its_peers_instead_of_filling_the_pool()
     assert_eq!(r.shared.taken.load(Ordering::SeqCst), 1);
     r.sink.combine(l, &g).unwrap();
     slow.open_gate();
-    // Faster than the pool's spill wait: nothing waits for memory.
-    tokio::time::timeout(Duration::from_secs(4), r.sink.finalize(&g, &r.ctx))
+    // The open slow lane takes its whole deep window at once, so the hold
+    // ends and the two lanes share the pool: slower, never stuck.
+    tokio::time::timeout(Duration::from_secs(40), r.sink.finalize(&g, &r.ctx))
         .await
         .unwrap()
         .unwrap();
     let groups = usize::try_from(groups).unwrap();
     assert_eq!(r.shared.taken.load(Ordering::SeqCst), groups);
     assert_eq!(slow.taken.load(Ordering::SeqCst), groups);
+    drop(g);
+    done(r);
+}
+
+/// A two-lane aggregate on key `k`: lane `f` of `fast`, lane `g` of
+/// `slow`, at `window` frames in flight per lane.
+fn two_lane_aggregate(
+    lanes: [(&Arc<Shared>, Yield); 2],
+    window: usize,
+    scope: Option<krishiv_memory::SpillScope>,
+) -> Arc<RelationSink> {
+    let lane = |(shared, yields): (&Arc<Shared>, Yield), name: &str| RelationLane {
+        name: name.to_owned(),
+        udf: Arc::new(Fake {
+            shared: Arc::clone(shared),
+            yields,
+        }),
+        sides: vec![vec![
+            column(0, ArrowType::Int32),
+            column(1, ArrowType::Int64),
+        ]],
+        names: vec![vec!["k".to_owned(), "v".to_owned()]],
+        client: vec![ArrowType::Int64],
+    };
+    let [fast, slow] = lanes;
+    RelationSink::try_new(
+        input(false),
+        RelationShape::Aggregate {
+            keys: vec![0],
+            key_values: vec![0],
+        },
+        vec![lane(fast, "f"), lane(slow, "g")],
+        Arc::new(Schema::new(vec![
+            Field::new("k", ArrowType::Int32, true),
+            Field::new("n", ArrowType::Int64, true),
+            Field::new("m", ArrowType::Int64, true),
+        ])),
+        limits(0, window),
+        scope,
+    )
+    .unwrap()
+}
+
+/// The groups `0..n`, one row each.
+fn groups(n: i32) -> Batch {
+    rows(&(0..n).collect::<Vec<_>>(), None)
+}
+
+/// The production window: the slow lane's window, not its memory, stops
+/// the feed. While it has frames it has not taken, the fast lane reads no
+/// value past its first; once it takes them both lanes finish.
+#[tokio::test]
+async fn at_the_production_window_a_fast_lane_waits_while_its_peer_has_frames() {
+    let shape = RelationShape::Aggregate {
+        keys: vec![0],
+        key_values: vec![0],
+    };
+    let mut r = rig(shape, Yield::Count, limits(0, DEFAULT_WINDOW), 1 << 20);
+    let slow = Arc::new(Shared::default());
+    slow.closed.store(true, Ordering::SeqCst);
+    r.sink = two_lane_aggregate(
+        [(&r.shared, Yield::Count), (&slow, Yield::Count)],
+        DEFAULT_WINDOW,
+        None,
+    );
+    let g = r.sink.global_state(&r.ctx).unwrap();
+    let mut l = r.sink.local_state(&r.ctx, &g).unwrap();
+    let SinkStatus::Blocked(wait) = r.sink.sink(groups(2_000), &mut l, &g).unwrap() else {
+        panic!("the slow lane's window is full");
+    };
+    assert_eq!(r.shared.taken.load(Ordering::SeqCst), 1);
+    slow.open_gate();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        wait.await;
+        r.sink.combine(l, &g).unwrap();
+        r.sink.finalize(&g, &r.ctx).await.unwrap();
+    })
+    .await
+    .unwrap();
+    assert_eq!(r.shared.taken.load(Ordering::SeqCst), 2_000);
+    assert_eq!(slow.taken.load(Ordering::SeqCst), 2_000);
+    drop(g);
+    done(r);
+}
+
+/// A peer runtime batching its values across groups needs later frames
+/// before it yields; the fast lane, whose runtime takes no frame while a
+/// result is unread, must not hold back then, or no lane gets a frame.
+#[tokio::test]
+async fn a_peer_batching_values_across_groups_never_hangs_the_fast_lane() {
+    let shape = RelationShape::Aggregate {
+        keys: vec![0],
+        key_values: vec![0],
+    };
+    let mut r = rig(shape, Yield::Count, limits(0, DEFAULT_WINDOW), 64 << 20);
+    *r.shared.out_cap.lock().unwrap() = Some(1);
+    let slow = Arc::new(Shared::default());
+    r.sink = two_lane_aggregate(
+        [(&r.shared, Yield::Count), (&slow, Yield::Coalesce(40))],
+        DEFAULT_WINDOW,
+        None,
+    );
+    tokio::time::timeout(Duration::from_secs(10), drive(&r, vec![groups(100)]))
+        .await
+        .expect("the query hung")
+        .unwrap();
+    assert_eq!(r.shared.taken.load(Ordering::SeqCst), 100);
+    assert_eq!(slow.taken.load(Ordering::SeqCst), 3);
+    done(r);
+}
+
+/// A peer that ends with fewer values no longer holds the fast lane back:
+/// the phase fails with the mismatch, it does not hang.
+#[tokio::test]
+async fn a_peer_ending_with_fewer_values_fails_the_phase_instead_of_hanging() {
+    let shape = RelationShape::Aggregate {
+        keys: vec![0],
+        key_values: vec![0],
+    };
+    let mut r = rig(shape, Yield::Count, limits(0, DEFAULT_WINDOW), 64 << 20);
+    *r.shared.out_cap.lock().unwrap() = Some(1);
+    let slow = Arc::new(Shared::default());
+    r.sink = two_lane_aggregate(
+        [(&r.shared, Yield::Count), (&slow, Yield::Nothing)],
+        DEFAULT_WINDOW,
+        None,
+    );
+    let err = tokio::time::timeout(Duration::from_secs(10), drive(&r, vec![groups(50)]))
+        .await
+        .expect("the query hung")
+        .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::KrishivPythonUdfResultMismatch,
+        "{err}"
+    );
+    done(r);
+}
+
+/// A peer failing while the fast lane waits for it: its error, no hang.
+#[tokio::test]
+async fn a_peer_failing_while_the_fast_lane_waits_gives_the_peer_s_error() {
+    let shape = RelationShape::Aggregate {
+        keys: vec![0],
+        key_values: vec![0],
+    };
+    let mut r = rig(shape, Yield::Count, limits(0, DEFAULT_WINDOW), 64 << 20);
+    let slow = Arc::new(Shared::default());
+    slow.closed.store(true, Ordering::SeqCst);
+    *slow.fail_at.lock().unwrap() = Some(1);
+    r.sink = two_lane_aggregate(
+        [(&r.shared, Yield::Count), (&slow, Yield::Count)],
+        DEFAULT_WINDOW,
+        None,
+    );
+    let g = r.sink.global_state(&r.ctx).unwrap();
+    let mut l = r.sink.local_state(&r.ctx, &g).unwrap();
+    let SinkStatus::Blocked(wait) = r.sink.sink(groups(100), &mut l, &g).unwrap() else {
+        panic!("the slow lane's window is full");
+    };
+    // Held back: the slow lane has frames it has not taken.
+    assert_eq!(r.shared.taken.load(Ordering::SeqCst), 1);
+    slow.open_gate();
+    let err = tokio::time::timeout(Duration::from_secs(10), async {
+        wait.await;
+        r.sink.combine(l, &g)?;
+        r.sink.finalize(&g, &r.ctx).await
+    })
+    .await
+    .expect("the query hung")
+    .unwrap_err();
+    assert!(err.to_string().contains("the UDF raised"), "{err}");
     drop(g);
     done(r);
 }
