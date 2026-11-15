@@ -63,6 +63,7 @@ variants!(
     UnionLoop,
     LoopRef,
     Sample,
+    TableWrite,
 );
 
 fn variant_of(node: &PhysNode) -> Variant {
@@ -94,6 +95,7 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::SharedRead { .. } => Variant::SharedRead,
         PhysNode::LateFetch { .. } => Variant::LateFetch,
         PhysNode::Sample { .. } => Variant::Sample,
+        PhysNode::TableWrite { .. } => Variant::TableWrite,
     }
 }
 
@@ -612,6 +614,9 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "rust_udf"
             | "python_udf"
             | "sample"
+            | "table_write"
+            | "table_write_by_filter"
+            | "table_write_row_level"
             | "rust_udaf"
             | "nested_types"
             | "struct_field"

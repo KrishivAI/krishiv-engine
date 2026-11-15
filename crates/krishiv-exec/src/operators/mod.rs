@@ -42,6 +42,7 @@ mod scan;
 pub(crate) mod select;
 mod sort;
 mod spilled_scan;
+pub(crate) mod table_write;
 mod union;
 
 pub use expand::{Expand, NullOf};

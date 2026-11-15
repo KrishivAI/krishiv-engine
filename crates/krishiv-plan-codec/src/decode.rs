@@ -20,9 +20,11 @@ use krishiv_exec::physical::{
 };
 use krishiv_exec::physical::{
     ExchangeFilterPlan, ProbeColumn, ProbeFilter, ProbeFilterColumn, ProbeRowStage, ProbeSelect,
-    SharedId, SharedPlan,
+    SharedId, SharedPlan, TableWriteRequest,
 };
-use krishiv_exec::planner::ExplainNode;
+use krishiv_exec::planner::{
+    ExplainNode, RowLevelOperation, RowLevelWrite, WriteMode, WriteRequest,
+};
 use krishiv_exec::window::{
     FrameBound, FrameUnits, GroupLimitPlan, RankLike, WindowFrame, WindowFunction,
     WindowFunctionPlan, WindowPlan,
@@ -649,6 +651,69 @@ impl Decoder {
                 write: w.write.as_ref().map(write_plan).transpose()?,
             },
             Kind::Exchange(e) => PhysNode::Exchange(self.exchange(e)?),
+            Kind::TableWrite(t) => self.table_write(t)?,
+        })
+    }
+
+    fn table_write(&mut self, t: &pb::TableWriteNode) -> Result<PhysNode> {
+        use pb::table_write_node::Request;
+        let table = required(&t.table, "a written table")?;
+        let options = |entries: &[pb::MapLiteralEntry]| {
+            entries
+                .iter()
+                .map(|e| (e.key.clone(), e.value.clone()))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        let request = match required(&t.request, "a write request")? {
+            Request::Write(w) => {
+                let filter = w.filter.map(|i| self.expr_ref(i)).transpose()?;
+                let mode = enum_map!(pb::TableWriteMode, w.mode, "write mode", {
+                    Append => WriteMode::Append,
+                    Truncate => WriteMode::Truncate,
+                    OverwriteByFilter => WriteMode::OverwriteByFilter(
+                        filter.clone().ok_or_else(|| corrupt("an overwrite by filter without its filter"))?,
+                    ),
+                    OverwriteDynamic => WriteMode::OverwriteDynamic,
+                })?;
+                if filter.is_some() && !matches!(mode, WriteMode::OverwriteByFilter(_)) {
+                    return Err(corrupt("a write filter on a mode that takes none"));
+                }
+                let mut request =
+                    WriteRequest::new(mode, w.table_name.clone(), schema_from(&w.input_schema)?);
+                request.options = options(&w.options);
+                request.write_id.clone_from(&w.write_id);
+                TableWriteRequest::Write(request)
+            }
+            Request::RowLevel(r) => {
+                let op = enum_map!(pb::RowLevelOperation, r.op, "row-level operation", {
+                    Delete => RowLevelOperation::Delete,
+                    Update => RowLevelOperation::Update,
+                    Merge => RowLevelOperation::Merge,
+                })?;
+                let mut request = RowLevelWrite::new(
+                    op,
+                    r.table_name.clone(),
+                    schema_from(&r.input_schema)?,
+                    r.touched.clone(),
+                    r.read_filter.map(|i| self.expr_ref(i)).transpose()?,
+                );
+                request.options = options(&r.options);
+                request.write_id.clone_from(&r.write_id);
+                TableWriteRequest::RowLevel(request)
+            }
+        };
+        Ok(PhysNode::TableWrite {
+            input: self.boxed(t.input)?,
+            table: Scan {
+                source: read_source(required(&table.source, "a written table's source")?)?,
+                output: table
+                    .output
+                    .iter()
+                    .map(bound_column)
+                    .collect::<Result<_>>()?,
+                version: table.version.map(TableVersion),
+            },
+            request,
         })
     }
 

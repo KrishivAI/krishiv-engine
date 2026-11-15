@@ -39,6 +39,7 @@ mod shared;
 mod splits;
 mod string_encoding;
 mod sum_rewrite;
+mod table_write;
 mod tpcds_merge;
 mod tpch;
 mod two_phase;

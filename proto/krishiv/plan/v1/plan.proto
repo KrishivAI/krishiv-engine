@@ -174,7 +174,79 @@ message Node {
     PythonEvalNode python_eval = 26;
     // feature: sample
     SampleNode sample = 27;
+    // feature: table_write
+    TableWriteNode table_write = 28;
   }
+}
+
+// feature: table_write
+// The rows of `input` written into a table provider's sink: `table` names the
+// provider as a scan does, and is resolved when the plan is instantiated, into
+// the table's writer or the rewriter of its row-level table. The node returns
+// no rows; the sink commits when it finalizes.
+message TableWriteNode {
+  uint32 input = 1;
+  TableRef table = 2;
+  oneof request {
+    TableWriteRequest write = 3;
+    RowLevelWriteRequest row_level = 4;
+  }
+}
+
+// feature: table_write
+// A table as the provider resolver names it (a scan's source, columns and
+// pinned version).
+message TableRef {
+  ReadSource source = 1;
+  repeated BoundColumn output = 2;
+  optional sint64 version = 3;
+}
+
+// feature: table_write
+// A write: the table's writer for `mode`.
+message TableWriteRequest {
+  TableWriteMode mode = 1;
+  // The rows an overwrite by filter replaces (an expression table index).
+  optional uint32 filter = 2;
+  string table_name = 3;
+  // The rows the sink receives (Arrow IPC `Schema` flatbuffer).
+  bytes input_schema = 4;
+  // Plain text only: an inline secret or a URL with credentials fails to encode.
+  repeated MapLiteralEntry options = 5;
+  optional string write_id = 6;
+}
+
+// feature: table_write
+enum TableWriteMode {
+  TABLE_WRITE_MODE_UNSPECIFIED = 0;
+  TABLE_WRITE_MODE_APPEND = 1;
+  TABLE_WRITE_MODE_TRUNCATE = 2;
+  TABLE_WRITE_MODE_OVERWRITE_BY_FILTER = 3;
+  TABLE_WRITE_MODE_OVERWRITE_DYNAMIC = 4;
+}
+
+// feature: table_write
+// A copy-on-write rewrite: the rewriter of the table's row-level table.
+message RowLevelWriteRequest {
+  RowLevelOperation op = 1;
+  string table_name = 2;
+  // The rows the sink receives (Arrow IPC `Schema` flatbuffer).
+  bytes input_schema = 3;
+  // The files the rewrite replaces.
+  repeated string touched = 4;
+  // The statement's condition (an expression table index); absent: every row was read.
+  optional uint32 read_filter = 5;
+  // Plain text only, as `TableWriteRequest.options`.
+  repeated MapLiteralEntry options = 6;
+  optional string write_id = 7;
+}
+
+// feature: table_write
+enum RowLevelOperation {
+  ROW_LEVEL_OPERATION_UNSPECIFIED = 0;
+  ROW_LEVEL_OPERATION_DELETE = 1;
+  ROW_LEVEL_OPERATION_UPDATE = 2;
+  ROW_LEVEL_OPERATION_MERGE = 3;
 }
 
 // feature: sample

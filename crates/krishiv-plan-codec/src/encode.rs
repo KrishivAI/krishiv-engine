@@ -16,9 +16,9 @@ use krishiv_exec::physical::{
     AggregatePlan, ExchangeFilterPlan, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme,
     JoinDistribution, JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan,
     ProbeSelect, ProjectItemPlan, Residual, ScanFilter, ScanNode, ScanRuntimeFilter,
-    SortMergeJoinPlan, SubqueryPlan, SubqueryValueKind, WritePlan,
+    SortMergeJoinPlan, SubqueryPlan, SubqueryValueKind, TableWriteRequest, WritePlan,
 };
-use krishiv_exec::planner::ExplainNode;
+use krishiv_exec::planner::{ExplainNode, RowLevelOperation, WriteMode};
 use krishiv_exec::window::{FrameBound, FrameUnits, RankLike, WindowFunction, WindowFunctionPlan};
 use krishiv_exec::{FetchSlot, RowStageSettings, SortKey};
 use krishiv_io::{ColumnPath, KeyFilterOptions};
@@ -415,6 +415,11 @@ impl Encoder {
                     .map(|w| write_plan(w, &self.nested))
                     .transpose()?,
             }),
+            PhysNode::TableWrite {
+                input,
+                table,
+                request,
+            } => Kind::TableWrite(self.table_write(input, table, request)?),
             PhysNode::Exchange(exchange) => Kind::Exchange(self.exchange(exchange)?),
             PhysNode::Expand {
                 input,
@@ -614,6 +619,79 @@ impl Encoder {
                 .schema
                 .as_deref()
                 .map(|schema| flagged_schema_bytes(schema, &self.nested)),
+        })
+    }
+
+    fn table_write(
+        &mut self,
+        input: &PhysNode,
+        table: &Scan,
+        request: &TableWriteRequest,
+    ) -> Result<pb::TableWriteNode> {
+        use pb::table_write_node::Request;
+        let Scan {
+            source,
+            output,
+            version,
+        } = table;
+        let options = |o: &std::collections::BTreeMap<String, String>| {
+            o.iter()
+                .map(|(k, v)| map_entry(k, v))
+                .collect::<Result<Vec<_>>>()
+        };
+        let request = match request {
+            TableWriteRequest::Write(w) => {
+                let (mode, filter) = match &w.mode {
+                    WriteMode::Append => (pb::TableWriteMode::Append, None),
+                    WriteMode::Truncate => (pb::TableWriteMode::Truncate, None),
+                    WriteMode::OverwriteByFilter(f) => {
+                        (pb::TableWriteMode::OverwriteByFilter, Some(self.expr(f)?))
+                    }
+                    WriteMode::OverwriteDynamic => (pb::TableWriteMode::OverwriteDynamic, None),
+                    other => {
+                        return Err(CodecError::Unsupported(format!("the write mode {other:?}")));
+                    }
+                };
+                Request::Write(pb::TableWriteRequest {
+                    mode: mode.into(),
+                    filter,
+                    table_name: w.table_name.clone(),
+                    input_schema: flagged_schema_bytes(&w.input_schema, &self.nested),
+                    options: options(&w.options)?,
+                    write_id: w.write_id.clone(),
+                })
+            }
+            TableWriteRequest::RowLevel(r) => Request::RowLevel(pb::RowLevelWriteRequest {
+                op: match r.op {
+                    RowLevelOperation::Delete => pb::RowLevelOperation::Delete,
+                    RowLevelOperation::Update => pb::RowLevelOperation::Update,
+                    RowLevelOperation::Merge => pb::RowLevelOperation::Merge,
+                    other => {
+                        return Err(CodecError::Unsupported(format!(
+                            "the row-level operation {other:?}"
+                        )));
+                    }
+                }
+                .into(),
+                table_name: r.table_name.clone(),
+                input_schema: flagged_schema_bytes(&r.input_schema, &self.nested),
+                touched: r.touched.clone(),
+                read_filter: r.read_filter.as_ref().map(|f| self.expr(f)).transpose()?,
+                options: options(&r.options)?,
+                write_id: r.write_id.clone(),
+            }),
+        };
+        Ok(pb::TableWriteNode {
+            input: self.node_index(input)?,
+            table: Some(pb::TableRef {
+                source: Some(read_source(source)?),
+                output: output
+                    .iter()
+                    .map(|c| bound_column(c, &self.nested))
+                    .collect::<Result<_>>()?,
+                version: version.map(|v| v.0),
+            }),
+            request: Some(request),
         })
     }
 

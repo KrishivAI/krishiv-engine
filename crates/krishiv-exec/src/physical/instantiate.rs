@@ -1262,6 +1262,11 @@ impl Instantiation<'_> {
                 })
             }
             PhysNode::WriteFiles { input, write } => self.write_files(input, write),
+            PhysNode::TableWrite {
+                input,
+                table,
+                request,
+            } => self.table_write(input, table, request),
             // See the module docs: the operators around an exchange
             // implement it on one worker.
             PhysNode::Exchange(e) if e.partitioning == Partitioning::Broadcast => self.broadcast(e),
@@ -1358,6 +1363,56 @@ impl Instantiation<'_> {
     /// number in file names is the partition index; attempt 0 names files
     /// exactly as before, and attempt `k > 0` appends `_<k>` to the job-id
     /// segment, so a late attempt can never overwrite a committed file.
+    /// A [`PhysNode::TableWrite`]: the table resolved through the worker's resolver, its sink
+    /// asked for the request, the input's columns checked against the request's schema.
+    fn table_write(
+        &mut self,
+        input: &PhysNode,
+        table: &krishiv_plan::Scan,
+        request: &crate::physical::TableWriteRequest,
+    ) -> Result<Built> {
+        use crate::physical::TableWriteRequest;
+        let provider = self.worker.tables.provider(table)?;
+        let sink = match request {
+            TableWriteRequest::Write(w) => provider.writer(w)?,
+            TableWriteRequest::RowLevel(r) => provider
+                .row_level(r.op)
+                .ok_or_else(|| {
+                    krishiv_common::error::KrishivError::from(
+                        krishiv_common::error::UnsupportedFeatureTableOperation {
+                            table_name: r.table_name.clone(),
+                            operation: r.op.name().to_owned(),
+                        },
+                    )
+                })?
+                .rewriter(r)?,
+        };
+        let input = self.node(input)?;
+        let want = request.input_schema();
+        let same = input.schema.fields().len() == want.fields().len()
+            && input
+                .schema
+                .fields()
+                .iter()
+                .zip(want.fields())
+                .all(|(a, b)| a.data_type() == b.data_type());
+        if !same {
+            return Err(internal(format!(
+                "a write into {} gets columns {:?} where its request says {:?}",
+                request.table_name(),
+                input.schema.fields(),
+                want.fields()
+            )));
+        }
+        Ok(Built {
+            schema: crate::operators::table_write::written_schema(),
+            node: Arc::new(crate::operators::table_write::TableWrite {
+                input: input.node,
+                sink,
+            }),
+        })
+    }
+
     fn write_files(&mut self, input: &PhysNode, write: &Option<WritePlan>) -> Result<Built> {
         let Some(write) = write else {
             return Err(internal(

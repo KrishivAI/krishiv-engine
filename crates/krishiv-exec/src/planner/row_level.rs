@@ -109,7 +109,7 @@ impl RowLevelCounts {
 }
 
 /// What a copy-on-write rewrite asks of a table.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct RowLevelWrite {
     /// The statement.
@@ -122,7 +122,7 @@ pub struct RowLevelWrite {
     /// references), each once.
     pub touched: Vec<String>,
     /// The statement's condition, for the table's conflict check (`None`: every row was read).
-    pub read_filter: Option<Expr>,
+    pub read_filter: Option<Arc<Expr>>,
     /// The statement's options (`WITH (...)`), keys as written.
     pub options: BTreeMap<String, String>,
     /// The idempotency key of the commit.
@@ -137,7 +137,7 @@ impl RowLevelWrite {
         table_name: impl Into<String>,
         input_schema: SchemaRef,
         touched: Vec<String>,
-        read_filter: Option<Expr>,
+        read_filter: Option<Arc<Expr>>,
     ) -> Self {
         Self {
             op,
