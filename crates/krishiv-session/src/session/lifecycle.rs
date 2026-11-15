@@ -146,6 +146,7 @@ impl Session {
                     .unwrap_or_else(|| Arc::new(Unlimited)),
                 statements: AtomicU64::new(0),
                 sql_sources: AtomicU32::new(seed.sql_sources),
+                denials: std::sync::OnceLock::new(),
             }),
         };
         session
@@ -186,6 +187,29 @@ impl Session {
         };
         // The runtime's starting configuration, validated when it was built
         // (for a private runtime, the builder's configuration).
+        let config = Config::clone(&runtime.config);
+        inherit_denials(self, Self::on_runtime(runtime, config, parts))
+    }
+
+    /// [`Self::new_session`] acting for `principal` under `policy` instead of this session's
+    /// principal and policy: a server's session for one authenticated caller (P3-T002, ADR
+    /// 0046), built from a base session that holds the server's runtime and profile. The
+    /// principal and policy are the new session's for life.
+    #[must_use]
+    pub fn new_session_as(
+        &self,
+        principal: krishiv_common::principal::Principal,
+        policy: Arc<dyn krishiv_plan::analyzer::AccessPolicy>,
+    ) -> Self {
+        let state = &self.state;
+        let runtime = Arc::clone(&state.runtime);
+        let parts = SessionParts {
+            profile: state.profile,
+            principal: Arc::new(principal),
+            policy,
+            functions: state.base_functions.clone(),
+            admission: Some(Arc::clone(&state.admission)),
+        };
         let config = Config::clone(&runtime.config);
         Self::on_runtime(runtime, config, parts)
     }
@@ -269,7 +293,10 @@ impl Session {
         // A `close` that ran while the copy was made wins: no live clone of
         // a closed session.
         self.check_open()?;
-        Ok(Self::seeded(Arc::clone(&state.runtime), parts, seed))
+        Ok(inherit_denials(
+            self,
+            Self::seeded(Arc::clone(&state.runtime), parts, seed),
+        ))
     }
 
     /// The runtime this session runs on.
@@ -587,6 +614,15 @@ struct Seed {
     /// The working directory relative paths resolve against; `None` takes
     /// the process's.
     cwd: Option<String>,
+}
+
+/// `to`, counting its denials where `from` counts them (`new_session` and `clone_session` keep
+/// the principal, so they keep the server's denial counter too).
+fn inherit_denials(from: &Session, to: Session) -> Session {
+    if let Some((counts, surface)) = from.state.denials.get() {
+        to.count_denials(Arc::clone(counts), *surface);
+    }
+    to
 }
 
 #[cfg(test)]

@@ -161,6 +161,15 @@ impl Activity {
             .store(ms.unwrap_or(NO_TIMEOUT), Ordering::Relaxed);
     }
 
+    /// The user id the client reported (client-asserted, never an identity).
+    pub(crate) fn client_user_id(&self) -> Option<String> {
+        self.client
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .client_user_id
+            .clone()
+    }
+
     /// Keeps the first non-empty client type and user id seen, and the latest server session id.
     pub(crate) fn set_client(
         &self,
