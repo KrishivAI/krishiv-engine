@@ -1368,6 +1368,7 @@ impl Session {
                 use std::hash::BuildHasher as _;
                 std::collections::hash_map::RandomState::new().hash_one(0_u8)
             },
+            quiet_denials: false,
         }
     }
 
@@ -1444,7 +1445,7 @@ impl Session {
         });
         views.extend(body_views?);
         // Analysis checks every read: its denials are the reads' denials.
-        let mut analyzed = crate::access::audit(self, StatementClass::Read, analyzed)?;
+        let mut analyzed = crate::access::audit_read(self, env, analyzed)?;
         // Spark's `ViewSyncSchemaToMetaStore`: once the query analyzed, evolved views store their new schema. A
         // concurrent change of the view wins (its entry is no longer the one the read found).
         // A difference from Spark (ADR 0008: explicit): a metadata analysis (Connect `AnalyzePlan`, for every

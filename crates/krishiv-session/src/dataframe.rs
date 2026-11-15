@@ -987,6 +987,17 @@ impl DataFrame {
     /// invalidation ran since and no files are read (by path or through a file view), else a fresh one,
     /// which lists them again.
     pub(crate) async fn analysis(&self) -> Result<Arc<Analysis>, KrishivError> {
+        self.analysis_with(false).await
+    }
+
+    /// [`Self::analysis`] whose read denials write no audit record (P3 PR-14d): the
+    /// caller answers a denial with an analysis of its own, which is audited. A success is
+    /// the frame's ordinary analysis and is kept as one.
+    pub(crate) async fn trial_analysis(&self) -> Result<Arc<Analysis>, KrishivError> {
+        self.analysis_with(true).await
+    }
+
+    async fn analysis_with(&self, quiet_denials: bool) -> Result<Arc<Analysis>, KrishivError> {
         let cached = self
             .analysis
             .lock()
@@ -1013,6 +1024,7 @@ impl DataFrame {
         {
             return Ok(a);
         }
+        env.quiet_denials = quiet_denials;
         self.analyzed_in(env).await
     }
 
@@ -1059,6 +1071,8 @@ impl DataFrame {
         let plan = self.plan_with_checkpoints().await?;
         let analyzed = self.session.analyze_in(&plan, &env, text).await?;
         let mut env = env;
+        // A trial's analysis is kept as an ordinary one: later checks are audited.
+        env.quiet_denials = false;
         if let Some(t) = text {
             env.set_text(t);
         }

@@ -7,7 +7,10 @@
 //! `Select` even for metadata (inference reads file contents: CSV `header=true` names are the
 //! file's first line), and `PathPrefixPolicy` refuses paths outside its roots for every role; a
 //! permanent view over a path needs `Select` on the path. Reads inside a CTE, a subquery or a SQL
-//! function body ask `Browse` too, and nothing of the plan runs.
+//! function body ask `Browse` too, and nothing of the plan runs. P3 PR-14d: `explain_for_metadata`
+//! gives a viewer the plan with statistics, samples and the cache note withheld (the same plan
+//! whatever the tables hold), an operator the ordinary text; `cost`, permanent views and reads
+//! by path keep `Select`; SQL `EXPLAIN` the same, its refusals in the text.
 #![cfg(test)]
 
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
@@ -28,6 +31,8 @@ const DENIED: &str = "KRISHIV_INSUFFICIENT_PERMISSIONS";
 const ADMIN: u8 = 0;
 const VIEWER: u8 = 1;
 const OPERATOR: u8 = 2;
+/// `Browse` allowed; a `Select` question is a policy error.
+const BROKEN_SELECT: u8 = 3;
 
 /// Admin (everything), viewer (`Browse` only) or operator (`Browse` and `Select`); a role change
 /// bumps the version, as a policy's must. Records every question.
@@ -71,9 +76,17 @@ impl AccessPolicy for Roles {
             .lock()
             .unwrap()
             .push((securable.to_string(), privilege));
-        let allowed = match self.role.load(Ordering::SeqCst) {
+        let role = self.role.load(Ordering::SeqCst);
+        if role == BROKEN_SELECT && privilege == Privilege::Select {
+            return Box::pin(std::future::ready(Err(KrishivError::from(
+                krishiv_common::error::KrishivUnsupportedFeature {
+                    feature: "a policy that fails".to_owned(),
+                },
+            ))));
+        }
+        let allowed = match role {
             ADMIN => true,
-            VIEWER => privilege == Privilege::Browse,
+            VIEWER | BROKEN_SELECT => privilege == Privilege::Browse,
             _ => matches!(privilege, Privilege::Browse | Privilege::Select),
         };
         Box::pin(std::future::ready(Ok(if allowed {
@@ -406,4 +419,168 @@ fn a_cte_a_subquery_and_a_function_body_ask_browse_and_run_nothing() {
         // A run of the same frame is still asked `Select`, and denied.
         assert_eq!(class(block_on(df.collect())), DENIED, "{text}");
     }
+}
+
+// P3 PR-14d: `explain_for_metadata`, the explain a viewer may see.
+
+const NOTE: &str = "== Note ==\nStatistics withheld";
+
+const MODES: [ExplainMode; 4] = [
+    ExplainMode::Simple,
+    ExplainMode::Extended,
+    ExplainMode::Formatted,
+    ExplainMode::Codegen,
+];
+
+/// What a withheld explain never prints: statistics, samples, the cache note, the join's sizes.
+fn assert_withheld(text: &str, what: &str) {
+    assert!(text.contains(NOTE), "{what}: {text}");
+    for data in [
+        "Statistics(",
+        "Distinct-Value",
+        "Result Cache",
+        "builds left",
+        "MiB",
+        "rowCount",
+    ] {
+        assert!(!text.contains(data), "{what}: {data} in {text}");
+    }
+}
+
+#[test]
+fn a_viewer_explains_tables_with_the_data_withheld() {
+    let (policy, s, _fixture) = setup(VIEWER);
+    for (name, df) in [
+        ("table", s.table("t")),
+        ("temporary view", s.table("tv")),
+        ("permanent table", s.table("p")),
+    ] {
+        for mode in MODES {
+            policy.take();
+            let text = block_on(df.explain_for_metadata(mode))
+                .unwrap_or_else(|e| panic!("{name} {mode:?}: {e}"));
+            assert_withheld(&text, &format!("{name} {mode:?}"));
+            // The trial asks `Select` first; what the viewer is shown was checked with `Browse`.
+            let asked = policy.take();
+            assert!(
+                asked.iter().any(|(_, p)| *p == Privilege::Select)
+                    && asked.iter().any(|(_, p)| *p == Privilege::Browse),
+                "{name}: {asked:?}"
+            );
+        }
+        // `cost` is the statistics: `Select`.
+        assert_eq!(
+            class(block_on(df.explain_for_metadata(ExplainMode::Cost))),
+            DENIED,
+            "{name}: cost"
+        );
+        // Nothing of it is kept: the frame's own actions still ask `Select`.
+        assert_eq!(class(block_on(df.collect())), DENIED, "{name}: collect");
+    }
+}
+
+#[test]
+fn an_operator_gets_the_ordinary_explain() {
+    let (_policy, s, _fixture) = setup(OPERATOR);
+    for (name, df) in frames(&s) {
+        for mode in [
+            ExplainMode::Simple,
+            ExplainMode::Extended,
+            ExplainMode::Cost,
+        ] {
+            let text = block_on(df.explain_for_metadata(mode))
+                .unwrap_or_else(|e| panic!("{name} {mode:?}: {e}"));
+            assert!(!text.contains(NOTE), "{name} {mode:?}: {text}");
+            assert_eq!(text, block_on(df.explain(mode)).unwrap(), "{name} {mode:?}");
+        }
+    }
+}
+
+#[test]
+fn a_viewer_cannot_explain_a_permanent_view_whose_body_the_plan_shows() {
+    let (_policy, s, _fixture) = setup(VIEWER);
+    let df = s.table("pv");
+    for mode in MODES {
+        assert_eq!(
+            class(block_on(df.explain_for_metadata(mode))),
+            DENIED,
+            "{mode:?}"
+        );
+    }
+    // Its schema stays metadata (PR-14c): only the body is withheld.
+    assert!(block_on(df.schema_for_metadata()).is_ok());
+}
+
+#[test]
+fn a_read_by_path_needs_select_for_a_withheld_explain_too() {
+    let (_policy, s, fixture) = setup(VIEWER);
+    let df = s.read().parquet([fixture.inside.as_str()]);
+    assert_eq!(
+        class(block_on(df.explain_for_metadata(ExplainMode::Simple))),
+        DENIED
+    );
+}
+
+#[test]
+fn a_policy_that_fails_on_select_gets_the_withheld_explain() {
+    let (_policy, s, _fixture) = setup(BROKEN_SELECT);
+    let text = block_on(s.table("t").explain_for_metadata(ExplainMode::Simple)).unwrap();
+    assert_withheld(&text, "broken select");
+}
+
+#[test]
+fn a_viewer_sees_the_same_plan_whatever_the_tables_hold() {
+    let (_policy, s, _fixture) = setup(VIEWER);
+    let explain = |s: &Session| {
+        block_on(
+            s.table("t")
+                .join_using(&s.table("u"), ["a"], krishiv_session::JoinType::Inner)
+                .explain_for_metadata(ExplainMode::Simple),
+        )
+        .unwrap()
+    };
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+    let rows = |n: i32| {
+        RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from((0..n).collect::<Vec<_>>()))],
+        )
+        .unwrap()
+    };
+    s.register_batches("u", Arc::clone(&schema), vec![rows(1)])
+        .unwrap();
+    let small = explain(&s);
+    s.register_batches("u", Arc::clone(&schema), vec![rows(100_000)])
+        .unwrap();
+    let large = explain(&s);
+    assert_withheld(&small, "small");
+    assert_eq!(small, large);
+}
+
+#[test]
+fn sql_explain_as_a_viewer() {
+    let (_policy, s, _fixture) = setup(VIEWER);
+    let text = |sql: &str| {
+        let batches = block_on(async { s.sql(sql).await?.collect().await })
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+        use arrow_array::cast::AsArray as _;
+        let c = batches[0].column(0);
+        match c.as_string_view_opt() {
+            Some(v) => v.value(0).to_owned(),
+            None => c.as_string::<i32>().value(0).to_owned(),
+        }
+    };
+    assert_withheld(&text("EXPLAIN SELECT a FROM p WHERE a = 1"), "EXPLAIN");
+    assert_withheld(
+        &text("EXPLAIN EXTENDED SELECT a FROM p WHERE a = 1"),
+        "EXPLAIN EXTENDED",
+    );
+    // SQL `EXPLAIN` is lenient: a refusal is the text, as Spark prints a failed analysis.
+    let cost = text("EXPLAIN COST SELECT a FROM p");
+    assert!(cost.contains(DENIED), "{cost}");
+    // `EXTENDED` shows the failure (plain `EXPLAIN` prints only Spark's planning-error line).
+    let view = text("EXPLAIN EXTENDED SELECT a FROM pv");
+    assert!(view.contains(DENIED) && !view.contains(NOTE), "{view}");
+    let plain = text("EXPLAIN SELECT a FROM pv");
+    assert!(!plain.contains(NOTE) && !plain.contains("Scan"), "{plain}");
 }

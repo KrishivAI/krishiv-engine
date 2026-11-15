@@ -60,7 +60,7 @@ impl Subscriber for Capture {
 
 #[test]
 fn each_denial_leaves_one_audit_record() {
-    tracing::subscriber::set_global_default(Capture).unwrap();
+    let _ = tracing::subscriber::set_global_default(Capture);
     let s = Session::builder()
         .principal(Principal::new("ana", PrincipalKind::User))
         .access_policy(Arc::new(DenyAll))
@@ -125,4 +125,69 @@ fn each_denial_leaves_one_audit_record() {
             "the policy's reason stays out: {r}"
         );
     }
+}
+
+/// `Browse` only: a viewer.
+struct BrowseOnly;
+
+impl krishiv_session::AccessPolicy for BrowseOnly {
+    fn version(&self) -> krishiv_plan::analyzer::PolicyVersion {
+        krishiv_plan::analyzer::PolicyVersion(1)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _: &'a krishiv_session::Principal,
+        _: &'a krishiv_session::Securable,
+        privilege: krishiv_session::Privilege,
+    ) -> krishiv_plan::analyzer::BoxFuture<
+        'a,
+        Result<krishiv_session::AccessDecision, krishiv_common::error::KrishivError>,
+    > {
+        Box::pin(std::future::ready(Ok(
+            if privilege == krishiv_session::Privilege::Browse {
+                krishiv_session::AccessDecision::Allow
+            } else {
+                krishiv_session::AccessDecision::Deny {
+                    reason: "viewer".to_owned(),
+                }
+            },
+        )))
+    }
+}
+
+/// P3 PR-14d: the `Select` trial of a viewer's explain is an answer, not a refusal: no record.
+/// A refusal the viewer is shown (`cost`) is one.
+#[test]
+fn a_withheld_explain_leaves_no_audit_record() {
+    let _ = tracing::subscriber::set_global_default(Capture);
+    let s = Session::builder()
+        .principal(Principal::new("vee", PrincipalKind::User))
+        .access_policy(Arc::new(BrowseOnly))
+        .build()
+        .unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+    s.register_batches("t", schema, vec![]).unwrap();
+    let vee = || -> Vec<String> {
+        RECORDS
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.contains("principal=vee"))
+            .cloned()
+            .collect()
+    };
+    let text = block_on(
+        s.table("t")
+            .explain_for_metadata(krishiv_session::ExplainMode::Simple),
+    )
+    .unwrap();
+    assert!(text.contains("Statistics withheld"), "{text}");
+    assert!(vee().is_empty(), "{:?}", vee());
+    block_on(
+        s.table("t")
+            .explain_for_metadata(krishiv_session::ExplainMode::Cost),
+    )
+    .unwrap_err();
+    assert_eq!(vee().len(), 1, "{:?}", vee());
 }

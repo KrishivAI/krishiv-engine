@@ -17,7 +17,7 @@ use arrow_schema::SchemaRef;
 use krishiv_common::error::KrishivError;
 use krishiv_plan::analyzer::{AnalysisMode, AnalyzedPlan};
 
-use super::DataFrame;
+use super::{Analysis, DataFrame, ExplainMode};
 
 impl DataFrame {
     /// The result's schema, as [`Self::schema`], for a caller that only shows it: every catalog table
@@ -48,6 +48,37 @@ impl DataFrame {
             .await
     }
 
+    /// The query's plans as text, as [`Self::explain`], for a caller that only shows them (Connect
+    /// `AnalyzePlan.explain`; ADR 0046 §3b). A principal whose reads pass the ordinary `Select`
+    /// check gets [`Self::explain`]'s text. One that holds only `Browse` on the catalog tables gets
+    /// the plan chosen with no table statistics, no distinct-value samples and no result-cache note,
+    /// ending in a `== Note ==` section that says so. Reads by path, permanent views and catalog
+    /// functions still need `Select` (their bodies or contents are shown), and so does
+    /// [`ExplainMode::Cost`].
+    ///
+    /// ```
+    /// use krishiv_session::ExplainMode;
+    /// # let s = krishiv_session::Session::new()?;
+    /// # let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![
+    /// #     arrow_schema::Field::new("a", arrow_schema::DataType::Int32, false),
+    /// # ]));
+    /// # s.register_batches("t", schema, vec![])?;
+    /// let df = s.table("t").limit(1);
+    /// let text = futures::executor::block_on(df.explain_for_metadata(ExplainMode::Simple))?;
+    /// assert_eq!(text, futures::executor::block_on(df.explain(ExplainMode::Simple))?);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Analysis and planning errors; `KRISHIV_INSUFFICIENT_PERMISSIONS` without `Browse` on a
+    /// table, or without `Select` on what the withheld plan still needs it for.
+    pub async fn explain_for_metadata(&self, mode: ExplainMode) -> Result<String, KrishivError> {
+        let df = self.clone();
+        self.session
+            .on_executor(async move { df.explain_for_metadata_text(mode, false).await })
+            .await
+    }
+
     /// The analysis of this DataFrame's plan, as [`Self::analyzed`], for a caller that never runs it
     /// (see [`Self::schema_for_metadata`]): reads need `Browse`, and the result is not kept.
     ///
@@ -63,6 +94,12 @@ impl DataFrame {
 
     /// A fresh metadata analysis, never stored in the frame.
     async fn metadata_analysis_here(&self) -> Result<Arc<AnalyzedPlan>, KrishivError> {
+        Ok(Arc::clone(&self.metadata_analysis().await?.analyzed))
+    }
+
+    /// A fresh metadata analysis with the environment it ran in (a withheld explain plans in
+    /// it), never stored in the frame.
+    pub(crate) async fn metadata_analysis(&self) -> Result<Arc<Analysis>, KrishivError> {
         if let Some(e) = &self.invalid {
             return Err(e.clone());
         }
@@ -70,6 +107,9 @@ impl DataFrame {
         env.analysis.mode = AnalysisMode::Metadata;
         let plan = self.plan_with_checkpoints().await?;
         let analyzed = self.session.analyze_in(&plan, &env, None).await?;
-        Ok(Arc::new(analyzed))
+        Ok(Arc::new(Analysis {
+            env: Arc::new(env),
+            analyzed: Arc::new(analyzed),
+        }))
     }
 }

@@ -11,7 +11,7 @@ impl Session {
         analyzed: &AnalyzedPlan,
         env: &QueryEnv,
     ) -> Result<(Plan, PhysicalPlan), KrishivError> {
-        let (optimized, physical, _) = self.physical_with(analyzed, env, false).await?;
+        let (optimized, physical, _) = self.physical_with(analyzed, env, false, false).await?;
         Ok((optimized, physical))
     }
 
@@ -22,7 +22,7 @@ impl Session {
         analyzed: &AnalyzedPlan,
         env: &QueryEnv,
     ) -> Result<(Plan, PhysicalPlan), KrishivError> {
-        let (optimized, physical, _) = self.physical_with(analyzed, env, false).await?;
+        let (optimized, physical, _) = self.physical_with(analyzed, env, false, false).await?;
         Ok((optimized, physical))
     }
 
@@ -35,7 +35,19 @@ impl Session {
         env: &QueryEnv,
         trace: bool,
     ) -> Result<(Plan, PhysicalPlan, Vec<krishiv_optimizer::RuleStep>), KrishivError> {
-        self.physical_with(analyzed, env, trace).await
+        self.physical_with(analyzed, env, trace, false).await
+    }
+
+    /// As [`Self::physical_inspected`] with every table's statistics and planning hints withheld
+    /// and no distinct-value samples taken (P3 PR-14d): the plan a principal without `Select`
+    /// may see, whose shape does not depend on the data.
+    pub(crate) async fn physical_withheld(
+        &self,
+        analyzed: &AnalyzedPlan,
+        env: &QueryEnv,
+    ) -> Result<(Plan, PhysicalPlan), KrishivError> {
+        let (optimized, physical, _) = self.physical_with(analyzed, env, false, true).await?;
+        Ok((optimized, physical))
     }
 
     async fn physical_with(
@@ -43,6 +55,7 @@ impl Session {
         analyzed: &AnalyzedPlan,
         env: &QueryEnv,
         trace: bool,
+        withheld: bool,
     ) -> Result<(Plan, PhysicalPlan, Vec<krishiv_optimizer::RuleStep>), KrishivError> {
         let start = query_start_micros();
         // A recursive CTE runs as an operator of the physical plan; the
@@ -54,9 +67,17 @@ impl Session {
         } else {
             analyzed
         };
-        env.catalog.open_files(analyzed.plan.root()).await?;
-        let tables =
-            Arc::clone(&env.catalog) as Arc<dyn krishiv_exec::planner::TableProviderResolver>;
+        let tables = if withheld {
+            env.catalog
+                .open_files_unsampled(analyzed.plan.root())
+                .await?;
+            crate::explain::withheld::resolver(
+                Arc::clone(&env.catalog) as Arc<dyn krishiv_exec::planner::TableProviderResolver>
+            )
+        } else {
+            env.catalog.open_files(analyzed.plan.root()).await?;
+            Arc::clone(&env.catalog) as Arc<dyn krishiv_exec::planner::TableProviderResolver>
+        };
         let stats = ProviderStatistics(Arc::clone(&tables));
         let (optimized, steps) = if trace {
             krishiv_optimizer::optimize_traced_with_udfs(
@@ -83,7 +104,7 @@ impl Session {
             .with_udfs(Arc::clone(&self.state.udfs));
         let physical = self.state.planner.plan(&optimized, &cx)?;
         // The admission request's estimate, only for a controller that reads it.
-        if self.state.admission.uses_estimate() {
+        if !withheld && self.state.admission.uses_estimate() {
             env.catalog.set_estimate(crate::explain::estimate_of(
                 &optimized,
                 &physical,

@@ -27,9 +27,12 @@
 //! table and view the plan reads needs `Browse`, so a viewer may ask them. A
 //! read by path keeps `Select`: its schema is inferred from file contents (CSV
 //! `header=true` column names are the file's first line).
-//! `input_files` lists paths and keeps `Select`. `explain` keeps `Select` too:
-//! it plans the query, and planning samples distinct values of file columns
-//! (rows) and its `cost` mode prints statistics, which are data (follow-up).
+//! `input_files` lists paths and keeps `Select`. `explain`
+//! (`DataFrame::explain_for_metadata`, P3 PR-14d) is the ordinary text for a
+//! principal whose `Select` check passes; otherwise the plan chosen with no
+//! table statistics and no distinct-value samples, with a note saying so.
+//! Its `cost` mode, a read by path, a permanent view and a catalog function
+//! keep `Select` (they show statistics or a body).
 
 pub mod types;
 
@@ -108,12 +111,13 @@ async fn analyze(
         }
         Some(Analyze::Explain(e)) => {
             // Spark builds the Dataset (translation, analysis) before it
-            // reads the mode. `Select`: planning reads rows (see the module docs).
+            // reads the mode: a metadata analysis here (`Browse`), then the
+            // explain a principal may see (see the module docs).
             let df = frame(session, e.plan.as_ref(), limits).await?;
-            df.analyzed().await?;
+            df.analyzed_for_metadata().await?;
             let mode = explain_mode(e.explain_mode)?;
             res::Result::Explain(res::Explain {
-                explain_string: df.explain(mode).await?,
+                explain_string: df.explain_for_metadata(mode).await?,
             })
         }
         Some(Analyze::TreeString(t)) => {

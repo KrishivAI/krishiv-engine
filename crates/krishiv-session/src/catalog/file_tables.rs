@@ -36,6 +36,19 @@ impl QueryCatalog {
     /// Listing errors (`PATH_NOT_FOUND` once a view's files are gone, ...)
     /// and errors reading the files' footers.
     pub(crate) async fn open_files(&self, plan: &LogicalPlan) -> Result<(), KrishivError> {
+        self.open_files_with(plan, true).await
+    }
+
+    /// As [`Self::open_files`], taking no distinct-value samples: they read column values, which a
+    /// plan shown without `Select` must not depend on (P3 PR-14d).
+    pub(crate) async fn open_files_unsampled(
+        &self,
+        plan: &LogicalPlan,
+    ) -> Result<(), KrishivError> {
+        self.open_files_with(plan, false).await
+    }
+
+    async fn open_files_with(&self, plan: &LogicalPlan, sample: bool) -> Result<(), KrishivError> {
         self.check_reference_options(plan)?;
         let scans = self.file_scans(plan);
         for (key, source, table, _, partitions) in &scans {
@@ -82,7 +95,9 @@ impl QueryCatalog {
         }
         // Boxed: the sample's future would otherwise nest inside every
         // caller's state machine (the MCP server's overflows the layout depth).
-        Box::pin(self.sample_distinct(plan, &scans)).await;
+        if sample {
+            Box::pin(self.sample_distinct(plan, &scans)).await;
+        }
         Ok(())
     }
 

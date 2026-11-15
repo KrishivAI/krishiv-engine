@@ -163,6 +163,19 @@ pub(crate) fn audit<T>(
     result
 }
 
+/// [`audit`] of a query's read check, unless `env` is a trial analysis
+/// ([`QueryEnv::quiet_denials`]), whose denials are not logged.
+pub(crate) fn audit_read<T>(
+    session: &Session,
+    env: &QueryEnv,
+    result: Result<T, KrishivError>,
+) -> Result<T, KrishivError> {
+    if env.quiet_denials {
+        return result;
+    }
+    audit(session, StatementClass::Read, result)
+}
+
 /// The audit record of the denial `e` (see [`audit`]): also written when
 /// an access check fails closed because it cannot name what a statement
 /// touches (`KRISHIV_UNSUPPORTED_FEATURE`).
@@ -289,11 +302,35 @@ impl Session {
                     env.analysis.mode.read_privilege(),
                 )
                 .await;
-                audit(self, StatementClass::Read, r)?;
+                audit_read(self, env, r)?;
                 checked.push(securable);
             }
         }
         Ok(views)
+    }
+
+    /// `Select` on every permanent view and catalog function a metadata analysis read at
+    /// `Browse` (a withheld explain, design P3 PR-14d D2a): the plan shows their inlined bodies,
+    /// and a view's text is data (ADR 0046, update 2026-11-12). Asked in plan order; a denial is
+    /// audited.
+    pub(crate) async fn authorize_bodies(
+        &self,
+        analysis: &crate::dataframe::Analysis,
+    ) -> Result<(), KrishivError> {
+        for used in &analysis.analyzed.securables {
+            if !matches!(used.securable, Securable::View(_) | Securable::Function(_)) {
+                continue;
+            }
+            let r = authorize(
+                &*self.state.policy,
+                &self.state.principal,
+                &used.securable,
+                Privilege::Select,
+            )
+            .await;
+            audit(self, StatementClass::Read, r)?;
+        }
+        Ok(())
     }
 
     /// `privilege` on the permanent view `namespace.name`, besides the table-named check made

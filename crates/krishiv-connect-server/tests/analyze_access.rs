@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `AnalyzePlan` under the ADR 0046 role matrix (§3b, P3 PR-14c), end to end over a raw tonic client:
 //! a viewer (`RolePolicy`: `Browse`, no `Select`) gets the schema, tree string, flags and semantic
-//! hash of a table it may not read; `ExecutePlan` of the same plan, `input_files` and `explain` stay
-//! `PERMISSION_DENIED`. An operator gets everything. A read by path keeps `Select` even for
+//! hash of a table it may not read, and its `explain` with the statistics withheld (P3 PR-14d);
+//! `ExecutePlan` of the same plan, `input_files` and `explain` in `cost` mode stay
+//! `PERMISSION_DENIED`. An operator gets everything, its explain unchanged. A read by path keeps `Select` even for
 //! `AnalyzePlan` (its schema is inferred from file contents): a viewer's schema of it is denied.
 #![expect(
     clippy::expect_used,
@@ -245,16 +246,22 @@ async fn a_viewer_analyzes_a_table_it_may_not_read() {
         .await,
         "input_files",
     );
+    // `explain` (P3 PR-14d): the plan with the data withheld; `cost` is the data.
+    let explained = analyze(&run, explain_of(areq::explain::ExplainMode::Simple))
+        .await
+        .expect("explain");
+    let AResult::Explain(e) = explained else {
+        panic!("an explain: {explained:?}")
+    };
+    assert!(
+        e.explain_string.contains("Statistics withheld")
+            && !e.explain_string.contains("Statistics("),
+        "{}",
+        e.explain_string
+    );
     denied(
-        &analyze(
-            &run,
-            Analyze::Explain(Box::new(areq::Explain {
-                plan: Some(table()),
-                explain_mode: areq::explain::ExplainMode::Simple.into(),
-            })),
-        )
-        .await,
-        "explain",
+        &analyze(&run, explain_of(areq::explain::ExplainMode::Cost)).await,
+        "explain cost",
     );
     // And the schema still answers after the denials.
     analyze(&run, schema_of(table()))
@@ -267,15 +274,27 @@ async fn an_operator_runs_what_it_analyzed() {
     let run = start(Role::Operator).await;
     analyze(&run, schema_of(table())).await.expect("schema");
     assert!(execute(&run, table()).await.expect("execute") > 0);
-    analyze(
-        &run,
-        Analyze::Explain(Box::new(areq::Explain {
-            plan: Some(table()),
-            explain_mode: areq::explain::ExplainMode::Simple.into(),
-        })),
-    )
-    .await
-    .expect("explain");
+    for mode in [
+        areq::explain::ExplainMode::Simple,
+        areq::explain::ExplainMode::Cost,
+    ] {
+        let explained = analyze(&run, explain_of(mode)).await.expect("explain");
+        let AResult::Explain(e) = explained else {
+            panic!("an explain: {explained:?}")
+        };
+        assert!(
+            !e.explain_string.contains("Statistics withheld"),
+            "{}",
+            e.explain_string
+        );
+    }
+}
+
+fn explain_of(mode: areq::explain::ExplainMode) -> Analyze {
+    Analyze::Explain(Box::new(areq::Explain {
+        plan: Some(table()),
+        explain_mode: mode.into(),
+    }))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
