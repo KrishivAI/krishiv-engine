@@ -50,6 +50,7 @@ mod cache;
 mod cancel;
 mod carrier;
 mod catalog;
+pub mod catalog_decl;
 mod char_write;
 mod collation_defaults;
 mod column;
