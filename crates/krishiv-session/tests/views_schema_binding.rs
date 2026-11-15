@@ -377,10 +377,10 @@ fn a_metadata_analysis_never_stores_the_evolved_schema() {
         .collect();
     assert_eq!(shown, ["c1:string", "c2:double"]);
     // Stored: still the old types.
-    assert_eq!(columns(&s, "v"), ["c1|int|", "c2|int|"]);
+    assert_eq!(columns(&s, "v"), ["c1|int|~", "c2|int|~"]);
     // The next ordinary query stores them.
     run(&s, "SELECT * FROM v");
-    assert_eq!(columns(&s, "v"), ["c1|string|", "c2|double|"]);
+    assert_eq!(columns(&s, "v"), ["c1|string|~", "c2|double|~"]);
 }
 
 #[test]
