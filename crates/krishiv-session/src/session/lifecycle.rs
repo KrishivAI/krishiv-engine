@@ -126,6 +126,8 @@ impl Session {
             operation: None,
             deadline: None,
             request_tags: Arc::from([]),
+            inbound_trace: None,
+            inbound_baggage: Arc::from([]),
             state: Arc::new(SessionState {
                 conf: Arc::new(seed.conf),
                 catalog: Arc::new(seed.catalog),
@@ -161,6 +163,7 @@ impl Session {
                     .unwrap_or_else(|| Arc::new(Unlimited)),
                 statements: AtomicU64::new(0),
                 sql_sources: AtomicU32::new(seed.sql_sources),
+                denials: std::sync::OnceLock::new(),
             }),
         };
         session
@@ -201,6 +204,29 @@ impl Session {
         };
         // The runtime's starting configuration, validated when it was built
         // (for a private runtime, the builder's configuration).
+        let config = Config::clone(&runtime.config);
+        inherit_denials(self, Self::on_runtime(runtime, config, parts))
+    }
+
+    /// [`Self::new_session`] acting for `principal` under `policy` instead of this session's
+    /// principal and policy: a server's session for one authenticated caller (P3-T002, ADR
+    /// 0046), built from a base session that holds the server's runtime and profile. The
+    /// principal and policy are the new session's for life.
+    #[must_use]
+    pub fn new_session_as(
+        &self,
+        principal: krishiv_common::principal::Principal,
+        policy: Arc<dyn krishiv_plan::analyzer::AccessPolicy>,
+    ) -> Self {
+        let state = &self.state;
+        let runtime = Arc::clone(&state.runtime);
+        let parts = SessionParts {
+            profile: state.profile,
+            principal: Arc::new(principal),
+            policy,
+            functions: state.base_functions.clone(),
+            admission: Some(Arc::clone(&state.admission)),
+        };
         let config = Config::clone(&runtime.config);
         Self::on_runtime(runtime, config, parts)
     }
@@ -284,7 +310,10 @@ impl Session {
         // A `close` that ran while the copy was made wins: no live clone of
         // a closed session.
         self.check_open()?;
-        Ok(Self::seeded(Arc::clone(&state.runtime), parts, seed))
+        Ok(inherit_denials(
+            self,
+            Self::seeded(Arc::clone(&state.runtime), parts, seed),
+        ))
     }
 
     /// The runtime this session runs on.
@@ -495,12 +524,30 @@ impl Session {
                 Some(Arc::new(taken))
             }
         };
+        // A request's trace parses once: a valid `traceparent` carries its bounded baggage.
+        let parsed = options.inbound_trace.map(|(tp, baggage)| {
+            let parent = tp
+                .as_deref()
+                .and_then(crate::trace_context::parse_remote_parent)
+                .map(Arc::new);
+            let bag = match (&parent, baggage.as_deref()) {
+                (Some(_), Some(b)) => crate::trace_context::parse_baggage(b),
+                _ => Vec::new(),
+            };
+            (parent, bag)
+        });
+        let (inbound_trace, inbound_baggage) = match parsed {
+            Some((parent, bag)) => (Some(parent), Arc::from(bag)),
+            None => (None, Arc::from([])),
+        };
         let handle = Session {
             state: Arc::clone(&self.state),
             locals: Arc::clone(&self.locals),
             operation,
             deadline: options.deadline.or(self.deadline),
             request_tags: options.request_tags.into(),
+            inbound_trace,
+            inbound_baggage,
         };
         Ok(handle)
     }
@@ -641,6 +688,15 @@ struct Seed {
     /// The working directory relative paths resolve against; `None` takes
     /// the process's.
     cwd: Option<String>,
+}
+
+/// `to`, counting its denials where `from` counts them (`new_session` and `clone_session` keep
+/// the principal, so they keep the server's denial counter too).
+fn inherit_denials(from: &Session, to: Session) -> Session {
+    if let Some((counts, surface)) = from.state.denials.get() {
+        to.count_denials(Arc::clone(counts), *surface);
+    }
+    to
 }
 
 #[cfg(test)]

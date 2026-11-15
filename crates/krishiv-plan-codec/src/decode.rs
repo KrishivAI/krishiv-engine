@@ -20,9 +20,11 @@ use krishiv_exec::physical::{
 };
 use krishiv_exec::physical::{
     ExchangeFilterPlan, ProbeColumn, ProbeFilter, ProbeFilterColumn, ProbeRowStage, ProbeSelect,
-    SharedId, SharedPlan,
+    SharedId, SharedPlan, TableWriteRequest,
 };
-use krishiv_exec::planner::ExplainNode;
+use krishiv_exec::planner::{
+    ExplainNode, RowLevelOperation, RowLevelWrite, WriteMode, WriteRequest,
+};
 use krishiv_exec::window::{
     FrameBound, FrameUnits, GroupLimitPlan, RankLike, WindowFrame, WindowFunction,
     WindowFunctionPlan, WindowPlan,
@@ -573,6 +575,37 @@ impl Decoder {
                     })
                     .collect::<Result<_>>()?,
             },
+            Kind::PythonMap(p) => PhysNode::PythonMap {
+                input: self.boxed(p.input)?,
+                udf: python_relation(required(&p.udf, "a Python relation UDF")?)?,
+            },
+            Kind::PythonGroupMap(p) => PhysNode::PythonGroupMap {
+                input: self.boxed(p.input)?,
+                keys: usizes(&p.keys)?,
+                udf: python_relation(required(&p.udf, "a Python relation UDF")?)?,
+            },
+            Kind::PythonCoGroupMap(p) => PhysNode::PythonCoGroupMap {
+                input: self.boxed(p.input)?,
+                keys: usizes(&p.keys)?,
+                side: usize_of(p.side)?,
+                udf: python_relation(required(&p.udf, "a Python relation UDF")?)?,
+            },
+            Kind::PythonAggregate(p) => PhysNode::PythonAggregate {
+                input: self.boxed(p.input)?,
+                layout: layout(&p.layout),
+                keys: usizes(&p.keys)?,
+                key_values: usizes(&p.key_values)?,
+                calls: p
+                    .calls
+                    .iter()
+                    .map(|c| {
+                        Ok(PythonCallPlan {
+                            call: self.expr_ref(c.call)?,
+                            output: AttrId(c.output),
+                        })
+                    })
+                    .collect::<Result<_>>()?,
+            },
             Kind::Generate(g) => PhysNode::Generate {
                 input: self.boxed(g.input)?,
                 layout: layout(&g.layout),
@@ -581,6 +614,7 @@ impl Decoder {
                     PosExplode => krishiv_plan::GeneratorKind::PosExplode,
                     Inline => krishiv_plan::GeneratorKind::Inline,
                     VariantExplode => krishiv_plan::GeneratorKind::VariantExplode,
+                    PythonUdtf => krishiv_plan::GeneratorKind::PythonUdtf,
                 })?,
                 outer: g.outer,
                 arg: self.expr_ref(g.arg)?,
@@ -649,6 +683,69 @@ impl Decoder {
                 write: w.write.as_ref().map(write_plan).transpose()?,
             },
             Kind::Exchange(e) => PhysNode::Exchange(self.exchange(e)?),
+            Kind::TableWrite(t) => self.table_write(t)?,
+        })
+    }
+
+    fn table_write(&mut self, t: &pb::TableWriteNode) -> Result<PhysNode> {
+        use pb::table_write_node::Request;
+        let table = required(&t.table, "a written table")?;
+        let options = |entries: &[pb::MapLiteralEntry]| {
+            entries
+                .iter()
+                .map(|e| (e.key.clone(), e.value.clone()))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        let request = match required(&t.request, "a write request")? {
+            Request::Write(w) => {
+                let filter = w.filter.map(|i| self.expr_ref(i)).transpose()?;
+                let mode = enum_map!(pb::TableWriteMode, w.mode, "write mode", {
+                    Append => WriteMode::Append,
+                    Truncate => WriteMode::Truncate,
+                    OverwriteByFilter => WriteMode::OverwriteByFilter(
+                        filter.clone().ok_or_else(|| corrupt("an overwrite by filter without its filter"))?,
+                    ),
+                    OverwriteDynamic => WriteMode::OverwriteDynamic,
+                })?;
+                if filter.is_some() && !matches!(mode, WriteMode::OverwriteByFilter(_)) {
+                    return Err(corrupt("a write filter on a mode that takes none"));
+                }
+                let mut request =
+                    WriteRequest::new(mode, w.table_name.clone(), schema_from(&w.input_schema)?);
+                request.options = options(&w.options);
+                request.write_id.clone_from(&w.write_id);
+                TableWriteRequest::Write(request)
+            }
+            Request::RowLevel(r) => {
+                let op = enum_map!(pb::RowLevelOperation, r.op, "row-level operation", {
+                    Delete => RowLevelOperation::Delete,
+                    Update => RowLevelOperation::Update,
+                    Merge => RowLevelOperation::Merge,
+                })?;
+                let mut request = RowLevelWrite::new(
+                    op,
+                    r.table_name.clone(),
+                    schema_from(&r.input_schema)?,
+                    r.touched.clone(),
+                    r.read_filter.map(|i| self.expr_ref(i)).transpose()?,
+                );
+                request.options = options(&r.options);
+                request.write_id.clone_from(&r.write_id);
+                TableWriteRequest::RowLevel(request)
+            }
+        };
+        Ok(PhysNode::TableWrite {
+            input: self.boxed(t.input)?,
+            table: Scan {
+                source: read_source(required(&table.source, "a written table's source")?)?,
+                output: table
+                    .output
+                    .iter()
+                    .map(bound_column)
+                    .collect::<Result<_>>()?,
+                version: table.version.map(TableVersion),
+            },
+            request,
         })
     }
 
@@ -1787,4 +1884,44 @@ fn day_time_field(v: i32) -> Result<DayTimeField> {
         Minute => DayTimeField::Minute,
         Second => DayTimeField::Second,
     })
+}
+
+/// A Python relation node's UDF, frame sides and declared result.
+fn python_relation(p: &pb::PythonRelation) -> Result<krishiv_exec::physical::PythonRelationPlan> {
+    let u = required(&p.udf, "a Python relation UDF identity")?;
+    let udf = krishiv_plan::PythonUdfRef {
+        name: u.name.clone(),
+        version: u32::try_from(u.version)
+            .map_err(|_| corrupt("a Python UDF version out of range"))?,
+        eval_type: PythonEvalType::from_code(u.eval_type)
+            .ok_or_else(|| corrupt("an unknown Python UDF eval type"))?,
+        thread_safe: u.thread_safe,
+        deterministic: p.deterministic,
+    };
+    let sides = p
+        .sides
+        .iter()
+        .map(|s| {
+            if s.names.len() != s.columns.len() || s.types.len() != s.columns.len() {
+                return Err(corrupt("a Python frame side of uneven lengths"));
+            }
+            Ok(krishiv_exec::physical::PythonFrameSide {
+                columns: usizes(&s.columns)?,
+                names: s.names.clone(),
+                types: s.types.iter().map(spark_type).collect::<Result<_>>()?,
+            })
+        })
+        .collect::<Result<_>>()?;
+    let output = p
+        .output
+        .iter()
+        .map(|c| {
+            Ok(krishiv_exec::physical::PythonOutputColumn {
+                name: c.name.clone(),
+                data_type: spark_type(required(&c.data_type, "a Python result type")?)?,
+                nullable: c.nullable,
+            })
+        })
+        .collect::<Result<_>>()?;
+    Ok(krishiv_exec::physical::PythonRelationPlan { udf, sides, output })
 }

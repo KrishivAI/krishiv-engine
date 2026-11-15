@@ -145,7 +145,7 @@ pub struct ExplainNode {
 pub struct Node {
     #[prost(
         oneof = "node::Kind",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 21, 24, 25, 26, 27"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 21, 24, 25, 26, 27, 28, 29, 30, 31, 32"
     )]
     pub kind: ::core::option::Option<node::Kind>,
 }
@@ -220,7 +220,102 @@ pub mod node {
         /// feature: sample
         #[prost(message, tag = "27")]
         Sample(super::SampleNode),
+        /// feature: python_udf_relations
+        #[prost(message, tag = "28")]
+        PythonMap(super::PythonMapNode),
+        /// feature: python_udf_relations
+        #[prost(message, tag = "29")]
+        PythonGroupMap(super::PythonGroupMapNode),
+        /// feature: python_udf_relations
+        #[prost(message, tag = "30")]
+        PythonCoGroupMap(super::PythonCoGroupMapNode),
+        /// feature: python_udf_relations
+        #[prost(message, tag = "31")]
+        PythonAggregate(super::PythonAggregateNode),
+        /// feature: table_write
+        #[prost(message, tag = "32")]
+        TableWrite(super::TableWriteNode),
     }
+}
+/// feature: table_write
+/// The rows of `input` written into a table provider's sink: `table` names the
+/// provider as a scan does, and is resolved when the plan is instantiated, into
+/// the table's writer or the rewriter of its row-level table. The node returns
+/// no rows; the sink commits when it finalizes.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TableWriteNode {
+    #[prost(uint32, tag = "1")]
+    pub input: u32,
+    #[prost(message, optional, tag = "2")]
+    pub table: ::core::option::Option<TableRef>,
+    #[prost(oneof = "table_write_node::Request", tags = "3, 4")]
+    pub request: ::core::option::Option<table_write_node::Request>,
+}
+/// Nested message and enum types in `TableWriteNode`.
+pub mod table_write_node {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Request {
+        #[prost(message, tag = "3")]
+        Write(super::TableWriteRequest),
+        #[prost(message, tag = "4")]
+        RowLevel(super::RowLevelWriteRequest),
+    }
+}
+/// feature: table_write
+/// A table as the provider resolver names it (a scan's source, columns and
+/// pinned version).
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TableRef {
+    #[prost(message, optional, tag = "1")]
+    pub source: ::core::option::Option<ReadSource>,
+    #[prost(message, repeated, tag = "2")]
+    pub output: ::prost::alloc::vec::Vec<BoundColumn>,
+    #[prost(sint64, optional, tag = "3")]
+    pub version: ::core::option::Option<i64>,
+}
+/// feature: table_write
+/// A write: the table's writer for `mode`.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TableWriteRequest {
+    #[prost(enumeration = "TableWriteMode", tag = "1")]
+    pub mode: i32,
+    /// The rows an overwrite by filter replaces (an expression table index).
+    #[prost(uint32, optional, tag = "2")]
+    pub filter: ::core::option::Option<u32>,
+    #[prost(string, tag = "3")]
+    pub table_name: ::prost::alloc::string::String,
+    /// The rows the sink receives (Arrow IPC `Schema` flatbuffer).
+    #[prost(bytes = "vec", tag = "4")]
+    pub input_schema: ::prost::alloc::vec::Vec<u8>,
+    /// Plain text only: an inline secret or a URL with credentials fails to encode.
+    #[prost(message, repeated, tag = "5")]
+    pub options: ::prost::alloc::vec::Vec<MapLiteralEntry>,
+    #[prost(string, optional, tag = "6")]
+    pub write_id: ::core::option::Option<::prost::alloc::string::String>,
+}
+/// feature: table_write
+/// A copy-on-write rewrite: the rewriter of the table's row-level table.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RowLevelWriteRequest {
+    #[prost(enumeration = "RowLevelOperation", tag = "1")]
+    pub op: i32,
+    #[prost(string, tag = "2")]
+    pub table_name: ::prost::alloc::string::String,
+    /// The rows the sink receives (Arrow IPC `Schema` flatbuffer).
+    #[prost(bytes = "vec", tag = "3")]
+    pub input_schema: ::prost::alloc::vec::Vec<u8>,
+    /// The files the rewrite replaces (encoded file references, the values of
+    /// `_krishiv_row_file`).
+    #[prost(bytes = "vec", repeated, tag = "4")]
+    pub touched: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
+    /// The statement's condition (an expression table index); absent: every row was read.
+    #[prost(uint32, optional, tag = "5")]
+    pub read_filter: ::core::option::Option<u32>,
+    /// Plain text only, as `TableWriteRequest.options`.
+    #[prost(message, repeated, tag = "6")]
+    pub options: ::prost::alloc::vec::Vec<MapLiteralEntry>,
+    #[prost(string, optional, tag = "7")]
+    pub write_id: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// feature: sample
 /// `TABLESAMPLE` (Spark's Bernoulli `SampleExec`): each row of input
@@ -237,6 +332,93 @@ pub struct SampleNode {
     pub upper: f64,
     #[prost(int64, tag = "4")]
     pub seed: i64,
+}
+/// feature: python_udf_relations
+/// `mapInPandas` / `mapInArrow`: each partition of `input` sent to a Python
+/// UDF task.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PythonMapNode {
+    #[prost(uint32, tag = "1")]
+    pub input: u32,
+    #[prost(message, optional, tag = "2")]
+    pub udf: ::core::option::Option<PythonRelation>,
+}
+/// feature: python_udf_relations
+/// A grouped map over `input` clustered and sorted by the key columns.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PythonGroupMapNode {
+    #[prost(uint32, tag = "1")]
+    pub input: u32,
+    #[prost(uint64, repeated, tag = "2")]
+    pub keys: ::prost::alloc::vec::Vec<u64>,
+    #[prost(message, optional, tag = "3")]
+    pub udf: ::core::option::Option<PythonRelation>,
+}
+/// feature: python_udf_relations
+/// A cogrouped map over both relations in one stream, sorted by the key
+/// columns then the side column.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PythonCoGroupMapNode {
+    #[prost(uint32, tag = "1")]
+    pub input: u32,
+    #[prost(uint64, repeated, tag = "2")]
+    pub keys: ::prost::alloc::vec::Vec<u64>,
+    #[prost(uint64, tag = "3")]
+    pub side: u64,
+    #[prost(message, optional, tag = "4")]
+    pub udf: ::core::option::Option<PythonRelation>,
+}
+/// feature: python_udf_relations
+/// An aggregate of grouped-aggregate Python UDF calls over `input` clustered
+/// and sorted by the key columns (`keys`: a collated key's comparison key);
+/// each group shows its first row's `key_values`.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PythonAggregateNode {
+    #[prost(uint32, tag = "1")]
+    pub input: u32,
+    #[prost(uint64, repeated, tag = "2")]
+    pub layout: ::prost::alloc::vec::Vec<u64>,
+    #[prost(uint64, repeated, tag = "3")]
+    pub keys: ::prost::alloc::vec::Vec<u64>,
+    #[prost(message, repeated, tag = "4")]
+    pub calls: ::prost::alloc::vec::Vec<PythonCall>,
+    #[prost(uint64, repeated, tag = "5")]
+    pub key_values: ::prost::alloc::vec::Vec<u64>,
+}
+/// feature: python_udf_relations
+/// The Python UDF of a relation node: by name and version, the columns of its
+/// frames per side, and its declared result.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PythonRelation {
+    #[prost(message, optional, tag = "1")]
+    pub udf: ::core::option::Option<PythonUdfFunction>,
+    #[prost(message, repeated, tag = "2")]
+    pub sides: ::prost::alloc::vec::Vec<PythonFrameSide>,
+    #[prost(message, repeated, tag = "3")]
+    pub output: ::prost::alloc::vec::Vec<PythonOutputColumn>,
+    /// Whether the UDF is deterministic (Spark's `udfDeterministic`).
+    #[prost(bool, tag = "4")]
+    pub deterministic: bool,
+}
+/// feature: python_udf_relations
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PythonFrameSide {
+    #[prost(uint64, repeated, tag = "1")]
+    pub columns: ::prost::alloc::vec::Vec<u64>,
+    #[prost(string, repeated, tag = "2")]
+    pub names: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag = "3")]
+    pub types: ::prost::alloc::vec::Vec<DataType>,
+}
+/// feature: python_udf_relations
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PythonOutputColumn {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub data_type: ::core::option::Option<DataType>,
+    #[prost(bool, tag = "3")]
+    pub nullable: bool,
 }
 /// feature: python_udf
 /// The rows of `input`, then one column per Python UDF call over every row.
@@ -1709,6 +1891,75 @@ pub struct CalendarLiteral {
     #[prost(sint64, tag = "3")]
     pub micros: i64,
 }
+/// feature: table_write
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum TableWriteMode {
+    Unspecified = 0,
+    Append = 1,
+    Truncate = 2,
+    OverwriteByFilter = 3,
+    OverwriteDynamic = 4,
+}
+impl TableWriteMode {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "TABLE_WRITE_MODE_UNSPECIFIED",
+            Self::Append => "TABLE_WRITE_MODE_APPEND",
+            Self::Truncate => "TABLE_WRITE_MODE_TRUNCATE",
+            Self::OverwriteByFilter => "TABLE_WRITE_MODE_OVERWRITE_BY_FILTER",
+            Self::OverwriteDynamic => "TABLE_WRITE_MODE_OVERWRITE_DYNAMIC",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "TABLE_WRITE_MODE_UNSPECIFIED" => Some(Self::Unspecified),
+            "TABLE_WRITE_MODE_APPEND" => Some(Self::Append),
+            "TABLE_WRITE_MODE_TRUNCATE" => Some(Self::Truncate),
+            "TABLE_WRITE_MODE_OVERWRITE_BY_FILTER" => Some(Self::OverwriteByFilter),
+            "TABLE_WRITE_MODE_OVERWRITE_DYNAMIC" => Some(Self::OverwriteDynamic),
+            _ => None,
+        }
+    }
+}
+/// feature: table_write
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum RowLevelOperation {
+    Unspecified = 0,
+    Delete = 1,
+    Update = 2,
+    Merge = 3,
+}
+impl RowLevelOperation {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "ROW_LEVEL_OPERATION_UNSPECIFIED",
+            Self::Delete => "ROW_LEVEL_OPERATION_DELETE",
+            Self::Update => "ROW_LEVEL_OPERATION_UPDATE",
+            Self::Merge => "ROW_LEVEL_OPERATION_MERGE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "ROW_LEVEL_OPERATION_UNSPECIFIED" => Some(Self::Unspecified),
+            "ROW_LEVEL_OPERATION_DELETE" => Some(Self::Delete),
+            "ROW_LEVEL_OPERATION_UPDATE" => Some(Self::Update),
+            "ROW_LEVEL_OPERATION_MERGE" => Some(Self::Merge),
+            _ => None,
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum SubqueryValueKind {
@@ -1748,6 +1999,8 @@ pub enum GeneratorKind {
     Inline = 3,
     /// feature: variant_explode
     VariantExplode = 4,
+    /// feature: python_udf_relations
+    PythonUdtf = 5,
 }
 impl GeneratorKind {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1761,6 +2014,7 @@ impl GeneratorKind {
             Self::PosExplode => "GENERATOR_KIND_POS_EXPLODE",
             Self::Inline => "GENERATOR_KIND_INLINE",
             Self::VariantExplode => "GENERATOR_KIND_VARIANT_EXPLODE",
+            Self::PythonUdtf => "GENERATOR_KIND_PYTHON_UDTF",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1771,6 +2025,7 @@ impl GeneratorKind {
             "GENERATOR_KIND_POS_EXPLODE" => Some(Self::PosExplode),
             "GENERATOR_KIND_INLINE" => Some(Self::Inline),
             "GENERATOR_KIND_VARIANT_EXPLODE" => Some(Self::VariantExplode),
+            "GENERATOR_KIND_PYTHON_UDTF" => Some(Self::PythonUdtf),
             _ => None,
         }
     }

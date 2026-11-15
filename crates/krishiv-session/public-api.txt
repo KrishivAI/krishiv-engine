@@ -373,6 +373,27 @@ pub fn krishiv_session::auth::Credentials<'_>::fmt(&self, &mut core::fmt::Format
 impl<'a> core::clone::Clone for krishiv_session::auth::Credentials<'a>
 pub fn krishiv_session::auth::Credentials<'a>::clone(&self) -> krishiv_session::auth::Credentials<'a>
 impl<'a> core::marker::Copy for krishiv_session::auth::Credentials<'a>
+#[non_exhaustive] pub struct krishiv_session::auth::DeniedCount
+pub krishiv_session::auth::DeniedCount::count: u64
+pub krishiv_session::auth::DeniedCount::privilege: krishiv_plan::analyzer::catalog::Privilege
+pub krishiv_session::auth::DeniedCount::surface: krishiv_session::auth::Surface
+impl core::clone::Clone for krishiv_session::auth::DeniedCount
+pub fn krishiv_session::auth::DeniedCount::clone(&self) -> krishiv_session::auth::DeniedCount
+impl core::cmp::Eq for krishiv_session::auth::DeniedCount
+impl core::cmp::PartialEq for krishiv_session::auth::DeniedCount
+pub fn krishiv_session::auth::DeniedCount::eq(&self, &krishiv_session::auth::DeniedCount) -> bool
+impl core::fmt::Debug for krishiv_session::auth::DeniedCount
+pub fn krishiv_session::auth::DeniedCount::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::auth::DeniedCount
+pub struct krishiv_session::auth::DeniedCounts
+impl krishiv_session::auth::DeniedCounts
+pub fn krishiv_session::auth::DeniedCounts::counts(&self) -> alloc::vec::Vec<krishiv_session::auth::DeniedCount>
+pub fn krishiv_session::auth::DeniedCounts::new() -> Self
+pub fn krishiv_session::auth::DeniedCounts::record(&self, krishiv_session::auth::Surface, krishiv_plan::analyzer::catalog::Privilege)
+impl core::default::Default for krishiv_session::auth::DeniedCounts
+pub fn krishiv_session::auth::DeniedCounts::default() -> Self
+impl core::fmt::Debug for krishiv_session::auth::DeniedCounts
+pub fn krishiv_session::auth::DeniedCounts::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 #[non_exhaustive] pub struct krishiv_session::auth::FailureCount
 pub krishiv_session::auth::FailureCount::count: u64
 pub krishiv_session::auth::FailureCount::method: krishiv_session::auth::Method
@@ -470,8 +491,10 @@ pub fn krishiv_session::auth::RolePolicy::version(&self) -> krishiv_plan::analyz
 pub struct krishiv_session::auth::ServerAuth
 impl krishiv_session::auth::ServerAuth
 pub fn krishiv_session::auth::ServerAuth::authenticate_at(&self, &krishiv_session::auth::Credentials<'_>, std::time::Instant) -> core::result::Result<krishiv_session::auth::Authenticated, krishiv_session::auth::AuthFailure>
+pub fn krishiv_session::auth::ServerAuth::denials(&self) -> alloc::sync::Arc<krishiv_session::auth::DeniedCounts>
 pub fn krishiv_session::auth::ServerAuth::failure_counts(&self) -> alloc::vec::Vec<krishiv_session::auth::FailureCount>
 pub fn krishiv_session::auth::ServerAuth::is_enabled(&self) -> bool
+pub fn krishiv_session::auth::ServerAuth::metrics(&self) -> krishiv_exec::metrics::registry::MetricsSnapshot
 pub fn krishiv_session::auth::ServerAuth::new(&krishiv_session::auth::AuthConfig) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 impl core::fmt::Debug for krishiv_session::auth::ServerAuth
 pub fn krishiv_session::auth::ServerAuth::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -581,6 +604,11 @@ pub fn krishiv_session::functions::min(krishiv_session::Column) -> krishiv_sessi
 pub fn krishiv_session::functions::python_udf_call(&krishiv_session::PythonUdfDef, u32, impl core::iter::traits::collect::IntoIterator<Item = krishiv_session::Column>) -> core::result::Result<krishiv_session::Column, krishiv_common::error::KrishivError>
 pub fn krishiv_session::functions::sum(krishiv_session::Column) -> krishiv_session::Column
 pub mod krishiv_session::resource_groups
+pub struct krishiv_session::resource_groups::GroupRow
+impl core::clone::Clone for krishiv_session::resource_groups::GroupRow
+pub fn krishiv_session::resource_groups::GroupRow::clone(&self) -> krishiv_session::resource_groups::GroupRow
+impl core::fmt::Debug for krishiv_session::resource_groups::GroupRow
+pub fn krishiv_session::resource_groups::GroupRow::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct krishiv_session::resource_groups::GroupSlot
 impl krishiv_session::resource_groups::GroupSlot
 pub fn krishiv_session::resource_groups::GroupSlot::add_bytes_read(&self, u64)
@@ -595,6 +623,7 @@ impl krishiv_session::resource_groups::ResourceGroups
 pub fn krishiv_session::resource_groups::ResourceGroups::counts(&self, &str) -> core::option::Option<(usize, usize)>
 pub fn krishiv_session::resource_groups::ResourceGroups::from_file(&str, usize) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 pub fn krishiv_session::resource_groups::ResourceGroups::from_json(&str, usize) -> core::result::Result<Self, krishiv_common::error::KrishivError>
+pub fn krishiv_session::resource_groups::ResourceGroups::rows(&self) -> alloc::vec::Vec<krishiv_session::resource_groups::GroupRow>
 pub fn krishiv_session::resource_groups::ResourceGroups::with_clock(&str, usize, alloc::sync::Arc<(dyn core::ops::function::Fn() -> u64 + core::marker::Send + core::marker::Sync)>) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 impl core::fmt::Debug for krishiv_session::resource_groups::ResourceGroups
 pub fn krishiv_session::resource_groups::ResourceGroups::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -1040,6 +1069,7 @@ impl core::marker::StructuralPartialEq for krishiv_session::QueryId
 #[non_exhaustive] pub struct krishiv_session::QueryOptions
 impl krishiv_session::QueryOptions
 pub fn krishiv_session::QueryOptions::deadline(self, core::time::Duration) -> Self
+pub fn krishiv_session::QueryOptions::inbound_trace(self, core::option::Option<&str>, core::option::Option<&str>) -> Self
 pub fn krishiv_session::QueryOptions::new() -> Self
 pub fn krishiv_session::QueryOptions::operation_id(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn krishiv_session::QueryOptions::tags<I, T>(self, I) -> Self where I: core::iter::traits::collect::IntoIterator<Item = T>, T: core::convert::AsRef<str>
@@ -1083,6 +1113,10 @@ impl core::fmt::Debug for krishiv_session::RuntimeConf
 pub fn krishiv_session::RuntimeConf::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct krishiv_session::Session
 impl krishiv_session::Session
+pub async fn krishiv_session::Session::authorize_privilege(&self, &krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege, krishiv_sql::classify::StatementClass) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub async fn krishiv_session::Session::authorize_set_key(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub fn krishiv_session::Session::count_denials(&self, alloc::sync::Arc<krishiv_session::auth::DeniedCounts>, krishiv_session::auth::Surface) -> bool
+impl krishiv_session::Session
 pub fn krishiv_session::Session::baggage(&self) -> alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
 pub fn krishiv_session::Session::clear_trace_context(&self)
 pub fn krishiv_session::Session::remove_tag(&self, &str)
@@ -1121,6 +1155,7 @@ pub fn krishiv_session::Session::interrupt_all(&self) -> alloc::vec::Vec<krishiv
 pub fn krishiv_session::Session::interrupt_tag(&self, &str) -> alloc::vec::Vec<krishiv_session::QueryId>
 pub fn krishiv_session::Session::is_closed(&self) -> bool
 pub fn krishiv_session::Session::new_session(&self) -> Self
+pub fn krishiv_session::Session::new_session_as(&self, krishiv_common::principal::Principal, alloc::sync::Arc<dyn krishiv_plan::analyzer::catalog::AccessPolicy>) -> Self
 pub fn krishiv_session::Session::running_queries(&self) -> usize
 pub fn krishiv_session::Session::runtime(&self) -> &alloc::sync::Arc<krishiv_session::EngineRuntime>
 pub fn krishiv_session::Session::set_client_info(&self, krishiv_session::Transport, core::option::Option<&str>, core::option::Option<&str>, core::option::Option<&str>)

@@ -92,6 +92,7 @@ mod sql_path;
 mod store;
 mod store_catalog;
 mod system;
+mod system_groups;
 mod table_commands;
 mod telemetry;
 mod trace_context;

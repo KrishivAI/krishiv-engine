@@ -73,6 +73,29 @@ fn randn_zero_matches_spark() {
 }
 
 #[test]
+fn randn_takes_the_log_of_strict_math() {
+    // Java's `nextGaussian` takes `StrictMath.log` (fdlibm), which differs
+    // from the platform `ln` in the last bit for some draws: the first value
+    // of partition 3 (stream seed 45) is one such. Oracle: Spark 4.2.0,
+    // `randn(42)` over a 6-split Parquet scan (rows 2 and 3 of partitions
+    // 3 to 5; the union-partition-ids probe).
+    let s = seed_i64(42);
+    let want = [
+        (3, [0.7400395449950132, -0.6419333657553036]),
+        (4, [-0.9930404818235632, -0.5308376537058802]),
+        (5, [0.8951356612564867, 1.1971861109011261]),
+    ];
+    for (partition, values) in want {
+        let got = seeded("randn", &s, 2, partition);
+        assert_eq!(
+            f64s(&got),
+            values.map(Some).to_vec(),
+            "partition {partition}"
+        );
+    }
+}
+
+#[test]
 fn null_seeds_read_as_zero() {
     // `rand(NULL)` and `rand(cast(NULL AS INT))` are `rand(0)`.
     let s = null_i32();

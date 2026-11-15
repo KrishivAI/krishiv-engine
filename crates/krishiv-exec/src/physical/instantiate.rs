@@ -89,6 +89,8 @@ mod detached;
 mod distributed;
 mod order;
 mod python_eval;
+mod python_relation;
+mod table_write;
 pub(crate) use detached::{Detached, LoopRun};
 mod join;
 use distributed::planned_schema_holds;
@@ -927,6 +929,10 @@ impl Instantiation<'_> {
     fn untagged(&mut self, n: &PhysNode) -> Result<Built> {
         match n {
             PhysNode::PythonEval { .. } => self.python_eval(n),
+            PhysNode::PythonMap { .. }
+            | PhysNode::PythonGroupMap { .. }
+            | PhysNode::PythonCoGroupMap { .. }
+            | PhysNode::PythonAggregate { .. } => self.python_relation(n),
             PhysNode::Scan(s) => self.scan(s),
             PhysNode::Range(r) => {
                 let source = Arc::new(crate::operators::Range::new(
@@ -1262,6 +1268,11 @@ impl Instantiation<'_> {
                 })
             }
             PhysNode::WriteFiles { input, write } => self.write_files(input, write),
+            PhysNode::TableWrite {
+                input,
+                table,
+                request,
+            } => self.table_write(input, table, request),
             // See the module docs: the operators around an exchange
             // implement it on one worker.
             PhysNode::Exchange(e) if e.partitioning == Partitioning::Broadcast => self.broadcast(e),

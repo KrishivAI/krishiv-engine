@@ -275,6 +275,13 @@ fn check_member(
             "a null {what} in a nested literal whose type forbids nulls"
         )));
     }
+    // The options-only map literal is not a value: the codec refuses it as a member and the
+    // executor builds it with other child types than a declared `MAP<STRING, STRING>`.
+    if matches!(value, Literal::Map(_)) {
+        return Err(invalid(format!(
+            "an options-only map as a nested literal {what}; use a key/value map literal"
+        )));
+    }
     match value.data_type() {
         Some(t) if t == *expected => Ok(()),
         Some(t) => Err(invalid(format!(

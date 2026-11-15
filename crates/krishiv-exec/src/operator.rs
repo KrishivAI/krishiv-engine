@@ -80,6 +80,19 @@ pub trait Source: Send + Sync {
     fn partitions(&self, global: &GlobalState) -> usize {
         self.max_parallelism(global)
     }
+    /// Whether the source's output is Spark's `SinglePartition`: a `range`
+    /// asking for one slice with at least one row, a global aggregate. A
+    /// `UNION ALL` whose inputs all are runs them as one partition
+    /// (`spark.sql.unionOutputPartitioning`, `numbering.rs`). Default `false`
+    /// (Spark's `UnknownPartitioning`: a file scan, `VALUES`). Not mirrored
+    /// yet: a sort's output, a breaker over an AQE-coalesced shuffle and a
+    /// grouped aggregate over a one-partition input (no exchange in Spark:
+    /// `(s1 EXCEPT ALL ..) UNION ALL (s2 EXCEPT ALL ..)` is spid 0), which
+    /// Spark makes one partition.
+    fn single_partition(&self, global: &GlobalState) -> bool {
+        let _ = global;
+        false
+    }
     /// One driver's state.
     ///
     /// # Errors
@@ -237,6 +250,16 @@ pub trait Operator: Send + Sync {
     /// Drivers flush in parallel, so the operator shares out the work
     /// itself. Default: `false`.
     fn needs_flush(&self) -> bool {
+        false
+    }
+    /// Whether the operator's output keeps its input's Spark partitioning
+    /// (`ProjectExec`, `FilterExec`, `SampleExec`, `GenerateExec` (also
+    /// `ReplicateRows`, planned as one), and a
+    /// `LIMIT` over one partition), so a `SinglePartition` input stays one
+    /// (see [`Source::single_partition`]). Default `false`. Not mirrored
+    /// yet: Spark's `GlobalLimitExec` is one partition over any input;
+    /// Krishiv's `LIMIT` keeps its input's partitions.
+    fn keeps_partitioning(&self) -> bool {
         false
     }
     /// This driver's input ended: publish what [`flush`](Self::flush) needs

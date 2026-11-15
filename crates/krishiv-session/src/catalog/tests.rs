@@ -62,6 +62,7 @@ fn first_column(t: &TempTable) -> &str {
     match t {
         TempTable::Files { columns, .. }
         | TempTable::Memory { columns, .. }
+        | TempTable::Provider { columns, .. }
         | TempTable::View { columns, .. } => &columns[0].name,
     }
 }
@@ -1115,4 +1116,21 @@ fn a_file_read_with_a_declared_schema_uses_it() {
     let names: Vec<_> = schema.fields().iter().map(|f| f.name().clone()).collect();
     assert_eq!(names, ["k", "v"]);
     assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 2);
+    let mut got: Vec<(String, String)> = Vec::new();
+    for b in &batches {
+        for i in 0..b.num_rows() {
+            let cell =
+                |c: usize| arrow_cast::display::array_value_to_string(b.column(c), i).unwrap();
+            got.push((cell(0), cell(1)));
+        }
+    }
+    got.sort();
+    assert_eq!(
+        got,
+        [
+            ("1".to_owned(), "a".to_owned()),
+            ("2".to_owned(), "b".to_owned())
+        ]
+    );
+    assert_eq!(schema.field(0).data_type(), &arrow_schema::DataType::Int64);
 }
