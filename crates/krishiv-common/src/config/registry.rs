@@ -28,7 +28,8 @@ pub use lakehouse::{
     CATALOG_MAX_COLUMNS, CATALOG_MAX_METADATA_BYTES, CATALOG_REQUEST_TIMEOUT, DELTA_LOG_THREADS,
 };
 pub use optimizer::{
-    EXPERIMENTAL_GROUP_KEY_CODE_FORCE, GROUP_KEY_CODE, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
+    EXPERIMENTAL_GROUP_KEY_CODE_FORCE, GROUP_KEY_CODE, SEMI_ANTI_JOIN_ORDER,
+    SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
 };
 pub use result_cache::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
 pub use server::{
@@ -100,6 +101,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &GROUP_KEY_CODE,
     &EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
     &SHARE_REPEATED_SUBTREES,
+    &SEMI_ANTI_JOIN_ORDER,
     &SPILL_DIR,
     &WORKLOAD_RESOURCE_GROUPS_FILE,
     &SPILL_MAX_BYTES,
@@ -108,6 +110,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &SPILL_DROP_BEHIND_BYTES,
     &EXPERIMENTAL_IVM,
     &EXPERIMENTAL_UNALIGNED_CHECKPOINTS,
+    &EXPERIMENTAL_RUNTIME_FILTER_BLOOM_AT_SCALE,
     &IO_STRICT_OPTIONS,
     &FILES_MAX_PARTITION_BYTES,
     &FILES_OPEN_COST_IN_BYTES,
@@ -904,6 +907,20 @@ pub static EXPERIMENTAL_UNALIGNED_CHECKPOINTS: ConfigEntry = ConfigEntry {
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Experimental: larger runtime Bloom filters for scans far larger than the build.
+pub static EXPERIMENTAL_RUNTIME_FILTER_BLOOM_AT_SCALE: ConfigEntry = ConfigEntry {
+    key: "krishiv.experimental.runtimeFilterBloomAtScale",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Experimental: a join whose probe-side scan is estimated at least 20 times its build plans its runtime \
+          Bloom filter with caps of 20,000,000 keys and 32 MiB instead of `krishiv.runtimeFilter.bloom.maxItems` \
+          and `krishiv.runtimeFilter.bloom.maxBytes`, when those are lower. Results do not change.",
+    scope: Scope::Session,
+    settable_by: SettableBy::Admin,
+    version_added: "0.2.0",
     spark_alias: None,
 };
 

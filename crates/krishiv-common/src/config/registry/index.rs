@@ -259,6 +259,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         "krishiv.connect.session.idleTimeout",
         &CONNECT_SESSION_IDLE_TIMEOUT,
     ),
+    ("krishiv.optimizer.semiAntiJoinOrder", &SEMI_ANTI_JOIN_ORDER),
     (
         "krishiv.python.worker.maxPerSession",
         &PYTHON_WORKER_MAX_PER_SESSION,
@@ -514,6 +515,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "spark.sql.optimizer.windowGroupLimitThreshold",
         &WINDOW_GROUP_LIMIT_THRESHOLD,
+    ),
+    (
+        "krishiv.experimental.runtimeFilterBloomAtScale",
+        &EXPERIMENTAL_RUNTIME_FILTER_BLOOM_AT_SCALE,
     ),
     (
         "krishiv.runtimeFilter.bloom.minApplicationRows",
