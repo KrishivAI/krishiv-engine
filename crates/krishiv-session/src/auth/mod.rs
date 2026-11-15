@@ -27,6 +27,7 @@
 //!   credential) and its failure counters.
 
 mod config;
+mod denials;
 mod der;
 mod impersonation;
 #[cfg_attr(
@@ -76,6 +77,7 @@ use futures::future::BoxFuture;
 use krishiv_common::principal::Principal;
 
 pub use config::{AuthConfig, RoleLists, ThrottleConfig, TokenSpec, is_auth_key};
+pub use denials::{DeniedCount, DeniedCounts};
 pub use der::{CertNames, DerError};
 pub use impersonation::{ActAs, Denial, ImpersonationConfig};
 pub use jose::Alg;

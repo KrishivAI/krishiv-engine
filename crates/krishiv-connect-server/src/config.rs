@@ -41,18 +41,12 @@ use krishiv_common::secret::is_sensitive_key;
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::config_request::operation::OpType;
 use krishiv_session::RuntimeConf;
+use krishiv_session::auth::{Authenticated, Method, Role};
 
 use crate::manager::SessionEntry;
 
 /// What a principal may do with configuration (ADR 0046 §8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "viewer and operator arrive with authentication (P3-T002)"
-    )
-)]
 pub(crate) enum ConfigRole {
     /// Reads and sets `User` keys only.
     Viewer,
@@ -62,20 +56,21 @@ pub(crate) enum ConfigRole {
     Admin,
 }
 
-/// The configuration role of `principal`.
+/// The configuration role of `caller` (P3-T002, ADR 0046): its authenticated role; a caller
+/// with none is a viewer. With authentication off every request is the local user on a
+/// loopback listener (design P3-T001 §3.6), which is the admin.
 ///
-/// TODO(P3-T002): roles arrive with authentication; until then every
-/// principal is the local user on a loopback listener (design P3-T001
-/// §3.6) and is treated as the admin. T002 must also:
-/// - flip this default (an unknown principal is a viewer);
-/// - move [`check_settable`] into the session's `AccessPolicy` path, so
-///   SQL `SET` (`Session::sql`) and Connect's `SqlCommand` (T012) take the
-///   same gate as this RPC (ADR 0046 rejects listener-local checks);
-/// - hide `Startup` and `Admin` keys from `get_all` for viewers and
-///   operators.
+/// SQL `SET` takes the same gate through the session's policy (`Manage` on the cluster for an
+/// `admin` key). TODO(P3-T002 follow-up): have this RPC ask the session's policy too instead
+/// of [`check_settable`] (ADR 0046 rejects listener-local checks), and hide `Startup` and
+/// `Admin` keys from `get_all` for viewers and operators.
 #[must_use]
-pub(crate) fn role_of(_principal: &Principal) -> ConfigRole {
-    ConfigRole::Admin
+pub(crate) fn role_of(caller: &Authenticated) -> ConfigRole {
+    match (caller.method, caller.role) {
+        (Method::None, _) | (_, Some(Role::Admin)) => ConfigRole::Admin,
+        (_, Some(Role::Operator)) => ConfigRole::Operator,
+        (_, Some(Role::Viewer) | None) => ConfigRole::Viewer,
+    }
 }
 
 /// Whether `role` may set or unset `key` (the registry's `SettableBy`).
@@ -263,7 +258,7 @@ fn message(e: &KrishivError) -> String {
 /// module docs); `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SET` for a
 /// request without an operation (Spark throws a classless
 /// `UnsupportedOperationException`: a recorded difference).
-pub(crate) fn config(
+pub(crate) async fn config(
     entry: &SessionEntry,
     request: &pb::ConfigRequest,
     principal: &Principal,
@@ -288,7 +283,7 @@ pub(crate) fn config(
         Some(OpType::Set(set)) => {
             let silent = set.silent.unwrap_or(false);
             for kv in &set.pairs {
-                match set_one(&conf, principal, role, &kv.key, kv.value.as_deref()) {
+                match set_one(entry, principal, role, &kv.key, kv.value.as_deref()).await {
                     Ok(()) => out.warnings.extend(warning(&kv.key)),
                     Err(e) if silent => {
                         let shown = kv
@@ -370,7 +365,7 @@ pub(crate) fn config(
         }
         Some(OpType::Unset(u)) => {
             for key in &u.keys {
-                check_settable(role, principal, key)?;
+                authorize(entry, role, principal, key).await?;
                 conf.unset(key)?;
                 out.warnings.extend(warning(key));
             }
@@ -386,14 +381,35 @@ pub(crate) fn config(
     Ok(out)
 }
 
-fn set_one(
-    conf: &RuntimeConf,
+/// The checks of a `set` or `unset` of `key`: a `Startup` key is refused for every role, then
+/// the session asks its policy as SQL `SET` does (`Session::authorize_set_key`: an `Admin` key
+/// or a server-scoped store key needs `Manage` on the cluster; a denial is audited and
+/// counted), then the role's `SettableBy`.
+async fn authorize(
+    entry: &SessionEntry,
+    role: ConfigRole,
+    principal: &Principal,
+    key: &str,
+) -> Result<(), KrishivError> {
+    if matches!(
+        lookup(key).map(|e| e.settable_by),
+        Some(SettableBy::Startup)
+    ) {
+        return check_settable(role, principal, key);
+    }
+    entry.session().authorize_set_key(key).await?;
+    check_settable(role, principal, key)
+}
+
+async fn set_one(
+    entry: &SessionEntry,
     principal: &Principal,
     role: ConfigRole,
     key: &str,
     value: Option<&str>,
 ) -> Result<(), KrishivError> {
-    check_settable(role, principal, key)?;
+    authorize(entry, role, principal, key).await?;
+    let conf = entry.session().conf();
     // Spark's `require(value != null)` is a classless
     // `IllegalArgumentException`: a recorded difference.
     let Some(value) = value else {

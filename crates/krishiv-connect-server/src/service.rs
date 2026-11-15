@@ -4,7 +4,8 @@
 //! implementation of it, [`ConnectService`].
 //!
 //! T001 implements the session RPCs (`ReleaseSession`) and what every RPC
-//! shares (the principal, the draining refusal). T011a (PR-11a) adds
+//! shares (the draining refusal); T002 authenticates every RPC, the
+//! unimplemented ones too (`crate::auth`). T011a (PR-11a) adds
 //! `ExecutePlan` (`crate::execute`), `ReattachExecute` and `ReleaseExecute`
 //! (with the replay buffer, sender caps and detach of PR-15a, design
 //! P3-T011a §3.8). PR-11b adds `AnalyzePlan` (`crate::analyze`), `Config`
@@ -18,13 +19,14 @@ use krishiv_common::error::{
     ConnectInvalidPlanInvalidOneOfFieldNotSet, InvalidCursorNotReattachable,
     InvalidHandleOperationAbandoned, InvalidHandleOperationNotFound, KrishivError,
 };
-use krishiv_common::principal::Principal;
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::release_execute_request::Release;
 use krishiv_connect::wire::Decoded;
+use krishiv_session::auth::Authenticated;
 use tonic::codegen::BoxStream;
 use tonic::{Request, Response, Status, Streaming};
 
+use crate::auth::{Check, ConnectAuth, Rpc, check_rpc};
 use crate::codec::WireCodec;
 use crate::execute::ResponseBudget;
 use crate::manager::{SessionEntry, SessionManager};
@@ -45,39 +47,35 @@ mod generated {
 
 pub use generated::{SparkConnectService, SparkConnectServiceServer};
 
-/// The principal a request runs as: set by the authentication layer (T002)
-/// as a request extension; until then the server's local user, on loopback
-/// only (design P3-T001 §3.6).
-fn principal_of<T>(request: &Request<T>, default: &Principal) -> Principal {
-    request
-        .extensions()
-        .get::<Principal>()
-        .cloned()
-        .unwrap_or_else(|| default.clone())
-}
-
 /// Krishiv's Spark Connect service over a [`SessionManager`].
 #[derive(Debug)]
 pub struct ConnectService {
     manager: Arc<SessionManager>,
     draining: Arc<AtomicBool>,
-    local: Principal,
+    auth: Arc<ConnectAuth>,
     limits: ExecuteLimits,
     budget: ResponseBudget,
 }
 
 impl ConnectService {
-    /// A service over `manager`; new RPCs are refused with `UNAVAILABLE`
-    /// once `draining` is set (shutdown).
+    /// A service over `manager`, with authentication off; new RPCs are
+    /// refused with `UNAVAILABLE` once `draining` is set (shutdown).
     #[must_use]
     pub fn new(manager: Arc<SessionManager>, draining: Arc<AtomicBool>) -> Self {
         Self {
             manager,
             draining,
-            local: Principal::local_user(),
+            auth: Arc::new(ConnectAuth::off()),
             budget: ResponseBudget::new(ExecuteLimits::default().max_response_bytes),
             limits: ExecuteLimits::default(),
         }
+    }
+
+    /// This service authenticating every RPC with `auth`.
+    #[must_use]
+    pub fn with_auth(mut self, auth: Arc<ConnectAuth>) -> Self {
+        self.auth = auth;
+        self
     }
 
     /// This service with the `ExecutePlan` limits `limits` (and a response
@@ -119,26 +117,48 @@ impl ConnectService {
         }
     }
 
-    /// The session `session_id` of `principal`, created if needed, its
-    /// server-side id checked against the client's (the get-or-create RPCs
-    /// of design P3-T011a §2.1).
+    /// Admits `request` and returns its caller (authenticated by
+    /// [`crate::auth::AuthLayer`] before the body was read), after the
+    /// ADR 0046 §3b class of `rpc`. A class that needs more than the
+    /// session lookup or the analyzer (a privilege, the write path, a side
+    /// effect) is refused until the RPC that needs it applies it: fail
+    /// closed, so a newly implemented RPC cannot skip its check.
+    fn caller<T>(&self, request: &Request<T>, rpc: Rpc) -> Result<Authenticated, Status> {
+        self.admit()?;
+        let caller = self.auth.caller(request)?;
+        match check_rpc(rpc) {
+            Check::OwnSession | Check::Plan => Ok(caller),
+            Check::Privilege { .. } | Check::Write | Check::SideEffect | Check::Unsupported(_) => {
+                Err(Status::unimplemented(format!(
+                    "{rpc:?} is not supported by this server yet"
+                )))
+            }
+        }
+    }
+
+    /// The session `session_id` of `caller`, created if needed, its server-side id checked
+    /// against the client's (the get-or-create RPCs of design P3-T011a §2.1). The client's
+    /// `user_id` is recorded, never trusted (ADR 0046 §5).
     fn session(
         &self,
-        principal: &Principal,
+        caller: &Authenticated,
         session_id: &str,
         observed: Option<&str>,
         user: Option<&pb::UserContext>,
     ) -> Result<Arc<SessionEntry>, Status> {
         let user = user.map_or("", |u| u.user_id.as_str());
         self.manager
-            .get_or_create(principal, session_id, observed, user)
+            .get_or_create(caller, session_id, observed, user)
             .map_err(|e| status_of(&e))
     }
 
-    fn unimplemented(&self, rpc: &str) -> Status {
-        match self.admit() {
+    /// `UNIMPLEMENTED`, once `request` is admitted and authenticated: an
+    /// unauthenticated client learns nothing about what the server
+    /// implements.
+    fn unimplemented<T>(&self, request: &Request<T>, rpc: Rpc) -> Status {
+        match self.caller(request, rpc) {
             Err(s) => s,
-            Ok(()) => Status::unimplemented(format!("{rpc} is not supported by this server yet")),
+            Ok(_) => Status::unimplemented(format!("{rpc:?} is not supported by this server yet")),
         }
     }
 }
@@ -154,11 +174,10 @@ impl SparkConnectService for ConnectService {
         &self,
         request: Request<Decoded<pb::ExecutePlanRequest>>,
     ) -> Result<Response<Self::ExecutePlanStream>, Status> {
-        self.admit()?;
-        let principal = principal_of(&request, &self.local);
+        let caller = self.caller(&request, Rpc::ExecutePlan)?;
         let request = request.into_inner();
         let entry = self.session(
-            &principal,
+            &caller,
             &request.session_id,
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
@@ -167,9 +186,7 @@ impl SparkConnectService for ConnectService {
         // lines 105-120); a live one is attached to by `execute_plan`.
         if let Some(id) = &request.operation_id
             && entry.operations().get(id).is_none()
-            && self
-                .manager
-                .is_abandoned(&principal, &request.session_id, id)
+            && self.manager.is_abandoned(&caller, &request.session_id, id)
         {
             return Err(status_of(
                 &InvalidHandleOperationAbandoned { handle: id.clone() }.into(),
@@ -187,11 +204,10 @@ impl SparkConnectService for ConnectService {
         &self,
         request: Request<Decoded<pb::AnalyzePlanRequest>>,
     ) -> Result<Response<pb::AnalyzePlanResponse>, Status> {
-        self.admit()?;
-        let principal = principal_of(&request, &self.local);
+        let caller = self.caller(&request, Rpc::AnalyzePlan)?;
         let request = request.into_inner();
         let entry = self.session(
-            &principal,
+            &caller,
             &request.session_id,
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
@@ -208,32 +224,37 @@ impl SparkConnectService for ConnectService {
         &self,
         request: Request<Decoded<pb::ConfigRequest>>,
     ) -> Result<Response<pb::ConfigResponse>, Status> {
-        self.admit()?;
-        let principal = principal_of(&request, &self.local);
+        let caller = self.caller(&request, Rpc::Config)?;
         let request = request.into_inner();
         let entry = self.session(
-            &principal,
+            &caller,
             &request.session_id,
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
-        config::config(&entry, &request, &principal, config::role_of(&principal))
-            .map(Response::new)
-            .map_err(|e| status_of(&e))
+        config::config(
+            &entry,
+            &request,
+            &caller.principal,
+            config::role_of(&caller),
+        )
+        .await
+        .map(Response::new)
+        .map_err(|e| status_of(&e))
     }
 
     async fn add_artifacts(
         &self,
-        _request: Request<Streaming<Decoded<pb::AddArtifactsRequest>>>,
+        request: Request<Streaming<Decoded<pb::AddArtifactsRequest>>>,
     ) -> Result<Response<pb::AddArtifactsResponse>, Status> {
-        Err(self.unimplemented("AddArtifacts"))
+        Err(self.unimplemented(&request, Rpc::AddArtifacts))
     }
 
     async fn artifact_status(
         &self,
-        _request: Request<Decoded<pb::ArtifactStatusesRequest>>,
+        request: Request<Decoded<pb::ArtifactStatusesRequest>>,
     ) -> Result<Response<pb::ArtifactStatusesResponse>, Status> {
-        Err(self.unimplemented("ArtifactStatus"))
+        Err(self.unimplemented(&request, Rpc::ArtifactStatus))
     }
 
     /// Spark's `SparkConnectInterruptHandler`: the session is looked up or
@@ -242,18 +263,24 @@ impl SparkConnectService for ConnectService {
         &self,
         request: Request<Decoded<pb::InterruptRequest>>,
     ) -> Result<Response<pb::InterruptResponse>, Status> {
-        self.admit()?;
-        let principal = principal_of(&request, &self.local);
+        let caller = self.caller(&request, Rpc::Interrupt)?;
         let request = request.into_inner();
         let entry = self.session(
-            &principal,
+            &caller,
             &request.session_id,
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
-        interrupt::interrupt(&entry, &request)
-            .map(Response::new)
-            .map_err(|e| status_of(&e))
+        let response = interrupt::interrupt(&entry, &request).map_err(|e| status_of(&e))?;
+        // An id it did not interrupt that is no operation of this session may be another
+        // owner's: answered the same (an empty list), recorded (ADR 0046 §3b).
+        if let Some(pb::interrupt_request::Interrupt::OperationId(id)) = &request.interrupt
+            && response.interrupted_ids.is_empty()
+            && entry.operations().get(id).is_none()
+        {
+            self.manager.audit_foreign_operation(&caller, id);
+        }
+        Ok(Response::new(response))
     }
 
     /// Spark's `SparkConnectReattachExecuteHandler` (v4.3.0 lines 30-66)
@@ -269,13 +296,12 @@ impl SparkConnectService for ConnectService {
         &self,
         request: Request<Decoded<pb::ReattachExecuteRequest>>,
     ) -> Result<Response<Self::ReattachExecuteStream>, Status> {
-        self.admit()?;
-        let principal = principal_of(&request, &self.local);
+        let caller = self.caller(&request, Rpc::ReattachExecute)?;
         let request = request.into_inner();
         let entry = self
             .manager
             .get(
-                &principal,
+                &caller,
                 &request.session_id,
                 request.client_observed_server_side_session_id.as_deref(),
             )
@@ -285,10 +311,13 @@ impl SparkConnectService for ConnectService {
             let error: KrishivError =
                 if self
                     .manager
-                    .is_abandoned(&principal, &request.session_id, &request.operation_id)
+                    .is_abandoned(&caller, &request.session_id, &request.operation_id)
                 {
                     InvalidHandleOperationAbandoned { handle }.into()
                 } else {
+                    // Answered as unknown, recorded if another owner's (ADR 0046 §3b).
+                    self.manager
+                        .audit_foreign_operation(&caller, &request.operation_id);
                     InvalidHandleOperationNotFound { handle }.into()
                 };
             return Err(status_of(&error));
@@ -321,19 +350,25 @@ impl SparkConnectService for ConnectService {
         &self,
         request: Request<Decoded<pb::ReleaseExecuteRequest>>,
     ) -> Result<Response<pb::ReleaseExecuteResponse>, Status> {
-        self.admit()?;
-        let principal = principal_of(&request, &self.local);
+        let caller = self.caller(&request, Rpc::ReleaseExecute)?;
         let request = request.into_inner();
         let entry = self
             .manager
-            .get(&principal, &request.session_id, None)
+            .get(&caller, &request.session_id, None)
             .map_err(|e| status_of(&e))?;
         let mut response = pb::ReleaseExecuteResponse {
             session_id: request.session_id.clone(),
             server_side_session_id: entry.server_side_id().to_owned(),
             operation_id: None,
         };
-        if let Some(op) = entry.operations().get(&request.operation_id) {
+        let found = entry.operations().get(&request.operation_id);
+        if found.is_none() {
+            // Answered as unknown (success, no operation id), recorded if another owner's
+            // (ADR 0046 §3b).
+            self.manager
+                .audit_foreign_operation(&caller, &request.operation_id);
+        }
+        if let Some(op) = found {
             if !op.reattachable() {
                 return Err(status_of(&InvalidCursorNotReattachable {}.into()));
             }
@@ -370,12 +405,11 @@ impl SparkConnectService for ConnectService {
         &self,
         request: Request<Decoded<pb::ReleaseSessionRequest>>,
     ) -> Result<Response<pb::ReleaseSessionResponse>, Status> {
-        self.admit()?;
-        let principal = principal_of(&request, &self.local);
+        let caller = self.caller(&request, Rpc::ReleaseSession)?;
         let request = request.into_inner();
         let server_side =
             self.manager
-                .release(&principal, &request.session_id, request.allow_reconnect);
+                .release(&caller, &request.session_id, request.allow_reconnect);
         Ok(Response::new(pb::ReleaseSessionResponse {
             session_id: request.session_id.clone(),
             server_side_session_id: server_side.unwrap_or_default(),
@@ -384,22 +418,22 @@ impl SparkConnectService for ConnectService {
 
     async fn fetch_error_details(
         &self,
-        _request: Request<Decoded<pb::FetchErrorDetailsRequest>>,
+        request: Request<Decoded<pb::FetchErrorDetailsRequest>>,
     ) -> Result<Response<pb::FetchErrorDetailsResponse>, Status> {
-        Err(self.unimplemented("FetchErrorDetails"))
+        Err(self.unimplemented(&request, Rpc::FetchErrorDetails))
     }
 
     async fn clone_session(
         &self,
-        _request: Request<Decoded<pb::CloneSessionRequest>>,
+        request: Request<Decoded<pb::CloneSessionRequest>>,
     ) -> Result<Response<pb::CloneSessionResponse>, Status> {
-        Err(self.unimplemented("CloneSession"))
+        Err(self.unimplemented(&request, Rpc::CloneSession))
     }
 
     async fn get_status(
         &self,
-        _request: Request<Decoded<pb::GetStatusRequest>>,
+        request: Request<Decoded<pb::GetStatusRequest>>,
     ) -> Result<Response<pb::GetStatusResponse>, Status> {
-        Err(self.unimplemented("GetStatus"))
+        Err(self.unimplemented(&request, Rpc::GetStatus))
     }
 }

@@ -24,8 +24,22 @@ fn config_settable_by() {
         assert_eq!(e.error_class().sql_state(), Some("42501"));
     }
     check_settable(ConfigRole::Admin, &p, ADMIN).unwrap();
-    // Until T002 the local principal is the admin.
-    assert_eq!(role_of(&Principal::local_user()), ConfigRole::Admin);
+    // Authentication off: the local user (loopback only) is the admin. Otherwise the caller's
+    // role, and no role is a viewer.
+    use krishiv_session::auth::{Authenticated, Method, Role};
+    let local = Authenticated::new(Principal::local_user(), None, Method::None);
+    assert_eq!(role_of(&local), ConfigRole::Admin);
+    let as_role = |role| {
+        role_of(&Authenticated::new(
+            Principal::new("ann", krishiv_common::principal::PrincipalKind::User),
+            role,
+            Method::Token,
+        ))
+    };
+    assert_eq!(as_role(Some(Role::Admin)), ConfigRole::Admin);
+    assert_eq!(as_role(Some(Role::Operator)), ConfigRole::Operator);
+    assert_eq!(as_role(Some(Role::Viewer)), ConfigRole::Viewer);
+    assert_eq!(as_role(None), ConfigRole::Viewer);
 }
 
 #[test]
