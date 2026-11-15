@@ -211,29 +211,28 @@ pub(super) fn joined(
 /// Refuses an aggregate driver whose tasks all ended with groups or values
 /// left over: a task yielded another number of values than groups. The
 /// error names the first lane whose total is not the number of groups (a
-/// lane with the right count beside a short one is not the culprit), else
-/// the lane with the fewest values.
+/// lane with the right count beside a short one is not the culprit).
 pub(super) fn check_complete(
     pending: &Pending,
     lanes: &[RelationLane],
     states: &[Lane],
 ) -> Result<()> {
-    let mut fewest: Option<(&RelationLane, usize)> = None;
     for (lane, state) in lanes.iter().zip(states) {
         let total = yielded(lane, state)? + pending.joined;
         if total != pending.groups {
             return Err(too_many(lane, total, pending.groups));
         }
-        if fewest.is_none_or(|(_, n)| total < n) {
-            fewest = Some((lane, total));
-        }
     }
-    match fewest {
-        Some((lane, total)) if pending.joined < pending.groups => {
-            Err(too_many(lane, total, pending.groups))
-        }
-        _ => Ok(()),
+    // Every lane has a value for every group, so `joined` took them all:
+    // groups left over here are the engine's error, not the UDF's.
+    if pending.joined < pending.groups {
+        return Err(internal(format!(
+            "{} of {} Python aggregate groups left unjoined",
+            pending.groups - pending.joined,
+            pending.groups
+        )));
     }
+    Ok(())
 }
 
 fn too_many(

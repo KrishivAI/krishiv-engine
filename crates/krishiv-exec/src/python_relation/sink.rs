@@ -470,7 +470,10 @@ impl RelationSink {
     /// cut by either limit: Spark writes each group as one batch
     /// (`ArrowAggregatePythonExec` runs a `BasicPythonArrowInput`,
     /// ArrowPythonRunner.scala L78-91 and PythonArrowInput.scala L126-156
-    /// at v4.2.0), so its rows go as they come.
+    /// at v4.2.0), so its rows go as they come. A group that spans input
+    /// batches still reaches its task as several frames: the runtime must
+    /// concatenate an aggregate's frames up to `EndGroup` before it calls
+    /// the UDF (no runtime implements the relation kinds yet).
     fn cut_held(&self, d: &mut Driver, all: bool) -> Result<()> {
         if d.held_rows == 0 {
             return Ok(());
@@ -486,15 +489,20 @@ impl RelationSink {
         } else {
             let copy = arrow_select::concat::concat_batches(&self.input, &held)
                 .map_err(|e| internal(format!("held Python UDF rows: {e}")))?;
-            // The copy holds the rows now: its slices share a reservation
-            // of its own, and the batches it was cut from are freed with
-            // their other slices (carried on, a long group would keep every
-            // batch it spans). Refused, the copy goes unreserved until its
-            // last frame is taken: at most a frame's rows.
+            // A leftover joined with the rows that fill its frame (`feed`
+            // adds no more than that): at most `maxRecordsPerBatch` rows,
+            // or, without that limit, the rows of the group (or side) held
+            // across input batches. The copy holds them now: its slices
+            // share a reservation of its own, and the batches it was cut
+            // from are freed with their other slices (carried on, a long
+            // group would keep every batch it spans). If the pool refuses
+            // the copy's, the source batches' reservations stay with its
+            // slices instead: they cover at least its rows, so nothing the
+            // copy holds goes unreserved.
             drop(held);
             let bytes = copy.get_array_memory_size();
-            memory.clear();
             if d.input_bytes.try_grow(bytes).is_ok() {
+                memory.clear();
                 memory.push(Arc::new(Mutex::new(d.input_bytes.split(bytes))));
             }
             copy
@@ -614,6 +622,10 @@ impl RelationSink {
         memory: &SharedMem,
     ) -> Result<()> {
         let grouped = self.encoder.is_some();
+        // The rows of a full frame, when frames are cut by count.
+        let frame_rows = (self.max_rows > 0
+            && !matches!(self.shape, RelationShape::Aggregate { .. }))
+        .then_some(self.max_rows);
         for run in runs {
             if run.new_group {
                 if d.group_open {
@@ -633,12 +645,25 @@ impl RelationSink {
                 self.empty_side(d, 0);
             }
             d.sides_seen[usize::from(run.side)] = true;
-            d.held.push(batch.slice(run.start, run.len));
-            d.held_rows += run.len;
-            if !d.held_mem.iter().any(|m| Arc::ptr_eq(m, memory)) {
-                d.held_mem.push(Arc::clone(memory));
+            // Behind a leftover, only the rows that fill its frame join it
+            // (the one copy, `cut_held`); the rest of the run is cut from
+            // the batch itself, without a copy.
+            let mut at = run.start;
+            let end = run.start + run.len;
+            while at < end {
+                let n = match frame_rows {
+                    Some(step) if d.held_rows > 0 => step.saturating_sub(d.held_rows).max(1),
+                    _ => end - at,
+                }
+                .min(end - at);
+                d.held.push(batch.slice(at, n));
+                d.held_rows += n;
+                if !d.held_mem.iter().any(|m| Arc::ptr_eq(m, memory)) {
+                    d.held_mem.push(Arc::clone(memory));
+                }
+                self.cut_held(d, false)?;
+                at += n;
             }
-            self.cut_held(d, false)?;
         }
         Ok(())
     }
@@ -1374,10 +1399,12 @@ impl RelationSink {
                 self.store.add_part(&g.store, batches, reservation)?;
             } else {
                 // The results' bytes stay lent to the consumer's credit
-                // until they are written out: counted in the pool while the
-                // batches live, and the writer's scratch (a reservation of
-                // the same consumer) draws them first, when the pool may
-                // have nothing else. What is left goes back after.
+                // until they are written out, and the writer's scratch (a
+                // reservation of the same consumer) draws them first, when
+                // the pool may have nothing else. So the spill write's
+                // working memory is not counted on top of the batches: the
+                // pool counts max(lent, scratch) during the write, not
+                // their sum. What is left goes back after.
                 drop(reservation);
                 let written = self.store.add_spilled_part(&g.store, batches, ctx).await;
                 drop(handle.reservation_from_credit(lent));

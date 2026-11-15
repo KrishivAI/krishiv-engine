@@ -1443,7 +1443,52 @@ async fn a_short_lane_is_named_not_the_right_lane_beside_it() {
         .expect("the query hung")
         .unwrap_err();
     let text = err.to_string();
-    assert!(text.contains("0 values for 50 groups"), "{text}");
+    assert!(text.contains("The Python UDF g returned"), "{text}");
+    assert!(text.contains(": 0 values for 50 groups"), "{text}");
+    done(r);
+}
+
+/// A leftover joined with the next batch while the pool has no room for
+/// the copy: only the rows that fill the leftover's frame are copied, the
+/// rest of the batch is cut from the batch itself, and whatever the pool
+/// refuses, every byte still alive stays reserved (the copy's sources stand
+/// in for it).
+#[tokio::test]
+async fn a_leftover_joined_with_the_next_batch_stays_reserved_when_the_copy_is_refused() {
+    let r = rig(RelationShape::Map, Yield::Nothing, limits(6, 1024), 4 << 20);
+    r.shared.closed.store(true, Ordering::SeqCst);
+    let g = r.sink.global_state(&r.ctx).unwrap();
+    let mut l = r.sink.local_state(&r.ctx, &g).unwrap();
+    // Four rows: fewer than a frame, held as the leftover.
+    let status = r.sink.sink(rows(&[1, 2, 3, 4], None), &mut l, &g).unwrap();
+    assert!(matches!(status, SinkStatus::NeedMoreInput), "{status:?}");
+    let keys: Vec<i32> = (0..1000).collect();
+    let batch = rows(&keys, None);
+    let bytes = batch.data().get_array_memory_size();
+    // The pool keeps room for the batch, not for a copy of it.
+    let mut hog = r.ctx.consumer().reservation();
+    let mut step = 1 << 20;
+    while step >= 64 {
+        if hog.try_grow(step).is_err() {
+            step /= 2;
+        }
+    }
+    hog.shrink(bytes + (3 << 10));
+    let status = r.sink.sink(batch, &mut l, &g).unwrap();
+    assert!(matches!(status, SinkStatus::NeedMoreInput), "{status:?}");
+    // The batch's rows wait in the frames and the backlog: reserved.
+    let held = r.root.reserved() - hog.size();
+    assert!(held >= bytes, "{held} of {bytes} bytes reserved");
+    drop(hog);
+    r.shared.open_gate();
+    r.sink.combine(l, &g).unwrap();
+    r.sink.finalize(&g, &r.ctx).await.unwrap();
+    let log = r.shared.log();
+    // 1004 rows: 167 frames of 6, then 2.
+    assert_eq!(log.len(), 169, "{log:?}");
+    assert_eq!(log[0], "B0:6");
+    assert_eq!(log[167], "B0:2");
+    drop(g);
     done(r);
 }
 
