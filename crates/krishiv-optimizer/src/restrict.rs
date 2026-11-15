@@ -746,6 +746,7 @@ pub(crate) fn max_id(
         | PlanNode::WithCte { .. }
         | PlanNode::JoinHint { .. }
         | PlanNode::Repartition { .. }
+        | PlanNode::Sample { .. }
         | PlanNode::ReplicateRows { .. } => true,
         PlanNode::Join { kind, .. } => !matches!(kind, JoinKind::Existence(_)),
         _ => false,

@@ -398,7 +398,7 @@ impl Gen<'_> {
 
     fn plan(&mut self, depth: u8) -> LogicalPlan {
         let origin = self.origin();
-        let kinds = if depth == 0 { 4 } else { 31 };
+        let kinds = if depth == 0 { 4 } else { 32 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => PlanNode::Read(self.source()),
@@ -511,6 +511,14 @@ impl Gen<'_> {
             30 => PlanNode::Repartition {
                 input: self.input(d),
                 exprs: self.exprs(),
+            },
+            31 => PlanNode::Sample {
+                input: self.input(d),
+                bounds: crate::SampleBounds {
+                    lower: f64::from(self.pick(3)) / 10.0,
+                    upper: f64::from(self.pick(11)) / 10.0,
+                },
+                seed: self.flag().then(|| i64::from(self.pick(100))),
             },
             15 => PlanNode::Hint {
                 input: self.input(d),
@@ -1202,6 +1210,16 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
         | PlanNode::Limit { input, limit: e }
         | PlanNode::Offset { input, offset: e }
         | PlanNode::ReplicateRows { input, count: e } => m_expr(e, w) || m_plan(input, w),
+        PlanNode::Sample {
+            input,
+            bounds,
+            seed,
+        } => {
+            site!(w, bounds.lower += 0.5);
+            site!(w, bounds.upper += 0.5);
+            site!(w, *seed = seed.map_or(Some(0), |s| s.checked_add(1)));
+            m_plan(input, w)
+        }
         PlanNode::Generate {
             input,
             outer,

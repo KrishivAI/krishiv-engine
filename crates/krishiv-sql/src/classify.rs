@@ -150,6 +150,8 @@ pub fn classify(statement: &Statement) -> StatementClass {
             }
         }
         Statement::CreateTableLike(_)
+        | Statement::CreatePipelineDataset(_)
+        | Statement::CreateFlow(_)
         | Statement::DropTable(_)
         | Statement::CreateNamespace(_)
         | Statement::DropNamespace(_)
@@ -164,6 +166,8 @@ pub fn classify(statement: &Statement) -> StatementClass {
         | Statement::Update(_)
         | Statement::Merge(_)
         | Statement::Truncate(_)
+        | Statement::LoadData(_)
+        | Statement::InsertDirectory(_)
         | Statement::Analyze(_) => StatementClass::Write,
         Statement::Cache(c) => match &c.kind {
             CacheKind::Cache { .. } | CacheKind::Uncache { .. } => StatementClass::Session,
@@ -201,6 +205,9 @@ pub fn statement_queries(statement: &Statement) -> Option<Vec<&Query>> {
         Statement::Explain(e) => return statement_queries(&e.statement),
         Statement::CreateView(v) => vec![&*v.query],
         Statement::CreateTable(t) => t.as_query.iter().map(|q| &**q).collect(),
+        Statement::CreatePipelineDataset(c) => c.table.as_query.iter().map(|q| &**q).collect(),
+        Statement::CreateFlow(f) => f.insert.clauses.iter().map(|c| &*c.query).collect(),
+        Statement::InsertDirectory(d) => vec![&*d.query],
         Statement::CreatePermanentView(v) => v.query.iter().map(|q| &**q).collect(),
         Statement::SetVariable(v) => match &v.kind {
             SetVariableKind::Row { query, .. } => vec![&**query],
@@ -277,6 +284,7 @@ pub fn statement_queries(statement: &Statement) -> Option<Vec<&Query>> {
         | Statement::Analyze(_)
         | Statement::Repair(_)
         | Statement::AddResource(_)
+        | Statement::LoadData(_)
         | Statement::ListResource(_) => Vec::new(),
     })
 }
@@ -429,6 +437,38 @@ pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
                 out.push(t(O::Table(&c.name), Modify));
             }
             out.extend(location(&c.location));
+            out
+        }
+        Statement::CreatePipelineDataset(c) => {
+            let mut out = vec![t(O::ParentOf(&c.table.name), Create)];
+            if c.table.as_query.is_some() {
+                out.push(t(O::Table(&c.table.name), Modify));
+            }
+            out.extend(location(&c.table.location));
+            out
+        }
+        Statement::CreateFlow(f) => {
+            let mut out = vec![t(O::ParentOf(&f.name), Create)];
+            out.extend(
+                f.insert
+                    .clauses
+                    .iter()
+                    .map(|c| t(O::Table(&c.name), Modify)),
+            );
+            out
+        }
+        Statement::LoadData(l) => {
+            let mut out = vec![t(O::Table(&l.table), Modify)];
+            // `LOCAL` reads a file of the client, not the cluster's storage: no read target.
+            if !l.local {
+                out.push(t(O::Path(&l.path), Select));
+            }
+            out
+        }
+        // The directory is a write target whether written outside `OPTIONS` or as its `path`.
+        Statement::InsertDirectory(d) => {
+            let mut out = location(&d.path);
+            out.extend(d.option_path().map(|p| t(TargetObject::Path(p), Modify)));
             out
         }
         Statement::CreateTableLike(c) => {

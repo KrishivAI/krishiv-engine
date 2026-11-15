@@ -176,6 +176,7 @@ fn pushdowns(req: &ScanRequest) -> ScanPushdowns {
         mapping: req.mapping.clone(),
         metadata: req.metadata_cols,
         row_id: false,
+        partition_order: false,
     }
 }
 
