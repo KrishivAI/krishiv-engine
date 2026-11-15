@@ -7,8 +7,8 @@ name: canary
 
 on:
   schedule:
-    # 06:00 UTC, after the 03:20 UTC nightly `ci` run.
-    - cron: "0 6 * * *"
+    # 13:00 UTC: scheduled ci runs on main start about 10:00-11:00 UTC.
+    - cron: "0 13 * * *"
   workflow_dispatch:
 
 permissions:
@@ -28,7 +28,7 @@ jobs:
         run: |
           run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --event schedule \
             --limit 1 --json conclusion,createdAt,url,status \
-            -q '.[0] | "\(.status) \(.conclusion) \(.createdAt) \(.url)"')
+            -q '.[0] | "\(.status) \(.conclusion // "none") \(.createdAt) \(.url)"') || run="query-failed"
           echo "run=$run" >> "$GITHUB_OUTPUT"
           echo "Latest scheduled ci run on main: $run" >> "$GITHUB_STEP_SUMMARY"
           status=$(echo "$run" | cut -d' ' -f1)
@@ -36,7 +36,9 @@ jobs:
           created=$(echo "$run" | cut -d' ' -f3)
           url=$(echo "$run" | cut -d' ' -f4)
           problem=""
-          if [ -z "$run" ] || [ "$created" = "null" ]; then
+          if [ "$run" = "query-failed" ]; then
+            problem="could not query the scheduled ci runs on main (see the step log)"
+          elif [ -z "$run" ] || [ "$created" = "null" ]; then
             problem="no scheduled ci run on main was found"
           elif [ "$status" != "completed" ]; then
             problem="the latest scheduled ci run is still $status ($url)"
