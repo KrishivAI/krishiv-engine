@@ -15,7 +15,7 @@ impl Session {
         text: &str,
         options: &BTreeMap<String, OptionValue>,
         env: &QueryEnv,
-    ) -> Result<krishiv_exec::files::LocatedPath, KrishivError> {
+    ) -> Result<crate::access::Checked, KrishivError> {
         let stores = self.scoped_stores(&env.config);
         let at = ObjectPaths::new(
             StoreId::new(LOCAL_STORE),
@@ -24,7 +24,7 @@ impl Session {
             stores,
         )
         .locate_with_options(text, options)?;
-        crate::access::physical(at)
+        crate::access::physical(self, at, Privilege::Modify, StatementClass::Write)
     }
 
     /// A write's options, before its target is located: locating builds the
@@ -62,20 +62,15 @@ impl Session {
     /// path was located (`authorize_write_options`).
     pub(crate) async fn authorize_write_path(
         &self,
-        at: &krishiv_exec::files::LocatedPath,
+        checked: &crate::access::Checked,
     ) -> Result<(), KrishivError> {
-        let securable = Securable::Path(OptionValue::from_user("path", at.display.clone()));
-        for privilege in [Privilege::Modify, Privilege::Create] {
-            let r = authorize(
-                &*self.state.policy,
-                &self.state.principal,
-                &securable,
-                privilege,
-            )
-            .await;
-            crate::access::audit(self, StatementClass::Write, r)?;
-        }
-        Ok(())
+        crate::access::authorize_checked(
+            self,
+            checked,
+            &[Privilege::Modify, Privilege::Create],
+            StatementClass::Write,
+        )
+        .await
     }
 
     /// `Manage` on the cluster when `options` hold a server-scoped store key
@@ -256,14 +251,15 @@ impl Session {
         let max_records = max_records_per_file(&options, format.name())?;
         self.authorize_write_options(&options, &table_options)
             .await?;
-        let at = self.locate_write_path(text, &options, env)?;
+        let checked = self.locate_write_path(text, &options, env)?;
+        let at = checked.at.clone();
         // The query's own context: its counters are the write's bytes.
         let io = env.io.clone();
-        self.authorize_write_path(&at).await?;
+        self.authorize_write_path(&checked).await?;
         // A link swapped into the checked path since fails the write
         // before anything is replaced, and again before the commit deletes
         // what an overwrite replaces.
-        crate::access::still_physical(self, &at)?;
+        crate::access::still_physical(self, &checked)?;
         // Checked only (`dry`): nothing is admitted or replaced.
         if dry {
             return Ok(Vec::new());
@@ -280,7 +276,7 @@ impl Session {
             // Every name of the write is resolved relative to the directory
             // opened here, never through a link (P2-T199). The registration
             // lives until the write is over.
-            let (store, _registration) = self.anchor_local_write(&at, &job)?;
+            let (store, _registration) = self.anchor_local_write(&checked, &job)?;
             // An overwrite deletes what it replaces here: from now on a cancel
             // reaches the write through its query, not by dropping it (`action.rs`).
             crate::action::commit_point();
@@ -340,7 +336,7 @@ impl Session {
             // The query's stream has ended and its `system.queries` row says `finished`: a failure
             // of the steps that follow is the write's outcome, so the row is corrected.
             let after_run = async {
-                if let Err(denied) = crate::access::still_physical(self, &at) {
+                if let Err(denied) = crate::access::still_physical(self, &checked) {
                     // The files the query wrote are under the anchor: remove
                     // them (best effort) before refusing.
                     for f in &files {
@@ -401,7 +397,7 @@ impl Session {
         if written
             .as_ref()
             .is_err_and(|e| e.error_class().name() != "KRISHIV_INSUFFICIENT_PERMISSIONS")
-            && let Err(denied) = crate::access::still_physical(self, &at)
+            && let Err(denied) = crate::access::still_physical(self, &checked)
             && denied.error_class().name() == "KRISHIV_INSUFFICIENT_PERMISSIONS"
         {
             return Err(denied);
@@ -416,9 +412,10 @@ impl Session {
     /// store of `at`.
     pub(super) fn anchor_local_write(
         &self,
-        at: &krishiv_exec::files::LocatedPath,
+        checked: &crate::access::Checked,
         job: &str,
     ) -> Result<(StoreId, Option<StoreRegistration>), KrishivError> {
+        let at = &checked.at;
         #[cfg(unix)]
         if let Some(local) = at.display.strip_prefix("file:") {
             match krishiv_io::BeneathStore::anchor(std::path::Path::new(local)) {
@@ -436,7 +433,7 @@ impl Session {
                 Err(krishiv_io::AnchorError::Swapped(_)) => {
                     // A link or file where a directory was checked: the
                     // audited denial if the path now resolves elsewhere.
-                    crate::access::still_physical(self, at)?;
+                    crate::access::still_physical(self, checked)?;
                     return Err(anchor_failed(
                         at,
                         "a component of the path is not a directory",

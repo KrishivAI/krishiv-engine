@@ -209,8 +209,8 @@ fn command_output_schemas() {
             .iter()
             .map(|c| format!("{}: {}", c.name, c.data_type.simple_string()))
             .collect();
-        // The snapshot also pins Spark 4.2.0's nullability (`command_schema.rs`); the run's frame is built from
-        // literal rows, so only names and types are compared with it.
+        // The snapshot also pins Spark 4.2.0's nullability (`command_schema.rs`), and the run's frame must
+        // report the same (names, types and nullability are compared with it below).
         let shown: Vec<String> = a
             .output_schema
             .iter()
@@ -228,7 +228,7 @@ fn command_output_schemas() {
         } else {
             writeln!(out, "{sql}\n  {}", shown.join(", ")).unwrap();
         }
-        // The command's own frame has the same names and types.
+        // The command's own frame has the same names, types and nullability.
         let run = block_on(df.schema()).unwrap();
         let ran: Vec<String> = run
             .fields()
@@ -241,10 +241,14 @@ fn command_output_schemas() {
                     | arrow_schema::DataType::Utf8View => "string",
                     other => panic!("{sql}: {other}"),
                 };
-                format!("{}: {ty}", f.name())
+                if f.is_nullable() {
+                    format!("{}: {ty}", f.name())
+                } else {
+                    format!("{}: {ty} not null", f.name())
+                }
             })
             .collect();
-        assert_eq!(cols, ran, "{sql}");
+        assert_eq!(shown, ran, "{sql}");
     }
     insta::assert_snapshot!(out);
 }

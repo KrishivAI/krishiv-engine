@@ -15,8 +15,7 @@ use krishiv_plan::{LogicalPlan, Plan};
 use krishiv_sql::ast::{Explain, SetKind, Statement, TimeZone};
 
 use crate::dataframe::{Analysis, DataFrame, ExplainMode};
-use crate::functions::lit;
-use crate::session::{Session, internal};
+use crate::session::Session;
 
 impl From<krishiv_sql::ast::ExplainMode> for ExplainMode {
     fn from(mode: krishiv_sql::ast::ExplainMode) -> Self {
@@ -213,22 +212,11 @@ fn command_plan(statement: &Statement) -> Result<String, KrishivError> {
 /// A frame of one row, the string column `plan`.
 impl Session {
     async fn one_row(&self, text: &str) -> Result<DataFrame, KrishivError> {
-        let env = self.query_env();
-        let Statement::Query(q) =
-            krishiv_sql::parse_statement("SELECT 1", &env.parser).map_err(|e| e.error)?
-        else {
-            return Err(internal("SELECT 1 is not a query".to_owned()));
-        };
-        let plan = krishiv_sql::lower_with(
-            &q,
-            krishiv_plan::SourceId(0),
-            self.parser_options().case_sensitive,
+        self.string_frame(
+            crate::analyze::command_schema::EXPLAIN,
+            vec![vec![Some(text.to_owned())]],
         )
-        .map_err(|e| e.error)?;
-        let df = DataFrame::new(self.clone(), Arc::clone(plan.root()))
-            .select([lit(text.to_owned()).alias("plan")]);
-        df.analyzed_in(env).await?;
-        Ok(df)
+        .await
     }
 }
 

@@ -20,7 +20,7 @@ use krishiv_common::error::{
     ErrorClass, KrishivError, KrishivInvalidConfigValue, KrishivUnsupportedFeature, PathNotFound,
 };
 use krishiv_common::secret::OptionValue;
-use krishiv_exec::files::LocatedPath;
+use krishiv_exec::files::{LocatedPath, PathLocator};
 use krishiv_io::{StoreId, parse_object_url};
 use krishiv_plan::SourceId;
 use krishiv_plan::analyzer::{
@@ -747,45 +747,175 @@ fn folded(ident: &TableIdent) -> TableIdent {
     }
 }
 
-/// `at` (a local path, `file:/...`) with the symbolic links of its
-/// existing part resolved: the directory a write really goes to.
-pub(crate) fn physical(at: LocatedPath) -> Result<LocatedPath, KrishivError> {
+/// A path as an access check sees it: `at`, resolved (links followed), is what the policy is asked
+/// about, the audit record names and the statement uses; `shown`, the path as the caller wrote it with
+/// `.` and `..` folded from the text only (`LocalPaths::locate`), is what a denial the caller sees names.
+/// Nothing read from the file system reaches `shown`, so a denial cannot tell a link's target or whether
+/// anything exists.
+#[derive(Debug, Clone)]
+pub(crate) struct Checked {
+    /// The resolved path.
+    pub(crate) at: LocatedPath,
+    /// The caller's text, `..` folded, qualified (`file:/...`).
+    pub(crate) shown: String,
+}
+
+/// `at` (a local path, `file:/...`, as `LocalPaths::locate` gives it: `.` and `..` already folded in the
+/// text, as every read and write folds them) with the symbolic links of its existing part resolved: the
+/// directory a write really goes to. An object-store path is returned as it is. `at.display` is the
+/// [`Checked::shown`] text.
+///
+/// # Errors
+/// `KRISHIV_INSUFFICIENT_PERMISSIONS` for `privilege` on the shown path (audited as `class`) when the
+/// path cannot be resolved: an unsearchable directory, a dangling link or a link loop on it. That is the
+/// answer a policy gives a path it denies, with the same text (no existence oracle).
+pub(crate) fn physical(
+    session: &Session,
+    at: LocatedPath,
+    privilege: Privilege,
+    class: StatementClass,
+) -> Result<Checked, KrishivError> {
+    let shown = at.display.clone();
     let Some(local) = at.display.strip_prefix("file:") else {
-        return Ok(at);
+        return Ok(Checked { at, shown });
     };
-    let resolved = resolve_links(Path::new(local)).ok_or_else(|| unplaceable("this path"))?;
-    let parts = resolved
-        .components()
-        .filter_map(|c| match c {
-            Component::Normal(p) => Some(p.to_str().ok_or_else(|| unplaceable("non-UTF-8 paths"))),
-            _ => None,
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(LocatedPath {
-        store: at.store,
-        path: object_store::path::Path::from_iter(parts.iter().copied()),
-        display: format!("file:/{}", parts.join("/")),
+    let Some(parts) = canonical_parts(Path::new(local)) else {
+        return Err(unresolved(session, class, &shown, privilege));
+    };
+    Ok(Checked {
+        at: LocatedPath {
+            store: at.store,
+            path: object_store::path::Path::from_iter(parts.iter().map(String::as_str)),
+            display: format!("file:/{}", parts.join("/")),
+        },
+        shown,
     })
 }
 
-/// Fails closed (`KRISHIV_INSUFFICIENT_PERMISSIONS`) when `at`, a path
-/// [`physical`] resolved and the policy allowed, now resolves elsewhere: a
-/// symbolic link was swapped into it.
-pub(crate) fn still_physical(session: &Session, at: &LocatedPath) -> Result<(), KrishivError> {
-    let now = physical(at.clone())?;
-    if now.display == at.display {
-        return Ok(());
+/// The local directory `path` (absolute) in the one form every check of a table's directories asks:
+/// `.` and `..` folded in the text (`LocalPaths::locate`, as reads and writes fold them), then
+/// [`physical`]. The result's `at.display` is `file:` and the canonical path.
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` (audited) for a relative or non-UTF-8 path: that depends on the text
+/// only, never on the disk. `KRISHIV_INSUFFICIENT_PERMISSIONS` as [`physical`] gives it.
+pub(crate) fn canonical_dir(
+    session: &Session,
+    path: &Path,
+    privilege: Privilege,
+    class: StatementClass,
+) -> Result<Checked, KrishivError> {
+    let lexical = lexical_dir(path).inspect_err(|e| log_denial(session, class, e))?;
+    physical(session, lexical, privilege, class)
+}
+
+/// The absolute local path `path` with `.` and `..` folded in its text, as `LocalPaths::locate` folds a
+/// read's or write's path; no file system access.
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` for a relative or non-UTF-8 path.
+pub(crate) fn lexical_dir(path: &Path) -> Result<LocatedPath, KrishivError> {
+    let text = path
+        .to_str()
+        .ok_or_else(|| unplaceable("non-UTF-8 paths"))?;
+    if !path.is_absolute() {
+        return Err(unplaceable("relative paths"));
     }
-    let securable = Securable::Path(OptionValue::from_user("path", now.display));
-    audit(
-        session,
-        StatementClass::Write,
-        Err(insufficient_permissions(
+    krishiv_exec::files::LocalPaths::new(StoreId::new(crate::session::LOCAL_STORE), "/")
+        .locate(text)
+}
+
+/// Asks the policy each of `privileges` on the resolved path `checked.at`, auditing each answer with that
+/// path (the record stays on the server), and returns a denial naming `checked.shown`, the caller's text.
+pub(crate) async fn authorize_checked(
+    session: &Session,
+    checked: &Checked,
+    privileges: &[Privilege],
+    class: StatementClass,
+) -> Result<(), KrishivError> {
+    let asked = Securable::Path(OptionValue::from_user("path", checked.at.display.clone()));
+    for privilege in privileges {
+        let r = authorize(
+            &*session.state.policy,
             &session.state.principal,
-            &securable,
+            &asked,
+            *privilege,
+        )
+        .await;
+        if let Err(e) = audit(session, class, r) {
+            // Re-issued with the caller's text and the same class: `authorize` names the securable only
+            // in a 42501 and in the `UNSUPPORTED_FEATURE` of a filtered `Select`; any other error names
+            // no path and passes as it is.
+            let shown = Securable::Path(OptionValue::from_user("path", checked.shown.clone()));
+            return Err(match e.error_class() {
+                ErrorClass::KrishivInsufficientPermissions => {
+                    insufficient_permissions(&session.state.principal, &shown, *privilege)
+                }
+                ErrorClass::KrishivUnsupportedFeature => KrishivUnsupportedFeature {
+                    feature: format!("row filters and column masks (on {shown})"),
+                }
+                .into(),
+                _ => e,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// The denial of `privilege` on the path `display` (the caller's text) that cannot be resolved: the same
+/// 42501 a policy's denial gives, with the audit record a denial writes.
+///
+/// `privilege` is the first one the caller would ask: a policy denying a missing path denies that one
+/// first too, unless it grants it and denies a later one, which a caller sees only on paths inside its
+/// rights.
+pub(crate) fn unresolved(
+    session: &Session,
+    class: StatementClass,
+    display: &str,
+    privilege: Privilege,
+) -> KrishivError {
+    let securable = Securable::Path(OptionValue::from_user("path", display.to_owned()));
+    let e = insufficient_permissions(&session.state.principal, &securable, privilege);
+    log_denial(session, class, &e);
+    e
+}
+
+/// The components of the absolute local path `local` with every symbolic link resolved in the part of
+/// it that exists, and the part that does not exist yet appended as written (see [`resolve_links`]).
+/// `None` for a relative path, one that cannot be resolved (an I/O error, a link loop, a dangling link,
+/// a `..` in its missing part) and a non-UTF-8 one. Callers fold `..` in the text first.
+fn canonical_parts(local: &Path) -> Option<Vec<String>> {
+    if !local.is_absolute() {
+        return None;
+    }
+    resolve_links(local)?
+        .components()
+        .filter_map(|c| match c {
+            Component::Normal(p) => Some(p.to_str().map(str::to_owned)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Fails closed (`KRISHIV_INSUFFICIENT_PERMISSIONS`, naming `checked.shown`) when `checked.at`, a path
+/// [`physical`] resolved and the policy allowed, now resolves elsewhere (a symbolic link was swapped
+/// into it) or no longer resolves.
+pub(crate) fn still_physical(session: &Session, checked: &Checked) -> Result<(), KrishivError> {
+    let deny = || {
+        unresolved(
+            session,
+            StatementClass::Write,
+            &checked.shown,
             Privilege::Modify,
-        )),
-    )
+        )
+    };
+    let Some(local) = checked.at.display.strip_prefix("file:") else {
+        return Ok(());
+    };
+    match canonical_parts(Path::new(local)) {
+        Some(parts) if format!("file:/{}", parts.join("/")) == checked.at.display => Ok(()),
+        _ => Err(deny()),
+    }
 }
 
 /// Allows paths only under the given root directories, and delegates every
@@ -1052,14 +1182,30 @@ fn resolve_links(path: &Path) -> Option<PathBuf> {
     let mut existing = path.to_path_buf();
     let mut rest = Vec::new();
     loop {
-        if let Ok(resolved) = std::fs::canonicalize(&existing) {
-            return Some(rest.iter().rev().fold(resolved, |p, part| p.join(part)));
+        match std::fs::canonicalize(&existing) {
+            Ok(resolved) => return Some(rest.iter().rev().fold(resolved, |p, part| p.join(part))),
+            // Only a name that is not there at all is kept as written (below a file it cannot be there
+            // either; the write then fails as a storage error). A dangling link (its own entry exists), a
+            // link loop or an unreadable directory fails closed.
+            Err(e)
+                if absent(&e)
+                    && std::fs::symlink_metadata(&existing).is_err_and(|m| absent(&m)) => {}
+            Err(_) => return None,
         }
+        // `None` for a missing part ending in `..`: it is not resolved against a directory that is not there.
         rest.push(existing.file_name()?.to_owned());
         if !existing.pop() {
             return None;
         }
     }
+}
+
+/// Whether `e` says the entry is not there: missing, or below a file.
+fn absent(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+    )
 }
 
 impl AccessPolicy for PathPrefixPolicy {
@@ -1273,4 +1419,63 @@ fn calls_secret(t: &str) -> bool {
                 .get(i + 1)
                 .is_some_and(|k| k.kind == TokenKind::Sym(Sym::LParen))
     })
+}
+
+#[cfg(test)]
+mod canonical_path_tests {
+    use std::path::Path;
+
+    use super::{canonical_parts, lexical_dir};
+
+    /// `path` as the directory checks see it: `..` folded in the text, then links resolved.
+    fn canonical(path: &Path) -> Option<String> {
+        let lexical = lexical_dir(path).ok()?;
+        let local = lexical.display.strip_prefix("file:")?.to_owned();
+        canonical_parts(Path::new(&local)).map(|p| format!("file:/{}", p.join("/")))
+    }
+
+    #[test]
+    fn folds_dot_dot_in_the_text_then_resolves_links_and_appends_the_rest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let real = root.join("real");
+        std::fs::create_dir(&real).unwrap();
+        std::fs::create_dir(root.join("x")).unwrap();
+        std::fs::create_dir(root.join("elsewhere")).unwrap();
+        std::os::unix::fs::symlink(&real, root.join("link")).unwrap();
+        // `l/..` is `root`, not the parent of the link's target.
+        std::os::unix::fs::symlink(root.join("elsewhere"), root.join("l")).unwrap();
+        let expected = format!("file:{}/new/t", real.display());
+        for written in [
+            real.join("new/t"),
+            root.join("link/new/t"),
+            root.join("x/../link/./new/t"),
+            root.join("l/../link/new/t"),
+            root.join("missing/../link/new/t"),
+        ] {
+            assert_eq!(
+                canonical(&written).as_deref(),
+                Some(&*expected),
+                "{written:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn refuses_paths_it_cannot_make_canonical() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::os::unix::fs::symlink(dir.join("nowhere"), dir.join("dangling")).unwrap();
+        std::os::unix::fs::symlink(dir.join("loop"), dir.join("loop")).unwrap();
+        for path in [Path::new("relative/wh"), Path::new("file:/wh")] {
+            assert!(lexical_dir(path).is_err(), "{path:?} was not refused");
+        }
+        for path in [
+            &dir.join("dangling/t"),
+            &dir.join("dangling"),
+            &dir.join("loop/t"),
+        ] {
+            assert_eq!(canonical(path), None, "{path:?} was not refused");
+        }
+    }
 }
