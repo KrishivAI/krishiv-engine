@@ -60,8 +60,17 @@ impl ResourceGroups {
             return Err(read_only(path, "it is not writable"));
         }
         Self::validate(document, self.total_memory)?;
-        write_atomically(Path::new(path), document, &meta)?;
-        self.reload_json(document)
+        match write_atomically(Path::new(path), document, &meta) {
+            Ok(()) => {}
+            Err(e) if is_read_only(&e) => {
+                return Err(read_only(
+                    path,
+                    "its directory or file system is not writable here",
+                ));
+            }
+            Err(e) => return Err(failed("cannot write the resource group file", &e)),
+        }
+        self.swap(document)
     }
 }
 
@@ -80,6 +89,14 @@ fn read_only(path: &str, reason: &str) -> KrishivError {
     .into()
 }
 
+/// A write refused for want of permission or on a read-only mount.
+fn is_read_only(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem
+    )
+}
+
 fn failed(what: &str, e: &std::io::Error) -> KrishivError {
     KrishivError::from(InternalError {
         message: format!("{what}: {}", e.kind()),
@@ -87,8 +104,10 @@ fn failed(what: &str, e: &std::io::Error) -> KrishivError {
 }
 
 /// Temporary file in the same directory (with the original's permissions), fsync, rename, fsync
-/// of the directory: a reader sees the old file or the new one, never half of it.
-fn write_atomically(path: &Path, text: &str, original: &fs::Metadata) -> Result<(), KrishivError> {
+/// of the directory: a reader sees the old file or the new one, never half of it. A failed
+/// directory sync after the rename is logged, not returned: the file is already replaced, so the
+/// tree must follow it.
+fn write_atomically(path: &Path, text: &str, original: &fs::Metadata) -> std::io::Result<()> {
     let dir = path.parent().filter(|d| !d.as_os_str().is_empty());
     let dir = dir.unwrap_or_else(|| Path::new("."));
     let temp = dir.join(format!(
@@ -107,11 +126,13 @@ fn write_atomically(path: &Path, text: &str, original: &fs::Metadata) -> Result<
         file.write_all(text.as_bytes())?;
         fs::set_permissions(&temp, original.permissions())?;
         file.sync_all()?;
-        fs::rename(&temp, path)?;
-        fs::File::open(dir)?.sync_all()
+        fs::rename(&temp, path)
     };
-    write().map_err(|e| {
+    write().inspect_err(|_| {
         let _ = fs::remove_file(&temp);
-        failed("cannot write the resource group file", &e)
-    })
+    })?;
+    if let Err(e) = fs::File::open(dir).and_then(|d| d.sync_all()) {
+        tracing::warn!(error = %e, "the resource group file's directory could not be synced");
+    }
+    Ok(())
 }

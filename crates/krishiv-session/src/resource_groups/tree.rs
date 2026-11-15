@@ -313,8 +313,12 @@ pub(super) struct QueuedGuard {
 
 impl Drop for QueuedGuard {
     fn drop(&mut self) {
-        let mut tree = self.shared.lock();
-        tree.remove_waiter(self.leaf, self.id);
+        {
+            let mut tree = self.shared.lock();
+            tree.remove_waiter(self.leaf, self.id);
+        }
+        // Removing a waiter can free a removed group the parent's queue was waiting on.
+        self.shared.dispatch();
     }
 }
 
@@ -798,11 +802,9 @@ impl Tree {
         let Some(n) = self.nodes.get(idx) else {
             return false;
         };
-        if n.children.is_empty() {
-            !n.waiting.is_empty() && self.can_run(idx)
-        } else {
-            n.children.iter().any(|c| self.eligible(*c))
-        }
+        // A group that gained subgroups in a reload keeps the queries it queued as a leaf: they
+        // are dispatched from it, before the subgroups' own.
+        (!n.waiting.is_empty() && self.can_run(idx)) || n.children.iter().any(|c| self.eligible(*c))
     }
 
     /// The leaf whose oldest query goes next, walking down by each group's policy.
@@ -811,7 +813,7 @@ impl Tree {
         if !self.eligible(idx) {
             return None;
         }
-        if n.children.is_empty() {
+        if n.children.is_empty() || (!n.waiting.is_empty() && self.can_run(idx)) {
             return Some(idx);
         }
         match n.policy {
@@ -841,16 +843,13 @@ impl Tree {
         let mut stack = vec![idx];
         while let Some(i) = stack.pop() {
             let n = self.nodes.get(i)?;
-            if n.children.is_empty() {
-                if let Some(head) = n.waiting.front().filter(|_| self.can_run(i)) {
-                    let key = (n.priority, std::cmp::Reverse(head.seq), i);
-                    if best.is_none_or(|b| key > b) {
-                        best = Some(key);
-                    }
+            if let Some(head) = n.waiting.front().filter(|_| self.can_run(i)) {
+                let key = (n.priority, std::cmp::Reverse(head.seq), i);
+                if best.is_none_or(|b| key > b) {
+                    best = Some(key);
                 }
-            } else {
-                stack.extend(n.children.iter().copied());
             }
+            stack.extend(n.children.iter().copied());
         }
         best.map(|b| b.2)
     }

@@ -137,6 +137,16 @@ impl ResourceGroups {
     ///
     /// As [`ResourceGroups::from_json`].
     pub fn reload_json(&self, json: &str) -> Result<(), KrishivError> {
+        // Not while a replace checks the file and writes it.
+        let _one = self
+            .replacing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        self.swap(json)
+    }
+
+    /// The swap of [`ResourceGroups::reload_json`], for a caller holding `replacing`.
+    fn swap(&self, json: &str) -> Result<(), KrishivError> {
         let config = config::parse(json, self.total_memory)?;
         // Held across the swap, so a query that selects a group after the swap sees the new
         // selectors and one that selected before it asks again when its group is gone.
@@ -153,7 +163,11 @@ impl ResourceGroups {
     /// `KRISHIV_RESOURCE_GROUP_CONFIG_INVALID` when the file cannot be read, and as
     /// [`ResourceGroups::from_json`] otherwise.
     pub fn reload_file(&self, path: &str) -> Result<(), KrishivError> {
-        self.reload_json(&read_file(path)?)
+        let _one = self
+            .replacing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        self.swap(&read_file(path)?)
     }
 
     /// The loaded document as canonical JSON.

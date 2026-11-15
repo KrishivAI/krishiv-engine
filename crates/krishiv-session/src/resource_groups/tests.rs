@@ -791,3 +791,41 @@ fn a_replace_refuses_a_link_a_read_only_file_and_an_invalid_document() {
     assert_eq!(class_of(&e), ErrorClass::KrishivResourceGroupConfigReadOnly);
     assert_eq!(rg.etag(), etag);
 }
+
+#[test]
+fn queries_queued_on_a_group_that_gains_subgroups_still_start() {
+    let rg = ResourceGroups::from_json(&two_leaves(1), MEM).unwrap_or_else(|e| panic!("{e}"));
+    let first = run(&rg, "u");
+    let req = request("u");
+    let mut waiting = rg.admit(&req);
+    assert!(poll(&mut waiting).is_none());
+    // root.a becomes a parent; the query it queued as a leaf stays its own.
+    let parent = r#"{"rootGroups": [{"name": "root", "hardConcurrencyLimit": 10, "maxQueued": 10,
+        "subGroups": [{"name": "a", "hardConcurrencyLimit": 1, "maxQueued": 5,
+                       "subGroups": [{"name": "c", "hardConcurrencyLimit": 1, "maxQueued": 5}]},
+                      {"name": "b", "hardConcurrencyLimit": 2, "maxQueued": 5}]}],
+        "selectors": [{"user": "bob", "group": "root.b"}],
+        "defaultGroup": "root.a.c"}"#;
+    rg.reload_json(parent).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(rg.counts("root.a"), Some((1, 1)));
+    drop(first);
+    let second = poll(&mut waiting).unwrap_or_else(|| panic!("the queued query never started"));
+    assert!(second.is_ok());
+    assert_eq!(rg.counts("root.a"), Some((1, 0)));
+}
+
+#[test]
+fn a_replace_in_a_directory_that_cannot_be_written_is_read_only() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let (dir, path) = group_file(&two_leaves(1));
+    let rg = ResourceGroups::from_file(&path, MEM).unwrap_or_else(|e| panic!("{e}"));
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let result = rg.replace_file(&path, &two_leaves(4), &rg.etag());
+    // a superuser writes anyway; the check is for everyone else
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755))
+        .unwrap_or_else(|e| panic!("{e}"));
+    if let Err(e) = result {
+        assert_eq!(class_of(&e), ErrorClass::KrishivResourceGroupConfigReadOnly);
+    }
+}
