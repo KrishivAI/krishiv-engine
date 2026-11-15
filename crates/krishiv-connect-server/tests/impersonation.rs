@@ -60,11 +60,21 @@ async fn start(impersonating: bool) -> Running {
 
 /// [`start`], with authentication on or off and the given session limits.
 async fn start_with(impersonating: bool, authenticated: bool, limits: SessionLimits) -> Running {
+    start_configured(impersonating, authenticated, limits, &[]).await
+}
+
+/// [`start_with`] and the further auth settings `extra`.
+async fn start_configured(
+    impersonating: bool,
+    authenticated: bool,
+    limits: SessionLimits,
+    extra: &[(&str, &str)],
+) -> Running {
     let dir = tempfile::tempdir().expect("tempdir");
     let p = secret(dir.path(), "p", PORTAL);
     let c = secret(dir.path(), "c", CAROL);
     let a = secret(dir.path(), "a", ALICE);
-    let config = AuthConfig::from_settings([
+    let base = [
         ("krishiv.auth.tokens.p.secret", p.as_str()),
         ("krishiv.auth.tokens.p.principal", "portal"),
         ("krishiv.auth.tokens.p.kind", "service"),
@@ -82,8 +92,9 @@ async fn start_with(impersonating: bool, authenticated: bool, limits: SessionLim
         ("krishiv.auth.tokens.a.secret", a.as_str()),
         ("krishiv.auth.tokens.a.principal", "alice"),
         ("krishiv.auth.tokens.a.role", "viewer"),
-    ])
-    .expect("auth config");
+    ];
+    let config = AuthConfig::from_settings(base.into_iter().chain(extra.iter().copied()))
+        .expect("auth config");
     let auth = Arc::new(ServerAuth::new(&config).expect("auth"));
     let denials = Arc::new(krishiv_session::auth::DeniedCounts::new());
     let factory = role_sessions(
@@ -140,7 +151,7 @@ async fn execute(
     session: &str,
     plan: pb::Plan,
     token: &str,
-    metadata: &[(&'static str, &'static str)],
+    metadata: &[(&'static str, &str)],
 ) -> Result<Vec<Vec<String>>, tonic::Status> {
     use arrow_array::Array as _;
     let request = pb::ExecutePlanRequest {
@@ -540,4 +551,198 @@ async fn other_groups_do_not_multiply_the_session_cap() {
     )
     .await
     .expect("alice's own session");
+}
+
+/// Signed act-as assertions end to end (unit I3): the plain metadata sent beside an assertion
+/// reaches the server's check (`act_as::resolve` passes it on), so a disagreeing part is
+/// refused.
+#[cfg(feature = "oidc")]
+mod signed {
+    use std::io::{Read as _, Write as _};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use aws_lc_rs::rand::SystemRandom;
+    use aws_lc_rs::signature::{KeyPair as _, RSA_PKCS1_SHA256, RsaKeyPair};
+
+    use super::*;
+
+    const AUDIENCE: &str = "krishiv-act-as";
+
+    fn b64(bytes: &[u8]) -> String {
+        const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+        let mut out = String::new();
+        for chunk in bytes.chunks(3) {
+            let mut acc = 0u32;
+            for (i, b) in chunk.iter().enumerate() {
+                acc |= u32::from(*b) << (16 - 8 * i);
+            }
+            for i in 0..=chunk.len() {
+                out.push(char::from(A[((acc >> (18 - 6 * i)) & 63) as usize]));
+            }
+        }
+        out
+    }
+
+    /// `(n, e)` of an RSA public key's DER (`RSAPublicKey ::= SEQUENCE { n INTEGER, e INTEGER }`).
+    fn rsa_components(der: &[u8]) -> (Vec<u8>, Vec<u8>) {
+        fn tlv(d: &[u8]) -> (&[u8], &[u8]) {
+            let (len, head) = match d[1] {
+                l if l < 0x80 => (usize::from(l), 2),
+                0x81 => (usize::from(d[2]), 3),
+                0x82 => (usize::from(d[2]) << 8 | usize::from(d[3]), 4),
+                other => unreachable!("DER length form {other:#x}"),
+            };
+            (&d[head..head + len], &d[head + len..])
+        }
+        let (seq, _) = tlv(der);
+        let (n, rest) = tlv(seq);
+        let (e, _) = tlv(rest);
+        let strip = |v: &[u8]| {
+            v.iter()
+                .skip_while(|b| **b == 0)
+                .copied()
+                .collect::<Vec<_>>()
+        };
+        (strip(n), strip(e))
+    }
+
+    /// A loopback HTTP server answering every request with the JWK set of `key`; its base URL.
+    fn serve_jwks(key: &RsaKeyPair) -> String {
+        let (n, e) = rsa_components(key.public_key().as_ref());
+        let body = serde_json::json!({"keys": [{
+            "kty": "RSA", "kid": "k1", "use": "sig", "alg": "RS256", "n": b64(&n), "e": b64(&e),
+        }]})
+        .to_string();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind jwks");
+        let base = format!("http://{}", listener.local_addr().expect("addr"));
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut request = [0u8; 4096];
+                let _ = stream.read(&mut request);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        base
+    }
+
+    /// An RS256 assertion from `issuer` for the end user `sub` in `groups`, acted by `actor`.
+    fn assertion(
+        key: &RsaKeyPair,
+        issuer: &str,
+        sub: &str,
+        groups: &[&str],
+        actor: &str,
+    ) -> String {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_secs();
+        let header = serde_json::json!({"alg": "RS256", "typ": "JWT", "kid": "k1"});
+        let claims = serde_json::json!({
+            "iss": issuer, "aud": AUDIENCE, "sub": sub, "groups": groups,
+            "iat": now, "exp": now + 120, "jti": "assert-1", "act": {"sub": actor},
+        });
+        let input = format!(
+            "{}.{}",
+            b64(header.to_string().as_bytes()),
+            b64(claims.to_string().as_bytes())
+        );
+        let mut sig = vec![0; key.public_modulus_len()];
+        key.sign(
+            &RSA_PKCS1_SHA256,
+            &SystemRandom::new(),
+            input.as_bytes(),
+            &mut sig,
+        )
+        .expect("sign");
+        format!("{input}.{}", b64(&sig))
+    }
+
+    struct Signed {
+        run: Running,
+        key: RsaKeyPair,
+        issuer: String,
+    }
+
+    impl Signed {
+        fn token(&self, sub: &str, groups: &[&str]) -> String {
+            assertion(&self.key, &self.issuer, sub, groups, "portal")
+        }
+    }
+
+    /// [`start`] with signed assertions on, their keys from a loopback JWK set.
+    async fn start_signed() -> Signed {
+        let key = RsaKeyPair::generate(aws_lc_rs::rsa::KeySize::Rsa2048).expect("RSA key");
+        let base = serve_jwks(&key);
+        let issuer = format!("{base}/");
+        let jwks = format!("{base}/jwks");
+        let run = start_configured(
+            true,
+            true,
+            SessionLimits::default(),
+            &[
+                ("krishiv.auth.impersonation.signedAssertion", "true"),
+                (
+                    "krishiv.auth.impersonation.assertion.issuer",
+                    issuer.as_str(),
+                ),
+                ("krishiv.auth.impersonation.assertion.audience", AUDIENCE),
+                (
+                    "krishiv.auth.impersonation.assertion.jwksUri",
+                    jwks.as_str(),
+                ),
+                (
+                    "krishiv.auth.impersonation.assertion.allowInsecureIssuer",
+                    "true",
+                ),
+            ],
+        )
+        .await;
+        Signed { run, key, issuer }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_signed_assertion_acts_for_its_end_user_with_agreeing_metadata() {
+        let s = start_signed().await;
+        let token = s.token("alice", &["analysts"]);
+        // As an analyst alice is an operator, who sees every principal's sessions.
+        let own = format!("{OWN_SESSIONS} WHERE principal = 'alice'");
+        let rows = execute(
+            &s.run,
+            SESSION,
+            sql(&own),
+            PORTAL,
+            &[(ACT_AS_TOKEN, &token), (ACT_AS_USER, "alice")],
+        )
+        .await
+        .expect("portal acts for alice by assertion");
+        assert_eq!(rows, [["alice", "portal", "mallory"]]);
+        assert_eq!(s.run.auth.impersonation_counts(), counts(1, 0));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn metadata_beside_an_assertion_that_disagrees_is_refused() {
+        let s = start_signed().await;
+        let token = s.token("alice", &["analysts"]);
+        // Another user; then other groups for the same user: both disagree with the assertion.
+        for beside in [
+            &[(ACT_AS_TOKEN, token.as_str()), (ACT_AS_USER, "bob")][..],
+            &[
+                (ACT_AS_TOKEN, token.as_str()),
+                (ACT_AS_USER, "alice"),
+                (ACT_AS_GROUPS, "admins"),
+            ][..],
+        ] {
+            assert_impersonation_denied(
+                execute(&s.run, SESSION, sql("SELECT 'ok'"), PORTAL, beside).await,
+            );
+        }
+        assert_eq!(s.run.auth.impersonation_counts(), counts(0, 2));
+        assert_eq!(s.run.manager.counts().live, 0, "no session for a refusal");
+    }
 }

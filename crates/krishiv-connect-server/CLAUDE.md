@@ -43,7 +43,7 @@ Paths are relative to this crate.
   `UserContext.user_id`; decided by `ServerAuth::impersonate` / `impersonate_signed` from the connection's own peer
   (`ConnectAuth::with_impersonation`; without it, or with authentication off, act-as is refused); unreadable metadata,
   or plain metadata that disagrees with the assertion beside it, is refused through `refuse_impersonation`; every
-  refusal `KRISHIV_AUTH_IMPERSONATION_DENIED`, `PERMISSION_DENIED`; `tests/impersonation.rs`. `check_rpc` / `check_command`: the §3b class of every RPC and `Command` arm,
+  refusal `KRISHIV_AUTH_IMPERSONATION_DENIED`, `PERMISSION_DENIED`; `tests/impersonation.rs` (its `signed` module, feature `oidc`: assertions against a loopback JWK set, metadata beside them that disagrees refused). `check_rpc` / `check_command`: the §3b class of every RPC and `Command` arm,
   no wildcard arm (a new proto arm fails to compile); `enforce` asks the session's policy for a
   `Check::Privilege` (`Session::authorize_privilege`, one `krishiv::audit` record per denial); `tests/auth.rs`
 - `src/operation.rs` `Operation` (one per `ExecutePlan`: id, plan digest, tags, reattachable, its `Replay`, one
@@ -125,5 +125,5 @@ Paths are relative to this crate.
 0003, 0026, 0046
 
 ## Tests
-`cargo nextest run -p krishiv-connect-server` · `cargo clippy -p krishiv-connect-server --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-connect-server` · `cargo clippy -p krishiv-connect-server --all-targets -- -D warnings` · feature `oidc` (signed act-as assertions): `--features oidc`
 · the generated stub: `cargo run --locked --manifest-path tools/connect-protogen/Cargo.toml -- --check`
