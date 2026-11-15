@@ -22,6 +22,10 @@
 //! together and the union keeps the plain numbering, deterministic but not
 //! Spark's one stream (Spark 4.2.0 `bhj_above`: mono 0..7 across both
 //! branches).
+//!
+//! Also not Spark's: a member's partitions are `span` ids, at least its
+//! driver count, so above a plain union a file scan read by more drivers
+//! than it has partitions offsets the next branch by its drivers.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -175,7 +179,11 @@ impl<'a> Numbering<'a> {
             .chain(std::iter::once(&top))
             .map(|o| {
                 let offset = self.offset(m.pipeline, *o).unwrap_or(0);
-                u32::try_from(m.base.saturating_sub(offset)).unwrap_or(u32::MAX)
+                // `start_group` rejects an id space past `u32`, and an
+                // offset never exceeds the member's base, so this fits.
+                let base = m.base.saturating_sub(offset);
+                debug_assert!(u32::try_from(base).is_ok());
+                u32::try_from(base).unwrap_or(u32::MAX)
             })
             .collect()
     }
@@ -232,5 +240,40 @@ mod tests {
         // ... unless the conf is off.
         let n = Numbering::new(&members, false);
         assert_eq!(n.bases(&members[1], top), [1, 0, 0]);
+    }
+
+    /// `(A UNION ALL B) UNION ALL C` not flattened: A and B one partition
+    /// each (the inner union coalesces), C two; an operator above the outer
+    /// union numbers C after the inner union's one partition.
+    #[test]
+    fn a_coalesced_union_inside_a_plain_one() {
+        let fans_a = vec![vec![o(1, 0)], vec![o(2, 0)]];
+        let above = [o(0, 2)];
+        let member = |pipeline, base, span, single, fans: &'static [Vec<Origin>]| MemberShape {
+            pipeline,
+            base,
+            span,
+            single_source: single,
+            origins: &above,
+            keeps: vec![true],
+            fans,
+        };
+        let fans_a: &'static [Vec<Origin>] = Box::leak(fans_a.into_boxed_slice());
+        let members = vec![
+            member(0, 0, 1, true, fans_a),
+            member(1, 1, 1, true, &[]),
+            member(2, 2, 2, false, &[]),
+        ];
+        let top = o(0, 2);
+        let n = Numbering::new(&members, true);
+        assert!(n.coalesced(o(0, 1)));
+        assert!(!n.coalesced(top));
+        assert_eq!(n.bases(&members[0], top), [0, 0]);
+        assert_eq!(n.bases(&members[1], top), [1, 1]);
+        assert_eq!(n.bases(&members[2], top), [1, 1]);
+        // Conf off: one partition after another.
+        let n = Numbering::new(&members, false);
+        assert_eq!(n.bases(&members[1], top), [0, 0]);
+        assert_eq!(n.bases(&members[2], top), [0, 0]);
     }
 }

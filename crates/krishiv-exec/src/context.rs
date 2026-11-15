@@ -548,9 +548,13 @@ pub struct TaskContext {
     /// offset of a `UNION ALL` child).
     partition_base: u32,
     /// The first partition id an operator numbers its input's partitions
-    /// from: its `UNION ALL` branch's below the union, the union's first
-    /// branch's above it (Spark's child partition index; see
-    /// `Pipeline::origins`). The member's own base for a source or sink.
+    /// from, so that an id minus it is Spark's partition index of the
+    /// operator's input: its `UNION ALL` branch's own base below the union;
+    /// above a plain union, the base that puts this branch after the
+    /// partitions of the branches before it; above a coalesced union, the
+    /// member's own base (every branch at index 0). Computed by
+    /// `numbering.rs` from `Pipeline::origins`. The member's own base for a
+    /// source; the group's top numbering for the sink.
     numbering_base: u32,
 }
 

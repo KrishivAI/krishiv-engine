@@ -133,14 +133,18 @@ impl Sample {
     /// The keep mask of `rows` rows of `partition`, drawn in order.
     fn mask(&self, partition: u32, rows: usize) -> BooleanArray {
         let seed = self.seed;
-        let mut streams = lock(&self.streams);
-        let rng = streams
-            .entry(partition)
-            .or_insert_with(|| XorShiftRandom::new(seed.wrapping_add(i64::from(partition))));
+        // The stream is taken out for the draws, so the lock is held for a
+        // map operation only: each partition index is read by one driver at a
+        // time (a split goes to one driver; a coalesced union's branches run
+        // in turn), so no other driver wants this stream meanwhile.
+        let taken = lock(&self.streams).remove(&partition);
+        let mut rng =
+            taken.unwrap_or_else(|| XorShiftRandom::new(seed.wrapping_add(i64::from(partition))));
         let keep = BooleanBuffer::collect_bool(rows, |_| {
             let x = rng.next_double();
             self.lower <= x && x < self.upper
         });
+        lock(&self.streams).insert(partition, rng);
         BooleanArray::new(keep, None)
     }
 }
