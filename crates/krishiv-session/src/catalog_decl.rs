@@ -305,6 +305,15 @@ impl CatalogDeclarations {
                         "expected krishiv.catalog.<name>.<setting>",
                     ));
                 };
+                // `:` marks the parser's own fields (`clientSecret:inline`, `spark:<opt>`):
+                // configuration cannot set them (review 58a1 M1).
+                if field.contains(':') {
+                    return Err(invalid(
+                        key,
+                        krishiv_common::secret::REDACTED,
+                        &format!("catalog `{name}` has no setting `{field}`"),
+                    ));
+                }
                 let entry = raw.entry(name.to_owned()).or_default();
                 entry
                     .fields
@@ -639,7 +648,9 @@ fn decl(
         )));
     }
     let secret = |field: &str| -> Result<Option<SecretRef>, KrishivError> {
-        if let Some((_, v)) = fields.get(&format!("{field}:inline")) {
+        if let Some((_, v)) = fields.get(&format!("{field}:inline"))
+            && mode == DeclMode::Embedded
+        {
             // Only the embedded Spark `credential` reaches here inline.
             return Ok(Some(SecretRef::Inline(
                 krishiv_common::secret::SecretString::new(v.as_str()),

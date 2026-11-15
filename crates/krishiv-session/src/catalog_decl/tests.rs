@@ -406,3 +406,28 @@ fn catalog_keys_are_recognised() {
     assert!(is_catalog_key("SPARK.SQL.CATALOG.x"));
     assert!(!is_catalog_key("spark.sql.catalogImplementation"));
 }
+
+/// Review M1: the internal `:inline` field cannot be set from configuration; server mode takes
+/// references only.
+#[test]
+fn inline_secret_key_refused() {
+    let mut pairs = rest_with(&[]);
+    pairs.retain(|(k, _)| !k.ends_with("clientSecret"));
+    pairs.push((
+        "krishiv.catalog.lake.clientSecret:inline",
+        "hunter2-literal",
+    ));
+    for mode in [DeclMode::Server, DeclMode::Embedded] {
+        let text = err(&pairs, mode);
+        assert!(text.contains("clientSecret:inline"), "{text}");
+        assert!(!text.contains("hunter2"), "{text}");
+    }
+    let text = err(
+        &[
+            ("krishiv.catalog.m.type", "memory"),
+            ("krishiv.catalog.m.spark:uri", "x"),
+        ],
+        DeclMode::Embedded,
+    );
+    assert!(text.contains("spark:uri"), "{text}");
+}
