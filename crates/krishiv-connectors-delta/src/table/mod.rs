@@ -155,6 +155,7 @@ pub(crate) struct Inner {
     pub(crate) mapping: FieldMapping,
     pub(crate) units: Arc<[ScanUnit]>,
     pub(crate) scan_options: ScanOptions,
+    pub(crate) limits: crate::commit::RetryLimits,
 }
 
 /// A Delta table at one version for one query (see the module docs).
@@ -308,6 +309,7 @@ impl DeltaTable {
                 mapping,
                 units,
                 scan_options: ScanOptions::from_config(config),
+                limits: crate::commit::RetryLimits::from_config(config),
             }),
         })
     }
@@ -346,6 +348,31 @@ impl DeltaTable {
         &self.inner.units
     }
 
+    /// The table as errors name it.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.inner.name
+    }
+
+    /// The engine the table was opened with (bound to the planning cancellation).
+    #[must_use]
+    pub fn engine(&self) -> &DeltaEngine {
+        &self.inner.engine
+    }
+
+    /// The writer of this table with the commit loop bounded by `limits` (design section 4.1;
+    /// [`TableProvider::writer`] uses the default limits).
+    ///
+    /// # Errors
+    /// See [`crate::write`]'s refusals.
+    pub fn writer_with(
+        &self,
+        request: &krishiv_exec::planner::WriteRequest,
+        limits: crate::commit::RetryLimits,
+    ) -> Result<Arc<dyn krishiv_exec::Sink>, KrishivError> {
+        crate::write::sink::writer(self, request, limits)
+    }
+
     /// The scan, typed.
     #[must_use]
     pub fn delta_scan(&self) -> DeltaScan {
@@ -375,6 +402,20 @@ impl TableProvider for DeltaTable {
     /// One unit per live file.
     fn scan_units(&self) -> Option<u64> {
         u64::try_from(self.inner.units.len()).ok()
+    }
+
+    /// Append, truncate, overwrite by filter and dynamic overwrite (design section 4.1).
+    fn capabilities(&self) -> krishiv_exec::planner::TableCapabilities {
+        crate::write::sink::capabilities()
+    }
+
+    /// The Delta write sink ([`crate::write`]); its commit loop is bounded by
+    /// [`crate::commit::RetryLimits::from_config`] of the table's configuration.
+    fn writer(
+        &self,
+        request: &krishiv_exec::planner::WriteRequest,
+    ) -> krishiv_exec::Result<Arc<dyn krishiv_exec::Sink>> {
+        self.writer_with(request, self.inner.limits)
     }
 }
 

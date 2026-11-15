@@ -26,9 +26,9 @@
 //!
 //! | Writer feature | P3 write |
 //! |---|---|
-//! | `appendOnly`, `changeDataFeed`, `deletionVectors`, `domainMetadata`, `inCommitTimestamp`, `timestampNtz`, `typeWidening`, `typeWidening-preview`, `v2Checkpoint`, `vacuumProtocolCheck` | yes |
+//! | `appendOnly`, `changeDataFeed`, `columnMapping`, `deletionVectors`, `domainMetadata`, `inCommitTimestamp`, `timestampNtz`, `typeWidening`, `typeWidening-preview`, `v2Checkpoint`, `vacuumProtocolCheck` | yes (`columnMapping`: the writer writes physical names and Parquet field ids, [`crate::write`]) |
 //! | `invariants` | yes while no column carries `delta.invariants` |
-//! | `columnMapping`, `variantType`, `variantType-preview` | refused until the data-file writer sets field ids and physical names and passes the Variant round trip |
+//! | `variantType`, `variantType-preview` | refused until the writer passes the Variant round trip |
 //! | anything else | refused |
 //!
 //! A refusal is `DELTA_UNSUPPORTED_FEATURES_FOR_WRITE` (56038), naming every refused feature in
@@ -232,6 +232,7 @@ fn unsupported_for_read(table: &str, features: &[&str]) -> KrishivError {
 pub const WRITABLE: &[&str] = &[
     "appendOnly",
     "changeDataFeed",
+    "columnMapping",
     "deletionVectors",
     "domainMetadata",
     "inCommitTimestamp",

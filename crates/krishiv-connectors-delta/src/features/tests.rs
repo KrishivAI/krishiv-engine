@@ -279,7 +279,6 @@ fn delta_write_refusals() {
         "catalogManaged",
         "coordinatedCommits-preview",
         "geospatial",
-        "columnMapping",
         "variantType",
         "somethingNew",
     ] {

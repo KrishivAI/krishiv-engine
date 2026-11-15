@@ -3107,6 +3107,7 @@ dependencies = [
  "krishiv-io",
  "krishiv-memory",
  "krishiv-optimizer",
+ "krishiv-plan",
  "krishiv-types",
  "object_store",
  "serde_json",

@@ -1061,3 +1061,16 @@ fn a_winner_past_the_depth_limit_fails_the_commit() {
     ));
     assert_eq!(c, ErrorClass::KrishivCatalogLimitExceeded);
 }
+
+#[test]
+fn retry_limits_come_from_the_config() {
+    let mut c = krishiv_common::config::Config::new();
+    assert_eq!(RetryLimits::from_config(&c), RetryLimits::default());
+    c.set("spark.databricks.delta.maxCommitAttempts", "7")
+        .unwrap();
+    c.set("krishiv.write.commitRetryTimeout", "5s").unwrap();
+    let l = RetryLimits::from_config(&c);
+    assert_eq!(l.max_attempts, 7);
+    assert_eq!(l.timeout, std::time::Duration::from_secs(5));
+    assert_eq!(l.backoff_min, RetryLimits::default().backoff_min);
+}
