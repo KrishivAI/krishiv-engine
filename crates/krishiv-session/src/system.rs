@@ -278,26 +278,7 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("error_message", Text, true),
             ("partial", Flag, false),
         ],
-        "resource_groups" => vec![
-            ("group_id", Text, false),
-            ("parent_id", Text, true),
-            ("state", Text, false),
-            ("scheduling_policy", Text, false),
-            ("scheduling_weight", Int, false),
-            ("priority", Int, false),
-            ("workload_class", Text, false),
-            ("hard_concurrency_limit", Int, false),
-            ("max_queued", Int, false),
-            ("soft_memory_limit_bytes", Long, true),
-            ("per_query_memory_limit_bytes", Long, true),
-            ("scan_quota_bytes", Long, true),
-            ("scan_quota_period_s", Long, true),
-            ("running", Int, false),
-            ("queued", Int, false),
-            ("memory_reserved_bytes", Long, false),
-            ("scan_bytes_in_window", Long, true),
-            ("scan_window_resets_at", Time, true),
-        ],
+        "resource_groups" => crate::system_groups::layout(),
         "sessions" => crate::sessions::layout(),
         _ => return None,
     })
@@ -569,44 +550,7 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
         return crate::sessions::columns(sources);
     }
     if table.eq_ignore_ascii_case("resource_groups") {
-        // Group names often name tenants: only a caller with `Monitor` on `system` lists them.
-        // (The design's own-groups view for other callers is not built yet.)
-        let rows = match (&sources.groups, sources.monitor.sees_all()) {
-            (Some(groups), true) => groups.rows(),
-            _ => Vec::new(),
-        };
-        let micros = |ms: Option<i64>| ms.map(|m| m.saturating_mul(1000));
-        return vec![
-            text(rows.iter().map(|r| Some(r.group_id.as_str()))),
-            text(rows.iter().map(|r| r.parent_id.as_deref())),
-            text(rows.iter().map(|_| Some("active"))),
-            text(rows.iter().map(|r| Some(r.scheduling_policy))),
-            Arc::new(Int32Array::from_iter(
-                rows.iter().map(|r| Some(r.scheduling_weight)),
-            )),
-            Arc::new(Int32Array::from_iter(rows.iter().map(|r| Some(r.priority)))),
-            text(rows.iter().map(|r| Some(r.workload_class))),
-            Arc::new(Int32Array::from_iter(
-                rows.iter().map(|r| Some(r.hard_concurrency_limit)),
-            )),
-            Arc::new(Int32Array::from_iter(
-                rows.iter().map(|r| Some(r.max_queued)),
-            )),
-            long(rows.iter().map(|r| r.soft_memory_limit_bytes)),
-            long(rows.iter().map(|r| r.per_query_memory_limit_bytes)),
-            long(rows.iter().map(|r| r.scan_quota_bytes)),
-            long(rows.iter().map(|r| r.scan_quota_period_s)),
-            Arc::new(Int32Array::from_iter(rows.iter().map(|r| Some(r.running)))),
-            Arc::new(Int32Array::from_iter(rows.iter().map(|r| Some(r.queued)))),
-            long(rows.iter().map(|r| Some(r.memory_reserved_bytes))),
-            long(rows.iter().map(|r| r.scan_bytes_in_window)),
-            Arc::new(
-                TimestampMicrosecondArray::from_iter(
-                    rows.iter().map(|r| micros(r.scan_window_resets_at_ms)),
-                )
-                .with_timezone("UTC"),
-            ),
-        ];
+        return crate::system_groups::columns(sources);
     }
     if table.eq_ignore_ascii_case("queries") {
         let rows = sources.queries.snapshot(sources.monitor.sees_all());
@@ -1209,33 +1153,6 @@ impl QueryLog {
             // What the controller held the query in its queue (0 when it started at once).
             row.queued_ns = Some(i64::try_from(queued_ns).unwrap_or(i64::MAX));
             row.resource_group = group.map(str::to_owned);
-        });
-    }
-
-    /// The tags row `id` carries now: the snapshot taken when the statement started (the
-    /// session's tags then, and the request tags), which later `set_tag` calls do not change.
-    pub(crate) fn row_tags(&self, id: &str) -> Option<Vec<(String, String)>> {
-        let mut tags = None;
-        self.history.update(&self.session_id, id, |row| {
-            tags = Some(row.tags.clone());
-        });
-        tags
-    }
-
-    /// Sets the trace id of row `id` (a statement with a trace of its own).
-    pub(crate) fn set_row_trace(&self, id: &str, trace_id: Option<String>) {
-        self.history.update(&self.session_id, id, |row| {
-            row.trace_id = trace_id;
-        });
-    }
-
-    /// Adds the statement's request tags, as `(tag, "")` pairs, to the tags of row `id`.
-    pub(crate) fn add_request_tags(&self, id: &str, tags: &[Arc<str>]) {
-        if tags.is_empty() {
-            return;
-        }
-        self.history.update(&self.session_id, id, |row| {
-            crate::action::merge_request_tags(&mut row.tags, tags);
         });
     }
 
@@ -2061,6 +1978,7 @@ mod tests {
 }
 
 mod caches;
+mod row_stamps;
 mod text;
 pub(crate) use text::TextPolicy;
 #[cfg(test)]

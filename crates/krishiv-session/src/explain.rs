@@ -489,12 +489,12 @@ fn render(mode: ExplainMode, parsed: &str, p: &Planned, stats: &ProviderStatisti
 
 /// Spark's `FORMATTED`: the outline with operator ids (children first),
 /// then `(id) Name` with the node's arguments.
-/// The ids the planner gives its own columns start at 2^62, far above the
+/// The ids the planner and the common-subexpression pass give their own columns start at 2^32 and 2^62, far above the
 /// plan's; in the text they follow the plan's largest id in order of first
 /// appearance (`sum(amount#1)#4`, as Spark prints `sum(amount#1)#12L`),
 /// never `#4611686018427387904` (PY-008).
 fn dense_ids(text: &str) -> String {
-    const HIGH: u64 = 1 << 62;
+    const HIGH: u64 = 1 << 32;
     let ids = |text: &str| -> Vec<(usize, usize, u64)> {
         let b = text.as_bytes();
         let mut out = Vec::new();
