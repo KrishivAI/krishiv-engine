@@ -7,6 +7,7 @@ use std::sync::Arc;
 use arrow_schema::SchemaRef;
 use krishiv_memory::SpillScope;
 
+use super::distinct::{DistinctCount, DistinctCountNode, covers};
 use super::{
     AggInput, AggregateExpr, AggregateOutput, AggregateSpec, HashAggregate, PartialAggregate,
     unsupported,
@@ -81,6 +82,26 @@ pub fn distinct_plan(
     spec: AggregateSpec,
     distinct: &[bool],
 ) -> Result<Arc<dyn ExecNode>> {
+    let at_merge = matches!(
+        krishiv_common::config::EXEC_AGG_DISTINCT_COUNT_AT_MERGE.default,
+        Some(krishiv_common::config::ConfigValue::Bool(true))
+    );
+    distinct_plan_with(input, spec, distinct, at_merge)
+}
+
+/// [`distinct_plan`] with `krishiv.exec.agg.distinctCountAtMerge` set to
+/// `count_at_merge`: a single `count(DISTINCT)` in a `GROUP BY` then runs as
+/// one breaker that counts each distinct pair where its tables merge
+/// (`aggregate/distinct.rs`); every other spec keeps the two aggregations.
+///
+/// # Errors
+/// As [`distinct_plan`].
+pub fn distinct_plan_with(
+    input: Arc<dyn ExecNode>,
+    spec: AggregateSpec,
+    distinct: &[bool],
+    count_at_merge: bool,
+) -> Result<Arc<dyn ExecNode>> {
     if distinct.len() != spec.aggregates.len()
         || spec.output != AggregateOutput::Final
         || spec.aggregates.iter().any(|a| a.input != AggInput::Raw)
@@ -113,6 +134,12 @@ pub fn distinct_plan(
     let Some(dargs) = dargs.map(<[usize]>::to_vec) else {
         return Ok(AggregateNode::new(input, HashAggregate::new(spec)?));
     };
+    if count_at_merge && covers(&spec, distinct) {
+        return Ok(DistinctCountNode::new(
+            input,
+            DistinctCount::new(&spec, distinct)?,
+        ));
+    }
     let k = spec.group_by.len();
     let first = AggregateSpec {
         group_by: spec.group_by.iter().chain(&dargs).copied().collect(),

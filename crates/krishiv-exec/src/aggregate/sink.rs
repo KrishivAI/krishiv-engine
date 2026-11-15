@@ -36,6 +36,7 @@ use krishiv_memory::{
 };
 use krishiv_types::batch::{Batch, Weights};
 
+use super::distinct::PairCounter;
 use super::rowtable::{Mode, PARTS, RowTable, WIDEN_GROUPS};
 use super::table::{AggCore, AggTable, Table};
 use super::{AggregateSpec, is_order_sensitive, unsupported};
@@ -1074,6 +1075,22 @@ struct Global {
     combined: AtomicUsize,
     inner: Mutex<Inner>,
     done: OnceLock<Final>,
+    /// The pairs table of a `count(DISTINCT)` counted at the merge
+    /// ([`super::distinct`]): each in-memory final-phase task counts its
+    /// finished table here instead of publishing it.
+    counter: OnceLock<Arc<PairCounter>>,
+}
+
+/// Makes the final phase of the aggregate whose global state is `g` count
+/// its finished tables into `counter` ([`super::distinct`]).
+///
+/// # Errors
+/// `INTERNAL_ERROR` for another operator's state, or a second counter.
+pub(super) fn set_pair_counter(g: &GlobalState, counter: Arc<PairCounter>) -> Result<()> {
+    global(g)?
+        .counter
+        .set(counter)
+        .map_err(|_| internal("a second pair counter".to_owned()))
 }
 
 fn downcast<T: 'static>(state: &mut LocalState) -> Result<&mut T> {
@@ -1471,6 +1488,7 @@ impl Sink for HashAggregate {
             combined: AtomicUsize::new(0),
             inner: Mutex::new(Inner::default()),
             done: OnceLock::new(),
+            counter: OnceLock::new(),
         }))
     }
 

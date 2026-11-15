@@ -27,7 +27,10 @@ fn rows_of(plan: &Runnable, root: &TreePool) -> (Vec<String>, usize, u64) {
     let sinks = metrics
         .operators
         .values()
-        .filter(|o| o.name == "HashAggregate" && o.role == OperatorRole::Sink)
+        .filter(|o| {
+            matches!(o.name.as_ref(), "HashAggregate" | "DistinctCount")
+                && o.role == OperatorRole::Sink
+        })
         .count();
     let files = metrics
         .operators
@@ -96,7 +99,9 @@ fn distinct_has_a_partial_merge_and_placed_inputs_keep_one_aggregate() {
         "SELECT a, count(DISTINCT b), sum(b) FROM t GROUP BY a",
     );
     assert_eq!(rows.len(), 9, "{rows:?}");
-    assert_eq!((fused, written), (2, 3));
+    // Fused, the single `count(DISTINCT)` is one breaker counting at the
+    // merge (`krishiv.exec.agg.distinctCountAtMerge`).
+    assert_eq!((fused, written), (1, 3));
     let (rows, ..) = both(&env, "SELECT count(DISTINCT a), max(s) FROM t");
     assert_eq!(rows, ["8|s9"]);
     let plan = explain(

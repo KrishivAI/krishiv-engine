@@ -1207,7 +1207,26 @@ impl Instantiation<'_> {
                         let spec =
                             aggregate_spec(&input.schema, &single, &self.env, self.spill.clone());
                         let schema = spec.output_schema()?;
-                        let node = aggregate_node(input.node, spec, &single.distinct)?;
+                        let at_merge = self.worker.config.as_deref().map_or_else(
+                            || {
+                                matches!(
+                                    krishiv_common::config::EXEC_AGG_DISTINCT_COUNT_AT_MERGE
+                                        .default,
+                                    Some(krishiv_common::config::ConfigValue::Bool(true))
+                                )
+                            },
+                            |c| {
+                                c.get(&krishiv_common::config::EXEC_AGG_DISTINCT_COUNT_AT_MERGE)
+                                    .and_then(krishiv_common::config::ConfigValue::as_bool)
+                                    .unwrap_or(true)
+                            },
+                        );
+                        let node = crate::aggregate::distinct_plan_with(
+                            input.node,
+                            spec,
+                            &single.distinct,
+                            at_merge,
+                        )?;
                         return Ok(Built { node, schema });
                     }
                     // Written out, the partial phase is where a row's weight

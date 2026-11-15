@@ -44,7 +44,9 @@
 //!   `sum`, `count(*)` and `avg` (about 250k distinct pairs); q14: a 20-byte `Utf8View` key of
 //!   2^16 values and an independent user of 2^18 (nearly every pair distinct), the distinct
 //!   aggregate alone. `…_pairs` is the first phase alone (a plain `group by k, v` with the same
-//!   plain aggregates), so the difference is what the second phase costs.
+//!   plain aggregates), so the difference is what the second phase costs; `…_pairs_bare` is
+//!   the same `group by k, v` with no aggregates (the floor of a pairs table with no payload);
+//!   `…_new` is the whole query counted at the merge (`krishiv.exec.agg.distinctCountAtMerge`).
 //!
 //! `AGG_BENCH_THREADS=N` runs them (but the spill one) on `N` worker
 //! threads in the shipped (non-deterministic) mode instead: thread-local
@@ -68,7 +70,7 @@ use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use futures::StreamExt;
 use krishiv_exec::aggregate::{
     AggInput, AggregateExpr, AggregateFunction, AggregateNode, AggregateOutput, AggregateSpec,
-    HashAggregate, UdafCall, UdafEnv, distinct_plan,
+    HashAggregate, UdafCall, UdafEnv, distinct_plan_with,
 };
 use krishiv_exec::testing::{Batches, Scan};
 use krishiv_exec::{
@@ -544,13 +546,27 @@ fn distinct_q14_input() -> Vec<Batch> {
         .collect()
 }
 
+/// Which part of a distinct shape runs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Pairs {
+    /// The whole query through today's `distinct_plan` (two aggregations).
+    Full,
+    /// The whole query counted at the merge
+    /// (`krishiv.exec.agg.distinctCountAtMerge`).
+    AtMerge,
+    /// Its first phase alone: `group by k, v` with the plain aggregates.
+    States,
+    /// `group by k, v` with no aggregates (the pairs table's floor).
+    Bare,
+}
+
 /// `select k, [sum(w), count(*), avg(w),] count(DISTINCT v) group by k` through
 /// `distinct_plan`.
 fn distinct_shape_plan(
     batches: &[Batch],
     key: DataType,
     plain: bool,
-    pairs_only: bool,
+    pairs: Pairs,
 ) -> Arc<dyn ExecNode> {
     let s = distinct_schema(key);
     let mut aggregates = Vec::new();
@@ -591,15 +607,19 @@ fn distinct_shape_plan(
         udafs: None,
     };
     let scan = Arc::new(Scan(Batches::new(s, batches.to_vec())));
-    if pairs_only {
+    if !matches!(pairs, Pairs::Full | Pairs::AtMerge) {
+        let plain = match pairs {
+            Pairs::States => spec.aggregates[..spec.aggregates.len() - 1].to_vec(),
+            _ => Vec::new(),
+        };
         let spec = AggregateSpec {
             group_by: vec![0, 1],
-            aggregates: spec.aggregates[..spec.aggregates.len() - 1].to_vec(),
+            aggregates: plain,
             ..spec
         };
         return AggregateNode::new(scan, HashAggregate::new(spec).expect("spec"));
     }
-    distinct_plan(scan, spec, &distinct).expect("distinct plan")
+    distinct_plan_with(scan, spec, &distinct, pairs == Pairs::AtMerge).expect("distinct plan")
 }
 
 fn plan(batches: &[Batch], spill: Option<SpillScope>) -> Arc<dyn ExecNode> {
@@ -806,11 +826,16 @@ fn bench(c: &mut Criterion) {
         ("distinct_q10_shape", &q10, DataType::Int64, true),
         ("distinct_q14_shape", &q14, DataType::Utf8View, false),
     ] {
-        for (suffix, pairs_only) in [("", false), ("_pairs", true)] {
+        for (suffix, pairs) in [
+            ("", Pairs::Full),
+            ("_new", Pairs::AtMerge),
+            ("_pairs", Pairs::States),
+            ("_pairs_bare", Pairs::Bare),
+        ] {
             g.bench_function(format!("{name}{suffix}"), |b| {
                 let mode = Mode { rows: true, seeded };
                 b.iter(|| {
-                    let p = distinct_shape_plan(batches, key.clone(), plain, pairs_only);
+                    let p = distinct_shape_plan(batches, key.clone(), plain, pairs);
                     black_box(run(&runner, &caller, p, 1 << 30, mode))
                 });
             });
