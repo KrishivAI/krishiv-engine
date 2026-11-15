@@ -14,7 +14,6 @@ use std::sync::Arc;
 
 use arrow_array::{Int32Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
-use krishiv_common::principal::Principal;
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::analyze_plan_request::{self as areq, Analyze};
 use krishiv_connect::proto::v4_3::analyze_plan_response::Result as AResult;
@@ -23,7 +22,7 @@ use krishiv_connect::proto::v4_3::relation::RelType;
 use krishiv_connect_server::{ConnectServer, ConnectServerConfig, SessionLimits, SessionManager};
 use krishiv_plan::analyzer::PolicyVersion;
 use krishiv_session::Session;
-use krishiv_session::auth::{Role, RolePolicy};
+use krishiv_session::auth::{Authenticated, Role, RolePolicy};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tonic::Code;
@@ -38,7 +37,7 @@ struct Running {
 
 /// A server whose sessions run as `role`, each with the table `t` (column `a`, three rows).
 async fn start(role: Role) -> Running {
-    let factory = move |_: &Principal| {
+    let factory = move |_: &Authenticated| {
         let policy = RolePolicy::new(Some(role), Role::Admin, PolicyVersion(1));
         let s = Session::builder().access_policy(Arc::new(policy)).build()?;
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));

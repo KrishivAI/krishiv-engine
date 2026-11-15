@@ -115,9 +115,40 @@ impl Session {
         .await
     }
 
-    /// `SET key = ..` of a server-scoped store key is `Manage` on the cluster (P3-T067b); any
-    /// other key passes. Asked before the value is stored, so a refused `SET` changes nothing.
-    pub(crate) async fn authorize_set_store_key(&self, key: &str) -> Result<(), KrishivError> {
+    /// `RESET key`: the key's `SET` check ([`Self::authorize_set_key`]), then the unset.
+    pub(crate) async fn unset_key(&self, key: &str) -> Result<(), KrishivError> {
+        self.authorize_set_key(key).await?;
+        self.conf().unset(key)
+    }
+
+    /// `SET key = ..` (or `RESET key`) of a key only an administrator may change is `Manage`
+    /// on the cluster (ADR 0046 §3): a registry key settable by `admin` (its Spark alias too),
+    /// or a server-scoped store key (P3-T067b). Any other key passes. Asked before the value
+    /// is stored, so a refused `SET` changes nothing. A `startup` key is refused by the
+    /// configuration itself, for every principal (`CANNOT_MODIFY_STATIC_CONFIG`).
+    ///
+    /// Public for server adapters that set configuration outside SQL (Spark Connect's `Config`
+    /// RPC), so they ask exactly what `SET` asks; not meant as user API.
+    ///
+    /// # Errors
+    /// `KRISHIV_INSUFFICIENT_PERMISSIONS` (42501) when the principal lacks `Manage`; the
+    /// denial is audited and counted like every other.
+    pub async fn authorize_set_key(&self, key: &str) -> Result<(), KrishivError> {
+        if krishiv_common::config::lookup(key)
+            .or_else(|| {
+                krishiv_common::config::lookup(krishiv_common::config::resolve_alternative(key))
+            })
+            .is_some_and(|e| e.settable_by == krishiv_common::config::SettableBy::Admin)
+        {
+            let r = authorize(
+                &*self.state.policy,
+                &self.state.principal,
+                &Securable::System("cluster".to_owned()),
+                Privilege::Manage,
+            )
+            .await;
+            return crate::access::audit(self, StatementClass::Session, r);
+        }
         if !krishiv_io::is_server_scoped_option(key) {
             return Ok(());
         }
@@ -375,8 +406,11 @@ impl Session {
             }
         }
         // A store error after the anchor is open may be a link swapped into
-        // the path: the audited denial is what the caller sees then.
-        if written.is_err()
+        // the path: the audited denial is what the caller sees then. A denial
+        // is already audited (and counted): it is not asked about again.
+        if written
+            .as_ref()
+            .is_err_and(|e| e.error_class().name() != "KRISHIV_INSUFFICIENT_PERMISSIONS")
             && let Err(denied) = crate::access::still_physical(self, &at)
             && denied.error_class().name() == "KRISHIV_INSUFFICIENT_PERMISSIONS"
         {

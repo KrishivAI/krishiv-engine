@@ -1,31 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Unit tests of `SettableBy`, redaction and the per-key warnings.
-use krishiv_common::principal::{Principal, PrincipalKind};
-
-use super::{ConfigRole, check_settable, is_redacted, role_of, warning};
+use super::{check_static, is_redacted, warning};
 
 const STARTUP: &str = "krishiv.resultCache.maxBytes";
 const ADMIN: &str = "krishiv.resultCache.ttl";
 const USER: &str = "spark.sql.ansi.enabled";
 
+/// A `Startup` key is refused here for everyone; an `Admin` key is left to the session's
+/// policy (`tests/auth.rs` `config_refusals_are_counted_like_sql_set`).
 #[test]
 fn config_settable_by() {
-    let p = Principal::new("ann", PrincipalKind::User);
-    for role in [ConfigRole::Viewer, ConfigRole::Operator, ConfigRole::Admin] {
-        let e = check_settable(role, &p, STARTUP).unwrap_err();
-        assert_eq!(e.error_class().name(), "CANNOT_MODIFY_STATIC_CONFIG");
-        assert_eq!(e.error_class().sql_state(), Some("46110"));
-        check_settable(role, &p, USER).unwrap();
-        check_settable(role, &p, "my.app.flag").unwrap();
-    }
-    for role in [ConfigRole::Viewer, ConfigRole::Operator] {
-        let e = check_settable(role, &p, ADMIN).unwrap_err();
-        assert_eq!(e.error_class().name(), "KRISHIV_INSUFFICIENT_PERMISSIONS");
-        assert_eq!(e.error_class().sql_state(), Some("42501"));
-    }
-    check_settable(ConfigRole::Admin, &p, ADMIN).unwrap();
-    // Until T002 the local principal is the admin.
-    assert_eq!(role_of(&Principal::local_user()), ConfigRole::Admin);
+    let e = check_static(STARTUP).unwrap_err();
+    assert_eq!(e.error_class().name(), "CANNOT_MODIFY_STATIC_CONFIG");
+    assert_eq!(e.error_class().sql_state(), Some("46110"));
+    check_static(ADMIN).unwrap();
+    check_static(USER).unwrap();
+    check_static("my.app.flag").unwrap();
 }
 
 #[test]

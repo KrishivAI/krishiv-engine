@@ -60,6 +60,10 @@ const MATRIX: &[(&str, Role)] = &[
     ("SELECT id FROM range(3)", Role::Viewer),
     // Session class.
     ("SET spark.sql.shuffle.partitions = 4", Role::Viewer),
+    // A key settable by `admin` only (ADR 0046 §3): `Manage` on the cluster, for `SET` and
+    // `RESET key` alike.
+    ("SET krishiv.exec.targetPartitionBytes = 64m", Role::Admin),
+    ("RESET krishiv.exec.targetPartitionBytes", Role::Admin),
     ("USE default", Role::Viewer),
     // Metadata (Browse).
     ("SHOW TABLES", Role::Viewer),
@@ -72,6 +76,7 @@ const MATRIX: &[(&str, Role)] = &[
     ("SELECT count(*) FROM system.queries", Role::Viewer),
     ("SELECT count(*) FROM SYSTEM.QUERIES", Role::Viewer),
     ("SELECT count(*) FROM system.capabilities", Role::Viewer),
+    ("SELECT count(*) FROM system.sessions", Role::Viewer),
     // A system table's schema is metadata, even where its rows are not (Browse, not Select).
     ("DESCRIBE system.memory", Role::Viewer),
     ("SHOW COLUMNS IN system.memory", Role::Viewer),
