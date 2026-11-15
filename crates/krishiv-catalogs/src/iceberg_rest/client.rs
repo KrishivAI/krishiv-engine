@@ -91,6 +91,17 @@ fn check_names(levels: &[String], table: Option<&str>) -> Result<(), RestError> 
     Ok(())
 }
 
+/// As [`check_names`], for a call that addresses a namespace in the path: it needs at least one level (an empty
+/// one would send `namespaces//tables`).
+fn check_namespace(levels: &[String], table: Option<&str>) -> Result<(), RestError> {
+    if levels.is_empty() {
+        return Err(RestError::Protocol(
+            "a table call without a namespace".to_owned(),
+        ));
+    }
+    check_names(levels, table)
+}
+
 /// Whether a storage-credential prefix is a bare scheme (`s3`, `gs`, `abfss`; T067 §4.1).
 fn is_bare_scheme(prefix: &str) -> bool {
     let mut bytes = prefix.bytes();
@@ -418,7 +429,7 @@ impl RestClient {
         let server = self.server()?;
         let what = relation(namespace, None);
         let run = || -> Result<Option<Vec<TableIdent>>, RestError> {
-            check_names(namespace, None)?;
+            check_namespace(namespace, None)?;
             let ns = namespace_path(namespace, &server.separator);
             let url = self.url(&server, &["namespaces", &ns, "tables"])?;
             self.pages(&url, types::tables_page)
@@ -440,7 +451,7 @@ impl RestClient {
         let server = self.server()?;
         let what = relation(namespace, Some(table));
         let run = || -> Result<Option<LoadedTable>, RestError> {
-            check_names(namespace, Some(table))?;
+            check_namespace(namespace, Some(table))?;
             let ns = namespace_path(namespace, &server.separator);
             let name = path_segment(table);
             let url = self.url(&server, &["namespaces", &ns, "tables", &name])?;
@@ -514,7 +525,7 @@ impl RestClient {
             .into());
         }
         let run = || -> Result<Option<Vec<StorageCredential>>, RestError> {
-            check_names(namespace, Some(table))?;
+            check_namespace(namespace, Some(table))?;
             let ns = namespace_path(namespace, &server.separator);
             let name = path_segment(table);
             let url = self.url(

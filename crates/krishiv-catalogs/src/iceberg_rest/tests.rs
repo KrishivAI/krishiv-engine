@@ -192,6 +192,8 @@ fn dot_and_empty_names_are_refused_before_any_request() {
         }
     }
     assert!(client.list_namespaces(&ns(&[".."])).is_err());
+    assert!(client.list_tables(&[]).is_err());
+    assert!(client.load_table(&[], "t").is_err());
     assert_eq!(server.seen().len(), 1, "only the config was requested");
 }
 
