@@ -49,13 +49,37 @@ pub async fn authorize(
     securable: &Securable,
     privilege: Privilege,
 ) -> Result<(), KrishivError> {
-    let result = decide(policy, principal, securable, privilege).await;
-    if let Err(e) = &result
-        && e.error_class() == krishiv_common::error::ErrorClass::KrishivInsufficientPermissions
-    {
-        policy.denied(principal, securable, privilege);
+    authorize_reported(policy, principal, securable, privilege, privilege).await
+}
+
+/// [`authorize`] asking `asked` but refusing (and telling [`AccessPolicy::denied`]) as
+/// `reported`: Bind asks a column-level policy `Browse` for a read, and a refusal names the
+/// `Select` the statement needs (P3-T062 review m6).
+///
+/// # Errors
+/// As [`authorize`], naming `reported`.
+pub async fn authorize_reported(
+    policy: &dyn AccessPolicy,
+    principal: &Principal,
+    securable: &Securable,
+    asked: Privilege,
+    reported: Privilege,
+) -> Result<(), KrishivError> {
+    let result = decide(policy, principal, securable, asked).await;
+    match result {
+        Err(e)
+            if e.error_class()
+                == krishiv_common::error::ErrorClass::KrishivInsufficientPermissions =>
+        {
+            policy.denied(principal, securable, reported);
+            Err(if asked == reported {
+                e
+            } else {
+                insufficient_permissions(principal, securable, reported)
+            })
+        }
+        other => other,
     }
-    result
 }
 
 async fn decide(
@@ -104,22 +128,24 @@ async fn decide(
 }
 
 /// The column pass of a policy that [decides columns](AccessPolicy::column_level): `Select` on
-/// each referenced column of every table and view the query reads, in first-use order, or on the
-/// table itself when the query references none of its columns (`count(*)` reads its rows). Bind
-/// asked only `Browse` on them, so this is the read check; a policy that does not decide columns
-/// was asked `Select` on the table at Bind and is not asked again.
+/// each column of every table and view the final plan reads (`reads`, one per use, see
+/// `reads::column_reads`), and on the table itself when some appearance reads whole rows
+/// (`count(*)`, a view, or a plan the walk cannot prove). Bind asked only `Browse` on them, so
+/// this is the read check; a policy that does not decide columns was asked `Select` on the table
+/// at Bind and is not asked again.
 ///
 /// # Errors
 /// As [`authorize`], at `origin`, for the first column (or table) denied.
 pub(super) async fn authorize_columns(
     ctx: &super::AnalysisContext,
     uses: &[super::SecurableUse],
+    reads: &[super::reads::Reads],
     origin: crate::Origin,
 ) -> Result<(), super::AnalysisError> {
     if !ctx.policy.column_level() {
         return Ok(());
     }
-    for used in uses {
+    for (i, used) in uses.iter().enumerate() {
         let (Securable::Table(table) | Securable::View(table)) = &used.securable else {
             continue;
         };
@@ -127,7 +153,9 @@ pub(super) async fn authorize_columns(
             continue;
         }
         let at = |e| super::AnalysisError::new(e, origin);
-        if used.columns.is_empty() {
+        // A use without a derived read is asked as whole rows (fail closed).
+        let read = reads.get(i);
+        if read.is_none_or(|r| r.whole) {
             authorize(
                 &*ctx.policy,
                 &ctx.principal,
@@ -137,7 +165,7 @@ pub(super) async fn authorize_columns(
             .await
             .map_err(at)?;
         }
-        for column in &used.columns {
+        for column in read.map(|r| &r.columns).into_iter().flatten() {
             let securable = Securable::Column {
                 table: table.clone(),
                 column: column.clone(),

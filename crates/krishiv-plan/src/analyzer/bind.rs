@@ -755,7 +755,7 @@ async fn authorize_as(
     } else {
         privilege
     };
-    super::access::authorize(&*ctx.policy, &ctx.principal, &securable, asked)
+    super::access::authorize_reported(&*ctx.policy, &ctx.principal, &securable, asked, privilege)
         .await
         .map_err(|e| AnalysisError::new(e, origin))?;
     b.securables.push((securable.clone(), privilege));
