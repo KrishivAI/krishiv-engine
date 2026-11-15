@@ -41,6 +41,27 @@ fn type_name(t: &DataType) -> String {
     t.type_name()
 }
 
+/// `NOT NULL` on the declared columns of `t` (its column list, then its typed `PARTITIONED BY`
+/// columns, as [`Session::declared_columns`] lists them): a Delta table keeps it, where a file
+/// source's columns are all nullable.
+pub(super) fn keep_not_null(
+    declared: &mut [StoreColumn],
+    t: &CreateTable,
+    typed_partitions: &[&krishiv_sql::ast::PartitionColumn],
+) {
+    let not_null = t
+        .elements
+        .iter()
+        .filter_map(|e| match e {
+            krishiv_sql::ast::TableElement::Column(def) => Some(def.not_null),
+            _ => None,
+        })
+        .chain(typed_partitions.iter().map(|c| c.not_null));
+    for (c, not_null) in declared.iter_mut().zip(not_null) {
+        c.nullable = !not_null;
+    }
+}
+
 /// `SchemaUtils.reportDifferences(existing, specified)` for top-level columns: missing and
 /// additional fields by exact name, then for each common field its nullability and type
 /// differences. delta-spark lists the missing and additional fields in its set's order; here they

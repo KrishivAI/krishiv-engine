@@ -16,6 +16,7 @@ impl Session {
         {
             if table.view.is_none() {
                 // Reading a Delta table to analyze it is no write; everything else waits for PR-37a.
+                #[cfg(feature = "delta")]
                 if is_delta_table(&table) && operation != "ANALYZE TABLE" {
                     return Err(delta_write_refused(name.quoted(), operation));
                 }

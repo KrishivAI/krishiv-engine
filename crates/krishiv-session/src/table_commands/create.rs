@@ -134,11 +134,13 @@ impl Session {
             data_version: 0,
             stamp: 0,
         };
+        #[cfg(feature = "delta")]
         if is_delta_table(&table) {
             let located = location_text.is_some();
             // delta-spark compares the whole declared schema, typed partition columns and
             // `NOT NULL` included, with the log's.
-            let declared = self.declared_columns(t, original, &typed_partitions, true)?;
+            let mut declared = self.declared_columns(t, original, &typed_partitions)?;
+            super::delta::keep_not_null(&mut declared, t, &typed_partitions);
             self.create_delta_table(table, t, &declared, &name, &partition_names, mode, located)
                 .await?;
             return self.empty_frame().await;
@@ -153,7 +155,7 @@ impl Session {
                     .await?;
             }
             None => {
-                table.columns = self.declared_columns(t, original, &typed_partitions, false)?;
+                table.columns = self.declared_columns(t, original, &typed_partitions)?;
                 if table.columns.is_empty() {
                     return Err(unsupported("CREATE TABLE without columns"));
                 }
@@ -254,26 +256,15 @@ impl Session {
     }
 
     /// The declared columns of `t`: its column list, then its typed `PARTITIONED BY` columns
-    /// (columns of the table's schema, checked for duplicates with the others). With
-    /// `keep_not_null`, a `NOT NULL` column is not nullable (a Delta table keeps it); a file
-    /// source drops it, as Spark does.
+    /// (columns of the table's schema, checked for duplicates with the others). Every column is
+    /// nullable, as Spark makes a file source's columns.
     pub(super) fn declared_columns(
         &self,
         t: &CreateTable,
         original: &str,
         typed_partitions: &[&krishiv_sql::ast::PartitionColumn],
-        keep_not_null: bool,
     ) -> Result<Vec<StoreColumn>, KrishivError> {
         let mut columns = self.columns_of(t, original)?;
-        if keep_not_null {
-            let defs = t.elements.iter().filter_map(|e| match e {
-                TableElement::Column(def) => Some(def),
-                _ => None,
-            });
-            for (c, def) in columns.iter_mut().zip(defs) {
-                c.nullable = !def.not_null;
-            }
-        }
         let mut typed = Vec::with_capacity(typed_partitions.len());
         for c in typed_partitions {
             let ColumnName::Ident(ident) = &c.name else {
@@ -289,12 +280,12 @@ impl Session {
             self.query_env().analysis.conf.case_sensitive,
         )?;
         for (c, ident) in typed_partitions.iter().zip(typed) {
-            let mut column =
-                StoreColumn::declared(ident.value.clone(), &c.data_type, None, c.comment.clone())?;
-            if keep_not_null {
-                column.nullable = !c.not_null;
-            }
-            columns.push(column);
+            columns.push(StoreColumn::declared(
+                ident.value.clone(),
+                &c.data_type,
+                None,
+                c.comment.clone(),
+            )?);
         }
         Ok(columns)
     }
@@ -380,6 +371,7 @@ impl Session {
         layout: &LayoutRequest<'_>,
         pre: &mut Option<Admitted>,
     ) -> Result<(), KrishivError> {
+        #[cfg(feature = "delta")]
         if is_delta_table(&table) {
             return Err(delta_write_refused(
                 quoted(&table.namespace, &table.name),
@@ -578,6 +570,7 @@ impl Session {
             data_version: 0,
             stamp: 0,
         };
+        #[cfg(feature = "delta")]
         if is_delta_table(&table) {
             return Err(delta_write_refused(name.quoted(), "CREATE TABLE LIKE"));
         }

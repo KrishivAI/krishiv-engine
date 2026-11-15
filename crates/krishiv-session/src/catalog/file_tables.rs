@@ -42,6 +42,7 @@ impl QueryCatalog {
             if self.opened(key).is_some() {
                 continue;
             }
+            #[cfg(feature = "delta")]
             if crate::delta::is_delta(source) {
                 // The table's log is read once per query, never listed as files.
                 self.delta
@@ -189,6 +190,7 @@ impl QueryCatalog {
     }
 }
 
+#[cfg(feature = "delta")]
 /// How Delta errors name the table a scan of `key` reads: a permanent table by its
 /// `namespace.table` (delta-spark's catalog form); a path or a temporary view by the path.
 fn delta_name(key: &FilesKey) -> Option<String> {

@@ -379,3 +379,53 @@ fn a_stale_drop_keeps_a_newer_entry() {
     cache.invalidate_if(&key(&env, "alice"), now.snapshot.version(), now.last);
     assert_eq!(cache.cached_version(&key(&env, "alice")), None);
 }
+
+/// `invalidate` drops one key, `invalidate_root` every key of a root; a store never replaces a
+/// newer entry of its key with an older snapshot; the default and configured caches start empty.
+#[test]
+fn invalidation_and_stores_keep_the_newest_entry() {
+    let env = two_commits();
+    let cache = Arc::new(SnapshotCache::default());
+    assert!(cache.is_empty());
+    let configured = SnapshotCache::from_config(&Config::new());
+    assert!(configured.is_empty());
+    let mine = key(&env, "me");
+    let theirs = key(&env, "them");
+    open_cached(&env, &cache, mine.clone());
+    open_cached(&env, &cache, theirs.clone());
+    assert_eq!(cache.len(), 2);
+    cache.invalidate(&mine);
+    assert_eq!(cache.len(), 1);
+    assert!(cache.lookup(&mine).is_none());
+    // A newer snapshot cached for `theirs`, then the older one offered again: the newer stays.
+    let older = cache.lookup(&theirs).unwrap();
+    commit_last(&env);
+    open_cached(&env, &cache, theirs.clone());
+    assert_eq!(cache.lookup(&theirs).unwrap().snapshot.version(), 2);
+    cache.store(theirs.clone(), older);
+    assert_eq!(cache.lookup(&theirs).unwrap().snapshot.version(), 2);
+    cache.invalidate_root(&theirs.root);
+    assert!(cache.is_empty());
+}
+
+/// The table's partition columns come from the log's `metaData.partitionColumns`.
+#[test]
+fn partition_columns_come_from_the_log() {
+    let env = two_commits();
+    let cache = Arc::new(SnapshotCache::default());
+    let table = open_cached(&env, &cache, key(&env, "me"));
+    let declared: Vec<String> = serde_json::from_str::<Value>(
+        std::fs::read_to_string(env.dir.join("_delta_log/00000000000000000000.json"))
+            .unwrap()
+            .lines()
+            .find(|l| l.contains("\"metaData\""))
+            .unwrap(),
+    )
+    .unwrap()["metaData"]["partitionColumns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(table.partition_columns(), declared);
+}

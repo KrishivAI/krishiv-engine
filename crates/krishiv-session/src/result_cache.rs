@@ -468,6 +468,7 @@ impl Session {
                 return Err("it reads a view that is not inlined");
             }
             // Delta resolves the latest version per query (ADR 0037): the key would not see it.
+            #[cfg(feature = "delta")]
             if crate::table_commands::is_delta_table(&table) {
                 return Err("it reads a Delta table");
             }
