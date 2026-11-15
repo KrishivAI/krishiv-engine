@@ -5,5 +5,9 @@
   "check-compat": "Check a project with check-compat",
   "run-sql-from-the-command-line": "Run SQL from the command line",
   "tokio-console": "Task diagnostics with tokio-console",
-  "notebooks-and-datasets": "Notebooks and sample data"
+  "notebooks-and-datasets": "Notebooks and sample data",
+  "resource-groups": "Resource groups and request tags",
+  "python-udf-sandbox": "Python UDFs in the server: the sandbox",
+  "single-node-server-security": "Securing a single-node server",
+  "collations-and-icu": "Collations and ICU"
 }
