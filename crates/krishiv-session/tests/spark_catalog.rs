@@ -589,6 +589,28 @@ fn the_system_catalog_lists_its_tables() {
 }
 
 #[test]
+fn an_unknown_catalog_is_catalog_not_found_and_a_database_name_is_not_a_catalog() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE DATABASE d1");
+    let c = s.catalog();
+    let before = c.current_database();
+    for name in ["nope", "default", "d1"] {
+        let e = block_on(c.set_current_catalog(name)).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            krishiv_common::error::ErrorClass::CatalogNotFound,
+            "{name}: {e}"
+        );
+    }
+    assert_eq!(
+        c.current_database(),
+        before,
+        "a refused call changes nothing"
+    );
+}
+
+#[test]
 fn values_the_parser_cannot_read_back_are_refused_not_changed() {
     let dir = tempfile::tempdir().unwrap();
     let s = session(dir.path());

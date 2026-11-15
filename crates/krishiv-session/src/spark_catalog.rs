@@ -235,7 +235,16 @@ impl Catalog<'_> {
     /// # Errors
     /// The statement's: `CATALOG_NOT_FOUND` for an unknown catalog.
     pub async fn set_current_catalog(&self, name: &str) -> Result<(), KrishivError> {
-        self.run(&format!("USE {}", quoted(name))).await
+        // `USE <name>` would switch the namespace for a namespace's name: the catalog is checked first.
+        let wanted = self.fold(name);
+        if !self.list_catalogs().iter().any(|c| self.fold(c) == wanted) {
+            return Err(krishiv_common::error::CatalogNotFound {
+                catalog_name: format!("`{name}`"),
+                config: "\"spark.sql.catalog.<name>\"".to_owned(),
+            }
+            .into());
+        }
+        self.run(&format!("USE {}", quoted(&wanted))).await
     }
 
     /// The catalogs, sorted.
