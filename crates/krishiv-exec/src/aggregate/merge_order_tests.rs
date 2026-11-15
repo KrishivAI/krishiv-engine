@@ -3,9 +3,11 @@
 //! `min_by`, float `max`/`min` of `0.0` and `-0.0`, `percentile_approx`)
 //! across drivers follow the driver-partition order whatever order the
 //! drivers combine in, and whether or not each driver's table spilled before
-//! it combined. Known gaps, not covered here: a driver that spills part-way
-//! through its input, the two-phase partial aggregate (it flushes or bypasses
-//! by memory), and a final phase over an exchange (fetch order).
+//! it combined, or spilled part-way through its input (its earlier runs merge
+//! before the rest of its table; `percentile_approx` then stays only within
+//! its error, as a sketch cut in two does). Known gaps, not covered here: the two-phase
+//! partial aggregate (it flushes or bypasses by memory), and a final phase
+//! over an exchange (fetch order).
 #![cfg(not(loom))]
 #![expect(
     clippy::disallowed_methods,
@@ -55,16 +57,19 @@ enum Mode {
 const SPREAD_KEYS: i64 = 4;
 const SPREAD_ROWS: i64 = 6_000;
 
-/// Partition `p`'s rows for `mode`: keys `0..KEYS`, then the order column
-/// counting from `p * 10_000` (or the zero of [`Mode::Zeros`]).
+/// Partition `p`'s rows for `mode`: keys `0..KEYS` twice (so a split of the
+/// input puts every group on both sides), then the order column counting
+/// from `p * 10_000` (or the zero of [`Mode::Zeros`]).
 fn input(mode: Mode, p: u32) -> Batch {
     let cols: Vec<ArrayRef> = match mode {
-        Mode::Picks | Mode::By => return batch(false, i64::from(p) * 10_000, 0..KEYS),
+        Mode::Picks | Mode::By => {
+            return batch(false, i64::from(p) * 10_000, (0..KEYS).chain(0..KEYS));
+        }
         Mode::Zeros => {
             let zero = if p == 0 { 0.0 } else { -0.0 };
             vec![
-                Arc::new(Int64Array::from_iter_values(0..KEYS)),
-                Arc::new(Float64Array::from_iter_values((0..KEYS).map(|_| zero))),
+                Arc::new(Int64Array::from_iter_values((0..KEYS).chain(0..KEYS))),
+                Arc::new(Float64Array::from_iter_values((0..2 * KEYS).map(|_| zero))),
             ]
         }
         Mode::Percentiles => {
@@ -96,6 +101,18 @@ fn zeros_schema() -> SchemaRef {
 /// [`input`]; the drivers in `spilled` spill their table before they
 /// combine. Returns the rows `mode` describes, sorted.
 async fn run(mode: Mode, rows: bool, order: &[u32], spilled: &[u32]) -> Vec<[i64; 3]> {
+    run_parted(mode, rows, order, spilled, &[]).await
+}
+
+/// [`run`], where the drivers in `part_way` spill after the first half of
+/// their input and fold the second half into a fresh table.
+async fn run_parted(
+    mode: Mode,
+    rows: bool,
+    order: &[u32],
+    spilled: &[u32],
+    part_way: &[u32],
+) -> Vec<[i64; 3]> {
     let dir = tempfile::Builder::new()
         .prefix("krishiv-merge-order-")
         .tempdir()
@@ -169,10 +186,25 @@ async fn run(mode: Mode, rows: bool, order: &[u32], spilled: &[u32]) -> Vec<[i64
         let d = task().with_partition(p);
         let mut l = Sink::local_state(&*agg, &d, &g).unwrap();
         let b = input(mode, p);
-        assert!(matches!(
-            agg.sink(b, &mut l, &g).unwrap(),
-            SinkStatus::NeedMoreInput
-        ));
+        let halves = if part_way.contains(&p) {
+            let d = b.data();
+            let half = d.num_rows() / 2;
+            vec![
+                Batch::new(d.slice(0, half)),
+                Batch::new(d.slice(half, d.num_rows() - half)),
+            ]
+        } else {
+            vec![b]
+        };
+        for (i, b) in halves.into_iter().enumerate() {
+            if i > 0 {
+                assert!(agg.spill(&mut l, 0, &d).await.unwrap() > 0, "partition {p}");
+            }
+            assert!(matches!(
+                agg.sink(b, &mut l, &g).unwrap(),
+                SinkStatus::NeedMoreInput
+            ));
+        }
         if spilled.contains(&p) {
             assert!(agg.spill(&mut l, 0, &d).await.unwrap() > 0, "partition {p}");
         }
@@ -207,7 +239,10 @@ async fn run(mode: Mode, rows: bool, order: &[u32], spilled: &[u32]) -> Vec<[i64
 }
 
 /// Every combine order, spilled or not, in either table layout gives
-/// `reference`'s rows (`mode` as [`run`]).
+/// `reference`'s rows (`mode` as [`run`]); so do drivers that spill
+/// part-way, except under [`Mode::Percentiles`], whose answer there need only
+/// stay within the summary's error (see
+/// [`percentile_approx_does_not_depend_on_memory`]).
 async fn same_in_every_run(mode: Mode, reference: &[[i64; 3]]) {
     for rows in [true, false] {
         for order in [[0, 1, 2], [2, 1, 0], [1, 2, 0]] {
@@ -216,6 +251,22 @@ async fn same_in_every_run(mode: Mode, reference: &[[i64; 3]]) {
                 assert!(
                     got == reference,
                     "row layout {rows}, combine order {order:?}, spilled {spilled:?}: {:?}",
+                    &got[..2]
+                );
+            }
+            // Drivers 0 and 2 (whose order `first` and `last` see) spill
+            // part-way: with the rest of their table in memory, spilled
+            // whole again, or next to a driver that spills whole.
+            for (spilled, part_way) in [(&[][..], &[0, 2][..]), (&[2], &[2]), (&[0, 1], &[0, 1])] {
+                let got = run_parted(mode, rows, &order, spilled, part_way).await;
+                if matches!(mode, Mode::Percentiles) {
+                    assert_percentiles_within_error(&got);
+                    continue;
+                }
+                assert!(
+                    got == reference,
+                    "row layout {rows}, combine order {order:?}, spilled {spilled:?}, \
+                     part-way {part_way:?}: {:?}",
                     &got[..2]
                 );
             }
@@ -228,7 +279,7 @@ async fn same_in_every_run(mode: Mode, reference: &[[i64; 3]]) {
 #[tokio::test]
 async fn first_and_last_follow_partition_order_spilled_or_not() {
     let reference = run(Mode::Picks, true, &[0, 1, 2], &[0, 1, 2]).await;
-    let want: Vec<[i64; 3]> = (0..KEYS).map(|k| [k, k, 20_000 + k]).collect();
+    let want: Vec<[i64; 3]> = (0..KEYS).map(|k| [k, k, 20_000 + KEYS + k]).collect();
     assert_eq!(reference, want);
     same_in_every_run(Mode::Picks, &reference).await;
 }
@@ -238,7 +289,8 @@ async fn first_and_last_follow_partition_order_spilled_or_not() {
 #[tokio::test]
 async fn max_by_and_min_by_ties_do_not_depend_on_memory() {
     let reference = run(Mode::By, true, &[0, 1, 2], &[0, 1, 2]).await;
-    let want: Vec<[i64; 3]> = (0..KEYS).map(|k| [k, 20_000 + k, 20_000 + k]).collect();
+    let last = |k| 20_000 + KEYS + k;
+    let want: Vec<[i64; 3]> = (0..KEYS).map(|k| [k, last(k), last(k)]).collect();
     assert_eq!(reference, want);
     same_in_every_run(Mode::By, &reference).await;
 }
@@ -283,15 +335,26 @@ fn only_float_extrema_observe_merge_order() {
 
 /// `percentile_approx`'s Greenwald-Khanna merge is not symmetric (the
 /// answer moves within its error with the merge order): its states merge
-/// in partition order, as the disk phase merges them, so spilling does not
-/// change the answer.
+/// in partition order, as the disk phase merges them, so spilling a driver's
+/// whole table does not change the answer. A driver that spills part-way
+/// splits its input into two summaries, which merged differ from the one
+/// summary of the whole input: that answer moves within the error too, as
+/// any sketch's does with where its input was cut (a known gap, no merge
+/// order closes it).
 #[tokio::test]
 async fn percentile_approx_does_not_depend_on_memory() {
     let reference = run(Mode::Percentiles, true, &[0, 1, 2], &[0, 1, 2]).await;
     assert_eq!(reference.len(), usize::try_from(SPREAD_KEYS).unwrap());
-    // Within the summary's error of the exact rank (relative error 1 /
-    // accuracy), so an answer wrong alike in every run fails too.
-    for row in &reference {
+    assert_percentiles_within_error(&reference);
+    same_in_every_run(Mode::Percentiles, &reference).await;
+}
+
+/// Each row of a [`Mode::Percentiles`] run lies within the summary's error
+/// of the exact rank (relative error 1 / accuracy), so an answer wrong alike
+/// in every run fails too.
+fn assert_percentiles_within_error(got: &[[i64; 3]]) {
+    assert_eq!(got.len(), usize::try_from(SPREAD_KEYS).unwrap());
+    for row in got {
         let mut values: Vec<f64> = (0..3)
             .flat_map(|p| {
                 let b = input(Mode::Percentiles, p);
@@ -317,5 +380,4 @@ async fn percentile_approx_does_not_depend_on_memory() {
             );
         }
     }
-    same_in_every_run(Mode::Percentiles, &reference).await;
 }
