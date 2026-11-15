@@ -238,17 +238,39 @@ pub(crate) struct HistoryJob {
     pub(crate) trace: Option<serde_json::Value>,
 }
 
+impl crate::session::QueryEnv {
+    /// The persisted-history job for the query whose `system.queries` row is `row_id`, when the runtime keeps a history.
+    pub(crate) fn history_job(
+        &self,
+        session: &crate::session::Session,
+        row_id: &str,
+        plan: &krishiv_exec::planner::PhysicalPlan,
+        detailed: bool,
+    ) -> Option<HistoryJob> {
+        session.state.runtime.profile_history.as_ref()?;
+        Some(HistoryJob::of(
+            session,
+            row_id,
+            plan,
+            self.text.as_deref(),
+            detailed,
+            self.history_hold.clone(),
+        ))
+    }
+}
+
 impl HistoryJob {
     /// The job for the query whose `system.queries` row is `row_id`.
     pub(crate) fn of(
-        state: &SessionState,
+        session: &crate::session::Session,
         row_id: &str,
         plan: &krishiv_exec::planner::PhysicalPlan,
         sql: Option<&str>,
         detailed: bool,
         hold: Option<Arc<crate::profile_history::HistoryHold>>,
     ) -> Self {
-        let who = crate::telemetry::Who::of(state);
+        let who = crate::telemetry::Who::of(session);
+        let state = &session.state;
         let mut trace = serde_json::json!({ "session_id": who.session_id });
         if let (Some(t), Some(o)) = (&who.trace_id, trace.as_object_mut()) {
             o.insert("trace_id".to_owned(), t.clone().into());

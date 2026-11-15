@@ -1346,8 +1346,7 @@ impl Session {
             files: Some(files),
             variables: Arc::clone(&variables),
         };
-        // The epoch the query's catalog reads at: entries it loads are at
-        // least as new.
+        // The epoch the query's catalog reads at: entries it loads are at least as new.
         let catalog_epoch = krishiv_plan::analyzer::Catalog::epoch(&*catalog);
         QueryEnv {
             io,
@@ -1868,16 +1867,7 @@ impl Session {
                 log_id,
                 _permit: permit,
                 _operation: self.operation.clone(),
-                history: self.state.runtime.profile_history.as_ref().map(|_| {
-                    crate::query_fold::HistoryJob::of(
-                        &self.state,
-                        &row_id,
-                        physical,
-                        env.text.as_deref(),
-                        detailed,
-                        env.history_hold.clone(),
-                    )
-                }),
+                history: env.history_job(self, &row_id, physical, detailed),
             }),
             None,
         );
