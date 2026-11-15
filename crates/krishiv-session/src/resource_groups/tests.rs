@@ -119,7 +119,7 @@ const SELECTORS: &str = r#"{
 }"#;
 
 fn routed(rg: &ResourceGroups, r: &QueryRequest) -> String {
-    super::select::select(&rg.config, r).to_owned()
+    super::select::select(&rg.current().config, r).to_owned()
 }
 
 #[test]
@@ -588,4 +588,118 @@ fn rows_carry_the_subtree_counters_and_reserved_memory_to_every_ancestor() {
     );
     drop(permit);
     assert_eq!(rg.rows()[0].memory_reserved_bytes, 0);
+}
+
+// ---- reload (T066: the tree swap that keeps counters by group id) ----------------------------
+
+fn two_leaves(a_hard: usize) -> String {
+    format!(
+        r#"{{"rootGroups": [{{"name": "root", "hardConcurrencyLimit": 10, "maxQueued": 10,
+            "subGroups": [{{"name": "a", "hardConcurrencyLimit": {a_hard}, "maxQueued": 5}},
+                          {{"name": "b", "hardConcurrencyLimit": 2, "maxQueued": 5}}]}}],
+          "selectors": [{{"user": "bob", "group": "root.b"}}],
+          "defaultGroup": "root.a"}}"#
+    )
+}
+
+fn run(rg: &ResourceGroups, user: &str) -> Permit {
+    let req = request(user);
+    let mut f = rg.admit(&req);
+    poll(&mut f)
+        .unwrap_or_else(|| panic!("{user} queued"))
+        .unwrap_or_else(|e| panic!("{e}"))
+}
+
+#[test]
+fn a_reload_keeps_the_counters_of_the_groups_it_keeps_and_takes_their_new_limits() {
+    let rg = ResourceGroups::from_json(&two_leaves(1), MEM).unwrap_or_else(|e| panic!("{e}"));
+    let first = run(&rg, "u");
+    let req = request("u");
+    let mut waiting = rg.admit(&req);
+    assert!(poll(&mut waiting).is_none());
+    assert_eq!(rg.counts("root.a"), Some((1, 1)));
+    // Raising the limit starts the waiting query: the running count carried over.
+    rg.reload_json(&two_leaves(3))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let second = poll(&mut waiting).unwrap_or_else(|| panic!("still queued"));
+    assert!(second.is_ok());
+    assert_eq!(rg.counts("root.a"), Some((2, 0)));
+    drop((first, second));
+    assert_eq!(rg.counts("root.a"), Some((0, 0)));
+}
+
+#[test]
+fn a_removed_group_takes_nothing_new_and_goes_with_its_last_query() {
+    let rg = ResourceGroups::from_json(&two_leaves(2), MEM).unwrap_or_else(|e| panic!("{e}"));
+    let held = run(&rg, "bob");
+    assert_eq!(rg.counts("root.b"), Some((1, 0)));
+    let only_a = r#"{"rootGroups": [{"name": "root", "hardConcurrencyLimit": 10, "maxQueued": 10,
+        "subGroups": [{"name": "a", "hardConcurrencyLimit": 2, "maxQueued": 5}]}],
+        "defaultGroup": "root.a"}"#;
+    rg.reload_json(only_a).unwrap_or_else(|e| panic!("{e}"));
+    let states: Vec<_> = rg
+        .rows()
+        .iter()
+        .map(|r| (r.group_id.clone(), r.state))
+        .collect();
+    assert_eq!(
+        states,
+        [
+            ("root".to_owned(), "active"),
+            ("root.a".to_owned(), "active"),
+            ("root.b".to_owned(), "removed"),
+        ]
+    );
+    // The selector for bob is gone: his next query goes to the default group.
+    assert_eq!(routed(&rg, &request("bob")), "root.a");
+    // The running query still counts in the parent, and ends cleanly.
+    assert_eq!(rg.counts("root"), Some((1, 0)));
+    drop(held);
+    assert_eq!(rg.counts("root.b"), None, "freed with its last query");
+    assert_eq!(rg.rows().len(), 2);
+    // A new group reuses the freed place.
+    rg.reload_json(&two_leaves(2))
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(rg.counts("root.b"), Some((0, 0)));
+    assert_eq!(rg.rows().len(), 3);
+}
+
+#[test]
+fn an_invalid_document_leaves_the_tree_and_its_etag_as_they_were() {
+    let rg = ResourceGroups::from_json(&two_leaves(2), MEM).unwrap_or_else(|e| panic!("{e}"));
+    let (etag, document) = (rg.etag(), rg.document());
+    let held = run(&rg, "u");
+    let err = rg.reload_json(r#"{"rootGroups": []}"#).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::KrishivResourceGroupConfigInvalid
+    );
+    assert_eq!((rg.etag(), rg.document()), (etag.clone(), document));
+    assert_eq!(rg.counts("root.a"), Some((1, 0)));
+    // A different document has another etag; the same document spelled differently has the same.
+    let respelled = two_leaves(2).replace(" ", "  ");
+    rg.reload_json(&respelled).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(rg.etag(), etag);
+    rg.reload_json(&two_leaves(3))
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_ne!(rg.etag(), etag);
+    drop(held);
+}
+
+#[test]
+fn a_queued_query_in_a_removed_group_still_runs() {
+    let rg = ResourceGroups::from_json(&two_leaves(2), MEM).unwrap_or_else(|e| panic!("{e}"));
+    let (b1, b2) = (run(&rg, "bob"), run(&rg, "bob"));
+    let req = request("bob");
+    let mut waiting = rg.admit(&req);
+    assert!(poll(&mut waiting).is_none());
+    let only_a = r#"{"rootGroups": [{"name": "root", "hardConcurrencyLimit": 10, "maxQueued": 10,
+        "subGroups": [{"name": "a", "hardConcurrencyLimit": 2, "maxQueued": 5}]}],
+        "defaultGroup": "root.a"}"#;
+    rg.reload_json(only_a).unwrap_or_else(|e| panic!("{e}"));
+    drop(b1);
+    let third = poll(&mut waiting).unwrap_or_else(|| panic!("the waiter never started"));
+    assert!(third.is_ok());
+    drop((b2, third));
+    assert_eq!(rg.counts("root.b"), None);
 }
