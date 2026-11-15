@@ -235,17 +235,25 @@ impl std::fmt::Debug for CatalogDecl {
     }
 }
 
-/// `uri` as errors, warnings and `Debug` show it (T067 review 58a1 nit 1): the userinfo removed,
-/// to the last `@` before the query or fragment (so a password holding `/` or `@` goes whole; an
-/// `@` in the path over-removes, never leaks), then any credential parameter redacted.
-fn shown_uri(uri: &str) -> String {
+/// `uri` as errors, warnings and `Debug` show it (T067 review 58a1 nit 1, re-check 3 n2): the
+/// userinfo replaced by the redaction marker, then any credential parameter redacted. The
+/// userinfo runs to the last `@` after `//`, wherever it is: a password may hold unencoded `/`,
+/// `?`, `#`, `@` or `:`, so no delimiter is trusted to end it (an `@` in the path or query
+/// over-redacts, never leaks).
+pub(crate) fn shown_uri(uri: &str) -> String {
     let (scheme, rest) = match uri.find("://") {
         Some(i) => uri.split_at(i + 3),
         None => ("", uri),
     };
-    let end = rest.find(['?', '#']).unwrap_or(rest.len());
-    let host_on = rest[..end].rfind('@').map_or(rest, |at| &rest[at + 1..]);
-    krishiv_common::secret::OptionValue::from_user("uri", format!("{scheme}{host_on}")).to_string()
+    let shown = match rest.rfind('@') {
+        Some(at) => format!(
+            "{scheme}{}{}",
+            krishiv_common::secret::REDACTED,
+            &rest[at..]
+        ),
+        None => uri.to_owned(),
+    };
+    krishiv_common::secret::OptionValue::from_user("uri", shown).to_string()
 }
 
 impl CatalogDecl {

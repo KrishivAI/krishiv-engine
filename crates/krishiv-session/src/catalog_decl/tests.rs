@@ -485,3 +485,32 @@ fn a_uri_userinfo_never_reaches_an_error_or_debug() {
         "{shown}"
     );
 }
+
+/// Review re-check 3 n2: a password holding an unencoded `?`, `#`, `@`, `:` or `/` is removed
+/// whole.
+#[test]
+fn a_userinfo_with_delimiters_is_removed_whole() {
+    const CANARY: &str = "Canary-Pw-7f3e";
+    for uri in [
+        "http://svc:x?Canary-Pw-7f3e@catalog.internal/x",
+        "http://svc:x#Canary-Pw-7f3e@catalog.internal/x",
+        "http://svc:x@Canary-Pw-7f3e@catalog.internal/x",
+        "http://svc:x:Canary-Pw-7f3e@catalog.internal/x",
+        "http://svc:x/Canary-Pw-7f3e@catalog.internal/x",
+        "http://svc:x/y?Canary-Pw-7f3e@catalog.internal/x",
+        "http://svc:x?y/Canary-Pw-7f3e#z@catalog.internal/x",
+        "http://svc:Canary-Pw-7f3e@catalog.internal/x?q=a@b",
+    ] {
+        let mut pairs = rest_with(&[]);
+        pairs.retain(|(k, _)| !k.ends_with(".uri"));
+        pairs.push(("krishiv.catalog.lake.uri", uri));
+        let e = err(&pairs, DeclMode::Server);
+        assert!(!e.contains(CANARY) && !e.contains("svc"), "{uri}: {e}");
+        assert!(e.contains("allowInsecure"), "{uri}: {e}");
+    }
+    assert_eq!(
+        shown_uri("https://u:p?ss@host/x"),
+        format!("https://{}@host/x", krishiv_common::secret::REDACTED)
+    );
+    assert_eq!(shown_uri("https://host/x"), "https://host/x");
+}

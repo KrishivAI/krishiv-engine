@@ -331,10 +331,13 @@ impl Session {
                     })?;
                     for (key, privilege) in &rows {
                         for grantee in grantees {
+                            // One row per grantor (review re-check 3 n1): another grantor's row
+                            // of the same grant is not this caller's to change or revoke.
                             let row = s.0.grants.iter_mut().find(|g| {
                                 g.grantee == *grantee
                                     && g.privilege == *privilege
                                     && g.object == *key
+                                    && g.granted_by == me
                             });
                             match row {
                                 Some(g) => g.with_grant_option |= *with_grant_option,

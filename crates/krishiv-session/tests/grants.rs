@@ -502,3 +502,27 @@ fn a_revoke_reaches_only_the_callers_own_grants_unless_owner_or_admin() {
     ok(&ana, "REVOKE SELECT ON mine FROM user:bob");
     denied(&bob, "SELECT * FROM mine");
 }
+
+#[test]
+fn each_grantor_keeps_its_own_row() {
+    let w = World::new();
+    table(&w, "t");
+    let (root, ana, carl) = (w.admin(), w.user("ana"), w.user("carl"));
+    ok(&root, "GRANT MODIFY ON t TO user:ana WITH GRANT OPTION");
+    // review re-check 3 n1: the same grant from ana, then from an admin, is two rows.
+    ok(&ana, "GRANT MODIFY ON t TO user:carl");
+    ok(&root, "GRANT MODIFY ON t TO user:carl");
+    let shown = grants_on(&w, "t");
+    assert_eq!(shown.matches("\"user:carl\"").count(), 2, "{shown}");
+    // ana's revoke takes only ana's row: the admin's grant stays.
+    ok(&ana, "REVOKE MODIFY ON t FROM user:carl");
+    ok(&carl, "INSERT INTO t VALUES (5, 6)");
+    let shown = grants_on(&w, "t");
+    assert_eq!(shown.matches("\"user:carl\"").count(), 1, "{shown}");
+    // Granting again by the same grantor keeps one row (the grant option is added).
+    ok(&ana, "GRANT MODIFY ON t TO user:carl");
+    ok(&ana, "GRANT MODIFY ON t TO user:carl");
+    assert_eq!(grants_on(&w, "t").matches("\"user:carl\"").count(), 2);
+    ok(&root, "REVOKE MODIFY ON t FROM user:carl");
+    denied(&carl, "INSERT INTO t VALUES (7, 8)");
+}
