@@ -1560,3 +1560,30 @@ async fn a_command_result_over_the_batch_cap_is_refused() {
 fn local_caller() -> Authenticated {
     Authenticated::new(Principal::local_user(), None, Method::None)
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_compressed_sql_command_runs_like_a_plain_one() {
+    let run = start().await;
+    let Some(OpType::Command(command)) =
+        sql_command("CREATE TEMPORARY VIEW zc AS SELECT 7 AS n").op_type
+    else {
+        panic!("not a command");
+    };
+    let data = zstd::bulk::compress(&command.encode_to_vec(), 3).expect("zstd");
+    let plan = pb::Plan {
+        op_type: Some(OpType::CompressedOperation(Box::new(
+            pb::plan::CompressedOperation {
+                data,
+                op_type: pb::plan::compressed_operation::OpType::Command as i32,
+                compression_codec: pb::CompressionCodec::Zstd as i32,
+            },
+        ))),
+    };
+    let r = collect(&run.channel, request(plan)).await.expect("runs");
+    // The command ran, and its answer is the one `sql_command_result`.
+    let relation = sql_result(&r);
+    assert!(
+        matches!(relation.rel_type, Some(RelType::LocalRelation(_))),
+        "{relation:?}"
+    );
+}
