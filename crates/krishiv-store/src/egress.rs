@@ -331,7 +331,9 @@ impl ProviderEndpoints {
 }
 
 /// The host of `endpoint`: a URL (`http://host:port/path`) or a bare `host[:port]`. Lowercased,
-/// IPv6 brackets removed.
+/// IPv6 brackets removed, and an address literal in its canonical form whatever form it was
+/// written in (`2130706433`, `0x7f.0.0.1`, `127.1` and `127.0.0.1.` are all `127.0.0.1`), as the
+/// URL parser reqwest dials through reads it.
 #[must_use]
 pub fn host_of(endpoint: &str) -> Option<String> {
     let rest = endpoint
@@ -347,15 +349,31 @@ pub fn host_of(endpoint: &str) -> Option<String> {
     } else {
         authority.split(':').next()?
     };
-    (!host.is_empty()).then(|| host.to_ascii_lowercase())
+    if host.is_empty() {
+        return None;
+    }
+    Some(literal_ip(host).map_or_else(|| host.to_ascii_lowercase(), |ip| ip.to_string()))
 }
 
-/// `host` as an IP address when it is a literal (brackets and an IPv6 zone removed).
+/// `host` as an IP address when it is a literal (brackets and an IPv6 zone removed). An IPv4
+/// host is read by the WHATWG URL host parser (the `url` crate reqwest builds its requests
+/// with), so every form a request would dial as an address is one here: decimal, octal and hex
+/// parts, fewer than four parts, a trailing dot (review B1). A host that is no address is a name.
 #[must_use]
 pub fn literal_ip(host: &str) -> Option<IpAddr> {
     let host = host.trim_start_matches('[').trim_end_matches(']');
     let host = host.split('%').next().unwrap_or(host);
-    host.parse().ok()
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        return Some(ip);
+    }
+    if host.contains(':') {
+        return None;
+    }
+    match url::Host::parse(host) {
+        Ok(url::Host::Ipv4(v4)) => Some(IpAddr::V4(v4)),
+        Ok(url::Host::Ipv6(v6)) => Some(IpAddr::V6(v6)),
+        _ => None,
+    }
 }
 
 /// Whether the egress rule applies (`krishiv.io.egress.privateAddresses`).

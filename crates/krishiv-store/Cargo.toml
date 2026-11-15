@@ -22,6 +22,8 @@ http = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true, features = ["http2", "rustls"] }
 humantime = { workspace = true, optional = true }
 object_store.workspace = true
+# The WHATWG host parser of egress literal checks (already in the tree through object_store).
+url.workspace = true
 async-trait.workspace = true
 bytes.workspace = true
 futures = { workspace = true, features = ["alloc", "std"] }

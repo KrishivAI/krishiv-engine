@@ -387,3 +387,34 @@ async fn env_proxy_ignored_by_policy_clients() {
     assert!(stdout.contains("1 passed"), "{stdout}");
     assert_eq!(seen.lock().unwrap().len(), 1, "the request went direct");
 }
+
+/// Review B1: a request whose host is a non-canonical IPv4 literal is checked as that address
+/// (reqwest dials such a host without the resolver).
+#[tokio::test]
+async fn noncanonical_literal_request_refused() {
+    let (port, seen) = server(ok_response()).await;
+    let client = connector(&[])
+        .connect(&ClientOptions::new().with_allow_http(true))
+        .unwrap();
+    for host in [
+        "2130706433",
+        "127.1",
+        "0x7f.0.0.1",
+        "0177.0.0.1",
+        "127.0.0.1.",
+    ] {
+        let request = http::Request::builder()
+            .uri(format!("http://{host}:{port}/x"))
+            .body(object_store::client::HttpRequestBody::empty())
+            .unwrap();
+        let err = client.execute(request).await.unwrap_err();
+        assert!(
+            error_chain(&err).contains("private address"),
+            "{host}: {err}"
+        );
+    }
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "nothing reached the server"
+    );
+}

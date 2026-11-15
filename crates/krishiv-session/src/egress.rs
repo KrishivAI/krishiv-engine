@@ -170,6 +170,20 @@ mod tests {
         let err = store_scope(&policy, &deny).unwrap_err().to_string();
         assert!(err.contains("fs.s3a.endpoint"), "{err}");
         assert!(!err.contains("169.254"), "{err}");
+        // Review B1: the metadata address written in decimal, hex or short form is refused too.
+        for endpoint in [
+            "http://2852039166:80",
+            "http://0xa9fea9fe",
+            "http://169.254.43518",
+            "http://169.254.169.254.",
+        ] {
+            let c = config(&[
+                ("krishiv.io.egress.privateAddresses", "deny"),
+                ("fs.s3a.endpoint", endpoint),
+            ]);
+            let policy = egress_policy(&c, none).unwrap();
+            assert!(store_scope(&policy, &c).is_err(), "{endpoint}");
+        }
         // An on-premises MinIO at a private literal is exempt by name.
         let minio = config(&[
             ("krishiv.io.egress.privateAddresses", "deny"),

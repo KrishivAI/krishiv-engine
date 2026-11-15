@@ -2872,6 +2872,7 @@ dependencies = [
  "object_store",
  "reqwest",
  "tokio",
+ "url",
 ]
 
 [[package]]

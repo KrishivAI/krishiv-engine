@@ -275,3 +275,41 @@ fn redirect_hops_get_no_provider_exemption() {
     assert!(scope.check_redirect("8.8.8.8").is_ok());
     assert!(scope.check_redirect("cdn.example.com").is_ok());
 }
+
+/// Review B1: every IPv4 form the WHATWG URL parser (and so reqwest) reads as an address is a
+/// literal here, so no form slips past the literal checks as a "name".
+#[test]
+fn noncanonical_ipv4_literals_recognised() {
+    let scope = deny(&[], &[]).scope::<_, &str>([]);
+    for (form, canonical) in [
+        ("2130706433", "127.0.0.1"),
+        ("2852039166", "169.254.169.254"),
+        ("0x7f.0.0.1", "127.0.0.1"),
+        ("0177.0.0.1", "127.0.0.1"),
+        ("127.1", "127.0.0.1"),
+        ("10.1", "10.0.0.1"),
+        ("127.0.0.1.", "127.0.0.1"),
+        ("0xa9.0376.43518", "169.254.169.254"),
+        ("0XA9FEA9FE", "169.254.169.254"),
+    ] {
+        assert_eq!(literal_ip(form), Some(ip(canonical)), "{form}");
+        let url = format!("http://{form}:80/latest");
+        assert_eq!(host_of(&url).as_deref(), Some(canonical), "{url}");
+        assert_eq!(
+            scope.check_endpoint(&url),
+            Err(EgressRefusal::PrivateAddress),
+            "{url}"
+        );
+        assert!(
+            scope.permits_request_literal(form).is_err() || canonical == "169.254.169.254",
+            "{form}"
+        );
+        assert!(scope.check_redirect(form).is_err(), "{form}");
+    }
+    // An exemption declared in one form covers the others: they are one address.
+    let minio = deny(&[], &[]).scope(["167772165"]);
+    assert!(minio.check_endpoint("http://10.0.0.5:9000").is_ok());
+    // Names stay names.
+    assert_eq!(literal_ip("s3.amazonaws.com"), None);
+    assert_eq!(literal_ip("1x.example"), None);
+}
