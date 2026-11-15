@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The read privilege of one analysis (ADR 0046 §3b, P3 PR-14c): an analysis that runs the plan asks
-//! `Select` on every table, view and path it reads; a metadata analysis (`AnalysisMode::Metadata`:
-//! schema, tree string, semantic hash) asks `Browse`. Other privileges (`Usage` on a secret scope,
-//! `Manage` for a server-scoped store option) are asked as before; a read by path asks `Select` in
-//! both modes (inference reads file contents: CSV header names, JSON keys); and nothing resolved in one mode
-//! is reused by the other (the context fingerprint differs, so the prefix cache misses).
+//! `Select` on every catalog table and view it reads; a metadata analysis (`AnalysisMode::Metadata`:
+//! schema, tree string, semantic hash) asks `Browse` on them. A read by path asks `Select` in both
+//! modes (inference reads file contents: CSV header names, JSON keys). Other privileges (`Usage` on
+//! a secret scope, `Manage` for a server-scoped store option) are asked as before. Nothing resolved
+//! in one mode is reused by the other: the context fingerprint carries the mode, so the prefix cache
+//! misses even where both modes record the same securables (a plan that reads no securable).
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -13,7 +14,7 @@ use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_common::secret::OptionValue;
 use krishiv_types::DataType;
 
-use super::dsl::c;
+use super::dsl::{c, int};
 use crate::analyzer::testing::{block_on, context};
 use crate::analyzer::{
     AccessDecision, AccessPolicy, AllowAll, AnalysisContext, AnalysisError, AnalysisMode,
@@ -22,6 +23,7 @@ use crate::analyzer::{
     TableColumn, fingerprint,
 };
 use crate::{LogicalPlan, Plan, PlanNode, ReadSource};
+use crate::{Origin, PlanId};
 
 /// A viewer: `Browse` on everything, every other privilege denied (but `Select` on paths when
 /// `paths`). Records every question.
@@ -229,6 +231,9 @@ fn the_mode_is_part_of_the_context_fingerprint() {
     assert_ne!(a.digest(), b.digest());
 }
 
+/// The modes record different securables here (`(t, Browse)` against `(t, Select)`), so the slot's
+/// securable comparison misses on its own, and Bind asks the policy on every call anyway: this
+/// checks the property, not the fingerprint (`the_prefix_cache_keys_on_the_mode_alone` does that).
 #[test]
 fn the_prefix_cache_never_serves_another_mode() {
     let viewer = Arc::new(Viewer::default());
@@ -265,4 +270,42 @@ fn the_prefix_cache_never_serves_another_mode() {
             .iter()
             .all(|s| s.privilege == Privilege::Select)
     );
+}
+
+#[test]
+fn the_prefix_cache_keys_on_the_mode_alone() {
+    // A plan that reads no securable records the same (empty) securable list in both modes, under
+    // one policy that allows everything: only the mode in the fingerprint keeps the slots apart.
+    let one_row =
+        || LogicalPlan::new(PlanNode::OneRowRelation).with_origin(Origin::plan(PlanId(0)));
+    let grown = |steps: i64| {
+        let mut plan = one_row();
+        for i in 1..=steps {
+            plan = LogicalPlan::new(PlanNode::WithColumns {
+                input: Arc::new(plan),
+                columns: vec![(format!("c{i}"), Arc::new(int(1)))],
+            })
+            .with_origin(Origin::plan(PlanId(i)));
+        }
+        plan
+    };
+    let allowed = |mode| {
+        let mut c = ctx(&Arc::new(Viewer::default()), mode);
+        c.policy = Arc::new(AllowAll);
+        c
+    };
+    let (metadata, execute) = (
+        allowed(AnalysisMode::Metadata),
+        allowed(AnalysisMode::Execute),
+    );
+    let cache = CachingAnalyzer::new();
+    let first = run(&cache, grown(1), &metadata).unwrap();
+    let second = run(&cache, grown(2), &metadata).unwrap();
+    assert_eq!(cache.warm_starts(), 1, "the same mode starts warm");
+    assert!(first.securables.is_empty() && second.securables.is_empty());
+    run(&cache, grown(3), &execute).unwrap();
+    assert_eq!(cache.warm_starts(), 1, "another mode never does");
+    // And back: the execute run took the slot, so a metadata run starts cold too.
+    run(&cache, grown(4), &metadata).unwrap();
+    assert_eq!(cache.warm_starts(), 1, "nor the reverse");
 }

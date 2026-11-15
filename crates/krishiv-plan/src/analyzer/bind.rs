@@ -702,9 +702,9 @@ fn fold(ident: &TableIdent, case_sensitive: bool) -> TableIdent {
 
 /// Asks the policy about the read of `securable` (a catalog table or view) once per query, as the
 /// analysis' [`AnalysisMode::read_privilege`](super::AnalysisMode::read_privilege) (`Select`, or
-/// `Browse` for a metadata analysis; paths always ask `Select`, see [`bind_files`]); a denial or any policy error fails closed, without the
-/// policy's reason or error text, and row filters and column masks on a `Select` are rejected
-/// until they can be applied.
+/// `Browse` for a metadata analysis; paths always ask `Select`, see [`bind_files`]); a denial or
+/// any policy error fails closed, without the policy's reason or error text, and row filters and
+/// column masks on a `Select` are rejected until they can be applied.
 async fn authorize(
     ctx: &AnalysisContext,
     b: &mut Bindings,

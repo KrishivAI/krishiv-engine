@@ -5,7 +5,9 @@
 //! temporary view, a permanent view and a permanent table, and never reads rows: no metadata
 //! analysis is reused by a later action of the same frame or session. A read by path keeps
 //! `Select` even for metadata (inference reads file contents: CSV `header=true` names are the
-//! file's first line), and `PathPrefixPolicy` refuses paths outside its roots for every role.
+//! file's first line), and `PathPrefixPolicy` refuses paths outside its roots for every role; a
+//! permanent view over a path needs `Select` on the path. Reads inside a CTE, a subquery or a SQL
+//! function body ask `Browse` too, and nothing of the plan runs.
 #![cfg(test)]
 
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
@@ -289,16 +291,119 @@ fn an_operator_run_after_a_metadata_analysis_is_checked_with_select() {
             "{name}: the run asked {asked:?}"
         );
     }
-    // A viewer's metadata analysis of the same text, then a run by the operator: asked again.
-    policy.become_(VIEWER);
-    block_on(s.table("t").select(["a"]).schema_for_metadata()).unwrap();
-    policy.become_(OPERATOR);
-    policy.take();
-    block_on(s.table("t").select(["a"]).collect()).unwrap();
-    assert!(
-        policy
-            .take()
-            .iter()
-            .any(|(s, p)| s.contains("`t`") && *p == Privilege::Select)
+}
+
+#[test]
+fn a_run_after_a_metadata_analysis_of_the_same_plan_asks_select() {
+    // One policy version throughout (no role change): the same plan text, built again, first for
+    // metadata and then run. The guard is that Bind asks the policy on every analysis (and that the
+    // prefix cache keys on the mode, tested in krishiv-plan's `metadata_mode`), not a version bump.
+    let (policy, s, _fixture) = setup(OPERATOR);
+    let version = policy.version();
+    for _ in 0..2 {
+        policy.take();
+        block_on(s.table("t").select(["a"]).schema_for_metadata()).unwrap();
+        let asked = policy.take();
+        assert!(
+            asked
+                .iter()
+                .any(|(s, p)| s.contains("`t`") && *p == Privilege::Browse),
+            "{asked:?}"
+        );
+        assert!(
+            asked.iter().all(|(_, p)| *p == Privilege::Browse),
+            "{asked:?}"
+        );
+        block_on(s.table("t").select(["a"]).collect()).unwrap();
+        let asked = policy.take();
+        assert!(
+            asked
+                .iter()
+                .any(|(s, p)| s.contains("`t`") && *p == Privilege::Select),
+            "{asked:?}"
+        );
+        assert!(
+            asked.iter().all(|(_, p)| *p == Privilege::Select),
+            "{asked:?}"
+        );
+    }
+    assert_eq!(policy.version(), version);
+}
+
+#[test]
+fn a_permanent_view_over_a_path_needs_select_on_the_path() {
+    // The key case for views over paths: `Browse` on the view does not show a viewer what inference
+    // reads from the files (the body's path read keeps `Select`).
+    for (role, expected) in [(VIEWER, DENIED), (OPERATOR, "OK")] {
+        let (policy, s, f) = setup(role);
+        let admin = Session::builder()
+            .runtime(Arc::clone(s.runtime()))
+            .access_policy(Arc::new(AllowAll))
+            .build()
+            .unwrap();
+        run(
+            &admin,
+            &format!("CREATE VIEW pathv AS SELECT a FROM parquet.`{}`", f.inside),
+        );
+        policy.take();
+        let r = block_on(s.table("pathv").schema_for_metadata());
+        let asked = policy.take();
+        assert!(
+            asked
+                .iter()
+                .any(|(s, p)| s.starts_with("path ") && *p == Privilege::Select),
+            "{role}: {asked:?}"
+        );
+        assert_eq!(class(r), expected, "{role}");
+    }
+}
+
+#[test]
+fn a_cte_a_subquery_and_a_function_body_ask_browse_and_run_nothing() {
+    let (policy, s, _fixture) = setup(ADMIN);
+    // A body that reads the permanent table `p`; created while the role may.
+    run(
+        &s,
+        "CREATE TEMPORARY FUNCTION top_a() RETURNS INT RETURN (SELECT max(a) FROM p)",
     );
+    policy.become_(VIEWER);
+    // Each reads `p` only inside the CTE, the subquery or the function body; `t` is the frame.
+    // Built lazily (`Session::sql` analyzes its text at once, with `Select`). Running any of these
+    // fails: `raise_error` on every row, and `Select` is denied anyway.
+    let boom = "raise_error('executed') AS boom";
+    let t = || s.table("t");
+    let frames = [
+        (
+            "cte",
+            t().select_expr([
+                "(WITH c AS (SELECT a FROM p) SELECT max(a) FROM c) AS a",
+                boom,
+            ]),
+        ),
+        (
+            "subquery",
+            t().filter_expr("a IN (SELECT a FROM p)")
+                .and_then(|df| df.select_expr(["a", boom])),
+        ),
+        ("function body", t().select_expr(["top_a() AS a", boom])),
+    ];
+    for (text, df) in frames {
+        let df = df.unwrap_or_else(|e| panic!("{text}: {e}"));
+        policy.take();
+        let schema = block_on(df.schema_for_metadata()).unwrap_or_else(|e| panic!("{text}: {e}"));
+        assert_eq!(schema.field(0).name(), "a", "{text}");
+        let asked = policy.take();
+        assert!(
+            asked
+                .iter()
+                .any(|(s, p)| s.contains("`p`") && *p == Privilege::Browse),
+            "{text}: the read inside asks `Browse`: {asked:?}"
+        );
+        assert!(
+            asked.iter().all(|(_, p)| *p == Privilege::Browse),
+            "{text}: {asked:?}"
+        );
+        // A run of the same frame is still asked `Select`, and denied.
+        assert_eq!(class(block_on(df.collect())), DENIED, "{text}");
+    }
 }

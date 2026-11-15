@@ -2,7 +2,8 @@
 //! `AnalyzePlan` under the ADR 0046 role matrix (§3b, P3 PR-14c), end to end over a raw tonic client:
 //! a viewer (`RolePolicy`: `Browse`, no `Select`) gets the schema, tree string, flags and semantic
 //! hash of a table it may not read; `ExecutePlan` of the same plan, `input_files` and `explain` stay
-//! `PERMISSION_DENIED`. An operator gets everything.
+//! `PERMISSION_DENIED`. An operator gets everything. A read by path keeps `Select` even for
+//! `AnalyzePlan` (its schema is inferred from file contents): a viewer's schema of it is denied.
 #![expect(
     clippy::expect_used,
     reason = "integration-test helpers are outside #[test] fns"
@@ -90,6 +91,40 @@ fn table() -> pb::Plan {
             })),
         }))),
     }
+}
+
+/// `spark.read.parquet(dir)`, as a DataFrame plan.
+fn by_path(dir: &str) -> pb::Plan {
+    pb::Plan {
+        op_type: Some(PlanOp::Root(Box::new(pb::Relation {
+            common: None,
+            rel_type: Some(RelType::Read(pb::Read {
+                is_streaming: false,
+                read_type: Some(pb::read::ReadType::DataSource(pb::read::DataSource {
+                    format: Some("parquet".to_owned()),
+                    paths: vec![dir.to_owned()],
+                    ..Default::default()
+                })),
+            })),
+        }))),
+    }
+}
+
+/// A directory of parquet files of `t` (column `a`), written by an unrestricted session.
+async fn parquet_dir() -> (tempfile::TempDir, String) {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let dir = tmp.path().join("data").to_str().expect("utf-8").to_owned();
+    let s = Session::new().expect("session");
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+    )
+    .expect("batch");
+    s.register_batches("t", schema, vec![batch])
+        .expect("register");
+    s.table("t").write().parquet(&dir).await.expect("write");
+    (tmp, dir)
 }
 
 async fn analyze(run: &Running, analyze: Analyze) -> Result<AResult, tonic::Status> {
@@ -241,4 +276,45 @@ async fn an_operator_runs_what_it_analyzed() {
     )
     .await
     .expect("explain");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_read_by_path_needs_select_for_analyze_plan_too() {
+    let (_tmp, dir) = parquet_dir().await;
+    let viewer = start(Role::Viewer).await;
+    denied(&analyze(&viewer, schema_of(by_path(&dir))).await, "schema");
+    denied(
+        &analyze(
+            &viewer,
+            Analyze::InputFiles(Box::new(areq::InputFiles {
+                plan: Some(by_path(&dir)),
+            })),
+        )
+        .await,
+        "input_files",
+    );
+    let operator = start(Role::Operator).await;
+    let AResult::Schema(s) = analyze(&operator, schema_of(by_path(&dir)))
+        .await
+        .expect("schema")
+    else {
+        panic!("schema");
+    };
+    assert!(s.schema.is_some());
+    let AResult::InputFiles(f) = analyze(
+        &operator,
+        Analyze::InputFiles(Box::new(areq::InputFiles {
+            plan: Some(by_path(&dir)),
+        })),
+    )
+    .await
+    .expect("input_files") else {
+        panic!("input_files");
+    };
+    assert!(!f.files.is_empty(), "{:?}", f.files);
+    assert!(
+        f.files.iter().all(|file| file.contains("data")),
+        "{:?}",
+        f.files
+    );
 }

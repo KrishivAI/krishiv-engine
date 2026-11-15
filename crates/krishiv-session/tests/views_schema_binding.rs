@@ -349,6 +349,41 @@ fn type_evolution_keeps_the_names_and_takes_the_types() {
 }
 
 #[test]
+fn a_metadata_analysis_never_stores_the_evolved_schema() {
+    // A difference from Spark (ADR 0008), on purpose: Spark's `ViewSyncSchemaToMetaStore` stores the
+    // evolved schema in every analysis, `.schema` too. A metadata analysis (Connect `AnalyzePlan`)
+    // must not write the catalog, for any role: it shows the evolved schema, and the next ordinary
+    // query stores it.
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE TABLE t(c1 INT NOT NULL, c2 INT) USING PARQUET");
+    run(
+        &s,
+        "CREATE OR REPLACE VIEW v WITH SCHEMA TYPE EVOLUTION AS SELECT * FROM t",
+    );
+    run(&s, "DROP TABLE IF EXISTS t");
+    run(
+        &s,
+        "CREATE TABLE t(c1 STRING NOT NULL, c2 DOUBLE) USING PARQUET",
+    );
+    let shown = block_on(s.table("v").schema_for_metadata()).unwrap();
+    let shown: Vec<String> = shown
+        .fields()
+        .iter()
+        .map(|f| {
+            let t = DataType::from_arrow_field(f).unwrap();
+            format!("{}:{}", f.name(), t.catalog_string())
+        })
+        .collect();
+    assert_eq!(shown, ["c1:string", "c2:double"]);
+    // Stored: still the old types.
+    assert_eq!(columns(&s, "v"), ["c1|int|", "c2|int|"]);
+    // The next ordinary query stores them.
+    run(&s, "SELECT * FROM v");
+    assert_eq!(columns(&s, "v"), ["c1|string|", "c2|double|"]);
+}
+
+#[test]
 fn a_column_list_turns_evolution_into_type_evolution() {
     let dir = tempfile::tempdir().unwrap();
     let s = session(dir.path());

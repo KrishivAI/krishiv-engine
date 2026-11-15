@@ -1446,8 +1446,11 @@ impl Session {
         // Analysis checks every read: its denials are the reads' denials.
         let mut analyzed = crate::access::audit(self, StatementClass::Read, analyzed)?;
         // Spark's `ViewSyncSchemaToMetaStore`: once the query analyzed, evolved views store their new schema. A
-        // concurrent change of the view wins (its entry is no longer the one the read found). A metadata
-        // analysis (`Browse` only) changes nothing in the catalog: the next run stores it.
+        // concurrent change of the view wins (its entry is no longer the one the read found).
+        // A difference from Spark (ADR 0008: explicit): a metadata analysis (Connect `AnalyzePlan`, for every
+        // role, admins too) never stores it. Spark syncs in the analysis of every Dataset, `.schema` included;
+        // here an `AnalyzePlan` must not write the catalog (a viewer has `Browse` only and no side effects).
+        // It returns the evolved schema all the same, and the next ordinary query stores it.
         if env.analysis.mode == krishiv_plan::analyzer::AnalysisMode::Execute {
             for (found, changed) in synced {
                 crate::store::CatalogStore::replace_table(
