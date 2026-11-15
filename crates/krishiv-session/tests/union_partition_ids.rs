@@ -168,26 +168,6 @@ fn skip_reason(tag: &str) -> Option<&'static str> {
     None
 }
 
-/// Whether two printed rows are equal, a `randn` value within one ulp:
-/// Krishiv's `randn` differs from Spark's `nextGaussian` in the last bit for
-/// some streams (seed 45: `0.7400395449950131` against `...132`), a
-/// difference of the function, not of the partition numbering.
-fn same_row(tag: &str, got: &str, want: &str) -> bool {
-    if got == want {
-        return true;
-    }
-    if !tag.contains("randn") {
-        return false;
-    }
-    let (g, w): (Vec<&str>, Vec<&str>) = (got.split(',').collect(), want.split(',').collect());
-    g.len() == w.len()
-        && g.iter().zip(&w).all(|(g, w)| {
-            g == w
-                || matches!((g.parse::<f64>(), w.parse::<f64>()), (Ok(a), Ok(b))
-                    if a.to_bits().abs_diff(b.to_bits()) <= 1)
-        })
-}
-
 /// Shapes compared at one compute thread only: Spark's partitions follow
 /// its own layout rules here (`local[1]`), which Krishiv matches with one
 /// driver per pipeline.
@@ -247,8 +227,7 @@ fn check(threads: &[usize], filter: impl Fn(&str) -> bool) {
                 got.sort();
                 want.sort();
             }
-            let same =
-                got.len() == want.len() && got.iter().zip(&want).all(|(g, w)| same_row(tag, g, w));
+            let same = got == want;
             if !same {
                 failures.push(format!(
                     "{tag} at {threads} threads: {sql}\n  want {want:?}\n  got  {got:?}"
