@@ -1419,14 +1419,18 @@ impl Session {
         // can fail, so a principal who may not read it learns nothing from it.
         let mut views = self.authorize_reads(&expansion.reads, env).await?;
         if let Some(e) = expansion.deferred {
-            return Err(self.view_text_failure(&views, env, e).await);
+            let e = self.view_text_failure(&views, env, e).await;
+            return crate::access::audit_read(self, env, Err(e));
         }
         // (Boxed: `analyze_in` runs on the deepest stacks, where the size of its
         // future counts.)
         let (synced, renames) =
             match Box::pin(self.check_stored_views(&expansion.stored_reads, env)).await {
                 Ok(checked) => checked,
-                Err(e) => return Err(self.view_text_failure(&views, env, e).await),
+                Err(e) => {
+                    let e = self.view_text_failure(&views, env, e).await;
+                    return crate::access::audit_read(self, env, Err(e));
+                }
             };
         let plan = Plan::try_new(crate::view_schema::apply_renames(&expansion.plan, &renames))?;
         // The bodies of the functions the plan calls read views the same way:

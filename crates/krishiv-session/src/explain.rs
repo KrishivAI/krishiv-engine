@@ -479,7 +479,8 @@ impl DataFrame {
     /// The plan of a metadata analysis (catalog tables need `Browse`), planned with no table
     /// statistics, no planning hints and no distinct-value samples, and without the result-cache
     /// note; a note line says so. A plan that reads a permanent view still needs `Select` on it:
-    /// the plan shows the inlined body, and a view's text is data (ADR 0046, update 2026-11-12). A file listing or footer failure is shown without its
+    /// the plan shows the inlined body, and a view's text is data (ADR 0046, update 2026-11-12).
+    /// A file listing or footer failure is shown without its
     /// paths, which can carry partition values.
     async fn explain_withheld(
         &self,

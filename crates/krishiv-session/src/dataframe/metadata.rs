@@ -54,7 +54,7 @@ impl DataFrame {
     /// the plan chosen with no table statistics, no distinct-value samples and no result-cache note,
     /// ending in a `== Note ==` section that says so. Reads by path and permanent views still
     /// need `Select` (their contents or text are shown), and so does [`ExplainMode::Cost`]; a
-    /// SQL function's body is shown, as `DESCRIBE FUNCTION EXTENDED` shows it.
+    /// SQL function's body is shown, as Spark's `DESCRIBE FUNCTION EXTENDED` shows it.
     ///
     /// ```
     /// use krishiv_session::ExplainMode;
