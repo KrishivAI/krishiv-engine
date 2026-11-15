@@ -10,6 +10,7 @@ use krishiv_common::error::{
     ExpectPermanentViewNotTemp, KrishivError, KrishivUnsupportedFeature, SchemaNotFound,
     ShowColumnsWithConflictNamespace, UnresolvedColumnWithSuggestion,
 };
+use krishiv_plan::analyzer::Privilege;
 use krishiv_sql::ast::{
     DdlName, Describe, DescribeKind, PartitionSpec, Show, ShowKind, ShowPattern,
 };
@@ -543,20 +544,11 @@ impl Session {
                     }
                 };
                 if let Some(t) = system_table {
-                    let analysis = DataFrame::new(
-                        self.clone(),
-                        Arc::new(krishiv_plan::LogicalPlan::table([
-                            "system",
-                            &t.to_lowercase(),
-                        ])),
-                    )
-                    .analyzed_in(env.clone())
-                    .await?;
-                    let names = analysis
-                        .analyzed
-                        .output
+                    let names = self
+                        .system_table_columns(&t.to_lowercase(), &env)
+                        .await?
                         .iter()
-                        .map(|c| vec![s(&c.name)])
+                        .map(|(name, _)| vec![s(name)])
                         .collect();
                     return self
                         .frame_with_order(&["col_name"], &[], names, false)
@@ -581,7 +573,7 @@ impl Session {
                     name.namespace = from;
                     name.bare = false;
                 }
-                let columns = self.columns_of_relation(&name).await?;
+                let columns = self.columns_of_relation(&name, Privilege::Browse).await?;
                 let rows = columns.into_iter().map(|c| vec![s(c.0)]).collect();
                 self.frame_with_order(&["col_name"], &[], rows, false).await
             }
@@ -605,7 +597,7 @@ impl Session {
                 }
                 let table = self.stored_relation(&name)?;
                 if table.view.is_some() {
-                    self.authorize_view_select(&name.namespace, &name.name, &env)
+                    self.authorize_view(&name.namespace, &name.name, Privilege::Browse, &env)
                         .await?;
                 }
                 let rows = match key {
@@ -647,7 +639,7 @@ impl Session {
                     return Err(unsupported("SHOW CREATE TABLE ... AS SERDE on a table"));
                 }
                 if table.view.is_some() {
-                    self.authorize_view_select(&name.namespace, &name.name, &env)
+                    self.authorize_view(&name.namespace, &name.name, Privilege::Select, &env)
                         .await?;
                 }
                 self.ordered_frame(
@@ -746,7 +738,7 @@ impl Session {
             }
             if t.view.is_some() {
                 // The information holds the view's text, as SHOW CREATE TABLE does.
-                self.authorize_view_select(&ns, &t.name, &self.query_env())
+                self.authorize_view(&ns, &t.name, Privilege::Select, &self.query_env())
                     .await?;
             }
             let mut entries = self.table_information(&t);
@@ -869,10 +861,13 @@ impl Session {
             .ok_or_else(|| name.not_found())
     }
 
-    /// The (name, type, comment) of the columns of a table, view or temporary view.
+    /// The (name, type, comment) of the columns of a table, view or temporary view. A permanent
+    /// view is checked for `privilege`: `Browse` for its schema, `Select` when the statement also
+    /// shows statistics or partitions (ADR 0046 §4).
     async fn columns_of_relation(
         &self,
         name: &TableName,
+        privilege: Privilege,
     ) -> Result<Vec<(String, DataType, Option<String>)>, KrishivError> {
         let env = self.query_env();
         if !name.bare
@@ -910,7 +905,7 @@ impl Session {
         }
         let table = self.stored_relation(name)?;
         if table.view.is_some() {
-            self.authorize_view_select(&name.namespace, &name.name, &env)
+            self.authorize_view(&name.namespace, &name.name, privilege, &env)
                 .await?;
         }
         Ok(table
@@ -954,15 +949,11 @@ impl Session {
                 "DESCRIBE variants other than the plain form of a system table",
             ));
         }
-        let plan = Arc::new(krishiv_plan::LogicalPlan::table(["system", table]));
-        let analysis = DataFrame::new(self.clone(), plan)
-            .analyzed_in(env.clone())
-            .await?;
-        let rows: Vec<Vec<Cell>> = analysis
-            .analyzed
-            .output
+        let rows: Vec<Vec<Cell>> = self
+            .system_table_columns(table, env)
+            .await?
             .iter()
-            .map(|c| vec![s(&c.name), s(c.data_type.catalog_string()), s("")])
+            .map(|(name, ty)| vec![s(name), s(ty.catalog_string()), s("")])
             .collect();
         self.ordered_frame(&["col_name", "data_type", "comment"], &[], rows)
             .await
@@ -1000,7 +991,12 @@ impl Session {
                         .await;
                 }
                 let name = self.table_name(table, &env)?;
-                let columns = self.columns_of_relation(&name).await?;
+                let privilege = if mode.is_some() || partition.is_some() {
+                    Privilege::Select
+                } else {
+                    Privilege::Browse
+                };
+                let columns = self.columns_of_relation(&name, privilege).await?;
                 let temp = self.temp_entry_of(&name, &env)
                     || (!name.bare
                         && name

@@ -1,0 +1,11 @@
+{
+  "cases": {
+    "sql-commands": [
+      214,
+      215,
+      259
+    ]
+  },
+  "file": "sql-session-variables",
+  "format_version": 1
+}

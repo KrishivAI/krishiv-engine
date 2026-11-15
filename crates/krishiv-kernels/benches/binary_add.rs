@@ -199,6 +199,47 @@ fn decimal_range(p: u8, s: i8, lo: i128, span: i128, seed: i128) -> Decimal128Ar
     a.with_precision_and_scale(p, s).unwrap()
 }
 
+/// The 64-bit try of exact `+ - *` on 128-bit storage (E2 step 3) against
+/// the forced 128-bit path (`with_storage`, no try), on q01's second
+/// product: small values (the try computes the batch), one value beyond
+/// 64 bits in the last row (the worst case: the try runs to the end, then
+/// the proof and the 128-bit lanes) and every value beyond 64 bits (the
+/// first-value guard skips the try).
+fn decimal_try(c: &mut Criterion) {
+    let ctx = KernelCtx::new();
+    let small = decimal_range(32, 4, 90_000_000, 1_000_000_000, 7919);
+    let wide_at = |a: &Decimal128Array, rows: std::ops::Range<usize>| {
+        let mut v: Vec<i128> = a.values().to_vec();
+        for i in rows {
+            v[i] = v[i].wrapping_add(10_i128.pow(25));
+        }
+        Decimal128Array::from(v)
+            .with_precision_and_scale(32, 4)
+            .unwrap()
+    };
+    let n = small.len();
+    let late = wide_at(&small, n - 1..n);
+    let all = wide_at(&small, 0..n);
+    let tax = decimal_range(16, 2, 100, 9, 15_485_863);
+    let natural = DecimalPlan::new(DecimalOp::Multiply, (32, 4), (16, 2), (38, 6)).unwrap();
+    let forced = natural.with_storage(DecimalStorage::I128).unwrap();
+    for (shape, l) in [("small", &small), ("late_wide", &late), ("all_wide", &all)] {
+        for (path, p) in [("try", &natural), ("i128", &forced)] {
+            c.bench_function(&format!("decimal_mul/try_{shape}/{path}"), |bench| {
+                bench.iter(|| {
+                    decimal_binary::<Mul, AnsiError>(
+                        Operand::Array(black_box(l)),
+                        Operand::Array(black_box(&tax)),
+                        p,
+                        &ctx,
+                    )
+                    .unwrap()
+                });
+            });
+        }
+    }
+}
+
 fn decimal_proof(c: &mut Criterion) {
     let ctx = KernelCtx::new();
     // l_extendedprice (15,2), 1 - l_discount and 1 + l_tax (16,2).
@@ -371,6 +412,7 @@ criterion_group!(
     integer,
     decimal,
     decimal_proof,
+    decimal_try,
     decimal_carrier,
     float
 );

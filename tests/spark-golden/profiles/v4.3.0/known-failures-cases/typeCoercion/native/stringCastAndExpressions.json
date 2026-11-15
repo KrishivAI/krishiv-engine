@@ -1,9 +1,0 @@
-{
-  "cases": {
-    "s43-other": [
-      22
-    ]
-  },
-  "file": "typeCoercion/native/stringCastAndExpressions",
-  "format_version": 1
-}

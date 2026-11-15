@@ -195,6 +195,28 @@ impl ExclusionManifest {
         Ok(Self { frozen, entries })
     }
 
+    /// The manifest for a set of another Spark release than the one the manifest was written for: an older
+    /// release lacks files added later (3.5 has no `try_reflect`), so the entries naming files the set does not
+    /// have are dropped instead of failing [`Self::validate`]. The committed 4.2.0 set keeps the strict check.
+    #[must_use]
+    pub fn restricted_to(&self, set: &GoldenSet) -> Self {
+        let known: BTreeSet<&str> = set
+            .pairs
+            .iter()
+            .map(|p| p.name.as_str())
+            .chain(set.unpaired_inputs.iter().map(String::as_str))
+            .collect();
+        Self {
+            frozen: self.frozen,
+            entries: self
+                .entries
+                .iter()
+                .filter(|e| known.contains(e.file.as_str()))
+                .cloned()
+                .collect(),
+        }
+    }
+
     /// Check every entry names a golden file of `set`.
     pub fn validate(&self, set: &GoldenSet) -> Result<(), ManifestError> {
         let known: BTreeSet<&str> = set

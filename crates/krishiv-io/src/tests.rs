@@ -1328,6 +1328,17 @@ fn case_rules_field_ids_and_column_mapping() {
         ),
         Some(1)
     );
+    // Under id mapping a field without an id (a Variant's `metadata`/`value`) is matched by name.
+    assert_eq!(
+        one(
+            &read(
+                schema(vec![f("gamma", DataType::Int32)]),
+                FieldMapping::DeltaColumnMapping { by_id: true }
+            ),
+            0
+        ),
+        Some(3)
+    );
     let dup = schema(vec![f("a", DataType::Int32), f("A", DataType::Int32)]);
     let e = mapper(&schema(vec![f("a", DataType::Int32)]), &dup, by_name()).unwrap_err();
     // Spark 4.2: FAILED_READ_FILE.NO_HINT caused by _LEGACY_ERROR_TEMP_2093.

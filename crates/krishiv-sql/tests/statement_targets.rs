@@ -86,8 +86,8 @@ fn each_statement_shape_needs_its_privileges() {
                 "Modify Path(/n)",
             ],
         ),
-        ("SHOW TABLES", &["Select CurrentNamespace"]),
-        ("SHOW TABLES IN db", &["Select Namespace(db)"]),
+        ("SHOW TABLES", &["Browse CurrentNamespace"]),
+        ("SHOW TABLES IN db", &["Browse Namespace(db)"]),
         ("INSERT INTO t VALUES (1)", &["Modify Table(t)"]),
         (
             "CREATE FUNCTION f(x INT) RETURNS INT RETURN x + 1",

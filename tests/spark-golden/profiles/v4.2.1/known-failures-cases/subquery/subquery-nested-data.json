@@ -1,0 +1,13 @@
+{
+  "cases": {
+    "nested-interval-types": [
+      24,
+      26
+    ],
+    "query-features": [
+      11
+    ]
+  },
+  "file": "subquery/subquery-nested-data",
+  "format_version": 1
+}

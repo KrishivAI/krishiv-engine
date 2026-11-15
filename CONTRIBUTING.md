@@ -64,6 +64,13 @@ cargo xtask diff-coverage --base origin/main --fail-under 90 # the merge gate, o
 Pull requests get a diff-coverage report in the job summary; the nightly job publishes the full HTML and JSON report
 as an artifact. Both upload to [Codecov](https://about.codecov.io/), which is informational only and never blocks a merge.
 
+## Changelog
+
+Each pull request adds a fragment, `changelog.d/<pr>.<type>.md`, written for a user: what they can now do, in one or
+two lines, with no internal function names, internal plans or competitor names. CI (`cargo xtask changelog check`)
+requires a fragment, or the `no-changelog` label for a CI-only or docs-only change. Release assembles the
+fragments into `CHANGELOG.md` (`changelog.d/README.md` lists the types).
+
 ## Fuzzing and mutation testing
 
 Nightly CI fuzzes every target of `fuzz/` for an hour and the kernels differential fuzzer for ten minutes; a weekly

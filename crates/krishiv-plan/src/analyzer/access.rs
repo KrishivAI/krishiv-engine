@@ -57,7 +57,26 @@ pub async fn authorize(
             Ok(AccessDecision::AllowWith(_)) | Err(_) => return Err(denied()),
         }
     }
-    match policy.check(principal, securable, privilege).await {
+    let decision = match policy.check(principal, securable, privilege).await {
+        Ok(AccessDecision::Allow) => Ok(AccessDecision::Allow),
+        // Metadata is not rows: a row filter or column mask does not hide that the object
+        // exists or its schema.
+        Ok(AccessDecision::AllowWith(_)) if privilege == Privilege::Browse => {
+            Ok(AccessDecision::Allow)
+        }
+        // `Select` implies `Browse` (ADR 0046 §4): a provider that knows only `Select` keeps
+        // answering metadata commands as it did before `Browse` existed.
+        Ok(_) | Err(_) if privilege == Privilege::Browse => {
+            match policy.check(principal, securable, Privilege::Select).await {
+                Ok(AccessDecision::Allow | AccessDecision::AllowWith(_)) => {
+                    Ok(AccessDecision::Allow)
+                }
+                _ => return Err(denied()),
+            }
+        }
+        other => other,
+    };
+    match decision {
         Ok(AccessDecision::Allow) => Ok(()),
         Ok(AccessDecision::AllowWith(_)) if privilege == Privilege::Select => {
             Err(KrishivUnsupportedFeature {
@@ -199,14 +218,62 @@ mod tests {
         Fixed(answers.iter().cloned().collect())
     }
 
-    const ALL: [Privilege; 6] = [
+    const ALL: [Privilege; 10] = [
         Privilege::Select,
         Privilege::Modify,
         Privilege::Create,
         Privilege::Drop,
         Privilege::Monitor,
         Privilege::Usage,
+        Privilege::Browse,
+        Privilege::Operate,
+        Privilege::Manage,
+        Privilege::Impersonate,
     ];
+
+    #[test]
+    fn select_implies_browse() {
+        // A provider that knows only `Select` answers metadata as before `Browse` existed.
+        let select_only = fixed(&[
+            (Privilege::Select, Some(AccessDecision::Allow)),
+            (Privilege::Browse, deny()),
+        ]);
+        check(&select_only, Privilege::Browse).unwrap();
+        // A provider that fails on `Browse` but allows `Select` too.
+        let browse_errors = fixed(&[
+            (Privilege::Select, Some(AccessDecision::Allow)),
+            (Privilege::Browse, None),
+        ]);
+        check(&browse_errors, Privilege::Browse).unwrap();
+        // `Browse` alone does not give `Select`.
+        let browse_only = fixed(&[
+            (Privilege::Browse, Some(AccessDecision::Allow)),
+            (Privilege::Select, deny()),
+        ]);
+        check(&browse_only, Privilege::Browse).unwrap();
+        let e = check(&browse_only, Privilege::Select).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::KrishivInsufficientPermissions);
+        // Neither: denied, as `BROWSE`, without the reason.
+        let neither = fixed(&[(Privilege::Select, deny()), (Privilege::Browse, deny())]);
+        let e = check(&neither, Privilege::Browse).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::KrishivInsufficientPermissions);
+        assert!(
+            e.to_string().contains("BROWSE") && !e.to_string().contains("secret"),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn a_filtered_reader_may_browse() {
+        // Metadata is not rows: a row filter answered for `Browse` or for its `Select`
+        // fallback still shows that the object exists and its schema.
+        for policy in [
+            fixed(&[(Privilege::Browse, filtered()), (Privilege::Select, deny())]),
+            fixed(&[(Privilege::Browse, deny()), (Privilege::Select, filtered())]),
+        ] {
+            check(&policy, Privilege::Browse).unwrap();
+        }
+    }
 
     #[test]
     fn allow_all_and_deny_all() {
@@ -307,11 +374,24 @@ mod tests {
         let names: Vec<String> = ALL.iter().map(ToString::to_string).collect();
         assert_eq!(
             names,
-            ["SELECT", "MODIFY", "CREATE", "DROP", "MONITOR", "USAGE"]
+            [
+                "SELECT",
+                "MODIFY",
+                "CREATE",
+                "DROP",
+                "MONITOR",
+                "USAGE",
+                "BROWSE",
+                "OPERATE",
+                "MANAGE",
+                "IMPERSONATE"
+            ]
         );
         assert_eq!(
             ALL.map(Privilege::changes),
-            [false, true, true, true, false, false]
+            [
+                false, true, true, true, false, false, false, false, false, false
+            ]
         );
     }
 }

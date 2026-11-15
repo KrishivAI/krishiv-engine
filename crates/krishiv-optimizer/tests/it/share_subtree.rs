@@ -19,10 +19,10 @@ fn q11(conf: &[(&str, &str)]) -> Plan {
     optimize_with_udfs(&plan, &fixture(), &UdfLibrary::new(), &config).unwrap()
 }
 
-/// Off by default: q11 keeps today's plan (two evaluations of the join).
+/// With the key off, q11 keeps the pre-W1 plan (two evaluations of the join).
 #[test]
 fn q11_is_unchanged_without_the_key() {
-    let plan = q11(&[]);
+    let plan = q11(&[("krishiv.optimizer.shareRepeatedSubtrees", "false")]);
     assert!(
         !plan.root().to_string().contains("CteRef"),
         "{}",
@@ -58,11 +58,12 @@ fn q11_shares_the_join_the_subquery_rereads() {
 fn run(sql: &str, on: bool) -> Plan {
     let plan = support::resolve(sql, &support::ctx());
     let mut config = Config::new();
-    if on {
-        config
-            .set("krishiv.optimizer.shareRepeatedSubtrees", "true")
-            .unwrap();
-    }
+    config
+        .set(
+            "krishiv.optimizer.shareRepeatedSubtrees",
+            if on { "true" } else { "false" },
+        )
+        .unwrap();
     optimize_with_udfs(&plan, &fixture(), &UdfLibrary::new(), &config).unwrap()
 }
 
@@ -96,4 +97,20 @@ fn different_subtrees_are_not_shared() {
                WHERE ps_supplycost > (SELECT avg(ps_supplycost) FROM partsupp WHERE ps_availqty > 5)";
     let text = run(sql, true).root().to_string();
     assert!(!text.contains("CteRef"), "{text}");
+}
+
+/// TPC-H q15 reads the `revenue0` body twice (the join and the `max` subquery). The join's
+/// inferred `isnotnull(l_suppkey)` stays off the shared body, so both reads stay one
+/// definition and `lineitem` is scanned once (the #598 regression: the inferred filter made
+/// the two copies differ and each was computed).
+#[test]
+fn q15_computes_the_revenue_body_once() {
+    let plan = run(&support::tpch_sql(15), true);
+    let text = plan.root().to_string();
+    assert!(text.starts_with("WithCte"), "{text}");
+    assert_eq!(
+        text.matches("Scan spark_catalog.default.lineitem").count(),
+        1,
+        "{text}"
+    );
 }

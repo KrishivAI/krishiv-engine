@@ -1,6 +1,5 @@
 ---
 source: crates/krishiv-optimizer/tests/it/rules.rs
-assertion_line: 607
 expression: "WITH y AS (SELECT a, b, 's' AS ch, count(*) AS n FROM t GROUP BY a, b UNION ALL SELECT a, d, 'u' AS ch, count(*) AS n FROM u GROUP BY a, d) SELECT p.a FROM y p JOIN y q ON p.a = q.a WHERE p.ch = 's' AND p.b = 'x' AND q.ch = 'u' AND q.b = 'y'"
 ---
 Project [a#9]

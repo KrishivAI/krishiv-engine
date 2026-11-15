@@ -1,0 +1,10 @@
+{
+  "cases": {
+    "query-features": [
+      12,
+      85
+    ]
+  },
+  "file": "cte-recursion",
+  "format_version": 1
+}

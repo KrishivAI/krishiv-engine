@@ -141,6 +141,9 @@ fn a_filter_below_a_probe_is_fused_into_it() {
         // TPC-H Q19's shape: a filter and a runtime-filtered scan.
         "SELECT l_orderkey, p_brand FROM lineitem JOIN part ON l_partkey = p_partkey \
          WHERE l_quantity < 10 AND p_size < 5",
+        // A filter reading every probe input column: no narrow form.
+        "SELECT l_orderkey, p_brand FROM lineitem JOIN part ON l_partkey = p_partkey \
+         WHERE l_quantity < 10 AND l_orderkey > 3 AND l_partkey > 2 AND p_size < 5",
         // A left outer join: the filter's NULL rows are not joined.
         "SELECT l_orderkey, o_orderdate FROM lineitem LEFT JOIN orders \
          ON l_orderkey = o_orderkey AND o_totalprice > 1000 WHERE l_discount > 0.05",

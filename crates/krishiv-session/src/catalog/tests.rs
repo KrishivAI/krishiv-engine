@@ -1034,3 +1034,56 @@ fn task_specs_of_a_copied_memory_table_resolve_in_the_clone() {
     union.sort_unstable();
     assert_eq!(union, vec![1, 2, 3]);
 }
+
+/// Design P3-T083 §3.8: a stage that scans a disk-cached relation is refused as an unsupported
+/// feature (the file is on the driver), not failed as an internal error; a memory-cached one is
+/// dealt as a lease-less memory table is.
+#[test]
+fn task_specs_refuse_a_disk_cached_scan_and_accept_a_memory_one() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let session = Session::builder()
+        .config(
+            "krishiv.spill.dir",
+            dir.path().join("spill").to_str().unwrap(),
+        )
+        .build()
+        .unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "id",
+        arrow_schema::DataType::Int32,
+        false,
+    )]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+    )
+    .unwrap();
+    session.register_batches("t", schema, vec![batch]).unwrap();
+    for (level, on_disk) in [
+        (crate::StorageLevel::DISK_ONLY, true),
+        (crate::StorageLevel::MEMORY_ONLY, false),
+    ] {
+        let cached = session.table("t").persist(level);
+        assert_eq!(rt.block_on(cached.count()).unwrap(), 3);
+        let derived = cached.filter(crate::functions::col("id").gt(crate::functions::lit(1)));
+        let analysis = rt.block_on(derived.analysis()).unwrap();
+        let (physical, fill) = rt.block_on(derived.physical_cached(&analysis)).unwrap();
+        let specs = analysis.env.catalog.task_specs(&physical, 1, 1);
+        if on_disk {
+            let error = specs.unwrap_err();
+            assert_eq!(
+                error.error_class().name(),
+                "KRISHIV_UNSUPPORTED_FEATURE",
+                "{error}"
+            );
+        } else {
+            assert_eq!(specs.unwrap().len(), 1);
+        }
+        drop(fill);
+        rt.block_on(cached.unpersist()).unwrap();
+    }
+}

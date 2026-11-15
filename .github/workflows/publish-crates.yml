@@ -22,28 +22,22 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  nightly-green:
+  # Publishing needs every gate of ci.yml green on the exact commit being published: the job calls the
+  # same reusable workflow nightly.yml calls (Miri, the fuzz-target build, the wheel matrix, ...), so no
+  # earlier scheduled run is trusted.
+  ci:
     if: github.repository == 'KrishivAI/krishiv-engine' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
     permissions:
       contents: read
       actions: read
-    steps:
-      - name: Harden the runner (audit egress)
-        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
-        with:
-          egress-policy: audit
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Latest scheduled CI run is green on this commit
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: .github/scripts/require-green-nightly.sh
+      checks: read
+      id-token: write
+      issues: write
+      pull-requests: write
+    uses: $/.github/workflows/ci.yml
 
   publish:
-    needs: nightly-green
+    needs: ci
     if: github.repository == 'KrishivAI/krishiv-engine' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     timeout-minutes: 120

@@ -63,6 +63,27 @@ DataFrame[age: bigint, name: string]
 2
 ```
 
+### `checkpoint`
+
+```python
+def checkpoint(self, eager: bool=True) -> DataFrame
+```
+
+Returns a checkpointed version of this `DataFrame`: the rows are fixed (now, or
+at the first action when `eager` is false) and later changes to the sources are not
+seen. Needs `spark.checkpoint.dir` (set with `spark.conf.set`); the files are
+deleted when the result is garbage collected.
+
+**Parameters**
+
+eager : bool, optional
+    Whether to checkpoint now (default) or at the first action.
+
+**Returns**
+
+`DataFrame`
+    The checkpointed frame.
+
 ### `coalesce`
 
 ```python
@@ -762,6 +783,27 @@ def join(self, other: DataFrame, on: str | list[str] | Column | list[Column] | N
 def limit(self, num: int) -> DataFrame
 ```
 
+### `localCheckpoint`
+
+```python
+def localCheckpoint(self, eager: bool=True, storageLevel: StorageLevel | None=None) -> DataFrame
+```
+
+Returns a locally checkpointed version of this `DataFrame`: as
+`checkpoint`, held by the session, no directory needed.
+
+**Parameters**
+
+eager : bool, optional
+    Whether to checkpoint now (default) or at the first action.
+storageLevel : `krishiv.storagelevel.StorageLevel`, optional
+    The storage level; accepted, the rows are held in the session's memory.
+
+**Returns**
+
+`DataFrame`
+    The checkpointed frame.
+
 ### `melt`
 
 ```python
@@ -1122,7 +1164,8 @@ Functionality for statistic functions (`DataFrameStatFunctions`).
 def storageLevel(self) -> StorageLevel
 ```
 
-This frame's storage level (all false when uncached).
+This frame's effective storage level (all false when uncached): what the session
+registered, which is not always what this frame asked for.
 
 ### `subtract`
 

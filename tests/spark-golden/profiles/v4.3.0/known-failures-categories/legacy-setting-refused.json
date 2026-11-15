@@ -1,0 +1,17 @@
+{
+  "category": "legacy-setting-refused",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "detail": "^error KRISHIV_UNSUPPORTED_FEATURE: The feature the Spark setting \"spark\\.sql\\.legacy\\.",
+      "order": 5
+    },
+    {
+      "file": "^parse-query-correctness-old-behavior$",
+      "order": 6
+    }
+  ],
+  "summary": "the file or statement sets a spark.sql.legacy.* setting to a non-default value Krishiv does not implement; SET is refused with KRISHIV_UNSUPPORTED_FEATURE, never run with the setting ignored (P3-T090, crates/krishiv-common/src/config/legacy.rs); the file's later statements, which depend on the refused SET, follow it",
+  "task": "P3-T090"
+}

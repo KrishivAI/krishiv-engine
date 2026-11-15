@@ -100,6 +100,13 @@ fn wait_for<T>(seen: &Requests, pick: impl Fn(&str, &[u8]) -> Option<T>) -> T {
     }
 }
 
+fn hex_bytes(h: &str) -> Vec<u8> {
+    (0..h.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&h[i..i + 2], 16).expect("hex"))
+        .collect()
+}
+
 #[test]
 fn query_spans_reach_the_collector_with_the_database_attributes() {
     let (url, seen) = collector();
@@ -112,6 +119,11 @@ fn query_spans_reach_the_collector_with_the_database_attributes() {
     tracing::subscriber::set_global_default(subscriber).expect("one subscriber in this binary");
 
     let s = Session::new().expect("session");
+    // T068: the caller's trace arrives as headers; a hostile baggage is bounded.
+    assert!(s.set_inbound_trace(
+        Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
+        Some("user=ann, broken, k=v"),
+    ));
     let df = block_on(s.sql("SELECT 'secret-token' AS x, 1 + 1 AS y")).expect("plans");
     block_on(df.collect()).expect("runs");
     tracing.flush().expect("flush");
@@ -152,6 +164,13 @@ fn query_spans_reach_the_collector_with_the_database_attributes() {
             }
         })
     };
+    // The engine span is a child of the caller's span, in the caller's trace.
+    assert_eq!(
+        span.trace_id,
+        hex_bytes("4bf92f3577b34da6a3ce929d0e0e4736"),
+        "the query span joins the client's trace"
+    );
+    assert_eq!(span.parent_span_id, hex_bytes("00f067aa0ba902b7"));
     assert_eq!(attribute("db.system.name").as_deref(), Some("krishiv"));
     assert_eq!(attribute("db.operation.name").as_deref(), Some("SELECT"));
     let text = attribute("db.query.text").expect("sanitized text");

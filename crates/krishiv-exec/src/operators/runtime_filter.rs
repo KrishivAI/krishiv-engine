@@ -464,7 +464,7 @@ impl SharedStage {
 
 /// `prev` with its set rows replaced by `answers` (one per set row, in
 /// order).
-fn scatter(prev: &BooleanBuffer, answers: &BooleanBuffer) -> BooleanBuffer {
+pub(super) fn scatter(prev: &BooleanBuffer, answers: &BooleanBuffer) -> BooleanBuffer {
     let mut out = BooleanBufferBuilder::new(prev.len());
     out.append_n(prev.len(), false);
     for (k, i) in prev.set_indices().enumerate() {

@@ -190,9 +190,15 @@ fn the_registry_is_sorted_and_every_feature_has_goldens() {
         let files = std::fs::read_dir(&dir).map_or(0, Iterator::count);
         // `legacy_statistical_aggregate` fires only around a moment
         // aggregate, whose feature sorts after it, so its plans file under
-        // `moment_aggregates` and it has no directory of its own.
+        // `moment_aggregates` and it has no directory of its own; likewise
+        // `collated_min_max`, whose struct argument files its plans under
+        // `nested_types`.
         assert!(
-            files > 0 || *f == Feature::LegacyStatisticalAggregate,
+            files > 0
+                || matches!(
+                    *f,
+                    Feature::LegacyStatisticalAggregate | Feature::CollatedMinMax
+                ),
             "{id}: no golden files in {}",
             dir.display()
         );

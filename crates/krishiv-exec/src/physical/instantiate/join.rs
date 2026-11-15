@@ -4,6 +4,11 @@
 //! stage a scan below hands the probe ([`RuntimeFilters::hand_to_consumer`]).
 
 use super::*;
+use std::collections::HashSet;
+
+use krishiv_plan::{ExprNode, ResolvedExpr};
+
+use crate::operators::select::Narrow;
 use crate::physical::{ProbeColumn, ProbeFilter};
 
 /// The hash join of `j` over inputs of `probe` and `build`, publishing its
@@ -48,7 +53,13 @@ pub(crate) fn hash_join(
         spill,
     })?;
     let join = match j.select.as_ref().and_then(|s| s.filter.as_ref()) {
-        Some(f) => join.with_probe_filter(probe_filter(received, f, env)?)?,
+        Some(f) => {
+            let join = join.with_probe_filter(probe_filter(received, f, env)?)?;
+            match narrow_probe_filter(received, f, env) {
+                Some(narrow) => join.with_narrow_probe_filter(narrow)?,
+                None => join,
+            }
+        }
         None => join,
     };
     let join = match columns {
@@ -113,6 +124,135 @@ fn probe_filter(probe: &SchemaRef, f: &ProbeFilter, env: &EvalEnv) -> Result<Arc
     };
     let e = compile_one(&f.predicate, &f.layout, probe, &v)?;
     Ok(Arc::new(Compiled(e)))
+}
+
+/// The fused filter `f` compiled over only the columns of `probe` it reads,
+/// for the copy of a selective row stage's rows (design P2-E3 U2): `None`
+/// when it reads every column or none, or does not compile over them (the
+/// copy then holds every column; results are the same either way).
+fn narrow_probe_filter(probe: &SchemaRef, f: &ProbeFilter, env: &EvalEnv) -> Option<Narrow> {
+    let mut read = HashSet::new();
+    read_columns(&f.predicate, &mut read);
+    let columns: Vec<usize> = (0..f.layout.len())
+        .filter(|&i| read.contains(&f.layout[i]))
+        .collect();
+    if columns.is_empty() || columns.len() >= f.layout.len() {
+        return None;
+    }
+    let layout: Vec<AttrId> = columns.iter().map(|&i| f.layout[i]).collect();
+    let schema = Arc::new(probe.project(&columns).ok()?);
+    let v = Values {
+        env,
+        subqueries: &[],
+    };
+    // The full form compiled: a failure here means `read_columns` missed a
+    // reader; the copy then holds every column (same results).
+    let e = match compile_one(&f.predicate, &layout, &schema, &v) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::debug!("a fused probe filter does not compile over its columns: {e}");
+            return None;
+        }
+    };
+    Some(Narrow {
+        columns,
+        schema,
+        predicate: Arc::new(Compiled(e)),
+    })
+}
+
+/// The attributes `e` reads as columns, its sub-expressions' too (a
+/// higher-order call's captured columns included; its lambda variables are
+/// not input columns).
+fn read_columns(e: &Arc<Expr>, out: &mut HashSet<AttrId>) {
+    if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &e.node {
+        out.insert(c.id);
+    }
+    e.for_each_child(&mut |c| read_columns(c, out));
+}
+
+#[cfg(all(test, not(loom)))]
+mod tests {
+    use arrow_array::{ArrayRef, Int64Array, RecordBatch};
+    use krishiv_common::config::Config;
+    use krishiv_plan::{BoundColumn, Builtin, FunctionId, FunctionKind, Literal, ResolvedFunction};
+    use krishiv_types::DataType;
+
+    use super::*;
+
+    fn col(id: u64) -> Arc<Expr> {
+        Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Column(
+            BoundColumn {
+                id: AttrId(id),
+                name: format!("c{id}"),
+                data_type: DataType::Long,
+                nullable: true,
+            },
+        ))))
+    }
+
+    fn op(b: Builtin, args: Vec<Arc<Expr>>) -> Arc<Expr> {
+        Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+            ResolvedFunction {
+                id: FunctionId::Builtin(b),
+                kind: FunctionKind::Scalar,
+                args,
+                distinct: false,
+                filter: None,
+                within_group: Vec::new(),
+                data_type: DataType::Boolean,
+                nullable: true,
+                deterministic: true,
+            },
+        ))))
+    }
+
+    /// A predicate over two of four columns compiles over those two, in
+    /// layout order, and gives the full form's mask; one over every column
+    /// (or none) has no narrow form.
+    #[test]
+    fn a_narrow_filter_reads_only_its_columns() {
+        let fields: Vec<Field> = (0..4)
+            .map(|i| Field::new(format!("c{i}"), arrow_schema::DataType::Int64, true))
+            .collect();
+        let probe: SchemaRef = Arc::new(Schema::new(fields));
+        // The layout lists attributes 10..14; the predicate reads 13 and 11.
+        let layout: Vec<AttrId> = (10..14).map(AttrId).collect();
+        let env = EvalEnv::new(&Config::new(), Arc::from("test"));
+        let two = ProbeFilter {
+            layout: layout.clone(),
+            predicate: op(Builtin::Gt, vec![col(13), col(11)]),
+        };
+        let narrow = narrow_probe_filter(&probe, &two, &env).unwrap();
+        assert_eq!(narrow.columns, vec![1, 3]);
+        assert_eq!(narrow.schema.fields().len(), 2);
+        let cols: Vec<ArrayRef> = (0..4i64)
+            .map(|c| Arc::new(Int64Array::from(vec![c, 5 - c, 2 * c, 1])) as ArrayRef)
+            .collect();
+        let data = RecordBatch::try_new(Arc::clone(&probe), cols).unwrap();
+        let full = probe_filter(&probe, &two, &env)
+            .unwrap()
+            .evaluate(&data)
+            .unwrap();
+        let part = data.project(&narrow.columns).unwrap();
+        assert_eq!(narrow.predicate.evaluate(&part).unwrap(), full);
+        let all = ProbeFilter {
+            layout: layout.clone(),
+            predicate: op(
+                Builtin::And,
+                vec![
+                    op(Builtin::Gt, vec![col(10), col(11)]),
+                    op(Builtin::Gt, vec![col(12), col(13)]),
+                ],
+            ),
+        };
+        assert!(narrow_probe_filter(&probe, &all, &env).is_none());
+        let none = ProbeFilter {
+            layout,
+            predicate: Arc::new(Expr::new(ExprNode::Literal(Literal::Boolean(true)))),
+        };
+        assert!(narrow_probe_filter(&probe, &none, &env).is_none());
+    }
 }
 
 impl Instantiation<'_> {

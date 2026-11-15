@@ -41,7 +41,7 @@ impl StaticTokens {
     ///
     /// # Errors
     /// `KRISHIV_INVALID_CONFIG_VALUE` when a secret cannot be resolved, is shorter than 32
-    /// bytes or longer than 16 KiB, or is the same as another token's secret, or when two tokens give one principal
+    /// bytes or longer than 16 KiB, holds anything but visible ASCII, or is the same as another token's secret, or when two tokens give one principal
     /// different roles.
     pub fn build(specs: &[TokenSpec]) -> Result<Self, KrishivError> {
         let mut entries: Vec<(Entry, &str)> = Vec::with_capacity(specs.len());
@@ -61,6 +61,15 @@ impl StaticTokens {
                     &key,
                     krishiv_common::secret::REDACTED,
                     &format!("a token must be at most {MAX_SECRET_BYTES} bytes"),
+                ));
+            }
+            if !secret.expose_secret().bytes().all(|b| b.is_ascii_graphic()) {
+                // `Authorization: Bearer <token>` cannot carry it as written: header parsing drops
+                // leading and trailing spaces, and controls or non-ASCII bytes are not header text.
+                return Err(invalid(
+                    &key,
+                    krishiv_common::secret::REDACTED,
+                    "a token must be visible ASCII characters only (no spaces or controls)",
                 ));
             }
             let digest = digest(secret.expose_secret());
@@ -119,22 +128,31 @@ impl StaticTokens {
     /// compared, whether or not an earlier one matched.
     #[must_use]
     pub fn lookup(&self, presented: &str) -> Option<(&Principal, Role)> {
-        let d = digest(presented);
-        let mut found = None;
-        for (i, e) in self.entries.iter().enumerate() {
-            let same = ct_eq(&d, &e.digest);
-            if same && found.is_none() {
-                found = Some(i);
-            }
-        }
+        let (found, _) = self.find(presented);
         let e = self.entries.get(found?)?;
         Some((&e.principal, e.role))
     }
 
-    /// How many digests one lookup compares (the structural constant-time test).
+    /// The index of the entry `presented` matches, and how many digests were compared to find
+    /// it (always all of them).
+    fn find(&self, presented: &str) -> (Option<usize>, usize) {
+        let d = digest(presented);
+        let mut found = None;
+        let mut compared = 0;
+        for (i, e) in self.entries.iter().enumerate() {
+            let same = ct_eq(&d, &e.digest);
+            compared += 1;
+            if same && found.is_none() {
+                found = Some(i);
+            }
+        }
+        (found, compared)
+    }
+
+    /// How many digests a lookup of `presented` compared (the structural constant-time test).
     #[cfg(test)]
-    pub(crate) fn comparisons_per_lookup(&self) -> usize {
-        self.entries.len()
+    pub(crate) fn comparisons_for(&self, presented: &str) -> usize {
+        self.find(presented).1
     }
 }
 

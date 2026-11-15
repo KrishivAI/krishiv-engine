@@ -53,6 +53,47 @@ impl DiffArgs {
         }
     }
 
+    /// Paths the range adds (renames count as added), for the changelog-fragment check.
+    ///
+    /// # Errors
+    /// Returns the git failure message.
+    pub fn git_added_files(&self) -> Result<Vec<String>, String> {
+        let range = format!("{}...{}", self.base, self.head);
+        let out = self.git(&["diff", "--name-only", "--diff-filter=AR", &range])?;
+        Ok(out.lines().map(str::to_owned).collect())
+    }
+
+    /// Paths the range modifies, for the changelog-fragment check.
+    ///
+    /// # Errors
+    /// Returns the git failure message.
+    pub fn git_modified_files(&self) -> Result<Vec<String>, String> {
+        let range = format!("{}...{}", self.base, self.head);
+        let out = self.git(&["diff", "--name-only", "--diff-filter=M", &range])?;
+        Ok(out.lines().map(str::to_owned).collect())
+    }
+
+    /// The text of `path` at the head of the range.
+    ///
+    /// # Errors
+    /// Returns the git failure message, or a message when the blob is not valid UTF-8 (the
+    /// release reader uses `read_to_string`, so the check must reject what it would).
+    pub fn git_show_head(&self, path: &str) -> Result<String, String> {
+        let spec = format!("{}:{path}", self.head);
+        let out = Command::new("git")
+            .args(["show", &spec])
+            .current_dir(&self.repo)
+            .output()
+            .map_err(|e| format!("failed to run git: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "git show {spec} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        }
+        String::from_utf8(out.stdout).map_err(|_| format!("{path} is not valid UTF-8"))
+    }
+
     /// `git diff -U0` of the range, for line-level reports.
     ///
     /// # Errors

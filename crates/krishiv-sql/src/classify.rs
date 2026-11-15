@@ -150,6 +150,8 @@ pub fn classify(statement: &Statement) -> StatementClass {
             }
         }
         Statement::CreateTableLike(_)
+        | Statement::CreatePipelineDataset(_)
+        | Statement::CreateFlow(_)
         | Statement::DropTable(_)
         | Statement::CreateNamespace(_)
         | Statement::DropNamespace(_)
@@ -164,6 +166,8 @@ pub fn classify(statement: &Statement) -> StatementClass {
         | Statement::Update(_)
         | Statement::Merge(_)
         | Statement::Truncate(_)
+        | Statement::LoadData(_)
+        | Statement::InsertDirectory(_)
         | Statement::Analyze(_) => StatementClass::Write,
         Statement::Cache(c) => match &c.kind {
             CacheKind::Cache { .. } | CacheKind::Uncache { .. } => StatementClass::Session,
@@ -201,6 +205,9 @@ pub fn statement_queries(statement: &Statement) -> Option<Vec<&Query>> {
         Statement::Explain(e) => return statement_queries(&e.statement),
         Statement::CreateView(v) => vec![&*v.query],
         Statement::CreateTable(t) => t.as_query.iter().map(|q| &**q).collect(),
+        Statement::CreatePipelineDataset(c) => c.table.as_query.iter().map(|q| &**q).collect(),
+        Statement::CreateFlow(f) => f.insert.clauses.iter().map(|c| &*c.query).collect(),
+        Statement::InsertDirectory(d) => vec![&*d.query],
         Statement::CreatePermanentView(v) => v.query.iter().map(|q| &**q).collect(),
         Statement::SetVariable(v) => match &v.kind {
             SetVariableKind::Row { query, .. } => vec![&**query],
@@ -277,6 +284,7 @@ pub fn statement_queries(statement: &Statement) -> Option<Vec<&Query>> {
         | Statement::Analyze(_)
         | Statement::Repair(_)
         | Statement::AddResource(_)
+        | Statement::LoadData(_)
         | Statement::ListResource(_) => Vec::new(),
     })
 }
@@ -337,15 +345,16 @@ pub struct Target<'a> {
 /// checks): `Modify` on what it writes, `Create` on the namespace a new
 /// object goes in, `Drop` on what it drops or replaces (an `ALTER` replaces
 /// the object's definition: `Drop` on it and `Create` in its namespace),
-/// `Select` on what it reads without a query (metadata commands, `LIKE`
-/// sources, `MERGE` from a table), and `Monitor` on the cluster for the
-/// `ADMIN` class. Session-class statements need nothing beyond the files
+/// `Browse` on what a metadata command only names (`SHOW TABLES`, `SHOW COLUMNS`, plain
+/// `DESCRIBE`; ADR 0046 §4), `Select` on what it reads without a query (statistics and
+/// partition values, `LIKE` sources, `MERGE` from a table), and `Manage` on the cluster for
+/// the `ADMIN` class (ADR 0046 §4). Session-class statements need nothing beyond the files
 /// they name (a temporary table's `LOCATION`).
 #[must_use]
 #[deny(clippy::wildcard_enum_match_arm)]
 #[expect(clippy::too_many_lines, reason = "one arm per statement kind")]
 pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
-    use Privilege::{Create, Drop, Modify, Monitor, Select};
+    use Privilege::{Browse, Create, Drop, Manage, Modify, Select};
     use TargetObject as O;
     const fn t(object: TargetObject<'_>, privilege: Privilege) -> Target<'_> {
         Target { object, privilege }
@@ -363,7 +372,7 @@ pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
         let object = namespace
             .as_ref()
             .map_or(TargetObject::CurrentNamespace, TargetObject::Namespace);
-        vec![t(object, Privilege::Select)]
+        vec![t(object, Privilege::Browse)]
     }
     if let Statement::Script(c) = statement {
         // What any statement of the script writes, creates or drops, asked up front.
@@ -428,6 +437,38 @@ pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
                 out.push(t(O::Table(&c.name), Modify));
             }
             out.extend(location(&c.location));
+            out
+        }
+        Statement::CreatePipelineDataset(c) => {
+            let mut out = vec![t(O::ParentOf(&c.table.name), Create)];
+            if c.table.as_query.is_some() {
+                out.push(t(O::Table(&c.table.name), Modify));
+            }
+            out.extend(location(&c.table.location));
+            out
+        }
+        Statement::CreateFlow(f) => {
+            let mut out = vec![t(O::ParentOf(&f.name), Create)];
+            out.extend(
+                f.insert
+                    .clauses
+                    .iter()
+                    .map(|c| t(O::Table(&c.name), Modify)),
+            );
+            out
+        }
+        Statement::LoadData(l) => {
+            let mut out = vec![t(O::Table(&l.table), Modify)];
+            // `LOCAL` reads a file of the client, not the cluster's storage: no read target.
+            if !l.local {
+                out.push(t(O::Path(&l.path), Select));
+            }
+            out
+        }
+        // The directory is a write target whether written outside `OPTIONS` or as its `path`.
+        Statement::InsertDirectory(d) => {
+            let mut out = location(&d.path);
+            out.extend(d.option_path().map(|p| t(TargetObject::Path(p), Modify)));
             out
         }
         Statement::CreateTableLike(c) => {
@@ -527,26 +568,42 @@ pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
         Statement::Analyze(a) => vec![t(O::Table(&a.table), Select), t(O::Table(&a.table), Modify)],
         Statement::Show(s) => match &s.kind {
             ShowKind::Tables { namespace, .. }
-            | ShowKind::TableExtended { namespace, .. }
             | ShowKind::Views { namespace, .. }
             | ShowKind::Functions { namespace, .. } => listing(namespace),
+            // Prints statistics and partition values, which are data (ADR 0046 §3).
+            ShowKind::TableExtended { namespace, .. } => {
+                let object = namespace.as_ref().map_or(O::CurrentNamespace, O::Namespace);
+                vec![t(object, Select)]
+            }
             ShowKind::Columns {
                 table, namespace, ..
             } => vec![t(
                 namespace
                     .as_ref()
                     .map_or(O::Table(table), |namespace| O::TableIn { table, namespace }),
-                Select,
+                Browse,
             )],
-            ShowKind::Namespaces { .. } => vec![t(O::CurrentCatalog, Select)],
-            ShowKind::CreateTable { name, .. }
-            | ShowKind::TblProperties { name, .. }
-            | ShowKind::Partitions { name, .. } => vec![t(O::Table(name), Select)],
+            ShowKind::Namespaces { .. } => vec![t(O::CurrentCatalog, Browse)],
+            ShowKind::CreateTable { name, .. } | ShowKind::TblProperties { name, .. } => {
+                vec![t(O::Table(name), Browse)]
+            }
+            // Partition values are data.
+            ShowKind::Partitions { name, .. } => vec![t(O::Table(name), Select)],
             ShowKind::CurrentNamespace { .. } | ShowKind::Catalogs { .. } => Vec::new(),
         },
         Statement::Describe(d) => match &d.kind {
-            DescribeKind::Table { table, .. } => vec![t(O::Table(table), Select)],
-            DescribeKind::Namespace { name, .. } => vec![t(O::Namespace(name), Select)],
+            // `EXTENDED`/`FORMATTED` print statistics (a column's min and max), and a partition
+            // spec answers whether that partition exists: both are data.
+            DescribeKind::Table {
+                table,
+                mode,
+                partition,
+                ..
+            } => {
+                let data = mode.is_some() || partition.is_some();
+                vec![t(O::Table(table), if data { Select } else { Browse })]
+            }
+            DescribeKind::Namespace { name, .. } => vec![t(O::Namespace(name), Browse)],
             // Built-in functions are public; a query's reads are analyzed.
             DescribeKind::Function { .. } | DescribeKind::Query { .. } => Vec::new(),
         },
@@ -561,15 +618,15 @@ pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
             }
             // Whether the table exists is answered, so naming it needs the right to read it.
             CacheKind::Uncache { name, .. } => vec![t(O::Table(name), Select)],
-            CacheKind::Clear => vec![t(O::Cluster, Monitor)],
+            CacheKind::Clear => vec![t(O::Cluster, Manage)],
         },
         Statement::Refresh(r) => match &r.kind {
             RefreshKind::Table { name, .. } => {
-                vec![t(O::Table(name), Select), t(O::Cluster, Monitor)]
+                vec![t(O::Table(name), Select), t(O::Cluster, Manage)]
             }
-            RefreshKind::Function { .. } | RefreshKind::Path { .. } => vec![t(O::Cluster, Monitor)],
+            RefreshKind::Function { .. } | RefreshKind::Path { .. } => vec![t(O::Cluster, Manage)],
         },
-        Statement::AddResource(_) => vec![t(O::Cluster, Monitor)],
+        Statement::AddResource(_) => vec![t(O::Cluster, Manage)],
     }
 }
 

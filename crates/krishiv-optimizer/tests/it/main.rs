@@ -9,6 +9,7 @@
 )]
 
 mod cse;
+mod group_code;
 mod join_cost;
 mod join_enumerator;
 mod join_order;

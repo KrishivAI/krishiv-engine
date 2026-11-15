@@ -145,7 +145,7 @@ pub struct ExplainNode {
 pub struct Node {
     #[prost(
         oneof = "node::Kind",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 21, 24, 25, 26"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 21, 24, 25, 26, 27"
     )]
     pub kind: ::core::option::Option<node::Kind>,
 }
@@ -217,7 +217,26 @@ pub mod node {
         /// feature: python_udf
         #[prost(message, tag = "26")]
         PythonEval(super::PythonEvalNode),
+        /// feature: sample
+        #[prost(message, tag = "27")]
+        Sample(super::SampleNode),
     }
+}
+/// feature: sample
+/// `TABLESAMPLE` (Spark's Bernoulli `SampleExec`): each row of input
+/// partition `i` takes the next draw of `XORShiftRandom(seed + i)` and is
+/// kept when it falls in `[lower, upper)`. The seed is always resolved (an
+/// unseeded sample's is drawn when the plan is built).
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct SampleNode {
+    #[prost(uint32, tag = "1")]
+    pub input: u32,
+    #[prost(double, tag = "2")]
+    pub lower: f64,
+    #[prost(double, tag = "3")]
+    pub upper: f64,
+    #[prost(int64, tag = "4")]
+    pub seed: i64,
 }
 /// feature: python_udf
 /// The rows of `input`, then one column per Python UDF call over every row.
@@ -1389,7 +1408,8 @@ pub struct DataType {
     /// feature: collated_strings
     /// `KIND_COLLATED_STRING` only: the collation's canonical name (never
     /// `UTF8_BINARY`, which is `KIND_STRING`). Ids index an ICU build's
-    /// table, so they never travel.
+    /// table, so they never travel. The INDETERMINATE collation is `null`
+    /// (feature `indeterminate_collation`).
     #[prost(string, tag = "10")]
     pub collation: ::prost::alloc::string::String,
 }
@@ -1916,6 +1936,13 @@ pub enum AggregateFunction {
     /// A session aggregate UDF, by name and version (`AggregateExpr.udaf`).
     /// feature: rust_udaf
     Udf = 46,
+    /// `max` of a collated string: `MAX_BY` of the value by its collation key,
+    /// keeping the first of equal keys.
+    /// feature: collated_min_max
+    MaxByKeyFirst = 47,
+    /// `min` of a collated string, as `MAX_BY_KEY_FIRST`.
+    /// feature: collated_min_max
+    MinByKeyFirst = 48,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1971,6 +1998,8 @@ impl AggregateFunction {
             Self::MaxBy => "AGGREGATE_FUNCTION_MAX_BY",
             Self::MinBy => "AGGREGATE_FUNCTION_MIN_BY",
             Self::Udf => "AGGREGATE_FUNCTION_UDF",
+            Self::MaxByKeyFirst => "AGGREGATE_FUNCTION_MAX_BY_KEY_FIRST",
+            Self::MinByKeyFirst => "AGGREGATE_FUNCTION_MIN_BY_KEY_FIRST",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2023,6 +2052,8 @@ impl AggregateFunction {
             "AGGREGATE_FUNCTION_MAX_BY" => Some(Self::MaxBy),
             "AGGREGATE_FUNCTION_MIN_BY" => Some(Self::MinBy),
             "AGGREGATE_FUNCTION_UDF" => Some(Self::Udf),
+            "AGGREGATE_FUNCTION_MAX_BY_KEY_FIRST" => Some(Self::MaxByKeyFirst),
+            "AGGREGATE_FUNCTION_MIN_BY_KEY_FIRST" => Some(Self::MinByKeyFirst),
             _ => None,
         }
     }

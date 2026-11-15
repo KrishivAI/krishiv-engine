@@ -532,6 +532,27 @@ impl Decoder {
                 offset: l.offset,
                 limit: l.limit,
             },
+            Kind::Sample(s) => {
+                // The planner writes finite bounds with `0 <= lower <= upper`,
+                // or `lower = 0` over a negative `upper`: a fraction within
+                // Spark's rounding epsilon below zero, an empty range of draws.
+                if !(s.lower.is_finite()
+                    && s.upper.is_finite()
+                    && 0.0 <= s.lower
+                    && (s.lower <= s.upper || s.lower == 0.0))
+                {
+                    return Err(CodecError::Corrupt(format!(
+                        "a sample's bounds [{}, {}) are not a range of draws",
+                        s.lower, s.upper
+                    )));
+                }
+                PhysNode::Sample {
+                    input: self.boxed(s.input)?,
+                    lower: s.lower,
+                    upper: s.upper,
+                    seed: s.seed,
+                }
+            }
             Kind::ReplicateRows(r) => PhysNode::ReplicateRows {
                 input: self.boxed(r.input)?,
                 layout: layout(&r.layout),
@@ -1169,6 +1190,8 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
         AnyValue => AggregateFunction::AnyValue { ignore_nulls: ignore },
         MaxBy => AggregateFunction::MaxBy,
         MinBy => AggregateFunction::MinBy,
+        MaxByKeyFirst => AggregateFunction::MaxByKeyFirst,
+        MinByKeyFirst => AggregateFunction::MinByKeyFirst,
         Listagg => if a.listagg_desc.len() != a.listagg_nulls_first.len() {
             return Err(corrupt("a listagg state of another shape than its orders"));
         } else {
@@ -1562,8 +1585,12 @@ fn spark_type(t: &pb::DataType) -> Result<DataType> {
 }
 
 /// A collated string type from its collation's canonical name: only the
-/// form the encoder writes, so the plan encodes to the same bytes.
+/// form the encoder writes, so the plan encodes to the same bytes. The
+/// INDETERMINATE collation is `null`.
 fn collated_string(t: &pb::DataType) -> Result<DataType> {
+    if t.collation == Collation::INDETERMINATE.name() {
+        return Ok(DataType::CollatedString(Collation::INDETERMINATE));
+    }
     match Collation::parse(&t.collation) {
         Ok(c) if !c.is_utf8_binary() && !c.is_indeterminate() && c.name() == t.collation => {
             Ok(DataType::CollatedString(c))
@@ -1585,8 +1612,9 @@ fn interval_day_time(t: &pb::DataType) -> Result<DataType> {
 /// A nested type from its Spark JSON (depth-bounded by `from_json`).
 fn nested(t: &pb::DataType) -> Result<DataType> {
     // Only the canonical form the encoder writes: bytes decode to a plan
-    // that encodes to the same bytes.
-    match DataType::from_json(&t.json) {
+    // that encodes to the same bytes. The canonical reading also takes the
+    // INDETERMINATE collation (`string collate null`), which `from_json` refuses.
+    match DataType::from_canonical_json(&t.json) {
         Ok(d) if d.is_nested() && d.json() == t.json => Ok(d),
         _ => Err(corrupt("an invalid nested type")),
     }
