@@ -180,6 +180,8 @@ const SINK_SLOTS_FEW_THREADS: usize = 1 << 18;
 const MAX_SINK_SLOTS: usize = 1 << 19;
 /// Input rows between append decisions of a fixed index.
 pub(crate) const ADAPT_ROWS: usize = 1 << 20;
+/// Input rows before a fixed index's first append decision (scratch step 0).
+const FIRST_ADAPT_ROWS: usize = 1 << 17;
 /// Bytes of partial duplicates per byte of the grown index from which a
 /// full fixed index grows (DuckDB 2.0's `GROWTH_DUPLICATE_BYTES_FACTOR`).
 const GROW_DUPLICATE_FACTOR: usize = 4;
@@ -466,7 +468,7 @@ impl RowTable {
                 sketch: Hll::new(ADAPT_HLL_BITS),
                 rows: 0,
                 pushed: 0,
-                next: ADAPT_ROWS,
+                next: FIRST_ADAPT_ROWS,
                 window: (0, 0),
                 early: false,
                 filled: false,
