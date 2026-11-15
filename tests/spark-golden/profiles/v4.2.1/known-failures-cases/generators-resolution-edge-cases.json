@@ -1,0 +1,17 @@
+{
+  "cases": {
+    "query-features": [
+      16,
+      18,
+      19,
+      22,
+      41,
+      42,
+      43,
+      50,
+      52
+    ]
+  },
+  "file": "generators-resolution-edge-cases",
+  "format_version": 1
+}

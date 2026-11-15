@@ -4,28 +4,42 @@ assertion_line: 112
 expression: optimized.root().to_string()
 ---
 Sort [revenue#47 DESC NULLS LAST], true
-+- Aggregate [n_name#41], [n_name#41, sum((l_extendedprice#22 * (1 - l_discount#23))) AS revenue#47]
-   +- Project [l_extendedprice#22, l_discount#23, n_name#41]
-      +- Join Inner, ((l_suppkey#19 == s_suppkey#33) and (c_nationkey#3 == s_nationkey#36))
-         :- Project [l_suppkey#19, l_extendedprice#22, l_discount#23, c_nationkey#3, n_name#41]
-         :  +- Join Inner, (l_orderkey#17 == o_orderkey#8)
-         :     :- Filter (isnotnull(l_orderkey#17) and isnotnull(l_suppkey#19))
-         :     :  +- Scan spark_catalog.default.lineitem [l_orderkey#17, l_suppkey#19, l_extendedprice#22, l_discount#23]
-         :     +- Project [o_orderkey#8, c_nationkey#3, n_name#41]
-         :        +- Join Inner, (c_custkey#0 == o_custkey#9)
-         :           :- Project [o_orderkey#8, o_custkey#9]
-         :           :  +- Filter ((((o_orderdate#12 >= DATE '1994-01-01') and (o_orderdate#12 < DATE '1995-01-01')) and isnotnull(o_custkey#9)) and isnotnull(o_orderkey#8))
-         :           :     +- Scan spark_catalog.default.orders [o_orderkey#8, o_custkey#9, o_orderdate#12]
-         :           +- Project [c_custkey#0, c_nationkey#3, n_name#41]
-         :              +- Join Inner, (c_nationkey#3 == n_nationkey#40)
-         :                 :- Filter (isnotnull(c_custkey#0) and isnotnull(c_nationkey#3))
-         :                 :  +- Scan spark_catalog.default.customer [c_custkey#0, c_nationkey#3]
-         :                 +- Project [n_nationkey#40, n_name#41]
-         :                    +- Join Inner, (n_regionkey#42 == r_regionkey#44)
-         :                       :- Filter (isnotnull(n_nationkey#40) and isnotnull(n_regionkey#42))
-         :                       :  +- Scan spark_catalog.default.nation [n_nationkey#40, n_name#41, n_regionkey#42]
-         :                       +- Project [r_regionkey#44]
-         :                          +- Filter ((r_name#45 == 'ASIA') and isnotnull(r_regionkey#44))
-         :                             +- Scan spark_catalog.default.region [r_regionkey#44, r_name#45]
-         +- Filter (isnotnull(s_suppkey#33) and isnotnull(s_nationkey#36))
-            +- Scan spark_catalog.default.supplier [s_suppkey#33, s_nationkey#36]
++- Project [n_name#134 AS n_name#41, revenue#47]
+   +- Join Inner, (krishiv_group_code#182 == krishiv_group_code#137)
+      :- Shift +45
+      :  +- Window [row_number() OVER (ORDER BY n_name#89 ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS krishiv_group_code#92], [], [n_name#89 ASC NULLS FIRST] (shared #1)
+      :     +- Aggregate [n_name#89], [n_name#89]
+      :        +- Project [n_name#89]
+      :           +- Shift +48
+      :              +- Filter (isnotnull(n_nationkey#40) and isnotnull(n_regionkey#42))
+      :                 +- Scan spark_catalog.default.nation [n_nationkey#40, n_name#41, n_regionkey#42] (shared #2)
+      +- Aggregate [krishiv_group_code#182], [krishiv_group_code#182, sum((l_extendedprice#22 * (1 - l_discount#23))) AS revenue#47]
+         +- Project [l_extendedprice#22, l_discount#23, krishiv_group_code#182]
+            +- Join Inner, ((l_suppkey#19 == s_suppkey#33) and (c_nationkey#3 == s_nationkey#36))
+               :- Project [l_suppkey#19, l_extendedprice#22, l_discount#23, c_nationkey#3, krishiv_group_code#182]
+               :  +- Join Inner, (l_orderkey#17 == o_orderkey#8)
+               :     :- Filter (isnotnull(l_suppkey#19) and isnotnull(l_orderkey#17))
+               :     :  +- Scan spark_catalog.default.lineitem [l_orderkey#17, l_suppkey#19, l_extendedprice#22, l_discount#23]
+               :     +- Project [o_orderkey#8, c_nationkey#3, krishiv_group_code#182]
+               :        +- Join Inner, (c_custkey#0 == o_custkey#9)
+               :           :- Project [o_orderkey#8, o_custkey#9]
+               :           :  +- Filter (((isnotnull(o_orderkey#8) and isnotnull(o_custkey#9)) and (o_orderdate#12 < DATE '1995-01-01')) and (o_orderdate#12 >= DATE '1994-01-01'))
+               :           :     +- Scan spark_catalog.default.orders [o_orderkey#8, o_custkey#9, o_orderdate#12]
+               :           +- Project [c_custkey#0, c_nationkey#3, krishiv_group_code#182]
+               :              +- Join Inner, (c_nationkey#3 == n_nationkey#40)
+               :                 :- Filter (isnotnull(c_nationkey#3) and isnotnull(c_custkey#0))
+               :                 :  +- Scan spark_catalog.default.customer [c_custkey#0, c_nationkey#3]
+               :                 +- Project [n_nationkey#40, krishiv_group_code#182]
+               :                    +- Join Inner, (n_regionkey#42 == r_regionkey#44)
+               :                       :- Shift +0
+               :                       :  +- Project [n_nationkey#40, n_regionkey#42, krishiv_group_code#182]
+               :                       :     +- Join Inner, (n_name#41 <=> n_name#179)
+               :                       :        :- Filter (isnotnull(n_regionkey#42) and isnotnull(n_nationkey#40))
+               :                       :        :  +- Shared #2, printed above
+               :                       :        +- Shift +90
+               :                       :           +- Shared #1, printed above
+               :                       +- Project [r_regionkey#44]
+               :                          +- Filter (isnotnull(r_regionkey#44) and (r_name#45 == 'ASIA'))
+               :                             +- Scan spark_catalog.default.region [r_regionkey#44, r_name#45]
+               +- Filter (isnotnull(s_nationkey#36) and isnotnull(s_suppkey#33))
+                  +- Scan spark_catalog.default.supplier [s_suppkey#33, s_nationkey#36]

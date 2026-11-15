@@ -1,0 +1,13 @@
+{
+  "cases": {
+    "depends-on-command": [
+      8
+    ],
+    "nested-interval-types": [
+      6,
+      7
+    ]
+  },
+  "file": "subexp-elimination",
+  "format_version": 1
+}

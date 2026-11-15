@@ -20,11 +20,14 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::time::Duration;
 
-use crate::error::{KrishivError, KrishivInvalidConfigValue, KrishivUnknownConfig};
+use crate::error::{
+    KrishivError, KrishivInvalidConfigValue, KrishivUnknownConfig, KrishivUnsupportedFeature,
+};
 
 mod build_projection;
 mod direct_keys;
 mod join_cost;
+mod legacy;
 mod partition_types;
 mod registry;
 mod registry_join;
@@ -459,6 +462,13 @@ pub fn lookup(key: &str) -> Option<&'static ConfigEntry> {
     search(registry::INDEX, key).copied()
 }
 
+/// The key to look up for `key`: the primary key when `key` is a Spark legacy alternative of a registered
+/// one (`withAlternative`), else `key`. Reads, resets and writes all go through it so they address one entry.
+#[must_use]
+pub fn resolve_alternative(key: &str) -> &str {
+    legacy::primary_key(key)
+}
+
 /// The value for `key` in `index`, a slice ordered by (length, name) as
 /// [`registry::INDEX`] is. Public so the benchmark measures the same search
 /// on a fixed-size index (the registry's own size changes as keys are added).
@@ -525,7 +535,7 @@ impl Config {
     /// Sets `key` (a `krishiv.*` key, a Spark alias or another key) to
     /// `value`. On error the config is unchanged.
     pub fn set(&mut self, key: &str, value: &str) -> Result<Option<ConfigWarning>, KrishivError> {
-        if let Some(entry) = lookup(key) {
+        if let Some(entry) = lookup(legacy::primary_key(key)) {
             let v = entry.parse(key, value)?;
             self.values.insert(entry.key, v);
             Ok(None)
@@ -535,6 +545,26 @@ impl Config {
             }
             .into())
         } else {
+            // A Spark legacy setting Krishiv does not honour: a Spark default changes nothing, any other value
+            // asks for behaviour it does not have (P3 PR-05).
+            if key.starts_with("spark.sql.legacy.") {
+                match legacy::check(key, value) {
+                    legacy::Verdict::Refuse { since } => {
+                        return Err(KrishivUnsupportedFeature {
+                            feature: format!(
+                                "the Spark setting \"{key}\" = \"{value}\" (legacy behaviour, Spark {since}); \
+                                 leave it unset or at its default"
+                            ),
+                        }
+                        .into());
+                    }
+                    legacy::Verdict::Accept => {
+                        self.unregistered.insert(key.to_owned(), value.to_owned());
+                        return Ok(None);
+                    }
+                    legacy::Verdict::Handled | legacy::Verdict::Unknown => {}
+                }
+            }
             // One warning per key: re-setting a key already seen stays silent.
             if self
                 .unregistered
@@ -554,7 +584,7 @@ impl Config {
     /// Removes the value of `key` (a `krishiv.*` key, a Spark alias or
     /// another key), so the entry has its default again.
     pub fn unset(&mut self, key: &str) {
-        match lookup(key) {
+        match lookup(legacy::primary_key(key)) {
             Some(entry) => {
                 self.values.remove(entry.key);
             }
@@ -568,7 +598,7 @@ impl Config {
     /// its value in `baseline`: the value set there, or the default when
     /// neither sets it.
     pub fn reset_key(&mut self, key: &str, baseline: &Config) {
-        match lookup(key) {
+        match lookup(legacy::primary_key(key)) {
             Some(entry) => {
                 self.values.remove(entry.key);
                 if let Some(value) = baseline.values.get(entry.key) {

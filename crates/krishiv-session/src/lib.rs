@@ -42,6 +42,7 @@
 #![forbid(unsafe_code)]
 
 mod access;
+mod action;
 mod admission;
 mod arrow_values;
 pub mod auth;
@@ -87,6 +88,7 @@ mod sessions;
 mod sql_functions;
 mod sql_path;
 mod store;
+mod store_catalog;
 mod system;
 mod table_commands;
 mod telemetry;

@@ -144,6 +144,15 @@ fn exception_classes_pick_the_python_exception_spark_would_raise() {
         first(ErrorClass::ParseSyntaxError),
         "org.apache.spark.sql.catalyst.parser.ParseException"
     );
+    // SQL-18: unnamed errors by their number range (no SQLSTATE).
+    assert_eq!(
+        first(ErrorClass::LegacyErrorTemp1035),
+        "org.apache.spark.sql.AnalysisException"
+    );
+    assert_eq!(
+        first(ErrorClass::LegacyErrorTemp0035),
+        "org.apache.spark.sql.catalyst.parser.ParseException"
+    );
     // Every list ends as ErrorUtils.allClasses ends it.
     for c in [ErrorClass::DivideByZero, ErrorClass::InvalidHandleFormat] {
         let list = exception_classes(c);
@@ -166,4 +175,25 @@ fn an_operation_limit_is_resource_exhausted() {
     }
     .into();
     assert_eq!(status_of(&e).code(), Code::ResourceExhausted);
+}
+
+/// ADR 0046 §8: an authorization refusal is `PERMISSION_DENIED`, with the
+/// same `ErrorInfo` as every other error.
+#[test]
+fn insufficient_permissions_is_permission_denied() {
+    let e: KrishivError = krishiv_common::error::KrishivInsufficientPermissions {
+        principal: "ann".to_owned(),
+        privilege: "SET".to_owned(),
+        securable: "configuration `krishiv.resultCache.ttl`".to_owned(),
+    }
+    .into();
+    let status = status_of(&e);
+    assert_eq!(status.code(), Code::PermissionDenied);
+    let (rpc, info) = details(&status);
+    assert_eq!(rpc.code, Code::PermissionDenied as i32);
+    assert_eq!(
+        info.metadata["errorClass"],
+        "KRISHIV_INSUFFICIENT_PERMISSIONS"
+    );
+    assert_eq!(info.metadata["sqlState"], "42501");
 }

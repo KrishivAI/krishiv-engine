@@ -1,3 +1,7 @@
+---
+description: "Where Krishiv behaviour deliberately differs from Spark."
+---
+
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # Known differences from Spark
 
@@ -47,6 +51,42 @@ on every row as Spark's shuffle evaluates them. Two things differ:
 
 Pinned by `crates/krishiv-session/tests/distribute_by_goldens.rs` (`DIFFERENT`), against a Spark
 4.2.0 run (3.5, 4.0 and 4.1 not run).
+
+## `TABLESAMPLE` rows follow the input's partitions
+
+`TABLESAMPLE (x PERCENT)` and `(BUCKET x OUT OF y)` sample as Spark's `SampleExec` does: each row of
+input partition `i` takes one draw of `XORShiftRandom(seed + i)`, in input order, and is kept when it
+falls below the fraction. The rows therefore equal Spark's when both engines split the input the same
+way, and are otherwise a different Bernoulli sample at the same fraction:
+
+- A session with one compute thread reads `range(0, n)`, `VALUES` and a small file as one partition, as
+  Spark's `local[1]` does; `range(a, b, step, n)` is the same `n` slices in both engines at any thread
+  count; `UNION ALL` numbers its inputs' partitions one after another, as Spark.
+- An in-memory table (registered batches, a cached relation) is one partition per 128 Ki rows
+  (`morsel_rows`), even at one thread: a larger one draws from several streams where Spark's
+  `local[1]` draws from one.
+- A file scan under a sample reads Spark's file partitions (the same split planning:
+  `maxPartitionBytes`, `openCostInBytes`, the leaf parallelism) each whole, by one driver, in row order.
+  So `REPEATABLE` gives the same rows on every run at any thread count; they equal Spark's when the
+  files hold the same rows in the same order and the same sizes (files Krishiv writes differ in size
+  from Spark's, which can pack them differently).
+- With more threads, `range(0, n)` is cut into one slice per thread (Spark: `defaultParallelism`), so
+  the rows differ from a Spark cluster's of another parallelism; the same session repeats them.
+- After a join, an aggregate or an exchange the input partition is the driver's, and its rows' order
+  depends on scheduling: as in Spark, a sample there is not repeatable.
+- Without `REPEATABLE` the seed is a random value in `0..1000`, drawn when the plan is built. One
+  DataFrame keeps its seeds across actions (`df.collect()` twice gives the same rows, as a Spark
+  Dataset keeps its executed plan); each new statement draws again. Every reference of a `WITH`
+  definition holding one samples with its own seed, as Spark's inlined references do.
+- Inside a recursive CTE a sample draws from the stream of its iteration's input partition, without
+  Spark's per-round partition shift, so its rows there differ from Spark's.
+- `TABLESAMPLE SYSTEM (...)` (Spark 4.2's block sampling) is `KRISHIV_UNSUPPORTED_FEATURE`, and a
+  `REPEATABLE` seed past `BIGINT` is refused as unsupported where Spark raises an unclassified
+  `NumberFormatException`. A sampled plan travels through the plan codec (feature `sample`); a
+  worker without that feature refuses it.
+
+Pinned by `crates/krishiv-session/tests/tablesample_goldens.rs` against a Spark 4.2.0 run
+(`tests/fixtures/spark-4.2.0/tablesample.json`).
 
 ## Filters move below only their deterministic prefix
 
@@ -215,13 +255,38 @@ do not see it, as in Spark. `system.caches` lists the session's live checkpoints
 - **Geometry, geography and variant columns** get Spark's Arrow shape at the top level of a result only, not inside a
   struct, array or map.
 - **The `metrics` response of ExecutePlan is empty** until the operator tree is wired through.
-- **Reattaching to an operation that is still sending** answers `INVALID_CURSOR.DISCONNECTED` to the new stream, and
-  ExecutePlan re-sent with a live operation id answers the same; Spark ends the old stream and replays from the start.
-  The stock client reattaches only after a dropped connection, when Krishiv has already cancelled the operation.
+- **A reattachable operation's query pauses** once `krishiv.connect.execute.aheadBytes` (64 MiB) of its responses are
+  unread, whether or not a client is attached; Spark keeps producing and buffers every unread response.
+- **A new operation can wait for admission.** Each operation reserves its worst case (`aheadBytes` plus, reattachable,
+  `krishiv.connect.execute.retryBufferSize`) of `krishiv.connect.maxResponseBytes` (1 GiB) before its first response,
+  until it is released, abandoned or ends; past the cap a new `ExecutePlan` waits (its stream sends nothing yet) until
+  one does. Running operations never wait on it. Spark has no such cap. A server refuses to start with a cap below one
+  operation's worst case (`KRISHIV_INVALID_CONFIG_VALUE`). There is no per-principal share yet, so one principal's
+  open operations can hold the whole cap.
 - **Column metadata travels in the `schema` response only**: Spark 4.3 also writes each field's user metadata into
   the Arrow schema of every result batch (`SPARK::metadata::json`); Krishiv's batches carry none.
-- **A connection that breaks while results are streaming fails the query**: Krishiv cancels the operation and the
-  client's reattach answers `INVALID_HANDLE.OPERATION_NOT_FOUND`, where Spark keeps the sent responses and resumes the
-  stream. Krishiv's replay buffer and resume come in a later release.
 - **ReleaseExecute without a release type** fails with `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SET`; Spark throws
   an `UnsupportedOperationException` without an error class.
+- **AnalyzePlan.** An `UNSPECIFIED` explain mode fails with `CONNECT_INVALID_PLAN.INVALID_ENUM`, and `json_to_ddl` of a
+  type that is not a struct with `INVALID_SCHEMA.NON_STRUCT_TYPE`; Spark sends `INTERNAL` without an error class for
+  both. `persist`, `unpersist` and `get_storage_level` fail with
+  `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SUPPORTED` until DataFrame caching lands. `input_files` lists the paths
+  the file scans read, qualified (`file:/data/t`), not the files under them, and nothing for a catalog table (Spark
+  lists the files of a file-backed table). `same_semantics` and `semantic_hash` ignore column and alias names and
+  subquery aliases, as Spark's canonicalization does, but not Spark's other rewrites: plans that differ only in the
+  order of commutative operands (`a + b` and `b + a`), in a projection that only renames or repeats the input's
+  columns, or in join hints are not the same in Krishiv and are in Spark. `semantic_hash` values are Krishiv's own
+  (equal for plans `same_semantics` calls equal, within one server), not Spark's. `ddl_parse` refuses the clauses only
+  a table schema takes (`DEFAULT`, `GENERATED`), and its parse errors are those of the text as a data type, where Spark
+  reports the table-schema parse. `spark_version` is the session profile's release line (`4.2.0`).
+- **Config.** Secret-looking keys and values (Spark 4.3's `spark.redaction.regex` default) are hidden for 4.2 sessions
+  too; Spark 4.2 shows them. The pattern is the default only (Spark reads `spark.redaction.regex` from the startup
+  configuration). Krishiv also hides what its own secret classifier finds, where Spark 4.3 shows it: keys such as
+  `fs.azure.account.key.<account>`, `sasl.jaas.config` or `*.apiKey`, and values with credentials in a URL
+  (`postgres://user:password@host`). `set` of a key without a value fails with `INVALID_CONF_VALUE.REQUIREMENT`, and a request without an
+  operation with `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SET`; Spark sends `INTERNAL` without an error class.
+  `is_modifiable` answers `true` for a key outside the engine's registry, where Spark answers `false` for a key it does
+  not know. `get_all` lists a registered key under its Spark name when it has one, else under its `krishiv.*` name.
+  Setting a key the registry marks admin-only answers `KRISHIV_INSUFFICIENT_PERMISSIONS` (42501, gRPC
+  `PERMISSION_DENIED`) for a non-admin role (no role exists before authentication, so the local user is the admin).
+- **Interrupt by tag** fails with `UNSUPPORTED_FEATURE.INTERRUPT_TYPE` until operation tags can be interrupted.

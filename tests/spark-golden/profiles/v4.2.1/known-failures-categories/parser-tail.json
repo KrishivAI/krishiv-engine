@@ -1,0 +1,18 @@
+{
+  "category": "parser-tail",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "file": "^transform$",
+      "order": 110
+    },
+    {
+      "detail": "^parse failed",
+      "order": 170,
+      "query": "(?i)\\b(transform|identifier|tablesample|nearest)\\b|\\btable\\s*\\(|:\\w"
+    }
+  ],
+  "summary": "TRANSFORM, IDENTIFIER(), TABLE(...) arguments, TABLESAMPLE, NEAREST BY, variant paths",
+  "task": "P2-T075c"
+}

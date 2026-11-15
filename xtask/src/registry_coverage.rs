@@ -244,6 +244,7 @@ pub fn run(root: &Path) -> Result<(), String> {
     let mut catalog = Vec::new();
     for file in [
         "vendored/spark-error-conditions.json",
+        "vendored/spark-error-conditions-4.2.1.json",
         "krishiv-error-classes.json",
     ] {
         let path = root.join("crates/krishiv-common").join(file);
@@ -251,6 +252,9 @@ pub fn run(root: &Path) -> Result<(), String> {
             .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         catalog.extend(parse_error_classes(&json)?);
     }
+    // A class in both Spark releases is one class.
+    catalog.sort_by(|a, b| a.name.cmp(&b.name));
+    catalog.dedup_by(|a, b| a.name == b.name);
     let classes = raised(&catalog, &collect_engine(root));
     let keys: Vec<&str> = krishiv_common::config::REGISTRY
         .iter()

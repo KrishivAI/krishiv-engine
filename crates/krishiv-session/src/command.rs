@@ -145,6 +145,7 @@ impl Session {
                     }
                     .into());
                 }
+                self.authorize_set_store_key(key).await?;
                 // The assignment sets through the session configuration,
                 // so validation and error classes are its own; the row
                 // shows the value as written, as in Spark.

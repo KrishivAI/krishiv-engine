@@ -1,5 +1,8 @@
 {
   "cases": {
+    "legacy-setting-refused": [
+      123
+    ],
     "parser-tail": [
       0,
       1,

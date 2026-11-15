@@ -13,39 +13,85 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from krishiv.sql.row import Row, _create_row
-from krishiv.sql.types import (
-    ArrayType,
-    AtomicType,
-    BinaryType,
-    BooleanType,
-    ByteType,
-    CalendarIntervalType,
-    CharType,
-    DataType,
-    DateType,
-    DayTimeIntervalType,
-    DecimalType,
-    DoubleType,
-    FloatType,
-    FractionalType,
-    IntegerType,
-    IntegralType,
-    LongType,
-    MapType,
-    NullType,
-    NumericType,
-    ShortType,
-    StringType,
-    StructField,
-    StructType,
-    TimestampNTZType,
-    TimestampType,
-    VarcharType,
-    VariantType,
-    YearMonthIntervalType,
-)
-from krishiv.sql.variant import VariantVal
+from krishiv._udf._host import IN_WORKER
+
+# Pool workers (`_host`): pyspark's own classes, since a UDF's pickled return type is one of them.
+if IN_WORKER:
+    from pyspark._globals import _NoValue  # ty: ignore[unresolved-import]  # pool workers only
+    from pyspark.sql.types import (  # ty: ignore[unresolved-import]  # pool workers only
+        ArrayType,
+        AtomicType,
+        BinaryType,
+        BooleanType,
+        ByteType,
+        CalendarIntervalType,
+        CharType,
+        DataType,
+        DateType,
+        DayTimeIntervalType,
+        DecimalType,
+        DoubleType,
+        FloatType,
+        FractionalType,
+        Geography,
+        GeographyType,
+        Geometry,
+        GeometryType,
+        IntegerType,
+        IntegralType,
+        LongType,
+        MapType,
+        NullType,
+        NumericType,
+        Row,
+        ShortType,
+        StringType,
+        StructField,
+        StructType,
+        TimestampNTZType,
+        TimestampType,
+        TimeType,
+        UserDefinedType,
+        VarcharType,
+        VariantType,
+        VariantVal,
+        YearMonthIntervalType,
+        _create_row,
+    )
+else:
+    from krishiv.sql.row import Row, _create_row
+    from krishiv.sql.types import (
+        ArrayType,
+        AtomicType,
+        BinaryType,
+        BooleanType,
+        ByteType,
+        CalendarIntervalType,
+        CharType,
+        DataType,
+        DateType,
+        DayTimeIntervalType,
+        DecimalType,
+        DoubleType,
+        FloatType,
+        FractionalType,
+        IntegerType,
+        IntegralType,
+        LongType,
+        MapType,
+        NullType,
+        NumericType,
+        ShortType,
+        StringType,
+        StructField,
+        StructType,
+        TimestampNTZType,
+        TimestampType,
+        VarcharType,
+        VariantType,
+        YearMonthIntervalType,
+    )
+    from krishiv.sql.variant import VariantVal
 
 __all__ = [
     "ArrayType",
@@ -91,73 +137,66 @@ __all__ = [
 ]
 
 
-class _NoValueType:
-    """``pyspark._globals._NoValueType``: the one "no value" marker (a zero-column batch's rows)."""
+if not IN_WORKER:
+    # In-process stand-ins for what `krishiv.sql.types` lacks.
+    class _NoValueType:
+        """``pyspark._globals._NoValueType``: the one "no value" marker (a zero-column batch's rows)."""
 
-    _instance: _NoValueType | None = None
+        _instance: _NoValueType | None = None
 
-    def __new__(cls) -> _NoValueType:
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
+        def __new__(cls) -> _NoValueType:
+            if cls._instance is None:
+                cls._instance = super().__new__(cls)
+            return cls._instance
 
-    def __repr__(self) -> str:
-        return "<no value>"
+        def __repr__(self) -> str:
+            return "<no value>"
 
+    _NoValue = _NoValueType()
 
-_NoValue = _NoValueType()
+    class TimeType(AtomicType):
+        """Stands in for ``pyspark.sql.types.TimeType`` (``TIME(6)``): made for a ``time64`` input column."""
 
+        def __init__(self, precision: int = 6) -> None:
+            self.precision = precision
 
-class TimeType(AtomicType):
-    """Stands in for ``pyspark.sql.types.TimeType`` (``TIME(6)``): made for a ``time64`` input column."""
+        def simpleString(self) -> str:
+            return f"time({self.precision})"
 
-    def __init__(self, precision: int = 6) -> None:
-        self.precision = precision
+    class UserDefinedType(DataType):
+        """Stands in for ``pyspark.sql.types.UserDefinedType``: Krishiv has no UDTs, so nothing is one."""
 
-    def simpleString(self) -> str:
-        return f"time({self.precision})"
+        def sqlType(self) -> DataType:
+            raise NotImplementedError
 
+        def serialize(self, obj: Any) -> Any:
+            raise NotImplementedError
 
-class UserDefinedType(DataType):
-    """Stands in for ``pyspark.sql.types.UserDefinedType``: Krishiv has no UDTs, so nothing is one."""
+        def deserialize(self, datum: Any) -> Any:
+            raise NotImplementedError
 
-    def sqlType(self) -> DataType:
-        raise NotImplementedError
+    class _SpatialType(DataType):
+        MIXED_SRID = -1
 
-    def serialize(self, obj: Any) -> Any:
-        raise NotImplementedError
+        def __init__(self, srid: int | str) -> None:
+            self.srid = srid
 
-    def deserialize(self, datum: Any) -> Any:
-        raise NotImplementedError
+        def toInternal(self, obj: Any) -> Any:
+            raise NotImplementedError
 
+    class GeometryType(_SpatialType):
+        """Stands in for ``pyspark.sql.types.GeometryType``: the Python facade has no spatial values yet."""
 
-class _SpatialType(DataType):
-    MIXED_SRID = -1
+    class GeographyType(_SpatialType):
+        """Stands in for ``pyspark.sql.types.GeographyType``: the Python facade has no spatial values yet."""
 
-    def __init__(self, srid: int | str) -> None:
-        self.srid = srid
+    class _Spatial:
+        @classmethod
+        def fromWKB(cls, wkb: bytes, srid: int) -> Any:
+            raise NotImplementedError("spatial values in Python UDFs")
 
-    def toInternal(self, obj: Any) -> Any:
-        raise NotImplementedError
+    class Geometry(_Spatial):
+        """Stands in for ``pyspark.sql.types.Geometry``."""
 
-
-class GeometryType(_SpatialType):
-    """Stands in for ``pyspark.sql.types.GeometryType``: the Python facade has no spatial values yet."""
-
-
-class GeographyType(_SpatialType):
-    """Stands in for ``pyspark.sql.types.GeographyType``: the Python facade has no spatial values yet."""
-
-
-class _Spatial:
-    @classmethod
-    def fromWKB(cls, wkb: bytes, srid: int) -> Any:
-        raise NotImplementedError("spatial values in Python UDFs")
-
-
-class Geometry(_Spatial):
-    """Stands in for ``pyspark.sql.types.Geometry``."""
-
-
-class Geography(_Spatial):
-    """Stands in for ``pyspark.sql.types.Geography``."""
+    class Geography(_Spatial):
+        """Stands in for ``pyspark.sql.types.Geography``."""

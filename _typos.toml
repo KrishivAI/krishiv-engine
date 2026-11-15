@@ -10,7 +10,7 @@ extend-exclude = [
     "docs/reference/rust/**",
     "crates/krishiv-functions/vendored/spark-function-docs.jsonl",
     "crates/*/tests/fixtures/**",
-    "crates/krishiv-common/vendored/spark-error-conditions.json",
+    "crates/krishiv-common/vendored/spark-error-conditions*.json",
     "crates/krishiv-types/vendored/collations.tsv",
     # generated Java zone-name table (PONT, TAHT)
     "crates/krishiv-kernels/src/datetime_pattern/zone_names.rs",

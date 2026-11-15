@@ -61,6 +61,7 @@ impl Session {
     /// A session of `parts` on `runtime` starting from `seed`'s state.
     fn seeded(runtime: Arc<EngineRuntime>, parts: SessionParts, seed: Seed) -> Self {
         let config = seed.conf.snapshot();
+        let runtime_admission = runtime.admission.clone();
         let queries = Arc::new(crate::system::QueryLog::new(
             Arc::clone(&runtime.history),
             &parts.principal.name,
@@ -109,6 +110,7 @@ impl Session {
             locals: Arc::from([]),
             operation: None,
             deadline: None,
+            request_tags: Arc::from([]),
             state: Arc::new(SessionState {
                 conf: Arc::new(seed.conf),
                 catalog: Arc::new(seed.catalog),
@@ -138,7 +140,10 @@ impl Session {
                 // One session id for traces and `system.queries`.
                 session_id: queries.session_id().to_owned(),
                 queries,
-                admission: parts.admission.unwrap_or_else(|| Arc::new(Unlimited)),
+                admission: parts
+                    .admission
+                    .or(runtime_admission)
+                    .unwrap_or_else(|| Arc::new(Unlimited)),
                 statements: AtomicU64::new(0),
                 sql_sources: AtomicU32::new(seed.sql_sources),
             }),
@@ -278,7 +283,8 @@ impl Session {
     /// `OPERATION_CANCELED`, and it takes no new statement
     /// (`INVALID_HANDLE.SESSION_CLOSED`). Dropping a session's handles does
     /// not cancel anything: an open result stream keeps its session alive.
-    /// Returns the number of queries cancelled; closing again is a no-op.
+    /// Statements it is still analyzing or planning end too. Returns the
+    /// number of queries and statements it ended; closing again is a no-op.
     ///
     /// ```
     /// let s = krishiv_session::Session::new()?;
@@ -341,6 +347,22 @@ impl Session {
     #[must_use]
     pub fn id(&self) -> &str {
         self.state.queries.session_id()
+    }
+
+    /// The Spark release line the session behaves as
+    /// ([`SessionBuilder::profile`](crate::SessionBuilder::profile)); Spark
+    /// Connect's `AnalyzePlan.spark_version` answers from it.
+    ///
+    /// ```
+    /// use krishiv_plan::analyzer::SparkProfile;
+    /// let s = krishiv_session::Session::builder().profile(SparkProfile::V4_1).build()?;
+    /// assert_eq!(s.spark_profile(), SparkProfile::V4_1);
+    /// assert_eq!(s.new_session().spark_profile(), SparkProfile::V4_1);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    #[must_use]
+    pub fn spark_profile(&self) -> krishiv_plan::analyzer::SparkProfile {
+        self.state.profile
     }
 
     /// Whether [`Self::close`] ran.
@@ -424,6 +446,7 @@ impl Session {
             locals: Arc::clone(&self.locals),
             operation,
             deadline: options.deadline.or(self.deadline),
+            request_tags: options.request_tags.into(),
         };
         Ok(handle)
     }
@@ -477,9 +500,11 @@ impl Session {
     /// too): its stream ends with
     /// `OPERATION_CANCELED` at its next batch boundary (a query whose
     /// execution has not begun fails as it begins), and
-    /// `system.queries.cancel_reason` shows `user`. Whether a running query
-    /// was cancelled: `false` for an unknown id, a query that ended or one
-    /// of another session.
+    /// `system.queries.cancel_reason` shows `user`. A statement named `id`
+    /// that is still being analyzed or planned ends with `OPERATION_CANCELED`
+    /// before its query exists. Whether a running query or statement was
+    /// cancelled: `false` for an unknown id, one that ended or one of another
+    /// session.
     ///
     /// ```
     /// let s = krishiv_session::Session::new()?;
@@ -499,12 +524,29 @@ impl Session {
     }
 
     /// Cancels every running query of this session (Spark Connect's
-    /// `Interrupt` of type `ALL`) and returns their ids.
+    /// `Interrupt` of type `ALL`) and returns their ids. Every action of the
+    /// session still being analyzed or planned ends too, including ones that
+    /// run no query (`schema`, `explain`, `estimate`); those the caller gave
+    /// no operation id are ended but not listed.
     pub fn interrupt_all(&self) -> Vec<crate::QueryId> {
         let number = self.state.number;
         self.state
             .runtime
             .cancel_where(crate::CancelReason::User, |s, _| s == number)
+    }
+
+    /// Cancels every running query of this session that carries the request tag `tag`
+    /// (Spark Connect's `Interrupt` of type `TAG`; [`crate::QueryOptions::tags`]) and returns
+    /// their ids. The match is exact: `a` does not match `ab` or `a=1`, and the session's own
+    /// tags ([`Session::set_tag`]) never match, as a Connect client cannot see them. Nothing
+    /// matched is an empty list. The queries end with `OPERATION_CANCELED`.
+    pub fn interrupt_tag(&self, tag: &str) -> Vec<crate::QueryId> {
+        let number = self.state.number;
+        self.state
+            .runtime
+            .cancel_tagged(crate::CancelReason::User, |s, t| {
+                s == number && t.request_tags.iter().any(|r| &**r == tag)
+            })
     }
 }
 
@@ -518,9 +560,12 @@ impl Session {
         error: &KrishivError,
     ) -> String {
         let policy = crate::system::TextPolicy::from_config(&self.state.conf.snapshot());
-        self.state
+        let id = self
+            .state
             .queries
-            .record_refused(policy, text, class, error, self.operation_id())
+            .record_refused(policy, text, class, error, self.operation_id());
+        self.state.queries.add_request_tags(&id, &self.request_tags);
+        id
     }
 }
 

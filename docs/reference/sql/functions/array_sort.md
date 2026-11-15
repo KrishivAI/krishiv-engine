@@ -38,13 +38,13 @@ array_sort(expr, func)
 ```sql
 -- array_sort, example 1
 > SELECT array_sort(array(5, 6, 1), (left, right) -> case when left < right then -1 when left > right then 1 else 0 end);
-Error: PARSE_SYNTAX_ERROR
+[1,5,6]
 ```
 
 ```sql
 -- array_sort, example 2
 > SELECT array_sort(array('bc', 'ab', 'dc'), (left, right) -> case when left is null and right is null then 0 when left is null then -1 when right is null then 1 when left < right then 1 when left > right then -1 else 0 end);
-Error: PARSE_SYNTAX_ERROR
+["dc","bc","ab"]
 ```
 
 ```sql

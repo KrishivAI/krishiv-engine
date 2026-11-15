@@ -12,6 +12,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.exec.seed", &EXEC_SEED),
     ("krishiv.spill.dir", &SPILL_DIR),
     ("krishiv.ui.enabled", &UI_ENABLED),
+    ("krishiv.udf.sandbox", &UDF_SANDBOX),
     ("krishiv.connect.port", &CONNECT_PORT),
     ("krishiv.memory.limit", &MEMORY_LIMIT),
     ("spark.checkpoint.dir", &CHECKPOINT_DIR),
@@ -64,6 +65,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.session.memoryLimit", &SESSION_MEMORY_LIMIT),
     ("spark.sql.binaryOutputStyle", &BINARY_OUTPUT_STYLE),
     ("spark.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
+    ("krishiv.connect.maxPlanDepth", &CONNECT_MAX_PLAN_DEPTH),
     ("krishiv.io.cache.memoryBytes", &IO_CACHE_MEMORY_BYTES),
     ("krishiv.memory.residentGuard", &MEMORY_RESIDENT_GUARD),
     ("krishiv.resultCache.maxBytes", &RESULT_CACHE_MAX_BYTES),
@@ -71,6 +73,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("spark.sql.shuffle.partitions", &SHUFFLE_PARTITIONS_HINT),
     ("krishiv.exec.sort.hashBuckets", &EXEC_SORT_HASH_BUCKETS),
     ("krishiv.io.coalesceWasteBytes", &IO_COALESCE_WASTE_BYTES),
+    ("krishiv.io.local.allowedRoots", &IO_LOCAL_ALLOWED_ROOTS),
     ("krishiv.io.metadataCacheBytes", &IO_METADATA_CACHE_BYTES),
     ("krishiv.io.multipartPartBytes", &IO_MULTIPART_PART_BYTES),
     ("krishiv.optimizer.joinDpLimit", &JOIN_DP_LIMIT),
@@ -81,10 +84,13 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.sql.binaryOutputStyle", &BINARY_OUTPUT_STYLE),
     ("krishiv.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
     ("spark.sql.legacy.javaCharsets", &LEGACY_JAVA_CHARSETS),
+    ("krishiv.catalog.requestTimeout", &CATALOG_REQUEST_TIMEOUT),
     ("krishiv.connect.keepAlive.time", &CONNECT_KEEPALIVE_TIME),
     ("krishiv.connect.maxConnections", &CONNECT_MAX_CONNECTIONS),
     ("krishiv.exec.lateFetch.maxRows", &LATE_FETCH_MAX_ROWS),
     ("krishiv.io.lateMaterialization", &IO_LATE_MATERIALIZATION),
+    ("krishiv.optimizer.groupKeyCode", &GROUP_KEY_CODE),
+    ("krishiv.python.worker.maxTotal", &PYTHON_WORKER_MAX_TOTAL),
     ("krishiv.query.maxExecutionTime", &QUERY_MAX_EXECUTION_TIME),
     ("krishiv.server.shutdownTimeout", &SERVER_SHUTDOWN_TIMEOUT),
     ("spark.sql.cteRecursionRowLimit", &CTE_RECURSION_ROW_LIMIT),
@@ -110,6 +116,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.connect.handshakeTimeout",
         &CONNECT_HANDSHAKE_TIMEOUT,
+    ),
+    (
+        "krishiv.connect.maxResponseBytes",
+        &CONNECT_MAX_RESPONSE_BYTES,
     ),
     (
         "krishiv.exec.debug.planRoundTrip",
@@ -159,6 +169,18 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.memory.reservationQuantum",
         &MEMORY_RESERVATION_QUANTUM,
+    ),
+    (
+        "krishiv.python.worker.executables",
+        &PYTHON_WORKER_EXECUTABLES,
+    ),
+    (
+        "krishiv.python.worker.idleTimeout",
+        &PYTHON_WORKER_IDLE_TIMEOUT,
+    ),
+    (
+        "krishiv.python.worker.memoryLimit",
+        &PYTHON_WORKER_MEMORY_LIMIT,
     ),
     (
         "krishiv.sql.files.maxPartitionNum",
@@ -238,6 +260,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_SESSION_IDLE_TIMEOUT,
     ),
     (
+        "krishiv.python.worker.maxPerSession",
+        &PYTHON_WORKER_MAX_PER_SESSION,
+    ),
+    (
         "krishiv.sql.files.maxPartitionBytes",
         &FILES_MAX_PARTITION_BYTES,
     ),
@@ -260,6 +286,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.legacy.codingErrorAction",
         &LEGACY_CODING_ERROR_ACTION,
+    ),
+    (
+        "krishiv.workload.resourceGroups.file",
+        &WORKLOAD_RESOURCE_GROUPS_FILE,
     ),
     (
         "spark.connect.grpc.keepAlive.enabled",
@@ -302,6 +332,14 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &EXEC_JOIN_SHARED_BROADCAST_BYTES,
     ),
     (
+        "krishiv.experimental.groupKeyCodeForce",
+        &EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
+    ),
+    (
+        "krishiv.io.objectStore.allowedPrefixes",
+        &IO_OBJECT_STORE_ALLOWED_PREFIXES,
+    ),
+    (
         "krishiv.io.parquet.bloomFilter.enabled",
         &IO_PARQUET_BLOOM_FILTER_ENABLED,
     ),
@@ -334,6 +372,14 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &BUCKETING_MAX_BUCKETS,
     ),
     (
+        "krishiv.connect.execute.detachedTimeout",
+        &CONNECT_EXECUTE_DETACHED_TIMEOUT,
+    ),
+    (
+        "krishiv.connect.execute.retryBufferSize",
+        &CONNECT_EXECUTE_RETRY_BUFFER_SIZE,
+    ),
+    (
         "krishiv.connect.maxOperationsPerSession",
         &CONNECT_MAX_OPERATIONS_PER_SESSION,
     ),
@@ -344,6 +390,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.optimizer.shareRepeatedSubtrees",
         &SHARE_REPEATED_SUBTREES,
+    ),
+    (
+        "krishiv.python.worker.sandbox.allowFork",
+        &PYTHON_WORKER_ALLOW_FORK,
     ),
     (
         "krishiv.sql.legacy.statisticalAggregate",
@@ -418,6 +468,18 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &PARTITION_OVERWRITE_MODE,
     ),
     (
+        "krishiv.connect.execute.abandonedTombstones",
+        &CONNECT_EXECUTE_ABANDONED_TOMBSTONES,
+    ),
+    (
+        "krishiv.connect.execute.maintenanceInterval",
+        &CONNECT_EXECUTE_MAINTENANCE_INTERVAL,
+    ),
+    (
+        "krishiv.connect.execute.senderMaxStreamSize",
+        &CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE,
+    ),
+    (
         "krishiv.connect.session.maintenanceInterval",
         &CONNECT_SESSION_MAINTENANCE_INTERVAL,
     ),
@@ -446,6 +508,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &PYTHON_UDF_ARROW_ENABLED,
     ),
     (
+        "spark.connect.execute.manager.detachedTimeout",
+        &CONNECT_EXECUTE_DETACHED_TIMEOUT,
+    ),
+    (
         "spark.sql.optimizer.windowGroupLimitThreshold",
         &WINDOW_GROUP_LIMIT_THRESHOLD,
     ),
@@ -456,6 +522,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.execution.arrow.maxRecordsPerBatch",
         &ARROW_MAX_RECORDS_PER_BATCH,
+    ),
+    (
+        "krishiv.connect.execute.senderMaxStreamDuration",
+        &CONNECT_EXECUTE_SENDER_MAX_STREAM_DURATION,
     ),
     (
         "krishiv.sql.optimizer.windowGroupLimitThreshold",
@@ -470,6 +540,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &RUNTIME_FILTER_BLOOM_ENABLED,
     ),
     (
+        "spark.connect.execute.manager.maintenanceInterval",
+        &CONNECT_EXECUTE_MAINTENANCE_INTERVAL,
+    ),
+    (
         "spark.connect.session.manager.maintenanceInterval",
         &CONNECT_SESSION_MAINTENANCE_INTERVAL,
     ),
@@ -480,6 +554,22 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.legacy.skipTypeValidationOnAlterPartition",
         &LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
+    ),
+    (
+        "spark.connect.execute.manager.abandonedTombstonesSize",
+        &CONNECT_EXECUTE_ABANDONED_TOMBSTONES,
+    ),
+    (
+        "spark.connect.execute.reattachable.senderMaxStreamSize",
+        &CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE,
+    ),
+    (
+        "spark.connect.execute.reattachable.observerRetryBufferSize",
+        &CONNECT_EXECUTE_RETRY_BUFFER_SIZE,
+    ),
+    (
+        "spark.connect.execute.reattachable.senderMaxStreamDuration",
+        &CONNECT_EXECUTE_SENDER_MAX_STREAM_DURATION,
     ),
     (
         "spark.connect.session.manager.closedSessionsTombstonesSize",

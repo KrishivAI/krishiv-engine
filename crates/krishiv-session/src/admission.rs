@@ -54,6 +54,9 @@ pub struct QueryRequest {
 pub struct Permit {
     memory_budget: Option<usize>,
     slot: Option<Box<dyn std::any::Any + Send + Sync>>,
+    group: Option<String>,
+    priority: Option<u8>,
+    class: Option<WorkloadClass>,
 }
 
 impl Permit {
@@ -62,6 +65,9 @@ impl Permit {
         Self {
             memory_budget: None,
             slot: None,
+            group: None,
+            priority: None,
+            class: None,
         }
     }
 
@@ -71,6 +77,9 @@ impl Permit {
         Self {
             memory_budget: None,
             slot: Some(Box::new(slot)),
+            group: None,
+            priority: None,
+            class: None,
         }
     }
 
@@ -79,6 +88,44 @@ impl Permit {
     pub fn with_memory_budget(mut self, bytes: usize) -> Self {
         self.memory_budget = Some(bytes);
         self
+    }
+
+    /// This permit naming the resource group the controller placed the query in
+    /// (`system.queries.resource_group`).
+    pub fn with_group(mut self, group: impl Into<String>) -> Self {
+        self.group = Some(group.into());
+        self
+    }
+
+    /// This permit with an abort priority (0 to 100): when the memory pool is exhausted the lowest
+    /// priority query is aborted first (`MemoryPool::child_with_priority`).
+    pub fn with_priority(mut self, priority: u8) -> Self {
+        self.priority = Some(priority);
+        self
+    }
+
+    /// This permit with the workload class the query runs as.
+    pub fn with_class(mut self, class: WorkloadClass) -> Self {
+        self.class = Some(class);
+        self
+    }
+
+    /// The abort priority the controller set, if any.
+    #[must_use]
+    pub fn priority(&self) -> Option<u8> {
+        self.priority
+    }
+
+    /// The workload class the controller set, if any.
+    #[must_use]
+    pub fn class(&self) -> Option<WorkloadClass> {
+        self.class
+    }
+
+    /// The resource group the controller placed the query in, if it named one.
+    #[must_use]
+    pub fn group(&self) -> Option<&str> {
+        self.group.as_deref()
     }
 
     /// The slot guard this permit holds, if it is a `T` (how a session reaches its controller's
