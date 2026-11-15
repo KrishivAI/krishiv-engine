@@ -146,6 +146,11 @@ impl Sample {
 }
 
 impl Operator for Sample {
+    /// Spark's `SampleExec` keeps its child's partitioning.
+    fn keeps_partitioning(&self) -> bool {
+        true
+    }
+
     fn lane_safe(&self) -> bool {
         true
     }

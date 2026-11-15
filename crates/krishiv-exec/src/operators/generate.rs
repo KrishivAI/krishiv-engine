@@ -261,6 +261,11 @@ impl Elements {
 }
 
 impl Operator for Generate {
+    /// Spark's `GenerateExec` keeps its child's partitioning.
+    fn keeps_partitioning(&self) -> bool {
+        true
+    }
+
     fn lane_safe(&self) -> bool {
         true
     }

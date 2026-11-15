@@ -1,7 +1,7 @@
 {
  "spark": "4.2.0",
  "master": "local[1]",
- "provenance": "apache/spark:4.2.0 spark-shell runs at local[1] and local[4] (scripts probe.scala, probe2.scala, probe3.scala; spark.sql.shuffle.partitions=4, ANSI on, AQE on unless conf says otherwise). rows: Row.toSeq.map(toString).mkString(\",\") in collect() order; partitions: df.rdd.getNumPartitions. local[4] gave the same rows and partition counts except for the tags in differs_at_local4 (file packing and LocalTableScan slicing follow defaultParallelism).",
+ "provenance": "apache/spark:4.2.0 spark-shell runs at local[1] and local[4] (scripts probe.scala, probe2.scala, probe3.scala; spark.sql.shuffle.partitions=4, ANSI on, AQE on unless conf says otherwise). rows: Row.toSeq.map(toString).mkString(\",\") in collect() order; partitions: df.rdd.getNumPartitions. local[4] gave the same rows and partition counts except for the tags in differs_at_local4 (file packing and LocalTableScan slicing follow defaultParallelism). Cases of script review-probe.scala: the reviewer's probe of a70c2be3e plus cte_two_reads*, gagg_above_off, re-run at local[1] and local[4] (identical output), rows printed with String.valueOf.",
  "views": {
   "probe.scala": {
    "s1": "range(0, 4, 1, 1)",
@@ -26,6 +26,13 @@
    "a2": "range(1000, 1200, 1, 1)",
    "b1": "range(0, 200, 1, 3)",
    "b2": "range(1000, 1200, 1, 2)"
+  },
+  "review-probe.scala": {
+   "s1": "range(0, 4, 1, 1)",
+   "s2": "range(10, 14, 1, 1)",
+   "m1": "range(0, 6, 1, 3)",
+   "m2": "range(10, 14, 1, 2)",
+   "d": "range(0, 20, 1, 1)"
   }
  },
  "files": {
@@ -4480,6 +4487,152 @@
     "4",
     "3",
     "1"
+   ]
+  },
+  {
+   "tag": "r.gagg_above",
+   "script": "review-probe.scala",
+   "sql": "SELECT c, spark_partition_id() p, monotonically_increasing_id() m FROM (SELECT count(*) c FROM m1 UNION ALL SELECT count(*) c FROM m2)",
+   "conf": {},
+   "partitions": 1,
+   "rows": [
+    "6,0,0",
+    "4,0,1"
+   ]
+  },
+  {
+   "tag": "r.range1_4slices_above",
+   "script": "review-probe.scala",
+   "sql": "SELECT id, spark_partition_id() p FROM (SELECT id FROM range(0,1,1,4) UNION ALL SELECT id FROM range(5,6,1,4))",
+   "conf": {},
+   "partitions": 8,
+   "rows": [
+    "0,3",
+    "5,7"
+   ]
+  },
+  {
+   "tag": "r.limit_multi_above",
+   "script": "review-probe.scala",
+   "sql": "SELECT id, spark_partition_id() p FROM (SELECT * FROM (SELECT id FROM m1 LIMIT 3) UNION ALL SELECT * FROM (SELECT id FROM m2 LIMIT 3))",
+   "conf": {},
+   "partitions": 1,
+   "rows": [
+    "0,0",
+    "1,0",
+    "2,0",
+    "10,0",
+    "11,0",
+    "12,0"
+   ]
+  },
+  {
+   "tag": "r.bhj_above",
+   "script": "review-probe.scala",
+   "sql": "SELECT /*+ BROADCAST(d) */ u.id, monotonically_increasing_id() m, rand(42) r FROM (SELECT id FROM s1 UNION ALL SELECT id FROM s2) u JOIN d ON u.id = d.id",
+   "conf": {},
+   "partitions": 1,
+   "rows": [
+    "0,0,0.619189370225301",
+    "1,1,0.5096018842446481",
+    "2,2,0.8325259388871524",
+    "3,3,0.26322809041172357",
+    "10,4,0.6702867696264135",
+    "11,5,0.5173283545794627",
+    "12,6,0.9991441647585968",
+    "13,7,0.06993233728279169"
+   ]
+  },
+  {
+   "tag": "r.bhj_above_nohint_parts",
+   "script": "review-probe.scala",
+   "sql": "SELECT u.id, spark_partition_id() p, monotonically_increasing_id() m FROM (SELECT id FROM s1 UNION ALL SELECT id FROM s2) u JOIN d ON u.id = d.id",
+   "conf": {},
+   "partitions": 1,
+   "rows": [
+    "0,0,0",
+    "1,0,1",
+    "2,0,2",
+    "3,0,3",
+    "10,0,4",
+    "11,0,5",
+    "12,0,6",
+    "13,0,7"
+   ]
+  },
+  {
+   "tag": "r.sample_branch_above",
+   "script": "review-probe.scala",
+   "sql": "SELECT id, spark_partition_id() p FROM (SELECT id FROM s1 TABLESAMPLE (50 PERCENT) REPEATABLE (1) UNION ALL SELECT id FROM s2 TABLESAMPLE (50 PERCENT) REPEATABLE (1))",
+   "conf": {},
+   "partitions": 1,
+   "rows": [
+    "2,0",
+    "3,0",
+    "12,0",
+    "13,0"
+   ]
+  },
+  {
+   "tag": "r.explode_branch_above",
+   "script": "review-probe.scala",
+   "sql": "SELECT x, spark_partition_id() p FROM (SELECT explode(array(id, id)) x FROM s1 UNION ALL SELECT explode(array(id)) x FROM s2)",
+   "conf": {},
+   "partitions": 1,
+   "rows": [
+    "0,0",
+    "0,0",
+    "1,0",
+    "1,0",
+    "2,0",
+    "2,0",
+    "3,0",
+    "3,0",
+    "10,0",
+    "11,0",
+    "12,0",
+    "13,0"
+   ]
+  },
+  {
+   "tag": "r.sort_branch_above",
+   "script": "review-probe.scala",
+   "sql": "SELECT id, spark_partition_id() p FROM (SELECT * FROM (SELECT id FROM s1 ORDER BY id DESC) UNION ALL SELECT * FROM (SELECT id FROM s2 ORDER BY id DESC))",
+   "conf": {},
+   "partitions": 1,
+   "rows": [
+    "3,0",
+    "2,0",
+    "1,0",
+    "0,0",
+    "13,0",
+    "12,0",
+    "11,0",
+    "10,0"
+   ]
+  },
+  {
+   "tag": "r.gagg_above_aqeoff",
+   "script": "review-probe.scala",
+   "sql": "SELECT c, spark_partition_id() p FROM (SELECT count(*) c FROM m1 UNION ALL SELECT count(*) c FROM m2)",
+   "conf": {},
+   "partitions": 1,
+   "rows": [
+    "6,0",
+    "4,0"
+   ]
+  },
+  {
+   "tag": "r.gagg_above_off",
+   "script": "review-probe.scala",
+   "sql": "SELECT c, spark_partition_id() p, monotonically_increasing_id() m FROM (SELECT count(*) c FROM m1 UNION ALL SELECT count(*) c FROM m2)",
+   "conf": {
+    "spark.sql.unionOutputPartitioning": "false"
+   },
+   "partitions": 2,
+   "rows": [
+    "6,0,0",
+    "4,1,8589934592"
    ]
   }
  ]
