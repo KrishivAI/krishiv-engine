@@ -77,7 +77,7 @@ fn array_functions_over_a_vector_column_match_a_list_column() {
     let (_, batch) = vectors();
     let plain = krishiv_exec::carrier::recarried_array(
         batch.column(1),
-        &DataType::List(Arc::new(Field::new("item", DataType::Float32, true))),
+        &DataType::List(Arc::new(Field::new("element", DataType::Float32, true))),
     )
     .unwrap();
     let schema = Arc::new(Schema::new(vec![
@@ -99,6 +99,12 @@ fn array_functions_over_a_vector_column_match_a_list_column() {
         "SELECT count(v), max(size(v)) FROM {}",
         "SELECT id, v FROM {} ORDER BY id DESC",
         // Hash, equality, grouping and joining read the value, not the carrier (design P3-T075, hash and sort keys).
+        // Aggregate, window and subquery inputs read the plain list too.
+        "SELECT collect_list(v) FROM {}",
+        "SELECT first(v), last(v) FROM {}",
+        "SELECT max(v) FROM {}",
+        "SELECT id, lag(v) OVER (ORDER BY id) FROM {} ORDER BY id",
+        "SELECT (SELECT v FROM {} WHERE id = 1)",
         "SELECT hash(v), xxhash64(v) FROM {} ORDER BY id",
         "SELECT v = v, v <=> v FROM {} ORDER BY id",
         "SELECT count(DISTINCT v) FROM {}",

@@ -401,10 +401,14 @@ fn column(input: Input<'_>, c: &BoundColumn) -> Result<Arc<dyn PhysExpr>> {
     let field = input.schema.field(index);
     // The expression-input guard (design P3-T075 §5): a vector carrier is read as the plain list every kernel and
     // function was written against. Plain column items of a projection never come through here, so they keep it.
-    let data_type = match field.data_type() {
-        ArrowType::FixedSizeList(item, _) => ArrowType::List(Arc::clone(item)),
-        other => other.clone(),
-    };
+    let data_type =
+        match field.data_type() {
+            // The engine's plain list: field `element`, null elements allowed (as `carrier::fixed_to_list` builds it).
+            ArrowType::FixedSizeList(item, _) => ArrowType::List(Arc::new(
+                arrow_schema::Field::new("element", item.data_type().clone(), true),
+            )),
+            other => other.clone(),
+        };
     Ok(Arc::new(Column {
         index,
         data_type,
