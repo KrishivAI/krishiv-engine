@@ -115,6 +115,64 @@ impl ActAs {
     }
 }
 
+/// Plain act-as metadata a transport received beside a signed assertion (design P3-T061
+/// §4.1; the security review's wiring requirement 5): each part that is present must agree
+/// with what the assertion names, or [`super::ServerAuth::impersonate_signed`] refuses
+/// (`MetadataMismatch`). Groups compare as sets; a tenant compares with the caller's (A10: the
+/// end user is always in the caller's tenant).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ActAsHint {
+    /// The end user's name, if sent.
+    pub user: Option<String>,
+    /// The end user's groups, if sent.
+    pub groups: Option<Vec<String>>,
+    /// The end user's tenant, if sent.
+    pub tenant: Option<String>,
+}
+
+impl ActAsHint {
+    /// Nothing sent beside the assertion.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// With the end user's name.
+    #[must_use]
+    pub fn with_user(mut self, user: impl Into<String>) -> Self {
+        self.user = Some(user.into());
+        self
+    }
+
+    /// With the end user's groups.
+    #[must_use]
+    pub fn with_groups(mut self, groups: Vec<String>) -> Self {
+        self.groups = Some(groups);
+        self
+    }
+
+    /// With the end user's tenant.
+    #[must_use]
+    pub fn with_tenant(mut self, tenant: impl Into<String>) -> Self {
+        self.tenant = Some(tenant.into());
+        self
+    }
+
+    /// Whether a part that is present names something other than `act_as` for `caller`.
+    pub(crate) fn disagrees_with(&self, act_as: &ActAs, caller: &Principal) -> bool {
+        fn set(g: &[String]) -> std::collections::BTreeSet<&String> {
+            g.iter().collect()
+        }
+        self.user.as_ref().is_some_and(|u| *u != act_as.user)
+            || self
+                .groups
+                .as_ref()
+                .is_some_and(|g| set(g) != set(&act_as.groups))
+            || self.tenant.is_some() && self.tenant != caller.tenant
+    }
+}
+
 /// `krishiv.auth.impersonation.*`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]

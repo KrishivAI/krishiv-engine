@@ -55,6 +55,11 @@ fn secret(dir: &Path, name: &str, token: &str) -> String {
 /// and the users `carol` (viewer) and `alice` (viewer). `impersonating` decides whether the
 /// listener is given the `ServerAuth` for act-as requests.
 async fn start(impersonating: bool) -> Running {
+    start_with(impersonating, true, SessionLimits::default()).await
+}
+
+/// [`start`], with authentication on or off and the given session limits.
+async fn start_with(impersonating: bool, authenticated: bool, limits: SessionLimits) -> Running {
     let dir = tempfile::tempdir().expect("tempdir");
     let p = secret(dir.path(), "p", PORTAL);
     let c = secret(dir.path(), "c", CAROL);
@@ -87,15 +92,17 @@ async fn start(impersonating: bool) -> Running {
         Arc::clone(&denials),
     )
     .expect("factory");
-    let manager = Arc::new(SessionManager::new(factory, SessionLimits::default()));
+    let manager = Arc::new(SessionManager::new(factory, limits));
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
     let mut connect = ConnectAuth::new(Arc::clone(&auth) as Arc<_>).with_denials(denials);
     if impersonating {
         connect = connect.with_impersonation(Arc::clone(&auth));
     }
-    let server =
-        ConnectServer::new(Arc::clone(&manager), ConnectServerConfig::default()).with_auth(connect);
+    let mut server = ConnectServer::new(Arc::clone(&manager), ConnectServerConfig::default());
+    if authenticated {
+        server = server.with_auth(connect);
+    }
     let (stop, stopped) = oneshot::channel::<()>();
     tokio::spawn(server.serve(listener, async {
         let _ = stopped.await;
@@ -448,4 +455,89 @@ async fn the_end_users_role_comes_from_its_groups() {
     .await
     .expect("alice the analyst");
     assert!(rows.contains(&vec!["carol".to_owned()]), "{rows:?}");
+}
+
+/// Review M2 (A12): a server without authentication refuses act-as metadata instead of
+/// serving it as its local user.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_server_without_authentication_refuses_act_as() {
+    let run = start_with(true, false, SessionLimits::default()).await;
+    for metadata in [
+        &[(ACT_AS_USER, "alice")][..],
+        &[(ACT_AS_GROUPS, "analysts")][..],
+        &[(ACT_AS_TOKEN, "e30.e30.c2ln")][..],
+    ] {
+        assert_impersonation_denied(
+            execute(&run, SESSION, sql("SELECT 'ok'"), PORTAL, metadata).await,
+        );
+    }
+    assert_eq!(run.manager.counts().live, 0, "no session for a refusal");
+    // Without act-as metadata the local user is served as before.
+    execute(&run, SESSION, sql("SELECT 'ok'"), PORTAL, &[])
+        .await
+        .expect("the local user");
+}
+
+/// Review m4: the pinned groups are a set, so their order does not matter.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_pinned_groups_are_a_set() {
+    let run = start(true).await;
+    execute(
+        &run,
+        SESSION,
+        sql("SELECT 'ok'"),
+        PORTAL,
+        &[(ACT_AS_USER, "alice"), (ACT_AS_GROUPS, "analysts,eng")],
+    )
+    .await
+    .expect("portal for alice");
+    execute(
+        &run,
+        SESSION,
+        sql("SELECT 'ok'"),
+        PORTAL,
+        &[(ACT_AS_USER, "alice"), (ACT_AS_GROUPS, "eng,analysts,eng")],
+    )
+    .await
+    .expect("the same groups in another order");
+    assert_eq!(run.manager.counts().live, 1);
+}
+
+/// Review m1: the groups a front end sends do not multiply the per-principal session cap.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn other_groups_do_not_multiply_the_session_cap() {
+    let limits = SessionLimits {
+        max_sessions_per_principal: 1,
+        ..SessionLimits::default()
+    };
+    let run = start_with(true, true, limits).await;
+    execute(
+        &run,
+        SESSION,
+        sql("SELECT 'ok'"),
+        PORTAL,
+        &[(ACT_AS_USER, "alice")],
+    )
+    .await
+    .expect("the first session of alice through portal");
+    let status = execute(
+        &run,
+        "4a0d6b85-1f3e-4c9b-92a5-8e7f6d5c4b32",
+        sql("SELECT 'ok'"),
+        PORTAL,
+        &[(ACT_AS_USER, "alice"), (ACT_AS_GROUPS, "analysts")],
+    )
+    .await
+    .expect_err("a second session past the cap");
+    assert_eq!(error_class(&status), "KRISHIV_SESSION_LIMIT");
+    // alice herself has her own cap.
+    execute(
+        &run,
+        "5b1e7c96-2a4f-4d0c-a3b6-9f8e7d6c5b43",
+        sql("SELECT 'ok'"),
+        ALICE,
+        &[],
+    )
+    .await
+    .expect("alice's own session");
 }

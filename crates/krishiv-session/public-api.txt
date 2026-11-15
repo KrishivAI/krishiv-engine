@@ -384,6 +384,25 @@ pub fn krishiv_session::auth::ActAs::fmt(&self, &mut core::fmt::Formatter<'_>) -
 impl core::hash::Hash for krishiv_session::auth::ActAs
 pub fn krishiv_session::auth::ActAs::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::StructuralPartialEq for krishiv_session::auth::ActAs
+#[non_exhaustive] pub struct krishiv_session::auth::ActAsHint
+pub krishiv_session::auth::ActAsHint::groups: core::option::Option<alloc::vec::Vec<alloc::string::String>>
+pub krishiv_session::auth::ActAsHint::tenant: core::option::Option<alloc::string::String>
+pub krishiv_session::auth::ActAsHint::user: core::option::Option<alloc::string::String>
+impl krishiv_session::auth::ActAsHint
+pub fn krishiv_session::auth::ActAsHint::new() -> Self
+pub fn krishiv_session::auth::ActAsHint::with_groups(self, alloc::vec::Vec<alloc::string::String>) -> Self
+pub fn krishiv_session::auth::ActAsHint::with_tenant(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn krishiv_session::auth::ActAsHint::with_user(self, impl core::convert::Into<alloc::string::String>) -> Self
+impl core::clone::Clone for krishiv_session::auth::ActAsHint
+pub fn krishiv_session::auth::ActAsHint::clone(&self) -> krishiv_session::auth::ActAsHint
+impl core::cmp::Eq for krishiv_session::auth::ActAsHint
+impl core::cmp::PartialEq for krishiv_session::auth::ActAsHint
+pub fn krishiv_session::auth::ActAsHint::eq(&self, &krishiv_session::auth::ActAsHint) -> bool
+impl core::default::Default for krishiv_session::auth::ActAsHint
+pub fn krishiv_session::auth::ActAsHint::default() -> krishiv_session::auth::ActAsHint
+impl core::fmt::Debug for krishiv_session::auth::ActAsHint
+pub fn krishiv_session::auth::ActAsHint::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::auth::ActAsHint
 #[non_exhaustive] pub struct krishiv_session::auth::AuthConfig
 pub krishiv_session::auth::AuthConfig::impersonation: krishiv_session::auth::ImpersonationConfig
 pub krishiv_session::auth::AuthConfig::mtls: krishiv_session::auth::MtlsConfig
@@ -638,7 +657,7 @@ pub fn krishiv_session::auth::ServerAuth::authenticate_at(&self, &krishiv_sessio
 pub fn krishiv_session::auth::ServerAuth::denials(&self) -> alloc::sync::Arc<krishiv_session::auth::DeniedCounts>
 pub fn krishiv_session::auth::ServerAuth::failure_counts(&self) -> alloc::vec::Vec<krishiv_session::auth::FailureCount>
 pub fn krishiv_session::auth::ServerAuth::impersonate(&self, &krishiv_session::auth::Authenticated, krishiv_session::auth::Surface, core::net::socket_addr::SocketAddr, &krishiv_session::auth::ActAs) -> core::result::Result<krishiv_session::auth::Authenticated, krishiv_common::error::KrishivError>
-pub async fn krishiv_session::auth::ServerAuth::impersonate_signed(&self, &krishiv_session::auth::Authenticated, krishiv_session::auth::Surface, core::net::socket_addr::SocketAddr, &str) -> core::result::Result<(krishiv_session::auth::ActAs, krishiv_session::auth::Authenticated), krishiv_common::error::KrishivError>
+pub async fn krishiv_session::auth::ServerAuth::impersonate_signed(&self, &krishiv_session::auth::Authenticated, krishiv_session::auth::Surface, core::net::socket_addr::SocketAddr, &str, &krishiv_session::auth::ActAsHint) -> core::result::Result<(krishiv_session::auth::ActAs, krishiv_session::auth::Authenticated), krishiv_common::error::KrishivError>
 pub fn krishiv_session::auth::ServerAuth::impersonation_counts(&self) -> krishiv_session::auth::ImpersonationCount
 pub fn krishiv_session::auth::ServerAuth::is_enabled(&self) -> bool
 pub fn krishiv_session::auth::ServerAuth::metrics(&self) -> krishiv_exec::metrics::registry::MetricsSnapshot

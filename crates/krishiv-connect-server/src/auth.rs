@@ -165,7 +165,7 @@ impl ConnectAuth {
     ) -> Result<Authenticated, Status> {
         let Some(authenticator) = &self.authenticator else {
             if act_as::asks(headers) {
-                return Err(self.no_impersonation(&self.local()));
+                return Err(self.no_impersonation(&self.local(), peer));
             }
             return Ok(self.local());
         };
@@ -218,7 +218,7 @@ impl ConnectAuth {
             return Ok(caller);
         }
         let Some(server) = &self.impersonation else {
-            return Err(self.no_impersonation(&caller));
+            return Err(self.no_impersonation(&caller, Some(peer)));
         };
         act_as::resolve(server, headers, peer, caller)
             .await
@@ -227,13 +227,14 @@ impl ConnectAuth {
 
     /// The refusal of act-as metadata on a listener that decides none (authentication off, or
     /// no [`ConnectAuth::with_impersonation`]): never ignored (P3-T061 §4.2 rule 1).
-    fn no_impersonation(&self, caller: &Authenticated) -> Status {
+    fn no_impersonation(&self, caller: &Authenticated, peer: Option<SocketAddr>) -> Status {
         tracing::warn!(
             target: "krishiv::audit",
             listener = Surface::Connect.as_str(),
             caller = %caller.principal.name,
             decision = "denied",
             reason_code = "no_impersonation",
+            remote_addr = peer.map(tracing::field::display),
             "impersonation"
         );
         status_of(&krishiv_session::auth::Denial::NoPrivilege.error())
@@ -312,9 +313,9 @@ pub struct SessionOwner {
     /// The service acting for the principal (P3-T061 note A4): a front end acting for alice
     /// and alice herself, or two front ends acting for her, never share a session.
     delegated_by: Option<String>,
-    /// An impersonated principal's groups (the act-as identity pinned per session, P3-T061
-    /// §4.2 rule 5); empty for a principal that authenticated itself, whose groups may change
-    /// between two tokens.
+    /// An impersonated principal's groups, sorted and without repeats (the act-as identity
+    /// pinned per session, P3-T061 §4.2 rule 5); empty for a principal that authenticated
+    /// itself, whose groups may change between two tokens.
     act_as_groups: Vec<String>,
 }
 
@@ -329,10 +330,24 @@ impl SessionOwner {
             name: caller.principal.name.clone(),
             delegated_by: caller.principal.delegated_by.clone(),
             act_as_groups: if caller.principal.delegated_by.is_some() {
-                caller.principal.groups.clone()
+                let mut groups = caller.principal.groups.clone();
+                groups.sort_unstable();
+                groups.dedup();
+                groups
             } else {
                 Vec::new()
             },
+        }
+    }
+
+    /// The owner `krishiv.connect.maxSessionsPerPrincipal` counts under: this one without the
+    /// act-as groups, which are the front end's own claim (review m1), so one front end acting
+    /// for one user has one cap whatever groups it sends.
+    #[must_use]
+    pub(crate) fn cap_key(&self) -> Self {
+        Self {
+            act_as_groups: Vec::new(),
+            ..self.clone()
         }
     }
 }

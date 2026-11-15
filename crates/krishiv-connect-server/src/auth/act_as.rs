@@ -16,19 +16,26 @@
 //! - **Per RPC** (requirement 4): the layer runs on every RPC, so a service whose `expires`
 //!   passed, or an assertion past its lifetime, stops acting at its next call.
 //! - The peer is the connection's own TCP peer (`PeerInfo`, requirement 2), never a header.
-//! - **Plain metadata beside an assertion** must name the same user, groups and tenant, or the
-//!   request is refused (requirement 5); only the [`ActAs`] and [`Authenticated`] the server
-//!   returns are used afterwards (requirement 6), so the end user's role is the capped one.
+//!   **Plain act-as trusts a loopback peer**, so behind a TLS-terminating proxy on the same
+//!   host every client is loopback and anyone holding the service's token could act for its
+//!   users from the network: such a deployment needs client certificates (mTLS) or signed
+//!   assertions (`krishiv.auth.impersonation.signedAssertion`).
+//! - **Plain metadata beside an assertion** goes to the server as an [`ActAsHint`]: a part
+//!   that disagrees with the assertion is refused there, as one audited decision (requirement
+//!   5); only the [`ActAs`] and [`Authenticated`] the server returns are used afterwards
+//!   (requirement 6), so the end user's role is the capped one.
+//! - A name, group or tenant with leading or trailing whitespace is unreadable (` eng` after a
+//!   comma is not `eng`), and so is a `%` escape that is not two hex digits.
 
 use std::net::SocketAddr;
 
 use krishiv_common::error::KrishivError;
-use krishiv_session::auth::{ActAs, Authenticated, Denial, ServerAuth, Surface};
+use krishiv_session::auth::{ActAs, ActAsHint, Authenticated, Denial, ServerAuth, Surface};
 use tonic::codegen::http::HeaderMap;
 
 /// The end user's name (plain act-as).
 pub const ACT_AS_USER: &str = "x-krishiv-act-as-user";
-/// The end user's groups, comma separated (plain act-as).
+/// The end user's groups, comma separated (plain act-as; compared as a set).
 pub const ACT_AS_GROUPS: &str = "x-krishiv-act-as-groups";
 /// The end user's tenant (plain act-as).
 pub const ACT_AS_TENANT: &str = "x-krishiv-act-as-tenant";
@@ -64,20 +71,33 @@ impl Metadata {
                     .collect::<Option<Vec<_>>>()?,
             ),
         };
-        Some(Self {
+        let metadata = Self {
             user: decoded(headers, ACT_AS_USER)?,
             groups,
             tenant: decoded(headers, ACT_AS_TENANT)?,
             // A compact JWS is base64url and dots: no escapes to undo.
             token: one(headers, ACT_AS_TOKEN)?.map(str::to_owned),
-        })
+        };
+        let padded = |v: &String| v.trim() != v.as_str();
+        let any_padded = metadata.user.iter().any(padded)
+            || metadata.tenant.iter().any(padded)
+            || metadata.groups.iter().flatten().any(padded);
+        (!any_padded).then_some(metadata)
     }
 
-    /// Whether the plain part names something other than `act_as`.
-    fn disagrees_with(&self, act_as: &ActAs) -> bool {
-        self.user.as_ref().is_some_and(|u| *u != act_as.user)
-            || self.groups.as_ref().is_some_and(|g| *g != act_as.groups)
-            || self.tenant.is_some() && self.tenant != act_as.tenant
+    /// The plain part, for the server to compare with an assertion.
+    fn hint(&self) -> ActAsHint {
+        let mut hint = ActAsHint::new();
+        if let Some(user) = &self.user {
+            hint = hint.with_user(user.clone());
+        }
+        if let Some(groups) = &self.groups {
+            hint = hint.with_groups(groups.clone());
+        }
+        if let Some(tenant) = &self.tenant {
+            hint = hint.with_tenant(tenant.clone());
+        }
+        hint
     }
 }
 
@@ -109,6 +129,10 @@ fn percent_decode(text: &str) -> Option<String> {
     while let Some(&b) = bytes.get(i) {
         if b == b'%' {
             let hex = bytes.get(i + 1..i + 3)?;
+            // `from_str_radix` would also take a sign (`%+A`).
+            if !hex.iter().all(u8::is_ascii_hexdigit) {
+                return None;
+            }
             let hex = std::str::from_utf8(hex).ok()?;
             out.push(u8::from_str_radix(hex, 16).ok()?);
             i += 3;
@@ -144,17 +168,9 @@ pub(super) async fn resolve(
         ));
     };
     if let Some(token) = &metadata.token {
-        let (act_as, end_user) = server
-            .impersonate_signed(&caller, Surface::Connect, peer, token)
+        let (_, end_user) = server
+            .impersonate_signed(&caller, Surface::Connect, peer, token, &metadata.hint())
             .await?;
-        if metadata.disagrees_with(&act_as) {
-            return Err(server.refuse_impersonation(
-                &caller,
-                Surface::Connect,
-                peer,
-                Denial::MetadataMismatch,
-            ));
-        }
         return Ok(end_user);
     }
     // Groups or a tenant name no one without a user.
@@ -193,6 +209,7 @@ mod tests {
         assert_eq!(percent_decode("%2"), None);
         assert_eq!(percent_decode("%zz"), None);
         assert_eq!(percent_decode("%FF"), None);
+        assert_eq!(percent_decode("%+A"), None);
     }
 
     #[test]
@@ -228,29 +245,40 @@ mod tests {
     }
 
     #[test]
-    fn plain_metadata_must_match_the_assertion() {
-        let act_as = ActAs::new("alice").with_groups(vec!["eng".to_owned()]);
-        let same = Metadata {
-            user: Some("alice".to_owned()),
-            groups: Some(vec!["eng".to_owned()]),
-            ..Metadata::default()
-        };
-        assert!(!same.disagrees_with(&act_as));
-        assert!(!Metadata::default().disagrees_with(&act_as));
-        let other_user = Metadata {
-            user: Some("bob".to_owned()),
-            ..Metadata::default()
-        };
-        assert!(other_user.disagrees_with(&act_as));
-        let other_groups = Metadata {
-            groups: Some(vec!["admins".to_owned()]),
-            ..Metadata::default()
-        };
-        assert!(other_groups.disagrees_with(&act_as));
-        let a_tenant = Metadata {
-            tenant: Some("acme".to_owned()),
-            ..Metadata::default()
-        };
-        assert!(a_tenant.disagrees_with(&act_as));
+    fn whitespace_around_a_value_is_unreadable() {
+        for (k, v) in [
+            (ACT_AS_GROUPS, "eng, data"),
+            (ACT_AS_USER, "alice%20"),
+            (ACT_AS_TENANT, " acme"),
+        ] {
+            let mut h = headers(&[(ACT_AS_USER, "alice")]);
+            h.insert(k, HeaderValue::from_static(v));
+            assert_eq!(Metadata::read(&h), None, "{k}: {v}");
+        }
+    }
+
+    #[test]
+    fn the_plain_part_is_the_hint() {
+        let h = headers(&[
+            (ACT_AS_USER, "alice"),
+            (ACT_AS_GROUPS, "eng"),
+            (ACT_AS_TENANT, "acme"),
+            (ACT_AS_TOKEN, "a.b.c"),
+        ]);
+        let metadata = Metadata::read(&h).expect("readable");
+        assert_eq!(metadata.token.as_deref(), Some("a.b.c"));
+        assert_eq!(
+            metadata.hint(),
+            ActAsHint::new()
+                .with_user("alice")
+                .with_groups(vec!["eng".to_owned()])
+                .with_tenant("acme")
+        );
+        assert_eq!(
+            Metadata::read(&headers(&[(ACT_AS_TOKEN, "a.b.c")]))
+                .expect("readable")
+                .hint(),
+            ActAsHint::new()
+        );
     }
 }

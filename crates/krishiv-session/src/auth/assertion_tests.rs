@@ -14,7 +14,8 @@ use super::oidc_tests::{
     Source, jwks, rs_header, rs256, rsa, rsa_jwk, rsa_other, token, wait_until,
 };
 use super::{
-    ActAs, AuthConfig, Authenticated, ImpersonationCount, Method, Role, ServerAuth, Surface,
+    ActAs, ActAsHint, AuthConfig, Authenticated, ImpersonationCount, Method, Role, ServerAuth,
+    Surface,
 };
 
 const ISSUER: &str = "https://portal.example.test/";
@@ -88,7 +89,16 @@ fn present(
     caller: &Authenticated,
     assertion: &str,
 ) -> Result<(ActAs, Authenticated), KrishivError> {
-    block_on(auth.impersonate_signed(caller, Surface::Connect, remote(), assertion))
+    present_beside(auth, caller, assertion, &ActAsHint::new())
+}
+
+fn present_beside(
+    auth: &ServerAuth,
+    caller: &Authenticated,
+    assertion: &str,
+    beside: &ActAsHint,
+) -> Result<(ActAs, Authenticated), KrishivError> {
+    block_on(auth.impersonate_signed(caller, Surface::Connect, remote(), assertion, beside))
 }
 
 fn denied<T>(r: Result<T, KrishivError>) -> bool {
@@ -360,4 +370,52 @@ fn audit_record_has_no_assertion_text() {
         assert!(!logged.contains(t.as_str()), "{logged}");
         assert!(!logged.contains(signature), "{logged}");
     }
+}
+
+/// The wiring's requirement 5 (review M1, M3): plain act-as metadata beside an assertion must
+/// agree with it, and a disagreement is one denied decision, audited once.
+#[test]
+fn plain_metadata_beside_an_assertion_must_agree() {
+    let assertion = signed(&claims("alice", &json!({"sub": "portal"})));
+    for beside in [
+        ActAsHint::new().with_user("bob"),
+        ActAsHint::new().with_groups(vec!["dbas".to_owned()]),
+        // The end user is in the caller's tenant, and portal has none.
+        ActAsHint::new().with_tenant("acme"),
+    ] {
+        let (auth, _) = server();
+        assert!(
+            denied(present_beside(
+                &auth,
+                &caller("portal"),
+                &assertion,
+                &beside
+            )),
+            "{beside:?}"
+        );
+        assert_eq!(
+            auth.impersonation_counts(),
+            ImpersonationCount {
+                allowed: 0,
+                denied: 1
+            },
+            "one decision for {beside:?}"
+        );
+    }
+    let (auth, _) = server();
+    // The same user and groups (as a set, in any order or repeated) agree.
+    let same = ActAsHint::new()
+        .with_user("alice")
+        .with_groups(vec!["analysts".to_owned(), "analysts".to_owned()]);
+    let (act_as, end) =
+        present_beside(&auth, &caller("portal"), &assertion, &same).expect("agrees");
+    assert_eq!(act_as.user, "alice");
+    assert_eq!(end.principal.delegated_by.as_deref(), Some("portal"));
+    assert_eq!(
+        auth.impersonation_counts(),
+        ImpersonationCount {
+            allowed: 1,
+            denied: 0
+        }
+    );
 }

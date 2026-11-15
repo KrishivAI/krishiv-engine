@@ -8,8 +8,10 @@
 //! Spark keys by `(UserContext.user_id, session_id)`. Krishiv keys by the
 //! authenticated caller instead (ADR 0046 §5, threat model T-A8): the
 //! client's `user_id` is recorded, unverified, and never decides anything.
-//! The key is the caller's [`SessionOwner`] (method, principal kind, tenant
-//! and name, without groups). A session id another owner holds is refused as
+//! The key is the caller's [`SessionOwner`] (method, principal kind, tenant,
+//! name and delegator; groups only for an impersonated principal, whose
+//! act-as identity they pin, P3-T061). `maxSessionsPerPrincipal` counts
+//! without those groups (`SessionOwner::cap_key`). A session id another owner holds is refused as
 //! unknown (`INVALID_HANDLE.SESSION_NOT_FOUND`), the answer a lookup of an
 //! unknown id gets, and writes a `krishiv::audit` denial record (ADR 0046
 //! §3b: no existence oracle, but the denial is recorded); so does a release
@@ -412,7 +414,7 @@ impl SessionManager {
                         inner
                             .owners
                             .insert(key.session_id.clone(), key.owner.clone());
-                        *inner.per_principal.entry(key.owner.clone()).or_insert(0) += 1;
+                        *inner.per_principal.entry(key.owner.cap_key()).or_insert(0) += 1;
                         Ok(None)
                     }
                 }
@@ -815,7 +817,11 @@ impl SessionManager {
             }
             .into());
         }
-        if inner.per_principal.get(&key.owner).copied().unwrap_or(0)
+        if inner
+            .per_principal
+            .get(&key.owner.cap_key())
+            .copied()
+            .unwrap_or(0)
             >= limits.max_sessions_per_principal
         {
             return Err(KrishivSessionLimit {
@@ -830,10 +836,11 @@ impl SessionManager {
     fn remove_locked(inner: &mut Inner, key: &Key) -> Option<Arc<SessionEntry>> {
         let entry = inner.live.remove(key)?;
         inner.owners.remove(&key.session_id);
-        if let Some(n) = inner.per_principal.get_mut(&key.owner) {
+        let cap = key.owner.cap_key();
+        if let Some(n) = inner.per_principal.get_mut(&cap) {
             *n = n.saturating_sub(1);
             if *n == 0 {
-                inner.per_principal.remove(&key.owner);
+                inner.per_principal.remove(&cap);
             }
         }
         Some(entry)
@@ -862,6 +869,7 @@ fn write_foreign_record(caller: &Authenticated, handle: &'static str) {
         principal = %caller.principal.name,
         method = caller.method.as_str(),
         role = caller.role.map_or("none", Role::as_str),
+        delegated_by = caller.principal.delegated_by.as_deref(),
         surface = Surface::Connect.as_str(),
         handle,
         "refused a Connect id another principal holds, answered as unknown"

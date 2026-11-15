@@ -19,7 +19,9 @@ use krishiv_common::error::KrishivError;
 use krishiv_common::principal::Principal;
 
 use super::config::{AuthConfig, RoleLists, SPARK_TOKEN_NAME};
-use super::impersonation::{self, ActAs, Channel, Decision, Denial, ImpersonationConfig};
+use super::impersonation::{
+    self, ActAs, ActAsHint, Channel, Decision, Denial, ImpersonationConfig,
+};
 #[cfg(feature = "oidc")]
 use super::jose::{self, Identity};
 use super::mtls::{ClientCertificates, MtlsConfig};
@@ -438,8 +440,9 @@ impl ServerAuth {
     /// inside `act`; then the rules of [`ServerAuth::impersonate`] apply as for a trusted
     /// channel, from any peer. A key not cached yet waits for one JWK set fetch. The returned
     /// [`ActAs`] is what the transport pins for the session (rule 5): a later call may bring a
-    /// fresh assertion, which must name the same end user, groups and tenant. The transport
-    /// refuses plain act-as metadata that disagrees with an assertion sent beside it.
+    /// fresh assertion, which must name the same end user, groups and tenant. `beside` is the
+    /// plain act-as metadata the transport received with the assertion: a part that disagrees
+    /// with it is refused (`MetadataMismatch`), audited once with the assertion's `jti`.
     ///
     /// # Errors
     /// `KRISHIV_AUTH_IMPERSONATION_DENIED` (42501) for every refusal, `signedAssertion` off
@@ -450,6 +453,7 @@ impl ServerAuth {
         surface: Surface,
         peer: std::net::SocketAddr,
         assertion: &str,
+        beside: &ActAsHint,
     ) -> Result<(ActAs, Authenticated), KrishivError> {
         // The caller's own standing first (review m3): a caller that may not impersonate never
         // makes the server verify an assertion or fetch its keys.
@@ -467,14 +471,19 @@ impl ServerAuth {
                 return Err(self.refuse(caller, surface, peer, denial));
             }
         };
-        let decision = impersonation::decide(
-            &self.principals,
-            &self.impersonation,
-            caller,
-            Channel::Signed,
-            &act_as,
-            std::time::SystemTime::now(),
-        );
+        // One decision, one audit record (review M3): a disagreeing hint is that decision.
+        let decision = if beside.disagrees_with(&act_as, &caller.principal) {
+            Decision::Denied(Denial::MetadataMismatch)
+        } else {
+            impersonation::decide(
+                &self.principals,
+                &self.impersonation,
+                caller,
+                Channel::Signed,
+                &act_as,
+                std::time::SystemTime::now(),
+            )
+        };
         let end_user = self.audit(
             caller,
             surface,
