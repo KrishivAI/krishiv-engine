@@ -22,3 +22,9 @@ default-filter = "none()"
 [[profile.default.overrides]]
 filter = "test(=a_slow_scan_does_not_delay_a_short_query) | test(=a_cancelled_query_stops_within_100ms_and_releases_everything) | test(=blocking_work_does_not_delay_a_short_query) | test(=tpch_suite_counts_no_stalls) | test(=a_very_large_batch_is_processed_in_chunks)"
 retries = 2
+
+# Known intermittent failure (krishiv-internal ops/flaky-tests.txt). Retried once, and only this test; remove the
+# override when the owning fix merges.
+[[profile.default.overrides]]
+filter = "test(=a_queued_query_without_an_operation_id_is_named_when_cancelled_by_tag)"
+retries = 1

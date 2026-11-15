@@ -1,0 +1,64 @@
+# SPDX-License-Identifier: Apache-2.0
+# CI canary (owner-approved 2026-11-15): the nightly `ci` run on main already executes the full PR check set
+# (its `schedule` event adds the heavy jobs). This daily job checks that the latest scheduled run on main
+# passed and ran recently, and alerts when it did not. Alerts go to ntfy when the repository secret
+# NTFY_TOPIC is set; the job summary always says what it found.
+name: canary
+
+on:
+  schedule:
+    # 06:00 UTC, after the 03:20 UTC nightly `ci` run.
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-nightly:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+    steps:
+      - name: Latest scheduled ci run on main
+        id: run
+        run: |
+          run=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --event schedule \
+            --limit 1 --json conclusion,createdAt,url,status \
+            -q '.[0] | "\(.status) \(.conclusion) \(.createdAt) \(.url)"')
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "Latest scheduled ci run on main: $run" >> "$GITHUB_STEP_SUMMARY"
+          status=$(echo "$run" | cut -d' ' -f1)
+          conclusion=$(echo "$run" | cut -d' ' -f2)
+          created=$(echo "$run" | cut -d' ' -f3)
+          url=$(echo "$run" | cut -d' ' -f4)
+          problem=""
+          if [ -z "$run" ] || [ "$created" = "null" ]; then
+            problem="no scheduled ci run on main was found"
+          elif [ "$status" != "completed" ]; then
+            problem="the latest scheduled ci run is still $status ($url)"
+          elif [ "$conclusion" != "success" ]; then
+            problem="the latest scheduled ci run on main ended $conclusion ($url)"
+          else
+            age=$(( $(date -u +%s) - $(date -u -d "$created" +%s) ))
+            if [ "$age" -gt $((26 * 3600)) ]; then
+              problem="the latest scheduled ci run on main is older than 26 hours ($created, $url)"
+            fi
+          fi
+          echo "problem=$problem" >> "$GITHUB_OUTPUT"
+          if [ -n "$problem" ]; then echo "::error::CI canary: $problem"; else echo "CI canary: nightly ci on main is green."; fi
+      - name: Alert on ntfy
+        if: steps.run.outputs.problem != ''
+        run: |
+          if [ -z "$NTFY_TOPIC" ]; then
+            echo "::warning::NTFY_TOPIC is not set; no push alert sent. Summary: ${{ steps.run.outputs.problem }}"
+            exit 0
+          fi
+          curl -fsS --max-time 20 -H "Title: krishiv-engine CI canary" -H "Priority: high" \
+            -d "${{ steps.run.outputs.problem }}" "https://ntfy.sh/$NTFY_TOPIC"
+      - name: Fail the canary run
+        if: steps.run.outputs.problem != ''
+        run: exit 1
