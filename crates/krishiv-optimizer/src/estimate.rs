@@ -458,6 +458,13 @@ impl<'a> Estimator<'a> {
                 let rows = est.rows.min(n);
                 est.with_rows(rows)
             }
+            // Spark's `Sample` statistics: the input's rows times the fraction.
+            PlanNode::Sample { input, bounds, .. } => {
+                let est = RelStats::clone(&self.plan(input));
+                let fraction = (bounds.upper - bounds.lower).clamp(0.0, 1.0);
+                let rows = (est.rows * fraction).ceil();
+                est.with_rows(rows)
+            }
             PlanNode::Offset { input, offset } => {
                 let est = RelStats::clone(&self.plan(input));
                 let skipped = limit_value(offset).map_or(0.0, to_f64);
