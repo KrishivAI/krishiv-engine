@@ -58,7 +58,6 @@ use super::{
 };
 use crate::aggregate::{
     AggInput, AggregateExpr, AggregateNode, AggregateOutput, AggregateSpec, HashAggregate,
-    distinct_plan,
 };
 use crate::error::{Result, internal};
 use crate::exchange::{Exchange, ExchangeRead, ExchangeSink, ExchangeWrite, MapOutputId};
@@ -328,6 +327,15 @@ impl WorkerContext {
     pub fn with_fused_aggregates(mut self, fuse: bool) -> Self {
         self.fuse_aggregates = fuse;
         self
+    }
+
+    /// `krishiv.exec.agg.distinctCountAtMerge` from this worker's
+    /// configuration, or the entry's default without one: whether a single
+    /// `count(DISTINCT)` in a `GROUP BY` may count at the merge
+    /// (`aggregate/distinct.rs`). Every path that builds a distinct plan
+    /// reads it here.
+    pub(crate) fn distinct_count_at_merge(&self) -> bool {
+        crate::aggregate::distinct_count_at_merge(self.config.as_deref())
     }
 
     /// The fixed spill scope, if one is set ([`Self::with_spill`]).
@@ -657,13 +665,13 @@ pub(crate) fn fused_aggregate<'p>(
 
 /// The phases of `single`, an aggregation with `DISTINCT` aggregates over raw
 /// input, around an exchange (Spark's single-distinct plan, as
-/// [`distinct_plan`] runs it in one place): a partial phase grouped by the
+/// [`distinct_plan`](crate::aggregate::distinct_plan) runs it in one place): a partial phase grouped by the
 /// keys and the distinct arguments computing the other aggregates' states; a
 /// partial merge after the exchange on the same columns, which removes the
 /// pairs several tasks sent; and the final phase grouped by the keys, which
 /// aggregates each distinct value once (as plain aggregates over the now
 /// distinct argument columns) and merges the other states. `None` where
-/// [`distinct_plan`] has no such plan: no distinct aggregate, distinct
+/// [`distinct_plan`](crate::aggregate::distinct_plan) has no such plan: no distinct aggregate, distinct
 /// aggregates over different arguments or with a filter, or input that is not
 /// raw.
 pub(crate) fn distinct_phases(single: &AggregatePlan) -> Option<[AggregatePlan; 3]> {
@@ -1207,25 +1215,11 @@ impl Instantiation<'_> {
                         let spec =
                             aggregate_spec(&input.schema, &single, &self.env, self.spill.clone());
                         let schema = spec.output_schema()?;
-                        let at_merge = self.worker.config.as_deref().map_or_else(
-                            || {
-                                matches!(
-                                    krishiv_common::config::EXEC_AGG_DISTINCT_COUNT_AT_MERGE
-                                        .default,
-                                    Some(krishiv_common::config::ConfigValue::Bool(true))
-                                )
-                            },
-                            |c| {
-                                c.get(&krishiv_common::config::EXEC_AGG_DISTINCT_COUNT_AT_MERGE)
-                                    .and_then(krishiv_common::config::ConfigValue::as_bool)
-                                    .unwrap_or(true)
-                            },
-                        );
                         let node = crate::aggregate::distinct_plan_with(
                             input.node,
                             spec,
                             &single.distinct,
-                            at_merge,
+                            self.worker.distinct_count_at_merge(),
                         )?;
                         return Ok(Built { node, schema });
                     }
@@ -1240,7 +1234,12 @@ impl Instantiation<'_> {
                     aggregate_spec(&input.schema, aggregate, &self.env, self.spill.clone());
                 spec.require_unit_weights = unit;
                 let schema = spec.output_schema()?;
-                let node = aggregate_node(input.node, spec, &aggregate.distinct)?;
+                let node = aggregate_node(
+                    input.node,
+                    spec,
+                    &aggregate.distinct,
+                    self.worker.distinct_count_at_merge(),
+                )?;
                 Ok(Built { node, schema })
             }
             PhysNode::HashJoin(j) => self.hash_join(j),
@@ -1835,14 +1834,17 @@ pub(crate) fn aggregate_spec(
     }
 }
 
-/// The aggregate of `spec` over `input` (two for `DISTINCT` aggregates).
+/// The aggregate of `spec` over `input` (two for `DISTINCT` aggregates, or
+/// one counting at the merge with `count_at_merge`: see
+/// [`crate::aggregate::distinct_plan_with`]).
 pub(crate) fn aggregate_node(
     input: Arc<dyn ExecNode>,
     spec: AggregateSpec,
     distinct: &[bool],
+    count_at_merge: bool,
 ) -> Result<Arc<dyn ExecNode>> {
     if distinct.iter().any(|d| *d) {
-        distinct_plan(input, spec, distinct)
+        crate::aggregate::distinct_plan_with(input, spec, distinct, count_at_merge)
     } else {
         Ok(AggregateNode::new(input, HashAggregate::new(spec)?))
     }

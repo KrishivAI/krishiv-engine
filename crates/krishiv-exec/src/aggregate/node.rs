@@ -82,19 +82,25 @@ pub fn distinct_plan(
     spec: AggregateSpec,
     distinct: &[bool],
 ) -> Result<Arc<dyn ExecNode>> {
-    let at_merge = matches!(
-        krishiv_common::config::EXEC_AGG_DISTINCT_COUNT_AT_MERGE.default,
-        Some(krishiv_common::config::ConfigValue::Bool(true))
-    );
-    distinct_plan_with(input, spec, distinct, at_merge)
+    distinct_plan_with(input, spec, distinct, distinct_count_at_merge(None))
+}
+
+/// `krishiv.exec.agg.distinctCountAtMerge` in `config`, or the entry's
+/// default without one (or without the key set).
+pub(crate) fn distinct_count_at_merge(config: Option<&krishiv_common::config::Config>) -> bool {
+    use krishiv_common::config::{ConfigValue, EXEC_AGG_DISTINCT_COUNT_AT_MERGE as E};
+    config
+        .map_or(E.default.as_ref(), |c| c.get(&E))
+        .and_then(ConfigValue::as_bool)
+        .unwrap_or(false)
 }
 
 /// [`distinct_plan`] with `krishiv.exec.agg.distinctCountAtMerge` set to
 /// `count_at_merge`: a single `count(DISTINCT)` in a `GROUP BY` then runs as
 /// one breaker that counts each distinct pair where its tables merge
-/// (`aggregate/distinct.rs`) when its pipelines run more than one driver;
-/// on one driver there is no parallel merge to count at, so it keeps the
-/// two aggregations, as every other spec does.
+/// (`aggregate/distinct.rs`) when the executor runs more than one slot
+/// and `krishiv.deterministicOrder` is off; otherwise it keeps the two
+/// aggregations, as every other spec does.
 ///
 /// # Errors
 /// As [`distinct_plan`].

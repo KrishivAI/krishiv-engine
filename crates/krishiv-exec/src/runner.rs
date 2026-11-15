@@ -89,8 +89,11 @@ impl QueryRunner {
     ) -> Result<BoxStream<'static, Result<Batch>>> {
         let capacity = query.config().result_buffer_per_slot * self.executor.parallelism();
         let channel = Channel::new(capacity);
+        // Under `krishiv.deterministicOrder` every pipeline runs one driver
+        // (lanes aside, `start_members`), and a plan chosen from this value
+        // must not make its output order follow thread timing: one.
         let parallelism = if query.config().deterministic_order {
-            DETERMINISTIC_LOGICAL_PARTITIONS
+            1
         } else {
             self.executor.parallelism()
         };

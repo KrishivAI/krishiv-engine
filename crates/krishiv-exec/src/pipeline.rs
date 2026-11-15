@@ -162,9 +162,10 @@ impl PipelineBuilder {
     }
 
     /// The most drivers one pipeline runs at once: the executor's slots, or
-    /// under `krishiv.deterministicOrder` the most logical partitions (a
-    /// constant, so a plan chosen from it never follows the machine; see
-    /// [`TaskContext::layout_parallelism`](crate::TaskContext::layout_parallelism)).
+    /// 1 under `krishiv.deterministicOrder` (one driver per pipeline there,
+    /// and a plan chosen from it never follows the machine or thread
+    /// timing). It is the slot count, not a pipeline's own driver count,
+    /// which its source's `max_parallelism` decides only once it runs.
     /// `None` when the builder was made outside a runner.
     pub(crate) fn parallelism(&self) -> Option<usize> {
         self.parallelism

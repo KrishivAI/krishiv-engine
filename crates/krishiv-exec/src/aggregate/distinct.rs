@@ -25,11 +25,16 @@
 //! states. Both tables spill as any aggregate's do.
 //!
 //! **Chosen by parallelism.** [`DistinctChoice`] picks this plan when its
-//! pipelines are built, and only when they run more than one driver
-//! (`PipelineBuilder::parallelism`: the executor's slots, or a constant
-//! under `krishiv.deterministicOrder`). On one driver it builds the two
-//! aggregations in series: every row would go into two tables here, with
-//! no parallel merge to win that back.
+//! pipelines are built, and only when the executor has more than one slot
+//! (`PipelineBuilder::parallelism`). That is the slot count, not the input
+//! pipeline's own driver count (its source's `max_parallelism` is known
+//! only once it runs), so a one-driver source under many slots still takes
+//! this plan. On one slot it builds the two aggregations in series: every
+//! row would go into two tables here, with no parallel merge to win that
+//! back. Under `krishiv.deterministicOrder` the parallelism is 1, so the
+//! two aggregations run there too: this plan's rows without plain
+//! aggregates come from the counter's shards in the order parallel merge
+//! tasks filled them, which follows thread timing.
 //!
 //! **Memory.** The counter does not spill. Its bound is one entry per
 //! distinct key, the key table's bound. Every byte it holds is reserved
@@ -41,7 +46,10 @@
 //! reserved, for `finalize`, which waits for memory through arbitration.
 //! A chunk's scratch (up to [`COUNT_ROWS`] decoded pairs and their
 //! encoding) is reserved on the same consumer as it is made and released
-//! after the chunk; a refusal there takes the refused-count path.
+//! after the chunk; a refusal there takes the refused-count path. In
+//! `finalize` each output batch and its encoding are reserved the same
+//! way (waiting), and the counting runs on the blocking pool a batch at a
+//! time, checking for cancellation between batches.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -87,6 +95,22 @@ pub(super) static SCRATCH_REFUSALS: AtomicUsize = AtomicUsize::new(0);
 /// Tests: local shards a refused merge left to `finalize`.
 #[cfg(test)]
 pub(super) static PENDING_MERGES: AtomicUsize = AtomicUsize::new(0);
+
+/// Tests: cancel the query once `finalize` counted a batch of pairs.
+#[cfg(test)]
+pub(super) static CANCEL_IN_FINALIZE: AtomicBool = AtomicBool::new(false);
+
+/// Tests: cancel the query once a merge task counted a chunk of pairs.
+#[cfg(test)]
+pub(super) static CANCEL_IN_COUNT: AtomicBool = AtomicBool::new(false);
+
+/// Tests: the query pool's reserved bytes when `finalize` ends.
+#[cfg(test)]
+pub(super) static FINAL_POOL: AtomicUsize = AtomicUsize::new(0);
+
+/// Tests: the counter's kept bytes when `finalize` ends.
+#[cfg(test)]
+pub(super) static FINAL_HELD: AtomicUsize = AtomicUsize::new(0);
 
 /// Grows `r` by `bytes` without waiting; `true` if the pool refuses (tests
 /// also refuse after [`REFUSE_AFTER`] grants).
@@ -353,6 +377,10 @@ impl PairCounter {
                 drop(e);
                 shrink_to(&mut scratch, 0);
                 shrink_to(&mut r, pieces_bytes(&local));
+                #[cfg(test)]
+                if CANCEL_IN_COUNT.load(Ordering::Relaxed) {
+                    query.cancel();
+                }
             }
             // Counted: the partition's pairs are no longer needed.
             t.release_part(p);
@@ -393,6 +421,7 @@ impl PairCounter {
             shard.merge_from(piece)?;
             let grew = shard.bytes().saturating_sub(before);
             drop(shard);
+            debug_assert!(grew <= r.size(), "the counter grew past its projection");
             let moved = r.split(grew.min(r.size()));
             lock(&self.held).push(moved);
             *piece = Shard::default();
@@ -424,6 +453,7 @@ impl PairCounter {
                 shard.merge_from(piece)?;
                 let grew = shard.bytes().saturating_sub(before);
                 drop(shard);
+                debug_assert!(grew <= r.size(), "the counter grew past its projection");
                 let moved = r.split(grew.min(r.size()));
                 lock(&self.held).push(moved);
                 *piece = Shard::default();
@@ -433,28 +463,65 @@ impl PairCounter {
         Ok(())
     }
 
-    /// Counts a batch of pairs read from the output, waiting for each
-    /// shard's growth (in `finalize`: no task counts at the same time).
-    async fn count_waiting(&self, b: &RecordBatch) -> Result<()> {
-        let e = self.encode_pairs(b)?;
-        for (s, rows) in e.by_shard.iter().enumerate() {
-            if rows.is_empty() {
-                continue;
-            }
-            let delta = {
-                let shard = lock(self.shard(s)?);
-                shard.projected(&e, rows).saturating_sub(shard.bytes())
-            };
-            let mut r = self.consumer.reservation();
-            r.grow(delta).await.map_err(KrishivError::from)?;
-            let mut shard = lock(self.shard(s)?);
-            let before = shard.bytes();
-            shard.insert(&e, rows)?;
-            let grew = shard.bytes().saturating_sub(before);
-            drop(shard);
-            shrink_to(&mut r, grew);
-            lock(&self.held).push(r);
+    /// Counts a batch of pairs read from the output (in `finalize`: no task
+    /// counts at the same time, so the shards' projected growth holds until
+    /// the insert). The batch and its encoding are reserved as scratch, the
+    /// shards' growth is waited for through arbitration, and the encoding
+    /// and the inserts run on the blocking pool, never on the async thread.
+    ///
+    /// # Errors
+    /// Memory, cancellation, encoding errors.
+    async fn count_waiting(self: &Arc<Self>, b: Batch, ctx: &TaskContext) -> Result<()> {
+        let mut scratch = self.consumer.reservation();
+        scratch
+            .grow(b.data().get_array_memory_size())
+            .await
+            .map_err(KrishivError::from)?;
+        let me = Arc::clone(self);
+        let (e, grow) = ctx
+            .run_blocking(move || {
+                let e = me.encode_pairs(b.data())?;
+                drop(b);
+                let mut grow = 0;
+                for (s, rows) in e.by_shard.iter().enumerate() {
+                    if !rows.is_empty() {
+                        let shard = lock(me.shard(s)?);
+                        grow += shard.projected(&e, rows).saturating_sub(shard.bytes());
+                    }
+                }
+                Ok((e, grow))
+            })
+            .await?;
+        // The batch went; its encoding stays until the inserts are done.
+        let made = e.bytes();
+        if made > scratch.size() {
+            scratch
+                .grow(made - scratch.size())
+                .await
+                .map_err(KrishivError::from)?;
         }
+        shrink_to(&mut scratch, made);
+        let mut r = self.consumer.reservation();
+        r.grow(grow).await.map_err(KrishivError::from)?;
+        let me = Arc::clone(self);
+        let grew = ctx
+            .run_blocking(move || {
+                let mut grew = 0;
+                for (s, rows) in e.by_shard.iter().enumerate() {
+                    if rows.is_empty() {
+                        continue;
+                    }
+                    let mut shard = lock(me.shard(s)?);
+                    let before = shard.bytes();
+                    shard.insert(&e, rows)?;
+                    grew += shard.bytes().saturating_sub(before);
+                }
+                Ok(grew)
+            })
+            .await?;
+        debug_assert!(grew <= r.size(), "the counter grew past its projection");
+        shrink_to(&mut r, grew);
+        lock(&self.held).push(r);
         Ok(())
     }
 
@@ -817,7 +884,17 @@ impl Sink for DistinctCount {
             let mut reader = Source::local_state(&*self.pairs, ctx, &g.pairs)?;
             while let Some(b) = self.pairs.get_data(&mut reader, &g.pairs).await? {
                 ctx.query().check_cancelled()?;
-                g.counter.count_waiting(b.data()).await?;
+                g.counter.count_waiting(b, ctx).await?;
+                #[cfg(test)]
+                if CANCEL_IN_FINALIZE.load(Ordering::Relaxed) {
+                    ctx.query().cancel();
+                }
+            }
+            #[cfg(test)]
+            {
+                let held = lock(&g.counter.held).iter().map(Reservation::size).sum();
+                FINAL_HELD.store(held, Ordering::Relaxed);
+                FINAL_POOL.store(ctx.query().pool().reserved(), Ordering::Relaxed);
             }
             Ok(())
         })
@@ -982,8 +1059,9 @@ impl ExecNode for DistinctCountNode {
 }
 
 /// A covered `count(DISTINCT)` plan chosen when its pipelines are built:
-/// counted at the merge ([`DistinctCountNode`]) when a pipeline runs more
-/// than one driver, else the two aggregations in series. On one driver
+/// counted at the merge ([`DistinctCountNode`]) when the builder's
+/// parallelism is above 1, else (one slot, or `krishiv.deterministicOrder`)
+/// the two aggregations in series. On one driver
 /// every input row would go into two tables (pairs and keys) with no
 /// parallel merge to win that back (ClickBench q10 1.2x slower on one
 /// thread).
