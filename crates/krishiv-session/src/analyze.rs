@@ -29,9 +29,8 @@
 //! `SET PATH` have none) and no lineage. Any other statement (writes, DDL) has neither, but its reads are
 //! listed.
 //!
-//! Provisional: every command column is reported nullable. Spark's command attributes are mostly
-//! non-null; pinning them at the Spark tags is a spark-semantics follow-up, and the command frames and
-//! [`command_schema`] then change together.
+//! The command columns' nullability is Spark 4.2.0's ([`command_schema`]). The frames the commands return
+//! are built from literal rows and do not carry it yet (a follow-up).
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;

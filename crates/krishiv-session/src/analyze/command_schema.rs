@@ -12,9 +12,10 @@
 //! command returns. A command kind added to `krishiv-sql` later falls into the wildcard arms below (the
 //! enums are `#[non_exhaustive]` in another crate) and has no result schema until it is listed here.
 //!
-//! Provisional nullability: the commands build their frames from literal rows, so the run's nullability
-//! depends on the rows; analyze reports every command column as nullable. Spark's command attributes are
-//! not checked yet (a spark-semantics follow-up pins them at the Spark tags).
+//! Nullability is Spark 4.2.0's command attributes (`DescribeCommandSchema.scala`, `v2Commands.scala` and the v1
+//! commands' `output`; table in krishiv-internal `research/spark/show-describe-nullability/notes.md`): every
+//! column is non-null except `comment` of `DESCRIBE TABLE`/`DESCRIBE QUERY` and `info_value` of
+//! `DESCRIBE NAMESPACE`; `EXPLAIN`'s `plan` is nullable (`commands.scala:166`).
 
 use krishiv_sql::ast::{DescribeKind, SetKind, ShowKind, Statement};
 use krishiv_types::DataType;
@@ -24,12 +25,13 @@ use super::OutputColumn;
 /// The result columns of a `SHOW`, `DESCRIBE`, `EXPLAIN`, `SET` or `RESET` statement; `None` for any other
 /// statement.
 pub(crate) fn command_schema(statement: &Statement) -> Option<Vec<OutputColumn>> {
-    let names: &[&str] = match statement {
-        Statement::Show(s) => show_columns(&s.kind)?,
+    // The one nullable column of the command, if any.
+    let (names, nullable): (&[&str], Option<&str>) = match statement {
+        Statement::Show(s) => (show_columns(&s.kind)?, None),
         Statement::Describe(d) => describe_columns(&d.kind)?,
-        Statement::Explain(_) => &["plan"],
-        Statement::Set(s) => set_columns(&s.kind)?,
-        Statement::Reset(_) => &[],
+        Statement::Explain(_) => (&["plan"], Some("plan")),
+        Statement::Set(s) => (set_columns(&s.kind)?, None),
+        Statement::Reset(_) => (&[], None),
         _ => return None,
     };
     Some(
@@ -41,7 +43,7 @@ pub(crate) fn command_schema(statement: &Statement) -> Option<Vec<OutputColumn>>
                 } else {
                     DataType::String
                 };
-                OutputColumn::new(n, ty, true)
+                OutputColumn::new(n, ty, nullable == Some(n))
             })
             .collect(),
     )
@@ -82,21 +84,25 @@ fn show_columns(kind: &ShowKind) -> Option<&'static [&'static str]> {
     })
 }
 
-fn describe_columns(kind: &DescribeKind) -> Option<&'static [&'static str]> {
+/// `DESCRIBE`'s columns and its nullable one: `comment` of a table or query, `info_value` of a namespace (a
+/// column's `info_value` is non-null).
+fn describe_columns(
+    kind: &DescribeKind,
+) -> Option<(&'static [&'static str], Option<&'static str>)> {
     Some(match kind {
         DescribeKind::Table {
             as_json, column, ..
         } => {
             if *as_json {
-                &["json_metadata"]
+                (&["json_metadata"], None)
             } else if column.is_empty() {
-                DESCRIBE
+                (DESCRIBE, Some("comment"))
             } else {
-                INFO
+                (INFO, None)
             }
         }
-        DescribeKind::Namespace { .. } => INFO,
-        DescribeKind::Query { .. } => DESCRIBE,
+        DescribeKind::Namespace { .. } => (INFO, Some("info_value")),
+        DescribeKind::Query { .. } => (DESCRIBE, Some("comment")),
         // `DESCRIBE FUNCTION` (refused by the session, `KRISHIV_UNSUPPORTED_FEATURE`) and kinds added later.
         _ => return None,
     })

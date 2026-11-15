@@ -209,10 +209,24 @@ fn command_output_schemas() {
             .iter()
             .map(|c| format!("{}: {}", c.name, c.data_type.simple_string()))
             .collect();
-        if cols.is_empty() {
+        // The snapshot also pins Spark 4.2.0's nullability (`command_schema.rs`); the run's frame is built from
+        // literal rows, so only names and types are compared with it.
+        let shown: Vec<String> = a
+            .output_schema
+            .iter()
+            .zip(&cols)
+            .map(|(c, s)| {
+                if c.nullable {
+                    s.clone()
+                } else {
+                    format!("{s} not null")
+                }
+            })
+            .collect();
+        if shown.is_empty() {
             writeln!(out, "{sql}\n  (no columns)").unwrap();
         } else {
-            writeln!(out, "{sql}\n  {}", cols.join(", ")).unwrap();
+            writeln!(out, "{sql}\n  {}", shown.join(", ")).unwrap();
         }
         // The command's own frame has the same names and types.
         let run = block_on(df.schema()).unwrap();
