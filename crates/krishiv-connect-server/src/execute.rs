@@ -28,7 +28,9 @@
 //! Errors end the stream with the gRPC status of [`crate::status`] after the
 //! responses before them. An interrupted operation ends with
 //! `OPERATION_CANCELED`. Commands answer `CONNECT_INVALID_PLAN` (56K00)
-//! until P3-T012.
+//! until P3-T012, after the check of their ADR 0046 §3b class
+//! (`crate::auth::check_command`): a caller without the privilege a command
+//! needs is refused with 42501 first.
 //!
 //! The core is protocol-neutral where it is cheap: the plan is decoded into
 //! a `krishiv_plan::Plan`, run as a `DataFrame` and encoded as Arrow IPC;
@@ -40,6 +42,7 @@ pub mod schema;
 use std::io::Read;
 use std::sync::Arc;
 
+use crate::auth::{Check, check_command};
 use arrow_schema::SchemaRef;
 use futures::StreamExt;
 use krishiv_common::error::{
@@ -320,11 +323,36 @@ pub async fn execute_plan(
     Ok(stream)
 }
 
+/// What [`translate_plan`] made of a plan.
+enum Translated {
+    /// A ROOT relation as the engine's IR.
+    Relation(krishiv_plan::Plan),
+    /// A command (from a compressed operation too): its ADR 0046 §3b class,
+    /// then the refusal it gets until P3-T012 runs commands. The command
+    /// itself is not kept: it stays in the scrubbed request.
+    Command {
+        /// The command's class.
+        check: Check,
+        /// `CONNECT_INVALID_PLAN` naming the command.
+        refusal: KrishivError,
+    },
+}
+
+impl Translated {
+    fn command(command: &pb::Command) -> Self {
+        Self::Command {
+            check: check_command(command),
+            refusal: command_not_supported(command),
+        }
+    }
+}
+
 /// The engine plan of a request's `Plan`: a compressed one decompressed
 /// (off the async workers, bounded by `maxPlanSize`), then translated with
 /// the session's `spark.sql.sources.default`. Shared by `ExecutePlan` and
 /// `AnalyzePlan` (Spark's `RequestDecompressionInterceptor` then
-/// `SparkConnectPlanner`).
+/// `SparkConnectPlanner`). A command gets its class checked, then its refusal (until
+/// P3-T012 runs commands).
 ///
 /// # Errors
 /// The decompression, decoding and translation errors.
@@ -356,24 +384,35 @@ pub(crate) async fn request_plan(
         }
         _ => None,
     };
-    translate_plan(plan, decompressed.as_deref(), &translate)
+    match translate_plan(plan, decompressed.as_deref(), &translate)? {
+        Translated::Relation(logical) => Ok(logical),
+        // A command's ADR 0046 §3b class is checked before it is refused, on every RPC that
+        // takes a plan.
+        Translated::Command { check, refusal } => {
+            crate::auth::enforce(&check, session).await?;
+            Err(refusal)
+        }
+    }
 }
 
 /// The plan as the engine's IR: a ROOT relation translated, a compressed
-/// one decompressed first; commands refused until P3-T012.
+/// one decompressed first; a command is returned as decoded.
 fn translate_plan(
     plan: &pb::Plan,
     decompressed: Option<&[u8]>,
     conf: &TranslateConf,
-) -> Result<krishiv_plan::Plan, KrishivError> {
+) -> Result<Translated, KrishivError> {
     match &plan.op_type {
-        Some(OpType::Root(relation)) => translate_relation(relation, conf),
-        Some(OpType::Command(command)) => Err(command_not_supported(command)),
+        Some(OpType::Root(relation)) => {
+            translate_relation(relation, conf).map(Translated::Relation)
+        }
+        Some(OpType::Command(command)) => Ok(Translated::command(command)),
         Some(OpType::CompressedOperation(c)) => {
             let bytes = decompressed.unwrap_or_default();
             match CompressedOpType::try_from(c.op_type) {
                 Ok(CompressedOpType::Relation) => {
                     translate_relation(&*wire::decode_relation(bytes)?, conf)
+                        .map(Translated::Relation)
                 }
                 Ok(CompressedOpType::Command) => {
                     // Decoded through the bounded decoder as the `command`
@@ -387,8 +426,8 @@ fn translate_plan(
                     prost::encoding::encode_varint(bytes.len() as u64, &mut wrapped);
                     wrapped.extend_from_slice(bytes);
                     match &wire::decode_plan(&wrapped)?.op_type {
-                        Some(OpType::Command(command)) => Err(command_not_supported(command)),
-                        _ => Err(command_not_supported(&pb::Command::default())),
+                        Some(OpType::Command(command)) => Ok(Translated::command(command)),
+                        _ => Ok(Translated::command(&pb::Command::default())),
                     }
                 }
                 _ => {

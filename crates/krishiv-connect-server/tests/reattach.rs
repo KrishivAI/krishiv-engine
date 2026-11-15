@@ -30,6 +30,7 @@ use krishiv_connect_server::{
     ConnectServer, ConnectServerConfig, ExecuteLimits, SessionEntry, SessionLimits, SessionManager,
 };
 use krishiv_session::Session;
+use krishiv_session::auth::{Authenticated, Method};
 use prost::Message;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -51,7 +52,12 @@ struct Running {
 impl Running {
     fn entry(&self) -> Arc<SessionEntry> {
         self.manager
-            .get_or_create(&Principal::local_user(), SESSION, None, "u")
+            .get_or_create(
+                &Authenticated::new(Principal::local_user(), None, Method::None),
+                SESSION,
+                None,
+                "u",
+            )
             .expect("session")
     }
 
