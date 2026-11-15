@@ -425,6 +425,9 @@ _BY_PREFIX: tuple[tuple[str, type[PySparkException]], ...] = (
     ("PARSE_", ParseException),
     ("UNSUPPORTED_DATATYPE", ParseException),
     ("INVALID_SQL_SYNTAX", ParseException),
+    # Spark's unnamed errors: 0xxx come from `QueryParsingErrors`, 1xxx from `QueryCompilationErrors`.
+    ("_LEGACY_ERROR_TEMP_0", ParseException),
+    ("_LEGACY_ERROR_TEMP_1", AnalysisException),
 )
 # By SQLSTATE: the analyzer's class 42 (42601, syntax, is the parser's), arithmetic
 # (22012 division by zero, 22003 overflow), datetime (22007, 22008), 0A000 unsupported.

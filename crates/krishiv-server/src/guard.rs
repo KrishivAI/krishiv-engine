@@ -50,7 +50,7 @@ pub enum GuardSurface {
 }
 
 /// What a surface extracted from one request. Never logged: `Debug` hides the token.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 #[non_exhaustive]
 pub struct GuardRequest<'a> {
     /// The presented token, if the surface found one.
@@ -59,6 +59,8 @@ pub struct GuardRequest<'a> {
     pub malformed: bool,
     /// The peer's address, when the listener records it ([`PeerAddr`]).
     pub peer: Option<SocketAddr>,
+    /// The client certificate rustls verified at the TLS handshake, if any.
+    pub peer_leaf: Option<Arc<[u8]>>,
     /// The surface.
     pub surface: GuardSurface,
     /// What the route needs.
@@ -73,6 +75,7 @@ impl<'a> GuardRequest<'a> {
             token: None,
             malformed: false,
             peer: None,
+            peer_leaf: None,
             surface,
             access,
         }
@@ -96,6 +99,13 @@ impl<'a> GuardRequest<'a> {
     #[must_use]
     pub fn with_peer(mut self, peer: Option<SocketAddr>) -> Self {
         self.peer = peer;
+        self
+    }
+
+    /// The same request with the connection's verified client certificate.
+    #[must_use]
+    pub fn with_peer_leaf(mut self, leaf: Option<Arc<[u8]>>) -> Self {
+        self.peer_leaf = leaf;
         self
     }
 }
@@ -182,20 +192,45 @@ pub(crate) fn same_secret(a: &[u8], b: &[u8]) -> bool {
     std::hint::black_box(diff) == 0
 }
 
-/// The peer address of an admin connection, recorded by [`crate::admin::serve_capped`] as
-/// `ConnectInfo<PeerAddr>` for the failure throttle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PeerAddr(pub SocketAddr);
+/// The peer of an admin connection, recorded by [`crate::admin::serve_capped`] as
+/// `ConnectInfo<PeerAddr>`: its address (the failure throttle's key) and, over TLS, the client
+/// certificate rustls verified.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerAddr {
+    /// The peer's address.
+    pub addr: SocketAddr,
+    /// The verified client leaf certificate (DER), if the connection is TLS and the client
+    /// sent one.
+    pub leaf: Option<Arc<[u8]>>,
+}
+
+impl PeerAddr {
+    /// A peer at `addr` with no client certificate.
+    #[must_use]
+    pub fn new(addr: SocketAddr) -> Self {
+        Self { addr, leaf: None }
+    }
+}
 
 impl Connected<IncomingStream<'_, crate::admin::CappedListener>> for PeerAddr {
     fn connect_info(stream: IncomingStream<'_, crate::admin::CappedListener>) -> Self {
-        Self(*stream.remote_addr())
+        Self::new(*stream.remote_addr())
+    }
+}
+
+#[cfg(feature = "tls")]
+impl Connected<IncomingStream<'_, crate::tls::TlsCappedListener>> for PeerAddr {
+    fn connect_info(stream: IncomingStream<'_, crate::tls::TlsCappedListener>) -> Self {
+        Self {
+            addr: *stream.remote_addr(),
+            leaf: stream.io().peer_leaf(),
+        }
     }
 }
 
 impl Connected<SocketAddr> for PeerAddr {
     fn connect_info(addr: SocketAddr) -> Self {
-        Self(addr)
+        Self::new(addr)
     }
 }
 
@@ -204,7 +239,15 @@ impl Connected<SocketAddr> for PeerAddr {
 pub fn peer_of(extensions: &axum::http::Extensions) -> Option<SocketAddr> {
     extensions
         .get::<axum::extract::ConnectInfo<PeerAddr>>()
-        .map(|c| c.0.0)
+        .map(|c| c.0.addr)
+}
+
+/// The verified client certificate recorded on `extensions`, if the connection carried one.
+#[must_use]
+pub fn peer_leaf_of(extensions: &axum::http::Extensions) -> Option<Arc<[u8]>> {
+    extensions
+        .get::<axum::extract::ConnectInfo<PeerAddr>>()
+        .and_then(|c| c.0.leaf.clone())
 }
 
 #[cfg(test)]

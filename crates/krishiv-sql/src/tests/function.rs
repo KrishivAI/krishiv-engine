@@ -311,9 +311,19 @@ fn syntax_errors_match_spark() {
     // Anything after the statement but `;`.
     let e = fail("CREATE FUNCTION f() RETURN 1 2");
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
-    // The Hive form (`AS 'class'`) is not a SQL function.
-    let sql = "CREATE FUNCTION f AS 'com.example.F'";
-    assert_eq!(fail(sql).span.text(sql), "AS");
+    // The Hive form (`AS 'class'`) parses permanent as well as temporary
+    // (Spark 4.2.0 creates `CREATE FUNCTION f AS 'x.Y'`); the engine has no
+    // JVM to load the class (SQL-15).
+    for sql in [
+        "CREATE FUNCTION f AS 'com.example.F'",
+        "CREATE FUNCTION db.f AS 'com.example.F' USING JAR 'a.jar'",
+    ] {
+        assert_eq!(
+            fail(sql).error.error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{sql}"
+        );
+    }
 }
 
 #[test]

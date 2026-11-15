@@ -535,8 +535,25 @@ fn start_group(
             source_global,
             drivers,
             base_partition: base,
+            operator_bases: Vec::new(),
             lanes: lane_count.map(|n| (base, n)),
         });
+    }
+    // Each operator numbers partitions from the first id of its origin
+    // pipeline (`Pipeline::origins`): its own member below a `UNION ALL`,
+    // the union's first member above it.
+    let bases: HashMap<usize, u32> = started
+        .iter()
+        .filter_map(|m| Some((usize::try_from(m.pipeline.index).ok()?, m.base_partition)))
+        .collect();
+    for m in &mut started {
+        let own = m.base_partition;
+        m.operator_bases = m
+            .pipeline
+            .origins
+            .iter()
+            .map(|o| bases.get(o).copied().unwrap_or(own))
+            .collect();
     }
     // The members whose rows have a source order (an ordered source, and
     // no operator that emits after a cross-driver flush, where a driver
@@ -580,6 +597,8 @@ struct MemberStart {
     drivers: usize,
     /// The first scheduler-assigned partition id of its drivers.
     base_partition: u32,
+    /// Per operator: the first partition id it numbers partitions from.
+    operator_bases: Vec<u32>,
     /// `(first partition id, lane count)` when its drivers are logical partitions.
     lanes: Option<(u32, usize)>,
 }
@@ -708,6 +727,7 @@ fn spawn_group(
         let run = Arc::new(PipelineRun {
             pipeline: m.pipeline,
             operator_deps: m.operator_deps,
+            operator_bases: m.operator_bases,
             barriers: member_barriers,
             source_global: m.source_global,
             sink_global: Arc::clone(&sink_global),
@@ -745,6 +765,7 @@ async fn run_group_sequential(
         let run = Arc::new(PipelineRun {
             pipeline: m.pipeline,
             operator_deps: m.operator_deps,
+            operator_bases: m.operator_bases,
             barriers: member_barriers,
             source_global: m.source_global,
             sink_global: Arc::clone(&sink_global),

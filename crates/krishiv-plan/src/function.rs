@@ -355,9 +355,12 @@ pub enum FunctionId {
     },
 }
 
-/// The Python UDF kinds the engine evaluates, with Spark's
-/// `PythonEvalType` codes (`pyspark/util.py`, Spark 4.2.0). Grouped,
-/// iterator, table and aggregate kinds are later tasks.
+/// The Python UDF kinds a plan can name, with Spark's `PythonEvalType`
+/// codes (`pyspark/util.py` L655-688, Spark 4.2.0; the same at 4.3.0).
+/// The scalar kinds (101, 200, 250) run in a `PythonEval`; the relation
+/// kinds (design P3-T085 §2) see a relation, not a column, and run in the
+/// relation nodes ([`PythonUdfKind`]). Streaming-state kinds (208,
+/// 211-214) are not here (P4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum PythonEvalType {
@@ -367,14 +370,106 @@ pub enum PythonEvalType {
     /// A scalar `pandas_udf` (`SQL_SCALAR_PANDAS_UDF`, 200): pandas Series in
     /// and out.
     ScalarPandas,
+    /// `groupBy().applyInPandas` (`SQL_GROUPED_MAP_PANDAS_UDF`, 201).
+    GroupedMapPandas,
+    /// A grouped-aggregate `pandas_udf` (`SQL_GROUPED_AGG_PANDAS_UDF`, 202).
+    GroupedAggPandas,
+    /// A grouped-aggregate `pandas_udf` over a window
+    /// (`SQL_WINDOW_AGG_PANDAS_UDF`, 203).
+    WindowAggPandas,
+    /// A scalar iterator `pandas_udf` (`SQL_SCALAR_PANDAS_ITER_UDF`, 204).
+    ScalarPandasIter,
+    /// `mapInPandas` (`SQL_MAP_PANDAS_ITER_UDF`, 205).
+    MapPandasIter,
+    /// `cogroup().applyInPandas` (`SQL_COGROUPED_MAP_PANDAS_UDF`, 206).
+    CogroupedMapPandas,
+    /// `mapInArrow` (`SQL_MAP_ARROW_ITER_UDF`, 207).
+    MapArrowIter,
+    /// `groupBy().applyInArrow` (`SQL_GROUPED_MAP_ARROW_UDF`, 209).
+    GroupedMapArrow,
+    /// `cogroup().applyInArrow` (`SQL_COGROUPED_MAP_ARROW_UDF`, 210).
+    CogroupedMapArrow,
+    /// `applyInArrow` with iterator hints (`SQL_GROUPED_MAP_ARROW_ITER_UDF`,
+    /// 215).
+    GroupedMapArrowIter,
+    /// `applyInPandas` with iterator hints
+    /// (`SQL_GROUPED_MAP_PANDAS_ITER_UDF`, 216).
+    GroupedMapPandasIter,
+    /// A grouped-aggregate `pandas_udf` with iterator hints
+    /// (`SQL_GROUPED_AGG_PANDAS_ITER_UDF`, 217).
+    GroupedAggPandasIter,
     /// A scalar `arrow_udf` (`SQL_SCALAR_ARROW_UDF`, 250): `pyarrow.Array`
     /// in and out, no conversion.
     ScalarArrow,
+    /// A scalar iterator `arrow_udf` (`SQL_SCALAR_ARROW_ITER_UDF`, 251).
+    ScalarArrowIter,
+    /// A grouped-aggregate `arrow_udf` (`SQL_GROUPED_AGG_ARROW_UDF`, 252).
+    GroupedAggArrow,
+    /// A grouped-aggregate `arrow_udf` over a window
+    /// (`SQL_WINDOW_AGG_ARROW_UDF`, 253).
+    WindowAggArrow,
+    /// A grouped-aggregate `arrow_udf` with iterator hints
+    /// (`SQL_GROUPED_AGG_ARROW_ITER_UDF`, 254).
+    GroupedAggArrowIter,
+    /// `@udtf` (`SQL_TABLE_UDF`, 300).
+    TableUdf,
+    /// `@udtf(useArrow=True)` (`SQL_ARROW_TABLE_UDF`, 301).
+    ArrowTableUdf,
+    /// `@arrow_udtf` (`SQL_ARROW_UDTF`, 302).
+    ArrowUdtf,
+}
+
+/// What a Python UDF sees and returns, by [`PythonEvalType`] (design P3-T085
+/// §2's table): which plan node runs it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum PythonUdfKind {
+    /// A column per argument in, a column out, row for row (`PythonEval`).
+    Scalar,
+    /// As [`Self::Scalar`], called once per partition with an iterator of
+    /// batches.
+    ScalarIter,
+    /// A partition's batches in, any batches out (`MapPartitions`).
+    Map,
+    /// A group's rows in, any rows out (`GroupMap`).
+    GroupedMap,
+    /// A key's rows of two relations in, any rows out (`CoGroupMap`).
+    CogroupedMap,
+    /// A group's argument columns in, one value out (an `Aggregate`).
+    GroupedAgg,
+    /// A window partition's argument columns in, one value per row out (a
+    /// `Window`).
+    WindowAgg,
+    /// A table function (`PythonTableFunction`, `Generate`).
+    Udtf,
 }
 
 impl PythonEvalType {
     /// Every kind, in code order.
-    pub const ALL: [Self; 3] = [Self::ArrowBatched, Self::ScalarPandas, Self::ScalarArrow];
+    pub const ALL: [Self; 22] = [
+        Self::ArrowBatched,
+        Self::ScalarPandas,
+        Self::GroupedMapPandas,
+        Self::GroupedAggPandas,
+        Self::WindowAggPandas,
+        Self::ScalarPandasIter,
+        Self::MapPandasIter,
+        Self::CogroupedMapPandas,
+        Self::MapArrowIter,
+        Self::GroupedMapArrow,
+        Self::CogroupedMapArrow,
+        Self::GroupedMapArrowIter,
+        Self::GroupedMapPandasIter,
+        Self::GroupedAggPandasIter,
+        Self::ScalarArrow,
+        Self::ScalarArrowIter,
+        Self::GroupedAggArrow,
+        Self::WindowAggArrow,
+        Self::GroupedAggArrowIter,
+        Self::TableUdf,
+        Self::ArrowTableUdf,
+        Self::ArrowUdtf,
+    ];
 
     /// Spark's `PythonEvalType` code.
     #[must_use]
@@ -382,14 +477,118 @@ impl PythonEvalType {
         match self {
             Self::ArrowBatched => 101,
             Self::ScalarPandas => 200,
+            Self::GroupedMapPandas => 201,
+            Self::GroupedAggPandas => 202,
+            Self::WindowAggPandas => 203,
+            Self::ScalarPandasIter => 204,
+            Self::MapPandasIter => 205,
+            Self::CogroupedMapPandas => 206,
+            Self::MapArrowIter => 207,
+            Self::GroupedMapArrow => 209,
+            Self::CogroupedMapArrow => 210,
+            Self::GroupedMapArrowIter => 215,
+            Self::GroupedMapPandasIter => 216,
+            Self::GroupedAggPandasIter => 217,
             Self::ScalarArrow => 250,
+            Self::ScalarArrowIter => 251,
+            Self::GroupedAggArrow => 252,
+            Self::WindowAggArrow => 253,
+            Self::GroupedAggArrowIter => 254,
+            Self::TableUdf => 300,
+            Self::ArrowTableUdf => 301,
+            Self::ArrowUdtf => 302,
         }
     }
 
-    /// The kind with Spark's code `code`, if the engine evaluates it.
+    /// The kind with Spark's code `code`, if a plan can name it.
     #[must_use]
     pub fn from_code(code: i32) -> Option<Self> {
         Self::ALL.into_iter().find(|t| t.code() == code)
+    }
+
+    /// What the UDF sees and returns.
+    #[must_use]
+    pub const fn kind(self) -> PythonUdfKind {
+        match self {
+            Self::ArrowBatched | Self::ScalarPandas | Self::ScalarArrow => PythonUdfKind::Scalar,
+            Self::ScalarPandasIter | Self::ScalarArrowIter => PythonUdfKind::ScalarIter,
+            Self::MapPandasIter | Self::MapArrowIter => PythonUdfKind::Map,
+            Self::GroupedMapPandas
+            | Self::GroupedMapArrow
+            | Self::GroupedMapArrowIter
+            | Self::GroupedMapPandasIter => PythonUdfKind::GroupedMap,
+            Self::CogroupedMapPandas | Self::CogroupedMapArrow => PythonUdfKind::CogroupedMap,
+            Self::GroupedAggPandas
+            | Self::GroupedAggPandasIter
+            | Self::GroupedAggArrow
+            | Self::GroupedAggArrowIter => PythonUdfKind::GroupedAgg,
+            Self::WindowAggPandas | Self::WindowAggArrow => PythonUdfKind::WindowAgg,
+            Self::TableUdf | Self::ArrowTableUdf | Self::ArrowUdtf => PythonUdfKind::Udtf,
+        }
+    }
+
+    /// Whether a `PythonEval` evaluates it (101, 200, 250): the kinds of
+    /// design P2-T059. Every other kind is a relation kind (design P3-T085).
+    #[must_use]
+    pub const fn is_scalar(self) -> bool {
+        matches!(self.kind(), PythonUdfKind::Scalar)
+    }
+}
+
+/// A reference to a session-registered Python UDF run by a relation node
+/// (design P3-T085 §3.1): the same identity as
+/// [`FunctionId::PythonUdf`], never the callable (I13).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PythonUdfRef {
+    /// The canonical (lower-case) name: the identity, with `version`.
+    pub name: String,
+    /// The registration version.
+    pub version: u32,
+    /// How the worker converts and calls it.
+    pub eval_type: PythonEvalType,
+    /// Whether calls may run concurrently; `false` serialises them.
+    pub thread_safe: bool,
+    /// Whether the UDF gives the same rows for the same input (Spark's
+    /// `PythonUDF.udfDeterministic`): a relation over one that does not is
+    /// nondeterministic ([`crate::python_relation_is_deterministic`]), so a
+    /// CTE holding it is computed once, not once per reference. Not part of
+    /// the identity, as a scalar call's determinism is the call's
+    /// ([`ResolvedFunction`](crate::ResolvedFunction)).
+    pub deterministic: bool,
+}
+
+impl PythonUdfRef {
+    /// The function identity it stands for.
+    #[must_use]
+    pub fn function_id(&self) -> FunctionId {
+        FunctionId::PythonUdf {
+            name: self.name.clone(),
+            version: self.version,
+            eval_type: self.eval_type,
+            thread_safe: self.thread_safe,
+        }
+    }
+
+    /// The reference of a [`FunctionId::PythonUdf`] called with
+    /// `deterministic` (the call's determinism); `None` for any other
+    /// function.
+    #[must_use]
+    pub fn of(id: &FunctionId, deterministic: bool) -> Option<Self> {
+        match id {
+            FunctionId::PythonUdf {
+                name,
+                version,
+                eval_type,
+                thread_safe,
+            } => Some(Self {
+                name: name.clone(),
+                version: *version,
+                eval_type: *eval_type,
+                thread_safe: *thread_safe,
+                deterministic,
+            }),
+            _ => None,
+        }
     }
 }
 
