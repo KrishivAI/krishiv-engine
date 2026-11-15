@@ -27,8 +27,8 @@ pub static DELTA_SNAPSHOT_CACHE_MAX_BYTES: ConfigEntry = ConfigEntry {
     key: "krishiv.delta.snapshotCache.maxBytes",
     value_type: ValueType::Size,
     default: Some(ConfigValue::Size(64 * MIB)),
-    doc: "Experimental. Most bytes, estimated, the runtime's cache of Delta snapshots holds \
-          (ADR 0037): each table's latest snapshot and its live-file listing, kept across \
+    doc: "Experimental. Most bytes, estimated, the runtime's cache of Delta snapshots holds: \
+          each table's latest snapshot and its live-file listing, kept across \
           queries so the next one reads only the newer log. The least recently used table \
           leaves first; a table whose listing alone is larger keeps only its snapshot, and its \
           files are listed again by each query. Read when the runtime starts.",

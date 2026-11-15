@@ -136,7 +136,10 @@ impl Session {
         };
         if is_delta_table(&table) {
             let located = location_text.is_some();
-            self.create_delta_table(table, t, original, &name, &partition_names, mode, located)
+            // delta-spark compares the whole declared schema, typed partition columns and
+            // `NOT NULL` included, with the log's.
+            let declared = self.declared_columns(t, original, &typed_partitions, true)?;
+            self.create_delta_table(table, t, &declared, &name, &partition_names, mode, located)
                 .await?;
             return self.empty_frame().await;
         }
@@ -150,31 +153,7 @@ impl Session {
                     .await?;
             }
             None => {
-                table.columns = self.columns_of(t, original)?;
-                let mut typed = Vec::with_capacity(typed_partitions.len());
-                for c in &typed_partitions {
-                    let ColumnName::Ident(ident) = &c.name else {
-                        return Err(unsupported("IDENTIFIER() column names"));
-                    };
-                    typed.push(ident);
-                }
-                // A typed partition column is a column of the table's schema: checked with the others.
-                check_column_name_duplication(
-                    table
-                        .columns
-                        .iter()
-                        .map(|c| c.name.as_str())
-                        .chain(typed.iter().map(|i| i.value.as_str())),
-                    self.query_env().analysis.conf.case_sensitive,
-                )?;
-                for (c, ident) in typed_partitions.iter().zip(typed) {
-                    table.columns.push(StoreColumn::declared(
-                        ident.value.clone(),
-                        &c.data_type,
-                        None,
-                        c.comment.clone(),
-                    )?);
-                }
+                table.columns = self.declared_columns(t, original, &typed_partitions, false)?;
                 if table.columns.is_empty() {
                     return Err(unsupported("CREATE TABLE without columns"));
                 }
@@ -271,6 +250,52 @@ impl Session {
             columns.iter().map(|c| c.name.as_str()),
             self.query_env().analysis.conf.case_sensitive,
         )?;
+        Ok(columns)
+    }
+
+    /// The declared columns of `t`: its column list, then its typed `PARTITIONED BY` columns
+    /// (columns of the table's schema, checked for duplicates with the others). With
+    /// `keep_not_null`, a `NOT NULL` column is not nullable (a Delta table keeps it); a file
+    /// source drops it, as Spark does.
+    pub(super) fn declared_columns(
+        &self,
+        t: &CreateTable,
+        original: &str,
+        typed_partitions: &[&krishiv_sql::ast::PartitionColumn],
+        keep_not_null: bool,
+    ) -> Result<Vec<StoreColumn>, KrishivError> {
+        let mut columns = self.columns_of(t, original)?;
+        if keep_not_null {
+            let defs = t.elements.iter().filter_map(|e| match e {
+                TableElement::Column(def) => Some(def),
+                _ => None,
+            });
+            for (c, def) in columns.iter_mut().zip(defs) {
+                c.nullable = !def.not_null;
+            }
+        }
+        let mut typed = Vec::with_capacity(typed_partitions.len());
+        for c in typed_partitions {
+            let ColumnName::Ident(ident) = &c.name else {
+                return Err(unsupported("IDENTIFIER() column names"));
+            };
+            typed.push(ident);
+        }
+        check_column_name_duplication(
+            columns
+                .iter()
+                .map(|c| c.name.as_str())
+                .chain(typed.iter().map(|i| i.value.as_str())),
+            self.query_env().analysis.conf.case_sensitive,
+        )?;
+        for (c, ident) in typed_partitions.iter().zip(typed) {
+            let mut column =
+                StoreColumn::declared(ident.value.clone(), &c.data_type, None, c.comment.clone())?;
+            if keep_not_null {
+                column.nullable = !c.not_null;
+            }
+            columns.push(column);
+        }
         Ok(columns)
     }
 

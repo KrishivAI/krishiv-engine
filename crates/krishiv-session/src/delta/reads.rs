@@ -145,7 +145,7 @@ impl DeltaReads {
     }
 
     /// The table `source` reads, opened now (through the snapshot cache) unless this query
-    /// already did: one snapshot per root per query. `name` is how errors name a catalog table;
+    /// already did: one snapshot per store and root per query. `name` is how errors name a catalog table;
     /// a path is named by its Hadoop form.
     pub(crate) async fn open(
         &self,
@@ -153,7 +153,8 @@ impl DeltaReads {
         name: Option<String>,
     ) -> Result<Arc<DeltaTable>, KrishivError> {
         let (store, root) = self.root_of(source)?;
-        let key = root.as_str().to_owned();
+        let root_text = root.as_str().to_owned();
+        let key = table_key(&store, &root);
         if let Some(t) = self.find(&key) {
             return Ok(t);
         }
@@ -166,7 +167,7 @@ impl DeltaReads {
             (
                 Arc::clone(&self.cache),
                 CacheKey {
-                    root: key.clone(),
+                    root: root_text,
                     store,
                     credential: self.credential.clone(),
                 },
@@ -268,8 +269,8 @@ impl DeltaReads {
         &self,
         source: &ReadSource,
     ) -> Result<Arc<dyn TableProvider>, KrishivError> {
-        let (_, root) = self.root_of(source)?;
-        self.find(root.as_str())
+        let (store, root) = self.root_of(source)?;
+        self.find(&table_key(&store, &root))
             .map(|t| t as Arc<dyn TableProvider>)
             .ok_or_else(|| internal("a Delta scan whose table was not opened before planning"))
     }
@@ -304,4 +305,11 @@ fn internal(message: &str) -> KrishivError {
         message: message.to_owned(),
     }
     .into()
+}
+
+/// The query-local key of the table at `root` read through `store`: two reads of one URL with
+/// different `fs.*` options reach it through different stores (endpoint, credentials), so each
+/// opens its own table.
+pub(super) fn table_key(store: &StoreId, root: &Url) -> String {
+    format!("{}\u{0}{}", store.key(), root.as_str())
 }

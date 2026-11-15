@@ -236,7 +236,7 @@ impl DeltaTable {
                 let units: Arc<[ScanUnit]> = list_units(e, &snapshot, None)
                     .map_err(|err| from_kernel(&err, &label))?
                     .into();
-                let stamp = entry.as_ref().and_then(|_| last_commit(e, &snapshot));
+                let stamp = entry.as_ref().and_then(|_| listed_commit(e, &snapshot));
                 Ok(Opened {
                     snapshot,
                     units,
@@ -402,6 +402,22 @@ fn last_commit(engine: &DeltaEngine, snapshot: &SnapshotRef) -> Option<cache::Co
     })
 }
 
+/// The snapshot's last commit file as the listing that built the snapshot returned it: the
+/// stamp a cache entry is stored with, bound to the files the snapshot read (a `head` after the
+/// build could see a table recreated at the root meanwhile). `None` when that listing did not
+/// return it (the entry is then not stored).
+fn listed_commit(engine: &DeltaEngine, snapshot: &SnapshotRef) -> Option<cache::CommitStamp> {
+    let url = engine
+        .table_root()
+        .join(&format!("_delta_log/{:020}.json", snapshot.version()))
+        .ok()?;
+    let (size, last_modified) = engine.listed_commit(&url)?;
+    Some(cache::CommitStamp {
+        size,
+        last_modified,
+    })
+}
+
 /// The cached table `c` brought up to date (ADR 0037 `per_query`): `None` when its last commit
 /// is gone or rewritten (the table was removed or recreated at its root) or when anything on
 /// the way fails, so the caller builds the table afresh.
@@ -424,8 +440,14 @@ fn refresh(engine: &DeltaEngine, c: &cache::Cached, label: &str) -> Option<Opene
             stamp: Some(c.last),
         });
     }
+    // The cached commit checked again after the newer log was read: a table removed and
+    // recreated at the root meanwhile no longer has it, and its commits must not be replayed
+    // onto the cached snapshot.
+    if last_commit(engine, &c.snapshot) != Some(c.last) {
+        return None;
+    }
     let units: Arc<[ScanUnit]> = list_units(engine, &snapshot, None).ok()?.into();
-    let stamp = last_commit(engine, &snapshot);
+    let stamp = listed_commit(engine, &snapshot);
     Some(Opened {
         snapshot,
         units,

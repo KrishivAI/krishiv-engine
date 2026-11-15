@@ -527,3 +527,45 @@ fn a_dataframe_temp_view_and_the_metrics() {
         assert!(names.iter().any(|n| n == name), "{name} in {names:?}");
     }
 }
+
+/// delta-spark 4.4.1 `SchemaUtils.reportDifferences` (source; no session record yet): field
+/// names compare exactly, nullability is compared, and a typed `PARTITIONED BY` column is part
+/// of the declared schema.
+#[test]
+fn the_declared_schema_compares_exact_names_nullability_and_typed_partitions() {
+    let t = Table::copy("session-table");
+    let s = Session::new().unwrap();
+    let path = t.path();
+    let all = "name STRING, amount DECIMAL(10, 2), ts TIMESTAMP";
+    let e = error(
+        &s,
+        &format!(
+            "CREATE TABLE c1 (ID BIGINT, {all}, p STRING) USING delta PARTITIONED BY (p) LOCATION '{path}'"
+        ),
+    );
+    assert_eq!(
+        e.error_class().name(),
+        "DELTA_CREATE_TABLE_SCHEME_MISMATCH",
+        "{e}"
+    );
+    assert_eq!(
+        param(&e, "schemaDifferences"),
+        "- Specified schema is missing field(s): id\n- Specified schema has additional field(s): ID"
+    );
+    let e = error(
+        &s,
+        &format!(
+            "CREATE TABLE c2 (id BIGINT NOT NULL, {all}, p STRING) USING delta PARTITIONED BY (p) LOCATION '{path}'"
+        ),
+    );
+    assert_eq!(
+        param(&e, "schemaDifferences"),
+        "- Field id is non-nullable in specified schema but nullable in existing schema."
+    );
+    // The partition column declared with its type in `PARTITIONED BY`.
+    block_on(s.sql(&format!(
+        "CREATE TABLE c3 (id BIGINT, {all}) USING delta PARTITIONED BY (p STRING) LOCATION '{path}'"
+    )))
+    .unwrap();
+    assert_eq!(query(&s, "SELECT count(*) FROM c3").len(), 1);
+}

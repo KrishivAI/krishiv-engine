@@ -42,11 +42,12 @@ fn type_name(t: &DataType) -> String {
 }
 
 /// `SchemaUtils.reportDifferences(existing, specified)` for top-level columns: missing and
-/// additional fields, then each type difference. delta-spark lists the missing and additional
-/// fields in its set's order; here they are in the schema's order (a known difference).
+/// additional fields by exact name, then for each common field its nullability and type
+/// differences. delta-spark lists the missing and additional fields in its set's order; here they
+/// are in the schema's order (a known difference).
 fn schema_differences(existing: &[TableColumn], specified: &[StoreColumn]) -> Vec<String> {
-    let find_specified = |n: &str| specified.iter().find(|c| c.name.eq_ignore_ascii_case(n));
-    let find_existing = |n: &str| existing.iter().find(|c| c.name.eq_ignore_ascii_case(n));
+    let find_specified = |n: &str| specified.iter().find(|c| c.name == n);
+    let find_existing = |n: &str| existing.iter().find(|c| c.name == n);
     let missing: Vec<&str> = existing
         .iter()
         .filter(|c| find_specified(&c.name).is_none())
@@ -70,10 +71,20 @@ fn schema_differences(existing: &[TableColumn], specified: &[StoreColumn]) -> Ve
             additional.join(", ")
         ));
     }
+    let non = |nullable: bool| if nullable { "" } else { "non-" };
     for s in specified {
-        if let Some(e) = find_existing(&s.name)
-            && e.data_type != s.data_type
-        {
+        let Some(e) = find_existing(&s.name) else {
+            continue;
+        };
+        if e.nullable != s.nullable {
+            out.push(format!(
+                "- Field {} is {}nullable in specified schema but {}nullable in existing schema.",
+                s.name,
+                non(s.nullable),
+                non(e.nullable)
+            ));
+        }
+        if e.data_type != s.data_type {
             out.push(format!(
                 "- Specified type for {} is different from existing schema:\n  Specified: {}\n  \
                  Existing:  {}",
@@ -104,7 +115,7 @@ impl Session {
         &self,
         mut table: CatalogTable,
         t: &CreateTable,
-        original: &str,
+        specified: &[StoreColumn],
         name: &TableName,
         partition_names: &[String],
         mode: CreateMode,
@@ -123,7 +134,6 @@ impl Session {
         if t.bucket.is_some() {
             return Err(delta_write_refused(quoted, "CREATE TABLE ... CLUSTERED BY"));
         }
-        let specified = self.columns_of(t, original)?;
         // The location is read before it is registered.
         self.authorize_path(&table.location, &[Privilege::Select], StatementClass::Ddl)
             .await?;
@@ -141,7 +151,7 @@ impl Session {
             ));
         }
         if !specified.is_empty() {
-            let differences = schema_differences(&shape.columns, &specified);
+            let differences = schema_differences(&shape.columns, specified);
             if !differences.is_empty() {
                 let existing: Vec<(&str, &DataType, bool)> = shape
                     .columns
@@ -223,6 +233,14 @@ impl Session {
             return Err(unsupported("declared columns on a Delta temporary view"));
         }
         let mut options = options_of(refuse_secret_options(&v.options, original)?, original);
+        // The view's options reach the store when it is opened here: a server-scoped key is
+        // `Manage` on the cluster before that, as for `CREATE TABLE .. OPTIONS` (P3-T067b).
+        self.authorize_store_options(
+            krishiv_sql::StatementClass::Ddl,
+            &self.state.conf.snapshot(),
+            options.keys().map(String::as_str),
+        )
+        .await?;
         let path_key = options
             .keys()
             .find(|k| k.eq_ignore_ascii_case("path"))

@@ -148,3 +148,19 @@ fn the_runtime_cache_takes_its_byte_bound_from_the_config() {
     assert_eq!(cache.cached_version(&key), Some(1));
     assert!(!cache.keeps_listing(&key));
 }
+
+/// Two reads of one root with different `fs.*` options reach it through different stores (the
+/// options' hash in the store id), so the query-local key of each is its own (review: the key is
+/// the store and the root).
+#[test]
+fn reads_of_one_root_through_different_stores_have_their_own_keys() {
+    use krishiv_io::StoreId;
+    let root = url::Url::parse("s3://bucket/t/").unwrap();
+    let plain = StoreId::new("s3://bucket");
+    let other = StoreId::new("s3://bucket#00000000000000ab");
+    let key = super::reads::table_key;
+    assert_ne!(key(&plain, &root), key(&other, &root));
+    assert_eq!(key(&other, &root), key(&other.clone(), &root.clone()));
+    let elsewhere = url::Url::parse("s3://bucket/u/").unwrap();
+    assert_ne!(key(&plain, &root), key(&plain, &elsewhere));
+}

@@ -51,5 +51,5 @@ fn delta_is_not_a_data_source_without_the_feature() {
             .await
     })
     .unwrap_err();
-    assert_ne!(e.error_class(), ErrorClass::InternalError, "{e}");
+    assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound, "{e}");
 }

@@ -98,6 +98,10 @@ pub(crate) struct Shared {
     pub(crate) handle: Handle,
     pub(crate) limits: DeltaLimits,
     pub(crate) cancel: Cancel,
+    /// The size and modification time (ms) of each commit file (`_delta_log/*.json`) the
+    /// engine's listings returned, by URL: what a snapshot built through this engine read, so
+    /// the snapshot cache binds its entry to those files and not to a later `head`.
+    pub(crate) listed: std::sync::Mutex<std::collections::HashMap<String, (u64, i64)>>,
 }
 
 /// What ends an engine's kernel calls: a token of its own (planning), or the running query's
@@ -223,6 +227,7 @@ impl DeltaEngine {
                 handle,
                 limits,
                 cancel: Cancel::Token(cancel),
+                listed: std::sync::Mutex::default(),
             }),
             pool,
         })
@@ -243,6 +248,7 @@ impl DeltaEngine {
                 handle: s.handle.clone(),
                 limits: s.limits,
                 cancel: Cancel::Query(Arc::clone(query)),
+                listed: std::sync::Mutex::default(),
             }),
             pool: self.pool,
         }
@@ -269,6 +275,18 @@ impl DeltaEngine {
     #[must_use]
     pub fn store(&self) -> &StoreId {
         &self.shared.store
+    }
+
+    /// The size and modification time (ms) of the commit file at `url` as this engine's last
+    /// listing of it returned it, if one did.
+    #[must_use]
+    pub(crate) fn listed_commit(&self, url: &url::Url) -> Option<(u64, i64)> {
+        self.shared
+            .listed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(url.as_str())
+            .copied()
     }
 
     /// The storage handler.
