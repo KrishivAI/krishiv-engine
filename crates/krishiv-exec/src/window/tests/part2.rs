@@ -956,3 +956,22 @@ fn a_refused_frame_asks_for_at_least_the_base() {
         FlushOutput::NeedMemory { bytes: 73_144 }
     ));
 }
+
+/// A sliding frame of an external partition on a pool another consumer took whole: its batches do not fit, so it
+/// folds from the file, and the folds' states come out of the flush phase's headroom (they are part of a step's
+/// evaluation), not from the pool, which would refuse them and fail the query. (With larger batches the readers'
+/// frames of the two functions are more than the buffered partition lends: the query's error then comes from the
+/// flush phase's headroom, as in `offsets_and_nth_value_read_back_from_a_full_pool`.)
+#[tokio::test]
+async fn a_sliding_frame_folds_from_the_file_on_a_full_pool() {
+    use AggregateFunction::{Count, Sum};
+    use FrameBound::Offset;
+    use FrameUnits::Rows;
+    let frame = between(Rows, Offset(-2), Offset(1));
+    alternating_sizes_from_a_full_pool(
+        300,
+        vec![(agg(Sum, Some(3)), frame), (agg(Count, None), frame)],
+        false,
+    )
+    .await;
+}

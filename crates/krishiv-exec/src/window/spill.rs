@@ -579,7 +579,7 @@ impl Window {
             copied.disk.file.max_read_reservation(),
         )?);
         let need = |n: usize| -> Result<usize> {
-            Ok(frames.saturating_add(super::disk::headroom(&self.env.plan, n)?))
+            Ok(frames.saturating_add(super::disk::headroom(&self.env, n)?))
         };
         let full = need(rows)?;
         let spare = r.headroom.size().saturating_sub(full.max(r.base));
