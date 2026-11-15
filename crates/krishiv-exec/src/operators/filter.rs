@@ -38,6 +38,10 @@ impl Filter {
 }
 
 impl Operator for Filter {
+    fn keeps_partitioning(&self) -> bool {
+        true
+    }
+
     fn lane_safe(&self) -> bool {
         true
     }
@@ -51,19 +55,15 @@ impl Operator for Filter {
     }
 
     fn local_state(&self, ctx: &TaskContext) -> Result<LocalState> {
-        Ok(Box::new(PartitionState {
-            partition: ctx.partition(),
-        }))
+        Ok(Box::new(PartitionState::of(ctx)))
     }
 
     fn execute(&self, input: &Batch, local: &mut LocalState) -> Result<OperatorOutput> {
         if input.num_rows() == 0 {
             return Ok(OperatorOutput::NeedMoreInput(None));
         }
-        let partition = local_mut::<PartitionState>(local, "Filter")?.partition;
-        let mask = self
-            .predicate
-            .evaluate_in(input.data(), input.split().unwrap_or(partition))?;
+        let partition = local_mut::<PartitionState>(local, "Filter")?.index(input.split());
+        let mask = self.predicate.evaluate_in(input.data(), partition)?;
         let out = input.filter(&mask)?;
         if out.num_rows() == 0 {
             return Ok(OperatorOutput::NeedMoreInput(None));

@@ -43,6 +43,10 @@ struct RangeGlobal {
     end: i64,
     step: i64,
     partitions: u32,
+    /// Whether the range asked for one slice and has a row: Spark's
+    /// `RangeExec` is `SinglePartition` for `numSlices == 1` (the requested
+    /// count, before the clamp to the row count above) and `numElements > 0`.
+    single: bool,
     cursor: MorselCursor,
     batch_size: usize,
     returned: AtomicU64,
@@ -92,6 +96,7 @@ impl crate::operator::Source for Range {
             end: self.end,
             step: self.step,
             partitions,
+            single: wanted == 1 && rows > 0,
             // Slices are claimed in order even under a seed (which permutes
             // other sources' morsels in tests): a range's slice order is
             // its row order, which an ordered read (`OrderedNode`: a
@@ -104,6 +109,10 @@ impl crate::operator::Source for Range {
 
     fn max_parallelism(&self, global: &GlobalState) -> usize {
         global_ref::<RangeGlobal>(global, "Range").map_or(1, |g| (g.partitions as usize).max(1))
+    }
+
+    fn single_partition(&self, global: &GlobalState) -> bool {
+        global_ref::<RangeGlobal>(global, "Range").is_ok_and(|g| g.single)
     }
 
     // A `Range` never carries a pushed-down LIMIT (the scans that do, refuse a split under

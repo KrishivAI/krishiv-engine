@@ -77,7 +77,28 @@ impl QueryCatalog {
                         .listing_known(format, paths, options, Arc::clone(table), partitions)
                         .await?
                 }
-                _ => self.files.listing(format, paths, options).await?,
+                _ => match self.files.listing(format, paths, options).await {
+                    Ok(listing) => listing,
+                    // A view with declared columns over a directory with no file to infer from reads no
+                    // rows, as an empty table of those columns does (not the inference error).
+                    Err(e)
+                        if e.error_class()
+                            == krishiv_common::error::ErrorClass::UnableToInferSchema
+                            && matches!(key, FilesKey::View(_))
+                            && !table.fields().is_empty() =>
+                    {
+                        self.files
+                            .listing_known(
+                                format,
+                                paths,
+                                options,
+                                Arc::clone(table),
+                                &krishiv_exec::files::KnownPartitions::default(),
+                            )
+                            .await?
+                    }
+                    Err(e) => return Err(e),
+                },
             };
             let opened = open_table(
                 Arc::clone(&listing.format),
