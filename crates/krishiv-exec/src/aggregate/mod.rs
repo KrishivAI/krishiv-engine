@@ -79,6 +79,8 @@ mod table;
 mod udf;
 
 #[cfg(test)]
+mod merge_order_tests;
+#[cfg(test)]
 mod slice_tests;
 #[cfg(test)]
 mod tests;
@@ -847,6 +849,17 @@ pub fn is_order_sensitive(f: &AggregateFunction) -> bool {
             | F::ModeMin
             | F::ModeMax
             | F::ListAgg { .. }
+            // The pick keeps the earliest (or latest) partition's row, and
+            // `max_by`/`min_by` break ties by arrival: a biggest-first merge
+            // would make the answer depend on table sizes, and on whether the
+            // aggregate spilled (the disk phase merges runs in partition order).
+            | F::First { .. }
+            | F::Last { .. }
+            | F::AnyValue { .. }
+            | F::MaxBy
+            | F::MinBy
+            | F::MaxByKeyFirst
+            | F::MinByKeyFirst
     )
 }
 
