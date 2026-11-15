@@ -478,7 +478,7 @@ fn print_result(
 ) -> Result<(), String> {
     let cap = args.max_rows.unwrap_or(usize::MAX);
     let c = collect_rows(df, session, cap)?;
-    if c.names.is_empty() && c.rows.is_empty() {
+    if c.names.is_empty() && c.rows.is_empty() && !c.truncated {
         // A statement without a result (DDL, SET of nothing): no empty table and no `0 rows`.
         return Ok(());
     }
