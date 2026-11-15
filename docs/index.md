@@ -13,8 +13,7 @@ write.
 
 ## Install
 
-Nothing is on PyPI yet, so build the wheel from the repository (`maturin build` in `python/`) and install it. Once
-released, `pip install "krishiv[pyarrow]"` is all it takes; the [Quickstart](get-started/index.md) has the steps.
+`pip install "krishiv[pyarrow]"` is all it takes; [Get started](get-started/index.md) has the steps.
 
 ## Where to start
 

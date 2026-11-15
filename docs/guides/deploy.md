@@ -20,8 +20,8 @@ name instead of crashing.
 Memory use is bounded by `krishiv.*` settings (see [configuration](../reference/config/index.md)); operators spill to disk when the
 limit is reached.
 
-Nothing has been published to PyPI or crates.io yet. Until the first release, build the wheel from the repository
-(`maturin build` in `python/`).
+Install the Python package with `pip install "krishiv[pyarrow]"`; to build from source instead, run
+`maturin build` in `python/`.
 
 ## Single-node
 
