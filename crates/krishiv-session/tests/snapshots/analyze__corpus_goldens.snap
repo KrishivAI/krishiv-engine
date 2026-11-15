@@ -1446,3 +1446,60 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "lineage":[],
 "filters":[],
 "warnings":[]}
+
+-- CreatePipelineDataset: CREATE MATERIALIZED VIEW mv AS SELECT 1
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]},
+  {"kind":"table","name":["spark_catalog","default","mv"],"display":"table `spark_catalog`.`default`.`mv`","privilege":"MODIFY","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- CreatePipelineDataset: CREATE STREAMING TABLE st
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- CreateFlow: CREATE FLOW f AS INSERT INTO t BY NAME SELECT 1
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]},
+  {"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"MODIFY","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- LoadData: LOAD DATA LOCAL INPATH 'x' OVERWRITE INTO TABLE t
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"WRITE",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","t"],"display":"table `spark_catalog`.`default`.`t`","privilege":"MODIFY","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- InsertDirectory: INSERT OVERWRITE LOCAL DIRECTORY '/tmp/o' USING parquet SELECT 1
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"WRITE",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"path","name":["file:/tmp/o"],"display":"path 'file:/tmp/o'","privilege":"MODIFY","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}

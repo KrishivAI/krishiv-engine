@@ -154,6 +154,7 @@ fn ends_in_sort(n: &PhysNode) -> bool {
         | PhysNode::Filter { input, .. }
         | PhysNode::LateFetch { input, .. }
         | PhysNode::PythonEval { input, .. }
+        | PhysNode::Sample { input, .. }
         | PhysNode::Limit { input, .. } => ends_in_sort(input),
         _ => false,
     }
