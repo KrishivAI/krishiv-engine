@@ -324,3 +324,55 @@ fn conform_relabels_names_without_copying() {
         out.column(0).to_data().buffers()[0].as_ptr()
     );
 }
+
+#[test]
+fn an_empty_stream_validates_the_conversion_like_a_zero_row_batch() {
+    let s = Session::new().unwrap();
+    let schema = Arc::new(Schema::new(vec![ints("x", true)]));
+    let want = || {
+        user(&[(
+            "x",
+            krishiv_types::ArrayType::new(DataType::Integer, true).into(),
+            true,
+        )])
+    };
+    let empty = ipc(&schema, Vec::new());
+    let zero_col: ArrayRef = Arc::new(Int32Array::from(Vec::<i32>::new()));
+    let zero = ipc(&schema, vec![batch(&schema, vec![zero_col])]);
+    let a = block_on(s.local_relation(Some(&zero), Some(want()))).unwrap_err();
+    let b = block_on(s.local_relation(Some(&empty), Some(want()))).unwrap_err();
+    assert_eq!(a.error_class(), b.error_class());
+}
+
+#[test]
+fn utf8_and_binary_columns_meet_a_string_and_binary_schema() {
+    use arrow_array::BinaryArray;
+    let s = Session::new().unwrap();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("s", A::Utf8, true),
+        Field::new("b", A::Binary, true),
+    ]));
+    let cols: Vec<ArrayRef> = vec![
+        Arc::new(StringArray::from(vec![
+            Some("a"),
+            None,
+            Some("a longer string value"),
+        ])),
+        Arc::new(BinaryArray::from_iter(vec![
+            Some(b"x".as_slice()),
+            None,
+            Some(b"yz".as_slice()),
+        ])),
+    ];
+    let bytes = ipc(&schema, vec![batch(&schema, cols)]);
+    let want = user(&[("s", DataType::String, true), ("b", DataType::Binary, true)]);
+    let l = block_on(s.local_relation(Some(&bytes), Some(want))).unwrap();
+    let out = block_on(dataframe(&s, &l).collect()).unwrap();
+    assert_eq!(rows(&out), 3);
+    let strs = out[0].column(0).as_string_view();
+    assert_eq!(strs.value(0), "a");
+    assert!(strs.is_null(1));
+    assert_eq!(strs.value(2), "a longer string value");
+    let bins = out[0].column(1).as_binary_view();
+    assert_eq!(bins.value(2), b"yz");
+}

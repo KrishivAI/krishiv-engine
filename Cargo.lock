@@ -2760,6 +2760,7 @@ version = "0.2.0"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
+ "arrow-cast",
  "arrow-schema",
  "arrow-select",
  "aws-lc-rs",

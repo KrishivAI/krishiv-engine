@@ -673,5 +673,37 @@ fn a_declared_schema_prints_and_encodes_apart() {
         ]
     );
     assert!(b.len() > a.len());
-    assert!(b.windows(3).any(|w| w == b"BIG"));
+    assert!(b.windows(3).any(|w| w == b"big"));
+}
+
+/// The declared schema is encoded without loss: reads that differ only in an
+/// array's `containsNull`, a map's `valueContainsNull` or a nested field's
+/// nullability do not share canonical bytes.
+#[test]
+fn a_declared_schema_encodes_nested_nullability() {
+    use krishiv_types::{ArrayType, MapType, StructField, StructType};
+    let read = |ty: DataType| {
+        let schema = StructType::new([StructField::new("c", ty, true)]);
+        let p = LogicalPlan::new(PlanNode::Read(
+            ReadSource::files(
+                "parquet",
+                vec![OptionValue::from_user("path", "/d")],
+                BTreeMap::new(),
+            )
+            .with_schema(schema),
+        ));
+        Plan::try_new(p).unwrap().canonical_encoding()
+    };
+    let array = |n| ArrayType::new(DataType::Integer, n).into();
+    assert_ne!(read(array(true)), read(array(false)));
+    let map = |n| MapType::new(DataType::Integer, DataType::Integer, n).into();
+    assert_ne!(read(map(true)), read(map(false)));
+    let st = |n| {
+        DataType::Struct(StructType::new([StructField::new(
+            "x",
+            DataType::Integer,
+            n,
+        )]))
+    };
+    assert_ne!(read(st(true)), read(st(false)));
 }

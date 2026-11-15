@@ -78,14 +78,23 @@ impl Session {
             }
             .into());
         }
+        let (schema, records) = carried(&schema, records, &target)?;
         let renamed = renamed(&schema, &target);
         let same = renamed
             .fields()
             .iter()
             .zip(target.fields())
             .all(|(a, b)| same_shape(a.data_type(), b.data_type()));
-        let converted = if same || records.is_empty() {
+        let converted = if same {
             records
+        } else if records.is_empty() {
+            // No batches: the conversion is still checked, as for a zero-row batch.
+            let empty = RecordBatch::new_empty(Arc::clone(&renamed));
+            self.cast_batches(&renamed, &target, vec![empty])
+                .await?
+                .into_iter()
+                .filter(|b| b.num_rows() > 0)
+                .collect()
         } else {
             self.cast_batches(&renamed, &target, records).await?
         };
@@ -148,6 +157,91 @@ impl Session {
             .map(|b| recarried(b, &canonical_schema(Arc::clone(b.schema_ref()))))
             .collect()
     }
+}
+
+/// The view carrier of `t` for encoding-only differences: `Utf8`/`LargeUtf8` as `Utf8View` and
+/// `Binary`/`LargeBinary` as `BinaryView`, at any depth.
+fn viewed(t: &ArrowType) -> ArrowType {
+    let field = |f: &Arc<Field>| Arc::new(f.as_ref().clone().with_data_type(viewed(f.data_type())));
+    match t {
+        ArrowType::Utf8 | ArrowType::LargeUtf8 => ArrowType::Utf8View,
+        ArrowType::Binary | ArrowType::LargeBinary => ArrowType::BinaryView,
+        ArrowType::List(f) => ArrowType::List(field(f)),
+        ArrowType::LargeList(f) => ArrowType::LargeList(field(f)),
+        ArrowType::FixedSizeList(f, n) => ArrowType::FixedSizeList(field(f), *n),
+        ArrowType::Map(f, sorted) => ArrowType::Map(field(f), *sorted),
+        ArrowType::Struct(fields) => ArrowType::Struct(
+            fields
+                .iter()
+                .map(|f| f.as_ref().clone().with_data_type(viewed(f.data_type())))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// `records` (of `schema`) with the encoding-only carriers of string and binary columns moved to
+/// the views the engine runs on, by an Arrow cast of the buffers: a logical STRING-to-STRING cast
+/// would be folded away by the optimizer, so this is done here and explicitly. Only columns whose
+/// target is the same logical kind are touched; the rest keep their cast path.
+fn carried(
+    schema: &SchemaRef,
+    records: Vec<RecordBatch>,
+    target: &SchemaRef,
+) -> Result<(SchemaRef, Vec<RecordBatch>), KrishivError> {
+    let wanted: Vec<ArrowType> = schema
+        .fields()
+        .iter()
+        .zip(target.fields())
+        .map(|(have, want)| {
+            let v = viewed(have.data_type());
+            if &v != have.data_type() && v == viewed(want.data_type()) {
+                v
+            } else {
+                have.data_type().clone()
+            }
+        })
+        .collect();
+    if wanted
+        .iter()
+        .zip(schema.fields())
+        .all(|(w, f)| w == f.data_type())
+    {
+        return Ok((Arc::clone(schema), records));
+    }
+    let out = Arc::new(Schema::new_with_metadata(
+        schema
+            .fields()
+            .iter()
+            .zip(&wanted)
+            .map(|(f, w)| f.as_ref().clone().with_data_type(w.clone()))
+            .collect::<Vec<_>>(),
+        schema.metadata().clone(),
+    ));
+    let batches = records
+        .iter()
+        .map(|b| {
+            let columns = b
+                .columns()
+                .iter()
+                .zip(&wanted)
+                .map(|(c, w)| {
+                    if c.data_type() == w {
+                        Ok(Arc::clone(c))
+                    } else {
+                        arrow_cast::cast(c, w).map_err(|e| internal(e.to_string()))
+                    }
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            RecordBatch::try_new_with_options(
+                Arc::clone(&out),
+                columns,
+                &RecordBatchOptions::new().with_row_count(Some(b.num_rows())),
+            )
+            .map_err(|e| internal(e.to_string()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((out, batches))
 }
 
 /// The Arrow schema of a user-declared struct type.

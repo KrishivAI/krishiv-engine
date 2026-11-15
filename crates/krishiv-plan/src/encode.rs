@@ -1182,7 +1182,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 paths.iter().for_each(|p| self.option_value(p));
                 self.options(options);
                 if let Some(schema) = schema {
-                    self.str(&krishiv_types::DataType::Struct(schema.clone()).sql());
+                    self.lossless_type(&krishiv_types::DataType::Struct(schema.clone()));
                 }
             }
         }
