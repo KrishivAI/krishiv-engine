@@ -1043,6 +1043,77 @@ async fn an_aggregate_waits_for_its_slowest_lane_without_spinning() {
     done(r);
 }
 
+/// An aggregate whose fast lane would fill the pool with values before the
+/// slow lane's first is reserved: no group can be joined, and the lane
+/// queues are not spillable, so the slow lane's value would wait for memory
+/// only its peer holds. A lane reads no result while it holds more values
+/// than a peer still running, so it holds at most one result past the
+/// others and the slow lane always gets its value's memory.
+#[tokio::test]
+async fn a_fast_aggregate_lane_waits_for_its_peers_instead_of_filling_the_pool() {
+    let dir = tempfile::tempdir().unwrap();
+    let scope = krishiv_memory::SpillManager::open(&krishiv_memory::SpillConfig {
+        dir: dir.path().join("spill"),
+        ..krishiv_memory::SpillConfig::default()
+    })
+    .unwrap()
+    .scope()
+    .unwrap();
+    let shape = || RelationShape::Aggregate {
+        keys: vec![0],
+        key_values: vec![0],
+    };
+    let mut r = rig(shape(), Yield::Count, limits(0, 32768), 1 << 20);
+    let slow = Arc::new(Shared::default());
+    slow.closed.store(true, Ordering::SeqCst);
+    let lane = |shared: &Arc<Shared>, name: &str| RelationLane {
+        name: name.to_owned(),
+        udf: Arc::new(Fake {
+            shared: Arc::clone(shared),
+            yields: Yield::Count,
+        }),
+        sides: vec![vec![
+            column(0, ArrowType::Int32),
+            column(1, ArrowType::Int64),
+        ]],
+        names: vec![vec!["k".to_owned(), "v".to_owned()]],
+        client: vec![ArrowType::Int64],
+    };
+    r.sink = RelationSink::try_new(
+        input(false),
+        shape(),
+        vec![lane(&r.shared, "f"), lane(&slow, "g")],
+        Arc::new(Schema::new(vec![
+            Field::new("k", ArrowType::Int32, true),
+            Field::new("n", ArrowType::Int64, true),
+            Field::new("m", ArrowType::Int64, true),
+        ])),
+        limits(0, 32768),
+        Some(scope),
+    )
+    .unwrap();
+    let g = r.sink.global_state(&r.ctx).unwrap();
+    let mut l = r.sink.local_state(&r.ctx, &g).unwrap();
+    let groups = 12_000;
+    let keys: Vec<i32> = (0..groups).collect();
+    let status = r.sink.sink(rows(&keys, None), &mut l, &g).unwrap();
+    assert!(matches!(status, SinkStatus::NeedMoreInput), "{status:?}");
+    // The slow lane has no value yet: the fast one read one, then waits.
+    assert_eq!(r.shared.taken.load(Ordering::SeqCst), 1);
+    r.sink.combine(l, &g).unwrap();
+    slow.open_gate();
+    // Faster than the pool's spill wait: nothing waits for memory.
+    tokio::time::timeout(Duration::from_secs(4), r.sink.finalize(&g, &r.ctx))
+        .await
+        .unwrap()
+        .unwrap();
+    let groups = usize::try_from(groups).unwrap();
+    assert_eq!(r.shared.taken.load(Ordering::SeqCst), groups);
+    assert_eq!(slow.taken.load(Ordering::SeqCst), groups);
+    drop(g);
+    done(r);
+}
+
 #[tokio::test]
 async fn a_result_refused_in_finalize_spills_instead_of_waiting() {
     let dir = tempfile::tempdir().unwrap();
