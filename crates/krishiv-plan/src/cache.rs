@@ -139,8 +139,7 @@ struct Encoder {
     ids: HashMap<(u64, u64), u64>,
     next: u64,
     /// The normalized id per recursive-CTE loop id, in first-use order: the
-    /// raw ids come from a process-wide counter, so two lowerings of one
-    /// query differ in them.
+    /// raw ids come from a process-wide counter, so two lowerings of one query differ in them.
     loops: HashMap<u32, u64>,
     /// The digest of each plan and expression node already encoded, by
     /// address and shift bias. A shared (`Arc`) subtree is reached once per
