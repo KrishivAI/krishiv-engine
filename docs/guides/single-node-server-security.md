@@ -79,11 +79,8 @@ Embedded use, where the Python or Rust code runs in your own process, is not aff
 
 ## What is not in this release
 
-- **TLS and mutual TLS on the listeners.** The settings and the checks for them exist in the code, but the server
-  build in this release does not enable them. Run the server behind a TLS-terminating proxy, or on a loopback
-  address, until they ship.
-- **OpenID Connect (OIDC) sign-in.** Not in the server build in this release. Use static tokens.
-- **Connect-side tokens.** The Spark Connect listener does not yet check the admin tokens described above. Keep it
-  on a loopback address or behind your own access controls.
-
-Check the release notes for when each of these arrives.
+- **OpenID Connect (OIDC) sign-in.** No released build enables the `oidc` feature, so the OIDC settings are refused
+  at start-up. Use static tokens.
+- **The Spark Connect server.** It is not part of 0.2 (see [Deployment](deploy.md)). The authentication and TLS
+  settings on this page and in the deployment guide apply to the server in the builds that enable them. The release
+  notes say when each build does.

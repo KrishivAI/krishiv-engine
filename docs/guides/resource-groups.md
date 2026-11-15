@@ -28,7 +28,9 @@ restricted to the subset Krishiv supports. A complete example is in
         {"name": "interactive", "hardConcurrencyLimit": 16, "maxQueued": 50, "schedulingWeight": 3,
          "priority": 80, "workloadClass": "interactive"},
         {"name": "batch", "hardConcurrencyLimit": 6, "maxQueued": 100, "schedulingWeight": 1,
-         "priority": 30, "workloadClass": "batch"}
+         "priority": 30, "workloadClass": "batch"},
+        {"name": "background", "hardConcurrencyLimit": 2, "maxQueued": 100, "schedulingWeight": 1,
+         "priority": 10, "workloadClass": "background"}
       ]
     }
   ],
