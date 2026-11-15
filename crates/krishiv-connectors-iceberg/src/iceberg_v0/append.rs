@@ -8,7 +8,10 @@
 //! refreshed metadata with the same manifests and snapshot id.
 //!
 //! As Java's `SnapshotProducer`/`MergeAppend` (apache-iceberg 1.12.0):
-//! - one manifest per partition spec, at `<metadata dir>/<commit uuid>-m<n>.avro`;
+//! - the manifests of each partition spec (in spec id order) grouped and
+//!   rolled at `commit.manifest.target-size-bytes` as Java's
+//!   `writeDataManifests` (`rolling.rs`), at
+//!   `<metadata dir>/<commit uuid>-m<n>.avro`, `n` from 0 in list order;
 //!   entries `ADDED` with the write's snapshot id and null (inherited)
 //!   sequence numbers, so the manifests are valid on any base;
 //! - the list at `<metadata dir>/snap-<snapshot id>-<attempt>-<commit uuid>.avro`,
@@ -30,23 +33,25 @@
 //!   or null for a ref that does not exist yet); updates `add-snapshot` and
 //!   `set-snapshot-ref`, the branch keeping its retention.
 //!
-//! Manifests are not split at `commit.manifest.target-size-bytes` while
-//! written (Java's `RollingManifestWriter`): one per spec.
+//! Where a manifest rolls follows Java's rule over iceberg-rust's
+//! (uncompressed) encoded length, not Java's flushed, compressed length, and
+//! the group count fixes Java's host-dependent pool at 4 (`rolling.rs`).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use iceberg::io::FileIO;
 use iceberg::spec::{
-    DataFile, FormatVersion, ManifestFile, ManifestListWriter, ManifestWriterBuilder, Operation,
-    Snapshot, SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Summary,
-    TableMetadata, UNASSIGNED_SEQUENCE_NUMBER,
+    DataFile, FormatVersion, ManifestFile, ManifestListWriter, Operation, Snapshot,
+    SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Summary, TableMetadata,
+    UNASSIGNED_SEQUENCE_NUMBER,
 };
 use iceberg::{TableRequirement, TableUpdate};
 use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
 
 use super::data_file::check_partition;
 use super::merge::{MergeConfig, MergeContext, arrange};
+use super::rolling::{ManifestNames, SpecManifests};
 use super::scan::{read_manifest_files, snapshot_refs};
 use super::storage::from_iceberg;
 
@@ -144,10 +149,13 @@ pub(crate) struct NewManifests {
 
 /// Writes the manifests of `files` (data files, each with the id of the spec of
 /// `metadata` it was written under: iceberg-rust's `DataFile` does not expose it)
-/// under the snapshot id `snapshot_id` (module docs).
+/// under the snapshot id `snapshot_id` (module docs), each manifest's path
+/// pushed onto `written` before its file is created, so a caller can delete
+/// what a failed or dropped write left.
 ///
 /// # Errors
-/// An internal error for a file of a spec the table lacks or whose partition
+/// `KRISHIV_UNSUPPORTED_FEATURE` when `commit.manifest.target-size-bytes`
+/// does not parse (`MergeConfig`); an internal error for a file of a spec the table lacks or whose partition
 /// tuple does not fit its spec ([`check_partition`], checked before any
 /// iceberg-rust call, which would panic); iceberg-rust's write failures, with
 /// their Krishiv class when the storage raised one.
@@ -157,6 +165,7 @@ pub(crate) async fn write_new_manifests(
     files: Vec<(i32, DataFile)>,
     snapshot_id: i64,
     commit_uuid: &str,
+    written: &mut Vec<String>,
 ) -> Result<NewManifests, KrishivError> {
     let schema = Arc::clone(metadata.current_schema());
     let dir = metadata_dir(metadata);
@@ -188,28 +197,26 @@ pub(crate) async fn write_new_manifests(
         }
         specs.push(Arc::clone(spec));
     }
-    let mut manifests = Vec::with_capacity(by_spec.len());
-    for (n, (spec, files)) in specs.iter().zip(by_spec.into_values()).enumerate() {
-        let path = format!("{dir}/{commit_uuid}-m{n}.avro");
-        let output = io.new_output(&path).map_err(from_iceberg)?;
-        let builder = ManifestWriterBuilder::new(
-            output,
-            Some(snapshot_id),
-            Arc::clone(&schema),
-            spec.as_ref().clone(),
-        );
-        let mut writer = match metadata.format_version() {
-            FormatVersion::V1 => builder.build_v1(),
-            FormatVersion::V2 => builder.build_v2_data(),
-            FormatVersion::V3 => builder.build_v3_data(),
-        };
-        for f in files {
-            summary.add_file(&f, Arc::clone(&schema), Arc::clone(spec));
-            writer
-                .add_file(f, UNASSIGNED_SEQUENCE_NUMBER)
-                .map_err(from_iceberg)?;
+    let target_size_bytes = MergeConfig::from_properties(metadata.properties())?.target_size_bytes;
+    let mut names = ManifestNames {
+        prefix: format!("{dir}/{commit_uuid}-m"),
+        next: 0,
+        written,
+    };
+    let mut manifests = Vec::new();
+    for (spec, files) in specs.iter().zip(by_spec.into_values()) {
+        for f in &files {
+            summary.add_file(f, Arc::clone(&schema), Arc::clone(spec));
         }
-        manifests.push(writer.write_manifest_file().await.map_err(from_iceberg)?);
+        let writer = SpecManifests {
+            io,
+            version: metadata.format_version(),
+            schema: &schema,
+            spec,
+            snapshot_id,
+            target_size_bytes,
+        };
+        manifests.extend(writer.write(&mut names, files).await?);
     }
     let mut added = summary.build();
     // Java's `SnapshotSummary.Builder.build`: the count always, and

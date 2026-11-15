@@ -563,7 +563,7 @@ fn written_files_append_and_read_back() {
         .collect();
     let io = env.reg.file_io();
     let attempt = env.rt.block_on(async {
-        let mut new = write_new_manifests(&io, &m0, entries, 501, "uuid-501")
+        let mut new = write_new_manifests(&io, &m0, entries, 501, "uuid-501", &mut Vec::new())
             .await
             .unwrap();
         prepare_attempt(&io, &m0, &mut new, ids("w1"), now(&m0), MAX)
