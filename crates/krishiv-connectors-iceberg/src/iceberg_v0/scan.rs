@@ -283,7 +283,11 @@ pub(crate) fn check_size(
 /// its declared size (a manifest list's `manifest_length`) or the store's
 /// size is more than `max` bytes. Only that many bytes are ever fetched: a
 /// range read of the version the store listed, so a file larger than declared
-/// cannot make the read collect more.
+/// cannot make the read collect more. A file of another length is refused,
+/// never read short: a shorter one fails the range read; for a longer one the
+/// byte past the size reads (the reader refuses that range locally, without a
+/// request, when the file ends there), and a manifest cut at an Avro block
+/// boundary would otherwise parse with entries missing.
 pub(super) async fn read_capped(
     io: &FileIO,
     what: &str,
@@ -300,6 +304,16 @@ pub(super) async fn read_capped(
     let reader = input.reader().await.map_err(from_iceberg)?;
     let bytes = reader.read(0..size).await.map_err(from_iceberg)?;
     check_size(what, location, bytes.len() as u64, max)?;
+    if bytes.len() as u64 != size
+        || reader
+            .read(size..size + 1)
+            .await
+            .is_ok_and(|b| !b.is_empty())
+    {
+        return Err(internal(format!(
+            "the Iceberg {what} {location} is not {size} bytes long, as its metadata says"
+        )));
+    }
     Ok(bytes)
 }
 

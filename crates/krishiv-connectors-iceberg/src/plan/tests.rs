@@ -547,6 +547,18 @@ fn truncate_int_partitions_wrap_near_the_minimum() {
     let n = |op, v| keeps(&fields, &specs, &normal, &cmp("x", op, S::Int32(v)));
     assert!(n(CmpOp::Gt, i32::MIN + 1));
     assert!(n(CmpOp::Lt, 25));
+    // Past `W = 2^30` an int's `v % W + W` overflows far from the minimum
+    // too (Java: truncate[i32::MAX](5) = -2147483647): only equality prunes.
+    let wide = spec(vec![pfield(
+        1000,
+        1,
+        Transform::Truncate(i32::MAX.unsigned_abs()),
+        IcebergType::Int,
+    )]);
+    let zero = partitioned(vec![value(&S::Int32(0), &IcebergType::Int)]);
+    let w = |op, v| keeps(&fields, &wide, &zero, &cmp("x", op, S::Int32(v)));
+    assert!(w(CmpOp::Lt, 5));
+    assert!(w(CmpOp::Gt, -5));
     // Away from the window the projection still prunes.
     assert!(!n(CmpOp::Lt, 10));
     assert!(!n(CmpOp::Gt, 30));

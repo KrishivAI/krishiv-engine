@@ -493,21 +493,29 @@ fn project(pf: &PartitionFieldInfo, source: &IcebergType, op: Op<'_>, facts: &Fa
             };
             // `truncate` of an int or long wraps as Java's arithmetic does: a
             // value within `W` of the type's minimum lands near its maximum,
-            // so the transform is monotone only away from that window.
-            let wrap = wrapped_window(t, source);
-            if wrap.is_some() && !matches!(op, CmpOp::Eq | CmpOp::NotEq) && wraps(v, &fv) {
+            // so the transform is monotone only away from that window. Past
+            // `W = 2^30` an int's `v % W + W` itself overflows (Java's too),
+            // so values far from the minimum misplace: only equality prunes.
+            let windows = wrapped_windows(t, source);
+            let range = !matches!(op, CmpOp::Eq | CmpOp::NotEq);
+            if !windows.is_empty() && range && (wraps(v, &fv) || wide_truncate(t)) {
                 return true;
             }
             let wrapped_kept = || {
-                wrap.as_ref()
-                    .is_some_and(|w| facts.may_match(Op::Cmp(CmpOp::Gt, w)))
+                windows
+                    .iter()
+                    .any(|w| facts.may_match(Op::Cmp(CmpOp::Gt, w)))
             };
             match (t, op) {
                 (Transform::Bucket(_), CmpOp::Eq) => facts.may_match(Op::Cmp(CmpOp::Eq, &fv)),
                 (Transform::Bucket(_), _) | (_, CmpOp::NotEq) => true,
-                (_, CmpOp::Eq) => widened(t, &fv)
-                    .iter()
-                    .any(|x| facts.may_match(Op::Cmp(CmpOp::Eq, x))),
+                (_, CmpOp::Eq) => {
+                    widened(t, &fv)
+                        .iter()
+                        .any(|x| facts.may_match(Op::Cmp(CmpOp::Eq, x)))
+                        || int_era(t, source, v)
+                            .is_some_and(|x| facts.may_match(Op::Cmp(CmpOp::Eq, &x)))
+                }
                 (_, CmpOp::Lt | CmpOp::LtEq) => {
                     let hi = widened(t, &fv);
                     let top = hi.last().unwrap_or(&fv);
@@ -535,20 +543,49 @@ fn project(pf: &PartitionFieldInfo, source: &IcebergType, op: Op<'_>, facts: &Fa
     }
 }
 
-/// For `truncate[W]` of an int or long, the value every wrapped partition value
-/// lies above (`MAX - W`: a source value within `W` of the minimum truncates to
-/// above it); `None` for other transforms and types.
-fn wrapped_window(t: Transform, source: &IcebergType) -> Option<ScalarValue> {
+/// For `truncate[W]` of an int or long, the values every wrapped partition
+/// value lies above (`MAX - W`: a source value within `W` of the minimum
+/// truncates to above it). A long column may have been an int when a file was
+/// written (type promotion keeps its partition values), so its files may hold
+/// an int's wrapped values too. Empty for other transforms and types.
+fn wrapped_windows(t: Transform, source: &IcebergType) -> Vec<ScalarValue> {
     let Transform::Truncate(w) = t else {
+        return Vec::new();
+    };
+    let int_window = i64::from(i32::MAX) - i64::from(w);
+    match source {
+        IcebergType::Int => i32::try_from(int_window)
+            .map(|x| vec![ScalarValue::Int32(x)])
+            .unwrap_or_else(|_| vec![ScalarValue::Int32(i32::MIN)]),
+        IcebergType::Long => vec![
+            ScalarValue::Int64(i64::MAX - i64::from(w)),
+            ScalarValue::Int64(int_window),
+        ],
+        _ => Vec::new(),
+    }
+}
+
+/// For `truncate[W]` of a long column, the partition value a file written
+/// while the column was an int holds for `v` (its truncation in an int's
+/// wrapping arithmetic), when that differs from the long's.
+fn int_era(t: Transform, source: &IcebergType, v: &ScalarValue) -> Option<ScalarValue> {
+    let (Transform::Truncate(_), IcebergType::Long, ScalarValue::Int64(x)) = (t, source, v) else {
         return None;
     };
-    match source {
-        IcebergType::Int => Some(ScalarValue::Int32(
-            i32::MAX.saturating_sub(i32::try_from(w).ok()?),
-        )),
-        IcebergType::Long => Some(ScalarValue::Int64(i64::MAX - i64::from(w))),
+    let int = ScalarValue::Int32(i32::try_from(*x).ok()?);
+    match apply(t, &IcebergType::Int, &int)? {
+        ScalarValue::Int32(y) => {
+            let y = ScalarValue::Int64(i64::from(y));
+            (apply(t, source, v)? != y).then_some(y)
+        }
         _ => None,
     }
+}
+
+/// A `truncate[W]` whose int arithmetic overflows for values away from the
+/// minimum (`W > 2^30`: `v % W + W` passes `i32::MAX`).
+fn wide_truncate(t: Transform) -> bool {
+    matches!(t, Transform::Truncate(w) if w > 1 << 30)
 }
 
 /// Whether the truncation `fv` of the integer `v` wrapped (landed above it).

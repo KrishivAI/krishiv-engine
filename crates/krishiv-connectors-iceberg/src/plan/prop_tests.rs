@@ -94,6 +94,9 @@ fn candidate_fields() -> Vec<(i32, Transform)> {
         (3, Transform::Void),
         (4, Transform::Identity),
         (4, Transform::Truncate(5)),
+        (4, Transform::Truncate(10)),
+        // `v % W + W` overflows an int for values far from the minimum.
+        (4, Transform::Truncate(i32::MAX.unsigned_abs())),
         (5, Transform::Day),
         (5, Transform::Hour),
         (5, Transform::Month),
@@ -264,6 +267,18 @@ fn partition_value(pf: &PartitionFieldInfo, row: &Row, toward_zero: bool) -> Opt
     match pf.transform {
         // Void is always null; unknown is never serialised (no result type).
         Transform::Void | Transform::Unknown => None,
+        // The promoted column was an int when its files were written: its
+        // truncation wrapped as an int's does.
+        Transform::Truncate(w) if pf.source_id == 4 => {
+            let ScalarValue::Int64(x) = v else {
+                return None;
+            };
+            let int = ScalarValue::Int32(i32::try_from(x).ok()?);
+            match apply(Transform::Truncate(w), &IcebergType::Int, &int)? {
+                ScalarValue::Int32(y) => Some(ScalarValue::Int64(i64::from(y))),
+                other => Some(other),
+            }
+        }
         t => apply(t, &type_of(pf.source_id), &v),
     }
 }
@@ -301,7 +316,11 @@ fn row_strategy() -> impl Strategy<Value = Row> {
         prop::option::weighted(0.8, -20i64..20),
         prop::option::weighted(0.8, string_strategy()),
         prop::option::weighted(0.8, d),
-        prop::option::weighted(0.8, -30i32..30),
+        // Near the minimum, `truncate` of an int wraps (Java's arithmetic).
+        prop::option::weighted(
+            0.8,
+            prop_oneof![4 => -30i32..30, 1 => i32::MIN..i32::MIN + 12, 1 => i32::MAX - 12..=i32::MAX],
+        ),
         prop::option::weighted(0.8, t),
         prop::option::weighted(0.8, 0i32..3),
     )
@@ -312,7 +331,14 @@ fn row_strategy() -> impl Strategy<Value = Row> {
 /// values: one more or less, a string with one more character or one fewer).
 fn literal(c: &str, rows: &[Row]) -> BoxedStrategy<ScalarValue> {
     let random = match c {
-        "a" | "p" => (-35i64..35).prop_map(ScalarValue::Int64).boxed(),
+        "a" => (-35i64..35).prop_map(ScalarValue::Int64).boxed(),
+        "p" => prop_oneof![
+            3 => -35i64..35,
+            1 => i64::from(i32::MIN) - 2..i64::from(i32::MIN) + 14,
+            1 => i64::from(i32::MAX) - 14..i64::from(i32::MAX) + 2,
+        ]
+        .prop_map(ScalarValue::Int64)
+        .boxed(),
         "s" => string_strategy().prop_map(ScalarValue::Utf8).boxed(),
         "d" => prop::sample::select(vec![-2.0, -1.5, 0.0, -0.0, 1.0, 2.0, 3.25, 9.0, f64::NAN])
             .prop_map(ScalarValue::Float64)
@@ -329,8 +355,12 @@ fn literal(c: &str, rows: &[Row]) -> BoxedStrategy<ScalarValue> {
     let mut pool = Vec::new();
     for v in rows.iter().filter_map(|r| r.get(c)) {
         match &v {
-            ScalarValue::Int64(x) => pool.extend([x - 1, x + 1].map(ScalarValue::Int64)),
-            ScalarValue::Int32(x) => pool.extend([x - 1, x + 1].map(ScalarValue::Int32)),
+            ScalarValue::Int64(x) => {
+                pool.extend([x.saturating_sub(1), x.saturating_add(1)].map(ScalarValue::Int64));
+            }
+            ScalarValue::Int32(x) => {
+                pool.extend([x.saturating_sub(1), x.saturating_add(1)].map(ScalarValue::Int32));
+            }
             ScalarValue::TimestampMicros(x) => {
                 pool.extend([x - 1, x + 1].map(ScalarValue::TimestampMicros));
             }

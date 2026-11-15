@@ -514,9 +514,9 @@ fn arrow_schema_carries_nested_field_ids() {
 }
 
 /// A manifest read fetches only its declared length: a file larger than its
-/// manifest list says cannot make the read collect more (it is cut there and
-/// fails to parse); one smaller fails the read; either size past the cap is
-/// refused before any byte is read.
+/// manifest list says is refused (never parsed short, never collected whole),
+/// as is one smaller; either size past the cap is refused before any byte is
+/// read.
 #[tokio::test]
 async fn capped_reads_fetch_at_most_the_declared_bytes() {
     let dir = tempfile::tempdir().unwrap();
@@ -529,10 +529,19 @@ async fn capped_reads_fetch_at_most_the_declared_bytes() {
         .await
         .unwrap();
     let read = |declared, max| super::scan::read_capped(&io, "manifest", &loc, declared, max);
-    assert_eq!(read(Some(10), 100).await.unwrap().len(), 10);
+    assert_eq!(read(Some(4096), 8192).await.unwrap().len(), 4096);
     assert_eq!(read(None, 8192).await.unwrap().len(), 4096);
-    let e = read(Some(5000), 8192).await.unwrap_err();
-    assert!(!e.to_string().is_empty());
+    let longer = read(Some(10), 100).await.unwrap_err();
+    assert!(
+        longer.to_string().contains("is not 10 bytes long"),
+        "{longer}"
+    );
+    let shorter = read(Some(5000), 8192).await.unwrap_err();
+    assert_eq!(
+        shorter.error_class(),
+        krishiv_common::error::ErrorClass::FailedReadFileNoHint,
+        "{shorter}"
+    );
     for (declared, max) in [(Some(200), 100), (None, 100)] {
         let e = read(declared, max).await.unwrap_err();
         assert!(
