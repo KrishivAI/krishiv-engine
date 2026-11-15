@@ -4612,7 +4612,7 @@
    ]
   },
   {
-   "tag": "r.gagg_above_aqeoff",
+   "tag": "r.gagg_above_pid",
    "script": "review-probe.scala",
    "sql": "SELECT c, spark_partition_id() p FROM (SELECT count(*) c FROM m1 UNION ALL SELECT count(*) c FROM m2)",
    "conf": {},
@@ -4633,6 +4633,27 @@
    "rows": [
     "6,0,0",
     "4,1,8589934592"
+   ]
+  },
+  {
+   "tag": "r.cte_two_reads",
+   "script": "review-probe.scala",
+   "sql": "WITH t AS (SELECT id, rand() AS r FROM range(0, 1000, 1, 4) UNION ALL SELECT count(*), rand() FROM range(10)) SELECT count(DISTINCT m), count(*) FROM (SELECT monotonically_increasing_id() AS m FROM t UNION ALL SELECT monotonically_increasing_id() AS m FROM t)",
+   "conf": {},
+   "partitions": 1,
+   "rows": [
+    "1001,2002"
+   ]
+  },
+  {
+   "tag": "r.cte_two_reads_per_branch",
+   "script": "review-probe.scala",
+   "sql": "WITH t AS (SELECT id, rand() AS r FROM range(0, 1000, 1, 4) UNION ALL SELECT count(*), rand() FROM range(10)) SELECT b, count(DISTINCT m), count(*), min(m), max(m) FROM (SELECT 1 AS b, monotonically_increasing_id() AS m FROM t UNION ALL SELECT 2 AS b, monotonically_increasing_id() AS m FROM t) GROUP BY b ORDER BY b",
+   "conf": {},
+   "partitions": 1,
+   "rows": [
+    "1,1001,1001,0,1000",
+    "2,1001,1001,0,1000"
    ]
   }
  ]

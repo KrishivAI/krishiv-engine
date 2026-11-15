@@ -49,6 +49,12 @@ struct Cursor {
 }
 
 impl Operator for ReplicateRows {
+    /// Spark plans it as `Generate replicaterows(...)`, whose `GenerateExec`
+    /// keeps its child's partitioning.
+    fn keeps_partitioning(&self) -> bool {
+        true
+    }
+
     fn lane_safe(&self) -> bool {
         true
     }

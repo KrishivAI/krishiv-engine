@@ -199,6 +199,10 @@ fn one_thread_only(tag: &str) -> bool {
         || tag.starts_with("g.pq1_pq1")
         || tag == "f.values"
         || tag == "f2.agg_children"
+        // A shared CTE's stored batches carry no split: at more threads its
+        // copies are read by several drivers, whose ids differ from Spark's
+        // one partition (a known gap).
+        || tag.starts_with("r.cte_two_reads")
 }
 
 /// Whether Spark's row order is not defined by the plan (an aggregate's
@@ -374,7 +378,21 @@ fn a_coalescible_union_under_a_join_probe_stays_deterministic() {
         for attempt in 0..5 {
             let mut got = rows(&s, sql);
             got.sort();
-            assert_eq!(got.len(), 8);
+            // The plain numbering: branch 2 is partition 1 above the union.
+            assert_eq!(
+                got,
+                [
+                    "0,0,0.619189370225301",
+                    "1,1,0.5096018842446481",
+                    "10,8589934592,0.8017532427858894",
+                    "11,8589934593,0.6565552949992319",
+                    "12,8589934594,0.2515595782593636",
+                    "13,8589934595,0.2073428376111074",
+                    "2,2,0.8325259388871524",
+                    "3,3,0.26322809041172357",
+                ],
+                "{threads} threads, run {attempt}"
+            );
             match &first {
                 None => first = Some(got),
                 Some(want) => assert_eq!(&got, want, "{threads} threads, run {attempt}"),

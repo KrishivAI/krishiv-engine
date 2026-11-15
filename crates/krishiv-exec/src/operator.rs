@@ -85,8 +85,10 @@ pub trait Source: Send + Sync {
     /// `UNION ALL` whose inputs all are runs them as one partition
     /// (`spark.sql.unionOutputPartitioning`, `numbering.rs`). Default `false`
     /// (Spark's `UnknownPartitioning`: a file scan, `VALUES`). Not mirrored
-    /// yet: a sort's output and a breaker over an AQE-coalesced shuffle,
-    /// which Spark makes one partition.
+    /// yet: a sort's output, a breaker over an AQE-coalesced shuffle and a
+    /// grouped aggregate over a one-partition input (no exchange in Spark:
+    /// `(s1 EXCEPT ALL ..) UNION ALL (s2 EXCEPT ALL ..)` is spid 0), which
+    /// Spark makes one partition.
     fn single_partition(&self, global: &GlobalState) -> bool {
         let _ = global;
         false
@@ -251,7 +253,8 @@ pub trait Operator: Send + Sync {
         false
     }
     /// Whether the operator's output keeps its input's Spark partitioning
-    /// (`ProjectExec`, `FilterExec`, `SampleExec`, `GenerateExec`, and a
+    /// (`ProjectExec`, `FilterExec`, `SampleExec`, `GenerateExec` (also
+    /// `ReplicateRows`, planned as one), and a
     /// `LIMIT` over one partition), so a `SinglePartition` input stays one
     /// (see [`Source::single_partition`]). Default `false`. Not mirrored
     /// yet: Spark's `GlobalLimitExec` is one partition over any input;
