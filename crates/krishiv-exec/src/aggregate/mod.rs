@@ -860,6 +860,9 @@ pub fn is_order_sensitive(f: &AggregateFunction) -> bool {
             | F::MinBy
             | F::MaxByKeyFirst
             | F::MinByKeyFirst
+            // A session UDAF's merge may keep or concatenate in arrival order
+            // (nothing says it commutes): merge its states as the disk does.
+            | F::Udf(_)
     )
 }
 
