@@ -1177,9 +1177,9 @@ fn expression_strings_lower_like_select_items() {
         panic!("not an alias: {lowered:?}");
     };
     assert_eq!(name, "c");
-    // Constructs the IR lacks fail while lowering.
+    // A parameter marker nothing bound is Spark's `UNBOUND_SQL_PARAMETER`.
     let e = parse_and_lower_named_expression("?", &d, SourceId(0)).unwrap_err();
-    assert_eq!(e.error.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+    assert_eq!(e.error.error_class().name(), "UNBOUND_SQL_PARAMETER");
 }
 
 /// `lower_expression` lowers one parsed expression as `SELECT` items lower

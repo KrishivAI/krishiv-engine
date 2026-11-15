@@ -1,0 +1,12 @@
+# OSV-Scanner configuration (read from the directory of Cargo.lock).
+# Each ignore mirrors a reasoned `deny.toml` [advisories] ignore and expires,
+# so the scanner fails again if the dependency is still here by then.
+
+# paste is unmaintained (archived) and has no successor release. It comes only
+# from parquet 58.4.1, which iceberg 0.11 pulls; paste is a proc macro, so
+# nothing of it is linked. Drop this with the deny.toml ignore, when
+# iceberg-rust releases on the workspace Arrow major.
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0436"
+ignoreUntil = 2027-05-13
+reason = "unmaintained proc macro; only through iceberg 0.11's parquet 58; no safe upgrade"

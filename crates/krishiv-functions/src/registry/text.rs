@@ -226,9 +226,16 @@ pub(super) fn specs() -> Vec<Spec> {
         &Inputs::Expects(vec![InputType::Strict(DataType::String)]),
         string,
     ));
+    // `reverse` takes a string, a binary or an array (Spark's `TypeCollection(StringType, ArrayType)`): an array keeps its type.
     out.extend(scalar(
         &["reverse"],
-        &Inputs::Expects(vec![text_or_bytes.clone()]),
+        &Inputs::Built(InputBuilder(|c: &CallTypes<'_>| {
+            if matches!(c.data_type(0), Some(DataType::Array(_))) {
+                vec![InputType::Array]
+            } else {
+                vec![InputType::OneOf(vec![DataType::String, DataType::Binary])]
+            }
+        })),
         first_type,
     ));
     out.extend(scalar(&["quote"], &one_text, nullable_string));

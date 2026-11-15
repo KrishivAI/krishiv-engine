@@ -348,3 +348,35 @@ fn listings_never_follow_a_link_out_of_a_root() {
     let e = run(&s, &read(table.to_str().unwrap())).unwrap_err();
     assert!(e.contains("a link out of the allowed roots"), "{e}");
 }
+
+/// A managed table's own directory is a local path inside the roots: an admin creates, truncates,
+/// renames and drops a managed table whose warehouse is under `krishiv.io.local.allowedRoots` (the
+/// location is asked as a `file:` path, never as an object-store key), and no role can put one
+/// outside them.
+#[test]
+fn managed_tables_inside_the_roots() {
+    let (_tmp, allowed, secret) = dirs();
+    for (warehouse, inside) in [(allowed.join("wh"), true), (secret.join("wh"), false)] {
+        std::fs::create_dir_all(&warehouse).unwrap();
+        let s = Session::builder()
+            .principal(Principal::new("admin", PrincipalKind::User))
+            .access_policy(Arc::new(policy(
+                &config(&[("krishiv.io.local.allowedRoots", allowed.to_str().unwrap())]),
+                Role::Admin,
+            )))
+            .config("spark.sql.warehouse.dir", warehouse.to_str().unwrap())
+            .build()
+            .unwrap();
+        let created = run(&s, "CREATE TABLE t (a INT) USING parquet");
+        if inside {
+            created.unwrap();
+            run(&s, "INSERT INTO t VALUES (1)").unwrap();
+            run(&s, "TRUNCATE TABLE t").unwrap();
+            run(&s, "ALTER TABLE t RENAME TO u").unwrap();
+            run(&s, "DROP TABLE u").unwrap();
+        } else {
+            let e = created.unwrap_err();
+            assert!(e.contains(DENIED), "{e}");
+        }
+    }
+}
