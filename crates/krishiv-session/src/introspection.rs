@@ -22,6 +22,8 @@ use crate::session::Session;
 use crate::store::{CatalogPartition, CatalogStore, CatalogTable, NamespaceMeta};
 use crate::table_commands::TableName;
 
+mod ddl_type;
+
 type Cell = Option<String>;
 
 fn s(v: impl Into<String>) -> Cell {
@@ -202,16 +204,6 @@ fn redact<'a>(key: &str, value: &'a str) -> &'a str {
     } else {
         value
     }
-}
-
-/// A column type as `SHOW CREATE TABLE` prints it. Nested types keep their field names, which an upper-cased
-/// `catalog_string` would change, so they are not printed yet.
-fn type_sql(t: &DataType) -> Result<String, KrishivError> {
-    let text = t.catalog_string();
-    if text.contains('<') {
-        return Err(unsupported("SHOW CREATE TABLE with a nested column type"));
-    }
-    Ok(text.to_uppercase())
 }
 
 /// The type `DESCRIBE` shows for column `name`: its declared `CHAR(n)` / `VARCHAR(n)` string when it has one
@@ -1660,18 +1652,12 @@ fn partition_details(t: &CatalogTable, p: &CatalogPartition) -> Vec<(String, Str
 /// `spark.sql.legacy.viewSchemaBindingMode` (a view's `WITH SCHEMA` line).
 fn create_statement(t: &CatalogTable, binding_enabled: bool) -> Result<String, KrishivError> {
     let column = |c: &crate::store::StoreColumn| -> Result<String, KrishivError> {
-        // A `CHAR(n)` / `VARCHAR(n)` column prints its declared type (`CHAR(5)`); nested ones are refused like the
-        // other nested types.
-        let shown = match &c.char_varchar {
-            Some(cv) if !cv.contains('<') => cv.to_uppercase(),
-            _ => type_sql(&c.data_type)?,
-        };
-        let mut out = format!("  {} {}", quote_if_needed(&c.name), shown);
+        // Spark's `StructField.toDDL`: the type (a string with its collation, a `CHAR(n)` / `VARCHAR(n)` column
+        // as declared), then `NOT NULL`, `DEFAULT` and `COMMENT`.
+        let shown = ddl_type::ddl_type(&c.data_type, c.char_varchar.as_deref());
+        let mut out = format!("  {} {}", ddl_type::quote_field(&c.name), shown);
         if !c.nullable {
             out.push_str(" NOT NULL");
-        }
-        if c.data_type == DataType::String {
-            out.push_str(" COLLATE UTF8_BINARY");
         }
         if let Some(default) = &c.default {
             out.push_str(&format!(" DEFAULT {default}"));

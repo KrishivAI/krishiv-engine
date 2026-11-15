@@ -286,8 +286,8 @@ fn create_table_text_round_trips_quotes_and_hides_secrets() {
     assert!(ext.iter().all(|r| !r[1].contains("hunter2")));
     run(&s, "CREATE TABLE n (s STRUCT<a: INT>) USING parquet");
     assert_eq!(
-        class(&s, "SHOW CREATE TABLE n"),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        rows(&s, "SHOW CREATE TABLE n")[0][0],
+        "CREATE TABLE spark_catalog.default.n (\n  s STRUCT<a: INT>)\nUSING parquet\n"
     );
 }
 
