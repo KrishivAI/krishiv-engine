@@ -186,7 +186,12 @@ fn a_null_in_a_non_nullable_field_fails_at_any_depth() {
     // The same shape with the child nullable is fine.
     let loose = StructType::new([StructField::new("q", DataType::Integer, true)]);
     let want = user(&[("t", DataType::Struct(loose), true)]);
-    assert!(block_on(s.local_relation(Some(&bytes), Some(want))).is_ok());
+    let l = block_on(s.local_relation(Some(&bytes), Some(want))).unwrap();
+    let out = block_on(dataframe(&s, &l).collect()).unwrap();
+    let col = out[0].column(0).as_struct();
+    assert_eq!(col.column_names(), ["q"], "the nested field is renamed");
+    let q = col.column(0).as_primitive::<Int32Type>();
+    assert_eq!((q.len(), q.value(0), q.is_null(1)), (2, 1, true));
 }
 
 #[test]
@@ -221,8 +226,16 @@ fn a_failing_cast_or_a_wrong_count_errors_from_local_relation() {
     let col: ArrayRef = Arc::new(StringArray::from(vec!["abc"]));
     let bytes = ipc(&schema, vec![batch(&schema, vec![col])]);
     let want = user(&[("n", DataType::Integer, false)]);
-    assert!(block_on(s.local_relation(Some(&bytes), Some(want))).is_err());
+    let err = block_on(s.local_relation(Some(&bytes), Some(want))).unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::CastInvalidInput);
     assert_eq!(s.relations().len(), 0, "nothing is left behind");
+    // Control: a string that parses casts.
+    let col: ArrayRef = Arc::new(StringArray::from(vec!["123"]));
+    let ok = ipc(&schema, vec![batch(&schema, vec![col])]);
+    let want = user(&[("n", DataType::Integer, false)]);
+    let l = block_on(s.local_relation(Some(&ok), Some(want))).unwrap();
+    let out = block_on(dataframe(&s, &l).collect()).unwrap();
+    assert_eq!(out[0].column(0).as_primitive::<Int32Type>().value(0), 123);
 
     let (_, bytes) = two_ints();
     let want = user(&[("only", DataType::Integer, true)]);
@@ -274,13 +287,19 @@ fn a_scan_deals_its_batches_as_splits() {
     }
     assert_eq!(seen, 2, "both batches are dealt: {specs:?}");
     let mut total = 0;
+    let mut xs: Vec<i32> = Vec::new();
     for task in &specs {
-        total += rows(
-            &rt.block_on(s.run_task(&physical, &analysis.env, task))
-                .unwrap(),
-        );
+        let out = rt
+            .block_on(s.run_task(&physical, &analysis.env, task))
+            .unwrap();
+        total += rows(&out);
+        for b in &out {
+            xs.extend(b.column(0).as_primitive::<Int32Type>().values().iter());
+        }
     }
     assert_eq!(total, 4);
+    xs.sort_unstable();
+    assert_eq!(xs, [1, 2, 10, 11], "each row is read once");
 }
 
 #[test]
