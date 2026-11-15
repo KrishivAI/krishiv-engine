@@ -283,7 +283,7 @@ fn an_unsafe_prefix_or_separator_is_a_catalog_fault() {
 
 #[test]
 fn catalog_location_confined() {
-    for (location, credential_prefix) in [
+    for (location, scope) in [
         ("file:///etc", "s3://b/t"),
         ("http://169.254.169.254/latest", "s3://b/t"),
         ("s3://key:secret@b/t", "s3://b/t"),
@@ -296,7 +296,7 @@ fn catalog_location_confined() {
     ] {
         let body = format!(
             r#"{{"metadata": {{"format-version": 2, "location": "{location}"}},
-                "storage-credentials": [{{"prefix": "{credential_prefix}", "config": {{"s3.secret-access-key": "SK"}}}}]}}"#
+                "storage-credentials": [{{"prefix": "{scope}", "config": {{"s3.secret-access-key": "SK"}}}}]}}"#
         );
         let server = serve(move |r| match path(r) {
             "/v1/config" => Reply::Json(200, CONFIG.into()),
@@ -307,7 +307,7 @@ fn catalog_location_confined() {
         assert_eq!(
             class(&e),
             ErrorClass::KrishivCatalogLocationRefused,
-            "{location} {credential_prefix}"
+            "{location} {scope}"
         );
         let text = e.to_string();
         assert!(
