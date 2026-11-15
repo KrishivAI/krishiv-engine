@@ -317,8 +317,8 @@ fn listings_never_follow_a_link_out_of_a_root() {
     assert!(e.contains("a link out of the allowed roots"), "{e}");
 }
 
-/// A managed table's own directory is a local path inside the roots: an admin creates, renames
-/// and drops a managed table whose warehouse is under `krishiv.io.local.allowedRoots` (the
+/// A managed table's own directory is a local path inside the roots: an admin creates, truncates,
+/// renames and drops a managed table whose warehouse is under `krishiv.io.local.allowedRoots` (the
 /// location is asked as a `file:` path, never as an object-store key), and no role can put one
 /// outside them.
 #[test]
@@ -339,6 +339,7 @@ fn managed_tables_inside_the_roots() {
         if inside {
             created.unwrap();
             run(&s, "INSERT INTO t VALUES (1)").unwrap();
+            run(&s, "TRUNCATE TABLE t").unwrap();
             run(&s, "ALTER TABLE t RENAME TO u").unwrap();
             run(&s, "DROP TABLE u").unwrap();
         } else {
