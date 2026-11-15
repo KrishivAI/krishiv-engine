@@ -197,7 +197,7 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`grouping_id`](grouping_id.md) | aggregate | yes | returns the level of grouping, equals to |
 | [`hash`](hash.md) | scalar | yes | Returns a hash value of the arguments. |
 | [`hex`](hex.md) | scalar | yes | Converts `expr` to hexadecimal. |
-| [`histogram_numeric`](histogram_numeric.md) | aggregate | not yet | Computes a histogram on numeric 'expr' using nb bins. |
+| [`histogram_numeric`](histogram_numeric.md) | aggregate | yes | Computes a histogram on numeric 'expr' using nb bins. |
 | [`hll_sketch_agg`](hll_sketch_agg.md) | aggregate | not yet | Returns the HllSketch's updatable binary representation. |
 | [`hll_sketch_estimate`](hll_sketch_estimate.md) | aggregate | not yet | Returns the estimated number of unique values given the binary representation |
 | [`hll_union`](hll_union.md) | aggregate | not yet | Merges two binary representations of |
@@ -581,4 +581,4 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`\|\|`](op-pipe-pipe.md) | scalar | yes | Returns the concatenation of `expr1` and `expr2`. |
 | [`~`](op-tilde.md) | scalar | yes | Returns the result of bitwise NOT of `expr`. |
 
-480 of 574 functions are implemented.
+481 of 574 functions are implemented.

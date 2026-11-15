@@ -13,7 +13,7 @@ histogram, but in practice is comparable to the histograms produced by the R/S-P
 statistical computing packages. Note: the output type of the 'x' field in the return value is
 propagated from the input value consumed in the aggregate function.
 
-**Applies to:** not available in Krishiv yet. Spark: 3.5 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 3.5 and later.
 
 ## Syntax
 
@@ -25,7 +25,7 @@ histogram_numeric(expr, nb)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `agg_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 3.3.0 |
@@ -38,12 +38,13 @@ histogram_numeric(expr, nb)
 ```sql
 -- histogram_numeric, example 1
 > SELECT histogram_numeric(col, 5) FROM VALUES (0), (1), (2), (10) AS tab(col);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+[{"x":0,"y":1.0},{"x":1,"y":1.0},{"x":2,"y":1.0},{"x":10,"y":1.0}]
 ```
 
 ## Version history
 
 - Added in Spark 3.3.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

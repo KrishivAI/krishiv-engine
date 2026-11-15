@@ -190,7 +190,7 @@
  "grouping_id": "supported",
  "hash": "supported",
  "hex": "supported",
- "histogram_numeric": "not yet",
+ "histogram_numeric": "supported",
  "hll_sketch_agg": "not yet",
  "hll_sketch_estimate": "not yet",
  "hll_union": "not yet",

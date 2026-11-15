@@ -1379,7 +1379,7 @@ Calls the registry function `hex`.
 def histogram_numeric(col: ColumnOrName, nBins: Column) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `histogram_numeric`.
 
 ### `hll_sketch_agg`
 

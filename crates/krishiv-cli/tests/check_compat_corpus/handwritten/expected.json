@@ -73,12 +73,6 @@
  },
  {
   "file": "direct_imports.py",
-  "line": 15,
-  "name": "histogram_numeric",
-  "status": "not yet"
- },
- {
-  "file": "direct_imports.py",
   "line": 16,
   "name": "nope_fn",
   "status": "unknown"

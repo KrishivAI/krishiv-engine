@@ -500,7 +500,6 @@ _ENGINE_UNSUPPORTED = (
     "bitmap_or_agg",
     "collate",
     "count_min_sketch",
-    "histogram_numeric",
     "hll_sketch_agg",
     "hll_sketch_estimate",
     "hll_union",
@@ -1343,8 +1342,8 @@ def hex(col: ColumnOrName) -> Column:
 
 
 def histogram_numeric(col: ColumnOrName, nBins: Column) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("histogram_numeric")
+    """Calls the registry function ``histogram_numeric``."""
+    return _call("histogram_numeric", _named(col, "col"), _named(nBins, "nBins"))
 
 
 def hll_sketch_agg(col: ColumnOrName, lgConfigK: Column | int | None = None) -> Column:

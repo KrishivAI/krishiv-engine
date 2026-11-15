@@ -379,6 +379,11 @@ pub enum InputType {
     /// `TIMESTAMP` too, read as seconds (`DOUBLE`; Spark 4.2 casts it, a
     /// `DATE` or `TIMESTAMP_NTZ` it refuses). Its message names no timestamp.
     NumericOrTimestamp,
+    /// What `histogram_numeric` takes (Spark's `TypeCollection(NumericType,
+    /// DateType, TimestampType, TimestampNTZType, YearMonthIntervalType,
+    /// DayTimeIntervalType, AnyTimeType)`): these types stay as they are, a
+    /// string or untyped `NULL` becomes `DOUBLE`.
+    NumericOrTemporal,
     /// Any map type; an untyped `NULL` becomes `map<null, null>` (Spark's
     /// implicit cast of `NULL` to the abstract map type).
     Map,
@@ -400,6 +405,7 @@ impl InputType {
             Self::Map => "\"MAP\"".to_owned(),
             Self::Array => "\"ARRAY\"".to_owned(),
             Self::Numeric { intervals: false } | Self::StrictNumeric => "\"NUMERIC\"".to_owned(),
+            Self::NumericOrTemporal => "(\"NUMERIC\" or \"DATE\" or \"TIMESTAMP\" or \"TIMESTAMP_NTZ\" or \"INTERVAL YEAR TO MONTH\" or \"INTERVAL DAY TO SECOND\" or \"TIME\")".to_owned(),
             Self::Numeric { intervals: true } | Self::NumericOrTimestamp => {
                 "\"NUMERIC\" or \"ANSI INTERVAL\"".to_owned()
             }

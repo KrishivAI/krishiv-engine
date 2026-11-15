@@ -521,6 +521,7 @@ fn reference(
                         | AggregateFunction::PercentileApprox { .. }
                         | AggregateFunction::PercentileDisc { .. }
                         | AggregateFunction::ApproxCountDistinct { .. }
+                        | AggregateFunction::HistogramNumeric { .. }
                         | AggregateFunction::Udf(_) => {
                             unreachable!("no window test aggregates with this function")
                         }

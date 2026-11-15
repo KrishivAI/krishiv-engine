@@ -865,6 +865,7 @@ fn a_reader_without_partitioned_writes_refuses_the_plan_naming_it() {
     );
     // Likewise the moment and the `any_value`/`max_by`/`min_by` plans.
     for (case, feature) in [
+        ("aggregate_histogram_numeric", "histogram_numeric"),
         ("aggregate_moments", "moment_aggregates"),
         ("aggregate_any_value", "any_value_by_aggregates"),
         ("aggregate_max_min_by", "any_value_by_aggregates"),

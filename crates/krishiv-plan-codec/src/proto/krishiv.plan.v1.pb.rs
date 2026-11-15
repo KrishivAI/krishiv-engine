@@ -853,6 +853,10 @@ pub struct AggregateExpr {
     /// feature: rust_udaf (`AGGREGATE_FUNCTION_UDF` only: the call).
     #[prost(message, optional, boxed, tag = "18")]
     pub udaf: ::core::option::Option<::prost::alloc::boxed::Box<UdafCall>>,
+    /// feature: histogram_numeric (`histogram_numeric` only: the folded number of
+    /// bins, at least 2).
+    #[prost(int32, tag = "19")]
+    pub histogram_bins: i32,
 }
 /// The call of a session aggregate UDF: its implementation by name and
 /// version, and the columns the planner fixed for it. A worker must hold
@@ -2046,6 +2050,8 @@ pub enum AggregateFunction {
     /// `min` of a collated string, as `MAX_BY_KEY_FIRST`.
     /// feature: collated_min_max
     MinByKeyFirst = 48,
+    /// feature: histogram_numeric
+    HistogramNumeric = 49,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2103,6 +2109,7 @@ impl AggregateFunction {
             Self::Udf => "AGGREGATE_FUNCTION_UDF",
             Self::MaxByKeyFirst => "AGGREGATE_FUNCTION_MAX_BY_KEY_FIRST",
             Self::MinByKeyFirst => "AGGREGATE_FUNCTION_MIN_BY_KEY_FIRST",
+            Self::HistogramNumeric => "AGGREGATE_FUNCTION_HISTOGRAM_NUMERIC",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2157,6 +2164,7 @@ impl AggregateFunction {
             "AGGREGATE_FUNCTION_UDF" => Some(Self::Udf),
             "AGGREGATE_FUNCTION_MAX_BY_KEY_FIRST" => Some(Self::MaxByKeyFirst),
             "AGGREGATE_FUNCTION_MIN_BY_KEY_FIRST" => Some(Self::MinByKeyFirst),
+            "AGGREGATE_FUNCTION_HISTOGRAM_NUMERIC" => Some(Self::HistogramNumeric),
             _ => None,
         }
     }

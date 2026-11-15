@@ -65,6 +65,7 @@
 
 mod accumulator;
 mod collect;
+mod histogram;
 mod hll;
 mod listagg;
 mod merge_index;
@@ -316,6 +317,13 @@ pub enum AggregateFunction {
     ApproxCountDistinct {
         /// The addressing bits `p`.
         p: u32,
+    },
+    /// `histogram_numeric(x, nb)`: Spark's `NumericHistogram` of `nb` bins
+    /// (the analyzer-folded `nb >= 2`), `array<struct<x, y>>` with `x` of the
+    /// input's type. An empty group is NULL.
+    HistogramNumeric {
+        /// The number of bins.
+        nb: i32,
     },
     /// A session aggregate UDF (ADR 0045), by name and version: the worker
     /// runs the implementation its library holds under both, or refuses
@@ -617,6 +625,10 @@ impl AggregateExpr {
             (F::PercentileApprox { array, .. }, t) if accumulator::quantile_supported(t, true) => {
                 quantile_approx_result(t, *array)?
             }
+            // `histogram_numeric`: `array<struct<x: input type, y: double>>`.
+            (F::HistogramNumeric { .. }, t) if histogram::histogram_supported(t) => {
+                histogram_result(t)?
+            }
             // `approx_count_distinct` is `bigint`.
             (F::ApproxCountDistinct { .. }, t) if accumulator::hll_supported(t) => DataType::Int64,
             (F::MaxBy | F::MinBy | F::MaxByKeyFirst | F::MinByKeyFirst, _) => match self.by_types()
@@ -772,6 +784,9 @@ impl AggregateExpr {
             (F::PercentileApprox { .. }, _) => {
                 vec![Field::new(n("summary"), DataType::Binary, true)]
             }
+            (F::HistogramNumeric { .. }, _) => {
+                vec![Field::new(n("histogram"), DataType::Binary, true)]
+            }
             (F::ApproxCountDistinct { .. }, _) => {
                 vec![Field::new(n("registers"), DataType::Binary, true)]
             }
@@ -900,6 +915,21 @@ fn quantile_approx_result(t: &DataType, array: bool) -> Result<DataType> {
     let child = PlanDataType::from_arrow(t)
         .map_err(|e| internal(format!("an approximate percentile of {e}")))?;
     Ok(PlanDataType::Array(ArrayType::new(child, false).into()).to_arrow())
+}
+
+/// Spark's `HistogramNumeric.dataType` for an Arrow input type `t`:
+/// `array<struct<x: t, y: double>>`, every field nullable.
+fn histogram_result(t: &DataType) -> Result<DataType> {
+    use krishiv_types::{ArrayType, DataType as PlanDataType, StructField, StructType};
+    let x = PlanDataType::from_arrow(t).map_err(|e| internal(format!("a histogram of {e}")))?;
+    let fields = vec![
+        StructField::new("x".to_owned(), x, true),
+        StructField::new("y".to_owned(), PlanDataType::Double, true),
+    ];
+    Ok(PlanDataType::Array(
+        ArrayType::new(PlanDataType::Struct(StructType::new(fields)), true).into(),
+    )
+    .to_arrow())
 }
 
 /// A hash aggregation: grouping columns, aggregates and the output kind.

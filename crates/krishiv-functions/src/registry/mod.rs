@@ -198,6 +198,8 @@ pub enum Aggregate {
     PercentileDisc,
     /// `approx_count_distinct(x[, relativeSD])`: HyperLogLog++.
     ApproxCountDistinct,
+    /// `histogram_numeric(x, nb)`: Spark's `NumericHistogram`.
+    HistogramNumeric,
 }
 
 /// A built-in function.
