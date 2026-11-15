@@ -69,7 +69,7 @@ Sort [nation#50 ASC NULLS FIRST, o_year#51 DESC NULLS LAST], true
 == Physical Plan ==
 Sort [nation#50 ASC NULLS FIRST, o_year#51 DESC NULLS LAST]
 +- Exchange rangepartitioning(nation#50 ASC NULLS FIRST, o_year#51 DESC NULLS LAST)
-   +- Project [nation#50, o_year#51, sum(amount#52)#4611686018427387937 AS sum_profit#53]
+   +- Project [nation#50, o_year#51, sum(amount#52)#54 AS sum_profit#53]
       +- HashAggregate keys=[nation#50, o_year#51], functions=[sum(amount#52)]
          +- Exchange hashpartitioning(nation#50, o_year#51)
             +- PartialHashAggregate keys=[nation#50, o_year#51], functions=[sum(amount#52)]

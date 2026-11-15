@@ -36,7 +36,7 @@ fn unsupported(feature: &str) -> KrishivError {
 }
 
 /// Spark's `SHOW ... LIKE` pattern: `*` matches anything, `|` separates alternatives, the match ignores case.
-fn matches(pattern: &str, name: &str) -> bool {
+pub(crate) fn matches(pattern: &str, name: &str) -> bool {
     // `reach[j]`: the pattern so far matches the first `j` characters of the name. O(pattern x name), so a
     // pattern like `*a*a*a*` cannot blow up.
     fn glob(p: &[char], n: &[char]) -> bool {
@@ -1045,7 +1045,8 @@ impl Session {
                         vec![
                             s(n),
                             s(shown_type(&declared, n, t)),
-                            s(c.clone().unwrap_or_default()),
+                            // No comment is NULL, as in Spark (SQL-16); a comment written as `''` stays `''`.
+                            c.clone(),
                         ]
                     })
                     .collect();
@@ -1064,7 +1065,7 @@ impl Session {
                             s(c.char_varchar
                                 .clone()
                                 .unwrap_or_else(|| c.data_type.catalog_string())),
-                            s(c.comment.clone().unwrap_or_default()),
+                            c.comment.clone(),
                         ]
                     }));
                 }
