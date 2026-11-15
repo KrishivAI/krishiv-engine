@@ -5,10 +5,10 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Callable, Iterable
-from typing import Any
+from typing import Any, NoReturn
 
 from krishiv import _native
-from krishiv.errors import PySparkValueError, not_expected_type
+from krishiv.errors import PySparkValueError, not_expected_type, unsupported_feature
 from krishiv.sql.column import Column, _literal, _named
 
 __all__ = [
@@ -24,9 +24,16 @@ __all__ = [
     "_one_of",
     "_opt",
     "_opts",
+    "_unsupported",
 ]
 
 ColumnOrName = Column | str
+
+
+def _unsupported(name: str) -> NoReturn:
+    """Raises the engine's unsupported-feature error for the function ``name``, which Spark's catalog lists and
+    the engine does not implement (so a call could only fail when the query is analyzed)."""
+    raise unsupported_feature(f"function {name}")
 
 
 def _call(name: str, *args: _native.Column) -> Column:
