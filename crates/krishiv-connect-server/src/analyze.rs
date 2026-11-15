@@ -31,8 +31,8 @@
 //! (`DataFrame::explain_for_metadata`, P3 PR-14d) is the ordinary text for a
 //! principal whose `Select` check passes; otherwise the plan chosen with no
 //! table statistics and no distinct-value samples, with a note saying so.
-//! Its `cost` mode, a read by path, a permanent view and a catalog function
-//! keep `Select` (they show statistics or a body).
+//! Its `cost` mode, a read by path and a permanent view keep `Select` (they
+//! show statistics, contents or a view's text).
 
 pub mod types;
 

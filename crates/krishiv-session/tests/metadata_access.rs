@@ -126,6 +126,8 @@ fn run(s: &Session, sql: &str) {
 /// session under test (`vic`, confined to `root`, under `Roles`) has `t` and a temporary view `tv`.
 struct Fixture {
     _tmp: tempfile::TempDir,
+    /// The unconfined admin session that made the fixture (same runtime and catalog).
+    admin: Session,
     inside: String,
     outside: String,
 }
@@ -173,6 +175,7 @@ fn setup(role: u8) -> (Arc<Roles>, Session, Fixture) {
         s,
         Fixture {
             _tmp: tmp,
+            admin,
             inside,
             outside,
         },
@@ -583,4 +586,153 @@ fn sql_explain_as_a_viewer() {
     assert!(view.contains(DENIED) && !view.contains(NOTE), "{view}");
     let plain = text("EXPLAIN SELECT a FROM pv");
     assert!(!plain.contains(NOTE) && !plain.contains("Scan"), "{plain}");
+}
+
+#[test]
+fn a_view_behind_a_temporary_view_a_cte_or_a_subquery_needs_select_too() {
+    let (policy, s, _fixture) = setup(ADMIN);
+    run(&s, "CREATE TEMPORARY VIEW over_pv AS SELECT a FROM pv");
+    policy.become_(VIEWER);
+    assert_eq!(
+        class(block_on(
+            s.table("over_pv").explain_for_metadata(ExplainMode::Simple)
+        )),
+        DENIED
+    );
+    // SQL frames analyze with `Select` when made, so these go through SQL `EXPLAIN`.
+    for sql in [
+        "SELECT a FROM over_pv",
+        "WITH c AS (SELECT a FROM pv) SELECT a FROM c",
+        "SELECT a FROM t WHERE a IN (SELECT a FROM pv)",
+    ] {
+        let text = text_of(&s, &format!("EXPLAIN EXTENDED {sql}"));
+        assert!(
+            text.contains(DENIED) && !text.contains(NOTE),
+            "{sql}: {text}"
+        );
+    }
+    // The same plans over a table are shown.
+    let text = text_of(&s, "EXPLAIN WITH c AS (SELECT a FROM t) SELECT a FROM c");
+    assert_withheld(&text, "a CTE over a table");
+}
+
+/// Review B1: a permanent view whose text no longer analyzes. Its error names the text
+/// (`secretcol`), so a viewer gets the view's denial, an operator the error.
+#[test]
+fn a_broken_view_shows_its_text_only_with_select() {
+    let (policy, s, fixture) = setup(VIEWER);
+    let admin = &fixture.admin;
+    run(admin, "CREATE TABLE q (secretcol INT) USING parquet");
+    run(
+        admin,
+        "CREATE VIEW qv AS SELECT secretcol FROM q WHERE secretcol = 424242",
+    );
+    run(admin, "DROP TABLE q");
+    run(admin, "CREATE TABLE q (b INT) USING parquet");
+    policy.become_(VIEWER);
+    let df = s.table("qv");
+    let message = |r: Result<String, KrishivError>| match r {
+        Ok(text) => panic!("an error, not {text}"),
+        Err(e) => (e.error_class().name().to_owned(), e.to_string()),
+    };
+    for (what, (class, text)) in [
+        (
+            "explain",
+            message(block_on(df.explain_for_metadata(ExplainMode::Simple))),
+        ),
+        (
+            "schema",
+            message(block_on(df.schema_for_metadata()).map(|s| format!("{s:?}"))),
+        ),
+    ] {
+        assert_eq!(class, DENIED, "{what}: {text}");
+        assert!(
+            !text.contains("secretcol") && !text.contains("424242"),
+            "{what}: {text}"
+        );
+    }
+    let sql = text_of(&s, "EXPLAIN EXTENDED SELECT * FROM qv");
+    assert!(!sql.contains("secretcol") && sql.contains(DENIED), "{sql}");
+    policy.become_(OPERATOR);
+    let (class, text) = message(block_on(
+        s.table("qv").explain_for_metadata(ExplainMode::Simple),
+    ));
+    assert_ne!(class, DENIED, "{text}");
+    assert!(text.contains("secretcol"), "{text}");
+}
+
+/// The one string value of a `EXPLAIN` statement's result.
+fn text_of(s: &Session, sql: &str) -> String {
+    use arrow_array::cast::AsArray as _;
+    let batches = block_on(async { s.sql(sql).await?.collect().await })
+        .unwrap_or_else(|e| panic!("{sql}: {e}"));
+    let c = batches[0].column(0);
+    match c.as_string_view_opt() {
+        Some(v) => v.value(0).to_owned(),
+        None => c.as_string::<i32>().value(0).to_owned(),
+    }
+}
+
+/// A withheld explain takes no distinct-value sample: a later `EXPLAIN COST` samples afresh,
+/// never "sampled by an earlier query".
+#[test]
+fn a_withheld_explain_samples_nothing() {
+    let (policy, s, fixture) = setup(VIEWER);
+    s.conf()
+        .set("krishiv.optimizer.ndvSampling.enabled", "true")
+        .unwrap();
+    run(&fixture.admin, "CREATE TABLE ps (s STRING) USING parquet");
+    run(
+        &fixture.admin,
+        "INSERT INTO ps SELECT CAST(id % 7 AS STRING) FROM range(100)",
+    );
+    let sql = "SELECT s FROM ps WHERE s = '3'";
+    assert_withheld(&text_of(&s, &format!("EXPLAIN {sql}")), "withheld");
+    policy.become_(OPERATOR);
+    let cost = text_of(&s, &format!("EXPLAIN COST {sql}"));
+    assert!(cost.contains("Distinct-Value Samples"), "{cost}");
+    assert!(!cost.contains("sampled by an earlier query"), "{cost}");
+}
+
+/// A withheld explain whose footers do not read: the class stays, the paths (which can carry
+/// partition values) do not.
+#[test]
+fn a_withheld_planning_failure_shows_no_path() {
+    let (policy, s, fixture) = setup(VIEWER);
+    run(&fixture.admin, "CREATE TABLE broken (a INT) USING parquet");
+    run(&fixture.admin, "INSERT INTO broken VALUES (1)");
+    let mut corrupted = 0;
+    for entry in walk(fixture._tmp.path()) {
+        if entry.extension().is_some_and(|e| e == "parquet")
+            && entry.to_string_lossy().contains("broken")
+        {
+            std::fs::write(&entry, b"not a parquet file").unwrap();
+            corrupted += 1;
+        }
+    }
+    assert!(corrupted > 0);
+    let root = fixture._tmp.path().to_string_lossy().into_owned();
+    let e = block_on(s.table("broken").explain_for_metadata(ExplainMode::Simple)).unwrap_err();
+    assert!(!e.to_string().contains(&root), "{e}");
+    policy.become_(OPERATOR);
+    let ordinary =
+        block_on(s.table("broken").explain_for_metadata(ExplainMode::Simple)).unwrap_err();
+    assert_eq!(e.error_class(), ordinary.error_class());
+    assert_eq!(e.sql_state(), ordinary.sql_state());
+}
+
+fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for entry in std::fs::read_dir(&d).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else {
+                out.push(path);
+            }
+        }
+    }
+    out
 }

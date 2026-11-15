@@ -8,7 +8,7 @@
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
+use krishiv_common::error::{ErrorClass, KrishivError, KrishivUnsupportedFeature};
 use krishiv_exec::planner::{ExplainNode, PhysicalPlan, ProviderStatistics, TableProviderResolver};
 use krishiv_optimizer::PlanStats;
 use krishiv_plan::{LogicalPlan, Plan};
@@ -457,17 +457,29 @@ impl DataFrame {
         mode: ExplainMode,
         lenient: bool,
     ) -> Result<String, KrishivError> {
-        if mode == ExplainMode::Cost || self.trial_analysis().await.is_ok() {
+        if mode == ExplainMode::Cost {
             return self.explain_text(mode, lenient).await;
         }
-        self.explain_withheld(mode, lenient).await
+        match self.trial_analysis().await {
+            // An access refusal (a denial, a policy error, a row filter or mask on `Select`):
+            // the withheld plan. Any other failure is the ordinary explain's to show.
+            Err(e)
+                if matches!(
+                    e.error_class(),
+                    ErrorClass::KrishivInsufficientPermissions
+                        | ErrorClass::KrishivUnsupportedFeature
+                ) =>
+            {
+                self.explain_withheld(mode, lenient).await
+            }
+            _ => self.explain_text(mode, lenient).await,
+        }
     }
 
     /// The plan of a metadata analysis (catalog tables need `Browse`), planned with no table
     /// statistics, no planning hints and no distinct-value samples, and without the result-cache
-    /// note; a note line says so. A plan that reads a permanent view or calls a catalog function
-    /// still needs `Select` on it: the plan shows the inlined body, and a view's text is data
-    /// (ADR 0046, update 2026-11-12). A file listing or footer failure is shown without its
+    /// note; a note line says so. A plan that reads a permanent view still needs `Select` on it:
+    /// the plan shows the inlined body, and a view's text is data (ADR 0046, update 2026-11-12). A file listing or footer failure is shown without its
     /// paths, which can carry partition values.
     async fn explain_withheld(
         &self,
@@ -521,12 +533,10 @@ pub(crate) const WITHHELD_NOTE: &str =
     "== Note ==\nStatistics withheld: the plan is the one chosen with no table statistics.";
 
 /// A planning failure of a withheld explain, without its text: listing a table's files or reading
-/// their footers can fail with a path, and a path can carry partition values (`country=US`).
+/// their footers can fail with a path, and a path can carry partition values (`country=US`). Its
+/// class and SQLSTATE stay; every message parameter is redacted.
 fn withheld_error(e: &KrishivError) -> KrishivError {
-    internal(format!(
-        "the plan could not be built ({}); its details need SELECT on the tables it reads",
-        e.error_class().name()
-    ))
+    e.redacted()
 }
 
 fn physical_section(physical: &ExplainNode) -> String {

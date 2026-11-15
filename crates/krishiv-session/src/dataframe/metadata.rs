@@ -52,9 +52,9 @@ impl DataFrame {
     /// `AnalyzePlan.explain`; ADR 0046 §3b). A principal whose reads pass the ordinary `Select`
     /// check gets [`Self::explain`]'s text. One that holds only `Browse` on the catalog tables gets
     /// the plan chosen with no table statistics, no distinct-value samples and no result-cache note,
-    /// ending in a `== Note ==` section that says so. Reads by path, permanent views and catalog
-    /// functions still need `Select` (their bodies or contents are shown), and so does
-    /// [`ExplainMode::Cost`].
+    /// ending in a `== Note ==` section that says so. Reads by path and permanent views still
+    /// need `Select` (their contents or text are shown), and so does [`ExplainMode::Cost`]; a
+    /// SQL function's body is shown, as `DESCRIBE FUNCTION EXTENDED` shows it.
     ///
     /// ```
     /// use krishiv_session::ExplainMode;

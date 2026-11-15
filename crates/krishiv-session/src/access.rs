@@ -309,16 +309,49 @@ impl Session {
         Ok(views)
     }
 
-    /// `Select` on every permanent view and catalog function a metadata analysis read at
-    /// `Browse` (a withheld explain, design P3 PR-14d D2a): the plan shows their inlined bodies,
-    /// and a view's text is data (ADR 0046, update 2026-11-12). Asked in plan order; a denial is
-    /// audited.
+    /// The error `e` of a metadata analysis (P3 PR-14d review B1), raised after the permanent
+    /// `views` it inlined were allowed at `Browse`: a failure inside a view's text names the
+    /// text (`(a = 424242)`, a column name), and a view's text needs `Select`. So the error is
+    /// shown only once `Select` on each of them passes; otherwise the first denial is (logged
+    /// by the caller, through [`audit_read`]). An ordinary analysis asked `Select` already, and
+    /// an access error is shown as it is.
+    pub(crate) async fn view_text_failure(
+        &self,
+        views: &[TableIdent],
+        env: &QueryEnv,
+        e: KrishivError,
+    ) -> KrishivError {
+        if env.analysis.mode != krishiv_plan::analyzer::AnalysisMode::Metadata
+            || e.error_class() == ErrorClass::KrishivInsufficientPermissions
+        {
+            return e;
+        }
+        for view in views {
+            if let Err(denied) = authorize(
+                &*self.state.policy,
+                &self.state.principal,
+                &Securable::View(view.clone()),
+                Privilege::Select,
+            )
+            .await
+            {
+                return denied;
+            }
+        }
+        e
+    }
+
+    /// `Select` on every permanent view a metadata analysis read at `Browse` (a withheld
+    /// explain, design P3 PR-14d D2a): the plan shows a view's inlined body, and a view's text
+    /// is data (ADR 0046, update 2026-11-12). A SQL function's body is shown as
+    /// `DESCRIBE FUNCTION EXTENDED` shows it: metadata (ADR 0046, update 2026-11-15). Asked in
+    /// plan order; a denial is audited.
     pub(crate) async fn authorize_bodies(
         &self,
         analysis: &crate::dataframe::Analysis,
     ) -> Result<(), KrishivError> {
         for used in &analysis.analyzed.securables {
-            if !matches!(used.securable, Securable::View(_) | Securable::Function(_)) {
+            if !matches!(used.securable, Securable::View(_)) {
                 continue;
             }
             let r = authorize(

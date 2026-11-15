@@ -51,6 +51,19 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct Units(Arc<dyn TableProvider>);
+
+    impl TableProvider for Units {
+        fn scan(&self) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
+            self.0.scan()
+        }
+
+        fn scan_units(&self) -> Option<u64> {
+            Some(7)
+        }
+    }
+
     #[test]
     fn only_the_scan_reaches_the_planner() {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
@@ -71,6 +84,16 @@ mod tests {
         let provider = withheld.provider(&scan).expect("a provider");
         assert!(provider.statistics().is_none());
         assert!(provider.scan_units().is_none());
+        // A provider that knows its row groups: they are withheld too (review m1).
+        let units = resolver(Arc::new(One(Arc::new(Units(Arc::clone(&provider))))));
+        assert_eq!(Units(Arc::clone(&provider)).scan_units(), Some(7));
+        assert!(
+            units
+                .provider(&scan)
+                .expect("a provider")
+                .scan_units()
+                .is_none()
+        );
         assert_eq!(
             provider
                 .scan()
