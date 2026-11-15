@@ -188,6 +188,9 @@ pub fn check_location(
 /// As [`check_location`], for a bare scheme (an Iceberg storage-credential prefix such as `s3`;
 /// [`LocationPolicy::check_scheme`]).
 ///
+/// `scheme` must be a scheme as RFC 3986 §3.1 spells one (a letter, then letters, digits, `+`, `-` or `.`); anything
+/// else is refused as empty or malformed before the policy sees it.
+///
 /// # Errors
 /// `KRISHIV_CATALOG_LOCATION_REFUSED`, as [`check_location`].
 pub fn check_scheme(
@@ -196,9 +199,23 @@ pub fn check_scheme(
     scheme: &str,
     policy: &dyn LocationPolicy,
 ) -> Result<(), KrishivError> {
-    policy
-        .check_scheme(scheme)
+    is_scheme(scheme)
+        .and_then(|()| policy.check_scheme(scheme))
         .map_err(|rule| refused(catalog, relation_name, rule))
+}
+
+fn is_scheme(scheme: &str) -> Result<(), LocationRule> {
+    let mut chars = scheme.chars();
+    match chars.next() {
+        None => Err(LocationRule::Empty),
+        Some(first)
+            if first.is_ascii_alphabetic()
+                && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')) =>
+        {
+            Ok(())
+        }
+        Some(_) => Err(LocationRule::Malformed),
+    }
 }
 
 fn refused(catalog: &str, relation_name: &str, rule: LocationRule) -> KrishivError {
@@ -297,6 +314,58 @@ mod tests {
             Err(LocationRule::FileFromRemoteCatalog)
         );
         assert_eq!(p.check_scheme("http"), Err(LocationRule::SchemeNotAllowed));
+    }
+
+    /// A policy with only `check`, so `check_scheme` is the trait's default.
+    struct OnlyCheck(std::cell::RefCell<Vec<String>>);
+
+    impl LocationPolicy for OnlyCheck {
+        fn check(&self, location: &str) -> Result<(), LocationRule> {
+            self.0.borrow_mut().push(location.to_owned());
+            RemoteLocationPolicy::default().check(location)
+        }
+    }
+
+    #[test]
+    fn the_default_scheme_check_checks_a_placeholder_location_of_that_scheme() {
+        let p = OnlyCheck(std::cell::RefCell::new(Vec::new()));
+        assert_eq!(p.check_scheme("S3"), Ok(()));
+        assert_eq!(p.check_scheme("hdfs"), Err(LocationRule::SchemeNotAllowed));
+        assert_eq!(
+            *p.0.borrow(),
+            ["s3://scheme-prefix/", "hdfs://scheme-prefix/"]
+        );
+    }
+
+    #[test]
+    fn a_scheme_check_names_the_catalog_and_the_rule() {
+        let policy = RemoteLocationPolicy::default();
+        check_scheme("rest", "`rest`.`db`.`t`", "s3", &policy).unwrap();
+        let e = check_scheme("rest", "`rest`.`db`.`t`", "file", &policy).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::KrishivCatalogLocationRefused);
+        let text = e.to_string();
+        assert!(
+            text.contains("`rest`.`db`.`t`")
+                && text.contains("file location from a remote catalog"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_scheme_check_refuses_what_is_not_a_scheme() {
+        let policy = RemoteLocationPolicy::default();
+        let refused_by = |scheme: &str| {
+            check_scheme("rest", "`t`", scheme, &policy)
+                .unwrap_err()
+                .to_string()
+        };
+        assert!(refused_by("").contains("empty location"));
+        for not_a_scheme in ["s3://b", "3s", "s3/x", "s 3", "-s3"] {
+            assert!(
+                refused_by(not_a_scheme).contains("malformed location"),
+                "{not_a_scheme:?}"
+            );
+        }
     }
 
     #[test]
