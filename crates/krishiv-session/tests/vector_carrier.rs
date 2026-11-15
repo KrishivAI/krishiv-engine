@@ -98,13 +98,23 @@ fn array_functions_over_a_vector_column_match_a_list_column() {
         "SELECT id, explode(v) FROM {} ORDER BY id, 2",
         "SELECT count(v), max(size(v)) FROM {}",
         "SELECT id, v FROM {} ORDER BY id DESC",
+        // Hash, equality, grouping and joining read the value, not the carrier (design P3-T075, hash and sort keys).
+        "SELECT hash(v), xxhash64(v) FROM {} ORDER BY id",
+        "SELECT v = v, v <=> v FROM {} ORDER BY id",
+        "SELECT count(DISTINCT v) FROM {}",
+        "SELECT count(*) FROM (SELECT v FROM {} GROUP BY v)",
+        "SELECT a.id, b.id FROM {} a JOIN {} b ON a.v = b.v ORDER BY a.id, b.id",
     ] {
+        // A query the engine refuses for a list column is refused for a vector column with the same error class.
         let render = |table: &str| {
-            let batches = rows(&s, &sql.replace("{}", table));
-            batches
-                .iter()
-                .map(|b| format!("{:?}", b.columns()))
-                .collect::<Vec<_>>()
+            let sql = sql.replace("{}", table);
+            match block_on(s.sql(&sql)).and_then(|df| block_on(df.collect())) {
+                Ok(batches) => batches
+                    .iter()
+                    .map(|b| format!("{:?}", b.columns()))
+                    .collect::<Vec<_>>(),
+                Err(e) => vec![format!("{:?}", e.error_class())],
+            }
         };
         assert_eq!(render("t"), render("l"), "{sql}");
     }
@@ -227,4 +237,63 @@ fn a_vector_column_through_parquet_reads_the_same_by_path_and_by_table() {
     };
     assert_eq!(render(&by_path), render(&by_table));
     assert_eq!(by_path[0].num_rows(), 3);
+}
+
+/// `carrier_kind(v)`: 1 when the argument array a UDF receives is a plain list, 2 when it is a fixed-size list.
+#[derive(Debug)]
+struct CarrierKind;
+
+impl krishiv_session::ScalarUdf for CarrierKind {
+    fn name(&self) -> &str {
+        "carrier_kind"
+    }
+
+    fn version(&self) -> u32 {
+        1
+    }
+
+    fn signature(&self) -> &krishiv_session::Signature {
+        use std::sync::OnceLock;
+        static SIG: OnceLock<krishiv_session::Signature> = OnceLock::new();
+        SIG.get_or_init(|| {
+            krishiv_session::Signature::Exact(vec![krishiv_session::UdfInputType::Any])
+        })
+    }
+
+    fn return_field(
+        &self,
+        _: &[krishiv_session::ArgField],
+    ) -> Result<krishiv_session::ReturnField, krishiv_session::UdfError> {
+        Ok(krishiv_session::ReturnField {
+            data_type: krishiv_types::DataType::Integer,
+            nullable: false,
+        })
+    }
+
+    fn invoke(
+        &self,
+        args: &[krishiv_session::UdfArg<'_>],
+        rows: usize,
+        _: &krishiv_session::InvokeContext,
+    ) -> Result<ArrayRef, krishiv_session::UdfError> {
+        let kind = match args[0].array().data_type() {
+            DataType::List(_) => 1,
+            DataType::FixedSizeList(..) => 2,
+            _ => 0,
+        };
+        Ok(Arc::new(Int32Array::from(vec![kind; rows])))
+    }
+}
+
+/// A UDF sees Spark's plain list for a vector column (the session edge), never the fixed-size carrier.
+#[test]
+fn a_udf_receives_a_vector_column_as_a_plain_list() {
+    let s = session();
+    s.register_udf(CarrierKind).unwrap();
+    let batches = rows(&s, "SELECT carrier_kind(v) FROM t ORDER BY id");
+    let kinds: Vec<i32> = batches
+        .iter()
+        .flat_map(|b| b.column(0).as_primitive::<Int32Type>().values().to_vec())
+        .collect();
+    assert_eq!(kinds, [1, 1, 1]);
 }

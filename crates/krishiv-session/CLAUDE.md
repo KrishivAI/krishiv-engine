@@ -75,3 +75,6 @@ Paths are relative to this crate.
 ## Split modules (T193)
 Files split to stay under 2,000 lines; the parent file keeps the types and the entry points.
 - `session/` `env.rs` (`QueryEnv`, parser options), `spill.rs` (per-query spill scopes, `WriteTarget`), `writes.rs` (write helpers), `ops.rs` (more `impl Session`); `catalog/expand.rs` (view expansion), `command/tests.rs`; `dataframe/writer.rs` (`DataFrameWriter`, `DataFrameWriterV2`); `table_commands/` `create.rs` (create, drop, truncate, analyze, row-level changes), `writes.rs` (INSERT, saveAsTable, v2 writes).
+
+## Vector carrier (P3-T075)
+A column registered or read as `FixedSizeList<float|double, N>` runs as a vector carrier; callers, UDFs and `collect` see Spark `array<float>` (a plain list). Tests: `tests/vector_carrier.rs` (plain-list read, array functions, hash/equality, UDF edge, unions, Parquet path vs table).

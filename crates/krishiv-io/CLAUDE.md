@@ -80,3 +80,6 @@ Paths are relative to this crate.
 ## Tests
 `cargo nextest run -p krishiv-io --no-tests=pass` · `cargo clippy -p krishiv-io --all-targets -- -D warnings` ·
 conformance: `cargo nextest run -p krishiv-testkit --test file_format_mock` · bench: `cargo bench -p krishiv-io` (targets `io`, `coalesce` and `runtime_filter`)
+
+## Vector carrier (P3-T075)
+Parquet keeps the vector carrier. `schema_map` `Conv::List` accepts a file column stored as a fixed-size list for a `List` table column (`vectors_as_list_parts`); `(List, FixedSizeList)` resolves. `arrow-select` is a regular dependency for it.
