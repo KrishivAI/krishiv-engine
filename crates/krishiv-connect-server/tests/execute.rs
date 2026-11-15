@@ -529,7 +529,9 @@ async fn compressed_plans_decode_and_a_bomb_fails_before_it_expands() {
         e.message()
     );
     let command = pb::Command {
-        command_type: Some(pb::command::CommandType::SqlCommand(Box::default())),
+        command_type: Some(pb::command::CommandType::GetResourcesCommand(Box::new(
+            pb::GetResourcesCommand {},
+        ))),
     };
     let data = zstd::bulk::compress(&command.encode_to_vec(), 3).expect("zstd");
     let cmd = pb::plan::compressed_operation::OpType::Command as i32;
@@ -571,7 +573,9 @@ async fn invalid_requests_are_refused_with_sparks_classes() {
     );
     let command = request(pb::Plan {
         op_type: Some(OpType::Command(Box::new(pb::Command {
-            command_type: Some(pb::command::CommandType::SqlCommand(Box::default())),
+            command_type: Some(pb::command::CommandType::GetResourcesCommand(Box::new(
+                pb::GetResourcesCommand {},
+            ))),
         }))),
     });
     let e = collect(&run.channel, command).await.unwrap_err();
@@ -1297,4 +1301,169 @@ async fn a_data_source_schema_declares_the_columns() {
         &arrow_schema::DataType::Int32
     );
     assert_eq!(got.num_rows(), 2);
+}
+
+fn sql_command(query: &str) -> pb::Plan {
+    #[expect(deprecated, reason = "the field every client version sends")]
+    let command = pb::SqlCommand {
+        sql: query.to_owned(),
+        ..Default::default()
+    };
+    pb::Plan {
+        op_type: Some(OpType::Command(Box::new(pb::Command {
+            command_type: Some(pb::command::CommandType::SqlCommand(Box::new(command))),
+        }))),
+    }
+}
+
+/// The relation of the one `sql_command_result` response.
+fn sql_result(responses: &[pb::ExecutePlanResponse]) -> pb::Relation {
+    let results: Vec<_> = responses
+        .iter()
+        .filter_map(|r| match &r.response_type {
+            Some(ResponseType::SqlCommandResult(c)) => c.relation.clone(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results.len(), 1, "one sql_command_result");
+    assert!(
+        batches(responses).is_empty(),
+        "a SQL command streams no batch"
+    );
+    results.into_iter().next().expect("one")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_sql_query_answers_the_sql_relation_the_client_sends_again() {
+    let run = start().await;
+    let r = collect(
+        &run.channel,
+        reattachable(request(sql_command("SELECT 1 AS a, 'x' AS b"))),
+    )
+    .await
+    .expect("runs");
+    // Only the result and `result_complete`: no schema, batch or metrics.
+    assert_eq!(r.len(), 2, "{r:?}");
+    assert!(matches!(
+        r[1].response_type,
+        Some(ResponseType::ResultComplete(_))
+    ));
+    let relation = sql_result(&r);
+    let Some(RelType::Sql(sql)) = &relation.rel_type else {
+        panic!("a query answers a SQL relation: {relation:?}");
+    };
+    assert_eq!(sql.query, "SELECT 1 AS a, 'x' AS b");
+    // The client sends it as a root relation.
+    let again = collect(&run.channel, request(root(relation)))
+        .await
+        .expect("runs");
+    let got = rows(&again);
+    assert_eq!(got.num_rows(), 1);
+    assert_eq!(got.schema().field(0).name(), "a");
+    // An analysis error is raised by `spark.sql` itself, as Spark does.
+    let e = collect(
+        &run.channel,
+        request(sql_command("SELECT * FROM no_such_table")),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error_class(&e), "TABLE_OR_VIEW_NOT_FOUND");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_sql_command_runs_at_once_and_answers_its_rows_as_a_local_relation() {
+    let run = start().await;
+    let r = collect(
+        &run.channel,
+        request(sql_command("CREATE TEMPORARY VIEW v AS SELECT 7 AS n")),
+    )
+    .await
+    .expect("runs");
+    let relation = sql_result(&r);
+    assert!(
+        matches!(relation.rel_type, Some(RelType::LocalRelation(_))),
+        "{relation:?}"
+    );
+    // It ran: the view is there for the next request, and no later request creates it again.
+    let entry = run
+        .manager
+        .get(&Principal::local_user(), SESSION, None)
+        .expect("session");
+    let df = entry
+        .session()
+        .sql("SELECT n FROM v")
+        .await
+        .expect("the view exists");
+    assert_eq!(df.collect().await.expect("rows").len(), 1);
+    // `SET key=value` returns its rows (key, value) as a local relation the client re-sends.
+    let r = collect(
+        &run.channel,
+        request(sql_command("SET spark.sql.shuffle.partitions=3")),
+    )
+    .await
+    .expect("runs");
+    let relation = sql_result(&r);
+    let again = collect(&run.channel, request(root(relation)))
+        .await
+        .expect("a command's relation runs");
+    let got = rows(&again);
+    assert_eq!(got.num_rows(), 1);
+    assert_eq!(got.num_columns(), 2);
+    assert_eq!(
+        entry.session().conf().get("spark.sql.shuffle.partitions"),
+        Some("3".to_owned())
+    );
+    // A failing command is a failed start.
+    let e = collect(&run.channel, request(sql_command("DROP VIEW nope_view")))
+        .await
+        .unwrap_err();
+    assert_eq!(error_class(&e), "TABLE_OR_VIEW_NOT_FOUND");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_compressed_sql_command_runs_and_unsupported_forms_are_refused() {
+    let run = start().await;
+    #[expect(deprecated, reason = "the field every client version sends")]
+    let command = pb::Command {
+        command_type: Some(pb::command::CommandType::SqlCommand(Box::new(
+            pb::SqlCommand {
+                sql: "SELECT 2".to_owned(),
+                ..Default::default()
+            },
+        ))),
+    };
+    let data = zstd::bulk::compress(&command.encode_to_vec(), 3).expect("zstd");
+    let plan = pb::Plan {
+        op_type: Some(OpType::CompressedOperation(Box::new(
+            pb::plan::CompressedOperation {
+                data,
+                op_type: pb::plan::compressed_operation::OpType::Command as i32,
+                compression_codec: pb::CompressionCodec::Zstd as i32,
+            },
+        ))),
+    };
+    let r = collect(&run.channel, request(plan)).await.expect("runs");
+    assert!(matches!(sql_result(&r).rel_type, Some(RelType::Sql(_))));
+    // Parameters and DataFrame inputs are refused up front (golden-pending: group 4).
+    let mut with_input = sql_command("SELECT 1");
+    if let Some(OpType::Command(c)) = &mut with_input.op_type
+        && let Some(pb::command::CommandType::SqlCommand(s)) = &mut c.command_type
+    {
+        s.input = Some(range(1));
+    }
+    let e = collect(&run.channel, request(with_input))
+        .await
+        .unwrap_err();
+    assert_eq!(error_class(&e), "KRISHIV_UNSUPPORTED_FEATURE");
+    let mut with_args = sql_command("SELECT ?");
+    if let Some(OpType::Command(c)) = &mut with_args.op_type
+        && let Some(pb::command::CommandType::SqlCommand(s)) = &mut c.command_type
+    {
+        #[expect(deprecated, reason = "the field every client version sends")]
+        {
+            s.pos_arguments = vec![column("x")];
+        }
+    }
+    let e = collect(&run.channel, request(with_args)).await.unwrap_err();
+    assert_eq!(error_class(&e), "KRISHIV_UNSUPPORTED_FEATURE");
 }

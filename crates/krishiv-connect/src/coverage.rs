@@ -190,7 +190,7 @@ oneof! { command, COMMAND_ROWS, command::CommandType, "Command.command_type";
     WriteOperation => ("write_operation", 2, Missing, "", "DataFrameWriter V1: krishiv-session save/save_as_table/insert_into (dataframe.rs), semantics T023", "P3-T023", 11),
     CreateDataframeView => ("create_dataframe_view", 3, Missing, "", "create_or_replace_temp_view (exists), global temp views", "P3-T012", 4),
     WriteOperationV2 => ("write_operation_v2", 4, Missing, "", "DataFrameWriterV2 (create/replace/append/overwrite/overwrite_partitions exist in dataframe.rs), T023", "P3-T023", 11),
-    SqlCommand => ("sql_command", 5, Missing, "", "spark.sql() sends this. Run commands at once; for queries return sql_command_result.relation (Spark returns a SQL or LocalRelation relation the client re-sends). Without it no spark.sql test passes", "P3-T012", 1),
+    SqlCommand => ("sql_command", 5, Partial, "input (WithRelations form, group 4); named and positional arguments (the analyzer refuses SQL parameters)", "spark.sql() sends this. Run commands at once; for queries return sql_command_result.relation (Spark returns a SQL or LocalRelation relation the client re-sends). Translated here as the SQL relation of a query; the server runs commands (execute.rs)", "P3-T012", 1),
     WriteStreamOperationStart => ("write_stream_operation_start", 6, OutOfScope, "", "P4", "", 0),
     StreamingQueryCommand => ("streaming_query_command", 7, OutOfScope, "", "P4", "", 0),
     GetResourcesCommand => ("get_resources_command", 8, Missing, "", "an empty resource map (single node, no executors)", "P3-T012", 4),

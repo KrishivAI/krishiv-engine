@@ -64,6 +64,8 @@ use crate::variables::SessionVariables;
 
 mod context;
 mod lifecycle;
+#[cfg(feature = "unstable-ir")]
+pub use lifecycle::SqlOutcome;
 #[cfg(test)]
 mod run_task;
 
@@ -491,6 +493,11 @@ impl Session {
     /// Spark's parse and analysis errors; `KRISHIV_UNSUPPORTED_FEATURE`
     /// for statements other than queries and commands.
     pub async fn sql(&self, query: &str) -> Result<DataFrame, KrishivError> {
+        self.sql_kind(query).await.map(|(df, _)| df)
+    }
+
+    /// [`Self::sql`] and whether the statement was a command (not a query).
+    pub(crate) async fn sql_kind(&self, query: &str) -> Result<(DataFrame, bool), KrishivError> {
         self.check_open()?;
         let (session, text) = (self.clone(), query.to_owned());
         let row: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
@@ -505,7 +512,7 @@ impl Session {
                     .sql_here_marked(&text, marker)
                     .instrument(span)
                     .await
-                    .map(|df| df.with_trace(trace))
+                    .map(|(df, command)| (df.with_trace(trace), command))
             })
             .await;
         // A statement refused before it ran (parse, analysis, access) is a
@@ -552,7 +559,9 @@ impl Session {
         spans: Vec<krishiv_sql::ast::Span>,
     ) -> Result<DataFrame, KrishivError> {
         // Boxed: one more nested future level overflows the compiler's query depth in the binaries.
-        Box::pin(self.sql_here_inner(query, Arc::default(), spans)).await
+        Box::pin(self.sql_here_inner(query, Arc::default(), spans))
+            .await
+            .map(|(df, _)| df)
     }
 
     /// Runs `query` on the calling task as `sql` would, with `row` as the statement's slot for
@@ -561,7 +570,7 @@ impl Session {
         &self,
         query: &str,
         row: Arc<std::sync::Mutex<Option<String>>>,
-    ) -> Result<DataFrame, KrishivError> {
+    ) -> Result<(DataFrame, bool), KrishivError> {
         // Boxed: one more nested future level overflows the compiler's query depth in the binaries.
         Box::pin(self.sql_here_inner(query, row, Vec::new())).await
     }
@@ -571,7 +580,7 @@ impl Session {
         query: &str,
         row: Arc<std::sync::Mutex<Option<String>>>,
         spans: Vec<krishiv_sql::ast::Span>,
-    ) -> Result<DataFrame, KrishivError> {
+    ) -> Result<(DataFrame, bool), KrishivError> {
         let mut env = self.query_env();
         env.row = row;
         let written = query;
@@ -601,11 +610,12 @@ impl Session {
         let class = krishiv_sql::classify(&statement);
         self.authorize_statement(&statement, class, &env).await?;
         env.statement_class = Some(class.name());
+        let command = !matches!(statement, Statement::Query(_));
         let df = self.run_statement(statement, env, query, &redacted).await?;
         // Whatever frame the statement returns (a command's result too) shows the statement's
         // text and class when it runs.
         df.with_statement(&redacted, class.name());
-        Ok(df)
+        Ok((df, command))
     }
 
     /// Runs the parsed, authorized `statement`.

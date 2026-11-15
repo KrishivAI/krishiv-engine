@@ -144,18 +144,23 @@ pub fn expression_from_bytes(bytes: &[u8], conf: &TranslateConf) -> Result<Arc<E
     translate_expression(&*wire::decode_expression(bytes)?, conf)
 }
 
-/// Translates a `Plan` whose root is a relation.
+/// Translates a `Plan` whose root is a relation. A `sql_command` translates as the `SQL` relation
+/// it answers for a query ([`sql_command_relation`]); running it as a command, or not, is the
+/// server's job (it needs the session).
 ///
 /// # Errors
-/// `INVALID_ONE_OF_FIELD_NOT_SUPPORTED` for a command, `KRISHIV_UNSUPPORTED_FEATURE` for a compressed plan (the
-/// server's job, P3), plus the errors of [`translate_relation`].
+/// `INVALID_ONE_OF_FIELD_NOT_SUPPORTED` for any other command, `KRISHIV_UNSUPPORTED_FEATURE` for a compressed plan (the
+/// server's job, P3), plus the errors of [`translate_relation`] and [`sql_command_relation`].
 pub fn translate_plan(plan: &pb::Plan, conf: &TranslateConf) -> Result<Plan> {
     match &plan.op_type {
         Some(OpType::Root(relation)) => translate_relation(relation, conf),
-        Some(OpType::Command(command)) => Err(match &command.command_type {
-            Some(arm) => unsupported_variant("spark.connect.Command", arm.variant()),
-            None => not_set("spark.connect.Command", "COMMAND_TYPE_NOT_SET"),
-        }),
+        Some(OpType::Command(command)) => match &command.command_type {
+            Some(pb::command::CommandType::SqlCommand(c)) => {
+                translate_relation(&sql_command_relation(c)?, conf)
+            }
+            Some(arm) => Err(unsupported_variant("spark.connect.Command", arm.variant())),
+            None => Err(not_set("spark.connect.Command", "COMMAND_TYPE_NOT_SET")),
+        },
         Some(OpType::CompressedOperation(_)) => Err(unsupported_field(
             "Plan",
             "compressed_operation",
@@ -163,6 +168,48 @@ pub fn translate_plan(plan: &pb::Plan, conf: &TranslateConf) -> Result<Plan> {
         )),
         None => Err(not_set("spark.connect.Plan", "OP_TYPE_NOT_SET")),
     }
+}
+
+/// The `SQL` relation of a `SqlCommand`: what `spark.sql()`'s client re-sends when the statement
+/// was a query (Spark's `handleSqlCommand` returns the same text and parameters as a `SQL`
+/// relation). The deprecated `sql`, `args` and `pos_args` fields are the relation's `query`,
+/// `args` and `pos_args`; the named and positional expressions carry over as they are.
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` for `input` (the `WithRelations` form, which parameterises the
+/// query with DataFrames; Connect group 4).
+pub fn sql_command_relation(command: &pb::SqlCommand) -> Result<pb::Relation> {
+    if command.input.is_some() {
+        return Err(unsupported_field(
+            "SqlCommand",
+            "input",
+            "SQL over DataFrame arguments",
+        ));
+    }
+    #[expect(
+        deprecated,
+        reason = "Spark still accepts the deprecated fields of older clients"
+    )]
+    let sql = pb::Sql {
+        query: command.sql.clone(),
+        args: command.args.clone(),
+        pos_args: command.pos_args.clone(),
+        named_arguments: command.named_arguments.clone(),
+        pos_arguments: command.pos_arguments.clone(),
+    };
+    Ok(pb::Relation {
+        common: None,
+        rel_type: Some(pb::relation::RelType::Sql(sql)),
+    })
+}
+
+/// Whether a `SQL` relation carries parameters (`args`, `pos_args`, named or positional
+/// expressions).
+#[must_use]
+pub fn sql_has_parameters(sql: &pb::Sql) -> bool {
+    #[expect(deprecated, reason = "older clients send the literal fields")]
+    let literals = !sql.args.is_empty() || !sql.pos_args.is_empty();
+    literals || !sql.named_arguments.is_empty() || !sql.pos_arguments.is_empty()
 }
 
 /// The refusal of a command (`Plan.command`) until the server translates

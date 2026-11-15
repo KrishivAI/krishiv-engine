@@ -27,8 +27,9 @@
 //!
 //! Errors end the stream with the gRPC status of [`crate::status`] after the
 //! responses before them. An interrupted operation ends with
-//! `OPERATION_CANCELED`. Commands answer `CONNECT_INVALID_PLAN` (56K00)
-//! until P3-T012.
+//! `OPERATION_CANCELED`. A `sql_command` (`spark.sql()`) answers one
+//! `sql_command_result` (`execute::sql_command`); the other commands answer
+//! `CONNECT_INVALID_PLAN` (56K00) until P3-T012.
 //!
 //! The core is protocol-neutral where it is cheap: the plan is decoded into
 //! a `krishiv_plan::Plan`, run as a `DataFrame` and encoded as Arrow IPC;
@@ -36,6 +37,7 @@
 
 pub mod arrow;
 pub mod schema;
+mod sql_command;
 
 use std::io::Read;
 use std::sync::Arc;
@@ -260,17 +262,31 @@ pub async fn execute_plan(
     let empty = pb::Plan::default();
     let plan = request.plan.as_ref().unwrap_or(&empty);
     let prepared = until_cancelled(&op, async {
+        // `spark.sql()`: a command runs now, a query is analyzed; neither returns rows.
+        if let Some(command) = sql_command::of(plan, limits).await? {
+            let tz = conf.get("spark.sql.session.timeZone").map(Arc::from);
+            let relation = sql_command::run(session, &command, id.as_str(), tz.as_ref()).await?;
+            return Ok(Prepared::Command(relation));
+        }
         // Decompression (up to `maxPlanSize`) runs off the async workers.
         let logical = request_plan(entry, plan, limits).await?;
         let df = session.from_plan_with(&logical, QueryOptions::new().operation_id(id.as_str()))?;
         let schema = df.schema().await?;
-        Ok((df, schema))
+        Ok(Prepared::Rows(df, schema))
     })
     .await;
     // A preparation error settles like a query error: an interrupt that
     // reported this operation first turns it into `OPERATION_CANCELED`.
     let (df, schema) = match prepared {
-        Ok(ready) => ready,
+        Ok(Prepared::Rows(df, schema)) => (df, schema),
+        Ok(Prepared::Command(relation)) => {
+            let sender = new_sender(session, request, entry, &op, (limits, budget, &opts));
+            let stream =
+                sender::attach(Arc::clone(&op), operations, 0, SenderCaps::of(&op, limits));
+            registered.keep();
+            tokio::spawn(sql_command::encode(sender, relation));
+            return Ok(stream);
+        }
         Err(e) => {
             return Err(if op.finish() {
                 e
@@ -282,7 +298,32 @@ pub async fn execute_plan(
     let schema_response = schema::proto_schema(&schema)?;
     let settings = encode_settings(&conf, limits, opts.chunking);
 
-    let sender = Sender {
+    let sender = new_sender(session, request, entry, &op, (limits, budget, &opts));
+    // Attached before the encoder starts: the operation is never detached
+    // before its first stream.
+    let stream = sender::attach(Arc::clone(&op), operations, 0, SenderCaps::of(&op, limits));
+    registered.keep();
+    tokio::spawn(encode(sender, df, schema, schema_response, settings));
+    Ok(stream)
+}
+
+/// What a request's plan prepared.
+enum Prepared {
+    /// A relation: its frame and schema, streamed as batches.
+    Rows(DataFrame, SchemaRef),
+    /// A `sql_command`: the relation it answers.
+    Command(pb::Relation),
+}
+
+/// The producing side of `op`.
+fn new_sender(
+    session: &krishiv_session::Session,
+    request: &wire::Decoded<pb::ExecutePlanRequest>,
+    entry: &SessionEntry,
+    op: &Arc<Operation>,
+    (limits, budget, opts): (&ExecuteLimits, &ResponseBudget, &Options),
+) -> Sender {
+    Sender {
         ahead: Arc::new(Semaphore::new(
             limits.ahead_bytes.clamp(1, Semaphore::MAX_PERMITS),
         )),
@@ -294,16 +335,10 @@ pub async fn execute_plan(
             0
         }),
         consumer: ConsumerHandle::register(session.runtime().memory(), "connect_responses", None),
-        op: Arc::clone(&op),
+        op: Arc::clone(op),
         session_id: request.session_id.clone(),
         server_side_session_id: entry.server_side_id().to_owned(),
-    };
-    // Attached before the encoder starts: the operation is never detached
-    // before its first stream.
-    let stream = sender::attach(Arc::clone(&op), operations, 0, SenderCaps::of(&op, limits));
-    registered.keep();
-    tokio::spawn(encode(sender, df, schema, schema_response, settings));
-    Ok(stream)
+    }
 }
 
 /// The engine plan of a request's `Plan`: a compressed one decompressed
@@ -413,22 +448,10 @@ fn translate_plan(
                 Ok(CompressedOpType::Relation) => {
                     translate_relation(&*wire::decode_relation(bytes)?, conf)
                 }
-                Ok(CompressedOpType::Command) => {
-                    // Decoded through the bounded decoder as the `command`
-                    // field (2) of a `Plan`, which `wire` can start from.
-                    let mut wrapped = Vec::with_capacity(bytes.len() + 11);
-                    prost::encoding::encode_key(
-                        2,
-                        prost::encoding::WireType::LengthDelimited,
-                        &mut wrapped,
-                    );
-                    prost::encoding::encode_varint(bytes.len() as u64, &mut wrapped);
-                    wrapped.extend_from_slice(bytes);
-                    match &wire::decode_plan(&wrapped)?.op_type {
-                        Some(OpType::Command(command)) => Err(command_not_supported(command)),
-                        _ => Err(command_not_supported(&pb::Command::default())),
-                    }
-                }
+                Ok(CompressedOpType::Command) => match &decode_command(bytes)?.op_type {
+                    Some(OpType::Command(command)) => Err(command_not_supported(command)),
+                    _ => Err(command_not_supported(&pb::Command::default())),
+                },
                 _ => {
                     // Spark's `PlanCompressionUtils` re-throws what parsing
                     // the operation raised as `CANNOT_PARSE` (v4.3.0).
@@ -450,6 +473,16 @@ fn translate_plan(
         }
         .into()),
     }
+}
+
+/// A decompressed `Command`, decoded through the bounded decoder as the `command` field (2) of a
+/// `Plan`, which `wire` can start from.
+fn decode_command(bytes: &[u8]) -> Result<wire::Decoded<pb::Plan>, KrishivError> {
+    let mut wrapped = Vec::with_capacity(bytes.len() + 11);
+    prost::encoding::encode_key(2, prost::encoding::WireType::LengthDelimited, &mut wrapped);
+    prost::encoding::encode_varint(bytes.len() as u64, &mut wrapped);
+    wrapped.extend_from_slice(bytes);
+    wire::decode_plan(&wrapped)
 }
 
 /// Spark's `PlanCompressionUtils.decompressBytesWithZstd`: the frame's

@@ -67,7 +67,7 @@ fn commands_compressed_plans_and_empty_plans_are_not_relations() {
     );
     let command = pb::Plan {
         op_type: Some(OpType::Command(Box::new(pb::Command {
-            command_type: Some(pb::command::CommandType::SqlCommand(Box::default())),
+            command_type: Some(pb::command::CommandType::GetResourcesCommand(Box::default())),
         }))),
     };
     let e = fails(translate_plan(&command, &conf()));
@@ -75,7 +75,11 @@ fn commands_compressed_plans_and_empty_plans_are_not_relations() {
         e.error_class(),
         ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported
     );
-    assert!(e.message().contains("SQL_COMMAND(5)"), "{}", e.message());
+    assert!(
+        e.message().contains("GET_RESOURCES_COMMAND(8)"),
+        "{}",
+        e.message()
+    );
     let compressed = pb::Plan {
         op_type: Some(OpType::CompressedOperation(Box::default())),
     };
@@ -293,4 +297,45 @@ fn debug_of_a_write_hides_a_path_held_by_a_oneof() {
     let text = format!("{write:?}");
     assert!(!text.contains("Canary-4d1"), "{text}");
     assert!(text.contains("Path(<redacted: 38 bytes>)"), "{text}");
+}
+
+#[test]
+fn a_sql_command_translates_as_the_sql_relation_of_a_query() {
+    #[expect(deprecated, reason = "the field every client version sends")]
+    let command = pb::SqlCommand {
+        sql: "SELECT 1".to_owned(),
+        pos_args: vec![pb::expression::Literal {
+            literal_type: Some(pb::expression::literal::LiteralType::Integer(5)),
+            data_type: None,
+        }],
+        ..Default::default()
+    };
+    let relation = sql_command_relation(&command).expect("a relation");
+    let Some(pb::relation::RelType::Sql(sql)) = &relation.rel_type else {
+        panic!("a SQL relation: {relation:?}");
+    };
+    assert_eq!(sql.query, "SELECT 1");
+    assert!(sql_has_parameters(sql));
+    assert!(!sql_has_parameters(&pb::Sql::default()));
+    let plan = pb::Plan {
+        op_type: Some(OpType::Command(Box::new(pb::Command {
+            command_type: Some(pb::command::CommandType::SqlCommand(Box::new(command))),
+        }))),
+    };
+    assert_eq!(
+        translate_plan(&plan, &conf())
+            .expect("translates")
+            .to_string(),
+        translate_relation(&relation, &conf())
+            .expect("translates")
+            .to_string()
+    );
+    // The `WithRelations` form is refused as an unsupported field.
+    let with_input = pb::SqlCommand {
+        input: Some(pb::Relation::default()),
+        ..Default::default()
+    };
+    let e = sql_command_relation(&with_input).expect_err("refused");
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert!(e.message().contains("SqlCommand.input"), "{}", e.message());
 }

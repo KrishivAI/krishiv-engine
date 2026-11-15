@@ -137,6 +137,8 @@ pub use krishiv_udf_sdk::{
 pub use profile::{ExplainVerbose, OptimizerStep, VERBOSE_FORMAT, VERBOSE_VERSION};
 pub use python_udfs::{ANONYMOUS_VERSION_BIT, PythonUdfDef, PythonUdfEntry, PythonUdfLibrary};
 pub use runtime::{EngineRuntime, EngineRuntimeBuilder};
+#[cfg(feature = "unstable-ir")]
+pub use session::SqlOutcome;
 pub use session::{RecordBatchStream, Session, SessionBuilder};
 /// Native Rust scalar UDFs: the [`ScalarUdf`] trait and its boundary types,
 /// for [`Session::register_udf`].
