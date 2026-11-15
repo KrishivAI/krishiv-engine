@@ -88,7 +88,7 @@ note = ""
 
 [[surface]]
 group = "File formats"
-name = "Writing ORC (`df.write.orc`, `format("orc").save`)"
+name = "Writing ORC (`df.write.orc`, `format(\"orc\").save`)"
 status = "not yet"
 note = "Fails with KRISHIV_UNSUPPORTED_FEATURE; `df.write.orc` does not exist."
 
