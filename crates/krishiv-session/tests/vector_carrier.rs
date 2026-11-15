@@ -99,6 +99,12 @@ fn array_functions_over_a_vector_column_match_a_list_column() {
         "SELECT count(v), max(size(v)) FROM {}",
         "SELECT id, v FROM {} ORDER BY id DESC",
         // Hash, equality, grouping and joining read the value, not the carrier (design P3-T075, hash and sort keys).
+        // A bare vector column through the operators that move rows (design P3-T075 §9.2).
+        "SELECT id, v FROM {} WHERE id > 1 ORDER BY id",
+        "SELECT id, v FROM {} ORDER BY id LIMIT 2",
+        "SELECT id, v FROM (SELECT id, v FROM {} DISTRIBUTE BY id) ORDER BY id",
+        "SELECT id, v FROM {} UNION ALL SELECT id, v FROM {} ORDER BY id",
+        "SELECT id, v FROM (SELECT id, v FROM {} ORDER BY id DESC LIMIT 2) ORDER BY id",
         // Aggregate, window and subquery inputs read the plain list too.
         "SELECT collect_list(v) FROM {}",
         "SELECT first(v), last(v) FROM {}",
