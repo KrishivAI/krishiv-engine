@@ -1831,6 +1831,135 @@ null,
 ]
 },
 {
+"conf": {
+"spark.sql.csv.parser.columnPruning.enabled": "true"
+},
+"error": [
+"FAILED_READ_FILE.NO_HINT"
+],
+"file": "QSxYCjEsMgo=",
+"inferred": null,
+"name": "columnPruning conf true multiLine other column",
+"options": {
+"enforceSchema": "false",
+"header": "true",
+"multiLine": "true"
+},
+"schema": "a int, b int",
+"select": [
+"a"
+]
+},
+{
+"conf": {
+"spark.sql.csv.parser.columnPruning.enabled": "true"
+},
+"file": "QSxYCjEsMgo=",
+"inferred": null,
+"name": "columnPruning conf true multiLine option true",
+"options": {
+"columnPruning": "true",
+"enforceSchema": "false",
+"header": "true",
+"multiLine": "true"
+},
+"rows": [
+[
+"1"
+]
+],
+"schema": "a int, b int",
+"select": [
+"a"
+]
+},
+{
+"conf": {
+"spark.sql.csv.parser.columnPruning.enabled": "false"
+},
+"file": "QSxYCjEsMgo=",
+"inferred": null,
+"name": "columnPruning conf false option true",
+"options": {
+"columnPruning": "true",
+"enforceSchema": "false",
+"header": "true"
+},
+"rows": [
+[
+"1"
+]
+],
+"schema": "a int, b int",
+"select": [
+"a"
+]
+},
+{
+"conf": {
+"spark.sql.csv.parser.columnPruning.enabled": "true"
+},
+"file": "QSxYCjEsMgo=",
+"inferred": null,
+"name": "columnPruning conf true other column",
+"options": {
+"enforceSchema": "false",
+"header": "true"
+},
+"rows": [
+[
+"1"
+]
+],
+"schema": "a int, b int",
+"select": [
+"a"
+]
+},
+{
+"conf": {
+"spark.sql.csv.parser.columnPruning.enabled": "true"
+},
+"file": "YSxiCjEKMyw0Cg==",
+"inferred": null,
+"name": "columnPruning conf true multiLine short record",
+"options": {
+"header": "true",
+"mode": "DROPMALFORMED",
+"multiLine": "true"
+},
+"rows": [
+[
+"3"
+]
+],
+"schema": "a int, b int",
+"select": [
+"a"
+]
+},
+{
+"conf": {
+"spark.sql.csv.parser.columnPruning.enabled": "false"
+},
+"file": "YSxiCjEKMyw0Cg==",
+"inferred": null,
+"name": "columnPruning conf false short record",
+"options": {
+"header": "true",
+"mode": "DROPMALFORMED"
+},
+"rows": [
+[
+"3"
+]
+],
+"schema": "a int, b int",
+"select": [
+"a"
+]
+},
+{
 "file": "dgogMQoxIAorMQoxLjAKMHgxMAoyMTQ3NDgzNjQ4Ci0wCjEyNwotMTI5Cg==",
 "inferred": "struct<v:string>",
 "name": "integers",

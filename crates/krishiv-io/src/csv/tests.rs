@@ -85,9 +85,12 @@ fn options_under(map: &Value, conf: &Value) -> FormatOptions {
             );
         }
     }
+    // As a worker parses them: the driver's conf fallbacks carried as
+    // options, parsed against an empty configuration.
+    let carried = CsvFormat.options().with_conf_fallbacks(&user, &config);
     CsvFormat
         .options()
-        .parse(&user, &config)
+        .parse(&carried, &Config::new())
         .expect("options parse")
         .0
 }
@@ -1579,4 +1582,37 @@ fn inference_reserves_what_its_readers_hold() {
         .expect_err("a 1 KiB pool cannot hold a chunk")
         .into_error("f.csv");
     assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory);
+}
+
+/// The pruning conf on the driver (parsed against the session) and on a
+/// worker (carried as an option): ANDed with `!multiLine` both ways, while
+/// the read option is taken as given (Spark 4.2 `CSVOptions`).
+#[test]
+fn column_pruning_conf_counts_only_without_multi_line() {
+    let session = Config::from_pairs([("spark.sql.csv.parser.columnPruning.enabled", "true")])
+        .expect("conf")
+        .0;
+    let pruning = |pairs: &[(&str, &str)], carried: bool| {
+        let user: BTreeMap<String, OptionValue> = pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), OptionValue::from_user(k, (*v).to_owned())))
+            .collect();
+        let schema = CsvFormat.options();
+        let (o, _) = if carried {
+            schema.parse(&schema.with_conf_fallbacks(&user, &session), &Config::new())
+        } else {
+            schema.parse(&user, &session)
+        }
+        .expect("parse");
+        CsvOptions::new(&o, false).expect("options").column_pruning
+    };
+    for carried in [false, true] {
+        assert!(pruning(&[], carried));
+        assert!(!pruning(&[("multiLine", "true")], carried));
+        assert!(pruning(
+            &[("multiLine", "true"), ("columnPruning", "true")],
+            carried
+        ));
+        assert!(!pruning(&[("columnPruning", "false")], carried));
+    }
 }

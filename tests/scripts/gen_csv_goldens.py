@@ -310,6 +310,36 @@ READS += [
         ["a"],
         {"spark.sql.csv.parser.columnPruning.enabled": "false"},
     ),
+    # The conf is ANDed with `!multiLine` (`getBool(columnPruning, !multiLine && conf)`): set to true it does not
+    # prune a multiLine read; only the read option does.
+    *[
+        (
+            f"columnPruning conf {n}",
+            t,
+            {"header": "true", **o},
+            "a int, b int",
+            ["a"],
+            {"spark.sql.csv.parser.columnPruning.enabled": c},
+        )
+        for n, t, o, c in [
+            ("true multiLine other column", "A,X\n1,2\n", {"enforceSchema": "false", "multiLine": "true"}, "true"),
+            (
+                "true multiLine option true",
+                "A,X\n1,2\n",
+                {"enforceSchema": "false", "multiLine": "true", "columnPruning": "true"},
+                "true",
+            ),
+            (
+                "false option true",
+                "A,X\n1,2\n",
+                {"enforceSchema": "false", "columnPruning": "true"},
+                "false",
+            ),
+            ("true other column", "A,X\n1,2\n", {"enforceSchema": "false"}, "true"),
+            ("true multiLine short record", "a,b\n1\n3,4\n", {"multiLine": "true", "mode": "DROPMALFORMED"}, "true"),
+            ("false short record", "a,b\n1\n3,4\n", {"mode": "DROPMALFORMED"}, "false"),
+        ]
+    ],
     ("integers", "v\n 1\n1 \n+1\n1.0\n0x10\n2147483648\n-0\n127\n-129\n", {"header": "true"}, None, None),
     (
         "integer types",
