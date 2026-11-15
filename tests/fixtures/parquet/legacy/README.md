@@ -9,3 +9,14 @@
   `name string, favorite_color string, favorite_numbers array<int>` (all nullable) and the rows
   `[Alyssa,null,[3, 9, 15, 20]]`, `[Ben,red,[]]`. Checked by
   `crates/krishiv-testkit/tests/parquet_interop.rs` (`spark_users_two_level_list`, PY-043).
+- `required_nested.parquet`: written by pyarrow with every field required: `id int`,
+  `m map<struct<a int>, int>`, `l array<struct<x int>>`; rows `(1, {{a: 1} -> 10}, [{x: 5}])`,
+  `(2, {}, [])`. Spark 4.2.0 reads every field at every depth as nullable (the map key's struct
+  field too) and the same rows. Generator:
+  `pa.map_(pa.field('key', pa.struct([pa.field('a', pa.int32(), nullable=False)]), nullable=False),
+  pa.field('value', pa.int32(), nullable=False))`, the list's element and its `x` likewise
+  `nullable=False`, written with `pq.write_table`. Checked by
+  `crates/krishiv-session/tests/variant_parquet.rs` (`required_nested_fields_read_nullable`).
+
+Spark 3.5 to 4.2 read both files the same way (`DataSource.resolveRelation` over
+`dataSchema.asNullable`).
