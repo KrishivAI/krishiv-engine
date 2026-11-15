@@ -4779,8 +4779,8 @@ pub mod execute_plan_response {
     pub struct ArrowBatch {
         #[prost(int64, tag = "1")]
         pub row_count: i64,
-        #[prost(bytes = "vec", tag = "2")]
-        pub data: ::prost::alloc::vec::Vec<u8>,
+        #[prost(bytes = "bytes", tag = "2")]
+        pub data: ::prost::bytes::Bytes,
         #[prost(int64, optional, tag = "3")]
         pub start_offset: ::core::option::Option<i64>,
         #[prost(int64, optional, tag = "4")]

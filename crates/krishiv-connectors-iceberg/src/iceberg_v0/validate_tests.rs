@@ -1017,7 +1017,7 @@ fn foreign_op(c: &Case, name: &str, x: i32, id: i64, op: &'static str) -> Foreig
     Box::new(move |m: TableMetadata| {
         Box::pin(async move {
             let uuid = format!("uuid-{id}");
-            let mut new = write_new_manifests(&io, &m, vec![f], id, &uuid)
+            let mut new = write_new_manifests(&io, &m, vec![f], id, &uuid, &mut Vec::new())
                 .await
                 .unwrap();
             let ts = clock.now_ms().max(m.last_updated_ms() + 1);

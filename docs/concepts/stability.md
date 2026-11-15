@@ -1,3 +1,7 @@
+---
+description: "Krishiv follows semantic versioning; what may break in a 0.x release and what never does."
+---
+
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # API stability
 

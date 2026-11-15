@@ -1,0 +1,25 @@
+{
+ "condition": "DELTA_UNSUPPORTED_FEATURES_FOR_READ",
+ "jvm_class": "org.apache.spark.sql.delta.DeltaUnsupportedTableFeatureException",
+ "message": "[DELTA_UNSUPPORTED_FEATURES_FOR_READ] Unsupported Delta read feature: table \"file:<path>\" requires reader table feature(s) that are unsupported by Delta Lake \"4.4.1\": krishivProbeFeature.",
+ "parameters": {
+  "deltaVersion": "4.4.1",
+  "tableNameOrPath": "file:<path>",
+  "unsupported": "krishivProbeFeature"
+ },
+ "protocol": {
+  "minReaderVersion": 3,
+  "minWriterVersion": 7,
+  "readerFeatures": [
+   "deletionVectors",
+   "krishivProbeFeature"
+  ],
+  "writerFeatures": [
+   "deletionVectors",
+   "invariants",
+   "appendOnly",
+   "krishivProbeFeature"
+  ]
+ },
+ "sqlstate": "56038"
+}

@@ -1,0 +1,26 @@
+{
+  "rootGroups": [
+    {
+      "name": "root",
+      "hardConcurrencyLimit": 16,
+      "maxQueued": 200,
+      "schedulingPolicy": "weighted_fair",
+      "subGroups": [
+        {"name": "interactive", "hardConcurrencyLimit": 16, "maxQueued": 50, "schedulingWeight": 3,
+         "priority": 80, "workloadClass": "interactive"},
+        {"name": "agent", "hardConcurrencyLimit": 8, "maxQueued": 50, "schedulingWeight": 2,
+         "priority": 60, "workloadClass": "agent", "perQueryMemoryLimit": "10%"},
+        {"name": "batch", "hardConcurrencyLimit": 6, "maxQueued": 100, "schedulingWeight": 1,
+         "priority": 30, "workloadClass": "batch"},
+        {"name": "background", "hardConcurrencyLimit": 2, "maxQueued": 100, "schedulingWeight": 1,
+         "priority": 10, "workloadClass": "background"}
+      ]
+    }
+  ],
+  "selectors": [
+    {"source": "krishiv-agent.*", "group": "root.agent"},
+    {"clientTags": ["background"], "group": "root.background"},
+    {"queryType": "WRITE", "group": "root.batch"}
+  ],
+  "defaultGroup": "root.interactive"
+}

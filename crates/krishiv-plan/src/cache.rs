@@ -70,11 +70,45 @@ pub fn normalized_plan_hash(plan: &Plan) -> u128 {
     normalized_subtree_hash(plan.root())
 }
 
+/// The semantic hash of a resolved plan (Spark's `QueryPlan.semanticHash`
+/// over the canonicalized plan, `QueryPlan.scala:708-749`): the normalized
+/// hash without the cosmetic parts Spark's canonicalization erases. Column
+/// and alias names are left out (`Alias(child, "")`, an `AttributeReference`
+/// canonicalized as `"none"`, `namedExpressions.scala:326-327`) and a
+/// `SubqueryAlias` is its input (`basicLogicalOperators.scala:2031`). Spark's
+/// other rewrites (commutative operands sorted, projects that only rename
+/// dropped, join hints dropped) are not made, so plans differing only in
+/// those still hash differently: it may say "different" where Spark says
+/// "same", never the reverse.
+#[must_use]
+pub fn semantic_plan_hash(plan: &Plan) -> u128 {
+    let mut enc = Encoder {
+        semantic: true,
+        ..Encoder::default()
+    };
+    enc.plan(plan.root(), 0);
+    XxHash3_128::oneshot(&enc.out)
+}
+
 /// The normalized hash of a resolved subtree, for subplan substitution: a
 /// plan and a subplan of another query with the same result hash equal.
 #[must_use]
 pub fn normalized_subtree_hash(plan: &LogicalPlan) -> u128 {
     let mut enc = Encoder::default();
+    enc.plan(plan, 0);
+    XxHash3_128::oneshot(&enc.out)
+}
+
+/// [`normalized_subtree_hash`] without the scans' table versions: the same
+/// plan over other versions of its tables hashes equal. A relation cache keys
+/// its registrations by it and compares the versions apart, so a write to a
+/// cached table keeps the registration (Spark's `recacheByPlan`).
+#[must_use]
+pub fn unversioned_subtree_hash(plan: &LogicalPlan) -> u128 {
+    let mut enc = Encoder {
+        unversioned: true,
+        ..Encoder::default()
+    };
     enc.plan(plan, 0);
     XxHash3_128::oneshot(&enc.out)
 }
@@ -115,6 +149,10 @@ struct Encoder {
     /// new attribute ids (the first did), so a separate copy of the same
     /// subtree has the same digest: shared and copied plans hash equal.
     seen: HashMap<(NodeKind, usize, u64), u128>,
+    /// [`semantic_plan_hash`]: names and subquery aliases left out.
+    semantic: bool,
+    /// Leaves the scans' table versions out ([`unversioned_subtree_hash`]).
+    unversioned: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -174,7 +212,9 @@ impl Encoder {
     fn bound(&mut self, c: &BoundColumn, bias: u64) {
         let id = self.remap(c.id, bias);
         self.num(id);
-        self.text(&c.name);
+        if !self.semantic {
+            self.text(&c.name);
+        }
         self.debug(&c.data_type);
         self.flag(c.nullable);
     }
@@ -572,8 +612,22 @@ impl Encoder {
         }
     }
 
+    /// A relation node's Python UDF (by identity) and declared columns.
+    fn python_udf(&mut self, udf: &crate::PythonUdfRef, output: &[BoundColumn], bias: u64) {
+        self.debug(udf);
+        self.num(output.len() as u64);
+        for c in output {
+            self.bound(c, bias);
+        }
+    }
+
     /// Writes `plan` as the digest of its encoding, computed once per node.
     fn plan(&mut self, plan: &LogicalPlan, bias: u64) {
+        if self.semantic
+            && let PlanNode::SubqueryAlias { input, .. } = &plan.node
+        {
+            return self.plan(input, bias);
+        }
         let key = (NodeKind::Plan, std::ptr::from_ref(plan) as usize, bias);
         let digest = match self.seen.get(&key) {
             Some(d) => *d,
@@ -620,9 +674,11 @@ impl Encoder {
                 for c in &s.output {
                     self.bound(c, bias);
                 }
-                self.flag(s.version.is_some());
-                if let Some(v) = &s.version {
-                    self.inum(v.0);
+                if !self.unversioned {
+                    self.flag(s.version.is_some());
+                    if let Some(v) = &s.version {
+                        self.inum(v.0);
+                    }
                 }
             }
             PlanNode::OneRowRelation => self.tag("OneRowRelation"),
@@ -852,9 +908,83 @@ impl Encoder {
                 }
                 self.plan(input, bias);
             }
+            PlanNode::MapPartitions {
+                input,
+                udf,
+                output,
+                barrier,
+            } => {
+                self.tag("MapPartitions");
+                self.python_udf(udf, output, bias);
+                self.flag(*barrier);
+                self.plan(input, bias);
+            }
+            PlanNode::GroupMap {
+                input,
+                keys,
+                udf,
+                output,
+            } => {
+                self.tag("GroupMap");
+                self.exprs(keys, bias);
+                self.python_udf(udf, output, bias);
+                self.plan(input, bias);
+            }
+            PlanNode::CoGroupMap {
+                left,
+                right,
+                left_keys,
+                right_keys,
+                udf,
+                output,
+            } => {
+                self.tag("CoGroupMap");
+                self.exprs(left_keys, bias);
+                self.exprs(right_keys, bias);
+                self.python_udf(udf, output, bias);
+                self.plan(left, bias);
+                self.plan(right, bias);
+            }
+            PlanNode::PythonTableFunction {
+                args,
+                table_arg,
+                udf,
+                output,
+            } => {
+                self.tag("PythonTableFunction");
+                self.exprs(args, bias);
+                self.python_udf(udf, output, bias);
+                self.flag(table_arg.is_some());
+                if let Some(t) = table_arg {
+                    self.exprs(&t.partition_by, bias);
+                    self.num(t.order_by.len() as u64);
+                    for o in &t.order_by {
+                        self.order(o, bias);
+                    }
+                    self.flag(t.single_partition);
+                    self.plan(&t.input, bias);
+                }
+            }
             PlanNode::ReplicateRows { input, count } => {
                 self.tag("ReplicateRows");
                 self.expr(count, bias);
+                self.plan(input, bias);
+            }
+            PlanNode::Sample {
+                input,
+                bounds,
+                seed,
+            } => {
+                self.tag("Sample");
+                self.num(bounds.lower.to_bits());
+                self.num(bounds.upper.to_bits());
+                match seed {
+                    Some(s) => {
+                        self.tag("seed");
+                        self.num(s.cast_unsigned());
+                    }
+                    None => self.tag("unseeded"),
+                }
                 self.plan(input, bias);
             }
             PlanNode::Generate {
@@ -1143,6 +1273,41 @@ mod tests {
         let c = project(scan(&[1], &["a"]), &[rcol(1, "a")]);
         let d = project(scan(&[1], &["z"]), &[rcol(1, "z")]);
         assert_ne!(hash(&c), hash(&d));
+    }
+
+    fn semantic(plan: &LogicalPlan) -> u128 {
+        semantic_plan_hash(&Plan::try_new(plan.clone()).unwrap())
+    }
+
+    fn alias(e: Arc<Expr>, id: u64, name: &str) -> Arc<Expr> {
+        Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
+            expr: e,
+            output: bound(id, name),
+        })))
+    }
+
+    #[test]
+    fn the_semantic_hash_ignores_names_and_subquery_aliases() {
+        // Column and alias names (Spark: `AttributeReference` canonicalized
+        // as "none", `Alias` names erased).
+        let a = project(scan(&[1], &["a"]), &[alias(rcol(1, "a"), 2, "x")]);
+        let b = project(scan(&[7], &["z"]), &[alias(rcol(7, "z"), 8, "y")]);
+        assert_eq!(semantic(&a), semantic(&b));
+        assert_ne!(hash(&a), hash(&b), "the cache key keeps the names");
+        // A `SubqueryAlias` (Spark: `doCanonicalize` is the child's).
+        let aliased = LogicalPlan::new(PlanNode::SubqueryAlias {
+            input: Arc::new(scan(&[1], &["a"])),
+            alias: "t".to_owned(),
+            columns: vec!["c".to_owned()],
+        });
+        assert_eq!(semantic(&aliased), semantic(&scan(&[3], &["b"])));
+        // Other columns, literals and shapes still differ.
+        let c = project(scan(&[1, 2], &["a", "b"]), &[rcol(1, "a")]);
+        let d = project(scan(&[1, 2], &["a", "b"]), &[rcol(2, "a")]);
+        assert_ne!(semantic(&c), semantic(&d));
+        let e = filter(scan(&[1], &["a"]), gt(rcol(1, "a"), 1));
+        let f = filter(scan(&[1], &["a"]), gt(rcol(1, "a"), 2));
+        assert_ne!(semantic(&e), semantic(&f));
     }
 
     #[test]
@@ -1655,6 +1820,58 @@ mod tests {
                     })),
                 ),
                 (
+                    "map-partitions",
+                    node(PlanNode::MapPartitions {
+                        input: base(),
+                        udf: py(crate::PythonEvalType::MapArrowIter),
+                        output: vec![bound(2, "x")],
+                        barrier: true,
+                    }),
+                ),
+                (
+                    "group-map",
+                    node(PlanNode::GroupMap {
+                        input: base(),
+                        keys: vec![a()],
+                        udf: py(crate::PythonEvalType::GroupedMapArrow),
+                        output: vec![bound(2, "x")],
+                    }),
+                ),
+                (
+                    "cogroup-map",
+                    node(PlanNode::CoGroupMap {
+                        left: base(),
+                        right: base(),
+                        left_keys: vec![a()],
+                        right_keys: vec![a()],
+                        udf: py(crate::PythonEvalType::CogroupedMapArrow),
+                        output: vec![bound(2, "x")],
+                    }),
+                ),
+                (
+                    "python-table-function",
+                    node(PlanNode::PythonTableFunction {
+                        args: vec![lit(1)],
+                        table_arg: Some(crate::TableArg {
+                            input: base(),
+                            partition_by: vec![a()],
+                            order_by: vec![crate::SortOrder::asc(a())],
+                            single_partition: false,
+                        }),
+                        udf: py(crate::PythonEvalType::ArrowUdtf),
+                        output: vec![bound(2, "x")],
+                    }),
+                ),
+                (
+                    "python-table-function-no-table",
+                    node(PlanNode::PythonTableFunction {
+                        args: vec![lit(1)],
+                        table_arg: None,
+                        udf: py(crate::PythonEvalType::TableUdf),
+                        output: vec![bound(2, "x")],
+                    }),
+                ),
+                (
                     "read-table-options",
                     node(PlanNode::Read(ReadSource::Table {
                         name: vec!["t".into()],
@@ -1679,6 +1896,17 @@ mod tests {
         }
     }
 
+    /// A Python UDF reference of a relation node.
+    fn py(eval_type: crate::PythonEvalType) -> crate::PythonUdfRef {
+        crate::PythonUdfRef {
+            name: "f".into(),
+            version: 1,
+            eval_type,
+            thread_safe: true,
+            deterministic: true,
+        }
+    }
+
     #[test]
     fn subtree_hash_is_stable_and_differs_from_whole() {
         let sub = filter(scan(&[3], &["a"]), gt(rcol(3, "a"), 1));
@@ -1689,6 +1917,33 @@ mod tests {
         );
         let whole = project(sub.clone(), &[rcol(3, "a")]);
         assert_ne!(normalized_subtree_hash(&sub), hash(&whole));
+    }
+
+    #[test]
+    fn the_unversioned_hash_leaves_out_scan_versions_only() {
+        let versioned = |v: Option<i64>| {
+            let mut s = scan(&[1], &["a"]);
+            if let PlanNode::Scan(sc) = &mut s.node {
+                sc.version = v.map(crate::TableVersion);
+            }
+            filter(s, gt(rcol(1, "a"), 1))
+        };
+        let base = unversioned_subtree_hash(&versioned(Some(3)));
+        assert_eq!(unversioned_subtree_hash(&versioned(Some(4))), base);
+        assert_eq!(unversioned_subtree_hash(&versioned(None)), base);
+        assert_ne!(
+            normalized_subtree_hash(&versioned(Some(3))),
+            normalized_subtree_hash(&versioned(Some(4)))
+        );
+        let mut other = scan(&[1], &["a"]);
+        if let PlanNode::Scan(sc) = &mut other.node {
+            sc.version = Some(crate::TableVersion(3));
+        }
+        assert_ne!(
+            unversioned_subtree_hash(&filter(other, gt(rcol(1, "a"), 2))),
+            base,
+            "everything else still enters"
+        );
     }
 
     #[test]
@@ -1725,6 +1980,7 @@ mod tests {
             reads_files: false,
             timings: crate::analyzer::AnalysisTimings::default(),
             warnings: Vec::new(),
+            views: Vec::new(),
         };
         let base = CacheKey::of(&analyzed("a", 7));
         assert_ne!(CacheKey::of(&analyzed("b", 7)), base, "principals");

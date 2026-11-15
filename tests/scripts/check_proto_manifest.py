@@ -9,6 +9,7 @@ files and added field names, so the next bump is read, not assumed.
 
     python3 tests/scripts/check_proto_manifest.py            # verify (PR check)
     python3 tests/scripts/check_proto_manifest.py --write    # regenerate after a deliberate re-vendor
+    python3 tests/scripts/check_proto_manifest.py --upstream # nightly: re-read every tag from apache/spark and compare
 """
 
 from __future__ import annotations
@@ -17,8 +18,11 @@ import argparse
 import collections
 import difflib
 import hashlib
+import itertools
 import json
+import re
 import sys
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -112,10 +116,101 @@ def delta_problems(base: str = "4.2.1", new: str = "4.3") -> list[str]:
     return problems
 
 
+# Items an older version had that a newer one removed (the only non-additive changes between consecutive versions),
+# each with its reason. `LEGACY_3_5_FIELDS` in crates/krishiv-connect/src/wire.rs lets a 3.5 client still send them.
+ALLOWED_REMOVALS = {
+    ("3.5", "4.0"): {
+        ("relations.proto", "CachedLocalRelation", 1),  # userId: the server must use the active user
+        ("relations.proto", "CachedLocalRelation", 2),  # sessionId: likewise
+    },
+}
+
+
+def _items(ver: str) -> dict:
+    """(file, message path, field number) -> (label, type, name), and (file, enum path, "enum", number) -> name."""
+    out: dict = {}
+    for f in sorted((PROTO / ver / "spark" / "connect").glob("*.proto")):
+        stack: list[tuple[str, str]] = []
+        text = re.sub(r"/\*.*?\*/", "", f.read_text(), flags=re.S)
+        for raw in text.splitlines():
+            line = raw.split("//")[0].strip()
+            if not line:
+                continue
+            if m := re.match(r"(message|enum|oneof)\s+(\w+)\s*\{", line):
+                if line.endswith("}"):  # `message Unknown {}` on one line
+                    continue
+                stack.append((m.group(1), m.group(2)))
+                continue
+            if line.startswith("}"):
+                if stack:
+                    stack.pop()
+                continue
+            path = ".".join(n for k, n in stack if k != "oneof")
+            kind = stack[-1][0] if stack else ""
+            if kind in ("message", "oneof") and (
+                m := re.match(r"(?:(optional|repeated)\s+)?([\w.<>, ]+?)\s+(\w+)\s*=\s*(\d+)", line)
+            ):
+                out[(f.name, path, int(m.group(4)))] = (m.group(1) or "", m.group(2).replace(" ", ""), m.group(3))
+            elif kind == "enum" and (m := re.match(r"(\w+)\s*=\s*(-?\d+)\s*;", line)):
+                out[(f.name, path, "enum", int(m.group(2)))] = m.group(1)
+    return out
+
+
+def additivity_problems(chain=("3.5", "4.0", "4.1", "4.2", "4.2.1", "4.3")) -> list[str]:
+    """Each version must keep every field and enum value of the one before (label `optional` may be added),
+    except the listed removals: one superset decoder is only sound if newer versions only add."""
+    problems = []
+    for old, new in itertools.pairwise(chain):
+        a, b = _items(old), _items(new)
+        allowed = ALLOWED_REMOVALS.get((old, new), set())
+        for key, val in a.items():
+            if key in allowed:
+                if key in b:
+                    problems.append(f"{old} -> {new}: {key} is listed as removed but still exists")
+            elif key not in b:
+                problems.append(f"{old} -> {new}: removed {key} {val}")
+            elif b[key] != val and not (isinstance(val, tuple) and val[1:] == b[key][1:] and val[0] == ""):
+                problems.append(f"{old} -> {new}: changed {key} {val} -> {b[key]}")
+    return problems
+
+
+# Spark 3.5 keeps the protos under connector/connect; 4.0 moved them to sql/connect.
+RAW = "https://raw.githubusercontent.com/apache/spark/{tag}/{base}/common/src/main/protobuf/spark/connect/{name}"
+
+
+def upstream_problems(fetch=None) -> list[str]:
+    """Each vendored file against the same file at its apache/spark tag (network; the nightly check)."""
+
+    def default_fetch(url: str) -> bytes:
+        with urllib.request.urlopen(url, timeout=60) as r:
+            return r.read()
+
+    fetch = fetch or default_fetch
+    problems = []
+    for ver, tag in TAGS.items():
+        for f in sorted((PROTO / ver / "spark" / "connect").glob("*.proto")):
+            try:
+                body = fetch(
+                    RAW.format(tag=tag, base="connector/connect" if ver == "3.5" else "sql/connect", name=f.name)
+                )
+            except OSError as e:
+                problems.append(f"{ver}/{f.name}: cannot fetch {tag}: {e}")
+                continue
+            if hashlib.sha256(body).hexdigest() != sha256(f):
+                problems.append(f"{ver}/{f.name}: differs from apache/spark {tag}")
+    return problems
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--write", action="store_true")
+    ap.add_argument("--upstream", action="store_true", help="compare with apache/spark at each tag (network)")
     args = ap.parse_args(argv)
+    if args.upstream:
+        problems = upstream_problems()
+        for e in problems:
+            print(e, file=sys.stderr)
+        return 1 if problems else 0
     current = collect()
     if args.write:
         MANIFEST.write_text(json.dumps(current, indent=1) + "\n", encoding="utf-8")
@@ -123,6 +218,7 @@ def main(argv: list[str] | None = None) -> int:
     recorded = json.loads(MANIFEST.read_text(encoding="utf-8"))
     errors = [f"{v}: manifest differs from the vendored files" for v in current if current[v] != recorded.get(v)]
     errors += delta_problems()
+    errors += additivity_problems()
     for e in errors:
         print(e, file=sys.stderr)
     return 1 if errors else 0

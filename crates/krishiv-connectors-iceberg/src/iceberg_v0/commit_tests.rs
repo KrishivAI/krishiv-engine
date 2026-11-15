@@ -471,7 +471,7 @@ fn foreign_keyed(
     Box::new(move |m: TableMetadata| {
         Box::pin(async move {
             let uuid = format!("uuid-{id}");
-            let mut new = write_new_manifests(&io, &m, vec![f], id, &uuid)
+            let mut new = write_new_manifests(&io, &m, vec![f], id, &uuid, &mut Vec::new())
                 .await
                 .unwrap();
             let ts = clock.now_ms().max(m.last_updated_ms() + 1);
@@ -575,7 +575,14 @@ fn case_with(version: u8, properties: &[(&str, &str)]) -> Case {
     let io = env.reg.file_io();
     let new = env
         .rt
-        .block_on(write_new_manifests(&io, &base, vec![ours], OURS, OUR_UUID))
+        .block_on(write_new_manifests(
+            &io,
+            &base,
+            vec![ours],
+            OURS,
+            OUR_UUID,
+            &mut Vec::new(),
+        ))
         .unwrap();
     Case {
         env,

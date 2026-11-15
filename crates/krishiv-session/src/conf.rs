@@ -139,6 +139,23 @@ impl ConfStore {
         self.versioned_snapshot().0
     }
 
+    /// Whether `config` gives a server-scoped store key (`krishiv_io::is_server_scoped_option`:
+    /// endpoints, regions, accounts, key files) another value than the configuration the session
+    /// was built with, i.e. whether the session itself redirected a store (P3-T067b).
+    pub(crate) fn store_settings_changed(&self, config: &Config) -> bool {
+        let endpoints = |c: &Config| {
+            let mut v: Vec<(String, String)> = c
+                .explicit_unregistered()
+                .into_iter()
+                .filter(|(k, _)| krishiv_io::is_server_scoped_option(k))
+                .map(|(k, v)| (k.to_ascii_lowercase(), v.to_owned()))
+                .collect();
+            v.sort();
+            v
+        };
+        endpoints(config) != endpoints(&self.initial)
+    }
+
     /// Every explicitly set key with its value as text, sorted by key: what
     /// `SET` lists and Spark Connect's `Config` `GetAll` returns.
     pub(crate) fn explicit_entries(&self) -> Vec<(String, String)> {
@@ -299,7 +316,7 @@ fn leading_number(text: &str) -> Option<(u32, &str)> {
 /// `krishiv.*` key or Spark alias) with its default, else an unregistered
 /// key as set.
 pub(crate) fn get(config: &Config, key: &str) -> Option<String> {
-    match lookup(key) {
+    match lookup(krishiv_common::config::resolve_alternative(key)) {
         Some(entry) => config.get(entry).map(ToString::to_string),
         None => config.get_unregistered(key).map(str::to_owned),
     }

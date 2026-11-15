@@ -5,8 +5,13 @@
 //! # Kernel features
 //! `delta_kernel` is built with `default-features = false` and only `internal-api` (its Arrow
 //! features pull `chrono-tz`, banned by ADR 0028). The `internal-api` items this crate uses are
-//! listed here so a kernel bump reviews exactly those: none yet (PR-08b brings
-//! `Snapshot::table_configuration`, PR-37 the create-table builder and `update_deletion_vectors`).
+//! listed here so a kernel bump reviews exactly those: `Snapshot::table_configuration`,
+//! `TableConfiguration::{protocol, metadata, column_mapping_mode}`,
+//! `Protocol::{min_reader_version, reader_features, writer_features}`,
+//! `Metadata::{configuration, partition_columns}`, `StructField::physical_name` and the
+//! `TableFeature` and `ColumnMappingMode` types ([`features`], [`table`]); PR-37 adds the
+//! create-table builder and `update_deletion_vectors`. [`features`] also reads the text of the
+//! kernel's `"Feature '<name>' is not supported"` refusal (pinned by a test).
 //!
 //! # Error classes
 //! Delta's own classes are vendored from delta-spark 4.4.1 into `krishiv-common`
@@ -25,10 +30,18 @@
 //! (a parse limit), `KRISHIV_UNSUPPORTED_FEATURE` (a commit on a store without conditional put).
 //!
 //! # Engine
-//! [`engine::DeltaEngine`] gives the kernel Krishiv's storage and JSON handlers over `IoContext`
-//! and runs every kernel call on the process's bounded log pool ([`engine::pool::LogPool`]).
+//! [`engine::DeltaEngine`] is the kernel's `Engine`: Krishiv's storage, JSON and Parquet handlers
+//! over `IoContext` and an evaluator over Arrow compute. Every kernel call runs on the process's
+//! bounded log pool ([`engine::pool::LogPool`]) through [`engine::DeltaEngine::delta_blocking`].
+//!
+//! # Reading a table
+//! [`table::DeltaTable`] is the `TableProvider` of one table at one version for one query: the
+//! snapshot, Krishiv's reader allow-list ([`features`]), the live files, and the scan that reads
+//! them through krishiv-io (column mapping, partition values, type widening, deletion vectors).
 
 #![forbid(unsafe_code)]
 
 pub mod engine;
 pub mod error;
+pub mod features;
+pub mod table;

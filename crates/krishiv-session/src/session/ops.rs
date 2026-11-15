@@ -27,13 +27,14 @@ impl Session {
         crate::access::physical(at)
     }
 
-    /// Before anything is written or replaced (an overwrite deletes first):
-    /// `Modify` and `Create` on the path, both whether or not it exists, so a
-    /// denial never tells whether it does.
-    pub(crate) async fn authorize_write_path(
+    /// A write's options, before its target is located: locating builds the
+    /// store from them (a key file is read then), so a server-scoped option is
+    /// refused before any store sees it. `USAGE` on the secrets the encoder
+    /// resolves, then `Manage` for a server-scoped store key.
+    pub(crate) async fn authorize_write_options(
         &self,
-        at: &krishiv_exec::files::LocatedPath,
         options: &BTreeMap<String, OptionValue>,
+        table_options: &BTreeMap<String, OptionValue>,
     ) -> Result<(), KrishivError> {
         // The encoder resolves secret options (`encryptionKey`) for this principal: USAGE first.
         let r = krishiv_plan::analyzer::authorize_secret_refs(
@@ -43,6 +44,26 @@ impl Session {
         )
         .await;
         crate::access::audit(self, StatementClass::Write, r)?;
+        self.authorize_store_options(
+            StatementClass::Write,
+            &self.state.conf.snapshot(),
+            // A table's own stored option was authorized when it was stored.
+            options
+                .iter()
+                .filter(|(k, v)| table_options.get(*k) != Some(*v))
+                .map(|(k, _)| k.as_str()),
+        )
+        .await
+    }
+
+    /// Before anything is written or replaced (an overwrite deletes first):
+    /// `Modify` and `Create` on the path, both whether or not it exists, so a
+    /// denial never tells whether it does. The options were checked before the
+    /// path was located (`authorize_write_options`).
+    pub(crate) async fn authorize_write_path(
+        &self,
+        at: &krishiv_exec::files::LocatedPath,
+    ) -> Result<(), KrishivError> {
         let securable = Securable::Path(OptionValue::from_user("path", at.display.clone()));
         for privilege in [Privilege::Modify, Privilege::Create] {
             let r = authorize(
@@ -55,6 +76,78 @@ impl Session {
             crate::access::audit(self, StatementClass::Write, r)?;
         }
         Ok(())
+    }
+
+    /// `Manage` on the cluster when `options` hold a server-scoped store key
+    /// (`krishiv_io::is_server_scoped_option`: endpoints, regions, accounts, key files; not inline
+    /// credentials), or when the session's configuration `config` changed one from what the
+    /// session was built with (P3-T067b). A store built from them could send the server's own
+    /// credentials to another host. Admin only in server mode; embedded use (`AllowAll`) is
+    /// unchanged.
+    pub(crate) async fn authorize_store_options<'a>(
+        &self,
+        class: StatementClass,
+        config: &krishiv_common::config::Config,
+        mut options: impl Iterator<Item = &'a str>,
+    ) -> Result<(), KrishivError> {
+        if !options.any(krishiv_io::is_server_scoped_option)
+            && !self.state.conf.store_settings_changed(config)
+        {
+            return Ok(());
+        }
+        let r = authorize(
+            &*self.state.policy,
+            &self.state.principal,
+            &Securable::System("cluster".to_owned()),
+            Privilege::Manage,
+        )
+        .await;
+        crate::access::audit(self, class, r)
+    }
+
+    /// `RESET key`: the key's `SET` check ([`Self::authorize_set_key`]), then the unset.
+    pub(crate) async fn unset_key(&self, key: &str) -> Result<(), KrishivError> {
+        self.authorize_set_key(key).await?;
+        self.conf().unset(key)
+    }
+
+    /// `SET key = ..` (or `RESET key`) of a key only an administrator may change is `Manage`
+    /// on the cluster (ADR 0046 §3): a registry key settable by `admin` (its Spark alias too),
+    /// or a server-scoped store key (P3-T067b). Any other key passes. Asked before the value
+    /// is stored, so a refused `SET` changes nothing. A `startup` key is refused by the
+    /// configuration itself, for every principal (`CANNOT_MODIFY_STATIC_CONFIG`).
+    ///
+    /// Public for server adapters that set configuration outside SQL (Spark Connect's `Config`
+    /// RPC), so they ask exactly what `SET` asks; not meant as user API.
+    ///
+    /// # Errors
+    /// `KRISHIV_INSUFFICIENT_PERMISSIONS` (42501) when the principal lacks `Manage`; the
+    /// denial is audited and counted like every other.
+    pub async fn authorize_set_key(&self, key: &str) -> Result<(), KrishivError> {
+        if krishiv_common::config::lookup(key)
+            .or_else(|| {
+                krishiv_common::config::lookup(krishiv_common::config::resolve_alternative(key))
+            })
+            .is_some_and(|e| e.settable_by == krishiv_common::config::SettableBy::Admin)
+        {
+            let r = authorize(
+                &*self.state.policy,
+                &self.state.principal,
+                &Securable::System("cluster".to_owned()),
+                Privilege::Manage,
+            )
+            .await;
+            return crate::access::audit(self, StatementClass::Session, r);
+        }
+        if !krishiv_io::is_server_scoped_option(key) {
+            return Ok(());
+        }
+        self.authorize_store_options(
+            StatementClass::Session,
+            &self.state.conf.snapshot(),
+            std::iter::once(key),
+        )
+        .await
     }
 
     /// The file format named `format`, which must be one the engine writes:
@@ -127,6 +220,7 @@ impl Session {
             mode,
             path,
             options,
+            table_options,
             partition_by,
         } = target;
         let mode = SaveMode::parse(&mode)?;
@@ -160,10 +254,12 @@ impl Session {
         let dynamic =
             !partitions.is_empty() && partition_overwrite_is_dynamic(&env.config, &options)?;
         let max_records = max_records_per_file(&options, format.name())?;
+        self.authorize_write_options(&options, &table_options)
+            .await?;
         let at = self.locate_write_path(text, &options, env)?;
         // The query's own context: its counters are the write's bytes.
         let io = env.io.clone();
-        self.authorize_write_path(&at, &options).await?;
+        self.authorize_write_path(&at).await?;
         // A link swapped into the checked path since fails the write
         // before anything is replaced, and again before the commit deletes
         // what an overwrite replaces.
@@ -185,6 +281,9 @@ impl Session {
             // opened here, never through a link (P2-T199). The registration
             // lives until the write is over.
             let (store, _registration) = self.anchor_local_write(&at, &job)?;
+            // An overwrite deletes what it replaces here: from now on a cancel
+            // reaches the write through its query, not by dropping it (`action.rs`).
+            crate::action::commit_point();
             let Some(write) = DirectoryWrite::begin(
                 &io,
                 store.clone(),
@@ -297,8 +396,11 @@ impl Session {
             }
         }
         // A store error after the anchor is open may be a link swapped into
-        // the path: the audited denial is what the caller sees then.
-        if written.is_err()
+        // the path: the audited denial is what the caller sees then. A denial
+        // is already audited (and counted): it is not asked about again.
+        if written
+            .as_ref()
+            .is_err_and(|e| e.error_class().name() != "KRISHIV_INSUFFICIENT_PERMISSIONS")
             && let Err(denied) = crate::access::still_physical(self, &at)
             && denied.error_class().name() == "KRISHIV_INSUFFICIENT_PERMISSIONS"
         {

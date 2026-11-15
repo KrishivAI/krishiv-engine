@@ -37,9 +37,11 @@ mod project;
 mod range;
 mod replicate;
 mod runtime_filter;
+mod sample;
 mod scan;
 pub(crate) mod select;
 mod sort;
+mod spilled_scan;
 mod union;
 
 pub use expand::{Expand, NullOf};
@@ -61,6 +63,7 @@ pub use replicate::ReplicateRows;
 pub(crate) use runtime_filter::RowStage;
 pub(crate) use runtime_filter::ScanRows;
 pub use runtime_filter::{RowStageSettings, RuntimeFilters};
+pub use sample::Sample;
 pub(crate) use scan::scan_metadata;
 pub use scan::{
     FileSelections, FilterPushdown, MemoryScan, PushedFilter, ScanPushdown, ScanPushdowns, TakeRows,
@@ -69,6 +72,7 @@ pub use scan::{
 use scan::{ScanGlobal, ScanLocal};
 pub use sort::{DEFAULT_MAX_MERGE_FAN_IN, Sort, SortKey, SortMetrics, TopN};
 pub(crate) use sort::{KeyEncoder, blocking, data_bytes, owned_rows};
+pub use spilled_scan::SpilledScan;
 pub use union::UnionAlign;
 
 use crate::error::{Result, internal};

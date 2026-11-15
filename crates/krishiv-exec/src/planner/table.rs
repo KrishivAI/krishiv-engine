@@ -8,14 +8,14 @@ use std::sync::Arc;
 
 use arrow_schema::SchemaRef;
 use krishiv_common::error::{KrishivUnsupportedFeature, TableOrViewNotFound};
-use krishiv_memory::RelationLease;
+use krishiv_memory::{RelationLease, SpillFile};
 use krishiv_optimizer::{Statistics, TableStats};
 use krishiv_plan::{ReadSource, Scan};
 use krishiv_types::batch::Batch;
 
 use crate::error::Result;
 use crate::operator::Sink;
-use crate::operators::{MemoryScan, ScanPushdown};
+use crate::operators::{MemoryScan, ScanPushdown, SpilledScan};
 use crate::planner::write::{TableCapabilities, WriteRequest};
 
 /// A table the executor can read: the scan factory the planner pushes
@@ -178,6 +178,48 @@ impl TableProvider for MemoryTable {
 
     fn statistics(&self) -> Option<TableStats> {
         self.statistics.clone()
+    }
+}
+
+/// A table held in one spill file (a relation cache entry on disk, design
+/// P3-T083 §3.2). Its scan streams the file a batch at a time under the
+/// reading query's memory ([`SpilledScan`]); the file lives as long as the
+/// table and every scan built from it.
+#[derive(Debug, Clone)]
+pub struct SpilledTable {
+    schema: SchemaRef,
+    file: Arc<SpillFile>,
+}
+
+impl SpilledTable {
+    /// A table of the batches in `file`, of the file's schema.
+    pub fn new(file: SpillFile) -> Self {
+        Self {
+            schema: Arc::clone(file.schema()),
+            file: Arc::new(file),
+        }
+    }
+
+    /// The spill file.
+    #[must_use]
+    pub fn file(&self) -> &SpillFile {
+        &self.file
+    }
+}
+
+impl TableProvider for SpilledTable {
+    fn scan(&self) -> Result<Arc<dyn ScanPushdown>> {
+        Ok(Arc::new(SpilledScan::try_new(
+            Arc::clone(&self.schema),
+            Arc::clone(&self.file),
+        )?))
+    }
+
+    fn statistics(&self) -> Option<TableStats> {
+        Some(TableStats {
+            rows: self.file.num_rows(),
+            ..TableStats::default()
+        })
     }
 }
 

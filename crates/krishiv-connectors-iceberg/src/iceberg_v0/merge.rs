@@ -47,8 +47,10 @@
 //! The table's rows are the same; the layout and summary may differ.
 //! `ManifestFilterManager` was not read, so that rewrite is unverified.
 //!
-//! Manifests are not rolled at the target size while written (Java's
-//! `RollingManifestWriter`): `write_new_manifests` writes one per spec.
+//! The new manifests arrive rolled and grouped as Java's `writeDataManifests`
+//! (`rolling.rs`), numbered `-m0` on; merged manifests are numbered after them
+//! and written by a plain writer (`ManifestMergeManager.createManifest`), so
+//! a merged manifest never rolls, as in Java.
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashMap};

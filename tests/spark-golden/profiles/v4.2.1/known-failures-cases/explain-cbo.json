@@ -1,0 +1,9 @@
+{
+  "cases": {
+    "explain-plan-text": [
+      4
+    ]
+  },
+  "file": "explain-cbo",
+  "format_version": 1
+}

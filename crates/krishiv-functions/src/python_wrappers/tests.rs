@@ -190,15 +190,12 @@ fn imports_only_the_helpers_that_are_used() {
 
 #[test]
 fn the_registry_is_fully_accounted_for_and_the_table_is_not_stale() {
-    let registered: BTreeSet<&str> = crate::registry::builtins()
-        .functions()
-        .iter()
-        .map(|d| d.name)
-        .collect();
+    let registry = crate::registry::builtins();
+    let registered: BTreeSet<&str> = registry.functions().iter().map(|d| d.name).collect();
     for row in table::rows() {
         assert!(
-            registered.contains(row.registry),
-            "{} calls `{}`, which is not registered; remove the row",
+            registered.contains(row.registry) || registry.spark_function(row.registry).is_some(),
+            "{} calls `{}`, which is neither registered nor in Spark's catalog; remove the row",
             row.py,
             row.registry
         );

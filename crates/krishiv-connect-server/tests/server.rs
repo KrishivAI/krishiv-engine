@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The Connect listener end to end over a raw tonic client: session RPCs,
-//! limits, refusals and graceful shutdown (design P3-T001 §5). The PySpark
-//! tests need `ExecutePlan` (T011a) and live in `krishiv-cli`.
+//! limits, refusals and graceful shutdown (design P3-T001 §5). `ExecutePlan`
+//! is `tests/execute.rs`; the PySpark tests live in `krishiv-cli`.
 #![expect(
     clippy::expect_used,
     reason = "integration-test helpers are outside #[test] fns"
@@ -15,6 +15,7 @@ use krishiv_common::principal::Principal;
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect_server::{ConnectServer, ConnectServerConfig, SessionLimits, SessionManager};
 use krishiv_session::Session;
+use krishiv_session::auth::{Authenticated, Method};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tonic::Code;
@@ -95,7 +96,7 @@ fn release(session_id: &str, allow_reconnect: bool) -> pb::ReleaseSessionRequest
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn release_session_frees_state() {
     let run = start(ConnectServerConfig::default(), SessionLimits::default()).await;
-    let local = Principal::local_user();
+    let local = local_caller();
     let entry = run
         .manager
         .get_or_create(&local, ID, None, "someone")
@@ -144,10 +145,10 @@ async fn release_session_frees_state() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rpcs_of_later_tasks_are_unimplemented() {
     let run = start(ConnectServerConfig::default(), SessionLimits::default()).await;
-    let e = unary::<_, pb::ConfigResponse>(
+    let e = unary::<_, pb::FetchErrorDetailsResponse>(
         &run.channel,
-        "Config",
-        pb::ConfigRequest {
+        "FetchErrorDetails",
+        pb::FetchErrorDetailsRequest {
             session_id: ID.to_owned(),
             ..Default::default()
         },
@@ -230,7 +231,7 @@ async fn shutdown_cancels_a_stuck_query_at_the_timeout_and_closes_every_session(
         SessionLimits::default(),
     )
     .await;
-    let local = Principal::local_user();
+    let local = local_caller();
     let entry = run
         .manager
         .get_or_create(&local, ID, None, "u")
@@ -269,7 +270,7 @@ async fn shutdown_cancels_a_stuck_query_at_the_timeout_and_closes_every_session(
 async fn shutdown_with_nothing_running_returns_at_once() {
     let mut run = start(ConnectServerConfig::default(), SessionLimits::default()).await;
     run.manager
-        .get_or_create(&Principal::local_user(), ID, None, "u")
+        .get_or_create(&local_caller(), ID, None, "u")
         .expect("create");
     run.stop.take().expect("stop").send(()).expect("send");
     // Well inside the 30 s grace period: no query to wait for.
@@ -296,7 +297,7 @@ async fn the_idle_sweeper_runs_on_the_maintenance_interval() {
     .await;
     let entry = run
         .manager
-        .get_or_create(&Principal::local_user(), ID, None, "u")
+        .get_or_create(&local_caller(), ID, None, "u")
         .expect("create");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while run.manager.counts().live > 0 {
@@ -316,7 +317,7 @@ async fn a_session_with_a_running_query_is_not_swept() {
         },
     );
     let entry = manager
-        .get_or_create(&Principal::local_user(), ID, None, "u")
+        .get_or_create(&local_caller(), ID, None, "u")
         .expect("create");
     let session = entry.session().clone();
     let df = session
@@ -412,7 +413,7 @@ async fn shutdown_then_dropping_the_runtime_leaves_no_spill_directory() {
         .expect("session");
     let manager = Arc::new(SessionManager::from_base(base, SessionLimits::default()));
     let entry = manager
-        .get_or_create(&Principal::local_user(), ID, None, "u")
+        .get_or_create(&local_caller(), ID, None, "u")
         .expect("create");
     // A sort larger than the pool spills, which makes the spill directory.
     let rows = entry
@@ -557,50 +558,9 @@ async fn every_placeholder_rpc_is_unimplemented_until_the_server_drains() {
         draining.store(drain, Ordering::Release);
         let results: Vec<(&str, tonic::Status)> = vec![
             (
-                "ExecutePlan",
-                service
-                    .execute_plan(Request::new(decoded()))
-                    .await
-                    .err()
-                    .expect("err"),
-            ),
-            (
-                "AnalyzePlan",
-                service
-                    .analyze_plan(Request::new(decoded()))
-                    .await
-                    .unwrap_err(),
-            ),
-            (
-                "Config",
-                service.config(Request::new(decoded())).await.unwrap_err(),
-            ),
-            (
                 "ArtifactStatus",
                 service
                     .artifact_status(Request::new(decoded()))
-                    .await
-                    .unwrap_err(),
-            ),
-            (
-                "Interrupt",
-                service
-                    .interrupt(Request::new(decoded()))
-                    .await
-                    .unwrap_err(),
-            ),
-            (
-                "ReattachExecute",
-                service
-                    .reattach_execute(Request::new(decoded()))
-                    .await
-                    .err()
-                    .expect("err"),
-            ),
-            (
-                "ReleaseExecute",
-                service
-                    .release_execute(Request::new(decoded()))
                     .await
                     .unwrap_err(),
             ),
@@ -626,6 +586,39 @@ async fn every_placeholder_rpc_is_unimplemented_until_the_server_drains() {
                     .unwrap_err(),
             ),
         ];
+        if drain {
+            // The RPCs T011a and PR-11b implement refuse too while draining.
+            for e in [
+                service
+                    .analyze_plan(Request::new(decoded()))
+                    .await
+                    .unwrap_err(),
+                service.config(Request::new(decoded())).await.unwrap_err(),
+                service
+                    .interrupt(Request::new(decoded()))
+                    .await
+                    .unwrap_err(),
+            ] {
+                assert_eq!(e.code(), Code::Unavailable);
+            }
+            let e = service
+                .execute_plan(Request::new(decoded()))
+                .await
+                .err()
+                .expect("err");
+            assert_eq!(e.code(), Code::Unavailable);
+            let e = service
+                .reattach_execute(Request::new(decoded()))
+                .await
+                .err()
+                .expect("err");
+            assert_eq!(e.code(), Code::Unavailable);
+            let e = service
+                .release_execute(Request::new(decoded()))
+                .await
+                .unwrap_err();
+            assert_eq!(e.code(), Code::Unavailable);
+        }
         for (rpc, status) in results {
             assert_eq!(status.code(), code, "{rpc}");
             if drain {
@@ -656,4 +649,9 @@ async fn a_connection_cap_past_the_semaphore_limit_is_clamped() {
             .await
             .expect("release");
     assert_eq!(response.session_id, ID);
+}
+
+/// The caller of every request to a server without authentication.
+fn local_caller() -> Authenticated {
+    Authenticated::new(Principal::local_user(), None, Method::None)
 }

@@ -1,0 +1,21 @@
+{
+  "cases": {
+    "depends-on-command": [
+      22,
+      60,
+      67,
+      145
+    ],
+    "parser-pipe-collate": [
+      44,
+      69,
+      78,
+      104,
+      108,
+      109,
+      147
+    ]
+  },
+  "file": "collations-string-functions",
+  "format_version": 1
+}

@@ -10,9 +10,9 @@ use std::time::Duration;
 
 use arrow_schema::SchemaRef;
 use futures::future::BoxFuture;
-use krishiv_exec::testing::{Batches, Scan};
+use krishiv_exec::testing::{Batches, BlockingGate, Break, Buffer, Scan};
 use krishiv_exec::{ExecConfig, ExecNode, GlobalState, LocalState, Result, Source, TaskContext};
-use krishiv_memory::{ConsumerHandle, SpillOwner, Spillable};
+use krishiv_memory::{ConsumerHandle, MemoryPool, SpillOwner, Spillable};
 use krishiv_types::batch::Batch;
 
 use super::util::*;
@@ -70,6 +70,34 @@ async fn run_held(
     limit: usize,
     pressure: usize,
 ) -> (Vec<String>, Arc<krishiv_exec::QueryContext>) {
+    let (rows, q, _) = run_held_with(case, probe, build, limit, pressure, None).await;
+    (rows, q)
+}
+
+/// What the pool held while the sink above the probe finalized, and the
+/// bytes that sink had reserved for its buffered rows.
+struct AtFinalize {
+    held: usize,
+    sink_bytes: u64,
+}
+
+/// As [`run_held`]; with a `finalize_gate`, the join runs below a sink whose
+/// `finalize` waits at it (on real threads: the deterministic executor
+/// runs a blocking call on the test's own thread), and the result also
+/// says what the pool held while it waited.
+async fn run_held_with(
+    case: &Case,
+    probe: &[super::Row],
+    build: &[super::Row],
+    limit: usize,
+    pressure: usize,
+    finalize_gate: Option<Arc<BlockingGate>>,
+) -> (
+    Vec<String>,
+    Arc<krishiv_exec::QueryContext>,
+    Option<AtFinalize>,
+) {
+    const HANG: Duration = Duration::from_secs(60);
     let root = root(limit);
     let (_manager, scope) = spill();
     let config = ExecConfig {
@@ -90,9 +118,17 @@ async fn run_held(
         scan(&schema(), batches(&data(build), 256)),
         held,
     );
+    let (plan, runner) = match &finalize_gate {
+        Some(gate) => {
+            let sink = Buffer::with_finalize_gate(Arc::clone(gate));
+            let plan: Arc<dyn ExecNode> = Arc::new(Break(plan, sink, false));
+            (plan, runner(2))
+        }
+        None => (plan, runner_for(2, limit)),
+    };
     let running = tokio::spawn({
         let q = Arc::clone(&q);
-        async move { run(&runner_for(2, limit), plan, &q).await }
+        async move { run(&runner, plan, &q).await }
     });
     while !reached.load(Ordering::Acquire) {
         tokio::time::sleep(Duration::from_millis(1)).await;
@@ -115,10 +151,32 @@ async fn run_held(
     drop(taken);
     drop(filler);
     open.send(true).unwrap();
+    let held = match &finalize_gate {
+        Some(gate) => {
+            let reached = tokio::time::timeout(HANG, async {
+                while !gate.reached() {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            })
+            .await;
+            let held = root.reserved();
+            gate.open(); // before asserting, so a failure never leaves it shut
+            assert!(reached.is_ok(), "the sink above the probe finalized");
+            Some(held)
+        }
+        None => None,
+    };
     let out = running.await.unwrap().unwrap();
     assert_released(&root);
     assert_eq!(spill_files(&scope), 0, "spill files are deleted");
-    (render(&out), q)
+    let at_finalize = held.map(|held| AtFinalize {
+        held,
+        sink_bytes: out
+            .iter()
+            .map(|b| b.data().get_array_memory_size() as u64)
+            .sum(),
+    });
+    (render(&out), q, at_finalize)
 }
 
 #[tokio::test(start_paused = true)]
@@ -143,5 +201,53 @@ async fn an_idle_build_spills_before_the_requester_and_joins_from_disk() {
             assert!(metric(&q, "HashJoinProbe", "idle_spilled_bytes") > 0);
             assert!(metric(&q, "HashJoinProbe", "grace_partitions") > 0);
         }
+    }
+}
+
+/// An idle build that spilled some level-0 partitions after its finalize
+/// still gives the in-memory ones back when its last probe driver is done:
+/// while the sink above the probe finalizes, the pool holds that sink's
+/// rows, not the build's tables (design `P2-q16-build-release`).
+#[tokio::test]
+async fn an_idle_spilled_build_goes_back_before_the_sink_above_the_probe_finalizes() {
+    let build = skewed(6_000, 1_500);
+    let probe = skewed(3_000, 2_000);
+    for join_type in [JoinType::Inner, JoinType::RightOuter] {
+        let case = Case {
+            join_type,
+            keys: 2,
+            null_safe: vec![false, false],
+            filter: false,
+            row_layout: false,
+        };
+        let gate = BlockingGate::new();
+        let (rows, q, at) =
+            run_held_with(&case, &probe, &build, 16 * MIB, 512 << 10, Some(gate)).await;
+        let at = at.unwrap();
+        assert_eq!(rows, case.oracle(&probe, &build), "{case:?}");
+        assert!(
+            metric(&q, "HashJoinProbe", "idle_spills") > 0,
+            "the idle build spilled ({case:?})"
+        );
+        let build_bytes = metric(&q, "HashJoinBuild", "steady_reserved_bytes");
+        let spilled = metric(&q, "HashJoinProbe", "idle_spilled_bytes");
+        // Most of the build stayed in memory: the release has bytes to return.
+        assert!(
+            spilled < build_bytes / 2,
+            "{case:?}: spilled {spilled} of {build_bytes}"
+        );
+        // Measured: released, the pool holds the sink's rows and some tens of
+        // KiB more; with the release skipped, about 60% of the build more.
+        assert!(
+            (at.held as u64) < build_bytes,
+            "{case:?}: held {} at the sink's finalize, build {build_bytes}",
+            at.held
+        );
+        let beside_sink = (at.held as u64).saturating_sub(at.sink_bytes);
+        assert!(
+            beside_sink < build_bytes / 4,
+            "{case:?}: held {beside_sink} beside the sink's {} bytes, build {build_bytes}",
+            at.sink_bytes
+        );
     }
 }

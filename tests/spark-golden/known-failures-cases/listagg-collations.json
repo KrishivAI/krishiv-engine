@@ -1,9 +1,7 @@
 {
   "cases": {
     "parser-pipe-collate": [
-      5,
-      6,
-      7
+      5
     ]
   },
   "file": "listagg-collations",
