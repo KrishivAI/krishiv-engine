@@ -230,32 +230,32 @@ impl Catalog<'_> {
         self.session.state.catalog.current_catalog()
     }
 
-    /// Makes `name` the current catalog. A catalog's name matches whatever its case, in either `spark.sql.caseSensitive`
-    /// mode, as the SQL `USE` does. (Divergence: Spark 4.2 resets the namespace to `default` when the name differs
-    /// from the current catalog's only in case; here the current namespace is kept.)
+    /// Makes `name` the current catalog. Only `spark_catalog` is one here, and it matches whatever its case, in either
+    /// `spark.sql.caseSensitive` mode, as Spark's `CatalogManager` and the SQL `USE` do. (Divergence: Spark 4.2 resets
+    /// the namespace to `default` when the name differs from the current catalog's only in case; here the current
+    /// namespace is kept.) The `system` catalog is Krishiv's own (ADR 0023) and is reached with `USE system`, not here:
+    /// Spark has no such catalog, so it is `CATALOG_NOT_FOUND` like any other name.
     ///
     /// # Errors
-    /// `CATALOG_NOT_FOUND` for a name that is not a catalog (a namespace's name is not one).
+    /// `CATALOG_NOT_FOUND` for any other name (a namespace's name is not a catalog).
     pub async fn set_current_catalog(&self, name: &str) -> Result<(), KrishivError> {
         // `USE <name>` would switch the namespace for a namespace's name: the catalog is checked first.
-        let Some(known) = self
-            .list_catalogs()
-            .into_iter()
-            .find(|c| c.eq_ignore_ascii_case(name))
-        else {
+        if !name.eq_ignore_ascii_case(crate::catalog::CATALOG) {
             return Err(krishiv_common::error::CatalogNotFound {
                 catalog_name: krishiv_common::names::to_sql_id(name)?,
                 config: format!("\"spark.sql.catalog.{name}\""),
             }
             .into());
-        };
-        self.run(&format!("USE {}", quoted(&known))).await
+        }
+        self.run(&format!("USE {}", quoted(crate::catalog::CATALOG)))
+            .await
     }
 
-    /// The catalogs, sorted.
+    /// The catalogs: `spark_catalog` (Spark returns the loaded catalogs and `spark_catalog`; Krishiv loads no others,
+    /// and its `system` catalog is not listed, see [`Catalog::set_current_catalog`]).
     #[must_use]
     pub fn list_catalogs(&self) -> Vec<String> {
-        vec![crate::catalog::CATALOG.to_owned(), "system".to_owned()]
+        vec![crate::catalog::CATALOG.to_owned()]
     }
 
     /// The current namespace.

@@ -36,7 +36,7 @@ fn current_database_and_catalog() {
     assert_eq!(c.current_database(), "db1");
     let e = block_on(c.set_current_database("nope")).unwrap_err();
     assert_eq!(e.error_class().name(), "SCHEMA_NOT_FOUND");
-    assert_eq!(c.list_catalogs(), ["spark_catalog", "system"]);
+    assert_eq!(c.list_catalogs(), ["spark_catalog"]);
 }
 
 #[test]
@@ -582,7 +582,7 @@ fn the_system_catalog_lists_its_tables() {
         "{in_system:?}"
     );
     assert!(!in_system.iter().any(|t| t.name == "plain"));
-    block_on(c.set_current_catalog("system")).unwrap();
+    run(&s, "USE system");
     let bare = block_on(c.list_tables(None, None)).unwrap();
     assert!(bare.iter().any(|t| t.name == "sessions"), "{bare:?}");
     assert!(!bare.iter().any(|t| t.name == "plain"));
@@ -595,7 +595,7 @@ fn an_unknown_catalog_is_catalog_not_found_and_a_database_name_is_not_a_catalog(
     run(&s, "CREATE DATABASE d1");
     let c = s.catalog();
     let before = c.current_database();
-    for name in ["nope", "default", "d1"] {
+    for name in ["nope", "default", "d1", "system", "SYSTEM"] {
         let e = block_on(c.set_current_catalog(name)).unwrap_err();
         assert_eq!(
             e.error_class(),
@@ -610,8 +610,12 @@ fn an_unknown_catalog_is_catalog_not_found_and_a_database_name_is_not_a_catalog(
     );
     // A catalog's name matches whatever its case, also with `spark.sql.caseSensitive` on.
     s.conf().set("spark.sql.caseSensitive", "true").unwrap();
-    block_on(c.set_current_catalog("SYSTEM")).unwrap();
-    assert_eq!(c.current_catalog(), "system");
+    let e = block_on(c.set_current_catalog("SYSTEM")).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::CatalogNotFound,
+        "{e}"
+    );
     block_on(c.set_current_catalog("Spark_Catalog")).unwrap();
     assert_eq!(c.current_catalog(), "spark_catalog");
     let e = block_on(c.set_current_catalog("nope")).unwrap_err();
