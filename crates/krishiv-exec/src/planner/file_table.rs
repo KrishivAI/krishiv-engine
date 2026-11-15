@@ -89,7 +89,7 @@ impl FileTable {
         // general enough), so it could not run on a multi-threaded
         // runtime's task.
         let width = io.config().max_concurrent_requests.max(1);
-        let scan_options = ScanOptions::from_config(config);
+        let scan_options = ScanOptions::from_config(config).with_format_options(&options);
         let mut stats: Option<FileStatistics> = None;
         let mut known = true;
         let mut units = Some(0_u64);

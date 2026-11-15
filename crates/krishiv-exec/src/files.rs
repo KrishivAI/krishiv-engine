@@ -535,7 +535,8 @@ impl FileReads {
             }
             .into());
         }
-        let scan_options = krishiv_io::ScanOptions::from_config(&self.session);
+        let scan_options =
+            krishiv_io::ScanOptions::from_config(&self.session).with_format_options(&options);
         let schema = if merge {
             // Every file's own schema, merged by column name in first-seen order; names match
             // under `spark.sql.caseSensitive` (default false), so `id` and `ID` are one column.

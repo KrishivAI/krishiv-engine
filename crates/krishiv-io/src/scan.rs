@@ -100,6 +100,17 @@ impl ScanOptions {
             needs: MetadataNeeds::default(),
         }
     }
+
+    /// These settings with a read's own `ignoreCorruptFiles` option, which
+    /// wins over the SQL conf as in Spark's `FileSourceOptions`. Only formats
+    /// that declare the option (CSV, JSON; the conf is its fallback) carry it.
+    #[must_use]
+    pub fn with_format_options(mut self, o: &FormatOptions) -> Self {
+        if let Some(v) = o.bool("ignoreCorruptFiles") {
+            self.ignore_corrupt_files = v;
+        }
+        self
+    }
 }
 
 /// Prefetched bytes, held until the decoder asks for them.
