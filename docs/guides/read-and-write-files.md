@@ -71,5 +71,5 @@ The setting applies to the session. A directory that already has a `_krishiv_log
 ## Limits in 0.2.0
 
 - Local files work. The PyPI package of 0.2.0 does not include the object-store readers, so `s3://`, `gs://`, `az://`
-  and `https://` paths fail there (see [Krishiv 0.2.0](../releases/0.2.0.md)).
+  and `https://` paths fail there (see the 0.2.0 release notes).
 - This guide covers the options it shows. For the rest, see the [Python API reference](../reference/python/krishiv.sql.readwriter.md).
