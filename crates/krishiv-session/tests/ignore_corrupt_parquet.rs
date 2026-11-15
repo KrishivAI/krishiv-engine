@@ -187,8 +187,10 @@ fn without_the_key_a_corrupt_footer_fails_as_in_spark() {
 /// the rows decoded before the cut (1,474 rows summing to 611,601 over the
 /// fixtures `tests/fixtures/spark-4.2.0/ignore-corrupt-csv/`, its own gzip
 /// CSV of 1,000 rows and that file cut to half its length). Krishiv's CSV
-/// inference does not skip yet (known gap, a `krishiv-io` row of its own):
-/// the error stands, and is not turned into `UNABLE_TO_INFER_SCHEMA`.
+/// inference does not skip yet (known gap: the "RS-26 follow-up, text
+/// inference" row of `ops/queue-opus-b1.md`; when it lands this test expects
+/// Spark's rows): the error stands, and is not turned into
+/// `UNABLE_TO_INFER_SCHEMA`.
 #[test]
 fn a_csv_inference_error_is_not_read_as_an_empty_inference() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR"))
