@@ -1313,34 +1313,18 @@ impl Session {
                     p.location = renamed.location.join(rest);
                 }
             }
-            // Authorized before any file moves: the source must be deletable and the target creatable. The
-            // move acts on the canonical paths checked; the target's parents are made level by level and
-            // verified, and the target is verified again after the move (moved back if a link was swapped
-            // in). Not closed: a swap between that last verification and the move itself.
+            // Authorized before any file moves: the source must be deletable and the target creatable.
+            // Ordering: the files move first, on the canonical paths checked and verified after the move
+            // (`move_checked_dir`, which moves them back if a link was swapped in), then the catalog. If the
+            // catalog change fails the files move back. A move back that fails is the one state left where
+            // the catalog names an empty location: it is logged at error level with both paths and the
+            // statement fails with an internal error; the catalog is never pointed outside the checked paths.
             let source = self.deletable_dir(table).await?;
             let target = self
                 .authorize_path(&renamed.location, &[Privilege::Create], StatementClass::Ddl)
                 .await?;
-            if let Some(parent) = target.parent() {
-                self.create_checked_dir(parent, Privilege::Create, StatementClass::Ddl)?;
-            }
             let source = source.unwrap_or_else(|| table.location.clone());
-            std::fs::rename(&source, &target).map_err(|e| {
-                internal(format!(
-                    "cannot move {} to {}: {e}",
-                    table.location.display(),
-                    renamed.location.display()
-                ))
-            })?;
-            if std::fs::canonicalize(&target).ok().as_ref() != Some(&target) {
-                let _ = std::fs::rename(&target, &source);
-                return Err(crate::access::unresolved(
-                    self,
-                    StatementClass::Ddl,
-                    &format!("file:{}", target.display()),
-                    Privilege::Create,
-                ));
-            }
+            self.move_checked_dir(&source, &target, StatementClass::Ddl)?;
             moved = Some((target, source));
         }
         self.state
@@ -1350,7 +1334,7 @@ impl Session {
         if let Err(e) = store.create_table(renamed, CreateMode::ErrorIfExists) {
             let _ = store.create_table(table.clone(), CreateMode::Replace);
             if let Some((target, source)) = moved {
-                let _ = std::fs::rename(target, source);
+                self.move_back(&target, &source)?;
             }
             return Err(e);
         }

@@ -468,9 +468,10 @@ fn seen(r: Result<(), KrishivError>) -> String {
 
 /// `<dir>/d` made as each kind of entry a path cannot be resolved through, and as nothing: a missing
 /// directory, an unsearchable one (skipped when the test runs as root, which searches it anyway), a
-/// dangling link and a link loop.
+/// dangling link and a link loop. `probe` gets `<written>/d/x` (`written` is `dir` or a link to it).
 fn each_unresolvable_kind(
     dir: &Path,
+    written: &Path,
     mut probe: impl FnMut(&str) -> String,
 ) -> Vec<(String, String)> {
     use std::os::unix::fs::PermissionsExt;
@@ -493,7 +494,8 @@ fn each_unresolvable_kind(
             "link loop" => std::os::unix::fs::symlink(&d, &d).unwrap(),
             _ => {}
         }
-        out.push((kind.to_owned(), probe(&format!("{}/x", d.display()))));
+        let at = written.join("d").join("x");
+        out.push((kind.to_owned(), probe(&at.display().to_string())));
         if kind == "unsearchable" {
             std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o700)).unwrap();
             std::fs::remove_dir_all(&d).unwrap();
@@ -511,7 +513,7 @@ fn each_unresolvable_kind(
 fn an_unresolvable_path_is_denied_as_a_missing_one_is() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().canonicalize().unwrap();
-    let writes = each_unresolvable_kind(&dir, |path| {
+    let writes = each_unresolvable_kind(&dir, &dir, |path| {
         let s = Session::builder()
             .principal(Principal::new("ana", PrincipalKind::User))
             .access_policy(FirstPaths::new(0))
@@ -521,7 +523,7 @@ fn an_unresolvable_path_is_denied_as_a_missing_one_is() {
             s.sql("SELECT 1 AS a").await?.write().parquet(path).await
         }))
     });
-    let creates = each_unresolvable_kind(&dir, |path| {
+    let creates = each_unresolvable_kind(&dir, &dir, |path| {
         let s = Session::builder()
             .principal(Principal::new("ana", PrincipalKind::User))
             .access_policy(FirstPaths::new(1))
@@ -730,5 +732,152 @@ fn a_file_url_with_a_host_is_refused() {
         !log.0.lock().unwrap().iter().any(|p| p == "file:/evil/a"),
         "{:?}",
         log.0.lock().unwrap()
+    );
+}
+
+/// The `krishiv::audit` records of the current thread, as `field=value` lines.
+#[derive(Clone, Default)]
+struct AuditLines(Arc<std::sync::Mutex<Vec<String>>>);
+
+struct Fields(String);
+
+impl tracing::field::Visit for Fields {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        use std::fmt::Write as _;
+        let _ = write!(self.0, "{}={value:?} ", field.name());
+    }
+}
+
+impl tracing::Subscriber for AuditLines {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        if event.metadata().target() == "krishiv::audit" {
+            let mut fields = Fields(String::new());
+            event.record(&mut fields);
+            self.0.lock().unwrap().push(fields.0);
+        }
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// With a link above the part that cannot be resolved (`<tmp>/wh/o -> <tmp>/outside`, the entry
+/// `<tmp>/outside/d`), the denial a caller sees and the audit record it leaves are the same text whether
+/// `d` is missing, unsearchable, a dangling link or a loop: the path is named as a missing one's is
+/// (the part that resolves, resolved, and the rest appended), never as written.
+#[test]
+fn an_unresolvable_path_behind_a_link_is_named_as_a_missing_one_is() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    std::fs::create_dir_all(root.join("wh")).unwrap();
+    std::fs::create_dir_all(root.join("outside")).unwrap();
+    std::os::unix::fs::symlink(root.join("outside"), root.join("wh/o")).unwrap();
+    let audit = AuditLines::default();
+    // Nothing else in this binary sets a global subscriber (nextest runs each test in its own process).
+    let _ = tracing::subscriber::set_global_default(audit.clone());
+    let answers = each_unresolvable_kind(&root.join("outside"), &root.join("wh/o"), |path| {
+        let s = Session::builder()
+            .principal(Principal::new("audited", PrincipalKind::User))
+            .access_policy(FirstPaths::new(0))
+            .build()
+            .unwrap();
+        let answer = seen(block_on(async {
+            s.sql("SELECT 1 AS a").await?.write().parquet(path).await
+        }));
+        // The checks may run on the runtime's threads: the subscriber is process-wide, and only this
+        // test's principal is kept.
+        let records: Vec<String> = std::mem::take(&mut *audit.0.lock().unwrap())
+            .into_iter()
+            .filter(|r| r.contains("principal=audited"))
+            .collect();
+        assert!(!records.is_empty(), "no audit record for {path}");
+        format!("{answer}\naudit: {}", records.join("\n"))
+    });
+    let (_, missing) = &answers[0];
+    assert!(missing.starts_with(DENIED), "{missing}");
+    assert!(missing.contains("/outside/d/x"), "{missing}");
+    for (kind, answer) in &answers {
+        assert_eq!(answer, missing, "{kind}");
+    }
+}
+
+/// Swaps `<table>/a=1` for a link to `<tmp>/outside` (which holds a planted `b=2`) the first time the
+/// rename's target is asked about: the race between RENAME PARTITION's checks and its move.
+struct SwapPartitionParent {
+    table: std::path::PathBuf,
+    outside: std::path::PathBuf,
+    done: std::sync::atomic::AtomicBool,
+}
+
+impl AccessPolicy for SwapPartitionParent {
+    fn version(&self) -> PolicyVersion {
+        PolicyVersion(1)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _: &'a Principal,
+        securable: &'a Securable,
+        _: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        if let Securable::Path(p) = securable
+            && p.as_plain().is_some_and(|t| t.ends_with("/a=2/b=2"))
+            && !self.done.swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            std::fs::rename(self.table.join("a=1"), self.table.with_extension("a1-old")).unwrap();
+            std::os::unix::fs::symlink(&self.outside, self.table.join("a=1")).unwrap();
+        }
+        Box::pin(std::future::ready(Ok(AccessDecision::Allow)))
+    }
+}
+
+/// A link swapped above the source between RENAME PARTITION's checks and its move: the files behind the
+/// link are not moved into the table (they are put back), and the statement fails with 42501.
+#[test]
+fn a_link_swapped_under_a_partition_rename_moves_nothing_into_the_table() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    let wh = root.join("wh");
+    let outside = root.join("outside");
+    std::fs::create_dir_all(&wh).unwrap();
+    std::fs::create_dir_all(outside.join("b=2")).unwrap();
+    std::fs::write(outside.join("b=2/planted"), b"x").unwrap();
+    let policy = Arc::new(SwapPartitionParent {
+        table: wh.join("p"),
+        outside: outside.clone(),
+        done: std::sync::atomic::AtomicBool::new(false),
+    });
+    let (owner, s) = sessions(&wh.display().to_string(), policy);
+    run(
+        &owner,
+        "CREATE TABLE p (v INT, a INT, b INT) USING parquet PARTITIONED BY (a, b)",
+    )
+    .unwrap();
+    run(&owner, "ALTER TABLE p ADD PARTITION (a = 1, b = 2)").unwrap();
+    let r = run(
+        &s,
+        "ALTER TABLE p PARTITION (a = 1, b = 2) RENAME TO PARTITION (a = 2, b = 2)",
+    );
+    assert_eq!(outcome(r), DENIED);
+    assert!(
+        outside.join("b=2/planted").is_file(),
+        "the files behind the link left it"
+    );
+    assert!(
+        !wh.join("p/a=2/b=2/planted").exists(),
+        "moved into the table"
     );
 }

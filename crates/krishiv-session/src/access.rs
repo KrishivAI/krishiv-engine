@@ -633,7 +633,12 @@ pub(crate) fn physical(
         return Ok(at);
     };
     let Some(parts) = canonical_parts(Path::new(local)) else {
-        return Err(unresolved(session, class, &at.display, privilege));
+        return Err(unresolved(
+            session,
+            class,
+            &as_if_missing(Path::new(local)).unwrap_or(at.display),
+            privilege,
+        ));
     };
     Ok(LocatedPath {
         store: at.store,
@@ -673,6 +678,36 @@ pub(crate) fn lexical_dir(path: &Path) -> Result<LocatedPath, KrishivError> {
     }
     krishiv_exec::files::LocalPaths::new(StoreId::new(crate::session::LOCAL_STORE), "/")
         .locate(text)
+}
+
+/// The text a denial of the absolute path `local` names when `local` cannot be resolved: what [`physical`]
+/// would give if the entry that fails were missing. The longest prefix that resolves, resolved, and the rest
+/// appended as written (every error walked past, as for a missing entry), so the denial and its audit record
+/// read the same whether the entry is missing, unsearchable, a dangling link or a loop, with or without a
+/// link above it (no existence oracle). `None` if no prefix resolves (then the caller names it as written).
+fn as_if_missing(local: &Path) -> Option<String> {
+    let mut existing = local.to_path_buf();
+    let mut rest = Vec::new();
+    let resolved = loop {
+        if let Ok(resolved) = std::fs::canonicalize(&existing) {
+            break rest
+                .iter()
+                .rev()
+                .fold(resolved, |p: PathBuf, part| p.join(part));
+        }
+        rest.push(existing.file_name()?.to_owned());
+        if !existing.pop() {
+            return None;
+        }
+    };
+    let parts = resolved
+        .components()
+        .filter_map(|c| match c {
+            Component::Normal(p) => Some(p.to_str()),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(format!("file:/{}", parts.join("/")))
 }
 
 /// The denial of `privilege` on the path `display` that cannot be resolved: the same 42501 a policy's
