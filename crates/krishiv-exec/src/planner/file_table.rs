@@ -61,10 +61,11 @@ impl FileTable {
     /// (`spark.sql.files.maxPartitionBytes`, ...) over `worker_slots`
     /// drivers.
     ///
-    /// A file whose metadata read fails with an error the session's scan
-    /// settings skip (`spark.sql.files.ignoreCorruptFiles` for a footer that
-    /// cannot be read, `ignoreMissingFiles` for a file deleted after the
-    /// listing) is left out of the table, as Spark's scan skips it.
+    /// A file whose metadata read fails with an error the read's scan
+    /// settings skip (`ignoreCorruptFiles` for a footer that cannot be read,
+    /// `ignoreMissingFiles` for a file deleted after the listing; the read's
+    /// own option, else `spark.sql.files.*`, [`ScanOptions::for_read`]) is
+    /// left out of the table, as Spark's scan skips it.
     ///
     /// # Errors
     /// Errors reading a file's metadata that the scan settings do not skip.
@@ -89,7 +90,7 @@ impl FileTable {
         // general enough), so it could not run on a multi-threaded
         // runtime's task.
         let width = io.config().max_concurrent_requests.max(1);
-        let scan_options = ScanOptions::from_config(config);
+        let scan_options = ScanOptions::for_read(config, &options);
         let mut stats: Option<FileStatistics> = None;
         let mut known = true;
         let mut units = Some(0_u64);

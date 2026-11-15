@@ -2,7 +2,8 @@
 //! `spark.sql.files.ignoreCorruptFiles` over Parquet files whose footer
 //! cannot be read (RS-26): a directory of one good file and one cut short,
 //! in both name orders, and of a bad file alone, with and without
-//! `spark.sql.parquet.mergeSchema`. Expected answers: a Spark 4.2.0 run
+//! `spark.sql.parquet.mergeSchema`, and the per-read option against the
+//! session conf. Expected answers: a Spark 4.2.0 run
 //! (`spark-shell`, `local[1]`) over the same layout, a 1,000-row file of
 //! `id BIGINT, s STRING` written by Spark, cut to half its length or by its
 //! last 3 bytes (`tests/scripts/ignore_corrupt_parquet.scala`).
@@ -179,6 +180,93 @@ fn without_the_key_a_corrupt_footer_fails_as_in_spark() {
         assert_eq!(read(&s, &good_bad), want, "good_bad mergeSchema={merge}");
         assert_eq!(read(&s, &bad_good), footer, "bad_good mergeSchema={merge}");
     }
+}
+
+/// `count(*)` and `sum(id)` of `dir` read with the per-read
+/// `ignoreCorruptFiles` option `opt`, or the error class.
+fn read_with(s: &Session, dir: &Path, opt: bool) -> Result<(i64, i64), String> {
+    let df = s
+        .read()
+        .option("ignoreCorruptFiles", if opt { "true" } else { "false" })
+        .parquet([dir.to_str().unwrap().to_owned()]);
+    match block_on(async {
+        df.create_or_replace_temp_view("t").await?;
+        s.sql("SELECT count(*), sum(id) FROM t")
+            .await?
+            .collect()
+            .await
+    }) {
+        Ok(b) => Ok((
+            b[0].column(0).as_primitive::<Int64Type>().value(0),
+            b[0].column(1).as_primitive::<Int64Type>().value(0),
+        )),
+        Err(e) => Err(e.error_class().name().to_owned()),
+    }
+}
+
+/// The per-read `ignoreCorruptFiles` option takes precedence over
+/// `spark.sql.files.ignoreCorruptFiles`, in schema inference and in the scan
+/// (Spark 4.2.0 `FileSourceOptions`; the "option" rows of
+/// `tests/scripts/ignore_corrupt_parquet.scala`, identical for the conf on
+/// and off).
+#[test]
+fn the_read_option_takes_precedence_over_the_session_conf() {
+    let s = Session::new().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let good = good_file(&s, tmp.path());
+    let half = &good[..good.len() / 2];
+    let good_bad = layout(
+        tmp.path(),
+        "good_bad",
+        &[("a.parquet", &good), ("b.parquet", half)],
+    );
+    let bad_good = layout(
+        tmp.path(),
+        "bad_good",
+        &[("a.parquet", half), ("b.parquet", &good)],
+    );
+    let ok = Ok((1000, 499_500));
+    let footer = Err("FAILED_READ_FILE.CANNOT_READ_FILE_FOOTER".to_owned());
+    let no_hint = Err("FAILED_READ_FILE.NO_HINT".to_owned());
+    let infer = Err("UNABLE_TO_INFER_SCHEMA".to_owned());
+    let mut failures = vec![];
+    for conf in [false, true] {
+        block_on(s.sql(&format!("SET spark.sql.files.ignoreCorruptFiles = {conf}"))).unwrap();
+        for merge in [false, true] {
+            block_on(s.sql(&format!("SET spark.sql.parquet.mergeSchema = {merge}"))).unwrap();
+            for opt in [false, true] {
+                let cases = [
+                    (
+                        "good_bad",
+                        &good_bad,
+                        match (opt, merge) {
+                            (true, _) => &ok,
+                            (false, false) => &no_hint,
+                            (false, true) => &footer,
+                        },
+                    ),
+                    (
+                        "bad_good",
+                        &bad_good,
+                        match (opt, merge) {
+                            (true, true) => &ok,
+                            (true, false) => &infer,
+                            (false, _) => &footer,
+                        },
+                    ),
+                ];
+                for (name, dir, want) in cases {
+                    let got = read_with(&s, dir, opt);
+                    if &got != want {
+                        failures.push(format!(
+                            "{name} conf={conf} option={opt} mergeSchema={merge}: want {want:?}, got {got:?}"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// Only Parquet without `mergeSchema` infers from the first file alone, so
