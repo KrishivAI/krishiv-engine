@@ -149,10 +149,16 @@ fn append(
 ) -> (NewManifests, Attempt) {
     let io = env.reg.file_io();
     env.rt.block_on(async {
-        let mut new =
-            write_new_manifests(&io, m, files, snapshot_id, &format!("uuid-{snapshot_id}"))
-                .await
-                .unwrap();
+        let mut new = write_new_manifests(
+            &io,
+            m,
+            files,
+            snapshot_id,
+            &format!("uuid-{snapshot_id}"),
+            &mut Vec::new(),
+        )
+        .await
+        .unwrap();
         let a = prepare_attempt(&io, m, &mut new, ids(write_id), now(m), MAX)
             .await
             .unwrap();
@@ -376,7 +382,7 @@ fn a_new_branch_starts_from_the_current_snapshot_and_tags_are_refused() {
     let io = env.reg.file_io();
     let b = file(&env, &m1, "b.parquet", 2, &[(2, "b")]);
     let dev = env.rt.block_on(async {
-        let mut new = write_new_manifests(&io, &m1, vec![b], 402, "uuid-402")
+        let mut new = write_new_manifests(&io, &m1, vec![b], 402, "uuid-402", &mut Vec::new())
             .await
             .unwrap();
         let ids = WriteIds {
@@ -432,7 +438,7 @@ fn a_new_branch_starts_from_the_current_snapshot_and_tags_are_refused() {
         .metadata;
     let c = file(&env, &tagged, "c.parquet", 1, &[(3, "c")]);
     let e = env.rt.block_on(async {
-        let mut new = write_new_manifests(&io, &tagged, vec![c], 403, "uuid-403")
+        let mut new = write_new_manifests(&io, &tagged, vec![c], 403, "uuid-403", &mut Vec::new())
             .await
             .unwrap();
         let ids = WriteIds {
@@ -462,7 +468,7 @@ fn attempts_never_share_a_manifest_list() {
     let a = file(&env, &m0, "a.parquet", 1, &[(1, "a")]);
     let io = env.reg.file_io();
     let lists = env.rt.block_on(async {
-        let mut new = write_new_manifests(&io, &m0, vec![a], 501, "uuid-501")
+        let mut new = write_new_manifests(&io, &m0, vec![a], 501, "uuid-501", &mut Vec::new())
             .await
             .unwrap();
         let mut lists = Vec::new();
@@ -515,6 +521,7 @@ fn manifests_check_tuples_and_count_partitions_as_java() {
             vec![(spec_id, good.clone()), (spec_id, bad.clone())],
             601,
             "uuid-601",
+            &mut Vec::new(),
         ))
         .unwrap_err();
     assert!(e.to_string().contains("partition tuple of 0 values"), "{e}");
@@ -534,6 +541,7 @@ fn manifests_check_tuples_and_count_partitions_as_java() {
             vec![(spec_id, good)],
             602,
             "u",
+            &mut Vec::new(),
         ))
         .unwrap();
     assert_eq!(new.added["changed-partition-count"], "1");
@@ -559,7 +567,14 @@ fn manifests_check_tuples_and_count_partitions_as_java() {
     std::fs::create_dir_all(env.dir.path().join("flat/metadata")).unwrap();
     let new = env
         .rt
-        .block_on(write_new_manifests(&io, &flat, vec![(0, bad)], 603, "u"))
+        .block_on(write_new_manifests(
+            &io,
+            &flat,
+            vec![(0, bad)],
+            603,
+            "u",
+            &mut Vec::new(),
+        ))
         .unwrap();
     assert_eq!(new.added["changed-partition-count"], "1");
     assert_eq!(new.added["added-records"], "1");

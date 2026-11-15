@@ -86,7 +86,7 @@ use krishiv_exec::{GlobalState, LocalState, Sink, SinkStatus, TaskContext};
 use krishiv_types::batch::Batch;
 use tokio::sync::{mpsc, oneshot};
 
-use super::append::{WriteIds, metadata_dir, write_new_manifests};
+use super::append::{WriteIds, write_new_manifests};
 use super::commit::{CommitClock, CommitContext, CommitTable, commit_append};
 use super::data_file::{WrittenDataFile, data_file};
 use super::storage::Registered;
@@ -347,20 +347,15 @@ impl IcebergWriteSink {
         };
         let snapshot_id = snapshot_id(&t.base);
         let commit_uuid = random_uuid();
-        let mut specs: Vec<i32> = files.iter().map(|f| f.spec_id).collect();
-        specs.sort_unstable();
-        specs.dedup();
-        // `write_new_manifests` names them `<dir>/<uuid>-m<n>.avro`, one per spec.
-        let dir = metadata_dir(&t.base);
-        written.manifests = (0..specs.len())
-            .map(|n| format!("{dir}/{commit_uuid}-m{n}.avro"))
-            .collect();
         let mut new = match write_new_manifests(
             &t.file_io,
             &t.base,
             entries,
             snapshot_id,
             &commit_uuid,
+            // Each manifest's path is in the list before its file exists, so
+            // a failure or a dropped finalize deletes what was written.
+            &mut written.manifests,
         )
         .await
         {

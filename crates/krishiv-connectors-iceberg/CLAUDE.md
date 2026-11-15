@@ -40,14 +40,21 @@ object storage with hash directories; the deprecated path properties honoured, a
 from size, rows and `FileMetrics`; sort order 0 unless claimed); `write_metrics.rs` `WriteMetricsConfig` (Java's
 `MetricsConfig.from`); tests `data_file_tests.rs` (Java's partition paths and hash directories, a built file through a
 manifest and back) · `append.rs` (PR-36a) an append's metadata, as Java's `SnapshotProducer`/`MergeAppend`:
-`write_new_manifests` once per write (one manifest per spec, entries with the write's snapshot id and inherited
-sequence numbers; no rolling at the target size), `prepare_attempt` per commit attempt (the list through `merge.rs`'s
+`write_new_manifests` once per write (each spec's files through `rolling.rs`, entries with the write's snapshot id and inherited
+sequence numbers; each path pushed onto the caller's `written` list before its file exists, so `sink.rs` deletes what a failed or dropped write left), `prepare_attempt` per commit attempt (the list through `merge.rs`'s
 `arrange`: new manifests reset to unassigned, then the base's data manifests, then its delete manifests;
 sequence number `last-sequence-number` + 1; v3 `first-row-id`/`added-rows`; summary with `total-*`,
 `manifests-created`/`-kept`/`-replaced`, `engine-name`, `krishiv.write-id`/`krishiv.query-id`; requirements
 `assert-table-uuid`/`assert-ref-snapshot-id`, updates `add-snapshot`/`set-snapshot-ref`); tests `append_tests.rs`
 (committed as a catalog applies a request, read back through SQL and iceberg-rust's planning, a stale attempt refused
-and rebuilt, v3 lineage) · `merge.rs` (PR-36a, design note §6.2) manifest merging as Java's `MergeAppend`
+and rebuilt, v3 lineage) · `rolling.rs` (PR-36a, owner 2026-11-15) the new manifests' layout as Java's `writeDataManifests`: groups
+`max(1, min(4, round_half_up(n / 10,000)))` of `ceil(n / groups)` (`manifestWriterCount`, `divide`; Java's pool is
+the host's worker threads, Krishiv fixes 4), each rolled as `RollingManifestWriter` (every 250 entries, at
+`commit.manifest.target-size-bytes`), the length being iceberg-rust's exact encoded size of the entries so far, found
+by encoding prefixes in memory (exponential then binary search; Java's is its flushed, compressed length, a
+divergence in where the split falls); tests `rolling_tests.rs` (against a transcription of Java's loop, the
+14,999/15,000/25,000/45,001 group boundaries, names and the written list, rolled manifests committed and merged)
+· `merge.rs` (PR-36a, design note §6.2) manifest merging as Java's `MergeAppend`
 (`MergingSnapshotProducer.apply`, `ManifestMergeManager`, `BinPacking.ListPacker.packEnd`, apache-iceberg 1.12.0):
 `commit.manifest.{target-size-bytes,min-count-to-merge}`, `commit.manifest-merge.enabled` (`MergeConfig`, garbage
 `KRISHIV_UNSUPPORTED_FEATURE`); base manifests without added or existing files left out (`shouldKeep`); data and
