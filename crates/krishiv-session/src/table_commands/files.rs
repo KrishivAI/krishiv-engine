@@ -88,15 +88,20 @@ impl Session {
             let made = match std::fs::create_dir(&at) {
                 Ok(()) => dir_identity(&at),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => None,
-                Err(e) => return Err(internal(format!("cannot create {}: {e}", at.display()))),
+                Err(e) => {
+                    return Err(fs_failed(
+                        "cannot create a directory of the statement",
+                        &at,
+                        None,
+                        &e,
+                    ));
+                }
             };
             match std::fs::canonicalize(&at) {
                 Ok(now) if now == at => {}
                 now => {
-                    if let (Some(made), Ok(now)) = (made, now)
-                        && dir_identity(&now) == Some(made)
-                    {
-                        let _ = std::fs::remove_dir(now);
+                    if let Ok(now) = now {
+                        remove_made(made, &now);
                     }
                     return Err(crate::access::unresolved(
                         self,
@@ -130,13 +135,8 @@ impl Session {
         if let Some(parent) = target.parent() {
             self.create_checked_dir(parent, Privilege::Create, class)?;
         }
-        std::fs::rename(source, target).map_err(|e| {
-            internal(format!(
-                "cannot move {} to {}: {e}",
-                source.display(),
-                target.display()
-            ))
-        })?;
+        std::fs::rename(source, target)
+            .map_err(|e| fs_failed("cannot move a directory", source, Some(target), &e))?;
         let in_place = |p: &Path| std::fs::canonicalize(p).is_ok_and(|now| now == p);
         if in_place(target) && source.parent().is_none_or(in_place) {
             return Ok(());
@@ -265,6 +265,28 @@ fn move_back_failed(went: &Option<PathBuf>, came: &Option<PathBuf>) -> KrishivEr
     )
 }
 
+/// The caller's `INTERNAL_ERROR` for a failed file system step (`what`, naming no path and no I/O error,
+/// which could describe a directory behind a swapped link), with the paths and the error in an error-level
+/// server log.
+fn fs_failed(what: &str, path: &Path, other: Option<&Path>, e: &std::io::Error) -> KrishivError {
+    tracing::error!(
+        target: "krishiv::session",
+        path = %path.display(),
+        other = ?other,
+        error = %e,
+        "{what}"
+    );
+    internal(format!("{what}; the server log names it"))
+}
+
+/// Removes the empty directory `now` only if it is the one made, `made` (its device and inode right after
+/// the mkdir): a second swap cannot point the removal at another directory.
+fn remove_made(made: Option<(u64, u64)>, now: &Path) {
+    if made.is_some() && dir_identity(now) == made {
+        let _ = std::fs::remove_dir(now);
+    }
+}
+
 /// The device and inode of the directory `path` resolves to (`None` if it is not one, or off Unix).
 fn dir_identity(path: &Path) -> Option<(u64, u64)> {
     #[cfg(unix)]
@@ -314,4 +336,76 @@ fn clear_dir(dir: &Path) -> Result<(), KrishivError> {
         removed.map_err(|e| internal(format!("cannot delete {}: {e}", path.display())))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{dir_identity, remove_made};
+
+    #[test]
+    fn only_the_directory_made_is_removed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let made = tmp.path().join("made");
+        let other = tmp.path().join("other");
+        std::fs::create_dir(&made).unwrap();
+        std::fs::create_dir(&other).unwrap();
+        let identity = dir_identity(&made);
+        assert!(identity.is_some());
+        // A second swap points the removal at another empty directory: it stays.
+        remove_made(identity, &other);
+        assert!(other.is_dir());
+        remove_made(None, &made);
+        assert!(made.is_dir());
+        remove_made(identity, &made);
+        assert!(!made.exists());
+    }
+
+    #[test]
+    fn a_failed_mkdir_or_move_is_an_internal_error_naming_no_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        std::fs::write(root.join("file-secret"), b"").unwrap();
+        let session = crate::Session::new().unwrap();
+        let mkdir = session
+            .create_checked_dir(
+                &root.join("file-secret/sub"),
+                krishiv_plan::analyzer::Privilege::Create,
+                krishiv_sql::StatementClass::Ddl,
+            )
+            .unwrap_err();
+        let moved = session
+            .move_checked_dir(
+                &root.join("missing-secret"),
+                &root.join("target-secret"),
+                krishiv_sql::StatementClass::Ddl,
+            )
+            .unwrap_err();
+        for e in [mkdir, moved] {
+            assert_eq!(
+                e.error_class(),
+                krishiv_common::error::ErrorClass::InternalError
+            );
+            let text = e.to_string();
+            assert!(
+                !text.contains("secret") && !text.contains("os error"),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_failed_move_back_is_an_internal_error_naming_no_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let from = tmp.path().join("went-secret");
+        let to = tmp.path().join("came-secret");
+        let session = crate::Session::new().unwrap();
+        let e = session.move_back(&from, &to).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            krishiv_common::error::ErrorClass::InternalError
+        );
+        let text = e.to_string();
+        assert!(!text.contains("secret"), "{text}");
+        assert!(!text.contains(&*tmp.path().to_string_lossy()), "{text}");
+    }
 }

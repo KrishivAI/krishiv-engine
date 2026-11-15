@@ -712,6 +712,10 @@ fn as_if_missing(local: &Path) -> Option<String> {
 
 /// The denial of `privilege` on the path `display` that cannot be resolved: the same 42501 a policy's
 /// denial gives, with the audit record a denial writes.
+///
+/// `privilege` is the first one the caller would ask: a policy denying a missing path denies that one
+/// first too, unless it grants it and denies a later one, which a caller sees only on paths inside its
+/// rights.
 pub(crate) fn unresolved(
     session: &Session,
     class: StatementClass,
