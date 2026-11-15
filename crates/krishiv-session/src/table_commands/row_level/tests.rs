@@ -113,20 +113,26 @@ impl Files {
 }
 
 #[derive(Debug)]
-struct Table(Arc<Files>);
+struct Table {
+    files: Arc<Files>,
+    row_level: bool,
+    output: bool,
+}
 
 impl TableProvider for Table {
     fn scan(&self) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
-        self.0.table(None, false).scan()
+        self.files.table(None, false).scan()
     }
 
     fn row_level(&self, _op: RowLevelOperation) -> Option<Arc<dyn RowLevelTable>> {
-        Some(Arc::new(RowLevel(Arc::clone(&self.0))))
+        self.row_level.then(|| {
+            Arc::new(RowLevel(Arc::clone(&self.files), self.output)) as Arc<dyn RowLevelTable>
+        })
     }
 }
 
 #[derive(Debug)]
-struct RowLevel(Arc<Files>);
+struct RowLevel(Arc<Files>, bool);
 
 impl RowLevelTable for RowLevel {
     fn capabilities(&self) -> RowLevelCapabilities {
@@ -150,6 +156,9 @@ impl RowLevelTable for RowLevel {
     }
 
     fn output(&self, counts: &RowLevelCounts) -> Option<RecordBatch> {
+        if !self.1 {
+            return None;
+        }
         let schema = Arc::new(Schema::new(vec![Field::new(
             "num_affected_rows",
             ArrowType::Int64,
@@ -218,8 +227,13 @@ impl Sink for Swap {
     }
 }
 
-/// A session reading `files` as the hidden table it returns the name of.
+/// A session reading `files` as the temporary table `t`.
 fn session(files: &Arc<Files>) -> (Session, String) {
+    session_with(files, true, true)
+}
+
+/// [`session`] with or without a row-level table and an output.
+fn session_with(files: &Arc<Files>, row_level: bool, output: bool) -> (Session, String) {
     let session = Session::new().unwrap();
     let columns = vec![
         TableColumn {
@@ -239,7 +253,11 @@ fn session(files: &Arc<Files>) -> (Session, String) {
         "t",
         crate::catalog::TempTable::Provider {
             columns,
-            table: Arc::new(Table(Arc::clone(files))),
+            table: Arc::new(Table {
+                files: Arc::clone(files),
+                row_level,
+                output,
+            }),
         },
     );
     let name = "t".to_owned();
@@ -253,16 +271,35 @@ fn run(
     condition: Option<&str>,
     assignments: Vec<Assignment>,
 ) -> Vec<RecordBatch> {
+    let df = try_run(session, name, op, "t", condition, assignments)
+        .unwrap()
+        .unwrap();
+    block_on(df.collect()).unwrap()
+}
+
+fn try_run(
+    session: &Session,
+    name: &str,
+    op: RowLevelOperation,
+    alias: &str,
+    condition: Option<&str>,
+    assignments: Vec<Assignment>,
+) -> Result<Option<crate::dataframe::DataFrame>, krishiv_common::error::KrishivError> {
     let s = session.clone();
     let quoted = format!("`{name}`");
+    let alias = alias.to_owned();
     let condition = condition.map(str::to_owned);
-    let df = block_on(session.on_executor(async move {
-        s.run_row_level(op, &quoted, "t", condition.as_deref(), &assignments)
+    block_on(session.on_executor(async move {
+        s.run_row_level(op, &quoted, &alias, condition.as_deref(), &assignments)
             .await
     }))
-    .unwrap()
-    .unwrap();
-    block_on(df.collect()).unwrap()
+}
+
+fn set(column: &str, value: &str) -> Assignment {
+    Assignment {
+        column: column.to_owned(),
+        value: Some(value.to_owned()),
+    }
 }
 
 fn affected(batches: &[RecordBatch]) -> i64 {
@@ -336,22 +373,117 @@ fn row_level_delete_without_condition_empties_the_table() {
 fn row_level_failed_rewrite_commits_nothing() {
     let files = Files::new();
     let (session, name) = session(&files);
-    let s = session.clone();
-    let quoted = format!("`{name}`");
-    let result = block_on(session.on_executor(async move {
-        s.run_row_level(
-            RowLevelOperation::Update,
-            &quoted,
-            "t",
-            Some("id = 4"),
-            &[Assignment {
-                column: "id".to_owned(),
-                value: Some("CAST(s AS BIGINT)".to_owned()),
-            }],
-        )
-        .await
-    }));
-    assert!(result.is_err());
+    // `s4` is no number: the ANSI store assignment fails the hit row.
+    let e = try_run(
+        &session,
+        &name,
+        RowLevelOperation::Update,
+        "t",
+        Some("id = 4"),
+        vec![set("id", "CAST(s AS BIGINT) + 0")],
+    )
+    .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::CastInvalidInput,
+        "{e}"
+    );
     assert_eq!(files.commits.load(Ordering::Relaxed), 0);
     assert_eq!(files.ids(), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+}
+
+#[test]
+fn row_level_refusal_unchanged() {
+    let files = Files::new();
+    let (session, name) = session_with(&files, false, true);
+    let none = try_run(
+        &session,
+        &name,
+        RowLevelOperation::Delete,
+        "t",
+        None,
+        vec![],
+    )
+    .unwrap();
+    assert!(none.is_none());
+    assert_eq!(files.commits.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn row_level_counts_output() {
+    // A table without an output: no rows, no columns.
+    let files = Files::new();
+    let (session, name) = session_with(&files, true, false);
+    let df = try_run(
+        &session,
+        &name,
+        RowLevelOperation::Delete,
+        "t",
+        Some("id = 1"),
+        vec![],
+    )
+    .unwrap()
+    .unwrap();
+    let batches = block_on(df.collect()).unwrap();
+    assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 0);
+    assert_eq!(files.ids(), [2, 3, 4, 5, 6, 7, 8, 9]);
+}
+
+#[test]
+fn the_condition_and_values_resolve_under_the_statements_alias() {
+    let files = Files::new();
+    let (session, name) = session(&files);
+    let df = try_run(
+        &session,
+        &name,
+        RowLevelOperation::Update,
+        "x",
+        Some("x.id = 2"),
+        vec![set("s", "concat(x.s, '!')")],
+    )
+    .unwrap()
+    .unwrap();
+    let batches = block_on(df.collect()).unwrap();
+    assert_eq!(affected(&batches), 1);
+}
+
+/// The new value is computed for hit rows only: here it divides by zero on the row before.
+#[test]
+fn a_new_value_is_evaluated_on_hit_rows_only() {
+    let files = Files::new();
+    let (session, name) = session(&files);
+    let out = run(
+        &session,
+        &name,
+        RowLevelOperation::Update,
+        Some("id = 5"),
+        vec![set("id", "10 div (id - 4)")],
+    );
+    assert_eq!(affected(&out), 1);
+    assert_eq!(files.ids(), [1, 2, 3, 4, 6, 7, 8, 9, 10]);
+}
+
+#[test]
+fn assignments_are_checked_before_anything_runs() {
+    use krishiv_common::error::ErrorClass;
+    let files = Files::new();
+    let (session, name) = session(&files);
+    let class = |cond: Option<&str>, sets: Vec<Assignment>| {
+        try_run(&session, &name, RowLevelOperation::Update, "t", cond, sets)
+            .unwrap_err()
+            .error_class()
+    };
+    assert_eq!(
+        class(None, vec![set("id", "1"), set("ID", "2")]),
+        ErrorClass::DuplicateAssignments
+    );
+    assert_eq!(
+        class(None, vec![set("id", "'x'")]),
+        ErrorClass::IncompatibleDataForTableCannotSafelyCast
+    );
+    assert_eq!(
+        class(Some("rand() > 0.5"), vec![set("id", "1")]),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    assert_eq!(files.commits.load(Ordering::Relaxed), 0);
 }

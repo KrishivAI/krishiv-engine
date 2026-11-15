@@ -175,6 +175,10 @@ pub trait RowLevelTable: Send + Sync + fmt::Debug {
     /// written from the sink's rows added, after the table's conflict check against
     /// `request.read_filter`. A failed or cancelled statement leaves nothing visible. It is
     /// called with no touched files too: whether an empty change commits is the table's choice.
+    /// The commit is based on this table's own pinned snapshot, the one [`scan`](Self::scan)
+    /// read (newer commits are conflict-checked against it); the planner keeps one instance for
+    /// the whole statement. A distributed run, where a worker resolves the table again, needs
+    /// the read version carried in the request first.
     ///
     /// # Errors
     /// `UNSUPPORTED_FEATURE.TABLE_OPERATION` for an operation the table refuses.
@@ -387,5 +391,164 @@ impl Source for Reordered {
 
     fn extra_metrics(&self) -> crate::metrics::ExtraMetrics {
         self.inner.extra_metrics()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use arrow_array::{ArrayRef, BinaryViewArray, Int32Array, Int64Array};
+    use krishiv_types::batch::Batch as KBatch;
+
+    use super::*;
+    use crate::planner::{MemoryTable, TableProvider as _};
+
+    /// A table of `a INT` whose scan reads the row id as the file scan does (appended last,
+    /// `BinaryView` file, `Int64` position), and records the pushdowns it was built with.
+    #[derive(Debug, Default)]
+    struct Taking {
+        built: Mutex<Vec<(Option<Vec<String>>, bool)>>,
+    }
+
+    fn table_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]))
+    }
+
+    impl ScanPushdown for Taking {
+        fn table_schema(&self) -> SchemaRef {
+            table_schema()
+        }
+
+        fn filter_pushdown(&self, _: &PushedFilter) -> FilterPushdown {
+            FilterPushdown::Exact
+        }
+
+        fn supports_take(&self) -> bool {
+            true
+        }
+
+        fn build(&self, pushdowns: ScanPushdowns) -> Result<Arc<dyn Source>> {
+            self.built
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push((
+                    pushdowns
+                        .projection
+                        .as_ref()
+                        .map(|p| p.iter().map(|c| c.root().to_owned()).collect()),
+                    pushdowns.row_id,
+                ));
+            let mut fields = vec![Field::new("a", DataType::Int32, true)];
+            let mut columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![1, 2]))];
+            if pushdowns.row_id {
+                fields.push(Field::new(ROW_FILE_COLUMN, DataType::BinaryView, false));
+                fields.push(Field::new(ROW_POSITION_COLUMN, DataType::Int64, false));
+                columns.push(Arc::new(BinaryViewArray::from_iter_values([b"f", b"f"])));
+                columns.push(Arc::new(Int64Array::from(vec![0, 1])));
+            }
+            let schema = Arc::new(Schema::new(fields));
+            let batch = RecordBatch::try_new(Arc::clone(&schema), columns)
+                .map_err(|e| crate::error::internal(e.to_string()))?;
+            let inner = ScanPushdowns {
+                projection: pushdowns.projection.clone().map(|mut p| {
+                    if pushdowns.row_id {
+                        p.push(ColumnPath::new(ROW_FILE_COLUMN));
+                        p.push(ColumnPath::new(ROW_POSITION_COLUMN));
+                    }
+                    p
+                }),
+                ..ScanPushdowns::default()
+            };
+            MemoryTable::new(schema, vec![KBatch::new(batch)])
+                .scan()?
+                .build(inner)
+        }
+    }
+
+    #[test]
+    fn the_row_id_is_two_columns_of_the_file_scans_types_and_no_filter_goes_below() {
+        let scan = RowIdScan::new(Arc::new(Taking::default())).unwrap();
+        let schema = scan.table_schema();
+        let types: Vec<_> = schema
+            .fields()
+            .iter()
+            .map(|f| (f.name().clone(), f.data_type().clone()))
+            .collect();
+        assert_eq!(
+            types,
+            [
+                ("a".to_owned(), DataType::Int32),
+                (ROW_FILE_COLUMN.to_owned(), DataType::BinaryView),
+                (ROW_POSITION_COLUMN.to_owned(), DataType::Int64),
+            ]
+        );
+        let filter = PushedFilter::opaque(Arc::new(crate::operators::FnPredicate(
+            |b: &RecordBatch| Ok(arrow_array::BooleanArray::from(vec![true; b.num_rows()])),
+        )));
+        assert_eq!(scan.filter_pushdown(&filter), FilterPushdown::Unsupported);
+    }
+
+    #[test]
+    fn a_projection_asks_for_the_row_id_only_when_it_names_it_and_keeps_its_order() {
+        let inner = Arc::new(Taking::default());
+        let scan = RowIdScan::new(Arc::clone(&inner) as Arc<dyn ScanPushdown>).unwrap();
+        let p = ScanPushdowns {
+            projection: Some(vec![ColumnPath::new(ROW_FILE_COLUMN), ColumnPath::new("a")]),
+            ..ScanPushdowns::default()
+        };
+        let source = scan.build(p).unwrap();
+        let names: Vec<String> = source
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
+        assert_eq!(names, [ROW_FILE_COLUMN.to_owned(), "a".to_owned()]);
+        let p = ScanPushdowns {
+            projection: Some(vec![ColumnPath::new("a")]),
+            ..ScanPushdowns::default()
+        };
+        let source = scan.build(p).unwrap();
+        assert_eq!(source.schema().fields().len(), 1);
+        let built = inner.built.lock().unwrap().clone();
+        assert_eq!(
+            built,
+            [
+                (Some(vec!["a".to_owned()]), true),
+                (Some(vec!["a".to_owned()]), false),
+            ]
+        );
+        // No projection: every column and the row id.
+        let source = scan.build(ScanPushdowns::default()).unwrap();
+        assert_eq!(source.schema().fields().len(), 3);
+    }
+
+    #[test]
+    fn a_scan_without_row_ids_or_with_a_row_id_column_is_refused() {
+        let plain = MemoryTable::new(table_schema(), Vec::new()).scan().unwrap();
+        assert!(RowIdScan::new(plain).is_err());
+        #[derive(Debug)]
+        struct Named(SchemaRef);
+        impl ScanPushdown for Named {
+            fn table_schema(&self) -> SchemaRef {
+                Arc::clone(&self.0)
+            }
+            fn filter_pushdown(&self, _: &PushedFilter) -> FilterPushdown {
+                FilterPushdown::Unsupported
+            }
+            fn supports_take(&self) -> bool {
+                true
+            }
+            fn build(&self, _: ScanPushdowns) -> Result<Arc<dyn Source>> {
+                Err(crate::error::internal("unused".to_owned()))
+            }
+        }
+        let clash = Arc::new(Schema::new(vec![Field::new(
+            ROW_POSITION_COLUMN,
+            DataType::Int64,
+            false,
+        )]));
+        assert!(RowIdScan::new(Arc::new(Named(clash))).is_err());
     }
 }

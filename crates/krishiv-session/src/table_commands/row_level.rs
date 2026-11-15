@@ -34,7 +34,10 @@ use arrow_array::cast::AsArray;
 use arrow_array::{Array, RecordBatch};
 use arrow_schema::DataType as ArrowType;
 use futures::StreamExt;
-use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
+use krishiv_common::error::{
+    DuplicateAssignments, IncompatibleDataForTableCannotSafelyCast, KrishivError,
+    KrishivUnsupportedFeature,
+};
 use krishiv_exec::physical::{PhysNode, TableWriteRequest};
 use krishiv_exec::planner::{
     RowLevelCounts, RowLevelOperation, RowLevelTable, RowLevelWrite, TableProvider,
@@ -101,14 +104,23 @@ impl Session {
         assignments: &[Assignment],
     ) -> Result<Option<DataFrame>, KrishivError> {
         let plain = self.with_locals(Vec::new());
-        let probe = plain
+        // A table that cannot be planned keeps the statement's old refusal (a v1 table's error
+        // class does not change): only a table offering a row-level table runs it.
+        let Ok(probe) = plain
             .analyze_variable_query(&format!("SELECT * FROM {quoted}"))
-            .await?;
-        let (_, physical) = plain.physical(&probe.analyzed, &probe.env).await?;
+            .await
+        else {
+            return Ok(None);
+        };
+        let Ok((_, physical)) = plain.physical(&probe.analyzed, &probe.env).await else {
+            return Ok(None);
+        };
         let Some(scan) = first_scan(physical.root()) else {
             return Ok(None);
         };
-        let provider = probe.env.catalog.provider(&scan)?;
+        let Ok(provider) = probe.env.catalog.provider(&scan) else {
+            return Ok(None);
+        };
         let Some(table) = provider.row_level(op) else {
             return Ok(None);
         };
@@ -124,6 +136,34 @@ impl Session {
                 char_varchar: declared.clone(),
             })
             .collect();
+        let mut seen: Vec<String> = Vec::new();
+        let mut duplicates: Vec<String> = Vec::new();
+        for a in assignments {
+            let key = a.column.to_lowercase();
+            if seen.contains(&key) {
+                if !duplicates.contains(&key) {
+                    duplicates.push(key);
+                }
+            } else {
+                seen.push(key);
+            }
+        }
+        if !duplicates.is_empty() {
+            let names: Vec<String> = assignments
+                .iter()
+                .filter(|a| duplicates.contains(&a.column.to_lowercase()))
+                .map(|a| ident(&a.column))
+                .fold(Vec::new(), |mut acc, n| {
+                    if !acc.iter().any(|m: &String| m.eq_ignore_ascii_case(&n)) {
+                        acc.push(n);
+                    }
+                    acc
+                });
+            return Err(DuplicateAssignments {
+                name_list: names.join(", "),
+            }
+            .into());
+        }
         for a in assignments {
             if a.value.is_none() {
                 return Err(KrishivUnsupportedFeature {
@@ -156,6 +196,17 @@ impl Session {
         });
         let hit =
             condition.map_or_else(|| "true".to_owned(), |c| format!("coalesce(({c}), false)"));
+        self.check_assignments(
+            quoted,
+            alias,
+            &hit,
+            &columns,
+            &with_row_id,
+            &table,
+            op,
+            assignments,
+        )
+        .await?;
 
         // 1. The touched files and the hit count, over the whole snapshot.
         let (whole, whole_entry) = self.state.catalog.put_hidden_provider(
@@ -184,31 +235,36 @@ impl Session {
                 files: Some(touched.clone()),
             }),
         );
-        let select: Vec<String> = columns
-            .iter()
-            .map(|c| {
-                let name = ident(&c.name);
-                match assignments
-                    .iter()
-                    .rfind(|a| a.column.eq_ignore_ascii_case(&c.name))
-                {
-                    Some(a) => format!(
-                        "CAST(CASE WHEN {hit} THEN ({value}) ELSE {alias}.{name} END AS {ty}) AS {name}",
-                        value = a.value.as_deref().unwrap_or("NULL"),
-                        alias = ident(alias),
-                        ty = c.data_type.sql(),
-                    ),
-                    None => format!("{}.{name}", ident(alias)),
-                }
-            })
-            .collect();
+        let column_of =
+            |name: &str| crate::functions::expr(&format!("{}.{}", ident(alias), ident(name)));
+        let mut select = Vec::with_capacity(columns.len());
+        for c in &columns {
+            let value = match assignments
+                .iter()
+                .find(|a| a.column.eq_ignore_ascii_case(&c.name))
+            {
+                // Lazy, as `CASE`: the new value is computed for hit rows only, and stored as
+                // Spark's ANSI store assignment stores it whatever `spark.sql.ansi.enabled` says.
+                Some(a) => crate::functions::call_function(
+                    "if",
+                    [
+                        crate::functions::expr(&hit)?,
+                        crate::functions::expr(a.value.as_deref().unwrap_or("NULL"))?
+                            .cast_ansi(c.data_type.clone()),
+                        column_of(&c.name)?,
+                    ],
+                ),
+                None => column_of(&c.name)?,
+            };
+            select.push(value.alias(&c.name));
+        }
         let mut rewrite = self
             .hidden_frame(&part, part_entry, &with_row_id)
             .alias(alias);
         if op == RowLevelOperation::Delete {
             rewrite = rewrite.filter(crate::functions::expr(&format!("NOT {hit}"))?);
         }
-        let rewrite = rewrite.select_expr(&select)?;
+        let rewrite = rewrite.select(select);
         let analysis = rewrite.action_analysis().await?;
         let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
         let target = first_scan(physical.root())
@@ -236,6 +292,78 @@ impl Session {
 }
 
 impl Session {
+    /// The checks of the statement's condition and new values before anything runs: the
+    /// condition is deterministic (the find and the rewrite each evaluate it), and each new
+    /// value's type may be stored in its column (Spark's ANSI store assignment, as an `INSERT`
+    /// checks it: `INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST`).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the statement's parts, each read once"
+    )]
+    async fn check_assignments(
+        &self,
+        quoted: &str,
+        alias: &str,
+        hit: &str,
+        columns: &[TableColumn],
+        with_row_id: &[TableColumn],
+        table: &Arc<dyn RowLevelTable>,
+        op: RowLevelOperation,
+        assignments: &[Assignment],
+    ) -> Result<(), KrishivError> {
+        let (name, entry) = self.state.catalog.put_hidden_provider(
+            with_row_id.to_vec(),
+            Arc::new(Target {
+                table: Arc::clone(table),
+                op,
+                files: Some(Vec::new()),
+            }),
+        );
+        let mut texts: Vec<String> = assignments
+            .iter()
+            .map(|a| a.value.clone().unwrap_or_else(|| "NULL".to_owned()))
+            .collect();
+        texts.push(hit.to_owned());
+        let probe = self
+            .hidden_frame(&name, entry, with_row_id)
+            .alias(alias)
+            .select_expr(&texts)?;
+        let analysis = probe.action_analysis().await?;
+        let deterministic = match &analysis.analyzed.plan.root().node {
+            krishiv_plan::PlanNode::Project { exprs, .. } => exprs
+                .last()
+                .is_none_or(|e| krishiv_plan::is_deterministic(e)),
+            _ => true,
+        };
+        if !deterministic {
+            return Err(KrishivUnsupportedFeature {
+                feature: format!("{} with a non-deterministic condition", op.name()),
+            }
+            .into());
+        }
+        for (a, out) in assignments.iter().zip(&analysis.analyzed.output) {
+            let Some(column) = columns
+                .iter()
+                .find(|c| c.name.eq_ignore_ascii_case(&a.column))
+            else {
+                continue;
+            };
+            if !super::can_store(&out.data_type, &column.data_type) {
+                return Err(IncompatibleDataForTableCannotSafelyCast {
+                    table_name: quoted.to_owned(),
+                    col_name: ident(&column.name),
+                    src_type: format!("\"{}\"", out.data_type.catalog_string().to_uppercase()),
+                    target_type: format!(
+                        "\"{}\"",
+                        column.data_type.catalog_string().to_uppercase()
+                    ),
+                }
+                .into());
+            }
+        }
+        Ok(())
+    }
+
     /// A frame reading the hidden table `name` (`columns`), which owns `entry`: a resolved
     /// scan, as a script result's frame reads its table, since no SQL text names it.
     fn hidden_frame(

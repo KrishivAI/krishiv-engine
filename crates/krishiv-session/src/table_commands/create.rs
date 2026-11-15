@@ -785,21 +785,27 @@ impl Session {
             _ => None,
         };
         if let Some(op) = op {
+            let alias = alias.map_or_else(|| name.name.clone(), |a| a.value.clone());
             let assignments: Vec<super::row_level::Assignment> = changes
                 .targets
                 .iter()
                 .zip(changes.values)
-                .map(|(target, value)| super::row_level::Assignment {
-                    column: target
-                        .parts
-                        .iter()
-                        .map(|p| p.value.clone())
-                        .collect::<Vec<_>>()
-                        .join("."),
-                    value: (!crate::command::is_bare_default(value)).then(|| slice(value)),
+                .map(|(target, value)| {
+                    // `SET t.c = ..`: the qualifier names the target (its alias or table name).
+                    let mut parts: Vec<&str> =
+                        target.parts.iter().map(|p| p.value.as_str()).collect();
+                    if parts.len() > 1
+                        && (parts[0].eq_ignore_ascii_case(&alias)
+                            || parts[0].eq_ignore_ascii_case(&name.name))
+                    {
+                        parts.remove(0);
+                    }
+                    super::row_level::Assignment {
+                        column: parts.join("."),
+                        value: (!crate::command::is_bare_default(value)).then(|| slice(value)),
+                    }
                 })
                 .collect();
-            let alias = alias.map_or_else(|| name.name.clone(), |a| a.value.clone());
             let condition = changes.condition.map(slice);
             if let Some(done) = self
                 .run_row_level(
@@ -811,6 +817,10 @@ impl Session {
                 )
                 .await?
             {
+                // The table's data changed: what read it is stale (as after an `INSERT`).
+                self.state.catalog.store.bump();
+                self.forget_column_stats(&name);
+                self.forget_cached(&name);
                 return Ok(done);
             }
         }

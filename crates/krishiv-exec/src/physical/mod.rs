@@ -1480,7 +1480,8 @@ impl PhysicalPlan {
     /// The plan writing this plan's rows into the table `table` names, as `request` asks
     /// ([`PhysNode::TableWrite`]): its result has no rows and no columns. The rows are gathered
     /// into one task first, so the table's sink commits once; on one worker the gather lowers
-    /// into nothing.
+    /// into nothing. One task therefore writes every row: a table whose writes should spread
+    /// over tasks (each writing files, one commit after) needs a commit step of its own.
     #[must_use]
     pub fn into_table_write(self, table: Scan, request: TableWriteRequest) -> Self {
         let root = Arc::unwrap_or_clone(self.root);
