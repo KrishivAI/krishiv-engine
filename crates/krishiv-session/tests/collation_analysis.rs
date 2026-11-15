@@ -877,7 +877,6 @@ fn column(s: &Session, sql: &str) -> Vec<String> {
 /// Support"), so `aaa` sits between `AAA` and `bbb`, and the subquery's `BBB` is the column's
 /// `bbb`.
 #[test]
-#[ignore = "known gap: collation-key rewrite missing, tracked in KrishivAI/krishiv-engine#698"]
 fn collated_comparisons_under_not_between_having_and_subqueries() {
     let s = Session::new().unwrap();
     for sql in [
@@ -950,25 +949,20 @@ fn collated_comparisons_under_not_between_having_and_subqueries() {
         ),
         ["2", "4"]
     );
-    // `x IN (SELECT ...)` over the collated column is still refused: the collation-key rewrite
-    // (ADR 0043, section 3.2) covers the scalar comparisons above but not the subquery
-    // membership path, so it reports SQLSTATE 0A000 rather than comparing bytes silently.
-    // The issue's premise that every listed form already landed in #530 does not hold here.
-    let e = block_on(
-        s.sql("select n from t620 where a in (select a from u620 where n > 3) order by n"),
-    )
-    .unwrap_err();
+    // `x IN (SELECT ...)` over the collated column compares keys too: the subquery holds
+    // 'BBB' and 'zzz', so both spellings of 'bbb' and 'zzz' are members.
     assert_eq!(
-        e.error_class(),
-        ErrorClass::KrishivUnsupportedFeature,
-        "{e}"
+        column(
+            &s,
+            "select n from t620 where a in (select a from u620 where n > 3) order by n"
+        ),
+        ["3", "4", "5"]
     );
 }
 
 /// #620: comparisons inside `CASE` and `DECODE` — a `CASE WHEN` condition and `DECODE`'s
 /// null-safe equality are comparisons like any other, so `UTF8_LCASE` folds their operands.
 #[test]
-#[ignore = "known gap: collation-key rewrite missing, tracked in KrishivAI/krishiv-engine#698"]
 fn collated_comparisons_inside_case_and_decode() {
     let s = Session::new().unwrap();
     let setup = "create temporary view t621 as select * from (values \
