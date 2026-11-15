@@ -135,3 +135,16 @@ fn sequence_over_dates_needs_a_whole_day_step_and_a_step_that_advances() {
         ErrorClass::LegacyErrorTemp3243
     );
 }
+
+#[test]
+fn a_long_sequence_without_months_is_not_cut_off_by_the_calendar_guard() {
+    use arrow_array::types::DurationMicrosecondType;
+    use arrow_array::{PrimitiveArray, TimestampMicrosecondArray};
+    // 12,000,002 elements of one microsecond each: far below the array limit.
+    let start: ArrayRef = Arc::new(TimestampMicrosecondArray::from(vec![0_i64]));
+    let stop: ArrayRef = Arc::new(TimestampMicrosecondArray::from(vec![12_000_001_i64]));
+    let step: ArrayRef = Arc::new(PrimitiveArray::<DurationMicrosecondType>::from(vec![1_i64]));
+    let f = bind_with("sequence", &[&start, &stop, &step], &BindOptions::new());
+    let out = f.invoke(&[col(&start), col(&stop), col(&step)], 1).unwrap();
+    assert_eq!(out.as_list::<i32>().value(0).len(), 12_000_002);
+}

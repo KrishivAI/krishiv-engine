@@ -628,7 +628,8 @@ fn temporal_sequence(
                 break;
             }
             // A month step whose other fields pull the other way can wander without reaching `stop`: bound the steps taken.
-            if i > 12_000_000 {
+            // Steps without months are bounded by the up-front length check and `MAX_ARRAY_LENGTH` instead.
+            if months != 0 && i > 12_000_000 {
                 return Err(LegacyErrorTemp3243 {
                     start: start.to_string(),
                     stop: stop.to_string(),
