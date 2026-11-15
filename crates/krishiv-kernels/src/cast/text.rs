@@ -660,6 +660,10 @@ fn pow10_u64(k: u32) -> Option<u64> {
 /// the least `k` for which `c = round(|v| x 10^k)` reads back as `|v|` (`c / 10^k` is correctly
 /// rounded: `c < 2^53` and `10^k` are exact), when no neighbour `c +- 1` reads back too (then `c` is the
 /// one shortest decimal, so no tie). `None` sends the value to the formatter.
+///
+/// The least `k` is never skipped for a longer one: when some `c'` at `k'` reads back, `|v| x 10^k'` is
+/// within `x x 2^-53` of it and the product rounds by at most half an ulp, so `round` misses `c'` only
+/// for `x >= 2^51`; then `x x 10 >= 2^53` at the next `k` and the value goes to the formatter.
 fn short_decimal(v: f64) -> Option<(u64, u32, i64)> {
     const EXACT: f64 = 9_007_199_254_740_992.0; // 2^53
     const POW10: [f64; 18] = [
@@ -795,6 +799,8 @@ pub(crate) fn java_float_string<F: std::fmt::LowerExp + Copy + Into<f64>>(
         ..
     }) = java_shortest(v)
     else {
+        // Unreachable: `java_shortest` is `None` only for NaN and the infinities, handled above (and a
+        // `{:e}` rendering always fits its buffer and reads back).
         return "NaN".to_owned();
     };
     let sign = if negative { "-" } else { "" };
