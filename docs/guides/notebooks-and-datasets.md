@@ -8,7 +8,7 @@ Three notebooks in [`docs/notebooks`](https://github.com/KrishivAI/krishiv-engin
 
 1. `01-first-queries`: SQL over Parquet, filters and counts.
 2. `02-dataframes-and-joins`: the same query as SQL and as DataFrame calls, and the Arrow result.
-3. `03-explain-and-check-compat`: reading a plan with `explain(analyze=True)`, and where to scan a job with `krishiv check-compat` (a shell command, shown there as text).
+3. `03-explain-and-check-compat`: reading a plan with `explain(analyze=True)`, and where to look up functions that Krishiv does not run yet (the migration guide).
 
 Install, then open them with any Jupyter:
 

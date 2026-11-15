@@ -1691,3 +1691,22 @@ fn delta_and_catalog_limit_entries_parse_and_default() {
         assert_eq!(e.scope, Scope::Cluster, "{}", e.key);
     }
 }
+
+#[test]
+fn union_output_partitioning_is_a_spark_alias() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&UNION_OUTPUT_PARTITIONING),
+        Some(&ConfigValue::Bool(true))
+    );
+    assert_eq!(
+        lookup("spark.sql.unionOutputPartitioning").map(|e| e.key),
+        Some("krishiv.sql.unionOutputPartitioning")
+    );
+    c.set("spark.sql.unionOutputPartitioning", "false").unwrap();
+    assert_eq!(
+        c.get(&UNION_OUTPUT_PARTITIONING),
+        Some(&ConfigValue::Bool(false))
+    );
+    assert!(c.set("spark.sql.unionOutputPartitioning", "maybe").is_err());
+}
