@@ -511,8 +511,9 @@ fn list_segments(dir: &Path) -> std::io::Result<Vec<(PathBuf, u64)>> {
         let name = name.to_string_lossy();
         if name.starts_with(PREFIX) && name.ends_with(SUFFIX) {
             // Another engine's trim can remove a segment after the listing: it is gone, not an error.
-            match entry.metadata() {
-                Ok(meta) => out.push((entry.path(), meta.len())),
+            let path = entry.path();
+            match std::fs::metadata(&path) {
+                Ok(meta) => out.push((path, meta.len())),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => return Err(e),
             }
@@ -525,7 +526,11 @@ fn list_segments(dir: &Path) -> std::io::Result<Vec<(PathBuf, u64)>> {
 
 /// Removes the oldest segments while the directory is over `max_bytes`; the newest stays.
 fn trim(dir: &Path, max_bytes: u64) -> std::io::Result<()> {
-    let segments = list_segments(dir)?;
+    trim_listed(&list_segments(dir)?, max_bytes)
+}
+
+/// [`trim`] over a listing already taken: the segments may be gone by now (another engine's trim), which is fine.
+fn trim_listed(segments: &[(PathBuf, u64)], max_bytes: u64) -> std::io::Result<()> {
     let mut total: u64 = segments.iter().map(|(_, n)| n).sum();
     for (path, size) in segments.iter().take(segments.len().saturating_sub(1)) {
         if total <= max_bytes {

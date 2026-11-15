@@ -25,6 +25,13 @@ fn row(i: i64, profile: String) -> StoredProfile {
     }
 }
 
+/// The stored entries, which must not be empty: a masking test that loops over none passes by losing every profile.
+fn nonempty_history(dir: &std::path::Path) -> Vec<StoredProfile> {
+    let stored = read_history(dir).unwrap();
+    assert!(!stored.is_empty(), "the history holds no entry to check");
+    stored
+}
+
 fn runtime(dir: &std::path::Path, max: &str) -> Arc<EngineRuntime> {
     EngineRuntime::builder()
         .config("krishiv.history.path", dir.to_str().unwrap())
@@ -65,14 +72,21 @@ fn a_failed_query_is_kept_with_its_error_class() {
     let dir = tempfile::tempdir().unwrap();
     let rt = runtime(dir.path(), "64m");
     let session = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    // Division by zero raises under ANSI mode (Spark's DIVIDE_BY_ZERO), so the run must fail.
+    session
+        .conf()
+        .set("spark.sql.ansi.enabled", "true")
+        .unwrap();
     let df = block_on(session.sql("SELECT 1 / 0 FROM range(0, 3)")).unwrap();
-    // Division by zero raises under ANSI mode; without it the query succeeds, so either is a valid run.
-    let failed = block_on(df.collect()).is_err();
+    assert!(
+        block_on(df.collect()).is_err(),
+        "the query must fail under ANSI"
+    );
     rt.profile_history.as_ref().unwrap().flush();
     let stored = read_history(dir.path()).unwrap();
     assert_eq!(stored.len(), 1);
-    assert_eq!(stored[0].state == "failed", failed);
-    assert_eq!(stored[0].error_class.is_some(), failed);
+    assert_eq!(stored[0].state, "failed");
+    assert_eq!(stored[0].error_class.as_deref(), Some("DIVIDE_BY_ZERO"));
 }
 
 #[test]
@@ -393,9 +407,41 @@ fn trim_ignores_a_segment_another_engine_removed() {
     )
     .unwrap();
     // The listing sees all three; the first is gone by the time trim removes it.
+    let listed = super::list_segments(dir.path()).unwrap();
+    assert_eq!(listed.len(), 3);
     std::fs::remove_file(dir.path().join("history-0000000000001-a-000001.parquet")).unwrap();
-    trim(dir.path(), 1).unwrap();
-    assert_eq!(read_history(dir.path()).unwrap().len(), 1);
+    super::trim_listed(&listed, 1).unwrap();
+    let left: Vec<String> = super::list_segments(dir.path())
+        .unwrap()
+        .into_iter()
+        .map(|(p, _)| p.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(left, ["history-0000000000003-a-000003.parquet"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_segment_removed_between_the_listing_and_its_size_is_skipped() {
+    let dir = tempfile::tempdir().unwrap();
+    write_segment(
+        dir.path(),
+        "history-0000000000002-a-000002.parquet",
+        &[row(2, "y".repeat(5_000))],
+    )
+    .unwrap();
+    // A dangling link is listed by `read_dir` and gone when its size is read, as a segment trimmed by another engine is.
+    std::os::unix::fs::symlink(
+        dir.path().join("nowhere"),
+        dir.path().join("history-0000000000001-a-000001.parquet"),
+    )
+    .unwrap();
+    let listed = super::list_segments(dir.path()).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert!(
+        listed[0]
+            .0
+            .ends_with("history-0000000000002-a-000002.parquet")
+    );
 }
 
 #[test]
@@ -411,7 +457,7 @@ fn an_unaliased_literal_projection_is_masked_in_the_plan() {
         &format!("SELECT '{SECRET_TEXT}' FROM range(0, 5)"),
     );
     rt.profile_history.as_ref().unwrap().flush();
-    let stored = read_history(dir.path()).unwrap();
+    let stored = nonempty_history(dir.path());
     assert!(
         !stored[0].profile.contains(SECRET_TEXT),
         "a literal-derived output name was stored"
@@ -432,7 +478,7 @@ fn a_view_with_a_literal_output_name_is_masked_in_the_plan() {
     );
     run(&session, "SELECT * FROM v");
     rt.profile_history.as_ref().unwrap().flush();
-    for e in read_history(dir.path()).unwrap() {
+    for e in nonempty_history(dir.path()) {
         assert!(
             !e.profile.contains(SECRET_TEXT),
             "a view's literal name was stored"
@@ -451,7 +497,7 @@ fn concatenated_and_punctuated_literal_names_are_masked() {
     run(&session, "SELECT 'huntera' 'twob' FROM range(0, 5)");
     run(&session, "SELECT 'hunterc-secretd' FROM range(0, 5)");
     rt.profile_history.as_ref().unwrap().flush();
-    for stored in read_history(dir.path()).unwrap() {
+    for stored in nonempty_history(dir.path()) {
         for leak in ["huntera", "twob", "hunterc", "secretd"] {
             assert!(
                 !stored.profile.contains(leak),
@@ -471,8 +517,7 @@ fn a_file_write_of_a_literal_holding_as_and_a_hash_is_masked() {
     let df = block_on(session.sql("SELECT 'hunterx AS y#1hunterz' FROM range(0, 5)")).unwrap();
     block_on(df.write().parquet(out.path().join("t").to_str().unwrap())).unwrap();
     rt.profile_history.as_ref().unwrap().flush();
-    let stored = read_history(dir.path()).unwrap();
-    assert!(!stored.is_empty());
+    let stored = nonempty_history(dir.path());
     for q in stored {
         assert!(!q.profile.contains("hunterx"), "{}", q.profile);
         assert!(!q.profile.contains("hunterz"), "{}", q.profile);
@@ -488,8 +533,7 @@ fn a_file_write_of_a_literal_projection_is_masked() {
     let df = block_on(session.sql("SELECT 'huntere' FROM range(0, 5)")).unwrap();
     block_on(df.write().parquet(out.path().join("t").to_str().unwrap())).unwrap();
     rt.profile_history.as_ref().unwrap().flush();
-    let stored = read_history(dir.path()).unwrap();
-    assert!(!stored.is_empty());
+    let stored = nonempty_history(dir.path());
     for q in stored {
         assert!(!q.profile.contains("huntere"), "{}", q.profile);
     }
@@ -509,7 +553,7 @@ fn a_partitioned_write_of_a_literal_column_is_masked() {
     )
     .unwrap();
     rt.profile_history.as_ref().unwrap().flush();
-    for q in read_history(dir.path()).unwrap() {
+    for q in nonempty_history(dir.path()) {
         assert!(!q.profile.contains("huntery"), "{}", q.profile);
     }
 }
@@ -529,8 +573,7 @@ fn a_view_over_a_literal_is_masked_in_unions_and_distinct() {
     run(&session, "SELECT * FROM hv UNION ALL SELECT * FROM hv");
     run(&session, "SELECT DISTINCT * FROM hv");
     rt.profile_history.as_ref().unwrap().flush();
-    let stored = read_history(dir.path()).unwrap();
-    assert!(!stored.is_empty());
+    let stored = nonempty_history(dir.path());
     for q in stored {
         assert!(!q.profile.contains("hunterq"), "{}", q.profile);
     }
@@ -550,8 +593,7 @@ fn a_dataframe_write_of_literal_named_keys_is_masked() {
         .agg([count_star()]);
     block_on(df.write().parquet(out.path().join("t").to_str().unwrap())).unwrap();
     rt.profile_history.as_ref().unwrap().flush();
-    let stored = read_history(dir.path()).unwrap();
-    assert!(!stored.is_empty());
+    let stored = nonempty_history(dir.path());
     for q in stored {
         assert!(!q.profile.contains("hunterz"), "{}", q.profile);
     }
@@ -624,11 +666,34 @@ fn a_dropped_file_write_is_recorded_cancelled_or_finished_never_lost_or_doubled(
         drop(write);
         recorded_writes += 1;
     }
-    // A write dropped before its query ended has nothing to record; every other one leaves one entry.
-    std::thread::sleep(std::time::Duration::from_millis(200));
-    rt.profile_history.as_ref().unwrap().flush();
-    let stored = read_history(dir.path()).unwrap();
-    assert!(stored.len() <= recorded_writes, "an entry was doubled");
+    // A write dropped before its query was registered has nothing to record, so the count is not fixed; what must hold
+    // is that no entry is doubled and none is lost once it exists. Wait until the writer has taken everything (the count
+    // holds still for a second), not for a fixed time.
+    let history = rt.profile_history.as_ref().unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut last = (usize::MAX, std::time::Instant::now());
+    let stored = loop {
+        history.flush();
+        let now = read_history(dir.path()).unwrap();
+        if now.len() != last.0 {
+            last = (now.len(), std::time::Instant::now());
+        }
+        if last.1.elapsed() >= std::time::Duration::from_secs(1)
+            || std::time::Instant::now() > deadline
+        {
+            break now;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    assert!(
+        stored.len() <= recorded_writes,
+        "{} entries for {recorded_writes} dropped writes",
+        stored.len()
+    );
+    let mut ids: Vec<&str> = stored.iter().map(|q| q.query_id.as_str()).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), stored.len(), "an entry was doubled");
     assert!(
         stored.iter().any(|q| q.state == "cancelled"),
         "a dropped write's held entry was lost: {:?}",
