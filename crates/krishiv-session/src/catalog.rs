@@ -969,6 +969,10 @@ fn streaming_leaves(root: &PhysNode) -> (Vec<&krishiv_exec::physical::ScanNode>,
             | PhysNode::WindowGroupLimit { input, .. }
             | PhysNode::Aggregate { input, .. }
             | PhysNode::PythonEval { input, .. }
+            | PhysNode::PythonMap { input, .. }
+            | PhysNode::PythonGroupMap { input, .. }
+            | PhysNode::PythonCoGroupMap { input, .. }
+            | PhysNode::PythonAggregate { input, .. }
             | PhysNode::WriteFiles { input, .. }
             | PhysNode::TableWrite { input, .. } => go(input, out),
             PhysNode::Exchange(e) => go(&e.input, out),
