@@ -36,6 +36,7 @@ krishiv-memory = { path = "../crates/krishiv-memory" }
 krishiv-plan = { path = "../crates/krishiv-plan", features = ["testing"] }
 krishiv-sql = { path = "../crates/krishiv-sql" }
 krishiv-types = { path = "../crates/krishiv-types" }
+krishiv-udf-pool = { path = "../crates/krishiv-udf-pool" }
 krishiv-testkit = { path = "../crates/krishiv-testkit" }
 object_store = { version = "=0.14.2", default-features = false }
 serde = { version = "1.0.229", default-features = false, features = ["std"] }
@@ -94,6 +95,13 @@ bench = false
 [[bin]]
 name = "planted_panic"
 path = "fuzz_targets/planted_panic.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "udf_result_ipc"
+path = "fuzz_targets/udf_result_ipc.rs"
 test = false
 doc = false
 bench = false

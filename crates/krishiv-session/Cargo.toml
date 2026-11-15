@@ -61,6 +61,7 @@ object_store = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
 bytes.workspace = true
+krishiv-plan = { path = "../krishiv-plan", version = "=0.2.0", features = ["testing"] }
 arrow-select.workspace = true
 futures = { workspace = true, features = ["alloc", "executor"] }
 insta.workspace = true

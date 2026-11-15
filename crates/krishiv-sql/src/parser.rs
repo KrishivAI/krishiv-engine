@@ -15,6 +15,7 @@
 //! nested deeper than [`INLINE_NESTING`] brackets parses on a thread whose
 //! stack fits that depth.
 
+mod case;
 mod ddl;
 mod expr;
 mod function;
@@ -27,22 +28,23 @@ use std::collections::HashMap;
 
 use crate::ast::{
     Alias, BucketOn, BucketSpec, ColumnConstraint, ColumnConstraintKind, ColumnDef, ColumnName,
-    ConstraintCharacteristic, CreateNamespace, CreateTable, CreateTableLike, CreateView, Cte,
-    DataTypeSpec, DdlName, DeclareVariable, DropBehavior, DropNamespace, DropTable, DropVariable,
-    DropView, DynamicName, ExecuteImmediate, Explain, ExplainMode, Expr, ExprKind, FileFormat,
-    FileFormatKind, ForeignKeyConstraint, ForeignKeyRef, FromClause, FromStatement,
-    GeneratedColumn, GeneratedKind, GroupBy, GroupItem, GroupItemKind, GroupWith, GroupingSet,
-    Hint, Ident, IdentityColumn, IdentityHow, Join, JoinConstraint, JoinKind, LateralView, Limit,
-    Literal, NamedWindow, NamespaceKind, NearestBy, NearestDirection, NumKind, ObjectName,
-    OptionKey, OrderedIdent, PartitionColumn, PartitionField, PartitionFieldKind,
-    PartitionTransform, Pipe, PipeAggregate, PipeAssignment, PipeOp, PipeOpKind, PipeSelect,
-    PipeWhere, Pivot, Query, QueryOrganization, Relation, RelationExt, Reset, RowDelimited,
-    RowFormat, RowFormatKind, RowSerde, SampleMethod, SampleMethodKind, SampleType, Select,
-    SelectItem, Set, SetAssignment, SetExpr, SetExprKind, SetKind, SetOperator, SetQuantifier,
-    SetVariable, SetVariableKind, SkewSpec, SortItem, Span, Statement, StructField, TableAlias,
-    TableConstraint, TableConstraintKind, TableElement, TableFactor, TableFactorKind, TableOption,
-    TableSample, TemporalClause, TemporalKind, TimeZone, TransformKind, TransformOutput,
-    TransformSelect, Unpivot, UnpivotColumns, Use, UsingArgument, Values, ViewColumn, With,
+    ConstraintCharacteristic, CreateFlow, CreateNamespace, CreatePipelineDataset, CreateTable,
+    CreateTableLike, CreateView, Cte, DataTypeSpec, DdlName, DeclareVariable, DropBehavior,
+    DropNamespace, DropTable, DropVariable, DropView, DynamicName, ExecuteImmediate, Explain,
+    ExplainMode, Expr, ExprKind, FileFormat, FileFormatKind, ForeignKeyConstraint, ForeignKeyRef,
+    FromClause, FromStatement, GeneratedColumn, GeneratedKind, GroupBy, GroupItem, GroupItemKind,
+    GroupWith, GroupingSet, Hint, Ident, IdentityColumn, IdentityHow, Insert, Join, JoinConstraint,
+    JoinKind, LateralView, Limit, Literal, NamedWindow, NamespaceKind, NearestBy, NearestDirection,
+    NumKind, ObjectName, OptionKey, OrderedIdent, PartitionColumn, PartitionField,
+    PartitionFieldKind, PartitionTransform, Pipe, PipeAggregate, PipeAssignment, PipeOp,
+    PipeOpKind, PipeSelect, PipeWhere, PipelineDatasetKind, Pivot, Query, QueryOrganization,
+    Relation, RelationExt, Reset, RowDelimited, RowFormat, RowFormatKind, RowSerde, SampleMethod,
+    SampleMethodKind, SampleType, Select, SelectItem, Set, SetAssignment, SetExpr, SetExprKind,
+    SetKind, SetOperator, SetQuantifier, SetVariable, SetVariableKind, SkewSpec, SortItem, Span,
+    Statement, StructField, TableAlias, TableConstraint, TableConstraintKind, TableElement,
+    TableFactor, TableFactorKind, TableOption, TableSample, TemporalClause, TemporalKind, TimeZone,
+    TransformKind, TransformOutput, TransformSelect, Unpivot, UnpivotColumns, Use, UsingArgument,
+    Values, ViewColumn, With,
 };
 use crate::error::{self, ParseError};
 use crate::keywords::{CLAUSE_WORD, RESERVED_WORD, STRICT_WORD, classify, is_kw};
@@ -101,6 +103,9 @@ struct Checkpoint {
     missing: Option<(usize, &'static str)>,
     matched: Option<(usize, Sym, Close)>,
     deferred: Option<ParseError>,
+    /// The deepest level reached: an abandoned reading must not count toward
+    /// the height of the tree around it.
+    peak: usize,
 }
 
 /// The inline recovery ANTLR shows a failed `match` of a closing token with
@@ -149,6 +154,17 @@ pub(crate) struct Parser<'s> {
     /// For each `(` token, the position of its matching `)`; `usize::MAX`
     /// for any other token and for an unclosed `(`.
     closers: Vec<usize>,
+    /// For each token, whether a `WHEN` follows it in the same brackets
+    /// before they close or a `;` at their level (see
+    /// `Parser::case_or_column`); one pass, so each lookup is constant time.
+    when_ahead: Vec<bool>,
+    /// For each token (and one past the last), the bracket depth before it:
+    /// `Parser::depth_since` subtracts two entries.
+    depth_before: Vec<i64>,
+    /// For each token (and one past the last), the `CASE` words a scan from
+    /// it meets in its brackets outside nested `CASE`s (see
+    /// `Parser::closer_ahead_table`); filled once the parser is built.
+    closer_ahead: Vec<u8>,
     /// Token positions of the `?` parameter markers, in order.
     markers: Vec<usize>,
     /// How many script bodies the cursor is inside: a statement there ends at its `;`.
@@ -156,6 +172,20 @@ pub(crate) struct Parser<'s> {
     /// How many select items enclose the cursor (Spark's `NamedExpression` ancestors): a
     /// backquoted name there may be a column regex.
     in_named: usize,
+    /// Where the expression of the innermost select-list item starts: an
+    /// alias may follow the expression there (see `Parser::not_is_column`).
+    item_start: Option<usize>,
+    /// The part of the innermost `CASE` being read and where it starts: the
+    /// words that close it decide whether `NOT <word>` is the operator
+    /// (see `Parser::not_takes_operand`).
+    case_part: Option<(usize, CasePart)>,
+    /// What reading a `CASE` expression from a token position gave, so a
+    /// speculative `CASE` (`Parser::case_or_column`) is read once per
+    /// position and backtracking stays linear.
+    case_memo: HashMap<usize, CaseMemo>,
+    /// The `CASE` token a simple `CASE`'s operand must read as a column,
+    /// set while that operand is read again (`CASE case - 1 WHEN 0 ...`).
+    case_column_at: Option<usize>,
     /// How many script statements enclose the cursor (compounds, branches and loop bodies).
     script_depth: usize,
     /// The first error Spark raises after parsing (in `AstBuilder`) that
@@ -168,6 +198,48 @@ pub(crate) struct Parser<'s> {
     /// Reading the bodies of a multi-table insert: `INSERT INTO|OVERWRITE`
     /// starts the next clause, never an implicit alias.
     insert_bodies: bool,
+}
+
+/// A part of a `CASE` expression.
+#[derive(Clone, Copy)]
+pub(crate) enum CasePart {
+    /// A simple `CASE`'s operand.
+    Operand,
+    /// A `WHEN` condition.
+    Condition,
+    /// A `THEN` result.
+    Result,
+    /// The `ELSE` result.
+    Else,
+}
+
+impl CasePart {
+    /// The words that end the part.
+    pub(crate) fn closers(self) -> &'static [&'static str] {
+        match self {
+            Self::Operand => &["WHEN"],
+            Self::Condition => &["THEN"],
+            Self::Result => &["WHEN", "ELSE", "END"],
+            Self::Else => &["END"],
+        }
+    }
+}
+
+/// The outcome of reading a `CASE` expression at a token position.
+pub(crate) enum CaseMemo {
+    /// It parsed once; a second parse here stores the tree. Only a
+    /// speculative re-read parses a position twice, so an unambiguous
+    /// `CASE` is never copied (nested ones would copy every subtree).
+    Seen,
+    /// It parsed to this expression, ending before this token, its tree
+    /// reaching this many levels below the `CASE`.
+    Parsed(crate::ast::ExprKind, usize, usize),
+    /// It failed; the furthest failure and its recovery hints.
+    Failed {
+        far: usize,
+        matched: Option<(usize, Sym, Close)>,
+        missing: Option<(usize, &'static str)>,
+    },
 }
 
 /// Parses one query statement (`query ;* EOF`).
@@ -604,6 +676,41 @@ fn checked<R: TopRule>(
     }
 }
 
+/// For each token `i`, whether a `WHEN` follows it at its bracket level
+/// before that level closes or meets a `;`: read right to left with one
+/// flag per open level, so the table costs one pass over the tokens.
+fn when_ahead_table(toks: &[Token], case_words: &[u8]) -> Vec<bool> {
+    let mut out = vec![false; toks.len()];
+    // The flag of the innermost level seen so far (from the right), then
+    // the enclosing ones; an unclosed `(` leaves into a fresh level with
+    // nothing after it.
+    let mut levels = vec![false];
+    for (i, t) in toks.iter().enumerate().rev() {
+        out[i] = levels.last().copied().unwrap_or(false);
+        match t.kind {
+            TokenKind::Sym(Sym::RParen | Sym::RBracket) => levels.push(false),
+            TokenKind::Sym(Sym::LParen | Sym::LBracket) => {
+                levels.pop();
+                if levels.is_empty() {
+                    levels.push(false);
+                }
+            }
+            TokenKind::Sym(Sym::Semi) => {
+                if let Some(top) = levels.last_mut() {
+                    *top = false;
+                }
+            }
+            TokenKind::Word if case_words.get(i).is_some_and(|&w| w & 1 != 0) => {
+                if let Some(top) = levels.last_mut() {
+                    *top = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Words after which a parenthesis opens a query rather than an expression.
 const QUERY_START: &[&str] = &["SELECT", "WITH", "VALUES", "TABLE", "FROM"];
 
@@ -613,16 +720,35 @@ impl<'s> Parser<'s> {
     fn new(src: &'s str, toks: Vec<Token>, opts: ParserOptions, force_bare: Option<usize>) -> Self {
         #[cfg(test)]
         PARSERS.set(PARSERS.get() + 1);
-        let classes = toks
-            .iter()
-            .map(|t| {
-                if t.kind == TokenKind::Word {
-                    classify(t.span.text(src))
+        // One pass: keyword classes, the `CASE` keyword bits (all five are
+        // reserved words, so only those are compared) and the bracket depth.
+        let mut classes = Vec::with_capacity(toks.len());
+        let mut case_words = Vec::with_capacity(toks.len());
+        let mut depth_before = Vec::with_capacity(toks.len() + 1);
+        let mut depth = 0i64;
+        depth_before.push(depth);
+        for t in &toks {
+            let (class, case_bits) = if t.kind == TokenKind::Word {
+                let text = t.span.text(src);
+                let class = classify(text);
+                let bits = if class & RESERVED_WORD != 0 {
+                    case::case_word(text)
                 } else {
                     0
-                }
-            })
-            .collect();
+                };
+                (class, bits)
+            } else {
+                (0, 0)
+            };
+            classes.push(class);
+            case_words.push(case_bits);
+            match t.kind {
+                TokenKind::Sym(Sym::LParen | Sym::LBracket) => depth += 1,
+                TokenKind::Sym(Sym::RParen | Sym::RBracket) => depth -= 1,
+                _ => {}
+            }
+            depth_before.push(depth);
+        }
         let mut after_parens = vec![0; toks.len()];
         let mut next = toks.len();
         for (i, t) in toks.iter().enumerate().rev() {
@@ -644,10 +770,18 @@ impl<'s> Parser<'s> {
                 _ => {}
             }
         }
+        // The `CASE` tables are read only at a `CASE` word or inside a `CASE`
+        // part: a statement without one skips them (they cost ~10% of parsing).
+        let has_case = case_words.iter().any(|&w| w & case::CASE_BIT != 0);
+        let when_ahead = if has_case {
+            when_ahead_table(&toks, &case_words)
+        } else {
+            Vec::new()
+        };
         let markers = (0..toks.len())
             .filter(|&i| toks[i].kind == TokenKind::Sym(Sym::Question))
             .collect();
-        Self {
+        let mut parser = Self {
             src,
             toks,
             classes,
@@ -662,15 +796,26 @@ impl<'s> Parser<'s> {
             failed_queries: HashMap::new(),
             after_parens,
             closers,
+            when_ahead,
+            depth_before,
+            closer_ahead: vec![],
             markers,
             in_script: 0,
             in_named: 0,
+            item_start: None,
+            case_part: None,
+            case_memo: HashMap::new(),
+            case_column_at: None,
             script_depth: 0,
             deferred: None,
             cast_types: vec![],
             force_bare,
             insert_bodies: false,
+        };
+        if has_case {
+            parser.closer_ahead = parser.closer_ahead_table(&case_words);
         }
+        parser
     }
 
     /// The outcome of a parse that produced `out`: an error Spark raises
@@ -779,6 +924,7 @@ impl<'s> Parser<'s> {
             missing: self.missing,
             matched: self.matched,
             deferred: self.deferred.take(),
+            peak: self.peak,
         }
     }
 
@@ -790,6 +936,7 @@ impl<'s> Parser<'s> {
         self.missing = checkpoint.missing;
         self.matched = checkpoint.matched;
         self.deferred = checkpoint.deferred;
+        self.peak = checkpoint.peak;
     }
 
     /// Keeps the speculative parse begun at `checkpoint`: an error deferred
