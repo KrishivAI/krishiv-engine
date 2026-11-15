@@ -230,7 +230,7 @@ impl Catalog<'_> {
         self.session.state.catalog.current_catalog()
     }
 
-    /// Makes `name` the current catalog. Only `spark_catalog` is one here, and it matches whatever its case, in either
+    /// Makes `name` the current catalog. `spark_catalog` is the only catalog here, and it matches whatever its case, in either
     /// `spark.sql.caseSensitive` mode, as Spark's `CatalogManager` and the SQL `USE` do. (Divergence: Spark 4.2 resets
     /// the namespace to `default` when the name differs from the current catalog's only in case; here the current
     /// namespace is kept.) The `system` catalog is Krishiv's own (ADR 0023) and is reached with `USE system`, not here:

@@ -608,16 +608,39 @@ fn an_unknown_catalog_is_catalog_not_found_and_a_database_name_is_not_a_catalog(
         before,
         "a refused call changes nothing"
     );
-    // A catalog's name matches whatever its case, also with `spark.sql.caseSensitive` on.
-    s.conf().set("spark.sql.caseSensitive", "true").unwrap();
+    assert_eq!(
+        c.current_catalog(),
+        "spark_catalog",
+        "nor does it change the catalog"
+    );
+    // A catalog's name matches whatever its case, in both `spark.sql.caseSensitive` modes. The call has to do the
+    // switching: the current catalog is `system` (reached by `USE`) before each one.
+    for case_sensitive in ["false", "true"] {
+        s.conf()
+            .set("spark.sql.caseSensitive", case_sensitive)
+            .unwrap();
+        for name in ["Spark_Catalog", "SPARK_CATALOG"] {
+            run(&s, "USE system");
+            assert_eq!(c.current_catalog(), "system");
+            block_on(c.set_current_catalog(name)).unwrap();
+            assert_eq!(
+                c.current_catalog(),
+                "spark_catalog",
+                "{name} caseSensitive={case_sensitive}"
+            );
+        }
+    }
     let e = block_on(c.set_current_catalog("SYSTEM")).unwrap_err();
     assert_eq!(
         e.error_class(),
         krishiv_common::error::ErrorClass::CatalogNotFound,
         "{e}"
     );
-    block_on(c.set_current_catalog("Spark_Catalog")).unwrap();
-    assert_eq!(c.current_catalog(), "spark_catalog");
+    assert!(
+        e.to_string().contains("The catalog `SYSTEM` not found")
+            && e.to_string().contains("\"spark.sql.catalog.SYSTEM\""),
+        "{e}"
+    );
     let e = block_on(c.set_current_catalog("nope")).unwrap_err();
     assert!(
         e.to_string().contains(
