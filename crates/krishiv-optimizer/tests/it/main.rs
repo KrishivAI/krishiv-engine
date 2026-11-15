@@ -9,6 +9,7 @@
 )]
 
 mod cse;
+mod dependent_keys;
 mod group_code;
 mod join_cost;
 mod join_enumerator;

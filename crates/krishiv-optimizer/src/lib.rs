@@ -21,6 +21,9 @@
 //!    inner one (Spark's `CollapseRepartition`).
 //!    **Algebraic sum**, once: `SUM(x + c)` over a narrow integral column
 //!    becomes `SUM(x) + c * COUNT(x)` (`sum_rewrite`).
+//!    **Dependent group keys**, once: a key computed from other column
+//!    keys (`GROUP BY x, x - 1`) leaves the keys and is computed per group
+//!    (`dependent_keys`).
 //! 2. **Restrict**, then alternating with join order until neither
 //!    changes the plan: an aggregate below a join that drops its unmatched
 //!    groups groups only the input rows whose keys the join's other side
@@ -56,6 +59,7 @@ mod collation_keys;
 mod constraints;
 mod cse;
 mod dag;
+mod dependent_keys;
 mod eager;
 mod estimate;
 mod expr;
@@ -466,6 +470,11 @@ fn run(
         };
         let root = t.once("AlgebraicSum", &root, |r| {
             sum_rewrite::rewrite(Arc::clone(r))
+        })?;
+        // Before restriction, eager aggregation and the group-key code,
+        // which then see only the keys that decide a group.
+        let root = t.once("DependentGroupKeys", &root, |r| {
+            dependent_keys::rewrite(Arc::clone(r))
         })?;
         // Restriction and join ordering alternate until neither changes
         // the plan: ordering sees the restricted estimates, and restriction
