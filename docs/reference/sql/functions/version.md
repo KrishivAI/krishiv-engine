@@ -6,6 +6,8 @@ Returns the Spark version. The string contains 2 fields, the first being a relea
 
 **Applies to:** Krishiv 0.2.0 and above. Spark: 3.5 and later.
 
+**Note.** Spark returns its version and a git revision (`4.2.0 <40-character hash>`). Krishiv returns the Spark version it runs as, `4.2.0`, with no revision.
+
 ## Syntax
 
 ```text

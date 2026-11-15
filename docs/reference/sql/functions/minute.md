@@ -10,6 +10,8 @@ If `expr` is a TIME type (since 4.1.0), it returns the minute of the time-of-day
 
 **Applies to:** Krishiv 0.2.0 and above. Spark: 3.5 and later.
 
+**Note.** The `TIME` type is off by default in Spark 4.2.0 and in Krishiv: set `spark.sql.timeType.enabled` to `true` first, or this function fails with `UNSUPPORTED_TIME_TYPE`.
+
 ## Syntax
 
 ```text

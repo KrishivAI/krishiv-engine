@@ -6,6 +6,8 @@ Returns the number of milliseconds since midnight for the given TIME value.
 
 **Applies to:** Krishiv 0.2.0 and above. Spark: 4.2 and later.
 
+**Note.** The `TIME` type is off by default in Spark 4.2.0 and in Krishiv: set `spark.sql.timeType.enabled` to `true` first, or this function fails with `UNSUPPORTED_TIME_TYPE`.
+
 ## Syntax
 
 ```text
