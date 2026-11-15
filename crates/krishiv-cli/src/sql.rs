@@ -476,7 +476,12 @@ fn print_result(
     mode: OutputMode,
     args: &SqlArgs,
 ) -> Result<(), String> {
-    let c = collect_rows(df, session, args.max_rows.unwrap_or(usize::MAX))?;
+    let cap = args.max_rows.unwrap_or(usize::MAX);
+    let c = collect_rows(df, session, cap)?;
+    if c.names.is_empty() && c.rows.is_empty() && !c.truncated {
+        // A statement without a result (DDL, SET of nothing): no empty table and no `0 rows`.
+        return Ok(());
+    }
     write!(
         out,
         "{}",
@@ -484,7 +489,18 @@ fn print_result(
             mode, &c.names, &c.rows, &c.numeric, &c.float, &c.bools, &c.nulls
         )
     )
-    .map_err(|e| format!("cannot write output: {e}"))
+    .map_err(|e| format!("cannot write output: {e}"))?;
+    if c.truncated {
+        // stdout keeps its shape for pipes; the cut is said on stderr (agent mode reports it in its footer). Flush
+        // first so the notice does not appear above the table it describes.
+        out.flush()
+            .map_err(|e| format!("cannot write output: {e}"))?;
+        let _ = writeln!(
+            io::stderr(),
+            "warning: output cut at --max-rows {cap}; more rows exist"
+        );
+    }
+    Ok(())
 }
 
 /// The statement an agent result is for.
@@ -634,6 +650,8 @@ struct Collected {
     bools: Vec<bool>,
     /// NULL cells.
     nulls: Vec<Vec<bool>>,
+    /// More rows existed than `max_rows`; the rest were not read.
+    truncated: bool,
 }
 
 /// Collects `df` into typed string rows, cut to `max_rows` for display.
@@ -650,7 +668,8 @@ fn collect_rows(
     let mut stream = futures::executor::block_on(df.execute_stream()).map_err(|e| e.to_string())?;
     let mut batches = Vec::new();
     let mut seen = 0usize;
-    while seen < max_rows {
+    // One row past the cap, so a result of exactly `max_rows` rows is not reported as cut.
+    while seen <= max_rows {
         let Some(next) = futures::executor::block_on(stream.next()) else {
             break;
         };
@@ -698,6 +717,7 @@ fn collect_rows(
         }
     }
     Ok(Collected {
+        truncated: seen > max_rows,
         names,
         rows,
         numeric,
@@ -857,6 +877,7 @@ mod tests {
             float,
             bools,
             nulls,
+            truncated: false,
         }
     }
 

@@ -109,9 +109,13 @@ pub(super) fn one_row_select(p: &Arc<LogicalPlan>) -> Option<Vec<Arc<Expr>>> {
     }
 }
 
-/// Whether no expression of the plan `p` is nondeterministic.
+/// Whether no expression of the plan `p`, and no Python relation UDF it
+/// runs, is nondeterministic.
 pub(in crate::analyzer) fn plan_is_deterministic(p: &Arc<LogicalPlan>) -> bool {
     visit_distinct(Node::Plan(p), |n| match n {
+        Node::Plan(q) if !crate::python_relation_is_deterministic(&q.node) => {
+            ControlFlow::Break(())
+        }
         Node::Expr(e)
             if matches!(
                 &e.node,

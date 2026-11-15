@@ -1864,6 +1864,12 @@ impl Source for HashAggregate {
             .map_or(1, |f| f.chunks.max(1))
     }
 
+    /// A global aggregate's final row is Spark's `SinglePartition`.
+    fn single_partition(&self, _g: &GlobalState) -> bool {
+        self.core.spec.group_by.is_empty()
+            && matches!(self.core.spec.output, super::AggregateOutput::Final)
+    }
+
     fn local_state(&self, ctx: &TaskContext, _g: &GlobalState) -> Result<LocalState> {
         Ok(Box::new(SourceLocal {
             consumer: Arc::clone(ctx.consumer().consumer()),

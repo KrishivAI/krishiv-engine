@@ -1915,3 +1915,4 @@ mod delta;
 pub(crate) use delta::{delta_write_refused, is_delta_table};
 
 mod pipeline;
+mod row_level;
