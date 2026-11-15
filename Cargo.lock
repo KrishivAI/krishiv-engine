@@ -3342,6 +3342,7 @@ dependencies = [
  "proptest",
  "serde_json",
  "thiserror",
+ "tracing",
  "twox-hash",
 ]
 
@@ -3524,6 +3525,7 @@ dependencies = [
  "krishiv-kernels",
  "krishiv-plan",
  "krishiv-types",
+ "proptest",
  "serde_json",
  "thiserror",
 ]
