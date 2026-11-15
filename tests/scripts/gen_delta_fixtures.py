@@ -63,9 +63,7 @@ def session() -> SparkSession:
 
 
 def write_expected(spark: SparkSession, path: str, notes: dict, rows_as_dicts: bool = True) -> None:
-    rows = (
-        [r.asDict() for r in spark.read.format("delta").load(path).orderBy("id").collect()] if rows_as_dicts else []
-    )
+    rows = [r.asDict() for r in spark.read.format("delta").load(path).orderBy("id").collect()] if rows_as_dicts else []
     log = sorted(
         os.path.relpath(os.path.join(d, f), os.path.join(path, "_delta_log"))
         for d, _, files in os.walk(os.path.join(path, "_delta_log"))
@@ -625,8 +623,7 @@ STATS_CASES = [
     "named_struct('x', NULL, 'y', 'aa'), NULL, NULL, 'x'), "
     "(4, 3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, "
     "NULL, NULL, 'x')",
-    "(5, 4, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, "
-    "NULL, NULL, 'y')",
+    "(5, 4, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'y')",
     "(6, 5, NULL, NULL, NULL, NULL, CAST('NaN' AS FLOAT), CAST('NaN' AS DOUBLE), NULL, NULL, NULL, NULL, "
     "NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'x'), (7, 5, NULL, NULL, NULL, NULL, CAST(-0.0 AS FLOAT), "
     "1.0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'x')",
@@ -666,7 +663,6 @@ def stats_table(spark: SparkSession, out: str) -> None:
     write_scan_expected(
         spark, path, {"feature": "stats", "commits": commits(path), "strings": STATS_STRINGS}, rows_as_dicts=False
     )
-
 
 
 def run_steps(spark: SparkSession, path: str, steps: list[tuple[str, Any]]) -> list[dict]:
@@ -730,18 +726,37 @@ def write_modes(spark: SparkSession, out: str) -> None:
         ("replace_where", replace_where("p = 'y'", "(30, 'rw', 'y')")),
         ("replace_where_mismatch", replace_where("p = 'y'", "(31, 'rw', 'x')")),
         ("static_partition_overwrite", f"INSERT OVERWRITE {t} PARTITION (p = 'z') VALUES (40, 'st')"),
-        ("insert_overwrite_dataframe_mode", lambda s: s.sql(
-            "SELECT CAST(50 AS BIGINT) AS id, 'df' AS v, 'x' AS p"
-        ).write.format("delta").mode("overwrite").save(path)),
-        ("append_dataframe", lambda s: s.sql(
-            "SELECT CAST(51 AS BIGINT) AS id, 'df' AS v, 'w' AS p"
-        ).write.format("delta").mode("append").save(path)),
-        ("save_errorifexists", lambda s: s.sql(
-            "SELECT CAST(52 AS BIGINT) AS id, 'df' AS v, 'w' AS p"
-        ).write.format("delta").save(path)),
-        ("save_ignore", lambda s: s.sql(
-            "SELECT CAST(53 AS BIGINT) AS id, 'df' AS v, 'w' AS p"
-        ).write.format("delta").mode("ignore").save(path)),
+        (
+            "insert_overwrite_dataframe_mode",
+            lambda s: (
+                s.sql("SELECT CAST(50 AS BIGINT) AS id, 'df' AS v, 'x' AS p")
+                .write.format("delta")
+                .mode("overwrite")
+                .save(path)
+            ),
+        ),
+        (
+            "append_dataframe",
+            lambda s: (
+                s.sql("SELECT CAST(51 AS BIGINT) AS id, 'df' AS v, 'w' AS p")
+                .write.format("delta")
+                .mode("append")
+                .save(path)
+            ),
+        ),
+        (
+            "save_errorifexists",
+            lambda s: s.sql("SELECT CAST(52 AS BIGINT) AS id, 'df' AS v, 'w' AS p").write.format("delta").save(path),
+        ),
+        (
+            "save_ignore",
+            lambda s: (
+                s.sql("SELECT CAST(53 AS BIGINT) AS id, 'df' AS v, 'w' AS p")
+                .write.format("delta")
+                .mode("ignore")
+                .save(path)
+            ),
+        ),
         ("insert_reading_itself", f"INSERT INTO {t} SELECT id + 100, v, p FROM {t}"),
     ]
     record: dict = {
@@ -759,18 +774,44 @@ def write_modes(spark: SparkSession, out: str) -> None:
         "SELECT CAST(1 AS BIGINT) AS id, 'a' AS v, 'x' AS p"
     )
     sat_steps: list[tuple[str, Any]] = [
-        ("save_as_table_overwrite_same_schema", lambda s: s.sql(
-            "SELECT CAST(2 AS BIGINT) AS id, 'b' AS v, 'y' AS p"
-        ).write.format("delta").mode("overwrite").partitionBy("p").saveAsTable("sat")),
-        ("save_as_table_overwrite_other_schema", lambda s: s.sql(
-            "SELECT CAST(3 AS BIGINT) AS id, 3 AS other, 'y' AS p"
-        ).write.format("delta").mode("overwrite").partitionBy("p").saveAsTable("sat")),
-        ("save_as_table_overwrite_other_partitioning", lambda s: s.sql(
-            "SELECT CAST(4 AS BIGINT) AS id, 'd' AS v, 'y' AS p"
-        ).write.format("delta").mode("overwrite").saveAsTable("sat")),
-        ("save_as_table_append", lambda s: s.sql(
-            "SELECT CAST(5 AS BIGINT) AS id, 'e' AS v, 'x' AS p"
-        ).write.format("delta").mode("append").saveAsTable("sat")),
+        (
+            "save_as_table_overwrite_same_schema",
+            lambda s: (
+                s.sql("SELECT CAST(2 AS BIGINT) AS id, 'b' AS v, 'y' AS p")
+                .write.format("delta")
+                .mode("overwrite")
+                .partitionBy("p")
+                .saveAsTable("sat")
+            ),
+        ),
+        (
+            "save_as_table_overwrite_other_schema",
+            lambda s: (
+                s.sql("SELECT CAST(3 AS BIGINT) AS id, 3 AS other, 'y' AS p")
+                .write.format("delta")
+                .mode("overwrite")
+                .partitionBy("p")
+                .saveAsTable("sat")
+            ),
+        ),
+        (
+            "save_as_table_overwrite_other_partitioning",
+            lambda s: (
+                s.sql("SELECT CAST(4 AS BIGINT) AS id, 'd' AS v, 'y' AS p")
+                .write.format("delta")
+                .mode("overwrite")
+                .saveAsTable("sat")
+            ),
+        ),
+        (
+            "save_as_table_append",
+            lambda s: (
+                s.sql("SELECT CAST(5 AS BIGINT) AS id, 'e' AS v, 'x' AS p")
+                .write.format("delta")
+                .mode("append")
+                .saveAsTable("sat")
+            ),
+        ),
     ]
     record["save_as_table"] = run_steps(spark, managed, sat_steps)
     spark.sql("DROP TABLE IF EXISTS sat")
@@ -812,64 +853,102 @@ def write_modes(spark: SparkSession, out: str) -> None:
 #: row. ``refused`` rows are features Krishiv does not write; the others it appends to.
 WRITE_FEATURE_TABLES: list[tuple[str, bool, list[str]]] = [
     ("append-only", False, ["CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.appendOnly' = 'true')"]),
-    ("change-data-feed", False, [
-        "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')"
-    ]),
-    ("column-mapping", False, [
-        "CREATE TABLE {t} (id BIGINT, s STRUCT<x: INT>) USING delta "
-        "TBLPROPERTIES ('delta.columnMapping.mode' = 'name')"
-    ]),
-    ("deletion-vectors", False, [
-        "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')"
-    ]),
-    ("domain-metadata", False, [
-        "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.feature.domainMetadata' = 'supported')"
-    ]),
-    ("in-commit-timestamp", False, [
-        "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.enableInCommitTimestamps' = 'true')"
-    ]),
-    ("v2-checkpoint", False, [
-        "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.checkpointPolicy' = 'v2')"
-    ]),
-    ("vacuum-protocol-check", False, [
-        "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.feature.vacuumProtocolCheck' = 'supported')"
-    ]),
+    (
+        "change-data-feed",
+        False,
+        ["CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')"],
+    ),
+    (
+        "column-mapping",
+        False,
+        [
+            "CREATE TABLE {t} (id BIGINT, s STRUCT<x: INT>) USING delta "
+            "TBLPROPERTIES ('delta.columnMapping.mode' = 'name')"
+        ],
+    ),
+    (
+        "deletion-vectors",
+        False,
+        ["CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')"],
+    ),
+    (
+        "domain-metadata",
+        False,
+        ["CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.feature.domainMetadata' = 'supported')"],
+    ),
+    (
+        "in-commit-timestamp",
+        False,
+        ["CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.enableInCommitTimestamps' = 'true')"],
+    ),
+    (
+        "v2-checkpoint",
+        False,
+        ["CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.checkpointPolicy' = 'v2')"],
+    ),
+    (
+        "vacuum-protocol-check",
+        False,
+        ["CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.feature.vacuumProtocolCheck' = 'supported')"],
+    ),
     ("timestamp-ntz", False, ["CREATE TABLE {t} (id BIGINT, n TIMESTAMP_NTZ) USING delta"]),
-    ("type-widening", False, [
-        "CREATE TABLE {t} (id BIGINT, i INT) USING delta TBLPROPERTIES ('delta.enableTypeWidening' = 'true')"
-    ]),
-    ("row-tracking", True, [
-        "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.enableRowTracking' = 'true')"
-    ]),
-    ("iceberg-compat-v2", True, [
-        "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.columnMapping.mode' = 'name', "
-        "'delta.enableIcebergCompatV2' = 'true')"
-    ]),
+    (
+        "type-widening",
+        False,
+        ["CREATE TABLE {t} (id BIGINT, i INT) USING delta TBLPROPERTIES ('delta.enableTypeWidening' = 'true')"],
+    ),
+    (
+        "row-tracking",
+        True,
+        ["CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.enableRowTracking' = 'true')"],
+    ),
+    (
+        "iceberg-compat-v2",
+        True,
+        [
+            "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.columnMapping.mode' = 'name', "
+            "'delta.enableIcebergCompatV2' = 'true')"
+        ],
+    ),
     ("clustering", True, ["CREATE TABLE {t} (id BIGINT) USING delta CLUSTER BY (id)"]),
-    ("check-constraints", True, [
-        "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.feature.checkConstraints' = 'supported')"
-    ]),
-    ("generated-columns", True, [
-        "CREATE TABLE {t} (id BIGINT, g BIGINT GENERATED ALWAYS AS (id * 2)) USING delta"
-    ]),
+    (
+        "check-constraints",
+        True,
+        ["CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.feature.checkConstraints' = 'supported')"],
+    ),
+    ("generated-columns", True, ["CREATE TABLE {t} (id BIGINT, g BIGINT GENERATED ALWAYS AS (id * 2)) USING delta"]),
     ("identity-columns", True, ["CREATE TABLE {t} (id BIGINT, g BIGINT GENERATED ALWAYS AS IDENTITY) USING delta"]),
-    ("column-defaults", True, [
-        "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.feature.allowColumnDefaults' = 'supported')"
-    ]),
+    (
+        "column-defaults",
+        True,
+        ["CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.feature.allowColumnDefaults' = 'supported')"],
+    ),
     ("legacy-1-3", True, ["CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.minWriterVersion' = '3')"]),
     ("legacy-1-4", True, ["CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.minWriterVersion' = '4')"]),
-    ("legacy-2-5", True, [
-        "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.minReaderVersion' = '2', "
-        "'delta.minWriterVersion' = '5')"
-    ]),
-    ("legacy-2-6", True, [
-        "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.minReaderVersion' = '2', "
-        "'delta.minWriterVersion' = '6')"
-    ]),
-    ("check-on-1-2", True, [
-        "CREATE TABLE {t} (id BIGINT) USING delta",
-        "ALTER TABLE {t} ADD CONSTRAINT positive CHECK (id > 0)",
-    ]),
+    (
+        "legacy-2-5",
+        True,
+        [
+            "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.minReaderVersion' = '2', "
+            "'delta.minWriterVersion' = '5')"
+        ],
+    ),
+    (
+        "legacy-2-6",
+        True,
+        [
+            "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.minReaderVersion' = '2', "
+            "'delta.minWriterVersion' = '6')"
+        ],
+    ),
+    (
+        "check-on-1-2",
+        True,
+        [
+            "CREATE TABLE {t} (id BIGINT) USING delta",
+            "ALTER TABLE {t} ADD CONSTRAINT positive CHECK (id > 0)",
+        ],
+    ),
 ]
 
 
