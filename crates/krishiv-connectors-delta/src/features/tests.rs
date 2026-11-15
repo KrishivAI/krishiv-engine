@@ -233,3 +233,93 @@ fn several_unsupported_features_are_named_as_delta_spark_names_them() {
         probe["parameters"]["unsupported"].as_str()
     );
 }
+
+fn writer(version: i32, features: &[&str]) -> WriteProtocol {
+    WriteProtocol {
+        read: ReadProtocol {
+            min_reader_version: 3,
+            reader_features: Some(Vec::new()),
+            writer_features: (version == 7)
+                .then(|| features.iter().map(|f| (*f).to_owned()).collect()),
+            configuration: HashMap::new(),
+        },
+        min_writer_version: version,
+        invariants_in_use: false,
+    }
+}
+
+/// Section 4.2: every row of the writer allow-list.
+#[test]
+fn delta_write_refusals() {
+    for yes in WRITABLE {
+        assert!(check_write("t", &writer(7, &[yes])).is_ok(), "{yes}");
+    }
+    for v in [1, 2] {
+        assert!(check_write("t", &writer(v, &[])).is_ok(), "{v}");
+    }
+    for v in [3, 4, 5, 6, 8] {
+        let e = check_write("t", &writer(v, &[])).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::DeltaInvalidProtocolVersion,
+            "{v}"
+        );
+        assert!(e.to_string().contains("[1, 2, 7]"), "{e}");
+    }
+    for no in [
+        "rowTracking",
+        "icebergCompatV2",
+        "clustering",
+        "materializePartitionColumns",
+        "allowColumnDefaults",
+        "variantShredding-preview",
+        "checkConstraints",
+        "generatedColumns",
+        "identityColumns",
+        "catalogManaged",
+        "coordinatedCommits-preview",
+        "geospatial",
+        "columnMapping",
+        "variantType",
+        "somethingNew",
+    ] {
+        let e = check_write("t", &writer(7, &["appendOnly", no])).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::DeltaUnsupportedFeaturesForWrite,
+            "{no}"
+        );
+    }
+    // Every refused feature, in the protocol's order.
+    let e = check_write(
+        "db.t",
+        &writer(7, &["rowTracking", "appendOnly", "clustering"]),
+    )
+    .unwrap_err();
+    let m = e.to_string();
+    assert!(
+        m.contains(&format!(
+            "table \"db.t\" requires writer table feature(s) that are unsupported by Delta Lake \
+             \"{}\": rowTracking, clustering.",
+            crate::error::delta_version()
+        )),
+        "{m}"
+    );
+}
+
+#[test]
+fn an_invariant_in_use_refuses_the_write() {
+    let mut p = writer(7, &["invariants"]);
+    p.invariants_in_use = true;
+    let e = check_write("t", &p).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::DeltaUnsupportedFeaturesForWrite
+    );
+    assert!(e.to_string().contains(": invariants."), "{e}");
+    let mut legacy = writer(2, &[]);
+    legacy.invariants_in_use = true;
+    assert!(check_write("t", &legacy).is_err());
+    legacy.min_writer_version = 1;
+    assert!(check_write("t", &legacy).is_ok());
+}
