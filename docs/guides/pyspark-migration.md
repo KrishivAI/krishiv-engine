@@ -32,12 +32,8 @@ assert [tuple(r) for r in out.collect()] == [("east", 15.5), ("west", 20.0)]
 
 ## Step 2: scan your project
 
-`krishiv check-compat` reads `.py`, `.sql` and `.ipynb` files without running them and lists the functions below that
-your code calls (see [check-compat](check-compat.md)).
-
-```bash
-krishiv check-compat .
-```
+To find the functions your code calls that are listed below, search your project for them by name. The
+`krishiv check-compat` scanner that automates this is not part of 0.2.0 (see [check-compat](check-compat.md)).
 
 ## Spark functions Krishiv does not run yet (94)
 

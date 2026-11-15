@@ -45,7 +45,7 @@ Add `-o json` for one JSON object per row:
 {"id":2,"name":"b"}
 ```
 
-The other formats are `tsv`, `jsonl`, `markdown` and `line`.
+The other formats are `tsv`, `markdown` and `line`.
 
 ## Use it from a script or an agent
 
