@@ -401,12 +401,16 @@
     ]
   },
   "array_sort#1": {
-    "class": "PARSE_SYNTAX_ERROR",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "[1,5,6]"
+    ]
   },
   "array_sort#2": {
-    "class": "PARSE_SYNTAX_ERROR",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "[\"dc\",\"bc\",\"ab\"]"
+    ]
   },
   "array_sort#3": {
     "ok": true,

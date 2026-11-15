@@ -110,6 +110,7 @@ impl Detached {
                 unit_weights: HashSet::new(),
                 salts: self.salts.clone(),
                 stages: HashMap::new(),
+                partition_ordered: std::collections::HashSet::new(),
                 range_ordered: super::range_ordered_evals([node], None),
             };
             cx.declare_filters(node)?;
