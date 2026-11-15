@@ -110,7 +110,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &SPILL_DROP_BEHIND_BYTES,
     &EXPERIMENTAL_IVM,
     &EXPERIMENTAL_UNALIGNED_CHECKPOINTS,
-    &EXPERIMENTAL_RUNTIME_FILTER_BLOOM_AT_SCALE,
+    &RUNTIME_FILTER_BLOOM_AT_SCALE,
     &IO_STRICT_OPTIONS,
     &FILES_MAX_PARTITION_BYTES,
     &FILES_OPEN_COST_IN_BYTES,
@@ -910,17 +910,17 @@ pub static EXPERIMENTAL_UNALIGNED_CHECKPOINTS: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
-/// Experimental: larger runtime Bloom filters for scans far larger than the build.
-pub static EXPERIMENTAL_RUNTIME_FILTER_BLOOM_AT_SCALE: ConfigEntry = ConfigEntry {
-    key: "krishiv.experimental.runtimeFilterBloomAtScale",
+/// `krishiv.runtimeFilter.bloom.atScale`: larger runtime Bloom filters for scans far larger than the build.
+pub static RUNTIME_FILTER_BLOOM_AT_SCALE: ConfigEntry = ConfigEntry {
+    key: "krishiv.runtimeFilter.bloom.atScale",
     value_type: ValueType::Bool,
-    default: Some(ConfigValue::Bool(false)),
-    doc: "Experimental: a join whose probe-side scan is estimated at least 20 times its build plans its runtime \
-          Bloom filter with caps of 20,000,000 keys and 32 MiB instead of `krishiv.runtimeFilter.bloom.maxItems` \
-          and `krishiv.runtimeFilter.bloom.maxBytes`, when those are lower. Results do not change.",
+    default: Some(ConfigValue::Bool(true)),
+    doc: "A join whose probe-side scan is estimated at least 20 times its build plans its runtime Bloom filter with \
+          caps of 20,000,000 keys and 32 MiB instead of `krishiv.runtimeFilter.bloom.maxItems` and \
+          `krishiv.runtimeFilter.bloom.maxBytes`, when those are lower. Results do not change.",
     scope: Scope::Session,
     settable_by: SettableBy::Admin,
-    version_added: "0.2.0",
+    version_added: "0.3.0",
     spark_alias: None,
 };
 

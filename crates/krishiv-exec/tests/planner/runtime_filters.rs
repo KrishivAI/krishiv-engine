@@ -1032,7 +1032,7 @@ fn a_partitioned_build_plans_its_bloom_size() {
     assert_eq!(results[0], results[1]);
 }
 
-/// `krishiv.experimental.runtimeFilterBloomAtScale` (gap ledger §4 item 13):
+/// `krishiv.runtimeFilter.bloom.atScale` (gap ledger §4 item 13):
 /// a scan estimated at least 20x the build plans its Bloom filter past a
 /// lower `bloom.maxItems`; a scan below that ratio keeps the cap; results
 /// never change. Caps are scaled down: a 100-key cap, builds of 150 (probe
@@ -1060,8 +1060,10 @@ fn bloom_at_scale_raises_the_cap_only_for_a_large_probe() {
         ("krishiv.runtimeFilter.exactSet.maxValues", "0"),
         ("krishiv.runtimeFilter.bloom.maxItems", "100"),
         ("krishiv.runtimeFilter.adaptive.maxPassPercent", "100"),
+        // On by default: the "off" plans turn it off.
+        ("krishiv.runtimeFilter.bloom.atScale", "false"),
     ];
-    let on = ("krishiv.experimental.runtimeFilterBloomAtScale", "true");
+    let on = ("krishiv.runtimeFilter.bloom.atScale", "true");
     for (build, at_scale) in [("few", true), ("many", false)] {
         let q = format!("SELECT b.v FROM big b JOIN {build} s ON b.k64 = s.k64");
         configured(&mut t, MODES[0].1);
