@@ -305,6 +305,14 @@ jobs:
           KRISHIV_TEST_UDF_PYTHON: ${{ runner.temp }}/udf-python/bin/python
           KRISHIV_UDF_POOL_REQUIRED: "1"
       - run: cargo test --workspace --doc --locked
+      # The feature-gated runs below rebuild their crates' test executables beside the workspace's, which
+      # have already run: drop those first, or the krishiv-server link runs out of disk (ld Bus error, #769).
+      # Libraries (`.rlib`, `.rmeta`, `.so`) stay, so nothing is compiled again.
+      - name: Drop the workspace's test executables
+        run: |
+          df -h /
+          find target/debug/deps -maxdepth 1 -type f -perm -u+x ! -name '*.so' ! -name '*.d' -delete
+          df -h /
       - run: cargo nextest run -p krishiv-session --features telemetry-otlp --test otlp_collector --locked
       # Server TLS (`tls`) and OIDC (`oidc`), both off by default: the in-memory rustls handshakes,
       # and the JWT verifier against keys generated per run.
