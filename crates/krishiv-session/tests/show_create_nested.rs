@@ -3,6 +3,9 @@
 //! `MAP<.., ..>` and `STRUCT<name: type, ..>` with field names quoted where needed, field comments, every
 //! string as `STRING COLLATE UTF8_BINARY` and a declared `CHAR(n)` / `VARCHAR(n)` kept at its place. The
 //! expected texts are Spark 4.2.0's output for the same statements (`spark-shell`, `local[1]`).
+//!
+//! Not covered yet: a nested `NOT NULL` (declared, or from a CTAS `named_struct`) still prints, where Spark makes
+//! a stored table nullable at every level and prints none; that comes with the stored-table nullability fix.
 #![cfg(test)]
 
 use arrow_array::cast::AsArray;
@@ -120,5 +123,36 @@ fn a_column_name_starting_with_a_digit_is_quoted() {
     assert_eq!(
         show_create(&s, "t9"),
         "CREATE TABLE spark_catalog.default.t9 (\n  `9a` INT,\n  select INT)\nUSING parquet\n"
+    );
+}
+
+/// Comments escape only the quote (Spark's `getDDLComment`), at the column and the table level; partition
+/// columns quote like the column list.
+#[test]
+fn comments_keep_backslashes_and_partition_columns_quote_like_columns() {
+    let s = Session::new().unwrap();
+    run(
+        &s,
+        "CREATE TABLE c1 (a INT COMMENT 'it''s a\\\\b', `9a` INT, p INT, `9p` INT) USING parquet \
+         PARTITIONED BY (p, `9p`) COMMENT 'tab\\\\le'",
+    );
+    assert_eq!(
+        show_create(&s, "c1"),
+        "CREATE TABLE spark_catalog.default.c1 (\n  a INT COMMENT 'it\\'s a\\b',\n  `9a` INT,\n  p INT,\n  \
+         `9p` INT)\nUSING parquet\nPARTITIONED BY (p, `9p`)\nCOMMENT 'tab\\le'\n"
+    );
+}
+
+#[test]
+fn a_view_quotes_and_comments_its_columns_the_same_way() {
+    let s = Session::new().unwrap();
+    run(
+        &s,
+        "CREATE VIEW v9 (`9a` COMMENT 'x\\\\y', b) AS SELECT 1, 2",
+    );
+    let text = show_create(&s, "v9");
+    assert!(
+        text.starts_with("CREATE VIEW default.v9 (\n  `9a` COMMENT 'x\\y',\n  b)\n"),
+        "{text}"
     );
 }

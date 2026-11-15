@@ -79,13 +79,19 @@ fn render(t: &DataType, spec: Option<&DataTypeSpec>, out: &mut String) {
                     out.push_str(" NOT NULL");
                 }
                 if let Some(c) = f.metadata().comment() {
-                    let _ = write!(out, " COMMENT '{}'", c.replace('\'', "\\'"));
+                    let _ = write!(out, " COMMENT {}", comment_literal(c));
                 }
             }
             out.push('>');
         }
         other => out.push_str(&other.sql()),
     }
+}
+
+/// A comment as `StructField.getDDLComment` and `SHOW CREATE TABLE` write it: in single quotes, with only the
+/// quote escaped (`\'`); a backslash stays as it is.
+pub(super) fn comment_literal(c: &str) -> String {
+    format!("'{}'", c.replace('\'', "\\'"))
 }
 
 /// The collation name of a string type: `UTF8_BINARY` for a plain `STRING`.

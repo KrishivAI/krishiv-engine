@@ -1663,7 +1663,7 @@ fn create_statement(t: &CatalogTable, binding_enabled: bool) -> Result<String, K
             out.push_str(&format!(" DEFAULT {default}"));
         }
         if let Some(comment) = &c.comment {
-            out.push_str(&format!(" COMMENT {}", sql_literal(comment)));
+            out.push_str(&format!(" COMMENT {}", ddl_type::comment_literal(comment)));
         }
         Ok(out)
     };
@@ -1673,14 +1673,18 @@ fn create_statement(t: &CatalogTable, binding_enabled: bool) -> Result<String, K
             .columns
             .iter()
             .map(|c| match &c.comment {
-                Some(m) => format!("  {} COMMENT {}", quote_if_needed(&c.name), sql_literal(m)),
-                None => format!("  {}", quote_if_needed(&c.name)),
+                Some(m) => format!(
+                    "  {} COMMENT {}",
+                    ddl_type::quote_field(&c.name),
+                    ddl_type::comment_literal(m)
+                ),
+                None => format!("  {}", ddl_type::quote_field(&c.name)),
             })
             .collect::<Vec<_>>()
             .join(",\n");
         let mut out = format!("CREATE VIEW {}.{} (\n{cols})\n", t.namespace, t.name);
         if let Some(c) = &t.comment {
-            out.push_str(&format!("COMMENT {}\n", sql_literal(c)));
+            out.push_str(&format!("COMMENT {}\n", ddl_type::comment_literal(c)));
         }
         if !t.properties.is_empty() {
             let props = t
@@ -1716,7 +1720,7 @@ fn create_statement(t: &CatalogTable, binding_enabled: bool) -> Result<String, K
                 t.layout
                     .partition_columns
                     .iter()
-                    .map(|c| quote_if_needed(c))
+                    .map(|c| ddl_type::quote_field(c))
                     .collect::<Vec<_>>()
                     .join(", ")
             ));
@@ -1741,7 +1745,7 @@ fn create_statement(t: &CatalogTable, binding_enabled: bool) -> Result<String, K
     }
     partitioning(&mut out);
     if let Some(c) = &t.comment {
-        out.push_str(&format!("COMMENT {}\n", sql_literal(c)));
+        out.push_str(&format!("COMMENT {}\n", ddl_type::comment_literal(c)));
     }
     if !t.managed {
         out.push_str(&format!(
