@@ -85,3 +85,39 @@ group = "Spark Connect"
 name = "Spark Connect server (subset)"
 status = "not yet"
 note = ""
+
+[[surface]]
+group = "File formats"
+name = "Writing ORC (`df.write.orc`, `format("orc").save`)"
+status = "not yet"
+note = "Fails with KRISHIV_UNSUPPORTED_FEATURE; `df.write.orc` does not exist."
+
+[[surface]]
+group = "SQL"
+name = "`bucketBy` on writes"
+status = "not yet"
+note = "Fails with a clear unsupported-feature error."
+
+[[surface]]
+group = "SQL"
+name = "DataFrameWriterV2 (`writeTo`)"
+status = "partial"
+note = "`create` and `append` work. `createOrReplace` and `replace` fail as REPLACE TABLE AS SELECT does, and `overwritePartitions` always fails with KRISHIV_UNSUPPORTED_FEATURE."
+
+[[surface]]
+group = "SQL"
+name = "Spark version"
+status = "partial"
+note = "Krishiv 0.2 runs as Spark 4.2 only; Spark 3.5, 4.0 and 4.1 behaviour is not selectable yet."
+
+[[surface]]
+group = "User-defined functions"
+name = "Python `@udf` and scalar `pandas_udf` / `arrow_udf`"
+status = "supported"
+note = ""
+
+[[surface]]
+group = "User-defined functions"
+name = "Grouped-aggregate and iterator `pandas_udf`, `applyInPandas`, `mapInPandas`"
+status = "not yet"
+note = "Fail with NOT_IMPLEMENTED (eval types 202 and 204 for the first two)."
