@@ -580,11 +580,13 @@ impl FileReads {
             {
                 Ok(schema) => schema,
                 Err(e) => {
-                    // Without `mergeSchema` Spark infers from the first
-                    // file alone: when the scan settings skip its error,
-                    // nothing is left to infer from.
+                    // Without `mergeSchema` Spark's Parquet inference reads
+                    // the first file alone: when the scan settings skip its
+                    // error, nothing is left to infer from. Other formats
+                    // read every file (CSV, JSON) or keep their own rule,
+                    // so their errors stand.
                     let e = e.into_error(&files[0].display_path());
-                    if !scan_options.skips(&e) {
+                    if format.name() != "parquet" || !scan_options.skips(&e) {
                         return Err(e);
                     }
                     tracing::warn!(path = files[0].display_path(), error = %e, "skipped a file whose schema cannot be read");

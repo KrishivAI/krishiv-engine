@@ -180,3 +180,85 @@ fn without_the_key_a_corrupt_footer_fails_as_in_spark() {
         assert_eq!(read(&s, &bad_good), footer, "bad_good mergeSchema={merge}");
     }
 }
+
+/// Only Parquet without `mergeSchema` infers from the first file alone, so
+/// only there does a skipped inference error become `UNABLE_TO_INFER_SCHEMA`.
+/// CSV infers from every file: Spark 4.2.0 skips the corrupt one and keeps
+/// the rows decoded before the cut (1,474 rows summing to 611,601 over the
+/// fixtures `tests/fixtures/spark-4.2.0/ignore-corrupt-csv/`, its own gzip
+/// CSV of 1,000 rows and that file cut to half its length). Krishiv's CSV
+/// inference does not skip yet (known gap, a `krishiv-io` row of its own):
+/// the error stands, and is not turned into `UNABLE_TO_INFER_SCHEMA`.
+#[test]
+fn a_csv_inference_error_is_not_read_as_an_empty_inference() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/spark-4.2.0/ignore-corrupt-csv");
+    let good = std::fs::read(fixtures.join("good.csv.gz")).unwrap();
+    let cut = std::fs::read(fixtures.join("truncated.csv.gz")).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let s = Session::new().unwrap();
+    block_on(s.sql("SET spark.sql.files.ignoreCorruptFiles = true")).unwrap();
+    for (name, files) in [
+        ("good_bad", [("a.csv.gz", &good), ("b.csv.gz", &cut)]),
+        ("bad_good", [("a.csv.gz", &cut), ("b.csv.gz", &good)]),
+    ] {
+        let files: Vec<(&str, &[u8])> = files.iter().map(|(n, b)| (*n, b.as_slice())).collect();
+        let dir = layout(tmp.path(), name, &files);
+        let df = s
+            .read()
+            .format("csv")
+            .option("header", "true")
+            .option("inferSchema", "true")
+            .load([dir.to_str().unwrap()]);
+        let got = block_on(async {
+            df.create_or_replace_temp_view("c").await?;
+            s.sql("SELECT count(*) FROM c").await?.collect().await
+        });
+        let class = got.err().map(|e| e.error_class().name().to_owned());
+        assert_eq!(class.as_deref(), Some("FAILED_READ_FILE.NO_HINT"), "{name}");
+    }
+}
+
+/// A partitioned directory and a table with a declared schema (no inference:
+/// the table's footer reads are the first) skip the corrupt file the same
+/// way, and without the key fail as Spark's scan does,
+/// `FAILED_READ_FILE.NO_HINT` (Spark 4.2.0, the same layouts and table).
+#[test]
+fn partitions_and_declared_tables_skip_a_corrupt_footer() {
+    let s = Session::new().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let good = good_file(&s, tmp.path());
+    let half = &good[..good.len() / 2];
+    let parts = tmp.path().join("parts");
+    layout(&parts, "p=1", &[("a.parquet", &good)]);
+    layout(&parts, "p=2", &[("b.parquet", half)]);
+    let flat = layout(
+        tmp.path(),
+        "flat",
+        &[("a.parquet", half), ("b.parquet", &good)],
+    );
+    block_on(s.sql(&format!(
+        "CREATE TABLE declared (id BIGINT, s STRING) USING parquet LOCATION '{}'",
+        flat.display()
+    )))
+    .unwrap();
+    let run = |sql: &str| match block_on(async { s.sql(sql).await?.collect().await }) {
+        Ok(b) => Ok((
+            b[0].column(0).as_primitive::<Int64Type>().value(0),
+            b[0].column(1).as_primitive::<Int64Type>().value(0),
+        )),
+        Err(e) => Err(e.error_class().name().to_owned()),
+    };
+    let partitioned = format!(
+        "SELECT count(*), sum(id) FROM parquet.`{}` WHERE p IN (1, 2)",
+        parts.display()
+    );
+    let declared = "SELECT count(*), sum(id) FROM declared";
+    block_on(s.sql("SET spark.sql.files.ignoreCorruptFiles = true")).unwrap();
+    assert_eq!(run(&partitioned), Ok((1000, 499_500)));
+    assert_eq!(run(declared), Ok((1000, 499_500)));
+    block_on(s.sql("SET spark.sql.files.ignoreCorruptFiles = false")).unwrap();
+    let no_hint = Err("FAILED_READ_FILE.NO_HINT".to_owned());
+    assert_eq!(run(&partitioned), no_hint);
+    assert_eq!(run(declared), no_hint);
+}
