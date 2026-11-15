@@ -14,15 +14,30 @@ use std::collections::BTreeMap;
 use krishiv_common::secret::SecretString;
 use serde_json::{Map, Value};
 
-use super::error::RestError;
+use super::encode::json_depth_within;
+use super::error::{RestError, RestLimit};
 
 fn protocol(what: &str) -> RestError {
     RestError::Protocol(what.to_owned())
 }
 
-/// Parses a body that already passed the depth check.
-pub(crate) fn parse(body: &[u8]) -> Result<Value, RestError> {
+/// The nesting limit for bodies parsed only for an error code (an error body is never refused, only ignored).
+const ERROR_BODY_DEPTH: usize = 64;
+
+/// Parses a body nested at most `max_depth` deep (pre-scanned, so the parser never recurses past it).
+pub(crate) fn parse_limited(body: &[u8], max_depth: usize) -> Result<Value, RestError> {
+    if !json_depth_within(body, max_depth) {
+        return Err(RestError::Limit(RestLimit::Depth));
+    }
     serde_json::from_slice(body).map_err(|e| RestError::Protocol(format!("not JSON: {e}")))
+}
+
+/// An error body as an object, when it is one within [`ERROR_BODY_DEPTH`].
+fn error_object(body: &[u8]) -> Option<Map<String, Value>> {
+    match parse_limited(body, ERROR_BODY_DEPTH) {
+        Ok(Value::Object(m)) => Some(m),
+        _ => None,
+    }
 }
 
 fn object(v: Value, what: &str) -> Result<Map<String, Value>, RestError> {
@@ -77,13 +92,14 @@ fn string_list(v: Value, what: &str) -> Result<Vec<String>, RestError> {
     }
 }
 
-/// `CatalogConfig`.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+/// `CatalogConfig`. Every value is secret-typed: a server may put a `token`, a `credential` or storage keys in
+/// `defaults` or `overrides`, so `Debug` prints the keys only.
+#[derive(Default, Clone, PartialEq, Eq)]
 pub struct CatalogConfig {
     /// `defaults`.
-    pub defaults: BTreeMap<String, String>,
+    pub defaults: BTreeMap<String, SecretString>,
     /// `overrides`.
-    pub overrides: BTreeMap<String, String>,
+    pub overrides: BTreeMap<String, SecretString>,
     /// `endpoints`; `None` when the server sent none (the spec's default set then applies).
     pub endpoints: Option<Vec<String>>,
 }
@@ -96,19 +112,20 @@ impl CatalogConfig {
             Some(v) => Some(string_list(v, "`endpoints`")?),
         };
         Ok(Self {
-            defaults: string_map(m.remove("defaults"), "`defaults`")?,
-            overrides: string_map(m.remove("overrides"), "`overrides`")?,
-            endpoints,
+            defaults: secret_map(m.remove("defaults"), "`defaults`")?,
+            overrides: secret_map(m.remove("overrides"), "`overrides`")?,
+            // An empty list means the default set, as in Java (`RESTSessionCatalog`).
+            endpoints: endpoints.filter(|e| !e.is_empty()),
         })
     }
 
-    /// A key as the merged configuration has it: an override, else a default.
+    /// A key as the merged configuration has it: an override, else a default. The value is exposed; never log it.
     #[must_use]
     pub fn get(&self, key: &str) -> Option<&str> {
         self.overrides
             .get(key)
             .or_else(|| self.defaults.get(key))
-            .map(String::as_str)
+            .map(SecretString::expose_secret)
     }
 
     /// Whether the server supports `endpoint` (`"GET /v1/{prefix}/..."`). Without an `endpoints` list, only the
@@ -119,6 +136,16 @@ impl CatalogConfig {
             Some(list) => list.iter().any(|e| e == endpoint),
             None => DEFAULT_ENDPOINTS.contains(&endpoint),
         }
+    }
+}
+
+impl std::fmt::Debug for CatalogConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CatalogConfig")
+            .field("defaults", &self.defaults.keys().collect::<Vec<_>>())
+            .field("overrides", &self.overrides.keys().collect::<Vec<_>>())
+            .field("endpoints", &self.endpoints)
+            .finish()
     }
 }
 
@@ -305,7 +332,7 @@ pub(crate) fn credentials(v: Value) -> Result<Vec<StorageCredential>, RestError>
 
 /// The `ErrorModel` of an `IcebergErrorResponse`, when the body is one: `(type, message)`.
 pub(crate) fn error_model(body: &[u8]) -> (Option<String>, Option<String>) {
-    let Ok(Value::Object(mut m)) = serde_json::from_slice::<Value>(body) else {
+    let Some(mut m) = error_object(body) else {
         return (None, None);
     };
     let Some(Value::Object(mut e)) = m.remove("error") else {
@@ -348,9 +375,7 @@ pub(crate) fn token_response(v: Value) -> Result<TokenResponse, RestError> {
 
 /// The OAuth `error` code of a token endpoint's error body (never `error_description`).
 pub(crate) fn oauth_error(body: &[u8]) -> Option<String> {
-    let Ok(Value::Object(mut m)) = serde_json::from_slice::<Value>(body) else {
-        return None;
-    };
+    let mut m = error_object(body)?;
     take_string(&mut m, "error", "an OAuth error")
         .ok()
         .flatten()
@@ -383,6 +408,19 @@ mod tests {
         assert!(c.supports("GET /v1/{prefix}/namespaces/{namespace}/tables/{table}/credentials"));
         assert!(!c.supports("GET /v1/{prefix}/namespaces"));
         assert!(CatalogConfig::from_json(json!({"defaults": {"a": 1}})).is_err());
+        let c = CatalogConfig::from_json(
+            json!({"defaults": {"token": "planted-tok"}, "endpoints": []}),
+        )
+        .unwrap();
+        assert!(
+            c.supports("GET /v1/{prefix}/namespaces"),
+            "an empty list is the default set"
+        );
+        let shown = format!("{c:?}");
+        assert!(
+            shown.contains("token") && !shown.contains("planted-tok"),
+            "{shown}"
+        );
         assert!(CatalogConfig::from_json(json!([])).is_err());
     }
 

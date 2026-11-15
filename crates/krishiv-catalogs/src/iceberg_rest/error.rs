@@ -109,17 +109,17 @@ impl RestError {
                 RestLimit::Depth => (
                     "the nesting depth of a response",
                     limits.max_depth.to_string(),
-                    "a higher depth limit for this catalog",
+                    "a higher depth limit, which is not a setting yet",
                 ),
                 RestLimit::Entries => (
                     "entries in one listing",
                     limits.max_list_entries.to_string(),
-                    "a higher listing limit for this catalog",
+                    "a higher listing limit, which is not a setting yet",
                 ),
                 RestLimit::Pages => (
                     "pages in one listing",
                     limits.max_pages.to_string(),
-                    "a higher page limit for this catalog",
+                    "a higher page limit, which is not a setting yet",
                 ),
             };
             return KrishivCatalogLimitExceeded {

@@ -95,6 +95,13 @@ impl Transport {
                 let client = match reqwest::Client::builder()
                     .redirect(reqwest::redirect::Policy::none())
                     .no_proxy()
+                    // Never decode a body, even if another crate turns these `reqwest` features on: a decoded
+                    // body would pass the compressed-body refusal (so a gzip bomb is `CATALOG_FAILURE`, refused
+                    // outright, never `CATALOG_LIMIT_EXCEEDED` after inflating).
+                    .no_gzip()
+                    .no_brotli()
+                    .no_deflate()
+                    .no_zstd()
                     .https_only(!allow_http)
                     .connect_timeout(timeout)
                     .timeout(timeout)
@@ -147,7 +154,11 @@ impl Transport {
                 reply,
             })
             .map_err(|_| RestError::Transport("the client thread has stopped".to_owned()))?;
-        match answer.recv_timeout(deadline.saturating_duration_since(now) + REPLY_GRACE) {
+        match answer.recv_timeout(
+            deadline
+                .saturating_duration_since(now)
+                .saturating_add(REPLY_GRACE),
+        ) {
             Ok(result) => result,
             Err(mpsc::RecvTimeoutError::Timeout) => Err(RestError::Timeout),
             Err(mpsc::RecvTimeoutError::Disconnected) => Err(RestError::Transport(

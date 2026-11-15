@@ -13,8 +13,16 @@
 //! - **Refusals.** A table whose `read-restrictions` impose anything is refused (`KRISHIV_UNSUPPORTED_FEATURE`, T067
 //!   §4.1: Krishiv cannot apply them yet, and the spec says such a reader must fail), as is one whose `config` says
 //!   `scan-planning-mode=server`.
-//! - **Limits.** Each request has the whole `request_timeout`; listings stop at `max_pages` and `max_list_entries`
-//!   and refuse a page token the server repeats.
+//! - **Limits.** Each call has one `request_timeout`, a paged listing included (all its pages share it); listings
+//!   stop at `max_pages` and `max_list_entries` and refuse a page token the server repeats or one past 4 KiB.
+//! - **Names.** An empty, `.` or `..` namespace level or table name is refused before a URL is built, and any path
+//!   the URL parser would rewrite is refused (it would address another resource).
+//! - **Not here yet (the `Catalog` step, PR-58a/b).** Which table `config` keys reach a store: endpoint and signer
+//!   overrides (`s3.endpoint`, `signer.uri`, refresh endpoints), `remote-signing-config` and the delegated-token
+//!   keys are returned as they are (secret-typed) and the `Catalog` over this client decides on them, with the
+//!   endpoint-override case of `catalog_location_confined`. `load_credentials` sends the caller's token; using a
+//!   table's vended `token` for its later requests (T067 §4.1) comes with PR-58b. Copies of the client secret and
+//!   token inside `reqwest` (the form body, the header value) are not wiped.
 //!
 //! Calls block the caller (the `Catalog` trait is synchronous); see the `transport` module.
 
@@ -30,8 +38,8 @@ use url::Url;
 use super::auth::Tokens;
 use super::config::RestConfig;
 use super::encode::{
-    DEFAULT_NAMESPACE_SEPARATOR, json_depth_within, namespace_path, namespace_query, path_segment,
-    prefix_is_safe, separator_is_safe,
+    DEFAULT_NAMESPACE_SEPARATOR, namespace_path, namespace_query, path_segment, prefix_is_safe,
+    separator_is_safe,
 };
 use super::error::{RestError, RestLimit, quoted};
 use super::transport::{Request, Transport};
@@ -50,6 +58,13 @@ pub(crate) fn join(base: &Url, segments: &[&str]) -> Result<Url, RestError> {
         path.push_str(s);
     }
     url.set_path(&path);
+    // The URL parser removes dot segments (`..`, `.`, `%2e%2e`) and would address another resource than the one
+    // built; refuse any path it changed.
+    if url.path() != path {
+        return Err(RestError::Protocol(
+            "a name that the URL parser rewrites (a `.` or `..` segment)".to_owned(),
+        ));
+    }
     if url.host_str() != base.host_str()
         || url.scheme() != base.scheme()
         || url.port() != base.port()
@@ -59,6 +74,44 @@ pub(crate) fn join(base: &Url, segments: &[&str]) -> Result<Url, RestError> {
         ));
     }
     Ok(url)
+}
+
+/// The longest `next-page-token` accepted; a token is an opaque cursor, not a payload.
+const MAX_PAGE_TOKEN_BYTES: usize = 4096;
+
+/// Refuses a namespace level or table name a path cannot carry as itself: empty, `.` or `..` (a URL parser
+/// collapses them, so the request would address another resource).
+fn check_names(levels: &[String], table: Option<&str>) -> Result<(), RestError> {
+    let bad = |n: &str| n.is_empty() || n == "." || n == "..";
+    if levels.iter().any(|l| bad(l)) || table.is_some_and(bad) {
+        return Err(RestError::Protocol(
+            "an empty, `.` or `..` namespace level or table name".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Whether a storage-credential prefix is a bare scheme (`s3`, `gs`, `abfss`; T067 §4.1).
+fn is_bare_scheme(prefix: &str) -> bool {
+    let mut bytes = prefix.bytes();
+    bytes.next().is_some_and(|b| b.is_ascii_alphabetic())
+        && bytes.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'))
+}
+
+/// Checks a storage-credential prefix: a full URL or bucket prefix like any location, a bare scheme prefix by
+/// whether the policy allows that scheme (checked on a placeholder location of that scheme).
+fn check_prefix(
+    catalog: &str,
+    what: &str,
+    prefix: &str,
+    policy: &dyn LocationPolicy,
+) -> Result<(), KrishivError> {
+    if is_bare_scheme(prefix) {
+        let probe = format!("{}://scheme-prefix/", prefix.to_ascii_lowercase());
+        check_location(catalog, what, &probe, policy)
+    } else {
+        check_location(catalog, what, prefix, policy)
+    }
 }
 
 /// What the server's `/v1/config` settled.
@@ -120,7 +173,10 @@ impl RestClient {
                 config.limits.request_timeout,
                 config.limits.max_response_bytes,
             )?;
-            Ok((http, Tokens::new(&config.auth, &config.uri)?))
+            Ok((
+                http,
+                Tokens::new(&config.auth, &config.uri, config.limits.max_depth)?,
+            ))
         };
         let (http, tokens) =
             start().map_err(|e| e.into_error(&name, "the catalog client", &config.limits))?;
@@ -145,32 +201,44 @@ impl RestClient {
         move |e| e.into_error(&self.name, &relation, &self.config.limits)
     }
 
-    /// One GET: a token, the request, one retry after a 401 when the token can be renewed. `Ok(None)` is a 404.
+    /// The deadline of a call that starts now.
+    fn deadline(&self) -> Instant {
+        let now = Instant::now();
+        // `validate` caps the timeout, so this never saturates in practice.
+        now.checked_add(self.config.limits.request_timeout)
+            .unwrap_or(now)
+    }
+
+    /// One GET within `deadline`: a token, the request, one retry after a 401 when the token can be renewed.
+    /// `Ok(None)` is a 404 whose `ErrorModel` says the namespace, table or view does not exist; any other 404 (a
+    /// proxy, a wrong prefix) is an error.
     fn get(
         &self,
         url: &Url,
         headers: &[(&'static str, String)],
+        deadline: Instant,
     ) -> Result<Option<Value>, RestError> {
-        let deadline = Instant::now() + self.config.limits.request_timeout;
         let mut retried = false;
         loop {
             let mut request = Request::get(url.clone());
             request.headers = headers.to_vec();
-            request.bearer = self.tokens.token(&self.http, deadline)?;
+            let bearer = self.tokens.token(&self.http, deadline)?;
+            request.bearer.clone_from(&bearer);
             let mut response = self.http.call(request, deadline)?;
             let result = match response.status {
-                200 => {
-                    if json_depth_within(&response.body, self.config.limits.max_depth) {
-                        types::parse(&response.body).map(Some)
-                    } else {
-                        Err(RestError::Limit(RestLimit::Depth))
-                    }
-                }
-                404 => Ok(None),
+                200 => types::parse_limited(&response.body, self.config.limits.max_depth).map(Some),
                 401 if !retried && self.tokens.refreshable() => {
-                    self.tokens.invalidate();
+                    if let Some(refused) = &bearer {
+                        self.tokens.invalidate(refused);
+                    }
                     retried = true;
                     continue;
+                }
+                404 if types::error_model(&response.body)
+                    .0
+                    .is_some_and(|k| k.starts_with("NoSuch")) =>
+                {
+                    Ok(None)
                 }
                 status => {
                     let (kind, message) = types::error_model(&response.body);
@@ -188,24 +256,29 @@ impl RestClient {
 
     /// The server's configuration, fetched on first use.
     fn server(&self) -> Result<Arc<Server>, KrishivError> {
-        let mut slot = self
-            .server
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(s) = slot.as_ref() {
+        let slot = || {
+            self.server
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        };
+        if let Some(s) = slot().as_ref() {
             return Ok(Arc::clone(s));
         }
+        // Fetched without the lock, so a stalled `/v1/config` holds no other caller; when two callers race, the
+        // first answer stored wins.
         let fail = self.fail("the catalog configuration");
         let fetch = || -> Result<Server, RestError> {
             let mut url = join(&self.config.uri, &["v1", "config"])?;
             if let Some(w) = &self.config.warehouse {
                 url.query_pairs_mut().append_pair("warehouse", w);
             }
-            let value = self.get(&url, &[])?.ok_or(RestError::Status {
-                status: 404,
-                kind: Some("NoSuchWarehouseException".to_owned()),
-                message: None,
-            })?;
+            let value = self
+                .get(&url, &[], self.deadline())?
+                .ok_or(RestError::Status {
+                    status: 404,
+                    kind: Some("NoSuchWarehouseException".to_owned()),
+                    message: None,
+                })?;
             let config = CatalogConfig::from_json(value)?;
             if config.get("uri").is_some() {
                 tracing::info!(
@@ -238,9 +311,8 @@ impl RestClient {
                 config,
             })
         };
-        let server = Arc::new(fetch().map_err(fail)?);
-        *slot = Some(Arc::clone(&server));
-        Ok(server)
+        let fetched = Arc::new(fetch().map_err(fail)?);
+        Ok(Arc::clone(slot().get_or_insert(fetched)))
     }
 
     /// The server's merged configuration (after the first call).
@@ -267,6 +339,8 @@ impl RestClient {
         parse: impl Fn(Value) -> Result<Page<T>, RestError>,
     ) -> Result<Option<Vec<T>>, RestError> {
         let limits = &self.config.limits;
+        // One deadline for the whole listing, so many fast pages cannot hold a call longer than one request.
+        let deadline = self.deadline();
         let mut out = Vec::new();
         let mut token: Option<String> = None;
         let mut seen = HashSet::new();
@@ -275,7 +349,7 @@ impl RestClient {
             if let Some(t) = &token {
                 url.query_pairs_mut().append_pair("pageToken", t);
             }
-            let Some(value) = self.get(&url, &[])? else {
+            let Some(value) = self.get(&url, &[], deadline)? else {
                 return if token.is_none() {
                     Ok(None)
                 } else {
@@ -292,6 +366,11 @@ impl RestClient {
             match page.next.filter(|t| !t.is_empty()) {
                 None => return Ok(Some(out)),
                 Some(next) => {
+                    if next.len() > MAX_PAGE_TOKEN_BYTES {
+                        return Err(RestError::Protocol(
+                            "a page token longer than 4 KiB".to_owned(),
+                        ));
+                    }
                     if !seen.insert(next.clone()) {
                         return Err(RestError::Protocol(
                             "a listing repeats its page token".to_owned(),
@@ -316,6 +395,7 @@ impl RestClient {
         let server = self.server()?;
         let what = relation(parent, None);
         let run = || -> Result<Option<Vec<Vec<String>>>, RestError> {
+            check_names(parent, None)?;
             let mut url = self.url(&server, &["namespaces"])?;
             if !parent.is_empty() {
                 let value =
@@ -338,6 +418,7 @@ impl RestClient {
         let server = self.server()?;
         let what = relation(namespace, None);
         let run = || -> Result<Option<Vec<TableIdent>>, RestError> {
+            check_names(namespace, None)?;
             let ns = namespace_path(namespace, &server.separator);
             let url = self.url(&server, &["namespaces", &ns, "tables"])?;
             self.pages(&url, types::tables_page)
@@ -359,6 +440,7 @@ impl RestClient {
         let server = self.server()?;
         let what = relation(namespace, Some(table));
         let run = || -> Result<Option<LoadedTable>, RestError> {
+            check_names(namespace, Some(table))?;
             let ns = namespace_path(namespace, &server.separator);
             let name = path_segment(table);
             let url = self.url(&server, &["namespaces", &ns, "tables", &name])?;
@@ -370,7 +452,7 @@ impl RestClient {
             } else {
                 Vec::new()
             };
-            self.get(&url, &headers)?
+            self.get(&url, &headers, self.deadline())?
                 .map(LoadedTable::from_json)
                 .transpose()
         };
@@ -404,7 +486,7 @@ impl RestClient {
         }
         check_location(&self.name, what, &t.location, policy)?;
         for c in &t.storage_credentials {
-            check_location(&self.name, what, &c.prefix, policy)?;
+            check_prefix(&self.name, what, &c.prefix, policy)?;
         }
         Ok(())
     }
@@ -432,19 +514,22 @@ impl RestClient {
             .into());
         }
         let run = || -> Result<Option<Vec<StorageCredential>>, RestError> {
+            check_names(namespace, Some(table))?;
             let ns = namespace_path(namespace, &server.separator);
             let name = path_segment(table);
             let url = self.url(
                 &server,
                 &["namespaces", &ns, "tables", &name, "credentials"],
             )?;
-            self.get(&url, &[])?.map(types::credentials).transpose()
+            self.get(&url, &[], self.deadline())?
+                .map(types::credentials)
+                .transpose()
         };
         let Some(creds) = run().map_err(self.fail(&what))? else {
             return Ok(None);
         };
         for c in &creds {
-            check_location(&self.name, &what, &c.prefix, &*self.policy)?;
+            check_prefix(&self.name, &what, &c.prefix, &*self.policy)?;
         }
         Ok(Some(creds))
     }

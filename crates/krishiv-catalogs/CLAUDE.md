@@ -31,14 +31,19 @@ input, not a trusted party (design `P3-lakehouse.md` §5.6): everything it retur
   thread of its own with a current-thread runtime (the caller blocks on a `std` channel with the exact deadline, so dropping or
   calling inside a runtime never panics; no redirects, no ambient proxy, `Accept-Encoding: identity` and any other encoding
   refused, body capped while read), `auth.rs` the token source per request (client-credentials token reused until a tenth of its
-  lifetime is left, renewed after a 401), `encode.rs` RFC 3986 path segments, namespace separator, Java `URLEncoder` form bodies,
-  `prefix`/separator safety, JSON depth pre-scan, `types.rs` the response bodies from `serde_json::Value` (table and credential
+  lifetime is left, the lifetime capped at a day; a 401 drops only the token it refused), `encode.rs` RFC 3986 path segments, namespace separator, Java `URLEncoder` form bodies,
+  `prefix`/separator safety, JSON depth pre-scan, `types.rs` the response bodies from `serde_json::Value` (catalog, table and credential
   `config` values become `SecretString`s; `read-restrictions` fail closed), `error.rs` `RestError` -> `KRISHIV_CATALOG_FAILURE`/
   `KRISHIV_CATALOG_LIMIT_EXCEEDED` (server messages and `error_description` stay out of the error), `client.rs` `RestClient`
-  (`/v1/config` once, only `prefix` and `namespace-separator` taken, `uri` ignored; paged listings with page/entry caps and a
-  repeated-token stop; `load_table` checks every returned location and refuses read restrictions and server-side planning;
+  (`/v1/config` once, fetched outside the lock, only `prefix` and `namespace-separator` taken, `uri` ignored; one deadline per
+  call, a paged listing included; page/entry caps, a repeated or over-4-KiB token stops it; empty/`.`/`..` names and any path
+  the URL parser rewrites refused; a 404 is "absent" only with a `NoSuch*` error model; credential prefixes as full URL,
+  bucket or bare scheme; `load_table` checks every returned location and refuses read restrictions and server-side planning;
   `load_credentials` only when advertised), `test_server.rs` a fake HTTP/1.1 server (tests only).
-- Not here yet: the `Catalog` over the REST client (metadata mapped through `krishiv-connectors-iceberg`), the write half of the
+- Not here yet: the `Catalog` over the REST client (metadata mapped through `krishiv-connectors-iceberg`; it also decides which
+  table `config` keys reach a store: `s3.endpoint`, signer and refresh endpoints, `remote-signing-config`, delegated-token keys,
+  with the endpoint-override case of `catalog_location_confined`; a table's vended `token` for later requests is PR-58b), a fuzz
+  target for the REST response parsers, the write half of the
   Hive catalog, the Unity Catalog client, the Docker acceptance against a real metastore
   (the default port, transport and SASL are settings and unverified until then).
 

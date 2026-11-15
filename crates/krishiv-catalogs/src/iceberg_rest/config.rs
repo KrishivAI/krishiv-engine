@@ -48,18 +48,48 @@ pub enum RestAuth {
 /// The limits of one client (design P3-lakehouse §5.6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RestLimits {
-    /// Longest one call may take, first byte sent to last byte read, token fetch included
-    /// (`krishiv.catalog.requestTimeout`).
+    /// Longest one call may take, first byte sent to last byte read, token fetch and every page of a listing
+    /// included (`krishiv.catalog.requestTimeout`; more than zero, at most an hour).
     pub request_timeout: Duration,
     /// Most bytes one response may carry (`krishiv.catalog.maxMetadataBytes`). The client never asks for or
     /// accepts a compressed body, so this counts the bytes the parser sees.
     pub max_response_bytes: usize,
-    /// Deepest JSON nesting accepted (64).
+    /// Deepest JSON nesting accepted (64; at most 128).
     pub max_depth: usize,
     /// Most entries one listing may return over all its pages.
     pub max_list_entries: usize,
     /// Most pages one listing may take.
     pub max_pages: usize,
+}
+
+/// The longest `request_timeout` accepted.
+const MAX_REQUEST_TIMEOUT: Duration = Duration::from_secs(3600);
+
+impl RestLimits {
+    /// Refuses a zero limit, a zero or over-an-hour timeout, and a depth past 128 (the parser's own recursion
+    /// limit), so no limit can make every call fail or overflow a deadline (LH §5.6).
+    fn validate(&self) -> Result<(), KrishivError> {
+        if self.request_timeout.is_zero() || self.request_timeout > MAX_REQUEST_TIMEOUT {
+            return Err(invalid(
+                "requestTimeout",
+                "it must be more than zero and at most an hour",
+            ));
+        }
+        for (key, value) in [
+            ("maxMetadataBytes", self.max_response_bytes),
+            ("maxDepth", self.max_depth),
+            ("maxListEntries", self.max_list_entries),
+            ("maxPages", self.max_pages),
+        ] {
+            if value == 0 {
+                return Err(invalid(key, "it must be more than zero"));
+            }
+        }
+        if self.max_depth > 128 {
+            return Err(invalid("maxDepth", "it must be at most 128"));
+        }
+        Ok(())
+    }
 }
 
 impl Default for RestLimits {
@@ -141,6 +171,7 @@ impl RestConfig {
     /// `KRISHIV_INVALID_CONFIG_VALUE` for a malformed URI or token endpoint.
     pub fn validate(&self) -> Result<(), KrishivError> {
         check_url(&self.uri, self.allow_http, "uri")?;
+        self.limits.validate()?;
         if is_s3_tables(&self.uri, self.warehouse.as_deref()) {
             return Err(unsupported("Iceberg S3 Tables catalog"));
         }

@@ -42,8 +42,23 @@ pub(crate) enum Tokens {
         endpoint: Url,
         scope: String,
         extra: Vec<(String, String)>,
+        max_depth: usize,
         cached: Mutex<Option<Cached>>,
     },
+}
+
+/// The longest a client-credentials token is reused, whatever lifetime the endpoint claims: an `expires_in` is
+/// untrusted input, and a huge one must neither overflow an `Instant` nor keep a token past a day.
+const MAX_TOKEN_LIFETIME: Duration = Duration::from_secs(24 * 3600);
+
+/// When to stop using a token fetched at `fetched` that lives `expires_in` seconds: a tenth of its lifetime (at
+/// most a minute) before it ends, the lifetime capped at [`MAX_TOKEN_LIFETIME`].
+fn refresh_at(fetched: Instant, expires_in: u64) -> Instant {
+    let lifetime = Duration::from_secs(expires_in).min(MAX_TOKEN_LIFETIME);
+    // Past the clock's range: use the token for this request only.
+    fetched
+        .checked_add(lifetime.saturating_sub(refresh_margin(lifetime)))
+        .unwrap_or(fetched)
 }
 
 fn refresh_margin(lifetime: Duration) -> Duration {
@@ -51,8 +66,9 @@ fn refresh_margin(lifetime: Duration) -> Duration {
 }
 
 impl Tokens {
-    /// The source for `auth`; `base` is the catalog URI, for the default token endpoint `v1/oauth/tokens`.
-    pub(crate) fn new(auth: &RestAuth, base: &Url) -> Result<Self, RestError> {
+    /// The source for `auth`; `base` is the catalog URI, for the default token endpoint `v1/oauth/tokens`;
+    /// `max_depth` bounds the nesting of a token response.
+    pub(crate) fn new(auth: &RestAuth, base: &Url, max_depth: usize) -> Result<Self, RestError> {
         Ok(match auth {
             RestAuth::None => Self::None,
             RestAuth::Token(t) => Self::Static(t.clone()),
@@ -71,6 +87,7 @@ impl Tokens {
                 },
                 scope: scope.clone().unwrap_or_else(|| DEFAULT_SCOPE.to_owned()),
                 extra: extra.clone(),
+                max_depth,
                 cached: Mutex::new(None),
             },
         })
@@ -91,6 +108,7 @@ impl Tokens {
                 endpoint,
                 scope,
                 extra,
+                max_depth,
                 cached,
             } => {
                 let now = Instant::now();
@@ -115,7 +133,7 @@ impl Tokens {
                 };
                 let mut response = http.call(request, deadline)?;
                 let result = if response.status == 200 {
-                    types::parse(&response.body).and_then(types::token_response)
+                    types::parse_limited(&response.body, *max_depth).and_then(types::token_response)
                 } else if matches!(response.status, 400 | 401 | 403) {
                     Err(RestError::TokenRefused {
                         status: response.status,
@@ -131,10 +149,7 @@ impl Tokens {
                 krishiv_common::secret::wipe_bytes(&mut response.body);
                 let token = result?;
                 let fetched = Instant::now();
-                let refresh_at = token.expires_in.map(|s| {
-                    let lifetime = Duration::from_secs(s);
-                    fetched + lifetime.saturating_sub(refresh_margin(lifetime))
-                });
+                let refresh_at = token.expires_in.map(|s| refresh_at(fetched, s));
                 *lock(cached) = Some(Cached {
                     token: token.access_token.clone(),
                     refresh_at,
@@ -149,10 +164,14 @@ impl Tokens {
         matches!(self, Self::ClientCredentials { .. })
     }
 
-    /// Drops a cached token the catalog refused.
-    pub(crate) fn invalidate(&self) {
+    /// Drops the cached token if it is `refused`, the one the catalog just answered 401 to; a newer token another
+    /// caller stored meanwhile stays.
+    pub(crate) fn invalidate(&self, refused: &SecretString) {
         if let Self::ClientCredentials { cached, .. } = self {
-            *lock(cached) = None;
+            let mut slot = lock(cached);
+            if slot.as_ref().is_some_and(|c| c.token == *refused) {
+                *slot = None;
+            }
         }
     }
 }
@@ -179,6 +198,43 @@ mod tests {
     }
 
     #[test]
+    fn a_huge_expires_in_is_capped_and_never_overflows() {
+        let now = Instant::now();
+        let day = now + MAX_TOKEN_LIFETIME - Duration::from_secs(60);
+        assert_eq!(refresh_at(now, u64::MAX), day);
+        assert_eq!(refresh_at(now, (i64::MAX as u64) + 1), day);
+        assert_eq!(refresh_at(now, 100), now + Duration::from_secs(90));
+    }
+
+    #[test]
+    fn invalidate_drops_only_the_refused_token() {
+        let base = Url::parse("https://h/").unwrap();
+        let t = Tokens::new(
+            &RestAuth::ClientCredentials {
+                client_id: None,
+                client_secret: SecretString::new("s"),
+                token_endpoint: None,
+                scope: None,
+                extra: Vec::new(),
+            },
+            &base,
+            64,
+        )
+        .unwrap();
+        let Tokens::ClientCredentials { cached, .. } = &t else {
+            panic!("client credentials")
+        };
+        *lock(cached) = Some(Cached {
+            token: SecretString::new("new"),
+            refresh_at: None,
+        });
+        t.invalidate(&SecretString::new("old"));
+        assert!(lock(cached).is_some());
+        t.invalidate(&SecretString::new("new"));
+        assert!(lock(cached).is_none());
+    }
+
+    #[test]
     fn the_default_token_endpoint_is_under_the_catalog_uri() {
         let base = Url::parse("https://h/iceberg").unwrap();
         let t = Tokens::new(
@@ -190,6 +246,7 @@ mod tests {
                 extra: Vec::new(),
             },
             &base,
+            64,
         )
         .unwrap();
         let Tokens::ClientCredentials {

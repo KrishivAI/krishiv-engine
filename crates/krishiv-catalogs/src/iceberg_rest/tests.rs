@@ -147,6 +147,52 @@ fn missing_names_are_none() {
     assert!(client.load_table(&ns(&["db"]), "t").unwrap().is_none());
     assert!(client.list_tables(&ns(&["db"])).unwrap().is_none());
     assert!(client.list_namespaces(&ns(&["db"])).unwrap().is_none());
+
+    // A 404 that is not the catalog's `NoSuch*` answer (a proxy, a wrong prefix) is no proof of absence.
+    for body in [
+        "{}",
+        "<html>not found</html>",
+        r#"{"error": {"type": "NotFoundException"}}"#,
+    ] {
+        let server = serve(move |r| match path(r) {
+            "/v1/config" => Reply::Json(200, CONFIG.into()),
+            _ => Reply::Json(404, body.into()),
+        });
+        let client = client_with(config_for(&server));
+        let e = client.load_table(&ns(&["db"]), "t").unwrap_err();
+        assert_eq!(class(&e), ErrorClass::KrishivCatalogFailure, "{body}");
+    }
+}
+
+#[test]
+fn dot_and_empty_names_are_refused_before_any_request() {
+    let server = serve(|r| match path(r) {
+        "/v1/config" => Reply::Json(200, CONFIG.into()),
+        _ => Reply::Json(200, table_json("s3://b/t")),
+    });
+    let client = client_with(config_for(&server));
+    client.catalog_config().unwrap();
+    for (namespace, table) in [
+        (ns(&["db"]), ".."),
+        (ns(&["db"]), "."),
+        (ns(&["db"]), ""),
+        (ns(&[".."]), "t"),
+        (ns(&["."]), "t"),
+        (ns(&[""]), "t"),
+        (ns(&["a", ".."]), "t"),
+    ] {
+        let e = client.load_table(&namespace, table).unwrap_err();
+        assert_eq!(
+            class(&e),
+            ErrorClass::KrishivCatalogFailure,
+            "{namespace:?} {table}"
+        );
+        if namespace != ["db"] {
+            assert!(client.list_tables(&namespace).is_err(), "{namespace:?}");
+        }
+    }
+    assert!(client.list_namespaces(&ns(&[".."])).is_err());
+    assert_eq!(server.seen().len(), 1, "only the config was requested");
 }
 
 #[test]
@@ -223,6 +269,10 @@ fn catalog_location_confined() {
         ("http://169.254.169.254/latest", "s3://b/t"),
         ("s3://key:secret@b/t", "s3://b/t"),
         ("s3://b/t", "file:///"),
+        ("s3://b/t", "file"),
+        ("s3://b/t", "http"),
+        ("s3://b/t", "s3:"),
+        ("s3://b/t", "b/t"),
         ("s3://b/wh/../../other", "s3://b/t"),
     ] {
         let body = format!(
@@ -382,6 +432,85 @@ fn catalog_redirect_not_followed() {
     assert_eq!(class(&e), ErrorClass::KrishivCatalogFailure);
     assert!(e.to_string().contains("`rest`"), "{e}");
     assert!(elsewhere.seen().is_empty());
+}
+
+#[test]
+fn credential_prefixes_in_the_three_forms() {
+    for prefix in ["s3://b/t", "s3://b", "s3://b/", "s3", "S3", "abfss", "gs"] {
+        let body = format!(
+            r#"{{"metadata": {{"format-version": 2, "location": "s3://b/t"}},
+                "storage-credentials": [{{"prefix": "{prefix}", "config": {{}}}}]}}"#
+        );
+        let server = serve(move |r| match path(r) {
+            "/v1/config" => Reply::Json(200, CONFIG.into()),
+            _ => Reply::Json(200, body.clone()),
+        });
+        let client = client_with(config_for(&server));
+        let t = client.load_table(&ns(&["db"]), "t").unwrap().unwrap();
+        assert_eq!(t.storage_credentials[0].prefix, prefix);
+    }
+}
+
+#[test]
+fn a_paged_listing_shares_one_deadline() {
+    let pages = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&pages);
+    let server = serve(move |r| match path(r) {
+        "/v1/config" => Reply::Json(200, CONFIG.into()),
+        _ => {
+            // Each page is fast (~100 ms) and names a new token, forever.
+            let n = counter.fetch_add(1, Ordering::SeqCst);
+            Reply::Trickle(
+                format!(r#"{{"identifiers":[],"next-page-token":"p{n:04}"}}"#),
+                Duration::from_millis(2),
+            )
+        }
+    });
+    let mut config = config_for(&server);
+    config.limits.request_timeout = Duration::from_millis(700);
+    let client = client_with(config);
+    client.catalog_config().unwrap();
+    let started = Instant::now();
+    let e = client.list_tables(&ns(&["db"])).unwrap_err();
+    let took = started.elapsed();
+    assert_eq!(class(&e), ErrorClass::KrishivCatalogFailure);
+    assert!(took < Duration::from_millis(2500), "{took:?}");
+    assert!(
+        pages.load(Ordering::SeqCst) > 1,
+        "more than one page was read"
+    );
+}
+
+#[test]
+fn a_page_token_past_4_kib_is_refused() {
+    let token = "x".repeat(4097);
+    let server = serve(move |r| match path(r) {
+        "/v1/config" => Reply::Json(200, CONFIG.into()),
+        _ => Reply::Json(
+            200,
+            format!(r#"{{"identifiers":[],"next-page-token":"{token}"}}"#),
+        ),
+    });
+    let client = client_with(config_for(&server));
+    let e = client.list_tables(&ns(&["db"])).unwrap_err();
+    assert_eq!(class(&e), ErrorClass::KrishivCatalogFailure);
+}
+
+#[test]
+fn zero_and_absurd_limits_fail_at_startup() {
+    let base = "https://h/";
+    let cases: [fn(&mut RestConfig); 4] = [
+        |c| c.limits.request_timeout = Duration::ZERO,
+        |c| c.limits.request_timeout = Duration::from_secs(u64::MAX),
+        |c| c.limits.max_pages = 0,
+        |c| c.limits.max_depth = 129,
+    ];
+    for set in cases {
+        let mut c = RestConfig::new(base).unwrap();
+        set(&mut c);
+        let e = RestClient::new("rest", c, Arc::new(RemoteLocationPolicy::default())).unwrap_err();
+        assert_eq!(class(&e), ErrorClass::KrishivInvalidConfigValue);
+    }
 }
 
 #[test]
