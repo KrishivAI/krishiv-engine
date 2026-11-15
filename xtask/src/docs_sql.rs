@@ -269,7 +269,16 @@ fn status(name: &str, def: Option<&FunctionDef>) -> &'static str {
 /// A page's description: the first sentence of Spark's usage text, else a line naming the function.
 fn description_of(name: &str, desc: &str) -> String {
     let flat = desc.split_whitespace().collect::<Vec<_>>().join(" ");
-    let first = flat.split_inclusive(". ").next().unwrap_or("").trim();
+    let mut first = flat.as_str();
+    // The first sentence: stop at ". " but never inside backticks or after an ellipsis.
+    for (i, _) in flat.match_indices(". ") {
+        let head = &flat[..=i];
+        if head.matches('`').count() % 2 == 0 && !head.ends_with("..") {
+            first = head;
+            break;
+        }
+    }
+    let first = first.trim();
     if first.is_empty() {
         format!("The Spark SQL function {name}: syntax, examples and Krishiv's status.")
     } else {

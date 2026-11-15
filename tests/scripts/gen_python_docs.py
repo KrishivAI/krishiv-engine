@@ -148,6 +148,13 @@ def render_class(cls: ast.ClassDef) -> str:
     return "\n".join(lines)
 
 
+def first_sentence(doc: str) -> str:
+    """The first sentence of the first paragraph, on one line."""
+    para = " ".join(doc.strip().split("\n\n")[0].split())
+    cut = para.find(". ")
+    return para if cut < 0 else para[: cut + 1]
+
+
 def render_module(name: str, path: Path) -> str:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     exported = exports(tree)
@@ -158,7 +165,7 @@ def render_module(name: str, path: Path) -> str:
         if exported is not None:
             exported |= exports(sub) or set()
     doc = md_doc(ast.get_docstring(tree))
-    summary = doc.strip().splitlines()[0] if doc else f"The {name} module of the Krishiv Python API."
+    summary = first_sentence(doc) if doc else f"The {name} module of the Krishiv Python API."
     lines = [front_matter(summary), f"# `{name}`", "", HEADER, ""]
     if doc:
         lines += [doc, ""]

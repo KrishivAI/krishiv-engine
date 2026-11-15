@@ -1,5 +1,5 @@
 ---
-description: "`pyspark.sql.functions`: column builders. A function resolves by name in the engine's"
+description: "`pyspark.sql.functions`: column builders."
 ---
 
 # `krishiv.sql.functions`

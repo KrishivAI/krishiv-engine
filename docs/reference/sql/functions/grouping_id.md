@@ -1,5 +1,5 @@
 ---
-description: "returns the level of grouping, equals to `(grouping(c1) << (n-1)) + (grouping(c2) << (n-2)) + ..."
+description: "returns the level of grouping, equals to `(grouping(c1) << (n-1)) + (grouping(c2) << (n-2)) + ... + grouping(cn)`"
 ---
 
 # `grouping_id`

@@ -1,5 +1,5 @@
 ---
-description: "`DataFrameReader` (`spark.read`), `DataFrameWriter` (`df.write`)"
+description: "`DataFrameReader` (`spark.read`), `DataFrameWriter` (`df.write`) and `DataFrameWriterV2` (`df.writeTo`)."
 ---
 
 # `krishiv.sql.readwriter`
