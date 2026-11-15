@@ -124,6 +124,12 @@ pub struct ScanPushdowns {
     /// [`ScanPushdown::take`] reads the row back by. Only for a scan that
     /// [`supports_take`](ScanPushdown::supports_take).
     pub row_id: bool,
+    /// Read each input partition whole, by one driver, in order, and tag
+    /// its batches with the partition's index ([`Batch::split`]): a
+    /// `TABLESAMPLE` above draws partition `i`'s rows from its own stream
+    /// in row order, however many drivers run. File scans honour it; an
+    /// in-memory scan's morsels are already read so.
+    pub partition_order: bool,
 }
 
 /// The rows of one file [`ScanPushdown::take`] reads.

@@ -130,6 +130,12 @@
     ],
     "sqlState" : "53400"
   },
+  "KRISHIV_PYTHON_UDF_RESULT_MISMATCH" : {
+    "message" : [
+      "The Python UDF <name> returned a result that does not match what it declares: <reason>. Make the function return the declared columns, in their declared types, and for a grouped aggregate one value per group."
+    ],
+    "sqlState" : "39000"
+  },
   "KRISHIV_PYTHON_WORKER_EXITED" : {
     "message" : [
       "Python worker exited unexpectedly (crashed): <reason>. The next query starts a new worker. If a UDF ran out of memory, raise \"krishiv.python.worker.memoryLimit\"."
