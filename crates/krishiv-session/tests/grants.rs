@@ -431,34 +431,62 @@ fn a_table_revoke_takes_the_column_grants_with_it() {
     denied(&ana, "GRANT SELECT (a) ON t TO user:carl");
 }
 
+/// `SHOW GRANTS ON TABLE t` rows as an admin sees them, as text.
+fn grants_on(w: &World, table: &str) -> String {
+    let shown = block_on(async {
+        w.admin()
+            .sql(&format!("SHOW GRANTS ON TABLE {table}"))
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap();
+    format!("{shown:?}")
+}
+
 #[test]
-fn only_the_grantor_the_owner_or_an_admin_revokes() {
+fn a_revoke_reaches_only_the_callers_own_grants_unless_owner_or_admin() {
     let w = World::new();
     table(&w, "t");
-    let (root, ana, bob, carl) = (w.admin(), w.user("ana"), w.user("bob"), w.user("carl"));
+    let (root, ana, bob, carl, g) = (
+        w.admin(),
+        w.user("ana"),
+        w.user("bob"),
+        w.user("carl"),
+        w.user("g"),
+    );
     ok(&root, "GRANT SELECT ON t TO user:ana WITH GRANT OPTION");
-    ok(&ana, "GRANT SELECT ON t TO user:bob");
-    ok(&root, "GRANT SELECT ON t TO user:carl");
-    // A grant-option holder cannot revoke an admin's grant, nor another holder's.
-    denied(&ana, "REVOKE SELECT ON t FROM user:carl");
-    assert_eq!(ok(&carl, "SELECT * FROM t"), 1);
-    ok(&root, "GRANT SELECT ON t TO user:carl WITH GRANT OPTION");
-    denied(&carl, "REVOKE SELECT ON t FROM user:bob");
-    denied(&carl, "REVOKE GRANT OPTION FOR SELECT ON t FROM user:ana");
-    denied(&carl, "REVOKE SELECT ON t FROM user:ana");
-    assert_eq!(ok(&bob, "SELECT * FROM t"), 1);
-    assert_eq!(ok(&ana, "SELECT * FROM t"), 1);
-    // A refusal changes nothing, even for the rows the caller did grant.
-    ok(&carl, "GRANT SELECT ON t TO user:dee");
-    denied(&carl, "REVOKE SELECT ON t FROM user:dee, user:bob");
+    ok(&root, "GRANT SELECT ON t TO user:bob WITH GRANT OPTION");
+    // Grantors ana and bob both grant SELECT to g; bob's revoke takes only bob's row.
+    ok(&ana, "GRANT SELECT ON t TO user:g");
+    ok(&bob, "GRANT SELECT ON t TO user:g");
+    ok(&bob, "REVOKE SELECT ON t FROM user:g");
+    let shown = grants_on(&w, "t");
+    assert!(shown.contains("\"user:g\""), "{shown}");
+    assert_eq!(ok(&g, "SELECT * FROM t"), 1);
+    // A grant only ana made, revoked by bob, answers exactly as a grant never made: success,
+    // nothing changed, no audit record (no existence oracle).
+    let before = grants_on(&w, "t");
+    let made = run(&bob, "REVOKE SELECT ON t FROM user:g").map_err(|e| e.to_string());
+    let never = run(&bob, "REVOKE SELECT ON t FROM user:nobody").map_err(|e| e.to_string());
+    assert_eq!(made, never);
+    assert_eq!(made, Ok(0));
+    assert_eq!(grants_on(&w, "t"), before);
+    // Same for an admin's grant and for the grant option of another grantor's grantee.
+    ok(&bob, "REVOKE SELECT ON t FROM user:ana");
+    ok(&bob, "REVOKE GRANT OPTION FOR SELECT ON t FROM user:ana");
+    ok(&ana, "GRANT SELECT ON t TO user:dee");
     assert_eq!(ok(&w.user("dee"), "SELECT * FROM t"), 1);
-    // The grantor may.
-    ok(&ana, "REVOKE SELECT ON t FROM user:bob");
-    denied(&bob, "SELECT * FROM t");
-    // An admin may revoke anyone's.
-    ok(&root, "REVOKE SELECT ON t FROM user:carl");
-    denied(&carl, "SELECT * FROM t");
-    // The owner may revoke a grant an admin made on its object.
+    // The grantor's own revoke works.
+    ok(&ana, "REVOKE SELECT ON t FROM user:g");
+    denied(&g, "SELECT * FROM t");
+    // No grant authority at all is refused before anything is looked up.
+    denied(&carl, "REVOKE SELECT ON t FROM user:g");
+    denied(&carl, "REVOKE SELECT ON t FROM user:nobody");
+    // An admin revokes anyone's.
+    ok(&root, "REVOKE SELECT ON t FROM user:ana");
+    denied(&ana, "SELECT * FROM t");
+    // The owner revokes a grant an admin made on its object.
     ok(&root, "GRANT CREATE ON SCHEMA default TO user:ana");
     let wh = w.dir.path().join("wh");
     ok(

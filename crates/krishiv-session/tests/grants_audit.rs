@@ -124,7 +124,8 @@ fn each_refusal_leaves_exactly_one_record() {
     assert_eq!(e.error_class().name(), "KRISHIV_INSUFFICIENT_PERMISSIONS");
     assert_eq!(take().len(), 1);
 
-    // A revoke of a grant the caller neither made nor owns: one record (T062 REVOKE fix).
+    // A revoke of another grantor's grant is a no-op without a record; one without any grant
+    // authority is refused with one (T062 REVOKE fix).
     for sql in [
         "CREATE TABLE t2 (a INT) USING parquet",
         "GRANT SELECT ON t2 TO user:ana WITH GRANT OPTION",
@@ -147,7 +148,19 @@ fn each_refusal_leaves_exactly_one_record() {
             "{sql}: {records:?}"
         );
     };
-    refused(&ana, "REVOKE SELECT ON t2 FROM user:carl", "grants");
+    block_on(async {
+        ana.sql("REVOKE SELECT ON t2 FROM user:carl")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap();
+    assert!(take().is_empty());
+    refused(
+        &session("bob", false),
+        "REVOKE SELECT ON t2 FROM user:carl",
+        "grants",
+    );
     // The role matrix's refusals carry the counter's label, `roles`, with or without grants.
     let viewer_with_grants = session_over("vic", false, viewer());
     refused(&viewer_with_grants, "SELECT * FROM system.memory", "roles");

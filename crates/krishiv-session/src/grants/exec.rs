@@ -4,9 +4,10 @@
 //!
 //! Who may change a grant (note §2.2): an admin, an owner of the object (or a parent), or a holder
 //! of the privilege there `WITH GRANT OPTION`; a grant never exceeds the grantor's own rights
-//! (`ALL PRIVILEGES` needs the authority for each). `REVOKE` takes the same authority, and each
-//! row it removes must be the caller's own grant, on an object it owns, or the caller an admin; a
-//! table-level revoke takes the grantee's column grants on the table with it. Role
+//! (`ALL PRIVILEGES` needs the authority for each). `REVOKE` takes the same authority, then
+//! removes only the caller's own grants unless it owns the object or is an admin (another
+//! grantor's rows are left as if absent: no existence oracle); a table-level revoke takes the
+//! grantee's column grants on the table with it. Role
 //! changes other than `CREATE ROLE` need an admin or the role's creator. Every refusal is
 //! `KRISHIV_INSUFFICIENT_PERMISSIONS` naming only what the statement wrote, and reads the same
 //! whether the object or role exists or not.
@@ -375,21 +376,29 @@ impl Session {
                             })
                     };
                     // Only the grant's grantor, an owner of its object (or a parent) or an admin
-                    // revokes it; one row the caller may not revoke refuses the whole statement.
-                    if !admin
-                        && let Some(g) = s.0.grants.iter().find(|g| {
-                            matches(g) && g.granted_by != me && !s.0.owns(&principal, &g.object, cs)
-                        })
-                    {
-                        return Err(self.refuse(policy, &securable, g.privilege));
-                    }
+                    // revokes it. Another grantor's row is left as if it did not exist, so the
+                    // answer never tells whether it does (no existence oracle); a caller without
+                    // any grant authority was refused above, before anything was looked up.
+                    let mine: Vec<bool> =
+                        s.0.grants
+                            .iter()
+                            .map(|g| {
+                                matches(g)
+                                    && (admin
+                                        || g.granted_by == me
+                                        || s.0.owns(&principal, &g.object, cs))
+                            })
+                            .collect();
                     if *grant_option_only {
                         s.0.grants
                             .iter_mut()
-                            .filter(|g| matches(g))
-                            .for_each(|g| g.with_grant_option = false);
+                            .zip(&mine)
+                            .filter(|(_, m)| **m)
+                            .for_each(|(g, _)| g.with_grant_option = false);
                     } else {
-                        s.0.grants.retain(|g| !matches(g));
+                        let mut mine = mine.iter();
+                        s.0.grants
+                            .retain(|_| !mine.next().copied().unwrap_or(false));
                     }
                     Ok(())
                 })?;
