@@ -208,7 +208,7 @@ impl Session {
                         return Err(unable());
                     }
                     // The partition columns of `key=value` directories (hidden and `_`-prefixed entries are not).
-                    crate::partition_keys::partition_keys(&table.location)
+                    crate::partition_keys::partition_keys(&table.location)?
                 } else {
                     Vec::new()
                 };

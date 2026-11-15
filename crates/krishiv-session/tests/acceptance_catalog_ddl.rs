@@ -275,7 +275,7 @@ fn sql_19_hidden_and_underscore_directories_are_not_partition_columns() {
     run(&s, "INSERT INTO src VALUES (1, 10)");
     let l = dir.path().join("src");
     std::fs::create_dir_all(l.join(".hidden=1")).unwrap();
-    std::fs::create_dir_all(l.join("_temporary=1")).unwrap();
+    std::fs::create_dir_all(l.join("_temporary").join("0")).unwrap();
     run(
         &s,
         &format!(
@@ -329,4 +329,46 @@ fn a_view_without_a_path_stays_an_empty_relation_of_its_declared_columns() {
         ),
         [[Some("53".to_owned()), None]]
     );
+}
+
+#[test]
+fn sql_19_an_underscore_prefixed_key_value_directory_is_a_partition() {
+    // As the file reader treats it: only `_` names without a `=` (`_SUCCESS`) are hidden.
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE src (id INT, `_p` INT) USING parquet PARTITIONED BY (`_p`)",
+    );
+    run(&s, "INSERT INTO src VALUES (1, 10)");
+    let l = dir.path().join("src");
+    run(
+        &s,
+        &format!(
+            "CREATE TABLE pt USING parquet LOCATION '{}'",
+            l.to_str().unwrap()
+        ),
+    );
+    let c = rows(&s, "DESCRIBE TABLE EXTENDED pt");
+    assert!(
+        c.iter()
+            .any(|r| r[0].as_deref() == Some("# Partition Information")),
+        "{c:?}"
+    );
+}
+
+#[test]
+fn rs_8_a_view_with_declared_columns_over_an_empty_directory_reads_no_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    let empty = dir.path().join("empty");
+    std::fs::create_dir(&empty).unwrap();
+    run(
+        &s,
+        &format!(
+            "CREATE OR REPLACE TEMPORARY VIEW ev (id INT) USING parquet OPTIONS (path '{}')",
+            empty.to_str().unwrap()
+        ),
+    );
+    assert!(rows(&s, "SELECT * FROM ev").is_empty());
 }

@@ -53,7 +53,7 @@ fn unsupported(feature: &str) -> KrishivError {
     .into()
 }
 
-fn internal(message: String) -> KrishivError {
+pub(crate) fn internal(message: String) -> KrishivError {
     InternalError { message }.into()
 }
 
@@ -370,7 +370,7 @@ fn list_partition_dirs(
         let Ok(n) = entry.file_name().into_string() else {
             continue;
         };
-        if n.contains('=') && !n.starts_with(['.', '_']) {
+        if crate::partition_keys::is_partition_dir_name(&n) {
             names.push((n, entry.path()));
         }
     }
