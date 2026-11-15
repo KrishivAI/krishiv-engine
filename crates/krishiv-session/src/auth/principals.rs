@@ -313,6 +313,10 @@ mod tests {
         let t = parse_date("k", "2024-03-01").expect("valid");
         assert_eq!(t, UNIX_EPOCH + Duration::from_secs(1_709_251_200));
         assert!(parse_date("k", "2023-02-29").is_err());
+        // A 30-day month: the 30th exists, the 31st does not.
+        assert!(parse_date("k", "2024-04-30").is_ok());
+        assert!(parse_date("k", "2024-04-31").is_err());
+        assert!(parse_date("k", "2024-11-31").is_err());
         assert!(parse_date("k", "2024-02-29").is_ok());
         for bad in [
             "2024-1-01",
@@ -327,6 +331,23 @@ mod tests {
         ] {
             assert!(parse_date("k", bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn the_table_lists_its_entries_by_name() {
+        assert!(PrincipalTable::default().is_empty());
+        let t = table(&[
+            ("krishiv.auth.principals.portal.privileges", "impersonate"),
+            ("krishiv.auth.principals.batch.privileges", ""),
+        ])
+        .expect("valid");
+        assert!(!t.is_empty());
+        let names: Vec<&str> = t.iter().map(|(n, _)| n).collect();
+        assert_eq!(names, ["batch", "portal"]);
+        assert!(
+            t.iter()
+                .any(|(n, r)| n == "portal" && r.has(PrincipalPrivilege::Impersonate))
+        );
     }
 
     #[test]

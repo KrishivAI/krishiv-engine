@@ -422,3 +422,184 @@ fn audit_event_has_no_token_text() {
     assert!(logged.contains("malformed=true"), "{logged}");
     assert!(!logged.contains("analysts"), "{logged}");
 }
+
+#[derive(Clone, Default)]
+struct LogSink(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for LogSink {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend_from_slice(b);
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl LogSink {
+    fn text(&self) -> String {
+        String::from_utf8(
+            self.0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone(),
+        )
+        .unwrap_or_default()
+    }
+}
+
+/// With `signedAssertion` off (and in a build without `oidc`) every assertion is refused with
+/// the one error class, one audit record and one denied count; the reason is only in the log.
+#[tokio::test]
+async fn signed_assertion_off_is_refused_audited_and_counted() {
+    let sink = LogSink::default();
+    let writer = sink.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::TRACE)
+        .with_writer(move || writer.clone())
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let auth = server(&[]);
+    let r = auth
+        .impersonate_signed(&portal(), Surface::Connect, remote(), "a.b.c")
+        .await;
+    assert!(
+        matches!(&r, Err(e) if e.error_class() == ErrorClass::KrishivAuthImpersonationDenied
+        && e.sql_state() == Some("42501"))
+    );
+    assert_eq!(
+        auth.impersonation_counts(),
+        ImpersonationCount {
+            allowed: 0,
+            denied: 1
+        }
+    );
+    let logged = sink.text();
+    assert_eq!(logged.matches("krishiv::audit").count(), 1, "{logged}");
+    assert!(logged.contains("reason_code=\"assertion_off\""), "{logged}");
+    assert!(logged.contains("decision=\"denied\""), "{logged}");
+    assert!(!logged.contains("a.b.c"), "{logged}");
+}
+
+/// A caller that may not impersonate is refused on its own standing, before any assertion is
+/// looked at (review m3): `no_privilege`, not the assertion's verdict.
+#[tokio::test]
+async fn signed_assertion_from_a_caller_without_the_privilege_is_refused() {
+    let sink = LogSink::default();
+    let writer = sink.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::TRACE)
+        .with_writer(move || writer.clone())
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let auth = server(&[]);
+    let batch = caller("batch", Role::Admin, Method::Token);
+    let r = auth
+        .impersonate_signed(&batch, Surface::Connect, remote(), "a.b.c")
+        .await;
+    assert!(matches!(&r, Err(e) if e.error_class() == ErrorClass::KrishivAuthImpersonationDenied));
+    assert_eq!(auth.impersonation_counts().denied, 1);
+    assert_eq!(auth.impersonation_counts().allowed, 0);
+    let logged = sink.text();
+    assert_eq!(logged.matches("krishiv::audit").count(), 1, "{logged}");
+    assert!(logged.contains("reason_code=\"no_privilege\""), "{logged}");
+}
+
+#[test]
+fn denial_reason_codes_are_stable() {
+    use super::impersonation::Denial;
+    for (d, code) in [
+        (Denial::NoPrivilege, "no_privilege"),
+        (Denial::NotAllowed, "not_allowed"),
+        (Denial::Chained, "chained"),
+        (Denial::UntrustedChannel, "untrusted_channel"),
+        (Denial::Malformed, "malformed"),
+        (Denial::OtherTenant, "other_tenant"),
+        (Denial::AssertionOff, "assertion_off"),
+        (Denial::BadAssertion, "bad_assertion"),
+        (Denial::AssertionUnavailable, "assertion_unavailable"),
+        (Denial::ActorMismatch, "actor_mismatch"),
+        (Denial::Expired, "expired"),
+    ] {
+        assert_eq!(d.as_str(), code);
+        assert_eq!(
+            d.error().error_class(),
+            ErrorClass::KrishivAuthImpersonationDenied
+        );
+    }
+}
+
+#[test]
+fn signed_assertion_settings() {
+    let on = [
+        ("krishiv.auth.impersonation.signedAssertion", " TRUE "),
+        (
+            "krishiv.auth.impersonation.assertion.issuer",
+            "https://portal.example.test/",
+        ),
+        (
+            "krishiv.auth.impersonation.assertion.audience",
+            "krishiv-act-as",
+        ),
+    ];
+    // The assertion settings share OIDC's validator: a build without `oidc` refuses them.
+    let on = AuthConfig::from_settings(on);
+    assert_eq!(on.is_ok(), cfg!(feature = "oidc"), "{on:?}");
+    if let Ok(c) = on {
+        assert!(c.impersonation.signed_assertion);
+    }
+    let off = AuthConfig::from_settings([("krishiv.auth.impersonation.signedAssertion", "false")])
+        .expect("valid");
+    assert!(!off.impersonation.signed_assertion);
+    // Not a boolean; on without an issuer; assertion settings while off.
+    let bad = |pairs: Vec<(&str, &str)>| AuthConfig::from_settings(pairs).expect_err("refused");
+    let e = bad(vec![("krishiv.auth.impersonation.signedAssertion", "yes")]);
+    assert!(e.to_string().contains("expected true or false"), "{e}");
+    let e = bad(vec![("krishiv.auth.impersonation.signedAssertion", "true")]);
+    assert!(e.to_string().contains("assertion.issuer"), "{e}");
+    let e = bad(vec![
+        (
+            "krishiv.auth.impersonation.assertion.issuer",
+            "https://portal.example.test/",
+        ),
+        (
+            "krishiv.auth.impersonation.assertion.audience",
+            "krishiv-act-as",
+        ),
+    ]);
+    // Without `oidc` the build refuses the settings first; with it, the missing switch.
+    if cfg!(feature = "oidc") {
+        assert!(e.to_string().contains("signedAssertion"), "{e}");
+    }
+}
+
+/// A principal that already acts for someone never presents an assertion: refused as `chained`
+/// on its own standing, counted once.
+#[tokio::test]
+async fn signed_assertion_from_a_delegated_principal_is_refused() {
+    let auth = server(&[]);
+    let alice = auth
+        .impersonate(
+            &portal(),
+            Surface::Connect,
+            loopback(),
+            &ActAs::new("alice"),
+        )
+        .expect("allowed");
+    let r = auth
+        .impersonate_signed(&alice, Surface::Connect, remote(), "a.b.c")
+        .await;
+    assert!(matches!(&r, Err(e) if e.error_class() == ErrorClass::KrishivAuthImpersonationDenied));
+    assert_eq!(
+        auth.impersonation_counts(),
+        ImpersonationCount {
+            allowed: 1,
+            denied: 1
+        }
+    );
+}
