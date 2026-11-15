@@ -62,8 +62,10 @@ def session() -> SparkSession:
     )
 
 
-def write_expected(spark: SparkSession, path: str, notes: dict) -> None:
-    rows = [r.asDict() for r in spark.read.format("delta").load(path).orderBy("id").collect()]
+def write_expected(spark: SparkSession, path: str, notes: dict, rows_as_dicts: bool = True) -> None:
+    rows = (
+        [r.asDict() for r in spark.read.format("delta").load(path).orderBy("id").collect()] if rows_as_dicts else []
+    )
     log = sorted(
         os.path.relpath(os.path.join(d, f), os.path.join(path, "_delta_log"))
         for d, _, files in os.walk(os.path.join(path, "_delta_log"))
@@ -119,6 +121,8 @@ def typed(v: object) -> object:
         return {"variant": {"metadata": bytes(row.metadata).hex(), "value": bytes(row.value).hex()}}
     if isinstance(v, list):
         return [typed(x) for x in v]
+    if isinstance(v, dict):
+        return {"map": [[typed(k), typed(x)] for k, x in v.items()]}
     raise TypeError(f"no typed form for {type(v)}")
 
 
@@ -162,7 +166,7 @@ def protocol(path: str) -> dict:
     return found
 
 
-def write_scan_expected(spark: SparkSession, path: str, notes: dict) -> None:
+def write_scan_expected(spark: SparkSession, path: str, notes: dict, rows_as_dicts: bool = True) -> None:
     df = spark.read.format("delta").load(path)
     rows = df.orderBy("id").collect()
     dv_storage: set[str] = set()
@@ -184,7 +188,7 @@ def write_scan_expected(spark: SparkSession, path: str, notes: dict) -> None:
         "dv_storage_types": sorted(dv_storage),
         "timezone": spark.conf.get("spark.sql.session.timeZone"),
     }
-    write_expected(spark, path, notes)
+    write_expected(spark, path, notes, rows_as_dicts)
 
 
 def drop_hadoop_crc(out: str) -> None:
@@ -563,8 +567,357 @@ def session_probes(spark: SparkSession, out: str) -> None:
         f.write("\n")
 
 
+def commits(path: str) -> list[dict]:
+    """Every JSON commit of the table's log, in version order: its version, ``commitInfo``
+    (``timestamp``, ``txnId`` and ``engineInfo`` dropped), the protocol and metadata actions, and
+    its ``add`` and ``remove`` actions (``stats`` parsed; times and sizes dropped)."""
+    log = os.path.join(path, "_delta_log")
+    out = []
+    for name in sorted(n for n in os.listdir(log) if n.endswith(".json") and n[0].isdigit()):
+        record: dict = {"version": int(name.split(".")[0]), "adds": [], "removes": []}
+        with open(os.path.join(log, name)) as f:
+            for line in f:
+                action = json.loads(line)
+                if "commitInfo" in action:
+                    info = dict(action["commitInfo"])
+                    for k in ("timestamp", "txnId", "engineInfo", "inCommitTimestamp"):
+                        info.pop(k, None)
+                    record["commitInfo"] = info
+                elif "add" in action:
+                    add = action["add"]
+                    record["adds"].append(
+                        {
+                            "path": add["path"],
+                            "partitionValues": add["partitionValues"],
+                            "stats": json.loads(add["stats"]) if add.get("stats") else None,
+                        }
+                    )
+                elif "remove" in action:
+                    rm = action["remove"]
+                    record["removes"].append({"path": rm["path"], "partitionValues": rm.get("partitionValues")})
+                elif "protocol" in action:
+                    record["protocol"] = action["protocol"]
+                elif "metaData" in action:
+                    record["partitionColumns"] = action["metaData"]["partitionColumns"]
+        out.append(record)
+    return out
+
+
+#: The ``stats`` table's columns: every type delta-spark keeps min/max for, the types it keeps
+#: only null counts for, nested columns and a partition column (no statistics).
+STATS_SCHEMA = (
+    "id INT, k INT, b TINYINT, s SMALLINT, i INT, l BIGINT, f FLOAT, d DOUBLE, dec DECIMAL(10, 2), "
+    "dec38 DECIMAL(38, 4), str STRING, dt DATE, ts TIMESTAMP, ntz TIMESTAMP_NTZ, bool BOOLEAN, "
+    "bin BINARY, st STRUCT<x: INT, y: STRING>, arr ARRAY<INT>, m MAP<STRING, INT>, p STRING"
+)
+
+#: One INSERT per case (one file each): ``k`` names the case. The string cases are delta-spark's
+#: truncation rules (`StatisticsCollection.truncateMinStringAgg`/`truncateMaxStringAgg`, prefix
+#: 32): exactly 32 characters, 33, a surrogate pair across the cut, a non-ASCII character after
+#: it (the U+10FFFF tie-breaker), U+10FFFF characters after it (skipped), and so many of them
+#: that the max is dropped.
+STATS_CASES = [
+    "(1, 1, 1, 10, 100, 1000, 1.5, 2.5, 12.34, 123456789012345678901234567890.1234, 'abc', "
+    "DATE'2024-01-01', TIMESTAMP'2024-01-01 12:30:45.123456', TIMESTAMP_NTZ'2024-01-01 12:30:45.5', "
+    "true, X'0102', named_struct('x', 1, 'y', 'yy'), array(1, 2), map('a', 1), 'x'), "
+    "(3, 2, -5, -10, -100, -1000, -0.5, -2.5, -12.34, -1.0001, 'abd', DATE'1969-12-31', "
+    "TIMESTAMP'1969-12-31 23:59:59.999999', TIMESTAMP_NTZ'1900-01-01 00:00:00', false, NULL, "
+    "named_struct('x', NULL, 'y', 'aa'), NULL, NULL, 'x'), "
+    "(4, 3, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, "
+    "NULL, NULL, 'x')",
+    "(5, 4, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, "
+    "NULL, NULL, 'y')",
+    "(6, 5, NULL, NULL, NULL, NULL, CAST('NaN' AS FLOAT), CAST('NaN' AS DOUBLE), NULL, NULL, NULL, NULL, "
+    "NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'x'), (7, 5, NULL, NULL, NULL, NULL, CAST(-0.0 AS FLOAT), "
+    "1.0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'x')",
+]
+STATS_STRINGS = [
+    "a" * 32,
+    "a" * 33,
+    "z" * 40,
+    "a" * 31 + "\U0001f600" + "bc",
+    "a" * 32 + "é" * 3,
+    "a" * 32 + "\U0010ffff" * 2 + "b",
+    "a" * 32 + "\U0010ffff" * 20 + "b",
+    "é" * 40,
+]
+
+
+def sql_string(v: str) -> str:
+    return "'" + v.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def stats_table(spark: SparkSession, out: str) -> None:
+    """``write-stats``: one file per case of ``STATS_CASES`` and ``STATS_STRINGS`` (``k`` from
+    10 on), so ``delta_stats_match_spark`` writes each case's rows with Krishiv and compares its
+    ``stats`` with the oracle's."""
+    path = os.path.join(out, "write-stats")
+    spark.sql(f"CREATE TABLE delta.`{path}` ({STATS_SCHEMA}) USING delta PARTITIONED BY (p)")
+    for case in STATS_CASES:
+        spark.sql(f"INSERT INTO delta.`{path}` VALUES {case}")
+    nulls = ", ".join(["NULL"] * 8)
+    for n, v in enumerate(STATS_STRINGS):
+        spark.sql(
+            f"INSERT INTO delta.`{path}` VALUES ({100 + n}, {10 + n}, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, "
+            f"{sql_string(v)}, {nulls}, 'x')"
+        )
+    # The rows by case, and every commit's adds with their parsed stats.
+    # `rows` stays empty: its NaN cells are not JSON (``typed_rows`` has them as strings).
+    write_scan_expected(
+        spark, path, {"feature": "stats", "commits": commits(path), "strings": STATS_STRINGS}, rows_as_dicts=False
+    )
+
+
+
+def run_steps(spark: SparkSession, path: str, steps: list[tuple[str, Any]]) -> list[dict]:
+    """Runs each named step (SQL text, or a callable of the session) on the table at ``path``
+    and records its outcome: the error, or the rows read back (by ``id``) and the commit it
+    wrote."""
+    out = []
+    for name, step in steps:
+        before = len(commits(path)) if os.path.isdir(os.path.join(path, "_delta_log")) else 0
+        record: dict = {"step": name}
+        if isinstance(step, str):
+            record["sql"] = step.replace(path, "<path>")
+        try:
+            spark.sql(step).collect() if isinstance(step, str) else step(spark)
+            record["error"] = None
+        except Exception as e:  # the oracle's error is the record
+            record["error"] = oracle_error(e, path)
+        if os.path.isdir(os.path.join(path, "_delta_log")):
+            log = commits(path)
+            record["commits"] = log[before:]
+            df = spark.read.format("delta").load(path)
+            record["rows"] = [[typed(r[i]) for i in range(len(r))] for r in df.orderBy("id").collect()]
+        out.append(record)
+    return out
+
+
+def write_modes(spark: SparkSession, out: str) -> None:
+    """``WRITES.json``: the write modes against the oracle (``write_modes_match_oracle``), each
+    step on a table partitioned by ``p``: CTAS, append, overwrite (truncate), dynamic partition
+    overwrite, ``replaceWhere`` (matching and not), a static partition overwrite, v1
+    ``saveAsTable`` overwrite (same schema, another schema) and an overwrite of an append-only
+    table. Each step records the oracle's error or its commit and rows."""
+    path = os.path.join(out, "write-modes")
+    t = f"delta.`{path}`"
+
+    def replace_where(where: str, rows: str):
+        def step(s: SparkSession) -> None:
+            s.sql(f"SELECT * FROM VALUES {rows} AS v(id, v, p)").selectExpr(
+                "CAST(id AS BIGINT) AS id", "v", "p"
+            ).write.format("delta").mode("overwrite").option("replaceWhere", where).save(path)
+
+        return step
+
+    def dynamic(s: SparkSession) -> None:
+        s.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
+        try:
+            s.sql(f"INSERT OVERWRITE {t} VALUES (20, 'dyn', 'x'), (21, 'dyn', 'z')").collect()
+        finally:
+            s.conf.unset("spark.sql.sources.partitionOverwriteMode")
+
+    steps: list[tuple[str, Any]] = [
+        (
+            "ctas",
+            f"CREATE TABLE {t} USING delta PARTITIONED BY (p) AS "
+            "SELECT CAST(id AS BIGINT) AS id, v, p FROM VALUES (1, 'a', 'x'), (2, 'b', 'y') AS s(id, v, p)",
+        ),
+        ("append", f"INSERT INTO {t} VALUES (3, 'c', 'x'), (4, 'd', NULL)"),
+        ("overwrite", f"INSERT OVERWRITE {t} VALUES (5, 'e', 'x'), (6, 'f', 'y')"),
+        ("append_again", f"INSERT INTO {t} VALUES (7, 'g', 'y'), (8, 'h', 'z')"),
+        ("dynamic_overwrite", dynamic),
+        ("replace_where", replace_where("p = 'y'", "(30, 'rw', 'y')")),
+        ("replace_where_mismatch", replace_where("p = 'y'", "(31, 'rw', 'x')")),
+        ("static_partition_overwrite", f"INSERT OVERWRITE {t} PARTITION (p = 'z') VALUES (40, 'st')"),
+        ("insert_overwrite_dataframe_mode", lambda s: s.sql(
+            "SELECT CAST(50 AS BIGINT) AS id, 'df' AS v, 'x' AS p"
+        ).write.format("delta").mode("overwrite").save(path)),
+        ("append_dataframe", lambda s: s.sql(
+            "SELECT CAST(51 AS BIGINT) AS id, 'df' AS v, 'w' AS p"
+        ).write.format("delta").mode("append").save(path)),
+        ("save_errorifexists", lambda s: s.sql(
+            "SELECT CAST(52 AS BIGINT) AS id, 'df' AS v, 'w' AS p"
+        ).write.format("delta").save(path)),
+        ("save_ignore", lambda s: s.sql(
+            "SELECT CAST(53 AS BIGINT) AS id, 'df' AS v, 'w' AS p"
+        ).write.format("delta").mode("ignore").save(path)),
+        ("insert_reading_itself", f"INSERT INTO {t} SELECT id + 100, v, p FROM {t}"),
+    ]
+    record: dict = {
+        "format_version": FORMAT_VERSION,
+        "generator": "tests/scripts/gen_delta_fixtures.py",
+        "spark": spark.version,
+        "delta_spark": "4.4.1",
+        "steps": run_steps(spark, path, steps),
+    }
+
+    # v1 saveAsTable(mode=overwrite) on an existing catalog table.
+    managed = os.path.join(out, "write-save-as-table")
+    spark.sql(
+        f"CREATE TABLE sat USING delta PARTITIONED BY (p) LOCATION '{managed}' AS "
+        "SELECT CAST(1 AS BIGINT) AS id, 'a' AS v, 'x' AS p"
+    )
+    sat_steps: list[tuple[str, Any]] = [
+        ("save_as_table_overwrite_same_schema", lambda s: s.sql(
+            "SELECT CAST(2 AS BIGINT) AS id, 'b' AS v, 'y' AS p"
+        ).write.format("delta").mode("overwrite").partitionBy("p").saveAsTable("sat")),
+        ("save_as_table_overwrite_other_schema", lambda s: s.sql(
+            "SELECT CAST(3 AS BIGINT) AS id, 3 AS other, 'y' AS p"
+        ).write.format("delta").mode("overwrite").partitionBy("p").saveAsTable("sat")),
+        ("save_as_table_overwrite_other_partitioning", lambda s: s.sql(
+            "SELECT CAST(4 AS BIGINT) AS id, 'd' AS v, 'y' AS p"
+        ).write.format("delta").mode("overwrite").saveAsTable("sat")),
+        ("save_as_table_append", lambda s: s.sql(
+            "SELECT CAST(5 AS BIGINT) AS id, 'e' AS v, 'x' AS p"
+        ).write.format("delta").mode("append").saveAsTable("sat")),
+    ]
+    record["save_as_table"] = run_steps(spark, managed, sat_steps)
+    spark.sql("DROP TABLE IF EXISTS sat")
+
+    ao = os.path.join(out, "write-append-only")
+    spark.sql(
+        f"CREATE TABLE delta.`{ao}` (id BIGINT, p STRING) USING delta PARTITIONED BY (p) "
+        "TBLPROPERTIES ('delta.appendOnly' = 'true')"
+    )
+    spark.sql(f"INSERT INTO delta.`{ao}` VALUES (1, 'x')")
+    record["append_only"] = run_steps(
+        spark,
+        ao,
+        [
+            ("append", f"INSERT INTO delta.`{ao}` VALUES (2, 'y')"),
+            ("overwrite", f"INSERT OVERWRITE delta.`{ao}` VALUES (3, 'x')"),
+        ],
+    )
+    created = os.path.join(out, "write-created")
+    record["create_new_location"] = run_steps(
+        spark,
+        created,
+        [("create", f"CREATE TABLE delta.`{created}` (id BIGINT, p STRING) USING delta PARTITIONED BY (p)")],
+    )
+    record["ctas_existing_location"] = run_steps(
+        spark,
+        created,
+        [("ctas", f"CREATE TABLE ctas_x USING delta LOCATION '{created}' AS SELECT CAST(1 AS BIGINT) AS id, 'x' AS p")],
+    )
+    spark.sql("DROP TABLE IF EXISTS ctas_x")
+    for d in (path, managed, ao, created):
+        shutil.rmtree(d, ignore_errors=True)
+    with open(os.path.join(out, "WRITES.json"), "w") as f:
+        json.dump(record, f, indent=1, sort_keys=True)
+        f.write("\n")
+
+
+#: Tables for the writer allow-list (design section 4.2): each created by delta-spark with one
+#: row. ``refused`` rows are features Krishiv does not write; the others it appends to.
+WRITE_FEATURE_TABLES: list[tuple[str, bool, list[str]]] = [
+    ("append-only", False, ["CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.appendOnly' = 'true')"]),
+    ("change-data-feed", False, [
+        "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')"
+    ]),
+    ("column-mapping", False, [
+        "CREATE TABLE {t} (id BIGINT, s STRUCT<x: INT>) USING delta "
+        "TBLPROPERTIES ('delta.columnMapping.mode' = 'name')"
+    ]),
+    ("deletion-vectors", False, [
+        "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')"
+    ]),
+    ("domain-metadata", False, [
+        "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.feature.domainMetadata' = 'supported')"
+    ]),
+    ("in-commit-timestamp", False, [
+        "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.enableInCommitTimestamps' = 'true')"
+    ]),
+    ("v2-checkpoint", False, [
+        "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.checkpointPolicy' = 'v2')"
+    ]),
+    ("vacuum-protocol-check", False, [
+        "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.feature.vacuumProtocolCheck' = 'supported')"
+    ]),
+    ("timestamp-ntz", False, ["CREATE TABLE {t} (id BIGINT, n TIMESTAMP_NTZ) USING delta"]),
+    ("type-widening", False, [
+        "CREATE TABLE {t} (id BIGINT, i INT) USING delta TBLPROPERTIES ('delta.enableTypeWidening' = 'true')"
+    ]),
+    ("row-tracking", True, [
+        "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.enableRowTracking' = 'true')"
+    ]),
+    ("iceberg-compat-v2", True, [
+        "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.columnMapping.mode' = 'name', "
+        "'delta.enableIcebergCompatV2' = 'true')"
+    ]),
+    ("clustering", True, ["CREATE TABLE {t} (id BIGINT) USING delta CLUSTER BY (id)"]),
+    ("check-constraints", True, [
+        "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.feature.checkConstraints' = 'supported')"
+    ]),
+    ("generated-columns", True, [
+        "CREATE TABLE {t} (id BIGINT, g BIGINT GENERATED ALWAYS AS (id * 2)) USING delta"
+    ]),
+    ("identity-columns", True, ["CREATE TABLE {t} (id BIGINT, g BIGINT GENERATED ALWAYS AS IDENTITY) USING delta"]),
+    ("column-defaults", True, [
+        "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.feature.allowColumnDefaults' = 'supported')"
+    ]),
+    ("legacy-1-3", True, ["CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.minWriterVersion' = '3')"]),
+    ("legacy-1-4", True, ["CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.minWriterVersion' = '4')"]),
+    ("legacy-2-5", True, [
+        "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.minReaderVersion' = '2', "
+        "'delta.minWriterVersion' = '5')"
+    ]),
+    ("legacy-2-6", True, [
+        "CREATE TABLE {t} (id BIGINT) USING delta TBLPROPERTIES ('delta.minReaderVersion' = '2', "
+        "'delta.minWriterVersion' = '6')"
+    ]),
+    ("check-on-1-2", True, [
+        "CREATE TABLE {t} (id BIGINT) USING delta",
+        "ALTER TABLE {t} ADD CONSTRAINT positive CHECK (id > 0)",
+    ]),
+]
+
+
+def write_feature_tables(spark: SparkSession, out: str) -> None:
+    """``write-features/<name>``: one table per row of ``WRITE_FEATURE_TABLES`` with one row
+    (``id`` = 1, other columns NULL), and ``write-features/FEATURES.json`` with each table's
+    protocol, what created it and whether Krishiv refuses writes to it."""
+    root = os.path.join(out, "write-features")
+    os.makedirs(root, exist_ok=True)
+    report: dict = {
+        "format_version": FORMAT_VERSION,
+        "generator": "tests/scripts/gen_delta_fixtures.py",
+        "spark": spark.version,
+        "delta_spark": "4.4.1",
+        "tables": {},
+    }
+    for name, refused, sqls in WRITE_FEATURE_TABLES:
+        path = os.path.join(root, name)
+        t = f"delta.`{path}`"
+        entry: dict = {"refused": refused, "created_by": [q.replace("{t}", "<t>") for q in sqls]}
+        try:
+            for q in sqls:
+                spark.sql(q.format(t=t)).collect()
+            spark.sql(f"INSERT INTO {t} (id) VALUES (1)").collect()
+        except Exception as e:  # the oracle's error is the record
+            entry["error"] = oracle_error(e, path)
+            shutil.rmtree(path, ignore_errors=True)
+            report["tables"][name] = entry
+            continue
+        entry["protocol"] = protocol(path)
+        df = spark.read.format("delta").load(path)
+        entry["fields"] = [f.name for f in df.schema.fields]
+        entry["rows"] = [[typed(r[i]) for i in range(len(r))] for r in df.orderBy("id").collect()]
+        report["tables"][name] = entry
+    with open(os.path.join(root, "FEATURES.json"), "w") as f:
+        json.dump(report, f, indent=1, sort_keys=True)
+        f.write("\n")
+
+
 def main(out: str, which: str = "checkpoint") -> None:
     spark = session()
+    if which == "writes":
+        stats_table(spark, out)
+        write_modes(spark, out)
+        write_feature_tables(spark, out)
+        drop_hadoop_crc(out)
+        spark.stop()
+        return
     if which == "session":
         session_probes(spark, out)
         drop_hadoop_crc(out)
