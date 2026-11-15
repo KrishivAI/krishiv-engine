@@ -20,6 +20,11 @@
 //!   (`az storage container create --name krishiv-test --connection-string ...`), and for the
 //!   SAS read `KRISHIV_TEST_AZURE_SAS`, a container SAS with read and list permissions
 //!   (`az storage container generate-sas`; `tests/scripts/object_store_emulators.sh` makes both).
+//! - Azurite in OAuth mode (`--oauth basic`, https) for the bearer-token read:
+//!   `KRISHIV_TEST_AZURE_OAUTH_ENDPOINT=https://127.0.0.1:<port>/devstoreaccount1`, container
+//!   `krishiv-test`, the tokens `KRISHIV_TEST_AZURE_BEARER` (Azure Storage's audience) and
+//!   `KRISHIV_TEST_AZURE_BEARER_OTHER_AUDIENCE`, and `SSL_CERT_FILE` naming a bundle that trusts the
+//!   emulator's certificate (the script makes all of them).
 //!
 //! Every byte goes through the layer's wrappers ([`IoContext`](krishiv_io::IoContext)):
 //! the round-trip writes with [`put_object`](krishiv_io::IoContext::put_object),
@@ -395,9 +400,8 @@ const AZURITE_KEY: &str =
 /// A raw CSV file on `abfss://` (lakehouse benchmark gate 2): written with the account key, read
 /// back through the CSV format with a header and a schema, signed with a container SAS given by
 /// the Hadoop ABFS keys `fs.azure.account.auth.type.<host> = SAS` and
-/// `fs.azure.sas.fixed.token.<host>`. Azurite serves bearer tokens only over https
-/// (`--oauth basic` needs a certificate), so the bearer path is covered by the loopback tests of
-/// `krishiv-store` (`tests/azure_auth.rs`).
+/// `fs.azure.sas.fixed.token.<host>`. The bearer-token read is
+/// `azure_csv_reads_with_a_bearer_token`.
 #[tokio::test]
 async fn azure_csv_reads_with_a_sas() {
     let host = "devstoreaccount1.dfs.core.windows.net";
@@ -453,6 +457,89 @@ async fn azure_csv_reads_with_a_sas() {
     assert_eq!(
         names,
         vec![Some("a".to_owned()), None, Some("c".to_owned())]
+    );
+    sched.context().delete(&store, &path).await.unwrap();
+}
+
+/// A raw CSV file on `abfss://` read with only an Azure bearer token (lakehouse benchmark gate 2):
+/// written with the account key, read through the Hadoop ABFS keys
+/// `fs.azure.account.auth.type.<host> = OAuth` and `fs.azure.account.oauth2.access.token.<host>`
+/// against Azurite in OAuth mode (`--oauth basic`, https). Azurite checks the token's audience,
+/// so a token for another audience is refused: the read depends on the bearer token, not on an
+/// open emulator. `tests/scripts/object_store_emulators.sh` starts that Azurite, makes both tokens
+/// and the `krishiv-test` container, and trusts its certificate through `SSL_CERT_FILE`.
+#[tokio::test]
+async fn azure_csv_reads_with_a_bearer_token() {
+    let host = "devstoreaccount1.dfs.core.windows.net";
+    let (auth_key, token_key, account_key) = (
+        format!("fs.azure.account.auth.type.{host}"),
+        format!("fs.azure.account.oauth2.access.token.{host}"),
+        format!("fs.azure.account.key.{host}"),
+    );
+    let (Some(endpoint), Some(token), Some(other_audience)) = (
+        endpoint("KRISHIV_TEST_AZURE_OAUTH_ENDPOINT"),
+        env_nonempty("KRISHIV_TEST_AZURE_BEARER"),
+        env_nonempty("KRISHIV_TEST_AZURE_BEARER_OTHER_AUDIENCE"),
+    ) else {
+        // Offline: a bearer-token store builds without I/O.
+        let config = test_config(&[
+            ("fs.azure.endpoint", "https://127.0.0.1:1/devstoreaccount1"),
+            (auth_key.as_str(), "OAuth"),
+            (token_key.as_str(), "header.payload.signature"),
+        ]);
+        let sched = IoScheduler::new(IoConfig::from_config(&config));
+        let registry = StoreRegistry::new(config);
+        register(
+            &sched,
+            &registry,
+            &format!("abfss://krishiv-test@{host}/a.csv"),
+        )
+        .unwrap();
+        return;
+    };
+    let url = format!("abfss://krishiv-test@{host}/{}/people.csv", unique_dir());
+    let writer = test_config(&[
+        ("fs.azure.endpoint", endpoint.as_str()),
+        (account_key.as_str(), AZURITE_KEY),
+    ]);
+    let sched = IoScheduler::new(IoConfig::from_config(&writer));
+    let registry = StoreRegistry::new(Arc::clone(&writer));
+    let (store, path, _) = register(&sched, &registry, &url).unwrap();
+    sched
+        .context()
+        .put_object(
+            &store,
+            &path,
+            Bytes::from_static(b"id,name\n1,a\n2,\n3,c\n"),
+        )
+        .await
+        .unwrap();
+    let bearer = |token: &str| {
+        test_config(&[
+            ("fs.azure.endpoint", endpoint.as_str()),
+            (auth_key.as_str(), "OAuth"),
+            (token_key.as_str(), token),
+        ])
+    };
+    let (ids, names) = read_csv(bearer(&token), &url).await;
+    assert_eq!(ids, vec![1, 2, 3]);
+    assert_eq!(
+        names,
+        vec![Some("a".to_owned()), None, Some("c".to_owned())]
+    );
+    // A token for another audience is refused by the emulator, so the read above used the token.
+    let refused = bearer(&other_audience);
+    let refused_sched = IoScheduler::new(IoConfig::from_config(&refused));
+    let refused_registry = StoreRegistry::new(Arc::clone(&refused));
+    let (refused_store, refused_path, _) =
+        register(&refused_sched, &refused_registry, &url).unwrap();
+    assert!(
+        refused_sched
+            .context()
+            .head(&refused_store, &refused_path)
+            .await
+            .is_err(),
+        "a token for another audience must not read the file"
     );
     sched.context().delete(&store, &path).await.unwrap();
 }
