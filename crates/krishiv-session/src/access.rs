@@ -711,15 +711,20 @@ pub(crate) async fn authorize_checked(
         )
         .await;
         if let Err(e) = audit(session, class, r) {
-            if e.error_class() == ErrorClass::KrishivInsufficientPermissions {
-                let shown = Securable::Path(OptionValue::from_user("path", checked.shown.clone()));
-                return Err(insufficient_permissions(
-                    &session.state.principal,
-                    &shown,
-                    *privilege,
-                ));
-            }
-            return Err(e);
+            // Re-issued with the caller's text and the same class: `authorize` names the securable only
+            // in a 42501 and in the `UNSUPPORTED_FEATURE` of a filtered `Select`; any other error names
+            // no path and passes as it is.
+            let shown = Securable::Path(OptionValue::from_user("path", checked.shown.clone()));
+            return Err(match e.error_class() {
+                ErrorClass::KrishivInsufficientPermissions => {
+                    insufficient_permissions(&session.state.principal, &shown, *privilege)
+                }
+                ErrorClass::KrishivUnsupportedFeature => KrishivUnsupportedFeature {
+                    feature: format!("row filters and column masks (on {shown})"),
+                }
+                .into(),
+                _ => e,
+            });
         }
     }
     Ok(())

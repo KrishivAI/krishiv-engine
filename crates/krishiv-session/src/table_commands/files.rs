@@ -241,9 +241,18 @@ impl Session {
                 location.display()
             )));
         }
-        self.authorize_path(&canonical, &[Privilege::Modify], StatementClass::Write)
-            .await
-            .map(|c| Some(c.path))
+        // Asked about the location as written (`..` folded): the policy gets it resolved, the caller's
+        // denial names it as written. It resolves to the directory checked above, or nothing is deleted.
+        let checked = self
+            .authorize_path(location, &[Privilege::Modify], StatementClass::Write)
+            .await?;
+        if checked.path != canonical {
+            return Err(internal(format!(
+                "refusing to delete {}: it changed while it was checked",
+                location.display()
+            )));
+        }
+        Ok(Some(checked.path))
     }
 }
 

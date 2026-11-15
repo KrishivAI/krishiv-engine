@@ -899,3 +899,28 @@ fn a_link_swapped_under_a_partition_rename_moves_nothing_into_the_table() {
         "moved into the table"
     );
 }
+
+/// DROP TABLE and RENAME of a managed table under a warehouse reached through a link
+/// (`<tmp>/wh/o -> <tmp>/outside`): the denial names the directory as written, never the link's target,
+/// and the same for both statements.
+#[test]
+fn drop_and_rename_denials_name_the_directory_as_written() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().canonicalize().unwrap();
+    std::fs::create_dir_all(root.join("wh")).unwrap();
+    std::fs::create_dir_all(root.join("outside")).unwrap();
+    std::os::unix::fs::symlink(root.join("outside"), root.join("wh/o")).unwrap();
+    let (owner, s) = sessions(&format!("{}/wh/o", root.display()), FirstPaths::new(0));
+    run(&owner, "CREATE TABLE t (a INT) USING parquet").unwrap();
+    run(&owner, "INSERT INTO t VALUES (1)").unwrap();
+    let written = format!("'file:{}/wh/o/t'", root.display());
+    let mut texts = Vec::new();
+    for sql in ["DROP TABLE t", "ALTER TABLE t RENAME TO t2"] {
+        let text = seen(run(&s, sql));
+        assert!(text.starts_with(DENIED), "{sql}: {text}");
+        assert!(text.contains(&written), "{sql}: {text}");
+        assert!(!text.contains("outside"), "{sql}: {text}");
+        texts.push(text);
+    }
+    assert_eq!(texts[0], texts[1]);
+}
