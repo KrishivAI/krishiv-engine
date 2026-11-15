@@ -29,9 +29,9 @@ use std::sync::Arc;
 
 use krishiv_common::error::{
     CannotParseInterval, DatatypeMismatchParameterConstraintViolation,
-    DatatypeMismatchValueOutOfRange, InternalError, LegacyErrorTemp1039, LegacyErrorTemp1207,
-    LegacyErrorTemp3231, MissingAggregation, MissingAttributesResolvedAttributeMissingFromInput,
-    WrongNumArgsWithoutSuggestion,
+    DatatypeMismatchValueOutOfRange, InternalError, LegacyErrorTemp1006, LegacyErrorTemp1039,
+    LegacyErrorTemp1207, LegacyErrorTemp3231, MissingAggregation,
+    MissingAttributesResolvedAttributeMissingFromInput, WrongNumArgsWithoutSuggestion,
 };
 use krishiv_types::DataType;
 use krishiv_types::interval_parse::parse_string;
@@ -238,7 +238,7 @@ fn qualify_over_project(p: &LogicalPlan) -> Option<(&Arc<LogicalPlan>, &Arc<Expr
 
 /// Whether `e` calls `window_time` (renamed) anywhere (outside subqueries).
 fn calls_window_time(e: &Arc<Expr>) -> bool {
-    call_of(e, WINDOW_TIME_SCALAR).is_some() || {
+    call_of(e, WINDOW_TIME_SCALAR).is_some_and(|f| f.args.len() == 1) || {
         let mut any = false;
         e.for_each_child(&mut |c| any = any || calls_window_time(c));
         any
@@ -279,6 +279,7 @@ fn node(p: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, AnalysisError> {
             | PlanNode::Filter { .. }
             | PlanNode::Aggregate { .. }
             | PlanNode::Sort { .. }
+            | PlanNode::Pivot { .. }
     ) {
         return Ok(p);
     }
@@ -288,6 +289,16 @@ fn node(p: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, AnalysisError> {
         return Ok(p);
     }
     let origin = p.origin;
+    // A window call as a pivot's aggregate is no aggregate.
+    if matches!(p.node, PlanNode::Pivot { .. }) {
+        let name = call_of(&found[0], WINDOW).map_or(SESSION, |_| WINDOW);
+        return Err(AnalysisError::new(
+            LegacyErrorTemp1006 {
+                sql: name.to_owned(),
+            },
+            origin,
+        ));
+    }
     let (calls, keys) = outermost(&found, origin)?;
     if calls.len() > 1 {
         return Err(AnalysisError::new(LegacyErrorTemp1039 {}, origin));

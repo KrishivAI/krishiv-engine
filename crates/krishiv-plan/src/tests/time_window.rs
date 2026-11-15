@@ -343,3 +343,15 @@ fn qualify_reads_the_window_below_the_select_list() {
     let names: Vec<String> = r.unwrap().output.iter().map(|c| c.name.clone()).collect();
     assert_eq!(names, ["window", "ts", "rn"]);
 }
+
+#[test]
+fn a_window_in_a_pivot_is_no_aggregate_and_window_time_takes_one_argument() {
+    let wrong = LogicalPlan::table(["t"]).aggregate(
+        vec![window("ts", &["5 minutes"])],
+        vec![
+            f("window_time", vec![c("window"), c("window")]),
+            count_star(),
+        ],
+    );
+    assert_eq!(class(&run(wrong)), "WRONG_NUM_ARGS.WITHOUT_SUGGESTION");
+}
