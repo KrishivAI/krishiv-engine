@@ -4,6 +4,8 @@ description: "Securing a single-node Krishiv server: admin token roles, what the
 
 # Securing a single-node server
 
+> The single-node server is not part of 0.2.0. This page describes its security settings.
+
 This page covers a single-node `krishiv server`: one process that serves Spark Connect clients, the metrics
 endpoint and the web console. It describes what the server checks today.
 
