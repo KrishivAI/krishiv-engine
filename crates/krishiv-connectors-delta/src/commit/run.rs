@@ -27,7 +27,9 @@ use crate::error::from_kernel;
 use crate::features::{WriteProtocol, check_write};
 
 /// Winners read per log-pool call; more are read on the next round (small under test, so the
-/// tests cross a chunk boundary).
+/// tests cross a chunk boundary). Each full chunk costs one more attempt (a put sure to lose and
+/// a backoff), where Delta checks every winner in one round: a writer far behind with a small
+/// `maxCommitAttempts` can run out of attempts sooner. No winner goes unchecked.
 #[cfg(not(test))]
 const WINNERS_PER_READ: usize = 1000;
 #[cfg(test)]

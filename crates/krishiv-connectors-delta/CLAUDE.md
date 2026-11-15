@@ -32,6 +32,9 @@ Fuzz target `fuzz/fuzz_targets/delta_commit_json.rs` (one commit through `parse_
   `TableProvider::writer` wiring and the plan node that reaches it, overwrite/`replaceWhere`/CTAS, checkpoints after
   a commit, the config keys of `RetryLimits` (`spark.databricks.delta.maxCommitAttempts`,
   `krishiv.write.commitRetryTimeout`). `columnMapping` and `variantType` stay off the writer allow-list until then.
+- PR-37b gates for DML commits: removes on an `appendOnly` table surface as the kernel's `INTERNAL_ERROR`, not
+  `DELTA_CANNOT_MODIFY_APPEND_ONLY`; `changeDataFeed` tables must refuse UPDATE, MERGE and copy-on-write DELETE
+  (design §6.2) before `commit` is called.
 - A landed check after the query is cancelled cannot run on the log pool: it raises `OPERATION_CANCELED` and the
   outcome is unknown.
 

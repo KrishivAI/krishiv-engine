@@ -838,8 +838,7 @@ fn hints_follow_the_partition_column_order() {
     assert!(m.contains("[n=null, p=x, d=null, ts=null]"), "{m}");
 }
 
-/// On an unpartitioned table any add conflicts with a reader, without a hint; two removes of one
-/// file conflict without a hint too.
+/// On an unpartitioned table any add conflicts with a reader, without a hint.
 #[test]
 fn an_unpartitioned_table_conflicts_without_hints() {
     let env = Env::new();
@@ -945,6 +944,10 @@ fn implied_features_of_each_legacy_version() {
             .collect::<Vec<_>>()
     };
     assert_eq!(names(1, 2, None), ["appendOnly", "invariants"]);
+    // columnMapping only from reader 2 with writer 5 or 6; writer 7 implies nothing.
+    assert!(!names(1, 5, None).contains(&"columnMapping".to_owned()));
+    assert!(names(2, 6, None).contains(&"columnMapping".to_owned()));
+    assert_eq!(names(2, 7, Some(&["appendOnly"])), ["appendOnly"]);
     assert_eq!(
         names(1, 2, None),
         names(1, 7, Some(&["appendOnly", "invariants"]))
@@ -1011,6 +1014,47 @@ fn a_winner_over_the_metadata_limit_fails_the_commit() {
     let s = env.snapshot();
     let big = json!({"commitInfo": {"operation": "WRITE", "pad": "x".repeat(5000)}});
     env.write_commit(2, &[big]);
+    let (c, _) = class(env.commit(
+        &s,
+        staged("b", vec![add("b.parquet", Some("x"))], ReadSet::default()),
+    ));
+    assert_eq!(c, ErrorClass::KrishivCatalogLimitExceeded);
+}
+
+/// A winner add whose partition value does not parse counts as a match.
+#[test]
+fn an_unparseable_partition_value_counts_as_a_match() {
+    let env = Env::new();
+    let s = env.snapshot();
+    env.write_commit(
+        2,
+        &[
+            json!({"commitInfo": {"operation": "WRITE"}}),
+            json!({"add": {"path": "bad.parquet",
+                "partitionValues": {"p": "z", "n": "not-a-number", "d": null, "ts": null},
+                "size": 1, "modificationTime": 1, "dataChange": true}}),
+        ],
+    );
+    let (c, m) = class(env.commit(
+        &s,
+        staged("b", vec![add("b.parquet", Some("q"))], reads_partition("x")),
+    ));
+    assert_eq!(c, ErrorClass::DeltaConcurrentAppendWithPartitionHint, "{m}");
+    assert!(m.contains("n=not-a-number"), "{m}");
+}
+
+/// A winner nested past the depth limit fails the commit with the limit's class.
+#[test]
+fn a_winner_past_the_depth_limit_fails_the_commit() {
+    let env = Env::with_limits(DeltaLimits {
+        max_depth: 4,
+        ..DeltaLimits::default()
+    });
+    let s = env.snapshot();
+    env.write_commit(
+        2,
+        &[json!({"commitInfo": {"operation": "WRITE", "x": {"a": {"b": {"c": {"d": 1}}}}}})],
+    );
     let (c, _) = class(env.commit(
         &s,
         staged("b", vec![add("b.parquet", Some("x"))], ReadSet::default()),

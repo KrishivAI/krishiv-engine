@@ -432,7 +432,10 @@ fn concurrent_transaction(winner: &WinningCommit) -> KrishivError {
 }
 
 /// Every feature a protocol supports, the ones its legacy versions imply included
-/// (delta-spark's `implicitlyAndExplicitlySupportedFeatures`, `TableFeature.scala:470-497`).
+/// (delta-spark's `implicitlyAndExplicitlySupportedFeatures`, `TableFeature.scala:470-497`): a
+/// table-features protocol (writer 7) implies none and lists its writer features (and, at
+/// reader 3, its reader features); a legacy one implies the features of its writer version, and
+/// `columnMapping` only at reader 2 or above with writer 5 or 6.
 #[must_use]
 pub fn supported_features(
     min_reader: i64,
@@ -443,26 +446,26 @@ pub fn supported_features(
     let mut out = BTreeSet::new();
     if min_writer >= 7 {
         out.extend(writer_features.into_iter().flatten().cloned());
-    } else {
-        let implied: &[(i64, &str)] = &[
-            (2, "appendOnly"),
-            (2, "invariants"),
-            (3, "checkConstraints"),
-            (4, "changeDataFeed"),
-            (4, "generatedColumns"),
-            (5, "columnMapping"),
-            (6, "identityColumns"),
-        ];
-        out.extend(
-            implied
-                .iter()
-                .filter(|(v, _)| min_writer >= *v)
-                .map(|(_, f)| (*f).to_owned()),
-        );
+        if min_reader >= 3 {
+            out.extend(reader_features.into_iter().flatten().cloned());
+        }
+        return out;
     }
-    if min_reader >= 3 {
-        out.extend(reader_features.into_iter().flatten().cloned());
-    } else if min_reader >= 2 {
+    let implied: &[(i64, &str)] = &[
+        (2, "appendOnly"),
+        (2, "invariants"),
+        (3, "checkConstraints"),
+        (4, "changeDataFeed"),
+        (4, "generatedColumns"),
+        (6, "identityColumns"),
+    ];
+    out.extend(
+        implied
+            .iter()
+            .filter(|(v, _)| min_writer >= *v)
+            .map(|(_, f)| (*f).to_owned()),
+    );
+    if min_reader >= 2 && min_writer >= 5 {
         out.insert("columnMapping".to_owned());
     }
     out
