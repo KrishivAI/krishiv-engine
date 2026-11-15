@@ -431,3 +431,57 @@ fn inline_secret_key_refused() {
     );
     assert!(text.contains("spark:uri"), "{text}");
 }
+
+/// T067 review 58a1 nit 1: a `uri` (or token endpoint) with userinfo is shown without it in
+/// every error and in `Debug`.
+#[test]
+fn a_uri_userinfo_never_reaches_an_error_or_debug() {
+    const CANARY: &str = "Canary-Pw-7f3e";
+    let with_uri = |uri: &'static str| {
+        let mut pairs = rest_with(&[]);
+        pairs.retain(|(k, _)| !k.ends_with(".uri"));
+        pairs.push(("krishiv.catalog.lake.uri", uri));
+        pairs
+    };
+    for (pairs, mode) in [
+        (
+            with_uri("http://svc:Canary-Pw-7f3e@catalog.internal:8181/api"),
+            DeclMode::Server,
+        ),
+        (
+            with_uri("ftp://svc:Canary-Pw-7f3e@catalog.internal/api"),
+            DeclMode::Embedded,
+        ),
+        (
+            with_uri("http://svc:Canary/Pw@x:Canary-Pw-7f3e@catalog.internal/api"),
+            DeclMode::Server,
+        ),
+        (
+            with_uri("http://Canary-Pw-7f3e@catalog.internal/api"),
+            DeclMode::Server,
+        ),
+    ] {
+        let e = err(&pairs, mode);
+        assert!(!e.contains(CANARY) && !e.contains("svc"), "{e}");
+        assert!(e.contains("catalog.internal"), "{e}");
+    }
+    let mut pairs = REST.to_vec();
+    pairs.push((
+        "krishiv.catalog.lake.tokenEndpoint",
+        "http://svc:Canary-Pw-7f3e@idp.example.com/token",
+    ));
+    let e = err(&pairs, DeclMode::Server);
+    assert!(!e.contains(CANARY) && e.contains("idp.example.com"), "{e}");
+    let mut pairs = rest_with(&[]);
+    pairs.retain(|(k, _)| !k.ends_with(".uri"));
+    pairs.push((
+        "krishiv.catalog.lake.uri",
+        "https://svc:Canary-Pw-7f3e@catalog.example.com/api",
+    ));
+    let decls = parse(&pairs, DeclMode::Server).unwrap();
+    let shown = format!("{decls:?}");
+    assert!(
+        !shown.contains(CANARY) && shown.contains("catalog.example.com"),
+        "{shown}"
+    );
+}

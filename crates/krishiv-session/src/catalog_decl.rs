@@ -114,8 +114,9 @@ impl CatalogType {
     }
 }
 
-/// How the server authenticates to the catalog (§3.1; `delegated` is PR-58b's).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// How the server authenticates to the catalog (§3.1; `delegated` is PR-58b's). `Debug` shows
+/// the token endpoint without its userinfo.
+#[derive(Clone, PartialEq, Eq)]
 pub enum CatalogAuth {
     /// Anonymous.
     None,
@@ -134,6 +135,29 @@ pub enum CatalogAuth {
         /// `audience`.
         audience: Option<String>,
     },
+}
+
+impl std::fmt::Debug for CatalogAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => f.write_str("None"),
+            Self::Token(t) => f.debug_tuple("Token").field(t).finish(),
+            Self::ClientCredentials {
+                client_id,
+                client_secret,
+                token_endpoint,
+                scope,
+                audience,
+            } => f
+                .debug_struct("ClientCredentials")
+                .field("client_id", client_id)
+                .field("client_secret", client_secret)
+                .field("token_endpoint", &shown_uri(token_endpoint))
+                .field("scope", scope)
+                .field("audience", audience)
+                .finish(),
+        }
+    }
 }
 
 impl CatalogAuth {
@@ -168,8 +192,8 @@ impl CatalogStorage {
     }
 }
 
-/// One declared catalog.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One declared catalog. `Debug` shows the `uri` without its userinfo.
+#[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct CatalogDecl {
     /// The catalog name (a lowercase identifier).
@@ -192,6 +216,36 @@ pub struct CatalogDecl {
     pub allow_insecure: bool,
     /// `option.<key>` values.
     pub options: BTreeMap<String, String>,
+}
+
+impl std::fmt::Debug for CatalogDecl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CatalogDecl")
+            .field("name", &self.name)
+            .field("kind", &self.kind)
+            .field("uri", &self.uri.as_deref().map(shown_uri))
+            .field("warehouse", &self.warehouse)
+            .field("auth", &self.auth)
+            .field("storage", &self.storage)
+            .field("tenants", &self.tenants)
+            .field("allow_config_keys", &self.allow_config_keys)
+            .field("allow_insecure", &self.allow_insecure)
+            .field("options", &self.options)
+            .finish()
+    }
+}
+
+/// `uri` as errors, warnings and `Debug` show it (T067 review 58a1 nit 1): the userinfo removed,
+/// to the last `@` before the query or fragment (so a password holding `/` or `@` goes whole; an
+/// `@` in the path over-removes, never leaks), then any credential parameter redacted.
+fn shown_uri(uri: &str) -> String {
+    let (scheme, rest) = match uri.find("://") {
+        Some(i) => uri.split_at(i + 3),
+        None => ("", uri),
+    };
+    let end = rest.find(['?', '#']).unwrap_or(rest.len());
+    let host_on = rest[..end].rfind('@').map_or(rest, |at| &rest[at + 1..]);
+    krishiv_common::secret::OptionValue::from_user("uri", format!("{scheme}{host_on}")).to_string()
 }
 
 impl CatalogDecl {
@@ -622,12 +676,16 @@ fn decl(
             _ => lower.starts_with("https://") || lower.starts_with("http://"),
         };
         if !scheme_ok {
-            return Err(invalid(k, u, "not a uri this catalog type speaks"));
+            return Err(invalid(
+                k,
+                &shown_uri(u),
+                "not a uri this catalog type speaks",
+            ));
         }
         if lower.starts_with("http://") && mode == DeclMode::Server && !allow_insecure {
             return Err(invalid(
                 k,
-                u,
+                &shown_uri(u),
                 "an http:// catalog uri needs allowInsecure = true in server mode",
             ));
         }
@@ -691,7 +749,7 @@ fn decl(
             if !(te.starts_with("https://") || (te.starts_with("http://") && allow_insecure)) {
                 return Err(invalid(
                     &key_of("tokenEndpoint"),
-                    &token_endpoint,
+                    &shown_uri(&token_endpoint),
                     "the token endpoint must be https (or http with allowInsecure)",
                 ));
             }
