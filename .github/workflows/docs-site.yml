@@ -96,7 +96,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo xtask docs-sql --check
-          cargo xtask connect-coverage --check
+          cargo xtask connect-coverage --check || { rc=$?; echo "DEBUG connect-coverage rc=$rc"; git status --short | head; git diff --stat | tail -5; ls -la docs/reference/connect tests/connect; exit $rc; }
           python3 tests/scripts/gen_compat_matrix.py --check
           cargo xtask docs-examples --check
           cargo xtask docs-python --check
