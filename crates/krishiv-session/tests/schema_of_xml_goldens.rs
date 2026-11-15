@@ -28,6 +28,7 @@ const KNOWN_GAPS: &[&str] = &[
     "schema_of_xml#130",
     "schema_of_xml#132",
     // `locale` for numbers (`1,5`), an invalid `timeZone` and FAILFAST on an unclosed document: options not read here yet.
+    "schema_of_xml#162",
     "schema_of_xml#163",
     "schema_of_xml#168",
     "schema_of_xml#183",
@@ -110,20 +111,26 @@ fn schema_of_xml_follows_the_spark_runs() {
             let upper = case.sql.to_ascii_uppercase();
             if !upper.starts_with("SELECT") {
                 // SET, CREATE VIEW ...: run for their effect.
-                let _ = block_on(s.sql(&case.sql)).and_then(|df| block_on(df.collect()));
+                // A setup statement that Spark ran must run here too, or the later results mean nothing.
+                let done = block_on(s.sql(&case.sql)).and_then(|df| block_on(df.collect()));
+                if let Err(e) = done
+                    && !is_error(&case.output)
+                {
+                    panic!("setup statement {id} failed: {}: {e:?}", case.sql);
+                }
                 continue;
             }
             let got = render(&s, &case.sql);
             let ok = if is_error(&case.output) {
-                // A failure, and when Spark names an error class the same class (a `_LEGACY_ERROR_TEMP_*` or an unclassified Java
-                // exception is checked as a failure only).
+                // A failure, and when Spark names an error class (a `_LEGACY_ERROR_TEMP_*` too) the same class; only an exception
+                // without a class is checked as a failure alone.
                 let want = case
                     .output
                     .lines()
                     .find_map(|l| l.strip_prefix("errorClass: "))
                     .map(|c| c.trim().to_owned());
                 match (&got, want) {
-                    (Err(e), Some(c)) if !c.starts_with("_LEGACY") => e.error_class().name() == c,
+                    (Err(e), Some(c)) => e.error_class().name() == c,
                     (Err(_), _) => true,
                     _ => false,
                 }

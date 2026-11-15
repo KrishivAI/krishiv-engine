@@ -521,16 +521,10 @@ fn temporal_sequence(
             }
             .into());
         }
-        // The direction is the one from start to stop; the step must move that way, its sign being that of its first non-zero field
-        // (months, then days, then microseconds), except that equal bounds give one element for any step a timestamp takes.
-        // Months decide the direction when there are any; otherwise the whole of days and microseconds does (`1 day` with `-48 hours`
-        // moves backwards however its first field reads).
+        // The direction is the one from start to stop; the step must move that way. Spark's estimate of the step is
+        // `months * 28 days + days + micros`, and equal bounds give one element for any step a timestamp takes.
         let rest = i128::from(days) * i128::from(MICROS_PER_DAY) + i128::from(micros);
-        let sign = if months != 0 {
-            i128::from(months.signum())
-        } else {
-            rest.signum()
-        };
+        let sign = (i128::from(months) * 28 * i128::from(MICROS_PER_DAY) + rest).signum();
         let up = start <= stop;
         // A step whose days and microseconds cancel out (`1 day` and `-24 hours`) never advances: it is a zero step.
         let advances =
@@ -595,8 +589,10 @@ fn temporal_sequence(
                 .ok_or_else(|| overflow("date"))?;
                 // A date's step is whole days: the remainder of `i * micros` below a day is dropped (`1 day 12 hours` gives
                 // Jan 1, Jan 2, Jan 4).
-                let extra =
-                    micros.checked_mul(i).ok_or_else(|| overflow("micros"))? / MICROS_PER_DAY;
+                let extra = micros
+                    .checked_mul(i)
+                    .ok_or_else(|| overflow("micros"))?
+                    .div_euclid(MICROS_PER_DAY);
                 i64::from(moved)
                     .checked_add(days.checked_mul(i).ok_or_else(|| overflow("days"))?)
                     .and_then(|d| d.checked_add(extra))
@@ -620,7 +616,17 @@ fn temporal_sequence(
                     .checked_add(micros.checked_mul(i).ok_or_else(|| overflow("micros"))?)
                     .ok_or_else(|| overflow("timestamp"))?
             };
-            let past = if up { at > stop } else { at < stop };
+            // A date element that falls on `stop` with a time of day left over (`1 month 1 hour`) is after `stop`.
+            let sub_day = if is_date {
+                micros.wrapping_mul(i).rem_euclid(MICROS_PER_DAY)
+            } else {
+                0
+            };
+            let past = if up {
+                at > stop || (at == stop && sub_day > 0 && i > 0)
+            } else {
+                at < stop
+            };
             if past || date_count.is_some_and(|n| i128::from(i) >= n) {
                 break;
             }

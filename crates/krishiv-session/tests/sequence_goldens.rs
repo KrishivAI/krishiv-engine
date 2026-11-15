@@ -31,6 +31,9 @@ const KNOWN_GAPS: &[&str] = &[
     "sequence_calendar#72",
     "sequence_calendar#73",
     "sequence_calendar#74",
+    // The same legacy-interval mode with a DAY TO SECOND or zero-month step over dates: the literal is refused before the step is checked.
+    "sequence_calendar#75",
+    "sequence_calendar#76",
 ];
 
 struct Case {
@@ -108,20 +111,26 @@ fn sequence_over_dates_and_timestamps_follows_the_spark_runs() {
             let upper = case.sql.to_ascii_uppercase();
             if !upper.starts_with("SELECT") {
                 // SET, CREATE VIEW ...: run for their effect.
-                let _ = block_on(s.sql(&case.sql)).and_then(|df| block_on(df.collect()));
+                // A setup statement that Spark ran must run here too, or the later results mean nothing.
+                let done = block_on(s.sql(&case.sql)).and_then(|df| block_on(df.collect()));
+                if let Err(e) = done
+                    && !is_error(&case.output)
+                {
+                    panic!("setup statement {id} failed: {}: {e:?}", case.sql);
+                }
                 continue;
             }
             let got = render(&s, &case.sql);
             let ok = if is_error(&case.output) {
-                // A failure, and when Spark names an error class the same class (a `_LEGACY_ERROR_TEMP_*` or an unclassified Java
-                // exception is checked as a failure only).
+                // A failure, and when Spark names an error class (a `_LEGACY_ERROR_TEMP_*` too) the same class; only an exception
+                // without a class is checked as a failure alone.
                 let want = case
                     .output
                     .lines()
                     .find_map(|l| l.strip_prefix("errorClass: "))
                     .map(|c| c.trim().to_owned());
                 match (&got, want) {
-                    (Err(e), Some(c)) if !c.starts_with("_LEGACY") => e.error_class().name() == c,
+                    (Err(e), Some(c)) => e.error_class().name() == c,
                     (Err(_), _) => true,
                     _ => false,
                 }

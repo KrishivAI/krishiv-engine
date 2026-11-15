@@ -148,3 +148,23 @@ fn a_long_sequence_without_months_is_not_cut_off_by_the_calendar_guard() {
     let out = f.invoke(&[col(&start), col(&stop), col(&step)], 1).unwrap();
     assert_eq!(out.as_list::<i32>().value(0).len(), 12_000_002);
 }
+
+#[test]
+fn a_descending_date_sequence_floors_the_part_of_a_day() {
+    use arrow_array::types::DurationMicrosecondType;
+    use arrow_array::{Date32Array, PrimitiveArray};
+    // 2018-01-05 down to 2018-01-01 by 36 hours: Spark converts each instant to a date, so the elements are Jan 5, 3 and 2.
+    let start: ArrayRef = Arc::new(Date32Array::from(vec![17536]));
+    let stop: ArrayRef = Arc::new(Date32Array::from(vec![17532]));
+    let step: ArrayRef = Arc::new(PrimitiveArray::<DurationMicrosecondType>::from(vec![
+        -36 * 3_600_000_000_i64,
+    ]));
+    let f = bind_with("sequence", &[&start, &stop, &step], &BindOptions::new());
+    let out = f.invoke(&[col(&start), col(&stop), col(&step)], 1).unwrap();
+    let list = out.as_list::<i32>().value(0);
+    let got: Vec<i32> = list
+        .as_primitive::<arrow_array::types::Date32Type>()
+        .values()
+        .to_vec();
+    assert_eq!(got, vec![17536, 17534, 17533]);
+}

@@ -207,8 +207,12 @@ impl Opts {
                     }
                 },
                 // Accepted by Spark's XML source and without effect on an inferred schema (Spark 4.2.0 run).
-                "columnnameofcorruptrecord" | "wildcardcolname" | "charset" | "locale"
+                "columnnameofcorruptrecord" | "wildcardcolname" | "charset"
                     if func == "schema_of_xml" => {}
+                // `locale` changes how numbers are inferred (`1,5` is a decimal in `de-DE`): only the default is implemented.
+                "locale"
+                    if func == "schema_of_xml"
+                        && v.trim().replace('_', "-").eq_ignore_ascii_case("en-US") => {}
                 "samplingratio"
                 | "columnnameofcorruptrecord"
                 | "wildcardcolname"
@@ -244,6 +248,13 @@ fn flag(v: &str, func: &str, name: &str) -> Result<bool, KrishivError> {
     } else if v.eq_ignore_ascii_case("false") {
         Ok(false)
     } else {
+        // `schema_of_xml` (Spark 4.2.0 run): `_LEGACY_ERROR_TEMP_2147` naming the option; the other functions keep the refusal.
+        if func == "schema_of_xml" {
+            return Err(krishiv_common::error::LegacyErrorTemp2147 {
+                param_name: name.to_owned(),
+            }
+            .into());
+        }
         Err(unsupported(
             func,
             &format!("option {name}={v} (it must be true or false)"),
@@ -1436,18 +1447,21 @@ fn infer_elem(e: &Elem, o: &Opts, root: bool) -> T {
         );
     }
     let mut seen: Vec<(String, T, usize)> = Vec::new();
+    // Child names are compared case-insensitively: one lower-cased key per child, looked up in a map, not searched for in a list.
+    let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for c in &e.children {
         let t = infer_elem(c, o, false);
-        match seen
-            .iter()
-            .position(|(n, _, _)| n.eq_ignore_ascii_case(&local(&c.name)))
-        {
-            Some(i) => {
+        let name = local(&c.name);
+        match index.get(&name.to_lowercase()) {
+            Some(&i) => {
                 let old = std::mem::replace(&mut seen[i].1, T::Null);
                 seen[i].1 = merge(old, t, &o.value_tag);
                 seen[i].2 += 1;
             }
-            None => seen.push((local(&c.name), t, 1)),
+            None => {
+                index.insert(name.to_lowercase(), seen.len());
+                seen.push((name, t, 1));
+            }
         }
     }
     for (name, t, n) in seen {

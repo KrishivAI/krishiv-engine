@@ -697,7 +697,7 @@ fn to_xml_wraps_inner_arrays_in_item_elements() {
 #[test]
 fn option_values_and_schemas() {
     let s = session();
-    // Spark refuses a flag that is not true or false; an unknown mode reads as PERMISSIVE.
+    // Spark refuses a flag that is not true or false (`_LEGACY_ERROR_TEMP_2147`, golden schema_of_xml#165); an unknown mode reads as PERMISSIVE.
     for options in [
         "'ignoreSurroundingSpaces', 'maybe'",
         "'inferSchema', 'maybe'",
@@ -709,7 +709,7 @@ fn option_values_and_schemas() {
                 &s,
                 &format!("select schema_of_xml('<p><a>1</a></p>', map({options}))")
             ),
-            ErrorClass::KrishivUnsupportedFeature,
+            ErrorClass::LegacyErrorTemp2147,
             "{options}"
         );
     }

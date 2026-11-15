@@ -9,7 +9,9 @@ FN=$(dirname "$HERE")
 N=krishiv-s7sql456-oracle-$V
 mkdir -p "$HERE/results/spark-$V"
 docker run --rm --name "$N" --user root -v "$FN":/g -w /g apache/spark:$V /bin/bash -c '
+failed=0
 for f in /g/sequence_xml/inputs/'"$ONLY"'.sql; do
   b=$(basename $f)
-  /opt/spark/bin/spark-submit --conf spark.ui.enabled=false /g/run_oracle.py $f /g/sequence_xml/results/spark-'"$V"'/$b.out >/dev/null 2>&1 || echo FAIL $b
-done'
+  /opt/spark/bin/spark-submit --conf spark.ui.enabled=false /g/run_oracle.py $f /g/sequence_xml/results/spark-'"$V"'/$b.out >/dev/null 2>&1 || { echo FAIL $b; failed=1; }
+done
+exit $failed'
