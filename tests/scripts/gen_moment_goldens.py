@@ -185,7 +185,7 @@ def main():
         "spark": spark.version,
         "ansi": spark.conf.get("spark.sql.ansi.enabled"),
         "generator": "tests/scripts/gen_moment_goldens.py",
-        "big_dataset": {"n": 10000, "seed": 7012, "rule": big_dataset.__doc__.strip()},
+        "big_dataset": {"n": 10000, "seed": 7012, "rule": (big_dataset.__doc__ or "").strip()},
         "cases": cases,
     }
     print(json.dumps(out, indent=1, allow_nan=False))
