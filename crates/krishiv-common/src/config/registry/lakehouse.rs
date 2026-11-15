@@ -38,6 +38,35 @@ pub static DELTA_SNAPSHOT_CACHE_MAX_BYTES: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// Most retries of a Delta commit that lost a race (delta-spark's `maxCommitAttempts`).
+pub static DELTA_MAX_COMMIT_ATTEMPTS: ConfigEntry = ConfigEntry {
+    key: "krishiv.delta.maxCommitAttempts",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(10_000_000)),
+    doc: "Most times a Delta write retries its commit after another writer committed first and \
+          no conflict was found: up to this many retries, so one more attempt in all, as \
+          delta-spark counts them. Past it the write fails with \
+          `DELTA_MAX_COMMIT_RETRIES_EXCEEDED`.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
+    spark_alias: Some("spark.databricks.delta.maxCommitAttempts"),
+};
+
+/// Longest time a Delta commit retries.
+pub static WRITE_COMMIT_RETRY_TIMEOUT: ConfigEntry = ConfigEntry {
+    key: "krishiv.write.commitRetryTimeout",
+    value_type: ValueType::Duration,
+    default: Some(ConfigValue::Duration(Duration::from_secs(30 * 60))),
+    doc: "Experimental. Longest time all the attempts of one table-format commit may take \
+          together (a Delta commit retried after losing races). Past it the write fails with \
+          `DELTA_MAX_COMMIT_RETRIES_EXCEEDED`; delta-spark has no such bound.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
 /// Largest catalog metadata a lakehouse connector parses.
 pub static CATALOG_MAX_METADATA_BYTES: ConfigEntry = ConfigEntry {
     key: "krishiv.catalog.maxMetadataBytes",

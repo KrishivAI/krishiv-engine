@@ -1710,3 +1710,34 @@ fn union_output_partitioning_is_a_spark_alias() {
     );
     assert!(c.set("spark.sql.unionOutputPartitioning", "maybe").is_err());
 }
+
+/// P3-T021 PR-37a: the bounds of the Delta commit loop, `maxCommitAttempts` under Spark's name
+/// too.
+#[test]
+fn delta_commit_retry_entries_parse_and_default() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&DELTA_MAX_COMMIT_ATTEMPTS)
+            .and_then(ConfigValue::as_int),
+        Some(10_000_000)
+    );
+    assert_eq!(
+        c.get(&WRITE_COMMIT_RETRY_TIMEOUT)
+            .and_then(ConfigValue::as_duration),
+        Some(std::time::Duration::from_secs(1800))
+    );
+    c.set("spark.databricks.delta.maxCommitAttempts", "3")
+        .unwrap();
+    assert_eq!(
+        c.get(&DELTA_MAX_COMMIT_ATTEMPTS)
+            .and_then(ConfigValue::as_int),
+        Some(3)
+    );
+    c.set("krishiv.write.commitRetryTimeout", "90s").unwrap();
+    assert_eq!(
+        c.get(&WRITE_COMMIT_RETRY_TIMEOUT)
+            .and_then(ConfigValue::as_duration),
+        Some(std::time::Duration::from_secs(90))
+    );
+    assert!(c.set("krishiv.delta.maxCommitAttempts", "0").is_err());
+}
