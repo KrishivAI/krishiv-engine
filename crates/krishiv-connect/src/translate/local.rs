@@ -67,11 +67,14 @@ impl LocalRelations {
         Self(Mode::Resolved(relations.into()))
     }
 
-    /// The requests recorded so far, in order (empty unless [`Self::collecting`]).
+    /// Takes the requests recorded so far, in order (empty unless [`Self::collecting`]), leaving
+    /// none behind: the inline data is moved out, never copied.
     #[must_use]
-    pub fn requests(&self) -> Vec<LocalRequest> {
+    pub fn take_requests(&self) -> Vec<LocalRequest> {
         match &self.0 {
-            Mode::Collect(r) => r.lock().unwrap_or_else(PoisonError::into_inner).clone(),
+            Mode::Collect(r) => {
+                std::mem::take(&mut *r.lock().unwrap_or_else(PoisonError::into_inner))
+            }
             _ => Vec::new(),
         }
     }

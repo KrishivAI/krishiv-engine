@@ -4,15 +4,22 @@
 //! The statement runs through [`Session::sql_command`]: a command (`SET`, `CREATE VIEW`, `SHOW`,
 //! `INSERT`, ...) runs at once and answers a `LocalRelation` of its result rows; a query is only
 //! analyzed (its errors surface here) and answers the `SQL` relation the client sends again as a
-//! root relation. The stream is one `sql_command_result`, then `result_complete` for a
-//! reattachable operation: no schema, batch or metrics response (Spark's `handleSqlCommand`).
+//! root relation. The stream is one `sql_command_result`, then, for a command only, one
+//! `metrics` response (empty until command metrics exist; Spark sends it when `isCommand` and
+//! skips it for a query), then `result_complete` for a reattachable operation: no schema or
+//! batch response (Spark's `handleSqlCommand`).
+//!
+//! The statement is `SqlCommand.input` when set (what PySpark 4.x sends for every `spark.sql()`),
+//! else the deprecated `sql` field. A command's result is one IPC stream; it is capped at
+//! `0.7 x maxBatchSize` as Spark's single batch is (Spark asserts; Krishiv refuses with a typed
+//! error). Unlike Spark's single batch it may hold several record batches.
 
 use std::sync::Arc;
 
 use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature, OperationCanceled};
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::execute_plan_response::{
-    ResponseType, ResultComplete, SqlCommandResult,
+    Metrics, ResponseType, ResultComplete, SqlCommandResult,
 };
 use krishiv_connect::proto::v4_3::plan::OpType;
 use krishiv_connect::proto::v4_3::plan::compressed_operation::OpType as CompressedOpType;
@@ -57,17 +64,28 @@ pub(super) async fn of(
     })
 }
 
-/// Runs `command` on `session` under operation `id`: the relation to answer.
+/// What a `sql_command` answers.
+pub(super) struct Answer {
+    /// The relation of the `sql_command_result`.
+    pub(super) relation: pb::Relation,
+    /// Whether the statement was a command that ran (a `metrics` response follows).
+    pub(super) is_command: bool,
+}
+
+/// Runs `command` on `session` under operation `id`: the relation to answer. The session time
+/// zone of a command's result is read after the command ran (it may have been `SET`).
 ///
 /// # Errors
-/// `KRISHIV_UNSUPPORTED_FEATURE` for `input` and for parameters (the analyzer refuses SQL
-/// parameters on this base); the statement's parse, analysis and run errors.
+/// `KRISHIV_UNSUPPORTED_FEATURE` for an `input` that is not a plain `SQL` relation, for parameters
+/// (the analyzer refuses SQL parameters on this base) and for a result over the batch cap;
+/// `CONNECT_INVALID_PLAN.SQL_COMMAND_EXPECTS_SQL_OR_WITH_RELATIONS` for another `input`; the
+/// statement's parse, analysis and run errors.
 pub(super) async fn run(
     session: &Session,
     command: &pb::SqlCommand,
     id: &str,
-    tz: Option<&Arc<str>>,
-) -> Result<pb::Relation, KrishivError> {
+    max_batch_size: usize,
+) -> Result<Answer, KrishivError> {
     let relation = sql_command_relation(command)?;
     let Some(RelType::Sql(sql)) = &relation.rel_type else {
         return Err(internal(
@@ -84,8 +102,16 @@ pub(super) async fn run(
         .sql_command_with(&sql.query, QueryOptions::new().operation_id(id))
         .await?
     {
-        SqlOutcome::Query(_) => Ok(relation),
+        SqlOutcome::Query(_) => Ok(Answer {
+            relation,
+            is_command: false,
+        }),
         SqlOutcome::Command(df) => {
+            let tz: Option<Arc<str>> = session
+                .conf()
+                .get("spark.sql.session.timeZone")
+                .map(Arc::from);
+            let tz = tz.as_ref();
             let schema = df.schema().await?;
             let mut batches = Vec::new();
             for batch in df.collect().await? {
@@ -95,12 +121,33 @@ pub(super) async fn run(
                 batches.push(arrow::empty_batch(&schema, tz)?);
             }
             let data = arrow::ipc_stream_of(&batches, None)?;
-            Ok(pb::Relation {
-                common: None,
-                rel_type: Some(RelType::LocalRelation(pb::LocalRelation {
-                    data: Some(data),
-                    schema: None,
-                })),
+            drop(batches);
+            #[expect(
+                clippy::cast_precision_loss,
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "Spark's (maxBatchSize * 0.7).toLong on a positive size"
+            )]
+            let cap = (max_batch_size as f64 * 0.7) as usize;
+            if data.len() > cap {
+                return Err(KrishivUnsupportedFeature {
+                    feature: format!(
+                        "a SQL command result of {} bytes, over the {cap}-byte batch cap \
+                         (0.7 x spark.connect.grpc.arrow.maxBatchSize)",
+                        data.len()
+                    ),
+                }
+                .into());
+            }
+            Ok(Answer {
+                relation: pb::Relation {
+                    common: None,
+                    rel_type: Some(RelType::LocalRelation(pb::LocalRelation {
+                        data: Some(data),
+                        schema: None,
+                    })),
+                },
+                is_command: true,
             })
         }
         _ => Err(internal("an unknown outcome of a SQL command")),
@@ -115,26 +162,32 @@ fn internal(message: &str) -> KrishivError {
 }
 
 /// Streams the answer of a `sql_command` and ends the operation.
-pub(super) async fn encode(sender: Sender, relation: pb::Relation) {
+pub(super) async fn encode(sender: Sender, answer: Answer) {
     let op = Arc::clone(&sender.op);
     let outcome = tokio::select! {
         biased;
         () = op.closed() => Err(Stop::Gone),
         () = op.cancelled() => Err(Stop::Failed(OperationCanceled {}.into())),
-        r = produce(&sender, relation) => r,
+        r = produce(&sender, answer) => r,
     };
     settle(&op, outcome);
 }
 
-async fn produce(sender: &Sender, relation: pb::Relation) -> Result<(), Stop> {
+async fn produce(sender: &Sender, answer: Answer) -> Result<(), Stop> {
     sender.admit().await?;
     sender
         .send(
             sender.response(Some(ResponseType::SqlCommandResult(SqlCommandResult {
-                relation: Some(relation),
+                relation: Some(answer.relation),
             }))),
         )
         .await?;
+    if answer.is_command {
+        // The operator tree needs a session hook for a command's metrics: empty until then.
+        let mut metrics = sender.response(None);
+        metrics.metrics = Some(Metrics::default());
+        sender.send(metrics).await?;
+    }
     // As `produce` of the batches ends: atomic with interrupts.
     if !sender.op.finish() {
         return Err(Stop::Failed(OperationCanceled {}.into()));

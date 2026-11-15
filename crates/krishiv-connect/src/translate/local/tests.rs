@@ -45,7 +45,7 @@ fn the_first_pass_records_each_request_in_order() {
         ..Join::default()
     })));
     translate_relation(&join, &conf_with(locals.clone())).expect("translates");
-    let requests = locals.requests();
+    let requests = locals.take_requests();
     assert_eq!(requests.len(), 2);
     let LocalRequest::Inline { data, schema } = &requests[0] else {
         panic!("{:?}", requests[0])
@@ -94,7 +94,7 @@ fn no_data_and_no_schema_is_an_invalid_relation() {
     // A schema alone is an empty relation of that schema.
     let locals = LocalRelations::collecting();
     translate_relation(&local(None, Some("a INT")), &conf_with(locals.clone())).expect("ok");
-    assert_eq!(locals.requests().len(), 1);
+    assert_eq!(locals.take_requests().len(), 1);
 }
 
 #[test]

@@ -781,3 +781,34 @@ fn a_decimal_literal_of_any_length_is_read_in_place() {
         ErrorClass::DecimalPrecisionExceedsMaxPrecision
     );
 }
+
+#[test]
+#[expect(deprecated, reason = "the pre-4.1 element_type field")]
+fn a_member_that_misses_the_declared_type_is_an_invalid_plan_not_internal() {
+    let assertion = ErrorClass::ConnectInvalidPlanAssertionFailure;
+    // A pre-4.1 client declares `int` elements and sends a long.
+    let wrong_member = literal_of(LiteralType::Array(pl::Array {
+        element_type: Some(proto_type(Kind::Integer(dt::Integer::default()))),
+        elements: vec![literal_of(LiteralType::Long(1))],
+    }));
+    assert_eq!(literal(&wrong_member).unwrap_err().error_class(), assertion);
+    // A null member under `array<int not null>`.
+    let null_member = expression::Literal {
+        literal_type: Some(LiteralType::Array(pl::Array {
+            elements: vec![int_lit(1), null_lit()],
+            ..pl::Array::default()
+        })),
+        data_type: Some(array_type(Kind::Integer(dt::Integer::default()), false)),
+    };
+    assert_eq!(literal(&null_member).unwrap_err().error_class(), assertion);
+    // A specialized `longs` under a root `array<int>`.
+    let specialized = expression::Literal {
+        literal_type: Some(LiteralType::SpecializedArray(pl::SpecializedArray {
+            value_type: Some(pl::specialized_array::ValueType::Longs(
+                crate::proto::v4_3::Longs { values: vec![1] },
+            )),
+        })),
+        data_type: Some(array_type(Kind::Integer(dt::Integer::default()), true)),
+    };
+    assert_eq!(literal(&specialized).unwrap_err().error_class(), assertion);
+}

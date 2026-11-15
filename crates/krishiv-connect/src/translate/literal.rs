@@ -6,7 +6,7 @@
 //! value implies; a value that does not fit a declared type is
 //! `INCOMPATIBLE_LITERAL_DATA_TYPE`. `NULL` is compatible with any type.
 
-use krishiv_common::error::{KrishivError, NumericValueOutOfRangeWithSuggestion};
+use krishiv_common::error::{ErrorClass, KrishivError, NumericValueOutOfRangeWithSuggestion};
 use krishiv_plan::{DayTimeField, Literal, YearMonthField};
 use krishiv_types::{ArrayType, DataType, DecimalType, MapType};
 
@@ -232,7 +232,7 @@ fn array(
         .iter()
         .map(|e| literal_at(e, Some(ty.element_type()), depth + 1))
         .collect::<Result<Vec<_>, _>>()?;
-    Literal::array(ty, elements)
+    client_input(Literal::array(ty, elements))
 }
 
 /// `Literal.Map`: keys and values are parallel lists of one length.
@@ -273,7 +273,7 @@ fn map(
             ))
         })
         .collect::<Result<Vec<_>, KrishivError>>()?;
-    Literal::key_value_map(ty, entries)
+    client_input(Literal::key_value_map(ty, entries))
 }
 
 /// `Literal.Struct`: one element per field of the struct type.
@@ -308,7 +308,7 @@ fn struct_literal(
         .zip(&s.elements)
         .map(|(f, e)| literal_at(e, Some(f.data_type()), depth + 1))
         .collect::<Result<Vec<_>, _>>()?;
-    Literal::struct_value(ty, fields)
+    client_input(Literal::struct_value(ty, fields))
 }
 
 /// `Literal.SpecializedArray`: a primitive array, as an array literal of non-null elements.
@@ -364,7 +364,7 @@ fn specialized(
         }
         None => ArrayType::new(element, false),
     };
-    Literal::array(ty, elements)
+    client_input(Literal::array(ty, elements))
 }
 
 /// A null of type `of`; the `NULL` type is Spark's `void`.
@@ -571,6 +571,19 @@ fn parse_decimal(text: &str) -> Option<Parsed> {
         magnitude,
         precision,
         scale,
+    })
+}
+
+/// A nested literal the plan crate refuses for a member that does not fit the declared type (or
+/// a null where nulls are forbidden): client input, so `CONNECT_INVALID_PLAN.ASSERTION_FAILURE`
+/// rather than the constructor's `INTERNAL_ERROR`. Other errors (too deep) pass through.
+fn client_input(r: Result<Literal, KrishivError>) -> Result<Literal, KrishivError> {
+    r.map_err(|e| {
+        if e.error_class() == ErrorClass::InternalError {
+            assertion(e.to_string())
+        } else {
+            e
+        }
     })
 }
 

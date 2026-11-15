@@ -264,9 +264,9 @@ pub async fn execute_plan(
     let prepared = until_cancelled(&op, async {
         // `spark.sql()`: a command runs now, a query is analyzed; neither returns rows.
         if let Some(command) = sql_command::of(plan, limits).await? {
-            let tz = conf.get("spark.sql.session.timeZone").map(Arc::from);
-            let relation = sql_command::run(session, &command, id.as_str(), tz.as_ref()).await?;
-            return Ok(Prepared::Command(relation));
+            let answer =
+                sql_command::run(session, &command, id.as_str(), limits.max_batch_size).await?;
+            return Ok(Prepared::Command(answer));
         }
         // Decompression (up to `maxPlanSize`) runs off the async workers.
         let logical = request_plan(entry, plan, limits).await?;
@@ -279,12 +279,12 @@ pub async fn execute_plan(
     // reported this operation first turns it into `OPERATION_CANCELED`.
     let (df, schema) = match prepared {
         Ok(Prepared::Rows(df, schema)) => (df, schema),
-        Ok(Prepared::Command(relation)) => {
+        Ok(Prepared::Command(answer)) => {
             let sender = new_sender(session, request, entry, &op, (limits, budget, &opts));
             let stream =
                 sender::attach(Arc::clone(&op), operations, 0, SenderCaps::of(&op, limits));
             registered.keep();
-            tokio::spawn(sql_command::encode(sender, relation));
+            tokio::spawn(sql_command::encode(sender, answer));
             return Ok(stream);
         }
         Err(e) => {
@@ -312,7 +312,7 @@ enum Prepared {
     /// A relation: its frame and schema, streamed as batches.
     Rows(DataFrame, SchemaRef),
     /// A `sql_command`: the relation it answers.
-    Command(pb::Relation),
+    Command(sql_command::Answer),
 }
 
 /// The producing side of `op`.
@@ -389,7 +389,11 @@ pub(crate) async fn request_plan(
         ..translate.clone()
     };
     let logical = translate_plan(plan, decompressed.as_deref(), &first)?;
-    let requests = collecting.requests();
+    // Drained, not copied: the recorded inline data is the one copy, and each request is consumed
+    // (and freed) by its build below.
+    let requests = collecting.take_requests();
+    drop(first);
+    drop(collecting);
     if requests.is_empty() {
         return Ok(logical);
     }

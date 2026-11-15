@@ -330,12 +330,41 @@ fn a_sql_command_translates_as_the_sql_relation_of_a_query() {
             .expect("translates")
             .to_string()
     );
-    // The `WithRelations` form is refused as an unsupported field.
+    // `input` (PySpark 4.x) wins and is answered as it came, plan id included.
+    let input = pb::Relation {
+        common: Some(pb::RelationCommon {
+            plan_id: Some(9),
+            ..Default::default()
+        }),
+        rel_type: Some(pb::relation::RelType::Sql(pb::Sql {
+            query: "SELECT 2".to_owned(),
+            ..Default::default()
+        })),
+    };
     let with_input = pb::SqlCommand {
+        input: Some(input.clone()),
+        ..Default::default()
+    };
+    assert_eq!(sql_command_relation(&with_input).expect("input"), input);
+    // The `WithRelations` form is refused as an unsupported field.
+    let with_relations = pb::SqlCommand {
+        input: Some(pb::Relation {
+            common: None,
+            rel_type: Some(pb::relation::RelType::WithRelations(Box::default())),
+        }),
+        ..Default::default()
+    };
+    let e = sql_command_relation(&with_relations).expect_err("refused");
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert!(e.message().contains("SqlCommand.input"), "{}", e.message());
+    // Any other relation is Spark's `SQL_COMMAND_EXPECTS_SQL_OR_WITH_RELATIONS`.
+    let other = pb::SqlCommand {
         input: Some(pb::Relation::default()),
         ..Default::default()
     };
-    let e = sql_command_relation(&with_input).expect_err("refused");
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    assert!(e.message().contains("SqlCommand.input"), "{}", e.message());
+    let e = sql_command_relation(&other).expect_err("refused");
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::ConnectInvalidPlanSqlCommandExpectsSqlOrWithRelations
+    );
 }

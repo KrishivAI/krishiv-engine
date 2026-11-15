@@ -1316,6 +1316,29 @@ fn sql_command(query: &str) -> pb::Plan {
     }
 }
 
+/// The command PySpark 4.x sends for `spark.sql(query)`: the statement as `input`, a `SQL`
+/// relation (the deprecated fields unset).
+fn sql_command_input(query: &str, plan_id: i64) -> pb::Plan {
+    let command = pb::SqlCommand {
+        input: Some(pb::Relation {
+            common: Some(pb::RelationCommon {
+                plan_id: Some(plan_id),
+                ..Default::default()
+            }),
+            rel_type: Some(RelType::Sql(pb::Sql {
+                query: query.to_owned(),
+                ..Default::default()
+            })),
+        }),
+        ..Default::default()
+    };
+    pb::Plan {
+        op_type: Some(OpType::Command(Box::new(pb::Command {
+            command_type: Some(pb::command::CommandType::SqlCommand(Box::new(command))),
+        }))),
+    }
+}
+
 /// The relation of the one `sql_command_result` response.
 fn sql_result(responses: &[pb::ExecutePlanResponse]) -> pb::Relation {
     let results: Vec<_> = responses
@@ -1379,6 +1402,12 @@ async fn a_sql_command_runs_at_once_and_answers_its_rows_as_a_local_relation() {
     )
     .await
     .expect("runs");
+    // Spark's order for a command: the result, then metrics (then `result_complete`).
+    assert!(
+        matches!(r[0].response_type, Some(ResponseType::SqlCommandResult(_))),
+        "{r:?}"
+    );
+    assert!(r[1].metrics.is_some(), "{r:?}");
     let relation = sql_result(&r);
     assert!(
         matches!(relation.rel_type, Some(RelType::LocalRelation(_))),
@@ -1444,17 +1473,7 @@ async fn a_compressed_sql_command_runs_and_unsupported_forms_are_refused() {
     };
     let r = collect(&run.channel, request(plan)).await.expect("runs");
     assert!(matches!(sql_result(&r).rel_type, Some(RelType::Sql(_))));
-    // Parameters and DataFrame inputs are refused up front (golden-pending: group 4).
-    let mut with_input = sql_command("SELECT 1");
-    if let Some(OpType::Command(c)) = &mut with_input.op_type
-        && let Some(pb::command::CommandType::SqlCommand(s)) = &mut c.command_type
-    {
-        s.input = Some(range(1));
-    }
-    let e = collect(&run.channel, request(with_input))
-        .await
-        .unwrap_err();
-    assert_eq!(error_class(&e), "KRISHIV_UNSUPPORTED_FEATURE");
+    // Parameters are refused up front (golden-pending: group 4).
     let mut with_args = sql_command("SELECT ?");
     if let Some(OpType::Command(c)) = &mut with_args.op_type
         && let Some(pb::command::CommandType::SqlCommand(s)) = &mut c.command_type
@@ -1465,5 +1484,73 @@ async fn a_compressed_sql_command_runs_and_unsupported_forms_are_refused() {
         }
     }
     let e = collect(&run.channel, request(with_args)).await.unwrap_err();
+    assert_eq!(error_class(&e), "KRISHIV_UNSUPPORTED_FEATURE");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pyspark_4_sql_command_sends_its_statement_as_input() {
+    let run = start().await;
+    // A query: the `input` relation comes back as it was, plan id included.
+    let r = collect(
+        &run.channel,
+        reattachable(request(sql_command_input("SELECT 1 AS a", 41))),
+    )
+    .await
+    .expect("runs");
+    assert_eq!(r.len(), 2, "{r:?}");
+    let relation = sql_result(&r);
+    assert_eq!(relation.common.as_ref().and_then(|c| c.plan_id), Some(41));
+    assert!(
+        matches!(&relation.rel_type, Some(RelType::Sql(s)) if s.query == "SELECT 1 AS a"),
+        "{relation:?}"
+    );
+    // A command through `input` runs at once.
+    let r = collect(
+        &run.channel,
+        request(sql_command_input(
+            "CREATE TEMPORARY VIEW iv AS SELECT 5 AS n",
+            42,
+        )),
+    )
+    .await
+    .expect("runs");
+    assert!(matches!(
+        sql_result(&r).rel_type,
+        Some(RelType::LocalRelation(_))
+    ));
+    let entry = run
+        .manager
+        .get(&Principal::local_user(), SESSION, None)
+        .expect("session");
+    let df = entry
+        .session()
+        .sql("SELECT n FROM iv")
+        .await
+        .expect("the view exists");
+    assert_eq!(df.collect().await.expect("rows").len(), 1);
+    // Another input relation is refused with Spark's class; WithRelations is group 4.
+    let mut other = sql_command_input("x", 1);
+    if let Some(OpType::Command(c)) = &mut other.op_type
+        && let Some(pb::command::CommandType::SqlCommand(s)) = &mut c.command_type
+    {
+        s.input = Some(range(1));
+    }
+    let e = collect(&run.channel, request(other)).await.unwrap_err();
+    assert_eq!(
+        error_class(&e),
+        "CONNECT_INVALID_PLAN.SQL_COMMAND_EXPECTS_SQL_OR_WITH_RELATIONS"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_command_result_over_the_batch_cap_is_refused() {
+    let run = start_with(ExecuteLimits {
+        max_batch_size: 64,
+        ..ExecuteLimits::default()
+    })
+    .await;
+    let e = collect(&run.channel, request(sql_command("SHOW TABLES")))
+        .await
+        .unwrap_err();
     assert_eq!(error_class(&e), "KRISHIV_UNSUPPORTED_FEATURE");
 }

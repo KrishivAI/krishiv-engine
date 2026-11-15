@@ -171,20 +171,38 @@ pub fn translate_plan(plan: &pb::Plan, conf: &TranslateConf) -> Result<Plan> {
 }
 
 /// The `SQL` relation of a `SqlCommand`: what `spark.sql()`'s client re-sends when the statement
-/// was a query (Spark's `handleSqlCommand` returns the same text and parameters as a `SQL`
-/// relation). The deprecated `sql`, `args` and `pos_args` fields are the relation's `query`,
-/// `args` and `pos_args`; the named and positional expressions carry over as they are.
+/// was a query. When `input` is set (every `spark.sql()` of a PySpark 4.x client sends it, the
+/// other fields being deprecated) it is the relation, unchanged and with its `common` (Spark's
+/// `handleSqlCommand` answers `command.getInput`); otherwise the deprecated `sql`, `args` and
+/// `pos_args` fields are the relation's `query`, `args` and `pos_args`, the named and positional
+/// expressions carrying over as they are.
+///
+/// The library form of a `sql_command` exists for the coverage tie and for the server, which
+/// runs the command; `AnalyzePlan` of a command plan stays refused by the server.
 ///
 /// # Errors
-/// `KRISHIV_UNSUPPORTED_FEATURE` for `input` (the `WithRelations` form, which parameterises the
-/// query with DataFrames; Connect group 4).
+/// `KRISHIV_UNSUPPORTED_FEATURE` for an `input` of `WithRelations` (SQL over DataFrame
+/// arguments, Connect group 4); `CONNECT_INVALID_PLAN.SQL_COMMAND_EXPECTS_SQL_OR_WITH_RELATIONS`
+/// for any other `input` relation.
 pub fn sql_command_relation(command: &pb::SqlCommand) -> Result<pb::Relation> {
-    if command.input.is_some() {
-        return Err(unsupported_field(
-            "SqlCommand",
-            "input",
-            "SQL over DataFrame arguments",
-        ));
+    if let Some(input) = &command.input {
+        return match &input.rel_type {
+            Some(pb::relation::RelType::Sql(_)) => Ok(input.clone()),
+            Some(pb::relation::RelType::WithRelations(_)) => Err(unsupported_field(
+                "SqlCommand",
+                "input",
+                "SQL over DataFrame arguments",
+            )),
+            other => Err(
+                krishiv_common::error::ConnectInvalidPlanSqlCommandExpectsSqlOrWithRelations {
+                    other: other.as_ref().map_or_else(
+                        || "REL_TYPE_NOT_SET".to_owned(),
+                        |r| r.variant().field.to_ascii_uppercase(),
+                    ),
+                }
+                .into(),
+            ),
+        };
     }
     #[expect(
         deprecated,

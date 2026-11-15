@@ -479,7 +479,8 @@ mod tests;
 
 /// The alias of a `SubqueryAlias`: `qualifier ++ [alias]` joined by [`ALIAS_PART_SEP`], as the IR
 /// holds a multi-part alias (Spark's `AliasIdentifier(alias, qualifier)`). A part holding the
-/// separator could not be told from two parts, so it is refused (56K00).
+/// separator could not be told from two parts, so it is refused as `KRISHIV_UNSUPPORTED_FEATURE`
+/// (a deviation from note section 4: 56K00 is for `oneof` arms).
 fn alias_name(qualifier: &[String], alias: &str) -> Result<String> {
     let parts = || qualifier.iter().map(String::as_str).chain([alias]);
     if parts().any(|p| p.contains(ALIAS_PART_SEP)) {

@@ -111,7 +111,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 2 | write_operation | missing |  | DataFrameWriter V1: krishiv-session save/save_as_table/insert_into (dataframe.rs), semantics T023 | P3-T023 | 11 |
 | 3 | create_dataframe_view | missing |  | create_or_replace_temp_view (exists), global temp views | P3-T012 | 4 |
 | 4 | write_operation_v2 | missing |  | DataFrameWriterV2 (create/replace/append/overwrite/overwrite_partitions exist in dataframe.rs), T023 | P3-T023 | 11 |
-| 5 | sql_command | partial | input (WithRelations form, group 4); named and positional arguments (the analyzer refuses SQL parameters) | spark.sql() sends this. Run commands at once; for queries return sql_command_result.relation (Spark returns a SQL or LocalRelation relation the client re-sends). Translated here as the SQL relation of a query; the server runs commands (execute.rs) | P3-T012 | 1 |
+| 5 | sql_command | partial | input of WithRelations form (group 4; the plain SQL input is supported); named and positional arguments (the analyzer refuses SQL parameters) | spark.sql() sends this. Run commands at once; for queries return sql_command_result.relation (Spark returns a SQL or LocalRelation relation the client re-sends). Translated here as the SQL relation of a query; the server runs commands (execute.rs) | P3-T012 | 1 |
 | 6 | write_stream_operation_start | out of scope |  | P4 |  | 0 |
 | 7 | streaming_query_command | out of scope |  | P4 |  | 0 |
 | 8 | get_resources_command | missing |  | an empty resource map (single node, no executors) | P3-T012 | 4 |
