@@ -392,8 +392,13 @@ impl Walker<'_> {
             PlanNode::Limit { input, .. }
             | PlanNode::Offset { input, .. }
             | PlanNode::JoinHint { input, .. }
-            // `TABLESAMPLE` keeps some input rows, by a draw that reads no column.
-            | PlanNode::Sample { input, .. }
+            // `TABLESAMPLE` keeps some input rows, by a draw that reads no column (`BUCKET .. ON col` is refused
+            // before a `Sample` is built). Its fields are listed so a new one, a column above all, is decided here.
+            | PlanNode::Sample {
+                input,
+                bounds: _,
+                seed: _,
+            }
             | PlanNode::ReplicateRows { input, .. } => Ok(Rule::Same(self.plan(input, offset)?)),
             PlanNode::SubqueryAlias { input, alias, .. } => self.alias(p, input, alias, offset),
             PlanNode::WithCte { input, ctes } => {
