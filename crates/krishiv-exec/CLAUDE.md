@@ -106,6 +106,7 @@ the probe (`join/probe.rs`) encodes the selected rows' keys and gathers by compo
 `planner/properties.rs` (P2-T174) the ADR 0012 property pass: required distributions and provided placements (by
 attribute id); `Exchange` nodes (`Hash` on the routing hash, `Single`, `Broadcast`, `RoundRobin`, `Range`) are inserted
 only where a requirement is unmet, plus one hash exchange for every `DISTRIBUTE BY` (`Planner::repartition`: key expressions computed below, dropped above, so they are evaluated as Spark's shuffle evaluates them); on one worker instantiation lowers each exchange into the operators around it.
+A `GROUP BY` key that other column keys determine (`krishiv_optimizer::dependent_group_keys`, ClickBench q36's `ClientIP - k`) is not hashed or exchanged: the output expressions compute it from each group's key columns, and one that may raise is still computed on every input row below the aggregate (Spark evaluates grouping keys per row; `tests/planner/dependent_keys.rs`, LIMIT and unread keys included).
 An aggregate over rows that must move is planned in two phases, `Aggregate{Partial}` -> exchange -> `Aggregate{Final}`
 over states (`planner/aggregate.rs`, design P2-T174 unit 2; `DISTINCT`: partial over keys and argument, exchange,
 partial merge, final, `physical::distinct_phases`, fused back by `fused_distinct`); `physical::fused_aggregate`

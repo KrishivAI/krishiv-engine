@@ -1,14 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Group keys computed from other column keys leave the keys (see
-//! `dependent_keys.rs`): the shapes it applies to and each condition that
-//! keeps a key. The values, overflow included, are checked against the
-//! unrewritten plan on the executor, in `krishiv-exec`'s planner tests.
+//! Group keys determined by other column keys (`dependent_group_keys`):
+//! the shapes it finds and each condition that keeps a key. The physical
+//! planner groups by the rest; the values and errors are checked against
+//! Spark's per-row grouping in `krishiv-exec`'s planner tests.
 
-use std::sync::Arc;
-
-use krishiv_optimizer::optimize;
+use krishiv_optimizer::dependent_group_keys;
 use krishiv_plan::analyzer::{MemoryCatalog, TableColumn};
-use krishiv_plan::{Grouping, LogicalPlan, PlanNode};
+use krishiv_plan::{Grouping, PlanNode};
 
 use crate::support;
 
@@ -37,44 +35,26 @@ fn catalog() -> MemoryCatalog {
     )
 }
 
-/// The key counts of the aggregates of `sql`, before and after optimizing
-/// (outermost first); the output and the fixed point are checked too.
+/// The key counts of the first aggregate of `sql` (as analyzed): all of
+/// them, and those that are not dependent.
 fn keys(sql: &str) -> (Vec<usize>, Vec<usize>, String) {
     let ctx = support::ctx_over(catalog());
     let resolved = support::resolve(sql, &ctx);
-    let optimized = optimize(&resolved).unwrap();
-    assert_eq!(
-        optimized.root().resolved_output(),
-        resolved.root().resolved_output(),
-        "{sql}: the output keeps its attributes (id, name, type, nullability)"
-    );
-    let again = optimize(&optimized).unwrap();
-    assert!(
-        again.structurally_eq(&optimized),
-        "{sql}: a fixed point\n{}",
-        again.root()
-    );
-    (
-        key_counts(resolved.root()),
-        key_counts(optimized.root()),
-        optimized.root().to_string(),
-    )
-}
-
-fn key_counts(root: &Arc<LogicalPlan>) -> Vec<usize> {
-    let mut out = Vec::new();
-    let mut stack = vec![root];
+    let mut all = Vec::new();
+    let mut kept = Vec::new();
+    let mut stack = vec![resolved.root()];
     while let Some(p) = stack.pop() {
         if let PlanNode::Aggregate {
             grouping: Grouping::GroupBy(k),
             ..
         } = &p.node
         {
-            out.push(k.len());
+            all.push(k.len());
+            kept.push(dependent_group_keys(k).iter().filter(|d| !**d).count());
         }
         p.for_each_child(&mut |c| stack.push(c));
     }
-    out
+    (all, kept, resolved.root().to_string())
 }
 
 #[test]
@@ -84,8 +64,6 @@ fn clickbench_q36_groups_by_one_key() {
     let (before, after, text) = keys(sql);
     assert_eq!(before, vec![4], "{text}");
     assert_eq!(after, vec![1], "{text}");
-    // The shifted keys are still computed, by the aggregate.
-    assert!(text.contains("(ip#0 - 3)"), "{text}");
 }
 
 #[test]
@@ -148,16 +126,4 @@ fn conditions_that_keep_a_key() {
         let (before, after, text) = keys(sql);
         assert_eq!(before, after, "{sql}: {why}\n{text}");
     }
-}
-
-#[test]
-fn rollup_keeps_its_keys() {
-    let sql = "SELECT ip, ip - 1, COUNT(*) FROM h GROUP BY ROLLUP(ip, ip - 1)";
-    let ctx = support::ctx_over(catalog());
-    let resolved = support::resolve(sql, &ctx);
-    let optimized = optimize(&resolved).unwrap();
-    let text = optimized.root().to_string();
-    // A rollup's sets are lowered to an expand and a plain aggregate; a key
-    // of a set (and `spark_grouping_id`) is never a function of another.
-    assert!(text.contains("(ip#0 - 1)"), "{text}");
 }

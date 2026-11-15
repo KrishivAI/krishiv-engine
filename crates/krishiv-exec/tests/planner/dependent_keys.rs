@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Group keys computed from other column keys (`GROUP BY g, g - 1`) leave
-//! the keys (the optimizer's `dependent_keys`): the rows (or the error) of
-//! the optimised plan equal those of the plan as analyzed, for generated
-//! data with NULLs and the extremes of each type, under ANSI and legacy
-//! arithmetic, so a key that overflows for some row raises as before.
+//! Group keys determined by other column keys (`GROUP BY g, g - 1`) are
+//! not hashed (`krishiv_optimizer::dependent_group_keys`, planned in
+//! `planner/aggregate.rs`). Spark evaluates a grouping key on every row, so
+//! the rows or the error must be those of Spark's per-row grouping: checked
+//! against the same query with each key spelled so it cannot be found
+//! dependent, for generated data with NULLs and the extremes of each type,
+//! under ANSI and legacy arithmetic, whether the key is selected, with
+//! `HAVING` and `LIMIT`.
 
 use std::sync::Arc;
 
@@ -126,6 +129,13 @@ impl Db {
         Ok(rows)
     }
 
+    /// The physical plan of `sql`, optimised, as text.
+    fn physical(&self, sql: &str) -> String {
+        let plan = krishiv_optimizer::optimize(&self.analyze(sql)).unwrap();
+        let cx = PlanningContext::new(Arc::clone(&self.tables) as _, Arc::clone(&self.config));
+        DefaultPlanner.plan(&plan, &cx).unwrap().to_string()
+    }
+
     /// The rows of `sql` as analyzed, and as optimised (also returned as
     /// text).
     fn both(&self, sql: &str) -> (Outcome, Outcome, String) {
@@ -194,57 +204,142 @@ const DEPENDENT: &[&str] = &[
     "'k'",
 ];
 
+/// `key` spelled so that it is never found dependent but has the same
+/// value on every row: it also reads `ti`, which is not a key, so the
+/// reference query hashes it as Spark does.
+fn hashed(key: &str) -> String {
+    format!("if(ti IS NULL OR ti IS NOT NULL, {key}, NULL)")
+}
+
 proptest! {
     #![proptest_config(ProptestConfig {
-        cases: 96,
+        cases: 128,
         failure_persistence: None,
         ..ProptestConfig::default()
     })]
 
-    /// The optimised plan returns what the analyzed plan does: the same
-    /// rows, or the same error class.
+    /// The query with dependent keys returns what the query with the same
+    /// keys hashed returns: the same rows, or the same error class. With a
+    /// `LIMIT` the rows are not ordered, so only their count is compared.
     #[test]
     fn dropped_keys_give_the_same_rows_or_error(
         data in rows(),
         batch in 1..8_usize,
         ansi in any::<bool>(),
         picks in prop::collection::vec(0..DEPENDENT.len(), 1..4),
-        having in any::<bool>(),
+        selected in any::<bool>(),
+        tail in 0..3_u8,
     ) {
         let db = db(&data, batch, ansi);
         let dependent: Vec<&str> = picks.iter().map(|k| DEPENDENT[*k]).collect();
-        let keys = format!("i, l, {}", dependent.join(", "));
-        // A filter that drops groups above the aggregate must not hide an
-        // error the dropped key raises.
-        let filter = if having { " HAVING COUNT(*) > 1" } else { "" };
-        let sql = format!(
-            "SELECT {keys}, COUNT(*), SUM(ti) FROM s GROUP BY {keys}{filter}"
-        );
-        let (original, optimized, _) = db.both(&sql);
-        prop_assert_eq!(original, optimized, "{} (ansi {})", sql, ansi);
+        let reference: Vec<String> = dependent.iter().map(|k| hashed(k)).collect();
+        let query = |keys: &[String]| {
+            let group = format!("i, l, {}", keys.join(", "));
+            let select = if selected { group.clone() } else { "i, l".to_owned() };
+            let tail = match tail {
+                0 => "",
+                // A filter that drops groups must not hide an error the
+                // key raises for one of them.
+                1 => " HAVING COUNT(*) > 1",
+                _ => " LIMIT 1",
+            };
+            format!("SELECT {select}, COUNT(*), SUM(ti) FROM s GROUP BY {group}{tail}")
+        };
+        let plain: Vec<String> = dependent.iter().map(|k| (*k).to_owned()).collect();
+        let sql = query(&plain);
+        let (_, optimized, _) = db.both(&sql);
+        let (_, expected, _) = db.both(&query(&reference));
+        if tail == 2 {
+            prop_assert_eq!(
+                optimized.map(|r| r.len()),
+                expected.map(|r| r.len()),
+                "{} (ansi {})", sql, ansi
+            );
+        } else {
+            prop_assert_eq!(optimized, expected, "{} (ansi {})", sql, ansi);
+        }
     }
 }
 
 #[test]
-fn q36_shape_drops_three_keys_and_raises_on_overflow() {
-    let sql = "SELECT i, i - 1, i - 2, i - 3, COUNT(*) AS c FROM s \
-               GROUP BY i, i - 1, i - 2, i - 3 HAVING COUNT(*) > 5 ORDER BY c DESC LIMIT 10";
-    let rows = vec![
-        (Some(0), Some(0), Some(0), Some(7), Some(0)),
-        (Some(0), Some(0), Some(0), Some(i32::MIN + 1), Some(0)),
-    ];
-    let db = db(&rows, 1, true);
-    let (original, optimized, _) = db.both(sql);
-    // `i32::MIN + 1 - 2` overflows: an error both ways, although the
-    // group's count of 1 fails the HAVING.
-    assert!(original.is_err(), "{original:?}");
-    assert_eq!(original, optimized);
-    let legacy = db_legacy(&rows);
-    let (original, optimized, _) = legacy.both(sql);
-    assert!(original.is_ok(), "{original:?}");
-    assert_eq!(original, optimized);
+fn the_reference_spelling_is_hashed() {
+    let db = db(&[], 1, true);
+    let text = db.physical(&format!(
+        "SELECT i, COUNT(*) FROM s GROUP BY i, {}",
+        hashed("i - 1")
+    ));
+    assert!(!text.contains("HashAggregate keys=[i#3], "), "{text}");
+    // `if(c, a, b)` prints as `CASE WHEN`.
+    assert!(
+        text.contains(
+            "HashAggregate keys=[i#3, CASE WHEN (isnull(ti#1) or isnotnull(ti#1)) THEN (i#3 - 1)"
+        ),
+        "{text}"
+    );
 }
 
-fn db_legacy(rows: &[Row]) -> Db {
-    db(rows, 1, false)
+#[test]
+fn q36_groups_by_one_key() {
+    let db = db(&[], 1, true);
+    let text = db.physical(
+        "SELECT i, i - 1, i - 2, i - 3, COUNT(*) AS c FROM s \
+         GROUP BY i, i - 1, i - 2, i - 3 ORDER BY c DESC LIMIT 10",
+    );
+    assert!(text.contains("HashAggregate keys=[i#3], "), "{text}");
+}
+
+/// Many groups, one of whose keys overflows: the error is raised although
+/// the key is never selected and the `LIMIT` reads one group (Spark
+/// evaluates the key on every row). In legacy mode it wraps and one row
+/// returns.
+#[test]
+fn a_raising_key_raises_unread_and_under_a_limit() {
+    let mut rows: Vec<Row> = (0..5000)
+        .map(|n| (Some(0), Some(0), Some(0), Some(n), Some(0)))
+        .collect();
+    rows.push((Some(0), Some(0), Some(0), Some(i32::MIN), Some(0)));
+    for sql in [
+        "SELECT COUNT(*) FROM s GROUP BY i, i - 1",
+        "SELECT i, COUNT(*) FROM s GROUP BY i, i - 1 LIMIT 1",
+        "SELECT i, i - 1, COUNT(*) FROM s GROUP BY i, i - 1 LIMIT 1",
+        "SELECT i FROM s GROUP BY i, i - 1 HAVING COUNT(*) > 1",
+        // A distinct aggregate is planned in more phases.
+        "SELECT i, COUNT(DISTINCT l) FROM s GROUP BY i, i - 1 LIMIT 1",
+    ] {
+        let ansi = db(&rows, 64, true);
+        assert!(
+            ansi.physical(sql).contains("HashAggregate keys=[i#3], "),
+            "{sql}\n{}",
+            ansi.physical(sql)
+        );
+        let (original, optimized, _) = ansi.both(sql);
+        assert_eq!(
+            optimized,
+            Err(ErrorClass::ArithmeticOverflow),
+            "{sql}: {original:?}"
+        );
+        let legacy = db(&rows, 64, false);
+        let (_, optimized, _) = legacy.both(sql);
+        assert!(optimized.is_ok(), "{sql}: {optimized:?}");
+    }
+}
+
+/// `ROLLUP` keys are lowered to an expand, whose output columns are never
+/// found dependent: the overflow is raised as Spark raises it.
+#[test]
+fn a_rollup_key_raises_as_before() {
+    let rows: Vec<Row> = vec![
+        (Some(0), Some(0), Some(0), Some(7), Some(0)),
+        (Some(0), Some(0), Some(0), Some(i32::MIN), Some(0)),
+    ];
+    let sql = "SELECT i, COUNT(*) FROM s GROUP BY ROLLUP(i, i - 1) LIMIT 1";
+    let ansi = db(&rows, 1, true);
+    let (original, optimized, _) = ansi.both(sql);
+    assert_eq!(
+        optimized,
+        Err(ErrorClass::ArithmeticOverflow),
+        "{original:?}"
+    );
+    let (_, optimized, _) = db(&rows, 1, false).both(sql);
+    assert!(optimized.is_ok(), "{optimized:?}");
 }

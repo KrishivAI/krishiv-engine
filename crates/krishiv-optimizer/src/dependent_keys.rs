@@ -1,17 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Group keys determined by other keys (`GROUP BY x, x - 1`) leave the keys.
+//! Group keys determined by other keys (`GROUP BY x, x - 1`).
 //!
 //! ClickBench's 36th query groups by `ClientIP, ClientIP - 1, ClientIP - 2,
 //! ClientIP - 3`: four keys hashed, compared, stored and exchanged where
 //! one decides the group. A key that is a deterministic function of key
 //! columns of the same aggregate splits no group those columns form, so the
-//! aggregate groups by the columns alone and computes the dependent key as
-//! one of its outputs, over the key columns, once per group.
+//! physical planner groups by the columns alone and computes the dependent
+//! key from the key columns of each group (`krishiv-exec`
+//! `planner/aggregate.rs`). This module only decides which keys are
+//! dependent; the logical plan is not changed.
 //!
-//! # When it applies
+//! # Which keys are dependent
 //!
 //! A key of a `GROUP BY` aggregate (not `ROLLUP`, `CUBE` or `GROUPING
-//! SETS`) is dropped when all of the following hold, else it stays:
+//! SETS`) is dependent when all of the following hold:
 //!
 //! 1. It is not a bare column, and it reads only columns that are bare
 //!    column keys of the same aggregate (a literal key reads none). At
@@ -29,47 +31,30 @@
 //!    collated strings (`'a'` and `'A'` form one group under a
 //!    case-insensitive collation; `upper` or `length` of them need not).
 //!
-//! # Errors and NULL
+//! # Errors
 //!
-//! The dependent key is computed by the aggregate itself (its output
-//! expressions, evaluated over the key columns of each group), not by a
-//! projection above it, so no filter or limit moves between the aggregate
-//! and the computation. Each group's key values are those of some input
-//! row, so the computation raises (ANSI overflow, a raising function) for
-//! some group exactly when the per-row computation raised for some row:
-//! the query fails or succeeds as before, with the same error class. When
-//! another computation of the query also raises, which of the two errors is
-//! reported may differ, as it may between two runs. A NULL key column is one
-//! group, and the expression of NULL is one value.
+//! Spark evaluates a grouping key on every input row, so a key that can
+//! raise (ANSI overflow in `ClientIP - 1`) raises for any row, whether or
+//! not the key is read above the aggregate and however few groups a
+//! `LIMIT` takes. The physical planner therefore still computes a dependent
+//! key that may raise on every input row, below the aggregate (a breaker,
+//! which reads all its input before its first output row), and only leaves
+//! it out of the hashed keys; a key that cannot raise is computed per group
+//! only.
 
 use std::sync::Arc;
 
-use krishiv_common::error::KrishivError;
-use krishiv_plan::{
-    Expr, ExprNode, FunctionId, FunctionKind, Grouping, LogicalPlan, PlanNode, ResolvedExpr,
-};
+use krishiv_plan::{Expr, ExprNode, FunctionId, FunctionKind, ResolvedExpr};
 use krishiv_types::DataType;
 
-use crate::dag;
 use crate::expr::{Attrs, has_outer_reference, has_subquery, is_deterministic, references};
 
-/// Drops the dependent keys of every aggregate of `root`.
-///
-/// # Errors
-/// As [`dag::rewrite_up`].
-pub(crate) fn rewrite(root: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, KrishivError> {
-    dag::rewrite_up(root, &mut |p| Ok(rewrite_aggregate(p)))
-}
-
-fn rewrite_aggregate(p: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
-    let PlanNode::Aggregate {
-        input,
-        grouping: Grouping::GroupBy(keys),
-        aggregates,
-    } = &p.node
-    else {
-        return p;
-    };
+/// For each of `keys` (an aggregate's `GROUP BY` keys), whether it is
+/// determined by the bare column keys among them (see the module
+/// documentation). All `false` when no bare column key could decide a
+/// group.
+#[must_use]
+pub fn dependent_group_keys(keys: &[Arc<Expr>]) -> Vec<bool> {
     // The bare column keys whose values decide their group exactly.
     let mut determinants = Attrs::default();
     for k in keys {
@@ -80,23 +65,9 @@ fn rewrite_aggregate(p: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
         }
     }
     if determinants.is_empty() {
-        return p;
+        return vec![false; keys.len()];
     }
-    let kept: Vec<Arc<Expr>> = keys
-        .iter()
-        .filter(|k| !dependent(k, &determinants))
-        .cloned()
-        .collect();
-    if kept.len() == keys.len() {
-        return p;
-    }
-    let mut out = LogicalPlan::new(PlanNode::Aggregate {
-        input: Arc::clone(input),
-        grouping: Grouping::GroupBy(kept),
-        aggregates: aggregates.clone(),
-    });
-    out.origin = p.origin;
-    Arc::new(out)
+    keys.iter().map(|k| dependent(k, &determinants)).collect()
 }
 
 /// Whether key `k` is determined by the columns in `determinants`

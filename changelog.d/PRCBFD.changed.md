@@ -1,1 +1,1 @@
-An aggregate no longer groups by keys that other keys determine: `GROUP BY ClientIP, ClientIP - 1, ClientIP - 2, ClientIP - 3` (ClickBench q36) hashes and exchanges `ClientIP` alone and computes the other three per group. Results and errors are unchanged.
+An aggregate no longer hashes or exchanges keys that other keys determine: `GROUP BY ClientIP, ClientIP - 1, ClientIP - 2, ClientIP - 3` (ClickBench q36) groups by `ClientIP` alone and computes the other three per group. A key that can raise is still evaluated on every input row, so errors are raised exactly as before.

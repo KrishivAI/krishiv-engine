@@ -55,6 +55,23 @@ impl Planner<'_> {
         let Grouping::GroupBy(keys) = grouping else {
             return Err(unsupported("ROLLUP, CUBE and GROUPING SETS"));
         };
+        // Keys that other keys determine (ClickBench q36: `ip, ip - 1`) are
+        // not hashed or exchanged: the output expressions compute them from
+        // each group's key columns. Spark evaluates a grouping key on every
+        // input row, so one that may raise is still computed on every row
+        // below the aggregate, which reads all its input before its first
+        // output row (`krishiv_optimizer::dependent_group_keys`).
+        let dependent = krishiv_optimizer::dependent_group_keys(keys);
+        let mut checks: Vec<Arc<Expr>> = Vec::new();
+        let mut kept: Vec<Arc<Expr>> = Vec::with_capacity(keys.len());
+        for (key, is_dependent) in keys.iter().zip(dependent) {
+            if !is_dependent {
+                kept.push(Arc::clone(key));
+            } else if !krishiv_plan::runs_on_any_row(key, self.env.ansi) {
+                checks.push(Arc::clone(key));
+            }
+        }
+        let keys = &kept;
         // The aggregate calls, once each.
         let mut calls: Vec<Call> = Vec::new();
         for e in outputs {
@@ -81,6 +98,8 @@ impl Planner<'_> {
                 at
             }));
         }
+        // Computed and not read: they raise where the per-row key would.
+        wanted.extend(checks);
         // Python UDFs in keys and arguments run below (Spark's
         // `ExtractGroupingPythonUDFFromAggregate`).
         let (input, wanted) = self.extract_python(input, &wanted)?;

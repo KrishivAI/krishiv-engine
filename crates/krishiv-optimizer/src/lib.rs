@@ -21,9 +21,6 @@
 //!    inner one (Spark's `CollapseRepartition`).
 //!    **Algebraic sum**, once: `SUM(x + c)` over a narrow integral column
 //!    becomes `SUM(x) + c * COUNT(x)` (`sum_rewrite`).
-//!    **Dependent group keys**, once: a key computed from other column
-//!    keys (`GROUP BY x, x - 1`) leaves the keys and is computed per group
-//!    (`dependent_keys`).
 //! 2. **Restrict**, then alternating with join order until neither
 //!    changes the plan: an aggregate below a join that drops its unmatched
 //!    groups groups only the input rows whose keys the join's other side
@@ -96,6 +93,7 @@ use krishiv_plan::{
 use krishiv_udf_sdk::UdfLibrary;
 
 pub use collation_keys::key_if_collated as collation_key;
+pub use dependent_keys::dependent_group_keys;
 pub use group_code::{could_code_group_keys, is_group_code_dictionary};
 pub use group_limit::{
     DEFAULT_WINDOW_GROUP_LIMIT_THRESHOLD, RankLikeFunction, WindowGroupLimit,
@@ -470,11 +468,6 @@ fn run(
         };
         let root = t.once("AlgebraicSum", &root, |r| {
             sum_rewrite::rewrite(Arc::clone(r))
-        })?;
-        // Before restriction, eager aggregation and the group-key code,
-        // which then see only the keys that decide a group.
-        let root = t.once("DependentGroupKeys", &root, |r| {
-            dependent_keys::rewrite(Arc::clone(r))
         })?;
         // Restriction and join ordering alternate until neither changes
         // the plan: ordering sees the restricted estimates, and restriction
