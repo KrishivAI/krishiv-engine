@@ -68,6 +68,31 @@ plan = spark.sql("EXPLAIN ANALYZE SELECT region, sum(amount) FROM orders GROUP B
 assert plan.startswith("== Physical Plan (analyzed) ==")
 ```
 
+## From Rust
+
+`cargo add krishiv futures` (Rust 1.97 or newer). Results are Arrow record batches; actions are `async`, so any
+runtime, or none with `futures::executor::block_on`, can await them.
+
+```rust
+use std::sync::Arc;
+use krishiv::arrow::array::{Int32Array, RecordBatch};
+use krishiv::arrow::datatypes::{DataType, Field, Schema};
+use krishiv::functions::col;
+use krishiv::Session;
+
+let session = Session::new()?;
+let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![3, 1, 2]))])?;
+session.register_batches("t", schema, vec![batch])?;
+
+let df = session.table("t").order_by([col("a").desc()]).limit(2);
+let rows: Vec<RecordBatch> = futures::executor::block_on(df.collect())?;
+```
+
+To print a `TIMESTAMP` column with `arrow-cast`'s `array_value_to_string`, enable the `chrono-tz` feature of
+`arrow-array` in your own `Cargo.toml` (`cargo add arrow-array --features chrono-tz`, at the version `krishiv` uses):
+results carry the zone `UTC`, and Arrow cannot format a named zone without it.
+
 ## Next
 
 - [Notebooks and sample data](../guides/notebooks-and-datasets.md): three notebooks over generated order data.

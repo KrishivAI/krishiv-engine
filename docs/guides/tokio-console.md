@@ -25,6 +25,15 @@ export RUSTFLAGS="--cfg tokio_unstable"
 cargo run -p krishiv-cli --features tokio-console -- sql -e 'SELECT ...'
 ```
 
+From a crates.io install (no engine checkout needed), build the CLI with the feature and the cfg:
+
+```sh
+RUSTFLAGS="--cfg tokio_unstable" cargo install krishiv-cli --features tokio-console
+KRISHIV_TOKIO_CONSOLE=1 krishiv sql -e 'SELECT ...'
+```
+
+The subscriber listens on `127.0.0.1:6669`; without `KRISHIV_TOKIO_CONSOLE` it stays closed.
+
 Then point the console at the process:
 
 ```sh
@@ -48,6 +57,9 @@ never yields shows one long poll where the rest show short ones. Warnings
 (`waker missed`, `task long poll`) point at the same task.
 
 ## Walk-through: a planted slow operator
+
+This walk-through needs a checkout of the engine repository (the `-p` commands below are workspace commands; a crates.io
+install cannot run them).
 
 The `tokio-console-test` feature (implies `tokio-console`) adds
 `testing::BusyLoop`, a pass-through operator that busy-loops 50 ms per
@@ -85,8 +97,8 @@ between chunks.
 
 ## Cost
 
-- Enabled, attached, idle query: added overhead per query to be recorded.
-- Enabled, attached, running query: resident memory of the subscriber to be recorded.
+- Enabled, attached, idle query: added overhead per query: not measured for 0.2.
+- Enabled, attached, running query: resident memory of the subscriber: not measured for 0.2.
 - Disabled (any default or `dist` build): zero overhead and zero console
   symbols in the `krishiv` and `krishiv-cli` default feature trees, checked by
   `cargo xtask tokio-console-check` (wired into `cargo xtask precheck`). The subscriber accounts none of its memory to
