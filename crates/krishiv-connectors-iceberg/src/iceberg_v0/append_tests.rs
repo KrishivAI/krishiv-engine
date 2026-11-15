@@ -584,7 +584,7 @@ fn manifests_check_tuples_and_count_partitions_as_java() {
 }
 
 /// Every file path under `dir`.
-fn walk(dir: &std::path::Path) -> Vec<String> {
+pub(super) fn walk(dir: &std::path::Path) -> Vec<String> {
     let mut out = Vec::new();
     for e in std::fs::read_dir(dir).unwrap() {
         let p = e.unwrap().path();

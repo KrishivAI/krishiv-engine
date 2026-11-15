@@ -51,9 +51,11 @@ and rebuilt, v3 lineage) · `rolling.rs` (PR-36a, owner 2026-11-15) the new mani
 `max(1, min(4, round_half_up(n / 10,000)))` of `ceil(n / groups)` (`manifestWriterCount`, `divide`; Java's pool is
 the host's worker threads, Krishiv fixes 4), each rolled as `RollingManifestWriter` (every 250 entries, at
 `commit.manifest.target-size-bytes`), the length being iceberg-rust's exact encoded size of the entries so far, found
-by encoding prefixes in memory (exponential then binary search; Java's is its flushed, compressed length, a
-divergence in where the split falls); tests `rolling_tests.rs` (against a transcription of Java's loop, the
-14,999/15,000/25,000/45,001 group boundaries, names and the written list, rolled manifests committed and merged)
+by encoding prefixes in memory (250 entries, then the line's crossing of the target, halving as a fallback; the
+settling probe's bytes written as the manifest; Java's length is its flushed, compressed one, a divergence in where
+the split falls); tests `rolling_tests.rs` (against a transcription of Java's loop with even and uneven entries, the
+14,999/15,000/25,000/45,001 group boundaries, names, a failed later manifest's paths in the written list, rolled
+manifests committed and merged; ignored `probe_cost_on_a_10k_group`)
 · `merge.rs` (PR-36a, design note §6.2) manifest merging as Java's `MergeAppend`
 (`MergingSnapshotProducer.apply`, `ManifestMergeManager`, `BinPacking.ListPacker.packEnd`, apache-iceberg 1.12.0):
 `commit.manifest.{target-size-bytes,min-count-to-merge}`, `commit.manifest-merge.enabled` (`MergeConfig`, garbage
@@ -153,7 +155,8 @@ Fixture: `tests/fixtures/iceberg-1.12.0-spark-types.json` (source-only goldens,
 - Isolated `iceberg` crate (Arrow 58) crossing to Arrow 60 via the C Data Interface; only values iceberg-rust returns
   as Arrow (`inspect` tables) cross, through `krishiv-arrow-bridge`; data batches never do (`design/P3-lakehouse.md`
   §5.2). No `iceberg` or Arrow 58 type in a public signature.
-- Every byte iceberg-rust reads or writes goes through `IoContext` (`StorageRegistration`); `opendal` and
+- Every byte iceberg-rust reads or writes goes through `IoContext` (`StorageRegistration`), except the scratch
+  `FileIO::new_with_memory` that `rolling.rs` encodes manifest prefixes into (memory only, never a store); `opendal` and
   `iceberg-storage-opendal` are banned in `deny.toml`. `StorageConfig` properties from a catalog are ignored: stores
   come from Krishiv's configuration (LH §5.6).
 - A serialised `FileIO` carries only the registration name; an unknown name fails at `build`, never panics.
@@ -194,6 +197,9 @@ Fixture: `tests/fixtures/iceberg-1.12.0-spark-types.json` (source-only goldens,
   per-provider (`Weak`) or per-worker cache of loaded key sets and selections keyed by delete path.
 - **Planning memory:** decoded manifest entries are not charged to a query reservation while a plan runs (`open` has no
   query context); the manifest cache bounds only what is kept.
+- **Manifest probe memory** (`rolling.rs`): a probe holds its cloned entries and the encoded bytes (in the writer and
+  the scratch store until deleted), and the search keeps the reaching probe's bytes, so up to about twice the
+  target size (8 MiB default) plus the entries on the driver, uncharged, as iceberg-rust's own manifest buffering is.
 - `statistics()` takes no filter: the row estimate sums every live file, not the files left after pruning.
 
 ## ADRs (in `../krishiv-internal/adr/`)
