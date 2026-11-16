@@ -15,8 +15,9 @@ use arrow_schema::{DataType, Field, Schema};
 use futures::executor::block_on;
 use krishiv_session::Session;
 
-fn vectors() -> (Arc<Schema>, RecordBatch) {
-    let item = Arc::new(Field::new("item", DataType::Float32, true));
+/// The three-row vector table, its elements nullable or not (`containsNull`).
+fn vectors_with(nullable: bool) -> (Arc<Schema>, RecordBatch) {
+    let item = Arc::new(Field::new("item", DataType::Float32, nullable));
     let values = Float32Array::from(vec![
         1.0, 2.0, 3.0, //
         0.0, 0.0, 0.0, // the null row's slot
@@ -41,8 +42,12 @@ fn vectors() -> (Arc<Schema>, RecordBatch) {
 }
 
 fn session() -> Session {
+    session_with(true)
+}
+
+fn session_with(nullable: bool) -> Session {
     let s = Session::new().unwrap();
-    let (schema, batch) = vectors();
+    let (schema, batch) = vectors_with(nullable);
     s.register_batches("t", schema, vec![batch]).unwrap();
     s
 }
@@ -73,11 +78,21 @@ fn a_caller_reads_a_vector_column_as_a_plain_list() {
 /// Functions over arrays read a vector column as they read a list: the result is the one a list column gives.
 #[test]
 fn array_functions_over_a_vector_column_match_a_list_column() {
-    let s = session();
-    let (_, batch) = vectors();
+    twin_check(true);
+}
+
+/// A vector of non-null elements (`containsNull = false`, design §9.1) behaves as the plain list of it too.
+#[test]
+fn array_functions_over_a_vector_of_non_null_elements_match_a_list_column() {
+    twin_check(false);
+}
+
+fn twin_check(nullable: bool) {
+    let s = session_with(nullable);
+    let (_, batch) = vectors_with(nullable);
     let plain = krishiv_exec::carrier::recarried_array(
         batch.column(1),
-        &DataType::List(Arc::new(Field::new("element", DataType::Float32, true))),
+        &DataType::List(Arc::new(Field::new("element", DataType::Float32, nullable))),
     )
     .unwrap();
     let schema = Arc::new(Schema::new(vec![

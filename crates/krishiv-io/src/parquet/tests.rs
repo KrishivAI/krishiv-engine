@@ -1836,8 +1836,8 @@ fn dictionary_encoded_nested_leaves_round_trip() {
 }
 
 /// A vector column written as a `FixedSizeList` reads back as one (design P3-T075 §6, decision D1): the footer's
-/// `ARROW:schema` keeps the carrier, a row selection and null vectors included, and the file holds the standard
-/// three-level `LIST` a `List` write of the same values gives.
+/// `ARROW:schema` keeps the carrier, a row selection and null vectors included. (That the file is byte-identical to a
+/// `List` write of the same values, and that Spark reads it, is not checked here: P3-T075 review M3.)
 #[test]
 fn a_vector_column_round_trips_as_a_fixed_size_list() {
     let env = Env::new();

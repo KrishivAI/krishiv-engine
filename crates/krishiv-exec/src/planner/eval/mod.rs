@@ -403,9 +403,10 @@ fn column(input: Input<'_>, c: &BoundColumn) -> Result<Arc<dyn PhysExpr>> {
     // function was written against. Plain column items of a projection never come through here, so they keep it.
     let data_type =
         match field.data_type() {
-            // The engine's plain list: field `element`, null elements allowed (as `carrier::fixed_to_list` builds it).
+            // The engine's plain list: field `element`, with the carrier's own element nullability (a vector of
+            // non-null elements is `array<float>` with `containsNull = false`, as a plain list of it is).
             ArrowType::FixedSizeList(item, _) => ArrowType::List(Arc::new(
-                arrow_schema::Field::new("element", item.data_type().clone(), true),
+                arrow_schema::Field::new("element", item.data_type().clone(), item.is_nullable()),
             )),
             other => other.clone(),
         };
