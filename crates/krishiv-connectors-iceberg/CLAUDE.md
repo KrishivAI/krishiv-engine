@@ -71,5 +71,5 @@ Fixture: `tests/fixtures/iceberg-1.12.0-spark-types.json` (source-only goldens,
 0014, 0028 (iceberg `skip-tree`, `anyhow` wrapper), 0029 (the bridge crate)
 
 ## Test
-`cargo nextest run -p krishiv-connectors-iceberg --no-tests=pass` (`--features cloud` adds the Azurite test, offline
-without its endpoint) · `cargo clippy -p krishiv-connectors-iceberg --all-targets -- -D warnings`
+`cargo nextest run -p krishiv-connectors-iceberg --no-tests=pass` (`--features cloud` adds the Azurite test: offline
+without `KRISHIV_TEST_AZURE_OAUTH_ENDPOINT`, a failure when it is set without the tokens) · `cargo clippy -p krishiv-connectors-iceberg --all-targets -- -D warnings`

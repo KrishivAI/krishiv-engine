@@ -80,11 +80,7 @@ fn iceberg_scan_over_abfss_with_a_bearer_token() {
         .enable_all()
         .build()
         .unwrap();
-    let (Some(endpoint), Some(token), Some(other_audience)) = (
-        env_nonempty("KRISHIV_TEST_AZURE_OAUTH_ENDPOINT"),
-        env_nonempty("KRISHIV_TEST_AZURE_BEARER"),
-        env_nonempty("KRISHIV_TEST_AZURE_BEARER_OTHER_AUDIENCE"),
-    ) else {
+    let Some(endpoint) = env_nonempty("KRISHIV_TEST_AZURE_OAUTH_ENDPOINT") else {
         // Offline: a bearer-token reader places an abfss:// location without I/O.
         let reader = config(&[
             ("fs.azure.endpoint", "https://127.0.0.1:1/devstoreaccount1"),
@@ -100,6 +96,13 @@ fn iceberg_scan_over_abfss_with_a_bearer_token() {
         assert_eq!(at.path.as_ref(), "w/db/t/metadata/v1.metadata.json");
         return;
     };
+    // With the endpoint set, missing tokens are a broken setup, not an offline run.
+    let token = env_nonempty("KRISHIV_TEST_AZURE_BEARER").unwrap_or_else(|| {
+        panic!("KRISHIV_TEST_AZURE_OAUTH_ENDPOINT is set without KRISHIV_TEST_AZURE_BEARER")
+    });
+    let other_audience = env_nonempty("KRISHIV_TEST_AZURE_BEARER_OTHER_AUDIENCE").unwrap_or_else(|| {
+        panic!("KRISHIV_TEST_AZURE_OAUTH_ENDPOINT is set without KRISHIV_TEST_AZURE_BEARER_OTHER_AUDIENCE")
+    });
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -216,5 +219,6 @@ fn iceberg_scan_over_abfss_with_a_bearer_token() {
         session.rows("SELECT id, x, name FROM t WHERE x > 10 ORDER BY id"),
         vec!["2|20|b", "3|30|c"]
     );
+    // The writer's registration lives to here so the catalog's `FileIO` name resolves for the whole write.
     drop(wreg);
 }
