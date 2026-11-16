@@ -64,19 +64,30 @@ impl<S: Statistics> Statistics for Keyed<S> {
 }
 
 fn config(on: bool) -> Config {
+    config_with(on, &[])
+}
+
+/// The rule on or off, and the `extra` settings.
+fn config_with(on: bool, extra: &[(&str, &str)]) -> Config {
     let mut c = Config::new();
     c.set(
         "krishiv.optimizer.payloadAboveAggregate",
         if on { "true" } else { "false" },
     )
     .unwrap();
+    for (k, v) in extra {
+        c.set(k, v).unwrap();
+    }
     c
 }
 
 /// The plan optimized with the rule on or off, and the rule's notes.
 fn optimized(plan: &Plan, stats: &dyn Statistics, on: bool) -> (Plan, Vec<String>) {
-    let (out, steps) =
-        optimize_traced_with_udfs(plan, stats, &UdfLibrary::new(), &config(on)).unwrap();
+    optimized_with(plan, stats, &config(on))
+}
+
+fn optimized_with(plan: &Plan, stats: &dyn Statistics, config: &Config) -> (Plan, Vec<String>) {
+    let (out, steps) = optimize_traced_with_udfs(plan, stats, &UdfLibrary::new(), config).unwrap();
     let notes = steps
         .into_iter()
         .filter(|s| s.rule == RULE && !s.note.is_empty())
@@ -93,14 +104,24 @@ fn moved(notes: &[String]) -> Vec<&String> {
 /// point, and (`dbs`) returns the unoptimised plan's rows. Returns the plan,
 /// its text and the notes.
 fn check(plan: &Plan, stats: &dyn Statistics, dbs: &[Db]) -> (Plan, String, Vec<String>) {
-    let (out, notes) = optimized(plan, stats, true);
+    check_in(plan, stats, dbs, &config(true))
+}
+
+/// [`check`] under `config`.
+fn check_in(
+    plan: &Plan,
+    stats: &dyn Statistics,
+    dbs: &[Db],
+    config: &Config,
+) -> (Plan, String, Vec<String>) {
+    let (out, notes) = optimized_with(plan, stats, config);
     let text = out.root().to_string();
     assert_eq!(
         out.root().resolved_output(),
         plan.root().resolved_output(),
         "{text}"
     );
-    let again = optimize_with_udfs(&out, stats, &UdfLibrary::new(), &config(true)).unwrap();
+    let again = optimize_with_udfs(&out, stats, &UdfLibrary::new(), config).unwrap();
     assert!(
         again.structurally_eq(&out),
         "not a fixed point:\n{text}\nagain:\n{}",
@@ -584,4 +605,237 @@ fn null_and_unmatched_keys_keep_the_rows() {
     ] {
         fires(sql, &facts());
     }
+}
+
+// ---------------------------------------------------------------- sweeps with keys
+
+/// One query of a sweep under `config`: where the rule moves nothing the plan
+/// is the rule-off plan; where it moves, [`check_in`] (output, fixed point,
+/// rows over `dbs`). Returns the moves. Where the rule-off plan is itself not
+/// a fixed point under a session configuration, only output and rows.
+fn sweep_one(plan: &Plan, stats: &dyn Statistics, dbs: &[Db], config: &Config) -> usize {
+    let (on, notes) = optimized_with(plan, stats, config);
+    let moves = moved(&notes).len();
+    let mut off_config = config.clone();
+    off_config
+        .set("krishiv.optimizer.payloadAboveAggregate", "false")
+        .unwrap();
+    let (off, _) = optimized_with(plan, stats, &off_config);
+    if moves == 0 {
+        assert!(on.structurally_eq(&off), "{}", on.root());
+        return moves;
+    }
+    let off_again = optimize_with_udfs(&off, stats, &UdfLibrary::new(), &off_config).unwrap();
+    if off_again.structurally_eq(&off) {
+        check_in(plan, stats, dbs, config);
+    } else {
+        // Not a fixed point without the rule either (`ShareCte` and the
+        // inferred filters under a session configuration): output and rows.
+        assert_eq!(on.root().resolved_output(), plan.root().resolved_output());
+        for db in dbs {
+            assert_eq!(eval::rows(db, on.root()), eval::rows(db, plan.root()));
+        }
+    }
+    moves
+}
+
+/// The rule on, `SubqueryAsWindow` off (the reference interpreter runs no
+/// window functions).
+fn sweep_config() -> Config {
+    config_with(true, &[("krishiv.optimizer.subqueryAsWindow", "false")])
+}
+
+/// Every TPC-H primary key.
+const TPCH_KEYS: &[(&str, &[&str])] = &[
+    ("customer", &["c_custkey"]),
+    ("lineitem", &["l_orderkey", "l_linenumber"]),
+    ("nation", &["n_nationkey"]),
+    ("orders", &["o_orderkey"]),
+    ("part", &["p_partkey"]),
+    ("partsupp", &["ps_partkey", "ps_suppkey"]),
+    ("region", &["r_regionkey"]),
+    ("supplier", &["s_suppkey"]),
+];
+
+/// With every primary key declared, each TPC-H query keeps its output, is a
+/// fixed point and returns the unoptimised plan's rows; the queries the rule
+/// changes are listed, so a change to the list is a reviewed decision.
+#[test]
+fn tpch_with_every_key_declared_keeps_rows_and_is_a_fixed_point() {
+    let stats = Keyed::new(fixture(), TPCH_KEYS);
+    let db = data::tpch(7, 150);
+    let mut changed = Vec::new();
+    for q in 1..=22 {
+        let plan = support::resolve(&support::tpch_sql(q), &support::ctx());
+        let moves = sweep_one(&plan, &stats, std::slice::from_ref(&db), &sweep_config());
+        if moves > 0 {
+            changed.push((q, moves));
+        }
+    }
+    assert!(changed.iter().any(|(q, _)| *q == 10), "{changed:?}");
+    insta::assert_debug_snapshot!("payload_above_tpch_changed", changed);
+}
+
+/// TPC-H q18 with its keys: the aggregate groups by the customer's and the
+/// order's columns; the rule keeps the order's (`K_X`) and `o_custkey` and
+/// joins `customer` above it.
+#[test]
+fn q18_with_its_keys_keeps_rows() {
+    let stats = Keyed::new(fixture(), TPCH_KEYS);
+    let plan = support::resolve(&support::tpch_sql(18), &support::ctx());
+    let (_, text, notes) = check_in(
+        &plan,
+        &stats,
+        &[data::tpch(7, 150), data::tpch(11, 150)],
+        &sweep_config(),
+    );
+    assert_eq!(moved(&notes).len(), 1, "{notes:?}\n{text}");
+    insta::assert_snapshot!("payload_above_q18", text);
+}
+
+/// The surrogate keys of the TPC-DS dimensions.
+const TPCDS_KEYS: &[(&str, &[&str])] = &[
+    ("call_center", &["cc_call_center_sk"]),
+    ("catalog_page", &["cp_catalog_page_sk"]),
+    ("customer", &["c_customer_sk"]),
+    ("customer_address", &["ca_address_sk"]),
+    ("customer_demographics", &["cd_demo_sk"]),
+    ("date_dim", &["d_date_sk"]),
+    ("household_demographics", &["hd_demo_sk"]),
+    ("income_band", &["ib_income_band_sk"]),
+    ("item", &["i_item_sk"]),
+    ("promotion", &["p_promo_sk"]),
+    ("reason", &["r_reason_sk"]),
+    ("ship_mode", &["sm_ship_mode_sk"]),
+    ("store", &["s_store_sk"]),
+    ("time_dim", &["t_time_sk"]),
+    ("warehouse", &["w_warehouse_sk"]),
+    ("web_page", &["wp_web_page_sk"]),
+    ("web_site", &["web_site_sk"]),
+];
+
+/// Over the 99 TPC-DS queries with SF1 row counts (the optimizer tests have
+/// no TPC-DS footer fixture) and the dimensions' keys declared: each keeps
+/// its output and is a fixed point; the queries the rule changes are listed.
+#[test]
+fn tpcds_with_keys_declared_is_a_fixed_point() {
+    let stats = Keyed::new(crate::late_payload::TpcdsRows, TPCDS_KEYS);
+    let ctx = support::ctx_over(crate::tpcds::catalog());
+    let mut changed = Vec::new();
+    for q in 1..=99 {
+        let Some(plan) = support::try_resolve(&crate::tpcds::sql(q), &ctx) else {
+            continue;
+        };
+        let moves = sweep_one(&plan, &stats, &[], &sweep_config());
+        if moves > 0 {
+            changed.push((q, moves));
+        }
+    }
+    insta::assert_debug_snapshot!("payload_above_tpcds_changed", changed);
+}
+
+/// With the group-key code on too, q10 and a two-dimension shape are fixed
+/// points (review m5: the code may fire on the new aggregate).
+#[test]
+fn with_the_group_key_code_on_too_the_plan_is_a_fixed_point() {
+    let both = config_with(
+        true,
+        &[
+            ("krishiv.optimizer.groupKeyCode", "true"),
+            ("krishiv.optimizer.subqueryAsWindow", "false"),
+        ],
+    );
+    let stats = Keyed::new(fixture(), TPCH_KEYS);
+    for q in [10, 18, 3, 5] {
+        let plan = support::resolve(&support::tpch_sql(q), &support::ctx());
+        check_in(&plan, &stats, &[data::tpch(7, 150)], &both);
+    }
+    let plan = resolve(
+        "SELECT dk, dname, dp, ename, sum(fv) FROM f, d, e WHERE fk = dk AND fi = ek \
+         GROUP BY dk, dname, dp, ename",
+    );
+    check_in(&plan, &facts(), &dbs(false), &both);
+}
+
+// ---------------------------------------------------------------- accepted shapes
+
+/// Shapes the rule accepts, each exact on data with NULL and unmatched keys.
+#[test]
+fn accepted_shapes_keep_the_rows() {
+    let multi = Keyed::new(Small, &[("d", &["dk", "dek"]), ("e", &["ek"])]);
+    let cases: &[(&str, &dyn Statistics)] = &[
+        // A DISTINCT call sees the same rows a group.
+        (
+            "SELECT dk, dname, count(DISTINCT fs) FROM f, d WHERE fk = dk GROUP BY dk, dname",
+            &facts(),
+        ),
+        // A two-column key.
+        (
+            "SELECT dk, dek, dname, sum(fv) FROM f, d WHERE fk = dk AND fi = dek \
+             GROUP BY dk, dek, dname",
+            &multi,
+        ),
+        // A kept inner join of the fact side.
+        (
+            "SELECT dk, dname, sum(fv), max(ename) FROM f, d, e WHERE fk = dk AND fi = ek \
+             GROUP BY dk, dname",
+            &facts(),
+        ),
+        // Kept semi and anti joins.
+        (
+            "SELECT dk, dname, sum(fv) FROM f, d WHERE fk = dk \
+             AND EXISTS (SELECT 1 FROM e WHERE ek = fi) GROUP BY dk, dname",
+            &facts(),
+        ),
+        (
+            "SELECT dk, dname, sum(fv) FROM f, d WHERE fk = dk \
+             AND NOT EXISTS (SELECT 1 FROM e WHERE ek = fi) GROUP BY dk, dname",
+            &facts(),
+        ),
+        // A kept left outer join of the fact side.
+        (
+            "SELECT dk, dname, sum(fv), max(ename) FROM f JOIN d ON fk = dk \
+             LEFT JOIN e ON fi = ek GROUP BY dk, dname",
+            &facts(),
+        ),
+        // The proof through a renaming projection.
+        (
+            "SELECT t.k, t.n, sum(fv) FROM f, (SELECT dk AS k, dname AS n FROM d) t \
+             WHERE fk = t.k GROUP BY t.k, t.n",
+            &facts(),
+        ),
+        // The proof through a `Shift` (a second instance of `d`).
+        (
+            "SELECT b.dk, b.dname, sum(fv) FROM f JOIN d a ON fk = a.dk \
+             JOIN d b ON fk = b.dk GROUP BY b.dk, b.dname",
+            &facts(),
+        ),
+    ];
+    for (sql, stats) in cases {
+        fires(sql, *stats);
+    }
+}
+
+/// A left outer join above the dimension's join that reads the dimension
+/// stays: the dimension cannot move above it.
+#[test]
+fn an_outer_join_reading_the_dimension_refuses() {
+    refused(
+        "SELECT dk, dname, ename, sum(fv) FROM f JOIN d ON fk = dk \
+         LEFT JOIN e ON dek = ek GROUP BY dk, dname, ename",
+        &facts(),
+        "join on the path reads the dimension",
+    );
+}
+
+/// An inner join above the dimension's that the dimension cannot absorb: `e`
+/// has no key fact.
+#[test]
+fn a_join_on_a_key_not_proven_unique_refuses() {
+    refused(
+        "SELECT dk, dname, ename, sum(fv) FROM f, d, e WHERE fk = dk AND dek = ek \
+         GROUP BY dk, dname, ename",
+        &Keyed::new(Small, &[("d", &["dk"])]),
+        "unique",
+    );
 }
