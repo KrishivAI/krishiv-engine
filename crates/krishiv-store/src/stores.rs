@@ -429,7 +429,7 @@ impl AzureHost {
 
     /// Whether `host` (lower-cased) is an Azure Storage (`*.core.windows.net`) host.
     #[cfg_attr(
-        not(feature = "cloud"),
+        not(any(feature = "cloud", test)),
         expect(dead_code, reason = "used by the cloud builders")
     )]
     pub(crate) fn is_core(host: &str) -> bool {
@@ -440,7 +440,7 @@ impl AzureHost {
     /// (`<workspace>.z<xy>.<service>.fabric.microsoft.com`), which object_store addresses at
     /// `https://<host>` instead of `https://<account>.blob.fabric.microsoft.com`.
     #[cfg_attr(
-        not(feature = "cloud"),
+        not(any(feature = "cloud", test)),
         expect(dead_code, reason = "used by the cloud builders")
     )]
     pub(crate) fn is_private_link(host: &str) -> bool {

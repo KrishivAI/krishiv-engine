@@ -993,3 +993,31 @@ fn onelake_stores_address_the_fabric_endpoint() {
         );
     }
 }
+
+#[test]
+fn azure_host_kinds_and_inline_oauth_keys() {
+    assert!(AzureHost::is_core("acct.dfs.core.windows.net"));
+    assert!(!AzureHost::is_core("onelake.dfs.fabric.microsoft.com"));
+    assert!(AzureHost::is_private_link(
+        "wsid.z28.dfs.fabric.microsoft.com"
+    ));
+    assert!(!AzureHost::is_private_link(
+        "onelake.dfs.fabric.microsoft.com"
+    ));
+    // OAuth keys that only authenticate are inline; the ones naming an endpoint or provider are not.
+    assert!(is_inline_azure_key(AZURE_OAUTH_CLIENT_SECRET));
+    assert!(is_inline_azure_key(&format!(
+        "{AZURE_OAUTH_ACCESS_TOKEN}.acct.dfs.core.windows.net"
+    )));
+    assert!(!is_inline_azure_key(AZURE_AUTH_TYPE));
+    assert!(!is_inline_azure_key(
+        "fs.azure.account.oauth2.client.endpoint"
+    ));
+    assert!(is_inline_azure_key(
+        "fs.azure.account.key.acct.dfs.core.windows.net"
+    ));
+    assert!(!is_server_scoped_option(AZURE_OAUTH_CLIENT_SECRET));
+    assert!(is_server_scoped_option(
+        "fs.azure.account.oauth2.client.endpoint"
+    ));
+}
