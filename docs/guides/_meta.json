@@ -10,5 +10,6 @@
   "resource-groups": "Resource groups and request tags",
   "python-udf-sandbox": "Python UDFs in the server: the sandbox",
   "single-node-server-security": "Securing a single-node server",
-  "collations-and-icu": "Collations and ICU"
+  "collations-and-icu": "Collations and ICU",
+  "observability": "Observability from Rust"
 }

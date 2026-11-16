@@ -24,12 +24,18 @@ use crate::worker::{PythonPayload, kill_via};
 /// Ids of loaded payloads, unique in the process: a worker keeps what it has loaded by id.
 static NEXT_PAYLOAD: AtomicU64 = AtomicU64::new(1);
 
+/// Where a session's runner conf is read from when a call is prepared: the session's live conf, so every
+/// query sends the values current when it starts, as Spark does per execution.
+pub type ConfSource = Arc<dyn Fn() -> BTreeMap<String, String> + Send + Sync>;
+
 /// The Python UDFs of one session, run on the pool's workers of that session.
 pub struct SessionUdfs {
     pool: Pool,
     owner: Owner,
     /// The runner conf (the session's SQL conf subset Spark sends its worker), read when a call is prepared.
     conf: RwLock<Arc<BTreeMap<String, String>>>,
+    /// When set, read at each `prepare` instead of `conf`.
+    conf_source: Option<ConfSource>,
     payloads: RwLock<HashMap<(String, u32), Registered>>,
 }
 
@@ -54,6 +60,7 @@ impl SessionUdfs {
             pool,
             owner,
             conf: RwLock::new(Arc::new(BTreeMap::new())),
+            conf_source: None,
             payloads: RwLock::new(HashMap::new()),
         }
     }
@@ -66,6 +73,14 @@ impl SessionUdfs {
             .write()
             .unwrap_or_else(PoisonError::into_inner)
             .insert((name.into(), version), Registered { id, payload });
+    }
+
+    /// Reads the runner conf from `source` each time a call is prepared (one query's calls share the conf
+    /// current when it was prepared); [`Self::set_runner_conf`] is then unused.
+    #[must_use]
+    pub fn with_conf_source(mut self, source: ConfSource) -> Self {
+        self.conf_source = Some(source);
+        self
     }
 
     /// Sets the runner conf that calls prepared from now on send their workers.
@@ -98,7 +113,10 @@ impl UdfRuntime for SessionUdfs {
             owner: self.owner.clone(),
             registered,
             return_type: spec.return_arrow.clone(),
-            conf: Arc::clone(&self.conf.read().unwrap_or_else(PoisonError::into_inner)),
+            conf: match &self.conf_source {
+                Some(source) => Arc::new(source()),
+                None => Arc::clone(&self.conf.read().unwrap_or_else(PoisonError::into_inner)),
+            },
         }))
     }
 }
