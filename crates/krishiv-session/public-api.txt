@@ -621,9 +621,17 @@ pub fn krishiv_session::resource_groups::GroupSlot::drop(&mut self)
 pub struct krishiv_session::resource_groups::ResourceGroups
 impl krishiv_session::resource_groups::ResourceGroups
 pub fn krishiv_session::resource_groups::ResourceGroups::counts(&self, &str) -> core::option::Option<(usize, usize)>
+pub fn krishiv_session::resource_groups::ResourceGroups::document(&self) -> alloc::string::String
+pub fn krishiv_session::resource_groups::ResourceGroups::etag(&self) -> alloc::string::String
+pub fn krishiv_session::resource_groups::ResourceGroups::file_etag(&str) -> core::option::Option<alloc::string::String>
 pub fn krishiv_session::resource_groups::ResourceGroups::from_file(&str, usize) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 pub fn krishiv_session::resource_groups::ResourceGroups::from_json(&str, usize) -> core::result::Result<Self, krishiv_common::error::KrishivError>
+pub fn krishiv_session::resource_groups::ResourceGroups::loaded_at_ms(&self) -> u64
+pub fn krishiv_session::resource_groups::ResourceGroups::reload_file(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub fn krishiv_session::resource_groups::ResourceGroups::reload_json(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub fn krishiv_session::resource_groups::ResourceGroups::replace_file(&self, &str, &str, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::resource_groups::ResourceGroups::rows(&self) -> alloc::vec::Vec<krishiv_session::resource_groups::GroupRow>
+pub fn krishiv_session::resource_groups::ResourceGroups::validate(&str, usize) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::resource_groups::ResourceGroups::with_clock(&str, usize, alloc::sync::Arc<(dyn core::ops::function::Fn() -> u64 + core::marker::Send + core::marker::Sync)>) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 impl core::fmt::Debug for krishiv_session::resource_groups::ResourceGroups
 pub fn krishiv_session::resource_groups::ResourceGroups::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
