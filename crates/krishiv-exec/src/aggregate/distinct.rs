@@ -27,9 +27,12 @@
 //!    NULL counts 0).
 //!
 //! **One table holds every key.** The key table's input is the input's
-//! columns, then `is_raw` (true on an input row, NULL on a count row), then
-//! `count` (NULL on an input row). Count rows carry NULL in every input
-//! column but the keys; an aggregate a NULL argument leaves unchanged
+//! columns, then a copy of each grouping column (the key table groups by
+//! the copies), then `is_raw` (true on an input row, NULL on a count row),
+//! then `count` (NULL on an input row). Count rows carry their key only in
+//! the copies and NULL in every input column, the grouping columns too, so
+//! an aggregate over a grouping column (`count(k)`, a FILTER on `k`) never
+//! reads one. An aggregate a NULL argument leaves unchanged
 //! (`sum`, `avg`, `min`, `max`, `count(x)`) reads them as written, `count(*)`
 //! becomes `count(is_raw)`, and every other one reads only rows whose
 //! `is_raw` is true (its mask, or `is_raw` when it has none: a count row's
@@ -43,7 +46,15 @@
 //! their encoding) and the queued rows are reserved without waiting. A
 //! refusal leaves the partition (and every partition after it in this
 //! query) in the pairs table, which reaches the output. Queued rows stay
-//! reserved until a reader takes them.
+//! reserved until a reader takes them. The queue has no spill hook: it
+//! holds only what the pool granted without waiting, and the second
+//! pipeline's readers drain it first, while the key table they feed spills
+//! as any aggregate does.
+//!
+//! **Merge order.** The key table's tables merge in driver-partition order,
+//! and the second pipeline's partition indices restart at 0, so its tables
+//! may merge before the first pipeline's. Their plain aggregates' states
+//! are empty (every count row is skipped), so the order changes no result.
 //!
 //! **Chosen by parallelism.** [`DistinctChoice`] picks this plan when its
 //! pipelines are built, and only when the executor has more than one slot
@@ -194,8 +205,9 @@ fn all_valid(values: &[ArrayRef]) -> Option<NullBuffer> {
 /// The shape of the key table's input (see the [module docs](self)).
 #[derive(Debug)]
 struct KeyInput {
-    /// The key table's input schema: the input's columns (nullable but the
-    /// keys), `is_raw`, `count`.
+    /// The key table's input schema: the input's columns (all nullable),
+    /// a copy of each grouping column (the key table's keys), `is_raw`,
+    /// `count`.
     schema: SchemaRef,
     /// Grouping column indices of the input, in key order.
     group_by: Vec<usize>,
@@ -204,43 +216,53 @@ struct KeyInput {
 }
 
 impl KeyInput {
-    fn new(spec: &AggregateSpec) -> Self {
-        let mut fields: Vec<Field> = spec
-            .input
-            .fields()
+    fn new(spec: &AggregateSpec) -> Result<Self> {
+        let input = spec.input.fields();
+        let mut fields: Vec<Field> = input
             .iter()
-            .enumerate()
-            .map(|(i, f)| {
-                let f = f.as_ref().clone();
-                if spec.group_by.contains(&i) {
-                    f
-                } else {
-                    f.with_nullable(true)
-                }
-            })
+            .map(|f| f.as_ref().clone().with_nullable(true))
             .collect();
         let width = fields.len();
+        for (j, &k) in spec.group_by.iter().enumerate() {
+            let f = input
+                .get(k)
+                .ok_or_else(|| internal(format!("grouping column {k} out of range")))?;
+            fields.push(f.as_ref().clone().with_name(format!("_krishiv_key{j}")));
+        }
         fields.push(Field::new("_krishiv_is_raw", DataType::Boolean, true));
         fields.push(Field::new("_krishiv_count", DataType::Int64, true));
-        Self {
+        Ok(Self {
             schema: Arc::new(Schema::new(fields)),
             group_by: spec.group_by.clone(),
             width,
-        }
+        })
+    }
+
+    /// The key table's grouping columns: the copies.
+    fn keys(&self) -> Vec<usize> {
+        (self.width..self.width + self.group_by.len()).collect()
     }
 
     fn is_raw(&self) -> usize {
-        self.width
+        self.width + self.group_by.len()
     }
 
     fn count(&self) -> usize {
-        self.width + 1
+        self.is_raw() + 1
     }
 
-    /// An input batch with `is_raw` true and `count` NULL appended.
+    /// An input batch with its keys copied (shared buffers), `is_raw` true
+    /// and `count` NULL appended.
     fn raw(&self, b: &Batch) -> Result<Batch> {
         let n = b.num_rows();
         let mut cols = b.data().columns().to_vec();
+        for &k in &self.group_by {
+            let c = cols
+                .get(k)
+                .cloned()
+                .ok_or_else(|| internal(format!("grouping column {k} out of range")))?;
+            cols.push(c);
+        }
         cols.push(Arc::new(BooleanArray::from(vec![true; n])));
         cols.push(new_null_array(&DataType::Int64, n));
         let data = RecordBatch::try_new(Arc::clone(&self.schema), cols)
@@ -248,20 +270,19 @@ impl KeyInput {
         Batch::with_weights(data, b.weights().clone())
     }
 
-    /// Count rows: `keys` (the grouping columns in key order) and their
-    /// `counts`, NULL in every other column.
+    /// Count rows: `keys` (in key order) and their `counts`; every input
+    /// column is NULL, the grouping columns too, so no plain aggregate
+    /// reads a count row's key (`count(k)`, `sum(k)`, a FILTER on a key).
     fn counts(&self, keys: &[ArrayRef], counts: ArrayRef) -> Result<RecordBatch> {
         let n = counts.len();
-        let mut cols = Vec::with_capacity(self.width + 2);
-        for (i, f) in self.schema.fields().iter().take(self.width).enumerate() {
-            match self.group_by.iter().position(|&k| k == i) {
-                Some(j) => cols
-                    .push(Arc::clone(keys.get(j).ok_or_else(|| {
-                        internal("count rows without their keys".to_owned())
-                    })?)),
-                None => cols.push(new_null_array(f.data_type(), n)),
-            }
+        if keys.len() != self.group_by.len() {
+            return Err(internal("count rows without their keys".to_owned()));
         }
+        let mut cols = Vec::with_capacity(self.width + keys.len() + 2);
+        for f in self.schema.fields().iter().take(self.width) {
+            cols.push(new_null_array(f.data_type(), n));
+        }
+        cols.extend(keys.iter().cloned());
         cols.push(new_null_array(&DataType::Boolean, n));
         cols.push(counts);
         RecordBatch::try_new(Arc::clone(&self.schema), cols).map_err(|e| internal(e.to_string()))
@@ -447,13 +468,23 @@ impl PairCounts {
                 query.cancel();
             }
         }
-        let rows = self.local_rows(&local)?;
-        let bytes: usize = rows.iter().map(RecordBatch::get_array_memory_size).sum();
-        if self.refused(&mut scratch, bytes) {
+        // The rows are reserved before they are built (their keys decoded,
+        // their counts and NULL columns: about the local table's bytes),
+        // then to their measured size.
+        if self.refused(&mut scratch, local.bytes()) {
             #[cfg(test)]
             self.hooks.queue_refusals.fetch_add(1, Ordering::Relaxed);
             return Ok(None);
         }
+        let rows = self.local_rows(&local)?;
+        let bytes: usize = rows.iter().map(RecordBatch::get_array_memory_size).sum();
+        let more = bytes.saturating_sub(scratch.size());
+        if more > 0 && self.refused(&mut scratch, more) {
+            #[cfg(test)]
+            self.hooks.queue_refusals.fetch_add(1, Ordering::Relaxed);
+            return Ok(None);
+        }
+        shrink_to(&mut scratch, bytes);
         // The rows replace the local table.
         drop(local);
         drop(r);
@@ -561,7 +592,7 @@ impl DistinctCount {
             require_unit_weights: true,
             ..spec.clone()
         })?;
-        let input = Arc::new(KeyInput::new(spec));
+        let input = Arc::new(KeyInput::new(spec)?);
         let aggregates = spec
             .aggregates
             .iter()
@@ -581,6 +612,7 @@ impl DistinctCount {
             .collect();
         let keys = HashAggregate::new(AggregateSpec {
             input: Arc::clone(&input.schema),
+            group_by: input.keys(),
             aggregates,
             require_unit_weights: true,
             ..spec.clone()

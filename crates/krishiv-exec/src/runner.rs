@@ -482,8 +482,9 @@ fn start_group(
     };
     let (sink_id, sink) = &first.sink;
     // A sink sees the breaker its pipeline's source reads, as the source
-    // does: a sink that continues that breaker's state adopts it
-    // (`aggregate/distinct.rs` `KeyFeed`); every other sink ignores it.
+    // does (for a fan-in, the first member's): a sink that continues that
+    // breaker's state adopts it (`aggregate/distinct.rs` `KeyFeed`); every
+    // other sink ignores it.
     let mut sink_ctx = ctx((*sink_id, sink.name()));
     if let Some(input) = &first.input {
         sink_ctx = sink_ctx.with_dependency(read(input)?);

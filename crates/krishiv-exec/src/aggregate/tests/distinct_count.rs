@@ -571,3 +571,73 @@ async fn many_keys_in_a_small_pool_spill_and_count_the_same() {
         );
     }
 }
+
+/// Plain aggregates over the grouping columns and with FILTER masks
+/// (review of `74ca3e4f3`): `count(k)`, `sum(k)`, `min`/`max`/`count(w)`,
+/// `max(w) FILTER (WHERE f)` with `f` a key, `count(*) FILTER (WHERE f)`, and
+/// `first(f)`/`last(k)` (NULL rows count; order-free here, as every row of a
+/// group holds the same key). Count rows carry their key only in the key
+/// table's copies, so none of these reads one: the rows equal the old plan's.
+#[tokio::test]
+async fn plain_aggregates_over_the_keys_and_masks_count_the_same() {
+    let (s3, b3) = gen_input(20_000, 2_000, 256);
+    let s = schema(vec![
+        ("k", DataType::Int64),
+        ("v", DataType::Int64),
+        ("w", DataType::Int64),
+        ("f", DataType::Boolean),
+    ]);
+    let b: Vec<Vec<ArrayRef>> = b3
+        .iter()
+        .enumerate()
+        .map(|(j, cols)| {
+            let n = cols[0].len();
+            let f: Vec<Option<bool>> = (0..n)
+                .map(|i| ((i + j) % 9 != 0).then_some((i * 7 + j) % 3 == 0))
+                .collect();
+            let mut c = cols.clone();
+            c.push(bools(&f));
+            c
+        })
+        .collect();
+    let _ = s3;
+    let masked = |mut a: AggregateExpr| {
+        a.mask = Some(3);
+        a
+    };
+    let aggs = vec![
+        agg(&Count, 0, &s),
+        agg(&Sum, 0, &s),
+        agg(&Min, 2, &s),
+        agg(&Max, 2, &s),
+        agg(&Count, 2, &s),
+        masked(agg(&Max, 2, &s)),
+        masked(AggregateExpr::count_star("cf")),
+        agg(
+            &AggregateFunction::First {
+                ignore_nulls: false,
+            },
+            3,
+            &s,
+        ),
+        agg(
+            &AggregateFunction::Last {
+                ignore_nulls: false,
+            },
+            0,
+            &s,
+        ),
+        agg(&Count, 1, &s),
+    ];
+    let mut flags = vec![false; aggs.len()];
+    flags[aggs.len() - 1] = true;
+    let sp = spec(&s, vec![0, 3], aggs);
+    for slots in [2, 4] {
+        let o = Opts {
+            slots,
+            ..Opts::default()
+        };
+        let (got, want) = both(&s, &b, &sp, &flags, o).await;
+        assert_eq!(got, want, "{slots} slots");
+    }
+}
