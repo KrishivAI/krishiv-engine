@@ -525,6 +525,10 @@ pub trait AccessPolicy: Send + Sync {
     /// The policy version.
     fn version(&self) -> PolicyVersion;
     /// The decision for `principal` on `securable`.
+    ///
+    /// It may also be asked speculatively: `analyze` and `EXPLAIN FORMAT JSON` of a write ask the run's target
+    /// checks quietly (no audit record, no denial count) to decide whether to list the target's directories. A
+    /// policy that logs or counts its own decisions sees those trial denials too.
     fn check<'a>(
         &'a self,
         principal: &'a Principal,

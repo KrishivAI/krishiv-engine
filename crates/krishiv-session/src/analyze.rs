@@ -5,7 +5,8 @@
 //! [`Session::analyze`] and [`Session::analyze_plan`] stop at the analyzed plan: nothing is optimized or
 //! planned physically (the step that evaluates a recursive CTE's `UnionLoop`), no row is read, no UDF is
 //! invoked, nothing spills. Reads go through the session's access policy as on a run (a denied read fails
-//! with the same 42501); targets are listed, not authorized.
+//! with the same 42501); targets are listed, not authorized: their checks run only quietly (no audit record, no
+//! denial count), to decide whether to list a target's directories.
 //!
 //! Directories: a run of `DROP TABLE` or `TRUNCATE TABLE` on a managed table also asks `MODIFY` on the
 //! table's directory when it exists, and a run of `INSERT` asks `MODIFY` and `CREATE` on the table's
