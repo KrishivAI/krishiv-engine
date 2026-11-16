@@ -120,6 +120,7 @@ fn read(format: &str, paths: &[&str]) -> LogicalPlan {
             .map(|p| OptionValue::from_user("path", *p))
             .collect(),
         options: BTreeMap::new(),
+        schema: None,
     }))
 }
 
@@ -548,6 +549,7 @@ fn read_with_secret(table: bool) -> LogicalPlan {
             format: "parquet".to_owned(),
             paths: vec![OptionValue::from_user("path", "/data/one")],
             options,
+            schema: None,
         }))
     }
 }
@@ -583,4 +585,165 @@ fn secret_references_need_usage_on_their_scope() {
     allowed.policy = Arc::clone(&policy) as Arc<dyn AccessPolicy>;
     run(read_with_secret(false), &allowed).unwrap();
     assert_eq!(*policy.asked.lock().unwrap(), ["prod"]);
+}
+
+// ---- a declared schema (P3-T012a part 2a, design note section 3) -----------
+
+fn declared() -> krishiv_types::StructType {
+    use krishiv_types::StructField;
+    krishiv_types::StructType::new([
+        StructField::new("k", DataType::Long, false),
+        StructField::new("v", DataType::String, true),
+    ])
+}
+
+fn read_declared(path: &str) -> LogicalPlan {
+    LogicalPlan::new(PlanNode::Read(
+        ReadSource::files(
+            "parquet",
+            vec![OptionValue::from_user("path", path)],
+            BTreeMap::new(),
+        )
+        .with_schema(declared()),
+    ))
+}
+
+/// A declared schema replaces inference: the resolver is never asked, and
+/// the declared fields are the columns. Nullability keeps the rule of an
+/// inferred read (every file column nullable); whether Spark keeps a declared
+/// `NOT NULL` per format is golden-pending.
+#[test]
+fn a_declared_schema_skips_inference() {
+    let files = Arc::new(Files::default());
+    // The path does not exist for inference: only a declared schema reads it.
+    let r = run(read_declared("/data/missing"), &ctx(&files));
+    assert!(files.calls.lock().unwrap().is_empty());
+    assert_eq!(
+        output(&r),
+        vec![
+            ("k".to_owned(), DataType::Long, true),
+            ("v".to_owned(), DataType::String, true),
+        ]
+    );
+    let a = r.unwrap();
+    let PlanNode::Scan(scan) = &a.plan.root().node else {
+        panic!("not a scan: {}", a.plan.root());
+    };
+    // The scan keeps the declared schema, so the session opens it as declared.
+    assert!(matches!(&scan.source, ReadSource::Files { schema: Some(s), .. } if *s == declared()));
+}
+
+/// A declared schema is nullable at every depth, as an inferred one is: a `NOT NULL` element or
+/// field of the declaration does not survive into the columns.
+#[test]
+fn a_declared_schema_is_nullable_in_nested_types() {
+    use krishiv_types::{ArrayType, StructField, StructType};
+    let nested = StructType::new([
+        StructField::new("a", ArrayType::new(DataType::Integer, false).into(), false),
+        StructField::new(
+            "s",
+            StructType::new([StructField::new("x", DataType::Long, false)]).into(),
+            false,
+        ),
+    ]);
+    let files = Arc::new(Files::default());
+    let plan = LogicalPlan::new(PlanNode::Read(
+        ReadSource::files(
+            "parquet",
+            vec![OptionValue::from_user("path", "/data/nested")],
+            BTreeMap::new(),
+        )
+        .with_schema(nested),
+    ));
+    let r = run(plan, &ctx(&files));
+    assert_eq!(
+        output(&r),
+        vec![
+            (
+                "a".to_owned(),
+                ArrayType::new(DataType::Integer, true).into(),
+                true
+            ),
+            (
+                "s".to_owned(),
+                StructType::new([StructField::new("x", DataType::Long, true)]).into(),
+                true
+            ),
+        ]
+    );
+}
+
+/// Two reads of one path differ by their schema: each is bound once.
+#[test]
+fn a_declared_schema_is_part_of_the_read() {
+    let files = Arc::new(Files::default());
+    let r = run(read("parquet", &["/data/one"]), &ctx(&files));
+    assert_eq!(files.calls.lock().unwrap().len(), 1);
+    assert_eq!(output(&r), nullable_one());
+    let r = run(read_declared("/data/one"), &ctx(&files));
+    assert_eq!(files.calls.lock().unwrap().len(), 1, "no second inference");
+    assert_eq!(output(&r)[0].0, "k");
+}
+
+/// Display shows the schema; the canonical encoding of a read that infers is
+/// the tag-2 bytes (unchanged), a declared schema is tag 4 and differs.
+#[test]
+fn a_declared_schema_prints_and_encodes_apart() {
+    let plan = read_declared("/d");
+    assert_eq!(
+        plan.to_string(),
+        "Read parquet [/d] schema=k BIGINT NOT NULL, v STRING\n"
+    );
+    let inferred = LogicalPlan::new(PlanNode::Read(ReadSource::files(
+        "parquet",
+        vec![OptionValue::from_user("path", "/d")],
+        BTreeMap::new(),
+    )));
+    assert_eq!(inferred.to_string(), "Read parquet [/d]\n");
+    let enc = |p: LogicalPlan| Plan::try_new(p).unwrap().canonical_encoding();
+    let (a, b) = (enc(inferred), enc(plan));
+    assert_ne!(a, b);
+    // Pinned: the bytes of a read that infers (source tag 2) never change.
+    assert_eq!(
+        a,
+        [
+            11, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 45, 0, 0, 0, 0, 0, 0, 0, 80, 1, 2, 7, 0, 0,
+            0, 0, 0, 0, 0, 112, 97, 114, 113, 117, 101, 116, 1, 0, 0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 0,
+            0, 0, 0, 0, 47, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+        ]
+    );
+    assert!(b.len() > a.len());
+    assert!(b.windows(3).any(|w| w == b"big"));
+}
+
+/// The declared schema is encoded without loss: reads that differ only in an
+/// array's `containsNull`, a map's `valueContainsNull` or a nested field's
+/// nullability do not share canonical bytes.
+#[test]
+fn a_declared_schema_encodes_nested_nullability() {
+    use krishiv_types::{ArrayType, MapType, StructField, StructType};
+    let read = |ty: DataType| {
+        let schema = StructType::new([StructField::new("c", ty, true)]);
+        let p = LogicalPlan::new(PlanNode::Read(
+            ReadSource::files(
+                "parquet",
+                vec![OptionValue::from_user("path", "/d")],
+                BTreeMap::new(),
+            )
+            .with_schema(schema),
+        ));
+        Plan::try_new(p).unwrap().canonical_encoding()
+    };
+    let array = |n| ArrayType::new(DataType::Integer, n).into();
+    assert_ne!(read(array(true)), read(array(false)));
+    let map = |n| MapType::new(DataType::Integer, DataType::Integer, n).into();
+    assert_ne!(read(map(true)), read(map(false)));
+    let st = |n| {
+        DataType::Struct(StructType::new([StructField::new(
+            "x",
+            DataType::Integer,
+            n,
+        )]))
+    };
+    assert_ne!(read(st(true)), read(st(false)));
 }

@@ -183,14 +183,14 @@ pub(crate) fn file_scan() -> ScanNode {
     ScanNode {
         id: ScanId(8),
         scan: Scan {
-            source: ReadSource::Files {
-                format: "parquet".to_owned(),
-                paths: vec![
+            source: ReadSource::files(
+                "parquet".to_owned(),
+                vec![
                     OptionValue::Plain("s3://bucket/a/*.parquet".to_owned()),
                     OptionValue::reference("prod", "signed-path"),
                 ],
-                options: BTreeMap::new(),
-            },
+                BTreeMap::new(),
+            ),
             output: scan_columns(),
             version: None,
         },
@@ -2469,6 +2469,50 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         nullable: None,
         subqueries: Vec::new(),
     };
+    // Nested values: an array with a null element, an empty one, a map with
+    // a struct value and a bare struct.
+    let nested_literals = {
+        use krishiv_types::{ArrayType, MapType, StructField, StructType};
+        let array_type = ArrayType::new(DataType::Integer, true);
+        let struct_type = StructType::new([
+            StructField::new("a", DataType::Integer, false),
+            StructField::new("s", DataType::String, true),
+        ]);
+        let a_struct = |v: i32| {
+            Literal::struct_value(
+                struct_type.clone(),
+                vec![Literal::Integer(v), Literal::Null(Some(DataType::String))],
+            )
+            .unwrap()
+        };
+        PhysNode::Project {
+            input: boxed(scan()),
+            layout: vec![AttrId(1), AttrId(2)],
+            items: [
+                Literal::array(
+                    array_type.clone(),
+                    vec![Literal::Integer(1), Literal::Null(Some(DataType::Integer))],
+                )
+                .unwrap(),
+                Literal::array(array_type, Vec::new()).unwrap(),
+                Literal::key_value_map(
+                    MapType::new(DataType::String, struct_type.clone().into(), true),
+                    vec![(Literal::String("k".to_owned()), a_struct(1))],
+                )
+                .unwrap(),
+                a_struct(2),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(i, l)| ProjectItemPlan::Expr {
+                name: format!("n{i}"),
+                expr: lit(l),
+            })
+            .collect(),
+            nullable: None,
+            subqueries: Vec::new(),
+        }
+    };
     let mut interval_columns = file_scan();
     interval_columns.scan.output = vec![
         column(
@@ -2524,9 +2568,42 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         nullable: None,
         subqueries: Vec::new(),
     };
+    // A file read with a declared schema (a nested field too).
+    let file_source_schema = {
+        use krishiv_types::{ArrayType, StructField, StructType};
+        let mut scan = file_scan();
+        scan.scan.source = scan.scan.source.with_schema(StructType::new([
+            StructField::new("a", DataType::Integer, false),
+            StructField::new(
+                "tags",
+                DataType::Array(std::sync::Arc::new(ArrayType::new(DataType::String, true))),
+                true,
+            ),
+        ]));
+        PhysNode::Scan(scan)
+    };
+    // A scan of a local relation, named by hash (no data in the plan).
+    let local_relation_source = {
+        use arrow_schema::{Field, Schema};
+        let mut scan = file_scan();
+        scan.scan.source = ReadSource::Local(krishiv_plan::LocalRelation::from_decoded(
+            std::sync::Arc::new(Schema::new(vec![
+                Field::new("a", arrow_schema::DataType::Int32, false),
+                Field::new("b", arrow_schema::DataType::Utf8, true),
+            ])),
+            [0x5a; 32],
+            2,
+            1_000,
+            4_096,
+        ));
+        PhysNode::Scan(scan)
+    };
     vec![
+        ("local_relation_source", local_relation_source),
+        ("file_source_schema", file_source_schema),
         ("interval_literals", interval_literals),
         ("options_map_literal", options_map),
+        ("nested_literals", nested_literals),
         ("interval_scan", PhysNode::Scan(interval_columns)),
         ("interval_nested", nested_intervals),
         (
