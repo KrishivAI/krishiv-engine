@@ -244,7 +244,6 @@ class UserDefinedFunction:
         self._thread_safe = True
         #: The profiler's id of this UDF and its handles by mode (P3-T080); empty while no profiler is on.
         self._profile_id: int | None = None
-        self._profiled_handles: dict[tuple[int, str], Any] = {}
 
     # --- pyspark/sql/udf.py:210-248 (the scalar kinds the engine runs) ---
     @staticmethod
@@ -325,16 +324,18 @@ class UserDefinedFunction:
         mode = active.conf.get(CONF_KEY, "")
         if mode not in MODES:
             return self._handle
-        if self._profile_id is None:
-            from krishiv._udf.profiler import next_udf_id
+        from krishiv._udf.profiler import ensure_udf_id
 
-            self._profile_id = next_udf_id()
-        key = (id(active), mode)
-        handle = self._profiled_handles.get(key)
+        udf_id = ensure_udf_id(self)
+        registry = active._profile_registry
+        # The cache lives on the session's registry (keyed by this object), so it goes with the session and
+        # an `id()` reused after a session is freed cannot return another session's handle.
+        by_mode = registry.handles.setdefault(self, {})
+        # `asNondeterministic` changes the handle's flag, so the flag is part of the key.
+        key = f"{mode}/{self.deterministic}"
+        handle = by_mode.get(key)
         if handle is None:
-            registry = active._profile_registry
-            profiled = registry.wrap(self.func, self._profile_id, self._name, mode)
-            handle = self._profiled_handles[key] = self._create_handle(profiled)
+            handle = by_mode[key] = self._create_handle(registry.wrap(self.func, udf_id, self._name, mode))
         return handle
 
     # --- pyspark/sql/udf.py:515-548 ---

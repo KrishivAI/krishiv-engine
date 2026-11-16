@@ -7,7 +7,7 @@ Spark 4.x profiles a UDF's calls when the session setting is ``perf`` (``cProfil
 
 * ``memory`` uses ``tracemalloc``: per UDF it reports the calls, the peak and the net bytes the calls
   allocated, not lines. It needs no extra package.
-* ``cProfile`` and ``tracemalloc`` are one per process, so a profiled UDF call takes one lock: with a
+* ``cProfile`` and ``tracemalloc`` are one per process, so a profiled UDF call takes one process-wide lock: with a
   profiler on, calls of profiled UDFs do not overlap (also on free-threaded Python). With it off, which is
   the default, nothing here runs: the UDF's wrapper is not even built.
 
@@ -25,6 +25,7 @@ import os
 import pstats
 import threading
 import tracemalloc
+import weakref
 from collections.abc import Callable
 from typing import Any
 
@@ -33,11 +34,22 @@ CONF_KEY = "spark.sql.pyspark.udf.profiler"
 MODES = ("perf", "memory")
 
 _ids = itertools.count(1)
+#: One lock for the process: `cProfile` and `tracemalloc` are one per process, not per session.
+_PROCESS_LOCK = threading.RLock()
 
 
 def next_udf_id() -> int:
     """The id a profiled UDF is shown under (``Profile of UDF<id=N>``)."""
-    return next(_ids)
+    with _PROCESS_LOCK:
+        return next(_ids)
+
+
+def ensure_udf_id(udf: Any) -> int:
+    """The profiler id of ``udf`` (its ``_profile_id``), assigned once even when two threads race."""
+    with _PROCESS_LOCK:
+        if udf._profile_id is None:
+            udf._profile_id = next(_ids)
+        return int(udf._profile_id)
 
 
 class _Entry:
@@ -55,7 +67,9 @@ class Registry:
     """The profiles of one session, by UDF id."""
 
     def __init__(self) -> None:
-        self.lock = threading.Lock()
+        self.lock = _PROCESS_LOCK
+        #: The profiled handles by UDF object and mode; they go with the session.
+        self.handles: weakref.WeakKeyDictionary[Any, dict[str, Any]] = weakref.WeakKeyDictionary()
         self.perf: dict[int, _Entry] = {}
         self.memory: dict[int, _Entry] = {}
 
@@ -182,6 +196,6 @@ class Profile:
                     stats = pstats.Stats(entry.perf, stream=out)
                     stats.sort_stats("time", "cumulative").print_stats()
             return head + out.getvalue()
-        return head + (
-            f"Memory of {entry.name}: {entry.calls} call(s), peak {entry.peak} bytes, net {entry.net} bytes\n"
-        )
+        with self._registry.lock:
+            calls, peak, net = entry.calls, entry.peak, entry.net
+        return head + f"Memory of {entry.name}: {calls} call(s), peak {peak} bytes, net {net} bytes\n"
