@@ -163,7 +163,7 @@ fn text_report_spells_out_the_statuses() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(
         dir.path().join("a.sql"),
-        "SELECT nopefn(1),\n  bitmap_count(2)\n",
+        "SELECT nopefn(1),\n  count_min_sketch(2)\n",
     )
     .expect("write");
     let out = run(&[], dir.path());
@@ -175,7 +175,7 @@ fn text_report_spells_out_the_statuses() {
         "{text}"
     );
     assert!(
-        lines[1].ends_with("a.sql:2: bitmap_count: not yet"),
+        lines[1].ends_with("a.sql:2: count_min_sketch: not yet"),
         "{text}"
     );
 }
@@ -198,10 +198,10 @@ fn walk_skips_environments_and_rejects_other_named_files() {
     std::fs::create_dir_all(&venv).expect("mkdir");
     std::fs::write(
         venv.join("x.py"),
-        "import pyspark.sql.functions as F\nF.bitmap_count(1)\n",
+        "import pyspark.sql.functions as F\nF.count_min_sketch(1)\n",
     )
     .expect("write");
-    std::fs::write(dir.path().join("notes.txt"), "bitmap_count(1)").expect("write");
+    std::fs::write(dir.path().join("notes.txt"), "count_min_sketch(1)").expect("write");
     assert_eq!(run(&[], dir.path()).status.code(), Some(0));
     assert_eq!(
         run(&[], &dir.path().join("notes.txt")).status.code(),
@@ -368,7 +368,7 @@ fn findings_carry_an_alternative_where_one_is_listed() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(
         dir.path().join("a.sql"),
-        "SELECT hll_sketch_estimate(hll_sketch_agg(c)), bitmap_count(s) FROM t\n",
+        "SELECT hll_sketch_estimate(hll_sketch_agg(c)), count_min_sketch(s) FROM t\n",
     )
     .expect("write");
     let (_, rep) = report(dir.path());
@@ -385,7 +385,7 @@ fn findings_carry_an_alternative_where_one_is_listed() {
             .is_some_and(|a| a.contains("approx_count_distinct")),
         "{alt}"
     );
-    assert!(by_name("bitmap_count").get("alternative").is_none());
+    assert!(by_name("count_min_sketch").get("alternative").is_none());
     let text = run(&[], dir.path());
     let out = String::from_utf8_lossy(&text.stdout);
     assert!(
@@ -403,7 +403,7 @@ fn a_thousand_files_scan_in_under_ten_seconds() {
         let (name, body) = if i % 2 == 0 {
             (
                 format!("q{i}.sql"),
-                "WITH a AS (SELECT id, upper(name) AS n FROM t WHERE id > 1)\nSELECT n, count(*), bitmap_count(n) FROM a GROUP BY n;\n".repeat(20),
+                "WITH a AS (SELECT id, upper(name) AS n FROM t WHERE id > 1)\nSELECT n, count(*), hll_sketch_estimate(n) FROM a GROUP BY n;\n".repeat(20),
             )
         } else {
             (
@@ -433,7 +433,7 @@ fn an_unwritable_report_exits_2() {
             .open("/dev/full")
             .expect("/dev/full");
         // Findings make the text report non-empty; the JSON report is always written.
-        std::fs::write(dir.path().join("b.sql"), "SELECT bitmap_count(x)\n").expect("write");
+        std::fs::write(dir.path().join("b.sql"), "SELECT hll_sketch_estimate(x)\n").expect("write");
         let out = Command::new(env!("CARGO_BIN_EXE_krishiv"))
             .arg("check-compat")
             .args(args)
