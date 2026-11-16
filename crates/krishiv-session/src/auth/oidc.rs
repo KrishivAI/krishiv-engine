@@ -179,6 +179,7 @@ pub(crate) struct Oidc {
     principal_claim: String,
     role_claim: String,
     skew_secs: u64,
+    max_lifetime_secs: u64,
     jwks: Arc<JwksCache>,
     /// Requests to the fetch thread; dropping it stops the thread.
     fetch: mpsc::Sender<FetchRequest>,
@@ -242,6 +243,7 @@ impl Oidc {
             principal_claim: config.principal_claim.clone(),
             role_claim: config.role_claim.clone(),
             skew_secs: config.clock_skew.as_secs(),
+            max_lifetime_secs: config.max_lifetime.as_secs(),
             jwks,
             fetch: tx,
         })
@@ -290,6 +292,7 @@ impl Oidc {
             principal_claim: &self.principal_claim,
             role_claim: &self.role_claim,
             skew_secs: self.skew_secs,
+            max_lifetime_secs: self.max_lifetime_secs,
         };
         match jose::check_claims(&jws.claims, &rules, unix_now) {
             Ok(identity) => Verified::Ok(identity),

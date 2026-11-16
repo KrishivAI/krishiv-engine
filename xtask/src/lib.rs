@@ -3,6 +3,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod admin_api;
 pub mod budgets;
 pub mod changelog;
 pub mod ci;

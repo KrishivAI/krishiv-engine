@@ -399,7 +399,9 @@ impl Walker<'_> {
                 bounds: _,
                 seed: _,
             }
-            | PlanNode::ReplicateRows { input, .. } => Ok(Rule::Same(self.plan(input, offset)?)),
+            | PlanNode::ReplicateRows { input, .. }
+            // `observe` passes its rows through; its metrics are reported apart, not as columns of the output.
+            | PlanNode::CollectMetrics { input, .. } => Ok(Rule::Same(self.plan(input, offset)?)),
             PlanNode::SubqueryAlias { input, alias, .. } => self.alias(p, input, alias, offset),
             PlanNode::WithCte { input, ctes } => {
                 for c in ctes {
@@ -981,6 +983,8 @@ impl Walker<'_> {
                         column: column.to_owned(),
                     })
                     .collect(),
+                // Rows carried in the plan have no table or path to name.
+                ReadSource::Local(_) => Vec::new(),
             }
         };
         let metadata = s.metadata_column().map(|c| c.id);

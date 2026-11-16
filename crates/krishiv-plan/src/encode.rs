@@ -118,6 +118,7 @@ pub(crate) fn plan_tag(node: &PlanNode) -> u8 {
         PlanNode::GroupMap { .. } => 38,
         PlanNode::CoGroupMap { .. } => 39,
         PlanNode::PythonTableFunction { .. } => 40,
+        PlanNode::CollectMetrics { .. } => 41,
     }
 }
 
@@ -715,8 +716,58 @@ impl<'k, 'a> Encoder<'k, 'a> {
         }
     }
 
+    /// An Arrow schema as names, Spark types and nullability (never data).
+    fn arrow_schema(&mut self, schema: &arrow_schema::Schema) {
+        self.len(schema.fields().len());
+        for f in schema.fields() {
+            self.str(f.name());
+            self.str(&crate::local::type_text(f));
+            self.bool(f.is_nullable());
+        }
+    }
+
     fn data_type(&mut self, t: &krishiv_types::DataType) {
         self.str(&t.simple_string());
+    }
+
+    /// A nested literal's type without loss: `simple_string` drops
+    /// nullability, comments and fields past the 25th, which `Literal::eq`
+    /// keeps. Bounded by `DataType::MAX_NESTING_DEPTH`.
+    fn lossless_type(&mut self, t: &krishiv_types::DataType) {
+        use krishiv_types::DataType;
+        match t {
+            DataType::Array(a) => {
+                self.u8(1);
+                self.bool(a.contains_null());
+                self.lossless_type(a.element_type());
+            }
+            DataType::Map(m) => {
+                self.u8(2);
+                self.bool(m.value_contains_null());
+                self.lossless_type(m.key_type());
+                self.lossless_type(m.value_type());
+            }
+            DataType::Struct(st) => {
+                self.u8(3);
+                self.len(st.fields().len());
+                for f in st.fields() {
+                    self.str(f.name());
+                    self.bool(f.nullable());
+                    // The map is ordered by key, so its debug text is stable.
+                    let md = f.metadata();
+                    self.str(&if md.is_empty() {
+                        String::new()
+                    } else {
+                        format!("{:?}", md.as_map())
+                    });
+                    self.lossless_type(f.data_type());
+                }
+            }
+            leaf => {
+                self.u8(0);
+                self.data_type(leaf);
+            }
+        }
     }
 
     fn exprs(&mut self, v: &'a [Arc<Expr>]) {
@@ -912,6 +963,10 @@ impl<'k, 'a> Encoder<'k, 'a> {
             | PlanNode::PipeOperator { .. }
             | PlanNode::Distinct { .. } => {}
             PlanNode::Repartition { exprs, .. } => self.exprs(exprs),
+            PlanNode::CollectMetrics { name, metrics, .. } => {
+                self.str(name);
+                self.exprs(metrics);
+            }
             PlanNode::JoinHint { strategy, .. } => {
                 self.str(strategy.name());
             }
@@ -1167,16 +1222,29 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.strs(name);
                 self.options(options);
             }
+            ReadSource::Local(l) => {
+                self.u8(3);
+                self.put(l.relation().hash.as_bytes());
+                self.arrow_schema(l.schema());
+                self.len(l.batches());
+                self.put(&l.rows().to_le_bytes());
+            }
             ReadSource::Files {
                 format,
                 paths,
                 options,
+                schema,
             } => {
-                self.u8(2);
+                // Tag 2 stays byte-identical for a read that infers; a
+                // declared schema is tag 4 (tag-2 fields, then the schema).
+                self.u8(if schema.is_some() { 4 } else { 2 });
                 self.str(format);
                 self.len(paths.len());
                 paths.iter().for_each(|p| self.option_value(p));
                 self.options(options);
+                if let Some(schema) = schema {
+                    self.lossless_type(&krishiv_types::DataType::Struct(schema.clone()));
+                }
             }
         }
     }
@@ -1605,6 +1673,36 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.put(&months.to_le_bytes());
                 self.put(&days.to_le_bytes());
                 self.i64(*micros);
+            }
+            // Nested values: the type, then the values (the type bounds the
+            // depth, `Literal::array` and friends check it).
+            Literal::Array {
+                data_type,
+                elements,
+            } => {
+                self.u8(20);
+                self.lossless_type(&krishiv_types::DataType::Array(Arc::clone(data_type)));
+                self.len(elements.len());
+                for e in elements {
+                    self.literal(e);
+                }
+            }
+            Literal::KeyValueMap { data_type, entries } => {
+                self.u8(21);
+                self.lossless_type(&krishiv_types::DataType::Map(Arc::clone(data_type)));
+                self.len(entries.len());
+                for (k, v) in entries {
+                    self.literal(k);
+                    self.literal(v);
+                }
+            }
+            Literal::Struct { data_type, fields } => {
+                self.u8(22);
+                self.lossless_type(&krishiv_types::DataType::Struct((**data_type).clone()));
+                self.len(fields.len());
+                for f in fields {
+                    self.literal(f);
+                }
             }
         }
     }

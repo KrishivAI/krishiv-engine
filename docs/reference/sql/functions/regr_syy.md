@@ -51,7 +51,8 @@ NULL
 ```sql
 -- regr_syy, example 4
 > SELECT regr_syy(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);
-0.6666666666666666
+0.6666666666666667
+-- Spark documents: 0.6666666666666666
 ```
 
 ```sql

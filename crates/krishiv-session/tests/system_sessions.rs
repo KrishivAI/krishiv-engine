@@ -302,3 +302,57 @@ fn equal_names_in_two_tenants_do_not_see_each_other() {
         ["1"]
     );
 }
+
+/// An impersonated session shows the end user as its principal and the service that acts for
+/// it in `delegated_by`, in `system.sessions` and in every row it adds to `system.queries`
+/// (P3-T061 §4.3, amendment A5); a session of its own shows NULL there. Own rows are keyed by
+/// the service too (amendment A11): a service acting for `spark` never sees the rows of the
+/// `spark` principal that logged in itself, nor the other way round.
+#[test]
+fn delegated_sessions_show_the_delegator() {
+    let rt = EngineRuntime::builder().build().unwrap();
+    let via = Session::builder()
+        .runtime(Arc::clone(&rt))
+        .principal(Principal::new("spark", PrincipalKind::User).with_delegator("portal"))
+        .access_policy(Arc::new(MonitorForAdmin))
+        .build()
+        .unwrap();
+    let own = session_of(&rt, "spark");
+    let admin = session_of(&rt, "admin");
+    block_on(block_on(via.sql("SELECT 1")).unwrap().collect()).unwrap();
+    block_on(block_on(own.sql("SELECT 2")).unwrap().collect()).unwrap();
+
+    let sessions = column(
+        &admin,
+        "SELECT coalesce(delegated_by, '-') FROM system.sessions WHERE principal = 'spark' \
+         ORDER BY delegated_by NULLS LAST",
+    );
+    assert_eq!(sessions, [Some("portal".to_owned()), Some("-".to_owned())]);
+    let queries = column(
+        &admin,
+        "SELECT concat(query_text, '|', coalesce(delegated_by, '-')) FROM system.queries \
+         WHERE query_text IN ('SELECT 1', 'SELECT 2') ORDER BY query_text",
+    );
+    assert_eq!(
+        queries,
+        [
+            Some("SELECT 1|portal".to_owned()),
+            Some("SELECT 2|-".to_owned())
+        ]
+    );
+
+    for (s, mine) in [(&own, "-"), (&via, "portal")] {
+        let sessions = column(s, "SELECT coalesce(delegated_by, '-') FROM system.sessions");
+        assert_eq!(
+            sessions,
+            [Some(mine.to_owned())],
+            "{mine}: own sessions only"
+        );
+        let queries = column(
+            s,
+            "SELECT coalesce(delegated_by, '-') FROM system.queries \
+             WHERE query_text IN ('SELECT 1', 'SELECT 2')",
+        );
+        assert_eq!(queries, [Some(mine.to_owned())], "{mine}: own queries only");
+    }
+}

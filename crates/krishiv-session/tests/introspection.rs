@@ -183,6 +183,37 @@ fn show_create_table() {
     );
 }
 
+/// Spark 4.2.0's `DescribeTableCommand` (`tables.scala:615`, `:687-690`): a column or partition column
+/// without a comment has a NULL comment, one with a comment its text; the section header and the
+/// `# col_name` row are literal strings, empty where Spark writes `""`.
+#[test]
+fn describe_comments_are_null_when_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE p (a INT COMMENT 'ca', b STRING, k INT COMMENT 'ck', j INT) USING parquet \
+         PARTITIONED BY (k, j)",
+    );
+    assert_eq!(
+        rows(&s, "DESCRIBE p"),
+        [
+            ["a", "int", "ca"],
+            ["b", "string", "NULL"],
+            ["k", "int", "ck"],
+            ["j", "int", "NULL"],
+            ["# Partition Information", "", ""],
+            ["# col_name", "data_type", "comment"],
+            ["k", "int", "ck"],
+            ["j", "int", "NULL"],
+        ]
+    );
+    // The `system` tables have no comments.
+    let sys = rows(&s, "DESCRIBE system.memory");
+    assert!(!sys.is_empty());
+    assert!(sys.iter().all(|r| r[2] == "NULL"), "{sys:?}");
+}
+
 #[test]
 fn describe_table_query_namespace_and_column() {
     let dir = tempfile::tempdir().unwrap();
@@ -190,6 +221,7 @@ fn describe_table_query_namespace_and_column() {
     setup(&s);
     let (names, d) = table(&s, "DESCRIBE t");
     assert_eq!(names, ["col_name", "data_type", "comment"]);
+    // A column without a comment has a NULL comment (`describeSchema`: `getComment().orNull`).
     assert_eq!(d, [["a", "int", "ca"], ["b", "string", "NULL"]]);
     let ext = rows(&s, "DESCRIBE TABLE EXTENDED t");
     assert_eq!(ext[2], ["", "", ""]);
@@ -440,7 +472,7 @@ fn column_comments_follow_columns_through_queries() {
     run(&s, "CREATE TABLE ct AS SELECT a, b AS bb, c FROM t");
     assert_eq!(
         desc("ct"),
-        // DESC prints NULL for a table column without a comment.
+        // DESC prints a NULL comment for a table column without one (`getComment().orNull`).
         pairs(&[("a", "ca"), ("bb", "cb"), ("c", "NULL")])
     );
     run(&s, "CREATE VIEW v1 AS SELECT a, b FROM t");
