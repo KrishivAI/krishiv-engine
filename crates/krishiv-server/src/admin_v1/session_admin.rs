@@ -338,7 +338,7 @@ impl AdminApi for SessionAdmin {
                 .query_infos()
                 .into_iter()
                 .filter(|q| who.monitor || q.is_owned_by(&who.principal))
-                .filter(|q| states.iter().any(|s| *s == q.state))
+                .filter(|q| states.contains(&q.state))
                 .filter(|q| request.session_id.is_empty() || q.session_id == request.session_id)
                 .filter(|q| request.principal.is_empty() || q.principal == request.principal)
                 .filter(|q| request.tag.is_empty() || tag_matches(&request.tag, &q.tags))
