@@ -323,6 +323,6 @@ pub static SERVER_ALLOWED_HOSTS: ConfigEntry = startup(
     "Comma-separated host names (or IP literals) the admin listener accepts in the `Host` header \
      when it is bound to a loopback address, besides `localhost`, `127.0.0.1` and `[::1]`. A \
      request with any other `Host` is refused with 421, which stops a web page from reaching the \
-     admin API through DNS rebinding (design P3-T066 section 3). Unset: only the loopback names.",
+     admin API through DNS rebinding. Unset: only the loopback names.",
     None,
 );

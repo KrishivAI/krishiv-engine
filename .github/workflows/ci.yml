@@ -454,6 +454,52 @@ jobs:
       - run: cargo run --locked --manifest-path tools/plan-protogen/Cargo.toml -- --check
       - run: cargo test --locked --manifest-path tools/plan-protogen/Cargo.toml
 
+  # `krishiv.admin.v1` (design P3-T066 section 6.3): the generated code is current, the snapshots are
+  # what the sources generate, and against the PR's base the surface only grew (a removed or
+  # renumbered field, a changed path or privilege fails). Before the first release that ships it,
+  # the label `admin-api-breaking` allows a non-additive change.
+  admin-protos:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'merge_group'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: $/.github/actions/setup-rust
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: tools/admin-protogen
+      - run: cargo run --locked --manifest-path tools/admin-protogen/Cargo.toml -- --check
+      - uses: $/.github/actions/setup-mold
+      # The label is read now, from the API, as the budget gate does.
+      - name: Snapshots and the additive-only check
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          if [ "$EVENT" = "pull_request" ]; then
+            flags="--base $(git merge-base "$BASE_SHA" HEAD)"
+            breaking=$(gh api "repos/$REPO/issues/$PR/labels" --jq 'any(.[]; .name == "admin-api-breaking")')
+            if [ "$breaking" = "true" ]; then flags="$flags --allow-breaking-before-release"; fi
+            cargo run --locked -p xtask -- admin-api $flags
+          else
+            cargo run --locked -p xtask -- admin-api
+          fi
+
   # The cargo-fuzz targets (`fuzz/`, a workspace of its own) only run nightly,
   # so a change to an API they call would break them unseen. Build all of them
   # here; same pinned nightly as fuzz.yml. cargo-fuzz has no --locked; the
@@ -1252,6 +1298,7 @@ jobs:
       - layering
       - connect-protos
       - plan-protos
+      - admin-protos
       - fuzz-build
       - msrv
       - docs

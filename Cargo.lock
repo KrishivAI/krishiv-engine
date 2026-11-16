@@ -6713,6 +6713,8 @@ dependencies = [
  "krishiv-exec",
  "krishiv-functions",
  "krishiv-plan",
+ "prost",
+ "prost-types",
  "serde",
  "serde_json",
  "tempfile",
