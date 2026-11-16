@@ -60,7 +60,7 @@ fn a_finished_query_leaves_a_profile_that_reads_back() {
     let q = &stored[0];
     assert_eq!(q.state, "finished");
     assert!(q.sql.as_deref().unwrap().contains("range"));
-    assert_eq!((q.profile_version, q.profile_minor), (1, 5));
+    assert_eq!((q.profile_version, q.profile_minor), (1, 6));
     let profile = QueryProfile::from_json(&q.profile).unwrap();
     assert!(!profile.metrics.operators.is_empty());
     assert_eq!(profile.identity.unwrap().principal, q.principal);

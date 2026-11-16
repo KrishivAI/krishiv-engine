@@ -24,6 +24,7 @@ use crate::metrics::{
     DriverStats, Metric, OperatorEntry, OperatorMetrics, OperatorRole, PipelineMetrics,
     QueryMemory, QueryMetrics,
 };
+use crate::planner::RowEstimate;
 
 type R<T> = Result<T, ProfileError>;
 
@@ -212,12 +213,19 @@ fn plan_json(root: &ProfileNode) -> Value {
         out.iter()
             .zip(children)
             .map(|(n, c)| {
-                json!({
+                let mut v = json!({
                     "id": n.id,
                     "name": n.name,
                     "detail": n.detail,
                     "children": c,
-                })
+                });
+                if let (Some(e), Some(o)) = (&n.estimate, v.as_object_mut()) {
+                    o.insert(
+                        "estimate".to_owned(),
+                        json!({ "rows": e.rows, "source": e.source }),
+                    );
+                }
+                v
             })
             .collect(),
     )
@@ -319,11 +327,22 @@ fn plan_of(v: &Value) -> R<ProfileNode> {
             }
             mine.push(c);
         }
+        let estimate = match o.get("estimate") {
+            None => None,
+            Some(e) => {
+                let e = obj(e, "estimate")?;
+                Some(RowEstimate {
+                    rows: u64_of(e, "rows")?,
+                    source: str_of(e, "source")?.to_owned(),
+                })
+            }
+        };
         nodes.push(Some(ProfileNode {
             id,
             name: str_of(o, "name")?.to_owned(),
             detail: str_of(o, "detail")?.to_owned(),
             children: Vec::new(),
+            estimate,
         }));
         inputs.push(mine);
     }

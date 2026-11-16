@@ -20,7 +20,7 @@ use krishiv_common::error::{KrishivError, KrishivInvalidProfileDocument};
 
 use crate::metrics::QueryMetrics;
 use crate::physical::{PhysNode, PhysicalPlan, SHARED_PLAN, WITH_SHARED};
-use crate::planner::ExplainNode;
+use crate::planner::{ExplainNode, RowEstimate};
 
 pub use text::TextOptions;
 
@@ -32,9 +32,9 @@ pub const PROFILE_VERSION: u64 = 1;
 /// The minor version this build writes: it counts additive changes within
 /// [`PROFILE_VERSION`] (0 or absent: the first v1; 1: `usage`; 2: the scan read
 /// costs, `query.scan_reads_in_flight_mean` and the `scan_read*` operator
-/// extras; 3: each pipeline's `max_slice_ns` and `stalls`; 4: `trace`; 5: `usage.principal` and `usage.tags`). A reader ignores
-/// members it does not know, so a later minor still loads.
-pub const PROFILE_MINOR: u64 = 5;
+/// extras; 3: each pipeline's `max_slice_ns` and `stalls`; 4: `trace`; 5: `usage.principal` and `usage.tags`; 6: each
+/// plan node's `estimate`). A reader ignores members it does not know, so a later minor still loads.
+pub const PROFILE_MINOR: u64 = 6;
 
 /// A node of the profiled plan: `EXPLAIN`'s node with its id.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,6 +51,11 @@ pub struct ProfileNode {
     pub detail: String,
     /// Its inputs.
     pub children: Vec<ProfileNode>,
+    /// The planner's estimate of its output rows (the `estimate` member,
+    /// minor 6): next to the operators' `rows_out` it is the node's
+    /// estimated vs actual cardinality. `None` where the planner made none
+    /// ([`ExplainNode::estimate`]).
+    pub estimate: Option<RowEstimate>,
 }
 
 impl ProfileNode {
@@ -66,6 +71,7 @@ impl ProfileNode {
                 name: SHARED_PLAN.to_owned(),
                 detail: format!("#{}", s.id.0),
                 children: vec![annotate(&s.plan, &s.explain, &mut next)],
+                estimate: None,
             })
             .collect();
         let root = annotate(plan.root(), plan.explain(), &mut next);
@@ -78,6 +84,7 @@ impl ProfileNode {
             name: WITH_SHARED.to_owned(),
             detail: String::new(),
             children,
+            estimate: None,
         }
     }
 
@@ -87,6 +94,7 @@ impl ProfileNode {
             name: e.name.clone(),
             detail: e.detail.clone(),
             children: e.children.iter().map(Self::unmatched).collect(),
+            estimate: e.estimate.clone(),
         }
     }
 
@@ -121,6 +129,7 @@ fn annotate(p: &PhysNode, e: &ExplainNode, next: &mut u32) -> ProfileNode {
                     name: e.name.clone(),
                     detail: e.detail.clone(),
                     children: vec![annotate(p, inner, next)],
+                    estimate: None,
                 },
                 _ => annotate(p, e, next),
             })
@@ -136,6 +145,7 @@ fn annotate(p: &PhysNode, e: &ExplainNode, next: &mut u32) -> ProfileNode {
         name: e.name.clone(),
         detail: e.detail.clone(),
         children,
+        estimate: e.estimate.clone(),
     }
 }
 

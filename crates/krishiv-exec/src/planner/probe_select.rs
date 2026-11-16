@@ -319,11 +319,7 @@ mod tests {
     #[test]
     fn a_filter_and_its_line_give_way_to_their_input() {
         let mut node = filter_over_one_row();
-        let mut explain = ExplainNode {
-            name: "Filter".to_owned(),
-            detail: "true".to_owned(),
-            children: vec![ExplainNode::leaf("OneRow", "")],
-        };
+        let mut explain = ExplainNode::new("Filter", "true", vec![ExplainNode::leaf("OneRow", "")]);
         assert_eq!(
             take_filter_input(&mut node, &mut explain, 0).as_deref(),
             Some("true")

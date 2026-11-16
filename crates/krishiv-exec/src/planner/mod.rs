@@ -57,7 +57,7 @@ use krishiv_udf_sdk::UdfLibrary;
 
 pub use build::DefaultPlanner;
 pub(crate) use build::concat_schemas;
-pub use explain::ExplainNode;
+pub use explain::{ExplainNode, RowEstimate};
 pub use file_table::FileTable;
 pub use ndv_sample::{SampleOptions, SampleOutcome, SampleResult};
 pub use row_level::{

@@ -9,7 +9,7 @@
   "properties": {
     "format": { "const": "krishiv.query-profile" },
     "version": { "const": 1 },
-    "minor": { "$ref": "#/$defs/u64", "description": "Additive revisions within version 1 (absent = 0). 1 adds `usage`, 2 adds `query.scan_reads_in_flight_mean` and the `scan_read*` operator extras, 3 adds each pipeline's `max_slice_ns` and `stalls`, 4 adds `trace`, 5 adds `usage.principal` and `usage.tags`. A reader ignores members it does not know." },
+    "minor": { "$ref": "#/$defs/u64", "description": "Additive revisions within version 1 (absent = 0). 1 adds `usage`, 2 adds `query.scan_reads_in_flight_mean` and the `scan_read*` operator extras, 3 adds each pipeline's `max_slice_ns` and `stalls`, 4 adds `trace`, 5 adds `usage.principal` and `usage.tags`, 6 adds each plan node's `estimate`. A reader ignores members it does not know." },
     "planning": { "$ref": "#/$defs/planning", "description": "Present for EXPLAIN ANALYZE VERBOSE (added in minor 1)." },
     "trace": {
       "type": "object",
@@ -118,7 +118,17 @@
           },
           "name": { "type": "string" },
           "detail": { "type": "string" },
-          "children": { "type": "array", "items": { "$ref": "#/$defs/u64" }, "description": "Positions in `plan`, each greater than this element's." }
+          "children": { "type": "array", "items": { "$ref": "#/$defs/u64" }, "description": "Positions in `plan`, each greater than this element's." },
+          "estimate": {
+            "type": "object",
+            "description": "The planner's estimate of the node's output rows (added in minor 6), to compare with its operators' `rows_out`. Present on the node that produces a logical relation's rows; absent on nodes the planner adds below it (exchanges, a partial aggregate), on headings and in a plan decoded from the plan codec.",
+            "required": ["rows", "source"],
+            "additionalProperties": false,
+            "properties": {
+              "rows": { "$ref": "#/$defs/u64" },
+              "source": { "type": "string", "description": "`statistics` when every table below the node reports statistics, `default` when some table's row count is a default. A reader keeps an unknown string." }
+            }
+          }
         }
       }
     },

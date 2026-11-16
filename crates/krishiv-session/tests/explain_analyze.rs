@@ -463,3 +463,46 @@ fn a_recursive_cte_reports_its_rounds() {
     assert!(has("rounds=6"), "{text}");
     assert!(has("rows=5"), "{text}");
 }
+
+/// Each plan node that produces a relation's rows carries the planner's
+/// estimate next to what its operators counted (profile minor 6): the
+/// in-memory tables report their row counts, so the scans' estimates are
+/// exact and come from statistics.
+#[test]
+fn profile_nodes_carry_the_planners_row_estimates() {
+    let s = session(2);
+    let df = block_on(s.sql("SELECT cust FROM orders WHERE amount >= 0")).unwrap();
+    let (got, profile) = block_on(df.collect_with_profile()).unwrap();
+    assert_eq!(rows(&got), 2_000);
+    let doc = profile.to_json_value();
+    assert_eq!(doc["minor"], 6);
+    let plan = doc["plan"].as_array().cloned().unwrap_or_default();
+    let estimated: Vec<_> = plan.iter().filter_map(|n| n.get("estimate")).collect();
+    assert!(!estimated.is_empty(), "{doc}");
+    for e in &estimated {
+        assert_eq!(e["source"], "statistics", "{doc}");
+    }
+    let scan = plan
+        .iter()
+        .find(|n| n["name"].as_str().is_some_and(|n| n.contains("Scan")))
+        .unwrap_or_else(|| panic!("no scan in {doc}"));
+    assert!(scan["estimate"]["rows"].as_u64().is_some(), "{doc}");
+
+    // A join and an aggregate are estimated too; the JSON reads back.
+    let df = block_on(s.sql(QUERY)).unwrap();
+    let (_, profile) = block_on(df.collect_with_profile()).unwrap();
+    let doc = profile.to_json_value();
+    let named = |name: &str| {
+        doc["plan"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|n| n["name"] == name)
+            .filter(|n| n.get("estimate").is_some())
+            .count()
+    };
+    assert!(named("HashJoin") >= 1, "{doc}");
+    assert!(named("HashAggregate") >= 1, "{doc}");
+    let back = QueryProfile::from_json(&profile.to_json()).unwrap();
+    assert_eq!(back.plan, profile.plan);
+}
