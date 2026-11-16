@@ -621,11 +621,13 @@ impl Memo {
                 // A reader of a definition `ShareCte` made: the body this
                 // pass left the `isnotnull` out of before it was shared, so a
                 // second `optimize` leaves it out too (fixed point; TPC-DS
-                // q23 under a session configuration). A user's `WITH`
+                // q23 and q59 under a session configuration). A user's `WITH`
                 // reference is not shared by this pass and takes the filter.
-                PlanNode::CteRef(r) if r.name.starts_with(crate::share_cte::SHARED_PREFIX) => {
-                    return true;
-                }
+                PlanNode::CteRef(r) if is_shared_ref(r) => return true,
+                // Pushdown moves a filter through a join into the input that
+                // holds its column; only `ShareCte`'s references are looked
+                // for there (TPC-DS q59), so the first pass is unchanged.
+                PlanNode::Join { .. } => return reaches_shared_ref(&at),
                 _ => return false,
             };
             at = next;
@@ -750,6 +752,38 @@ impl Memo {
         );
         (resolved, set)
     }
+}
+
+/// Whether `r` reads a definition `ShareCte` made.
+fn is_shared_ref(r: &krishiv_plan::CteRef) -> bool {
+    r.name.starts_with(crate::share_cte::SHARED_PREFIX)
+}
+
+/// Whether a `ShareCte` reference is below `plan` through single-input
+/// operators and joins (where pushdown can carry a filter).
+fn reaches_shared_ref(plan: &Arc<LogicalPlan>) -> bool {
+    let mut stack = vec![Arc::clone(plan)];
+    while let Some(at) = stack.pop() {
+        match &at.node {
+            PlanNode::CteRef(r) if is_shared_ref(r) => return true,
+            PlanNode::Join { left, right, .. } => {
+                stack.push(Arc::clone(left));
+                stack.push(Arc::clone(right));
+            }
+            PlanNode::Project { input, .. }
+            | PlanNode::Filter { input, .. }
+            | PlanNode::Aggregate { input, .. }
+            | PlanNode::Sort { input, .. }
+            | PlanNode::SubqueryAlias { input, .. }
+            | PlanNode::Shift { input, .. }
+            | PlanNode::JoinHint { input, .. }
+            | PlanNode::Repartition { input, .. }
+            | PlanNode::Window { input, .. }
+            | PlanNode::Generate { input, .. } => stack.push(Arc::clone(input)),
+            _ => {}
+        }
+    }
+    false
 }
 
 /// `e` with every column id raised by `offset` (what a [`PlanNode::Shift`]
