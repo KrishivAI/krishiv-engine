@@ -83,6 +83,8 @@ pub(super) fn conf_values<'k>(config: &Config, keys: &[&'k str]) -> BTreeMap<&'k
 #[derive(Clone)]
 pub(crate) struct QueryEnv {
     pub(crate) config: Arc<Config>,
+    /// Set by a file write, whose profile is recorded after its commit: see [`crate::profile_history::HistoryHold`].
+    pub(crate) history_hold: Option<Arc<crate::profile_history::HistoryHold>>,
     /// The query's I/O context: every read, scan and write of the query goes
     /// through it, so its counters are the query's own.
     pub(crate) io: krishiv_io::IoContext,
@@ -128,6 +130,10 @@ pub(crate) struct QueryEnv {
     /// drawn once per DataFrame and kept when it is analyzed again, so its
     /// actions sample the same rows.
     pub(crate) sample_salt: u64,
+    /// A trial analysis (P3 PR-14d): its read denials are answers, not refusals, so they write no
+    /// `krishiv::audit` record ([`crate::access::audit_read`]). Only a caller that falls back to
+    /// an analysis of its own, which is audited, sets it.
+    pub(crate) quiet_denials: bool,
 }
 
 /// A batch query's result rows: insert-only, so a weight other than 1 is a

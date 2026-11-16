@@ -14,7 +14,7 @@
 //!
 //! For a batch of `rows` rows whose lists hold `total` elements, the
 //! flattened batch has `total` rows: the lambda's element columns are the
-//! lists' child values, its index column (two-variable `transform`) counts
+//! lists' child values, its index column (two-variable `transform` or `filter`) counts
 //! positions within each list, and every captured outer column repeats its
 //! row's value per element (through the lists' offsets). A vectorized body
 //! runs once over that batch — never one evaluation per element — and the
@@ -454,7 +454,7 @@ fn compile_unary(name: &str, f: &ResolvedFunction, input: Input<'_>) -> Result<A
     let ArrowType::List(field) = array.data_type().clone() else {
         return Err(internal("a higher-order call over a non-list"));
     };
-    let index = name == "transform" && params.len() == 2;
+    let index = matches!(name, "transform" | "filter") && params.len() == 2;
     let mut refs = Refs::default();
     collect(
         body,

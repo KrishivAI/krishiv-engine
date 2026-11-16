@@ -158,12 +158,12 @@ fn is_variant_group(t: &TypePtr) -> bool {
 /// (three levels), or the repeated child itself (the legacy two levels, or
 /// a repeated variant group).
 fn list_element(t: &TypePtr) -> Option<&TypePtr> {
-    let repeated = t.get_fields().first()?;
+    let repeated = group_fields(t).first()?;
     // parquet-format's backward-compatibility rules: a one-field group
     // named `array` or `<list>_tuple` is the element itself.
     let legacy = repeated.name() == "array" || repeated.name() == format!("{}_tuple", t.name());
-    match repeated.get_fields() {
-        [element] if repeated.is_group() && !is_variant_group(repeated) && !legacy => Some(element),
+    match group_fields(repeated) {
+        [element] if !is_variant_group(repeated) && !legacy => Some(element),
         _ => Some(repeated),
     }
 }
@@ -196,10 +196,9 @@ fn parquet_declared(arrow: &DataType, t: &TypePtr) -> SparkType {
             SparkType::Array(Arc::new(krishiv_types::ArrayType::new(declared, true)))
         }
         DataType::Map(entries, _) => {
-            let value = t
-                .get_fields()
+            let value = group_fields(t)
                 .first()
-                .and_then(|kv| kv.get_fields().get(1))
+                .and_then(|kv| group_fields(kv).get(1))
                 .zip(match entries.data_type() {
                     DataType::Struct(kv) if kv.len() == 2 => Some(Arc::clone(&kv[1])),
                     _ => None,
@@ -217,10 +216,17 @@ fn parquet_declared(arrow: &DataType, t: &TypePtr) -> SparkType {
     }
 }
 
+/// The children of `t`: none for a primitive. The parquet crate's
+/// `get_fields` panics on a primitive, which a legacy two-level list's
+/// repeated element (`repeated int32 array`) is.
+fn group_fields(t: &Type) -> &[TypePtr] {
+    if t.is_group() { t.get_fields() } else { &[] }
+}
+
 /// Whether a group has the `metadata` and `value` (or `typed_value`)
 /// children of a variant.
 fn has_children(t: &TypePtr) -> bool {
-    let names: Vec<&str> = t.get_fields().iter().map(|c| c.name()).collect();
+    let names: Vec<&str> = group_fields(t).iter().map(|c| c.name()).collect();
     names.contains(&"metadata") && (names.contains(&"value") || names.contains(&"typed_value"))
 }
 
@@ -704,8 +710,8 @@ fn annotate_type(t: &TypePtr, arrow: &DataType) -> FormatResult<TypePtr> {
         DataType::List(e) | DataType::LargeList(e) => t
             .get_fields()
             .iter()
-            .map(|repeated| match repeated.get_fields() {
-                [element] if repeated.is_group() => {
+            .map(|repeated| match group_fields(repeated) {
+                [element] => {
                     let element = annotate_type(element, e.data_type())?;
                     rebuild_group(repeated, vec![element], None)
                 }
@@ -929,5 +935,59 @@ mod tests {
             assert_eq!(got.data_type(), want.data_type(), "{}", want.name());
         }
         assert_eq!(variants.roots.len(), 3);
+    }
+
+    /// PY-043: parquet-mr's legacy two-level list (Spark's own
+    /// `users.parquet`, Avro-written: `repeated int32 array` directly in the
+    /// `LIST` group) is walked without calling `get_fields` on a primitive
+    /// (the parquet crate panics), as is a repeated primitive under a `MAP`.
+    #[test]
+    fn legacy_two_level_list_is_walked_without_a_panic() {
+        let message = "message example.avro.User {
+            required binary name (STRING);
+            optional binary favorite_color (STRING);
+            required group favorite_numbers (LIST) { repeated int32 array; }
+        }";
+        let t = parquet::schema::parser::parse_message_type(message).unwrap();
+        let descr = SchemaDescriptor::new(Arc::new(t));
+        let decoded = parquet::arrow::parquet_to_arrow_schema(&descr, None).unwrap();
+        let (engine, variants) = Variants::engine_fields(&descr, None, decoded.fields());
+        assert_eq!(engine.len(), decoded.fields().len());
+        for (got, want) in engine.iter().zip(decoded.fields()) {
+            assert_eq!(got.data_type(), want.data_type(), "{}", want.name());
+        }
+        assert!(variants.roots.is_empty());
+        // A `MAP` whose repeated child is a primitive (arrow-rs refuses to
+        // decode it; the walk itself must not panic).
+        let bad_map = parquet::schema::parser::parse_message_type(
+            "message m { optional group bad_map (MAP) { repeated int32 key_value; } }",
+        )
+        .unwrap();
+        let entries = Arc::new(Field::new(
+            "key_value",
+            DataType::Struct(
+                vec![
+                    Arc::new(Field::new("key", DataType::Int32, false)),
+                    Arc::new(Field::new("value", DataType::Int32, true)),
+                ]
+                .into(),
+            ),
+            false,
+        ));
+        assert!(matches!(
+            parquet_declared(&DataType::Map(entries, false), &bad_map.get_fields()[0]),
+            SparkType::Map(_)
+        ));
+        // The writer's annotation walk, over a two-level list holding a variant.
+        let fields = vec![Arc::new(Field::new(
+            "favorite_numbers",
+            DataType::List(Arc::new(SparkType::Variant.to_arrow_field("array", true))),
+            false,
+        ))];
+        let two_level = parquet::schema::parser::parse_message_type(
+            "message m { required group favorite_numbers (LIST) { repeated int32 array; } }",
+        )
+        .unwrap();
+        annotate(SchemaDescriptor::new(Arc::new(two_level)), &fields).unwrap();
     }
 }

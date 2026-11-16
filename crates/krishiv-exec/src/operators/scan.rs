@@ -391,7 +391,9 @@ impl MemoryScan {
             if piece.num_rows() == 0 {
                 break;
             }
-            let mask = filter.evaluate_in(piece.data(), partition)?;
+            // Spark's index of the morsel's partition: a `UNION ALL` branch
+            // numbers its own from 0, as a `Filter` above the scan does.
+            let mask = filter.evaluate_in(piece.data(), partition.wrapping_sub(local.base))?;
             piece = piece.filter(&mask)?;
         }
         // After the pushed filters, as Spark evaluates a runtime filter

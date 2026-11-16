@@ -217,7 +217,8 @@ impl Operator for ProbeOp {
         let disk = ready.spilled().then(|| Box::new(Disk::new(ctx)));
         Ok(Box::new(ProbeLocal {
             ready,
-            partition: ctx.partition(),
+            // Spark's partition index (a `UNION ALL` branch numbers its own).
+            partition: ctx.partition().wrapping_sub(ctx.numbering_base()),
             cur: Pairing::default(),
             disk,
         }))
