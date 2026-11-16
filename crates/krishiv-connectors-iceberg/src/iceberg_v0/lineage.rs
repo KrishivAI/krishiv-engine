@@ -139,6 +139,10 @@ pub(super) fn constants_of(e: &DataFileEntry) -> [ScalarValue; 2] {
 
 /// The lineage columns are refused on a table of `format_version` below 3
 /// (see the module docs) and when the table has a column of their name.
+/// The second refusal is Krishiv's own, not a cited Java or spec rule (the
+/// spec reserves the field ids, not the names; no Java check was supplied):
+/// the scan's output and a rewrite's batches would hold two columns of one
+/// name, which its by-name projection cannot tell apart.
 ///
 /// # Errors
 /// `KRISHIV_UNSUPPORTED_FEATURE`.
