@@ -456,6 +456,12 @@ pub enum PhysNode {
     /// An aggregate whose calls are all grouped-aggregate Python UDFs, over
     /// `input` clustered by the key columns and sorted by them: per group,
     /// the values of `key_values` in its first row, then one value per call.
+    ///
+    /// With `window`, a window aggregate of Python UDFs (Spark's
+    /// `ArrowWindowPythonExec`): `keys` are the window's partitioning, the
+    /// input is sorted by them then the window's ordering, `key_values` is
+    /// empty, and the output is every input column, then one value per row
+    /// per call.
     PythonAggregate {
         /// The input.
         input: Box<PhysNode>,
@@ -468,6 +474,12 @@ pub enum PhysNode {
         key_values: Vec<usize>,
         /// The calls, in output column order after the keys.
         calls: Vec<PythonCallPlan>,
+        /// `Some` for a window aggregate: per call, whether its frame is
+        /// bounded (not the whole partition), so its first two arguments
+        /// are each row's frame start and end (`INT` row indexes within the
+        /// partition, the end exclusive), as Spark's
+        /// `wrap_bounded_window_agg_pandas_udf` takes them.
+        window: Option<Vec<bool>>,
     },
     /// `TABLESAMPLE`: each row of `input` kept when its draw of input
     /// partition `i`'s `XORShiftRandom(seed + i)` is in `[lower, upper)`
@@ -1159,7 +1171,7 @@ plan_data!(enum PhysNode {
     PythonMap { input, udf },
     PythonGroupMap { input, keys, udf },
     PythonCoGroupMap { input, keys, side, udf },
-    PythonAggregate { input, layout, keys, key_values, calls },
+    PythonAggregate { input, layout, keys, key_values, calls, window },
     Generate { input, layout, kind, outer, arg, subqueries },
     Expand { input, layout, projections, nullable, subqueries },
     Sort { input, keys },

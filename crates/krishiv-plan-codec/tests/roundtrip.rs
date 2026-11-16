@@ -626,6 +626,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "python_group_map"
             | "python_cogroup_map"
             | "python_aggregate"
+            | "python_window"
             | "python_udtf_generate"
             | "python_eval_types"
             | "table_write"

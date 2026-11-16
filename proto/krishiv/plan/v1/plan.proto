@@ -306,6 +306,17 @@ message PythonAggregateNode {
   repeated uint64 keys = 3;
   repeated PythonCall calls = 4;
   repeated uint64 key_values = 5;
+  // feature: python_udf_windows
+  PythonWindow window = 6;
+}
+
+// feature: python_udf_windows
+// A `PythonAggregateNode` in window form (Spark's `ArrowWindowPythonExec`):
+// `keys` are the window's partitioning, the output every input row with one
+// value per call; per call, whether its frame is bounded (its first two
+// arguments are each row's frame start and end).
+message PythonWindow {
+  repeated bool bounded = 1;
 }
 
 // feature: python_udf_relations

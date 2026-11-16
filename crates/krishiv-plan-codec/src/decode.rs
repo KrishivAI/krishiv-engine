@@ -595,6 +595,7 @@ impl Decoder {
                 layout: layout(&p.layout),
                 keys: usizes(&p.keys)?,
                 key_values: usizes(&p.key_values)?,
+                window: p.window.as_ref().map(|w| w.bounded.clone()),
                 calls: p
                     .calls
                     .iter()

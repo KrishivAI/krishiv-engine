@@ -375,11 +375,15 @@ impl Encoder {
                 keys,
                 key_values,
                 calls,
+                window,
             } => Kind::PythonAggregate(pb::PythonAggregateNode {
                 input: self.node_index(input)?,
                 layout: layout(l),
                 keys: indexes(keys),
                 key_values: indexes(key_values),
+                window: window.as_ref().map(|bounded| pb::PythonWindow {
+                    bounded: bounded.clone(),
+                }),
                 calls: calls
                     .iter()
                     .map(|c| {

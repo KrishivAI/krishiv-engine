@@ -161,6 +161,7 @@ registry! {
     (percentile_aggregates, PercentileAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The percentile family and `approx_count_distinct` aggregates (`percentile`, `percentile_approx`, `percentile_disc`, `approx_count_distinct` with their folded parameters)."),
     (python_udf, PythonUdf, POST_MIGRATION_READER_VERSION, Semantic, "Python UDF calls (`PythonUdfFunction`, by name and registration version) and the `PythonEval` node evaluating them; a worker without a UDF runtime refuses the plan."),
     (python_udf_relations, PythonUdfRelations, POST_MIGRATION_READER_VERSION, Semantic, "The Python UDF relation kinds (design P3-T085): the `PythonMap`, `PythonGroupMap`, `PythonCoGroupMap` and `PythonAggregate` nodes, the Python UDTF generator and the eval types beyond the scalar ones (Spark's codes 201-217, 251-254, 300-302); a worker without a runtime for them refuses the plan."),
+    (python_udf_windows, PythonUdfWindows, POST_MIGRATION_READER_VERSION, Semantic, "A `PythonAggregate` node in window form (design P3-T085 §3.1, Spark's `ArrowWindowPythonExec`): a window aggregate of Python UDFs (codes 203, 253), every input row with one value per call, a bounded frame's rows with their frame bounds; an older reader would run it as a grouped aggregate."),
     (range, Range, POST_MIGRATION_READER_VERSION, Semantic, "The `Range` node (`range(start, end, step, numSlices)`)."),
     (rust_udaf, RustUdaf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust aggregate UDF (`UdafCall`, by name and version, with its argument and state columns)."),
     (rust_udf, RustUdf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust UDF (`UdfFunction`, by name and version)."),
@@ -464,10 +465,13 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             PhysNode::WindowGroupLimit { .. } => Some(Feature::WindowGroupLimit),
             PhysNode::PythonEval { .. } => Some(Feature::PythonUdf),
             PhysNode::Sample { .. } => Some(Feature::Sample),
+            PhysNode::PythonAggregate {
+                window: Some(_), ..
+            } => Some(Feature::PythonUdfWindows),
             PhysNode::PythonMap { .. }
             | PhysNode::PythonGroupMap { .. }
             | PhysNode::PythonCoGroupMap { .. }
-            | PhysNode::PythonAggregate { .. } => Some(Feature::PythonUdfRelations),
+            | PhysNode::PythonAggregate { window: None, .. } => Some(Feature::PythonUdfRelations),
             PhysNode::TableWrite { .. } => Some(Feature::TableWrite),
             // A partitioned write needs a reader that
             // lays files out by partition (the older fields would be
