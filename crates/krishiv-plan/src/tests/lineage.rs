@@ -348,8 +348,8 @@ fn python_udf_relations_are_opaque_over_every_input_column() {
 
     drop(nodes);
 
-    // A Python relation under a `Shift` (a self-join of a shared subtree): the instance's outputs, its
-    // input's columns and its keys all read `id + offset`.
+    // A Python relation under a `Shift` (a self-join of a shared subtree): the instance's outputs read
+    // `id + offset` (ids 1100 and 1101 resolve). Its input and keys reach the same leaves, so only the outputs are pinned.
     let group_map = Arc::new(LogicalPlan::new(PlanNode::GroupMap {
         input: Arc::clone(a.plan.root()),
         keys: vec![Arc::clone(&x)],
@@ -383,7 +383,11 @@ fn python_udf_relations_are_opaque_over_every_input_column() {
         .iter()
         .filter(|(k, _)| *k == FilterKind::GroupBy)
         .collect();
-    assert_eq!(group_by.len(), 1, "both instances group by t.x");
+    assert_eq!(
+        group_by.len(),
+        1,
+        "both instances group by t.x, deduplicated"
+    );
 
     // A Python UDTF under LATERAL: the call over `x` is the generator's argument.
     let call = Arc::new(Expr::new(ExprNode::Resolved(
