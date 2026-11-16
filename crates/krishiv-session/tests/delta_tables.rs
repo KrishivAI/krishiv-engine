@@ -423,6 +423,12 @@ fn a_refused_table_is_named_as_delta_spark_names_it() {
         "CREATE TABLE refused USING delta LOCATION '{path}'"
     )))
     .unwrap();
+    for view in ["`a.b`", "`plain`"] {
+        block_on(s.sql(&format!(
+            "CREATE TEMPORARY VIEW {view} USING delta OPTIONS (path '{path}')"
+        )))
+        .unwrap();
+    }
     // A new commit adds the unknown feature, as the probe's did.
     std::fs::write(
         t.last("json"),
@@ -454,6 +460,17 @@ fn a_refused_table_is_named_as_delta_spark_names_it() {
         &path,
         &skip,
     );
+    // A temporary view is named by its path, as a path read is, even when its back-quoted
+    // name holds a `.` (review finding 10: decided by the entry's kind, never the key's spelling).
+    for view in ["`a.b`", "`plain`"] {
+        let e = error(&s, &format!("SELECT * FROM {view}"));
+        assert_oracle_error(
+            &e,
+            &session_record("refused_path_sql")["error"],
+            &path,
+            &skip,
+        );
+    }
 }
 
 #[test]
