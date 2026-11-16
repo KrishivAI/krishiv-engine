@@ -692,6 +692,10 @@ pub(super) async fn stage(
         None => (plan.touched.clone(), HashSet::new()),
     };
     let read_predicate = plan.read_predicate.clone();
+    let footer = dvs
+        .as_ref()
+        .map(|d| d.footer_records.clone())
+        .unwrap_or_default();
     let (removes, dv_updates, actions, dv_actions, also_read) = engine
         .delta_blocking(move |e| {
             let exact = match &whole {
@@ -769,7 +773,7 @@ pub(super) async fn stage(
                 }
                 if dv_keep.iter().any(|k| *k) {
                     dv_out.push(StagedRemoves {
-                        scan_rows: scan_rows.clone(),
+                        scan_rows: super::dv::with_footer_stats(scan_rows.clone(), &footer)?,
                         selection: dv_keep,
                     });
                 }

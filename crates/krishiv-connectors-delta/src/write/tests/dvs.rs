@@ -377,3 +377,236 @@ fn a_failure_before_the_commit_deletes_the_vector_file() {
     assert_eq!(env.latest(), version);
     assert_eq!(vector_files(&env), before, "the vector file was deleted");
 }
+
+/// A merge-on-read `UPDATE`-shaped rewrite: `marks` deleted, `written` rows written (their row
+/// ids those of `marks`, one each), through `rl`.
+fn update(
+    env: &Env,
+    rl: &Arc<dyn RowLevelTable>,
+    marks: &[(Vec<u8>, i64)],
+    written: &[(i64, &str, i32)],
+    write_id: &str,
+) -> Result<(), KrishivError> {
+    let n = marks.len();
+    let batch = RecordBatch::try_new(
+        schema(),
+        vec![
+            Arc::new(Int64Array::from(
+                (0..n)
+                    .map(|i| written.get(i).map(|w| w.0))
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(StringArray::from(
+                (0..n)
+                    .map(|i| written.get(i).map(|w| w.1))
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(Int32Array::from(
+                (0..n)
+                    .map(|i| written.get(i).map(|w| w.2))
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(BinaryViewArray::from(
+                marks
+                    .iter()
+                    .map(|r| Some(r.0.as_slice()))
+                    .collect::<Vec<_>>(),
+            )),
+            Arc::new(Int64Array::from(
+                marks.iter().map(|r| Some(r.1)).collect::<Vec<_>>(),
+            )),
+            Arc::new(BooleanArray::from(
+                (0..n).map(|i| i < written.len()).collect::<Vec<_>>(),
+            )),
+        ],
+    )
+    .map_err(|e| {
+        KrishivError::from(krishiv_common::error::InternalError {
+            message: e.to_string(),
+        })
+    })?;
+    let mut touched: Vec<Vec<u8>> = marks.iter().map(|r| r.0.clone()).collect();
+    touched.sort();
+    touched.dedup();
+    let mut request = RowLevelWrite::new(
+        RowLevelOperation::Update,
+        "`t`",
+        schema(),
+        touched,
+        Some(Arc::new(eq("id", Literal::Long(2)))),
+    );
+    request.write_id = Some(write_id.to_owned());
+    for (k, v) in [
+        (ROW_LEVEL_AFFECTED_OPTION, n.to_string()),
+        (ROW_LEVEL_ALIAS_OPTION, "t".to_owned()),
+        (ROW_LEVEL_CONDITION_OPTION, "id = 2".to_owned()),
+        (MERGE_ON_READ_OPTION, "true".to_owned()),
+    ] {
+        request.options.insert(k.to_owned(), v);
+    }
+    let sink = rl.rewriter(&request)?;
+    let input = krishiv_exec::planner::MemoryTable::new(
+        schema(),
+        vec![krishiv_types::batch::Batch::new(batch)],
+    )
+    .scan()?
+    .build(ScanPushdowns::default())?;
+    let out = env.run(Arc::new(Writing {
+        input: Arc::new(Leaf(input)),
+        sink,
+    }));
+    assert_eq!(
+        env.query_pool.reserved(),
+        0,
+        "the rewrite gave its memory back"
+    );
+    out.map(drop)
+}
+
+/// The fixture's first file (ids 1 to 3) with its statistics removed from the log.
+fn without_statistics(env: &Env) {
+    let path = env.dir.join("_delta_log/00000000000000000001.json");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let lines: Vec<String> = text
+        .lines()
+        .map(|l| {
+            let mut v: serde_json::Value = serde_json::from_str(l).unwrap();
+            if let Some(add) = v.get_mut("add").and_then(serde_json::Value::as_object_mut) {
+                add.remove("stats");
+            }
+            v.to_string()
+        })
+        .collect();
+    std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+    let crc = env.dir.join("_delta_log/00000000000000000001.crc");
+    let _ = std::fs::remove_file(crc);
+}
+
+/// delta-spark's rule for a file whose statistics lack `numRecords`
+/// (`tests/fixtures/delta-4.4.1/dvs-no-stats/NOSTATS.json`): the statement commits, the file's
+/// new add carries the footer's row count, and a file whose every row goes keeps a vector of
+/// all its rows (only statistics prove a file is fully replaced).
+#[test]
+fn a_file_without_statistics_gets_the_footer_count_and_is_never_removed_whole() {
+    let env = Env::fixture("dvs/unpartitioned/before");
+    without_statistics(&env);
+    let table = env.open().unwrap();
+    let file = row_files(&env, &table, RowLevelOperation::Delete)
+        .into_iter()
+        .find(|f| f.0 == 1)
+        .unwrap()
+        .1;
+    assert!(
+        table
+            .units()
+            .iter()
+            .any(|u| u.path.as_bytes() == file && u.records.is_none())
+    );
+    let rl = table.row_level(RowLevelOperation::Delete).unwrap();
+    delete(
+        &env,
+        &rl,
+        &[1, 2, 3],
+        ("id <= 3", eq("id", Literal::Long(3))),
+        "dv-no-stats",
+    )
+    .unwrap();
+    let log = env.log(env.latest());
+    let path = std::str::from_utf8(&file).unwrap();
+    let add = log
+        .iter()
+        .filter_map(|a| a.get("add"))
+        .find(|a| a["path"] == path)
+        .expect("the file is added again with its vector, not removed");
+    assert_eq!(add["deletionVector"]["cardinality"], 3);
+    let stats: serde_json::Value = serde_json::from_str(add["stats"].as_str().unwrap()).unwrap();
+    assert_eq!(stats["numRecords"], 3);
+    assert_eq!(stats["tightBounds"], false);
+    let left = ids(&env);
+    assert!(!left.contains(&1) && !left.contains(&3) && left.contains(&4));
+}
+
+/// A merge-on-read rewrite whose marks the pool cannot hold fails with the memory class, gives
+/// the pool back, writes no file and leaves the version.
+#[test]
+fn marks_the_pool_cannot_hold_fail_the_statement_cleanly() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("t");
+    super::copy_dir(&super::fixtures().join("dvs/unpartitioned/before"), &dir);
+    let env = Env::at_with(
+        tmp,
+        dir,
+        &krishiv_memory::MemoryConfig {
+            limit: Some(4 << 20),
+            quantum: 64 << 10,
+            ..krishiv_memory::MemoryConfig::default()
+        },
+    );
+    let (version, before) = (env.latest(), vector_files(&env));
+    let file = row_files(&env, &env.open().unwrap(), RowLevelOperation::Delete)
+        .into_iter()
+        .find(|f| f.0 == 2)
+        .unwrap()
+        .1;
+    // Two million marks, one per 2^16-row container: an 8 MiB bitmap bound at least, twice the
+    // pool (the batch itself is under 1 MiB of views over one path).
+    let marks: Vec<(Vec<u8>, i64)> = (0..2_000_000_i64)
+        .map(|i| (file.clone(), i * 70_000))
+        .collect();
+    let rl = env
+        .open()
+        .unwrap()
+        .row_level(RowLevelOperation::Delete)
+        .unwrap();
+    let err = update(&env, &rl, &marks, &[], "dv-marks-oom").unwrap_err();
+    assert_eq!(err.sql_state(), Some("53200"), "{err}");
+    assert_eq!(env.latest(), version);
+    assert_eq!(vector_files(&env), before);
+    assert_eq!(env.query_pool.reserved(), 0);
+}
+
+/// A statement cancelled while it writes its vector file (after a vector, before the file is
+/// finished): the version stays, the vector file and the written data file are deleted, the
+/// pool is back to zero.
+#[test]
+fn a_cancel_while_vectors_are_written_leaves_no_file() {
+    let env = Env::fixture("dvs/unpartitioned/before");
+    let (version, vectors, data) = (
+        env.latest(),
+        vector_files(&env),
+        super::streaming::data_files(&env.dir),
+    );
+    let table = env.open().unwrap();
+    let files = row_files(&env, &table, RowLevelOperation::Update);
+    let marks: Vec<(Vec<u8>, i64)> = files
+        .iter()
+        .filter(|f| f.0 == 2 || f.0 == 11)
+        .map(|f| (f.1.clone(), f.2))
+        .collect();
+    let id = "dv-cancel-vector-write";
+    test_hooks::set(
+        id,
+        Arc::new(|at, query| {
+            if at == test_hooks::Point::VectorWritten {
+                query.cancel();
+                true
+            } else {
+                false
+            }
+        }),
+    );
+    let rl = table.row_level(RowLevelOperation::Update).unwrap();
+    let err = update(&env, &rl, &marks, &[(2, "u", 2), (11, "u", 4)], id).unwrap_err();
+    assert_eq!(err.sql_state(), Some("HY008"), "{err}");
+    assert_eq!(env.latest(), version);
+    let mut gone = false;
+    for _ in 0..100 {
+        if vector_files(&env) == vectors && super::streaming::data_files(&env.dir) == data {
+            gone = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(gone, "a cancelled statement left a vector or data file");
+    assert_eq!(env.query_pool.reserved(), 0);
+}

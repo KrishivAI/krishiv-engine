@@ -1024,7 +1024,7 @@ impl DeltaWriteSink {
                 let marks =
                     std::mem::take(&mut *g.marks.lock().unwrap_or_else(PoisonError::into_inner));
                 Some(
-                    super::dv::write(&g.engine, table, marks, &g.dv_files)
+                    super::dv::write(&g.engine, table, marks, &g.dv_files, &g.write_id, &g.query)
                         .await
                         .map_err(Failure::NotCommitted)?,
                 )

@@ -33,6 +33,9 @@ consuming test checks what the oracle wrote, never a hand-written value.
 and ``MERGE`` steps on tables with ``delta.enableDeletionVectors = true``, in ``dvs/DVS.json``,
 with every commit's deletion vector descriptors and the change-data-feed rows Spark derives.
 
+``... /out dvs-no-stats`` writes the same for a table whose files carry no statistics, in
+``dvs-no-stats/NOSTATS.json``.
+
 ``... /out readback /in`` has Spark read the Krishiv-written tables under ``/in``
 (``tests/fixtures/delta-4.4.1/krishiv-written/``) and records ``READBACK.json`` there.
 
@@ -1772,6 +1775,30 @@ DV_SCENARIOS: list[tuple[str, list[str], list[tuple[str, str, dict]]]] = [
 ]
 
 
+#: A deletion-vector table whose files carry no statistics (``stats.collect`` off while they are
+#: written): delta-spark computes a new vector's file statistics from the file
+#: (``DMLWithDeletionVectorsHelper.getActionsWithStats``) and never removes such a file whole
+#: (``TouchedFileWithDV.isFullyReplaced`` needs ``numRecords``).
+DV_NO_STATS_SCENARIOS: list[tuple[str, list[str], list[tuple[str, str, dict]]]] = [
+    (
+        "no-stats",
+        [
+            f"CREATE TABLE {{t}} ({DML_COLUMNS}) USING delta TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')",
+            "SET spark.databricks.delta.stats.collect = false",
+            f"INSERT INTO {{t}} VALUES {DML_ROWS[0]}",
+            f"INSERT INTO {{t}} VALUES {DML_ROWS[1]}",
+            "SET spark.databricks.delta.stats.collect = true",
+        ],
+        [
+            ("delete_rows", "DELETE FROM {t} WHERE id = 2", {}),
+            ("delete_every_row_of_a_file", "DELETE FROM {t} WHERE id <= 3", {}),
+            ("update_rows", "UPDATE {t} SET v = 'u' WHERE id = 5", {}),
+            ("merge_delete", merge_on(MERGE_SRC, "WHEN MATCHED THEN DELETE"), {}),
+        ],
+    ),
+]
+
+
 def dv_commits(path: str) -> list[dict]:
     """``commits`` with every add's and remove's deletion vector descriptor (``None`` without
     one) and ``dataChange``, and the commit's ``cdc`` action count."""
@@ -1819,21 +1846,30 @@ def change_rows(spark: SparkSession, path: str, from_version: int) -> list[str]:
     ]
 
 
-def dv_cases(spark: SparkSession, out: str) -> None:
+def dv_cases(
+    spark: SparkSession,
+    out: str,
+    dirname: str = "dvs",
+    record_name: str = "DVS.json",
+    scenarios: list[tuple[str, list[str], list[tuple[str, str, dict]]]] | None = None,
+) -> None:
     """``dvs/``: as ``merge_cases`` for the deletion-vector steps of ``DV_SCENARIOS``
     (``DVS.json``, P3-T021 PR-37d): every step's commits with their deletion vector descriptors
     (``dv_commits``) and, on the change-data-feed table, the change rows Spark derives
-    (``change_rows``)."""
-    root = os.path.join(out, "dvs")
+    (``change_rows``). ``dvs-no-stats`` writes ``DV_NO_STATS_SCENARIOS`` the same way into
+    ``dvs-no-stats/NOSTATS.json``."""
+    if scenarios is None:
+        scenarios = DV_SCENARIOS
+    root = os.path.join(out, dirname)
     os.makedirs(root, exist_ok=True)
     record: dict = {
         "format_version": FORMAT_VERSION,
-        "generator": "tests/scripts/gen_delta_fixtures.py dvs",
+        "generator": f"tests/scripts/gen_delta_fixtures.py {dirname}",
         "spark": spark.version,
         "delta_spark": "4.4.1",
         "scenarios": {},
     }
-    for name, setup, steps in DV_SCENARIOS:
+    for name, setup, steps in scenarios:
         before = os.path.join(root, name, "before")
         for q in setup:
             spark.sql(q.format(t=f"delta.`{before}`")).collect()
@@ -1847,7 +1883,7 @@ def dv_cases(spark: SparkSession, out: str) -> None:
         }
         cdf = name == "change-data-feed"
         for step, sql, confs in steps:
-            work = os.path.join(out, "dvs-work", name, step)
+            work = os.path.join(out, f"{dirname}-work", name, step)
             shutil.copytree(before, work)
             text = sql.format(t=f"delta.`{work}`")
             entry: dict = {"step": step, "sql": sql.replace("{t}", "<t>"), "confs": confs}
@@ -1879,8 +1915,8 @@ def dv_cases(spark: SparkSession, out: str) -> None:
             scenario["steps"].append(entry)
             shutil.rmtree(work)
         record["scenarios"][name] = scenario
-    shutil.rmtree(os.path.join(out, "dvs-work"), ignore_errors=True)
-    with open(os.path.join(root, "DVS.json"), "w") as f:
+    shutil.rmtree(os.path.join(out, f"{dirname}-work"), ignore_errors=True)
+    with open(os.path.join(root, record_name), "w") as f:
         json.dump(record, f, indent=1, sort_keys=True)
         f.write("\n")
 
@@ -1948,6 +1984,11 @@ def main(out: str, which: str = "checkpoint", src: str = "") -> None:
     spark = session()
     if which == "readback":
         readback(spark, out, src)
+        spark.stop()
+        return
+    if which == "dvs-no-stats":
+        dv_cases(spark, out, "dvs-no-stats", "NOSTATS.json", DV_NO_STATS_SCENARIOS)
+        drop_hadoop_crc(out)
         spark.stop()
         return
     if which == "dvs":

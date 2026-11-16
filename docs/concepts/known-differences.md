@@ -425,7 +425,10 @@ table). They differ in:
 - **When vectors apply.** A `DELETE` or `UPDATE` whose condition is partition-only by Krishiv's
   translation (the whole-file `DELETE` rule above) removes or rewrites whole files; a
   partition-only condition of another form marks rows, where delta-spark removes whole files.
-- **Statistics.** A file is removed whole only when its `numRecords` proves every live row goes;
-  a file without the statistic keeps a vector of all its rows (delta-spark's own rule).
+- **Files without statistics.** As in delta-spark, a file is removed whole only when its
+  `numRecords` proves every live row goes; a file without the statistic keeps a vector of all its
+  rows, and its new add carries statistics (`tests/fixtures/delta-4.4.1/dvs-no-stats/`). Krishiv
+  writes only `numRecords` there (the footer's row count, with `tightBounds: false`); delta-spark
+  also computes the file's `minValues`, `maxValues` and `nullCount` by reading it.
 - **Change data feed.** A vector-only `DELETE` commits; an `UPDATE` or a `MERGE` that changes rows
   stays refused (delta-spark writes change data files for them).

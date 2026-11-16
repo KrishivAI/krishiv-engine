@@ -172,8 +172,8 @@ pub(crate) struct PersistentDvs {
 }
 
 impl PersistentDvs {
-    /// The confs as `config` sets them (unset: true; a value other than `true`/`false` is the
-    /// default, as an unparsable Spark conf is refused when set).
+    /// The confs as `config` sets them (unset: true; only `false` turns one off: another
+    /// value, which Spark refuses at `SET` for these boolean confs, keeps the default).
     pub(crate) fn from_config(config: &Config) -> Self {
         let flag = |op: &str| {
             config

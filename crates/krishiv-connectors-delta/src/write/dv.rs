@@ -28,6 +28,16 @@
 //! `numDeletionVectorsUpdated` (a file whose vector is replaced), `numDeletionVectorsRemoved`
 //! (fully replaced files that had one), the rows newly marked.
 //!
+//! A file whose statistics lack `numRecords` is never fully replaced (only statistics prove it,
+//! as delta-spark's `isFullyReplaced`); its new add gets `{"numRecords": <the footer's row
+//! count>}` ([`with_footer_stats`]), where delta-spark computes the file's whole statistics
+//! (`getActionsWithStats`), so the kernel's `update_deletion_vectors` has the count it needs.
+//!
+//! Memory: each file's marks are reserved at [`bitmap_bound`] (heap and serialized size) before
+//! a row is marked; the union with an old vector reserves its rows at their load peak and grows
+//! the bound to the union's; serializing reserves two more copies of the bound until the framed
+//! bytes are handed to the upload, whose buffered parts stay reserved.
+//!
 //! The vector file is invisible until the commit names it; a failed statement deletes it with
 //! its data files, and a cancelled one leaves an orphan no snapshot reads.
 
@@ -63,18 +73,23 @@ struct Marked {
     bound: usize,
 }
 
-/// An upper bound of the bytes a roaring bitmap of `rows` row indexes up to `max` holds: per
-/// 2^16-row container at most 2 bytes a row and at most 8 KiB, plus its header, and the
-/// structure's own.
+/// An upper bound of the heap a roaring bitmap of `rows` row indexes up to `max` holds (and of
+/// its serialized size): per 2^16-row container an array of 2-byte values grown by doubling (4
+/// bytes a row at most) or an 8 KiB bitmap, whichever is smaller (an array turns into a bitmap
+/// past 4,096 values), plus the container's map entry, and the structure's own.
 fn bitmap_bound(rows: u64, max: u64) -> usize {
     let containers = rows.min(max / 65_536 + 1);
-    let data = rows.saturating_mul(2).min(containers.saturating_mul(8_192));
+    let data = rows.saturating_mul(4).min(containers.saturating_mul(8_192));
     usize::try_from(
-        data.saturating_add(containers.saturating_mul(32))
-            .saturating_add(128),
+        data.saturating_add(containers.saturating_mul(96))
+            .saturating_add(256),
     )
     .unwrap_or(usize::MAX)
 }
+
+/// Bytes reserved per row of an existing vector while it is loaded: the kernel's bitmap and the
+/// row index vector it is read into, at their peak (as the scan reserves them).
+const OLD_ROW_BYTES: usize = 32;
 
 /// One driver's marked rows, by the path the log names (see the module docs).
 #[derive(Debug)]
@@ -116,19 +131,43 @@ pub(crate) fn split(batch: &RecordBatch) -> Result<Split, KrishivError> {
     let positions: &Int64Array = positions
         .as_primitive_opt()
         .ok_or_else(|| internal("a merge-on-read row index that is not a long"))?;
-    let files = arrow_cast::cast(batch.column(file_i), &ArrowType::Binary)
-        .map_err(|e| internal(&format!("a merge-on-read row file: {e}")))?;
-    let files = files.as_binary::<i32>();
-    let mut by_file: HashMap<&[u8], Vec<u64>> = HashMap::new();
-    for i in 0..batch.num_rows() {
-        if files.is_null(i) {
-            continue;
+    // The file column as the row id scan gives it (`BinaryView`), else as `Binary`: read in
+    // place, one hash per run of rows of one file.
+    let column = batch.column(file_i);
+    let view = column.as_binary_view_opt();
+    let plain = column.as_binary_opt::<i32>();
+    if view.is_none() && plain.is_none() {
+        return Err(internal("a merge-on-read row file that is not binary"));
+    }
+    let file_at = |i: usize| -> Option<&[u8]> {
+        match (view, plain) {
+            (Some(v), _) => (!v.is_null(i)).then(|| v.value(i)),
+            (_, Some(b)) => (!b.is_null(i)).then(|| b.value(i)),
+            _ => None,
         }
+    };
+    let mut by_file: HashMap<&[u8], Vec<u64>> = HashMap::new();
+    let mut run: Option<(&[u8], Vec<u64>)> = None;
+    for i in 0..batch.num_rows() {
+        let Some(f) = file_at(i) else {
+            continue;
+        };
         let index = (!positions.is_null(i))
             .then(|| u64::try_from(positions.value(i)).ok())
             .flatten()
             .ok_or_else(|| internal("a merge-on-read row of a file without its row index"))?;
-        by_file.entry(files.value(i)).or_default().push(index);
+        match &mut run {
+            Some((current, rows)) if *current == f => rows.push(index),
+            _ => {
+                if let Some((done, rows)) = run.take() {
+                    by_file.entry(done).or_default().extend(rows);
+                }
+                run = Some((f, vec![index]));
+            }
+        }
+    }
+    if let Some((done, rows)) = run {
+        by_file.entry(done).or_default().extend(rows);
     }
     let mut marks = Vec::with_capacity(by_file.len());
     for (f, rows) in by_file {
@@ -252,6 +291,76 @@ pub(crate) struct DvOutcome {
     pub(crate) removed_vectors: u64,
     /// The bytes of the fully replaced files.
     pub(crate) removed_bytes: u64,
+    /// The row counts read from the footers of files whose statistics lack `numRecords`.
+    pub(crate) footer_records: HashMap<String, u64>,
+}
+
+/// The row count of `unit`'s Parquet footer.
+async fn footer_rows(engine: &DeltaEngine, unit: &ScanUnit) -> Result<u64, KrishivError> {
+    use krishiv_io::{FileRef, MetadataNeeds, VersionToken};
+    let url = engine
+        .table_root()
+        .join(&unit.path)
+        .map_err(|e| internal(&format!("the Delta log names an unresolvable path: {e}")))?;
+    let file = FileRef {
+        store: engine.store().clone(),
+        path: engine.root().confine(&url)?,
+        size: unit.size,
+        // Delta data files are never rewritten in place.
+        version: VersionToken::Immutable,
+        modified_micros: unit.modification_time.checked_mul(1000),
+    };
+    let format = crate::engine::columnar::format()?;
+    let options = crate::engine::columnar::format_options()?;
+    let meta = engine
+        .io()
+        .read_metadata(format.as_ref(), &file, MetadataNeeds::default(), &options)
+        .await?;
+    meta.statistics().rows.exact().copied().ok_or_else(|| {
+        internal(&format!(
+            "the Parquet footer of {} has no row count",
+            unit.path
+        ))
+    })
+}
+
+/// `scan_rows` with `{"numRecords": n}` as the `stats` of each row whose path `footer` names
+/// (a file whose statistics lack the count; the kernel widens the bounds of a file it gives a
+/// new vector).
+pub(crate) fn with_footer_stats(
+    scan_rows: RecordBatch,
+    footer: &HashMap<String, u64>,
+) -> Result<RecordBatch, KrishivError> {
+    if footer.is_empty() {
+        return Ok(scan_rows);
+    }
+    let schema = scan_rows.schema();
+    let (Ok(path_i), Ok(stats_i)) = (schema.index_of("path"), schema.index_of("stats")) else {
+        return Err(internal("scan metadata without path or stats"));
+    };
+    let paths = arrow_cast::cast(scan_rows.column(path_i), &ArrowType::Utf8)
+        .map_err(|e| internal(&format!("a scan metadata path: {e}")))?;
+    let paths = paths.as_string::<i32>();
+    let stats = arrow_cast::cast(scan_rows.column(stats_i), &ArrowType::Utf8)
+        .map_err(|e| internal(&format!("scan metadata stats: {e}")))?;
+    let stats = stats.as_string::<i32>();
+    let patched: arrow_array::StringArray = (0..scan_rows.num_rows())
+        .map(|i| {
+            let path = (!paths.is_null(i)).then(|| paths.value(i));
+            match path.and_then(|p| footer.get(p)) {
+                Some(n) => Some(format!("{{\"numRecords\":{n}}}")),
+                None => (!stats.is_null(i)).then(|| stats.value(i).to_owned()),
+            }
+        })
+        .collect();
+    let column = arrow_cast::cast(&patched, scan_rows.column(stats_i).data_type())
+        .map_err(|e| internal(&format!("scan metadata stats: {e}")))?;
+    let mut columns = scan_rows.columns().to_vec();
+    if let Some(c) = columns.get_mut(stats_i) {
+        *c = column;
+    }
+    RecordBatch::try_new(schema, columns)
+        .map_err(|e| internal(&format!("scan metadata stats: {e}")))
 }
 
 /// z85 (ZeroMQ's base 85, delta-spark's `Base85Codec`) of a UUID's 16 bytes.
@@ -328,7 +437,11 @@ pub(crate) async fn write(
     table: &DeltaTable,
     marks: Vec<Marks>,
     files: &std::sync::Mutex<Vec<Path>>,
+    write_id: &str,
+    query: &std::sync::Arc<krishiv_exec::QueryContext>,
 ) -> Result<DvOutcome, KrishivError> {
+    #[cfg(not(test))]
+    let _ = (write_id, query);
     let mut all: Option<Marks> = None;
     for m in marks {
         match &mut all {
@@ -360,7 +473,8 @@ pub(crate) async fn write(
                     "the Delta row id file {path} is not a live file of the snapshot"
                 ))
             })?;
-            let existing = if unit.dv.has_vector() {
+            let had_vector = unit.dv.has_vector();
+            let existing = if had_vector {
                 unit.dv
                     .cardinality()
                     .map_err(|e| from_kernel(&e, &name))?
@@ -369,11 +483,12 @@ pub(crate) async fn write(
                 0
             };
             if existing > 0 {
-                // The old vector's rows, 8 bytes each while they are added.
-                let bytes = usize::try_from(existing)
+                // The old vector's rows: loaded at their peak, then added to the marks (whose
+                // bound grows to the union's).
+                let old_bytes = usize::try_from(existing)
                     .unwrap_or(usize::MAX)
-                    .saturating_mul(8);
-                extra.try_grow(bytes)?;
+                    .saturating_mul(OLD_ROW_BYTES);
+                extra.try_grow(old_bytes)?;
                 let (dv, root, n) = (unit.dv.clone(), engine.table_root().clone(), name.clone());
                 let old = engine
                     .delta_blocking(move |e| {
@@ -382,27 +497,47 @@ pub(crate) async fn write(
                     })
                     .await??
                     .unwrap_or_default();
+                let max = old.iter().copied().max().unwrap_or(0).max(m.max);
+                let union = bitmap_bound(m.rows.saturating_add(existing), max);
+                extra.try_grow(union.saturating_sub(m.bound))?;
                 m.dv.add_deleted_row_indexes(old);
-                extra.shrink(bytes);
+                extra.shrink(old_bytes);
+                m.bound = m.bound.max(union);
             }
             let cardinality = m.dv.cardinality();
             let modified = cardinality.saturating_sub(existing);
             if modified == 0 {
                 all.release(m.bound);
+                extra.shrink(extra.size());
                 continue;
             }
             out.modified_rows = out.modified_rows.saturating_add(modified);
+            // Only the statistics prove a file has no live row left: without `numRecords` it
+            // keeps a vector of all its rows (`TouchedFileWithDV.isFullyReplaced`,
+            // `DMLWithDeletionVectorsHelper.scala:575-580`).
             if unit.records == Some(cardinality) {
                 // Every live row goes: the file is removed whole.
                 out.removed.insert(path.clone());
                 out.removed_bytes = out.removed_bytes.saturating_add(unit.size);
-                if existing > 0 {
+                if had_vector {
                     out.removed_vectors += 1;
                 }
                 all.release(m.bound);
+                extra.shrink(extra.size());
                 continue;
             }
+            // A file without `numRecords` gets its footer's row count as its statistics, as
+            // delta-spark computes a new vector's file statistics from the file
+            // (`DMLWithDeletionVectorsHelper.scala:263-290`); the kernel needs the count on the
+            // file's new add.
+            if unit.records.is_none() {
+                let r = footer_rows(engine, unit).await?;
+                out.footer_records.insert(path.clone(), r);
+            }
+            // Serializing holds the bitmap, the kernel's serialized copy and the framed bytes:
+            // two more copies at most the bitmap's bound each.
             let bound = m.bound;
+            extra.try_grow(bound.saturating_mul(2))?;
             let (dv, n) = (m.dv, name.clone());
             let (framed, written) = engine
                 .delta_blocking(move |_| {
@@ -415,7 +550,9 @@ pub(crate) async fn write(
                     Ok::<_, KrishivError>((buf, r))
                 })
                 .await??;
+            // The bitmap is gone; the framed bytes stay held until the upload took them.
             all.release(bound);
+            extra.shrink(extra.size().saturating_sub(framed.len()));
             if file.is_none() {
                 let uuid = super::files::uuid_bytes();
                 let prefix = random_prefix(table);
@@ -448,9 +585,10 @@ pub(crate) async fn write(
             };
             // The kernel's writer frames each vector after the file's version byte: one fresh
             // writer per vector, its version byte dropped, places it at the file's offset.
-            let frame = framed
-                .get(1..)
-                .ok_or_else(|| internal("an empty deletion vector frame"))?;
+            if framed.len() < 2 {
+                return Err(internal("an empty deletion vector frame"));
+            }
+            let frame = Bytes::from(framed).slice(1..);
             let descriptor = DeletionVectorDescriptor::try_new(
                 DeletionVectorStorageType::PersistedRelative,
                 f.encoded.clone(),
@@ -463,7 +601,8 @@ pub(crate) async fn write(
             )
             .map_err(|err| from_kernel(&err, &name))?;
             f.offset = f.offset.saturating_add(frame.len());
-            f.upload.write(Bytes::copy_from_slice(frame)).await?;
+            f.upload.write(frame).await?;
+            extra.shrink(extra.size());
             let held = usize::try_from(f.upload.held_bytes()).unwrap_or(usize::MAX);
             let have = f.mem.size();
             if held > have {
@@ -471,12 +610,15 @@ pub(crate) async fn write(
             } else {
                 f.mem.shrink(have - held);
             }
-            if existing > 0 {
+            // A file that had a vector (even of cardinality 0) gets it replaced.
+            if had_vector {
                 out.updated += 1;
             } else {
                 out.added += 1;
             }
             out.descriptors.insert(path, descriptor);
+            #[cfg(test)]
+            super::test_hooks::at(write_id, super::test_hooks::Point::VectorWritten, query).await;
         }
         if let Some(f) = file.take() {
             let DvFile {

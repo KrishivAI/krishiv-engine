@@ -23,7 +23,14 @@ use krishiv_session::Session;
 use serde_json::Value;
 
 fn fixtures() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/delta-4.4.1/dvs")
+    fixtures_of("dvs")
+}
+
+/// The oracle directory `root` (`dvs`, `dvs-no-stats`).
+fn fixtures_of(root: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/delta-4.4.1")
+        .join(root)
 }
 
 fn copy_dir(from: &Path, to: &Path) {
@@ -40,7 +47,11 @@ fn copy_dir(from: &Path, to: &Path) {
 }
 
 fn oracle() -> Value {
-    serde_json::from_slice(&std::fs::read(fixtures().join("DVS.json")).unwrap()).unwrap()
+    oracle_of("dvs", "DVS.json")
+}
+
+fn oracle_of(root: &str, record: &str) -> Value {
+    serde_json::from_slice(&std::fs::read(fixtures_of(root).join(record)).unwrap()).unwrap()
 }
 
 fn cell(column: &dyn Array, row: usize) -> Value {
@@ -161,15 +172,15 @@ struct Run {
 
 /// Every step, each on its own copy of its scenario's `before` table, in a session pool of its
 /// own, back to exactly zero after the statement.
-fn run_all() -> Vec<(Value, Run)> {
-    let oracle = oracle();
+fn run_all(root: &str, record: &str) -> Vec<(Value, Run)> {
+    let oracle = oracle_of(root, record);
     let mut out = Vec::new();
     for (scenario, s) in oracle["scenarios"].as_object().unwrap() {
         let versions = s["versions"].as_u64().unwrap();
         for step in s["steps"].as_array().unwrap() {
             let tmp = tempfile::tempdir().unwrap();
             let dir = tmp.path().join("t");
-            copy_dir(&fixtures().join(scenario).join("before"), &dir);
+            copy_dir(&fixtures_of(root).join(scenario).join("before"), &dir);
             let session = Session::builder()
                 .config("krishiv.session.memoryLimit", "1g")
                 .build()
@@ -227,7 +238,74 @@ fn descriptor(dv: &Value) -> Value {
 fn delta_dvs_match_spark() {
     let mut checked = 0;
     let mut with_vectors = 0;
-    for (step, run) in run_all() {
+    for (step, run) in run_all("dvs", "DVS.json") {
+        if check_step(&step, &run, &mut with_vectors) {
+            checked += 1;
+        }
+    }
+    assert!(checked > 30, "{checked} steps checked");
+    assert!(with_vectors > 20, "{with_vectors} vectors checked");
+}
+
+/// Files whose statistics lack `numRecords` (`dvs-no-stats/NOSTATS.json`): the statements
+/// commit as delta-spark's do, a file whose every row goes keeps a vector of all its rows, and
+/// each file given a vector carries delta-spark's `numRecords` (from the footer; delta-spark
+/// also computes the bounds, a recorded difference).
+#[test]
+fn delta_dvs_without_statistics_match_spark() {
+    let mut checked = 0;
+    let mut with_vectors = 0;
+    for (step, run) in run_all("dvs-no-stats", "NOSTATS.json") {
+        let name = format!("{}/{}", run.scenario, run.step);
+        assert!(check_step(&step, &run, &mut with_vectors), "{name}");
+        checked += 1;
+        let ours = commits_from(&run.dir, run.versions);
+        let records = |adds: Vec<&Value>, stats: &dyn Fn(&Value) -> Value| {
+            let mut v: Vec<(String, Value)> = adds
+                .into_iter()
+                .map(|a| {
+                    (
+                        a["path"].as_str().unwrap().to_owned(),
+                        stats(a)["numRecords"].clone(),
+                    )
+                })
+                .collect();
+            v.sort_by(|a, b| a.0.cmp(&b.0));
+            v
+        };
+        let theirs_vectors: Vec<&Value> = step["commits"][0]["add_dvs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|a| !a["deletionVector"].is_null())
+            .collect();
+        let theirs: Vec<&Value> = step["commits"][0]["adds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|a| theirs_vectors.iter().any(|v| v["path"] == a["path"]))
+            .collect();
+        let ours_adds: Vec<&Value> = of_kind(&ours[0], "add")
+            .into_iter()
+            .filter(|a| a.get("deletionVector").is_some())
+            .collect();
+        assert_eq!(
+            records(ours_adds, &|a| serde_json::from_str(
+                a["stats"].as_str().unwrap()
+            )
+            .unwrap()),
+            records(theirs, &|a| a["stats"].clone()),
+            "{name}: numRecords of the files given a vector"
+        );
+    }
+    assert_eq!(checked, 4);
+    assert!(with_vectors >= 5, "{with_vectors}");
+}
+
+/// Compares one step with the oracle (see `delta_dvs_match_spark`); whether it was a step
+/// Krishiv runs (not a refusal). `with_vectors` counts the new vectors compared.
+fn check_step(step: &Value, run: &Run, with_vectors: &mut usize) -> bool {
+    {
         let name = format!("{}/{}", run.scenario, run.step);
         if CDF_REFUSED
             .iter()
@@ -242,7 +320,7 @@ fn delta_dvs_match_spark() {
                 "{name}: {e}"
             );
             assert!(commits_from(&run.dir, run.versions).is_empty(), "{name}");
-            continue;
+            return false;
         }
         assert!(step["error"].is_null(), "{name}: an oracle error");
         let (fields, rows) = match &run.outcome {
@@ -263,9 +341,8 @@ fn delta_dvs_match_spark() {
         let ours = commits_from(&run.dir, run.versions);
         let theirs = step["commits"].as_array().unwrap();
         assert_eq!(ours.len(), theirs.len(), "{name}: the commits written");
-        checked += 1;
         let (Some(commit), Some(want)) = (ours.first(), theirs.first()) else {
-            continue;
+            return true;
         };
         let info = commit.iter().find_map(|a| a.get("commitInfo")).unwrap();
         assert_eq!(info["operation"], want["commitInfo"]["operation"], "{name}");
@@ -383,7 +460,7 @@ fn delta_dvs_match_spark() {
                     .starts_with("deletion_vector_")),
                 "{name}: no vector file"
             );
-            with_vectors += 1;
+            *with_vectors += 1;
         }
         // A file added again keeps its record count; its bounds are no longer tight.
         for a in &ours_adds {
@@ -434,8 +511,7 @@ fn delta_dvs_match_spark() {
         );
         assert_eq!(want["cdc"], 0, "{name}");
     }
-    assert!(checked > 30, "{checked} steps checked");
-    assert!(with_vectors > 20, "{with_vectors} vectors checked");
+    true
 }
 
 /// The steps whose tables Spark reads back (`READBACK.json`).
@@ -632,11 +708,96 @@ fn a_dv_delete_under_a_small_pool() {
         readded.iter().any(|a| a.get("deletionVector").is_some()),
         "{readded:?}"
     );
-    let (_, count) = sql(
+    // Exactly the rows the condition holds for went: the fixture's 90 rows (ids 1 to 100 but
+    // the tens) and ids 1,000 to 3,000,999.
+    let before: Vec<i64> = (1..=100_i64)
+        .filter(|i| i % 10 != 0)
+        .chain(1000..3_001_000)
+        .collect();
+    let kept: Vec<i64> = before.iter().copied().filter(|i| i % 3 == 0).collect();
+    assert_eq!(deleted, i64::try_from(before.len() - kept.len()).unwrap());
+    let (_, got) = sql(
         &Session::new().unwrap(),
-        &format!("SELECT count(*) FROM delta.`{}`", dir.display()),
+        &format!(
+            "SELECT count(*), sum(id), min(id), max(id), count_if(id % 3 <> 0) FROM delta.`{}`",
+            dir.display()
+        ),
     )
     .unwrap();
-    let left = count[0][0].as_i64().unwrap();
-    assert_eq!(left + deleted, 3_000_000 + 90);
+    assert_eq!(
+        got,
+        serde_json::json!([[
+            kept.len(),
+            kept.iter().sum::<i64>(),
+            kept.first().copied().unwrap(),
+            kept.last().copied().unwrap(),
+            0
+        ]])
+    );
+}
+
+/// Physical row indexes across row groups and batches: delta-spark's `deletion-vectors` table
+/// (one file of 40,000 rows in five row groups of up to 8,332 rows, `id` = the row's position,
+/// 444 live rows under its vector). A `DELETE` whose range the row groups' statistics prune to
+/// two of them, then one over every row group, leave exactly the rows they do not hit, and the
+/// file's vector holds exactly the old and the new positions.
+#[test]
+fn a_dv_delete_over_several_row_groups_marks_exactly_its_rows() {
+    let fixture = fixtures_of("").join("deletion-vectors");
+    let expected: Value =
+        serde_json::from_slice(&std::fs::read(fixture.join("EXPECTED.json")).unwrap()).unwrap();
+    assert!(expected["row_groups"].as_array().unwrap().len() >= 5);
+    let mut live: Vec<i64> = expected["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_i64().unwrap())
+        .collect();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("t");
+    copy_dir(&fixture, &dir);
+    let session = Session::builder()
+        .config("krishiv.session.memoryLimit", "64m")
+        .build()
+        .unwrap();
+    for (condition, hit) in [
+        (
+            "id BETWEEN 16000 AND 17000",
+            &(|i: i64| (16_000..=17_000).contains(&i)) as &dyn Fn(i64) -> bool,
+        ),
+        ("id % 3 <> 0", &|i: i64| i % 3 != 0),
+    ] {
+        let gone = live.iter().filter(|i| hit(**i)).count();
+        assert!(gone > 0, "{condition}: the step deletes live rows");
+        let (_, out) = sql(
+            &session,
+            &format!("DELETE FROM delta.`{}` WHERE {condition}", dir.display()),
+        )
+        .unwrap();
+        assert_eq!(session.memory_reserved(), 0, "{condition}");
+        assert_eq!(out, serde_json::json!([[gone]]), "{condition}");
+        live.retain(|i| !hit(*i));
+        let (_, ids) = sql(
+            &Session::new().unwrap(),
+            &format!("SELECT id FROM delta.`{}` ORDER BY id", dir.display()),
+        )
+        .unwrap();
+        let ids: Vec<i64> = ids
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r[0].as_i64().unwrap())
+            .collect();
+        assert_eq!(ids, live, "{condition}: the rows left");
+        let last = commits_from(&dir, 0).pop().unwrap();
+        let add = of_kind(&last, "add")
+            .into_iter()
+            .find(|a| a.get("deletionVector").is_some())
+            .unwrap();
+        assert_eq!(
+            add["deletionVector"]["cardinality"],
+            40_000 - live.len(),
+            "{condition}: the vector holds every position gone"
+        );
+    }
 }

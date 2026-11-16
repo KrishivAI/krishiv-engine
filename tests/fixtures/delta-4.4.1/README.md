@@ -79,6 +79,10 @@ count and, on the change-data-feed table, the change rows Spark derives (`change
 krishiv-session `tests/delta_dvs.rs`. `dvs/krishiv-written/` holds tables after Krishiv's
 statements (`write_dv_readback_tables`) and Spark's `READBACK.json` of them (with `changes` for a
 change-data-feed table).
+`dvs-no-stats/` (`gen_delta_fixtures.py /out dvs-no-stats`, `NOSTATS.json`) is the same for a table
+whose files were written without statistics (`spark.databricks.delta.stats.collect = false`):
+delta-spark keeps a file whose every row goes with a vector of all its rows and gives each file a
+new vector with statistics computed from the file.
 
 DML oracle (PR-37b part 2; `gen_delta_fixtures.py /out dml`, run as the session probes are): `dml/<scenario>/before` is a
 table set up by delta-spark (`unpartitioned`, `partitioned` by `p`, `column-mapping` (mode `name`, a renamed column),

@@ -16,6 +16,8 @@ pub(crate) enum Point {
     Sunk,
     /// `finalize` finished every writer, before the commit.
     Finished,
+    /// A merge-on-read change wrote a deletion vector into its vector file (not yet finished).
+    VectorWritten,
 }
 
 /// A hook: given the point and the write's query; returns whether the write then stalls (a
