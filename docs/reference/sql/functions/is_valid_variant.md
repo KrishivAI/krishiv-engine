@@ -8,7 +8,7 @@ description: "Returns true if the variant is valid, false if it is malformed, NU
 
 Returns true if the variant is valid, false if it is malformed, NULL if `v` is NULL.
 
-**Applies to:** not available in Krishiv yet. Spark: 4.2 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 4.2 and later.
 
 ## Syntax
 
@@ -20,7 +20,7 @@ is_valid_variant(v)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `variant_funcs` |
 | Kind | scalar (function) |
 | Added in Spark | 4.2.0 |
@@ -45,6 +45,7 @@ Error: KRISHIV_UNSUPPORTED_FEATURE
 ## Version history
 
 - Added in Spark 4.2.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 
