@@ -844,13 +844,28 @@ fn the_spark_420_moment_fixture_is_reproduced_to_the_bit() {
         let name = case["dataset"].as_str().unwrap();
         for (fname, f) in &functions {
             let want = match &case["results"][*fname] {
-                v if v.get("error").is_some() => continue,
+                v if v.get("error").is_some() => {
+                    // Spark's error identity is part of the fixture: the one error is ANSI division by zero, and
+                    // the engine's class carries the same SQLSTATE (the cell is not run: it needs ANSI mode).
+                    assert_eq!(v["error"], "DIVIDE_BY_ZERO", "{name} {fname}");
+                    assert_eq!(
+                        v["sqlstate"].as_str(),
+                        ErrorClass::DivideByZero.sql_state(),
+                        "{name} {fname}"
+                    );
+                    continue;
+                }
                 v if v.get("null").is_some() => None,
                 v => Some(f64::from_bits(
                     u64::from_str_radix(v["hex"].as_str().unwrap(), 16).unwrap(),
                 )),
             };
             // The one-column statistics read x, the pair statistics (y, x).
+            // Every successful cell records one result column; a double function's is `double` (`regr_count` is
+            // `bigint`, `regr_avgx`/`regr_avgy` are not run here).
+            let schema = case["results"][*fname]["schema"].as_array().unwrap();
+            assert_eq!(schema.len(), 1, "{name} {fname}");
+            assert_eq!(schema[0]["type"], "double", "{name} {fname}");
             let (first, second) = if arity(f) == 2 {
                 (&ys, &xs)
             } else {
