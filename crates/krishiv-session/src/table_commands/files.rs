@@ -14,19 +14,170 @@ use crate::session::Session;
 use crate::store::CatalogTable;
 
 impl Session {
-    /// Asks the session's policy about `path` for each privilege (the writer does the same for its files).
-    pub(super) async fn authorize_path(
+    /// Asks the session's policy about the local directory `path` for each privilege (the writer does
+    /// the same for its files), in the one form every check of a table's directories takes: `file:` and
+    /// the canonical absolute path, with `.` and `..` folded in the text as reads and writes fold them,
+    /// then the links of its existing part resolved, the part that does not exist yet appended
+    /// (`access::canonical_dir`, the write path's rule). Returns that canonical path, which the caller acts
+    /// on (not `path`), and the text a denial names (`path` as written, `..` folded from the text only).
+    ///
+    /// # Errors
+    /// `KRISHIV_UNSUPPORTED_FEATURE` (audited) for a relative or non-UTF-8 path, before the policy is
+    /// asked; `KRISHIV_INSUFFICIENT_PERMISSIONS` for a denial and for a path that cannot be resolved (the
+    /// same answer, see `access::physical`).
+    pub(crate) async fn authorize_path(
         &self,
         path: &Path,
         privileges: &[Privilege],
         class: StatementClass,
+    ) -> Result<CheckedDir, KrishivError> {
+        let first = privileges.first().copied().unwrap_or(Privilege::Modify);
+        let checked = crate::access::canonical_dir(self, path, first, class)?;
+        crate::access::authorize_checked(self, &checked, privileges, class).await?;
+        Ok(CheckedDir {
+            path: local_of(&checked.at.display),
+            shown: checked.shown,
+        })
+    }
+
+    /// Asks `CREATE` on a table's `location` as CREATE TABLE asks it: a managed table's directory (and an
+    /// external local location) as [`Self::authorize_path`] does, a relative external location after
+    /// qualifying it against the working directory as its writes do, and an object-store location in its
+    /// qualified form. Returns the canonical local path checked (`None` for an object store).
+    pub(super) async fn authorize_location(
+        &self,
+        location: &Path,
+        managed: bool,
+    ) -> Result<Option<CheckedDir>, KrishivError> {
+        let (create, class) = (&[Privilege::Create], StatementClass::Ddl);
+        match location.to_str() {
+            Some(text) if !managed && !location.is_absolute() => {
+                let qualified = self.qualify_path(text)?;
+                match qualified.strip_prefix("file:") {
+                    Some(local) => self
+                        .authorize_path(Path::new(local), create, class)
+                        .await
+                        .map(Some),
+                    None => {
+                        let securable = Securable::Path(OptionValue::from_user("path", qualified));
+                        self.authorize_securable(&securable, create, class).await?;
+                        Ok(None)
+                    }
+                }
+            }
+            _ => self.authorize_path(location, create, class).await.map(Some),
+        }
+    }
+
+    /// Makes the directory `checked` (a canonical path [`Self::authorize_path`] allowed) and the missing
+    /// directories above it one level at a time, each verified to still resolve to itself once it exists.
+    /// A link swapped in on the way (after the check) is refused with 42501 for `privilege`, and the
+    /// directory just made through it is removed: only that directory, found by the identity (device and
+    /// inode) it had right after the mkdir, so a second swap cannot point the removal elsewhere.
+    ///
+    /// Not closed: between the verification of one level and the mkdir of the next, a swap makes one
+    /// empty directory outside, which the next verification finds and removes (best effort).
+    pub(crate) fn create_checked_dir(
+        &self,
+        checked: &Path,
+        shown: &str,
+        privilege: Privilege,
+        class: StatementClass,
     ) -> Result<(), KrishivError> {
-        let securable = Securable::Path(OptionValue::from_user("path", path.display().to_string()));
+        let mut at = PathBuf::new();
+        for part in checked.components() {
+            at.push(part);
+            let made = match std::fs::create_dir(&at) {
+                Ok(()) => dir_identity(&at),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => None,
+                Err(e) => {
+                    return Err(fs_failed(
+                        "cannot create a directory of the statement",
+                        &at,
+                        None,
+                        &e,
+                    ));
+                }
+            };
+            match std::fs::canonicalize(&at) {
+                Ok(now) if now == at => {}
+                now => {
+                    if let Ok(now) = now {
+                        remove_made(made, &now);
+                    }
+                    return Err(crate::access::unresolved(self, class, shown, privilege));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Moves the directory `source` to `target`, both canonical paths the policy allowed, making the
+    /// target's parents with [`Self::create_checked_dir`]. After the move the target and the source's
+    /// parent must still resolve to themselves: if a link was swapped in on either side after the checks,
+    /// the directory is moved back where it came from and the move is refused with 42501 (`CREATE` on the
+    /// target), so nothing is moved into or out of the checked paths through it.
+    ///
+    /// # Errors
+    /// 42501 as above; `INTERNAL_ERROR` when the move fails, or when the move back fails (the server log
+    /// names both paths at error level; the caller is not told where the directory is).
+    ///
+    /// Not closed: a swap during the `rename` itself, which the verification after it catches.
+    pub(crate) fn move_checked_dir(
+        &self,
+        source: &Path,
+        target: &CheckedDir,
+        class: StatementClass,
+    ) -> Result<(), KrishivError> {
+        let (shown, target) = (&target.shown, &target.path);
+        if let Some(parent) = target.parent() {
+            self.create_checked_dir(parent, parent_text(shown), Privilege::Create, class)?;
+        }
+        std::fs::rename(source, target)
+            .map_err(|e| fs_failed("cannot move a directory", source, Some(target), &e))?;
+        let in_place = |p: &Path| std::fs::canonicalize(p).is_ok_and(|now| now == p);
+        if in_place(target) && source.parent().is_none_or(in_place) {
+            return Ok(());
+        }
+        // Where the directory went, and where it came from, as the links resolve now.
+        let went = std::fs::canonicalize(target).ok();
+        let came = source
+            .parent()
+            .and_then(|p| std::fs::canonicalize(p).ok())
+            .zip(source.file_name())
+            .map(|(p, name)| p.join(name));
+        if let (Some(went), Some(came)) = (&went, &came)
+            && std::fs::rename(went, came).is_ok()
+        {
+            return Err(crate::access::unresolved(
+                self,
+                class,
+                shown,
+                Privilege::Create,
+            ));
+        }
+        Err(move_back_failed(&went, &came))
+    }
+
+    /// Moves `from` back to `to` after a later step of a move failed (both canonical); a failure is
+    /// [`move_back_failed`].
+    pub(crate) fn move_back(&self, from: &Path, to: &Path) -> Result<(), KrishivError> {
+        std::fs::rename(from, to)
+            .map_err(|_| move_back_failed(&Some(from.to_path_buf()), &Some(to.to_path_buf())))
+    }
+
+    /// Asks the session's policy about `securable` for each privilege, auditing each answer.
+    pub(super) async fn authorize_securable(
+        &self,
+        securable: &Securable,
+        privileges: &[Privilege],
+        class: StatementClass,
+    ) -> Result<(), KrishivError> {
         for privilege in privileges {
             let r = authorize(
                 &*self.state.policy,
                 &self.state.principal,
-                &securable,
+                securable,
                 *privilege,
             )
             .await;
@@ -66,7 +217,8 @@ impl Session {
         if !table.managed {
             return Ok(None);
         }
-        let location = &table.location;
+        // `..` folded in the text first, as every other check and the writes fold it.
+        let location = &local_of(&crate::access::lexical_dir(&table.location)?.display);
         let meta = match location.symlink_metadata() {
             Ok(m) => m,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -77,8 +229,7 @@ impl Session {
                 )));
             }
         };
-        let root = table
-            .root
+        let root = local_of(&crate::access::lexical_dir(&table.root)?.display)
             .canonicalize()
             .map_err(|e| internal(format!("cannot resolve the warehouse: {e}")))?;
         let canonical = location
@@ -90,10 +241,106 @@ impl Session {
                 location.display()
             )));
         }
-        self.authorize_path(&canonical, &[Privilege::Modify], StatementClass::Write)
+        // Asked about the location as written (`..` folded): the policy gets it resolved, the caller's
+        // denial names it as written. It resolves to the directory checked above, or nothing is deleted.
+        let checked = self
+            .authorize_path(location, &[Privilege::Modify], StatementClass::Write)
             .await?;
-        Ok(Some(canonical))
+        if checked.path != canonical {
+            return Err(internal(format!(
+                "refusing to delete {}: it changed while it was checked",
+                location.display()
+            )));
+        }
+        Ok(Some(checked.path))
     }
+}
+
+/// The error-level server log of a directory that could not be moved back (`went` is where it is, `came`
+/// where it belongs, `None` where a path no longer resolves), and the caller's `INTERNAL_ERROR`, which names
+/// neither path.
+fn move_back_failed(went: &Option<PathBuf>, came: &Option<PathBuf>) -> KrishivError {
+    tracing::error!(
+        target: "krishiv::session",
+        directory = ?went,
+        belongs_at = ?came,
+        "a directory could not be moved back after a refused or failed move; move it by hand"
+    );
+    internal(
+        "a directory could not be moved back after a refused or failed move; the server log names it"
+            .to_owned(),
+    )
+}
+
+/// The caller's `INTERNAL_ERROR` for a failed file system step (`what`, naming no path and no I/O error,
+/// which could describe a directory behind a swapped link), with the paths and the error in an error-level
+/// server log.
+fn fs_failed(what: &str, path: &Path, other: Option<&Path>, e: &std::io::Error) -> KrishivError {
+    tracing::error!(
+        target: "krishiv::session",
+        path = %path.display(),
+        other = ?other,
+        error = %e,
+        "{what}"
+    );
+    internal(format!("{what}; the server log names it"))
+}
+
+/// Removes the empty directory `now` only if it is the one made, `made` (its device and inode right after
+/// the mkdir): a second swap cannot point the removal at another directory.
+fn remove_made(made: Option<(u64, u64)>, now: &Path) {
+    if made.is_some() && dir_identity(now) == made {
+        let _ = std::fs::remove_dir(now);
+    }
+}
+
+/// The device and inode of the directory `path` resolves to (`None` if it is not one, or off Unix).
+fn dir_identity(path: &Path) -> Option<(u64, u64)> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let meta = std::fs::metadata(path).ok()?;
+        meta.is_dir().then(|| (meta.dev(), meta.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        None
+    }
+}
+
+/// A local directory as [`Session::authorize_path`] checked it: `path`, canonical, is the one to act on;
+/// `shown` is the caller's text (`..` folded from the text only) that a denial names.
+#[derive(Debug, Clone)]
+pub(crate) struct CheckedDir {
+    /// The canonical path the policy allowed.
+    pub(crate) path: PathBuf,
+    /// The text a denial names (`file:/...`).
+    pub(crate) shown: String,
+}
+
+impl CheckedDir {
+    /// The parent directory, with the parent of the shown text.
+    pub(crate) fn parent(&self) -> Option<CheckedDir> {
+        Some(CheckedDir {
+            path: self.path.parent()?.to_path_buf(),
+            shown: parent_text(&self.shown).to_owned(),
+        })
+    }
+}
+
+/// `shown` without its last `/segment` (`file:/` stays).
+fn parent_text(shown: &str) -> &str {
+    match shown.rfind('/') {
+        Some(i) if shown[..i].ends_with(':') => &shown[..=i],
+        Some(i) => &shown[..i],
+        None => shown,
+    }
+}
+
+/// The local path of a `file:/...` display.
+fn local_of(display: &str) -> PathBuf {
+    PathBuf::from(display.strip_prefix("file:").unwrap_or(display))
 }
 
 /// Deletes a managed table's directory; a directory that is already gone
@@ -125,4 +372,80 @@ fn clear_dir(dir: &Path) -> Result<(), KrishivError> {
         removed.map_err(|e| internal(format!("cannot delete {}: {e}", path.display())))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{dir_identity, remove_made};
+
+    #[test]
+    fn only_the_directory_made_is_removed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let made = tmp.path().join("made");
+        let other = tmp.path().join("other");
+        std::fs::create_dir(&made).unwrap();
+        std::fs::create_dir(&other).unwrap();
+        let identity = dir_identity(&made);
+        assert!(identity.is_some());
+        // A second swap points the removal at another empty directory: it stays.
+        remove_made(identity, &other);
+        assert!(other.is_dir());
+        remove_made(None, &made);
+        assert!(made.is_dir());
+        remove_made(identity, &made);
+        assert!(!made.exists());
+    }
+
+    #[test]
+    fn a_failed_mkdir_or_move_is_an_internal_error_naming_no_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        std::fs::write(root.join("file-secret"), b"").unwrap();
+        let session = crate::Session::new().unwrap();
+        let mkdir = session
+            .create_checked_dir(
+                &root.join("file-secret/sub"),
+                "file:/x",
+                krishiv_plan::analyzer::Privilege::Create,
+                krishiv_sql::StatementClass::Ddl,
+            )
+            .unwrap_err();
+        let moved = session
+            .move_checked_dir(
+                &root.join("missing-secret"),
+                &super::CheckedDir {
+                    path: root.join("target-secret"),
+                    shown: "file:/x".to_owned(),
+                },
+                krishiv_sql::StatementClass::Ddl,
+            )
+            .unwrap_err();
+        for e in [mkdir, moved] {
+            assert_eq!(
+                e.error_class(),
+                krishiv_common::error::ErrorClass::InternalError
+            );
+            let text = e.to_string();
+            assert!(
+                !text.contains("secret") && !text.contains("os error"),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_failed_move_back_is_an_internal_error_naming_no_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let from = tmp.path().join("went-secret");
+        let to = tmp.path().join("came-secret");
+        let session = crate::Session::new().unwrap();
+        let e = session.move_back(&from, &to).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            krishiv_common::error::ErrorClass::InternalError
+        );
+        let text = e.to_string();
+        assert!(!text.contains("secret"), "{text}");
+        assert!(!text.contains(&*tmp.path().to_string_lossy()), "{text}");
+    }
 }

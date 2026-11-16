@@ -251,7 +251,9 @@ pub static CONNECT_HANDSHAKE_TIMEOUT: ConfigEntry = startup(
     ValueType::Duration,
     ConfigValue::Duration(Duration::from_secs(10)),
     "A new Spark Connect connection that sends no first byte for this long is closed, so silent \
-     sockets cannot hold `krishiv.connect.maxConnections` for longer. `0s` means no deadline.",
+     sockets cannot hold `krishiv.connect.maxConnections` for longer; with TLS the whole handshake \
+     must also finish within it. `0s` means no deadline for either, so a client that stalls \
+     mid-handshake holds its connection slot until it disconnects.",
     None,
 );
 
@@ -310,5 +312,17 @@ pub static SERVER_METRICS_PUBLIC: ConfigEntry = startup(
     ConfigValue::Bool(false),
     "Whether the admin server's `/metrics` answers without the admin token. Only on a loopback \
      address; aggregate counters only.",
+    None,
+);
+
+/// Extra host names the admin listener accepts on a loopback address.
+pub static SERVER_ALLOWED_HOSTS: ConfigEntry = startup(
+    "krishiv.server.allowedHosts",
+    ValueType::String,
+    ConfigValue::String(std::borrow::Cow::Borrowed("")),
+    "Comma-separated host names (or IP literals) the admin listener accepts in the `Host` header \
+     when it is bound to a loopback address, besides `localhost`, `127.0.0.1` and `[::1]`. A \
+     request with any other `Host` is refused with 421, which stops a web page from reaching the \
+     admin API through DNS rebinding. Unset: only the loopback names.",
     None,
 );

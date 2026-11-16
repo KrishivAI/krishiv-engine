@@ -212,6 +212,28 @@ fn shared_broadcast_bytes_parses_and_defaults_to_no_cap() {
 }
 
 #[test]
+fn bloom_at_scale_is_on_by_default_and_parses() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        c.get(&RUNTIME_FILTER_BLOOM_AT_SCALE)
+            .and_then(ConfigValue::as_bool)
+    };
+    assert_eq!(get(&c), Some(true));
+    c.set("krishiv.runtimeFilter.bloom.atScale", "false")
+        .unwrap();
+    assert_eq!(get(&c), Some(false));
+    assert!(
+        c.set("krishiv.runtimeFilter.bloom.atScale", "sometimes")
+            .is_err()
+    );
+    // The experimental key it graduated from never shipped and is not registered.
+    assert!(
+        c.set("krishiv.experimental.runtimeFilterBloomAtScale", "true")
+            .is_err()
+    );
+}
+
+#[test]
 fn spill_entries_parse_and_default() {
     let mut c = Config::new();
     let get = |c: &Config| {
@@ -613,7 +635,7 @@ fn registry_is_well_formed() {
 #[test]
 fn docs_markdown_lists_every_entry_deterministically() {
     let md = docs_markdown();
-    assert!(md.starts_with("# Krishiv configuration reference\n"));
+    assert!(md.contains("\n# Krishiv configuration reference\n"));
     assert!(md.contains(
         "| Key | Type | Default | Scope | Settable by | Since | Spark alias | Description |"
     ));
@@ -903,6 +925,23 @@ fn group_key_code_force_is_experimental_and_off() {
         c.set("krishiv.experimental.groupKeyCodeForce", "maybe")
             .is_err()
     );
+}
+
+#[test]
+fn semi_anti_join_order_defaults_on_and_is_user_settable() {
+    let mut c = Config::new();
+    let key = "krishiv.optimizer.semiAntiJoinOrder";
+    assert_eq!(
+        c.get(&SEMI_ANTI_JOIN_ORDER).and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(SEMI_ANTI_JOIN_ORDER.settable_by, SettableBy::User);
+    c.set(key, "false").unwrap();
+    assert_eq!(
+        c.get(&SEMI_ANTI_JOIN_ORDER).and_then(ConfigValue::as_bool),
+        Some(false)
+    );
+    assert!(c.set(key, "sometimes").is_err());
 }
 
 #[test]
@@ -1330,6 +1369,48 @@ fn fuse_probe_select_defaults_on_and_parses() {
 }
 
 #[test]
+fn late_payload_join_defaults_on_and_parses() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&LATE_PAYLOAD_JOIN).and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+    c.set("krishiv.optimizer.latePayloadJoin", "false").unwrap();
+    assert_eq!(
+        c.get(&LATE_PAYLOAD_JOIN).and_then(ConfigValue::as_bool),
+        Some(false)
+    );
+    assert!(c.set("krishiv.optimizer.latePayloadJoin", "maybe").is_err());
+}
+
+#[test]
+fn history_entries_parse_and_default() {
+    let mut c = Config::new();
+    assert_eq!(c.get(&HISTORY_PATH), None);
+    assert_eq!(
+        c.get(&HISTORY_MAX_BYTES).and_then(ConfigValue::as_size),
+        Some(256 << 20)
+    );
+    c.set("krishiv.history.maxBytes", "50m").unwrap();
+    c.set("krishiv.history.path", "/var/lib/krishiv/history")
+        .unwrap();
+    assert_eq!(
+        c.get(&HISTORY_MAX_BYTES).and_then(ConfigValue::as_size),
+        Some(50 << 20)
+    );
+    assert!(c.set("krishiv.history.maxBytes", "lots").is_err());
+    assert_eq!(
+        c.get(&HISTORY_LITERALS)
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .as_deref(),
+        Some("mask")
+    );
+    c.set("krishiv.history.literals", "keep").unwrap();
+    assert!(c.set("krishiv.history.literals", "some").is_err());
+    assert_eq!(HISTORY_PATH.scope, Scope::Cluster);
+}
+
+#[test]
 fn python_worker_entries_parse_and_default() {
     let mut c = Config::new();
     let get = |c: &Config| {
@@ -1690,4 +1771,23 @@ fn delta_and_catalog_limit_entries_parse_and_default() {
     ] {
         assert_eq!(e.scope, Scope::Cluster, "{}", e.key);
     }
+}
+
+#[test]
+fn union_output_partitioning_is_a_spark_alias() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&UNION_OUTPUT_PARTITIONING),
+        Some(&ConfigValue::Bool(true))
+    );
+    assert_eq!(
+        lookup("spark.sql.unionOutputPartitioning").map(|e| e.key),
+        Some("krishiv.sql.unionOutputPartitioning")
+    );
+    c.set("spark.sql.unionOutputPartitioning", "false").unwrap();
+    assert_eq!(
+        c.get(&UNION_OUTPUT_PARTITIONING),
+        Some(&ConfigValue::Bool(false))
+    );
+    assert!(c.set("spark.sql.unionOutputPartitioning", "maybe").is_err());
 }

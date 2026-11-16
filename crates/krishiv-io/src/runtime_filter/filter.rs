@@ -335,12 +335,25 @@ impl KeyFilterBuilder {
     #[must_use]
     pub fn heap_bytes(&self) -> usize {
         let values = self.distinct.as_ref().map_or(0, Distinct::heap_bytes);
-        let hashes = self.hashes.as_ref().map_or(0, |h| h.capacity() * 8);
+        let hashes = self.hash_bytes();
         let range = match &self.range {
             Some(KeyRange::Bytes(a, b)) => a.len() + b.len(),
             _ => 0,
         };
         values + hashes + range
+    }
+
+    /// Heap bytes of the Bloom filter's hashes alone (what
+    /// [`drop_hashes`](Self::drop_hashes) frees).
+    #[must_use]
+    pub fn hash_bytes(&self) -> usize {
+        self.hashes.as_ref().map_or(0, |h| h.capacity() * 8)
+    }
+
+    /// Whether the Bloom filter's hashes are still collected.
+    #[must_use]
+    pub fn has_hashes(&self) -> bool {
+        self.hashes.is_some()
     }
 
     /// Drops the Bloom filter's hashes and keeps the distinct keys (the

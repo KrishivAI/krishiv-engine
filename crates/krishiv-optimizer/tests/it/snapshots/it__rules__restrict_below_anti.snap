@@ -1,0 +1,22 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+assertion_line: 668
+expression: "SELECT t.a FROM t JOIN (SELECT a, count(*) AS n FROM u WHERE d IN (SELECT b FROM t WHERE c > 0) AND NOT EXISTS (SELECT * FROM t t2 WHERE t2.c = u.d) GROUP BY a) g ON t.a = g.a WHERE t.b = 'x'"
+---
+Project [a#0]
++- Join Inner, (a#0 == a#3)
+   :- Project [a#0]
+   :  +- Filter ((b#1 == 'x') and isnotnull(a#0))
+   :     +- Scan spark_catalog.default.t [a#0, b#1, c#2] (shared #1)
+   +- Aggregate [a#3], [a#3]
+      +- Project [a#3]
+         +- Join LeftAnti, (c#8 == CAST(d#4 AS BIGINT))
+            :- Join LeftSemi, (d#4 == b#1)
+            :  :- Filter (isnotnull(d#4) and isnotnull(a#3))
+            :  :  +- Scan spark_catalog.default.u [a#3, d#4]
+            :  +- Project [b#1]
+            :     +- Filter ((c#2 > 0L) and isnotnull(b#1))
+            :        +- Shared #1, printed above
+            +- Project [c#8]
+               +- Shift +6
+                  +- Shared #1, printed above

@@ -206,11 +206,11 @@ fn directories_list_like_spark() {
     let analyzed = env.block_on(DefaultAnalyzer.analyze(&plan, &ctx)).unwrap();
     assert_eq!(analyzed.output[0].name, "a");
     // An unknown `USING` format is Spark's DATA_SOURCE_NOT_FOUND (42K02).
-    let read = LogicalPlan::new(PlanNode::Read(ReadSource::Files {
-        format: "delta".to_owned(),
-        paths: paths(&["/d"]),
-        options: BTreeMap::new(),
-    }));
+    let read = LogicalPlan::new(PlanNode::Read(ReadSource::files(
+        "delta".to_owned(),
+        paths(&["/d"]),
+        BTreeMap::new(),
+    )));
     let e = env
         .block_on(DefaultAnalyzer.analyze(&Plan::try_new(read).unwrap(), &ctx))
         .unwrap_err();
@@ -325,11 +325,11 @@ fn the_analyzer_reads_parquet_paths() {
     let analyze = |plan: LogicalPlan| {
         env.block_on(DefaultAnalyzer.analyze(&Plan::try_new(plan).unwrap(), &ctx))
     };
-    let read = LogicalPlan::new(PlanNode::Read(ReadSource::Files {
-        format: "parquet".to_owned(),
-        paths: paths(&["/t"]),
-        options: BTreeMap::new(),
-    }));
+    let read = LogicalPlan::new(PlanNode::Read(ReadSource::files(
+        "parquet".to_owned(),
+        paths(&["/t"]),
+        BTreeMap::new(),
+    )));
     let analyzed = analyze(read).unwrap();
     assert_eq!(analyzed.output.len(), 1);
     // Non-null in the file, nullable as Spark reads it.
@@ -471,11 +471,11 @@ fn agrees_with_spark_on_the_file_read_probe() {
                 .map(|p| sub(p.as_str().unwrap()))
                 .collect();
             let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
-            Plan::try_new(LogicalPlan::new(PlanNode::Read(ReadSource::Files {
-                format: "parquet".to_owned(),
-                paths: self::paths(&refs),
-                options: BTreeMap::new(),
-            })))
+            Plan::try_new(LogicalPlan::new(PlanNode::Read(ReadSource::files(
+                "parquet".to_owned(),
+                self::paths(&refs),
+                BTreeMap::new(),
+            ))))
             .unwrap()
         } else {
             let sql = sub(case["input"].as_str().unwrap());

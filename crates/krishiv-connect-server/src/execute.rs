@@ -28,18 +28,23 @@
 //! Errors end the stream with the gRPC status of [`crate::status`] after the
 //! responses before them. An interrupted operation ends with
 //! `OPERATION_CANCELED`. Commands answer `CONNECT_INVALID_PLAN` (56K00)
-//! until P3-T012.
+//! until P3-T012, after the check of their ADR 0046 §3b class
+//! (`crate::auth::check_command`): a caller without the privilege a command
+//! needs is refused with 42501 first.
 //!
 //! The core is protocol-neutral where it is cheap: the plan is decoded into
 //! a `krishiv_plan::Plan`, run as a `DataFrame` and encoded as Arrow IPC;
 //! only the envelope is Connect's.
 
 pub mod arrow;
+pub mod observed;
 pub mod schema;
 
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::sync::Arc;
 
+use crate::auth::{Check, check_command};
 use arrow_schema::SchemaRef;
 use futures::StreamExt;
 use krishiv_common::error::{
@@ -207,6 +212,16 @@ async fn until_cancelled<T>(
     }
 }
 
+/// The trace headers of an `ExecutePlan` request (`traceparent`, `baggage`): untrusted text the
+/// engine parses and bounds ([`QueryOptions::inbound_trace`]); either may be absent.
+#[derive(Debug, Clone, Default)]
+pub struct InboundTrace {
+    /// The `traceparent` header value.
+    pub traceparent: Option<String>,
+    /// The `baggage` header value.
+    pub baggage: Option<String>,
+}
+
 /// Starts `request` on the session `entry`; with the id of a live
 /// operation running the same plan, attaches to it from the start instead
 /// (Spark's `SparkConnectExecutePlanHandler`, v4.3.0 lines 47-60).
@@ -224,12 +239,18 @@ pub async fn execute_plan(
     request: &wire::Decoded<pb::ExecutePlanRequest>,
     limits: &ExecuteLimits,
     budget: &ResponseBudget,
+    inbound: &InboundTrace,
 ) -> Result<ResponseStream, KrishivError> {
     let id = match &request.operation_id {
         Some(text) => krishiv_session::QueryId::parse(text)?,
         None => new_operation_id()?,
     };
     let tags = validate_tags(&request.tags)?;
+    // The request's tags and trace go to the engine's queries of this operation, per request.
+    let query_options = QueryOptions::new()
+        .operation_id(id.as_str())
+        .tags(tags.iter())
+        .inbound_trace(inbound.traceparent.as_deref(), inbound.baggage.as_deref());
     let opts = options(request);
     let op = Arc::new(
         Operation::new(
@@ -260,14 +281,14 @@ pub async fn execute_plan(
     let prepared = until_cancelled(&op, async {
         // Decompression (up to `maxPlanSize`) runs off the async workers.
         let logical = request_plan(session, plan, limits).await?;
-        let df = session.from_plan_with(&logical, QueryOptions::new().operation_id(id.as_str()))?;
+        let df = session.from_plan_with(&logical, query_options)?;
         let schema = df.schema().await?;
-        Ok((df, schema))
+        Ok((df, schema, observed::plan_ids(logical.root())))
     })
     .await;
     // A preparation error settles like a query error: an interrupt that
     // reported this operation first turns it into `OPERATION_CANCELED`.
-    let (df, schema) = match prepared {
+    let (df, schema, plan_ids) = match prepared {
         Ok(ready) => ready,
         Err(e) => {
             return Err(if op.finish() {
@@ -300,15 +321,47 @@ pub async fn execute_plan(
     // before its first stream.
     let stream = sender::attach(Arc::clone(&op), operations, 0, SenderCaps::of(&op, limits));
     registered.keep();
-    tokio::spawn(encode(sender, df, schema, schema_response, settings));
+    tokio::spawn(encode(
+        sender,
+        df,
+        schema,
+        schema_response,
+        settings,
+        plan_ids,
+    ));
     Ok(stream)
+}
+
+/// What [`translate_plan`] made of a plan.
+enum Translated {
+    /// A ROOT relation as the engine's IR.
+    Relation(krishiv_plan::Plan),
+    /// A command (from a compressed operation too): its ADR 0046 §3b class,
+    /// then the refusal it gets until P3-T012 runs commands. The command
+    /// itself is not kept: it stays in the scrubbed request.
+    Command {
+        /// The command's class.
+        check: Check,
+        /// `CONNECT_INVALID_PLAN` naming the command.
+        refusal: KrishivError,
+    },
+}
+
+impl Translated {
+    fn command(command: &pb::Command) -> Self {
+        Self::Command {
+            check: check_command(command),
+            refusal: command_not_supported(command),
+        }
+    }
 }
 
 /// The engine plan of a request's `Plan`: a compressed one decompressed
 /// (off the async workers, bounded by `maxPlanSize`), then translated with
 /// the session's `spark.sql.sources.default`. Shared by `ExecutePlan` and
 /// `AnalyzePlan` (Spark's `RequestDecompressionInterceptor` then
-/// `SparkConnectPlanner`).
+/// `SparkConnectPlanner`). A command gets its class checked, then its refusal (until
+/// P3-T012 runs commands).
 ///
 /// # Errors
 /// The decompression, decoding and translation errors.
@@ -340,24 +393,35 @@ pub(crate) async fn request_plan(
         }
         _ => None,
     };
-    translate_plan(plan, decompressed.as_deref(), &translate)
+    match translate_plan(plan, decompressed.as_deref(), &translate)? {
+        Translated::Relation(logical) => Ok(logical),
+        // A command's ADR 0046 §3b class is checked before it is refused, on every RPC that
+        // takes a plan.
+        Translated::Command { check, refusal } => {
+            crate::auth::enforce(&check, session).await?;
+            Err(refusal)
+        }
+    }
 }
 
 /// The plan as the engine's IR: a ROOT relation translated, a compressed
-/// one decompressed first; commands refused until P3-T012.
+/// one decompressed first; a command is returned as decoded.
 fn translate_plan(
     plan: &pb::Plan,
     decompressed: Option<&[u8]>,
     conf: &TranslateConf,
-) -> Result<krishiv_plan::Plan, KrishivError> {
+) -> Result<Translated, KrishivError> {
     match &plan.op_type {
-        Some(OpType::Root(relation)) => translate_relation(relation, conf),
-        Some(OpType::Command(command)) => Err(command_not_supported(command)),
+        Some(OpType::Root(relation)) => {
+            translate_relation(relation, conf).map(Translated::Relation)
+        }
+        Some(OpType::Command(command)) => Ok(Translated::command(command)),
         Some(OpType::CompressedOperation(c)) => {
             let bytes = decompressed.unwrap_or_default();
             match CompressedOpType::try_from(c.op_type) {
                 Ok(CompressedOpType::Relation) => {
                     translate_relation(&*wire::decode_relation(bytes)?, conf)
+                        .map(Translated::Relation)
                 }
                 Ok(CompressedOpType::Command) => {
                     // Decoded through the bounded decoder as the `command`
@@ -371,8 +435,8 @@ fn translate_plan(
                     prost::encoding::encode_varint(bytes.len() as u64, &mut wrapped);
                     wrapped.extend_from_slice(bytes);
                     match &wire::decode_plan(&wrapped)?.op_type {
-                        Some(OpType::Command(command)) => Err(command_not_supported(command)),
-                        _ => Err(command_not_supported(&pb::Command::default())),
+                        Some(OpType::Command(command)) => Ok(Translated::command(command)),
+                        _ => Ok(Translated::command(&pb::Command::default())),
                     }
                 }
                 _ => {
@@ -586,6 +650,7 @@ async fn encode(
     schema: SchemaRef,
     schema_response: pb::DataType,
     settings: EncodeSettings,
+    plan_ids: BTreeMap<String, i64>,
 ) {
     let op = Arc::clone(&sender.op);
     // A close or an interrupt is seen at once, also while the encoder
@@ -594,7 +659,7 @@ async fn encode(
         biased;
         () = op.closed() => Err(Stop::Gone),
         () = op.cancelled() => Err(Stop::Failed(OperationCanceled {}.into())),
-        r = produce(&sender, &df, &schema, schema_response, &settings) => r,
+        r = produce(&sender, &df, &schema, schema_response, &settings, &plan_ids) => r,
     };
     // The query's stream is gone by now (dropped with `produce`).
     drop(df);
@@ -631,7 +696,10 @@ async fn produce(
     schema: &SchemaRef,
     schema_response: pb::DataType,
     settings: &EncodeSettings,
+    plan_ids: &BTreeMap<String, i64>,
 ) -> Result<(), Stop> {
+    let sink = krishiv_session::ObservedSink::new();
+    let df = &df.with_observed_sink(&sink);
     sender.admit().await?;
     let mut first = sender.response(None);
     first.schema = Some(schema_response);
@@ -657,6 +725,29 @@ async fn produce(
     // metrics (a follow-up); until then the list is empty.
     metrics.metrics = Some(Metrics::default());
     sender.send(metrics).await?;
+    // The observed nodes' metrics follow the SQL metrics, all in one response as Spark sends
+    // them; a query that ended in an error never gets here, so it sends none.
+    // An observation whose metrics failed to finalize, or have no literal yet, fails the action
+    // (Spark: the metric's error is the action's), after the others' metrics were sent.
+    let mut all = Vec::new();
+    let mut failed = None;
+    for (name, row) in sink.take().unwrap_or_default() {
+        let plan_id = plan_ids.get(&name).copied().unwrap_or(0);
+        match row.and_then(|row| observed::observed_metrics(&name, plan_id, &row)) {
+            Ok(metrics) => all.push(metrics),
+            Err(e) => {
+                failed.get_or_insert(e);
+            }
+        }
+    }
+    if !all.is_empty() {
+        let mut response = sender.response(None);
+        response.observed_metrics = all;
+        sender.send(response).await?;
+    }
+    if let Some(e) = failed {
+        return Err(e.into());
+    }
     // The end is atomic with interrupts: once finished, an interrupt
     // interrupts nothing; an interrupt that came first turns the end into
     // OPERATION_CANCELED (Spark's `ExecuteThreadRunner`, v4.3.0 lines

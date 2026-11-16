@@ -58,6 +58,23 @@ def _side_record(label: str, eng: KrishivEngine, sha: str | None) -> dict:
     }
 
 
+def build_mismatch(sides: dict) -> str | None:
+    """Why the two runners' builds differ (profile, CPU level or branch alignment), or None.
+
+    Two builds of one commit can differ by a few percent from code placement alone, so both sides of an A/B are built
+    the same way (bench/README.md). Runners that cannot report their build are not compared.
+    """
+    a, b = sides["a"]["build_info"], sides["b"]["build_info"]
+    if a is None or b is None or a == b:
+        return None
+    diff = ", ".join(
+        f"{k} A={a.get(k, 'unreported')} B={b.get(k, 'unreported')}"
+        for k in sorted(a.keys() | b.keys())
+        if a.get(k) != b.get(k)
+    )
+    return f"A and B runners are built differently ({diff}): build both sides alike (bench/README.md)"
+
+
 def _fail(entry: dict, reason: str) -> dict:
     return {**entry, "status": "failed", "reason": reason}
 
@@ -137,6 +154,8 @@ def markdown(record: dict) -> str:
     else:
         lines.append(f"No query passed the A-vs-B correctness check (0/{s['queries_total']}).")
     lines.append(load_line(record))
+    if "build_mismatch" in record:
+        lines.append(f"**Warning:** {record['build_mismatch']}.")
     return "\n".join(lines)
 
 
@@ -204,6 +223,9 @@ def run_ab(
             a.setup(ds)
             b.setup(ds)
             record["sides"] = {"a": _side_record("A", a, a_sha), "b": _side_record("B", b, b_sha)}
+            if mismatch := build_mismatch(record["sides"]):
+                record["build_mismatch"] = mismatch
+                print(f"warning: {mismatch}")
             for q in queries:
                 record["queries"][q.id] = one_query(q, a, b, reps)
         finally:

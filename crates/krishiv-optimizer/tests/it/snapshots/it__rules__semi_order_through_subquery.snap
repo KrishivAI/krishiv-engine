@@ -1,0 +1,17 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+assertion_line: 668
+expression: "SELECT s.a FROM (SELECT a, b FROM t WHERE EXISTS (SELECT * FROM u WHERE u.a = t.a)) s WHERE NOT EXISTS (SELECT * FROM u WHERE u.d = s.b)"
+---
+Join LeftSemi, (a#3 == a#0)
+:- Project [a#0]
+:  +- Join LeftAnti, (d#6 == b#1)
+:     :- Filter isnotnull(a#0)
+:     :  +- Scan spark_catalog.default.t [a#0, b#1]
+:     +- Project [d#6]
+:        +- Shift +2
+:           +- Filter isnotnull(d#4)
+:              +- Scan spark_catalog.default.u [a#3, d#4] (shared #1)
++- Project [a#3]
+   +- Filter isnotnull(a#3)
+      +- Shared #1, printed above

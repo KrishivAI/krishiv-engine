@@ -168,6 +168,14 @@ const RADIANS_TO_DEGREES: f64 = 57.295_779_513_082_32;
 /// `Math.toRadians`' factor (JDK 21).
 const DEGREES_TO_RADIANS: f64 = 0.017_453_292_519_943_295;
 
+/// Java's `StrictMath.log(x)` (fdlibm's `log`), bit for bit: for callers
+/// that reproduce a JVM algorithm calling it, such as `nextGaussian`.
+/// No Hive domain rule: `strict_log(0.0)` is `-inf`, a negative `x` NaN.
+#[must_use]
+pub fn strict_log(x: f64) -> f64 {
+    fdlibm::log(x)
+}
+
 /// `f(x)` over a column; NULL where `x` is NULL or `f` has no value.
 #[must_use]
 pub fn unary(f: UnaryFn, x: &Float64Array, ctx: &KernelCtx) -> Float64Array {

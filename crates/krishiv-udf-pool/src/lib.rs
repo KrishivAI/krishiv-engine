@@ -19,6 +19,8 @@ use std::ffi::OsString;
 use std::process::ExitCode;
 
 #[cfg(target_os = "linux")]
+mod calls;
+#[cfg(target_os = "linux")]
 mod interpreter;
 #[cfg(target_os = "linux")]
 mod package;

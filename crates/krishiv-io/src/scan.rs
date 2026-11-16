@@ -52,7 +52,7 @@ use crate::schema_map::SchemaMapper;
 pub struct ScanOptions {
     /// `krishiv.io.prefetchBytes`.
     pub prefetch_bytes: u64,
-    /// `spark.sql.files.ignoreCorruptFiles` / the `ignoreCorruptFiles`
+    /// `spark.sql.files.ignoreCorruptFiles` / the per-read `ignoreCorruptFiles`
     /// option: a file that cannot be decoded (bad footer, undecodable data)
     /// ends early, keeping the rows already returned. Storage failures
     /// (`KRISHIV_OBJECT_STORE_REQUEST_FAILED`) and changed files are never
@@ -99,6 +99,21 @@ impl ScanOptions {
             ignore_missing_files: flag("spark.sql.files.ignoreMissingFiles"),
             needs: MetadataNeeds::default(),
         }
+    }
+
+    /// The settings of one read: session config `c`, with the read's own
+    /// `ignoreCorruptFiles` / `ignoreMissingFiles` options taking precedence
+    /// over the session conf, as Spark's `FileSourceOptions`.
+    #[must_use]
+    pub fn for_read(c: &Config, options: &FormatOptions) -> Self {
+        let mut o = Self::from_config(c);
+        if let Some(v) = options.ignore_corrupt_files() {
+            o.ignore_corrupt_files = v;
+        }
+        if let Some(v) = options.ignore_missing_files() {
+            o.ignore_missing_files = v;
+        }
+        o
     }
 }
 

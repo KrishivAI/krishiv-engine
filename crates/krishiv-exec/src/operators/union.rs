@@ -92,6 +92,10 @@ impl UnionAlign {
 }
 
 impl Operator for UnionAlign {
+    fn keeps_partitioning(&self) -> bool {
+        true
+    }
+
     fn lane_safe(&self) -> bool {
         true
     }

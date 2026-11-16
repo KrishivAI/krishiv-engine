@@ -248,7 +248,7 @@ impl Cursor {
                 probe.push(u32::try_from(i).unwrap_or(u32::MAX));
                 build.push((p, self.chain));
             }
-            self.chain = table.map_or(NONE, |t| t.next()[self.chain as usize]);
+            self.chain = table.map_or(NONE, |t| t.next_of(self.chain));
             if self.chain == NONE {
                 self.pos += 1;
             }
@@ -762,7 +762,8 @@ impl Operator for ProbeOp {
             signal: Arc::clone(memory.signal()),
             flush: Flush::default(),
             batch_size: ctx.query().config().batch_size.max(1),
-            partition: ctx.partition(),
+            // Spark's partition index (a `UNION ALL` branch numbers its own).
+            partition: ctx.partition().wrapping_sub(ctx.numbering_base()),
             select,
             selected: None,
         }))

@@ -1,3 +1,7 @@
+---
+description: "Internal type representations."
+---
+
 **Version:** 0.2.0
 
 # Module `krishiv_types`

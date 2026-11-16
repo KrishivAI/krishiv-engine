@@ -17,7 +17,7 @@
 //! | `interval day to second` | `Duration(Microsecond)`, tagged for other fields | |
 //! | `interval` | `Struct<months: Int32, days: Int32, microseconds: Int64>`, children non-null and marked with [`CALENDAR_CHILD_METADATA_KEY`] (Spark's `CalendarInterval`) | `Interval(MonthDayNano)` (the session edges convert to and from it) |
 //! | `geometry(s)` / `geography(s)` | `Struct<srid: Int32, wkb: BinaryView>`, both children non-null, always tagged | |
-//! | `array<e>` | `List` of a field `element` (nullable when `containsNull`) | `LargeList`, any child name |
+//! | `array<e>` | `List` of a field `element` (nullable when `containsNull`) | `LargeList`, `FixedSizeList` (the vector carrier, any length), any child name |
 //! | `map<k,v>` | `Map` of a non-null struct `entries` of `key` (non-null) and `value` (nullable when `valueContainsNull`), unsorted | any child names |
 //! | `struct<...>` | `Struct` of the fields | |
 //! | `variant` | `Struct<metadata: BinaryView, value: BinaryView>`, both children non-null and marked with [`VARIANT_CHILD_METADATA_KEY`]; the field also carries the Arrow extension name `arrow.parquet.variant` | |
@@ -208,7 +208,8 @@ fn map_decimals(arrow: &ArrowType, to: fn(u8, i8) -> ArrowType) -> ArrowType {
 /// what an Arrow value of any carrier becomes when it enters a query.
 #[must_use]
 pub fn canonical_arrow_type(arrow: &ArrowType) -> ArrowType {
-    let arrow = map_calendar(arrow, false);
+    let arrow = map_fixed_lists(arrow, true);
+    let arrow = map_calendar(&arrow, false);
     map_decimals(&arrow, |p, s| {
         if p <= DECIMAL64_MAX_PRECISION {
             ArrowType::Decimal64(p, s)
@@ -228,7 +229,41 @@ pub fn client_arrow_type(arrow: &ArrowType) -> ArrowType {
 /// `Interval(MonthDayNano)` (Spark's own Arrow form of it).
 #[must_use]
 pub fn edge_arrow_type(arrow: &ArrowType) -> ArrowType {
-    map_calendar(&client_arrow_type(arrow), true)
+    map_calendar(&client_arrow_type(&map_fixed_lists(arrow, false)), true)
+}
+
+/// The longest vector the engine carries as a `FixedSizeList` (design P3-T075): the bound keeps `N` times a batch's rows
+/// far from the `i32` offsets of the plain list it becomes at an expression input.
+pub const MAX_VECTOR_LENGTH: i32 = 65_536;
+
+/// Whether `arrow` is a vector carrier: a top-level `FixedSizeList` of `Float32` or `Float64` of length `1..=`
+/// [`MAX_VECTOR_LENGTH`] (design P3-T075 §3).
+#[must_use]
+pub fn is_vector_carrier(arrow: &ArrowType) -> bool {
+    matches!(arrow, ArrowType::FixedSizeList(f, n)
+        if (1..=MAX_VECTOR_LENGTH).contains(n)
+            && matches!(f.data_type(), ArrowType::Float32 | ArrowType::Float64))
+}
+
+/// `arrow` with every `FixedSizeList` a plain `List`, except (when `keep_vectors`) a vector carrier at the top
+/// level: the carrier a column is born with only where a source's schema says so, and never nested.
+fn map_fixed_lists(arrow: &ArrowType, keep_vectors: bool) -> ArrowType {
+    if keep_vectors && is_vector_carrier(arrow) {
+        return arrow.clone();
+    }
+    let field = |f: &Field| {
+        f.clone()
+            .with_data_type(map_fixed_lists(f.data_type(), false))
+    };
+    match arrow {
+        ArrowType::FixedSizeList(f, _) | ArrowType::List(f) => ArrowType::List(Arc::new(field(f))),
+        ArrowType::LargeList(f) => ArrowType::LargeList(Arc::new(field(f))),
+        ArrowType::Map(f, sorted) => ArrowType::Map(Arc::new(field(f)), *sorted),
+        ArrowType::Struct(fields) => {
+            ArrowType::Struct(fields.iter().map(|f| field(f)).collect::<Fields>())
+        }
+        other => other.clone(),
+    }
 }
 
 /// `arrow` with each calendar interval on the struct carrier (`to_edge == false`) or on `Interval(MonthDayNano)`.
@@ -322,6 +357,7 @@ impl DataType {
             arrow,
             ArrowType::List(_)
                 | ArrowType::LargeList(_)
+                | ArrowType::FixedSizeList(..)
                 | ArrowType::Map(..)
                 | ArrowType::Struct(_)
         );
@@ -351,7 +387,9 @@ impl DataType {
             ArrowType::Interval(IntervalUnit::YearMonth) => Self::DEFAULT_YEAR_MONTH_INTERVAL,
             ArrowType::Duration(TimeUnit::Microsecond) => Self::DEFAULT_DAY_TIME_INTERVAL,
             ArrowType::Interval(IntervalUnit::MonthDayNano) => Self::CalendarInterval,
-            ArrowType::List(f) | ArrowType::LargeList(f) => {
+            // A fixed-length list is the stored carrier of `array<T>` (design P3-T075): the length is not part of
+            // the Spark type.
+            ArrowType::List(f) | ArrowType::LargeList(f) | ArrowType::FixedSizeList(f, _) => {
                 ArrayType::new(Self::from_arrow_field_at(f, depth + 1)?, f.is_nullable()).into()
             }
             ArrowType::Map(entries, _) => match entries.data_type() {
@@ -409,9 +447,10 @@ impl DataType {
             ) => *arrow == self.to_arrow(),
             // The element, key, value or field types decide, so a tag on the
             // top-level field can say what plain nested fields don't.
-            (Self::Array(a), ArrowType::List(e) | ArrowType::LargeList(e)) => {
-                a.element_type().is_valid_storage(e.data_type())
-            }
+            (
+                Self::Array(a),
+                ArrowType::List(e) | ArrowType::LargeList(e) | ArrowType::FixedSizeList(e, _),
+            ) => a.element_type().is_valid_storage(e.data_type()),
             (Self::Map(m), ArrowType::Map(entries, _)) => match entries.data_type() {
                 ArrowType::Struct(kv) => match (kv.first(), kv.get(1)) {
                     (Some(k), Some(v)) => {
