@@ -367,6 +367,383 @@
  "delta_spark": "4.4.1",
  "format_version": 1,
  "generator": "gen_delta_fixtures.py options",
+ "merge_schema": {
+  "bigint_into_int": {
+   "error": {
+    "condition": "DELTA_FAILED_TO_MERGE_FIELDS",
+    "message": "[DELTA_FAILED_TO_MERGE_FIELDS] Failed to merge fields 'n' and 'n'",
+    "parameters": {
+     "currentField": "n",
+     "updateField": "n"
+    },
+    "sqlstate": "22005"
+   },
+   "options": {
+    "mergeSchema": "true"
+   },
+   "select": "CAST(5 AS BIGINT) AS id, CAST(5 AS BIGINT) AS n, CAST(1.5 AS DECIMAL(10,2)) AS d, named_struct('a', CAST(1 AS INT)) AS s",
+   "table": "plain",
+   "versions": 2
+  },
+  "bigint_into_int_no_merge": {
+   "error": {
+    "condition": "DELTA_FAILED_TO_MERGE_FIELDS",
+    "message": "[DELTA_FAILED_TO_MERGE_FIELDS] Failed to merge fields 'n' and 'n'",
+    "parameters": {
+     "currentField": "n",
+     "updateField": "n"
+    },
+    "sqlstate": "22005"
+   },
+   "options": {},
+   "select": "CAST(5 AS BIGINT) AS id, CAST(5 AS BIGINT) AS n, CAST(1.5 AS DECIMAL(10,2)) AS d, named_struct('a', CAST(1 AS INT)) AS s",
+   "table": "plain",
+   "versions": 2
+  },
+  "decimal_precision": {
+   "error": {
+    "condition": "DELTA_FAILED_TO_MERGE_FIELDS",
+    "message": "[DELTA_FAILED_TO_MERGE_FIELDS] Failed to merge fields 'd' and 'd'",
+    "parameters": {
+     "currentField": "d",
+     "updateField": "d"
+    },
+    "sqlstate": "22005"
+   },
+   "options": {
+    "mergeSchema": "true"
+   },
+   "select": "CAST(5 AS BIGINT) AS id, CAST(5 AS INT) AS n, CAST(1.5 AS DECIMAL(12,2)) AS d, named_struct('a', CAST(1 AS INT)) AS s",
+   "table": "plain",
+   "versions": 2
+  },
+  "int_into_bigint": {
+   "error": {
+    "condition": "DELTA_FAILED_TO_MERGE_FIELDS",
+    "message": "[DELTA_FAILED_TO_MERGE_FIELDS] Failed to merge fields 'id' and 'id'",
+    "parameters": {
+     "currentField": "id",
+     "updateField": "id"
+    },
+    "sqlstate": "22005"
+   },
+   "options": {
+    "mergeSchema": "true"
+   },
+   "select": "CAST(5 AS INT) AS id, CAST(5 AS INT) AS n, CAST(1.5 AS DECIMAL(10,2)) AS d, named_struct('a', CAST(1 AS INT)) AS s",
+   "table": "plain",
+   "versions": 2
+  },
+  "nested_bigint_into_int": {
+   "error": {
+    "condition": "DELTA_FAILED_TO_MERGE_FIELDS",
+    "message": "[DELTA_FAILED_TO_MERGE_FIELDS] Failed to merge fields 's' and 's'",
+    "parameters": {
+     "currentField": "s",
+     "updateField": "s"
+    },
+    "sqlstate": "22005"
+   },
+   "options": {
+    "mergeSchema": "true"
+   },
+   "select": "CAST(5 AS BIGINT) AS id, CAST(5 AS INT) AS n, CAST(1.5 AS DECIMAL(10,2)) AS d, named_struct('a', CAST(1 AS BIGINT)) AS s",
+   "table": "plain",
+   "versions": 2
+  },
+  "null_into_int": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "canMergeSchema": true,
+     "mode": "Append",
+     "partitionBy": "[]"
+    }
+   },
+   "error": null,
+   "options": {
+    "mergeSchema": "true"
+   },
+   "rows": [
+    [
+     1,
+     1,
+     {
+      "decimal": "1.00"
+     },
+     {
+      "struct": {
+       "a": 1
+      }
+     }
+    ],
+    [
+     5,
+     null,
+     {
+      "decimal": "1.50"
+     },
+     {
+      "struct": {
+       "a": 1
+      }
+     }
+    ]
+   ],
+   "select": "CAST(5 AS BIGINT) AS id, NULL AS n, CAST(1.5 AS DECIMAL(10,2)) AS d, named_struct('a', CAST(1 AS INT)) AS s",
+   "table": "plain",
+   "types": {
+    "d": "decimal(10,2)",
+    "id": "bigint",
+    "n": "int",
+    "s": "struct<a:int>"
+   },
+   "versions": 3
+  },
+  "same_types": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "canMergeSchema": true,
+     "mode": "Append",
+     "partitionBy": "[]"
+    }
+   },
+   "error": null,
+   "options": {
+    "mergeSchema": "true"
+   },
+   "rows": [
+    [
+     1,
+     1,
+     {
+      "decimal": "1.00"
+     },
+     {
+      "struct": {
+       "a": 1
+      }
+     }
+    ],
+    [
+     5,
+     5,
+     {
+      "decimal": "1.50"
+     },
+     {
+      "struct": {
+       "a": 1
+      }
+     }
+    ]
+   ],
+   "select": "CAST(5 AS BIGINT) AS id, CAST(5 AS INT) AS n, CAST(1.5 AS DECIMAL(10,2)) AS d, named_struct('a', CAST(1 AS INT)) AS s",
+   "table": "plain",
+   "types": {
+    "d": "decimal(10,2)",
+    "id": "bigint",
+    "n": "int",
+    "s": "struct<a:int>"
+   },
+   "versions": 3
+  },
+  "smallint_into_int": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "canMergeSchema": true,
+     "mode": "Append",
+     "partitionBy": "[]"
+    }
+   },
+   "error": null,
+   "options": {
+    "mergeSchema": "true"
+   },
+   "rows": [
+    [
+     1,
+     1,
+     {
+      "decimal": "1.00"
+     },
+     {
+      "struct": {
+       "a": 1
+      }
+     }
+    ],
+    [
+     5,
+     5,
+     {
+      "decimal": "1.50"
+     },
+     {
+      "struct": {
+       "a": 1
+      }
+     }
+    ]
+   ],
+   "select": "CAST(5 AS BIGINT) AS id, CAST(5 AS SMALLINT) AS n, CAST(1.5 AS DECIMAL(10,2)) AS d, named_struct('a', CAST(1 AS INT)) AS s",
+   "table": "plain",
+   "types": {
+    "d": "decimal(10,2)",
+    "id": "bigint",
+    "n": "int",
+    "s": "struct<a:int>"
+   },
+   "versions": 3
+  },
+  "string_into_int": {
+   "error": {
+    "condition": "DELTA_FAILED_TO_MERGE_FIELDS",
+    "message": "[DELTA_FAILED_TO_MERGE_FIELDS] Failed to merge fields 'n' and 'n'",
+    "parameters": {
+     "currentField": "n",
+     "updateField": "n"
+    },
+    "sqlstate": "22005"
+   },
+   "options": {
+    "mergeSchema": "true"
+   },
+   "select": "CAST(5 AS BIGINT) AS id, '5' AS n, CAST(1.5 AS DECIMAL(10,2)) AS d, named_struct('a', CAST(1 AS INT)) AS s",
+   "table": "plain",
+   "versions": 2
+  },
+  "tinyint_into_int": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "canMergeSchema": true,
+     "mode": "Append",
+     "partitionBy": "[]"
+    }
+   },
+   "error": null,
+   "options": {
+    "mergeSchema": "true"
+   },
+   "rows": [
+    [
+     1,
+     1,
+     {
+      "decimal": "1.00"
+     },
+     {
+      "struct": {
+       "a": 1
+      }
+     }
+    ],
+    [
+     5,
+     5,
+     {
+      "decimal": "1.50"
+     },
+     {
+      "struct": {
+       "a": 1
+      }
+     }
+    ]
+   ],
+   "select": "CAST(5 AS BIGINT) AS id, CAST(5 AS TINYINT) AS n, CAST(1.5 AS DECIMAL(10,2)) AS d, named_struct('a', CAST(1 AS INT)) AS s",
+   "table": "plain",
+   "types": {
+    "d": "decimal(10,2)",
+    "id": "bigint",
+    "n": "int",
+    "s": "struct<a:int>"
+   },
+   "versions": 3
+  },
+  "widening_bigint_into_int": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "canMergeSchema": true,
+     "mode": "Append",
+     "partitionBy": "[]"
+    }
+   },
+   "error": null,
+   "options": {
+    "mergeSchema": "true"
+   },
+   "rows": [
+    [
+     1,
+     1
+    ],
+    [
+     5,
+     5
+    ]
+   ],
+   "select": "CAST(5 AS BIGINT) AS id, CAST(5 AS BIGINT) AS i",
+   "table": "widening",
+   "types": {
+    "i": "bigint",
+    "id": "bigint"
+   },
+   "versions": 3
+  },
+  "widening_short_into_int": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "canMergeSchema": true,
+     "mode": "Append",
+     "partitionBy": "[]"
+    }
+   },
+   "error": null,
+   "options": {
+    "mergeSchema": "true"
+   },
+   "rows": [
+    [
+     1,
+     1
+    ],
+    [
+     5,
+     5
+    ]
+   ],
+   "select": "CAST(5 AS BIGINT) AS id, CAST(5 AS SMALLINT) AS i",
+   "table": "widening",
+   "types": {
+    "i": "int",
+    "id": "bigint"
+   },
+   "versions": 3
+  },
+  "widening_string_into_int": {
+   "error": {
+    "condition": "DELTA_FAILED_TO_MERGE_FIELDS",
+    "message": "[DELTA_FAILED_TO_MERGE_FIELDS] Failed to merge fields 'i' and 'i'",
+    "parameters": {
+     "currentField": "i",
+     "updateField": "i"
+    },
+    "sqlstate": "22005"
+   },
+   "options": {
+    "mergeSchema": "true"
+   },
+   "select": "CAST(5 AS BIGINT) AS id, '5' AS i",
+   "table": "widening",
+   "versions": 2
+  }
+ },
  "spark": "4.2.0",
  "statements": {
   "delete_with_options": {

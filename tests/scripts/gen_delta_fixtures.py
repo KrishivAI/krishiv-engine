@@ -2037,6 +2037,115 @@ OPTION_STATEMENTS: list[tuple[str, str]] = [
 ]
 
 
+# `mergeSchema` against the table's types (`SchemaMergingUtils.mergeDataTypes`): (case, table,
+# the appended row's SELECT list, options). `plain` is `(id BIGINT, n INT, d DECIMAL(10,2),
+# s STRUCT<a: INT>)` with one row; `widening` is `(id BIGINT, i INT)` with
+# `delta.enableTypeWidening`, as `write-features/type-widening`.
+MERGE_SCHEMA_BASE = (
+    "CAST(5 AS BIGINT) AS id, CAST(5 AS INT) AS n, CAST(1.5 AS DECIMAL(10,2)) AS d, "
+    "named_struct('a', CAST(1 AS INT)) AS s"
+)
+MERGE_SCHEMA_CASES: list[tuple[str, str, str, dict[str, str]]] = [
+    ("same_types", "plain", MERGE_SCHEMA_BASE, {"mergeSchema": "true"}),
+    (
+        "bigint_into_int",
+        "plain",
+        MERGE_SCHEMA_BASE.replace("CAST(5 AS INT) AS n", "CAST(5 AS BIGINT) AS n"),
+        {"mergeSchema": "true"},
+    ),
+    (
+        "bigint_into_int_no_merge",
+        "plain",
+        MERGE_SCHEMA_BASE.replace("CAST(5 AS INT) AS n", "CAST(5 AS BIGINT) AS n"),
+        {},
+    ),
+    (
+        "smallint_into_int",
+        "plain",
+        MERGE_SCHEMA_BASE.replace("CAST(5 AS INT) AS n", "CAST(5 AS SMALLINT) AS n"),
+        {"mergeSchema": "true"},
+    ),
+    (
+        "tinyint_into_int",
+        "plain",
+        MERGE_SCHEMA_BASE.replace("CAST(5 AS INT) AS n", "CAST(5 AS TINYINT) AS n"),
+        {"mergeSchema": "true"},
+    ),
+    ("null_into_int", "plain", MERGE_SCHEMA_BASE.replace("CAST(5 AS INT) AS n", "NULL AS n"), {"mergeSchema": "true"}),
+    ("string_into_int", "plain", MERGE_SCHEMA_BASE.replace("CAST(5 AS INT) AS n", "'5' AS n"), {"mergeSchema": "true"}),
+    (
+        "int_into_bigint",
+        "plain",
+        MERGE_SCHEMA_BASE.replace("CAST(5 AS BIGINT) AS id", "CAST(5 AS INT) AS id"),
+        {"mergeSchema": "true"},
+    ),
+    (
+        "decimal_precision",
+        "plain",
+        MERGE_SCHEMA_BASE.replace("DECIMAL(10,2)", "DECIMAL(12,2)"),
+        {"mergeSchema": "true"},
+    ),
+    (
+        "nested_bigint_into_int",
+        "plain",
+        MERGE_SCHEMA_BASE.replace("named_struct('a', CAST(1 AS INT))", "named_struct('a', CAST(1 AS BIGINT))"),
+        {"mergeSchema": "true"},
+    ),
+    (
+        "widening_bigint_into_int",
+        "widening",
+        "CAST(5 AS BIGINT) AS id, CAST(5 AS BIGINT) AS i",
+        {"mergeSchema": "true"},
+    ),
+    ("widening_string_into_int", "widening", "CAST(5 AS BIGINT) AS id, '5' AS i", {"mergeSchema": "true"}),
+    (
+        "widening_short_into_int",
+        "widening",
+        "CAST(5 AS BIGINT) AS id, CAST(5 AS SMALLINT) AS i",
+        {"mergeSchema": "true"},
+    ),
+]
+
+
+def merge_schema_cases(spark: SparkSession, base: str) -> dict:
+    """Each case of ``MERGE_SCHEMA_CASES`` on a fresh table: the error, or the commit's
+    parameters, the table's column types after it, and its rows."""
+    out: dict = {}
+    for name, kind, select, options in MERGE_SCHEMA_CASES:
+        path = os.path.join(base, "merge-schema-" + name)
+        shutil.rmtree(path, ignore_errors=True)
+        if kind == "plain":
+            spark.sql(f"CREATE TABLE delta.`{path}` (id BIGINT, n INT, d DECIMAL(10,2), s STRUCT<a: INT>) USING delta")
+            spark.sql(f"INSERT INTO delta.`{path}` VALUES (1, 1, 1.00, named_struct('a', 1))")
+        else:
+            spark.sql(
+                f"CREATE TABLE delta.`{path}` (id BIGINT, i INT) USING delta "
+                "TBLPROPERTIES ('delta.enableTypeWidening' = 'true')"
+            )
+            spark.sql(f"INSERT INTO delta.`{path}` VALUES (1, 1)")
+        w = spark.sql(f"SELECT {select}").write.format("delta").mode("append")
+        for k, v in options.items():
+            w = w.option(k, v)
+        case: dict = {"table": kind, "select": select, "options": options}
+        try:
+            w.save(path)
+            case["error"] = None
+            info = commits(path)[-1]["commitInfo"]
+            case["commit"] = {
+                "operation": info.get("operation"),
+                "operationParameters": info.get("operationParameters"),
+            }
+            case["types"] = {f.name: f.dataType.simpleString() for f in spark.read.format("delta").load(path).schema}
+            case["rows"] = [
+                [typed(v) for v in r] for r in spark.read.format("delta").load(path).orderBy("id").collect()
+            ]
+        except Exception as e:  # the oracle records every failure
+            case["error"] = oracle_error(e, path)
+        case["versions"] = len(commits(path))
+        out[name] = case
+    return out
+
+
 def write_options(spark: SparkSession, out: str) -> None:
     """``OPTIONS.json``: what delta-spark does with each write option of ``OPTION_CASES`` (the
     error, or the commit's operation, parameters and ``userMetadata``), and Spark 4.2.0's parse
@@ -2089,6 +2198,7 @@ def write_options(spark: SparkSession, out: str) -> None:
         except Exception as e:  # the oracle records every failure
             record["statements"][name] = {"sql": sql, "error": oracle_error(e, path)}
         record["statements"][name]["versions"] = len(commits(path))
+    record["merge_schema"] = merge_schema_cases(spark, base)
     with open(os.path.join(out, "OPTIONS.json"), "w") as f:
         json.dump(record, f, indent=1, sort_keys=True)
         f.write("\n")
