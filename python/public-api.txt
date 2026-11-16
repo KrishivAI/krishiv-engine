@@ -1490,6 +1490,7 @@ Catalog.def uncacheTable(self, tableName: str) -> None
 SPARK_VERSION
 SparkSession.@property def catalog(self) -> Catalog
 SparkSession.@property def conf(self) -> RuntimeConfig
+SparkSession.@property def profile(self) -> Profile
 SparkSession.@property def read(self) -> DataFrameReader
 SparkSession.@property def udf(self) -> UDFRegistration
 SparkSession.@property def version(self) -> str

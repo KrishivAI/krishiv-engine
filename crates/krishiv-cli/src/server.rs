@@ -63,6 +63,52 @@ pub(crate) struct ServerArgs {
     conf: Vec<(String, String)>,
 }
 
+impl ServerArgs {
+    /// `--host`.
+    pub(crate) fn host(&self) -> Option<IpAddr> {
+        self.host
+    }
+    /// `--connect-port`.
+    pub(crate) fn connect_port(&self) -> Option<u16> {
+        self.connect_port
+    }
+    /// `--port`.
+    pub(crate) fn port(&self) -> u16 {
+        self.port
+    }
+    /// The `--conf` settings.
+    pub(crate) fn conf(&self) -> &[(String, String)] {
+        &self.conf
+    }
+    /// `--allow-root`.
+    pub(crate) fn allow_root(&self) -> bool {
+        self.allow_root
+    }
+    /// The settings of a test: default ports, no host, no `--allow-root`.
+    #[cfg(test)]
+    pub(crate) fn for_test(conf: &[(&str, &str)]) -> Self {
+        Self {
+            port: 0,
+            connect_port: Some(0),
+            host: None,
+            allow_root: false,
+            conf: conf
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect(),
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn set_host(&mut self, host: &str) {
+        self.host = host.parse().ok();
+    }
+    #[cfg(test)]
+    pub(crate) fn set_ports(&mut self, connect: u16, admin: u16) {
+        self.connect_port = Some(connect);
+        self.port = admin;
+    }
+}
+
 /// Runs the server; the process exit code.
 #[expect(clippy::print_stderr, reason = "CLI binary: stderr is its interface")]
 pub(crate) fn run(args: &ServerArgs) -> i32 {
@@ -75,20 +121,30 @@ pub(crate) fn run(args: &ServerArgs) -> i32 {
     }
 }
 
-fn serve(args: &ServerArgs) -> Result<(), String> {
+/// The settings of `krishiv server`, parsed and checked. `krishiv doctor` runs the same code, so
+/// the two cannot disagree about what a configuration means.
+pub(crate) struct Settings {
+    pub(crate) config: Config,
+    pub(crate) auth: AuthConfig,
+    pub(crate) tls: TlsConfig,
+}
+
+/// Parses every `--conf` setting: the listener's own (authentication, TLS) into their typed
+/// forms, the rest into the engine configuration.
+///
+/// `krishiv.auth.*` and `krishiv.server.tls.*` settings (secret references and key files
+/// included) are read once here and never become engine configuration: a session could otherwise
+/// list them with `SET`.
+pub(crate) fn load_settings(conf: &[(String, String)]) -> Result<Settings, String> {
     let mut config = Config::new();
-    let mut builder = EngineRuntime::builder();
-    // Authentication and TLS settings (secret references and key files included) are read once
-    // here and never become engine configuration: a session could otherwise list them with `SET`.
     let listener_settings = || {
-        args.conf
-            .iter()
+        conf.iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .filter(|(k, _)| is_listener_key(k))
     };
-    let auth_config = AuthConfig::from_settings(listener_settings()).map_err(|e| e.to_string())?;
-    let tls_config = TlsConfig::from_settings(listener_settings()).map_err(|e| e.to_string())?;
-    for (k, v) in &args.conf {
+    let auth = AuthConfig::from_settings(listener_settings()).map_err(|e| e.to_string())?;
+    let tls = TlsConfig::from_settings(listener_settings()).map_err(|e| e.to_string())?;
+    for (k, v) in conf {
         if is_listener_key(k) {
             continue;
         }
@@ -103,25 +159,47 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
             };
             return Err(format!("{k} is not supported by krishiv server{hint}"));
         }
-        builder = builder.config(k, v);
     }
-    let host = match args.host {
-        Some(h) => h,
+    Ok(Settings { config, auth, tls })
+}
+
+/// The address both listeners bind: `--host`, else `krishiv.connect.address`.
+pub(crate) fn resolve_host(host: Option<IpAddr>, config: &Config) -> Result<IpAddr, String> {
+    match host {
+        Some(h) => Ok(h),
         None => config
             .get(&CONNECT_ADDRESS)
             .and_then(ConfigValue::as_str)
             .unwrap_or("127.0.0.1")
             .parse()
-            .map_err(|_| "krishiv.connect.address is not an IP address".to_owned())?,
-    };
-    // ADR 0046 §6, design §3.5: before either listener binds (both bind `host`).
-    check_listener(SocketAddr::new(host, 0), &auth_config, &tls_config).map_err(|e| {
+            .map_err(|_| "krishiv.connect.address is not an IP address".to_owned()),
+    }
+}
+
+/// ADR 0046 §6, design §3.5: the check before either listener binds (both bind `host`).
+pub(crate) fn check_host(host: IpAddr, settings: &Settings) -> Result<(), String> {
+    check_listener(SocketAddr::new(host, 0), &settings.auth, &settings.tls).map_err(|e| {
         format!(
             "refusing to serve on {host}: {e}. Bind a loopback address (--host 127.0.0.1), or \
              configure authentication (krishiv.auth.*) and, for tokens or OIDC, TLS \
              (krishiv.server.tls.certFile and keyFile)."
         )
-    })?;
+    })
+}
+
+fn serve(args: &ServerArgs) -> Result<(), String> {
+    let settings = load_settings(&args.conf)?;
+    let mut builder = EngineRuntime::builder();
+    for (k, v) in args.conf.iter().filter(|(k, _)| !is_listener_key(k)) {
+        builder = builder.config(k, v);
+    }
+    let host = resolve_host(args.host, &settings.config)?;
+    check_host(host, &settings)?;
+    let Settings {
+        config,
+        auth: auth_config,
+        tls: tls_config,
+    } = settings;
     let tls = ServerTls::new(&tls_config, &auth_config.mtls).map_err(|e| e.to_string())?;
     let auth = ServerAuth::new(&auth_config).map_err(|e| e.to_string())?;
     if host::is_root() && !args.allow_root {
@@ -164,7 +242,7 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
 
 /// A setting `krishiv server` reads itself: authentication (`krishiv.auth.*`, Spark's token key)
 /// and the listeners' TLS (`krishiv.server.tls.*`).
-fn is_listener_key(key: &str) -> bool {
+pub(crate) fn is_listener_key(key: &str) -> bool {
     is_auth_key(key) || key.starts_with("krishiv.server.tls.")
 }
 
