@@ -280,3 +280,101 @@ fn variant_explode_of_null() {
     let b = out.iter().find(|b| b.num_rows() > 0).unwrap();
     assert!((0..3).all(|c| b.column(c).is_null(0)));
 }
+
+/// PY-043: Spark's own `users.parquet` (a legacy two-level list,
+/// `tests/fixtures/parquet/legacy/README.md`) reads with Spark 4.2.0's
+/// schema and rows; its schema walk for variants used to panic.
+#[test]
+fn spark_users_two_level_list_reads_as_spark_reads_it() {
+    let s = session();
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/parquet/legacy/users.parquet");
+    let df = s.read().parquet([path.to_str().unwrap().to_owned()]);
+    block_on(df.create_or_replace_temp_view("users")).unwrap();
+    let schema = block_on(async { s.sql("SELECT * FROM users").await?.schema().await }).unwrap();
+    let got: Vec<String> = schema
+        .fields()
+        .iter()
+        .map(|f| {
+            let t = krishiv_types::DataType::from_arrow_field(f).unwrap();
+            format!("{}:{}:{}", f.name(), t.simple_string(), f.is_nullable())
+        })
+        .collect();
+    assert_eq!(
+        got,
+        [
+            "name:string:true",
+            "favorite_color:string:true",
+            "favorite_numbers:array<int>:true",
+        ]
+    );
+    let contains_null = match schema.field(2).data_type() {
+        arrow_schema::DataType::List(e) => e.is_nullable(),
+        t => panic!("{t}"),
+    };
+    assert!(contains_null, "Spark reads containsNull = true");
+    let out = block_on(async {
+        s.sql(
+            "SELECT concat_ws('|', name, coalesce(favorite_color, 'NULL'), \
+             cast(favorite_numbers AS STRING)) FROM users",
+        )
+        .await?
+        .collect()
+        .await
+    })
+    .unwrap();
+    let got: Vec<String> = out
+        .iter()
+        .flat_map(|b| {
+            let a = b.column(0).as_string_view();
+            (0..b.num_rows())
+                .map(|i| a.value(i).to_owned())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(got, ["Alyssa|NULL|[3, 9, 15, 20]", "Ben|red|[]"]);
+}
+
+/// Every field of a file reads nullable at every depth, a map key's struct
+/// fields too, as Spark 4.2.0 reads `legacy/required_nested.parquet`
+/// (pyarrow, all fields required), and the rows still decode.
+#[test]
+fn required_nested_fields_read_nullable() {
+    let s = session();
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/parquet/legacy/required_nested.parquet");
+    let df = s.read().parquet([path.to_str().unwrap().to_owned()]);
+    block_on(df.create_or_replace_temp_view("req")).unwrap();
+    let schema = block_on(async { s.sql("SELECT * FROM req").await?.schema().await }).unwrap();
+    let types: Vec<krishiv_types::DataType> = schema
+        .fields()
+        .iter()
+        .map(|f| {
+            assert!(f.is_nullable(), "{}", f.name());
+            krishiv_types::DataType::from_arrow_field(f).unwrap()
+        })
+        .collect();
+    for t in &types {
+        assert_eq!(t, &t.as_nullable(), "{t:?}");
+    }
+    let out = block_on(async {
+        s.sql(
+            "SELECT concat_ws('|', cast(id AS STRING), cast(m AS STRING), cast(l AS STRING)) \
+             FROM req ORDER BY id",
+        )
+        .await?
+        .collect()
+        .await
+    })
+    .unwrap();
+    let got: Vec<String> = out
+        .iter()
+        .flat_map(|b| {
+            let a = b.column(0).as_string_view();
+            (0..b.num_rows())
+                .map(|i| a.value(i).to_owned())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(got, ["1|{{1} -> 10}|[{5}]", "2|{}|[]"]);
+}

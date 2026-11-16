@@ -1,4 +1,11 @@
 {
+  "KRISHIV_ADMIN_PRECONDITION_FAILED" : {
+    "message" : [
+      "The change was refused because the object is not in the state the request expects (<reason>)."
+    ],
+    "sqlState" : "55000",
+    "audience" : "operator"
+  },
   "KRISHIV_AUTH_IMPERSONATION_DENIED" : {
     "message" : [
       "The caller may not act for this user. An administrator grants acting for others with \"krishiv.auth.principals.CALLER.privileges\" = impersonate and lists whom in \"krishiv.auth.principals.CALLER.impersonates\", where CALLER is the caller's principal name; the server's audit log has the reason."
@@ -189,6 +196,13 @@
       "The resource group file is invalid at <path>: <reason>."
     ],
     "sqlState" : "22023",
+    "audience" : "operator"
+  },
+  "KRISHIV_RESOURCE_GROUP_CONFIG_READ_ONLY" : {
+    "message" : [
+      "The resource group file <path> cannot be changed here: <reason>."
+    ],
+    "sqlState" : "55000",
     "audience" : "operator"
   },
   "KRISHIV_RESOURCE_GROUP_QUEUE_FULL" : {
