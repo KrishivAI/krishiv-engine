@@ -467,6 +467,7 @@ fn no_relation_bypasses_the_policy() {
             format: "parquet".to_owned(),
             paths,
             options: std::collections::BTreeMap::new(),
+            schema: None,
         }))
     };
     let key = [("l_orderkey", DataType::Long)];
@@ -512,6 +513,7 @@ fn no_relation_bypasses_the_policy() {
             format: "parquet".to_owned(),
             paths: path(),
             options: std::collections::BTreeMap::new(),
+            schema: None,
         },
         output: Vec::new(),
         version: None,
@@ -814,6 +816,7 @@ fn unsupported_inputs_fail_explicitly() {
         format: "parquet".to_owned(),
         paths: vec![krishiv_common::secret::OptionValue::from_user("path", "/d")],
         options: std::collections::BTreeMap::new(),
+        schema: None,
     }));
     let sha = LogicalPlan::table(["t"]).project(vec![Expr::function("sentences", vec![c("b")])]);
     for plan in [files, sha] {
@@ -874,6 +877,7 @@ fn unsupported_inputs_fail_explicitly() {
             format: "parquet".to_owned(),
             paths: vec![krishiv_common::secret::OptionValue::from_user("path", "/d")],
             options: std::collections::BTreeMap::new(),
+            schema: None,
         },
         output: Vec::new(),
         version: None,

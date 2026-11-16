@@ -152,6 +152,17 @@ impl fmt::Debug for EqualityDeletes {
     }
 }
 
+#[cfg(test)]
+impl EqualityDeletes {
+    /// How many distinct equality delete files the scan's files hold.
+    pub(super) fn delete_files(&self) -> usize {
+        let mut seen: Vec<*const KeySet> = self.by_file.iter().flatten().map(Arc::as_ptr).collect();
+        seen.sort_unstable();
+        seen.dedup();
+        seen.len()
+    }
+}
+
 /// The equality deletes of the scan's files: `(i, d)` in `deletes` are the
 /// equality delete files `d` of data file `i` (of `files`). Every delete file
 /// is read once.

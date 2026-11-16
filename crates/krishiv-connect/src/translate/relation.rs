@@ -226,18 +226,16 @@ impl Translator<'_> {
                         "reads with predicates",
                     ));
                 }
-                ReadSource::Files {
-                    format: d
-                        .format
+                ReadSource::files(
+                    d.format
                         .clone()
                         .unwrap_or_else(|| self.conf.default_data_source.clone()),
-                    paths: d
-                        .paths
+                    d.paths
                         .iter()
                         .map(|p| OptionValue::from_user("path", p.as_str()))
                         .collect(),
-                    options: typed(&d.options),
-                }
+                    typed(&d.options),
+                )
             }
         }))
     }
