@@ -1,0 +1,24 @@
+---
+source: crates/krishiv-session/tests/analyze.rs
+expression: layout(&json)
+---
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","web_sales"],"display":"table `spark_catalog`.`default`.`web_sales`","privilege":"SELECT","columns":["ws_ship_hdemo_sk","ws_sold_time_sk","ws_web_page_sk"]},
+  {"kind":"table","name":["spark_catalog","default","household_demographics"],"display":"table `spark_catalog`.`default`.`household_demographics`","privilege":"SELECT","columns":["hd_demo_sk","hd_dep_count"]},
+  {"kind":"table","name":["spark_catalog","default","time_dim"],"display":"table `spark_catalog`.`default`.`time_dim`","privilege":"SELECT","columns":["t_hour","t_time_sk"]},
+  {"kind":"table","name":["spark_catalog","default","web_page"],"display":"table `spark_catalog`.`default`.`web_page`","privilege":"SELECT","columns":["wp_char_count","wp_web_page_sk"]}],
+"output_schema":[{"ordinal":0,"name":"am_pm_ratio","type":"decimal(35,20)","type_json":"\"decimal(35,20)\"","nullable":true,"declared_type":null}],
+"lineage":[{"ordinal":0,"output":"am_pm_ratio","sources":[],"transform":"aggregate"}],
+"filters":[{"kind":"filter","table":["spark_catalog","default","household_demographics"],"column":"hd_demo_sk"},
+  {"kind":"filter","table":["spark_catalog","default","household_demographics"],"column":"hd_dep_count"},
+  {"kind":"filter","table":["spark_catalog","default","time_dim"],"column":"t_hour"},
+  {"kind":"filter","table":["spark_catalog","default","time_dim"],"column":"t_time_sk"},
+  {"kind":"filter","table":["spark_catalog","default","web_page"],"column":"wp_char_count"},
+  {"kind":"filter","table":["spark_catalog","default","web_page"],"column":"wp_web_page_sk"},
+  {"kind":"filter","table":["spark_catalog","default","web_sales"],"column":"ws_ship_hdemo_sk"},
+  {"kind":"filter","table":["spark_catalog","default","web_sales"],"column":"ws_sold_time_sk"},
+  {"kind":"filter","table":["spark_catalog","default","web_sales"],"column":"ws_web_page_sk"}],
+"warnings":[]}

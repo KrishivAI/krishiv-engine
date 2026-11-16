@@ -44,6 +44,7 @@
 mod access;
 mod action;
 mod admission;
+mod analyze;
 mod arrow_values;
 pub mod auth;
 mod cache;
@@ -65,6 +66,8 @@ pub mod functions;
 mod history;
 mod identifier_clause;
 mod introspection;
+#[cfg(test)]
+mod lineage_tests;
 mod locals;
 #[cfg(feature = "telemetry-logs")]
 pub mod logging;
@@ -77,6 +80,7 @@ mod partition_keys;
 mod partitions;
 mod plan_round_trip;
 mod profile;
+mod profile_history;
 mod python_udfs;
 mod query_fold;
 mod recursion;
@@ -105,6 +109,7 @@ mod window;
 
 pub use access::{PathPrefixPolicy, ReadOnlyPolicy, StatementInfo};
 pub use admission::{AdmissionController, Permit, QueryRequest, Unlimited};
+pub use analyze::{Analysis, AnalysisWarning, OutputColumn};
 pub use sessions::Transport;
 pub use system::register_build_features;
 

@@ -3120,6 +3120,8 @@ name = "krishiv-connectors-iceberg"
 version = "0.2.0"
 dependencies = [
  "arrow-array 60.1.0",
+ "arrow-schema 60.1.0",
+ "arrow-select 60.1.0",
  "async-trait",
  "bytes",
  "futures",
@@ -3128,8 +3130,14 @@ dependencies = [
  "krishiv-common",
  "krishiv-exec",
  "krishiv-io",
+ "krishiv-memory",
+ "krishiv-optimizer",
+ "krishiv-plan",
+ "krishiv-sql",
  "krishiv-types",
  "object_store",
+ "parquet 60.1.0",
+ "proptest",
  "serde",
  "serde_json",
  "tempfile",
@@ -3342,6 +3350,7 @@ dependencies = [
  "proptest",
  "serde_json",
  "thiserror",
+ "tracing",
  "twox-hash",
 ]
 
@@ -3525,6 +3534,7 @@ dependencies = [
  "krishiv-kernels",
  "krishiv-plan",
  "krishiv-types",
+ "proptest",
  "serde_json",
  "thiserror",
 ]
@@ -3603,6 +3613,7 @@ name = "krishiv-udf-pool"
 version = "0.2.0"
 dependencies = [
  "arrow-array 60.1.0",
+ "arrow-buffer 60.1.0",
  "arrow-ipc 60.1.0",
  "arrow-schema 60.1.0",
  "futures",
