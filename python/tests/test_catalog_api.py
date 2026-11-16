@@ -91,3 +91,45 @@ def test_functions(spark: SparkSession) -> None:
 def test_argument_types_are_checked(spark: SparkSession) -> None:
     with pytest.raises(TypeError):
         spark.catalog.getTable(1)  # type: ignore[arg-type]
+
+
+def test_dataframe_tables_are_not_found_by_name(spark: SparkSession) -> None:
+    before = set(spark._native.temp_table_names())
+    df = spark.createDataFrame(pa.table({"a": [1]}))  # the table lives as long as the frame
+    [hidden] = set(spark._native.temp_table_names()) - before
+    assert not spark.catalog.tableExists(hidden)
+    assert df.count() == 1
+    for call in (spark.catalog.getTable, spark.catalog.listColumns):
+        with pytest.raises(AnalysisException) as err:
+            call(hidden)
+        assert err.value.getCondition() == "TABLE_OR_VIEW_NOT_FOUND"
+
+
+def test_a_permanent_table_and_the_database_paths(spark: SparkSession) -> None:
+    spark.sql("CREATE DATABASE d1")
+    spark.sql("CREATE TABLE d1.t (a INT, b STRING) USING parquet")
+    [t] = spark.catalog.listTables("d1")
+    assert (t.name, t.catalog, t.namespace, t.tableType, t.isTemporary) == (
+        "t",
+        "spark_catalog",
+        ["d1"],
+        "MANAGED",
+        False,
+    )
+    assert t.database == "d1"
+    assert spark.catalog.tableExists("t", "d1")
+    assert [c.name for c in spark.catalog.listColumns("t", "d1")] == ["a", "b"]
+    spark.catalog.setCurrentDatabase("d1")
+    assert spark.catalog.currentDatabase() == "d1"
+    assert spark.catalog.tableExists("t")
+    with pytest.raises(AnalysisException) as err:
+        spark.catalog.setCurrentDatabase("nope")
+    assert err.value.getCondition() == "SCHEMA_NOT_FOUND"
+    with pytest.raises(AnalysisException) as err:
+        spark.catalog.listTables("nope")
+    assert err.value.getCondition() == "SCHEMA_NOT_FOUND"
+
+
+def test_list_catalogs_pattern(spark: SparkSession) -> None:
+    assert [c.name for c in spark.catalog.listCatalogs("spark*")] == ["spark_catalog"]
+    assert spark.catalog.listCatalogs("other") == []

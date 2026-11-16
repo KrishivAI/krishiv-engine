@@ -85,6 +85,21 @@ GroupedData.def agg(self, cols: list[Column]) -> DataFrame
 Session.@staticmethod def is_dataframe_table(name: str) -> bool
 Session.def __new__(cls, config: list[tuple[str, str]] | None=...) -> Session
 Session.def cache_reserved(self) -> int
+Session.def catalog_current_catalog(self) -> str
+Session.def catalog_current_database(self) -> str
+Session.def catalog_database_exists(self, name: str) -> bool
+Session.def catalog_function_exists(self, name: str) -> bool
+Session.def catalog_get_database(self, name: str) -> tuple[str, str, str | None, str]
+Session.def catalog_get_function(self, name: str) -> tuple[str, str | None, list[str] | None, str | None, str, bool]
+Session.def catalog_get_table(self, name: str) -> tuple[str, str | None, list[str] | None, str | None, str, bool]
+Session.def catalog_list_catalogs(self) -> list[str]
+Session.def catalog_list_columns(self, name: str) -> list[tuple[str, str | None, str, bool, bool, bool, bool]]
+Session.def catalog_list_databases(self, pattern: str | None=...) -> list[tuple[str, str, str | None, str]]
+Session.def catalog_list_functions(self, pattern: str | None=...) -> list[tuple[str, str | None, list[str] | None, str | None, str, bool]]
+Session.def catalog_list_tables(self, database: str | None=..., pattern: str | None=...) -> list[tuple[str, str | None, list[str] | None, str | None, str, bool]]
+Session.def catalog_set_current_catalog(self, name: str) -> None
+Session.def catalog_set_current_database(self, name: str) -> None
+Session.def catalog_table_exists(self, name: str) -> bool
 Session.def clear_cache(self) -> None
 Session.def conf_get(self, key: str) -> str | None
 Session.def conf_is_modifiable(self, key: str) -> bool
@@ -1145,6 +1160,7 @@ Function.description: str | None
 Function.isTemporary: bool
 Function.name: str
 Function.namespace: list[str] | None
+Table.@property def database(self) -> str | None
 Table.catalog: str | None
 Table.description: str | None
 Table.isTemporary: bool

@@ -627,6 +627,7 @@ class Catalog:
         """The table or view ``tableName``; ``TABLE_OR_VIEW_NOT_FOUND`` when there is none."""
         if not isinstance(tableName, str):
             raise not_expected_type("tableName", "str", tableName)
+        _refuse_hidden_table(tableName)
         return Table(*self._n.catalog_get_table(tableName))
 
     def tableExists(self, tableName: str, dbName: str | None = None) -> bool:
@@ -635,6 +636,8 @@ class Catalog:
             raise not_expected_type("tableName", "str", tableName)
         if dbName is not None and not isinstance(dbName, str):
             raise not_expected_type("dbName", "str", dbName)
+        if _is_hidden_table(tableName):
+            return False
         return bool(self._n.catalog_table_exists(_qualified(tableName, dbName)))
 
     def listColumns(self, tableName: str, dbName: str | None = None) -> list[Column]:
@@ -643,6 +646,7 @@ class Catalog:
             raise not_expected_type("tableName", "str", tableName)
         if dbName is not None and not isinstance(dbName, str):
             raise not_expected_type("dbName", "str", dbName)
+        _refuse_hidden_table(tableName)
         return [Column(*row) for row in self._n.catalog_list_columns(_qualified(tableName, dbName))]
 
     def listFunctions(self, dbName: str | None = None, pattern: str | None = None) -> list[Function]:
@@ -727,6 +731,21 @@ class Catalog:
         if not isinstance(level, StorageLevel):
             raise not_expected_type("storageLevel", "StorageLevel", storageLevel)
         self._session.table(tableName).persist(level).count()
+
+
+def _is_hidden_table(name: str) -> bool:
+    """Whether ``name`` is one of the tables that hold ``createDataFrame`` data (listed nowhere)."""
+    return bool(_native.Session.is_dataframe_table(name.rsplit(".", 1)[-1].strip("`")))
+
+
+def _refuse_hidden_table(name: str) -> None:
+    """``TABLE_OR_VIEW_NOT_FOUND`` for a ``createDataFrame`` table, as for any table the catalog does not show."""
+    if _is_hidden_table(name):
+        raise AnalysisException(
+            errorClass="TABLE_OR_VIEW_NOT_FOUND",
+            messageParameters={"relationName": f"`{name}`"},
+            sqlState="42P01",
+        )
 
 
 def _glob_match(pattern: str, name: str) -> bool:

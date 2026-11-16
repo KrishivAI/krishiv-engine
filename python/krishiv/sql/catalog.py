@@ -34,6 +34,11 @@ class Table(NamedTuple):
     tableType: str
     isTemporary: bool
 
+    @property
+    def database(self) -> str | None:
+        """The database, as ``pyspark.sql.catalog.Table.database``: the one-part namespace, else ``None``."""
+        return self.namespace[0] if self.namespace is not None and len(self.namespace) == 1 else None
+
 
 class Column(NamedTuple):
     """A column, as ``pyspark.sql.catalog.Column``."""
