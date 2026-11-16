@@ -33,13 +33,15 @@ const NOT_NULL_TAG: &str = "\u{1}krishiv.not_null_assert:";
 
 /// `value` as stored in a column declared `declared` (`CharVarcharUtils.stringLengthCheck`): trimmed to the limit or
 /// failing the write. A `CHAR` inside an array, map or struct is padded too (`charTypeWriteSideCheck`); a top-level
-/// one is left to the read side, which pads it.
+/// one is left to the read side, which pads it. `null_checks` is false under `spark.sql.storeAssignmentPolicy=LEGACY`
+/// (`TableOutputResolver.requiresNullChecks`): a NOT NULL column is then not checked.
 pub(crate) fn checked(
     value: Column,
     column: &StoreColumn,
     conf: &ResolutionConf,
+    null_checks: bool,
 ) -> Result<Column, KrishivError> {
-    let value = if column.nullable {
+    let value = if column.nullable || !null_checks {
         value
     } else {
         // A NULL never reaches the stored column; the length check below sees a value that is there.
@@ -321,6 +323,19 @@ mod tests {
         run(&s, "insert into nn values (1, 'x')").unwrap();
         let e = run(&s, "insert into nn values (2, 'xyz')").unwrap_err();
         assert_eq!(e.error_class().name(), "EXCEED_LIMIT_LENGTH");
+    }
+
+    /// `requiresNullChecks` is false under `spark.sql.storeAssignmentPolicy=LEGACY` (Spark 4.2.0
+    /// `TableOutputResolver`), so no `AssertNotNull` is added and the NULL is written.
+    #[test]
+    fn the_not_null_check_is_skipped_under_the_legacy_store_assignment_policy() {
+        let s = Session::new().unwrap();
+        not_null_table(&s);
+        run(&s, "set spark.sql.storeAssignmentPolicy=LEGACY").unwrap();
+        run(&s, "insert into nn values (null, 'x')").unwrap();
+        run(&s, "set spark.sql.storeAssignmentPolicy=ANSI").unwrap();
+        let e = run(&s, "insert into nn values (null, 'x')").unwrap_err();
+        assert_eq!(e.error_class().name(), "NOT_NULL_ASSERT_VIOLATION");
     }
 
     use krishiv_plan::analyzer::DeclaredType as D;

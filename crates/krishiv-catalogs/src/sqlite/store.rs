@@ -44,6 +44,10 @@ CREATE TABLE IF NOT EXISTS epoch (
     value INTEGER NOT NULL
 );
 INSERT OR IGNORE INTO epoch (id, value) VALUES (0, 0);
+CREATE TABLE IF NOT EXISTS settings (
+    id INTEGER PRIMARY KEY CHECK (id = 0),
+    case_sensitive INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS namespaces (
     name TEXT PRIMARY KEY,
     comment TEXT,
@@ -66,7 +70,10 @@ CREATE TABLE IF NOT EXISTS tables (
 
 /// Creates the schema when the database is new and refuses one written by a newer format. Run in an immediate
 /// transaction, so two processes opening a new file at once make it once.
-pub(super) fn migrate(conn: &mut Connection) -> Result<(), Failure> {
+///
+/// Names are folded by one rule for the life of the file: `case_sensitive` is stored when the file is made, and a file
+/// is refused when opened with the other value.
+pub(super) fn migrate(conn: &mut Connection, case_sensitive: bool) -> Result<(), Failure> {
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let version: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if version > FORMAT_VERSION {
@@ -76,7 +83,21 @@ pub(super) fn migrate(conn: &mut Connection) -> Result<(), Failure> {
     }
     if version == 0 {
         tx.execute_batch(SCHEMA)?;
+        tx.execute(
+            "INSERT OR IGNORE INTO settings (id, case_sensitive) VALUES (0, ?1)",
+            [case_sensitive],
+        )?;
         tx.pragma_update(None, "user_version", FORMAT_VERSION)?;
+    }
+    let stored: bool = tx.query_row(
+        "SELECT case_sensitive FROM settings WHERE id = 0",
+        [],
+        |r| r.get(0),
+    )?;
+    if stored != case_sensitive {
+        return Err(Failure::Sql(format!(
+            "the catalog file folds names with case_sensitive = {stored}; it was opened with {case_sensitive}"
+        )));
     }
     tx.commit()?;
     Ok(())

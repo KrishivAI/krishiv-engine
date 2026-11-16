@@ -17,6 +17,7 @@ use krishiv_plan::analyzer::{
 use krishiv_types::DataType;
 
 use super::SqliteCatalog;
+use crate::location::RemoteLocationPolicy;
 
 fn form() -> NameForm {
     NameForm {
@@ -97,7 +98,10 @@ fn a_catalog_survives_a_restart_and_the_epoch_with_it() {
     let c = open(&path);
     assert_eq!(c.epoch(), epoch);
     assert_eq!(epoch, 2);
-    let details = c.table_details(&ident("ns", "t")).unwrap().unwrap();
+    let details = c
+        .table_details(&ident("ns", "t"), &RemoteLocationPolicy::default())
+        .unwrap()
+        .unwrap();
     assert_eq!(details.comment.as_deref(), Some("hello"));
     assert_eq!(details.location.as_deref(), Some("s3://bucket/t"));
     assert_eq!(details.properties.get("k").map(String::as_str), Some("v"));
@@ -167,7 +171,10 @@ fn types_comments_defaults_and_char_varchar_round_trip() {
         altered.column_comments.get("f").map(String::as_str),
         Some("the f")
     );
-    let details = c.table_details(&ident("default", "t")).unwrap().unwrap();
+    let details = c
+        .table_details(&ident("default", "t"), &RemoteLocationPolicy::default())
+        .unwrap()
+        .unwrap();
     assert_eq!(details.comment.as_deref(), Some("table comment"));
     assert_eq!(details.properties.get("k").map(String::as_str), Some("v"));
     assert_eq!(load(&c, "t").unwrap(), altered);
@@ -422,15 +429,23 @@ fn two_processes_writing_one_file_lose_nothing() {
 fn a_process_killed_in_the_middle_of_ddl_leaves_a_loadable_catalog() {
     let (_dir, path) = file();
     drop(open(&path));
-    let mut victim = child(&path, "k", None);
+    // Killed on drop, so a failed assertion below does not leave the unbounded writer running.
+    struct Victim(std::process::Child);
+    impl Drop for Victim {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let mut victim = Victim(child(&path, "k", None));
     let deadline = Instant::now() + Duration::from_secs(60);
     // Let it make some tables, then kill -9 it while it is making the next.
     while tables(&open(&path), "default").len() < 5 {
         assert!(Instant::now() < deadline, "the child made no tables");
         std::thread::sleep(Duration::from_millis(20));
     }
-    victim.kill().unwrap();
-    victim.wait().unwrap();
+    victim.0.kill().unwrap();
+    victim.0.wait().unwrap();
     let c = open(&path);
     let names = tables(&c, "default");
     // Every table that is there loads whole, and the epoch counts exactly the changes that committed.
@@ -446,4 +461,126 @@ fn a_process_killed_in_the_middle_of_ddl_leaves_a_loadable_catalog() {
     )
     .unwrap();
     assert_eq!(c.epoch(), names.len() as u64 + 1);
+}
+
+#[test]
+fn one_folding_rule_is_stored_in_the_file_whatever_the_query_says() {
+    // Rule: the catalog's own `case_sensitive`, fixed in the file; the query's `NameForm::case_sensitive` is ignored.
+    let (_dir, path) = file();
+    let c = SqliteCatalog::open("lite", &path, false).unwrap();
+    block_on(
+        c.as_write()
+            .unwrap()
+            .create_table(info("default", "T"), CreateMode::ErrorIfExists),
+    )
+    .unwrap();
+    for query in [false, true] {
+        let form = NameForm {
+            case_sensitive: query,
+            ..form()
+        };
+        for spelling in ["T", "t"] {
+            assert!(
+                block_on(c.load_table(&ident("default", spelling), None, form))
+                    .unwrap()
+                    .is_some(),
+                "{spelling} under case_sensitive={query}"
+            );
+        }
+        assert!(
+            c.table_details(&ident("default", "t"), &RemoteLocationPolicy::default())
+                .unwrap()
+                .is_some()
+        );
+    }
+    drop(c);
+    // The file refuses the other rule.
+    assert_eq!(
+        class(&SqliteCatalog::open("lite", &path, true).unwrap_err()),
+        "KRISHIV_CATALOG_FAILURE"
+    );
+    // And a case-sensitive file finds `T` under a case-insensitive query.
+    let (_dir2, path2) = file();
+    let s = SqliteCatalog::open("lite", &path2, true).unwrap();
+    block_on(
+        s.as_write()
+            .unwrap()
+            .create_table(info("default", "T"), CreateMode::ErrorIfExists),
+    )
+    .unwrap();
+    assert!(
+        block_on(s.load_table(&ident("default", "T"), None, form()))
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        block_on(s.load_table(&ident("default", "t"), None, form()))
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn a_location_another_process_wrote_is_checked_on_the_way_out() {
+    let (_dir, path) = file();
+    let c = open(&path);
+    block_on(
+        c.as_write()
+            .unwrap()
+            .create_table(info("default", "t"), CreateMode::ErrorIfExists),
+    )
+    .unwrap();
+    let raw = rusqlite::Connection::open(&path).unwrap();
+    raw.execute(
+        "UPDATE tables SET location = 'file:///etc' WHERE name = 't'",
+        [],
+    )
+    .unwrap();
+    let e = c
+        .table_details(&ident("default", "t"), &RemoteLocationPolicy::default())
+        .unwrap_err();
+    assert_eq!(class(&e), "KRISHIV_CATALOG_LOCATION_REFUSED");
+}
+
+#[test]
+fn a_two_part_name_is_requires_single_part_namespace() {
+    let c = SqliteCatalog::open_in_memory("lite", false).unwrap();
+    assert!(c.single_part_namespace());
+}
+
+#[test]
+fn the_epoch_never_goes_backwards_or_repeats_after_a_read_fault() {
+    let (_dir, path) = file();
+    let c = open(&path);
+    block_on(
+        c.as_write()
+            .unwrap()
+            .create_table(info("default", "t"), CreateMode::ErrorIfExists),
+    )
+    .unwrap();
+    let before = c.epoch();
+    assert_eq!(before, 1);
+    // Make the epoch unreadable from outside, as a damaged file would be.
+    let raw = rusqlite::Connection::open(&path).unwrap();
+    raw.execute_batch("ALTER TABLE epoch RENAME TO epoch_away")
+        .unwrap();
+    let a = c.epoch();
+    let b = c.epoch();
+    assert!(a > before && b > a, "{before} {a} {b}");
+    raw.execute_batch("ALTER TABLE epoch_away RENAME TO epoch")
+        .unwrap();
+    let mut seen = vec![before, a, b];
+    // The file reads again (at its old value): the answer stays above everything handed out, then follows the file.
+    let back = c.epoch();
+    assert!(seen.iter().all(|e| back > *e), "{seen:?} {back}");
+    seen.push(back);
+    // Another process commits changes, which move the file epoch up to and past the fault values.
+    for i in 0..(b as usize + 2) {
+        raw.execute("UPDATE epoch SET value = value + 1", [])
+            .unwrap();
+        let e = c.epoch();
+        assert!(!seen.contains(&e), "epoch {e} repeated ({i}): {seen:?}");
+        assert!(e > *seen.last().unwrap());
+        seen.push(e);
+    }
 }

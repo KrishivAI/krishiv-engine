@@ -13,7 +13,9 @@
 //!   longer current fails, and a table dropped and created again is never at the version a reader saw. There is no
 //!   history, so a load at any other version finds nothing (`time_travel` is off).
 //! * Namespaces have one part. `default` exists in a new file and cannot be dropped, as in Spark's session catalog.
-//!   Names are `[A-Za-z0-9_]+` and are stored folded (lower case unless the catalog is case sensitive).
+//!   Names are `[A-Za-z0-9_]+` and are stored folded (lower case unless the catalog is case sensitive). That rule is
+//!   stored in the file and the one rule for every call: a file opened with the other value is refused, and the per-query
+//!   `NameForm::case_sensitive` does not change how this catalog matches names.
 //! * Column types are stored as Spark catalog strings and read back by the DDL parser; a type that does not round-trip
 //!   is refused at create. NOT NULL is kept as declared (the writer enforces it, `krishiv-session`'s write check).
 //! * A failure of SQLite (busy past the timeout, a full disk, a damaged value) is `KRISHIV_CATALOG_FAILURE` naming the
@@ -27,7 +29,6 @@ mod write;
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -41,6 +42,7 @@ use krishiv_plan::analyzer::{
 };
 use rusqlite::Connection;
 
+use crate::location::{LocationPolicy, check_location};
 use store::{Failure, TableRow};
 
 /// How long a call waits for another writer before it fails as a catalog failure.
@@ -54,7 +56,7 @@ const LOGGED_DETAIL_CHARS: usize = 300;
 pub struct TableDetails {
     /// The table's comment.
     pub comment: Option<String>,
-    /// Where its data lives, as given at create (never checked or touched by this catalog).
+    /// Where its data lives, as given at create (this catalog never touches it; [`SqliteCatalog::table_details`] checks it).
     pub location: Option<String>,
     /// Its properties.
     pub properties: BTreeMap<String, String>,
@@ -67,8 +69,17 @@ pub struct SqliteCatalog {
     name: String,
     case_sensitive: bool,
     conn: Mutex<Connection>,
-    /// The last epoch this process saw, for a read that fails.
-    last_epoch: AtomicU64,
+    /// What `epoch()` has answered, and the shift a read fault added to it.
+    epoch_state: Mutex<EpochState>,
+}
+
+/// See [`SqliteCatalog::epoch`](Catalog::epoch).
+#[derive(Debug, Default)]
+struct EpochState {
+    /// Added to the file's epoch.
+    offset: u64,
+    /// The highest answer so far.
+    handed: u64,
 }
 
 impl std::fmt::Debug for SqliteCatalog {
@@ -123,15 +134,14 @@ impl SqliteCatalog {
             // WAL for a file (readers never block the writer); a memory database answers "memory", which is fine.
             conn.pragma_update_and_check(None, "journal_mode", "WAL", |_| Ok(()))?;
             conn.pragma_update(None, "synchronous", "FULL")?;
-            store::migrate(conn)
+            store::migrate(conn, case_sensitive)
         };
         setup(&mut conn).map_err(|f| self_fault(&name, "", f))?;
-        let epoch = store::read_epoch(&conn).map_err(|f| self_fault(&name, "", f))?;
         Ok(Self {
             name,
             case_sensitive,
             conn: Mutex::new(conn),
-            last_epoch: AtomicU64::new(u64::try_from(epoch).unwrap_or(0)),
+            epoch_state: Mutex::new(EpochState::default()),
         })
     }
 
@@ -191,10 +201,6 @@ impl SqliteCatalog {
             let (value, changed) = f(&tx)?;
             if changed {
                 tx.commit()?;
-                if let Ok(epoch) = store::read_epoch(conn) {
-                    self.last_epoch
-                        .store(u64::try_from(epoch).unwrap_or(0), Ordering::Release);
-                }
             }
             Ok(value)
         };
@@ -237,17 +243,28 @@ impl SqliteCatalog {
         }
     }
 
-    /// What the table keeps besides its columns; `None` when it does not exist.
+    /// What the table keeps besides its columns; `None` when it does not exist. The file may be written by another
+    /// process, so a stored location goes through `policy` before it is returned (design 5.6).
     ///
     /// # Errors
-    /// `KRISHIV_CATALOG_FAILURE`.
-    pub fn table_details(&self, id: &TableIdent) -> Result<Option<TableDetails>, KrishivError> {
+    /// `KRISHIV_CATALOG_FAILURE`; `KRISHIV_CATALOG_LOCATION_REFUSED` when `policy` refuses the location.
+    pub fn table_details(
+        &self,
+        id: &TableIdent,
+        policy: &dyn LocationPolicy,
+    ) -> Result<Option<TableDetails>, KrishivError> {
         let Ok(namespace) = self.namespace(&id.namespace) else {
             return Ok(None);
         };
         let name = self.fold(&id.name);
         let row = self.read(&id.name, |c| store::read_table(c, &namespace, &name))?;
-        Ok(row.map(|r| TableDetails {
+        let Some(r) = row else {
+            return Ok(None);
+        };
+        if let Some(location) = &r.location {
+            check_location(&self.name, &quoted(&id.name), location, policy)?;
+        }
+        Ok(Some(TableDetails {
             comment: r.comment,
             location: r.location,
             properties: r.properties,
@@ -315,18 +332,31 @@ impl Catalog for SqliteCatalog {
         &self.name
     }
 
-    /// The epoch in the file: another process's change moves it too. When the file cannot be read the epoch moves
-    /// anyway, so nothing keyed by it is ever served from before the fault.
+    /// The epoch in the file, which another process's change moves too. It never goes backwards and never repeats a
+    /// value it handed out earlier: when the file cannot be read it answers one more than any earlier answer, and
+    /// every later answer is shifted above that (by two, so not even an unchanged file lands on it). Nothing keyed
+    /// by an earlier epoch is served as current after a fault, and a fault value never equals a later file epoch.
     fn epoch(&self) -> u64 {
         let read = store::read_epoch(&self.lock());
-        match read {
-            Ok(epoch) => {
-                let epoch = u64::try_from(epoch).unwrap_or(0);
-                self.last_epoch.store(epoch, Ordering::Release);
-                epoch
+        let mut state = self
+            .epoch_state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let answer = match read {
+            Ok(file) => u64::try_from(file)
+                .unwrap_or(0)
+                .saturating_add(state.offset),
+            Err(_) => {
+                state.offset = state.offset.saturating_add(2);
+                state.handed.saturating_add(1)
             }
-            Err(_) => self.last_epoch.fetch_add(1, Ordering::AcqRel) + 1,
-        }
+        };
+        state.handed = state.handed.max(answer);
+        state.handed
+    }
+
+    fn single_part_namespace(&self) -> bool {
+        true
     }
 
     fn capabilities(&self) -> CatalogCapabilities {
@@ -351,14 +381,8 @@ impl Catalog for SqliteCatalog {
             let [namespace] = id.namespace.as_slice() else {
                 return Ok(None);
             };
-            let fold = |s: &str| {
-                if form.case_sensitive {
-                    s.to_owned()
-                } else {
-                    s.to_lowercase()
-                }
-            };
-            let (namespace, name) = (fold(namespace), fold(&id.name));
+            // One rule, the file's, whatever the query's `caseSensitive` says (see the module documentation).
+            let (namespace, name) = (self.fold(namespace), self.fold(&id.name));
             let row = self.read(&id.name, |c| store::read_table(c, &namespace, &name))?;
             Ok(row
                 .filter(|r| version.is_none_or(|v| v == TableVersion(r.version)))
