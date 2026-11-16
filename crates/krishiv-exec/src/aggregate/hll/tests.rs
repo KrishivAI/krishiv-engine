@@ -69,5 +69,8 @@ fn reserved_group_slots_are_counted() {
     let empty = h.size();
     h.reserve(1000);
     assert!(h.size() >= empty + 1000 * std::mem::size_of::<Vec<u8>>());
-    assert!(h.projected(10) >= h.size() + 10 * std::mem::size_of::<Vec<u8>>());
+    // Within the reserved slots only the registers grow; past them, the slots too.
+    assert_eq!(h.projected(10), h.size() + 10 * 512);
+    let fresh = HllAcc::new(9);
+    assert!(fresh.projected(10) >= fresh.size() + 10 * (512 + std::mem::size_of::<Vec<u8>>()));
 }

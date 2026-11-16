@@ -565,9 +565,9 @@ impl Partials {
         // Another partial dropped a filter's hashes: its merged filter
         // cannot be a Bloom, so these would only hold memory until finalize.
         if self.follow_lost() {
-            let held: usize = self.memory.iter().map(Reservation::size).sum();
-            self.release(held.saturating_sub(self.heap_bytes()));
+            self.release_excess();
         }
+        let mut lost = false;
         for (i, (b, f)) in self.builders.iter_mut().zip(filters).enumerate() {
             let had = b.as_ref().is_some_and(KeyFilterBuilder::has_hashes);
             let ok = match (b.as_mut(), keys.get(f.key)) {
@@ -578,28 +578,33 @@ impl Partials {
                 *b = None;
             }
             // Past `bloom_max_items` the builder dropped its own hashes.
-            if had
-                && !b.as_ref().is_some_and(KeyFilterBuilder::has_hashes)
-                && let Some(lost) = self.bloom_lost.get(i)
-            {
-                lost.store(true, Ordering::Relaxed);
+            if had && !b.as_ref().is_some_and(KeyFilterBuilder::has_hashes) {
+                lost = true;
+                if let Some(flag) = self.bloom_lost.get(i) {
+                    flag.store(true, Ordering::Relaxed);
+                }
             }
+        }
+        if lost {
+            self.release_excess();
         }
         self.fit();
     }
 
+    /// Releases what the reservations hold beyond the partials' bytes, after
+    /// hashes were dropped (a merge or `bloom_max_items`); only then, so a
+    /// few bytes' shrink of a range does not release and re-grow per batch.
+    fn release_excess(&mut self) {
+        let held: usize = self.memory.iter().map(Reservation::size).sum();
+        self.release(held.saturating_sub(self.heap_bytes()));
+    }
+
     /// Reserves what the partials hold beyond their reservations; when that
     /// fails the Bloom hashes go first, the exact keys only if it still
-    /// fails without them (an optional filter never waits or fails). When
-    /// they hold less than is reserved (a merge or `bloom_max_items` dropped
-    /// the hashes), the excess is released.
+    /// fails without them (an optional filter never waits or fails).
     fn fit(&mut self) {
         let held: usize = self.memory.iter().map(Reservation::size).sum();
         let want = self.heap_bytes();
-        if want < held {
-            self.release(held - want);
-            return;
-        }
         let Some(memory) = self.memory.first_mut() else {
             return;
         };
@@ -652,6 +657,7 @@ impl Partials {
     }
 
     fn merge(&mut self, other: Self) {
+        let mut lost = false;
         for (i, (dst, src)) in self.builders.iter_mut().zip(other.builders).enumerate() {
             let had = dst.as_ref().is_some_and(KeyFilterBuilder::has_hashes);
             *dst = match (dst.take(), src) {
@@ -663,14 +669,19 @@ impl Partials {
             };
             // Past `bloom_max_items` the merge dropped the hashes: drivers
             // still sinking stop collecting them (review nit of e324818fe).
-            if had
-                && !dst.as_ref().is_some_and(KeyFilterBuilder::has_hashes)
-                && let Some(lost) = self.bloom_lost.get(i)
-            {
-                lost.store(true, Ordering::Relaxed);
+            if had && !dst.as_ref().is_some_and(KeyFilterBuilder::has_hashes) {
+                lost = true;
+                if let Some(flag) = self.bloom_lost.get(i) {
+                    flag.store(true, Ordering::Relaxed);
+                }
             }
         }
         self.memory.extend(other.memory);
+        if lost {
+            // Both partials' reservations still hold the hashes the merge
+            // dropped.
+            self.release_excess();
+        }
         // `merge` grew this driver's hashes by the other's (review minor 2).
         self.fit();
     }

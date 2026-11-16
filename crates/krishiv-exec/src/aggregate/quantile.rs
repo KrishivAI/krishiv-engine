@@ -166,7 +166,8 @@ impl ExactAcc {
     /// not counted.
     pub(crate) fn projected(&self, new: usize, rows: usize) -> usize {
         self.size()
-            .saturating_add(new.saturating_mul(32 + 8 + std::mem::size_of::<HashMap<u64, i64>>()))
+            .saturating_add(new.saturating_mul(32 + 8))
+            .saturating_add(super::hll::slot_growth(&self.maps, new))
             .saturating_add(rows.saturating_mul(2 * 32))
     }
 
@@ -393,6 +394,8 @@ impl GkAcc {
     pub(crate) fn projected(&self, new: usize, rows: usize) -> usize {
         self.size()
             .saturating_add(new.saturating_mul(64))
+            .saturating_add(super::hll::slot_growth(&self.sampled, new))
+            .saturating_add(super::hll::slot_growth(&self.heads, new))
             .saturating_add(rows.saturating_mul(2 * 8 + 24))
     }
 

@@ -356,8 +356,9 @@ async fn a_build_offers_its_hashes_and_sheds_them_when_asked() {
     assert_eq!(query.pool().reserved(), 0, "the query pool is not empty");
 }
 
-/// A merge past `bloom_max_items` drops the merged hashes and tells the
-/// drivers still sinking.
+/// A merge past `bloom_max_items` drops the merged hashes, tells the
+/// drivers still sinking, and releases what both partials reserved for
+/// them (#800 review).
 #[test]
 fn a_merge_past_the_bloom_cap_raises_the_flag() {
     let mut f = filter();
@@ -389,6 +390,8 @@ fn a_merge_past_the_bloom_cap_raises_the_flag() {
         lost[0].load(std::sync::atomic::Ordering::Relaxed),
         "flag not raised"
     );
+    let held: usize = a.memory.iter().map(Reservation::size).sum();
+    assert_eq!(held, a.heap_bytes(), "the dropped hashes stay reserved");
 }
 
 /// A build with a spill scope asked for more than its hashes sheds them
