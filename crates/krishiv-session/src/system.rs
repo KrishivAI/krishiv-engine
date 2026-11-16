@@ -316,8 +316,8 @@ pub(crate) fn columns(table: &str) -> Option<Vec<TableColumn>> {
                     Kind::IntList => DataType::Array(
                         krishiv_types::ArrayType::new(DataType::Integer, false).into(),
                     ),
-                    Kind::Buckets => buckets_type(),
-                    Kind::Hints => hints_type(),
+                    Kind::Buckets => columns::buckets_type(),
+                    Kind::Hints => columns::hints_type(),
                 },
                 nullable,
                 char_varchar: None,
@@ -329,92 +329,6 @@ pub(crate) fn columns(table: &str) -> Option<Vec<TableColumn>> {
 /// `MAP<STRING, STRING>`.
 fn labels_type() -> DataType {
     DataType::Map(krishiv_types::MapType::new(DataType::String, DataType::String, true).into())
-}
-
-/// `ARRAY<STRUCT<le: DOUBLE, count: BIGINT>>`.
-fn buckets_type() -> DataType {
-    use krishiv_types::{ArrayType, StructField, StructType};
-    DataType::Array(
-        ArrayType::new(
-            DataType::Struct(StructType::new([
-                StructField::new("le", DataType::Double, false),
-                StructField::new("count", DataType::Long, false),
-            ])),
-            false,
-        )
-        .into(),
-    )
-}
-
-/// `ARRAY<STRUCT<code: STRING, node_id: INT, operator_id: INT, message: STRING>>`.
-fn hints_type() -> DataType {
-    use krishiv_types::{ArrayType, StructField, StructType};
-    DataType::Array(
-        ArrayType::new(
-            DataType::Struct(StructType::new([
-                StructField::new("code", DataType::String, false),
-                StructField::new("node_id", DataType::Integer, true),
-                StructField::new("operator_id", DataType::Integer, true),
-                StructField::new("message", DataType::String, false),
-            ])),
-            false,
-        )
-        .into(),
-    )
-}
-
-/// One advisor hint of a finished query, as `system.queries.hints` lists it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct HintRow {
-    pub(crate) code: &'static str,
-    pub(crate) node_id: Option<i32>,
-    pub(crate) operator_id: Option<i32>,
-    pub(crate) message: String,
-}
-
-impl HintRow {
-    /// The row of `h`.
-    pub(crate) fn of(h: &krishiv_exec::profile::Hint) -> Self {
-        Self {
-            code: h.code.as_str(),
-            node_id: h.node.and_then(|n| i32::try_from(n).ok()),
-            operator_id: h.operator.and_then(|o| i32::try_from(o.0).ok()),
-            message: h.message.clone(),
-        }
-    }
-}
-
-/// An `ARRAY<STRUCT<code, node_id, operator_id, message>>` column; a row with `None` is NULL.
-fn hints_column(rows: &[Option<&[HintRow]>]) -> ArrayRef {
-    use arrow_array::{ListArray, StringViewArray, StructArray};
-    use arrow_buffer::{NullBuffer, OffsetBuffer};
-    let ArrowType::List(element) = hints_type().to_arrow() else {
-        unreachable!("an array type maps to a list")
-    };
-    let ArrowType::Struct(fields) = element.data_type().clone() else {
-        unreachable!("the element is a struct")
-    };
-    let all = || rows.iter().flatten().flat_map(|r| r.iter());
-    let values = StructArray::new(
-        fields,
-        vec![
-            Arc::new(StringViewArray::from_iter_values(all().map(|h| h.code))),
-            Arc::new(Int32Array::from_iter(all().map(|h| h.node_id))),
-            Arc::new(Int32Array::from_iter(all().map(|h| h.operator_id))),
-            Arc::new(StringViewArray::from_iter_values(
-                all().map(|h| h.message.as_str()),
-            )),
-        ],
-        None,
-    );
-    let offsets = OffsetBuffer::from_lengths(rows.iter().map(|r| r.map_or(0, <[_]>::len)));
-    let valid = NullBuffer::from_iter(rows.iter().map(Option::is_some));
-    Arc::new(ListArray::new(
-        element,
-        offsets,
-        Arc::new(values),
-        Some(valid),
-    ))
 }
 
 /// An `ARRAY<INT>` column.
@@ -450,31 +364,6 @@ pub(crate) fn labels_column(rows: &[&[(String, String)]]) -> ArrayRef {
     let offsets = OffsetBuffer::from_lengths(rows.iter().map(|r| r.len()));
     let struct_array = StructArray::new(fields, vec![Arc::new(keys), Arc::new(vals)], None);
     Arc::new(MapArray::new(entries, offsets, struct_array, None, false))
-}
-
-/// An `ARRAY<STRUCT<le, count>>` column; a row with `None` is NULL.
-fn buckets_column(rows: &[Option<&[(f64, i64)]>]) -> ArrayRef {
-    use arrow_array::{Float64Array, ListArray, StructArray};
-    use arrow_buffer::{NullBuffer, OffsetBuffer};
-    let ArrowType::List(element) = buckets_type().to_arrow() else {
-        unreachable!("an array type maps to a list")
-    };
-    let ArrowType::Struct(fields) = element.data_type().clone() else {
-        unreachable!("the element is a struct")
-    };
-    let les =
-        Float64Array::from_iter_values(rows.iter().flatten().flat_map(|r| r.iter().map(|b| b.0)));
-    let counts =
-        Int64Array::from_iter_values(rows.iter().flatten().flat_map(|r| r.iter().map(|b| b.1)));
-    let offsets = OffsetBuffer::from_lengths(rows.iter().map(|r| r.map_or(0, <[_]>::len)));
-    let values = StructArray::new(fields, vec![Arc::new(les), Arc::new(counts)], None);
-    let valid = NullBuffer::from_iter(rows.iter().map(Option::is_some));
-    Arc::new(ListArray::new(
-        element,
-        offsets,
-        Arc::new(values),
-        Some(valid),
-    ))
 }
 
 /// Rows of text cells, column by column.
@@ -588,7 +477,7 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             Arc::new(Float64Array::from_iter(rows.iter().map(|r| r.value))),
             long(rows.iter().map(|r| r.count)),
             Arc::new(Float64Array::from_iter(rows.iter().map(|r| r.sum))),
-            buckets_column(&buckets),
+            columns::buckets_column(&buckets),
             Arc::new(TimestampMicrosecondArray::from_value(now, rows.len()).with_timezone("UTC")),
         ];
     }
@@ -698,32 +587,11 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             text(rows.iter().map(|r| r.error_message.as_deref())),
             // One process, one worker: every row is whole (design §2.7 for the merged rows).
             Arc::new(BooleanArray::from_iter(rows.iter().map(|_| Some(false)))),
-            hints_column(&rows.iter().map(|r| r.hints.as_deref()).collect::<Vec<_>>()),
+            columns::hints_column(&rows.iter().map(|r| r.hints.as_deref()).collect::<Vec<_>>()),
         ];
     }
     if table.eq_ignore_ascii_case("partition_advice") {
-        // Advice reads every principal's queries: only a `MONITOR` holder sees any.
-        let advice = match (&sources.history, sources.monitor.sees_all()) {
-            (Some(h), true) => crate::partition_advisor::advise_history(h.dir()),
-            _ => Vec::new(),
-        };
-        let rows: Vec<_> = advice
-            .iter()
-            .flat_map(|t| t.advice.iter().enumerate().map(move |(i, a)| (t, i, a)))
-            .collect();
-        return vec![
-            text(rows.iter().map(|(t, ..)| Some(t.table.as_str()))),
-            text(rows.iter().map(|(_, _, a)| Some(a.column.as_str()))),
-            Arc::new(Int32Array::from_iter(
-                rows.iter().map(|(_, i, _)| i32::try_from(i + 1).ok()),
-            )),
-            long(rows.iter().map(|(_, _, a)| i64::try_from(a.queries).ok())),
-            long(rows.iter().map(|(t, ..)| i64::try_from(t.queries).ok())),
-            long(rows.iter().map(|(_, _, a)| i64::try_from(a.distinct).ok())),
-            Arc::new(arrow_array::Float64Array::from_iter(
-                rows.iter().map(|(_, _, a)| Some(a.pruned_fraction)),
-            )),
-        ];
+        return advice::partition_advice(sources);
     }
     let rows = capability_rows();
     vec![
@@ -1417,8 +1285,8 @@ pub(crate) fn provider(
                         krishiv_types::ArrayType::new(DataType::Integer, false).into(),
                     )
                     .to_arrow(),
-                    Kind::Buckets => buckets_type().to_arrow(),
-                    Kind::Hints => hints_type().to_arrow(),
+                    Kind::Buckets => columns::buckets_type().to_arrow(),
+                    Kind::Hints => columns::hints_type().to_arrow(),
                 };
                 Field::new(*name, ty, *nullable)
             })
@@ -2115,7 +1983,10 @@ mod tests {
     }
 }
 
+mod advice;
 mod caches;
+mod columns;
+pub(crate) use columns::HintRow;
 mod row_stamps;
 mod text;
 pub(crate) use text::TextPolicy;
