@@ -25,6 +25,8 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub mod metrics;
 
 pub mod admin;
+#[cfg(feature = "admin-api")]
+pub mod admin_v1;
 pub mod guard;
 pub mod internal;
 #[cfg(feature = "tls")]
