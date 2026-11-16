@@ -64,6 +64,7 @@ jobs:
       - run: cargo xtask source-guard
       - run: cargo xtask file-size
       - run: cargo xtask registry-coverage
+      - run: cargo xtask entry-dirs --check
       - name: Large-file guard (new files over 1 MiB need .github/large-files-allow.txt)
         if: github.event_name == 'pull_request'
         env:

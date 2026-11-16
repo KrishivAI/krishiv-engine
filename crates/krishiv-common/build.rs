@@ -11,7 +11,7 @@
 //! `DELTA_`-prefixed, every one with a SQLSTATE) and
 //! `krishiv-error-classes/` (`KRISHIV_`-prefixed classes only, one `<CLASS>.json`
 //! file per class holding its body, so two changes adding classes never touch
-//! the same file; `cargo xtask error-classes --check` keeps them canonical). Output is
+//! the same file; `cargo xtask entry-dirs --check` keeps them canonical). Output is
 //! deterministic: `serde_json` without `preserve_order` keeps objects sorted
 //! by key, and the merged list is sorted by class name.
 
@@ -78,12 +78,21 @@ fn main() -> Result<(), BoxError> {
 }
 
 /// The classes of `dir` as one registry object: each `<CLASS>.json` file is the
-/// body of class `<CLASS>`. Any other entry is an error, so a misnamed file
+/// body of class `<CLASS>`. Any other entry but a dot file is an error, so a misnamed file
 /// cannot drop a class silently.
 fn collect_dir(dir: &std::path::Path) -> Result<String, BoxError> {
     let mut root = Map::new();
     for entry in std::fs::read_dir(dir)? {
         let path = entry?.path();
+        // Editor locks and swap files (`.#X.json`, `.X.json.swp`, `.DS_Store`); `cargo xtask
+        // entry-dirs` still refuses them in CI.
+        if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with('.'))
+        {
+            continue;
+        }
         let name = path
             .file_name()
             .and_then(|n| n.to_str())

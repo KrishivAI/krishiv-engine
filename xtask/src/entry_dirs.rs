@@ -2,26 +2,37 @@
 //! `cargo xtask entry-dirs [--check | --write]`: registries kept as one file per entry, so two
 //! changes that each add an entry never edit the same file (the conflict churn of shared sorted
 //! lists). Collected where they are used (`krishiv-common`'s `build.rs` reads the error classes,
-//! `krishiv-plan-codec`'s reads its per-feature test files) and checked here; CI's `generated`
-//! job runs `--check`.
+//! `krishiv-plan-codec`'s reads its per-entry test files) and checked here; CI's `pr-policy`
+//! job and `cargo xtask precheck` run `--check`.
 //!
 //! - `crates/krishiv-common/krishiv-error-classes/<CLASS>.json`: one Krishiv error class per file,
 //!   the class body (`message`, `sqlState`, optional `audience`, `subClass`), named
 //!   `KRISHIV_[A-Z0-9_]+`, pretty-printed as `serde_json` prints it (`--write` rewrites).
-//! - `crates/krishiv-plan-codec/tests/features/<name>.rs`: a feature's own codec tests, one module
-//!   per file (snake_case name, SPDX header); `tests/features.rs` and `tests/roundtrip.rs` may not
-//!   gain `#[test]` functions (their counts are capped below), so new tests land in new files.
+//! - `crates/krishiv-plan-codec/tests/{features,roundtrip}/<name>.rs`: codec tests, one module per
+//!   file of the `features` / `roundtrip` test (snake_case name, not `main`, SPDX header);
+//!   `tests/features.rs` and `tests/roundtrip.rs` may not gain test functions (their counts are
+//!   capped below), so new tests land in new files.
 
 use std::path::Path;
 
 /// The error-class directory, relative to the workspace root.
 pub const ERROR_CLASSES: &str = "crates/krishiv-common/krishiv-error-classes";
-/// The per-feature codec test directory, relative to the workspace root.
-pub const CODEC_FEATURE_TESTS: &str = "crates/krishiv-plan-codec/tests/features";
+/// The per-entry codec test directories (relative to the workspace root) and the file each
+/// belongs to.
+pub const CODEC_TEST_DIRS: &[(&str, &str)] = &[
+    (
+        "crates/krishiv-plan-codec/tests/features",
+        "tests/features.rs",
+    ),
+    (
+        "crates/krishiv-plan-codec/tests/roundtrip",
+        "tests/roundtrip.rs",
+    ),
+];
 /// Files whose `#[test]` count may only fall: (path, cap). Lower a cap when tests move out.
 pub const CAPPED_TEST_FILES: &[(&str, usize)] = &[
     ("crates/krishiv-plan-codec/tests/features.rs", 58),
-    ("crates/krishiv-plan-codec/tests/roundtrip.rs", 56),
+    ("crates/krishiv-plan-codec/tests/roundtrip.rs", 55),
 ];
 
 /// The Krishiv error classes under `root` as one JSON object (`{"KRISHIV_X": {...}, ...}`), the
@@ -85,7 +96,9 @@ pub fn is_class_name(name: &str) -> bool {
 /// Whether `name` (a file stem) is a snake_case Rust module name.
 #[must_use]
 pub fn is_module_name(name: &str) -> bool {
-    name.starts_with(|c: char| c.is_ascii_lowercase())
+    // `main.rs` in a directory under `tests/` would also be a test target of its own.
+    name != "main"
+        && name.starts_with(|c: char| c.is_ascii_lowercase())
         && name
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
@@ -101,10 +114,14 @@ pub fn canonical(body: &serde_json::Value) -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
-/// The `#[test]` functions in `text`.
+/// The test functions in `text`: lines starting with a test attribute (`#[test]`,
+/// `#[tokio::test]`, `#[tokio::test(...)]`), the function on the same line or the next.
 #[must_use]
 pub fn test_count(text: &str) -> usize {
-    text.lines().filter(|l| l.trim() == "#[test]").count()
+    text.lines()
+        .map(str::trim_start)
+        .filter(|l| l.starts_with("#[test]") || l.starts_with("#[tokio::test"))
+        .count()
 }
 
 /// Runs the checks; with `write`, rewrites error-class files into their canonical form first.
@@ -113,7 +130,14 @@ pub fn test_count(text: &str) -> usize {
 /// Every problem found, one per line.
 pub fn run(root: &Path, write: bool) -> Result<(), String> {
     let mut problems = Vec::new();
-    for (name, path) in error_class_files(root)? {
+    let classes = match error_class_files(root) {
+        Ok(c) => c,
+        Err(e) => {
+            problems.push(e);
+            Vec::new()
+        }
+    };
+    for (name, path) in classes {
         if !is_class_name(&name) {
             problems.push(format!(
                 "{}: an error-class file is named KRISHIV_<NAME>.json in [A-Z0-9_]",
@@ -142,24 +166,30 @@ pub fn run(root: &Path, write: bool) -> Result<(), String> {
             }
         }
     }
-    let tests_dir = root.join(CODEC_FEATURE_TESTS);
-    if let Ok(entries) = std::fs::read_dir(&tests_dir) {
+    for (dir, of) in CODEC_TEST_DIRS {
+        let Ok(entries) = std::fs::read_dir(root.join(dir)) else {
+            continue;
+        };
         for entry in entries {
-            let path = entry.map_err(|e| e.to_string())?.path();
+            let path = match entry {
+                Ok(e) => e.path(),
+                Err(e) => {
+                    problems.push(format!("{dir}: {e}"));
+                    continue;
+                }
+            };
             let stem = path
                 .file_name()
                 .and_then(|n| n.to_str())
                 .and_then(|n| n.strip_suffix(".rs"));
             match stem {
-                Some(stem) if is_module_name(stem) => {
-                    let text = std::fs::read_to_string(&path)
-                        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-                    if !text.starts_with("// SPDX-License-Identifier: Apache-2.0") {
-                        problems.push(format!("{}: missing the SPDX header", path.display()));
-                    }
-                }
+                Some(stem) if is_module_name(stem) => match std::fs::read_to_string(&path) {
+                    Ok(text) if text.starts_with("// SPDX-License-Identifier: Apache-2.0") => {}
+                    Ok(_) => problems.push(format!("{}: missing the SPDX header", path.display())),
+                    Err(e) => problems.push(format!("{}: {e}", path.display())),
+                },
                 _ => problems.push(format!(
-                    "{}: a codec test file is a snake_case <name>.rs",
+                    "{}: a test file of {of} is a snake_case <name>.rs other than main.rs",
                     path.display()
                 )),
             }
@@ -172,8 +202,9 @@ pub fn run(root: &Path, write: bool) -> Result<(), String> {
         let n = test_count(&text);
         if n > *cap {
             problems.push(format!(
-                "{file}: {n} #[test] functions, more than its cap {cap}; put new tests in \
-                 {CODEC_FEATURE_TESTS}/<feature>.rs (one file per feature, collected by build.rs)"
+                "{file}: {n} test functions, more than its cap {cap}; put new tests in a new file \
+                 of {} (one module per file, collected by build.rs)",
+                file.trim_end_matches(".rs")
             ));
         }
     }
@@ -200,6 +231,7 @@ mod tests {
         assert!(!is_module_name("Nested"));
         assert!(!is_module_name("1x"));
         assert!(!is_module_name("a-b"));
+        assert!(!is_module_name("main"));
     }
 
     #[test]
@@ -210,8 +242,8 @@ mod tests {
             "{\n  \"message\": [\n    \"m\"\n  ],\n  \"sqlState\": \"58030\"\n}\n"
         );
         assert_eq!(
-            test_count("#[test]\nfn a() {}\n    #[test]\nfn b() {}\n#[tokio::test]\n"),
-            2
+            test_count("#[test]\nfn a() {}\n    #[test] fn b() {}\n#[tokio::test]\n// #[test]\n"),
+            3
         );
     }
 

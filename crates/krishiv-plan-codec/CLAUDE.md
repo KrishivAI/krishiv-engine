@@ -44,10 +44,13 @@ enforcement of design P2-T171 invariant I1 (plans are pure data) and the wire fo
 - `tests/expect/<case>.txt`: each inventory case's header features and legacy `min_reader_version`
   (`tests/common/expect.rs`), checked by `features::the_header_lists_exactly_the_features_in_use` and
   `roundtrip::readers_that_predate_features_still_refuse_what_they_cannot_read`. A new case writes its file with
-  `KRISHIV_BLESS_GOLDEN=1` (missing files only; check what it wrote); a file without a case fails.
-- `tests/features/<name>.rs`: a feature's own tests, one module per file, collected by `build.rs` into the
-  `features` test (`use super::*;` for the helpers). `tests/features.rs` and `tests/roundtrip.rs` may not gain
-  `#[test]` functions (`cargo xtask entry-dirs` caps them; CI `generated` job). Every listed feature's reader
+  `KRISHIV_BLESS_GOLDEN=1 cargo nextest run -p krishiv-plan-codec --test features` (missing files only; check
+  what it wrote; bless through one test binary, not both at once); a renamed or removed case renames or deletes its
+  file, since a file without a case fails.
+- `tests/features/<name>.rs` and `tests/roundtrip/<name>.rs`: new tests, one module per file, collected by
+  `build.rs` into the `features` and `roundtrip` tests (`use super::*;` reaches that file's helpers).
+  `tests/features.rs` and `tests/roundtrip.rs` may not gain test functions (`cargo xtask entry-dirs` caps them;
+  CI `pr-policy`, `cargo xtask precheck`). Every listed feature's reader
   refusal is checked for every case by `features/every_listed_feature_is_required.rs`.
 
 ## Vector carrier (P3-T075)

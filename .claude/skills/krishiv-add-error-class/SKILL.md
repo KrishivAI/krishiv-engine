@@ -32,7 +32,7 @@ SQLSTATE there; `DELTA_VERSION_NOT_FOUND` becomes `ErrorClass::DeltaVersionNotFo
    (one file per class, so parallel PRs never conflict on a shared list): `"message"` as an array of lines with
    `<param>` placeholders, a `"sqlState"` (required for `KRISHIV_*`; five characters, digits and capitals), and
    optionally `"audience": "operator"`. The file name is the class name and must start with `KRISHIV_`. Run
-   `cargo xtask entry-dirs --write` to put it in canonical form (CI's `generated` job runs `--check`). `build.rs` fails the build on a
+   `cargo xtask entry-dirs --write` to put it in canonical form (CI's `pr-policy` job runs `--check`). `build.rs` fails the build on a
    wrong prefix, a missing SQLSTATE, a bad name or two names that map to one Rust name.
 2. **Generated type.** `KRISHIV_SPILL_CAP_EXCEEDED` becomes `ErrorClass::KrishivSpillCapExceeded` and a struct
    `krishiv_common::error::KrishivSpillCapExceeded` with a `String` field per parameter (snake case:

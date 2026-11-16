@@ -41,8 +41,8 @@ Test paths below are under `crates/krishiv-plan-codec/`.
 8. **Reader refusal and the feature's tests.** A reader missing a feature some case lists is refused naming it for
    every case automatically (`tests/features/every_listed_feature_is_required.rs`). The feature's own tests (constructs
    mapping to it, refusals needing more than one case, corrupt values) go in a new file
-   `tests/features/<id>.rs` (`use super::*;`), never in `tests/features.rs` or `tests/roundtrip.rs`, whose test counts
-   `cargo xtask entry-dirs` caps.
+   `tests/features/<id>.rs` (`use super::*;`; round-trip and corrupt-input tests in `tests/roundtrip/<id>.rs`), never
+   in `tests/features.rs` or `tests/roundtrip.rs`, whose test counts `cargo xtask entry-dirs` caps.
 9. **Ratchet.** `tests/ratchet.rs` must still round-trip every TPC-H and TPC-DS plan; its `TPCDS_NOT_PLANNED` list may
    only shrink.
 

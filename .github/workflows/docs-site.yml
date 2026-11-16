@@ -1,8 +1,7 @@
 name: Docs site
 
-# Prose lint (Vale) and a static HTML preview of the changed pages. The one-file-per-entry registries
-# (`cargo xtask entry-dirs`) and the generated reference
-# are checked against their generators (SQL pages, executed examples, Python, configuration) at PR time; the
+# Prose lint (Vale) and a static HTML preview of the changed pages. The generated reference
+# is checked against its generators (SQL pages, executed examples, Python, configuration) at PR time; the
 # Rust pages need nightly rustdoc and stay in the nightly `docs-reference` job.
 on:
   pull_request:
@@ -14,9 +13,6 @@ on:
       - "crates/krishiv-cli/src/check_compat/functions.json"
       - "crates/krishiv-functions/**"
       - "crates/krishiv-common/**"
-      - "crates/krishiv-plan-codec/build.rs"
-      - "crates/krishiv-plan-codec/tests/**"
-      - "xtask/src/entry_dirs.rs"
       - "crates/krishiv-plan/src/analyzer/lineage/schema.rs"
       - "crates/krishiv-connect/**"
       - "xtask/src/connect_coverage.rs"
@@ -104,7 +100,6 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-          cargo xtask entry-dirs --check
           cargo xtask docs-analyze --check --base "${BASE:-origin/main}"
           cargo xtask docs-sql --check
           cargo xtask connect-coverage --check
