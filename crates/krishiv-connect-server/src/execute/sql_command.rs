@@ -37,7 +37,12 @@ pub(super) async fn of(
     limits: &ExecuteLimits,
 ) -> Result<Option<pb::SqlCommand>, KrishivError> {
     let command = match &plan.op_type {
-        Some(OpType::Command(command)) => command.command_type.clone(),
+        Some(OpType::Command(command)) => match &command.command_type {
+            Some(pb::command::CommandType::SqlCommand(sql)) => {
+                Some(pb::command::CommandType::SqlCommand(sql.clone()))
+            }
+            _ => None,
+        },
         Some(OpType::CompressedOperation(c))
             if CompressedOpType::try_from(c.op_type) == Ok(CompressedOpType::Command) =>
         {
@@ -52,7 +57,12 @@ pub(super) async fn of(
                     .into()
                 })??;
             match &decode_command(&bytes)?.op_type {
-                Some(OpType::Command(command)) => command.command_type.clone(),
+                Some(OpType::Command(command)) => match &command.command_type {
+                    Some(pb::command::CommandType::SqlCommand(sql)) => {
+                        Some(pb::command::CommandType::SqlCommand(sql.clone()))
+                    }
+                    _ => None,
+                },
                 _ => None,
             }
         }
