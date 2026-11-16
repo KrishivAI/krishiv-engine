@@ -29,6 +29,11 @@ def test_parse_io_reads_the_three_read_counters():
     assert parse_io(PROC_IO) == IoCounters(rchar=1000, read_bytes=4096, syscr=20)
 
 
+def test_parse_io_reads_the_bytes_written_to_storage():
+    assert parse_io(PROC_IO.replace("write_bytes: 0", "write_bytes: 8192")).write_bytes == 8192
+    assert parse_io("rchar: 1\nread_bytes: 2\nsyscr: 3\n").write_bytes == 0  # an older kernel without the line
+
+
 def test_parse_io_refuses_text_without_the_counters():
     with pytest.raises(RuntimeError, match="syscr"):
         parse_io("rchar: 1\nread_bytes: 2\n")

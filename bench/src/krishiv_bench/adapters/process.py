@@ -132,8 +132,8 @@ class ProcessEngine(Engine):
 
     def timed_run(self, query: Query) -> tuple[int, float]:
         """Runs ``query`` in the worker; the worker tree's peak RSS and CPU seconds land in ``last_peak_rss_bytes``
-        and ``last_cpu_seconds``."""
-        self.last_peak_rss_bytes = self.last_cpu_seconds = None
+        and ``last_cpu_seconds``, the bytes it wrote to storage (spill) in ``last_write_bytes``."""
+        self.last_peak_rss_bytes = self.last_cpu_seconds = self.last_write_bytes = None
         if self._proc is None:
             self._start()  # the window must cover the live worker, not a pid that does not exist yet
         assert self._proc is not None
@@ -143,7 +143,8 @@ class ProcessEngine(Engine):
         try:
             return self._request({"op": "time", "query": query})
         finally:
-            self.last_peak_rss_bytes = self.end_measure().peak_rss_bytes
+            m = self.end_measure()
+            self.last_peak_rss_bytes, self.last_write_bytes = m.peak_rss_bytes, m.write_bytes
             if self._proc is not None:  # a killed worker has no meaningful CPU reading
                 self.last_cpu_seconds = max(0.0, tree_cpu_seconds(pid) - cpu0)
 

@@ -202,11 +202,14 @@ def judge(name: str, r: list, ref: list, qm: Mapping[str, Query], rows: Mapping[
     return v
 
 
-def _note_peak(peaks: dict[str, int], name: str, eng: Engine) -> None:
-    """Keeps the highest per-run peak RSS of ``eng`` (its worker process tree) seen for the query."""
+def _note_peak(peaks: dict[str, int], name: str, eng: Engine, writes: dict[str, int] | None = None) -> None:
+    """Keeps the highest per-run peak RSS of ``eng`` (its worker process tree) seen for the query, and in ``writes``
+    the most bytes one run wrote to storage (spill)."""
     peak = eng.last_peak_rss_bytes
     if peak is not None:
         peaks[name] = max(peaks.get(name, 0), peak)
+    if writes is not None and (w := eng.last_write_bytes) is not None:
+        writes[name] = max(writes.get(name, 0), w)
 
 
 def _baselines(qm, engines, live, nrows, entry, samples) -> dict[str, dict | None]:
@@ -363,6 +366,7 @@ def sequential_query(
     infos: dict[str, dict] = {}
     samples: dict[str, list[float]] = {}
     peaks: dict[str, int] = {}
+    writes: dict[str, int] = {}
     cpus: dict[str, list[float]] = {}
     nrows = 0
     for name in order:
@@ -416,7 +420,7 @@ def sequential_query(
                 samples[name], cpus[name] = [], []
                 for _ in range(samples_n):
                     samples[name].append(_timed(eng, qm[name], nrows, baseline, cold_root))
-                    _note_peak(peaks, name, eng)
+                    _note_peak(peaks, name, eng, writes)
                     if (cpu := eng.last_cpu_seconds) is not None:
                         cpus[name].append(cpu)
                 if profile and name == "krishiv":  # one more run, after the samples, in the worker that took them
@@ -453,6 +457,9 @@ def sequential_query(
             rows.pop(name, None)  # only DuckDB's and Krishiv's rows are compared against later engines
     entry: dict[str, Any] = {"rows": nrows, "engines": {n: dict(v) for n, v in verdicts.items()}}
     _finish(entry, samples, peaks, cpus, qm, {}, False)  # without DuckDB samples: medians and peaks, no ratios
+    for name, w in writes.items():
+        if name in samples:  # most bytes one timed run wrote to storage (spill); absent for a cached reference
+            entry["engines"][name]["spill_bytes_max"] = w
     entry["load_before"], entry["load_after"] = load_before, loadavg()
     return entry, infos
 

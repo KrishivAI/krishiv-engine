@@ -27,17 +27,24 @@ def _status_kb(text: str, key: str) -> int:
 @dataclass(frozen=True)
 class IoCounters:
     """Cumulative ``/proc/<pid>/io`` counters: ``rchar`` bytes asked of read-like syscalls (page cache included),
-    ``read_bytes`` bytes fetched from the storage layer (a page-cache hit adds nothing), ``syscr`` read syscalls."""
+    ``read_bytes`` bytes fetched from the storage layer (a page-cache hit adds nothing), ``syscr`` read syscalls,
+    ``write_bytes`` bytes the process caused to be sent to the storage layer (the engines under test write only their
+    spill files, so this is their spill; a file deleted before writeback still counts)."""
 
     rchar: int = 0
     read_bytes: int = 0
     syscr: int = 0
+    write_bytes: int = 0
 
     def __add__(self, o: IoCounters) -> IoCounters:
-        return IoCounters(self.rchar + o.rchar, self.read_bytes + o.read_bytes, self.syscr + o.syscr)
+        return IoCounters(
+            self.rchar + o.rchar, self.read_bytes + o.read_bytes, self.syscr + o.syscr, self.write_bytes + o.write_bytes
+        )
 
     def __sub__(self, o: IoCounters) -> IoCounters:
-        return IoCounters(self.rchar - o.rchar, self.read_bytes - o.read_bytes, self.syscr - o.syscr)
+        return IoCounters(
+            self.rchar - o.rchar, self.read_bytes - o.read_bytes, self.syscr - o.syscr, self.write_bytes - o.write_bytes
+        )
 
 
 def parse_io(text: str) -> IoCounters:
@@ -50,7 +57,7 @@ def parse_io(text: str) -> IoCounters:
     missing = {"rchar", "read_bytes", "syscr"} - vals.keys()
     if missing:
         raise RuntimeError(f"{sorted(missing)} not found in /proc io")
-    return IoCounters(vals["rchar"], vals["read_bytes"], vals["syscr"])
+    return IoCounters(vals["rchar"], vals["read_bytes"], vals["syscr"], vals.get("write_bytes", 0))
 
 
 class LocalProc:
@@ -286,6 +293,7 @@ def tree_measure(tree: TreeProc | None) -> Measure:
         rchar=io.rchar if io else None,
         read_bytes=io.read_bytes if io else None,
         syscr=io.syscr if io else None,
+        write_bytes=io.write_bytes if io else None,
     )
 
 

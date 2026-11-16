@@ -613,6 +613,31 @@ def test_sequential_query_checks_against_krishiv_when_asked_and_duckdb_has_no_an
     assert "median_s" not in got["spark-connect"]
 
 
+class Spilling(Scripted):
+    """A scripted engine whose timed runs write 100, 300, 200 ... bytes to storage."""
+
+    def timed_run(self, query):
+        self.writes = getattr(self, "writes", 0) + 1
+        self.last_write_bytes = [100, 300, 200][(self.writes - 1) % 3]
+        return super().timed_run(query)
+
+
+def test_sequential_query_records_the_most_one_timed_run_spilled(monkeypatch, tiny):
+    rows = [(1,), (2,)]
+    entry, _ = _sequential(
+        monkeypatch,
+        tiny,
+        {
+            "duckdb": lambda: Scripted("duckdb", rows, checksum=True),
+            "krishiv": lambda: Spilling("krishiv", rows, checksum=True),
+        },
+        ["duckdb", "krishiv"],
+    )
+    # the untimed baseline run wrote 100, the two samples 300 and 200: only the samples count
+    assert entry["engines"]["krishiv"]["spill_bytes_max"] == 300
+    assert "spill_bytes_max" not in entry["engines"]["duckdb"]  # no write figure measured
+
+
 def test_sequential_query_runs_polars_again_with_the_streaming_engine_after_a_crash(monkeypatch, tiny):
     rows = [(1,), (2,)]
     entry, _ = _sequential(
