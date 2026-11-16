@@ -95,6 +95,10 @@ fn catalog_declarations_are_checked_at_startup() {
         "spark.sql.catalog.h.uri=thrift://metastore:9083",
     ]);
     assert!(err.contains("`hive`"), "{err}");
+    // Spark's default-catalog key in any letter case reaches the registry (review 58a2 N3): a
+    // default no declaration names stops startup.
+    let err = refused(&["SPARK.SQL.DEFAULTCATALOG=nosuch"]);
+    assert!(err.contains("names no declared catalog"), "{err}");
     // A literal secret is refused without being echoed.
     let err = refused(&[
         "krishiv.catalog.lake.type=iceberg-rest",

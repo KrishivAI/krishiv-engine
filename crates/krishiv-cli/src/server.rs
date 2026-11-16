@@ -108,9 +108,15 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
             catalogs = catalogs.setting(k, v);
             continue;
         }
-        if k == "spark.sql.defaultCatalog" {
+        // Spark's default-catalog key in any letter case, like the declaration keys (review
+        // 58a2 N3): it names the default to the registry and stays engine configuration under
+        // its one spelling.
+        let k = if k.eq_ignore_ascii_case(SPARK_DEFAULT_CATALOG) {
             catalogs = catalogs.setting(k, v);
-        }
+            SPARK_DEFAULT_CATALOG
+        } else {
+            k.as_str()
+        };
         let warning = config.set(k, v).map_err(|e| e.to_string())?;
         // A Spark Connect setting Krishiv does not read would be ignored
         // silently: refuse it, naming the replacement where there is one.
@@ -405,6 +411,9 @@ fn metrics_need_token(config: &Config, bound: SocketAddr) -> bool {
     flag(config, &METRICS_ENABLED, false)
         && !(flag(config, &SERVER_METRICS_PUBLIC, false) && bound.ip().is_loopback())
 }
+
+/// Spark's default-catalog key (`krishiv.catalog.default` is a declaration key).
+const SPARK_DEFAULT_CATALOG: &str = "spark.sql.defaultCatalog";
 
 /// How long admin requests in flight may take once the server stops.
 const ADMIN_DRAIN: Duration = Duration::from_secs(2);
