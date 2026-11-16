@@ -202,7 +202,7 @@ jobs:
       - name: UDF worker interpreter
         run: |
           uv venv --python 3.12 "$RUNNER_TEMP/udf-python"
-          uv pip install --python "$RUNNER_TEMP/udf-python/bin/python" --require-hashes \
+          uv pip install --python "$RUNNER_TEMP/udf-python/bin/python" --require-hashes --no-deps \
             -r tests/udf-worker/requirements.txt
       - run: cargo xtask coverage --all-features --html --no-branch
         env:

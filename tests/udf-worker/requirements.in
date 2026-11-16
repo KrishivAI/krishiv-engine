@@ -1,8 +1,16 @@
 # The Python UDF worker interpreter of krishiv-udf-pool's tests (CI, nightly and coverage jobs).
-# Regenerate requirements.txt after a change here (hash-pinned, installed with --require-hashes):
-#   uv pip compile tests/udf-worker/requirements.in --generate-hashes --python-version 3.12 \
+# Every package the worker imports is listed here, and the file is compiled and installed with --no-deps.
+# pyspark-client also declares the Spark Connect client's gRPC stack (grpcio, grpcio-status,
+# googleapis-common-protos, protobuf, typing-extensions). A UDF worker never imports it, and the
+# dependency-review license check refuses protobuf's and typing-extensions' compound licenses.
+# Regenerate requirements.txt after a change here (hash-pinned, installed with --require-hashes --no-deps):
+#   uv pip compile tests/udf-worker/requirements.in --no-deps --generate-hashes --python-version 3.12 \
 #     --python-platform x86_64-unknown-linux-gnu -o tests/udf-worker/requirements.txt
 pyspark-client==4.2.1
 pyarrow==26.0.1
 pandas==3.1.1
 numpy==2.5.4
+python-dateutil==4.0.0
+pyyaml==6.0.3
+tzdata==2026.6
+zstandard==0.25.0
