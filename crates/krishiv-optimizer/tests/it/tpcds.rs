@@ -117,3 +117,34 @@ fn tpcds_plans() {
     );
     assert!(snapshotted == 99 - UNSUPPORTED.len());
 }
+
+/// Queries that are not yet a fixed point under a session configuration (so
+/// with `ShareCte`), with the reason.
+const NOT_FIXED_UNDER_SESSION: &[(usize, &str)] = &[(
+    59,
+    "an isnotnull inferred above an inner join is pushed through it onto a ShareCte CteRef",
+)];
+
+/// Under a session configuration `ShareCte` runs; a second `optimize` of its
+/// output adds nothing (inferred `isnotnull` stays off its `CteRef`s).
+#[test]
+fn tpcds_plans_are_fixed_points_under_a_session_configuration() {
+    use krishiv_optimizer::{NoStatistics, optimize_with_udfs};
+    use krishiv_udf_sdk::UdfLibrary;
+    let ctx = support::ctx_over(catalog());
+    let config = krishiv_common::config::Config::default();
+    let udfs = UdfLibrary::new();
+    let mut not_fixed = Vec::new();
+    for q in 1..=99 {
+        let Some(plan) = support::try_resolve(&sql(q), &ctx) else {
+            continue;
+        };
+        let once = optimize_with_udfs(&plan, &NoStatistics, &udfs, &config).unwrap();
+        let again = optimize_with_udfs(&once, &NoStatistics, &udfs, &config).unwrap();
+        if !again.structurally_eq(&once) {
+            not_fixed.push(q);
+        }
+    }
+    let expected: Vec<usize> = NOT_FIXED_UNDER_SESSION.iter().map(|(q, _)| *q).collect();
+    assert_eq!(not_fixed, expected);
+}
