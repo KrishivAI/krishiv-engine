@@ -1940,15 +1940,6 @@ impl Session {
     }
 }
 
-/// Aborts a task when dropped.
-struct AbortOnDrop(krishiv_exec::TaskHandle);
-
-impl Drop for AbortOnDrop {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
-
 #[cfg(test)]
 mod tests;
 
@@ -1962,3 +1953,4 @@ mod writes;
 use writes::*;
 
 mod ops;
+use ops::AbortOnDrop;
