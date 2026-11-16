@@ -302,35 +302,13 @@ fn sql_function_roots(
         let _ = walk::visit_distinct(Node::Plan(&roots[next]), |node| {
             if let Node::Plan(p) = node
                 && let PlanNode::TableFunction { name, .. } = &p.node
-                && let FunctionLookup::Sql(def) = ctx.functions.lookup(
-                    &name
-                        .split(crate::TABLE_FUNCTION_NAME_SEP)
-                        .map(str::to_owned)
-                        .collect::<Vec<_>>(),
-                    ctx.profile,
-                )
+                && let Some(def) = sql_table_function(ctx, name)
             {
                 defs.push(def);
             }
             if let Node::Expr(e) = node
                 && let ExprNode::Function(f) = &e.node
-                && is_registry_call(&f.name)
-                && let FunctionLookup::Sql(def) = ctx.functions.lookup(
-                    &if is_session_qualifier(&f.qualifier) {
-                        let mut parts = f.qualifier.clone();
-                        parts.push(f.name.clone());
-                        parts
-                    } else if f.qualifier.is_empty() {
-                        vec![f.name.clone()]
-                    } else if is_builtin_qualifier(&f.qualifier) {
-                        return ControlFlow::Continue(());
-                    } else {
-                        let mut parts = f.qualifier.clone();
-                        parts.push(f.name.clone());
-                        parts
-                    },
-                    ctx.profile,
-                )
+                && let Some(def) = sql_call(ctx, f)
             {
                 defs.push(def);
             }
@@ -362,6 +340,43 @@ fn sql_function_roots(
 
 /// Whether a call of `name` is for the function registry to answer: not a
 /// canonical operator or a grouping function.
+/// The SQL-bodied table function `name` (a `FROM f(..)` table function name, parts joined by
+/// [`crate::TABLE_FUNCTION_NAME_SEP`]), if it is one.
+pub(super) fn sql_table_function(
+    ctx: &AnalysisContext,
+    name: &str,
+) -> Option<Arc<super::SqlFunction>> {
+    let parts: Vec<String> = name
+        .split(crate::TABLE_FUNCTION_NAME_SEP)
+        .map(str::to_owned)
+        .collect();
+    match ctx.functions.lookup(&parts, ctx.profile) {
+        FunctionLookup::Sql(def) => Some(def),
+        _ => None,
+    }
+}
+
+/// The SQL-bodied function an unresolved call `f` calls, if it calls one (a `builtin.` call never does).
+pub(super) fn sql_call(
+    ctx: &AnalysisContext,
+    f: &crate::FunctionCall,
+) -> Option<Arc<super::SqlFunction>> {
+    if !is_registry_call(&f.name) || is_builtin_qualifier(&f.qualifier) {
+        return None;
+    }
+    let parts = if f.qualifier.is_empty() {
+        vec![f.name.clone()]
+    } else {
+        let mut parts = f.qualifier.clone();
+        parts.push(f.name.clone());
+        parts
+    };
+    match ctx.functions.lookup(&parts, ctx.profile) {
+        FunctionLookup::Sql(def) => Some(def),
+        _ => None,
+    }
+}
+
 fn is_registry_call(name: &str) -> bool {
     crate::Builtin::from_name(name).is_none_or(crate::Builtin::is_analyzer_internal)
         && super::analytics::GroupingFn::from_name(name).is_none()

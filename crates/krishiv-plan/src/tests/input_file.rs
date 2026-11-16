@@ -260,3 +260,109 @@ fn union_branches_read_their_own_files_or_the_constants() {
     assert_eq!(shape(&p), (true, false));
     assert_eq!(p.root().resolved_output().unwrap(), a.output);
 }
+
+fn plan_with(catalog: MemoryCatalog, plan: LogicalPlan) -> Result<AnalyzedPlan, AnalysisError> {
+    let mut ctx = context(catalog, ResolutionConf::default());
+    ctx.files = Some(Arc::new(Files));
+    let plan = Plan::try_new(plan).map_err(|error| AnalysisError {
+        error,
+        origin: Origin::UNKNOWN,
+    })?;
+    block_on(DefaultAnalyzer.analyze(&plan, &ctx))
+}
+
+/// Recorded divergence (module docs): an Iceberg or Delta scan (a versioned table) counts as a source, as Spark's
+/// V2 file scans do, but has no `_metadata` column, so a call over it gives the constants where Spark gives the
+/// data file.
+#[test]
+fn versioned_table_scans_count_but_give_the_constants() {
+    let catalog = || {
+        let col = TableColumn {
+            name: "id".to_owned(),
+            data_type: DataType::Integer,
+            nullable: true,
+            char_varchar: None,
+        };
+        MemoryCatalog::new("spark_catalog").with_table(
+            &["default"],
+            "v",
+            vec![col],
+            Some(crate::TableVersion(7)),
+        )
+    };
+    let v = || LogicalPlan::table(["v"]);
+    let r = plan_with(
+        catalog(),
+        v().join(read("/a"), JoinKind::Inner, on_id())
+            .project(vec![ifn()]),
+    );
+    assert_eq!(
+        r.err().map(|e| e.error.error_class()),
+        Some(ErrorClass::MultiSourcesUnsupportedForExpression)
+    );
+    let a = plan_with(catalog(), v().project(vec![ifn()])).unwrap();
+    // The session's lookup gives versioned tables no `_metadata` (`QueryCatalog::scan_file_metadata`).
+    let p = bind_input_files(&a.plan, &|s| match &s.source {
+        ReadSource::Files { .. } => FileMetadata::WithRowIndex,
+        _ => FileMetadata::None,
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(shape(&p), (false, false));
+}
+
+#[test]
+fn outer_joins_read_the_file_only_from_a_side_kept_whole() {
+    let file_left = |kind| {
+        bound(
+            read("/a")
+                .join(values(), kind, on_id())
+                .project(vec![ifn()]),
+        )
+    };
+    assert_eq!(shape(&file_left(JoinKind::LeftOuter)), (true, false));
+    assert_eq!(shape(&file_left(JoinKind::Inner)), (true, false));
+    assert_eq!(shape(&file_left(JoinKind::RightOuter)), (false, false));
+    assert_eq!(shape(&file_left(JoinKind::FullOuter)), (false, false));
+    let file_right = |kind| {
+        bound(
+            values()
+                .join(read("/a"), kind, on_id())
+                .project(vec![ifn()]),
+        )
+    };
+    assert_eq!(shape(&file_right(JoinKind::RightOuter)), (true, false));
+    assert_eq!(shape(&file_right(JoinKind::LeftOuter)), (false, false));
+    // The provided values stay non-nullable.
+    let p = file_right(JoinKind::RightOuter);
+    assert!(
+        !p.root().resolved_output().unwrap()[0].nullable,
+        "{}",
+        p.root()
+    );
+}
+
+/// A CTE reference counts its definition's sources (Spark checks after inlining).
+#[test]
+fn a_cte_reference_counts_its_definition() {
+    let with = |input: LogicalPlan| {
+        LogicalPlan::new(PlanNode::WithCte {
+            input: Arc::new(input),
+            ctes: vec![crate::Cte {
+                name: "x".to_owned(),
+                plan: Arc::new(read("/a")),
+            }],
+        })
+    };
+    let x = || LogicalPlan::table(["x"]);
+    assert_eq!(
+        class(with(
+            x().join(read("/b"), JoinKind::Inner, on_id())
+                .project(vec![ifn()])
+        )),
+        Some(ErrorClass::MultiSourcesUnsupportedForExpression)
+    );
+    assert_eq!(class(with(x().project(vec![ifn()]))), None);
+    let p = bound(with(x().project(vec![ifn()])));
+    assert_eq!(shape(&p), (true, false));
+}

@@ -1098,7 +1098,7 @@ async fn analyze_with(
     let (root, output, securables, warnings, output_declared, output_comments, entry, warm_started) =
         resolve::resolve(plan, ctx, &bindings, warm.as_deref(), slot.is_some())?;
     unexecutable::check(&root, ctx.conf.time_type)?;
-    input_file::check(plan.root(), &bindings)?;
+    input_file::check(plan.root(), &bindings, ctx)?;
     let resolved = Plan::try_new(root).map_err(|e| AnalysisError::new(e, plan.root().origin))?;
     if let Some((slot, starts)) = slot {
         if warm_started {

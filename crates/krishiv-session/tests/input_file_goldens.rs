@@ -9,6 +9,12 @@
 //! depends on its default parallelism: `local[1]` and `local[2]` differ), so those cases assert the plan's
 //! invariants instead: the blocks cover the file contiguously and every row is read once.
 //! Cases that do not match yet are listed in [`KNOWN_GAPS`] with the reason, and must still mismatch.
+//!
+//! Recorded divergences outside the fixture (module docs of `krishiv-plan` `analyzer/input_file.rs`): an Iceberg
+//! or Delta scan gives the no-file values (no `_metadata` column there; asserted by `krishiv-plan`
+//! `tests/input_file.rs` `versioned_table_scans_count_but_give_the_constants`, as these tests have no Iceberg or
+//! Delta catalog); a data column named `_metadata` hides the file ([`a_metadata_data_column_gives_the_no_file_value`]);
+//! an inner join whose file side Spark broadcasts gives Spark `''`, Krishiv the file; EXPLAIN shows the rewrite.
 #![cfg(test)]
 
 use std::collections::BTreeMap;
@@ -428,4 +434,176 @@ fn input_file_functions_match_spark() {
     assert!(report.is_empty(), "{report}");
     assert_eq!(gaps, KNOWN_GAPS.len());
     assert_eq!(cases.len(), 73);
+}
+
+/// A session with the views `a` (`a1.parquet`: ids 1, 2; `a2.parquet`: id 3) and `b` (`b1.parquet`: ids 1, 10),
+/// for the Krishiv-authored cases below (no Spark run behind them; each states the rule it follows).
+fn small() -> (tempfile::TempDir, PathBuf, Session) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let s = Session::new().unwrap();
+    let ints = |v: &[i32]| {
+        let rows: Vec<String> = v.iter().map(|i| format!("({i})")).collect();
+        format!("SELECT * FROM VALUES {} AS t(id)", rows.join(", "))
+    };
+    one(&s, &root, &ints(&[1, 2]), "parquet", "a", "a1.parquet");
+    one(&s, &root, &ints(&[3]), "parquet", "a", "a2.parquet");
+    one(&s, &root, &ints(&[1, 10]), "parquet", "b", "b1.parquet");
+    for v in ["a", "b"] {
+        let path = root.join(v).to_str().unwrap().to_owned();
+        block_on(s.read().parquet([path]).create_or_replace_temp_view(v)).unwrap();
+    }
+    (dir, root, s)
+}
+
+/// The rows of `sql` (sorted) and whether each output column is nullable.
+fn run_sql(s: &Session, sql: &str) -> Result<(Vec<Vec<String>>, Vec<bool>), KrishivError> {
+    block_on(async {
+        let df = s.sql(sql).await?;
+        let schema = df.schema().await?;
+        let rows = rows_of(&df.collect().await?);
+        Ok((
+            rows,
+            schema.fields().iter().map(|f| f.is_nullable()).collect(),
+        ))
+    })
+}
+
+fn files(root: &Path, names: &[&str]) -> Vec<Vec<String>> {
+    let mut v: Vec<Vec<String>> = names
+        .iter()
+        .map(|n| vec![format!("file://{}/{n}", root.display())])
+        .collect();
+    v.sort();
+    v
+}
+
+fn empty(n: usize) -> Vec<Vec<String>> {
+    vec![vec![String::new()]; n]
+}
+
+/// The three functions are never NULL: a join passes the file on only from a side it keeps whole. Spark pads the
+/// broadcast build side (or plans a sort-merge join), so the padded side's rows get the no-file values there too.
+#[test]
+fn outer_joins_take_the_file_only_from_a_side_kept_whole() {
+    let (_dir, root, s) = small();
+    let a = ["a/a1.parquet", "a/a1.parquet", "a/a2.parquet"];
+    let cases = [
+        // The kept side has no file: `''` on every row, padded or not.
+        (
+            "SELECT input_file_name() FROM range(5) r LEFT JOIN a ON r.id = a.id",
+            empty(5),
+        ),
+        (
+            "SELECT input_file_name() FROM a RIGHT JOIN range(5) r ON a.id = r.id",
+            empty(5),
+        ),
+        (
+            "SELECT input_file_name() FROM a FULL JOIN range(5) r ON a.id = r.id",
+            empty(5),
+        ),
+        // The kept side holds the file.
+        (
+            "SELECT input_file_name() FROM a LEFT JOIN range(5) r ON a.id = r.id",
+            files(&root, &a),
+        ),
+        (
+            "SELECT input_file_name() FROM range(5) r RIGHT JOIN a ON r.id = a.id",
+            files(&root, &a),
+        ),
+        (
+            "SELECT input_file_name() FROM range(5) r JOIN a ON r.id = a.id",
+            files(&root, &a),
+        ),
+    ];
+    for (sql, want) in cases {
+        let (rows, nullable) = run_sql(&s, sql).unwrap();
+        assert_eq!(rows, want, "{sql}");
+        assert_eq!(nullable, [false], "{sql}");
+    }
+    let (rows, nullable) = run_sql(
+        &s,
+        "SELECT input_file_block_start(), input_file_block_length() FROM a FULL JOIN range(5) r ON a.id = r.id",
+    )
+    .unwrap();
+    assert_eq!(rows, vec![vec!["-1".to_owned(), "-1".to_owned()]; 5]);
+    assert_eq!(nullable, [false, false]);
+}
+
+/// Spark checks the plan after inlining: a CTE reference counts its definition's sources, and a SQL function
+/// whose body calls `input_file_name()` holds that call where it is called.
+#[test]
+fn ctes_and_sql_functions_count_as_inlined() {
+    let (_dir, root, s) = small();
+    let class = |sql: &str| {
+        run_sql(&s, sql)
+            .err()
+            .map(|e| e.error_class().name().to_owned())
+    };
+    let multi = Some("MULTI_SOURCES_UNSUPPORTED_FOR_EXPRESSION".to_owned());
+    assert_eq!(
+        class("WITH x AS (SELECT * FROM a) SELECT input_file_name() FROM x JOIN a USING (id)"),
+        multi
+    );
+    assert_eq!(
+        class(
+            "WITH x AS (SELECT * FROM a), y AS (SELECT * FROM x) SELECT input_file_name() FROM y JOIN b USING (id)"
+        ),
+        multi
+    );
+    // A CTE over a range is no source.
+    assert_eq!(
+        class(
+            "WITH x AS (SELECT * FROM range(3)) SELECT input_file_name() FROM x JOIN a USING (id)"
+        ),
+        None
+    );
+    block_on(async {
+        s.sql("CREATE TEMPORARY FUNCTION f() RETURNS STRING RETURN input_file_name()")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap();
+    assert_eq!(class("SELECT f() FROM a JOIN b USING (id)"), multi);
+    let (rows, _) = run_sql(&s, "SELECT f() FROM a").unwrap();
+    assert_eq!(
+        rows,
+        files(&root, &["a/a1.parquet", "a/a1.parquet", "a/a2.parquet"])
+    );
+    let (rows, _) = run_sql(
+        &s,
+        "WITH x AS (SELECT * FROM a) SELECT input_file_name() FROM x",
+    )
+    .unwrap();
+    assert_eq!(
+        rows,
+        files(&root, &["a/a1.parquet", "a/a1.parquet", "a/a2.parquet"])
+    );
+    // Two references: each reads its own instance of the definition.
+    let sql = "WITH x AS (SELECT * FROM a) SELECT input_file_name() FROM x UNION ALL SELECT input_file_name() FROM x";
+    let (rows, _) = run_sql(&s, sql).unwrap();
+    let a = ["a/a1.parquet", "a/a1.parquet", "a/a2.parquet"];
+    assert_eq!(rows, files(&root, &[a, a].concat()));
+}
+
+/// Recorded divergence: a data column named `_metadata` hides the hidden column, so a call over the scan gives the
+/// no-file value (Spark's value does not depend on `_metadata`: it is the file).
+#[test]
+fn a_metadata_data_column_gives_the_no_file_value() {
+    let (_dir, root, s) = small();
+    one(
+        &s,
+        &root,
+        "SELECT 1 AS id, 2 AS _metadata",
+        "parquet",
+        "m",
+        "m1.parquet",
+    );
+    let sql = format!(
+        "SELECT input_file_name(), _metadata FROM parquet.`{}`",
+        root.join("m").display()
+    );
+    let (rows, _) = run_sql(&s, &sql).unwrap();
+    assert_eq!(rows, vec![vec![String::new(), "2".to_owned()]]);
 }
