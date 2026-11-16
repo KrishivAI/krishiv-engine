@@ -544,14 +544,14 @@ fn a_struct_built_of_metadata_fields_is_not_narrowed_by_name() {
 
 #[test]
 fn file_source_path_is_redacted() {
-    let mut plan = LogicalPlan::new(PlanNode::Read(krishiv_plan::ReadSource::Files {
-        format: "parquet".to_owned(),
-        paths: vec![OptionValue::from_user(
+    let mut plan = LogicalPlan::new(PlanNode::Read(krishiv_plan::ReadSource::files(
+        "parquet",
+        vec![OptionValue::from_user(
             "path",
             "s3://bucket/x?X-Amz-Signature=sekrit",
         )],
-        options: BTreeMap::new(),
-    }));
+        BTreeMap::new(),
+    )));
     plan = plan.project(vec![Expr::column(["p"])]);
     let l = lineage(&analyzed_plan(&Plan::try_new(plan).unwrap())).unwrap();
     let text = format!("{l:?}");

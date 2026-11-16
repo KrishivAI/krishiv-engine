@@ -323,7 +323,7 @@ fn build_rows(
     schema: &SchemaRef,
 ) -> Result<Batch> {
     let data = chunk.data();
-    let arena = RowArena::concat(shared.arena_schema(hashing), std::slice::from_ref(chunk))?;
+    let arena = RowArena::over_chunks(shared.arena_schema(hashing), std::slice::from_ref(chunk))?;
     let rows = u32::try_from(arena.len()).map_err(|_| internal("a chunk too large".to_owned()))?;
     let picks: Vec<(usize, u32)> = (0..rows).map(|r| (0, r)).collect();
     let mut columns = shared.build_columns(hashing.rows(), &picks, |_| Some(&arena))?;
