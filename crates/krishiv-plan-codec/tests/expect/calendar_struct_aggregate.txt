@@ -1,0 +1,2 @@
+features = calendar_struct
+legacy_reader_version = 6

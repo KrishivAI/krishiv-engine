@@ -1,0 +1,6 @@
+{
+  "message": [
+    "A hash join partition with <buildRows> build rows still does not fit in memory after <depth> rounds of repartitioning: its build side is skewed on very few join keys. Increase \"krishiv.memory.limit\", or rewrite the query so the skewed keys are joined separately."
+  ],
+  "sqlState": "53200"
+}

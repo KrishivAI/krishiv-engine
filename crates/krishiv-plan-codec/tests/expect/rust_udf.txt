@@ -1,0 +1,2 @@
+features = rust_udf
+legacy_reader_version = 6

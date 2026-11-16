@@ -1,0 +1,2 @@
+features = variant_type
+legacy_reader_version = 6

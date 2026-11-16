@@ -1,0 +1,7 @@
+{
+  "audience": "operator",
+  "message": [
+    "The resource group file is invalid at <path>: <reason>."
+  ],
+  "sqlState": "22023"
+}

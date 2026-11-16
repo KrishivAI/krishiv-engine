@@ -1,0 +1,2 @@
+features = nested_types, python_udf_relations
+legacy_reader_version = 6

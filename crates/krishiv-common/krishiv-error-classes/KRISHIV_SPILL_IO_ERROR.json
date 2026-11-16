@@ -1,0 +1,7 @@
+{
+  "audience": "operator",
+  "message": [
+    "Spill I/O failed while trying to <operation> <path>: <reason>."
+  ],
+  "sqlState": "58030"
+}

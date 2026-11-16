@@ -1,0 +1,3 @@
+# The literal's own type is nested, so a reader needs both.
+features = nested_literals, nested_types
+legacy_reader_version = 6

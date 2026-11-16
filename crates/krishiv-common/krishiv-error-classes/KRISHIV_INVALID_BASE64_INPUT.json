@@ -1,0 +1,6 @@
+{
+  "message": [
+    "The input is not valid base64: <reason>. Spark raises a Java `IllegalArgumentException` here without an error class."
+  ],
+  "sqlState": "22018"
+}

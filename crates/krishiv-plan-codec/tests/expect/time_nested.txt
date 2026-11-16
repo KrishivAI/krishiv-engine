@@ -1,0 +1,2 @@
+features = nested_types, time_type
+legacy_reader_version = 6

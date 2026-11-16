@@ -1,0 +1,6 @@
+{
+  "message": [
+    "The resource group <group> already has <maxQueued> queued queries, so this query is refused. Retry later, or raise \"maxQueued\" of the group."
+  ],
+  "sqlState": "53400"
+}

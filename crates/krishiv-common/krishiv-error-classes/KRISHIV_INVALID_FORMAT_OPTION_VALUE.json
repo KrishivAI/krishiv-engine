@@ -1,0 +1,6 @@
+{
+  "message": [
+    "The value <value> of the option <option> of the <format> data source is invalid: <reason>."
+  ],
+  "sqlState": "22023"
+}

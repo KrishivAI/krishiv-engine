@@ -1,0 +1,2 @@
+features = fixed_size_list_carrier
+legacy_reader_version = 6

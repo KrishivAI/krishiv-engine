@@ -1,0 +1,7 @@
+{
+  "audience": "operator",
+  "message": [
+    "The spill file <path> is corrupt or truncated: <reason>."
+  ],
+  "sqlState": "XX001"
+}

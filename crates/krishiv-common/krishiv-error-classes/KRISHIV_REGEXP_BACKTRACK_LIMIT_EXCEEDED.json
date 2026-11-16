@@ -1,0 +1,6 @@
+{
+  "message": [
+    "Matching the pattern <pattern> in <functionName> exceeded the backtracking limit of <limit> steps on one input, so the query was stopped. Simplify the pattern (nested or overlapping quantifiers such as `(a+)+` backtrack exponentially). Spark on the JVM has no such limit and would keep running."
+  ],
+  "sqlState": "54000"
+}

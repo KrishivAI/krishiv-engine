@@ -1,0 +1,2 @@
+features = existence_join
+legacy_reader_version = 6

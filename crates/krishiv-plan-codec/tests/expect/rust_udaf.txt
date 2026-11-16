@@ -1,0 +1,2 @@
+features = aggregate_filter, rust_udaf
+legacy_reader_version = 6

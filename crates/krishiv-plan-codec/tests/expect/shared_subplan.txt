@@ -1,0 +1,2 @@
+features = shared_subplan
+legacy_reader_version = 6

@@ -1,0 +1,2 @@
+features = range
+legacy_reader_version = 6

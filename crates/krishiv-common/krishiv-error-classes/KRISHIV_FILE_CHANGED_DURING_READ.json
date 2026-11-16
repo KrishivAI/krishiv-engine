@@ -1,0 +1,7 @@
+{
+  "audience": "operator",
+  "message": [
+    "The file <path> changed while it was being read: it no longer matches the version <version> seen when the scan was planned. Run REFRESH TABLE, or re-run the query to read the new version."
+  ],
+  "sqlState": "KD001"
+}

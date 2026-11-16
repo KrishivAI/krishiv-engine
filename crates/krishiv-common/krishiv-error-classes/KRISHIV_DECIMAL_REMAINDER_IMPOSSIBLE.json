@@ -1,0 +1,6 @@
+{
+  "message": [
+    "The remainder of <dividend> divided by <divisor> needs an integral quotient of more than 39 significant digits, so it cannot be computed (Spark raises `ArithmeticException: Division impossible` here in every mode)."
+  ],
+  "sqlState": "22003"
+}

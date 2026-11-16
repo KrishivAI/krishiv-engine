@@ -1,0 +1,2 @@
+features = any_value_by_aggregates
+legacy_reader_version = 6

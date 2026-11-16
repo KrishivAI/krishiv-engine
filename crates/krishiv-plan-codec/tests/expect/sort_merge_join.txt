@@ -1,0 +1,2 @@
+features = sort_merge_join
+legacy_reader_version = 6

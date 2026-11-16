@@ -1,0 +1,6 @@
+{
+  "message": [
+    "The query <queryId> ran longer than its limit of <limit> and was cancelled. Raise \"krishiv.query.maxExecutionTime\", or make the query cheaper."
+  ],
+  "sqlState": "HY008"
+}

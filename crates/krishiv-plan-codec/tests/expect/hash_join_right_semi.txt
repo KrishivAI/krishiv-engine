@@ -1,0 +1,2 @@
+features = join_build_preserved
+legacy_reader_version = 6

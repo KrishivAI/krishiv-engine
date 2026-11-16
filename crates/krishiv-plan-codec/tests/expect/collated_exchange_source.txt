@@ -1,0 +1,3 @@
+# The exchange's schema alone names the collation.
+features = collated_strings, exchange_source
+legacy_reader_version = 6

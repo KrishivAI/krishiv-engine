@@ -1,0 +1,6 @@
+{
+  "message": [
+    "The catalog <catalog> failed while loading <relationName>."
+  ],
+  "sqlState": "58030"
+}

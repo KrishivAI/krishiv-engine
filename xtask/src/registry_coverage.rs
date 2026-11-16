@@ -245,13 +245,15 @@ pub fn run(root: &Path) -> Result<(), String> {
     for file in [
         "vendored/spark-error-conditions.json",
         "vendored/spark-error-conditions-4.2.1.json",
-        "krishiv-error-classes.json",
     ] {
         let path = root.join("crates/krishiv-common").join(file);
         let json = std::fs::read_to_string(&path)
             .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         catalog.extend(parse_error_classes(&json)?);
     }
+    catalog.extend(parse_error_classes(
+        &crate::entry_dirs::error_classes_json(root)?,
+    )?);
     // A class in both Spark releases is one class.
     catalog.sort_by(|a, b| a.name.cmp(&b.name));
     catalog.dedup_by(|a, b| a.name == b.name);

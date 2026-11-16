@@ -1,0 +1,2 @@
+features = nested_types
+legacy_reader_version = 6

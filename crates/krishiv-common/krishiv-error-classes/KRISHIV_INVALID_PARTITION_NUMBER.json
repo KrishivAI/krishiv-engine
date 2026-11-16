@@ -1,0 +1,6 @@
+{
+  "message": [
+    "Number of partitions (<numPartitions>) must be positive."
+  ],
+  "sqlState": "22023"
+}

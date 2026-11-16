@@ -1,0 +1,6 @@
+{
+  "message": [
+    "Python worker exited unexpectedly (crashed): <reason>. The next query starts a new worker. If a UDF ran out of memory, raise \"krishiv.python.worker.memoryLimit\"."
+  ],
+  "sqlState": "38000"
+}

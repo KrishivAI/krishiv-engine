@@ -1,0 +1,3 @@
+# A lambda over arrays needs both features.
+features = lambda_functions, nested_types
+legacy_reader_version = 6

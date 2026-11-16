@@ -1,0 +1,2 @@
+features = union_loop
+legacy_reader_version = 6

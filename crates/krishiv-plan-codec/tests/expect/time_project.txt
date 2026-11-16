@@ -1,0 +1,2 @@
+features = time_type
+legacy_reader_version = 6

@@ -1,0 +1,2 @@
+features = window, window_frame_offsets
+legacy_reader_version = 6

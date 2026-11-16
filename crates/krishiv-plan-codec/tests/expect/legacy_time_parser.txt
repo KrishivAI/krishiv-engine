@@ -1,0 +1,2 @@
+features = legacy_time_parser
+legacy_reader_version = 6

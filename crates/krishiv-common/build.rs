@@ -9,7 +9,9 @@
 //! `delta-error-classes.json` (the subset of delta-spark 4.4.1's
 //! `delta-error-classes.json` that Krishiv raises, each entry copied verbatim:
 //! `DELTA_`-prefixed, every one with a SQLSTATE) and
-//! `krishiv-error-classes.json` (`KRISHIV_`-prefixed classes only). Output is
+//! `krishiv-error-classes/` (`KRISHIV_`-prefixed classes only, one `<CLASS>.json`
+//! file per class holding its body, so two changes adding classes never touch
+//! the same file; `cargo xtask error-classes --check` keeps them canonical). Output is
 //! deterministic: `serde_json` without `preserve_order` keeps objects sorted
 //! by key, and the merged list is sorted by class name.
 
@@ -51,7 +53,7 @@ fn main() -> Result<(), BoxError> {
     println!("cargo::rerun-if-changed=vendored/spark-error-conditions.json");
     println!("cargo::rerun-if-changed=vendored/spark-error-conditions-4.2.1.json");
     println!("cargo::rerun-if-changed=vendored/delta-error-classes.json");
-    println!("cargo::rerun-if-changed=krishiv-error-classes.json");
+    println!("cargo::rerun-if-changed=krishiv-error-classes");
     println!("cargo::rerun-if-changed=error-audience.json");
     println!("cargo::rerun-if-changed=src/error/template.rs");
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?);
@@ -59,7 +61,7 @@ fn main() -> Result<(), BoxError> {
     let spark_4_2 =
         std::fs::read_to_string(manifest.join("vendored/spark-error-conditions-4.2.1.json"))?;
     let delta = std::fs::read_to_string(manifest.join("vendored/delta-error-classes.json"))?;
-    let krishiv = std::fs::read_to_string(manifest.join("krishiv-error-classes.json"))?;
+    let krishiv = collect_dir(&manifest.join("krishiv-error-classes"))?;
     let mut leaves = merge_releases(
         parse(&spark_4_3, Source::Spark)?,
         parse(&spark_4_2, Source::Spark)?,
@@ -73,6 +75,28 @@ fn main() -> Result<(), BoxError> {
     let out = PathBuf::from(std::env::var("OUT_DIR")?).join("error_classes.rs");
     std::fs::write(out, generate(&leaves)?)?;
     Ok(())
+}
+
+/// The classes of `dir` as one registry object: each `<CLASS>.json` file is the
+/// body of class `<CLASS>`. Any other entry is an error, so a misnamed file
+/// cannot drop a class silently.
+fn collect_dir(dir: &std::path::Path) -> Result<String, BoxError> {
+    let mut root = Map::new();
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_suffix(".json"))
+            .ok_or_else(|| format!("{}: not a <CLASS>.json file", path.display()))?;
+        let body: Value = serde_json::from_str(&std::fs::read_to_string(&path)?)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        if !body.is_object() {
+            return Err(format!("{}: a class body must be an object", path.display()).into());
+        }
+        root.insert(name.to_owned(), body);
+    }
+    Ok(serde_json::to_string(&root)?)
 }
 
 /// The union of Spark 4.3.0's and 4.2.1's classes. A class in both keeps the

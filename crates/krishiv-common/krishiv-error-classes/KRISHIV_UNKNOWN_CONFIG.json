@@ -1,0 +1,6 @@
+{
+  "message": [
+    "The config <key> is not a known Krishiv config. Verify the spelling, or see the configuration reference."
+  ],
+  "sqlState": "42K0I"
+}

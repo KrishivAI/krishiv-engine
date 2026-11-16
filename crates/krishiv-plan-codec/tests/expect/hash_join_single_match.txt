@@ -1,0 +1,2 @@
+features = join_single_match
+legacy_reader_version = 6

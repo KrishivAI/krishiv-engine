@@ -1,0 +1,7 @@
+{
+  "audience": "operator",
+  "message": [
+    "Python UDF workers cannot run sandboxed on this server: <reason>. Run the server on Linux 5.13 or later with Landlock and seccomp enabled, or have an administrator set \"krishiv.udf.sandbox\" to \"off\" (worker code then runs without file and network confinement)."
+  ],
+  "sqlState": "0A000"
+}

@@ -1,0 +1,6 @@
+{
+  "message": [
+    "Cannot start a new operation: <limitName> allows at most <limit> live operations per session. Wait for one to finish or release it (ReleaseExecute, or interrupt it in the client), or raise \"<limitName>\"."
+  ],
+  "sqlState": "53400"
+}

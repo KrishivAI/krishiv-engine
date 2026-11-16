@@ -1,0 +1,2 @@
+features = partial_aggregate
+legacy_reader_version = 6

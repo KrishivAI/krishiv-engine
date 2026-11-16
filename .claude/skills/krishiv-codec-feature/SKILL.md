@@ -32,13 +32,17 @@ Test paths below are under `crates/krishiv-plan-codec/`.
 5. **Encode and decode.** `crates/krishiv-plan-codec/src/encode.rs` and `decode.rs`. A plan that uses no feature must
    still encode to the same bytes as before.
 6. **Test inventory.** Add a case to `crates/krishiv-plan-codec/tests/common/inventory.rs` (and the `variant_of`
-   match in `tests/roundtrip.rs` for a new `PhysNode`).
+   match in `tests/roundtrip.rs` for a new `PhysNode`). Its expected header is a new file
+   `tests/expect/<case>.txt` (features, legacy level): `KRISHIV_BLESS_GOLDEN=1 cargo nextest run -p
+   krishiv-plan-codec --test features` writes it; check it, add a `#` comment when the list is not obvious.
 7. **Goldens.** `KRISHIV_BLESS_GOLDEN=1 cargo test -p krishiv-plan-codec --test golden` writes the missing files
    under `crates/krishiv-plan-codec/tests/golden/<id>/`; rerun without it. Existing files never change; a change to
    `base/` or another feature's directory means an undeclared feature or an epoch change. `v1`-`v5` are frozen.
-8. **Reader refusal.** `tests/features.rs` holds the checks (`a_reader_without_a_feature_refuses_the_plan_naming_it`):
-   a reader built with `ReaderFeatures::only([...])` must fail with `CodecError::UnsupportedFeatures` naming the
-   feature. Extend the header and construct-mapping tests for the new id.
+8. **Reader refusal and the feature's tests.** A reader missing a feature some case lists is refused naming it for
+   every case automatically (`tests/features/every_listed_feature_is_required.rs`). The feature's own tests (constructs
+   mapping to it, refusals needing more than one case, corrupt values) go in a new file
+   `tests/features/<id>.rs` (`use super::*;`), never in `tests/features.rs` or `tests/roundtrip.rs`, whose test counts
+   `cargo xtask entry-dirs` caps.
 9. **Ratchet.** `tests/ratchet.rs` must still round-trip every TPC-H and TPC-DS plan; its `TPCDS_NOT_PLANNED` list may
    only shrink.
 

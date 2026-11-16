@@ -1,0 +1,6 @@
+{
+  "message": [
+    "The <document> document is invalid: <reason>."
+  ],
+  "sqlState": "22000"
+}

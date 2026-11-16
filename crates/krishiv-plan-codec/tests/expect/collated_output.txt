@@ -1,0 +1,2 @@
+features = collated_strings, nested_types
+legacy_reader_version = 6

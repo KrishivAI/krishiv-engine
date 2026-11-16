@@ -1,0 +1,6 @@
+{
+  "message": [
+    "The value <value> for config <key> is invalid: <reason>."
+  ],
+  "sqlState": "22023"
+}

@@ -1,6 +1,6 @@
 ---
 name: krishiv-add-error-class
-description: Use when a Krishiv failure needs an error class. Spark's classes come from the vendored Spark file; Krishiv-only classes (KRISHIV_*) are added to krishiv-error-classes.json. Covers the JSON entry, the generated type, use sites, tests and docs-errors.
+description: Use when a Krishiv failure needs an error class. Spark's classes come from the vendored Spark file; Krishiv-only classes (KRISHIV_*) are added as one file each in krishiv-error-classes/. Covers the JSON entry, the generated type, use sites, tests and docs-errors.
 ---
 
 # Add an error class
@@ -28,9 +28,11 @@ SQLSTATE there; `DELTA_VERSION_NOT_FOUND` becomes `ErrorClass::DeltaVersionNotFo
 `DeltaVersionNotFound`. List the class in `crates/krishiv-connectors-delta/src/lib.rs`'s crate docs.
 
 ## A Krishiv-only class
-1. **Entry** in `crates/krishiv-common/krishiv-error-classes.json`, keyed alphabetically:
-   `"message"` as an array of lines with `<param>` placeholders, and a `"sqlState"` (required for `KRISHIV_*`;
-   five characters, digits and capitals). The name must start with `KRISHIV_`. `build.rs` fails the build on a
+1. **Entry**: a new file `crates/krishiv-common/krishiv-error-classes/KRISHIV_<NAME>.json` holding the class body
+   (one file per class, so parallel PRs never conflict on a shared list): `"message"` as an array of lines with
+   `<param>` placeholders, a `"sqlState"` (required for `KRISHIV_*`; five characters, digits and capitals), and
+   optionally `"audience": "operator"`. The file name is the class name and must start with `KRISHIV_`. Run
+   `cargo xtask entry-dirs --write` to put it in canonical form (CI's `generated` job runs `--check`). `build.rs` fails the build on a
    wrong prefix, a missing SQLSTATE, a bad name or two names that map to one Rust name.
 2. **Generated type.** `KRISHIV_SPILL_CAP_EXCEEDED` becomes `ErrorClass::KrishivSpillCapExceeded` and a struct
    `krishiv_common::error::KrishivSpillCapExceeded` with a `String` field per parameter (snake case:

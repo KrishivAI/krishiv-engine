@@ -526,7 +526,7 @@ fn cause_chain_like_spark() {
 fn audience_comes_from_the_json_files() {
     assert_eq!(ErrorClass::DivideByZero.audience(), Audience::User);
     assert_eq!(ErrorClass::KrishivUnknownConfig.audience(), Audience::User);
-    // Krishiv class marked in krishiv-error-classes.json.
+    // Krishiv class marked in its krishiv-error-classes/ file.
     assert_eq!(
         ErrorClass::KrishivSpillIoError.audience(),
         Audience::Operator

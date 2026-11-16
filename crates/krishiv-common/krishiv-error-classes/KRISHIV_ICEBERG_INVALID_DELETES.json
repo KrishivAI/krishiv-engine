@@ -1,0 +1,7 @@
+{
+  "audience": "operator",
+  "message": [
+    "<message>"
+  ],
+  "sqlState": "KD001"
+}

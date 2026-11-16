@@ -1,0 +1,2 @@
+features = table_write
+legacy_reader_version = 6

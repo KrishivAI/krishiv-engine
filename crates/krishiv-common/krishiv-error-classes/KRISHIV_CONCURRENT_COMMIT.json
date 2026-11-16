@@ -1,0 +1,7 @@
+{
+  "audience": "operator",
+  "message": [
+    "The write to <root> conflicts with a commit made after it started (log version <version>). Another writer changed the directory; retry the write."
+  ],
+  "sqlState": "40001"
+}

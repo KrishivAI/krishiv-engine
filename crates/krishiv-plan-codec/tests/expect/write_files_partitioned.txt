@@ -1,0 +1,2 @@
+features = partitioned_writes
+legacy_reader_version = 6

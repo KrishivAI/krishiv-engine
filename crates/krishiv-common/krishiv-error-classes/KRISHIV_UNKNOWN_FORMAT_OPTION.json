@@ -1,0 +1,6 @@
+{
+  "message": [
+    "The option <option> is not an option of the <format> data source.<suggestion> Remove it, or set \"krishiv.io.strictOptions\" to \"false\" to ignore unknown options with a warning."
+  ],
+  "sqlState": "42K06"
+}

@@ -3,8 +3,14 @@
 //! checks it before reading a node, and how corrupt headers are refused.
 #![expect(clippy::unwrap_used, reason = "test code")]
 
+#[path = "common/expect.rs"]
+mod expect;
 #[path = "common/inventory.rs"]
 mod inventory;
+
+// One module per `tests/features/<name>.rs`, collected by build.rs: a feature's new tests go in
+// a new file there, never in this one (`cargo xtask entry-dirs` caps this file's tests).
+include!(concat!(env!("OUT_DIR"), "/feature_tests.rs"));
 
 use krishiv_exec::physical::PhysNode;
 use krishiv_plan_codec::features::{Construct, feature_of};
@@ -42,44 +48,14 @@ fn an_unknown_binary_output_style_is_corrupt() {
 
 #[test]
 fn the_header_lists_exactly_the_features_in_use() {
-    let m = message("window_ranking");
-    assert_eq!(m.features, ["window"]);
-    assert_eq!(m.epoch, EPOCH);
-    assert_eq!(message("limit_offset").features, ["limit_offset"]);
-    assert!(message("limit").features.is_empty());
-    assert_eq!(
-        message("captured_eval_mode").features,
-        ["captured_eval_mode"]
-    );
-    // A lambda over arrays needs both features.
-    assert_eq!(
-        message("lambda_functions").features,
-        ["lambda_functions", "nested_types"]
-    );
-    assert_eq!(
-        message("window_frames").features,
-        ["window", "window_frame_offsets"]
-    );
-    assert_eq!(
-        message("window_offset_values").features,
-        ["window", "window_frame_offsets", "window_offset_functions"]
-    );
-    assert_eq!(
-        message("window_range_values").features,
-        ["window", "window_range_bounds"]
-    );
-    assert_eq!(
-        message("window_range_months").features,
-        ["window", "window_range_month_bounds"]
-    );
-    assert_eq!(
-        message("window_range_day_time").features,
-        ["window", "window_range_day_time_bounds"]
-    );
-    assert_eq!(
-        message("aggregate_mode_regr_bit_listagg").features,
-        ["mode_regr_bit_listagg_aggs"]
-    );
+    // Each case's features are in `tests/expect/<case>.txt` (one file per case).
+    for (name, (want, got)) in expect::expected_and_actual(&cases()) {
+        assert_eq!(
+            got.features, want.features,
+            "{name}: the header's features differ from tests/expect/{name}.txt"
+        );
+    }
+    assert_eq!(message("window_ranking").epoch, EPOCH);
     // An offset of zero is the baseline `Limit`.
     let zero = plan_of(PhysNode::Limit {
         input: Box::new(PhysNode::OneRow),
@@ -87,53 +63,6 @@ fn the_header_lists_exactly_the_features_in_use() {
         limit: 1,
     });
     assert!(plan_features(&zero).is_empty());
-    assert_eq!(message("aggregate_filter").features, ["aggregate_filter"]);
-    assert_eq!(message("fused_probe").features, ["fused_probe"]);
-    assert_eq!(message("session_zone_name").features, ["session_zone_name"]);
-    assert_eq!(
-        message("legacy_charset_switches").features,
-        ["legacy_charset_switches"]
-    );
-    assert_eq!(
-        message("legacy_time_parser").features,
-        ["legacy_time_parser"]
-    );
-    assert_eq!(
-        message("binary_output_style").features,
-        ["binary_output_style"]
-    );
-    assert_eq!(message("aggregate_moments").features, ["moment_aggregates"]);
-    // The exchange's schema alone names the collation.
-    assert_eq!(
-        message("collated_exchange_source").features,
-        ["collated_strings", "exchange_source"]
-    );
-    assert_eq!(
-        message("options_map_literal").features,
-        ["options_map_literals"]
-    );
-    // The literal's own type is nested, so a reader needs both.
-    assert_eq!(
-        message("nested_literals").features,
-        ["nested_literals", "nested_types"]
-    );
-    // The declared schema is one struct type, so a reader needs both.
-    assert_eq!(
-        message("file_source_schema").features,
-        ["file_source_schema", "nested_types"]
-    );
-    assert_eq!(
-        message("aggregate_any_value").features,
-        ["any_value_by_aggregates"]
-    );
-    assert_eq!(
-        message("aggregate_max_min_by").features,
-        ["any_value_by_aggregates", "nested_types"]
-    );
-    assert_eq!(
-        message("aggregate_moments_legacy_statistical").features,
-        ["legacy_statistical_aggregate", "moment_aggregates"]
-    );
     // Every registered feature occurs in some inventory case.
     for f in Feature::ALL {
         assert!(
@@ -2107,41 +2036,6 @@ fn a_python_udf_needs_its_feature() {
         decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
         CodecError::UnsupportedFeatures {
             missing: vec!["python_udf".to_owned()]
-        }
-    );
-}
-
-/// A vector carrier (design P3-T075) needs its own feature, and a reader without it refuses the plan naming it.
-#[test]
-fn a_vector_carrier_needs_its_feature() {
-    use std::sync::Arc;
-    let vector = arrow_schema::DataType::FixedSizeList(
-        Arc::new(arrow_schema::Field::new(
-            "item",
-            arrow_schema::DataType::Float32,
-            true,
-        )),
-        768,
-    );
-    assert_eq!(
-        feature_of(Construct::ArrowType(&vector)),
-        Some(Feature::FixedSizeListCarrier)
-    );
-    assert_eq!(
-        message("vector_carrier_aggregate").features,
-        ["fixed_size_list_carrier"]
-    );
-    let (_, plan) = cases()
-        .into_iter()
-        .find(|(n, _)| n == "vector_carrier_aggregate")
-        .unwrap();
-    let bytes = encode(&plan).unwrap();
-    let reader = ReaderFeatures::only([Feature::NestedTypes]);
-    let err = decode_with(&bytes, &Limits::default(), &reader).unwrap_err();
-    assert_eq!(
-        err,
-        CodecError::UnsupportedFeatures {
-            missing: vec!["fixed_size_list_carrier".to_owned()]
         }
     );
 }

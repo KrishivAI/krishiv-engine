@@ -1,0 +1,6 @@
+{
+  "message": [
+    "The query <queryId> was stopped by the engine: <reason>."
+  ],
+  "sqlState": "HY008"
+}

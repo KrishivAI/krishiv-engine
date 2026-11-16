@@ -1,0 +1,2 @@
+features = python_udf
+legacy_reader_version = 6

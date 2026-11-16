@@ -1,0 +1,2 @@
+features = local_relation_source
+legacy_reader_version = 6

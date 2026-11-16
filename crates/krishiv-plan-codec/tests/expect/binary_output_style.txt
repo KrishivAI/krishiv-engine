@@ -1,0 +1,2 @@
+features = binary_output_style
+legacy_reader_version = 6

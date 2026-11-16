@@ -1,0 +1,2 @@
+features = collect_aggregates, nested_types
+legacy_reader_version = 6

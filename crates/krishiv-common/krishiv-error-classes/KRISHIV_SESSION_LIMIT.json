@@ -1,0 +1,6 @@
+{
+  "message": [
+    "Cannot open a new session: <limitName> allows at most <limit> live sessions. Release a session (ReleaseSession, or spark.stop() in the client) or raise \"<limitName>\"."
+  ],
+  "sqlState": "53400"
+}

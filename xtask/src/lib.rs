@@ -17,6 +17,7 @@ pub mod docs_analyze;
 pub mod docs_examples;
 pub mod docs_ext;
 pub mod docs_sql;
+pub mod entry_dirs;
 pub mod file_size;
 pub mod format_neutral;
 pub mod layering;

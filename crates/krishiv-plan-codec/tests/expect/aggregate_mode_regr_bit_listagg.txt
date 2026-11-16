@@ -1,0 +1,2 @@
+features = mode_regr_bit_listagg_aggs
+legacy_reader_version = 6

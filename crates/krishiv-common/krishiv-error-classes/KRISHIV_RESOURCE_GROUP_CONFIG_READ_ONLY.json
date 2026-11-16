@@ -1,0 +1,7 @@
+{
+  "audience": "operator",
+  "message": [
+    "The resource group file <path> cannot be changed here: <reason>."
+  ],
+  "sqlState": "55000"
+}

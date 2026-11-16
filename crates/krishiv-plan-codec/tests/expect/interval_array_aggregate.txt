@@ -1,0 +1,2 @@
+features = interval_types, percentile_aggregates
+legacy_reader_version = 6

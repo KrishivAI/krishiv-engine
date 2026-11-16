@@ -1,0 +1,6 @@
+{
+  "message": [
+    "The temporary view name <relationName> is reserved: names starting with <prefix> (in any letter case) are reserved for internal snapshots. Choose a different name."
+  ],
+  "sqlState": "42602"
+}

@@ -4,6 +4,8 @@
 //! defences against corrupt bytes.
 #![expect(clippy::unwrap_used, reason = "test code")]
 
+#[path = "common/expect.rs"]
+mod expect;
 #[path = "common/inventory.rs"]
 mod inventory;
 
@@ -599,95 +601,26 @@ fn a_legacy_plan_that_needs_a_newer_reader_is_refused() {
     );
 }
 
+/// The frozen format version and the legacy `min_reader_version` gate, per
+/// case in `tests/expect/<case>.txt` (`legacy_reader_version`; one file per
+/// case): an offset `Limit` needs a v3 reader (an older one would ignore the
+/// skipped rows), a `Window` a v4 reader, an `Expand` v5, a plan without
+/// features v2 (`MIN_READER_VERSION`), and every feature added after the
+/// freeze `POST_MIGRATION_READER_VERSION` (6), above every frozen version.
 #[test]
 fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
-    // The frozen format version and the legacy `min_reader_version` gate:
-    // an offset `Limit` needs a v3 reader (an older one would ignore the
-    // skipped rows), a `Window` a v4 reader, a plan without features v2.
     assert_eq!(FORMAT_VERSION, 5);
-    for (name, plan) in cases() {
-        let m = to_message(&plan).unwrap();
+    assert_eq!((MIN_READER_VERSION, POST_MIGRATION_READER_VERSION), (2, 6));
+    let cases = cases();
+    for (name, plan) in &cases {
+        let m = to_message(plan).unwrap();
         assert_eq!(m.format_version, FORMAT_VERSION, "{name}");
-        let expected = match name.as_str() {
-            "limit_offset" => 3,
-            "window_ranking" | "window_aggregates" => 4,
-            n if n.starts_with("expand") => 5,
-            // A feature added after the freeze: above every frozen version.
-            "window_group_limit"
-            | "late_fetch"
-            | "sort_merge_join"
-            | "partial_aggregate"
-            | "shared_subplan"
-            | "exchange_source"
-            | "rust_udf"
-            | "python_udf"
-            | "sample"
-            | "python_map"
-            | "python_group_map"
-            | "python_cogroup_map"
-            | "python_aggregate"
-            | "python_udtf_generate"
-            | "python_eval_types"
-            | "table_write"
-            | "table_write_by_filter"
-            | "table_write_row_level"
-            | "rust_udaf"
-            | "nested_types"
-            | "struct_field"
-            | "lambda_functions"
-            | "map_key_dedup_policy"
-            | "legacy_charset_switches"
-            | "legacy_time_parser"
-            | "binary_output_style"
-            | "session_zone_name"
-            | "aggregate_filter"
-            | "range"
-            | "aggregate_collects"
-            | "aggregate_vectors"
-            | "aggregate_mode_regr_bit_listagg"
-            | "aggregate_listagg"
-            | "aggregate_moments"
-            | "aggregate_any_value"
-            | "aggregate_max_min_by"
-            | "aggregate_moments_legacy_statistical"
-            | "write_files_partitioned"
-            | "write_files_column_types"
-            | "aggregate_percentiles"
-            | "options_map_literal"
-            | "nested_literals"
-            | "file_source_schema"
-            | "local_relation_source" => 6,
-            // Features added after the version was frozen: above every
-            // sequential format version.
-            n if n.starts_with("time_")
-                || n.starts_with("geo_")
-                || n.starts_with("interval_")
-                || n.starts_with("collated_")
-                || n.starts_with("variant_")
-                || n.starts_with("calendar_")
-                || n.starts_with("vector_carrier") =>
-            {
-                6
-            }
-            n if n.starts_with("hash_join_right") => POST_MIGRATION_READER_VERSION,
-            "hash_join_existence"
-            | "fused_probe"
-            | "hash_join_full_outer"
-            | "hash_join_single_match"
-            | "nested_loop_existence"
-            | "exchange_hash_key_group"
-            | "exchange_filters"
-            | "window_frames"
-            | "window_offset_values"
-            | "window_range_values"
-            | "window_range_months"
-            | "window_range_day_time"
-            | "captured_eval_mode"
-            | "write_files_with_plan" => POST_MIGRATION_READER_VERSION,
-            n if n.starts_with("generate_") || n.starts_with("union_loop") => 6,
-            _ => MIN_READER_VERSION,
-        };
-        assert_eq!(m.min_reader_version, expected, "{name}");
+    }
+    for (name, (want, got)) in expect::expected_and_actual(&cases) {
+        assert_eq!(
+            got.legacy_reader_version, want.legacy_reader_version,
+            "{name}: min_reader_version differs from tests/expect/{name}.txt"
+        );
     }
 }
 

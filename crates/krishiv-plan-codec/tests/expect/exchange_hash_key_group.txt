@@ -1,0 +1,2 @@
+features = key_group_hash
+legacy_reader_version = 6

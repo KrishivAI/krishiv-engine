@@ -1,0 +1,2 @@
+features = map_key_dedup_policy
+legacy_reader_version = 6

@@ -1,0 +1,6 @@
+{
+  "message": [
+    "The JSON string <json> is malformed. Provide valid JSON."
+  ],
+  "sqlState": "22018"
+}

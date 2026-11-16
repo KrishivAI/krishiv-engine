@@ -1,0 +1,2 @@
+features = join_full_outer
+legacy_reader_version = 6

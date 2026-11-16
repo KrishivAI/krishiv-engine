@@ -1,0 +1,6 @@
+{
+  "message": [
+    "The Arrow data passed to Krishiv is invalid: <reason>."
+  ],
+  "sqlState": "22000"
+}

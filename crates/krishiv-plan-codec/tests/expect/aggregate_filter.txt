@@ -1,0 +1,2 @@
+features = aggregate_filter
+legacy_reader_version = 6

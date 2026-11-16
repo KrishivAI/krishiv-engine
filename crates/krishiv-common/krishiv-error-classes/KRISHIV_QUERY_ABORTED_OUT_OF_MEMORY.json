@@ -1,0 +1,6 @@
+{
+  "message": [
+    "The query was aborted to free memory for other work: it held <heldBytes> bytes, the most of any query, and spilling did not free enough memory in time. Increase \"krishiv.memory.limit\" or run fewer concurrent queries."
+  ],
+  "sqlState": "53200"
+}

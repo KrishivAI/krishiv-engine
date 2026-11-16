@@ -1,0 +1,2 @@
+features = exchange_filters
+legacy_reader_version = 6

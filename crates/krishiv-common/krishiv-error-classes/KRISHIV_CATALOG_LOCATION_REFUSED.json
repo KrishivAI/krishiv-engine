@@ -1,0 +1,7 @@
+{
+  "audience": "operator",
+  "message": [
+    "The catalog <catalog> returned a location for <relationName> that Krishiv does not allow (<rule>), so the table was not loaded. This is a fault of the catalog, not a permission you can be granted: an administrator needs to check what the catalog returns for this table."
+  ],
+  "sqlState": "58030"
+}

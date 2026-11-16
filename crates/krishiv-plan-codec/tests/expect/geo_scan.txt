@@ -1,0 +1,2 @@
+features = geo_types
+legacy_reader_version = 6

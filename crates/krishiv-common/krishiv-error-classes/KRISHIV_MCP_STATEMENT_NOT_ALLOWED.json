@@ -1,0 +1,6 @@
+{
+  "message": [
+    "The read-only MCP server runs one read statement; this statement is of class <statementClass>."
+  ],
+  "sqlState": "42501"
+}

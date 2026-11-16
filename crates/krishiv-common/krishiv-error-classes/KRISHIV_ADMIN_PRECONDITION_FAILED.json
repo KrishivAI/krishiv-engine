@@ -1,0 +1,7 @@
+{
+  "audience": "operator",
+  "message": [
+    "The change was refused because the object is not in the state the request expects (<reason>)."
+  ],
+  "sqlState": "55000"
+}

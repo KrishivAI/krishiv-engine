@@ -1,0 +1,2 @@
+features = indeterminate_collation
+legacy_reader_version = 6

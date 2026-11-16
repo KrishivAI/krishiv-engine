@@ -1,0 +1,6 @@
+{
+  "message": [
+    "The name <name> is reserved for the engine's own <kind>: nothing can be created, replaced or dropped in the \"system\" catalog. Choose a different name."
+  ],
+  "sqlState": "42939"
+}

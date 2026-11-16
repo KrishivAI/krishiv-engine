@@ -1,0 +1,2 @@
+features = window, window_range_month_bounds
+legacy_reader_version = 6

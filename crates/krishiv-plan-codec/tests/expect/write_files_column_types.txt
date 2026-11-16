@@ -1,0 +1,2 @@
+features = interval_types, write_column_types, write_plan
+legacy_reader_version = 6

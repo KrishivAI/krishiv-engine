@@ -1,0 +1,2 @@
+features = collated_strings
+legacy_reader_version = 6

@@ -1,0 +1,2 @@
+features = legacy_charset_switches
+legacy_reader_version = 6

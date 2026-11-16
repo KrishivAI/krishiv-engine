@@ -1,0 +1,2 @@
+features = nested_types, struct_field
+legacy_reader_version = 6

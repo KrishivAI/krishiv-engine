@@ -1,0 +1,7 @@
+{
+  "audience": "operator",
+  "message": [
+    "The commit log of <root> cannot be read: <reason>. Nothing was changed; a missing or damaged entry under \"_krishiv_log\" needs the directory restored from a copy."
+  ],
+  "sqlState": "58030"
+}
