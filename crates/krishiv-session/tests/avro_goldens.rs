@@ -21,8 +21,10 @@ const FILES: &[(&str, &str)] = &[
     ("variant_misc", "variant_edge"),
 ];
 
-/// `file#n` (1-based statement number) the engine does not match yet; each is a Spark quirk or a missing feature named in the
-/// golden README.
+/// `file#n` (1-based statement number) the engine does not match yet: a Spark quirk, a missing feature, or the nullability
+/// difference of `to_avro` (see each group's comment). Also a difference no golden shows: `to_avro` rescales a decimal to the
+/// schema's precision and scale where Spark's `AvroSerializer` requires them to be equal (the Avro file writer relies on the
+/// rescale).
 const KNOWN_GAPS: &[&str] = &[
     // Spark types a cast of a literal as nullable (`to_avro` infers `[T, "null"]` and writes the branch index); a folded literal reaches the binding without that nullability.
     "basic#29",
@@ -46,9 +48,6 @@ const KNOWN_GAPS: &[&str] = &[
     "basic#78",
     "basic#91",
     "basic#92",
-    // A truncated record whose union field has no payload decodes as `{null}` where Spark raises the malformed-record error:
-    // a decoder bug to fix, not a Spark quirk.
-    "basic#83",
     // Avro unions of several non-null types read or written as `member0`..`memberN` structs, and `["null"]` as an empty struct.
     "basic#86",
     "basic#89",

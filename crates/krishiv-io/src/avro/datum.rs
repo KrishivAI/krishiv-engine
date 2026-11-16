@@ -27,6 +27,23 @@ pub struct DatumDecoder {
     reader: AvroSchema,
     field: Field,
     permissive: bool,
+    /// The schema has a union of several non-null types somewhere: its datums are checked by re-encoding what was read, because
+    /// `apache-avro` reads a truncated union payload as an empty value instead of failing.
+    reencode_check: bool,
+}
+
+/// Whether `schema` holds a union of several non-null types at any depth.
+fn has_member_union(schema: &AvroSchema) -> bool {
+    match schema {
+        AvroSchema::Union(u) => {
+            matches!(union_shape(u.variants()), UnionShape::Members)
+                || u.variants().iter().any(has_member_union)
+        }
+        AvroSchema::Record(r) => r.fields.iter().any(|f| has_member_union(&f.schema)),
+        AvroSchema::Array(a) => has_member_union(&a.items),
+        AvroSchema::Map(m) => has_member_union(&m.types),
+        _ => false,
+    }
 }
 
 /// `dt` with every field nullable, all the way down (Spark's
@@ -90,11 +107,13 @@ impl DatumDecoder {
             let dt = nullable_type(field.data_type());
             field = field.with_data_type(dt);
         }
+        let reencode_check = has_member_union(&writer);
         Ok(Self {
             writer,
             reader,
             field,
             permissive,
+            reencode_check,
         })
     }
 
@@ -155,6 +174,16 @@ impl DatumDecoder {
         }))
         .map_err(|_| corrupt("an undecodable datum"))?
         .map_err(|e| corrupt(format!("an undecodable datum: {e}")))?;
+        if self.reencode_check {
+            // What was read, written back, must be what the datum starts with (trailing bytes are ignored, as Spark does).
+            let again = apache_avro::writer::datum::GenericDatumWriter::builder(&self.writer)
+                .build()
+                .and_then(|w| w.write_value_to_vec(value.clone()))
+                .map_err(|e| corrupt(format!("an unwritable datum: {e}")))?;
+            if !bytes.starts_with(&again) {
+                return Err(corrupt("a truncated or non-canonical datum"));
+            }
+        }
         let resolved = resolve(&self.writer, &self.reader, value, false)?;
         append(node, &self.reader, &resolved, true)?;
         append(node, &self.reader, &resolved, false)

@@ -146,6 +146,8 @@ fn put_items(
 
 /// `v`, the unscaled value of an Arrow decimal of scale `from`, as the
 /// unscaled value of an Avro decimal of `precision` digits and scale `to`.
+/// Spark's `AvroSerializer` needs the precision and scale to be equal; this rescales when no digit is lost (the Avro file
+/// writer relies on it), so `to_avro` writes a decimal where Spark raises.
 ///
 /// # Errors
 /// [`FormatError::WriteFailed`] when the rescale overflows, drops non-zero
@@ -178,9 +180,6 @@ fn rescale(v: i128, from: i8, to: usize, precision: usize) -> FormatResult<i128>
     Ok(v)
 }
 
-/// Known difference from Spark (recorded in the `to_avro` goldens' gap list): Spark's `AvroSerializer` needs a decimal of exactly
-/// the schema's precision and scale, while this encoder rescales when no digit is lost (the Avro file writer relies on it).
-///
 /// The bytes of cell `row` of `array` in `schema` (writer) terms, appended
 /// to `out`.
 ///
@@ -335,7 +334,8 @@ fn put_scalar(
         }
         (AvroSchema::Record(r), DataType::Struct(_)) => {
             let s = array.as_struct();
-            // Spark needs as many struct fields as the record has (`IncompatibleSchemaException` otherwise).
+            // Stricter than Spark 4.2, which refuses extra SQL fields but allows extra nullable Avro fields and matches names
+            // case-insensitively by default: here a different number of fields is refused (loudly, never a wrong result).
             if s.num_columns() != r.fields.len() {
                 return Err(fail("struct with a different number of fields"));
             }
