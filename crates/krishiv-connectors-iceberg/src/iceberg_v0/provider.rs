@@ -258,6 +258,18 @@ impl IcebergTableProvider {
 
 #[cfg(test)]
 impl IcebergTableProvider {
+    /// How many splits the file scan of the lineage scan plans.
+    pub(super) fn lineage_splits(&self) -> usize {
+        self.scan
+            .with_lineage()
+            .base
+            .source(ScanPushdowns::default())
+            .map_or(0, |s| s.partitions().len())
+    }
+}
+
+#[cfg(test)]
+impl IcebergTableProvider {
     /// The pushdowns the inner file scan of an equality-delete scan gets for
     /// `p` (`None`: the scan has no equality deletes).
     pub(super) fn equality_inner_pushdowns(&self, p: ScanPushdowns) -> Option<ScanPushdowns> {
@@ -683,13 +695,17 @@ impl IcebergScan {
         // (`filter_pushdown`); any that arrive stay with the filter above.
         p.filters.retain(|f| !names_lineage(f));
         p.projection = Some(split.inner.clone());
+        // The row position is read as the file scan's row id, which does not
+        // combine with `_metadata` (review nit 6: refused here, not as the
+        // file scan's internal error).
+        if (split.wanted || p.row_id) && eq_deletes::any_metadata(&p.metadata) {
+            return Err(unsupported(
+                "the Iceberg row lineage or row id columns together with _metadata columns"
+                    .to_owned(),
+            ));
+        }
         if !split.wanted {
             return Ok((p, None));
-        }
-        if eq_deletes::any_metadata(&p.metadata) {
-            return Err(unsupported(
-                "the Iceberg row lineage columns together with _metadata columns".to_owned(),
-            ));
         }
         p.row_id = true;
         Ok((p, Some(split)))

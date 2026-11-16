@@ -119,7 +119,8 @@ derives the values (stored non-null wins, else `first_row_id + _pos` / data sequ
 `first_row_id` reads null for both); `DataFileWriter::with_lineage` writes both columns under their ids, optional longs,
 metrics in the table's default mode (Java's `MetricsConfig.columnMode(id)`); v1/v2 tables refuse both
 (`KRISHIV_UNSUPPORTED_FEATURE`); tests `lineage_tests.rs` (a rewrite round trip, stored/updated/inserted rows, deletes
-first, a pre-upgrade file, v1/v2, the derivation against a model) · `sink.rs` (PR-36a) `IcebergWriteSink`, an append as `krishiv-exec`'s `FileWriteSink`: one `DataFileWriter` per
+first, a pre-upgrade file, a real v2 → v3 upgrade, a file of several row groups in several splits under a pruning filter,
+v1/v2, the derivation against a model) · `sink.rs` (PR-36a) `IcebergWriteSink`, an append as `krishiv-exec`'s `FileWriteSink`: one `DataFileWriter` per
 driver on a task of its own behind a bounded channel (`Blocked` while full; not counted as the query's blocking work,
 whose counter is private to krishiv-exec, so an aborting task may outlive the query briefly), `combine` finishes,
 `finalize` gathers every driver's files, tells each task to keep or delete them, then `write_new_manifests` and
@@ -228,9 +229,10 @@ Fixture: `tests/fixtures/iceberg-1.12.0-spark-types.json` (source-only goldens,
   the scratch store until deleted), and the search keeps the reaching probe's bytes, so up to about twice the
   target size (8 MiB default) plus the entries on the driver, uncharged, as iceberg-rust's own manifest buffering is.
 - **Row lineage (PR-36b unit 2a):** a lineage scan reading a lineage column refuses `_metadata` columns
-  (`KRISHIV_UNSUPPORTED_FEATURE`: the row position is read as the row id); filters on the lineage columns are not
-  pushed. The Iceberg scan does not `supports_take`, which main's `RowIdScan` requires: unit 2's `RowLevelTable` needs
-  `take` (or its own row id wrapper) first. Whether Spark hides or refuses the columns on v1/v2 tables is not verified
+  (`KRISHIV_UNSUPPORTED_FEATURE`: the row position is read as the row id; so does a row id with `_metadata`); a table
+  with a user column named `_row_id` or `_last_updated_sequence_number` is refused (Krishiv's own rule, uncited); filters on the lineage columns are not
+  pushed. The Iceberg scan does not `supports_take`, which main's `RowIdScan` requires: **an acceptance item of unit 2**
+  (review finding 2), whose `RowLevelTable` needs `take` (or an Iceberg row id wrapper of its own) first. Whether Spark hides or refuses the columns on v1/v2 tables is not verified
   (its `SparkTable` source was not supplied); Krishiv refuses. A file whose manifest leaves its data sequence number
   null reads a null `_last_updated_sequence_number` where none is stored.
 - `statistics()` takes no filter: the row estimate sums every live file, not the files left after pruning.
