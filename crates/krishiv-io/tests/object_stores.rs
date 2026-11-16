@@ -422,12 +422,10 @@ async fn azure_csv_reads_with_a_sas() {
         ]);
         let sched = IoScheduler::new(IoConfig::from_config(&config));
         let registry = StoreRegistry::new(config);
-        register(
-            &sched,
-            &registry,
-            &format!("abfss://krishiv-test@{host}/a.csv"),
-        )
-        .unwrap();
+        let url = format!("abfss://krishiv-test@{host}/a.csv");
+        let (_, path, display) = register(&sched, &registry, &url).unwrap();
+        assert_eq!(path.as_ref(), "a.csv");
+        assert_eq!(display, url);
         return;
     };
     let url = format!("abfss://krishiv-test@{host}/{}/people.csv", unique_dir());
@@ -489,12 +487,10 @@ async fn azure_csv_reads_with_a_bearer_token() {
         ]);
         let sched = IoScheduler::new(IoConfig::from_config(&config));
         let registry = StoreRegistry::new(config);
-        register(
-            &sched,
-            &registry,
-            &format!("abfss://krishiv-test@{host}/a.csv"),
-        )
-        .unwrap();
+        let url = format!("abfss://krishiv-test@{host}/a.csv");
+        let (_, path, display) = register(&sched, &registry, &url).unwrap();
+        assert_eq!(path.as_ref(), "a.csv");
+        assert_eq!(display, url);
         return;
     };
     let url = format!("abfss://krishiv-test@{host}/{}/people.csv", unique_dir());
@@ -533,13 +529,20 @@ async fn azure_csv_reads_with_a_bearer_token() {
     let refused_registry = StoreRegistry::new(Arc::clone(&refused));
     let (refused_store, refused_path, _) =
         register(&refused_sched, &refused_registry, &url).unwrap();
+    let refused_error = refused_sched
+        .context()
+        .head(&refused_store, &refused_path)
+        .await
+        .expect_err("a token for another audience must not read the file");
+    // Azurite answers 403 (object_store's `PermissionDenied`), not a transport failure.
+    assert_eq!(
+        refused_error.error_class(),
+        ErrorClass::KrishivObjectStoreRequestFailed
+    );
+    let shown = refused_error.to_string();
     assert!(
-        refused_sched
-            .context()
-            .head(&refused_store, &refused_path)
-            .await
-            .is_err(),
-        "a token for another audience must not read the file"
+        shown.contains("lacked the necessary privileges") && shown.contains("403 Forbidden"),
+        "{shown}"
     );
     sched.context().delete(&store, &path).await.unwrap();
 }

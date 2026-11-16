@@ -22,8 +22,8 @@
 //! Every key is resolved as ABFS resolves it (`AbfsConfiguration.accountConf`/`containerConf`):
 //! the account-host form `<key>.<host>` beats the bare `<key>`, and a secret
 //! (`getPasswordString`: keys, tokens, client ids, endpoints, tenants) also has the container form
-//! `<key>.<container>.<host>` first. The host is the URL's (`account.dfs.core.windows.net`), its
-//! `blob` twin, and for Azure Storage accounts Krishiv's older `<key>.<container>.<account>` and
+//! `<key>.<container>.<host>` first. The hosts are the account's `dfs` name, then its `blob` name,
+//! whichever the URL wrote (one store, so one credential order), and for Azure Storage accounts Krishiv's older `<key>.<container>.<account>` and
 //! `<key>.<account>` forms. A provider class (OAuth or SAS) set only on the bare key applies only
 //! when the bare auth type is the same (`getTokenProviderClass`). Keys of one credential (the
 //! account key, `fs.azure.sas.fixed.token` and `fs.azure.sas`, the bearer token) are compared by
@@ -206,20 +206,22 @@ impl Lookup<'_> {
     }
 }
 
-/// The hosts `url`'s keys are scoped by: the URL's host and its `dfs`/`blob` twin, or, for a URL
-/// without a host, both Azure Storage names of `account`.
+/// The hosts `url`'s keys are scoped by: the account's `dfs` name, then its `blob` name, whichever
+/// of the two the URL wrote (both are one store, `AzureHost::store_host`, so whichever alias opens
+/// the store first must not change its credential); any other host (a private link) as is; for a
+/// URL without a host, both Azure Storage names of `account`.
 fn account_hosts(url: &ParsedUrl, account: Option<&str>) -> Vec<String> {
     match (&url.host, account) {
         (Some(host), _) => {
-            let mut hosts = vec![host.clone()];
             let labels: Vec<&str> = host.split('.').collect();
-            if let [a, service @ ("dfs" | "blob"), rest @ ..] = labels.as_slice()
+            if let [a, "dfs" | "blob", rest @ ..] = labels.as_slice()
                 && labels.len() == 5
             {
-                let twin = if *service == "dfs" { "blob" } else { "dfs" };
-                hosts.push(format!("{a}.{twin}.{}", rest.join(".")));
+                let rest = rest.join(".");
+                vec![format!("{a}.dfs.{rest}"), format!("{a}.blob.{rest}")]
+            } else {
+                vec![host.clone()]
             }
-            hosts
         }
         (None, Some(account)) => vec![
             format!("{account}.dfs.core.windows.net"),
@@ -553,4 +555,64 @@ fn percent_decoded(text: &str) -> Option<String> {
         }
     }
     String::from_utf8(out).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::stores::parse_object_url;
+
+    /// The bearer token `resolve_auth` picks for `input` under `settings`, built as `azure_store`
+    /// builds its lookup.
+    fn bearer(settings: &BTreeMap<String, String>, input: &str) -> String {
+        let url = parse_object_url(input).unwrap();
+        let options = BTreeMap::new();
+        let lookup = Lookup {
+            config: settings,
+            options: &options,
+            container: &url.bucket,
+            hosts: account_hosts(&url, url.account.as_deref()),
+            account: url
+                .account
+                .clone()
+                .filter(|_| url.host.as_deref().is_none_or(AzureHost::is_core)),
+        };
+        match resolve_auth(&lookup).unwrap() {
+            Some(Auth::Bearer(token)) => token.expose_secret().to_owned(),
+            _ => panic!("{input}: no bearer token"),
+        }
+    }
+
+    #[test]
+    fn dfs_and_blob_aliases_of_one_store_pick_one_credential() {
+        // Both names of an account are one store id, so the first alias to open it decides its
+        // credential: the lookup order is the same for both (the dfs name first).
+        for domain in ["core.windows.net", "fabric.microsoft.com"] {
+            let settings = BTreeMap::from([
+                (
+                    format!("{AZURE_OAUTH_ACCESS_TOKEN}.acct.dfs.{domain}"),
+                    "dfs-token".to_owned(),
+                ),
+                (
+                    format!("{AZURE_OAUTH_ACCESS_TOKEN}.acct.blob.{domain}"),
+                    "blob-token".to_owned(),
+                ),
+            ]);
+            let dfs = format!("abfss://c@acct.dfs.{domain}/k");
+            let blob = format!("abfss://c@acct.blob.{domain}/k");
+            assert_eq!(
+                parse_object_url(&dfs).unwrap().store_id,
+                parse_object_url(&blob).unwrap().store_id
+            );
+            assert_eq!(bearer(&settings, &dfs), "dfs-token");
+            assert_eq!(bearer(&settings, &blob), "dfs-token");
+            // A key scoped only by the blob name still applies to the dfs alias.
+            let blob_only = BTreeMap::from([(
+                format!("{AZURE_OAUTH_ACCESS_TOKEN}.acct.blob.{domain}"),
+                "blob-token".to_owned(),
+            )]);
+            assert_eq!(bearer(&blob_only, &dfs), "blob-token");
+            assert_eq!(bearer(&blob_only, &blob), "blob-token");
+        }
+    }
 }
