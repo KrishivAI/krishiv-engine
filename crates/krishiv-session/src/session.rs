@@ -1290,6 +1290,7 @@ impl Session {
                 metrics: Arc::clone(&self.state.runtime.metrics),
                 sessions: self.state.runtime.session_view(),
                 groups: self.state.runtime.resource_groups.clone(),
+                history: self.state.runtime.profile_history.clone(),
                 monitor: Arc::new(crate::system::Monitor::new(
                     Arc::clone(&self.state.principal),
                     Arc::clone(&self.state.policy),
@@ -1802,6 +1803,7 @@ impl Session {
                 _permit: permit,
                 _operation: self.operation.clone(),
                 history: env.history_job(self, &row_id, physical, detailed),
+                advisor: crate::query_fold::AdvisorJob::of(physical, &env.config),
             }),
             None,
         );

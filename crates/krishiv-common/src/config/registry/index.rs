@@ -27,12 +27,14 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.spill.maxBytes", &SPILL_MAX_BYTES),
     ("spark.sql.ansi.enabled", &ANSI_ENABLED),
     ("spark.sql.path.enabled", &SQL_PATH_ENABLED),
+    ("krishiv.advisor.enabled", &ADVISOR_ENABLED),
     ("krishiv.agent.gateBytes", &AGENT_GATE_BYTES),
     ("krishiv.connect.address", &CONNECT_ADDRESS),
     ("krishiv.metrics.enabled", &METRICS_ENABLED),
     ("krishiv.network.timeout", &NETWORK_TIMEOUT),
     ("krishiv.resultCache.ttl", &RESULT_CACHE_TTL),
     ("krishiv.sql.defaultPath", &SQL_DEFAULT_PATH),
+    ("krishiv.advisor.maxHints", &ADVISOR_MAX_HINTS),
     ("krishiv.delta.logThreads", &DELTA_LOG_THREADS),
     ("krishiv.experimental.ivm", &EXPERIMENTAL_IVM),
     ("krishiv.history.literals", &HISTORY_LITERALS),
@@ -57,6 +59,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.optimizer.joinCost", &JOIN_COST),
     ("krishiv.python.udf.threads", &PYTHON_UDF_THREADS),
     ("spark.sql.session.timeZone", &SESSION_TIME_ZONE),
+    ("krishiv.advisor.skew.factor", &ADVISOR_SKEW_FACTOR),
     ("krishiv.connect.maxSessions", &CONNECT_MAX_SESSIONS),
     ("krishiv.exec.agg.directKeys", &EXEC_AGG_DIRECT_KEYS),
     ("krishiv.exec.join.buildSide", &EXEC_JOIN_BUILD_SIDE),
@@ -68,6 +71,8 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.session.memoryLimit", &SESSION_MEMORY_LIMIT),
     ("spark.sql.binaryOutputStyle", &BINARY_OUTPUT_STYLE),
     ("spark.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
+    ("krishiv.advisor.skew.minRows", &ADVISOR_SKEW_MIN_ROWS),
+    ("krishiv.advisor.skew.minTime", &ADVISOR_SKEW_MIN_TIME),
     ("krishiv.connect.maxPlanDepth", &CONNECT_MAX_PLAN_DEPTH),
     ("krishiv.io.cache.memoryBytes", &IO_CACHE_MEMORY_BYTES),
     ("krishiv.memory.residentGuard", &MEMORY_RESIDENT_GUARD),
@@ -87,6 +92,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.sql.binaryOutputStyle", &BINARY_OUTPUT_STYLE),
     ("krishiv.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
     ("spark.sql.legacy.javaCharsets", &LEGACY_JAVA_CHARSETS),
+    ("krishiv.advisor.spill.minBytes", &ADVISOR_SPILL_MIN_BYTES),
     ("krishiv.catalog.requestTimeout", &CATALOG_REQUEST_TIMEOUT),
     ("krishiv.connect.keepAlive.time", &CONNECT_KEEPALIVE_TIME),
     ("krishiv.connect.maxConnections", &CONNECT_MAX_CONNECTIONS),
@@ -112,6 +118,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("spark.sql.files.minPartitionNum", &FILES_MIN_PARTITION_NUM),
     ("spark.sql.files.openCostInBytes", &FILES_OPEN_COST_IN_BYTES),
     ("spark.sql.storeAssignmentPolicy", &STORE_ASSIGNMENT_POLICY),
+    (
+        "krishiv.advisor.spill.minPercent",
+        &ADVISOR_SPILL_MIN_PERCENT,
+    ),
     (
         "krishiv.catalog.maxMetadataBytes",
         &CATALOG_MAX_METADATA_BYTES,
@@ -143,6 +153,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "spark.sql.cteRecursionLevelLimit",
         &CTE_RECURSION_LEVEL_LIMIT,
+    ),
+    (
+        "krishiv.advisor.memoryWait.factor",
+        &ADVISOR_MEMORY_WAIT_FACTOR,
     ),
     (
         "krishiv.cache.defaultStorageLevel",
@@ -223,6 +237,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &UNION_OUTPUT_PARTITIONING,
     ),
     (
+        "krishiv.advisor.memoryWait.minTime",
+        &ADVISOR_MEMORY_WAIT_MIN_TIME,
+    ),
+    (
         "krishiv.connect.execute.aheadBytes",
         &CONNECT_EXECUTE_AHEAD_BYTES,
     ),
@@ -283,6 +301,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &UNION_OUTPUT_PARTITIONING,
     ),
     (
+        "krishiv.advisor.missingStats.minRows",
+        &ADVISOR_MISSING_STATS_MIN_ROWS,
+    ),
+    (
         "krishiv.io.parquet.pageIndex.enabled",
         &IO_PARQUET_PAGE_INDEX_ENABLED,
     ),
@@ -337,6 +359,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "spark.sql.legacy.statisticalAggregate",
         &LEGACY_STATISTICAL_AGGREGATE,
+    ),
+    (
+        "krishiv.advisor.missingStats.minQError",
+        &ADVISOR_MISSING_STATS_MIN_Q_ERROR,
     ),
     (
         "krishiv.exec.join.sharedBroadcastBytes",
@@ -471,6 +497,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &LEGACY_VIEW_SCHEMA_COMPENSATION,
     ),
     (
+        "krishiv.advisor.runtimeFilter.minProbeRows",
+        &ADVISOR_RUNTIME_FILTER_MIN_PROBE_ROWS,
+    ),
+    (
         "krishiv.connect.http2.maxConcurrentStreams",
         &CONNECT_HTTP2_MAX_CONCURRENT_STREAMS,
     ),
@@ -501,6 +531,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "spark.sql.execution.pythonUDF.arrow.enabled",
         &PYTHON_UDF_ARROW_ENABLED,
+    ),
+    (
+        "krishiv.advisor.runtimeFilter.minDropPercent",
+        &ADVISOR_RUNTIME_FILTER_MIN_DROP_PERCENT,
     ),
     (
         "krishiv.connect.http2.maxPendingAcceptResets",

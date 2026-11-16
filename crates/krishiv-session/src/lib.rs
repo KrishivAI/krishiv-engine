@@ -77,6 +77,7 @@ mod monitor;
 mod nested_value;
 #[cfg(feature = "telemetry-otlp")]
 pub mod otlp;
+mod partition_advisor;
 mod partition_keys;
 mod partitions;
 mod plan_round_trip;

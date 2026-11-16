@@ -435,6 +435,16 @@ impl DataFrame {
                 samples.join("\n")
             );
         }
+        // Only when the runtime keeps a history: what the stored queries filtered these tables by.
+        if let Some(history) = &self.session.state.runtime.profile_history {
+            let lines = crate::partition_advisor::explain_lines(
+                &crate::partition_advisor::advise_history(history.dir()),
+                &planned.physical,
+            );
+            if !lines.is_empty() {
+                let _ = write!(text, "\n== Partition Advice ==\n{}\n", lines.join("\n"));
+            }
+        }
         // Only when the cache is on for the query, so the plan text stays Spark's by default.
         if let Some(note) = self.session.result_cache_note(&planned.analysis) {
             let _ = write!(text, "\n== Result Cache ==\n{note}\n");

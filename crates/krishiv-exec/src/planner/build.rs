@@ -1243,7 +1243,12 @@ impl<'a> Planner<'a> {
                 row_id,
             }),
             layout,
-            explain: ExplainNode::leaf("Scan", detail),
+            explain: ExplainNode::leaf("Scan", detail).with_facts(super::scan_facts::of(
+                scan,
+                provider.statistics(),
+                self.estimated_rows(plan),
+                filter.map_or_else(Vec::new, super::scan_facts::equality_columns),
+            )),
             sites,
             placement: Placement::Unknown,
         };
@@ -1808,7 +1813,7 @@ impl<'a> Planner<'a> {
 #[cfg(test)]
 mod attach_tests;
 
-mod util;
+pub(super) mod util;
 pub(crate) use util::*;
 
 /// `TABLESAMPLE` over `input` (Spark's `SampleExec`) with its resolved

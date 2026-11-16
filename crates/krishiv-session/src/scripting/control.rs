@@ -233,6 +233,7 @@ impl ScriptRun {
                 error_class,
                 operators: Vec::new(),
                 totals: None,
+                hints: None,
             },
         );
     }

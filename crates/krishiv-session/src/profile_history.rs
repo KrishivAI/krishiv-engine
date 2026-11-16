@@ -68,6 +68,8 @@ pub(crate) struct HistoryEntry {
     pub(crate) metrics: QueryMetrics,
     pub(crate) identity: ProfileIdentity,
     pub(crate) trace: Option<serde_json::Value>,
+    /// The advisor's hints (minor 6 of the profile).
+    pub(crate) hints: Vec<krishiv_exec::profile::Hint>,
 }
 
 /// Where a file write's entry waits for its commit: the query ends before the commit does, and a commit that
@@ -185,6 +187,7 @@ pub(crate) struct StoredProfile {
 
 /// The writer side: a bounded queue to the thread that writes segments.
 pub(crate) struct ProfileHistory {
+    dir: PathBuf,
     tx: Mutex<Option<SyncSender<Msg>>>,
     failures: Arc<AtomicU64>,
     thread: Mutex<Option<JoinHandle<()>>>,
@@ -233,10 +236,16 @@ impl ProfileHistory {
             .spawn(move || writer.run(&rx))
             .map_err(|e| internal(format!("cannot start the history writer: {e}")))?;
         Ok(Self {
+            dir: dir.to_owned(),
             tx: Mutex::new(Some(tx)),
             failures,
             thread: Mutex::new(Some(thread)),
         })
+    }
+
+    /// The directory the store keeps its segments in.
+    pub(crate) fn dir(&self) -> &Path {
+        &self.dir
     }
 
     /// Queues `entry`; a full queue drops it and counts a failure.
@@ -384,6 +393,7 @@ fn stored(e: HistoryEntry, mask: bool) -> Option<StoredProfile> {
     let mut profile = QueryProfile::new(&e.plan, e.metrics, e.detailed);
     profile.trace = e.trace;
     profile.identity = Some(e.identity.clone());
+    profile.hints = e.hints;
     let mut sql = e.sql;
     if mask {
         // A literal's text reaches the plan through any name: a generated output name (`SELECT 'x'` is named
@@ -391,6 +401,11 @@ fn stored(e: HistoryEntry, mask: bool) -> Option<StoredProfile> {
         // alias marker. No scan finds every such name, so the arguments of every node are dropped: the operator
         // tree and the metrics remain.
         blank_details(&mut profile.plan);
+        // A join key's text and a hint's message can carry a literal (`l_partkey + 7`): the facts keep the key's
+        // position, not its text, and a message is masked like a statement.
+        for h in &mut profile.hints {
+            h.message = krishiv_sql::mask_literals(&h.message);
+        }
         sql = sql.map(|t| krishiv_sql::mask_literals(&t));
     }
     let sql = sql.map(|t| cut(t, SQL_MAX));
@@ -411,6 +426,11 @@ fn stored(e: HistoryEntry, mask: bool) -> Option<StoredProfile> {
 /// Replaces the argument text of every node with `?`.
 fn blank_details(node: &mut krishiv_exec::profile::ProfileNode) {
     node.detail = "?".to_owned();
+    if let Some(facts) = &mut node.facts {
+        for gap in &mut Arc::make_mut(facts).filter_gaps {
+            gap.probe_key = "?".to_owned();
+        }
+    }
     for child in &mut node.children {
         blank_details(child);
     }
@@ -561,10 +581,6 @@ fn trim_listed(segments: &[(PathBuf, u64)], max_bytes: u64) -> std::io::Result<(
 ///
 /// # Errors
 /// The directory cannot be read.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "read by the offline profile viewer (T050)")
-)]
 pub(crate) fn read_history(dir: &Path) -> Result<Vec<StoredProfile>, KrishivError> {
     let segments =
         list_segments(dir).map_err(|e| internal(format!("history {}: {e}", dir.display())))?;
