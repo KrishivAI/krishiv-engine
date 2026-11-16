@@ -77,7 +77,6 @@ mod prune;
 mod pushdown;
 mod repartition;
 mod restrict;
-mod semi_order;
 mod share_cte;
 mod stats;
 mod sum_rewrite;
@@ -88,8 +87,7 @@ use std::sync::Arc;
 use krishiv_common::config::{
     ANSI_ENABLED, AUTO_BROADCAST_JOIN_THRESHOLD, Config, ConfigValue, EAGER_AGGREGATION,
     GROUP_KEY_CODE, JOIN_COST, JOIN_DP_LIMIT, JOIN_ENUMERATOR, LATE_PAYLOAD_JOIN,
-    SEMI_ANTI_JOIN_ORDER, SESSION_TIME_ZONE, SHARE_CTE_INSTANCES, SHARE_REPEATED_SUBTREES,
-    SUBQUERY_AS_WINDOW,
+    SESSION_TIME_ZONE, SHARE_CTE_INSTANCES, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
 };
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{
@@ -708,12 +706,6 @@ fn join_settings(config: Option<&Config>, trace: bool) -> join_order::Settings {
                 .unwrap_or(join_order::MAX_DP_LIMIT)
                 .min(join_order::MAX_DP_LIMIT);
         }
-        if let Some(on) = config
-            .get(&SEMI_ANTI_JOIN_ORDER)
-            .and_then(ConfigValue::as_bool)
-        {
-            s.semi_anti_order = on;
-        }
     }
     s
 }
@@ -796,13 +788,6 @@ fn order_and_restrict(
         let (ordered, trees) = join_order::reorder(&root, stats, propagate, joins);
         notes = trees;
         t.step("JoinOrder", round, "JoinOrder", &root, &ordered);
-        let ordered = if joins.semi_anti_order {
-            let sorted = semi_order::reorder(Arc::clone(&ordered), stats, propagate)?;
-            t.step("JoinOrder", round, "SemiAntiOrder", &ordered, &sorted);
-            sorted
-        } else {
-            ordered
-        };
         let restricted = restrict::restrict(Arc::clone(&ordered), stats, propagate)?;
         t.step("JoinOrder", round, "Restrict", &ordered, &restricted);
         // A filter ordering or restriction leaves can reject the NULL rows of an outer join's
