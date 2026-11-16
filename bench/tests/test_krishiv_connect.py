@@ -59,7 +59,8 @@ def test_start_server_reads_the_address_and_teardown_stops_it(tmp_path):
     e._start_server()
     assert e.remote == "sc://127.0.0.1:1"
     proc = e._proc
-    assert proc is not None and proc.poll() is None
+    assert proc is not None
+    assert proc.poll() is None
     e.teardown()
     assert proc.poll() is not None
 
