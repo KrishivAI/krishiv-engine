@@ -18,7 +18,10 @@
 //! more than 15 minutes (2026-11-16). The interpreter computes every number,
 //! doubles included, as exact fixed point, so the float rounding a reordered
 //! aggregation can change is not exercised here (the goldens' tolerance never
-//! applies).
+//! applies). The design's SF1 run is the engine's:
+//! `krishiv-exec/tests/planner/rule_differential.rs` runs the same arms
+//! through the executor over Parquet files (TPC-H SF 0.01 by default; TPC-H
+//! and TPC-DS SF1 as ignored tests), doubles within a tolerance.
 //!
 //! Rules that run only under a session configuration (`subquery_as_window`,
 //! `share_repeated_subtrees`) are switched through it: their arms optimize
