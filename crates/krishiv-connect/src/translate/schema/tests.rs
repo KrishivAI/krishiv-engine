@@ -18,8 +18,12 @@ fn a_local_schema_is_ddl_a_type_or_json_and_a_type_is_wrapped() {
     let wrapped = parse_local_schema("int").unwrap();
     assert_eq!(wrapped.fields().len(), 1);
     assert_eq!(wrapped.fields()[0].name(), "value");
+    assert_eq!(wrapped.fields()[0].data_type(), &DataType::Integer);
+    assert!(wrapped.fields()[0].nullable());
     let json_type = parse_local_schema("\"long\"").unwrap();
     assert_eq!(json_type.fields()[0].name(), "value");
+    assert_eq!(json_type.fields()[0].data_type(), &DataType::Long);
+    assert!(json_type.fields()[0].nullable());
     // Neither DDL nor JSON: the DDL error.
     assert!(parse_local_schema("a nonsense_type").is_err());
 }
@@ -52,4 +56,19 @@ fn datatype_strings_try_schema_type_then_struct() {
         "struct<a:int>"
     );
     assert_eq!(parse_datatype_string("int").unwrap().simple_string(), "int");
+}
+
+#[test]
+fn a_trailing_line_comment_does_not_swallow_the_closing_delimiter() {
+    // Spark parses a table schema directly, so a line comment may end at the end of the text.
+    for text in ["a INT -- note", "a INT, b STRING -- note"] {
+        let local = parse_local_schema(text).unwrap();
+        let table = parse_table_schema(text).unwrap();
+        assert_eq!(local, table, "{text}");
+        assert_eq!(local.fields()[0].name(), "a", "{text}");
+    }
+    assert_eq!(
+        DataType::Struct(parse_table_schema("a INT, b STRING -- note").unwrap()).simple_string(),
+        "struct<a:int,b:string>"
+    );
 }

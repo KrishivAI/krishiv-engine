@@ -104,6 +104,13 @@ fn a_bad_schema_text_fails_at_translation_and_is_not_echoed() {
         &conf_with(LocalRelations::collecting()),
     ));
     assert!(!e.message().contains("CANARY"), "{}", e.message());
+    // The schema parser's own error, not the refusal of local relations.
+    assert_ne!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::KrishivUnsupportedFeature,
+        "{}",
+        e.message()
+    );
 }
 
 #[test]

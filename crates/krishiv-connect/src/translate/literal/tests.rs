@@ -573,7 +573,10 @@ fn an_array_literal_takes_its_type_from_the_root_data_type() {
         data_type: Some(array_type(Kind::Integer(dt::Integer::default()), false)),
         ..lit
     };
-    assert!(literal(&strict).is_err());
+    assert_eq!(
+        literal(&strict).unwrap_err().error_class(),
+        ErrorClass::ConnectInvalidPlanAssertionFailure
+    );
 }
 
 #[test]
@@ -701,7 +704,8 @@ fn a_specialized_array_is_an_array_literal() {
         data_type: Some(array_type(Kind::Long(dt::Long::default()), true)),
         ..lit.clone()
     };
-    assert!(literal(&typed_root).is_ok());
+    let typed = literal(&typed_root).unwrap();
+    assert_eq!(typed.data_type().unwrap().simple_string(), "array<bigint>");
     let wrong = expression::Literal {
         data_type: Some(proto_type(Kind::Integer(dt::Integer::default()))),
         ..lit
@@ -811,4 +815,26 @@ fn a_member_that_misses_the_declared_type_is_an_invalid_plan_not_internal() {
         data_type: Some(array_type(Kind::Integer(dt::Integer::default()), true)),
     };
     assert_eq!(literal(&specialized).unwrap_err().error_class(), assertion);
+}
+
+#[test]
+fn a_collated_type_in_a_nested_literals_root_is_refused() {
+    // An empty array has no `String` member to meet the scalar refusal: its declared type must.
+    let collated = array_type(
+        Kind::String(dt::String {
+            collation: "UTF8_LCASE".into(),
+            ..dt::String::default()
+        }),
+        true,
+    );
+    let lit = expression::Literal {
+        literal_type: Some(LiteralType::Array(pl::Array::default())),
+        data_type: Some(collated),
+    };
+    let e = literal(&lit).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{e}"
+    );
 }

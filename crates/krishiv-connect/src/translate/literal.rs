@@ -185,7 +185,7 @@ fn root_type(
     expected: Option<&DataType>,
 ) -> Result<Option<DataType>, KrishivError> {
     match &lit.data_type {
-        Some(t) => Ok(Some(data_type(t)?)),
+        Some(t) => Ok(Some(data_type(t)?.refuse_collations()?)),
         None => Ok(expected.cloned()),
     }
 }
@@ -201,7 +201,7 @@ fn too_deep(depth: usize) -> Result<(), KrishivError> {
 /// message's missing type (golden-pending: Spark infers it from the elements).
 fn own_type(t: Option<&ProtoType>, message: &str) -> Result<DataType, KrishivError> {
     match t {
-        Some(t) => data_type(t),
+        Some(t) => data_type(t)?.refuse_collations(),
         None => Err(assertion(format!(
             "a {message} literal needs a type (the literal's data_type or its own)"
         ))),

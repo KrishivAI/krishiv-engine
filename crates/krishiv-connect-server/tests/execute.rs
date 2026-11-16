@@ -14,7 +14,8 @@ use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use arrow_array::RecordBatch;
+use arrow_array::cast::AsArray;
+use arrow_array::{Array, RecordBatch};
 use krishiv_common::principal::Principal;
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::execute_plan_request::RequestOption as ReqOpt;
@@ -1065,6 +1066,31 @@ fn people_ipc() -> Vec<u8> {
     out
 }
 
+/// An Arrow IPC stream of `(id: Int64, name: Utf8)` rows other than [`people_ipc`]'s.
+fn others_ipc() -> Vec<u8> {
+    use arrow_array::{Int64Array, StringArray};
+    use arrow_schema::{DataType, Field, Schema};
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, true),
+        Field::new("name", DataType::Utf8, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int64Array::from(vec![10, 20])),
+            Arc::new(StringArray::from(vec![Some("x"), Some("y")])),
+        ],
+    )
+    .expect("batch");
+    let mut out = Vec::new();
+    {
+        let mut w = arrow_ipc::writer::StreamWriter::try_new(&mut out, &schema).expect("writer");
+        w.write(&batch).expect("write");
+        w.finish().expect("finish");
+    }
+    out
+}
+
 fn local(data: Option<Vec<u8>>, schema: Option<&str>) -> pb::Relation {
     relation(RelType::LocalRelation(pb::LocalRelation {
         data,
@@ -1162,7 +1188,7 @@ async fn two_local_relations_join_in_one_plan() {
     let join = relation(RelType::Join(Box::new(pb::Join {
         left: Some(Box::new(local(Some(people_ipc()), None))),
         right: Some(Box::new(local(
-            Some(people_ipc()),
+            Some(others_ipc()),
             Some("id2 BIGINT, n2 STRING"),
         ))),
         join_type: pb::join::JoinType::Cross as i32,
@@ -1171,7 +1197,47 @@ async fn two_local_relations_join_in_one_plan() {
     let r = collect(&run.channel, request(root(join)))
         .await
         .expect("runs");
-    assert_eq!(rows(&r).num_rows(), 9);
+    let out = rows(&r);
+    // The two relations are bound to their own data: 3 left rows by 2 right rows, in the left's
+    // columns then the right's, with the right's names from its own schema text.
+    let names: Vec<_> = out
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect();
+    assert_eq!(names, ["id", "name", "id2", "n2"]);
+    let left = out
+        .column(0)
+        .as_primitive::<arrow_array::types::Int64Type>();
+    let left_names = out.column(1).as_string::<i32>();
+    let right = out
+        .column(2)
+        .as_primitive::<arrow_array::types::Int64Type>();
+    let right_names = out.column(3).as_string::<i32>();
+    let mut tuples: Vec<(i64, Option<String>, i64, String)> = (0..out.num_rows())
+        .map(|i| {
+            (
+                left.value(i),
+                (!left_names.is_null(i)).then(|| left_names.value(i).to_owned()),
+                right.value(i),
+                right_names.value(i).to_owned(),
+            )
+        })
+        .collect();
+    tuples.sort();
+    let expected: Vec<(i64, Option<String>, i64, String)> = [
+        (1, Some("a"), 10, "x"),
+        (1, Some("a"), 20, "y"),
+        (2, None, 10, "x"),
+        (2, None, 20, "y"),
+        (3, Some("c"), 10, "x"),
+        (3, Some("c"), 20, "y"),
+    ]
+    .into_iter()
+    .map(|(a, b, c, d)| (a, b.map(str::to_owned), c, d.to_owned()))
+    .collect();
+    assert_eq!(tuples, expected);
 }
 
 fn column(name: &str) -> pb::Expression {
@@ -1585,5 +1651,26 @@ async fn a_compressed_sql_command_runs_like_a_plain_one() {
     assert!(
         matches!(relation.rel_type, Some(RelType::LocalRelation(_))),
         "{relation:?}"
+    );
+    // The view exists afterwards: the compressed command ran, it was not only answered.
+    let entry = run
+        .manager
+        .get_or_create(&local_caller(), SESSION, None, "u")
+        .expect("session");
+    let batches = entry
+        .session()
+        .sql("SELECT n FROM zc")
+        .await
+        .expect("reads the view")
+        .collect()
+        .await
+        .expect("collects");
+    assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+    assert_eq!(
+        batches[0]
+            .column(0)
+            .as_primitive::<arrow_array::types::Int32Type>()
+            .value(0),
+        7
     );
 }

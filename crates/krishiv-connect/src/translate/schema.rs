@@ -17,13 +17,13 @@ use krishiv_types::{DataType, StructField, StructType};
 /// # Errors
 /// The parse error of the text as a data type.
 pub fn parse_datatype_string(text: &str) -> Result<DataType, KrishivError> {
-    if let Ok(t) = krishiv_types::parse_data_type(&format!("STRUCT<{text}>")) {
+    if let Ok(t) = krishiv_types::parse_data_type(&format!("STRUCT<{text}\n>")) {
         return Ok(t);
     }
     match krishiv_types::parse_data_type(text) {
         Ok(t) => Ok(t),
         Err(e) => {
-            krishiv_types::parse_data_type(&format!("STRUCT<{}>", text.trim())).map_err(|_| e)
+            krishiv_types::parse_data_type(&format!("STRUCT<{}\n>", text.trim())).map_err(|_| e)
         }
     }
 }
@@ -62,7 +62,7 @@ pub fn parse_local_schema(text: &str) -> Result<StructType, KrishivError> {
 /// (golden-pending: the class is the registry's Connect one for
 /// `invalidSchemaStringNonStructType`, its use unverified against a real run).
 pub fn parse_table_schema(text: &str) -> Result<StructType, KrishivError> {
-    let ddl = |t: &str| krishiv_types::parse_data_type(&format!("STRUCT<{t}>"));
+    let ddl = |t: &str| krishiv_types::parse_data_type(&format!("STRUCT<{t}\n>"));
     match with_fallback(text, ddl, DataType::from_json)? {
         DataType::Struct(s) => Ok(s),
         other => Err(ConnectInvalidPlanInvalidSchemaNonStructType {

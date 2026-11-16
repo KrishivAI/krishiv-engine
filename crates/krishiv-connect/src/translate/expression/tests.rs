@@ -672,15 +672,27 @@ fn an_expression_string_is_parsed_like_select_expr() {
 
 #[test]
 fn an_expression_string_is_parsed_with_the_conf_parser_options() {
-    // The options are the conf's: the same text under the default options translates.
+    // `"x"` is a string literal by default and an identifier under `doubleQuotedIdentifiers`:
+    // the options are the conf's.
     let e = expr(ExprType::ExpressionString(expression::ExpressionString {
-        expression: "a > 1".to_owned(),
+        expression: "\"x\"".to_owned(),
     }));
+    let default = translate_expression(&e, &TranslateConf::default()).unwrap();
     let conf = TranslateConf {
+        parser: krishiv_sql::ParserOptions {
+            double_quoted_identifiers: true,
+            ..krishiv_sql::ParserOptions::default()
+        },
+        ..TranslateConf::default()
+    };
+    let quoted = translate_expression(&e, &conf).unwrap();
+    assert_ne!(default, quoted);
+    // The control: the default options give the same answer as the default conf.
+    let control = TranslateConf {
         parser: krishiv_sql::ParserOptions::default(),
         ..TranslateConf::default()
     };
-    assert!(translate_expression(&e, &conf).is_ok());
+    assert_eq!(translate_expression(&e, &control).unwrap(), default);
 }
 
 fn text_of_sql(sql: &str) -> String {
