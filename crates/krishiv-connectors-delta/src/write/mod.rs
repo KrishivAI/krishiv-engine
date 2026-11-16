@@ -23,11 +23,13 @@
 //! 4. starts a checkpoint when the commits since the last one reach `delta.checkpointInterval`
 //!    (default 10, delta-spark's `DeltaConfig.scala:480-485`), detached from the statement: a
 //!    failed or cut-short checkpoint is logged and counted ([`checkpoint_failures`]), never
-//!    raised.
+//!    raised. At most one runs per table root ([`checkpoints_skipped`] counts the others),
+//!    within a time budget, and it is cancelled when the runtime drops it.
 //!
 //! Data files are invisible until the commit. A write that fails before its commit (or whose
-//! create surely did not land) deletes its files, best effort; a cancelled driver's files are
-//! deleted in the background. A file left behind is an orphan no snapshot reads.
+//! create surely did not land) deletes its files, best effort; a cancelled write's files
+//! (during its batches or its `finalize`, up to the commit attempt) are deleted in the
+//! background. A file left behind is an orphan no snapshot reads.
 //!
 //! # Refusals (before any file is written)
 //! - Krishiv's writer allow-list ([`crate::features::check_write`]).
@@ -52,8 +54,10 @@ mod files;
 pub mod filter;
 pub(crate) mod sink;
 pub mod stats;
+#[cfg(test)]
+pub(crate) mod test_hooks;
 
-pub use self::sink::{DeltaWriteSink, NewDeltaTable, checkpoint_failures};
+pub use self::sink::{DeltaWriteSink, NewDeltaTable, checkpoint_failures, checkpoints_skipped};
 
 /// The internal write option a session sets when the statement reads the table it writes
 /// (`INSERT INTO t SELECT .. FROM t`): the commit then is not a blind append and is checked as

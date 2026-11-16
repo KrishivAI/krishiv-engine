@@ -18,7 +18,7 @@
 //!   effort; a file left behind is an orphan no snapshot reads (as a failed delta-spark task's
 //!   files are).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow_array::{Array, ArrayRef, RecordBatch, StructArray};
@@ -108,18 +108,33 @@ pub(crate) struct Written {
     pub(crate) partition_values: Vec<Vec<Scalar>>,
     /// The files, for a failed write's clean-up.
     pub(crate) paths: Vec<Path>,
+    /// The sorted physical values of each of `partitions`, for [`Self::merge`]'s dedup.
+    seen: HashSet<PartitionKey>,
+}
+
+/// A partition's physical values, sorted by column: a hashable form of its map.
+type PartitionKey = Vec<(String, Option<String>)>;
+
+fn partition_key(values: &HashMap<String, Option<String>>) -> PartitionKey {
+    let mut key: PartitionKey = values.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    key.sort_unstable();
+    key
 }
 
 impl Written {
-    /// Adds `other`'s files; a partition both wrote is kept once.
+    /// Adds `other`'s files; a partition both wrote is kept once (a hash set: linear in the
+    /// partitions over every driver).
     pub(crate) fn merge(&mut self, other: Self) {
         self.adds.extend(other.adds);
         self.files += other.files;
         self.rows += other.rows;
         self.bytes += other.bytes;
         self.paths.extend(other.paths);
+        if self.seen.len() != self.partitions.len() {
+            self.seen = self.partitions.iter().map(partition_key).collect();
+        }
         for (physical, logical) in other.partitions.into_iter().zip(other.partition_values) {
-            if !self.partitions.contains(&physical) {
+            if self.seen.insert(partition_key(&physical)) {
                 self.partitions.push(physical);
                 self.partition_values.push(logical);
             }
@@ -380,6 +395,9 @@ impl DriverWriter {
                 || (plan.limits.target_bytes > 0
                     && f.encoder.written_bytes() >= plan.limits.target_bytes);
             if full && let Some(f) = part.file.take() {
+                // Listed before the close: a close that fails (or is dropped) after its upload
+                // landed still has its file deleted by `abort`.
+                self.done.paths.push(f.path.clone());
                 let add = close(plan, &part.ctx, f).await?;
                 self.done.push(add);
             }
@@ -401,7 +419,8 @@ impl DriverWriter {
     /// Fits the reservation to the bytes the open files hold: shrinks it, or grows it; when
     /// the pool refuses, encodes and ships the buffered row groups first, and what is still
     /// refused is the next batch's [`deficit`](Self::deficit).
-    async fn settle(&mut self) -> Result<(), KrishivError> {
+    pub(crate) async fn settle(&mut self) -> Result<(), KrishivError> {
+        self.deficit = 0;
         let held = self.held();
         let size = self.mem.size();
         if held <= size {
@@ -443,7 +462,8 @@ impl DriverWriter {
         Ok(freed)
     }
 
-    /// Ends every open file and returns what this driver wrote; its memory is given back.
+    /// Ends every open file and returns what this driver wrote; its memory is given back. The
+    /// files stay listed in the writer, so an [`abort`](Self::abort) after `finish` deletes them.
     ///
     /// # Errors
     /// Encode and upload errors (the caller then aborts the write).
@@ -455,11 +475,16 @@ impl DriverWriter {
                 continue;
             };
             if let Some(f) = part.file.take() {
+                self.done.paths.push(f.path.clone());
                 let add = close(plan, &part.ctx, f).await?;
                 self.done.push(add);
             }
         }
         let mut written = std::mem::take(&mut self.done);
+        // The writer keeps its files' paths until the write lets it go
+        // ([`WriteGlobal::release_writers`](super::sink)): a cancellation or failure before
+        // the commit still deletes them through `abort`.
+        self.done.paths.clone_from(&written.paths);
         for part in self.partitions.values() {
             if !plan.partition_columns.is_empty() {
                 written
@@ -537,12 +562,11 @@ pub(crate) async fn delete_files(engine: &DeltaEngine, paths: &[Path]) {
     }
 }
 
-/// One closed file: its add row, size and path.
+/// One closed file: its add row and size (its path was listed before the close).
 struct Closed {
     add: RecordBatch,
     rows: u64,
     size: u64,
-    path: Path,
 }
 
 impl Written {
@@ -551,7 +575,6 @@ impl Written {
         self.files += 1;
         self.rows += c.rows;
         self.bytes += c.size;
-        self.paths.push(c.path);
     }
 }
 
@@ -634,7 +657,6 @@ async fn close(
         encoder,
         mut upload,
         url,
-        path,
         rows,
         stats,
         ..
@@ -645,12 +667,7 @@ async fn close(
     let stats = stats.finish(&plan.stats_schema, plan.tight_bounds)?;
     let relative = ctx.resolve_file_path(&url).map_err(|e| kernel(&e))?;
     let add = add_row(ctx, &relative, size, stats, table)?;
-    Ok(Closed {
-        add,
-        rows,
-        size,
-        path,
-    })
+    Ok(Closed { add, rows, size })
 }
 
 /// The add row of one file: path, partition values, size, modification time, and the

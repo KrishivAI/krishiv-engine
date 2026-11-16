@@ -19,7 +19,7 @@ use super::{Env, adds, ids, modes_schema};
 use crate::write::files::FileLimits;
 
 /// The data files under `dir` (not the log).
-fn data_files(dir: &Path) -> usize {
+pub(super) fn data_files(dir: &Path) -> usize {
     let mut n = 0;
     for entry in std::fs::read_dir(dir).unwrap() {
         let entry = entry.unwrap();
@@ -36,7 +36,7 @@ fn data_files(dir: &Path) -> usize {
 }
 
 /// `n` rows of `(id, v, p)` from `start`, `p` alternating `x`/`y`, `v` 64 characters.
-fn wide_rows(start: i64, n: usize) -> RecordBatch {
+pub(super) fn wide_rows(start: i64, n: usize) -> RecordBatch {
     let ids: Vec<i64> = (start..).take(n).collect();
     let v: ArrayRef = Arc::new(StringArray::from_iter_values(
         ids.iter().map(|i| format!("{:064}", i.wrapping_mul(7919))),
@@ -48,7 +48,7 @@ fn wide_rows(start: i64, n: usize) -> RecordBatch {
     RecordBatch::try_new(modes_schema(), vec![id, v, p]).unwrap()
 }
 
-fn new_table(env: &Env, schema: &SchemaRef, partitions: &[&str]) -> NewDeltaTable {
+pub(super) fn new_table(env: &Env, schema: &SchemaRef, partitions: &[&str]) -> NewDeltaTable {
     NewDeltaTable::new(
         env.engine.clone(),
         schema,

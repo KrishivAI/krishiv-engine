@@ -254,11 +254,11 @@ impl DeltaEngine {
         }
     }
 
-    /// This engine with a fresh token of its own, cancelled by nothing: the work after a
-    /// commit has landed (the checkpoint), which neither the statement's cancellation nor its
-    /// end may cut short.
+    /// This engine with its kernel calls ended by `cancel` alone: the work after a commit has
+    /// landed (the checkpoint), which neither the statement's cancellation nor its end may cut
+    /// short; its owner cancels `cancel` at its time budget or when it is dropped.
     #[must_use]
-    pub(crate) fn detached(&self) -> Self {
+    pub(crate) fn detached(&self, cancel: Arc<CancellationToken>) -> Self {
         let s = &self.shared;
         Self {
             shared: Arc::new(Shared {
@@ -267,7 +267,7 @@ impl DeltaEngine {
                 root: s.root.clone(),
                 handle: s.handle.clone(),
                 limits: s.limits,
-                cancel: Cancel::Token(Arc::new(CancellationToken::new())),
+                cancel: Cancel::Token(cancel),
                 listed: std::sync::Mutex::default(),
             }),
             pool: self.pool,

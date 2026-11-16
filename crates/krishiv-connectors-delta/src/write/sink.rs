@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! [`DeltaWriteSink`] and [`NewDeltaTable`] (see the parent module).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -23,7 +23,8 @@ use krishiv_common::error::{
 };
 use krishiv_exec::planner::{TableCapabilities, TableProvider, WriteMode, WriteRequest};
 use krishiv_exec::{
-    GlobalState, LocalState, QueryContext, ScanPushdown, Sink, SinkStatus, TaskContext,
+    CancellationToken, GlobalState, LocalState, QueryContext, ScanPushdown, Sink, SinkStatus,
+    TaskContext,
 };
 use krishiv_memory::SpillSignal;
 use krishiv_types::batch::Batch;
@@ -352,9 +353,19 @@ impl WriteGlobal {
     /// combine later, are aborted.
     async fn abandon_all(&self) {
         self.failed.store(true, Ordering::Release);
-        let writers =
-            std::mem::take(&mut *self.writers.lock().unwrap_or_else(PoisonError::into_inner));
-        abort_all(&writers).await;
+        abort_all(&self.take_writers()).await;
+    }
+
+    fn take_writers(&self) -> Vec<Arc<AsyncMutex<DriverWriter>>> {
+        std::mem::take(&mut *self.writers.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    /// Lets the writers go just before the commit is attempted: from here a cancellation (or
+    /// [`Drop`]) no longer deletes their files, since the commit may land (review 2, N2).
+    /// Until then the writers stay here, so a cancellation anywhere in `finalize` aborts their
+    /// uploads and deletes their finished files.
+    fn release_writers(&self) {
+        drop(self.take_writers());
     }
 }
 
@@ -431,7 +442,7 @@ impl Sink for DeltaWriteSink {
             Target::Existing(table) => table.engine().for_query(ctx.query()),
             Target::Create(new) => new.engine.for_query(ctx.query()),
         };
-        Ok(Arc::new(WriteGlobal {
+        let global = Arc::new(WriteGlobal {
             engine,
             query: Arc::clone(ctx.query()),
             target: self.target.clone(),
@@ -441,7 +452,10 @@ impl Sink for DeltaWriteSink {
             planned: OnceCell::new(),
             writers: Mutex::new(Vec::new()),
             failed: std::sync::atomic::AtomicBool::new(false),
-        }))
+        });
+        #[cfg(test)]
+        super::test_hooks::record(&self.write_id, &global);
+        Ok(global)
     }
 
     /// The driver's writer, holding its memory in the driver's own consumer, where a
@@ -503,11 +517,20 @@ impl Sink for DeltaWriteSink {
             let out = match g.planned().await {
                 Ok(p) => match &*p {
                     Planned::Ready { plan, .. } => w.write(plan, &batch).await,
-                    Planned::Landed => Ok(()),
+                    Planned::Landed => {
+                        // Nothing is written: the batch's reservation goes back now.
+                        let size = w.reservation().size();
+                        w.reservation().shrink(size);
+                        Ok(())
+                    }
                 },
                 Err(e) => Err(e),
             };
             drop(batch);
+            #[cfg(test)]
+            if out.is_ok() {
+                super::test_hooks::at(&g.write_id, super::test_hooks::Point::Sunk, &g.query).await;
+            }
             if let Err(e) = out {
                 // Clean up before failing the query: its cancellation drops this future.
                 w.abort().await;
@@ -524,8 +547,12 @@ impl Sink for DeltaWriteSink {
             .downcast::<WriteLocal>()
             .map_err(|_| internal("wrong local state for the Delta write"))?;
         l.combined = true;
+        // The driver ends here: nothing will service a spill request on its signal again
+        // (review 2, N3). The writer's bytes stay in its reservation until `finalize`.
+        l.signal.set_spillable_bytes(0);
         let g = global_of(global)?;
         let writer = Arc::clone(&l.writer);
+        settle_deficit(&g.engine, &writer);
         if g.failed.load(Ordering::Acquire) {
             abandon(&g.engine, writer);
             return Ok(());
@@ -569,18 +596,23 @@ impl Sink for DeltaWriteSink {
     ) -> BoxFuture<'a, krishiv_exec::Result<()>> {
         Box::pin(async move {
             let g = global_of(global)?;
-            let writers =
-                std::mem::take(&mut *g.writers.lock().unwrap_or_else(PoisonError::into_inner));
+            // A copy: the writers stay in `g` until the commit is attempted, so a cancellation
+            // of this future leaves them to `Drop for WriteGlobal` (review 2, N2).
+            let writers = g
+                .writers
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
             let planned = match g.planned().await {
                 Ok(p) => p,
                 Err(e) => {
-                    abort_all(&writers).await;
+                    g.abandon_all().await;
                     return Err(e);
                 }
             };
             let (plan, create) = match &*planned {
                 Planned::Landed => {
-                    abort_all(&writers).await;
+                    g.abandon_all().await;
                     return Ok(());
                 }
                 Planned::Ready { plan, create } => (plan, create),
@@ -588,23 +620,39 @@ impl Sink for DeltaWriteSink {
             let mut written = Written::default();
             let mut first = None;
             for w in &writers {
-                match w.lock().await.finish(plan).await {
+                let mut w = w.lock().await;
+                let one = match w.failed.clone() {
+                    // Its deficit's background flush failed (`settle_deficit`).
+                    Some(e) => Err(e),
+                    None => w.finish(plan).await,
+                };
+                match one {
                     Ok(one) => written.merge(one),
                     Err(e) => {
                         first.get_or_insert(e);
                     }
                 }
             }
+            drop(writers);
             if let Some(e) = first {
-                abort_all(&writers).await;
-                delete_files(&g.engine, &written.paths).await;
+                // Every writer still lists its finished files: `abort` deletes them.
+                g.abandon_all().await;
                 return Err(e);
             }
+            #[cfg(test)]
+            super::test_hooks::at(&g.write_id, super::test_hooks::Point::Finished, &g.query).await;
             let paths = written.paths.clone();
             let out = match &self.target {
-                Target::Existing(table) => self.commit_existing(&g.engine, table, written).await,
+                Target::Existing(table) => self.commit_existing(g, table, written).await,
                 Target::Create(new) => {
-                    let txn = take_create(create)?;
+                    let txn = match take_create(create) {
+                        Ok(txn) => txn,
+                        Err(e) => {
+                            g.abandon_all().await;
+                            return Err(e);
+                        }
+                    };
+                    g.release_writers();
                     let (new, write_id) = (Arc::clone(new), self.write_id.clone());
                     let adds = std::mem::take(&mut written.adds);
                     match g
@@ -620,6 +668,8 @@ impl Sink for DeltaWriteSink {
             match out {
                 Ok(()) => Ok(()),
                 Err(Failure::NotCommitted(e)) => {
+                    // Released first, so `Drop` does not delete them a second time.
+                    g.release_writers();
                     delete_files(&g.engine, &paths).await;
                     Err(e)
                 }
@@ -628,6 +678,32 @@ impl Sink for DeltaWriteSink {
             }
         })
     }
+}
+
+/// Accounts for the bytes `writer`'s open files held past its reservation after the driver's
+/// last batch (review 2, N3): reserved now, or, when the pool refuses, given back by encoding
+/// and shipping the buffered row groups in the background (`finalize` waits on the writer's
+/// lock; a failure there fails the write).
+fn settle_deficit(engine: &DeltaEngine, writer: &Arc<AsyncMutex<DriverWriter>>) {
+    let Ok(mut w) = writer.try_lock() else {
+        return;
+    };
+    let deficit = w.deficit;
+    if deficit == 0 {
+        return;
+    }
+    if w.reservation().try_grow(deficit).is_ok() {
+        w.deficit = 0;
+        return;
+    }
+    drop(w);
+    let writer = Arc::clone(writer);
+    drop(engine.handle().spawn(async move {
+        let mut w = writer.lock().await;
+        if let Err(e) = w.settle().await {
+            w.failed.get_or_insert(e);
+        }
+    }));
 }
 
 /// Aborts every writer (their files are deleted).
@@ -846,10 +922,11 @@ impl DeltaWriteSink {
     /// Removes, checks and commits a write into an existing table.
     async fn commit_existing(
         &self,
-        engine: &DeltaEngine,
+        g: &WriteGlobal,
         table: &DeltaTable,
         written: Written,
     ) -> Result<(), Failure> {
+        let engine = &g.engine;
         let name = table.name().to_owned();
         let snapshot = Arc::clone(table.snapshot());
         let partitions = table.partition_columns();
@@ -936,6 +1013,7 @@ impl DeltaWriteSink {
             removes,
             read_set,
         };
+        g.release_writers();
         let committed = commit(engine, snapshot, staged, self.limits)
             .await
             .map_err(Failure::Unknown)?;
@@ -950,11 +1028,7 @@ impl DeltaWriteSink {
         {
             // The commit has landed: the checkpoint runs detached from the statement (its
             // cancellation and its end), so it can never turn a landed write into a failure.
-            let detached = engine.detached();
-            let version = committed.version;
-            drop(engine.handle().spawn(async move {
-                checkpoint(&detached, version, &name).await;
-            }));
+            spawn_checkpoint(engine, committed.version, name);
         }
         Ok(())
     }
@@ -1052,7 +1126,7 @@ pub(super) fn select_removes(
 }
 
 /// An overwrite predicate evaluated exactly over scan rows' partition values.
-struct ExactCheck {
+pub(super) struct ExactCheck {
     /// Per partition column: its physical name (the `partitionValues` key) and type.
     columns: Vec<(String, DataType)>,
     schema: Arc<StructType>,
@@ -1062,7 +1136,7 @@ struct ExactCheck {
 }
 
 impl ExactCheck {
-    fn new(
+    pub(super) fn new(
         e: &DeltaEngine,
         snapshot: &SnapshotRef,
         partitions: &[String],
@@ -1100,7 +1174,17 @@ impl ExactCheck {
     }
 
     /// Keeps selected only the rows of `batch` whose partition values make the predicate TRUE.
-    fn narrow(&self, batch: &RecordBatch, selection: &mut [bool]) -> Result<(), KrishivError> {
+    ///
+    /// # Errors
+    /// The refusal (`UNSUPPORTED_FEATURE.TABLE_OPERATION`) when a value does not parse, the
+    /// predicate does not evaluate, or a partitioned table's scan row carries no partition
+    /// values (never read as all-NULL: that would remove the NULL partition's files for every
+    /// file, review 2, N4).
+    pub(super) fn narrow(
+        &self,
+        batch: &RecordBatch,
+        selection: &mut [bool],
+    ) -> Result<(), KrishivError> {
         let values = batch
             .column_by_name("fileConstantValues")
             .and_then(|c| c.as_any().downcast_ref::<StructArray>())
@@ -1114,7 +1198,8 @@ impl ExactCheck {
             }
             let map: HashMap<String, Option<String>> = match values {
                 Some(m) if m.is_valid(i) => crate::commit::map_row(m, i)?,
-                _ => HashMap::new(),
+                _ if self.columns.is_empty() => HashMap::new(),
+                _ => return Err(self.refuse("a file without its partition values")),
             };
             let row = self
                 .columns
@@ -1234,6 +1319,83 @@ pub(super) fn check_filter(
         }
     }
     Ok(())
+}
+
+/// The time budget of a post-commit checkpoint: past it the checkpoint is cancelled (its
+/// kernel calls end at their next handler call, giving back the log-pool slot) and counted as
+/// failed. A `krishiv.delta.checkpointTimeout` key is a follow-up.
+const CHECKPOINT_BUDGET: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// The table roots with a post-commit checkpoint running in this process.
+static CHECKPOINTING: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+
+/// Post-commit checkpoints skipped because one of the same table was running.
+static CHECKPOINTS_SKIPPED: AtomicU64 = AtomicU64::new(0);
+
+/// How many post-commit checkpoints this process skipped because one of the same table root
+/// was still running (at most one runs per root).
+#[must_use]
+pub fn checkpoints_skipped() -> u64 {
+    CHECKPOINTS_SKIPPED.load(Ordering::Relaxed)
+}
+
+/// The one running checkpoint of a table root; dropping it lets the next one start.
+#[derive(Debug)]
+pub(super) struct CheckpointSlot(String);
+
+impl CheckpointSlot {
+    /// The slot of `root`, unless a checkpoint of `root` holds it.
+    pub(super) fn begin(root: &str) -> Option<Self> {
+        CHECKPOINTING
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(root.to_owned())
+            .then(|| Self(root.to_owned()))
+    }
+}
+
+impl Drop for CheckpointSlot {
+    fn drop(&mut self) {
+        CHECKPOINTING
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.0);
+    }
+}
+
+/// Cancels its token when dropped: the checkpoint task's end, its time budget, or the runtime
+/// shutting down (which drops the task) all end the kernel calls it started.
+struct CancelOnDrop(Arc<CancellationToken>);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
+/// Starts the checkpoint of `version` in the background (section 4.3): at most one per table
+/// root at a time (another is skipped and counted), within [`CHECKPOINT_BUDGET`], cancelled
+/// when the runtime drops it.
+fn spawn_checkpoint(engine: &DeltaEngine, version: u64, name: String) {
+    let Some(slot) = CheckpointSlot::begin(engine.table_root().as_str()) else {
+        CHECKPOINTS_SKIPPED.fetch_add(1, Ordering::Relaxed);
+        return;
+    };
+    let token = Arc::new(CancellationToken::new());
+    let detached = engine.detached(Arc::clone(&token));
+    drop(engine.handle().spawn(async move {
+        let _slot = slot;
+        let _cancel = CancelOnDrop(token);
+        let run = checkpoint(&detached, version, &name);
+        if tokio::time::timeout(CHECKPOINT_BUDGET, run).await.is_err() {
+            CHECKPOINT_FAILURES.fetch_add(1, Ordering::Relaxed);
+            tracing::warn!(
+                table = name,
+                version,
+                "a Delta checkpoint after a commit ran past its time budget and was cancelled"
+            );
+        }
+    }));
 }
 
 /// Writes a checkpoint of `version` (section 4.3) on `engine` (detached from the statement);

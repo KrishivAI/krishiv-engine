@@ -412,7 +412,13 @@ fn extreme(
     let Some(at) = best else {
         return Ok(arrow_array::new_null_array(out, 1));
     };
-    let one = column.slice(at, 1);
+    // `take` copies the value into fresh buffers: a `slice` would share (and keep alive) the
+    // whole column's buffers for as long as the raw row lives (review 2, N1).
+    let index = arrow_array::UInt32Array::from(vec![
+        u32::try_from(at).map_err(|_| internal("a stats row index that does not fit a u32"))?,
+    ]);
+    let one = arrow_select::take::take(column.as_ref(), &index, None)
+        .map_err(|e| internal(&format!("copying a stats value: {e}")))?;
     let one = arrow_cast::cast(&one, out)
         .map_err(|e| internal(&format!("a stats value as {out}: {e}")))?;
     if !finish {
@@ -491,6 +497,48 @@ fn internal(message: &str) -> KrishivError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The raw bounds own their values: a raw row does not keep the batch's buffers alive
+    /// (review 2, N1). A 1 MiB string column leaves a raw row of a few hundred bytes, and the
+    /// batch's value buffer is referenced by the batch alone once it is dropped.
+    #[test]
+    fn raw_bounds_do_not_pin_the_batch() {
+        use delta_kernel::schema::StructField;
+        let leaf = |t: DataType| StructType::new_unchecked([StructField::nullable("s", t)]);
+        let schema = StructType::new_unchecked([
+            StructField::nullable("numRecords", DataType::LONG),
+            StructField::nullable(
+                "nullCount",
+                DataType::Struct(Box::new(leaf(DataType::LONG))),
+            ),
+            StructField::nullable(
+                "minValues",
+                DataType::Struct(Box::new(leaf(DataType::STRING))),
+            ),
+            StructField::nullable(
+                "maxValues",
+                DataType::Struct(Box::new(leaf(DataType::STRING))),
+            ),
+        ]);
+        let values: Vec<String> = (0..1024)
+            .map(|i| format!("{i:04}{}", "x".repeat(1024)))
+            .collect();
+        let column = arrow_array::StringArray::from(values);
+        let buffer = column.values().clone();
+        let batch = RecordBatch::try_from_iter([("s", Arc::new(column) as ArrayRef)]).unwrap();
+        let mut acc = StatsAccumulator::default();
+        acc.update(&batch, &schema).unwrap();
+        drop(batch);
+        let size: usize = acc.raw.iter().map(Array::get_array_memory_size).sum();
+        assert!(size < 64 * 1024, "the raw row holds {size} bytes");
+        // `into_mutable` succeeds only on the buffer's last reference.
+        assert!(
+            buffer.into_mutable().is_ok(),
+            "a raw bound still references the batch's value buffer"
+        );
+        let done = acc.finish(&schema, false).unwrap();
+        assert_eq!(done.len(), 1);
+    }
 
     /// delta-spark's own cases (`StatsCollectionSuite` "truncateMaxStringAgg"), and the min's
     /// `substring`, prefix 32 unless named.
