@@ -453,7 +453,7 @@ impl TableProvider for DeltaTable {
         self.writer_with(request, self.inner.limits)
     }
 
-    /// Copy-on-write `DELETE` and `UPDATE` ([`crate::write::dml`]); `MERGE` is not offered yet.
+    /// Copy-on-write `DELETE`, `UPDATE` ([`crate::write::dml`]) and `MERGE` ([`crate::write::merge`]).
     fn row_level(
         &self,
         op: krishiv_exec::planner::RowLevelOperation,

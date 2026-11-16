@@ -31,7 +31,11 @@ use super::{Env, Leaf, Writing, commit_info, modes_schema, rows, typed_rows};
 use crate::table::DeltaTable;
 
 /// `(id, file)` of every live row, by the row-level scan.
-fn row_files(env: &Env, table: &DeltaTable, op: RowLevelOperation) -> Vec<(i64, Vec<u8>, i64)> {
+pub(super) fn row_files(
+    env: &Env,
+    table: &DeltaTable,
+    op: RowLevelOperation,
+) -> Vec<(i64, Vec<u8>, i64)> {
     let rl = table.row_level(op).unwrap();
     let source = rl
         .scan()
@@ -60,7 +64,7 @@ fn row_files(env: &Env, table: &DeltaTable, op: RowLevelOperation) -> Vec<(i64, 
 }
 
 /// A table of `rows` written in two appends (two files per partition written).
-fn two_file_table(env: &Env, partitions: &[&str]) {
+pub(super) fn two_file_table(env: &Env, partitions: &[&str]) {
     let table = new_table(env, &modes_schema(), partitions);
     env.write(
         &table,
@@ -159,7 +163,7 @@ fn metrics(info: &Value) -> serde_json::Map<String, Value> {
     m
 }
 
-fn the_file_of(files: &[(i64, Vec<u8>, i64)], id: i64) -> Vec<u8> {
+pub(super) fn the_file_of(files: &[(i64, Vec<u8>, i64)], id: i64) -> Vec<u8> {
     files.iter().find(|f| f.0 == id).unwrap().1.clone()
 }
 
@@ -511,7 +515,7 @@ fn a_change_data_feed_table_refuses_rewrites_but_commits_whole_file_deletes() {
     assert_eq!(env.query_pool.reserved(), 0);
 }
 
-fn ids_left(env: &Env) -> Vec<i64> {
+pub(super) fn ids_left(env: &Env) -> Vec<i64> {
     typed_rows(&env.read(&env.open().unwrap()))
         .iter()
         .map(|r| r[0].as_i64().unwrap())

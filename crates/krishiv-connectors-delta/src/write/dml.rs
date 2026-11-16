@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Copy-on-write `DELETE` and `UPDATE` on a Delta table (design note P3-T021 sections 2.3, 6.1 and
 //! 6.2; PR-37b part 2): [`DeltaRowLevel`], the table's
-//! [`RowLevelTable`](krishiv_exec::planner::RowLevelTable).
+//! [`RowLevelTable`](krishiv_exec::planner::RowLevelTable). It also commits a `MERGE`
+//! ([`super::merge`], PR-37c).
 //!
 //! The session plans the statement (krishiv-session `table_commands/row_level.rs`): a find query
 //! over [`scan`](DeltaRowLevel) (the live rows, deletion vectors applied, with
@@ -132,6 +133,8 @@ struct Outcome {
     /// delta-spark's `numDeletedRows` (`DELETE`) or `numUpdatedRows` (`UPDATE`) metric; `None`
     /// when a whole-file delete's files lack the statistic.
     rows: Option<u64>,
+    /// A `MERGE`'s counts.
+    merge: Option<super::merge::MergeOutcome>,
 }
 
 /// A Delta table at the version a `DELETE` or `UPDATE` read (see the module docs).
@@ -143,20 +146,27 @@ pub struct DeltaRowLevel {
 }
 
 impl DeltaRowLevel {
-    /// The row-level table of `op` over `table`; `None` for an operation not built yet
-    /// (`MERGE` is PR-37c).
+    /// The row-level table of `op` over `table`; `None` for an operation not built.
     #[must_use]
     pub fn new(table: DeltaTable, op: RowLevelOperation) -> Option<Self> {
-        matches!(op, RowLevelOperation::Delete | RowLevelOperation::Update).then(|| Self {
+        matches!(
+            op,
+            RowLevelOperation::Delete | RowLevelOperation::Update | RowLevelOperation::Merge
+        )
+        .then(|| Self {
             table,
             op,
             outcome: Arc::new(Mutex::new(None)),
         })
     }
 
-    /// The refusals that need no condition: the writer allow-list and append-only.
+    /// The refusals that need no condition: the writer allow-list and append-only (a `MERGE`
+    /// may only insert: its refusal waits for the touched files, [`Self::rewriter`]).
     fn check_table(&self) -> Result<(), KrishivError> {
         check_write(self.table.name(), &WriteProtocol::of(self.table.snapshot()))?;
+        if self.op == RowLevelOperation::Merge {
+            return Ok(());
+        }
         append_only_refusal(&self.table)
     }
 
@@ -249,7 +259,33 @@ impl RowLevelTable for DeltaRowLevel {
             .table_properties()
             .enable_change_data_feed
             == Some(true);
-        if cdf && whole_files.is_none() {
+        let merge = if request.op == RowLevelOperation::Merge {
+            let text = |key: &str| {
+                option(key)
+                    .cloned()
+                    .ok_or_else(|| internal(&format!("a Delta MERGE without {key}")))
+            };
+            if !touched.is_empty() {
+                // A MERGE that removes a file: refused where delta-spark refuses removes, and
+                // where it writes change data files (design section 6.2).
+                append_only_refusal(&self.table)?;
+                if cdf {
+                    return Err(cdf_refusal(
+                        &request.table_name,
+                        "MERGE INTO that changes or deletes rows",
+                    )
+                    .into());
+                }
+            }
+            Some(super::merge::MergeInfo::parse(
+                &text(super::merge::MERGE_COUNTS_OPTION)?,
+                &text(super::merge::MERGE_CLAUSES_OPTION)?,
+                &text(ROW_LEVEL_CONDITION_OPTION)?,
+            )?)
+        } else {
+            None
+        };
+        if cdf && whole_files.is_none() && merge.is_none() {
             let what = match request.op {
                 RowLevelOperation::Delete => "DELETE of rows (not of whole partitions)",
                 _ => "UPDATE",
@@ -264,7 +300,8 @@ impl RowLevelTable for DeltaRowLevel {
             condition,
             affected,
             scan_ms,
-            refuse_rows: cdf.then(|| request.table_name.clone()),
+            refuse_rows: (cdf && merge.is_none()).then(|| request.table_name.clone()),
+            merge,
             outcome: Arc::clone(&self.outcome),
         };
         Ok(row_level_sink(
@@ -279,6 +316,14 @@ impl RowLevelTable for DeltaRowLevel {
     /// not known.
     fn output(&self, counts: &RowLevelCounts) -> Option<RecordBatch> {
         let outcome = *self.outcome.lock().unwrap_or_else(PoisonError::into_inner);
+        if self.op == RowLevelOperation::Merge {
+            // delta-spark's four counts (`MergeIntoCommand.scala:78-82, 183-192`).
+            let (u, d, i) = match outcome.and_then(|o| o.merge) {
+                Some(m) => (m.updated, m.deleted, m.inserted),
+                None => (counts.updated, counts.deleted, counts.inserted),
+            };
+            return Some(merge_row(u, d, i));
+        }
         let n = match outcome {
             // Nothing was committed: no row matched.
             None => counts.affected,
@@ -300,6 +345,34 @@ fn affected_row(n: i64) -> RecordBatch {
         true,
     )]));
     RecordBatch::try_new(schema, vec![Arc::new(Int64Array::from(vec![n]))])
+        .unwrap_or_else(|_| RecordBatch::new_empty(Arc::new(Schema::empty())))
+}
+
+fn merge_row(updated: u64, deleted: u64, inserted: u64) -> RecordBatch {
+    let n = |v: u64| i64::try_from(v).unwrap_or(i64::MAX);
+    let names = [
+        "num_affected_rows",
+        "num_updated_rows",
+        "num_deleted_rows",
+        "num_inserted_rows",
+    ];
+    let values = [
+        n(updated.saturating_add(deleted).saturating_add(inserted)),
+        n(updated),
+        n(deleted),
+        n(inserted),
+    ];
+    let schema = Arc::new(Schema::new(
+        names
+            .iter()
+            .map(|c| Field::new(*c, ArrowType::Int64, true))
+            .collect::<Vec<_>>(),
+    ));
+    let columns: Vec<arrow_array::ArrayRef> = values
+        .iter()
+        .map(|v| Arc::new(Int64Array::from(vec![*v])) as arrow_array::ArrayRef)
+        .collect();
+    RecordBatch::try_new(schema, columns)
         .unwrap_or_else(|_| RecordBatch::new_empty(Arc::new(Schema::empty())))
 }
 
@@ -332,6 +405,8 @@ pub(crate) struct RowLevelPlan {
     /// A whole-file `DELETE` on a change-data-feed table: no row may be written (the table's
     /// name for the refusal).
     refuse_rows: Option<String>,
+    /// A `MERGE`'s counts and clauses.
+    merge: Option<super::merge::MergeInfo>,
     outcome: Arc<Mutex<Option<Outcome>>>,
 }
 
@@ -349,6 +424,7 @@ impl RowLevelPlan {
     fn operation(&self) -> CommitOperation {
         match self.op {
             RowLevelOperation::Update => CommitOperation::Update,
+            RowLevelOperation::Merge => CommitOperation::Merge,
             _ => CommitOperation::Delete,
         }
     }
@@ -517,6 +593,42 @@ pub(super) async fn stage(
         return Ok(None);
     }
     let rewrite_ms = millis(started.elapsed());
+    if let Some(info) = &plan.merge {
+        *plan.outcome.lock().unwrap_or_else(PoisonError::into_inner) = Some(Outcome {
+            removed_files: removed.files,
+            rows: None,
+            merge: Some(info.outcome(written.rows)),
+        });
+        let metrics = info.metrics(
+            written.rows,
+            written.files,
+            written.bytes,
+            removed.files,
+            removed.bytes,
+            plan.scan_ms,
+            rewrite_ms,
+        );
+        let mut read_set = ReadSet::default();
+        match &plan.read_predicate {
+            Some(p) => read_set.predicates.push(Arc::clone(p)),
+            None => read_set.whole_table = true,
+        }
+        read_set.files = removed.actions;
+        read_set.files.extend(also_read);
+        return Ok(Some(StagedCommit {
+            table: table.name().to_owned(),
+            write_id: write_id.to_owned(),
+            operation: plan.operation(),
+            operation_parameters: info.parameters(),
+            operation_metrics: metrics
+                .into_iter()
+                .map(|(k, v)| (k, Some(v.to_string())))
+                .collect(),
+            adds: written.adds,
+            removes,
+            read_set,
+        }));
+    }
     let mut metrics: Vec<(String, u64)> = Vec::new();
     let mut put = |k: &str, v: u64| metrics.push((k.to_owned(), v));
     put("numRemovedFiles", removed.files);
@@ -563,6 +675,7 @@ pub(super) async fn stage(
     *plan.outcome.lock().unwrap_or_else(PoisonError::into_inner) = Some(Outcome {
         removed_files: removed.files,
         rows: outcome_rows,
+        merge: None,
     });
     let mut read_set = ReadSet::default();
     match &plan.read_predicate {
