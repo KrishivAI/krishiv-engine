@@ -4,6 +4,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
+use std::os::fd::OwnedFd;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
@@ -21,6 +22,7 @@ use rustix::net::{AddressFamily, SocketFlags, SocketType};
 use rustix::process::{Resource, getrlimit};
 
 use crate::WORKER_SUBCOMMAND;
+use crate::calls::{CallThreads, Job};
 use crate::interpreter::{Interpreter, choose};
 use crate::package::{self, BootstrapLimits};
 use crate::worker::{Started, Worker};
@@ -170,6 +172,8 @@ pub(crate) struct Inner {
     package: package::Package,
     fd_limit: u64,
     spawner: Mutex<mpsc::Sender<SpawnRequest>>,
+    /// The threads calls run on (bounded; see [`crate::calls`]).
+    calls: CallThreads,
     /// The package and the workers' private directories; removed with the pool.
     root: tempfile::TempDir,
 }
@@ -251,6 +255,11 @@ impl Pool {
                 }
             })
             .map_err(|e| internal(format!("cannot start the UDF worker spawner: {e}")))?;
+        let calls = CallThreads::new(
+            config.max_total,
+            config.max_per_session,
+            config.idle_timeout,
+        );
         let inner = Arc::new(Inner {
             state: Mutex::new(State::default()),
             freed: Condvar::new(),
@@ -260,6 +269,7 @@ impl Pool {
             package,
             fd_limit,
             spawner: Mutex::new(sender),
+            calls,
             root,
         });
         start_reaper(Arc::downgrade(&inner));
@@ -313,13 +323,21 @@ impl Pool {
         drop(dropped);
     }
 
+    /// Runs `job`, a call of `owner`, on one of the pool's call threads (now, or when one is free).
+    pub(crate) fn submit(&self, owner: &Owner, job: Job) -> Result<(), KrishivError> {
+        self.inner
+            .calls
+            .submit(owner.clone(), job)
+            .map_err(internal)
+    }
+
     /// A worker of `owner` for a client on Python `python_ver`: an idle one of the same key, else a new one
-    /// within the caps, else waits for one. `cancelled` is polled while waiting.
+    /// within the caps, else waits for one. `watch` is polled while waiting, and told of a worker it starts.
     pub(crate) fn checkout(
         &self,
         owner: &Owner,
         python_ver: &str,
-        cancelled: &dyn Fn() -> bool,
+        watch: &dyn CallWatch,
     ) -> Result<Lease, KrishivError> {
         if let Some(refusal) = &self.inner.refusal {
             return Err(refusal.clone());
@@ -335,7 +353,7 @@ impl Pool {
         };
         let mut state = self.inner.lock();
         loop {
-            if cancelled() {
+            if watch.cancelled() {
                 return Err(OperationCanceled {}.into());
             }
             if let Some(idle) = state.idle.get_mut(&key).and_then(Vec::pop) {
@@ -347,7 +365,7 @@ impl Pool {
                     state.live += 1;
                     *state.per_owner.entry(owner.clone()).or_default() += 1;
                     drop(state);
-                    return match self.start(interpreter) {
+                    return match self.start(interpreter, watch) {
                         Ok(worker) => Ok(self.lease(key, worker)),
                         Err(e) => {
                             self.inner.lock().forget(owner);
@@ -391,8 +409,13 @@ impl Pool {
         }
     }
 
-    /// Starts one worker of `interpreter` and waits for its greeting.
-    fn start(&self, interpreter: &Interpreter) -> Result<Worker, KrishivError> {
+    /// Starts one worker of `interpreter` and waits for its greeting; `watch` gets its pidfd first, so a
+    /// cancel kills it rather than wait for the greeting.
+    fn start(
+        &self,
+        interpreter: &Interpreter,
+        watch: &dyn CallWatch,
+    ) -> Result<Worker, KrishivError> {
         let inner = &self.inner;
         let private_dir = tempfile::Builder::new()
             .prefix("w")
@@ -478,13 +501,25 @@ impl Pool {
                     interpreter.path.display()
                 ))
             })?;
-        Worker::handshake(Started {
-            child,
-            control: server_end,
-            private_dir,
-            sandboxed: config.sandbox,
-        })
+        Worker::handshake(
+            Started {
+                child,
+                control: server_end,
+                private_dir,
+                sandboxed: config.sandbox,
+            },
+            watch,
+        )
     }
+}
+
+/// What a call tells the pool while it waits for a worker or starts one.
+pub(crate) trait CallWatch {
+    /// The call was cancelled.
+    fn cancelled(&self) -> bool;
+    /// A worker is starting for the call and has `pidfd`: a cancel from now on kills it. False when the call
+    /// was already cancelled; the start is then abandoned (the worker killed and reaped).
+    fn starting(&self, pidfd: &Arc<OwnedFd>) -> bool;
 }
 
 impl Inner {

@@ -274,7 +274,8 @@ impl TableProviderResolver for MemoryTables {
     fn provider(&self, scan: &Scan) -> Result<Arc<dyn TableProvider>> {
         let ReadSource::Table { name, .. } = &scan.source else {
             return Err(KrishivUnsupportedFeature {
-                feature: "reading files by path from in-memory tables".to_owned(),
+                feature: "reading files by path or a local relation from in-memory tables"
+                    .to_owned(),
             }
             .into());
         };

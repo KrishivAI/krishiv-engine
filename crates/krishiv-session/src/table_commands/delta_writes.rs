@@ -55,11 +55,11 @@ pub(crate) enum DeltaTarget {
 
 /// The read of the Delta table at `path` (already qualified).
 pub(crate) fn delta_source(path: &str) -> ReadSource {
-    ReadSource::Files {
-        format: DELTA.to_owned(),
-        paths: vec![OptionValue::from_user("path", path)],
-        options: BTreeMap::new(),
-    }
+    ReadSource::files(
+        DELTA,
+        vec![OptionValue::from_user("path", path)],
+        BTreeMap::new(),
+    )
 }
 
 /// `name` as SQL text: a backquoted identifier.
@@ -274,12 +274,8 @@ impl Session {
         } else {
             &[krishiv_plan::analyzer::Privilege::Create]
         };
-        self.authorize_path(
-            std::path::Path::new(&qualified),
-            privileges,
-            krishiv_sql::StatementClass::Write,
-        )
-        .await?;
+        self.authorize_qualified_root(&qualified, privileges, krishiv_sql::StatementClass::Write)
+            .await?;
         // Every save mode creates a table where there is none.
         if !exists {
             return self

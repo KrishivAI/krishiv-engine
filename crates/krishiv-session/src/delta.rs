@@ -133,11 +133,7 @@ impl FileSchemaResolver for SessionFiles {
         #[cfg(feature = "delta")]
         if handles(format) {
             return Box::pin(async move {
-                let source = ReadSource::Files {
-                    format: DELTA.to_owned(),
-                    paths: paths.to_vec(),
-                    options: options.clone(),
-                };
+                let source = ReadSource::files(DELTA, paths.to_vec(), options.clone());
                 self.delta.columns(&source, None).await
             });
         }
