@@ -1106,7 +1106,12 @@ pub(super) fn finish_node(node: Node, field: &Field) -> FormatResult<ArrayRef> {
                 .zip(fields.iter())
                 .map(|(c, f)| finish_node(c, f))
                 .collect::<FormatResult<Vec<_>>>()?;
-            Arc::new(StructArray::new(fields.clone(), arrays, nulls.finish()))
+            // A record with no fields still has a length (`StructArray::new` panics for it).
+            let len = nulls.len();
+            Arc::new(
+                StructArray::try_new_with_length(fields.clone(), arrays, nulls.finish(), len)
+                    .map_err(|e| FormatError::Other(internal(format!("a struct column: {e}"))))?,
+            )
         }
         Node::List {
             item,

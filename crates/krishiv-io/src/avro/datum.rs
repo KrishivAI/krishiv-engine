@@ -98,6 +98,15 @@ impl DatumDecoder {
         })
     }
 
+    /// The same decoder with every nested field nullable, the form `from_avro`'s analyzed type has (a strict decode otherwise keeps
+    /// the schema's `NOT NULL` fields, which the declared column type does not).
+    #[must_use]
+    pub fn with_nullable_fields(mut self) -> Self {
+        let dt = nullable_type(self.field.data_type());
+        self.field = self.field.with_data_type(dt);
+        self
+    }
+
     /// The Arrow type of the decoded column.
     #[must_use]
     pub fn data_type(&self) -> &DataType {

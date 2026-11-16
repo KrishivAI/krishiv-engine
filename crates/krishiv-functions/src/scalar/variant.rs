@@ -212,6 +212,24 @@ fn variant_get(
     cast_values(&found, to, fail, &zone)
 }
 
+/// A `Decimal64` column as the same decimals on `Decimal128`; other columns as they are.
+fn widen_decimal64(a: ArrayRef) -> Result<ArrayRef, KrishivError> {
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::Decimal64Type;
+    use arrow_array::{Array, Decimal128Array};
+    let DataType::Decimal64(p, s) = a.data_type().clone() else {
+        return Ok(a);
+    };
+    let wide: Decimal128Array = a
+        .as_primitive::<Decimal64Type>()
+        .iter()
+        .map(|v| v.map(i128::from))
+        .collect::<Decimal128Array>()
+        .with_precision_and_scale(p, s)
+        .map_err(|e| super::args::internal(format!("a widened decimal: {e}")))?;
+    Ok(Arc::new(wide))
+}
+
 /// Binds the variant function `name`.
 pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyResult {
     let listed = listed(NAMES, name)?;
@@ -271,8 +289,15 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             };
             let opts = opts.clone();
             to.map(|to| {
-                Binding::new(to.to_arrow(), move |x: &Inputs<'_>| {
-                    variant_get(x, &path, &to, fail, name, &opts)
+                // Function results use the `Decimal128` carrier for every decimal (the analyzer's type), though the kernels
+                // build small decimals on `Decimal64`.
+                let declared = match to.to_arrow() {
+                    DataType::Decimal64(p, s) => DataType::Decimal128(p, s),
+                    other => other,
+                };
+                Binding::new(declared, move |x: &Inputs<'_>| {
+                    let out = variant_get(x, &path, &to, fail, name, &opts)?;
+                    widen_decimal64(out)
                 })
             })
         }

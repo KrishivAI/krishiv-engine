@@ -73,8 +73,14 @@ fn literal_string(arg: &BindArg) -> Result<Option<String>, KrishivError> {
 /// empty).
 fn options_of(arg: Option<&BindArg>) -> Result<BTreeMap<String, String>, KrishivError> {
     let mut out = BTreeMap::new();
-    let Some(BindArg::Literal(a)) = arg else {
+    let Some(arg) = arg else {
         return Ok(out);
+    };
+    let BindArg::Literal(a) = arg else {
+        // Not silently an empty map (that would read FAILFAST whatever the options say).
+        return Err(unsupported(
+            "from_avro options that are not a literal map".to_owned(),
+        ));
     };
     if a.is_null(0) || !matches!(a.data_type(), ArrowDataType::Map(..)) {
         return Ok(out);
@@ -128,7 +134,7 @@ fn from(args: &[BindArg]) -> Result<Binding, KrishivError> {
         Some(m) if m == "FAILFAST" => false,
         Some(m) if m == "DROPMALFORMED" => {
             return Err(ParseModeUnsupported {
-                func_name: "from_avro".to_owned(),
+                func_name: "`from_avro`".to_owned(),
                 mode: "DROPMALFORMED".to_owned(),
             }
             .into());
@@ -142,8 +148,9 @@ fn from(args: &[BindArg]) -> Result<Binding, KrishivError> {
     // decoder produces; a strict decode is cast to it.
     let lenient = DatumDecoder::new(&schema, None, true).map_err(|e| classified(e, "from_avro"))?;
     let target = lenient.data_type().clone();
-    let decoder =
-        DatumDecoder::new(&schema, None, permissive).map_err(|e| classified(e, "from_avro"))?;
+    let decoder = DatumDecoder::new(&schema, None, permissive)
+        .map_err(|e| classified(e, "from_avro"))?
+        .with_nullable_fields();
     Ok(Binding::new(target, move |x: &Inputs<'_>| {
         let col = x.column(0)?;
         let bin: BinaryArray = super::args::to_binary(col.as_ref())?;

@@ -250,7 +250,7 @@ fn put_scalar(
         (AvroSchema::Int, DataType::Int16) => {
             put_long(out, i64::from(prim::<t::Int16Type>(array, row)));
         }
-        (AvroSchema::Int | AvroSchema::Long, DataType::Int32) => {
+        (AvroSchema::Int, DataType::Int32) => {
             put_long(out, i64::from(prim::<t::Int32Type>(array, row)));
         }
         (AvroSchema::Long, DataType::Int64) => put_long(out, prim::<t::Int64Type>(array, row)),
@@ -263,9 +263,6 @@ fn put_scalar(
         (AvroSchema::Float, DataType::Float32) => {
             out.extend_from_slice(&prim::<t::Float32Type>(array, row).to_le_bytes());
         }
-        (AvroSchema::Double, DataType::Float32) => {
-            out.extend_from_slice(&f64::from(prim::<t::Float32Type>(array, row)).to_le_bytes());
-        }
         (AvroSchema::Double, DataType::Float64) => {
             out.extend_from_slice(&prim::<t::Float64Type>(array, row).to_le_bytes());
         }
@@ -277,9 +274,6 @@ fn put_scalar(
         }
         (AvroSchema::Bytes, DataType::LargeBinary) => {
             put_bytes(out, array.as_binary::<i64>().value(row));
-        }
-        (AvroSchema::Bytes, DataType::Utf8View) => {
-            put_bytes(out, array.as_string_view().value(row).as_bytes());
         }
         (AvroSchema::String, DataType::Utf8View | DataType::Utf8 | DataType::LargeUtf8) => {
             let s = str_at(array, row).ok_or_else(|| fail("string"))?;
@@ -673,9 +667,12 @@ mod tests {
         let one_f32: ArrayRef = Arc::new(arrow_array::Float32Array::from(vec![1.5]));
         assert!(cell_bytes(&parse(r#""int""#), &one_i8).is_ok());
         assert!(cell_bytes(&parse(r#""int""#), &one_i16).is_ok());
-        // A `float` column holds a `double`, widening as the readers do.
-        assert!(cell_bytes(&parse(r#""double""#), &one_f32).is_ok());
         assert!(cell_bytes(&parse(r#""float""#), &one_f32).is_ok());
+        // Spark's `AvroSerializer` never widens a SQL float to a double, or an int to a long (`IncompatibleSchemaException`).
+        assert!(cell_bytes(&parse(r#""double""#), &one_f32).is_err());
+        let one_i32: ArrayRef = Arc::new(arrow_array::Int32Array::from(vec![1]));
+        assert!(cell_bytes(&parse(r#""int""#), &one_i32).is_ok());
+        assert!(cell_bytes(&parse(r#""long""#), &one_i32).is_err());
     }
 
     #[test]
@@ -687,9 +684,9 @@ mod tests {
         assert!(cell_bytes(&bytes_schema, &binary).is_ok());
         assert!(cell_bytes(&bytes_schema, &large).is_ok());
         assert!(cell_bytes(&bytes_schema, &view).is_ok());
-        // `Utf8View` bytes are bytes too.
+        // A SQL string is not Avro bytes (`IncompatibleSchemaException` in Spark).
         let text: ArrayRef = Arc::new(StringViewArray::from(vec!["hi"]));
-        assert!(cell_bytes(&parse(r#""bytes""#), &text).is_ok());
+        assert!(cell_bytes(&parse(r#""bytes""#), &text).is_err());
         // A `string` column holds binary bytes that are UTF-8, nothing else.
         assert!(cell_bytes(&parse(r#""string""#), &text).is_ok());
         assert!(cell_bytes(&parse(r#""string""#), &view).is_ok());
