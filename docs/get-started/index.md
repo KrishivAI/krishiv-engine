@@ -77,3 +77,13 @@ assert plan.startswith("== Physical Plan (analyzed) ==")
   against the [compatibility data](../concepts/compatibility.md).
 - Trying it on sample data: the [notebooks and datasets](../guides/notebooks-and-datasets.md).
 - Running it somewhere other than your Python process: [deployment](../guides/deploy.md).
+
+## Supported platforms
+
+- **Python:** 3.11 or newer.
+- **Linux:** x86-64 and aarch64 with glibc 2.28 or newer (`manylinux_2_28`), and x86-64 on musl (`musllinux_1_2`,
+  for example Alpine).
+- **macOS:** arm64 (Apple silicon).
+- **Windows:** there is no Windows wheel; use WSL2 and install the Linux wheel.
+- **Older x86-64 CPUs** (no AVX2): install `krishiv-compat` instead of `krishiv`. It is the same package and imports
+  as `krishiv`; install one of the two, not both. It covers glibc Linux x86-64 only (no musl or arm64 build).

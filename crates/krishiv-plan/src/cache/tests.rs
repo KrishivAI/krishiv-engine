@@ -823,6 +823,7 @@ fn cache_keys_separate_principals_policies_and_pins() {
     let context = || crate::analyzer::ContextFingerprint {
         profile: crate::analyzer::SparkProfile::default(),
         conf: crate::analyzer::ResolutionConf::default(),
+        mode: crate::analyzer::AnalysisMode::default(),
         current: vec!["spark_catalog".to_owned(), "default".to_owned()],
         catalogs: 0,
         catalog_epochs: BTreeMap::new(),

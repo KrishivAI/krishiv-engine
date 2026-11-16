@@ -151,11 +151,17 @@ pub(super) fn evaluate(
     ansi: bool,
     zone: &krishiv_kernels::datetime::ZoneRef,
 ) -> Result<Vec<ArrayRef>> {
-    evaluate_with(plan, slices, ansi, false, zone, None, None)
+    evaluate_with(plan, slices, ansi, false, zone, None, None)?.map_err(|bytes| {
+        internal(format!(
+            "a window evaluation without UDFs refused {bytes} bytes"
+        ))
+    })
 }
 
 /// [`evaluate`] with the session's aggregate UDFs (ADR 0045), whose state is charged to
-/// `pool` as it grows.
+/// `pool` as it grows. `Ok(Err(bytes))`: the pool refused a UDF's state of `bytes` (the
+/// whole state, not only its last growth); nothing is evaluated and what was charged is
+/// released, so the caller may ask the driver for `bytes` and evaluate again.
 pub(super) fn evaluate_with(
     plan: &WindowPlan,
     slices: &[Slice<'_>],
@@ -163,8 +169,8 @@ pub(super) fn evaluate_with(
     legacy: bool,
     zone: &krishiv_kernels::datetime::ZoneRef,
     udafs: Option<&crate::aggregate::UdafEnv>,
-    mut pool: Option<&mut krishiv_memory::Reservation>,
-) -> Result<Vec<ArrayRef>> {
+    pool: Option<&mut krishiv_memory::Reservation>,
+) -> Result<std::result::Result<Vec<ArrayRef>, usize>> {
     let mut unit = Unit::new(slices)?;
     if has_range_offsets(plan)
         && let [key] = plan.order_by.as_slice()
@@ -179,18 +185,29 @@ pub(super) fn evaluate_with(
         )?;
     }
     let mut columns = Vec::with_capacity(plan.functions.len());
+    // The UDFs' states are charged as they grow, each on top of what the
+    // ones before held, and released with the evaluation: a refusal names
+    // the evaluation's whole need, and a retry's credit is not handed back
+    // to the pool between functions.
+    let mut charge = super::udaf::Charge::new(pool);
     for f in &plan.functions {
         columns.push(match &f.function {
             WindowFunction::Aggregate(a) if super::udaf::is_udf(a) => {
-                // A UDF's state is charged as it grows, and released with
-                // the function's evaluation.
-                let mut charge = super::udaf::Charge::with_slack(pool.as_deref_mut());
-                super::udaf::aggregate(a, f, &unit, ansi, udafs, &mut charge)?
+                charge.next_function();
+                match super::udaf::aggregate(a, f, &unit, ansi, udafs, &mut charge) {
+                    Ok(column) => column,
+                    Err(e) => {
+                        return match charge.refused() {
+                            Some(bytes) => Ok(Err(bytes)),
+                            None => Err(e),
+                        };
+                    }
+                }
             }
             _ => function(f, &unit, ansi, legacy)?,
         });
     }
-    Ok(columns)
+    Ok(Ok(columns))
 }
 
 /// Whether a function of `plan` has a `RANGE` frame with a value bound.

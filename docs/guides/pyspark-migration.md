@@ -144,6 +144,7 @@ Each row links to the full description in [known differences](../concepts/known-
 | --- |
 | [Error ordering between two raising expressions](../concepts/known-differences.md#error-ordering-between-two-raising-expressions) |
 | [Result cache, reproducible results (Krishiv extensions, off by default)](../concepts/known-differences.md#result-cache-reproducible-results-krishiv-extensions-off-by-default) |
+| [Writers leave a `_krishiv_log` directory](../concepts/known-differences.md#writers-leave-a-_krishiv_log-directory) |
 | [A malformed value of a Spark config key fails at `SET`](../concepts/known-differences.md#a-malformed-value-of-a-spark-config-key-fails-at-set) |
 | [`DISTRIBUTE BY` under a `LIMIT`, and partition numbers](../concepts/known-differences.md#distribute-by-under-a-limit-and-partition-numbers) |
 | [`TABLESAMPLE` rows follow the input's partitions](../concepts/known-differences.md#tablesample-rows-follow-the-inputs-partitions) |

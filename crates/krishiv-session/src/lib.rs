@@ -80,6 +80,7 @@ mod partition_keys;
 mod partitions;
 mod plan_round_trip;
 mod profile;
+mod profile_history;
 mod python_udfs;
 mod query_fold;
 mod recursion;
