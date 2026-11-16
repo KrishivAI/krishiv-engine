@@ -172,3 +172,27 @@ fn null_safe_equal_over_a_collated_column() {
         "false"
     );
 }
+
+/// S3 and S4 of the #493 review, each the answer of a real Spark 4.2.0 run: `nvl2` over a
+/// collated selector is named as written (no cast shown), and a written `CAST(.. AS STRING)`
+/// ends the inherited collation (the result is `UTF8_BINARY`, so `'a' LCASE` cast is not `'A'`).
+#[test]
+fn nvl2_name_and_cast_to_string_end_the_collation() {
+    let v = "(SELECT 'a' COLLATE utf8_lcase AS c) t";
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql(&format!("SELECT nvl2(c, 'x', 'y') FROM {v}"))).unwrap();
+    let batches = block_on(df.collect()).unwrap();
+    assert_eq!(batches[0].schema().field(0).name(), "nvl2(c, x, y)");
+    assert_eq!(
+        one(&format!(
+            "SELECT CAST(CAST(c AS STRING) = 'A' AS STRING) FROM {v}"
+        )),
+        "false"
+    );
+    assert_eq!(
+        one(&format!(
+            "SELECT collation(CAST(c AS STRING) || 'x') FROM {v}"
+        )),
+        "SYSTEM.BUILTIN.UTF8_BINARY"
+    );
+}
