@@ -6,8 +6,8 @@
 //! A NULL vector, element or degree is NULL, and a NULL vector is NULL
 //! before its degree is checked. The degree must be `1.0`, `2.0` or
 //! `float('inf')` (`INVALID_VECTOR_NORM_DEGREE` otherwise), and vectors of
-//! two dimensions do not combine (`VECTOR_DIMENSION_MISMATCH`). The sums run
-//! in `f32`, element by element, as Spark's do.
+//! two dimensions do not combine (`VECTOR_DIMENSION_MISMATCH`). The sums are
+//! `krishiv_kernels::vector`'s: blocks of 8 in `f32`, in Spark's order.
 
 use std::sync::Arc;
 

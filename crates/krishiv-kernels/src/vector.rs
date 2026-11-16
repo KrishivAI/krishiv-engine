@@ -56,6 +56,7 @@ fn sum1(v: &[f32], term: impl Fn(f32) -> f32) -> f32 {
 /// `vector_inner_product`: `0.0` for empty vectors.
 #[must_use]
 pub fn inner_product(a: &[f32], b: &[f32]) -> f32 {
+    debug_assert_eq!(a.len(), b.len());
     sum2(a, b, |x, y| x * y)
 }
 

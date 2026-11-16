@@ -249,3 +249,15 @@ fn only_float_vectors_bind() {
         }
     }
 }
+
+/// Spark checks the degree before it looks for a NULL element (`vectorNorm`), so a bad degree raises even over a
+/// vector with a NULL element; a NULL vector row is NULL first.
+#[test]
+fn a_bad_degree_raises_before_a_null_element_is_looked_for() {
+    let null_elem = vectors(&[Some(vec![Some(1.0), None])]);
+    let bad = floats(&[Some(3.0)]);
+    for name in ["vector_norm", "vector_normalize"] {
+        let (class, _) = error(name, &[&null_elem, &bad]);
+        assert_eq!(class, ErrorClass::InvalidVectorNormDegree, "{name}");
+    }
+}

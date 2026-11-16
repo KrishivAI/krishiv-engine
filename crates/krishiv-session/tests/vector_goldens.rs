@@ -117,7 +117,7 @@ fn check(name: &str, cell: &str, got: &Got, want: &Value, bad: &mut Vec<String>)
                 && state.as_deref() == want["sqlstate"].as_str()
                 && want["parameters"].as_object().is_some_and(|p| {
                     p.iter()
-                        .all(|(k, v)| text.contains(v.as_str().unwrap_or_default()) || k.is_empty())
+                        .all(|(_, v)| text.contains(v.as_str().unwrap_or_default()))
                 })
         }),
     };
