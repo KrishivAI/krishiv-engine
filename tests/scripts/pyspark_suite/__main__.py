@@ -9,6 +9,7 @@ from pathlib import Path
 
 from . import manifest as mf
 from .denominator import compute
+from .junit import oracle_skips
 from .report import dashboard, summarize, write_summary
 from .runner import check_pytest_timeout, run_file
 from .static_count import census
@@ -26,7 +27,8 @@ def cmd_static(a: argparse.Namespace) -> None:
     collected, skipped = census(_connect_dir(a.checkout))
     if not collected:
         raise SystemExit("static: no tests found; not overwriting the summary")
-    den, remaining = compute(a.version, collected, skipped, set(), mf.load(DATA / "manifest.toml"))
+    cond = oracle_skips(a.oracle_junit, a.version) if a.oracle_junit else None
+    den, remaining = compute(a.version, collected, skipped, set(), mf.load(DATA / "manifest.toml"), cond)
     path = write_summary(summarize(den, remaining, [], source="static"), DATA / "summary")
     print(json.dumps(den.as_dict(), indent=1))
     print(f"wrote {path}")
@@ -44,7 +46,8 @@ def cmd_run(a: argparse.Namespace) -> None:
     collected, skipped = census(connect)
     if not collected:
         raise SystemExit(f"run: no tests found under {connect}; not overwriting the summary")
-    den, remaining = compute(a.version, collected, skipped, set(), entries)
+    cond = oracle_skips(a.oracle_junit, a.version) if a.oracle_junit else None
+    den, remaining = compute(a.version, collected, skipped, set(), entries, cond)
     files = sorted({t.split("::", 1)[0] for t in remaining})
     if a.only:
         files = [f for f in files if any(f.startswith(o) for o in a.only)]
@@ -74,11 +77,17 @@ def main() -> None:
     s = sub.add_parser("static", help="ast census of a pinned checkout -> summary with 0 passed")
     s.add_argument("--version", required=True)
     s.add_argument("--checkout", type=Path, required=True, help="sparse checkout of the Spark tag")
+    s.add_argument(
+        "--oracle-junit", type=Path, help="dir of JUnit XML from a Spark oracle run: its skips leave the denominator"
+    )
     s.set_defaults(fn=cmd_static)
     u = sub.add_parser("run", help="run the suite per file against `--server-cmd` (CI sandbox only)")
     u.add_argument("--version", required=True)
     u.add_argument("--checkout", type=Path, required=True)
     u.add_argument("--port", type=int, default=15002)
+    u.add_argument(
+        "--oracle-junit", type=Path, help="dir of JUnit XML from a Spark oracle run: its skips leave the denominator"
+    )
     u.add_argument("--only", action="append", help="run only files starting with this path (repeatable)")
     u.add_argument("--server-cmd", nargs=argparse.REMAINDER, required=True, help="server command, last option")
     u.set_defaults(fn=cmd_run)
