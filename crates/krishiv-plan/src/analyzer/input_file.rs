@@ -139,6 +139,7 @@ pub(super) fn check(
         memo: HashMap::new(),
         counting: std::collections::HashSet::new(),
         cuts: 0,
+        kept: Vec::new(),
         bodies: std::collections::HashSet::new(),
     };
     c.walk(root)
@@ -168,7 +169,11 @@ struct Checker<'a> {
     /// The CTE definitions being counted (a recursive reference counts 0).
     counting: std::collections::HashSet<usize>,
     /// Recursive references cut so far: a count that cut one depends on what was being counted, so it is not kept.
+    /// A count with no cut never depends on `counting`: a definition is counted in the scope before it, so no
+    /// relation it reaches is counted while the definition itself is.
     cuts: u64,
+    /// The SQL table function bodies counted: kept alive so that the memo's addresses of their plans stay theirs.
+    kept: Vec<Arc<LogicalPlan>>,
     /// The SQL functions whose bodies were walked or are being searched, by routine name.
     bodies: std::collections::HashSet<String>,
 }
@@ -311,9 +316,11 @@ impl Checker<'_> {
                         let mut plans = Vec::new();
                         let _ = calls_in(&def.body, unresolved_call, &mut plans);
                         let plans: Vec<Arc<LogicalPlan>> = plans.into_iter().cloned().collect();
-                        plans
+                        let n = plans
                             .iter()
-                            .fold(0_u32, |n, q| n.saturating_add(self.sources(q, &[])))
+                            .fold(0_u32, |n, q| n.saturating_add(self.sources(q, &[])));
+                        self.kept.extend(plans);
+                        n
                     }
                     None => 0,
                 }
