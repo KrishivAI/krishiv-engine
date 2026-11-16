@@ -148,6 +148,15 @@ impl PrincipalTable {
         if name.is_empty() {
             return Err(invalid(key, name, "a principal name must not be empty"));
         }
+        // An empty segment or surrounding space is a typo, never a real principal: refuse it
+        // rather than let `expires` or `impersonates` silently miss the intended name.
+        if name.split('.').any(str::is_empty) || name.trim() != name {
+            return Err(invalid(
+                key,
+                name,
+                "a principal name has no empty dot segment and no surrounding spaces",
+            ));
+        }
         let entry = self.by_name.entry(name.to_owned()).or_default();
         match field {
             "privileges" => entry.privileges = parse_privileges(key, raw)?,

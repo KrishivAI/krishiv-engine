@@ -863,6 +863,56 @@ fn principal_names_may_contain_dots() {
     assert!(invalid_config(&err), "{err}");
     let err = config(&[("krishiv.auth.principals.expires", "2099-01-01")]).expect_err("no name");
     assert!(invalid_config(&err), "{err}");
+    // A typo'd name is refused, never kept as a separate principal.
+    for bad in [
+        "krishiv.auth.principals.etl..prod.expires",
+        "krishiv.auth.principals..etl.expires",
+        "krishiv.auth.principals.etl..expires",
+        "krishiv.auth.principals. etl.expires",
+    ] {
+        let err = config(&[(bad, "2099-01-01")]).expect_err(bad);
+        assert!(invalid_config(&err), "{bad}: {err}");
+    }
+}
+
+#[test]
+fn dotted_principal_names_never_collide() {
+    // `a.b` with field `privileges` and `a` with field `b.privileges` cannot be told apart by
+    // the key; the field is the last segment, so the key always means principal `a.b`.
+    let c = config(&[
+        ("krishiv.auth.principals.a.b.privileges", "impersonate"),
+        ("krishiv.auth.principals.a.b.impersonates", "alice"),
+        ("krishiv.auth.principals.a.expires", "2099-01-01"),
+    ])
+    .expect("valid");
+    assert!(
+        c.principals
+            .get("a.b")
+            .expect("a.b")
+            .may_impersonate("alice", &[])
+    );
+    assert!(
+        !c.principals
+            .get("a")
+            .expect("a")
+            .may_impersonate("alice", &[])
+    );
+    assert!(c.principals.get("a.b").expect("a.b").expires.is_none());
+    // A name that ends in a field word is still one name.
+    let c = config(&[(
+        "krishiv.auth.principals.x.privileges.privileges",
+        "impersonate",
+    )])
+    .expect("valid");
+    assert!(c.principals.get("x.privileges").is_some());
+    assert!(c.principals.get("x").is_none());
+    // Names compare exactly: a case twin gets no rights.
+    let c = config(&[
+        ("krishiv.auth.principals.ETL.privileges", "impersonate"),
+        ("krishiv.auth.principals.ETL.impersonates", "alice"),
+    ])
+    .expect("valid");
+    assert!(c.principals.get("etl").is_none());
 }
 
 #[test]
