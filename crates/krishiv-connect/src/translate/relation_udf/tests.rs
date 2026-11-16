@@ -6,18 +6,29 @@ use krishiv_plan::{PlanNode, PythonEvalType, PythonUdfRef};
 use krishiv_types::DataType;
 
 use super::super::testing::{attr, boxed, conf, fails, proto_type, read_table, relation};
-use super::super::{Result, translate_relation, translate_relation_with_relation_udfs};
-use super::{RelationUdf, RelationUdfHost};
+use super::super::{
+    PythonUdf, Result, UdfCallName, UdfHost, translate_relation, translate_relation_with,
+};
 use crate::proto::v4_3::{self as pb, data_type::Kind, relation::RelType};
 
-/// A host that names every UDF `f` at version 7 and records what it was sent.
+/// A host that names every relation UDF `f` at version 7, every inline call `session.inline<n>`, and
+/// records what it was sent.
 #[derive(Default)]
 struct Host {
-    seen: Vec<RelationUdf>,
+    seen: Vec<PythonUdf>,
+    inline: Vec<PythonUdf>,
 }
 
-impl RelationUdfHost for Host {
-    fn relation_python_udf(&mut self, udf: &RelationUdf) -> Result<PythonUdfRef> {
+impl UdfHost for Host {
+    fn inline_python_udf(&mut self, udf: &PythonUdf) -> Result<UdfCallName> {
+        self.inline.push(udf.clone());
+        Ok(UdfCallName {
+            qualifier: vec!["session".to_owned()],
+            name: format!("inline{}", self.inline.len()),
+        })
+    }
+
+    fn relation_python_udf(&mut self, udf: &PythonUdf) -> Result<PythonUdfRef> {
         self.seen.push(udf.clone());
         Ok(PythonUdfRef {
             name: "f".to_owned(),
@@ -95,7 +106,7 @@ fn cogroup(eval_type: i32) -> pb::CoGroupMap {
 
 fn with_host(r: &pb::Relation) -> (Result<krishiv_plan::Plan>, Host) {
     let mut host = Host::default();
-    let plan = translate_relation_with_relation_udfs(r, &conf(), &mut host);
+    let plan = translate_relation_with(r, &conf(), &mut host);
     (plan, host)
 }
 
@@ -454,4 +465,30 @@ fn the_determinism_and_name_reach_the_host() {
     assert!(!host.seen[0].deterministic);
     // The node carries the host's reference; the analyzer refuses it (krishiv-plan's tests).
     assert!(matches!(&plan.root().node, PlanNode::GroupMap { udf, .. } if !udf.deterministic));
+}
+
+#[test]
+fn a_plan_mixing_an_inline_udf_and_a_map_translates_with_one_host() {
+    // `df.select(my_udf(df.k).alias("k")).mapInPandas(f, schema)`: both UDFs go to the same host.
+    let call = pb::Expression {
+        common: None,
+        expr_type: Some(pb::expression::ExprType::CommonInlineUserDefinedFunction(
+            func(101, proto_type(Kind::Long(pb::data_type::Long::default()))),
+        )),
+    };
+    let project = relation(RelType::Project(Box::new(pb::Project {
+        input: boxed(read_table("t")),
+        expressions: vec![call],
+    })));
+    let mut m = map(205);
+    m.input = boxed(project);
+    let (plan, host) = ok(&relation(RelType::MapPartitions(Box::new(m))));
+    assert_eq!((host.inline.len(), host.seen.len()), (1, 1));
+    assert_eq!(host.inline[0].eval_type, 101);
+    assert_eq!(host.seen[0].eval_type, 205);
+    let PlanNode::MapPartitions { input, udf, .. } = &plan.root().node else {
+        panic!("{plan}")
+    };
+    assert_eq!(udf.version, 7);
+    assert!(input.to_string().contains("inline1"), "{input}");
 }

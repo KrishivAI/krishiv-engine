@@ -86,8 +86,6 @@ pub use udf::{
     Command, PythonUdf, SQL_BATCHED_UDF, UdfCallName, UdfHost, python_udf, translate_command,
 };
 
-pub use relation_udf::{RelationUdf, RelationUdfHost};
-
 use krishiv_common::error::{FailedToParseTooComplex, KrishivError};
 use krishiv_plan::{Expr, MAX_DEPTH, Plan};
 use std::sync::Arc;
@@ -193,28 +191,13 @@ pub fn translate_relation(relation: &pb::Relation, conf: &TranslateConf) -> Resu
     Plan::try_new(root)
 }
 
-/// [`translate_relation`] with the Python UDFs of the plan's relations (`MapPartitions`, `GroupMap`,
-/// `CoGroupMap`) sent to `udfs` (a server's session), which names the reference each one runs.
+/// [`translate_relation`] with the Python UDFs of the plan, inline calls and relations (`MapPartitions`,
+/// `GroupMap`, `CoGroupMap`), sent to `udfs` (a server's session), which names the function each call
+/// resolves to and the reference each relation runs.
 ///
 /// # Errors
-/// As [`translate_relation`], plus what `udfs` refuses and the refusals of the relation arms
-/// (`relation_udf`).
-pub fn translate_relation_with_relation_udfs(
-    relation: &pb::Relation,
-    conf: &TranslateConf,
-    udfs: &mut dyn RelationUdfHost,
-) -> Result<Plan> {
-    let mut t = Translator::new(conf);
-    t.relation_udfs = Some(udfs);
-    let root = t.relation(relation)?;
-    Plan::try_new(root)
-}
-
-/// [`translate_relation`] with the inline Python UDFs of the plan sent to `udfs` (a server's session),
-/// which names the function each call resolves to.
-///
-/// # Errors
-/// As [`translate_relation`], plus what `udfs` refuses and the errors of [`python_udf`].
+/// As [`translate_relation`], plus what `udfs` refuses, the errors of [`python_udf`] and the refusals of the
+/// relation arms (`relation_udf`).
 pub fn translate_relation_with(
     relation: &pb::Relation,
     conf: &TranslateConf,
@@ -238,9 +221,7 @@ pub fn translate_expression(
 /// The state of one translation.
 pub(crate) struct Translator<'c> {
     conf: &'c TranslateConf,
-    /// Where the Python UDFs of relations go; `None` refuses them.
-    relation_udfs: Option<&'c mut dyn RelationUdfHost>,
-    /// Where inline Python UDFs go; `None` refuses them.
+    /// Where Python UDFs (inline calls and relations) go; `None` refuses them.
     udfs: Option<&'c mut dyn UdfHost>,
     /// Relations and expressions being translated above the current one.
     depth: usize,
@@ -261,7 +242,6 @@ impl<'c> Translator<'c> {
     const fn new(conf: &'c TranslateConf) -> Self {
         Self {
             conf,
-            relation_udfs: None,
             udfs: None,
             depth: 0,
             nodes: 0,
@@ -280,6 +260,14 @@ impl<'c> Translator<'c> {
     fn inline_python_udf(&mut self, udf: &PythonUdf) -> Result<UdfCallName> {
         match self.udfs.as_deref_mut() {
             Some(host) => host.inline_python_udf(udf),
+            None => Err(udf::no_host()),
+        }
+    }
+
+    /// The reference the Python UDF `udf` of a relation runs as.
+    fn relation_python_udf(&mut self, udf: &PythonUdf) -> Result<krishiv_plan::PythonUdfRef> {
+        match self.udfs.as_deref_mut() {
+            Some(host) => host.relation_python_udf(udf),
             None => Err(udf::no_host()),
         }
     }

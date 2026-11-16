@@ -21,8 +21,9 @@
 //! `INVALID_ONE_OF_FIELD_NOT_SUPPORTED` (Krishiv runs no JVM code), an unset one `INVALID_ONE_OF_FIELD_NOT_SET`.
 //! The UDF's `output_type` must be a struct: its fields are the node's columns (Spark's `toAttributes`).
 //!
-//! The function itself is never run or stored here: the translator asks the [`RelationUdfHost`] the caller
-//! passes for the [`PythonUdfRef`] the plan names it by (the server registers the payload with the session's
+//! The function itself is never run or stored here: it is read into a [`PythonUdf`], and the translator asks
+//! the [`UdfHost`](super::UdfHost) the caller passes (the one inline calls use) for the [`PythonUdfRef`] the
+//! plan names it by (the server registers the payload with the session's
 //! workers under that name and version); without a host the relation is refused. The UDF's `arguments`
 //! (the DataFrame's columns, as PySpark sends them) are translated and dropped: the node passes every column
 //! of its input (`group_ops.py` L305), and Spark's cogroup ignores them too.
@@ -30,7 +31,6 @@
 //! The analyzer resolves these nodes (inputs, keys, output ids) and refuses a nondeterministic grouped or
 //! cogrouped map there, as Spark's `CheckAnalysis` does.
 
-use std::fmt;
 use std::sync::Arc;
 
 use krishiv_common::error::ConnectInvalidPlanFunctionEvalTypeNotSupported;
@@ -39,60 +39,9 @@ use krishiv_types::DataType;
 
 use super::errors::{assertion, not_set, unsupported, unsupported_field, unsupported_variant};
 use super::types::data_type;
-use super::{Result, Translator};
+use super::{PythonUdf, Result, Translator};
 use crate::proto::v4_3 as pb;
 use crate::proto::v4_3::common_inline_user_defined_function::Function;
-
-/// A Python UDF a relation runs (`MapPartitions`, `GroupMap`, `CoGroupMap`), as the plan carries it.
-#[derive(Clone, PartialEq, Eq)]
-pub struct RelationUdf {
-    /// `function_name`.
-    pub name: String,
-    /// `deterministic`.
-    pub deterministic: bool,
-    /// Spark's eval type as sent: what the worker is told.
-    pub eval_type: i32,
-    /// The same eval type as the plan names it.
-    pub plan_eval_type: PythonEvalType,
-    /// `output_type`: a struct, the relation's columns.
-    pub return_type: DataType,
-    /// `command`: the cloudpickled `(func, return_type)`, client code the engine never unpickles.
-    pub command: Vec<u8>,
-    /// `python_ver`: the client's Python `major.minor`.
-    pub python_ver: String,
-}
-
-impl fmt::Debug for RelationUdf {
-    // No payload bytes: the command is client code, and its size is what matters in a log.
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RelationUdf")
-            .field("name", &self.name)
-            .field("deterministic", &self.deterministic)
-            .field("eval_type", &self.eval_type)
-            .field("plan_eval_type", &self.plan_eval_type)
-            .field("return_type", &self.return_type)
-            .field("command_len", &self.command.len())
-            .field("python_ver", &self.python_ver)
-            .finish()
-    }
-}
-
-/// Where the translator sends the Python UDFs of a plan's relations: the server, which owns the session and
-/// its UDF workers. Called once per relation, in plan order.
-pub trait RelationUdfHost: Send {
-    /// The reference the plan names `udf` by. A host that runs nothing (analysis) still answers, so a plan
-    /// can be typed; one that will run the plan records `udf` so it can register it once the plan's
-    /// privileges are checked.
-    ///
-    /// # Errors
-    /// Whatever the host refuses (no UDF runtime, too many UDFs).
-    fn relation_python_udf(&mut self, udf: &RelationUdf) -> Result<PythonUdfRef>;
-}
-
-/// A relation's UDF without a host.
-fn no_host() -> krishiv_common::error::KrishivError {
-    unsupported("Python UDF relations outside a Spark Connect server (spark.connect.PythonUDF)")
-}
 
 /// The `transformWithState` eval types (`SQL_TRANSFORM_WITH_STATE_*`, 211-214), which a `GroupMap` may carry.
 const TRANSFORM_WITH_STATE: [i32; 4] = [211, 212, 213, 214];
@@ -295,10 +244,7 @@ impl Translator<'_> {
                 nullable: f.nullable(),
             })
             .collect();
-        let reference = match self.relation_udfs.as_deref_mut() {
-            Some(host) => host.relation_python_udf(&udf)?,
-            None => return Err(no_host()),
-        };
+        let reference = self.relation_python_udf(&udf)?;
         Ok(Translated {
             udf: reference,
             output,
@@ -325,7 +271,7 @@ fn relation_udf(
     fun: &pb::CommonInlineUserDefinedFunction,
     stateful: bool,
     accept: impl Fn(i32) -> Option<PythonEvalType>,
-) -> Result<RelationUdf> {
+) -> Result<PythonUdf> {
     const PARENT: &str = "spark.connect.CommonInlineUserDefinedFunction";
     let udf = match &fun.function {
         Some(Function::PythonUdf(udf)) => udf,
@@ -354,7 +300,7 @@ fn relation_udf(
         .into());
     };
     let return_type = data_type(udf.output_type.as_ref().unwrap_or(&pb::DataType::default()))?;
-    Ok(RelationUdf {
+    Ok(PythonUdf {
         name: fun.function_name.clone(),
         deterministic: fun.deterministic,
         eval_type: code,
