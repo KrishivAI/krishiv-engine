@@ -25,8 +25,8 @@ use tokio_rustls::server::TlsStream;
 /// The longest a connection may take from accept to a finished TLS handshake.
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Serves `app` on `listener` over TLS with `config` (the ALPN list is set to `http/1.1`: the
-/// admin server speaks HTTP/1.1 only; the certificate resolver is shared, so a reload of the
+/// Serves `app` on `listener` over TLS with `config` (the ALPN list is `http/1.1`, and with the
+/// `admin-api` feature also `h2`, which gRPC clients need for `krishiv.admin.v1`; the certificate resolver is shared, so a reload of the
 /// server's TLS material reaches new handshakes here too), at most `max_connections` open at
 /// once (a connection in its handshake holds a slot), until `shutdown` resolves.
 ///
@@ -40,7 +40,11 @@ pub async fn serve_capped_tls(
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> io::Result<()> {
     let mut config = config.clone();
-    config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    config.alpn_protocols = if cfg!(feature = "admin-api") {
+        vec![b"h2".to_vec(), b"http/1.1".to_vec()]
+    } else {
+        vec![b"http/1.1".to_vec()]
+    };
     let local = listener.local_addr()?;
     let permits = Arc::new(Semaphore::new(
         max_connections.clamp(1, Semaphore::MAX_PERMITS),

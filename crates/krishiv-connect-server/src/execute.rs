@@ -45,8 +45,10 @@
 pub mod arrow;
 #[cfg(test)]
 pub(crate) mod hooks;
+pub mod observed;
 pub mod schema;
 
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::sync::Arc;
 
@@ -334,16 +336,22 @@ pub async fn execute_plan(
             let df = session.from_plan_with(&logical, query_options)?;
             let schema = df.schema().await?;
             let schema_response = schema::proto_schema(&schema)?;
-            Ok((df, schema, schema_response))
+            Ok((
+                df,
+                schema,
+                schema_response,
+                observed::plan_ids(logical.root()),
+            ))
         })
         .await;
-        let ((df, schema, schema_response), registered) =
+        let ((df, schema, schema_response, plan_ids), registered) =
             settle_preparation(&op, registered, prepared)?;
         let query = Query {
             df,
             schema,
             schema_response,
             settings: encode_settings(&conf, limits, opts.chunking),
+            plan_ids,
         };
         (Work::Query(Box::new(query)), registered)
     };
@@ -731,6 +739,8 @@ struct Query {
     schema: SchemaRef,
     schema_response: pb::DataType,
     settings: EncodeSettings,
+    /// The observed nodes' plan ids by observation name (`observed::plan_ids`).
+    plan_ids: BTreeMap<String, i64>,
 }
 
 impl Work {
@@ -743,6 +753,7 @@ impl Work {
                     &q.schema,
                     q.schema_response.clone(),
                     &q.settings,
+                    &q.plan_ids,
                 )
                 .await
             }
@@ -846,7 +857,10 @@ async fn produce(
     schema: &SchemaRef,
     schema_response: pb::DataType,
     settings: &EncodeSettings,
+    plan_ids: &BTreeMap<String, i64>,
 ) -> Result<(), Stop> {
+    let sink = krishiv_session::ObservedSink::new();
+    let df = &df.with_observed_sink(&sink);
     sender.admit().await?;
     let mut first = sender.response(None);
     first.schema = Some(schema_response);
@@ -874,6 +888,29 @@ async fn produce(
     // metrics (a follow-up); until then the list is empty.
     metrics.metrics = Some(Metrics::default());
     sender.send(metrics).await?;
+    // The observed nodes' metrics follow the SQL metrics, all in one response as Spark sends
+    // them; a query that ended in an error never gets here, so it sends none.
+    // An observation whose metrics failed to finalize, or have no literal yet, fails the action
+    // (Spark: the metric's error is the action's), after the others' metrics were sent.
+    let mut all = Vec::new();
+    let mut failed = None;
+    for (name, row) in sink.take().unwrap_or_default() {
+        let plan_id = plan_ids.get(&name).copied().unwrap_or(0);
+        match row.and_then(|row| observed::observed_metrics(&name, plan_id, &row)) {
+            Ok(metrics) => all.push(metrics),
+            Err(e) => {
+                failed.get_or_insert(e);
+            }
+        }
+    }
+    if !all.is_empty() {
+        let mut response = sender.response(None);
+        response.observed_metrics = all;
+        sender.send(response).await?;
+    }
+    if let Some(e) = failed {
+        return Err(e.into());
+    }
     complete(sender).await
 }
 

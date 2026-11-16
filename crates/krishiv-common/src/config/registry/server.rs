@@ -351,3 +351,15 @@ pub static SERVER_METRICS_PUBLIC: ConfigEntry = startup(
      address; aggregate counters only.",
     None,
 );
+
+/// Extra host names the admin listener accepts on a loopback address.
+pub static SERVER_ALLOWED_HOSTS: ConfigEntry = startup(
+    "krishiv.server.allowedHosts",
+    ValueType::String,
+    ConfigValue::String(std::borrow::Cow::Borrowed("")),
+    "Comma-separated host names (or IP literals) the admin listener accepts in the `Host` header \
+     when it is bound to a loopback address, besides `localhost`, `127.0.0.1` and `[::1]`. A \
+     request with any other `Host` is refused with 421, which stops a web page from reaching the \
+     admin API through DNS rebinding. Unset: only the loopback names.",
+    None,
+);
