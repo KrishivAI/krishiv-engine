@@ -25,9 +25,17 @@ Paths are relative to this crate.
 - `src/relation.rs` the relation kinds (PR-26c-2: map 205/207, grouped map 201/209/215/216, cogrouped map 206/210,
   grouped aggregate 202/217/252/254): `prepare_relation` checks the payload's eval type, `open` starts one task per
   driver on a call thread that holds one worker for the task (wire `task`: frames on the worker's `want`, results
-  as they come, `done`); `send`/`next` are two bounded channels; dropping the task cancels it
+  as they come, `done`); `send`/`next` are two bounded channels (`send` resolves once the thread took the frame);
+  dropping the task cancels it; a thread that ends without `done` or a failure (a panic, a job dropped unrun) is
+  `INTERNAL_ERROR` (`Ending`), never a clean end; a `want` after `end` is a protocol break. `PoolSlots`: the
+  session's relation slots, the call sites' capacity hint (design P3-T085 §3.3a)
+- `src/validate.rs` Spark 4.1+'s result-schema check of the map kinds under
+  `spark.sql.execution.arrow.pyspark.validateSchema.enabled` (`ARROW_TYPE_MISMATCH`, compatible nullability)
 - `src/calls.rs` `CallThreads`: the bounded call threads (at most `maxTotal` threads, at most `maxPerSession`
-  running calls per owner; the rest wait in a FIFO queue, not on a thread)
+  running calls per owner; the rest wait in a FIFO queue, not on a thread), and the relation task slots: at most
+  `maxPerSession - 1` per owner (all of them when it is 1), taken all at once or waited for with a waker
+  (`take_slots`, never queued), a task with its slot submitted ahead of the queue (`submit_task`); with
+  `maxPerSession` 1 a scalar call beside an open task is `KRISHIV_PYTHON_WORKER_LIMIT`
 - `src/interpreter.rs` the startup record of each listed interpreter (version, read paths, packages) and `choose`;
   the inspection runs in a process group of its own, its output read while it runs (capped, under the timeout)
 - `src/package.rs` the embedded worker package and the `-c` bootstrap
@@ -55,7 +63,20 @@ Paths are relative to this crate.
   flatbuffer headers, bodies and buffers in bounds, **no compression**: arrow-ipc 60 allocates a compressed
   buffer's declared length up front, so a 16 KiB stream could abort the server), then decoded by `arrow-ipc`'s
   validating `StreamDecoder`, whose columns are slices of that buffer (no second copy), and checked for one column of the declared type, one batch and the input's row count (a relation task's result: one batch with the declared schema's types, given the declared schema). Worker
-  output is untrusted; fuzz target `fuzz/fuzz_targets/udf_result_ipc.rs` runs `decode_result` nightly.
+  output is untrusted; fuzz target `fuzz/fuzz_targets/udf_result_ipc.rs` runs `decode_result` and `decode_batch`
+  nightly.
+- **No relation task waits behind its owner's own tasks** (design P3-T085 §3.3a, review 2026-11-16 finding 1): a
+  task holds a worker while idle in `want`, so a queued one could hang its driver. The operator takes a slot per
+  lane at once (`PoolSlots`) or waits holding none; a scalar call of the owner always has a worker left (the
+  reserve), or with `maxPerSession` 1 fails fast. Tests: `calls.rs`, `relation.rs` unit tests, `tests/relations.rs`
+  `*_beside_an_open_task_*`.
+- **Memory outside the operator's accounting** (as on the scalar path): a frame's memfd copy while the worker reads
+  it, and up to two decoded result batches per task (one in the channel, one the thread waits to hand over).
+- **Divergence: map-kind results unlike the declared schema.** With
+  `spark.sql.execution.arrow.pyspark.validateSchema.enabled` off (Spark's default; 3.5 and 4.0 have no such
+  setting) Spark does not check a `mapInPandas`/`mapInArrow` result's types; the pool refuses it with
+  `PYTHON_EXCEPTION` (and a null in a non-nullable declared column). Recorded in `docs/concepts/known-differences.md`.
+  No Spark golden backs either form yet (the build host has no Spark).
 - Every worker is started by the one `krishiv-udf-spawner` thread (the parent-death signal follows the starting
   thread), never in a process group of its own. Every signal goes through the worker's **pidfd** (opened before
   the child can be reaped), never a pid, so a late kill (a cancel racing the worker's own exit, or `Drop` after

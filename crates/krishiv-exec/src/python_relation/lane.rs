@@ -32,20 +32,28 @@
 //! only by a peer with strictly fewer rows, so the holds form no cycle.
 //! Only an aggregate's lanes are peers ([`Lane::group`]): a map or grouped
 //! shape's results are stored one lane at a time.
+//!
+//! **Wakers.** A pump may be polled by several futures in turn: its
+//! driver's `Blocked` future, another driver's (which keeps a combined
+//! driver's pumps moving while it waits for their tasks' slots, design
+//! P3-T085 §3.3a) and `finalize`. A task keeps only the last waker it was
+//! polled with, so the pump is polled with a waker of its own that wakes
+//! every future that polled it since its last wake ([`Lane::poll`]): none
+//! is lost when another polls the pump after it.
 
 use std::collections::VecDeque;
 use std::future::poll_fn;
 use std::sync::Arc;
-use std::task::{Context, Poll, Waker};
+use std::task::{Context, Poll, Wake, Waker};
 
 use arrow_array::RecordBatch;
 use futures::future::BoxFuture;
 use krishiv_common::error::KrishivError;
 use krishiv_memory::Reservation;
 
-use super::{Frame, PreparedRelationUdf, UdfTask};
+use super::{Frame, PreparedRelationUdf, RelationSlot, UdfTask};
 use crate::error::Result;
-use crate::sync::{Mutex, lock};
+use crate::sync::{Mutex, lock, register, wake_all};
 
 /// A reservation shared by everything that keeps its buffers alive (the
 /// slices of one input batch), freed with the last of them.
@@ -123,11 +131,29 @@ enum Pump {
     Done(Result<()>),
 }
 
+/// The futures that polled a pump since its last wake, woken together.
+struct Pollers(Mutex<Vec<Waker>>);
+
+impl Wake for Pollers {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        let wakers = std::mem::take(&mut *lock(&self.0));
+        wake_all(wakers);
+    }
+}
+
 /// One lane of one driver.
 #[derive(Clone)]
 pub(super) struct Lane {
     pub(super) io: Arc<Mutex<LaneIo>>,
     pump: Arc<Mutex<Pump>>,
+    /// Who polled the pump since its last wake.
+    pollers: Arc<Pollers>,
+    /// The waker the pump is polled with: wakes every one of `pollers`.
+    waker: Waker,
     /// Every lane's queues of the driver, this one's at `index`.
     peers: Peers,
     index: usize,
@@ -166,21 +192,30 @@ impl Lane {
         peers
             .iter()
             .enumerate()
-            .map(|(index, io)| Self {
-                io: Arc::clone(io),
-                pump: Arc::new(Mutex::new(Pump::Idle)),
-                peers: Arc::clone(&peers),
-                index,
+            .map(|(index, io)| {
+                let pollers = Arc::new(Pollers(Mutex::new(Vec::new())));
+                Self {
+                    io: Arc::clone(io),
+                    pump: Arc::new(Mutex::new(Pump::Idle)),
+                    waker: Waker::from(Arc::clone(&pollers)),
+                    pollers,
+                    peers: Arc::clone(&peers),
+                    index,
+                }
             })
             .collect()
     }
 
     /// Polls the pump; its outcome once it ended (`None` while it runs or
-    /// before the task opened).
+    /// before the task opened). `cx` is woken when the pump can move, even
+    /// if another future polls the pump after this one.
     pub(super) fn poll(&self, cx: &mut Context<'_>) -> Option<Result<()>> {
         let mut p = lock(&self.pump);
+        if matches!(*p, Pump::Running(_)) {
+            register(&mut lock(&self.pollers.0), cx.waker());
+        }
         if let Pump::Running(f) = &mut *p
-            && let Poll::Ready(r) = f.as_mut().poll(cx)
+            && let Poll::Ready(r) = f.as_mut().poll(&mut Context::from_waker(&self.waker))
         {
             *p = Pump::Done(r);
         }
@@ -199,17 +234,19 @@ impl Lane {
         matches!(*lock(&self.pump), Pump::Idle | Pump::Done(Ok(())))
     }
 
-    /// Queues `frame`, opening the task first if it is not.
+    /// Queues `frame`, opening the task first if it is not, in `slot` (the
+    /// lane's slot of the driver's admission, `admit.rs`).
     pub(super) fn queue(
         &self,
         udf: &dyn PreparedRelationUdf,
         frame: Frame,
         memory: FrameMem,
+        slot: Option<RelationSlot>,
     ) -> Result<()> {
         {
             let mut p = lock(&self.pump);
             if matches!(*p, Pump::Idle) {
-                let task = udf.open()?;
+                let task = udf.open(slot)?;
                 *p = Pump::Running(pump(task, Arc::clone(&self.peers), self.index));
             }
         }

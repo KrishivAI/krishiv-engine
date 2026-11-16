@@ -42,8 +42,11 @@
 //!
 //! [`UdfRuntime::prepare_relation`]: crate::python_eval::UdfRuntime::prepare_relation
 
+use std::any::Any;
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
@@ -53,6 +56,7 @@ use krishiv_types::DataType;
 
 use crate::error::Result;
 
+mod admit;
 mod lane;
 mod pair;
 pub(crate) mod sink;
@@ -139,9 +143,64 @@ pub enum Frame {
 pub trait PreparedRelationUdf: Send + Sync {
     /// One task per driver: the frames in, the result batches out.
     ///
+    /// `slot` is one slot of a grant of [`Self::capacity`]'s slots (`None`
+    /// when that is `None`); the task holds it until it ends, so a runtime
+    /// whose tasks hold a scarce resource for their whole life (a worker
+    /// process) never starts one behind its own tasks.
+    ///
     /// # Errors
     /// What the runtime raises starting it.
-    fn open(&self) -> Result<Box<dyn UdfTask>>;
+    fn open(&self, slot: Option<RelationSlot>) -> Result<Box<dyn UdfTask>>;
+
+    /// The capacity hint (design P3-T085 §3.3a): the slots every task of
+    /// this call site needs one of, shared with the runtime's other call
+    /// sites of the session; `None` when tasks are not bounded.
+    ///
+    /// A driver opens all its lanes' tasks at once, so it takes one slot per
+    /// lane together ([`RelationSlots::poll_take`]), or parks until slots
+    /// free: a task that waits for a slot while its peers wait for frames
+    /// would hang the driver.
+    fn capacity(&self) -> Option<Arc<dyn RelationSlots>> {
+        None
+    }
+}
+
+/// The slots of a runtime whose relation tasks are bounded (the pool's
+/// workers of one session).
+pub trait RelationSlots: Send + Sync {
+    /// The most tasks that can be open at once.
+    fn limit(&self) -> usize;
+
+    /// `n` slots at once, or none: `Pending` (the waker registered, woken
+    /// when slots free) while fewer are free.
+    ///
+    /// # Errors
+    /// When `n` is over [`Self::limit`]: the driver could never start, so it
+    /// fails with a classed error naming the setting that bounds it.
+    fn poll_take(&self, n: usize, cx: &mut Context<'_>) -> Poll<Result<Vec<RelationSlot>>>;
+}
+
+/// One slot of a [`RelationSlots`] grant: what the runtime frees (and wakes
+/// waiters on) when it is dropped. Opaque to the operator.
+pub struct RelationSlot(Box<dyn Any + Send + Sync>);
+
+impl RelationSlot {
+    /// A slot holding `inner`, which frees the slot when it drops.
+    pub fn new(inner: impl Any + Send + Sync) -> Self {
+        Self(Box::new(inner))
+    }
+
+    /// What [`Self::new`] was given, for the runtime that made it.
+    #[must_use]
+    pub fn into_inner(self) -> Box<dyn Any + Send + Sync> {
+        self.0
+    }
+}
+
+impl fmt::Debug for RelationSlot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("RelationSlot")
+    }
 }
 
 /// A running relation call. The two methods may be awaited at once (the
@@ -155,6 +214,8 @@ pub trait PreparedRelationUdf: Send + Sync {
 /// its own, so a runtime must not call back into the operator from them.
 pub trait UdfTask: Send + Sync {
     /// Queues `frame`; waits while the task's bounded input window is full.
+    /// A task that ended well before the frame (its UDF stopped reading)
+    /// drops it.
     ///
     /// # Errors
     /// The task's failure (a Python error, a crashed worker).
@@ -174,5 +235,7 @@ impl fmt::Debug for dyn UdfTask {
     }
 }
 
+#[cfg(test)]
+mod slot_tests;
 #[cfg(test)]
 mod tests;

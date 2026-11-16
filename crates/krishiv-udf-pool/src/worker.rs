@@ -17,7 +17,7 @@ use arrow_array::{ArrayRef, RecordBatch};
 use arrow_buffer::Buffer;
 use arrow_ipc::reader::StreamDecoder;
 use arrow_ipc::writer::StreamWriter;
-use arrow_schema::{DataType, SchemaRef};
+use arrow_schema::{DataType, Schema, SchemaRef};
 use krishiv_common::error::{
     InternalError, KrishivError, KrishivPythonWorkerExited, OperationCanceled, PythonException,
 };
@@ -27,6 +27,7 @@ use rustix::process::{Pid, PidfdFlags, Signal};
 use serde_json::{Value, json};
 
 use crate::pool::CallWatch;
+use crate::validate::SchemaCheck;
 use crate::wire::{self, Message};
 
 /// How long a new worker may take to import its packages and greet the server.
@@ -297,6 +298,7 @@ impl Worker {
     pub(crate) fn task_event(
         &mut self,
         schema: &SchemaRef,
+        check: Option<&SchemaCheck>,
         max_result: u64,
     ) -> Result<TaskEvent, KrishivError> {
         let mut msg = match wire::recv(self.control.as_fd()) {
@@ -324,7 +326,7 @@ impl Worker {
                 let bytes = wire::read_untrusted(fd, len, max_result)
                     .map_err(|e| self.protocol(&e.to_string()))?;
                 // The task stops at a refused result, so the worker is out of step: never reused.
-                decode_batch(bytes, schema)
+                decode_checked(bytes, schema, check)
                     .map(TaskEvent::Result)
                     .inspect_err(|_| self.healthy = false)
             }
@@ -402,6 +404,11 @@ impl Worker {
             traceback: msg.str_field("message").to_owned(),
         }
         .into()
+    }
+
+    /// The worker broke the task protocol as `what` says (a `want` after `end`): it is killed and not reused.
+    pub(crate) fn broke(&mut self, what: &str) -> KrishivError {
+        self.protocol(what)
     }
 
     /// The worker broke the protocol (code in it wrote to its control socket, or sent a result it then
@@ -591,17 +598,37 @@ pub fn decode_result(
 
 /// A relation task's result batch, decoded as [`decode_result`] decodes a scalar result: framing checked,
 /// arrow-ipc's validating decoder, one batch, and a column of each of `schema`'s types, in order. The batch
-/// gets `schema` (its names and nullability; a null in a non-nullable column is refused).
-pub(crate) fn decode_batch(
+/// gets `schema` (its names and nullability; a null in a non-nullable column is refused). Public for the
+/// `udf_result_ipc` fuzz target only, so hidden from the documentation; not a supported interface.
+///
+/// # Errors
+/// Anything but a well-formed, uncompressed stream of one batch of that schema's types.
+#[doc(hidden)]
+pub fn decode_batch(
     bytes: impl Into<Buffer>,
     schema: &SchemaRef,
 ) -> Result<RecordBatch, KrishivError> {
+    decode_checked(bytes.into(), schema, None)
+}
+
+/// [`decode_batch`], the stream's schema first passed through Spark's map-kind check when the session turned
+/// it on (`ARROW_TYPE_MISMATCH` before the stricter checks).
+fn decode_checked(
+    bytes: Buffer,
+    schema: &SchemaRef,
+    check: Option<&SchemaCheck>,
+) -> Result<RecordBatch, KrishivError> {
+    if let Some(check) = check
+        && let Some(actual) = stream_schema(bytes.as_slice())?
+    {
+        check.check(&actual)?;
+    }
     let types: Vec<DataType> = schema
         .fields()
         .iter()
         .map(|f| f.data_type().clone())
         .collect();
-    let batch = decode_stream(bytes.into(), &types)?;
+    let batch = decode_stream(bytes, &types)?;
     let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
     RecordBatch::try_new_with_options(Arc::clone(schema), batch.columns().to_vec(), &options)
         .map_err(|e| invalid(format!("a result unlike the declared schema: {e}")))
@@ -618,18 +645,26 @@ fn invalid(detail: String) -> KrishivError {
 
 /// The one batch of the stream in `bytes`, whose columns have `types`: the schema checked from the first
 /// message's header before any batch is decoded (review 2026-11-14 m5).
+/// The schema the stream in `bytes` starts with (its framing checked first); `None` for an empty stream.
+fn stream_schema(bytes: &[u8]) -> Result<Option<Schema>, KrishivError> {
+    let first = check_frames(bytes).map_err(invalid)?;
+    let Some(header) = bytes.get(8..first) else {
+        return Ok(None);
+    };
+    let message = arrow_ipc::root_as_message(header)
+        .map_err(|e| invalid(format!("an invalid message header: {e}")))?;
+    let Some(schema) = message.header_as_schema() else {
+        return Err(invalid(
+            "the stream does not start with a schema".to_owned(),
+        ));
+    };
+    arrow_ipc::convert::try_fb_to_schema(schema)
+        .map(Some)
+        .map_err(|e| invalid(format!("an unreadable schema: {e}")))
+}
+
 fn decode_stream(mut bytes: Buffer, types: &[DataType]) -> Result<RecordBatch, KrishivError> {
-    let first = check_frames(bytes.as_slice()).map_err(invalid)?;
-    if let Some(header) = bytes.as_slice().get(8..first) {
-        let message = arrow_ipc::root_as_message(header)
-            .map_err(|e| invalid(format!("an invalid message header: {e}")))?;
-        let Some(schema) = message.header_as_schema() else {
-            return Err(invalid(
-                "the stream does not start with a schema".to_owned(),
-            ));
-        };
-        let schema = arrow_ipc::convert::try_fb_to_schema(schema)
-            .map_err(|e| invalid(format!("an unreadable schema: {e}")))?;
+    if let Some(schema) = stream_schema(bytes.as_slice())? {
         if schema.fields().len() != types.len() {
             return Err(invalid(format!(
                 "{} columns, expected {}",

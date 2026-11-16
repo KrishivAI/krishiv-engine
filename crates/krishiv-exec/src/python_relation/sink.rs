@@ -54,6 +54,15 @@
 //! has frames to take (`lane.rs`, Peers). A stored result's bytes pass to the store's
 //! reservation through the consumer's credit, never counted twice.
 //!
+//! **Slots.** A runtime whose tasks are bounded (the worker pool) gives a
+//! capacity hint; a driver opens its lanes' tasks together once it holds a
+//! slot for each, or stays `Blocked` until slots free, and a driver needing
+//! more than the runtime ever has fails at once (`admit.rs`). A driver that
+//! combined still holds its tasks' slots until they end, so while a driver
+//! waits for slots its `Blocked` future also polls the combined drivers'
+//! pumps: their `End` frames go out and their results come in before
+//! `finalize`, and their slots free (design P3-T085 §3.3a).
+//!
 //! **Errors and cancellation.** The first failure of a task fails the
 //! query. Dropping the state (query end, cancel, error) drops every task,
 //! which cancels it, and every reservation.
@@ -62,7 +71,7 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::future::poll_fn;
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, Wake, Waker};
 
 use arrow_array::{Array, ArrayRef, RecordBatch, RecordBatchOptions};
 use arrow_row::OwnedRow;
@@ -73,6 +82,7 @@ use krishiv_common::error::{KrishivError, KrishivPythonUdfResultMismatch};
 use krishiv_memory::{ConsumerHandle, Reservation, SpillScope};
 use krishiv_types::batch::Batch;
 
+use super::admit::poll_admit;
 use super::lane::{FrameMem, Lane, SharedMem};
 use super::pair::{self, Pending};
 use super::{Frame, PreparedRelationUdf};
@@ -81,7 +91,7 @@ use crate::error::{Result, internal};
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus};
 use crate::operators::{KeyEncoder, ScalarExpr, SortKey, global_ref, local_mut};
 use crate::shared::SharedSink;
-use crate::sync::{Mutex, lock};
+use crate::sync::{AtomicBool, Mutex, Ordering, lock, register, wake_all};
 
 /// How a relation node's input reaches its tasks.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -325,6 +335,41 @@ struct Driver {
     wants: usize,
     /// An aggregate's groups waiting for their values.
     pending: Pending,
+    /// In `finalize`, the backlog waits for the runtime's slots.
+    awaiting_slots: bool,
+    /// The waker `finalize` frames with: it marks the driver woken when its
+    /// slots free, so `wait` returns.
+    slot_wake: Arc<SlotWake>,
+}
+
+/// The waker of a driver's framing in `finalize`.
+struct SlotWake {
+    woken: AtomicBool,
+    /// The waker of `finalize`'s current wait.
+    waker: Mutex<Option<Waker>>,
+}
+
+impl SlotWake {
+    fn new() -> Self {
+        Self {
+            woken: AtomicBool::new(false),
+            waker: Mutex::new(None),
+        }
+    }
+}
+
+impl Wake for SlotWake {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.woken.store(true, Ordering::SeqCst);
+        let waker = lock(&self.waker).clone();
+        if let Some(w) = waker {
+            w.wake();
+        }
+    }
 }
 
 /// A driver's backlog, shared with its `Blocked` future.
@@ -344,6 +389,9 @@ enum Flushed {
     Window,
     /// The next frame's copies need this many more bytes.
     Memory(usize),
+    /// The lanes' tasks wait for the runtime's slots (the context's waker
+    /// is woken when slots free).
+    Slots,
 }
 
 /// One driver's sink state.
@@ -358,6 +406,19 @@ struct RelLocal {
 struct RelGlobal {
     store: GlobalState,
     leftover: Mutex<Vec<Driver>>,
+    /// The lanes of the drivers that combined, polled by a driver waiting
+    /// for slots (their tasks hold them until they end).
+    combined: Arc<Mutex<Combined>>,
+}
+
+/// The drivers that combined, as the drivers waiting for slots see them.
+#[derive(Default)]
+struct Combined {
+    /// Their lanes.
+    lanes: Vec<Lane>,
+    /// The `Blocked` futures waiting for slots, woken when a driver
+    /// combines (its lanes are theirs to poll from then on).
+    parked: Vec<Waker>,
 }
 
 /// A run of input rows within one group and side.
@@ -672,7 +733,7 @@ impl RelationSink {
 
     /// Frames the driver's backlog as [`flush_feed`] does; the failure of
     /// a `Blocked` future's framing first.
-    fn flush(&self, d: &mut Driver) -> Result<Flushed> {
+    fn flush(&self, d: &mut Driver, cx: &mut Context<'_>) -> Result<Flushed> {
         let mut feed = lock(&d.feed);
         if let Some(e) = feed.failed.take() {
             return Err(e);
@@ -684,7 +745,23 @@ impl RelationSink {
             &d.lanes,
             &mut feed.backlog,
             &mut d.spare,
+            cx,
         )
+    }
+
+    /// [`Self::flush`] from `sink` or `combine`, which wait for nothing: a
+    /// backlog waiting for slots makes `sink` return `Blocked`, whose
+    /// future frames it with a waker.
+    fn flush_now(&self, d: &mut Driver) -> Result<Flushed> {
+        self.flush(d, &mut Context::from_waker(noop_waker_ref()))
+    }
+
+    /// [`Self::flush`] in `finalize`, with the driver's slot waker.
+    fn flush_finalizing(&self, d: &mut Driver) -> Result<Flushed> {
+        let waker = Waker::from(Arc::clone(&d.slot_wake));
+        let flushed = self.flush(d, &mut Context::from_waker(&waker))?;
+        d.awaiting_slots = matches!(flushed, Flushed::Slots);
+        Ok(flushed)
     }
 
     /// A task's batch as an output batch: its columns checked against the
@@ -895,7 +972,8 @@ fn lend(parts: Vec<Reservation>, handle: &Arc<ConsumerHandle>, bytes: usize) -> 
 
 /// Frames `backlog` into `lanes` while every lane's window has room, the
 /// copies reserved in `spare`. Nothing changes for a frame whose copies the
-/// pool refuses.
+/// pool refuses, nor for one whose lanes' tasks wait for slots (`cx` is
+/// woken when slots free).
 fn flush_feed(
     specs: &[RelationLane],
     window: usize,
@@ -903,6 +981,7 @@ fn flush_feed(
     lanes: &[Lane],
     backlog: &mut VecDeque<Cut>,
     spare: &mut Reservation,
+    cx: &mut Context<'_>,
 ) -> Result<Flushed> {
     loop {
         if lanes.iter().any(|l| lock(&l.io).in_flight() >= window) {
@@ -931,22 +1010,36 @@ fn flush_feed(
                 if more > 0 && spare.try_grow(more).is_err() {
                     return Ok(Flushed::Memory(more));
                 }
+                let Some(mut slots) = admitted(specs, lanes, cx)? else {
+                    return Ok(Flushed::Slots);
+                };
                 let Some(Cut::Rows { memory, .. }) = backlog.pop_front() else {
                     return Err(internal("the Python UDF backlog changed".to_owned()));
                 };
-                for ((lane, state), (frame, copied)) in specs.iter().zip(lanes).zip(frames) {
+                for (((lane, state), (frame, copied)), slot) in
+                    specs.iter().zip(lanes).zip(frames).zip(&mut slots)
+                {
                     let memory = FrameMem {
                         _shared: memory.clone(),
                         _own: spare.split(copied),
                     };
-                    state.queue(lane.udf.as_ref(), frame, memory)?;
+                    state.queue(lane.udf.as_ref(), frame, memory, slot.take())?;
                 }
             }
             Cut::EndGroup | Cut::End => {
                 let end = matches!(cut, Cut::End);
+                // A task never opened (no rows) gets no `End`; an `EndGroup`
+                // opens one, as rows do.
+                let mut slots = if end {
+                    Vec::new()
+                } else {
+                    let Some(slots) = admitted(specs, lanes, cx)? else {
+                        return Ok(Flushed::Slots);
+                    };
+                    slots
+                };
                 backlog.pop_front();
-                for (lane, state) in specs.iter().zip(lanes) {
-                    // A task never opened (no rows) gets no `End`.
+                for (i, (lane, state)) in specs.iter().zip(lanes).enumerate() {
                     if end && !state.opened() {
                         continue;
                     }
@@ -955,10 +1048,27 @@ fn flush_feed(
                         _shared: Vec::new(),
                         _own: spare.split(0),
                     };
-                    state.queue(lane.udf.as_ref(), frame, memory)?;
+                    let slot = slots.get_mut(i).and_then(Option::take);
+                    state.queue(lane.udf.as_ref(), frame, memory, slot)?;
                 }
             }
         }
+    }
+}
+
+/// One slot per lane when a lane's task is not open yet (all of them at
+/// once, `admit.rs`), else none per lane; `None` while they wait for slots.
+fn admitted(
+    specs: &[RelationLane],
+    lanes: &[Lane],
+    cx: &mut Context<'_>,
+) -> Result<Option<Vec<Option<super::RelationSlot>>>> {
+    if lanes.iter().all(Lane::opened) {
+        return Ok(Some(specs.iter().map(|_| None).collect()));
+    }
+    match poll_admit(specs, cx) {
+        Poll::Ready(slots) => slots.map(Some),
+        Poll::Pending => Ok(None),
     }
 }
 
@@ -1138,7 +1248,9 @@ fn fresh_bytes(data: &arrow_data::ArrayData, input: &[(usize, usize)]) -> usize 
 /// backlog is empty and every lane's window has room; or early when a
 /// lane ended (its failure is the next call's), a result waits for memory,
 /// a frame's copies need memory or framing failed (the next call asks for
-/// the memory or returns the failure).
+/// the memory or returns the failure). While the lanes' tasks wait for
+/// slots it polls the `combined` drivers' lanes, whose tasks hold slots
+/// until they end.
 fn blocked(
     specs: Arc<[RelationLane]>,
     lanes: Vec<Lane>,
@@ -1146,6 +1258,7 @@ fn blocked(
     mut spare: Reservation,
     window: usize,
     partition: u32,
+    combined: Arc<Mutex<Combined>>,
 ) -> BoxFuture<'static, ()> {
     Box::pin(poll_fn(move |cx| {
         loop {
@@ -1166,12 +1279,28 @@ fn blocked(
                 &lanes,
                 &mut f.backlog,
                 &mut spare,
+                cx,
             ) {
                 Err(e) => {
                     f.failed = Some(e);
                     return Poll::Ready(());
                 }
                 Ok(Flushed::Memory(_)) => return Poll::Ready(()),
+                Ok(Flushed::Slots) => {
+                    drop(f);
+                    // Their `End` frames out and results in, so their tasks
+                    // end and free the slots this driver waits for (a
+                    // failure is `finalize`'s to report).
+                    let others = {
+                        let mut c = lock(&combined);
+                        register(&mut c.parked, cx.waker());
+                        c.lanes.clone()
+                    };
+                    for lane in &others {
+                        let _ = lane.poll(cx);
+                    }
+                    return Poll::Pending;
+                }
                 Ok(Flushed::All | Flushed::Window) => {
                     let (moved, empty) = (f.backlog.len() < before, f.backlog.is_empty());
                     drop(f);
@@ -1200,6 +1329,7 @@ impl Sink for RelationSink {
         Ok(Arc::new(RelGlobal {
             store: self.store.global_state(ctx)?,
             leftover: Mutex::new(Vec::new()),
+            combined: Arc::new(Mutex::new(Combined::default())),
         }))
     }
 
@@ -1231,6 +1361,8 @@ impl Sink for RelationSink {
                 spare: consumer.reservation(),
                 wants: 0,
                 pending: Pending::default(),
+                awaiting_slots: false,
+                slot_wake: Arc::new(SlotWake::new()),
             },
         }))
     }
@@ -1248,7 +1380,7 @@ impl Sink for RelationSink {
         if let Some(status) = self.store_results(l, g)? {
             return Ok(status);
         }
-        if let Flushed::Memory(bytes) = self.flush(&mut l.driver)? {
+        if let Flushed::Memory(bytes) = self.flush_now(&mut l.driver)? {
             return Ok(SinkStatus::NeedMemory { bytes });
         }
         if input.num_rows() > 0 {
@@ -1256,7 +1388,7 @@ impl Sink for RelationSink {
                 return Ok(status);
             }
             // A refusal here waits for the next call, which asks for it.
-            self.flush(&mut l.driver)?;
+            self.flush_now(&mut l.driver)?;
             Self::progress(&l.driver)?;
         }
         // Blocked while cuts wait or a window is full: the future frames
@@ -1274,6 +1406,7 @@ impl Sink for RelationSink {
                 d.spare.split(0),
                 self.window,
                 d.partition,
+                Arc::clone(&g.combined),
             )));
         }
         Ok(SinkStatus::NeedMoreInput)
@@ -1295,8 +1428,14 @@ impl Sink for RelationSink {
             self.cut_held(&mut driver, true)?;
         }
         lock(&driver.feed).backlog.push_back(Cut::End);
-        self.flush(&mut driver)?;
+        self.flush_now(&mut driver)?;
         Self::progress(&driver)?;
+        let parked = {
+            let mut c = lock(&g.combined);
+            c.lanes.extend(driver.lanes.iter().cloned());
+            std::mem::take(&mut c.parked)
+        };
+        wake_all(parked);
         lock(&g.leftover).push(driver);
         self.store.combine(store, &g.store)
     }
@@ -1366,7 +1505,7 @@ impl RelationSink {
     /// is done: no backlog, every task ended, every result stored (an
     /// aggregate's values left over are `check_complete`'s error).
     async fn finish_step(&self, d: &mut Driver, g: &RelGlobal, ctx: &TaskContext) -> Result<bool> {
-        d.wants = wanted(self.flush(d)?);
+        d.wants = wanted(self.flush_finalizing(d)?);
         let mut batches = Vec::new();
         let mut held = Vec::new();
         if let Some((batch, memory)) = d.ready.take() {
@@ -1414,7 +1553,7 @@ impl RelationSink {
             }
         }
         if d.wants > 0 {
-            d.wants = wanted(self.flush(d)?);
+            d.wants = wanted(self.flush_finalizing(d)?);
         }
         if aggregate {
             // The stored results' memory is free again; a value still
@@ -1432,8 +1571,8 @@ impl RelationSink {
 
     /// Waits until a driver can move: a lane yielded (for an aggregate:
     /// every lane, as `pair::joined` needs, or a refused value got its
-    /// memory), failed, ended or freed room in its window for a backlog; or
-    /// the query was cancelled.
+    /// memory), failed, ended or freed room in its window for a backlog, or
+    /// the slots its backlog waits for freed; or the query was cancelled.
     async fn wait(&self, drivers: &[Driver], ctx: &TaskContext) -> Result<()> {
         let aggregate = matches!(self.shape, RelationShape::Aggregate { .. });
         let mut reserving: Vec<BoxFuture<'static, Result<()>>> = if aggregate {
@@ -1457,6 +1596,10 @@ impl RelationSink {
             let mut ready = false;
             let mut all_done = true;
             for d in drivers {
+                *lock(&d.slot_wake.waker) = Some(cx.waker().clone());
+                if d.slot_wake.woken.swap(false, Ordering::SeqCst) {
+                    ready = true;
+                }
                 let mut room = true;
                 let mut joinable = aggregate;
                 for lane in &d.lanes {
@@ -1475,7 +1618,7 @@ impl RelationSink {
                     room &= q.in_flight() < self.window;
                 }
                 let backlog = !lock(&d.feed).backlog.is_empty();
-                ready |= joinable || (room && backlog);
+                ready |= joinable || (room && backlog && !d.awaiting_slots);
                 all_done &= !backlog && d.ready.is_none();
             }
             if ready || all_done {
@@ -1492,7 +1635,7 @@ impl RelationSink {
 fn wanted(flushed: Flushed) -> usize {
     match flushed {
         Flushed::Memory(bytes) => bytes,
-        Flushed::All | Flushed::Window => 0,
+        Flushed::All | Flushed::Window | Flushed::Slots => 0,
     }
 }
 

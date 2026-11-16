@@ -14,6 +14,7 @@
     reason = "the skip note when no interpreter is configured; test helpers sit outside #[test] fns"
 )]
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -61,7 +62,13 @@ fn python() -> Option<PathBuf> {
 }
 
 fn pool(python: &Path) -> Pool {
+    pool_of(python, 8)
+}
+
+/// A pool whose sessions run at most `max_per_session` workers.
+fn pool_of(python: &Path, max_per_session: usize) -> Pool {
     let mut config = PoolConfig::default();
+    config.max_per_session = max_per_session;
     config.executables = vec![python.display().to_string()];
     config.launcher = Launcher {
         program: std::env::current_exe().expect("test binary"),
@@ -138,6 +145,16 @@ fn prepare(
     payload: PythonPayload,
     call: &Call,
 ) -> Result<Arc<dyn krishiv_exec::python_relation::PreparedRelationUdf>, KrishivError> {
+    prepare_with(udfs, payload, call, BTreeMap::new())
+}
+
+/// As [`prepare`], the plan's runner conf holding `settings`.
+fn prepare_with(
+    udfs: &SessionUdfs,
+    payload: PythonPayload,
+    call: &Call,
+    settings: BTreeMap<String, String>,
+) -> Result<Arc<dyn krishiv_exec::python_relation::PreparedRelationUdf>, KrishivError> {
     static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let name = format!(
         "r{}",
@@ -172,6 +189,7 @@ fn prepare(
         output_arrow,
         conf: RunnerConf {
             max_records_per_batch: 10_000,
+            settings,
             ..RunnerConf::default()
         },
     };
@@ -183,7 +201,7 @@ fn run(
     prepared: &dyn krishiv_exec::python_relation::PreparedRelationUdf,
     frames: Vec<Frame>,
 ) -> Result<Vec<RecordBatch>, KrishivError> {
-    let task = prepared.open()?;
+    let task = prepared.open(None)?;
     drive(task.as_ref(), frames)
 }
 
@@ -657,7 +675,7 @@ fn a_cancel_mid_group_kills_the_worker_within_1s() {
     let mut call = grouped_call(PythonEvalType::GroupedMapPandas);
     call.output = vec![col("k", DataType::Long), col("v", DataType::Long)];
     let prepared = prepare(&udfs, payload, &call).expect("prepare");
-    let task = prepared.open().expect("open");
+    let task = prepared.open(None).expect("open");
     let mut frames = grouped_frames().into_iter();
     // The first group, whole: the UDF then sleeps in it.
     for frame in frames.by_ref().take(3) {
@@ -699,4 +717,196 @@ fn a_scalar_payload_is_not_a_relation() {
         .expect("refused");
     assert_eq!(err.error_class(), ErrorClass::InternalError, "{err}");
     assert_eq!(pool.live_workers(), 0, "refused before any worker starts");
+}
+
+/// Runs `f` on a thread of its own and gives its result, or fails the test after `deadline`: a hang fails
+/// rather than stalls the run.
+fn within<T: Send + 'static>(deadline: Duration, f: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx.recv_timeout(deadline).expect("hung past the deadline")
+}
+
+/// With `spark.sql.execution.arrow.pyspark.validateSchema.enabled` a `mapInArrow` result of another type is
+/// Spark 4.1+'s `ARROW_TYPE_MISMATCH` (`MapInBatchEvaluatorFactory.scala` L81-91 at v4.2.0), with Spark's
+/// parameters; a non-nullable result column fits a nullable declared one.
+#[test]
+fn map_in_arrow_under_validate_schema_raises_arrow_type_mismatch() {
+    let Some(py) = python() else { return };
+    let pool = pool(&py);
+    let udfs = udfs(&pool);
+    let on = BTreeMap::from([(
+        "krishiv.sql.execution.arrow.pyspark.validateSchema.enabled".to_owned(),
+        "true".to_owned(),
+    )]);
+    let wrong = command(
+        &py,
+        "import pyarrow as pa\ndef f(it):\n    for b in it:\n        \
+         yield pa.RecordBatch.from_pydict({'s': [1], 'v': [2]})",
+        MAP_RESULT,
+        207,
+    );
+    let prepared = prepare_with(
+        &udfs,
+        wrong,
+        &map_call(PythonEvalType::MapArrowIter),
+        on.clone(),
+    )
+    .expect("prepare");
+    let err = run(prepared.as_ref(), map_frames()).expect_err("wrong type");
+    assert_eq!(err.error_class(), ErrorClass::ArrowTypeMismatch, "{err}");
+    assert_eq!(
+        err.message(),
+        "Invalid schema from SQL_MAP_ARROW_ITER_UDF: expected \
+         StructType(StructField(s,StringType,true),StructField(v,LongType,true)), got \
+         StructType(StructField(s,LongType,true),StructField(v,LongType,true))."
+    );
+    let strict = command(
+        &py,
+        "import pyarrow as pa\ndef f(it):\n    for b in it:\n        \
+         s = pa.schema([pa.field('s', pa.string(), nullable=False), pa.field('v', pa.int64(), nullable=False)])\n        \
+         yield pa.RecordBatch.from_arrays([b.column('s'), b.column('id')], schema=s)",
+        MAP_RESULT,
+        207,
+    );
+    let prepared =
+        prepare_with(&udfs, strict, &map_call(PythonEvalType::MapArrowIter), on).expect("prepare");
+    let out = run(prepared.as_ref(), map_frames()).expect("compatible nullability");
+    assert_eq!(rows(&out), ["a|1", "b|2", "c|3"]);
+}
+
+/// A UDF that stops reading before the last frame ends the task; the frames still sent are dropped, and
+/// `send` does not fail for them.
+#[test]
+fn map_in_arrow_done_before_the_end_drops_the_frames_left() {
+    let Some(py) = python() else { return };
+    let pool = pool(&py);
+    let udfs = udfs(&pool);
+    let first = command(
+        &py,
+        "import pyarrow as pa\ndef f(it):\n    b = next(it)\n    \
+         yield pa.RecordBatch.from_arrays([b.column('s'), b.column('id')], ['s', 'v'])",
+        MAP_RESULT,
+        207,
+    );
+    let prepared = prepare(&udfs, first, &map_call(PythonEvalType::MapArrowIter)).expect("prepare");
+    let mut frames = map_frames();
+    frames.insert(
+        1,
+        batch(0, vec![("id", longs(&[9])), ("s", strings(&["z"]))]),
+    );
+    let out = within(Duration::from_secs(60), move || {
+        run(prepared.as_ref(), frames)
+    })
+    .expect("done before the end");
+    assert_eq!(rows(&out), ["a|1", "b|2"]);
+    assert_eq!(pool.live_workers(), 1, "the worker ended well and is kept");
+}
+
+/// A task dropped before its first frame starts no worker, or stops it at once.
+#[test]
+fn a_task_dropped_before_its_first_frame_holds_no_worker() {
+    let Some(py) = python() else { return };
+    let pool = pool(&py);
+    let udfs = udfs(&pool);
+    let payload = command(&py, "def f(it):\n    yield from it", MAP_RESULT, 205);
+    let prepared =
+        prepare(&udfs, payload, &map_call(PythonEvalType::MapPandasIter)).expect("prepare");
+    drop(prepared.open(None).expect("open"));
+    let started = Instant::now();
+    while pool.live_workers() > 0 && started.elapsed() < Duration::from_secs(30) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(pool.live_workers(), 0);
+    // The slot is free again: a second task opens and runs.
+    let out = within(Duration::from_secs(60), move || {
+        run(
+            prepared.as_ref(),
+            vec![
+                batch(0, vec![("s", strings(&["x"])), ("v", longs(&[1]))]),
+                Frame::End,
+            ],
+        )
+    })
+    .expect("a new task runs");
+    assert_eq!(rows(&out), ["x|1"]);
+}
+
+/// `maxPerSession` 2: a relation task holds one worker while it waits for frames, and a scalar UDF call of the
+/// same session (a `PythonEval` below the relation operator) still runs on the other.
+#[test]
+fn a_scalar_call_beside_an_open_task_runs_on_the_reserved_worker() {
+    let Some(py) = python() else { return };
+    let pool = pool_of(&py, 2);
+    let udfs = Arc::new(udfs(&pool));
+    let payload = command(&py, "def f(it):\n    yield from it", MAP_RESULT, 205);
+    let prepared =
+        prepare(&udfs, payload, &map_call(PythonEvalType::MapPandasIter)).expect("prepare");
+    let task = prepared.open(None).expect("open");
+    block_on(task.send(batch(0, vec![("s", strings(&["x"])), ("v", longs(&[1]))]))).expect("send");
+    let scalar = command(&py, "def f(x):\n    return x + 1", "LongType()", 101);
+    udfs.register("plus", 1, scalar);
+    let calls = Arc::clone(&udfs);
+    let out = within(Duration::from_secs(60), move || {
+        let prepared = calls.prepare(&krishiv_exec::python_eval::UdfCallSpec {
+            name: "plus".to_owned(),
+            version: 1,
+            eval_type: PythonEvalType::ArrowBatched,
+            thread_safe: true,
+            arg_types: vec![DataType::Long],
+            return_type: DataType::Long,
+            return_arrow: ArrowType::Int64,
+        })?;
+        let args = RecordBatch::try_from_iter([("a", longs(&[1, 2]))]).expect("args");
+        block_on(prepared.call(args))
+    })
+    .expect("the scalar call ran");
+    assert_eq!(out.len(), 2);
+    let rest = drive(task.as_ref(), vec![Frame::End]).expect("the task ends");
+    assert_eq!(rows(&rest), ["x|1"]);
+}
+
+/// `maxPerSession` 1: the one worker is the task's, so a scalar call beside it fails at once, naming the
+/// setting, instead of waiting for a task that may wait for it.
+#[test]
+fn with_one_worker_a_scalar_call_beside_an_open_task_fails_fast() {
+    let Some(py) = python() else { return };
+    let pool = pool_of(&py, 1);
+    let udfs = Arc::new(udfs(&pool));
+    let payload = command(&py, "def f(it):\n    yield from it", MAP_RESULT, 205);
+    let prepared =
+        prepare(&udfs, payload, &map_call(PythonEvalType::MapPandasIter)).expect("prepare");
+    let task = prepared.open(None).expect("open");
+    let scalar = command(&py, "def f(x):\n    return x + 1", "LongType()", 101);
+    udfs.register("plus", 1, scalar);
+    let calls = Arc::clone(&udfs);
+    let err = within(Duration::from_secs(30), move || {
+        let prepared = calls.prepare(&krishiv_exec::python_eval::UdfCallSpec {
+            name: "plus".to_owned(),
+            version: 1,
+            eval_type: PythonEvalType::ArrowBatched,
+            thread_safe: true,
+            arg_types: vec![DataType::Long],
+            return_type: DataType::Long,
+            return_arrow: ArrowType::Int64,
+        })?;
+        let args = RecordBatch::try_from_iter([("a", longs(&[1]))]).expect("args");
+        block_on(prepared.call(args))
+    })
+    .expect_err("refused");
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::KrishivPythonWorkerLimit,
+        "{err}"
+    );
+    assert!(
+        err.to_string()
+            .contains("krishiv.python.worker.maxPerSession"),
+        "{err}"
+    );
+    // A second task of the session would block: it is not queued behind the first.
+    assert!(prepared.open(None).is_err(), "no second slot");
+    drop(task);
 }

@@ -32,6 +32,8 @@ mod relation;
 #[cfg(target_os = "linux")]
 mod runtime;
 #[cfg(target_os = "linux")]
+mod validate;
+#[cfg(target_os = "linux")]
 pub mod wire;
 #[cfg(target_os = "linux")]
 mod worker;
@@ -43,7 +45,7 @@ pub use pool::{Launcher, Owner, Pool, PoolConfig};
 #[cfg(target_os = "linux")]
 pub use runtime::SessionUdfs;
 #[cfg(target_os = "linux")]
-pub use worker::{PythonPayload, decode_result};
+pub use worker::{PythonPayload, decode_batch, decode_result};
 
 /// The hidden subcommand of the server's binary that runs the sandbox trampoline.
 pub const WORKER_SUBCOMMAND: &str = "__udf-worker";

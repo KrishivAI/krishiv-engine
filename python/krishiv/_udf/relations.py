@@ -205,10 +205,13 @@ def _engine_schema(return_type: Any, conf: RunnerConf) -> Any:
     )
 
 
-def _engine_batch(arrays: list[Any], schema: Any, num_rows: int) -> Any:
+def _engine_batch(arrays: list[Any], schema: Any, num_rows: int, fields: Any = None) -> Any:
     """The result columns in the engine's forms. A column whose type differs from the declared one by more
     than its form (a ``mapInArrow`` result of another type, which Spark's worker does not check) is left as
-    it is: the server's check of the result names the mismatch."""
+    it is: the server's check of the result names the mismatch. ``fields`` are the UDF's own result fields
+    (``mapInArrow``): their names and nullability are kept, as the JVM sees them, for the server's check under
+    ``spark.sql.execution.arrow.pyspark.validateSchema.enabled`` (``MapInBatchEvaluatorFactory.scala``
+    L81-91 at v4.2.0); otherwise the declared names are used."""
     import pyarrow as pa
 
     if not arrays:
@@ -218,6 +221,9 @@ def _engine_batch(arrays: list[Any], schema: Any, num_rows: int) -> Any:
         if arr.type != field.type and _engine_form(arr.type) == field.type:
             arr = arr.cast(field.type)
         out.append(arr)
+    if fields is not None:
+        own = pa.schema([pa.field(f.name, arr.type, nullable=f.nullable) for f, arr in zip(fields, out, strict=False)])
+        return pa.RecordBatch.from_arrays(out, schema=own)
     names = [f.name for f in schema][: len(out)] + [f"_{i}" for i in range(len(schema), len(out))]
     return pa.RecordBatch.from_arrays(out, names=names)
 
@@ -251,8 +257,9 @@ def _from_pandas(result: Any, return_type: Any, conf: RunnerConf, schema: Any) -
     return _engine_batch(arrays, schema, len(column))
 
 
-def _from_arrow(batch: Any, schema: Any) -> Any:
-    return _engine_batch(list(batch.columns), schema, batch.num_rows)
+def _from_arrow(batch: Any, schema: Any, own_fields: bool = False) -> Any:
+    fields = list(batch.schema) if own_fields else None
+    return _engine_batch(list(batch.columns), schema, batch.num_rows, fields=fields)
 
 
 # --- ported from pyspark/worker.py:237-276 ---
@@ -532,7 +539,7 @@ def _map_arrow(f: Callable[..., Any], return_type: Any) -> Runner:
         input_batches = (_spark_batch(b, conf.timezone) for b in _map_batches(source))
         output_batches = udf_func(input_batches)
         for batch in verify_result(pa.RecordBatch)(output_batches):
-            yield _from_arrow(batch, schema)
+            yield _from_arrow(batch, schema, own_fields=True)
 
     return run
 

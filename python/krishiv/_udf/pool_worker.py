@@ -151,14 +151,23 @@ class _Relation:
         self.aggregate = aggregate
 
 
+#: The most rows of an aggregate's values kept before they are sent, when the task gives no ``max_rows``
+#: (Spark's default ``spark.sql.execution.arrow.maxRecordsPerBatch``).
+DEFAULT_MAX_ROWS = 10_000
+
+
 class _Results:
     """A task's results on their way to the server. A grouped aggregate yields one row per group, so its rows
     are kept and sent together before the worker next asks for a frame (or ends); other kinds' batches go at
-    once, so a map's output streams while its input does."""
+    once, so a map's output streams while its input does.
+
+    ``max_rows`` is only an upper bound: the values are flushed before every ``want`` anyway (one group's
+    value per frame request, in practice), so it caps the rows of one result only when a frame yields
+    more values than that."""
 
     def __init__(self, sock: socket.socket, max_rows: int, aggregate: bool) -> None:
         self.sock = sock
-        self.max_rows = max_rows if max_rows > 0 else 10_000
+        self.max_rows = max_rows if max_rows > 0 else DEFAULT_MAX_ROWS
         self.aggregate = aggregate
         self.pending: list[Any] = []
         self.rows = 0

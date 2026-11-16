@@ -20,6 +20,7 @@ use krishiv_exec::python_relation::{PreparedRelationUdf, RelationCallSpec};
 use std::os::fd::OwnedFd;
 
 use crate::pool::{CallWatch, Owner, Pool};
+use crate::relation::PoolSlots;
 use crate::worker::{PythonPayload, Worker, kill_via};
 
 /// Ids of loaded payloads, unique in the process: a worker keeps what it has loaded by id.
@@ -29,6 +30,8 @@ static NEXT_PAYLOAD: AtomicU64 = AtomicU64::new(1);
 pub struct SessionUdfs {
     pool: Pool,
     owner: Owner,
+    /// The session's relation task slots, shared by its relation call sites.
+    slots: Arc<PoolSlots>,
     /// The runner conf (the session's SQL conf subset Spark sends its worker), read when a call is prepared.
     conf: RwLock<Arc<BTreeMap<String, String>>>,
     payloads: RwLock<HashMap<(String, u32), Registered>>,
@@ -52,6 +55,7 @@ impl SessionUdfs {
     /// The UDFs of `owner`'s session, run on `pool`.
     pub fn new(pool: Pool, owner: Owner) -> Self {
         SessionUdfs {
+            slots: Arc::new(PoolSlots::new(pool.clone(), owner.clone())),
             pool,
             owner,
             conf: RwLock::new(Arc::new(BTreeMap::new())),
@@ -118,6 +122,7 @@ impl UdfRuntime for SessionUdfs {
         crate::relation::prepare(
             self.pool.clone(),
             self.owner.clone(),
+            Arc::clone(&self.slots),
             registered,
             spec,
             &session,

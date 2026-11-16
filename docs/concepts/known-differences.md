@@ -115,6 +115,24 @@ and differs from it, and so from Krishiv, in these cases (checked on PySpark 4.2
 - Errors are `ValueError` whose message starts with the error class; PySpark raises `PySparkValueError` carrying the
   condition.
 
+## `mapInPandas` and `mapInArrow` results unlike the declared schema
+
+With `spark.sql.execution.arrow.pyspark.validateSchema.enabled` set (Spark 4.1 and later), Krishiv checks each
+result batch as Spark does and raises `ARROW_TYPE_MISMATCH` with Spark's message. With it off (the default, and on
+Spark 3.5 and 4.0, which have no such setting), Spark does not check the result's types and reads the batch as if it
+had the declared ones. Krishiv refuses such a result instead, with `PYTHON_EXCEPTION` ("The Python worker returned an
+invalid result"), and refuses a null in a column declared non-nullable when a null is present. Under the setting,
+a result with more columns than declared is not seen by the check (the extra columns are dropped first).
+
+## Python UDF workers per session (server mode)
+
+In server mode each running Python relation UDF (`mapInPandas`, `applyInPandas`, a `pandas_udf` aggregate, ...)
+holds one of its session's `krishiv.python.worker.maxPerSession` workers for as long as the operator runs, and one
+worker is kept for scalar Python UDFs. An operator that needs more workers at once than that leaves (for example
+nine `pandas_udf` aggregates in one `agg` with the default of 8) fails with `KRISHIV_PYTHON_WORKER_LIMIT`; with the
+setting at 1, a scalar Python UDF call while a relation UDF runs fails the same way. Spark runs such calls in one
+worker and has no such limit.
+
 ## `schema_of_variant` with `spark.sql.caseSensitive=true`
 
 Spark's `schema_of_variant` merges two objects of the same size whose sorted field names match under the session's
