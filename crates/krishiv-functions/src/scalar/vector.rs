@@ -86,11 +86,14 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
                 _ => Pair::L2,
             };
             Binding::new(DataType::Float32, move |x: &Inputs<'_>| {
-                let (a, b) = (x.column(0)?, x.column(1)?);
+                // A literal operand (the query vector of a top-k search) is read at its one row, not
+                // broadcast to `rows` copies of itself.
+                let ((a, a_lit), (b, b_lit)) = (x.operand(0)?, x.operand(1)?);
                 let (a, b) = (a.as_list::<i32>(), b.as_list::<i32>());
                 let mut out = Float32Builder::with_capacity(x.rows());
                 for row in 0..x.rows() {
-                    out.append_option(pair(kind, listed, a, b, row)?);
+                    let rows = (if a_lit { 0 } else { row }, if b_lit { 0 } else { row });
+                    out.append_option(pair(kind, listed, a, b, rows)?);
                 }
                 Ok(Arc::new(out.finish()) as ArrayRef)
             })
@@ -243,9 +246,10 @@ fn pair(
     name: &str,
     a: &arrow_array::ListArray,
     b: &arrow_array::ListArray,
-    row: usize,
+    (a_row, b_row): (usize, usize),
 ) -> Result<Option<f32>, KrishivError> {
-    let (Some((x, x_null)), Some((y, y_null))) = (row_values(a, row), row_values(b, row)) else {
+    let (Some((x, x_null)), Some((y, y_null))) = (row_values(a, a_row), row_values(b, b_row))
+    else {
         return Ok(None);
     };
     if x.len() != y.len() {
