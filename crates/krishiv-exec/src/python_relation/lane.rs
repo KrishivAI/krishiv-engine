@@ -32,20 +32,28 @@
 //! only by a peer with strictly fewer rows, so the holds form no cycle.
 //! Only an aggregate's lanes are peers ([`Lane::group`]): a map or grouped
 //! shape's results are stored one lane at a time.
+//!
+//! **Wakers.** A pump may be polled by several futures in turn: its
+//! driver's `Blocked` future, another driver's (which keeps a combined
+//! driver's pumps moving while it waits for their tasks' slots, design
+//! P3-T085 §3.3a) and `finalize`. A task keeps only the last waker it was
+//! polled with, so the pump is polled with a waker of its own that wakes
+//! every future that polled it since its last wake ([`Lane::poll`]): none
+//! is lost when another polls the pump after it.
 
 use std::collections::VecDeque;
 use std::future::poll_fn;
 use std::sync::Arc;
-use std::task::{Context, Poll, Waker};
+use std::task::{Context, Poll, Wake, Waker};
 
 use arrow_array::RecordBatch;
 use futures::future::BoxFuture;
 use krishiv_common::error::KrishivError;
 use krishiv_memory::Reservation;
 
-use super::{Frame, PreparedRelationUdf, UdfTask};
+use super::{Frame, PreparedRelationUdf, RelationSlot, UdfTask};
 use crate::error::Result;
-use crate::sync::{Mutex, lock};
+use crate::sync::{Mutex, lock, register, wake_all};
 
 /// A reservation shared by everything that keeps its buffers alive (the
 /// slices of one input batch), freed with the last of them.
@@ -83,6 +91,10 @@ pub(super) struct LaneIo {
     /// The pump waiting while a peer holds the lane back, woken when a
     /// peer yields, takes its last frame or stops.
     waiting: Option<Waker>,
+    /// The pump waiting for a frame or for its refused result to be
+    /// reserved: woken by whoever queues the frame or moves the result
+    /// ([`wake_pump`]).
+    pump: Option<Waker>,
 }
 
 impl LaneIo {
@@ -123,11 +135,29 @@ enum Pump {
     Done(Result<()>),
 }
 
+/// The futures that polled a pump since its last wake, woken together.
+struct Pollers(Mutex<Vec<Waker>>);
+
+impl Wake for Pollers {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        let wakers = std::mem::take(&mut *lock(&self.0));
+        wake_all(wakers);
+    }
+}
+
 /// One lane of one driver.
 #[derive(Clone)]
 pub(super) struct Lane {
     pub(super) io: Arc<Mutex<LaneIo>>,
     pump: Arc<Mutex<Pump>>,
+    /// Who polled the pump since its last wake.
+    pollers: Arc<Pollers>,
+    /// The waker the pump is polled with: wakes every one of `pollers`.
+    waker: Waker,
     /// Every lane's queues of the driver, this one's at `index`.
     peers: Peers,
     index: usize,
@@ -160,27 +190,37 @@ impl Lane {
                     rows: 0,
                     stopped: false,
                     waiting: None,
+                    pump: None,
                 }))
             })
             .collect();
         peers
             .iter()
             .enumerate()
-            .map(|(index, io)| Self {
-                io: Arc::clone(io),
-                pump: Arc::new(Mutex::new(Pump::Idle)),
-                peers: Arc::clone(&peers),
-                index,
+            .map(|(index, io)| {
+                let pollers = Arc::new(Pollers(Mutex::new(Vec::new())));
+                Self {
+                    io: Arc::clone(io),
+                    pump: Arc::new(Mutex::new(Pump::Idle)),
+                    waker: Waker::from(Arc::clone(&pollers)),
+                    pollers,
+                    peers: Arc::clone(&peers),
+                    index,
+                }
             })
             .collect()
     }
 
     /// Polls the pump; its outcome once it ended (`None` while it runs or
-    /// before the task opened).
+    /// before the task opened). `cx` is woken when the pump can move, even
+    /// if another future polls the pump after this one.
     pub(super) fn poll(&self, cx: &mut Context<'_>) -> Option<Result<()>> {
         let mut p = lock(&self.pump);
+        if matches!(*p, Pump::Running(_)) {
+            register(&mut lock(&self.pollers.0), cx.waker());
+        }
         if let Pump::Running(f) = &mut *p
-            && let Poll::Ready(r) = f.as_mut().poll(cx)
+            && let Poll::Ready(r) = f.as_mut().poll(&mut Context::from_waker(&self.waker))
         {
             *p = Pump::Done(r);
         }
@@ -199,21 +239,57 @@ impl Lane {
         matches!(*lock(&self.pump), Pump::Idle | Pump::Done(Ok(())))
     }
 
-    /// Queues `frame`, opening the task first if it is not.
+    /// Queues `frame`, opening the task first if it is not, in `slot` (the
+    /// lane's slot of the driver's admission, `admit.rs`).
     pub(super) fn queue(
         &self,
         udf: &dyn PreparedRelationUdf,
         frame: Frame,
         memory: FrameMem,
+        slot: Option<RelationSlot>,
     ) -> Result<()> {
         {
             let mut p = lock(&self.pump);
             if matches!(*p, Pump::Idle) {
-                let task = udf.open()?;
+                let task = udf.open(slot)?;
                 *p = Pump::Running(pump(task, Arc::clone(&self.peers), self.index));
             }
         }
         lock(&self.io).inbound.push_back((frame, memory));
+        wake_pump(&self.io);
+        Ok(())
+    }
+
+    /// The bytes of the refused result, if any.
+    pub(super) fn refused_bytes(&self) -> Option<usize> {
+        lock(&self.io)
+            .refused
+            .as_ref()
+            .map(RecordBatch::get_array_memory_size)
+    }
+
+    /// Grows `memory` (a reservation of any consumer: the store takes it
+    /// over) to the refused result, if any, and moves the result to the
+    /// outputs, under one lock, so two drivers never reserve for one batch
+    /// nor move one under another's size (review R4-3); the bytes the pool
+    /// refused. The pump is woken to read on.
+    pub(super) fn reserve_refused_with(
+        &self,
+        mut memory: Reservation,
+    ) -> std::result::Result<(), usize> {
+        {
+            let mut q = lock(&self.io);
+            let Some(bytes) = q.refused.as_ref().map(RecordBatch::get_array_memory_size) else {
+                return Ok(());
+            };
+            if memory.try_grow(bytes).is_err() {
+                return Err(bytes);
+            }
+            if let Some(batch) = q.refused.take() {
+                q.outputs.push_back((batch, memory));
+            }
+        }
+        wake_pump(&self.io);
         Ok(())
     }
 
@@ -229,15 +305,22 @@ impl Lane {
         if let Some(batch) = q.refused.take() {
             q.outputs.push_back((batch, r));
         }
+        drop(q);
+        // The pump waits for this: it reads on.
+        wake_pump(&self.io);
         None
     }
 
     /// The refused result, if any, taken without a reservation (its
     /// caller stores it at once, writing it out when the pool is full).
     pub(super) fn take_refused_unreserved(&self) -> Option<RecordBatch> {
-        let mut q = lock(&self.io);
-        let batch = q.refused.take()?;
-        q.took(batch.num_rows());
+        let batch = {
+            let mut q = lock(&self.io);
+            let batch = q.refused.take()?;
+            q.took(batch.num_rows());
+            batch
+        };
+        wake_pump(&self.io);
         Some(batch)
     }
 
@@ -252,10 +335,13 @@ impl Lane {
         let io = Arc::clone(&self.io);
         Some(Box::pin(async move {
             r.grow(bytes).await.map_err(KrishivError::from)?;
-            let mut q = lock(&io);
-            if let Some(batch) = q.refused.take() {
-                q.outputs.push_back((batch, r));
+            {
+                let mut q = lock(&io);
+                if let Some(batch) = q.refused.take() {
+                    q.outputs.push_back((batch, r));
+                }
             }
+            wake_pump(&io);
             Ok(())
         }))
     }
@@ -273,6 +359,15 @@ fn held_back(peers: &[Arc<Mutex<LaneIo>>], index: usize) -> bool {
         let q = lock(io);
         i != index && !q.stopped && q.in_flight() > 0 && q.rows < own
     })
+}
+
+/// Wakes the pump of `io` if it waits for a frame or for its refused result
+/// (the waker is taken under the lock and woken after it is released).
+fn wake_pump(io: &Mutex<LaneIo>) {
+    let waker = lock(io).pump.take();
+    if let Some(w) = waker {
+        w.wake();
+    }
 }
 
 /// Wakes every peer of lane `index` waiting for it to yield, take its last
@@ -300,15 +395,18 @@ fn pump(task: Box<dyn UdfTask>, peers: Peers, index: usize) -> BoxFuture<'static
         };
         let send = async {
             loop {
-                // Never woken: whoever queues a frame polls the pump next.
-                let frame = poll_fn(|_| {
+                // Woken by whoever queues the next frame (`Lane::queue`).
+                let frame = poll_fn(|cx| {
                     let mut q = lock(&io);
                     match q.inbound.pop_front() {
                         Some((frame, memory)) => {
                             q.sending = Some(memory);
                             Poll::Ready(frame)
                         }
-                        None => Poll::Pending,
+                        None => {
+                            q.pump = Some(cx.waker().clone());
+                            Poll::Pending
+                        }
                     }
                 })
                 .await;
@@ -330,14 +428,18 @@ fn pump(task: Box<dyn UdfTask>, peers: Peers, index: usize) -> BoxFuture<'static
         };
         let receive = async {
             loop {
-                // Not woken while refused: whoever reserves the refused
-                // batch polls the pump next. Held back by a peer: woken
-                // when a peer yields, takes its last frame or stops (the
-                // waker is set before the check, so a peer that moves
-                // after it wakes this pump).
+                // Refused: woken by whoever reserves or takes the refused
+                // batch ([`wake_pump`]). Held back by a peer: woken when a
+                // peer yields, takes its last frame or stops (the waker is
+                // set before the check, so a peer that moves after it wakes
+                // this pump).
                 poll_fn(|cx| {
-                    if lock(&io).refused.is_some() {
-                        return Poll::Pending;
+                    {
+                        let mut q = lock(&io);
+                        if q.refused.is_some() {
+                            q.pump = Some(cx.waker().clone());
+                            return Poll::Pending;
+                        }
                     }
                     lock(&io).waiting = Some(cx.waker().clone());
                     if held_back(&peers, index) {

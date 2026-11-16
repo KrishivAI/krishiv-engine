@@ -97,7 +97,7 @@ struct Fake {
 }
 
 impl PreparedRelationUdf for Fake {
-    fn open(&self) -> crate::error::Result<Box<dyn UdfTask>> {
+    fn open(&self, _slot: Option<super::RelationSlot>) -> crate::error::Result<Box<dyn UdfTask>> {
         self.shared.opened.fetch_add(1, Ordering::SeqCst);
         Ok(Box::new(Task {
             shared: Arc::clone(&self.shared),

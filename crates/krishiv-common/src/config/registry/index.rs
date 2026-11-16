@@ -575,6 +575,14 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE,
     ),
     (
+        "spark.sql.execution.arrow.pyspark.validateSchema.enabled",
+        &ARROW_PYSPARK_VALIDATE_SCHEMA,
+    ),
+    (
+        "krishiv.sql.execution.arrow.pyspark.validateSchema.enabled",
+        &ARROW_PYSPARK_VALIDATE_SCHEMA,
+    ),
+    (
         "spark.connect.execute.reattachable.observerRetryBufferSize",
         &CONNECT_EXECUTE_RETRY_BUFFER_SIZE,
     ),

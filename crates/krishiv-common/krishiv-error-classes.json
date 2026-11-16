@@ -149,6 +149,12 @@
     ],
     "sqlState" : "38000"
   },
+  "KRISHIV_PYTHON_WORKER_LIMIT" : {
+    "message" : [
+      "<operation> needs <needed> Python UDF workers at once, and at most <available> can serve it: \"<setting>\" is <value>, and one of those workers is kept for scalar Python UDFs when there are 2 or more. Raise \"<setting>\", or call fewer Python UDFs in one operator."
+    ],
+    "sqlState" : "54000"
+  },
   "KRISHIV_QUERY_ABORTED_OUT_OF_MEMORY" : {
     "message" : [
       "The query was aborted to free memory for other work: it held <heldBytes> bytes, the most of any query, and spilling did not free enough memory in time. Increase \"krishiv.memory.limit\" or run fewer concurrent queries."
