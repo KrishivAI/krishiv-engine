@@ -1,8 +1,7 @@
 {
   "cases": {
     "other-version": [
-      6,
-      7
+      6
     ]
   },
   "file": "timestamp-ltz",

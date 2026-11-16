@@ -8,13 +8,16 @@ use std::sync::Arc;
 
 use arrow_schema::SchemaRef;
 use krishiv_common::error::{KrishivUnsupportedFeature, TableOrViewNotFound};
-use krishiv_memory::RelationLease;
+use krishiv_memory::{RelationLease, SpillFile};
 use krishiv_optimizer::{Statistics, TableStats};
 use krishiv_plan::{ReadSource, Scan};
 use krishiv_types::batch::Batch;
 
 use crate::error::Result;
-use crate::operators::{MemoryScan, ScanPushdown};
+use crate::operator::Sink;
+use crate::operators::{MemoryScan, ScanPushdown, SpilledScan};
+use crate::planner::row_level::{RowLevelOperation, RowLevelTable};
+use crate::planner::write::{TableCapabilities, WriteRequest};
 
 /// A table the executor can read: the scan factory the planner pushes
 /// projections and filters into, and the table's statistics.
@@ -36,6 +39,38 @@ pub trait TableProvider: Send + Sync + fmt::Debug {
     /// How many units (row groups) a whole read of the table touches, when
     /// known. The cost of a late fetch (design P2-T063) needs it.
     fn scan_units(&self) -> Option<u64> {
+        None
+    }
+
+    /// The write modes the table declared (Spark's `TableCapability`). The
+    /// session checks them before planning a write; the default declares
+    /// none, so a read-only table is never offered one.
+    fn capabilities(&self) -> TableCapabilities {
+        TableCapabilities::default()
+    }
+
+    /// The sink a write ends in. Every write commits atomically through the
+    /// table's format, never by rename (spec 13 §7): the commit happens when
+    /// the sink finalizes, with `request.write_id` as its idempotency key, and
+    /// a failed or cancelled write leaves nothing visible.
+    ///
+    /// # Errors
+    /// `UNSUPPORTED_FEATURE.TABLE_OPERATION` when the table did not declare
+    /// what the mode needs ([`capabilities`](Self::capabilities)).
+    fn writer(&self, request: &WriteRequest) -> Result<Arc<dyn Sink>> {
+        self.capabilities()
+            .check(&request.mode, &request.table_name)?;
+        Err(KrishivUnsupportedFeature {
+            feature: format!("a writer for {self:?}"),
+        }
+        .into())
+    }
+
+    /// The table as `op` changes it (`DELETE`, `UPDATE`, `MERGE`; design
+    /// `P3-PR-DML-row-level.md`), at the version this provider reads. The default offers
+    /// none: the statement is refused as Spark refuses it for a v1 table.
+    fn row_level(&self, op: RowLevelOperation) -> Option<Arc<dyn RowLevelTable>> {
+        let _ = op;
         None
     }
 }
@@ -155,6 +190,48 @@ impl TableProvider for MemoryTable {
     }
 }
 
+/// A table held in one spill file (a relation cache entry on disk, design
+/// P3-T083 §3.2). Its scan streams the file a batch at a time under the
+/// reading query's memory ([`SpilledScan`]); the file lives as long as the
+/// table and every scan built from it.
+#[derive(Debug, Clone)]
+pub struct SpilledTable {
+    schema: SchemaRef,
+    file: Arc<SpillFile>,
+}
+
+impl SpilledTable {
+    /// A table of the batches in `file`, of the file's schema.
+    pub fn new(file: SpillFile) -> Self {
+        Self {
+            schema: Arc::clone(file.schema()),
+            file: Arc::new(file),
+        }
+    }
+
+    /// The spill file.
+    #[must_use]
+    pub fn file(&self) -> &SpillFile {
+        &self.file
+    }
+}
+
+impl TableProvider for SpilledTable {
+    fn scan(&self) -> Result<Arc<dyn ScanPushdown>> {
+        Ok(Arc::new(SpilledScan::try_new(
+            Arc::clone(&self.schema),
+            Arc::clone(&self.file),
+        )?))
+    }
+
+    fn statistics(&self) -> Option<TableStats> {
+        Some(TableStats {
+            rows: self.file.num_rows(),
+            ..TableStats::default()
+        })
+    }
+}
+
 /// Providers by table name: the fully qualified name parts the analyzer
 /// resolves to (`["spark_catalog", "default", "t"]`), compared ASCII
 /// case-insensitively.
@@ -185,7 +262,8 @@ impl TableProviderResolver for MemoryTables {
     fn provider(&self, scan: &Scan) -> Result<Arc<dyn TableProvider>> {
         let ReadSource::Table { name, .. } = &scan.source else {
             return Err(KrishivUnsupportedFeature {
-                feature: "reading files by path from in-memory tables".to_owned(),
+                feature: "reading files by path or a local relation from in-memory tables"
+                    .to_owned(),
             }
             .into());
         };

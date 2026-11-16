@@ -10,12 +10,10 @@ use krishiv_common::error::{
 use krishiv_kernels::cast::FixedOffset;
 use krishiv_kernels::datetime::{resolve_zone, zone_id};
 
-/// Prefixes of entries read once, when the session is built (memory pool,
-/// spill directory, I/O scheduler): setting them later would not apply,
-/// so it fails like a static config.
-pub(crate) const BUILD_TIME: &[&str] = &["krishiv.memory.", "krishiv.spill.", "krishiv.io."];
-
-/// Session keys fixed when the session is built (its memory pool).
+/// Session-scope keys fixed when the session is built (its memory pool): `SET` of one fails like
+/// a static config, a builder option sets it. Every other session-scope key is read per query, so
+/// `SET` takes it, whatever its prefix (SQL-23: the `krishiv.io.*` format-option fallbacks and
+/// `krishiv.io.prefetchBytes` are read from each query's configuration snapshot).
 const SESSION_BUILD_TIME: &[&str] = &["krishiv.session.memoryLimit"];
 
 /// The configuration of a session, shared by its clones. Queries read an
@@ -137,6 +135,23 @@ impl ConfStore {
 
     pub(crate) fn snapshot(&self) -> Arc<Config> {
         self.versioned_snapshot().0
+    }
+
+    /// Whether `config` gives a server-scoped store key (`krishiv_io::is_server_scoped_option`:
+    /// endpoints, regions, accounts, key files) another value than the configuration the session
+    /// was built with, i.e. whether the session itself redirected a store (P3-T067b).
+    pub(crate) fn store_settings_changed(&self, config: &Config) -> bool {
+        let endpoints = |c: &Config| {
+            let mut v: Vec<(String, String)> = c
+                .explicit_unregistered()
+                .into_iter()
+                .filter(|(k, _)| krishiv_io::is_server_scoped_option(k))
+                .map(|(k, v)| (k.to_ascii_lowercase(), v.to_owned()))
+                .collect();
+            v.sort();
+            v
+        };
+        endpoints(config) != endpoints(&self.initial)
     }
 
     /// Every explicitly set key with its value as text, sorted by key: what
@@ -299,7 +314,7 @@ fn leading_number(text: &str) -> Option<(u32, &str)> {
 /// `krishiv.*` key or Spark alias) with its default, else an unregistered
 /// key as set.
 pub(crate) fn get(config: &Config, key: &str) -> Option<String> {
-    match lookup(key) {
+    match lookup(krishiv_common::config::resolve_alternative(key)) {
         Some(entry) => config.get(entry).map(ToString::to_string),
         None => config.get_unregistered(key).map(str::to_owned),
     }
@@ -308,11 +323,7 @@ pub(crate) fn get(config: &Config, key: &str) -> Option<String> {
 /// Whether `key` can change after the session is built.
 pub(crate) fn is_modifiable(key: &str) -> bool {
     match lookup(key) {
-        Some(entry) => {
-            entry.scope == Scope::Session
-                && !BUILD_TIME.iter().any(|p| entry.key.starts_with(p))
-                && !SESSION_BUILD_TIME.contains(&entry.key)
-        }
+        Some(entry) => entry.scope == Scope::Session && !SESSION_BUILD_TIME.contains(&entry.key),
         None => true,
     }
 }

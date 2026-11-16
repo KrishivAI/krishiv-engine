@@ -53,11 +53,7 @@ fn files(col: &str) -> TempTable {
         known: false,
         permanent: false,
         partitions: Some(Default::default()),
-        source: ReadSource::Files {
-            format: "parquet".to_owned(),
-            paths: vec![],
-            options: Default::default(),
-        },
+        source: ReadSource::files("parquet".to_owned(), vec![], Default::default()),
         columns: vec![TableColumn::new(col.to_owned(), DataType::Integer, false)],
     }
 }
@@ -66,6 +62,7 @@ fn first_column(t: &TempTable) -> &str {
     match t {
         TempTable::Files { columns, .. }
         | TempTable::Memory { columns, .. }
+        | TempTable::Provider { columns, .. }
         | TempTable::View { columns, .. } => &columns[0].name,
     }
 }
@@ -917,11 +914,11 @@ fn task_specs_rejects_what_it_cannot_split() {
     // A scan of files that were never opened.
     let e = catalog
         .task_specs(
-            &split_scan_plan(ReadSource::Files {
-                format: "parquet".to_owned(),
-                paths: Vec::new(),
-                options: BTreeMap::new(),
-            }),
+            &split_scan_plan(ReadSource::files(
+                "parquet".to_owned(),
+                Vec::new(),
+                BTreeMap::new(),
+            )),
             2,
             2,
         )
@@ -1033,4 +1030,107 @@ fn task_specs_of_a_copied_memory_table_resolve_in_the_clone() {
     }
     union.sort_unstable();
     assert_eq!(union, vec![1, 2, 3]);
+}
+
+/// Design P3-T083 §3.8: a stage that scans a disk-cached relation is refused as an unsupported
+/// feature (the file is on the driver), not failed as an internal error; a memory-cached one is
+/// dealt as a lease-less memory table is.
+#[test]
+fn task_specs_refuse_a_disk_cached_scan_and_accept_a_memory_one() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let session = Session::builder()
+        .config(
+            "krishiv.spill.dir",
+            dir.path().join("spill").to_str().unwrap(),
+        )
+        .build()
+        .unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "id",
+        arrow_schema::DataType::Int32,
+        false,
+    )]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+    )
+    .unwrap();
+    session.register_batches("t", schema, vec![batch]).unwrap();
+    for (level, on_disk) in [
+        (crate::StorageLevel::DISK_ONLY, true),
+        (crate::StorageLevel::MEMORY_ONLY, false),
+    ] {
+        let cached = session.table("t").persist(level);
+        assert_eq!(rt.block_on(cached.count()).unwrap(), 3);
+        let derived = cached.filter(crate::functions::col("id").gt(crate::functions::lit(1)));
+        let analysis = rt.block_on(derived.analysis()).unwrap();
+        let (physical, fill) = rt.block_on(derived.physical_cached(&analysis)).unwrap();
+        let specs = analysis.env.catalog.task_specs(&physical, 1, 1);
+        if on_disk {
+            let error = specs.unwrap_err();
+            assert_eq!(
+                error.error_class().name(),
+                "KRISHIV_UNSUPPORTED_FEATURE",
+                "{error}"
+            );
+        } else {
+            assert_eq!(specs.unwrap().len(), 1);
+        }
+        drop(fill);
+        rt.block_on(cached.unpersist()).unwrap();
+    }
+}
+
+/// A read with a declared schema opens with the declared table, nothing
+/// inferred: a headerless CSV would be named `_c0`, `_c1` by inference. The
+/// declared nullability follows the inferred-read rule (golden-pending).
+#[test]
+fn a_file_read_with_a_declared_schema_uses_it() {
+    use krishiv_common::secret::OptionValue;
+    use krishiv_types::{StructField, StructType};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.csv");
+    std::fs::write(&path, "1,a\n2,b\n").unwrap();
+    let s = Session::new().unwrap();
+    let source = ReadSource::files(
+        "csv",
+        vec![OptionValue::from_user("path", path.to_string_lossy())],
+        Default::default(),
+    )
+    .with_schema(StructType::new([
+        StructField::new("k", DataType::Long, true),
+        StructField::new("v", DataType::String, true),
+    ]));
+    let df = crate::dataframe::DataFrame::new(
+        s,
+        Arc::new(krishiv_plan::LogicalPlan::new(
+            krishiv_plan::PlanNode::Read(source),
+        )),
+    );
+    let batches = block_on(df.collect()).unwrap();
+    let schema = batches[0].schema();
+    let names: Vec<_> = schema.fields().iter().map(|f| f.name().clone()).collect();
+    assert_eq!(names, ["k", "v"]);
+    assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 2);
+    let mut got: Vec<(String, String)> = Vec::new();
+    for b in &batches {
+        for i in 0..b.num_rows() {
+            let cell =
+                |c: usize| arrow_cast::display::array_value_to_string(b.column(c), i).unwrap();
+            got.push((cell(0), cell(1)));
+        }
+    }
+    got.sort();
+    assert_eq!(
+        got,
+        [
+            ("1".to_owned(), "a".to_owned()),
+            ("2".to_owned(), "b".to_owned())
+        ]
+    );
+    assert_eq!(schema.field(0).data_type(), &arrow_schema::DataType::Int64);
 }

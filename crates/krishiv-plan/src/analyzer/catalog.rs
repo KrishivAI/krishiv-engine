@@ -153,6 +153,16 @@ pub trait Catalog: Send + Sync {
     fn single_part_namespace(&self) -> bool {
         false
     }
+    /// What the catalog supports; the DDL commands check it before calling a
+    /// method. A catalog that declares nothing is read-only.
+    fn capabilities(&self) -> super::CatalogCapabilities {
+        super::CatalogCapabilities::default()
+    }
+    /// The write half, when the catalog has one. A read-only catalog (Unity
+    /// in P3) returns `None`, so no write method exists on it.
+    fn as_write(&self) -> Option<&dyn super::CatalogWrite> {
+        None
+    }
     /// The table `id` (as written; the catalog applies `form`, as Spark's
     /// catalogs do) at `version`, or the current one; `None` when it does
     /// not exist.
@@ -428,12 +438,26 @@ pub enum Privilege {
     Create,
     /// Drop (or replace) the object.
     Drop,
-    /// Read other principals' rows in `system.*` tables, and run the
-    /// cluster-scope statements of the `ADMIN` class.
+    /// Read other principals' rows in `system.*` tables (ADR 0046 §4: the
+    /// cluster-scope statements of the `ADMIN` class moved to [`Self::Manage`]).
     Monitor,
     /// Use a secret or connection without reading its value: the engine
-    /// resolves it on the principal's behalf (E12).
+    /// resolves it on the principal's behalf (E12). On `System("udf")`: send code the server
+    /// runs (Python UDFs, data sources, artifacts; ADR 0046 §4).
     Usage,
+    /// See that an object exists and its schema, without its rows (ADR 0046 §4, Unity
+    /// Catalog's `BROWSE`). `Select` implies it: [`super::authorize`] asks for `Select` when a
+    /// policy does not allow `Browse`, so providers that answer only `Select` keep working.
+    Browse,
+    /// Act on other principals' running work: cancel their queries, kill their sessions
+    /// (ADR 0046 §4; on `System("queries")` / `System("sessions")`).
+    Operate,
+    /// Change the server: cluster-scope statements, drain, config, resource groups (ADR 0046
+    /// §4; on `System("cluster")`).
+    Manage,
+    /// Assert another principal's identity (ADR 0046 §5; on `System("principals")`). Never part
+    /// of a role.
+    Impersonate,
 }
 
 impl Privilege {
@@ -455,6 +479,10 @@ impl fmt::Display for Privilege {
             Self::Drop => "DROP",
             Self::Monitor => "MONITOR",
             Self::Usage => "USAGE",
+            Self::Browse => "BROWSE",
+            Self::Operate => "OPERATE",
+            Self::Manage => "MANAGE",
+            Self::Impersonate => "IMPERSONATE",
         })
     }
 }

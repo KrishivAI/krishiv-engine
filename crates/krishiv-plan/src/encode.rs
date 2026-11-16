@@ -113,6 +113,11 @@ pub(crate) fn plan_tag(node: &PlanNode) -> u8 {
         PlanNode::Generate { .. } => 33,
         PlanNode::PipeOperator { .. } => 34,
         PlanNode::Repartition { .. } => 35,
+        PlanNode::Sample { .. } => 36,
+        PlanNode::MapPartitions { .. } => 37,
+        PlanNode::GroupMap { .. } => 38,
+        PlanNode::CoGroupMap { .. } => 39,
+        PlanNode::PythonTableFunction { .. } => 40,
     }
 }
 
@@ -648,6 +653,13 @@ impl<'k, 'a> Encoder<'k, 'a> {
         }
     }
 
+    /// A relation node's Python UDF and its declared result columns.
+    fn python_udf(&mut self, udf: &crate::PythonUdfRef, output: &[BoundColumn]) {
+        self.function_id(&udf.function_id());
+        self.len(output.len());
+        output.iter().for_each(|c| self.bound(c));
+    }
+
     fn bytes(&mut self, b: &[u8]) {
         self.len(b.len());
         self.put(b);
@@ -703,8 +715,58 @@ impl<'k, 'a> Encoder<'k, 'a> {
         }
     }
 
+    /// An Arrow schema as names, Spark types and nullability (never data).
+    fn arrow_schema(&mut self, schema: &arrow_schema::Schema) {
+        self.len(schema.fields().len());
+        for f in schema.fields() {
+            self.str(f.name());
+            self.str(&crate::local::type_text(f));
+            self.bool(f.is_nullable());
+        }
+    }
+
     fn data_type(&mut self, t: &krishiv_types::DataType) {
         self.str(&t.simple_string());
+    }
+
+    /// A nested literal's type without loss: `simple_string` drops
+    /// nullability, comments and fields past the 25th, which `Literal::eq`
+    /// keeps. Bounded by `DataType::MAX_NESTING_DEPTH`.
+    fn lossless_type(&mut self, t: &krishiv_types::DataType) {
+        use krishiv_types::DataType;
+        match t {
+            DataType::Array(a) => {
+                self.u8(1);
+                self.bool(a.contains_null());
+                self.lossless_type(a.element_type());
+            }
+            DataType::Map(m) => {
+                self.u8(2);
+                self.bool(m.value_contains_null());
+                self.lossless_type(m.key_type());
+                self.lossless_type(m.value_type());
+            }
+            DataType::Struct(st) => {
+                self.u8(3);
+                self.len(st.fields().len());
+                for f in st.fields() {
+                    self.str(f.name());
+                    self.bool(f.nullable());
+                    // The map is ordered by key, so its debug text is stable.
+                    let md = f.metadata();
+                    self.str(&if md.is_empty() {
+                        String::new()
+                    } else {
+                        format!("{:?}", md.as_map())
+                    });
+                    self.lossless_type(f.data_type());
+                }
+            }
+            leaf => {
+                self.u8(0);
+                self.data_type(leaf);
+            }
+        }
     }
 
     fn exprs(&mut self, v: &'a [Arc<Expr>]) {
@@ -922,6 +984,12 @@ impl<'k, 'a> Encoder<'k, 'a> {
             PlanNode::ReplicateRows { count, .. } => {
                 self.expr(count);
             }
+            PlanNode::Sample { bounds, seed, .. } => {
+                self.i64(bounds.lower.to_bits().cast_signed());
+                self.i64(bounds.upper.to_bits().cast_signed());
+                self.bool(seed.is_some());
+                self.i64(seed.unwrap_or(0));
+            }
             PlanNode::Offset { offset, .. } => {
                 self.expr(offset);
             }
@@ -1030,6 +1098,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                     crate::GeneratorKind::PosExplode => 1,
                     crate::GeneratorKind::Inline => 2,
                     crate::GeneratorKind::VariantExplode => 3,
+                    crate::GeneratorKind::PythonUdtf => 4,
                 });
                 self.u8(u8::from(*outer));
                 self.expr(arg);
@@ -1047,6 +1116,50 @@ impl<'k, 'a> Encoder<'k, 'a> {
             PlanNode::TableFunction { name, args } => {
                 self.str(name);
                 self.exprs(args);
+            }
+            PlanNode::MapPartitions {
+                udf,
+                output,
+                barrier,
+                ..
+            } => {
+                self.python_udf(udf, output);
+                self.u8(u8::from(*barrier));
+            }
+            PlanNode::GroupMap {
+                keys, udf, output, ..
+            } => {
+                self.exprs(keys);
+                self.python_udf(udf, output);
+            }
+            PlanNode::CoGroupMap {
+                left_keys,
+                right_keys,
+                udf,
+                output,
+                ..
+            } => {
+                self.exprs(left_keys);
+                self.exprs(right_keys);
+                self.python_udf(udf, output);
+            }
+            PlanNode::PythonTableFunction {
+                args,
+                table_arg,
+                udf,
+                output,
+            } => {
+                self.exprs(args);
+                match table_arg {
+                    None => self.u8(0),
+                    Some(t) => {
+                        self.u8(1);
+                        self.exprs(&t.partition_by);
+                        self.orders(&t.order_by);
+                        self.u8(u8::from(t.single_partition));
+                    }
+                }
+                self.python_udf(udf, output);
             }
             PlanNode::Range {
                 start,
@@ -1104,16 +1217,29 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.strs(name);
                 self.options(options);
             }
+            ReadSource::Local(l) => {
+                self.u8(3);
+                self.put(l.relation().hash.as_bytes());
+                self.arrow_schema(l.schema());
+                self.len(l.batches());
+                self.put(&l.rows().to_le_bytes());
+            }
             ReadSource::Files {
                 format,
                 paths,
                 options,
+                schema,
             } => {
-                self.u8(2);
+                // Tag 2 stays byte-identical for a read that infers; a
+                // declared schema is tag 4 (tag-2 fields, then the schema).
+                self.u8(if schema.is_some() { 4 } else { 2 });
                 self.str(format);
                 self.len(paths.len());
                 paths.iter().for_each(|p| self.option_value(p));
                 self.options(options);
+                if let Some(schema) = schema {
+                    self.lossless_type(&krishiv_types::DataType::Struct(schema.clone()));
+                }
             }
         }
     }
@@ -1542,6 +1668,36 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.put(&months.to_le_bytes());
                 self.put(&days.to_le_bytes());
                 self.i64(*micros);
+            }
+            // Nested values: the type, then the values (the type bounds the
+            // depth, `Literal::array` and friends check it).
+            Literal::Array {
+                data_type,
+                elements,
+            } => {
+                self.u8(20);
+                self.lossless_type(&krishiv_types::DataType::Array(Arc::clone(data_type)));
+                self.len(elements.len());
+                for e in elements {
+                    self.literal(e);
+                }
+            }
+            Literal::KeyValueMap { data_type, entries } => {
+                self.u8(21);
+                self.lossless_type(&krishiv_types::DataType::Map(Arc::clone(data_type)));
+                self.len(entries.len());
+                for (k, v) in entries {
+                    self.literal(k);
+                    self.literal(v);
+                }
+            }
+            Literal::Struct { data_type, fields } => {
+                self.u8(22);
+                self.lossless_type(&krishiv_types::DataType::Struct((**data_type).clone()));
+                self.len(fields.len());
+                for f in fields {
+                    self.literal(f);
+                }
             }
         }
     }

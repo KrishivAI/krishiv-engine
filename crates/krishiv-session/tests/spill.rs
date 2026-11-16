@@ -245,3 +245,24 @@ fn a_join_feeding_a_full_sort_spills_under_eight_mib() {
     drop(stream);
     wait_until_clean(&root(&dir));
 }
+
+/// RS-29 / PY-058: a spill directory that cannot be made (a read-only root, no writable home)
+/// does not fail queries that never spill: `select 1` and a plain scan run.
+#[test]
+fn an_unusable_spill_directory_does_not_fail_a_query_that_never_spills() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("a_file");
+    std::fs::write(&file, b"x").unwrap();
+    // a directory below a regular file can never be created
+    let dir = file.join("spill");
+    let s = Session::builder()
+        .config("krishiv.spill.dir", dir.to_str().unwrap())
+        .build()
+        .unwrap();
+    let df = block_on(s.sql("SELECT 1 AS one, 'a' AS b")).unwrap();
+    let got = block_on(df.collect()).unwrap();
+    assert_eq!(got.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+    let df = block_on(s.sql("SELECT count(*) AS n FROM range(1000)")).unwrap();
+    let got = block_on(df.collect()).unwrap();
+    assert_eq!(got[0].column(0).as_primitive::<Int64Type>().value(0), 1000);
+}

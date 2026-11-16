@@ -25,7 +25,7 @@ use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, internal};
 use crate::executor::{Executor, TaskHandle};
 use crate::metrics::{DriverStats, OperatorMetrics};
-use crate::morsel::{Barrier, Baton, Countdown};
+use crate::morsel::{Barrier, Baton, CombineOrder, Countdown};
 use crate::operator::{FlushOutput, GlobalState, LocalState, OperatorOutput, SinkStatus};
 use crate::pipeline::Pipeline;
 
@@ -37,6 +37,9 @@ pub(crate) struct PipelineRun {
     pub(crate) pipeline: Pipeline,
     /// Per operator: the finalized breaker state it reads, if any.
     pub(crate) operator_deps: Vec<Option<GlobalState>>,
+    /// Per operator, then for the sink: the first partition id it numbers
+    /// its input's partitions from (see `Pipeline::origins`).
+    pub(crate) operator_bases: Vec<u32>,
     /// Per operator: its flush barrier (used if it needs a flush), shared
     /// with the other pipelines of a fan-in that run the operator.
     pub(crate) barriers: Vec<Arc<Barrier>>,
@@ -47,8 +50,28 @@ pub(crate) struct PipelineRun {
     /// The fan-in's baton and this pipeline's member index, when the
     /// members of a deterministic fan-in take turns (see [`Baton`]).
     pub(crate) turn: Option<(Arc<Baton>, usize)>,
+    /// `(first partition id, lane count)` when the drivers of this pipeline
+    /// are the logical partitions of `krishiv.deterministicOrder` (T094 G1):
+    /// the driver of partition `p` is lane `p - first` and reads only the
+    /// morsels dealt to its lane.
+    pub(crate) lanes: Option<(u32, usize)>,
+    /// The lanes' combine order (set with `lanes`).
+    pub(crate) combine_order: Option<Arc<CombineOrder>>,
     pub(crate) query: Arc<QueryContext>,
     pub(crate) executor: Arc<dyn Executor>,
+}
+
+/// A lane's place in its pipeline's [`CombineOrder`]: dropped, it lets the next
+/// lane combine, whether this one combined, failed or was aborted.
+struct LanePass {
+    order: Arc<CombineOrder>,
+    lane: usize,
+}
+
+impl Drop for LanePass {
+    fn drop(&mut self) {
+        self.order.pass(self.lane);
+    }
 }
 
 /// A driver's place in its fan-in's [`Baton`]: it leaves when dropped, so
@@ -473,6 +496,8 @@ struct Driver {
     /// The driver's baton and member index in a deterministic fan-in, if it
     /// takes turns (its [`Turn`] guard is held by the driver's task).
     turn: Option<(Arc<Baton>, usize)>,
+    /// The scheduler-assigned partition id (the lane is `partition - first`).
+    partition: u32,
 }
 
 impl Driver {
@@ -487,6 +512,10 @@ impl Driver {
                 name,
             )
             .with_partition(partition)
+            .with_lane(
+                run.lanes
+                    .map(|(first, n)| ((partition - first) as usize, n)),
+            )
             .with_partition_base(base)
         };
         let p = &run.pipeline;
@@ -500,7 +529,8 @@ impl Driver {
             busy: false,
         });
         for (k, (id, op)) in p.operators.iter().enumerate() {
-            let mut c = ctx(*id, op.name());
+            let mut c = ctx(*id, op.name())
+                .with_numbering_base(run.operator_bases.get(k).copied().unwrap_or(base));
             if let Some(Some(state)) = run.operator_deps.get(k) {
                 c = c.with_dependency(Arc::clone(state));
             }
@@ -513,7 +543,14 @@ impl Driver {
             });
         }
         let (sink_id, sink) = &p.sink;
-        let c = Arc::new(ctx(*sink_id, sink.name()));
+        let c = Arc::new(
+            ctx(*sink_id, sink.name()).with_numbering_base(
+                run.operator_bases
+                    .get(p.operators.len())
+                    .copied()
+                    .unwrap_or(base),
+            ),
+        );
         let local = sink.local_state(&c, &run.sink_global)?;
         slots.push(Slot {
             ctx: c,
@@ -531,6 +568,7 @@ impl Driver {
             yields: 0,
             position: None,
             turn: run.turn.clone(),
+            partition,
             owner,
             run,
         })
@@ -584,9 +622,29 @@ impl Driver {
         self.finish_operators(finish_from).await?;
         let sink = &run.pipeline.sink.1;
         let k = run.pipeline.operators.len() + 1;
+        // Logical partitions combine in lane order, so partial aggregates, builds and
+        // runs merge the same way on every run. The guard is made after this lane's turn
+        // came, and lets the next lane go when its combine ends or fails. A lane that fails
+        // earlier (source, operators) never passes: the higher lanes stay parked until the
+        // query's failure cancels the query and the drivers are aborted.
+        let _lane = match (&run.combine_order, run.lanes) {
+            (Some(order), Some((first, _))) if !sink.combine_unordered() => {
+                let lane = (self.partition - first) as usize;
+                // The sink state stays in its slot while this lane waits, and spill
+                // requests are still served, so a lane waiting here can free memory
+                // for the lane it waits on.
+                pause(&run, Some((&self.owner, &self.slots)), order.wait(lane)).await?;
+                Some(LanePass {
+                    order: Arc::clone(order),
+                    lane,
+                })
+            }
+            _ => None,
+        };
         let local = self.slots.get_mut().slot(k)?.local.take();
         let local = local.ok_or_else(|| internal("sink state combined twice".to_owned()))?;
         sink.combine(local, &run.sink_global)?;
+        drop(_lane);
         if run.countdown.arrive() {
             self.boundary().await?;
             let start = run.executor.now();

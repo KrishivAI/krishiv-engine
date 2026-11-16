@@ -26,7 +26,7 @@ use crate::operator::{GlobalState, LocalState, Sink, SinkStatus};
 use crate::output_spill::{OutputSpill, SpillUnread};
 use crate::rows::Hll;
 use crate::sync::{Event, Mutex, lock};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 /// The build sink.
 #[derive(Debug)]
@@ -49,6 +49,12 @@ pub(crate) struct BuildGlobal {
     /// Between `finalize` and the first read: the finalized build, its
     /// tables spillable (see [`IdleBuild`]).
     idle: Mutex<Option<Arc<IdleBuild>>>,
+    /// Probe drivers that may still read the level-0 tables
+    /// ([`Self::probe_joined`], [`Self::probe_left`]).
+    probes: AtomicUsize,
+    /// A probe driver reached the probe's flush, so every probe driver
+    /// exists: the flush starts behind a barrier all of them arrive at.
+    probe_flushing: AtomicBool,
     /// Runtime filter partials merged so far, and the memory they hold.
     runtime: Mutex<Partials>,
     /// The runtime filters and where they are published, abandoned if the
@@ -92,9 +98,9 @@ struct Collect {
 /// The finalized build.
 #[derive(Debug)]
 pub(crate) struct Built {
-    /// Per level-0 partition: its table, or `None` if it spilled or is
-    /// empty.
-    pub(crate) tables: Vec<Option<JoinTable>>,
+    /// The level-0 tables, `None` once every probe driver is done with
+    /// them ([`BuildGlobal::probe_left`]).
+    level0: Mutex<Option<Arc<Level0>>>,
     /// Level-0 partitions with build rows on disk (bit per partition).
     pub(crate) spilled: u64,
     /// The spilled partitions' work, shared by the probe drivers' flush
@@ -103,7 +109,62 @@ pub(crate) struct Built {
     /// Notified whenever a driver's claim on `grace` ends, or a write of an
     /// idle build's partition does.
     pub(crate) grace_changed: Arc<Event>,
+    /// The runtime filters' memory: a scan of another pipeline may still
+    /// read a filter after the probe ends, so it stays until the build's
+    /// state is dropped.
     _memory: Vec<Reservation>,
+}
+
+impl Built {
+    /// The level-0 tables, for a probe driver to hold while it probes;
+    /// `None` once they were released.
+    pub(crate) fn level0(&self) -> Option<Arc<Level0>> {
+        lock(&self.level0).clone()
+    }
+}
+
+/// A finalized build's level-0 tables and the memory they hold (their rows
+/// and indexes). Each probe driver holds a reference while it probes, and
+/// the build holds one until every probe driver is done, so the memory goes
+/// back when the probe ends rather than when its pipeline does: a
+/// downstream sink's final phase (an aggregate's merge) gets it.
+#[derive(Debug)]
+pub(crate) struct Level0 {
+    /// Per level-0 partition: its table, or `None` if it spilled or is
+    /// empty.
+    pub(crate) tables: Vec<Option<JoinTable>>,
+    /// Held only to go back with the tables.
+    _memory: Vec<Reservation>,
+}
+
+impl BuildGlobal {
+    /// A probe driver that may read the level-0 tables: its state was made.
+    /// Only for a build its probe owns (a prebuilt build may serve more
+    /// than one probe, so it is never released).
+    pub(crate) fn probe_joined(&self) {
+        self.probes.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A probe driver started the probe's flush.
+    pub(crate) fn probe_flushing(&self) {
+        self.probe_flushing.store(true, Ordering::Release);
+    }
+
+    /// A probe driver that [joined](Self::probe_joined) is done with the
+    /// tables: its flush ended, or its state was dropped. It dropped its
+    /// own reference first. When the last one leaves after some driver
+    /// started the flush, every probe driver has left, and the build's
+    /// reference is taken out: the caller drops it, and with it the tables
+    /// and their memory. A count that reaches zero before any flush (drivers
+    /// whose output was not wanted) releases nothing: later drivers may
+    /// still join, and the tables go when the build's state is dropped.
+    pub(crate) fn probe_left(&self) -> Option<Arc<Level0>> {
+        let last = self.probes.fetch_sub(1, Ordering::AcqRel) == 1;
+        if !last || !self.probe_flushing.load(Ordering::Acquire) {
+            return None;
+        }
+        lock(&self.built.get()?.level0).take()
+    }
 }
 
 impl BuildGlobal {
@@ -179,10 +240,23 @@ impl IdleBuild {
     /// Ends the idle window: the build as the probe reads it.
     fn seal(&self) -> Option<Built> {
         let mut st = lock(&self.state);
-        let mut built = st.built.take()?;
-        for m in &mut st.memory {
-            built._memory.append(m);
+        let built = st.built.take()?;
+        // The tables' memory goes back with the tables (`Level0`), not with
+        // the build: a probe that ends releases it for the sink above.
+        // No clone of the tables exists before the seal, so `get_mut` holds.
+        let mut level0 = lock(&built.level0);
+        let present = level0.is_some();
+        let unique = level0.as_mut().and_then(Arc::get_mut);
+        debug_assert!(
+            unique.is_some() || !present,
+            "hash join level-0 tables shared before the build sealed"
+        );
+        if let Some(l0) = unique {
+            for m in &mut st.memory {
+                l0._memory.append(m);
+            }
         }
+        drop(level0);
         drop(st);
         self.hook.set_idle(false);
         self.hook.set_spillable_bytes(0);
@@ -237,8 +311,14 @@ impl SpillUnread for IdleBuild {
                 let Some(built) = built.as_mut() else {
                     return Ok(0);
                 };
-                let mut order: Vec<usize> = (0..built.tables.len())
-                    .filter(|&p| built.tables[p].is_some() && memory.get(p).is_some())
+                // Idle: no probe driver holds the tables yet, so the
+                // reference is unique.
+                let mut l0 = lock(&built.level0);
+                let Some(l0) = l0.as_mut().and_then(Arc::get_mut) else {
+                    return Ok(0);
+                };
+                let mut order: Vec<usize> = (0..l0.tables.len())
+                    .filter(|&p| l0.tables[p].is_some() && memory.get(p).is_some())
                     .collect();
                 order.sort_by_key(|&p| std::cmp::Reverse(held(&memory[p])));
                 // One partition covers the request: the smallest that does,
@@ -265,7 +345,7 @@ impl SpillUnread for IdleBuild {
                 topup.shrink_to_credit(topup.size());
                 let mut jobs = Vec::with_capacity(chosen.len());
                 for p in chosen {
-                    let Some(table) = built.tables[p].take() else {
+                    let Some(table) = l0.tables[p].take() else {
                         continue;
                     };
                     built.spilled |= 1 << p;
@@ -304,7 +384,9 @@ impl SpillUnread for IdleBuild {
                 for (p, table, scratch) in jobs {
                     let rows = table.arena().len() as u64;
                     let mut w = scope.writer(Arc::clone(&schema), scratch)?;
-                    write_sliced(&mut w, table.arena().batch())?;
+                    for block in table.arena().blocks() {
+                        write_sliced(&mut w, block)?;
+                    }
                     drop(table);
                     files.push((p, w.finish()?, rows));
                 }
@@ -643,11 +725,14 @@ impl BuildSink {
     }
 }
 
-/// What indexing a partition's in-memory rows reserves: `(index, copy)`,
-/// its [`JoinTable`] index (and match bitmap when `marks`) and its
-/// transient concatenation copy (none for a single chunk); `None` if no
-/// rows are in memory.
-fn build_need(part: &Part, row_layout: bool, marks: bool) -> Option<(usize, usize)> {
+/// What indexing a partition's in-memory rows reserves, as `(lasting,
+/// transient, kept)`: lasting is its [`JoinTable`] index (and match bitmap when
+/// `marks`) plus the copied chunk tails that stay beside chunks the arena
+/// also slices (held through the probe); transient is the rest of the
+/// tails' copy, which replaces chunks dropped once the arena is built
+/// ([`RowArena::reblock_bytes`]); kept is the tails' part of lasting.
+/// `None` if no rows are in memory.
+fn build_need(part: &Part, row_layout: bool, marks: bool) -> Option<(usize, usize, usize)> {
     if part.chunks.is_empty() {
         return None;
     }
@@ -657,12 +742,25 @@ fn build_need(part: &Part, row_layout: bool, marks: bool) -> Option<(usize, usiz
     if marks {
         index = index.saturating_add(JoinTable::marks_bytes(rows));
     }
-    let copy = if part.chunks.len() > 1 {
-        part.bytes()
-    } else {
-        0
-    };
-    Some((index, copy))
+    let (copy, kept) = RowArena::reblock_bytes(&part.chunks, 0);
+    Some((index.saturating_add(kept), copy.saturating_sub(kept), kept))
+}
+
+/// Returns what a built partition's chunks reserved beyond its arena: the
+/// chunks were reserved at their allocated size (builder slack, and tails
+/// charged at the chunk they were sliced from), the arena copied the tails
+/// into exact blocks and the chunks are gone, so the reservation keeps
+/// `bytes`, the arena's allocated bytes ([`RowArena::held_bytes`]), less
+/// the `kept` tail bytes the index reservation still holds (so the two
+/// together cover the arena; `kept` may be all of it, leaving the chunks'
+/// reservation nothing). Never below zero, and only ever shrinks.
+fn trim_to_arena(part: &mut Part, kept: usize, bytes: usize) {
+    let mut excess = part.bytes().saturating_sub(bytes.saturating_sub(kept));
+    for m in part.memory.iter_mut() {
+        let cut = excess.min(m.size());
+        m.shrink(cut);
+        excess -= cut;
+    }
 }
 
 /// A duration in whole nanoseconds, saturating.
@@ -676,8 +774,13 @@ struct Job {
     /// Bytes of its rows in memory.
     bytes: usize,
     chunks: Vec<Batch>,
-    /// What indexing it reserves (see [`build_need`]).
+    /// What indexing it reserves: lasting (index and kept tails) and the
+    /// transient copy (see [`build_need`]).
     need: (usize, usize),
+    /// Of the lasting part, the arena's copied tails that stay beside chunks
+    /// it also slices: reserved through the probe
+    /// ([`RowArena::reblock_bytes`]).
+    kept: usize,
     /// Its estimated distinct keys (row layout, when sketched).
     keys: Option<usize>,
 }
@@ -726,12 +829,17 @@ impl BuildGlobal {
             collect: Mutex::new(Collect::default()),
             built: OnceLock::new(),
             idle: Mutex::new(None),
+            probes: AtomicUsize::new(0),
+            probe_flushing: AtomicBool::new(false),
             runtime: Mutex::new(Partials::default()),
             filters: Vec::new(),
             publisher: None,
         };
         let _ = g.built.set(Built {
-            tables: Vec::new(),
+            level0: Mutex::new(Some(Arc::new(Level0 {
+                tables: Vec::new(),
+                _memory: Vec::new(),
+            }))),
             spilled: 0,
             grace: Arc::new(Mutex::new(grace)),
             grace_changed: Arc::new(Event::default()),
@@ -758,6 +866,11 @@ impl Sink for BuildSink {
             .collect()
     }
 
+    /// Partitions absorb in `combine`, which runs in lane order.
+    fn lane_safe(&self) -> bool {
+        true
+    }
+
     fn global_state(&self, ctx: &TaskContext) -> Result<GlobalState> {
         let hashing = self.0.hashing(ctx.query().config());
         let fanout = hashing.fanout0();
@@ -774,6 +887,8 @@ impl Sink for BuildSink {
             }),
             built: OnceLock::new(),
             idle: Mutex::new(None),
+            probes: AtomicUsize::new(0),
+            probe_flushing: AtomicBool::new(false),
             runtime: Mutex::new(Partials {
                 builders: partials(&self.0),
                 memory: Vec::new(),
@@ -894,7 +1009,7 @@ impl Sink for BuildSink {
         }
         for (p, c) in chunks {
             l.parts[p].chunks.push(c);
-            let merged = l.parts[p].coalesce(s.arena_schema(&g.hashing))?;
+            let merged = l.parts[p].block(s.arena_schema(&g.hashing))?;
             s.counters.max(Counter::MaxCoalesceCopyBytes, merged as u64);
         }
         if let Some((sketches, _)) = &mut l.sketches {
@@ -956,9 +1071,11 @@ impl Sink for BuildSink {
             let s = &self.0;
             let filter_memory = self.publish_filters(g, ctx);
             // Write what is left of spilled partitions; reserve the index of
-            // the rest, spilling the largest while it does not fit. A
-            // partition's table is built only while its concatenation copy
-            // is reserved, so the copies never need the build's size again.
+            // the rest, spilling the largest while it does not fit. The arenas
+            // read the blocks in place; finalize copies only the chunk tails.
+            // A spilling build reserves every index and kept tail and the
+            // largest transient copy, so one partition can always run and the
+            // copies never need the build's size again.
             let mut index = ctx.consumer().reservation();
             let mut held_copy = 0;
             if s.spill.is_some() {
@@ -986,7 +1103,7 @@ impl Sink for BuildSink {
                         let rows = g.hashing.rows();
                         let marks = s.join_type.builds_preserved();
                         let needs = c.parts.iter().filter_map(|p| build_need(p, rows, marks));
-                        needs.fold((0usize, 0usize), |(i, m), (index, copy)| {
+                        needs.fold((0usize, 0usize), |(i, m), (index, copy, _)| {
                             (i.saturating_add(index), usize::max(m, copy))
                         })
                     };
@@ -1010,11 +1127,12 @@ impl Sink for BuildSink {
                         let marks = s.join_type.builds_preserved();
                         Some((i, build_need(p, g.hashing.rows(), marks)?, p, keys))
                     })
-                    .map(|(i, need, p, keys)| Job {
+                    .map(|(i, (lasting, copy, kept), p, keys)| Job {
                         part: i,
                         bytes: p.bytes(),
+                        kept,
                         chunks: std::mem::take(&mut p.chunks),
-                        need,
+                        need: (lasting, copy),
                         keys,
                     })
                     .collect()
@@ -1025,11 +1143,11 @@ impl Sink for BuildSink {
             // Nothing in memory is spillable any more.
             ctx.consumer().signal().set_spillable_bytes(0);
             // One blocking task per partition (the executor's blocking pool
-            // bounds how many run at once), each started only once its
-            // concatenation copy is reserved. A spilling build's reservation
-            // already funds the largest copy (`spare`), so one partition can
-            // always run; without a spill scope a partition's index and copy
-            // are asked for through arbitration when nothing else runs.
+            // bounds how many run at once), each started only once its tails'
+            // copy is reserved. A spilling build's reservation already funds
+            // the largest transient copy (`spare`), so one partition can always run;
+            // without a spill scope a partition's index and copy are asked
+            // for through arbitration when nothing else runs.
             let spill = s.spill.is_some();
             let mut spare = held_copy;
             // The concatenation copies reserved at once (for the counter).
@@ -1037,6 +1155,10 @@ impl Sink for BuildSink {
             let mut jobs = std::collections::VecDeque::from(jobs);
             let mut running = futures::stream::FuturesUnordered::new();
             let mut tables = Vec::with_capacity(jobs.len());
+            // Per built partition: the kept tails its index reservation
+            // holds and its arena's allocated bytes, to true up its chunks'
+            // reservation once they are gone.
+            let mut arena_held = Vec::with_capacity(jobs.len());
             loop {
                 if let Some(&Job {
                     need: (index_bytes, copy),
@@ -1052,7 +1174,7 @@ impl Sink for BuildSink {
                     let funded = if spill && copy <= spare {
                         spare -= copy;
                         true
-                    } else if index.try_grow(grow).is_ok() {
+                    } else if grow == 0 || index.try_grow(grow).is_ok() {
                         true
                     } else if running.is_empty() {
                         index.grow(grow).await.map_err(KrishivError::from)?;
@@ -1065,6 +1187,7 @@ impl Sink for BuildSink {
                         chunks,
                         need: (index_bytes, copy),
                         keys,
+                        kept,
                         ..
                     }) = jobs.pop_front_if(|_| funded)
                     {
@@ -1079,7 +1202,7 @@ impl Sink for BuildSink {
                                 .run_blocking(move || {
                                     let t0 = std::time::Instant::now();
                                     let schema = shared.arena_schema(&hashing);
-                                    let arena = RowArena::concat(schema, &chunks)?;
+                                    let arena = RowArena::over_chunks(schema, &chunks)?;
                                     drop(chunks);
                                     let t1 = std::time::Instant::now();
                                     let layout = shared.keys.layout().filter(|_| hashing.rows());
@@ -1103,7 +1226,7 @@ impl Sink for BuildSink {
                                     table
                                 })
                                 .await?;
-                            Ok::<_, KrishivError>((p, table, copy, index_bytes))
+                            Ok::<_, KrishivError>((p, table, index_bytes, copy, kept))
                         });
                         continue;
                     }
@@ -1111,15 +1234,28 @@ impl Sink for BuildSink {
                 let Some(done) = futures::StreamExt::next(&mut running).await else {
                     break;
                 };
-                let (p, table, copy, index_bytes) = done?;
-                copying = copying.saturating_sub(copy);
+                let (p, table, lasting, transient, kept) = done?;
+                copying = copying.saturating_sub(transient);
                 // The index was reserved for one key per row: keep what it
-                // holds.
+                // holds. The copied tails beside chunks the arena also slices
+                // (`kept`, part of `lasting`) stay reserved through the probe.
                 index.shrink(
-                    index_bytes
+                    lasting
+                        .saturating_sub(kept)
                         .saturating_sub(table.index_memory())
                         .min(index.size()),
                 );
+                // The transient copy replaced chunks that are gone now.
+                if spill {
+                    // Keep the largest transient copy funded; return the rest.
+                    spare = spare.saturating_add(transient);
+                    if spare > held_copy {
+                        index.shrink((spare - held_copy).min(index.size()));
+                        spare = held_copy;
+                    }
+                } else {
+                    index.shrink(transient.min(index.size()));
+                }
                 let split = table.arena().memory_split();
                 let n = &self.0.counters;
                 n.add(
@@ -1133,19 +1269,13 @@ impl Sink for BuildSink {
                 self.0.counters.or(Counter::IndexKinds, kind as u64);
                 self.0.counters.add(Counter::HashEntries, keys as u64);
                 self.0.counters.add(Counter::HashBuckets, buckets as u64);
+                // Of `kept`, what the index reservation still holds once the
+                // index is paid: an index past its estimate took the rest.
+                let covered = lasting.saturating_sub(table.index_memory()).min(kept);
+                arena_held.push((p, covered, table.arena().held_bytes()));
                 tables.push((p, table));
-                if spill {
-                    // Keep the largest copy funded; return the rest.
-                    spare = spare.saturating_add(copy);
-                    if spare > held_copy {
-                        index.shrink(spare - held_copy);
-                        spare = held_copy;
-                    }
-                } else {
-                    index.shrink(copy);
-                }
             }
-            index.shrink(spare);
+            index.shrink(spare.min(index.size()));
             let mut c = lock(&g.collect);
             // Spilled partitions that hold rows: the probe defers only these
             // (an empty partition matches nothing, spilled or not).
@@ -1173,9 +1303,14 @@ impl Sink for BuildSink {
                     }
                 }
             }
-            let mut memory = vec![index, filter_memory];
+            let mut memory = vec![index];
             let mut grace = Grace::new(g.hashing.fanout0());
             grace.keep_unprobed = s.join_type.keeps_null_build_keys();
+            for (p, kept, bytes) in arena_held {
+                if let Some(part) = c.parts.get_mut(p) {
+                    trim_to_arena(part, kept, bytes);
+                }
+            }
             for (p, part) in c.parts.iter_mut().enumerate() {
                 if spilled & (1 << p) == 0 {
                     self.0
@@ -1197,11 +1332,14 @@ impl Sink for BuildSink {
             n.add(Counter::BuildSpillBytes, c.file_bytes);
             n.add(Counter::FinalizeNs, nanos(started.elapsed()));
             let built = Built {
-                tables: all,
+                level0: Mutex::new(Some(Arc::new(Level0 {
+                    tables: all,
+                    _memory: memory,
+                }))),
                 spilled,
                 grace: Arc::new(Mutex::new(grace)),
                 grace_changed: Arc::new(Event::default()),
-                _memory: memory,
+                _memory: vec![filter_memory],
             };
             drop(c);
             if g.built.get().is_some() || lock(&g.idle).is_some() {

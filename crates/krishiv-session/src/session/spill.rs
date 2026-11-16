@@ -28,7 +28,9 @@ impl SpillScopes for QuerySpill {
             .unwrap_or_else(PoisonError::into_inner);
         if slot.is_none() {
             let manager = SpillManager::open(&SpillConfig::from_config(&self.state.runtime.config))
-                .map_err(|e| internal(format!("cannot set up the spill directory: {e}")))?;
+                .map_err(|e| internal(format!(
+                    "cannot set up the spill directory (set `krishiv.spill.dir` to a writable local directory): {e}"
+                )))?;
             *slot = Some(manager);
         }
         slot.as_ref().map_or_else(
@@ -57,6 +59,9 @@ pub(crate) struct WriteTarget {
     pub(crate) mode: String,
     pub(crate) path: OptionValue,
     pub(crate) options: BTreeMap<String, OptionValue>,
+    /// The stored options of the table written (`INSERT`), already authorized when they were
+    /// stored: an option equal to one of them is not asked about again (P3-T067b).
+    pub(crate) table_options: BTreeMap<String, OptionValue>,
     pub(crate) partition_by: Vec<String>,
 }
 

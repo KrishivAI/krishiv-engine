@@ -112,6 +112,16 @@ fn the_header_lists_exactly_the_features_in_use() {
         message("options_map_literal").features,
         ["options_map_literals"]
     );
+    // The literal's own type is nested, so a reader needs both.
+    assert_eq!(
+        message("nested_literals").features,
+        ["nested_literals", "nested_types"]
+    );
+    // The declared schema is one struct type, so a reader needs both.
+    assert_eq!(
+        message("file_source_schema").features,
+        ["file_source_schema", "nested_types"]
+    );
     assert_eq!(
         message("aggregate_any_value").features,
         ["any_value_by_aggregates"]
@@ -1884,15 +1894,156 @@ fn collated_strings_need_their_feature_wherever_they_appear() {
         &m,
         "the feature header does not match the plan's constructs",
     );
-    // The indeterminate collation of a mixed expression is the analyzer's,
-    // never a plan's.
+    // The INDETERMINATE collation has a feature of its own.
     let indeterminate = DataType::CollatedString(Collation::INDETERMINATE);
-    let mut plan = inventory::file_scan();
-    plan.scan.output[0].data_type = indeterminate;
-    assert!(matches!(
-        encode(&plan_of(PhysNode::Scan(plan))),
-        Err(CodecError::Unsupported(_))
-    ));
+    assert_eq!(
+        feature_of(Construct::Type(&indeterminate)),
+        Some(Feature::IndeterminateCollation)
+    );
+}
+
+/// The INDETERMINATE collation of a mixed expression's type (`string collate
+/// null`, Spark's result type of `elt` or `rpad` over strings of conflicting
+/// collations) travels by its name `null`, alone or inside a nested type, under
+/// `indeterminate_collation`: a reader without it refuses the plan naming it.
+#[test]
+fn the_indeterminate_collation_needs_its_feature() {
+    use krishiv_exec::physical::ProjectItemPlan;
+    use krishiv_plan::Literal;
+    use krishiv_types::{Collation, DataType, MapType, StructField, StructType};
+    let null = DataType::CollatedString(Collation::INDETERMINATE);
+    assert_eq!(
+        message("collated_indeterminate_scan").features,
+        ["indeterminate_collation"]
+    );
+    assert_eq!(
+        Feature::IndeterminateCollation.kind(),
+        FeatureKind::Semantic
+    );
+    assert_eq!(Feature::IndeterminateCollation.legacy_level(), 6);
+    // Nested: a map of them (`str_to_map`) and a struct field's `__COLLATIONS`.
+    let nested: Vec<DataType> = vec![
+        MapType::new(null.clone(), null.clone(), true).into(),
+        StructType::new(vec![StructField::new("s", null, true)]).into(),
+    ];
+    let mut plans = vec![(
+        "collated_indeterminate_scan".to_owned(),
+        cases()
+            .into_iter()
+            .find(|(n, _)| n == "collated_indeterminate_scan")
+            .unwrap()
+            .1,
+    )];
+    for t in nested {
+        let plan = plan_of(PhysNode::Project {
+            input: Box::new(PhysNode::Scan(inventory::file_scan())),
+            layout: Vec::new(),
+            items: vec![ProjectItemPlan::Expr {
+                name: "m".to_owned(),
+                expr: inventory::lit(Literal::Null(Some(t.clone()))),
+            }],
+            nullable: None,
+            subqueries: Vec::new(),
+        });
+        assert_eq!(
+            to_message(&plan).unwrap().features,
+            ["indeterminate_collation", "nested_types"],
+            "{t}"
+        );
+        plans.push((t.to_string(), plan));
+    }
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::IndeterminateCollation),
+    );
+    for (name, plan) in plans {
+        let bytes = encode(&plan).unwrap();
+        assert_eq!(decode(&bytes).unwrap(), plan, "{name}");
+        assert_eq!(encode(&decode(&bytes).unwrap()).unwrap(), bytes, "{name}");
+        assert_eq!(
+            decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+            CodecError::UnsupportedFeatures {
+                missing: vec!["indeterminate_collation".to_owned()]
+            },
+            "{name}"
+        );
+    }
+    // A header that hides it is corrupt.
+    let mut m = message("collated_indeterminate_scan");
+    m.features.clear();
+    m.min_reader_version = 2;
+    corrupt(
+        &m,
+        "the feature header does not match the plan's constructs",
+    );
+}
+
+/// An Arrow field tagged with the INDETERMINATE collation (an exchange schema or an aggregate's element
+/// field) names `indeterminate_collation`, alone or inside a nested type: the tag is not parseable DDL.
+#[test]
+fn an_indeterminate_arrow_field_tag_needs_its_feature() {
+    use arrow_schema::{DataType as Arrow, Field};
+    use krishiv_types::arrow::SPARK_TYPE_METADATA_KEY;
+    for tag in ["string collate null", "array<string collate null>"] {
+        let field = Field::new("s", Arrow::Utf8View, true).with_metadata(
+            std::collections::HashMap::from([(SPARK_TYPE_METADATA_KEY.to_owned(), tag.to_owned())]),
+        );
+        assert_eq!(
+            feature_of(Construct::ArrowField(&field)),
+            Some(Feature::IndeterminateCollation),
+            "{tag}"
+        );
+    }
+}
+
+/// `max` and `min` of a collated string (`MaxByKeyFirst`, `MinByKeyFirst`)
+/// have their own aggregate functions on the wire, under `collated_min_max`.
+#[test]
+fn collated_min_max_needs_its_feature() {
+    use krishiv_exec::aggregate::AggregateFunction;
+    assert_eq!(
+        message("collated_min_max").features,
+        ["collated_min_max", "nested_types"]
+    );
+    for f in [
+        AggregateFunction::MaxByKeyFirst,
+        AggregateFunction::MinByKeyFirst,
+    ] {
+        assert_eq!(
+            feature_of(Construct::AggregateFunction(&f)),
+            Some(Feature::CollatedMinMax)
+        );
+    }
+    assert_eq!(Feature::CollatedMinMax.kind(), FeatureKind::Semantic);
+    assert_eq!(Feature::CollatedMinMax.legacy_level(), 6);
+    let (_, plan) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "collated_min_max")
+        .unwrap();
+    let bytes = encode(&plan).unwrap();
+    assert_eq!(decode(&bytes).unwrap(), plan);
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::CollatedMinMax),
+    );
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["collated_min_max".to_owned()]
+        }
+    );
+    // Like `max_by`, they take no `ignore_nulls`.
+    let mut m = message("collated_min_max");
+    let last = m.nodes.len() - 1;
+    let Some(pb::node::Kind::Aggregate(a)) = m.nodes[last].kind.as_mut() else {
+        panic!("not an aggregate")
+    };
+    a.aggregates[0].ignore_nulls = true;
+    corrupt(&m, "`ignore_nulls` on a function without it");
 }
 
 #[test]
@@ -1921,12 +2072,16 @@ fn a_decoded_collation_is_checked() {
         "SYSTEM.BUILTIN.UTF8_LCASE",
         "UNICODE_CS",
         "UTF8_BINARY",
-        "null",
         "",
         "NOPE",
     ] {
         corrupt(&named(name), "an invalid collation");
     }
+    // `null` is the INDETERMINATE collation, which needs its own feature.
+    corrupt(
+        &named("null"),
+        "the feature header does not match the plan's constructs",
+    );
     let on_string = edit(&|t: &mut pb::DataType| t.kind = Kind::String as i32);
     corrupt(
         &on_string,
@@ -1954,4 +2109,458 @@ fn a_python_udf_needs_its_feature() {
             missing: vec!["python_udf".to_owned()]
         }
     );
+}
+
+/// A vector carrier (design P3-T075) needs its own feature, and a reader without it refuses the plan naming it.
+#[test]
+fn a_vector_carrier_needs_its_feature() {
+    use std::sync::Arc;
+    let vector = arrow_schema::DataType::FixedSizeList(
+        Arc::new(arrow_schema::Field::new(
+            "item",
+            arrow_schema::DataType::Float32,
+            true,
+        )),
+        768,
+    );
+    assert_eq!(
+        feature_of(Construct::ArrowType(&vector)),
+        Some(Feature::FixedSizeListCarrier)
+    );
+    assert_eq!(
+        message("vector_carrier_aggregate").features,
+        ["fixed_size_list_carrier"]
+    );
+    let (_, plan) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "vector_carrier_aggregate")
+        .unwrap();
+    let bytes = encode(&plan).unwrap();
+    let reader = ReaderFeatures::only([Feature::NestedTypes]);
+    let err = decode_with(&bytes, &Limits::default(), &reader).unwrap_err();
+    assert_eq!(
+        err,
+        CodecError::UnsupportedFeatures {
+            missing: vec!["fixed_size_list_carrier".to_owned()]
+        }
+    );
+}
+
+/// The Python UDF relation nodes, the Python UDTF generator and every eval
+/// type past the scalar ones list `python_udf_relations` (semantic: no plan
+/// without them computes the same rows); a reader without it refuses each
+/// plan naming it, and a scalar-only plan does not list it.
+#[test]
+fn the_python_udf_relation_kinds_need_their_feature() {
+    assert_eq!(Feature::PythonUdfRelations.kind(), FeatureKind::Semantic);
+    // The declared `ARRAY<STRING>` result is a nested type.
+    for name in ["python_map", "python_group_map", "python_cogroup_map"] {
+        assert_eq!(
+            message(name).features,
+            ["nested_types", "python_udf_relations"],
+            "{name}"
+        );
+    }
+    assert_eq!(
+        message("python_udtf_generate").features,
+        ["generate", "python_udf", "python_udf_relations"]
+    );
+    for name in ["python_aggregate", "python_eval_types"] {
+        assert_eq!(
+            message(name).features,
+            ["python_udf", "python_udf_relations"],
+            "{name}"
+        );
+    }
+    assert_eq!(message("python_udf").features, ["python_udf"]);
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::PythonUdfRelations),
+    );
+    for name in [
+        "python_map",
+        "python_group_map",
+        "python_cogroup_map",
+        "python_aggregate",
+        "python_udtf_generate",
+        "python_eval_types",
+    ] {
+        let bytes = message(name).encode_to_vec();
+        assert_eq!(
+            decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+            CodecError::UnsupportedFeatures {
+                missing: vec!["python_udf_relations".to_owned()]
+            },
+            "{name}"
+        );
+    }
+}
+
+/// A `TABLESAMPLE` plan lists `sample` (a semantic feature: no plan without
+/// the node keeps the same rows), and a reader without it refuses the plan
+/// naming the feature.
+#[test]
+fn a_sample_needs_its_feature() {
+    assert_eq!(message("sample").features, ["sample"]);
+    assert_eq!(Feature::Sample.kind(), FeatureKind::Semantic);
+    let bytes = message("sample").encode_to_vec();
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::Sample),
+    );
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["sample".to_owned()]
+        }
+    );
+}
+
+// ---- nested literals (nested_literals) ------------------------------------
+
+#[test]
+fn nested_literals_need_their_feature_and_their_type_feature() {
+    let m = message("nested_literals");
+    assert_eq!(m.features, ["nested_literals", "nested_types"]);
+    assert_eq!(Feature::NestedLiterals.kind(), FeatureKind::Semantic);
+    let bytes = m.encode_to_vec();
+    // A reader that has the nested types but not the literals refuses the
+    // plan naming the literals; the reverse names the types.
+    let without_literals = ReaderFeatures::only([Feature::NestedTypes]);
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &without_literals).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["nested_literals".to_owned()]
+        }
+    );
+    let without_types = ReaderFeatures::only([Feature::NestedLiterals]);
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &without_types).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["nested_types".to_owned()]
+        }
+    );
+    let both = ReaderFeatures::only([Feature::NestedLiterals, Feature::NestedTypes]);
+    let plan = decode_with(&bytes, &Limits::default(), &both).unwrap();
+    assert_eq!(encode(&plan).unwrap(), bytes);
+}
+
+#[test]
+fn a_nested_literal_is_classified_as_an_expression_and_by_its_type() {
+    use krishiv_plan::{Expr, Literal};
+    use krishiv_types::{ArrayType, DataType};
+    let l = Literal::array(ArrayType::new(DataType::Integer, true), Vec::new()).unwrap();
+    assert_eq!(
+        feature_of(Construct::Expr(&Expr::from(l))),
+        Some(Feature::NestedLiterals)
+    );
+    assert_eq!(
+        feature_of(Construct::NestedLiteralType),
+        Some(Feature::NestedTypes)
+    );
+}
+
+/// Every literal of the plan's expression table, mutably.
+fn literals_mut(m: &mut pb::PhysicalPlan) -> Vec<&mut pb::Literal> {
+    m.exprs
+        .iter_mut()
+        .filter_map(|e| match &mut e.kind {
+            Some(pb::expr::Kind::Literal(l)) => Some(l),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_nested_literal_that_does_not_fit_its_type_is_corrupt() {
+    use pb::literal::Kind;
+    let int_type = pb::DataType {
+        kind: pb::data_type::Kind::Integer as i32,
+        ..pb::DataType::default()
+    };
+    // The array type replaced by a scalar one.
+    let mut m = message("nested_literals");
+    for l in literals_mut(&mut m) {
+        if let Some(Kind::Array(a)) = &mut l.kind {
+            a.data_type = Some(int_type.clone());
+        }
+    }
+    corrupt(&m, "an array literal whose type is not an array");
+    // An element of another type.
+    let mut m = message("nested_literals");
+    for l in literals_mut(&mut m) {
+        if let Some(Kind::Array(a)) = &mut l.kind {
+            for e in &mut a.elements {
+                e.kind = Some(Kind::String("x".to_owned()));
+            }
+        }
+    }
+    corrupt(&m, "an array literal that does not fit its type");
+    // A struct with a missing value.
+    let mut m = message("nested_literals");
+    for l in literals_mut(&mut m) {
+        if let Some(Kind::Struct(s)) = &mut l.kind {
+            s.fields.pop();
+        }
+    }
+    corrupt(&m, "a struct literal that does not fit its type");
+    // No type at all.
+    let mut m = message("nested_literals");
+    for l in literals_mut(&mut m) {
+        if let Some(Kind::KeyValueMap(v)) = &mut l.kind {
+            v.data_type = None;
+        }
+    }
+    let err = decode(&m.encode_to_vec()).unwrap_err();
+    assert!(matches!(err, CodecError::Corrupt(_)), "{err:?}");
+}
+
+// ---- declared file schema (file_source_schema) -----------------------------
+
+#[test]
+fn a_declared_file_schema_needs_its_feature_and_the_type_feature() {
+    let m = message("file_source_schema");
+    assert_eq!(Feature::FileSourceSchema.kind(), FeatureKind::Semantic);
+    let bytes = m.encode_to_vec();
+    let without_schema = ReaderFeatures::only([Feature::NestedTypes]);
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &without_schema).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["file_source_schema".to_owned()]
+        }
+    );
+    let without_types = ReaderFeatures::only([Feature::FileSourceSchema]);
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &without_types).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["nested_types".to_owned()]
+        }
+    );
+    let both = ReaderFeatures::only([Feature::FileSourceSchema, Feature::NestedTypes]);
+    let plan = decode_with(&bytes, &Limits::default(), &both).unwrap();
+    assert_eq!(encode(&plan).unwrap(), bytes);
+    assert_eq!(
+        feature_of(Construct::FileSourceSchema),
+        Some(Feature::FileSourceSchema)
+    );
+}
+
+/// A read that infers writes no schema field and lists no feature for it.
+#[test]
+fn a_read_without_a_declared_schema_has_no_field_and_no_feature() {
+    let m = message("interval_array_aggregate");
+    assert!(!m.features.iter().any(|f| f == "file_source_schema"));
+    let sources: Vec<_> = m
+        .nodes
+        .iter()
+        .filter_map(|n| match &n.kind {
+            Some(pb::node::Kind::Scan(s)) => s.source.as_ref(),
+            _ => None,
+        })
+        .collect();
+    assert!(!sources.is_empty());
+    for s in sources {
+        if let Some(pb::read_source::Kind::Files(f)) = &s.kind {
+            assert!(f.schema.is_none());
+        }
+    }
+}
+
+#[test]
+fn a_declared_file_schema_that_is_not_a_struct_is_corrupt() {
+    let mut m = message("file_source_schema");
+    let mut seen = false;
+    for node in &mut m.nodes {
+        if let Some(pb::node::Kind::Scan(s)) = &mut node.kind
+            && let Some(pb::ReadSource {
+                kind: Some(pb::read_source::Kind::Files(f)),
+            }) = &mut s.source
+        {
+            f.schema = Some(pb::DataType {
+                kind: pb::data_type::Kind::Integer as i32,
+                ..pb::DataType::default()
+            });
+            seen = true;
+        }
+    }
+    assert!(seen);
+    corrupt(&m, "a declared file schema that is not a struct");
+}
+
+// ---- local relation scans (local_relation_source) --------------------------
+
+fn local_source_mut(m: &mut pb::PhysicalPlan, f: impl Fn(&mut pb::LocalSource)) -> bool {
+    let mut seen = false;
+    for node in &mut m.nodes {
+        if let Some(pb::node::Kind::Scan(s)) = &mut node.kind
+            && let Some(pb::ReadSource {
+                kind: Some(pb::read_source::Kind::Local(l)),
+            }) = &mut s.source
+        {
+            f(l);
+            seen = true;
+        }
+    }
+    seen
+}
+
+#[test]
+fn a_local_relation_scan_needs_its_feature() {
+    let m = message("local_relation_source");
+    assert_eq!(Feature::LocalRelationSource.kind(), FeatureKind::Semantic);
+    assert_eq!(m.features, ["local_relation_source"]);
+    let bytes = m.encode_to_vec();
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &ReaderFeatures::only([])).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["local_relation_source".to_owned()]
+        }
+    );
+    let reader = ReaderFeatures::only([Feature::LocalRelationSource]);
+    let plan = decode_with(&bytes, &Limits::default(), &reader).unwrap();
+    assert_eq!(encode(&plan).unwrap(), bytes);
+    assert_eq!(
+        feature_of(Construct::LocalRelationSource),
+        Some(Feature::LocalRelationSource)
+    );
+}
+
+/// The plan carries the hash and counts, never rows, and decodes without a lease.
+#[test]
+fn a_decoded_local_relation_holds_the_hash_and_counts_and_no_lease() {
+    let bytes = message("local_relation_source").encode_to_vec();
+    let plan = decode(&bytes).unwrap();
+    let mut found = false;
+    let mut stack = vec![plan.root()];
+    while let Some(n) = stack.pop() {
+        if let PhysNode::Scan(s) = n
+            && let krishiv_plan::ReadSource::Local(l) = &s.scan.source
+        {
+            assert_eq!(l.relation().hash.as_bytes(), &[0x5a; 32]);
+            assert_eq!((l.batches(), l.rows(), l.bytes()), (2, 1_000, 4_096));
+            assert!(l.lease().is_none());
+            assert_eq!(l.schema().fields().len(), 2);
+            found = true;
+        }
+        stack.extend(n.children());
+    }
+    assert!(found);
+}
+
+#[test]
+fn a_local_relation_hash_of_the_wrong_length_is_corrupt() {
+    let mut m = message("local_relation_source");
+    assert!(local_source_mut(&mut m, |l| l.hash.truncate(5)));
+    corrupt(&m, "a local relation hash that is not 32 bytes");
+}
+
+#[test]
+fn a_local_relation_with_a_nested_column_lists_the_type_feature_too() {
+    use arrow_schema::{DataType as A, Field, Schema};
+    let mut scan = inventory::file_scan();
+    scan.scan.source = krishiv_plan::ReadSource::Local(krishiv_plan::LocalRelation::from_decoded(
+        std::sync::Arc::new(Schema::new(vec![Field::new(
+            "xs",
+            A::List(std::sync::Arc::new(Field::new("item", A::Int32, true))),
+            true,
+        )])),
+        [1; 32],
+        1,
+        1,
+        1,
+    ));
+    let m = to_message(&plan_of(PhysNode::Scan(scan))).unwrap();
+    assert_eq!(m.features, ["local_relation_source", "nested_types"]);
+    let only_local = ReaderFeatures::only([Feature::LocalRelationSource]);
+    assert_eq!(
+        decode_with(&m.encode_to_vec(), &Limits::default(), &only_local).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["nested_types".to_owned()]
+        }
+    );
+}
+
+#[test]
+fn a_reader_without_table_write_refuses_a_table_write_naming_it() {
+    for name in [
+        "table_write",
+        "table_write_by_filter",
+        "table_write_row_level",
+    ] {
+        let plan = cases().into_iter().find(|(n, _)| n == name).unwrap().1;
+        let bytes = encode(&plan).unwrap();
+        assert_eq!(decode(&bytes).unwrap(), plan, "{name}");
+        let err = decode_with(&bytes, &Limits::default(), &ReaderFeatures::only([])).unwrap_err();
+        let CodecError::UnsupportedFeatures { missing } = err else {
+            panic!("{name}: {err:?}");
+        };
+        assert!(
+            missing.contains(&"table_write".to_owned()),
+            "{name}: {missing:?}"
+        );
+    }
+}
+
+#[test]
+fn a_table_write_to_a_declared_schema_source_lists_the_schema_features() {
+    use krishiv_types::{DataType, StructField, StructType};
+    let mut root = cases()
+        .into_iter()
+        .find(|(n, _)| n == "table_write")
+        .unwrap()
+        .1
+        .root()
+        .clone();
+    let PhysNode::TableWrite { table, .. } = &mut root else {
+        panic!("not a table write");
+    };
+    let schema = StructType::new([StructField::new("a", DataType::Integer, true)]);
+    table.source = krishiv_plan::ReadSource::files(
+        "csv".to_owned(),
+        vec![krishiv_common::secret::OptionValue::from_user(
+            "path",
+            "file:/tmp/t",
+        )],
+        Default::default(),
+    )
+    .with_schema(schema);
+    let bytes = encode(&plan_of(root)).unwrap();
+    // The written source carries the schema, so a reader without the feature must refuse
+    // the plan, not infer the columns again.
+    let err = decode_with(&bytes, &Limits::default(), &ReaderFeatures::only([])).unwrap_err();
+    let CodecError::UnsupportedFeatures { missing } = err else {
+        panic!("{err:?}");
+    };
+    assert!(
+        missing.contains(&"file_source_schema".to_owned()),
+        "{missing:?}"
+    );
+    assert!(decode(&bytes).is_ok());
+}
+
+#[test]
+fn a_table_write_never_carries_an_inline_secret() {
+    use krishiv_exec::physical::TableWriteRequest;
+    let mut root = cases()
+        .into_iter()
+        .find(|(n, _)| n == "table_write")
+        .unwrap()
+        .1
+        .root()
+        .clone();
+    let PhysNode::TableWrite { request, .. } = &mut root else {
+        panic!("not a table write");
+    };
+    let TableWriteRequest::Write(w) = request else {
+        panic!("not a write");
+    };
+    w.options
+        .insert("fs.s3a.secret.key".to_owned(), "abc".to_owned());
+    let err = encode(&plan_of(root)).unwrap_err();
+    assert!(matches!(err, CodecError::Unsupported(_)), "{err:?}");
+    assert!(!err.to_string().contains("abc"), "{err}");
 }

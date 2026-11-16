@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod budgets;
+pub mod changelog;
 pub mod ci;
 pub mod codeql_proxy;
 pub mod compat;
@@ -12,6 +13,7 @@ pub mod console;
 pub mod coverage;
 pub mod dev;
 pub mod docs;
+pub mod docs_analyze;
 pub mod docs_examples;
 pub mod docs_ext;
 pub mod docs_sql;

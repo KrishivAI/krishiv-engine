@@ -1,9 +1,35 @@
 {
+  "KRISHIV_ADMIN_PRECONDITION_FAILED" : {
+    "message" : [
+      "The change was refused because the object is not in the state the request expects (<reason>)."
+    ],
+    "sqlState" : "55000",
+    "audience" : "operator"
+  },
+  "KRISHIV_AUTH_IMPERSONATION_DENIED" : {
+    "message" : [
+      "The caller may not act for this user. An administrator grants acting for others with \"krishiv.auth.principals.CALLER.privileges\" = impersonate and lists whom in \"krishiv.auth.principals.CALLER.impersonates\", where CALLER is the caller's principal name; the server's audit log has the reason."
+    ],
+    "sqlState" : "42501"
+  },
   "KRISHIV_CATALOG_FAILURE" : {
     "message" : [
       "The catalog <catalog> failed while loading <relationName>."
     ],
     "sqlState" : "58030"
+  },
+  "KRISHIV_CATALOG_LIMIT_EXCEEDED" : {
+    "message" : [
+      "<source> exceeds <limit> (<value>), so it was not loaded. A legitimate table or catalog this large needs <config>."
+    ],
+    "sqlState" : "54000"
+  },
+  "KRISHIV_CATALOG_LOCATION_REFUSED" : {
+    "message" : [
+      "The catalog <catalog> returned a location for <relationName> that Krishiv does not allow (<rule>), so the table was not loaded. This is a fault of the catalog, not a permission you can be granted: an administrator needs to check what the catalog returns for this table."
+    ],
+    "sqlState" : "58030",
+    "audience" : "operator"
   },
   "KRISHIV_COMMIT_LOG_CORRUPT" : {
     "message" : [
@@ -28,6 +54,13 @@
   "KRISHIV_FILE_CHANGED_DURING_READ" : {
     "message" : [
       "The file <path> changed while it was being read: it no longer matches the version <version> seen when the scan was planned. Run REFRESH TABLE, or re-run the query to read the new version."
+    ],
+    "sqlState" : "KD001",
+    "audience" : "operator"
+  },
+  "KRISHIV_ICEBERG_INVALID_DELETES" : {
+    "message" : [
+      "<message>"
     ],
     "sqlState" : "KD001",
     "audience" : "operator"
@@ -68,6 +101,12 @@
     ],
     "sqlState" : "22023"
   },
+  "KRISHIV_INVALID_OPERATION_TAG" : {
+    "message" : [
+      "<reason>"
+    ],
+    "sqlState" : "22023"
+  },
   "KRISHIV_INVALID_PROFILE_DOCUMENT" : {
     "message" : [
       "The <document> document is invalid: <reason>."
@@ -105,6 +144,24 @@
     "sqlState" : "58030",
     "audience" : "operator"
   },
+  "KRISHIV_OPERATION_LIMIT" : {
+    "message" : [
+      "Cannot start a new operation: <limitName> allows at most <limit> live operations per session. Wait for one to finish or release it (ReleaseExecute, or interrupt it in the client), or raise \"<limitName>\"."
+    ],
+    "sqlState" : "53400"
+  },
+  "KRISHIV_PYTHON_UDF_RESULT_MISMATCH" : {
+    "message" : [
+      "The Python UDF <name> returned a result that does not match what it declares: <reason>. Make the function return the declared columns, in their declared types, and for a grouped aggregate one value per group."
+    ],
+    "sqlState" : "39000"
+  },
+  "KRISHIV_PYTHON_WORKER_EXITED" : {
+    "message" : [
+      "Python worker exited unexpectedly (crashed): <reason>. The next query starts a new worker. If a UDF ran out of memory, raise \"krishiv.python.worker.memoryLimit\"."
+    ],
+    "sqlState" : "38000"
+  },
   "KRISHIV_QUERY_ABORTED_OUT_OF_MEMORY" : {
     "message" : [
       "The query was aborted to free memory for other work: it held <heldBytes> bytes, the most of any query, and spilling did not free enough memory in time. Increase \"krishiv.memory.limit\" or run fewer concurrent queries."
@@ -141,6 +198,38 @@
     ],
     "sqlState" : "42602"
   },
+  "KRISHIV_RESOURCE_GROUP_CONFIG_INVALID" : {
+    "message" : [
+      "The resource group file is invalid at <path>: <reason>."
+    ],
+    "sqlState" : "22023",
+    "audience" : "operator"
+  },
+  "KRISHIV_RESOURCE_GROUP_CONFIG_READ_ONLY" : {
+    "message" : [
+      "The resource group file <path> cannot be changed here: <reason>."
+    ],
+    "sqlState" : "55000",
+    "audience" : "operator"
+  },
+  "KRISHIV_RESOURCE_GROUP_QUEUE_FULL" : {
+    "message" : [
+      "The resource group <group> already has <maxQueued> queued queries, so this query is refused. Retry later, or raise \"maxQueued\" of the group."
+    ],
+    "sqlState" : "53400"
+  },
+  "KRISHIV_RESOURCE_GROUP_QUOTA_EXHAUSTED" : {
+    "message" : [
+      "The resource group <group> has used its scan quota for the current window, so this query is refused. The quota resets at <resetAt>."
+    ],
+    "sqlState" : "53400"
+  },
+  "KRISHIV_SESSION_LIMIT" : {
+    "message" : [
+      "Cannot open a new session: <limitName> allows at most <limit> live sessions. Release a session (ReleaseSession, or spark.stop() in the client) or raise \"<limitName>\"."
+    ],
+    "sqlState" : "53400"
+  },
   "KRISHIV_SPILL_CAP_EXCEEDED" : {
     "message" : [
       "Spilling <requestedBytes> more bytes would exceed the spill limit of <capBytes> bytes (<usedBytes> bytes are in use). Increase \"krishiv.spill.maxBytes\" or run fewer spilling queries at once."
@@ -162,6 +251,12 @@
     "sqlState" : "58030",
     "audience" : "operator"
   },
+  "KRISHIV_TIME_TRAVEL_NOT_FOUND" : {
+    "message" : [
+      "<message>"
+    ],
+    "sqlState" : "42K0E"
+  },
   "KRISHIV_UNKNOWN_CONFIG" : {
     "message" : [
       "The config <key> is not a known Krishiv config. Verify the spelling, or see the configuration reference."
@@ -173,6 +268,13 @@
       "The user-defined function <name>@<version> is not available on this worker: register it on the executing session before running the plan."
     ],
     "sqlState" : "39000",
+    "audience" : "operator"
+  },
+  "KRISHIV_UDF_SANDBOX_UNAVAILABLE" : {
+    "message" : [
+      "Python UDF workers cannot run sandboxed on this server: <reason>. Run the server on Linux 5.13 or later with Landlock and seccomp enabled, or have an administrator set \"krishiv.udf.sandbox\" to \"off\" (worker code then runs without file and network confinement)."
+    ],
+    "sqlState" : "0A000",
     "audience" : "operator"
   },
   "KRISHIV_UNKNOWN_FORMAT_OPTION" : {

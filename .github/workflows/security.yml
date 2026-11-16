@@ -51,6 +51,9 @@ jobs:
           # only on wasm32; webpki-root-certs is CDLA-Permissive-2.0, the
           # root-certificate data reached through the object-store TLS stack;
           # libbz2-rs-sys is bzip2-1.0.6, owner-approved for .bz2 text files).
+          # brotli-decompressor 5.x declares the legacy "BSD-3-Clause/MIT" (both
+          # allowed; cargo-deny reads it as OR), which GitHub cannot parse; reached
+          # through parquet's default codecs, which iceberg 0.11 turns on.
           # GitHub Actions used only in CI: Swatinem/rust-cache is LGPL-3.0, but it is
           # CI tooling that runs on the build runner and is never distributed with, or
           # linked into, any Krishiv artifact, so the copyleft terms do not reach us.
@@ -58,6 +61,7 @@ jobs:
             pkg:cargo/tiny-keccak,
             pkg:cargo/webpki-root-certs,
             pkg:cargo/libbz2-rs-sys,
+            pkg:cargo/brotli-decompressor,
             pkg:githubactions/Swatinem/rust-cache
 
   # Pull requests: read-only, fails on any finding.

@@ -53,6 +53,10 @@ fn trees(steps: &[RuleStep]) -> Vec<Tree> {
 /// `plan` optimised under the given settings, with its trees.
 fn plan_with(plan: &Plan, stats: &dyn Statistics, conf: &[(&str, &str)]) -> (Plan, Vec<Tree>) {
     let mut config = Config::new();
+    // The reference interpreter has no window operator: these tests compare rows, not W1 plans.
+    config
+        .set("krishiv.optimizer.subqueryAsWindow", "false")
+        .unwrap();
     for (k, v) in conf {
         config.set(k, v).unwrap();
     }

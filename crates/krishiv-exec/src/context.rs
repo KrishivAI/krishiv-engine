@@ -85,6 +85,11 @@ pub struct ExecConfig {
     /// hashes take a fixed seed (a constant unless
     /// `krishiv.exec.seed` names one) (`krishiv.deterministicOrder`).
     pub deterministic_order: bool,
+    /// A `UNION ALL` of inputs that are each one partition (Spark's
+    /// `SinglePartition`) is one partition: its inputs run in turn at index
+    /// 0 (`krishiv.sql.unionOutputPartitioning`, Spark's
+    /// `spark.sql.unionOutputPartitioning`).
+    pub union_output_partitioning: bool,
 }
 
 /// The key-hash seed of `krishiv.deterministicOrder` when `krishiv.exec.seed`
@@ -111,6 +116,7 @@ impl Default for ExecConfig {
             shared_broadcast_bytes: None,
             join_idle_spill_after: Duration::from_secs(1),
             deterministic_order: false,
+            union_output_partitioning: true,
         }
     }
 }
@@ -163,6 +169,10 @@ impl ExecConfig {
             .get(&krishiv_common::config::DETERMINISTIC_ORDER)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
             .unwrap_or(false);
+        let union_output_partitioning = config
+            .get(&krishiv_common::config::UNION_OUTPUT_PARTITIONING)
+            .and_then(krishiv_common::config::ConfigValue::as_bool)
+            .unwrap_or(true);
         // Under `krishiv.deterministicOrder` the key hashes are seeded too
         // (`krishiv.exec.seed` when set, else a fixed seed): spill partitions
         // follow the seeded hash, so a random seed per query would order the
@@ -184,6 +194,7 @@ impl ExecConfig {
             join_merge_buffer_bytes,
             shared_broadcast_bytes,
             join_idle_spill_after,
+            union_output_partitioning,
             ..Self::default()
         }
     }
@@ -531,9 +542,20 @@ pub struct TaskContext {
     /// stream whichever driver read it; this id is the fallback for untagged
     /// batches. The first driver of a group reads partition 0.
     partition: u32,
+    /// `(lane, lanes)` of a logical-partition driver (T094 G1), else `None`.
+    lane: Option<(usize, usize)>,
     /// The first partition id of the driver's pipeline-group member (the
     /// offset of a `UNION ALL` child).
     partition_base: u32,
+    /// The first partition id an operator numbers its input's partitions
+    /// from, so that an id minus it is Spark's partition index of the
+    /// operator's input: its `UNION ALL` branch's own base below the union;
+    /// above a plain union, the base that puts this branch after the
+    /// partitions of the branches before it; above a coalesced union, the
+    /// member's own base (every branch at index 0). Computed by
+    /// `numbering.rs` from `Pipeline::origins`. The member's own base for a
+    /// source; the group's top numbering for the sink.
+    numbering_base: u32,
 }
 
 impl fmt::Debug for TaskContext {
@@ -564,8 +586,24 @@ impl TaskContext {
             dependency: None,
             second_dependency: None,
             partition: 0,
+            lane: None,
             partition_base: 0,
+            numbering_base: 0,
         }
+    }
+
+    /// The same context for the driver of lane `lane` out of `lanes`.
+    #[must_use]
+    pub(crate) fn with_lane(mut self, lane: Option<(usize, usize)>) -> Self {
+        self.lane = lane;
+        self
+    }
+
+    /// `(lane, lanes)` when this driver is one of the logical partitions of
+    /// `krishiv.deterministicOrder` (T094 G1): a source then claims only the
+    /// morsels dealt to its lane ([`MorselCursor::claim_strided`](crate::MorselCursor::claim_strided)).
+    pub fn lane(&self) -> Option<(usize, usize)> {
+        self.lane
     }
 
     /// The same context for the driver `partition` (its scheduler-assigned
@@ -579,7 +617,24 @@ impl TaskContext {
     #[must_use]
     pub(crate) fn with_partition_base(mut self, base: u32) -> Self {
         self.partition_base = base;
+        self.numbering_base = base;
         self
+    }
+
+    /// The same context for an operator that numbers its input's
+    /// partitions from `base` (see [`Self::numbering_base`]).
+    #[must_use]
+    pub(crate) fn with_numbering_base(mut self, base: u32) -> Self {
+        self.numbering_base = base;
+        self
+    }
+
+    /// The first partition id this operator numbers its input's partitions
+    /// from: a partition (or split) id minus this is Spark's partition index
+    /// of the operator's input, so a sample in a `UNION ALL` branch draws as
+    /// the branch's own `SampleExec` does.
+    pub(crate) fn numbering_base(&self) -> u32 {
+        self.numbering_base
     }
 
     /// The first partition id of this driver's pipeline-group member: the
@@ -626,6 +681,18 @@ impl TaskContext {
     /// The executor.
     pub fn executor(&self) -> &Arc<dyn Executor> {
         &self.executor
+    }
+
+    /// The driver count a source cuts its morsels for. Under `krishiv.deterministicOrder` it is
+    /// a constant (the logical partitions), never the executor's thread count: which rows a
+    /// morsel holds decides the result's bytes, and must not follow the machine (T094 G1).
+    #[must_use]
+    pub fn layout_parallelism(&self) -> usize {
+        if self.query.config().deterministic_order {
+            crate::runner::DETERMINISTIC_LOGICAL_PARTITIONS
+        } else {
+            self.executor.parallelism()
+        }
     }
 
     /// Runs non-yielding work over ~1 ms on the bounded blocking pool and

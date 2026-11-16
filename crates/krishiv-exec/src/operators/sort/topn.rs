@@ -219,6 +219,12 @@ impl Sink for TopN {
         "TopN"
     }
 
+    /// Each driver keeps its own top rows; `combine` merges them, and under
+    /// lanes it runs in lane order, so ties resolve the same at any thread count.
+    fn lane_safe(&self) -> bool {
+        true
+    }
+
     fn global_state(&self, _ctx: &TaskContext) -> Result<GlobalState> {
         Ok(Arc::new(TopGlobal::default()))
     }

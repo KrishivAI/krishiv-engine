@@ -100,25 +100,45 @@ fn wait_for<T>(seen: &Requests, pick: impl Fn(&str, &[u8]) -> Option<T>) -> T {
     }
 }
 
+fn hex_bytes(h: &str) -> Vec<u8> {
+    (0..h.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&h[i..i + 2], 16).expect("hex"))
+        .collect()
+}
+
+/// The one global tracing subscriber of this binary, exporting to one collector.
+fn tracing_fixture() -> &'static (OtlpTracing, Requests) {
+    static FIXTURE: std::sync::OnceLock<(OtlpTracing, Requests)> = std::sync::OnceLock::new();
+    FIXTURE.get_or_init(|| {
+        let (url, seen) = collector();
+        let mut config = OtlpConfig::new(&url);
+        config.service_name = "krishiv-test".into();
+        config.headers.push(("x-api-key".into(), "k".into()));
+        let tracing = OtlpTracing::new(&config).expect("exporter");
+        let subscriber = tracing_subscriber::registry().with(tracing.layer());
+        // Actions run on the session's executor threads, so the subscriber is global.
+        tracing::subscriber::set_global_default(subscriber).expect("set once");
+        (tracing, seen)
+    })
+}
+
 #[test]
 fn query_spans_reach_the_collector_with_the_database_attributes() {
-    let (url, seen) = collector();
-    let mut config = OtlpConfig::new(&url);
-    config.service_name = "krishiv-test".into();
-    config.headers.push(("x-api-key".into(), "k".into()));
-    let tracing = OtlpTracing::new(&config).expect("exporter");
-    let subscriber = tracing_subscriber::registry().with(tracing.layer());
-    // Actions run on the session's executor threads, so the subscriber is global.
-    tracing::subscriber::set_global_default(subscriber).expect("one subscriber in this binary");
-
+    let (tracing, seen) = tracing_fixture();
     let s = Session::new().expect("session");
+    // T068: the caller's trace arrives as headers; a hostile baggage is bounded.
+    assert!(s.set_inbound_trace(
+        Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
+        Some("user=ann, broken, k=v"),
+    ));
     let df = block_on(s.sql("SELECT 'secret-token' AS x, 1 + 1 AS y")).expect("plans");
     block_on(df.collect()).expect("runs");
     tracing.flush().expect("flush");
 
     // The request that holds the query span: a batch the exporter scheduled
     // earlier may carry other spans.
-    let request = wait_for(&seen, |path, body| {
+    let request = wait_for(seen, |path, body| {
         let request = (path == "/v1/traces")
             .then(|| ExportTraceServiceRequest::decode(body).ok())
             .flatten()?;
@@ -152,6 +172,13 @@ fn query_spans_reach_the_collector_with_the_database_attributes() {
             }
         })
     };
+    // The engine span is a child of the caller's span, in the caller's trace.
+    assert_eq!(
+        span.trace_id,
+        hex_bytes("4bf92f3577b34da6a3ce929d0e0e4736"),
+        "the query span joins the client's trace"
+    );
+    assert_eq!(span.parent_span_id, hex_bytes("00f067aa0ba902b7"));
     assert_eq!(attribute("db.system.name").as_deref(), Some("krishiv"));
     assert_eq!(attribute("db.operation.name").as_deref(), Some("SELECT"));
     let text = attribute("db.query.text").expect("sanitized text");
@@ -162,6 +189,45 @@ fn query_spans_reach_the_collector_with_the_database_attributes() {
         sent.iter()
             .any(|(_, h, _)| h.iter().any(|(k, v)| k == "x-api-key" && v == "k"))
     );
+}
+
+/// T068 acceptance: two requests of one session, each with its own `traceparent`, produce
+/// engine spans in their own client's trace (never the other's, never the session's).
+#[test]
+fn each_request_joins_its_own_clients_trace() {
+    use krishiv_session::QueryOptions;
+    let (tracing, seen) = tracing_fixture();
+    let s = Session::new().expect("session");
+    let (a, b) = (
+        "4bf92f3577b34da6a3ce929d0e0e4a01",
+        "4bf92f3577b34da6a3ce929d0e0e4b02",
+    );
+    for (trace, span) in [(a, "00f067aa0ba902a1"), (b, "00f067aa0ba902b2")] {
+        let options =
+            QueryOptions::new().inbound_trace(Some(&format!("00-{trace}-{span}-01")), None);
+        let df = block_on(s.sql_with("SELECT 1 AS x", options)).expect("plans");
+        block_on(df.collect()).expect("runs");
+    }
+    tracing.flush().expect("flush");
+    for (trace, span) in [(a, "00f067aa0ba902a1"), (b, "00f067aa0ba902b2")] {
+        let found = wait_for(seen, |path, body| {
+            let request = (path == "/v1/traces")
+                .then(|| ExportTraceServiceRequest::decode(body).ok())
+                .flatten()?;
+            request
+                .resource_spans
+                .iter()
+                .flat_map(|r| &r.scope_spans)
+                .flat_map(|s| &s.spans)
+                .find(|s| s.name == "krishiv.query" && s.trace_id == hex_bytes(trace))
+                .map(|s| s.parent_span_id.clone())
+        });
+        assert_eq!(
+            found,
+            hex_bytes(span),
+            "the span of {trace} has the client's span as parent"
+        );
+    }
 }
 
 #[test]

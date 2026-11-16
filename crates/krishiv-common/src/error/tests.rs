@@ -185,7 +185,8 @@ fn docs_markdown_lists_every_class_with_escaped_templates() {
     assert_eq!(md, docs_markdown());
 }
 
-const SPARK_JSON: &str = include_str!("../../vendored/spark-error-conditions.json");
+const SPARK_4_3_JSON: &str = include_str!("../../vendored/spark-error-conditions.json");
+const SPARK_4_2_JSON: &str = include_str!("../../vendored/spark-error-conditions-4.2.1.json");
 const RENDER_FIXTURE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../tests/fixtures/spark-4.2.0/error-classes/render.json"
@@ -195,46 +196,236 @@ fn json(text: &str) -> serde_json::Value {
     serde_json::from_str(text).expect("valid JSON")
 }
 
-/// P2-T003: the registry has exactly the classes of Spark 4.2.0's JSON.
+const DELTA_JSON: &str = include_str!("../../vendored/delta-error-classes.json");
+
+/// P3-T021: the registry holds exactly the classes of the vendored Delta subset
+/// (delta-spark 4.4.1), each with that file's SQLSTATE and template (a sub-class
+/// joins its parent's text with a space, as for Spark's classes).
 #[test]
-fn class_count_equals_spark_4_2_0() {
-    let doc = json(SPARK_JSON);
+fn delta_classes_equal_the_vendored_subset() {
+    let doc = json(DELTA_JSON);
     let doc = doc.as_object().expect("object");
-    let leaves: usize = doc
-        .values()
-        .map(|v| {
-            v.get("subClass")
-                .and_then(|s| s.as_object())
-                .map_or(1, serde_json::Map::len)
-        })
-        .sum();
-    let spark: Vec<&ErrorClass> = ErrorClass::ALL
-        .iter()
-        .filter(|c| !c.name().starts_with("KRISHIV_"))
-        .collect();
-    assert_eq!(spark.len(), leaves);
-    let top: BTreeSet<&str> = spark
-        .iter()
-        .map(|c| c.name().split('.').next().unwrap_or_default())
-        .collect();
-    assert_eq!(top.len(), doc.len());
-    // The count recorded by the generator from the live container agrees.
-    let fixture = json(RENDER_FIXTURE);
-    assert_eq!(fixture["top_level_classes"], doc.len());
-    assert_eq!(fixture["leaf_classes"], leaves);
-    // Every class has the SQLSTATE the JSON declares (or none).
+    let mut want = Vec::new();
     for (name, info) in doc {
-        let want = info.get("sqlState").and_then(|v| v.as_str());
-        let subs = info.get("subClass").and_then(|s| s.as_object());
-        let leaf_names: Vec<String> = subs.map_or_else(
-            || vec![name.clone()],
-            |s| s.keys().map(|k| format!("{name}.{k}")).collect(),
-        );
-        for leaf in leaf_names {
-            let c = ErrorClass::from_name(&leaf).expect("registered");
-            assert_eq!(c.sql_state(), want, "{leaf}");
+        let lines = |v: &serde_json::Value| -> String {
+            v["message"]
+                .as_array()
+                .expect("message lines")
+                .iter()
+                .map(|l| l.as_str().expect("line"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let main = lines(info);
+        let state = info["sqlState"]
+            .as_str()
+            .expect("Delta classes have a SQLSTATE");
+        match info.get("subClass").and_then(|s| s.as_object()) {
+            None => want.push((name.clone(), state, main)),
+            Some(subs) => {
+                for (sub, sub_info) in subs {
+                    want.push((
+                        format!("{name}.{sub}"),
+                        state,
+                        format!("{main} {}", lines(sub_info)),
+                    ));
+                }
+            }
         }
     }
+    let got: Vec<&ErrorClass> = ErrorClass::ALL
+        .iter()
+        .filter(|c| c.name().starts_with("DELTA_"))
+        .collect();
+    assert_eq!(got.len(), want.len());
+    for (name, state, template) in &want {
+        let c = ErrorClass::from_name(name).expect("registered");
+        assert_eq!(c.sql_state(), Some(*state), "{name}");
+        assert_eq!(c.message_template(), template, "{name}");
+    }
+    // The classes the Delta connector names (design note P3-T021 sections 2.2, 3.4, 3.7).
+    for (name, state) in [
+        ("DELTA_INVALID_PROTOCOL_VERSION", "KD004"),
+        ("DELTA_UNSUPPORTED_FEATURES_FOR_READ", "56038"),
+        ("DELTA_VERSION_NOT_FOUND", "22003"),
+        ("DELTA_TIMESTAMP_GREATER_THAN_COMMIT", "42816"),
+        ("DELTA_CONCURRENT_APPEND.WITH_PARTITION_HINT", "2D521"),
+        ("DELTA_MAX_COMMIT_RETRIES_EXCEEDED", "40000"),
+    ] {
+        assert_eq!(
+            ErrorClass::from_name(name).and_then(ErrorClass::sql_state),
+            Some(state),
+            "{name}"
+        );
+    }
+    let e: KrishivError = DeltaVersionNotFound {
+        user_version: "7".to_owned(),
+        earliest: "0".to_owned(),
+        latest: "3".to_owned(),
+    }
+    .into();
+    assert_eq!(
+        e.to_string(),
+        "[DELTA_VERSION_NOT_FOUND] Cannot time travel Delta table to version 7. Available versions: [0, 3]. SQLSTATE: 22003"
+    );
+}
+
+/// P3-T021: the catalog parse-limit class names the limit, its value and the fix.
+#[test]
+fn catalog_limit_exceeded_names_the_limit() {
+    let e: KrishivError = KrishivCatalogLimitExceeded {
+        source: "Delta log file t/_delta_log/0.json".to_owned(),
+        limit: "the size limit".to_owned(),
+        value: "268435456 bytes".to_owned(),
+        config: "krishiv.catalog.maxMetadataBytes".to_owned(),
+    }
+    .into();
+    assert_eq!(e.error_class(), ErrorClass::KrishivCatalogLimitExceeded);
+    assert_eq!(e.error_class().sql_state(), Some("54000"));
+    assert!(
+        e.to_string().contains("krishiv.catalog.maxMetadataBytes"),
+        "{e}"
+    );
+}
+
+/// One release's leaf classes: name -> (SQLSTATE, template), as Spark joins a
+/// main message and its sub-class message.
+fn release_leaves(
+    doc: &serde_json::Value,
+) -> std::collections::BTreeMap<String, (Option<String>, String)> {
+    let join = |v: &serde_json::Value| -> String {
+        v["message"]
+            .as_array()
+            .expect("message array")
+            .iter()
+            .map(|l| l.as_str().expect("line"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let mut out = std::collections::BTreeMap::new();
+    for (name, info) in doc.as_object().expect("object") {
+        let state = info
+            .get("sqlState")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned);
+        match info.get("subClass").and_then(|s| s.as_object()) {
+            None => {
+                out.insert(name.clone(), (state, join(info)));
+            }
+            Some(subs) => {
+                for (sub, sub_info) in subs {
+                    out.insert(
+                        format!("{name}.{sub}"),
+                        (state.clone(), format!("{} {}", join(info), join(sub_info))),
+                    );
+                }
+            }
+        }
+    }
+    out
+}
+
+/// PR-64: the Spark classes are exactly the union of 4.2.1's and 4.3.0's, each with the SQLSTATE the JSON
+/// declares, and the generator's 4.2.0 count (from the live container) plus 4.2.1's two added classes is
+/// 4.2.1's count (`PARQUET_FIELD_REQUESTED_MORE_THAN_ONCE`, `WINDOW_FUNCTION_PARTITION_SIZE_EXCEEDS_LIMIT`).
+#[test]
+fn registry_is_the_union_of_spark_4_2_1_and_4_3_0() {
+    let v42 = release_leaves(&json(SPARK_4_2_JSON));
+    let v43 = release_leaves(&json(SPARK_4_3_JSON));
+    let union: BTreeSet<&String> = v42.keys().chain(v43.keys()).collect();
+    let spark: BTreeSet<String> = ErrorClass::ALL
+        .iter()
+        .filter(|c| !c.name().starts_with("KRISHIV_") && !c.name().starts_with("DELTA_"))
+        .map(|c| c.name().to_owned())
+        .collect();
+    assert_eq!(spark.iter().collect::<BTreeSet<_>>(), union);
+    assert_eq!(v42.len(), 1931);
+    assert_eq!(v43.len(), 2001);
+    let fixture = json(RENDER_FIXTURE);
+    assert_eq!(fixture["leaf_classes"].as_u64(), Some(v42.len() as u64 - 2));
+    for name in &spark {
+        let c = ErrorClass::from_name(name).expect("registered");
+        let want = v42
+            .get(name)
+            .or_else(|| v43.get(name))
+            .map(|(s, _)| s.as_deref());
+        assert_eq!(Some(c.sql_state()), want, "{name}");
+    }
+}
+
+/// PR-64: each release's own text and parameters, `None` where the class is not in that release, and the
+/// default view (`message_template`) is 4.2's, or 4.3's for a class only 4.3.0 has.
+#[test]
+fn per_release_templates_match_the_vendored_registries() {
+    let v42 = release_leaves(&json(SPARK_4_2_JSON));
+    let v43 = release_leaves(&json(SPARK_4_3_JSON));
+    for c in ErrorClass::ALL
+        .iter()
+        .filter(|c| !c.name().starts_with("KRISHIV_") && !c.name().starts_with("DELTA_"))
+    {
+        let name = c.name().to_owned();
+        let t42 = v42.get(&name).map(|(_, t)| t.as_str());
+        let t43 = v43.get(&name).map(|(_, t)| t.as_str());
+        assert_eq!(c.message_template_for(SparkRelease::V4_2), t42, "{name}");
+        assert_eq!(c.message_template_for(SparkRelease::V4_3), t43, "{name}");
+        assert_eq!(
+            c.message_template(),
+            t42.or(t43).expect("in a release"),
+            "{name}"
+        );
+        for (release, t) in [(SparkRelease::V4_2, t42), (SparkRelease::V4_3, t43)] {
+            let want = t.map(template::placeholders);
+            assert_eq!(
+                c.parameters_for(release),
+                want.as_deref(),
+                "{name} {release:?}"
+            );
+        }
+    }
+    // Krishiv's own classes exist in every release, with one text.
+    let k = ErrorClass::KrishivSpillCapExceeded;
+    assert_eq!(
+        k.message_template_for(SparkRelease::V4_2),
+        Some(k.message_template())
+    );
+    assert_eq!(
+        k.message_template_for(SparkRelease::V4_3),
+        Some(k.message_template())
+    );
+}
+
+/// PR-64: the differences the 4.3.0 migration brings, by name: a replaced message, a class added in 4.3.0, a
+/// class only the 4.2 goldens raise, and a new parameter the default view does not have.
+#[test]
+fn spark_4_3_0_differences_are_keyed_by_release() {
+    let p = ErrorClass::UnsupportedTimePrecision;
+    assert!(
+        p.message_template_for(SparkRelease::V4_2)
+            .is_some_and(|t| t.contains("[0, 6]"))
+    );
+    assert!(
+        p.message_template_for(SparkRelease::V4_3)
+            .is_some_and(|t| t.contains("[0, 9]"))
+    );
+    let added = ErrorClass::from_name("INVALID_SQL_SYNTAX.INVALID_WINDOW_FRAME_BOUND")
+        .expect("added in 4.3.0");
+    assert_eq!(added.message_template_for(SparkRelease::V4_2), None);
+    assert!(added.message_template_for(SparkRelease::V4_3).is_some());
+    let dropped =
+        ErrorClass::from_name("DATETIME_FIELD_OUT_OF_BOUNDS.WITH_SUGGESTION").expect("4.2 only");
+    assert!(dropped.message_template_for(SparkRelease::V4_2).is_some());
+    assert_eq!(dropped.message_template_for(SparkRelease::V4_3), None);
+    // 4.3.0 names the operator; the default view (and so the 4.2 goldens' `messageParameters`) does not.
+    let op = ErrorClass::UnsupportedExprForOperator;
+    assert_eq!(op.parameters(), &["invalidExprSqls"]);
+    assert_eq!(
+        op.parameters_for(SparkRelease::V4_2),
+        Some(&["invalidExprSqls"][..])
+    );
+    assert_eq!(
+        op.parameters_for(SparkRelease::V4_3),
+        Some(&["operator", "invalidExprSqls"][..])
+    );
 }
 
 /// P2-T003: 20 classes raised in a real Spark 4.2.0 render byte-identically.

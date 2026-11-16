@@ -245,6 +245,10 @@ pub(crate) fn compare_values(x: &Literal, y: &Literal) -> Option<Ordering> {
                 |v: i128, from: u8| v.checked_mul(10_i128.checked_pow(u32::from(scale - from))?);
             up(*a, s.scale())?.cmp(&up(*b, t.scale())?)
         }
+        // Not foldable: nested values are not ordered here, nor are mixed types.
+        (Literal::Array { .. } | Literal::KeyValueMap { .. } | Literal::Struct { .. }, _) => {
+            return None;
+        }
         _ => return None,
     })
 }
@@ -363,6 +367,9 @@ pub(crate) fn literal_type(l: &Literal) -> Option<DataType> {
         Literal::Date(_) => DataType::Date,
         Literal::Timestamp(_) => DataType::Timestamp,
         Literal::TimestampNtz(_) => DataType::TimestampNtz,
+        Literal::Array { .. } | Literal::KeyValueMap { .. } | Literal::Struct { .. } => {
+            return l.data_type();
+        }
         _ => return None,
     })
 }
@@ -401,6 +408,11 @@ fn to_array(l: &Literal) -> Option<ArrayRef> {
         Literal::String(v) => Arc::new(StringArray::from(vec![v.as_str()])),
         Literal::Date(v) => Arc::new(Date32Array::from(vec![*v])),
         Literal::TimestampNtz(v) => Arc::new(TimestampMicrosecondArray::from(vec![*v])),
+        // Not foldable: nested values have no one-row form here, so a cast or
+        // call over one stays as written.
+        Literal::Array { .. } | Literal::KeyValueMap { .. } | Literal::Struct { .. } => {
+            return None;
+        }
         _ => return None,
     })
 }
@@ -723,6 +735,8 @@ mod tests {
     use krishiv_plan::{Builtin, CastMode, Literal};
     use krishiv_types::{DataType, DecimalType};
 
+    use std::sync::Arc;
+
     use super::{arith, compare_values, fold_cast, lit, negate};
 
     fn dec(unscaled: i128, p: u32, s: u32) -> Literal {
@@ -730,6 +744,38 @@ mod tests {
             unscaled,
             data_type: DecimalType::try_new(p, s).unwrap(),
         }
+    }
+
+    #[test]
+    fn nested_literals_are_left_intact() {
+        use krishiv_plan::Expr;
+        use krishiv_types::ArrayType;
+
+        let array = |v: i32| {
+            Literal::array(
+                ArrayType::new(DataType::Integer, true),
+                vec![Literal::Integer(v)],
+            )
+            .unwrap()
+        };
+        // They have no ordering and no one-row form here, so nothing over
+        // them folds, but their type is known.
+        assert_eq!(compare_values(&array(1), &array(1)), None);
+        assert_eq!(
+            fold_cast(&array(1), &DataType::String, CastMode::Ansi),
+            None
+        );
+        assert_eq!(
+            super::literal_type(&array(1)),
+            Some(ArrayType::new(DataType::Integer, true).into())
+        );
+        // `array(1) = array(1)` stays a call; the literals are not touched.
+        let eq = Arc::new(Expr::builtin(
+            Builtin::Eq,
+            vec![Expr::from(array(1)), Expr::from(array(1))],
+        ));
+        let folded = super::fold(&eq);
+        assert!(Arc::ptr_eq(&eq, &folded) || *folded == *eq);
     }
 
     #[test]

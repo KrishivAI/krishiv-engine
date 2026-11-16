@@ -268,3 +268,16 @@ fn argument_casts_follow_spark() {
         InputType::Any
     );
 }
+
+#[test]
+fn to_char_of_a_binary_refuses_a_null_format() {
+    let args = [ty(DataType::Binary), ty(DataType::String)];
+    for name in ["to_char", "to_varchar"] {
+        let err = result(name, &args, &[None, Some(Constant::Null)]).unwrap_err();
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::InvalidParameterValueNull,
+            "{name}"
+        );
+    }
+}

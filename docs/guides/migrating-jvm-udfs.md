@@ -33,8 +33,8 @@ Work down this list. The first option that fits your function is usually the sim
 
 3. **A Rust UDF.** A function that needs real code is written in Rust, compiled into the application, and
    registered on the session. See [Native Rust UDFs](../reference/rust-udfs.md).
-4. **A Python UDF.** Not available yet. Python UDFs over Spark Connect are planned (P3 task T014). Until
-   they ship, rewrite the logic as one of the options above.
+4. **A Python UDF.** Python UDFs in the single-node server are not part of 0.2. Until they ship, rewrite
+   the logic as one of the options above.
 
 ## Common Hive and Spark-community UDFs
 

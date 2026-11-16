@@ -23,6 +23,9 @@ impl Session {
             locals: locals.into(),
             operation: self.operation.clone(),
             deadline: self.deadline,
+            request_tags: Arc::clone(&self.request_tags),
+            inbound_trace: self.inbound_trace.clone(),
+            inbound_baggage: Arc::clone(&self.inbound_baggage),
         }
     }
 }

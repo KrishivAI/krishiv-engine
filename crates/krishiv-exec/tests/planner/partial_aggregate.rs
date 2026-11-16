@@ -172,7 +172,7 @@ pub(super) fn physical(t: &Tpch, plan: &Plan) -> Result<Runnable, KrishivError> 
     ))
 }
 
-fn write(dir: &Path, name: &str, batch: &RecordBatch) {
+pub(super) fn write(dir: &Path, name: &str, batch: &RecordBatch) {
     let o = FormatOptions::defaults(ParquetFormat.options());
     let mut enc = ParquetFormat::encoder_with(&batch.schema(), &o, |p| p).unwrap();
     let mut bytes = Vec::new();

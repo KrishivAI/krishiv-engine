@@ -224,14 +224,11 @@ fn ci_policy_wiring() {
         "the failure notice must run after a failed dependency, on the schedule only"
     );
     assert!(job(&ci, "nightly-failure-notice").contains("issues: write"));
-    // A release or a published binary needs the latest nightly run green on its commit.
-    for wf in ["publish-testpypi.yml", "binaries.yml"] {
-        let text = read(&format!(".github/workflows/{wf}"));
-        assert!(
-            text.contains(".github/scripts/require-green-nightly.sh"),
-            "{wf} must require a green nightly run"
-        );
-    }
+    // A published binary needs the latest nightly run green on its commit.
+    assert!(
+        read(".github/workflows/binaries.yml").contains(".github/scripts/require-green-nightly.sh"),
+        "binaries.yml must require a green nightly run"
+    );
     // Diff coverage tests only the packages the PR touches and their dependents.
     let coverage = read(".github/workflows/coverage.yml");
     for needle in [
@@ -726,13 +723,25 @@ fn security_workflows_are_wired() {
         .skip(1)
         .filter_map(|l| l.split('"').next())
         .collect();
+    // A third, named category: crates whose license field uses a legacy string GitHub
+    // cannot parse ("A/B") although every license in it is on deny.toml's allow list,
+    // so cargo-deny needs no exception for them. Each must really be in Cargo.lock.
+    const UNPARSABLE_LICENSE_STRING: &[&str] = &["brotli-decompressor"];
+    let lock = read("Cargo.lock");
+    for name in UNPARSABLE_LICENSE_STRING {
+        assert!(
+            lock.contains(&format!("name = \"{name}\"\n")),
+            "{name} is listed as a license-string exception but is not in Cargo.lock"
+        );
+    }
     let cargo: Vec<&str> = purls
         .iter()
         .filter_map(|p| p.strip_prefix("pkg:cargo/"))
+        .filter(|c| !UNPARSABLE_LICENSE_STRING.contains(c))
         .collect();
     assert_eq!(
         cargo, exception_crates,
-        "pkg:cargo purls must be deny.toml's exceptions"
+        "pkg:cargo purls must be deny.toml's exceptions (plus the license-string list)"
     );
     let workflows: String = std::fs::read_dir(root().join(".github/workflows"))
         .unwrap()
@@ -886,6 +895,20 @@ fn release_publishing_is_manual_and_gated() {
             wf.contains("github.ref == 'refs/heads/main'") && wf.contains("refs/tags/v"),
             "{file}: only main or a v* tag may publish"
         );
+        // Publishing needs every gate of ci.yml green on the exact ref being published: a `ci` job calls the
+        // reusable workflow (as nightly.yml does) and the publish job needs it; no earlier nightly is trusted.
+        assert!(
+            job(&wf, "ci").contains("    uses: $/.github/workflows/ci.yml\n"),
+            "{file}: the `ci` job must call ci.yml on this ref"
+        );
+        assert!(
+            publish.contains("    needs: ci\n"),
+            "{file}: the publish job must need the `ci` job"
+        );
+        assert!(
+            !wf.contains("require-green-nightly.sh"),
+            "{file}: a scheduled run is not evidence about this ref"
+        );
         // Each upload goes where its file says, and only the crates.io job holds a token.
         match file {
             "publish-testpypi.yml" => {
@@ -971,7 +994,8 @@ fn release_publishing_is_manual_and_gated() {
         .filter(|l| !l.is_empty())
         .map(String::from)
         .collect();
-    assert_eq!(listed.len(), 20, "the 0.2 release publishes 20 crates");
+    // 0.2 published 22; P3-T014 adds krishiv-udf-sandbox and krishiv-udf-pool.
+    assert_eq!(listed.len(), 24, "the release publishes 24 crates");
     let mut manifests = vec![root().join("xtask/Cargo.toml")];
     for entry in std::fs::read_dir(root().join("crates")).unwrap() {
         manifests.push(entry.unwrap().path().join("Cargo.toml"));

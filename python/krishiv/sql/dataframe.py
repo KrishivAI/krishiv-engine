@@ -130,7 +130,6 @@ class DataFrame:
     def __init__(self, native: _native.DataFrame, session: SparkSession) -> None:
         self._df = native
         self._session = session
-        self._storage_level = StorageLevel(False, False, False, False)
 
     @property
     def sparkSession(self) -> SparkSession:
@@ -247,7 +246,6 @@ class DataFrame:
         2
         """
         self._df = self._df.cache()
-        self._storage_level = StorageLevel.MEMORY_AND_DISK
         return self
 
     def persist(self, storageLevel: StorageLevel = StorageLevel.MEMORY_AND_DISK) -> DataFrame:
@@ -281,7 +279,6 @@ class DataFrame:
             storageLevel.deserialized,
             storageLevel.replication,
         )
-        self._storage_level = storageLevel
         return self
 
     def unpersist(self, blocking: bool = False) -> DataFrame:
@@ -306,13 +303,65 @@ class DataFrame:
         DataFrame[age: bigint, name: string]
         """
         self._df = self._df.unpersist(blocking)
-        self._storage_level = StorageLevel(False, False, False, False)
         return self
+
+    def checkpoint(self, eager: bool = True) -> DataFrame:
+        """Returns a checkpointed version of this :class:`DataFrame`: the rows are fixed (now, or
+        at the first action when ``eager`` is false) and later changes to the sources are not
+        seen. Needs ``spark.checkpoint.dir`` (set with ``spark.conf.set``); the files are
+        deleted when the result is garbage collected.
+
+        Parameters
+        ----------
+        eager : bool, optional
+            Whether to checkpoint now (default) or at the first action.
+
+        Returns
+        -------
+        :class:`DataFrame`
+            The checkpointed frame.
+        """
+        if not isinstance(eager, bool):
+            raise not_expected_type("eager", "bool", eager)
+        return self._new(self._df.checkpoint(eager))
+
+    def localCheckpoint(self, eager: bool = True, storageLevel: StorageLevel | None = None) -> DataFrame:
+        """Returns a locally checkpointed version of this :class:`DataFrame`: as
+        :meth:`checkpoint`, held by the session, no directory needed.
+
+        Parameters
+        ----------
+        eager : bool, optional
+            Whether to checkpoint now (default) or at the first action.
+        storageLevel : :class:`krishiv.storagelevel.StorageLevel`, optional
+            The storage level; accepted, the rows are held in the session's memory.
+
+        Returns
+        -------
+        :class:`DataFrame`
+            The checkpointed frame.
+        """
+        if not isinstance(eager, bool):
+            raise not_expected_type("eager", "bool", eager)
+        level = None
+        if storageLevel is not None:
+            if not isinstance(storageLevel, StorageLevel):
+                raise not_expected_type("storageLevel", "StorageLevel", storageLevel)
+            level = (
+                storageLevel.useDisk,
+                storageLevel.useMemory,
+                storageLevel.useOffHeap,
+                storageLevel.deserialized,
+                storageLevel.replication,
+            )
+        return self._new(self._df.local_checkpoint(eager, level))
 
     @property
     def storageLevel(self) -> StorageLevel:
-        """This frame's storage level (all false when uncached)."""
-        return self._storage_level
+        """This frame's effective storage level (all false when uncached): what the session
+        registered, which is not always what this frame asked for."""
+        disk, memory, off_heap, deserialized, replication = self._df.storage_level()
+        return StorageLevel(disk, memory, off_heap, deserialized, replication)
 
     @property
     def is_cached(self) -> bool:

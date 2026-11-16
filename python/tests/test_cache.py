@@ -43,6 +43,10 @@ def test_cache_acts_on_the_frame_itself(spark: SparkSession) -> None:
     assert df.cache() is df
     assert df.count() == 2
     assert df.is_cached
+    # Already cached: the first registration's level stays, as in Spark.
+    assert df.persist(StorageLevel.DISK_ONLY) is df
+    assert df.storageLevel == StorageLevel.MEMORY_AND_DISK
+    assert df.unpersist() is df
     assert df.persist(StorageLevel.DISK_ONLY) is df
     assert df.storageLevel == StorageLevel.DISK_ONLY
     assert df.unpersist() is df
@@ -84,7 +88,9 @@ def test_cached_frame_reads_the_snapshot(spark: SparkSession) -> None:
     spark.catalog.refreshTable("t")
     assert not cached.is_cached
     assert rows(cached) == [(2, "b")]
-    assert cached.is_cached
+    # The registration belonged to the old plan; the replaced view is read uncached until cached again.
+    assert not cached.is_cached
+    assert cached.cache().is_cached
     spark.catalog.clearCache()
     assert not cached.is_cached
 
@@ -146,3 +152,47 @@ def test_storage_level_repr_str_and_equality() -> None:
     assert level == StorageLevel(True, True, False, True, 2)
     assert level != StorageLevel.MEMORY_AND_DISK
     assert level != "Disk"
+
+
+def test_local_checkpoint_fixes_the_rows(spark: SparkSession) -> None:
+    df = spark.createDataFrame([(2, "Alice"), (5, "Bob")], ["age", "name"])
+    cp = df.localCheckpoint()
+    assert rows(cp) == [(2, "Alice"), (5, "Bob")]
+    assert not cp.is_cached
+    assert rows(df.localCheckpoint(eager=False, storageLevel=StorageLevel.DISK_ONLY)) == rows(df)
+
+
+def test_checkpoint_needs_a_directory(spark: SparkSession, tmp_path) -> None:
+    df = spark.createDataFrame([(2, "Alice")], ["age", "name"])
+    with pytest.raises(Exception, match="Checkpoint directory has not been set"):
+        df.checkpoint()
+    spark.conf.set("spark.checkpoint.dir", str(tmp_path / "cp"))
+    assert rows(df.checkpoint()) == [(2, "Alice")]
+
+
+def test_checkpoint_arguments_are_checked(spark: SparkSession) -> None:
+    df = spark.createDataFrame([(2, "Alice")], ["age", "name"])
+    with pytest.raises(Exception, match="eager"):
+        df.checkpoint("yes")  # ty: ignore[invalid-argument-type]
+    with pytest.raises(Exception, match="eager"):
+        df.localCheckpoint("yes")  # ty: ignore[invalid-argument-type]
+    with pytest.raises(Exception, match="storageLevel"):
+        df.localCheckpoint(storageLevel="DISK_ONLY")  # ty: ignore[invalid-argument-type]
+
+
+def test_a_checkpoint_is_a_snapshot_of_a_changing_source(spark: SparkSession, tmp_path) -> None:
+    spark.conf.set("spark.checkpoint.dir", str(tmp_path / "cp"))
+    makers = {
+        "local": lambda d: d.localCheckpoint(),
+        "reliable": lambda d: d.checkpoint(),
+        "lazy": lambda d: d.localCheckpoint(eager=False),
+    }
+    for kind, make in makers.items():
+        table = f"snap_{kind}"
+        spark.sql(f"CREATE TABLE {table} (age INT, name STRING) USING parquet")
+        spark.sql(f"INSERT INTO {table} VALUES (1, 'a')")
+        cp = make(spark.table(table))
+        if kind == "lazy":
+            assert rows(cp) == [(1, "a")]
+        spark.sql(f"INSERT INTO {table} VALUES (9, 'z')")
+        assert rows(cp) == [(1, "a")]

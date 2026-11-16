@@ -805,6 +805,50 @@ fn scan_options_read_the_session() {
 }
 
 #[test]
+fn the_read_options_take_precedence_over_the_session() {
+    let (on, _) = Config::from_pairs([
+        ("spark.sql.files.ignoreCorruptFiles", "true"),
+        ("spark.sql.files.ignoreMissingFiles", "true"),
+    ])
+    .unwrap();
+    let v = |k: &'static str, x: &str| (k, OptionValue::from_user(k, x));
+    // Unset: the session decides.
+    let (o, _) = parse(&[], &on).unwrap();
+    assert_eq!(
+        (o.ignore_corrupt_files(), o.ignore_missing_files()),
+        (None, None)
+    );
+    let s = ScanOptions::for_read(&on, &o);
+    assert!(s.ignore_corrupt_files && s.ignore_missing_files);
+    // Given (any case of the name and value): the read decides, either way.
+    let (o, _) = parse(
+        &[
+            v("IGNORECORRUPTFILES", " False "),
+            v("ignoreMissingFiles", "false"),
+        ],
+        &on,
+    )
+    .unwrap();
+    let s = ScanOptions::for_read(&on, &o);
+    assert!(!s.ignore_corrupt_files && !s.ignore_missing_files);
+    let (o, _) = parse(&[v("ignoreCorruptFiles", "TRUE")], &Config::new()).unwrap();
+    let s = ScanOptions::for_read(&Config::new(), &o);
+    assert!(s.ignore_corrupt_files && !s.ignore_missing_files);
+    // The flags key the read: two reads that differ only in them differ.
+    let (off, _) = parse(&[v("ignoreCorruptFiles", "false")], &Config::new()).unwrap();
+    assert!(!o.same_read(&off) && o.same_read(&o.clone()));
+    // Not a boolean.
+    for k in ["ignoreCorruptFiles", "ignoreMissingFiles"] {
+        let e = parse(&[v(k, "yes")], &Config::new()).unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "KRISHIV_INVALID_FORMAT_OPTION_VALUE",
+            "{k}"
+        );
+    }
+}
+
+#[test]
 fn secrets_stay_secret_and_key_the_cache() {
     let rt = || OptionValue::from_user("key", "hunter2");
     let (o, _) = parse(&[("key", rt())], &Config::new()).unwrap();
@@ -1327,6 +1371,17 @@ fn case_rules_field_ids_and_column_mapping() {
             0
         ),
         Some(1)
+    );
+    // Under id mapping a field without an id (a Variant's `metadata`/`value`) is matched by name.
+    assert_eq!(
+        one(
+            &read(
+                schema(vec![f("gamma", DataType::Int32)]),
+                FieldMapping::DeltaColumnMapping { by_id: true }
+            ),
+            0
+        ),
+        Some(3)
     );
     let dup = schema(vec![f("a", DataType::Int32), f("A", DataType::Int32)]);
     let e = mapper(&schema(vec![f("a", DataType::Int32)]), &dup, by_name()).unwrap_err();
@@ -1880,3 +1935,5 @@ fn a_projector_reuses_its_plan_across_batches_and_follows_a_schema_change() {
     // A missing column is still an error, not a stale answer.
     assert!(p.project(&batch(&["a", "c"])).is_err());
 }
+
+mod field_ids;

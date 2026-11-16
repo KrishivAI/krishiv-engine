@@ -52,6 +52,7 @@ fn kinds_of_node(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
         PlanNode::Distinct { .. } => "PlanNode::Distinct",
         PlanNode::SetOp { .. } => "PlanNode::SetOp",
         PlanNode::ReplicateRows { .. } => "PlanNode::ReplicateRows",
+        PlanNode::Sample { .. } => "PlanNode::Sample",
         PlanNode::Expand { .. } => "PlanNode::Expand",
         PlanNode::Generate { .. } => "PlanNode::Generate",
         PlanNode::Pivot { .. } => "PlanNode::Pivot",
@@ -62,6 +63,10 @@ fn kinds_of_node(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
         PlanNode::Range { .. } => "PlanNode::Range",
         PlanNode::UnionLoop { .. } => "PlanNode::UnionLoop",
         PlanNode::UnionLoopRef { .. } => "PlanNode::UnionLoopRef",
+        PlanNode::MapPartitions { .. } => "PlanNode::MapPartitions",
+        PlanNode::GroupMap { .. } => "PlanNode::GroupMap",
+        PlanNode::CoGroupMap { .. } => "PlanNode::CoGroupMap",
+        PlanNode::PythonTableFunction { .. } => "PlanNode::PythonTableFunction",
     });
 }
 
@@ -185,6 +190,7 @@ fn slice_ops() -> Vec<(&'static str, LogicalPlan)> {
             "path", "/data",
         )],
         options: BTreeMap::new(),
+        schema: None,
     }));
     let sql = LogicalPlan::new(PlanNode::Sql {
         query: "SELECT 1".to_owned(),

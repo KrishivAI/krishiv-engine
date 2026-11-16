@@ -41,7 +41,10 @@ fn rows_under(env: &Env, conf: &[(&str, &str)]) -> (Vec<String>, usize) {
 #[test]
 fn sharing_the_repeated_join_keeps_the_rows() {
     let env = env();
-    let (off, shared_off) = rows_under(&env, &[]);
+    let (off, shared_off) = rows_under(
+        &env,
+        &[("krishiv.optimizer.shareRepeatedSubtrees", "false")],
+    );
     let (on, shared_on) = rows_under(&env, &[("krishiv.optimizer.shareRepeatedSubtrees", "true")]);
     assert_eq!(off, on);
     assert!(!off.is_empty());

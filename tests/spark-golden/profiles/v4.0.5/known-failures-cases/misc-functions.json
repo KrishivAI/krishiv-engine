@@ -1,5 +1,8 @@
 {
   "cases": {
+    "legacy-setting-refused": [
+      21
+    ],
     "other-version": [
       7
     ]

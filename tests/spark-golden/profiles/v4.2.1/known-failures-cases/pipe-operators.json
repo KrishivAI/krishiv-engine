@@ -1,0 +1,10 @@
+{
+  "cases": {
+    "parser-pipe-collate": [
+      259,
+      260
+    ]
+  },
+  "file": "pipe-operators",
+  "format_version": 1
+}

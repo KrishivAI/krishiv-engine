@@ -396,9 +396,17 @@ fn survey(plan: &Arc<LogicalPlan>) -> Found {
     while let Some(step) = stack.pop() {
         match step {
             Step::Plan(p) => {
+                // An unseeded sample draws its seed per physical plan.
+                if let PlanNode::Sample { seed: None, .. } = &p.node {
+                    found.nondeterministic = true;
+                }
                 if let PlanNode::Scan(s) = &p.node {
                     match &s.source {
                         ReadSource::Table { name, .. } => found.tables.push(name.clone()),
+                        // Content-addressed input: no file or table dependency.
+                        ReadSource::Local(_) => {}
+                        // Files by path, and any source added later, are assumed
+                        // to read files.
                         _ => found.files = true,
                     }
                 }

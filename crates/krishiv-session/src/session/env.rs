@@ -83,6 +83,8 @@ pub(super) fn conf_values<'k>(config: &Config, keys: &[&'k str]) -> BTreeMap<&'k
 #[derive(Clone)]
 pub(crate) struct QueryEnv {
     pub(crate) config: Arc<Config>,
+    /// Set by a file write, whose profile is recorded after its commit: see [`crate::profile_history::HistoryHold`].
+    pub(crate) history_hold: Option<Arc<crate::profile_history::HistoryHold>>,
     /// The query's I/O context: every read, scan and write of the query goes
     /// through it, so its counters are the query's own.
     pub(crate) io: krishiv_io::IoContext,
@@ -123,6 +125,15 @@ pub(crate) struct QueryEnv {
     pub(crate) identifier_spans: Arc<[krishiv_sql::ast::Span]>,
     /// The `IDENTIFIER(..)` text each of `identifier_spans` replaced (empty for `CACHE TABLE`).
     pub(crate) identifier_written: Arc<[String]>,
+    /// The salt of the statement's unseeded `TABLESAMPLE` seeds
+    /// ([`PlanningContext::sample_salt`](krishiv_exec::planner::PlanningContext::sample_salt)):
+    /// drawn once per DataFrame and kept when it is analyzed again, so its
+    /// actions sample the same rows.
+    pub(crate) sample_salt: u64,
+    /// A trial analysis (P3 PR-14d): its read denials are answers, not refusals, so they write no
+    /// `krishiv::audit` record ([`crate::access::audit_read`]). Only a caller that falls back to
+    /// an analysis of its own, which is audited, sets it.
+    pub(crate) quiet_denials: bool,
 }
 
 /// A batch query's result rows: insert-only, so a weight other than 1 is a
@@ -153,9 +164,9 @@ pub(crate) fn read_files(
     paths: Vec<OptionValue>,
     options: BTreeMap<String, OptionValue>,
 ) -> LogicalPlan {
-    LogicalPlan::new(PlanNode::Read(ReadSource::Files {
-        format: format.to_owned(),
+    LogicalPlan::new(PlanNode::Read(ReadSource::files(
+        format.to_owned(),
         paths,
         options,
-    }))
+    )))
 }

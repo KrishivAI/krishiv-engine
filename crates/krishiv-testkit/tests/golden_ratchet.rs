@@ -8,6 +8,10 @@
 //! --ratchet update`. The nightly serialize-through job runs the same ratchet with every plan
 //! encoded to `krishiv.plan.v1` and decoded before it runs (P2-T173).
 #![forbid(unsafe_code)]
+// The baseline no longer lists the ICU rows of `collations-basic` (ICU collations are default-on,
+// ADR 0043 D5), so the ratchet runs with `collations-icu`, which is a default feature here. Without
+// it those rows fail and the ratchet is compiled out; `tests/golden_icu.rs` covers the ICU rows.
+#![cfg(feature = "collations-icu")]
 
 use krishiv_testkit::golden::known_failures::KnownFailures;
 use krishiv_testkit::golden::manifest::ExclusionManifest;
@@ -42,6 +46,7 @@ fn matches_the_frozen_baseline(mut engine: SessionEngine) -> R {
     let manifest = ExclusionManifest::load(&ExclusionManifest::default_path())?;
     assert!(manifest.frozen, "the exclusion manifest is frozen");
     let set = GoldenSet::scan(&GoldenSet::tag_dir(DEFAULT_TAG))?;
+    manifest.validate(&set)?;
     let result = run(&mut engine, &set, &manifest)?;
     assert!(result.failed_files.is_empty(), "{:?}", result.failed_files);
     let timeouts: Vec<String> = result

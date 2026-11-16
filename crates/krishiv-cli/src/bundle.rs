@@ -503,6 +503,7 @@ fn platform() -> String {
 pub(crate) fn feature_states() -> Vec<(&'static str, bool)> {
     vec![
         ("mimalloc", cfg!(feature = "mimalloc")),
+        ("server", cfg!(feature = "server")),
         ("ui", cfg!(feature = "ui")),
         ("kafka", cfg!(feature = "kafka")),
         ("iceberg", cfg!(feature = "iceberg")),
@@ -512,6 +513,7 @@ pub(crate) fn feature_states() -> Vec<(&'static str, bool)> {
         ("flight-sql", cfg!(feature = "flight-sql")),
         ("mcp", cfg!(feature = "mcp")),
         ("python", cfg!(feature = "python")),
+        ("collations-icu", cfg!(feature = "collations-icu")),
         ("wasm-udf", cfg!(feature = "wasm-udf")),
         ("celeborn", cfg!(feature = "celeborn")),
         ("tokio-console", cfg!(feature = "tokio-console")),
@@ -524,6 +526,9 @@ fn enabled_features() -> Vec<&'static str> {
     let mut out = Vec::new();
     if cfg!(feature = "mimalloc") {
         out.push("mimalloc");
+    }
+    if cfg!(feature = "server") {
+        out.push("server");
     }
     if cfg!(feature = "ui") {
         out.push("ui");
@@ -551,6 +556,9 @@ fn enabled_features() -> Vec<&'static str> {
     }
     if cfg!(feature = "python") {
         out.push("python");
+    }
+    if cfg!(feature = "collations-icu") {
+        out.push("collations-icu");
     }
     if cfg!(feature = "wasm-udf") {
         out.push("wasm-udf");

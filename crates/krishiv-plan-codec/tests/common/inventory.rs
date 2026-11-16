@@ -17,9 +17,11 @@ use krishiv_exec::physical::{
     JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProbeColumn, ProbeFilter,
     ProbeFilterColumn, ProbeRowStage, ProbeSelect, ProjectItemPlan, Residual, ScanFilter, ScanId,
     ScanNode, ScanRuntimeFilter, SortMergeJoinPlan, SubqueryId, SubqueryPlan, SubqueryValueKind,
-    WritePlan,
+    TableWriteRequest, WritePlan,
 };
-use krishiv_exec::planner::ExplainNode;
+use krishiv_exec::planner::{
+    ExplainNode, RowLevelOperation, RowLevelWrite, WriteMode, WriteRequest,
+};
 use krishiv_exec::window::{
     FrameBound, FrameUnits, GroupLimitPlan, RankLike, WindowFrame, WindowFunction,
     WindowFunctionPlan, WindowPlan,
@@ -181,14 +183,14 @@ pub(crate) fn file_scan() -> ScanNode {
     ScanNode {
         id: ScanId(8),
         scan: Scan {
-            source: ReadSource::Files {
-                format: "parquet".to_owned(),
-                paths: vec![
+            source: ReadSource::files(
+                "parquet".to_owned(),
+                vec![
                     OptionValue::Plain("s3://bucket/a/*.parquet".to_owned()),
                     OptionValue::reference("prod", "signed-path"),
                 ],
-                options: BTreeMap::new(),
-            },
+                BTreeMap::new(),
+            ),
             output: scan_columns(),
             version: None,
         },
@@ -211,6 +213,14 @@ pub(crate) fn partial_aggregate() -> PhysNode {
             output: AggregateOutput::Partial,
         },
     }
+}
+
+/// The rows a [`PhysNode::TableWrite`] of the inventory sends its table.
+fn written_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("a", ArrowType::Int64, true),
+        Field::new("s", ArrowType::Utf8, false),
+    ]))
 }
 
 pub(crate) fn scan() -> PhysNode {
@@ -454,6 +464,23 @@ pub(crate) fn max_min_by_exprs() -> Vec<AggregateExpr> {
         )
     };
     vec![by(AggregateFunction::MaxBy), by(AggregateFunction::MinBy)]
+}
+
+/// `max` and `min` of a collated string: the value and its collation key, the
+/// first of equal keys kept (a struct argument, so `nested_types` too).
+pub(crate) fn collated_min_max_exprs() -> Vec<AggregateExpr> {
+    let by = |function| {
+        AggregateExpr::by(
+            function,
+            (0, 1),
+            (ArrowType::Utf8View, ArrowType::Binary),
+            "x",
+        )
+    };
+    vec![
+        by(AggregateFunction::MaxByKeyFirst),
+        by(AggregateFunction::MinByKeyFirst),
+    ]
 }
 
 fn window_function(function: WindowFunction, frame: WindowFrame, name: &str) -> WindowFunctionPlan {
@@ -1073,6 +1100,55 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                     keys: vec![SortKey::asc(0), SortKey::desc(1)],
                 }),
                 window: window_aggregates(),
+            },
+        ),
+        (
+            "table_write",
+            PhysNode::TableWrite {
+                input: boxed(scan()),
+                table: table_scan().scan,
+                request: TableWriteRequest::Write({
+                    let mut w =
+                        WriteRequest::new(WriteMode::Append, "`c`.`db`.`t`", written_schema());
+                    w.options = BTreeMap::from([("mergeSchema".to_owned(), "true".to_owned())]);
+                    w.write_id = Some("0b7f3a6e-5c1d-4e2a-9f8b-1a2b3c4d5e6f".to_owned());
+                    w
+                }),
+            },
+        ),
+        (
+            "table_write_by_filter",
+            PhysNode::TableWrite {
+                input: boxed(scan()),
+                table: table_scan().scan,
+                request: TableWriteRequest::Write(WriteRequest::new(
+                    WriteMode::OverwriteByFilter(predicate()),
+                    "`t`",
+                    written_schema(),
+                )),
+            },
+        ),
+        (
+            "table_write_row_level",
+            PhysNode::TableWrite {
+                input: boxed(scan()),
+                table: table_scan().scan,
+                request: TableWriteRequest::RowLevel(RowLevelWrite::new(
+                    RowLevelOperation::Delete,
+                    "`t`",
+                    written_schema(),
+                    vec![b"part-0.parquet".to_vec()],
+                    Some(predicate()),
+                )),
+            },
+        ),
+        (
+            "sample",
+            PhysNode::Sample {
+                input: boxed(scan()),
+                lower: 0.0,
+                upper: 0.1,
+                seed: 7,
             },
         ),
         (
@@ -1717,6 +1793,169 @@ pub(crate) fn python_eval() -> PhysNode {
     }
 }
 
+/// A Python UDF reference of a relation node (`python_udf_relations`).
+fn python_udf_ref(eval_type: krishiv_plan::PythonEvalType) -> krishiv_plan::PythonUdfRef {
+    krishiv_plan::PythonUdfRef {
+        name: "py_rel".to_owned(),
+        version: 4,
+        eval_type,
+        thread_safe: true,
+        deterministic: true,
+    }
+}
+
+/// A relation node's UDF: frames of columns 0 and 1 per side, a declared
+/// `n BIGINT, tags ARRAY<STRING>` result.
+fn python_relation(
+    eval_type: krishiv_plan::PythonEvalType,
+    sides: usize,
+) -> krishiv_exec::physical::PythonRelationPlan {
+    use krishiv_exec::physical::{PythonFrameSide, PythonOutputColumn, PythonRelationPlan};
+    PythonRelationPlan {
+        udf: python_udf_ref(eval_type),
+        sides: (0..sides)
+            .map(|s| PythonFrameSide {
+                columns: vec![2 * s, 2 * s + 1],
+                names: vec!["a".to_owned(), "b".to_owned()],
+                types: vec![DataType::Integer, DataType::Long],
+            })
+            .collect(),
+        output: vec![
+            PythonOutputColumn {
+                name: "n".to_owned(),
+                data_type: DataType::Long,
+                nullable: false,
+            },
+            PythonOutputColumn {
+                name: "tags".to_owned(),
+                data_type: DataType::Array(
+                    krishiv_types::ArrayType::new(DataType::String, true).into(),
+                ),
+                nullable: true,
+            },
+        ],
+    }
+}
+
+/// The Python UDF relation nodes (`python_udf_relations`, design P3-T085
+/// §3.1), each over a scan.
+pub(crate) fn python_relations() -> Vec<(&'static str, PhysNode)> {
+    use krishiv_plan::PythonEvalType as T;
+    let call = |eval_type: T| {
+        Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+            ResolvedFunction {
+                within_group: Vec::new(),
+                id: python_udf_ref(eval_type).function_id(),
+                kind: FunctionKind::Aggregate,
+                args: vec![col(2, "b", DataType::Long)],
+                distinct: false,
+                filter: None,
+                data_type: DataType::Double,
+                nullable: true,
+                deterministic: true,
+            },
+        ))))
+    };
+    vec![
+        (
+            "python_map",
+            PhysNode::PythonMap {
+                input: boxed(scan()),
+                udf: python_relation(T::MapArrowIter, 1),
+            },
+        ),
+        (
+            "python_group_map",
+            PhysNode::PythonGroupMap {
+                input: boxed(scan()),
+                keys: vec![0],
+                udf: python_relation(T::GroupedMapPandasIter, 1),
+            },
+        ),
+        (
+            "python_cogroup_map",
+            PhysNode::PythonCoGroupMap {
+                input: boxed(scan()),
+                keys: vec![0],
+                side: 1,
+                udf: python_relation(T::CogroupedMapPandas, 2),
+            },
+        ),
+        (
+            "python_aggregate",
+            PhysNode::PythonAggregate {
+                input: boxed(scan()),
+                layout: vec![AttrId(1), AttrId(2)],
+                keys: vec![0],
+                key_values: vec![1],
+                calls: vec![
+                    krishiv_exec::physical::PythonCallPlan {
+                        call: call(T::GroupedAggArrow),
+                        output: AttrId(9),
+                    },
+                    krishiv_exec::physical::PythonCallPlan {
+                        call: call(T::GroupedAggPandasIter),
+                        output: AttrId(10),
+                    },
+                ],
+            },
+        ),
+        (
+            "python_udtf_generate",
+            PhysNode::Generate {
+                input: boxed(scan()),
+                layout: vec![AttrId(1), AttrId(2)],
+                kind: krishiv_plan::GeneratorKind::PythonUdtf,
+                outer: false,
+                arg: Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                    ResolvedFunction {
+                        within_group: Vec::new(),
+                        id: python_udf_ref(T::ArrowUdtf).function_id(),
+                        kind: FunctionKind::Generator,
+                        args: vec![col(1, "a", DataType::Integer)],
+                        distinct: false,
+                        filter: None,
+                        data_type: DataType::Long,
+                        nullable: true,
+                        deterministic: true,
+                    },
+                )))),
+                subqueries: Vec::new(),
+            },
+        ),
+    ]
+}
+
+/// Every eval type, each in a `PythonEval` call: the scalar ones need only
+/// `python_udf`, every other one `python_udf_relations` too.
+pub(crate) fn python_eval_types() -> PhysNode {
+    let calls = krishiv_plan::PythonEvalType::ALL
+        .iter()
+        .enumerate()
+        .map(|(i, t)| krishiv_exec::physical::PythonCallPlan {
+            call: Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                ResolvedFunction {
+                    within_group: Vec::new(),
+                    id: python_udf_ref(*t).function_id(),
+                    kind: FunctionKind::Scalar,
+                    args: vec![col(1, "a", DataType::Integer)],
+                    distinct: false,
+                    filter: None,
+                    data_type: DataType::Long,
+                    nullable: true,
+                    deterministic: true,
+                },
+            )))),
+            output: AttrId(100 + i as u64),
+        })
+        .collect();
+    PhysNode::PythonEval {
+        input: boxed(scan()),
+        layout: vec![AttrId(1), AttrId(2)],
+        calls,
+    }
+}
+
 /// A call of a session-registered native Rust aggregate UDF
 /// (`rust_udaf`): by name and version, with the argument and state
 /// columns the planner fixed, in a final aggregate and the merge of its
@@ -1899,6 +2138,12 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
     out.push(("expressions".to_owned(), plan_of(expressions())));
     out.push(("rust_udf".to_owned(), plan_of(udf_call())));
     out.push(("python_udf".to_owned(), plan_of(python_eval())));
+    out.extend(
+        python_relations()
+            .into_iter()
+            .map(|(name, node)| (name.to_owned(), plan_of(node))),
+    );
+    out.push(("python_eval_types".to_owned(), plan_of(python_eval_types())));
     out.push(("rust_udaf".to_owned(), plan_of(udaf_call())));
     // The expression environment flag the `legacy_statistical_aggregate`
     // feature is about: the same root as `one_row`, under a session with
@@ -2224,6 +2469,50 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         nullable: None,
         subqueries: Vec::new(),
     };
+    // Nested values: an array with a null element, an empty one, a map with
+    // a struct value and a bare struct.
+    let nested_literals = {
+        use krishiv_types::{ArrayType, MapType, StructField, StructType};
+        let array_type = ArrayType::new(DataType::Integer, true);
+        let struct_type = StructType::new([
+            StructField::new("a", DataType::Integer, false),
+            StructField::new("s", DataType::String, true),
+        ]);
+        let a_struct = |v: i32| {
+            Literal::struct_value(
+                struct_type.clone(),
+                vec![Literal::Integer(v), Literal::Null(Some(DataType::String))],
+            )
+            .unwrap()
+        };
+        PhysNode::Project {
+            input: boxed(scan()),
+            layout: vec![AttrId(1), AttrId(2)],
+            items: [
+                Literal::array(
+                    array_type.clone(),
+                    vec![Literal::Integer(1), Literal::Null(Some(DataType::Integer))],
+                )
+                .unwrap(),
+                Literal::array(array_type, Vec::new()).unwrap(),
+                Literal::key_value_map(
+                    MapType::new(DataType::String, struct_type.clone().into(), true),
+                    vec![(Literal::String("k".to_owned()), a_struct(1))],
+                )
+                .unwrap(),
+                a_struct(2),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(i, l)| ProjectItemPlan::Expr {
+                name: format!("n{i}"),
+                expr: lit(l),
+            })
+            .collect(),
+            nullable: None,
+            subqueries: Vec::new(),
+        }
+    };
     let mut interval_columns = file_scan();
     interval_columns.scan.output = vec![
         column(
@@ -2256,6 +2545,14 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         column(3, "lcase", collated("utf8_lcase"), true),
         column(4, "icu", collated("UNICODE_CI_RTRIM"), false),
     ];
+    // The INDETERMINATE collation of a mixed expression (`string collate null`).
+    let mut indeterminate_columns = file_scan();
+    indeterminate_columns.scan.output = vec![column(
+        3,
+        "mixed",
+        DataType::collated_string(Collation::INDETERMINATE),
+        true,
+    )];
     let collated_nested = PhysNode::Project {
         input: boxed(scan()),
         layout: vec![AttrId(1), AttrId(2)],
@@ -2271,9 +2568,42 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         nullable: None,
         subqueries: Vec::new(),
     };
+    // A file read with a declared schema (a nested field too).
+    let file_source_schema = {
+        use krishiv_types::{ArrayType, StructField, StructType};
+        let mut scan = file_scan();
+        scan.scan.source = scan.scan.source.with_schema(StructType::new([
+            StructField::new("a", DataType::Integer, false),
+            StructField::new(
+                "tags",
+                DataType::Array(std::sync::Arc::new(ArrayType::new(DataType::String, true))),
+                true,
+            ),
+        ]));
+        PhysNode::Scan(scan)
+    };
+    // A scan of a local relation, named by hash (no data in the plan).
+    let local_relation_source = {
+        use arrow_schema::{Field, Schema};
+        let mut scan = file_scan();
+        scan.scan.source = ReadSource::Local(krishiv_plan::LocalRelation::from_decoded(
+            std::sync::Arc::new(Schema::new(vec![
+                Field::new("a", arrow_schema::DataType::Int32, false),
+                Field::new("b", arrow_schema::DataType::Utf8, true),
+            ])),
+            [0x5a; 32],
+            2,
+            1_000,
+            4_096,
+        ));
+        PhysNode::Scan(scan)
+    };
     vec![
+        ("local_relation_source", local_relation_source),
+        ("file_source_schema", file_source_schema),
         ("interval_literals", interval_literals),
         ("options_map_literal", options_map),
+        ("nested_literals", nested_literals),
         ("interval_scan", PhysNode::Scan(interval_columns)),
         ("interval_nested", nested_intervals),
         (
@@ -2310,6 +2640,32 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
                 },
             },
         ),
+        (
+            // A vector column on the `FixedSizeList` carrier (design P3-T075): the argument type of a count.
+            // Hand-built: the planner types an aggregate argument from its Spark type, so it only ever emits a
+            // plain list. The case keeps the defensive feature (header, refusal, bytes) tested.
+            "vector_carrier_aggregate",
+            PhysNode::Aggregate {
+                input: Box::new(PhysNode::Scan(file_scan())),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    aggregates: vec![AggregateExpr {
+                        function: AggregateFunction::Count,
+                        args: vec![1],
+                        input: AggInput::Raw,
+                        arg_type: ArrowType::FixedSizeList(
+                            std::sync::Arc::new(Field::new("item", ArrowType::Float32, true)),
+                            768,
+                        ),
+                        name: "vec".to_owned(),
+                        mask: None,
+                        element: None,
+                    }],
+                    distinct: vec![false],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
         ("time_nested", nested_times),
         ("time_project", times),
         ("geo_scan", PhysNode::Scan(spatial)),
@@ -2317,6 +2673,22 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         ("variant_scan", PhysNode::Scan(variants)),
         ("collated_scan", PhysNode::Scan(collated_columns)),
         ("collated_nested", collated_nested),
+        (
+            "collated_indeterminate_scan",
+            PhysNode::Scan(indeterminate_columns),
+        ),
+        (
+            "collated_min_max",
+            PhysNode::Aggregate {
+                input: Box::new(PhysNode::Scan(file_scan())),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    aggregates: collated_min_max_exprs(),
+                    distinct: vec![false; 2],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
     ]
 }
 

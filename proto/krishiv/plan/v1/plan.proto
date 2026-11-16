@@ -172,7 +172,165 @@ message Node {
     ExchangeSourceNode exchange_source = 25;
     // feature: python_udf
     PythonEvalNode python_eval = 26;
+    // feature: sample
+    SampleNode sample = 27;
+    // feature: python_udf_relations
+    PythonMapNode python_map = 28;
+    // feature: python_udf_relations
+    PythonGroupMapNode python_group_map = 29;
+    // feature: python_udf_relations
+    PythonCoGroupMapNode python_co_group_map = 30;
+    // feature: python_udf_relations
+    PythonAggregateNode python_aggregate = 31;
+    // feature: table_write
+    TableWriteNode table_write = 32;
   }
+}
+
+// feature: table_write
+// The rows of `input` written into a table provider's sink: `table` names the
+// provider as a scan does, and is resolved when the plan is instantiated, into
+// the table's writer or the rewriter of its row-level table. The node returns
+// no rows; the sink commits when it finalizes.
+message TableWriteNode {
+  uint32 input = 1;
+  TableRef table = 2;
+  oneof request {
+    TableWriteRequest write = 3;
+    RowLevelWriteRequest row_level = 4;
+  }
+}
+
+// feature: table_write
+// A table as the provider resolver names it (a scan's source, columns and
+// pinned version).
+message TableRef {
+  ReadSource source = 1;
+  repeated BoundColumn output = 2;
+  optional sint64 version = 3;
+}
+
+// feature: table_write
+// A write: the table's writer for `mode`.
+message TableWriteRequest {
+  TableWriteMode mode = 1;
+  // The rows an overwrite by filter replaces (an expression table index).
+  optional uint32 filter = 2;
+  string table_name = 3;
+  // The rows the sink receives (Arrow IPC `Schema` flatbuffer).
+  bytes input_schema = 4;
+  // Plain text only: an inline secret or a URL with credentials fails to encode.
+  repeated MapLiteralEntry options = 5;
+  optional string write_id = 6;
+}
+
+// feature: table_write
+enum TableWriteMode {
+  TABLE_WRITE_MODE_UNSPECIFIED = 0;
+  TABLE_WRITE_MODE_APPEND = 1;
+  TABLE_WRITE_MODE_TRUNCATE = 2;
+  TABLE_WRITE_MODE_OVERWRITE_BY_FILTER = 3;
+  TABLE_WRITE_MODE_OVERWRITE_DYNAMIC = 4;
+}
+
+// feature: table_write
+// A copy-on-write rewrite: the rewriter of the table's row-level table.
+message RowLevelWriteRequest {
+  RowLevelOperation op = 1;
+  string table_name = 2;
+  // The rows the sink receives (Arrow IPC `Schema` flatbuffer).
+  bytes input_schema = 3;
+  // The files the rewrite replaces (encoded file references, the values of
+  // `_krishiv_row_file`).
+  repeated bytes touched = 4;
+  // The statement's condition (an expression table index); absent: every row was read.
+  optional uint32 read_filter = 5;
+  // Plain text only, as `TableWriteRequest.options`.
+  repeated MapLiteralEntry options = 6;
+  optional string write_id = 7;
+}
+
+// feature: table_write
+enum RowLevelOperation {
+  ROW_LEVEL_OPERATION_UNSPECIFIED = 0;
+  ROW_LEVEL_OPERATION_DELETE = 1;
+  ROW_LEVEL_OPERATION_UPDATE = 2;
+  ROW_LEVEL_OPERATION_MERGE = 3;
+}
+
+// feature: sample
+// `TABLESAMPLE` (Spark's Bernoulli `SampleExec`): each row of input
+// partition `i` takes the next draw of `XORShiftRandom(seed + i)` and is
+// kept when it falls in `[lower, upper)`. The seed is always resolved (an
+// unseeded sample's is drawn when the plan is built).
+message SampleNode {
+  uint32 input = 1;
+  double lower = 2;
+  double upper = 3;
+  int64 seed = 4;
+}
+
+// feature: python_udf_relations
+// `mapInPandas` / `mapInArrow`: each partition of `input` sent to a Python
+// UDF task.
+message PythonMapNode {
+  uint32 input = 1;
+  PythonRelation udf = 2;
+}
+
+// feature: python_udf_relations
+// A grouped map over `input` clustered and sorted by the key columns.
+message PythonGroupMapNode {
+  uint32 input = 1;
+  repeated uint64 keys = 2;
+  PythonRelation udf = 3;
+}
+
+// feature: python_udf_relations
+// A cogrouped map over both relations in one stream, sorted by the key
+// columns then the side column.
+message PythonCoGroupMapNode {
+  uint32 input = 1;
+  repeated uint64 keys = 2;
+  uint64 side = 3;
+  PythonRelation udf = 4;
+}
+
+// feature: python_udf_relations
+// An aggregate of grouped-aggregate Python UDF calls over `input` clustered
+// and sorted by the key columns (`keys`: a collated key's comparison key);
+// each group shows its first row's `key_values`.
+message PythonAggregateNode {
+  uint32 input = 1;
+  repeated uint64 layout = 2;
+  repeated uint64 keys = 3;
+  repeated PythonCall calls = 4;
+  repeated uint64 key_values = 5;
+}
+
+// feature: python_udf_relations
+// The Python UDF of a relation node: by name and version, the columns of its
+// frames per side, and its declared result.
+message PythonRelation {
+  PythonUdfFunction udf = 1;
+  repeated PythonFrameSide sides = 2;
+  repeated PythonOutputColumn output = 3;
+  // Whether the UDF is deterministic (Spark's `udfDeterministic`).
+  bool deterministic = 4;
+}
+
+// feature: python_udf_relations
+message PythonFrameSide {
+  repeated uint64 columns = 1;
+  repeated string names = 2;
+  repeated DataType types = 3;
+}
+
+// feature: python_udf_relations
+message PythonOutputColumn {
+  string name = 1;
+  DataType data_type = 2;
+  bool nullable = 3;
 }
 
 // feature: python_udf
@@ -365,6 +523,8 @@ enum GeneratorKind {
   GENERATOR_KIND_INLINE = 3;
   // feature: variant_explode
   GENERATOR_KIND_VARIANT_EXPLODE = 4;
+  // feature: python_udf_relations
+  GENERATOR_KIND_PYTHON_UDTF = 5;
 }
 
 // feature: expand
@@ -620,6 +780,13 @@ enum AggregateFunction {
   // A session aggregate UDF, by name and version (`AggregateExpr.udaf`).
   // feature: rust_udaf
   AGGREGATE_FUNCTION_UDF = 46;
+  // `max` of a collated string: `MAX_BY` of the value by its collation key,
+  // keeping the first of equal keys.
+  // feature: collated_min_max
+  AGGREGATE_FUNCTION_MAX_BY_KEY_FIRST = 47;
+  // `min` of a collated string, as `MAX_BY_KEY_FIRST`.
+  // feature: collated_min_max
+  AGGREGATE_FUNCTION_MIN_BY_KEY_FIRST = 48;
 }
 
 enum AggregateInput {
@@ -966,6 +1133,8 @@ message ReadSource {
   oneof kind {
     TableSource table = 1;
     FilesSource files = 2;
+    // feature: local_relation_source
+    LocalSource local = 3;
   }
 }
 
@@ -978,6 +1147,23 @@ message FilesSource {
   string format = 1;
   repeated OptionValue paths = 2;
   map<string, OptionValue> options = 3;
+  // feature: file_source_schema
+  // The schema the user declared (a struct type); absent: inferred.
+  DataType schema = 4;
+}
+
+// Arrow data a plan reads (Spark's LocalRelation), named by content hash. The
+// data is never in the plan: it lives in the session's relation store of the
+// process that runs the plan, found by `hash`; a process without it fails.
+// feature: local_relation_source
+message LocalSource {
+  // SHA-256 content hash (32 bytes).
+  bytes hash = 1;
+  // Arrow IPC `Schema` flatbuffer of the stored batches.
+  bytes schema = 2;
+  uint64 rows = 3;
+  uint64 batches = 4;
+  uint64 bytes = 5;
 }
 
 // A data source option: plain text or a reference to a secret. An inline
@@ -1197,7 +1383,8 @@ message DataType {
   // feature: collated_strings
   // `KIND_COLLATED_STRING` only: the collation's canonical name (never
   // `UTF8_BINARY`, which is `KIND_STRING`). Ids index an ICU build's
-  // table, so they never travel.
+  // table, so they never travel. The INDETERMINATE collation is `null`
+  // (feature `indeterminate_collation`).
   string collation = 10;
 }
 
@@ -1237,7 +1424,42 @@ message Literal {
     CalendarLiteral calendar = 17;
     // feature: options_map_literals
     MapLiteral map = 18;
+    // feature: nested_literals
+    ArrayLiteral array = 19;
+    // feature: nested_literals
+    KeyValueMapLiteral key_value_map = 20;
+    // feature: nested_literals
+    StructLiteral struct = 21;
   }
+}
+
+// feature: nested_literals
+// An array value of any element type: `data_type` is the array type (a
+// nested type, so `nested_types` too), each element a literal of the element
+// type, a null one a typed `NullLiteral`.
+message ArrayLiteral {
+  DataType data_type = 1;
+  repeated Literal elements = 2;
+}
+
+// feature: nested_literals
+// A map value of any key and value type (not the options-only `MapLiteral`).
+message KeyValueMapLiteral {
+  DataType data_type = 1;
+  repeated KeyValueEntry entries = 2;
+}
+
+// feature: nested_literals
+message KeyValueEntry {
+  Literal key = 1;
+  Literal value = 2;
+}
+
+// feature: nested_literals
+// A struct value: one literal per field of `data_type`, in field order.
+message StructLiteral {
+  DataType data_type = 1;
+  repeated Literal fields = 2;
 }
 
 // feature: options_map_literals

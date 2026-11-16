@@ -1025,3 +1025,74 @@ fn read_latency_counts_every_read_attempt_to_a_remote_store_only() {
         assert_eq!((total, own), (3, 3));
     });
 }
+
+#[cfg(unix)]
+#[test]
+fn list_from_is_recursive_sorted_and_strictly_after_the_offset() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("t/_delta_log");
+        std::fs::create_dir_all(root.join("_sidecars/deep")).unwrap();
+        // Written out of order so the store's walk order is not the answer.
+        for name in [
+            "00000000000000000002.json",
+            "_sidecars/deep/a.parquet",
+            "00000000000000000000.json",
+            "00000000000000000001.json",
+            "00000000000000000001.checkpoint.parquet",
+            "_last_checkpoint",
+        ] {
+            std::fs::write(root.join(name), b"x").unwrap();
+        }
+        let sched = IoScheduler::new(IoConfig::default());
+        let id = StoreId::new("file");
+        sched.register_whole_listing_store(
+            id.clone(),
+            Arc::new(local_listing::SettledLocalFileSystem::new()) as Arc<dyn ObjectStore>,
+        );
+        let io = sched.context();
+        let dir = Path::from_absolute_path(&root).unwrap();
+        let names = |listed: Vec<ObjectMeta>| -> Vec<String> {
+            listed
+                .iter()
+                .map(|m| {
+                    m.location
+                        .as_ref()
+                        .strip_prefix(&format!("{dir}/"))
+                        .unwrap()
+                        .to_owned()
+                })
+                .collect()
+        };
+        let offset = Path::from(format!("{dir}/00000000000000000000.json"));
+        let got = names(io.list_from(&id, &dir, &offset).await.unwrap());
+        assert_eq!(
+            got,
+            [
+                "00000000000000000001.checkpoint.parquet",
+                "00000000000000000001.json",
+                "00000000000000000002.json",
+                "_last_checkpoint",
+                "_sidecars/deep/a.parquet",
+            ]
+        );
+        // An offset past everything lists nothing; an offset before everything lists all.
+        let last = Path::from(format!("{dir}/_sidecars/deep/a.parquet"));
+        assert!(io.list_from(&id, &dir, &last).await.unwrap().is_empty());
+        let all = names(io.list_from(&id, &dir, &dir).await.unwrap());
+        assert_eq!(all.len(), 6);
+        assert!(all.windows(2).all(|w| w[0] < w[1]));
+        // A missing directory is an empty listing.
+        let missing = Path::from(format!("{dir}/nope"));
+        assert!(
+            io.list_from(&id, &missing, &missing)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    });
+}

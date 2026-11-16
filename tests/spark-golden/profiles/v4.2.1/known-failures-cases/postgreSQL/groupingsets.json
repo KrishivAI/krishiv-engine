@@ -1,0 +1,9 @@
+{
+  "cases": {
+    "grouping-sets": [
+      34
+    ]
+  },
+  "file": "postgreSQL/groupingsets",
+  "format_version": 1
+}

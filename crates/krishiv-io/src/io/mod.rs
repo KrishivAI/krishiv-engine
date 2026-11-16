@@ -27,6 +27,7 @@ pub mod cache;
 mod coalesce;
 pub mod distinct_samples;
 pub mod fault;
+pub mod inferred;
 pub mod latency;
 #[cfg(unix)]
 pub mod local_listing;
@@ -69,14 +70,15 @@ pub use self::cache::{CacheKey, CacheStats, MetadataCache};
 pub use self::coalesce::{Coalesced, Waste, coalesce, coalesce_with};
 pub use self::distinct_samples::{DistinctSample, DistinctSamples, SampleKey};
 pub use self::fault::{FaultStats, FaultStore, ScheduledRequest, TransientError};
+pub use self::inferred::{InferKey, InferredSchemas, infer_schema_cached};
 pub use self::latency::{LATENCY_BUCKETS, LatencyHistogram};
 use self::pace::{Direction, Pacer};
 pub use self::stores::{
     AZURE_ACCOUNT_KEY, AZURE_ACCOUNT_NAME, AZURE_ENDPOINT, AZURE_SAS, GCS_ENDPOINT, GCS_KEY,
     GCS_KEYFILE, GCS_STORAGE_ROOT_URL, ObjectScheme, OpenedStore, ParsedUrl, S3_ACCESS_KEY,
     S3_ENDPOINT, S3_ENDPOINT_REGION, S3_PATH_STYLE_ACCESS, S3_REGION, S3_SECRET_KEY,
-    S3_SESSION_TOKEN, StoreRegistry, StoreSettings, parse_object_url, query_registry, register,
-    register_with_options,
+    S3_SESSION_TOKEN, StoreRegistry, StoreSettings, is_server_scoped_option, parse_object_url,
+    query_registry, register, register_with_options,
 };
 pub use self::upload::Upload;
 use crate::error::{
@@ -407,6 +409,8 @@ pub struct IoScheduler {
     cache: MetadataCache,
     /// The distinct-value samples the planner took of file columns (P2-T164 U6).
     distinct_samples: DistinctSamples,
+    /// The schemas formats inferred from files (see [`InferredSchemas`]).
+    inferred: InferredSchemas,
     /// The local block cache of remote reads, when `krishiv.io.cache.enabled`.
     block_cache: Option<Arc<BlockCache>>,
     runtime: Option<tokio::runtime::Handle>,
@@ -451,6 +455,7 @@ impl IoScheduler {
             block_cache,
             cache: MetadataCache::new(config.metadata_cache_bytes),
             distinct_samples: DistinctSamples::default(),
+            inferred: InferredSchemas::default(),
             jitter: AtomicU64::new(config.seed),
             config,
             stores: RwLock::new(HashMap::new()),
@@ -458,6 +463,14 @@ impl IoScheduler {
             totals: IoCounters::default(),
             http_clients: krishiv_store::SharedHttpClients::new(),
         })
+    }
+
+    /// The I/O runtime requests run on ([`Self::with_runtime`]), if any:
+    /// what a library that spawns its own I/O tasks (iceberg-rust's
+    /// `Runtime`) is handed, so its work stays off the compute workers.
+    #[must_use]
+    pub fn runtime(&self) -> Option<&tokio::runtime::Handle> {
+        self.runtime.as_ref()
     }
 
     /// The HTTP clients stores registered on this scheduler share (see
@@ -600,6 +613,12 @@ impl IoScheduler {
     #[must_use]
     pub fn distinct_samples(&self) -> &DistinctSamples {
         &self.distinct_samples
+    }
+
+    /// The schemas formats inferred from files, next to the metadata cache.
+    #[must_use]
+    pub fn inferred_schemas(&self) -> &InferredSchemas {
+        &self.inferred
     }
 
     /// Process-wide counters.
@@ -887,6 +906,31 @@ impl IoContext {
     #[must_use]
     pub fn memory_pool(&self) -> Option<&Arc<dyn MemoryPool>> {
         self.memory.as_ref().map(|h| h.pool())
+    }
+
+    /// An empty reservation from the query's pool, when the context has one.
+    pub(crate) fn reservation(&self) -> Option<Reservation> {
+        self.memory.as_ref().map(ConsumerHandle::reservation)
+    }
+
+    /// Grows (waiting for memory) or shrinks `r` to `bytes`.
+    ///
+    /// # Errors
+    /// Memory errors.
+    pub(crate) async fn resize_reservation(
+        &self,
+        r: &mut Option<Reservation>,
+        bytes: usize,
+    ) -> Result<()> {
+        if let Some(r) = r {
+            let have = r.size();
+            if bytes > have {
+                r.grow(bytes - have).await?;
+            } else {
+                r.shrink(have - bytes);
+            }
+        }
+        Ok(())
     }
 
     async fn reserve(&self, bytes: u64) -> Result<Option<Reservation>> {
@@ -1477,6 +1521,37 @@ impl IoContext {
     /// # Errors
     /// `KRISHIV_OBJECT_STORE_REQUEST_FAILED` after retries.
     pub async fn list(&self, store: &StoreId, prefix: &Path) -> Result<Vec<ObjectMeta>> {
+        self.list_after(store, prefix, None).await
+    }
+
+    /// Every object under the directory `prefix` of `store`, at any depth,
+    /// whose path sorts strictly after `offset` (UTF-8 byte order), sorted
+    /// by path: object_store's `list_with_offset`, the listing a Delta log
+    /// replay starts from. Stores that do not list in order are sorted here.
+    ///
+    /// # Errors
+    /// `KRISHIV_OBJECT_STORE_REQUEST_FAILED` after retries.
+    pub async fn list_from(
+        &self,
+        store: &StoreId,
+        prefix: &Path,
+        offset: &Path,
+    ) -> Result<Vec<ObjectMeta>> {
+        let mut out = self.list_after(store, prefix, Some(offset)).await?;
+        // The default `list_with_offset` filters but does not sort, and
+        // neither does the local file system's walk.
+        out.retain(|m| m.location.as_ref() > offset.as_ref());
+        out.sort_unstable_by(|a, b| a.location.as_ref().cmp(b.location.as_ref()));
+        Ok(out)
+    }
+
+    /// [`Self::list`], or [`Self::list_from`] when `offset` is given.
+    async fn list_after(
+        &self,
+        store: &StoreId,
+        prefix: &Path,
+        offset: Option<&Path>,
+    ) -> Result<Vec<ObjectMeta>> {
         let (s, lane) = self.sched.store(store)?;
         let cfg = &self.sched.config;
         let display = format!("{store}/{prefix}");
@@ -1494,7 +1569,10 @@ impl IoContext {
             let (retry_after, reason) = {
                 let _permit = lane.admit(Direction::Read, prefix).await?;
                 self.count(|c| &c.requests, 1);
-                let mut listed = s.list(Some(prefix));
+                let mut listed = match offset {
+                    Some(offset) => s.list_with_offset(Some(prefix), offset),
+                    None => s.list(Some(prefix)),
+                };
                 let mut out = Vec::new();
                 loop {
                     match tokio::time::timeout(object_wait, futures::StreamExt::next(&mut listed))

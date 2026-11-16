@@ -61,9 +61,10 @@ impl Session {
     /// A session of `parts` on `runtime` starting from `seed`'s state.
     fn seeded(runtime: Arc<EngineRuntime>, parts: SessionParts, seed: Seed) -> Self {
         let config = seed.conf.snapshot();
+        let runtime_admission = runtime.admission.clone();
         let queries = Arc::new(crate::system::QueryLog::new(
             Arc::clone(&runtime.history),
-            &parts.principal.name,
+            &parts.principal,
         ));
         // Without a session limit the session level is skipped: queries stay
         // children of the root, so `system.memory` shows what it always did.
@@ -77,7 +78,15 @@ impl Session {
             ),
             None => runtime.memory(),
         };
-        let cache = RelationCache::on(&memory, &runtime.invalidation);
+        let cache = RelationCache::on(
+            &memory,
+            &runtime.invalidation,
+            Some(crate::cache::CacheDisk {
+                executor: Arc::clone(&runtime.executor),
+                spill: Arc::clone(&runtime.spill),
+                config: krishiv_memory::SpillConfig::from_config(&runtime.config),
+            }),
+        );
         let io = Arc::clone(&runtime.io);
         let cwd = seed.cwd.unwrap_or_else(|| {
             std::env::current_dir()
@@ -97,14 +106,18 @@ impl Session {
                 SessionFunctions::new(Arc::clone(&udfs)).with_python(Arc::clone(&python_udfs)),
             ) as Arc<dyn FunctionRegistry>,
         };
-        Session {
+        let session = Session {
             locals: Arc::from([]),
             operation: None,
             deadline: None,
+            request_tags: Arc::from([]),
+            inbound_trace: None,
+            inbound_baggage: Arc::from([]),
             state: Arc::new(SessionState {
                 conf: Arc::new(seed.conf),
                 catalog: Arc::new(seed.catalog),
                 cache,
+                analyzer: krishiv_plan::analyzer::CachingAnalyzer::new(),
                 variables: Arc::new(seed.variables),
                 profile: parts.profile,
                 principal: parts.principal,
@@ -118,6 +131,7 @@ impl Session {
                 commit_log_probes: Mutex::new(HashMap::new()),
                 number: runtime.next_session(),
                 closed: AtomicBool::new(false),
+                activity: crate::sessions::Activity::default(),
                 runtime,
                 memory,
                 relations: seed.relations,
@@ -128,11 +142,21 @@ impl Session {
                 // One session id for traces and `system.queries`.
                 session_id: queries.session_id().to_owned(),
                 queries,
-                admission: parts.admission.unwrap_or_else(|| Arc::new(Unlimited)),
+                admission: parts
+                    .admission
+                    .or(runtime_admission)
+                    .unwrap_or_else(|| Arc::new(Unlimited)),
                 statements: AtomicU64::new(0),
                 sql_sources: AtomicU32::new(seed.sql_sources),
+                denials: std::sync::OnceLock::new(),
             }),
-        }
+        };
+        session
+            .state
+            .runtime
+            .sessions
+            .register(session.state.number, Arc::downgrade(&session.state));
+        session
     }
 
     /// A new session on the same runtime, run by the same principal under
@@ -165,6 +189,29 @@ impl Session {
         };
         // The runtime's starting configuration, validated when it was built
         // (for a private runtime, the builder's configuration).
+        let config = Config::clone(&runtime.config);
+        inherit_denials(self, Self::on_runtime(runtime, config, parts))
+    }
+
+    /// [`Self::new_session`] acting for `principal` under `policy` instead of this session's
+    /// principal and policy: a server's session for one authenticated caller (P3-T002, ADR
+    /// 0046), built from a base session that holds the server's runtime and profile. The
+    /// principal and policy are the new session's for life.
+    #[must_use]
+    pub fn new_session_as(
+        &self,
+        principal: krishiv_common::principal::Principal,
+        policy: Arc<dyn krishiv_plan::analyzer::AccessPolicy>,
+    ) -> Self {
+        let state = &self.state;
+        let runtime = Arc::clone(&state.runtime);
+        let parts = SessionParts {
+            profile: state.profile,
+            principal: Arc::new(principal),
+            policy,
+            functions: state.base_functions.clone(),
+            admission: Some(Arc::clone(&state.admission)),
+        };
         let config = Config::clone(&runtime.config);
         Self::on_runtime(runtime, config, parts)
     }
@@ -248,7 +295,10 @@ impl Session {
         // A `close` that ran while the copy was made wins: no live clone of
         // a closed session.
         self.check_open()?;
-        Ok(Self::seeded(Arc::clone(&state.runtime), parts, seed))
+        Ok(inherit_denials(
+            self,
+            Self::seeded(Arc::clone(&state.runtime), parts, seed),
+        ))
     }
 
     /// The runtime this session runs on.
@@ -262,7 +312,8 @@ impl Session {
     /// `OPERATION_CANCELED`, and it takes no new statement
     /// (`INVALID_HANDLE.SESSION_CLOSED`). Dropping a session's handles does
     /// not cancel anything: an open result stream keeps its session alive.
-    /// Returns the number of queries cancelled; closing again is a no-op.
+    /// Statements it is still analyzing or planning end too. Returns the
+    /// number of queries and statements it ended; closing again is a no-op.
     ///
     /// ```
     /// let s = krishiv_session::Session::new()?;
@@ -275,10 +326,85 @@ impl Session {
         if self.state.closed.swap(true, Ordering::AcqRel) {
             return 0;
         }
+        // The session's cached relations go with it: their memory, and the
+        // spill scopes of those on disk (once no cancelled query reads them).
+        self.state.cache.close();
         // Under the runtime's registry lock: a query that registers after
         // this is refused there (`EngineRuntime::attach`), so none slips
         // between the flag and the cancellation.
-        self.state.runtime.cancel_session(self.state.number)
+        let n = self
+            .state
+            .runtime
+            .cancel_session(self.state.number, crate::CancelReason::ClientGone);
+        self.state.runtime.sessions.retire(self.state.number, || {
+            crate::sessions::SessionRow::of(
+                &self.state,
+                Some(crate::sessions::End::Closed("release_session")),
+                0,
+            )
+        });
+        n
+    }
+
+    /// Says which front end opened this session and what its client reported
+    /// (`system.sessions.transport`, `client_type`, `client_user_id`,
+    /// `server_session_id`). The first non-empty client type and user id are
+    /// kept. All of it is client-asserted: shown, never used as an identity.
+    pub fn set_client_info(
+        &self,
+        transport: crate::Transport,
+        client_type: Option<&str>,
+        client_user_id: Option<&str>,
+        server_session_id: Option<&str>,
+    ) {
+        let a = &self.state.activity;
+        a.set_transport(transport);
+        a.set_client(client_type, client_user_id, server_session_id);
+        a.touch();
+    }
+
+    /// The idle timeout `system.sessions.idle_timeout_ms` shows for this
+    /// session (`None`: the server default). The sweep that enforces it is the
+    /// server's, through [`EngineRuntime::expire_session`].
+    pub fn set_idle_timeout_ms(&self, ms: Option<i64>) {
+        self.state.activity.set_idle_timeout_ms(ms);
+    }
+
+    /// The session's id: a UUIDv7 minted when it was made, the id
+    /// `system.queries` and traces carry (Spark Connect's server-side
+    /// session id).
+    #[must_use]
+    pub fn id(&self) -> &str {
+        self.state.queries.session_id()
+    }
+
+    /// The Spark release line the session behaves as
+    /// ([`SessionBuilder::profile`](crate::SessionBuilder::profile)); Spark
+    /// Connect's `AnalyzePlan.spark_version` answers from it.
+    ///
+    /// ```
+    /// use krishiv_plan::analyzer::SparkProfile;
+    /// let s = krishiv_session::Session::builder().profile(SparkProfile::V4_1).build()?;
+    /// assert_eq!(s.spark_profile(), SparkProfile::V4_1);
+    /// assert_eq!(s.new_session().spark_profile(), SparkProfile::V4_1);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    #[must_use]
+    pub fn spark_profile(&self) -> krishiv_plan::analyzer::SparkProfile {
+        self.state.profile
+    }
+
+    /// Whether [`Self::close`] ran.
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.state.closed.load(Ordering::Acquire)
+    }
+
+    /// The number of this session's queries that are running (registered
+    /// on the runtime and not yet ended).
+    #[must_use]
+    pub fn running_queries(&self) -> usize {
+        self.state.runtime.running_in_session(self.state.number)
     }
 
     /// The error a closed session answers with.
@@ -294,6 +420,7 @@ impl Session {
         if self.state.closed.load(Ordering::Acquire) {
             return Err(self.closed_error());
         }
+        self.state.activity.touch();
         Ok(())
     }
 
@@ -343,11 +470,30 @@ impl Session {
                 Some(Arc::new(taken))
             }
         };
+        // A request's trace parses once: a valid `traceparent` carries its bounded baggage.
+        let parsed = options.inbound_trace.map(|(tp, baggage)| {
+            let parent = tp
+                .as_deref()
+                .and_then(crate::trace_context::parse_remote_parent)
+                .map(Arc::new);
+            let bag = match (&parent, baggage.as_deref()) {
+                (Some(_), Some(b)) => crate::trace_context::parse_baggage(b),
+                _ => Vec::new(),
+            };
+            (parent, bag)
+        });
+        let (inbound_trace, inbound_baggage) = match parsed {
+            Some((parent, bag)) => (Some(parent), Arc::from(bag)),
+            None => (None, Arc::from([])),
+        };
         let handle = Session {
             state: Arc::clone(&self.state),
             locals: Arc::clone(&self.locals),
             operation,
             deadline: options.deadline.or(self.deadline),
+            request_tags: options.request_tags.into(),
+            inbound_trace,
+            inbound_baggage,
         };
         Ok(handle)
     }
@@ -401,9 +547,11 @@ impl Session {
     /// too): its stream ends with
     /// `OPERATION_CANCELED` at its next batch boundary (a query whose
     /// execution has not begun fails as it begins), and
-    /// `system.queries.cancel_reason` shows `user`. Whether a running query
-    /// was cancelled: `false` for an unknown id, a query that ended or one
-    /// of another session.
+    /// `system.queries.cancel_reason` shows `user`. A statement named `id`
+    /// that is still being analyzed or planned ends with `OPERATION_CANCELED`
+    /// before its query exists. Whether a running query or statement was
+    /// cancelled: `false` for an unknown id, one that ended or one of another
+    /// session.
     ///
     /// ```
     /// let s = krishiv_session::Session::new()?;
@@ -423,12 +571,29 @@ impl Session {
     }
 
     /// Cancels every running query of this session (Spark Connect's
-    /// `Interrupt` of type `ALL`) and returns their ids.
+    /// `Interrupt` of type `ALL`) and returns their ids. Every action of the
+    /// session still being analyzed or planned ends too, including ones that
+    /// run no query (`schema`, `explain`, `estimate`); those the caller gave
+    /// no operation id are ended but not listed.
     pub fn interrupt_all(&self) -> Vec<crate::QueryId> {
         let number = self.state.number;
         self.state
             .runtime
             .cancel_where(crate::CancelReason::User, |s, _| s == number)
+    }
+
+    /// Cancels every running query of this session that carries the request tag `tag`
+    /// (Spark Connect's `Interrupt` of type `TAG`; [`crate::QueryOptions::tags`]) and returns
+    /// their ids. The match is exact: `a` does not match `ab` or `a=1`, and the session's own
+    /// tags ([`Session::set_tag`]) never match, as a Connect client cannot see them. Nothing
+    /// matched is an empty list. The queries end with `OPERATION_CANCELED`.
+    pub fn interrupt_tag(&self, tag: &str) -> Vec<crate::QueryId> {
+        let number = self.state.number;
+        self.state
+            .runtime
+            .cancel_tagged(crate::CancelReason::User, |s, t| {
+                s == number && t.request_tags.iter().any(|r| &**r == tag)
+            })
     }
 }
 
@@ -442,9 +607,12 @@ impl Session {
         error: &KrishivError,
     ) -> String {
         let policy = crate::system::TextPolicy::from_config(&self.state.conf.snapshot());
-        self.state
+        let id = self
+            .state
             .queries
-            .record_refused(policy, text, class, error, self.operation_id())
+            .record_refused(policy, text, class, error, self.operation_id());
+        self.state.queries.add_request_tags(&id, &self.request_tags);
+        id
     }
 }
 
@@ -466,6 +634,15 @@ struct Seed {
     /// The working directory relative paths resolve against; `None` takes
     /// the process's.
     cwd: Option<String>,
+}
+
+/// `to`, counting its denials where `from` counts them (`new_session` and `clone_session` keep
+/// the principal, so they keep the server's denial counter too).
+fn inherit_denials(from: &Session, to: Session) -> Session {
+    if let Some((counts, surface)) = from.state.denials.get() {
+        to.count_denials(Arc::clone(counts), *surface);
+    }
+    to
 }
 
 #[cfg(test)]

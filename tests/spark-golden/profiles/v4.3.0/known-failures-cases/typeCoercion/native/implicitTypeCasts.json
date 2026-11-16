@@ -1,9 +1,0 @@
-{
-  "cases": {
-    "s43-other": [
-      35
-    ]
-  },
-  "file": "typeCoercion/native/implicitTypeCasts",
-  "format_version": 1
-}

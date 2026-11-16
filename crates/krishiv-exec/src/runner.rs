@@ -38,10 +38,11 @@ use crate::driver::{PipelineRun, spawn_driver};
 use crate::error::{Result, cancelled, internal};
 use crate::executor::{Executor, TaskHandle};
 use crate::metrics::OperatorEntry;
-use crate::morsel::{Barrier, Baton, Countdown};
-use crate::operator::GlobalState;
+use crate::morsel::{Barrier, Baton, CombineOrder, Countdown};
+use crate::numbering::{MemberShape, Numbering};
+use crate::operator::{GlobalState, Source};
 use crate::physical::{PhysicalPlan, WorkerContext, instantiate};
-use crate::pipeline::{ExecNode, Pipeline, PipelineBuilder};
+use crate::pipeline::{ExecNode, Origin, Pipeline, PipelineBuilder};
 use crate::sync::{Mutex, lock};
 
 /// Plans in, running queries out (spec 13 §4). Embedded and single-node:
@@ -479,7 +480,7 @@ fn start_group(
     // never compute the same partition (stateful functions own one value
     // stream per partition). An index past `u32` is rejected rather than
     // wrapped to `u32::MAX`, which would collide.
-    let mut next_partition: u64 = 0;
+    let mut prepared = Vec::with_capacity(members.len());
     for pipeline in members {
         let (source_id, source) = &pipeline.source;
         let mut source_ctx = ctx((*source_id, source.name()));
@@ -495,10 +496,22 @@ fn start_group(
             .map(|i| i.as_ref().map(read).transpose())
             .collect::<Result<Vec<_>>>()?;
         let source_global = source.global_state(&source_ctx)?;
+        let lane_count = lane_count(query, &pipeline, source, &source_global);
+        prepared.push((pipeline, operator_deps, source_global, lane_count));
+    }
+    // A fan-in whose members do not all split keeps one driver per member (the baton
+    // needs it, and a flush barrier is shared: design §6.5), so no member runs in lanes.
+    let mixed = prepared.len() > 1 && prepared.iter().any(|p| p.3.is_none());
+    let mut next_partition: u64 = 0;
+    for (pipeline, operator_deps, source_global, lane_count) in prepared {
+        let (_, source) = &pipeline.source;
+        let lane_count = if mixed { None } else { lane_count };
         // One driver when the pipeline must keep order, and for every pipeline under
         // `krishiv.deterministicOrder`: no interleaving of drivers, no run-to-run
         // difference in the order of merges or output rows.
-        let drivers = if pipeline.preserve_order || query.config().deterministic_order {
+        let drivers = if let Some(n) = lane_count {
+            n
+        } else if pipeline.preserve_order || query.config().deterministic_order {
             1
         } else {
             executor
@@ -523,7 +536,56 @@ fn start_group(
             source_global,
             drivers,
             base_partition: base,
+            span: span as u64,
+            operator_bases: Vec::new(),
+            lanes: lane_count.map(|n| (base, n)),
         });
+    }
+    // Each operator numbers partitions from its origin (`Pipeline::origins`):
+    // its own member below a `UNION ALL`, the union's numbering above it
+    // (`numbering.rs`).
+    let shapes: Vec<MemberShape<'_>> = started
+        .iter()
+        .map(|m| MemberShape {
+            pipeline: usize::try_from(m.pipeline.index).unwrap_or(usize::MAX),
+            base: u64::from(m.base_partition),
+            span: m.span,
+            single_source: m.pipeline.source.1.single_partition(&m.source_global),
+            origins: &m.pipeline.origins,
+            keeps: m
+                .pipeline
+                .operators
+                .iter()
+                .map(|(_, op)| op.keeps_partitioning())
+                .collect(),
+            fans: &m.pipeline.fans,
+        })
+        .collect();
+    // A coalesced union's branches share index 0's streams above it, so they
+    // must run in turn (Spark's one task). A group whose members run together
+    // (a shared operator needs a flush, e.g. a hash-join probe above the
+    // union) keeps the plain numbering, which gives each member its own
+    // streams: deterministic, though not Spark's one stream (known gap,
+    // `numbering.rs`).
+    let sequential = started.len() < 2 || members_run_in_turn(&started);
+    let numbering = Numbering::new(
+        &shapes,
+        query.config().union_output_partitioning && sequential,
+    );
+    // The group's sink is above every fan-in of the first member.
+    let top = shapes.first().map_or(
+        Origin {
+            pipeline: 0,
+            level: 0,
+        },
+        |m| Origin {
+            pipeline: m.pipeline,
+            level: m.fans.len(),
+        },
+    );
+    let bases: Vec<Vec<u32>> = shapes.iter().map(|m| numbering.bases(m, top)).collect();
+    for (m, bases) in started.iter_mut().zip(bases) {
+        m.operator_bases = bases;
     }
     // The members whose rows have a source order (an ordered source, and
     // no operator that emits after a cross-driver flush, where a driver
@@ -567,7 +629,57 @@ struct MemberStart {
     drivers: usize,
     /// The first scheduler-assigned partition id of its drivers.
     base_partition: u32,
+    /// The partition ids it takes (see `start_group`).
+    span: u64,
+    /// Per operator: the first partition id it numbers partitions from.
+    operator_bases: Vec<u32>,
+    /// `(first partition id, lane count)` when its drivers are logical partitions.
+    lanes: Option<(u32, usize)>,
 }
+
+/// The logical partitions of a pipeline under `krishiv.deterministicOrder`
+/// (T094 G1), or `None` for the one-driver mode: the source offers a split, the
+/// sink merges in lane order without help, and no operator waits for
+/// another driver (a flush barrier). The count is a property of the source,
+/// never of the executor's thread count.
+fn lane_count(
+    query: &QueryContext,
+    pipeline: &Pipeline,
+    source: &Arc<dyn Source>,
+    global: &GlobalState,
+) -> Option<usize> {
+    if !query.config().deterministic_order || pipeline.preserve_order {
+        return None;
+    }
+    // Spill decisions follow the shared pool, which the lanes' timing moves (G2: a private
+    // per-query budget lifts this): under a small limit the one-driver mode keeps its guarantee.
+    if query
+        .pool()
+        .effective_limit()
+        .is_some_and(|l| l < LANES_MIN_MEMORY_LIMIT)
+    {
+        return None;
+    }
+    if !source.reports_positions()
+        || !pipeline.sink.1.lane_safe()
+        || pipeline
+            .operators
+            .iter()
+            .any(|(_, op)| op.needs_flush() || !op.lane_safe())
+    {
+        return None;
+    }
+    let n = source
+        .deterministic_split(global)?
+        .min(DETERMINISTIC_LOGICAL_PARTITIONS);
+    (n > 1).then_some(n)
+}
+
+/// Below this pool limit a deterministic pipeline keeps one driver (see `lane_count`).
+const LANES_MIN_MEMORY_LIMIT: usize = 4 << 30;
+
+/// The most logical partitions a deterministic pipeline runs.
+pub(crate) const DETERMINISTIC_LOGICAL_PARTITIONS: usize = 16;
 
 /// A pipeline group planned but not yet running: the state its members
 /// share and the members in pipeline order.
@@ -586,11 +698,15 @@ struct GroupStart {
 /// over a sorted child) sees nondeterministic rows. A flush barrier waits
 /// for every driver's arrival, so a group sharing one stays concurrent.
 fn fan_in_is_sequential(group: &GroupStart) -> bool {
-    group.members.len() > 1
-        && group
-            .members
-            .iter()
-            .all(|m| m.pipeline.operators.iter().all(|(_, op)| !op.needs_flush()))
+    group.members.len() > 1 && members_run_in_turn(&group.members)
+}
+
+/// Whether no operator of `members` needs a cross-driver flush (see
+/// [`fan_in_is_sequential`]).
+fn members_run_in_turn(members: &[MemberStart]) -> bool {
+    members
+        .iter()
+        .all(|m| m.pipeline.operators.iter().all(|(_, op)| !op.needs_flush()))
 }
 
 /// The barriers of `member`'s operators.
@@ -649,11 +765,14 @@ fn spawn_group(
         let run = Arc::new(PipelineRun {
             pipeline: m.pipeline,
             operator_deps: m.operator_deps,
+            operator_bases: m.operator_bases,
             barriers: member_barriers,
             source_global: m.source_global,
             sink_global: Arc::clone(&sink_global),
             countdown: Arc::clone(&countdown),
             turn: baton.as_ref().map(|b| (Arc::clone(b), member)),
+            lanes: m.lanes,
+            combine_order: m.lanes.map(|_| Arc::new(CombineOrder::new())),
             query: Arc::clone(query),
             executor: Arc::clone(executor),
         });
@@ -684,11 +803,14 @@ async fn run_group_sequential(
         let run = Arc::new(PipelineRun {
             pipeline: m.pipeline,
             operator_deps: m.operator_deps,
+            operator_bases: m.operator_bases,
             barriers: member_barriers,
             source_global: m.source_global,
             sink_global: Arc::clone(&sink_global),
             countdown: Arc::clone(&countdown),
             turn: None,
+            lanes: m.lanes,
+            combine_order: m.lanes.map(|_| Arc::new(CombineOrder::new())),
             query: Arc::clone(query),
             executor: Arc::clone(executor),
         });

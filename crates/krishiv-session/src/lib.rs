@@ -42,8 +42,11 @@
 #![forbid(unsafe_code)]
 
 mod access;
+mod action;
 mod admission;
+mod analyze;
 mod arrow_values;
+pub mod auth;
 mod cache;
 mod cancel;
 mod carrier;
@@ -62,38 +65,53 @@ pub mod functions;
 mod history;
 mod identifier_clause;
 mod introspection;
+#[cfg(test)]
+mod lineage_tests;
+#[cfg(feature = "unstable-ir")]
+mod local_relation;
 mod locals;
 #[cfg(feature = "telemetry-logs")]
 pub mod logging;
 mod memory_table;
+mod monitor;
 mod nested_value;
 #[cfg(feature = "telemetry-otlp")]
 pub mod otlp;
+mod partition_keys;
 mod partitions;
 mod plan_round_trip;
 mod profile;
+mod profile_history;
 mod python_udfs;
 mod query_fold;
 mod recursion;
+pub mod resource_groups;
 mod result_cache;
 mod run_site;
 mod runtime;
 mod scripting;
 mod session;
+mod sessions;
+pub mod spark_catalog;
 mod sql_functions;
 mod sql_path;
 mod store;
+mod store_catalog;
 mod system;
+mod system_groups;
 mod table_commands;
 mod telemetry;
+mod trace_context;
 mod udfs;
 mod variable_substitution;
 mod variables;
 mod view_schema;
 mod window;
 
-pub use access::{PathPrefixPolicy, ReadOnlyPolicy, StatementInfo};
+pub use access::{PathPrefixPolicy, READ_ONLY_PRIVILEGES, ReadOnlyPolicy, StatementInfo};
 pub use admission::{AdmissionController, Permit, QueryRequest, Unlimited};
+pub use analyze::{Analysis, AnalysisWarning, OutputColumn};
+pub use sessions::Transport;
 pub use system::register_build_features;
 
 pub mod agent;

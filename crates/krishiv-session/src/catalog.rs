@@ -74,6 +74,12 @@ pub(crate) enum TempTable {
         columns: Vec<TableColumn>,
         table: Arc<MemoryTable>,
     },
+    /// Any table provider under a hidden name: a row-level statement's target at the version the
+    /// statement read, with its row id (`RowIdScan`).
+    Provider {
+        columns: Vec<TableColumn>,
+        table: Arc<dyn TableProvider>,
+    },
     /// A read by path, with the columns inferred when the view was created.
     Files {
         source: ReadSource,
@@ -469,7 +475,36 @@ pub(crate) struct FileScans {
     pub(crate) slots: u64,
     /// The executor's I/O runtime, which opens the file tables.
     pub(crate) runtime: tokio::runtime::Handle,
+    /// The session's relation store, which holds the data of local relations.
+    pub(crate) relations: Arc<krishiv_memory::RelationStore>,
 }
+
+impl FileScans {
+    /// A lease on the entry of the local relation `l`: its own lease, else one
+    /// found by hash in the session's store.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` naming the hash when the store does not hold it (a
+    /// decoded plan run where its data is not): never an empty result.
+    pub(crate) fn local_lease(
+        &self,
+        l: &krishiv_plan::LocalRelation,
+    ) -> Result<krishiv_memory::RelationLease, KrishivError> {
+        if let Some(lease) = l.lease() {
+            return Ok(lease.clone());
+        }
+        let hash = l.relation().hash;
+        self.relations.lease(&hash).ok_or_else(|| {
+            InternalError {
+                message: format!("the local relation {hash} is not in this session's store"),
+            }
+            .into()
+        })
+    }
+}
+
+/// A snapshot pinned by hidden name, and how many actions pinned it.
+type Pinned = (Arc<dyn TableProvider>, usize);
 
 /// The session catalog as one query sees it: the catalog resolver and the
 /// table providers of its scans.
@@ -478,8 +513,9 @@ pub(crate) struct QueryCatalog {
     cache: Arc<RelationCache>,
     /// The cached snapshots this query's plan was rewritten to scan, by
     /// hidden name: held so a concurrent `CLEAR CACHE` cannot pull them out
-    /// from under the query between substitution and planning.
-    pinned: Mutex<HashMap<String, Arc<MemoryTable>>>,
+    /// from under the query between substitution and planning. Counted:
+    /// each action over the analysis pins and unpins (`SnapshotLease`).
+    pinned: Mutex<HashMap<String, Pinned>>,
     files: Arc<FileReads>,
     scans: FileScans,
     /// Entries loaded by this query, by lower-case name.
@@ -588,11 +624,25 @@ impl QueryCatalog {
     }
 
     /// Keeps the snapshot `table` for this query's scans of the hidden `name`.
-    pub(crate) fn pin_cached(&self, name: String, table: Arc<MemoryTable>) {
-        self.pinned
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(name, table);
+    pub(crate) fn pin_cached(&self, name: String, table: Arc<dyn TableProvider>) {
+        let mut pinned = self.pinned.lock().unwrap_or_else(PoisonError::into_inner);
+        let slot = pinned
+            .entry(name)
+            .or_insert_with(|| (Arc::clone(&table), 0));
+        slot.0 = table;
+        slot.1 += 1;
+    }
+
+    /// Lets go of one pin of the hidden `name` ([`Self::pin_cached`]); the
+    /// last one drops the snapshot from this query's catalog.
+    pub(crate) fn unpin_cached(&self, name: &str) {
+        let mut pinned = self.pinned.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(slot) = pinned.get_mut(name) {
+            slot.1 = slot.1.saturating_sub(1);
+            if slot.1 == 0 {
+                pinned.remove(name);
+            }
+        }
     }
 
     /// The entry a scan of `name` (as the analyzer kept it) reads: a
@@ -716,6 +766,19 @@ impl QueryCatalog {
                 ReadSource::Table { name, options } => {
                     let last = name.last().map_or("", String::as_str);
                     let Some(table) = self.loaded(last) else {
+                        // A relation cache snapshot lives on the driver (design P3-T083
+                        // §3.8): a memory snapshot is dealt as a memory table without a
+                        // lease is (no assignment: a stage of one task reads it whole);
+                        // a disk snapshot is a driver-local file no worker can open, so
+                        // such a plan is refused, not failed as an internal error.
+                        if crate::cache::is_cache_name(last) {
+                            if self.cache.is_on_disk(last) {
+                                return Err(unsupported(
+                                    "a scan of a disk-cached relation in a distributed stage",
+                                ));
+                            }
+                            continue;
+                        }
                         return Err(InternalError {
                             message: format!("the scanned table {last} was not loaded"),
                         }
@@ -759,6 +822,8 @@ impl QueryCatalog {
                             })?;
                             assigned.push((scan.id, self.file_splits(&table, total_slots)?));
                         }
+                        // A row-level target plans its own splits through its scan.
+                        TempTable::Provider { .. } => {}
                         TempTable::View { .. } => {
                             return Err(InternalError {
                                 message: "a scan of a temporary view that was not inlined"
@@ -774,6 +839,19 @@ impl QueryCatalog {
                         message: "a scan of files that was not opened before planning".to_owned(),
                     })?;
                     assigned.push((scan.id, self.file_splits(&table, total_slots)?));
+                }
+                ReadSource::Local(l) => {
+                    // The batches live in the session's store; the splits name
+                    // them by hash. A relation the store lost is an engine
+                    // bug, never an empty scan.
+                    let lease = self.scans.local_lease(l)?;
+                    assigned.push((
+                        scan.id,
+                        ScanSplitsKind::Batches {
+                            relation: lease.reference(),
+                            batches: lease.batches(),
+                        },
+                    ));
                 }
                 _ => {
                     return Err(unsupported("this scan"));
@@ -919,6 +997,7 @@ fn streaming_leaves(root: &PhysNode) -> (Vec<&krishiv_exec::physical::ScanNode>,
             PhysNode::Filter { input, .. }
             | PhysNode::Project { input, .. }
             | PhysNode::ReplicateRows { input, .. }
+            | PhysNode::Sample { input, .. }
             | PhysNode::Generate { input, .. }
             | PhysNode::Expand { input, .. }
             | PhysNode::Limit { input, .. }
@@ -929,7 +1008,12 @@ fn streaming_leaves(root: &PhysNode) -> (Vec<&krishiv_exec::physical::ScanNode>,
             | PhysNode::WindowGroupLimit { input, .. }
             | PhysNode::Aggregate { input, .. }
             | PhysNode::PythonEval { input, .. }
-            | PhysNode::WriteFiles { input, .. } => go(input, out),
+            | PhysNode::PythonMap { input, .. }
+            | PhysNode::PythonGroupMap { input, .. }
+            | PhysNode::PythonCoGroupMap { input, .. }
+            | PhysNode::PythonAggregate { input, .. }
+            | PhysNode::WriteFiles { input, .. }
+            | PhysNode::TableWrite { input, .. } => go(input, out),
             PhysNode::Exchange(e) => go(&e.input, out),
             PhysNode::HashJoin(join) => go(&join.probe, out),
             PhysNode::SortMergeJoin(join) => go(&join.probe, out),
@@ -1045,7 +1129,7 @@ impl QueryCatalog {
 
 /// The `_metadata` column of a table read through the file source
 /// `provider` (Spark: file sources; row positions only from Parquet).
-fn file_metadata(provider: &str) -> FileMetadata {
+pub(crate) fn file_metadata(provider: &str) -> FileMetadata {
     match provider.to_ascii_lowercase().as_str() {
         "parquet" => FileMetadata::WithRowIndex,
         "orc" | "csv" | "json" | "text" | "avro" | "xml" | "binaryfile" => FileMetadata::Basic,
@@ -1055,13 +1139,13 @@ fn file_metadata(provider: &str) -> FileMetadata {
 
 /// The read of a table's files.
 pub(crate) fn table_source(table: &crate::store::CatalogTable) -> ReadSource {
-    ReadSource::Files {
-        format: table.provider.clone(),
-        paths: vec![krishiv_common::secret::OptionValue::from_user(
+    ReadSource::files(
+        table.provider.clone(),
+        vec![krishiv_common::secret::OptionValue::from_user(
             "path",
             table.location.display().to_string(),
         )],
-        options: table
+        table
             .options
             .iter()
             .map(|(k, v)| {
@@ -1071,7 +1155,7 @@ pub(crate) fn table_source(table: &crate::store::CatalogTable) -> ReadSource {
                 )
             })
             .collect(),
-    }
+    )
 }
 
 fn unsupported(feature: &str) -> KrishivError {
@@ -1115,9 +1199,9 @@ impl Catalog for QueryCatalog {
                 return Ok(self.load_stored(id, form));
             };
             let (columns, kind) = match &*table {
-                TempTable::Memory { columns, .. } | TempTable::Files { columns, .. } => {
-                    (columns.clone(), TableKind::Table)
-                }
+                TempTable::Memory { columns, .. }
+                | TempTable::Files { columns, .. }
+                | TempTable::Provider { columns, .. } => (columns.clone(), TableKind::Table),
                 TempTable::View { columns, .. } => (columns.clone(), TableKind::View),
             };
             let file_metadata = match &*table {
@@ -1209,9 +1293,9 @@ impl TableProviderResolver for QueryCatalog {
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
                         .get(last)
-                        .cloned();
+                        .map(|(table, _)| Arc::clone(table));
                     if let Some(cached) = pinned.or_else(|| self.cache.table(last)) {
-                        return Ok(cached as Arc<dyn TableProvider>);
+                        return Ok(cached);
                     }
                     return Err(InternalError {
                         message: format!("the scanned table {last} was not loaded"),
@@ -1222,6 +1306,7 @@ impl TableProviderResolver for QueryCatalog {
                     TempTable::Memory { table, .. } => {
                         Ok(Arc::clone(table) as Arc<dyn TableProvider>)
                     }
+                    TempTable::Provider { table, .. } => Ok(Arc::clone(table)),
                     TempTable::Files {
                         known,
                         permanent,
@@ -1245,6 +1330,14 @@ impl TableProviderResolver for QueryCatalog {
             }
             source @ ReadSource::Files { .. } => {
                 self.files_provider(&FilesKey::Read(source.clone()))
+            }
+            ReadSource::Local(l) => {
+                let lease = self.scans.local_lease(l)?;
+                Ok(Arc::new(krishiv_exec::planner::MemoryTable::from_lease(
+                    Arc::clone(l.schema()),
+                    l.rows(),
+                    lease,
+                )))
             }
             _ => Err(unsupported("this scan")),
         }
@@ -1332,6 +1425,7 @@ pub(crate) fn expand_views_in(
         reads: Vec::new(),
         deferred: None,
         stored_reads: Vec::new(),
+        views: Vec::new(),
     };
     let plan = expander.go(Arc::clone(plan), &mut Vec::new())?;
     Ok(Expansion {
@@ -1339,6 +1433,7 @@ pub(crate) fn expand_views_in(
         reads: expander.reads,
         deferred: expander.deferred,
         stored_reads: expander.stored_reads,
+        views: expander.views,
     })
 }
 
@@ -1365,6 +1460,8 @@ pub(crate) struct Expansion {
     /// The stored views inlined, inner views before the views that read them: their schema binding is checked
     /// against their analyzed queries (`view_schema::check_read`).
     pub(crate) stored_reads: Vec<crate::view_schema::StoredRead>,
+    /// The views inlined, for the lineage side table (`AnalyzedPlan::views`, located once analyzed).
+    pub(crate) views: Vec<krishiv_plan::analyzer::views::ViewExpansion>,
 }
 
 /// Whether creating the temporary view `name` over `plan` would close a
