@@ -1113,10 +1113,23 @@ async fn a_failed_query_sends_no_observed_metrics() {
             metrics: vec![aliased_count("n")],
         }))),
     };
-    let status = collect(&run.channel, request(root(failing)))
-        .await
-        .expect_err("the table is missing");
+    // Read the stream directly so responses sent before the error are kept and checked.
+    let mut retained = Vec::new();
+    let status = match stream(&run.channel, "ExecutePlan", request(root(failing))).await {
+        Err(status) => status,
+        Ok(mut s) => loop {
+            match s.message().await {
+                Ok(Some(r)) => retained.push(r),
+                Ok(None) => panic!("the table is missing, yet the stream ended: {retained:?}"),
+                Err(status) => break status,
+            }
+        },
+    };
     assert_eq!(status.code(), Code::Internal);
+    assert!(
+        retained.iter().all(|r| r.observed_metrics.is_empty()),
+        "{retained:?}"
+    );
 }
 
 // ---- the Connect leg of tests/fixtures/spark-4.2.0/observe-goldens.json (P3-T084) ----
@@ -1226,6 +1239,7 @@ fn observed_of(responses: &[pb::ExecutePlanResponse]) -> Observed {
         .iter()
         .flat_map(|r| &r.observed_metrics)
         .map(|m| {
+            assert_eq!(m.keys.len(), m.values.len(), "{m:?}");
             let cells = m
                 .keys
                 .iter()

@@ -82,9 +82,9 @@ const GAP_SUBQUERY_NOW: &str =
     r#"{"errorClass":"KRISHIV_UNSUPPORTED_FEATURE","outcome":"error","sqlState":"0A000"}"#;
 const GAP_OVERFLOW_NOW: &str = r#"{"action_result":2,"error":{"errorClass":"ARITHMETIC_OVERFLOW","outcome":"error","sqlState":"22003"},"get":"error"}"#;
 
-/// Cases whose `metrics` are compared as a subset of the fixture's columns (the case leaves out
-/// what depends on which of the parallel drivers' rows a `LIMIT` takes).
-const SUBSET_METRICS: &[&str] = &["limit_big_range"];
+/// Cases whose `metrics` leave out the named fixture columns (what depends on which of the
+/// parallel drivers' rows a `LIMIT` takes); every other column must still match.
+const OMITTED_METRICS: &[(&str, &[&str])] = &[("limit_big_range", &["s"])];
 
 fn fixture() -> Value {
     let path = concat!(
@@ -715,17 +715,22 @@ fn cases() -> Vec<(&'static str, Case)> {
 }
 
 /// `got` against `want`: every key `got` has must match (so a case compares the columns it
-/// builds); a metrics dict must match key for key unless the case is in `SUBSET_METRICS`.
-fn matches(got: &Value, want: &Value, subset: bool, key: &str) -> bool {
+/// builds); a metrics dict must match key for key, apart from the columns `omitted` names
+/// (`OMITTED_METRICS`), which it must not have.
+fn matches(got: &Value, want: &Value, omitted: &[&str], key: &str) -> bool {
     match (got, want) {
         (Value::Object(g), Value::Object(w)) => {
-            let exact = key == "metrics" && !subset;
-            (!exact || g.len() == w.len())
+            let complete = key != "metrics"
+                || w.keys().all(|k| {
+                    let left_out = omitted.contains(&k.as_str());
+                    g.contains_key(k) != left_out
+                });
+            complete
                 && g.iter()
-                    .all(|(k, v)| w.get(k).is_some_and(|x| matches(v, x, subset, k)))
+                    .all(|(k, v)| w.get(k).is_some_and(|x| matches(v, x, omitted, k)))
         }
         (Value::Array(g), Value::Array(w)) => {
-            g.len() == w.len() && g.iter().zip(w).all(|(a, b)| matches(a, b, subset, key))
+            g.len() == w.len() && g.iter().zip(w).all(|(a, b)| matches(a, b, omitted, key))
         }
         _ => got == want,
     }
@@ -735,8 +740,11 @@ fn outcome(name: &str, case: Case, want: &Value) -> Result<(), String> {
     // A panic inside a case (an unexpected `unwrap`) is that case's failure, with its name.
     let got =
         std::panic::catch_unwind(|| case(&session())).map_err(|_| format!("{name}: panicked"))?;
-    let subset = SUBSET_METRICS.contains(&name);
-    if matches(&got, want, subset, "") {
+    let omitted = OMITTED_METRICS
+        .iter()
+        .find_map(|(case, cols)| (*case == name).then_some(*cols))
+        .unwrap_or(&[]);
+    if matches(&got, want, omitted, "") {
         Ok(())
     } else {
         Err(format!("{name}: got {got}\n   want {want}"))
