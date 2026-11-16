@@ -1045,3 +1045,394 @@ fn a_scalar_call_right_after_a_task_s_results_end_runs() {
         }
     });
 }
+
+// --- PR-26c-3: the window aggregate (203, 253), the scalar iterator (204, 251) and artifacts ---
+
+fn ints(values: &[i32]) -> ArrayRef {
+    Arc::new(arrow_array::Int32Array::from(values.to_vec()))
+}
+
+/// A window's frames: two partitions of `v`, each row with its frame's start and end (`ROWS BETWEEN 1
+/// PRECEDING AND CURRENT ROW`) when `bounded`.
+fn window_frames(bounded: bool) -> Vec<Frame> {
+    let frame = |begin: &[i32], end: &[i32], v: &[i64]| {
+        let mut columns = Vec::new();
+        if bounded {
+            columns.push(("_b", ints(begin)));
+            columns.push(("_e", ints(end)));
+        }
+        columns.push(("_0", longs(v)));
+        batch(0, columns)
+    };
+    vec![
+        frame(&[0, 0], &[1, 2], &[1, 2]),
+        frame(&[1, 2], &[3, 4], &[3, 4]),
+        Frame::EndGroup,
+        frame(&[0], &[1], &[10]),
+        Frame::EndGroup,
+        Frame::End,
+    ]
+}
+
+fn window_call(eval_type: PythonEvalType, bounded: bool) -> Call {
+    let mut side = Vec::new();
+    if bounded {
+        side.push(col("_b", DataType::Integer));
+        side.push(col("_e", DataType::Integer));
+    }
+    side.push(col("_0", DataType::Long));
+    Call {
+        eval_type,
+        sides: vec![side],
+        key_count: 0,
+        output: vec![col("pythonUDAF0", DataType::Double)],
+    }
+}
+
+/// The runner conf entry the window operator sets per call (Spark's `window_bound_types`).
+fn bound_conf(bounded: bool) -> BTreeMap<String, String> {
+    BTreeMap::from([(
+        "window_bound_types".to_owned(),
+        if bounded { "bounded" } else { "unbounded" }.to_owned(),
+    )])
+}
+
+/// A grouped-aggregate UDF over a window runs as Spark's window kind (202 as 203, 252 as 253): one value per
+/// row, the whole partition's for an unbounded frame, each row's frame's for a bounded one (the rows between
+/// its start and end indexes, `wrap_bounded_window_agg_pandas_udf`).
+#[test]
+fn window_aggregates_yield_one_value_per_row() {
+    let Some(py) = python() else { return };
+    let pool = pool(&py);
+    let udfs = udfs(&pool);
+    let cases = [
+        (
+            202,
+            PythonEvalType::WindowAggPandas,
+            "def f(v):\n    return float(v.sum())",
+        ),
+        (
+            252,
+            PythonEvalType::WindowAggArrow,
+            "import pyarrow.compute as pc\ndef f(v):\n    return float(pc.sum(v).as_py() or 0)",
+        ),
+    ];
+    for (code, eval_type, body) in cases {
+        for bounded in [false, true] {
+            let payload = command(&py, body, "DoubleType()", code);
+            let prepared = prepare_with(
+                &udfs,
+                payload,
+                &window_call(eval_type, bounded),
+                bound_conf(bounded),
+                &[],
+            )
+            .expect("prepare");
+            let out = run(prepared.as_ref(), window_frames(bounded))
+                .unwrap_or_else(|e| panic!("{code} bounded={bounded}: {e}"));
+            assert_schema(&out, &["pythonUDAF0"], &[ArrowType::Float64]);
+            let want: &[&str] = if bounded {
+                &["1", "3", "5", "7", "10"]
+            } else {
+                &["10", "10", "10", "10", "10"]
+            };
+            assert_eq!(rows(&out), want, "{code} bounded={bounded}");
+        }
+    }
+}
+
+/// A window UDF's error is `PYTHON_EXCEPTION`; a task of the window kind over a payload of another kind is
+/// refused when it is prepared.
+#[test]
+fn a_window_udf_error_is_python_exception() {
+    let Some(py) = python() else { return };
+    let pool = pool(&py);
+    let udfs = udfs(&pool);
+    let payload = command(
+        &py,
+        "def f(v):\n    raise ValueError('bad window')",
+        "DoubleType()",
+        202,
+    );
+    let prepared = prepare_with(
+        &udfs,
+        payload,
+        &window_call(PythonEvalType::WindowAggPandas, true),
+        bound_conf(true),
+        &[],
+    )
+    .expect("prepare");
+    let err = run(prepared.as_ref(), window_frames(true)).expect_err("raises");
+    assert_eq!(err.error_class(), ErrorClass::PythonException, "{err}");
+    assert!(err.to_string().contains("ValueError: bad window"), "{err}");
+    let map = command(&py, "def f(it):\n    yield from it", "LongType()", 205);
+    let refused = prepare_with(
+        &udfs,
+        map,
+        &window_call(PythonEvalType::WindowAggPandas, false),
+        bound_conf(false),
+        &[],
+    );
+    assert!(refused.is_err(), "a map payload is no window UDF");
+}
+
+/// A scalar iterator's frames: its argument batches, then the end.
+fn iter_frames() -> Vec<Frame> {
+    vec![
+        batch(0, vec![("_0", longs(&[1, 2, 3]))]),
+        batch(0, vec![("_0", longs(&[4, 5]))]),
+        Frame::End,
+    ]
+}
+
+fn iter_call(eval_type: PythonEvalType) -> Call {
+    Call {
+        eval_type,
+        sides: vec![vec![col("_0", DataType::Long)]],
+        key_count: 0,
+        output: vec![col("pythonUDF0", DataType::Long)],
+    }
+}
+
+/// A scalar iterator UDF is called once with an iterator over the task's batches, and may yield its values
+/// in batches of any size (the operator aligns them with the rows).
+#[test]
+fn scalar_iterators_yield_one_value_per_row_in_any_batches() {
+    let Some(py) = python() else { return };
+    let pool = pool(&py);
+    let udfs = udfs(&pool);
+    let cases = [
+        (
+            204,
+            PythonEvalType::ScalarPandasIter,
+            "def f(it):\n    for s in it:\n        yield s + 1",
+            vec![3, 2],
+        ),
+        (
+            204,
+            PythonEvalType::ScalarPandasIter,
+            "import pandas as pd\ndef f(it):\n    yield pd.concat(list(it), ignore_index=True) + 1",
+            vec![5],
+        ),
+        (
+            251,
+            PythonEvalType::ScalarArrowIter,
+            "import pyarrow.compute as pc\ndef f(it):\n    for a in it:\n        yield pc.add(a, 1)",
+            vec![3, 2],
+        ),
+    ];
+    for (code, eval_type, body, sizes) in cases {
+        let payload = command(&py, body, "LongType()", code);
+        let prepared = prepare(&udfs, payload, &iter_call(eval_type)).expect("prepare");
+        let out = run(prepared.as_ref(), iter_frames()).unwrap_or_else(|e| panic!("{code}: {e}"));
+        assert_schema(&out, &["pythonUDF0"], &[ArrowType::Int64]);
+        assert_eq!(rows(&out), ["2", "3", "4", "5", "6"], "{code}: {body}");
+        let got: Vec<usize> = out.iter().map(RecordBatch::num_rows).collect();
+        assert_eq!(got, sizes, "{code}: {body}");
+    }
+}
+
+/// Spark's row checks of the scalar iterators (`worker.py` L2586-2646, L3183-3246 at v4.2.0), raised in the
+/// worker: `PYTHON_EXCEPTION` carrying the PySpark error class.
+#[test]
+fn scalar_iterator_row_checks_raise_spark_s_classes() {
+    let Some(py) = python() else { return };
+    let pool = pool(&py);
+    let udfs = udfs(&pool);
+    let cases = [
+        (
+            204,
+            PythonEvalType::ScalarPandasIter,
+            "def f(it):\n    for s in it:\n        yield s.iloc[:1]",
+            "RESULT_ROWS_MISMATCH",
+        ),
+        (
+            204,
+            PythonEvalType::ScalarPandasIter,
+            "import pandas as pd\ndef f(it):\n    for s in it:\n        yield pd.concat([s, s])",
+            "OUTPUT_EXCEEDS_INPUT_ROWS",
+        ),
+        (
+            204,
+            PythonEvalType::ScalarPandasIter,
+            "def f(it):\n    yield next(it)",
+            "INPUT_NOT_FULLY_CONSUMED",
+        ),
+        (
+            251,
+            PythonEvalType::ScalarArrowIter,
+            "def f(it):\n    for a in it:\n        yield a.slice(0, 1)",
+            "RESULT_ROWS_MISMATCH",
+        ),
+        (
+            251,
+            PythonEvalType::ScalarArrowIter,
+            "def f(it):\n    yield next(it)",
+            "INPUT_NOT_FULLY_CONSUMED",
+        ),
+        (
+            251,
+            PythonEvalType::ScalarArrowIter,
+            "def f(it):\n    for a in it:\n        yield [1]",
+            "UDF_RETURN_TYPE",
+        ),
+    ];
+    for (code, eval_type, body, class) in cases {
+        let payload = command(&py, body, "LongType()", code);
+        let prepared = prepare(&udfs, payload, &iter_call(eval_type)).expect("prepare");
+        let err = run(prepared.as_ref(), iter_frames()).expect_err(body);
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::PythonException,
+            "{body}: {err}"
+        );
+        assert!(err.to_string().contains(class), "{body}: {err}");
+    }
+}
+
+/// A canonical temporary directory (the artifact paths must be canonical).
+fn artifact_dir() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = std::fs::canonicalize(dir.path()).expect("canonical");
+    (dir, path)
+}
+
+/// Writes an archive with `python` running `script` (given `out`, the archive's path).
+fn make_archive(python: &Path, out: &Path, script: &str) {
+    let code = format!("import sys\nout = sys.argv[1]\n{script}");
+    let status = Command::new(python)
+        .args(["-c", &code])
+        .arg(out)
+        .status()
+        .expect("python");
+    assert!(status.success());
+}
+
+/// A scalar iterator importing `module` and adding its `V` to each value.
+fn importing(py: &Path, module: &str) -> PythonPayload {
+    command(
+        py,
+        &format!("def f(it):\n    import {module}\n    for s in it:\n        yield s + {module}.V"),
+        "LongType()",
+        204,
+    )
+}
+
+/// `set_artifacts`: a pyfile and a zip archive reach the workers' `sys.path` (the archive unpacked, read
+/// only, in the sandbox); a later set gets workers of its own.
+#[test]
+fn pyfiles_and_archives_reach_the_workers_sys_path() {
+    let Some(py) = python() else { return };
+    let pool = pool(&py);
+    let udfs = udfs(&pool);
+    let (_keep, dir) = artifact_dir();
+    std::fs::write(dir.join("helper.py"), "V = 100\n").expect("pyfile");
+    let archive = dir.join("deps.zip");
+    make_archive(
+        &py,
+        &archive,
+        "import zipfile\nwith zipfile.ZipFile(out, 'w') as z:\n    z.writestr('pkg/__init__.py', 'V = 7\\n')",
+    );
+    let tar = dir.join("more.tar.gz");
+    make_archive(
+        &py,
+        &tar,
+        "import io, tarfile\nwith tarfile.open(out, 'w:gz') as t:\n    data = b'V = 1000\\n'\n    \
+         i = tarfile.TarInfo('tpkg/__init__.py')\n    i.size = len(data)\n    t.addfile(i, io.BytesIO(data))",
+    );
+    udfs.set_artifacts(vec![dir.join("helper.py")], vec![archive, tar]);
+    for (module, add) in [("helper", 100), ("pkg", 7), ("tpkg", 1000)] {
+        let prepared = prepare(
+            &udfs,
+            importing(&py, module),
+            &iter_call(PythonEvalType::ScalarPandasIter),
+        )
+        .expect("prepare");
+        let out = run(prepared.as_ref(), iter_frames()).unwrap_or_else(|e| panic!("{module}: {e}"));
+        let want: Vec<String> = (1..=5).map(|v| (v + add).to_string()).collect();
+        assert_eq!(rows(&out), want, "{module}");
+    }
+    // A worker of the old set never serves the new one: without the pyfile the import fails.
+    udfs.set_artifacts(Vec::new(), Vec::new());
+    let prepared = prepare(
+        &udfs,
+        importing(&py, "helper"),
+        &iter_call(PythonEvalType::ScalarPandasIter),
+    )
+    .expect("prepare");
+    let err = run(prepared.as_ref(), iter_frames()).expect_err("no helper");
+    assert!(err.to_string().contains("ModuleNotFoundError"), "{err}");
+}
+
+/// A symbolic link is refused (`INVALID_ARTIFACT_PATH`); an archive whose member links out of its directory, or
+/// over the pool's artifact limit, is refused (`KRISHIV_PYTHON_ARTIFACT_REFUSED`); the calls fail, no worker
+/// sees them.
+#[test]
+fn unsafe_or_oversized_artifacts_are_refused() {
+    let Some(py) = python() else { return };
+    let (_keep, dir) = artifact_dir();
+    std::fs::write(dir.join("real.py"), "V = 1\n").expect("pyfile");
+    std::os::unix::fs::symlink("/etc/passwd", dir.join("link.py")).expect("link");
+    let evil = dir.join("evil.tar");
+    make_archive(
+        &py,
+        &evil,
+        "import tarfile\nwith tarfile.open(out, 'w') as t:\n    \
+         i = tarfile.TarInfo('out')\n    i.type = tarfile.SYMTYPE\n    i.linkname = '/etc/passwd'\n    t.addfile(i)",
+    );
+    let big = dir.join("big.zip");
+    make_archive(
+        &py,
+        &big,
+        "import zipfile\nwith zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:\n    \
+         z.writestr('zeros.bin', bytes(4 << 20))",
+    );
+    let mut config = PoolConfig::default();
+    config.executables = vec![py.display().to_string()];
+    config.artifact_limit = 1 << 20;
+    config.launcher = Launcher {
+        program: std::env::current_exe().expect("test binary"),
+        args: ["worker_child", "--exact", "--nocapture", "--"]
+            .map(OsString::from)
+            .to_vec(),
+    };
+    let pool = Pool::new(config).expect("pool");
+    let udfs = udfs(&pool);
+    let cases = [
+        (
+            vec![dir.join("link.py")],
+            Vec::new(),
+            ErrorClass::InvalidArtifactPath,
+            "link.py",
+        ),
+        (
+            Vec::new(),
+            vec![evil],
+            ErrorClass::KrishivPythonArtifactRefused,
+            "leaves the archive's directory",
+        ),
+        (
+            Vec::new(),
+            vec![big],
+            ErrorClass::KrishivPythonArtifactRefused,
+            "over the 1048576 bytes left",
+        ),
+    ];
+    for (pyfiles, archives, class, why) in cases {
+        udfs.set_artifacts(pyfiles, archives);
+        let prepared = prepare(
+            &udfs,
+            importing(&py, "real"),
+            &iter_call(PythonEvalType::ScalarPandasIter),
+        )
+        .expect("prepare");
+        let err = run(prepared.as_ref(), iter_frames()).expect_err("refused");
+        assert_eq!(err.error_class(), class, "{err}");
+        assert!(err.to_string().contains(why), "{err}");
+    }
+    assert_eq!(
+        pool.live_workers(),
+        0,
+        "no worker started for a refused set"
+    );
+}

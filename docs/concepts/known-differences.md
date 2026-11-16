@@ -152,6 +152,18 @@ setting at 1, a scalar Python UDF call while a relation UDF of the same session 
 way. All sessions' relation UDFs together hold at most `krishiv.python.worker.maxTotal` minus one workers; one
 waits for another to finish when they would hold more, in arrival order. Spark runs such calls in one worker and has no such limit.
 
+A scalar iterator UDF (`pandas_udf` or `arrow_udf` with `Iterator` hints) and a Python UDF over a window hold a
+worker the same way, one per UDF of the operator.
+
+## Python artifacts in server mode
+
+Pyfiles and archives a Connect client adds (`addArtifacts(..., pyfile=True)`, `archive=True`) reach the session's
+Python UDF workers on `sys.path`, as in Spark. Archives (zip, jar, tar, tar.gz, tgz) are unpacked into a read-only
+directory of the server, each under its file name, which is on `sys.path` too; Spark unpacks them into the
+executor's working directory, so code that opens an archive's files by a path relative to the working directory
+finds them in Spark only. A tar member that is a link leaving its archive's directory, a device file, or artifacts
+past the server's size limit fail the session's UDF calls with `KRISHIV_PYTHON_ARTIFACT_REFUSED`.
+
 ## `schema_of_variant` with `spark.sql.caseSensitive=true`
 
 Spark's `schema_of_variant` merges two objects of the same size whose sorted field names match under the session's

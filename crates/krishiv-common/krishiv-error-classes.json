@@ -137,6 +137,12 @@
     ],
     "sqlState" : "53400"
   },
+  "KRISHIV_PYTHON_ARTIFACT_REFUSED" : {
+    "message" : [
+      "The Python artifact <name> cannot be used by UDF workers: <reason>. Add a smaller or a well-formed artifact (zip, jar, tar, tar.gz or tgz archives), or raise the server's artifact limit."
+    ],
+    "sqlState" : "22023"
+  },
   "KRISHIV_PYTHON_UDF_RESULT_MISMATCH" : {
     "message" : [
       "The Python UDF <name> returned a result that does not match what it declares: <reason>. Make the function return the declared columns, in their declared types, and for a grouped aggregate one value per group."

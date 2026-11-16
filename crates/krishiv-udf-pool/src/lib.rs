@@ -20,6 +20,8 @@ use std::ffi::OsString;
 use std::process::ExitCode;
 
 #[cfg(target_os = "linux")]
+mod artifacts;
+#[cfg(target_os = "linux")]
 mod calls;
 #[cfg(target_os = "linux")]
 mod interpreter;
@@ -41,7 +43,7 @@ mod worker;
 #[cfg(target_os = "linux")]
 pub use interpreter::{Interpreter, choose};
 #[cfg(target_os = "linux")]
-pub use pool::{Launcher, Owner, Pool, PoolConfig};
+pub use pool::{DEFAULT_ARTIFACT_LIMIT, Launcher, Owner, Pool, PoolConfig};
 #[cfg(target_os = "linux")]
 pub use runtime::SessionUdfs;
 #[cfg(target_os = "linux")]

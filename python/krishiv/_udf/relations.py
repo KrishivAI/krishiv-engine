@@ -3,7 +3,13 @@
 # (Apache License 2.0; see NOTICE). Each ported function names its source lines; the code keeps Spark's shape
 # so a later diff against the tag stays readable.
 """The relation kinds of Python UDFs (design ``P3-T085-embedded-python-udf-kinds.md`` §3.2): map, grouped map,
-cogrouped map and grouped aggregate, each run over a stream of **frames**.
+cogrouped map, grouped aggregate, window aggregate and scalar iterator, each run over a stream of **frames**.
+
+A window aggregate's partitions are groups; its runner yields one value per row of each, as Spark's JVM joins
+them with the rows it queued (``ArrowWindowPythonEvaluatorFactory``). A bounded frame's frames lead with each
+row's frame start and end (``INT`` row indexes within the partition), and the runner conf's
+``window_bound_types`` says which (Spark's entry, one UDF per task here). A scalar iterator's frames are its
+argument columns, a partition's batches then the end; it yields one value per input row in any batches.
 
 A runner (:func:`make_relation`) is called once per task with a frame source and the task's key count, and
 yields result batches in the engine's Arrow forms (strings and binaries as views, timestamps in UTC, as
@@ -44,6 +50,8 @@ from krishiv._udf.worker import (
 #: Spark's ``PythonEvalType`` codes (``pyspark/util.py:655-688``) of the relation kinds run here.
 SQL_GROUPED_MAP_PANDAS_UDF = 201
 SQL_GROUPED_AGG_PANDAS_UDF = 202
+SQL_WINDOW_AGG_PANDAS_UDF = 203
+SQL_SCALAR_PANDAS_ITER_UDF = 204
 SQL_MAP_PANDAS_ITER_UDF = 205
 SQL_COGROUPED_MAP_PANDAS_UDF = 206
 SQL_MAP_ARROW_ITER_UDF = 207
@@ -52,7 +60,9 @@ SQL_COGROUPED_MAP_ARROW_UDF = 210
 SQL_GROUPED_MAP_ARROW_ITER_UDF = 215
 SQL_GROUPED_MAP_PANDAS_ITER_UDF = 216
 SQL_GROUPED_AGG_PANDAS_ITER_UDF = 217
+SQL_SCALAR_ARROW_ITER_UDF = 251
 SQL_GROUPED_AGG_ARROW_UDF = 252
+SQL_WINDOW_AGG_ARROW_UDF = 253
 SQL_GROUPED_AGG_ARROW_ITER_UDF = 254
 
 #: Every relation kind :func:`make_relation` runs.
@@ -70,18 +80,28 @@ RELATION_EVAL_TYPES = frozenset(
         SQL_GROUPED_AGG_PANDAS_ITER_UDF,
         SQL_GROUPED_AGG_ARROW_UDF,
         SQL_GROUPED_AGG_ARROW_ITER_UDF,
+        SQL_WINDOW_AGG_PANDAS_UDF,
+        SQL_WINDOW_AGG_ARROW_UDF,
+        SQL_SCALAR_PANDAS_ITER_UDF,
+        SQL_SCALAR_ARROW_ITER_UDF,
     }
 )
 
-#: The grouped-aggregate kinds: one value per group.
+#: The grouped and window aggregate kinds: one value per group (per row of a partition, for a window), sent
+#: together before the next frame is asked for.
 AGGREGATE_EVAL_TYPES = frozenset(
     {
         SQL_GROUPED_AGG_PANDAS_UDF,
         SQL_GROUPED_AGG_PANDAS_ITER_UDF,
         SQL_GROUPED_AGG_ARROW_UDF,
         SQL_GROUPED_AGG_ARROW_ITER_UDF,
+        SQL_WINDOW_AGG_PANDAS_UDF,
+        SQL_WINDOW_AGG_ARROW_UDF,
     }
 )
+
+#: The window kind a grouped-aggregate UDF runs as over a window (Spark's ``ArrowWindowPythonExec`` eval type).
+WINDOW_OF = {SQL_GROUPED_AGG_PANDAS_UDF: SQL_WINDOW_AGG_PANDAS_UDF, SQL_GROUPED_AGG_ARROW_UDF: SQL_WINDOW_AGG_ARROW_UDF}
 
 
 class FrameSource(Protocol):
@@ -868,6 +888,297 @@ def _grouped_agg_arrow(f: Callable[..., Any], return_type: Any, iterator: bool) 
     return run
 
 
+# --- the window kinds: worker.py:875-954 (wrap_window_agg_pandas_udf and its two forms) ---
+def _window_bound_type(conf: RunnerConf) -> str:
+    """The task's frame kind from the runner conf's ``window_bound_types`` (``worker.py:875-894``): one UDF per
+    task, so the first entry."""
+    window_bound_types_str = conf.get("window_bound_types")
+    window_bound_type = window_bound_types_str.split(",")[0].strip().lower()
+    if window_bound_type not in ("bounded", "unbounded"):
+        raise PySparkRuntimeError(
+            errorClass="INVALID_WINDOW_BOUND_TYPE",
+            messageParameters={
+                "window_bound_type": window_bound_type,
+            },
+        )
+    return window_bound_type
+
+
+def _concat_batches(batch_list: list[Any]) -> Any:
+    """``pa.concat_batches`` (``worker.py:2735-2743``), with Spark's fallback before pyarrow 19."""
+    import pyarrow as pa
+
+    if hasattr(pa, "concat_batches"):
+        return pa.concat_batches(batch_list)
+    return pa.RecordBatch.from_struct_array(pa.concat_arrays([b.to_struct_array() for b in batch_list]))
+
+
+# --- SQL_WINDOW_AGG_PANDAS_UDF (203): wrap_unbounded_window_agg_pandas_udf and
+# wrap_bounded_window_agg_pandas_udf (worker.py:897-954) under read_udfs' mapper (worker.py:3509-3536) and
+# ArrowStreamAggPandasUDFSerializer.load_stream (serializers.py:625-652) ---
+def _window_agg_pandas(f: Callable[..., Any], return_type: Any) -> Runner:
+    import pandas as pd
+
+    func = fail_on_stopiteration(f)
+
+    def unbounded(*series: Any) -> Any:
+        result = func(*series)
+        return pd.Series([result]).repeat(len(series[0]))
+
+    def bounded(begin_index: Any, end_index: Any, *series: Any) -> Any:
+        result = []
+        begin_array = begin_index.values
+        end_array = end_index.values
+        for i in range(len(begin_array)):
+            series_slices = [s.iloc[begin_array[i] : end_array[i]] for s in series]
+            result.append(func(*series_slices))
+        return pd.Series(result)
+
+    def run(source: FrameSource, key_count: int, arity: int) -> Iterator[Any]:
+        conf = _runner_conf()
+        schema = _engine_schema(return_type, conf)
+        wrapped = bounded if _window_bound_type(conf) == "bounded" else unbounded
+        for group in _groups(source):
+            batches = [
+                tuple(
+                    _to_pandas(
+                        _spark_batch(b, conf.timezone),
+                        conf,
+                        struct_in_pandas="dict",
+                        ndarray_as_list=False,
+                        df_for_struct=False,
+                    )
+                )
+                for _side, b in group
+            ]
+            num_columns = len(batches[0])
+            concatenated = [pd.concat([batch[i] for batch in batches], ignore_index=True) for i in range(num_columns)]
+            yield _from_pandas(wrapped(*concatenated), return_type, conf, schema)
+
+    return run
+
+
+# --- SQL_WINDOW_AGG_ARROW_UDF (253): worker.py:2719-2785 ---
+def _window_agg_arrow(f: Callable[..., Any], return_type: Any) -> Runner:
+    import pyarrow as pa
+
+    from krishiv._udf.conversion import ArrowBatchTransformer
+    from krishiv._udf.pandas_types import to_arrow_schema
+
+    udf_func = fail_on_stopiteration(f)
+
+    def run(source: FrameSource, key_count: int, arity: int) -> Iterator[Any]:
+        conf = _runner_conf()
+        schema = _engine_schema(return_type, conf)
+        bound_type = _window_bound_type(conf)
+        return_schema = to_arrow_schema(
+            StructType([StructField("_0", return_type)]),
+            timezone="UTC",
+            prefers_large_types=conf.use_large_var_types,
+        )
+        for group in _groups(source):
+            batch_list = [_spark_batch(b, conf.timezone) for _side, b in group]
+            if not batch_list:
+                continue
+            concatenated = _concat_batches(batch_list)
+            num_rows = concatenated.num_rows
+            if bound_type == "unbounded":
+                result = udf_func(*[concatenated.column(o) for o in range(concatenated.num_columns)])
+                result_array = pa.repeat(result, num_rows)
+            else:
+                begin_col = concatenated.column(0)
+                end_col = concatenated.column(1)
+                results = []
+                for i in range(num_rows):
+                    offset = begin_col[i].as_py()
+                    length = end_col[i].as_py() - offset
+                    slices = [
+                        concatenated.column(o).slice(offset=offset, length=length)
+                        for o in range(2, concatenated.num_columns)
+                    ]
+                    results.append(udf_func(*slices))
+                result_array = pa.array(results)
+            batch = pa.RecordBatch.from_arrays([result_array], ["_0"])
+            yield _from_arrow(ArrowBatchTransformer.enforce_schema(batch, return_schema), schema)
+
+    return run
+
+
+# --- the scalar iterator kinds ---
+def _column_schema(return_type: Any, conf: RunnerConf) -> Any:
+    """The engine's schema of a scalar kind's result: one column ``_0`` of the return type (a struct stays one
+    column)."""
+    import pyarrow as pa
+
+    from krishiv._udf.pandas_types import to_arrow_type
+
+    arrow_type = to_arrow_type(return_type, timezone="UTC", prefers_large_types=conf.use_large_var_types)
+    return pa.schema([pa.field("_0", _engine_form(arrow_type))])
+
+
+def _arg_batches(source: FrameSource, conf: RunnerConf) -> Iterator[Any]:
+    """A scalar iterator task's argument batches, in Spark's Arrow forms."""
+    for batch in _map_batches(source):
+        yield _spark_batch(batch, conf.timezone)
+
+
+# --- SQL_SCALAR_PANDAS_ITER_UDF (204): worker.py:3183-3246 around wrap_pandas_batch_iter_udf (worker.py:415-451),
+# with ArrowStreamPandasUDFSerializer(df_for_struct=True) and its dump_stream's create_batch
+# (serializers.py:509-539) ---
+def _scalar_pandas_iter(f: Callable[..., Any], return_type: Any) -> Runner:
+    import pandas as pd
+
+    from krishiv._udf.conversion import PandasToArrowConversion
+
+    # `read_single_udf` does not wrap this eval type in `fail_on_stopiteration` (worker.py:1103-1110).
+    udf = wrap_pandas_batch_iter_udf(f, return_type)
+
+    def run(source: FrameSource, key_count: int, arity: int) -> Iterator[Any]:
+        from krishiv._udf._host import PySparkValueError
+
+        conf = _runner_conf()
+        schema = _column_schema(return_type, conf)
+        num_input_rows = 0
+
+        def map_batch(batch: Any) -> Any:
+            nonlocal num_input_rows
+
+            udf_args = _to_pandas(batch, conf, struct_in_pandas="dict", ndarray_as_list=False, df_for_struct=True)
+            num_input_rows += len(udf_args[0])
+            if len(udf_args) == 1:
+                return udf_args[0]
+            return tuple(udf_args)
+
+        iterator = map(map_batch, _arg_batches(source, conf))
+        result_iter = udf(iterator)
+
+        num_output_rows = 0
+        for result_batch, result_type in result_iter:
+            num_output_rows += len(result_batch)
+            # This check is for Scalar Iterator UDF to fail fast.
+            if num_output_rows > num_input_rows:
+                raise PySparkRuntimeError(errorClass="OUTPUT_EXCEEDS_INPUT_ROWS", messageParameters={})
+            if isinstance(result_type, StructType) and not isinstance(result_batch, pd.DataFrame):
+                raise PySparkValueError(
+                    "Invalid return type. Please make sure that the UDF returns a "
+                    "pandas.DataFrame when the specified return type is StructType."
+                )
+            column = PandasToArrowConversion.convert(
+                [result_batch],
+                StructType([StructField("_0", result_type)]),
+                timezone=conf.timezone,
+                safecheck=conf.safecheck,
+                arrow_cast=True,
+                prefers_large_types=conf.use_large_var_types,
+                assign_cols_by_name=conf.assign_cols_by_name,
+                int_to_decimal_coercion_enabled=conf.int_to_decimal_coercion_enabled,
+                ignore_unexpected_complex_type_values=False,
+                is_legacy=False,
+            ).column(0)
+            yield _engine_batch([column], schema, len(column))
+
+        try:
+            next(iterator)
+        except StopIteration:
+            pass
+        else:
+            raise PySparkRuntimeError(
+                errorClass="INPUT_NOT_FULLY_CONSUMED",
+                messageParameters={},
+            )
+
+        if num_output_rows != num_input_rows:
+            raise PySparkRuntimeError(
+                errorClass="RESULT_ROWS_MISMATCH",
+                messageParameters={
+                    "output_length": str(num_output_rows),
+                    "input_length": str(num_input_rows),
+                },
+            )
+
+    return run
+
+
+# --- ported from pyspark/worker.py:325-367 ---
+def verify_iterator_exhausted(iterator: Iterator, error_class: str) -> None:
+    """Verify that an iterator has been fully consumed."""
+    try:
+        next(iterator)
+    except StopIteration:
+        pass
+    else:
+        raise PySparkRuntimeError(errorClass=error_class, messageParameters={})
+
+
+def verify_output_row_limit(iterator: Iterator, max_rows: Callable[[], int], error_class: str) -> Iterator:
+    """Yield elements while verifying total rows do not exceed a limit (fail-fast)."""
+    total_rows = 0
+    for element in iterator:
+        total_rows += len(element)
+        if total_rows > max_rows():
+            raise PySparkRuntimeError(errorClass=error_class, messageParameters={})
+        yield element
+
+
+def verify_output_row_count(iterator: Iterator, expected_rows: Callable[[], int], error_class: str) -> Iterator:
+    """Yield elements and verify final row count matches expected exactly."""
+    actual_rows = 0
+    for element in iterator:
+        actual_rows += len(element)
+        yield element
+
+    expected = expected_rows()
+    if actual_rows != expected:
+        raise PySparkRuntimeError(
+            errorClass=error_class,
+            messageParameters={
+                "output_length": str(actual_rows),
+                "input_length": str(expected),
+            },
+        )
+
+
+# --- SQL_SCALAR_ARROW_ITER_UDF (251): worker.py:2586-2646 ---
+def _scalar_arrow_iter(f: Callable[..., Any], return_type: Any) -> Runner:
+    import pyarrow as pa
+
+    from krishiv._udf.conversion import ArrowBatchTransformer
+    from krishiv._udf.pandas_types import to_arrow_type
+
+    udf_func = fail_on_stopiteration(f)
+
+    def run(source: FrameSource, key_count: int, arity: int) -> Iterator[Any]:
+        conf = _runner_conf()
+        schema = _column_schema(return_type, conf)
+        arrow_return_type = to_arrow_type(return_type, timezone="UTC", prefers_large_types=conf.use_large_var_types)
+        num_input_rows = 0
+
+        def extract_args(batch: Any) -> Any:
+            nonlocal num_input_rows
+            args = tuple(batch.column(o) for o in range(batch.num_columns))
+            num_input_rows += batch.num_rows
+            return args[0] if len(args) == 1 else args
+
+        args_iter = map(extract_args, _arg_batches(source, conf))
+        verified_iter = verify_result(pa.Array)(udf_func(args_iter))
+        target_schema = pa.schema([pa.field("_0", arrow_return_type)])
+
+        def process_results() -> Iterator[Any]:
+            for result in verified_iter:
+                batch = pa.RecordBatch.from_arrays([result], ["_0"])
+                yield ArrowBatchTransformer.enforce_schema(batch, target_schema, safecheck=True)
+
+        limited = verify_output_row_limit(
+            process_results(), lambda: num_input_rows, error_class="OUTPUT_EXCEEDS_INPUT_ROWS"
+        )
+        matched = verify_output_row_count(limited, lambda: num_input_rows, error_class="RESULT_ROWS_MISMATCH")
+        for batch in matched:
+            yield _from_arrow(batch, schema)
+        verify_iterator_exhausted(args_iter, error_class="INPUT_NOT_FULLY_CONSUMED")
+
+    return run
+
+
 def make_relation(f: Callable[..., Any], eval_type: int, return_type: Any) -> Runner:
     """The runner of ``f`` for the relation kind ``eval_type`` (``read_single_udf``, ``worker.py:1064-1188``,
     then ``read_udfs``'s loop for that kind)."""
@@ -889,6 +1200,14 @@ def make_relation(f: Callable[..., Any], eval_type: int, return_type: Any) -> Ru
         return _grouped_agg_pandas(f, return_type, eval_type == SQL_GROUPED_AGG_PANDAS_ITER_UDF)
     if eval_type in (SQL_GROUPED_AGG_ARROW_UDF, SQL_GROUPED_AGG_ARROW_ITER_UDF):
         return _grouped_agg_arrow(f, return_type, eval_type == SQL_GROUPED_AGG_ARROW_ITER_UDF)
+    if eval_type == SQL_WINDOW_AGG_PANDAS_UDF:
+        return _window_agg_pandas(f, return_type)
+    if eval_type == SQL_WINDOW_AGG_ARROW_UDF:
+        return _window_agg_arrow(f, return_type)
+    if eval_type == SQL_SCALAR_PANDAS_ITER_UDF:
+        return _scalar_pandas_iter(f, return_type)
+    if eval_type == SQL_SCALAR_ARROW_ITER_UDF:
+        return _scalar_arrow_iter(f, return_type)
     from krishiv._udf._host import not_implemented
 
     raise not_implemented(f"Python UDFs of eval type {eval_type} as a relation")

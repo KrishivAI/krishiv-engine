@@ -5,6 +5,7 @@
 //! the executor and the session need no change to call pool workers.
 
 use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
@@ -19,6 +20,7 @@ use krishiv_exec::python_eval::{PreparedUdf, UdfCallSpec, UdfRuntime};
 use krishiv_exec::python_relation::{PreparedRelationUdf, RelationCallSpec};
 use std::os::fd::OwnedFd;
 
+use crate::artifacts::ArtifactSet;
 use crate::pool::{CallWatch, Owner, Pool};
 use crate::relation::PoolSlots;
 use crate::worker::{PythonPayload, Worker, kill_via};
@@ -35,6 +37,8 @@ pub struct SessionUdfs {
     /// The runner conf (the session's SQL conf subset Spark sends its worker), read when a call is prepared.
     conf: RwLock<Arc<BTreeMap<String, String>>>,
     payloads: RwLock<HashMap<(String, u32), Registered>>,
+    /// The session's pyfiles and archives, read when a call is prepared.
+    artifacts: RwLock<Arc<ArtifactSet>>,
 }
 
 #[derive(Clone)]
@@ -60,7 +64,32 @@ impl SessionUdfs {
             owner,
             conf: RwLock::new(Arc::new(BTreeMap::new())),
             payloads: RwLock::new(HashMap::new()),
+            artifacts: RwLock::new(Arc::new(ArtifactSet::empty())),
         }
+    }
+
+    /// Sets the session's Python artifacts that calls prepared from now on see: `pyfiles` (`.py` files, and
+    /// zips or eggs) on the workers' `sys.path`, and `archives` (zip, jar, tar, tar.gz, tgz) unpacked and on
+    /// it too (`artifacts.rs`). The server names the paths: each must be an absolute path of a regular file
+    /// with no symbolic link at or above it, or the calls fail with `INVALID_ARTIFACT_PATH`; an archive the
+    /// pool cannot unpack within its limit fails them with `KRISHIV_PYTHON_ARTIFACT_REFUSED`. Workers started
+    /// for the previous set are not reused for the new one.
+    pub fn set_artifacts(&self, pyfiles: Vec<PathBuf>, archives: Vec<PathBuf>) {
+        *self
+            .artifacts
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) =
+            Arc::new(ArtifactSet::new(pyfiles, archives));
+    }
+
+    /// The artifact set calls prepared now see.
+    fn artifacts(&self) -> Arc<ArtifactSet> {
+        Arc::clone(
+            &self
+                .artifacts
+                .read()
+                .unwrap_or_else(PoisonError::into_inner),
+        )
     }
 
     /// Registers `payload` as `(name, version)`; plans name UDFs by both, so an older version stays callable
@@ -110,6 +139,7 @@ impl UdfRuntime for SessionUdfs {
             registered,
             return_type: spec.return_arrow.clone(),
             conf: Arc::clone(&self.conf.read().unwrap_or_else(PoisonError::into_inner)),
+            artifacts: self.artifacts(),
         }))
     }
 
@@ -126,6 +156,7 @@ impl UdfRuntime for SessionUdfs {
             registered,
             spec,
             &session,
+            self.artifacts(),
         )
     }
 }
@@ -136,6 +167,7 @@ struct Prepared {
     registered: Registered,
     return_type: DataType,
     conf: Arc<BTreeMap<String, String>>,
+    artifacts: Arc<ArtifactSet>,
 }
 
 /// A call's link to its future: dropping the future (the query was cancelled or failed) kills the worker
@@ -200,6 +232,7 @@ impl PreparedUdf for Prepared {
         let registered = self.registered.clone();
         let return_type = self.return_type.clone();
         let conf = Arc::clone(&self.conf);
+        let artifacts = Arc::clone(&self.artifacts);
         // Each call blocks on its worker, so it runs on one of the pool's call threads, never on the caller
         // (a compute worker). Those threads are bounded by the worker caps (`crate::calls`).
         let submitted = self.pool.submit(
@@ -215,6 +248,7 @@ impl PreparedUdf for Prepared {
                         &pool,
                         &owner,
                         &registered,
+                        &artifacts,
                         &args,
                         &conf,
                         &return_type,
@@ -241,33 +275,40 @@ impl PreparedUdf for Prepared {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one scalar call's parts, moved onto its call thread"
+)]
 fn run(
     pool: &Pool,
     owner: &Owner,
     registered: &Registered,
+    artifacts: &ArtifactSet,
     args: &RecordBatch,
     conf: &BTreeMap<String, String>,
     return_type: &DataType,
     call: &Mutex<CallState>,
 ) -> Result<ArrayRef, KrishivError> {
     let max_result = pool.max_result_bytes();
-    with_worker(pool, owner, registered, call, |worker| {
+    with_worker(pool, owner, registered, artifacts, call, |worker| {
         worker.run_batch(registered.id, args, conf, return_type, max_result)
     })
 }
 
-/// Runs `body` on a worker of `owner` that has `registered` loaded, for the call `call`: a cancel kills the
+/// Runs `body` on a worker of `owner` that has `registered` loaded and reads `artifacts`, for the call `call`: a
+/// cancel kills the
 /// worker while it starts or while `body` runs, and a worker killed so is never given back (the call then
 /// ends with `OPERATION_CANCELED`). The worker is given back (or stopped) before this returns.
 pub(crate) fn with_worker<T>(
     pool: &Pool,
     owner: &Owner,
     registered: &Registered,
+    artifacts: &ArtifactSet,
     call: &Mutex<CallState>,
     body: impl FnOnce(&mut Worker) -> Result<T, KrishivError>,
 ) -> Result<T, KrishivError> {
     let lock = || call.lock().unwrap_or_else(PoisonError::into_inner);
-    let mut lease = match pool.checkout(owner, &registered.payload.python_ver, call) {
+    let mut lease = match pool.checkout(owner, &registered.payload.python_ver, artifacts, call) {
         Ok(lease) => lease,
         Err(e) => {
             // A start that failed (or was killed by the cancel) left its pidfd behind; that worker is reaped.
