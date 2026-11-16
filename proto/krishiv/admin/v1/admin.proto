@@ -1,0 +1,47 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// krishiv.admin.v1: the control API of `krishiv server` (design P3-T066, ADR 0036, ADR 0046).
+// One service, two transports: gRPC and REST under /api/admin/v1 (the proto3 JSON mapping of
+// these messages). Additive only (design §6.1): fields are never removed, renumbered, renamed or
+// retyped; enums start with *_UNSPECIFIED = 0 and only gain values; one request and one response
+// message per RPC; new intent is a new RPC. The REST verb and path of each RPC, and the privilege it
+// checks, are in `crates/krishiv-server/admin-v1/routes.json` (the router and the OpenAPI document
+// read it). Until the first release that ships it the surface is
+// `preview` (design D8). `cargo xtask admin-api` checks the descriptor against the base branch.
+syntax = "proto3";
+
+package krishiv.admin.v1;
+
+service AdminService {
+  // The engine version and the revision of this surface. Any authenticated caller.
+  rpc GetVersion(GetVersionRequest) returns (GetVersionResponse);
+
+  // The `system.capabilities` rows. Any authenticated caller.
+  rpc GetCapabilities(GetCapabilitiesRequest) returns (GetCapabilitiesResponse);
+}
+
+message GetVersionRequest {}
+
+message GetVersionResponse {
+  // The engine's version, as `/api/v1/version` reports it.
+  string version = 1;
+  // An integer that grows whenever this surface's descriptor changes (design §6.3): a client that
+  // needs a field checks it first.
+  int64 admin_v1_revision = 2;
+  // True until the first release that ships admin.v1 (design D8): the surface may still change.
+  bool preview = 3;
+}
+
+message GetCapabilitiesRequest {}
+
+message GetCapabilitiesResponse {
+  repeated Capability capabilities = 1;
+}
+
+// One row of `system.capabilities`.
+message Capability {
+  string kind = 1;
+  string name = 2;
+  string value = 3;
+  string detail = 4;
+}

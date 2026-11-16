@@ -33,9 +33,9 @@ use serde::{Deserialize, Serialize};
 
 /// What a registration name resolves to.
 #[derive(Clone)]
-struct Registered {
-    io: IoContext,
-    paths: Arc<dyn PathLocator>,
+pub(crate) struct Registered {
+    pub(crate) io: IoContext,
+    pub(crate) paths: Arc<dyn PathLocator>,
 }
 
 impl fmt::Debug for Registered {
@@ -91,6 +91,14 @@ impl StorageRegistration {
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// The I/O and path placement registered under this name.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` when the name is gone.
+    pub(crate) fn registered(&self) -> Result<Registered, KrishivError> {
+        resolve(&self.name).map_err(from_iceberg)
     }
 
     /// A `FileIO` over this registration.

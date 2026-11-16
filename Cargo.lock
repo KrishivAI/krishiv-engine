@@ -1875,6 +1875,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fallible-iterator"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2acce4a10f12dc2fb14a218589d4f1f62ef011b2d0cc4b3cb1bba8e94da14649"
+
+[[package]]
+name = "fallible-streaming-iterator"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
+
+[[package]]
 name = "fancy-regex"
 version = "0.19.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2979,11 +2991,14 @@ dependencies = [
 name = "krishiv-catalogs"
 version = "0.2.0"
 dependencies = [
+ "futures",
  "krishiv-common",
  "krishiv-plan",
  "krishiv-types",
  "reqwest 0.13.5",
+ "rusqlite",
  "serde_json",
+ "tempfile",
  "thrift 0.25.0",
  "tokio",
  "tracing",
@@ -3119,6 +3134,10 @@ name = "krishiv-connectors-iceberg"
 version = "0.2.0"
 dependencies = [
  "arrow-array 60.1.0",
+ "arrow-buffer 60.1.0",
+ "arrow-row",
+ "arrow-schema 60.1.0",
+ "arrow-select 60.1.0",
  "async-trait",
  "bytes",
  "futures",
@@ -3127,8 +3146,15 @@ dependencies = [
  "krishiv-common",
  "krishiv-exec",
  "krishiv-io",
+ "krishiv-memory",
+ "krishiv-optimizer",
+ "krishiv-plan",
+ "krishiv-sql",
  "krishiv-types",
  "object_store",
+ "parquet 60.1.0",
+ "proptest",
+ "roaring",
  "serde",
  "serde_json",
  "tempfile",
@@ -3276,8 +3302,10 @@ dependencies = [
  "futures",
  "krishiv-common",
  "krishiv-functions",
+ "krishiv-plan",
  "krishiv-session",
  "krishiv-sql",
+ "krishiv-types",
  "rmcp",
  "serde_json",
  "tempfile",
@@ -3336,6 +3364,7 @@ dependencies = [
  "krishiv-functions",
  "krishiv-io",
  "krishiv-kernels",
+ "krishiv-memory",
  "krishiv-types",
  "krishiv-udf-sdk",
  "proptest",
@@ -3419,10 +3448,15 @@ dependencies = [
  "krishiv-exec",
  "krishiv-session",
  "krishiv-ui-assets",
+ "prost",
+ "prost-reflect",
  "serde_json",
  "tempfile",
  "tokio",
  "tokio-rustls",
+ "tonic",
+ "tonic-prost",
+ "tower",
  "tracing",
 ]
 
@@ -3432,6 +3466,7 @@ version = "0.2.0"
 dependencies = [
  "arrow-array 60.1.0",
  "arrow-buffer 60.1.0",
+ "arrow-cast 60.1.0",
  "arrow-schema 60.1.0",
  "arrow-select 60.1.0",
  "aws-lc-rs",
@@ -3603,6 +3638,7 @@ name = "krishiv-udf-pool"
 version = "0.2.0"
 dependencies = [
  "arrow-array 60.1.0",
+ "arrow-buffer 60.1.0",
  "arrow-ipc 60.1.0",
  "arrow-schema 60.1.0",
  "futures",
@@ -3745,6 +3781,17 @@ checksum = "6a45a52f43e1c16f667ccfe4dd8c85b7f7c204fd5e3bf46c5b0db9a5c3c0b8e9"
 dependencies = [
  "cc",
  "cty",
+]
+
+[[package]]
+name = "libsqlite3-sys"
+version = "0.40.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b06e69070b7e12262b0cd90832f0a7396f142a2b330181255562decf9f0c6215"
+dependencies = [
+ "cc",
+ "pkg-config",
+ "vcpkg",
 ]
 
 [[package]]
@@ -5001,6 +5048,19 @@ checksum = "18bd8a37d17a58532776dcdf6041ce64929adca78e8489d5cacbafe99229d3e1"
 dependencies = [
  "bytemuck",
  "byteorder",
+]
+
+[[package]]
+name = "rusqlite"
+version = "0.43.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f172c4812a19b26d1c23cdb0070e69db335503dfa378b910eb857386e5b8beba"
+dependencies = [
+ "bitflags 2.13.2",
+ "fallible-iterator",
+ "fallible-streaming-iterator",
+ "libsqlite3-sys",
+ "smallvec",
 ]
 
 [[package]]
@@ -6341,6 +6401,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bfa6c38708f6257f1ec2ca7e5a11f9bbf58a27d7060078b6b333624968183d96"
 
 [[package]]
+name = "vcpkg"
+version = "0.2.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
+
+[[package]]
 name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6697,6 +6763,8 @@ dependencies = [
  "krishiv-exec",
  "krishiv-functions",
  "krishiv-plan",
+ "prost",
+ "prost-types",
  "serde",
  "serde_json",
  "tempfile",

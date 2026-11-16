@@ -29,6 +29,7 @@
 mod config;
 mod denials;
 mod der;
+mod impersonation;
 #[cfg_attr(
     all(not(feature = "oidc"), not(test)),
     expect(
@@ -41,6 +42,7 @@ mod mtls;
 #[cfg(feature = "oidc")]
 mod oidc;
 mod oidc_config;
+mod principals;
 mod roles;
 mod secret_ref;
 mod server;
@@ -50,6 +52,11 @@ mod tls;
 mod tls_config;
 mod tokens;
 
+#[cfg(test)]
+#[cfg(feature = "oidc")]
+mod assertion_tests;
+#[cfg(test)]
+mod impersonation_tests;
 #[cfg(test)]
 mod jose_tests;
 #[cfg(test)]
@@ -72,12 +79,14 @@ use krishiv_common::principal::Principal;
 pub use config::{AuthConfig, RoleLists, ThrottleConfig, TokenSpec, is_auth_key};
 pub use denials::{DeniedCount, DeniedCounts};
 pub use der::{CertNames, DerError};
+pub use impersonation::{ActAs, Denial, ImpersonationConfig};
 pub use jose::Alg;
 pub use mtls::{ClientCertificates, MtlsConfig, PrincipalFrom};
 pub use oidc_config::OidcConfig;
+pub use principals::{ImpersonationTarget, PrincipalPrivilege, PrincipalRights, PrincipalTable};
 pub use roles::RolePolicy;
 pub use secret_ref::SecretRef;
-pub use server::{FailureCount, ServerAuth};
+pub use server::{FailureCount, ImpersonationCount, ServerAuth};
 pub use throttle::FailureThrottle;
 #[cfg(feature = "tls")]
 pub use tls::ServerTls;
@@ -272,6 +281,8 @@ pub struct Authenticated {
     pub role: Option<Role>,
     /// How it authenticated.
     pub method: Method,
+    /// The credential's own id (an OIDC token's `jti`), for the audit record; never enforced.
+    pub token_id: Option<String>,
 }
 
 impl Authenticated {
@@ -282,7 +293,15 @@ impl Authenticated {
             principal,
             role,
             method,
+            token_id: None,
         }
+    }
+
+    /// This result with the credential's id `token_id`.
+    #[must_use]
+    pub fn with_token_id(mut self, token_id: Option<String>) -> Self {
+        self.token_id = token_id;
+        self
     }
 }
 

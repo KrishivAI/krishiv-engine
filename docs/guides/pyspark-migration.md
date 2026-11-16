@@ -144,6 +144,8 @@ Each row links to the full description in [known differences](../concepts/known-
 | --- |
 | [Error ordering between two raising expressions](../concepts/known-differences.md#error-ordering-between-two-raising-expressions) |
 | [Result cache, reproducible results (Krishiv extensions, off by default)](../concepts/known-differences.md#result-cache-reproducible-results-krishiv-extensions-off-by-default) |
+| [`EXPLAIN FORMAT JSON`, `EXPLAIN ANALYZE`, `EXPLAIN VERBOSE` (Krishiv extensions)](../concepts/known-differences.md#explain-format-json-explain-analyze-explain-verbose-krishiv-extensions) |
+| [Writers leave a `_krishiv_log` directory](../concepts/known-differences.md#writers-leave-a-_krishiv_log-directory) |
 | [A malformed value of a Spark config key fails at `SET`](../concepts/known-differences.md#a-malformed-value-of-a-spark-config-key-fails-at-set) |
 | [`DISTRIBUTE BY` under a `LIMIT`, and partition numbers](../concepts/known-differences.md#distribute-by-under-a-limit-and-partition-numbers) |
 | [`TABLESAMPLE` rows follow the input's partitions](../concepts/known-differences.md#tablesample-rows-follow-the-inputs-partitions) |
@@ -159,6 +161,7 @@ Each row links to the full description in [known differences](../concepts/known-
 | [The relation cache is per session](../concepts/known-differences.md#the-relation-cache-is-per-session) |
 | [Checkpoint files and where a checkpoint lives](../concepts/known-differences.md#checkpoint-files-and-where-a-checkpoint-lives) |
 | [`krishiv server` (Spark Connect)](../concepts/known-differences.md#krishiv-server-spark-connect) |
+| [`Dataset.observe`: where the counts differ from Spark's (follow-up P3-T084c)](../concepts/known-differences.md#datasetobserve-where-the-counts-differ-from-sparks-follow-up-p3-t084c) |
 
 ## Where it runs
 

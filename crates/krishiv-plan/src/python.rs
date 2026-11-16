@@ -5,7 +5,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use krishiv_common::error::{InvalidPandasUdfPlacement, KrishivError};
+use krishiv_common::error::{
+    InvalidNonDeterministicExpressions, InvalidPandasUdfPlacement, KrishivError,
+};
 
 use crate::{Expr, ExprNode, FunctionId, FunctionKind, PlanNode, PythonUdfKind, ResolvedExpr};
 
@@ -36,6 +38,75 @@ pub fn python_relation_is_deterministic(node: &PlanNode) -> bool {
         | PlanNode::PythonTableFunction { udf, .. } => udf.deterministic,
         _ => true,
     }
+}
+
+/// Refuses a grouped or cogrouped map whose UDF is nondeterministic:
+/// Spark's `CheckAnalysis` allows nondeterministic expressions only on some
+/// operators, of the Python relations `MapInPandas` and `MapInArrow`
+/// (CheckAnalysis.scala L1032-1052 at v4.2.0), and a node's `functionExpr`
+/// is a `PythonUDF` whose `deterministic` is `udfDeterministic`. Spark
+/// lists the node's expressions (`QueryPlan.expressions`), each as
+/// `toSQLExpr` shows it: a grouped map's grouping attributes, its UDF call
+/// over the input's columns (`PrettyPythonUDF`: `name(a, b)`) and its
+/// output attributes; a cogroup's UDF call and output (its key counts are
+/// not expressions). Spark raises it at analysis (`df.schema`, `explain`
+/// and SQL fail); no front end builds these nodes yet (Connect's
+/// `GroupMap`/`CoGroupMap` are not lowered, P3-T014), so for now only the
+/// physical planner calls it, at a DataFrame's first action. The front end
+/// that builds them must call it where it resolves the node.
+///
+/// Known differences: the UDF's name is the canonical lower-case one (a
+/// [`crate::PythonUdfRef`] keeps no other), and a
+/// computed key shows as `toPrettySQL` names it, where Spark aliases it by
+/// the unresolved expression's `toString`. The text is derived from the
+/// source; a Spark-run golden awaits a lane with Spark.
+///
+/// # Errors
+/// `INVALID_NON_DETERMINISTIC_EXPRESSIONS` (42K0E).
+pub fn check_python_relation_determinism(node: &PlanNode) -> Result<(), KrishivError> {
+    let call = |udf: &crate::PythonUdfRef, inputs: &[&crate::LogicalPlan]| {
+        let args: Vec<String> = inputs
+            .iter()
+            .flat_map(|p| p.resolved_output().unwrap_or_default())
+            .map(|c| c.name)
+            .collect();
+        format!(
+            "{}({})",
+            crate::function::shown_call_name("", &udf.name),
+            args.join(", ")
+        )
+    };
+    let shown: Vec<String> = match node {
+        PlanNode::GroupMap {
+            input,
+            keys,
+            udf,
+            output,
+        } if !udf.deterministic => keys
+            .iter()
+            .map(|k| crate::analyzer::pretty_sql(k))
+            .chain(std::iter::once(call(udf, &[input])))
+            .chain(output.iter().map(|c| c.name.clone()))
+            .collect(),
+        PlanNode::CoGroupMap {
+            left,
+            right,
+            udf,
+            output,
+            ..
+        } if !udf.deterministic => std::iter::once(call(udf, &[left, right]))
+            .chain(output.iter().map(|c| c.name.clone()))
+            .collect(),
+        _ => return Ok(()),
+    };
+    Err(InvalidNonDeterministicExpressions {
+        sql_exprs: shown
+            .iter()
+            .map(|s| format!("\"{s}\""))
+            .collect::<Vec<_>>()
+            .join(", "),
+    }
+    .into())
 }
 
 /// Refuses an aggregate whose expressions call a grouped-aggregate Python UDF

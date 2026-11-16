@@ -1935,3 +1935,5 @@ fn a_projector_reuses_its_plan_across_batches_and_follows_a_schema_change() {
     // A missing column is still an error, not a stale answer.
     assert!(p.project(&batch(&["a", "c"])).is_err());
 }
+
+mod field_ids;

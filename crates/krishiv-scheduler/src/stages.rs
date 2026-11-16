@@ -387,6 +387,8 @@ impl StageRunner {
         self.record(&task.metrics());
         outcome?;
         task.error().map_or(Ok(()), Err)?;
+        // Its `CollectMetrics` partials belong to the query, which outlives the task.
+        task.forward_observed_to(query)?;
         Ok(produced(&stage.plan, values.as_ref()))
     }
 

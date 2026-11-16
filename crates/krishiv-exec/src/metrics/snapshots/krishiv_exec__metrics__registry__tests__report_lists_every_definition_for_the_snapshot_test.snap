@@ -13,6 +13,7 @@ krishiv.query.output.rows counter {row} [] -> krishiv_query_output_rows_total
 krishiv.query.spill.bytes counter By [] -> krishiv_query_spill_bytes_bytes_total
 krishiv.query.spill.files counter {file} [] -> krishiv_query_spill_files_total
 krishiv.query.memory.peak histogram By [class=interactive|batch|background|agent] -> krishiv_query_memory_peak_bytes
+krishiv.history.write_failures gauge {profile} [] -> krishiv_history_write_failures
 krishiv.memory.reserved gauge By [] -> krishiv_memory_reserved_bytes
 krishiv.memory.limit gauge By [] -> krishiv_memory_limit_bytes
 krishiv.memory.arbitration.spills counter 1 [] -> krishiv_memory_arbitration_spills_total

@@ -12,6 +12,8 @@ returns NULL. By default, it follows casting rules to a time if the `format` is 
 
 **Applies to:** Krishiv 0.2.0 and above. Spark: 4.1 and later.
 
+**Note.** The `TIME` type is off by default in Spark 4.2.0 and in Krishiv. Examples that use it fail with `UNSUPPORTED_TIME_TYPE` until `spark.sql.timeType.enabled` is set to `true`.
+
 ## Syntax
 
 ```text

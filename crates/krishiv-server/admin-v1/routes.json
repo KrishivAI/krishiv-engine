@@ -1,0 +1,4 @@
+[
+  {"rpc": "GetVersion", "method": "GET", "path": "/version", "privilege": "authenticated"},
+  {"rpc": "GetCapabilities", "method": "GET", "path": "/capabilities", "privilege": "authenticated"}
+]

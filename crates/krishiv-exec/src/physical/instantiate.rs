@@ -57,8 +57,8 @@ use super::{
     SortMergeJoinPlan, SubqueryPlan, ValueId, Version, WritePlan, files_of, partitions_of,
 };
 use crate::aggregate::{
-    AggInput, AggregateExpr, AggregateNode, AggregateOutput, AggregateSpec, HashAggregate,
-    distinct_plan,
+    AggInput, AggregateExpr, AggregateNode, AggregateOutput, AggregateSpec, CollectMetrics,
+    HashAggregate, distinct_plan,
 };
 use crate::error::{Result, internal};
 use crate::exchange::{Exchange, ExchangeRead, ExchangeSink, ExchangeWrite, MapOutputId};
@@ -93,8 +93,10 @@ mod python_relation;
 mod table_write;
 pub(crate) use detached::{Detached, LoopRun};
 mod join;
+mod observe;
 use distributed::planned_schema_holds;
 pub(crate) use join::hash_join;
+pub(crate) use observe::collect_metrics_op;
 use order::{range_ordered_evals, reads_range_in_order};
 
 /// Creates the spill scope of one instantiation: the query's own spill
@@ -350,6 +352,30 @@ impl WorkerContext {
         }
     }
 
+    /// As [`Self::spill_scope`], for a query that does not need to spill to run: when the
+    /// factory cannot make the spill directory (a read-only root, no writable home, RS-29) the
+    /// query runs without spilling and the first such failure is logged with the error; an
+    /// operator that then needs to spill fails with its memory error. Every later failure is a
+    /// debug record, so a server does not log once per query.
+    pub fn spill_scope_if_available(&self) -> Option<SpillScope> {
+        static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        match self.spill_scope() {
+            Ok(scope) => scope,
+            Err(e) => {
+                if WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    tracing::debug!(error = %e, "queries run without spilling");
+                } else {
+                    tracing::warn!(
+                        error = %e,
+                        "the spill directory cannot be used, so queries run without spilling; \
+                         set `krishiv.spill.dir` to a writable local directory"
+                    );
+                }
+                None
+            }
+        }
+    }
+
     /// The relation store, if batch splits resolve through one.
     pub fn relations(&self) -> Option<&Arc<krishiv_memory::RelationStore>> {
         self.relations.as_ref()
@@ -434,7 +460,7 @@ fn instantiate_with_schemas(
     task: &TaskSpec,
 ) -> Result<(Arc<dyn ExecNode>, BTreeMap<ExchangeId, SchemaRef>)> {
     let run = || {
-        let spill = worker.spill_scope()?;
+        let spill = worker.spill_scope_if_available();
         let mut env = EvalEnv::from_plan(plan.env());
         // The UDFs travel with the worker, never with the plan.
         env.udfs = worker.udfs.clone();
@@ -1044,6 +1070,15 @@ impl Instantiation<'_> {
                 subqueries,
             } => self.with_subqueries(input, subqueries, |input, v| {
                 Ok(project_op(input, layout, items, nullable.as_deref(), v)? as Arc<dyn Operator>)
+            }),
+            PhysNode::CollectMetrics {
+                input,
+                name,
+                measure,
+                instance,
+                limit,
+            } => self.with_subqueries(input, &[], |input, v| {
+                collect_metrics_op(name, *instance, *limit, measure, input, v)
             }),
             PhysNode::ReplicateRows {
                 input,

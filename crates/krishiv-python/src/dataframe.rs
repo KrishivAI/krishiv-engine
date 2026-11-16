@@ -26,6 +26,43 @@ pub struct PyDataFrame {
     pub(crate) owned: Vec<Arc<OwnedTable>>,
 }
 
+/// `krishiv._native.Observation`: the handle of `DataFrame.observe` (P3-T084).
+#[pyclass(name = "Observation", module = "krishiv._native", frozen)]
+#[derive(Debug)]
+pub struct PyObservation {
+    inner: krishiv_session::Observation,
+}
+
+#[pymethods]
+impl PyObservation {
+    /// An observation named `name`, or by a fresh unique name.
+    #[new]
+    #[pyo3(signature = (name=None))]
+    fn new(py: Python<'_>, name: Option<&str>) -> PyResult<Self> {
+        let inner = match name {
+            Some(n) => krishiv_session::Observation::named(n).map_err(|e| to_py(py, &e))?,
+            None => krishiv_session::Observation::new(),
+        };
+        Ok(Self { inner })
+    }
+
+    /// The name keying the metrics.
+    #[getter]
+    fn name(&self) -> String {
+        self.inner.name().to_owned()
+    }
+
+    /// The one-row metrics, as a stream: blocks (the GIL released) until
+    /// the first action on the observed frame has finished.
+    fn get(&self, py: Python<'_>) -> PyResult<ArrowStream> {
+        let obs = self.inner.clone();
+        let batch = py.detach(|| obs.get()).map_err(|e| to_py(py, &e))?;
+        let schema = batch.schema();
+        let reader = arrow_array::RecordBatchIterator::new([Ok(batch)], schema);
+        Ok(ArrowStream::new(Box::new(reader)))
+    }
+}
+
 /// A temporary table dropped from its session when the last holder goes.
 #[derive(Debug)]
 pub(crate) struct OwnedTable {
@@ -169,6 +206,20 @@ impl PyDataFrame {
 
     fn order_by(&self, cols: Vec<PyColumn>) -> Self {
         self.derive(self.inner.order_by(columns(cols)))
+    }
+
+    /// Observes `metrics` under `observation` (PySpark's `observe`).
+    fn observe(
+        &self,
+        py: Python<'_>,
+        observation: &PyObservation,
+        metrics: Vec<PyColumn>,
+    ) -> PyResult<Self> {
+        let inner = self
+            .inner
+            .observe(&observation.inner, columns(metrics))
+            .map_err(|e| to_py(py, &e))?;
+        Ok(self.derive(inner))
     }
 
     fn limit(&self, n: i32) -> Self {

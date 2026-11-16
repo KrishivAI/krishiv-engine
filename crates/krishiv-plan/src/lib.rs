@@ -80,6 +80,7 @@
 //! | `PlanNode::Hint` | U | - | - |
 //! | `PlanNode::PipeOperator` | U | - | - |
 //! | `PlanNode::Repartition` | U, R | - | - |
+//! | `PlanNode::CollectMetrics` | U, R | - | `observe` |
 //! | `PlanNode::JoinHint` | R | - | - |
 //! | `PlanNode::Union` | U, R | - | - |
 //! | `PlanNode::Distinct` | U | - | - |
@@ -114,9 +115,13 @@
 //! | `ResolvedExpr::StateInput` | R | - | - |
 //! | `ResolvedExpr::EvalMode` | R | - | - |
 //!
+//! `ReadSource::Local` (Spark's `LocalRelation`, see [`LocalRelation`]) is a
+//! `PlanNode::Read` of data held in the session's relation store; it resolves
+//! to a `PlanNode::Scan` and is not a node of its own.
+//!
 //! Not in v1 (spec 13 §9; added with the features that need them):
 //! `Generate`, `Hint`, `Pivot`, `Command`,
-//! `Extension`, `ToDF`, `Offset`, `Deduplicate`, `LocalRelation` and `Range`
+//! `Extension`, `ToDF`, `Offset`, `Deduplicate` and `Range`
 //! relations; lambda, extract-value and extension expressions.
 
 #![forbid(unsafe_code)]
@@ -129,6 +134,7 @@ mod encode;
 mod expr;
 pub mod function;
 mod literal;
+mod local;
 mod origin;
 mod partial;
 mod plan;
@@ -154,6 +160,7 @@ pub use function::{
     Builtin, FunctionId, FunctionKind, PythonEvalType, PythonUdfKind, PythonUdfRef, QuantifiedLike,
 };
 pub use literal::{DayTimeField, Literal, YearMonthField};
+pub use local::LocalRelation;
 pub use origin::{Origin, PlanId, SourceId, Span};
 pub use partial::partial_state_columns;
 /// The qualifier prefix of the columns a select-list generator adds: an
@@ -177,6 +184,9 @@ pub use plan::{
     SetOperation, SqlArgs, TABLE_FUNCTION_NAME_SEP, TableArg, TableVersion, UnpivotColumnSet,
     generator_arg, without_generated_marker,
 };
-pub use python::{check_python_aggregates, is_python_udaf, python_relation_is_deterministic};
+pub use python::{
+    check_python_aggregates, check_python_relation_determinism, is_python_udaf,
+    python_relation_is_deterministic,
+};
 pub use raises::{conjuncts, exact_decimal, is_deterministic, may_raise, runs_on_any_row};
 pub use walk::{MAX_DEPTH, check_depth};

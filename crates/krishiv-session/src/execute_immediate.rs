@@ -170,13 +170,15 @@ impl Session {
                     .await?
             }
             statement => {
-                let class = krishiv_sql::classify(&statement);
+                let class = krishiv_sql::classify_with(&statement, &env.parser);
                 // The text of the statement does not see a running script's locals (Spark's
                 // `EXECUTE IMMEDIATE` runs it apart from the script); its arguments did.
                 let plain = self.with_locals(Vec::new());
                 let mut env = plain.query_env();
                 env.identifier_spans = identifier_spans.into();
                 env.identifier_written = identifier_written.into();
+                // `system.queries` records the statement under its text and class (P3-T063 N3).
+                env.statement_class = Some(class.name());
                 plain.authorize_statement(&statement, class, &env).await?;
                 Box::pin(plain.run_statement(statement, env, &bound, &inner_text)).await?
             }
@@ -501,6 +503,9 @@ fn render_literal(value: &Literal, escaped_strings: bool) -> Result<String, Kris
         // `INTERVAL '3' DAY`: the literal's own SQL keeps the interval's fields.
         | Literal::YearMonthInterval { .. }
         | Literal::DayTimeInterval { .. } => Ok(value.to_string()),
+        Literal::Array { .. } | Literal::KeyValueMap { .. } | Literal::Struct { .. } => {
+            Err(unsupported("an array, map or struct type"))
+        }
         _ => Err(unsupported("this type")),
     }
 }
