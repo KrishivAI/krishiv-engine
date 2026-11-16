@@ -57,9 +57,9 @@ use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
 use krishiv_plan::{
-    AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionKind, Grouping, JoinCondition, JoinKind,
-    Literal, LogicalPlan, PlanNode, ResolvedExpr, ResolvedFunction, may_raise,
-    partial_state_columns,
+    AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionId, FunctionKind, Grouping,
+    JoinCondition, JoinKind, Literal, LogicalPlan, PlanNode, ResolvedExpr, ResolvedFunction,
+    may_raise, partial_state_columns,
 };
 use krishiv_types::DataType;
 
@@ -625,6 +625,10 @@ pub(crate) fn refusal_of_call(
     null_supplying: bool,
 ) -> Result<(), String> {
     let name = f.id.name();
+    // By identity, never by name: a session UDAF named `sum` is not `sum`.
+    if !matches!(f.id, FunctionId::Registry { .. }) {
+        return Err(format!("{name} is not a built-in aggregate"));
+    }
     if f.args.iter().any(|a| {
         !is_deterministic(a)
             || has_subquery(a)
@@ -824,5 +828,50 @@ fn without_calls(e: &Arc<Expr>, none: &Arc<Expr>) -> Arc<Expr> {
     match out {
         Ok(v) => v,
         Err(never) => match never {},
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sum_of_int(id: FunctionId) -> ResolvedFunction {
+        ResolvedFunction {
+            id,
+            kind: FunctionKind::Aggregate,
+            args: vec![Arc::new(Expr::new(ExprNode::Resolved(
+                ResolvedExpr::Column(BoundColumn {
+                    id: AttrId(1),
+                    name: "x".to_owned(),
+                    data_type: DataType::Integer,
+                    nullable: true,
+                }),
+            )))],
+            distinct: false,
+            filter: None,
+            within_group: Vec::new(),
+            data_type: DataType::Long,
+            nullable: true,
+            deterministic: true,
+        }
+    }
+
+    #[test]
+    fn only_registry_aggregates_run_below_a_join() {
+        let side = RelStats::default();
+        let builtin = sum_of_int(FunctionId::Registry {
+            name: "sum".to_owned(),
+            id: 1,
+        });
+        assert_eq!(refusal_of_call(&builtin, &side, false), Ok(()));
+        // A session UDAF named `sum` is refused by identity, before any rule keyed by name.
+        let udaf = sum_of_int(FunctionId::Udf {
+            name: "sum".to_owned(),
+            version: 1,
+        });
+        assert_eq!(
+            refusal_of_call(&udaf, &side, false),
+            Err("sum is not a built-in aggregate".to_owned())
+        );
     }
 }
