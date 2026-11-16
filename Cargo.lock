@@ -3051,6 +3051,7 @@ dependencies = [
  "insta",
  "krishiv-common",
  "krishiv-plan",
+ "krishiv-sql",
  "krishiv-types",
  "prost",
  "prost-reflect",
@@ -3547,6 +3548,7 @@ dependencies = [
  "krishiv-types",
  "object_store",
  "prost",
+ "tempfile",
  "tokio",
  "turmoil",
 ]
