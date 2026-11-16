@@ -52,6 +52,13 @@ pub struct FileTable {
     /// What each [`sample_distinct`](Self::sample_distinct) call did, in
     /// order; shared by the clones of the table.
     outcomes: Arc<Mutex<Vec<super::ndv_sample::SampleOutcome>>>,
+    /// Column sets a key count proved unique (design P2b A5 (d)); shared by
+    /// the clones of the table.
+    keys: Arc<Mutex<Vec<Vec<String>>>>,
+    /// Column sets the optimizer asked to have counted, not yet taken.
+    wanted: Arc<Mutex<Vec<Vec<String>>>>,
+    /// What each [`discover_unique`](Self::discover_unique) call did.
+    key_outcomes: Arc<Mutex<Vec<super::key_count::KeyOutcome>>>,
 }
 
 impl FileTable {
@@ -156,6 +163,9 @@ impl FileTable {
             scan_options,
             sampled: Arc::default(),
             outcomes: Arc::default(),
+            keys: Arc::default(),
+            wanted: Arc::default(),
+            key_outcomes: Arc::default(),
         })
     }
 }
@@ -181,6 +191,20 @@ impl TableProvider for FileTable {
 
     fn scan_units(&self) -> Option<u64> {
         self.units
+    }
+
+    fn unique_keys(&self) -> Vec<Vec<String>> {
+        self.keys
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn want_unique(&self, columns: &[String]) {
+        let mut wanted = self.wanted.lock().unwrap_or_else(PoisonError::into_inner);
+        if !wanted.iter().any(|w| w.as_slice() == columns) {
+            wanted.push(columns.to_vec());
+        }
     }
 }
 
@@ -267,6 +291,42 @@ impl FileTable {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(outcome);
+    }
+
+    /// The column sets the optimizer asked to have counted since the last
+    /// call ([`TableProvider::want_unique`]), in the order asked.
+    #[must_use]
+    pub fn take_wanted(&self) -> Vec<Vec<String>> {
+        std::mem::take(&mut *self.wanted.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    /// What the table's key counts did (design P2b A5 (d)), in order.
+    #[must_use]
+    pub fn key_outcomes(&self) -> Vec<super::key_count::KeyOutcome> {
+        self.key_outcomes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Keeps `outcome` for [`Self::key_outcomes`] and returns it.
+    pub(super) fn keep_outcome(
+        &self,
+        outcome: super::key_count::KeyOutcome,
+    ) -> super::key_count::KeyOutcome {
+        self.key_outcomes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(outcome.clone());
+        outcome
+    }
+
+    /// Keeps `columns` (sorted) as a proven key.
+    pub(super) fn keep_key(&self, columns: &[String]) {
+        let mut keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
+        if !keys.iter().any(|k| k.as_slice() == columns) {
+            keys.push(columns.to_vec());
+        }
     }
 
     /// Keeps the distinct count `sample` gives `name` in a table of `rows`.

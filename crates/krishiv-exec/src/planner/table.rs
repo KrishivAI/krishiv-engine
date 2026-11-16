@@ -73,6 +73,25 @@ pub trait TableProvider: Send + Sync + fmt::Debug {
         let _ = op;
         None
     }
+
+    /// Sets of column names, each unique among the table's rows whose
+    /// columns of the set are all non-NULL (a fact, never an estimate:
+    /// [`Statistics::unique_keys`]). None by default; a [`FileTable`]
+    /// reports the sets a key count proved (design P2b A5 (d)).
+    ///
+    /// [`FileTable`]: super::FileTable
+    fn unique_keys(&self) -> Vec<Vec<String>> {
+        Vec::new()
+    }
+
+    /// The optimizer wants `columns` (sorted names) proven unique
+    /// ([`Statistics::want_unique`]): a request the session may answer with
+    /// a key count. Ignored by default; a [`FileTable`] keeps it.
+    ///
+    /// [`FileTable`]: super::FileTable
+    fn want_unique(&self, columns: &[String]) {
+        let _ = columns;
+    }
 }
 
 /// Finds the provider of the table a resolved scan reads, at the version
@@ -93,6 +112,19 @@ pub struct ProviderStatistics(pub Arc<dyn TableProviderResolver>);
 impl Statistics for ProviderStatistics {
     fn table(&self, scan: &Scan) -> Option<TableStats> {
         self.0.provider(scan).ok()?.statistics()
+    }
+
+    fn unique_keys(&self, scan: &Scan) -> Vec<Vec<String>> {
+        self.0
+            .provider(scan)
+            .map(|p| p.unique_keys())
+            .unwrap_or_default()
+    }
+
+    fn want_unique(&self, scan: &Scan, columns: &[String]) {
+        if let Ok(p) = self.0.provider(scan) {
+            p.want_unique(columns);
+        }
     }
 }
 

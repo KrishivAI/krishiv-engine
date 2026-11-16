@@ -32,6 +32,7 @@ pub(crate) mod eval;
 mod explain;
 mod file_table;
 mod join;
+mod key_count;
 mod late_fetch;
 mod ndv_sample;
 pub(crate) mod nodes;
@@ -60,6 +61,7 @@ pub use build::DefaultPlanner;
 pub(crate) use build::concat_schemas;
 pub use explain::ExplainNode;
 pub use file_table::FileTable;
+pub use key_count::{KeyOptions, KeyOutcome, KeyResult, KeyUnknown};
 pub use ndv_sample::{SampleOptions, SampleOutcome, SampleResult};
 pub use row_level::{
     CardinalityRule, RowIdScan, RowLevelCapabilities, RowLevelCounts, RowLevelOperation,

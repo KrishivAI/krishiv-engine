@@ -24,6 +24,7 @@ mod fused_probe;
 mod group_code;
 mod group_limit;
 mod hints;
+mod key_count;
 mod late_fetch;
 mod late_payload;
 mod listing;
