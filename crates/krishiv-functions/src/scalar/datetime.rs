@@ -279,22 +279,32 @@ fn reserve<T>(len: usize) -> Result<Vec<T>, KrishivError> {
     Ok(out)
 }
 
-/// The zone of each row of a zone column; a NULL is `None`. Runs of equal
-/// names resolve once.
+/// The zone of each row of a zone column; a NULL is `None`. Each distinct
+/// name resolves once per column, so its rows share one zone (and one offset
+/// table) even when more names alternate than the per-thread zone cache holds.
+/// A row with the previous row's name reuses its zone without hashing.
 fn column_zones(names: &StringArray) -> Result<Vec<Option<ZoneRef>>, KrishivError> {
     let mut out = reserve(names.len())?;
+    let mut seen: std::collections::HashMap<&str, ZoneRef> = std::collections::HashMap::new();
     let mut last: Option<(&str, ZoneRef)> = None;
     for name in names.iter() {
         out.push(match name {
             None => None,
-            Some(n) => match last {
-                Some((seen, ref zone)) if seen == n => Some(zone.clone()),
+            Some(n) => Some(match &last {
+                Some((prev, zone)) if *prev == n => zone.clone(),
                 _ => {
-                    let zone = resolve_zone(n)?;
+                    let zone = match seen.get(n) {
+                        Some(zone) => zone.clone(),
+                        None => {
+                            let zone = resolve_zone(n)?;
+                            seen.insert(n, zone.clone());
+                            zone
+                        }
+                    };
                     last = Some((n, zone.clone()));
-                    Some(zone)
+                    zone
                 }
-            },
+            }),
         });
     }
     Ok(out)

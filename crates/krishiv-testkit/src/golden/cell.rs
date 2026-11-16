@@ -297,7 +297,9 @@ impl CellFormat {
 
 /// A variant's JSON in `zone`; bytes that are not a variant show the error.
 fn variant_json(metadata: &[u8], value: &[u8], zone: &TimeZone) -> String {
-    let rules = krishiv_kernels::datetime::ZoneRef::Named(zone.clone());
+    let rules = krishiv_kernels::datetime::ZoneRef::Named(krishiv_kernels::datetime::Region::new(
+        zone.clone(),
+    ));
     let mut out = String::new();
     match krishiv_types::variant::VariantRef::new(metadata, value)
         .and_then(|v| krishiv_kernels::variant::write_json(&v, &rules, &mut out))

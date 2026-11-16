@@ -23,6 +23,7 @@ pub mod sender;
 pub mod server;
 pub mod service;
 pub mod status;
+pub mod udf;
 
 pub use auth::{
     ACT_AS_GROUPS, ACT_AS_TENANT, ACT_AS_TOKEN, ACT_AS_USER, AuthLayer, Check, ConnectAuth, Rpc,
@@ -33,3 +34,4 @@ pub use operation::{ExecuteLimits, Operation, Operations};
 pub use server::{ConnectServer, ConnectServerConfig};
 pub use service::ConnectService;
 pub use status::status_of;
+pub use udf::{RunnerConf, SessionUdfRuntime, UdfHost};

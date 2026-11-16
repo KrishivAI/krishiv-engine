@@ -12,7 +12,7 @@ use krishiv_connect::coverage::{
     all,
 };
 use krishiv_connect::translate::{
-    TranslateConf, expression_from_bytes, relation_from_bytes, translate_plan,
+    TranslateConf, expression_from_bytes, relation_from_bytes, translate_command,
 };
 use prost_reflect::DescriptorPool;
 
@@ -83,11 +83,16 @@ fn coverage_matches_translator() {
             row,
         );
     }
-    // Plan.command is field 2; a Command holds the arm.
+    // Plan.command is field 2; a Command holds the arm. The server runs commands through
+    // `translate_command`.
     for row in COMMAND_ROWS {
         let plan = field(2, &field(row.number, &[]));
         let decoded = krishiv_connect::wire::decode_plan(&plan).expect("a plan");
-        refused(&translate_plan(&decoded, &conf).map(|_| ()), row);
+        let Some(krishiv_connect::proto::v4_3::plan::OpType::Command(command)) = &decoded.op_type
+        else {
+            panic!("a command");
+        };
+        refused(&translate_command(command).map(|_| ()), row);
     }
     // Expression.literal is field 1.
     for row in LITERAL_ROWS {

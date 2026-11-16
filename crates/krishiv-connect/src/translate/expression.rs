@@ -79,6 +79,7 @@ impl Translator<'_> {
             }
             ExprType::UnresolvedFunction(f) => self.function(f)?,
             ExprType::CallFunction(c) => self.call_function(c)?,
+            ExprType::CommonInlineUserDefinedFunction(f) => self.inline_udf(f)?,
             ExprType::NamedArgumentExpression(_) => {
                 // Only as an argument of a function call (`call_args`); Spark's analyzer
                 // refuses it anywhere else.
@@ -238,6 +239,29 @@ impl Translator<'_> {
             name,
             qualifier: parts,
             arg_names,
+            args,
+            distinct: false,
+            filter: None,
+            within_group: Vec::new(),
+        }))
+    }
+
+    /// `CommonInlineUserDefinedFunction`: Spark's `transformPythonFuncExpression`. The Python UDF's call
+    /// is the function the host names for it, over the translated arguments (`udf`).
+    fn inline_udf(
+        &mut self,
+        f: &crate::proto::v4_3::CommonInlineUserDefinedFunction,
+    ) -> Result<ExprNode> {
+        let udf = super::python_udf(f)?;
+        let mut args = Vec::with_capacity(f.arguments.len());
+        for a in &f.arguments {
+            args.push(self.expression(a)?);
+        }
+        let name = self.inline_python_udf(&udf)?;
+        Ok(ExprNode::Function(FunctionCall {
+            name: name.name,
+            qualifier: name.qualifier,
+            arg_names: Vec::new(),
             args,
             distinct: false,
             filter: None,

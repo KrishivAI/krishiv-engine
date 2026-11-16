@@ -19,10 +19,12 @@ futures = { workspace = true, features = ["std"] }
 bytes = { workspace = true, features = ["std"] }
 krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
 krishiv-connect = { path = "../krishiv-connect", version = "=0.2.0" }
+krishiv-exec = { path = "../krishiv-exec", version = "=0.2.0" }
 krishiv-memory = { path = "../krishiv-memory", version = "=0.2.0" }
 krishiv-plan = { path = "../krishiv-plan", version = "=0.2.0" }
 krishiv-session = { path = "../krishiv-session", version = "=0.2.0", features = ["unstable-ir", "tls"] }
 krishiv-types = { path = "../krishiv-types", version = "=0.2.0" }
+krishiv-udf-pool = { path = "../krishiv-udf-pool", version = "=0.2.0" }
 getrandom.workspace = true
 prost = { workspace = true, features = ["derive", "std"] }
 prost-types = { workspace = true, features = ["std"] }
@@ -42,6 +44,7 @@ aws-lc-rs.workspace = true
 hyper-util = { workspace = true, features = ["tokio"] }
 tower = { workspace = true, features = ["util"] }
 tempfile.workspace = true
+krishiv-udf-sandbox = { path = "../krishiv-udf-sandbox" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time"] }
 tonic = { workspace = true, features = ["channel", "server", "router", "codegen"] }
 tonic-prost.workspace = true
