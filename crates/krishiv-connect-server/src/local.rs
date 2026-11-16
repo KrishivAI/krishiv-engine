@@ -53,10 +53,13 @@ impl LocalServer {
     /// `INTERNAL_ERROR` when no random source, port or thread is available.
     pub fn start(base: Session) -> Result<Self, KrishivError> {
         let token = new_token()?;
-        let config = AuthConfig::from_settings([(
-            "spark.connect.authenticate.token",
-            token.expose_secret(),
-        )])?;
+        // No failure throttle: every local client shares the peer address 127.0.0.1, so another
+        // process sending wrong tokens would lock the owner out. The token is 256 random bits, so
+        // guessing it is not a risk the throttle has to cover.
+        let config = AuthConfig::from_settings([
+            ("spark.connect.authenticate.token", token.expose_secret()),
+            ("krishiv.auth.failureThrottle.maxFailures", "0"),
+        ])?;
         let auth = Arc::new(ServerAuth::new(&config)?);
         let (std_listener, v6_listener) = bind_loopback()?;
         let addr = std_listener

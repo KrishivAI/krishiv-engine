@@ -207,3 +207,24 @@ async fn a_connection_without_the_token_is_refused() {
         .await
         .expect("join");
 }
+
+/// Every local client has the peer address 127.0.0.1: wrong tokens from another process must not
+/// lock the owner out (the default failure throttle would after 20).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wrong_tokens_never_lock_the_owner_out() {
+    let mut server = LocalServer::start(Session::new().expect("session")).expect("start");
+    let addr = server.addr();
+    let token = server.token().to_owned();
+    for _ in 0..25 {
+        let wrong = config_rpc(addr, Some(&"0".repeat(64)))
+            .await
+            .expect_err("wrong token");
+        assert_eq!(wrong.code(), Code::Unauthenticated);
+    }
+    config_rpc(addr, Some(&token))
+        .await
+        .expect("the right token still works after 25 wrong ones");
+    tokio::task::spawn_blocking(move || server.stop().expect("stop"))
+        .await
+        .expect("join");
+}
