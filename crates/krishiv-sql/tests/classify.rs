@@ -12,8 +12,8 @@ use std::collections::BTreeSet;
 
 use krishiv_sql::ast::Statement;
 use krishiv_sql::{
-    ExplainKind, ParserOptions, StatementClass, classify, explain_kind, parse_statement,
-    statement_queries,
+    ExplainKind, ParserOptions, StatementClass, classify, explain_kind, needs_cluster_manage,
+    parse_statement, statement_queries, statement_reads,
 };
 
 const GOLDENS: &str = include_str!("fixtures/statement-classes.tsv");
@@ -243,6 +243,11 @@ fn explain_kind_and_statement_queries() {
         explain_kind(&parse("EXPLAIN ANALYZE SELECT 1")),
         Some(ExplainKind::Analyze)
     );
+    // `EXPLAIN FORMAT JSON` shows the analysis without running anything.
+    assert_eq!(
+        explain_kind(&parse("EXPLAIN FORMAT JSON INSERT INTO t SELECT 1")),
+        Some(ExplainKind::Plan)
+    );
     let count = |sql: &str| statement_queries(&parse(sql)).map(|q| q.len());
     for (sql, n) in [
         ("SELECT 1", Some(1)),
@@ -264,6 +269,12 @@ fn explain_kind_and_statement_queries() {
         (
             "MERGE INTO t USING s ON t.k = s.k WHEN MATCHED THEN DELETE",
             Some(0),
+        ),
+        // A subquery in a MERGE expression fails closed (review m1).
+        (
+            "MERGE INTO t USING s ON t.k = s.k AND s.k IN (SELECT k FROM x) \
+             WHEN MATCHED THEN DELETE",
+            None,
         ),
         ("CACHE TABLE c AS SELECT 1", Some(1)),
         ("CACHE TABLE c", Some(0)),
@@ -287,4 +298,125 @@ fn explain_kind_and_statement_queries() {
         panic!("not an EXPLAIN");
     };
     assert_eq!(statement_queries(&e.statement).map(|q| q.len()), Some(1));
+}
+
+/// A subquery anywhere in a MERGE's expressions leaves its reads unknown (`None`), in both entry
+/// points: `ON`, a clause condition, an `UPDATE SET` value and an inserted value (review m1).
+#[test]
+fn merge_subquery_condition_is_partial() {
+    let options = ParserOptions::default();
+    let parse = |sql: &str| parse_statement(sql, &options).unwrap();
+    let head = "MERGE INTO t USING s ON t.k = s.k";
+    for sql in [
+        "MERGE INTO t USING s ON t.k = (SELECT max(k) FROM x) WHEN MATCHED THEN DELETE".to_owned(),
+        format!("{head} WHEN MATCHED AND EXISTS (SELECT 1 FROM x) THEN DELETE"),
+        format!("{head} WHEN MATCHED THEN UPDATE SET v = (SELECT max(v) FROM x)"),
+        format!("{head} WHEN NOT MATCHED THEN INSERT (k, v) VALUES (s.k, (SELECT 1 FROM x))"),
+        format!("{head} WHEN NOT MATCHED BY SOURCE AND t.k IN (SELECT k FROM x) THEN DELETE"),
+        format!("EXPLAIN {head} WHEN MATCHED AND EXISTS (SELECT 1 FROM x) THEN DELETE"),
+    ] {
+        let statement = parse(&sql);
+        assert!(statement_queries(&statement).is_none(), "{sql}");
+        assert!(statement_reads(&statement).is_none(), "{sql}");
+    }
+    // `INSERT ... REPLACE WHERE|ON` with a subquery fails closed in both entry points too (review m3);
+    // without one, both list the inserted query.
+    for (sql, n) in [
+        (
+            "INSERT INTO t REPLACE WHERE k IN (SELECT k FROM x) SELECT * FROM s",
+            None,
+        ),
+        (
+            "INSERT INTO t REPLACE ON t.k = (SELECT max(k) FROM x) SELECT * FROM s",
+            None,
+        ),
+        ("INSERT INTO t REPLACE WHERE k > 0 SELECT * FROM s", Some(1)),
+    ] {
+        let statement = parse(sql);
+        assert_eq!(statement_queries(&statement).map(|q| q.len()), n, "{sql}");
+        assert_eq!(statement_reads(&statement).map(|q| q.len()), n, "{sql}");
+    }
+    // A valid MERGE without subqueries keeps its source query.
+    let plain = parse(&format!(
+        "{head} WHEN MATCHED AND s.v > 0 THEN UPDATE SET v = s.v + 1 \
+         WHEN NOT MATCHED THEN INSERT *"
+    ));
+    assert_eq!(statement_reads(&plain).map(|r| r.len()), Some(0));
+}
+
+/// The reads of a statement whose reads are not whole queries but are local (design §3.2): the
+/// queries are built from the statement's own expressions.
+#[test]
+fn statement_reads_cover_the_local_shapes() {
+    let options = ParserOptions::default();
+    let count =
+        |sql: &str| statement_reads(&parse_statement(sql, &options).unwrap()).map(|r| r.len());
+    for (sql, n) in [
+        ("SELECT 1", Some(1)),
+        (
+            "FROM s INSERT INTO t SELECT a INSERT INTO u SELECT b WHERE a > 0",
+            Some(2),
+        ),
+        ("UPDATE t SET a = 1", Some(2)),
+        (
+            "UPDATE t AS x SET a = (SELECT max(b) FROM s), b = DEFAULT WHERE x.k IN (SELECT k FROM s)",
+            Some(3),
+        ),
+        // A run analyzes `SELECT 1 FROM t` (review m1).
+        ("DELETE FROM t", Some(1)),
+        ("DELETE FROM t WHERE k IN (SELECT k FROM s)", Some(1)),
+        (
+            "EXPLAIN DELETE FROM t WHERE k IN (SELECT k FROM s)",
+            Some(1),
+        ),
+        (
+            "INSERT INTO t REPLACE WHERE k IN (SELECT k FROM s) SELECT * FROM s",
+            None,
+        ),
+        ("EXECUTE IMMEDIATE 'SELECT 1'", None),
+        ("SET VAR v = (SELECT 1)", None),
+        ("DECLARE v INT DEFAULT (SELECT 1)", None),
+    ] {
+        assert_eq!(count(sql), n, "{sql}");
+    }
+}
+
+/// Dynamic SQL needs no `Manage` on the cluster wherever it stands (review B1, design §4 N3 decisions),
+/// though its reported class is `ADMIN`; literal text needs what the statement it holds needs.
+#[test]
+fn dynamic_sql_needs_no_cluster_manage() {
+    let options = ParserOptions::default();
+    let parse = |sql: &str| parse_statement(sql, &options).unwrap();
+    for (sql, manage) in [
+        ("EXECUTE IMMEDIATE stmt", false),
+        (
+            "BEGIN DECLARE s STRING DEFAULT 'SELECT 1'; EXECUTE IMMEDIATE s; END",
+            false,
+        ),
+        ("EXPLAIN ANALYZE EXECUTE IMMEDIATE stmt", false),
+        (
+            "EXECUTE IMMEDIATE 'SELECT 1 AS IDENTIFIER(:s ''.'' :c)' USING 'd' AS s, 'c' AS c",
+            false,
+        ),
+        ("EXECUTE IMMEDIATE 'SELEC 1'", false),
+        ("EXECUTE IMMEDIATE 'CLEAR CACHE'", true),
+        ("BEGIN EXECUTE IMMEDIATE 'CLEAR CACHE'; END", true),
+        (
+            "BEGIN EXECUTE IMMEDIATE stmt; ADD JAR '/tmp/a.jar'; END",
+            true,
+        ),
+        ("CLEAR CACHE", true),
+        ("SELECT 1", false),
+    ] {
+        let statement = parse(sql);
+        assert_eq!(needs_cluster_manage(&statement, &options), manage, "{sql}");
+        // Each statement here but the plain query is reported `ADMIN`.
+        if sql != "SELECT 1" {
+            assert_eq!(
+                krishiv_sql::classify_with(&statement, &options),
+                StatementClass::Admin,
+                "{sql}"
+            );
+        }
+    }
 }
