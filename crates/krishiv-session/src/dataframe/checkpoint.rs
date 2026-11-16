@@ -14,12 +14,16 @@ use arrow_schema::SchemaRef;
 use krishiv_common::config::CHECKPOINT_DIR;
 use krishiv_common::error::{KrishivError, LegacyErrorTemp3016};
 use krishiv_memory::{ConsumerId, MemoryPool, Reservation, SpillConfig, SpillFile, SpillManager};
-use krishiv_plan::{LogicalPlan, Origin, PlanId};
+use krishiv_plan::{LogicalPlan, Origin, PlanId, PlanNode, ReadSource};
 use krishiv_types::batch::Batch;
 
 use super::{DataFrame, StorageLevel};
 use crate::cache::{CacheDisk, batch_bytes};
 use crate::session::Session;
+
+/// The table name of the leaf that stands for a lazy checkpoint until its rows are taken; it is
+/// replaced before any analysis, so it is never looked up.
+const LAZY_LEAF: &str = "__krishiv_lazy_checkpoint";
 
 /// A checkpoint whose rows are not taken yet: `marker` is the plan id of the node standing in for
 /// the snapshot in the result's plan, `source` the frame that produces the rows.
@@ -142,7 +146,13 @@ impl DataFrame {
             .on_executor(async move { df.analysis().await.map(|_| ()) })
             .await?;
         let marker = self.session.next_plan_id();
-        let plan = LogicalPlan::clone(&self.plan).with_origin(Origin::plan(marker));
+        // A leaf, not the source's plan: the lineage stays with `LazyCheckpoint::source` until the
+        // rows are taken, so frames built on this one (a loop of joins) do not carry it along.
+        let plan = LogicalPlan::new(PlanNode::Read(ReadSource::Table {
+            name: vec![LAZY_LEAF.to_owned()],
+            options: std::collections::BTreeMap::new(),
+        }))
+        .with_origin(Origin::plan(marker));
         let mut out = Self {
             plan: Arc::new(plan),
             analysis: Arc::default(),

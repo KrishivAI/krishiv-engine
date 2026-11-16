@@ -321,7 +321,6 @@ fn fifty_rounds_of_join_and_eager_checkpoint_keep_the_plan_bounded() {
 /// lineage in its plan until an action takes the rows, and later frames built on it carry it on
 /// (the plan grows about quadratically over 50 rounds). Open: P3-T083 / PR-47.
 #[test]
-#[ignore = "PR-47: a lazy checkpoint keeps its lineage in the plan"]
 fn fifty_rounds_of_join_and_lazy_checkpoint_keep_the_plan_bounded() {
     assert_bounded(&[(false, true), (false, false)]);
 }
