@@ -77,7 +77,8 @@ pub static PAYLOAD_ABOVE_AGGREGATE: ConfigEntry = ConfigEntry {
           (TPC-H q10's customer and nation columns) group by the joining key of the other side \
           instead, and join the dimension above the aggregate, so the aggregate and the joins \
           below it hold narrow rows. Applies only where the dimension's key is proven unique \
-          (the plan groups it, or the table's statistics declare it), no aggregate argument can \
+          (the plan groups it, the table's statistics declare it, or a key count proved it: \
+          `krishiv.optimizer.discoverKeys`), no aggregate argument can \
           raise or overflow, and statistics say the join keeps most rows. Results are the same \
           either way. Off until its timed A/B passes.",
     scope: Scope::Session,
