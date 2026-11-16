@@ -1110,9 +1110,12 @@ async fn bind_files(
         .await
         .map_err(fail)?
         .into_iter()
-        // Spark reads every file column as nullable.
+        // Spark reads every file column as nullable, nested elements,
+        // values and fields too (`HadoopFsRelation` over
+        // `dataSchema.asNullable`), as the scan's rows are typed.
         .map(|c| TableColumn {
             nullable: true,
+            data_type: c.data_type.as_nullable(),
             ..c
         })
         .collect();
