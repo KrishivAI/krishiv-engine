@@ -73,13 +73,6 @@ struct Task {
     need: usize,
     /// Groups to presize the index for on the first start (0 once done).
     presize: usize,
-    /// Groups per partition of `parts` to presize the row pages and
-    /// accumulators for on the first start (empty once done, or when the
-    /// pool refused `pages`).
-    part_groups: Vec<usize>,
-    /// The bytes `part_groups` adds, reserved with `need` when the pool
-    /// grants both at once; otherwise the task grows as it merges.
-    pages: usize,
 }
 
 impl Task {
@@ -88,13 +81,6 @@ impl Task {
     fn run(&mut self, query: &QueryContext) -> Result<Option<usize>> {
         if self.presize > 0 {
             self.table.presize(std::mem::take(&mut self.presize))?;
-            // Non-empty only when the scheduler granted `pages` with `need`
-            // (it clears them otherwise), so these bytes are reserved.
-            let groups = std::mem::take(&mut self.part_groups);
-            if !groups.is_empty() {
-                self.table.presize_parts(self.parts.start, &groups, CHUNK);
-                shrink_to(&mut self.reservation, self.table.memory_size());
-            }
         }
         let Self {
             parts,
@@ -250,17 +236,6 @@ impl HashAggregate {
                     queue.push_front(task);
                     stalled = running.is_empty();
                     break;
-                }
-                if task.pages > 0 {
-                    // Presized pages only when the pool grants them now;
-                    // never a reason to wait.
-                    let pages = std::mem::take(&mut task.pages);
-                    if task.reservation.try_grow(task.need + pages).is_ok() {
-                        task.need = 0;
-                        bump(&self.counters.row_final_presized, 1);
-                    } else {
-                        task.part_groups.clear();
-                    }
                 }
                 if task.need > 0 {
                     if task.reservation.try_grow(task.need).is_err() {
@@ -493,7 +468,6 @@ impl HashAggregate {
             vec![FinalTask {
                 parts: 0..wide,
                 groups: inputs.iter().map(RowTable::len).max().unwrap_or(0),
-                part_groups: Vec::new(),
             }]
         };
         let ranges: Vec<Range<usize>> = plan.iter().map(|t| t.parts.clone()).collect();
@@ -520,8 +494,6 @@ impl HashAggregate {
                 .with_probes(g.probes.clone());
             queue.push_back(Task {
                 need: table.projected_presize(t.groups),
-                pages: table.projected_parts(&t.part_groups, CHUNK),
-                part_groups: t.part_groups,
                 presize: t.groups.max(1),
                 at: (0, t.parts.start, 0),
                 parts: t.parts,

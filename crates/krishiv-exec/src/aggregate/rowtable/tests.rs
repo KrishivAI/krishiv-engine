@@ -155,59 +155,6 @@ fn a_large_merge_table_takes_the_salted_index() {
     }
 }
 
-/// Row pages and accumulators presized for each partition's groups take
-/// every merged group without growing, within their projection, and give
-/// the same groups and states as an unpresized merge; a one-partition table
-/// takes the sum.
-#[test]
-fn presized_pages_merge_without_growing() {
-    let core = core();
-    let seed = HashSeed::new(Some(5));
-    let input = |keys: Range<i64>| {
-        let mut t = RowTable::new(&core, &seed, Mode::Append, true, RADIX_BITS).unwrap();
-        for s in keys.clone().step_by(4096) {
-            apply(&mut t, &batch(&core, s..(s + 4096).min(keys.end)));
-        }
-        t
-    };
-    let inputs = [input(0..30_000), input(20_000..40_000)];
-    let plain = merged(&core, &seed, &inputs, 40_000);
-    let groups: Vec<usize> = (0..PARTS).map(|p| plain.part_len(p)).collect();
-    assert_eq!(groups.iter().sum::<usize>(), 40_000);
-
-    let mut out = RowTable::new(&core, &seed, Mode::Grow, false, RADIX_BITS).unwrap();
-    let want = out.projected_presize(40_000) + out.projected_parts(&groups, 1024);
-    out.presize(40_000).unwrap();
-    out.presize_parts(0, &groups, 1024);
-    assert!(out.memory_size() <= want, "{} > {want}", out.memory_size());
-    let caps: Vec<usize> = out.parts.iter().map(|p| p.rows.capacity()).collect();
-    for t in &inputs {
-        for p in 0..PARTS {
-            for start in (0..t.part_len(p)).step_by(1024) {
-                let end = (start + 1024).min(t.part_len(p));
-                let c = t.merge_chunk(p, start..end).unwrap();
-                out.apply_merge(t, &c).unwrap();
-            }
-        }
-    }
-    let after: Vec<usize> = out.parts.iter().map(|p| p.rows.capacity()).collect();
-    assert_eq!(after, caps, "a presized row page grew");
-    assert!(out.memory_size() <= want, "{} > {want}", out.memory_size());
-    let want_rows = plain.output_batch(&plain.ids(0..plain.len())).unwrap();
-    assert_eq!(out.output_batch(&out.ids(0..out.len())).unwrap(), want_rows);
-
-    // One partition: the sum, whatever the start.
-    let mut one = RowTable::new(&core, &seed, Mode::Grow, false, 0).unwrap();
-    let (before, add) = (one.memory_size(), one.projected_parts(&[10, 20], 1024));
-    one.presize_parts(3, &[10, 20], 1024);
-    assert!(one.parts[0].rows.capacity() >= 60 * one.stride);
-    assert!(
-        one.memory_size() <= before + add,
-        "{} > {before} + {add}",
-        one.memory_size()
-    );
-}
-
 /// A detailed profile counts the salted merge's lookups and key compares.
 #[test]
 fn a_salted_merge_counts_its_probes() {
