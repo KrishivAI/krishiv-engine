@@ -2107,14 +2107,62 @@ MERGE_SCHEMA_CASES: list[tuple[str, str, str, dict[str, str]]] = [
 ]
 
 
+# More cases (review 2 of PR-37e): (case, table, SELECT list, options, save mode, writer), the
+# writer `save` (a DataFrame `save(path)`) or `saveAsTable` (an append to the catalog table at
+# the path). `short` is `(id BIGINT, n SMALLINT)`, `varchar` is `(id BIGINT, v VARCHAR(5))`.
+MERGE_SCHEMA_MORE: list[tuple[str, str, str, dict[str, str], str, str]] = [
+    (
+        "bigint_into_int_overwrite_no_merge",
+        "plain",
+        MERGE_SCHEMA_BASE.replace("CAST(5 AS INT) AS n", "CAST(5 AS BIGINT) AS n"),
+        {},
+        "overwrite",
+        "save",
+    ),
+    ("int_into_short_no_merge", "short", "CAST(5 AS BIGINT) AS id, CAST(5 AS INT) AS n", {}, "append", "save"),
+    (
+        "int_into_short_merge",
+        "short",
+        "CAST(5 AS BIGINT) AS id, CAST(5 AS INT) AS n",
+        {"mergeSchema": "true"},
+        "append",
+        "save",
+    ),
+    (
+        "widening_bigint_into_int_no_merge",
+        "widening",
+        "CAST(5 AS BIGINT) AS id, CAST(5 AS BIGINT) AS i",
+        {},
+        "append",
+        "save",
+    ),
+    (
+        "bigint_into_int_save_as_table_append",
+        "plain",
+        MERGE_SCHEMA_BASE.replace("CAST(5 AS INT) AS n", "CAST(5 AS BIGINT) AS n"),
+        {},
+        "append",
+        "saveAsTable",
+    ),
+    ("string_into_varchar", "varchar", "CAST(5 AS BIGINT) AS id, 'ab' AS v", {}, "append", "save"),
+]
+
+
 def merge_schema_cases(spark: SparkSession, base: str) -> dict:
-    """Each case of ``MERGE_SCHEMA_CASES`` on a fresh table: the error, or the commit's
-    parameters, the table's column types after it, and its rows."""
+    """Each case of ``MERGE_SCHEMA_CASES`` and ``MERGE_SCHEMA_MORE`` on a fresh table: the error,
+    or the commit's parameters, the table's column types after it, and its rows."""
     out: dict = {}
-    for name, kind, select, options in MERGE_SCHEMA_CASES:
+    cases = [(n, k, sel, o, "append", "save") for n, k, sel, o in MERGE_SCHEMA_CASES] + MERGE_SCHEMA_MORE
+    for name, kind, select, options, mode, writer in cases:
         path = os.path.join(base, "merge-schema-" + name)
         shutil.rmtree(path, ignore_errors=True)
-        if kind == "plain":
+        if kind == "short":
+            spark.sql(f"CREATE TABLE delta.`{path}` (id BIGINT, n SMALLINT) USING delta")
+            spark.sql(f"INSERT INTO delta.`{path}` VALUES (1, 1)")
+        elif kind == "varchar":
+            spark.sql(f"CREATE TABLE delta.`{path}` (id BIGINT, v VARCHAR(5)) USING delta")
+            spark.sql(f"INSERT INTO delta.`{path}` VALUES (1, 'a')")
+        elif kind == "plain":
             spark.sql(f"CREATE TABLE delta.`{path}` (id BIGINT, n INT, d DECIMAL(10,2), s STRUCT<a: INT>) USING delta")
             spark.sql(f"INSERT INTO delta.`{path}` VALUES (1, 1, 1.00, named_struct('a', 1))")
         else:
@@ -2123,12 +2171,18 @@ def merge_schema_cases(spark: SparkSession, base: str) -> dict:
                 "TBLPROPERTIES ('delta.enableTypeWidening' = 'true')"
             )
             spark.sql(f"INSERT INTO delta.`{path}` VALUES (1, 1)")
-        w = spark.sql(f"SELECT {select}").write.format("delta").mode("append")
+        w = spark.sql(f"SELECT {select}").write.format("delta").mode(mode)
         for k, v in options.items():
             w = w.option(k, v)
-        case: dict = {"table": kind, "select": select, "options": options}
+        case: dict = {"table": kind, "select": select, "options": options, "mode": mode, "writer": writer}
         try:
-            w.save(path)
+            if writer == "saveAsTable":
+                table = "merge_schema_" + name
+                spark.sql(f"DROP TABLE IF EXISTS {table}")
+                spark.sql(f"CREATE TABLE {table} USING delta LOCATION '{path}'")
+                w.saveAsTable(table)
+            else:
+                w.save(path)
             case["error"] = None
             info = commits(path)[-1]["commitInfo"]
             case["commit"] = {
