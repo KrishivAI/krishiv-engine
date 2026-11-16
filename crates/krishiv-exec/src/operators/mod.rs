@@ -43,7 +43,7 @@ pub(crate) mod select;
 mod sort;
 mod spilled_scan;
 pub(crate) mod table_write;
-mod union;
+pub(crate) mod union;
 
 pub use expand::{Expand, NullOf};
 pub use expr::{FnPredicate, Predicate, ScalarExpr};

@@ -1250,13 +1250,20 @@ impl Instantiation<'_> {
                 let mut nodes = Vec::with_capacity(inputs.len());
                 let mut schema: Option<SchemaRef> = None;
                 for i in inputs {
-                    let built = self.node(i)?;
+                    let mut built = self.node(i)?;
                     match &schema {
-                        None => schema = Some(built.schema),
+                        None => schema = Some(Arc::clone(&built.schema)),
                         Some(s) if !crate::physical::same_columns(s, &built.schema) => {
                             return Err(internal(
                                 "union inputs of different physical types".to_owned(),
                             ));
+                        }
+                        // Fields that differ only in labels take the union's.
+                        Some(s) if s.fields() != built.schema.fields() => {
+                            built = operator(
+                                built,
+                                crate::operators::union::UnionRelabel::new(Arc::clone(s)),
+                            );
                         }
                         Some(_) => {}
                     }
