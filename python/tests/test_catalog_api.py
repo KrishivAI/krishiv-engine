@@ -90,7 +90,7 @@ def test_functions(spark: SparkSession) -> None:
 
 def test_argument_types_are_checked(spark: SparkSession) -> None:
     with pytest.raises(TypeError):
-        spark.catalog.getTable(1)  # type: ignore[arg-type]
+        spark.catalog.getTable(1)  # ty: ignore[invalid-argument-type]
 
 
 def test_dataframe_tables_are_not_found_by_name(spark: SparkSession) -> None:
