@@ -124,24 +124,30 @@ impl SchemaMapper {
     /// type change of a projected column; `FAILED_READ_FILE.NO_HINT` caused
     /// by `_LEGACY_ERROR_TEMP_2093` for an ambiguous case-insensitive match.
     pub fn new(req: &ScanRequest, file_schema: SchemaRef, path: &str) -> Result<Self> {
-        let without_ids = match req.mapping {
+        let without_ids = match &req.mapping {
             FieldMapping::FieldIdOr(w) if !has_field_ids(file_schema.fields()) => Some(w),
             _ => None,
         };
-        if without_ids == Some(WithoutFieldIds::Refuse) {
-            return Err(KrishivUnsupportedFeature {
-                feature: format!(
-                    "reading the file {path}, which has no field ids, through a name mapping"
-                ),
+        let file_schema = match without_ids {
+            Some(WithoutFieldIds::Refuse) => {
+                return Err(KrishivUnsupportedFeature {
+                    feature: format!(
+                        "reading the file {path}, which has no field ids, without a rule for it"
+                    ),
+                }
+                .into());
             }
-            .into());
-        }
+            // The mapped ids are written onto the file's fields; the file is
+            // then read by id like any other.
+            Some(WithoutFieldIds::Names(m)) => m.apply(&file_schema),
+            _ => file_schema,
+        };
         let resolver = Arc::new(Resolver {
             table: Arc::clone(&req.table_schema),
             file: file_schema,
             mapping: req.mapping.clone(),
             path: path.to_owned(),
-            positional: without_ids == Some(WithoutFieldIds::Position),
+            positional: matches!(without_ids, Some(WithoutFieldIds::Position)),
         });
         let projected = project_schema(&req.table_schema, &req.projection)?;
         let mut file_projection = Vec::new();
