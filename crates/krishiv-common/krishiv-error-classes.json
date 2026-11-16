@@ -1,4 +1,11 @@
 {
+  "KRISHIV_ADMIN_PRECONDITION_FAILED" : {
+    "message" : [
+      "The change was refused because the object is not in the state the request expects (<reason>)."
+    ],
+    "sqlState" : "55000",
+    "audience" : "operator"
+  },
   "KRISHIV_CATALOG_FAILURE" : {
     "message" : [
       "The catalog <catalog> failed while loading <relationName>."
@@ -185,6 +192,13 @@
     "sqlState" : "22023",
     "audience" : "operator"
   },
+  "KRISHIV_RESOURCE_GROUP_CONFIG_READ_ONLY" : {
+    "message" : [
+      "The resource group file <path> cannot be changed here: <reason>."
+    ],
+    "sqlState" : "55000",
+    "audience" : "operator"
+  },
   "KRISHIV_RESOURCE_GROUP_QUEUE_FULL" : {
     "message" : [
       "The resource group <group> already has <maxQueued> queued queries, so this query is refused. Retry later, or raise \"maxQueued\" of the group."
@@ -223,6 +237,12 @@
     ],
     "sqlState" : "58030",
     "audience" : "operator"
+  },
+  "KRISHIV_TIME_TRAVEL_NOT_FOUND" : {
+    "message" : [
+      "<message>"
+    ],
+    "sqlState" : "42K0E"
   },
   "KRISHIV_UNKNOWN_CONFIG" : {
     "message" : [
