@@ -57,7 +57,7 @@ pub struct UcTable {
     pub data_source_format: Option<String>,
     /// `storage_location`.
     pub storage_location: Option<String>,
-    /// `table_type` (`MANAGED`, `EXTERNAL`).
+    /// `table_type` (`MANAGED`, `EXTERNAL`, `STREAMING_TABLE`, `MATERIALIZED_VIEW`, `METRIC_VIEW`, `VIEW`); only the first two are read.
     pub table_type: Option<String>,
     /// The string-valued entries of `properties`.
     pub properties: BTreeMap<String, String>,

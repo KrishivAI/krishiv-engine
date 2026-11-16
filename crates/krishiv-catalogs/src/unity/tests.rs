@@ -533,7 +533,7 @@ fn views_and_other_table_types_are_table_operation_refusals_before_the_location_
     ] {
         // A recorded view body: no storage location, a view definition.
         let body = format!(
-            r#"{{"name": "v", "table_type": "{kind}", "view_definition": "select 1", "storage_location": null,
+            r#"{{"name": "v", "table_type": "{kind}", "data_source_format": "DELTA", "view_definition": "select 1", "storage_location": null,
                 "columns": [{{"name": "a", "type_text": "int", "position": 0}}]}}"#
         );
         let server = serve(move |_| Reply::Json(200, body.clone()));
@@ -542,6 +542,10 @@ fn views_and_other_table_types_are_table_operation_refusals_before_the_location_
             class(&e),
             ErrorClass::UnsupportedFeatureTableOperation,
             "{kind}"
+        );
+        assert!(
+            e.to_string().contains("only MANAGED and EXTERNAL"),
+            "{kind}: {e}"
         );
     }
 }
