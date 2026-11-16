@@ -445,7 +445,9 @@ impl<'a> Walker<'a> {
                 bounds: _,
                 seed: _,
             }
-            | PlanNode::ReplicateRows { input, .. } => Ok(Rule::Same(self.plan(input, offset)?)),
+            | PlanNode::ReplicateRows { input, .. }
+            // `observe` passes its rows through; its metrics are reported apart, not as columns of the output.
+            | PlanNode::CollectMetrics { input, .. } => Ok(Rule::Same(self.plan(input, offset)?)),
             PlanNode::SubqueryAlias { input, alias, .. } => self.alias(p, input, alias, offset),
             PlanNode::WithCte { input, ctes } => {
                 for c in ctes {

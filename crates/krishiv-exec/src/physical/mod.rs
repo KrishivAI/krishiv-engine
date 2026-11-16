@@ -483,6 +483,31 @@ pub enum PhysNode {
         /// The seed of partition 0.
         seed: i64,
     },
+    /// `Dataset.observe`: the rows of `input` pass through unchanged while
+    /// each partition folds them into the metrics' aggregate states, which
+    /// the query's result reports under `name`. `measure` is plain data,
+    /// not a child: `Project(Aggregate(Project(OneRow)))` with `OneRow`
+    /// standing for the input's rows, as the planner lowers the metrics
+    /// as a global aggregate (the first projection computes the aggregates'
+    /// arguments, the aggregate is the partial phase's plan, the last
+    /// projection computes the metrics from its results).
+    CollectMetrics {
+        /// The input.
+        input: Box<PhysNode>,
+        /// The observation's name.
+        name: String,
+        /// The metrics' computation over the input's columns.
+        measure: Box<PhysNode>,
+        /// The planner's rank of this node among the plan's observing
+        /// nodes, in plan order (Spark's `CollectMetricsExec.collect` lets
+        /// the last of a name win). Plan data, so every worker numbers the
+        /// instances alike.
+        instance: u32,
+        /// At most this many rows are folded: a `LIMIT` above (through
+        /// row-for-row operators only) takes no more, and Spark counts the
+        /// rows its consumer pulled.
+        limit: Option<u64>,
+    },
     /// Each row of `input` `count` times (`INTERSECT ALL`, `EXCEPT ALL`).
     ReplicateRows {
         /// The input.
@@ -1153,6 +1178,7 @@ plan_data!(enum PhysNode {
     Filter { input, layout, predicate, subqueries },
     Project { input, layout, items, nullable, subqueries },
     Limit { input, offset, limit },
+    CollectMetrics { input, name, measure, instance, limit },
     ReplicateRows { input, layout, count, subqueries },
     Sample { input, lower, upper, seed },
     PythonEval { input, layout, calls },
@@ -1269,6 +1295,7 @@ impl PhysNode {
             | Self::WindowGroupLimit { input, .. }
             | Self::Aggregate { input, .. }
             | Self::PythonEval { input, .. }
+            | Self::CollectMetrics { input, .. }
             | Self::PythonMap { input, .. }
             | Self::PythonGroupMap { input, .. }
             | Self::PythonCoGroupMap { input, .. }
@@ -1283,6 +1310,18 @@ impl PhysNode {
             Self::UnionLoop {
                 anchor, recursive, ..
             } => vec![anchor.as_ref(), recursive.as_ref()],
+        }
+    }
+
+    /// The plan of an observation's metrics (`CollectMetrics`): plain data
+    /// that is not a child (it reads no relation), listed for the codec and
+    /// the feature scan.
+    #[must_use]
+    #[doc(hidden)]
+    pub fn measure(&self) -> Option<&PhysNode> {
+        match self {
+            Self::CollectMetrics { measure, .. } => Some(measure),
+            _ => None,
         }
     }
 
@@ -1321,6 +1360,7 @@ impl PhysNode {
             | Self::WindowGroupLimit { input, .. }
             | Self::Aggregate { input, .. }
             | Self::PythonEval { input, .. }
+            | Self::CollectMetrics { input, .. }
             | Self::PythonMap { input, .. }
             | Self::PythonGroupMap { input, .. }
             | Self::PythonCoGroupMap { input, .. }
