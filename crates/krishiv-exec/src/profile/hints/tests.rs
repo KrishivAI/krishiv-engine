@@ -128,9 +128,9 @@ fn hint_skew_raised_at_the_boundary() {
         hints(&agg_plan(), &m, &s)
     };
     // 4 drivers, the slowest 400 of 1,000 ms: 1.6x the even share, under 4x.
-    assert!(skewed("HashAggregate", 400, 1000, 4).is_empty());
+    assert!(skewed("Window", 400, 1000, 4).is_empty());
     // The slowest 1,000 of 1,000 ms over 4 drivers: exactly 4x.
-    let h = skewed("HashAggregate", 1000, 1000, 4);
+    let h = skewed("Window", 1000, 1000, 4);
     assert_eq!(h.len(), 1);
     assert_eq!(h[0].code, HintCode::Skew);
     assert!(
@@ -139,13 +139,18 @@ fn hint_skew_raised_at_the_boundary() {
         h[0].message
     );
     // Under the time floor, or one driver: quiet.
-    assert!(skewed("HashAggregate", 199, 199, 4).is_empty());
-    assert!(skewed("HashAggregate", 1000, 1000, 1).is_empty());
-    // A scan balances by morsels: never skew.
-    assert!(skewed("FileScan", 1000, 1000, 4).is_empty());
-    for name in ["HashJoinBuild", "HashJoinProbe", "Window", "ExchangeRead"] {
-        assert_eq!(skewed(name, 1000, 1000, 4).len(), 1, "{name}");
+    assert!(skewed("Window", 199, 199, 4).is_empty());
+    assert!(skewed("Window", 1000, 1000, 1).is_empty());
+    // Scans, hash joins and hash aggregates share morsels on a node: never skew (TPC-H q04, q05, q21).
+    for name in [
+        "FileScan",
+        "HashJoinBuild",
+        "HashJoinProbe",
+        "HashAggregate",
+    ] {
+        assert!(skewed(name, 1000, 1000, 4).is_empty(), "{name}");
     }
+    assert_eq!(skewed("ExchangeRead", 1000, 1000, 4).len(), 1);
 }
 
 #[test]
@@ -156,7 +161,7 @@ fn skew_by_rows_needs_the_row_floor() {
         op(
             &mut m,
             1,
-            "HashAggregate",
+            "Window",
             0,
             OperatorMetrics {
                 drivers: 8,

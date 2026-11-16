@@ -173,14 +173,11 @@ impl HintSettings {
 }
 
 /// Operators whose drivers each own a key range, so morsel stealing cannot rebalance them: a slow driver
-/// is key skew. A scan's drivers share morsels, so a slow scan driver is I/O, not skew.
-const KEY_PARTITIONED: [&str; 5] = [
-    "HashJoinBuild",
-    "HashJoinProbe",
-    "HashAggregate",
-    "Window",
-    "ExchangeRead",
-];
+/// is key skew. A scan's drivers, a hash join's build and probe and a hash aggregate's partial and final phases
+/// share morsels on one node, so one driver doing most of the work there is scheduling, not key skew (TPC-H
+/// SF1 q04, q05 and q21 raised it on those with the first list; they are not listed). What remains owns its
+/// keys: a window's partitions and an exchange consumer's reduce partitions.
+const KEY_PARTITIONED: [&str; 2] = ["Window", "ExchangeRead"];
 
 fn find(plan: &ProfileNode, id: u32) -> Option<&ProfileNode> {
     if plan.id == Some(id) {
