@@ -503,6 +503,9 @@ fn render_literal(value: &Literal, escaped_strings: bool) -> Result<String, Kris
         // `INTERVAL '3' DAY`: the literal's own SQL keeps the interval's fields.
         | Literal::YearMonthInterval { .. }
         | Literal::DayTimeInterval { .. } => Ok(value.to_string()),
+        Literal::Array { .. } | Literal::KeyValueMap { .. } | Literal::Struct { .. } => {
+            Err(unsupported("an array, map or struct type"))
+        }
         _ => Err(unsupported("this type")),
     }
 }

@@ -485,6 +485,8 @@ impl Resolver<'_> {
                     PlanNode::Scan(_)
                     | PlanNode::Sql { .. }
                     | PlanNode::Read(ReadSource::Files { .. }) => self.uncacheable = true,
+                    // `Read(Local)` is cacheable on purpose (content-addressed,
+                    // so a kept analysis of it stays valid): it falls to the wildcard.
                     PlanNode::Read(ReadSource::Table { name, .. }) => {
                         self.read_tables.push(name.clone());
                     }
@@ -952,7 +954,7 @@ impl Resolver<'_> {
             PlanNode::TableFunction { name, args } => self.table_function(p, name, args, env),
             // Listed, not wildcarded: a new `PlanNode` variant must be
             // placed here or in `leaf_node` to compile.
-            PlanNode::Read(ReadSource::Files { .. })
+            PlanNode::Read(ReadSource::Files { .. } | ReadSource::Local(_))
             | PlanNode::Sql { .. }
             | PlanNode::Scan(_)
             | PlanNode::CteRef(_)
@@ -980,6 +982,7 @@ impl Resolver<'_> {
                     None => Err(unsupported("reading files by path", o)),
                 }
             }
+            PlanNode::Read(ReadSource::Local(l)) => self.local(p, l),
             PlanNode::Sql { .. } => {
                 let root = self.b.sql.get(&addr(&**p)).cloned();
                 let env0 = self.root_env.clone();
@@ -991,7 +994,7 @@ impl Resolver<'_> {
             PlanNode::Scan(s) => {
                 let name = match &s.source {
                     ReadSource::Table { name, .. } => name.clone(),
-                    ReadSource::Files { .. } => Vec::new(),
+                    ReadSource::Files { .. } | ReadSource::Local(_) => Vec::new(),
                 };
                 let source = self.b.scans.get(&name).copied();
                 // Bind checked every scan of a table; one it did not bind

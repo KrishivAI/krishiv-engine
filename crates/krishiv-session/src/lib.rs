@@ -70,6 +70,8 @@ mod identifier_clause;
 mod introspection;
 #[cfg(test)]
 mod lineage_tests;
+#[cfg(feature = "unstable-ir")]
+mod local_relation;
 mod locals;
 #[cfg(feature = "telemetry-logs")]
 pub mod logging;
