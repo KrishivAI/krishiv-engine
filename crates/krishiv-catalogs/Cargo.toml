@@ -16,6 +16,9 @@ workspace = true
 hive = ["dep:thrift", "dep:krishiv-plan", "dep:krishiv-types", "dep:tokio"]
 # The Iceberg REST catalog client (async reqwest over rustls on a thread of its own). Off by default.
 iceberg-rest = ["dep:reqwest", "dep:serde_json", "dep:tokio", "dep:url", "tokio/time", "tokio/sync"]
+# The Unity Catalog read-only client (async reqwest over rustls on a thread of its own). Off by default; shares no code with
+# `iceberg-rest`, so either feature builds without the other.
+unity = ["dep:reqwest", "dep:serde_json", "dep:tokio", "dep:url", "dep:krishiv-plan", "dep:krishiv-types", "tokio/time", "tokio/sync"]
 
 # The embedded SQLite catalog (`rusqlite` with the bundled C amalgamation: a C build). Off by default.
 sqlite = ["dep:rusqlite", "dep:serde_json", "dep:krishiv-plan", "dep:krishiv-types"]

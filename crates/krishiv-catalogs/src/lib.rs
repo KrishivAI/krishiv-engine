@@ -7,8 +7,13 @@
 
 #[cfg(feature = "hive")]
 pub mod hive;
+#[cfg(test)]
+#[cfg(any(feature = "iceberg-rest", feature = "unity"))]
+mod http_test_server;
 #[cfg(feature = "iceberg-rest")]
 pub mod iceberg_rest;
 pub mod location;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
+#[cfg(feature = "unity")]
+pub mod unity;
