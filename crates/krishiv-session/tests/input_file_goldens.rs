@@ -616,3 +616,35 @@ fn a_metadata_data_column_gives_the_no_file_value() {
     let (rows, _) = run_sql(&s, &sql).unwrap();
     assert_eq!(rows, vec![vec![String::new(), "2".to_owned()]]);
 }
+
+/// The check counts a CTE reference's definition once per scope: 30 chained CTEs that each read the previous one
+/// twice analyse in milliseconds (counted per reference, 2^30 counts). Analysis only: the physical planner's first
+/// pass still plans each deterministic reference on its own (a separate follow-up).
+#[test]
+fn chained_ctes_are_counted_once_per_scope() {
+    let (_dir, _root, s) = small();
+    let mut sql = String::from("WITH c0 AS (SELECT id FROM a)");
+    for i in 1..=30 {
+        let p = i - 1;
+        sql.push_str(&format!(
+            ", c{i} AS (SELECT l.id FROM c{p} l JOIN c{p} r ON l.id = r.id)"
+        ));
+    }
+    let start = std::time::Instant::now();
+    let class = block_on(async {
+        s.sql(&format!("{sql} SELECT input_file_name() FROM c30"))
+            .await?
+            .schema()
+            .await
+    })
+    .err()
+    .map(|e| e.error_class().name().to_owned());
+    // c1 joins two reads of `a`: two sources under the call.
+    assert_eq!(
+        class.as_deref(),
+        Some("MULTI_SOURCES_UNSUPPORTED_FOR_EXPRESSION")
+    );
+    let elapsed = start.elapsed();
+    // Linear is milliseconds; the old count was hours. The bound leaves room for coverage builds.
+    assert!(elapsed < std::time::Duration::from_secs(5), "{elapsed:?}");
+}

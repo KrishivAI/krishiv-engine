@@ -138,6 +138,7 @@ pub(super) fn check(
         seen: std::collections::HashSet::new(),
         memo: HashMap::new(),
         counting: std::collections::HashSet::new(),
+        cuts: 0,
         bodies: std::collections::HashSet::new(),
     };
     c.walk(root)
@@ -145,6 +146,13 @@ pub(super) fn check(
 
 /// The `WITH` definitions in scope, innermost last.
 type Ctes = [(String, Arc<LogicalPlan>)];
+
+/// The identity of a scope of [`Ctes`]: each definition's name and plan address, outermost first.
+type ScopeKey = Vec<(String, usize)>;
+
+fn scope_key(ctes: &Ctes) -> ScopeKey {
+    ctes.iter().map(|(n, d)| (n.clone(), addr(&**d))).collect()
+}
 
 /// A scope of [`Ctes`] shared by the relations under it.
 type Scope = Arc<Vec<(String, Arc<LogicalPlan>)>>;
@@ -154,10 +162,13 @@ struct Checker<'a> {
     ctx: &'a super::AnalysisContext,
     /// Relations walked, by (address, CTE scope depth).
     seen: std::collections::HashSet<(usize, usize)>,
-    /// Source counts of relations outside any `WITH` scope, by address.
-    memo: HashMap<usize, u32>,
+    /// Source counts of relations, by (address, the CTE scope they were counted in): every reference to a
+    /// definition counts it under the same scope, so chained CTEs that read the previous one twice stay linear.
+    memo: HashMap<(usize, ScopeKey), u32>,
     /// The CTE definitions being counted (a recursive reference counts 0).
     counting: std::collections::HashSet<usize>,
+    /// Recursive references cut so far: a count that cut one depends on what was being counted, so it is not kept.
+    cuts: u64,
     /// The SQL functions whose bodies were walked or are being searched, by routine name.
     bodies: std::collections::HashSet<String>,
 }
@@ -270,11 +281,11 @@ impl Checker<'_> {
 
     /// The sources Spark's check counts under `p` (`checkNumInputFileBlockSources`) after inlining.
     fn sources(&mut self, p: &LogicalPlan, ctes: &Ctes) -> u32 {
-        if ctes.is_empty()
-            && let Some(n) = self.memo.get(&addr(p))
-        {
+        let key = (addr(p), scope_key(ctes));
+        if let Some(n) = self.memo.get(&key) {
             return *n;
         }
+        let cuts = self.cuts;
         let n = match &p.node {
             PlanNode::Read(ReadSource::Table { name, .. }) => self.table(name, ctes),
             PlanNode::Read(ReadSource::Files { .. })
@@ -319,8 +330,8 @@ impl Checker<'_> {
                     .fold(0_u32, |n, c| n.saturating_add(self.sources(c, ctes)))
             }
         };
-        if ctes.is_empty() {
-            self.memo.insert(addr(p), n);
+        if self.cuts == cuts {
+            self.memo.insert(key, n);
         }
         n
     }
@@ -340,6 +351,7 @@ impl Checker<'_> {
             let def = Arc::clone(&ctes[i].1);
             // A recursive reference reads the rows of the definition being counted.
             if !self.counting.insert(addr(&*def)) {
+                self.cuts += 1;
                 return 0;
             }
             let n = self.sources(&def, &ctes[..i]);
