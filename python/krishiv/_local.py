@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import atexit
-import weakref
 from typing import TYPE_CHECKING
 
 from krishiv import _native
@@ -15,8 +14,10 @@ if TYPE_CHECKING:
 
 __all__ = ["LocalConnect", "start_local"]
 
-# Servers still running at interpreter exit are stopped there: no thread or port outlives it.
-_RUNNING: weakref.WeakSet[LocalConnect] = weakref.WeakSet()
+# Servers not yet stopped are held here, so a dropped handle does not stop one a client still uses
+# (``remote(krishiv.start_local().url)``); the exit hook stops them: no thread or port outlives
+# the interpreter.
+_RUNNING: set[LocalConnect] = set()
 
 
 def _stop_all() -> None:
@@ -46,7 +47,7 @@ class LocalConnect:
 
     @property
     def port(self) -> int:
-        """The loopback port (``127.0.0.1``) the server listens on."""
+        """The loopback port the server listens on (``127.0.0.1`` and ``[::1]``, nothing else)."""
         return self._native.port
 
     @property
@@ -78,9 +79,6 @@ class LocalConnect:
     ) -> None:
         self.stop()
 
-    def __str__(self) -> str:
-        return self.url
-
     def __repr__(self) -> str:
         return f"LocalConnect(port={self.port}, running={self.running})"
 
@@ -88,8 +86,9 @@ class LocalConnect:
 def start_local(config: Mapping[str, str] | None = None) -> LocalConnect:
     """Start an in-process Spark Connect server and return its handle.
 
-    The server listens on a free port of ``127.0.0.1`` only. A stock ``pyspark-client`` connects
-    with ``SparkSession.builder.remote(server.url).getOrCreate()``. ``config`` holds ``krishiv.*``
+    The server listens on a free port of the loopback addresses ``127.0.0.1`` and ``[::1]``
+    only. A stock ``pyspark-client`` connects with
+    ``SparkSession.builder.remote(server.url).getOrCreate()``. ``config`` holds ``krishiv.*``
     settings of the server's sessions.
 
     This is not ``SparkSession.builder.remote("local")``, which starts a JVM and is not supported.

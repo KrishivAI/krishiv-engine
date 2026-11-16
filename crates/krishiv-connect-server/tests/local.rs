@@ -137,6 +137,49 @@ fn binds_loopback_only_and_the_string_names_the_port_and_token() {
     server.stop().expect("stop");
 }
 
+fn has_ipv6_loopback() -> bool {
+    TcpListener::bind("[::1]:0").is_ok()
+}
+
+/// `localhost` may resolve to `::1` first: nobody else may be able to hold `[::1]:<port>` and
+/// receive the token a client sends there.
+#[test]
+fn the_ipv6_loopback_of_the_port_is_ours_too() {
+    if !has_ipv6_loopback() {
+        return;
+    }
+    let mut server = LocalServer::start(Session::new().expect("session")).expect("start");
+    let port = server.addr().port();
+    assert!(
+        TcpListener::bind(("::1", port)).is_err(),
+        "[::1]:{port} is bindable by another process while the server runs"
+    );
+    assert!(server.addrs().iter().all(|a| a.ip().is_loopback()));
+    assert!(server.addrs().iter().any(SocketAddr::is_ipv6));
+    server.stop().expect("stop");
+    TcpListener::bind(("::1", port)).expect("[::1] is free after stop");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_token_works_over_the_ipv6_loopback() {
+    if !has_ipv6_loopback() {
+        return;
+    }
+    let mut server = LocalServer::start(Session::new().expect("session")).expect("start");
+    let v6 = server
+        .addrs()
+        .into_iter()
+        .find(SocketAddr::is_ipv6)
+        .expect("v6");
+    let token = server.token().to_owned();
+    let status = config_rpc(v6, None).await.expect_err("no token");
+    assert_eq!(status.code(), Code::Unauthenticated);
+    config_rpc(v6, Some(&token)).await.expect("token");
+    tokio::task::spawn_blocking(move || server.stop().expect("stop"))
+        .await
+        .expect("join");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_connection_without_the_token_is_refused() {
     let mut server = LocalServer::start(Session::new().expect("session")).expect("start");

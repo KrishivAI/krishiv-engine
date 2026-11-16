@@ -5,6 +5,7 @@
 
 use std::sync::Mutex;
 
+use krishiv_common::secret::SecretString;
 use krishiv_connect_server::LocalServer;
 use krishiv_session::Session;
 use pyo3::prelude::*;
@@ -13,12 +14,20 @@ use crate::errors::to_py;
 
 /// A running local Connect server.
 #[pyclass(name = "LocalConnectServer", module = "krishiv._native", frozen)]
-#[derive(Debug)]
 pub struct PyLocalConnectServer {
     server: Mutex<LocalServer>,
     port: u16,
-    token: String,
-    connection_string: String,
+    token: SecretString,
+    connection_string: SecretString,
+}
+
+impl std::fmt::Debug for PyLocalConnectServer {
+    /// Never the token or the connection string, which holds it.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PyLocalConnectServer")
+            .field("port", &self.port)
+            .finish_non_exhaustive()
+    }
 }
 
 #[pymethods]
@@ -37,8 +46,8 @@ impl PyLocalConnectServer {
             .map_err(|e| to_py(py, &e))?;
         Ok(Self {
             port: server.addr().port(),
-            token: server.token().to_owned(),
-            connection_string: server.connection_string(),
+            token: SecretString::new(server.token()),
+            connection_string: SecretString::new(server.connection_string()),
             server: Mutex::new(server),
         })
     }
@@ -52,13 +61,13 @@ impl PyLocalConnectServer {
     /// The token every RPC must carry.
     #[getter]
     fn token(&self) -> &str {
-        &self.token
+        self.token.expose_secret()
     }
 
     /// `sc://localhost:<port>/;token=<token>`.
     #[getter]
     fn connection_string(&self) -> &str {
-        &self.connection_string
+        self.connection_string.expose_secret()
     }
 
     /// Whether the server is serving.

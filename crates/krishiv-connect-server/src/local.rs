@@ -2,7 +2,10 @@
 //! The in-process Connect server of `krishiv.start_local()` (P3-T016): one Connect listener on a
 //! free loopback port, owned by one thread of its own, that a stock `pyspark-client` connects to.
 //!
-//! * The listener binds `127.0.0.1:0` and nothing else.
+//! * The listener binds `127.0.0.1:0` and, on the same port, `[::1]` (`localhost` may resolve to
+//!   `::1` first, and a client sends the token to the first address that answers: no other process
+//!   may be able to hold that address). `[::1]` is skipped only when the host has no IPv6 loopback.
+//!   Nothing else is bound.
 //! * Every RPC authenticates with a token generated for this start (32 random bytes, hex) through
 //!   the server's one authenticator (`spark.connect.authenticate.token`, compared in constant time
 //!   as a SHA-256 digest); a connection without it is `UNAUTHENTICATED`. The token is the caller's
@@ -11,7 +14,7 @@
 //! * [`LocalServer::stop`] (and `Drop`) drains the server, joins its thread and drops the engine
 //!   runtime: no port stays bound and no thread stays alive.
 
-use std::net::{Ipv4Addr, SocketAddr, TcpListener as StdListener};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener as StdListener};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
@@ -37,6 +40,7 @@ fn internal(message: String) -> KrishivError {
 #[derive(Debug)]
 pub struct LocalServer {
     addr: SocketAddr,
+    addr6: Option<SocketAddr>,
     token: SecretString,
     stop: Option<oneshot::Sender<()>>,
     thread: Option<JoinHandle<Result<(), KrishivError>>>,
@@ -54,19 +58,16 @@ impl LocalServer {
             token.expose_secret(),
         )])?;
         let auth = Arc::new(ServerAuth::new(&config)?);
-        let std_listener = StdListener::bind((Ipv4Addr::LOCALHOST, 0))
-            .map_err(|e| internal(format!("cannot bind a loopback port: {e}")))?;
-        std_listener
-            .set_nonblocking(true)
-            .map_err(|e| internal(format!("cannot configure the listener: {e}")))?;
+        let (std_listener, v6_listener) = bind_loopback()?;
         let addr = std_listener
             .local_addr()
             .map_err(|e| internal(format!("cannot read the listener address: {e}")))?;
+        let addr6 = v6_listener.as_ref().and_then(|l| l.local_addr().ok());
         let (stop, stopped) = oneshot::channel::<()>();
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), KrishivError>>();
         let thread = std::thread::Builder::new()
             .name("krishiv-local-connect".to_owned())
-            .spawn(move || run(base, auth, std_listener, stopped, &ready_tx))
+            .spawn(move || run(base, &auth, std_listener, v6_listener, stopped, &ready_tx))
             .map_err(|e| internal(format!("cannot start the server thread: {e}")))?;
         match ready_rx.recv() {
             Ok(Ok(())) => {}
@@ -83,6 +84,7 @@ impl LocalServer {
         }
         Ok(Self {
             addr,
+            addr6,
             token,
             stop: Some(stop),
             thread: Some(thread),
@@ -93,6 +95,13 @@ impl LocalServer {
     #[must_use]
     pub fn addr(&self) -> SocketAddr {
         self.addr
+    }
+
+    /// Every address the server listens on: `127.0.0.1:<port>` and, when the host has one,
+    /// `[::1]:<port>`.
+    #[must_use]
+    pub fn addrs(&self) -> Vec<SocketAddr> {
+        std::iter::once(self.addr).chain(self.addr6).collect()
     }
 
     /// The token this server accepts.
@@ -141,6 +150,36 @@ impl Drop for LocalServer {
     }
 }
 
+/// Binds `127.0.0.1:0`, then `[::1]` on the same port (another port is tried when `::1` has that
+/// one taken). A host with no IPv6 loopback gets the IPv4 listener only. Both are non-blocking.
+fn bind_loopback() -> Result<(StdListener, Option<StdListener>), KrishivError> {
+    let fail = |what: &str, e: std::io::Error| internal(format!("{what}: {e}"));
+    for _ in 0..32 {
+        let v4 = StdListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .map_err(|e| fail("cannot bind a loopback port", e))?;
+        let port = v4
+            .local_addr()
+            .map_err(|e| fail("cannot read the listener address", e))?
+            .port();
+        let v6 = match StdListener::bind((Ipv6Addr::LOCALHOST, port)) {
+            Ok(l) => Some(l),
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => continue,
+            // No IPv6 loopback: `localhost` cannot reach `::1` either.
+            Err(_) => None,
+        };
+        v4.set_nonblocking(true)
+            .map_err(|e| fail("cannot configure the listener", e))?;
+        if let Some(l) = &v6 {
+            l.set_nonblocking(true)
+                .map_err(|e| fail("cannot configure the listener", e))?;
+        }
+        return Ok((v4, v6));
+    }
+    Err(internal(
+        "no loopback port is free on both 127.0.0.1 and ::1".to_owned(),
+    ))
+}
+
 /// A fresh token: 32 random bytes as 64 hex digits.
 fn new_token() -> Result<SecretString, KrishivError> {
     let mut bytes = [0_u8; 32];
@@ -160,8 +199,9 @@ fn new_token() -> Result<SecretString, KrishivError> {
 )]
 fn run(
     base: Session,
-    auth: Arc<ServerAuth>,
+    auth: &Arc<ServerAuth>,
     listener: StdListener,
+    listener6: Option<StdListener>,
     stopped: oneshot::Receiver<()>,
     ready: &std::sync::mpsc::Sender<Result<(), KrishivError>>,
 ) -> Result<(), KrishivError> {
@@ -177,21 +217,43 @@ fn run(
         }
     };
     let result = runtime.block_on(async {
-        let listener = tokio::net::TcpListener::from_std(listener)
-            .map_err(|e| internal(format!("cannot adopt the listener: {e}")))?;
         let manager = Arc::new(SessionManager::from_base(base, SessionLimits::default()));
         let config = ConnectServerConfig {
             // Nothing in flight outlives a stop for long: this is the user's own process.
             shutdown_timeout: std::time::Duration::from_secs(5),
             ..ConnectServerConfig::default()
         };
-        let server = ConnectServer::new(manager, config).with_auth(ConnectAuth::new(auth));
+        let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+        let serve_one = |listener: StdListener| {
+            let manager = Arc::clone(&manager);
+            let auth = Arc::clone(auth);
+            let config = config.clone();
+            let mut stop = stop_rx.clone();
+            async move {
+                let listener = tokio::net::TcpListener::from_std(listener)
+                    .map_err(|e| internal(format!("cannot adopt the listener: {e}")))?;
+                ConnectServer::new(manager, config)
+                    .with_auth(ConnectAuth::new(auth))
+                    .serve(listener, async move {
+                        let _ = stop.wait_for(|stopped| *stopped).await;
+                    })
+                    .await
+            }
+        };
+        let main = serve_one(listener);
+        let second = async {
+            match listener6 {
+                Some(l) => serve_one(l).await,
+                None => Ok(()),
+            }
+        };
+        let signal = async {
+            let _ = stopped.await;
+            let _ = stop_tx.send(true);
+        };
         let _ = ready.send(Ok(()));
-        server
-            .serve(listener, async {
-                let _ = stopped.await;
-            })
-            .await
+        let ((first, second), ()) = tokio::join!(async { tokio::join!(main, second) }, signal);
+        first.and(second)
     });
     // Connection tasks that still hold on end with the runtime.
     drop(runtime);

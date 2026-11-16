@@ -4,7 +4,7 @@ description: "Run a Spark Connect server inside your Python process and connect 
 
 # Connect stock PySpark to an in-process server
 
-`krishiv.start_local()` starts a Spark Connect server inside your Python process, on a free port of `127.0.0.1`, and returns a handle with the connection string. A stock `pyspark-client` connects to it with no JVM and no separate server process. Use it to run code written against the PySpark Connect API on Krishiv in a script, a notebook or a test.
+`krishiv.start_local()` starts a Spark Connect server inside your Python process, on a free port of the loopback addresses, and returns a handle with the connection string. A stock `pyspark-client` connects to it with no JVM and no separate server process. Use it to run code written against the PySpark Connect API on Krishiv in a script, a notebook or a test.
 
 ## Start a server and connect
 
@@ -15,13 +15,14 @@ from pyspark.sql import SparkSession  # pip install pyspark-client
 with krishiv.start_local() as server:
     spark = SparkSession.builder.remote(server.url).getOrCreate()
     spark.range(3).show()
-    spark.sql("SELECT id * 2 AS d FROM range(3)").show()
     spark.stop()
 ```
 
 `server.url` is `sc://localhost:<port>/;token=<token>`. The client sends the token with every request (`authorization: Bearer <token>`), and the server refuses a connection that does not carry it. The token is made for each `start_local()` call, so another local process that finds the port cannot use it.
 
-The host name is `localhost` on purpose: `pyspark-client` sends a token over a plain connection only to that name, and wants TLS for any other. The server itself listens on `127.0.0.1` and on no other address.
+The host name is `localhost` on purpose: `pyspark-client` sends a token over a plain connection only to that name, and wants TLS for any other. The server listens on `127.0.0.1` and `[::1]` (the two addresses `localhost` can mean, so that no other process can hold one of them and receive the token) and on no other address.
+
+`spark.sql(...)` through the client is not available yet: it needs Spark Connect commands (P3-T012). The DataFrame API (`range`, `select`, `join`, `groupBy`, `agg`) works.
 
 ## Stop it
 
