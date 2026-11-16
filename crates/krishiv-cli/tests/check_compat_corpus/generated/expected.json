@@ -289,18 +289,6 @@
  },
  {
   "file": "job21.py",
-  "line": 6,
-  "name": "bitmap_bucket_number",
-  "status": "not yet"
- },
- {
-  "file": "job21.py",
-  "line": 8,
-  "name": "bitmap_construct_agg",
-  "status": "not yet"
- },
- {
-  "file": "job21.py",
   "line": 9,
   "name": "kll_sketch_get_rank_bigint",
   "status": "not yet"
@@ -364,12 +352,6 @@
   "line": 5,
   "name": "legacy_fn_25",
   "status": "unknown"
- },
- {
-  "file": "job29.py",
-  "line": 8,
-  "name": "bitmap_bit_position",
-  "status": "not yet"
  },
  {
   "file": "q00.sql",
@@ -594,12 +576,6 @@
   "status": "unknown"
  },
  {
-  "file": "q15.sql",
-  "line": 4,
-  "name": "bitmap_bucket_number",
-  "status": "not yet"
- },
- {
   "file": "q16.sql",
   "line": 2,
   "name": "from_protobuf",
@@ -628,12 +604,6 @@
   "line": 3,
   "name": "legacy_fn_4",
   "status": "unknown"
- },
- {
-  "file": "q18.sql",
-  "line": 4,
-  "name": "bitmap_or_agg",
-  "status": "not yet"
  },
  {
   "file": "q19.sql",
@@ -751,12 +721,6 @@
  },
  {
   "file": "q25.sql",
-  "line": 3,
-  "name": "bitmap_bit_position",
-  "status": "not yet"
- },
- {
-  "file": "q25.sql",
   "line": 4,
   "name": "theta_union",
   "status": "not yet"
@@ -777,12 +741,6 @@
   "file": "q26.sql",
   "line": 3,
   "name": "tuple_union_theta_integer",
-  "status": "not yet"
- },
- {
-  "file": "q26.sql",
-  "line": 5,
-  "name": "bitmap_count",
   "status": "not yet"
  },
  {
