@@ -121,3 +121,45 @@ group = "User-defined functions"
 name = "Grouped-aggregate and iterator `pandas_udf`, `applyInPandas`, `mapInPandas`"
 status = "not yet"
 note = "The two `pandas_udf` forms fail with NOT_IMPLEMENTED (eval types 202 and 204); `applyInPandas` and `mapInPandas` do not exist on `DataFrame` and raise `AttributeError`."
+
+[[surface]]
+group = "Not covered"
+name = "RDD API, `SparkContext`, `SparkConf` and broadcast variables"
+status = "not yet"
+note = "The Python package has no `sparkContext`, `rdd` or `SparkConf`; use DataFrames and SQL."
+
+[[surface]]
+group = "Not covered"
+name = "`pyspark.pandas` (pandas API on Spark)"
+status = "not yet"
+note = "Not provided. `toPandas()` and scalar `pandas_udf` work."
+
+[[surface]]
+group = "Not covered"
+name = "`pyspark.ml` and MLlib"
+status = "not yet"
+note = "Not provided."
+
+[[surface]]
+group = "Not covered"
+name = "`spark-submit` and cluster managers (`master('yarn')`, `spark.executor.*` keys)"
+status = "not yet"
+note = "Not provided; a script runs in-process or against `krishiv server`."
+
+[[surface]]
+group = "Not covered"
+name = "Spark Streaming and Structured Streaming APIs in Python"
+status = "not yet"
+note = "Not available in 0.2."
+
+[[surface]]
+group = "Not covered"
+name = "XML file source (`format('xml')`)"
+status = "not yet"
+note = "Fails with DATA_SOURCE_NOT_FOUND: xml."
+
+[[surface]]
+group = "Not covered"
+name = "JDBC data source and Hive support"
+status = "not yet"
+note = "Not provided."

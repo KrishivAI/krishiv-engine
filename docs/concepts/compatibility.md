@@ -53,6 +53,18 @@ Status per surface. Anything not listed here is unknown and not supported.
 | Python `@udf` and scalar `pandas_udf` / `arrow_udf` | supported |  |
 | Grouped-aggregate and iterator `pandas_udf`, `applyInPandas`, `mapInPandas` | not yet | The two `pandas_udf` forms fail with NOT_IMPLEMENTED (eval types 202 and 204); `applyInPandas` and `mapInPandas` do not exist on `DataFrame` and raise `AttributeError`. |
 
+## Not covered
+
+| Surface | Status | Notes |
+| --- | --- | --- |
+| RDD API, `SparkContext`, `SparkConf` and broadcast variables | not yet | The Python package has no `sparkContext`, `rdd` or `SparkConf`; use DataFrames and SQL. |
+| `pyspark.pandas` (pandas API on Spark) | not yet | Not provided. `toPandas()` and scalar `pandas_udf` work. |
+| `pyspark.ml` and MLlib | not yet | Not provided. |
+| `spark-submit` and cluster managers (`master('yarn')`, `spark.executor.*` keys) | not yet | Not provided; a script runs in-process or against `krishiv server`. |
+| Spark Streaming and Structured Streaming APIs in Python | not yet | Not available in 0.2. |
+| XML file source (`format('xml')`) | not yet | Fails with DATA_SOURCE_NOT_FOUND: xml. |
+| JDBC data source and Hive support | not yet | Not provided. |
+
 ## Spark golden suite
 
 Measured against Apache Spark v4.2.0's own SQL test files (19284 statements in 349 files).
