@@ -8,13 +8,15 @@
 //! asserts, so they route queries but never limit a tenant: use `user` / `userGroup` for that.
 
 mod config;
+mod replace;
 mod select;
 mod tree;
 
 #[cfg(test)]
 mod tests;
 
-use std::sync::Arc;
+use std::fmt::Write as _;
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use krishiv_common::error::{
@@ -24,6 +26,7 @@ use krishiv_plan::analyzer::BoxFuture;
 
 use crate::admission::{AdmissionController, Permit, QueryRequest};
 use config::Config;
+use sha2::{Digest as _, Sha256};
 use tree::{Admitted, Refusal, Shared};
 
 pub use select::tag_matches;
@@ -32,8 +35,48 @@ pub use tree::{GroupRow, GroupSlot};
 /// The admission controller for a resource group tree.
 #[derive(Debug)]
 pub struct ResourceGroups {
-    config: Config,
+    loaded: RwLock<Arc<Loaded>>,
+    total_memory: usize,
     shared: Arc<Shared>,
+    /// One replace of the group file at a time.
+    replacing: std::sync::Mutex<()>,
+}
+
+/// The document the tree was last built from.
+#[derive(Debug)]
+struct Loaded {
+    config: Config,
+    /// The document as canonical JSON.
+    document: String,
+    /// SHA-256 of `document`, in hex.
+    etag: String,
+    loaded_at_ms: u64,
+}
+
+/// A document as canonical JSON and its SHA-256 (hex): the same document always gives the same pair.
+fn canonical(json: &str) -> (String, String) {
+    // `serde_json` keeps object keys sorted, so the same document always prints the same.
+    let document = serde_json::from_str::<serde_json::Value>(json)
+        .map_or_else(|_| json.to_owned(), |v| v.to_string());
+    let etag = Sha256::digest(document.as_bytes())
+        .iter()
+        .fold(String::new(), |mut hex, b| {
+            let _ = write!(hex, "{b:02x}");
+            hex
+        });
+    (document, etag)
+}
+
+impl Loaded {
+    fn new(json: &str, config: Config, now_ms: u64) -> Self {
+        let (document, etag) = canonical(json);
+        Self {
+            config,
+            document,
+            etag,
+            loaded_at_ms: now_ms,
+        }
+    }
 }
 
 impl ResourceGroups {
@@ -62,7 +105,87 @@ impl ResourceGroups {
     ) -> Result<Self, KrishivError> {
         let config = config::parse(json, total_memory)?;
         let shared = Shared::new(&config.roots, now_ms);
-        Ok(Self { config, shared })
+        let loaded = Arc::new(Loaded::new(json, config, shared.now()));
+        Ok(Self {
+            loaded: RwLock::new(loaded),
+            total_memory,
+            shared,
+            replacing: std::sync::Mutex::new(()),
+        })
+    }
+
+    fn current(&self) -> Arc<Loaded> {
+        Arc::clone(&self.loaded.read().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    /// Checks a candidate document without changing anything (`ValidateResourceGroupConfig`).
+    ///
+    /// # Errors
+    ///
+    /// As [`ResourceGroups::from_json`].
+    pub fn validate(json: &str, total_memory: usize) -> Result<(), KrishivError> {
+        config::parse(json, total_memory).map(drop)
+    }
+
+    /// Swaps the tree for the one `json` describes. A group the new document keeps (by dotted
+    /// id) keeps its counters, its queue and its running queries and takes the new limits; a
+    /// new group starts empty; a removed group takes no new query and is freed when its last
+    /// one ends. Selectors and the default group change at once. An invalid document is
+    /// refused and the old tree stays.
+    ///
+    /// # Errors
+    ///
+    /// As [`ResourceGroups::from_json`].
+    pub fn reload_json(&self, json: &str) -> Result<(), KrishivError> {
+        // Not while a replace checks the file and writes it.
+        let _one = self
+            .replacing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        self.swap(json)
+    }
+
+    /// The swap of [`ResourceGroups::reload_json`], for a caller holding `replacing`.
+    fn swap(&self, json: &str) -> Result<(), KrishivError> {
+        let config = config::parse(json, self.total_memory)?;
+        // Held across the swap, so a query that selects a group after the swap sees the new
+        // selectors and one that selected before it asks again when its group is gone.
+        let mut guard = self.loaded.write().unwrap_or_else(PoisonError::into_inner);
+        self.shared.reload(&config.roots);
+        *guard = Arc::new(Loaded::new(json, config, self.shared.now()));
+        Ok(())
+    }
+
+    /// As [`ResourceGroups::reload_json`], from the file at `path`.
+    ///
+    /// # Errors
+    ///
+    /// `KRISHIV_RESOURCE_GROUP_CONFIG_INVALID` when the file cannot be read, and as
+    /// [`ResourceGroups::from_json`] otherwise.
+    pub fn reload_file(&self, path: &str) -> Result<(), KrishivError> {
+        let _one = self
+            .replacing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        self.swap(&read_file(path)?)
+    }
+
+    /// The loaded document as canonical JSON.
+    #[must_use]
+    pub fn document(&self) -> String {
+        self.current().document.clone()
+    }
+
+    /// SHA-256 (hex) of [`ResourceGroups::document`]: what a replace is checked against.
+    #[must_use]
+    pub fn etag(&self) -> String {
+        self.current().etag.clone()
+    }
+
+    /// When the loaded document was read, in milliseconds since the Unix epoch.
+    #[must_use]
+    pub fn loaded_at_ms(&self) -> u64 {
+        self.current().loaded_at_ms
     }
 
     /// Builds the controller from the group file at `path` (`krishiv.workload.resourceGroups.file`).
@@ -72,13 +195,7 @@ impl ResourceGroups {
     /// `KRISHIV_RESOURCE_GROUP_CONFIG_INVALID` when the file cannot be read, and as
     /// [`ResourceGroups::from_json`] otherwise.
     pub fn from_file(path: &str, total_memory: usize) -> Result<Self, KrishivError> {
-        let json = std::fs::read_to_string(path).map_err(|e| {
-            KrishivError::from(KrishivResourceGroupConfigInvalid {
-                path: path.to_owned(),
-                reason: format!("cannot read the file: {}", e.kind()),
-            })
-        })?;
-        Self::from_json(&json, total_memory)
+        Self::from_json(&read_file(path)?, total_memory)
     }
 
     /// One row per group of the tree, parents first, with the counters now (the source of
@@ -95,6 +212,15 @@ impl ResourceGroups {
     }
 }
 
+fn read_file(path: &str) -> Result<String, KrishivError> {
+    std::fs::read_to_string(path).map_err(|e| {
+        KrishivError::from(KrishivResourceGroupConfigInvalid {
+            path: path.to_owned(),
+            reason: format!("cannot read the file: {}", e.kind()),
+        })
+    })
+}
+
 fn wall_clock_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -107,24 +233,32 @@ impl AdmissionController for ResourceGroups {
         request: &'a QueryRequest,
     ) -> BoxFuture<'a, Result<Permit, KrishivError>> {
         Box::pin(async move {
-            let group = select::select(&self.config, request);
-            let leaf = self.shared.leaf(group).ok_or_else(|| {
-                KrishivError::from(InternalError {
-                    message: format!("resource group {group} is not in the tree"),
-                })
-            })?;
-            let budget = self.shared.per_query_memory(leaf);
-            let slot = match self.shared.admit(leaf) {
-                Err(Refusal::Quota(e)) => return Err(e),
-                Err(Refusal::QueueFull { group, max_queued }) => {
-                    return Err(KrishivResourceGroupQueueFull {
-                        group,
-                        max_queued: max_queued.to_string(),
+            // A reload between the selector and the admission removes the group the selector
+            // chose: select again against the new document.
+            let mut tries = 0;
+            let (admitted, traits, group) = loop {
+                let group = select::select(&self.current().config, request).to_owned();
+                match self.shared.admit(&group) {
+                    Ok((admitted, traits)) => break (admitted, traits, group),
+                    Err(Refusal::Missing) if tries < 3 => tries += 1,
+                    Err(Refusal::Missing) => {
+                        return Err(KrishivError::from(InternalError {
+                            message: format!("resource group {group} is not in the tree"),
+                        }));
                     }
-                    .into());
+                    Err(Refusal::Quota(e)) => return Err(e),
+                    Err(Refusal::QueueFull { group, max_queued }) => {
+                        return Err(KrishivResourceGroupQueueFull {
+                            group,
+                            max_queued: max_queued.to_string(),
+                        }
+                        .into());
+                    }
                 }
-                Ok(Admitted::Now(slot)) => slot,
-                Ok(Admitted::Queued(rx, guard)) => {
+            };
+            let slot = match admitted {
+                Admitted::Now(slot) => slot,
+                Admitted::Queued(rx, guard) => {
                     let granted = rx.await;
                     drop(guard);
                     granted.map_err(|_| {
@@ -134,10 +268,11 @@ impl AdmissionController for ResourceGroups {
                     })??
                 }
             };
-            let mut permit = Permit::with_slot(slot).with_group(group);
-            if let Some((priority, class)) = self.shared.leaf_traits(leaf) {
-                permit = permit.with_priority(priority).with_class(class);
-            }
+            let permit = Permit::with_slot(slot)
+                .with_group(&group)
+                .with_priority(traits.priority)
+                .with_class(traits.class);
+            let budget = traits.budget;
             Ok(match budget {
                 Some(bytes) => permit.with_memory_budget(bytes),
                 None => permit,

@@ -35,14 +35,14 @@ tokio = { workspace = true, features = ["sync"] }
 # dependency and binary-size budgets; `krishiv-io/cloud` turns it on. Without it, cloud URLs parse but no
 # store is built (`KRISHIV_UNSUPPORTED_FEATURE`).
 cloud = [
-  "object_store/aws",
-  "object_store/azure",
-  "object_store/gcp",
-  "object_store/http",
-  "dep:http",
-  "dep:reqwest",
-  "dep:humantime",
-  "tokio/net",
+    "object_store/aws",
+    "object_store/azure",
+    "object_store/gcp",
+    "object_store/http",
+    "dep:http",
+    "dep:reqwest",
+    "dep:humantime",
+    "tokio/net",
 ]
 
 [dev-dependencies]

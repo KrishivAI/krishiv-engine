@@ -24,9 +24,11 @@
 //! a side without rows for a key gets one zero-row frame.
 //! Rows are cut into frames of `maxRecordsPerBatch` rows (and, when set,
 //! closed by the row that brings the frame's columns to `maxBytesPerBatch`
-//! bytes as Spark's Arrow writer sizes them) or at the end of their group
-//! or side, as Spark cuts a group's Arrow stream; a group is never held
-//! whole.
+//! bytes as Spark's Arrow writer sizes them; the columns evaluated to size
+//! a frame are its columns) or at the end of their group or side, as Spark
+//! cuts a group's Arrow stream; a group is never held whole. A grouped
+//! aggregate's rows are not cut by either limit (Spark sends each group as
+//! one batch): they go as each input batch brings them.
 //!
 //! **Window.** The window bounds the frames queued per lane and is checked
 //! frame by frame: input rows cut but not framed yet wait in the driver's
@@ -37,9 +39,10 @@
 //! input batch.
 //!
 //! **Memory (I11).** Every byte the sink holds is reserved in the driver's
-//! consumer: input rows held or in the backlog, queued frames (the chunk's
-//! rows shared by the lanes' frames, released by the last lane's task to
-//! take it, and what a frame's columns hold beyond those rows: a computed
+//! consumer: input rows held or in the backlog, queued frames (an input
+//! batch's one reservation, shared by every cut and frame that slices it
+//! and released with the last of them, since a slice keeps the whole
+//! batch's buffers; and what a frame's columns hold beyond those rows: a computed
 //! argument's result, a client form's copy), the results a task
 //! yielded until they are stored (`lane.rs`: a refused result stops the
 //! task's reads until reserved), and an aggregate's pending group keys
@@ -70,7 +73,7 @@ use krishiv_common::error::{KrishivError, KrishivPythonUdfResultMismatch};
 use krishiv_memory::{ConsumerHandle, Reservation, SpillScope};
 use krishiv_types::batch::Batch;
 
-use super::lane::{FrameMem, Lane};
+use super::lane::{FrameMem, Lane, SharedMem};
 use super::pair::{self, Pending};
 use super::{Frame, PreparedRelationUdf};
 use crate::context::TaskContext;
@@ -279,7 +282,10 @@ enum Cut {
     Rows {
         side: u8,
         rows: RecordBatch,
-        memory: Reservation,
+        memory: Vec<SharedMem>,
+        /// The frames' columns of every lane (in lane order) when they were
+        /// already evaluated to size the frame (`maxBytesPerBatch`).
+        columns: Option<Vec<ArrayRef>>,
     },
     EndGroup,
     End,
@@ -302,13 +308,13 @@ struct Driver {
     held_side: u8,
     /// The cogroup sides the open group has rows on.
     sides_seen: [bool; 2],
-    /// The reservation of the bytes of the input rows taken and not cut
-    /// yet: the held rows and the rest of the batch being fed.
-    held_bytes: Reservation,
-    /// The rows `held_bytes` covers: each cut takes its share by rows of
-    /// all of them, not of the held rows only (a batch's later groups keep
-    /// theirs while its first group is cut).
-    held_bytes_rows: usize,
+    /// Grows the reservation of each input batch (and of sized frame
+    /// columns); empty between calls.
+    input_bytes: Reservation,
+    /// The reservations of the input batches the held rows slice. A slice
+    /// keeps all of its batch's buffers alive, so every cut of a batch
+    /// shares the batch's one reservation, freed with its last slice.
+    held_mem: Vec<SharedMem>,
     /// Cut, waiting for room in the lanes' windows (shared with the
     /// driver's `Blocked` future, which frames it as the windows free).
     feed: Arc<Mutex<Feed>>,
@@ -418,11 +424,15 @@ impl RelationSink {
     /// The frame of `lane` over `rows` (one side): its columns evaluated,
     /// in their client forms; and the bytes they hold beyond the rows'
     /// buffers (a computed argument's result, a client form's copy).
+    ///
+    /// `sized` are the columns already evaluated (and reserved) to size the
+    /// frame: they are used as they are, and hold nothing more.
     fn frame(
         lane: &RelationLane,
         side: u8,
         rows: &RecordBatch,
         partition: u32,
+        sized: Option<&[ArrayRef]>,
     ) -> Result<(Frame, usize)> {
         let exprs = &lane.sides[usize::from(side)];
         let names = &lane.names[usize::from(side)];
@@ -430,12 +440,20 @@ impl RelationSink {
         let mut columns = Vec::with_capacity(exprs.len());
         let mut copied = 0;
         let mut input = Vec::new();
-        for c in rows.columns() {
-            buffer_ranges(&c.to_data(), &mut input);
+        if sized.is_none() {
+            for c in rows.columns() {
+                buffer_ranges(&c.to_data(), &mut input);
+            }
         }
-        for (e, name) in exprs.iter().zip(names) {
-            let a = client_column(e.as_ref(), rows, partition)?;
-            copied += fresh_bytes(&a.to_data(), &input);
+        for (i, (e, name)) in exprs.iter().zip(names).enumerate() {
+            let a = match sized.and_then(|s| s.get(i)) {
+                Some(a) => Arc::clone(a),
+                None => {
+                    let a = client_column(e.as_ref(), rows, partition)?;
+                    copied += fresh_bytes(&a.to_data(), &input);
+                    a
+                }
+            };
             fields.push(Field::new(name, a.data_type().clone(), e.nullable()));
             columns.push(a);
         }
@@ -448,29 +466,57 @@ impl RelationSink {
 
     /// Cuts the held rows into frames of at most `maxRecordsPerBatch` rows
     /// (and `maxBytesPerBatch` bytes); with `all` the rows left over too
-    /// (the end of a group or side).
+    /// (the end of a group or side). A grouped aggregate's rows are not
+    /// cut by either limit: Spark writes each group as one batch
+    /// (`ArrowAggregatePythonExec` runs a `BasicPythonArrowInput`,
+    /// ArrowPythonRunner.scala L78-91 and PythonArrowInput.scala L126-156
+    /// at v4.2.0), so its rows go as they come. A group that spans input
+    /// batches still reaches its task as several frames: the runtime must
+    /// concatenate an aggregate's frames up to `EndGroup` before it calls
+    /// the UDF (no runtime implements the relation kinds yet).
     fn cut_held(&self, d: &mut Driver, all: bool) -> Result<()> {
         if d.held_rows == 0 {
             return Ok(());
         }
         let held = std::mem::take(&mut d.held);
         let rows = std::mem::take(&mut d.held_rows);
+        let mut memory = std::mem::take(&mut d.held_mem);
+        let aggregate = matches!(self.shape, RelationShape::Aggregate { .. });
         let data = if held.len() == 1 {
             held.into_iter()
                 .next()
                 .ok_or_else(|| internal("no held rows".to_owned()))?
         } else {
-            arrow_select::concat::concat_batches(&self.input, &held)
-                .map_err(|e| internal(format!("held Python UDF rows: {e}")))?
+            let copy = arrow_select::concat::concat_batches(&self.input, &held)
+                .map_err(|e| internal(format!("held Python UDF rows: {e}")))?;
+            // A leftover joined with the rows that fill its frame (`feed`
+            // adds no more than that): at most `maxRecordsPerBatch` rows.
+            // Without that limit `feed` adds whole runs: with only
+            // `maxBytesPerBatch` the copy is the leftover plus the next
+            // run (up to a whole input batch), and with neither limit the
+            // rows of the group (or side) held across input batches. The copy holds them now: its slices
+            // share a reservation of its own, and the batches it was cut
+            // from are freed with their other slices (carried on, a long
+            // group would keep every batch it spans). If the pool refuses
+            // the copy's, the source batches' reservations stay with its
+            // slices instead: they cover at least its rows, so nothing the
+            // copy holds goes unreserved.
+            drop(held);
+            let bytes = copy.get_array_memory_size();
+            if d.input_bytes.try_grow(bytes).is_ok() {
+                memory.clear();
+                memory.push(Arc::new(Mutex::new(d.input_bytes.split(bytes))));
+            }
+            copy
         };
-        let step = if self.max_rows == 0 {
+        let step = if self.max_rows == 0 || aggregate {
             rows
         } else {
             self.max_rows
         };
         // The frames' columns as the tasks get them (computed arguments,
         // client forms), sized as Spark's Arrow writer sizes them.
-        let sized = if self.max_bytes > 0 {
+        let sized = if self.max_bytes > 0 && !aggregate {
             let mut columns = Vec::new();
             for lane in self.lanes.iter() {
                 for e in &lane.sides[usize::from(d.held_side)] {
@@ -481,6 +527,27 @@ impl RelationSink {
         } else {
             None
         };
+        // The sized columns are the frames' columns too, if what they hold
+        // beyond the rows can be reserved (else each frame evaluates its
+        // own, reserved as it is framed). One reservation for all their
+        // slices, as for the input's.
+        let mut kept: Option<(&[ArrayRef], Option<SharedMem>)> = None;
+        if let Some(columns) = &sized {
+            let mut input = Vec::new();
+            for c in data.columns() {
+                buffer_ranges(&c.to_data(), &mut input);
+            }
+            let copied: usize = columns
+                .iter()
+                .map(|a| fresh_bytes(&a.to_data(), &input))
+                .sum();
+            if copied == 0 {
+                kept = Some((columns, None));
+            } else if d.input_bytes.try_grow(copied).is_ok() {
+                let memory = Arc::new(Mutex::new(d.input_bytes.split(copied)));
+                kept = Some((columns, Some(memory)));
+            }
+        }
         // A map's rows travel as one struct column (its validity counts).
         let wrapped = if matches!(self.shape, RelationShape::Map) {
             self.lanes.len()
@@ -500,14 +567,20 @@ impl RelationSink {
                 // Too few for a full frame: held for the next input.
                 d.held.push(data.slice(offset, len));
                 d.held_rows = len;
+                d.held_mem = memory;
                 break;
             }
-            let share = d.held_bytes.size() * len / d.held_bytes_rows.max(len);
-            d.held_bytes_rows = d.held_bytes_rows.saturating_sub(len);
+            let mut shared = memory.clone();
+            if let Some((_, Some(m))) = &kept {
+                shared.push(Arc::clone(m));
+            }
             feed.backlog.push_back(Cut::Rows {
                 side: d.held_side,
                 rows: data.slice(offset, len),
-                memory: d.held_bytes.split(share),
+                memory: shared,
+                columns: kept
+                    .as_ref()
+                    .map(|(c, _)| c.iter().map(|a| a.slice(offset, len)).collect()),
             });
             offset += len;
         }
@@ -522,7 +595,8 @@ impl RelationSink {
         lock(&d.feed).backlog.push_back(Cut::Rows {
             side,
             rows: RecordBatch::new_empty(Arc::clone(&self.input)),
-            memory: d.held_bytes.split(0),
+            memory: Vec::new(),
+            columns: None,
         });
     }
 
@@ -541,9 +615,19 @@ impl RelationSink {
         Ok(())
     }
 
-    /// Cuts `batch` (reserved in `held_bytes`) into the backlog.
-    fn feed(&self, d: &mut Driver, batch: &RecordBatch, runs: Vec<Run>) -> Result<()> {
+    /// Cuts `batch` (reserved in `memory`) into the backlog.
+    fn feed(
+        &self,
+        d: &mut Driver,
+        batch: &RecordBatch,
+        runs: Vec<Run>,
+        memory: &SharedMem,
+    ) -> Result<()> {
         let grouped = self.encoder.is_some();
+        // The rows of a full frame, when frames are cut by count.
+        let frame_rows = (self.max_rows > 0
+            && !matches!(self.shape, RelationShape::Aggregate { .. }))
+        .then_some(self.max_rows);
         for run in runs {
             if run.new_group {
                 if d.group_open {
@@ -563,9 +647,25 @@ impl RelationSink {
                 self.empty_side(d, 0);
             }
             d.sides_seen[usize::from(run.side)] = true;
-            d.held.push(batch.slice(run.start, run.len));
-            d.held_rows += run.len;
-            self.cut_held(d, false)?;
+            // Behind a leftover, only the rows that fill its frame join it
+            // (the one copy, `cut_held`); the rest of the run is cut from
+            // the batch itself, without a copy.
+            let mut at = run.start;
+            let end = run.start + run.len;
+            while at < end {
+                let n = match frame_rows {
+                    Some(step) if d.held_rows > 0 => step.saturating_sub(d.held_rows).max(1),
+                    _ => end - at,
+                }
+                .min(end - at);
+                d.held.push(batch.slice(at, n));
+                d.held_rows += n;
+                if !d.held_mem.iter().any(|m| Arc::ptr_eq(m, memory)) {
+                    d.held_mem.push(Arc::clone(memory));
+                }
+                self.cut_held(d, false)?;
+                at += n;
+            }
         }
         Ok(())
     }
@@ -655,7 +755,14 @@ impl RelationSink {
         let lent = lend(memory, &l.consumer, batch.data().get_array_memory_size());
         match self.store.sink(batch.clone(), &mut l.store, &g.store)? {
             SinkStatus::NeedMemory { bytes } => {
-                let back = l.consumer.reservation_from_credit(lent);
+                // Taken back from the credit the store refunded, by a
+                // reservation with the consumer's handle: the retry lends it
+                // to the credit again, not to the pool (which another
+                // consumer could take it from in between).
+                let mut back = l.consumer.reservation();
+                if back.try_grow(lent).is_err() {
+                    back = l.consumer.reservation_from_credit(lent);
+                }
                 l.driver.ready = Some((batch, vec![back]));
                 Ok(Some(SinkStatus::NeedMemory {
                     bytes: bytes.saturating_sub(lent).max(1),
@@ -728,15 +835,15 @@ impl RelationSink {
         };
         let key_bytes = keys.as_ref().map_or(0, RecordBatch::get_array_memory_size);
         let bytes = data.get_array_memory_size() + key_bytes;
-        if d.held_bytes.try_grow(bytes).is_err() {
+        if d.input_bytes.try_grow(bytes).is_err() {
             return Ok(Some(SinkStatus::NeedMemory { bytes }));
         }
         if let Some(keys) = keys {
-            let memory = d.held_bytes.split(key_bytes);
+            let memory = d.input_bytes.split(key_bytes);
             d.pending.push(keys, memory);
         }
-        d.held_bytes_rows += data.num_rows();
-        self.feed(d, data, runs)?;
+        let memory = Arc::new(Mutex::new(d.input_bytes.split(bytes - key_bytes)));
+        self.feed(d, data, runs, &memory)?;
         d.current = last;
         Ok(None)
     }
@@ -805,10 +912,19 @@ fn flush_feed(
             return Ok(Flushed::All);
         };
         match cut {
-            Cut::Rows { side, rows, .. } => {
+            Cut::Rows {
+                side,
+                rows,
+                columns,
+                ..
+            } => {
                 let mut frames = Vec::with_capacity(specs.len());
+                let mut at = 0;
                 for lane in specs {
-                    frames.push(RelationSink::frame(lane, *side, rows, partition)?);
+                    let n = lane.sides[usize::from(*side)].len();
+                    let sized = columns.as_deref().and_then(|c| c.get(at..at + n));
+                    at += n;
+                    frames.push(RelationSink::frame(lane, *side, rows, partition, sized)?);
                 }
                 let copied: usize = frames.iter().map(|(_, c)| c).sum();
                 let more = copied.saturating_sub(spare.size());
@@ -818,10 +934,9 @@ fn flush_feed(
                 let Some(Cut::Rows { memory, .. }) = backlog.pop_front() else {
                     return Err(internal("the Python UDF backlog changed".to_owned()));
                 };
-                let shared = Arc::new(Mutex::new(memory));
                 for ((lane, state), (frame, copied)) in specs.iter().zip(lanes).zip(frames) {
                     let memory = FrameMem {
-                        _shared: Some(Arc::clone(&shared)),
+                        _shared: memory.clone(),
                         _own: spare.split(copied),
                     };
                     state.queue(lane.udf.as_ref(), frame, memory)?;
@@ -837,7 +952,7 @@ fn flush_feed(
                     }
                     let frame = if end { Frame::End } else { Frame::EndGroup };
                     let memory = FrameMem {
-                        _shared: None,
+                        _shared: Vec::new(),
                         _own: spare.split(0),
                     };
                     state.queue(lane.udf.as_ref(), frame, memory)?;
@@ -1107,8 +1222,8 @@ impl Sink for RelationSink {
                 held_rows: 0,
                 held_side: 0,
                 sides_seen: [false; 2],
-                held_bytes: consumer.reservation(),
-                held_bytes_rows: 0,
+                input_bytes: consumer.reservation(),
+                held_mem: Vec::new(),
                 feed: Arc::new(Mutex::new(Feed {
                     backlog: VecDeque::new(),
                     failed: None,
@@ -1285,8 +1400,17 @@ impl RelationSink {
             if !free && reservation.try_grow(bytes).is_ok() {
                 self.store.add_part(&g.store, batches, reservation)?;
             } else {
-                drop((reservation, handle.reservation_from_credit(lent)));
-                self.store.add_spilled_part(&g.store, batches, ctx).await?;
+                // The results' bytes stay lent to the consumer's credit
+                // until they are written out, and the writer's scratch (a
+                // reservation of the same consumer) draws them first, when
+                // the pool may have nothing else. So the spill write's
+                // working memory is not counted on top of the batches: the
+                // pool counts max(lent, scratch) during the write, not
+                // their sum. What is left goes back after.
+                drop(reservation);
+                let written = self.store.add_spilled_part(&g.store, batches, ctx).await;
+                drop(handle.reservation_from_credit(lent));
+                written?;
             }
         }
         if d.wants > 0 {

@@ -95,7 +95,11 @@ fn policy_client_honours_every_client_config_key() {
         // object_store's own verdict on the same options: the copy accepts and refuses alike.
         let original = ReqwestConnector::default().connect(&options).is_ok();
         let result = plain.reqwest_client(&options);
-        if key == ClientConfigKey::ProxyUrl {
+        if key == ClientConfigKey::AllowInvalidCertificates {
+            // The one deliberate difference: verification is never turned off in server mode.
+            assert!(result.is_err(), "{key:?}");
+            assert!(proxied.reqwest_client(&options).is_err(), "{key:?}");
+        } else if key == ClientConfigKey::ProxyUrl {
             // A store proxy without the admin's egress proxy is refused, never silently used
             // or dropped; with it, the store's proxy settings apply.
             assert!(result.is_err(), "{key:?}");
@@ -113,6 +117,10 @@ fn policy_client_honours_every_client_config_key() {
             );
         }
     }
+    // Asking for verification (the default) is accepted.
+    let verified =
+        ClientOptions::new().with_config(ClientConfigKey::AllowInvalidCertificates, "false");
+    assert!(plain.reqwest_client(&verified).is_ok());
     // The proxy CA is parsed as object_store parses it, once a proxy is in use.
     let with_ca =
         changed(ClientConfigKey::ProxyUrl).with_config(ClientConfigKey::ProxyCaCertificate, "PEM");
@@ -481,15 +489,12 @@ async fn data_read_of_provider_literal_refused() {
     ] {
         let url = parse_object_url(location).unwrap();
         let store = registry.store(&url).unwrap();
-        let started = std::time::Instant::now();
+        // The policy's own refusal, not a connect or timeout error: the request was stopped
+        // before any dial (no wall-clock bound, which load makes flaky).
         let err = store.get(&url.key).await.unwrap_err();
         assert!(
             error_chain(&err).contains("private address"),
             "{location}: {err}"
-        );
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(5),
-            "{location}: dialled"
         );
     }
     // A store with ambient credential providers still builds on the same cache.

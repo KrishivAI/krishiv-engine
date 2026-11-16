@@ -83,8 +83,15 @@ fn apply(
 ) -> object_store::Result<reqwest::ClientBuilder> {
     use ClientConfigKey as K;
     Ok(match key {
+        // Policy clients exist only in server mode, where certificate checks stay on: a store or
+        // catalog endpoint with a certificate the system store does not trust is refused, never
+        // reached without verification (object_store would disable verification here).
         K::AllowInvalidCertificates if parse_bool(key, value)? => {
-            builder.danger_accept_invalid_certs(true)
+            return Err(generic(format!(
+                "client option {} is refused by the egress policy client: certificate \
+                 verification stays on in server mode",
+                key.as_ref()
+            )));
         }
         // No root certificates are added (see the module docs): the system store or none.
         K::NoSystemCertificates if parse_bool(key, value)? => {

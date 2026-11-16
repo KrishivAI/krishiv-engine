@@ -47,10 +47,15 @@ use super::{Frame, PreparedRelationUdf, UdfTask};
 use crate::error::Result;
 use crate::sync::{Mutex, lock};
 
+/// A reservation shared by everything that keeps its buffers alive (the
+/// slices of one input batch), freed with the last of them.
+pub(super) type SharedMem = Arc<Mutex<Reservation>>;
+
 /// The memory a queued frame holds until its task takes it.
 pub(super) struct FrameMem {
-    /// The input chunk's rows, shared by the lanes' frames of the chunk.
-    pub(super) _shared: Option<Arc<Mutex<Reservation>>>,
+    /// The reservations of the input batches (and sized columns) the
+    /// frame's rows slice, shared with every other frame and cut of them.
+    pub(super) _shared: Vec<SharedMem>,
     /// The copies made for this lane's frame (client forms).
     pub(super) _own: Reservation,
 }

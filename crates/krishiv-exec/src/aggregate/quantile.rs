@@ -873,6 +873,11 @@ mod tests {
             top.merge(&[0], &states).unwrap();
         }
         let out = top.evaluate(&[0]).unwrap();
+        if let Some(ints) = out.as_any().downcast_ref::<Int64Array>() {
+            return (0..ints.len())
+                .map(|i| ints.is_valid(i).then(|| ints.value(i) as f64))
+                .collect();
+        }
         let out = out.as_any().downcast_ref::<Float64Array>().unwrap();
         (0..out.len())
             .map(|i| out.is_valid(i).then(|| out.value(i)))
@@ -1018,5 +1023,49 @@ mod tests {
             DataType::Float64,
         );
         assert!(empty.evaluate(&[0]).unwrap().is_null(0));
+    }
+
+    /// SQL-12: on one partition (all rows through one partial accumulator, merged once into an empty
+    /// final one, as Spark's one-partition plan does) the answers equal real Spark 4.2.0's.
+    #[test]
+    fn one_partition_equals_spark_420() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/spark-4.2.0/quantile-goldens.json"
+        ))
+        .unwrap();
+        let u = |id: i64| (id * 2_654_435_761 + 12345) % 1_000_003;
+        let (mut compared, mut bad) = (0, Vec::new());
+        for case in fixture["cases"].as_array().unwrap() {
+            let n = case["n"].as_i64().unwrap();
+            let dist = case["dist"].as_str().unwrap();
+            if case["partitions"] != 1 || n > 60_000 {
+                continue;
+            }
+            let rows: Vec<Option<i64>> = match dist {
+                "asc" => (0..n).map(Some).collect(),
+                "desc" => (0..n).map(|i| Some(n - 1 - i)).collect(),
+                "uniform_int" => (0..n).map(|i| Some(u(i))).collect(),
+                "repeated" => (0..n).map(|i| Some(u(i) % 17)).collect(),
+                _ => continue,
+            };
+            let accuracy = case["accuracy"].as_i64().unwrap();
+            for p in ["0.0", "0.01", "0.1", "0.5", "0.9", "0.99", "1.0"] {
+                let f = AggregateFunction::PercentileApprox {
+                    percentages: vec![p.parse().unwrap()],
+                    array: false,
+                    accuracy,
+                };
+                let got = run(&f, &DataType::Int64, &rows, 1)[0];
+                let want = case["scalars"][p].as_i64().unwrap();
+                compared += 1;
+                if got != Some(want as f64) {
+                    bad.push(format!(
+                        "{dist} n={n} acc={accuracy} p={p}: {got:?} vs {want}"
+                    ));
+                }
+            }
+        }
+        assert!(compared > 100, "{compared}");
+        assert!(bad.is_empty(), "{} differ:\n{}", bad.len(), bad.join("\n"));
     }
 }
