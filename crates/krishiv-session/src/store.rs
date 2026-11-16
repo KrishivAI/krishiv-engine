@@ -131,6 +131,10 @@ pub(crate) struct ViewDef {
     /// `WITH SCHEMA ...` as stored; `None` for a view created while `spark.sql.legacy.viewSchemaBindingMode` was
     /// off (Spark then stores no mode, and the view reads as `BINDING` once the feature is on).
     pub(crate) schema_mode: Option<ViewSchemaMode>,
+    /// `SQL SECURITY DEFINER` (P3-T062 §2.4): the principal whose rights read the view's query (its
+    /// creator, or whoever last replaced the query); `None` for `INVOKER`, the default, read with
+    /// the rights of whoever reads the view.
+    pub(crate) definer: Option<String>,
 }
 
 /// How a permanent view follows the schema of its query (Spark's `ViewSchemaMode`).

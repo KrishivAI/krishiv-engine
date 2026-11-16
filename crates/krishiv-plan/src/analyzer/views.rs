@@ -17,8 +17,7 @@ use crate::plan::{LogicalPlan, PlanNode};
 use crate::walk::{Node, PtrSet, children};
 use crate::{AttrId, Origin};
 
-/// How a view's base tables are authorized (T062 sets [`Self::Definer`]; today every permanent view is
-/// read as its invoker reads its query).
+/// How a view's base tables are authorized (P3-T062 §2.4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum ViewSecurity {
@@ -47,6 +46,10 @@ pub struct ViewExpansion {
     /// The output attributes of this expansion's node in the resolved plan; `None` until located, or when
     /// resolution left no node for it.
     pub output: Option<Vec<AttrId>>,
+    /// For a [`ViewSecurity::Definer`] view: what its query reads, as authorized for its owner (the
+    /// securables of that analysis). A caller shown the view's query (an `EXPLAIN`) is asked them
+    /// too, as an invoker would be. Empty otherwise.
+    pub owner_reads: Vec<super::SecurableUse>,
 }
 
 impl ViewExpansion {
@@ -66,6 +69,7 @@ impl ViewExpansion {
             security,
             bases_authorized,
             output: None,
+            owner_reads: Vec::new(),
         }
     }
 

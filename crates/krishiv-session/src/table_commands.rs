@@ -670,6 +670,9 @@ impl Session {
                 written: crate::identifier_clause::written_within(
                     original, ids, written, query.span,
                 ),
+                // `SQL SECURITY DEFINER` reads as its creator (P3-T062 §2.4).
+                definer: matches!(v.security, Some(krishiv_sql::ast::SqlSecurity::Definer))
+                    .then(|| self.state.principal.name.clone()),
             }),
             layout: TableLayout::default(),
             column_stats: BTreeMap::new(),
@@ -1059,6 +1062,13 @@ impl Session {
                     written: crate::identifier_clause::written_within(
                         original, ids, written, query.span,
                     ),
+                    // A definer view keeps its mode, and its new query reads as whoever wrote it:
+                    // never as the previous definer, whose rights the new text could reach.
+                    definer: existing
+                        .view
+                        .as_ref()
+                        .and_then(|v| v.definer.as_ref())
+                        .map(|_| self.state.principal.name.clone()),
                 });
             }
             AlterViewAction::SetSchemaBinding(binding) => {

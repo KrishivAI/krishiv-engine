@@ -1527,6 +1527,7 @@ mod tests {
             identifier_spans: Vec::new(),
             written: "SELECT 1".into(),
             schema_mode: None,
+            definer: None,
         });
         let current = c.store.table("db", "v").unwrap();
         assert!(c.store.replace_table(&current, view));
@@ -1877,6 +1878,7 @@ mod tests {
             identifier_spans: Vec::new(),
             written: "SELECT 1".into(),
             schema_mode: None,
+            definer: None,
         });
         assert!(c.store.replace_table(&current, view));
         let e = rename(c, "v", "w").unwrap_err();

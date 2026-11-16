@@ -55,6 +55,7 @@ pub fn context(catalog: MemoryCatalog, conf: ResolutionConf) -> AnalysisContext 
         files: None,
         variables: Arc::new(VariableSnapshot::default()),
         mode: AnalysisMode::Execute,
+        definer_sources: Arc::default(),
     }
 }
 

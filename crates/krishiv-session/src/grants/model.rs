@@ -337,6 +337,23 @@ impl GrantState {
             .any(|g| g.privilege == privilege)
     }
 
+    /// Whether a listing shows `key` to `principal` (P3-T062 §2.4): it owns the key (or a
+    /// parent), may `Select` it (a grant there or on a parent), or holds any grant on the key
+    /// itself or one of its columns. A grant of another privilege on a parent (`CREATE` on the
+    /// namespace) lets the principal list the namespace, not see every object in it.
+    pub(crate) fn lists(&self, principal: &Principal, key: &ObjectKey, cs: bool) -> bool {
+        if self.owns(principal, key, cs) {
+            return true;
+        }
+        let grantees = self.effective(principal);
+        self.covering(&grantees, key, cs)
+            .any(|g| g.privilege == Privilege::Select)
+            || self.grants.iter().any(|g| {
+                grantees.contains(&g.grantee)
+                    && (g.object.same(key, cs) || g.object.is_column_of(key, cs))
+            })
+    }
+
     /// Whether `principal` may grant `privilege` on `key` to others: it owns the key (or a
     /// parent), or holds the privilege there with the grant option.
     pub(crate) fn may_grant(

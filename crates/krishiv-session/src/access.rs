@@ -259,9 +259,21 @@ fn log_denial(session: &Session, class: StatementClass, e: &KrishivError) {
         crate::grants::DecidedBy::Roles
     }
     .as_str();
+    // A refusal of a principal acting for this one (the definer of a `SQL SECURITY DEFINER` view
+    // the session read, P3-T062 §2.4) names it: the record shows both.
+    let own =
+        krishiv_common::names::quote_parts(std::slice::from_ref(&session.state.principal.name));
+    let acting_as = e
+        .message_parameters()
+        .iter()
+        .find(|(name, _)| *name == "principal")
+        .map(|(_, p)| p.clone())
+        .filter(|p| *p != own);
     tracing::warn!(
         target: "krishiv::audit",
         principal = %session.state.principal.name,
+        acting_as = acting_as.as_deref(),
+        delegated_by = session.state.principal.delegated_by.as_deref(),
         client_user_id_unverified = client_user_id.as_deref(),
         statement_class = class.name(),
         error_class = e.error_class().name(),
@@ -398,6 +410,18 @@ impl Session {
         reads: &[crate::catalog::ReadCandidate],
         env: &QueryEnv,
     ) -> Result<Vec<TableIdent>, KrishivError> {
+        let principal = Arc::clone(&self.state.principal);
+        self.authorize_reads_as(reads, env, &principal).await
+    }
+
+    /// [`Self::authorize_reads`] for `principal`: the session's own, or the definer of a
+    /// `SQL SECURITY DEFINER` view acting for it (P3-T062 §2.4).
+    pub(crate) async fn authorize_reads_as(
+        &self,
+        reads: &[crate::catalog::ReadCandidate],
+        env: &QueryEnv,
+        principal: &Principal,
+    ) -> Result<Vec<TableIdent>, KrishivError> {
         let catalogs = &*env.analysis.catalogs;
         let fold = !env.analysis.conf.case_sensitive;
         let mut views = Vec::new();
@@ -443,7 +467,7 @@ impl Session {
                 };
                 let r = authorize_reported(
                     &*self.state.policy,
-                    &self.state.principal,
+                    principal,
                     &securable,
                     privilege,
                     wanted,
@@ -454,6 +478,143 @@ impl Session {
             }
         }
         Ok(views)
+    }
+
+    /// The analysis' read privilege (`Select`; `Browse` for a metadata analysis) on every stored
+    /// function the query's analysis resolved a call to (P3-T062 §2.4: calling a function needs
+    /// `Select` on it; there is no `Execute`, Q3). Built-in, temporary and session functions are
+    /// not securables. A call inside a definer view's text is asked of the reader too (fails
+    /// closed). Each refusal is the caller's to audit.
+    pub(crate) async fn authorize_function_calls(
+        &self,
+        env: &QueryEnv,
+    ) -> Result<(), KrishivError> {
+        let privilege = env.analysis.mode.read_privilege();
+        for (namespace, name) in env.sql_functions.stored_calls() {
+            let securable =
+                Securable::Function(vec![crate::catalog::CATALOG.to_owned(), namespace, name]);
+            authorize(
+                &*self.state.policy,
+                &self.state.principal,
+                &securable,
+                privilege,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Asks the session's principal what the `SQL SECURITY DEFINER` views of `analyzed` read
+    /// (their `owner_reads`), as an invoker would be asked, before their inlined queries are shown
+    /// (`EXPLAIN`, estimates, warnings; P3-T062 §2.4: an explain checks the privileges of the
+    /// statement it explains). Column-level policies are asked per column read. Audited.
+    ///
+    /// # Errors
+    /// The first refusal (42501).
+    pub(crate) async fn authorize_shown_definer_reads(
+        &self,
+        analyzed: &krishiv_plan::analyzer::AnalyzedPlan,
+    ) -> Result<(), KrishivError> {
+        use krishiv_plan::analyzer::views::ViewSecurity;
+        let policy = &*self.state.policy;
+        for view in analyzed
+            .views
+            .iter()
+            .filter(|v| v.security == ViewSecurity::Definer)
+        {
+            for used in &view.owner_reads {
+                let per_column = used.privilege == Privilege::Select
+                    && policy.column_level()
+                    && !used.columns.is_empty();
+                let asked: Vec<Securable> = match &used.securable {
+                    Securable::Table(t) | Securable::View(t) if per_column => used
+                        .columns
+                        .iter()
+                        .map(|c| Securable::Column {
+                            table: t.clone(),
+                            column: c.clone(),
+                        })
+                        .collect(),
+                    other => vec![other.clone()],
+                };
+                for securable in asked {
+                    let r =
+                        authorize(policy, &self.state.principal, &securable, used.privilege).await;
+                    audit(self, StatementClass::Read, r)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether this session's principal may see `securable` in a listing (`SHOW TABLES`,
+    /// `SHOW VIEWS`, `SHOW NAMESPACES`, `spark.catalog.list*`; P3-T062 §2.4): under the `grants`
+    /// provider when it may `Select` it or holds any grant on it (`GrantsPolicy::listable`; a
+    /// `CREATE` on the namespace does not show every table in it), otherwise `Browse` on it.
+    /// Asked quietly: leaving an entry out is not a refusal (no audit record, no denial counter).
+    pub(crate) async fn may_list(&self, securable: &Securable) -> bool {
+        if let Some(grants) = &self.state.grants
+            && let Some(listed) = grants.listable(&self.state.principal, securable)
+        {
+            return listed;
+        }
+        krishiv_plan::analyzer::allowed(
+            &*self.state.policy,
+            &self.state.principal,
+            securable,
+            Privilege::Browse,
+        )
+        .await
+    }
+
+    /// The relations of the session catalog's namespace `namespace` among `tables` that this
+    /// session's principal may see ([`Self::may_list`]).
+    pub(crate) async fn listed_relations(
+        &self,
+        namespace: &str,
+        tables: Vec<Arc<crate::store::CatalogTable>>,
+    ) -> Vec<Arc<crate::store::CatalogTable>> {
+        let mut out = Vec::with_capacity(tables.len());
+        for t in tables {
+            let ident = TableIdent {
+                catalog: crate::catalog::CATALOG.to_owned(),
+                namespace: vec![namespace.to_owned()],
+                name: t.name.clone(),
+            };
+            let securable = if t.view.is_some() {
+                Securable::View(ident)
+            } else {
+                Securable::Table(ident)
+            };
+            if self.may_list(&securable).await {
+                out.push(t);
+            }
+        }
+        out
+    }
+
+    /// Whether this session's principal may see the session catalog's namespace `namespace` in a
+    /// listing: `Browse` on it, or on any relation in it (a table grant shows where the table is).
+    pub(crate) async fn may_list_namespace(&self, namespace: &str) -> bool {
+        let securable = Securable::Namespace(vec![
+            crate::catalog::CATALOG.to_owned(),
+            namespace.to_owned(),
+        ]);
+        if self.may_list(&securable).await {
+            return true;
+        }
+        let tables = crate::store::CatalogStore::tables_in(&*self.state.catalog.store, namespace);
+        for t in tables {
+            let ident = TableIdent {
+                catalog: crate::catalog::CATALOG.to_owned(),
+                namespace: vec![namespace.to_owned()],
+                name: t.name.clone(),
+            };
+            if self.may_list(&Securable::Table(ident)).await {
+                return true;
+            }
+        }
+        false
     }
 
     /// The error `e` of a metadata analysis (P3 PR-14d review B1), raised after the permanent

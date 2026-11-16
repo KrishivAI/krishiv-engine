@@ -465,8 +465,10 @@ impl Session {
                         )
                         .await;
                 }
-                let mut rows: Vec<Vec<Cell>> = store
-                    .tables_in(&ns)
+                // Only what the principal may see (P3-T062 §2.4).
+                let mut rows: Vec<Vec<Cell>> = self
+                    .listed_relations(&ns, store.tables_in(&ns))
+                    .await
                     .iter()
                     .filter(|t| keep(pattern.as_ref(), &t.name))
                     .map(|t| vec![s(&ns), s(&t.name), s("false")])
@@ -504,8 +506,9 @@ impl Session {
                         )
                         .await;
                 }
-                let mut rows: Vec<Vec<Cell>> = store
-                    .tables_in(&ns)
+                let mut rows: Vec<Vec<Cell>> = self
+                    .listed_relations(&ns, store.tables_in(&ns))
+                    .await
                     .iter()
                     .filter(|t| t.view.is_some() && keep(pattern.as_ref(), &t.name))
                     .map(|t| vec![s(&ns), s(&t.name), s("false")])
@@ -580,12 +583,14 @@ impl Session {
             ShowKind::Namespaces { pattern, .. } => {
                 // `system` has no namespaces; never list the session catalog's under it.
                 let in_system = crate::system::is_system(&self.state.catalog.current_catalog());
-                let rows = store
-                    .namespaces()
-                    .into_iter()
-                    .filter(|(n, _)| !in_system && keep(pattern.as_ref(), n))
-                    .map(|(n, _)| vec![s(n)])
-                    .collect();
+                let mut rows = Vec::new();
+                for (n, _) in store.namespaces() {
+                    // Only what the principal may see (P3-T062 §2.4).
+                    if !in_system && keep(pattern.as_ref(), &n) && self.may_list_namespace(&n).await
+                    {
+                        rows.push(vec![s(n)]);
+                    }
+                }
                 self.ordered_frame(&["namespace"], &[], rows).await
             }
             ShowKind::TblProperties { name, key, .. } => {
@@ -732,7 +737,8 @@ impl Session {
             return self.ordered_frame(&COLUMNS, &["isTemporary"], rows).await;
         }
         let mut rows: Vec<Vec<Cell>> = Vec::new();
-        for t in self.state.catalog.store.tables_in(&ns) {
+        let tables = self.state.catalog.store.tables_in(&ns);
+        for t in self.listed_relations(&ns, tables).await {
             if !keep(Some(pattern), &t.name) {
                 continue;
             }

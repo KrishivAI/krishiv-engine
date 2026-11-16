@@ -21,6 +21,12 @@ pub struct Principal {
     pub tenant: Option<String>,
     /// User or service principal.
     pub kind: PrincipalKind,
+    /// Who this principal acts for, when it is derived from another one: the reader of a
+    /// `SQL SECURITY DEFINER` view (whose base tables are checked against the view's owner), or
+    /// `scheduler` for a materialized view refresh run as its owner (P3-T062 §2.4). `None` for a
+    /// principal that acts for itself. A derived principal never inherits the role of the one it
+    /// acts for.
+    pub delegated_by: Option<String>,
 }
 
 /// The kind of a principal.
@@ -42,6 +48,17 @@ impl Principal {
             groups: Vec::new(),
             tenant: None,
             kind,
+            delegated_by: None,
+        }
+    }
+
+    /// The principal `name` acting for `by` (see [`Self::delegated_by`]): a user principal
+    /// without groups or tenant, so it holds only what is granted to `name` itself.
+    #[must_use]
+    pub fn delegated(name: impl Into<String>, by: impl Into<String>) -> Self {
+        Self {
+            delegated_by: Some(by.into()),
+            ..Self::new(name, PrincipalKind::User)
         }
     }
 
@@ -71,11 +88,12 @@ impl Principal {
             groups: Vec::new(),
             tenant: None,
             kind: PrincipalKind::User,
+            delegated_by: None,
         }
     }
 
     /// The identity that enters the context fingerprint: kind, tenant,
-    /// name and the sorted groups (a policy may decide by group).
+    /// name, the sorted groups (a policy may decide by group) and whom it acts for.
     #[must_use]
     pub fn id(&self) -> String {
         let kind = match self.kind {
@@ -91,13 +109,19 @@ impl Principal {
             .as_ref()
             .map_or_else(|| "-".to_owned(), |t| quoted(std::slice::from_ref(t)));
         format!(
-            "{kind}:{tenant}/{}{}",
+            "{kind}:{tenant}/{}{}{}",
             quoted(std::slice::from_ref(&self.name)),
             if groups.is_empty() {
                 String::new()
             } else {
                 format!("[{}]", quoted(&groups))
-            }
+            },
+            self.delegated_by
+                .as_ref()
+                .map_or_else(String::new, |by| format!(
+                    "<{}",
+                    quoted(std::slice::from_ref(by))
+                ))
         )
     }
 }
@@ -123,6 +147,15 @@ mod tests {
         let mut b = Principal::new("y", PrincipalKind::User);
         b.tenant = Some("t/`x".to_owned());
         assert_ne!(a.id(), b.id());
+    }
+
+    #[test]
+    fn a_delegated_principal_has_its_own_id() {
+        let owner = Principal::new("ana", PrincipalKind::User);
+        let derived = Principal::delegated("ana", "bob");
+        assert_eq!(derived.delegated_by.as_deref(), Some("bob"));
+        assert_eq!(owner.id(), "user:-/`ana`");
+        assert_eq!(derived.id(), "user:-/`ana`<`bob`");
     }
 
     #[test]

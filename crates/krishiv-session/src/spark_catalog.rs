@@ -299,7 +299,14 @@ impl Catalog<'_> {
         pattern: Option<&str>,
     ) -> Result<Vec<Database>, KrishivError> {
         self.authorize_as("SHOW NAMESPACES").await?;
-        Ok(self.databases(pattern))
+        // Only what the principal may see, as `SHOW NAMESPACES` lists (P3-T062 §2.4).
+        let mut out = Vec::new();
+        for d in self.databases(pattern) {
+            if self.session.may_list_namespace(&d.name).await {
+                out.push(d);
+            }
+        }
+        Ok(out)
     }
 
     fn databases(&self, pattern: Option<&str>) -> Vec<Database> {
@@ -451,10 +458,13 @@ impl Catalog<'_> {
                 Some(d) => self.lookup_database(d)?.name,
                 None => self.current_database(),
             };
+            // Only what the principal may see, as `SHOW TABLES` lists (P3-T062 §2.4).
+            let listed = self
+                .session
+                .listed_relations(&db, catalog.store.tables_in(&db))
+                .await;
             permanent.extend(
-                catalog
-                    .store
-                    .tables_in(&db)
+                listed
                     .iter()
                     .filter(|t| keep(&t.name))
                     .map(|t| Self::table_of(t)),
@@ -628,7 +638,25 @@ impl Catalog<'_> {
         pattern: Option<&str>,
     ) -> Result<Vec<Function>, KrishivError> {
         self.authorize_as("SHOW FUNCTIONS").await?;
-        Ok(self.functions(pattern))
+        // A stored function is listed only to a principal that may see it (P3-T062 §2.4).
+        let mut out = Vec::new();
+        for f in self.functions(pattern) {
+            let visible = match (&f.catalog, &f.namespace) {
+                (Some(catalog), Some(namespace)) => {
+                    let mut parts = vec![catalog.clone()];
+                    parts.extend(namespace.iter().cloned());
+                    parts.push(f.name.clone());
+                    self.session
+                        .may_list(&krishiv_plan::analyzer::Securable::Function(parts))
+                        .await
+                }
+                _ => true,
+            };
+            if visible {
+                out.push(f);
+            }
+        }
+        Ok(out)
     }
 
     fn functions(&self, pattern: Option<&str>) -> Vec<Function> {

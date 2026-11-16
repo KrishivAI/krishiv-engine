@@ -1374,6 +1374,8 @@ impl Session {
             // `DataFrame::analyzed_for_metadata` / `schema_for_metadata` switch one analysis to
             // `Metadata`; every other analysis may run the plan.
             mode: krishiv_plan::analyzer::AnalysisMode::Execute,
+            // Filled per analysis by `Session::authorize_definer` callers; none by default.
+            definer_sources: Arc::default(),
         };
         // The epoch the query's catalog reads at: entries it loads are at least as new.
         let catalog_epoch = krishiv_plan::analyzer::Catalog::epoch(&*catalog);
@@ -1456,10 +1458,37 @@ impl Session {
             let e = self.view_text_failure(&views, env, e).await;
             return crate::access::audit_read(self, env, Err(e));
         }
+        // `SQL SECURITY DEFINER` views (P3-T062 §2.4): the reader may read the view (asked above);
+        // its text is read with its definer's rights, and the reader's analysis skips what it reads.
+        let definers = std::mem::take(&mut expansion.definers);
+        let sources: std::collections::BTreeSet<krishiv_plan::SourceId> =
+            definers.iter().map(|d| d.source).collect();
+        for d in &definers {
+            match Box::pin(self.authorize_definer(d, &sources, env)).await {
+                Ok(owner_reads) => {
+                    if let Some(v) = inlined.get_mut(d.view) {
+                        v.owner_reads = owner_reads;
+                    }
+                }
+                Err(e) => {
+                    let e = self.view_text_failure(&views, env, e).await;
+                    return crate::access::audit_read(self, env, Err(e));
+                }
+            }
+        }
+        let trusting;
+        let analysis = if sources.is_empty() {
+            &env.analysis
+        } else {
+            let mut ctx = env.analysis.clone();
+            ctx.definer_sources = Arc::new(sources);
+            trusting = ctx;
+            &trusting
+        };
         // (Boxed: `analyze_in` runs on the deepest stacks, where the size of its
         // future counts.)
         let (synced, renames) =
-            match Box::pin(self.check_stored_views(&expansion.stored_reads, env)).await {
+            match Box::pin(self.check_stored_views(&expansion.stored_reads, env, analysis)).await {
                 Ok(checked) => checked,
                 Err(e) => {
                     let e = self.view_text_failure(&views, env, e).await;
@@ -1472,9 +1501,13 @@ impl Session {
         // a failure inside a view's text) is shown. One boxed future for both
         // steps: `analyze_in` runs on the deepest stacks, where the size of
         // its own future counts.
-        let (analyzed, body_views) = Box::pin(async {
-            let analyzed = self.state.analyzer.analyze(&plan, &env.analysis).await;
-            (analyzed, self.authorize_body_reads(env).await)
+        let (analyzed, body_views, calls) = Box::pin(async {
+            let analyzed = self.state.analyzer.analyze(&plan, analysis).await;
+            (
+                analyzed,
+                self.authorize_body_reads(env).await,
+                self.authorize_function_calls(env).await,
+            )
         })
         .await;
         let analyzed = analyzed.map_err(|e| {
@@ -1487,6 +1520,8 @@ impl Session {
             attach_analysis(e, own.as_ref().or(text))
         });
         views.extend(body_views?);
+        // The stored functions it calls, before the analysis' own result (P3-T062 §2.4).
+        crate::access::audit_read(self, env, calls)?;
         let analyzed = match analyzed {
             Ok(analyzed) => Ok(analyzed),
             Err(e) => Err(self.view_text_failure(&views, env, e).await),
@@ -1526,6 +1561,44 @@ impl Session {
         Ok(analyzed)
     }
 
+    /// The `SQL SECURITY DEFINER` view `d` read with its definer's rights (P3-T062 §2.4): the
+    /// lookups of its text, then its query analyzed, both as the definer acting for this session's
+    /// principal (`Principal::delegated`; a derived principal holds only its own grants, never
+    /// the reader's role). Inside it, the texts of other definer views (`sources`) are theirs.
+    /// Returns what its query reads, for the view side table.
+    ///
+    /// # Errors
+    /// The definer's denial (42501, naming the definer), or its query's analysis error.
+    async fn authorize_definer(
+        &self,
+        d: &crate::catalog::DefinerRead,
+        sources: &std::collections::BTreeSet<krishiv_plan::SourceId>,
+        env: &QueryEnv,
+    ) -> Result<Vec<krishiv_plan::analyzer::SecurableUse>, KrishivError> {
+        let Some(query) = &d.query else {
+            return Err(krishiv_common::error::InternalError {
+                message: format!("definer view `{}` was not inlined", d.name.join(".")),
+            }
+            .into());
+        };
+        let definer = Arc::new(Principal::delegated(
+            d.definer.clone(),
+            self.state.principal.name.clone(),
+        ));
+        self.authorize_reads_as(&d.reads, env, &definer).await?;
+        let mut ctx = env.analysis.clone();
+        ctx.principal = definer;
+        let mut inner = sources.clone();
+        inner.remove(&d.source);
+        ctx.definer_sources = Arc::new(inner);
+        let plan = Plan::try_new(Arc::clone(query))?;
+        let analyzed = DefaultAnalyzer
+            .analyze(&plan, &ctx)
+            .await
+            .map_err(|e| e.error)?;
+        Ok(analyzed.securables)
+    }
+
     /// The views the bodies of the functions a query called read, once the
     /// policy allows them; a failure inside a view's text after that.
     ///
@@ -1559,6 +1632,7 @@ impl Session {
         &self,
         reads: &[crate::view_schema::StoredRead],
         env: &QueryEnv,
+        analysis: &AnalysisContext,
     ) -> Result<crate::view_schema::StoredViewChecks, KrishivError> {
         let compensation = crate::view_schema::compensation(&env.config);
         let mut synced = Vec::new();
@@ -1569,7 +1643,7 @@ impl Session {
             else {
                 continue;
             };
-            let Ok(analyzed) = DefaultAnalyzer.analyze(&plan, &env.analysis).await else {
+            let Ok(analyzed) = DefaultAnalyzer.analyze(&plan, analysis).await else {
                 continue;
             };
             let case_sensitive = env.analysis.conf.case_sensitive;

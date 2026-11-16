@@ -156,6 +156,27 @@ impl Session {
                 }
                 _ => None,
             },
+            // A stored function of the session catalog (P3-T062 G3: its creator owns it, so it
+            // can call it, which needs `Select` on it).
+            Securable::Function(n) => match n.as_slice() {
+                [catalog, namespace, name] if catalog == crate::catalog::CATALOG => {
+                    use crate::store::CatalogStore as _;
+                    let namespace = if cs {
+                        namespace.clone()
+                    } else {
+                        namespace.to_lowercase()
+                    };
+                    Some(
+                        self.state
+                            .catalog
+                            .store
+                            .functions()
+                            .get(&namespace, name)
+                            .is_some(),
+                    )
+                }
+                _ => None,
+            },
             _ => None,
         }
     }

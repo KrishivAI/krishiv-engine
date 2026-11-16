@@ -144,7 +144,7 @@ use krishiv_common::redact::RedactedSql;
 use twox_hash::XxHash3_128;
 
 pub use access::{
-    authorize, authorize_reported, authorize_secret_refs, insufficient_permissions,
+    allowed, authorize, authorize_reported, authorize_secret_refs, insufficient_permissions,
     namespace_parts, secret_scopes, table_ident,
 };
 pub use builtins::BuiltinFunctions;
@@ -666,6 +666,14 @@ pub struct AnalysisContext {
     pub variables: Arc<VariableSnapshot>,
     /// What the analysis is for: the privilege its reads ask.
     pub mode: AnalysisMode,
+    /// The SQL sources of the `SQL SECURITY DEFINER` view texts inlined into the plan whose reads
+    /// were authorized for the view's owner (P3-T062 §2.4): under a plan node lowered from one of
+    /// them, Bind asks the policy nothing about catalog tables, views and paths for
+    /// [`Self::principal`], the column pass skips those reads, and they are not among
+    /// [`AnalyzedPlan::securables`]. Secret scopes and server-scoped store options under them
+    /// are still asked of the principal. A source id is minted by the session for each view text
+    /// it lowers, so no plan a caller writes carries one. Empty for every other analysis.
+    pub definer_sources: Arc<BTreeSet<crate::SourceId>>,
 }
 
 /// The context inputs of a resolution: with the input key and the pins,
@@ -1106,11 +1114,27 @@ async fn analyze_with(
         hinted,
     ) = resolve::resolve(plan, ctx, &bindings, warm.as_deref(), slot.is_some())?;
     // What each table read reads, from the final plan (P3-T062 review B1).
-    let reads = reads::column_reads(&root, &bindings, &hinted);
+    let reads = reads::column_reads(ctx, &root, &bindings, &hinted);
     for (used, read) in securables.iter_mut().zip(&reads) {
         used.columns.clone_from(&read.columns);
     }
-    access::authorize_columns(ctx, &securables, &reads, plan.root().origin).await?;
+    access::authorize_columns(
+        ctx,
+        &securables,
+        &reads,
+        &bindings.definer_only,
+        plan.root().origin,
+    )
+    .await?;
+    // What only a definer view's text reads is its owner's, not the principal's (P3-T062 §2.4).
+    if !bindings.definer_only.is_empty() {
+        securables = securables
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| !bindings.definer_only.contains(i))
+            .map(|(_, u)| u)
+            .collect();
+    }
     unexecutable::check(&root, ctx.conf.time_type)?;
     let resolved = Plan::try_new(root).map_err(|e| AnalysisError::new(e, plan.root().origin))?;
     if let Some((slot, starts)) = slot {

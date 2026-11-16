@@ -32,6 +32,7 @@ pub(super) struct Reads {
 /// The reads of `root` per [`Bindings::securables`] entry (see the module docs). `hinted` is
 /// what the plan's hints read before they were removed ([`hint_reads`]).
 pub(super) fn column_reads(
+    ctx: &super::AnalysisContext,
     root: &LogicalPlan,
     b: &Bindings,
     hinted: &(HashSet<u64>, bool),
@@ -48,7 +49,10 @@ pub(super) fn column_reads(
     for (name, securable) in &b.scans {
         by_name.entry(name.clone()).or_default().push(*securable);
     }
-    let mut walk = Walk::default();
+    let mut walk = Walk {
+        definer: Some(ctx).filter(|c| !c.definer_sources.is_empty()),
+        ..Walk::default()
+    };
     walk.refs.extend(hinted.0.iter().copied());
     walk.unproven |= hinted.1;
     walk.plan(root);
@@ -134,7 +138,10 @@ struct Scan {
 }
 
 #[derive(Default)]
-struct Walk {
+struct Walk<'c> {
+    /// The context, when the plan inlines definer views: what their texts read is their
+    /// owners', authorized apart, so the walk does not enter them (P3-T062 §2.4).
+    definer: Option<&'c super::AnalysisContext>,
     /// Attribute ids (as seen from the root) something reads.
     refs: HashSet<u64>,
     /// `(a, b)`: if `a` is read, so is `b` (positional consumption).
@@ -146,7 +153,7 @@ struct Walk {
     seen_exprs: HashSet<(*const crate::Expr, u64)>,
 }
 
-impl Walk {
+impl Walk<'_> {
     /// Marks every output column of `p` (shifted by `off`) read.
     fn all_of(&mut self, p: &LogicalPlan, off: u64) {
         match p.resolved_output() {
@@ -174,6 +181,12 @@ impl Walk {
         let mut stack: Vec<(&LogicalPlan, u64)> = vec![(root, 0)];
         while let Some((p, off)) = stack.pop() {
             if !seen.insert((std::ptr::from_ref(p), off)) {
+                continue;
+            }
+            if self
+                .definer
+                .is_some_and(|ctx| super::bind::from_definer_text(ctx, crate::walk::Node::Plan(p)))
+            {
                 continue;
             }
             let mut subplans: Vec<&LogicalPlan> = Vec::new();

@@ -70,6 +70,12 @@ pub(super) struct Bindings {
     pub(super) pins: BTreeMap<TableIdent, TableVersion>,
     pub(super) epochs: BTreeMap<String, u64>,
     pub(super) securables: Vec<(Securable, Privilege)>,
+    /// The [`Self::securables`] read only under a `SQL SECURITY DEFINER` view's text
+    /// ([`AnalysisContext::definer_sources`]): authorized for the view's owner, never asked of the
+    /// principal here, so the column pass skips them and the analysis does not report them.
+    pub(super) definer_only: std::collections::BTreeSet<usize>,
+    /// Whether the read being bound is under a definer view's text (see [`Self::definer_only`]).
+    pub(super) under_definer: bool,
     pub(super) query_text: Option<RedactedSql>,
     /// Spark's search path, for `TABLE_OR_VIEW_NOT_FOUND` and
     /// `UNRESOLVED_ROUTINE`.
@@ -125,24 +131,52 @@ pub(super) async fn bind(plan: &Plan, ctx: &AnalysisContext) -> Result<Bindings,
     }
     sql_function_roots(ctx, &mut roots)?;
     let mut found = Vec::new();
+    // Per `found` entry: whether it is under a definer view's text.
+    let mut definer = Vec::new();
     let mut seen = HashSet::new();
     // Every CTE scope stays alive for the walk, so no scope address is
     // reused while `seen` holds it.
     let mut scopes: Vec<Arc<[String]>> = vec![Arc::from(Vec::new())];
     for root in &roots {
-        let mut stack = vec![(Node::Plan(root), Arc::clone(&scopes[0]))];
-        while let Some((node, env)) = stack.pop() {
-            if !seen.insert((node.key() as usize, addr(&*env))) {
+        let mut stack = vec![(Node::Plan(root), Arc::clone(&scopes[0]), false)];
+        while let Some((node, env, under)) = stack.pop() {
+            if !seen.insert((node.key() as usize, addr(&*env), under)) {
                 continue;
             }
+            let under = under || from_definer_text(ctx, node);
             let mut next = Vec::new();
             visit(node, &env, ctx, &mut next, &mut found)?;
+            definer.resize(found.len(), under);
             scopes.extend(next.iter().map(|(_, e)| Arc::clone(e)));
-            stack.extend(next.into_iter().rev());
+            stack.extend(next.into_iter().rev().map(|(n, e)| (n, e, under)));
         }
     }
-    load(ctx, &mut b, found).await?;
+    // The principal's own reads first, then those only a definer view's text makes: a name both
+    // read is bound (and asked) as the principal's, never served from the owner's check.
+    let (own, owner): (Vec<_>, Vec<_>) = found
+        .into_iter()
+        .zip(definer)
+        .partition(|(_, under)| !*under);
+    load(ctx, &mut b, own.into_iter().map(|(f, _)| f).collect()).await?;
+    b.under_definer = true;
+    load(ctx, &mut b, owner.into_iter().map(|(f, _)| f).collect()).await?;
+    b.under_definer = false;
     Ok(b)
+}
+
+/// Whether `node` was lowered from the text of a `SQL SECURITY DEFINER` view whose reads were
+/// authorized for its owner ([`AnalysisContext::definer_sources`]).
+pub(super) fn from_definer_text(ctx: &AnalysisContext, node: Node<'_>) -> bool {
+    if ctx.definer_sources.is_empty() {
+        return false;
+    }
+    let origin = match node {
+        Node::Plan(p) => p.origin,
+        Node::Expr(e) => e.origin,
+    };
+    origin
+        .sql
+        .is_some_and(|(source, _)| ctx.definer_sources.contains(&source))
 }
 
 enum Found<'a> {
@@ -754,6 +788,18 @@ async fn authorize_as(
         .find(|(s, i)| *s == securable && b.securables[*i].1 == privilege)
     {
         return Ok(*i);
+    }
+    // A catalog table or view read under a definer view's text was asked of the view's owner
+    // (paths, secret scopes and store options are still the principal's).
+    if b.under_definer
+        && matches!(securable, Securable::Table(_) | Securable::View(_))
+        && matches!(privilege, Privilege::Select | Privilege::Browse)
+    {
+        b.securables.push((securable.clone(), privilege));
+        let i = b.securables.len() - 1;
+        b.definer_only.insert(i);
+        checked.push((securable, i));
+        return Ok(i);
     }
     // A policy that decides columns is asked only whether the schema may be seen here; the rows
     // are asked per referenced column once the query is resolved (`authorize_columns`).

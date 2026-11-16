@@ -23,12 +23,18 @@ pub(super) struct Expander<'a> {
     pub(super) stored_reads: Vec<crate::view_schema::StoredRead>,
     /// The views inlined so far, for [`Expansion::views`] (the lineage side table).
     pub(super) views: Vec<ViewExpansion>,
+    /// The definer views inlined so far, for [`Expansion::definers`].
+    pub(super) definers: Vec<DefinerRead>,
+    /// The definer views whose text the expansion is inside, innermost last (indexes of
+    /// [`Self::definers`]): a lookup there is the innermost one's, asked of its definer.
+    pub(super) in_definer: Vec<usize>,
 }
 
-/// A view read the expansion inlined as `SubqueryAlias alias` at `origin`, for the view side table. Every
-/// view inlined here is read with its base tables checked against the caller (the analyzer binds them as the
-/// query's own reads): a temporary view, or a permanent view as `INVOKER` (T062 adds `DEFINER`). The expansion
-/// has no memo, so a read shared by two parents of the plan (`df.join(df)`) is inlined, and recorded, twice.
+/// A view read the expansion inlined as `SubqueryAlias alias` at `origin`, for the view side table: a
+/// temporary view or a permanent `INVOKER` view, read with its base tables checked against the caller (the
+/// analyzer binds them as the query's own reads), or a permanent `DEFINER` view, whose base tables are checked
+/// against its definer (P3-T062 §2.4). The expansion has no memo, so a read shared by two parents of the plan
+/// (`df.join(df)`) is inlined, and recorded, twice.
 fn view_read(
     name: Vec<String>,
     alias: &str,
@@ -234,8 +240,16 @@ impl Expander<'_> {
                 .filter(|e| e.view.is_some())
                 .map(|e| (e.namespace.clone(), e.name.clone())),
         };
-        if !self.reads.contains(&candidate) {
-            self.reads.push(candidate);
+        // Inside a definer view's text a lookup is the definer's to be allowed, not the reader's.
+        let reads = match self.in_definer.last() {
+            Some(&i) => match self.definers.get_mut(i) {
+                Some(d) => &mut d.reads,
+                None => &mut self.reads,
+            },
+            None => &mut self.reads,
+        };
+        if !reads.contains(&candidate) {
+            reads.push(candidate);
         }
         let Some((entry, view)) = entry.as_ref().and_then(|e| Some((e, e.view.as_ref()?))) else {
             return Ok(plan);
@@ -284,13 +298,32 @@ impl Expander<'_> {
             }
             .into());
         };
+        let source = (stored.next_source)();
         let lowered = krishiv_sql::lower_identified(
             &query,
-            (stored.next_source)(),
+            source,
             stored.parser.case_sensitive,
             &view.identifier_spans,
         )
         .map_err(|e| e.error)?;
+        let name = vec![
+            CATALOG.to_owned(),
+            namespace.to_owned(),
+            table_key.to_owned(),
+        ];
+        // A definer view's text is read with its definer's rights: its lookups are recorded as its own.
+        let definer = view.definer.as_ref().map(|definer| {
+            self.definers.push(DefinerRead {
+                name: name.clone(),
+                definer: definer.clone(),
+                source,
+                query: None,
+                reads: Vec::new(),
+                view: 0,
+            });
+            self.definers.len() - 1
+        });
+        self.in_definer.extend(definer);
         self.path.push(key);
         let previous = self.view_namespace.replace(view.namespace.clone());
         let previous_path = self.view_path.replace(view.path.clone());
@@ -298,7 +331,14 @@ impl Expander<'_> {
         self.view_namespace = previous;
         self.view_path = previous_path;
         self.path.pop();
+        if definer.is_some() {
+            self.in_definer.pop();
+        }
         let mut input = input?;
+        if let Some(d) = definer.and_then(|i| self.definers.get_mut(i)) {
+            d.query = Some(Arc::clone(&input));
+            d.view = self.views.len();
+        }
         let mode = crate::view_schema::effective_mode(view.schema_mode, stored.binding_enabled);
         let projection = crate::view_schema::projection(mode);
         let mut columns: Vec<String> = entry.columns.iter().map(|c| c.name.clone()).collect();
@@ -334,14 +374,14 @@ impl Expander<'_> {
             );
         }
         self.views.push(view_read(
-            vec![
-                CATALOG.to_owned(),
-                namespace.to_owned(),
-                table_key.to_owned(),
-            ],
+            name,
             &table,
             plan.origin,
-            ViewSecurity::Invoker,
+            if definer.is_some() {
+                ViewSecurity::Definer
+            } else {
+                ViewSecurity::Invoker
+            },
         ));
         // Otherwise (a view stored without its query's column names) the columns are only renamed by position.
         Ok(Arc::new(

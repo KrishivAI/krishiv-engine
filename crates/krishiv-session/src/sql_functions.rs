@@ -152,6 +152,9 @@ pub(crate) struct QueryFunctions {
     /// The views the bodies expanded so far inlined, for the query's view side table
     /// (`AnalyzedPlan::views`).
     views_read: Mutex<Vec<krishiv_plan::analyzer::views::ViewExpansion>>,
+    /// The stored functions a lookup resolved so far (namespace, name as stored), each once: a
+    /// call needs `Select` on the function (P3-T062 §2.4).
+    called: Mutex<Vec<(String, String)>>,
 }
 
 /// How a body's permanent views are read: the parser options of the query
@@ -185,7 +188,16 @@ impl QueryFunctions {
             expanded: Mutex::new(HashMap::new()),
             reads: Mutex::new((Vec::new(), None)),
             views_read: Mutex::new(Vec::new()),
+            called: Mutex::new(Vec::new()),
         }
+    }
+
+    /// The stored functions a lookup resolved so far, in order, each once (see `called`).
+    pub(crate) fn stored_calls(&self) -> Vec<(String, String)> {
+        self.called
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// This registry as the query snapshot saw the current catalog (`system` or not).
@@ -313,7 +325,10 @@ impl QueryFunctions {
         let body = match expansion {
             Ok(expansion) => {
                 let mut seen = self.reads.lock().unwrap_or_else(PoisonError::into_inner);
-                for read in expansion.reads {
+                // A definer view read by a body is read as an invoker one (fails closed): the
+                // lookups of its text are the caller's too (P3-T062 §2.4).
+                let inner = expansion.definers.into_iter().flat_map(|d| d.reads);
+                for read in expansion.reads.into_iter().chain(inner) {
                     if !seen.0.contains(&read) {
                         seen.0.push(read);
                     }
@@ -500,9 +515,15 @@ impl FunctionRegistry for QueryFunctions {
                 .map(|entry| FunctionLookup::Sql(self.expanded(&entry.def, profile)))
         };
         let stored = |namespace: &str, f: &String| {
-            self.stored
-                .get(namespace, f)
-                .map(|stored| FunctionLookup::Sql(self.expanded(&stored.entry.def, profile)))
+            self.stored.get(namespace, f).map(|stored| {
+                let key = (stored.namespace.clone(), f.clone());
+                let mut called = self.called.lock().unwrap_or_else(PoisonError::into_inner);
+                if !called.contains(&key) {
+                    called.push(key);
+                }
+                drop(called);
+                FunctionLookup::Sql(self.expanded(&stored.entry.def, profile))
+            })
         };
         let found = match lower.as_slice() {
             [f] => self.path.iter().find_map(|entry| match entry.as_slice() {

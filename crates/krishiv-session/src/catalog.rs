@@ -1379,6 +1379,8 @@ pub(crate) fn expand_views_in(
         deferred: None,
         stored_reads: Vec::new(),
         views: Vec::new(),
+        definers: Vec::new(),
+        in_definer: Vec::new(),
     };
     let plan = expander.go(Arc::clone(plan), &mut Vec::new())?;
     Ok(Expansion {
@@ -1387,7 +1389,29 @@ pub(crate) fn expand_views_in(
         deferred: expander.deferred,
         stored_reads: expander.stored_reads,
         views: expander.views,
+        definers: expander.definers,
     })
+}
+
+/// A `SQL SECURITY DEFINER` view the expansion inlined (P3-T062 §2.4): its query reads with its
+/// definer's rights. The reader is asked only about the view itself (among
+/// [`Expansion::reads`]); the session asks [`Self::reads`] and analyzes [`Self::query`] as the
+/// definer, then has the reader's analysis skip what the text from [`Self::source`] reads
+/// (`AnalysisContext::definer_sources`).
+#[derive(Debug, Clone)]
+pub(crate) struct DefinerRead {
+    /// The view's name parts (`spark_catalog`, namespace, name).
+    pub(crate) name: Vec<String>,
+    /// Whose rights read its query.
+    pub(crate) definer: String,
+    /// The source id its text was lowered with (fresh for this read).
+    pub(crate) source: krishiv_plan::SourceId,
+    /// Its query, the views it reads inlined; `None` until inlined.
+    pub(crate) query: Option<Arc<LogicalPlan>>,
+    /// The catalog-store lookups of its text (not those of a definer view inside it), in order.
+    pub(crate) reads: Vec<ReadCandidate>,
+    /// Its entry among [`Expansion::views`].
+    pub(crate) view: usize,
 }
 
 /// A table-like name the expansion looked up in the catalog store, in plan order. The analyzer never
@@ -1415,6 +1439,8 @@ pub(crate) struct Expansion {
     pub(crate) stored_reads: Vec<crate::view_schema::StoredRead>,
     /// The views inlined, for the lineage side table (`AnalyzedPlan::views`, located once analyzed).
     pub(crate) views: Vec<krishiv_plan::analyzer::views::ViewExpansion>,
+    /// The `SQL SECURITY DEFINER` views inlined, outer views first.
+    pub(crate) definers: Vec<DefinerRead>,
 }
 
 /// Whether creating the temporary view `name` over `plan` would close a

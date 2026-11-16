@@ -22,6 +22,8 @@ impl Session {
         analyzed: &AnalyzedPlan,
         env: &QueryEnv,
     ) -> Result<(Plan, PhysicalPlan), KrishivError> {
+        // A plan that is shown shows the queries of its definer views (P3-T062 §2.4).
+        self.authorize_shown_definer_reads(analyzed).await?;
         let (optimized, physical, _) = self.physical_with(analyzed, env, false, false).await?;
         Ok((optimized, physical))
     }
@@ -35,6 +37,7 @@ impl Session {
         env: &QueryEnv,
         trace: bool,
     ) -> Result<(Plan, PhysicalPlan, Vec<krishiv_optimizer::RuleStep>), KrishivError> {
+        self.authorize_shown_definer_reads(analyzed).await?;
         self.physical_with(analyzed, env, trace, false).await
     }
 
@@ -46,6 +49,7 @@ impl Session {
         analyzed: &AnalyzedPlan,
         env: &QueryEnv,
     ) -> Result<(Plan, PhysicalPlan), KrishivError> {
+        self.authorize_shown_definer_reads(analyzed).await?;
         let (optimized, physical, _) = self.physical_with(analyzed, env, false, true).await?;
         Ok((optimized, physical))
     }

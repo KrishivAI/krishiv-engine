@@ -82,13 +82,28 @@ pub async fn authorize_reported(
     }
 }
 
+/// Whether `policy` allows `principal` `privilege` on `securable`, asked as [`authorize`] asks it
+/// (fail closed: a denial, a policy error or a filter on a change is `false`) but quietly: the
+/// policy is not told of a refusal and nothing is traced. For what a listing shows
+/// (`SHOW TABLES` lists only what the principal may `Browse`, P3-T062 §2.4): leaving an entry
+/// out is not a refusal.
+pub async fn allowed(
+    policy: &dyn AccessPolicy,
+    principal: &Principal,
+    securable: &Securable,
+    privilege: Privilege,
+) -> bool {
+    decide_quietly(policy, principal, securable, privilege)
+        .await
+        .is_ok()
+}
+
 async fn decide(
     policy: &dyn AccessPolicy,
     principal: &Principal,
     securable: &Securable,
     privilege: Privilege,
 ) -> Result<(), KrishivError> {
-    let denied = || insufficient_permissions(principal, securable, privilege);
     // What is asked, before any answer: the analyze API's securables are checked against these
     // events (P3-T063 m3). The securable prints as the denial text does (redacted, ADR 0038).
     tracing::trace!(
@@ -98,6 +113,16 @@ async fn decide(
         securable = %securable,
         "authorize"
     );
+    decide_quietly(policy, principal, securable, privilege).await
+}
+
+async fn decide_quietly(
+    policy: &dyn AccessPolicy,
+    principal: &Principal,
+    securable: &Securable,
+    privilege: Privilege,
+) -> Result<(), KrishivError> {
+    let denied = || insufficient_permissions(principal, securable, privilege);
     if privilege.changes() {
         match policy.check(principal, securable, Privilege::Select).await {
             // A write-only principal (reads denied) may still write.
@@ -141,7 +166,8 @@ async fn decide(
 /// `reads::column_reads`), and on the table itself when some appearance reads whole rows
 /// (`count(*)`, a view, or a plan the walk cannot prove). Bind asked only `Browse` on them, so
 /// this is the read check; a policy that does not decide columns was asked `Select` on the table
-/// at Bind and is not asked again.
+/// at Bind and is not asked again. The uses in `definer_only` (read only under a definer view's
+/// text, authorized for the view's owner) are not asked.
 ///
 /// # Errors
 /// As [`authorize`], at `origin`, for the first column (or table) denied.
@@ -149,12 +175,16 @@ pub(super) async fn authorize_columns(
     ctx: &super::AnalysisContext,
     uses: &[super::SecurableUse],
     reads: &[super::reads::Reads],
+    definer_only: &std::collections::BTreeSet<usize>,
     origin: crate::Origin,
 ) -> Result<(), super::AnalysisError> {
     if !ctx.policy.column_level() {
         return Ok(());
     }
     for (i, used) in uses.iter().enumerate() {
+        if definer_only.contains(&i) {
+            continue;
+        }
         let (Securable::Table(table) | Securable::View(table)) = &used.securable else {
             continue;
         };
