@@ -253,6 +253,55 @@ fn command_output_schemas() {
     insta::assert_snapshot!(out);
 }
 
+/// `SHOW GRANTS` (a Krishiv extension, the `grants` provider) reports the 7 columns its run returns,
+/// with the same names, types and nullability (review #803 n3).
+#[test]
+fn show_grants_reports_its_result_columns() {
+    use krishiv_session::grants::{Grants, GrantsPolicy, MemoryGrantStore};
+    let policy = Arc::new(GrantsPolicy::new(
+        Grants::new(Arc::new(MemoryGrantStore::new())),
+        Arc::new(krishiv_session::AllowAll),
+        true,
+    ));
+    let s = Session::builder()
+        .principal(Principal::new("root", PrincipalKind::User))
+        .access_policy(Arc::clone(&policy) as Arc<dyn AccessPolicy>)
+        .grants(policy)
+        .build()
+        .unwrap();
+    corpus_session(&s);
+    for sql in [
+        "SHOW GRANTS",
+        "SHOW GRANTS ON TABLE t",
+        "SHOW GRANTS TO user:ana",
+    ] {
+        let a = block_on(s.analyze(sql)).unwrap();
+        assert_valid(&a.to_json());
+        let analyzed: Vec<(String, String, bool)> = a
+            .output_schema
+            .iter()
+            .map(|c| (c.name.clone(), c.data_type.simple_string(), c.nullable))
+            .collect();
+        assert_eq!(analyzed.len(), 7, "{sql}: {analyzed:?}");
+        let run = block_on(block_on(s.sql(sql)).unwrap().schema()).unwrap();
+        let ran: Vec<(String, String, bool)> = run
+            .fields()
+            .iter()
+            .map(|f| {
+                let ty = match f.data_type() {
+                    arrow_schema::DataType::Boolean => "boolean",
+                    arrow_schema::DataType::Utf8
+                    | arrow_schema::DataType::LargeUtf8
+                    | arrow_schema::DataType::Utf8View => "string",
+                    other => panic!("{sql}: {other}"),
+                };
+                (f.name().clone(), ty.to_owned(), f.is_nullable())
+            })
+            .collect();
+        assert_eq!(analyzed, ran, "{sql}");
+    }
+}
+
 /// An `ADMIN` statement needs `Manage` on the cluster, and `statement_info` lists it (review m3).
 #[test]
 fn admin_statements_list_manage_on_the_cluster() {
