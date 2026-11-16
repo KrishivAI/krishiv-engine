@@ -21,6 +21,8 @@ use crate::join_order::fixture;
 use crate::support::eval::{Db, V};
 use crate::support::{self, Rng, data, eval};
 
+mod requests;
+
 const RULE: &str = "PayloadAboveAggregate";
 
 /// Statistics with key facts: `inner`'s tables, and per table name the column

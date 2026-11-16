@@ -283,12 +283,10 @@ fn an_absorbed_input_must_be_unique_and_not_shared() {
         notes.iter().any(|n| n.contains("absorbed [e]")),
         "{notes:?}"
     );
-    // `e` without its key: `f` is not unique on anything.
+    // `e` without its key: `f` declares none, so its key is counted first
+    // (a request, design P2b A5 (d)).
     let not_unique = scan("f", vec![int(6, "ek"), string(7, "ename")]);
-    refused(
-        absorbing(&not_unique),
-        "is not proven unique on its join key",
-    );
+    refused(absorbing(&not_unique), "awaiting a key count of f [ek]");
     // `e` read by another parent too.
     let shared = e();
     let root = Arc::new(LogicalPlan::new(PlanNode::Union {

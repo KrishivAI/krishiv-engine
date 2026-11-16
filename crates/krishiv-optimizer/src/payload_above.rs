@@ -25,6 +25,14 @@
 //! whose table declares a subset of `d` unique ([`Statistics::unique_keys`]:
 //! statistics). Nothing is guessed: without a proof the rule does not fire.
 //!
+//! Where only a base relation's fact is missing (a scan of a table or of
+//! files with no declared key), the candidate goes on through every other
+//! gate with the missing facts pending; when all of them pass, each is
+//! asked for ([`Statistics::want_unique`]: a request, never a fact, design
+//! P2b A5 (d)) and the rule refuses with an "awaiting a key count" note. The
+//! session may count the columns (`krishiv.optimizer.discoverKeys`) and
+//! optimize once more, when the answer is a fact like any other.
+//!
 //! # Absorption
 //!
 //! An inner join on the path whose condition reads `D'`'s columns and only
@@ -111,13 +119,14 @@ use crate::eager::{MIN_RETENTION, distinct_calls, replace_calls};
 use crate::estimate::Estimator;
 use crate::expr::{
     Attrs, builtin, column, conjuncts, has_outer_reference, has_subquery, is_deterministic,
-    output_of, references, references_into, strip_alias,
+    output_of, references, references_into,
 };
 use crate::late_payload::{
     MIN_PAYLOAD_BYTES, bare_column, children, fixed_width, plain_column, shared_nodes, with_child,
 };
 use crate::restrict::{MAX_ID, key_type, max_id};
 use crate::stats::{RelStats, Statistics, number};
+use unique::{Key, Want, push_want, unique};
 
 /// The most moves below one aggregate (the new aggregate is tried again).
 const MAX_MOVES: usize = 8;
@@ -490,6 +499,9 @@ fn try_candidate(
     let mut absorbed: Vec<String> = Vec::new();
     let mut kept: Vec<&Step> = Vec::new();
     let mut proofs: Vec<String> = Vec::new();
+    // Key counts a proof still waits for (design P2b A5 (d)): asked for only
+    // once every other gate passed.
+    let mut wanted: Vec<Want> = Vec::new();
     for s in &c.path {
         match &s.node.node {
             PlanNode::Project { exprs, .. } => {
@@ -565,12 +577,19 @@ fn try_candidate(
                     }
                 }
                 let name = relation_name(e);
-                let Some(proof) = unique(e, &e_keys, ctx.stats) else {
-                    return refuse(format!(
-                        "the joined {name} is not proven unique on its join key"
-                    ));
-                };
-                proofs.push(format!("{name} by {proof}"));
+                match unique(e, &e_keys, ctx.stats) {
+                    Some(Key::Proven(proof)) => proofs.push(format!("{name} by {proof}")),
+                    Some(Key::Wanted(w)) => {
+                        for w in w {
+                            push_want(&mut wanted, w);
+                        }
+                    }
+                    None => {
+                        return refuse(format!(
+                            "the joined {name} is not proven unique on its join key"
+                        ));
+                    }
+                }
                 absorbed.push(name);
                 let (left, right) = if s.child == 0 {
                     (dprime, Arc::clone(e))
@@ -621,11 +640,20 @@ fn try_candidate(
     }
 
     // FD2.
-    let Some(proof) = unique(join.dim, &d_ids, ctx.stats) else {
-        return refuse(format!(
-            "no fact proves the dimension unique on [{}]",
-            names(join.eqs.iter().map(|(_, d)| d))
-        ));
+    let proof = match unique(join.dim, &d_ids, ctx.stats) {
+        Some(Key::Proven(proof)) => Some(proof),
+        Some(Key::Wanted(w)) => {
+            for w in w {
+                push_want(&mut wanted, w);
+            }
+            None
+        }
+        None => {
+            return refuse(format!(
+                "no fact proves the dimension unique on [{}]",
+                names(join.eqs.iter().map(|(_, d)| d))
+            ));
+        }
     };
 
     // Retention, from statistics.
@@ -713,6 +741,24 @@ fn try_candidate(
         .filter(|n| *n <= MAX_ID)
     else {
         return refuse("the plan has no attribute ids left".to_owned());
+    };
+    // Every other gate passed: what is still unproven is asked for, and the
+    // rule waits for the answer (a later optimization reads it as a fact).
+    if !wanted.is_empty() {
+        for w in &wanted {
+            if let PlanNode::Scan(scan) = &w.scan.node {
+                ctx.stats.want_unique(scan, &w.columns);
+            }
+        }
+        let texts: Vec<String> = wanted.iter().map(Want::text).collect();
+        return refuse(format!(
+            "no fact proves the dimension unique on [{}] yet: awaiting a key count of {}",
+            names(join.eqs.iter().map(|(_, d)| d)),
+            texts.join(", ")
+        ));
+    }
+    let Some(proof) = proof else {
+        return refuse("no fact proves the dimension unique".to_owned());
     };
     ctx.next = next;
     let mut merged: Vec<(Arc<Expr>, Arc<Expr>)> = Vec::new();
@@ -922,118 +968,6 @@ fn magnitude(e: &Expr, rel: &RelStats) -> Option<f64> {
     }
 }
 
-/// How `p` is proven unique on a subset of `cols` among the rows whose
-/// columns of that subset are not NULL, or `None`:
-/// - a scan whose table declares such a set ([`Statistics::unique_keys`]);
-/// - an aggregate grouped by columns that `cols` all hold (the plan);
-/// - through filters, `Shift`s and projections that pass the columns through;
-/// - an inner join of `A` unique on its part of `cols` with `B` unique on the
-///   columns its equalities compare (each `A` row meets at most one `B` row),
-///   either way round.
-fn unique(p: &Arc<LogicalPlan>, cols: &Attrs, stats: &dyn Statistics) -> Option<String> {
-    if cols.is_empty() {
-        return None;
-    }
-    match &p.node {
-        PlanNode::Scan(s) => {
-            let named: HashSet<&str> = s
-                .output
-                .iter()
-                .filter(|c| cols.contains(&c.id))
-                .map(|c| c.name.as_str())
-                .collect();
-            stats
-                .unique_keys(s)
-                .into_iter()
-                .find(|k| !k.is_empty() && k.iter().all(|n| named.contains(n.as_str())))
-                .map(|k| format!("statistics (key [{}])", k.join(", ")))
-        }
-        PlanNode::Filter { input, .. } => unique(input, cols, stats),
-        PlanNode::Shift { input, offset } => {
-            let below: Attrs = cols
-                .iter()
-                .filter_map(|id| id.0.checked_sub(*offset).map(AttrId))
-                .collect();
-            unique(input, &below, stats)
-        }
-        PlanNode::Project { input, exprs } => {
-            let mut below = Attrs::default();
-            for e in exprs {
-                if let Some(out) = output_of(e)
-                    && cols.contains(&out.id)
-                    && let Some(c) = bare_column(strip_alias(e))
-                {
-                    below.insert(c.id);
-                }
-            }
-            unique(input, &below, stats)
-        }
-        PlanNode::Aggregate {
-            grouping: Grouping::GroupBy(keys),
-            aggregates,
-            ..
-        } => {
-            let mut key_ids = Attrs::default();
-            for k in keys {
-                key_ids.insert(bare_column(k)?.id);
-            }
-            // The output columns that are grouping keys, as their key.
-            let mut held = Attrs::default();
-            for e in aggregates {
-                if let Some(out) = output_of(e)
-                    && cols.contains(&out.id)
-                    && let Some(c) = bare_column(strip_alias(e))
-                    && key_ids.contains(&c.id)
-                {
-                    held.insert(c.id);
-                }
-            }
-            (!key_ids.is_empty() && key_ids.is_subset(&held)).then(|| {
-                let v: Vec<String> = keys
-                    .iter()
-                    .filter_map(|k| bare_column(k).map(|c| c.name.clone()))
-                    .collect();
-                format!("the plan (grouped by [{}])", v.join(", "))
-            })
-        }
-        PlanNode::Join {
-            left,
-            right,
-            kind: JoinKind::Inner,
-            condition: JoinCondition::On(on),
-        } => {
-            let (l_ids, r_ids) = (ids(left)?, ids(right)?);
-            let mut l_keys = Attrs::default();
-            let mut r_keys = Attrs::default();
-            for conj in conjuncts(on) {
-                if let Some((Builtin::Eq, [a, b], _)) = builtin(&conj)
-                    && let (Some(a), Some(b)) = (bare_column(a), bare_column(b))
-                    && identity_key(&a.data_type)
-                    && a.data_type == b.data_type
-                {
-                    if l_ids.contains(&a.id) && r_ids.contains(&b.id) {
-                        l_keys.insert(a.id);
-                        r_keys.insert(b.id);
-                    } else if l_ids.contains(&b.id) && r_ids.contains(&a.id) {
-                        l_keys.insert(b.id);
-                        r_keys.insert(a.id);
-                    }
-                }
-            }
-            let l_cols: Attrs = cols.intersection(&l_ids).copied().collect();
-            let r_cols: Attrs = cols.intersection(&r_ids).copied().collect();
-            if let Some(a) = unique(left, &l_cols, stats)
-                && let Some(b) = unique(right, &r_keys, stats)
-            {
-                return Some(format!("{a} joined to {b}"));
-            }
-            let a = unique(right, &r_cols, stats)?;
-            let b = unique(left, &l_keys, stats)?;
-            Some(format!("{a} joined to {b}"))
-        }
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests;
+mod unique;

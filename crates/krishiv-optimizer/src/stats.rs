@@ -157,6 +157,16 @@ pub trait Statistics: Send + Sync + fmt::Debug {
         let _ = scan;
         Vec::new()
     }
+
+    /// A request, never a fact: a rewrite that needs `columns` (names of
+    /// `scan`'s output columns, sorted) unique in the table `scan` reads,
+    /// where no fact says so yet ([`Self::unique_keys`]). The session may
+    /// count the columns before it optimizes again (design P2b A5, (d):
+    /// `krishiv.optimizer.discoverKeys`); a request never changes a plan.
+    /// Ignored by default.
+    fn want_unique(&self, scan: &Scan, columns: &[String]) {
+        let _ = (scan, columns);
+    }
 }
 
 /// No statistics: every table is estimated by default.
