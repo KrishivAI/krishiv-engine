@@ -101,6 +101,7 @@ mod hof;
 mod instance;
 mod intervals;
 pub(crate) mod legacy;
+pub mod lineage;
 mod ops;
 mod pivot;
 pub(crate) mod prefix;

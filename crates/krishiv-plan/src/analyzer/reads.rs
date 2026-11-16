@@ -285,8 +285,13 @@ impl Walk {
                         None => self.unproven = true,
                     }
                 }
-                // Unresolved forms: nothing proves what they read.
+                // Unresolved forms: nothing proves what they read. A Python UDF over a relation
+                // (map, grouped and cogrouped map, table function) sees every column of it.
                 PlanNode::Read(_)
+                | PlanNode::MapPartitions { .. }
+                | PlanNode::GroupMap { .. }
+                | PlanNode::CoGroupMap { .. }
+                | PlanNode::PythonTableFunction { .. }
                 | PlanNode::Sql { .. }
                 | PlanNode::WithColumns { .. }
                 | PlanNode::Hint { .. }

@@ -7,7 +7,7 @@
 //! in the metastore's own lists, as Hive type strings. A Spark schema property that is damaged (a part missing, JSON
 //! that does not parse or is not a struct, a partition column the schema does not have) is a catalog fault, never a
 //! silent fall back to the placeholder columns. The storage locations (`sd.location`, and the serde's `path` property
-//! where Spark records it) go through [`check_location`](crate::location::check_location) before they leave this
+//! where Spark records it) go through [`crate::location::check_location`] before they leave this
 //! module, so a catalog that names `file:///etc` or an endpoint of its own is refused as a catalog fault, never read.
 //!
 //! The client is blocking: each call runs on the blocking pool, on one connection that is dropped on any failure so

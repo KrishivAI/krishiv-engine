@@ -43,13 +43,14 @@ const SCHEMA_VERSION: &str = "1";
 const LOCAL_WORKER: &str = "local";
 
 /// Every table of the catalog.
-const TABLES: [&str; 7] = [
+const TABLES: [&str; 8] = [
     "capabilities",
     "caches",
     "memory",
     "metrics",
     "operators",
     "queries",
+    "resource_groups",
     "sessions",
 ];
 
@@ -277,6 +278,7 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("error_message", Text, true),
             ("partial", Flag, false),
         ],
+        "resource_groups" => crate::system_groups::layout(),
         "sessions" => crate::sessions::layout(),
         _ => return None,
     })
@@ -547,6 +549,9 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
     if table.eq_ignore_ascii_case("sessions") {
         return crate::sessions::columns(sources);
     }
+    if table.eq_ignore_ascii_case("resource_groups") {
+        return crate::system_groups::columns(sources);
+    }
     if table.eq_ignore_ascii_case("queries") {
         let rows = sources.queries.snapshot(sources.monitor.sees_all());
         let micros = |ms: Option<i64>| ms.map(|m| m.saturating_mul(1000));
@@ -672,6 +677,8 @@ pub(crate) struct Sources {
     pub(crate) monitor: Arc<Monitor>,
     /// The runtime's sessions.
     pub(crate) sessions: Arc<crate::sessions::SessionView>,
+    /// The resource group controller (`krishiv.workload.resourceGroups.file`), when one is set.
+    pub(crate) groups: Option<Arc<crate::resource_groups::ResourceGroups>>,
 }
 
 pub(crate) use crate::monitor::Monitor;
@@ -1149,26 +1156,6 @@ impl QueryLog {
         });
     }
 
-    /// The tags row `id` carries now: the snapshot taken when the statement started (the
-    /// session's tags then, and the request tags), which later `set_tag` calls do not change.
-    pub(crate) fn row_tags(&self, id: &str) -> Option<Vec<(String, String)>> {
-        let mut tags = None;
-        self.history.update(&self.session_id, id, |row| {
-            tags = Some(row.tags.clone());
-        });
-        tags
-    }
-
-    /// Adds the statement's request tags, as `(tag, "")` pairs, to the tags of row `id`.
-    pub(crate) fn add_request_tags(&self, id: &str, tags: &[Arc<str>]) {
-        if tags.is_empty() {
-            return;
-        }
-        self.history.update(&self.session_id, id, |row| {
-            crate::action::merge_request_tags(&mut row.tags, tags);
-        });
-    }
-
     /// The session's tags now.
     pub(crate) fn tags_now(&self) -> Vec<(String, String)> {
         self.tags()
@@ -1388,7 +1375,7 @@ impl Catalog for SystemCatalog {
             if !id.namespace.is_empty() {
                 return Ok(None);
             }
-            if ["queries", "operators", "sessions"]
+            if ["queries", "operators", "sessions", "resource_groups"]
                 .iter()
                 .any(|t| id.name.eq_ignore_ascii_case(t))
             {
@@ -1710,6 +1697,7 @@ mod tests {
                 Arc::new(krishiv_plan::analyzer::AllowAll),
             )),
             sessions: Arc::default(),
+            groups: None,
         };
         assert!(provider("capabilities", &sources).unwrap().is_some());
         assert!(provider("nope", &sources).unwrap().is_none());
@@ -1990,6 +1978,7 @@ mod tests {
 }
 
 mod caches;
+mod row_stamps;
 mod text;
 pub(crate) use text::TextPolicy;
 #[cfg(test)]

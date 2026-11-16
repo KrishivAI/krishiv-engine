@@ -6,10 +6,14 @@
 //! `krishiv.auth.tokens.*` configured the admin routes take those principals
 //! and the ADR 0046 roles (P3-T002); without, a random token printed once.
 //!
-//! Before anything binds: a non-loopback address is refused (no
-//! authentication exists until P3-T002), uid 0 is refused without
-//! `--allow-root`, and core dumps are turned off unless
-//! `krishiv.server.allowCoreDumps`. On SIGTERM or SIGINT the server drains
+//! Before anything binds: the address, authentication and TLS must fit
+//! together (`check_listener`, design P3-T002 §3.5: a non-loopback address
+//! needs an authentication method, a bearer method there needs TLS, client
+//! certificates need TLS), uid 0 is refused without `--allow-root`, and
+//! core dumps are turned off unless `krishiv.server.allowCoreDumps`. With
+//! `krishiv.server.tls.certFile`/`keyFile` both listeners speak TLS; on
+//! SIGHUP (Unix) the certificate and key are read again, and a failed read
+//! keeps the old ones serving. On SIGTERM or SIGINT the server drains
 //! (`/readyz` 503, new RPCs `UNAVAILABLE`), gives running queries
 //! `krishiv.server.shutdownTimeout`, closes every session, and returns; the
 //! engine runtime is dropped before `main` exits, which removes the spill
@@ -25,11 +29,14 @@ use krishiv_common::config::{
     METRICS_ENABLED, SERVER_ALLOW_CORE_DUMPS, SERVER_METRICS_PUBLIC, UI_ENABLED,
 };
 use krishiv_connect_server::{
-    ConnectServer, ConnectServerConfig, SessionLimits, SessionManager, host,
+    ConnectAuth, ConnectServer, ConnectServerConfig, SessionLimits, SessionManager, host,
+    role_sessions,
 };
 use krishiv_server::guard::{Guard, TokenGuard};
 use krishiv_server::session_guard::SessionGuard;
-use krishiv_session::auth::{AuthConfig, ServerAuth, is_auth_key};
+use krishiv_session::auth::{
+    AuthConfig, ServerAuth, ServerTls, TlsConfig, check_listener, is_auth_key,
+};
 use krishiv_session::{EngineRuntime, Session};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -44,7 +51,8 @@ pub(crate) struct ServerArgs {
     #[arg(long = "connect-port")]
     connect_port: Option<u16>,
     /// Address both listeners bind; default `krishiv.connect.address`, loopback. A
-    /// non-loopback address needs authentication, which this build cannot configure yet.
+    /// non-loopback address needs authentication (`krishiv.auth.*`), and TLS
+    /// (`krishiv.server.tls.*`) when that is a bearer token or OIDC.
     #[arg(long)]
     host: Option<IpAddr>,
     /// Run even as uid 0.
@@ -70,18 +78,18 @@ pub(crate) fn run(args: &ServerArgs) -> i32 {
 fn serve(args: &ServerArgs) -> Result<(), String> {
     let mut config = Config::new();
     let mut builder = EngineRuntime::builder();
-    // Authentication settings (secret references included) are read once here and never become
-    // engine configuration: a session could otherwise list them with `SET`.
-    let auth = AuthConfig::from_settings(
+    // Authentication and TLS settings (secret references and key files included) are read once
+    // here and never become engine configuration: a session could otherwise list them with `SET`.
+    let listener_settings = || {
         args.conf
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
-            .filter(|(k, _)| is_auth_key(k)),
-    )
-    .and_then(|c| ServerAuth::new(&c))
-    .map_err(|e| e.to_string())?;
+            .filter(|(k, _)| is_listener_key(k))
+    };
+    let auth_config = AuthConfig::from_settings(listener_settings()).map_err(|e| e.to_string())?;
+    let tls_config = TlsConfig::from_settings(listener_settings()).map_err(|e| e.to_string())?;
     for (k, v) in &args.conf {
-        if is_auth_key(k) {
+        if is_listener_key(k) {
             continue;
         }
         let warning = config.set(k, v).map_err(|e| e.to_string())?;
@@ -115,14 +123,16 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
             .parse()
             .map_err(|_| "krishiv.connect.address is not an IP address".to_owned())?,
     };
-    // ADR 0046 §6: before either listener binds.
-    if host::needs_auth(host) {
-        return Err(format!(
-            "refusing to serve on {host} without authentication: a non-loopback address needs \
-             authentication configured (P3-T002, not in this build). Bind a loopback address \
-             (--host 127.0.0.1) and put an authenticated tunnel or proxy in front of it."
-        ));
-    }
+    // ADR 0046 §6, design §3.5: before either listener binds (both bind `host`).
+    check_listener(SocketAddr::new(host, 0), &auth_config, &tls_config).map_err(|e| {
+        format!(
+            "refusing to serve on {host}: {e}. Bind a loopback address (--host 127.0.0.1), or \
+             configure authentication (krishiv.auth.*) and, for tokens or OIDC, TLS \
+             (krishiv.server.tls.certFile and keyFile)."
+        )
+    })?;
+    let tls = ServerTls::new(&tls_config, &auth_config.mtls).map_err(|e| e.to_string())?;
+    let auth = ServerAuth::new(&auth_config).map_err(|e| e.to_string())?;
     if host::is_root() && !args.allow_root {
         return Err("refusing to run as root; pass --allow-root to override".to_owned());
     }
@@ -149,6 +159,7 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
             runtime,
             &config,
             auth,
+            tls,
             SocketAddr::new(host, connect_port),
             SocketAddr::new(host, args.port),
         )
@@ -160,6 +171,12 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
     result
 }
 
+/// A setting `krishiv server` reads itself: authentication (`krishiv.auth.*`, Spark's token key)
+/// and the listeners' TLS (`krishiv.server.tls.*`).
+fn is_listener_key(key: &str) -> bool {
+    is_auth_key(key) || key.starts_with("krishiv.server.tls.")
+}
+
 fn flag(config: &Config, entry: &krishiv_common::config::ConfigEntry, default: bool) -> bool {
     config
         .get(entry)
@@ -169,13 +186,13 @@ fn flag(config: &Config, entry: &krishiv_common::config::ConfigEntry, default: b
 
 #[expect(
     clippy::print_stdout,
-    clippy::print_stderr,
-    reason = "CLI binary: the addresses, token and warnings are its output"
+    reason = "CLI binary: the addresses and the token are its output"
 )]
 async fn run_listeners(
     runtime: Arc<EngineRuntime>,
     config: &Config,
     auth: ServerAuth,
+    tls: Option<ServerTls>,
     connect_addr: SocketAddr,
     admin_addr: SocketAddr,
 ) -> Result<(), String> {
@@ -183,10 +200,19 @@ async fn run_listeners(
         .runtime(Arc::clone(&runtime))
         .build()
         .map_err(|e| e.to_string())?;
-    let manager = Arc::new(SessionManager::from_base(
-        base,
-        SessionLimits::from_config(config),
-    ));
+    let authenticated = auth.is_enabled();
+    let auth = Arc::new(auth);
+    // One denial counter for the guards and every caller's session (ADR 0046 §8).
+    let denials = auth.denials();
+    let limits = SessionLimits::from_config(config);
+    let manager = Arc::new(if authenticated {
+        SessionManager::new(
+            role_sessions(base, config, Arc::clone(&denials)).map_err(|e| e.to_string())?,
+            limits,
+        )
+    } else {
+        SessionManager::from_base(base, limits)
+    });
     let connect_listener = TcpListener::bind(connect_addr)
         .await
         .map_err(|e| format!("cannot bind the Spark Connect port {connect_addr}: {e}"))?;
@@ -198,10 +224,9 @@ async fn run_listeners(
 
     // With authentication configured the admin routes take the same principals as Connect;
     // without it, a random token printed once (loopback only).
-    let authenticated = auth.is_enabled();
     let token = krishiv_server::internal::random_token().map_err(|e| e.to_string())?;
     let guard: Arc<dyn Guard> = if authenticated {
-        Arc::new(SessionGuard::new(Arc::new(auth)))
+        Arc::new(SessionGuard::new(Arc::clone(&auth) as Arc<_>).with_denials(Arc::clone(&denials)))
     } else {
         Arc::new(TokenGuard::new(&token))
     };
@@ -210,14 +235,20 @@ async fn run_listeners(
         &runtime,
         config,
         guard,
-        authenticated,
+        authenticated.then(|| Arc::clone(&auth)),
         Arc::clone(&ready),
         admin_bound,
     )?;
-    let connect = ConnectServer::new(
+    let mut connect = ConnectServer::new(
         Arc::clone(&manager),
         ConnectServerConfig::from_config(config),
     );
+    if authenticated {
+        connect = connect.with_auth(ConnectAuth::new(auth).with_denials(denials));
+    }
+    if let Some(tls) = &tls {
+        connect = connect.with_tls(&tls.server_config());
+    }
 
     let (stop_tx, stop_rx) = watch::channel(false);
     // Installed before the addresses are printed: a SIGTERM right after
@@ -228,25 +259,49 @@ async fn run_listeners(
     let stopped = |mut rx: watch::Receiver<bool>| async move {
         let _ = rx.wait_for(|stop| *stop).await;
     };
-    let admin = tokio::spawn(krishiv_server::admin::serve_capped(
-        admin_listener,
-        app,
-        krishiv_server::admin::HttpLimits::default().max_connections,
-        stopped(stop_rx.clone()),
-    ));
-    println!("krishiv server: Spark Connect on sc://{connect_bound}");
-    println!("krishiv server: admin on http://{admin_bound}");
+    let max_admin = krishiv_server::admin::HttpLimits::default().max_connections;
+    let admin = match &tls {
+        Some(tls) => {
+            let config = tls.server_config();
+            let shutdown = stopped(stop_rx.clone());
+            tokio::spawn(async move {
+                krishiv_server::tls::serve_capped_tls(
+                    admin_listener,
+                    app,
+                    max_admin,
+                    &config,
+                    shutdown,
+                )
+                .await
+            })
+        }
+        None => tokio::spawn(krishiv_server::admin::serve_capped(
+            admin_listener,
+            app,
+            max_admin,
+            stopped(stop_rx.clone()),
+        )),
+    };
+    // The SIGHUP handler is installed here, before the addresses are printed: a SIGHUP after
+    // readiness must reload, not end the process (SIGHUP's default action).
+    let reloads = tls
+        .clone()
+        .map(|tls| tokio::spawn(reload_on_hangup(tls, Hangups::install())));
+    let (sc_suffix, http) = if tls.is_some() {
+        ("/;use_ssl=true", "https")
+    } else {
+        ("", "http")
+    };
+    println!("krishiv server: Spark Connect on sc://{connect_bound}{sc_suffix}");
+    println!("krishiv server: admin on {http}://{admin_bound}");
     let ui = flag(config, &UI_ENABLED, true) && cfg!(feature = "ui");
     if authenticated {
-        println!("krishiv server: admin routes need a configured token (krishiv.auth.tokens)");
-        // The Connect listener is authenticated in a later unit; until then it serves any
-        // local client, which the loopback-only rule above keeps to this machine.
-        eprintln!(
-            "krishiv server: warning: Spark Connect does not check tokens yet; it accepts any \
-             client on {connect_bound}"
+        println!(
+            "krishiv server: Spark Connect and the admin routes need a configured credential \
+             (krishiv.auth.*)"
         );
     } else if ui {
-        println!("open http://{admin_bound}/?token={token}");
+        println!("open {http}://{admin_bound}/?token={token}");
     } else if metrics_need_token(config, admin_bound) {
         // `/metrics` is behind the admin token: print it once.
         println!("krishiv server: admin token {token}");
@@ -258,6 +313,9 @@ async fn run_listeners(
         .map_err(|e| e.to_string());
     ready.store(false, Ordering::Release);
     signals.abort();
+    if let Some(reloads) = reloads {
+        reloads.abort();
+    }
     // The admin listener stopped accepting with the same signal; requests in
     // flight get `ADMIN_DRAIN` to finish. Open event streams never end on
     // their own, so whatever is left then is aborted.
@@ -275,10 +333,11 @@ fn admin_router(
     runtime: &Arc<EngineRuntime>,
     config: &Config,
     guard: Arc<dyn Guard>,
-    authenticated: bool,
+    auth: Option<Arc<ServerAuth>>,
     ready: Arc<AtomicBool>,
     bound: SocketAddr,
 ) -> Result<axum::Router, String> {
+    let authenticated = auth.is_some();
     let metrics_on = flag(config, &METRICS_ENABLED, false);
     // With authentication configured every scrape authenticates (ADR 0046 §3c: a viewer
     // service principal); `krishiv.server.metrics.public` opens it only without.
@@ -286,7 +345,14 @@ fn admin_router(
     let snapshot_runtime = Arc::clone(runtime);
     let metrics = krishiv_server::metrics::metrics_route_guarded(
         metrics_on,
-        Arc::new(move || snapshot_runtime.metrics()),
+        // With authentication on, the auth counters ride along (ADR 0046 §8).
+        Arc::new(move || {
+            let mut snapshot = snapshot_runtime.metrics();
+            if let Some(auth) = &auth {
+                snapshot.merge(&auth.metrics());
+            }
+            snapshot
+        }),
         (!public).then(|| Arc::clone(&guard)),
     );
     let base = if cfg!(feature = "ui") && flag(config, &UI_ENABLED, true) {
@@ -314,6 +380,61 @@ fn metrics_need_token(config: &Config, bound: SocketAddr) -> bool {
 
 /// How long admin requests in flight may take once the server stops.
 const ADMIN_DRAIN: Duration = Duration::from_secs(2);
+
+/// SIGHUP, registered when installed (tokio registers a handler only when its stream is
+/// created). `None` elsewhere than Unix, or when it cannot be installed.
+struct Hangups {
+    #[cfg(unix)]
+    signal: Option<tokio::signal::unix::Signal>,
+}
+
+impl Hangups {
+    #[expect(clippy::print_stderr, reason = "CLI binary: stderr is its interface")]
+    fn install() -> Self {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{SignalKind, signal};
+            let signal = signal(SignalKind::hangup()).ok();
+            if signal.is_none() {
+                eprintln!("krishiv server: cannot install the SIGHUP handler; TLS reload is off");
+            }
+            Self { signal }
+        }
+        #[cfg(not(unix))]
+        {
+            Self {}
+        }
+    }
+}
+
+/// Reads the TLS certificate and key again on every SIGHUP (Unix; elsewhere it waits forever).
+/// New handshakes get the new material; a failed read is logged and the old material serves on.
+#[expect(clippy::print_stderr, reason = "CLI binary: stderr is its interface")]
+async fn reload_on_hangup(tls: ServerTls, hangups: Hangups) {
+    #[cfg(unix)]
+    {
+        let Some(mut hangups) = hangups.signal else {
+            return;
+        };
+        while hangups.recv().await.is_some() {
+            let tls = tls.clone();
+            match tokio::task::spawn_blocking(move || tls.reload()).await {
+                Ok(Ok(())) => eprintln!("krishiv server: TLS certificate reloaded"),
+                Ok(Err(e)) => {
+                    eprintln!(
+                        "krishiv server: TLS reload failed, the old certificate serves on: {e}"
+                    );
+                }
+                Err(e) => eprintln!("krishiv server: TLS reload did not finish: {e}"),
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (tls, hangups);
+        std::future::pending::<()>().await;
+    }
+}
 
 /// The first SIGTERM or SIGINT starts the drain; a second exits at once.
 #[expect(clippy::print_stderr, reason = "CLI binary: stderr is its interface")]

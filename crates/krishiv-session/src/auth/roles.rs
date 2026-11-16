@@ -10,7 +10,7 @@
 //! | Privilege | viewer | operator | admin |
 //! |---|---|---|---|
 //! | `Browse` (metadata) | yes | yes | yes |
-//! | `Select` on `system.queries` (own rows; others' need `Monitor`), `capabilities`, `metrics` | yes | yes | yes |
+//! | `Select` on `system.queries`, `system.sessions` (own rows; others' need `Monitor`), `capabilities`, `metrics` | yes | yes | yes |
 //! | `Select` on the other `system.*` tables (`memory`, `operators`, `caches`) | no | yes | yes |
 //! | `Select` on anything else (tables, views, functions, paths) | no (T062 grants) | yes | yes |
 //! | `Usage` on a secret or connection | no | yes | yes |
@@ -37,10 +37,10 @@ pub(crate) const SYSTEM_UDF: &str = "udf";
 pub(crate) const SYSTEM_METRICS: &str = "metrics";
 /// The reserved `system` catalog.
 const SYSTEM_CATALOG: &str = "system";
-/// The `system` tables a viewer reads: `queries` shows only the principal's own rows without
-/// `Monitor`, `capabilities` and `metrics` hold no principal's data (ADR 0046 §3, §3c). The
-/// others (`memory`, `operators`, `caches`) name other principals' work: operator.
-const VIEWER_SYSTEM_TABLES: [&str; 3] = ["queries", "capabilities", "metrics"];
+/// The `system` tables a viewer reads: `queries` and `sessions` show only the principal's own
+/// rows without `Monitor`, `capabilities` and `metrics` hold no principal's data (ADR 0046 §3,
+/// §3c). The others (`memory`, `operators`, `caches`) name other principals' work: operator.
+const VIEWER_SYSTEM_TABLES: [&str; 4] = ["queries", "sessions", "capabilities", "metrics"];
 
 /// The ADR 0046 role matrix for one session's principal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

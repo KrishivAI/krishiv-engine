@@ -117,6 +117,11 @@ pub struct Session {
     pub(crate) deadline: Option<std::time::Duration>,
     /// The statement's request tags ([`crate::QueryOptions::tags`]).
     pub(crate) request_tags: Arc<[Arc<str>]>,
+    /// The trace of the request that started the statement ([`crate::QueryOptions::inbound_trace`]):
+    /// `Some(None)` is a request without a valid one (no trace), `None` means the session's.
+    pub(crate) inbound_trace: Option<Option<Arc<crate::trace_context::RemoteParent>>>,
+    /// The baggage that came with it (empty without a valid `traceparent`).
+    pub(crate) inbound_baggage: Arc<[(String, String)]>,
 }
 
 impl fmt::Debug for Session {
@@ -151,7 +156,7 @@ pub(crate) struct SessionState {
     base_functions: Option<Arc<dyn FunctionRegistry>>,
     /// The session's registered UDFs, shared with the registry above and
     /// the workers running its plans.
-    udfs: Arc<UdfLibrary>,
+    pub(crate) udfs: Arc<UdfLibrary>,
     /// The session's Python UDFs (P2-T059), shared with the registry above:
     /// plans name them by name and version only.
     pub(crate) python_udfs: Arc<crate::python_udfs::PythonUdfLibrary>,
@@ -192,6 +197,8 @@ pub(crate) struct SessionState {
     /// while expanding a view point into the view's text, not the outer
     /// statement's (`SourceId(0)` stays the outer statement's).
     sql_sources: AtomicU32,
+    /// Where this session counts its denials (a server's sessions, `Session::count_denials`).
+    pub(crate) denials: std::sync::OnceLock<(Arc<crate::auth::DeniedCounts>, crate::auth::Surface)>,
 }
 
 impl Drop for SessionState {
@@ -525,7 +532,7 @@ impl Session {
                 let seq = session.state.statements.fetch_add(1, Ordering::Relaxed);
                 use tracing::Instrument as _;
                 let trace = crate::telemetry::QueryTrace::of(seq, &text);
-                let span = trace.prepare_span(&crate::telemetry::Who::of(&session.state));
+                let span = trace.prepare_span(&crate::telemetry::Who::of(&session));
                 session
                     .sql_here_marked(&text, marker)
                     .instrument(span)
@@ -547,7 +554,7 @@ impl Session {
                 error,
                 self.operation_id(),
             );
-            self.state.queries.add_request_tags(&id, &self.request_tags);
+            self.stamp_row(&id);
             // Ended by `cancel`/`interrupt_all` while it was analyzed (`action.rs`).
             if let Some(reason) = cancelled {
                 self.state.queries.note_cancel_reason(&id, reason);
@@ -1307,6 +1314,7 @@ impl Session {
                 relations: Arc::clone(&self.state.cache),
                 metrics: Arc::clone(&self.state.runtime.metrics),
                 sessions: self.state.runtime.session_view(),
+                groups: self.state.runtime.resource_groups.clone(),
                 monitor: Arc::new(crate::system::Monitor::new(
                     Arc::clone(&self.state.principal),
                     Arc::clone(&self.state.policy),
@@ -1364,12 +1372,12 @@ impl Session {
             files: Some(files),
             variables: Arc::clone(&variables),
         };
-        // The epoch the query's catalog reads at: entries it loads are at
-        // least as new.
+        // The epoch the query's catalog reads at: entries it loads are at least as new.
         let catalog_epoch = krishiv_plan::analyzer::Catalog::epoch(&*catalog);
         QueryEnv {
             io,
             config,
+            history_hold: None,
             parser,
             analysis,
             catalog,
@@ -1712,6 +1720,26 @@ impl Session {
         tagging
     }
 
+    /// The trace a statement started now belongs to: its request's
+    /// ([`crate::QueryOptions::inbound_trace`]) when it has one, else the session's.
+    pub(crate) fn trace_now(&self) -> Option<crate::trace_context::RemoteParent> {
+        match &self.inbound_trace {
+            Some(t) => t.as_deref().cloned(),
+            None => self.state.queries.trace(),
+        }
+    }
+
+    /// Stamps the history row `id` with what this statement adds to it: its request tags and, when
+    /// it has its own trace, the trace id.
+    pub(crate) fn stamp_row(&self, id: &str) {
+        self.state.queries.add_request_tags(id, &self.request_tags);
+        if self.inbound_trace.is_some() {
+            self.state
+                .queries
+                .set_row_trace(id, self.trace_now().map(|t| t.trace_id));
+        }
+    }
+
     /// The principal and tags of a statement started now, for cancel by tag.
     pub(crate) fn tagging(&self) -> crate::action::Tagging {
         crate::action::Tagging {
@@ -1797,9 +1825,7 @@ impl Session {
         )?;
         crate::action::note_row(&log_id);
         // The request tags join the row's tags at once, so a queued query shows them too.
-        self.state
-            .queries
-            .add_request_tags(&log_id, &self.request_tags);
+        self.stamp_row(&log_id);
         *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
         let permit = self.admit(&log_id, env, exempt).await?;
         Ok(Admitted::new(Arc::clone(&self.state), log_id, permit))
@@ -1867,6 +1893,7 @@ impl Session {
                 log_id,
                 _permit: permit,
                 _operation: self.operation.clone(),
+                history: env.history_job(self, &row_id, physical, detailed),
             }),
             None,
         );
@@ -1950,37 +1977,6 @@ impl Session {
     #[must_use]
     pub fn metrics(&self) -> MetricsSnapshot {
         self.state.runtime.metrics.snapshot()
-    }
-}
-
-impl Session {
-    /// What a query's plans are instantiated with in this process: the
-    /// query's tables, its UDFs, and its spill scope under the session's
-    /// spill directory (created at instantiation). Writes build their sink
-    /// from the plan with the query's I/O context, formats and configuration;
-    /// batch splits resolve through the session's relation store.
-    fn worker(&self, env: &QueryEnv) -> WorkerContext {
-        let worker = WorkerContext::new(
-            Arc::clone(&env.catalog) as Arc<dyn krishiv_exec::planner::TableProviderResolver>
-        )
-        .with_udfs(Arc::clone(&self.state.udfs))
-        .with_relations(Arc::clone(&self.state.relations))
-        .with_spill_scopes(Arc::new(QuerySpill {
-            state: Arc::clone(&self.state),
-        }))
-        .with_io(env.io.clone())
-        .with_formats(Arc::clone(&self.state.runtime.formats))
-        .with_config(Arc::clone(&env.config));
-        self.with_python_runtime(worker)
-    }
-}
-
-/// Aborts a task when dropped.
-struct AbortOnDrop(krishiv_exec::TaskHandle);
-
-impl Drop for AbortOnDrop {
-    fn drop(&mut self) {
-        self.0.abort();
     }
 }
 

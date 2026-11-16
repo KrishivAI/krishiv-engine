@@ -70,6 +70,8 @@ pub struct EngineRuntime {
     session_seq: AtomicU64,
     /// The `system.queries` rows of every session.
     pub(crate) history: Arc<QueryHistory>,
+    /// The persisted profiles of finished queries (`krishiv.history.path`, P3-T051); `None` when unset.
+    pub(crate) profile_history: Option<Arc<crate::profile_history::ProfileHistory>>,
     /// The result cache: the process-wide one for a private runtime (sessions
     /// built alone share it, as before), a store of its own for a supplied
     /// runtime (ADR 0037 §6 holds per runtime).
@@ -89,6 +91,8 @@ pub struct EngineRuntime {
     /// session of the runtime so the group limits hold across them (`None` when the key is unset:
     /// every query is admitted at once).
     pub(crate) admission: Option<Arc<dyn crate::admission::AdmissionController>>,
+    /// The same controller as `admission`, kept by its own type for `system.resource_groups`.
+    pub(crate) resource_groups: Option<Arc<crate::resource_groups::ResourceGroups>>,
     /// The sessions, live and recently ended (`system.sessions`).
     pub(crate) sessions: Arc<crate::sessions::SessionRegistry>,
     /// The session actions running now, cancellable before their query exists.
@@ -312,13 +316,34 @@ impl EngineRuntime {
             .and_then(krishiv_common::config::ConfigValue::as_int)
             .and_then(|n| usize::try_from(n).ok())
             .unwrap_or(crate::history::DEFAULT_CAPACITY);
+        let profile_history = match config
+            .get(&krishiv_common::config::HISTORY_PATH)
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .filter(|p| !p.is_empty())
+        {
+            Some(dir) => {
+                let max = config
+                    .get(&krishiv_common::config::HISTORY_MAX_BYTES)
+                    .and_then(krishiv_common::config::ConfigValue::as_size)
+                    .unwrap_or(256 << 20);
+                Some(Arc::new(crate::profile_history::ProfileHistory::open(
+                    std::path::Path::new(&dir),
+                    max,
+                    config
+                        .get(&krishiv_common::config::HISTORY_LITERALS)
+                        .and_then(|v| v.as_str().map(|m| m != "keep"))
+                        .unwrap_or(true),
+                )?))
+            }
+            None => None,
+        };
         let results = if private {
             Arc::clone(crate::result_cache::global())
         } else {
             Arc::new(ResultCache::default())
         };
         let invalidation = crate::cache::Invalidation::new(Arc::clone(&results));
-        let admission = match config
+        let resource_groups = match config
             .get(&krishiv_common::config::WORKLOAD_RESOURCE_GROUPS_FILE)
             .and_then(krishiv_common::config::ConfigValue::as_str)
         {
@@ -328,11 +353,13 @@ impl EngineRuntime {
                     .unwrap_or(usize::MAX);
                 Some(Arc::new(crate::resource_groups::ResourceGroups::from_file(
                     path, total,
-                )?)
-                    as Arc<dyn crate::admission::AdmissionController>)
+                )?))
             }
             None => None,
         };
+        let admission = resource_groups
+            .clone()
+            .map(|g| g as Arc<dyn crate::admission::AdmissionController>);
         let runtime = Self {
             pairs,
             config: Arc::new(config),
@@ -345,6 +372,7 @@ impl EngineRuntime {
             query_index: AtomicU64::new(0),
             session_seq: AtomicU64::new(0),
             history: Arc::new(QueryHistory::new(capacity)),
+            profile_history,
             catalog_store: Arc::new(InMemoryCatalogStore::with_hub(Arc::clone(&invalidation))),
             invalidation,
             warehouse: Arc::new(Warehouse::default()),
@@ -353,6 +381,7 @@ impl EngineRuntime {
             live: Mutex::new(LiveSet::default()),
             sessions: Arc::default(),
             admission,
+            resource_groups,
             actions: Arc::default(),
             io,
             egress,
@@ -786,6 +815,12 @@ impl EngineRuntime {
     /// gauge holds the runtime itself, so the runtime can end.
     fn register_gauges(&self) -> Result<(), KrishivError> {
         let metrics = &self.metrics;
+        if let Some(history) = &self.profile_history {
+            let history = Arc::clone(history);
+            metrics.add_gauge("krishiv.history.write_failures", Vec::new(), move || {
+                Some(history.failures())
+            })?;
+        }
         {
             let memory = Arc::clone(&self.memory_tree);
             metrics.add_gauge("krishiv.memory.reserved", Vec::new(), move || {
@@ -845,17 +880,11 @@ impl EngineRuntime {
     }
 }
 
-/// Whether `key` belongs to the runtime rather than to a session: a
-/// cluster-scope entry, or one of the keys fixed when the runtime's
-/// components are built (`krishiv.memory.*`, `krishiv.spill.*`,
-/// `krishiv.io.*`).
+/// Whether `key` belongs to the runtime rather than to a session: a cluster-scope entry (the
+/// memory pool, the spill directory and the I/O scheduler are built from them). A session-scope
+/// key is the session's, whatever its prefix.
 pub(crate) fn runtime_owned(key: &str) -> bool {
-    lookup(key).is_some_and(|entry| {
-        entry.scope == krishiv_common::config::Scope::Cluster
-            || crate::conf::BUILD_TIME
-                .iter()
-                .any(|p| entry.key.starts_with(p))
-    })
+    lookup(key).is_some_and(|entry| entry.scope == krishiv_common::config::Scope::Cluster)
 }
 
 #[cfg(test)]

@@ -14,6 +14,8 @@ workspace = true
 [features]
 # The Hive metastore catalog (Thrift client). Off by default: the default build carries no Thrift runtime.
 hive = ["dep:thrift", "dep:krishiv-plan", "dep:krishiv-types", "dep:krishiv-store", "dep:tokio"]
+# The Iceberg REST catalog client (async reqwest over rustls on a thread of its own). Off by default.
+iceberg-rest = ["dep:reqwest", "dep:serde_json", "dep:tokio", "dep:url", "tokio/time", "tokio/sync"]
 
 [dependencies]
 krishiv-common = { path = "../krishiv-common", version = "=0.2.0" }
@@ -24,3 +26,6 @@ krishiv-store = { path = "../krishiv-store", version = "=0.2.0", optional = true
 tracing.workspace = true
 thrift = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt"], optional = true }
+reqwest = { workspace = true, features = ["rustls"], optional = true }
+serde_json = { workspace = true, features = ["std"], optional = true }
+url = { workspace = true, optional = true }
