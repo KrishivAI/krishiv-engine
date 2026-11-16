@@ -684,6 +684,26 @@ impl QueryCatalog {
     /// The entry a scan of `name` (as the analyzer kept it) reads: a
     /// temporary view or table by its single part, a permanent table by
     /// `namespace.table`.
+    /// The `_metadata` column `scan` can read (`input_file_name()` reads it): its file source's, none for a
+    /// table that is no file source or a cached snapshot substituted after analysis (Spark's cached data has no
+    /// file either).
+    pub(crate) fn scan_file_metadata(&self, scan: &Scan) -> FileMetadata {
+        let format = match &scan.source {
+            ReadSource::Files { format, .. } => format.clone(),
+            ReadSource::Table { name, .. } if !crate::system::is_system_table(name) => {
+                match self.loaded_for(name).as_deref() {
+                    Some(TempTable::Files {
+                        source: ReadSource::Files { format, .. },
+                        ..
+                    }) => format.clone(),
+                    _ => return FileMetadata::None,
+                }
+            }
+            _ => return FileMetadata::None,
+        };
+        file_metadata(&format)
+    }
+
     fn loaded_for(&self, name: &[String]) -> Option<Arc<TempTable>> {
         self.entry_of(name).map(|(_, t)| t)
     }
