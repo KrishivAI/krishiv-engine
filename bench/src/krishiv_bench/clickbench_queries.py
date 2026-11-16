@@ -70,7 +70,7 @@ TIE_BREAK: dict[str, list[str]] = {
 }
 
 # Engines that read SQL string literals and regular expressions as Spark does.
-SPARK_DIALECT: frozenset[str] = frozenset({"krishiv", "spark-connect", "spark-local", "sail"})
+SPARK_DIALECT: frozenset[str] = frozenset({"krishiv", "krishiv-connect", "spark-connect", "spark-local", "sail"})
 # q29's domain extraction: the upstream (DuckDB, RE2) text, and its rewrite per dialect.
 REGEX_Q29_UPSTREAM = r"REGEXP_REPLACE(Referer, '^https?://(?:www\.)?([^/]+)/.*$', '\1')"
 REGEX_Q29: dict[str, str] = {

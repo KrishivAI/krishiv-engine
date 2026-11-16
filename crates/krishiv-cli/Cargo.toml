@@ -66,6 +66,7 @@ server = [
     "dep:krishiv-server",
     "krishiv-server/session",
     "krishiv-server/metrics-prometheus",
+    "krishiv-server/admin-api",
     "krishiv-server/tls",
     "dep:krishiv-session",
     "krishiv-session/tls",

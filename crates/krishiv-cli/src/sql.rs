@@ -301,7 +301,7 @@ pub(crate) fn run_one(
     } else if agent {
         print_agent_result(out, statement, &df, session, args).map(|()| Ran::Yes)
     } else {
-        print_result(out, &df, session, mode, args).map(|()| Ran::Yes)
+        print_result(out, statement, &df, session, mode, args).map(|()| Ran::Yes)
     }
 }
 
@@ -471,13 +471,16 @@ fn shift_header(line: &str, line_offset: usize) -> String {
 
 fn print_result(
     out: &mut dyn Write,
+    stmt: &AgentStatement<'_>,
     df: &DataFrame,
     session: &krishiv::Session,
     mode: OutputMode,
     args: &SqlArgs,
 ) -> Result<(), String> {
+    // A run-time error shows the SQL span that raised it, as an analysis error does.
+    let fail = |e: &krishiv::Error| describe(stmt.text, stmt.line_offset, e);
     let cap = args.max_rows.unwrap_or(usize::MAX);
-    let c = collect_rows(df, session, cap)?;
+    let c = collect_rows(df, session, cap, &fail)?;
     if c.names.is_empty() && c.rows.is_empty() && !c.truncated {
         // A statement without a result (DDL, SET of nothing): no empty table and no `0 rows`.
         return Ok(());
@@ -659,13 +662,14 @@ fn collect_rows(
     df: &DataFrame,
     session: &krishiv::Session,
     max_rows: usize,
+    fail: &dyn Fn(&krishiv::Error) -> String,
 ) -> Result<Collected, String> {
     use futures::StreamExt as _;
 
     let zone = session_zone(session.conf().get("spark.sql.session.timeZone").as_deref())?;
-    let schema = futures::executor::block_on(df.schema()).map_err(|e| e.to_string())?;
+    let schema = futures::executor::block_on(df.schema()).map_err(|e| fail(&e))?;
     // Streams and stops at the cap, so a huge result is never buffered: dropping the stream cancels the query.
-    let mut stream = futures::executor::block_on(df.execute_stream()).map_err(|e| e.to_string())?;
+    let mut stream = futures::executor::block_on(df.execute_stream()).map_err(|e| fail(&e))?;
     let mut batches = Vec::new();
     let mut seen = 0usize;
     // One row past the cap, so a result of exactly `max_rows` rows is not reported as cut.
@@ -673,7 +677,7 @@ fn collect_rows(
         let Some(next) = futures::executor::block_on(stream.next()) else {
             break;
         };
-        let batch = next.map_err(|e| e.to_string())?;
+        let batch = next.map_err(|e| fail(&e))?;
         seen = seen.saturating_add(batch.num_rows());
         batches.push(batch);
     }
@@ -764,7 +768,7 @@ mod tests {
              cast(null as interval day) e",
         ))
         .expect("query");
-        let got = collect_rows(&df, &session, 10).expect("rows");
+        let got = collect_rows(&df, &session, 10, &|e| e.to_string()).expect("rows");
         assert_eq!(
             got.rows,
             [[

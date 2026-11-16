@@ -127,6 +127,8 @@ chrono = { version = "0.4.42", default-features = false }
 # Hive metastore client of `krishiv-catalogs` (feature `hive`): the plain runtime only. With default features off it adds
 # `varint-rs` and a second `ordered-float` to the tree; `hive_metastore` (volo/pilota) would add 28 crates (P3-T020b).
 thrift = { version = "0.25", default-features = false }
+# The embedded SQLite catalog (P3 PB-07, `krishiv-catalogs` feature `sqlite`): the bundled C amalgamation, so no system libsqlite3.
+rusqlite = { version = "0.43", default-features = false, features = ["bundled"] }
 tokio = { version = "1.53", default-features = false }
 tonic = { version = "0.14.6", default-features = false }
 # Test clients of the Connect server only (dev-dependency).
