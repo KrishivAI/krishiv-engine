@@ -454,10 +454,20 @@ struct RelGlobal {
 struct Combined {
     /// Their lanes.
     lanes: Vec<Lane>,
+    /// Their backlogs (what `combine` could not frame: a window was full,
+    /// or the pool refused a frame's copies), with their lanes and
+    /// partitions. A driver waiting for slots frames them where their tasks
+    /// are open ([`frame_combined`]), so a combined driver's `End` reaches
+    /// its tasks, and their slots free, before `finalize` (which waits for
+    /// the waiting driver).
+    feeds: Vec<CombinedFeed>,
     /// The `Blocked` futures waiting for slots, woken when a driver
     /// combines (its lanes are theirs to poll from then on).
     parked: Vec<Waker>,
 }
+
+/// A combined driver's backlog, its lanes and its partition.
+type CombinedFeed = (Arc<Mutex<Feed>>, Vec<Lane>, u32);
 
 /// A run of input rows within one group and side.
 struct Run {
@@ -1125,6 +1135,42 @@ fn reserve_combined(
     None
 }
 
+/// Frames the combined drivers' backlogs (`feeds`) while their windows have
+/// room, the copies reserved in `spare` (a reservation of the waiting
+/// driver: its consumer's grant credit, which a `NeedMemory` adds to, is
+/// what the retry uses), only where their tasks are open: they hold slots,
+/// and a combined driver never queues for slots through another's poll
+/// (review R4-1). A framing failure stays in that feed, `finalize`'s to
+/// report. The bytes the first frame whose copies the pool refuses still
+/// needs: nothing the waiting driver waits on frees them, so its caller
+/// asks for them (`Blocked` ends, the next `sink` returns `NeedMemory`)
+/// rather than leaving them to `finalize`, which waits for that driver.
+fn frame_combined(
+    specs: &[RelationLane],
+    window: usize,
+    feeds: &[CombinedFeed],
+    spare: &mut Reservation,
+    cx: &mut Context<'_>,
+) -> Option<usize> {
+    for (feed, lanes, partition) in feeds {
+        if !lanes.iter().all(Lane::opened) {
+            continue;
+        }
+        let mut theirs = lock(feed);
+        if theirs.backlog.is_empty() || theirs.failed.is_some() {
+            continue;
+        }
+        match flush_feed(specs, window, *partition, lanes, &mut theirs, spare, cx) {
+            Ok(Flushed::Memory(bytes)) => return Some(bytes),
+            // A full window frees as their pumps take frames, and the pumps
+            // wake whoever polled them (the caller polls their lanes next).
+            Ok(Flushed::All | Flushed::Window | Flushed::Slots) => {}
+            Err(e) => theirs.failed = Some(e),
+        }
+    }
+    None
+}
+
 /// One slot per lane when a lane's task is not open yet (all of them at
 /// once, `admit.rs`), else none per lane; `None` while they wait for slots.
 fn admitted(
@@ -1319,8 +1365,9 @@ fn fresh_bytes(data: &arrow_data::ArrayData, input: &[(usize, usize)]) -> usize 
 /// lane ended (its failure is the next call's), a result waits for memory,
 /// a frame's copies need memory or framing failed (the next call asks for
 /// the memory or returns the failure). While the lanes' tasks wait for
-/// slots it polls the `combined` drivers' lanes, whose tasks hold slots
-/// until they end.
+/// slots it frames the `combined` drivers' backlogs ([`frame_combined`];
+/// ready early when such a frame's copies need memory) and polls their
+/// lanes, whose tasks hold slots until they end.
 fn blocked(
     specs: Arc<[RelationLane]>,
     lanes: Vec<Lane>,
@@ -1358,11 +1405,17 @@ fn blocked(
                     // Their `End` frames out and results in, so their tasks
                     // end and free the slots this driver waits for (a
                     // failure is `finalize`'s to report).
-                    let others = {
+                    let (others, feeds) = {
                         let mut c = lock(&combined);
                         register(&mut c.parked, cx.waker());
-                        c.lanes.clone()
+                        (c.lanes.clone(), c.feeds.clone())
                     };
+                    // Their backlogs first: their `End` may wait for room
+                    // or for memory. A frame the pool refuses its copies
+                    // ends this future; the next `sink` asks for them.
+                    if frame_combined(&specs, window, &feeds, &mut spare, cx).is_some() {
+                        return Poll::Ready(());
+                    }
                     for lane in &others {
                         let _ = lane.poll(cx);
                     }
@@ -1463,12 +1516,27 @@ impl Sink for RelationSink {
                 // The slots wait for a combined driver whose result the pool
                 // refused: the arbitrator decides (a spill, or the query's
                 // abort), never a hang. The input is not taken yet.
-                let others = lock(&g.combined).lanes.clone();
+                // So do the slots of a combined driver whose backlog's frame
+                // the pool refused its copies.
+                let (others, feeds) = {
+                    let c = lock(&g.combined);
+                    (c.lanes.clone(), c.feeds.clone())
+                };
                 let consumer = Arc::clone(&l.consumer);
                 let waker = Waker::from(Arc::clone(&l.driver.wake));
                 let mut cx = Context::from_waker(&waker);
                 if let Some(bytes) = reserve_combined(&others, || consumer.reservation(), &mut cx) {
                     return Ok(SinkStatus::NeedMemory { bytes });
+                }
+                let mut spare = consumer.reservation();
+                if let Some(bytes) =
+                    frame_combined(&self.lanes, self.window, &feeds, &mut spare, &mut cx)
+                {
+                    return Ok(SinkStatus::NeedMemory { bytes });
+                }
+                // The pumps take the frames just queued.
+                for lane in &others {
+                    let _ = lane.poll(&mut cx);
                 }
             }
             Flushed::All | Flushed::Window => {}
@@ -1528,6 +1596,11 @@ impl Sink for RelationSink {
         let parked = {
             let mut c = lock(&g.combined);
             c.lanes.extend(driver.lanes.iter().cloned());
+            c.feeds.push((
+                Arc::clone(&driver.feed),
+                driver.lanes.clone(),
+                driver.partition,
+            ));
             std::mem::take(&mut c.parked)
         };
         wake_all(parked);

@@ -362,6 +362,64 @@ fn rig_with(lanes: usize, limit: usize, memory: usize, result_rows: usize) -> Ri
 /// As [`rig_with`], frames of at most `max_rows` rows (0: no limit), so a
 /// driver with fewer rows holds them until its input ends.
 fn rig_full(lanes: usize, limit: usize, memory: usize, result_rows: usize, max_rows: usize) -> Rig {
+    rig_opts(lanes, limit, memory, result_rows, max_rows, Opts::default())
+}
+
+/// The rest of a rig's shape.
+#[derive(Clone, Copy)]
+struct Opts {
+    /// Frames in flight per lane.
+    window: usize,
+    /// One lane of a grouped map (keyed by `k`) rather than a map.
+    grouped: bool,
+    /// The lanes' argument is a computed copy of `v` ([`Copied`]), so each
+    /// frame reserves its copies.
+    copied: bool,
+}
+
+impl Default for Opts {
+    fn default() -> Self {
+        Self {
+            window: 4,
+            grouped: false,
+            copied: false,
+        }
+    }
+}
+
+/// `v` copied into a buffer of its own, as a computed argument is: a frame
+/// of it holds bytes beyond its rows', reserved as the frame is made.
+#[derive(Debug)]
+struct Copied;
+
+impl ScalarExpr for Copied {
+    fn data_type(&self) -> ArrowType {
+        ArrowType::Int64
+    }
+
+    fn nullable(&self) -> bool {
+        true
+    }
+
+    fn evaluate(&self, batch: &RecordBatch) -> crate::error::Result<ArrayRef> {
+        let v = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        Ok(Arc::new(v.iter().collect::<Int64Array>()))
+    }
+}
+
+/// As [`rig_full`], with `opts`.
+fn rig_opts(
+    lanes: usize,
+    limit: usize,
+    memory: usize,
+    result_rows: usize,
+    max_rows: usize,
+    opts: Opts,
+) -> Rig {
     let slots = Arc::new(Slots {
         owner: 0,
         limit,
@@ -393,12 +451,21 @@ fn rig_full(lanes: usize, limit: usize, memory: usize, result_rows: usize, max_r
         .map(|u| RelationLane {
             name: "f".to_owned(),
             udf: Arc::clone(u) as Arc<dyn PreparedRelationUdf>,
-            sides: vec![vec![column(1, ArrowType::Int64)]],
+            sides: vec![vec![if opts.copied {
+                Arc::new(Copied) as Arc<dyn ScalarExpr>
+            } else {
+                column(1, ArrowType::Int64)
+            }]],
             names: vec![vec!["v".to_owned()]],
             client: vec![ArrowType::Int64],
         })
         .collect();
-    let (shape, output) = if lanes == 1 {
+    let (shape, output) = if opts.grouped {
+        (
+            RelationShape::Grouped { keys: vec![0] },
+            vec![Field::new("v", ArrowType::Int64, true)],
+        )
+    } else if lanes == 1 {
         (
             RelationShape::Map,
             vec![Field::new("v", ArrowType::Int64, true)],
@@ -422,7 +489,7 @@ fn rig_full(lanes: usize, limit: usize, memory: usize, result_rows: usize, max_r
         RelationLimits {
             max_rows,
             max_bytes: 0,
-            window: 4,
+            window: opts.window,
         },
         None,
     )
@@ -908,6 +975,137 @@ async fn a_second_refused_result_of_a_combined_task_is_not_lost() {
         .unwrap();
     // a's task ended (its slot was what b's `finish` needed), and so did b's.
     assert_eq!(r.ends.load(Ordering::SeqCst), 2);
+}
+
+/// A combined driver whose `End` stayed in its backlog (its window was full
+/// when it combined: the open group's held rows, then `EndGroup`) holds the
+/// one slot until that `End` goes out. Its driver no longer frames it, and
+/// `finalize`, which would, waits for the driver blocked on that slot: the
+/// waiting driver frames the combined drivers' backlogs (`blocked`). Seed 19
+/// of PR-26c-3's sweep with #820's grouped shape.
+#[tokio::test(start_paused = true)]
+async fn a_combined_driver_s_end_left_by_a_full_window_is_framed_by_the_driver_waiting_for_its_slot()
+ {
+    let r = rig_opts(
+        1,
+        1,
+        64 << 20,
+        0,
+        2,
+        Opts {
+            window: 2,
+            grouped: true,
+            ..Opts::default()
+        },
+    );
+    let g = r.sink.global_state(&r.ctx).unwrap();
+    let run = async {
+        let mut a = r.sink.local_state(&r.ctx, &g)?;
+        let mut b = r.sink.local_state(&r.ctx, &g)?;
+        // a takes the slot: a frame of two rows now, one row held.
+        feed(&r, rows(&[1, 1, 1]), &mut a, &g).await?;
+        assert_eq!(r.slots.held(), 1);
+        // The held row and `EndGroup` fill a's window of two; `End` waits.
+        r.sink.combine(a, &g)?;
+        assert_eq!(r.ends.load(Ordering::SeqCst), 0, "a's task cannot end yet");
+        // b's whole frame waits for the slot a's task holds.
+        let SinkStatus::Blocked(wait) = r.sink.sink(rows(&[5, 5]), &mut b, &g)? else {
+            panic!("the second driver must wait for the slot");
+        };
+        wait.await;
+        finish(&r, b, &g).await
+    };
+    tokio::time::timeout(DEADLINE, run)
+        .await
+        .expect("the waiting driver hung on the combined driver's backlog")
+        .unwrap();
+    assert_eq!(r.udfs[0].opened.load(Ordering::SeqCst), 2);
+    assert_eq!(r.ends.load(Ordering::SeqCst), 2);
+    assert_eq!(r.slots.state.most.load(Ordering::SeqCst), 1);
+}
+
+/// The memory-pressure variant: the combined driver's backlog (the open
+/// group's held rows, `EndGroup`, `End`) waits for its frame's copies, which
+/// the pool refuses (and which the waiting driver's own reserved copies, a
+/// one-row frame's, do not cover).
+/// The driver waiting for the slot cannot frame it, and nothing it waits on
+/// frees memory: its `Blocked` future ends and its next `sink` asks for the
+/// copies (`NeedMemory`), so the arbitrator gives them (a spill) or fails
+/// the query, never a hang. With the grant the retry frames the backlog and
+/// the combined task ends.
+#[tokio::test(start_paused = true)]
+async fn a_combined_driver_s_backlog_refused_its_copies_asks_for_the_memory() {
+    let r = rig_opts(
+        1,
+        1,
+        4 << 20,
+        0,
+        10_000,
+        Opts {
+            grouped: true,
+            copied: true,
+            ..Opts::default()
+        },
+    );
+    let g = r.sink.global_state(&r.ctx).unwrap();
+    let (ctx_a, _) = driver_ctx(&r, 1);
+    let (ctx_b, owner_b) = driver_ctx(&r, 2);
+    let (ctx_c, _) = driver_ctx(&r, 3);
+    let run = async {
+        let mut a = r.sink.local_state(&ctx_a, &g)?;
+        let mut b = r.sink.local_state(&ctx_b, &g)?;
+        // a takes the slot: one group, a frame of 10,000 rows now, 5,000
+        // held.
+        let keys: Vec<i32> = std::iter::repeat_n(0, 15_000).collect();
+        feed(&r, rows(&keys), &mut a, &g).await?;
+        assert_eq!(r.slots.held(), 1);
+        // b's first group (one row, its copies reserved) waits for the slot.
+        let SinkStatus::Blocked(wait) = r.sink.sink(rows(&[1, 2]), &mut b, &g)? else {
+            panic!("the second driver must wait for the slot");
+        };
+        let waiting = tokio::spawn(wait);
+        tokio::task::yield_now().await;
+        // Whatever the pool has left goes to another holder.
+        let mut hog = ctx_c.consumer().consumer().reservation();
+        let mut step = 1 << 20;
+        while step >= 64 {
+            if hog.try_grow(step).is_err() {
+                step /= 2;
+            }
+        }
+        // a's held rows are refused their copies: they, `EndGroup` and
+        // `End` wait.
+        r.sink.combine(a, &g)?;
+        waiting.await.unwrap();
+        assert_eq!(r.ends.load(Ordering::SeqCst), 0, "a's task cannot end yet");
+        let empty = || Batch::new(RecordBatch::new_empty(input()));
+        let status = r.sink.sink(empty(), &mut b, &g)?;
+        let SinkStatus::NeedMemory { bytes } = status else {
+            panic!("the driver must ask for the combined frame's copies: {status:?}");
+        };
+        assert!(bytes >= 40_000, "the held rows' copies: {bytes}");
+        // The driver's loop: memory freed (a spill), then granted to b.
+        drop(hog);
+        let b_consumer = Arc::clone(ctx_b.consumer().consumer());
+        owner_b
+            .reserve_for(&b_consumer, bytes, || async {})
+            .await
+            .unwrap();
+        match r.sink.sink(empty(), &mut b, &g)? {
+            SinkStatus::NeedMemory { .. } => panic!("the retry must use the grant"),
+            SinkStatus::Blocked(wait) => wait.await,
+            SinkStatus::NeedMoreInput | SinkStatus::Finished => {}
+        }
+        // a's task ended: b holds the slot.
+        assert_eq!(r.ends.load(Ordering::SeqCst), 1);
+        finish(&r, b, &g).await
+    };
+    tokio::time::timeout(DEADLINE, run)
+        .await
+        .expect("the waiting driver hung on the combined driver's refused frame")
+        .unwrap();
+    assert_eq!(r.ends.load(Ordering::SeqCst), 2);
+    assert_eq!(r.slots.state.most.load(Ordering::SeqCst), 1);
 }
 
 /// A small seeded generator (xorshift64*), so a failing case is named by

@@ -98,6 +98,16 @@ def error_class(err: pytest.ExceptionInfo[Any]) -> str:
     return err.value.getCondition()
 
 
+# The exception class ``relations.py`` raises each error class as (``worker.py``'s): a wrong kind of result is a
+# ``PySparkTypeError``, a result whose columns do not match the declared schema a ``PySparkRuntimeError``.
+RAISED: dict[str, type[kerrors.PySparkException]] = {
+    "UDF_RETURN_TYPE": kerrors.PySparkTypeError,
+    "RESULT_COLUMN_NAMES_MISMATCH": kerrors.PySparkRuntimeError,
+    "RESULT_COLUMN_SCHEMA_MISMATCH": kerrors.PySparkRuntimeError,
+    "RESULT_COLUMN_TYPES_MISMATCH": kerrors.PySparkRuntimeError,
+}
+
+
 # --- the frames ---
 def test_a_map_task_reads_batches_up_to_the_end() -> None:
     frames = [batch(0, v=[1]), batch(0, v=[2, 3]), END]
@@ -211,7 +221,7 @@ def test_map_in_pandas_with_a_scalar_return_type_yields_series() -> None:
     ],
 )
 def test_map_in_pandas_checks_what_the_udf_returns(f: Any, return_type: Any, klass: str, text: str) -> None:
-    with pytest.raises(Exception) as err:  # noqa: PT011  # the class is what is asserted
+    with pytest.raises(RAISED[klass]) as err:
         run(SQL_MAP_PANDAS_ITER_UDF, f, return_type, [batch(0, k=[1], v=[2]), END])
     assert error_class(err) == klass
     assert text in message(err)
@@ -314,7 +324,7 @@ def test_grouped_map_in_pandas_with_and_without_the_key() -> None:
     ],
 )
 def test_grouped_map_in_pandas_checks_what_the_udf_returns(result: Any, klass: str) -> None:
-    with pytest.raises(Exception) as err:  # noqa: PT011
+    with pytest.raises(RAISED[klass]) as err:
         run(SQL_GROUPED_MAP_PANDAS_UDF, lambda df: result, KV, _groups_frames(), key_count=1)
     assert error_class(err) == klass
 
@@ -347,6 +357,8 @@ def test_grouped_map_in_pandas_iterator_form_refuses_other_arities() -> None:
     def f3(a: Any, b: Any, c: Any) -> Any:
         return iter([])
 
+    # Spark's worker.py calls the UDF in an if/elif on the arity with no else, so any other arity fails reading the
+    # unbound `result`; relations.py ports that as is (its UnboundLocalError, relations.py:612, 703, 769).
     with pytest.raises(UnboundLocalError, match="cannot access local variable 'result'"):
         run(SQL_GROUPED_MAP_PANDAS_ITER_UDF, f3, KV, _groups_frames(), key_count=1)
 
@@ -400,7 +412,7 @@ def test_grouped_map_in_arrow_binds_by_position_when_asked(conf: dict[str, str])
     ],
 )
 def test_grouped_map_in_arrow_checks_what_the_udf_returns(result: Any, klass: str, text: str) -> None:
-    with pytest.raises(Exception) as err:  # noqa: PT011
+    with pytest.raises(RAISED[klass]) as err:
         run(SQL_GROUPED_MAP_ARROW_UDF, lambda t: result, KV, _groups_frames(), key_count=1)
     assert error_class(err) == klass
     assert text in message(err)
@@ -431,7 +443,7 @@ def test_grouped_map_in_arrow_iterator_form() -> None:
     [(5, "UDF_RETURN_TYPE"), (pa.record_batch([pa.array([1])], names=["z"]), "RESULT_COLUMN_NAMES_MISMATCH")],
 )
 def test_grouped_map_in_arrow_iterator_form_checks_each_batch(element: Any, klass: str) -> None:
-    with pytest.raises(Exception) as err:  # noqa: PT011
+    with pytest.raises(RAISED[klass]) as err:
         run(SQL_GROUPED_MAP_ARROW_ITER_UDF, lambda it: iter([element]), KV, _groups_frames(), key_count=1)
     assert error_class(err) == klass
 
@@ -482,6 +494,8 @@ def test_cogrouped_map_in_pandas_refuses_other_arities_and_bad_results() -> None
     def f4(a: Any, b: Any, c: Any, d: Any) -> Any:
         return None
 
+    # Spark's worker.py calls the UDF in an if/elif on the arity with no else, so any other arity fails reading the
+    # unbound `result`; relations.py ports that as is (its UnboundLocalError, relations.py:612, 703, 769).
     with pytest.raises(UnboundLocalError):
         run(SQL_COGROUPED_MAP_PANDAS_UDF, f4, KV, _cogroup_frames(), key_count=1)
     with pytest.raises(kerrors.PySparkTypeError) as err:
@@ -506,6 +520,8 @@ def test_cogrouped_map_in_arrow_refuses_other_arities_and_bad_results() -> None:
     def f1(a: Any) -> Any:
         return None
 
+    # Spark's worker.py calls the UDF in an if/elif on the arity with no else, so any other arity fails reading the
+    # unbound `result`; relations.py ports that as is (its UnboundLocalError, relations.py:612, 703, 769).
     with pytest.raises(UnboundLocalError):
         run(SQL_COGROUPED_MAP_ARROW_UDF, f1, KV, _cogroup_frames(), key_count=1)
     with pytest.raises(kerrors.PySparkTypeError) as err:

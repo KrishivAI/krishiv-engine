@@ -1675,12 +1675,17 @@ async fn finalize_drains_results_before_waiting_for_frame_copies() {
         }
         drop(hog);
     };
+    // The order is what is checked, not the speed: waiting for the copies
+    // before the results are written out is a wait for memory only the
+    // results hold, which fails `finalize` with the pool's error (its spill
+    // wait) or never ends. The deadline only catches the latter, so it is
+    // far above any run's time, under any load.
     let (finalized, ()) = tokio::time::timeout(
-        Duration::from_secs(4),
+        Duration::from_secs(120),
         futures::future::join(r.sink.finalize(&g, &r.ctx), release),
     )
     .await
-    .unwrap();
+    .expect("finalize hung waiting for the frame's copies");
     finalized.unwrap();
     assert_eq!(quiet.log(), ["B0:100", "B0:50", "E"]);
     assert_eq!(r.shared.taken.load(Ordering::SeqCst), 4000);
