@@ -123,7 +123,7 @@ fn cgroup_available() -> bool {
 }
 
 /// Resident room a coverage-instrumented build needs on top of the bound: the profile counters and
-/// bitmaps are mapped into the process (the coverage job measured 0.2 to 5 MB over a 140 MB bound).
+/// bitmaps are mapped into the process (the coverage job measured 0.2 to 5 MB over a 140 MiB bound).
 /// `cargo llvm-cov` sets `LLVM_PROFILE_FILE` for every test process; a plain run gets no allowance.
 fn instrumented_bound(bound: u64) -> u64 {
     const INSTRUMENTATION_ALLOWANCE: u64 = 32 << 20;
