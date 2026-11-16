@@ -455,6 +455,8 @@ fn a_parquet_row_group_holding_a_match_is_kept() {
     );
 }
 
+/// Without `collations-icu` (with it, the keys exist: `collation_analysis.rs`).
+#[cfg(not(feature = "collations-icu"))]
 #[test]
 fn icu_collations_stay_refused_in_every_key_position() {
     let c = "(SELECT 'a' COLLATE unicode_ci AS c, 1 AS x)";

@@ -26,6 +26,7 @@ use krishiv_connect_server::{
     ConnectServer, ConnectServerConfig, ExecuteLimits, SessionLimits, SessionManager,
 };
 use krishiv_session::Session;
+use krishiv_session::auth::{Authenticated, Method};
 use prost::Message;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -242,7 +243,7 @@ async fn execute_response_order() {
     // small engine batches are not merged (design P3-T011a §3.2), so the
     // engine's batch size decides how many come below the limits.
     run.manager
-        .get_or_create(&Principal::local_user(), SESSION, None, "u")
+        .get_or_create(&local_caller(), SESSION, None, "u")
         .expect("session")
         .session()
         .conf()
@@ -292,7 +293,7 @@ async fn execute_response_order() {
     ));
     let entry = run
         .manager
-        .get(&Principal::local_user(), SESSION, None)
+        .get(&local_caller(), SESSION, None)
         .expect("session");
     let ids: HashSet<&str> = responses.iter().map(|r| r.response_id.as_str()).collect();
     assert_eq!(ids.len(), responses.len(), "fresh response ids");
@@ -303,7 +304,23 @@ async fn execute_response_order() {
         assert_eq!(r.server_side_session_id, entry.server_side_id());
     }
     assert!(krishiv_session::QueryId::parse(op).is_ok(), "a minted UUID");
-    // A finished operation is removed.
+    // A finished reattachable operation stays until the client releases it
+    // (Spark's `ReleaseExecute(release_all)`).
+    assert!(entry.operations().get(op).is_some());
+    let _: pb::ReleaseExecuteResponse = unary(
+        &run.channel,
+        "ReleaseExecute",
+        pb::ReleaseExecuteRequest {
+            session_id: SESSION.to_owned(),
+            operation_id: op.clone(),
+            release: Some(pb::release_execute_request::Release::ReleaseAll(
+                pb::release_execute_request::ReleaseAll {},
+            )),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("release all");
     assert!(entry.operations().is_empty());
 }
 
@@ -343,7 +360,7 @@ async fn strings_are_utf8_and_chunks_reassemble() {
     });
     let entry = run
         .manager
-        .get_or_create(&Principal::local_user(), SESSION, None, "u")
+        .get_or_create(&local_caller(), SESSION, None, "u")
         .expect("session");
     entry
         .session()
@@ -386,7 +403,7 @@ async fn compressed_ipc_buffers_follow_the_session_codec() {
     let run = start().await;
     let entry = run
         .manager
-        .get_or_create(&Principal::local_user(), SESSION, None, "u")
+        .get_or_create(&local_caller(), SESSION, None, "u")
         .expect("session");
     for (codec, expected) in [
         ("zstd", arrow_ipc::CompressionType::ZSTD),
@@ -577,7 +594,7 @@ async fn invalid_requests_are_refused_with_sparks_classes() {
     );
     let entry = run
         .manager
-        .get(&Principal::local_user(), SESSION, None)
+        .get(&local_caller(), SESSION, None)
         .expect("session");
     assert!(
         entry.operations().is_empty(),
@@ -648,11 +665,8 @@ async fn live_operations_reattach_release_and_cap() {
         .unwrap_err();
     assert_eq!(e.code(), Code::ResourceExhausted);
     assert_eq!(error_class(&e), "KRISHIV_OPERATION_LIMIT");
-    // The same id again: same plan DISCONNECTED, another plan ALREADY_EXISTS.
-    let e = collect(&run.channel, with_id(reattachable(request(endless())), OP))
-        .await
-        .unwrap_err();
-    assert_eq!(error_class(&e), "INVALID_CURSOR.DISCONNECTED");
+    // The same id with another plan: ALREADY_EXISTS (the same plan
+    // reattaches, `tests/reattach.rs`).
     let e = collect(&run.channel, with_id(request(root(range(1))), OP))
         .await
         .unwrap_err();
@@ -663,10 +677,6 @@ async fn live_operations_reattach_release_and_cap() {
         operation_id: op.to_owned(),
         ..Default::default()
     };
-    let e = stream(&run.channel, "ReattachExecute", reattach(SESSION, OP))
-        .await
-        .unwrap_err();
-    assert_eq!(error_class(&e), "INVALID_CURSOR.DISCONNECTED");
     let e = stream(
         &run.channel,
         "ReattachExecute",
@@ -677,7 +687,7 @@ async fn live_operations_reattach_release_and_cap() {
     assert_eq!(error_class(&e), "INVALID_HANDLE.OPERATION_NOT_FOUND");
     // Another session never sees the operation (operation_bound_to_session).
     run.manager
-        .get_or_create(&Principal::local_user(), OTHER_SESSION, None, "u")
+        .get_or_create(&local_caller(), OTHER_SESSION, None, "u")
         .expect("other");
     let e = stream(&run.channel, "ReattachExecute", reattach(OTHER_SESSION, OP))
         .await
@@ -745,10 +755,11 @@ async fn live_operations_reattach_release_and_cap() {
     .expect("unknown");
     assert_eq!(ok.operation_id, None);
 
-    // release_all cancels the live operation: its stream ends cancelled.
+    // release_all closes the live operation: its stream is disconnected
+    // (Spark's `ExecuteHolder.close` interrupts the attached sender).
     let entry = run
         .manager
-        .get(&Principal::local_user(), SESSION, None)
+        .get(&local_caller(), SESSION, None)
         .expect("session");
     let session = entry.session().clone();
     let _: pb::ReleaseExecuteResponse = unary(
@@ -766,7 +777,7 @@ async fn live_operations_reattach_release_and_cap() {
             Err(s) => break s,
         }
     };
-    assert_eq!(error_class(&status), "OPERATION_CANCELED");
+    assert_eq!(error_class(&status), "INVALID_CURSOR.DISCONNECTED");
     eventually("the query stops", || session.running_queries() == 0).await;
 }
 
@@ -807,7 +818,7 @@ async fn a_live_non_reattachable_operation_is_not_reattachable() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn release_session_cancels_its_operations() {
+async fn release_session_closes_its_operations() {
     let run = start().await;
     let mut live = stream(
         &run.channel,
@@ -827,6 +838,8 @@ async fn release_session_cancels_its_operations() {
     )
     .await
     .expect("release");
+    // Spark's `removeAllExecutionsForSession` closes them: the attached
+    // sender is interrupted.
     let status = loop {
         match live.message().await {
             Ok(Some(_)) => {}
@@ -834,7 +847,7 @@ async fn release_session_cancels_its_operations() {
             Err(s) => break s,
         }
     };
-    assert_eq!(error_class(&status), "OPERATION_CANCELED");
+    assert_eq!(error_class(&status), "INVALID_CURSOR.DISCONNECTED");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -846,7 +859,7 @@ async fn a_dropped_stream_cancels_the_query_and_frees_its_memory() {
     .await;
     let entry = run
         .manager
-        .get_or_create(&Principal::local_user(), SESSION, None, "u")
+        .get_or_create(&local_caller(), SESSION, None, "u")
         .expect("session");
     let session = entry.session().clone();
     session
@@ -887,7 +900,7 @@ async fn a_dropped_stream_cancels_a_query_that_has_not_produced_yet() {
     let run = start().await;
     let entry = run
         .manager
-        .get_or_create(&Principal::local_user(), SESSION, None, "u")
+        .get_or_create(&local_caller(), SESSION, None, "u")
         .expect("session");
     let session = entry.session().clone();
     // An aggregate sends nothing until it has read its whole input.
@@ -914,21 +927,23 @@ async fn a_dropped_stream_cancels_a_query_that_has_not_produced_yet() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_cancelled_operation_does_not_wait_forever_for_a_client_that_reads_nothing() {
+async fn a_released_operation_does_not_wait_for_a_client_that_reads_nothing() {
     let run = start_with(ExecuteLimits {
-        ahead_bytes: 1 << 30,
+        ahead_bytes: 64 * 1024,
         ..ExecuteLimits::default()
     })
     .await;
     let entry = run
         .manager
-        .get_or_create(&Principal::local_user(), SESSION, None, "u")
+        .get_or_create(&local_caller(), SESSION, None, "u")
         .expect("session");
-    entry
-        .session()
+    let session = entry.session().clone();
+    session
         .conf()
         .set("spark.sql.execution.arrow.maxRecordsPerBatch", "1")
         .expect("conf");
+    let memory = session.runtime().memory();
+    let before = memory.reserved();
     let mut live = stream(
         &run.channel,
         "ExecutePlan",
@@ -938,7 +953,7 @@ async fn a_cancelled_operation_does_not_wait_forever_for_a_client_that_reads_not
     .expect("execute");
     live.message().await.expect("ok").expect("schema");
     let op = entry.operations().get(OP).expect("live");
-    // Tiny responses fill the channel's slots and the transport.
+    // Tiny responses fill the ahead budget and the transport.
     blocked_on_the_client(&op).await;
     let _: pb::ReleaseExecuteResponse = unary(
         &run.channel,
@@ -954,8 +969,13 @@ async fn a_cancelled_operation_does_not_wait_forever_for_a_client_that_reads_not
     )
     .await
     .expect("release all");
-    // The encoder gives up sending its error and ends, dropping its handle.
-    eventually("the encoder ends", || Arc::strong_count(&op) == 1).await;
+    // The encoder ends and the buffer is dropped while the client still
+    // reads nothing.
+    eventually("the query stops", || session.running_queries() == 0).await;
+    eventually("the buffer's memory returns", || {
+        memory.reserved() == before
+    })
+    .await;
     drop(live);
 }
 
@@ -979,7 +999,7 @@ async fn large_row_result() {
         assert_eq!(batch.num_chunks_in_batch, None);
     }
     run.manager
-        .get_or_create(&Principal::local_user(), SESSION, None, "u")
+        .get_or_create(&local_caller(), SESSION, None, "u")
         .expect("session")
         .session()
         .conf()
@@ -1012,4 +1032,9 @@ async fn large_row_result() {
         .downcast_ref::<arrow_array::StringArray>()
         .expect("utf8");
     assert_eq!(s.value(0).len(), 65_536);
+}
+
+/// The caller of every request to a server without authentication.
+fn local_caller() -> Authenticated {
+    Authenticated::new(Principal::local_user(), None, Method::None)
 }

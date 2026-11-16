@@ -28,8 +28,18 @@ struct Waiter {
     tx: oneshot::Sender<Grant>,
 }
 
+/// Where a group is in its life: a reload turns a group the new file lacks into `Removed`
+/// (it takes nothing new and is freed when its last query ends), and a freed index is reused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum State {
+    Active,
+    Removed,
+    Free,
+}
+
 /// One group's configuration and counters.
 struct Node {
+    state: State,
     id: String,
     parent: Option<usize>,
     children: Vec<usize>,
@@ -40,10 +50,6 @@ struct Node {
     soft_memory: Option<usize>,
     per_query_memory: Option<usize>,
     priority: u8,
-    #[expect(
-        dead_code,
-        reason = "the session wiring reads the class for system.queries"
-    )]
     class: WorkloadClass,
     scan_quota: Option<ScanQuota>,
     // Counters, over the group's subtree.
@@ -60,6 +66,7 @@ struct Node {
 /// The whole tree.
 pub(super) struct Tree {
     nodes: Vec<Node>,
+    free: Vec<usize>,
     roots: Vec<usize>,
     seq: u64,
     next_id: u64,
@@ -67,8 +74,20 @@ pub(super) struct Tree {
 
 /// Why an admission was refused before queueing.
 pub(super) enum Refusal {
+    /// No active group has the id (a reload removed it).
+    Missing,
     Quota(KrishivError),
-    QueueFull { group: String, max_queued: usize },
+    QueueFull {
+        group: String,
+        max_queued: usize,
+    },
+}
+
+/// What a leaf gives the query it admits.
+pub(super) struct Traits {
+    pub(super) budget: Option<usize>,
+    pub(super) priority: u8,
+    pub(super) class: WorkloadClass,
 }
 
 /// A grant on its way to a waiter, sent once the lock is released.
@@ -100,6 +119,7 @@ impl Shared {
     pub(super) fn new(roots: &[GroupCfg], now_ms: Arc<dyn Fn() -> u64 + Send + Sync>) -> Arc<Self> {
         let mut tree = Tree {
             nodes: Vec::new(),
+            free: Vec::new(),
             roots: Vec::new(),
             seq: 0,
             next_id: 0,
@@ -123,22 +143,33 @@ impl Shared {
         (self.now_ms)()
     }
 
-    /// The leaf index of a dotted group id.
-    pub(super) fn leaf(&self, id: &str) -> Option<usize> {
-        self.lock().nodes.iter().position(|n| n.id == id)
+    /// Swaps in a new group document (see `Tree::reload`) and hands out what the new limits let
+    /// a queued query start.
+    pub(super) fn reload(self: &Arc<Self>, roots: &[GroupCfg]) {
+        let now = self.now();
+        self.lock().reload(roots, now);
+        self.dispatch();
     }
 
     /// Admits at once when the leaf may run another query and nothing waits ahead, else queues.
-    pub(super) fn admit(self: &Arc<Self>, leaf: usize) -> Result<Admitted, Refusal> {
+    ///
+    /// The group is looked up by its dotted id under the same lock, so a reload between the
+    /// selector and the admission can never leave a stale index: a group the reload removed is
+    /// `Refusal::Missing` and the caller selects again.
+    pub(super) fn admit(self: &Arc<Self>, group: &str) -> Result<(Admitted, Traits), Refusal> {
         let now = self.now();
         let mut tree = self.lock();
+        let Some(leaf) = tree.active(group) else {
+            return Err(Refusal::Missing);
+        };
+        let traits = tree.traits(leaf);
         if let Some(refusal) = tree.quota_refusal(leaf, now) {
             return Err(Refusal::Quota(refusal));
         }
         let immediate =
             tree.can_run(leaf) && tree.nodes.get(leaf).is_some_and(|n| n.waiting.is_empty());
         if immediate {
-            return Ok(Admitted::Now(tree.start(self, leaf, 0)));
+            return Ok((Admitted::Now(tree.start(self, leaf, 0)), traits));
         }
         // `maxQueued` limits waiting queries; a query that can start never waits.
         if let Some(full) = tree.full_queue(leaf) {
@@ -159,13 +190,16 @@ impl Shared {
                 tx,
             },
         );
-        Ok(Admitted::Queued(
-            rx,
-            QueuedGuard {
-                shared: Arc::clone(self),
-                leaf,
-                id,
-            },
+        Ok((
+            Admitted::Queued(
+                rx,
+                QueuedGuard {
+                    shared: Arc::clone(self),
+                    leaf,
+                    id,
+                },
+            ),
+            traits,
         ))
     }
 
@@ -178,9 +212,56 @@ impl Shared {
         }
     }
 
-    /// The per-query memory budget of a leaf.
-    pub(super) fn per_query_memory(&self, leaf: usize) -> Option<usize> {
-        self.lock().nodes.get(leaf).and_then(|n| n.per_query_memory)
+    /// One row per group, parents before their children; a removed group still holding queries
+    /// shows as `removed` (`system.resource_groups`).
+    pub(super) fn rows(&self) -> Vec<GroupRow> {
+        let tree = self.lock();
+        tree.order()
+            .into_iter()
+            .filter_map(|i| tree.nodes.get(i).map(|n| (i, n)))
+            .map(|(i, n)| GroupRow {
+                group_id: n.id.clone(),
+                parent_id: n
+                    .parent
+                    .and_then(|p| tree.nodes.get(p))
+                    .map(|p| p.id.clone()),
+                state: if n.state == State::Active {
+                    "active"
+                } else {
+                    "removed"
+                },
+                scheduling_policy: match n.policy {
+                    Policy::WeightedFair => "weighted_fair",
+                    Policy::QueryPriority => "query_priority",
+                },
+                scheduling_weight: i32::try_from(n.weight).unwrap_or(i32::MAX),
+                priority: i32::from(n.priority),
+                workload_class: n.class.as_str(),
+                hard_concurrency_limit: i32::try_from(n.hard).unwrap_or(i32::MAX),
+                max_queued: i32::try_from(n.max_queued).unwrap_or(i32::MAX),
+                soft_memory_limit_bytes: n
+                    .soft_memory
+                    .map(|b| i64::try_from(b).unwrap_or(i64::MAX)),
+                per_query_memory_limit_bytes: n
+                    .per_query_memory
+                    .map(|b| i64::try_from(b).unwrap_or(i64::MAX)),
+                scan_quota_bytes: n
+                    .scan_quota
+                    .map(|q| i64::try_from(q.bytes).unwrap_or(i64::MAX)),
+                scan_quota_period_s: n
+                    .scan_quota
+                    .map(|q| i64::try_from(q.period_ms / 1000).unwrap_or(i64::MAX)),
+                running: i32::try_from(n.running).unwrap_or(i32::MAX),
+                queued: i32::try_from(n.queued).unwrap_or(i32::MAX),
+                memory_reserved_bytes: i64::try_from(tree.reserved_in(i)).unwrap_or(i64::MAX),
+                scan_bytes_in_window: n
+                    .scan_quota
+                    .map(|_| i64::try_from(n.scan_used).unwrap_or(i64::MAX)),
+                scan_window_resets_at_ms: n
+                    .scan_quota
+                    .map(|_| i64::try_from(n.window_end_ms).unwrap_or(i64::MAX)),
+            })
+            .collect()
     }
 
     /// `(running, queued)` of a group, by dotted id.
@@ -188,9 +269,33 @@ impl Shared {
         self.lock()
             .nodes
             .iter()
+            .filter(|n| n.state != State::Free)
             .find(|n| n.id == id)
             .map(|n| (n.running, n.queued))
     }
+}
+
+/// One group of the tree as `system.resource_groups` shows it.
+#[derive(Debug, Clone)]
+pub struct GroupRow {
+    pub(crate) group_id: String,
+    pub(crate) parent_id: Option<String>,
+    pub(crate) state: &'static str,
+    pub(crate) scheduling_policy: &'static str,
+    pub(crate) scheduling_weight: i32,
+    pub(crate) priority: i32,
+    pub(crate) workload_class: &'static str,
+    pub(crate) hard_concurrency_limit: i32,
+    pub(crate) max_queued: i32,
+    pub(crate) soft_memory_limit_bytes: Option<i64>,
+    pub(crate) per_query_memory_limit_bytes: Option<i64>,
+    pub(crate) scan_quota_bytes: Option<i64>,
+    pub(crate) scan_quota_period_s: Option<i64>,
+    pub(crate) running: i32,
+    pub(crate) queued: i32,
+    pub(crate) memory_reserved_bytes: i64,
+    pub(crate) scan_bytes_in_window: Option<i64>,
+    pub(crate) scan_window_resets_at_ms: Option<i64>,
 }
 
 /// The result of asking a group for a slot.
@@ -208,8 +313,12 @@ pub(super) struct QueuedGuard {
 
 impl Drop for QueuedGuard {
     fn drop(&mut self) {
-        let mut tree = self.shared.lock();
-        tree.remove_waiter(self.leaf, self.id);
+        {
+            let mut tree = self.shared.lock();
+            tree.remove_waiter(self.leaf, self.id);
+        }
+        // Removing a waiter can free a removed group the parent's queue was waiting on.
+        self.shared.dispatch();
     }
 }
 
@@ -287,25 +396,17 @@ impl Node {
 }
 
 impl Tree {
-    fn add(
-        &mut self,
+    fn make_node(
         cfg: &GroupCfg,
+        id: String,
         parent: Option<usize>,
-        prefix: &str,
-        inherited_priority: u8,
-        inherited_class: WorkloadClass,
+        priority: u8,
+        class: WorkloadClass,
         now: u64,
-    ) -> usize {
-        let id = if prefix.is_empty() {
-            cfg.name.clone()
-        } else {
-            format!("{prefix}.{}", cfg.name)
-        };
-        let priority = cfg.priority.unwrap_or(inherited_priority);
-        let class = cfg.class.unwrap_or(inherited_class);
-        let idx = self.nodes.len();
-        self.nodes.push(Node {
-            id: id.clone(),
+    ) -> Node {
+        Node {
+            state: State::Active,
+            id,
             parent,
             children: Vec::new(),
             hard: cfg.hard_concurrency,
@@ -326,7 +427,51 @@ impl Tree {
                 .map_or(0, |q| now.saturating_add(q.period_ms)),
             waiting: VecDeque::new(),
             reserved: Vec::new(),
-        });
+        }
+    }
+
+    /// Puts a node in a freed slot, or at the end.
+    fn alloc(&mut self, node: Node) -> usize {
+        if let Some((i, slot)) = self
+            .free
+            .pop()
+            .and_then(|i| self.nodes.get_mut(i).map(|slot| (i, slot)))
+        {
+            *slot = node;
+            return i;
+        }
+        self.nodes.push(node);
+        self.nodes.len() - 1
+    }
+
+    fn group_id(prefix: &str, name: &str) -> String {
+        if prefix.is_empty() {
+            name.to_owned()
+        } else {
+            format!("{prefix}.{name}")
+        }
+    }
+
+    fn add(
+        &mut self,
+        cfg: &GroupCfg,
+        parent: Option<usize>,
+        prefix: &str,
+        inherited_priority: u8,
+        inherited_class: WorkloadClass,
+        now: u64,
+    ) -> usize {
+        let id = Self::group_id(prefix, &cfg.name);
+        let priority = cfg.priority.unwrap_or(inherited_priority);
+        let class = cfg.class.unwrap_or(inherited_class);
+        let idx = self.alloc(Self::make_node(
+            cfg,
+            id.clone(),
+            parent,
+            priority,
+            class,
+            now,
+        ));
         for child in &cfg.children {
             let c = self.add(child, Some(idx), &id, priority, class, now);
             if let Some(n) = self.nodes.get_mut(idx) {
@@ -334,6 +479,144 @@ impl Tree {
             }
         }
         idx
+    }
+
+    /// The index of the active group with this dotted id.
+    fn active(&self, id: &str) -> Option<usize> {
+        self.nodes
+            .iter()
+            .position(|n| n.state == State::Active && n.id == id)
+    }
+
+    fn traits(&self, leaf: usize) -> Traits {
+        let n = self.nodes.get(leaf);
+        Traits {
+            budget: n.and_then(|n| n.per_query_memory),
+            priority: n.map_or(50, |n| n.priority),
+            class: n.map_or(WorkloadClass::Interactive, |n| n.class),
+        }
+    }
+
+    /// Every live group, parents before their children.
+    fn order(&self) -> Vec<usize> {
+        let mut out = Vec::new();
+        let mut stack: Vec<usize> = self.roots.iter().rev().copied().collect();
+        while let Some(i) = stack.pop() {
+            out.push(i);
+            if let Some(n) = self.nodes.get(i) {
+                stack.extend(n.children.iter().rev().copied());
+            }
+        }
+        out
+    }
+
+    /// Swaps in a new group document. A group the document still has keeps its counters, queue
+    /// and running queries (matched by dotted id) and takes the new limits; a new group starts
+    /// empty; a group the document lacks takes nothing new and is freed with its last query.
+    pub(super) fn reload(&mut self, roots: &[GroupCfg], now: u64) {
+        let mut seen = std::collections::HashSet::new();
+        for r in roots {
+            let idx = self.sync(r, None, "", 50, WorkloadClass::Interactive, now, &mut seen);
+            if !self.roots.contains(&idx) {
+                self.roots.push(idx);
+            }
+        }
+        for (i, n) in self.nodes.iter_mut().enumerate() {
+            if n.state == State::Active && !seen.contains(&i) {
+                n.state = State::Removed;
+            }
+        }
+        self.sweep();
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the recursion carries the inherited values"
+    )]
+    fn sync(
+        &mut self,
+        cfg: &GroupCfg,
+        parent: Option<usize>,
+        prefix: &str,
+        inherited_priority: u8,
+        inherited_class: WorkloadClass,
+        now: u64,
+        seen: &mut std::collections::HashSet<usize>,
+    ) -> usize {
+        let id = Self::group_id(prefix, &cfg.name);
+        let priority = cfg.priority.unwrap_or(inherited_priority);
+        let class = cfg.class.unwrap_or(inherited_class);
+        let existing = self
+            .nodes
+            .iter()
+            .position(|n| n.state != State::Free && n.parent == parent && n.id == id);
+        let idx = if let Some(i) = existing {
+            if let Some(n) = self.nodes.get_mut(i) {
+                n.state = State::Active;
+                n.hard = cfg.hard_concurrency;
+                n.max_queued = cfg.max_queued;
+                n.policy = cfg.policy;
+                n.weight = cfg.weight;
+                n.soft_memory = cfg.soft_memory;
+                n.per_query_memory = cfg.per_query_memory;
+                n.priority = priority;
+                n.class = class;
+                // The window is realigned when the period changes or the quota is new; the
+                // bytes counted stay while the window does.
+                match (n.scan_quota, cfg.scan_quota) {
+                    (_, None) => {
+                        n.scan_used = 0;
+                        n.window_end_ms = 0;
+                    }
+                    (Some(old), Some(new)) if old.period_ms == new.period_ms => {}
+                    (_, Some(new)) => {
+                        n.scan_used = 0;
+                        n.window_end_ms = now.saturating_add(new.period_ms);
+                    }
+                }
+                n.scan_quota = cfg.scan_quota;
+            }
+            i
+        } else {
+            let i = self.alloc(Self::make_node(
+                cfg,
+                id.clone(),
+                parent,
+                priority,
+                class,
+                now,
+            ));
+            if let Some(p) = parent.and_then(|p| self.nodes.get_mut(p)) {
+                p.children.push(i);
+            }
+            i
+        };
+        seen.insert(idx);
+        for child in &cfg.children {
+            self.sync(child, Some(idx), &id, priority, class, now, seen);
+        }
+        idx
+    }
+
+    /// Frees every removed group that holds no query and has no group below it.
+    fn sweep(&mut self) {
+        while let Some(i) = self.nodes.iter().position(|n| {
+            n.state == State::Removed && n.running == 0 && n.queued == 0 && n.children.is_empty()
+        }) {
+            let parent = self.nodes.get(i).and_then(|n| n.parent);
+            if let Some(p) = parent.and_then(|p| self.nodes.get_mut(p)) {
+                p.children.retain(|c| *c != i);
+            }
+            self.roots.retain(|r| *r != i);
+            if let Some(n) = self.nodes.get_mut(i) {
+                n.state = State::Free;
+                n.id.clear();
+                n.parent = None;
+                n.waiting.clear();
+                n.reserved.clear();
+            }
+            self.free.push(i);
+        }
     }
 
     fn next_id(&mut self) -> u64 {
@@ -438,6 +721,7 @@ impl Tree {
                     n.queued = n.queued.saturating_sub(1);
                 }
             }
+            self.sweep();
         }
     }
 
@@ -479,6 +763,7 @@ impl Tree {
                 }
             }
         }
+        self.sweep();
     }
 
     /// Hands every freed slot to a queued query, as far as the groups allow.
@@ -508,6 +793,7 @@ impl Tree {
                 out.push(Delivery { tx: w.tx, grant });
             }
         }
+        self.sweep();
         out
     }
 
@@ -516,11 +802,9 @@ impl Tree {
         let Some(n) = self.nodes.get(idx) else {
             return false;
         };
-        if n.children.is_empty() {
-            !n.waiting.is_empty() && self.can_run(idx)
-        } else {
-            n.children.iter().any(|c| self.eligible(*c))
-        }
+        // A group that gained subgroups in a reload keeps the queries it queued as a leaf: they
+        // are dispatched from it, before the subgroups' own.
+        (!n.waiting.is_empty() && self.can_run(idx)) || n.children.iter().any(|c| self.eligible(*c))
     }
 
     /// The leaf whose oldest query goes next, walking down by each group's policy.
@@ -529,7 +813,7 @@ impl Tree {
         if !self.eligible(idx) {
             return None;
         }
-        if n.children.is_empty() {
+        if n.children.is_empty() || (!n.waiting.is_empty() && self.can_run(idx)) {
             return Some(idx);
         }
         match n.policy {
@@ -559,16 +843,13 @@ impl Tree {
         let mut stack = vec![idx];
         while let Some(i) = stack.pop() {
             let n = self.nodes.get(i)?;
-            if n.children.is_empty() {
-                if let Some(head) = n.waiting.front().filter(|_| self.can_run(i)) {
-                    let key = (n.priority, std::cmp::Reverse(head.seq), i);
-                    if best.is_none_or(|b| key > b) {
-                        best = Some(key);
-                    }
+            if let Some(head) = n.waiting.front().filter(|_| self.can_run(i)) {
+                let key = (n.priority, std::cmp::Reverse(head.seq), i);
+                if best.is_none_or(|b| key > b) {
+                    best = Some(key);
                 }
-            } else {
-                stack.extend(n.children.iter().copied());
             }
+            stack.extend(n.children.iter().copied());
         }
         best.map(|b| b.2)
     }

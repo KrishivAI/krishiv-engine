@@ -39,7 +39,9 @@ mod orient;
 mod probe_select;
 mod properties;
 pub(crate) mod pushdown;
+mod python_relation;
 mod python_udf;
+mod row_level;
 mod runtime_filter;
 pub(crate) mod subquery;
 mod table;
@@ -58,6 +60,10 @@ pub(crate) use build::concat_schemas;
 pub use explain::ExplainNode;
 pub use file_table::FileTable;
 pub use ndv_sample::{SampleOptions, SampleOutcome, SampleResult};
+pub use row_level::{
+    CardinalityRule, RowIdScan, RowLevelCapabilities, RowLevelCounts, RowLevelOperation,
+    RowLevelTable, RowLevelWrite,
+};
 pub use table::{
     MemoryTable, MemoryTables, ProviderStatistics, SpilledTable, TableProvider,
     TableProviderResolver,
@@ -100,6 +106,11 @@ pub struct PlanningContext {
     /// caller fixes it (a query planned in several pieces reads one
     /// `current_timestamp()`); `None`: planning takes it.
     pub query_start_micros: Option<i64>,
+    /// The salt unseeded `TABLESAMPLE` seeds are drawn from: the same salt
+    /// draws the same seeds, so a caller keeping it for one DataFrame keeps
+    /// its sampled rows across actions (Spark's Dataset keeps its executed
+    /// plan). `None`: each plan draws fresh seeds.
+    pub sample_salt: Option<u64>,
 }
 
 impl PlanningContext {
@@ -111,7 +122,15 @@ impl PlanningContext {
             user: Arc::from(krishiv_plan::analyzer::Principal::local_user().name),
             udfs: None,
             query_start_micros: None,
+            sample_salt: None,
         }
+    }
+
+    /// The same context drawing unseeded sample seeds from `salt`.
+    #[must_use]
+    pub fn with_sample_salt(mut self, salt: u64) -> Self {
+        self.sample_salt = Some(salt);
+        self
     }
 
     /// The same context for the session user `user`.

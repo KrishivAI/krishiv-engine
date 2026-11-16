@@ -102,6 +102,14 @@ impl Collation {
         self.0
     }
 
+    /// The collation of a Spark id, as [`Self::id`] returned it (the analyzer hands it to the
+    /// kernels as an integer). An id no collation has names no locale, so every ICU lookup on it
+    /// fails instead of misbehaving.
+    #[must_use]
+    pub const fn from_id(id: u32) -> Self {
+        Self(id)
+    }
+
     /// Parses a collation name as Spark does: case-insensitive, an optional
     /// `SYSTEM.BUILTIN.` qualifier, `UTF8_BINARY` or `UTF8_LCASE`, or an ICU
     /// `<locale>[_CI][_AI]`, each with an optional `_RTRIM`. `_CS` and `_AS`
@@ -230,6 +238,19 @@ impl Collation {
             out.push_str("_RTRIM");
         }
         out
+    }
+
+    /// The ICU locale as Spark spells it (`UNICODE`, `en`, `sr_Cyrl`, `de_AUT`), or `None` for
+    /// a `UTF8_*` collation.
+    #[must_use]
+    pub fn icu_locale(self) -> Option<&'static str> {
+        match self.family() {
+            CollationFamily::Icu { .. } => usize::try_from(self.0 & LOCALE_MASK)
+                .ok()
+                .and_then(|i| LOCALES.get(i))
+                .copied(),
+            _ => None,
+        }
     }
 
     /// `SYSTEM.BUILTIN.<name>`: what `collation(x)` returns.

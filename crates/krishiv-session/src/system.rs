@@ -43,13 +43,14 @@ const SCHEMA_VERSION: &str = "1";
 const LOCAL_WORKER: &str = "local";
 
 /// Every table of the catalog.
-const TABLES: [&str; 7] = [
+const TABLES: [&str; 8] = [
     "capabilities",
     "caches",
     "memory",
     "metrics",
     "operators",
     "queries",
+    "resource_groups",
     "sessions",
 ];
 
@@ -257,6 +258,8 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("peak_memory_bytes", Long, true),
             ("error_class", Text, true),
             ("workload_class", Text, true),
+            ("resource_group", Text, true),
+            ("queued_ns", Long, true),
             ("cpu_ns", Long, true),
             ("rows_produced", Long, true),
             ("bytes_read", Long, true),
@@ -275,6 +278,7 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("error_message", Text, true),
             ("partial", Flag, false),
         ],
+        "resource_groups" => crate::system_groups::layout(),
         "sessions" => crate::sessions::layout(),
         _ => return None,
     })
@@ -545,6 +549,9 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
     if table.eq_ignore_ascii_case("sessions") {
         return crate::sessions::columns(sources);
     }
+    if table.eq_ignore_ascii_case("resource_groups") {
+        return crate::system_groups::columns(sources);
+    }
     if table.eq_ignore_ascii_case("queries") {
         let rows = sources.queries.snapshot(sources.monitor.sees_all());
         let micros = |ms: Option<i64>| ms.map(|m| m.saturating_mul(1000));
@@ -578,6 +585,8 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             long(rows.iter().map(|r| r.peak_memory_bytes)),
             text(rows.iter().map(|r| r.error_class.as_deref())),
             text(rows.iter().map(|r| r.workload_class)),
+            text(rows.iter().map(|r| r.resource_group.as_deref())),
+            long(rows.iter().map(|r| r.queued_ns)),
             long(rows.iter().map(|r| r.cpu_ns)),
             long(rows.iter().map(|r| r.rows_produced)),
             long(rows.iter().map(|r| r.bytes_read)),
@@ -668,6 +677,8 @@ pub(crate) struct Sources {
     pub(crate) monitor: Arc<Monitor>,
     /// The runtime's sessions.
     pub(crate) sessions: Arc<crate::sessions::SessionView>,
+    /// The resource group controller (`krishiv.workload.resourceGroups.file`), when one is set.
+    pub(crate) groups: Option<Arc<crate::resource_groups::ResourceGroups>>,
 }
 
 pub(crate) use crate::monitor::Monitor;
@@ -716,6 +727,11 @@ pub(crate) struct QueryRow {
     /// the history doesn't copy them.
     pub(crate) operators: Arc<[OperatorRow]>,
     pub(crate) workload_class: Option<&'static str>,
+    /// The resource group the controller placed the query in (`None` without one).
+    pub(crate) resource_group: Option<String>,
+    /// How long admission held the query queued, in nanoseconds (`None` for a query that never
+    /// reached admission; 0 when it started at once).
+    pub(crate) queued_ns: Option<i64>,
     /// Busy time of its drivers.
     pub(crate) cpu_ns: Option<i64>,
     pub(crate) rows_produced: Option<i64>,
@@ -999,6 +1015,8 @@ impl QueryLog {
             policy,
             operators: Arc::default(),
             workload_class: None,
+            resource_group: None,
+            queued_ns: None,
             cpu_ns: None,
             rows_produced: None,
             bytes_read: None,
@@ -1085,6 +1103,13 @@ impl QueryLog {
     /// or ended before its run): its wall time is the time since it was submitted, so the
     /// queue time is not lost.
     pub(crate) fn close_unrun(&self, id: &str, state: &'static str, error_class: Option<&str>) {
+        // A statement dropped while it waited because its action was cancelled
+        // (`action.rs`; the drop runs with the action current): name the reason.
+        if state == "cancelled"
+            && let Some(reason) = crate::action::current_reason()
+        {
+            self.note_cancel_reason(id, reason);
+        }
         let waited = self
             .history
             .submitted_at(&self.session_id, id)
@@ -1104,6 +1129,16 @@ impl QueryLog {
         );
     }
 
+    /// Records `reason` as the `cancel_reason` of row `id` unless it has one
+    /// (the first reason wins, as for a running query).
+    pub(crate) fn note_cancel_reason(&self, id: &str, reason: crate::CancelReason) {
+        self.history.update(&self.session_id, id, |row| {
+            if row.cancel_reason.is_none() {
+                row.cancel_reason = Some(reason.as_str());
+            }
+        });
+    }
+
     /// Sets the state of the live row `id` (`queued` while admission waits,
     /// `running` once it is admitted).
     pub(crate) fn set_state(&self, id: &str, state: &'static str) {
@@ -1112,9 +1147,12 @@ impl QueryLog {
     }
 
     /// Stamps the start of live row `id`: admission let it run.
-    pub(crate) fn mark_started(&self, id: &str) {
+    pub(crate) fn mark_started(&self, id: &str, group: Option<&str>, queued_ns: u64) {
         self.history.update(&self.session_id, id, |row| {
             row.started_ms = Some(now_ms());
+            // What the controller held the query in its queue (0 when it started at once).
+            row.queued_ns = Some(i64::try_from(queued_ns).unwrap_or(i64::MAX));
+            row.resource_group = group.map(str::to_owned);
         });
     }
 
@@ -1337,7 +1375,7 @@ impl Catalog for SystemCatalog {
             if !id.namespace.is_empty() {
                 return Ok(None);
             }
-            if ["queries", "operators", "sessions"]
+            if ["queries", "operators", "sessions", "resource_groups"]
                 .iter()
                 .any(|t| id.name.eq_ignore_ascii_case(t))
             {
@@ -1427,7 +1465,7 @@ impl Session {
     /// The permit of a query that reads only `system.*` (never queued behind the load it
     /// inspects): it starts at once, so its row has a start time.
     pub(crate) fn exempt_permit(&self, log_id: &str) -> crate::admission::Permit {
-        self.state.queries.mark_started(log_id);
+        self.state.queries.mark_started(log_id, None, 0);
         crate::admission::Permit::unlimited()
     }
 
@@ -1659,6 +1697,7 @@ mod tests {
                 Arc::new(krishiv_plan::analyzer::AllowAll),
             )),
             sessions: Arc::default(),
+            groups: None,
         };
         assert!(provider("capabilities", &sources).unwrap().is_some());
         assert!(provider("nope", &sources).unwrap().is_none());
@@ -1939,6 +1978,7 @@ mod tests {
 }
 
 mod caches;
+mod row_stamps;
 mod text;
 pub(crate) use text::TextPolicy;
 #[cfg(test)]

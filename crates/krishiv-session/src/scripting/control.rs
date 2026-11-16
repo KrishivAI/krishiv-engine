@@ -52,10 +52,13 @@ impl Session {
             env.statement_class,
             self.operation_id(),
         )?;
-        let index =
-            self.state
-                .runtime
-                .reserve(self.state.number, self.state.queries.session_id(), &row);
+        self.stamp_row(&row);
+        let index = self.state.runtime.reserve_tagged(
+            self.state.number,
+            self.state.queries.session_id(),
+            &row,
+            self.tagging_of_row(&row),
+        );
         let pool = self
             .state
             .memory
@@ -78,7 +81,7 @@ impl Session {
         };
         // A failed attach drops `run`, which closes the row.
         self.attach(&ctx, &row, &env.config)?;
-        self.state.queries.mark_started(&row);
+        self.state.queries.mark_started(&row, None, 0);
         Ok(run)
     }
 }

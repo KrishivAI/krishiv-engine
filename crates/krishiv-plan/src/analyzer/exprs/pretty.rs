@@ -208,6 +208,12 @@ pub(super) fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> St
         }) if name == "__subscript" && qualifier.is_empty() && k.len() == 2 => {
             format!("{}[{}]", k[0], k[1])
         }
+        // `current_time()` is `CurrentTime` with its default precision, which Spark shows: `current_time(6)` (SQL-26).
+        ExprNode::Function(FunctionCall {
+            name, qualifier, ..
+        }) if name == "current_time" && qualifier.is_empty() && k.is_empty() => {
+            "current_time(6)".to_owned()
+        }
         // `TimeAddInterval` and `SubtractTimes` show `left + right` / `left - right`, without the parentheses of
         // Spark's arithmetic operators (`intervals.rs` `time_arithmetic` names them so).
         ExprNode::Function(FunctionCall {
@@ -295,6 +301,12 @@ pub(super) fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> St
             } else {
                 text
             }
+        }
+        // The resolved call of the same (SQL-26).
+        ExprNode::Resolved(ResolvedExpr::Function(f))
+            if f.id.name() == "current_time" && k.is_empty() && f.filter.is_none() =>
+        {
+            "current_time(6)".to_owned()
         }
         // Spark's `ExtractValue` shows `child[ordinal]`.
         ExprNode::Resolved(ResolvedExpr::Function(f))

@@ -109,6 +109,9 @@ fn run_cli() -> Result<(), String> {
     let mut manifest = ExclusionManifest::load(&manifest_path).map_err(|e| e.to_string())?;
     let dir = GoldenSet::tag_dir(&tag);
     let mut set = GoldenSet::scan_for(&dir, jdk).map_err(|e| format!("{}: {e}", dir.display()))?;
+    if tag != krishiv_testkit::golden::DEFAULT_TAG {
+        manifest = manifest.restricted_to(&set);
+    }
     if let Some(name) = &only {
         set.pairs.retain(|p| p.name.contains(name.as_str()));
         manifest = ExclusionManifest::default();

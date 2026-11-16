@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use krishiv_common::error::{
     DatatypeMismatchNonFoldableInput, DatatypeMismatchUnexpectedInputType,
-    InvalidParameterValueBinaryFormat, KrishivError,
+    InvalidParameterValueBinaryFormat, InvalidParameterValueNull, KrishivError,
 };
 use krishiv_kernels::cast::{CastMode, CastOptions, TimeZoneRules, cast};
 use krishiv_kernels::number_format::parse_format;
@@ -515,6 +515,14 @@ fn to_char_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     // Binaries take `base64`/`hex`/`utf-8` (matched lower-cased, like
     // Spark's `toLowerCase.trim`).
     if matches!(c.data_type(0), Some(DataType::Binary)) {
+        // Spark's `ToCharacterBuilder` refuses a NULL format for a binary.
+        if matches!(c.constant(1), Some(Constant::Null)) {
+            return Err(InvalidParameterValueNull {
+                parameter: "`format`".to_owned(),
+                function_name: "`to_char`".to_owned(),
+            }
+            .into());
+        }
         if let Some(pattern) = format.as_deref()
             && !matches!(
                 pattern.to_lowercase().trim_matches(|c: char| c <= ' '),

@@ -40,7 +40,10 @@ use std::sync::Arc;
 
 use krishiv_exec::JoinType;
 use krishiv_exec::aggregate::{AggregateExpr, AggregateFunction, AggregateOutput, is_moment};
-use krishiv_exec::physical::{HashScheme, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan};
+use krishiv_exec::physical::{
+    HashScheme, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan, TableWriteRequest,
+};
+use krishiv_exec::planner::WriteMode;
 use krishiv_exec::window::{FrameBound, WindowFrame, WindowFunction};
 use krishiv_plan::{Expr, ExprNode, FunctionId, Literal, ResolvedExpr};
 use krishiv_types::DataType;
@@ -154,13 +157,16 @@ registry! {
     (partitioned_writes, PartitionedWrites, POST_MIGRATION_READER_VERSION, Semantic, "A `WritePlan` laid out by partition columns (Spark's directory layout)."),
     (percentile_aggregates, PercentileAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The percentile family and `approx_count_distinct` aggregates (`percentile`, `percentile_approx`, `percentile_disc`, `approx_count_distinct` with their folded parameters)."),
     (python_udf, PythonUdf, POST_MIGRATION_READER_VERSION, Semantic, "Python UDF calls (`PythonUdfFunction`, by name and registration version) and the `PythonEval` node evaluating them; a worker without a UDF runtime refuses the plan."),
+    (python_udf_relations, PythonUdfRelations, POST_MIGRATION_READER_VERSION, Semantic, "The Python UDF relation kinds (design P3-T085): the `PythonMap`, `PythonGroupMap`, `PythonCoGroupMap` and `PythonAggregate` nodes, the Python UDTF generator and the eval types beyond the scalar ones (Spark's codes 201-217, 251-254, 300-302); a worker without a runtime for them refuses the plan."),
     (range, Range, POST_MIGRATION_READER_VERSION, Semantic, "The `Range` node (`range(start, end, step, numSlices)`)."),
     (rust_udaf, RustUdaf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust aggregate UDF (`UdafCall`, by name and version, with its argument and state columns)."),
     (rust_udf, RustUdf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust UDF (`UdfFunction`, by name and version)."),
+    (sample, Sample, POST_MIGRATION_READER_VERSION, Semantic, "The `Sample` node (`TABLESAMPLE`: Spark's Bernoulli sample of each input partition from `XORShiftRandom(seed + partition)`)."),
     (session_zone_name, SessionZoneName, POST_MIGRATION_READER_VERSION, Semantic, "The configured session time zone name (`spark.sql.session.timeZone`) where it differs from the rendered offset; without it a worker shows the offset in `current_timezone()` and `VV`/`z` patterns."),
     (shared_subplan, SharedSubplan, POST_MIGRATION_READER_VERSION, Semantic, "Subplans run once per query and read by several `SharedRead` nodes (`WITH` bodies computed once)."),
     (sort_merge_join, SortMergeJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `SortMergeJoin` node: a join of its inputs sorted on the keys (a `MERGE` hint or `krishiv.exec.join.strategy`)."),
     (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
+    (table_write, TableWrite, POST_MIGRATION_READER_VERSION, Semantic, "The `TableWrite` node: rows written into a table provider's sink (its writer, or the rewriter of its row-level table), resolved at instantiation; design P3-PR-DML §7."),
     (time_type, TimeType, POST_MIGRATION_READER_VERSION, Semantic, "The `TIME` type, with its precision."),
     (union_loop, UnionLoop, POST_MIGRATION_READER_VERSION, Semantic, "The `UnionLoop` and `LoopRef` nodes (recursive common table expressions run as a loop)."),
     (variant_explode, VariantExplode, POST_MIGRATION_READER_VERSION, Semantic, "The `variant_explode` generator (and `variant_explode_outer`): the fields of a variant object or the elements of a variant array."),
@@ -239,6 +245,8 @@ pub enum Construct<'a> {
     Generator(krishiv_plan::GeneratorKind),
     /// A hash join's probe selection (`HashJoinPlan.select`).
     ProbeSelect,
+    /// A Python UDF's eval type (of a call or a relation node's UDF).
+    PythonEvalType(krishiv_plan::PythonEvalType),
 }
 
 /// The feature a type needs on its own. The walk reports a type inside an
@@ -412,6 +420,12 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             PhysNode::SortMergeJoin(_) => Some(Feature::SortMergeJoin),
             PhysNode::WindowGroupLimit { .. } => Some(Feature::WindowGroupLimit),
             PhysNode::PythonEval { .. } => Some(Feature::PythonUdf),
+            PhysNode::Sample { .. } => Some(Feature::Sample),
+            PhysNode::PythonMap { .. }
+            | PhysNode::PythonGroupMap { .. }
+            | PhysNode::PythonCoGroupMap { .. }
+            | PhysNode::PythonAggregate { .. } => Some(Feature::PythonUdfRelations),
+            PhysNode::TableWrite { .. } => Some(Feature::TableWrite),
             // A partitioned write needs a reader that
             // lays files out by partition (the older fields would be
             // ignored and the rows written flat).
@@ -479,8 +493,11 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         Construct::EvalMode => Some(Feature::CapturedEvalMode),
         Construct::WriteColumnTypes => Some(Feature::WriteColumnTypes),
         Construct::ProbeSelect => Some(Feature::FusedProbe),
+        // The scalar kinds came with `python_udf`; every other kind is newer.
+        Construct::PythonEvalType(t) => (!t.is_scalar()).then_some(Feature::PythonUdfRelations),
         Construct::Generator(kind) => match kind {
             krishiv_plan::GeneratorKind::VariantExplode => Some(Feature::VariantExplode),
+            krishiv_plan::GeneratorKind::PythonUdtf => Some(Feature::PythonUdfRelations),
             krishiv_plan::GeneratorKind::Explode
             | krishiv_plan::GeneratorKind::PosExplode
             | krishiv_plan::GeneratorKind::Inline => None,
@@ -680,6 +697,12 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
                     .for_each(|field| visit_arrow_field(field, f));
             }
         }
+        // The request's schema is classified by field, as an exchange's is.
+        PhysNode::TableWrite { request, .. } => request
+            .input_schema()
+            .fields()
+            .iter()
+            .for_each(|field| visit_arrow_field(field, f)),
         // A reduce fragment may name a type only in the schema it reads
         // (a sort by column index above it), so the schema is classified
         // by field, as the plan's output schema is.
@@ -704,11 +727,18 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         | PhysNode::Filter { .. }
         | PhysNode::Limit { .. }
         | PhysNode::ReplicateRows { .. }
+        | PhysNode::Sample { .. }
         | PhysNode::Sort { .. }
         | PhysNode::TopN { .. }
         | PhysNode::WindowGroupLimit { .. }
         | PhysNode::PythonEval { .. }
+        | PhysNode::PythonAggregate { .. }
         | PhysNode::Union { .. } => {}
+        PhysNode::PythonMap { udf, .. }
+        | PhysNode::PythonGroupMap { udf, .. }
+        | PhysNode::PythonCoGroupMap { udf, .. } => {
+            f(Construct::PythonEvalType(udf.udf.eval_type));
+        }
         PhysNode::WriteFiles { write, .. } => {
             if write.as_ref().is_some_and(|w| !w.column_types.is_empty()) {
                 f(Construct::WriteColumnTypes);
@@ -801,8 +831,18 @@ fn types_of<'a>(node: &'a PhysNode) -> Vec<&'a DataType> {
     if let PhysNode::Scan(scan) | PhysNode::LateFetch { scan, .. } = node {
         out.extend(scan.scan.output.iter().map(|c| &c.data_type));
     }
+    if let PhysNode::TableWrite { table, .. } = node {
+        out.extend(table.output.iter().map(|c| &c.data_type));
+    }
     if let PhysNode::WriteFiles { write: Some(w), .. } = node {
         out.extend(w.column_types.values());
+    }
+    if let PhysNode::PythonMap { udf, .. }
+    | PhysNode::PythonGroupMap { udf, .. }
+    | PhysNode::PythonCoGroupMap { udf, .. } = node
+    {
+        out.extend(udf.sides.iter().flat_map(|s| &s.types));
+        out.extend(udf.output.iter().map(|c| &c.data_type));
     }
     out
 }
@@ -827,7 +867,9 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
         }
         PhysNode::ReplicateRows { count, .. } => roots.push(count),
         PhysNode::Generate { arg, .. } => roots.push(arg),
-        PhysNode::PythonEval { calls, .. } => roots.extend(calls.iter().map(|c| &c.call)),
+        PhysNode::PythonEval { calls, .. } | PhysNode::PythonAggregate { calls, .. } => {
+            roots.extend(calls.iter().map(|c| &c.call));
+        }
         PhysNode::HashJoin(j) => {
             roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts));
             roots.extend(
@@ -839,12 +881,21 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
         }
         PhysNode::SortMergeJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
         PhysNode::NestedLoopJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
+        PhysNode::TableWrite { request, .. } => match request {
+            TableWriteRequest::Write(w) => {
+                if let WriteMode::OverwriteByFilter(filter) = &w.mode {
+                    roots.push(filter);
+                }
+            }
+            TableWriteRequest::RowLevel(r) => roots.extend(r.read_filter.iter()),
+        },
         PhysNode::OneRow
         | PhysNode::SharedRead { .. }
         | PhysNode::LateFetch { .. }
         | PhysNode::UnionLoop { .. }
         | PhysNode::LoopRef { .. }
         | PhysNode::Limit { .. }
+        | PhysNode::Sample { .. }
         | PhysNode::Range(_)
         | PhysNode::Sort { .. }
         | PhysNode::TopN { .. }
@@ -854,7 +905,10 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
         | PhysNode::Union { .. }
         | PhysNode::WriteFiles { .. }
         | PhysNode::Exchange(_)
-        | PhysNode::ExchangeSource { .. } => {}
+        | PhysNode::ExchangeSource { .. }
+        | PhysNode::PythonMap { .. }
+        | PhysNode::PythonGroupMap { .. }
+        | PhysNode::PythonCoGroupMap { .. } => {}
     }
     // Expressions share subtrees: each is visited once.
     let mut seen = std::collections::HashSet::new();
@@ -881,6 +935,9 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
 fn functions_in<'a>(e: &'a Arc<Expr>, f: &mut impl FnMut(Construct<'a>)) {
     if let ExprNode::Resolved(ResolvedExpr::Function(c)) = &e.node {
         f(Construct::Function(&c.id));
+        if let FunctionId::PythonUdf { eval_type, .. } = &c.id {
+            f(Construct::PythonEvalType(*eval_type));
+        }
     }
 }
 

@@ -1,20 +1,28 @@
+---
+description: "Krishiv is a Rust-native, Spark-compatible engine for batch SQL and DataFrames, in process and with no JVM."
+---
+
 # Krishiv documentation
 
-Krishiv is a Rust-native, Apache Spark-compatible compute engine: batch SQL, DataFrames, streaming and incrementally
-maintained views on one vectorized, Arrow-native engine, with no JVM. Keep the PySpark and Spark SQL you already
-write.
+Krishiv is a Rust-native, Apache Spark-compatible compute engine for batch SQL and DataFrames. It runs in your
+process, on one vectorized, Arrow-native engine, with no JVM. Keep the PySpark and Spark SQL you already write.
 
-> **Alpha (`0.2.0-alpha`).** The embedded core runs: in-process batch SQL and DataFrames from Python. There is no
-> stable API yet. Streaming, incremental views, Spark Connect and distributed execution are being built.
+> **Krishiv 0.2 is the embedded core.** In-process batch SQL and DataFrames from Python and Rust. Streaming,
+> incremental views, Spark Connect and distributed execution are not in this release. The APIs are not stable yet.
 
-## Where to go
+## Install
 
-The pages follow four kinds of need.
+Krishiv 0.2 is on PyPI: `pip install "krishiv[pyarrow]"`. The [Quickstart](get-started/quickstart.md) has the steps.
+You can also build the wheel from the repository (`maturin build` in `python/`).
 
-- **[Get started](get-started/quickstart.md)** teach by doing: [install and run your first query](get-started/quickstart.md).
-- **[Guides](guides/deploy.md)** solve one task: [migrate a PySpark job](guides/pyspark-migration.md), [deploy](guides/deploy.md) and [find a stalled task with tokio-console](guides/tokio-console.md).
-- **[Reference](reference/index.md)** lists facts: the [SQL language](reference/sql/index.md) and
-  [function reference](reference/sql/functions/index.md), the [Python package](reference/python-package.md) and
+## Where to start
+
+- **New here:** [Get started](get-started/index.md) installs Krishiv and runs a first query.
+- **Coming from Spark:** [Guides](guides/index.md), beginning with
+  [Migrate a PySpark job](guides/pyspark-migration.md).
+- **Looking something up:** [Reference](reference/index.md): the [SQL language](reference/sql/index.md) and
+  [functions](reference/sql/functions/index.md), the [Python package](reference/python-package.md) and
   [API](reference/python/index.md), every [setting](reference/config/index.md), metrics and query profiles.
-- **[Concepts](concepts/compatibility.md)** gives background: what is supported against Spark
-  ([compatibility](concepts/compatibility.md)) and the [known differences](concepts/known-differences.md).
+- **Deciding what to rely on:** [Concepts](concepts/index.md): what is [supported](concepts/compatibility.md) against
+  Spark and the [known differences](concepts/known-differences.md).
+- **What changed:** [Releases](releases/index.md).

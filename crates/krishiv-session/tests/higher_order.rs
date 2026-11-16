@@ -281,6 +281,24 @@ fn filter_keeps_true_elements() {
     );
 }
 
+/// SQL-4: `filter` with the element index, `(x, i) -> ...` (Spark 4.2.0: `[2, 3]`).
+#[test]
+fn filter_takes_the_element_index() {
+    let s = session();
+    assert_eq!(
+        strings(&s, "filter(array(0, 2, 3), (x, i) -> x > i)", ""),
+        [Some("[2, 3]".to_owned())]
+    );
+    assert_eq!(
+        strings(&s, "filter(array(10, 20, 30, 40), (x, i) -> i % 2 = 0)", ""),
+        [Some("[10, 30]".to_owned())]
+    );
+    assert_eq!(
+        strings(&s, "filter(array(5, NULL, 7), (x, i) -> i > 0)", ""),
+        [Some("[null, 7]".to_owned())]
+    );
+}
+
 #[test]
 fn exists_and_forall_fold_the_marks() {
     let s = session();
@@ -474,13 +492,13 @@ fn constant_lambdas_of_the_wrong_type_are_rejected() {
 #[test]
 fn lambda_shapes_are_checked() {
     let s = session();
-    // `transform` takes one or two variables, the others exactly one.
+    // `transform` and `filter` take one or two variables, the others exactly one.
     let e = error(&s, "SELECT transform(ys, (a, b, c) -> a) FROM t");
     assert_eq!(
         e.error_class(),
         ErrorClass::InvalidLambdaFunctionCallNumArgsMismatch
     );
-    let e = error(&s, "SELECT filter(ys, (a, b) -> a) FROM t");
+    let e = error(&s, "SELECT filter(ys, (a, b, c) -> a) FROM t");
     assert_eq!(
         e.error_class(),
         ErrorClass::InvalidLambdaFunctionCallNumArgsMismatch
@@ -1295,4 +1313,63 @@ fn map_zip_with_widens_differing_key_types() {
         e.error_class().name(),
         "DATATYPE_MISMATCH.MAP_ZIP_WITH_DIFF_TYPES"
     );
+}
+
+/// Lambda parameters named by keywords (SQL-3): Spark reads every keyword as
+/// an identifier unless keywords are enforced, so `(left, right) -> ...`
+/// (Spark's own `array_sort` example) and keywords that start a primary
+/// (`case`, `current_date`, `interval`, `not`) name lambda variables, while
+/// `true -> true` keeps the literal. Values from a Spark 4.2.0 run.
+#[test]
+fn lambda_parameters_may_be_keywords() {
+    let s = Session::new().unwrap();
+    for (expr, want) in [
+        (
+            "array_sort(array(5, 6, 1), (left, right) -> CASE WHEN left < right THEN -1 \
+             WHEN left > right THEN 1 ELSE 0 END)",
+            "[1, 5, 6]",
+        ),
+        ("transform(array(1, 2), (left, i) -> left - i)", "[1, 1]"),
+        ("transform(array(1, 2), left -> left - 1)", "[0, 1]"),
+        (
+            "transform(array(1, 2), (from, i) -> from * 10 + i)",
+            "[10, 21]",
+        ),
+        ("transform(array(1, 2), (case, y) -> case - y)", "[1, 1]"),
+        (
+            "transform(array(1, 2), (current_date, i) -> current_date + i)",
+            "[1, 3]",
+        ),
+        ("transform(array(1, 2), user -> user - 1)", "[0, 1]"),
+        (
+            "transform(array(1, 2), (interval, i) -> interval - 1)",
+            "[0, 1]",
+        ),
+        ("transform(array(1, 2), true -> true)", "[true, true]"),
+        (
+            "transform(array(1, 2), (not, i) -> not IS NULL)",
+            "[false, false]",
+        ),
+        (
+            "filter(array(1, NULL, 3), all -> all IS NOT NULL AND all > 1)",
+            "[3]",
+        ),
+        (
+            "aggregate(array(1, 2, 3), 0, (on, using) -> on + using)",
+            "6",
+        ),
+        (
+            "transform(array(named_struct('a', 1)), (left, i) -> left.a + i)",
+            "[1]",
+        ),
+        (
+            "transform(array(array(7, 8)), (right, i) -> right[i])",
+            "[7]",
+        ),
+    ] {
+        assert_eq!(strings(&s, expr, ""), [Some(want.to_owned())], "{expr}");
+    }
+    // One parenthesized name is no lambda in Spark's grammar either.
+    let e = error(&s, "SELECT transform(array(1), (x) -> x + 1)");
+    assert_eq!(e.error_class(), ErrorClass::ParseSyntaxError, "{e}");
 }

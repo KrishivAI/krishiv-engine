@@ -13,9 +13,15 @@
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use krishiv_common::error::{ErrorClass, KrishivError, KrishivUnsupportedFeature, PathNotFound};
+use krishiv_common::config::{
+    Config, ConfigValue, IO_LOCAL_ALLOWED_ROOTS, IO_OBJECT_STORE_ALLOWED_PREFIXES,
+};
+use krishiv_common::error::{
+    ErrorClass, KrishivError, KrishivInvalidConfigValue, KrishivUnsupportedFeature, PathNotFound,
+};
 use krishiv_common::secret::OptionValue;
-use krishiv_exec::files::LocatedPath;
+use krishiv_exec::files::{LocatedPath, PathLocator};
+use krishiv_io::{StoreId, parse_object_url};
 use krishiv_plan::SourceId;
 use krishiv_plan::analyzer::{
     AccessDecision, AccessPolicy, BoxFuture, PolicyVersion, Principal, Privilege, Securable,
@@ -23,7 +29,7 @@ use krishiv_plan::analyzer::{
 };
 use krishiv_sql::ast::{DdlName, ExprKind, Literal, Statement, TableOption};
 use krishiv_sql::{
-    ExplainKind, StatementClass, Target, TargetObject, parse_multipart_identifier,
+    ExplainKind, ParserOptions, StatementClass, Target, TargetObject, parse_multipart_identifier,
     statement_targets,
 };
 
@@ -73,9 +79,9 @@ impl Session {
     /// # Errors
     /// Parse and analysis errors (`KRISHIV_INSUFFICIENT_PERMISSIONS` for a
     /// denied read); `KRISHIV_UNSUPPORTED_FEATURE` for a statement whose
-    /// reads are not whole queries (a multi-table `INSERT` with a shared
-    /// `FROM`, reads through `UPDATE`/`DELETE` predicates or variable
-    /// expressions).
+    /// reads are not known from its text (a `MERGE` with a subquery in an
+    /// expression, `EXECUTE IMMEDIATE` of non-literal text or with `USING`,
+    /// scripts and variable expressions; `krishiv_sql::statement_reads`).
     pub async fn statement_info(&self, sql: &str) -> Result<StatementInfo, KrishivError> {
         let (session, sql) = (self.clone(), sql.to_owned());
         self.on_executor(async move { session.statement_info_here(&sql).await })
@@ -83,40 +89,89 @@ impl Session {
     }
 
     async fn statement_info_here(&self, sql: &str) -> Result<StatementInfo, KrishivError> {
+        let parts = self.statement_parts(sql).await?;
+        if parts.partial {
+            return Err(KrishivUnsupportedFeature {
+                feature: "listing the reads of this statement".to_owned(),
+            }
+            .into());
+        }
+        Ok(parts.info)
+    }
+
+    /// The statement `sql` parsed, classified and its reads analyzed (see [`Self::statement_info`]),
+    /// for `statement_info` and the analyze API. When its reads are not known from its text
+    /// (`krishiv_sql::statement_reads` gives `None`), nothing is analyzed and `partial` is set: the
+    /// securables are then its targets only.
+    pub(crate) async fn statement_parts(&self, sql: &str) -> Result<StatementParts, KrishivError> {
         let env = self.query_env();
         let sql = &*self.substituted(sql);
         let redacted = krishiv_sql::redact_sql(sql);
         let statement = krishiv_sql::parse_statement(sql, &env.parser)
             .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
-        let class = krishiv_sql::classify(&statement);
+        self.parts_of_statement(statement, &redacted).await
+    }
+
+    /// [`Self::statement_parts`] of the parsed `statement`, whose spans index `redacted`'s text
+    /// (`EXPLAIN FORMAT JSON` analyzes its explained statement here).
+    pub(crate) async fn parts_of_statement(
+        &self,
+        statement: Statement,
+        redacted: &krishiv_common::redact::RedactedSql,
+    ) -> Result<StatementParts, KrishivError> {
+        let env = self.query_env();
+        let class = krishiv_sql::classify_with(&statement, &env.parser);
+        if let Statement::ExecuteImmediate(e) = &statement {
+            return Box::pin(self.immediate_parts(e, class, statement.clone())).await;
+        }
         let explain = krishiv_sql::explain_kind(&statement);
-        let queries = krishiv_sql::statement_queries(&statement).ok_or_else(|| {
-            KrishivError::from(KrishivUnsupportedFeature {
-                feature: "listing the reads of this statement".to_owned(),
-            })
-        })?;
+        let queries = krishiv_sql::statement_reads(&statement);
+        let partial = queries.is_none();
         let mut securables: Vec<SecurableUse> = Vec::new();
-        for query in queries {
-            let plan = krishiv_sql::lower(query, SourceId(0))
-                .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
+        let mut analyzed = Vec::new();
+        for query in queries.unwrap_or_default() {
+            let plan = krishiv_sql::lower(&query, SourceId(0))
+                .map_err(|e| sql_context(e.error, redacted, e.span.start, e.span.end))?;
             let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
             let analysis = df
-                .analyzed_in_with_text(self.query_env(), Some(&redacted))
+                .analyzed_in_with_text(self.query_env(), Some(redacted))
                 .await?;
-            for used in &analysis.analyzed.securables {
-                match securables
-                    .iter_mut()
-                    .find(|s| s.securable == used.securable && s.privilege == used.privilege)
-                {
-                    Some(seen) => seen.columns.extend(used.columns.iter().cloned()),
-                    None => securables.push(used.clone()),
-                }
-            }
+            merge_reads(&mut securables, &analysis.analyzed.securables);
+            analyzed.push(Arc::clone(&analysis.analyzed));
         }
-        // Then what it writes, creates or drops, as the session would check
-        // it (the name as written).
-        for target in statement_targets(&statement) {
-            if let Some(securable) = self.securables_of(target.object, &env)?.into_iter().next()
+        self.add_targets(&mut securables, &statement, &env, false)?;
+        Ok(StatementParts {
+            info: StatementInfo {
+                class,
+                explain,
+                securables,
+            },
+            partial,
+            analyzed,
+            statement,
+        })
+    }
+}
+
+impl Session {
+    /// Adds what `statement` writes, creates or drops to `securables`, as the session would check it
+    /// (the name as written), and `Manage` on the cluster for `ADMIN` ([`required_targets`]). With
+    /// `skip_unplaced`, a target that cannot be placed (an `IDENTIFIER(:marker)` name of text not yet
+    /// bound) is left out instead of failing.
+    fn add_targets(
+        &self,
+        securables: &mut Vec<SecurableUse>,
+        statement: &Statement,
+        env: &QueryEnv,
+        skip_unplaced: bool,
+    ) -> Result<(), KrishivError> {
+        for target in required_targets(statement, &env.parser) {
+            let placed = match self.securables_of(target.object, env) {
+                Ok(placed) => placed,
+                Err(_) if skip_unplaced => continue,
+                Err(e) => return Err(e),
+            };
+            if let Some(securable) = placed.into_iter().next()
                 && !securables
                     .iter()
                     .any(|s| s.securable == securable && s.privilege == target.privilege)
@@ -128,12 +183,104 @@ impl Session {
                 });
             }
         }
-        Ok(StatementInfo {
-            class,
-            explain,
-            securables,
-        })
+        Ok(())
     }
+
+    /// The parts of `EXECUTE IMMEDIATE` (of `class`, see `krishiv_sql::classify_with`): with literal
+    /// text and no `USING`, those of the statement the text holds (its spans index the text), under the
+    /// outer class (`INTO` makes it at least `SESSION`); text with `USING` arguments is bound only when
+    /// it runs, so it is `partial` with the inner statement's class and targets (the text parses with
+    /// its markers); text from a variable or an expression is `ADMIN` and `partial`, permanently
+    /// (design §3.2). Nothing is evaluated.
+    async fn immediate_parts(
+        &self,
+        e: &krishiv_sql::ast::ExecuteImmediate,
+        class: StatementClass,
+        statement: Statement,
+    ) -> Result<StatementParts, KrishivError> {
+        let env = self.query_env();
+        // A nested `EXECUTE IMMEDIATE` or a script is refused when it runs: nothing to list.
+        let inner = krishiv_sql::immediate_statement(e, &env.parser)
+            .filter(|i| !matches!(i, Statement::ExecuteImmediate(_) | Statement::Script(_)));
+        let inner = match inner {
+            Some(inner) if e.using.is_empty() => inner,
+            known => {
+                let mut securables = Vec::new();
+                if let Some(inner) = &known {
+                    // Its markers are unbound: a name made of one cannot be placed yet.
+                    self.add_targets(&mut securables, inner, &env, true)?;
+                }
+                return Ok(StatementParts {
+                    info: StatementInfo {
+                        class,
+                        explain: None,
+                        securables,
+                    },
+                    partial: true,
+                    analyzed: Vec::new(),
+                    statement,
+                });
+            }
+        };
+        let inner_redacted =
+            krishiv_sql::redact_sql(krishiv_sql::immediate_text(e).unwrap_or_default());
+        let mut parts = self.parts_of_statement(inner, &inner_redacted).await?;
+        parts.info.class = class;
+        if !e.into.is_empty() {
+            // The row goes to variables: no result columns or lineage.
+            parts.statement = statement;
+        }
+        Ok(parts)
+    }
+}
+
+/// A statement as [`Session::statement_parts`] found it.
+pub(crate) struct StatementParts {
+    /// Its class, explain kind and securables.
+    pub(crate) info: StatementInfo,
+    /// Whether its reads are not whole queries (none were analyzed).
+    pub(crate) partial: bool,
+    /// The analyses of its queries, in order.
+    pub(crate) analyzed: Vec<Arc<krishiv_plan::analyzer::AnalyzedPlan>>,
+    /// The parsed statement.
+    pub(crate) statement: Statement,
+}
+
+/// Adds the reads `used` to `securables`: one entry per (securable, privilege), with the union of
+/// the columns.
+pub(crate) fn merge_reads(securables: &mut Vec<SecurableUse>, used: &[SecurableUse]) {
+    for used in used {
+        match securables
+            .iter_mut()
+            .find(|s| s.securable == used.securable && s.privilege == used.privilege)
+        {
+            Some(seen) => seen.columns.extend(used.columns.iter().cloned()),
+            None => securables.push(used.clone()),
+        }
+    }
+}
+
+/// What `statement` writes, creates or drops and reads without a query (`statement_targets`), plus
+/// `Manage` on the cluster for every `ADMIN` statement (ADR 0046 §4), whatever else it names: what the
+/// session checks before it runs, and what `statement_info` lists. `options` read the text of an
+/// `EXECUTE IMMEDIATE`.
+///
+/// Dynamic SQL (`EXECUTE IMMEDIATE` of text that cannot be placed, reported `ADMIN`) adds no `Manage`
+/// wherever it stands, in a script or under `EXPLAIN ANALYZE` too (`krishiv_sql::needs_cluster_manage`):
+/// the statement it runs is authorized under its own class when it runs (`execute_immediate.rs`).
+fn required_targets<'s>(statement: &'s Statement, options: &ParserOptions) -> Vec<Target<'s>> {
+    let mut targets = statement_targets(statement);
+    if krishiv_sql::needs_cluster_manage(statement, options)
+        && !targets
+            .iter()
+            .any(|t| t.object == TargetObject::Cluster && t.privilege == Privilege::Manage)
+    {
+        targets.push(Target {
+            object: TargetObject::Cluster,
+            privilege: Privilege::Manage,
+        });
+    }
+    targets
 }
 
 /// The parts of a function name as written.
@@ -157,13 +304,38 @@ pub(crate) fn audit<T>(
     result
 }
 
+/// [`audit`] of a query's read check, unless `env` is a trial analysis
+/// ([`QueryEnv::quiet_denials`]), whose denials are not logged.
+pub(crate) fn audit_read<T>(
+    session: &Session,
+    env: &QueryEnv,
+    result: Result<T, KrishivError>,
+) -> Result<T, KrishivError> {
+    if env.quiet_denials {
+        return result;
+    }
+    audit(session, StatementClass::Read, result)
+}
+
 /// The audit record of the denial `e` (see [`audit`]): also written when
 /// an access check fails closed because it cannot name what a statement
 /// touches (`KRISHIV_UNSUPPORTED_FEATURE`).
 fn log_denial(session: &Session, class: StatementClass, e: &KrishivError) {
+    if e.error_class() == ErrorClass::KrishivInsufficientPermissions
+        && let Some((counts, surface)) = session.state.denials.get()
+        && let Some((_, privilege)) = e
+            .message_parameters()
+            .iter()
+            .find(|(name, _)| *name == "privilege")
+    {
+        counts.record_named(*surface, privilege);
+    }
+    // ADR 0046 §5: the client's own `user_id` is recorded, marked unverified, never used.
+    let client_user_id = session.state.activity.client_user_id();
     tracing::warn!(
         target: "krishiv::audit",
         principal = %session.state.principal.name,
+        client_user_id_unverified = client_user_id.as_deref(),
         statement_class = class.name(),
         error_class = e.error_class().name(),
         denial = %e,
@@ -172,6 +344,17 @@ fn log_denial(session: &Session, class: StatementClass, e: &KrishivError) {
 }
 
 impl Session {
+    /// Counts every `KRISHIV_INSUFFICIENT_PERMISSIONS` denial of this session into `counts`
+    /// under `surface` from now on (a server's sessions: `krishiv_auth_denied_total`, ADR 0046
+    /// §8). Set once; a second call changes nothing and returns `false`.
+    pub fn count_denials(
+        &self,
+        counts: Arc<crate::auth::DeniedCounts>,
+        surface: crate::auth::Surface,
+    ) -> bool {
+        self.state.denials.set((counts, surface)).is_ok()
+    }
+
     /// Checks what `statement` (of `class`) writes, creates or drops, and
     /// what it reads without a query, before it runs; an `ADMIN` statement
     /// needs `Manage` on the cluster (ADR 0046 §4). Names are located as analysis locates
@@ -187,19 +370,7 @@ impl Session {
             log_denial(self, class, &e);
             return Err(e);
         }
-        let mut targets = statement_targets(statement);
-        // Every cluster-scope statement needs `Manage` on the cluster (ADR 0046 §4), whatever
-        // else it names.
-        if class == StatementClass::Admin
-            && !targets
-                .iter()
-                .any(|t| t.object == TargetObject::Cluster && t.privilege == Privilege::Manage)
-        {
-            targets.push(Target {
-                object: TargetObject::Cluster,
-                privilege: Privilege::Manage,
-            });
-        }
+        let targets = required_targets(statement, &env.parser);
         let mut checked: Vec<(Securable, Privilege)> = Vec::new();
         for target in targets {
             let securables = match self.securables_of(target.object, env) {
@@ -238,7 +409,9 @@ impl Session {
     /// them is read: permanent views are inlined before binding, so the analyzer never asks about
     /// them. Each name is asked as the analyzer asks about a table (as written, then folded, whether
     /// or not it exists, so a denial cannot tell a view from a missing name), then a permanent view
-    /// is asked as a view. Returns the views, for the securables the analysis reports.
+    /// is asked as a view. Each is asked the analysis' read privilege (`Select`; `Browse` for a
+    /// metadata analysis, `AnalysisMode::Metadata`). Returns the views, for the securables the
+    /// analysis reports.
     pub(crate) async fn authorize_reads(
         &self,
         reads: &[crate::catalog::ReadCandidate],
@@ -278,14 +451,94 @@ impl Session {
                     &*self.state.policy,
                     &self.state.principal,
                     &securable,
-                    Privilege::Select,
+                    env.analysis.mode.read_privilege(),
                 )
                 .await;
-                audit(self, StatementClass::Read, r)?;
+                audit_read(self, env, r)?;
                 checked.push(securable);
             }
         }
         Ok(views)
+    }
+
+    /// The error `e` of a metadata analysis (P3 PR-14d review B1), raised after the permanent
+    /// `views` it inlined were allowed at `Browse`: a failure inside a view's text names the
+    /// text (`(a = 424242)`, a column name), and a view's text needs `Select`. So the error is
+    /// shown only once `Select` on each of them passes; otherwise the first denial is (logged
+    /// by the caller, through [`audit_read`]). An ordinary analysis asked `Select` already, and
+    /// an access error is shown as it is.
+    pub(crate) async fn view_text_failure(
+        &self,
+        views: &[TableIdent],
+        env: &QueryEnv,
+        e: KrishivError,
+    ) -> KrishivError {
+        if env.analysis.mode != krishiv_plan::analyzer::AnalysisMode::Metadata
+            || e.error_class() == ErrorClass::KrishivInsufficientPermissions
+        {
+            return e;
+        }
+        for view in views {
+            if let Err(denied) = authorize(
+                &*self.state.policy,
+                &self.state.principal,
+                &Securable::View(view.clone()),
+                Privilege::Select,
+            )
+            .await
+            {
+                return denied;
+            }
+        }
+        e
+    }
+
+    /// `Select` on every permanent view a metadata analysis read at `Browse` (a withheld
+    /// explain, design P3 PR-14d D2a): the plan shows a view's inlined body, and a view's text
+    /// is data (ADR 0046, update 2026-11-12). A SQL function's body is shown as
+    /// `DESCRIBE FUNCTION EXTENDED` shows it: metadata (ADR 0046, update 2026-11-15). Asked in
+    /// plan order; a denial is audited.
+    pub(crate) async fn authorize_bodies(
+        &self,
+        analysis: &crate::dataframe::Analysis,
+    ) -> Result<(), KrishivError> {
+        for used in &analysis.analyzed.securables {
+            if !matches!(used.securable, Securable::View(_)) {
+                continue;
+            }
+            let r = authorize(
+                &*self.state.policy,
+                &self.state.principal,
+                &used.securable,
+                Privilege::Select,
+            )
+            .await;
+            audit(self, StatementClass::Read, r)?;
+        }
+        Ok(())
+    }
+
+    /// Checks that this session's principal holds `privilege` on `securable` under the
+    /// session's policy, outside any statement: what a server checks for a request before it
+    /// runs one (the Connect request classes of ADR 0046 §3b). Fails closed as every check
+    /// does, and a denial writes one `krishiv::audit` record with `class`.
+    ///
+    /// # Errors
+    /// `KRISHIV_INSUFFICIENT_PERMISSIONS` (42501) when the policy does not allow it.
+    pub async fn authorize_privilege(
+        &self,
+        securable: &Securable,
+        privilege: Privilege,
+        class: StatementClass,
+    ) -> Result<(), KrishivError> {
+        let r = authorize(
+            &*self.state.policy,
+            &self.state.principal,
+            securable,
+            privilege,
+        )
+        .await;
+        audit(self, class, r)
     }
 
     /// `privilege` on the permanent view `namespace.name`, besides the table-named check made
@@ -566,45 +819,175 @@ fn folded(ident: &TableIdent) -> TableIdent {
     }
 }
 
-/// `at` (a local path, `file:/...`) with the symbolic links of its
-/// existing part resolved: the directory a write really goes to.
-pub(crate) fn physical(at: LocatedPath) -> Result<LocatedPath, KrishivError> {
+/// A path as an access check sees it: `at`, resolved (links followed), is what the policy is asked
+/// about, the audit record names and the statement uses; `shown`, the path as the caller wrote it with
+/// `.` and `..` folded from the text only (`LocalPaths::locate`), is what a denial the caller sees names.
+/// Nothing read from the file system reaches `shown`, so a denial cannot tell a link's target or whether
+/// anything exists.
+#[derive(Debug, Clone)]
+pub(crate) struct Checked {
+    /// The resolved path.
+    pub(crate) at: LocatedPath,
+    /// The caller's text, `..` folded, qualified (`file:/...`).
+    pub(crate) shown: String,
+}
+
+/// `at` (a local path, `file:/...`, as `LocalPaths::locate` gives it: `.` and `..` already folded in the
+/// text, as every read and write folds them) with the symbolic links of its existing part resolved: the
+/// directory a write really goes to. An object-store path is returned as it is. `at.display` is the
+/// [`Checked::shown`] text.
+///
+/// # Errors
+/// `KRISHIV_INSUFFICIENT_PERMISSIONS` for `privilege` on the shown path (audited as `class`) when the
+/// path cannot be resolved: an unsearchable directory, a dangling link or a link loop on it. That is the
+/// answer a policy gives a path it denies, with the same text (no existence oracle).
+pub(crate) fn physical(
+    session: &Session,
+    at: LocatedPath,
+    privilege: Privilege,
+    class: StatementClass,
+) -> Result<Checked, KrishivError> {
+    let shown = at.display.clone();
     let Some(local) = at.display.strip_prefix("file:") else {
-        return Ok(at);
+        return Ok(Checked { at, shown });
     };
-    let resolved = resolve_links(Path::new(local)).ok_or_else(|| unplaceable("this path"))?;
-    let parts = resolved
-        .components()
-        .filter_map(|c| match c {
-            Component::Normal(p) => Some(p.to_str().ok_or_else(|| unplaceable("non-UTF-8 paths"))),
-            _ => None,
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(LocatedPath {
-        store: at.store,
-        path: object_store::path::Path::from_iter(parts.iter().copied()),
-        display: format!("file:/{}", parts.join("/")),
+    let Some(parts) = canonical_parts(Path::new(local)) else {
+        return Err(unresolved(session, class, &shown, privilege));
+    };
+    Ok(Checked {
+        at: LocatedPath {
+            store: at.store,
+            path: object_store::path::Path::from_iter(parts.iter().map(String::as_str)),
+            display: format!("file:/{}", parts.join("/")),
+        },
+        shown,
     })
 }
 
-/// Fails closed (`KRISHIV_INSUFFICIENT_PERMISSIONS`) when `at`, a path
-/// [`physical`] resolved and the policy allowed, now resolves elsewhere: a
-/// symbolic link was swapped into it.
-pub(crate) fn still_physical(session: &Session, at: &LocatedPath) -> Result<(), KrishivError> {
-    let now = physical(at.clone())?;
-    if now.display == at.display {
-        return Ok(());
+/// The local directory `path` (absolute) in the one form every check of a table's directories asks:
+/// `.` and `..` folded in the text (`LocalPaths::locate`, as reads and writes fold them), then
+/// [`physical`]. The result's `at.display` is `file:` and the canonical path.
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` (audited) for a relative or non-UTF-8 path: that depends on the text
+/// only, never on the disk. `KRISHIV_INSUFFICIENT_PERMISSIONS` as [`physical`] gives it.
+pub(crate) fn canonical_dir(
+    session: &Session,
+    path: &Path,
+    privilege: Privilege,
+    class: StatementClass,
+) -> Result<Checked, KrishivError> {
+    let lexical = lexical_dir(path).inspect_err(|e| log_denial(session, class, e))?;
+    physical(session, lexical, privilege, class)
+}
+
+/// The absolute local path `path` with `.` and `..` folded in its text, as `LocalPaths::locate` folds a
+/// read's or write's path; no file system access.
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` for a relative or non-UTF-8 path.
+pub(crate) fn lexical_dir(path: &Path) -> Result<LocatedPath, KrishivError> {
+    let text = path
+        .to_str()
+        .ok_or_else(|| unplaceable("non-UTF-8 paths"))?;
+    if !path.is_absolute() {
+        return Err(unplaceable("relative paths"));
     }
-    let securable = Securable::Path(OptionValue::from_user("path", now.display));
-    audit(
-        session,
-        StatementClass::Write,
-        Err(insufficient_permissions(
+    krishiv_exec::files::LocalPaths::new(StoreId::new(crate::session::LOCAL_STORE), "/")
+        .locate(text)
+}
+
+/// Asks the policy each of `privileges` on the resolved path `checked.at`, auditing each answer with that
+/// path (the record stays on the server), and returns a denial naming `checked.shown`, the caller's text.
+pub(crate) async fn authorize_checked(
+    session: &Session,
+    checked: &Checked,
+    privileges: &[Privilege],
+    class: StatementClass,
+) -> Result<(), KrishivError> {
+    let asked = Securable::Path(OptionValue::from_user("path", checked.at.display.clone()));
+    for privilege in privileges {
+        let r = authorize(
+            &*session.state.policy,
             &session.state.principal,
-            &securable,
+            &asked,
+            *privilege,
+        )
+        .await;
+        if let Err(e) = audit(session, class, r) {
+            // Re-issued with the caller's text and the same class: `authorize` names the securable only
+            // in a 42501 and in the `UNSUPPORTED_FEATURE` of a filtered `Select`; any other error names
+            // no path and passes as it is.
+            let shown = Securable::Path(OptionValue::from_user("path", checked.shown.clone()));
+            return Err(match e.error_class() {
+                ErrorClass::KrishivInsufficientPermissions => {
+                    insufficient_permissions(&session.state.principal, &shown, *privilege)
+                }
+                ErrorClass::KrishivUnsupportedFeature => KrishivUnsupportedFeature {
+                    feature: format!("row filters and column masks (on {shown})"),
+                }
+                .into(),
+                _ => e,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// The denial of `privilege` on the path `display` (the caller's text) that cannot be resolved: the same
+/// 42501 a policy's denial gives, with the audit record a denial writes.
+///
+/// `privilege` is the first one the caller would ask: a policy denying a missing path denies that one
+/// first too, unless it grants it and denies a later one, which a caller sees only on paths inside its
+/// rights.
+pub(crate) fn unresolved(
+    session: &Session,
+    class: StatementClass,
+    display: &str,
+    privilege: Privilege,
+) -> KrishivError {
+    let securable = Securable::Path(OptionValue::from_user("path", display.to_owned()));
+    let e = insufficient_permissions(&session.state.principal, &securable, privilege);
+    log_denial(session, class, &e);
+    e
+}
+
+/// The components of the absolute local path `local` with every symbolic link resolved in the part of
+/// it that exists, and the part that does not exist yet appended as written (see [`resolve_links`]).
+/// `None` for a relative path, one that cannot be resolved (an I/O error, a link loop, a dangling link,
+/// a `..` in its missing part) and a non-UTF-8 one. Callers fold `..` in the text first.
+fn canonical_parts(local: &Path) -> Option<Vec<String>> {
+    if !local.is_absolute() {
+        return None;
+    }
+    resolve_links(local)?
+        .components()
+        .filter_map(|c| match c {
+            Component::Normal(p) => Some(p.to_str().map(str::to_owned)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Fails closed (`KRISHIV_INSUFFICIENT_PERMISSIONS`, naming `checked.shown`) when `checked.at`, a path
+/// [`physical`] resolved and the policy allowed, now resolves elsewhere (a symbolic link was swapped
+/// into it) or no longer resolves.
+pub(crate) fn still_physical(session: &Session, checked: &Checked) -> Result<(), KrishivError> {
+    let deny = || {
+        unresolved(
+            session,
+            StatementClass::Write,
+            &checked.shown,
             Privilege::Modify,
-        )),
-    )
+        )
+    };
+    let Some(local) = checked.at.display.strip_prefix("file:") else {
+        return Ok(());
+    };
+    match canonical_parts(Path::new(local)) {
+        Some(parts) if format!("file:/{}", parts.join("/")) == checked.at.display => Ok(()),
+        _ => Err(deny()),
+    }
 }
 
 /// Allows paths only under the given root directories, and delegates every
@@ -614,10 +997,14 @@ pub(crate) fn still_physical(session: &Session, at: &LocatedPath) -> Result<(), 
 /// A path is compared in the qualified form reads and writes use
 /// (`file:/a/b`, `.` and `..` already resolved), after resolving symbolic
 /// links in the part of it that exists, against the roots with their links
-/// resolved. Anything else is denied: other schemes (`s3://`, ...), paths
-/// with credentials, any path containing `%` (percent-encoded text would
-/// not be decoded the way the comparison reads it, so even a literal `%`
-/// in a file name is refused) and relative or unresolved paths. Session
+/// resolved. Object-store paths are allowed only under the prefixes of
+/// [`Self::with_object_prefixes`] (none by default). Anything else is
+/// denied: other schemes, paths with credentials, any path containing `%`
+/// (percent-encoded text would not be decoded the way the comparison reads
+/// it, so even a literal `%` in a file name is refused) and relative or
+/// unresolved paths. A glob or directory read is checked as written; the
+/// runtime's local store refuses a listing that follows a link out of
+/// `krishiv.io.local.allowedRoots` (set it on the runtime too). Session
 /// writes go to the resolved directory, which is opened once and then used
 /// by descriptor (no name is resolved through a link while the write runs),
 /// and fail if a link is swapped into it before the write begins or commits.
@@ -638,13 +1025,22 @@ pub(crate) fn still_physical(session: &Session, at: &LocatedPath) -> Result<(), 
 #[derive(Clone)]
 pub struct PathPrefixPolicy {
     roots: Vec<PathBuf>,
+    prefixes: Vec<ObjectPrefix>,
     inner: Arc<dyn AccessPolicy>,
+}
+
+/// One allowed object-store prefix: a store and the whole key segments under it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ObjectPrefix {
+    store: StoreId,
+    segments: Vec<String>,
 }
 
 impl std::fmt::Debug for PathPrefixPolicy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PathPrefixPolicy")
             .field("roots", &self.roots)
+            .field("prefixes", &self.prefixes)
             .finish_non_exhaustive()
     }
 }
@@ -669,16 +1065,95 @@ impl PathPrefixPolicy {
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self { roots, inner })
+        Ok(Self {
+            roots,
+            prefixes: Vec::new(),
+            inner,
+        })
     }
 
-    /// Whether the qualified path `path` lies under a root.
+    /// Also allows object-store paths under `prefixes` (`s3://bucket/prefix`, `gs://bucket`,
+    /// `abfss://container@account.dfs.core.windows.net/prefix`): a path is allowed when it
+    /// names the same store (`s3` and `s3a` are one; for Azure the same container in the same
+    /// account) and its key starts with the prefix's whole segments, so `s3://b/data` allows
+    /// `s3://b/data/x` but not `s3://b/data2` (ADR 0046 §3a). An Azure path without an
+    /// account host is never allowed, since its account would come from the client's settings.
+    ///
+    /// # Errors
+    /// `KRISHIV_INVALID_CONFIG_VALUE` for a prefix that is not an object-store URL with a
+    /// bucket, an Azure prefix without an `account.<host>`, or one that holds credentials,
+    /// `%`, a query or fragment, a glob character, or a `.`, `..` or empty segment.
+    pub fn with_object_prefixes<S: AsRef<str>>(
+        mut self,
+        prefixes: impl IntoIterator<Item = S>,
+    ) -> Result<Self, KrishivError> {
+        for prefix in prefixes {
+            let prefix = prefix.as_ref();
+            let parsed = parse_object_prefix(prefix)
+                .filter(|_| !prefix.contains(['*', '?', '[', ']', '{', '}']))
+                // An Azure prefix names its account: without one, the store would take the
+                // account from the client's `fs.azure.account.name`.
+                .filter(|_| {
+                    parse_object_url(prefix).is_ok_and(|u| {
+                        u.scheme != krishiv_io::ObjectScheme::Azure || u.account.is_some()
+                    })
+                })
+                .ok_or_else(|| {
+                    KrishivError::from(KrishivInvalidConfigValue {
+                        value: format!("'{prefix}'"),
+                        key: format!("\"{}\"", IO_OBJECT_STORE_ALLOWED_PREFIXES.key),
+                        reason:
+                            "expected an object-store prefix such as s3://bucket/prefix (Azure: \
+                             abfss://container@account.dfs.core.windows.net/prefix), without \
+                             credentials, `%`, a query or fragment, glob characters, or `.`, `..` \
+                             or empty segments"
+                                .to_owned(),
+                    })
+                })?;
+            self.prefixes.push(parsed);
+        }
+        Ok(self)
+    }
+
+    /// The server-mode confinement of ADR 0046 §3a around `inner`: local paths under
+    /// `krishiv.io.local.allowedRoots`, object-store paths under
+    /// `krishiv.io.objectStore.allowedPrefixes` (both comma separated, default empty, so
+    /// nothing by path), and nothing else, for every role.
+    ///
+    /// # Errors
+    /// `KRISHIV_INVALID_CONFIG_VALUE` for a root that is not an absolute path to an existing
+    /// directory, or a prefix [`Self::with_object_prefixes`] refuses.
+    pub fn from_config(
+        config: &Config,
+        inner: Arc<dyn AccessPolicy>,
+    ) -> Result<Self, KrishivError> {
+        Self {
+            roots: allowed_roots(config)?,
+            prefixes: Vec::new(),
+            inner,
+        }
+        .with_object_prefixes(config_list(config, &IO_OBJECT_STORE_ALLOWED_PREFIXES))
+    }
+
+    /// Whether the qualified path `path` lies under a root or an object-store prefix.
     fn allows(&self, path: &OptionValue) -> bool {
-        let Some(text) = path.as_plain() else {
-            return false;
+        let text = match path {
+            OptionValue::Plain(text) => text.as_str(),
+            // `container@account.host` reads as user info, so an Azure path arrives typed as a
+            // URL with credentials; Azure parsing takes it as container and account and refuses
+            // `user:secret@` forms, so only Azure URLs are compared, and the text never leaves
+            // this check.
+            OptionValue::Url(url) => {
+                let exposed = url.expose_secret();
+                let text = exposed.expose_secret();
+                return parse_object_url(text)
+                    .is_ok_and(|u| u.scheme == krishiv_io::ObjectScheme::Azure)
+                    && self.allows_object(text);
+            }
+            OptionValue::Secret(_) => return false,
         };
         let Some(local) = text.strip_prefix("file:") else {
-            return false;
+            return self.allows_object(text);
         };
         let local = Path::new(local);
         let normal = local.is_absolute()
@@ -692,20 +1167,117 @@ impl PathPrefixPolicy {
     }
 }
 
+impl PathPrefixPolicy {
+    /// Whether the object-store URL `text` lies under one of the prefixes.
+    fn allows_object(&self, text: &str) -> bool {
+        parse_object_prefix(text).is_some_and(|p| {
+            self.prefixes
+                .iter()
+                .any(|a| a.store == p.store && p.segments.starts_with(&a.segments))
+        })
+    }
+}
+
+/// The comma-separated entries of the string setting `entry` (blank entries dropped).
+fn config_list(config: &Config, entry: &krishiv_common::config::ConfigEntry) -> Vec<String> {
+    match config.get(entry) {
+        Some(ConfigValue::String(raw)) => raw
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// `krishiv.io.local.allowedRoots`, canonical (links resolved); empty when unset. The policy
+/// checks paths against them and the runtime's local store refuses listings that follow a
+/// link out of them (ADR 0046 §3a).
+///
+/// # Errors
+/// `KRISHIV_INVALID_CONFIG_VALUE` naming the key for a root that is not an absolute path to
+/// an existing directory.
+pub(crate) fn allowed_roots(config: &Config) -> Result<Vec<PathBuf>, KrishivError> {
+    config_list(config, &IO_LOCAL_ALLOWED_ROOTS)
+        .into_iter()
+        .map(|root| {
+            let path = Path::new(&root);
+            std::fs::canonicalize(path)
+                .ok()
+                .filter(|c| path.is_absolute() && c.is_dir())
+                .ok_or_else(|| {
+                    KrishivError::from(KrishivInvalidConfigValue {
+                        value: format!("'{root}'"),
+                        key: format!("\"{}\"", IO_LOCAL_ALLOWED_ROOTS.key),
+                        reason: "expected absolute paths of existing directories, comma \
+                                 separated"
+                            .to_owned(),
+                    })
+                })
+        })
+        .collect()
+}
+
+/// `text` as an object-store store and key segments, if it is a plain object-store URL: a
+/// bucket, no credentials, no `%` (percent-encoded text would not be compared the way the
+/// store reads it), no query or fragment, and no `.`, `..` or empty key segment (the URL
+/// parser would fold them, so the text written would not be the key compared). A trailing
+/// `/` is allowed.
+fn parse_object_prefix(text: &str) -> Option<ObjectPrefix> {
+    if text.contains(['%', '?', '#']) {
+        return None;
+    }
+    let (_, rest) = text.split_once("://")?;
+    let key = rest.split_once('/').map_or("", |(_, key)| key);
+    let key = key.strip_suffix('/').unwrap_or(key);
+    if !key.is_empty() && key.split('/').any(|s| matches!(s, "" | "." | "..")) {
+        return None;
+    }
+    let url = parse_object_url(text).ok()?;
+    let segments = url
+        .key
+        .as_ref()
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect();
+    Some(ObjectPrefix {
+        store: url.store_id,
+        segments,
+    })
+}
+
 /// `path` with the symbolic links of its longest existing prefix resolved
 /// (the rest does not exist yet, so it holds no links).
 fn resolve_links(path: &Path) -> Option<PathBuf> {
     let mut existing = path.to_path_buf();
     let mut rest = Vec::new();
     loop {
-        if let Ok(resolved) = std::fs::canonicalize(&existing) {
-            return Some(rest.iter().rev().fold(resolved, |p, part| p.join(part)));
+        match std::fs::canonicalize(&existing) {
+            Ok(resolved) => return Some(rest.iter().rev().fold(resolved, |p, part| p.join(part))),
+            // Only a name that is not there at all is kept as written (below a file it cannot be there
+            // either; the write then fails as a storage error). A dangling link (its own entry exists), a
+            // link loop or an unreadable directory fails closed.
+            Err(e)
+                if absent(&e)
+                    && std::fs::symlink_metadata(&existing).is_err_and(|m| absent(&m)) => {}
+            Err(_) => return None,
         }
+        // `None` for a missing part ending in `..`: it is not resolved against a directory that is not there.
         rest.push(existing.file_name()?.to_owned());
         if !existing.pop() {
             return None;
         }
     }
+}
+
+/// Whether `e` says the entry is not there: missing, or below a file.
+fn absent(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+    )
 }
 
 impl AccessPolicy for PathPrefixPolicy {
@@ -729,6 +1301,12 @@ impl AccessPolicy for PathPrefixPolicy {
         self.inner.check(principal, securable, privilege)
     }
 }
+
+/// The privileges a read-only surface allows: `Select` and `Browse` (metadata, which reads nothing a
+/// `Select` would not). [`ReadOnlyPolicy`] denies every other one, and the MCP server's analyze check
+/// refuses a statement that needs any other (design `P3-T063-analyze-api.md` §3.4): `Monitor` (other
+/// principals' `system.*` rows) and `Usage` (on `system.udf`, sending code the server runs) stay out.
+pub const READ_ONLY_PRIVILEGES: [Privilege; 2] = [Privilege::Select, Privilege::Browse];
 
 /// A policy that allows `Select` as `inner` decides and denies every other
 /// privilege: the read-only surfaces (the MCP server) enforce read-only
@@ -775,7 +1353,7 @@ impl AccessPolicy for ReadOnlyPolicy {
         privilege: Privilege,
     ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
         // `Browse` (metadata) reads nothing a `Select` would not; the inner policy decides both.
-        if !matches!(privilege, Privilege::Select | Privilege::Browse) {
+        if !READ_ONLY_PRIVILEGES.contains(&privilege) {
             return Box::pin(std::future::ready(Ok(AccessDecision::Deny {
                 reason: "the session is read-only".to_owned(),
             })));
@@ -913,4 +1491,63 @@ fn calls_secret(t: &str) -> bool {
                 .get(i + 1)
                 .is_some_and(|k| k.kind == TokenKind::Sym(Sym::LParen))
     })
+}
+
+#[cfg(test)]
+mod canonical_path_tests {
+    use std::path::Path;
+
+    use super::{canonical_parts, lexical_dir};
+
+    /// `path` as the directory checks see it: `..` folded in the text, then links resolved.
+    fn canonical(path: &Path) -> Option<String> {
+        let lexical = lexical_dir(path).ok()?;
+        let local = lexical.display.strip_prefix("file:")?.to_owned();
+        canonical_parts(Path::new(&local)).map(|p| format!("file:/{}", p.join("/")))
+    }
+
+    #[test]
+    fn folds_dot_dot_in_the_text_then_resolves_links_and_appends_the_rest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let real = root.join("real");
+        std::fs::create_dir(&real).unwrap();
+        std::fs::create_dir(root.join("x")).unwrap();
+        std::fs::create_dir(root.join("elsewhere")).unwrap();
+        std::os::unix::fs::symlink(&real, root.join("link")).unwrap();
+        // `l/..` is `root`, not the parent of the link's target.
+        std::os::unix::fs::symlink(root.join("elsewhere"), root.join("l")).unwrap();
+        let expected = format!("file:{}/new/t", real.display());
+        for written in [
+            real.join("new/t"),
+            root.join("link/new/t"),
+            root.join("x/../link/./new/t"),
+            root.join("l/../link/new/t"),
+            root.join("missing/../link/new/t"),
+        ] {
+            assert_eq!(
+                canonical(&written).as_deref(),
+                Some(&*expected),
+                "{written:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn refuses_paths_it_cannot_make_canonical() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::os::unix::fs::symlink(dir.join("nowhere"), dir.join("dangling")).unwrap();
+        std::os::unix::fs::symlink(dir.join("loop"), dir.join("loop")).unwrap();
+        for path in [Path::new("relative/wh"), Path::new("file:/wh")] {
+            assert!(lexical_dir(path).is_err(), "{path:?} was not refused");
+        }
+        for path in [
+            &dir.join("dangling/t"),
+            &dir.join("dangling"),
+            &dir.join("loop/t"),
+        ] {
+            assert_eq!(canonical(path), None, "{path:?} was not refused");
+        }
+    }
 }

@@ -132,6 +132,8 @@ fn java_uuid(text: &str) -> Option<Arc<str>> {
 pub struct QueryOptions {
     pub(crate) operation_id: Option<String>,
     pub(crate) deadline: Option<std::time::Duration>,
+    pub(crate) request_tags: Vec<Arc<str>>,
+    pub(crate) inbound_trace: Option<(Option<String>, Option<String>)>,
 }
 
 impl QueryOptions {
@@ -159,6 +161,31 @@ impl QueryOptions {
     /// statement can tighten the session's limit, never loosen it.
     pub fn deadline(mut self, limit: std::time::Duration) -> Self {
         self.deadline = Some(limit);
+        self
+    }
+
+    /// Gives the statement's queries the trace context of the request that started them: the
+    /// W3C `traceparent` and `baggage` header values, either absent. Per request, unlike
+    /// [`crate::Session::set_inbound_trace`], which sets the session's: concurrent requests of one
+    /// session each keep their own. The headers are untrusted and never fail anything: a missing
+    /// or malformed `traceparent` means no trace for these queries (the session's own trace, if
+    /// any, is not used either). A valid `traceparent` brings its `baggage` (at most 32 well-formed entries within 4 KiB), read back with [`crate::Session::baggage`] on the statement's handle.
+    pub fn inbound_trace(mut self, traceparent: Option<&str>, baggage: Option<&str>) -> Self {
+        self.inbound_trace = Some((traceparent.map(str::to_owned), baggage.map(str::to_owned)));
+        self
+    }
+
+    /// Tags the statement's queries with the request tags `tags` (Spark Connect's
+    /// `ExecutePlanRequest.tags`: opaque strings, already validated by the caller). They last for
+    /// these queries only; each shows in `system.queries.tags` as the pair `(tag, "")` beside the
+    /// session's tags, is what a resource group's `clientTags` selector sees, and
+    /// [`crate::Session::interrupt_tag`] cancels by exact match.
+    pub fn tags<I, T>(mut self, tags: I) -> Self
+    where
+        I: IntoIterator<Item = T>,
+        T: AsRef<str>,
+    {
+        self.request_tags = tags.into_iter().map(|t| Arc::from(t.as_ref())).collect();
         self
     }
 }

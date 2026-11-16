@@ -1,0 +1,17 @@
+{
+  "cases": {
+    "generators": [
+      215,
+      216
+    ],
+    "sql-commands": [
+      70,
+      71,
+      73,
+      75,
+      76
+    ]
+  },
+  "file": "identifier-clause",
+  "format_version": 1
+}

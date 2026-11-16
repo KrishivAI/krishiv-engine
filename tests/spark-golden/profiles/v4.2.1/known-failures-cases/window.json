@@ -1,0 +1,12 @@
+{
+  "cases": {
+    "depends-on-command": [
+      70
+    ],
+    "fn-aggregate": [
+      26
+    ]
+  },
+  "file": "window",
+  "format_version": 1
+}

@@ -119,7 +119,7 @@ const SELECTORS: &str = r#"{
 }"#;
 
 fn routed(rg: &ResourceGroups, r: &QueryRequest) -> String {
-    super::select::select(&rg.config, r).to_owned()
+    super::select::select(&rg.current().config, r).to_owned()
 }
 
 #[test]
@@ -539,4 +539,293 @@ fn the_file_is_checked() {
     assert!(
         ResourceGroups::from_json(&g(r#","jmxExport":true,"softConcurrencyLimit":1"#), MEM).is_ok()
     );
+}
+
+#[test]
+fn a_selector_tag_matches_a_key_or_the_whole_pair() {
+    use super::tag_matches;
+    // A bare key matches any value; `k=v` the exact pair.
+    assert!(tag_matches("team", "team", "x"));
+    assert!(tag_matches("team=x", "team", "x"));
+    assert!(!tag_matches("team=y", "team", "x"));
+    // A Connect tag is opaque: `job=42` is a key, and the selector `job=42` matches it as written.
+    assert!(tag_matches("job=42", "job=42", ""));
+    // The over-match documented in the design: the selector `job=42` also matches the session
+    // pair `("job", "42")`, and a key containing `=` matches whatever its value.
+    assert!(tag_matches("job=42", "job", "42"));
+    assert!(tag_matches("team=x", "team=x", "anything"));
+    // Prefixes are not matches.
+    assert!(!tag_matches("teams", "team", "x"));
+    assert!(!tag_matches("team=", "team", "x"));
+}
+
+#[test]
+fn rows_carry_the_subtree_counters_and_reserved_memory_to_every_ancestor() {
+    let rg = ResourceGroups::from_json(CAPS, MEM).unwrap_or_else(|e| panic!("{e}"));
+    let req = request("u");
+    let mut f: Pending<'_> = rg.admit(&req);
+    let permit = poll(&mut f)
+        .and_then(Result::ok)
+        .unwrap_or_else(|| panic!("admitted"));
+    permit
+        .slot::<GroupSlot>()
+        .unwrap_or_else(|| panic!("a group slot"))
+        .set_reserved(4096);
+    let rows = rg.rows();
+    let by_id = |id: &str| {
+        rows.iter()
+            .find(|r| r.group_id == id)
+            .unwrap_or_else(|| panic!("row {id}"))
+    };
+    let (root, leaf) = (by_id("root"), by_id("root.q"));
+    assert_eq!(root.parent_id, None);
+    assert_eq!(leaf.parent_id.as_deref(), Some("root"));
+    assert_eq!((root.running, leaf.running), (1, 1));
+    assert_eq!(
+        (root.memory_reserved_bytes, leaf.memory_reserved_bytes),
+        (4096, 4096),
+        "the parent row sums its subtree"
+    );
+    drop(permit);
+    assert_eq!(rg.rows()[0].memory_reserved_bytes, 0);
+}
+
+// ---- reload (T066: the tree swap that keeps counters by group id) ----------------------------
+
+fn two_leaves(a_hard: usize) -> String {
+    format!(
+        r#"{{"rootGroups": [{{"name": "root", "hardConcurrencyLimit": 10, "maxQueued": 10,
+            "subGroups": [{{"name": "a", "hardConcurrencyLimit": {a_hard}, "maxQueued": 5}},
+                          {{"name": "b", "hardConcurrencyLimit": 2, "maxQueued": 5}}]}}],
+          "selectors": [{{"user": "bob", "group": "root.b"}}],
+          "defaultGroup": "root.a"}}"#
+    )
+}
+
+fn run(rg: &ResourceGroups, user: &str) -> Permit {
+    let req = request(user);
+    let mut f = rg.admit(&req);
+    poll(&mut f)
+        .unwrap_or_else(|| panic!("{user} queued"))
+        .unwrap_or_else(|e| panic!("{e}"))
+}
+
+#[test]
+fn a_reload_keeps_the_counters_of_the_groups_it_keeps_and_takes_their_new_limits() {
+    let rg = ResourceGroups::from_json(&two_leaves(1), MEM).unwrap_or_else(|e| panic!("{e}"));
+    let first = run(&rg, "u");
+    let req = request("u");
+    let mut waiting = rg.admit(&req);
+    assert!(poll(&mut waiting).is_none());
+    assert_eq!(rg.counts("root.a"), Some((1, 1)));
+    // Raising the limit starts the waiting query: the running count carried over.
+    rg.reload_json(&two_leaves(3))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let second = poll(&mut waiting).unwrap_or_else(|| panic!("still queued"));
+    assert!(second.is_ok());
+    assert_eq!(rg.counts("root.a"), Some((2, 0)));
+    drop((first, second));
+    assert_eq!(rg.counts("root.a"), Some((0, 0)));
+}
+
+#[test]
+fn a_removed_group_takes_nothing_new_and_goes_with_its_last_query() {
+    let rg = ResourceGroups::from_json(&two_leaves(2), MEM).unwrap_or_else(|e| panic!("{e}"));
+    let held = run(&rg, "bob");
+    assert_eq!(rg.counts("root.b"), Some((1, 0)));
+    let only_a = r#"{"rootGroups": [{"name": "root", "hardConcurrencyLimit": 10, "maxQueued": 10,
+        "subGroups": [{"name": "a", "hardConcurrencyLimit": 2, "maxQueued": 5}]}],
+        "defaultGroup": "root.a"}"#;
+    rg.reload_json(only_a).unwrap_or_else(|e| panic!("{e}"));
+    let states: Vec<_> = rg
+        .rows()
+        .iter()
+        .map(|r| (r.group_id.clone(), r.state))
+        .collect();
+    assert_eq!(
+        states,
+        [
+            ("root".to_owned(), "active"),
+            ("root.a".to_owned(), "active"),
+            ("root.b".to_owned(), "removed"),
+        ]
+    );
+    // The selector for bob is gone: his next query goes to the default group.
+    assert_eq!(routed(&rg, &request("bob")), "root.a");
+    // The running query still counts in the parent, and ends cleanly.
+    assert_eq!(rg.counts("root"), Some((1, 0)));
+    drop(held);
+    assert_eq!(rg.counts("root.b"), None, "freed with its last query");
+    assert_eq!(rg.rows().len(), 2);
+    // A new group reuses the freed place.
+    rg.reload_json(&two_leaves(2))
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(rg.counts("root.b"), Some((0, 0)));
+    assert_eq!(rg.rows().len(), 3);
+}
+
+#[test]
+fn an_invalid_document_leaves_the_tree_and_its_etag_as_they_were() {
+    let rg = ResourceGroups::from_json(&two_leaves(2), MEM).unwrap_or_else(|e| panic!("{e}"));
+    let (etag, document) = (rg.etag(), rg.document());
+    let held = run(&rg, "u");
+    let err = rg.reload_json(r#"{"rootGroups": []}"#).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::KrishivResourceGroupConfigInvalid
+    );
+    assert_eq!((rg.etag(), rg.document()), (etag.clone(), document));
+    assert_eq!(rg.counts("root.a"), Some((1, 0)));
+    // A different document has another etag; the same document spelled differently has the same.
+    let respelled = two_leaves(2).replace(" ", "  ");
+    rg.reload_json(&respelled).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(rg.etag(), etag);
+    rg.reload_json(&two_leaves(3))
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_ne!(rg.etag(), etag);
+    drop(held);
+}
+
+#[test]
+fn a_queued_query_in_a_removed_group_still_runs() {
+    let rg = ResourceGroups::from_json(&two_leaves(2), MEM).unwrap_or_else(|e| panic!("{e}"));
+    let (b1, b2) = (run(&rg, "bob"), run(&rg, "bob"));
+    let req = request("bob");
+    let mut waiting = rg.admit(&req);
+    assert!(poll(&mut waiting).is_none());
+    let only_a = r#"{"rootGroups": [{"name": "root", "hardConcurrencyLimit": 10, "maxQueued": 10,
+        "subGroups": [{"name": "a", "hardConcurrencyLimit": 2, "maxQueued": 5}]}],
+        "defaultGroup": "root.a"}"#;
+    rg.reload_json(only_a).unwrap_or_else(|e| panic!("{e}"));
+    drop(b1);
+    let third = poll(&mut waiting).unwrap_or_else(|| panic!("the waiter never started"));
+    assert!(third.is_ok());
+    drop((b2, third));
+    assert_eq!(rg.counts("root.b"), None);
+}
+
+// ---- replace (T066: a new document written over the group file) -------------------------------
+
+fn group_file(text: &str) -> (tempfile::TempDir, String) {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let path = dir.path().join("groups.json");
+    std::fs::write(&path, text).unwrap_or_else(|e| panic!("{e}"));
+    let path = path.to_string_lossy().into_owned();
+    (dir, path)
+}
+
+fn class_of(e: &KrishivError) -> ErrorClass {
+    e.error_class()
+}
+
+#[test]
+fn a_replace_writes_the_file_and_swaps_the_tree() {
+    let (_dir, path) = group_file(&two_leaves(1));
+    let rg = ResourceGroups::from_file(&path, MEM).unwrap_or_else(|e| panic!("{e}"));
+    let old = rg.etag();
+    assert_eq!(ResourceGroups::file_etag(&path), Some(old.clone()));
+    rg.replace_file(&path, &two_leaves(4), &old)
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_ne!(rg.etag(), old);
+    assert_eq!(ResourceGroups::file_etag(&path), Some(rg.etag()));
+    let on_disk = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(on_disk, two_leaves(4));
+    let a = rg.rows().into_iter().find(|r| r.group_id == "root.a");
+    assert_eq!(a.map(|r| r.hard_concurrency_limit), Some(4));
+    // no temporary file is left beside it
+    let left = std::fs::read_dir(
+        std::path::Path::new(&path)
+            .parent()
+            .unwrap_or_else(|| panic!("dir")),
+    )
+    .unwrap_or_else(|e| panic!("{e}"))
+    .count();
+    assert_eq!(left, 1);
+}
+
+#[test]
+fn a_replace_with_a_stale_etag_or_an_edited_file_changes_nothing() {
+    let (_dir, path) = group_file(&two_leaves(1));
+    let rg = ResourceGroups::from_file(&path, MEM).unwrap_or_else(|e| panic!("{e}"));
+    let etag = rg.etag();
+    let e = rg.replace_file(&path, &two_leaves(4), "0000").unwrap_err();
+    assert_eq!(class_of(&e), ErrorClass::KrishivAdminPreconditionFailed);
+    assert!(e.to_string().contains("stale_etag"), "{e}");
+    // a hand edit of the file since it was loaded
+    std::fs::write(&path, two_leaves(2)).unwrap_or_else(|e| panic!("{e}"));
+    let e = rg.replace_file(&path, &two_leaves(4), &etag).unwrap_err();
+    assert_eq!(class_of(&e), ErrorClass::KrishivAdminPreconditionFailed);
+    assert!(e.to_string().contains("file_changed"), "{e}");
+    assert_eq!(rg.etag(), etag);
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}")),
+        two_leaves(2)
+    );
+}
+
+#[test]
+fn a_replace_refuses_a_link_a_read_only_file_and_an_invalid_document() {
+    let (dir, path) = group_file(&two_leaves(1));
+    let rg = ResourceGroups::from_file(&path, MEM).unwrap_or_else(|e| panic!("{e}"));
+    let etag = rg.etag();
+    // invalid document: the file stays
+    let e = rg.replace_file(&path, "{}", &etag).unwrap_err();
+    assert_eq!(class_of(&e), ErrorClass::KrishivResourceGroupConfigInvalid);
+    assert_eq!(rg.etag(), etag);
+    // a symbolic link (a mounted ConfigMap)
+    let link = dir.path().join("link.json");
+    std::os::unix::fs::symlink(&path, &link).unwrap_or_else(|e| panic!("{e}"));
+    let link = link.to_string_lossy().into_owned();
+    let via_link = ResourceGroups::from_file(&link, MEM).unwrap_or_else(|e| panic!("{e}"));
+    let e = via_link
+        .replace_file(&link, &two_leaves(4), &via_link.etag())
+        .unwrap_err();
+    assert_eq!(class_of(&e), ErrorClass::KrishivResourceGroupConfigReadOnly);
+    // a read-only file
+    let mut perms = std::fs::metadata(&path)
+        .unwrap_or_else(|e| panic!("{e}"))
+        .permissions();
+    perms.set_readonly(true);
+    std::fs::set_permissions(&path, perms).unwrap_or_else(|e| panic!("{e}"));
+    let e = rg.replace_file(&path, &two_leaves(4), &etag).unwrap_err();
+    assert_eq!(class_of(&e), ErrorClass::KrishivResourceGroupConfigReadOnly);
+    assert_eq!(rg.etag(), etag);
+}
+
+#[test]
+fn queries_queued_on_a_group_that_gains_subgroups_still_start() {
+    let rg = ResourceGroups::from_json(&two_leaves(1), MEM).unwrap_or_else(|e| panic!("{e}"));
+    let first = run(&rg, "u");
+    let req = request("u");
+    let mut waiting = rg.admit(&req);
+    assert!(poll(&mut waiting).is_none());
+    // root.a becomes a parent; the query it queued as a leaf stays its own.
+    let parent = r#"{"rootGroups": [{"name": "root", "hardConcurrencyLimit": 10, "maxQueued": 10,
+        "subGroups": [{"name": "a", "hardConcurrencyLimit": 1, "maxQueued": 5,
+                       "subGroups": [{"name": "c", "hardConcurrencyLimit": 1, "maxQueued": 5}]},
+                      {"name": "b", "hardConcurrencyLimit": 2, "maxQueued": 5}]}],
+        "selectors": [{"user": "bob", "group": "root.b"}],
+        "defaultGroup": "root.a.c"}"#;
+    rg.reload_json(parent).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(rg.counts("root.a"), Some((1, 1)));
+    drop(first);
+    let second = poll(&mut waiting).unwrap_or_else(|| panic!("the queued query never started"));
+    assert!(second.is_ok());
+    assert_eq!(rg.counts("root.a"), Some((1, 0)));
+}
+
+#[test]
+fn a_replace_in_a_directory_that_cannot_be_written_is_read_only() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let (dir, path) = group_file(&two_leaves(1));
+    let rg = ResourceGroups::from_file(&path, MEM).unwrap_or_else(|e| panic!("{e}"));
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let result = rg.replace_file(&path, &two_leaves(4), &rg.etag());
+    // a superuser writes anyway; the check is for everyone else
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755))
+        .unwrap_or_else(|e| panic!("{e}"));
+    if let Err(e) = result {
+        assert_eq!(class_of(&e), ErrorClass::KrishivResourceGroupConfigReadOnly);
+    }
 }

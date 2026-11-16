@@ -74,6 +74,12 @@ pub(crate) enum TempTable {
         columns: Vec<TableColumn>,
         table: Arc<MemoryTable>,
     },
+    /// Any table provider under a hidden name: a row-level statement's target at the version the
+    /// statement read, with its row id (`RowIdScan`).
+    Provider {
+        columns: Vec<TableColumn>,
+        table: Arc<dyn TableProvider>,
+    },
     /// A read by path, with the columns inferred when the view was created.
     Files {
         source: ReadSource,
@@ -790,6 +796,8 @@ impl QueryCatalog {
                             })?;
                             assigned.push((scan.id, self.file_splits(&table, total_slots)?));
                         }
+                        // A row-level target plans its own splits through its scan.
+                        TempTable::Provider { .. } => {}
                         TempTable::View { .. } => {
                             return Err(InternalError {
                                 message: "a scan of a temporary view that was not inlined"
@@ -950,6 +958,7 @@ fn streaming_leaves(root: &PhysNode) -> (Vec<&krishiv_exec::physical::ScanNode>,
             PhysNode::Filter { input, .. }
             | PhysNode::Project { input, .. }
             | PhysNode::ReplicateRows { input, .. }
+            | PhysNode::Sample { input, .. }
             | PhysNode::Generate { input, .. }
             | PhysNode::Expand { input, .. }
             | PhysNode::Limit { input, .. }
@@ -960,7 +969,12 @@ fn streaming_leaves(root: &PhysNode) -> (Vec<&krishiv_exec::physical::ScanNode>,
             | PhysNode::WindowGroupLimit { input, .. }
             | PhysNode::Aggregate { input, .. }
             | PhysNode::PythonEval { input, .. }
-            | PhysNode::WriteFiles { input, .. } => go(input, out),
+            | PhysNode::PythonMap { input, .. }
+            | PhysNode::PythonGroupMap { input, .. }
+            | PhysNode::PythonCoGroupMap { input, .. }
+            | PhysNode::PythonAggregate { input, .. }
+            | PhysNode::WriteFiles { input, .. }
+            | PhysNode::TableWrite { input, .. } => go(input, out),
             PhysNode::Exchange(e) => go(&e.input, out),
             PhysNode::HashJoin(join) => go(&join.probe, out),
             PhysNode::SortMergeJoin(join) => go(&join.probe, out),
@@ -1076,7 +1090,7 @@ impl QueryCatalog {
 
 /// The `_metadata` column of a table read through the file source
 /// `provider` (Spark: file sources; row positions only from Parquet).
-fn file_metadata(provider: &str) -> FileMetadata {
+pub(crate) fn file_metadata(provider: &str) -> FileMetadata {
     match provider.to_ascii_lowercase().as_str() {
         "parquet" => FileMetadata::WithRowIndex,
         "orc" | "csv" | "json" | "text" | "avro" | "xml" | "binaryfile" => FileMetadata::Basic,
@@ -1146,9 +1160,9 @@ impl Catalog for QueryCatalog {
                 return Ok(self.load_stored(id, form));
             };
             let (columns, kind) = match &*table {
-                TempTable::Memory { columns, .. } | TempTable::Files { columns, .. } => {
-                    (columns.clone(), TableKind::Table)
-                }
+                TempTable::Memory { columns, .. }
+                | TempTable::Files { columns, .. }
+                | TempTable::Provider { columns, .. } => (columns.clone(), TableKind::Table),
                 TempTable::View { columns, .. } => (columns.clone(), TableKind::View),
             };
             let file_metadata = match &*table {
@@ -1253,6 +1267,7 @@ impl TableProviderResolver for QueryCatalog {
                     TempTable::Memory { table, .. } => {
                         Ok(Arc::clone(table) as Arc<dyn TableProvider>)
                     }
+                    TempTable::Provider { table, .. } => Ok(Arc::clone(table)),
                     TempTable::Files {
                         known,
                         permanent,
@@ -1363,6 +1378,7 @@ pub(crate) fn expand_views_in(
         reads: Vec::new(),
         deferred: None,
         stored_reads: Vec::new(),
+        views: Vec::new(),
     };
     let plan = expander.go(Arc::clone(plan), &mut Vec::new())?;
     Ok(Expansion {
@@ -1370,6 +1386,7 @@ pub(crate) fn expand_views_in(
         reads: expander.reads,
         deferred: expander.deferred,
         stored_reads: expander.stored_reads,
+        views: expander.views,
     })
 }
 
@@ -1396,6 +1413,8 @@ pub(crate) struct Expansion {
     /// The stored views inlined, inner views before the views that read them: their schema binding is checked
     /// against their analyzed queries (`view_schema::check_read`).
     pub(crate) stored_reads: Vec<crate::view_schema::StoredRead>,
+    /// The views inlined, for the lineage side table (`AnalyzedPlan::views`, located once analyzed).
+    pub(crate) views: Vec<krishiv_plan::analyzer::views::ViewExpansion>,
 }
 
 /// Whether creating the temporary view `name` over `plan` would close a

@@ -2043,3 +2043,16 @@ fn a_stored_body_names_its_stored_function_not_a_session_udf() {
     let rows = collect(&s, "SELECT caller(1)");
     assert_eq!(ints(&rows), [Some(101)]);
 }
+
+#[test]
+fn a_registered_native_udf_is_listed_and_found_by_the_catalog_api() {
+    let s = Session::new().unwrap();
+    let c = s.catalog();
+    assert!(!block_on(c.function_exists("add_one")).unwrap());
+    s.register_udf(AddOne).unwrap();
+    assert!(block_on(c.function_exists("add_one")).unwrap());
+    let listed = block_on(c.list_functions(Some("add_one"))).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert!(listed[0].is_temporary);
+    assert_eq!(block_on(c.get_function("add_one")).unwrap().name, "add_one");
+}

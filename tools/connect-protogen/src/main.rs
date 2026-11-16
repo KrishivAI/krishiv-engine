@@ -143,6 +143,10 @@ fn generate(root: &Path, version: &str) -> Result<Vec<(PathBuf, Vec<u8>)>> {
     }
     // `debug.pb.rs` writes every `Debug`, so none is derived.
     config.skip_debug(["."]);
+    // The Arrow payload of a result batch is `bytes::Bytes`: the server
+    // keeps each response for a reattach and sends a copy, which then
+    // shares the payload instead of copying it.
+    config.bytes([".spark.connect.ExecutePlanResponse.ArrowBatch.data"]);
     let requests = fds
         .file
         .iter()

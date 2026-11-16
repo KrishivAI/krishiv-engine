@@ -20,7 +20,7 @@
 #
 
 from krishiv._udf.loose_version import LooseVersion
-from krishiv.errors import PySparkImportError, PySparkRuntimeError
+from krishiv._udf._host import PySparkImportError, PySparkRuntimeError
 
 
 def require_minimum_pandas_version() -> None:
