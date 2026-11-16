@@ -79,7 +79,8 @@ impl RelationSlots for Slots {
                 operation: "a fake operator".to_owned(),
                 needed: n.to_string(),
                 available: self.limit.to_string(),
-                max_per_session: (self.limit + 1).to_string(),
+                setting: "krishiv.python.worker.maxPerSession".to_owned(),
+                value: (self.limit + 1).to_string(),
             }
             .into()));
         }
@@ -104,6 +105,10 @@ struct Udf {
     slots: Arc<Slots>,
     opened: AtomicUsize,
     ends: Arc<AtomicUsize>,
+    /// Rows of the one result batch a task yields at its end (0: none). A
+    /// task with a result frees its slot only once that is read, as a pool
+    /// task's thread waits for the operator to take its result.
+    result_rows: usize,
 }
 
 impl PreparedRelationUdf for Udf {
@@ -118,6 +123,8 @@ impl PreparedRelationUdf for Udf {
             ended: Mutex::new(false),
             reader: AtomicWaker::new(),
             ends: Arc::clone(&self.ends),
+            result: Mutex::new(None),
+            result_rows: self.result_rows,
         }))
     }
 
@@ -132,6 +139,8 @@ struct Task {
     ended: Mutex<bool>,
     reader: AtomicWaker,
     ends: Arc<AtomicUsize>,
+    result: Mutex<Option<RecordBatch>>,
+    result_rows: usize,
 }
 
 impl UdfTask for Task {
@@ -146,7 +155,15 @@ impl UdfTask for Task {
                     return Poll::Pending;
                 }
                 *self.ended.lock().unwrap() = true;
-                drop(self.slot.lock().unwrap().take());
+                if self.result_rows > 0 {
+                    let v: Int64Array = (0..self.result_rows).map(|i| Some(i as i64)).collect();
+                    let schema =
+                        Arc::new(Schema::new(vec![Field::new("v", ArrowType::Int64, true)]));
+                    *self.result.lock().unwrap() =
+                        Some(RecordBatch::try_new(schema, vec![Arc::new(v) as ArrayRef]).unwrap());
+                } else {
+                    drop(self.slot.lock().unwrap().take());
+                }
                 self.ends.fetch_add(1, Ordering::SeqCst);
                 self.reader.wake();
             }
@@ -157,7 +174,11 @@ impl UdfTask for Task {
     fn next(&self) -> BoxFuture<'_, crate::error::Result<Option<RecordBatch>>> {
         Box::pin(poll_fn(|cx| {
             self.reader.register(cx.waker());
+            if let Some(batch) = self.result.lock().unwrap().take() {
+                return Poll::Ready(Ok(Some(batch)));
+            }
             if *self.ended.lock().unwrap() {
+                drop(self.slot.lock().unwrap().take());
                 Poll::Ready(Ok(None))
             } else {
                 Poll::Pending
@@ -190,6 +211,12 @@ struct Rig {
 /// A sink of `lanes` lanes (an aggregate's when more than one) over slots
 /// of `limit`.
 fn rig(lanes: usize, limit: usize) -> Rig {
+    rig_with(lanes, limit, 64 << 20, 0)
+}
+
+/// As [`rig`], under a memory limit of `memory` bytes, each task yielding a
+/// batch of `result_rows` rows at its end.
+fn rig_with(lanes: usize, limit: usize, memory: usize, result_rows: usize) -> Rig {
     let slots = Arc::new(Slots {
         limit,
         state: Arc::default(),
@@ -201,6 +228,7 @@ fn rig(lanes: usize, limit: usize) -> Rig {
                 slots: Arc::clone(&slots),
                 opened: AtomicUsize::new(0),
                 ends: Arc::clone(&ends),
+                result_rows,
             })
         })
         .collect();
@@ -252,7 +280,7 @@ fn rig(lanes: usize, limit: usize) -> Rig {
     .unwrap();
     let root = TreePool::with_clock(
         &MemoryConfig {
-            limit: Some(64 << 20),
+            limit: Some(memory),
             quantum: 1 << 10,
             spill_wait_timeout: Duration::from_secs(5),
             abort_release_timeout: Duration::from_secs(30),
@@ -265,7 +293,7 @@ fn rig(lanes: usize, limit: usize) -> Rig {
         QueryId(86),
         WorkloadClass::Batch,
         ExecConfig::default(),
-        root.child("q", Some(64 << 20)),
+        root.child("q", Some(memory)),
     );
     let executor: Arc<dyn Executor> = TokioExecutor::deterministic(1).unwrap();
     let ctx = TaskContext::new(
@@ -403,10 +431,16 @@ async fn a_driver_takes_all_its_lanes_slots_together() {
         r.sink.finalize(&g, &r.ctx).await
     };
     // An aggregate's tasks here yield no values: `finalize` names the
-    // missing ones, which is fine; the point is that nothing hangs.
-    let _ = tokio::time::timeout(DEADLINE, run)
+    // missing ones; the point is that nothing hangs.
+    let err = tokio::time::timeout(DEADLINE, run)
         .await
-        .expect("a driver hung waiting for slots");
+        .expect("a driver hung waiting for slots")
+        .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::KrishivPythonUdfResultMismatch,
+        "{err}"
+    );
     assert_eq!(r.slots.state.most.load(Ordering::SeqCst), 2);
     assert_eq!(
         r.udfs
@@ -416,4 +450,43 @@ async fn a_driver_takes_all_its_lanes_slots_together() {
         6
     );
     assert_eq!(*r.slots.state.held.lock().unwrap(), 0);
+}
+
+/// A combined driver's result the memory pool refuses stops its task, which
+/// then never frees its slot: the driver waiting for that slot must not
+/// hang. Its `Blocked` future ends and its next `sink` asks for the memory
+/// (`NeedMemory`, the input untaken), so the arbitrator spills or aborts
+/// (review R2-2).
+#[tokio::test]
+async fn a_refused_result_of_a_combined_driver_asks_for_memory_instead_of_hanging() {
+    // One slot; 1 MiB of memory; each task's result is 1.6 MB.
+    let r = rig_with(1, 1, 1 << 20, 200_000);
+    let g = r.sink.global_state(&r.ctx).unwrap();
+    let run = async {
+        let mut a = r.sink.local_state(&r.ctx, &g)?;
+        let mut b = r.sink.local_state(&r.ctx, &g)?;
+        feed(&r, rows(&[1, 2]), &mut a, &g).await?;
+        let SinkStatus::Blocked(wait) = r.sink.sink(rows(&[3]), &mut b, &g)? else {
+            panic!("the second driver must wait for the slot");
+        };
+        let waiting = tokio::spawn(wait);
+        tokio::task::yield_now().await;
+        r.sink.combine(a, &g)?;
+        waiting.await.unwrap();
+        let status = r.sink.sink(rows(&[4]), &mut b, &g)?;
+        assert!(
+            matches!(status, SinkStatus::NeedMemory { bytes } if bytes > 0),
+            "the driver must ask for the refused result's memory"
+        );
+        Ok::<(), krishiv_common::error::KrishivError>(())
+    };
+    tokio::time::timeout(DEADLINE, run)
+        .await
+        .expect("the waiting driver hung on a refused result")
+        .unwrap();
+    assert_eq!(
+        *r.slots.state.held.lock().unwrap(),
+        1,
+        "a's task still holds its slot"
+    );
 }

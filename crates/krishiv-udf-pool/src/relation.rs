@@ -235,11 +235,12 @@ impl PreparedRelationUdf for PreparedRelation {
         self.pool.submit_task(
             &self.owner,
             Box::new(move || {
-                // Held until the task's thread is done with it: its owner's next task may start then.
-                let _slot = slot;
                 let outcome = with_worker(&pool, &owner, &registered, &call, |worker| {
                     drive(worker, &pool, &registered, &site, &mut ending)
                 });
+                // The worker is given back: the slot frees before the operator can see the results end, so a
+                // scalar call the plan makes next never finds it still held (review R2-5).
+                drop(slot);
                 // The worker is given back (or stopped) before the results end, so a task dropped once its
                 // results ended never kills a worker that finished well.
                 match outcome {

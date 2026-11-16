@@ -144,7 +144,7 @@
   },
   "KRISHIV_PYTHON_WORKER_LIMIT" : {
     "message" : [
-      "<operation> needs <needed> Python UDF workers of its session at once, and at most <available> can serve it: \"krishiv.python.worker.maxPerSession\" is <maxPerSession>, and when it is 2 or more one of those workers is kept for scalar Python UDFs. Raise \"krishiv.python.worker.maxPerSession\", or call fewer Python UDFs in one operator."
+      "<operation> needs <needed> Python UDF workers at once, and at most <available> can serve it: \"<setting>\" is <value>, and one of those workers is kept for scalar Python UDFs when there are 2 or more. Raise \"<setting>\", or call fewer Python UDFs in one operator."
     ],
     "sqlState" : "54000"
   },

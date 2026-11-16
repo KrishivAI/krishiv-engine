@@ -222,9 +222,11 @@ def _engine_batch(arrays: list[Any], schema: Any, num_rows: int, fields: Any = N
             arr = arr.cast(field.type)
         out.append(arr)
     if fields is not None:
-        own = pa.schema([pa.field(f.name, arr.type, nullable=f.nullable) for f, arr in zip(fields, out, strict=False)])
+        # Every column the UDF returned, so the server's checks see the extra ones (review R2-4).
+        out.extend(arrays[len(out) :])
+        own = pa.schema([pa.field(f.name, arr.type, nullable=f.nullable) for f, arr in zip(fields, out, strict=True)])
         return pa.RecordBatch.from_arrays(out, schema=own)
-    names = [f.name for f in schema][: len(out)] + [f"_{i}" for i in range(len(schema), len(out))]
+    names = [f.name for f in schema][: len(out)]
     return pa.RecordBatch.from_arrays(out, names=names)
 
 

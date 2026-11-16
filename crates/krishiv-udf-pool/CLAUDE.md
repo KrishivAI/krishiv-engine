@@ -33,7 +33,8 @@ Paths are relative to this crate.
   `spark.sql.execution.arrow.pyspark.validateSchema.enabled` (`ARROW_TYPE_MISMATCH`, compatible nullability)
 - `src/calls.rs` `CallThreads`: the bounded call threads (at most `maxTotal` threads, at most `maxPerSession`
   running calls per owner; the rest wait in a FIFO queue, not on a thread), and the relation task slots: at most
-  `maxPerSession - 1` per owner (all of them when it is 1), taken all at once or waited for with a waker
+  `min(maxPerSession, maxTotal) - 1` per owner (all of them when that is 1) and `maxTotal - 1` in all (the threads
+  are shared across sessions), taken all at once or waited for with a waker
   (`take_slots`, never queued), a task with its slot submitted ahead of the queue (`submit_task`); with
   `maxPerSession` 1 a scalar call beside an open task is `KRISHIV_PYTHON_WORKER_LIMIT`
 - `src/interpreter.rs` the startup record of each listed interpreter (version, read paths, packages) and `choose`;
@@ -76,7 +77,10 @@ Paths are relative to this crate.
   `spark.sql.execution.arrow.pyspark.validateSchema.enabled` off (Spark's default; 3.5 and 4.0 have no such
   setting) Spark does not check a `mapInPandas`/`mapInArrow` result's types; the pool refuses it with
   `PYTHON_EXCEPTION` (and a null in a non-nullable declared column). Recorded in `docs/concepts/known-differences.md`.
-  No Spark golden backs either form yet (the build host has no Spark).
+  No Spark golden backs either form yet (the build host has no Spark): a spark-semantics golden is owed for
+  `mapInArrow` with a wrong type at 4.1 and 4.2 and for `mapInPandas` with a non-nullable declared column (which
+  the v4.2.0 source says Spark refuses under the setting: its pandas serializer makes every field nullable). The
+  setting is not gated by Spark version (the pool does not know the client's).
 - Every worker is started by the one `krishiv-udf-spawner` thread (the parent-death signal follows the starting
   thread), never in a process group of its own. Every signal goes through the worker's **pidfd** (opened before
   the child can be reaped), never a pid, so a late kill (a cancel racing the worker's own exit, or `Drop` after

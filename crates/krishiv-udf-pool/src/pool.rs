@@ -354,13 +354,24 @@ impl Pool {
         }
     }
 
-    /// `KRISHIV_PYTHON_WORKER_LIMIT` for `operation`, which needs `needed` workers at once.
+    /// `KRISHIV_PYTHON_WORKER_LIMIT` for `operation`, which needs `needed` workers at once; it names the setting
+    /// that bounds the slots (`maxTotal` when it is below `maxPerSession`).
     pub(crate) fn worker_limit(&self, operation: &str, needed: usize) -> KrishivError {
+        let config = &self.inner.config;
+        let (setting, value) = if self.inner.calls.threads_bound() {
+            ("krishiv.python.worker.maxTotal", config.max_total)
+        } else {
+            (
+                "krishiv.python.worker.maxPerSession",
+                config.max_per_session,
+            )
+        };
         KrishivPythonWorkerLimit {
             operation: operation.to_owned(),
             needed: needed.to_string(),
             available: self.inner.calls.slot_limit().to_string(),
-            max_per_session: self.inner.config.max_per_session.to_string(),
+            setting: setting.to_owned(),
+            value: value.to_string(),
         }
         .into()
     }

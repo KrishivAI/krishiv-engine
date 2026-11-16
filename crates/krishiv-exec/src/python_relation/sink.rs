@@ -61,7 +61,15 @@
 //! combined still holds its tasks' slots until they end, so while a driver
 //! waits for slots its `Blocked` future also polls the combined drivers'
 //! pumps: their `End` frames go out and their results come in before
-//! `finalize`, and their slots free (design P3-T085 §3.3a).
+//! `finalize`, and their slots free (design P3-T085 §3.3a). A combined
+//! result the pool refuses makes the waiting driver's next `sink` return
+//! `NeedMemory`, so the arbitrator spills or aborts rather than the query
+//! hanging. The registry of combined drivers is this operator's, while the
+//! slots are the session's: a driver waiting for slots held by another
+//! operator's combined driver relies on that operator's own waiting drivers
+//! or its `finalize` to move them (operators of one query run as separate
+//! pipelines, each with drivers of its own; no trace found where neither
+//! comes).
 //!
 //! **Errors and cancellation.** The first failure of a task fails the
 //! query. Dropping the state (query end, cancel, error) drops every task,
@@ -1056,6 +1064,12 @@ fn flush_feed(
     }
 }
 
+/// The bytes a combined driver's refused result still needs (it is
+/// reserved and moved to its outputs if the pool has room now).
+fn refused_combined(lanes: &[Lane]) -> Option<usize> {
+    lanes.iter().find_map(Lane::try_take_refused)
+}
+
 /// One slot per lane when a lane's task is not open yet (all of them at
 /// once, `admit.rs`), else none per lane; `None` while they wait for slots.
 fn admitted(
@@ -1299,6 +1313,12 @@ fn blocked(
                     for lane in &others {
                         let _ = lane.poll(cx);
                     }
+                    // A combined driver's result the pool refused stops its
+                    // task, which then never frees its slot: the next `sink`
+                    // asks the driver for the memory (review R2-2).
+                    if refused_combined(&others).is_some() {
+                        return Poll::Ready(());
+                    }
                     return Poll::Pending;
                 }
                 Ok(Flushed::All | Flushed::Window) => {
@@ -1380,8 +1400,18 @@ impl Sink for RelationSink {
         if let Some(status) = self.store_results(l, g)? {
             return Ok(status);
         }
-        if let Flushed::Memory(bytes) = self.flush_now(&mut l.driver)? {
-            return Ok(SinkStatus::NeedMemory { bytes });
+        match self.flush_now(&mut l.driver)? {
+            Flushed::Memory(bytes) => return Ok(SinkStatus::NeedMemory { bytes }),
+            Flushed::Slots => {
+                // The slots wait for a combined driver whose result the pool
+                // refused: the arbitrator decides (a spill, or the query's
+                // abort), never a hang. The input is not taken yet.
+                let others = lock(&g.combined).lanes.clone();
+                if let Some(bytes) = refused_combined(&others) {
+                    return Ok(SinkStatus::NeedMemory { bytes });
+                }
+            }
+            Flushed::All | Flushed::Window => {}
         }
         if input.num_rows() > 0 {
             if let Some(status) = self.take_input(&mut l.driver, input)? {

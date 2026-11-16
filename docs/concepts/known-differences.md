@@ -121,8 +121,11 @@ With `spark.sql.execution.arrow.pyspark.validateSchema.enabled` set (Spark 4.1 a
 result batch as Spark does and raises `ARROW_TYPE_MISMATCH` with Spark's message. With it off (the default, and on
 Spark 3.5 and 4.0, which have no such setting), Spark does not check the result's types and reads the batch as if it
 had the declared ones. Krishiv refuses such a result instead, with `PYTHON_EXCEPTION` ("The Python worker returned an
-invalid result"), and refuses a null in a column declared non-nullable when a null is present. Under the setting,
-a result with more columns than declared is not seen by the check (the extra columns are dropped first).
+invalid result"), and refuses a null in a column declared non-nullable when a null is present. A `mapInArrow`
+result with more columns than declared is refused too (Spark reads the declared columns and ignores the rest when
+the setting is off; with it on, both raise `ARROW_TYPE_MISMATCH`). Krishiv does not know the client's Spark version
+here, so the setting is honoured whatever the version: under a Spark 3.5 or 4.0 client, which has no such setting,
+setting it still turns the check on.
 
 ## Python UDF workers per session (server mode)
 
@@ -130,8 +133,9 @@ In server mode each running Python relation UDF (`mapInPandas`, `applyInPandas`,
 holds one of its session's `krishiv.python.worker.maxPerSession` workers for as long as the operator runs, and one
 worker is kept for scalar Python UDFs. An operator that needs more workers at once than that leaves (for example
 nine `pandas_udf` aggregates in one `agg` with the default of 8) fails with `KRISHIV_PYTHON_WORKER_LIMIT`; with the
-setting at 1, a scalar Python UDF call while a relation UDF runs fails the same way. Spark runs such calls in one
-worker and has no such limit.
+setting at 1, a scalar Python UDF call while a relation UDF of the same session runs (in any query) fails the same
+way. All sessions' relation UDFs together hold at most `krishiv.python.worker.maxTotal` minus one workers; one
+waits for another to finish when they would hold more. Spark runs such calls in one worker and has no such limit.
 
 ## `schema_of_variant` with `spark.sql.caseSensitive=true`
 

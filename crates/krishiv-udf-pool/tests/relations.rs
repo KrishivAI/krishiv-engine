@@ -145,15 +145,17 @@ fn prepare(
     payload: PythonPayload,
     call: &Call,
 ) -> Result<Arc<dyn krishiv_exec::python_relation::PreparedRelationUdf>, KrishivError> {
-    prepare_with(udfs, payload, call, BTreeMap::new())
+    prepare_with(udfs, payload, call, BTreeMap::new(), &[])
 }
 
-/// As [`prepare`], the plan's runner conf holding `settings`.
+/// As [`prepare`], the plan's runner conf holding `settings`, and the result columns named in `non_null`
+/// declared non-nullable.
 fn prepare_with(
     udfs: &SessionUdfs,
     payload: PythonPayload,
     call: &Call,
     settings: BTreeMap<String, String>,
+    non_null: &[&str],
 ) -> Result<Arc<dyn krishiv_exec::python_relation::PreparedRelationUdf>, KrishivError> {
     static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let name = format!(
@@ -164,7 +166,7 @@ fn prepare_with(
     let output_arrow: SchemaRef = Arc::new(Schema::new(
         call.output
             .iter()
-            .map(|(n, t)| Field::new(n, client(t), true))
+            .map(|(n, t)| Field::new(n, client(t), !non_null.contains(&n.as_str())))
             .collect::<Vec<_>>(),
     ));
     let spec = RelationCallSpec {
@@ -753,6 +755,7 @@ fn map_in_arrow_under_validate_schema_raises_arrow_type_mismatch() {
         wrong,
         &map_call(PythonEvalType::MapArrowIter),
         on.clone(),
+        &[],
     )
     .expect("prepare");
     let err = run(prepared.as_ref(), map_frames()).expect_err("wrong type");
@@ -771,8 +774,14 @@ fn map_in_arrow_under_validate_schema_raises_arrow_type_mismatch() {
         MAP_RESULT,
         207,
     );
-    let prepared =
-        prepare_with(&udfs, strict, &map_call(PythonEvalType::MapArrowIter), on).expect("prepare");
+    let prepared = prepare_with(
+        &udfs,
+        strict,
+        &map_call(PythonEvalType::MapArrowIter),
+        on,
+        &[],
+    )
+    .expect("prepare");
     let out = run(prepared.as_ref(), map_frames()).expect("compatible nullability");
     assert_eq!(rows(&out), ["a|1", "b|2", "c|3"]);
 }
@@ -909,4 +918,86 @@ fn with_one_worker_a_scalar_call_beside_an_open_task_fails_fast() {
     // A second task of the session would block: it is not queued behind the first.
     assert!(prepared.open(None).is_err(), "no second slot");
     drop(task);
+}
+
+/// `mapInArrow` returning more columns than declared: Spark's JVM sees every column, so under
+/// `validateSchema` it is `ARROW_TYPE_MISMATCH`; with the setting off Krishiv refuses it (`PYTHON_EXCEPTION`,
+/// the recorded divergence: Spark reads the declared columns only). Never dropped silently.
+#[test]
+fn map_in_arrow_extra_columns_are_refused_not_dropped() {
+    let Some(py) = python() else { return };
+    let pool = pool(&py);
+    let udfs = udfs(&pool);
+    let extra = || {
+        command(
+            &py,
+            "import pyarrow as pa\ndef f(it):\n    for b in it:\n        \
+             yield pa.RecordBatch.from_arrays([b.column('s'), b.column('id'), b.column('id')], ['s', 'v', 'w'])",
+            MAP_RESULT,
+            207,
+        )
+    };
+    let on = BTreeMap::from([(
+        "krishiv.sql.execution.arrow.pyspark.validateSchema.enabled".to_owned(),
+        "true".to_owned(),
+    )]);
+    let prepared = prepare_with(
+        &udfs,
+        extra(),
+        &map_call(PythonEvalType::MapArrowIter),
+        on,
+        &[],
+    )
+    .expect("prepare");
+    let err = run(prepared.as_ref(), map_frames()).expect_err("three columns");
+    assert_eq!(err.error_class(), ErrorClass::ArrowTypeMismatch, "{err}");
+    assert!(
+        err.message().contains("StructField(w,LongType,true)"),
+        "{err}"
+    );
+    let prepared =
+        prepare(&udfs, extra(), &map_call(PythonEvalType::MapArrowIter)).expect("prepare");
+    let err = run(prepared.as_ref(), map_frames()).expect_err("three columns");
+    assert_eq!(err.error_class(), ErrorClass::PythonException, "{err}");
+    assert!(err.to_string().contains("3 columns, expected 2"), "{err}");
+}
+
+/// `mapInPandas` under `validateSchema` with a column declared non-nullable: Spark 4.2.0's pandas serializer
+/// builds the result with every field nullable (`conversion.py` L443 `RecordBatch.from_arrays(arrays,
+/// schema.names)`, wrapped by `wrap_struct` L108 with the batch's own fields), and the JVM's check
+/// (`MapInBatchEvaluatorFactory.scala` L84-90) refuses a nullable result field for a non-nullable declared one:
+/// `ARROW_TYPE_MISMATCH`, as here. Read from the v4.2.0 source; a Spark golden is still owed (no Spark on the
+/// build host). Nullable declared columns pass.
+#[test]
+fn map_in_pandas_under_validate_schema_compares_nullability_as_spark_4_2_0() {
+    let Some(py) = python() else { return };
+    let pool = pool(&py);
+    let udfs = udfs(&pool);
+    let on = BTreeMap::from([(
+        "krishiv.sql.execution.arrow.pyspark.validateSchema.enabled".to_owned(),
+        "true".to_owned(),
+    )]);
+    let body = "def f(it):\n    for pdf in it:\n        yield pdf.assign(v=pdf.id)[['s', 'v']]";
+    let call = map_call(PythonEvalType::MapPandasIter);
+    let prepared = prepare_with(
+        &udfs,
+        command(&py, body, MAP_RESULT, 205),
+        &call,
+        on.clone(),
+        &[],
+    )
+    .expect("prepare");
+    let out = run(prepared.as_ref(), map_frames()).expect("nullable declared columns");
+    assert_eq!(rows(&out), ["a|1", "b|2", "c|3"]);
+    let prepared = prepare_with(
+        &udfs,
+        command(&py, body, MAP_RESULT, 205),
+        &call,
+        on,
+        &["v"],
+    )
+    .expect("prepare");
+    let err = run(prepared.as_ref(), map_frames()).expect_err("v declared non-nullable");
+    assert_eq!(err.error_class(), ErrorClass::ArrowTypeMismatch, "{err}");
+    assert!(err.message().contains("SQL_MAP_PANDAS_ITER_UDF"), "{err}");
 }
