@@ -5,13 +5,15 @@
 //! insert-only (read once) or the source reads only pinned snapshots of lake tables:
 //!
 //! - **insert-only**: read as it is, once;
-//! - **one scan of a pinned table** ([`TableProvider::pinned`]: a Delta snapshot at one
-//!   version): the provider the statement opened, held as a hidden table, so both reads take
-//!   that snapshot;
+//! - **one bare scan of a pinned table** ([`TableProvider::pinned`](krishiv_exec::planner::TableProvider::pinned): a Delta snapshot at one
+//!   version; every column in table order, no pushed filter, no row id): the provider the
+//!   statement opened, held as a hidden table, so both reads take that snapshot;
 //! - **anything else** (files, a query, a non-deterministic expression, a UDF): streamed into a
 //!   spill file of its own, a batch at a time, each batch reserved while it is written, then read
 //!   back a batch at a time by both queries ([`SpilledTable`]). Its memory is the batch in
 //!   flight; the file is on disk under `krishiv.spill.maxBytes` and goes with the statement.
+//!   When the statement is cancelled while a batch is being written, that batch finishes
+//!   writing on the blocking pool after the consumer is gone (one batch unaccounted).
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -89,7 +91,7 @@ impl Session {
         if let PhysNode::Scan(s) = physical.root()
             && let Ok(provider) = analysis.env.catalog.provider(&s.scan)
             && provider.pinned()
-            && provider.scan()?.table_schema().fields().len() == columns.len()
+            && bare_scan(s, &provider.scan()?.table_schema(), &columns)
         {
             // A table's statistics may be estimates: the count is read when needed.
             let rows = None;
@@ -210,4 +212,25 @@ fn open_writer(
         }
     };
     Ok(scope.writer(schema, scratch.for_spill_scratch())?)
+}
+
+/// Whether `s` reads its whole table as the source's columns: every column, in table order,
+/// no pushed filter (an exact one has no `Filter` above it), no row id and no runtime filter.
+/// Only such a scan can stand in for the source as its provider: anything else is copied.
+fn bare_scan(
+    s: &krishiv_exec::physical::ScanNode,
+    table: &arrow_schema::SchemaRef,
+    columns: &[TableColumn],
+) -> bool {
+    let names: Vec<&str> = table.fields().iter().map(|f| f.name().as_str()).collect();
+    s.filter.is_none()
+        && !s.row_id
+        && s.runtime_filters.is_empty()
+        && names.len() == columns.len()
+        && names.iter().zip(columns).all(|(n, c)| *n == c.name)
+        && s.projection.len() == names.len()
+        && s.projection
+            .iter()
+            .zip(&names)
+            .all(|(p, n)| *p == krishiv_io::ColumnPath::new(*n))
 }

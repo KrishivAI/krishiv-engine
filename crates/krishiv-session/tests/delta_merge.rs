@@ -650,3 +650,49 @@ fn a_merge_source_larger_than_memory_spills() {
         "{rows}"
     );
 }
+
+/// A MERGE cancelled through the session while it runs (its query's time limit, during the
+/// source's copy) leaves the table at its version, writes no visible file, gives the pool back
+/// and leaves no spill file.
+#[test]
+fn a_merge_cancelled_through_the_session_changes_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("t");
+    copy_dir(&fixtures().join("unpartitioned").join("before"), &dir);
+    let spill = tmp.path().join("spill");
+    let runtime = krishiv_session::EngineRuntime::builder()
+        .config("krishiv.spill.dir", spill.to_str().unwrap())
+        .build()
+        .unwrap();
+    let session = Session::builder()
+        .runtime(runtime)
+        .config("krishiv.session.memoryLimit", "64m")
+        .build()
+        .unwrap();
+    sql(&session, "SET krishiv.query.maxExecutionTime = 300ms").unwrap();
+    let before = (commits_from(&dir, 0).len(), parquet_files(&dir));
+    let text = format!(
+        "MERGE INTO delta.`{}` t USING (SELECT id, repeat('x', 200) AS v, CAST(id AS INT) AS n \
+         FROM range(3000000)) s ON t.id = s.id WHEN MATCHED THEN UPDATE SET v = s.v",
+        dir.display()
+    );
+    let Err(e) = sql(&session, &text) else {
+        panic!("the MERGE finished inside its time limit");
+    };
+    assert_eq!(e.sql_state(), Some("HY008"), "{e}");
+    assert_eq!(session.memory_reserved(), 0);
+    assert_eq!((commits_from(&dir, 0).len(), parquet_files(&dir)), before);
+    let mut left = Vec::new();
+    let mut stack = vec![spill];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).into_iter().flatten() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().is_some_and(|x| x == "spill" || x == "tmp") {
+                left.push(p);
+            }
+        }
+    }
+    assert!(left.is_empty(), "{left:?}");
+}

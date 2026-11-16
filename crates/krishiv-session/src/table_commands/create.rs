@@ -927,10 +927,13 @@ impl Session {
                 })
                 .collect();
             let condition = changes.condition.map(slice);
-            if let Some(done) = self
-                .run_row_level(op, &quoted, &alias, condition.as_deref(), &assignments)
-                .await?
-            {
+            // The statement's hidden tables go at its end, a cancelled one's too.
+            let ran = super::row_level::Swept::new(
+                Arc::clone(&self.state.catalog),
+                self.run_row_level(op, &quoted, &alias, condition.as_deref(), &assignments),
+            )
+            .await;
+            if let Some(done) = ran? {
                 // The table's data changed: what read it is stale (as after an `INSERT`).
                 self.state.catalog.store.bump();
                 self.forget_column_stats(&name);

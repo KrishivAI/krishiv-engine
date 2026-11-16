@@ -858,9 +858,13 @@ impl Session {
             on: slice(m.on.span),
             clauses,
         };
-        let ran = self.run_merge(&statement).await;
-        // The statement's hidden tables (the target's scans, the source's copy) go now.
-        self.state.catalog.sweep_hidden();
+        // The statement's hidden tables (the target's scans, the source's copy) go at its end,
+        // a cancelled one's too.
+        let ran = super::row_level::Swept::new(
+            Arc::clone(&self.state.catalog),
+            self.run_merge(&statement),
+        )
+        .await;
         if let Some(done) = ran? {
             // The table's data changed: what read it is stale (as after an `INSERT`).
             self.state.catalog.store.bump();

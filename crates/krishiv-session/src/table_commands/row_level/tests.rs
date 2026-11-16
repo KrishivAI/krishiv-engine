@@ -838,4 +838,66 @@ mod merge {
             krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
         );
     }
+
+    /// A pinned provider whose scan applies filters exactly (a `MemoryTable`): a filtered source
+    /// over it is a bare scan with the filter pushed in, never the whole table.
+    #[derive(Debug)]
+    struct Pinned(MemoryTable);
+
+    impl TableProvider for Pinned {
+        fn scan(&self) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
+            self.0.scan()
+        }
+
+        fn pinned(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn a_filtered_source_over_a_pinned_exact_filtering_table_merges_only_its_rows() {
+        let files = Files::new();
+        let (session, _) = session(&files);
+        let src = Pinned(MemoryTable::new(schema(), vec![Batch::new(rows(&[2, 3]))]));
+        session.state.catalog.put(
+            "src_table",
+            crate::catalog::TempTable::Provider {
+                columns: vec![
+                    TableColumn {
+                        name: "id".to_owned(),
+                        data_type: krishiv_types::DataType::Long,
+                        nullable: true,
+                        char_varchar: None,
+                    },
+                    TableColumn {
+                        name: "s".to_owned(),
+                        data_type: krishiv_types::DataType::String,
+                        nullable: true,
+                        char_varchar: None,
+                    },
+                ],
+                table: Arc::new(src),
+            },
+        );
+        let update = || {
+            vec![clause(
+                ClauseKind::Matched,
+                None,
+                ClauseAction::Update(vec![set("s", "concat(src.s, '!')")]),
+            )]
+        };
+        let out = merge(
+            &session,
+            statement("SELECT * FROM src_table WHERE id = 2", update()),
+        );
+        assert_eq!(affected(&out), 1);
+        let changed: Vec<_> = strings(&files)
+            .into_iter()
+            .filter(|(_, s)| s.ends_with('!'))
+            .collect();
+        assert_eq!(changed, [(2, "s2!".to_owned())]);
+        // The bare scan is read as the pinned provider: both rows.
+        let out = merge(&session, statement("SELECT * FROM src_table", update()));
+        assert_eq!(affected(&out), 2);
+    }
 }

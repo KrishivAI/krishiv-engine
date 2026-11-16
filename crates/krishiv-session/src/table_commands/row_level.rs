@@ -468,6 +468,52 @@ impl Session {
     }
 }
 
+/// `fut`, after which (on completion, failure or drop: a cancelled statement too) the hidden
+/// tables nothing holds any more go from `catalog`: a row-level statement's target scans and
+/// its source copy (a spill file) do not wait for the catalog's next change. The future is
+/// dropped before the sweep, so the entries it held are free by then.
+pub(super) struct Swept<F> {
+    fut: Option<std::pin::Pin<Box<F>>>,
+    catalog: Arc<crate::catalog::SessionCatalog>,
+}
+
+impl<F: Future> Swept<F> {
+    pub(super) fn new(catalog: Arc<crate::catalog::SessionCatalog>, fut: F) -> Self {
+        Self {
+            fut: Some(Box::pin(fut)),
+            catalog,
+        }
+    }
+}
+
+impl<F: Future> Future for Swept<F> {
+    type Output = F::Output;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let this = self.get_mut();
+        let Some(fut) = this.fut.as_mut() else {
+            return std::task::Poll::Pending;
+        };
+        let out = fut.as_mut().poll(cx);
+        if out.is_ready() {
+            this.fut = None;
+            this.catalog.sweep_hidden();
+        }
+        out
+    }
+}
+
+impl<F> Drop for Swept<F> {
+    fn drop(&mut self) {
+        if self.fut.take().is_some() {
+            self.catalog.sweep_hidden();
+        }
+    }
+}
+
 /// Whether `e` holds a subquery anywhere.
 fn has_subquery(e: &krishiv_plan::Expr) -> bool {
     let mut stack: Vec<&krishiv_plan::Expr> = vec![e];

@@ -16,8 +16,9 @@
 //!   (`ResolveDeltaMergeInto.scala:285-305`); an extra source column is ignored.
 //! - Conditions are deterministic (`DELTA_NON_DETERMINISTIC_FUNCTION_NOT_SUPPORTED`) and hold no
 //!   subquery (`DELTA_UNSUPPORTED_SUBQUERY`; `PreprocessTableMerge.scala:66-85`).
-//! - An `UPDATE` sets a column once (`DELTA_CONFLICT_SET_COLUMN`), an `INSERT` names it once
-//!   (`DELTA_DUPLICATE_COLUMNS_ON_INSERT`, `PreprocessTableMerge.scala:136-162`); a column an
+//! - An `UPDATE` sets a column once (Spark's `DUPLICATE_ASSIGNMENTS`; a Delta table raises
+//!   `DELTA_CONFLICT_SET_COLUMN`), an `INSERT` names it once (refused; a Delta table raises
+//!   `DELTA_DUPLICATE_COLUMNS_ON_INSERT`, `PreprocessTableMerge.scala:136-162`); a column an
 //!   `INSERT` omits is `NULL`.
 //! - Each new value's type may be stored in its column (Spark's ANSI store assignment, as an
 //!   `UPDATE` checks it).
@@ -32,17 +33,16 @@
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    DeltaConflictSetColumn, DeltaDuplicateColumnsOnInsert,
-    IncompatibleDataForTableCannotSafelyCast, KrishivError, KrishivUnsupportedFeature,
-    NonLastMatchedClauseOmitCondition, NonLastNotMatchedBySourceClauseOmitCondition,
-    NonLastNotMatchedByTargetClauseOmitCondition,
+    DuplicateAssignments, IncompatibleDataForTableCannotSafelyCast, KrishivError,
+    KrishivUnsupportedFeature, NonLastMatchedClauseOmitCondition,
+    NonLastNotMatchedBySourceClauseOmitCondition, NonLastNotMatchedByTargetClauseOmitCondition,
 };
 use krishiv_exec::planner::{RowLevelOperation, RowLevelProblem, RowLevelTable};
 use krishiv_plan::analyzer::TableColumn;
 use krishiv_types::DataType;
 
 use super::merge::{ClauseAction, ClauseKind, MergeClause, Resolved};
-use super::row_level::ident;
+use super::row_level::{Assignment, ident};
 use crate::dataframe::{DataFrame, JoinType};
 use crate::functions::expr;
 
@@ -125,6 +125,57 @@ impl Checks<'_> {
                     .join(", "),
             },
         ))
+    }
+
+    /// A column an `INSERT` names twice, or an `UPDATE` sets twice, as the table raises it
+    /// (else Spark's `DUPLICATE_ASSIGNMENTS`, or a refusal for an `INSERT`).
+    fn duplicate(&self, insert: bool, assignments: &[Assignment]) -> KrishivError {
+        if insert {
+            return self
+                .table
+                .error(
+                    RowLevelOperation::Merge,
+                    &RowLevelProblem::DuplicateInsertColumn,
+                )
+                .unwrap_or_else(|| {
+                    KrishivUnsupportedFeature {
+                        feature: "MERGE INTO with an INSERT naming a column twice".to_owned(),
+                    }
+                    .into()
+                });
+        }
+        let repeated: Vec<String> = assignments
+            .iter()
+            .filter(|b| {
+                assignments
+                    .iter()
+                    .filter(|c| c.column.eq_ignore_ascii_case(&b.column))
+                    .count()
+                    > 1
+            })
+            .map(|b| b.column.clone())
+            .collect();
+        let mut names: Vec<String> = Vec::new();
+        for c in &repeated {
+            if !names.iter().any(|n| n.eq_ignore_ascii_case(c)) {
+                names.push(c.to_owned());
+            }
+        }
+        self.table
+            .error(
+                RowLevelOperation::Merge,
+                &RowLevelProblem::DuplicateAssignment { columns: &repeated },
+            )
+            .unwrap_or_else(|| {
+                DuplicateAssignments {
+                    name_list: names
+                        .iter()
+                        .map(|n| ident(n))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                }
+                .into()
+            })
     }
 
     /// The deterministic and subquery checks of a condition (`what`: delta-spark's name of it).
@@ -300,25 +351,7 @@ impl Checks<'_> {
                             .into());
                         };
                         if values[i].is_some() {
-                            return Err(if insert {
-                                DeltaDuplicateColumnsOnInsert {}.into()
-                            } else {
-                                let repeated: Vec<String> = assignments
-                                    .iter()
-                                    .filter(|b| {
-                                        assignments
-                                            .iter()
-                                            .filter(|c| c.column.eq_ignore_ascii_case(&b.column))
-                                            .count()
-                                            > 1
-                                    })
-                                    .map(|b| ident(&b.column))
-                                    .collect();
-                                DeltaConflictSetColumn {
-                                    column_list: format!("[{}]", repeated.join(", ")),
-                                }
-                                .into()
-                            });
+                            return Err(self.duplicate(insert, assignments));
                         }
                         values[i] = Some(value.clone());
                     }
