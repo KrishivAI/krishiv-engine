@@ -652,11 +652,11 @@ impl IcebergScan {
             let mut values = self
                 .parts
                 .constants
-                .get(&f.path)
+                .get(&f.store, &f.path)
                 .map(<[_]>::to_vec)
                 .unwrap_or_default();
             values.extend(lineage::constants_of(e));
-            constants.insert(f.path.clone(), values);
+            constants.insert(f.store.clone(), f.path.clone(), values);
         }
         scan.parts.constants = Arc::new(constants);
         scan.parts.lineage = true;
