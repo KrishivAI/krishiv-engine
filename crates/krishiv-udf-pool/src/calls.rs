@@ -24,9 +24,13 @@
 //! `PythonEval` below the relation operator) always have a worker, and all owners' tasks together hold at most
 //! `max_total - 1`, so the threads are never all held by idle tasks while a granted task waits for one (review
 //! 2026-11-16 R2-1: the threads are shared across sessions). When an owner can run only one call the one slot
-//! is the task's and a scalar call beside an open task is refused ([`Refused::Reserve`]) rather than left to
-//! wait for a task that waits for it; with `max_total` 1 that holds across owners. A waiter whose operator went
-//! away stays in the waiter list until the next slot frees, which wakes it for nothing.
+//! is the task's and a scalar call beside an open task of the same owner is refused ([`Refused::Reserve`])
+//! rather than left to wait for a task that waits for it; another owner's call waits (its task never waits for
+//! that call). Waiters are served in arrival order ([`TaskTicket`]): a grant never passes a waiter ahead of
+//! it of the same owner, nor one whose own owner has room (it waits for room in all, which a later request
+//! would take), so a driver needing many slots is not starved by smaller requests behind it (review R3-3);
+//! a waiter held back only by its own owner's share does not hold other owners back. A waiter that goes
+//! away drops its ticket and leaves the queue.
 
 use std::collections::{HashMap, VecDeque};
 use std::panic::AssertUnwindSafe;
@@ -66,8 +70,11 @@ struct Queue {
     slots: HashMap<Owner, usize>,
     /// Relation task slots held in all.
     slots_total: usize,
-    /// Operators waiting for slots (any owner's: a slot freed by one owner may be what another waits for).
-    slot_waiters: Vec<Waker>,
+    /// Operators waiting for slots, in arrival order (any owner's: a slot freed by one owner may be what
+    /// another waits for).
+    waiting_slots: VecDeque<Waiter>,
+    /// The next ticket's id.
+    next_ticket: u64,
     shutdown: bool,
 }
 
@@ -91,7 +98,37 @@ pub(crate) enum SlotTake {
     TooMany,
 }
 
-/// A relation task's slot: freed, and the owner's waiting operators woken, when it drops.
+/// One operator waiting for slots.
+struct Waiter {
+    id: u64,
+    owner: Owner,
+    /// The slots it waits for.
+    n: usize,
+    waker: Waker,
+}
+
+/// A waiter's place in the slot queue: it leaves the queue when dropped (its operator stopped waiting).
+pub(crate) struct TaskTicket {
+    shared: Arc<Shared>,
+    id: u64,
+}
+
+impl Drop for TaskTicket {
+    fn drop(&mut self) {
+        let wakers = {
+            let mut queue = self.shared.lock();
+            let Some(at) = queue.waiting_slots.iter().position(|w| w.id == self.id) else {
+                return;
+            };
+            queue.waiting_slots.remove(at);
+            // The waiters behind it may be served now.
+            queue.slot_wakers()
+        };
+        wakers.into_iter().for_each(Waker::wake);
+    }
+}
+
+/// A relation task's slot: freed, and the waiting operators woken, when it drops.
 pub(crate) struct TaskSlot {
     shared: Arc<Shared>,
     owner: Owner,
@@ -115,11 +152,18 @@ impl Drop for TaskSlot {
                 }
             }
             queue.slots_total = queue.slots_total.saturating_sub(1);
-            std::mem::take(&mut queue.slot_waiters)
+            queue.slot_wakers()
         };
         for w in waiters {
             w.wake();
         }
+    }
+}
+
+impl Queue {
+    /// The wakers of every operator waiting for slots.
+    fn slot_wakers(&self) -> Vec<Waker> {
+        self.waiting_slots.iter().map(|w| w.waker.clone()).collect()
     }
 }
 
@@ -146,9 +190,9 @@ impl CallThreads {
     /// ([`Refused::Reserve`]): `job` is then dropped unrun.
     pub(crate) fn submit(&self, owner: Owner, job: Job) -> Result<(), Refused> {
         let queue = self.shared.lock();
-        let owner_full = self.owner_calls() == 1 && queue.slots.get(&owner).is_some_and(|n| *n > 0);
-        let all_full = self.shared.max_threads == 1 && queue.slots_total > 0;
-        if owner_full || all_full {
+        // Only the owner's own call is refused: its task may wait for it. Another owner's call waits for a
+        // thread (the task never waits for it), even with `max_total` 1 (review R3-4).
+        if self.owner_calls() == 1 && queue.slots.get(&owner).is_some_and(|n| *n > 0) {
             drop(queue);
             drop(job);
             return Err(Refused::Reserve);
@@ -221,27 +265,77 @@ impl CallThreads {
         self.shared.max_threads < self.shared.max_per_owner
     }
 
-    /// `n` of `owner`'s slots at once, or none (`waker` is then woken when one frees).
+    /// `n` of `owner`'s slots at once, or none. A caller that waits gets a `ticket` (its place in the queue,
+    /// kept between calls; `waker` is woken when the queue moves) and is served in arrival order: slots are
+    /// granted only to the waiter at the head, or to a new caller when nobody waits. The grant clears the
+    /// ticket.
     pub(crate) fn take_slots(
         &self,
         owner: &Owner,
         n: usize,
+        ticket: &mut Option<TaskTicket>,
         waker: &Waker,
     ) -> (SlotTake, Vec<TaskSlot>) {
         if n > self.slot_limit() {
             return (SlotTake::TooMany, Vec::new());
         }
         let mut queue = self.shared.lock();
-        let held = queue.slots.get(owner).copied().unwrap_or(0);
-        if held + n > self.slot_limit() || queue.slots_total + n > self.total_limit() {
-            if !queue.slot_waiters.iter().any(|w| w.will_wake(waker)) {
-                queue.slot_waiters.push(waker.clone());
+        let at = ticket.as_ref().and_then(|t| {
+            queue
+                .waiting_slots
+                .iter()
+                .position(|w| w.id == t.id && Arc::ptr_eq(&t.shared, &self.shared))
+        });
+        let ahead = at.unwrap_or(queue.waiting_slots.len());
+        let limit = self.slot_limit();
+        let held_by = |o: &Owner| queue.slots.get(o).copied().unwrap_or(0);
+        // A waiter ahead holds this request back if it is the same owner's, or if its owner has room (it waits
+        // for room in all, which this request would take).
+        let held_back = queue
+            .waiting_slots
+            .iter()
+            .take(ahead)
+            .any(|w| &w.owner == owner || held_by(&w.owner) + w.n <= limit);
+        let fits = held_by(owner) + n <= limit && queue.slots_total + n <= self.total_limit();
+        if held_back || !fits {
+            match at.and_then(|i| queue.waiting_slots.get_mut(i)) {
+                Some(w) => {
+                    if !w.waker.will_wake(waker) {
+                        w.waker = waker.clone();
+                    }
+                }
+                None => {
+                    let id = queue.next_ticket;
+                    queue.next_ticket += 1;
+                    queue.waiting_slots.push_back(Waiter {
+                        id,
+                        owner: owner.clone(),
+                        n,
+                        waker: waker.clone(),
+                    });
+                    // A stale ticket (another pool's) is replaced; its drop takes this lock, so after it.
+                    let stale = ticket.replace(TaskTicket {
+                        shared: Arc::clone(&self.shared),
+                        id,
+                    });
+                    drop(queue);
+                    drop(stale);
+                    return (SlotTake::Wait, Vec::new());
+                }
             }
             return (SlotTake::Wait, Vec::new());
         }
+        if let Some(i) = at {
+            queue.waiting_slots.remove(i);
+        }
         *queue.slots.entry(owner.clone()).or_default() += n;
         queue.slots_total += n;
+        // The new head may be served now.
+        let wakers = queue.slot_wakers();
         drop(queue);
+        // Its entry is gone: the ticket's drop finds nothing to remove.
+        drop(ticket.take());
+        wakers.into_iter().for_each(Waker::wake);
         let slots = (0..n)
             .map(|_| TaskSlot {
                 shared: Arc::clone(&self.shared),
@@ -499,17 +593,28 @@ mod tests {
         assert_eq!(calls.slot_limit(), 2, "one call is kept for scalar calls");
         let count = Arc::new(Count(AtomicUsize::new(0)));
         let waker = Waker::from(Arc::clone(&count));
-        let (take, _) = calls.take_slots(&owner("a"), 3, &waker);
+        let (take, _) = calls.take_slots(&owner("a"), 3, &mut None, &waker);
         assert_eq!(take, SlotTake::TooMany);
-        let (take, first) = calls.take_slots(&owner("a"), 1, &waker);
+        let (take, first) = calls.take_slots(&owner("a"), 1, &mut None, &waker);
         assert_eq!((take, first.len()), (SlotTake::Taken, 1));
-        let (take, none) = calls.take_slots(&owner("a"), 2, &waker);
+        let mut a_wait = None;
+        let (take, none) = calls.take_slots(&owner("a"), 2, &mut a_wait, &waker);
         assert_eq!((take, none.len()), (SlotTake::Wait, 0));
-        // Another owner's slots are its own.
-        assert_eq!(calls.take_slots(&owner("b"), 2, &waker).0, SlotTake::Taken);
+        // Another owner's slots are its own: a waiter held back by its own share does not hold b back.
+        assert_eq!(
+            calls.take_slots(&owner("b"), 2, &mut None, &waker).0,
+            SlotTake::Taken
+        );
+        let before = count.0.load(Ordering::SeqCst);
         drop(first);
-        assert_eq!(count.0.load(Ordering::SeqCst), 1, "the waiter was woken");
-        assert_eq!(calls.take_slots(&owner("a"), 2, &waker).0, SlotTake::Taken);
+        assert!(
+            count.0.load(Ordering::SeqCst) > before,
+            "the waiter was woken"
+        );
+        assert_eq!(
+            calls.take_slots(&owner("a"), 2, &mut a_wait, &waker).0,
+            SlotTake::Taken
+        );
     }
 
     #[test]
@@ -517,7 +622,7 @@ mod tests {
         let calls = CallThreads::new(8, 1, Duration::from_secs(60));
         assert_eq!(calls.slot_limit(), 1);
         let waker = futures::task::noop_waker();
-        let (take, slots) = calls.take_slots(&owner("a"), 1, &waker);
+        let (take, slots) = calls.take_slots(&owner("a"), 1, &mut None, &waker);
         assert_eq!(take, SlotTake::Taken);
         let refused = calls.submit(owner("a"), Box::new(|| {}));
         assert!(matches!(refused, Err(Refused::Reserve)), "{refused:?}");
@@ -535,7 +640,7 @@ mod tests {
         // `PythonEval` below the relation operator); the reserve runs that call.
         let calls = Arc::new(CallThreads::new(8, 2, Duration::from_secs(60)));
         let waker = futures::task::noop_waker();
-        let (take, mut slots) = calls.take_slots(&owner("a"), 1, &waker);
+        let (take, mut slots) = calls.take_slots(&owner("a"), 1, &mut None, &waker);
         assert_eq!(take, SlotTake::Taken);
         let slot = slots.pop().expect("one slot");
         let (scalar_done, scalar) = mpsc::channel();
@@ -570,13 +675,23 @@ mod tests {
         assert!(calls.threads_bound());
         let count = Arc::new(Count(AtomicUsize::new(0)));
         let waker = Waker::from(Arc::clone(&count));
-        let (take, a) = calls.take_slots(&owner("a"), 2, &waker);
+        let (take, a) = calls.take_slots(&owner("a"), 2, &mut None, &waker);
         assert_eq!(take, SlotTake::Taken);
-        assert_eq!(calls.take_slots(&owner("b"), 2, &waker).0, SlotTake::Wait);
-        assert_eq!(calls.take_slots(&owner("b"), 1, &waker).0, SlotTake::Wait);
+        let mut b_wait = None;
+        assert_eq!(
+            calls.take_slots(&owner("b"), 2, &mut b_wait, &waker).0,
+            SlotTake::Wait
+        );
+        assert_eq!(
+            calls.take_slots(&owner("b"), 1, &mut None, &waker).0,
+            SlotTake::Wait
+        );
         drop(a);
         assert!(count.0.load(Ordering::SeqCst) >= 1, "b's waiter was woken");
-        assert_eq!(calls.take_slots(&owner("b"), 2, &waker).0, SlotTake::Taken);
+        assert_eq!(
+            calls.take_slots(&owner("b"), 2, &mut b_wait, &waker).0,
+            SlotTake::Taken
+        );
     }
 
     #[test]
@@ -587,10 +702,13 @@ mod tests {
         assert_eq!(calls.slot_limit(), 3);
         let waker = futures::task::noop_waker();
         assert_eq!(
-            calls.take_slots(&owner("a"), 4, &waker).0,
+            calls.take_slots(&owner("a"), 4, &mut None, &waker).0,
             SlotTake::TooMany
         );
-        assert_eq!(calls.take_slots(&owner("a"), 3, &waker).0, SlotTake::Taken);
+        assert_eq!(
+            calls.take_slots(&owner("a"), 3, &mut None, &waker).0,
+            SlotTake::Taken
+        );
     }
 
     #[test]
@@ -599,7 +717,7 @@ mod tests {
         // slot, and b's scalar call still runs on the fourth thread, within the deadline.
         let calls = CallThreads::new(4, 4, Duration::from_secs(60));
         let waker = futures::task::noop_waker();
-        let (take, slots) = calls.take_slots(&owner("a"), 3, &waker);
+        let (take, slots) = calls.take_slots(&owner("a"), 3, &mut None, &waker);
         assert_eq!(take, SlotTake::Taken);
         let gate = Arc::new(Barrier::new(4));
         for slot in slots {
@@ -614,7 +732,10 @@ mod tests {
                 )
                 .expect("task");
         }
-        assert_eq!(calls.take_slots(&owner("b"), 1, &waker).0, SlotTake::Wait);
+        assert_eq!(
+            calls.take_slots(&owner("b"), 1, &mut None, &waker).0,
+            SlotTake::Wait
+        );
         let (done, ran) = mpsc::channel();
         calls
             .submit(
@@ -628,10 +749,78 @@ mod tests {
             .expect("the scalar call ran on the thread kept for it");
         gate.wait();
         let deadline = Instant::now() + Duration::from_secs(10);
-        while calls.take_slots(&owner("b"), 1, &waker).0 != SlotTake::Taken {
+        while calls.take_slots(&owner("b"), 1, &mut None, &waker).0 != SlotTake::Taken {
             assert!(Instant::now() < deadline, "a's slots never freed");
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    #[test]
+    fn a_wide_waiter_is_not_passed_by_narrow_takes_behind_it() {
+        // R3-3: seven slots in all. a holds six; b asks for seven and waits first; c's single slot would fit,
+        // but it is behind b, so it waits until b is served.
+        let calls = CallThreads::new(8, 8, Duration::from_secs(60));
+        assert_eq!(calls.slot_limit(), 7);
+        let waker = futures::task::noop_waker();
+        let (take, a) = calls.take_slots(&owner("a"), 6, &mut None, &waker);
+        assert_eq!(take, SlotTake::Taken);
+        let mut b_ticket = None;
+        assert_eq!(
+            calls.take_slots(&owner("b"), 7, &mut b_ticket, &waker).0,
+            SlotTake::Wait
+        );
+        assert!(b_ticket.is_some(), "b waits in the queue");
+        for _ in 0..3 {
+            let mut c_ticket = None;
+            assert_eq!(
+                calls.take_slots(&owner("c"), 1, &mut c_ticket, &waker).0,
+                SlotTake::Wait,
+                "c must not pass b"
+            );
+        }
+        drop(a);
+        let (take, b) = calls.take_slots(&owner("b"), 7, &mut b_ticket, &waker);
+        assert_eq!(take, SlotTake::Taken);
+        assert!(b_ticket.is_none(), "the grant clears the ticket");
+        drop(b);
+        // A waiter that goes away leaves the queue: nobody waits behind a dropped ticket.
+        let (_, a) = calls.take_slots(&owner("a"), 7, &mut None, &waker);
+        let mut gone = None;
+        assert_eq!(
+            calls.take_slots(&owner("b"), 7, &mut gone, &waker).0,
+            SlotTake::Wait
+        );
+        drop(gone);
+        drop(a);
+        assert_eq!(
+            calls.take_slots(&owner("c"), 1, &mut None, &waker).0,
+            SlotTake::Taken
+        );
+    }
+
+    #[test]
+    fn with_one_thread_another_owner_s_scalar_call_waits_rather_than_fails() {
+        // R3-4: maxTotal 1. a's task holds the one slot; a's own scalar call is refused (the task may wait for
+        // it), b's is queued and runs.
+        let calls = CallThreads::new(1, 4, Duration::from_secs(60));
+        let waker = futures::task::noop_waker();
+        let (take, _slot) = calls.take_slots(&owner("a"), 1, &mut None, &waker);
+        assert_eq!(take, SlotTake::Taken);
+        assert!(matches!(
+            calls.submit(owner("a"), Box::new(|| {})),
+            Err(Refused::Reserve)
+        ));
+        let (done, ran) = mpsc::channel();
+        calls
+            .submit(
+                owner("b"),
+                Box::new(move || {
+                    let _ = done.send(());
+                }),
+            )
+            .expect("b's call is queued, not refused");
+        ran.recv_timeout(Duration::from_secs(10))
+            .expect("b's call ran");
     }
 
     #[test]

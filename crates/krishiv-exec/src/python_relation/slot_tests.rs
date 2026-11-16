@@ -27,7 +27,7 @@ use krishiv_types::batch::Batch;
 use super::sink::{InputColumn, RelationLimits};
 use super::{
     Frame, PreparedRelationUdf, RelationLane, RelationShape, RelationSink, RelationSlot,
-    RelationSlots, UdfTask,
+    RelationSlots, RelationTicket, UdfTask,
 };
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus};
 use crate::operators::ScalarExpr;
@@ -72,6 +72,7 @@ impl RelationSlots for Slots {
     fn poll_take(
         &self,
         n: usize,
+        _ticket: &mut Option<RelationTicket>,
         cx: &mut Context<'_>,
     ) -> Poll<crate::error::Result<Vec<RelationSlot>>> {
         if n > self.limit {
@@ -149,7 +150,9 @@ impl UdfTask for Task {
         Box::pin(poll_fn(move |cx| {
             if end {
                 let mut polled = self.end_polled.lock().unwrap();
-                if !*polled {
+                // A task with a result ends in one poll, so `combine`'s own
+                // poll (no waker) already meets the pool's refusal.
+                if !*polled && self.result_rows == 0 {
                     *polled = true;
                     cx.waker().wake_by_ref();
                     return Poll::Pending;
@@ -489,4 +492,122 @@ async fn a_refused_result_of_a_combined_driver_asks_for_memory_instead_of_hangin
         1,
         "a's task still holds its slot"
     );
+}
+
+/// Another driver's context of the rig's query: its own consumer (as each
+/// pipeline driver has) and spill owner.
+fn driver_ctx(r: &Rig, op: u32) -> (TaskContext, Arc<SpillOwner>) {
+    let owner = SpillOwner::new();
+    let ctx = TaskContext::new(
+        Arc::clone(r.ctx.query()),
+        Arc::clone(r.ctx.executor()),
+        Arc::clone(&owner),
+        OperatorId(op),
+        "python_relation",
+    );
+    (ctx, owner)
+}
+
+/// The rest of a two-driver run once `b` holds its slot: `b` combines and
+/// the phase finalizes.
+async fn finish(r: &Rig, mut b: LocalState, g: &GlobalState) -> crate::error::Result<()> {
+    feed(r, Batch::new(RecordBatch::new_empty(input())), &mut b, g).await?;
+    r.sink.combine(b, g)?;
+    r.sink.finalize(g, &r.ctx).await
+}
+
+/// R3-1: the waiting driver's `Blocked` future reserves a combined driver's
+/// refused result itself (its consumer has grant credit) and must poll that
+/// lane again: the refusal happened in `combine`'s poll, which has no waker,
+/// and the pump waits with none while the result is refused, so without
+/// that poll the task never ends and its slot never frees.
+#[tokio::test]
+async fn a_combined_result_reserved_by_the_waiting_driver_moves_its_task_on() {
+    // 4 MiB; each task's result is about 1.6 MB.
+    let r = rig_with(1, 1, 4 << 20, 200_000);
+    let g = r.sink.global_state(&r.ctx).unwrap();
+    let (ctx_a, _) = driver_ctx(&r, 1);
+    let (ctx_b, owner_b) = driver_ctx(&r, 2);
+    let (ctx_c, _) = driver_ctx(&r, 3);
+    let run = async {
+        let mut a = r.sink.local_state(&ctx_a, &g)?;
+        let mut b = r.sink.local_state(&ctx_b, &g)?;
+        feed(&r, rows(&[1, 2]), &mut a, &g).await?;
+        let SinkStatus::Blocked(wait) = r.sink.sink(rows(&[3]), &mut b, &g)? else {
+            panic!("the second driver must wait for the slot");
+        };
+        // b holds 2 MB of grant credit; the pool has room for a's result
+        // only through it.
+        let b_consumer = Arc::clone(ctx_b.consumer().consumer());
+        owner_b
+            .reserve_for(&b_consumer, 2_000_000, || async {})
+            .await
+            .unwrap();
+        let mut blocker = ctx_c.consumer().consumer().reservation();
+        blocker
+            .try_grow((4 << 20) - 2_000_000 - (768 << 10))
+            .unwrap();
+        r.sink.combine(a, &g)?;
+        wait.await;
+        assert!(
+            b_consumer.credit() < 2_000_000,
+            "the result used b's credit"
+        );
+        drop(blocker);
+        finish(&r, b, &g).await
+    };
+    tokio::time::timeout(DEADLINE, run)
+        .await
+        .expect("the combined task never moved on")
+        .unwrap();
+    assert_eq!(r.ends.load(Ordering::SeqCst), 2);
+}
+
+/// R3-2: a result that fits the memory limit but is refused at first: the
+/// waiting driver's `NeedMemory` grant (credit on its own consumer) is what
+/// its retry reserves the result with, so the credit is used once and does
+/// not grow, and the phase completes.
+#[tokio::test]
+async fn a_need_memory_grant_for_a_combined_result_is_used_by_the_retry() {
+    let r = rig_with(1, 1, 4 << 20, 200_000);
+    let g = r.sink.global_state(&r.ctx).unwrap();
+    let (ctx_a, _) = driver_ctx(&r, 1);
+    let (ctx_b, owner_b) = driver_ctx(&r, 2);
+    let (ctx_c, _) = driver_ctx(&r, 3);
+    let run = async {
+        let mut a = r.sink.local_state(&ctx_a, &g)?;
+        let mut b = r.sink.local_state(&ctx_b, &g)?;
+        feed(&r, rows(&[1, 2]), &mut a, &g).await?;
+        let mut blocker = ctx_c.consumer().consumer().reservation();
+        blocker.try_grow(3 << 20).unwrap();
+        let SinkStatus::Blocked(wait) = r.sink.sink(rows(&[3]), &mut b, &g)? else {
+            panic!("the second driver must wait for the slot");
+        };
+        let waiting = tokio::spawn(wait);
+        tokio::task::yield_now().await;
+        r.sink.combine(a, &g)?;
+        waiting.await.unwrap();
+        let SinkStatus::NeedMemory { bytes } = r.sink.sink(rows(&[4]), &mut b, &g)? else {
+            panic!("the driver must ask for the refused result's memory");
+        };
+        // The driver's loop: memory freed (a spill), then granted to b.
+        drop(blocker);
+        let b_consumer = Arc::clone(ctx_b.consumer().consumer());
+        owner_b
+            .reserve_for(&b_consumer, bytes, || async {})
+            .await
+            .unwrap();
+        match r.sink.sink(rows(&[4]), &mut b, &g)? {
+            SinkStatus::NeedMemory { .. } => panic!("the retry must use the grant"),
+            SinkStatus::Blocked(wait) => wait.await,
+            SinkStatus::NeedMoreInput | SinkStatus::Finished => {}
+        }
+        assert_eq!(b_consumer.credit(), 0, "the grant was used, not grown");
+        finish(&r, b, &g).await
+    };
+    tokio::time::timeout(DEADLINE, run)
+        .await
+        .expect("the phase hung")
+        .unwrap();
+    assert_eq!(r.ends.load(Ordering::SeqCst), 2);
 }

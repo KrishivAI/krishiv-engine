@@ -386,6 +386,9 @@ struct Feed {
     backlog: VecDeque<Cut>,
     /// A failure of the `Blocked` future's framing: the next call's error.
     failed: Option<KrishivError>,
+    /// The driver's places in the runtimes' slot queues while it waits
+    /// for slots (`admit.rs`); dropped with the state.
+    tickets: Vec<Option<super::RelationTicket>>,
 }
 
 /// What [`flush_feed`] stopped at.
@@ -742,7 +745,8 @@ impl RelationSink {
     /// Frames the driver's backlog as [`flush_feed`] does; the failure of
     /// a `Blocked` future's framing first.
     fn flush(&self, d: &mut Driver, cx: &mut Context<'_>) -> Result<Flushed> {
-        let mut feed = lock(&d.feed);
+        let mut guard = lock(&d.feed);
+        let feed = &mut *guard;
         if let Some(e) = feed.failed.take() {
             return Err(e);
         }
@@ -751,7 +755,7 @@ impl RelationSink {
             self.window,
             d.partition,
             &d.lanes,
-            &mut feed.backlog,
+            feed,
             &mut d.spare,
             cx,
         )
@@ -978,7 +982,7 @@ fn lend(parts: Vec<Reservation>, handle: &Arc<ConsumerHandle>, bytes: usize) -> 
     lent
 }
 
-/// Frames `backlog` into `lanes` while every lane's window has room, the
+/// Frames the `feed` backlog into `lanes` while every lane's window has room, the
 /// copies reserved in `spare`. Nothing changes for a frame whose copies the
 /// pool refuses, nor for one whose lanes' tasks wait for slots (`cx` is
 /// woken when slots free).
@@ -987,10 +991,13 @@ fn flush_feed(
     window: usize,
     partition: u32,
     lanes: &[Lane],
-    backlog: &mut VecDeque<Cut>,
+    feed: &mut Feed,
     spare: &mut Reservation,
     cx: &mut Context<'_>,
 ) -> Result<Flushed> {
+    let Feed {
+        backlog, tickets, ..
+    } = feed;
     loop {
         if lanes.iter().any(|l| lock(&l.io).in_flight() >= window) {
             return Ok(Flushed::Window);
@@ -1018,7 +1025,7 @@ fn flush_feed(
                 if more > 0 && spare.try_grow(more).is_err() {
                     return Ok(Flushed::Memory(more));
                 }
-                let Some(mut slots) = admitted(specs, lanes, cx)? else {
+                let Some(mut slots) = admitted(specs, lanes, tickets, cx)? else {
                     return Ok(Flushed::Slots);
                 };
                 let Some(Cut::Rows { memory, .. }) = backlog.pop_front() else {
@@ -1041,7 +1048,7 @@ fn flush_feed(
                 let mut slots = if end {
                     Vec::new()
                 } else {
-                    let Some(slots) = admitted(specs, lanes, cx)? else {
+                    let Some(slots) = admitted(specs, lanes, tickets, cx)? else {
                         return Ok(Flushed::Slots);
                     };
                     slots
@@ -1064,10 +1071,29 @@ fn flush_feed(
     }
 }
 
-/// The bytes a combined driver's refused result still needs (it is
-/// reserved and moved to its outputs if the pool has room now).
-fn refused_combined(lanes: &[Lane]) -> Option<usize> {
-    lanes.iter().find_map(Lane::try_take_refused)
+/// Reserves each combined driver's refused result in a reservation of the
+/// waiting driver (`reserve`: its consumer, whose grant credit a
+/// `NeedMemory` adds to, so the retry uses what the driver was given;
+/// review R3-2), moves it to that lane's outputs and polls the lane again,
+/// whose pump waits with no waker while a result is refused (R3-1). The
+/// bytes still missing for the first one the pool refuses.
+fn reserve_combined(
+    lanes: &[Lane],
+    mut reserve: impl FnMut() -> Reservation,
+    cx: &mut Context<'_>,
+) -> Option<usize> {
+    for lane in lanes {
+        let Some(bytes) = lane.refused_bytes() else {
+            continue;
+        };
+        let mut r = reserve();
+        if r.try_grow(bytes).is_err() {
+            return Some(bytes);
+        }
+        lane.accept_refused(r);
+        let _ = lane.poll(cx);
+    }
+    None
 }
 
 /// One slot per lane when a lane's task is not open yet (all of them at
@@ -1075,12 +1101,13 @@ fn refused_combined(lanes: &[Lane]) -> Option<usize> {
 fn admitted(
     specs: &[RelationLane],
     lanes: &[Lane],
+    tickets: &mut Vec<Option<super::RelationTicket>>,
     cx: &mut Context<'_>,
 ) -> Result<Option<Vec<Option<super::RelationSlot>>>> {
     if lanes.iter().all(Lane::opened) {
         return Ok(Some(specs.iter().map(|_| None).collect()));
     }
-    match poll_admit(specs, cx) {
+    match poll_admit(specs, tickets, cx) {
         Poll::Ready(slots) => slots.map(Some),
         Poll::Pending => Ok(None),
     }
@@ -1286,15 +1313,8 @@ fn blocked(
                 return Poll::Ready(());
             }
             let before = f.backlog.len();
-            match flush_feed(
-                &specs,
-                window,
-                partition,
-                &lanes,
-                &mut f.backlog,
-                &mut spare,
-                cx,
-            ) {
+            let flushed = flush_feed(&specs, window, partition, &lanes, &mut f, &mut spare, cx);
+            match flushed {
                 Err(e) => {
                     f.failed = Some(e);
                     return Poll::Ready(());
@@ -1314,9 +1334,10 @@ fn blocked(
                         let _ = lane.poll(cx);
                     }
                     // A combined driver's result the pool refused stops its
-                    // task, which then never frees its slot: the next `sink`
-                    // asks the driver for the memory (review R2-2).
-                    if refused_combined(&others).is_some() {
+                    // task, which then never frees its slot: reserved here if
+                    // the pool has room (its lane polled again), else the
+                    // next `sink` asks the driver for the memory (R2-2).
+                    if reserve_combined(&others, || spare.split(0), cx).is_some() {
                         return Poll::Ready(());
                     }
                     return Poll::Pending;
@@ -1377,6 +1398,7 @@ impl Sink for RelationSink {
                 feed: Arc::new(Mutex::new(Feed {
                     backlog: VecDeque::new(),
                     failed: None,
+                    tickets: Vec::new(),
                 })),
                 spare: consumer.reservation(),
                 wants: 0,
@@ -1407,7 +1429,9 @@ impl Sink for RelationSink {
                 // refused: the arbitrator decides (a spill, or the query's
                 // abort), never a hang. The input is not taken yet.
                 let others = lock(&g.combined).lanes.clone();
-                if let Some(bytes) = refused_combined(&others) {
+                let consumer = Arc::clone(&l.consumer);
+                let mut cx = Context::from_waker(noop_waker_ref());
+                if let Some(bytes) = reserve_combined(&others, || consumer.reservation(), &mut cx) {
                     return Ok(SinkStatus::NeedMemory { bytes });
                 }
             }

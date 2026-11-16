@@ -172,12 +172,44 @@ pub trait RelationSlots: Send + Sync {
     fn limit(&self) -> usize;
 
     /// `n` slots at once, or none: `Pending` (the waker registered, woken
-    /// when slots free) while fewer are free.
+    /// when slots may have freed) while they cannot be granted. `ticket` is
+    /// the caller's place in the queue: the runtime sets it when the caller
+    /// first waits and clears it on the grant; the caller keeps it between
+    /// polls and drops it when it stops waiting, so grants can go in arrival
+    /// order without a dropped waiter blocking the queue.
     ///
     /// # Errors
     /// When `n` is over [`Self::limit`]: the driver could never start, so it
     /// fails with a classed error naming the setting that bounds it.
-    fn poll_take(&self, n: usize, cx: &mut Context<'_>) -> Poll<Result<Vec<RelationSlot>>>;
+    fn poll_take(
+        &self,
+        n: usize,
+        ticket: &mut Option<RelationTicket>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<Vec<RelationSlot>>>;
+}
+
+/// A waiter's place in a [`RelationSlots`] queue; dropping it leaves the
+/// queue. Opaque to the operator.
+pub struct RelationTicket(Box<dyn Any + Send + Sync>);
+
+impl RelationTicket {
+    /// A ticket holding `inner`, which leaves the queue when it drops.
+    pub fn new(inner: impl Any + Send + Sync) -> Self {
+        Self(Box::new(inner))
+    }
+
+    /// What [`Self::new`] was given, for the runtime that made it.
+    #[must_use]
+    pub fn into_inner(self) -> Box<dyn Any + Send + Sync> {
+        self.0
+    }
+}
+
+impl fmt::Debug for RelationTicket {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("RelationTicket")
+    }
 }
 
 /// One slot of a [`RelationSlots`] grant: what the runtime frees (and wakes

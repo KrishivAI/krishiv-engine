@@ -254,6 +254,23 @@ impl Lane {
         Ok(())
     }
 
+    /// The bytes of the refused result, if any.
+    pub(super) fn refused_bytes(&self) -> Option<usize> {
+        lock(&self.io)
+            .refused
+            .as_ref()
+            .map(RecordBatch::get_array_memory_size)
+    }
+
+    /// Moves the refused result, if any, to the outputs with `memory`, a
+    /// reservation of its bytes (of any consumer: the store takes it over).
+    pub(super) fn accept_refused(&self, memory: Reservation) {
+        let mut q = lock(&self.io);
+        if let Some(batch) = q.refused.take() {
+            q.outputs.push_back((batch, memory));
+        }
+    }
+
     /// Reserves the refused result, if any, without waiting, and moves it
     /// to the outputs; the bytes still missing if the pool refuses again.
     pub(super) fn try_take_refused(&self) -> Option<usize> {

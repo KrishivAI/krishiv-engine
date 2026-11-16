@@ -39,11 +39,12 @@ use futures::future::BoxFuture;
 use futures::{SinkExt, StreamExt};
 use krishiv_common::error::{InternalError, KrishivError, OperationCanceled};
 use krishiv_exec::python_relation::{
-    Frame, PreparedRelationUdf, RelationCallSpec, RelationSlot, RelationSlots, UdfTask,
+    Frame, PreparedRelationUdf, RelationCallSpec, RelationSlot, RelationSlots, RelationTicket,
+    UdfTask,
 };
 use krishiv_types::{StructField, StructType};
 
-use crate::calls::{SlotTake, TaskSlot};
+use crate::calls::{SlotTake, TaskSlot, TaskTicket};
 use crate::pool::{Owner, Pool};
 use crate::runtime::{CallState, CancelOnDrop, Registered, with_worker};
 use crate::validate::{SchemaCheck, VALIDATE_SCHEMA};
@@ -75,9 +76,20 @@ impl RelationSlots for PoolSlots {
     fn poll_take(
         &self,
         n: usize,
+        ticket: &mut Option<RelationTicket>,
         cx: &mut Context<'_>,
     ) -> Poll<krishiv_exec::Result<Vec<RelationSlot>>> {
-        match self.pool.calls().take_slots(&self.owner, n, cx.waker()) {
+        // The pool's ticket out of the operator's box and back (moved, never dropped, so it keeps its place).
+        let mut own: Option<TaskTicket> = ticket
+            .take()
+            .and_then(|t| t.into_inner().downcast::<TaskTicket>().ok())
+            .map(|t| *t);
+        let taken = self
+            .pool
+            .calls()
+            .take_slots(&self.owner, n, &mut own, cx.waker());
+        *ticket = own.map(RelationTicket::new);
+        match taken {
             (SlotTake::Taken, slots) => {
                 Poll::Ready(Ok(slots.into_iter().map(RelationSlot::new).collect()))
             }
@@ -275,7 +287,11 @@ impl PreparedRelation {
             return Ok(*slot);
         }
         let waker = futures::task::noop_waker();
-        match self.pool.calls().take_slots(&self.owner, 1, &waker) {
+        match self
+            .pool
+            .calls()
+            .take_slots(&self.owner, 1, &mut None, &waker)
+        {
             (SlotTake::Taken, mut slots) => slots.pop().ok_or_else(|| {
                 InternalError {
                     message: "no relation slot was granted".to_owned(),
@@ -491,7 +507,7 @@ mod tests {
             let count = Arc::new(Count(AtomicUsize::new(0)));
             let waker = Waker::from(Arc::clone(&count));
             let mut cx = Context::from_waker(&waker);
-            let Poll::Ready(Err(e)) = slots.poll_take(limit + 1, &mut cx) else {
+            let Poll::Ready(Err(e)) = slots.poll_take(limit + 1, &mut None, &mut cx) else {
                 panic!("{} tasks over {limit} slots must fail", limit + 1);
             };
             assert_eq!(e.error_class(), ErrorClass::KrishivPythonWorkerLimit);
@@ -501,12 +517,13 @@ mod tests {
                 "{}",
                 e.message()
             );
-            let Poll::Ready(Ok(taken)) = slots.poll_take(limit, &mut cx) else {
+            let Poll::Ready(Ok(taken)) = slots.poll_take(limit, &mut None, &mut cx) else {
                 panic!("the slots are free");
             };
+            let mut ticket = None;
             assert!(
-                slots.poll_take(1, &mut cx).is_pending(),
-                "would block, not queue"
+                slots.poll_take(1, &mut ticket, &mut cx).is_pending(),
+                "would block until a slot frees"
             );
             drop(taken);
             assert!(
@@ -521,7 +538,9 @@ mod tests {
         let pool = pool(1);
         let slots = PoolSlots::new(pool.clone(), owner());
         let waker = futures::task::noop_waker();
-        let Poll::Ready(Ok(_taken)) = slots.poll_take(1, &mut Context::from_waker(&waker)) else {
+        let Poll::Ready(Ok(_taken)) =
+            slots.poll_take(1, &mut None, &mut Context::from_waker(&waker))
+        else {
             panic!("the slot is free");
         };
         let (done, ran) = std::sync::mpsc::channel::<()>();

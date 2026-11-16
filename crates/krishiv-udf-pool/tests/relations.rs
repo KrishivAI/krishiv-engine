@@ -1001,3 +1001,47 @@ fn map_in_pandas_under_validate_schema_compares_nullability_as_spark_4_2_0() {
     assert_eq!(err.error_class(), ErrorClass::ArrowTypeMismatch, "{err}");
     assert!(err.message().contains("SQL_MAP_PANDAS_ITER_UDF"), "{err}");
 }
+
+/// R2-5 regression: `maxPerSession` 1. Once a task's results ended, its slot is free, so a scalar call the plan
+/// makes next (`mapInPandas(...).select(py_udf(c))`) runs instead of being refused as beside an open task.
+/// Several rounds, since the old order (slot freed after the results ended) lost only a race.
+#[test]
+fn a_scalar_call_right_after_a_task_s_results_end_runs() {
+    let Some(py) = python() else { return };
+    let pool = pool_of(&py, 1);
+    let udfs = Arc::new(udfs(&pool));
+    let payload = command(&py, "def f(it):\n    yield from it", MAP_RESULT, 205);
+    let prepared =
+        prepare(&udfs, payload, &map_call(PythonEvalType::MapPandasIter)).expect("prepare");
+    let scalar = command(&py, "def f(x):\n    return x + 1", "LongType()", 101);
+    udfs.register("plus", 1, scalar);
+    let calls = Arc::clone(&udfs);
+    within(Duration::from_secs(120), move || {
+        let plus = calls
+            .prepare(&krishiv_exec::python_eval::UdfCallSpec {
+                name: "plus".to_owned(),
+                version: 1,
+                eval_type: PythonEvalType::ArrowBatched,
+                thread_safe: true,
+                arg_types: vec![DataType::Long],
+                return_type: DataType::Long,
+                return_arrow: ArrowType::Int64,
+            })
+            .expect("prepare the scalar call");
+        for round in 0..5 {
+            let out = run(
+                prepared.as_ref(),
+                vec![
+                    batch(0, vec![("s", strings(&["x"])), ("v", longs(&[1]))]),
+                    Frame::End,
+                ],
+            )
+            .expect("the task");
+            assert_eq!(rows(&out), ["x|1"]);
+            let args = RecordBatch::try_from_iter([("a", longs(&[1]))]).expect("args");
+            let column = block_on(plus.call(args))
+                .unwrap_or_else(|e| panic!("round {round}: the scalar call was refused: {e}"));
+            assert_eq!(column.len(), 1);
+        }
+    });
+}

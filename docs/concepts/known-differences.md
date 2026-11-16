@@ -135,7 +135,7 @@ worker is kept for scalar Python UDFs. An operator that needs more workers at on
 nine `pandas_udf` aggregates in one `agg` with the default of 8) fails with `KRISHIV_PYTHON_WORKER_LIMIT`; with the
 setting at 1, a scalar Python UDF call while a relation UDF of the same session runs (in any query) fails the same
 way. All sessions' relation UDFs together hold at most `krishiv.python.worker.maxTotal` minus one workers; one
-waits for another to finish when they would hold more. Spark runs such calls in one worker and has no such limit.
+waits for another to finish when they would hold more, in arrival order. Spark runs such calls in one worker and has no such limit.
 
 ## `schema_of_variant` with `spark.sql.caseSensitive=true`
 

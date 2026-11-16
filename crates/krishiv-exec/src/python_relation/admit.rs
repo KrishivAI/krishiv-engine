@@ -17,14 +17,17 @@
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use super::{RelationLane, RelationSlot, RelationSlots};
+use super::{RelationLane, RelationSlot, RelationSlots, RelationTicket};
 use crate::error::{Result, internal};
 
 /// One slot per lane of `specs` whose call site is bounded (`None` for the
 /// others), in lane order; `Pending` with no slot held while any group of
-/// lanes sharing slots cannot get all of them.
+/// lanes sharing slots cannot get all of them. `tickets` are the driver's
+/// places in the groups' queues, kept between polls (dropped with the
+/// driver's state when it stops waiting).
 pub(super) fn poll_admit(
     specs: &[RelationLane],
+    tickets: &mut Vec<Option<RelationTicket>>,
     cx: &mut Context<'_>,
 ) -> Poll<Result<Vec<Option<RelationSlot>>>> {
     // Lanes grouped by the slots they share (in practice one group: a
@@ -43,10 +46,13 @@ pub(super) fn poll_admit(
         }
     }
     let mut slots: Vec<Option<RelationSlot>> = specs.iter().map(|_| None).collect();
-    for (cap, lanes) in &groups {
+    if tickets.len() < groups.len() {
+        tickets.resize_with(groups.len(), || None);
+    }
+    for ((cap, lanes), ticket) in groups.iter().zip(tickets.iter_mut()) {
         // On `Pending` or an error the slots taken so far drop here: none is
         // held while the driver waits.
-        let taken = match cap.poll_take(lanes.len(), cx) {
+        let taken = match cap.poll_take(lanes.len(), ticket, cx) {
             Poll::Ready(Ok(taken)) => taken,
             Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
             Poll::Pending => return Poll::Pending,
@@ -64,5 +70,6 @@ pub(super) fn poll_admit(
             }
         }
     }
+    tickets.clear();
     Poll::Ready(Ok(slots))
 }
