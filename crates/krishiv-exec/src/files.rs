@@ -284,16 +284,16 @@ pub struct FileListing {
     pub partition_columns: Arc<[FieldRef]>,
     /// The parsed read options.
     pub options: FormatOptions,
-    /// The roots `_metadata.file_path` prints the files under: per store, the scheme and
-    /// authority the read's first path in it was written with.
+    /// The roots `_metadata.file_path` prints the files under: per read path, the scheme and
+    /// authority it was written with.
     pub path_roots: PathRoots,
 }
 
-/// The store of `at` and the root Spark prints its files under, for a cloud path (a local
-/// path prints under its store id, `file:`).
-fn spark_root(at: &LocatedPath) -> Option<(StoreId, String)> {
+/// The store and key of `at` and the root Spark prints the files under it with, for a cloud
+/// path (a local path prints under its store id, `file:`).
+fn spark_root(at: &LocatedPath) -> Option<(StoreId, Path, String)> {
     let root = parse_object_url(&at.display).ok()?.spark_root()?;
-    Some((at.store.clone(), root))
+    Some((at.store.clone(), at.path.clone(), root))
 }
 
 impl fmt::Debug for FileListing {
@@ -453,7 +453,7 @@ impl FileReads {
         mode.skip_all_dirs = mode.skip_foreign_dirs && !partitioned;
         // Spark checks the paths before the format.
         let mut listed: Vec<(FileRef, Vec<Segment>)> = Vec::new();
-        let mut roots: Vec<(StoreId, String)> = Vec::new();
+        let mut roots: Vec<(StoreId, Path, String)> = Vec::new();
         for p in paths {
             let Some(text) = p.as_plain() else {
                 return Err(unsupported("paths with credentials".to_owned()));

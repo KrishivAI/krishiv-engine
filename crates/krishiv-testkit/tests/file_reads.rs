@@ -595,18 +595,33 @@ fn a_listing_keeps_the_root_each_read_path_was_written_with() {
     let r = reads(&env, vec![Arc::new(MockFormat)], Arc::new(CloudPaths));
     let none = BTreeMap::new();
     let store = StoreId::new("memory://suite");
-    // Spark 4.2.0 run: `S3A://bucket/dir` prints `s3a://bucket/dir/...`; a glob's prefix gives
-    // the root as well; the first path of a store wins when two spell it differently.
-    for (read, root) in [
-        (&["S3A://bucket/d"][..], "s3a://bucket"),
-        (&["s3a://bucket/e*"][..], "s3a://bucket"),
-        (&["s3://bucket/d", "s3a://bucket/e"][..], "s3://bucket"),
+    // Each file prints under the spelling of the read path that listed it: a Spark 4.2.0 run
+    // keeps the scheme written (`S3A://bucket/dir` prints `s3a://bucket/dir/...`; `s3://` with
+    // `fs.s3.impl` set prints `s3://`), and a glob's directory gives its files' root.
+    for (read, want) in [
+        (&["S3A://bucket/d"][..], &[("d/part-0", "s3a://bucket")][..]),
+        (
+            &["s3a://bucket/e*"][..],
+            &[("e/part-0", "s3a://bucket")][..],
+        ),
+        (
+            &["s3://bucket/d", "s3a://bucket/e"][..],
+            &[("d/part-0", "s3://bucket"), ("e/part-0", "s3a://bucket")][..],
+        ),
     ] {
         let listing = env
             .block_on(r.listing("mock", &paths(read), &none))
             .unwrap();
-        assert!(!listing.files.is_empty(), "{read:?}");
-        assert_eq!(listing.path_roots.root(&store), Some(root), "{read:?}");
+        let got: Vec<(String, Option<&str>)> = listing
+            .files
+            .iter()
+            .map(|f| (f.path.to_string(), listing.path_roots.root(&store, &f.path)))
+            .collect();
+        let want: Vec<(String, Option<&str>)> = want
+            .iter()
+            .map(|(p, r)| ((*p).to_owned(), Some(*r)))
+            .collect();
+        assert_eq!(got, want, "{read:?}");
     }
     // A local read has no root: its files print under the store id (`file:`).
     let local = reads(
@@ -617,5 +632,8 @@ fn a_listing_keeps_the_root_each_read_path_was_written_with() {
     let listing = env
         .block_on(local.listing("mock", &paths(&["/d"]), &none))
         .unwrap();
-    assert_eq!(listing.path_roots.root(&store), None);
+    assert_eq!(
+        listing.path_roots.root(&store, &Path::from("d/part-0")),
+        None
+    );
 }

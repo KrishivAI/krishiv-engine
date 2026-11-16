@@ -64,6 +64,7 @@ use krishiv_io::{
 };
 use krishiv_memory::ConsumerHandle;
 use krishiv_types::batch::Batch;
+use object_store::path::Path;
 
 use super::scan::{
     FileSelections, FilterPushdown, PushedFilter, ScanPushdown, ScanPushdowns, TakeRows,
@@ -92,30 +93,46 @@ enum Partitions {
     Given(Arc<[FilePartition]>),
 }
 
-/// Per store, the root Spark prints its files under in `_metadata.file_path`: the scheme and
-/// authority the read's path was written with (`s3a://bucket` for a store whose id is
-/// `s3://bucket`). A store without a root prints under its id.
+/// The roots Spark prints a read's files under in `_metadata.file_path`: per read path (its
+/// store and key), the scheme and authority it was written with (`s3a://bucket` for a store
+/// whose id is `s3://bucket`; `s3://` and `s3a://` paths share a store, and Spark prints each
+/// file under the spelling of the path that listed it). A file without a root prints under its
+/// store id.
+///
+/// Kept beside the scan, not in the plan: a worker re-lists the read from the plan's paths and
+/// derives the same roots from them.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct PathRoots(Arc<[(StoreId, Arc<str>)]>);
+pub struct PathRoots(Arc<[(StoreId, Path, Arc<str>)]>);
 
 impl PathRoots {
-    /// Roots by store; the first root of a store wins (a read naming one store twice, with two
-    /// spellings, lists each file once).
+    /// Roots of read paths: `(store, key of the path or a glob's directory, root)`.
     #[must_use]
-    pub fn new(roots: impl IntoIterator<Item = (StoreId, String)>) -> Self {
-        let mut kept: Vec<(StoreId, Arc<str>)> = Vec::new();
-        for (store, root) in roots {
-            if !kept.iter().any(|(s, _)| *s == store) {
-                kept.push((store, Arc::from(root)));
-            }
-        }
-        Self(kept.into())
+    pub fn new(roots: impl IntoIterator<Item = (StoreId, Path, String)>) -> Self {
+        Self(
+            roots
+                .into_iter()
+                .map(|(store, key, root)| (store, key, Arc::from(root)))
+                .collect(),
+        )
     }
 
-    /// The root of `store`, if the read gave one.
+    /// The root of the file `path` in `store`: that of the read path nearest above it (the
+    /// longest key it is under; of equal keys the first path's). A file listed under one key
+    /// through two spellings is read once (the listing keeps one entry per store and path),
+    /// where Spark, reading two file systems, reads it twice.
     #[must_use]
-    pub fn root(&self, store: &StoreId) -> Option<&str> {
-        self.0.iter().find(|(s, _)| s == store).map(|(_, r)| &**r)
+    pub fn root(&self, store: &StoreId, path: &Path) -> Option<&str> {
+        let mut best: Option<(usize, &str)> = None;
+        for (s, key, root) in self.0.iter() {
+            if s != store || path.prefix_match(key).is_none() {
+                continue;
+            }
+            let depth = key.parts().count();
+            if best.is_none_or(|(d, _)| depth > d) {
+                best = Some((depth, root));
+            }
+        }
+        best.map(|(_, root)| root)
     }
 }
 
@@ -1532,7 +1549,7 @@ fn constant_string(value: &str, rows: usize) -> Result<ArrayRef> {
 /// for `/tmp/données x/é%41/...`).
 fn spark_file_path(file: &FileRef, roots: &PathRoots) -> String {
     let store = roots
-        .root(&file.store)
+        .root(&file.store, &file.path)
         .map_or_else(|| file.store.to_string(), str::to_owned);
     let path = uri_path(&decode_store_path(file.path.as_ref()));
     // A local store names itself `file://` or, for a session's tables, `file`.
@@ -1847,21 +1864,20 @@ mod tests {
             spark_file_path(&s3, &none),
             "s3://bucket/tmp/pq/a%20b.parquet"
         );
-        // Under the root the read was written with (Spark 4.2.0 run: an `s3a://` read prints
-        // `s3a://`); a store without a root keeps its id; the first root of a store wins.
+        // Under the root of the read path nearest above the file (Spark 4.2.0 run: an `s3a://`
+        // read prints `s3a://`); of two paths with one key the first; no root keeps the store id.
+        let bucket = krishiv_io::StoreId::new("s3://bucket");
+        let key = |k: &str| object_store::path::Path::from(k);
         let roots = PathRoots::new([
             (
                 krishiv_io::StoreId::new("s3://other"),
+                key(""),
                 "s3a://other".to_owned(),
             ),
-            (
-                krishiv_io::StoreId::new("s3://bucket"),
-                "s3a://bucket".to_owned(),
-            ),
-            (
-                krishiv_io::StoreId::new("s3://bucket"),
-                "s3://bucket".to_owned(),
-            ),
+            (bucket.clone(), key("tmp"), "s3a://bucket".to_owned()),
+            (bucket.clone(), key("tmp"), "s3://bucket".to_owned()),
+            (bucket.clone(), key("dir"), "s3://bucket".to_owned()),
+            (bucket, key(""), "s3n://bucket".to_owned()),
         ]);
         assert_eq!(
             spark_file_path(&s3, &roots),
@@ -1870,6 +1886,14 @@ mod tests {
         assert_eq!(
             spark_file_path(&odd, &roots),
             "file:/tmp/données%20x/é%2541/f.parquet"
+        );
+        let elsewhere = FileRef {
+            path: key("tmpx/f.parquet"),
+            ..s3.clone()
+        };
+        assert_eq!(
+            spark_file_path(&elsewhere, &roots),
+            "s3n://bucket/tmpx/f.parquet"
         );
         // The name is the last segment of the quoted path (Spark 4.2.0 run:
         // `with%20space%25.parquet`, `we+ird%23.parquet`).
@@ -1887,7 +1911,7 @@ mod tests {
         );
         assert_eq!(
             spark_file_path(&named("we+ird#.parquet"), &roots),
-            "s3a://bucket/dir/we+ird%23.parquet"
+            "s3://bucket/dir/we+ird%23.parquet"
         );
         for s in ["short", "a value longer than twelve bytes"] {
             let a = constant_string(s, 3).unwrap_or_else(|e| unreachable!("{e}"));
