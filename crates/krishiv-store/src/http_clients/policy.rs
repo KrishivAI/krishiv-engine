@@ -83,13 +83,15 @@ fn apply(
 ) -> object_store::Result<reqwest::ClientBuilder> {
     use ClientConfigKey as K;
     Ok(match key {
-        // Policy clients exist only in server mode, where certificate checks stay on: a store or
-        // catalog endpoint with a certificate the system store does not trust is refused, never
-        // reached without verification (object_store would disable verification here).
+        // Policy clients exist wherever `krishiv.io.egress.privateAddresses=deny`: the server-mode
+        // default, and an embedded runtime that sets it too. Certificate verification stays on in
+        // both: a store or catalog endpoint with a certificate the system store does not trust is
+        // refused, never reached without verification (object_store would disable verification
+        // here).
         K::AllowInvalidCertificates if parse_bool(key, value)? => {
             return Err(generic(format!(
                 "client option {} is refused by the egress policy client: certificate \
-                 verification stays on in server mode",
+                 verification stays on while krishiv.io.egress.privateAddresses=deny",
                 key.as_ref()
             )));
         }

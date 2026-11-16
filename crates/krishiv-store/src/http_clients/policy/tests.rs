@@ -96,7 +96,17 @@ fn policy_client_honours_every_client_config_key() {
         let original = ReqwestConnector::default().connect(&options).is_ok();
         let result = plain.reqwest_client(&options);
         if key == ClientConfigKey::AllowInvalidCertificates {
-            // The one deliberate difference: verification is never turned off in server mode.
+            // The one deliberate difference: verification is never turned off under the egress
+            // rule, whichever mode chose `deny` (an embedded runtime may too; review #803 n1).
+            let e = result
+                .as_ref()
+                .err()
+                .map(ToString::to_string)
+                .unwrap_or_default();
+            assert!(
+                e.contains("krishiv.io.egress.privateAddresses=deny"),
+                "{key:?}: {e}"
+            );
             assert!(result.is_err(), "{key:?}");
             assert!(proxied.reqwest_client(&options).is_err(), "{key:?}");
         } else if key == ClientConfigKey::ProxyUrl {
