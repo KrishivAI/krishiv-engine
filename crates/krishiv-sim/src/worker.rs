@@ -52,6 +52,13 @@ pub trait HostSetup: Send + Sync + 'static {
     fn released(&self, host: usize, job: u64, builds: usize, fallbacks: usize) {
         let _ = (host, job, builds, fallbacks);
     }
+    /// The memory limit of each task this host runs (its query pool's
+    /// limit); `None`, the default, leaves tasks unlimited. A scenario that
+    /// makes tasks spill sets it and gives [`worker`](Self::worker)'s
+    /// context spill scopes.
+    fn task_memory(&self) -> Option<usize> {
+        None
+    }
 }
 
 /// The execution seed of a task: from the simulation's seed, its job,
@@ -270,7 +277,7 @@ impl Host {
                 )),
                 ..settings
             },
-            self.pool.child(&name, None),
+            self.pool.child(&name, self.setup.task_memory()),
         );
         let mut stream = self.runner.execute(node, Arc::clone(&query)).await?;
         let mut outcome = Ok(());

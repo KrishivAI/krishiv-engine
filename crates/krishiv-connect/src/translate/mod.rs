@@ -80,6 +80,11 @@ mod names;
 mod relation;
 mod relation_udf;
 mod types;
+mod udf;
+
+pub use udf::{
+    Command, PythonUdf, SQL_BATCHED_UDF, UdfCallName, UdfHost, python_udf, translate_command,
+};
 
 pub use relation_udf::{RelationUdf, RelationUdfHost};
 
@@ -205,6 +210,20 @@ pub fn translate_relation_with_relation_udfs(
     Plan::try_new(root)
 }
 
+/// [`translate_relation`] with the inline Python UDFs of the plan sent to `udfs` (a server's session),
+/// which names the function each call resolves to.
+///
+/// # Errors
+/// As [`translate_relation`], plus what `udfs` refuses and the errors of [`python_udf`].
+pub fn translate_relation_with(
+    relation: &pb::Relation,
+    conf: &TranslateConf,
+    udfs: &mut dyn UdfHost,
+) -> Result<Plan> {
+    let root = Translator::with_udfs(conf, udfs).relation(relation)?;
+    Plan::try_new(root)
+}
+
 /// Translates an expression.
 ///
 /// # Errors
@@ -221,6 +240,8 @@ pub(crate) struct Translator<'c> {
     conf: &'c TranslateConf,
     /// Where the Python UDFs of relations go; `None` refuses them.
     relation_udfs: Option<&'c mut dyn RelationUdfHost>,
+    /// Where inline Python UDFs go; `None` refuses them.
+    udfs: Option<&'c mut dyn UdfHost>,
     /// Relations and expressions being translated above the current one.
     depth: usize,
     /// Relations and expressions translated so far.
@@ -241,9 +262,25 @@ impl<'c> Translator<'c> {
         Self {
             conf,
             relation_udfs: None,
+            udfs: None,
             depth: 0,
             nodes: 0,
             hops: 0,
+        }
+    }
+
+    fn with_udfs(conf: &'c TranslateConf, udfs: &'c mut dyn UdfHost) -> Self {
+        Self {
+            udfs: Some(udfs),
+            ..Self::new(conf)
+        }
+    }
+
+    /// The function a call of the inline Python UDF `udf` resolves to.
+    fn inline_python_udf(&mut self, udf: &PythonUdf) -> Result<UdfCallName> {
+        match self.udfs.as_deref_mut() {
+            Some(host) => host.inline_python_udf(udf),
+            None => Err(udf::no_host()),
         }
     }
 

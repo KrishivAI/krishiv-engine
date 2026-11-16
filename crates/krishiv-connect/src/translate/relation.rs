@@ -99,6 +99,11 @@ impl Translator<'_> {
             RelType::MapPartitions(m) => self.map_partitions(m)?,
             RelType::GroupMap(g) => self.group_map(g)?,
             RelType::CoGroupMap(g) => self.cogroup_map(g)?,
+            RelType::CollectMetrics(c) => PlanNode::CollectMetrics {
+                input: self.input("CollectMetrics", c.input.as_deref())?,
+                name: c.name.clone(),
+                metrics: self.expressions(&c.metrics)?,
+            },
             other => {
                 return Err(unsupported_variant(
                     "spark.connect.Relation",

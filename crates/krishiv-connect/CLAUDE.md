@@ -14,6 +14,9 @@ the logical-plan IR of `krishiv-plan`. The server (P3-T011, P3-T012) extends thi
 - `src/translate/mod.rs` `translate_*` entry points, `command_not_supported` (commands are 56K00 until T012); `src/translate/relation.rs` and `expression.rs` (IR building)
 - `src/translate/relation_udf.rs` (P3-T014 PR-26d part 2) `MapPartitions` (28), `GroupMap` (31), `CoGroupMap` (32) with a Python UDF: the eval types Spark's planner accepts, the stateful and Scala fields refused, the UDF's reference from a `RelationUdfHost` (`translate_relation_with_relation_udfs`; refused without one)
 - `src/translate/literal.rs` literals; `src/translate/names.rs` names and plan-id origins
+- `src/translate/udf.rs` Python UDFs (P3-T014): `python_udf` reads a `CommonInlineUserDefinedFunction` into a `PythonUdf`
+  (scalar eval types 100/101/200/250; Scala/Java 56K00), `UdfHost` is the server's hook naming an inline call
+  (`translate_relation_with`; without a host inline UDFs are refused), `translate_command` reads `register_function`
 - `src/translate/errors.rs` `KRISHIV_UNSUPPORTED_FEATURE` and `CONNECT_INVALID_PLAN.*` errors
 - `src/arrow.rs` result columns Spark sends in another Arrow shape than the engine holds (geometry/geography)
 - `tests/fuzz_regressions.rs` fuzz findings (inputs that once ran out of memory) must end in a typed error

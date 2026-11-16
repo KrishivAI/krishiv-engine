@@ -4,7 +4,7 @@
 use std::process::Command;
 
 #[test]
-fn build_info_names_the_profile_and_the_target_cpu() {
+fn build_info_names_the_profile_the_target_cpu_and_the_branch_alignment() {
     let out = Command::new(env!("CARGO_BIN_EXE_krishiv-bench-runner"))
         .arg("--build-info")
         .output()
@@ -28,6 +28,12 @@ fn build_info_names_the_profile_and_the_target_cpu() {
         fields
             .next()
             .is_some_and(|f| f.starts_with("target-cpu=") && f.len() > "target-cpu=".len()),
+        "{text}"
+    );
+    assert!(
+        fields
+            .next()
+            .is_some_and(|f| f == "branch-align=32B" || f == "branch-align=off"),
         "{text}"
     );
     assert_eq!(fields.next(), None, "{text}");

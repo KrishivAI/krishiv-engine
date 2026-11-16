@@ -272,6 +272,18 @@ pub enum PlanNode {
         /// The `REPEATABLE` seed; `None` draws one per physical plan.
         seed: Option<i64>,
     },
+    /// `Dataset.observe(name, metrics)` (Spark's `CollectMetrics`): rows
+    /// pass through unchanged while the metrics (aggregate expressions, as
+    /// a global aggregate with no grouping) are folded over the rows that
+    /// flow through; the result is reported under `name`, not as rows.
+    CollectMetrics {
+        /// Input.
+        input: Arc<LogicalPlan>,
+        /// The observation name.
+        name: String,
+        /// The metric expressions (aliased once resolved).
+        metrics: Vec<Arc<Expr>>,
+    },
     /// A join strategy hint on a relation (Spark's `ResolvedHint`): a join
     /// this relation is a side of prefers `strategy`. Rows pass through.
     JoinHint {
@@ -1146,6 +1158,7 @@ impl LogicalPlan {
             | PlanNode::Hint { input, .. }
             | PlanNode::PipeOperator { input }
             | PlanNode::Repartition { input, .. }
+            | PlanNode::CollectMetrics { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Distinct { input }
             | PlanNode::Expand { input, .. }
@@ -1206,6 +1219,7 @@ impl LogicalPlan {
             | PlanNode::Hint { input, .. }
             | PlanNode::PipeOperator { input }
             | PlanNode::Repartition { input, .. }
+            | PlanNode::CollectMetrics { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Distinct { input }
             | PlanNode::Expand { input, .. }
@@ -1257,7 +1271,11 @@ impl LogicalPlan {
             | PlanNode::Sample { .. }
             | PlanNode::MapPartitions { .. }
             | PlanNode::Distinct { .. } => {}
-            PlanNode::Hint { params, .. } | PlanNode::Repartition { exprs: params, .. } => {
+            PlanNode::Hint { params, .. }
+            | PlanNode::Repartition { exprs: params, .. }
+            | PlanNode::CollectMetrics {
+                metrics: params, ..
+            } => {
                 params.iter().for_each(f);
             }
             PlanNode::Sql { args, .. } => match args {
@@ -1358,7 +1376,11 @@ impl LogicalPlan {
             | PlanNode::Sample { .. }
             | PlanNode::MapPartitions { .. }
             | PlanNode::Distinct { .. } => {}
-            PlanNode::Hint { params, .. } | PlanNode::Repartition { exprs: params, .. } => {
+            PlanNode::Hint { params, .. }
+            | PlanNode::Repartition { exprs: params, .. }
+            | PlanNode::CollectMetrics {
+                metrics: params, ..
+            } => {
                 params.iter_mut().for_each(f);
             }
             PlanNode::Sql { args, .. } => match args {
@@ -1473,6 +1495,7 @@ impl LogicalPlan {
                 | PlanNode::JoinHint { input, .. }
                 | PlanNode::Repartition { input, .. }
                 | PlanNode::Sample { input, .. }
+                | PlanNode::CollectMetrics { input, .. }
                 | PlanNode::ReplicateRows { input, .. } => p = input,
                 PlanNode::Union { inputs, .. } => {
                     let mut out = inputs.first()?.resolved_output()?;
