@@ -3119,6 +3119,8 @@ name = "krishiv-connectors-iceberg"
 version = "0.2.0"
 dependencies = [
  "arrow-array 60.1.0",
+ "arrow-buffer 60.1.0",
+ "arrow-row",
  "arrow-schema 60.1.0",
  "arrow-select 60.1.0",
  "async-trait",
@@ -3137,6 +3139,7 @@ dependencies = [
  "object_store",
  "parquet 60.1.0",
  "proptest",
+ "roaring",
  "serde",
  "serde_json",
  "tempfile",

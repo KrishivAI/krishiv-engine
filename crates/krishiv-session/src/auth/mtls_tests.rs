@@ -293,6 +293,52 @@ fn a_certificate_authenticates_with_its_listed_role() {
     assert_eq!(a.role, None);
 }
 
+/// A principal name from a DNS name has dots; its rights are set by that whole name.
+#[test]
+fn a_dotted_certificate_name_holds_impersonation_rights() {
+    let ca = format!("file:{}", fixture("ca.pem"));
+    let config = config(&[
+        ("krishiv.auth.clientCertificates", "required"),
+        ("krishiv.auth.clientCa", &ca),
+        ("krishiv.auth.mtls.principalFrom", "san-dns"),
+        ("krishiv.auth.roles.operator", "etl.krishiv.test"),
+        (
+            "krishiv.auth.principals.etl.krishiv.test.privileges",
+            "impersonate",
+        ),
+        (
+            "krishiv.auth.principals.etl.krishiv.test.impersonates",
+            "alice",
+        ),
+    ])
+    .unwrap();
+    assert!(
+        config
+            .principals
+            .get("etl.krishiv.test")
+            .unwrap()
+            .may_impersonate("alice", &[])
+    );
+    let auth = ServerAuth::new(&config).unwrap();
+    let mut c = Credentials::new(peer(), Surface::Connect);
+    c.peer_leaf = Some(CLIENT);
+    let caller = auth.authenticate_at(&c, Instant::now()).unwrap();
+    assert_eq!(caller.principal.name, "etl.krishiv.test");
+    let end = auth
+        .impersonate(
+            &caller,
+            Surface::Connect,
+            peer(),
+            &super::ActAs::new("alice"),
+        )
+        .expect("the dotted principal may act for alice");
+    assert_eq!(end.principal.name, "alice");
+    assert!(
+        auth.impersonate(&caller, Surface::Connect, peer(), &super::ActAs::new("bob"))
+            .is_err()
+    );
+}
+
 #[test]
 fn a_certificate_without_one_principal_is_refused_and_counted() {
     let auth = ServerAuth::new(&mtls("required", "san-uri")).unwrap();

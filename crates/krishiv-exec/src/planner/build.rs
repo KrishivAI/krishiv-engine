@@ -1609,9 +1609,20 @@ impl<'a> Planner<'a> {
         input: Planned,
         exprs: &[Arc<Expr>],
     ) -> Result<(Planned, Vec<usize>)> {
+        // A vector carrier (design P3-T075) is never handed to an aggregate, window or key as it is stored: it goes
+        // through a computed column, where the expression input guard turns it into Spark's plain list.
+        let plain = |c: &usize| {
+            input
+                .stored(*c)
+                .is_ok_and(|t| !krishiv_types::arrow::is_vector_carrier(t))
+        };
         let computed: Vec<&Expr> = exprs
             .iter()
-            .filter(|e| column_of(e).is_none_or(|id| input.column(id).is_err()))
+            .filter(|e| {
+                column_of(e)
+                    .and_then(|id| input.column(id).ok())
+                    .is_none_or(|c| !plain(&c))
+            })
             .map(AsRef::as_ref)
             .collect();
         if computed.is_empty() {
@@ -1629,7 +1640,10 @@ impl<'a> Planner<'a> {
         let mut columns = Vec::with_capacity(exprs.len());
         let mut values = prepared.exprs.iter();
         for e in exprs {
-            match column_of(e).and_then(|id| input.column(id).ok()) {
+            match column_of(e)
+                .and_then(|id| input.column(id).ok())
+                .filter(plain)
+            {
                 Some(c) => columns.push(c),
                 None => {
                     let value = values.next().ok_or_else(|| internal("key arity"))?;

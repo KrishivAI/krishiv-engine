@@ -11,7 +11,7 @@ typed format options, and the scan/write drivers (`ScanStream`, `FileWriter`) th
 ## Layout (P2-T117)
 `format.rs` FileFormat/FileMetadata/Decoder/Encoder/Capabilities + `AsyncDecoder`/`PushReadAt` bridge ·
 `request.rs` ScanRequest, PushdownExpr, RowSelection, ColumnPath, `project_schema`/`project_batch`, `FieldMapping`
-(`FieldIdOr(WithoutFieldIds)`: by id, a file with no id read by position or refused, Iceberg) · `constants.rs`
+(`FieldIdOr(WithoutFieldIds)`: by id, a file with no id read by position, by a name mapping or refused, Iceberg) · `name_mapping.rs` `NameMapping`/`MappedField` (P3-T026 PR-25c): a table format's name mapping applied to a file without ids as Java's `ApplyNameMapping` (mapped ids written onto the file's fields at every depth, list `element`, map `key`/`value`; unmapped fields get none and are not read); the format parses its own text · `constants.rs`
 `FileConstants` (typed per-file constant columns keyed by path: Iceberg identity partitions, Delta partition
 values) and `scalar_column` · `stats.rs` statistics and
 sound `prune` (TriState) · `options.rs` OptionSchema/FormatOptions (unknown-option warning, strict mode,
@@ -83,3 +83,6 @@ Paths are relative to this crate.
 ## Tests
 `cargo nextest run -p krishiv-io --no-tests=pass` · `cargo clippy -p krishiv-io --all-targets -- -D warnings` ·
 conformance: `cargo nextest run -p krishiv-testkit --test file_format_mock` · bench: `cargo bench -p krishiv-io` (targets `io`, `coalesce` and `runtime_filter`)
+
+## Vector carrier (P3-T075)
+Parquet keeps the vector carrier. `schema_map` `Conv::List` accepts a file column stored as a fixed-size list for a `List` table column (`vectors_as_list_parts`); `(List, FixedSizeList)` resolves. `arrow-select` is a regular dependency for it.

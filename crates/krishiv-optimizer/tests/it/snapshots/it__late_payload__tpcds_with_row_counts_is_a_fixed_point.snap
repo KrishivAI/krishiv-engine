@@ -1,0 +1,22 @@
+---
+source: crates/krishiv-optimizer/tests/it/late_payload.rs
+expression: changed
+---
+[
+    (
+        35,
+        1,
+    ),
+    (
+        58,
+        3,
+    ),
+    (
+        72,
+        1,
+    ),
+    (
+        83,
+        3,
+    ),
+]
