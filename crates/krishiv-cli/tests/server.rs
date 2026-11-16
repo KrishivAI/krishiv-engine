@@ -495,6 +495,13 @@ fn the_admin_v1_surface_is_served_behind_the_guard() {
     // The old route stays, marked deprecated, and names its successor.
     let old = http_get_host(&server.admin, "/api/v1/version", "localhost", Some(token));
     assert!(old.to_ascii_lowercase().contains("deprecation: @"), "{old}");
+    // With authentication configured the alias needs the credential too (design D6).
+    let open = http_get_host(&server.admin, "/api/v1/version", "localhost", None);
+    assert!(open.starts_with("HTTP/1.1 401"), "{open}");
+    // An unknown path is a 404 of the server's own, not a gRPC status, and the server started
+    // with the UI router and the admin routes merged.
+    let missing = http_get_host(&server.admin, "/api/nowhere", "localhost", Some(token));
+    assert!(missing.starts_with("HTTP/1.1 404"), "{missing}");
 }
 
 #[cfg(unix)]

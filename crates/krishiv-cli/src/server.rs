@@ -359,6 +359,7 @@ fn admin_router(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    let alias_guard = Arc::clone(&guard);
     let admin_v1 = krishiv_server::admin_v1::router(
         Arc::new(krishiv_server::admin_v1::SessionAdmin::new()),
         Arc::clone(&guard),
@@ -375,6 +376,13 @@ fn admin_router(
         .merge(krishiv_server::admin::health_routes(ready))
         .merge(admin_v1)
         .merge(metrics);
+    // With authentication configured the deprecated version alias needs a credential like
+    // `GetVersion` (design P3-T066 D6, ADR 0046 section 3c).
+    let app = if authenticated {
+        krishiv_server::admin_v1::guard_version_alias(app, alias_guard)
+    } else {
+        app
+    };
     Ok(krishiv_server::admin::with_limits(
         app,
         krishiv_server::admin::HttpLimits::default(),

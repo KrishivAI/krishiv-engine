@@ -124,7 +124,7 @@ async fn a_rest_request_with_an_unknown_field_is_refused() {
     let (status, _, body) = send(&app, req).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
-    assert_eq!(json["error"]["errorClass"], "INVALID_PARAMETER_VALUE");
+    assert_eq!(json["error"]["errorClass"], "KRISHIV_ADMIN_INVALID_REQUEST");
     assert_eq!(json["error"]["sqlState"], "22023");
     assert!(
         json["error"]["requestId"]
@@ -143,10 +143,7 @@ async fn a_request_without_the_token_is_unauthenticated_and_a_cookie_is_no_crede
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(headers[header::WWW_AUTHENTICATE], "Bearer");
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
-    assert_eq!(
-        json["error"]["errorClass"],
-        "UNAUTHENTICATED.NO_CREDENTIALS"
-    );
+    assert_eq!(json["error"]["errorClass"], "KRISHIV_ADMIN_UNAUTHENTICATED");
     let cookie = Request::builder()
         .uri("/api/admin/v1/version")
         .header(header::HOST, "localhost")
@@ -359,4 +356,106 @@ fn error_kinds_map_to_the_statuses_of_the_design_table() {
         );
         assert_eq!(error.reason(), "X");
     }
+}
+
+#[tokio::test]
+async fn the_admin_router_merges_with_a_router_that_has_a_fallback_and_unknown_paths_stay_404() {
+    use axum::routing::get;
+    // The UI router carries a catch-all fallback; merging must not panic, and an unknown path is
+    // that router's answer, not a gRPC status.
+    let ui = Router::new()
+        .route("/ui", get(|| async { "ui" }))
+        .fallback(|| async { StatusCode::NOT_FOUND });
+    let merged = ui.merge(app(Arc::new(Open), true));
+    let (status, headers, _) = send(&merged, get_req("/nowhere")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(!headers.contains_key("grpc-status"));
+    assert_eq!(
+        send(&merged, get_req("/api/admin/v1/version")).await.0,
+        StatusCode::OK
+    );
+    // Alone, an unknown path under the service is 404 too.
+    let alone = app(Arc::new(Open), true);
+    let (status, _, _) = send(&alone, grpc("/krishiv.admin.v1.AdminService/Nope")).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a gRPC path without a row is a gRPC status"
+    );
+}
+
+fn get_req(path: &str) -> Request<Body> {
+    get(path)
+}
+
+#[tokio::test]
+async fn a_malformed_host_is_refused() {
+    let app = app(Arc::new(Open), true);
+    for host in [
+        "[::1]garbage",
+        "[::1",
+        "localhost:",
+        "localhost:80x",
+        "a@localhost",
+    ] {
+        let req = Request::builder()
+            .uri("/api/admin/v1/version")
+            .header(header::HOST, host)
+            .body(Body::empty())
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            send(&app, req).await.0,
+            StatusCode::MISDIRECTED_REQUEST,
+            "{host}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_bearer_scheme_is_case_insensitive() {
+    let app = app(
+        Arc::new(TokenGuard::new("secret-secret-secret-secret-0000")),
+        true,
+    );
+    for scheme in ["Bearer", "bearer", "BEARER"] {
+        let req = Request::builder()
+            .uri("/api/admin/v1/version")
+            .header(header::HOST, "localhost")
+            .header(
+                header::AUTHORIZATION,
+                format!("{scheme} secret-secret-secret-secret-0000"),
+            )
+            .body(Body::empty())
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(send(&app, req).await.0, StatusCode::OK, "{scheme}");
+    }
+}
+
+#[tokio::test]
+async fn the_version_alias_needs_the_credential_the_guard_asks_for() {
+    use axum::routing::get;
+    let app = guard_version_alias(
+        Router::new()
+            .route("/api/v1/version", get(|| async { "v" }))
+            .route("/other", get(|| async { "o" })),
+        Arc::new(TokenGuard::new("secret-secret-secret-secret-0000")),
+    );
+    assert_eq!(
+        send(&app, get_req("/api/v1/version")).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        send(&app, get_req("/other")).await.0,
+        StatusCode::OK,
+        "other paths pass through"
+    );
+    let with = Request::builder()
+        .uri("/api/v1/version")
+        .header(
+            header::AUTHORIZATION,
+            "Bearer secret-secret-secret-secret-0000",
+        )
+        .body(Body::empty())
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(send(&app, with).await.0, StatusCode::OK);
 }

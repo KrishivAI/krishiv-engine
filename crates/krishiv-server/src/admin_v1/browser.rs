@@ -14,7 +14,7 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 
 use super::rest::{error_response, request_id_of};
-use super::{AdminConfig, AdminError, ErrorKind, GRPC_PREFIX};
+use super::{AdminConfig, AdminError, GRPC_PREFIX};
 
 pub(super) async fn enforce(
     State(config): State<Arc<AdminConfig>>,
@@ -76,29 +76,37 @@ fn host_allowed(req: &Request, allowed: &[String]) -> bool {
     else {
         return false;
     };
+    // `[v6]` or `[v6]:port` for an IPv6 literal, else `name` or `name:port`; anything else is refused.
     let name = if let Some(rest) = host.strip_prefix('[') {
-        // `[::1]:8080`
-        rest.split(']')
-            .next()
-            .map(|h| format!("[{h}]"))
-            .unwrap_or_default()
+        let Some((inner, tail)) = rest.split_once(']') else {
+            return false;
+        };
+        if !(tail.is_empty() || tail.strip_prefix(':').is_some_and(is_port)) {
+            return false;
+        }
+        format!("[{inner}]")
     } else {
-        host.rsplit_once(':')
-            .filter(|(_, port)| port.bytes().all(|b| b.is_ascii_digit()))
-            .map_or(host, |(h, _)| h)
-            .to_owned()
+        match host.rsplit_once(':') {
+            Some((h, port)) if is_port(port) => h.to_owned(),
+            Some(_) => return false,
+            None => host.to_owned(),
+        }
     };
     let name = name.to_ascii_lowercase();
     matches!(name.as_str(), "localhost" | "127.0.0.1" | "[::1]")
         || allowed.iter().any(|a| a.eq_ignore_ascii_case(&name))
 }
 
+/// A port: digits only.
+fn is_port(port: &str) -> bool {
+    !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit())
+}
+
 fn refuse(req: &Request, grpc: bool, status: StatusCode, message: &str) -> Response {
     if grpc {
         return status.into_response();
     }
-    let kind = ErrorKind::InvalidArgument;
-    let error = AdminError::new(kind, "INVALID_PARAMETER_VALUE", "22023", message);
+    let error = AdminError::invalid_argument(message);
     let mut response = error_response(&error, &request_id_of(req));
     *response.status_mut() = status;
     response

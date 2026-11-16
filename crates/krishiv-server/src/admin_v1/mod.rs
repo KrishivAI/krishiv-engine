@@ -197,16 +197,18 @@ impl AdminError {
         Self::new(ErrorKind::Internal, "INTERNAL_ERROR", "XX000", message)
     }
 
-    /// `INVALID_PARAMETER_VALUE`-class refusal of a request (a REST body with an unknown field, an
-    /// unparsable body).
+    /// `KRISHIV_ADMIN_INVALID_REQUEST`: a bad request (a REST body with an unknown field, an
+    /// unparsable body, a wrong `Content-Type` or `Host`).
     #[must_use]
     pub fn invalid_argument(message: impl Into<String>) -> Self {
+        let message = message.into();
         Self::new(
             ErrorKind::InvalidArgument,
-            "INVALID_PARAMETER_VALUE",
+            "KRISHIV_ADMIN_INVALID_REQUEST",
             "22023",
-            message,
+            format!("The admin API request is not valid: {message}."),
         )
+        .with_parameter("reason", message)
     }
 
     /// The top-level condition of the class, `INVALID_HANDLE` for `INVALID_HANDLE.SESSION_NOT_FOUND`
@@ -248,10 +250,21 @@ impl AdminConfig {
     #[must_use]
     pub fn for_listener(addr: IpAddr, allowed_hosts: Vec<String>) -> Self {
         Self {
-            loopback: addr.is_loopback(),
+            loopback: addr.to_canonical().is_loopback(),
             allowed_hosts,
         }
     }
+}
+
+/// Puts `GET /api/v1/version` (the deprecated alias of `GetVersion`) behind `guard` as
+/// [`Access::Authenticated`](crate::guard::Access::Authenticated), as `GetVersion` is: with
+/// authentication configured an unauthenticated version string is not kept (design D6, ADR 0046
+/// §3c). Apply it to the whole admin app; every other path passes through untouched.
+pub fn guard_version_alias(app: Router, guard: Arc<dyn Guard>) -> Router {
+    app.layer(axum::middleware::from_fn_with_state(
+        guard,
+        rest::guard_version_alias,
+    ))
 }
 
 /// The admin routes, REST and gRPC, behind `guard` and the browser rules: merge it into the admin

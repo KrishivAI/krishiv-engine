@@ -84,10 +84,11 @@ impl Rest {
             .map_err(|_| {
                 AdminError::new(
                     ErrorKind::ResourceExhausted,
-                    "INVALID_PARAMETER_VALUE",
-                    "22023",
-                    "the request body is over 1 MiB",
+                    "KRISHIV_ADMIN_REQUEST_TOO_LARGE",
+                    "54000",
+                    format!("The admin API request body is over {MAX_BODY} bytes."),
                 )
+                .with_parameter("limit", MAX_BODY.to_string())
             })?;
         let method = method_of(rpc)?;
         let request = if bytes.is_empty() {
@@ -144,7 +145,11 @@ pub(super) fn bearer(headers: &axum::http::HeaderMap) -> (Option<String>, bool) 
     let value = headers.get(header::AUTHORIZATION);
     let token = value
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
+        .and_then(|v| {
+            // The scheme is case-insensitive (RFC 9110 section 11.1).
+            let (scheme, rest) = v.split_once(' ')?;
+            scheme.eq_ignore_ascii_case("bearer").then_some(rest)
+        })
         .map(str::trim)
         .filter(|t| !t.is_empty())
         .map(str::to_owned);
@@ -157,9 +162,9 @@ pub(super) fn refusal_error(refusal: Refusal) -> AdminError {
     match refusal {
         Refusal::Unauthenticated => AdminError::new(
             ErrorKind::Unauthenticated,
-            "UNAUTHENTICATED.NO_CREDENTIALS",
+            "KRISHIV_ADMIN_UNAUTHENTICATED",
             "28000",
-            "a valid credential is required",
+            "A valid credential is required for the admin API.",
         ),
         Refusal::Denied => AdminError::new(
             ErrorKind::PermissionDenied,
@@ -171,8 +176,9 @@ pub(super) fn refusal_error(refusal: Refusal) -> AdminError {
             ErrorKind::Unavailable,
             "KRISHIV_ADMIN_UNAVAILABLE",
             "08004",
-            "authentication is not possible now; retry later",
-        ),
+            "The admin API cannot answer now: authentication is not possible, retry later.",
+        )
+        .with_parameter("reason", "authentication is not possible"),
         _ => AdminError::internal("the server cannot authenticate this request"),
     }
 }
@@ -243,5 +249,26 @@ pub(super) fn error_response(error: &AdminError, request_id: &str) -> Response {
 impl IntoResponse for AdminError {
     fn into_response(self) -> Response {
         error_response(&self, "")
+    }
+}
+
+/// The middleware of [`super::guard_version_alias`].
+pub(super) async fn guard_version_alias(
+    axum::extract::State(guard): axum::extract::State<Arc<dyn Guard>>,
+    req: Request,
+    next: axum::middleware::Next,
+) -> Response {
+    if req.uri().path() != "/api/v1/version" {
+        return next.run(req).await;
+    }
+    let (token, malformed) = bearer(req.headers());
+    let request = GuardRequest::new(GuardSurface::Admin, Access::Authenticated)
+        .with_token(token.as_deref())
+        .with_malformed(malformed)
+        .with_peer(peer_of(req.extensions()))
+        .with_peer_leaf(peer_leaf_of(req.extensions()));
+    match guard.check(request).await {
+        Ok(()) => next.run(req).await,
+        Err(refusal) => error_response(&refusal_error(refusal), &request_id_of(&req)),
     }
 }

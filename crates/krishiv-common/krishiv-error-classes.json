@@ -1,9 +1,37 @@
 {
+  "KRISHIV_ADMIN_INVALID_REQUEST" : {
+    "message" : [
+      "The admin API request is not valid: <reason>."
+    ],
+    "sqlState" : "22023",
+    "audience" : "operator"
+  },
   "KRISHIV_ADMIN_PRECONDITION_FAILED" : {
     "message" : [
       "The change was refused because the object is not in the state the request expects (<reason>)."
     ],
     "sqlState" : "55000",
+    "audience" : "operator"
+  },
+  "KRISHIV_ADMIN_REQUEST_TOO_LARGE" : {
+    "message" : [
+      "The admin API request body is over <limit> bytes."
+    ],
+    "sqlState" : "54000",
+    "audience" : "operator"
+  },
+  "KRISHIV_ADMIN_UNAUTHENTICATED" : {
+    "message" : [
+      "A valid credential is required for the admin API."
+    ],
+    "sqlState" : "28000",
+    "audience" : "operator"
+  },
+  "KRISHIV_ADMIN_UNAVAILABLE" : {
+    "message" : [
+      "The admin API cannot answer now: <reason>."
+    ],
+    "sqlState" : "08004",
     "audience" : "operator"
   },
   "KRISHIV_CATALOG_FAILURE" : {

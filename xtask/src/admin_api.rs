@@ -56,13 +56,25 @@ pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
         (OPENAPI_JSON, pretty(&openapi)),
     ];
     if let Some(base) = &base {
-        let problems = compare_with_base(root, base, &descriptor, &openapi)?;
-        if !problems.is_empty() && !allow_breaking {
+        let Comparison { breaking, revision } =
+            compare_with_base(root, base, &descriptor, &openapi)?;
+        if allow_breaking && !preview_of(&read(root, MOD_RS)?)? {
+            return Err(
+                "--allow-breaking-before-release is refused: admin.v1 is no longer `preview` \
+                 (`PREVIEW` in admin_v1/mod.rs is false), so additive-only has no exception"
+                    .to_owned(),
+            );
+        }
+        // The revision must grow whenever the descriptor changes, flag or not: clients pin it.
+        if let Some(problem) = revision {
+            return Err(problem);
+        }
+        if !breaking.is_empty() && !allow_breaking {
             return Err(format!(
                 "admin.v1 changed in a way that is not additive against {base}:\n  {}\n\
                  (before the first release that ships it, `--allow-breaking-before-release` and \
                  the PR label `admin-api-breaking` allow it)",
-                problems.join("\n  ")
+                breaking.join("\n  ")
             ));
         }
     }
@@ -118,6 +130,23 @@ pub fn generate(root: &Path) -> Result<(Value, Value), String> {
     descriptor_and_openapi(file, &routes, revision)
 }
 
+fn read(root: &Path, rel: &str) -> Result<String, String> {
+    std::fs::read_to_string(root.join(rel)).map_err(|e| format!("{rel}: {e}"))
+}
+
+/// `PREVIEW` from the server's source: the flag that lets a breaking change through is only for a
+/// surface that has not been released.
+fn preview_of(source: &str) -> Result<bool, String> {
+    source
+        .lines()
+        .find_map(|l| {
+            l.trim()
+                .strip_prefix("pub const PREVIEW: bool =")
+                .map(|r| r.trim().trim_end_matches(';').trim() == "true")
+        })
+        .ok_or_else(|| format!("{MOD_RS} has no `pub const PREVIEW: bool = ..;`"))
+}
+
 /// `ADMIN_V1_REVISION` from the server's source.
 fn revision_of(source: &str) -> Result<i64, String> {
     source
@@ -136,10 +165,10 @@ fn descriptor_and_openapi(
     revision: i64,
 ) -> Result<(Value, Value), String> {
     let mut messages = Map::new();
-    for m in &file.message_type {
-        messages.insert(m.name().to_owned(), message_json(m));
-    }
     let mut enums = Map::new();
+    for m in &file.message_type {
+        collect(m, "", &mut messages, &mut enums);
+    }
     for e in &file.enum_type {
         enums.insert(e.name().to_owned(), enum_json(e));
     }
@@ -157,6 +186,12 @@ fn descriptor_and_openapi(
         methods.insert(m.name().to_owned(), method_json(m, route));
     }
     for r in routes {
+        if r["privilege"].as_str() != Some("authenticated") {
+            return Err(format!(
+                "{ROUTES}: unknown privilege {} (the server knows `authenticated`)",
+                r["privilege"]
+            ));
+        }
         let rpc = r["rpc"].as_str().unwrap_or_default();
         if !service.method.iter().any(|m| m.name() == rpc) {
             return Err(format!(
@@ -173,6 +208,31 @@ fn descriptor_and_openapi(
     });
     let openapi = openapi_of(&descriptor);
     Ok((descriptor, openapi))
+}
+
+/// Records `m` and, with qualified names (`Outer.Inner`), everything nested in it: a `map<K, V>`
+/// field is a nested `XEntry` message, so a retyped map value is a changed field of that entry.
+fn collect(
+    m: &DescriptorProto,
+    prefix: &str,
+    messages: &mut Map<String, Value>,
+    enums: &mut Map<String, Value>,
+) {
+    let name = format!("{prefix}{}", m.name());
+    let mut json = message_json(m);
+    if m.options
+        .as_ref()
+        .is_some_and(prost_types::MessageOptions::map_entry)
+    {
+        json["mapEntry"] = json!(true);
+    }
+    messages.insert(name.clone(), json);
+    for e in &m.enum_type {
+        enums.insert(format!("{name}.{}", e.name()), enum_json(e));
+    }
+    for nested in &m.nested_type {
+        collect(nested, &format!("{name}."), messages, enums);
+    }
 }
 
 fn short(type_name: &str) -> String {
@@ -234,15 +294,34 @@ fn method_json(m: &MethodDescriptorProto, route: &Value) -> Value {
 }
 
 /// The OpenAPI document: paths from the route table, schemas from the descriptor.
-fn openapi_of(descriptor: &Value) -> Value {
+pub(crate) fn openapi_of(descriptor: &Value) -> Value {
     let mut schemas = Map::new();
     if let Some(messages) = descriptor["messages"].as_object() {
         for (name, m) in messages {
+            if m["mapEntry"] == true {
+                // Rendered where it is used: a map is a JSON object, not a message.
+                continue;
+            }
             let mut props = Map::new();
             if let Some(fields) = m["fields"].as_object() {
                 for (_, f) in fields {
                     let json_name = f["jsonName"].as_str().unwrap_or_default().to_owned();
-                    let one = schema_of(f["type"].as_str().unwrap_or_default());
+                    let ty = f["type"].as_str().unwrap_or_default();
+                    let entry = ty
+                        .strip_prefix("message:")
+                        .and_then(|t| messages.get(t))
+                        .filter(|e| e["mapEntry"] == true);
+                    if let Some(entry) = entry {
+                        let value = entry["fields"]["value"]["type"]
+                            .as_str()
+                            .unwrap_or_default();
+                        props.insert(
+                            json_name,
+                            json!({"type": "object", "additionalProperties": schema_of(value)}),
+                        );
+                        continue;
+                    }
+                    let one = schema_of(ty);
                     let schema = if f["label"] == "repeated" {
                         json!({"type": "array", "items": one})
                     } else {
@@ -325,35 +404,84 @@ fn schema_of(ty: &str) -> Value {
     }
 }
 
+/// What the comparison with the base found.
+struct Comparison {
+    /// Non-additive changes, one line each.
+    breaking: Vec<String>,
+    /// The descriptor changed and its revision did not grow.
+    revision: Option<String>,
+}
+
+fn git(root: &Path, args: &[&str]) -> Result<std::process::Output, String> {
+    Command::new("git")
+        .current_dir(root)
+        .args(args)
+        .output()
+        .map_err(|e| format!("cannot run git: {e}"))
+}
+
+/// Compares the snapshots with the committed ones at `base`. The comparison is skipped only when
+/// `base` resolves and has no snapshot (the PR that adds the surface); a base that does not
+/// resolve (a bad ref, a shallow clone) is an error, never a pass.
 fn compare_with_base(
     root: &Path,
     base: &str,
     descriptor: &Value,
     openapi: &Value,
-) -> Result<Vec<String>, String> {
-    let mut problems = Vec::new();
+) -> Result<Comparison, String> {
+    let commit = git(
+        root,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("{base}^{{commit}}"),
+        ],
+    )?;
+    if !commit.status.success() {
+        return Err(format!(
+            "the base {base} does not resolve to a commit (a shallow clone?)"
+        ));
+    }
+    let mut result = Comparison {
+        breaking: Vec::new(),
+        revision: None,
+    };
     for (name, head) in [(DESCRIPTOR_JSON, descriptor), (OPENAPI_JSON, openapi)] {
         let path = format!("{DIR}/{name}");
-        let shown = Command::new("git")
-            .current_dir(root)
-            .args(["show", &format!("{base}:{path}")])
-            .output()
-            .map_err(|e| format!("cannot run git: {e}"))?;
-        if !shown.status.success() {
+        let present = git(root, &["cat-file", "-e", &format!("{base}:{path}")])?;
+        if !present.status.success() {
             println!(
                 "admin-api: {base} has no {path} (the PR that adds the surface): additive check skipped"
             );
             continue;
         }
+        let shown = git(root, &["show", &format!("{base}:{path}")])?;
+        if !shown.status.success() {
+            return Err(format!("cannot read {base}:{path}"));
+        }
         let old: Value =
             serde_json::from_slice(&shown.stdout).map_err(|e| format!("{base}:{path}: {e}"))?;
-        problems.extend(if name == DESCRIPTOR_JSON {
-            descriptor_problems(&old, head)
+        if name == DESCRIPTOR_JSON {
+            result.breaking.extend(descriptor_problems(&old, head));
+            result.revision = revision_problem(&old, head);
         } else {
-            openapi_problems(&old, head)
-        });
+            result.breaking.extend(openapi_problems(&old, head));
+        }
     }
-    Ok(problems)
+    Ok(result)
+}
+
+/// The descriptor changed but `ADMIN_V1_REVISION` did not grow.
+#[must_use]
+pub fn revision_problem(old: &Value, new: &Value) -> Option<String> {
+    let (or, nr) = (
+        old["revision"].as_i64().unwrap_or(0),
+        new["revision"].as_i64().unwrap_or(0),
+    );
+    (old != new && nr <= or).then(|| {
+        format!("the descriptor changed but ADMIN_V1_REVISION did not increase ({or} -> {nr})")
+    })
 }
 
 /// What a non-additive change of the descriptor snapshot is, one line per item.
@@ -415,15 +543,6 @@ pub fn descriptor_problems(old: &Value, new: &Value) -> Vec<String> {
                 }
             }
         }
-    }
-    let (or, nr) = (
-        old["revision"].as_i64().unwrap_or(0),
-        new["revision"].as_i64().unwrap_or(0),
-    );
-    if old != new && nr <= or {
-        out.push(format!(
-            "the descriptor changed but ADMIN_V1_REVISION did not increase ({or} -> {nr})"
-        ));
     }
     out
 }

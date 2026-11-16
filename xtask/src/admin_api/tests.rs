@@ -4,7 +4,7 @@
 
 use serde_json::{Value, json};
 
-use super::{descriptor_problems, generate, openapi_problems};
+use super::{descriptor_problems, generate, openapi_problems, preview_of, revision_problem};
 
 /// One non-additive change: what it is and how to make it.
 type Change = (&'static str, Box<dyn Fn(&mut Value)>);
@@ -130,14 +130,59 @@ fn each_non_additive_change_fails_and_names_the_item() {
 fn a_changed_descriptor_must_raise_the_revision() {
     let mut new = base();
     new["messages"]["New"] = json!({"fields": {}});
-    let problems = descriptor_problems(&base(), &new);
+    let problem = revision_problem(&base(), &new);
+    assert!(problem.is_some_and(|p| p.contains("ADMIN_V1_REVISION")));
     assert!(
-        problems.iter().any(|p| p.contains("ADMIN_V1_REVISION")),
-        "{problems:?}"
+        revision_problem(&base(), &base()).is_none(),
+        "no change, no new revision needed"
+    );
+    assert!(revision_problem(&base(), &bumped(new)).is_none());
+}
+
+#[test]
+fn the_breaking_flag_needs_a_preview_surface() {
+    assert_eq!(preview_of("pub const PREVIEW: bool = true;"), Ok(true));
+    assert_eq!(preview_of("  pub const PREVIEW: bool = false;"), Ok(false));
+    assert!(preview_of("nothing here").is_err());
+}
+
+#[test]
+fn a_retyped_map_value_and_a_nested_enum_are_caught() {
+    let mut old = base();
+    old["messages"]["Resp.LabelsEntry"] = json!({"mapEntry": true, "fields": {
+        "key": {"number": 1, "type": "string", "label": "singular", "jsonName": "key", "optional": false, "oneof": null},
+        "value": {"number": 2, "type": "string", "label": "singular", "jsonName": "value", "optional": false, "oneof": null}}});
+    old["enums"]["Resp.Kind"] = json!({"values": {"KIND_UNSPECIFIED": 0, "A": 1}});
+    let mut retyped = bumped(old.clone());
+    retyped["messages"]["Resp.LabelsEntry"]["fields"]["value"]["type"] = json!("int64");
+    assert!(!descriptor_problems(&old, &retyped).is_empty());
+    let mut enum_gone = bumped(old.clone());
+    enum_gone["enums"]["Resp.Kind"]["values"]
+        .as_object_mut()
+        .map(|v| v.remove("A"));
+    assert!(!descriptor_problems(&old, &enum_gone).is_empty());
+}
+
+#[test]
+fn the_openapi_of_a_map_is_an_object() {
+    let mut d = base();
+    d["messages"]["Resp.LabelsEntry"] = json!({"mapEntry": true, "fields": {
+        "key": {"number": 1, "type": "string", "label": "singular", "jsonName": "key", "optional": false, "oneof": null},
+        "value": {"number": 2, "type": "int64", "label": "singular", "jsonName": "value", "optional": false, "oneof": null}}});
+    d["messages"]["Resp"]["fields"]["labels"] = json!({"number": 3, "type": "message:Resp.LabelsEntry", "label": "repeated", "jsonName": "labels", "optional": false, "oneof": null});
+    let api = super::openapi_of(&d);
+    assert_eq!(
+        api["components"]["schemas"]["Resp"]["properties"]["labels"]["type"],
+        "object"
+    );
+    assert_eq!(
+        api["components"]["schemas"]["Resp"]["properties"]["labels"]["additionalProperties"]["format"],
+        "int64"
     );
     assert!(
-        descriptor_problems(&base(), &base()).is_empty(),
-        "no change, no new revision needed"
+        api["components"]["schemas"]
+            .get("Resp.LabelsEntry")
+            .is_none()
     );
 }
 
