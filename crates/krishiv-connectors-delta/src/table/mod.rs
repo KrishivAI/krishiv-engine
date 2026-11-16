@@ -453,6 +453,11 @@ impl TableProvider for DeltaTable {
         self.writer_with(request, self.inner.limits)
     }
 
+    /// One snapshot at one version: every scan reads the same rows.
+    fn pinned(&self) -> bool {
+        true
+    }
+
     /// Copy-on-write `DELETE`, `UPDATE` ([`crate::write::dml`]) and `MERGE` ([`crate::write::merge`]).
     fn row_level(
         &self,

@@ -78,10 +78,14 @@ use arrow_array::cast::AsArray;
 use arrow_array::{Array, Int64Array, MapArray, RecordBatch, StructArray};
 use arrow_schema::{DataType as ArrowType, Field, Schema};
 use delta_kernel::expressions::PredicateRef;
-use krishiv_common::error::{InternalError, KrishivError, UnsupportedFeatureTableOperation};
+use krishiv_common::error::{
+    DeltaCastOverflowInTableWrite, DeltaNonDeterministicFunctionNotSupported,
+    DeltaUnsupportedSubquery, InternalError, KrishivError, TaskWriteFailed,
+    UnsupportedFeatureTableOperation,
+};
 use krishiv_exec::planner::{
     CardinalityRule, RowIdScan, RowLevelCapabilities, RowLevelCounts, RowLevelOperation,
-    RowLevelTable, RowLevelWrite,
+    RowLevelProblem, RowLevelTable, RowLevelWrite,
 };
 use krishiv_exec::{ScanPushdown, Sink};
 use krishiv_plan::{Expr, ExprNode};
@@ -312,6 +316,64 @@ impl RowLevelTable for DeltaRowLevel {
         ))
     }
 
+    /// delta-spark's classes for what the session's planner found (krishiv-session
+    /// `row_level.rs`, `merge_checks.rs`):
+    /// - a `MERGE` name that does not resolve: `INTERNAL_ERROR` "Cannot find main error class
+    ///   'DELTA_MERGE_UNRESOLVED_EXPRESSION'", the analyzer's error as its cause (delta-spark
+    ///   4.4.1's class file lacks the class it raises, `ResolveDeltaMergeInto.scala:44-52`;
+    ///   `merge/MERGE.json`);
+    /// - a non-deterministic `MERGE` condition: `DELTA_NON_DETERMINISTIC_FUNCTION_NOT_SUPPORTED`
+    ///   (`PreprocessTableMerge.scala:66-71`);
+    /// - a subquery: `DELTA_UNSUPPORTED_SUBQUERY` (`PreprocessTableDelete.scala:35-45`,
+    ///   `PreprocessTableUpdate.scala:44`, `PreprocessTableMerge.scala:76-78`);
+    /// - an error of a task writing rows: Spark's `TASK_WRITE_FAILED` naming the table's root
+    ///   (`FileFormatWriter`), caused by the error, or by `DELTA_CAST_OVERFLOW_IN_TABLE_WRITE`
+    ///   for an arithmetic error under a store-assignment cast that can overflow
+    ///   (`UpdateExpressionsSupport.scala:729-757`); conflicts, Krishiv's refusals and limits,
+    ///   internal errors and cancellations stay as they came.
+    fn error(&self, op: RowLevelOperation, problem: &RowLevelProblem<'_>) -> Option<KrishivError> {
+        let name = |op: RowLevelOperation| match op {
+            RowLevelOperation::Update => "UPDATE",
+            RowLevelOperation::Merge => "MERGE",
+            _ => "DELETE",
+        };
+        match problem {
+            RowLevelProblem::Unresolved(e) if op == RowLevelOperation::Merge => Some(
+                KrishivError::from(InternalError {
+                    message: "Cannot find main error class 'DELTA_MERGE_UNRESOLVED_EXPRESSION'"
+                        .to_owned(),
+                })
+                .with_cause((*e).clone()),
+            ),
+            RowLevelProblem::NonDeterministic { what, condition }
+                if op == RowLevelOperation::Merge =>
+            {
+                Some(
+                    DeltaNonDeterministicFunctionNotSupported {
+                        operation: format!("{what} of MERGE operation"),
+                        expression: format!("(condition = {condition})"),
+                    }
+                    .into(),
+                )
+            }
+            RowLevelProblem::Subquery { what, condition } => Some(
+                DeltaUnsupportedSubquery {
+                    operation: if op == RowLevelOperation::Merge {
+                        format!("{what} of MERGE operation")
+                    } else {
+                        name(op).to_owned()
+                    },
+                    cond: (*condition).to_owned(),
+                }
+                .into(),
+            ),
+            RowLevelProblem::WriteFailed { error, overflow } => {
+                Some(task_write_failed(&self.table, error, *overflow))
+            }
+            _ => None,
+        }
+    }
+
     /// delta-spark's result row: `num_affected_rows`, `-1` for a whole-file delete whose count is
     /// not known.
     fn output(&self, counts: &RowLevelCounts) -> Option<RecordBatch> {
@@ -346,6 +408,43 @@ fn affected_row(n: i64) -> RecordBatch {
     )]));
     RecordBatch::try_new(schema, vec![Arc::new(Int64Array::from(vec![n]))])
         .unwrap_or_else(|_| RecordBatch::new_empty(Arc::new(Schema::empty())))
+}
+
+/// `TASK_WRITE_FAILED` around `e` (see [`DeltaRowLevel`]'s `error`).
+fn task_write_failed(
+    table: &DeltaTable,
+    e: &KrishivError,
+    overflow: Option<(&str, &krishiv_types::DataType, &krishiv_types::DataType)>,
+) -> KrishivError {
+    let class = e.error_class().name();
+    if class.starts_with("DELTA_")
+        || class.starts_with("KRISHIV_")
+        || class.starts_with("UNSUPPORTED_FEATURE")
+        || class == "INTERNAL_ERROR"
+        || e.sql_state() == Some("HY008")
+    {
+        return e.clone();
+    }
+    let sql = |t: &krishiv_types::DataType| format!("\"{}\"", t.catalog_string().to_uppercase());
+    let cause = match overflow {
+        Some((column, value, target)) if matches!(e.sql_state(), Some("22003" | "22012")) => {
+            DeltaCastOverflowInTableWrite {
+                source_type: sql(value),
+                target_type: sql(target),
+                column_name: format!("`{}`", column.replace('`', "``")),
+                store_assignment_policy_flag: "spark.sql.storeAssignmentPolicy".to_owned(),
+                update_and_merge_casting_follows_ansi_enabled_flag:
+                    "spark.databricks.delta.updateAndMergeCastingFollowsAnsiEnabledFlag".to_owned(),
+                ansi_enabled_flag: "spark.sql.ansi.enabled".to_owned(),
+            }
+            .into()
+        }
+        _ => e.clone(),
+    };
+    KrishivError::from(TaskWriteFailed {
+        path: crate::table::hadoop_path(table.engine().table_root()),
+    })
+    .with_cause(cause)
 }
 
 fn merge_row(updated: u64, deleted: u64, inserted: u64) -> RecordBatch {
