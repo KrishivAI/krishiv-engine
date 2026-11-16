@@ -348,11 +348,11 @@ impl Session {
             }
         }
         drop(env);
-        if option("mergeSchema").is_some_and(|v| v.eq_ignore_ascii_case("true")) {
-            let widening = opened.as_ref().is_some_and(|t| t.type_widening_enabled());
-            let schema = df.schema().await?;
-            super::delta_options::merge_schema_check(&columns, &schema, widening, &quoted)?;
-        }
+        // delta-spark merges the schemas on every `save` into an existing table.
+        let widening = opened.as_ref().is_some_and(|t| t.type_widening_enabled());
+        let merge = option("mergeSchema").is_some_and(|v| v.eq_ignore_ascii_case("true"));
+        let schema = df.schema().await?;
+        super::delta_options::merge_schema_check(&columns, &schema, widening, merge, &quoted)?;
         let aligned = self.delta_by_name(df, &columns, &quoted).await?;
         if write_reads_target(&aligned, &qualified).await {
             request_options.insert(READS_TARGET_OPTION.to_owned(), "true".to_owned());

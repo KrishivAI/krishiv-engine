@@ -221,20 +221,25 @@ fn widens(from: &DataType, to: &DataType) -> bool {
     }
 }
 
-/// `mergeSchema = true` on a write of `data` into a Delta table of `table` columns (`widening`:
-/// `delta.enableTypeWidening`), as delta-spark merges the schemas before it writes: the types
-/// it keeps pass (the rows are then stored in the table's types); a column it cannot merge is
-/// `DELTA_FAILED_TO_MERGE_FIELDS` with the table's and the data's names (the first in table
-/// order, `SchemaMergingUtils.scala:206-226`); a merge that would change the table's schema
-/// (type widening, a wider integral) is refused by name, since the kernel commits no schema
-/// change on a write (design section 4.1). Columns only one side has are left to the caller.
+/// The schema merge of a DataFrame `save(path)` of `data` into a Delta table of `table` columns
+/// (`widening`: `delta.enableTypeWidening`). delta-spark runs it on every such write, with or
+/// without `mergeSchema` (`ImplicitMetadataOperation.scala:87, 216-236`; the frame reaches
+/// `WriteIntoDelta` uncast): the types it keeps pass (the rows are then stored in the table's
+/// types); a column it cannot merge is `DELTA_FAILED_TO_MERGE_FIELDS` with the table's and the
+/// data's names (the first in table order, `SchemaMergingUtils.scala:206-226`); a merge that
+/// changes the table's schema (type widening, a wider integral) is, without `merge_schema`,
+/// delta-spark's `DELTA_METADATA_MISMATCH` (`ImplicitMetadataOperation.scala:152-165`), and with
+/// it refused by name, since the kernel commits no schema change on a write (design section
+/// 4.1). Columns only one side has are left to the caller. SQL `INSERT`, `insertInto` and
+/// `saveAsTable` append cast to the table's types first and do not call this.
 ///
 /// # Errors
-/// `DELTA_FAILED_TO_MERGE_FIELDS`; `KRISHIV_UNSUPPORTED_FEATURE`.
+/// `DELTA_FAILED_TO_MERGE_FIELDS`; `DELTA_METADATA_MISMATCH`; `KRISHIV_UNSUPPORTED_FEATURE`.
 pub(crate) fn merge_schema_check(
     table: &[TableColumn],
     data: &arrow_schema::Schema,
     widening: bool,
+    merge_schema: bool,
     quoted: &str,
 ) -> Result<(), KrishivError> {
     for c in table {
@@ -254,6 +259,11 @@ pub(crate) fn merge_schema_check(
                     update_field: f.name().clone(),
                 }
                 .into());
+            }
+            Merged::Changed(_) if !merge_schema => {
+                // delta-spark raises the parent class bare (`OPTIONS.json` `merge_schema`
+                // `int_into_short_no_merge`).
+                return Err(krishiv_common::error::DeltaMetadataMismatch {}.into());
             }
             Merged::Changed(what) => {
                 return Err(KrishivUnsupportedFeature {

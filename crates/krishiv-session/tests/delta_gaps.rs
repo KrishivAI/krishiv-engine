@@ -694,27 +694,27 @@ fn delta_kernel_gaps_are_refused_by_name() {
     );
 }
 
-/// `mergeSchema` cases where Krishiv differs from delta-spark, with what Krishiv does:
-/// a type change without `mergeSchema` keeps the store-assignment cast this engine always made
-/// (delta-spark raises `DELTA_FAILED_TO_MERGE_FIELDS`); a widening on a `typeWidening` table is
-/// refused by name (the kernel commits no schema change on a write).
-const MERGE_SCHEMA_KNOWN: &[(&str, Option<&str>)] = &[
-    ("bigint_into_int_no_merge", None),
-    (
-        "widening_bigint_into_int",
-        Some("KRISHIV_UNSUPPORTED_FEATURE"),
-    ),
+/// `mergeSchema` cases where Krishiv differs from delta-spark, with Krishiv's class: a merge
+/// delta-spark commits as a change of the table's types (a widening on a `typeWidening` table,
+/// an `INT` into a `SMALLINT` column) is refused by name, since the kernel commits no schema
+/// change on a write.
+const MERGE_SCHEMA_KNOWN: &[(&str, &str)] = &[
+    ("widening_bigint_into_int", "KRISHIV_UNSUPPORTED_FEATURE"),
+    ("int_into_short_merge", "KRISHIV_UNSUPPORTED_FEATURE"),
 ];
 
 /// The rows of a `merge_schema` table as the oracle's typed form: `id`, `n`, `d` (a decimal
-/// string), `s.a`; or `id`, `i`.
+/// string), `s.a`; `id`, `i`; `id`, `n`; or `id`, `v`.
 fn merge_schema_rows(s: &Session, kind: &str) -> Value {
     use arrow_array::Array;
     use arrow_array::cast::AsArray;
-    let sql = if kind == "plain" {
-        "SELECT id, CAST(n AS BIGINT), CAST(d AS STRING), CAST(s.a AS BIGINT) FROM m ORDER BY id"
-    } else {
-        "SELECT id, CAST(i AS BIGINT) FROM m ORDER BY id"
+    let sql = match kind {
+        "plain" => {
+            "SELECT id, CAST(n AS BIGINT), CAST(d AS STRING), CAST(s.a AS BIGINT) FROM m ORDER BY id"
+        }
+        "short" => "SELECT id, CAST(n AS BIGINT) FROM m ORDER BY id",
+        "varchar" => "SELECT id, CAST(v AS STRING) FROM m ORDER BY id",
+        _ => "SELECT id, CAST(i AS BIGINT) FROM m ORDER BY id",
     };
     let mut out = Vec::new();
     for b in block_on(df(s, sql).collect()).unwrap() {
@@ -726,6 +726,11 @@ fn merge_schema_rows(s: &Session, kind: &str) -> Value {
                 .map(|(i, c)| {
                     if c.is_null(r) {
                         Value::Null
+                    } else if i == 1 && kind == "varchar" {
+                        Value::from(match c.data_type() {
+                            arrow_schema::DataType::Utf8View => c.as_string_view().value(r),
+                            _ => c.as_string::<i32>().value(r),
+                        })
                     } else if i == 2 && kind == "plain" {
                         let text = match c.data_type() {
                             arrow_schema::DataType::Utf8View => c.as_string_view().value(r),
@@ -751,7 +756,7 @@ fn merge_schema_rows(s: &Session, kind: &str) -> Value {
 fn delta_merge_schema_matches_spark() {
     let oracle = options_oracle();
     let cases = oracle["merge_schema"].as_object().unwrap();
-    assert!(cases.len() >= 13, "{}", cases.len());
+    assert!(cases.len() >= 19, "{}", cases.len());
     for (name, case) in cases {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("t");
@@ -772,6 +777,18 @@ fn delta_merge_schema_matches_spark() {
                 "INSERT INTO m VALUES (1, 1, 1.00, named_struct('a', 1))",
             )
             .unwrap();
+        } else if kind == "short" || kind == "varchar" {
+            let (columns, row) = if kind == "short" {
+                ("n SMALLINT", "1")
+            } else {
+                ("v VARCHAR(5)", "'a'")
+            };
+            run(
+                &s,
+                &format!("CREATE TABLE m (id BIGINT, {columns}) USING delta LOCATION '{path}'"),
+            )
+            .unwrap();
+            run(&s, &format!("INSERT INTO m VALUES (1, {row})")).unwrap();
         } else {
             // The oracle's `(id BIGINT, i INT)` table with `delta.enableTypeWidening`.
             copy_dir(&fixtures().join("write-features/type-widening"), &dir);
@@ -781,20 +798,19 @@ fn delta_merge_schema_matches_spark() {
         let mut w = df(&s, &format!("SELECT {}", case["select"].as_str().unwrap()))
             .write()
             .format("delta")
-            .mode("append");
+            .mode(case["mode"].as_str().unwrap());
         for (k, v) in case["options"].as_object().unwrap() {
             w = w.option(k, v.as_str().unwrap());
         }
-        let ours = block_on(w.save(&path));
-        if let Some((_, known)) = MERGE_SCHEMA_KNOWN.iter().find(|(n, _)| n == name) {
-            match known {
-                None => assert!(ours.is_ok(), "{name}: {ours:?}"),
-                Some(class) => {
-                    let e = ours.expect_err(name);
-                    assert_eq!(e.error_class().name(), *class, "{name}: {e}");
-                    assert_eq!(versions(&dir), before, "{name}");
-                }
-            }
+        let ours = if case["writer"] == "saveAsTable" {
+            block_on(w.save_as_table("m"))
+        } else {
+            block_on(w.save(&path))
+        };
+        if let Some((_, class)) = MERGE_SCHEMA_KNOWN.iter().find(|(n, _)| n == name) {
+            let e = ours.expect_err(name);
+            assert_eq!(e.error_class().name(), *class, "{name}: {e}");
+            assert_eq!(versions(&dir), before, "{name}");
             continue;
         }
         match (ours, case["error"].is_null()) {
@@ -820,7 +836,7 @@ fn delta_merge_schema_matches_spark() {
                     as_strings(&case["commit"]["operationParameters"]),
                     "{name}"
                 );
-                if kind == "plain" {
+                if kind != "widening" {
                     assert_eq!(merge_schema_rows(&s, kind), case["rows"], "{name}");
                 } else {
                     // The fixture's own row is not the oracle's; the appended one is.
@@ -905,4 +921,22 @@ fn a_column_mapping_merge_of_struct_columns_reads_back() {
         out
     };
     assert_eq!(copied, before);
+
+    // A union of the struct column (its nested fields carry the column mapping) with the same
+    // column of the CTAS copy (no column mapping), both ways round: no cast is planned, and the
+    // scan's input is relabelled (krishiv-exec `UnionRelabel`).
+    for sql in [
+        format!("SELECT s FROM {table} UNION ALL SELECT s FROM c"),
+        format!("SELECT s FROM c UNION ALL SELECT s FROM {table}"),
+    ] {
+        let jsons = block_on(df(&s, &format!("SELECT to_json(s) FROM ({sql})")).collect()).unwrap();
+        assert_eq!(
+            jsons
+                .iter()
+                .map(arrow_array::RecordBatch::num_rows)
+                .sum::<usize>(),
+            2 * before.len(),
+            "{sql}"
+        );
+    }
 }
