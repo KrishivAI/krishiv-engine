@@ -570,3 +570,96 @@ fn a_delivered_observation_releases_its_retained_states() {
     drop(held);
     assert_eq!(reserved, 0);
 }
+
+/// What a bounded wait on `obs` gives: the error class it completed with. A pending observation
+/// (no run completed it) fails the test instead of blocking.
+fn failed_with(obs: &Observation) -> String {
+    match obs.get_timeout(Duration::from_secs(10)) {
+        Err(e) => e.error_class().name().to_owned(),
+        Ok(Some(row)) => panic!("completed with metrics: {row:?}"),
+        Ok(None) => panic!("still pending: no run completed the observation"),
+    }
+}
+
+/// A session whose runtime admits one query at a time and queues `queued` more.
+fn one_slot_session(queued: u32) -> Session {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("resource-groups.json");
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{"rootGroups": [{{"name": "root", "hardConcurrencyLimit": 1, "maxQueued": {queued}}}],
+                "defaultGroup": "root"}}"#
+        ),
+    )
+    .unwrap();
+    let rt = krishiv_session::EngineRuntime::builder()
+        .config(
+            "krishiv.workload.resourceGroups.file",
+            path.to_string_lossy().into_owned(),
+        )
+        .build()
+        .unwrap();
+    Session::builder().runtime(rt).build().unwrap()
+}
+
+/// Every run completes its observations, also the ones that end before the query starts.
+#[test]
+fn an_action_on_a_closed_session_completes_the_observation() {
+    let s = Session::new().unwrap();
+    let obs = Observation::new();
+    let df = s
+        .range(0, 10, 1, None)
+        .observe(&obs, [count(lit(1)).alias("n")])
+        .unwrap();
+    s.close();
+    let err = block_on(df.count()).unwrap_err();
+    assert_eq!(failed_with(&obs), err.error_class().name());
+}
+
+/// A write on a closed session is refused as its query starts (`run_on_query_logged`), after its
+/// analysis.
+#[test]
+fn a_write_on_a_closed_session_completes_the_observation() {
+    let s = Session::new().unwrap();
+    let obs = Observation::new();
+    let df = base(&s).observe(&obs, [count(lit(1)).alias("n")]).unwrap();
+    s.close();
+    let dir = tempfile::tempdir().unwrap();
+    let err = block_on(df.write().parquet(dir.path().join("o").to_str().unwrap())).unwrap_err();
+    assert_eq!(failed_with(&obs), err.error_class().name());
+}
+
+#[test]
+fn a_refused_admission_completes_the_observation() {
+    let s = one_slot_session(0);
+    let held = block_on(s.range(0, 1, 1, None).execute_stream()).unwrap();
+    let obs = Observation::new();
+    let df = s
+        .range(0, 10, 1, None)
+        .observe(&obs, [count(lit(1)).alias("n")])
+        .unwrap();
+    let err = block_on(df.count()).unwrap_err();
+    assert_eq!(
+        err.error_class().name(),
+        "KRISHIV_RESOURCE_GROUP_QUEUE_FULL"
+    );
+    assert_eq!(failed_with(&obs), "KRISHIV_RESOURCE_GROUP_QUEUE_FULL");
+    drop(held);
+}
+
+#[tokio::test]
+async fn an_action_dropped_while_it_waits_for_admission_completes_the_observation() {
+    let s = one_slot_session(1);
+    let held = s.range(0, 1, 1, None).execute_stream().await.unwrap();
+    let obs = Observation::new();
+    let df = s
+        .range(0, 10, 1, None)
+        .observe(&obs, [count(lit(1)).alias("n")])
+        .unwrap();
+    // Queued behind `held`, so the action is still in its setup when the caller gives up.
+    let gave_up = tokio::time::timeout(Duration::from_millis(200), df.count()).await;
+    assert!(gave_up.is_err(), "admitted past a full slot: {gave_up:?}");
+    assert_eq!(failed_with(&obs), "OPERATION_CANCELED");
+    drop(held);
+}

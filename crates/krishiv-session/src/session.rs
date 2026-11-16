@@ -1746,7 +1746,28 @@ impl Session {
     /// As [`Self::run_on_query`], also returning the id of the `system.queries` row this execution
     /// began, so the caller keeps it for itself: the statement's slot in `env` is shared by every
     /// execution of the same analyzed frame.
+    ///
+    /// Every run completes the frame's observations: a delivered stream as it ends, a run that
+    /// fails before it has one (closed session, refused admission, failed submit) with its
+    /// error, and a caller that drops this future during the setup with `OPERATION_CANCELED`.
     async fn run_on_query_logged(
+        &self,
+        physical: &PhysicalPlan,
+        worker: WorkerContext,
+        env: &QueryEnv,
+        detailed: bool,
+        admitted: Option<Admitted>,
+    ) -> Result<(RecordBatchStream, Arc<QueryContext>, String), KrishivError> {
+        let pending = crate::dataframe::PendingObservations::new(&env.observers);
+        let started = self
+            .start_query(physical, worker, env, detailed, admitted)
+            .await;
+        pending.settle(started.as_ref().err());
+        started
+    }
+
+    /// [`Self::run_on_query_logged`] up to the delivered stream.
+    async fn start_query(
         &self,
         physical: &PhysicalPlan,
         worker: WorkerContext,
@@ -1858,9 +1879,7 @@ impl Session {
                 if let Some(fold) = pending.0.take() {
                     fold.finish(Some(&error));
                 }
-                // No stream completes the observations: the failure does (Spark completes them
-                // whether the action succeeded or not).
-                crate::dataframe::fail_observations(&env.observers, &error);
+                // No stream completes the observations: the failure does, in the caller.
                 Err(error)
             }
             Ok(stream) => {

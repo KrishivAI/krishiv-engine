@@ -196,12 +196,41 @@ pub(crate) fn deliver(
     })
 }
 
-/// Completes `observers`' observations with `error`: the action failed before it had a stream
-/// (its submit failed), so no [`deliver`]ed stream completes them. Sinks keep nothing (a failed
-/// query sends no metrics); the first action still wins.
-pub(crate) fn fail_observations(observers: &Observers, error: &KrishivError) {
+/// Completes `observers`' observations with `error`: the action failed in its setup, before it
+/// had a stream, so no [`deliver`]ed stream completes them. Sinks keep nothing (a failed query
+/// sends no metrics); the first action still wins.
+pub(super) fn fail_observations(observers: &Observers, error: &KrishivError) {
     for o in &observers.observations {
         o.complete(Err(error.clone()));
+    }
+}
+
+/// The observations of a run that has no [`deliver`]ed stream yet: [`Self::settle`] fails them
+/// with the run's error (or leaves them to the stream), and a run dropped before it settles (its
+/// caller gave up during the setup) fails them with `OPERATION_CANCELED`, so no run leaves an
+/// [`Observation::get`] waiting.
+pub(crate) struct PendingObservations<'a>(Option<&'a Observers>);
+
+impl<'a> PendingObservations<'a> {
+    pub(crate) fn new(observers: &'a Observers) -> Self {
+        Self(Some(observers))
+    }
+
+    /// The run's outcome: its error fails the observations; without one the delivered stream
+    /// completes them.
+    pub(crate) fn settle(mut self, error: Option<&KrishivError>) {
+        if let (Some(observers), Some(error)) = (self.0.take(), error) {
+            fail_observations(observers, error);
+        }
+    }
+}
+
+impl Drop for PendingObservations<'_> {
+    fn drop(&mut self) {
+        if let Some(observers) = self.0.take() {
+            let cancelled = crate::cancel::CancelReason::ClientGone.error("", None);
+            fail_observations(observers, &cancelled);
+        }
     }
 }
 

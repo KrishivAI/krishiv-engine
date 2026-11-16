@@ -33,7 +33,7 @@ mod fill_stream;
 mod geo_gate;
 mod observe;
 pub use observe::ObservedSink;
-pub(crate) use observe::{Observers, deliver, fail_observations};
+pub(crate) use observe::{Observers, PendingObservations, deliver};
 mod metadata;
 mod traced;
 
