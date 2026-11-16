@@ -629,12 +629,20 @@ fn sweep_one(plan: &Plan, stats: &dyn Statistics, dbs: &[Db], config: &Config) -
     if off_again.structurally_eq(&off) {
         check_in(plan, stats, dbs, config);
     } else {
-        // Not a fixed point without the rule either (`ShareCte` and the
-        // inferred filters under a session configuration): output and rows.
+        // Not a fixed point without the rule either: under a session
+        // configuration `ShareCte`'s `CteRef`s gain inferred `isnotnull`
+        // filters on a second pass (TPC-DS q23, before this rule). Output and
+        // rows here, and the full check with `ShareCte` off, where the
+        // rule-off plan is a fixed point.
         assert_eq!(on.root().resolved_output(), plan.root().resolved_output());
         for db in dbs {
             assert_eq!(eval::rows(db, on.root()), eval::rows(db, plan.root()));
         }
+        let mut unshared = config.clone();
+        unshared
+            .set("krishiv.sql.optimizer.shareCteInstances", "false")
+            .unwrap();
+        check_in(plan, stats, dbs, &unshared);
     }
     moves
 }
@@ -717,6 +725,9 @@ const TPCDS_KEYS: &[(&str, &[&str])] = &[
 /// Over the 99 TPC-DS queries with SF1 row counts (the optimizer tests have
 /// no TPC-DS footer fixture) and the dimensions' keys declared: each keeps
 /// its output and is a fixed point; the queries the rule changes are listed.
+/// **No row comparison:** the reference interpreter has no TPC-DS data, so
+/// the moves here (q23, q64) are checked for shape only; their rows are the
+/// TPC-H sweep's and the executor differential's argument, plus review.
 #[test]
 fn tpcds_with_keys_declared_is_a_fixed_point() {
     let stats = Keyed::new(crate::late_payload::TpcdsRows, TPCDS_KEYS);
