@@ -1,0 +1,29 @@
+---
+source: crates/krishiv-session/tests/analyze.rs
+expression: layout(&json)
+---
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","store_sales"],"display":"table `spark_catalog`.`default`.`store_sales`","privilege":"SELECT","columns":["ss_customer_sk","ss_item_sk","ss_quantity","ss_sales_price","ss_ticket_number"]},
+  {"kind":"table","name":["spark_catalog","default","store_returns"],"display":"table `spark_catalog`.`default`.`store_returns`","privilege":"SELECT","columns":["sr_item_sk","sr_reason_sk","sr_return_quantity","sr_ticket_number"]},
+  {"kind":"table","name":["spark_catalog","default","reason"],"display":"table `spark_catalog`.`default`.`reason`","privilege":"SELECT","columns":["r_reason_desc","r_reason_sk"]}],
+"output_schema":[{"ordinal":0,"name":"ss_customer_sk","type":"int","type_json":"\"integer\"","nullable":true,"declared_type":null},
+  {"ordinal":1,"name":"sumsales","type":"decimal(28,2)","type_json":"\"decimal(28,2)\"","nullable":true,"declared_type":null}],
+"lineage":[{"ordinal":0,"output":"ss_customer_sk","sources":[{"table":["spark_catalog","default","store_sales"],"column":"ss_customer_sk","via_view":null}],"transform":"identity"},
+  {"ordinal":1,"output":"sumsales","sources":[{"table":["spark_catalog","default","store_returns"],"column":"sr_return_quantity","via_view":null},{"table":["spark_catalog","default","store_sales"],"column":"ss_quantity","via_view":null},{"table":["spark_catalog","default","store_sales"],"column":"ss_sales_price","via_view":null}],"transform":"aggregate"}],
+"filters":[{"kind":"filter","table":["spark_catalog","default","reason"],"column":"r_reason_desc"},
+  {"kind":"filter","table":["spark_catalog","default","reason"],"column":"r_reason_sk"},
+  {"kind":"filter","table":["spark_catalog","default","store_returns"],"column":"sr_reason_sk"},
+  {"kind":"join","table":["spark_catalog","default","store_returns"],"column":"sr_item_sk"},
+  {"kind":"join","table":["spark_catalog","default","store_returns"],"column":"sr_ticket_number"},
+  {"kind":"join","table":["spark_catalog","default","store_sales"],"column":"ss_item_sk"},
+  {"kind":"join","table":["spark_catalog","default","store_sales"],"column":"ss_ticket_number"},
+  {"kind":"group_by","table":["spark_catalog","default","store_sales"],"column":"ss_customer_sk"},
+  {"kind":"sort","table":["spark_catalog","default","store_returns"],"column":"sr_return_quantity"},
+  {"kind":"sort","table":["spark_catalog","default","store_sales"],"column":"ss_customer_sk"},
+  {"kind":"sort","table":["spark_catalog","default","store_sales"],"column":"ss_quantity"},
+  {"kind":"sort","table":["spark_catalog","default","store_sales"],"column":"ss_sales_price"},
+  {"kind":"conditional","table":["spark_catalog","default","store_returns"],"column":"sr_return_quantity"}],
+"warnings":[]}
