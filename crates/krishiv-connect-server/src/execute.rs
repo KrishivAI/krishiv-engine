@@ -727,16 +727,14 @@ async fn produce(
     sender.send(metrics).await?;
     // The observed nodes' metrics follow the SQL metrics, all in one response as Spark sends
     // them; a query that ended in an error never gets here, so it sends none.
-    // An observation whose metrics failed to finalize fails the action (Spark: the metric's error
-    // is the action's), after the others' metrics were sent.
+    // An observation whose metrics failed to finalize, or have no literal yet, fails the action
+    // (Spark: the metric's error is the action's), after the others' metrics were sent.
     let mut all = Vec::new();
     let mut failed = None;
     for (name, row) in sink.take().unwrap_or_default() {
-        match row {
-            Ok(row) => {
-                let plan_id = plan_ids.get(&name).copied().unwrap_or(0);
-                all.push(observed::observed_metrics(&name, plan_id, &row)?);
-            }
+        let plan_id = plan_ids.get(&name).copied().unwrap_or(0);
+        match row.and_then(|row| observed::observed_metrics(&name, plan_id, &row)) {
+            Ok(metrics) => all.push(metrics),
             Err(e) => {
                 failed.get_or_insert(e);
             }

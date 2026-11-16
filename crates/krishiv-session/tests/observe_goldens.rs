@@ -57,20 +57,30 @@ const CLIENT_ONLY: &[(&str, &str)] = &[
 ];
 
 /// Cases the engine does not match yet. Each must still fail; remove it when it passes.
-const KNOWN_GAPS: &[(&str, &str)] = &[
+/// Each gap is (case, why, what the engine gives now: the case's result as JSON), so a gap
+/// case that fails for another reason (a setup panic) is a failure, not the gap.
+const KNOWN_GAPS: &[(&str, &str, &str)] = &[
     (
         "observation_through_sort_limit_topn",
         "Spark's TakeOrderedAndProject pulls 20 of the 1000 rows (a partition-dependent count); the engine's top-N reads all 1000 (P3-T084c)",
+        GAP_TOPN_NOW,
     ),
     (
         "err_scalar_subquery",
         "Spark runs a scalar subquery in a metric; the engine refuses it with KRISHIV_UNSUPPORTED_FEATURE (P3-T084c)",
+        GAP_SUBQUERY_NOW,
     ),
     (
         "ansi_on_overflow_sum",
         "Spark's metric aggregate saturates a long sum at 9223372036854775807 under ANSI; the engine raises ARITHMETIC_OVERFLOW (P3-T084c)",
+        GAP_OVERFLOW_NOW,
     ),
 ];
+
+const GAP_TOPN_NOW: &str = r#"{"get":"ok","metrics":{"n":1000}}"#;
+const GAP_SUBQUERY_NOW: &str =
+    r#"{"errorClass":"KRISHIV_UNSUPPORTED_FEATURE","outcome":"error","sqlState":"0A000"}"#;
+const GAP_OVERFLOW_NOW: &str = r#"{"action_result":2,"error":{"errorClass":"ARITHMETIC_OVERFLOW","outcome":"error","sqlState":"22003"},"get":"error"}"#;
 
 /// Cases whose `metrics` are compared as a subset of the fixture's columns (the case leaves out
 /// what depends on which of the parallel drivers' rows a `LIMIT` takes).
@@ -751,7 +761,7 @@ fn every_fixture_case_is_run_skipped_or_a_known_gap() {
     for name in seen {
         assert!(classic.contains_key(name), "{name} is not in the fixture");
     }
-    for (name, _) in KNOWN_GAPS {
+    for (name, _, _) in KNOWN_GAPS {
         assert!(
             cases.iter().any(|(n, _)| n == name),
             "gap {name} is not a case"
@@ -767,13 +777,17 @@ fn classic_goldens_match_spark() {
     let mut fixed = Vec::new();
     for (name, case) in cases() {
         let result = outcome(name, case, &classic[name]);
-        let gap = KNOWN_GAPS.iter().any(|(g, _)| *g == name);
+        let gap = KNOWN_GAPS.iter().find(|(g, _, _)| *g == name);
         match (result, gap) {
-            (Err(why), false) => failures.push(why),
-            (Ok(()), true) => fixed.push(name),
-            // What the gap looks like now (visible with `--nocapture`).
-            (Err(why), true) => eprintln!("known gap: {why}"),
-            _ => {}
+            (Err(why), None) => failures.push(why),
+            (Ok(()), Some(_)) => fixed.push(name),
+            // The gap must look as it does now: any other failure of the case is a failure.
+            (Err(why), Some((_, _, now))) => {
+                if !why.starts_with(&format!("{name}: got {now}\n")) {
+                    failures.push(format!("known gap {name} changed (want got {now}): {why}"));
+                }
+            }
+            (Ok(()), None) => {}
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));

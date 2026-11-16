@@ -37,7 +37,8 @@ def test_first_action_wins(df: DataFrame) -> None:
     obs = Observation()
     out = df.observe(obs, F.count(F.lit(1)).alias("n"))
     out.count()
-    out.filter(F.col("id") > 5).count()
+    # A later action whose own metrics differ (a fresh observation of it gives {"n": 1}).
+    assert len(out.limit(1).collect()) == 1
     assert obs.get == {"n": 10}
 
 

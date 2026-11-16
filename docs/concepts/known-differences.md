@@ -303,8 +303,10 @@ fix removes the line). A `LIMIT` (and so `take`, `first`, `show`) directly above
 or above projections only, counts exactly the rows it takes, as Spark's `CollectMetricsExec` counts the rows
 its consumer pulled; the cap is one budget per node instance, so over several partitions the rows
 counted are the first the racing drivers hand over (Spark's are partition 0's: a `sum` metric can differ).
+The budget is per instantiation, not global: in a staged or distributed run every task that instantiates the
+observed node has its own, so the count can exceed `n` (P3-T084c).
 
-- **Limit not last, or a filter in between:** `observe(..).limit(n).count()`, a limit under a join, or a filter between the observed node and the limit: Spark's per-partition `LocalLimit` can pull up to `n` rows per partition, and a filter changes how many rows the node saw per row taken; the engine applies one global cap of `n` rows counted at the node. Not yet backed by a golden (P3-T084c).
+- **Limit not last, or a filter in between:** `observe(..).limit(n).count()`, a limit under a join, or a filter between the observed node and the limit: Spark's per-partition `LocalLimit` can pull up to `n` rows per partition, and a filter changes how many rows the node saw per row taken; the engine applies one cap of `n` rows per instance of the node (see above). Not yet backed by a golden (P3-T084c).
 - **Sort and limit:** `df.observe(..).orderBy(..).limit(n)` reads every row in the engine (`n` = the input);
   Spark's `TakeOrderedAndProject` pulls a partition-dependent subset (20 of 1000 in the golden).
 - **ANSI `sum` overflow:** Spark's metric aggregate returns the saturated `9223372036854775807` for a long

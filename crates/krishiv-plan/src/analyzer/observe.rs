@@ -14,6 +14,7 @@
 //! (equal field by field, `plan_id` included) is `DUPLICATED_METRICS_NAME`;
 //! the same relation reached twice (a self-join, a self-union) is legal.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use krishiv_common::error::{
@@ -44,10 +45,15 @@ enum Violation {
 }
 
 /// The first violation in a pre-order walk of `metric`, `None` when the
-/// metric is allowed.
+/// metric is allowed. A shared subexpression is walked once per inside-an-aggregate flag (its
+/// outcome depends on nothing else), so a DAG costs its node count, not its tree size.
 fn violation(metric: &Arc<Expr>) -> Option<Violation> {
     let mut stack = vec![(Arc::clone(metric), false)];
+    let mut visited = HashSet::new();
     while let Some((e, seen)) = stack.pop() {
+        if !visited.insert((Arc::as_ptr(&e).addr(), seen)) {
+            continue;
+        }
         let mut inside = seen;
         match &e.node {
             ExprNode::Window(_) => return Some(Violation::Window),
@@ -89,10 +95,14 @@ fn is_nondeterministic_call(e: &Expr) -> bool {
     }
 }
 
-/// Whether `e` holds a subquery expression.
+/// Whether `e` holds a subquery expression (each shared subexpression looked at once).
 fn has_subquery(e: &Arc<Expr>) -> bool {
     let mut stack = vec![Arc::clone(e)];
+    let mut visited = HashSet::new();
     while let Some(e) = stack.pop() {
+        if !visited.insert(Arc::as_ptr(&e).addr()) {
+            continue;
+        }
         if matches!(e.node, ExprNode::Subquery { .. }) {
             return true;
         }
@@ -200,5 +210,29 @@ impl Resolver<'_> {
         let mut r = self.make(o, node, c.out.to_vec(), &[&c]);
         r.hidden = Arc::clone(&c.hidden);
         Ok(r)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{FieldOp, Literal};
+
+    /// `e0 = 1`, `eN = eN-1.withField(f, eN-1)`: 2^40 leaf occurrences over 41 nodes. Both walks
+    /// finish, and say what a tree walk would (allowed, no subquery).
+    #[test]
+    fn the_walks_visit_a_shared_dag_once_per_node() {
+        let mut e: Arc<Expr> = Arc::new(Literal::Integer(1).into());
+        for _ in 0..40 {
+            e = Arc::new(Expr::new(ExprNode::UpdateFields {
+                base: Arc::clone(&e),
+                ops: vec![FieldOp::With {
+                    name: "f".to_owned(),
+                    value: Arc::clone(&e),
+                }],
+            }));
+        }
+        assert_eq!(violation(&e), None);
+        assert!(!has_subquery(&e));
     }
 }

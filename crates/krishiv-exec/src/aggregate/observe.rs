@@ -41,7 +41,7 @@ use crate::context::TaskContext;
 use crate::error::{Result, internal};
 use crate::hash::HashSeed;
 use crate::operator::{LocalState, Operator, OperatorOutput};
-use crate::operators::{Project, local_mut};
+use crate::operators::{PartitionState, Project, local_mut};
 
 /// Turns the partial states of one observation into its row.
 #[derive(Debug)]
@@ -157,6 +157,9 @@ struct Local {
     query: Arc<crate::context::QueryContext>,
     finalizer: Arc<Finalizer>,
     partition: u32,
+    /// The partition index the metrics' row expressions see (`spark_partition_id()`): a batch's
+    /// split tag over the numbering base, as a `Project` at the same place sees it.
+    index: PartitionState,
     /// The driver's lane among the logical partitions' (0 when it is not one).
     lane: usize,
     sent: bool,
@@ -230,6 +233,7 @@ impl Operator for CollectMetrics {
             query: Arc::clone(ctx.query()),
             finalizer: Arc::clone(&self.finalizer),
             partition: ctx.partition(),
+            index: PartitionState::of(ctx),
             lane: ctx.lane().map_or(0, |(lane, _)| lane),
             sent: false,
             reservation: ctx.consumer().reservation(),
@@ -260,7 +264,7 @@ impl Operator for CollectMetrics {
         let args;
         let folded = match &self.pre {
             Some(pre) => {
-                args = pre.project(seen, l.partition)?;
+                args = pre.project(seen, l.index.index(input.split()))?;
                 &args
             }
             None => seen,

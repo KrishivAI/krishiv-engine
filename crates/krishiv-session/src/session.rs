@@ -1366,6 +1366,7 @@ impl Session {
             identifier_spans: Arc::default(),
             identifier_written: Arc::default(),
             observers: Arc::default(),
+            view_keeps: Arc::default(),
             cache_generation,
             cache_cap,
             sql_functions,
@@ -1417,6 +1418,9 @@ impl Session {
             }),
         )?;
         let mut inlined = std::mem::take(&mut expansion.views);
+        *env.view_keeps
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = std::mem::take(&mut expansion.keeps);
         // A permanent view is inlined before binding, so the analyzer never asks the
         // policy about it: ask here, before any read and before the text of a stored view
         // can fail, so a principal who may not read it learns nothing from it.
@@ -1920,6 +1924,9 @@ impl Session {
                 if let Some(fold) = pending.0.take() {
                     fold.finish(Some(&error));
                 }
+                // No stream completes the observations: the failure does (Spark completes them
+                // whether the action succeeded or not).
+                crate::dataframe::fail_observations(&env.observers, &error);
                 Err(error)
             }
             Ok(stream) => {
@@ -1950,28 +1957,6 @@ impl Session {
     #[must_use]
     pub fn metrics(&self) -> MetricsSnapshot {
         self.state.runtime.metrics.snapshot()
-    }
-}
-
-impl Session {
-    /// What a query's plans are instantiated with in this process: the
-    /// query's tables, its UDFs, and its spill scope under the session's
-    /// spill directory (created at instantiation). Writes build their sink
-    /// from the plan with the query's I/O context, formats and configuration;
-    /// batch splits resolve through the session's relation store.
-    fn worker(&self, env: &QueryEnv) -> WorkerContext {
-        let worker = WorkerContext::new(
-            Arc::clone(&env.catalog) as Arc<dyn krishiv_exec::planner::TableProviderResolver>
-        )
-        .with_udfs(Arc::clone(&self.state.udfs))
-        .with_relations(Arc::clone(&self.state.relations))
-        .with_spill_scopes(Arc::new(QuerySpill {
-            state: Arc::clone(&self.state),
-        }))
-        .with_io(env.io.clone())
-        .with_formats(Arc::clone(&self.state.runtime.formats))
-        .with_config(Arc::clone(&env.config));
-        self.with_python_runtime(worker)
     }
 }
 

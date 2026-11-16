@@ -119,10 +119,13 @@ fn the_first_action_wins() {
     let df = base(&s).observe(&obs, [count(lit(1)).alias("n")]).unwrap();
     block_on(df.count()).unwrap();
     let first = metrics(&obs.get().unwrap());
-    block_on(df.filter(col("v").eq(1)).count()).unwrap();
-    block_on(df.count()).unwrap();
-    assert_eq!(metrics(&obs.get().unwrap()), first);
     assert_eq!(first["n"], 3);
+    // A later action whose own metrics differ (a fresh observation of it gives n = 1) leaves the
+    // first action's.
+    assert_eq!(block_on(df.limit(1).collect()).unwrap()[0].num_rows(), 1);
+    assert_eq!(metrics(&obs.get().unwrap()), first);
+    block_on(df.filter(col("v").eq(1)).count()).unwrap();
+    assert_eq!(metrics(&obs.get().unwrap()), first);
 }
 
 #[test]
@@ -313,15 +316,20 @@ fn a_limit_above_caps_the_count_at_the_rows_it_takes() {
         .select([col("id")]);
     block_on(df.limit(7).collect()).unwrap();
     assert_eq!(metrics(&obs.get().unwrap())["n"], 7);
-    // A filter between changes which rows the limit pulled: the count is whole batches at least.
+    // A filter between changes which rows the limit pulled (known-differences.md, "a filter in
+    // between"): over the one-batch, one-partition fixture the engine's count is deterministic.
     let obs = Observation::new();
     let df = base(&s)
         .observe(&obs, [count(lit(1)).alias("n")])
         .unwrap()
         .filter(col("v").is_not_null());
     block_on(df.limit(1).collect()).unwrap();
-    assert!(metrics(&obs.get().unwrap())["n"].as_i64().unwrap() >= 1);
+    assert_eq!(metrics(&obs.get().unwrap())["n"], FILTER_LIMIT_N);
 }
+
+/// The fixture's `observe -> filter(v IS NOT NULL) -> limit(1)` count: no cap reaches through the
+/// filter, so the node counts the one batch the limit's pull read, all 3 rows (at most the input).
+const FILTER_LIMIT_N: i64 = 3;
 
 /// A scalar subquery in a metric is refused as an unsupported feature, never an internal error.
 #[test]
@@ -479,4 +487,86 @@ fn a_view_over_a_view_of_an_observed_frame_completes_the_observation() {
         metrics(&obs.get_timeout(Duration::from_secs(10)).unwrap().unwrap())["n"],
         3
     );
+}
+
+/// A shared CTE over an observed view, read first under `LIMIT 0` and then live: the `LIMIT 0`
+/// reference does not plan the definition the live one reuses without its observed node (Spark
+/// prunes only the zero-row reference; the live one reports the rows it read).
+#[test]
+fn a_cte_read_under_limit_zero_first_still_observes_the_live_read() {
+    let s = Session::new().unwrap();
+    let obs = Observation::new();
+    let df = base(&s).observe(&obs, [count(lit(1)).alias("n")]).unwrap();
+    block_on(df.create_or_replace_temp_view("ov")).unwrap();
+    // `rand()` makes the definition nondeterministic, so its references always share one plan.
+    let q = "WITH c AS (SELECT k, rand() AS r FROM ov) \
+             SELECT k FROM (SELECT * FROM c LIMIT 0) UNION ALL SELECT k FROM c";
+    let rows: usize = block_on(async { s.sql(q).await.unwrap().collect().await })
+        .unwrap()
+        .iter()
+        .map(RecordBatch::num_rows)
+        .sum();
+    assert_eq!(rows, 3);
+    let got = obs.get_timeout(Duration::from_secs(10)).unwrap().unwrap();
+    assert_eq!(
+        metrics(&got),
+        serde_json::Map::from_iter([("n".to_owned(), Value::from(3))])
+    );
+}
+
+/// `spark_partition_id()` in a metric under the second `UNION ALL` branch (its partitions
+/// numbered from the first branch's count) is what the same expression gives in a projection at
+/// the same position (the engine's `Project`, the stated oracle; no Spark golden covers it):
+/// the branch's own index, 0 and 1 over five rows each, so 5.
+#[test]
+fn spark_partition_id_in_a_metric_matches_a_projection_at_its_place() {
+    let s = Session::new().unwrap();
+    let pid = || expr("spark_partition_id()").unwrap();
+    let first = s.range(0, 10, 1, Some(2)).select([lit(0).alias("p")]);
+    let oracle = first.union(&s.range(0, 10, 1, Some(2)).select([pid().alias("p")]));
+    let summed = block_on(oracle.agg([sum(col("p")).alias("s")]).collect()).unwrap();
+    let want = summed[0].column(0).as_primitive::<Int64Type>().value(0);
+    assert_eq!(want, 5);
+    let obs = Observation::new();
+    let observed = s
+        .range(0, 10, 1, Some(2))
+        .observe(&obs, [sum(pid()).alias("p")])
+        .unwrap()
+        .select([lit(0).alias("p")]);
+    assert_eq!(block_on(first.union(&observed).count()).unwrap(), 20);
+    assert_eq!(metrics(&obs.get().unwrap())["p"], want);
+}
+
+/// Once the observation is delivered, the query keeps no observation state charged to its pool,
+/// though the caller still holds the ended result stream (and so the query).
+#[test]
+fn a_delivered_observation_releases_its_retained_states() {
+    let s = Session::new().unwrap();
+    let obs = Observation::new();
+    let df = s
+        .range(0, 100_000, 1, Some(2))
+        .observe(&obs, [expr("size(collect_list(id))").unwrap().alias("l")])
+        .unwrap();
+    let held = block_on(async {
+        let mut stream = df.execute_stream().await.unwrap();
+        while let Some(b) = stream.next().await {
+            b.unwrap();
+        }
+        stream
+    });
+    assert_eq!(metrics(&obs.get().unwrap())["l"], 100_000);
+    let reserved = block_on(async {
+        s.sql(
+            "SELECT CAST(coalesce(sum(reserved_bytes), 0) AS BIGINT) FROM system.memory \
+             WHERE kind = 'consumer' AND path LIKE '%observed-metrics%'",
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await
+    })
+    .unwrap();
+    let reserved = reserved[0].column(0).as_primitive::<Int64Type>().value(0);
+    drop(held);
+    assert_eq!(reserved, 0);
 }

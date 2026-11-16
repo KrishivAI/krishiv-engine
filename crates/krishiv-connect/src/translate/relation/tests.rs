@@ -941,5 +941,18 @@ fn collect_metrics_without_an_input_is_refused() {
         name: "obs".into(),
         metrics: vec![],
     })));
-    fails(translate(&r));
+    // The required-input check's own error, not the unsupported-variant fallback's.
+    let e = fails(translate(&r));
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::ConnectInvalidPlanAssertionFailure
+    );
+    assert_eq!(e.sql_state(), Some("56K00"));
+    assert_eq!(
+        e.message_parameters(),
+        [(
+            "message",
+            "CollectMetrics needs an input relation".to_owned()
+        )]
+    );
 }

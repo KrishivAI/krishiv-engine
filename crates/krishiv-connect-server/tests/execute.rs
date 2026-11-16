@@ -1375,19 +1375,33 @@ async fn connect_types_and_the_struct_metric_gap() {
         .expect("execute");
     let (got, _) = observed_of(&responses);
     let cells = &got["m"];
+    // Spark 4.2.0 (`types` golden): sd = Decimal('1.10'), mn = NaN, l = [1]. The type of
+    // sum(DECIMAL(5,2)) is DECIMAL(15,2) (Spark's `Sum.resultType`: bounded(p + 10, s)).
     assert_eq!(cells[0].0, "sd");
-    assert!(
-        matches!(cells[0].1, Some(LiteralType::Decimal(_))),
+    assert_eq!(
+        cells[0].1,
+        Some(LiteralType::Decimal(pb::expression::literal::Decimal {
+            value: "1.10".to_owned(),
+            precision: Some(15),
+            scale: Some(2),
+        })),
         "{cells:?}"
     );
+    assert_eq!(cells[1].0, "mn");
     assert!(
         matches!(&cells[1].1, Some(LiteralType::Double(d)) if d.is_nan()),
         "{cells:?}"
     );
-    assert!(
-        matches!(cells[2].1, Some(LiteralType::Array(_))),
-        "{cells:?}"
-    );
+    assert_eq!(cells[2].0, "l");
+    let Some(LiteralType::Array(array)) = &cells[2].1 else {
+        panic!("l is not an array: {cells:?}");
+    };
+    let elements: Vec<_> = array
+        .elements
+        .iter()
+        .map(|e| e.literal_type.clone())
+        .collect();
+    assert_eq!(elements, vec![Some(LiteralType::Integer(1))]);
     let with_struct = observe_as(
         types,
         "m",
@@ -1404,6 +1418,42 @@ async fn connect_types_and_the_struct_metric_gap() {
         .await
         .expect_err("a struct metric is not supported yet");
     assert_eq!(error_class(&status), "KRISHIV_UNSUPPORTED_FEATURE");
+}
+
+/// An observation whose metric has no literal yet fails the action, but only after the other
+/// observations' metrics were sent (as for a metric that failed to finalize).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn connect_unconvertible_metric_still_sends_the_others() {
+    let run = start().await;
+    let inner = observe_as(base(), "a", vec![count_n()], 1);
+    let plan = observe_as(
+        inner,
+        "b",
+        vec![aliased(
+            call(
+                "struct",
+                vec![call("max", vec![attr("v")]), call("min", vec![attr("v")])],
+            ),
+            "st",
+        )],
+        2,
+    );
+    let mut s = stream(&run.channel, "ExecutePlan", request(root(plan)))
+        .await
+        .expect("stream");
+    let mut responses = Vec::new();
+    let status = loop {
+        match s.message().await {
+            Ok(Some(r)) => responses.push(r),
+            Ok(None) => panic!("the action did not fail ({} responses)", responses.len()),
+            Err(status) => break status,
+        }
+    };
+    assert_eq!(error_class(&status), "KRISHIV_UNSUPPORTED_FEATURE");
+    let (got, carrying) = observed_of(&responses);
+    assert_eq!(carrying, 1);
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert_eq!(got["a"], vec![("n".to_owned(), long(3))]);
 }
 
 /// The caller of every request to a server without authentication.

@@ -81,6 +81,7 @@ fn expanding_a_cycle_is_an_internal_error() {
         columns: Vec::new(),
         pins: Vec::new(),
         text: None,
+        keeps: ViewKeeps::default(),
     };
     session.put("a", view("b"));
     session.put("b", view("a"));
@@ -1087,4 +1088,45 @@ fn task_specs_refuse_a_disk_cached_scan_and_accept_a_memory_one() {
         drop(fill);
         rt.block_on(cached.unpersist()).unwrap();
     }
+}
+
+/// A DataFrame view's keeps are part of its entry: an expansion reports those of the entry it
+/// inlined, and replacing the view publishes the new plan and its keeps together, leaving an
+/// entry already read with its own (no lookup by name after the fact).
+#[test]
+fn a_view_expansion_carries_the_keeps_of_the_entry_it_inlined() {
+    let catalog = SessionCatalog::default();
+    let first: Keep = Arc::new(1_u8);
+    let second: Keep = Arc::new(2_u8);
+    let put = |keep: &Keep| {
+        catalog.put_view(
+            "v",
+            Arc::new(LogicalPlan::table(["base"])),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            ViewKeeps(vec![Arc::clone(keep)]),
+        );
+    };
+    let read = Arc::new(LogicalPlan::table(["v"]));
+    let keeps_of = |e: &Expansion| -> Vec<u8> {
+        e.keeps
+            .iter()
+            .map(|k| *Arc::clone(k).downcast::<u8>().unwrap())
+            .collect()
+    };
+    put(&first);
+    let before = catalog.get("v", false).unwrap();
+    let expanded = expand_views(&catalog, &read, false, None).unwrap();
+    assert_eq!(keeps_of(&expanded), [1]);
+    put(&second);
+    let expanded = expand_views(&catalog, &read, false, None).unwrap();
+    assert_eq!(keeps_of(&expanded), [2]);
+    let TempTable::View { keeps, .. } = &*before else {
+        panic!("not a view: {before:?}");
+    };
+    assert!(Arc::ptr_eq(&keeps.0[0], &first));
+    assert!(catalog.drop_table("v"));
+    let expanded = expand_views(&catalog, &read, false, None).unwrap();
+    assert!(expanded.keeps.is_empty());
 }

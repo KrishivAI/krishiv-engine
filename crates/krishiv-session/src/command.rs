@@ -363,14 +363,13 @@ impl Session {
         };
         self.state.catalog.put(
             &key,
-            TempTable::View {
+            TempTable::sql_view(
                 plan,
                 columns,
-                pins: Vec::new(),
-                text: original
+                original
                     .and_then(|o| o.get(v.query.span.start..v.query.span.end))
                     .map(str::to_owned),
-            },
+            ),
         );
         self.state.cache.forget_table(&v.name.value);
         self.empty_frame().await

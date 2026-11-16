@@ -176,7 +176,7 @@ impl Observation {
     }
 
     /// As [`Self::get`], giving up after `timeout`: `Ok(None)` if no action
-    /// has finished by then.
+    /// has finished by then. A `timeout` too long to represent as a deadline waits as `get` does.
     ///
     /// # Errors
     /// As [`Self::get`].
@@ -186,7 +186,8 @@ impl Observation {
 
     fn wait(&self, timeout: Option<Duration>) -> Result<Option<RecordBatch>, KrishivError> {
         let mut state = self.shared.lock();
-        let deadline = timeout.map(|t| std::time::Instant::now() + t);
+        // A deadline past what an `Instant` holds (`Duration::MAX`) is no deadline: wait as `get`.
+        let deadline = timeout.and_then(|t| std::time::Instant::now().checked_add(t));
         loop {
             match &*state {
                 State::Unbound => {
@@ -226,4 +227,22 @@ fn unreachable_wait(name: &str) -> KrishivError {
         name: name.to_owned(),
     }
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `Duration::MAX` is past what an `Instant` holds: no panic, the state decides.
+    #[test]
+    fn an_unrepresentable_timeout_does_not_panic() {
+        let unbound = Observation::new();
+        let err = unbound.get_timeout(Duration::MAX).unwrap_err();
+        assert_eq!(err.error_class().name(), "KRISHIV_NO_OBSERVE_BEFORE_GET");
+        let done = Observation::new();
+        done.shared.bind().unwrap();
+        done.shared.complete(Ok(None));
+        let row = done.get_timeout(Duration::MAX).unwrap().unwrap();
+        assert_eq!((row.num_rows(), row.num_columns()), (0, 0));
+    }
 }

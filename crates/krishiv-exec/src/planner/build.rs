@@ -832,7 +832,11 @@ impl<'a> Planner<'a> {
             deterministic: krishiv_optimizer::plan_is_deterministic(&def),
             ordered,
         });
-        self.shared_ids.insert(source.to_vec(), id);
+        // Planned under a `LIMIT 0`, the definition lost its observed nodes: that copy is the
+        // zero-row reference's own, and a live reference plans (and shares) one that observes.
+        if self.unobserved == 0 {
+            self.shared_ids.insert(source.to_vec(), id);
+        }
         self.shared_schemas.insert(id, Arc::clone(&schema));
         Ok((id, schema))
     }

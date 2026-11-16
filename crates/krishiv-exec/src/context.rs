@@ -432,6 +432,17 @@ impl QueryContext {
             .collect()
     }
 
+    /// [`Self::observed_each`] for the delivery of the observations: the retained partial states
+    /// and their reservation are released after, so a query a caller still holds (an ended result
+    /// stream) keeps no observation memory. A later read sees only states sent since.
+    #[doc(hidden)]
+    pub fn take_observed_each(&self) -> BTreeMap<String, Result<arrow_array::RecordBatch>> {
+        let out = self.observed_each();
+        lock(&self.observed).clear();
+        *lock(&self.observed_memory) = None;
+        out
+    }
+
     /// The query id.
     pub fn id(&self) -> QueryId {
         self.id

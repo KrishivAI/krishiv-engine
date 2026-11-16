@@ -196,6 +196,15 @@ pub(crate) fn deliver(
     })
 }
 
+/// Completes `observers`' observations with `error`: the action failed before it had a stream
+/// (its submit failed), so no [`deliver`]ed stream completes them. Sinks keep nothing (a failed
+/// query sends no metrics); the first action still wins.
+pub(crate) fn fail_observations(observers: &Observers, error: &KrishivError) {
+    for o in &observers.observations {
+        o.complete(Err(error.clone()));
+    }
+}
+
 /// The observations and sinks a stream completes.
 type Targets = (Vec<Arc<Shared>>, Vec<Arc<SinkSlot>>);
 
@@ -215,7 +224,7 @@ impl Delivering {
         // On the carriers a caller reads (decimals, intervals), as the action's rows are.
         let observed: BTreeMap<String, Result<RecordBatch, KrishivError>> = self
             .query
-            .observed_each()
+            .take_observed_each()
             .into_iter()
             .map(|(name, row)| {
                 let row = row.and_then(|row| crate::carrier::client_batch(&row));
