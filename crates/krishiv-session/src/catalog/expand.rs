@@ -23,6 +23,8 @@ pub(super) struct Expander<'a> {
     pub(super) stored_reads: Vec<crate::view_schema::StoredRead>,
     /// The views inlined so far, for [`Expansion::views`] (the lineage side table).
     pub(super) views: Vec<ViewExpansion>,
+    /// The keeps of the temporary view entries inlined so far, for [`Expansion::keeps`].
+    pub(super) keeps: Vec<Keep>,
 }
 
 /// A view read the expansion inlined as `SubqueryAlias alias` at `origin`, for the view side table. Every
@@ -122,9 +124,11 @@ impl Expander<'_> {
                 && let TempTable::View {
                     plan: definition,
                     columns,
+                    keeps,
                     ..
                 } = &*entry
             {
+                self.keeps.extend(keeps.0.iter().cloned());
                 // Debug-quoted parts keep the part boundaries: `a.b` (one part) and `a`.`b` differ.
                 let key = format!(
                     "{:?}",

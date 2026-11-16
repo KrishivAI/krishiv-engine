@@ -19,6 +19,22 @@ pub static SUBQUERY_AS_WINDOW: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// Whether a stack of semi/anti joins over one input runs its most selective join first.
+pub static SEMI_ANTI_JOIN_ORDER: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.semiAntiJoinOrder",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Run the `LEFT SEMI` and `LEFT ANTI` joins stacked over one input (`EXISTS` and \
+          `NOT EXISTS` subqueries of one block, TPC-H q21) in the order of their estimated \
+          survivors, fewest first, instead of the order of the text, when their conditions \
+          cannot raise, and only when every input is estimated from statistics. Results are the \
+          same either way; `false` turns it off.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
 /// Whether a subtree the main block and a subquery both read is computed once.
 pub static SHARE_REPEATED_SUBTREES: ConfigEntry = ConfigEntry {
     key: "krishiv.optimizer.shareRepeatedSubtrees",
@@ -27,6 +43,23 @@ pub static SHARE_REPEATED_SUBTREES: ConfigEntry = ConfigEntry {
     doc: "Compute an uncorrelated subtree once when the main block reads it directly and a \
           subquery reads it again (TPC-H q11), and let both read the stored result. Needs \
           `krishiv.sql.optimizer.shareCteInstances`. Results are the same either way; `false` turns it off.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// A dimension's payload joins above the semi and anti joins that never read it
+/// (`krishiv.optimizer.latePayloadJoin`).
+pub static LATE_PAYLOAD_JOIN: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.latePayloadJoin",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Join a dimension's payload columns (such as a name read only by the aggregate on top) \
+          after the semi, anti and outer joins that never read them, and leave a semi join on the \
+          dimension's keys where the join was, so those joins build and probe narrower rows. Applies \
+          when statistics show the payload is wide and the dimension is the smaller side. Results \
+          are the same either way.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.1.0",
