@@ -37,7 +37,8 @@ idle after `krishiv.exec.join.idleSpillAfter`, so the arbitrator asks them befor
 30. Each probe driver then holds the build's level-0 tables, `build.rs` `Level0`, whose memory includes the per-partition
 reservations moved at the seal; the last probe driver done after the flush barrier releases them, so a downstream
 sink's final phase gets that memory; a `Prebuilt` broadcast build is never released) · `grace.rs` spill partitions,
-flush-phase grace join · `broadcast.rs`
+flush-phase grace join · `block.rs` a
+partition's chunks kept few: the probe side's tiered merge, the build side's cut into the arena's 2^14-row blocks · `broadcast.rs`
 (P2-T177 unit 3) `BroadcastTables`, a worker resource (`WorkerContext::with_broadcasts`): a broadcast join over a cut
 broadcast exchange builds its table once per job and worker (its own query over the resource's pool, no spill, its
 reservations never abort a query) and every task probes it through a `PrebuiltSink` that republishes its runtime
@@ -166,3 +167,6 @@ benches: `cargo bench -p krishiv-exec --bench pipeline` · `--bench operators` �
 ## Split modules (T193)
 Files split to stay under 2,000 lines; the parent file keeps the types and the entry points.
 - `aggregate/accumulator/` `fold.rs` (the batch fold match), `dense.rs` (dense folds of integer `sum`, integer-like `min`/`max`, `count(col)` and double `sum`/`avg` for unmasked unit-weight rows; `dense_tests.rs` against the per-row loop), `output.rs` (state and result columns), `results.rs` (percentile and struct-extremum results), `helpers.rs` (decimal proofs, column readers, decimal text), `tests.rs`, `proof_tests.rs`; `aggregate/rowtable/` `probe.rs` (lookups), `merge.rs` (merging tables, the salted index), `tests.rs`; `aggregate/hll/tables.rs` (bias tables); `aggregate/sink/held.rs` (the breaker's reservation helpers); `planner/build/util.rs` (plan-building helpers); `planner/eval/hof/sort.rs` (the sort-with-comparator function); test modules of `aggregate/tests/`, `window/tests/` in `partN.rs`.
+
+## Vector carrier (P3-T075)
+`carrier::fixed_to_list` turns a vector carrier into a plain list (shared values, offsets 0,N,2N; null rows get empty slots); `recarried_array` has the FSL to List branch. Expressions never see the carrier: `column()` and `Column::eval` (`planner/eval/mod.rs`) convert on input, while a bare projected column keeps it. Grouping and join keys on lists stay unsupported, vector or not.
