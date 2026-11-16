@@ -26,7 +26,7 @@ for page in sorted(root.glob("*.md")):
         status = "partial"
     else:
         status = "supported"
-    title = re.match(r"# `(.+?)`", text)
+    title = re.search(r"^# `(.+?)`", text, re.M)
     rows[(title.group(1) if title else page.stem).lower()] = status
 data = json.dumps(dict(sorted(rows.items())), indent=1) + "\n"
 if "--check" in sys.argv:

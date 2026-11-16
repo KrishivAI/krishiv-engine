@@ -70,6 +70,9 @@ fn full_registry() -> Arc<MetricsRegistry> {
             .unwrap();
     }
     registry
+        .add_gauge("krishiv.history.write_failures", Vec::new(), || Some(2))
+        .unwrap();
+    registry
         .add_gauge("krishiv.memory.reserved", Vec::new(), || Some(8))
         .unwrap();
     registry
@@ -410,6 +413,23 @@ async fn metrics_serves_every_sourced_catalogue_metric() {
     }));
     // Counters use the OpenMetrics `_total` name.
     assert!(parsed.contains_key("krishiv_query_count_total"));
+    // The history write-failure gauge reports the 2 the fixture's source returns; the exporter adds the worker_id label
+    // to every gauge and nothing else.
+    let failures = &parsed["krishiv_history_write_failures"];
+    assert_eq!(failures.samples.len(), 1, "{:?}", failures.samples);
+    assert_eq!(failures.samples[0].name, "krishiv_history_write_failures");
+    let label_names: Vec<&str> = failures.samples[0]
+        .labels
+        .iter()
+        .map(|(k, _)| k.as_str())
+        .collect();
+    assert_eq!(
+        label_names,
+        ["worker_id"],
+        "{:?}",
+        failures.samples[0].labels
+    );
+    assert_eq!(failures.samples[0].value, 2.0);
     // The base routes still serve beside /metrics.
     let version = get(addr, "/api/v1/version").await;
     assert!(version.starts_with("HTTP/1.1 200"), "{version}");

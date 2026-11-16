@@ -74,6 +74,10 @@ impl Session {
     /// The `baggage` entries [`Session::set_inbound_trace`] kept.
     #[must_use]
     pub fn baggage(&self) -> Vec<(String, String)> {
+        if self.inbound_trace.is_some() {
+            // A statement with its own request trace has its own baggage.
+            return self.inbound_baggage.to_vec();
+        }
         self.state.queries.baggage()
     }
 

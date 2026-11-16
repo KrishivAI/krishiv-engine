@@ -124,6 +124,12 @@ pub struct ScanPushdowns {
     /// [`ScanPushdown::take`] reads the row back by. Only for a scan that
     /// [`supports_take`](ScanPushdown::supports_take).
     pub row_id: bool,
+    /// Read each input partition whole, by one driver, in order, and tag
+    /// its batches with the partition's index ([`Batch::split`]): a
+    /// `TABLESAMPLE` above draws partition `i`'s rows from its own stream
+    /// in row order, however many drivers run. File scans honour it; an
+    /// in-memory scan's morsels are already read so.
+    pub partition_order: bool,
 }
 
 /// The rows of one file [`ScanPushdown::take`] reads.
@@ -385,7 +391,9 @@ impl MemoryScan {
             if piece.num_rows() == 0 {
                 break;
             }
-            let mask = filter.evaluate_in(piece.data(), partition)?;
+            // Spark's index of the morsel's partition: a `UNION ALL` branch
+            // numbers its own from 0, as a `Filter` above the scan does.
+            let mask = filter.evaluate_in(piece.data(), partition.wrapping_sub(local.base))?;
             piece = piece.filter(&mask)?;
         }
         // After the pushed filters, as Spark evaluates a runtime filter

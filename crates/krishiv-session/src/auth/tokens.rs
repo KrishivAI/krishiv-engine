@@ -7,7 +7,7 @@
 //! timing on the digest and gains nothing at tens of tokens.
 
 use krishiv_common::error::KrishivError;
-use krishiv_common::principal::Principal;
+use krishiv_common::principal::{Principal, PrincipalKind};
 use krishiv_common::secret::SecretString;
 use sha2::{Digest, Sha256};
 use std::time::SystemTime;
@@ -62,6 +62,18 @@ impl StaticTokens {
                     &format!("krishiv.auth.principals.{}.expires", spec.principal),
                     "",
                     &format!("token `{}` has expired", spec.name),
+                ));
+            }
+            // The same rule `AuthConfig::from_settings` applies, for a hand-built config.
+            if spec.kind == PrincipalKind::Service && spec.expires.is_none() {
+                return Err(invalid(
+                    &format!("krishiv.auth.principals.{}.expires", spec.principal),
+                    "",
+                    &format!(
+                        "token `{}` names service principal `{}`: a static service token needs \
+                         an expiry date",
+                        spec.name, spec.principal
+                    ),
                 ));
             }
             let secret: SecretString = spec.secret.resolve(&key)?;

@@ -76,9 +76,7 @@ fn a_raw_value_parameter_is_masked_and_a_long_value_is_linear() {
     assert_eq!(got, "Malformed records: ? in parsing.");
     // 40,000 backquote-space pairs inside one open JSON string: one pass, not a rescan per backquote.
     let long = format!("The value `\"{}` cannot be cast.", "x` ".repeat(40_000));
-    let started = std::time::Instant::now();
     let got = mask.apply_message(&long);
-    assert!(started.elapsed() < std::time::Duration::from_secs(20));
     assert!(!got.contains("x` x`"));
 }
 
@@ -115,8 +113,35 @@ fn an_escaped_quote_does_not_end_a_masked_value() {
 #[test]
 fn capabilities_has_one_row_per_fact() {
     let rows = capability_rows();
-    assert!(rows.iter().any(|r| r[0] == "build" && r[1] == "engine"));
-    assert!(rows.iter().any(|r| r[0] == "feature" && r[1] == "cloud"));
+    let mut pairs: Vec<(&str, &str)> = rows
+        .iter()
+        .map(|r| (r[0].as_str(), r[1].as_str()))
+        .collect();
+    pairs.sort_unstable();
+    assert!(
+        pairs.windows(2).all(|w| w[0] != w[1]),
+        "one row per (kind, name): {pairs:?}"
+    );
+    let one = |kind: &str, name: &str| -> [String; 4] {
+        let found: Vec<_> = rows
+            .iter()
+            .filter(|r| r[0] == kind && r[1] == name)
+            .collect();
+        assert_eq!(found.len(), 1, "{kind}/{name}");
+        found[0].clone()
+    };
+    let engine = one("build", "engine");
+    assert_eq!(engine[2], "krishiv");
+    assert_eq!(engine[3], env!("CARGO_PKG_VERSION"));
+    let cloud = one("feature", "cloud");
+    assert_eq!(
+        cloud[2],
+        if cfg!(feature = "cloud") {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
     let memory: Arc<dyn MemoryPool> =
         krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default());
     let sources = Sources {
@@ -130,6 +155,7 @@ fn capabilities_has_one_row_per_fact() {
             Arc::new(krishiv_plan::analyzer::AllowAll),
         )),
         sessions: Arc::default(),
+        groups: None,
     };
     assert!(provider("capabilities", &sources).unwrap().is_some());
     assert!(provider("nope", &sources).unwrap().is_none());

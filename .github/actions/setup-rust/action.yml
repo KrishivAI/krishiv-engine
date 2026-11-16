@@ -13,7 +13,7 @@ runs:
   using: composite
   steps:
     - id: first
-      uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
       continue-on-error: true
       with:
         toolchain: ${{ inputs.toolchain }}
@@ -24,7 +24,7 @@ runs:
       run: sleep 20
     - name: Retry the toolchain install
       if: steps.first.outcome == 'failure'
-      uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
       with:
         toolchain: ${{ inputs.toolchain }}
         components: ${{ inputs.components }}

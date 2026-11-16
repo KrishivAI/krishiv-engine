@@ -57,8 +57,8 @@ use super::{
     SortMergeJoinPlan, SubqueryPlan, ValueId, Version, WritePlan, files_of, partitions_of,
 };
 use crate::aggregate::{
-    AggInput, AggregateExpr, AggregateNode, AggregateOutput, AggregateSpec, HashAggregate,
-    distinct_plan,
+    AggInput, AggregateExpr, AggregateNode, AggregateOutput, AggregateSpec, CollectMetrics,
+    HashAggregate, distinct_plan,
 };
 use crate::error::{Result, internal};
 use crate::exchange::{Exchange, ExchangeRead, ExchangeSink, ExchangeWrite, MapOutputId};
@@ -71,8 +71,8 @@ use crate::loops::UnionLoopSource;
 use crate::operator::{Operator, Sink, Source};
 use crate::operators::{
     Expand, FileWrite, FileWriteSink, Filter, FilterPushdown, Generate, LateFetch, NullOf,
-    Predicate, Project, ProjectItem, PushedFilter, ReplicateRows, RuntimeFilters, ScanPushdown,
-    ScanPushdowns, Sort, SortKey, TopN,
+    Predicate, Project, ProjectItem, PushedFilter, ReplicateRows, RuntimeFilters, Sample,
+    ScanPushdown, ScanPushdowns, Sort, SortKey, TopN,
 };
 use crate::pipeline::{ExecNode, PipelineBuilder};
 use crate::planner::TableProviderResolver;
@@ -89,10 +89,14 @@ mod detached;
 mod distributed;
 mod order;
 mod python_eval;
+mod python_relation;
+mod table_write;
 pub(crate) use detached::{Detached, LoopRun};
 mod join;
+mod observe;
 use distributed::planned_schema_holds;
 pub(crate) use join::hash_join;
+pub(crate) use observe::collect_metrics_op;
 use order::{range_ordered_evals, reads_range_in_order};
 
 /// Creates the spill scope of one instantiation: the query's own spill
@@ -348,6 +352,30 @@ impl WorkerContext {
         }
     }
 
+    /// As [`Self::spill_scope`], for a query that does not need to spill to run: when the
+    /// factory cannot make the spill directory (a read-only root, no writable home, RS-29) the
+    /// query runs without spilling and the first such failure is logged with the error; an
+    /// operator that then needs to spill fails with its memory error. Every later failure is a
+    /// debug record, so a server does not log once per query.
+    pub fn spill_scope_if_available(&self) -> Option<SpillScope> {
+        static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        match self.spill_scope() {
+            Ok(scope) => scope,
+            Err(e) => {
+                if WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    tracing::debug!(error = %e, "queries run without spilling");
+                } else {
+                    tracing::warn!(
+                        error = %e,
+                        "the spill directory cannot be used, so queries run without spilling; \
+                         set `krishiv.spill.dir` to a writable local directory"
+                    );
+                }
+                None
+            }
+        }
+    }
+
     /// The relation store, if batch splits resolve through one.
     pub fn relations(&self) -> Option<&Arc<krishiv_memory::RelationStore>> {
         self.relations.as_ref()
@@ -432,7 +460,7 @@ fn instantiate_with_schemas(
     task: &TaskSpec,
 ) -> Result<(Arc<dyn ExecNode>, BTreeMap<ExchangeId, SchemaRef>)> {
     let run = || {
-        let spill = worker.spill_scope()?;
+        let spill = worker.spill_scope_if_available();
         let mut env = EvalEnv::from_plan(plan.env());
         // The UDFs travel with the worker, never with the plan.
         env.udfs = worker.udfs.clone();
@@ -454,6 +482,7 @@ fn instantiate_with_schemas(
             range_ordered: range_ordered_evals(plan.roots(), Some(plan.root())),
             salts: HashMap::new(),
             stages: HashMap::new(),
+            partition_ordered: HashSet::new(),
         };
         for root in plan.roots() {
             cx.declare_filters(root)?;
@@ -534,6 +563,9 @@ struct Instantiation<'a> {
     salts: HashMap<super::SharedId, u64>,
     /// Each scan's runtime filters, for the probe it may hand its row stage.
     stages: HashMap<ScanId, RuntimeFilters>,
+    /// The scans a `Sample` reads through split-keeping nodes: each reads
+    /// its partitions whole and tags them ([`ScanPushdowns::partition_order`]).
+    partition_ordered: HashSet<ScanId>,
 }
 
 /// A shared plan's body and the sink that keeps its rows; every reader's pipeline depends on this one.
@@ -923,6 +955,10 @@ impl Instantiation<'_> {
     fn untagged(&mut self, n: &PhysNode) -> Result<Built> {
         match n {
             PhysNode::PythonEval { .. } => self.python_eval(n),
+            PhysNode::PythonMap { .. }
+            | PhysNode::PythonGroupMap { .. }
+            | PhysNode::PythonCoGroupMap { .. }
+            | PhysNode::PythonAggregate { .. } => self.python_relation(n),
             PhysNode::Scan(s) => self.scan(s),
             PhysNode::Range(r) => {
                 let source = Arc::new(crate::operators::Range::new(
@@ -1035,6 +1071,15 @@ impl Instantiation<'_> {
             } => self.with_subqueries(input, subqueries, |input, v| {
                 Ok(project_op(input, layout, items, nullable.as_deref(), v)? as Arc<dyn Operator>)
             }),
+            PhysNode::CollectMetrics {
+                input,
+                name,
+                measure,
+                instance,
+                limit,
+            } => self.with_subqueries(input, &[], |input, v| {
+                collect_metrics_op(name, *instance, *limit, measure, input, v)
+            }),
             PhysNode::ReplicateRows {
                 input,
                 layout,
@@ -1085,6 +1130,17 @@ impl Instantiation<'_> {
                 } else {
                     built
                 })
+            }
+            PhysNode::Sample {
+                input,
+                lower,
+                upper,
+                seed,
+            } => {
+                sampled_scans(input, &mut self.partition_ordered);
+                let input = self.node(input)?;
+                let op = Sample::new(Arc::clone(&input.schema), *lower, *upper, *seed);
+                Ok(operator(input, op))
             }
             PhysNode::Sort { input, keys } => {
                 let buckets = hash_buckets(input, keys);
@@ -1247,6 +1303,11 @@ impl Instantiation<'_> {
                 })
             }
             PhysNode::WriteFiles { input, write } => self.write_files(input, write),
+            PhysNode::TableWrite {
+                input,
+                table,
+                request,
+            } => self.table_write(input, table, request),
             // See the module docs: the operators around an exchange
             // implement it on one worker.
             PhysNode::Exchange(e) if e.partitioning == Partitioning::Broadcast => self.broadcast(e),
@@ -1302,6 +1363,7 @@ impl Instantiation<'_> {
             filters,
             dynamic,
             row_id: s.row_id,
+            partition_order: self.partition_ordered.contains(&s.id),
             metadata: crate::operators::scan_metadata(&s.scan),
             ..ScanPushdowns::default()
         })?;
@@ -1891,6 +1953,26 @@ pub(crate) struct Unbuilt;
 impl ExecNode for Unbuilt {
     fn build_pipelines(self: Arc<Self>, _b: &mut PipelineBuilder) -> Result<()> {
         Err(internal("a validation-only plan node was run".to_owned()))
+    }
+}
+
+/// The scans `input` (a sample's input) reads through nodes that keep each
+/// batch's split: a sample's draws follow those scans' partitions.
+fn sampled_scans(input: &PhysNode, out: &mut HashSet<ScanId>) {
+    match input {
+        PhysNode::Scan(s) => {
+            out.insert(s.id);
+        }
+        // The operators that tag their output with the input batch's split
+        // (`with_split(input.split())`); an `Expand` or anything past an
+        // exchange or a breaker numbers its own partitions.
+        PhysNode::Filter { input, .. }
+        | PhysNode::Project { input, .. }
+        | PhysNode::Generate { input, .. }
+        | PhysNode::ReplicateRows { input, .. }
+        | PhysNode::Sample { input, .. } => sampled_scans(input, out),
+        PhysNode::Union { inputs } => inputs.iter().for_each(|i| sampled_scans(i, out)),
+        _ => {}
     }
 }
 

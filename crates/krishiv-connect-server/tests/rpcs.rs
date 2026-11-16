@@ -814,6 +814,61 @@ async fn config_set_silent_and_static_keys() {
     );
 }
 
+/// Authentication off: the local user of the loopback listener sets and unsets admin-only keys
+/// (by name and by Spark alias) and server-scoped store keys, as SQL `SET` lets it (the base
+/// session's policy allows everything).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_the_local_user_sets_admin_keys() {
+    let run = start().await;
+    config(
+        &run,
+        OpType::Set(creq::Set {
+            pairs: vec![
+                kv("krishiv.resultCache.ttl", Some("1m")),
+                kv("spark.sql.autoBroadcastJoinThreshold", Some("1")),
+                kv("fs.s3a.endpoint", Some("http://minio.local:9000")),
+            ],
+            silent: None,
+        }),
+    )
+    .await
+    .expect("the local user may set admin keys");
+    let got = config(
+        &run,
+        OpType::GetOption(creq::GetOption {
+            keys: keys(&[
+                "krishiv.resultCache.ttl",
+                "spark.sql.autoBroadcastJoinThreshold",
+                "fs.s3a.endpoint",
+            ]),
+        }),
+    )
+    .await
+    .expect("get");
+    let values: Vec<_> = got.pairs.iter().map(|p| p.value.as_deref()).collect();
+    assert_eq!(
+        values,
+        [Some("1min"), Some("1"), Some("http://minio.local:9000")]
+    );
+    config(
+        &run,
+        OpType::Unset(creq::Unset {
+            keys: keys(&["krishiv.resultCache.ttl"]),
+        }),
+    )
+    .await
+    .expect("the local user may unset an admin key");
+    assert_eq!(
+        run.entry()
+            .session()
+            .conf()
+            .get("krishiv.resultCache.ttl")
+            .as_deref(),
+        Some("1d"),
+        "unset: back to the default"
+    );
+}
+
 /// T-C8: a planted secret never comes back from `Config`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_redaction() {
@@ -1113,4 +1168,182 @@ async fn interrupt_refusals() {
         .await
         .unwrap_err();
     assert_eq!(error_class(&status), "UNSUPPORTED_FEATURE.INTERRUPT_TYPE");
+}
+
+// ------------------------------------------------- trace context and client type
+
+/// `AnalyzePlan` with extra request metadata, as a client interceptor adds it.
+async fn analyze_with_metadata(
+    run: &Running,
+    metadata: &[(&'static str, &str)],
+    client_type: Option<&str>,
+) -> Result<pb::AnalyzePlanResponse, tonic::Status> {
+    let mut request = tonic::Request::new(pb::AnalyzePlanRequest {
+        session_id: SESSION.to_owned(),
+        client_type: client_type.map(str::to_owned),
+        analyze: Some(Analyze::Schema(Box::new(areq::Schema {
+            plan: Some(sql("SELECT 1 AS a")),
+        }))),
+        ..Default::default()
+    });
+    for (k, v) in metadata {
+        request
+            .metadata_mut()
+            .insert(*k, v.parse().expect("metadata value"));
+    }
+    let mut grpc = tonic::client::Grpc::new(run.channel.clone());
+    grpc.ready().await.expect("ready");
+    grpc.unary(
+        request,
+        path("AnalyzePlan"),
+        tonic_prost::ProstCodec::<pb::AnalyzePlanRequest, pb::AnalyzePlanResponse>::default(),
+    )
+    .await
+    .map(tonic::Response::into_inner)
+}
+
+const TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+
+/// `ExecutePlan` of `SELECT 1` under `id` with extra request metadata, read to its end.
+async fn execute_with_metadata(run: &Running, id: &str, metadata: &[(&'static str, &str)]) {
+    let mut request = tonic::Request::new(pb::ExecutePlanRequest {
+        session_id: SESSION.to_owned(),
+        operation_id: Some(id.to_owned()),
+        plan: Some(sql("SELECT 1 AS a")),
+        ..Default::default()
+    });
+    for (k, v) in metadata {
+        request
+            .metadata_mut()
+            .insert(*k, v.parse().expect("metadata value"));
+    }
+    let mut grpc = tonic::client::Grpc::new(run.channel.clone());
+    grpc.ready().await.expect("ready");
+    let mut live = grpc
+        .server_streaming(
+            request,
+            path("ExecutePlan"),
+            tonic_prost::ProstCodec::<pb::ExecutePlanRequest, pb::ExecutePlanResponse>::default(),
+        )
+        .await
+        .expect("execute")
+        .into_inner();
+    while live.message().await.expect("message").is_some() {}
+}
+
+async fn trace_ids(run: &Running) -> BTreeMap<String, Option<String>> {
+    use arrow_array::Array;
+    use arrow_array::cast::AsArray;
+    let batches = run
+        .entry()
+        .session()
+        .sql("select query_id, trace_id from system.queries where state = 'finished'")
+        .await
+        .expect("sql")
+        .collect()
+        .await
+        .expect("collect");
+    let mut out = BTreeMap::new();
+    for b in &batches {
+        let (ids, traces) = (
+            b.column(0).as_string::<i32>(),
+            b.column(1).as_string::<i32>(),
+        );
+        for i in 0..b.num_rows() {
+            out.insert(
+                ids.value(i).to_owned(),
+                (!traces.is_null(i)).then(|| traces.value(i).to_owned()),
+            );
+        }
+    }
+    out
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn each_request_keeps_its_own_traceparent() {
+    let run = start().await;
+    let other = "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-00f067aa0ba902b7-01";
+    execute_with_metadata(&run, OP, &[("traceparent", TRACEPARENT)]).await;
+    execute_with_metadata(&run, OP2, &[("traceparent", other)]).await;
+    execute_with_metadata(&run, "00112233-4455-6677-8899-aabbccddee01", &[]).await;
+    execute_with_metadata(
+        &run,
+        "00112233-4455-6677-8899-aabbccddee02",
+        &[("traceparent", "junk")],
+    )
+    .await;
+    let rows = trace_ids(&run).await;
+    assert_eq!(
+        rows[OP].as_deref(),
+        Some("4bf92f3577b34da6a3ce929d0e0e4736"),
+        "{rows:?}"
+    );
+    assert_eq!(
+        rows[OP2].as_deref(),
+        Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    );
+    assert_eq!(rows["00112233-4455-6677-8899-aabbccddee01"], None);
+    assert_eq!(
+        rows["00112233-4455-6677-8899-aabbccddee02"], None,
+        "a malformed header means no trace, and fails nothing"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_client_type_and_transport_show_in_system_sessions() {
+    use arrow_array::cast::AsArray;
+    let run = start().await;
+    analyze_with_metadata(&run, &[], Some("_SPARK_CONNECT_PYTHON spark/4.3.0"))
+        .await
+        .expect("analyze");
+    let batches = run
+        .entry()
+        .session()
+        .sql("select transport, client_type from system.sessions where client_type is not null")
+        .await
+        .expect("sql")
+        .collect()
+        .await
+        .expect("collect");
+    let b = &batches[0];
+    assert_eq!(b.column(0).as_string::<i32>().value(0), "connect");
+    assert_eq!(
+        b.column(1).as_string::<i32>().value(0),
+        "_SPARK_CONNECT_PYTHON spark/4.3.0"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_requests_tags_reach_the_engine_queries() {
+    use arrow_array::cast::AsArray;
+    let run = start().await;
+    let mut live = stream(
+        &run.channel,
+        pb::ExecutePlanRequest {
+            session_id: SESSION.to_owned(),
+            operation_id: Some(OP.to_owned()),
+            plan: Some(sql("SELECT 1 AS a")),
+            tags: vec!["etl".to_owned(), "job=42".to_owned()],
+            ..Default::default()
+        },
+    )
+    .await;
+    while live.message().await.expect("message").is_some() {}
+    let batches = run
+        .entry()
+        .session()
+        .sql("select count(*) from system.queries where tags['etl'] is not null and tags['job=42'] is not null")
+        .await
+        .expect("sql")
+        .collect()
+        .await
+        .expect("collect");
+    assert_eq!(
+        batches[0]
+            .column(0)
+            .as_primitive::<arrow_array::types::Int64Type>()
+            .value(0),
+        1,
+        "both request tags are on the operation's query row"
+    );
 }

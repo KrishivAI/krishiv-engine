@@ -586,3 +586,34 @@ fn max_lifetime_setting() {
         );
     }
 }
+
+#[test]
+fn act_claim_is_read_for_assertions() {
+    let with_act = |act: Value| {
+        let mut c = good();
+        c["act"] = act;
+        check(&c)
+    };
+    assert_eq!(check(&good()).expect("valid").act, None);
+    let a = with_act(json!({"sub": "portal"})).expect("valid").act;
+    assert_eq!(
+        a,
+        Some(jose::Actor {
+            subject: Some("portal".to_owned()),
+            chained: false
+        })
+    );
+    // A chain is flagged; a subject that is not a name or not a string is dropped.
+    let chained = with_act(json!({"sub": "portal", "act": {"sub": "x"}}))
+        .expect("valid")
+        .act;
+    assert!(chained.is_some_and(|a| a.chained));
+    for sub in [json!(""), json!(7), json!("bad\nname")] {
+        let a = with_act(json!({ "sub": sub })).expect("valid").act;
+        assert_eq!(a.and_then(|a| a.subject), None);
+    }
+    assert_eq!(
+        with_act(json!("portal")).unwrap_err(),
+        JoseError::Invalid("act")
+    );
+}

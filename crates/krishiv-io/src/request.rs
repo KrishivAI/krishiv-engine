@@ -562,12 +562,32 @@ pub enum FieldMapping {
     /// field metadata), as Iceberg: renames and reorders are free. A table
     /// field without an id is matched by name (Spark 4.2).
     FieldId,
+    /// By field id as [`Self::FieldId`], for a table format whose files may
+    /// have been written without ids (Iceberg tables imported from Hive): a
+    /// file with no field id anywhere is read as the [`WithoutFieldIds`]
+    /// says. A file with any id is read by id only.
+    FieldIdOr(WithoutFieldIds),
     /// Delta column mapping: by `delta.columnMapping.physicalName` (name
     /// mode) or `delta.columnMapping.id` (id mode) of the table field.
     DeltaColumnMapping {
         /// Id mode (else name mode).
         by_id: bool,
     },
+}
+
+/// How [`FieldMapping::FieldIdOr`] reads a file that has no field id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WithoutFieldIds {
+    /// Its top-level columns have the ids 1..n by position, nested fields
+    /// none (Iceberg's `ParquetSchemaUtil.addFallbackIds`, FC S4).
+    Position,
+    /// Its fields take the ids the name mapping gives their names (Iceberg's
+    /// `schema.name-mapping.default`, `ApplyNameMapping`); an unmapped field
+    /// has none and is not read.
+    Names(Arc<crate::NameMapping>),
+    /// The file is refused (`KRISHIV_UNSUPPORTED_FEATURE`): the table names
+    /// a rule this reader does not apply.
+    Refuse,
 }
 
 impl Default for FieldMapping {

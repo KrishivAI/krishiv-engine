@@ -12,6 +12,9 @@
 //! krishiv.auth.principals.<name>.expires      = 2027-03-01           (UTC date: a static token stops working, and the privileges end)
 //! ```
 //!
+//! A principal name may contain dots (`etl.prod`, a DNS name from a certificate): the field is
+//! always the last segment. Only an empty name is refused.
+//!
 //! `impersonates` lists the end users the principal may act for: a name, a glob with `*`, or
 //! `group:<g>` for any member of a group. An empty list with `impersonate` granted means no one
 //! (explicit, §4.2 rule 2); `impersonates` without `impersonate` is refused, so a list that
@@ -140,11 +143,18 @@ impl PrincipalTable {
         let Some((name, field)) = rest.rsplit_once('.') else {
             return Err(invalid(key, key, "not a known authentication setting"));
         };
-        if name.is_empty() || name.contains('.') {
+        // The field is always the last segment, so a name may itself contain dots
+        // (`etl.prod`, a DNS name from a certificate).
+        if name.is_empty() {
+            return Err(invalid(key, name, "a principal name must not be empty"));
+        }
+        // An empty segment or surrounding space is a typo, never a real principal: refuse it
+        // rather than let `expires` or `impersonates` silently miss the intended name.
+        if name.split('.').any(str::is_empty) || name.trim() != name {
             return Err(invalid(
                 key,
                 name,
-                "a principal name is one non-empty segment",
+                "a principal name has no empty dot segment and no surrounding spaces",
             ));
         }
         let entry = self.by_name.entry(name.to_owned()).or_default();
@@ -313,6 +323,10 @@ mod tests {
         let t = parse_date("k", "2024-03-01").expect("valid");
         assert_eq!(t, UNIX_EPOCH + Duration::from_secs(1_709_251_200));
         assert!(parse_date("k", "2023-02-29").is_err());
+        // A 30-day month: the 30th exists, the 31st does not.
+        assert!(parse_date("k", "2024-04-30").is_ok());
+        assert!(parse_date("k", "2024-04-31").is_err());
+        assert!(parse_date("k", "2024-11-31").is_err());
         assert!(parse_date("k", "2024-02-29").is_ok());
         for bad in [
             "2024-1-01",
@@ -327,6 +341,23 @@ mod tests {
         ] {
             assert!(parse_date("k", bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn the_table_lists_its_entries_by_name() {
+        assert!(PrincipalTable::default().is_empty());
+        let t = table(&[
+            ("krishiv.auth.principals.portal.privileges", "impersonate"),
+            ("krishiv.auth.principals.batch.privileges", ""),
+        ])
+        .expect("valid");
+        assert!(!t.is_empty());
+        let names: Vec<&str> = t.iter().map(|(n, _)| n).collect();
+        assert_eq!(names, ["batch", "portal"]);
+        assert!(
+            t.iter()
+                .any(|(n, r)| n == "portal" && r.has(PrincipalPrivilege::Impersonate))
+        );
     }
 
     #[test]
@@ -372,7 +403,6 @@ mod tests {
             ("krishiv.auth.principals.p.role", "admin"),
             ("krishiv.auth.principals.p", "x"),
             ("krishiv.auth.principals..privileges", "impersonate"),
-            ("krishiv.auth.principals.a.b.privileges", "impersonate"),
             ("krishiv.auth.principals.p.impersonates", "group:"),
             ("krishiv.auth.principals.p.expires", "tomorrow"),
         ] {

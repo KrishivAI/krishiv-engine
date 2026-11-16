@@ -89,6 +89,12 @@ arrow-ipc = { version = "60", default-features = false }
 arrow-json = { version = "60", default-features = false }
 arrow-flight = { version = "60", default-features = false }
 parquet = { version = "60", default-features = false }
+# Arrow 58, the major iceberg-rust 0.11 is on (`^58.4`), under renamed names. Used only
+# by krishiv-arrow-bridge, which moves C Data Interface values 58 -> 60 (ADR 0029 update
+# 2026-11-13, design/P3-lakehouse.md §5.2). Deleted with that crate when iceberg-rust
+# moves to the workspace's Arrow major.
+arrow-array-58 = { package = "arrow-array", version = "58.4", default-features = false }
+arrow-schema-58 = { package = "arrow-schema", version = "58.4", default-features = false }
 # object_store is pinned to the version delta_kernel 0.30 builds against (ADR 0028
 # update 2026-10-17); never enable parquet's `object_store` feature (deny.toml).
 # Cloud TLS (the `aws`, `gcp` and `azure` features) is opt-in through
@@ -105,9 +111,10 @@ url = { version = "2.5", default-features = false, features = ["std"] }
 http = { version = "1", default-features = false }
 # Avro container files (P2-T081b): datum encode/decode, codecs and schema
 # parsing. Only the pure-Rust codecs are enabled (deflate is built in;
-# snappy needs no OpenSSL). The `zstandard` feature stays off: it pulls
-# zstd 0.13, which carries RUSTSEC-2026-0391, and no apache-avro release
-# allows zstd 0.14; zstandard and xz files are refused.
+# snappy needs no OpenSSL). The `zstandard` feature stays off (zstandard and
+# xz files are refused); it pulls zstd 0.13, which was under RUSTSEC-2026-0391
+# until 0.13.4 (the lock has 0.13.5 through iceberg's apache-avro 0.21), so
+# turning it on is now a plain feature decision.
 apache-avro = { version = "=0.22.0", default-features = false, features = ["bzip", "snappy"] }
 # Implementing `object_store::ObjectStore` (an `async_trait` trait) for store
 # wrappers; already in the tree through object_store itself.
@@ -174,7 +181,11 @@ foyer = { version = "0.22.6", default-features = false }
 # minors (P3-T021 design note section 7); a bump reviews the items listed in the
 # connector's crate docs.
 delta_kernel = { version = "=0.30.1", default-features = false }
-iceberg = { version = "0.10.1", default-features = false }
+iceberg = { version = "0.11.0", default-features = false }
+# `iceberg`'s `Storage`/`StorageFactory` are `#[typetag::serde]` traits: Krishiv's
+# implementation in krishiv-connectors-iceberg registers through the same crate
+# (already in the tree through iceberg).
+typetag = { version = "0.2.23", default-features = false }
 rdkafka = { version = "0.39", default-features = false }
 wasmtime = { version = "49", default-features = false }
 axum = { version = "0.8.9", default-features = false }

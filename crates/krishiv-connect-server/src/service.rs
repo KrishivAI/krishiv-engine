@@ -47,6 +47,32 @@ mod generated {
 
 pub use generated::{SparkConnectService, SparkConnectServiceServer};
 
+/// The trace headers of a request, read once before the request body is taken (a non-ASCII
+/// value is no header at all).
+fn inbound_of(metadata: &tonic::metadata::MetadataMap) -> execute::InboundTrace {
+    let text = |name: &str| {
+        metadata
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+    };
+    execute::InboundTrace {
+        traceparent: text("traceparent"),
+        baggage: text("baggage"),
+    }
+}
+
+/// Tells the engine session who is calling (`system.sessions`: transport, client type, user).
+/// Client-asserted: shown, never used as an identity.
+fn observe(entry: &SessionEntry, client_type: Option<&str>) {
+    entry.session().set_client_info(
+        krishiv_session::Transport::Connect,
+        client_type,
+        Some(entry.client_user_id()),
+        Some(entry.server_side_id()),
+    );
+}
+
 /// Krishiv's Spark Connect service over a [`SessionManager`].
 #[derive(Debug)]
 pub struct ConnectService {
@@ -175,6 +201,7 @@ impl SparkConnectService for ConnectService {
         request: Request<Decoded<pb::ExecutePlanRequest>>,
     ) -> Result<Response<Self::ExecutePlanStream>, Status> {
         let caller = self.caller(&request, Rpc::ExecutePlan)?;
+        let inbound = inbound_of(request.metadata());
         let request = request.into_inner();
         let entry = self.session(
             &caller,
@@ -182,6 +209,7 @@ impl SparkConnectService for ConnectService {
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
+        observe(&entry, request.client_type.as_deref());
         // An abandoned id is refused (Spark's `createExecuteHolder`, v4.3.0
         // lines 105-120); a live one is attached to by `execute_plan`.
         if let Some(id) = &request.operation_id
@@ -192,7 +220,7 @@ impl SparkConnectService for ConnectService {
                 &InvalidHandleOperationAbandoned { handle: id.clone() }.into(),
             ));
         }
-        let stream = execute::execute_plan(&entry, &request, &self.limits, &self.budget)
+        let stream = execute::execute_plan(&entry, &request, &self.limits, &self.budget, &inbound)
             .await
             .map_err(|e| status_of(&e))?;
         Ok(Response::new(stream))
@@ -212,6 +240,7 @@ impl SparkConnectService for ConnectService {
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
+        observe(&entry, request.client_type.as_deref());
         analyze::analyze_plan(&entry, &request, &self.limits)
             .await
             .map(Response::new)
@@ -232,15 +261,11 @@ impl SparkConnectService for ConnectService {
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
-        config::config(
-            &entry,
-            &request,
-            &caller.principal,
-            config::role_of(&caller),
-        )
-        .await
-        .map(Response::new)
-        .map_err(|e| status_of(&e))
+        observe(&entry, request.client_type.as_deref());
+        config::config(&entry, &request)
+            .await
+            .map(Response::new)
+            .map_err(|e| status_of(&e))
     }
 
     async fn add_artifacts(
@@ -271,6 +296,7 @@ impl SparkConnectService for ConnectService {
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
+        observe(&entry, request.client_type.as_deref());
         let response = interrupt::interrupt(&entry, &request).map_err(|e| status_of(&e))?;
         // An id it did not interrupt that is no operation of this session may be another
         // owner's: answered the same (an empty list), recorded (ADR 0046 §3b).

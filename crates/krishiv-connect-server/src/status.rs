@@ -173,6 +173,9 @@ pub(crate) fn exception_classes(class: ErrorClass) -> &'static [&'static str] {
         ("PARSE_", PARSE_EXCEPTION),
         ("UNSUPPORTED_DATATYPE", PARSE_EXCEPTION),
         ("INVALID_SQL_SYNTAX", PARSE_EXCEPTION),
+        // Spark's unnamed errors: 0xxx are `QueryParsingErrors`, 1xxx `QueryCompilationErrors`.
+        ("_LEGACY_ERROR_TEMP_0", PARSE_EXCEPTION),
+        ("_LEGACY_ERROR_TEMP_1", ANALYSIS_EXCEPTION),
     ];
     if let Some((_, classes)) = by_prefix.iter().find(|(p, _)| name.starts_with(p)) {
         return classes;

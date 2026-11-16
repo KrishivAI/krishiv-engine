@@ -730,7 +730,7 @@ async fn execute_in(channel: &Channel, session_id: &str, token: &str) {
     while s.message().await.expect("response").is_some() {}
 }
 
-/// A `Config` request of `ops` in [`SESSION`] as `token`.
+/// A `Config` request of `op` in [`SESSION`] as `token`.
 async fn config_as(
     run: &Running,
     token: &str,
@@ -752,7 +752,8 @@ async fn config_as(
 /// `Config` set and unset of an admin-only key or a server-scoped store key ask the session's
 /// policy as SQL `SET` does: a refusal is `PERMISSION_DENIED`, audited and counted under
 /// `connect` and `MANAGE` (ADR 0046 §8), a silent set turns it into a warning (still counted)
-/// and changes nothing, and an admin may.
+/// and changes nothing, an admin-only key named by its Spark alias is refused the same way, and
+/// an admin may.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_refusals_are_counted_like_sql_set() {
     use krishiv_connect::proto::v4_3::config_request::{self as creq, operation::OpType as Op};
@@ -804,7 +805,19 @@ async fn config_refusals_are_counted_like_sql_set() {
     .await
     .expect_err("server-scoped store key");
     assert_eq!(s.code(), Code::PermissionDenied);
-    assert_eq!(denied(&run), [(Surface::Connect, Privilege::Manage, 4)]);
+    // `krishiv.sql.autoBroadcastJoinThreshold` (admin) by its Spark name.
+    let s = config_as(
+        &run,
+        OPERATOR,
+        Op::Set(creq::Set {
+            pairs: vec![kv("spark.sql.autoBroadcastJoinThreshold", "1")],
+            silent: None,
+        }),
+    )
+    .await
+    .expect_err("admin key by its Spark alias");
+    assert_eq!(s.code(), Code::PermissionDenied);
+    assert_eq!(denied(&run), [(Surface::Connect, Privilege::Manage, 5)]);
     let got = config_as(
         &run,
         OPERATOR,
@@ -816,11 +829,25 @@ async fn config_refusals_are_counted_like_sql_set() {
     .expect("get");
     assert_ne!(
         got.pairs[0].value.as_deref(),
-        Some("1m"),
+        Some("1min"),
         "a refused set changes nothing"
     );
     release_as(&run, OPERATOR).await;
 
     config_as(&run, ADMIN, set(false)).await.expect("admin may");
-    assert_eq!(denied(&run), [(Surface::Connect, Privilege::Manage, 4)]);
+    let got = config_as(
+        &run,
+        ADMIN,
+        Op::GetOption(creq::GetOption {
+            keys: vec!["krishiv.resultCache.ttl".to_owned()],
+        }),
+    )
+    .await
+    .expect("get");
+    assert_eq!(
+        got.pairs[0].value.as_deref(),
+        Some("1min"),
+        "the admin's set holds (1m, read back normalized)"
+    );
+    assert_eq!(denied(&run), [(Surface::Connect, Privilege::Manage, 5)]);
 }
