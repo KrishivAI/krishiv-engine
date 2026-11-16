@@ -45,6 +45,7 @@ use krishiv_plan::{
 use crate::cache::{RelationCache, is_cache_name};
 
 mod file_tables;
+mod key_facts;
 mod ndv_sampling;
 mod scans;
 mod script_results;
@@ -714,6 +715,14 @@ impl QueryCatalog {
             .unwrap_or_else(PoisonError::into_inner)
             .values()
             .any(|t| matches!(&**t, TempTable::Files { .. }))
+    }
+
+    /// Every file table opened for the query, in opening order.
+    fn opened_tables(&self) -> Vec<(FilesKey, Arc<FileTable>)> {
+        self.opened
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     fn opened(&self, key: &FilesKey) -> Option<Arc<FileTable>> {
