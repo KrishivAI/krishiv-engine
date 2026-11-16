@@ -310,8 +310,8 @@ READS += [
         ["a"],
         {"spark.sql.csv.parser.columnPruning.enabled": "false"},
     ),
-    # The conf is ANDed with `!multiLine` (`getBool(columnPruning, !multiLine && conf)`): set to true it does not
-    # prune a multiLine read; only the read option does.
+    # The conf is combined with `!multiLine` by AND (`getBool(columnPruning, !multiLine && conf)`): set to true it
+    # does not prune a multiLine read; only the read option does.
     *[
         (
             f"columnPruning conf {n}",

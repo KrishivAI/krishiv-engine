@@ -1594,7 +1594,7 @@ fn inference_reserves_what_its_readers_hold() {
 }
 
 /// The pruning conf on the driver (parsed against the session) and on a
-/// worker (carried as an option): ANDed with `!multiLine` both ways, while
+/// worker (carried as an option): combined with `!multiLine` by AND both ways, while
 /// the read option is taken as given (Spark 4.2 `CSVOptions`).
 #[test]
 fn column_pruning_conf_counts_only_without_multi_line() {
