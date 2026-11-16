@@ -459,3 +459,53 @@ async fn the_version_alias_needs_the_credential_the_guard_asks_for() {
         .unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(send(&app, with).await.0, StatusCode::OK);
 }
+
+struct Unavailable;
+
+impl Guard for Unavailable {
+    fn check<'a>(&'a self, _: GuardRequest<'a>) -> BoxFuture<'a, Result<(), Refusal>> {
+        async { Err(Refusal::Unavailable) }.boxed()
+    }
+}
+
+#[tokio::test]
+async fn an_unavailable_guard_is_503_with_its_registry_class() {
+    let app = app(Arc::new(Unavailable), true);
+    let (status, _, body) = send(&app, get("/api/admin/v1/version")).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+    assert_eq!(json["error"]["errorClass"], "KRISHIV_ADMIN_UNAVAILABLE");
+    assert_eq!(json["error"]["sqlState"], "08004");
+}
+
+#[tokio::test]
+async fn a_body_over_the_cap_is_413_with_its_registry_class() {
+    let app = app(Arc::new(Open), true);
+    let req = Request::builder()
+        .uri("/api/admin/v1/version")
+        .header(header::HOST, "localhost")
+        .body(Body::from(vec![b' '; (1 << 20) + 1]))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let (status, _, body) = send(&app, req).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+    assert_eq!(
+        json["error"]["errorClass"],
+        "KRISHIV_ADMIN_REQUEST_TOO_LARGE"
+    );
+    assert_eq!(json["error"]["messageParameters"]["limit"], "1048576");
+}
+
+#[test]
+fn every_admin_error_class_is_in_the_registry() {
+    // The permanent codes clients branch on are registry classes, not strings of this crate.
+    let json = include_str!("../../../krishiv-common/krishiv-error-classes.json");
+    for class in [
+        "KRISHIV_ADMIN_INVALID_REQUEST",
+        "KRISHIV_ADMIN_REQUEST_TOO_LARGE",
+        "KRISHIV_ADMIN_UNAUTHENTICATED",
+        "KRISHIV_ADMIN_UNAVAILABLE",
+    ] {
+        assert!(json.contains(&format!("\"{class}\"")), "{class}");
+    }
+}

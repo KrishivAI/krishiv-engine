@@ -3431,7 +3431,6 @@ dependencies = [
  "krishiv-ui-assets",
  "prost",
  "prost-reflect",
- "serde",
  "serde_json",
  "tempfile",
  "tokio",
