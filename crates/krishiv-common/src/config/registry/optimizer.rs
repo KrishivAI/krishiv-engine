@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The config entries of the subquery shared-scan rules (P3 W1) and of the group-key code (P2b D2).
+//! The config entries of the subquery shared-scan rules (P3 W1), the group-key code (P2b D2) and the
+//! payload joins (P2b S5, A5).
 
 use crate::config::{ConfigEntry, ConfigValue, Scope, SettableBy, ValueType};
 
@@ -63,6 +64,25 @@ pub static LATE_PAYLOAD_JOIN: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Whether a dimension's payload columns join above the aggregate that groups by them (P2b A5,
+/// `krishiv.optimizer.payloadAboveAggregate`).
+pub static PAYLOAD_ABOVE_AGGREGATE: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.payloadAboveAggregate",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Internal. Let an aggregate that groups by a dimension's key and its other columns \
+          (TPC-H q10's customer and nation columns) group by the joining key of the other side \
+          instead, and join the dimension above the aggregate, so the aggregate and the joins \
+          below it hold narrow rows. Applies only where the dimension's key is proven unique \
+          (the plan groups it, or the table's statistics declare it), no aggregate argument can \
+          raise or overflow, and statistics say the join keeps most rows. Results are the same \
+          either way. Off until its timed A/B passes.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
     spark_alias: None,
 };
 

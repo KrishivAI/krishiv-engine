@@ -1384,6 +1384,27 @@ fn late_payload_join_defaults_on_and_parses() {
 }
 
 #[test]
+fn payload_above_aggregate_defaults_off_and_parses() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&PAYLOAD_ABOVE_AGGREGATE)
+            .and_then(ConfigValue::as_bool),
+        Some(false)
+    );
+    c.set("krishiv.optimizer.payloadAboveAggregate", "true")
+        .unwrap();
+    assert_eq!(
+        c.get(&PAYLOAD_ABOVE_AGGREGATE)
+            .and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+    assert!(
+        c.set("krishiv.optimizer.payloadAboveAggregate", "maybe")
+            .is_err()
+    );
+}
+
+#[test]
 fn history_entries_parse_and_default() {
     let mut c = Config::new();
     assert_eq!(c.get(&HISTORY_PATH), None);
