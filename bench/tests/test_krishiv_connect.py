@@ -3,9 +3,12 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
 from krishiv_bench.adapters import ENGINES, make_engine
+from krishiv_bench.adapters.base import Dataset
 from krishiv_bench.adapters.krishiv_connect import KrishivConnectEngine, parse_address, server_binary
 from krishiv_bench.clickbench_queries import SPARK_DIALECT
 
@@ -76,3 +79,93 @@ def test_server_that_hangs_silently_hits_the_startup_timeout(tmp_path):
     with pytest.raises(RuntimeError, match="did not report"):
         e._start_server()
     assert e._proc is None
+
+
+def test_binary_default_is_the_dist_build(monkeypatch, tmp_path):
+    monkeypatch.delenv("KRISHIV_BENCH_SERVER", raising=False)
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(tmp_path))
+    assert server_binary() == tmp_path / "dist" / "krishiv"
+
+
+def test_start_server_twice_keeps_the_first_process(tmp_path):
+    fake = _fake_server(tmp_path, "echo 'krishiv server: Spark Connect on sc://127.0.0.1:1'; sleep 60")
+    e = KrishivConnectEngine(binary=fake, startup_timeout_s=10)
+    try:
+        e._start_server()
+        first = e._proc
+        e._start_server()
+        assert e._proc is first
+    finally:
+        e.teardown()
+
+
+def test_version_and_config_name_the_binary():
+    e = KrishivConnectEngine(binary="/x/krishiv", conf=[("a", "1")])
+    assert "krishiv" in e.version()
+    assert e.config()["binary"] == "/x/krishiv"
+    assert e.config()["conf"] == [("a", "1")]
+
+
+def test_setup_failure_stops_the_server(tmp_path, monkeypatch):
+    from krishiv_bench.adapters.spark_connect import SparkConnectEngine
+
+    def boom(self, dataset):
+        raise ValueError("no session")
+
+    monkeypatch.setattr(SparkConnectEngine, "setup", boom)
+    fake = _fake_server(tmp_path, "echo 'krishiv server: Spark Connect on sc://127.0.0.1:1'; sleep 60")
+    e = KrishivConnectEngine(binary=fake, startup_timeout_s=10)
+    with pytest.raises(ValueError, match="no session"):
+        e.setup(cast(Dataset, None))
+    assert e._proc is None
+
+
+def test_setup_success_leaves_the_server_running(tmp_path, monkeypatch):
+    from krishiv_bench.adapters.spark_connect import SparkConnectEngine
+
+    monkeypatch.setattr(SparkConnectEngine, "setup", lambda self, dataset: None)
+    fake = _fake_server(tmp_path, "echo 'krishiv server: Spark Connect on sc://127.0.0.1:1'; sleep 60")
+    e = KrishivConnectEngine(binary=fake, startup_timeout_s=10)
+    try:
+        e.setup(cast(Dataset, None))
+        assert e._proc is not None
+    finally:
+        e.teardown()
+
+
+def test_measure_window_covers_the_server_process(tmp_path):
+    fake = _fake_server(tmp_path, "echo 'krishiv server: Spark Connect on sc://127.0.0.1:1'; sleep 60")
+    e = KrishivConnectEngine(binary=fake, startup_timeout_s=10)
+    try:
+        e._start_server()
+        e.begin_measure()
+        assert e._tree is not None
+        m = e.end_measure()
+        assert m is not None
+        assert e._tree is None
+    finally:
+        e.teardown()
+
+
+def test_teardown_kills_a_server_that_ignores_sigterm(tmp_path, monkeypatch):
+    fake = _fake_server(
+        tmp_path, "trap '' TERM\necho 'krishiv server: Spark Connect on sc://127.0.0.1:1'\nwhile true; do sleep 1; done"
+    )
+    e = KrishivConnectEngine(binary=fake, startup_timeout_s=10)
+    e._start_server()
+    proc = e._proc
+    assert proc is not None
+    import krishiv_bench.adapters.krishiv_connect as mod
+
+    real_wait = proc.wait
+    calls = []
+
+    def fast_wait(timeout=None):
+        calls.append(timeout)
+        return real_wait(timeout=0.3)
+
+    monkeypatch.setattr(proc, "wait", fast_wait)
+    e.teardown()
+    assert calls
+    assert real_wait(timeout=5) is not None
+    assert mod is not None
