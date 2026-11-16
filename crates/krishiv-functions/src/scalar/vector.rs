@@ -113,18 +113,16 @@ fn norm_inputs(
     Ok((v, d))
 }
 
-/// The elements of `list` row `row`, or `None` for a NULL vector or one with
-/// a NULL element.
-fn elements(list: &arrow_array::ListArray, row: usize) -> Option<Vec<f32>> {
+/// Row `row` of `list` as floats, with whether any element is NULL (the
+/// values under a NULL element are not read); `None` for a NULL vector. The
+/// values are a slice of the list's child, not a copy.
+fn row_values(list: &arrow_array::ListArray, row: usize) -> Option<(ArrayRef, bool)> {
     if list.is_null(row) {
         return None;
     }
     let values = list.value(row);
-    let values = values.as_primitive::<Float32Type>();
-    if values.null_count() > 0 {
-        return None;
-    }
-    Some(values.values().to_vec())
+    let has_null = values.null_count() > 0;
+    Some((values, has_null))
 }
 
 #[derive(Clone, Copy)]
@@ -172,53 +170,59 @@ fn degree_of(name: &str, d: f32) -> Result<Degree, KrishivError> {
 
 fn norm_of(v: &[f32], degree: Degree) -> f32 {
     match degree {
-        Degree::One => v.iter().fold(0.0_f32, |s, x| s + x.abs()),
-        Degree::Two => v.iter().fold(0.0_f32, |s, x| s + x * x).sqrt(),
-        Degree::Infinity => v.iter().fold(0.0_f32, |m, x| {
-            if x.abs() > m || x.is_nan() {
-                x.abs()
-            } else {
-                m
-            }
-        }),
+        Degree::One => krishiv_kernels::vector::l1_norm(v),
+        Degree::Two => krishiv_kernels::vector::l2_norm(v),
+        Degree::Infinity => krishiv_kernels::vector::inf_norm(v),
     }
 }
 
-/// The norm of row `row`: NULL for a NULL vector, element or degree.
+/// The norm of row `row`: NULL for a NULL vector, element or degree. The
+/// degree is checked before a NULL element is looked for (Spark's order).
 fn row_norm(
     v: &ArrayRef,
     d: &Float32Array,
     row: usize,
     name: &str,
 ) -> Result<Option<f32>, KrishivError> {
-    let Some(values) = elements(v.as_list::<i32>(), row) else {
+    let Some((values, has_null)) = row_values(v.as_list::<i32>(), row) else {
         return Ok(None);
     };
     if d.is_null(row) {
         return Ok(None);
     }
     let degree = degree_of(name, d.value(row))?;
-    Ok(Some(norm_of(&values, degree)))
+    if has_null {
+        return Ok(None);
+    }
+    Ok(Some(norm_of(
+        values.as_primitive::<Float32Type>().values(),
+        degree,
+    )))
 }
 
-/// The row's vector divided by its norm: NULL for a zero norm.
+/// The row's vector divided by its norm: NULL for a norm below
+/// `Float.MIN_NORMAL`.
 fn row_normalized(
     v: &ArrayRef,
     d: &Float32Array,
     row: usize,
 ) -> Result<Option<Vec<f32>>, KrishivError> {
-    let Some(values) = elements(v.as_list::<i32>(), row) else {
+    let Some((values, has_null)) = row_values(v.as_list::<i32>(), row) else {
         return Ok(None);
     };
     if d.is_null(row) {
         return Ok(None);
     }
     let degree = degree_of("vector_normalize", d.value(row))?;
-    if values.is_empty() {
-        return Ok(Some(values));
+    if has_null {
+        return Ok(None);
     }
-    let norm = norm_of(&values, degree);
-    if norm == 0.0 {
+    let values = values.as_primitive::<Float32Type>().values();
+    if values.is_empty() {
+        return Ok(Some(Vec::new()));
+    }
+    let norm = norm_of(values, degree);
+    if !krishiv_kernels::vector::is_normalizable(norm) {
         return Ok(None);
     }
     Ok(Some(values.iter().map(|x| x / norm).collect()))
@@ -231,6 +235,9 @@ enum Pair {
     L2,
 }
 
+/// One row of a two-vector function. Spark's order: a NULL vector is NULL,
+/// then the dimensions are compared (a mismatch raises even when an element
+/// is NULL), then an empty vector answers, then a NULL element is NULL.
 fn pair(
     kind: Pair,
     name: &str,
@@ -238,7 +245,7 @@ fn pair(
     b: &arrow_array::ListArray,
     row: usize,
 ) -> Result<Option<f32>, KrishivError> {
-    let (Some(x), Some(y)) = (elements(a, row), elements(b, row)) else {
+    let (Some((x, x_null)), Some((y, y_null))) = (row_values(a, row), row_values(b, row)) else {
         return Ok(None);
     };
     if x.len() != y.len() {
@@ -249,25 +256,22 @@ fn pair(
         }
         .into());
     }
-    let dot = x.iter().zip(&y).fold(0.0_f32, |s, (p, q)| s + p * q);
+    if x.is_empty() {
+        return Ok(match kind {
+            Pair::Cosine => None,
+            Pair::Inner | Pair::L2 => Some(0.0),
+        });
+    }
+    if x_null || y_null {
+        return Ok(None);
+    }
+    let (x, y) = (
+        x.as_primitive::<Float32Type>().values(),
+        y.as_primitive::<Float32Type>().values(),
+    );
     Ok(match kind {
-        Pair::Inner => Some(dot),
-        Pair::L2 => Some(
-            x.iter()
-                .zip(&y)
-                .fold(0.0_f32, |s, (p, q)| s + (p - q) * (p - q))
-                .sqrt(),
-        ),
-        Pair::Cosine => {
-            // `dot / sqrt(|x|^2 * |y|^2)`, the order Spark's float result
-            // follows (not the product of the two roots).
-            let sq = |v: &[f32]| v.iter().fold(0.0_f32, |s, p| s + p * p);
-            let (nx, ny) = (sq(&x), sq(&y));
-            if nx == 0.0 || ny == 0.0 {
-                None
-            } else {
-                Some(dot / (nx * ny).sqrt())
-            }
-        }
+        Pair::Inner => Some(krishiv_kernels::vector::inner_product(x, y)),
+        Pair::L2 => Some(krishiv_kernels::vector::l2_distance(x, y)),
+        Pair::Cosine => krishiv_kernels::vector::cosine_similarity(x, y),
     })
 }
