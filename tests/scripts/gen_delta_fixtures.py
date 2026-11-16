@@ -154,6 +154,30 @@ def oracle_error(e: Exception, path: str) -> dict:
         record["parameters"] = {k: v.replace(path, "<path>") for k, v in params.items()}
     message = java.getMessage() if java is not None else str(e)
     record["message"] = (message or "").splitlines()[0].replace(path, "<path>")[:600]
+    # The classified causes below it, nearest first (Spark's `TASK_WRITE_FAILED` wraps the
+    # condition the write raised).
+    causes = []
+    cause = java.getCause() if java is not None else None
+    while cause is not None and len(causes) < 8:
+        try:
+            condition = cause.getErrorClass()
+        except Exception:
+            condition = None
+        if condition is not None:
+            causes.append(
+                {
+                    "jvm_class": cause.getClass().getName(),
+                    "condition": condition,
+                    "sqlstate": cause.getSqlState(),
+                    "parameters": {
+                        k: str(v).replace(path, "<path>") for k, v in dict(cause.getMessageParameters()).items()
+                    },
+                    "message": (cause.getMessage() or "").splitlines()[0].replace(path, "<path>")[:600],
+                }
+            )
+        cause = cause.getCause()
+    if causes:
+        record["causes"] = causes
     return record
 
 
@@ -598,7 +622,10 @@ def commits(path: str) -> list[dict]:
                     )
                 elif "remove" in action:
                     rm = action["remove"]
-                    record["removes"].append({"path": rm["path"], "partitionValues": rm.get("partitionValues")})
+                    removed = {"path": rm["path"], "partitionValues": rm.get("partitionValues")}
+                    if rm.get("deletionVector"):
+                        removed["deletionVector"] = rm["deletionVector"]
+                    record["removes"].append(removed)
                 elif "protocol" in action:
                     record["protocol"] = action["protocol"]
                 elif "metaData" in action:
@@ -1089,6 +1116,57 @@ DML_SCENARIOS: list[tuple[str, list[str], list[tuple[str, str, dict]]]] = [
             ("delete_rows", "DELETE FROM {t} WHERE id = 3", {}),
             ("update_rows", "UPDATE {t} SET v = 'u' WHERE id = 3", {}),
             ("update_partition_only", "UPDATE {t} SET v = 'u' WHERE p = 'y'", {}),
+        ],
+    ),
+    (
+        # A struct column `s` with a field `p` beside the partition column `p`: `s.p` is the
+        # struct's field, never the partition column (`x.p` under the alias `x` is the partition).
+        "struct-partition",
+        [
+            "CREATE TABLE {t} (id BIGINT, s STRUCT<p: INT, q: INT>, p INT) USING delta PARTITIONED BY (p)",
+            "INSERT INTO {t} VALUES (1, named_struct('p', 1, 'q', 1), 1), (2, named_struct('p', 2, 'q', 2), 1)",
+            "INSERT INTO {t} VALUES (3, named_struct('p', 2, 'q', 3), 1), (4, named_struct('p', 1, 'q', 4), 2)",
+            "INSERT INTO {t} VALUES (5, named_struct('p', 3, 'q', 5), 1), (6, named_struct('p', 3, 'q', 6), 2)",
+        ],
+        [
+            ("delete_struct_field", "DELETE FROM {t} WHERE s.p = 1", {}),
+            ("delete_struct_field_none_match", "DELETE FROM {t} WHERE s.p = 9", {}),
+            ("delete_qualified_partition", "DELETE FROM {t} AS x WHERE x.p = 2", {}),
+            ("delete_struct_field_and_partition", "DELETE FROM {t} WHERE p = 1 AND s.p = 2", {}),
+            ("update_struct_field", "UPDATE {t} SET id = id + 100 WHERE s.p = 2", {}),
+        ],
+    ),
+    (
+        # A TIMESTAMP partition column compared with a string literal under a non-UTC session
+        # zone: Spark casts the literal in the session zone.
+        "timestamp-partition",
+        [
+            "CREATE TABLE {t} (id BIGINT, ts TIMESTAMP) USING delta PARTITIONED BY (ts)",
+            "INSERT INTO {t} VALUES (1, TIMESTAMP '2024-01-01 00:00:00'), (2, TIMESTAMP '2024-01-01 08:00:00')",
+            "INSERT INTO {t} VALUES (3, TIMESTAMP '2024-01-01 08:00:00'), (4, TIMESTAMP '2024-01-01 16:00:00')",
+        ],
+        [
+            ("delete_string_literal_utc", "DELETE FROM {t} WHERE ts = '2024-01-01 08:00:00'", {}),
+            (
+                "delete_string_literal_zone",
+                "DELETE FROM {t} WHERE ts = '2024-01-01 00:00:00'",
+                {"spark.sql.session.timeZone": "America/Los_Angeles"},
+            ),
+            (
+                "delete_timestamp_literal_zone",
+                "DELETE FROM {t} WHERE ts = TIMESTAMP '2024-01-01 00:00:00'",
+                {"spark.sql.session.timeZone": "America/Los_Angeles"},
+            ),
+            (
+                "delete_string_range_zone",
+                "DELETE FROM {t} WHERE ts < '2024-01-01 00:00:00'",
+                {"spark.sql.session.timeZone": "America/Los_Angeles"},
+            ),
+            (
+                "update_string_literal_zone",
+                "UPDATE {t} SET id = id + 100 WHERE ts = '2024-01-01 00:00:00'",
+                {"spark.sql.session.timeZone": "America/Los_Angeles"},
+            ),
         ],
     ),
     (
