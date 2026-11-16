@@ -946,6 +946,42 @@ fn when_unifies_string_encodings() {
     );
 }
 
+/// A branch whose struct fields carry other field metadata (a Delta column mapping's ids and
+/// physical names on a scanned struct) is the CASE's type relabelled, not an engine error.
+#[test]
+fn case_branch_with_other_field_metadata_is_relabelled() {
+    use arrow_array::StructArray;
+    let env = env(true);
+    let tagged = Field::new("x", ArrowType::Int32, true).with_metadata(
+        [("delta.columnMapping.id".to_owned(), "5".to_owned())]
+            .into_iter()
+            .collect::<std::collections::HashMap<_, _>>(),
+    );
+    let from = ArrowType::Struct(vec![tagged.clone()].into());
+    let out = ArrowType::Struct(vec![Field::new("x", ArrowType::Int32, true)].into());
+    let values = StructArray::from(vec![(
+        Arc::new(tagged),
+        Arc::new(Int32Array::from(vec![Some(1), Some(2)])) as ArrayRef,
+    )]);
+    let schema = Arc::new(Schema::new(vec![Field::new("s", from.clone(), true)]));
+    let batch = RecordBatch::try_new(schema, vec![Arc::new(values)]).unwrap();
+    let e = when(
+        vec![lit(&Literal::Boolean(true)), column(0, from, true)],
+        out.clone(),
+        &env,
+    )
+    .unwrap();
+    let got = e.eval(&batch, 0).unwrap().into_array(2).unwrap();
+    assert_eq!(got.data_type(), &out);
+    assert_eq!(
+        got.as_struct()
+            .column(0)
+            .as_primitive::<Int32Type>()
+            .values(),
+        &[1, 2]
+    );
+}
+
 /// `nullif` of `Utf8` and `Utf8View` operands compares in the view and
 /// returns the `STRING` carrier with the value's contents.
 #[test]
