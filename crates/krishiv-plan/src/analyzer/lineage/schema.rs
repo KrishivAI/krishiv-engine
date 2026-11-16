@@ -17,10 +17,15 @@
 //! changing a meaning is `krishiv.analyze.v2` (`cargo xtask docs-analyze --check` refuses it). The
 //! session's golden validator stays strict: it checks [`analyze_v1`], which has no unknown member.
 //!
-//! Not listed: the directory of a managed table. A run of `DROP TABLE`, `TRUNCATE TABLE` or `INSERT` on a
-//! managed table also checks `MODIFY` (and `CREATE`) on the table's directory, but only when the
-//! directory exists and on its resolved path, so listing it would take file-system I/O and would not be
-//! deterministic.
+//! Directories: a run of `DROP TABLE` or `TRUNCATE TABLE` on a managed table also checks `MODIFY` on the
+//! table's directory when it exists, and `INSERT` checks `MODIFY` and `CREATE` on the table's location;
+//! the session lists them after the targets, as the qualified path a denial names (`file:` for a local
+//! one), and only when the statement's targets are allowed (a denied target lists no directory). The
+//! directories a run of `CREATE TABLE`, CTAS, `REPLACE TABLE`, `ALTER TABLE ... RENAME TO`,
+//! `DROP NAMESPACE ... CASCADE` and partition DDL checks are not listed yet.
+//!
+//! `display` (a securable as the 42501 denial text prints it) is a Krishiv addition to the design's v1
+//! shape.
 
 use std::fmt::Write as _;
 
@@ -277,7 +282,8 @@ pub fn analyze_v1() -> Shape {
         ),
         field(
             "display",
-            "The securable as the 42501 denial text prints it (redacted by `Securable`'s `Display`, ADR 0038).",
+            "The securable as the 42501 denial text prints it (redacted by `Securable`'s `Display`, ADR 0038). \
+             A Krishiv addition, so a caller can show a requirement as a denial names it.",
             Shape::String,
         ),
         field(
@@ -358,20 +364,30 @@ pub fn analyze_v1() -> Shape {
         ),
         field(
             "securables",
-            "What the statement needs, in first-use order: reads (with columns), then targets. Not listed: a \
-             managed table's directory, which a run of DROP TABLE, TRUNCATE TABLE or INSERT also checks \
-             only when it exists, on its resolved path.",
+            "What the statement needs, in first-use order: reads (with columns), then targets, then the \
+             directories a run also checks: MODIFY on a managed table's directory for DROP TABLE and \
+             TRUNCATE TABLE when it exists, MODIFY and CREATE on the table's location for INSERT (the \
+             qualified path as a denial names it, `file:` for a local one; the policy gets a local path \
+             with its links resolved), listed only when the statement's targets are allowed. Not listed \
+             yet: the directories of CREATE TABLE, CREATE TABLE AS SELECT, REPLACE TABLE, ALTER TABLE \
+             RENAME TO, DROP NAMESPACE CASCADE and partition DDL.",
             array(securable),
         ),
         field(
             "output_schema",
-            "The result columns: a query's analyzed output; a SHOW, DESCRIBE, EXPLAIN, SET or RESET command's \
-             result (RESET and SET PATH: none); empty for writes, DDL and other commands.",
+            "The result columns: a query's analyzed output; for a write of one query (an INSERT of one query \
+             or a CREATE TABLE AS SELECT), the columns that query produces, not the target table's (the \
+             statement itself returns none); a SHOW, DESCRIBE, EXPLAIN, SET or \
+             RESET command's result (RESET and SET PATH: none; an EXPLAIN gives no data schema of what it \
+             explains); empty for DDL, multi-table INSERT and other commands.",
             array(output),
         ),
         field(
             "lineage",
-            "Per output ordinal of a query, its sources and transform; else empty.",
+            "Per output ordinal of a query (or of the one query an INSERT or CREATE TABLE AS SELECT writes), \
+             its sources and transform; else empty. For a write, ordinal i is the query's i-th column: the \
+             target column it lands in (a column list, BY NAME, its position after static partition values \
+             or defaults) is not given in v1.",
             array(lineage),
         ),
         field(
@@ -431,10 +447,11 @@ pub fn json_schema() -> String {
                  be added, so a reader ignores members it does not know and accepts enum values it does not \
                  know; new alternatives of a `oneOf` (such as a new lineage leaf form) may be added too, so a \
                  reader skips an element that matches no alternative it knows and does not validate unknown \
-                 forms strictly; `required` lists the members v1 has had from the start. Not listed among the \
-                 securables: a managed table's directory, which a run of DROP TABLE, TRUNCATE TABLE or INSERT \
-                 also checks only when the directory exists, on its resolved path (not deterministic without \
-                 file-system I/O)."
+                 forms strictly; `required` lists the members v1 has had from the start. The securables include \
+                 the directories a run of DROP TABLE, TRUNCATE TABLE and INSERT checks (a managed table's \
+                 directory for DROP TABLE and TRUNCATE TABLE when it exists, the table's location for INSERT), \
+                 as they are at analysis and only when the statement's targets are allowed; not yet those of \
+                 other DDL."
                     .to_owned(),
             ),
         ),

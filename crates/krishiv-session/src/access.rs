@@ -366,25 +366,43 @@ impl Session {
         class: StatementClass,
         env: &QueryEnv,
     ) -> Result<(), KrishivError> {
-        if let Err(e) = reject_system_namespace(statement) {
-            log_denial(self, class, &e);
-            return Err(e);
-        }
+        self.check_targets(statement, env, Some(class)).await
+    }
+
+    /// Whether [`Self::authorize_statement`] of `statement` would pass, asked as it asks (the same
+    /// questions in the same order, stopping at the first denial) but quietly: no `krishiv::audit`
+    /// record, no denial count. The analyze API asks it before it reads any catalog or file-system
+    /// state about a write target (T063 N1b review B2), so analysis reveals nothing about a target the
+    /// caller may not write.
+    pub(crate) async fn targets_allowed_quietly(
+        &self,
+        statement: &Statement,
+        env: &QueryEnv,
+    ) -> bool {
+        self.check_targets(statement, env, None).await.is_ok()
+    }
+
+    /// The checks of [`Self::authorize_statement`]; each denial is logged under `class`, or not at all
+    /// when `class` is `None` (a quiet trial).
+    async fn check_targets(
+        &self,
+        statement: &Statement,
+        env: &QueryEnv,
+        class: Option<StatementClass>,
+    ) -> Result<(), KrishivError> {
+        let denied = |e: KrishivError| {
+            if let Some(class) = class {
+                log_denial(self, class, &e);
+            }
+            e
+        };
+        reject_system_namespace(statement).map_err(denied)?;
         let targets = required_targets(statement, &env.parser);
         let mut checked: Vec<(Securable, Privilege)> = Vec::new();
         for target in targets {
-            let securables = match self.securables_of(target.object, env) {
-                Ok(s) => s,
-                Err(e) => {
-                    log_denial(self, class, &e);
-                    return Err(e);
-                }
-            };
+            let securables = self.securables_of(target.object, env).map_err(denied)?;
             for securable in securables {
-                if let Err(e) = reject_system_write(&securable, target.privilege) {
-                    log_denial(self, class, &e);
-                    return Err(e);
-                }
+                reject_system_write(&securable, target.privilege).map_err(denied)?;
                 if checked
                     .iter()
                     .any(|(s, p)| *s == securable && *p == target.privilege)
@@ -398,7 +416,10 @@ impl Session {
                     target.privilege,
                 )
                 .await;
-                audit(self, class, r)?;
+                match class {
+                    Some(class) => audit(self, class, r)?,
+                    None => r?,
+                }
                 checked.push((securable, target.privilege));
             }
         }
