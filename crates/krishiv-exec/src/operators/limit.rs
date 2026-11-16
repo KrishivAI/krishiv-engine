@@ -55,6 +55,10 @@ impl Limit {
 }
 
 impl Operator for Limit {
+    fn keeps_partitioning(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "Limit"
     }

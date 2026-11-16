@@ -762,7 +762,8 @@ impl Operator for ProbeOp {
             signal: Arc::clone(memory.signal()),
             flush: Flush::default(),
             batch_size: ctx.query().config().batch_size.max(1),
-            partition: ctx.partition(),
+            // Spark's partition index (a `UNION ALL` branch numbers its own).
+            partition: ctx.partition().wrapping_sub(ctx.numbering_base()),
             select,
             selected: None,
         }))

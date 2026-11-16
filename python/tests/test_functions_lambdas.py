@@ -71,7 +71,6 @@ def test_lambda_variables_do_not_capture_columns() -> None:
     assert one(d, F.aggregate("arr", F.lit(0), lambda acc, x: acc + x + F.col("y_0"))) == 2003
 
 
-@pytest.mark.xfail(reason="the engine's filter takes no index lambda: INVALID_LAMBDA_FUNCTION_CALL", strict=True)
 def test_filter_with_an_index_lambda(df: DataFrame) -> None:
     assert one(df, F.filter("arr", lambda x, i: i > 0)) == [1, 2]
 
