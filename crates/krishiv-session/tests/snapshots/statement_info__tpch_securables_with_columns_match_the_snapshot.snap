@@ -1,6 +1,5 @@
 ---
 source: crates/krishiv-session/tests/statement_info.rs
-assertion_line: 50
 expression: out
 ---
 q01

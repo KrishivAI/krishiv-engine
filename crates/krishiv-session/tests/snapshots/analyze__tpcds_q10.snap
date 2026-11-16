@@ -1,6 +1,5 @@
 ---
 source: crates/krishiv-session/tests/analyze.rs
-assertion_line: 71
 expression: layout(&json)
 ---
 {"schema_version":"krishiv.analyze.v1",

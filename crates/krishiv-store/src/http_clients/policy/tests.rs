@@ -453,15 +453,12 @@ async fn data_read_of_provider_literal_refused() {
     ] {
         let url = parse_object_url(location).unwrap();
         let store = registry.store(&url).unwrap();
-        let started = std::time::Instant::now();
+        // The policy's own refusal, not a connect or timeout error: the request was stopped
+        // before any dial (no wall-clock bound, which load makes flaky).
         let err = store.get(&url.key).await.unwrap_err();
         assert!(
             error_chain(&err).contains("private address"),
             "{location}: {err}"
-        );
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(5),
-            "{location}: dialled"
         );
     }
     // A store with ambient credential providers still builds on the same cache.

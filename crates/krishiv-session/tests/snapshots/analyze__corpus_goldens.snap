@@ -1,6 +1,5 @@
 ---
 source: crates/krishiv-session/tests/analyze.rs
-assertion_line: 48
 expression: out
 ---
 -- Query: SELECT a FROM t
