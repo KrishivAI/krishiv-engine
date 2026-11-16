@@ -113,7 +113,7 @@ pub use access::{PathPrefixPolicy, READ_ONLY_PRIVILEGES, ReadOnlyPolicy, Stateme
 pub use admission::{AdmissionController, Permit, QueryRequest, Unlimited};
 pub use analyze::{Analysis, AnalysisWarning, OutputColumn};
 pub use sessions::Transport;
-pub use system::register_build_features;
+pub use system::{capabilities, register_build_features, register_surface};
 
 pub mod agent;
 
@@ -145,6 +145,8 @@ pub use krishiv_udf_sdk::{
 };
 pub use observation::Observation;
 pub use profile::{ExplainVerbose, OptimizerStep, VERBOSE_FORMAT, VERBOSE_VERSION};
+#[cfg(feature = "unstable-ir")]
+pub use python_udfs::python_udf_call_name;
 pub use python_udfs::{ANONYMOUS_VERSION_BIT, PythonUdfDef, PythonUdfEntry, PythonUdfLibrary};
 pub use runtime::{EngineRuntime, EngineRuntimeBuilder};
 #[cfg(feature = "unstable-ir")]

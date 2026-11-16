@@ -175,7 +175,7 @@ oneof! { expression, EXPRESSION_ROWS, expression::ExprType, "Expression.expr_typ
     UnresolvedExtractValue => ("unresolved_extract_value", 12, Missing, "", "Field", "P3-T012", 2),
     UpdateFields => ("update_fields", 13, Missing, "", "UpdateFields", "P3-T012", 2),
     UnresolvedNamedLambdaVariable => ("unresolved_named_lambda_variable", 14, Missing, "", "lambda-scoped Column (UNRESOLVED_NAMED_LAMBDA_VARIABLE_REQUIRES_NAME_PART)", "P3-T012", 2),
-    CommonInlineUserDefinedFunction => ("common_inline_user_defined_function", 15, Missing, "", "Python UDF call (T014); Scala/Java → UNSUPPORTED_USER_DEFINED_FUNCTION_IMPLEMENTATION (T081)", "P3-T014", 6),
+    CommonInlineUserDefinedFunction => ("common_inline_user_defined_function", 15, Partial, "scalar_scala_udf and java_udf (56K00: no JVM code; T081), Python eval types other than 100/101/200/250, additional_includes", "Function over the session's encoded name of an unregistered Python UDF (PythonUdf), its payload registered with the session's UDF workers; Usage on System(udf) before any worker starts", "P3-T014", 6),
     CallFunction => ("call_function", 16, Done, "", "Function (as #3, by name)", "P3-T012", 1),
     NamedArgumentExpression => ("named_argument_expression", 17, Partial, "outside a function call's arguments", "FunctionCall.arg_names", "P3-T012", 1),
     MergeAction => ("merge_action", 19, Missing, "", "MERGE actions for merge_into_table_command (T023, T021, T027)", "P3-T023", 11),
@@ -186,7 +186,7 @@ oneof! { expression, EXPRESSION_ROWS, expression::ExprType, "Expression.expr_typ
 }
 
 oneof! { command, COMMAND_ROWS, command::CommandType, "Command.command_type";
-    RegisterFunction => ("register_function", 1, Missing, "", "Python UDF registration (T014); JVM → T081's class", "P3-T014", 6),
+    RegisterFunction => ("register_function", 1, Partial, "scalar_scala_udf and java_udf (56K00: no JVM code; T081), Python eval types other than 100/101/200/250, additional_includes", "Session::register_python_udf plus the payload on the session's UDF workers (translate_command; run by the server)", "P3-T014", 6),
     WriteOperation => ("write_operation", 2, Missing, "", "DataFrameWriter V1: krishiv-session save/save_as_table/insert_into (dataframe.rs), semantics T023", "P3-T023", 11),
     CreateDataframeView => ("create_dataframe_view", 3, Missing, "", "create_or_replace_temp_view (exists), global temp views", "P3-T012", 4),
     WriteOperationV2 => ("write_operation_v2", 4, Missing, "", "DataFrameWriterV2 (create/replace/append/overwrite/overwrite_partitions exist in dataframe.rs), T023", "P3-T023", 11),

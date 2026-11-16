@@ -62,7 +62,8 @@ use krishiv_connect::proto::v4_3::execute_plan_response::{
 use krishiv_connect::proto::v4_3::plan::OpType;
 use krishiv_connect::proto::v4_3::plan::compressed_operation::OpType as CompressedOpType;
 use krishiv_connect::translate::{
-    LocalRelations, LocalRequest, TranslateConf, command_not_supported, translate_relation,
+    Command as RunCommand, LocalRelations, LocalRequest, TranslateConf, UdfHost as TranslateHost,
+    command_not_supported, translate_command, translate_relation_with,
 };
 use krishiv_connect::wire;
 use krishiv_memory::ConsumerHandle;
@@ -80,6 +81,7 @@ use crate::operation::{
 };
 use crate::sender::{self, SenderCaps};
 use crate::status::status_of;
+use crate::udf::InlineUdfs;
 
 /// The default of `spark.connect.session.resultChunking.maxChunkSize`
 /// (`(0.9 × 128 MiB).toInt`, Spark 4.1+).
@@ -306,28 +308,24 @@ pub async fn execute_plan(
             return Ok(Prepared::Command(answer));
         }
         // Decompression (up to `maxPlanSize`) runs off the async workers.
-        let logical = request_plan(entry, plan, limits).await?;
-        let df = session.from_plan_with(&logical, query_options)?;
-        let schema = df.schema().await?;
-        Ok(Prepared::Rows(
-            df,
-            schema,
-            observed::plan_ids(logical.root()),
-        ))
+        match execution_plan(entry, plan, limits).await? {
+            Executed::Relation(logical) => {
+                let df = session.from_plan_with(&logical, query_options)?;
+                let schema = df.schema().await?;
+                Ok(Prepared::Rows(
+                    df,
+                    schema,
+                    observed::plan_ids(logical.root()),
+                ))
+            }
+            Executed::Command => Ok(Prepared::Done),
+        }
     })
     .await;
     // A preparation error settles like a query error: an interrupt that
     // reported this operation first turns it into `OPERATION_CANCELED`.
-    let (df, schema, plan_ids) = match prepared {
-        Ok(Prepared::Rows(df, schema, plan_ids)) => (df, schema, plan_ids),
-        Ok(Prepared::Command(answer)) => {
-            let sender = new_sender(session, request, entry, &op, (limits, budget, &opts));
-            let stream =
-                sender::attach(Arc::clone(&op), operations, 0, SenderCaps::of(&op, limits));
-            registered.keep();
-            tokio::spawn(sql_command::encode(sender, answer));
-            return Ok(stream);
-        }
+    let prepared = match prepared {
+        Ok(ready) => ready,
         Err(e) => {
             return Err(if op.finish() {
                 e
@@ -336,7 +334,6 @@ pub async fn execute_plan(
             });
         }
     };
-    let schema_response = schema::proto_schema(&schema)?;
     let settings = encode_settings(&conf, limits, opts.chunking);
 
     let sender = new_sender(session, request, entry, &op, (limits, budget, &opts));
@@ -344,14 +341,27 @@ pub async fn execute_plan(
     // before its first stream.
     let stream = sender::attach(Arc::clone(&op), operations, 0, SenderCaps::of(&op, limits));
     registered.keep();
-    tokio::spawn(encode(
-        sender,
-        df,
-        schema,
-        schema_response,
-        settings,
-        plan_ids,
-    ));
+    match prepared {
+        Prepared::Rows(df, schema, plan_ids) => {
+            let schema_response = schema::proto_schema(&schema)?;
+            tokio::spawn(encode(
+                sender,
+                df,
+                schema,
+                schema_response,
+                settings,
+                plan_ids,
+            ));
+        }
+        // A `sql_command`: the relation it answers.
+        Prepared::Command(answer) => {
+            tokio::spawn(sql_command::encode(sender, answer));
+        }
+        // A command that ran: no response but the end (Spark's `ExecuteThreadRunner`, v4.3.0 lines 271-293).
+        Prepared::Done => {
+            tokio::spawn(complete(sender));
+        }
+    }
     Ok(stream)
 }
 
@@ -361,6 +371,8 @@ enum Prepared {
     Rows(DataFrame, SchemaRef, BTreeMap<String, i64>),
     /// A `sql_command`: the relation it answers.
     Command(sql_command::Answer),
+    /// A command that ran (`register_function`): no response but the end.
+    Done,
 }
 
 /// The producing side of `op`.
@@ -393,22 +405,88 @@ fn new_sender(
 enum Translated {
     /// A ROOT relation as the engine's IR.
     Relation(krishiv_plan::Plan),
-    /// A command (from a compressed operation too): its ADR 0046 §3b class,
-    /// then the refusal it gets until P3-T012 runs commands. The command
-    /// itself is not kept: it stays in the scrubbed request.
-    Command {
-        /// The command's class.
-        check: Check,
-        /// `CONNECT_INVALID_PLAN` naming the command.
-        refusal: KrishivError,
-    },
+    /// A command (from a compressed operation too). The proto itself is
+    /// not kept: it stays in the scrubbed request.
+    Command(Box<TranslatedCommand>),
+}
+
+/// A command: its ADR 0046 §3b class, what `ExecutePlan` runs
+/// (`register_function`; every other command is refused until P3-T012) and
+/// the refusal `AnalyzePlan` gives.
+struct TranslatedCommand {
+    /// The command's class.
+    check: Check,
+    /// The command as translated, or why it is not run.
+    run: Result<RunCommand, KrishivError>,
+    /// `CONNECT_INVALID_PLAN` naming the command.
+    refusal: KrishivError,
 }
 
 impl Translated {
     fn command(command: &pb::Command) -> Self {
-        Self::Command {
+        Self::Command(Box::new(TranslatedCommand {
             check: check_command(command),
+            run: translate_command(command),
             refusal: command_not_supported(command),
+        }))
+    }
+}
+
+/// What an `ExecutePlan` request's plan is, once its privileges are checked.
+enum Executed {
+    /// A ROOT relation to run; its inline Python UDFs are registered.
+    Relation(krishiv_plan::Plan),
+    /// A command that ran (`register_function`).
+    Command,
+}
+
+/// The session's `spark.sql.sources.default` for translation.
+fn translate_conf(session: &krishiv_session::Session) -> TranslateConf {
+    TranslateConf {
+        default_data_source: session
+            .conf()
+            .get("spark.sql.sources.default")
+            .unwrap_or_else(|| TranslateConf::default().default_data_source),
+        parser: session.parser_options(),
+        local_relations: LocalRelations::default(),
+    }
+}
+
+/// The plan of an `ExecutePlan` request, after its checks: a command's ADR
+/// 0046 §3b class is enforced before it runs; a relation with an inline
+/// Python UDF needs `Usage` on `System("udf")` before its UDFs are
+/// registered with the session's workers (ADR 0046 §3b, N1: fail closed,
+/// nothing is registered or started for a caller without it).
+///
+/// # Errors
+/// The decompression, decoding and translation errors, the privilege
+/// refusals (`KRISHIV_INSUFFICIENT_PERMISSIONS`), a command's errors, and
+/// the refusal of a command that is not run yet.
+async fn execution_plan(
+    entry: &SessionEntry,
+    plan: &pb::Plan,
+    limits: &ExecuteLimits,
+) -> Result<Executed, KrishivError> {
+    let session = entry.session();
+    let decompressed = decompressed(plan, limits).await?;
+    let mut udfs = InlineUdfs::execution(entry.python());
+    match translate_locals(entry, plan, decompressed.as_deref(), &mut udfs).await? {
+        Translated::Relation(logical) => {
+            if udfs.seen() {
+                crate::auth::enforce(&crate::auth::client_code(), session).await?;
+                udfs.grant(session)?;
+            }
+            Ok(Executed::Relation(logical))
+        }
+        Translated::Command(command) => {
+            let TranslatedCommand { check, run, .. } = *command;
+            crate::auth::enforce(&check, session).await?;
+            match run? {
+                RunCommand::RegisterPythonUdf(udf) => {
+                    entry.python().register(session, udf)?;
+                }
+            }
+            Ok(Executed::Command)
         }
     }
 }
@@ -428,15 +506,27 @@ pub(crate) async fn request_plan(
     limits: &ExecuteLimits,
 ) -> Result<krishiv_plan::Plan, KrishivError> {
     let session = entry.session();
-    let translate = TranslateConf {
-        default_data_source: session
-            .conf()
-            .get("spark.sql.sources.default")
-            .unwrap_or_else(|| TranslateConf::default().default_data_source),
-        parser: session.parser_options(),
-        local_relations: LocalRelations::default(),
-    };
-    let decompressed = match &plan.op_type {
+    let decompressed = decompressed(plan, limits).await?;
+    // Inline Python UDFs are typed, never registered: analysis runs no client code.
+    let mut udfs = InlineUdfs::analysis(entry.python());
+    match translate_locals(entry, plan, decompressed.as_deref(), &mut udfs).await? {
+        Translated::Relation(logical) => Ok(logical),
+        // A command's ADR 0046 §3b class is checked before it is refused, on every RPC that
+        // takes a plan.
+        Translated::Command(command) => {
+            crate::auth::enforce(&command.check, session).await?;
+            Err(command.refusal)
+        }
+    }
+}
+
+/// A compressed operation's bytes, decompressed off the async workers
+/// (bounded by `maxPlanSize`); `None` for any other plan.
+async fn decompressed(
+    plan: &pb::Plan,
+    limits: &ExecuteLimits,
+) -> Result<Option<Vec<u8>>, KrishivError> {
+    Ok(match &plan.op_type {
         Some(OpType::CompressedOperation(c)) => {
             let c = (**c).clone();
             let max = limits.max_plan_size;
@@ -452,34 +542,34 @@ pub(crate) async fn request_plan(
             )
         }
         _ => None,
-    };
-    // The local relations (`createDataFrame`) are built by an async pre-pass, as the translator is
-    // synchronous: a first translation records what the plan needs, the relations are built, and a
-    // second translation uses them. A plan without any is translated once.
+    })
+}
+
+/// The plan translated, with its local relations (`createDataFrame`) built by an async pre-pass, as
+/// the translator is synchronous: a first translation records what the plan needs, the relations are
+/// built, and a second translation uses them. A plan without any is translated once.
+async fn translate_locals(
+    entry: &SessionEntry,
+    plan: &pb::Plan,
+    decompressed: Option<&[u8]>,
+    udfs: &mut dyn TranslateHost,
+) -> Result<Translated, KrishivError> {
+    let translate = translate_conf(entry.session());
     let collecting = LocalRelations::collecting();
     let first = TranslateConf {
         local_relations: collecting.clone(),
         ..translate.clone()
     };
-    let translated = translate_plan(plan, decompressed.as_deref(), &first)?;
+    let translated = translate_plan(plan, decompressed, &first, udfs)?;
     // Drained, not copied: the recorded inline data is the one copy, and each request is consumed
     // (and freed) by its build below.
     let requests = collecting.take_requests();
     drop(first);
     drop(collecting);
-    let logical = match translated {
-        Translated::Relation(logical) => logical,
-        // A command's ADR 0046 §3b class is checked before it is refused, on every RPC that
-        // takes a plan.
-        Translated::Command { check, refusal } => {
-            crate::auth::enforce(&check, session).await?;
-            return Err(refusal);
-        }
-    };
-    if requests.is_empty() {
-        return Ok(logical);
+    if requests.is_empty() || !matches!(translated, Translated::Relation(_)) {
+        return Ok(translated);
     }
-    drop(logical);
+    drop(translated);
     let mut built = Vec::with_capacity(requests.len());
     for request in requests {
         built.push(build_local_relation(entry, request).await?);
@@ -488,10 +578,7 @@ pub(crate) async fn request_plan(
         local_relations: LocalRelations::resolved(built),
         ..translate
     };
-    match translate_plan(plan, decompressed.as_deref(), &second)? {
-        Translated::Relation(logical) => Ok(logical),
-        Translated::Command { refusal, .. } => Err(refusal),
-    }
+    translate_plan(plan, decompressed, &second, udfs)
 }
 
 /// The relation of one request of the translator's first pass: an inline one through
@@ -527,17 +614,18 @@ fn translate_plan(
     plan: &pb::Plan,
     decompressed: Option<&[u8]>,
     conf: &TranslateConf,
+    udfs: &mut dyn TranslateHost,
 ) -> Result<Translated, KrishivError> {
     match &plan.op_type {
         Some(OpType::Root(relation)) => {
-            translate_relation(relation, conf).map(Translated::Relation)
+            translate_relation_with(relation, conf, udfs).map(Translated::Relation)
         }
         Some(OpType::Command(command)) => Ok(Translated::command(command)),
         Some(OpType::CompressedOperation(c)) => {
             let bytes = decompressed.unwrap_or_default();
             match CompressedOpType::try_from(c.op_type) {
                 Ok(CompressedOpType::Relation) => {
-                    translate_relation(&*wire::decode_relation(bytes)?, conf)
+                    translate_relation_with(&*wire::decode_relation(bytes)?, conf, udfs)
                         .map(Translated::Relation)
                 }
                 Ok(CompressedOpType::Command) => match &decode_command(bytes)?.op_type {
@@ -803,6 +891,37 @@ fn settle(op: &Operation, outcome: Result<(), Stop>) {
             op.replay().finish(Some(status_of(&error)));
         }
     }
+}
+
+/// The end of a command's stream: admitted as every operation is, then
+/// `ResultComplete` when reattachable.
+async fn complete(sender: Sender) {
+    let op = Arc::clone(&sender.op);
+    let outcome = tokio::select! {
+        biased;
+        () = op.closed() => Err(Stop::Gone),
+        () = op.cancelled() => Err(Stop::Failed(OperationCanceled {}.into())),
+        r = finish(&sender) => r,
+    };
+    settle(&op, outcome);
+}
+
+/// Ends `sender`'s operation after its last response: atomic with
+/// interrupts (an interrupt that came first turns the end into
+/// `OPERATION_CANCELED`, Spark's `ExecuteThreadRunner`, v4.3.0 lines
+/// 271-293), then `ResultComplete` when reattachable.
+async fn finish(sender: &Sender) -> Result<(), Stop> {
+    sender.admit().await?;
+    if !sender.op.finish() {
+        return Err(Stop::Failed(OperationCanceled {}.into()));
+    }
+    if sender.op.reattachable() {
+        sender
+            .send(sender.response(Some(ResponseType::ResultComplete(ResultComplete {}))))
+            .await?;
+    }
+    sender.op.replay().finish(None);
+    Ok(())
 }
 
 async fn produce(

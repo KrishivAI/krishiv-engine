@@ -196,14 +196,27 @@ async fn run_listeners(
     // One denial counter for the guards and every caller's session (ADR 0046 §8).
     let denials = auth.denials();
     let limits = SessionLimits::from_config(config);
-    let manager = Arc::new(if authenticated {
+    let manager = if authenticated {
         SessionManager::new(
             role_sessions(base, config, Arc::clone(&denials)).map_err(|e| e.to_string())?,
             limits,
         )
     } else {
         SessionManager::from_base(base, limits)
-    });
+    };
+    // One Python UDF worker pool per server (P3-T014): every Connect session's UDFs run on it, in
+    // workers of their own owner, once the session passed the `Usage` check on `System("udf")`.
+    // Starting it runs each listed interpreter once and writes the worker package: off the async workers.
+    #[cfg(target_os = "linux")]
+    let manager = {
+        let pool_config = krishiv_udf_pool::PoolConfig::from_config(config);
+        let pool = tokio::task::spawn_blocking(move || krishiv_udf_pool::Pool::new(pool_config))
+            .await
+            .map_err(|e| format!("cannot start the Python UDF worker pool: {e}"))?
+            .map_err(|e| format!("cannot start the Python UDF worker pool: {e}"))?;
+        manager.with_udf_host(Arc::new(pool))
+    };
+    let manager = Arc::new(manager);
     let connect_listener = TcpListener::bind(connect_addr)
         .await
         .map_err(|e| format!("cannot bind the Spark Connect port {connect_addr}: {e}"))?;
@@ -346,6 +359,25 @@ fn admin_router(
         }),
         (!public).then(|| Arc::clone(&guard)),
     );
+    // `krishiv.admin.v1`: gRPC and REST on the admin listener, behind the same guard.
+    let allowed_hosts = config
+        .get(&krishiv_common::config::SERVER_ALLOWED_HOSTS)
+        .and_then(krishiv_common::config::ConfigValue::as_str)
+        .map(|hosts| {
+            hosts
+                .split(',')
+                .map(str::trim)
+                .filter(|h| !h.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let alias_guard = Arc::clone(&guard);
+    let admin_v1 = krishiv_server::admin_v1::router(
+        Arc::new(krishiv_server::admin_v1::SessionAdmin::new()),
+        Arc::clone(&guard),
+        krishiv_server::admin_v1::AdminConfig::for_listener(bound.ip(), allowed_hosts),
+    );
     let base = if cfg!(feature = "ui") && flag(config, &UI_ENABLED, true) {
         let source = krishiv_server::session_source::SessionSource::new(Arc::clone(runtime))
             .map_err(|e| e.to_string())?;
@@ -355,7 +387,15 @@ fn admin_router(
     };
     let app = base
         .merge(krishiv_server::admin::health_routes(ready))
+        .merge(admin_v1)
         .merge(metrics);
+    // With authentication configured the deprecated version alias needs a credential like
+    // `GetVersion` (design P3-T066 D6, ADR 0046 section 3c).
+    let app = if authenticated {
+        krishiv_server::admin_v1::guard_version_alias(app, alias_guard)
+    } else {
+        app
+    };
     Ok(krishiv_server::admin::with_limits(
         app,
         krishiv_server::admin::HttpLimits::default(),

@@ -11,8 +11,11 @@ the logical-plan IR of `krishiv-plan`. The server (P3-T011, P3-T012) extends thi
 - `src/wire.rs` the only decode path (`wire::decode_*`, `decode_*_with(bytes, &DecodeOptions)`; `decode_request` for any RPC request, the `Request` trait the
   generated layout implements): size, count, depth (`krishiv.connect.maxPlanDepth`) and field-version checks
 - `src/proto/mod.rs` versioned generated protos; `src/proto/v4_3/spark.connect.pb.rs` generated messages (4.2 is kept only for the golden descriptor) (do not edit)
-- `src/translate/mod.rs` `translate_*` entry points, `command_not_supported` (the server runs `sql_command`; every other command is 56K00 until T012); `src/translate/relation.rs` and `expression.rs` (IR building)
+- `src/translate/mod.rs` `translate_*` entry points, `command_not_supported` (the server runs `sql_command` and `register_function`; every other command is 56K00 until T012); `src/translate/relation.rs` and `expression.rs` (IR building)
 - `src/translate/literal.rs` literals (scalars, intervals, nested array/map/struct, specialized arrays); `src/translate/local.rs` the host protocol for local relations; `src/translate/schema.rs` schema texts; `src/translate/names.rs` names and plan-id origins
+- `src/translate/udf.rs` Python UDFs (P3-T014): `python_udf` reads a `CommonInlineUserDefinedFunction` into a `PythonUdf`
+  (scalar eval types 100/101/200/250; Scala/Java 56K00), `UdfHost` is the server's hook naming an inline call
+  (`translate_relation_with`; without a host inline UDFs are refused), `translate_command` reads `register_function`
 - `src/translate/errors.rs` `KRISHIV_UNSUPPORTED_FEATURE` and `CONNECT_INVALID_PLAN.*` errors
 - `src/arrow.rs` result columns Spark sends in another Arrow shape than the engine holds (geometry/geography)
 - `tests/fuzz_regressions.rs` fuzz findings (inputs that once ran out of memory) must end in a typed error

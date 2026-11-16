@@ -81,6 +81,11 @@ mod names;
 mod relation;
 mod schema;
 mod types;
+mod udf;
+
+pub use udf::{
+    Command, PythonUdf, SQL_BATCHED_UDF, UdfCallName, UdfHost, python_udf, translate_command,
+};
 
 pub use local::{LocalRelations, LocalRequest};
 pub use schema::{parse_datatype_string, parse_local_schema, parse_table_schema};
@@ -262,6 +267,20 @@ pub fn translate_relation(relation: &pb::Relation, conf: &TranslateConf) -> Resu
     Plan::try_new(root)
 }
 
+/// [`translate_relation`] with the inline Python UDFs of the plan sent to `udfs` (a server's session),
+/// which names the function each call resolves to.
+///
+/// # Errors
+/// As [`translate_relation`], plus what `udfs` refuses and the errors of [`python_udf`].
+pub fn translate_relation_with(
+    relation: &pb::Relation,
+    conf: &TranslateConf,
+    udfs: &mut dyn UdfHost,
+) -> Result<Plan> {
+    let root = Translator::with_udfs(conf, udfs).relation(relation)?;
+    Plan::try_new(root)
+}
+
 /// Translates an expression.
 ///
 /// # Errors
@@ -276,6 +295,8 @@ pub fn translate_expression(
 /// The state of one translation.
 pub(crate) struct Translator<'c> {
     conf: &'c TranslateConf,
+    /// Where inline Python UDFs go; `None` refuses them.
+    udfs: Option<&'c mut dyn UdfHost>,
     /// Relations and expressions being translated above the current one.
     depth: usize,
     /// Relations and expressions translated so far.
@@ -297,10 +318,26 @@ impl<'c> Translator<'c> {
     const fn new(conf: &'c TranslateConf) -> Self {
         Self {
             conf,
+            udfs: None,
             depth: 0,
             nodes: 0,
             hops: 0,
             locals: 0,
+        }
+    }
+
+    fn with_udfs(conf: &'c TranslateConf, udfs: &'c mut dyn UdfHost) -> Self {
+        Self {
+            udfs: Some(udfs),
+            ..Self::new(conf)
+        }
+    }
+
+    /// The function a call of the inline Python UDF `udf` resolves to.
+    fn inline_python_udf(&mut self, udf: &PythonUdf) -> Result<UdfCallName> {
+        match self.udfs.as_deref_mut() {
+            Some(host) => host.inline_python_udf(udf),
+            None => Err(udf::no_host()),
         }
     }
 

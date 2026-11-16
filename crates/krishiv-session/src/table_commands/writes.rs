@@ -268,8 +268,15 @@ impl Session {
                 .collect::<Vec<_>>(),
         );
         let mut select = Vec::with_capacity(values.len());
+        // `TableOutputResolver.requiresNullChecks`: no NOT NULL check under `storeAssignmentPolicy=LEGACY`.
+        let null_checks = !env
+            .config
+            .get(&krishiv_common::config::STORE_ASSIGNMENT_POLICY)
+            .and_then(krishiv_common::config::ConfigValue::as_str)
+            .is_some_and(|p| p.eq_ignore_ascii_case("LEGACY"));
         for ((_, column), name) in values.iter().zip(&staged) {
-            let checked = crate::char_write::checked(col(name), column, &env.analysis.conf)?;
+            let checked =
+                crate::char_write::checked(col(name), column, &env.analysis.conf, null_checks)?;
             select.push(checked.alias(&column.name));
         }
         let df = computed.select(select);

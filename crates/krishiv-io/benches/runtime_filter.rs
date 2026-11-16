@@ -6,7 +6,9 @@
 //! - probing 262,144 `bigint` rows (almost all misses, as a selective join
 //!   filter sees them) against each row form: a min/max range, a small set
 //!   (8 keys), and an exact hash set and a Bloom filter of 1,024, 4,096
-//!   and 65,536 keys (the exact-set cutoff is chosen from these);
+//!   and 65,536 keys (the exact-set cutoff is chosen from these), and a Bloom
+//!   filter of 1 Mi and 8 Mi keys (1-10 MB: the join-build sizes whose probes
+//!   miss the caches, which the batched probe prefetches);
 //! - `int` rows widened to the `bigint` key, and 262,144 strings against a
 //!   Bloom filter of 65,536 keys.
 
@@ -70,6 +72,32 @@ fn bench(c: &mut Criterion) {
             (n, exact, bloom)
         })
         .collect();
+    // Join-build-sized filters (study 18 §R4: 1-10 MB at SF10-SF1000): past
+    // the caches, where a probe waits on memory unless it prefetches.
+    let large: Vec<(i64, KeyFilter)> = [1i64 << 20, 1 << 23]
+        .into_iter()
+        .map(|n| {
+            // Past the session's default caps, as a planned large build is.
+            let options = KeyFilterOptions {
+                max_values: 0,
+                exact_max_values: 0,
+                bloom: true,
+                bloom_max_items: u64::MAX,
+                bloom_max_bytes: 64 << 20,
+                ..KeyFilterOptions::default()
+            };
+            let keys = spread(n);
+            let mut b = KeyFilterBuilder::new(keys.data_type().clone(), options).expect("key type");
+            b.add(&keys, None).expect("keys");
+            let bloom = b.finish();
+            assert!(
+                matches!(bloom.form(), FilterForm::Bloom(_)),
+                "{:?}",
+                bloom.form()
+            );
+            (n, bloom)
+        })
+        .collect();
     let strings: Vec<String> = (0..ROWS).map(|i| format!("customer#{i:09}")).collect();
     let probe_strings = StringViewArray::from_iter_values(strings.iter());
     let string_bloom = build(
@@ -99,6 +127,11 @@ fn bench(c: &mut Criterion) {
             b.iter(|| black_box(exact.evaluate(black_box(&probe))));
         });
         group.bench_function(format!("probe_bloom{n}_256k_i64"), |b| {
+            b.iter(|| black_box(bloom.evaluate(black_box(&probe))));
+        });
+    }
+    for (n, bloom) in &large {
+        group.bench_function(format!("probe_bloom{}m_256k_i64", n >> 20), |b| {
             b.iter(|| black_box(bloom.evaluate(black_box(&probe))));
         });
     }

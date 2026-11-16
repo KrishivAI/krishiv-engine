@@ -60,16 +60,25 @@ Paths are relative to this crate.
   `aheadBytes` + retry buffer, reserved before the first response, held until close), then pushing into the
   operation's `Replay` under the ahead budget (`krishiv.connect.execute.aheadBytes`) and memory consumer
   `connect_responses` (the Arrow payload is `Bytes`, shared with the copy sent), the
-  response order (schema, batches, metrics, `ResultComplete` when reattachable); `sql_command` (`spark.sql()`) runs as a command (tags and trace carried), other commands are 56K00 until T012;
+  response order (schema, batches, metrics, `ResultComplete` when reattachable); `sql_command` (`spark.sql()`) runs as a command (tags and trace carried), `register_function` with a Python UDF runs (no response but the end), other commands are 56K00 until T012;
   `request_plan` (shared with `AnalyzePlan`) translates twice when the plan holds local relations: the first pass records
   them, `Session::local_relation` builds them (cached ones are `NOT_FOUND_CACHED_LOCAL_RELATION` until the artifact
   store lands), the second pass resolves them (`krishiv-connect` CLAUDE.md);
   `src/execute/arrow.rs` Spark's Arrow shapes, batch limits, IPC streams, codecs and chunks;
   `src/execute/schema.rs` the `schema` response (`DataTypeProtoConverter.toConnectProtoType`)
+- `src/udf.rs` (P3-T014, PR-26d part 1) Python UDFs: `UdfHost` (the server's one pool, `krishiv_udf_pool::Pool` on
+  Linux, set with `SessionManager::with_udf_host`; `krishiv server` builds it from its config) and `SessionPython`, each
+  session's UDFs: its runtime (`SessionUdfs`, owner = principal and server-side id) is installed on the session only at
+  the first passed `Usage` check on `System("udf")` (`register_function`'s command class; a plan with an inline UDF
+  checked in `execute::execution_plan` after translation, before anything is registered), released with the session;
+  `InlineUdfs` is the translator's host (inline UDFs as the session's encoded unregistered-UDF names, one version per
+  distinct definition by digest; `AnalyzePlan` types them, registers nothing, needs no privilege); `copy_for` gives a
+  `CloneSession` clone a runtime of its own (to be called by PR-15's CloneSession); `tests/udf.rs` (real workers with
+  `KRISHIV_TEST_UDF_PYTHON`)
 - `src/codec.rs` `WireCodec`: requests decode only through `wire::decode_request` (bounded size, count, depth, fields)
 - `src/status.rs` `status_of`: a `KrishivError` as Spark's gRPC status (`INTERNAL`, `google.rpc.ErrorInfo` with
   `classes`, `sqlState`, `errorClass`, `messageParameters`; `ErrorUtils.buildStatusFromThrowable`, v4.3.0;
-  `KRISHIV_INSUFFICIENT_PERMISSIONS` is `PERMISSION_DENIED`, ADR 0046 §8);
+  `KRISHIV_INSUFFICIENT_PERMISSIONS` is `PERMISSION_DENIED`, ADR 0046 §8; `PYTHON_EXCEPTION` carries Spark's `PythonException` classes, `KRISHIV_PYTHON_WORKER_EXITED` `SparkException`);
   `exception_classes` picks the Java class list PySpark's `convert_exception` reads (Spark's own for the Connect
   classes, else the Python facade's class/SQLSTATE rules); `KRISHIV_SESSION_LIMIT` and `KRISHIV_OPERATION_LIMIT`
   are `RESOURCE_EXHAUSTED`
@@ -113,6 +122,8 @@ Paths are relative to this crate.
   `detachedTimeout` (then tombstoned: `OPERATION_ABANDONED`). Live operations, detached or finished but unreleased,
   keep a session from the idle sweep; shutdown waits only for operations still running or read by an attached
   client (`Operation::is_active`).
+- **Client code runs only after its `Usage` check on `System("udf")`** (ADR 0046 §3b, N1): a session that never
+  passed one has no Python UDF runtime, so no plan of it starts a worker.
 - `#![forbid(unsafe_code)]`; no `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
 
 ## ADRs (in `../krishiv-internal/adr/`)

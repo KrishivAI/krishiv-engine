@@ -5,9 +5,16 @@
 //! read side pads, `krishiv-plan`'s `char_varchar`); inside arrays, maps and structs it is, as Spark. The check is an `if(...)` over the value whose failing
 //! branch is a tagged `raise_error`, which [`map_error`] turns into the error class once the write
 //! has failed, so the check needs no kernel of its own.
+//!
+//! A column that is not nullable gets the same shape of check for `NULL` (Spark's `TableOutputResolver.checkNullability`
+//! wraps the value in `AssertNotNull(value, colPath)`; its failure is `NOT_NULL_ASSERT_VIOLATION` with
+//! `walkedTypePath = colPath.mkString("\n", "\n", "\n")`, Spark 4.2.0 bytecode of `AssertNotNull` and
+//! `QueryExecutionErrors.notNullAssertViolation`). The file-source tables of the session catalog are always nullable
+//! (Spark makes them so), so only a catalog that keeps NOT NULL (SQLite, Delta, Iceberg) reaches it. Top-level columns
+//! only: a nested field's nullability is not checked on write yet.
 
 use krishiv_common::error::{
-    ErrorClass, ExceedLimitLength, KrishivError, KrishivUnsupportedFeature,
+    ErrorClass, ExceedLimitLength, KrishivError, KrishivUnsupportedFeature, NotNullAssertViolation,
 };
 use std::sync::Arc;
 
@@ -21,11 +28,40 @@ use crate::store::StoreColumn;
 
 /// Marks the `raise_error` message of a failed check; the limit follows.
 const TAG: &str = "\u{1}krishiv.exceed_limit_length:";
+/// Marks the `raise_error` message of a failed NOT NULL check; the column name follows, closed by `\u{2}`.
+const NOT_NULL_TAG: &str = "\u{1}krishiv.not_null_assert:";
 
 /// `value` as stored in a column declared `declared` (`CharVarcharUtils.stringLengthCheck`): trimmed to the limit or
 /// failing the write. A `CHAR` inside an array, map or struct is padded too (`charTypeWriteSideCheck`); a top-level
-/// one is left to the read side, which pads it.
+/// one is left to the read side, which pads it. `null_checks` is false under `spark.sql.storeAssignmentPolicy=LEGACY`
+/// (`TableOutputResolver.requiresNullChecks`): a NOT NULL column is then not checked.
 pub(crate) fn checked(
+    value: Column,
+    column: &StoreColumn,
+    conf: &ResolutionConf,
+    null_checks: bool,
+) -> Result<Column, KrishivError> {
+    let value = if column.nullable || !null_checks {
+        value
+    } else {
+        // A NULL never reaches the stored column; the length check below sees a value that is there.
+        call_function(
+            "if",
+            [
+                call_function("isnull", [value.clone()]),
+                call_function(
+                    "raise_error",
+                    [lit(format!("{NOT_NULL_TAG}{}\u{2}", column.name))],
+                ),
+                value,
+            ],
+        )
+    };
+    length_checked(value, column, conf)
+}
+
+/// The `CHAR(n)` / `VARCHAR(n)` half of [`checked`].
+fn length_checked(
     value: Column,
     column: &StoreColumn,
     conf: &ResolutionConf,
@@ -215,12 +251,20 @@ pub(crate) fn refuse_indeterminate_schema(a: &AnalyzedPlan) -> Result<&AnalyzedP
     .into())
 }
 
-/// A failed check as `EXCEED_LIMIT_LENGTH`; any other error as it is.
+/// A failed check as `EXCEED_LIMIT_LENGTH` or `NOT_NULL_ASSERT_VIOLATION`; any other error as it is.
 pub(crate) fn map_error(e: KrishivError) -> KrishivError {
     if e.error_class() != ErrorClass::UserRaisedException {
         return e;
     }
     let text = e.to_string();
+    if let Some((_, rest)) = text.split_once(NOT_NULL_TAG) {
+        // The name runs to the closing mark.
+        let name = rest.split('\u{2}').next().unwrap_or(rest);
+        return NotNullAssertViolation {
+            walked_type_path: format!("\n{name}\n"),
+        }
+        .into();
+    }
     match text.split_once(TAG).map(|(_, rest)| {
         rest.chars()
             .take_while(char::is_ascii_digit)
@@ -233,6 +277,67 @@ pub(crate) fn map_error(e: KrishivError) -> KrishivError {
 
 #[cfg(test)]
 mod tests {
+    use futures::executor::block_on;
+
+    use crate::Session;
+    use crate::store::CatalogStore;
+
+    fn run(s: &Session, sql: &str) -> Result<(), krishiv_common::error::KrishivError> {
+        block_on(async { s.sql(sql).await?.collect().await }).map(|_| ())
+    }
+
+    /// A table whose `a` column is `NOT NULL` (the file-source tables the session makes are always nullable, so
+    /// the flag is set on the stored entry, as a catalog that keeps it would).
+    fn not_null_table(s: &Session) {
+        run(s, "create table nn(a int, b varchar(2)) using parquet").unwrap();
+        let store = &s.state.catalog.store;
+        let current = store.table("default", "nn").unwrap();
+        let mut changed = (*current).clone();
+        changed.columns[0].nullable = false;
+        store.replace_table_entry(&current, changed).unwrap();
+    }
+
+    /// Spark 4.2.0 `TableOutputResolver.checkNullability` wraps the value in `AssertNotNull(value, colPath)`, whose
+    /// failure is `NOT_NULL_ASSERT_VIOLATION` with `walkedTypePath = colPath.mkString("\n", "\n", "\n")`
+    /// (`AssertNotNull` and `QueryExecutionErrors.notNullAssertViolation` in `spark-catalyst_2.13-4.2.0.jar`).
+    #[test]
+    fn a_null_in_a_not_null_column_is_not_null_assert_violation() {
+        let s = Session::new().unwrap();
+        not_null_table(&s);
+        for sql in [
+            "insert into nn values (null, 'x')",
+            "insert into nn select cast(null as int), 'x'",
+        ] {
+            let e = run(&s, sql).unwrap_err();
+            assert_eq!(e.error_class().name(), "NOT_NULL_ASSERT_VIOLATION", "{sql}");
+            assert_eq!(
+                e.message_parameters()
+                    .iter()
+                    .find(|(k, _)| *k == "walkedTypePath")
+                    .map(|(_, v)| v.clone()),
+                Some("\na\n".to_owned()),
+                "{sql}"
+            );
+        }
+        // Nothing was written, and a value that is there passes (and the length check still runs on `b`).
+        run(&s, "insert into nn values (1, 'x')").unwrap();
+        let e = run(&s, "insert into nn values (2, 'xyz')").unwrap_err();
+        assert_eq!(e.error_class().name(), "EXCEED_LIMIT_LENGTH");
+    }
+
+    /// `requiresNullChecks` is false under `spark.sql.storeAssignmentPolicy=LEGACY` (Spark 4.2.0
+    /// `TableOutputResolver`), so no `AssertNotNull` is added and the NULL is written.
+    #[test]
+    fn the_not_null_check_is_skipped_under_the_legacy_store_assignment_policy() {
+        let s = Session::new().unwrap();
+        not_null_table(&s);
+        run(&s, "set spark.sql.storeAssignmentPolicy=LEGACY").unwrap();
+        run(&s, "insert into nn values (null, 'x')").unwrap();
+        run(&s, "set spark.sql.storeAssignmentPolicy=ANSI").unwrap();
+        let e = run(&s, "insert into nn values (null, 'x')").unwrap_err();
+        assert_eq!(e.error_class().name(), "NOT_NULL_ASSERT_VIOLATION");
+    }
+
     use krishiv_plan::analyzer::DeclaredType as D;
 
     #[test]
