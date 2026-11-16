@@ -1405,6 +1405,28 @@ fn payload_above_aggregate_defaults_off_and_parses() {
 }
 
 #[test]
+fn discover_keys_entries_default_off_and_parse() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        (
+            c.get(&DISCOVER_KEYS).and_then(ConfigValue::as_bool),
+            c.get(&DISCOVER_KEYS_TIMEOUT)
+                .and_then(ConfigValue::as_duration),
+        )
+    };
+    assert_eq!(get(&c), (Some(false), Some(Duration::from_secs(60))));
+    c.set("krishiv.optimizer.discoverKeys", "true").unwrap();
+    c.set("krishiv.optimizer.discoverKeys.timeout", "250ms")
+        .unwrap();
+    assert_eq!(get(&c), (Some(true), Some(Duration::from_millis(250))));
+    assert!(c.set("krishiv.optimizer.discoverKeys", "maybe").is_err());
+    assert!(
+        c.set("krishiv.optimizer.discoverKeys.timeout", "soon")
+            .is_err()
+    );
+}
+
+#[test]
 fn history_entries_parse_and_default() {
     let mut c = Config::new();
     assert_eq!(c.get(&HISTORY_PATH), None);

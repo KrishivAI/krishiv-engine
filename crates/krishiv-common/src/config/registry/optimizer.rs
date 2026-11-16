@@ -86,6 +86,38 @@ pub static PAYLOAD_ABOVE_AGGREGATE: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// Whether the session counts a table's key columns to prove them unique (P2b A5 unit 2,
+/// `krishiv.optimizer.discoverKeys`).
+pub static DISCOVER_KEYS: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.discoverKeys",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Internal. Let the session prove a file table's key columns unique by reading them once \
+          before the query runs, when `krishiv.optimizer.payloadAboveAggregate` needs that fact \
+          for a join over plain files (TPC-H q10's `customer`). The answer is cached per file \
+          version: a later query over the same files reads nothing. A count that runs out of \
+          time or memory, or fails, proves nothing and the plan stays as it was. Results are the \
+          same either way. Off until its timed A/B passes.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
+/// Time one query's key counts may take (`krishiv.optimizer.discoverKeys.timeout`).
+pub static DISCOVER_KEYS_TIMEOUT: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.discoverKeys.timeout",
+    value_type: ValueType::Duration,
+    default: Some(ConfigValue::Duration(std::time::Duration::from_secs(60))),
+    doc: "The time one query's key counts (`krishiv.optimizer.discoverKeys`) may take together: \
+          its tables are counted in turn, each with what the ones before it left. A count that \
+          runs out of time proves nothing; it is tried again only by a query given more time.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
 /// Whether an aggregate's group keys from one dimension travel as one integer code (P2b D2).
 pub static GROUP_KEY_CODE: ConfigEntry = ConfigEntry {
     key: "krishiv.optimizer.groupKeyCode",

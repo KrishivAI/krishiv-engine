@@ -93,6 +93,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.connect.maxConnections", &CONNECT_MAX_CONNECTIONS),
     ("krishiv.exec.lateFetch.maxRows", &LATE_FETCH_MAX_ROWS),
     ("krishiv.io.lateMaterialization", &IO_LATE_MATERIALIZATION),
+    ("krishiv.optimizer.discoverKeys", &DISCOVER_KEYS),
     ("krishiv.optimizer.groupKeyCode", &GROUP_KEY_CODE),
     ("krishiv.python.worker.maxTotal", &PYTHON_WORKER_MAX_TOTAL),
     ("krishiv.query.maxExecutionTime", &QUERY_MAX_EXECUTION_TIME),
@@ -360,6 +361,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.io.parquet.bloomFilter.enabled",
         &IO_PARQUET_BLOOM_FILTER_ENABLED,
+    ),
+    (
+        "krishiv.optimizer.discoverKeys.timeout",
+        &DISCOVER_KEYS_TIMEOUT,
     ),
     (
         "krishiv.runtimeFilter.adaptive.minRows",
