@@ -234,6 +234,11 @@ impl Lane {
         !matches!(*lock(&self.pump), Pump::Idle)
     }
 
+    /// Whether the lane's task is open and has not ended (nor failed).
+    pub(super) fn running(&self) -> bool {
+        matches!(*lock(&self.pump), Pump::Running(_))
+    }
+
     /// Whether the lane is never opened or its task ended well.
     pub(super) fn finished(&self) -> bool {
         matches!(*lock(&self.pump), Pump::Idle | Pump::Done(Ok(())))

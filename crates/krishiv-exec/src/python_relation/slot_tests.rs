@@ -375,6 +375,10 @@ struct Opts {
     /// The lanes' argument is a computed copy of `v` ([`Copied`]), so each
     /// frame reserves its copies.
     copied: bool,
+    /// With `copied`: the argument fails the second time it is evaluated
+    /// over this many rows (a frame evaluated again after the pool refused
+    /// its copies).
+    fails: Option<usize>,
 }
 
 impl Default for Opts {
@@ -383,6 +387,7 @@ impl Default for Opts {
             window: 4,
             grouped: false,
             copied: false,
+            fails: None,
         }
     }
 }
@@ -390,7 +395,12 @@ impl Default for Opts {
 /// `v` copied into a buffer of its own, as a computed argument is: a frame
 /// of it holds bytes beyond its rows', reserved as the frame is made.
 #[derive(Debug)]
-struct Copied;
+struct Copied {
+    /// [`Opts::fails`].
+    fails: Option<usize>,
+    /// Evaluations over `fails` rows so far.
+    seen: AtomicUsize,
+}
 
 impl ScalarExpr for Copied {
     fn data_type(&self) -> ArrowType {
@@ -402,6 +412,11 @@ impl ScalarExpr for Copied {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> crate::error::Result<ArrayRef> {
+        if self.fails == Some(batch.num_rows()) && self.seen.fetch_add(1, Ordering::SeqCst) == 1 {
+            return Err(crate::error::internal(
+                "the argument fails on purpose".to_owned(),
+            ));
+        }
         let v = batch
             .column(1)
             .as_any()
@@ -452,7 +467,10 @@ fn rig_opts(
             name: "f".to_owned(),
             udf: Arc::clone(u) as Arc<dyn PreparedRelationUdf>,
             sides: vec![vec![if opts.copied {
-                Arc::new(Copied) as Arc<dyn ScalarExpr>
+                Arc::new(Copied {
+                    fails: opts.fails,
+                    seen: AtomicUsize::new(0),
+                }) as Arc<dyn ScalarExpr>
             } else {
                 column(1, ArrowType::Int64)
             }]],
@@ -986,6 +1004,23 @@ async fn a_second_refused_result_of_a_combined_task_is_not_lost() {
 #[tokio::test(start_paused = true)]
 async fn a_combined_driver_s_end_left_by_a_full_window_is_framed_by_the_driver_waiting_for_its_slot()
  {
+    end_left_by_a_full_window(2).await;
+}
+
+/// As above with a window of one (review R7-1): each frame the waiting
+/// driver queues is taken inside its poll of the combined lane, which then
+/// waits for the next frame with no event to come (no result follows a
+/// frame mid-group). One framing pass left `EndGroup` and `End` behind and
+/// the waiting driver parked for good; it frames again until nothing moves.
+#[tokio::test(start_paused = true)]
+async fn a_combined_backlog_whose_window_empties_inside_the_poll_is_framed_to_its_end() {
+    end_left_by_a_full_window(1).await;
+}
+
+/// Two drivers over one slot, a grouped map of frames of two rows in a
+/// `window`: a combines with its held row, `EndGroup` and `End` (some of
+/// them past its window), and b waits for a's slot.
+async fn end_left_by_a_full_window(window: usize) {
     let r = rig_opts(
         1,
         1,
@@ -993,7 +1028,7 @@ async fn a_combined_driver_s_end_left_by_a_full_window_is_framed_by_the_driver_w
         0,
         2,
         Opts {
-            window: 2,
+            window,
             grouped: true,
             ..Opts::default()
         },
@@ -1005,7 +1040,8 @@ async fn a_combined_driver_s_end_left_by_a_full_window_is_framed_by_the_driver_w
         // a takes the slot: a frame of two rows now, one row held.
         feed(&r, rows(&[1, 1, 1]), &mut a, &g).await?;
         assert_eq!(r.slots.held(), 1);
-        // The held row and `EndGroup` fill a's window of two; `End` waits.
+        // The held row and `EndGroup` fill a's window of two (with one, the
+        // held row does); `End` waits.
         r.sink.combine(a, &g)?;
         assert_eq!(r.ends.load(Ordering::SeqCst), 0, "a's task cannot end yet");
         // b's whole frame waits for the slot a's task holds.
@@ -1035,18 +1071,36 @@ async fn a_combined_driver_s_end_left_by_a_full_window_is_framed_by_the_driver_w
 /// the combined task ends.
 #[tokio::test(start_paused = true)]
 async fn a_combined_driver_s_backlog_refused_its_copies_asks_for_the_memory() {
-    let r = rig_opts(
+    backlog_refused_its_copies(4).await;
+}
+
+/// As above with a window of two (review R7-4).
+#[tokio::test(start_paused = true)]
+async fn a_combined_backlog_refused_its_copies_in_a_window_of_two_asks_for_the_memory() {
+    backlog_refused_its_copies(2).await;
+}
+
+/// A grouped map with a computed argument over 4 MiB and one slot: a holds
+/// the slot with 5,000 rows held, b waits for it, the pool is filled.
+fn refused_copies_rig(window: usize, fails: Option<usize>) -> Rig {
+    rig_opts(
         1,
         1,
         4 << 20,
         0,
         10_000,
         Opts {
+            window,
             grouped: true,
             copied: true,
-            ..Opts::default()
+            fails,
         },
-    );
+    )
+}
+
+/// The body of the tests above, with lanes of `window` frames.
+async fn backlog_refused_its_copies(window: usize) {
+    let r = refused_copies_rig(window, None);
     let g = r.sink.global_state(&r.ctx).unwrap();
     let (ctx_a, _) = driver_ctx(&r, 1);
     let (ctx_b, owner_b) = driver_ctx(&r, 2);
@@ -1106,6 +1160,51 @@ async fn a_combined_driver_s_backlog_refused_its_copies_asks_for_the_memory() {
         .unwrap();
     assert_eq!(r.ends.load(Ordering::SeqCst), 2);
     assert_eq!(r.slots.state.most.load(Ordering::SeqCst), 1);
+}
+
+/// A combined driver's backlog frame that fails when the waiting driver
+/// frames it (its argument fails the second time over its rows; the first,
+/// in `combine`, was refused its copies) is the waiting driver's error
+/// (review R7-2): left in the combined driver's state, its task would wait
+/// for the frame holding the slot, and `finalize` could not start.
+#[tokio::test(start_paused = true)]
+async fn a_combined_backlog_s_framing_failure_fails_the_waiting_driver() {
+    let r = refused_copies_rig(4, Some(5_000));
+    let g = r.sink.global_state(&r.ctx).unwrap();
+    let (ctx_a, _) = driver_ctx(&r, 1);
+    let (ctx_b, _) = driver_ctx(&r, 2);
+    let (ctx_c, _) = driver_ctx(&r, 3);
+    let run = async {
+        let mut a = r.sink.local_state(&ctx_a, &g)?;
+        let mut b = r.sink.local_state(&ctx_b, &g)?;
+        let keys: Vec<i32> = std::iter::repeat_n(0, 15_000).collect();
+        feed(&r, rows(&keys), &mut a, &g).await?;
+        let SinkStatus::Blocked(wait) = r.sink.sink(rows(&[1, 2]), &mut b, &g)? else {
+            panic!("the second driver must wait for the slot");
+        };
+        let waiting = tokio::spawn(wait);
+        tokio::task::yield_now().await;
+        let mut hog = ctx_c.consumer().consumer().reservation();
+        let mut step = 1 << 20;
+        while step >= 64 {
+            if hog.try_grow(step).is_err() {
+                step /= 2;
+            }
+        }
+        // a's held rows are evaluated (once) and refused their copies.
+        r.sink.combine(a, &g)?;
+        drop(hog);
+        // b frames them again: the evaluation fails.
+        waiting.await.unwrap();
+        let empty = Batch::new(RecordBatch::new_empty(input()));
+        Ok::<_, krishiv_common::error::KrishivError>(r.sink.sink(empty, &mut b, &g).map(drop))
+    };
+    let err = tokio::time::timeout(DEADLINE, run)
+        .await
+        .expect("the waiting driver hung on the combined backlog's failure")
+        .unwrap()
+        .expect_err("the waiting driver must fail");
+    assert!(err.to_string().contains("fails on purpose"), "{err}");
 }
 
 /// A small seeded generator (xorshift64*), so a failing case is named by
