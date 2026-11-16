@@ -38,6 +38,11 @@
 //! 5. **Tidy**: the rewrite batch again over the pruned plan; prune and
 //!    tidy repeat until neither changes the plan (folding can leave columns
 //!    unread).
+//!    **Payload above aggregate**, once, with statistics and
+//!    `krishiv.optimizer.payloadAboveAggregate` (`payload_above`, design P2b
+//!    A5): an aggregate grouping by a dimension's proven-unique key and its
+//!    payload groups by the other side's key, the dimension joined above it;
+//!    then join order, eager aggregation, prune and tidy again when it moved.
 //!    **Late payload join**, once, with statistics (`late_payload`): a
 //!    dimension's payload columns join above the semi, anti and outer joins
 //!    that never read them, a key-only semi join left in place; then join
@@ -71,6 +76,7 @@ mod join_order;
 mod late_payload;
 mod limit;
 mod narrow;
+mod payload_above;
 mod plan_stats;
 mod project;
 mod prune;
@@ -88,8 +94,8 @@ use std::sync::Arc;
 use krishiv_common::config::{
     ANSI_ENABLED, AUTO_BROADCAST_JOIN_THRESHOLD, Config, ConfigValue, EAGER_AGGREGATION,
     GROUP_KEY_CODE, JOIN_COST, JOIN_DP_LIMIT, JOIN_ENUMERATOR, LATE_PAYLOAD_JOIN,
-    SEMI_ANTI_JOIN_ORDER, SESSION_TIME_ZONE, SHARE_CTE_INSTANCES, SHARE_REPEATED_SUBTREES,
-    SUBQUERY_AS_WINDOW,
+    PAYLOAD_ABOVE_AGGREGATE, SEMI_ANTI_JOIN_ORDER, SESSION_TIME_ZONE, SHARE_CTE_INSTANCES,
+    SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
 };
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{
@@ -174,6 +180,12 @@ pub struct Options {
     /// join above the semi and anti joins that never read them. Needs
     /// statistics; a session configuration, when given, can switch it off.
     pub late_payload_join: bool,
+    /// Payload above the aggregate (`payload_above`, design P2b A5): an
+    /// aggregate grouping by a dimension's key and payload groups by the
+    /// other side's key, and the dimension joins above it. Needs statistics
+    /// and a session configuration with
+    /// `krishiv.optimizer.payloadAboveAggregate` on (off by default).
+    pub payload_above_aggregate: bool,
     /// Subquery as window (`win_magic`, P3 W1 shape (a)): a correlated
     /// aggregate subquery over the outer block's own join runs as a window.
     /// Runs only when `krishiv.optimizer.subqueryAsWindow` is also on.
@@ -196,6 +208,7 @@ impl Default for Options {
             stats_propagation: true,
             eager_aggregation: true,
             late_payload_join: true,
+            payload_above_aggregate: true,
             subquery_as_window: true,
             share_repeated_subtrees: true,
             group_key_code: true,
@@ -563,6 +576,44 @@ fn run(
             root
         };
         let root = prune_and_tidy(&root, &mut t)?;
+        // After pruning, so the payload is what the aggregate really groups
+        // by; the moved join is then ordered with the dimension's joins (it
+        // sits above an aggregate, which ordering never looks through, so
+        // ordering cannot undo it), eager aggregation sees the new aggregate,
+        // and the plan is pruned and tidied again (design P2b A5).
+        let above = options.payload_above_aggregate
+            && udfs.is_some_and(|(_, config)| {
+                config
+                    .get(&PAYLOAD_ABOVE_AGGREGATE)
+                    .and_then(ConfigValue::as_bool)
+                    .unwrap_or(false)
+            });
+        let root = match stats {
+            Some(stats) if above => {
+                let (after, notes) =
+                    payload_above::rewrite(Arc::clone(&root), stats, options.stats_propagation)?;
+                t.step(
+                    "PayloadAboveAggregate",
+                    1,
+                    "PayloadAboveAggregate",
+                    &root,
+                    &after,
+                );
+                t.notes("PayloadAboveAggregate", &after, notes);
+                if Arc::ptr_eq(&after, &root) {
+                    after
+                } else {
+                    let mut ordered =
+                        order_and_restrict(after, stats, options.stats_propagation, joins, &mut t)?;
+                    if eager {
+                        ordered =
+                            eager_pass(&ordered, stats, options.stats_propagation, joins, &mut t)?;
+                    }
+                    prune_and_tidy(&ordered, &mut t)?
+                }
+            }
+            _ => root,
+        };
         // After pruning, so a projection on the path holds only what is read
         // above it and the payload is what the path really carries; the moved
         // join is then ordered with the dimension's own joins and its path

@@ -144,6 +144,16 @@ pub trait Statistics: Send + Sync + fmt::Debug {
     /// The statistics of the table `scan` reads at its pinned version, when
     /// known.
     fn table(&self, scan: &Scan) -> Option<TableStats>;
+
+    /// Sets of column names, each unique among the rows of the table `scan`
+    /// reads at its pinned version whose columns of the set are all non-NULL
+    /// (two such rows never agree on every column of a set). A fact, never an
+    /// estimate: a rewrite that returns other rows when it is false reads it
+    /// (`payload_above`, design P2b A5). None by default.
+    fn unique_keys(&self, scan: &Scan) -> Vec<Vec<String>> {
+        let _ = scan;
+        Vec::new()
+    }
 }
 
 /// No statistics: every table is estimated by default.
