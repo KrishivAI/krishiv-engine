@@ -1,7 +1,5 @@
 -- query 24: nope(1)
-SELECT kll_sketch_to_string_double(a, b) AS c1 FROM t24 WHERE x IN (1, 2) AND y = 'x(kll_sketch_to_string_double)';
-SELECT tuple_intersection_theta_double(a, b) AS c2 FROM t24 WHERE x IN (1, 2) AND y = 'x(tuple_intersection_theta_double)';
-SELECT legacy_fn_13(a, b) AS c3 FROM t24 WHERE x IN (1, 2) AND y = 'x(legacy_fn_13)';
-SELECT to_variant_object(a, b) AS c4 FROM t24 WHERE x IN (1, 2) AND y = 'x(to_variant_object)';
-SELECT legacy_fn_14(a, b) AS c5 FROM t24 WHERE x IN (1, 2) AND y = 'x(legacy_fn_14)';
-SELECT kll_sketch_get_quantile_double(a, b) AS c6 FROM t24 WHERE x IN (1, 2) AND y = 'x(kll_sketch_get_quantile_double)';
+SELECT tuple_difference_theta_integer(a, b) AS c1 FROM t24 WHERE x IN (1, 2) AND y = 'x(tuple_difference_theta_integer)';
+SELECT bitmap_bit_position(a, b) AS c2 FROM t24 WHERE x IN (1, 2) AND y = 'x(bitmap_bit_position)';
+SELECT to_avro(a, b) AS c3 FROM t24 WHERE x IN (1, 2) AND y = 'x(to_avro)';
+SELECT approx_top_k_accumulate(a, b) AS c4 FROM t24 WHERE x IN (1, 2) AND y = 'x(approx_top_k_accumulate)';

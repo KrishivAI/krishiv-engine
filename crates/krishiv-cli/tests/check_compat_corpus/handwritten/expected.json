@@ -49,12 +49,6 @@
  },
  {
   "file": "stream_job.py",
-  "line": 8,
-  "name": "window",
-  "status": "not yet"
- },
- {
-  "file": "stream_job.py",
   "line": 11,
   "name": "theta_sketch_agg",
   "status": "not yet"
@@ -119,12 +113,6 @@
   "file": "nested_calls.sql",
   "line": 6,
   "name": "java_method",
-  "status": "not yet"
- },
- {
-  "file": "nested_calls.sql",
-  "line": 7,
-  "name": "window",
   "status": "not yet"
  }
 ]

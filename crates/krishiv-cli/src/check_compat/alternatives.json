@@ -13,6 +13,5 @@
  "sentences": "for the words of one sentence: regexp_extract_all(str, '[A-Za-z0-9_]+', 0); Spark's sentence and word break rules are not reproduced",
  "theta_sketch_agg": "approx_count_distinct(expr) returns a distinct-count estimate; Theta sketches are not available",
  "theta_sketch_estimate": "approx_count_distinct(expr) over the raw column returns a distinct-count estimate; Theta sketches are not available",
- "try_reflect": "Krishiv has no JVM to call into; register a UDF instead (see the Native Rust UDFs reference)",
- "window": "tumbling windows, start only and whole seconds: group by timestamp_seconds(floor(unix_timestamp(ts) / N) * N) for N seconds; no window struct or end column"
+ "try_reflect": "Krishiv has no JVM to call into; register a UDF instead (see the Native Rust UDFs reference)"
 }
