@@ -196,14 +196,22 @@ async fn run_listeners(
     // One denial counter for the guards and every caller's session (ADR 0046 §8).
     let denials = auth.denials();
     let limits = SessionLimits::from_config(config);
-    let manager = Arc::new(if authenticated {
+    let manager = if authenticated {
         SessionManager::new(
             role_sessions(base, config, Arc::clone(&denials)).map_err(|e| e.to_string())?,
             limits,
         )
     } else {
         SessionManager::from_base(base, limits)
-    });
+    };
+    // One Python UDF worker pool per server (P3-T014): every Connect session's UDFs run on it, in
+    // workers of their own owner, once the session passed the `Usage` check on `System("udf")`.
+    #[cfg(target_os = "linux")]
+    let manager = manager.with_udf_host(Arc::new(
+        krishiv_udf_pool::Pool::new(krishiv_udf_pool::PoolConfig::from_config(config))
+            .map_err(|e| format!("cannot start the Python UDF worker pool: {e}"))?,
+    ));
+    let manager = Arc::new(manager);
     let connect_listener = TcpListener::bind(connect_addr)
         .await
         .map_err(|e| format!("cannot bind the Spark Connect port {connect_addr}: {e}"))?;
