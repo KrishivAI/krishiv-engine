@@ -8,15 +8,16 @@
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
+use krishiv_common::error::{ErrorClass, KrishivError, KrishivUnsupportedFeature};
 use krishiv_exec::planner::{ExplainNode, PhysicalPlan, ProviderStatistics, TableProviderResolver};
 use krishiv_optimizer::PlanStats;
 use krishiv_plan::{LogicalPlan, Plan};
 use krishiv_sql::ast::{Explain, SetKind, Statement, TimeZone};
 
 use crate::dataframe::{Analysis, DataFrame, ExplainMode};
-use crate::functions::lit;
-use crate::session::{Session, internal};
+use crate::session::Session;
+
+pub(crate) mod withheld;
 
 impl From<krishiv_sql::ast::ExplainMode> for ExplainMode {
     fn from(mode: krishiv_sql::ast::ExplainMode) -> Self {
@@ -54,6 +55,16 @@ impl Session {
         env: crate::session::QueryEnv,
         redacted: &krishiv_common::redact::RedactedSql,
     ) -> Result<DataFrame, KrishivError> {
+        // Krishiv's `EXPLAIN FORMAT JSON` (P3-T063 N2): the explained
+        // statement's analyze document. It is analyzed, never run; its
+        // reads are checked as a run checks them.
+        if e.mode == krishiv_sql::ast::ExplainMode::Json {
+            let json = self
+                .analyze_statement((*e.statement).clone(), redacted)
+                .await?
+                .to_json();
+            return self.one_row(&json).await;
+        }
         if !matches!(&*e.statement, Statement::Query(_)) {
             let text = command_plan(&e.statement)?;
             return self.one_row(&text).await;
@@ -82,7 +93,11 @@ impl Session {
                     .to_text(krishiv_exec::profile::TextOptions::default())
             }
             krishiv_sql::ast::ExplainMode::Verbose => explained.verbose().await?.to_text(),
-            mode => explained.explain_text(mode.into(), true).await?,
+            mode => {
+                explained
+                    .explain_for_metadata_text(mode.into(), true)
+                    .await?
+            }
         };
         self.one_row(&text).await
     }
@@ -203,22 +218,11 @@ fn command_plan(statement: &Statement) -> Result<String, KrishivError> {
 /// A frame of one row, the string column `plan`.
 impl Session {
     async fn one_row(&self, text: &str) -> Result<DataFrame, KrishivError> {
-        let env = self.query_env();
-        let Statement::Query(q) =
-            krishiv_sql::parse_statement("SELECT 1", &env.parser).map_err(|e| e.error)?
-        else {
-            return Err(internal("SELECT 1 is not a query".to_owned()));
-        };
-        let plan = krishiv_sql::lower_with(
-            &q,
-            krishiv_plan::SourceId(0),
-            self.parser_options().case_sensitive,
+        self.string_frame(
+            crate::analyze::command_schema::EXPLAIN,
+            vec![vec![Some(text.to_owned())]],
         )
-        .map_err(|e| e.error)?;
-        let df = DataFrame::new(self.clone(), Arc::clone(plan.root()))
-            .select([lit(text.to_owned()).alias("plan")]);
-        df.analyzed_in(env).await?;
-        Ok(df)
+        .await
     }
 }
 
@@ -437,6 +441,101 @@ impl DataFrame {
         }
         Ok(text)
     }
+}
+
+impl DataFrame {
+    /// The text of `mode` for a caller that may hold only `Browse` on what the plan reads (Connect
+    /// `AnalyzePlan.explain`, SQL `EXPLAIN`; ADR 0046 §3b, design P3 PR-14d D1). A principal whose
+    /// ordinary (`Select`) analysis passes gets [`Self::explain_text`], unchanged. Otherwise the
+    /// plan is shown with the data withheld ([`Self::explain_withheld`]). The trial analysis logs
+    /// no audit record: its denial is an answer, not a refusal. `cost` keeps `Select`: its numbers
+    /// are the data.
+    pub(crate) async fn explain_for_metadata_text(
+        &self,
+        mode: ExplainMode,
+        lenient: bool,
+    ) -> Result<String, KrishivError> {
+        if mode == ExplainMode::Cost {
+            return self.explain_text(mode, lenient).await;
+        }
+        match self.trial_analysis().await {
+            // An access refusal (a denial, a policy error, a row filter or mask on `Select`):
+            // the withheld plan. Any other failure is the ordinary explain's to show.
+            Err(e)
+                if matches!(
+                    e.error_class(),
+                    ErrorClass::KrishivInsufficientPermissions
+                        | ErrorClass::KrishivUnsupportedFeature
+                ) =>
+            {
+                self.explain_withheld(mode, lenient).await
+            }
+            _ => self.explain_text(mode, lenient).await,
+        }
+    }
+
+    /// The plan of a metadata analysis (catalog tables need `Browse`), planned with no table
+    /// statistics, no planning hints and no distinct-value samples, and without the result-cache
+    /// note; a note line says so. A plan that reads a permanent view still needs `Select` on it:
+    /// the plan shows the inlined body, and a view's text is data (ADR 0046, update 2026-11-12).
+    /// A file listing or footer failure is shown without its
+    /// paths, which can carry partition values.
+    async fn explain_withheld(
+        &self,
+        mode: ExplainMode,
+        lenient: bool,
+    ) -> Result<String, KrishivError> {
+        let parsed = self.plan.to_string();
+        let analysis = match self.metadata_analysis().await {
+            Ok(a) => a,
+            Err(e) if lenient => return Ok(failed(mode, &parsed, None, &e)),
+            Err(e) => return Err(e),
+        };
+        if let Err(e) = self.session.authorize_bodies(&analysis).await {
+            return if lenient {
+                Ok(failed(mode, &parsed, None, &e))
+            } else {
+                Err(e)
+            };
+        }
+        let (optimized, physical) = match self
+            .session
+            .physical_withheld(&analysis.analyzed, &analysis.env)
+            .await
+        {
+            Ok((optimized, physical)) => (optimized, physical.explain_all()),
+            Err(e) => {
+                let e = withheld_error(&e);
+                return if lenient {
+                    Ok(failed(mode, &parsed, Some(&analysis), &e))
+                } else {
+                    Err(e)
+                };
+            }
+        };
+        let stats = ProviderStatistics(withheld::resolver(
+            Arc::clone(&analysis.env.catalog) as Arc<dyn TableProviderResolver>
+        ));
+        let planned = Planned {
+            analysis,
+            optimized,
+            physical,
+        };
+        let mut text = render(mode, &parsed, &planned, &stats);
+        let _ = write!(text, "\n{WITHHELD_NOTE}\n");
+        Ok(text)
+    }
+}
+
+/// The last section of a withheld explain.
+pub(crate) const WITHHELD_NOTE: &str =
+    "== Note ==\nStatistics withheld: the plan is the one chosen with no table statistics.";
+
+/// A planning failure of a withheld explain, without its text: listing a table's files or reading
+/// their footers can fail with a path, and a path can carry partition values (`country=US`). Its
+/// class and SQLSTATE stay; every message parameter is redacted.
+fn withheld_error(e: &KrishivError) -> KrishivError {
+    e.redacted()
 }
 
 fn physical_section(physical: &ExplainNode) -> String {

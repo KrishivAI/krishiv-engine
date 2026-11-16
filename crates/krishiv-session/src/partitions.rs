@@ -32,7 +32,7 @@ use krishiv_common::error::{
 };
 use krishiv_common::names::check_column_name_duplication;
 use krishiv_plan::Literal;
-use krishiv_plan::analyzer::{Privilege, Securable, authorize};
+use krishiv_plan::analyzer::Privilege;
 use krishiv_sql::StatementClass;
 use krishiv_sql::ast::{AlterTableAction, BucketSpec, Expr, PartitionSpec, PartitionWithLocation};
 use krishiv_types::DataType;
@@ -131,21 +131,6 @@ pub(crate) fn partition_path(root: &Path, spec: &[(String, String)]) -> PathBuf 
         ));
     }
     path
-}
-
-/// Moves a partition directory to `target`, creating its parents.
-fn move_partition_dir(source: &Path, target: &Path) -> Result<(), KrishivError> {
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| internal(format!("cannot create {}: {e}", parent.display())))?;
-    }
-    std::fs::rename(source, target).map_err(|e| {
-        internal(format!(
-            "cannot rename {} to {}: {e}",
-            source.display(),
-            target.display()
-        ))
-    })
 }
 
 /// `col=value/...` of a partition (Spark's partition name, as `SHOW PARTITIONS` lists it).
@@ -789,6 +774,7 @@ impl Session {
         let env = self.query_env();
         let locate = |p: &Path| {
             self.locate_write_path(&format!("file:{}", p.display()), &BTreeMap::new(), &env)
+                .map(|c| c.at)
         };
         let at = locate(root)?;
         let below = |p: &Path| -> Result<Option<String>, KrishivError> {
@@ -890,8 +876,9 @@ impl Session {
             return Ok(());
         }
         let env = self.query_env();
-        let at =
-            self.locate_write_path(&format!("file:{}", root.display()), &BTreeMap::new(), &env)?;
+        let at = self
+            .locate_write_path(&format!("file:{}", root.display()), &BTreeMap::new(), &env)?
+            .at;
         let log = CommitLog::new(
             &env.io,
             at.store.clone(),
@@ -1067,14 +1054,17 @@ impl Session {
             )));
         }
         // The files leave the source directory and land in the target.
-        self.authorize_dir_for(&source, Privilege::Modify).await?;
-        self.authorize_dir(&target).await?;
+        // The move acts on the canonical paths checked, and is verified after it (`move_checked_dir`).
+        let checked_source = self.authorize_dir_for(&source, Privilege::Modify).await?;
+        let checked_target = self.authorize_dir(&target).await?;
         // The log moves first, then the directory: a lost race or a failed commit changes nothing, and a crash in
         // between leaves the log one rename ahead of the files, which a rerun of the statement completes (the
         // log then lists nothing below the old directory). A failed move puts the log back.
         self.relog_partitions(&table.location, &[(source.clone(), Some(target.clone()))])
             .await?;
-        if let Err(e) = move_partition_dir(&source, &target) {
+        if let Err(e) =
+            self.move_checked_dir(&checked_source.path, &checked_target, StatementClass::Ddl)
+        {
             if let Err(undo) = self
                 .relog_partitions(&table.location, &[(target.clone(), Some(source.clone()))])
                 .await
@@ -1095,7 +1085,9 @@ impl Session {
         self.state
             .cache
             .invalidate_table(&format!("{}.{}", table.namespace, table.name));
-        if let Err(e) = move_partition_dir(&target, &source) {
+        if let Err(e) =
+            self.move_checked_dir(&checked_target.path, &checked_source, StatementClass::Ddl)
+        {
             tracing::warn!(error = %e, "a partition rename that lost its catalog swap could not move its directory back");
             return Err(e);
         }
@@ -1438,54 +1430,53 @@ impl Session {
             .into());
         }
         // Every check first, then the directories: a failure removes the ones this command created.
+        let mut checked = Vec::with_capacity(added.len());
         for p in &added {
-            self.authorize_dir(&p.location).await?;
+            checked.push(self.authorize_dir(&p.location).await?);
         }
+        // The directories made are the canonical ones checked, each verified after the mkdir.
         let mut created: Vec<&Path> = Vec::new();
-        for p in &added {
-            if p.location.is_dir() {
+        for dir in &checked {
+            if dir.path.is_dir() {
                 continue;
             }
-            if let Err(e) = std::fs::create_dir_all(&p.location) {
+            if let Err(e) = self.create_checked_dir(
+                &dir.path,
+                &dir.shown,
+                Privilege::Create,
+                StatementClass::Ddl,
+            ) {
                 for dir in created {
                     let _ = std::fs::remove_dir(dir);
                 }
-                return Err(internal(format!(
-                    "cannot create {}: {e}",
-                    p.location.display()
-                )));
+                return Err(e);
             }
-            created.push(&p.location);
+            created.push(&dir.path);
         }
         changed.layout.partitions.extend(added);
         changed.data_changed();
         Ok(changed)
     }
 
-    /// `CREATE` on a partition directory the command makes or registers.
-    async fn authorize_dir(&self, path: &Path) -> Result<(), KrishivError> {
+    /// `CREATE` on a partition directory the command makes or registers: the canonical path checked.
+    async fn authorize_dir(
+        &self,
+        path: &Path,
+    ) -> Result<crate::table_commands::CheckedDir, KrishivError> {
         self.authorize_dir_for(path, Privilege::Create).await
     }
 
     /// `privilege` on a partition directory: `CREATE` where the command makes or registers one, `MODIFY` where it
-    /// deletes or moves away the files in one (as TRUNCATE and INSERT ask of the paths they change).
+    /// deletes or moves away the files in one (as TRUNCATE and INSERT ask of the paths they change). Asked in the
+    /// form `authorize_path` asks a table's directory in (the canonical path, returned), so one rule answers both
+    /// alike.
     async fn authorize_dir_for(
         &self,
         path: &Path,
         privilege: Privilege,
-    ) -> Result<(), KrishivError> {
-        let securable = Securable::Path(krishiv_common::secret::OptionValue::from_user(
-            "path",
-            path.display().to_string(),
-        ));
-        let r = authorize(
-            &*self.state.policy,
-            &self.state.principal,
-            &securable,
-            privilege,
-        )
-        .await;
-        crate::access::audit(self, StatementClass::Ddl, r)
+    ) -> Result<crate::table_commands::CheckedDir, KrishivError> {
+        self.authorize_path(path, &[privilege], StatementClass::Ddl)
+            .await
     }
 
     /// Registers the partitions a successful write committed files to (`dirs`, as
@@ -1698,7 +1689,7 @@ impl Session {
         let rows = names.into_iter().map(|n| vec![Some(n)]).collect();
         // A union of rows keeps no order, so sort the frame itself.
         Ok(self
-            .string_frame(&["partition"], rows)
+            .string_frame(crate::analyze::command_schema::SHOW_PARTITIONS, rows)
             .await?
             .order_by([col("partition")]))
     }

@@ -45,6 +45,7 @@ variants!(
     ReplicateRows,
     Generate,
     PythonEval,
+    CollectMetrics,
     PythonMap,
     PythonGroupMap,
     PythonCoGroupMap,
@@ -81,6 +82,7 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::ReplicateRows { .. } => Variant::ReplicateRows,
         PhysNode::Generate { .. } => Variant::Generate,
         PhysNode::PythonEval { .. } => Variant::PythonEval,
+        PhysNode::CollectMetrics { .. } => Variant::CollectMetrics,
         PhysNode::PythonMap { .. } => Variant::PythonMap,
         PhysNode::PythonGroupMap { .. } => Variant::PythonGroupMap,
         PhysNode::PythonCoGroupMap { .. } => Variant::PythonCoGroupMap,
@@ -642,6 +644,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "session_zone_name"
             | "aggregate_filter"
             | "range"
+            | "observe"
             | "aggregate_collects"
             | "aggregate_vectors"
             | "aggregate_mode_regr_bit_listagg"
@@ -653,7 +656,10 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "write_files_partitioned"
             | "write_files_column_types"
             | "aggregate_percentiles"
-            | "options_map_literal" => 6,
+            | "options_map_literal"
+            | "nested_literals"
+            | "file_source_schema"
+            | "local_relation_source" => 6,
             // Features added after the version was frozen: above every
             // sequential format version.
             n if n.starts_with("time_")
@@ -661,7 +667,8 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
                 || n.starts_with("interval_")
                 || n.starts_with("collated_")
                 || n.starts_with("variant_")
-                || n.starts_with("calendar_") =>
+                || n.starts_with("calendar_")
+                || n.starts_with("vector_carrier") =>
             {
                 6
             }

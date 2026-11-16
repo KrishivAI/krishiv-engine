@@ -28,6 +28,12 @@ both off (the default) nothing differs. See [result cache](../reference/result-c
 what is cached, when entries go, and the one staleness the cache accepts (a change made outside the
 engine, until the entry expires or `REFRESH TABLE`).
 
+## `EXPLAIN FORMAT JSON`, `EXPLAIN ANALYZE`, `EXPLAIN VERBOSE` (Krishiv extensions)
+
+Spark 4.2 has none of these forms, and its parser rejects each with a syntax error. Krishiv accepts them:
+`EXPLAIN FORMAT JSON <statement>` returns the statement's analysis as JSON without running it (see the
+[SQL reference](../reference/sql/index.md)); any other `EXPLAIN FORMAT ...` is a syntax error, as in Spark.
+
 ## Writers leave a `_krishiv_log` directory
 
 A write to a plain directory records each commit in `<path>/_krishiv_log/` (one `<version>.json` per commit), so that
@@ -302,3 +308,31 @@ do not see it, as in Spark. `system.caches` lists the session's live checkpoints
   Setting a key the registry marks admin-only answers `KRISHIV_INSUFFICIENT_PERMISSIONS` (42501, gRPC
   `PERMISSION_DENIED`) for a non-admin role (no role exists before authentication, so the local user is the admin).
 - **Interrupt by tag** fails with `UNSUPPORTED_FEATURE.INTERRUPT_TYPE` until operation tags can be interrupted.
+
+## `Dataset.observe`: where the counts differ from Spark's (follow-up P3-T084c)
+
+`DataFrame::observe` / PySpark `Observation` match Spark 4.2.0 on every case of
+`tests/fixtures/spark-4.2.0/observe-goldens.json` except the ones below
+(`crates/krishiv-session/tests/observe_goldens.rs` pins them in `KNOWN_GAPS`, each must still fail there, so a
+fix removes the line). A `LIMIT` (and so `take`, `first`, `show`) directly above the observed node,
+or above projections only, counts exactly the rows it takes, as Spark's `CollectMetricsExec` counts the rows
+its consumer pulled; the cap is one budget per node instance, so over several partitions the rows
+counted are the first the racing drivers hand over (Spark's are partition 0's: a `sum` metric can differ).
+The budget is per instantiation, not global: in a staged or distributed run every task that instantiates the
+observed node has its own, so the count can exceed `n` (P3-T084c).
+
+- **Limit not last, or a filter in between:** `observe(..).limit(n).count()`, a limit under a join, or a filter between the observed node and the limit: Spark's per-partition `LocalLimit` can pull up to `n` rows per partition, and a filter changes how many rows the node saw per row taken; the engine applies one cap of `n` rows per instance of the node (see above). Not yet backed by a golden (P3-T084c).
+- **Sort and limit:** `df.observe(..).orderBy(..).limit(n)` reads every row in the engine (`n` = the input);
+  Spark's `TakeOrderedAndProject` pulls a partition-dependent subset (20 of 1000 in the golden).
+- **ANSI `sum` overflow:** Spark's metric aggregate returns the saturated `9223372036854775807` for a long
+  `sum` that overflows under ANSI; the engine raises `ARITHMETIC_OVERFLOW`. With ANSI off both wrap.
+- **Scalar subquery in a metric:** Spark runs it; the engine refuses it with `KRISHIV_UNSUPPORTED_FEATURE`.
+- **Empty relation above:** `observe(..).where(false)` (Spark prunes the node; `{}`) counts the rows read.
+  Only `LIMIT 0` prunes. Streaming frames are not refused as Spark refuses them.
+- **Connect:** struct, map and interval metric values are refused when the server builds the
+  `ObservedMetrics` literal (after the rows were sent); a name with no plan id reports `plan_id` 0.
+- **Cancelled actions:** a dropped result stream completes the observation with `{}` or the rows
+  folded before the drivers stopped (Spark: a partial value); a failed finalization of a metric is what `get`
+  raises.
+- **`Observation.get` blocks** a thread; do not call it from async code on a runtime thread.
+- **Result cache:** a plan that observes is never served from the result cache (every action runs it).

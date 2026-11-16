@@ -14,6 +14,10 @@ def make_engine(name: str, **kw) -> Engine:
         from .spark_connect import SparkConnectEngine
 
         return SparkConnectEngine(**kw)
+    if name == "krishiv-connect":
+        from .krishiv_connect import KrishivConnectEngine
+
+        return KrishivConnectEngine(**kw)
     if name == "polars-streaming":
         from .polars_engine import PolarsEngine
 
@@ -45,5 +49,15 @@ def make_engine(name: str, **kw) -> Engine:
     raise ValueError(f"unknown engine {name!r}; available: {', '.join(ENGINES)}")
 
 
-ENGINES = ["duckdb", "spark-connect", "krishiv", "polars", "datafusion", "spark-local", "sail", "clickhouse"]
+ENGINES = [
+    "duckdb",
+    "spark-connect",
+    "krishiv",
+    "krishiv-connect",
+    "polars",
+    "datafusion",
+    "spark-local",
+    "sail",
+    "clickhouse",
+]
 __all__ = ["ENGINES", "Dataset", "Engine", "Measure", "Query", "make_engine"]

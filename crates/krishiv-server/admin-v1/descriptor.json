@@ -1,0 +1,113 @@
+{
+  "enums": {},
+  "messages": {
+    "Capability": {
+      "fields": {
+        "detail": {
+          "jsonName": "detail",
+          "label": "singular",
+          "number": 4,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "kind": {
+          "jsonName": "kind",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "name": {
+          "jsonName": "name",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        },
+        "value": {
+          "jsonName": "value",
+          "label": "singular",
+          "number": 3,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        }
+      }
+    },
+    "GetCapabilitiesRequest": {
+      "fields": {}
+    },
+    "GetCapabilitiesResponse": {
+      "fields": {
+        "capabilities": {
+          "jsonName": "capabilities",
+          "label": "repeated",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "message:Capability"
+        }
+      }
+    },
+    "GetVersionRequest": {
+      "fields": {}
+    },
+    "GetVersionResponse": {
+      "fields": {
+        "admin_v1_revision": {
+          "jsonName": "adminV1Revision",
+          "label": "singular",
+          "number": 2,
+          "oneof": null,
+          "optional": false,
+          "type": "int64"
+        },
+        "preview": {
+          "jsonName": "preview",
+          "label": "singular",
+          "number": 3,
+          "oneof": null,
+          "optional": false,
+          "type": "bool"
+        },
+        "version": {
+          "jsonName": "version",
+          "label": "singular",
+          "number": 1,
+          "oneof": null,
+          "optional": false,
+          "type": "string"
+        }
+      }
+    }
+  },
+  "methods": {
+    "GetCapabilities": {
+      "clientStreaming": false,
+      "http": {
+        "method": "GET",
+        "path": "/capabilities"
+      },
+      "privilege": "authenticated",
+      "request": "GetCapabilitiesRequest",
+      "response": "GetCapabilitiesResponse",
+      "serverStreaming": false
+    },
+    "GetVersion": {
+      "clientStreaming": false,
+      "http": {
+        "method": "GET",
+        "path": "/version"
+      },
+      "privilege": "authenticated",
+      "request": "GetVersionRequest",
+      "response": "GetVersionResponse",
+      "serverStreaming": false
+    }
+  },
+  "package": "krishiv.admin.v1",
+  "revision": 1
+}

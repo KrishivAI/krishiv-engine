@@ -19,7 +19,7 @@ pub(crate) fn columns(sources: &Sources) -> Vec<ArrayRef> {
     vec![
         text(rows.iter().map(|r| Some(r.group_id.as_str()))),
         text(rows.iter().map(|r| r.parent_id.as_deref())),
-        text(rows.iter().map(|_| Some("active"))),
+        text(rows.iter().map(|r| Some(r.state))),
         text(rows.iter().map(|r| Some(r.scheduling_policy))),
         Arc::new(Int32Array::from_iter(
             rows.iter().map(|r| Some(r.scheduling_weight)),
