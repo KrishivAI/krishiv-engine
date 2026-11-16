@@ -580,6 +580,15 @@ fn ctes_and_sql_functions_count_as_inlined() {
         rows,
         files(&root, &["a/a1.parquet", "a/a1.parquet", "a/a2.parquet"])
     );
+    // A definition that calls the function itself: bound, it is deterministic and inlined (Spark inlines it).
+    let sql =
+        "WITH x AS (SELECT input_file_name() f, id FROM a) SELECT input_file_name(), f FROM x";
+    let (rows, _) = run_sql(&s, sql).unwrap();
+    let pairs: Vec<Vec<String>> = files(&root, &["a/a1.parquet", "a/a1.parquet", "a/a2.parquet"])
+        .into_iter()
+        .map(|r| vec![r[0].clone(), r[0].clone()])
+        .collect();
+    assert_eq!(rows, pairs);
     // Two references: each reads its own instance of the definition.
     let sql = "WITH x AS (SELECT * FROM a) SELECT input_file_name() FROM x UNION ALL SELECT input_file_name() FROM x";
     let (rows, _) = run_sql(&s, sql).unwrap();

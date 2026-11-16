@@ -34,9 +34,10 @@
 //!   constants; Spark's value does not depend on `_metadata` and is the file.
 //! - EXPLAIN shows the rewrite (`regexp_replace(_metadata.file_path, ..) AS input_file_name()` over a scan with
 //!   `_metadata`) where Spark prints `input_file_name()`; output names are the call's.
-//! - A reference to a `WITH` definition that holds a nondeterministic call is a pipeline break (Krishiv computes
-//!   such a definition once for all its references; Spark inlines it and shows the file). A deterministic one is
-//!   read through a fresh instance of the definition, as the optimizer inlines it.
+//! - A reference to a `WITH` definition that is nondeterministic after binding (`plan_is_deterministic`, the
+//!   optimizer's own test: a nondeterministic call or Python relation) is a pipeline break (Krishiv computes such a
+//!   definition once for all its references; Spark inlines it and shows the file). Any other is read through a
+//!   fresh instance of the bound definition, as the optimizer inlines it.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -404,6 +405,7 @@ pub fn bind_input_files(
         done: HashMap::new(),
         provided: HashMap::new(),
         defs,
+        spans: HashMap::new(),
     };
     let out = r.rewrite(root);
     Plan::try_new(out).map(Some)
@@ -424,6 +426,8 @@ struct Binder<'a> {
     provided: HashMap<usize, (Arc<LogicalPlan>, Widened)>,
     /// The `WITH` definitions, by their output ids (a `CteRef`'s `source`).
     defs: HashMap<Vec<AttrId>, Arc<LogicalPlan>>,
+    /// The id span of each widened definition (`first_free_id`), measured once.
+    spans: HashMap<Vec<AttrId>, u64>,
 }
 
 fn col(c: &BoundColumn) -> Arc<Expr> {
@@ -464,22 +468,6 @@ fn holds_call(p: &LogicalPlan) -> bool {
         found |= calls_in(e, resolved_call, &mut plans).is_some();
     });
     found
-}
-
-/// Whether every call in `p` (subquery plans included) is deterministic.
-fn deterministic(p: &LogicalPlan) -> bool {
-    let mut det = true;
-    let _ = crate::walk::visit_distinct(crate::walk::Node::Plan(p), |n| {
-        if let crate::walk::Node::Expr(e) = n
-            && let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node
-            && !f.deterministic
-        {
-            det = false;
-            return std::ops::ControlFlow::Break(());
-        }
-        std::ops::ControlFlow::Continue(())
-    });
-    det
 }
 
 /// `e` with origins cleared, for comparing a select-list expression with a grouping one.
@@ -744,12 +732,21 @@ impl Binder<'_> {
     /// shared (computed once for all its references), so a reference to it is a break.
     fn cte_instance(&mut self, r: &crate::CteRef) -> Option<(Arc<LogicalPlan>, Provided)> {
         let def = Arc::clone(self.defs.get(&r.source)?);
-        if !deterministic(&def) {
+        // Tested after the rewrite, as the optimizer tests what it inlines: a definition that calls
+        // `input_file_name()` is deterministic once bound.
+        let def = self.rewrite(&def);
+        if !crate::plan_is_deterministic(&def) {
             return None;
         }
-        let def = self.rewrite(&def);
         let (wide, cols) = self.provide(&def)?;
-        let span = super::resolve::first_free_id(&wide).ok()?;
+        let span = match self.spans.get(&r.source) {
+            Some(n) => *n,
+            None => {
+                let n = super::resolve::first_free_id(&wide).ok()?;
+                self.spans.insert(r.source.clone(), n);
+                n
+            }
+        };
         let offset = self.next;
         self.next = offset.checked_add(span)?.checked_add(1)?;
         let moved = |c: &BoundColumn, as_: &BoundColumn| -> Option<Arc<Expr>> {

@@ -338,8 +338,6 @@ fn sql_function_roots(
     Ok(())
 }
 
-/// Whether a call of `name` is for the function registry to answer: not a
-/// canonical operator or a grouping function.
 /// The SQL-bodied table function `name` (a `FROM f(..)` table function name, parts joined by
 /// [`crate::TABLE_FUNCTION_NAME_SEP`]), if it is one.
 pub(super) fn sql_table_function(
@@ -377,6 +375,8 @@ pub(super) fn sql_call(
     }
 }
 
+/// Whether a call of `name` is for the function registry to answer: not a
+/// canonical operator or a grouping function.
 fn is_registry_call(name: &str) -> bool {
     crate::Builtin::from_name(name).is_none_or(crate::Builtin::is_analyzer_internal)
         && super::analytics::GroupingFn::from_name(name).is_none()
