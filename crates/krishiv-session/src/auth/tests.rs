@@ -952,3 +952,35 @@ fn a_hand_built_service_token_without_expiry_refuses_startup() {
     assert!(invalid_config(&err), "{err}");
     assert!(err.to_string().contains("prometheus.expires"), "{err}");
 }
+
+/// #785 review R1: a token's principal follows the principal-name rule, refused at the token's
+/// own key, so the operator is never sent to a `principals.<p>.expires` key that cannot be set.
+#[test]
+fn a_token_principal_follows_the_principal_name_rule() {
+    let dir = tempfile::tempdir().unwrap();
+    let b = secret_file(dir.path(), "b", TOKEN_B, 0o400);
+    for bad in ["etl..prod", ".etl", "etl."] {
+        for kind in ["user", "service"] {
+            let err = config(&[
+                ("krishiv.auth.tokens.etl.secret", b.as_str()),
+                ("krishiv.auth.tokens.etl.principal", bad),
+                ("krishiv.auth.tokens.etl.kind", kind),
+                ("krishiv.auth.tokens.etl.role", "operator"),
+            ])
+            .expect_err(bad);
+            assert!(invalid_config(&err), "{bad}: {err}");
+            assert!(
+                err.to_string()
+                    .contains("krishiv.auth.tokens.etl.principal"),
+                "{bad}: {err}"
+            );
+        }
+    }
+    let err = config(&[
+        (SPARK_TOKEN_KEY, b.as_str()),
+        ("krishiv.auth.sparkTokenPrincipal", "spark..admin"),
+    ])
+    .expect_err("spark token principal");
+    assert!(invalid_config(&err), "{err}");
+    assert!(err.to_string().contains("sparkTokenPrincipal"), "{err}");
+}
