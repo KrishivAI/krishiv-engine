@@ -5,7 +5,7 @@
 //! The suggestion comes from the class's simple name (`org.apache.hadoop.hive.ql.udf.generic.
 //! GenericUDFNvl` is `nvl`) or, failing that, from the name the statement gives the function, matched
 //! against the built-in functions that Hive and Spark-community UDFs most often stand for. The
-//! list is the migration guide's table; a test checks that each name has a reference page.
+//! list leaves out functions whose results differ from Hive's (`hash` is Murmur3 here); a test checks that each name has a reference page.
 
 /// The built-in functions a JVM UDF is most often a copy of.
 const BUILT_INS: &[&str] = &[
@@ -24,7 +24,6 @@ const BUILT_INS: &[&str] = &[
     "from_unixtime",
     "from_utc_timestamp",
     "get_json_object",
-    "hash",
     "hex",
     "if",
     "instr",
@@ -69,11 +68,19 @@ const PREFIXES: &[&str] = &[
 pub(crate) fn hint(function: &str, class_name: &str) -> String {
     let simple = class_name.rsplit(['.', '$']).next().unwrap_or(class_name);
     let mut key = normalise(simple);
+    let mut hive_named = false;
     if let Some(rest) = PREFIXES.iter().find_map(|p| key.strip_prefix(p)) {
         key = rest.to_owned();
+        hive_named = true;
     }
     if let Some(name) = built_in(&key) {
-        return format!("Use the built-in function `{name}` instead.");
+        if hive_named {
+            return format!("Use the built-in function `{name}` instead.");
+        }
+        // A bare simple name such as `Hash` or `Split` may be any package's own class.
+        return format!(
+            "Krishiv has a built-in function `{name}`: if the class does the same, call it directly instead of registering a class."
+        );
     }
     let own = function.rsplit('.').next().unwrap_or(function);
     if let Some(name) = built_in(&normalise(own)) {
@@ -82,7 +89,7 @@ pub(crate) fn hint(function: &str, class_name: &str) -> String {
         );
     }
     "Rewrite it as a built-in function, a SQL function (CREATE FUNCTION ... RETURN), a Rust UDF or a \
-     Python UDF; the guide \"Migrating JVM UDFs\" lists the replacements."
+     Python UDF."
         .to_owned()
 }
 
@@ -125,13 +132,31 @@ mod tests {
                 "org.apache.hadoop.hive.ql.udf.generic.GenericUDFDateDiff",
                 "datediff",
             ),
-            ("com.example.Md5", "md5"),
-            ("com.example.Outer$Upper", "upper"),
         ] {
             let text = hint("f", class);
             assert!(text.contains(&format!("`{built_in}`")), "{class}: {text}");
             assert!(text.starts_with("Use the built-in"), "{class}: {text}");
         }
+    }
+
+    #[test]
+    fn a_bare_simple_name_is_only_a_suggestion() {
+        for class in [
+            "com.acme.Split",
+            "com.example.Md5",
+            "com.example.Outer$Upper",
+        ] {
+            let text = hint("f", class);
+            assert!(
+                text.contains("if the class does the same"),
+                "{class}: {text}"
+            );
+            assert!(!text.starts_with("Use the built-in"), "{class}: {text}");
+        }
+        // Hive's `hash` is not Murmur3: never named as the replacement.
+        assert!(
+            !hint("f", "org.apache.hadoop.hive.ql.udf.generic.GenericUDFHash").contains("`hash`")
+        );
     }
 
     #[test]
@@ -145,7 +170,6 @@ mod tests {
     fn an_unknown_class_gets_the_general_advice() {
         let text = hint("my_fn", "com.example.MyFancyThing");
         assert!(text.contains("Rust UDF"), "{text}");
-        assert!(text.contains("Migrating JVM UDFs"), "{text}");
         // An empty simple name matches nothing.
         assert!(hint("my_fn", "com.example.").contains("Rust UDF"));
     }
