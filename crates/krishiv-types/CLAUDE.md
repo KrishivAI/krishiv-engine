@@ -47,3 +47,6 @@ Paths are relative to this crate.
 
 ## Tests
 `cargo nextest run -p krishiv-types --no-tests=pass` · `cargo clippy -p krishiv-types --all-targets -- -D warnings`
+
+## Vector carrier (P3-T075)
+`FixedSizeList<Float32|Float64, N>` (top level, 1 <= N <= `MAX_VECTOR_LENGTH` 65,536) is a stored carrier of Spark `array<float|double>`: `canonical_arrow_type` keeps an eligible one, converts every other fixed-size list to `List`; `edge_arrow_type` converts all to `List` (what callers, UDFs and the wire see); `is_vector_carrier` tells them apart.

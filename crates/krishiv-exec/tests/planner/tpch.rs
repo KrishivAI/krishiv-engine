@@ -221,6 +221,30 @@ impl Tpch {
         })
     }
 
+    /// `text` parsed, analyzed and optimized by the tables' statistics under
+    /// the session `settings`, with the optimizer's trace.
+    pub(crate) fn optimized_in(
+        &self,
+        text: &str,
+        settings: &[(&str, &str)],
+    ) -> Result<(Plan, Vec<krishiv_optimizer::RuleStep>), KrishivError> {
+        let plan =
+            krishiv_sql::parse_and_lower(text, &krishiv_sql::ParserOptions::default(), SourceId(0))
+                .map_err(KrishivError::from)?;
+        let plan: Plan = block_on(DefaultAnalyzer.analyze(&plan, &self.ctx))?.plan;
+        let stats = ProviderStatistics(Arc::clone(&self.tables) as _);
+        let mut config = Config::new();
+        for (k, v) in settings {
+            config.set(k, v)?;
+        }
+        krishiv_optimizer::optimize_traced_with_udfs(
+            &plan,
+            &stats,
+            &krishiv_udf_sdk::UdfLibrary::new(),
+            &config,
+        )
+    }
+
     /// As [`Self::plan_sql_with`], its operators spilling into `spill`.
     pub(crate) fn plan_sql_in(
         &self,

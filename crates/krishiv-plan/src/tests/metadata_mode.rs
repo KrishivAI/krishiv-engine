@@ -108,14 +108,14 @@ fn ctx(policy: &Arc<Viewer>, mode: AnalysisMode) -> AnalysisContext {
 }
 
 fn files(options: &[(&str, OptionValue)]) -> LogicalPlan {
-    LogicalPlan::new(PlanNode::Read(ReadSource::Files {
-        format: "parquet".to_owned(),
-        paths: vec![OptionValue::from_user("path", "/data/x")],
-        options: options
+    LogicalPlan::new(PlanNode::Read(ReadSource::files(
+        "parquet",
+        vec![OptionValue::from_user("path", "/data/x")],
+        options
             .iter()
             .map(|(k, v)| ((*k).to_owned(), v.clone()))
             .collect(),
-    }))
+    )))
 }
 
 fn run(
