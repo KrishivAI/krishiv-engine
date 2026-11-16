@@ -10,6 +10,8 @@
 //! ([`PruneMode::Conservative`]).
 
 pub(crate) mod bounds;
+pub(crate) mod deletes;
+pub(crate) mod dv;
 pub(crate) mod entry;
 pub(crate) mod metrics;
 pub(crate) mod prune;
@@ -23,6 +25,8 @@ mod prop_tests;
 mod tests;
 
 pub use bounds::{decode, encode};
+pub use deletes::{DELETE_FILE_PATH_ID, DELETE_FILE_POS_ID, DeleteIndex, TaskDeletes};
+pub use dv::{decode_dv, encode_dv};
 pub use entry::{
     ContentFile, ContentKind, DataFileEntry, DeleteFileEntry, DeleteKind, EntryStatus,
     FileFormatKind, FileScanTask, LiveEntry, ManifestContent, ManifestFileEntry, ManifestFilter,

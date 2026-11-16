@@ -169,10 +169,18 @@ impl PhysExpr for SubqueryValue {
         let values::Value::Subquery(v) = v.as_ref() else {
             return Err(internal("a subquery value of another kind"));
         };
+        // A vector carrier (design P3-T075) the subquery's plan ended in is Spark's plain list to its reader.
+        let v = if v.data_type() == &self.data_type {
+            Arc::clone(v)
+        } else if krishiv_types::arrow::is_vector_carrier(v.data_type()) {
+            crate::carrier::recarried_array(v, &self.data_type)?
+        } else {
+            Arc::clone(v)
+        };
         if v.data_type() != &self.data_type || v.len() != 1 {
             return Err(internal("a subquery value of another type or length"));
         }
-        Ok(Value::Scalar(Arc::clone(v)))
+        Ok(Value::Scalar(v))
     }
 }
 

@@ -605,7 +605,7 @@ impl Session {
         }
         // Before any side effect: what the statement writes, creates or
         // drops (its reads are checked by analysis, first thing).
-        let class = krishiv_sql::classify(&statement);
+        let class = krishiv_sql::classify_with(&statement, &env.parser);
         self.authorize_statement(&statement, class, &env).await?;
         env.statement_class = Some(class.name());
         let df = self.run_statement(statement, env, query, &redacted).await?;
@@ -1280,6 +1280,7 @@ impl Session {
                 u64::try_from(self.state.runtime.executor.parallelism().max(1)).unwrap_or(1)
             },
             runtime: self.state.runtime.executor.io_handle().clone(),
+            relations: Arc::clone(&self.state.relations),
         };
         let catalog = Arc::new(QueryCatalog::new(
             Arc::clone(&self.state.catalog),
@@ -1886,15 +1887,6 @@ impl Session {
     }
 }
 
-/// Aborts a task when dropped.
-struct AbortOnDrop(krishiv_exec::TaskHandle);
-
-impl Drop for AbortOnDrop {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
-
 #[cfg(test)]
 mod tests;
 
@@ -1908,5 +1900,6 @@ mod writes;
 use writes::*;
 
 mod ops;
+use ops::AbortOnDrop;
 
 mod planning;

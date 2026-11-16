@@ -159,3 +159,58 @@ fn with_ids(field: arrow_schema::Field, id: i32, ty: &Type) -> arrow_schema::Fie
     metadata.insert(krishiv_io::FIELD_ID_KEY.to_owned(), id.to_string());
     field.with_data_type(data_type).with_metadata(metadata)
 }
+
+/// One field of an Iceberg name mapping as serialised (table spec "Column
+/// Projection": `field-id` optional, `names`, nested `fields`).
+#[derive(serde::Deserialize)]
+struct MappedFieldJson {
+    #[serde(rename = "field-id")]
+    field_id: Option<i32>,
+    names: Vec<String>,
+    #[serde(default)]
+    fields: Vec<MappedFieldJson>,
+}
+
+impl From<MappedFieldJson> for krishiv_io::MappedField {
+    fn from(f: MappedFieldJson) -> Self {
+        Self {
+            id: f.field_id,
+            names: f.names,
+            fields: f.fields.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// The name mapping `text` (the table property
+/// `schema.name-mapping.default`, Java's `NameMappingParser.fromJson`).
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` naming the parse error for text that is not
+/// a name mapping (a field without `names`, as Java requires them) or that
+/// gives one name twice at a level (Java's `MappedFields` refuses it): files
+/// without ids are then never read by a guess.
+pub(crate) fn parse_name_mapping(text: &str) -> Result<krishiv_io::NameMapping, KrishivError> {
+    let bad = |e: String| {
+        unsupported(format!(
+            "reading the Iceberg name mapping schema.name-mapping.default: {e}"
+        ))
+    };
+    let fields: Vec<MappedFieldJson> =
+        serde_json::from_str(text).map_err(|e| bad(e.to_string()))?;
+    fn unique(level: &[MappedFieldJson]) -> Result<(), String> {
+        let mut seen = std::collections::BTreeSet::new();
+        for f in level {
+            for n in &f.names {
+                if !seen.insert(n.as_str()) {
+                    return Err(format!("the name {n} is mapped twice"));
+                }
+            }
+            unique(&f.fields)?;
+        }
+        Ok(())
+    }
+    unique(&fields).map_err(bad)?;
+    Ok(krishiv_io::NameMapping::new(
+        fields.into_iter().map(Into::into).collect(),
+    ))
+}

@@ -157,10 +157,12 @@ fn crafted_partial_collisions_scatter() {
 
 /// `m` distinct keys forged to one full 64-bit `h`, among ordinary keys:
 /// every key is still found, absent keys with the same `h` are not, the
-/// colliding keys' probe run grows linearly in `m` (at load 1/2 the
-/// cluster takes in about as many neighbours: at most `2m` plus an
-/// ordinary run); only the ordinary keys next to the cluster get longer
-/// runs, so their total grows by `O(m²)`, whatever the table size.
+/// colliding keys' probe run grows linearly in `m` (at this test's load,
+/// about 1/2, the cluster takes in about as many neighbours: at most `2m`
+/// plus an ordinary run; a directory near its 4/5 bound takes in more, still
+/// linear in `m`, which this test does not measure); only the ordinary keys
+/// next to the cluster get longer runs, so their total grows by `O(m²)`,
+/// whatever the table size.
 #[test]
 fn full_collisions_stay_correct_and_bounded() {
     const BASE: usize = 3840;
@@ -239,4 +241,29 @@ fn a_flat_index_has_no_probe_runs() {
         .unwrap_or_else(|e| panic!("{e}"));
     assert!(index.is_flat());
     assert_eq!(index.probe_run(enc.hashes()[0]), None);
+}
+
+/// The directory is sized for its keys at load ≤ 4/5 and never grows: at
+/// key counts where 5/4 of them lands exactly on a power of two and they are
+/// not a multiple of 4 (1,639: 1,639 + 409 = 2,048), rounding 5/4 down left
+/// the last key past the load bound, and the directory doubled with no
+/// reservation behind it (review of S5's 5/4 sizing).
+#[test]
+fn the_directory_holds_its_keys_without_growing() {
+    let layout = layout();
+    for n in [1_639_usize, 1_638, 1_640, 3_277, 6_554] {
+        let keys: Vec<i64> = (0..i64::try_from(n).unwrap_or(0)).collect();
+        let (index, _) = salted(&layout, &keys, &[], 0, 7);
+        assert_eq!(index.len(), n);
+        assert!(
+            5 * n <= 4 * index.buckets(),
+            "{n} keys in {}",
+            index.buckets()
+        );
+        assert_eq!(
+            index.buckets(),
+            salted_bytes(n) / 8,
+            "{n} keys grew the directory"
+        );
+    }
 }
