@@ -29,6 +29,10 @@ NOBC = "spark.sql.autoBroadcastJoinThreshold=-1"
 SPLIT = "spark.sql.files.maxPartitionBytes=100000"
 V2 = "spark.sql.sources.useV1SourceList="
 CACHE = "CACHE TABLE ca AS SELECT * FROM a"
+BIG_BLOCKS = (
+    "SELECT count(*), min(s), max(s), min(l), max(l)"
+    " FROM (SELECT input_file_block_start() s, input_file_block_length() l FROM big)"
+)
 
 # (conf "k=v|k=v", pre statements ";;"-separated, sql)
 CASES: list[tuple[str, str, str]] = [
@@ -88,14 +92,26 @@ CASES: list[tuple[str, str, str]] = [
     ("", "", f"SELECT {IFN} = _metadata.file_path, {IFN}, id FROM parquet.`/w/data/a`"),
     ("", "", f"SELECT {IFN} = _metadata.file_path, id FROM a"),
     # DataSourceV2 file source (Iceberg-like: a DataSourceV2Relation, not a LogicalRelation)
-    (V2, "CREATE OR REPLACE TEMP VIEW av2 AS SELECT * FROM parquet.`/w/data/a`",
-     f"SELECT {IFN}, input_file_block_start(), input_file_block_length(), id FROM av2"),
-    (V2, "CREATE OR REPLACE TEMP VIEW av2 AS SELECT * FROM parquet.`/w/data/a`",
-     f"SELECT {IFN} FROM av2 JOIN b USING (id)"),
-    (V2, "CREATE OR REPLACE TEMP VIEW av2 AS SELECT * FROM parquet.`/w/data/a`",
-     f"SELECT {IFN} FROM av2 JOIN range(5) r ON av2.id = r.id"),
-    (V2, "CREATE OR REPLACE TEMP VIEW av2 AS SELECT * FROM parquet.`/w/data/a`",
-     f"SELECT {IFN} FROM av2 WHERE {IFN} LIKE '%a1%'"),
+    (
+        V2,
+        "CREATE OR REPLACE TEMP VIEW av2 AS SELECT * FROM parquet.`/w/data/a`",
+        f"SELECT {IFN}, input_file_block_start(), input_file_block_length(), id FROM av2",
+    ),
+    (
+        V2,
+        "CREATE OR REPLACE TEMP VIEW av2 AS SELECT * FROM parquet.`/w/data/a`",
+        f"SELECT {IFN} FROM av2 JOIN b USING (id)",
+    ),
+    (
+        V2,
+        "CREATE OR REPLACE TEMP VIEW av2 AS SELECT * FROM parquet.`/w/data/a`",
+        f"SELECT {IFN} FROM av2 JOIN range(5) r ON av2.id = r.id",
+    ),
+    (
+        V2,
+        "CREATE OR REPLACE TEMP VIEW av2 AS SELECT * FROM parquet.`/w/data/a`",
+        f"SELECT {IFN} FROM av2 WHERE {IFN} LIKE '%a1%'",
+    ),
     # one more shape per remaining item
     ("", "", f"SELECT {IFN} FROM a WHERE id > 1 ORDER BY id LIMIT 1"),
     ("", "", f"SELECT {IFN}, id + 1 FROM a ORDER BY {IFN}, id"),
@@ -109,8 +125,16 @@ CASES: list[tuple[str, str, str]] = [
     ("", "", f"SELECT {IFN}, id FROM a GROUP BY id, {IFN}"),
     ("", "", f"SELECT {IFN} FROM a GROUP BY id"),
     ("", "", f"SELECT count(*) FROM a WHERE {IFN} = ''"),
-    ("", "", "SELECT count(*), min(s), max(s), min(l), max(l) FROM (SELECT input_file_block_start() s, input_file_block_length() l FROM big)"),
-    (SPLIT, "", "SELECT count(*), min(s), max(s), min(l), max(l) FROM (SELECT input_file_block_start() s, input_file_block_length() l FROM big)"),
+    (
+        "",
+        "",
+        BIG_BLOCKS,
+    ),
+    (
+        SPLIT,
+        "",
+        BIG_BLOCKS,
+    ),
 ]
 
 
@@ -123,9 +147,26 @@ def run(master: str, workdir: Path) -> tuple[str, list[str], list[dict]]:
         for n, (conf, pre, sql) in enumerate(CASES):
             f.write(json.dumps({"n": n, "conf": conf, "pre": pre, "sql": sql}) + "\n")
     script = (Path(__file__).parent / "gen_input_file_goldens.scala").read_text(encoding="utf-8")
-    cmd = ["docker", "run", "--rm", "-i", "-e", "HOME=/tmp", "-v", f"{workdir}:/w", IMAGE,
-           "/opt/spark/bin/spark-shell", "--master", master, "--driver-memory", "1g",
-           "--conf", "spark.sql.warehouse.dir=/w/wh", "--conf", "spark.ui.enabled=false"]
+    cmd = [
+        "docker",
+        "run",
+        "--rm",
+        "-i",
+        "-e",
+        "HOME=/tmp",
+        "-v",
+        f"{workdir}:/w",
+        IMAGE,
+        "/opt/spark/bin/spark-shell",
+        "--master",
+        master,
+        "--driver-memory",
+        "1g",
+        "--conf",
+        "spark.sql.warehouse.dir=/w/wh",
+        "--conf",
+        "spark.ui.enabled=false",
+    ]
     out = subprocess.run(cmd, input=script, capture_output=True, text=True, timeout=3600, check=False).stdout
     lines = [m.group(1) for line in out.splitlines() if (m := re.match(r"^(?:scala> )*(@@.*)$", line))]
     if "@@END" not in lines:
@@ -133,8 +174,11 @@ def run(master: str, workdir: Path) -> tuple[str, list[str], list[dict]]:
     version = next(x for x in lines if x.startswith("@@VERSION "))[10:]
     files = [x[7:] for x in lines if x.startswith("@@FILE ")]
     cases = [json.loads(x[7:]) for x in lines if x.startswith("@@CASE ")]
-    subprocess.run(["docker", "run", "--rm", "-v", f"{workdir}:/w", "--entrypoint", "rm", IMAGE, "-rf", "/w/data", "/w/wh"],
-                   check=False, capture_output=True)
+    subprocess.run(
+        ["docker", "run", "--rm", "-v", f"{workdir}:/w", "--entrypoint", "rm", IMAGE, "-rf", "/w/data", "/w/wh"],
+        check=False,
+        capture_output=True,
+    )
     return version, files, cases
 
 
@@ -167,12 +211,21 @@ def main() -> None:
         "setup": {
             "files": [f.split(" ")[0].strip('"') + f" ({f.rsplit(' ', 1)[1]} bytes)" for f in files],
             "contents": {
-                "a/a1.parquet": "id 1,2", "a/a2.parquet": "id 3", "b/b1.parquet": "id 1,10",
-                "c/c1.csv": "header id; 1,7", "d/d1.json": "id 2,8",
+                "a/a1.parquet": "id 1,2",
+                "a/a2.parquet": "id 3",
+                "b/b1.parquet": "id 1,10",
+                "c/c1.csv": "header id; 1,7",
+                "d/d1.json": "id 2,8",
                 "big/big.parquet": "id 0..199999, h = sha2(id), parquet.block.size=65536",
             },
-            "views": {"a": "parquet a", "b": "parquet b", "c": "csv c (header, inferSchema)", "d": "json d",
-                      "big": "parquet big", "t": "CREATE TABLE t USING parquet LOCATION <root>/a (catalog table)"},
+            "views": {
+                "a": "parquet a",
+                "b": "parquet b",
+                "c": "csv c (header, inferSchema)",
+                "d": "json d",
+                "big": "parquet big",
+                "t": "CREATE TABLE t USING parquet LOCATION <root>/a (catalog table)",
+            },
             "paths": "rows print <root> for the mounted data directory",
         },
         "cases": cases,
