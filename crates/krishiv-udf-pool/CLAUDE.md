@@ -14,12 +14,18 @@ Paths are relative to this crate.
 - `src/lib.rs` public surface and `run_trampoline_if_requested` (the binary's `__udf-worker` dispatch)
 - `src/pool.rs` `Pool`, `PoolConfig` (from the `krishiv.python.worker.*` and `krishiv.udf.sandbox` keys), `Launcher`,
   `Owner`; the spawner thread, the caps, idle stop, `release`, and `Lease` (a worker handed to one call)
-- `src/worker.rs` one worker: handshake, `ensure_loaded` (a `udf` message), `run_batch` (a `batch` message), the
+- `src/worker.rs` one worker: handshake, `ensure_loaded` (a `udf` message), `run_batch` (a `batch` message), a
+  relation task's messages (`start_task`, `task_event`, `send_frame`, `abandon`), the
   error mapping (`PYTHON_EXCEPTION`, `KRISHIV_PYTHON_WORKER_EXITED`, `KRISHIV_UDF_SANDBOX_UNAVAILABLE` for a trampoline
-  that exits 125 before the worker greets the server; afterwards, or with the sandbox off, 125 is an ordinary exit) and the validating result reader `decode_result`
+  that exits 125 before the worker greets the server; afterwards, or with the sandbox off, 125 is an ordinary exit) and the validating result readers `decode_result` (scalar) and `decode_batch` (a relation task's result, given the declared schema)
 - `src/wire.rs` control messages (JSON, `SCM_RIGHTS`), memfds (`sealed_memfd`, `read_untrusted`)
 - `src/runtime.rs` `SessionUdfs`: a session's payload store keyed by `(name, version)` as a `UdfRuntime`; each call
   runs on a pool call thread and is cancelled (worker killed, even one still starting) when its future is dropped
+  (`with_worker`, shared with the relation tasks)
+- `src/relation.rs` the relation kinds (PR-26c-2: map 205/207, grouped map 201/209/215/216, cogrouped map 206/210,
+  grouped aggregate 202/217/252/254): `prepare_relation` checks the payload's eval type, `open` starts one task per
+  driver on a call thread that holds one worker for the task (wire `task`: frames on the worker's `want`, results
+  as they come, `done`); `send`/`next` are two bounded channels; dropping the task cancels it
 - `src/calls.rs` `CallThreads`: the bounded call threads (at most `maxTotal` threads, at most `maxPerSession`
   running calls per owner; the rest wait in a FIFO queue, not on a thread)
 - `src/interpreter.rs` the startup record of each listed interpreter (version, read paths, packages) and `choose`;
@@ -29,6 +35,9 @@ Paths are relative to this crate.
   copies the files through it; one link rather than one per file, so ruff, which lints them under `python/`, does
   not lint them again without that config). The worker program is `python/krishiv/_udf/pool_worker.py`; `_host.py` switches the
   wrappers' names between the `krishiv` facade (in-process) and `pyspark` (here)
+- `python/krishiv/_udf/relations.py` (through the link) the relation kinds' runners, Spark 4.2.0's per-eval-type
+  loops of `worker.py` over the engine's frames (host-agnostic: the in-process runtime of PR-48 can reuse them)
+- `tests/relations.rs` each relation kind through the pool with real workers (same interpreter rule as below)
 - `tests/pool.rs` real workers: needs `KRISHIV_TEST_UDF_PYTHON` (Python >= 3.11 with `pyspark-client`, `pyarrow`,
   `pandas`); without it the tests pass with a note unless `KRISHIV_UDF_POOL_REQUIRED` is set (the CI job sets both)
 
@@ -37,7 +46,7 @@ Paths are relative to this crate.
   worker of the previous build cannot read raises `WIRE_VERSION` (the worker is part of the same binary, so the
   version guards mixed packages, not stored data).
 - A new file in the worker package: an entry in `package::FILES` (the file itself lives in `python/krishiv/_udf/`).
-- Relation kinds, UDTF analyze and archives (PR-26c), Connect decode and registered functions (PR-26d) build on
+- Window aggregates, UDTF analyze and archives (PR-26c-3), Connect decode and registered functions (PR-26d) build on
   `SessionUdfs` and `Worker`.
 
 ## Invariants
@@ -45,7 +54,7 @@ Paths are relative to this crate.
   `pread` into one 64-byte-aligned Arrow buffer, capped (`max_result_bytes`), their framing checked by `check_frames` (verified
   flatbuffer headers, bodies and buffers in bounds, **no compression**: arrow-ipc 60 allocates a compressed
   buffer's declared length up front, so a 16 KiB stream could abort the server), then decoded by `arrow-ipc`'s
-  validating `StreamDecoder`, whose columns are slices of that buffer (no second copy), and checked for one column of the declared type, one batch and the input's row count. Worker
+  validating `StreamDecoder`, whose columns are slices of that buffer (no second copy), and checked for one column of the declared type, one batch and the input's row count (a relation task's result: one batch with the declared schema's types, given the declared schema). Worker
   output is untrusted; fuzz target `fuzz/fuzz_targets/udf_result_ipc.rs` runs `decode_result` nightly.
 - Every worker is started by the one `krishiv-udf-spawner` thread (the parent-death signal follows the starting
   thread), never in a process group of its own. Every signal goes through the worker's **pidfd** (opened before
@@ -65,6 +74,8 @@ Paths are relative to this crate.
   the server. Test `udf_cannot_outlive_the_server_by_exec_from_a_thread`.
 - One worker serves one `Owner` (principal and session) and one interpreter; reuse only within that key.
 - Blocking work (spawn, socket I/O, waits) runs on the pool's threads, never on a compute worker.
+- A relation task's server side writes to the worker only after the worker's `want`, so neither side blocks on a
+  full socket while the other writes; the worker is given back before the task's results end.
 - No `unwrap`/`expect`/`panic` in library code; errors carry an error class and SQLSTATE.
 
 ## Not here yet (design note §9 records why)

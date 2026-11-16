@@ -10,7 +10,8 @@
 //! `krishiv` wheel.
 //!
 //! - [`Pool`]: the workers, keyed by [`Owner`] and interpreter, with caps, reuse and an idle timeout.
-//! - [`SessionUdfs`]: a session's registered UDFs as an executor `UdfRuntime`.
+//! - [`SessionUdfs`]: a session's registered UDFs as an executor `UdfRuntime`, for the scalar and the relation
+//!   kinds (map, grouped map, cogrouped map, grouped aggregate).
 //! - [`Interpreter`]: the administrator's interpreters, recorded at startup.
 //! - [`run_trampoline_if_requested`]: the binary's dispatch of the hidden subcommand.
 #![forbid(unsafe_code)]
@@ -26,6 +27,8 @@ mod interpreter;
 mod package;
 #[cfg(target_os = "linux")]
 mod pool;
+#[cfg(target_os = "linux")]
+mod relation;
 #[cfg(target_os = "linux")]
 mod runtime;
 #[cfg(target_os = "linux")]

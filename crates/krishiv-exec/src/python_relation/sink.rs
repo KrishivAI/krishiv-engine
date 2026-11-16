@@ -473,7 +473,7 @@ impl RelationSink {
     /// at v4.2.0), so its rows go as they come. A group that spans input
     /// batches still reaches its task as several frames: the runtime must
     /// concatenate an aggregate's frames up to `EndGroup` before it calls
-    /// the UDF (no runtime implements the relation kinds yet).
+    /// the UDF (the worker pool does, `krishiv-udf-pool`).
     fn cut_held(&self, d: &mut Driver, all: bool) -> Result<()> {
         if d.held_rows == 0 {
             return Ok(());

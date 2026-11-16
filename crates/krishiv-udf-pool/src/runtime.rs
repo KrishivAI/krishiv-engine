@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The pool as an executor UDF runtime: one [`SessionUdfs`] per session, implementing
-//! `krishiv_exec::python_eval::UdfRuntime` for the scalar eval types (design `P3-T014-connect-udfs-sandbox.md`
-//! §3.2). Its payload store is filled by the session's registrations (the Connect `udf` module, PR-26d), so
+//! `krishiv_exec::python_eval::UdfRuntime` for the scalar eval types and, through `crate::relation`, the
+//! relation kinds (design `P3-T014-connect-udfs-sandbox.md` §3.2). Its payload store is filled by the session's registrations (the Connect `udf` module, PR-26d), so
 //! the executor and the session need no change to call pool workers.
 
 use std::collections::{BTreeMap, HashMap};
@@ -16,10 +16,11 @@ use krishiv_common::error::{
     InternalError, KrishivError, KrishivUdfNotAvailable, OperationCanceled,
 };
 use krishiv_exec::python_eval::{PreparedUdf, UdfCallSpec, UdfRuntime};
+use krishiv_exec::python_relation::{PreparedRelationUdf, RelationCallSpec};
 use std::os::fd::OwnedFd;
 
 use crate::pool::{CallWatch, Owner, Pool};
-use crate::worker::{PythonPayload, kill_via};
+use crate::worker::{PythonPayload, Worker, kill_via};
 
 /// Ids of loaded payloads, unique in the process: a worker keeps what it has loaded by id.
 static NEXT_PAYLOAD: AtomicU64 = AtomicU64::new(1);
@@ -34,9 +35,9 @@ pub struct SessionUdfs {
 }
 
 #[derive(Clone)]
-struct Registered {
-    id: u64,
-    payload: PythonPayload,
+pub(crate) struct Registered {
+    pub(crate) id: u64,
+    pub(crate) payload: PythonPayload,
 }
 
 impl std::fmt::Debug for SessionUdfs {
@@ -79,20 +80,26 @@ impl SessionUdfs {
     }
 }
 
-impl UdfRuntime for SessionUdfs {
-    fn prepare(&self, spec: &UdfCallSpec) -> krishiv_exec::Result<Arc<dyn PreparedUdf>> {
-        let registered = self
-            .payloads
+impl SessionUdfs {
+    /// The payload registered as `(name, version)`.
+    fn registered(&self, name: &str, version: u32) -> Result<Registered, KrishivError> {
+        self.payloads
             .read()
             .unwrap_or_else(PoisonError::into_inner)
-            .get(&(spec.name.clone(), spec.version))
+            .get(&(name.to_owned(), version))
             .cloned()
             .ok_or_else(|| {
                 KrishivError::from(KrishivUdfNotAvailable {
-                    name: spec.name.clone(),
-                    version: spec.version.to_string(),
+                    name: name.to_owned(),
+                    version: version.to_string(),
                 })
-            })?;
+            })
+    }
+}
+
+impl UdfRuntime for SessionUdfs {
+    fn prepare(&self, spec: &UdfCallSpec) -> krishiv_exec::Result<Arc<dyn PreparedUdf>> {
+        let registered = self.registered(&spec.name, spec.version)?;
         Ok(Arc::new(Prepared {
             pool: self.pool.clone(),
             owner: self.owner.clone(),
@@ -100,6 +107,21 @@ impl UdfRuntime for SessionUdfs {
             return_type: spec.return_arrow.clone(),
             conf: Arc::clone(&self.conf.read().unwrap_or_else(PoisonError::into_inner)),
         }))
+    }
+
+    fn prepare_relation(
+        &self,
+        spec: &RelationCallSpec,
+    ) -> krishiv_exec::Result<Arc<dyn PreparedRelationUdf>> {
+        let registered = self.registered(&spec.name, spec.version)?;
+        let session = Arc::clone(&self.conf.read().unwrap_or_else(PoisonError::into_inner));
+        crate::relation::prepare(
+            self.pool.clone(),
+            self.owner.clone(),
+            registered,
+            spec,
+            &session,
+        )
     }
 }
 
@@ -114,7 +136,7 @@ struct Prepared {
 /// A call's link to its future: dropping the future (the query was cancelled or failed) kills the worker
 /// running it at once (design §3.4 "Cancel").
 #[derive(Default)]
-struct CallState {
+pub(crate) struct CallState {
     cancelled: bool,
     /// The pidfd of the worker running the call; cleared, under this lock, before the worker is given back, so
     /// a late cancel can never signal a worker that already serves another call (and a pidfd never names a
@@ -124,7 +146,7 @@ struct CallState {
     killed: bool,
     /// The call's input until a call thread takes it; a cancel drops it, so a call still queued keeps no
     /// batch in memory (review 2026-11-14 m1).
-    args: Option<RecordBatch>,
+    pub(crate) args: Option<RecordBatch>,
 }
 
 impl CallWatch for Mutex<CallState> {
@@ -144,7 +166,7 @@ impl CallWatch for Mutex<CallState> {
     }
 }
 
-struct CancelOnDrop(Arc<Mutex<CallState>>);
+pub(crate) struct CancelOnDrop(pub(crate) Arc<Mutex<CallState>>);
 
 impl Drop for CancelOnDrop {
     fn drop(&mut self) {
@@ -223,6 +245,22 @@ fn run(
     return_type: &DataType,
     call: &Mutex<CallState>,
 ) -> Result<ArrayRef, KrishivError> {
+    let max_result = pool.max_result_bytes();
+    with_worker(pool, owner, registered, call, |worker| {
+        worker.run_batch(registered.id, args, conf, return_type, max_result)
+    })
+}
+
+/// Runs `body` on a worker of `owner` that has `registered` loaded, for the call `call`: a cancel kills the
+/// worker while it starts or while `body` runs, and a worker killed so is never given back (the call then
+/// ends with `OPERATION_CANCELED`). The worker is given back (or stopped) before this returns.
+pub(crate) fn with_worker<T>(
+    pool: &Pool,
+    owner: &Owner,
+    registered: &Registered,
+    call: &Mutex<CallState>,
+    body: impl FnOnce(&mut Worker) -> Result<T, KrishivError>,
+) -> Result<T, KrishivError> {
     let lock = || call.lock().unwrap_or_else(PoisonError::into_inner);
     let mut lease = match pool.checkout(owner, &registered.payload.python_ver, call) {
         Ok(lease) => lease,
@@ -251,10 +289,9 @@ fn run(
         state.running = Some(pidfd);
     }
     let worker = lease.worker()?;
-    let max_result = pool.max_result_bytes();
     let result = worker
         .ensure_loaded(registered.id, &registered.payload)
-        .and_then(|()| worker.run_batch(registered.id, args, conf, return_type, max_result));
+        .and_then(|()| body(worker));
     let mut state = lock();
     state.running = None;
     if state.cancelled {
