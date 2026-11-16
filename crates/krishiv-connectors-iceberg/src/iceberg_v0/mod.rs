@@ -8,6 +8,7 @@ pub(crate) mod data_file;
 pub(crate) mod deletes;
 pub(crate) mod eq_deletes;
 pub(crate) mod lazy;
+pub(crate) mod lineage;
 pub(crate) mod manifest_cache;
 pub(crate) mod merge;
 pub(crate) mod provider;
@@ -36,6 +37,8 @@ mod delete_tests;
 mod dst_tests;
 #[cfg(test)]
 mod evolution_tests;
+#[cfg(test)]
+mod lineage_tests;
 #[cfg(test)]
 mod merge_tests;
 #[cfg(test)]
