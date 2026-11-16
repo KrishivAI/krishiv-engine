@@ -552,8 +552,8 @@ def _qualified(name: str, db: str | None) -> str:
 class Catalog:
     """The catalog API, as ``pyspark.sql.catalog.Catalog``; the lists are Python lists of named tuples.
 
-    ``spark_catalog`` is the only catalog; its ``default`` database holds the temporary views
-    and the tables ``CREATE TABLE`` made.
+    ``spark_catalog`` is the only catalog this API lists or accepts; its ``default`` database holds the
+    temporary views and the tables ``CREATE TABLE`` made.
     """
 
     def __init__(self, session: SparkSession) -> None:
@@ -568,13 +568,19 @@ class Catalog:
         return str(self._n.catalog_current_catalog())
 
     def setCurrentCatalog(self, catalogName: str) -> None:
-        """Makes ``catalogName`` the current catalog; only ``spark_catalog`` exists."""
+        """Makes ``catalogName`` the current catalog; only ``spark_catalog`` is accepted.
+
+        SQL ``USE system`` still reaches the system tables.
+        """
         if not isinstance(catalogName, str):
             raise not_expected_type("catalogName", "str", catalogName)
         self._n.catalog_set_current_catalog(catalogName)
 
     def listCatalogs(self, pattern: str | None = None) -> list[CatalogMetadata]:
-        """The catalogs, filtered by the ``|``-separated glob ``pattern``."""
+        """The catalogs, filtered by the ``|``-separated glob ``pattern``.
+
+        Only ``spark_catalog`` is listed; the system tables stay reachable through SQL ``USE system``.
+        """
         if pattern is not None and not isinstance(pattern, str):
             raise not_expected_type("pattern", "str", pattern)
         names = [str(n) for n in self._n.catalog_list_catalogs()]
@@ -735,7 +741,31 @@ class Catalog:
 
 def _is_hidden_table(name: str) -> bool:
     """Whether ``name`` is one of the tables that hold ``createDataFrame`` data (listed nowhere)."""
-    return bool(_native.Session.is_dataframe_table(name.rsplit(".", 1)[-1].strip("`")))
+    return bool(_native.Session.is_dataframe_table(_last_part(name)))
+
+
+def _last_part(name: str) -> str:
+    """The last dot-separated part of ``name``; a backquoted part may hold dots (a doubled backquote is one)."""
+    parts: list[str] = []
+    cur: list[str] = []
+    quoted = False
+    i = 0
+    while i < len(name):
+        ch = name[i]
+        if ch == "`":
+            if quoted and name[i + 1 : i + 2] == "`":
+                cur.append("`")
+                i += 1
+            else:
+                quoted = not quoted
+        elif ch == "." and not quoted:
+            parts.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+        i += 1
+    parts.append("".join(cur))
+    return parts[-1]
 
 
 def _refuse_hidden_table(name: str) -> None:

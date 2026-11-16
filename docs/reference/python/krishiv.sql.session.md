@@ -16,8 +16,8 @@ class Catalog
 
 The catalog API, as `pyspark.sql.catalog.Catalog`; the lists are Python lists of named tuples.
 
-`spark_catalog` is the only catalog; its `default` database holds the temporary views
-and the tables `CREATE TABLE` made.
+`spark_catalog` is the only catalog this API lists or accepts; its `default` database holds the
+temporary views and the tables `CREATE TABLE` made.
 
 ### `cacheTable`
 
@@ -116,6 +116,8 @@ def listCatalogs(self, pattern: str | None=None) -> list[CatalogMetadata]
 
 The catalogs, filtered by the `|`-separated glob `pattern`.
 
+Only `spark_catalog` is listed; the system tables stay reachable through SQL `USE system`.
+
 ### `listColumns`
 
 ```python
@@ -186,7 +188,9 @@ An alias for `spark.udf.register` (deprecated since 2.3.0, `pyspark/sql/catalog.
 def setCurrentCatalog(self, catalogName: str) -> None
 ```
 
-Makes `catalogName` the current catalog; only `spark_catalog` exists.
+Makes `catalogName` the current catalog; only `spark_catalog` is accepted.
+
+SQL `USE system` still reaches the system tables.
 
 ### `setCurrentDatabase`
 

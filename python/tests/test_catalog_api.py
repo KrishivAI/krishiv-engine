@@ -58,8 +58,11 @@ def test_databases_and_current(spark: SparkSession) -> None:
 
 def test_catalogs(spark: SparkSession) -> None:
     assert spark.catalog.currentCatalog() == "spark_catalog"
-    assert CatalogMetadata(name="spark_catalog", description=None) in spark.catalog.listCatalogs()
+    assert spark.catalog.listCatalogs() == [CatalogMetadata(name="spark_catalog", description=None)]
+    spark.sql("USE system")  # SQL still reaches the system tables
+    assert spark.catalog.currentCatalog() == "system"
     spark.catalog.setCurrentCatalog("SPARK_CATALOG")
+    assert spark.catalog.currentCatalog() == "spark_catalog"
     with pytest.raises(AnalysisException) as e:
         spark.catalog.setCurrentCatalog("no_such_catalog")
     assert "CATALOG_NOT_FOUND" in str(e.value)
@@ -118,7 +121,8 @@ def test_argument_types_are_checked(spark: SparkSession, method: str, args: tupl
 
 def test_function_and_database_arguments(spark: SparkSession) -> None:
     assert spark.catalog.listFunctions("default", "abs")[0].name == "abs"
-    assert isinstance(spark.catalog.functionExists("abs", "default"), bool)  # built-ins live in no database
+    assert spark.catalog.functionExists("abs")
+    assert spark.catalog.functionExists("no_such_function", "default") is False
     assert not spark.catalog.functionExists("no_such_function")
     for call in (lambda: spark.catalog.listFunctions("nope"), lambda: spark.catalog.getDatabase("nope")):
         with pytest.raises(AnalysisException) as err:
@@ -168,3 +172,28 @@ def test_a_permanent_table_and_the_database_paths(spark: SparkSession) -> None:
 def test_list_catalogs_pattern(spark: SparkSession) -> None:
     assert [c.name for c in spark.catalog.listCatalogs("spark*")] == ["spark_catalog"]
     assert spark.catalog.listCatalogs("other") == []
+
+
+@pytest.mark.parametrize(
+    ("name", "last"),
+    [
+        ("t", "t"),
+        ("db.t", "t"),
+        ("spark_catalog.db.t", "t"),
+        ("`a.b`", "a.b"),
+        ("db.`a.__krishiv_arrow_archive`", "a.__krishiv_arrow_archive"),
+        ("`a``b`", "a`b"),
+    ],
+)
+def test_the_last_part_of_a_quoted_name(name: str, last: str) -> None:
+    from krishiv.sql.session import _last_part
+
+    assert _last_part(name) == last
+
+
+def test_set_current_database_never_switches_the_catalog(spark: SparkSession) -> None:
+    for name in ("system", "spark_catalog"):
+        with pytest.raises(AnalysisException) as err:
+            spark.catalog.setCurrentDatabase(name)
+        assert err.value.getCondition() == "SCHEMA_NOT_FOUND"
+        assert spark.catalog.currentCatalog() == "spark_catalog"

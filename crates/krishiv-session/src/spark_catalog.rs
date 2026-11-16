@@ -269,7 +269,7 @@ impl Catalog<'_> {
     /// # Errors
     /// `SCHEMA_NOT_FOUND` for an unknown namespace.
     pub async fn set_current_database(&self, name: &str) -> Result<(), KrishivError> {
-        self.run(&format!("USE {}", quoted(name))).await
+        self.run(&format!("USE NAMESPACE {}", quoted(name))).await
     }
 
     fn database_of(&self, name: &str, meta: &crate::store::NamespaceMeta) -> Database {

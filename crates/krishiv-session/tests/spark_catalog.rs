@@ -37,6 +37,13 @@ fn current_database_and_catalog() {
     let e = block_on(c.set_current_database("nope")).unwrap_err();
     assert_eq!(e.error_class().name(), "SCHEMA_NOT_FOUND");
     assert_eq!(c.list_catalogs(), ["spark_catalog"]);
+    // A database name is a namespace, never a catalog: `system` and `spark_catalog` are no databases.
+    for name in ["system", "spark_catalog"] {
+        let e = block_on(c.set_current_database(name)).unwrap_err();
+        assert_eq!(e.error_class().name(), "SCHEMA_NOT_FOUND", "{name}");
+        assert_eq!(c.current_catalog(), "spark_catalog", "{name}");
+        assert_eq!(c.current_database(), "db1", "{name}");
+    }
 }
 
 #[test]
