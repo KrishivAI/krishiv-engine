@@ -326,9 +326,20 @@ impl SparkConnectService for ConnectService {
             first.user_context.as_ref(),
         )?;
         observe(&entry, first.client_type.as_deref());
-        enforce(&check, entry.session())
-            .await
-            .map_err(|e| entry.errors().status(&e))?;
+        // Only the classes this handler applies are accepted: a class
+        // `enforce` passes through (the write path, a side effect, an
+        // unsupported request) would let every caller in (fail closed).
+        match &check {
+            Check::Privilege { .. } => enforce(&check, entry.session())
+                .await
+                .map_err(|e| entry.errors().status(&e))?,
+            Check::OwnSession => {}
+            Check::Plan | Check::Write | Check::SideEffect | Check::Unsupported(_) => {
+                return Err(Status::unimplemented(
+                    "AddArtifacts is not supported by this server yet",
+                ));
+            }
+        }
         artifacts::add_artifacts(&entry, &self.artifacts, first, &mut stream)
             .await
             .map(Response::new)

@@ -384,6 +384,10 @@ pub async fn execute_plan(
 /// `release_session`): answered with nothing to clean (connect-mapping §4
 /// row 17, decision 11). Every other command, and this one compressed, stays
 /// 56K00.
+///
+/// The shortcut skips the command path, so it also requires the command's ADR
+/// 0046 §3b class to be [`Check::OwnSession`] (`check_command`): a class change
+/// sends it down the ordinary path, with its check, instead of past it.
 fn is_ml_clean_cache(plan: &pb::Plan) -> bool {
     use krishiv_connect::proto::v4_3::command::CommandType;
     use krishiv_connect::proto::v4_3::ml_command::Command as MlCommand;
@@ -393,7 +397,7 @@ fn is_ml_clean_cache(plan: &pb::Plan) -> bool {
             &command.command_type,
             Some(CommandType::MlCommand(ml))
                 if matches!(ml.command, Some(MlCommand::CleanCache(_)))
-        )
+        ) && check_command(command) == Check::OwnSession
     )
 }
 

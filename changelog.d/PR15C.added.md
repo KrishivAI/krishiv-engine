@@ -1,1 +1,0 @@
-Spark Connect: `CloneSession` copies a session (configuration, temporary views and functions, variables, artifacts) under a new id, and `GetStatus` reports the state of a session's operations, including those that ended in the last 30 minutes.
