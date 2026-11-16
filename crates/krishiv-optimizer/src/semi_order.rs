@@ -31,6 +31,9 @@ pub(crate) fn reorder(
     propagate: bool,
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
     let mut est = Estimator::with_propagation(stats, propagate);
+    // Every `WITH` definition is known before a stack reads it, so a `CteRef` in a stack is
+    // estimated from its definition (as join ordering does).
+    est.plan(&root);
     dag::rewrite_up(root, &mut |p| Ok(order_stack(p, &mut est)))
 }
 

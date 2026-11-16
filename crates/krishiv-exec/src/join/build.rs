@@ -590,10 +590,16 @@ impl Partials {
 
     /// Reserves what the partials hold beyond their reservations; when that
     /// fails the Bloom hashes go first, the exact keys only if it still
-    /// fails without them (an optional filter never waits or fails).
+    /// fails without them (an optional filter never waits or fails). When
+    /// they hold less than is reserved (a merge or `bloom_max_items` dropped
+    /// the hashes), the excess is released.
     fn fit(&mut self) {
         let held: usize = self.memory.iter().map(Reservation::size).sum();
         let want = self.heap_bytes();
+        if want < held {
+            self.release(held - want);
+            return;
+        }
         let Some(memory) = self.memory.first_mut() else {
             return;
         };
@@ -913,6 +919,7 @@ impl BuildGlobal {
             probes: AtomicUsize::new(0),
             probe_flushing: AtomicBool::new(false),
             runtime: Mutex::new(Partials::default()),
+            bloom_lost: Arc::default(),
             filters: Vec::new(),
             publisher: None,
         };

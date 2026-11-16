@@ -135,12 +135,18 @@ impl ExactAcc {
         self.frozen.reserve(new);
     }
 
-    /// Bytes held: the maps (an entry is two words) and the totals.
+    /// Bytes held: the maps (an entry is two words), their slots (a
+    /// [`reserve`](Self::reserve) allocates them before any group) and the
+    /// totals.
     pub(crate) fn size(&self) -> usize {
         self.maps
             .iter()
             .map(|m| m.capacity().saturating_mul(32))
             .sum::<usize>()
+            + self
+                .maps
+                .capacity()
+                .saturating_mul(std::mem::size_of::<HashMap<u64, i64>>())
             + self.totals.capacity().saturating_mul(8)
             + self.frozen.capacity().saturating_mul(32)
             + self
@@ -160,7 +166,7 @@ impl ExactAcc {
     /// not counted.
     pub(crate) fn projected(&self, new: usize, rows: usize) -> usize {
         self.size()
-            .saturating_add(new.saturating_mul(32 + 8))
+            .saturating_add(new.saturating_mul(32 + 8 + std::mem::size_of::<HashMap<u64, i64>>()))
             .saturating_add(rows.saturating_mul(2 * 32))
     }
 
@@ -390,8 +396,10 @@ impl GkAcc {
             .saturating_add(rows.saturating_mul(2 * 8 + 24))
     }
 
-    /// Bytes held.
+    /// Bytes held, the group slots included (a [`reserve`](Self::reserve)
+    /// allocates them before any group).
     pub(crate) fn size(&self) -> usize {
+        const SLOT: usize = std::mem::size_of::<Vec<f64>>();
         self.sampled
             .iter()
             .map(|s| s.capacity().saturating_mul(24))
@@ -401,6 +409,11 @@ impl GkAcc {
                 .iter()
                 .map(|h| h.capacity().saturating_mul(8))
                 .sum::<usize>()
+            + self
+                .sampled
+                .capacity()
+                .saturating_add(self.heads.capacity())
+                .saturating_mul(SLOT)
             + self.counts.capacity().saturating_mul(8)
     }
 
@@ -809,6 +822,18 @@ mod tests {
 
     use super::*;
     use crate::aggregate::{Accumulator, AggInput, AggregateExpr, AggregateFunction};
+
+    /// A reserve allocates the group slots before any group exists; the
+    /// size counts them (#800 review).
+    #[test]
+    fn reserved_group_slots_are_counted() {
+        let mut e = ExactAcc::default();
+        e.reserve(1000);
+        assert!(e.size() >= 1000 * (8 + std::mem::size_of::<HashMap<u64, i64>>()));
+        let mut g = GkAcc::default();
+        g.reserve(1000);
+        assert!(g.size() >= 1000 * (8 + 2 * std::mem::size_of::<Vec<f64>>()));
+    }
 
     fn expr(function: AggregateFunction, t: DataType) -> AggregateExpr {
         let args = match &function {

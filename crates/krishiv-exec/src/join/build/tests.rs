@@ -520,23 +520,35 @@ fn memory_pressure_drops_forms_never_fails() {
     };
     assert!(k.bloom_bytes().is_none() && k.has_range());
 
-    // The hashes fit, the published Bloom does not.
-    let f = filter();
-    let shared = vec![f.clone()];
-    let mut p = Partials {
-        builders: vec![krishiv_io::KeyFilterBuilder::new(
-            DataType::Int64,
-            f.options,
-        )],
-        memory: vec![reservation(1 << 20)],
-        bloom_lost: Arc::default(),
+    // The hashes fit, the published Bloom does not. Sparse keys and no
+    // exact set, so the filter is a Bloom when it fits (dense keys would
+    // publish as the range alone, passing without the fallback).
+    let sparse: ArrayRef = Arc::new(Int64Array::from_iter_values((0..2000).map(|i| i * 3)));
+    let sparse_keys = [sparse];
+    let published = |held: usize| {
+        let mut f = filter();
+        f.options.exact_max_values = 0;
+        let shared = vec![f.clone()];
+        let mut p = Partials {
+            builders: vec![krishiv_io::KeyFilterBuilder::new(
+                DataType::Int64,
+                f.options,
+            )],
+            memory: vec![reservation(1 << 20)],
+            bloom_lost: Arc::default(),
+        };
+        p.add_keys(&shared, &sparse_keys, None);
+        publish(&publisher(&f), &shared, p, &mut reservation(held));
+        let FilterSnapshot::Final(k) = f.filter.published().snapshot.clone() else {
+            unreachable!("not published")
+        };
+        k
     };
-    p.add_keys(&shared, &spec_keys, None);
-    let mut tiny = reservation(16);
-    publish(&publisher(&f), &shared, p, &mut tiny);
-    let FilterSnapshot::Final(k) = f.filter.published().snapshot.clone() else {
-        unreachable!("not published")
-    };
+    assert!(
+        published(1 << 20).bloom_bytes().is_some(),
+        "no Bloom with room"
+    );
+    let k = published(16);
     assert!(k.bloom_bytes().is_none() && k.has_range());
 
     // A key of another type drops the partial; the filter is disabled.

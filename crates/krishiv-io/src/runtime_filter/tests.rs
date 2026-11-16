@@ -60,7 +60,9 @@ mod unit {
             bloom_max_bytes: 64 << 20,
             ..KeyFilterOptions::default()
         };
-        let n = 400_000i64;
+        // Past `PREFETCH_ABOVE_BYTES`, so `check_batch` takes the batched,
+        // prefetching path (smaller filters probe row by row).
+        let n = 1_000_000i64;
         let ints = Int64Array::from_iter_values((0..n).map(|i| i * 2));
         let strings = StringViewArray::from_iter_values((0..n).map(|i| format!("k{:08}", i * 2)));
         for keys in [&ints as &dyn Array, &strings] {
@@ -70,7 +72,8 @@ mod unit {
             let f = b.finish();
             assert!(
                 matches!(f.form(), FilterForm::Bloom(_))
-                    && f.bloom_bytes().is_some_and(|b| b > 256 * 1024),
+                    && f.bloom_bytes()
+                        .is_some_and(|b| b > crate::runtime_filter::bloom::PREFETCH_ABOVE_BYTES),
                 "{:?} {:?}",
                 f.form(),
                 f.bloom_bytes()

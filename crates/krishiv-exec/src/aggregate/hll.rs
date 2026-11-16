@@ -98,17 +98,24 @@ impl HllAcc {
         self.regs.reserve(new);
     }
 
-    /// Bytes held.
+    /// Bytes held: each group's registers and the group slots themselves
+    /// (a [`reserve`](Self::reserve) allocates slots before any group).
     pub(crate) fn size(&self) -> usize {
         self.regs
             .iter()
-            .map(|r| r.capacity().saturating_mul(1))
+            .map(Vec::capacity)
             .sum::<usize>()
+            .saturating_add(
+                self.regs
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<Vec<u8>>()),
+            )
     }
 
     /// The projected size after adding groups.
     pub(crate) fn projected(&self, new: usize) -> usize {
-        self.size() + new.saturating_mul(self.m)
+        self.size()
+            .saturating_add(new.saturating_mul(self.m + std::mem::size_of::<Vec<u8>>()))
     }
 
     /// Folds the hash `x` of one value into group `g` (Spark's `update`).

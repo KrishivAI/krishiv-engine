@@ -59,3 +59,15 @@ fn count_distinct_merges_identically_and_within_error() {
     assert_eq!(estimate(p, &[1, 1, 2, 2, 2], 2), 2);
     assert_eq!(estimate(p, &[], 1), 0);
 }
+
+/// A reserve allocates the group slots before any group exists; the size
+/// counts them, so a reservation shrunk to the size after a presize keeps
+/// them charged (#800 review).
+#[test]
+fn reserved_group_slots_are_counted() {
+    let mut h = HllAcc::new(9);
+    let empty = h.size();
+    h.reserve(1000);
+    assert!(h.size() >= empty + 1000 * std::mem::size_of::<Vec<u8>>());
+    assert!(h.projected(10) >= h.size() + 10 * std::mem::size_of::<Vec<u8>>());
+}
