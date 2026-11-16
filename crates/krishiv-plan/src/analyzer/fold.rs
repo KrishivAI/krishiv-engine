@@ -888,7 +888,16 @@ fn literal(l: &Literal) -> Option<ArrayRef> {
         Literal::DayTimeInterval { micros, .. } => {
             Arc::new(arrow_array::DurationMicrosecondArray::from(vec![*micros]))
         }
-        _ => return None,
+        // Not foldable here: nested values never take part in constant
+        // folding (a call over one stays a call).
+        Literal::Array { .. }
+        | Literal::KeyValueMap { .. }
+        | Literal::Struct { .. }
+        | Literal::Map(_)
+        | Literal::Binary(_)
+        | Literal::Timestamp(_)
+        | Literal::TimestampNtz(_)
+        | Literal::CalendarInterval { .. } => return None,
     })
 }
 

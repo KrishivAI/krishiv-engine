@@ -631,6 +631,11 @@ impl Config {
             .collect()
     }
 
+    /// Whether `entry` has an explicitly set value (not its default).
+    pub fn is_set(&self, entry: &ConfigEntry) -> bool {
+        self.values.contains_key(entry.key)
+    }
+
     /// The value of `entry`: the set value, else its default.
     pub fn get<'a>(&'a self, entry: &'a ConfigEntry) -> Option<&'a ConfigValue> {
         self.values.get(entry.key).or(entry.default.as_ref())
