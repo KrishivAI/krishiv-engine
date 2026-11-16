@@ -53,6 +53,12 @@ impl RelationHash {
         Self(bytes)
     }
 
+    /// The 32 hash bytes.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
     /// The hash as 64 hexadecimal characters (as Spark Connect addresses its
     /// cached local relations).
     #[must_use]
@@ -277,6 +283,33 @@ impl RelationStore {
         let (schema, records) = decode_records(ipc)?;
         let batches: Vec<Batch> = records.into_iter().map(Batch::new).collect();
         self.insert(&schema, &batches)
+    }
+
+    /// Decodes wire bytes (an Arrow IPC stream) into their schema and
+    /// unweighted batches **without** storing them, so a caller can transform
+    /// the batches (cast, relabel) and insert only the result.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for undecodable bytes.
+    pub fn decode_ipc(ipc: &[u8]) -> Result<(SchemaRef, Vec<Batch>), KrishivError> {
+        let (schema, records) = decode_records(ipc)?;
+        Ok((schema, records.into_iter().map(Batch::new).collect()))
+    }
+
+    /// A new lease on the entry `hash`, or `None` if the store does not hold
+    /// it. The entry is found and an owner added under one lock, so a
+    /// concurrent last-lease drop cannot interleave; the batch count comes
+    /// from the entry.
+    #[must_use]
+    pub fn lease(self: &Arc<Self>, hash: &RelationHash) -> Option<RelationLease> {
+        let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+        let (entry, owners) = entries.map.get_mut(hash)?;
+        *owners += 1;
+        Some(RelationLease {
+            store: Arc::clone(self),
+            hash: *hash,
+            batches: entry.batches.len(),
+        })
     }
 
     /// Releases one owner of `hash`, dropping its entry (and its bytes)
@@ -717,5 +750,44 @@ mod tests {
         drop(lease);
         assert_eq!(store.reserved(), 0, "the last lease returns the bytes");
         assert!(store.is_empty());
+    }
+
+    #[test]
+    fn lease_finds_a_held_entry_and_adds_an_owner() {
+        let store = store();
+        let schema = schema();
+        let held = store
+            .insert(&schema, &[batch(&schema, &[1]), batch(&schema, &[2])])
+            .expect("insert stores");
+        let found = store.lease(&held.hash()).expect("the entry is held");
+        assert_eq!(found.hash(), held.hash());
+        assert_eq!(found.batches(), 2, "the count comes from the entry");
+        drop(held);
+        assert_eq!(store.len(), 1, "the found lease keeps the entry alive");
+        drop(found);
+        assert!(store.is_empty());
+    }
+
+    #[test]
+    fn lease_of_a_missing_hash_is_none_and_creates_nothing() {
+        let store = store();
+        assert!(store.lease(&RelationHash::from_bytes([3; 32])).is_none());
+        assert!(store.is_empty());
+    }
+
+    #[test]
+    fn decode_ipc_returns_the_batches_without_storing_them() {
+        let store = store();
+        let schema = schema();
+        let lease = store
+            .insert(&schema, &[batch(&schema, &[1, 2, 3])])
+            .expect("insert stores");
+        let ipc = store.encode_ipc(&lease.hash()).expect("encodes");
+        let (decoded, batches) = RelationStore::decode_ipc(&ipc).expect("decodes");
+        assert_eq!(decoded, schema);
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 3);
+        assert_eq!(store.len(), 1, "decoding stores nothing more");
+        assert!(RelationStore::decode_ipc(b"not ipc").is_err());
     }
 }

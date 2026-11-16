@@ -55,11 +55,11 @@ fn two_commits(tmp: &Path) -> (PathBuf, impl Fn()) {
 }
 
 fn read(path: &str) -> ReadSource {
-    ReadSource::Files {
-        format: DELTA.to_owned(),
-        paths: vec![OptionValue::from_user("path", path)],
-        options: std::collections::BTreeMap::new(),
-    }
+    ReadSource::files(
+        DELTA,
+        vec![OptionValue::from_user("path", path)],
+        std::collections::BTreeMap::new(),
+    )
 }
 
 #[test]
@@ -163,4 +163,30 @@ fn reads_of_one_root_through_different_stores_have_their_own_keys() {
     assert_eq!(key(&other, &root), key(&other.clone(), &root.clone()));
     let elsewhere = url::Url::parse("s3://bucket/u/").unwrap();
     assert_ne!(key(&plain, &root), key(&plain, &elsewhere));
+}
+
+#[test]
+fn a_declared_schema_on_a_delta_read_is_refused_by_name() {
+    use krishiv_types::{DataType, StructField, StructType};
+    let tmp = tempfile::tempdir().unwrap();
+    let (dir, _land) = two_commits(tmp.path());
+    let s = Session::new().unwrap();
+    let source = read(&dir.to_string_lossy()).with_schema(StructType::new([StructField::new(
+        "id",
+        DataType::Long,
+        true,
+    )]));
+    let df = crate::dataframe::DataFrame::new(
+        s,
+        Arc::new(krishiv_plan::LogicalPlan::new(
+            krishiv_plan::PlanNode::Read(source),
+        )),
+    );
+    let e = block_on(df.collect()).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::KrishivUnsupportedFeature,
+        "{e}"
+    );
+    assert!(e.to_string().contains("user-specified schema"), "{e}");
 }
