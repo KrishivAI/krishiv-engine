@@ -274,6 +274,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &PYTHON_WORKER_MAX_PER_SESSION,
     ),
     (
+        "krishiv.runtimeFilter.bloom.atScale",
+        &RUNTIME_FILTER_BLOOM_AT_SCALE,
+    ),
+    (
         "krishiv.sql.files.maxPartitionBytes",
         &FILES_MAX_PARTITION_BYTES,
     ),
