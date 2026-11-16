@@ -2994,6 +2994,7 @@ dependencies = [
  "futures",
  "krishiv-common",
  "krishiv-plan",
+ "krishiv-store",
  "krishiv-types",
  "reqwest 0.13.5",
  "rusqlite",
@@ -3580,9 +3581,12 @@ dependencies = [
  "bytes",
  "futures",
  "http",
+ "humantime",
  "krishiv-common",
  "object_store",
+ "reqwest 0.13.5",
  "tokio",
+ "url",
 ]
 
 [[package]]
