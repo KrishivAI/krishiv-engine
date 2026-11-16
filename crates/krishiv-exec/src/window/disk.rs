@@ -1121,7 +1121,7 @@ impl Held {
                 f,
                 &slices,
                 &rebased,
-                &mut super::udaf::Charge::strict(Some(&mut self.charge)),
+                &mut super::udaf::Charge::new(Some(&mut self.charge)),
             );
             self.charge.shrink(eval);
             match out {
@@ -1171,7 +1171,7 @@ impl Held {
             f,
             &[row],
             &vec![(0, 0); frames.len()],
-            &mut super::udaf::Charge::strict(Some(&mut self.charge)),
+            &mut super::udaf::Charge::new(Some(&mut self.charge)),
         );
         self.charge.shrink(eval);
         out

@@ -223,12 +223,51 @@ fn subqueries(plan: &LogicalPlan) -> Vec<&LogicalPlan> {
     out
 }
 
+/// A relation node's Python UDF: `name#version(eval type)`.
+struct UdfRef<'a>(&'a crate::PythonUdfRef);
+
+impl Display for UdfRef<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let name = crate::function::shown_call_name("", &self.0.name);
+        write!(f, "{name}#{}({})", self.0.version, self.0.eval_type.code())
+    }
+}
+
+/// `[name#id, ...]`.
+fn columns(f: &mut Formatter<'_>, output: &[crate::BoundColumn]) -> fmt::Result {
+    f.write_str("[")?;
+    for (i, c) in output.iter().enumerate() {
+        write!(f, "{}{}#{}", sep(i), c.name, c.id.0)?;
+    }
+    f.write_str("]")
+}
+
 /// One node's line, without its children.
 struct NodeLine<'a>(&'a LogicalPlan);
 
 impl Display for NodeLine<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match &self.0.node {
+            // Spark's `LocalRelation [a#1, b#2]`; the row count is Krishiv's
+            // own, as for an inline table.
+            PlanNode::Read(ReadSource::Local(l)) => {
+                f.write_str("LocalRelation [")?;
+                for (i, field) in l.schema().fields().iter().enumerate() {
+                    write!(f, "{}{}", sep(i), field.name())?;
+                }
+                write!(f, "] ({} rows)", l.rows())
+            }
+            PlanNode::Scan(scan) if matches!(scan.source, ReadSource::Local(_)) => {
+                f.write_str("LocalRelation [")?;
+                for (i, c) in scan.output.iter().enumerate() {
+                    write!(f, "{}{}#{}", sep(i), c.name, c.id.0)?;
+                }
+                f.write_str("]")?;
+                if let ReadSource::Local(l) = &scan.source {
+                    write!(f, " ({} rows)", l.rows())?;
+                }
+                Ok(())
+            }
             PlanNode::Read(source) => write!(f, "Read {}", SourceText(source)),
             PlanNode::OneRowRelation => f.write_str("OneRowRelation"),
             PlanNode::Sql { query, args } => {
@@ -520,6 +559,60 @@ impl Display for NodeLine<'_> {
             PlanNode::TableFunction { name, args } => {
                 write!(f, "TableFunction {name} [{}]", List(args))
             }
+            // Spark's `MapInPandas f(a#1, b#2)#3, [x#4], false`, shortened.
+            PlanNode::MapPartitions {
+                udf,
+                output,
+                barrier,
+                ..
+            } => {
+                write!(f, "MapPartitions {}, ", UdfRef(udf))?;
+                columns(f, output)?;
+                write!(f, ", barrier={barrier}")
+            }
+            PlanNode::GroupMap {
+                keys, udf, output, ..
+            } => {
+                write!(f, "GroupMap [{}], {}, ", List(keys), UdfRef(udf))?;
+                columns(f, output)
+            }
+            PlanNode::CoGroupMap {
+                left_keys,
+                right_keys,
+                udf,
+                output,
+                ..
+            } => {
+                write!(
+                    f,
+                    "CoGroupMap [{}], [{}], {}, ",
+                    List(left_keys),
+                    List(right_keys),
+                    UdfRef(udf)
+                )?;
+                columns(f, output)
+            }
+            PlanNode::PythonTableFunction {
+                args,
+                table_arg,
+                udf,
+                output,
+            } => {
+                write!(f, "PythonTableFunction {}({}), ", UdfRef(udf), List(args))?;
+                columns(f, output)?;
+                if let Some(t) = table_arg {
+                    write!(
+                        f,
+                        ", TABLE PARTITION BY [{}] ORDER BY [",
+                        List(&t.partition_by)
+                    )?;
+                    for (i, o) in t.order_by.iter().enumerate() {
+                        write!(f, "{}{o}", sep(i))?;
+                    }
+                    write!(f, "], single={}", t.single_partition)?;
+                }
+                Ok(())
+            }
             PlanNode::Range {
                 start,
                 end,
@@ -547,13 +640,28 @@ impl Display for SourceText<'_> {
                 format,
                 paths,
                 options,
+                schema,
             } => {
                 write!(f, "{format} [")?;
                 for (i, p) in paths.iter().enumerate() {
                     write!(f, "{}{p}", sep(i))?;
                 }
                 f.write_str("]")?;
+                if let Some(schema) = schema {
+                    f.write_str(" schema=")?;
+                    for (i, field) in schema.fields().iter().enumerate() {
+                        write!(f, "{}{} {}", sep(i), field.name(), field.data_type().sql())?;
+                        if !field.nullable() {
+                            f.write_str(" NOT NULL")?;
+                        }
+                    }
+                }
                 options
+            }
+            // Printed by the node line, which has the columns.
+            ReadSource::Local(l) => {
+                write!(f, "LocalRelation ({} rows)", l.rows())?;
+                return Ok(());
             }
         };
         if !options.is_empty() {
@@ -1277,6 +1385,58 @@ impl Display for Literal {
                 "INTERVAL '{}'",
                 krishiv_types::interval::calendar_string(*months, *days, *micros)
             ),
+            // Nested values print as the constructor call that builds them;
+            // Spark's own text is golden-pending (design P3-T012a note, 5).
+            Self::Array {
+                data_type,
+                elements,
+            } => {
+                // Arrays of other element types (or nullability) are different values, empty or
+                // not: identity text carries the whole type (the Spark-facing text stays `ARRAY(`).
+                if IDENTITY.with(std::cell::Cell::get) {
+                    write!(f, "ARRAY<{data_type:?}>(")?;
+                } else {
+                    f.write_str("ARRAY(")?;
+                }
+                for (i, e) in elements.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{e}")?;
+                }
+                f.write_str(")")
+            }
+            Self::KeyValueMap { data_type, entries } => {
+                // As for arrays: identity text names the map type, so two empty maps of other
+                // types never compare equal (the Spark-facing text stays `MAP(`).
+                if IDENTITY.with(std::cell::Cell::get) {
+                    write!(f, "MAP<{data_type:?}>(")?;
+                } else {
+                    f.write_str("MAP(")?;
+                }
+                for (i, (k, v)) in entries.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{k}, {v}")?;
+                }
+                f.write_str(")")
+            }
+            Self::Struct { data_type, fields } => {
+                // As for arrays: identity text names the struct type, nullability included.
+                if IDENTITY.with(std::cell::Cell::get) {
+                    write!(f, "NAMED_STRUCT<{data_type:?}>(")?;
+                } else {
+                    f.write_str("NAMED_STRUCT(")?;
+                }
+                for (i, (field, v)) in data_type.fields().iter().zip(fields).enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "'{}', {v}", Escaped(field.name()))?;
+                }
+                f.write_str(")")
+            }
         }
     }
 }

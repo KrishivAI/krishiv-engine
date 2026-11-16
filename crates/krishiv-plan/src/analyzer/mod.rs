@@ -82,6 +82,12 @@ pub mod contract;
 mod exprs;
 mod table_change;
 
+/// Spark's `toPrettySQL` name of a resolved expression (timestamp literals
+/// in UTC): for errors raised outside the analyzer.
+pub(crate) fn pretty_sql(e: &crate::Expr) -> String {
+    exprs::pretty(e, None)
+}
+
 /// Whether `name` is an AES function, in any letter case: the key is the
 /// second argument and must not reach a name, a plan or an error (ADR 0042).
 pub(crate) fn is_aes_function(name: &str) -> bool {
@@ -100,6 +106,7 @@ mod hof;
 mod instance;
 mod intervals;
 pub(crate) mod legacy;
+pub mod lineage;
 mod ops;
 mod pivot;
 pub(crate) mod prefix;
@@ -600,6 +607,35 @@ impl ResolutionConf {
     }
 }
 
+/// What an analysis is for, which decides the privilege its reads ask (ADR 0046 §3b).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub enum AnalysisMode {
+    /// The plan may run: every table, view and path read asks `Select`.
+    #[default]
+    Execute,
+    /// The plan is never run (Connect `AnalyzePlan` schema, tree string, semantic hash): every
+    /// catalog table and view read asks `Browse` (their schema is stored). A read by path still asks
+    /// `Select`: inferring its schema reads file contents (CSV header names, JSON keys). Such an
+    /// analysis must never be kept where a later run could reuse it; its context fingerprint
+    /// differs from an `Execute` one, so no cache keyed by the fingerprint (the prefix cache)
+    /// serves one mode's resolution to the other.
+    Metadata,
+}
+
+impl AnalysisMode {
+    /// The privilege a catalog table or view read asks in this mode (a path always asks `Select`).
+    /// Other privileges (`Usage` on a secret scope, `Manage` for a server-scoped store option) do
+    /// not change with the mode.
+    #[must_use]
+    pub fn read_privilege(self) -> Privilege {
+        match self {
+            Self::Execute => Privilege::Select,
+            Self::Metadata => Privilege::Browse,
+        }
+    }
+}
+
 /// Everything resolution may read.
 #[derive(Clone)]
 pub struct AnalysisContext {
@@ -626,6 +662,8 @@ pub struct AnalysisContext {
     /// The session variables the query resolves, taken once per query
     /// (see [`VariableSnapshot`]).
     pub variables: Arc<VariableSnapshot>,
+    /// What the analysis is for: the privilege its reads ask.
+    pub mode: AnalysisMode,
 }
 
 /// The context inputs of a resolution: with the input key and the pins,
@@ -658,6 +696,8 @@ pub struct ContextFingerprint {
     /// [`VariableSnapshot::version`]: a resolved plan is never reused
     /// after a variable changed.
     pub variables: u64,
+    /// [`AnalysisContext::mode`]: a resolution authorized for metadata never serves a run.
+    pub mode: AnalysisMode,
 }
 
 impl ContextFingerprint {
@@ -753,6 +793,13 @@ impl ContextFingerprint {
         text(&mut b, &self.principal);
         num(&mut b, self.policy.0);
         num(&mut b, self.variables);
+        num(
+            &mut b,
+            match self.mode {
+                AnalysisMode::Execute => 0,
+                AnalysisMode::Metadata => 1,
+            },
+        );
         XxHash3_128::oneshot(&b)
     }
 }
@@ -902,6 +949,7 @@ impl fmt::Debug for AnalysisContext {
             .field("profile", &self.profile)
             .field("conf", &self.conf)
             .field("principal", &self.principal)
+            .field("mode", &self.mode)
             .finish_non_exhaustive()
     }
 }
@@ -937,6 +985,7 @@ pub(crate) fn fingerprint(
         policy: ctx.policy.version(),
         files: ctx.files.is_some(),
         variables: ctx.variables.version,
+        mode: ctx.mode,
     }
 }
 

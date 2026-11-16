@@ -5,7 +5,8 @@
 //! key column reaches an output schema; a second run finds nothing to do (a key is `BINARY`).
 //!
 //! - **Aggregates** group by the key and output the first value of each group (Spark's
-//!   `RewriteGroupByCollation`, `First(c)`).
+//!   `RewriteGroupByCollation`, `First(c)`). An aggregate of grouped-aggregate Python UDFs is left
+//!   as it is: its physical planner groups by the key itself and shows each group's first value.
 //! - **`min`/`max`** of a collated string take the key as a second argument, which the executor
 //!   runs as a by-key extremum that keeps the first of equal keys (as Spark's `Max` keeps its
 //!   buffer on a tie; `max_by`, which takes the last, keeps its own form with a keyed ordering).
@@ -24,7 +25,8 @@ use krishiv_functions::registry::{Lookup, builtins};
 use krishiv_functions::signature::SparkProfile;
 use krishiv_plan::{
     BoundColumn, Expr, ExprNode, FunctionId, FunctionKind, Grouping, Literal, LogicalPlan,
-    PlanNode, ResolvedExpr, ResolvedFunction, SortOrder, WindowExpr, WindowSpec, WindowSpecRef,
+    PlanNode, PythonUdfKind, ResolvedExpr, ResolvedFunction, SortOrder, WindowExpr, WindowSpec,
+    WindowSpecRef,
 };
 use krishiv_types::DataType;
 
@@ -91,7 +93,13 @@ fn key(e: &Arc<Expr>) -> Res<Arc<Expr>> {
     ))
 }
 
-fn key_if_collated(e: &Arc<Expr>) -> Res<Arc<Expr>> {
+/// `e`'s comparison key if it is collated (`__collation_key(e, 'type of e')`), else `e`: what an
+/// operator outside this rewrite that compares `e` by bytes groups, sorts and hashes by (the
+/// Python UDF relations' grouping keys, whose frames keep `e` itself).
+///
+/// # Errors
+/// `INTERNAL_ERROR` if `__collation_key` is not registered.
+pub fn key_if_collated(e: &Arc<Expr>) -> Res<Arc<Expr>> {
     if collated(e) {
         key(e)
     } else {
@@ -237,6 +245,14 @@ fn calls<'a>(e: &'a Expr, out: &mut Vec<&'a ResolvedFunction>) {
         return;
     }
     e.for_each_child(&mut |c| calls(c, out));
+}
+
+/// Whether `f` calls a grouped-aggregate Python UDF.
+fn python_udaf(f: &ResolvedFunction) -> bool {
+    matches!(
+        &f.id,
+        FunctionId::PythonUdf { eval_type, .. } if eval_type.kind() == PythonUdfKind::GroupedAgg
+    )
 }
 
 fn alias(expr: Arc<Expr>, output: BoundColumn) -> Arc<Expr> {
@@ -436,12 +452,18 @@ fn aggregate(p: &Arc<LogicalPlan>, next: &mut u64) -> Res<Arc<LogicalPlan>> {
     else {
         return Ok(Arc::clone(p));
     };
+    let mut found = Vec::new();
+    aggregates.iter().for_each(|a| calls(a, &mut found));
+    // A grouped-aggregate Python UDF's aggregate keys a collated key itself
+    // (the physical planner's `python_aggregate`): an `any_value(k)` beside
+    // the UDF would be a native aggregate it cannot run with.
+    if found.iter().any(|f| python_udaf(f)) {
+        return Ok(Arc::clone(p));
+    }
     if let Some(done) = distinct_over_keys(p, input, keys, aggregates, next)? {
         return Ok(done);
     }
     let held: Vec<Arc<Expr>> = keys.iter().filter(|k| collated(k)).cloned().collect();
-    let mut found = Vec::new();
-    aggregates.iter().for_each(|a| calls(a, &mut found));
     let mut changes = !held.is_empty();
     for f in found {
         changes |= keyed_call(f, p.origin)?.is_some();
