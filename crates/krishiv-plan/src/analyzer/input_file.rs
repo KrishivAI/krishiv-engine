@@ -20,8 +20,8 @@
 //!
 //! Known differences from Spark, all physical-plan dependent there: a sort-merge join (no broadcast) gives
 //! Spark's `''` on its probe side where Krishiv gives the file; a window whose result is read gives Spark's `''`
-//! (Spark prunes an unread window, then the file shows, as here); a user-written `LEFT SEMI`/`LEFT ANTI` join
-//! counts its right side in Spark's check and not here (the rewritten subqueries must not).
+//! (Spark prunes an unread window, then the file shows, as here); a call over an Iceberg or Delta scan is counted
+//! as a source but gives the constants (those scans have no `_metadata` column).
 
 use std::collections::HashMap;
 use std::sync::Arc;
