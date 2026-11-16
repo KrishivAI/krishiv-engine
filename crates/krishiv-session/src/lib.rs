@@ -110,7 +110,7 @@ pub use access::{PathPrefixPolicy, READ_ONLY_PRIVILEGES, ReadOnlyPolicy, Stateme
 pub use admission::{AdmissionController, Permit, QueryRequest, Unlimited};
 pub use analyze::{Analysis, AnalysisWarning, OutputColumn};
 pub use sessions::Transport;
-pub use system::register_build_features;
+pub use system::{capabilities, register_build_features, register_surface};
 
 pub mod agent;
 

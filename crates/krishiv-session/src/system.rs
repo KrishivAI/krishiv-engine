@@ -12,6 +12,7 @@
 //! operator, cache and metric tables arrive with their recorders (units 2
 //! and 3).
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -115,6 +116,26 @@ pub fn register_build_features(features: &[(&str, bool)]) {
     let _ = BUILD_FEATURES.set(owned);
 }
 
+/// The API surfaces a host serves, `name -> (value, detail)`, for the `surface` rows of
+/// `system.capabilities` (`admin.v1` with its revision, P3-T066).
+static SURFACES: Mutex<BTreeMap<String, (String, String)>> = Mutex::new(BTreeMap::new());
+
+/// Records an API surface the host serves as a `("surface", name, value, detail)` row of
+/// `system.capabilities`. A later call for the same name replaces the row.
+pub fn register_surface(name: &str, value: &str, detail: &str) {
+    SURFACES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(name.to_owned(), (value.to_owned(), detail.to_owned()));
+}
+
+/// The rows of `system.capabilities` as `[kind, name, value, detail]`, the same rows a query of the
+/// table returns (`GetCapabilities` of the admin API answers with them).
+#[must_use]
+pub fn capabilities() -> Vec<[String; 4]> {
+    capability_rows()
+}
+
 /// The rows of `system.capabilities`: `(kind, name, value, detail)`.
 fn capability_rows() -> Vec<[String; 4]> {
     let row = |kind: &str, name: &str, value: &str, detail: &str| {
@@ -133,6 +154,13 @@ fn capability_rows() -> Vec<[String; 4]> {
         row("surface", "agent_result", "1", ""),
         row("feature", "cloud", state(cfg!(feature = "cloud")), ""),
     ];
+    for (name, (value, detail)) in SURFACES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+    {
+        rows.push(row("surface", name, value, detail));
+    }
     if let Some(features) = BUILD_FEATURES.get() {
         let mut sorted: Vec<&(String, bool)> = features.iter().collect();
         sorted.sort();
@@ -1677,6 +1705,21 @@ mod tests {
             mask.apply_message("a 'b\\\\' then 'c' end"),
             "a '?' then '?' end"
         );
+    }
+
+    #[test]
+    fn a_registered_surface_is_a_capability_row() {
+        register_surface("test.surface", "7", "preview");
+        let rows = capabilities();
+        assert!(rows.iter().any(|r| r[0] == "surface"
+            && r[1] == "test.surface"
+            && r[2] == "7"
+            && r[3] == "preview"));
+        register_surface("test.surface", "8", "");
+        let rows = capabilities();
+        let ours: Vec<_> = rows.iter().filter(|r| r[1] == "test.surface").collect();
+        assert_eq!(ours.len(), 1, "a later call replaces the row");
+        assert_eq!(ours[0][2], "8");
     }
 
     #[test]

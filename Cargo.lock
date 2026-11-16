@@ -3429,10 +3429,16 @@ dependencies = [
  "krishiv-exec",
  "krishiv-session",
  "krishiv-ui-assets",
+ "prost",
+ "prost-reflect",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",
  "tokio-rustls",
+ "tonic",
+ "tonic-prost",
+ "tower",
  "tracing",
 ]
 

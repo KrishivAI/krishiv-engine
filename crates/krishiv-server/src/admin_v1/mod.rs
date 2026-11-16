@@ -14,6 +14,10 @@
 mod browser;
 mod grpc;
 mod rest;
+#[cfg(feature = "session")]
+mod session_admin;
+#[cfg(feature = "session")]
+pub use session_admin::SessionAdmin;
 
 use std::collections::BTreeMap;
 use std::net::IpAddr;

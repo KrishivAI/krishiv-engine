@@ -37,9 +37,21 @@ pub mod session_guard;
 #[cfg(feature = "session")]
 pub mod session_source;
 
+/// `GET /api/v1/version`, a deprecated alias of `GET /api/admin/v1/version` (design P3-T066 D6):
+/// answered with `Deprecation` (RFC 9745) and a `Link` to its successor, and removed at 1.0.
 async fn version() -> impl IntoResponse {
     (
-        [(header::CONTENT_TYPE, "application/json")],
+        [
+            (header::CONTENT_TYPE, "application/json"),
+            (
+                axum::http::HeaderName::from_static("deprecation"),
+                "@1794787200",
+            ),
+            (
+                header::LINK,
+                "</api/admin/v1/version>; rel=\"successor-version\"",
+            ),
+        ],
         format!("{{\"version\":\"{VERSION}\"}}"),
     )
 }

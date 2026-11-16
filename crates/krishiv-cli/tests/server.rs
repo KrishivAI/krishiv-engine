@@ -173,6 +173,22 @@ fn http_get(addr: &str, path: &str) -> String {
     http_get_as(addr, path, None)
 }
 
+/// `GET path` with the given `Host` and, when given, a bearer token.
+fn http_get_host(addr: &str, path: &str, host: &str, token: Option<&str>) -> String {
+    let mut s = TcpStream::connect(addr).expect("connect");
+    s.set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("timeout");
+    let auth = token.map_or(String::new(), |t| format!("Authorization: Bearer {t}\r\n"));
+    write!(
+        s,
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\n{auth}Connection: close\r\n\r\n"
+    )
+    .expect("write");
+    let mut out = String::new();
+    s.read_to_string(&mut out).expect("read");
+    out
+}
+
 /// `GET path` with `Authorization: Bearer token` when `token` is given.
 fn http_get_as(addr: &str, path: &str, token: Option<&str>) -> String {
     let mut s = TcpStream::connect(addr).expect("connect");
@@ -433,6 +449,52 @@ fn configured_tokens_guard_the_admin_routes() {
             "{scrape}"
         );
     }
+}
+
+/// `krishiv.admin.v1` on the admin listener (design P3-T066 PR-52a): any authenticated caller
+/// reads the version and the capabilities, which list the surface and its revision; a request
+/// without a token is 401, and a `Host` outside the loopback names is 421.
+#[test]
+fn the_admin_v1_surface_is_served_behind_the_guard() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let token = "admin-v1-viewer-token-0123456789abcdef";
+    let path = dir.path().join("viewer");
+    std::fs::write(&path, token).expect("write secret");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    let conf = [
+        format!("krishiv.auth.tokens.v.secret=file:{}", path.display()),
+        "krishiv.auth.tokens.v.principal=viewer-service".to_owned(),
+        "krishiv.auth.tokens.v.role=viewer".to_owned(),
+    ];
+    let server = start_with(dir.path(), &conf);
+    let none = http_get_host(&server.admin, "/api/admin/v1/version", "localhost", None);
+    assert!(none.starts_with("HTTP/1.1 401"), "{none}");
+    let version = http_get_host(
+        &server.admin,
+        "/api/admin/v1/version",
+        "localhost",
+        Some(token),
+    );
+    assert!(version.starts_with("HTTP/1.1 200"), "{version}");
+    assert!(version.contains("\"adminV1Revision\":\"1\""), "{version}");
+    let caps = http_get_host(
+        &server.admin,
+        "/api/admin/v1/capabilities",
+        "localhost",
+        Some(token),
+    );
+    assert!(caps.contains("\"admin.v1\""), "{caps}");
+    let rebound = http_get_host(
+        &server.admin,
+        "/api/admin/v1/version",
+        "evil.example",
+        Some(token),
+    );
+    assert!(rebound.starts_with("HTTP/1.1 421"), "{rebound}");
+    // The old route stays, marked deprecated, and names its successor.
+    let old = http_get_host(&server.admin, "/api/v1/version", "localhost", Some(token));
+    assert!(old.to_ascii_lowercase().contains("deprecation: @"), "{old}");
 }
 
 #[cfg(unix)]
