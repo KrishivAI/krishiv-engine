@@ -21,9 +21,10 @@ immutable `ScanPushdowns`; implemented by scan factories: MemoryScan, FileScan) 
 `hash.rs` shared hash-table blocks (seeded key hash, key normalization + row encoding, `KeyTable`, spill
 partition bits; for the join too) · `aggregate/` hash aggregate (P2-T053a): `mod.rs` spec + Spark result types,
 `accumulator.rs` per-group states (`accumulator/paired.rs`: a decimal `sum(x)` and `avg(x)` of one aggregate folded in one pass where both take the proof path), `table.rs` one table, `sink.rs` breaker (spill runs, finalize merge,
-`spill_global`; a batch whose worst case the pool refuses is applied in slices, `slice_tests.rs`, unless a spill of the driver's tables would free the shortfall (then it spills, ADR 0007 addendum 2026-11-08); `sink/disk.rs` the disk phase's partition tasks in parallel, one output file each), `partial.rs` flushable partial phase with adaptive bypass, `node.rs` plan nodes + DISTINCT/UNION, `udf.rs` session aggregate UDFs (ADR 0045: `UdafCall` plan data, `UdafEnv`, the guarded `UdfAcc` accumulator kind) ·
+`spill_global`; `sink/combined.rs` the tables of drivers that combined and ended, on a consumer of their own whose `OutputSpill` hook writes them as runs, so any arbitration round can ask them; a batch whose worst case the pool refuses is applied in slices, `slice_tests.rs`, unless a spill of the driver's tables would free the shortfall (then it spills, ADR 0007 addendum 2026-11-08); `sink/disk.rs` the disk phase's partition tasks in parallel, one output file each), `partial.rs` flushable partial phase with adaptive bypass, `node.rs` plan nodes + DISTINCT/UNION, `udf.rs` session aggregate UDFs (ADR 0045: `UdafCall` plan data, `UdafEnv`, the guarded `UdfAcc` accumulator kind) ·
 (P2-T117b) `file_scan.rs` FileScan/FileScanSource over any `krishiv_io::FileFormat` (Spark partitions cut into
-about four morsels per driver, footer read-ahead, `_metadata` struct column; filters stay `Inexact`) · `file_write.rs` FileWriteSink
+about four morsels per driver, footer read-ahead, `_metadata` struct column; filters stay `Inexact`; partition
+columns from the directories or, `with_file_constants`, from a table format's per-file `FileConstants`) · `file_write.rs` FileWriteSink
 (one writer task per driver behind a bounded channel; nothing visible after a failed or cancelled write) + FileWrite.
 End-to-end tests over the mock format: `krishiv-testkit/tests/file_exec.rs`; the conformance suite through the
 executor: `mock_exec` in `krishiv-testkit/tests/file_format_mock.rs`.
@@ -142,7 +143,7 @@ Paths are relative to this crate.
 - All memory through krishiv-memory reservations; every spill path tested with tiny-memory tests.
 - Only the driver yields, awaits memory, spills or checks cancellation; `execute`/`sink` stay sync and bounded.
   Exception: a breaker's finished in-memory result, owned by no driver, spills on a task of its own
-  (`output_spill.rs`: aggregate and sort results, and a hash join build's finished tables until the first probe driver
+  (`output_spill.rs`: aggregate and sort results, an aggregate's combined driver tables until `finalize` (`aggregate/sink/combined.rs`), and a hash join build's finished tables until the first probe driver
   reads them, `join/build.rs` `IdleBuild`); the coordinator drops a finalized state after its last reader.
 - At query end (success, error, cancel) the query pool is empty: tests assert it.
 - Cancellation-safe, no blocking in async; metrics feed EXPLAIN ANALYZE.
@@ -164,4 +165,4 @@ benches: `cargo bench -p krishiv-exec --bench pipeline` · `--bench operators` �
 
 ## Split modules (T193)
 Files split to stay under 2,000 lines; the parent file keeps the types and the entry points.
-- `aggregate/accumulator/` `fold.rs` (the batch fold match), `dense.rs` (dense folds of integer `sum`, integer-like `min`/`max`, `count(col)` and double `sum`/`avg` for unmasked unit-weight rows; `dense_tests.rs` against the per-row loop), `output.rs` (state and result columns), `results.rs` (percentile and struct-extremum results), `helpers.rs` (decimal proofs, column readers, decimal text), `tests.rs`, `proof_tests.rs`; `aggregate/rowtable/` `probe.rs` (lookups), `merge.rs` (merging tables, the salted index), `tests.rs`; `aggregate/hll/tables.rs` (bias tables); `planner/build/util.rs` (plan-building helpers); `planner/eval/hof/sort.rs` (the sort-with-comparator function); test modules of `aggregate/tests/`, `window/tests/` in `partN.rs`.
+- `aggregate/accumulator/` `fold.rs` (the batch fold match), `dense.rs` (dense folds of integer `sum`, integer-like `min`/`max`, `count(col)` and double `sum`/`avg` for unmasked unit-weight rows; `dense_tests.rs` against the per-row loop), `output.rs` (state and result columns), `results.rs` (percentile and struct-extremum results), `helpers.rs` (decimal proofs, column readers, decimal text), `tests.rs`, `proof_tests.rs`; `aggregate/rowtable/` `probe.rs` (lookups), `merge.rs` (merging tables, the salted index), `tests.rs`; `aggregate/hll/tables.rs` (bias tables); `aggregate/sink/held.rs` (the breaker's reservation helpers); `planner/build/util.rs` (plan-building helpers); `planner/eval/hof/sort.rs` (the sort-with-comparator function); test modules of `aggregate/tests/`, `window/tests/` in `partN.rs`.
