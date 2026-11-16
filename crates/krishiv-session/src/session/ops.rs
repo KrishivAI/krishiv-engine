@@ -83,6 +83,17 @@ impl Session {
         &self,
         class: StatementClass,
         config: &krishiv_common::config::Config,
+        options: impl Iterator<Item = &'a str>,
+    ) -> Result<(), KrishivError> {
+        let r = self.check_store_options(config, options).await;
+        crate::access::audit(self, class, r)
+    }
+
+    /// [`Self::authorize_store_options`] without the audit record, for a caller that logs it
+    /// (an analysis, through [`crate::access::audit_read`], silent in a trial).
+    pub(crate) async fn check_store_options<'a>(
+        &self,
+        config: &krishiv_common::config::Config,
         mut options: impl Iterator<Item = &'a str>,
     ) -> Result<(), KrishivError> {
         if !options.any(krishiv_io::is_server_scoped_option)
@@ -90,14 +101,13 @@ impl Session {
         {
             return Ok(());
         }
-        let r = authorize(
+        authorize(
             &*self.state.policy,
             &self.state.principal,
             &Securable::System("cluster".to_owned()),
             Privilege::Manage,
         )
-        .await;
-        crate::access::audit(self, class, r)
+        .await
     }
 
     /// `RESET key`: the key's `SET` check ([`Self::authorize_set_key`]), then the unset.
