@@ -362,3 +362,37 @@ async fn system_resource_groups_lists_the_tree_with_its_counters() {
     );
     drop(held);
 }
+
+#[tokio::test]
+async fn system_resource_groups_rows_name_the_document_they_came_from() {
+    use arrow_array::Array;
+    use arrow_array::cast::AsArray;
+    let path = write_file(
+        "etag_columns",
+        r#"{"rootGroups": [{"name": "root", "hardConcurrencyLimit": 4, "maxQueued": 8,
+              "subGroups": [{"name": "etl", "hardConcurrencyLimit": 2, "maxQueued": 4}]}],
+            "defaultGroup": "root.etl"}"#,
+    );
+    let rt = EngineRuntime::builder()
+        .config("krishiv.workload.resourceGroups.file", path)
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let s = Session::builder()
+        .runtime(rt)
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let batches = s
+        .sql("select config_etag, loaded_at from system.resource_groups order by group_id")
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .collect()
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let b = &batches[0];
+    assert_eq!(b.num_rows(), 2);
+    let etags = b.column(0).as_string::<i32>();
+    assert_eq!(etags.value(0), etags.value(1), "one document, one etag");
+    assert_eq!(etags.value(0).len(), 64, "a SHA-256 in hex");
+    assert!(etags.value(0).bytes().all(|c| c.is_ascii_hexdigit()));
+    assert!(!b.column(1).is_null(0) && !b.column(1).is_null(1));
+}

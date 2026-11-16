@@ -46,6 +46,11 @@ pub(crate) fn columns(sources: &Sources) -> Vec<ArrayRef> {
             )
             .with_timezone("UTC"),
         ),
+        text(rows.iter().map(|r| Some(r.config_etag.as_str()))),
+        Arc::new(
+            TimestampMicrosecondArray::from_iter(rows.iter().map(|r| micros(Some(r.loaded_at_ms))))
+                .with_timezone("UTC"),
+        ),
     ]
 }
 
@@ -70,5 +75,7 @@ pub(crate) fn layout() -> Vec<(&'static str, Kind, bool)> {
         ("memory_reserved_bytes", Long, false),
         ("scan_bytes_in_window", Long, true),
         ("scan_window_resets_at", Time, true),
+        ("config_etag", Text, false),
+        ("loaded_at", Time, false),
     ]
 }
