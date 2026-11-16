@@ -360,6 +360,14 @@ fn an_empty_stream_validates_the_conversion_like_a_zero_row_batch() {
     let zero = ipc(&schema, vec![batch(&schema, vec![zero_col])]);
     let a = block_on(s.local_relation(Some(&zero), Some(want()))).unwrap_err();
     let b = block_on(s.local_relation(Some(&empty), Some(want()))).unwrap_err();
+    // Both refuse the conversion `INT` to `ARRAY<INT>`, as Spark's cast check does.
+    for e in [&a, &b] {
+        assert_eq!(
+            e.error_class(),
+            krishiv_common::error::ErrorClass::DatatypeMismatchCastWithoutSuggestion,
+            "{e}"
+        );
+    }
     assert_eq!(a.error_class(), b.error_class());
 }
 
