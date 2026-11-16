@@ -49,7 +49,7 @@ fn pool(limit: usize) -> Arc<TreePool> {
 /// `(p, o, id, v)`: partition key, order key (small codes, see
 /// [`Keys`]), unique tie-break, value. Column 4 is a string derived from
 /// `v` ([`text`]).
-type Row = (Option<i64>, Option<i64>, i64, Option<i64>);
+pub(super) type Row = (Option<i64>, Option<i64>, i64, Option<i64>);
 
 /// The type the partition and order key codes are written as.
 #[derive(Clone, Copy, Debug)]
@@ -124,7 +124,7 @@ fn text(v: Option<i64>) -> Option<String> {
     v.map(|x| format!("s{:02}", (x * 37) % 100))
 }
 
-fn schema() -> SchemaRef {
+pub(super) fn schema() -> SchemaRef {
     schema_of(Keys::Int)
 }
 
@@ -138,7 +138,7 @@ fn schema_of(keys: Keys) -> SchemaRef {
     ]))
 }
 
-fn batch(rows: &[Row]) -> Batch {
+pub(super) fn batch(rows: &[Row]) -> Batch {
     batch_of(Keys::Int, rows)
 }
 
@@ -171,7 +171,7 @@ pub(super) fn agg(function: AggregateFunction, arg: Option<usize>) -> WindowFunc
     })
 }
 
-fn plan(functions: Vec<(WindowFunction, WindowFrame)>, partitioned: bool) -> WindowPlan {
+pub(super) fn plan(functions: Vec<(WindowFunction, WindowFrame)>, partitioned: bool) -> WindowPlan {
     WindowPlan {
         partition_by: if partitioned { vec![0] } else { Vec::new() },
         order_by: vec![SortKey::asc(1)],
@@ -285,7 +285,7 @@ fn cell(a: &ArrayRef, i: usize) -> String {
 }
 
 /// Each output row as `id: w0, w1, ...`, in output order.
-fn outputs(batches: &[Batch], functions: usize) -> Vec<String> {
+pub(super) fn outputs(batches: &[Batch], functions: usize) -> Vec<String> {
     let mut out = Vec::new();
     for b in batches {
         let d = b.data();
@@ -719,7 +719,7 @@ pub(super) fn task(limit: usize) -> (Arc<TreePool>, TaskContext) {
     task_with(limit, ExecConfig::default())
 }
 
-fn task_with(limit: usize, config: ExecConfig) -> (Arc<TreePool>, TaskContext) {
+pub(super) fn task_with(limit: usize, config: ExecConfig) -> (Arc<TreePool>, TaskContext) {
     let root = pool(limit);
     let q = QueryContext::new(
         QueryId(7),

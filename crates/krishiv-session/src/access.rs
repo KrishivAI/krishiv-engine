@@ -219,6 +219,19 @@ pub(crate) fn audit<T>(
     result
 }
 
+/// [`audit`] of a query's read check, unless `env` is a trial analysis
+/// ([`QueryEnv::quiet_denials`]), whose denials are not logged.
+pub(crate) fn audit_read<T>(
+    session: &Session,
+    env: &QueryEnv,
+    result: Result<T, KrishivError>,
+) -> Result<T, KrishivError> {
+    if env.quiet_denials {
+        return result;
+    }
+    audit(session, StatementClass::Read, result)
+}
+
 /// The audit record of the denial `e` (see [`audit`]): also written when
 /// an access check fails closed because it cannot name what a statement
 /// touches (`KRISHIV_UNSUPPORTED_FEATURE`).
@@ -377,7 +390,9 @@ impl Session {
     /// them is read: permanent views are inlined before binding, so the analyzer never asks about
     /// them. Each name is asked as the analyzer asks about a table (as written, then folded, whether
     /// or not it exists, so a denial cannot tell a view from a missing name), then a permanent view
-    /// is asked as a view. Returns the views, for the securables the analysis reports.
+    /// is asked as a view. Each is asked the analysis' read privilege (`Select`; `Browse` for a
+    /// metadata analysis, `AnalysisMode::Metadata`). Returns the views, for the securables the
+    /// analysis reports.
     pub(crate) async fn authorize_reads(
         &self,
         reads: &[crate::catalog::ReadCandidate],
@@ -413,29 +428,89 @@ impl Session {
                 if checked.contains(&securable) {
                     continue;
                 }
-                // A policy that decides columns is asked here only whether the name may be seen;
-                // the table's rows are asked per column after analysis. A stored view is still
-                // asked `Select` as a whole (column grants on views are not supported).
-                let privilege = if self.state.policy.column_level()
+                // The analysis' read privilege (`Select`, or `Browse` for a metadata analysis). A
+                // policy that decides columns is asked here only whether the name may be seen; the
+                // table's rows are asked per column after analysis. A stored view is still asked
+                // `Select` as a whole (column grants on views are not supported).
+                let wanted = env.analysis.mode.read_privilege();
+                let privilege = if wanted == Privilege::Select
+                    && self.state.policy.column_level()
                     && matches!(securable, Securable::Table(_))
                 {
                     Privilege::Browse
                 } else {
-                    Privilege::Select
+                    wanted
                 };
                 let r = authorize_reported(
                     &*self.state.policy,
                     &self.state.principal,
                     &securable,
                     privilege,
-                    Privilege::Select,
+                    wanted,
                 )
                 .await;
-                audit(self, StatementClass::Read, r)?;
+                audit_read(self, env, r)?;
                 checked.push(securable);
             }
         }
         Ok(views)
+    }
+
+    /// The error `e` of a metadata analysis (P3 PR-14d review B1), raised after the permanent
+    /// `views` it inlined were allowed at `Browse`: a failure inside a view's text names the
+    /// text (`(a = 424242)`, a column name), and a view's text needs `Select`. So the error is
+    /// shown only once `Select` on each of them passes; otherwise the first denial is (logged
+    /// by the caller, through [`audit_read`]). An ordinary analysis asked `Select` already, and
+    /// an access error is shown as it is.
+    pub(crate) async fn view_text_failure(
+        &self,
+        views: &[TableIdent],
+        env: &QueryEnv,
+        e: KrishivError,
+    ) -> KrishivError {
+        if env.analysis.mode != krishiv_plan::analyzer::AnalysisMode::Metadata
+            || e.error_class() == ErrorClass::KrishivInsufficientPermissions
+        {
+            return e;
+        }
+        for view in views {
+            if let Err(denied) = authorize(
+                &*self.state.policy,
+                &self.state.principal,
+                &Securable::View(view.clone()),
+                Privilege::Select,
+            )
+            .await
+            {
+                return denied;
+            }
+        }
+        e
+    }
+
+    /// `Select` on every permanent view a metadata analysis read at `Browse` (a withheld
+    /// explain, design P3 PR-14d D2a): the plan shows a view's inlined body, and a view's text
+    /// is data (ADR 0046, update 2026-11-12). A SQL function's body is shown as
+    /// `DESCRIBE FUNCTION EXTENDED` shows it: metadata (ADR 0046, update 2026-11-15). Asked in
+    /// plan order; a denial is audited.
+    pub(crate) async fn authorize_bodies(
+        &self,
+        analysis: &crate::dataframe::Analysis,
+    ) -> Result<(), KrishivError> {
+        for used in &analysis.analyzed.securables {
+            if !matches!(used.securable, Securable::View(_)) {
+                continue;
+            }
+            let r = authorize(
+                &*self.state.policy,
+                &self.state.principal,
+                &used.securable,
+                Privilege::Select,
+            )
+            .await;
+            audit(self, StatementClass::Read, r)?;
+        }
+        Ok(())
     }
 
     /// Checks that this session's principal holds `privilege` on `securable` under the
