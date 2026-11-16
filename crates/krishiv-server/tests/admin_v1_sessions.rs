@@ -434,3 +434,90 @@ async fn a_repeated_request_id_replays_and_a_reused_one_is_refused() {
     let (third, body) = f.call("alice:viewer", "POST", &other, Some(body)).await;
     assert_ne!(third, StatusCode::OK, "{body}");
 }
+
+/// Collects the `krishiv::admin_action` records of the current thread as `field=value` strings.
+#[derive(Clone, Default)]
+struct Records(Arc<Mutex<Vec<String>>>);
+
+struct Fields(String);
+
+impl tracing::field::Visit for Fields {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        use std::fmt::Write as _;
+        let _ = write!(self.0, "{}={value:?} ", field.name());
+    }
+}
+
+impl tracing::Subscriber for Records {
+    fn enabled(&self, m: &tracing::Metadata<'_>) -> bool {
+        m.target() == "krishiv::admin_action"
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, e: &tracing::Event<'_>) {
+        let mut f = Fields(String::new());
+        e.record(&mut f);
+        self.0.lock().unwrap().push(f.0);
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+#[tokio::test]
+async fn every_mutating_call_writes_one_action_record_and_a_replay_says_so() {
+    // One global subscriber, so a callsite first hit by a parallel test is never cached as off;
+    // this test reads only the records of its own principals.
+    static RECORDS: std::sync::OnceLock<Records> = std::sync::OnceLock::new();
+    let records = RECORDS.get_or_init(|| {
+        let r = Records::default();
+        let _ = tracing::subscriber::set_global_default(r.clone());
+        r
+    });
+    let f = fixture();
+    let (a, b) = (f.session("zed"), f.session("yan"));
+    let _ta = f.start(&a, 1, &[]);
+    let _tb = f.start(&b, 2, &[]);
+    f.gate.queued(2).await;
+
+    // Allowed (own), refused (another's), replayed.
+    let own = format!("/queries/{}:cancel", qid(1));
+    let body = r#"{"requestId":"r-1"}"#;
+    f.call("zed:viewer", "POST", &own, Some(body)).await;
+    f.call("zed:viewer", "POST", &own, Some(body)).await;
+    f.call(
+        "zed:viewer",
+        "POST",
+        &format!("/queries/{}:cancel", qid(2)),
+        Some("{}"),
+    )
+    .await;
+    // Reads write nothing.
+    f.call("zed:viewer", "GET", "/queries", None).await;
+
+    let log: Vec<String> = records
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|l| l.contains("principal=\"zed\""))
+        .cloned()
+        .collect();
+    assert_eq!(log.len(), 3, "{log:#?}");
+    assert!(
+        log[0].contains("result=\"ok\"") && log[0].contains("replay=false"),
+        "{}",
+        log[0]
+    );
+    assert!(log[0].contains("rpc=\"CancelQuery\"") && log[0].contains("own=true"));
+    assert!(log[0].contains("request_id=\"r-1\"") && log[0].contains("transport=\"rest\""));
+    assert!(log[1].contains("replay=true"), "{}", log[1]);
+    assert!(log[2].contains("result=\"denied\""), "{}", log[2]);
+    assert!(log[2].contains("INVALID_HANDLE.OPERATION_NOT_FOUND"));
+    assert!(
+        log.iter().all(|l| !l.contains("zed:viewer")),
+        "a record never holds the token"
+    );
+}
