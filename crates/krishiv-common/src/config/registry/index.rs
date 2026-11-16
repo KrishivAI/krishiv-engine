@@ -66,6 +66,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.io.cache.blockBytes", &IO_CACHE_BLOCK_BYTES),
     ("krishiv.query.maxQueuedTime", &QUERY_MAX_QUEUED_TIME),
     ("krishiv.resultCache.enabled", &RESULT_CACHE_ENABLED),
+    ("krishiv.server.allowedHosts", &SERVER_ALLOWED_HOSTS),
     ("krishiv.session.memoryLimit", &SESSION_MEMORY_LIMIT),
     ("spark.sql.binaryOutputStyle", &BINARY_OUTPUT_STYLE),
     ("spark.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
@@ -174,6 +175,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         "krishiv.memory.reservationQuantum",
         &MEMORY_RESERVATION_QUANTUM,
     ),
+    ("krishiv.optimizer.latePayloadJoin", &LATE_PAYLOAD_JOIN),
     (
         "krishiv.python.worker.executables",
         &PYTHON_WORKER_EXECUTABLES,

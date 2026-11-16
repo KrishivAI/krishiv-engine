@@ -60,6 +60,7 @@ async fn start() -> SocketAddr {
         ("krishiv.auth.tokens.prom.principal", "prometheus"),
         ("krishiv.auth.tokens.prom.kind", "service"),
         ("krishiv.auth.tokens.prom.role", "viewer"),
+        ("krishiv.auth.principals.prometheus.expires", "2999-01-01"),
         ("krishiv.auth.tokens.ops.secret", o.as_str()),
         ("krishiv.auth.tokens.ops.principal", "ann"),
         ("krishiv.auth.tokens.ops.role", "operator"),

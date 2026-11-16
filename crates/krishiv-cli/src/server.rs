@@ -349,6 +349,25 @@ fn admin_router(
         }),
         (!public).then(|| Arc::clone(&guard)),
     );
+    // `krishiv.admin.v1`: gRPC and REST on the admin listener, behind the same guard.
+    let allowed_hosts = config
+        .get(&krishiv_common::config::SERVER_ALLOWED_HOSTS)
+        .and_then(krishiv_common::config::ConfigValue::as_str)
+        .map(|hosts| {
+            hosts
+                .split(',')
+                .map(str::trim)
+                .filter(|h| !h.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let alias_guard = Arc::clone(&guard);
+    let admin_v1 = krishiv_server::admin_v1::router(
+        Arc::new(krishiv_server::admin_v1::SessionAdmin::new()),
+        Arc::clone(&guard),
+        krishiv_server::admin_v1::AdminConfig::for_listener(bound.ip(), allowed_hosts),
+    );
     let base = if cfg!(feature = "ui") && flag(config, &UI_ENABLED, true) {
         let mut source = krishiv_server::session_source::SessionSource::new(Arc::clone(runtime))
             .map_err(|e| e.to_string())?;
@@ -383,7 +402,15 @@ fn admin_router(
     };
     let app = base
         .merge(krishiv_server::admin::health_routes(ready))
+        .merge(admin_v1)
         .merge(metrics);
+    // With authentication configured the deprecated version alias needs a credential like
+    // `GetVersion` (design P3-T066 D6, ADR 0046 section 3c).
+    let app = if authenticated {
+        krishiv_server::admin_v1::guard_version_alias(app, alias_guard)
+    } else {
+        app
+    };
     Ok(krishiv_server::admin::with_limits(
         app,
         krishiv_server::admin::HttpLimits::default(),

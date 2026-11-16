@@ -19,6 +19,10 @@ krishiv-session = { path = "../krishiv-session", version = "=0.2.0", optional = 
 krishiv-ui-assets = { path = "../krishiv-ui-assets", version = "=0.2.0" }
 utoipa = { workspace = true, features = ["macros"] }
 futures = { workspace = true, features = ["alloc"] }
+prost = { workspace = true, features = ["derive", "std"], optional = true }
+prost-reflect = { workspace = true, features = ["serde"], optional = true }
+tonic = { workspace = true, features = ["server", "router", "codegen"], optional = true }
+tonic-prost = { workspace = true, optional = true }
 getrandom.workspace = true
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync"] }
@@ -32,6 +36,8 @@ tracing.workspace = true
 metrics-prometheus = ["dep:krishiv-exec"]
 # `SessionSource`: the UI backend over an engine runtime (embedded mode), reading the system tables.
 session = ["dep:krishiv-session", "dep:arrow-array", "dep:arrow-cast", "dep:arrow-schema"]
+# `krishiv.admin.v1` (design P3-T066): the control API over gRPC and REST, from one descriptor.
+admin-api = ["dep:prost", "dep:prost-reflect", "dep:tonic", "dep:tonic-prost", "axum/http2"]
 # The admin listener over TLS (`tls::serve_capped_tls`, P3-T002 design §3.5).
 tls = ["dep:tokio-rustls", "krishiv-session?/tls"]
 
@@ -39,6 +45,10 @@ tls = ["dep:tokio-rustls", "krishiv-session?/tls"]
 krishiv-session = { path = "../krishiv-session" }
 krishiv-exec = { path = "../krishiv-exec" }
 tempfile.workspace = true
+tower = { workspace = true, features = ["util"] }
+tonic = { workspace = true, features = ["channel", "server", "router", "codegen"] }
+tonic-prost.workspace = true
+prost = { workspace = true, features = ["derive", "std"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "macros", "time"] }
 
 [lints]

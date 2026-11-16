@@ -1,0 +1,148 @@
+{
+  "components": {
+    "schemas": {
+      "Capability": {
+        "properties": {
+          "detail": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Error": {
+        "properties": {
+          "error": {
+            "properties": {
+              "errorClass": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "messageParameters": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "requestId": {
+                "type": "string"
+              },
+              "sqlState": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "GetCapabilitiesRequest": {
+        "properties": {},
+        "type": "object"
+      },
+      "GetCapabilitiesResponse": {
+        "properties": {
+          "capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/Capability"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "GetVersionRequest": {
+        "properties": {},
+        "type": "object"
+      },
+      "GetVersionResponse": {
+        "properties": {
+          "adminV1Revision": {
+            "format": "int64",
+            "type": "string"
+          },
+          "preview": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "krishiv.admin.v1",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/admin/v1/capabilities": {
+      "get": {
+        "operationId": "GetCapabilities",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetCapabilitiesResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "the error envelope"
+          }
+        },
+        "x-privilege": "authenticated"
+      }
+    },
+    "/api/admin/v1/version": {
+      "get": {
+        "operationId": "GetVersion",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetVersionResponse"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "description": "the error envelope"
+          }
+        },
+        "x-privilege": "authenticated"
+      }
+    }
+  }
+}

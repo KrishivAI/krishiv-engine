@@ -64,7 +64,7 @@ impl Session {
         let runtime_admission = runtime.admission.clone();
         let queries = Arc::new(crate::system::QueryLog::new(
             Arc::clone(&runtime.history),
-            &parts.principal.name,
+            &parts.principal,
         ));
         // Without a session limit the session level is skipped: queries stay
         // children of the root, so `system.memory` shows what it always did.
