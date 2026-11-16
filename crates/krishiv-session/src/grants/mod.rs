@@ -22,8 +22,8 @@
 //!
 //! Names match as the catalog resolves them (review M1): keys keep the catalog's spelling and
 //! are never folded; a key is compared ignoring ASCII case only when the session catalog holds
-//! no case twin of it ([`GrantsPolicy::exact_for`]). A user and a service principal of one name share grants and
-//! ownership (review m8: principals are keyed by name).
+//! no case twin of it (`GrantsPolicy::exact_for`). A user and a service principal of one name
+//! share grants and ownership (review m8: principals are keyed by name).
 
 mod exec;
 mod index;
