@@ -337,7 +337,10 @@ pub trait Sink: Send + Sync {
     fn published_filters(&self) -> Vec<FilterId> {
         Vec::new()
     }
-    /// Shared state, made once per pipeline run.
+    /// Shared state, made once per pipeline run. When the pipeline's source
+    /// reads a breaker, `ctx.dependency()` holds that breaker's finalized
+    /// state, as for the source: a sink that continues it adopts it
+    /// (`aggregate/distinct.rs` `KeyFeed`); other sinks ignore it.
     ///
     /// # Errors
     /// Any error fails the query.
