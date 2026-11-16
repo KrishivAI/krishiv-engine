@@ -118,6 +118,7 @@ pub(crate) fn plan_tag(node: &PlanNode) -> u8 {
         PlanNode::GroupMap { .. } => 38,
         PlanNode::CoGroupMap { .. } => 39,
         PlanNode::PythonTableFunction { .. } => 40,
+        PlanNode::CollectMetrics { .. } => 41,
     }
 }
 
@@ -962,6 +963,10 @@ impl<'k, 'a> Encoder<'k, 'a> {
             | PlanNode::PipeOperator { .. }
             | PlanNode::Distinct { .. } => {}
             PlanNode::Repartition { exprs, .. } => self.exprs(exprs),
+            PlanNode::CollectMetrics { name, metrics, .. } => {
+                self.str(name);
+                self.exprs(metrics);
+            }
             PlanNode::JoinHint { strategy, .. } => {
                 self.str(strategy.name());
             }
