@@ -68,7 +68,5 @@ The first release is the embedded core: the engine runs in your process, from Py
 
 ### Known limits
 
-- Temporary views over in-memory DataFrames and SQL expression strings (`selectExpr`, `expr`) are not supported
-  yet; read data from files for views.
 - Spark Connect, streaming, incremental views and distributed execution are not part of this release.
 - The APIs are not stable.
