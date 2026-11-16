@@ -1134,3 +1134,69 @@ fn a_file_read_with_a_declared_schema_uses_it() {
     );
     assert_eq!(schema.field(0).data_type(), &arrow_schema::DataType::Int64);
 }
+
+#[cfg(feature = "delta")]
+#[test]
+fn task_specs_refuse_a_delta_scan_anywhere_in_the_plan() {
+    // A worker cannot open the session's Delta snapshots, so a Delta scan
+    // outside the streaming pipeline (a subquery, a join's build side) is
+    // refused as the streaming one is, for one task as for several.
+    let session = Session::new().unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "id",
+        arrow_schema::DataType::Int32,
+        false,
+    )]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int32Array::from((0..6).collect::<Vec<_>>()))],
+    )
+    .unwrap();
+    session
+        .register_batches("t", Arc::clone(&schema), vec![batch])
+        .unwrap();
+    let delta = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/delta-4.4.1/session-appends");
+    let delta = delta.to_string_lossy();
+    let in_subquery = format!("SELECT id FROM t WHERE id > (SELECT max(id) FROM delta.`{delta}`)");
+    for (sql, delta_streams) in [
+        (in_subquery, Some(false)),
+        (
+            format!("SELECT t.id FROM t JOIN delta.`{delta}` d ON t.id = d.id"),
+            None,
+        ),
+        (
+            format!("SELECT t.id FROM delta.`{delta}` d JOIN t ON t.id = d.id"),
+            None,
+        ),
+    ] {
+        let df = block_on(session.sql(&sql)).unwrap();
+        let analysis = block_on(df.analysis()).unwrap();
+        let (_, physical) = block_on(session.physical(&analysis.analyzed, &analysis.env)).unwrap();
+        if let Some(streams) = delta_streams {
+            let streaming = streaming_scans(physical.root());
+            assert_eq!(
+                streaming
+                    .iter()
+                    .any(|s| crate::delta::is_delta(&s.scan.source)),
+                streams,
+                "{sql}: {streaming:?}"
+            );
+        }
+        for tasks in [1_usize, 2] {
+            let e = analysis
+                .env
+                .catalog
+                .task_specs(&physical, tasks, 2)
+                .unwrap_err();
+            assert_eq!(
+                e.error_class(),
+                ErrorClass::KrishivUnsupportedFeature,
+                "{sql}"
+            );
+            assert!(e.to_string().contains("a Delta scan"), "{sql}: {e}");
+        }
+        drop(analysis);
+        drop(df);
+    }
+}

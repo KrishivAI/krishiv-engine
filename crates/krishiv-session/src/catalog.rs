@@ -711,6 +711,29 @@ impl QueryCatalog {
         }
     }
 
+    /// Whether any scan of `plan` reads a Delta table: every tree
+    /// ([`PhysicalPlan::roots`]) and every node's inputs and subquery plans
+    /// ([`PhysNode::children`]), not only the streaming pipeline.
+    #[cfg(feature = "delta")]
+    fn reads_delta(&self, plan: &PhysicalPlan) -> bool {
+        let mut stack: Vec<&PhysNode> = plan.roots().collect();
+        while let Some(node) = stack.pop() {
+            if let PhysNode::Scan(scan) = node {
+                let delta = match &scan.scan.source {
+                    ReadSource::Table { name, .. } => self.loaded_for(name).is_some_and(
+                        |t| matches!(&*t, TempTable::Files { source, .. } if crate::delta::is_delta(source)),
+                    ),
+                    source => crate::delta::is_delta(source),
+                };
+                if delta {
+                    return true;
+                }
+            }
+            stack.extend(node.children());
+        }
+        false
+    }
+
     /// The scan splits of one stage over `plan`: one [`TaskSpec`] per task
     /// of `tasks`, dealing the streaming pipeline's scans (or relation
     /// batches) in contiguous index ranges, deterministically.
@@ -732,7 +755,10 @@ impl QueryCatalog {
     ///
     /// # Errors
     /// `INTERNAL_ERROR` for no tasks, a task count past `u32`, or a scan
-    /// whose files were not opened before planning.
+    /// whose files were not opened before planning;
+    /// `KRISHIV_UNSUPPORTED_FEATURE` for a plan that reads Delta anywhere
+    /// (a worker cannot open the session's snapshots), a range source or a
+    /// shared plan across several tasks, and a scan it cannot split.
     #[cfg_attr(
         not(test),
         expect(
@@ -772,19 +798,14 @@ impl QueryCatalog {
         }
         scans.sort_by_key(|s| s.id);
         let mut assigned: Vec<(ScanId, ScanSplitsKind)> = Vec::new();
+        // A worker cannot open the session's Delta snapshots, so no stage
+        // that reads Delta anywhere (a build side, a subquery or a shared
+        // plan included, not only the streaming pipeline) leaves the driver.
+        #[cfg(feature = "delta")]
+        if self.reads_delta(plan) {
+            return Err(unsupported("a Delta scan in a distributed stage"));
+        }
         for scan in scans {
-            #[cfg(feature = "delta")]
-            {
-                let delta = match &scan.scan.source {
-                    ReadSource::Table { name, .. } => self.loaded_for(name).is_some_and(
-                        |t| matches!(&*t, TempTable::Files { source, .. } if crate::delta::is_delta(source)),
-                    ),
-                    source => crate::delta::is_delta(source),
-                };
-                if delta {
-                    return Err(unsupported("a Delta scan split across several tasks"));
-                }
-            }
             match &scan.scan.source {
                 ReadSource::Table { name, options } => {
                     let last = name.last().map_or("", String::as_str);
