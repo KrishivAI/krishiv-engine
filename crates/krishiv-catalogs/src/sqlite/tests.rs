@@ -575,7 +575,7 @@ fn the_epoch_never_goes_backwards_or_repeats_after_a_read_fault() {
     assert!(seen.iter().all(|e| back > *e), "{seen:?} {back}");
     seen.push(back);
     // Another process commits changes, which move the file epoch up to and past the fault values.
-    for i in 0..(b as usize + 2) {
+    for i in 0..(usize::try_from(b).unwrap() + 2) {
         raw.execute("UPDATE epoch SET value = value + 1", [])
             .unwrap();
         let e = c.epoch();
