@@ -753,15 +753,7 @@ impl Session {
                 )
                 .await
             }
-            Statement::Merge(m) => {
-                let changes = crate::table_commands::RowChanges {
-                    targets: &[],
-                    values: &[],
-                    condition: None,
-                };
-                self.exec_row_level_change(&m.target, None, "MERGE INTO TABLE", &changes, query)
-                    .await
-            }
+            Statement::Merge(m) => self.exec_merge(&m, query).await,
             _ => Err(unsupported_statement("statements other than queries")),
         }
     }

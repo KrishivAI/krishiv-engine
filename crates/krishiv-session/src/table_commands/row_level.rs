@@ -28,7 +28,7 @@
 //! conflict check's read set is the table's (the Delta connector reads the condition's partition
 //! conjuncts).
 //!
-//! Not here yet: `MERGE` (PR-37c), merge-on-read (PR-37d), `SET c = DEFAULT`, the
+//! `MERGE` is `merge.rs` (PR-37c), over the same hidden tables. Not here yet: merge-on-read (PR-37d), `SET c = DEFAULT`, the
 //! CHAR/VARCHAR write checks of an `UPDATE`, and a condition that names the table by a
 //! qualified name longer than its own (`db.t.c`: the target is read under its last name part or
 //! the statement's alias).
@@ -73,6 +73,7 @@ pub(crate) const ALIAS_OPTION: &str = "__krishiv_row_level_alias";
 
 /// A column of the statement's `SET` list: the column and the value's SQL text (`None`:
 /// `DEFAULT`).
+#[derive(Debug, Clone)]
 pub(crate) struct Assignment {
     pub(crate) column: String,
     pub(crate) value: Option<String>,
@@ -80,10 +81,10 @@ pub(crate) struct Assignment {
 
 /// The target as a provider: the one row-level table, read whole or restricted to `files`.
 #[derive(Debug)]
-struct Target {
-    table: Arc<dyn RowLevelTable>,
-    op: RowLevelOperation,
-    files: Option<Vec<Vec<u8>>>,
+pub(super) struct Target {
+    pub(super) table: Arc<dyn RowLevelTable>,
+    pub(super) op: RowLevelOperation,
+    pub(super) files: Option<Vec<Vec<u8>>>,
 }
 
 impl TableProvider for Target {
@@ -100,12 +101,12 @@ impl TableProvider for Target {
 }
 
 /// `name` as SQL text: a backquoted identifier.
-fn ident(name: &str) -> String {
+pub(super) fn ident(name: &str) -> String {
     format!("`{}`", name.replace('`', "``"))
 }
 
 /// The first scan of `node`, depth first.
-fn first_scan(node: &PhysNode) -> Option<krishiv_plan::Scan> {
+pub(super) fn first_scan(node: &PhysNode) -> Option<krishiv_plan::Scan> {
     match node {
         PhysNode::Scan(s) => Some(s.scan.clone()),
         _ => node.children().into_iter().find_map(first_scan),
@@ -452,7 +453,7 @@ impl Session {
 
     /// A frame reading the hidden table `name` (`columns`), which owns `entry`: a resolved
     /// scan, as a script result's frame reads its table, since no SQL text names it.
-    fn hidden_frame(
+    pub(super) fn hidden_frame(
         &self,
         name: &str,
         entry: Arc<crate::catalog::TempTable>,
@@ -503,7 +504,7 @@ fn has_subquery(e: &krishiv_plan::Expr) -> bool {
 /// are not the task's (the commit's `DELTA_*` conflicts, Krishiv's own refusals and limits,
 /// internal errors, cancellation) are returned as they came. `value_types` are the assigned
 /// columns and their new values' types.
-fn delta_task_write_failed(
+pub(super) fn delta_task_write_failed(
     e: KrishivError,
     root: &str,
     columns: &[TableColumn],

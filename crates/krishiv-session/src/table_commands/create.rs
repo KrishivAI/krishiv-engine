@@ -854,34 +854,7 @@ impl Session {
         original: &str,
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
-        let name = self.table_name(table, &env)?;
-        // `delta.`/path``: a Delta table by path (no catalog entry), read as its scans read it.
-        #[cfg(feature = "delta")]
-        let by_path = match crate::access::ddl_parts(table, &env)?.as_slice() {
-            [format, path]
-                if format.eq_ignore_ascii_case("delta")
-                    && path.contains('/')
-                    && self
-                        .state
-                        .catalog
-                        .store
-                        .table(&name.namespace, &name.name)
-                        .is_none() =>
-            {
-                // The path as written: a table name is case-folded, a path is not.
-                Some(format!("delta.`{}`", path.replace('`', "``")))
-            }
-            _ => None,
-        };
-        #[cfg(not(feature = "delta"))]
-        let by_path: Option<String> = None;
-        let quoted = match by_path {
-            Some(q) => q,
-            None => {
-                self.table_for_write(&name, operation, &env)?;
-                name.quoted()
-            }
-        };
+        let (name, quoted) = self.row_level_target(table, operation, &env)?;
         // Spark analyzes the condition and the new values against the table before it finds that the
         // table cannot change: an unknown column is the error then.
         // Each assigned column is analyzed as a reference, so an unknown one is the analyzer's own
@@ -970,6 +943,46 @@ impl Session {
             operation: operation.to_owned(),
         }
         .into())
+    }
+
+    /// The table a row-level statement changes and the name it is read under: a Delta table by
+    /// path (`delta.`/path``, no catalog entry) as written, else a permanent table that may be
+    /// written by `operation`.
+    pub(crate) fn row_level_target(
+        &self,
+        table: &DdlName,
+        operation: &str,
+        env: &QueryEnv,
+    ) -> Result<(TableName, String), KrishivError> {
+        let name = self.table_name(table, env)?;
+        // `delta.`/path``: a Delta table by path (no catalog entry), read as its scans read it.
+        #[cfg(feature = "delta")]
+        let by_path = match crate::access::ddl_parts(table, env)?.as_slice() {
+            [format, path]
+                if format.eq_ignore_ascii_case("delta")
+                    && path.contains('/')
+                    && self
+                        .state
+                        .catalog
+                        .store
+                        .table(&name.namespace, &name.name)
+                        .is_none() =>
+            {
+                // The path as written: a table name is case-folded, a path is not.
+                Some(format!("delta.`{}`", path.replace('`', "``")))
+            }
+            _ => None,
+        };
+        #[cfg(not(feature = "delta"))]
+        let by_path: Option<String> = None;
+        let quoted = match by_path {
+            Some(q) => q,
+            None => {
+                self.table_for_write(&name, operation, env)?;
+                name.quoted()
+            }
+        };
+        Ok((name, quoted))
     }
 
     /// Drops the cached relations that read the permanent table `name`: its data or existence changed.
