@@ -369,7 +369,7 @@ impl EngineRuntime {
     }
 
     /// The configuration a session of this runtime starts from: the
-    /// runtime's pairs, then the session's. A runtime-owned key among the
+    /// runtime's pairs, the defaults set at run time (`set_config_defaults`), then the session's. A runtime-owned key among the
     /// session's pairs fails with `CANNOT_MODIFY_STATIC_CONFIG`, as `SET` of
     /// one does (a private runtime's session passes none: its builder's
     /// pairs are the runtime's).
