@@ -1,0 +1,32 @@
+---
+source: crates/krishiv-session/tests/analyze.rs
+expression: layout(&json)
+---
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","customer"],"display":"table `spark_catalog`.`default`.`customer`","privilege":"SELECT","columns":["c_current_addr_sk","c_current_cdemo_sk","c_current_hdemo_sk","c_customer_id","c_first_name","c_last_name"]},
+  {"kind":"table","name":["spark_catalog","default","customer_address"],"display":"table `spark_catalog`.`default`.`customer_address`","privilege":"SELECT","columns":["ca_address_sk","ca_city"]},
+  {"kind":"table","name":["spark_catalog","default","customer_demographics"],"display":"table `spark_catalog`.`default`.`customer_demographics`","privilege":"SELECT","columns":["cd_demo_sk"]},
+  {"kind":"table","name":["spark_catalog","default","household_demographics"],"display":"table `spark_catalog`.`default`.`household_demographics`","privilege":"SELECT","columns":["hd_demo_sk","hd_income_band_sk"]},
+  {"kind":"table","name":["spark_catalog","default","income_band"],"display":"table `spark_catalog`.`default`.`income_band`","privilege":"SELECT","columns":["ib_income_band_sk","ib_lower_bound","ib_upper_bound"]},
+  {"kind":"table","name":["spark_catalog","default","store_returns"],"display":"table `spark_catalog`.`default`.`store_returns`","privilege":"SELECT","columns":["sr_cdemo_sk"]}],
+"output_schema":[{"ordinal":0,"name":"customer_id","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null},
+  {"ordinal":1,"name":"customername","type":"string","type_json":"\"string\"","nullable":false,"declared_type":null}],
+"lineage":[{"ordinal":0,"output":"customer_id","sources":[{"table":["spark_catalog","default","customer"],"column":"c_customer_id","via_view":null}],"transform":"identity"},
+  {"ordinal":1,"output":"customername","sources":[{"table":["spark_catalog","default","customer"],"column":"c_first_name","via_view":null},{"table":["spark_catalog","default","customer"],"column":"c_last_name","via_view":null}],"transform":"expression"}],
+"filters":[{"kind":"filter","table":["spark_catalog","default","customer"],"column":"c_current_addr_sk"},
+  {"kind":"filter","table":["spark_catalog","default","customer"],"column":"c_current_cdemo_sk"},
+  {"kind":"filter","table":["spark_catalog","default","customer"],"column":"c_current_hdemo_sk"},
+  {"kind":"filter","table":["spark_catalog","default","customer_address"],"column":"ca_address_sk"},
+  {"kind":"filter","table":["spark_catalog","default","customer_address"],"column":"ca_city"},
+  {"kind":"filter","table":["spark_catalog","default","customer_demographics"],"column":"cd_demo_sk"},
+  {"kind":"filter","table":["spark_catalog","default","household_demographics"],"column":"hd_demo_sk"},
+  {"kind":"filter","table":["spark_catalog","default","household_demographics"],"column":"hd_income_band_sk"},
+  {"kind":"filter","table":["spark_catalog","default","income_band"],"column":"ib_income_band_sk"},
+  {"kind":"filter","table":["spark_catalog","default","income_band"],"column":"ib_lower_bound"},
+  {"kind":"filter","table":["spark_catalog","default","income_band"],"column":"ib_upper_bound"},
+  {"kind":"filter","table":["spark_catalog","default","store_returns"],"column":"sr_cdemo_sk"},
+  {"kind":"sort","table":["spark_catalog","default","customer"],"column":"c_customer_id"}],
+"warnings":[]}

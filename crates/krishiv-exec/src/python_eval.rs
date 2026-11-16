@@ -478,7 +478,9 @@ impl Sink for PythonEvalSink {
             store: self.store.local_state(ctx, &g.store)?,
             pending: Arc::new(Mutex::new(Pending::default())),
             ready: None,
-            partition: ctx.partition(),
+            // Spark's index of this driver's partition (a `UNION ALL` branch
+            // numbers its own).
+            partition: ctx.partition().wrapping_sub(ctx.numbering_base()),
             held: Vec::new(),
             held_rows: 0,
             held_bytes: ctx.consumer().consumer().reservation(),

@@ -40,7 +40,10 @@ use std::sync::Arc;
 
 use krishiv_exec::JoinType;
 use krishiv_exec::aggregate::{AggregateExpr, AggregateFunction, AggregateOutput, is_moment};
-use krishiv_exec::physical::{HashScheme, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan};
+use krishiv_exec::physical::{
+    HashScheme, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan, TableWriteRequest,
+};
+use krishiv_exec::planner::WriteMode;
 use krishiv_exec::window::{FrameBound, WindowFrame, WindowFunction};
 use krishiv_plan::{Expr, ExprNode, FunctionId, Literal, ResolvedExpr};
 use krishiv_types::DataType;
@@ -130,6 +133,8 @@ registry! {
     (exchange_source, ExchangeSource, POST_MIGRATION_READER_VERSION, Semantic, "The `ExchangeSource` node: a plan fragment's read of an exchange another stage wrote (distributed stages)."),
     (existence_join, ExistenceJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `Existence` join type (Spark's `ExistenceJoin`: `EXISTS` and `IN` outside a filter conjunct), hash or nested loop."),
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
+    (file_source_schema, FileSourceSchema, POST_MIGRATION_READER_VERSION, Semantic, "A user-declared schema on a file read (`ReadSource::Files.schema`). A reader without it would infer the columns again and misread formats such as CSV. The schema is a struct type, so a plan with one lists `nested_types` too."),
+    (fixed_size_list_carrier, FixedSizeListCarrier, POST_MIGRATION_READER_VERSION, Semantic, "A vector column on the `FixedSizeList` carrier (design P3-T075): an `array<float>` or `array<double>` stored with its length. A reader without it would read the column through code that expects a plain list."),
     (fused_probe, FusedProbe, POST_MIGRATION_READER_VERSION, Optimization, "A hash join's probe selection (`HashJoinPlan.select`, design P2-E3 U2): a filter and a scan's runtime-filter row stage fused into the probe, which joins the selected rows by id; without it the planner keeps the `Filter` node and the scan's own row stage."),
     (generate, Generate, POST_MIGRATION_READER_VERSION, Semantic, "The `Generate` node (`explode`, `posexplode`, `inline` and their `_outer` forms)."),
     (geo_types, GeoTypes, POST_MIGRATION_READER_VERSION, Semantic, "The `GEOMETRY` and `GEOGRAPHY` types, with their SRID."),
@@ -145,9 +150,11 @@ registry! {
     (legacy_statistical_aggregate, LegacyStatisticalAggregate, POST_MIGRATION_READER_VERSION, Semantic, "The `legacy_statistical_aggregate` expression environment flag (`spark.sql.legacy.statisticalAggregate`): the sample moment aggregates give NaN instead of NULL where Spark divides by zero."),
     (legacy_time_parser, LegacyTimeParser, POST_MIGRATION_READER_VERSION, Semantic, "The `legacy_time_parser` expression environment flag (`spark.sql.legacy.timeParserPolicy=LEGACY`): the datetime pattern functions use `SimpleDateFormat`, and the JSON, CSV and XML functions the lenient `FastDateFormat`."),
     (limit_offset, LimitOffset, 3, Semantic, "A `Limit` that skips leading rows (a nonzero offset)."),
+    (local_relation_source, LocalRelationSource, POST_MIGRATION_READER_VERSION, Semantic, "A read of Arrow data held in the session's relation store (`ReadSource::Local`, Spark's `LocalRelation`), named by content hash; the data is not in the plan. A reader without it has no way to read the relation."),
     (map_key_dedup_policy, MapKeyDedupPolicy, POST_MIGRATION_READER_VERSION, Semantic, "The session's map-key dedup policy (`LAST_WIN`); without it a worker keeps the first value on duplicate map keys."),
     (mode_regr_bit_listagg_aggs, ModeRegrBitListaggAggs, POST_MIGRATION_READER_VERSION, Semantic, "The `mode`, regression (`regr_*`), bitwise (`bit_and`, `bit_or`, `bit_xor`), `listagg`/`string_agg` and `try_sum`/`try_avg` aggregates."),
     (moment_aggregates, MomentAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The moment aggregates (`stddev_samp`, `stddev_pop`, `var_samp`, `var_pop`, `skewness`, `kurtosis`, `corr`, `covar_samp`, `covar_pop`)."),
+    (nested_literals, NestedLiterals, POST_MIGRATION_READER_VERSION, Semantic, "An array, map or struct literal value (`Literal::{Array, KeyValueMap, Struct}`). The literal's type is a nested type, so a plan with one lists `nested_types` too."),
     (nested_types, NestedTypes, POST_MIGRATION_READER_VERSION, Semantic, "Array, map and struct types (`DataType.KIND_NESTED`, written as Spark's JSON form of the type)."),
     (options_map_literals, OptionsMapLiterals, POST_MIGRATION_READER_VERSION, Semantic, "A `MAP<STRING, STRING>` literal: the options of one call (`from_json`, `from_csv`, `from_xml`). Entries are classified as source options are: a sensitive key or a URL with credentials does not encode (ADR 0038)."),
     (partial_aggregate, PartialAggregate, POST_MIGRATION_READER_VERSION, Optimization, "Partial aggregates below a join, whose states a later aggregate merges (eager aggregation)."),
@@ -163,6 +170,7 @@ registry! {
     (shared_subplan, SharedSubplan, POST_MIGRATION_READER_VERSION, Semantic, "Subplans run once per query and read by several `SharedRead` nodes (`WITH` bodies computed once)."),
     (sort_merge_join, SortMergeJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `SortMergeJoin` node: a join of its inputs sorted on the keys (a `MERGE` hint or `krishiv.exec.join.strategy`)."),
     (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
+    (table_write, TableWrite, POST_MIGRATION_READER_VERSION, Semantic, "The `TableWrite` node: rows written into a table provider's sink (its writer, or the rewriter of its row-level table), resolved at instantiation; design P3-PR-DML §7."),
     (time_type, TimeType, POST_MIGRATION_READER_VERSION, Semantic, "The `TIME` type, with its precision."),
     (union_loop, UnionLoop, POST_MIGRATION_READER_VERSION, Semantic, "The `UnionLoop` and `LoopRef` nodes (recursive common table expressions run as a loop)."),
     (variant_explode, VariantExplode, POST_MIGRATION_READER_VERSION, Semantic, "The `variant_explode` generator (and `variant_explode_outer`): the fields of a variant object or the elements of a variant array."),
@@ -237,6 +245,17 @@ pub enum Construct<'a> {
     EvalMode,
     /// A `WritePlan` naming the Spark types of input columns.
     WriteColumnTypes,
+    /// The type of a nested literal (array, map or struct): a nested type
+    /// the literal carries itself, so `nested_types` is listed with
+    /// `nested_literals`.
+    NestedLiteralType,
+    /// The schema a file read declares (`ReadSource::Files.schema`).
+    FileSourceSchema,
+    /// A scan of a local relation (`ReadSource::Local`).
+    LocalRelationSource,
+    /// A declared schema's struct type, written as one nested type (so
+    /// `nested_types` is listed with `file_source_schema`).
+    SchemaType,
     /// A `Generate` node's generator.
     Generator(krishiv_plan::GeneratorKind),
     /// A hash join's probe selection (`HashJoinPlan.select`).
@@ -296,6 +315,35 @@ fn indeterminate_field(field: &arrow_schema::Field) -> bool {
         .metadata()
         .get(SPARK_TYPE_METADATA_KEY)
         .is_some_and(|tag| tag.contains("collate null"))
+}
+
+/// The constructs of a source a plan reads or writes: a declared file schema, or the stored
+/// batches of a local relation. Inferred file reads and table reads need nothing here (the
+/// encoder refuses a table read it cannot write).
+fn visit_read_source<'a>(source: &'a krishiv_plan::ReadSource, f: &mut impl FnMut(Construct<'a>)) {
+    match source {
+        krishiv_plan::ReadSource::Files {
+            schema: Some(schema),
+            ..
+        } => {
+            f(Construct::FileSourceSchema);
+            f(Construct::SchemaType);
+            schema
+                .fields()
+                .iter()
+                .for_each(|x| visit_type(x.data_type(), f));
+        }
+        // The stored batches' Arrow schema travels in the plan, so its fields are classified like
+        // any schema the plan writes.
+        krishiv_plan::ReadSource::Local(l) => {
+            f(Construct::LocalRelationSource);
+            l.schema()
+                .fields()
+                .iter()
+                .for_each(|field| visit_arrow_field(field, f));
+        }
+        _ => {}
+    }
 }
 
 /// `field`, its type and every field and type inside it as constructs: the
@@ -390,7 +438,10 @@ fn arrow_nested(t: &arrow_schema::DataType) -> bool {
 /// excludes it (it is `calendar_struct`).
 pub(crate) fn arrow_type_is_nested(t: &arrow_schema::DataType) -> bool {
     // A variant's carrier is one value, not a struct: it needs `variant_type`, not `nested_types`.
-    !krishiv_types::arrow::is_variant_struct(t) && arrow_nested(t)
+    // Nor is a vector carrier: it needs `fixed_size_list_carrier`.
+    !krishiv_types::arrow::is_variant_struct(t)
+        && !matches!(t, arrow_schema::DataType::FixedSizeList(..))
+        && arrow_nested(t)
 }
 
 /// The feature `construct` needs, or `None` for the epoch-1 baseline.
@@ -421,6 +472,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | PhysNode::PythonGroupMap { .. }
             | PhysNode::PythonCoGroupMap { .. }
             | PhysNode::PythonAggregate { .. } => Some(Feature::PythonUdfRelations),
+            PhysNode::TableWrite { .. } => Some(Feature::TableWrite),
             // A partitioned write needs a reader that
             // lays files out by partition (the older fields would be
             // ignored and the rows written flat).
@@ -487,6 +539,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         Construct::Lambda => Some(Feature::LambdaFunctions),
         Construct::EvalMode => Some(Feature::CapturedEvalMode),
         Construct::WriteColumnTypes => Some(Feature::WriteColumnTypes),
+        Construct::NestedLiteralType | Construct::SchemaType => Some(Feature::NestedTypes),
+        Construct::FileSourceSchema => Some(Feature::FileSourceSchema),
+        Construct::LocalRelationSource => Some(Feature::LocalRelationSource),
         Construct::ProbeSelect => Some(Feature::FusedProbe),
         // The scalar kinds came with `python_udf`; every other kind is newer.
         Construct::PythonEvalType(t) => (!t.is_scalar()).then_some(Feature::PythonUdfRelations),
@@ -521,6 +576,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             } else if krishiv_types::arrow::is_variant_struct(t) {
                 // A variant's carrier is one value, not a struct.
                 Some(Feature::VariantType)
+            } else if matches!(t, arrow_schema::DataType::FixedSizeList(..)) {
+                // A vector carrier is one value, not a nested type: a reader needs the carrier, not `nested_types`.
+                Some(Feature::FixedSizeListCarrier)
             } else {
                 arrow_nested(t).then_some(Feature::NestedTypes)
             }
@@ -529,6 +587,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             ExprNode::Resolved(ResolvedExpr::Field { .. }) => Some(Feature::StructField),
             ExprNode::Literal(Literal::CalendarInterval { .. }) => Some(Feature::IntervalTypes),
             ExprNode::Literal(Literal::Map(_)) => Some(Feature::OptionsMapLiterals),
+            ExprNode::Literal(
+                Literal::Array { .. } | Literal::KeyValueMap { .. } | Literal::Struct { .. },
+            ) => Some(Feature::NestedLiterals),
             // The year-month and day-time literal kinds predate the feature,
             // so a bare one stays baseline: whatever reads its column names
             // the interval type. As an argument nothing else may name it, and
@@ -692,6 +753,17 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
                     .for_each(|field| visit_arrow_field(field, f));
             }
         }
+        // The request's schema is classified by field, as an exchange's is.
+        // The target's source is written too (`TableRef.source`), so it is classified as a
+        // scan's is.
+        PhysNode::TableWrite { request, table, .. } => {
+            visit_read_source(&table.source, f);
+            request
+                .input_schema()
+                .fields()
+                .iter()
+                .for_each(|field| visit_arrow_field(field, f));
+        }
         // A reduce fragment may name a type only in the schema it reads
         // (a sort by column index above it), so the schema is classified
         // by field, as the plan's output schema is.
@@ -706,9 +778,10 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
                 .iter()
                 .for_each(|field| visit_arrow_field(field, f));
         }
-        PhysNode::Scan(_)
-        | PhysNode::LateFetch { .. }
-        | PhysNode::OneRow
+        PhysNode::Scan(scan) | PhysNode::LateFetch { scan, .. } => {
+            visit_read_source(&scan.scan.source, f);
+        }
+        PhysNode::OneRow
         | PhysNode::SharedRead { .. }
         | PhysNode::UnionLoop { .. }
         | PhysNode::LoopRef { .. }
@@ -751,9 +824,41 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
             f(Construct::EvalMode);
         }
         f(Construct::Expr(e));
+        nested_literal_types(e, f);
         // A UDF call hides in any expression of the node (`exprs_of`
         // already yields every descendant, so one node check is enough).
         functions_in(e, f);
+    }
+}
+
+/// A nested literal's type as constructs: the literal itself is a nested type
+/// (`nested_types`), and the types inside it are visited as any type is
+/// (`array<time(3)>` needs `time_type` too).
+fn nested_literal_types<'a>(e: &'a Expr, f: &mut impl FnMut(Construct<'a>)) {
+    let ExprNode::Literal(l) = &e.node else {
+        return;
+    };
+    match l {
+        Literal::Array { data_type, .. } => {
+            f(Construct::NestedLiteralType);
+            visit_type(data_type.element_type(), f);
+        }
+        Literal::KeyValueMap { data_type, .. } => {
+            f(Construct::NestedLiteralType);
+            visit_type(data_type.key_type(), f);
+            visit_type(data_type.value_type(), f);
+        }
+        Literal::Struct { data_type, .. } => {
+            f(Construct::NestedLiteralType);
+            data_type
+                .fields()
+                .iter()
+                .for_each(|x| visit_type(x.data_type(), f));
+        }
+        // Scalars and the options map have no type of their own to visit;
+        // `Literal` is non-exhaustive, and a kind added later fails to encode
+        // (`encode::literal`) until it is handled there.
+        _ => {}
     }
 }
 
@@ -820,6 +925,9 @@ fn types_of<'a>(node: &'a PhysNode) -> Vec<&'a DataType> {
     if let PhysNode::Scan(scan) | PhysNode::LateFetch { scan, .. } = node {
         out.extend(scan.scan.output.iter().map(|c| &c.data_type));
     }
+    if let PhysNode::TableWrite { table, .. } = node {
+        out.extend(table.output.iter().map(|c| &c.data_type));
+    }
     if let PhysNode::WriteFiles { write: Some(w), .. } = node {
         out.extend(w.column_types.values());
     }
@@ -867,6 +975,14 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
         }
         PhysNode::SortMergeJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
         PhysNode::NestedLoopJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
+        PhysNode::TableWrite { request, .. } => match request {
+            TableWriteRequest::Write(w) => {
+                if let WriteMode::OverwriteByFilter(filter) = &w.mode {
+                    roots.push(filter);
+                }
+            }
+            TableWriteRequest::RowLevel(r) => roots.extend(r.read_filter.iter()),
+        },
         PhysNode::OneRow
         | PhysNode::SharedRead { .. }
         | PhysNode::LateFetch { .. }

@@ -1,4 +1,17 @@
 {
+  "KRISHIV_ADMIN_PRECONDITION_FAILED" : {
+    "message" : [
+      "The change was refused because the object is not in the state the request expects (<reason>)."
+    ],
+    "sqlState" : "55000",
+    "audience" : "operator"
+  },
+  "KRISHIV_AUTH_IMPERSONATION_DENIED" : {
+    "message" : [
+      "The caller may not act for this user. An administrator grants acting for others with \"krishiv.auth.principals.CALLER.privileges\" = impersonate and lists whom in \"krishiv.auth.principals.CALLER.impersonates\", where CALLER is the caller's principal name; the server's audit log has the reason."
+    ],
+    "sqlState" : "42501"
+  },
   "KRISHIV_CATALOG_FAILURE" : {
     "message" : [
       "The catalog <catalog> failed while loading <relationName>."
@@ -41,6 +54,13 @@
   "KRISHIV_FILE_CHANGED_DURING_READ" : {
     "message" : [
       "The file <path> changed while it was being read: it no longer matches the version <version> seen when the scan was planned. Run REFRESH TABLE, or re-run the query to read the new version."
+    ],
+    "sqlState" : "KD001",
+    "audience" : "operator"
+  },
+  "KRISHIV_ICEBERG_INVALID_DELETES" : {
+    "message" : [
+      "<message>"
     ],
     "sqlState" : "KD001",
     "audience" : "operator"
@@ -185,6 +205,13 @@
     "sqlState" : "22023",
     "audience" : "operator"
   },
+  "KRISHIV_RESOURCE_GROUP_CONFIG_READ_ONLY" : {
+    "message" : [
+      "The resource group file <path> cannot be changed here: <reason>."
+    ],
+    "sqlState" : "55000",
+    "audience" : "operator"
+  },
   "KRISHIV_RESOURCE_GROUP_QUEUE_FULL" : {
     "message" : [
       "The resource group <group> already has <maxQueued> queued queries, so this query is refused. Retry later, or raise \"maxQueued\" of the group."
@@ -223,6 +250,12 @@
     ],
     "sqlState" : "58030",
     "audience" : "operator"
+  },
+  "KRISHIV_TIME_TRAVEL_NOT_FOUND" : {
+    "message" : [
+      "<message>"
+    ],
+    "sqlState" : "42K0E"
   },
   "KRISHIV_UNKNOWN_CONFIG" : {
     "message" : [

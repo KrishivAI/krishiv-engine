@@ -44,7 +44,7 @@ pip install "krishiv[pyarrow]"
 **Rust:**
 
 ```bash
-cargo add krishiv
+cargo add krishiv   # needs Rust 1.97 or newer
 ```
 
 Install with the `pyarrow` extra: `collect()`, `show()` and `toArrow()` return Arrow data. Wheels cover Linux x86_64

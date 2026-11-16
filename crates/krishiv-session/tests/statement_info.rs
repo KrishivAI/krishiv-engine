@@ -126,12 +126,21 @@ fn reads_by_path_are_qualified_paths() {
     );
 }
 
+/// A statement whose reads are not known from its text (`krishiv_sql::statement_reads`) is refused;
+/// one whose reads are built from its own expressions is listed (P3-T063 N3).
 #[test]
 fn statements_without_standalone_reads_are_unsupported() {
     let s = session();
     for sql in [
         "FROM nation INSERT INTO region SELECT n_name",
         "UPDATE region SET r_name = 'x' WHERE r_regionkey = 1",
+    ] {
+        assert!(block_on(s.statement_info(sql)).is_ok(), "{sql}");
+    }
+    for sql in [
+        "MERGE INTO region USING nation ON r_regionkey = (SELECT max(n_regionkey) FROM nation) \
+         WHEN MATCHED THEN DELETE",
+        "DECLARE v INT DEFAULT (SELECT 1)",
     ] {
         let e = block_on(s.statement_info(sql)).unwrap_err();
         assert_eq!(

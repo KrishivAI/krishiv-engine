@@ -290,8 +290,8 @@ jobs:
       - name: UDF worker interpreter
         run: |
           uv venv --python 3.12 "$RUNNER_TEMP/udf-python"
-          uv pip install --python "$RUNNER_TEMP/udf-python/bin/python" \
-            "pyspark-client==4.2.1" "pyarrow==26.0.1" "pandas==3.1.1" "numpy==2.5.4"
+          uv pip install --python "$RUNNER_TEMP/udf-python/bin/python" --require-hashes --no-deps \
+            -r tests/udf-worker/requirements.txt
       # Every GitHub-hosted x64 runner has x86-64-v3, so the kernel tests must
       # run that clone, not skip it (AVX-512 varies by runner: not required).
       - run: cargo nextest run --workspace --locked --no-tests=pass
@@ -316,6 +316,9 @@ jobs:
       # The admin listener's authentication (P3-T002) is feature-gated, so default-feature runs skip it.
       - run: cargo nextest run -p krishiv-server --features session,metrics-prometheus --locked
       - run: cargo nextest run -p krishiv-cli --features server --test server --locked
+      # The external catalog clients (Hive metastore, Iceberg REST) are feature-gated; their hostile-catalog tests
+      # run here, not only nightly. The Docker acceptance against Apache's REST fixture is env-gated (skipped).
+      - run: cargo nextest run -p krishiv-catalogs --features hive,iceberg-rest --locked
       - name: Disk left
         if: always()
         run: |

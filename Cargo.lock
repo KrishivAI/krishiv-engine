@@ -2982,9 +2982,12 @@ dependencies = [
  "krishiv-common",
  "krishiv-plan",
  "krishiv-types",
+ "reqwest 0.13.5",
+ "serde_json",
  "thrift 0.25.0",
  "tokio",
  "tracing",
+ "url",
 ]
 
 [[package]]
@@ -3116,6 +3119,10 @@ name = "krishiv-connectors-iceberg"
 version = "0.2.0"
 dependencies = [
  "arrow-array 60.1.0",
+ "arrow-buffer 60.1.0",
+ "arrow-row",
+ "arrow-schema 60.1.0",
+ "arrow-select 60.1.0",
  "async-trait",
  "bytes",
  "futures",
@@ -3124,8 +3131,15 @@ dependencies = [
  "krishiv-common",
  "krishiv-exec",
  "krishiv-io",
+ "krishiv-memory",
+ "krishiv-optimizer",
+ "krishiv-plan",
+ "krishiv-sql",
  "krishiv-types",
  "object_store",
+ "parquet 60.1.0",
+ "proptest",
+ "roaring",
  "serde",
  "serde_json",
  "tempfile",
@@ -3273,8 +3287,10 @@ dependencies = [
  "futures",
  "krishiv-common",
  "krishiv-functions",
+ "krishiv-plan",
  "krishiv-session",
  "krishiv-sql",
+ "krishiv-types",
  "rmcp",
  "serde_json",
  "tempfile",
@@ -3333,11 +3349,13 @@ dependencies = [
  "krishiv-functions",
  "krishiv-io",
  "krishiv-kernels",
+ "krishiv-memory",
  "krishiv-types",
  "krishiv-udf-sdk",
  "proptest",
  "serde_json",
  "thiserror",
+ "tracing",
  "twox-hash",
 ]
 
@@ -3428,6 +3446,7 @@ version = "0.2.0"
 dependencies = [
  "arrow-array 60.1.0",
  "arrow-buffer 60.1.0",
+ "arrow-cast 60.1.0",
  "arrow-schema 60.1.0",
  "arrow-select 60.1.0",
  "aws-lc-rs",
@@ -3519,6 +3538,7 @@ dependencies = [
  "krishiv-kernels",
  "krishiv-plan",
  "krishiv-types",
+ "proptest",
  "serde_json",
  "thiserror",
 ]
@@ -3597,6 +3617,7 @@ name = "krishiv-udf-pool"
 version = "0.2.0"
 dependencies = [
  "arrow-array 60.1.0",
+ "arrow-buffer 60.1.0",
  "arrow-ipc 60.1.0",
  "arrow-schema 60.1.0",
  "futures",

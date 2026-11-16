@@ -23,7 +23,7 @@ use krishiv_sql::ParserOptions;
 use serde_json::{Map, Value};
 use tokio::sync::Semaphore;
 
-use crate::gate::{SetupLock, check_read};
+use crate::gate::{SetupLock, check_analysis, check_read};
 
 /// Tools of this server, in `tools/list` order.
 pub const TOOL_NAMES: [&str; 10] = [
@@ -632,6 +632,8 @@ impl Tools {
         // directory: they run under the deadline too.
         let setup = Box::pin(async {
             let session = child_session(&self.config.data).await?;
+            // Layer 2 of the gate (`gate.rs`): the analysis must be a complete read.
+            check_analysis(&session, sql).await?;
             let estimate = if limits.explain || limits.allow_heavy {
                 None
             } else {
@@ -876,6 +878,39 @@ mod tests {
                 Some(&Value::Bool(false))
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod udf_runtime_tests {
+    use krishiv_common::error::ErrorClass;
+    use krishiv_session::PythonUdfDef;
+
+    use super::child_session;
+
+    /// The gate's UDTF clause is post hoc (`gate.rs`, layer 2): it holds today only because an MCP
+    /// session cannot run Python code. A Python function registered on a child session (no SQL path
+    /// can do it) still finds no runtime. If this fails, move the UDTF refusal before the analysis.
+    #[tokio::test]
+    async fn child_sessions_have_no_python_udf_runtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let session = child_session(dir.path()).await.unwrap();
+        session.register_python_udf(PythonUdfDef {
+            name: "py_plus".to_owned(),
+            eval_type: krishiv_plan::PythonEvalType::ArrowBatched,
+            return_type: krishiv_types::DataType::Long,
+            deterministic: true,
+            thread_safe: true,
+        });
+        let err = match session.sql("SELECT py_plus(id) FROM range(3)").await {
+            Ok(df) => df.collect().await.unwrap_err(),
+            Err(e) => e,
+        };
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::KrishivUdfNotAvailable,
+            "{err}"
+        );
     }
 }
 

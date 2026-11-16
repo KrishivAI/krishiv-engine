@@ -376,8 +376,8 @@ fn a_sample_below_union_all_numbers_its_own_partitions() {
 /// one Parquet file of ids 0..999: 215 rows, the inner union's two
 /// partitions drawing seeds 7 and 8; with the outer branch, 3 rows more;
 /// run `~/krishiv-data/tmp/opus-3/r4/p2c.out`). Over `range` views Spark
-/// zips the union's single partitions into one (`p2b.out`: 204 rows), which
-/// Krishiv does not do (a separate difference).
+/// zips the union's single partitions into one (`p2b.out`: 204 rows; see
+/// `union_partition_ids.rs`).
 #[test]
 fn a_sample_over_a_nested_union_numbers_the_inner_unions_partitions() {
     let s = session(1);

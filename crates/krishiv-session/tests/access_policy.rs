@@ -948,12 +948,14 @@ fn writes_go_to_the_directory_a_link_names_and_are_checked_there() {
     let df = block_on(s.sql("SELECT 1 AS a")).unwrap();
     let e = block_on(df.write().parquet(root.join("link/o").to_str().unwrap())).unwrap_err();
     assert_eq!(e.error_class().name(), DENIED);
-    // The denial names the directory the write would have gone to.
+    // The policy is asked about the directory the write would have gone to, but the denial names the
+    // path as written: it never shows where a link points.
     assert!(
         e.to_string()
-            .contains(&format!("{}/o", outside.canonicalize().unwrap().display())),
+            .contains(&format!("'file:{}/link/o'", root.display())),
         "{e}"
     );
+    assert!(!e.to_string().contains("outside"), "{e}");
     assert!(!outside.join("o").exists());
 }
 
@@ -2015,12 +2017,15 @@ fn browse_on_a_view_shows_its_schema_not_its_text_or_rows() {
     ] {
         block_on(async { s.sql(sql).await?.collect().await }).unwrap();
     }
-    // Exactly the schema: names and types (comment empty, as in Spark 4.2.0's
-    // `view-schema-evolution.sql.out`), no row carrying the view's text or its literal.
+    // Exactly the schema: names and types (comment NULL: the golden file `view-schema-evolution.sql.out` prints it empty
+    // only because Spark's DESCRIBE text formatting does), no row carrying the view's text or its literal.
     let row = |c: &[&str]| c.iter().map(|v| (*v).to_owned()).collect::<Vec<_>>();
     assert_eq!(
         cells(&s, "DESCRIBE TABLE pv"),
-        [row(&["a", "int", ""]), row(&["secret_literal", "int", ""])]
+        [
+            row(&["a", "int", "NULL"]),
+            row(&["secret_literal", "int", "NULL"])
+        ]
     );
     assert_eq!(
         cells(&s, "SHOW COLUMNS IN pv"),

@@ -8,8 +8,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
 use super::{
-    AllowAll, AnalysisContext, BuiltinFunctions, BuiltinTableFunctions, Catalog, CatalogResolver,
-    MemoryCatalog, Principal, PrincipalKind, ResolutionConf, SparkProfile, VariableSnapshot,
+    AllowAll, AnalysisContext, AnalysisMode, BuiltinFunctions, BuiltinTableFunctions, Catalog,
+    CatalogResolver, MemoryCatalog, Principal, PrincipalKind, ResolutionConf, SparkProfile,
+    VariableSnapshot,
 };
 
 /// One catalog, the current one, and the current namespace.
@@ -53,6 +54,7 @@ pub fn context(catalog: MemoryCatalog, conf: ResolutionConf) -> AnalysisContext 
         sql: None,
         files: None,
         variables: Arc::new(VariableSnapshot::default()),
+        mode: AnalysisMode::Execute,
     }
 }
 
