@@ -2,7 +2,7 @@
 //! The UI's page endpoints beyond the query lists (P3-T050): the catalog browser, the environment page, the SQL
 //! editor's run and cancel, the UI session, the DNS-rebinding host check and the OpenAPI document of these routes.
 //!
-//! Everything reads through [`UiSource`]; nothing here holds engine state. Configuration shown on a page, in the
+//! Everything reads through [`UiSource`](crate::internal::UiSource); nothing here holds engine state. Configuration shown on a page, in the
 //! REST JSON or in the event stream goes through [`redact_entries`]: a key the engine classifies as sensitive
 //! shows [`MASK`], and every other value has the secrets in it replaced ([`krishiv_common::redact::redact`]).
 //!
