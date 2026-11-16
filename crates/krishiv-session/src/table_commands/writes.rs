@@ -166,6 +166,9 @@ impl Session {
                 _ => Err(unsupported("IDENTIFIER() column names")),
             })
             .collect::<Result<_, _>>()?;
+        let options: Vec<(String, String)> = super::options_of(&c.target_options, original)
+            .into_iter()
+            .collect();
         self.insert_rows(
             &name,
             &table,
@@ -176,6 +179,7 @@ impl Session {
                 overwrite: c.overwrite,
                 statics: &statics,
                 dry,
+                options: &options,
             },
         )
         .await
@@ -197,6 +201,7 @@ impl Session {
             overwrite,
             statics,
             dry,
+            options,
         } = *target;
         let env = self.query_env();
         let analysis = source.analyzed_in(self.query_env()).await?;
@@ -313,7 +318,7 @@ impl Session {
                 return Ok(());
             }
             let written = self
-                .insert_delta(name, table, &df, overwrite, statics, reads_target)
+                .insert_delta(name, table, &df, overwrite, statics, reads_target, options)
                 .await;
             self.state.catalog.store.bump();
             self.forget_column_stats(name);
@@ -321,7 +326,7 @@ impl Session {
             return written
                 .map_err(|e| overflow_in_table_insert(e, &assigned, &output, &assignment));
         }
-        let _ = reads_target;
+        let _ = (reads_target, options);
         if dry {
             // Every check of the write, without writing.
             return self.check_table_write(table, &df, overwrite).await;
@@ -657,6 +662,7 @@ impl Session {
             overwrite,
             statics: &[],
             dry: false,
+            options: &[],
         };
         self.insert_rows(&name, &found, df, &target).await
     }
@@ -689,6 +695,7 @@ impl Session {
                     overwrite: false,
                     statics: &[],
                     dry: false,
+                    options: &[],
                 };
                 return self.insert_rows(&name, &table, df, &target).await;
             }

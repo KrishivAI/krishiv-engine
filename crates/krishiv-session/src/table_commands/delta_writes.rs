@@ -243,8 +243,19 @@ impl Session {
         let qualified = self.qualify_path(path)?;
         let source = delta_source(&qualified);
         let env = self.query_env();
-        let exists = env.catalog.delta.exists(&source).await?;
         let plain = plain_options(options)?;
+        let exists = env.catalog.delta.exists(&source).await?;
+        let partitioned = if exists {
+            !env.catalog
+                .delta
+                .open(&source, None)
+                .await?
+                .partition_columns()
+                .is_empty()
+        } else {
+            !partition_by.is_empty()
+        };
+        let passed = super::delta_options::delta_write_options(&plain, partitioned)?;
         let quoted = format!("delta.{}", ident(&qualified));
         let option = |k: &str| {
             plain
@@ -283,7 +294,7 @@ impl Session {
                         properties: BTreeMap::new(),
                     },
                     WriteMode::Append,
-                    BTreeMap::new(),
+                    passed,
                     &quoted,
                 )
                 .await;
@@ -303,7 +314,11 @@ impl Session {
                     WriteMode::OverwriteByFilter(Arc::new(crate::functions::expr(&text)?.expr))
                 }
                 None => {
-                    if crate::session::partition_overwrite_is_dynamic(&env.config, options)? {
+                    // delta-spark never reads the mode for an unpartitioned table
+                    // (`OPTIONS.json` `pom_bad_unpartitioned`).
+                    if partitioned
+                        && crate::session::partition_overwrite_is_dynamic(&env.config, options)?
+                    {
                         WriteMode::OverwriteDynamic
                     } else {
                         WriteMode::Truncate
@@ -311,7 +326,7 @@ impl Session {
                 }
             },
         };
-        let mut request_options = BTreeMap::new();
+        let mut request_options = passed;
         if let Some(text) = option("replaceWhere") {
             request_options.insert(PREDICATE_TEXT_OPTION.to_owned(), text);
         }
@@ -335,6 +350,9 @@ impl Session {
             }
         }
         drop(env);
+        if option("mergeSchema").is_some_and(|v| v.eq_ignore_ascii_case("true")) {
+            widening_refused(df, &columns, &quoted).await?;
+        }
         let aligned = self.delta_by_name(df, &columns, &quoted).await?;
         if write_reads_target(&aligned, &qualified).await {
             request_options.insert(READS_TARGET_OPTION.to_owned(), "true".to_owned());
@@ -361,6 +379,7 @@ impl Session {
     ) -> Result<(), KrishivError> {
         let quoted = format!("`{}`.`{}`", table.namespace, table.name);
         let plain = plain_options(options)?;
+        let passed = super::delta_options::delta_write_options(&plain, table.is_partitioned())?;
         if plain.iter().any(|(k, v)| {
             k.eq_ignore_ascii_case("overwriteSchema") && v.eq_ignore_ascii_case("true")
         }) {
@@ -390,7 +409,7 @@ impl Session {
             &aligned,
             DeltaTarget::Existing { source, name },
             WriteMode::Truncate,
-            BTreeMap::new(),
+            passed,
             &quoted,
         )
         .await?;
@@ -403,7 +422,10 @@ impl Session {
     /// `INSERT INTO|OVERWRITE` into the Delta catalog table `table` of the rows of `df` (its
     /// columns, in its order): an append; an overwrite of the static partition `statics`
     /// (`replaceWhere` of `(p <=> 'v')`, as delta-spark records it); a dynamic partition
-    /// overwrite under `spark.sql.sources.partitionOverwriteMode = dynamic`; else a truncate.
+    /// overwrite under `spark.sql.sources.partitionOverwriteMode = dynamic` (or the
+    /// `partitionOverwriteMode` option); else a truncate. `user_options` are the statement's
+    /// `WITH (..)` options, Delta's write options ([`super::delta_options`]).
+    #[expect(clippy::too_many_arguments, reason = "one INSERT clause's parts")]
     pub(crate) async fn insert_delta(
         &self,
         name: &super::TableName,
@@ -412,8 +434,10 @@ impl Session {
         overwrite: bool,
         statics: &[(String, String)],
         reads_target: bool,
+        user_options: &[(String, String)],
     ) -> Result<(), KrishivError> {
-        let mut options = BTreeMap::new();
+        let mut options =
+            super::delta_options::delta_write_options(user_options, table.is_partitioned())?;
         let mode = if !overwrite {
             WriteMode::Append
         } else if !statics.is_empty() {
@@ -448,7 +472,10 @@ impl Session {
         } else if table.is_partitioned()
             && crate::session::partition_overwrite_is_dynamic(
                 &self.query_env().config,
-                &BTreeMap::new(),
+                &user_options
+                    .iter()
+                    .map(|(k, v)| (k.clone(), OptionValue::from_user(k, v)))
+                    .collect(),
             )?
         {
             WriteMode::OverwriteDynamic
@@ -478,6 +505,34 @@ async fn write_reads_target(df: &DataFrame, path: &str) -> bool {
         return false;
     };
     crate::catalog::reads_files_at(a.analyzed.plan.root(), path)
+}
+
+/// Under `mergeSchema = true`, a column whose type differs from the table's: delta-spark
+/// merges the types (widening the column on a `typeWidening` table, else
+/// `DELTA_FAILED_TO_MERGE_FIELDS`), which the kernel cannot commit (no write-time type
+/// widening, design section 4.1), so it is refused by name instead of stored in the table's
+/// type.
+async fn widening_refused(
+    df: &DataFrame,
+    table: &[TableColumn],
+    quoted: &str,
+) -> Result<(), KrishivError> {
+    let schema = df.schema().await?;
+    for f in schema.fields() {
+        let Some(c) = table.iter().find(|c| c.name.eq_ignore_ascii_case(f.name())) else {
+            continue;
+        };
+        if krishiv_types::DataType::from_arrow_field(f).is_ok_and(|t| t != c.data_type) {
+            return Err(KrishivUnsupportedFeature {
+                feature: format!(
+                    "a Delta write to {quoted} with mergeSchema whose column {} has another type                      than the table's (type widening on write)",
+                    c.name
+                ),
+            }
+            .into());
+        }
+    }
+    Ok(())
 }
 
 fn columns_differ(quoted: &str) -> KrishivError {

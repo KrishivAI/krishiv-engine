@@ -1493,6 +1493,8 @@ struct InsertTarget<'a> {
     statics: &'a [(String, String)],
     /// Checked through to the rows it would write, not written.
     dry: bool,
+    /// `INSERT .. WITH (..)` options (a Delta table's write options).
+    options: &'a [(String, String)],
 }
 
 /// A clause of a multi-table insert as a single-table one: its query reads `FROM source`, as
@@ -1967,6 +1969,8 @@ mod create;
 mod delta;
 #[cfg(feature = "delta")]
 pub(crate) use delta::{delta_write_refused, is_delta_table};
+#[cfg(feature = "delta")]
+mod delta_options;
 #[cfg(feature = "delta")]
 mod delta_writes;
 #[cfg(feature = "delta")]
