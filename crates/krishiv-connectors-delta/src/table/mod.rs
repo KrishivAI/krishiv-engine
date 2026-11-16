@@ -456,6 +456,14 @@ impl DeltaTable {
     /// Whether the table takes new deletion vectors: the feature in its protocol and
     /// `delta.enableDeletionVectors = true` (delta-spark's `deletionVectorsWritable`,
     /// `DeletionVectorUtils.scala:72-74`).
+    /// Whether type widening is enabled: `delta.enableTypeWidening = true` (delta-spark's
+    /// `TypeWidening.isEnabled`, `TypeWidening.scala:43-52`), so a `mergeSchema` write would
+    /// widen a column's type.
+    #[must_use]
+    pub fn type_widening_enabled(&self) -> bool {
+        self.inner.snapshot.table_properties().enable_type_widening == Some(true)
+    }
+
     pub(crate) fn dv_writable(&self) -> bool {
         self.inner
             .snapshot

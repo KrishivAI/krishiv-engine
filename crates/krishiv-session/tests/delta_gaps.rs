@@ -13,8 +13,12 @@
 //! - `no_coordinated_commits`: a table with coordinated commits (the writer feature, or a
 //!   `delta.coordinatedCommits.*` key) refuses every read, write and DML statement with
 //!   `UNSUPPORTED_FEATURE.TABLE_OPERATION` before anything is written;
+//! - `delta_merge_schema_matches_spark`: `mergeSchema` against the table's types as
+//!   delta-spark's `SchemaMergingUtils` merges them (`OPTIONS.json` `merge_schema`);
+//! - `a_column_mapping_merge_of_struct_columns_reads_back`: the rows after a `MERGE` and a CTAS
+//!   over a column-mapping table with a struct column;
 //! - `delta_kernel_gaps_are_refused_by_name`: what the kernel cannot do (write-time type
-//!   widening, writes to legacy writer 3-6 tables, row tracking, Variant writes, data-column
+//!   widening on a `typeWidening` table, writes to legacy writer 3-6 tables, row tracking, Variant writes, data-column
 //!   `replaceWhere`) is refused with its class before anything is written; a table whose files
 //!   carry no statistics takes appends past a checkpoint and row-level changes.
 #![cfg(test)]
@@ -109,13 +113,8 @@ fn options_oracle() -> Value {
 
 /// Options delta-spark commits with and Krishiv refuses by name (`KRISHIV_UNSUPPORTED_FEATURE`,
 /// recorded in `docs/concepts/known-differences.md`): idempotent writes, `dataChange = false`,
-/// `replaceUsing`, `writePartitionColumns`.
-const REFUSED_OPTIONS: &[&str] = &[
-    "txn_both",
-    "data_change_false_append",
-    "replace_using",
-    "write_partition_columns",
-];
+/// `replaceUsing`.
+const REFUSED_OPTIONS: &[&str] = &["txn_both", "data_change_false_append", "replace_using"];
 
 /// The oracle's commit parameters as the kernel writes them: every value a string (a recorded
 /// difference, as for `isDynamicPartitionOverwrite`).
@@ -283,12 +282,15 @@ fn oracle_tables() -> Vec<PathBuf> {
 }
 
 /// A statement kind tried on a table: SQL over `delta.`<path>`` (`<t>`) whose first column is
-/// `<c>`, an `INSERT` of one of its rows into it as a catalog table (Krishiv's `INSERT` takes no
-/// path table), or a DataFrame write of one of its rows with a save mode and options.
+/// `<c>`; SQL over the catalog table `ins` at the same location (Krishiv's `INSERT` takes no path
+/// table), registered first unless it is already (`CREATE TABLE IF NOT EXISTS`); or a DataFrame
+/// write of one of its rows with a save mode and options.
 enum Kind {
     Sql(&'static str),
-    Insert,
+    Catalog(&'static str),
     Write(&'static str, &'static [(&'static str, &'static str)]),
+    /// `saveAsTable` overwrite of `ins` with one of its rows.
+    SaveAsTable,
 }
 
 const KINDS: &[(&str, Kind)] = &[
@@ -302,7 +304,21 @@ const KINDS: &[(&str, Kind)] = &[
         "replaceWhere",
         Kind::Write("overwrite", &[("replaceWhere", "<c> IS NULL")]),
     ),
-    ("insert", Kind::Insert),
+    (
+        "insert",
+        Kind::Catalog("INSERT INTO ins SELECT * FROM ins LIMIT 1"),
+    ),
+    (
+        "insert overwrite",
+        Kind::Catalog("INSERT OVERWRITE ins SELECT * FROM ins LIMIT 1"),
+    ),
+    ("saveAsTable overwrite", Kind::SaveAsTable),
+    (
+        "ctas",
+        Kind::Sql(
+            "CREATE TABLE ctas USING delta LOCATION '<path>-ctas' AS SELECT * FROM <t> LIMIT 1",
+        ),
+    ),
     (
         "delete rows",
         Kind::Sql("DELETE FROM <t> WHERE <c> IS NOT NULL"),
@@ -350,19 +366,42 @@ const DOCUMENTED: &[&str] = &[
     "TASK_WRITE_FAILED",
 ];
 
+/// The analyzer's classes the generic statements meet on particular tables, each a deliberate
+/// entry (see the test's comment where it is listed).
+const ANALYSIS: &[&str] = &[];
+
 /// `kind` on the table at `dir` (one column `first`).
 fn try_kind(s: &Session, dir: &Path, first: &str, kind: &Kind) -> Result<(), KrishivError> {
     let path = dir.to_string_lossy().into_owned();
     let table = format!("delta.`{path}`");
-    let fill = |t: &str| t.replace("<t>", &table).replace("<c>", first);
+    let fill = |t: &str| {
+        t.replace("<t>", &table)
+            .replace("<c>", first)
+            .replace("<path>", &path)
+    };
+    let register = || {
+        run(
+            s,
+            &format!("CREATE TABLE IF NOT EXISTS ins USING delta LOCATION '{path}'"),
+        )
+    };
     match kind {
         Kind::Sql(text) => run(s, &fill(text)),
-        Kind::Insert => {
-            run(
-                s,
-                &format!("CREATE TABLE ins USING delta LOCATION '{path}'"),
-            )?;
-            run(s, "INSERT INTO ins SELECT * FROM ins LIMIT 1")
+        Kind::Catalog(text) => {
+            register()?;
+            run(s, text)
+        }
+        Kind::SaveAsTable => {
+            register()?;
+            block_on(async {
+                s.sql("SELECT * FROM ins LIMIT 1")
+                    .await?
+                    .write()
+                    .format("delta")
+                    .mode("overwrite")
+                    .save_as_table("ins")
+                    .await
+            })
         }
         Kind::Write(mode, options) => block_on(async {
             let mut w = s
@@ -419,11 +458,8 @@ fn delta_no_internal_error_on_oracle_tables() {
             if let Err(e) = try_kind(&s, &dir, &first, kind) {
                 let class = e.error_class().name();
                 assert_ne!(class, "INTERNAL_ERROR", "{name} {what}: {e}");
-                // Analysis errors of the generic statement on an odd table (a column type
-                // the statement cannot assign) are the analyzer's own named classes.
-                let analysis = e.sql_state().is_some_and(|s| s.starts_with("42"));
                 assert!(
-                    DOCUMENTED.contains(&class) || analysis,
+                    DOCUMENTED.contains(&class) || ANALYSIS.contains(&class),
                     "{name} {what}: {e}"
                 );
                 seen.insert(class.to_owned());
@@ -443,14 +479,22 @@ fn delta_no_internal_error_on_oracle_tables() {
 }
 
 /// `actions` appended to a copy of the oracle table `name` as its next commit.
+/// (No commit when `actions` is empty.)
 fn with_commit(name: &str, actions: &[Value]) -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().join("t");
     copy_dir(&fixtures().join(name), &dir);
-    let next = versions(&dir);
+    if !actions.is_empty() {
+        append_commit(&dir, actions);
+    }
+    (tmp, dir)
+}
+
+/// `actions` as the next commit of the table at `dir`.
+fn append_commit(dir: &Path, actions: &[Value]) {
+    let next = versions(dir);
     let text: String = actions.iter().map(|a| format!("{a}\n")).collect();
     std::fs::write(dir.join(format!("_delta_log/{next:020}.json")), text).unwrap();
-    (tmp, dir)
 }
 
 /// The first `metaData` action of the oracle table `name`.
@@ -475,22 +519,29 @@ fn no_coordinated_commits() {
     let mut by_config = metadata_of(base);
     by_config["metaData"]["configuration"]["delta.coordinatedCommits.commitCoordinator-preview"] =
         json!("dynamodb");
-    let tables = [
-        ("configuration", with_commit(base, &[by_config])),
+    let forms = [
+        ("configuration", by_config),
         (
             "writer feature",
-            with_commit(
-                base,
-                &[json!({ "protocol": {
-                    "minReaderVersion": 1,
-                    "minWriterVersion": 7,
-                    "writerFeatures": ["appendOnly", "invariants", "coordinatedCommits-preview"],
-                }})],
-            ),
+            json!({ "protocol": {
+                "minReaderVersion": 1,
+                "minWriterVersion": 7,
+                "writerFeatures": ["appendOnly", "invariants", "coordinatedCommits-preview"],
+            }}),
         ),
     ];
-    for (form, (_tmp, dir)) in &tables {
+    for (form, action) in forms {
+        // The catalog table `ins` is registered before coordinated commits are turned on, so
+        // the catalog statements reach the refusal of their own write, not `CREATE`'s.
+        let (_tmp, dir) = with_commit(base, &[]);
+        let dir = &dir;
         let s = Session::new().unwrap();
+        run(
+            &s,
+            &format!("CREATE TABLE ins USING delta LOCATION '{}'", dir.display()),
+        )
+        .unwrap();
+        append_commit(dir, &[action]);
         let e = run(&s, &format!("SELECT * FROM delta.`{}`", dir.display())).unwrap_err();
         assert_eq!(
             e.error_class().name(),
@@ -524,10 +575,11 @@ fn delta_kernel_gaps_are_refused_by_name() {
     }
     let gaps = [
         Gap {
-            // The kernel has no write-time type widening; delta-spark would merge the types.
+            // The kernel has no write-time type widening; delta-spark widens the column
+            // (`OPTIONS.json` `merge_schema` `widening_bigint_into_int`).
             what: "type widening on write",
-            table: "dml/unpartitioned/before",
-            sql: "SELECT id, v, CAST(n AS BIGINT) AS n FROM <t>",
+            table: "write-features/type-widening",
+            sql: "SELECT id, CAST(i AS BIGINT) AS i FROM <t>",
             options: &[("mergeSchema", "true")],
             class: "KRISHIV_UNSUPPORTED_FEATURE",
         },
@@ -640,4 +692,217 @@ fn delta_kernel_gaps_are_refused_by_name() {
         ),
         1
     );
+}
+
+/// `mergeSchema` cases where Krishiv differs from delta-spark, with what Krishiv does:
+/// a type change without `mergeSchema` keeps the store-assignment cast this engine always made
+/// (delta-spark raises `DELTA_FAILED_TO_MERGE_FIELDS`); a widening on a `typeWidening` table is
+/// refused by name (the kernel commits no schema change on a write).
+const MERGE_SCHEMA_KNOWN: &[(&str, Option<&str>)] = &[
+    ("bigint_into_int_no_merge", None),
+    (
+        "widening_bigint_into_int",
+        Some("KRISHIV_UNSUPPORTED_FEATURE"),
+    ),
+];
+
+/// The rows of a `merge_schema` table as the oracle's typed form: `id`, `n`, `d` (a decimal
+/// string), `s.a`; or `id`, `i`.
+fn merge_schema_rows(s: &Session, kind: &str) -> Value {
+    use arrow_array::Array;
+    use arrow_array::cast::AsArray;
+    let sql = if kind == "plain" {
+        "SELECT id, CAST(n AS BIGINT), CAST(d AS STRING), CAST(s.a AS BIGINT) FROM m ORDER BY id"
+    } else {
+        "SELECT id, CAST(i AS BIGINT) FROM m ORDER BY id"
+    };
+    let mut out = Vec::new();
+    for b in block_on(df(s, sql).collect()).unwrap() {
+        for r in 0..b.num_rows() {
+            let row: Vec<Value> = b
+                .columns()
+                .iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    if c.is_null(r) {
+                        Value::Null
+                    } else if i == 2 && kind == "plain" {
+                        let text = match c.data_type() {
+                            arrow_schema::DataType::Utf8View => c.as_string_view().value(r),
+                            _ => c.as_string::<i32>().value(r),
+                        };
+                        json!({ "decimal": text })
+                    } else if i == 3 {
+                        json!({ "struct": { "a": c.as_primitive::<arrow_array::types::Int64Type>().value(r) } })
+                    } else {
+                        Value::from(c.as_primitive::<arrow_array::types::Int64Type>().value(r))
+                    }
+                })
+                .collect();
+            out.push(Value::Array(row));
+        }
+    }
+    Value::Array(out)
+}
+
+/// `mergeSchema` against the table's types as delta-spark's `SchemaMergingUtils.mergeDataTypes`
+/// merges them (`OPTIONS.json` `merge_schema`): the same error, or the same rows and commit.
+#[test]
+fn delta_merge_schema_matches_spark() {
+    let oracle = options_oracle();
+    let cases = oracle["merge_schema"].as_object().unwrap();
+    assert!(cases.len() >= 13, "{}", cases.len());
+    for (name, case) in cases {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("t");
+        let path = dir.to_string_lossy().into_owned();
+        let s = Session::new().unwrap();
+        let kind = case["table"].as_str().unwrap();
+        if kind == "plain" {
+            run(
+                &s,
+                &format!(
+                    "CREATE TABLE m (id BIGINT, n INT, d DECIMAL(10,2), s STRUCT<a: INT>) \
+                     USING delta LOCATION '{path}'"
+                ),
+            )
+            .unwrap();
+            run(
+                &s,
+                "INSERT INTO m VALUES (1, 1, 1.00, named_struct('a', 1))",
+            )
+            .unwrap();
+        } else {
+            // The oracle's `(id BIGINT, i INT)` table with `delta.enableTypeWidening`.
+            copy_dir(&fixtures().join("write-features/type-widening"), &dir);
+            run(&s, &format!("CREATE TABLE m USING delta LOCATION '{path}'")).unwrap();
+        }
+        let before = versions(&dir);
+        let mut w = df(&s, &format!("SELECT {}", case["select"].as_str().unwrap()))
+            .write()
+            .format("delta")
+            .mode("append");
+        for (k, v) in case["options"].as_object().unwrap() {
+            w = w.option(k, v.as_str().unwrap());
+        }
+        let ours = block_on(w.save(&path));
+        if let Some((_, known)) = MERGE_SCHEMA_KNOWN.iter().find(|(n, _)| n == name) {
+            match known {
+                None => assert!(ours.is_ok(), "{name}: {ours:?}"),
+                Some(class) => {
+                    let e = ours.expect_err(name);
+                    assert_eq!(e.error_class().name(), *class, "{name}: {e}");
+                    assert_eq!(versions(&dir), before, "{name}");
+                }
+            }
+            continue;
+        }
+        match (ours, case["error"].is_null()) {
+            (Err(e), false) => {
+                let want = &case["error"];
+                assert_eq!(e.error_class().name(), want["condition"], "{name}: {e}");
+                assert_eq!(
+                    e.to_string()
+                        .lines()
+                        .next()
+                        .unwrap()
+                        .split(" SQLSTATE")
+                        .next(),
+                    want["message"].as_str(),
+                    "{name}"
+                );
+                assert_eq!(versions(&dir), before, "{name}: nothing committed");
+            }
+            (Ok(()), true) => {
+                let info = last_commit_info(&dir);
+                assert_eq!(
+                    info["operationParameters"],
+                    as_strings(&case["commit"]["operationParameters"]),
+                    "{name}"
+                );
+                if kind == "plain" {
+                    assert_eq!(merge_schema_rows(&s, kind), case["rows"], "{name}");
+                } else {
+                    // The fixture's own row is not the oracle's; the appended one is.
+                    let rows = merge_schema_rows(&s, kind);
+                    assert_eq!(
+                        rows.as_array().unwrap().last(),
+                        case["rows"].as_array().unwrap().last(),
+                        "{name}"
+                    );
+                }
+            }
+            (ours, _) => panic!("{name}: {ours:?} against {}", case["error"]),
+        }
+    }
+}
+
+/// The relabelled `MERGE` of a struct column under column mapping (krishiv-exec's CASE over
+/// fields with column-mapping metadata) keeps every row: an upsert of a row onto itself.
+#[test]
+fn a_column_mapping_merge_of_struct_columns_reads_back() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("t");
+    copy_dir(&fixtures().join("column-mapping-id"), &dir);
+    let table = format!("delta.`{}`", dir.display());
+    let s = Session::new().unwrap();
+    let rows = |s: &Session| {
+        use arrow_array::cast::AsArray;
+        let mut out: Vec<String> = Vec::new();
+        for b in
+            block_on(df(s, &format!("SELECT to_json(struct(*)) FROM {table}")).collect()).unwrap()
+        {
+            let c = b.column(0);
+            for r in 0..b.num_rows() {
+                out.push(match c.data_type() {
+                    arrow_schema::DataType::Utf8View => c.as_string_view().value(r).to_owned(),
+                    _ => c.as_string::<i32>().value(r).to_owned(),
+                });
+            }
+        }
+        out.sort();
+        out
+    };
+    let before = rows(&s);
+    assert!(before.iter().any(|r| r.contains("\"s\"")), "{before:?}");
+    let v = versions(&dir);
+    run(
+        &s,
+        &format!(
+            "MERGE INTO {table} AS t USING (SELECT * FROM {table}) AS s ON t.id = s.id \
+             WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *"
+        ),
+    )
+    .unwrap();
+    assert_eq!(versions(&dir), v + 1, "the MERGE committed");
+    let s = Session::new().unwrap();
+    assert_eq!(rows(&s), before);
+
+    // A CTAS from it (krishiv-exec's union of the scan's columns, which carry the column
+    // mapping, with the new table's) holds the same rows.
+    let ctas = tmp.path().join("ctas");
+    run(
+        &s,
+        &format!(
+            "CREATE TABLE c USING delta LOCATION '{}' AS SELECT * FROM {table}",
+            ctas.display()
+        ),
+    )
+    .unwrap();
+    let copied = {
+        use arrow_array::cast::AsArray;
+        let mut out: Vec<String> = Vec::new();
+        for b in block_on(df(&s, "SELECT to_json(struct(*)) FROM c").collect()).unwrap() {
+            let c = b.column(0);
+            for r in 0..b.num_rows() {
+                out.push(match c.data_type() {
+                    arrow_schema::DataType::Utf8View => c.as_string_view().value(r).to_owned(),
+                    _ => c.as_string::<i32>().value(r).to_owned(),
+                });
+            }
+        }
+        out.sort();
+        out
+    };
+    assert_eq!(copied, before);
 }

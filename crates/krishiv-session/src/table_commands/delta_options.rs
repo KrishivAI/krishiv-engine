@@ -15,20 +15,28 @@
 //! - honoured: `replaceWhere`, `partitionOverwriteMode`, `maxRecordsPerFile`, `userMetadata`
 //!   (`commitInfo.userMetadata`), `mergeSchema` (`canMergeSchema`; other columns stay refused),
 //!   `overwriteSchema` (refused as a replace on an existing table); accepted with no effect on
-//!   the table's rows or log: `optimizeWrite`, `compression`, `parquet.writer.version`;
+//!   the table's rows or log: `optimizeWrite`, `compression`, `parquet.writer.version`, and
+//!   `writePartitionColumns` (delta-spark keeps only `maxRecordsPerFile`, `compression`,
+//!   `parquet.writer.version` and the output timestamp type of the write options and decides
+//!   from the table whether partition columns go into the files, `TransactionalWrite.scala:
+//!   477-492`; the probe's `write_partition_columns` commits as a plain append);
 //! - refused by name (`KRISHIV_UNSUPPORTED_FEATURE`), where delta-spark changes what it commits
 //!   and Krishiv cannot: idempotent writes (`txnAppId` + `txnVersion`, a `txn` action),
-//!   `dataChange = false`, `replaceOn`, `replaceUsing`, `targetAlias`,
-//!   `writePartitionColumns = true` and `useNullIntolerantEqualityWithDPO = true`.
+//!   `dataChange = false`, `replaceOn`, `replaceUsing`, `targetAlias` and
+//!   `useNullIntolerantEqualityWithDPO = true` (the last two from the source only, no probe).
+//!
+//! [`merge_schema_check`] is `mergeSchema`'s type rule.
 //!
 //! Options whose names start with `__krishiv` are the session's own and never pass from a user.
 
 use std::collections::BTreeMap;
 
 use krishiv_common::error::{
-    DeltaIllegalOption, DeltaInvalidIdempotentWritesOptions, KrishivError,
-    KrishivUnsupportedFeature,
+    DeltaFailedToMergeFields, DeltaIllegalOption, DeltaInvalidIdempotentWritesOptions,
+    KrishivError, KrishivUnsupportedFeature,
 };
+use krishiv_plan::analyzer::TableColumn;
+use krishiv_types::DataType;
 
 /// The prefix of the session's own write options.
 const INTERNAL_PREFIX: &str = "__krishiv";
@@ -99,8 +107,6 @@ pub(crate) fn delta_write_options(
         Some("a Delta write with the option replaceOn or replaceUsing")
     } else if get("targetAlias").is_some() {
         Some("a Delta write with the option targetAlias")
-    } else if get("writePartitionColumns").is_some_and(|v| v.eq_ignore_ascii_case("true")) {
-        Some("a Delta write with the option writePartitionColumns = true")
     } else if flags.get("useNullIntolerantEqualityWithDPO") == Some(&true) {
         Some("a Delta write with the option useNullIntolerantEqualityWithDPO = true")
     } else {
@@ -117,6 +123,150 @@ pub(crate) fn delta_write_options(
         .filter(|(k, _)| !k.starts_with(INTERNAL_PREFIX))
         .cloned()
         .collect())
+}
+
+/// What merging a table type with a written type gives (delta-spark 4.4.1
+/// `SchemaMergingUtils.mergeDataTypes`, `schema/SchemaMergingUtils.scala:193-305`).
+#[derive(Debug, PartialEq, Eq)]
+enum Merged {
+    /// The table's type stays: the rows are stored in it.
+    Kept,
+    /// delta-spark changes the table's schema; the kernel cannot (refused by name).
+    Changed(&'static str),
+    /// `DELTA_MERGE_INCOMPATIBLE_*`, which the enclosing column reports as
+    /// `DELTA_FAILED_TO_MERGE_FIELDS`.
+    Incompatible,
+}
+
+/// `mergeDataTypes(current, update)` as `ImplicitMetadataOperation.mergeSchema` calls it
+/// (`schema/ImplicitMetadataOperation.scala:222-236`: no implicit conversions, the existing
+/// type not kept), with type widening as the table has it (`TypeWideningMode.TypeEvolution`,
+/// same-family widenings by default).
+fn merge_type(current: &DataType, update: &DataType, widening: bool) -> Merged {
+    use DataType as T;
+    let both = |a: Merged, b: Merged| match (a, b) {
+        (Merged::Incompatible, _) | (_, Merged::Incompatible) => Merged::Incompatible,
+        (Merged::Changed(w), _) | (_, Merged::Changed(w)) => Merged::Changed(w),
+        _ => Merged::Kept,
+    };
+    match (current, update) {
+        // `:203-238`: fields by name (Delta is case insensitive), the current nullability
+        // kept; a field only the update has is added to the schema.
+        (T::Struct(c), T::Struct(u)) => {
+            let mut out = Merged::Kept;
+            for cf in c.fields() {
+                if let Some(uf) = u
+                    .fields()
+                    .iter()
+                    .find(|f| f.name().eq_ignore_ascii_case(cf.name()))
+                {
+                    out = both(out, merge_type(cf.data_type(), uf.data_type(), widening));
+                }
+            }
+            let added = u.fields().iter().any(|uf| {
+                !c.fields()
+                    .iter()
+                    .any(|cf| cf.name().eq_ignore_ascii_case(uf.name()))
+            });
+            if added {
+                out = both(
+                    out,
+                    Merged::Changed("a new nested field (schema evolution)"),
+                );
+            }
+            out
+        }
+        // `:239-249`: the current `containsNull` kept.
+        (T::Array(c), T::Array(u)) => merge_type(c.element_type(), u.element_type(), widening),
+        (T::Map(c), T::Map(u)) => both(
+            merge_type(c.key_type(), u.key_type(), widening),
+            merge_type(c.value_type(), u.value_type(), widening),
+        ),
+        (c, u) if c.equals_ignore_nullability(u) => Merged::Kept,
+        // `:251-255`: a widening the table allows changes the column's type.
+        (c, u) if widening && widens(c, u) => Merged::Changed("type widening on write"),
+        // `:288-299`: Parquet stores BYTE, SHORT and INT alike; the wider of the two is the
+        // merged type.
+        // `:301-304`: a NULL-typed update keeps the current type.
+        (T::Integer, T::Short | T::Byte) | (T::Short, T::Byte) | (_, T::Null) => Merged::Kept,
+        (T::Byte, T::Short | T::Integer) | (T::Short, T::Integer) => {
+            Merged::Changed("a wider column type (schema evolution)")
+        }
+        (T::Null, _) => Merged::Changed("a NULL-typed column given a type (schema evolution)"),
+        // `:262-287` (decimals of another precision or scale) and `:305`.
+        _ => Merged::Incompatible,
+    }
+}
+
+/// delta-spark's widenings for schema evolution (`TypeWidening.scala:111-123`): an integral
+/// type to one at least as wide, `FLOAT` to `DOUBLE`, a decimal to a wider one, `DATE` to
+/// `TIMESTAMP_NTZ`.
+fn widens(from: &DataType, to: &DataType) -> bool {
+    use DataType as T;
+    let size = |t: &DataType| match t {
+        T::Byte => Some(1),
+        T::Short => Some(2),
+        T::Integer => Some(4),
+        T::Long => Some(8),
+        _ => None,
+    };
+    match (from, to) {
+        (T::Float, T::Double) | (T::Date, T::TimestampNtz) => true,
+        (T::Decimal(f), T::Decimal(t)) => {
+            t.scale() >= f.scale()
+                && i32::from(t.precision()) - i32::from(t.scale())
+                    >= i32::from(f.precision()) - i32::from(f.scale())
+        }
+        _ => matches!((size(from), size(to)), (Some(f), Some(t)) if f <= t),
+    }
+}
+
+/// `mergeSchema = true` on a write of `data` into a Delta table of `table` columns (`widening`:
+/// `delta.enableTypeWidening`), as delta-spark merges the schemas before it writes: the types
+/// it keeps pass (the rows are then stored in the table's types); a column it cannot merge is
+/// `DELTA_FAILED_TO_MERGE_FIELDS` with the table's and the data's names (the first in table
+/// order, `SchemaMergingUtils.scala:206-226`); a merge that would change the table's schema
+/// (type widening, a wider integral) is refused by name, since the kernel commits no schema
+/// change on a write (design section 4.1). Columns only one side has are left to the caller.
+///
+/// # Errors
+/// `DELTA_FAILED_TO_MERGE_FIELDS`; `KRISHIV_UNSUPPORTED_FEATURE`.
+pub(crate) fn merge_schema_check(
+    table: &[TableColumn],
+    data: &arrow_schema::Schema,
+    widening: bool,
+    quoted: &str,
+) -> Result<(), KrishivError> {
+    for c in table {
+        let Some(f) = data
+            .fields()
+            .iter()
+            .find(|f| f.name().eq_ignore_ascii_case(&c.name))
+        else {
+            continue;
+        };
+        let update = DataType::from_arrow_field(f)?;
+        match merge_type(&c.data_type, &update, widening) {
+            Merged::Kept => {}
+            Merged::Incompatible => {
+                return Err(DeltaFailedToMergeFields {
+                    current_field: c.name.clone(),
+                    update_field: f.name().clone(),
+                }
+                .into());
+            }
+            Merged::Changed(what) => {
+                return Err(KrishivUnsupportedFeature {
+                    feature: format!(
+                        "a Delta write to {quoted} with mergeSchema that changes column {}: {what}",
+                        c.name
+                    ),
+                }
+                .into());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Scala's `String.toBoolean` (`true`/`false`, any case, nothing else), as `DeltaOptionParser`
@@ -197,12 +347,79 @@ mod tests {
                 &[("replaceOn", "t.id = s.id")],
                 "KRISHIV_UNSUPPORTED_FEATURE",
             ),
-            (
-                &[("writePartitionColumns", "true")],
-                "KRISHIV_UNSUPPORTED_FEATURE",
-            ),
+            (&[("writePartitionColumns", "true")], "ok"),
         ] {
             assert_eq!(class(pairs), want, "{pairs:?}");
+        }
+    }
+
+    #[test]
+    fn merge_types_as_schema_merging_utils() {
+        use krishiv_types::{ArrayType, StructField, StructType};
+        use std::sync::Arc;
+        let st = |nullable: bool, t: DataType| {
+            DataType::Struct(StructType::new([StructField::new("a", t, nullable)]))
+        };
+        for (current, update, widening, want) in [
+            (DataType::Integer, DataType::Integer, false, Merged::Kept),
+            (DataType::Integer, DataType::Short, false, Merged::Kept),
+            (DataType::Integer, DataType::Byte, false, Merged::Kept),
+            (DataType::Integer, DataType::Null, false, Merged::Kept),
+            (
+                DataType::Integer,
+                DataType::Long,
+                false,
+                Merged::Incompatible,
+            ),
+            (
+                DataType::Long,
+                DataType::Integer,
+                false,
+                Merged::Incompatible,
+            ),
+            (
+                DataType::Integer,
+                DataType::String,
+                false,
+                Merged::Incompatible,
+            ),
+            (
+                DataType::Integer,
+                DataType::Long,
+                true,
+                Merged::Changed("type widening on write"),
+            ),
+            (
+                DataType::Integer,
+                DataType::String,
+                true,
+                Merged::Incompatible,
+            ),
+            (DataType::Integer, DataType::Short, true, Merged::Kept),
+            (
+                st(true, DataType::Integer),
+                st(false, DataType::Integer),
+                false,
+                Merged::Kept,
+            ),
+            (
+                st(true, DataType::Integer),
+                st(true, DataType::Long),
+                false,
+                Merged::Incompatible,
+            ),
+            (
+                DataType::Array(Arc::new(ArrayType::new(DataType::Integer, true))),
+                DataType::Array(Arc::new(ArrayType::new(DataType::Short, false))),
+                false,
+                Merged::Kept,
+            ),
+        ] {
+            assert_eq!(
+                merge_type(&current, &update, widening),
+                want,
+                "{current:?} {update:?} {widening}"
+            );
         }
     }
 

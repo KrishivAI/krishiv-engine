@@ -331,9 +331,15 @@ Krishiv writes Delta tables through `delta_kernel` and its own writer (`krishiv-
   unknown names are accepted, as delta-spark only logs them; `userMetadata` and `mergeSchema`
   (`canMergeSchema`, the string `"true"`) reach the commit. Refused by name where delta-spark
   commits: idempotent writes (`txnAppId` + `txnVersion`), `dataChange = false`, `replaceOn`,
-  `replaceUsing`, `targetAlias`, `writePartitionColumns = true` and
-  `useNullIntolerantEqualityWithDPO = true`; `mergeSchema` with a column of another type (no
-  write-time type widening in the kernel). A non-numeric `maxRecordsPerFile` is
+  `replaceUsing`, `targetAlias` and `useNullIntolerantEqualityWithDPO = true`
+  (`writePartitionColumns` is accepted and has no effect, as in delta-spark). `mergeSchema`
+  merges the types as delta-spark's `SchemaMergingUtils` does (`OPTIONS.json` `merge_schema`):
+  narrower integrals, NULL-typed columns and other nested nullability are taken, other types are
+  `DELTA_FAILED_TO_MERGE_FIELDS`; a merge that would change the table's schema (type widening on
+  a `typeWidening` table, a wider integral, a new nested field) is refused by name, since the
+  kernel commits no schema change on a write. Without `mergeSchema`, a column of another type is
+  stored in the table's type (store assignment) where delta-spark raises
+  `DELTA_FAILED_TO_MERGE_FIELDS`. A non-numeric `maxRecordsPerFile` is
   `KRISHIV_INVALID_FORMAT_OPTION_VALUE` where delta-spark raises a classless
   `NumberFormatException`. `optimizeWrite` and `compression` are accepted and change nothing.
   `INSERT INTO delta.`<path>`` is not taken (`TABLE_OR_VIEW_NOT_FOUND`); a catalog table is.

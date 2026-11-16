@@ -44,7 +44,9 @@ oracle-wide no-`INTERNAL_ERROR`, coordinated-commits and kernel-gap tests (krish
   taken (a catalog table is). Delta's read options on a write (`maxFilesPerTrigger` and the like, which delta-spark
   also checks on a write) are not checked.
 - Refused by name (kernel or Krishiv gaps): replace (RTAS, `REPLACE TABLE`, `overwriteSchema`); write-time type
-  widening and other schema evolution on write (`mergeSchema` with other columns or types, `MERGE` schema evolution);
+  widening and other schema evolution on write (`mergeSchema` with other columns, or a merge that changes the
+  table's types: `DeltaTable::type_widening_enabled` tells a widening table, the type rule is krishiv-session
+  `delta_options::merge_schema_check`; `MERGE` schema evolution);
   legacy writer 3-6 tables (`DELTA_INVALID_PROTOCOL_VERSION`); row tracking, `variantType` and the other refused
   writer features; change files (`UPDATE`, `MERGE` with removes, copy-on-write `DELETE`, `INSERT OVERWRITE`,
   `replaceWhere`, dynamic overwrite on change-data-feed tables); idempotent writes (`txnAppId`/`txnVersion`),

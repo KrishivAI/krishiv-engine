@@ -245,16 +245,14 @@ impl Session {
         let env = self.query_env();
         let plain = plain_options(options)?;
         let exists = env.catalog.delta.exists(&source).await?;
-        let partitioned = if exists {
-            !env.catalog
-                .delta
-                .open(&source, None)
-                .await?
-                .partition_columns()
-                .is_empty()
+        let opened = if exists {
+            Some(env.catalog.delta.open(&source, None).await?)
         } else {
-            !partition_by.is_empty()
+            None
         };
+        let partitioned = opened.as_ref().map_or(!partition_by.is_empty(), |t| {
+            !t.partition_columns().is_empty()
+        });
         let passed = super::delta_options::delta_write_options(&plain, partitioned)?;
         let quoted = format!("delta.{}", ident(&qualified));
         let option = |k: &str| {
@@ -351,7 +349,9 @@ impl Session {
         }
         drop(env);
         if option("mergeSchema").is_some_and(|v| v.eq_ignore_ascii_case("true")) {
-            widening_refused(df, &columns, &quoted).await?;
+            let widening = opened.as_ref().is_some_and(|t| t.type_widening_enabled());
+            let schema = df.schema().await?;
+            super::delta_options::merge_schema_check(&columns, &schema, widening, &quoted)?;
         }
         let aligned = self.delta_by_name(df, &columns, &quoted).await?;
         if write_reads_target(&aligned, &qualified).await {
@@ -505,34 +505,6 @@ async fn write_reads_target(df: &DataFrame, path: &str) -> bool {
         return false;
     };
     crate::catalog::reads_files_at(a.analyzed.plan.root(), path)
-}
-
-/// Under `mergeSchema = true`, a column whose type differs from the table's: delta-spark
-/// merges the types (widening the column on a `typeWidening` table, else
-/// `DELTA_FAILED_TO_MERGE_FIELDS`), which the kernel cannot commit (no write-time type
-/// widening, design section 4.1), so it is refused by name instead of stored in the table's
-/// type.
-async fn widening_refused(
-    df: &DataFrame,
-    table: &[TableColumn],
-    quoted: &str,
-) -> Result<(), KrishivError> {
-    let schema = df.schema().await?;
-    for f in schema.fields() {
-        let Some(c) = table.iter().find(|c| c.name.eq_ignore_ascii_case(f.name())) else {
-            continue;
-        };
-        if krishiv_types::DataType::from_arrow_field(f).is_ok_and(|t| t != c.data_type) {
-            return Err(KrishivUnsupportedFeature {
-                feature: format!(
-                    "a Delta write to {quoted} with mergeSchema whose column {} has another type                      than the table's (type widening on write)",
-                    c.name
-                ),
-            }
-            .into());
-        }
-    }
-    Ok(())
 }
 
 fn columns_differ(quoted: &str) -> KrishivError {
