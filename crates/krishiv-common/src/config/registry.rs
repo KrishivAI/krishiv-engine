@@ -1270,7 +1270,7 @@ pub static ACCESS_PROVIDER: ConfigEntry = ConfigEntry {
     value_type: ValueType::String,
     default: None,
     doc: "Server mode: the access-policy provider that decides data securables (tables, views, \
-          columns, namespaces, functions, paths, secrets, connections; P3-T062). `grants`: \
+          columns, namespaces, functions, paths, secrets, connections). `grants`: \
           `GRANT`/`REVOKE` decide them, and the role matrix keeps deciding the server's own \
           objects; an admin passes every data check. `roles`: the role matrix decides \
           everything. Unset: `grants` when authentication is configured, otherwise `roles`. \
