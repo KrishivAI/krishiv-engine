@@ -28,6 +28,7 @@ mod coalesce;
 pub mod distinct_samples;
 pub mod fault;
 pub mod inferred;
+pub mod key_facts;
 pub mod latency;
 #[cfg(unix)]
 pub mod local_listing;
@@ -71,6 +72,7 @@ pub use self::coalesce::{Coalesced, Waste, coalesce, coalesce_with};
 pub use self::distinct_samples::{DistinctSample, DistinctSamples, SampleKey};
 pub use self::fault::{FaultStats, FaultStore, ScheduledRequest, TransientError};
 pub use self::inferred::{InferKey, InferredSchemas, infer_schema_cached};
+pub use self::key_facts::{KeyFact, KeyFactKey, KeyFacts};
 pub use self::latency::{LATENCY_BUCKETS, LatencyHistogram};
 use self::pace::{Direction, Pacer};
 pub use self::stores::{
@@ -409,6 +411,8 @@ pub struct IoScheduler {
     cache: MetadataCache,
     /// The distinct-value samples the planner took of file columns (P2-T164 U6).
     distinct_samples: DistinctSamples,
+    /// The key facts the planner counted of file tables (design P2b A5).
+    key_facts: KeyFacts,
     /// The schemas formats inferred from files (see [`InferredSchemas`]).
     inferred: InferredSchemas,
     /// The local block cache of remote reads, when `krishiv.io.cache.enabled`.
@@ -455,6 +459,7 @@ impl IoScheduler {
             block_cache,
             cache: MetadataCache::new(config.metadata_cache_bytes),
             distinct_samples: DistinctSamples::default(),
+            key_facts: KeyFacts::default(),
             inferred: InferredSchemas::default(),
             jitter: AtomicU64::new(config.seed),
             config,
@@ -613,6 +618,13 @@ impl IoScheduler {
     #[must_use]
     pub fn distinct_samples(&self) -> &DistinctSamples {
         &self.distinct_samples
+    }
+
+    /// The key facts counted of file tables, next to the distinct-value
+    /// samples (design P2b A5 (d)).
+    #[must_use]
+    pub fn key_facts(&self) -> &KeyFacts {
+        &self.key_facts
     }
 
     /// The schemas formats inferred from files, next to the metadata cache.
