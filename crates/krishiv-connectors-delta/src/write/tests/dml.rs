@@ -705,3 +705,104 @@ fn a_failure_while_staging_the_commit_leaves_no_files() {
     );
     assert_eq!(env.query_pool.reserved(), 0);
 }
+
+/// Review 2, B2: a condition with a subquery is a whole-table read whatever its partition
+/// conjuncts say (the subquery reads the table too): an append to another partition conflicts.
+#[test]
+fn a_condition_with_a_subquery_reads_the_whole_table() {
+    let env = Env::new();
+    two_file_table(&env, &["p"]);
+    let table = env.open().unwrap();
+    let files = row_files(&env, &table, RowLevelOperation::Delete);
+    env.write(
+        &env.open().unwrap(),
+        WriteMode::Append,
+        rows(&[(9, "w", Some("z"))]),
+        &[],
+    )
+    .unwrap();
+    let after = env.latest();
+    let sub = Expr::subquery(
+        krishiv_plan::SubqueryKind::In(vec![Arc::new(Expr::column(["id"]))]),
+        krishiv_plan::LogicalPlan::table(["t"]),
+    );
+    let rl = table.row_level(RowLevelOperation::Delete).unwrap();
+    let err = rewrite(
+        &env,
+        &rl,
+        RowLevelOperation::Delete,
+        vec![the_file_of(&files, 3)],
+        Vec::new(),
+        Some((
+            "p = 'y' AND id IN (SELECT id FROM t)",
+            and(eq("p", Literal::String("y".to_owned())), sub),
+        )),
+        1,
+        "dml-b2-subquery",
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.error_class().name(),
+        "DELTA_CONCURRENT_APPEND.WITH_PARTITION_HINT",
+        "{err}"
+    );
+    assert_eq!(env.latest(), after);
+}
+
+/// Review 2, M4: every candidate file of the read partitions is a read file, touched or not
+/// (delta-spark's `filterFiles`): a concurrent remove of an untouched file of a read partition
+/// is `DELTA_CONCURRENT_DELETE_READ`; of a file of another partition it commits.
+#[test]
+fn a_concurrent_remove_of_an_untouched_candidate_file_conflicts() {
+    for (gone, conflicts) in [(6_i64, false), (4, true)] {
+        let env = Env::new();
+        two_file_table(&env, &["p"]);
+        let table = env.open().unwrap();
+        let files = row_files(&env, &table, RowLevelOperation::Delete);
+        // Another statement removes the file of row `gone` (partition `z` or `y`).
+        let other = env.open().unwrap();
+        let rl = other.row_level(RowLevelOperation::Delete).unwrap();
+        rewrite(
+            &env,
+            &rl,
+            RowLevelOperation::Delete,
+            vec![the_file_of(&files, gone)],
+            Vec::new(),
+            Some(("id = gone", eq("id", Literal::Long(gone)))),
+            1,
+            &format!("dml-m4-winner-{gone}"),
+        )
+        .unwrap();
+        let after = env.latest();
+        let rl = table.row_level(RowLevelOperation::Delete).unwrap();
+        let out = rewrite(
+            &env,
+            &rl,
+            RowLevelOperation::Delete,
+            vec![the_file_of(&files, 3)],
+            Vec::new(),
+            Some((
+                "p = 'y' AND id = 3",
+                and(
+                    eq("p", Literal::String("y".to_owned())),
+                    eq("id", Literal::Long(3)),
+                ),
+            )),
+            1,
+            &format!("dml-m4-{gone}"),
+        );
+        if conflicts {
+            let err = out.unwrap_err();
+            assert!(
+                err.error_class()
+                    .name()
+                    .starts_with("DELTA_CONCURRENT_DELETE_READ"),
+                "{err}"
+            );
+            assert_eq!(env.latest(), after);
+        } else {
+            out.unwrap();
+            assert_eq!(env.latest(), after + 1);
+        }
+    }
+}

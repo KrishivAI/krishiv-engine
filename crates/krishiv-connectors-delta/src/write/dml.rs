@@ -83,6 +83,7 @@ use krishiv_exec::planner::{
     RowLevelTable, RowLevelWrite,
 };
 use krishiv_exec::{ScanPushdown, Sink};
+use krishiv_plan::{Expr, ExprNode};
 
 use super::files::Written;
 use super::filter::{partition_conjuncts, partition_predicate};
@@ -107,6 +108,21 @@ pub const ROW_LEVEL_SCAN_MS_OPTION: &str = "__krishiv_row_level_scan_ms";
 /// the table's last name part): a two-part column name of the condition starting with it names
 /// a column of the table (absent: only one-part names do).
 pub const ROW_LEVEL_ALIAS_OPTION: &str = "__krishiv_row_level_alias";
+
+/// Whether `e` holds a subquery (`IN (SELECT ..)`, `EXISTS`, a scalar subquery) anywhere.
+/// delta-spark refuses a `DELETE` or `UPDATE` whose condition has one
+/// (`PreprocessTableDelete.scala:35-45`, `PreprocessTableUpdate.scala:44`).
+#[must_use]
+pub fn has_subquery(e: &Expr) -> bool {
+    let mut stack: Vec<&Expr> = vec![e];
+    while let Some(x) = stack.pop() {
+        if matches!(x.node, ExprNode::Subquery { .. }) {
+            return true;
+        }
+        x.for_each_child(&mut |c| stack.push(c));
+    }
+    false
+}
 
 /// What a finished row-level change did, for its result row.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -221,9 +237,11 @@ impl RowLevelTable for DeltaRowLevel {
         };
         // What the statement read, for the conflict check: the condition's partition conjuncts
         // (delta-spark's read predicates), else the whole table.
+        // A subquery reads the table too (review 2, B2): such a condition is a whole-table read.
         let read_predicate: Option<PredicateRef> = request
             .read_filter
             .as_ref()
+            .filter(|f| !has_subquery(f))
             .and_then(|f| partition_conjuncts(f, &schema, &partitions, &qualifiers).map(Arc::new));
         let cdf = self
             .table
@@ -405,18 +423,26 @@ pub(super) async fn stage(
         _ => HashSet::new(),
     };
     let touched = plan.touched.clone();
-    let (removes, actions) = engine
+    let read_predicate = plan.read_predicate.clone();
+    let (removes, actions, also_read) = engine
         .delta_blocking(move |e| {
             let exact = match &whole {
                 Some(Some(p)) => Some(ExactCheck::new(e, &snapshot, &partitions, p, &name)?),
                 _ => None,
             };
+            // The statement's candidate files (delta-spark's `filterFiles` by the read
+            // predicates): every one is a read file of the conflict check, touched or not.
+            let read = match &read_predicate {
+                Some(p) => Some(ExactCheck::new(e, &snapshot, &partitions, p, &name)?),
+                None => None,
+            };
             let mut out = Vec::new();
             let mut actions = Vec::new();
+            let mut also_read = Vec::new();
             let mut found = 0_usize;
             // Batch by batch: only the batches holding a removed file are kept.
             for_each_scan_batch(e, &snapshot, &name, |scan_rows, selection| {
-                let mut extra = match (&whole, &exact) {
+                let extra = match (&whole, &exact) {
                     (Some(None), _) => selection.clone(),
                     (Some(Some(_)), Some(x)) => {
                         let mut s = selection.clone();
@@ -424,6 +450,14 @@ pub(super) async fn stage(
                         s
                     }
                     _ => vec![false; selection.len()],
+                };
+                let candidate = match &read {
+                    Some(x) => {
+                        let mut s = selection.clone();
+                        x.narrow(&scan_rows, &mut s)?;
+                        s
+                    }
+                    None => Vec::new(),
                 };
                 let paths = paths_of(&scan_rows)?;
                 let mut keep = vec![false; selection.len()];
@@ -436,7 +470,7 @@ pub(super) async fn stage(
                     if hit && live {
                         found += 1;
                     }
-                    let added = extra.get_mut(i).is_some_and(|x| {
+                    let added = extra.get(i).is_some_and(|x| {
                         *x && (matches!(whole, Some(None)) || empty.contains(p.as_str()))
                     });
                     *k = live && (hit || added);
@@ -445,9 +479,13 @@ pub(super) async fn stage(
                             path: p.clone(),
                             partition_values: partition_values_of(&scan_rows, i)?,
                         });
+                    } else if live && candidate.get(i).copied().unwrap_or(false) {
+                        also_read.push(FileAction {
+                            path: p.clone(),
+                            partition_values: partition_values_of(&scan_rows, i)?,
+                        });
                     }
                 }
-                extra.clear();
                 if keep.iter().any(|k| *k) {
                     out.push(StagedRemoves {
                         scan_rows,
@@ -461,7 +499,7 @@ pub(super) async fn stage(
                     "a touched file of a Delta row-level change is not in the snapshot's scan",
                 ));
             }
-            Ok((out, actions))
+            Ok((out, actions, also_read))
         })
         .await
         .and_then(|r| r)
@@ -532,6 +570,7 @@ pub(super) async fn stage(
         None => read_set.whole_table = true,
     }
     read_set.files = removed.actions;
+    read_set.files.extend(also_read);
     Ok(Some(StagedCommit {
         table: table.name().to_owned(),
         write_id: write_id.to_owned(),
