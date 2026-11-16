@@ -618,6 +618,14 @@ impl Memo {
                 | PlanNode::Repartition { input, .. }
                 | PlanNode::Window { input, .. }
                 | PlanNode::Generate { input, .. } => Arc::clone(input),
+                // A reader of a definition `ShareCte` made: the body this
+                // pass left the `isnotnull` out of before it was shared, so a
+                // second `optimize` leaves it out too (fixed point; TPC-DS
+                // q23 under a session configuration). A user's `WITH`
+                // reference is not shared by this pass and takes the filter.
+                PlanNode::CteRef(r) if r.name.starts_with(crate::share_cte::SHARED_PREFIX) => {
+                    return true;
+                }
                 _ => return false,
             };
             at = next;
