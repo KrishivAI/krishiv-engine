@@ -178,6 +178,9 @@ fn rescale(v: i128, from: i8, to: usize, precision: usize) -> FormatResult<i128>
     Ok(v)
 }
 
+/// Known difference from Spark (recorded in the `to_avro` goldens' gap list): Spark's `AvroSerializer` needs a decimal of exactly
+/// the schema's precision and scale, while this encoder rescales when no digit is lost (the Avro file writer relies on it).
+///
 /// The bytes of cell `row` of `array` in `schema` (writer) terms, appended
 /// to `out`.
 ///
@@ -279,11 +282,6 @@ fn put_scalar(
             let s = str_at(array, row).ok_or_else(|| fail("string"))?;
             put_bytes(out, s.as_bytes());
         }
-        (AvroSchema::String, DataType::BinaryView) => {
-            let v = array.as_binary_view().value(row);
-            std::str::from_utf8(v).map_err(|_| write_failed("binary bytes that are not UTF-8"))?;
-            put_bytes(out, v);
-        }
         (AvroSchema::Fixed(f), DataType::BinaryView | DataType::Binary) => {
             let v = match array.data_type() {
                 DataType::Binary => array.as_binary::<i32>().value(row),
@@ -326,16 +324,21 @@ fn put_scalar(
         (AvroSchema::TimeMicros, DataType::Time64(TimeUnit::Microsecond)) => {
             put_long(out, prim::<t::Time64MicrosecondType>(array, row));
         }
-        (
-            AvroSchema::TimestampMillis | AvroSchema::LocalTimestampMillis,
-            DataType::Timestamp(TimeUnit::Millisecond, _),
-        ) => put_long(out, prim::<t::TimestampMillisecondType>(array, row)),
-        (
-            AvroSchema::TimestampMicros | AvroSchema::LocalTimestampMicros,
-            DataType::Timestamp(TimeUnit::Microsecond, _),
-        ) => put_long(out, prim::<t::TimestampMicrosecondType>(array, row)),
+        // TIMESTAMP maps to `timestamp-*` and TIMESTAMP_NTZ to `local-timestamp-*`, never across.
+        (AvroSchema::TimestampMillis, DataType::Timestamp(TimeUnit::Millisecond, Some(_)))
+        | (AvroSchema::LocalTimestampMillis, DataType::Timestamp(TimeUnit::Millisecond, None)) => {
+            put_long(out, prim::<t::TimestampMillisecondType>(array, row));
+        }
+        (AvroSchema::TimestampMicros, DataType::Timestamp(TimeUnit::Microsecond, Some(_)))
+        | (AvroSchema::LocalTimestampMicros, DataType::Timestamp(TimeUnit::Microsecond, None)) => {
+            put_long(out, prim::<t::TimestampMicrosecondType>(array, row));
+        }
         (AvroSchema::Record(r), DataType::Struct(_)) => {
             let s = array.as_struct();
+            // Spark needs as many struct fields as the record has (`IncompatibleSchemaException` otherwise).
+            if s.num_columns() != r.fields.len() {
+                return Err(fail("struct with a different number of fields"));
+            }
             for f in &r.fields {
                 let Some(child) = s.column_by_name(&f.name) else {
                     return Err(write_failed(format!(
@@ -689,10 +692,8 @@ mod tests {
         assert!(cell_bytes(&parse(r#""bytes""#), &text).is_err());
         // A `string` column holds binary bytes that are UTF-8, nothing else.
         assert!(cell_bytes(&parse(r#""string""#), &text).is_ok());
-        assert!(cell_bytes(&parse(r#""string""#), &view).is_ok());
-        let bad: ArrayRef = Arc::new(BinaryViewArray::from(vec![b"\xff".as_slice()]));
-        let e = cell_bytes(&parse(r#""string""#), &bad).unwrap_err();
-        assert!(e.to_string().contains("not UTF-8"), "{e}");
+        // Binary is not a string (`IncompatibleSchemaException` in Spark).
+        assert!(cell_bytes(&parse(r#""string""#), &view).is_err());
     }
 
     #[test]
@@ -724,14 +725,16 @@ mod tests {
             )
             .is_ok()
         );
-        let ms: ArrayRef = Arc::new(arrow_array::TimestampMillisecondArray::from(vec![3]));
-        assert!(
-            cell_bytes(
-                &parse(r#"{"type":"long","logicalType":"timestamp-millis"}"#),
-                &ms
-            )
-            .is_ok()
-        );
+        let ms: ArrayRef =
+            Arc::new(arrow_array::TimestampMillisecondArray::from(vec![3]).with_timezone("UTC"));
+        let ntz: ArrayRef = Arc::new(arrow_array::TimestampMillisecondArray::from(vec![3]));
+        let ts = parse(r#"{"type":"long","logicalType":"timestamp-millis"}"#);
+        let local = parse(r#"{"type":"long","logicalType":"local-timestamp-millis"}"#);
+        assert!(cell_bytes(&ts, &ms).is_ok());
+        assert!(cell_bytes(&local, &ntz).is_ok());
+        // TIMESTAMP and TIMESTAMP_NTZ never cross (`IncompatibleSchemaException` in Spark).
+        assert!(cell_bytes(&ts, &ntz).is_err());
+        assert!(cell_bytes(&local, &ms).is_err());
     }
 
     #[test]

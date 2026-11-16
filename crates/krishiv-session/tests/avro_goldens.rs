@@ -31,7 +31,6 @@ const KNOWN_GAPS: &[&str] = &[
     "basic#34",
     // `to_avro` of an untyped NULL (`NullType`) is not bound.
     "basic#23",
-    "basic#56",
     // A `timestamp-millis` target schema for a timestamp value is not written yet.
     "basic#52",
     // A SQL string holding bytes that are not UTF-8 (`cast(X'ff' as string)`): strings here are always valid UTF-8.
@@ -39,13 +38,17 @@ const KNOWN_GAPS: &[&str] = &[
     "ansi_tz#41",
     "basic#57",
     "basic#149",
-    // Spark quirks the owner put under opt-in incompatibility: a `["null","int"]` reader returns 0 for the null branch, and decimal and NaN reads of a nullable union.
-    "basic#78",
-    "basic#83",
-    "basic#91",
-    "basic#92",
+    // `to_avro` infers its schema from the physical nullability of the argument, where Spark uses the analyzer's (a `cast` of a
+    // literal is nullable there): the bytes differ by the union branch index. Needs the analyzer's nullability, or owner sign-off.
     "basic#133",
     "basic#140",
+    // Spark quirks the owner put under opt-in incompatibility: a `["null","int"]` reader returns 0 for the null branch.
+    "basic#78",
+    "basic#91",
+    "basic#92",
+    // A truncated record whose union field has no payload decodes as `{null}` where Spark raises the malformed-record error:
+    // a decoder bug to fix, not a Spark quirk.
+    "basic#83",
     // Avro unions of several non-null types read or written as `member0`..`memberN` structs, and `["null"]` as an empty struct.
     "basic#86",
     "basic#89",
@@ -64,9 +67,10 @@ const KNOWN_GAPS: &[&str] = &[
     // `schema_of_avro` is not implemented.
     "basic#150",
     "basic#151",
-    // A schema or options map that is foldable but not a literal (`concat(..)`, `map_concat(..)`, a NULL map key): refused here
-    // (UNSUPPORTED_FEATURE) where Spark folds it.
+    // A NULL map key in the options: Spark raises NULL_MAP_KEY, here the options are refused as not a literal.
     "basic#116",
+    // A schema or options map that is foldable but not a literal (`concat(..)`, `map_concat(..)`): refused here
+    // (UNSUPPORTED_FEATURE) where Spark folds it.
     "errors_args#21",
     "errors_args#22",
     "errors_args#23",
@@ -160,6 +164,13 @@ fn avro_and_variant_functions_follow_the_spark_runs() {
     let mut gaps: Vec<String> = Vec::new();
     for (dir, file) in FILES {
         let s = Session::new().unwrap();
+        // The goldens were run in UTC (their README); the host zone must not leak into the results.
+        block_on(
+            block_on(s.sql("SET spark.sql.session.timeZone=UTC"))
+                .unwrap()
+                .collect(),
+        )
+        .unwrap();
         for (n, case) in cases(dir, file).iter().enumerate() {
             let id = format!("{file}#{}", n + 1);
             let upper = case.sql.to_ascii_uppercase();

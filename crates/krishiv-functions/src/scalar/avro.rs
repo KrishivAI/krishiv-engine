@@ -65,6 +65,10 @@ fn literal_string(arg: &BindArg) -> Result<Option<String>, KrishivError> {
             "an Avro schema that is not a literal".to_owned(),
         ));
     };
+    // An untyped NULL literal (`to_avro(1, null)`, the form Spark prints for `to_avro(1)`) is no schema.
+    if matches!(a.data_type(), ArrowDataType::Null) {
+        return Ok(None);
+    }
     let s = to_utf8(a.as_ref())?;
     Ok(s.is_valid(0).then(|| s.value(0).to_owned()))
 }
