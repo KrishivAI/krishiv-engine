@@ -514,6 +514,11 @@ pub(crate) struct FileScans {
     pub(crate) runtime: tokio::runtime::Handle,
     /// The session's relation store, which holds the data of local relations.
     pub(crate) relations: Arc<krishiv_memory::RelationStore>,
+    /// The session's memory pool (under the runtime's root and
+    /// `krishiv.session.memoryLimit`): plan-time work that holds memory, the
+    /// key counts, reserves from a child of it, since the query's own pool
+    /// exists only once planning is done.
+    pub(crate) memory: Arc<dyn krishiv_memory::MemoryPool>,
 }
 
 impl FileScans {

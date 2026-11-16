@@ -5,13 +5,15 @@
 //! samples so a later query over the same file versions reads nothing.
 //!
 //! A key names every file of the table by its metadata-cache key (store,
-//! path, size and version), in listing order, and the sorted column names:
-//! a changed, added or removed file is a miss, never a stale fact. A count
+//! path, size and version), in listing order, the sorted column names and
+//! how the values were decoded ([`KeyFactKey`]): a changed, added or removed
+//! file, or another decoding, is a miss, never a stale fact. A count
 //! that did not finish is kept with the time it had, so it is tried again
 //! only with more. The cache is bounded in entries and drops the least
 //! recently used one when full.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::{Mutex, PoisonError};
 
 use crate::io::cache::CacheKey;
@@ -32,22 +34,42 @@ pub enum KeyFact {
     },
 }
 
-/// The key of a fact: every file of the table, in order, and the column
-/// names, sorted.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// The key of a fact: every file of the table, in order, the column names,
+/// sorted, and what decides the values the count saw (`decoding`: the
+/// columns' types, the format and its read options, the settings that
+/// change which rows are read). The same files decoded another way (a
+/// `STRING` column read as `INT` turns `1` and `01` into one value; a CSV
+/// `nullValue` turns a value into NULL) are another key, never the same fact.
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct KeyFactKey {
     files: Vec<CacheKey>,
     columns: Vec<String>,
+    decoding: String,
+}
+
+impl fmt::Debug for KeyFactKey {
+    // The decoding text can hold read options; it is compared, never shown.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("KeyFactKey")
+            .field("files", &self.files)
+            .field("columns", &self.columns)
+            .finish_non_exhaustive()
+    }
 }
 
 impl KeyFactKey {
-    /// The key of a count of `columns` over `files` (all the table's files).
+    /// The key of a count of `columns` over `files` (all the table's files),
+    /// decoded as `decoding` describes.
     #[must_use]
-    pub fn new(files: Vec<CacheKey>, columns: &[String]) -> Self {
+    pub fn new(files: Vec<CacheKey>, columns: &[String], decoding: String) -> Self {
         let mut columns = columns.to_vec();
         columns.sort();
         columns.dedup();
-        Self { files, columns }
+        Self {
+            files,
+            columns,
+            decoding,
+        }
     }
 }
 
@@ -164,12 +186,17 @@ mod tests {
     #[test]
     fn a_fact_is_found_by_its_files_and_sorted_columns() {
         let c = KeyFacts::default();
-        let key = KeyFactKey::new(vec![file("a", "v1"), file("b", "v1")], &cols(&["y", "x"]));
+        let key = KeyFactKey::new(
+            vec![file("a", "v1"), file("b", "v1")],
+            &cols(&["y", "x"]),
+            "int".into(),
+        );
         c.insert(key, KeyFact::Unique);
         assert_eq!(
             c.get(&KeyFactKey::new(
                 vec![file("a", "v1"), file("b", "v1")],
-                &cols(&["x", "y"])
+                &cols(&["x", "y"]),
+                "int".into()
             )),
             Some(KeyFact::Unique),
             "columns in any order"
@@ -192,8 +219,21 @@ mod tests {
                 "other columns",
             ),
         ] {
-            assert_eq!(c.get(&KeyFactKey::new(files, &columns)), None, "{why}");
+            assert_eq!(
+                c.get(&KeyFactKey::new(files, &columns, "int".into())),
+                None,
+                "{why}"
+            );
         }
+        assert_eq!(
+            c.get(&KeyFactKey::new(
+                vec![file("a", "v1"), file("b", "v1")],
+                &cols(&["x", "y"]),
+                "string".into()
+            )),
+            None,
+            "another decoding"
+        );
     }
 
     #[test]
@@ -207,7 +247,11 @@ mod tests {
         .into_iter()
         .enumerate()
         {
-            let key = KeyFactKey::new(vec![file(&i.to_string(), "v")], &cols(&["k"]));
+            let key = KeyFactKey::new(
+                vec![file(&i.to_string(), "v")],
+                &cols(&["k"]),
+                String::new(),
+            );
             c.insert(key.clone(), fact);
             assert_eq!(c.get(&key), Some(fact));
         }
@@ -219,7 +263,7 @@ mod tests {
     #[test]
     fn a_full_cache_drops_the_least_recently_used() {
         let c = KeyFacts::new(2);
-        let key = |n: &str| KeyFactKey::new(vec![file(n, "v")], &cols(&["k"]));
+        let key = |n: &str| KeyFactKey::new(vec![file(n, "v")], &cols(&["k"]), String::new());
         c.insert(key("a"), KeyFact::Unique);
         c.insert(key("b"), KeyFact::Unique);
         // `a` used again: `b` is the oldest.

@@ -15,7 +15,8 @@ use krishiv_exec::planner::{
     FileTable, KeyOptions, KeyOutcome, KeyResult, KeyUnknown, ProviderStatistics, TableProvider,
 };
 use krishiv_io::parquet::ParquetFormat;
-use krishiv_io::{FileFormat, FileRef, FormatOptions, IoConfig, IoScheduler, StoreId};
+use krishiv_io::{CsvFormat, FileFormat, FileRef, FormatOptions, IoConfig, IoScheduler, StoreId};
+use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
 use object_store::ObjectStore;
 
 use super::partial_aggregate::write;
@@ -50,6 +51,17 @@ impl Files {
     /// The table of `names` (in order) with columns `schema`; the last
     /// `partitions` columns of `schema` come from the directories.
     fn open(&self, names: &[&str], schema: &SchemaRef, partitions: usize) -> FileTable {
+        self.open_as(names, schema, partitions, Arc::new(ParquetFormat))
+    }
+
+    /// [`Self::open`] read by `format`.
+    fn open_as(
+        &self,
+        names: &[&str],
+        schema: &SchemaRef,
+        partitions: usize,
+        format: Arc<dyn FileFormat>,
+    ) -> FileTable {
         let files: Vec<FileRef> = names
             .iter()
             .map(|n| {
@@ -63,8 +75,7 @@ impl Files {
                 FileRef::from_meta(self.id.clone(), &meta)
             })
             .collect();
-        let format: Arc<dyn FileFormat> = Arc::new(ParquetFormat);
-        let options = FormatOptions::defaults(ParquetFormat.options());
+        let options = FormatOptions::defaults(format.options());
         let io = self.sched.context();
         let table_schema = Arc::clone(schema);
         let table = self
@@ -92,10 +103,20 @@ impl Files {
         columns: &[&str],
         timeout: Duration,
     ) -> KeyOutcome {
+        self.discover_in(table, columns, timeout, None).unwrap()
+    }
+
+    /// The count under `pool` (when given).
+    fn discover_in(
+        &self,
+        table: &FileTable,
+        columns: &[&str],
+        timeout: Duration,
+        pool: Option<Arc<dyn MemoryPool>>,
+    ) -> krishiv_exec::Result<KeyOutcome> {
         let columns: Vec<String> = columns.iter().map(|c| (*c).to_owned()).collect();
         self.rt
-            .block_on(table.discover_unique(&columns, KeyOptions { timeout }))
-            .unwrap()
+            .block_on(table.discover_unique(&columns, KeyOptions { timeout, pool }))
     }
 }
 
@@ -312,4 +333,133 @@ fn requests_and_facts_go_through_provider_statistics() {
     assert!(stats.unique_keys(&scan).is_empty());
     assert!(f.discover(&t, &["k"]).is_unique());
     assert_eq!(stats.unique_keys(&scan), vec![cols(&["k"])]);
+}
+
+/// A duplicate in the second file of a key the first file read in order:
+/// the fast path gives up and the hash path finds it.
+#[test]
+fn a_repeat_across_files_after_the_fast_path_gives_up_is_found() {
+    let dir = tempfile::tempdir().unwrap();
+    file(dir.path(), "a.parquet", &ints(1..=10));
+    file(dir.path(), "b.parquet", &ints(5..=20));
+    let f = Files::new(dir.path());
+    let t = f.open(&["a.parquet", "b.parquet"], &keys_schema(), 0);
+    let o = f.discover(&t, &["k"]);
+    // 10 rows of `a`, then `b`'s 5 repeats `a`'s.
+    assert_eq!(discovered(&o), (false, 11, false), "{o}");
+    assert!(t.unique_keys().is_empty());
+}
+
+/// The same CSV file read with `k` as STRING and as INT: `1` and `01` are
+/// two values, then one. The second table must count again (review B1).
+#[test]
+fn a_fact_is_never_reused_by_a_table_that_decodes_the_files_otherwise() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("k.csv"), "1\n01\n2\n").unwrap();
+    let f = Files::new(dir.path());
+    let schema =
+        |t: DataType| -> SchemaRef { Arc::new(Schema::new(vec![Field::new("k", t, true)])) };
+    let strings = f.open_as(&["k.csv"], &schema(DataType::Utf8), 0, Arc::new(CsvFormat));
+    let o = f.discover(&strings, &["k"]);
+    assert!(discovered(&o).0, "{o}");
+    let ints = f.open_as(&["k.csv"], &schema(DataType::Int32), 0, Arc::new(CsvFormat));
+    let o = f.discover(&ints, &["k"]);
+    assert!(!discovered(&o).0, "{o}");
+    assert!(ints.unique_keys().is_empty());
+    assert_eq!(f.sched.key_facts().len(), 2);
+}
+
+fn small_pool(limit: usize) -> Arc<dyn MemoryPool> {
+    TreePool::new(&MemoryConfig {
+        limit: Some(limit),
+        quantum: 1,
+        spill_scratch_reserve: 0,
+        ..MemoryConfig::default()
+    })
+}
+
+fn consumers(pool: &Arc<dyn MemoryPool>) -> usize {
+    pool.snapshot()
+        .entries
+        .iter()
+        .filter(|e| e.is_consumer)
+        .count()
+}
+
+/// The hash path's set reserved from the caller's pool: too small a pool
+/// answers unknown, cached nowhere, and leaves the pool empty.
+#[test]
+fn a_pool_too_small_for_the_set_answers_unknown() {
+    let dir = tempfile::tempdir().unwrap();
+    // Unsorted: the hash path.
+    file(dir.path(), "a.parquet", &ints((1..=400_000).rev()));
+    let f = Files::new(dir.path());
+    let t = f.open(&["a.parquet"], &keys_schema(), 0);
+    let pool = small_pool(3 << 20);
+    let o = f
+        .discover_in(&t, &["k"], Duration::from_secs(60), Some(Arc::clone(&pool)))
+        .unwrap();
+    assert_eq!(o.result, KeyResult::Unknown(KeyUnknown::NoMemory), "{o}");
+    assert_eq!(f.sched.key_facts().len(), 0);
+    assert_eq!((consumers(&pool), pool.reserved()), (0, 0));
+    // With room, the same count proves the key.
+    let roomy = small_pool(64 << 20);
+    let o = f
+        .discover_in(
+            &t,
+            &["k"],
+            Duration::from_secs(60),
+            Some(Arc::clone(&roomy)),
+        )
+        .unwrap();
+    assert!(o.is_unique(), "{o}");
+    assert_eq!((consumers(&roomy), roomy.reserved()), (0, 0));
+}
+
+/// A count that runs out of time or fails leaves no consumer behind
+/// (review I2); a read error is not cached (review M2).
+#[test]
+fn a_timed_out_or_failed_count_releases_its_consumers() {
+    let dir = tempfile::tempdir().unwrap();
+    for i in 0..8 {
+        file(
+            dir.path(),
+            &format!("{i}.parquet"),
+            &ints((i * 20_000..(i + 1) * 20_000).rev()),
+        );
+    }
+    let names: Vec<String> = (0..8).map(|i| format!("{i}.parquet")).collect();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let f = Files::new(dir.path());
+    let t = f.open(&names, &keys_schema(), 0);
+    let pool = small_pool(256 << 20);
+    let o = f
+        .discover_in(
+            &t,
+            &["k"],
+            Duration::from_millis(1),
+            Some(Arc::clone(&pool)),
+        )
+        .unwrap();
+    assert_eq!(
+        o.result,
+        KeyResult::Unknown(KeyUnknown::TimedOut {
+            after: Duration::from_millis(1)
+        }),
+        "{o}"
+    );
+    assert_eq!((consumers(&pool), pool.reserved()), (0, 0));
+    assert_eq!(f.sched.key_facts().len(), 1, "a timeout is cached");
+    // A file gone after the listing: the read fails.
+    let t = f.open(&names, &keys_schema(), 0);
+    std::fs::remove_file(dir.path().join("7.parquet")).unwrap();
+    f.sched.key_facts().clear();
+    let e = f.discover_in(&t, &["k"], Duration::from_secs(60), Some(Arc::clone(&pool)));
+    assert!(e.is_err(), "{e:?}");
+    assert_eq!(
+        t.key_outcomes().last().map(|o| o.result),
+        Some(KeyResult::Unknown(KeyUnknown::Failed))
+    );
+    assert_eq!((consumers(&pool), pool.reserved()), (0, 0));
+    assert_eq!(f.sched.key_facts().len(), 0, "a read error is not cached");
 }

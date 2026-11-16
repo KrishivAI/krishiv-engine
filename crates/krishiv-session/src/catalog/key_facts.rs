@@ -47,11 +47,16 @@ impl QueryCatalog {
             .and_then(ConfigValue::as_duration)
             .unwrap_or_default();
         let deadline = std::time::Instant::now() + budget;
+        // Under the session's pool, so the arbitrator and
+        // `krishiv.session.memoryLimit` see the counts (no query pool exists
+        // while planning).
+        let pool = self.scans.memory.child("key counts", None);
         let mut proved = false;
         for (table, sets) in wanted {
             for columns in sets {
                 let options = krishiv_exec::planner::KeyOptions {
                     timeout: deadline.saturating_duration_since(std::time::Instant::now()),
+                    pool: Some(std::sync::Arc::clone(&pool)),
                 };
                 let table = std::sync::Arc::clone(&table);
                 match run_on(&self.scans.runtime, async move {
