@@ -55,7 +55,7 @@ def table_rows(n, dim, short_row=None):
             v[2] = None
         elif i == 57:
             v[0] = INF
-        if short_row == i:
+        if short_row == i and v is not None:
             v = v[:-1]
         rows.append((i, v))
     return rows
