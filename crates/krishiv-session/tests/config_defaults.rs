@@ -210,3 +210,101 @@ fn a_path_allowlist_value_is_withheld_without_manage() {
     let shown = listed(&rt, "krishiv.io.local.allowedRoots", true);
     assert!(!shown.withheld && shown.value.is_some());
 }
+
+#[test]
+fn concurrent_sets_all_survive() {
+    let rt = runtime();
+    let real = [
+        ("krishiv.sql.ansi.enabled", "true"),
+        ("krishiv.sql.session.timeZone", "UTC"),
+        ("krishiv.deterministicOrder", "true"),
+        ("krishiv.cache.maxBytes", "1m"),
+    ];
+    std::thread::scope(|scope| {
+        for (k, v) in real {
+            let rt = Arc::clone(&rt);
+            scope.spawn(move || {
+                rt.set_config_defaults(&[pair(k, v)], &[])
+                    .unwrap_or_else(|e| panic!("{e}"));
+            });
+        }
+    });
+    let set: Vec<String> = rt.config_defaults().into_iter().map(|(k, _)| k).collect();
+    for (k, _) in real {
+        assert!(set.iter().any(|s| s == k), "{k} was lost: {set:?}");
+    }
+}
+
+#[test]
+fn a_spark_alias_sets_and_unsets_the_canonical_key() {
+    let rt = runtime();
+    rt.set_config_defaults(&[pair("spark.sql.ansi.enabled", "true")], &[])
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        rt.config_defaults(),
+        vec![pair("krishiv.sql.ansi.enabled", "true")]
+    );
+    rt.set_config_defaults(&[], &["spark.sql.ansi.enabled".to_owned()])
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(rt.config_defaults().is_empty());
+}
+
+#[test]
+fn a_build_time_session_key_is_refused() {
+    let rt = runtime();
+    let err = rt
+        .set_config_defaults(&[pair("krishiv.session.memoryLimit", "64m")], &[])
+        .err()
+        .unwrap_or_else(|| panic!("a build-time key was accepted"));
+    assert_eq!(
+        err.error_class().name(),
+        ErrorClass::CannotModifyStaticConfig.name()
+    );
+}
+
+#[tokio::test]
+async fn new_clone_and_reset_see_the_defaults() {
+    let rt = runtime();
+    let base = Session::builder()
+        .runtime(Arc::clone(&rt))
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    rt.set_config_defaults(&[pair("krishiv.sql.ansi.enabled", "true")], &[])
+        .unwrap_or_else(|e| panic!("{e}"));
+    let key = "krishiv.sql.ansi.enabled";
+    let fresh = base.new_session();
+    assert_eq!(
+        fresh.conf().get(key).as_deref(),
+        Some("true"),
+        "new_session"
+    );
+    fresh
+        .conf()
+        .set(key, "false")
+        .unwrap_or_else(|e| panic!("{e}"));
+    fresh
+        .sql("RESET")
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .collect()
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(fresh.conf().get(key).as_deref(), Some("true"), "RESET");
+    let clone = base.clone_session().unwrap_or_else(|e| panic!("{e}"));
+    clone
+        .conf()
+        .set(key, "false")
+        .unwrap_or_else(|e| panic!("{e}"));
+    clone
+        .sql("RESET")
+        .await
+        .unwrap_or_else(|e| panic!("{e}"))
+        .collect()
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        clone.conf().get(key).as_deref(),
+        Some("true"),
+        "clone RESET"
+    );
+}

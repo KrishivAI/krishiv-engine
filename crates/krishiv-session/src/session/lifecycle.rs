@@ -259,7 +259,7 @@ impl Session {
         };
         // The runtime's starting configuration, validated when it was built
         // (for a private runtime, the builder's configuration).
-        let config = Config::clone(&runtime.config);
+        let config = runtime.current_config();
         inherit_denials(self, Self::on_runtime(runtime, config, parts))
     }
 
@@ -286,7 +286,7 @@ impl Session {
             functions: state.base_functions.clone(),
             admission: Some(Arc::clone(&state.admission)),
         };
-        let config = Config::clone(&runtime.config);
+        let config = runtime.current_config();
         Self::on_runtime(runtime, config, parts)
     }
 
@@ -344,7 +344,7 @@ impl Session {
         let sql_functions = state.sql_functions.copy();
         let catalog = state.catalog.copy();
         let seed = Seed {
-            conf: state.conf.copy_onto(&state.runtime.config),
+            conf: state.conf.copy_onto(&state.runtime.current_config()),
             catalog,
             variables: state.variables.copy(),
             // Shared, not copied: the SDK's library has no copy (a public

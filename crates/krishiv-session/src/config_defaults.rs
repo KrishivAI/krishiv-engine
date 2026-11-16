@@ -20,6 +20,26 @@ use crate::conf::{ConfStore, RuntimeConf, is_modifiable};
 use crate::runtime::EngineRuntime;
 
 impl EngineRuntime {
+    /// The configuration a new session starts from, and the one its `RESET` returns to: the
+    /// startup pairs with the defaults set at run time on top.
+    pub(crate) fn current_config(&self) -> Config {
+        let admin = Arc::clone(
+            &self
+                .admin_defaults
+                .read()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+        if admin.is_empty() {
+            return Config::clone(&self.config);
+        }
+        let mut config = Config::clone(&self.config);
+        for (key, value) in admin.iter() {
+            // Validated when it was set; a failure here keeps the startup value.
+            let _ = config.set(key, value);
+        }
+        config
+    }
+
     /// The session defaults set at run time, as `(canonical key, value)` in key order
     /// (`GetConfig` shows them with source `admin`).
     #[must_use]
@@ -47,12 +67,13 @@ impl EngineRuntime {
         set: &[(String, String)],
         unset: &[String],
     ) -> Result<(), KrishivError> {
-        let mut next: BTreeMap<String, String> = self
+        // One write lock for the whole read-modify-write: two concurrent calls never start from the
+        // same copy, so neither loses the other's change.
+        let mut guard = self
             .admin_defaults
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .as_ref()
-            .clone();
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        let mut next: BTreeMap<String, String> = guard.as_ref().clone();
         let mut set_keys = Vec::with_capacity(set.len());
         for (key, value) in set {
             let entry = admin_settable(key)?;
@@ -74,10 +95,7 @@ impl EngineRuntime {
             }
             next.remove(entry);
         }
-        *self
-            .admin_defaults
-            .write()
-            .unwrap_or_else(PoisonError::into_inner) = Arc::new(next);
+        *guard = Arc::new(next);
         Ok(())
     }
 }
@@ -147,8 +165,10 @@ fn is_sensitive(key: &str) -> bool {
 impl EngineRuntime {
     /// The configuration the runtime serves, one row per registered key plus the startup keys the
     /// registry does not know, in key order; `prefix` keeps the keys that start with it. A
-    /// sensitive key (`krishiv.auth.*` and the path allowlists) shows its value only when
-    /// `reveal_sensitive` is set (the caller holds `Manage` on the cluster), else `withheld`.
+    /// sensitive key (the path allowlists) shows its value only when `reveal_sensitive` is set (the
+    /// caller holds `Manage` on the cluster), else `withheld`. The `krishiv.auth.*` settings are
+    /// listener settings that never reach the runtime's configuration, so they are not listed
+    /// here: the server layer lists them (withheld the same way) beside these rows.
     #[must_use]
     pub fn config_listing(
         &self,
