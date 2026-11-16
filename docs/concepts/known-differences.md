@@ -122,9 +122,16 @@ Pinned by `crates/krishiv-session/tests/aggregate_histogram_numeric.rs` and the 
 
 ## `SELECT *` next to `window(..)` or `session_window(..)`
 
-`SELECT *, window(ts, '5 minutes') FROM t` returns the window column once, as Spark. A table with a column
-named `window` (or `session_window`) loses it from the `*` there: Krishiv excludes the name from the star
-because it adds the window column to the input before the star expands, where Spark expands first.
+`SELECT *, window(ts, '5 minutes') FROM t` returns the window column once, as Spark does, also with a
+`QUALIFY` over a window. Krishiv adds the window column to the input before the star expands, where Spark
+expands the star first, so it leaves the added column out of a bare `*`. Three cases differ:
+
+- A table with a column named `window` (or `session_window`) next to a window call fails with
+  `AMBIGUOUS_REFERENCE`.
+- `SELECT * EXCEPT (window), window(..)` fails with `EXCEPT_OVERLAPPING_COLUMNS` where Spark answers
+  `UNRESOLVED_COLUMN`.
+- A `*` next to a window call in a `WHERE` or `ORDER BY`, and `struct(*)` next to one, are not pinned against a
+  Spark run; the star may include a trailing `window` column.
 
 ## Filters move below only their deterministic prefix
 

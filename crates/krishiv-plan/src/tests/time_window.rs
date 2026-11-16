@@ -188,6 +188,43 @@ fn a_star_next_to_a_window_returns_the_window_column_once() {
 }
 
 #[test]
+fn a_star_with_qualify_over_a_window_returns_the_window_column_once() {
+    // `SELECT *, row_number() OVER (ORDER BY ts) AS rn FROM t QUALIFY window(ts, '5 minutes').start IS NOT NULL`
+    let qualified = LogicalPlan::table(["t"])
+        .project(vec![
+            star(),
+            Expr::new(ExprNode::Window(crate::WindowExpr {
+                function: f("row_number", vec![]).into(),
+                window: crate::WindowSpecRef::Spec(crate::WindowSpec {
+                    partition_by: vec![],
+                    order_by: vec![crate::SortOrder::asc(c("ts"))],
+                    frame: None,
+                }),
+            }))
+            .alias("rn"),
+        ])
+        .filter(f(
+            "qualify",
+            vec![f(
+                "isnotnull",
+                vec![Expr::new(ExprNode::Field {
+                    base: window("ts", &["5 minutes"]).into(),
+                    name: "start".to_owned(),
+                })],
+            )],
+        ))
+        .with_origin(Origin::sql(
+            crate::SourceId(0),
+            crate::Span { start: 0, end: 1 },
+        ));
+    let r = run(qualified);
+    assert_eq!(class(&r), "OK", "{:?}", r.as_ref().err().map(|e| &e.error));
+    // The window column comes first, once, as Spark's rewrite puts it; the star has the table's columns.
+    let names: Vec<String> = r.unwrap().output.iter().map(|c| c.name.clone()).collect();
+    assert_eq!(names, ["window", "a", "ts", "n", "x", "rn"]);
+}
+
+#[test]
 fn two_distinct_windows_in_one_operator_are_refused() {
     let two = LogicalPlan::table(["t"]).project(vec![
         window("ts", &["5 minutes"]).alias("w1"),

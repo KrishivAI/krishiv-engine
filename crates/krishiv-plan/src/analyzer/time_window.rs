@@ -384,7 +384,7 @@ fn node(p: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, AnalysisError> {
         return Ok(p);
     };
     let mut selected = vec![col(name, origin)];
-    selected.extend(exprs.iter().cloned());
+    selected.extend(exprs.iter().map(|e| except_star(e, name)));
     let widened = Arc::new(
         LogicalPlan::new(PlanNode::Project {
             input,
@@ -397,25 +397,13 @@ fn node(p: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, AnalysisError> {
 }
 
 /// A select list's bare `*` stands for the input's columns as the query wrote them: Spark expands it before
-/// it adds the window column, so `SELECT *, window(ts, ..)` has `window` once. (A table with a column of
-/// the same name loses it from the `*`: a known difference.)
+/// it adds the window column, so `SELECT *, window(ts, ..)` has `window` once. A table that has a column of
+/// the same name makes the reference ambiguous.
 fn except_added_column(p: Arc<LogicalPlan>, name: &str) -> Arc<LogicalPlan> {
     let PlanNode::Project { input, exprs } = &p.node else {
         return p;
     };
-    let exprs = exprs
-        .iter()
-        .map(|e| match &e.node {
-            ExprNode::Star(s)
-                if s.qualifier.is_empty() && s.regex.is_none() && s.position.is_none() =>
-            {
-                let mut s = s.clone();
-                s.except.push(vec![name.to_owned()]);
-                Arc::new(Expr::new(ExprNode::Star(s)).with_origin(e.origin))
-            }
-            _ => Arc::clone(e),
-        })
-        .collect();
+    let exprs = exprs.iter().map(|e| except_star(e, name)).collect();
     Arc::new(
         LogicalPlan::new(PlanNode::Project {
             input: Arc::clone(input),
@@ -423,6 +411,20 @@ fn except_added_column(p: Arc<LogicalPlan>, name: &str) -> Arc<LogicalPlan> {
         })
         .with_origin(p.origin),
     )
+}
+
+/// `e`, a bare `*`, without the column `name` the rewrite added; any other expression as it is.
+fn except_star(e: &Arc<Expr>, name: &str) -> Arc<Expr> {
+    match &e.node {
+        ExprNode::Star(s)
+            if s.qualifier.is_empty() && s.regex.is_none() && s.position.is_none() =>
+        {
+            let mut s = s.clone();
+            s.except.push(vec![name.to_owned()]);
+            Arc::new(Expr::new(ExprNode::Star(s)).with_origin(e.origin))
+        }
+        _ => Arc::clone(e),
+    }
 }
 
 /// The only input of `p`.

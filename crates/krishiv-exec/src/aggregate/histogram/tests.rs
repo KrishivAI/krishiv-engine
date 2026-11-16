@@ -116,7 +116,9 @@ fn bad_state_is_refused() {
 }
 
 #[test]
-fn nan_and_infinities_do_not_panic() {
+fn nan_and_infinities_match_spark() {
+    // Spark 4.3.0, `local[1]`, `histogram_numeric(col, 3)` over `VALUES`:
+    // NaN, 1, +Inf, -Inf, 2, NaN gave [{NaN,3},{Infinity,2},{NaN,1}] ...
     let h = hist(
         3,
         [
@@ -128,7 +130,21 @@ fn nan_and_infinities_do_not_panic() {
             f64::NAN,
         ],
     );
-    assert!(h.bins().len() <= 3);
+    let bins = h.bins();
+    assert_eq!(bins.len(), 3);
+    assert!(bins[0].0.is_nan() && bins[0].1 == 3.0);
+    assert!(bins[1].0 == f64::INFINITY && bins[1].1 == 2.0);
+    assert!(bins[2].0.is_nan() && bins[2].1 == 1.0);
+    // ... and 1, +Inf, -Inf, 2, 5 gave [{-Infinity,1},{2.666666666666667,3},{Infinity,1}].
+    let h = hist(3, [1.0, f64::INFINITY, f64::NEG_INFINITY, 2.0, 5.0]);
+    assert_eq!(
+        h.bins(),
+        &[
+            (f64::NEG_INFINITY, 1.0),
+            (2.666_666_666_666_667, 3.0),
+            (f64::INFINITY, 1.0)
+        ]
+    );
 }
 
 #[test]
@@ -137,4 +153,64 @@ fn decimal_centers_round_in_two_steps() {
     assert_eq!(decimal_unscaled_in(1.244_999_9, 4, 2), 125);
     assert_eq!(decimal_unscaled_in(2.0, 4, 2), 200);
     assert_eq!(decimal_unscaled_in(-2.5, 4, 1), -25);
+}
+
+/// The accumulator's partial and final phases (`Accumulator::update`, `state`,
+/// `merge`) equal the direct two-partition merge of the Spark golden.
+#[test]
+fn the_accumulator_merges_partial_states_like_the_golden() {
+    use crate::aggregate::{Accumulator, AggInput, AggregateExpr, AggregateFunction};
+    use arrow_array::{Array, BinaryArray, Float64Array};
+    let expr = AggregateExpr {
+        function: AggregateFunction::HistogramNumeric { nb: 3 },
+        args: vec![0],
+        input: AggInput::Raw,
+        arg_type: DataType::Float64,
+        name: "h".to_owned(),
+        mask: None,
+        element: None,
+    };
+    let acc = || {
+        let mut a = Accumulator::new(&expr, true).unwrap();
+        a.resize(1);
+        a
+    };
+    let v = fifty();
+    let mut top = acc();
+    for part in v.chunks(25) {
+        let mut a = acc();
+        let col = Arc::new(Float64Array::from(part.to_vec())) as ArrayRef;
+        a.update(
+            &vec![0; part.len()],
+            &[col],
+            &krishiv_types::batch::Weights::Const(1),
+        )
+        .unwrap();
+        // The projection counts the serialized bins of a state batch, twice.
+        let states = a.state(&[0]).unwrap();
+        let held = top.projected(0, Some(&states[0]), None);
+        let bins = states[0]
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .map(|b| (b.value(0).len() - 8) / 16)
+            .unwrap();
+        assert!(held >= top.size() + 2 * bins * 16, "{held} for {bins} bins");
+        top.merge(&[0], &states).unwrap();
+    }
+    let merged = top.state(&[0]).unwrap();
+    let merged = merged[0].as_any().downcast_ref::<BinaryArray>().unwrap();
+    assert_eq!(
+        merged.value(0),
+        two_phase(3, 2).serialize().unwrap().as_slice()
+    );
+    // A group with no value has a NULL state, which a merge skips.
+    let empty = acc();
+    let none = empty.state(&[0]).unwrap();
+    assert!(
+        none[0]
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap()
+            .is_null(0)
+    );
 }

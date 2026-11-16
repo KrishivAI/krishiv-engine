@@ -736,7 +736,7 @@ impl Accumulator {
             Kind::Exact(e) => e.projected(new, arg.map_or(0, arrow_array::Array::len)),
             Kind::Approx(g) => g.projected(new, arg.map_or(0, arrow_array::Array::len)),
             Kind::Hll(h) => h.projected(new),
-            Kind::Hist(h) => h.projected(new, arg.map_or(0, arrow_array::Array::len)),
+            Kind::Hist(h) => h.projected(new, arg),
             _ => 0,
         };
         vecs + heap

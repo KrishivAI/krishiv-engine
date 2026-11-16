@@ -284,12 +284,22 @@ impl HistAcc {
                 .sum::<usize>()
     }
 
-    /// The size after `new` more groups and `rows` more values: each value
-    /// adds at most one bin.
-    pub(crate) fn projected(&self, new: usize, rows: usize) -> usize {
-        self.size()
-            + new.saturating_mul(size_of::<NumericHistogram>())
-            + rows.saturating_mul(size_of::<(f64, f64)>())
+    /// The size after `new` more groups and an update reading `arg`: each raw
+    /// value adds at most one bin; a state column adds the bins of every
+    /// serialized histogram twice (the deserialized copy, then the growth of
+    /// the destination in the merge).
+    pub(crate) fn projected(&self, new: usize, arg: Option<&ArrayRef>) -> usize {
+        use arrow_array::Array;
+        let bin = size_of::<(f64, f64)>();
+        let bins = arg.map_or(0, |a| match a.as_any().downcast_ref::<BinaryArray>() {
+            Some(states) => (0..states.len())
+                .filter(|&i| states.is_valid(i))
+                .map(|i| states.value(i).len().saturating_sub(8) / bin)
+                .fold(0_usize, usize::saturating_add)
+                .saturating_mul(2),
+            None => a.len(),
+        });
+        self.size() + new.saturating_mul(size_of::<NumericHistogram>()) + bins.saturating_mul(bin)
     }
 
     /// Adds `v` to the histogram of group `g`.
