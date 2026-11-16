@@ -3385,6 +3385,7 @@ dependencies = [
  "arrow-schema 60.1.0",
  "futures",
  "krishiv-common",
+ "krishiv-connect-server",
  "krishiv-exec",
  "krishiv-plan",
  "krishiv-session",

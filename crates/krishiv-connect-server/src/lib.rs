@@ -17,6 +17,7 @@ pub mod config;
 pub mod execute;
 pub mod host;
 pub mod interrupt;
+pub mod local;
 pub mod manager;
 pub mod operation;
 pub mod sender;
@@ -27,6 +28,7 @@ pub mod status;
 pub use auth::{
     AuthLayer, Check, ConnectAuth, Rpc, SessionOwner, check_command, check_rpc, role_sessions,
 };
+pub use local::LocalServer;
 pub use manager::{ManagerCounts, SessionEntry, SessionLimits, SessionManager};
 pub use operation::{ExecuteLimits, Operation, Operations};
 pub use server::{ConnectServer, ConnectServerConfig};
