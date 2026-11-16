@@ -787,6 +787,15 @@ enum AggregateFunction {
   // `min` of a collated string, as `MAX_BY_KEY_FIRST`.
   // feature: collated_min_max
   AGGREGATE_FUNCTION_MIN_BY_KEY_FIRST = 48;
+  // `bitmap_construct_agg(position)`: a 4,096-byte bitmap of the positions.
+  // feature: bitmap_aggregates
+  AGGREGATE_FUNCTION_BITMAP_CONSTRUCT_AGG = 49;
+  // `bitmap_or_agg(bitmap)`.
+  // feature: bitmap_aggregates
+  AGGREGATE_FUNCTION_BITMAP_OR_AGG = 50;
+  // `bitmap_and_agg(bitmap)`.
+  // feature: bitmap_aggregates
+  AGGREGATE_FUNCTION_BITMAP_AND_AGG = 51;
 }
 
 enum AggregateInput {

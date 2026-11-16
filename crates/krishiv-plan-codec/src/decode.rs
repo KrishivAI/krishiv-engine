@@ -1289,6 +1289,9 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
         MinBy => AggregateFunction::MinBy,
         MaxByKeyFirst => AggregateFunction::MaxByKeyFirst,
         MinByKeyFirst => AggregateFunction::MinByKeyFirst,
+        BitmapConstructAgg => AggregateFunction::BitmapConstructAgg,
+        BitmapOrAgg => AggregateFunction::BitmapOrAgg,
+        BitmapAndAgg => AggregateFunction::BitmapAndAgg,
         Listagg => if a.listagg_desc.len() != a.listagg_nulls_first.len() {
             return Err(corrupt("a listagg state of another shape than its orders"));
         } else {

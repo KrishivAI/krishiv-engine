@@ -430,6 +430,12 @@ pub(super) fn approx_count_distinct(_: &CallTypes<'_>) -> Result<ArgType, Krishi
     Ok(ArgType::new(DataType::Long, false))
 }
 
+/// The bitmap aggregates: a `BINARY` that is never NULL (an empty group is
+/// the bitmap of no bits, or of every bit for `bitmap_and_agg`).
+pub(super) fn bitmap_agg(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Binary, false))
+}
+
 pub(super) fn aggregates() -> Vec<Spec> {
     let numeric = || Inputs::Expects(vec![InputType::NumericOrTimestamp]);
     let boolean_arg = || Inputs::Expects(vec![exact(DataType::Boolean)]);
@@ -524,6 +530,26 @@ pub(super) fn aggregates() -> Vec<Spec> {
         // as `listagg` throughout for Spark's display name.
         aggregate("listagg", string_or_bytes(), listagg, Aggregate::ListAgg),
         aggregate("string_agg", string_or_bytes(), listagg, Aggregate::ListAgg),
+        // The bitmap aggregates (P3-T086): `bitmap_construct_agg` casts its
+        // position to `BIGINT`; the others take a `BINARY` as it is.
+        aggregate(
+            "bitmap_construct_agg",
+            Inputs::Expects(vec![exact(DataType::Long)]),
+            bitmap_agg,
+            Aggregate::BitmapConstructAgg,
+        ),
+        aggregate(
+            "bitmap_or_agg",
+            Inputs::Expects(vec![InputType::Strict(DataType::Binary)]),
+            bitmap_agg,
+            Aggregate::BitmapOrAgg,
+        ),
+        aggregate(
+            "bitmap_and_agg",
+            Inputs::Expects(vec![InputType::Strict(DataType::Binary)]),
+            bitmap_agg,
+            Aggregate::BitmapAndAgg,
+        ),
         // `try_sum` / `try_avg`: `sum` / `avg` that give NULL instead of
         // an overflow error, ANSI on or off.
         aggregate("try_sum", numeric(), try_sum, Aggregate::TrySum),

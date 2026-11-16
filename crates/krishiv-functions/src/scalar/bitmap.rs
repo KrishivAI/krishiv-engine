@@ -57,7 +57,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
                 Ok(Arc::new(out) as ArrayRef)
             }))
         }
-        ("bitmap_count", DataType::Binary) => {
+        ("bitmap_count", DataType::Binary | DataType::BinaryView | DataType::LargeBinary) => {
             Ok(Binding::new(DataType::Int64, |x: &Inputs<'_>| {
                 let b = x.binaries(0)?;
                 let out: Int64Array = b

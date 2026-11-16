@@ -492,9 +492,6 @@ __all__ = [
 ]
 
 _ENGINE_UNSUPPORTED = (
-    "bitmap_and_agg",
-    "bitmap_construct_agg",
-    "bitmap_or_agg",
     "collate",
     "count_min_sketch",
     "histogram_numeric",
@@ -846,8 +843,8 @@ def bit_xor(col: ColumnOrName) -> Column:
 
 
 def bitmap_and_agg(col: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("bitmap_and_agg")
+    """Calls the registry function ``bitmap_and_agg``."""
+    return _call("bitmap_and_agg", _named(col, "col"))
 
 
 def bitmap_bit_position(col: ColumnOrName) -> Column:
@@ -861,8 +858,8 @@ def bitmap_bucket_number(col: ColumnOrName) -> Column:
 
 
 def bitmap_construct_agg(col: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("bitmap_construct_agg")
+    """Calls the registry function ``bitmap_construct_agg``."""
+    return _call("bitmap_construct_agg", _named(col, "col"))
 
 
 def bitmap_count(col: ColumnOrName) -> Column:
@@ -871,8 +868,8 @@ def bitmap_count(col: ColumnOrName) -> Column:
 
 
 def bitmap_or_agg(col: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("bitmap_or_agg")
+    """Calls the registry function ``bitmap_or_agg``."""
+    return _call("bitmap_or_agg", _named(col, "col"))
 
 
 def bitwiseNOT(col: ColumnOrName) -> Column:
