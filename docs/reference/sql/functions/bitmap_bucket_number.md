@@ -8,7 +8,7 @@ description: "Returns the bucket number for the given input child expression."
 
 Returns the bucket number for the given input child expression.
 
-**Applies to:** not available in Krishiv yet. Spark: 3.5 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 3.5 and later.
 
 ## Syntax
 
@@ -20,7 +20,7 @@ bitmap_bucket_number(child)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `misc_funcs` |
 | Kind | scalar (function) |
 | Added in Spark | 3.5.0 |
@@ -45,6 +45,7 @@ Error: KRISHIV_UNSUPPORTED_FEATURE
 ## Version history
 
 - Added in Spark 3.5.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

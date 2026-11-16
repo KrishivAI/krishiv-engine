@@ -9,7 +9,7 @@ description: "Returns a bitmap with the positions of the bits set from all the v
 Returns a bitmap with the positions of the bits set from all the values from
 the child expression. The child expression will most likely be bitmap_bit_position().
 
-**Applies to:** not available in Krishiv yet. Spark: 3.5 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 3.5 and later.
 
 ## Syntax
 
@@ -21,7 +21,7 @@ bitmap_construct_agg(child)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `agg_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 3.5.0 |
@@ -46,6 +46,7 @@ Error: KRISHIV_UNSUPPORTED_FEATURE
 ## Version history
 
 - Added in Spark 3.5.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 
