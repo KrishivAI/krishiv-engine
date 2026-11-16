@@ -660,7 +660,7 @@ pub krishiv_session::catalog_decl::CatalogDeclarations::catalogs: alloc::vec::Ve
 pub krishiv_session::catalog_decl::CatalogDeclarations::default: core::option::Option<alloc::string::String>
 pub krishiv_session::catalog_decl::CatalogDeclarations::warnings: alloc::vec::Vec<alloc::string::String>
 impl krishiv_session::catalog_decl::CatalogDeclarations
-pub fn krishiv_session::catalog_decl::CatalogDeclarations::parse<'a>(impl core::iter::traits::collect::IntoIterator<Item = (&'a str, &'a str)>, krishiv_session::catalog_decl::DeclMode, &[krishiv_session::catalog_decl::CatalogType], core::option::Option<&krishiv_store::egress::EgressScope>) -> core::result::Result<Self, krishiv_common::error::KrishivError>
+pub fn krishiv_session::catalog_decl::CatalogDeclarations::parse<'a>(impl core::iter::traits::collect::IntoIterator<Item = (&'a str, &'a str)>, krishiv_session::catalog_decl::DeclMode, &[krishiv_session::catalog_decl::CatalogType], core::option::Option<&alloc::sync::Arc<krishiv_store::egress::EgressPolicy>>) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 impl core::clone::Clone for krishiv_session::catalog_decl::CatalogDeclarations
 pub fn krishiv_session::catalog_decl::CatalogDeclarations::clone(&self) -> krishiv_session::catalog_decl::CatalogDeclarations
 impl core::cmp::Eq for krishiv_session::catalog_decl::CatalogDeclarations
@@ -675,6 +675,43 @@ pub const krishiv_session::catalog_decl::CATALOG_PREFIX: &str
 pub const krishiv_session::catalog_decl::DEFAULT_CATALOG_KEY: &str
 pub const krishiv_session::catalog_decl::SPARK_CATALOG_PREFIX: &str
 pub fn krishiv_session::catalog_decl::is_catalog_key(&str) -> bool
+pub fn krishiv_session::catalog_decl::is_declaration_key(&str) -> bool
+pub mod krishiv_session::catalog_registry
+#[non_exhaustive] pub struct krishiv_session::catalog_registry::CatalogDeps
+pub krishiv_session::catalog_registry::CatalogDeps::egress: alloc::sync::Arc<krishiv_store::egress::EgressPolicy>
+pub krishiv_session::catalog_registry::CatalogDeps::max_response_bytes: u64
+pub krishiv_session::catalog_registry::CatalogDeps::mode: krishiv_session::catalog_decl::DeclMode
+pub krishiv_session::catalog_registry::CatalogDeps::proxy: core::option::Option<alloc::string::String>
+pub krishiv_session::catalog_registry::CatalogDeps::request_timeout: core::time::Duration
+impl krishiv_session::catalog_registry::CatalogDeps
+pub fn krishiv_session::catalog_registry::CatalogDeps::new(krishiv_session::catalog_decl::DeclMode, alloc::sync::Arc<krishiv_store::egress::EgressPolicy>) -> Self
+pub fn krishiv_session::catalog_registry::CatalogDeps::with_proxy(self, core::option::Option<alloc::string::String>) -> Self
+impl core::clone::Clone for krishiv_session::catalog_registry::CatalogDeps
+pub fn krishiv_session::catalog_registry::CatalogDeps::clone(&self) -> krishiv_session::catalog_registry::CatalogDeps
+impl core::fmt::Debug for krishiv_session::catalog_registry::CatalogDeps
+pub fn krishiv_session::catalog_registry::CatalogDeps::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct krishiv_session::catalog_registry::CatalogRegistry
+impl krishiv_session::catalog_registry::CatalogRegistry
+pub fn krishiv_session::catalog_registry::CatalogRegistry::catalog(&self, &str, core::option::Option<&str>) -> core::option::Option<alloc::sync::Arc<dyn krishiv_plan::analyzer::catalog::Catalog>>
+pub fn krishiv_session::catalog_registry::CatalogRegistry::declarations(&self) -> impl core::iter::traits::iterator::Iterator<Item = &krishiv_session::catalog_decl::CatalogDecl>
+pub fn krishiv_session::catalog_registry::CatalogRegistry::default_catalog(&self) -> core::option::Option<&str>
+pub fn krishiv_session::catalog_registry::CatalogRegistry::empty(krishiv_session::catalog_decl::DeclMode) -> Self
+pub fn krishiv_session::catalog_registry::CatalogRegistry::mode(&self) -> krishiv_session::catalog_decl::DeclMode
+pub fn krishiv_session::catalog_registry::CatalogRegistry::visible<'a>(&'a self, core::option::Option<&'a str>) -> impl core::iter::traits::iterator::Iterator<Item = &'a krishiv_session::catalog_decl::CatalogDecl>
+pub fn krishiv_session::catalog_registry::CatalogRegistry::warnings(&self) -> &[alloc::string::String]
+impl core::fmt::Debug for krishiv_session::catalog_registry::CatalogRegistry
+pub fn krishiv_session::catalog_registry::CatalogRegistry::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct krishiv_session::catalog_registry::CatalogSetup
+impl krishiv_session::catalog_registry::CatalogSetup
+pub fn krishiv_session::catalog_registry::CatalogSetup::factory(self, alloc::sync::Arc<dyn krishiv_session::catalog_registry::CatalogFactory>) -> Self
+pub fn krishiv_session::catalog_registry::CatalogSetup::new(krishiv_session::catalog_decl::DeclMode) -> Self
+pub fn krishiv_session::catalog_registry::CatalogSetup::setting(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+impl core::fmt::Debug for krishiv_session::catalog_registry::CatalogSetup
+pub fn krishiv_session::catalog_registry::CatalogSetup::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub trait krishiv_session::catalog_registry::CatalogFactory: core::fmt::Debug + core::marker::Send + core::marker::Sync
+pub fn krishiv_session::catalog_registry::CatalogFactory::build(&self, &krishiv_session::catalog_decl::CatalogDecl, &krishiv_session::catalog_registry::CatalogDeps) -> core::result::Result<alloc::sync::Arc<dyn krishiv_plan::analyzer::catalog::Catalog>, krishiv_common::error::KrishivError>
+pub fn krishiv_session::catalog_registry::CatalogFactory::kind(&self) -> krishiv_session::catalog_decl::CatalogType
+pub fn krishiv_session::catalog_registry::CatalogFactory::validate(&self, &krishiv_session::catalog_decl::CatalogDecl, &krishiv_session::catalog_registry::CatalogDeps) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub mod krishiv_session::egress
 pub fn krishiv_session::egress::egress_policy(&krishiv_common::config::Config, impl core::ops::function::Fn(&str) -> core::option::Option<alloc::string::String>) -> core::result::Result<alloc::sync::Arc<krishiv_store::egress::EgressPolicy>, krishiv_common::error::KrishivError>
 pub fn krishiv_session::egress::egress_proxy(&krishiv_common::config::Config) -> core::option::Option<alloc::string::String>
@@ -1255,6 +1292,7 @@ impl krishiv_session::EngineRuntime
 pub fn krishiv_session::EngineRuntime::builder() -> krishiv_session::EngineRuntimeBuilder
 pub fn krishiv_session::EngineRuntime::cancel(&self, &krishiv_session::QueryId, krishiv_session::CancelReason) -> bool
 pub fn krishiv_session::EngineRuntime::cancel_by_tag(&self, &str, &str, bool) -> alloc::vec::Vec<krishiv_session::QueryId>
+pub fn krishiv_session::EngineRuntime::catalogs(&self) -> &alloc::sync::Arc<krishiv_session::catalog_registry::CatalogRegistry>
 pub fn krishiv_session::EngineRuntime::egress_policy(&self) -> &alloc::sync::Arc<krishiv_store::egress::EgressPolicy>
 pub fn krishiv_session::EngineRuntime::executor(&self) -> &alloc::sync::Arc<dyn krishiv_exec::executor::Executor>
 pub fn krishiv_session::EngineRuntime::expire_session(&self, &str) -> core::option::Option<usize>
@@ -1268,6 +1306,7 @@ pub fn krishiv_session::EngineRuntime::fmt(&self, &mut core::fmt::Formatter<'_>)
 pub struct krishiv_session::EngineRuntimeBuilder
 impl krishiv_session::EngineRuntimeBuilder
 pub fn krishiv_session::EngineRuntimeBuilder::build(self) -> core::result::Result<alloc::sync::Arc<krishiv_session::EngineRuntime>, krishiv_common::error::KrishivError>
+pub fn krishiv_session::EngineRuntimeBuilder::catalogs(self, krishiv_session::catalog_registry::CatalogSetup) -> Self
 pub fn krishiv_session::EngineRuntimeBuilder::config(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn krishiv_session::EngineRuntimeBuilder::executor(self, alloc::sync::Arc<dyn krishiv_exec::executor::Executor>) -> Self
 impl core::fmt::Debug for krishiv_session::EngineRuntimeBuilder

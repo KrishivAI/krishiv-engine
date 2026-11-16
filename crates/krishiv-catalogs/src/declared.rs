@@ -172,19 +172,25 @@ impl Catalog for RestCatalog {
             }
             let client = Arc::clone(&self.client);
             let (namespace, name) = (id.namespace.clone(), id.name.clone());
-            // The client blocks until its deadline: never on a compute worker.
-            let loaded = tokio::task::spawn_blocking(move || client.load_table(&namespace, &name))
-                .await
-                .map_err(|_| {
-                    crate::iceberg_rest::RestError::Transport(
-                        "the catalog call did not finish".to_owned(),
-                    )
-                    .into_error(
-                        self.client.name(),
-                        "the table",
-                        &crate::iceberg_rest::RestLimits::default(),
-                    )
-                })??;
+            // The client blocks until its deadline: never on a compute worker. Outside a tokio
+            // runtime (an embedded host on another executor) there is no blocking pool, and the
+            // call runs on the caller's thread, which is blocking already.
+            let loaded = match tokio::runtime::Handle::try_current() {
+                Ok(handle) => handle
+                    .spawn_blocking(move || client.load_table(&namespace, &name))
+                    .await
+                    .map_err(|_| {
+                        crate::iceberg_rest::RestError::Transport(
+                            "the catalog call did not finish".to_owned(),
+                        )
+                        .into_error(
+                            self.client.name(),
+                            "the table",
+                            &crate::iceberg_rest::RestLimits::default(),
+                        )
+                    })??,
+                Err(_) => client.load_table(&namespace, &name)?,
+            };
             let Some(_table) = loaded else {
                 return Ok(None);
             };

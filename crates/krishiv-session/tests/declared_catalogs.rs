@@ -56,11 +56,13 @@ impl Catalog for OneTable {
     }
 }
 
-/// Builds [`OneTable`] for `memory` declarations; the first `fail_first` builds fail.
+/// Builds [`OneTable`] for `memory` declarations; the first `fail_first` builds fail; each
+/// build takes `delay`.
 #[derive(Debug, Default)]
 struct Fake {
     builds: AtomicUsize,
     fail_first: usize,
+    delay: std::time::Duration,
 }
 
 impl CatalogFactory for Fake {
@@ -74,6 +76,7 @@ impl CatalogFactory for Fake {
         _deps: &CatalogDeps,
     ) -> Result<Arc<dyn Catalog>, KrishivError> {
         let n = self.builds.fetch_add(1, Ordering::SeqCst);
+        std::thread::sleep(self.delay);
         if n < self.fail_first {
             return Err(krishiv_common::error::KrishivCatalogFailure {
                 catalog: decl.name.clone(),
@@ -207,8 +210,8 @@ fn unresolved_secret_reference_fails_startup() {
 #[test]
 fn a_failed_build_is_not_kept() {
     let factory = Arc::new(Fake {
-        builds: AtomicUsize::new(0),
         fail_first: 1,
+        ..Fake::default()
     });
     let rt = EngineRuntime::builder()
         .catalogs(setup(DeclMode::Embedded, &LAKE, Arc::clone(&factory)))
@@ -378,4 +381,62 @@ fn embedded_set_catalog_unchanged() {
         .build()
         .unwrap();
     assert_eq!(schema_of(&s, "SELECT * FROM lake.db.t").unwrap(), ["x"]);
+}
+
+/// Review 58a2 N2: two first uses at once both succeed with the same catalog; later uses build
+/// nothing more.
+#[test]
+fn concurrent_first_uses_both_succeed() {
+    let factory = Arc::new(Fake {
+        delay: std::time::Duration::from_millis(200),
+        ..Fake::default()
+    });
+    let rt = EngineRuntime::builder()
+        .catalogs(setup(DeclMode::Embedded, &LAKE, Arc::clone(&factory)))
+        .build()
+        .unwrap();
+    let threads: Vec<_> = (0..2)
+        .map(|_| {
+            let rt = Arc::clone(&rt);
+            std::thread::spawn(move || {
+                let s = Session::builder().runtime(rt).build().unwrap();
+                schema_of(&s, "SELECT * FROM lake.db.t").map_err(|e| e.to_string())
+            })
+        })
+        .collect();
+    for t in threads {
+        assert_eq!(t.join().unwrap().unwrap(), ["x"]);
+    }
+    let built = factory.builds.load(Ordering::SeqCst);
+    assert!((1..=2).contains(&built), "{built}");
+    let s = Session::builder().runtime(rt).build().unwrap();
+    assert_eq!(schema_of(&s, "SELECT * FROM lake.db.t").unwrap(), ["x"]);
+    assert_eq!(
+        factory.builds.load(Ordering::SeqCst),
+        built,
+        "the stored catalog is shared"
+    );
+}
+
+/// Review 58a2 M3: a server runtime takes no declaration through its configuration either.
+#[test]
+fn server_runtime_refuses_declarations_in_its_configuration() {
+    for key in KEYS {
+        let e = EngineRuntime::builder()
+            .config(key, "memory")
+            .catalogs(setup(DeclMode::Server, &[], Arc::default()))
+            .build()
+            .unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "CANNOT_MODIFY_STATIC_CONFIG",
+            "{key}"
+        );
+    }
+    // Registered catalog settings stay configuration.
+    EngineRuntime::builder()
+        .config("krishiv.catalog.requestTimeout", "5s")
+        .catalogs(setup(DeclMode::Server, &[], Arc::default()))
+        .build()
+        .unwrap();
 }

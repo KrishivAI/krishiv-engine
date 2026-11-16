@@ -158,6 +158,11 @@ impl fmt::Debug for CatalogSetup {
 }
 
 impl CatalogSetup {
+    /// Where the declarations come from.
+    pub(crate) fn mode(&self) -> DeclMode {
+        self.mode
+    }
+
     /// No declarations yet, for `mode`.
     pub fn new(mode: DeclMode) -> Self {
         Self {

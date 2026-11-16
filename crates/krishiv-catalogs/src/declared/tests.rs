@@ -226,3 +226,37 @@ fn startup_validation_refuses_what_the_client_cannot_do() {
     let e = IcebergRestFactory.validate(&d, &deps).unwrap_err();
     assert!(!e.to_string().contains("hunter2"), "{e}");
 }
+
+/// Polls `f` to completion on the calling thread, with no tokio runtime anywhere.
+fn poll_without_runtime<F: std::future::Future>(f: F) -> F::Output {
+    let mut f = std::pin::pin!(f);
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    loop {
+        if let std::task::Poll::Ready(v) = f.as_mut().poll(&mut cx) {
+            return v;
+        }
+        std::thread::yield_now();
+    }
+}
+
+/// Review 58a2 M1: outside a tokio runtime (an embedded host on `futures::executor`), a table
+/// load runs the blocking call on the caller's thread instead of panicking.
+#[test]
+fn load_table_outside_a_tokio_runtime() {
+    let server = catalog_server();
+    let d = decl(
+        &[
+            ("krishiv.catalog.lake.type", "iceberg-rest"),
+            ("krishiv.catalog.lake.uri", server.base.as_str()),
+        ],
+        DeclMode::Embedded,
+    );
+    let catalog = IcebergRestFactory
+        .build(&d, &deps(DeclMode::Embedded, PrivateAddresses::Allow))
+        .unwrap();
+    assert!(tokio::runtime::Handle::try_current().is_err());
+    let found = poll_without_runtime(catalog.load_table(&ident(&["db"], "missing"), None, FORM));
+    assert!(found.unwrap().is_none());
+    let e = poll_without_runtime(catalog.load_table(&ident(&["db"], "t"), None, FORM)).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+}

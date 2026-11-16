@@ -297,6 +297,20 @@ impl EngineRuntime {
         // Diagnostics first: installs the tokio-console subscriber when the
         // feature is on and `KRISHIV_TOKIO_CONSOLE=1`, a no-op otherwise.
         krishiv_exec::maybe_init_tokio_console();
+        // A server runtime's catalogs come from its `CatalogSetup` only: a declaration among its
+        // configuration would be listed by `SET` and declare nothing (review 58a2 M3).
+        if catalogs
+            .as_ref()
+            .is_some_and(|c| c.mode() == crate::catalog_decl::DeclMode::Server)
+            && let Some((key, _)) = pairs
+                .iter()
+                .find(|(k, _)| crate::catalog_decl::is_declaration_key(k))
+        {
+            return Err(CannotModifyStaticConfig {
+                key: format!("\"{key}\""),
+            }
+            .into());
+        }
         crate::conf::check_pairs(&pairs)?;
         let (config, _) = Config::from_pairs(pairs.iter().cloned())?;
         let executor: Arc<dyn Executor> = match executor {

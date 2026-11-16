@@ -40,12 +40,23 @@ pub const SPARK_CATALOG_PREFIX: &str = "spark.sql.catalog.";
 /// `krishiv.catalog.default` (Spark's `spark.sql.defaultCatalog`).
 pub const DEFAULT_CATALOG_KEY: &str = "krishiv.catalog.default";
 
-/// Whether `key` declares a catalog: a `krishiv.catalog.*` or `spark.sql.catalog.*` key. In
-/// server mode such keys are startup only, for every role (§2.2, decision 1).
+/// `key` after `prefix`, the prefix matched in any ASCII letter case: the one prefix match of
+/// [`is_catalog_key`] and [`CatalogDeclarations::parse`], so no key one routes to the
+/// declarations is missed by the other (review 58a2 B1).
+fn strip_prefix_ci<'a>(key: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = key.get(..prefix.len())?;
+    head.eq_ignore_ascii_case(prefix)
+        .then(|| key.get(prefix.len()..))
+        .flatten()
+}
+
+/// Whether `key` declares a catalog: a `krishiv.catalog.*` or `spark.sql.catalog.*` key, the
+/// prefix in any letter case. In server mode such keys are startup only, for every role (§2.2,
+/// decision 1).
 #[must_use]
 pub fn is_catalog_key(key: &str) -> bool {
-    let lower = key.to_ascii_lowercase();
-    lower.starts_with(CATALOG_PREFIX) || lower.starts_with(SPARK_CATALOG_PREFIX)
+    strip_prefix_ci(key, CATALOG_PREFIX).is_some()
+        || strip_prefix_ci(key, SPARK_CATALOG_PREFIX).is_some()
 }
 
 /// Whether `key` is part of a catalog declaration: a catalog key ([`is_catalog_key`]) that is
@@ -370,15 +381,17 @@ impl CatalogDeclarations {
         let mut raw: BTreeMap<String, Raw> = BTreeMap::new();
         let mut default = None;
         for (key, value) in settings {
-            if key == DEFAULT_CATALOG_KEY || key == "spark.sql.defaultCatalog" {
+            if key.eq_ignore_ascii_case(DEFAULT_CATALOG_KEY)
+                || key.eq_ignore_ascii_case("spark.sql.defaultCatalog")
+            {
                 default = Some(value.trim().to_owned());
             } else if !is_declaration_key(key) {
                 // A registered engine setting (`krishiv.catalog.requestTimeout`) or no catalog key.
-            } else if let Some(rest) = key.strip_prefix(CATALOG_PREFIX) {
+            } else if let Some(rest) = strip_prefix_ci(key, CATALOG_PREFIX) {
                 let Some((name, field)) = rest.split_once('.') else {
                     return Err(invalid(
                         key,
-                        value,
+                        krishiv_common::secret::REDACTED,
                         "expected krishiv.catalog.<name>.<setting>",
                     ));
                 };
@@ -395,7 +408,7 @@ impl CatalogDeclarations {
                 entry
                     .fields
                     .insert(field.to_owned(), (key.to_owned(), value.to_owned()));
-            } else if let Some(rest) = key.strip_prefix(SPARK_CATALOG_PREFIX) {
+            } else if let Some(rest) = strip_prefix_ci(key, SPARK_CATALOG_PREFIX) {
                 match rest.split_once('.') {
                     None => {
                         raw.entry(rest.to_owned()).or_default().spark_class =
@@ -408,6 +421,14 @@ impl CatalogDeclarations {
                             .insert(format!("spark:{opt}"), (key.to_owned(), value.to_owned()));
                     }
                 }
+            } else {
+                // `is_declaration_key` routed it here, so it must not be dropped: a dropped
+                // `tenants` would widen the catalog (review 58a2 B1).
+                return Err(invalid(
+                    key,
+                    krishiv_common::secret::REDACTED,
+                    "not a catalog declaration key",
+                ));
             }
         }
         let mut out = Self {

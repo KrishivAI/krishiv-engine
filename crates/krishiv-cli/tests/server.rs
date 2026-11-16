@@ -75,6 +75,26 @@ fn catalog_declarations_are_checked_at_startup() {
         "krishiv.catalog.h.uri=thrift://metastore:9083",
     ]);
     assert!(err.contains("`hive`") && err.contains("`h`"), "{err}");
+    // In any letter case (review 58a2 B1): never dropped, never a silently wider catalog.
+    let err = refused(&[
+        "KRISHIV.CATALOG.h.type=hive",
+        "krishiv.catalog.h.uri=thrift://metastore:9083",
+    ]);
+    assert!(err.contains("`hive`"), "{err}");
+    let err = refused(&[
+        "krishiv.catalog.lake.type=iceberg-rest",
+        "krishiv.catalog.lake.uri=https://catalog.example.com/api",
+        "Krishiv.catalog.lake.tenants=",
+    ]);
+    if cfg!(feature = "catalog-iceberg-rest") {
+        assert!(err.contains("empty tenant list"), "{err}");
+    }
+    let err = refused(&[
+        "Spark.SQL.Catalog.h=org.apache.iceberg.spark.SparkCatalog",
+        "spark.sql.catalog.h.type=hive",
+        "spark.sql.catalog.h.uri=thrift://metastore:9083",
+    ]);
+    assert!(err.contains("`hive`"), "{err}");
     // A literal secret is refused without being echoed.
     let err = refused(&[
         "krishiv.catalog.lake.type=iceberg-rest",

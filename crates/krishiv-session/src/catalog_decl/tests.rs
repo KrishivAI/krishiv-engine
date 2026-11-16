@@ -575,3 +575,62 @@ fn a_userinfo_with_delimiters_is_removed_whole() {
     );
     assert_eq!(shown_uri("https://host/x"), "https://host/x");
 }
+
+/// Review 58a2 B1: a catalog key in any letter case is a declaration, parsed like the lowercase
+/// one; nothing a key routes to the declarations is ever dropped.
+#[test]
+fn catalog_key_prefixes_match_in_any_case() {
+    // A blank `tenants` under a mixed-case prefix still fails startup.
+    let mut pairs = rest_with(&[]);
+    pairs.push(("Krishiv.catalog.lake.tenants", ""));
+    assert!(err(&pairs, DeclMode::Server).contains("empty tenant list"));
+    let mut pairs = rest_with(&[]);
+    pairs.push(("KRISHIV.CATALOG.lake.tenants", "acme"));
+    let decls = parse(&pairs, DeclMode::Server).unwrap();
+    assert!(!decls.catalogs[0].visible_to(Some("globex")));
+    // A whole declaration in upper case is parsed, and refused as the lowercase one is.
+    let e = CatalogDeclarations::parse(
+        [
+            ("KRISHIV.CATALOG.h.type", "hive"),
+            ("krishiv.catalog.h.uri", "thrift://m:9083"),
+        ],
+        DeclMode::Server,
+        &[CatalogType::IcebergRest],
+        None,
+    )
+    .unwrap_err();
+    assert!(e.to_string().contains("`hive`"), "{e}");
+    // Spark's alias in another case.
+    let decls = parse(
+        &[
+            (
+                "Spark.SQL.Catalog.lake",
+                "org.apache.iceberg.spark.SparkCatalog",
+            ),
+            ("spark.sql.CATALOG.lake.type", "rest"),
+            (
+                "SPARK.sql.catalog.lake.uri",
+                "https://catalog.example.com/api",
+            ),
+        ],
+        DeclMode::Embedded,
+    )
+    .unwrap();
+    assert_eq!(decls.catalogs[0].kind, CatalogType::IcebergRest);
+    // The default key too.
+    let mut pairs = rest_with(&[]);
+    pairs.push(("Krishiv.Catalog.Default", "lake"));
+    assert_eq!(
+        parse(&pairs, DeclMode::Server).unwrap().default.as_deref(),
+        Some("lake")
+    );
+    // Every key `is_declaration_key` accepts is consumed or refused.
+    for key in [
+        "KRISHIV.CATALOG.requesttimeout",
+        "krishiv.catalog.",
+        "Spark.Sql.Catalog.",
+    ] {
+        assert!(is_declaration_key(key), "{key}");
+        assert!(parse(&[(key, "x")], DeclMode::Server).is_err(), "{key}");
+    }
+}
