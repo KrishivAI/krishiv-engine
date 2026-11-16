@@ -78,6 +78,45 @@ pub enum Mode {
     },
 }
 
+/// The static web UI assets may weigh at most 3 MiB brotli-compressed (ADR 0024's "< 2-3 MB", P3-T050).
+pub const UI_ASSET_BUDGET_BYTES: u64 = 3 * 1024 * 1024;
+
+/// The bytes of the files under `dir`, summed. Raw size: brotli never makes the text and font files of the
+/// build larger, so a raw total within the budget proves the compressed one is.
+///
+/// # Errors
+/// A directory that cannot be read.
+pub fn ui_asset_bytes(dir: &Path) -> Result<u64, String> {
+    let mut total = 0_u64;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for entry in std::fs::read_dir(&d).map_err(|e| format!("{}: {e}", d.display()))? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let meta = entry.metadata().map_err(|e| e.to_string())?;
+            if meta.is_dir() {
+                stack.push(entry.path());
+            } else {
+                total = total.saturating_add(meta.len());
+            }
+        }
+    }
+    Ok(total)
+}
+
+/// Checks the UI assets of `root` against [`UI_ASSET_BUDGET_BYTES`].
+///
+/// # Errors
+/// Over the budget, or unreadable.
+pub fn check_ui_assets(root: &Path) -> Result<u64, String> {
+    let bytes = ui_asset_bytes(&root.join("crates/krishiv-ui-assets/assets"))?;
+    if bytes > UI_ASSET_BUDGET_BYTES {
+        return Err(format!(
+            "budgets: the UI assets weigh {bytes} bytes, over the {UI_ASSET_BUDGET_BYTES} byte budget"
+        ));
+    }
+    Ok(bytes)
+}
+
 /// What `--precheck` prints when no cached main measurement exists yet.
 pub const NO_MAIN_BASELINE: &str = "budgets: skipped (no main baseline; CI checks it)";
 
@@ -482,6 +521,13 @@ mod tests {
             unsafe_sites: None,
             wheel_bytes: None,
         }
+    }
+
+    #[test]
+    fn the_committed_ui_assets_are_within_the_budget() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let bytes = check_ui_assets(&root).unwrap();
+        assert!(bytes > 0);
     }
 
     #[test]

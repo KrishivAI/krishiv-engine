@@ -218,6 +218,11 @@ fn cargo_cmd() -> Command {
 fn run_budgets(flags: &[&str]) -> Result<(), String> {
     let mode = budgets::parse_flags(flags).ok_or_else(|| USAGE.to_owned())?;
     let root = workspace_root();
+    eprintln!(
+        "budgets: UI assets {} bytes (limit {})",
+        budgets::check_ui_assets(&root)?,
+        budgets::UI_ASSET_BUDGET_BYTES
+    );
     if let budgets::Mode::Precheck { base, repo } = &mode {
         return run_budgets_precheck(repo.as_deref().unwrap_or(&root), base);
     }

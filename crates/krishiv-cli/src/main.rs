@@ -22,6 +22,8 @@ mod repl;
 #[cfg(feature = "server")]
 mod server;
 mod sql;
+#[cfg(feature = "ui")]
+mod ui;
 
 use clap::Parser;
 
@@ -73,6 +75,9 @@ enum Command {
     /// Run Krishiv single-node: serve Spark Connect (port 15002) and the admin API (port 8080; the web UI with `ui`).
     #[cfg(feature = "server")]
     Server(server::ServerArgs),
+    /// Open stored query profiles in the web UI with no server and no engine (`krishiv.history.path` stores).
+    #[cfg(feature = "ui")]
+    Ui(ui::UiArgs),
 }
 
 /// `KRISHIV_LOG=json` turns on JSON log records on stderr (query, session and trace ids on each;
@@ -137,6 +142,8 @@ fn run() {
         // Returns only after the engine runtime is dropped (spill directory removed).
         #[cfg(feature = "server")]
         Command::Server(args) => std::process::exit(server::run(&args)),
+        #[cfg(feature = "ui")]
+        Command::Ui(args) => std::process::exit(ui::run(&args)),
     }
 }
 

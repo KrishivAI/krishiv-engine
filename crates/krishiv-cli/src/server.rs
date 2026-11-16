@@ -349,7 +349,22 @@ fn admin_router(
     let base = if cfg!(feature = "ui") && flag(config, &UI_ENABLED, true) {
         let source = krishiv_server::session_source::SessionSource::new(Arc::clone(runtime))
             .map_err(|e| e.to_string())?;
-        krishiv_server::internal::router_with_ui_guard(Arc::new(source), guard)
+        // The UI answers to loopback names and the address it is bound to; more names (a DNS name behind a proxy)
+        // come from `KRISHIV_UI_ALLOWED_HOSTS` (comma separated, no ports).
+        let mut policy = krishiv_server::pages::UiPolicy::loopback();
+        if !bound.ip().is_loopback() {
+            policy = policy.allow_host(&match bound.ip() {
+                IpAddr::V6(a) => format!("[{a}]"),
+                IpAddr::V4(a) => a.to_string(),
+            });
+        }
+        for h in std::env::var("KRISHIV_UI_ALLOWED_HOSTS")
+            .unwrap_or_default()
+            .split(',')
+        {
+            policy = policy.allow_host(h);
+        }
+        krishiv_server::internal::router_with_ui_policy(Arc::new(source), guard, policy)
     } else {
         krishiv_server::api_router()
     };

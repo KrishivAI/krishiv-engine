@@ -181,7 +181,7 @@ fn http_get_as(addr: &str, path: &str, token: Option<&str>) -> String {
     let auth = token.map_or(String::new(), |t| format!("Authorization: Bearer {t}\r\n"));
     write!(
         s,
-        "GET {path} HTTP/1.1\r\nHost: x\r\n{auth}Connection: close\r\n\r\n"
+        "GET {path} HTTP/1.1\r\nHost: localhost\r\n{auth}Connection: close\r\n\r\n"
     )
     .expect("write");
     let mut out = String::new();
@@ -510,7 +510,7 @@ fn tls_connect(addr: &str) -> rustls::StreamOwned<rustls::ClientConnection, TcpS
 fn tls_healthz_on(
     mut tls: rustls::StreamOwned<rustls::ClientConnection, TcpStream>,
 ) -> (Vec<u8>, String) {
-    tls.write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+    tls.write_all(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
         .expect("write");
     let mut out = Vec::new();
     // The server may close without `close_notify`; keep what came.
@@ -553,7 +553,7 @@ fn tls_serves_the_admin_listener_and_reloads_on_sighup() {
     plain
         .set_read_timeout(Some(Duration::from_secs(10)))
         .expect("timeout");
-    let _ = plain.write_all(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n");
+    let _ = plain.write_all(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\n\r\n");
     let mut out = Vec::new();
     let _ = plain.read_to_end(&mut out);
     assert!(
