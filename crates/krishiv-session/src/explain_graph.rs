@@ -168,6 +168,7 @@ pub fn dot_of_plan(root: &ExplainNode) -> String {
 ///         name: "Scan".to_owned(),
 ///         detail: "t".to_owned(),
 ///         children: Vec::new(),
+///         estimate: None,
 ///     },
 ///     metrics: QueryMetrics::default(),
 ///     detailed: false,
@@ -759,6 +760,7 @@ mod tests {
                 name: "Scan".to_owned(),
                 detail: "t".to_owned(),
                 children: Vec::new(),
+                estimate: None,
             },
             metrics,
             detailed: false,
@@ -809,6 +811,7 @@ mod tests {
                 name: "Scan".to_owned(),
                 detail: String::new(),
                 children: Vec::new(),
+                estimate: None,
             },
             metrics: sink_metrics,
             detailed: false,
@@ -838,7 +841,9 @@ mod tests {
                     name: "Scan".to_owned(),
                     detail: "t".to_owned(),
                     children: Vec::new(),
+                    estimate: None,
                 }],
+                estimate: None,
             },
             metrics: QueryMetrics::default(),
             detailed: true,
@@ -878,6 +883,7 @@ mod tests {
             name: format!("p{depth}"),
             detail: String::new(),
             children: Vec::new(),
+            estimate: None,
         };
         for i in (0..depth).rev() {
             node = ProfileNode {
@@ -885,6 +891,7 @@ mod tests {
                 name: format!("p{i}"),
                 detail: String::new(),
                 children: vec![node],
+                estimate: None,
             };
         }
         node

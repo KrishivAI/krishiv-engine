@@ -7,7 +7,12 @@ use std::fmt;
 /// details and its inputs. Printed in the style of the logical plan
 /// (Spark's `treeString`): the first inputs under `:- `, the last under
 /// `+- `.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// Two nodes are equal when they print the same: the planner's
+/// [`estimate`](Self::estimate) is not printed, so it is not compared (a
+/// plan decoded from the plan codec, which does not carry it, still equals
+/// the plan it was encoded from).
+#[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct ExplainNode {
     /// The operator, e.g. `HashJoin`.
@@ -16,6 +21,40 @@ pub struct ExplainNode {
     pub detail: String,
     /// Its inputs.
     pub children: Vec<ExplainNode>,
+    /// The planner's estimate of the node's output rows: set on the node
+    /// that produces a logical relation's rows, `None` on nodes the
+    /// planner adds below it (exchanges, a partial aggregate) and on a plan
+    /// decoded from the plan codec. The profile's `plan[].estimate`.
+    pub estimate: Option<RowEstimate>,
+}
+
+impl PartialEq for ExplainNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.detail == other.detail && self.children == other.children
+    }
+}
+
+impl Eq for ExplainNode {}
+
+/// The planner's estimate of a node's output rows (T164's statistics, as
+/// join ordering and the runtime-filter cost read them).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RowEstimate {
+    /// Estimated output rows, rounded.
+    pub rows: u64,
+    /// Where the estimate comes from: [`RowEstimate::STATISTICS`] when every
+    /// table under the node reports statistics, [`RowEstimate::DEFAULT`]
+    /// when some table's row count is a default. A profile read from JSON
+    /// keeps a string it does not know.
+    pub source: String,
+}
+
+impl RowEstimate {
+    /// Every table below the node reports statistics.
+    pub const STATISTICS: &'static str = "statistics";
+    /// Some table below the node has no statistics: its row count is a
+    /// default.
+    pub const DEFAULT: &'static str = "default";
 }
 
 impl ExplainNode {
@@ -25,6 +64,7 @@ impl ExplainNode {
             name: name.into(),
             detail: detail.into(),
             children: Vec::new(),
+            estimate: None,
         }
     }
 
@@ -38,6 +78,7 @@ impl ExplainNode {
             name: name.into(),
             detail: detail.into(),
             children,
+            estimate: None,
         }
     }
 

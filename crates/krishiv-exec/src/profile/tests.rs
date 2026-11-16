@@ -699,6 +699,10 @@ fn schema_matches_the_writer() {
         "optimized": "o", "physical": "x"}),
     );
     profile.trace = Some(serde_json::json!({"trace_id": "t", "session_id": "s"}));
+    profile.plan.estimate = Some(RowEstimate {
+        rows: 7,
+        source: RowEstimate::STATISTICS.to_owned(),
+    });
     profile.identity = Some(ProfileIdentity {
         principal: "user:a".into(),
         tags: [("team".to_owned(), "x".to_owned())].into(),
@@ -769,6 +773,10 @@ fn schema_matches_the_writer() {
     check(&props["usage"]["properties"]["scan"], &doc["usage"]["scan"]);
     check(&props["pipelines"]["items"], &doc["pipelines"][0]);
     check(&props["plan"]["items"], &doc["plan"][0]);
+    check(
+        &props["plan"]["items"]["properties"]["estimate"],
+        &doc["plan"][0]["estimate"],
+    );
     let op = &props["operators"]["items"];
     check(op, &doc["operators"][0]);
     check(
@@ -1138,4 +1146,54 @@ fn a_scanned_table_keeps_the_boundaries_of_its_name() {
         named(&["spark_catalog", "default", "Ev_1"]),
         ["spark_catalog.default.Ev_1"]
     );
+}
+
+/// The planner's estimate rides from the explain tree to the profile and
+/// through its JSON; a node without one writes no member; an unknown
+/// source string is kept (minor 7).
+#[test]
+fn plan_estimates_round_trip_and_unknown_sources_are_kept() {
+    let mut explain = matching();
+    explain.estimate = Some(RowEstimate {
+        rows: 42,
+        source: RowEstimate::DEFAULT.to_owned(),
+    });
+    let profile = QueryProfile::new(&plan(explain), metrics(), false);
+    assert_eq!(
+        profile.plan.estimate,
+        Some(RowEstimate {
+            rows: 42,
+            source: "default".to_owned()
+        })
+    );
+    let mut doc = profile.to_json_value();
+    assert_eq!(doc["minor"], 6);
+    assert_eq!(doc["plan"][0]["estimate"]["rows"], 42);
+    assert!(doc["plan"][1].get("estimate").is_none(), "{doc}");
+    doc["plan"][0]["estimate"]["source"] = "analyze".into();
+    let back = QueryProfile::from_json(&doc.to_string()).expect("reads");
+    assert_eq!(
+        back.plan.estimate,
+        Some(RowEstimate {
+            rows: 42,
+            source: "analyze".to_owned()
+        })
+    );
+    assert_eq!(back.plan.children[0].estimate, None);
+    // A malformed estimate is refused, not dropped.
+    doc["plan"][0]["estimate"] = serde_json::json!({"rows": "many", "source": "x"});
+    assert!(QueryProfile::from_json(&doc.to_string()).is_err());
+}
+
+/// The estimate is not printed, so explain trees that differ only in it
+/// are equal (a codec round trip drops it).
+#[test]
+fn explain_equality_ignores_the_estimate() {
+    let mut a = matching();
+    a.estimate = Some(RowEstimate {
+        rows: 1,
+        source: RowEstimate::STATISTICS.to_owned(),
+    });
+    assert_eq!(a, matching());
+    assert_ne!(ExplainNode::leaf("A", ""), ExplainNode::leaf("B", ""));
 }
