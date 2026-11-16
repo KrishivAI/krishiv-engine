@@ -49,21 +49,51 @@
 //!   the join dropped first (no match, NULL keys), so every path expression,
 //!   absorbed condition, call argument and `FILTER` must run on any row
 //!   (`runs_on_any_row`: cannot raise, or exact decimal arithmetic), the calls
-//!   are `count`, `min`, `max`, `sum` and `avg`, and every `sum` or decimal
-//!   `avg` buffer is proven not to overflow from the argument's range times
-//!   the rows of `Path'(X)` with eager aggregation's 8× margin;
+//!   are the built-in (registry, never a session UDAF of the same name)
+//!   `count`, `min`, `max`, and integer or decimal `sum` and `avg` (floating
+//!   point never: the summation order changes), and every `sum` and `avg`
+//!   buffer is proven not to overflow (integer `avg`: its double sum stays
+//!   below 2^53) from the argument's range times the rows of `Path'(X)`,
+//!   estimated from statistics only, with eager aggregation's 8× margin;
 //! - `P` holds a variable-width column or at least
 //!   [`MIN_PAYLOAD_BYTES`] a row;
 //! - the join keeps at least [`MIN_RETENTION`] of `X`'s rows, both estimated
 //!   from statistics (a selective `D'` pruned `X` before the aggregate);
-//! - no node the rule rebuilds or moves is read by another parent.
+//! - no node the rule rebuilds or moves is read by another parent;
+//! - batch plans only. No gate is needed: the session's batch planning
+//!   (`krishiv-session` `planning.rs`) is the optimizer's only production
+//!   caller, and streaming plans never pass through `optimize*`. A streaming
+//!   caller must switch the rule off (`Options::payload_above_aggregate`).
+//!
+//! Key types: every equality the proofs read (the moved join's, an absorbed
+//! join's, an inner join's in [`unique`]) must be of one type whose `=` is
+//! identity ([`identity_key`]), so that a key unique under grouping (a fact or
+//! an aggregate) is unique under the join's `=`.
+//!
+//! # Residual assumption
+//!
+//! The overflow proof bounds each argument soundly (footer ranges, or the
+//! type's range) but multiplies by the *estimated* rows of `Path'(X)` with an
+//! 8× margin, as eager aggregation's rule 2 does. If the true rows exceed the
+//! estimate by more than 8× and the proven bound is close to the buffer's
+//! limit, a group the join would have dropped could overflow under ANSI where
+//! Spark raises nothing. The design note (§2) accepts this.
+//!
+//! # Not here
+//!
+//! With `K_X` non-empty the new aggregate is partitioned on `K_X ∪ x` and the
+//! payload join on `x`: a second shuffle. Partitioning the aggregate on `x`
+//! alone (design §4, review minor 8) is the physical planner's and is
+//! deferred; it costs time, never rows. q10 has an empty `K_X`.
 //!
 //! # Fixed point
 //!
-//! The rule runs once after join ordering and pruning (`lib.rs`). The moved
-//! join sits above an aggregate, which join ordering treats as an input and
-//! never looks through, so ordering cannot move `D'` back below it. The new
-//! aggregate is tried again at once, so a second optimization finds nothing
+//! The rule runs after join ordering and pruning (`lib.rs`). The moved join
+//! sits above an aggregate, which join ordering treats as an input and never
+//! looks through, so ordering cannot move `D'` back below it. The new
+//! aggregate is tried again at once; after a move `lib.rs` re-runs join
+//! ordering, eager aggregation and the group-key code (when on) and then the
+//! rule again until it moves nothing, so a second optimization finds nothing
 //! the first left.
 
 use std::collections::HashSet;
@@ -71,8 +101,8 @@ use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
 use krishiv_plan::{
-    AttrId, BoundColumn, Builtin, Expr, ExprNode, Grouping, JoinCondition, JoinKind, LogicalPlan,
-    PlanNode, ResolvedExpr, ResolvedFunction, runs_on_any_row,
+    AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionId, Grouping, JoinCondition, JoinKind,
+    LogicalPlan, PlanNode, ResolvedExpr, ResolvedFunction, runs_on_any_row,
 };
 use krishiv_types::DataType;
 
@@ -157,7 +187,7 @@ struct Step {
 }
 
 /// A join below the aggregate: the path from just above it to the
-/// aggregate's input (top first), the join, which side is the dimension.
+/// aggregate's input (bottom first), the join, which side is the dimension.
 struct Candidate {
     path: Vec<Step>,
     join: Arc<LogicalPlan>,
@@ -379,8 +409,10 @@ fn ids(p: &LogicalPlan) -> Option<Attrs> {
 }
 
 /// Whether `t`'s `=` is identity, so `x = d` makes `x` and `d` the same value.
+/// Every proof of uniqueness rests on it too: a key unique under grouping is
+/// unique under `=` only for these types.
 fn identity_key(t: &DataType) -> bool {
-    key_type(t) && !matches!(t, DataType::Boolean) && !t.contains_collation()
+    key_type(t) && !t.contains_collation()
 }
 
 /// The aggregate rewritten over `c`, why not, or not a candidate.
@@ -396,8 +428,24 @@ fn try_candidate(
     est: &mut Estimator<'_>,
     ctx: &mut Context<'_>,
 ) -> Outcome {
-    let Ok(join) = Join::of(c) else {
-        return Outcome::Skip;
+    let join = match Join::of(c) {
+        Ok(j) => j,
+        Err(why) => {
+            // A refusal only where the aggregate groups by the side's columns.
+            let side = children(&c.join)
+                .get(usize::from(!c.dim_left))
+                .and_then(|p| ids(p));
+            let grouped_side = side.is_some_and(|s| {
+                keys.iter()
+                    .filter_map(|k| bare_column(k))
+                    .any(|k| s.contains(&k.id))
+            });
+            return if grouped_side {
+                Outcome::Refused(format!("not applied: {why}"))
+            } else {
+                Outcome::Skip
+            };
+        }
     };
     // Grouping keys are columns.
     let mut grouped = Attrs::default();
@@ -506,6 +554,8 @@ fn try_candidate(
                 for conj in conjuncts(on) {
                     if let Some((Builtin::Eq, [a, b], _)) = builtin(&conj)
                         && let (Some(a), Some(b)) = (bare_column(a), bare_column(b))
+                        && identity_key(&a.data_type)
+                        && a.data_type == b.data_type
                     {
                         if dcols.contains(&a.id) && e_ids.contains(&b.id) {
                             e_keys.insert(b.id);
@@ -630,6 +680,12 @@ fn try_candidate(
 
     // The error gate's accumulation half: no sum buffer can overflow.
     let path_est = est.plan(&below);
+    // The bound multiplies by these rows: never a default count.
+    if !path_est.from_statistics {
+        return refuse(
+            "the rows of the aggregate's new input rest on default row counts".to_owned(),
+        );
+    }
     for (_, f) in &calls {
         if let Err(why) = accumulates_safely(f, &path_est) {
             return refuse(why);
@@ -769,6 +825,12 @@ fn call_reads_x(f: &ResolvedFunction, dcols: &Attrs) -> Result<(), String> {
 /// proven (argument magnitude × rows × 8 below the buffer's limit).
 fn accumulates_safely(f: &ResolvedFunction, rel: &RelStats) -> Result<(), String> {
     let name = f.id.name();
+    // By identity, never by name: a session UDAF named `max` is not `max`.
+    if !matches!(f.id, FunctionId::Registry { .. }) {
+        return Err(format!(
+            "{name} is not a built-in aggregate: its body may raise on a row the join drops"
+        ));
+    }
     let arg = f.args.first();
     let arg_type = arg.and_then(|a| crate::expr::data_type(a));
     let limit = match (name, &arg_type) {
@@ -946,6 +1008,8 @@ fn unique(p: &Arc<LogicalPlan>, cols: &Attrs, stats: &dyn Statistics) -> Option<
             for conj in conjuncts(on) {
                 if let Some((Builtin::Eq, [a, b], _)) = builtin(&conj)
                     && let (Some(a), Some(b)) = (bare_column(a), bare_column(b))
+                    && identity_key(&a.data_type)
+                    && a.data_type == b.data_type
                 {
                     if l_ids.contains(&a.id) && r_ids.contains(&b.id) {
                         l_keys.insert(a.id);
@@ -970,3 +1034,6 @@ fn unique(p: &Arc<LogicalPlan>, cols: &Attrs, stats: &dyn Statistics) -> Option<
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests;

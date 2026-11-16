@@ -579,8 +579,9 @@ fn run(
         // After pruning, so the payload is what the aggregate really groups
         // by; the moved join is then ordered with the dimension's joins (it
         // sits above an aggregate, which ordering never looks through, so
-        // ordering cannot undo it), eager aggregation sees the new aggregate,
-        // and the plan is pruned and tidied again (design P2b A5).
+        // ordering cannot undo it), eager aggregation and the group-key code
+        // see the new aggregate, and the plan is pruned and tidied again
+        // (design P2b A5).
         let above = options.payload_above_aggregate
             && udfs.is_some_and(|(_, config)| {
                 config
@@ -590,27 +591,56 @@ fn run(
             });
         let root = match stats {
             Some(stats) if above => {
-                let (after, notes) =
-                    payload_above::rewrite(Arc::clone(&root), stats, options.stats_propagation)?;
-                t.step(
-                    "PayloadAboveAggregate",
-                    1,
-                    "PayloadAboveAggregate",
-                    &root,
-                    &after,
-                );
-                t.notes("PayloadAboveAggregate", &after, notes);
-                if Arc::ptr_eq(&after, &root) {
-                    after
-                } else {
+                // To a fixed point: a move gives a new aggregate, which the
+                // group-key code (when on) may code, and the coded aggregate
+                // may carry another payload; a second optimization would do
+                // the same.
+                let mut root = root;
+                for _ in 1..=MAX_ITERATIONS {
+                    let (after, notes) = payload_above::rewrite(
+                        Arc::clone(&root),
+                        stats,
+                        options.stats_propagation,
+                    )?;
+                    t.step(
+                        "PayloadAboveAggregate",
+                        1,
+                        "PayloadAboveAggregate",
+                        &root,
+                        &after,
+                    );
+                    t.notes("PayloadAboveAggregate", &after, notes);
+                    if Arc::ptr_eq(&after, &root) {
+                        break;
+                    }
                     let mut ordered =
                         order_and_restrict(after, stats, options.stats_propagation, joins, &mut t)?;
                     if eager {
                         ordered =
                             eager_pass(&ordered, stats, options.stats_propagation, joins, &mut t)?;
                     }
-                    prune_and_tidy(&ordered, &mut t)?
+                    if coded {
+                        let (after, notes) = group_code::rewrite(
+                            Arc::clone(&ordered),
+                            stats,
+                            options.stats_propagation,
+                            forced,
+                        )?;
+                        t.step("GroupKeyCode", 1, "GroupKeyCode", &ordered, &after);
+                        t.notes("GroupKeyCode", &after, notes);
+                        if !Arc::ptr_eq(&after, &ordered) {
+                            ordered = order_and_restrict(
+                                after,
+                                stats,
+                                options.stats_propagation,
+                                joins,
+                                &mut t,
+                            )?;
+                        }
+                    }
+                    root = prune_and_tidy(&ordered, &mut t)?;
                 }
+                root
             }
             _ => root,
         };

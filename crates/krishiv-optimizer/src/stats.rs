@@ -147,9 +147,12 @@ pub trait Statistics: Send + Sync + fmt::Debug {
 
     /// Sets of column names, each unique among the rows of the table `scan`
     /// reads at its pinned version whose columns of the set are all non-NULL
-    /// (two such rows never agree on every column of a set). A fact, never an
-    /// estimate: a rewrite that returns other rows when it is false reads it
-    /// (`payload_above`, design P2b A5). None by default.
+    /// (two such rows never agree, under the engine's `=` for the columns'
+    /// types, on every column of a set; a floating-point column, where `0.0`
+    /// and `-0.0` agree, is never used as a key). Names are the scan's output
+    /// column names (`Scan::output`), as `table` keys its columns. A fact,
+    /// never an estimate: a rewrite that returns other rows when it is false
+    /// reads it (`payload_above`, design P2b A5). None by default.
     fn unique_keys(&self, scan: &Scan) -> Vec<Vec<String>> {
         let _ = scan;
         Vec::new()
