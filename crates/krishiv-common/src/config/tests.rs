@@ -906,6 +906,23 @@ fn group_key_code_force_is_experimental_and_off() {
 }
 
 #[test]
+fn semi_anti_join_order_defaults_on_and_is_user_settable() {
+    let mut c = Config::new();
+    let key = "krishiv.optimizer.semiAntiJoinOrder";
+    assert_eq!(
+        c.get(&SEMI_ANTI_JOIN_ORDER).and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(SEMI_ANTI_JOIN_ORDER.settable_by, SettableBy::User);
+    c.set(key, "false").unwrap();
+    assert_eq!(
+        c.get(&SEMI_ANTI_JOIN_ORDER).and_then(ConfigValue::as_bool),
+        Some(false)
+    );
+    assert!(c.set(key, "sometimes").is_err());
+}
+
+#[test]
 fn eager_aggregation_defaults_on_and_parses() {
     let mut c = Config::new();
     assert_eq!(

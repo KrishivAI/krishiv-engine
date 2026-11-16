@@ -20,6 +20,7 @@ mod props;
 mod python_relations;
 mod qerror;
 mod rules;
+mod semi_order;
 mod share_subtree;
 mod sum_rewrite;
 mod support;
