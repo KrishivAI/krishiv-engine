@@ -120,6 +120,42 @@ fn schema_differences(existing: &[TableColumn], specified: &[StoreColumn]) -> Ve
 }
 
 impl Session {
+    /// Asks `SELECT` on the Delta table root `path` before its log is read: qualified against the
+    /// working directory, then a local root through [`Self::authorize_path`] (the canonical path,
+    /// links resolved: stricter than a plain read by path, whose text is asked as written) and an
+    /// object-store root as its qualified path, as [`Self::authorize_location`] asks `CREATE`.
+    /// Returns the qualified text the table is opened with.
+    async fn authorize_delta_root(&self, path: &str) -> Result<String, KrishivError> {
+        let qualified = self.qualify_path(path)?;
+        self.authorize_qualified_root(&qualified, &[Privilege::Select], StatementClass::Ddl)
+            .await?;
+        Ok(qualified)
+    }
+
+    /// Asks `privileges` on the already qualified Delta table root `qualified`: a `file:` root
+    /// through [`Self::authorize_path`] (links resolved), an object-store root as its qualified
+    /// path.
+    pub(super) async fn authorize_qualified_root(
+        &self,
+        qualified: &str,
+        privileges: &[Privilege],
+        class: StatementClass,
+    ) -> Result<(), KrishivError> {
+        match qualified.strip_prefix("file:") {
+            Some(local) => {
+                self.authorize_path(Path::new(local), privileges, class)
+                    .await?;
+            }
+            None => {
+                let securable =
+                    Securable::Path(OptionValue::from_user("path", qualified.to_owned()));
+                self.authorize_securable(&securable, privileges, class)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
     /// `CREATE TABLE t [(columns)] USING delta [PARTITIONED BY (..)] LOCATION 'p'`: registers the
     /// Delta table at `p`, whose columns and partitioning come from its log. A column list or a
     /// partitioning that differs from the log's is delta-spark's error.
@@ -153,8 +189,16 @@ impl Session {
                 .await;
         }
         // The location is read before it is registered.
-        self.authorize_path(&table.location, &[Privilege::Select], StatementClass::Ddl)
-            .await?;
+        match table.location.to_str() {
+            Some(text) => {
+                self.authorize_delta_root(text).await?;
+            }
+            // Refused there, audited, before the policy is asked.
+            None => {
+                self.authorize_path(&table.location, &[Privilege::Select], StatementClass::Ddl)
+                    .await?;
+            }
+        }
         let env = self.query_env();
         let source = crate::catalog::table_source(&table);
         let shape = env
@@ -337,24 +381,18 @@ impl Session {
         let Some(path) = path_key.and_then(|k| options.remove(&k)) else {
             return Err(unsupported("a Delta temporary view without a path"));
         };
-        let qualified = self.qualify_path(&path)?;
-        self.authorize_path(
-            Path::new(&qualified),
-            &[Privilege::Select],
-            StatementClass::Ddl,
-        )
-        .await?;
-        let source = krishiv_plan::ReadSource::Files {
-            format: DELTA.to_owned(),
-            paths: vec![OptionValue::from_user("path", qualified)],
-            options: options
+        let qualified = self.authorize_delta_root(&path).await?;
+        let source = krishiv_plan::ReadSource::files(
+            DELTA,
+            vec![OptionValue::from_user("path", qualified)],
+            options
                 .into_iter()
                 .map(|(k, val)| {
                     let val = OptionValue::from_user(&k, val);
                     (k, val)
                 })
                 .collect(),
-        };
+        );
         let columns = env.catalog.delta.columns(&source, None).await?;
         self.state.catalog.put(
             name,

@@ -1,0 +1,21 @@
+---
+source: crates/krishiv-session/tests/analyze.rs
+expression: layout(&json)
+---
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"READ",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"table","name":["spark_catalog","default","item"],"display":"table `spark_catalog`.`default`.`item`","privilege":"SELECT","columns":["i_category","i_color","i_manufact","i_manufact_id","i_product_name","i_size","i_units"]}],
+"output_schema":[{"ordinal":0,"name":"i_product_name","type":"string","type_json":"\"string\"","nullable":true,"declared_type":null}],
+"lineage":[{"ordinal":0,"output":"i_product_name","sources":[{"table":["spark_catalog","default","item"],"column":"i_product_name","via_view":null}],"transform":"identity"}],
+"filters":[{"kind":"filter","table":["spark_catalog","default","item"],"column":"i_category"},
+  {"kind":"filter","table":["spark_catalog","default","item"],"column":"i_color"},
+  {"kind":"filter","table":["spark_catalog","default","item"],"column":"i_manufact_id"},
+  {"kind":"filter","table":["spark_catalog","default","item"],"column":"i_size"},
+  {"kind":"filter","table":["spark_catalog","default","item"],"column":"i_units"},
+  {"kind":"join","table":["spark_catalog","default","item"],"column":"i_manufact"},
+  {"kind":"group_by","table":["spark_catalog","default","item"],"column":"i_manufact"},
+  {"kind":"group_by","table":["spark_catalog","default","item"],"column":"i_product_name"},
+  {"kind":"sort","table":["spark_catalog","default","item"],"column":"i_product_name"}],
+"warnings":[]}

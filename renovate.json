@@ -81,6 +81,16 @@
         "pyspark"
       ],
       "enabled": false
+    },
+    {
+      "description": "GitHub Actions pins: one weekly PR for all action updates (owner 2026-11-15)",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "groupName": "github actions",
+      "schedule": [
+        "before 6am on monday"
+      ]
     }
   ]
 }

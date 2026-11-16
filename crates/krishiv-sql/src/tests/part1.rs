@@ -871,6 +871,70 @@ fn explain_errors_follow_spark() {
     assert_eq!(e.span.range(), 17..25);
 }
 
+/// `EXPLAIN FORMAT JSON <statement>` (a Krishiv extension, P3-T063 N2):
+/// only `FORMAT JSON` right after `EXPLAIN` is the format; `format` stays
+/// a name everywhere else, other formats fail as before, and `PHYSICAL`
+/// after it is reserved.
+#[test]
+fn explain_format_json() {
+    use ast::{ExplainMode, Statement};
+    let d = ParserOptions::default();
+    let explain = |sql: &str| match parse_statement(sql, &d) {
+        Ok(Statement::Explain(e)) => e,
+        other => panic!("{sql} does not parse as EXPLAIN: {other:?}"),
+    };
+    for sql in [
+        "EXPLAIN FORMAT JSON SELECT 1",
+        "explain format json select 1",
+        "EXPLAIN FORMAT JSON SELECT * FROM format",
+        "EXPLAIN FORMAT JSON SELECT format FROM format AS json",
+        "EXPLAIN FORMAT JSON FROM format SELECT *",
+    ] {
+        let e = explain(sql);
+        assert_eq!(e.mode, ExplainMode::Json, "{sql}");
+        assert!(matches!(*e.statement, Statement::Query(_)), "{sql}");
+        assert_eq!(e.span.range(), 0..sql.len(), "{sql}");
+    }
+    // A table named `format`, with or without an alias `json`, is a name.
+    for sql in [
+        "EXPLAIN SELECT * FROM format",
+        "EXPLAIN SELECT * FROM format json",
+        "EXPLAIN FROM format SELECT *",
+    ] {
+        assert_eq!(explain(sql).mode, ExplainMode::Simple, "{sql}");
+    }
+    // Any statement is explained, an `EXPLAIN` too.
+    let e = explain("EXPLAIN FORMAT JSON INSERT INTO t SELECT 1");
+    assert!(matches!(*e.statement, Statement::Insert(_)));
+    let e = explain("EXPLAIN FORMAT JSON DROP TABLE t");
+    assert!(matches!(*e.statement, Statement::DropTable(_)));
+    let e = explain("EXPLAIN FORMAT JSON EXPLAIN ANALYZE INSERT INTO t SELECT 1");
+    let Statement::Explain(inner) = &*e.statement else {
+        panic!("not an explained EXPLAIN: {e:?}");
+    };
+    assert_eq!(inner.mode, ExplainMode::Analyze);
+    // Other formats are not modes: `FORMAT` starts the explained statement,
+    // which is a syntax error, as in Spark (which has no `FORMAT` at all).
+    let fail = |sql: &str| parse_statement(sql, &d).unwrap_err();
+    for sql in [
+        "EXPLAIN FORMAT XML SELECT 1",
+        "EXPLAIN FORMAT SELECT 1",
+        "EXPLAIN FORMAT 'json' SELECT 1",
+    ] {
+        assert_eq!(
+            fail(sql).error.error_class(),
+            ErrorClass::ParseSyntaxError,
+            "{sql}"
+        );
+    }
+    assert_eq!(fail("EXPLAIN FORMAT JSON").span.range(), 19..19);
+    // `FORMAT JSON PHYSICAL` is reserved for a plan tree.
+    let e = fail("EXPLAIN FORMAT JSON PHYSICAL SELECT 1");
+    assert_eq!(e.error.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+    assert_eq!(e.span.range(), 8..28);
+    assert!(e.error.to_string().contains("EXPLAIN FORMAT JSON PHYSICAL"));
+}
+
 /// A long `EXPLAIN` chain is capped without deep recursion.
 #[test]
 fn explain_chains_are_capped_without_recursion() {
