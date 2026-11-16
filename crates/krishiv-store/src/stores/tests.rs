@@ -78,7 +78,7 @@ fn urls_parse_for_every_scheme() {
             "cont",
             Some("acct"),
             "k",
-            "abfss://cont@acct",
+            "abfss://cont@acct.dfs.core.windows.net",
             "abfss://cont@acct.dfs.core.windows.net/k",
         ),
         (
@@ -88,7 +88,7 @@ fn urls_parse_for_every_scheme() {
             "cont",
             Some("acct"),
             "",
-            "abfss://cont@acct",
+            "abfss://cont@acct.dfs.core.windows.net",
             "abfs://cont@acct.blob.core.windows.net",
         ),
         (
@@ -879,7 +879,7 @@ fn onelake_hosts_keep_their_host_and_never_share_an_azure_store() {
             "abfss://c@Acct.DFS.core.windows.net/k",
             "acct",
             "acct.dfs.core.windows.net",
-            "abfss://c@acct",
+            "abfss://c@acct.dfs.core.windows.net",
         ),
         (
             "abfss://ws@WsId.Z28.dfs.fabric.microsoft.com/lh",
@@ -903,7 +903,7 @@ fn onelake_hosts_keep_their_host_and_never_share_an_azure_store() {
             "abfss://ws@onelake.dfs.core.windows.net/lh",
             "onelake",
             "onelake.dfs.core.windows.net",
-            "abfss://ws@onelake",
+            "abfss://ws@onelake.dfs.core.windows.net",
         ),
     ] {
         let url = parse_object_url(input).unwrap();

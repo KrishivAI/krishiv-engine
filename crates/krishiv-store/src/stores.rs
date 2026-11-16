@@ -255,11 +255,11 @@ pub struct ParsedUrl {
     pub revision: Option<String>,
     /// The key within the bucket.
     pub key: Path,
-    /// The store id: `s3://bucket`, `gs://bucket`,
-    /// `abfss://container`, `abfss://container@account` (Azure Storage) or
-    /// `abfss://container@host` (OneLake: the host is kept, its `blob` name written as the `dfs`
-    /// one, so a OneLake workspace never shares a store with a same-named container of an Azure
-    /// Storage account). Azure accounts and hosts are lower-case in the id.
+    /// The store id: `s3://bucket`, `gs://bucket`, `abfss://container` or
+    /// `abfss://container@host` (Azure Storage and OneLake: the host is kept, its `blob` name
+    /// written as the `dfs` one, so the two names of one account share a store, a OneLake
+    /// workspace never shares one with a same-named container of an Azure Storage account, and
+    /// the id re-parses to the same store). Azure hosts are lower-case in the id.
     pub store_id: StoreId,
     /// The URL in canonical form (`scheme://authority/key`); what errors
     /// print and what re-parses to the same store and key.
@@ -333,14 +333,10 @@ pub fn parse_object_url(text: &str) -> Result<ParsedUrl> {
     let store_id = match (&kind, &account, &host) {
         (ObjectScheme::S3, _, _) => StoreId::new(format!("s3://{bucket}")),
         (ObjectScheme::Gcs, _, _) => StoreId::new(format!("gs://{bucket}")),
-        // An Azure Storage account keeps its `container@account` id (its dfs and blob names
-        // are one store); a OneLake host is kept whole.
-        (ObjectScheme::Azure, Some(account), Some(host)) => {
-            if AzureHost::is_core(host) {
-                StoreId::new(format!("abfss://{bucket}@{account}"))
-            } else {
-                StoreId::new(format!("abfss://{bucket}@{}", AzureHost::store_host(host)))
-            }
+        // The host is kept, written as its `dfs` name: the dfs and blob names of one account
+        // are one store, and the id (what io errors print) re-parses to this store.
+        (ObjectScheme::Azure, Some(_), Some(host)) => {
+            StoreId::new(format!("abfss://{bucket}@{}", AzureHost::store_host(host)))
         }
         (ObjectScheme::Azure, _, _) => StoreId::new(format!("abfss://{bucket}")),
         (ObjectScheme::Http | ObjectScheme::HuggingFace, _, _) => {
@@ -417,18 +413,25 @@ impl AzureHost {
         }
     }
 
-    /// The host part of a OneLake store id: the `dfs` name for both names of a OneLake host (one
-    /// service, object_store addresses the `blob` endpoint for either); a private-link host as is.
+    /// The host part of an Azure store id: the `dfs` name for both names of an Azure Storage or
+    /// OneLake account (one service; object_store addresses the `blob` endpoint for either); a
+    /// private-link host as is.
     pub(crate) fn store_host(host: &str) -> String {
-        match host.strip_suffix(".blob.fabric.microsoft.com") {
-            Some(account) if !account.contains('.') => {
-                format!("{account}.dfs.fabric.microsoft.com")
+        for domain in ["core.windows.net", "fabric.microsoft.com"] {
+            if let Some(account) = host.strip_suffix(&format!(".blob.{domain}"))
+                && !account.contains('.')
+            {
+                return format!("{account}.dfs.{domain}");
             }
-            _ => host.to_owned(),
         }
+        host.to_owned()
     }
 
     /// Whether `host` (lower-cased) is an Azure Storage (`*.core.windows.net`) host.
+    #[cfg_attr(
+        not(feature = "cloud"),
+        expect(dead_code, reason = "used by the cloud builders")
+    )]
     pub(crate) fn is_core(host: &str) -> bool {
         host.ends_with(".core.windows.net")
     }
