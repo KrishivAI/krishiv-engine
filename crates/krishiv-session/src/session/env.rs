@@ -83,6 +83,8 @@ pub(super) fn conf_values<'k>(config: &Config, keys: &[&'k str]) -> BTreeMap<&'k
 #[derive(Clone)]
 pub(crate) struct QueryEnv {
     pub(crate) config: Arc<Config>,
+    /// Set by a file write, whose profile is recorded after its commit: see [`crate::profile_history::HistoryHold`].
+    pub(crate) history_hold: Option<Arc<crate::profile_history::HistoryHold>>,
     /// The query's I/O context: every read, scan and write of the query goes
     /// through it, so its counters are the query's own.
     pub(crate) io: krishiv_io::IoContext,

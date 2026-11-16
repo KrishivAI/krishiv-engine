@@ -1310,12 +1310,12 @@ impl Session {
             files: Some(files),
             variables: Arc::clone(&variables),
         };
-        // The epoch the query's catalog reads at: entries it loads are at
-        // least as new.
+        // The epoch the query's catalog reads at: entries it loads are at least as new.
         let catalog_epoch = krishiv_plan::analyzer::Catalog::epoch(&*catalog);
         QueryEnv {
             io,
             config,
+            history_hold: None,
             parser,
             analysis,
             catalog,
@@ -1831,6 +1831,7 @@ impl Session {
                 log_id,
                 _permit: permit,
                 _operation: self.operation.clone(),
+                history: env.history_job(self, &row_id, physical, detailed),
             }),
             None,
         );
