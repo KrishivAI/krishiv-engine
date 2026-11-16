@@ -35,7 +35,7 @@ The exit status is 0 when no check failed (warnings are allowed) and 1 when one 
 | --- | --- |
 | `config` | a setting does not parse, or names a Spark Connect setting Krishiv does not read |
 | `listener` | the address is not loopback and there is no authentication, a bearer token or OIDC has no TLS, or client certificates have no TLS |
-| `authentication` | a secret file or variable cannot be read, or the key file is readable by group or others. A warning when it is off on a loopback address |
+| `authentication` | a secret file or variable cannot be read (an OIDC issuer is not contacted), or the key file is readable by group or others. A warning when it is off on a loopback address |
 | `tls` | the certificate or key does not load, or the key is readable by group or others |
 | `ports` | the Spark Connect or admin port is taken |
 | `user` | the process is root without `--allow-root` |

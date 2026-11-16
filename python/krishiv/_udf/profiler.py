@@ -148,9 +148,11 @@ class Profile:
         os.makedirs(path, exist_ok=True)
         for kind in _kinds(type):
             for udf_id, entry in self._selected(kind, id):
-                if kind == "perf" and entry.perf is not None:
+                if kind == "perf":
                     with self._registry.lock:
-                        entry.perf.dump_stats(os.path.join(path, f"udf_{udf_id}_perf.pstats"))
+                        # Read under the lock: `clear` may have swapped the profile since the listing.
+                        if entry.perf is not None:
+                            entry.perf.dump_stats(os.path.join(path, f"udf_{udf_id}_perf.pstats"))
                 elif kind == "memory":
                     body = {"name": entry.name, "calls": entry.calls, "peak_bytes": entry.peak, "net_bytes": entry.net}
                     with open(os.path.join(path, f"udf_{udf_id}_memory.json"), "w", encoding="utf-8") as f:
