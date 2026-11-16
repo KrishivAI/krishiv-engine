@@ -844,3 +844,61 @@ fn static_service_tokens_need_an_expiry() {
         );
     }
 }
+
+/// A principal name may contain dots: the field is the last segment.
+#[test]
+fn principal_names_may_contain_dots() {
+    let c = config(&[
+        ("krishiv.auth.principals.etl.prod.privileges", "impersonate"),
+        ("krishiv.auth.principals.etl.prod.impersonates", "alice"),
+        ("krishiv.auth.principals.etl.prod.expires", "2099-01-01"),
+    ])
+    .expect("valid");
+    let rights = c.principals.get("etl.prod").expect("entry by whole name");
+    assert!(rights.may_impersonate("alice", &[]));
+    assert!(rights.expires.is_some());
+    assert!(c.principals.get("etl").is_none());
+    let err =
+        config(&[("krishiv.auth.principals..expires", "2099-01-01")]).expect_err("an empty name");
+    assert!(invalid_config(&err), "{err}");
+    let err = config(&[("krishiv.auth.principals.expires", "2099-01-01")]).expect_err("no name");
+    assert!(invalid_config(&err), "{err}");
+}
+
+#[test]
+fn a_static_service_token_may_be_named_with_dots() {
+    let dir = tempfile::tempdir().unwrap();
+    let b = secret_file(dir.path(), "b", TOKEN_B, 0o400);
+    let c = config(&[
+        ("krishiv.auth.tokens.etl.secret", b.as_str()),
+        ("krishiv.auth.tokens.etl.principal", "etl.prod"),
+        ("krishiv.auth.tokens.etl.kind", "service"),
+        ("krishiv.auth.tokens.etl.role", "operator"),
+        ("krishiv.auth.principals.etl.prod.expires", "2099-01-01"),
+    ])
+    .expect("valid");
+    let auth = ServerAuth::new(&c).expect("builds");
+    let cr = Credentials::new(peer(3), Surface::Connect).with_bearer(TOKEN_B);
+    let a = auth.authenticate_at(&cr, Instant::now()).expect("logs in");
+    assert_eq!(a.principal.name, "etl.prod");
+}
+
+/// A hand-built config cannot skip the expiry a service token needs.
+#[test]
+fn a_hand_built_service_token_without_expiry_refuses_startup() {
+    let dir = tempfile::tempdir().unwrap();
+    let b = secret_file(dir.path(), "b", TOKEN_B, 0o400);
+    let mut c = config(&[
+        ("krishiv.auth.tokens.prom.secret", b.as_str()),
+        ("krishiv.auth.tokens.prom.principal", "prometheus"),
+        ("krishiv.auth.tokens.prom.kind", "service"),
+        ("krishiv.auth.tokens.prom.role", "viewer"),
+        ("krishiv.auth.principals.prometheus.expires", "2099-01-01"),
+    ])
+    .expect("valid");
+    ServerAuth::new(&c).expect("with expiry");
+    c.tokens[0].expires = None;
+    let err = ServerAuth::new(&c).expect_err("no expiry");
+    assert!(invalid_config(&err), "{err}");
+    assert!(err.to_string().contains("prometheus.expires"), "{err}");
+}

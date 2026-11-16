@@ -12,6 +12,9 @@
 //! krishiv.auth.principals.<name>.expires      = 2027-03-01           (UTC date: a static token stops working, and the privileges end)
 //! ```
 //!
+//! A principal name may contain dots (`etl.prod`, a DNS name from a certificate): the field is
+//! always the last segment. Only an empty name is refused.
+//!
 //! `impersonates` lists the end users the principal may act for: a name, a glob with `*`, or
 //! `group:<g>` for any member of a group. An empty list with `impersonate` granted means no one
 //! (explicit, §4.2 rule 2); `impersonates` without `impersonate` is refused, so a list that
@@ -140,12 +143,10 @@ impl PrincipalTable {
         let Some((name, field)) = rest.rsplit_once('.') else {
             return Err(invalid(key, key, "not a known authentication setting"));
         };
-        if name.is_empty() || name.contains('.') {
-            return Err(invalid(
-                key,
-                name,
-                "a principal name is one non-empty segment",
-            ));
+        // The field is always the last segment, so a name may itself contain dots
+        // (`etl.prod`, a DNS name from a certificate).
+        if name.is_empty() {
+            return Err(invalid(key, name, "a principal name must not be empty"));
         }
         let entry = self.by_name.entry(name.to_owned()).or_default();
         match field {
@@ -393,7 +394,6 @@ mod tests {
             ("krishiv.auth.principals.p.role", "admin"),
             ("krishiv.auth.principals.p", "x"),
             ("krishiv.auth.principals..privileges", "impersonate"),
-            ("krishiv.auth.principals.a.b.privileges", "impersonate"),
             ("krishiv.auth.principals.p.impersonates", "group:"),
             ("krishiv.auth.principals.p.expires", "tomorrow"),
         ] {
