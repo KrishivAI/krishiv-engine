@@ -23,8 +23,11 @@
 //! the account-host form `<key>.<host>` beats the bare `<key>`, and a secret
 //! (`getPasswordString`: keys, tokens, client ids, endpoints, tenants) also has the container form
 //! `<key>.<container>.<host>` first. The hosts are the account's `dfs` name, then its `blob` name,
-//! whichever the URL wrote (one store, so one credential order), and for Azure Storage accounts Krishiv's older `<key>.<container>.<account>` and
-//! `<key>.<account>` forms. A provider class (OAuth or SAS) set only on the bare key applies only
+//! and for Azure Storage accounts Krishiv's older `<key>.<container>.<account>` and
+//! `<key>.<account>` forms. Divergence from ABFS, which scopes by the URL's own host only: a key
+//! scoped by the other name of the account applies too, and with both names set a `blob` URL
+//! takes the `dfs` key, because both names are one store (one credential, whichever alias opens
+//! it first). A provider class (OAuth or SAS) set only on the bare key applies only
 //! when the bare auth type is the same (`getTokenProviderClass`). Keys of one credential (the
 //! account key, `fs.azure.sas.fixed.token` and `fs.azure.sas`, the bearer token) are compared by
 //! scope level first, so a host-scoped key of any of them beats a bare one.
@@ -203,6 +206,25 @@ impl Lookup<'_> {
     fn required(&self, base: &str, why: &str) -> Result<SecretString> {
         self.secret(base)?
             .ok_or_else(|| invalid_option(base, &format!("required by {why}")).into())
+    }
+}
+
+impl<'a> Lookup<'a> {
+    /// The lookup of `url`'s keys, `account` being the URL's account or `fs.azure.account.name`.
+    fn of(
+        config: &'a dyn StoreSettings,
+        options: &'a BTreeMap<String, OptionValue>,
+        url: &'a ParsedUrl,
+        account: Option<&str>,
+    ) -> Self {
+        let core = url.host.as_deref().is_none_or(AzureHost::is_core);
+        Lookup {
+            config,
+            options,
+            container: &url.bucket,
+            hosts: account_hosts(url, account),
+            account: account.filter(|_| core).map(str::to_owned),
+        }
     }
 }
 
@@ -412,14 +434,7 @@ pub(super) fn azure_store(
         .account
         .clone()
         .or(text(config, options, AZURE_ACCOUNT_NAME)?);
-    let core = url.host.as_deref().is_none_or(AzureHost::is_core);
-    let lookup = Lookup {
-        config,
-        options,
-        container: &url.bucket,
-        hosts: account_hosts(url, account.as_deref()),
-        account: account.clone().filter(|_| core),
-    };
+    let lookup = Lookup::of(config, options, url, account.as_deref());
     // Under a credential scope the source is the only credential: session keys do not apply.
     let auth = match scope {
         Some(_) => None,
@@ -562,21 +577,12 @@ mod tests {
     use super::*;
     use crate::stores::parse_object_url;
 
-    /// The bearer token `resolve_auth` picks for `input` under `settings`, built as `azure_store`
-    /// builds its lookup.
+    /// The bearer token `resolve_auth` picks for `input` under `settings`, through the lookup
+    /// `azure_store` uses.
     fn bearer(settings: &BTreeMap<String, String>, input: &str) -> String {
         let url = parse_object_url(input).unwrap();
         let options = BTreeMap::new();
-        let lookup = Lookup {
-            config: settings,
-            options: &options,
-            container: &url.bucket,
-            hosts: account_hosts(&url, url.account.as_deref()),
-            account: url
-                .account
-                .clone()
-                .filter(|_| url.host.as_deref().is_none_or(AzureHost::is_core)),
-        };
+        let lookup = Lookup::of(settings, &options, &url, url.account.as_deref());
         match resolve_auth(&lookup).unwrap() {
             Some(Auth::Bearer(token)) => token.expose_secret().to_owned(),
             _ => panic!("{input}: no bearer token"),
