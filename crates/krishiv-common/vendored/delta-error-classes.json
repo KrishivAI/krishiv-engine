@@ -234,6 +234,12 @@
     ],
     "sqlState" : "56038"
   },
+  "DELTA_UNSUPPORTED_SUBQUERY" : {
+    "message" : [
+      "Subqueries are not supported in the <operation> (condition = <cond>)."
+    ],
+    "sqlState" : "0AKDC"
+  },
   "DELTA_VERSION_NOT_FOUND" : {
     "message" : [
       "Cannot time travel Delta table to version <userVersion>. Available versions: [<earliest>, <latest>]."
