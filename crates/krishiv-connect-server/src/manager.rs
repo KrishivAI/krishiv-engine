@@ -55,6 +55,7 @@ use crate::artifacts::SessionArtifacts;
 use crate::auth::SessionOwner;
 use crate::errors::SessionErrors;
 use crate::operation::{Operation, Operations};
+use crate::udf::{SessionPython, UdfHost};
 
 /// Builds the session an authenticated caller gets for a new session id:
 /// its principal, and the policy of its role.
@@ -138,6 +139,9 @@ pub struct SessionEntry {
     errors: Arc<SessionErrors>,
     /// The session's artifacts (`AddArtifacts`).
     artifacts: Arc<SessionArtifacts>,
+    /// The session's Python UDFs (P3-T014): their runtime exists from the first passed `Usage` check on
+    /// `System("udf")`; its workers stop when the session is closed.
+    python: SessionPython,
     /// Milliseconds since the manager's epoch at the last lookup.
     last_access: AtomicU64,
     /// Held shared by the RPCs that change the session's state while they
@@ -207,13 +211,19 @@ impl SessionEntry {
         self.gate.write().await
     }
 
+    /// The session's Python UDFs.
+    pub(crate) fn python(&self) -> &SessionPython {
+        &self.python
+    }
+
     /// Closes the session's operations, then the session (its queries
-    /// cancelled), then its artifacts (their directory removed). Returns the
-    /// operations it closed.
+    /// cancelled), then its artifacts (their directory removed), then stops
+    /// its Python UDF workers. Returns the operations it closed.
     fn close(&self) -> Vec<Arc<Operation>> {
         let ops = self.operations.close_all();
         self.session.close();
         self.artifacts.close();
+        self.python.release();
         ops
     }
 }
@@ -306,6 +316,8 @@ impl<K: Clone + Eq + std::hash::Hash> Tombstones<K> {
 /// The Connect sessions of one server.
 pub struct SessionManager {
     factory: Box<SessionFactory>,
+    /// The server's Python UDF workers; `None` refuses Python UDFs.
+    udfs: Option<Arc<dyn UdfHost>>,
     limits: SessionLimits,
     inner: Mutex<Inner>,
     epoch: Instant,
@@ -326,6 +338,7 @@ impl SessionManager {
     pub fn new(factory: Box<SessionFactory>, limits: SessionLimits) -> Self {
         Self {
             factory,
+            udfs: None,
             limits,
             inner: Mutex::new(Inner::default()),
             epoch: Instant::now(),
@@ -340,6 +353,16 @@ impl SessionManager {
     #[must_use]
     pub fn from_base(base: Session, limits: SessionLimits) -> Self {
         Self::new(Box::new(move |_| Ok(base.new_session())), limits)
+    }
+
+    /// Runs the Python UDFs of every session this manager builds on `host`'s workers (the server's one
+    /// pool, `krishiv_udf_pool::Pool` on Linux): each session gets a runtime of its own, keyed by its
+    /// principal and server-side id, once it passes the `Usage` check on `System("udf")`. Without a host,
+    /// Python UDFs are refused (`KRISHIV_UNSUPPORTED_FEATURE`).
+    #[must_use]
+    pub fn with_udf_host(mut self, host: Arc<dyn UdfHost>) -> Self {
+        self.udfs = Some(host);
+        self
     }
 
     /// The limits in force.
@@ -364,6 +387,7 @@ impl SessionManager {
         caller: &Authenticated,
         session: Session,
         client_user_id: &str,
+        python: SessionPython,
     ) -> Arc<SessionEntry> {
         session.set_client_info(
             krishiv_session::Transport::Connect,
@@ -378,6 +402,7 @@ impl SessionManager {
             caller: caller.clone(),
             client_user_id: client_user_id.to_owned(),
             operations: Arc::default(),
+            python,
             last_access: AtomicU64::new(self.now_ms()),
             gate: tokio::sync::RwLock::new(()),
         })
@@ -453,7 +478,8 @@ impl SessionManager {
         // Built without the lock; a racing create of the same key wins and
         // this one is closed unused.
         let session = (self.factory)(caller)?;
-        let entry = self.new_entry(caller, session, client_user_id);
+        let python = SessionPython::new(self.udfs.as_ref(), &caller.principal.name, &session);
+        let entry = self.new_entry(caller, session, client_user_id, python);
         let mut retired = None;
         let raced = {
             let mut inner = self.lock();
@@ -477,11 +503,11 @@ impl SessionManager {
         match raced {
             Err(e) => {
                 // Built, then refused by a check that changed meanwhile.
-                entry.session.close();
+                entry.close();
                 Err(audit_foreign(caller, "session", e))
             }
             Ok(Some(existing)) => {
-                entry.session.close();
+                entry.close();
                 Self::check_observed(&key, &existing, observed)?;
                 Ok(existing)
             }

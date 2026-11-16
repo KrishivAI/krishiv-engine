@@ -67,7 +67,10 @@ use krishiv_connect::proto::v4_3::execute_plan_response::{
 };
 use krishiv_connect::proto::v4_3::plan::OpType;
 use krishiv_connect::proto::v4_3::plan::compressed_operation::OpType as CompressedOpType;
-use krishiv_connect::translate::{TranslateConf, command_not_supported, translate_relation};
+use krishiv_connect::translate::{
+    Command as RunCommand, TranslateConf, UdfHost as TranslateHost, command_not_supported,
+    translate_command, translate_relation_with,
+};
 use krishiv_connect::wire;
 use krishiv_memory::ConsumerHandle;
 use krishiv_session::{DataFrame, QueryOptions, RecordBatchStream};
@@ -84,6 +87,7 @@ use crate::operation::{
     validate_tags,
 };
 use crate::sender::{self, SenderCaps};
+use crate::udf::InlineUdfs;
 
 /// The default of `spark.connect.session.resultChunking.maxChunkSize`
 /// (`(0.9 × 128 MiB).toInt`, Spark 4.1+).
@@ -332,28 +336,36 @@ pub async fn execute_plan(
             #[cfg(test)]
             hooks::preparing(id.as_str()).await;
             // Decompression (up to `maxPlanSize`) runs off the async workers.
-            let logical = request_plan(session, plan, limits).await?;
-            let df = session.from_plan_with(&logical, query_options)?;
-            let schema = df.schema().await?;
-            let schema_response = schema::proto_schema(&schema)?;
-            Ok((
-                df,
-                schema,
-                schema_response,
-                observed::plan_ids(logical.root()),
-            ))
+            match execution_plan(entry, plan, limits).await? {
+                Executed::Relation(logical) => {
+                    let df = session.from_plan_with(&logical, query_options)?;
+                    let schema = df.schema().await?;
+                    let schema_response = schema::proto_schema(&schema)?;
+                    Ok(Some((
+                        df,
+                        schema,
+                        schema_response,
+                        observed::plan_ids(logical.root()),
+                    )))
+                }
+                // A command that ran (`register_function`): no response but the end.
+                Executed::Command => Ok(None),
+            }
         })
         .await;
-        let ((df, schema, schema_response, plan_ids), registered) =
-            settle_preparation(&op, registered, prepared)?;
-        let query = Query {
-            df,
-            schema,
-            schema_response,
-            settings: encode_settings(&conf, limits, opts.chunking),
-            plan_ids,
-        };
-        (Work::Query(Box::new(query)), registered)
+        match settle_preparation(&op, registered, prepared)? {
+            (Some((df, schema, schema_response, plan_ids)), registered) => {
+                let query = Query {
+                    df,
+                    schema,
+                    schema_response,
+                    settings: encode_settings(&conf, limits, opts.chunking),
+                    plan_ids,
+                };
+                (Work::Query(Box::new(query)), registered)
+            }
+            (None, registered) => (Work::NoResult, registered),
+        }
     };
 
     let sender = Sender {
@@ -413,22 +425,91 @@ fn is_ml_clean_cache(plan: &pb::Plan) -> bool {
 enum Translated {
     /// A ROOT relation as the engine's IR.
     Relation(krishiv_plan::Plan),
-    /// A command (from a compressed operation too): its ADR 0046 §3b class,
-    /// then the refusal it gets until P3-T012 runs commands. The command
-    /// itself is not kept: it stays in the scrubbed request.
-    Command {
-        /// The command's class.
-        check: Check,
-        /// `CONNECT_INVALID_PLAN` naming the command.
-        refusal: KrishivError,
-    },
+    /// A command (from a compressed operation too). The proto itself is
+    /// not kept: it stays in the scrubbed request.
+    Command(Box<TranslatedCommand>),
+}
+
+/// A command: its ADR 0046 §3b class, what `ExecutePlan` runs
+/// (`register_function`; every other command is refused until P3-T012) and
+/// the refusal `AnalyzePlan` gives.
+struct TranslatedCommand {
+    /// The command's class.
+    check: Check,
+    /// The command as translated, or why it is not run.
+    run: Result<RunCommand, KrishivError>,
+    /// `CONNECT_INVALID_PLAN` naming the command.
+    refusal: KrishivError,
 }
 
 impl Translated {
     fn command(command: &pb::Command) -> Self {
-        Self::Command {
+        Self::Command(Box::new(TranslatedCommand {
             check: check_command(command),
+            run: translate_command(command),
             refusal: command_not_supported(command),
+        }))
+    }
+}
+
+/// What an `ExecutePlan` request's plan is, once its privileges are checked.
+enum Executed {
+    /// A ROOT relation to run; its inline Python UDFs are registered.
+    Relation(krishiv_plan::Plan),
+    /// A command that ran (`register_function`).
+    Command,
+}
+
+/// The session's `spark.sql.sources.default` for translation.
+fn translate_conf(session: &krishiv_session::Session) -> TranslateConf {
+    TranslateConf {
+        default_data_source: session
+            .conf()
+            .get("spark.sql.sources.default")
+            .unwrap_or_else(|| TranslateConf::default().default_data_source),
+    }
+}
+
+/// The plan of an `ExecutePlan` request, after its checks: a command's ADR
+/// 0046 §3b class is enforced before it runs; a relation with an inline
+/// Python UDF needs `Usage` on `System("udf")` before its UDFs are
+/// registered with the session's workers (ADR 0046 §3b, N1: fail closed,
+/// nothing is registered or started for a caller without it).
+///
+/// # Errors
+/// The decompression, decoding and translation errors, the privilege
+/// refusals (`KRISHIV_INSUFFICIENT_PERMISSIONS`), a command's errors, and
+/// the refusal of a command that is not run yet.
+async fn execution_plan(
+    entry: &SessionEntry,
+    plan: &pb::Plan,
+    limits: &ExecuteLimits,
+) -> Result<Executed, KrishivError> {
+    let session = entry.session();
+    let decompressed = decompressed(plan, limits).await?;
+    let mut udfs = InlineUdfs::execution(entry.python());
+    match translate_plan(
+        plan,
+        decompressed.as_deref(),
+        &translate_conf(session),
+        &mut udfs,
+    )? {
+        Translated::Relation(logical) => {
+            if udfs.seen() {
+                crate::auth::enforce(&crate::auth::client_code(), session).await?;
+                udfs.grant(session)?;
+            }
+            Ok(Executed::Relation(logical))
+        }
+        Translated::Command(command) => {
+            let TranslatedCommand { check, run, .. } = *command;
+            crate::auth::enforce(&check, session).await?;
+            match run? {
+                RunCommand::RegisterPythonUdf(udf) => {
+                    entry.python().register(session, udf)?;
+                }
+            }
+            Ok(Executed::Command)
         }
     }
 }
@@ -443,17 +524,37 @@ impl Translated {
 /// # Errors
 /// The decompression, decoding and translation errors.
 pub(crate) async fn request_plan(
-    session: &krishiv_session::Session,
+    entry: &SessionEntry,
     plan: &pb::Plan,
     limits: &ExecuteLimits,
 ) -> Result<krishiv_plan::Plan, KrishivError> {
-    let translate = TranslateConf {
-        default_data_source: session
-            .conf()
-            .get("spark.sql.sources.default")
-            .unwrap_or_else(|| TranslateConf::default().default_data_source),
-    };
-    let decompressed = match &plan.op_type {
+    let session = entry.session();
+    let decompressed = decompressed(plan, limits).await?;
+    // Inline Python UDFs are typed, never registered: analysis runs no client code.
+    let mut udfs = InlineUdfs::analysis(entry.python());
+    match translate_plan(
+        plan,
+        decompressed.as_deref(),
+        &translate_conf(session),
+        &mut udfs,
+    )? {
+        Translated::Relation(logical) => Ok(logical),
+        // A command's ADR 0046 §3b class is checked before it is refused, on every RPC that
+        // takes a plan.
+        Translated::Command(command) => {
+            crate::auth::enforce(&command.check, session).await?;
+            Err(command.refusal)
+        }
+    }
+}
+
+/// A compressed operation's bytes, decompressed off the async workers
+/// (bounded by `maxPlanSize`); `None` for any other plan.
+async fn decompressed(
+    plan: &pb::Plan,
+    limits: &ExecuteLimits,
+) -> Result<Option<Vec<u8>>, KrishivError> {
+    Ok(match &plan.op_type {
         Some(OpType::CompressedOperation(c)) => {
             let c = (**c).clone();
             let max = limits.max_plan_size;
@@ -469,16 +570,7 @@ pub(crate) async fn request_plan(
             )
         }
         _ => None,
-    };
-    match translate_plan(plan, decompressed.as_deref(), &translate)? {
-        Translated::Relation(logical) => Ok(logical),
-        // A command's ADR 0046 §3b class is checked before it is refused, on every RPC that
-        // takes a plan.
-        Translated::Command { check, refusal } => {
-            crate::auth::enforce(&check, session).await?;
-            Err(refusal)
-        }
-    }
+    })
 }
 
 /// The plan as the engine's IR: a ROOT relation translated, a compressed
@@ -487,17 +579,18 @@ fn translate_plan(
     plan: &pb::Plan,
     decompressed: Option<&[u8]>,
     conf: &TranslateConf,
+    udfs: &mut dyn TranslateHost,
 ) -> Result<Translated, KrishivError> {
     match &plan.op_type {
         Some(OpType::Root(relation)) => {
-            translate_relation(relation, conf).map(Translated::Relation)
+            translate_relation_with(relation, conf, udfs).map(Translated::Relation)
         }
         Some(OpType::Command(command)) => Ok(Translated::command(command)),
         Some(OpType::CompressedOperation(c)) => {
             let bytes = decompressed.unwrap_or_default();
             match CompressedOpType::try_from(c.op_type) {
                 Ok(CompressedOpType::Relation) => {
-                    translate_relation(&*wire::decode_relation(bytes)?, conf)
+                    translate_relation_with(&*wire::decode_relation(bytes)?, conf, udfs)
                         .map(Translated::Relation)
                 }
                 Ok(CompressedOpType::Command) => {

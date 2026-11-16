@@ -13,6 +13,9 @@ the logical-plan IR of `krishiv-plan`. The server (P3-T011, P3-T012) extends thi
 - `src/proto/mod.rs` versioned generated protos; `src/proto/v4_3/spark.connect.pb.rs` generated messages (4.2 is kept only for the golden descriptor) (do not edit)
 - `src/translate/mod.rs` `translate_*` entry points, `command_not_supported` (commands are 56K00 until T012); `src/translate/relation.rs` and `expression.rs` (IR building)
 - `src/translate/literal.rs` literals; `src/translate/names.rs` names and plan-id origins
+- `src/translate/udf.rs` Python UDFs (P3-T014): `python_udf` reads a `CommonInlineUserDefinedFunction` into a `PythonUdf`
+  (scalar eval types 100/101/200/250; Scala/Java 56K00), `UdfHost` is the server's hook naming an inline call
+  (`translate_relation_with`; without a host inline UDFs are refused), `translate_command` reads `register_function`
 - `src/translate/errors.rs` `KRISHIV_UNSUPPORTED_FEATURE` and `CONNECT_INVALID_PLAN.*` errors
 - `src/artifact.rs` `parse_artifact_name`: `AddArtifacts` names (prefixes, segments, fragments), fuzzed by
   `connect_artifact_name` in `fuzz/`

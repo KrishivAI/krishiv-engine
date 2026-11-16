@@ -128,6 +128,17 @@ const SPARK_UPGRADE_EXCEPTION: &[&str] = classes!(
     "java.lang.RuntimeException",
 );
 
+/// `PythonException` (`core/.../api/python/PythonRDD.scala` v4.3.0 line 130:
+/// `extends RuntimeException with SparkThrowable`), which Connect sends
+/// unwrapped from the job failure (`ErrorUtils.isPythonExecutionException`,
+/// v4.3.0 lines 283-288, 336-338). PySpark raises its `PythonException`
+/// when the first entry is in `classes` (`errors/exceptions/connect.py`
+/// line 189).
+const PYTHON_EXCEPTION: &[&str] = classes!(
+    "org.apache.spark.api.python.PythonException",
+    "java.lang.RuntimeException",
+);
+
 /// The Java class hierarchy Spark would raise for `class`, as
 /// `ErrorUtils.allClasses` lists it. PySpark 4.3.0
 /// (`pyspark/errors/exceptions/connect.py`, `EXCEPTION_CLASS_MAPPING`) picks
@@ -168,6 +179,11 @@ pub(crate) fn exception_classes(class: ErrorClass) -> &'static [&'static str] {
         ("ARTIFACT_ALREADY_EXISTS", SPARK_RUNTIME_EXCEPTION),
         ("INVALID_ARTIFACT_PATH", SPARK_RUNTIME_EXCEPTION),
         ("INTERNAL_ERROR", SPARK_EXCEPTION),
+        // A UDF that raised (38000).
+        ("PYTHON_EXCEPTION", PYTHON_EXCEPTION),
+        // Spark's crashed worker is a classless `SparkException("Python worker exited
+        // unexpectedly (crashed)...")` (`PythonRunner.scala` v4.3.0 lines 1132-1143).
+        ("KRISHIV_PYTHON_WORKER_EXITED", SPARK_EXCEPTION),
         // Spark's `ExecuteThreadRunner` throws a `SparkSQLException`
         // (v4.3.0, lines 105 and 175): PySpark raises `UnknownException`.
         ("OPERATION_CANCELED", SPARK_SQL_EXCEPTION),

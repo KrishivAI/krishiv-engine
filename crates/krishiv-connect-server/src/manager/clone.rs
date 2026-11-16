@@ -100,7 +100,9 @@ impl SessionManager {
             let snapshot = source.artifacts().snapshot();
             (session, snapshot)
         };
-        let entry = self.new_entry(caller, session, source.client_user_id());
+        // The clone's own Python UDF runtime, never the source's (its workers serve one owner).
+        let python = source.python().copy_for(&caller.principal.name, &session);
+        let entry = self.new_entry(caller, session, source.client_user_id(), python);
         let pending = Unpublished(Some(Arc::clone(&entry)));
         let snapshot = snapshot.ok_or_else(source_closed)?;
         if !snapshot.is_empty() {

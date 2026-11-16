@@ -26,6 +26,7 @@ pub mod sender;
 pub mod server;
 pub mod service;
 pub mod status;
+pub mod udf;
 
 pub use artifacts::{ArtifactLimits, ArtifactStore, SessionArtifacts};
 pub use auth::{
@@ -37,3 +38,4 @@ pub use operation::{ExecuteLimits, Operation, OperationState, Operations};
 pub use server::{ConnectServer, ConnectServerConfig};
 pub use service::ConnectService;
 pub use status::status_of;
+pub use udf::{RunnerConf, SessionUdfRuntime, UdfHost};
