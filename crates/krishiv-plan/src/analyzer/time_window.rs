@@ -377,6 +377,7 @@ fn node(p: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, AnalysisError> {
     };
     let Some(project) = qualify else {
         let with_input = p.map_children(|_| Ok::<_, AnalysisError>(Arc::clone(&input)))?;
+        let with_input = except_added_column(with_input, name);
         return with_input.map_expressions(replace);
     };
     let PlanNode::Project { exprs, .. } = &project.node else {
@@ -393,6 +394,35 @@ fn node(p: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, AnalysisError> {
     );
     let with_input = p.map_children(|_| Ok::<_, AnalysisError>(Arc::clone(&widened)))?;
     with_input.map_expressions(replace)
+}
+
+/// A select list's bare `*` stands for the input's columns as the query wrote them: Spark expands it before
+/// it adds the window column, so `SELECT *, window(ts, ..)` has `window` once. (A table with a column of
+/// the same name loses it from the `*`: a known difference.)
+fn except_added_column(p: Arc<LogicalPlan>, name: &str) -> Arc<LogicalPlan> {
+    let PlanNode::Project { input, exprs } = &p.node else {
+        return p;
+    };
+    let exprs = exprs
+        .iter()
+        .map(|e| match &e.node {
+            ExprNode::Star(s)
+                if s.qualifier.is_empty() && s.regex.is_none() && s.position.is_none() =>
+            {
+                let mut s = s.clone();
+                s.except.push(vec![name.to_owned()]);
+                Arc::new(Expr::new(ExprNode::Star(s)).with_origin(e.origin))
+            }
+            _ => Arc::clone(e),
+        })
+        .collect();
+    Arc::new(
+        LogicalPlan::new(PlanNode::Project {
+            input: Arc::clone(input),
+            exprs,
+        })
+        .with_origin(p.origin),
+    )
 }
 
 /// The only input of `p`.
@@ -468,8 +498,22 @@ fn time_window_input(
     }
     // `window(window(ts, ..), ..)`: the outer window reads the inner one's `window_time`.
     if let Some(inner) = call_of(&f.args[0], WINDOW) {
-        let inner_input =
-            single_window(base, inner, "__tw_inner", (*inner.args[0]).clone(), origin)?;
+        // An inner `window()` with no arguments gets the arity error of `single_window`.
+        let inner_time = match inner.args.first() {
+            Some(t) => (**t).clone(),
+            None => {
+                return Err(AnalysisError::new(
+                    WrongNumArgsWithoutSuggestion {
+                        function_name: "`window`".to_owned(),
+                        expected_num: "[2, 3, 4]".to_owned(),
+                        actual_num: "0".to_owned(),
+                        docroot: SPARK_DOC_ROOT.to_owned(),
+                    },
+                    origin,
+                ));
+            }
+        };
+        let inner_input = single_window(base, inner, "__tw_inner", inner_time, origin)?;
         let time = Expr::function(WINDOW_TIME_SCALAR, vec![Expr::column(["__tw_inner"])]);
         return single_window(&inner_input, f, WINDOW, time, origin);
     }

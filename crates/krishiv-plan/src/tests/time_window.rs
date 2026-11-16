@@ -5,7 +5,7 @@
 
 use krishiv_types::DataType;
 
-use super::dsl::{c, count_star, f, int, s};
+use super::dsl::{c, count_star, f, int, s, star};
 use crate::analyzer::testing::{block_on, context};
 use crate::analyzer::{
     AnalysisError, AnalyzedPlan, Analyzer as _, DefaultAnalyzer, MemoryCatalog, ResolutionConf,
@@ -165,6 +165,26 @@ fn other_argument_errors() {
     // Integer durations are microseconds.
     let micros = f("window", vec![c("ts"), int(5_000_000)]);
     assert_eq!(class(&run(grouped(micros))), "OK");
+}
+
+#[test]
+fn an_inner_window_without_arguments_is_an_arity_error_not_a_panic() {
+    // `window(window(), '5 minutes')`: Spark raises WRONG_NUM_ARGS for the inner call.
+    let inner = f("window", vec![]);
+    let nested = f("window", vec![inner, s("5 minutes")]);
+    assert_eq!(
+        class(&run(grouped(nested))),
+        "WRONG_NUM_ARGS.WITHOUT_SUGGESTION"
+    );
+}
+
+#[test]
+fn a_star_next_to_a_window_returns_the_window_column_once() {
+    // `SELECT *, window(ts, '5 minutes') FROM t`: the table's columns plus one `window`.
+    let plan = LogicalPlan::table(["t"]).project(vec![star(), window("ts", &["5 minutes"])]);
+    let r = run(plan);
+    assert_eq!(class(&r), "OK");
+    assert_eq!(types(&r).len(), 5, "a, ts, n, x and one window column");
 }
 
 #[test]
