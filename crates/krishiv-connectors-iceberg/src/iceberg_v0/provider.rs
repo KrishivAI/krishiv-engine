@@ -237,7 +237,7 @@ impl TableProvider for IcebergTableProvider {
         Ok(Arc::clone(&self.scan) as Arc<dyn ScanPushdown>)
     }
 
-    /// From the manifests ([`super::stats`]), worked out once.
+    /// From the manifests (`stats.rs`), worked out once.
     fn statistics(&self) -> Option<TableStats> {
         let s = &self.scan;
         Some(
