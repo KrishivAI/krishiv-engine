@@ -218,7 +218,7 @@ async fn the_editor_runs_a_statement_and_returns_rows() {
     assert_eq!(done["columns"], json!(["answer", "s", "d"]));
     assert_eq!(done["rows"], json!([[42, "x", "2024-02-03"]]));
 
-    let (_, body) = post(addr, "/api/internal/sql", r#"{"sql": "SELEC nope"}"#).await;
+    let (_, body) = post(addr, "/api/internal/sql", r#"{"sql": "SELECT FROM WHERE"}"#).await;
     let run = body["run_id"].as_str().unwrap().to_owned();
     let failed = wait_state(addr, &run, "failed", Duration::from_secs(20)).await;
     assert!(failed["error_class"].is_string(), "{failed}");
@@ -515,7 +515,7 @@ async fn the_documented_properties_are_the_ones_the_responses_carry() {
         want.sort();
         assert_eq!(got, want, "{path}");
     }
-    let (_, body) = post(addr, "/api/internal/sql", r#"{"sql": "SELEC nope"}"#).await;
+    let (_, body) = post(addr, "/api/internal/sql", r#"{"sql": "SELECT FROM WHERE"}"#).await;
     let failed = wait_state(
         addr,
         body["run_id"].as_str().unwrap(),

@@ -662,22 +662,6 @@ fn tls_serves_the_admin_listener_and_reloads_on_sighup() {
     let _ = server.child.kill();
 }
 
-/// `GET path` as `host`, with the bearer `token`.
-#[cfg(feature = "ui")]
-fn http_get_host(addr: &str, path: &str, host: &str, token: &str) -> String {
-    let mut s = TcpStream::connect(addr).expect("connect");
-    s.set_read_timeout(Some(Duration::from_secs(10)))
-        .expect("timeout");
-    write!(
-        s,
-        "GET {path} HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {token}\r\nConnection: close\r\n\r\n"
-    )
-    .expect("write");
-    let mut out = String::new();
-    s.read_to_string(&mut out).expect("read");
-    out
-}
-
 #[cfg(feature = "ui")]
 #[test]
 fn the_ui_host_allowlist_follows_krishiv_ui_allowed_hosts() {
@@ -701,16 +685,21 @@ fn the_ui_host_allowlist_follows_krishiv_ui_allowed_hosts() {
         &server.admin,
         "/api/internal/health",
         "ui.example.com",
-        &token,
+        Some(&token),
     );
     assert!(named.starts_with("HTTP/1.1 200"), "{named}");
-    let local = http_get_host(&server.admin, "/api/internal/health", "localhost", &token);
+    let local = http_get_host(
+        &server.admin,
+        "/api/internal/health",
+        "localhost",
+        Some(&token),
+    );
     assert!(local.starts_with("HTTP/1.1 200"), "{local}");
     let other = http_get_host(
         &server.admin,
         "/api/internal/health",
         "evil.example",
-        &token,
+        Some(&token),
     );
     assert!(other.starts_with("HTTP/1.1 403"), "{other}");
 }
