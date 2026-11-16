@@ -35,7 +35,9 @@ Paths are relative to this crate.
   running calls per owner; the rest wait in a FIFO queue, not on a thread), and the relation task slots: at most
   `min(maxPerSession, maxTotal) - 1` per owner (all of them when that is 1) and `maxTotal - 1` in all (the threads
   are shared across sessions), taken all at once or waited for in arrival order (a `TaskTicket` per waiter,
-  dropped when it stops waiting; no grant passes a waiter ahead)
+  dropped when it stops waiting; no grant passes a waiter ahead of the same owner, or one waiting for room in
+  all; with `maxTotal` 1 no task is granted while another owner's scalar call waits for the thread).
+  `try_take_now` is the no-wait form (no ticket, no waker)
   (`take_slots`, never queued), a task with its slot submitted ahead of the queue (`submit_task`); with
   `maxPerSession` 1 a scalar call beside an open task is `KRISHIV_PYTHON_WORKER_LIMIT`
 - `src/interpreter.rs` the startup record of each listed interpreter (version, read paths, packages) and `choose`;

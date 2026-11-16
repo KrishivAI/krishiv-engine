@@ -71,6 +71,19 @@
 //! pipelines, each with drivers of its own; no trace found where neither
 //! comes).
 //!
+//! **Wakers.** No poll here uses a waker nobody listens to (review round
+//! 4). Polls made by `sink` and `combine` (lanes, framing, slot requests)
+//! register the driver's own waker (`DriverWake`), which remembers an event
+//! and passes it to whichever future waits for the driver next (its
+//! `Blocked` future or `finalize`'s `wait`). A pump waiting for a frame or
+//! for its refused result to be reserved is woken by whoever queues the
+//! frame or moves the result (`lane.rs` `wake_pump`). A driver that combines
+//! gives up its place in a slot queue (`finalize` asks again), so no place is
+//! held by a driver nobody polls. A `Blocked` future that leaves a combined
+//! driver's result refused (the pool had no room for it) ends, so the next
+//! `sink` asks for the memory: memory freeing is no event a waker can wait
+//! for, the driver's memory request is.
+//!
 //! **Errors and cancellation.** The first failure of a task fails the
 //! query. Dropping the state (query end, cancel, error) drops every task,
 //! which cancels it, and every reservation.
@@ -85,7 +98,6 @@ use arrow_array::{Array, ArrayRef, RecordBatch, RecordBatchOptions};
 use arrow_row::OwnedRow;
 use arrow_schema::{DataType as ArrowType, Field, Schema, SchemaRef};
 use futures::future::BoxFuture;
-use futures::task::noop_waker_ref;
 use krishiv_common::error::{KrishivError, KrishivPythonUdfResultMismatch};
 use krishiv_memory::{ConsumerHandle, Reservation, SpillScope};
 use krishiv_types::batch::Batch;
@@ -345,19 +357,32 @@ struct Driver {
     pending: Pending,
     /// In `finalize`, the backlog waits for the runtime's slots.
     awaiting_slots: bool,
-    /// The waker `finalize` frames with: it marks the driver woken when its
-    /// slots free, so `wait` returns.
-    slot_wake: Arc<SlotWake>,
+    /// The waker every poll of the driver's lanes, framing and slot requests
+    /// registers when no future of its own polls them (`sink`, `combine`,
+    /// `finalize`): an event it gets is remembered and passed to the future
+    /// that waits for the driver next (its `Blocked` future, `finalize`'s
+    /// `wait`). No poll in this operator uses a waker nobody listens to
+    /// (review round 4).
+    wake: Arc<DriverWake>,
 }
 
-/// The waker of a driver's framing in `finalize`.
-struct SlotWake {
+/// The waker of one driver's polls outside its futures (see [`Driver::wake`]).
+struct DriverWake {
     woken: AtomicBool,
-    /// The waker of `finalize`'s current wait.
+    /// The waker of the future waiting for the driver now.
     waker: Mutex<Option<Waker>>,
 }
 
-impl SlotWake {
+impl DriverWake {
+    /// The waker its events go to from now on (the poll of a future that
+    /// waits for the driver); whether one came since the last call.
+    fn listen(&self, waker: &Waker) -> bool {
+        *lock(&self.waker) = Some(waker.clone());
+        self.woken.swap(false, Ordering::SeqCst)
+    }
+}
+
+impl DriverWake {
     fn new() -> Self {
         Self {
             woken: AtomicBool::new(false),
@@ -366,7 +391,7 @@ impl SlotWake {
     }
 }
 
-impl Wake for SlotWake {
+impl Wake for DriverWake {
     fn wake(self: Arc<Self>) {
         self.wake_by_ref();
     }
@@ -389,6 +414,8 @@ struct Feed {
     /// The driver's places in the runtimes' slot queues while it waits
     /// for slots (`admit.rs`); dropped with the state.
     tickets: Vec<Option<super::RelationTicket>>,
+    /// The driver's waker ([`Driver::wake`]), for its `Blocked` future.
+    wake: Arc<DriverWake>,
 }
 
 /// What [`flush_feed`] stopped at.
@@ -761,17 +788,18 @@ impl RelationSink {
         )
     }
 
-    /// [`Self::flush`] from `sink` or `combine`, which wait for nothing: a
-    /// backlog waiting for slots makes `sink` return `Blocked`, whose
-    /// future frames it with a waker.
+    /// [`Self::flush`] from `sink` or `combine`, with the driver's waker:
+    /// a backlog waiting for slots makes `sink` return `Blocked`, whose
+    /// future listens to that waker.
     fn flush_now(&self, d: &mut Driver) -> Result<Flushed> {
-        self.flush(d, &mut Context::from_waker(noop_waker_ref()))
+        let waker = Waker::from(Arc::clone(&d.wake));
+        self.flush(d, &mut Context::from_waker(&waker))
     }
 
-    /// [`Self::flush`] in `finalize`, with the driver's slot waker.
+    /// [`Self::flush`] in `finalize`, with the driver's waker (`wait`
+    /// listens to it).
     fn flush_finalizing(&self, d: &mut Driver) -> Result<Flushed> {
-        let waker = Waker::from(Arc::clone(&d.slot_wake));
-        let flushed = self.flush(d, &mut Context::from_waker(&waker))?;
+        let flushed = self.flush_now(d)?;
         d.awaiting_slots = matches!(flushed, Flushed::Slots);
         Ok(flushed)
     }
@@ -864,7 +892,8 @@ impl RelationSink {
     /// Moves each lane's frames and results without waiting; the first
     /// failure of a lane.
     fn progress(d: &Driver) -> Result<()> {
-        let mut cx = Context::from_waker(noop_waker_ref());
+        let waker = Waker::from(Arc::clone(&d.wake));
+        let mut cx = Context::from_waker(&waker);
         for lane in &d.lanes {
             if let Some(Err(e)) = lane.poll(&mut cx) {
                 return Err(e);
@@ -1083,15 +1112,14 @@ fn reserve_combined(
     cx: &mut Context<'_>,
 ) -> Option<usize> {
     for lane in lanes {
-        let Some(bytes) = lane.refused_bytes() else {
-            continue;
-        };
-        let mut r = reserve();
-        if r.try_grow(bytes).is_err() {
-            return Some(bytes);
+        // The poll after a reservation may read the next result and meet
+        // another refusal (R4-2): on until none is left or one does not fit.
+        while lane.refused_bytes().is_some() {
+            if let Err(bytes) = lane.reserve_refused_with(reserve()) {
+                return Some(bytes);
+            }
+            let _ = lane.poll(cx);
         }
-        lane.accept_refused(r);
-        let _ = lane.poll(cx);
     }
     None
 }
@@ -1301,7 +1329,11 @@ fn blocked(
     partition: u32,
     combined: Arc<Mutex<Combined>>,
 ) -> BoxFuture<'static, ()> {
+    let wake = Arc::clone(&lock(&feed).wake);
     Box::pin(poll_fn(move |cx| {
+        // The driver's own polls (in `sink`) registered its waker: their
+        // events come here from now on.
+        let _ = wake.listen(cx.waker());
         loop {
             for lane in &lanes {
                 if lane.poll(cx).is_some() || lock(&lane.io).refused.is_some() {
@@ -1377,6 +1409,7 @@ impl Sink for RelationSink {
     fn local_state(&self, ctx: &TaskContext, global: &GlobalState) -> Result<LocalState> {
         let g = global_ref::<RelGlobal>(global, "PythonRelation")?;
         let consumer = ctx.consumer().consumer();
+        let wake = Arc::new(DriverWake::new());
         Ok(Box::new(RelLocal {
             consumer: Arc::clone(consumer),
             store: self.store.local_state(ctx, &g.store)?,
@@ -1399,12 +1432,13 @@ impl Sink for RelationSink {
                     backlog: VecDeque::new(),
                     failed: None,
                     tickets: Vec::new(),
+                    wake: Arc::clone(&wake),
                 })),
                 spare: consumer.reservation(),
                 wants: 0,
                 pending: Pending::default(),
                 awaiting_slots: false,
-                slot_wake: Arc::new(SlotWake::new()),
+                wake,
             },
         }))
     }
@@ -1430,7 +1464,8 @@ impl Sink for RelationSink {
                 // abort), never a hang. The input is not taken yet.
                 let others = lock(&g.combined).lanes.clone();
                 let consumer = Arc::clone(&l.consumer);
-                let mut cx = Context::from_waker(noop_waker_ref());
+                let waker = Waker::from(Arc::clone(&l.driver.wake));
+                let mut cx = Context::from_waker(&waker);
                 if let Some(bytes) = reserve_combined(&others, || consumer.reservation(), &mut cx) {
                     return Ok(SinkStatus::NeedMemory { bytes });
                 }
@@ -1484,6 +1519,11 @@ impl Sink for RelationSink {
         lock(&driver.feed).backlog.push_back(Cut::End);
         self.flush_now(&mut driver)?;
         Self::progress(&driver)?;
+        // Its place in a slot queue would be polled again only in
+        // `finalize`, after every driver combined, and it holds back the
+        // siblings asking after it (review R4-1): it leaves the queue, and
+        // `finalize` asks again.
+        lock(&driver.feed).tickets.clear();
         let parked = {
             let mut c = lock(&g.combined);
             c.lanes.extend(driver.lanes.iter().cloned());
@@ -1650,8 +1690,7 @@ impl RelationSink {
             let mut ready = false;
             let mut all_done = true;
             for d in drivers {
-                *lock(&d.slot_wake.waker) = Some(cx.waker().clone());
-                if d.slot_wake.woken.swap(false, Ordering::SeqCst) {
+                if d.wake.listen(cx.waker()) {
                     ready = true;
                 }
                 let mut room = true;

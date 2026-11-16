@@ -24,7 +24,10 @@ use crate::error::{Result, internal};
 /// others), in lane order; `Pending` with no slot held while any group of
 /// lanes sharing slots cannot get all of them. `tickets` are the driver's
 /// places in the groups' queues, kept between polls (dropped with the
-/// driver's state when it stops waiting).
+/// driver's state when it stops waiting). Arrival order holds for one group
+/// only (review R4-6): with several, the groups before the one still waiting
+/// give their grant back and ask again at the tail. A query has one group
+/// today (one slot set per session).
 pub(super) fn poll_admit(
     specs: &[RelationLane],
     tickets: &mut Vec<Option<RelationTicket>>,

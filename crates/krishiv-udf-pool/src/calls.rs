@@ -287,17 +287,7 @@ impl CallThreads {
                 .position(|w| w.id == t.id && Arc::ptr_eq(&t.shared, &self.shared))
         });
         let ahead = at.unwrap_or(queue.waiting_slots.len());
-        let limit = self.slot_limit();
-        let held_by = |o: &Owner| queue.slots.get(o).copied().unwrap_or(0);
-        // A waiter ahead holds this request back if it is the same owner's, or if its owner has room (it waits
-        // for room in all, which this request would take).
-        let held_back = queue
-            .waiting_slots
-            .iter()
-            .take(ahead)
-            .any(|w| &w.owner == owner || held_by(&w.owner) + w.n <= limit);
-        let fits = held_by(owner) + n <= limit && queue.slots_total + n <= self.total_limit();
-        if held_back || !fits {
+        if !self.grantable(&queue, owner, n, ahead) {
             match at.and_then(|i| queue.waiting_slots.get_mut(i)) {
                 Some(w) => {
                     if !w.waker.will_wake(waker) {
@@ -343,6 +333,43 @@ impl CallThreads {
             })
             .collect();
         (SlotTake::Taken, slots)
+    }
+
+    /// One of `owner`'s slots now, or none: for a caller that will not wait (it takes no place in the queue,
+    /// so it needs no waker).
+    pub(crate) fn try_take_now(&self, owner: &Owner) -> Option<TaskSlot> {
+        let mut queue = self.shared.lock();
+        if !self.grantable(&queue, owner, 1, queue.waiting_slots.len()) {
+            return None;
+        }
+        *queue.slots.entry(owner.clone()).or_default() += 1;
+        queue.slots_total += 1;
+        drop(queue);
+        Some(TaskSlot {
+            shared: Arc::clone(&self.shared),
+            owner: owner.clone(),
+        })
+    }
+
+    /// Whether `n` slots can go to `owner`, behind the first `ahead` waiters.
+    fn grantable(&self, queue: &Queue, owner: &Owner, n: usize, ahead: usize) -> bool {
+        let limit = self.slot_limit();
+        let held_by = |o: &Owner| queue.slots.get(o).copied().unwrap_or(0);
+        // A waiter ahead holds this request back if it is the same owner's, or if its owner has room (it waits
+        // for room in all, which this request would take).
+        let held_back = queue
+            .waiting_slots
+            .iter()
+            .take(ahead)
+            .any(|w| &w.owner == owner || held_by(&w.owner) + w.n <= limit);
+        // With one thread, no new task is granted while another owner's scalar call waits for that thread: a
+        // stream of one owner's tasks would otherwise keep it waiting (review R4-5).
+        let thread_wanted =
+            self.shared.max_threads == 1 && queue.calls.iter().any(|(o, _)| o != owner);
+        !held_back
+            && !thread_wanted
+            && held_by(owner) + n <= limit
+            && queue.slots_total + n <= self.total_limit()
     }
 
     /// Live call threads.
@@ -437,7 +464,14 @@ impl Shared {
                 continue;
             };
             let _ = self.wake(&mut queue);
+            // With one thread a slot request may wait for a queued call to start (`take_slots`): it can go now.
+            let slot_wakers = if self.max_threads == 1 {
+                queue.slot_wakers()
+            } else {
+                Vec::new()
+            };
             drop(queue);
+            slot_wakers.into_iter().for_each(Waker::wake);
             // A call that panics loses only its result (its future reports that it ended without one).
             let _ = std::panic::catch_unwind(AssertUnwindSafe(job));
             queue = self.lock();
@@ -821,6 +855,50 @@ mod tests {
             .expect("b's call is queued, not refused");
         ran.recv_timeout(Duration::from_secs(10))
             .expect("b's call ran");
+    }
+
+    #[test]
+    fn with_one_thread_a_queued_scalar_call_goes_before_the_next_task() {
+        // R4-5: maxTotal 1. The thread is busy; b's scalar call is queued. a's next task is not granted while
+        // b's call waits for the thread, so a stream of a's tasks cannot keep it waiting.
+        let calls = CallThreads::new(1, 4, Duration::from_secs(60));
+        let (release, gate) = mpsc::channel::<()>();
+        calls
+            .submit(
+                owner("c"),
+                Box::new(move || {
+                    let _ = gate.recv_timeout(Duration::from_secs(10));
+                }),
+            )
+            .expect("c");
+        let (done, ran) = mpsc::channel();
+        calls
+            .submit(
+                owner("b"),
+                Box::new(move || {
+                    let _ = done.send(());
+                }),
+            )
+            .expect("b");
+        let count = Arc::new(Count(AtomicUsize::new(0)));
+        let waker = Waker::from(Arc::clone(&count));
+        let mut ticket = None;
+        assert_eq!(
+            calls.take_slots(&owner("a"), 1, &mut ticket, &waker).0,
+            SlotTake::Wait
+        );
+        let _ = release.send(());
+        ran.recv_timeout(Duration::from_secs(10))
+            .expect("b's call ran first");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while count.0.load(Ordering::SeqCst) == 0 {
+            assert!(Instant::now() < deadline, "a's waiter was never woken");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            calls.take_slots(&owner("a"), 1, &mut ticket, &waker).0,
+            SlotTake::Taken
+        );
     }
 
     #[test]

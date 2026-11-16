@@ -286,24 +286,13 @@ impl PreparedRelation {
         {
             return Ok(*slot);
         }
-        let waker = futures::task::noop_waker();
-        match self
-            .pool
-            .calls()
-            .take_slots(&self.owner, 1, &mut None, &waker)
-        {
-            (SlotTake::Taken, mut slots) => slots.pop().ok_or_else(|| {
-                InternalError {
-                    message: "no relation slot was granted".to_owned(),
-                }
-                .into()
-            }),
-            _ => Err(InternalError {
+        self.pool.calls().try_take_now(&self.owner).ok_or_else(|| {
+            InternalError {
                 message: "a Python UDF task was opened without a free relation slot of its session"
                     .to_owned(),
             }
-            .into()),
-        }
+            .into()
+        })
     }
 }
 

@@ -91,6 +91,10 @@ pub(super) struct LaneIo {
     /// The pump waiting while a peer holds the lane back, woken when a
     /// peer yields, takes its last frame or stops.
     waiting: Option<Waker>,
+    /// The pump waiting for a frame or for its refused result to be
+    /// reserved: woken by whoever queues the frame or moves the result
+    /// ([`wake_pump`]).
+    pump: Option<Waker>,
 }
 
 impl LaneIo {
@@ -186,6 +190,7 @@ impl Lane {
                     rows: 0,
                     stopped: false,
                     waiting: None,
+                    pump: None,
                 }))
             })
             .collect();
@@ -251,6 +256,7 @@ impl Lane {
             }
         }
         lock(&self.io).inbound.push_back((frame, memory));
+        wake_pump(&self.io);
         Ok(())
     }
 
@@ -262,13 +268,29 @@ impl Lane {
             .map(RecordBatch::get_array_memory_size)
     }
 
-    /// Moves the refused result, if any, to the outputs with `memory`, a
-    /// reservation of its bytes (of any consumer: the store takes it over).
-    pub(super) fn accept_refused(&self, memory: Reservation) {
-        let mut q = lock(&self.io);
-        if let Some(batch) = q.refused.take() {
-            q.outputs.push_back((batch, memory));
+    /// Grows `memory` (a reservation of any consumer: the store takes it
+    /// over) to the refused result, if any, and moves the result to the
+    /// outputs, under one lock, so two drivers never reserve for one batch
+    /// nor move one under another's size (review R4-3); the bytes the pool
+    /// refused. The pump is woken to read on.
+    pub(super) fn reserve_refused_with(
+        &self,
+        mut memory: Reservation,
+    ) -> std::result::Result<(), usize> {
+        {
+            let mut q = lock(&self.io);
+            let Some(bytes) = q.refused.as_ref().map(RecordBatch::get_array_memory_size) else {
+                return Ok(());
+            };
+            if memory.try_grow(bytes).is_err() {
+                return Err(bytes);
+            }
+            if let Some(batch) = q.refused.take() {
+                q.outputs.push_back((batch, memory));
+            }
         }
+        wake_pump(&self.io);
+        Ok(())
     }
 
     /// Reserves the refused result, if any, without waiting, and moves it
@@ -283,15 +305,22 @@ impl Lane {
         if let Some(batch) = q.refused.take() {
             q.outputs.push_back((batch, r));
         }
+        drop(q);
+        // The pump waits for this: it reads on.
+        wake_pump(&self.io);
         None
     }
 
     /// The refused result, if any, taken without a reservation (its
     /// caller stores it at once, writing it out when the pool is full).
     pub(super) fn take_refused_unreserved(&self) -> Option<RecordBatch> {
-        let mut q = lock(&self.io);
-        let batch = q.refused.take()?;
-        q.took(batch.num_rows());
+        let batch = {
+            let mut q = lock(&self.io);
+            let batch = q.refused.take()?;
+            q.took(batch.num_rows());
+            batch
+        };
+        wake_pump(&self.io);
         Some(batch)
     }
 
@@ -306,10 +335,13 @@ impl Lane {
         let io = Arc::clone(&self.io);
         Some(Box::pin(async move {
             r.grow(bytes).await.map_err(KrishivError::from)?;
-            let mut q = lock(&io);
-            if let Some(batch) = q.refused.take() {
-                q.outputs.push_back((batch, r));
+            {
+                let mut q = lock(&io);
+                if let Some(batch) = q.refused.take() {
+                    q.outputs.push_back((batch, r));
+                }
             }
+            wake_pump(&io);
             Ok(())
         }))
     }
@@ -327,6 +359,15 @@ fn held_back(peers: &[Arc<Mutex<LaneIo>>], index: usize) -> bool {
         let q = lock(io);
         i != index && !q.stopped && q.in_flight() > 0 && q.rows < own
     })
+}
+
+/// Wakes the pump of `io` if it waits for a frame or for its refused result
+/// (the waker is taken under the lock and woken after it is released).
+fn wake_pump(io: &Mutex<LaneIo>) {
+    let waker = lock(io).pump.take();
+    if let Some(w) = waker {
+        w.wake();
+    }
 }
 
 /// Wakes every peer of lane `index` waiting for it to yield, take its last
@@ -354,15 +395,18 @@ fn pump(task: Box<dyn UdfTask>, peers: Peers, index: usize) -> BoxFuture<'static
         };
         let send = async {
             loop {
-                // Never woken: whoever queues a frame polls the pump next.
-                let frame = poll_fn(|_| {
+                // Woken by whoever queues the next frame (`Lane::queue`).
+                let frame = poll_fn(|cx| {
                     let mut q = lock(&io);
                     match q.inbound.pop_front() {
                         Some((frame, memory)) => {
                             q.sending = Some(memory);
                             Poll::Ready(frame)
                         }
-                        None => Poll::Pending,
+                        None => {
+                            q.pump = Some(cx.waker().clone());
+                            Poll::Pending
+                        }
                     }
                 })
                 .await;
@@ -384,14 +428,18 @@ fn pump(task: Box<dyn UdfTask>, peers: Peers, index: usize) -> BoxFuture<'static
         };
         let receive = async {
             loop {
-                // Not woken while refused: whoever reserves the refused
-                // batch polls the pump next. Held back by a peer: woken
-                // when a peer yields, takes its last frame or stops (the
-                // waker is set before the check, so a peer that moves
-                // after it wakes this pump).
+                // Refused: woken by whoever reserves or takes the refused
+                // batch ([`wake_pump`]). Held back by a peer: woken when a
+                // peer yields, takes its last frame or stops (the waker is
+                // set before the check, so a peer that moves after it wakes
+                // this pump).
                 poll_fn(|cx| {
-                    if lock(&io).refused.is_some() {
-                        return Poll::Pending;
+                    {
+                        let mut q = lock(&io);
+                        if q.refused.is_some() {
+                            q.pump = Some(cx.waker().clone());
+                            return Poll::Pending;
+                        }
                     }
                     lock(&io).waiting = Some(cx.waker().clone());
                     if held_back(&peers, index) {
