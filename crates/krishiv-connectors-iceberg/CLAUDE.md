@@ -110,7 +110,16 @@ retry never reuses a failed attempt's names; tests `write_tests.rs`
 (tuples against iceberg-rust's transforms over the rows read back, footers' field ids, rollover, the open-file cap,
 an append of the written files read back, failed writes and an injected upload failure leaving no file, a dropped
 abort, two attempts, memory pressure and the reservation released, list and map ids from a sliced batch)
-· `sink.rs` (PR-36a) `IcebergWriteSink`, an append as `krishiv-exec`'s `FileWriteSink`: one `DataFileWriter` per
+· `lineage.rs` (PR-36b unit 2a, design note §8 item 3) v3 row lineage: `_row_id` (2147483540) and
+`_last_updated_sequence_number` (2147483539) as the spec's "Row Lineage" rules: `IcebergTableProvider::lineage_scan`
+(crate-private, the seam unit 2's CoW rewrite reads through) appends both to the table schema; its inner file scan
+reads the stored values by reserved id (null when the file lacks them), the file's `first_row_id` and data sequence
+number as `FileConstants` and the row position as the row id, under the delete-aware source, and `LineageSource`
+derives the values (stored non-null wins, else `first_row_id + _pos` / data sequence number; a file without
+`first_row_id` reads null for both); `DataFileWriter::with_lineage` writes both columns under their ids, optional longs,
+metrics in the table's default mode (Java's `MetricsConfig.columnMode(id)`); v1/v2 tables refuse both
+(`KRISHIV_UNSUPPORTED_FEATURE`); tests `lineage_tests.rs` (a rewrite round trip, stored/updated/inserted rows, deletes
+first, a pre-upgrade file, v1/v2, the derivation against a model) · `sink.rs` (PR-36a) `IcebergWriteSink`, an append as `krishiv-exec`'s `FileWriteSink`: one `DataFileWriter` per
 driver on a task of its own behind a bounded channel (`Blocked` while full; not counted as the query's blocking work,
 whose counter is private to krishiv-exec, so an aborting task may outlive the query briefly), `combine` finishes,
 `finalize` gathers every driver's files, tells each task to keep or delete them, then `write_new_manifests` and
@@ -218,6 +227,12 @@ Fixture: `tests/fixtures/iceberg-1.12.0-spark-types.json` (source-only goldens,
 - **Manifest probe memory** (`rolling.rs`): a probe holds its cloned entries and the encoded bytes (in the writer and
   the scratch store until deleted), and the search keeps the reaching probe's bytes, so up to about twice the
   target size (8 MiB default) plus the entries on the driver, uncharged, as iceberg-rust's own manifest buffering is.
+- **Row lineage (PR-36b unit 2a):** a lineage scan reading a lineage column refuses `_metadata` columns
+  (`KRISHIV_UNSUPPORTED_FEATURE`: the row position is read as the row id); filters on the lineage columns are not
+  pushed. The Iceberg scan does not `supports_take`, which main's `RowIdScan` requires: unit 2's `RowLevelTable` needs
+  `take` (or its own row id wrapper) first. Whether Spark hides or refuses the columns on v1/v2 tables is not verified
+  (its `SparkTable` source was not supplied); Krishiv refuses. A file whose manifest leaves its data sequence number
+  null reads a null `_last_updated_sequence_number` where none is stored.
 - `statistics()` takes no filter: the row estimate sums every live file, not the files left after pruning.
 - A deletion vector is read at the length its manifest declares (`deletes.rs` `read_dv`) without the
   `krishiv.catalog.maxMetadataBytes` cap the metadata files get; its memory is charged to the query (the decode's transient copy aside; review of the
