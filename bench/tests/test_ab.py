@@ -137,6 +137,31 @@ def test_conf_argv_exact(tmp_path: Path):
         eng.teardown()
 
 
+def test_branch_alignment_is_recorded_when_the_runner_reports_it(tmp_path: Path):
+    info = {"profile": "dist", "target-cpu": "x86-64-v3", "branch-align": "32B"}
+    eng = KrishivEngine(binary=make_runner(tmp_path, "aligned", info))
+    assert eng.runner_build_info() == {"build_profile": "dist", "target_cpu": "x86-64-v3", "branch_align": "32B"}
+
+
+def test_build_mismatch_names_the_fields_that_differ():
+    plain = {"build_profile": "dist", "target_cpu": "x86-64-v3"}
+    aligned = {**plain, "branch_align": "32B"}
+    off = {**plain, "branch_align": "off"}
+
+    def sides(a, b):
+        return {"a": {"build_info": a}, "b": {"build_info": b}}
+
+    assert ab.build_mismatch(sides(aligned, aligned)) is None
+    assert ab.build_mismatch(sides(None, aligned)) is None  # a runner that cannot say is not compared
+    msg = ab.build_mismatch(sides(off, aligned))
+    assert msg is not None
+    assert "branch_align A=off B=32B" in msg
+    assert "target_cpu" not in msg
+    msg = ab.build_mismatch(sides(plain, aligned))
+    assert msg is not None
+    assert "branch_align A=unreported B=32B" in msg
+
+
 def test_build_info_is_recorded_when_supported_and_skipped_otherwise(tmp_path: Path):
     old = KrishivEngine(binary=make_runner(tmp_path, "old"))
     new = KrishivEngine(binary=make_runner(tmp_path, "new", {"profile": "dist", "target-cpu": "x86-64-v3"}))
@@ -254,6 +279,28 @@ def test_run_ab_writes_both_sides_into_the_result(tmp_path: Path, monkeypatch: p
     assert rec["queries"]["q01"]["status"] == "ok"
     assert rec["summary"]["queries_ok"] == 1
     assert "B/A geomean" in ab.markdown(rec)
+    assert "build_mismatch" not in rec  # one runner cannot report its build: nothing to compare
+
+
+def test_run_ab_records_and_prints_a_build_mismatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    data = tmp_path / "data"
+    ds = data / "tpch-duckdb" / "sf1"
+    ds.mkdir(parents=True)
+    pq.write_table(pa.table({"a": [1]}), ds / "t.parquet")
+    plain = {"profile": "dist", "target-cpu": "x86-64-v3", "branch-align": "off"}
+    a_runner = make_runner(tmp_path, "a-runner", plain)
+    b_runner = make_runner(tmp_path, "b-runner", {**plain, "branch-align": "32B"})
+    monkeypatch.setenv("KRISHIV_DATA", str(data))
+    monkeypatch.setattr(ab, "load_queries", lambda *_, **__: [q()])
+    monkeypatch.setattr(ab, "wait_idle", lambda: None)
+    out = ab.run_ab(1, "tpch-duckdb", str(a_runner), str(b_runner), [], [], reps=1)
+    rec = json.loads(out.read_text())
+    assert "branch_align A=off B=32B" in rec["build_mismatch"]
+    assert "**Warning:** A and B runners are built differently" in ab.markdown(rec)
+    assert "warning: A and B runners are built differently" in capsys.readouterr().out
 
 
 def test_summary_geomean_and_ci_use_the_b_over_a_direction():

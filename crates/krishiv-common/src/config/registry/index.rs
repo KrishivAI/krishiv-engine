@@ -269,9 +269,14 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         "krishiv.connect.session.idleTimeout",
         &CONNECT_SESSION_IDLE_TIMEOUT,
     ),
+    ("krishiv.optimizer.semiAntiJoinOrder", &SEMI_ANTI_JOIN_ORDER),
     (
         "krishiv.python.worker.maxPerSession",
         &PYTHON_WORKER_MAX_PER_SESSION,
+    ),
+    (
+        "krishiv.runtimeFilter.bloom.atScale",
+        &RUNTIME_FILTER_BLOOM_AT_SCALE,
     ),
     (
         "krishiv.sql.files.maxPartitionBytes",
