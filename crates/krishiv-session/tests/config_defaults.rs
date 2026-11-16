@@ -1,0 +1,160 @@
+// SPDX-License-Identifier: Apache-2.0
+//! `EngineRuntime::set_config_defaults` (P3-T066, design §5.5): session defaults set while running.
+#![cfg(test)]
+
+use std::sync::Arc;
+
+use krishiv_common::error::ErrorClass;
+use krishiv_session::{EngineRuntime, Session};
+
+fn pair(k: &str, v: &str) -> (String, String) {
+    (k.to_owned(), v.to_owned())
+}
+
+fn runtime() -> Arc<EngineRuntime> {
+    EngineRuntime::builder()
+        .config("krishiv.sql.ansi.enabled", "false")
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"))
+}
+
+fn value(rt: &Arc<EngineRuntime>, key: &str) -> Option<String> {
+    Session::builder()
+        .runtime(Arc::clone(rt))
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"))
+        .conf()
+        .get(key)
+}
+
+#[test]
+fn a_default_reaches_new_sessions_and_not_existing_ones() {
+    let rt = runtime();
+    let before = Session::builder()
+        .runtime(Arc::clone(&rt))
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    rt.set_config_defaults(&[pair("krishiv.sql.ansi.enabled", "true")], &[])
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        before.conf().get("krishiv.sql.ansi.enabled").as_deref(),
+        Some("false"),
+        "a session that exists keeps its value"
+    );
+    assert_eq!(
+        value(&rt, "krishiv.sql.ansi.enabled").as_deref(),
+        Some("true")
+    );
+    assert_eq!(
+        rt.config_defaults(),
+        vec![pair("krishiv.sql.ansi.enabled", "true")]
+    );
+}
+
+#[test]
+fn unset_returns_a_key_to_its_startup_value() {
+    let rt = runtime();
+    rt.set_config_defaults(&[pair("krishiv.sql.ansi.enabled", "true")], &[])
+        .unwrap_or_else(|e| panic!("{e}"));
+    rt.set_config_defaults(&[], &["krishiv.sql.ansi.enabled".to_owned()])
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        value(&rt, "krishiv.sql.ansi.enabled").as_deref(),
+        Some("false"),
+        "the startup value, not the registry default"
+    );
+    assert!(rt.config_defaults().is_empty());
+}
+
+#[test]
+fn a_batch_with_one_bad_key_changes_nothing() {
+    let rt = runtime();
+    for bad in [
+        pair("krishiv.memory.limit", "1g"),
+        pair("krishiv.no.such.key", "1"),
+        pair("krishiv.sql.ansi.enabled", "maybe"),
+    ] {
+        let err = rt
+            .set_config_defaults(&[pair("krishiv.sql.session.timeZone", "UTC"), bad], &[])
+            .err()
+            .unwrap_or_else(|| panic!("the bad key was accepted"));
+        drop(err);
+        assert!(rt.config_defaults().is_empty(), "the good key was applied");
+    }
+}
+
+#[test]
+fn a_cluster_key_is_static_and_an_unknown_key_is_unknown() {
+    let rt = runtime();
+    let static_err = rt
+        .set_config_defaults(&[pair("krishiv.memory.limit", "1g")], &[])
+        .err()
+        .unwrap_or_else(|| panic!("a cluster key was accepted"));
+    assert_eq!(
+        static_err.error_class().name(),
+        ErrorClass::CannotModifyStaticConfig.name()
+    );
+    let unknown = rt
+        .set_config_defaults(&[pair("krishiv.no.such.key", "1")], &[])
+        .err()
+        .unwrap_or_else(|| panic!("an unknown key was accepted"));
+    assert_eq!(
+        unknown.error_class().name(),
+        ErrorClass::KrishivUnknownConfig.name()
+    );
+}
+
+#[test]
+fn no_security_key_can_be_set_at_run_time() {
+    let rt = runtime();
+    for key in [
+        "krishiv.auth.udf.minRole",
+        "krishiv.auth.defaultRole",
+        "krishiv.auth.tokens.x.secret",
+        "krishiv.io.local.allowedRoots",
+        "krishiv.io.objectStore.allowedPrefixes",
+    ] {
+        let err = rt
+            .set_config_defaults(&[pair(key, "/tmp")], &[])
+            .err()
+            .unwrap_or_else(|| panic!("{key} was accepted"));
+        assert_eq!(
+            err.error_class().name(),
+            ErrorClass::CannotModifyStaticConfig.name(),
+            "{key}"
+        );
+        let err = rt
+            .set_config_defaults(&[], &[key.to_owned()])
+            .err()
+            .unwrap_or_else(|| panic!("unset of {key} was accepted"));
+        assert_eq!(
+            err.error_class().name(),
+            ErrorClass::CannotModifyStaticConfig.name(),
+            "{key}"
+        );
+    }
+}
+
+#[test]
+fn a_key_set_and_unset_in_one_batch_is_refused() {
+    let rt = runtime();
+    let err = rt
+        .set_config_defaults(
+            &[pair("krishiv.sql.ansi.enabled", "true")],
+            &["krishiv.sql.ansi.enabled".to_owned()],
+        )
+        .err()
+        .unwrap_or_else(|| panic!("the conflicting batch was accepted"));
+    drop(err);
+    assert!(rt.config_defaults().is_empty());
+}
+
+#[test]
+fn an_invalid_time_zone_is_refused_as_set_refuses_it() {
+    let rt = runtime();
+    assert!(
+        rt.set_config_defaults(&[pair("krishiv.sql.session.timeZone", "Mars/Base")], &[])
+            .is_err()
+    );
+    assert!(rt.config_defaults().is_empty());
+}

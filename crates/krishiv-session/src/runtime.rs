@@ -12,10 +12,10 @@
 //! always did. A host serving many sessions builds one runtime and hands it
 //! to each session ([`SessionBuilder::runtime`](crate::SessionBuilder::runtime)).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock, Weak};
 
 use krishiv_common::config::{Config, SYSTEM_QUERIES_CAPACITY, lookup};
 use krishiv_common::error::{CannotModifyStaticConfig, KrishivError};
@@ -87,6 +87,8 @@ pub struct EngineRuntime {
     deadlines: OnceLock<Deadlines>,
     /// The queries running now, and the closed sessions.
     live: Mutex<LiveSet>,
+    /// Session defaults set while running (`set_config_defaults`): an overlay on `pairs`.
+    pub(crate) admin_defaults: RwLock<Arc<BTreeMap<String, String>>>,
     /// The admission controller built from `krishiv.workload.resourceGroups.file`, shared by every
     /// session of the runtime so the group limits hold across them (`None` when the key is unset:
     /// every query is admitted at once).
@@ -326,6 +328,7 @@ impl EngineRuntime {
             results,
             deadlines: OnceLock::new(),
             live: Mutex::new(LiveSet::default()),
+            admin_defaults: RwLock::default(),
             sessions: Arc::default(),
             admission,
             resource_groups,
@@ -381,7 +384,18 @@ impl EngineRuntime {
             .into());
         }
         crate::conf::check_pairs(&session_pairs)?;
-        let pairs = self.pairs.iter().cloned().chain(session_pairs);
+        let admin = Arc::clone(
+            &self
+                .admin_defaults
+                .read()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+        let pairs = self
+            .pairs
+            .iter()
+            .cloned()
+            .chain(admin.iter().map(|(k, v)| (k.clone(), v.clone())))
+            .chain(session_pairs);
         Ok(Config::from_pairs(pairs)?.0)
     }
 

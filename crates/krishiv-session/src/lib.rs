@@ -57,6 +57,7 @@ mod column;
 mod column_stats;
 mod command;
 mod conf;
+mod config_defaults;
 mod dataframe;
 mod execute_immediate;
 mod explain;
