@@ -98,6 +98,29 @@ impl ProfileNode {
         }
     }
 
+    /// Whether `o` is the same tree, estimates aside.
+    fn same_plan(&self, o: &Self) -> bool {
+        self.id == o.id
+            && self.name == o.name
+            && self.detail == o.detail
+            && self.children.len() == o.children.len()
+            && self
+                .children
+                .iter()
+                .zip(&o.children)
+                .all(|(a, b)| a.same_plan(b))
+    }
+
+    /// Fills the estimates this tree lacks from `o`, the same tree.
+    fn take_estimates(&mut self, o: &Self) {
+        if self.estimate.is_none() {
+            self.estimate.clone_from(&o.estimate);
+        }
+        for (a, b) in self.children.iter_mut().zip(&o.children) {
+            a.take_estimates(b);
+        }
+    }
+
     /// Every node, depth first.
     pub(crate) fn walk(&self, f: &mut impl FnMut(&Self)) {
         f(self);
@@ -278,12 +301,16 @@ impl QueryProfile {
     ///
     /// # Errors
     /// [`ProfileError`] if `o` profiles another plan.
+    /// The plans are compared without their estimates: a worker's plan,
+    /// decoded from the plan codec, carries none, and the merged profile
+    /// keeps the planner's.
     pub fn merge(&mut self, o: &Self) -> Result<(), ProfileError> {
-        if self.plan != o.plan {
+        if !self.plan.same_plan(&o.plan) {
             return Err(ProfileError::new(
                 "cannot merge profiles of different plans",
             ));
         }
+        self.plan.take_estimates(&o.plan);
         self.metrics.merge(&o.metrics);
         self.detailed &= o.detailed;
         Ok(())

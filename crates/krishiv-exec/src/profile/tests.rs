@@ -950,3 +950,20 @@ fn explain_equality_ignores_the_estimate() {
     assert_eq!(a, matching());
     assert_ne!(ExplainNode::leaf("A", ""), ExplainNode::leaf("B", ""));
 }
+
+/// A worker's profile, whose plan came through the codec without
+/// estimates, merges with the driver's and the merged plan keeps them.
+#[test]
+fn profiles_merge_whatever_their_estimates() {
+    let mut explain = matching();
+    explain.estimate = Some(RowEstimate::new(9, RowEstimate::STATISTICS));
+    let mut driver = QueryProfile::new(&plan(matching()), metrics(), false);
+    let worker = QueryProfile::new(&plan(explain), metrics(), false);
+    driver.merge(&worker).expect("same plan");
+    assert_eq!(
+        driver.plan.estimate,
+        Some(RowEstimate::new(9, RowEstimate::STATISTICS))
+    );
+    let other = QueryProfile::new(&plan(ExplainNode::leaf("Other", "")), metrics(), false);
+    assert!(driver.merge(&other).is_err());
+}

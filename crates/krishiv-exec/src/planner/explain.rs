@@ -39,6 +39,7 @@ impl Eq for ExplainNode {}
 /// The planner's estimate of a node's output rows (T164's statistics, as
 /// join ordering and the runtime-filter cost read them).
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RowEstimate {
     /// Estimated output rows, rounded.
     pub rows: u64,
@@ -50,6 +51,14 @@ pub struct RowEstimate {
 }
 
 impl RowEstimate {
+    /// An estimate of `rows` from `source`.
+    pub fn new(rows: u64, source: impl Into<String>) -> Self {
+        Self {
+            rows,
+            source: source.into(),
+        }
+    }
+
     /// Every table below the node reports statistics.
     pub const STATISTICS: &'static str = "statistics";
     /// Some table below the node has no statistics: its row count is a
