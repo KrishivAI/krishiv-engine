@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, PoisonError};
 
-use krishiv_common::config::{Config, SettableBy, lookup};
+use krishiv_common::config::{Config, REGISTRY, Scope, SettableBy, lookup};
 use krishiv_common::error::{
     CannotModifyStaticConfig, InvalidConfValueRequirement, KrishivError, KrishivUnknownConfig,
 };
@@ -106,4 +106,113 @@ fn admin_settable(key: &str) -> Result<&'static str, KrishivError> {
         .into());
     }
     Ok(entry.key)
+}
+
+/// Where a configuration value of [`EngineRuntime::config_listing`] comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigSource {
+    /// The registry default: nothing set it.
+    Default,
+    /// The startup configuration (the builder, the startup file or the environment).
+    Startup,
+    /// A default set while running, [`EngineRuntime::set_config_defaults`].
+    Admin,
+}
+
+/// One row of [`EngineRuntime::config_listing`] (design `P3-T066-admin-api.md` §5.5 `GetConfig`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigListing {
+    /// The canonical key.
+    pub key: String,
+    /// The value as text; `None` when it is withheld or the key has no value.
+    pub value: Option<String>,
+    /// `"session"` or `"cluster"`; `None` for a startup key that is not in the registry.
+    pub scope: Option<&'static str>,
+    /// `"startup"`, `"admin"` or `"user"`; `None` for a key that is not in the registry.
+    pub settable_by: Option<&'static str>,
+    /// Where the value comes from.
+    pub source: ConfigSource,
+    /// The value is hidden because the caller may not see it.
+    pub withheld: bool,
+}
+
+/// Keys whose value says how to become an administrator or what a role may read (design §4):
+/// the authentication settings and the path allowlists.
+fn is_sensitive(key: &str) -> bool {
+    key.starts_with("krishiv.auth.")
+        || key == "krishiv.io.local.allowedRoots"
+        || key == "krishiv.io.objectStore.allowedPrefixes"
+}
+
+impl EngineRuntime {
+    /// The configuration the runtime serves, one row per registered key plus the startup keys the
+    /// registry does not know, in key order; `prefix` keeps the keys that start with it. A
+    /// sensitive key (`krishiv.auth.*` and the path allowlists) shows its value only when
+    /// `reveal_sensitive` is set (the caller holds `Manage` on the cluster), else `withheld`.
+    #[must_use]
+    pub fn config_listing(
+        &self,
+        prefix: Option<&str>,
+        reveal_sensitive: bool,
+    ) -> Vec<ConfigListing> {
+        let admin = Arc::clone(
+            &self
+                .admin_defaults
+                .read()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+        let explicit: BTreeMap<&str, String> =
+            self.config.explicit_registered().into_iter().collect();
+        let keep = |key: &str| prefix.is_none_or(|p| key.starts_with(p));
+        let mut rows: BTreeMap<String, ConfigListing> = BTreeMap::new();
+        let mut push = |key: &str, value: Option<String>, scope, settable_by, source| {
+            let withheld = is_sensitive(key) && !reveal_sensitive && value.is_some();
+            rows.insert(
+                key.to_owned(),
+                ConfigListing {
+                    key: key.to_owned(),
+                    value: if withheld { None } else { value },
+                    scope,
+                    settable_by,
+                    source,
+                    withheld,
+                },
+            );
+        };
+        for entry in REGISTRY.iter().filter(|e| keep(e.key)) {
+            let (value, source) = if let Some(v) = admin.get(entry.key) {
+                (Some(v.clone()), ConfigSource::Admin)
+            } else if let Some(v) = explicit.get(entry.key) {
+                (Some(v.clone()), ConfigSource::Startup)
+            } else {
+                (
+                    entry.default.as_ref().map(ToString::to_string),
+                    ConfigSource::Default,
+                )
+            };
+            let scope = match entry.scope {
+                Scope::Session => "session",
+                Scope::Cluster => "cluster",
+            };
+            push(
+                entry.key,
+                value,
+                Some(scope),
+                Some(entry.settable_by.as_str()),
+                source,
+            );
+        }
+        for (key, value) in self.config.explicit_unregistered() {
+            if keep(key) {
+                push(
+                    key,
+                    Some(value.to_owned()),
+                    None,
+                    None,
+                    ConfigSource::Startup,
+                );
+            }
+        }
+        rows.into_values().collect()
+    }
 }

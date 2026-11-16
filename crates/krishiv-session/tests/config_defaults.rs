@@ -158,3 +158,55 @@ fn an_invalid_time_zone_is_refused_as_set_refuses_it() {
     );
     assert!(rt.config_defaults().is_empty());
 }
+
+fn listed(rt: &Arc<EngineRuntime>, key: &str, reveal: bool) -> krishiv_session::ConfigListing {
+    rt.config_listing(Some(key), reveal)
+        .into_iter()
+        .find(|r| r.key == key)
+        .unwrap_or_else(|| panic!("{key} is not listed"))
+}
+
+#[test]
+fn the_listing_says_where_each_value_comes_from() {
+    use krishiv_session::ConfigSource;
+    let rt = runtime();
+    rt.set_config_defaults(&[pair("krishiv.sql.session.timeZone", "UTC")], &[])
+        .unwrap_or_else(|e| panic!("{e}"));
+    let startup = listed(&rt, "krishiv.sql.ansi.enabled", false);
+    assert_eq!(
+        (startup.source, startup.value.as_deref()),
+        (ConfigSource::Startup, Some("false"))
+    );
+    let admin = listed(&rt, "krishiv.sql.session.timeZone", false);
+    assert_eq!(
+        (admin.source, admin.value.as_deref()),
+        (ConfigSource::Admin, Some("UTC"))
+    );
+    assert_eq!(admin.settable_by, Some("user"));
+    assert_eq!(admin.scope, Some("session"));
+    let default = listed(&rt, "krishiv.deterministicOrder", false);
+    assert_eq!(default.source, ConfigSource::Default);
+    let all = rt.config_listing(None, false);
+    assert!(all.windows(2).all(|w| w[0].key < w[1].key), "key order");
+    assert!(
+        rt.config_listing(Some("krishiv.sql."), false)
+            .iter()
+            .all(|r| r.key.starts_with("krishiv.sql."))
+    );
+}
+
+#[test]
+fn a_path_allowlist_value_is_withheld_without_manage() {
+    let dir = std::env::temp_dir();
+    let rt = EngineRuntime::builder()
+        .config(
+            "krishiv.io.local.allowedRoots",
+            dir.to_string_lossy().into_owned(),
+        )
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let hidden = listed(&rt, "krishiv.io.local.allowedRoots", false);
+    assert!(hidden.withheld && hidden.value.is_none());
+    let shown = listed(&rt, "krishiv.io.local.allowedRoots", true);
+    assert!(!shown.withheld && shown.value.is_some());
+}
