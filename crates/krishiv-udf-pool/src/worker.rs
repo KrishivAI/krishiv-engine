@@ -6,23 +6,25 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::fs::File;
-use std::io::{BufWriter, Cursor, Read};
+use std::io::{BufWriter, Read};
 use std::os::fd::{AsFd, OwnedFd};
 use std::process::{Child, ExitStatus};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use arrow_array::{ArrayRef, RecordBatch};
-use arrow_ipc::reader::StreamReader;
+use arrow_buffer::Buffer;
+use arrow_ipc::reader::StreamDecoder;
 use arrow_ipc::writer::StreamWriter;
 use arrow_schema::DataType;
 use krishiv_common::error::{
-    InternalError, KrishivError, KrishivPythonWorkerExited, PythonException,
+    InternalError, KrishivError, KrishivPythonWorkerExited, OperationCanceled, PythonException,
 };
 use krishiv_udf_sandbox::{EXIT_SANDBOX_FAILED, SandboxError};
 use rustix::process::{Pid, PidfdFlags, Signal};
 use serde_json::{Value, json};
 
+use crate::pool::CallWatch;
 use crate::wire::{self, Message};
 
 /// How long a new worker may take to import its packages and greet the server.
@@ -85,8 +87,10 @@ pub struct PythonPayload {
 }
 
 impl Worker {
-    /// Waits for the worker's greeting and checks its wire version.
-    pub(crate) fn handshake(started: Started) -> Result<Self, KrishivError> {
+    /// Waits for the worker's greeting and checks its wire version. `watch` gets the worker's pidfd before
+    /// the wait, so a call cancelled meanwhile kills the starting worker (review 2026-11-13 n3): the wait
+    /// then ends at once, and the worker is reaped when this returns.
+    pub(crate) fn handshake(started: Started, watch: &dyn CallWatch) -> Result<Self, KrishivError> {
         let Started {
             mut child,
             control,
@@ -124,6 +128,10 @@ impl Worker {
             sandboxed,
             greeted: false,
         };
+        if !watch.starting(&worker.pidfd) {
+            // Dropping the worker kills and reaps it.
+            return Err(OperationCanceled {}.into());
+        }
         let greeting = rustix::net::sockopt::set_socket_timeout(
             worker.control.as_fd(),
             rustix::net::sockopt::Timeout::Recv,
@@ -440,15 +448,20 @@ fn write_input(args: &RecordBatch) -> std::io::Result<(File, u64)> {
 }
 
 /// Decodes a worker's result stream as the pool does: the framing checked first ([`check_frames`]), then
-/// arrow-ipc's validating reader, then one column of `return_type`, one batch and `rows` rows. Every failure
+/// arrow-ipc's validating decoder, then one column of `return_type`, one batch and `rows` rows. Every failure
 /// is `PYTHON_EXCEPTION` naming what was wrong. Public for the `udf_result_ipc` fuzz target only, so hidden
 /// from the documentation; not a supported interface.
+///
+/// The decoder slices the column's buffers out of `bytes` rather than copying them (review 2026-11-13 n1):
+/// the pool reads a result into one 64-byte-aligned buffer ([`wire::read_untrusted`]), so it is copied once,
+/// from the memfd. A buffer arrow-ipc finds misaligned (only from a caller that passes unaligned bytes) is
+/// copied into an aligned one.
 ///
 /// # Errors
 /// Anything but a well-formed, uncompressed stream of that shape.
 #[doc(hidden)]
 pub fn decode_result(
-    bytes: Vec<u8>,
+    bytes: impl Into<Buffer>,
     return_type: &DataType,
     rows: usize,
 ) -> Result<ArrayRef, KrishivError> {
@@ -459,30 +472,51 @@ pub fn decode_result(
         }
         .into()
     };
-    check_frames(&bytes).map_err(invalid)?;
-    let mut reader = StreamReader::try_new(Cursor::new(bytes), None)
+    let mut bytes: Buffer = bytes.into();
+    let first = check_frames(bytes.as_slice()).map_err(invalid)?;
+    // The schema is checked from the first message's header before any batch is decoded (review 2026-11-14 m5).
+    if let Some(header) = bytes.as_slice().get(8..first) {
+        let message = arrow_ipc::root_as_message(header)
+            .map_err(|e| invalid(format!("an invalid message header: {e}")))?;
+        let Some(schema) = message.header_as_schema() else {
+            return Err(invalid(
+                "the stream does not start with a schema".to_owned(),
+            ));
+        };
+        let schema = arrow_ipc::convert::try_fb_to_schema(schema)
+            .map_err(|e| invalid(format!("an unreadable schema: {e}")))?;
+        let [field] = schema.fields().iter().collect::<Vec<_>>()[..] else {
+            return Err(invalid(format!(
+                "{} columns, expected one",
+                schema.fields().len()
+            )));
+        };
+        if field.data_type() != return_type {
+            return Err(invalid(format!(
+                "a column of type {}, expected {return_type}",
+                field.data_type()
+            )));
+        }
+    }
+    let mut decoder = StreamDecoder::new();
+    let mut batch = None;
+    // `check_frames` saw a whole stream, so the decoder sees every message whole and keeps body slices.
+    while !bytes.is_empty() {
+        let decoded = decoder
+            .decode(&mut bytes)
+            .map_err(|e| invalid(format!("unreadable Arrow stream: {e}")))?;
+        if let Some(decoded) = decoded
+            && batch.replace(decoded).is_some()
+        {
+            return Err(invalid("more than one batch".to_owned()));
+        }
+    }
+    decoder
+        .finish()
         .map_err(|e| invalid(format!("unreadable Arrow stream: {e}")))?;
-    let schema = reader.schema();
-    let [field] = schema.fields().iter().collect::<Vec<_>>()[..] else {
-        return Err(invalid(format!(
-            "{} columns, expected one",
-            schema.fields().len()
-        )));
+    let Some(batch) = batch else {
+        return Err(invalid("no batch".to_owned()));
     };
-    if field.data_type() != return_type {
-        return Err(invalid(format!(
-            "a column of type {}, expected {return_type}",
-            field.data_type()
-        )));
-    }
-    let batch = match reader.next() {
-        Some(Ok(batch)) => batch,
-        Some(Err(e)) => return Err(invalid(format!("unreadable Arrow batch: {e}"))),
-        None => return Err(invalid("no batch".to_owned())),
-    };
-    if reader.next().is_some() {
-        return Err(invalid("more than one batch".to_owned()));
-    }
     if batch.num_rows() != rows {
         return Err(invalid(format!(
             "{} rows, expected {rows}",
@@ -499,7 +533,10 @@ pub fn decode_result(
 /// Compression is refused because arrow-ipc 60 allocates a compressed buffer's declared uncompressed length
 /// before reading it: a worker could declare 2^45 bytes in a 16 KiB stream and abort the server (review
 /// 2026-11-13 M1). The server never asks for a compressed result, and the worker writes without compression.
-fn check_frames(bytes: &[u8]) -> Result<(), String> {
+///
+/// Returns where the first message's header ends (it starts at byte 8), so the schema can be checked before
+/// any batch is decoded; 0 for an empty stream.
+fn check_frames(bytes: &[u8]) -> Result<usize, String> {
     const CONTINUATION: u32 = 0xFFFF_FFFF;
     let word = |at: usize| -> Option<u32> {
         Some(u32::from_le_bytes(
@@ -507,6 +544,7 @@ fn check_frames(bytes: &[u8]) -> Result<(), String> {
         ))
     };
     let mut at = 0_usize;
+    let mut first = None;
     while at < bytes.len() {
         if word(at) != Some(CONTINUATION) {
             return Err(format!("no continuation marker at byte {at}"));
@@ -516,7 +554,7 @@ fn check_frames(bytes: &[u8]) -> Result<(), String> {
         if len == 0 {
             // End of stream: nothing may follow.
             return if at == bytes.len() {
-                Ok(())
+                Ok(first.unwrap_or(0))
             } else {
                 Err(format!(
                     "{} bytes after the end of the stream",
@@ -560,9 +598,10 @@ fn check_frames(bytes: &[u8]) -> Result<(), String> {
                 }
             }
         }
+        first.get_or_insert(meta_end);
         at = body_end;
     }
-    Ok(())
+    Ok(first.unwrap_or(0))
 }
 
 #[cfg(test)]
@@ -592,6 +631,37 @@ mod tests {
     fn a_valid_result_decodes() {
         let col = decode_result(stream(&[longs(vec![1, 2])]), &DataType::Int64, 2).expect("ok");
         assert_eq!(col.len(), 2);
+    }
+
+    #[test]
+    fn a_result_is_decoded_without_a_copy() {
+        // Review 2026-11-13 n1: the column's values are a slice of the buffer the result was read into.
+        let bytes = stream(&[longs((0..1024).collect())]);
+        let mut aligned = arrow_buffer::MutableBuffer::new(bytes.len());
+        aligned.extend_from_slice(&bytes);
+        let buffer = Buffer::from(aligned);
+        let start = buffer.as_ptr().addr();
+        let range = start..start + buffer.len();
+        let col = decode_result(buffer, &DataType::Int64, 1024).expect("ok");
+        let data = col.to_data();
+        let values = data.buffers()[0].as_ptr().addr();
+        assert!(range.contains(&values), "the values were copied");
+    }
+
+    #[test]
+    fn an_empty_stream_has_no_batch() {
+        let schema_only = {
+            let batch = longs(vec![]);
+            let mut out = Vec::new();
+            let mut w = StreamWriter::try_new(&mut out, &batch.schema()).expect("writer");
+            w.finish().expect("finish");
+            drop(w);
+            out
+        };
+        let err = decode_result(schema_only, &DataType::Int64, 0).expect_err("no batch");
+        assert!(err.to_string().contains("no batch"), "{err}");
+        let err = decode_result(Vec::<u8>::new(), &DataType::Int64, 0).expect_err("nothing");
+        assert!(err.to_string().contains("no batch"), "{err}");
     }
 
     #[test]
@@ -665,7 +735,16 @@ mod tests {
     #[test]
     fn framing_errors_are_refused() {
         let good = stream(&[longs(vec![1])]);
-        assert!(check_frames(&good).is_ok());
+        let first = check_frames(&good).expect("framed");
+        let header = arrow_ipc::root_as_message(&good[8..first]).expect("the first header");
+        assert!(header.header_as_schema().is_some());
+        let batch_first = stream(&[longs(vec![1])])
+            .split_off(first + usize::try_from(header.bodyLength()).expect("small"));
+        let err = decode_result(batch_first, &DataType::Int64, 1).expect_err("no schema");
+        assert!(
+            err.to_string().contains("does not start with a schema"),
+            "{err}"
+        );
         let mut no_marker = good.clone();
         no_marker[0] = 0;
         assert!(

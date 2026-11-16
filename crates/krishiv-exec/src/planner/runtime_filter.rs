@@ -389,11 +389,11 @@ mod tests {
     use crate::physical::{ScanId, ScanNode};
 
     fn files(path: &str) -> ReadSource {
-        ReadSource::Files {
-            format: "parquet".to_owned(),
-            paths: vec![OptionValue::from_user("path", path)],
-            options: BTreeMap::new(),
-        }
+        ReadSource::files(
+            "parquet".to_owned(),
+            vec![OptionValue::from_user("path", path)],
+            BTreeMap::new(),
+        )
     }
 
     /// Two paths of one format are two sources.
