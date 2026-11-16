@@ -948,12 +948,14 @@ fn writes_go_to_the_directory_a_link_names_and_are_checked_there() {
     let df = block_on(s.sql("SELECT 1 AS a")).unwrap();
     let e = block_on(df.write().parquet(root.join("link/o").to_str().unwrap())).unwrap_err();
     assert_eq!(e.error_class().name(), DENIED);
-    // The denial names the directory the write would have gone to.
+    // The policy is asked about the directory the write would have gone to, but the denial names the
+    // path as written: it never shows where a link points.
     assert!(
         e.to_string()
-            .contains(&format!("{}/o", outside.canonicalize().unwrap().display())),
+            .contains(&format!("'file:{}/link/o'", root.display())),
         "{e}"
     );
+    assert!(!e.to_string().contains("outside"), "{e}");
     assert!(!outside.join("o").exists());
 }
 
@@ -1401,7 +1403,8 @@ fn statement_info_lists_the_view_securable() {
 }
 
 /// A grant on the table-named securable does not show a permanent view's definition, columns or
-/// properties: those statements need `SELECT` on the view, as a query of it does.
+/// properties: those statements need `SELECT` on the view, as a query of it does; a listing leaves
+/// the view out.
 #[test]
 fn describing_a_view_needs_the_view_securable() {
     let dir = tempfile::tempdir().unwrap();
@@ -1430,12 +1433,20 @@ fn describing_a_view_needs_the_view_securable() {
         "DESCRIBE TABLE pv",
         "DESCRIBE TABLE EXTENDED pv",
         "SHOW COLUMNS IN pv",
-        "SHOW TABLE EXTENDED LIKE 'pv'",
     ];
     let results: Vec<_> = denied
         .iter()
         .map(|sql| class(block_on(s.sql(sql))))
         .collect();
+    // A listing hides what the principal may not see instead of failing on it (P3-T062 §2.4),
+    // so the view's entry is simply absent: no denial that would say it exists.
+    let listed = block_on(async {
+        s.sql("SHOW TABLE EXTENDED LIKE 'pv'")
+            .await?
+            .collect()
+            .await
+    })
+    .map(|b| b.iter().map(RecordBatch::num_rows).sum::<usize>());
     let table_ok = block_on(async { s.sql("SHOW CREATE TABLE pt").await?.collect().await }).is_ok()
         && block_on(async {
             s.sql("SHOW TABLE EXTENDED LIKE 'pt'")
@@ -1448,6 +1459,11 @@ fn describing_a_view_needs_the_view_securable() {
     for (sql, c) in denied.iter().zip(&results) {
         assert_eq!(c, DENIED, "{sql}");
     }
+    assert_eq!(
+        listed.ok(),
+        Some(0),
+        "SHOW TABLE EXTENDED LIKE 'pv' lists nothing"
+    );
     assert!(table_ok, "the table itself stays readable");
 }
 

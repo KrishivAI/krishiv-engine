@@ -244,8 +244,13 @@ fn explaining_a_definer_view_asks_what_its_query_reads() {
     ] {
         match run(&bob, sql) {
             Err(e) => assert_eq!(e.error_class().name(), DENIED, "{sql}"),
+            // The refusal, or (a metadata explain, P3 PR-14d) the planning failure with its
+            // message redacted: never a plan.
             Ok(text) => {
-                assert!(text.contains(DENIED), "{sql}: {text}");
+                assert!(
+                    text.contains(DENIED) || text.contains("Error occurred during query planning"),
+                    "{sql}: {text}"
+                );
                 assert!(!text.contains("Scan"), "{sql}: {text}");
             }
         }
@@ -300,11 +305,11 @@ fn a_stored_function_needs_select_and_its_body_reads_as_the_caller() {
 #[test]
 fn a_refresh_runs_as_the_owner_for_the_scheduler() {
     // No materialized view refresh path exists yet: the hook is the principal it will run as
-    // (`Principal::delegated(owner, "scheduler")`) in a session over the same grants. It holds
+    // (`Principal::definer(owner, "scheduler")`) in a session over the same grants. It holds
     // the owner's grants and never the role of the session that starts it.
     let (w, root, ana) = world();
     ok(&ana, "CREATE TABLE mv_target (a INT) USING parquet");
-    let refresh = w.session(Principal::delegated("ana", "scheduler"), true);
+    let refresh = w.session(Principal::definer("ana", "scheduler"), true);
     ok(&refresh, "INSERT INTO mv_target SELECT a FROM t");
     assert_eq!(rows(&ana, "SELECT * FROM mv_target"), 1);
     // The owner's rights, not an admin's: root's table that ana cannot read stays closed.

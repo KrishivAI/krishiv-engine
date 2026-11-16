@@ -21,12 +21,18 @@ pub struct Principal {
     pub tenant: Option<String>,
     /// User or service principal.
     pub kind: PrincipalKind,
-    /// Who this principal acts for, when it is derived from another one: the reader of a
-    /// `SQL SECURITY DEFINER` view (whose base tables are checked against the view's owner), or
-    /// `scheduler` for a materialized view refresh run as its owner (P3-T062 §2.4). `None` for a
-    /// principal that acts for itself. A derived principal never inherits the role of the one it
-    /// acts for.
+    /// The service principal that acts for this one (trusted impersonation, P3-T061 §4.2 rule
+    /// 4), `None` when the principal authenticated itself. Authorization checks the principal
+    /// itself; the audit and `system.queries` / `system.sessions` show both. It never enters
+    /// [`Self::id`]: what a query may read is the end user's, whoever asked for it.
     pub delegated_by: Option<String>,
+    /// The reader this principal acts for while it reads the query of a `SQL SECURITY DEFINER`
+    /// view as the view's definer (P3-T062 §2.4), or `scheduler` for a materialized view refresh
+    /// run as its owner. `None` for a principal that acts for itself. Such a principal holds
+    /// only what is granted to its own name: never the session's admin role, never the groups or
+    /// the objects of the statement that runs it. It enters [`Self::id`], so a plan analyzed
+    /// for it is never reused for the definer itself.
+    pub definer_for: Option<String>,
 }
 
 /// The kind of a principal.
@@ -49,17 +55,27 @@ impl Principal {
             tenant: None,
             kind,
             delegated_by: None,
+            definer_for: None,
         }
     }
 
-    /// The principal `name` acting for `by` (see [`Self::delegated_by`]): a user principal
-    /// without groups or tenant, so it holds only what is granted to `name` itself.
+    /// The principal `name` reading a `SQL SECURITY DEFINER` view's query for `reader` (see
+    /// [`Self::definer_for`]): a user principal without groups or tenant, so it holds only what
+    /// is granted to `name` itself.
     #[must_use]
-    pub fn delegated(name: impl Into<String>, by: impl Into<String>) -> Self {
+    pub fn definer(name: impl Into<String>, reader: impl Into<String>) -> Self {
         Self {
-            delegated_by: Some(by.into()),
+            definer_for: Some(reader.into()),
             ..Self::new(name, PrincipalKind::User)
         }
+    }
+
+    /// This principal, acting through the service principal `delegator` (trusted
+    /// impersonation).
+    #[must_use]
+    pub fn with_delegator(mut self, delegator: impl Into<String>) -> Self {
+        self.delegated_by = Some(delegator.into());
+        self
     }
 
     /// The principal of a context nobody has set one on: it has no name, and
@@ -83,17 +99,11 @@ impl Principal {
             .iter()
             .find_map(|k| std::env::var(k).ok())
             .unwrap_or_else(|| "unknown".to_owned());
-        Self {
-            name,
-            groups: Vec::new(),
-            tenant: None,
-            kind: PrincipalKind::User,
-            delegated_by: None,
-        }
+        Self::new(name, PrincipalKind::User)
     }
 
     /// The identity that enters the context fingerprint: kind, tenant,
-    /// name, the sorted groups (a policy may decide by group) and whom it acts for.
+    /// name, the sorted groups (a policy may decide by group) and the reader a definer acts for.
     #[must_use]
     pub fn id(&self) -> String {
         let kind = match self.kind {
@@ -116,7 +126,7 @@ impl Principal {
             } else {
                 format!("[{}]", quoted(&groups))
             },
-            self.delegated_by
+            self.definer_for
                 .as_ref()
                 .map_or_else(String::new, |by| format!(
                     "<{}",
@@ -150,12 +160,23 @@ mod tests {
     }
 
     #[test]
-    fn a_delegated_principal_has_its_own_id() {
+    fn a_definer_principal_has_its_own_id() {
         let owner = Principal::new("ana", PrincipalKind::User);
-        let derived = Principal::delegated("ana", "bob");
-        assert_eq!(derived.delegated_by.as_deref(), Some("bob"));
+        let derived = Principal::definer("ana", "bob");
+        assert_eq!(derived.definer_for.as_deref(), Some("bob"));
+        assert_eq!(derived.delegated_by, None);
         assert_eq!(owner.id(), "user:-/`ana`");
         assert_eq!(derived.id(), "user:-/`ana`<`bob`");
+    }
+
+    #[test]
+    fn the_delegator_is_kept_but_not_in_the_id() {
+        let alice = Principal::new("alice", PrincipalKind::User);
+        let via = alice.clone().with_delegator("portal");
+        assert_eq!(via.delegated_by.as_deref(), Some("portal"));
+        assert_eq!(alice.delegated_by, None);
+        assert_eq!(via.id(), alice.id());
+        assert_ne!(via, alice);
     }
 
     #[test]

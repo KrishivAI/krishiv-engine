@@ -160,6 +160,23 @@ mod tests {
     }
 
     #[test]
+    fn egress_proxy_only_when_set() {
+        assert_eq!(egress_proxy(&config(&[])), None);
+        assert_eq!(
+            egress_proxy(&config(&[("krishiv.io.egress.proxy", "  ")])),
+            None,
+            "a blank proxy is no proxy"
+        );
+        assert_eq!(
+            egress_proxy(&config(&[(
+                "krishiv.io.egress.proxy",
+                " http://proxy.internal:3128 "
+            )])),
+            Some("http://proxy.internal:3128".to_owned())
+        );
+    }
+
+    #[test]
     fn literal_endpoint_checked_when_set() {
         let none = |_: &str| None;
         let deny = config(&[

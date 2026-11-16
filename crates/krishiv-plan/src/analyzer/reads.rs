@@ -218,7 +218,9 @@ impl Walk<'_> {
                             columns,
                         });
                     }
-                    ReadSource::Files { .. } => {}
+                    // Paths are checked as path securables; a local relation is data the client
+                    // sent with the request. Neither reads a catalog table's columns.
+                    ReadSource::Files { .. } | ReadSource::Local(_) => {}
                 },
                 PlanNode::OneRowRelation
                 | PlanNode::Range { .. }

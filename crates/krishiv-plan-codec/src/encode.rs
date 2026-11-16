@@ -730,7 +730,7 @@ impl Encoder {
         Ok(pb::TableWriteNode {
             input: self.node_index(input)?,
             table: Some(pb::TableRef {
-                source: Some(read_source(source)?),
+                source: Some(read_source(source, &self.nested)?),
                 output: output
                     .iter()
                     .map(|c| bound_column(c, &self.nested))
@@ -760,7 +760,7 @@ impl Encoder {
             .transpose()?;
         Ok(pb::ScanNode {
             id: node.id.0,
-            source: Some(read_source(source)?),
+            source: Some(read_source(source, &self.nested)?),
             output: output
                 .iter()
                 .map(|c| bound_column(c, &self.nested))
@@ -1469,7 +1469,7 @@ fn percentile_expr(
     }
 }
 
-fn read_source(source: &ReadSource) -> Result<pb::ReadSource> {
+fn read_source(source: &ReadSource, nested: &Cell<bool>) -> Result<pb::ReadSource> {
     use pb::read_source::Kind;
     let options = |options: &std::collections::BTreeMap<String, OptionValue>| {
         options
@@ -1486,6 +1486,8 @@ fn read_source(source: &ReadSource) -> Result<pb::ReadSource> {
             format,
             paths,
             options: o,
+            schema,
+            ..
         } => Kind::Files(pb::FilesSource {
             format: format.clone(),
             paths: paths
@@ -1493,6 +1495,18 @@ fn read_source(source: &ReadSource) -> Result<pb::ReadSource> {
                 .map(|p| option("path", p))
                 .collect::<Result<_>>()?,
             options: options(o)?,
+            // Written only when declared: a plan that infers keeps its bytes.
+            schema: schema
+                .as_ref()
+                .map(|s| spark_type(&DataType::Struct(s.clone()), nested))
+                .transpose()?,
+        }),
+        ReadSource::Local(l) => Kind::Local(pb::LocalSource {
+            hash: l.relation().hash.as_bytes().to_vec(),
+            schema: flagged_schema_bytes(l.schema(), nested),
+            rows: l.rows(),
+            batches: l.batches() as u64,
+            bytes: l.bytes(),
         }),
         _ => {
             return Err(CodecError::Unsupported(
@@ -1724,6 +1738,38 @@ fn literal(l: &Literal, nested: &Cell<bool>) -> Result<pb::Literal> {
                 .map(|(key, value)| map_entry(key, value))
                 .collect::<Result<_>>()?,
         }),
+        Literal::Array {
+            data_type,
+            elements,
+        } => Kind::Array(pb::ArrayLiteral {
+            data_type: Some(spark_type(&DataType::Array(Arc::clone(data_type)), nested)?),
+            elements: elements
+                .iter()
+                .map(|e| nested_member(e, nested))
+                .collect::<Result<_>>()?,
+        }),
+        Literal::KeyValueMap { data_type, entries } => Kind::KeyValueMap(pb::KeyValueMapLiteral {
+            data_type: Some(spark_type(&DataType::Map(Arc::clone(data_type)), nested)?),
+            entries: entries
+                .iter()
+                .map(|(k, v)| {
+                    Ok(pb::KeyValueEntry {
+                        key: Some(nested_member(k, nested)?),
+                        value: Some(nested_member(v, nested)?),
+                    })
+                })
+                .collect::<Result<_>>()?,
+        }),
+        Literal::Struct { data_type, fields } => Kind::Struct(pb::StructLiteral {
+            data_type: Some(spark_type(
+                &DataType::Struct((**data_type).clone()),
+                nested,
+            )?),
+            fields: fields
+                .iter()
+                .map(|e| nested_member(e, nested))
+                .collect::<Result<_>>()?,
+        }),
         _ => {
             return Err(CodecError::Unsupported(
                 "a literal kind this version does not know".to_owned(),
@@ -1731,6 +1777,18 @@ fn literal(l: &Literal, nested: &Cell<bool>) -> Result<pb::Literal> {
         }
     };
     Ok(pb::Literal { kind: Some(kind) })
+}
+
+/// A value inside a nested literal. The options map is its own feature
+/// (`options_map_literals`), which the walk reports for an expression, not for
+/// a member, so it does not travel inside one.
+fn nested_member(l: &Literal, nested: &Cell<bool>) -> Result<pb::Literal> {
+    if matches!(l, Literal::Map(_)) {
+        return Err(CodecError::Unsupported(
+            "an options map inside an array, map or struct literal".to_owned(),
+        ));
+    }
+    literal(l, nested)
 }
 
 fn year_month_field(f: YearMonthField) -> pb::YearMonthField {

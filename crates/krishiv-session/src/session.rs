@@ -630,7 +630,7 @@ impl Session {
         }
         // Before any side effect: what the statement writes, creates or
         // drops (its reads are checked by analysis, first thing).
-        let class = krishiv_sql::classify(&statement);
+        let class = krishiv_sql::classify_with(&statement, &env.parser);
         self.authorize_statement(&statement, class, &env).await?;
         env.statement_class = Some(class.name());
         let df = self.run_statement(statement, env, query, &redacted).await?;
@@ -1297,6 +1297,7 @@ impl Session {
                 u64::try_from(self.state.runtime.executor.parallelism().max(1)).unwrap_or(1)
             },
             runtime: self.state.runtime.executor.io_handle().clone(),
+            relations: Arc::clone(&self.state.relations),
         };
         let catalog = Arc::new(QueryCatalog::new(
             Arc::clone(&self.state.catalog),
@@ -1559,44 +1560,6 @@ impl Session {
             }
         }
         Ok(analyzed)
-    }
-
-    /// The `SQL SECURITY DEFINER` view `d` read with its definer's rights (P3-T062 §2.4): the
-    /// lookups of its text, then its query analyzed, both as the definer acting for this session's
-    /// principal (`Principal::delegated`; a derived principal holds only its own grants, never
-    /// the reader's role). Inside it, the texts of other definer views (`sources`) are theirs.
-    /// Returns what its query reads, for the view side table.
-    ///
-    /// # Errors
-    /// The definer's denial (42501, naming the definer), or its query's analysis error.
-    async fn authorize_definer(
-        &self,
-        d: &crate::catalog::DefinerRead,
-        sources: &std::collections::BTreeSet<krishiv_plan::SourceId>,
-        env: &QueryEnv,
-    ) -> Result<Vec<krishiv_plan::analyzer::SecurableUse>, KrishivError> {
-        let Some(query) = &d.query else {
-            return Err(krishiv_common::error::InternalError {
-                message: format!("definer view `{}` was not inlined", d.name.join(".")),
-            }
-            .into());
-        };
-        let definer = Arc::new(Principal::delegated(
-            d.definer.clone(),
-            self.state.principal.name.clone(),
-        ));
-        self.authorize_reads_as(&d.reads, env, &definer).await?;
-        let mut ctx = env.analysis.clone();
-        ctx.principal = definer;
-        let mut inner = sources.clone();
-        inner.remove(&d.source);
-        ctx.definer_sources = Arc::new(inner);
-        let plan = Plan::try_new(Arc::clone(query))?;
-        let analyzed = DefaultAnalyzer
-            .analyze(&plan, &ctx)
-            .await
-            .map_err(|e| e.error)?;
-        Ok(analyzed.securables)
     }
 
     /// The views the bodies of the functions a query called read, once the
@@ -2000,5 +1963,9 @@ mod writes;
 use writes::*;
 
 mod ops;
+use ops::AbortOnDrop;
 
 mod planning;
+
+// `SQL SECURITY DEFINER` reads (P3-T062 §2.4).
+mod definer;

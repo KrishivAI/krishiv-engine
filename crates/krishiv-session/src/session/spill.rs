@@ -119,12 +119,3 @@ impl Session {
         self.with_python_runtime(worker)
     }
 }
-
-/// Aborts a task when dropped.
-pub(super) struct AbortOnDrop(pub(super) krishiv_exec::TaskHandle);
-
-impl Drop for AbortOnDrop {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}

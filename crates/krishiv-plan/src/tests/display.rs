@@ -158,6 +158,7 @@ fn options_print_as_typed_values() {
         format: "csv".to_owned(),
         paths: vec![OptionValue::from_user("path", "/d")],
         options,
+        schema: None,
     }));
     assert_eq!(
         plan.to_string(),

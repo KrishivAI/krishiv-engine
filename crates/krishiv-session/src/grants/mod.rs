@@ -315,7 +315,7 @@ impl GrantsPolicy {
         if Self::decided_by(securable) == DecidedBy::Roles {
             return None;
         }
-        if self.admin && principal.delegated_by.is_none() {
+        if self.admin && principal.definer_for.is_none() {
             return Some(true);
         }
         let Some(key) = ObjectKey::of(securable).and_then(physical_key) else {
@@ -373,7 +373,7 @@ impl GrantsPolicy {
         // A principal acting for another (a definer view's owner for its reader, a refresh's
         // owner for the scheduler; P3-T062 §2.4) holds only its own grants: never the session's
         // admin role, nor what the session's running statement is creating.
-        let own = principal.delegated_by.is_none();
+        let own = principal.definer_for.is_none();
         if self.admin && own {
             return AccessDecision::Allow;
         }

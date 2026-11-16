@@ -299,6 +299,16 @@ fn no_row_reads_the_canary_and_none_shows_the_vault() {
     for (row, run) in &refused {
         let result = run(&ana);
         let records = take();
+        // Time travel is refused as unsupported before anything is read; when it is supported,
+        // this row is a denial like the others.
+        if *row == "via time travel"
+            && let Err(e) = &result
+            && e.error_class().name() == "KRISHIV_UNSUPPORTED_FEATURE"
+            && records.is_empty()
+            && leaks(&e.to_string()).is_none()
+        {
+            continue;
+        }
         match &result {
             Err(e) if e.error_class().name() == DENIED => {
                 if e.sql_state() != Some("42501") {
@@ -334,7 +344,12 @@ fn no_row_reads_the_canary_and_none_shows_the_vault() {
         let result = sql(statement)(&ana);
         let records = take();
         match &result {
-            Ok(text) if text.contains(DENIED) && !text.contains("Scan") => {}
+            // A metadata explain (P3 PR-14d) that cannot show a withheld plan prints the
+            // planning failure with its message redacted.
+            Ok(text)
+                if !text.contains("Scan")
+                    && (text.contains(DENIED)
+                        || text.contains("Error occurred during query planning")) => {}
             Err(e) if e.error_class().name() == DENIED => {}
             other => bad.push(format!("{statement}: not refused: {other:?}")),
         }

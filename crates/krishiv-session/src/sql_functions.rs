@@ -155,6 +155,9 @@ pub(crate) struct QueryFunctions {
     /// The stored functions a lookup resolved so far (namespace, name as stored), each once: a
     /// call needs `Select` on the function (P3-T062 §2.4).
     called: Mutex<Vec<(String, String)>>,
+    /// The stored function a `CREATE FUNCTION` is checking (namespace, name): its probe calls
+    /// it, which is no call by the creator, so it is not recorded in `called`.
+    defining: Option<(String, String)>,
 }
 
 /// How a body's permanent views are read: the parser options of the query
@@ -189,6 +192,7 @@ impl QueryFunctions {
             reads: Mutex::new((Vec::new(), None)),
             views_read: Mutex::new(Vec::new()),
             called: Mutex::new(Vec::new()),
+            defining: None,
         }
     }
 
@@ -209,6 +213,13 @@ impl QueryFunctions {
     /// This registry resolving bare names through `path`.
     pub(crate) fn with_path(mut self, path: Vec<Vec<String>>) -> Self {
         self.path = path;
+        self
+    }
+
+    /// This registry checking the definition of the stored function `namespace.name`: its own
+    /// call is not one [`Self::stored_calls`] reports.
+    pub(crate) fn defining(mut self, namespace: &str, name: &str) -> Self {
+        self.defining = Some((namespace.to_owned(), name.to_owned()));
         self
     }
 
@@ -517,8 +528,19 @@ impl FunctionRegistry for QueryFunctions {
         let stored = |namespace: &str, f: &String| {
             self.stored.get(namespace, f).map(|stored| {
                 let key = (stored.namespace.clone(), f.clone());
+                let same = |a: &str, b: &str| {
+                    if self.case_sensitive {
+                        a == b
+                    } else {
+                        a.eq_ignore_ascii_case(b)
+                    }
+                };
+                let own = self
+                    .defining
+                    .as_ref()
+                    .is_some_and(|(n, d)| same(n, &key.0) && same(d, &key.1));
                 let mut called = self.called.lock().unwrap_or_else(PoisonError::into_inner);
-                if !called.contains(&key) {
+                if !own && !called.contains(&key) {
                     called.push(key);
                 }
                 drop(called);

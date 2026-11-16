@@ -12,6 +12,9 @@
 //! command returns. A command kind added to `krishiv-sql` later falls into the wildcard arms below (the
 //! enums are `#[non_exhaustive]` in another crate) and has no result schema until it is listed here.
 //!
+//! The tables below are the one list: the session builds each command's frame from the same table
+//! ([`CommandColumn`], `Session::string_frame`), so the frame and `analyze` cannot disagree.
+//!
 //! Nullability is Spark 4.2.0's command attributes (`DescribeCommandSchema.scala`, `v2Commands.scala` and the v1
 //! commands' `output`; table in krishiv-internal `research/spark/show-describe-nullability/notes.md`): every
 //! column is non-null except `comment` of `DESCRIBE TABLE`/`DESCRIBE QUERY` and `info_value` of
@@ -22,87 +25,171 @@ use krishiv_types::DataType;
 
 use super::OutputColumn;
 
+/// One result column of a command: its name and whether Spark 4.2.0 declares it nullable. `isTemporary`
+/// is `BOOLEAN`, every other column `STRING`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CommandColumn {
+    /// The column name.
+    pub(crate) name: &'static str,
+    /// Whether Spark declares it nullable.
+    pub(crate) nullable: bool,
+}
+
+impl CommandColumn {
+    /// A non-null column.
+    pub(crate) const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            nullable: false,
+        }
+    }
+
+    /// A nullable column.
+    const fn nullable(name: &'static str) -> Self {
+        Self {
+            name,
+            nullable: true,
+        }
+    }
+
+    /// Its type in the frame.
+    fn data_type(self) -> DataType {
+        if self.name == "isTemporary" {
+            DataType::Boolean
+        } else {
+            DataType::String
+        }
+    }
+}
+
+const fn c(name: &'static str) -> CommandColumn {
+    CommandColumn::new(name)
+}
+
+/// `SHOW TABLES`.
+pub(crate) const SHOW_TABLES: &[CommandColumn] =
+    &[c("namespace"), c("tableName"), c("isTemporary")];
+/// `SHOW TABLE EXTENDED`.
+pub(crate) const SHOW_TABLE_EXTENDED: &[CommandColumn] = &[
+    c("namespace"),
+    c("tableName"),
+    c("isTemporary"),
+    c("information"),
+];
+/// `SHOW VIEWS`.
+pub(crate) const SHOW_VIEWS: &[CommandColumn] = &[c("namespace"), c("viewName"), c("isTemporary")];
+/// `SHOW COLUMNS`.
+pub(crate) const SHOW_COLUMNS: &[CommandColumn] = &[c("col_name")];
+/// `SHOW NAMESPACES`.
+pub(crate) const SHOW_NAMESPACES: &[CommandColumn] = &[c("namespace")];
+/// `SHOW CREATE TABLE`.
+pub(crate) const SHOW_CREATE_TABLE: &[CommandColumn] = &[c("createtab_stmt")];
+/// `SHOW TBLPROPERTIES`.
+pub(crate) const SHOW_TBLPROPERTIES: &[CommandColumn] = &[c("key"), c("value")];
+/// `SHOW PARTITIONS`.
+pub(crate) const SHOW_PARTITIONS: &[CommandColumn] = &[c("partition")];
+/// `SHOW CATALOGS`.
+pub(crate) const SHOW_CATALOGS: &[CommandColumn] = &[c("catalog")];
+/// `SHOW CURRENT NAMESPACE`.
+pub(crate) const SHOW_CURRENT_NAMESPACE: &[CommandColumn] = &[c("catalog"), c("namespace")];
+
+/// `SHOW GRANTS` (the `grants` provider, `grants/exec.rs`): an ownership row has no grantor or time.
+pub(crate) const SHOW_GRANTS: &[CommandColumn] = &[
+    c("principal"),
+    c("privilege"),
+    c("object_type"),
+    c("object_key"),
+    c("grant_option"),
+    CommandColumn::nullable("granted_by"),
+    CommandColumn::nullable("granted_at"),
+];
+/// `DESCRIBE TABLE` (no column) and `DESCRIBE QUERY`: `comment` is nullable.
+pub(crate) const DESCRIBE_TABLE: &[CommandColumn] = &[
+    c("col_name"),
+    c("data_type"),
+    CommandColumn::nullable("comment"),
+];
+/// `DESCRIBE TABLE .. AS JSON`.
+pub(crate) const DESCRIBE_JSON: &[CommandColumn] = &[c("json_metadata")];
+/// `DESCRIBE TABLE t col`: both non-null.
+pub(crate) const DESCRIBE_COLUMN: &[CommandColumn] = &[c("info_name"), c("info_value")];
+/// `DESCRIBE NAMESPACE`: `info_value` is nullable.
+pub(crate) const DESCRIBE_NAMESPACE: &[CommandColumn] =
+    &[c("info_name"), CommandColumn::nullable("info_value")];
+/// `EXPLAIN`: `plan` is nullable (`commands.scala:166`).
+pub(crate) const EXPLAIN: &[CommandColumn] = &[CommandColumn::nullable("plan")];
+/// `SET`, `SET key`, `SET key = value`, `SET TIME ZONE`.
+pub(crate) const SET: &[CommandColumn] = &[c("key"), c("value")];
+/// `SET -v`.
+pub(crate) const SET_VERBOSE: &[CommandColumn] =
+    &[c("key"), c("value"), c("meaning"), c("Since version")];
+
 /// The result columns of a `SHOW`, `DESCRIBE`, `EXPLAIN`, `SET` or `RESET` statement; `None` for any other
 /// statement.
 pub(crate) fn command_schema(statement: &Statement) -> Option<Vec<OutputColumn>> {
-    // The one nullable column of the command, if any.
-    let (names, nullable): (&[&str], Option<&str>) = match statement {
-        Statement::Show(s) => (show_columns(&s.kind)?, None),
+    let columns: &[CommandColumn] = match statement {
+        Statement::Show(s) => show_columns(&s.kind)?,
         Statement::Describe(d) => describe_columns(&d.kind)?,
-        Statement::Explain(_) => (&["plan"], Some("plan")),
-        Statement::Set(s) => (set_columns(&s.kind)?, None),
-        Statement::Reset(_) => (&[], None),
+        Statement::Explain(_) => EXPLAIN,
+        Statement::Set(s) => set_columns(&s.kind)?,
+        Statement::Reset(_) => &[],
         _ => return None,
     };
     Some(
-        names
+        columns
             .iter()
-            .map(|&n| {
-                let ty = if n == "isTemporary" {
-                    DataType::Boolean
-                } else {
-                    DataType::String
-                };
-                OutputColumn::new(n, ty, nullable == Some(n))
-            })
+            .map(|c| OutputColumn::new(c.name, c.data_type(), c.nullable))
             .collect(),
     )
 }
 
 /// `SET`'s columns (`Session::exec_set`).
-fn set_columns(kind: &SetKind) -> Option<&'static [&'static str]> {
+fn set_columns(kind: &SetKind) -> Option<&'static [CommandColumn]> {
     Some(match kind {
         SetKind::All | SetKind::Show { .. } | SetKind::Assign { .. } | SetKind::TimeZone { .. } => {
-            &["key", "value"]
+            SET
         }
-        SetKind::Verbose => &["key", "value", "meaning", "Since version"],
+        SetKind::Verbose => SET_VERBOSE,
         SetKind::Path { .. } => &[],
         // `SET` forms added later.
         _ => return None,
     })
 }
 
-const TABLES: &[&str] = &["namespace", "tableName", "isTemporary"];
-const DESCRIBE: &[&str] = &["col_name", "data_type", "comment"];
-const INFO: &[&str] = &["info_name", "info_value"];
-
-fn show_columns(kind: &ShowKind) -> Option<&'static [&'static str]> {
+fn show_columns(kind: &ShowKind) -> Option<&'static [CommandColumn]> {
     Some(match kind {
-        ShowKind::Tables { .. } => TABLES,
-        ShowKind::TableExtended { .. } => &["namespace", "tableName", "isTemporary", "information"],
-        ShowKind::Views { .. } => &["namespace", "viewName", "isTemporary"],
-        ShowKind::Columns { .. } => &["col_name"],
-        ShowKind::Namespaces { .. } => &["namespace"],
-        ShowKind::CreateTable { .. } => &["createtab_stmt"],
-        ShowKind::TblProperties { .. } => &["key", "value"],
-        ShowKind::Partitions { .. } => &["partition"],
-        ShowKind::Catalogs { .. } => &["catalog"],
-        ShowKind::CurrentNamespace { .. } => &["catalog", "namespace"],
+        ShowKind::Tables { .. } => SHOW_TABLES,
+        ShowKind::TableExtended { .. } => SHOW_TABLE_EXTENDED,
+        ShowKind::Views { .. } => SHOW_VIEWS,
+        ShowKind::Columns { .. } => SHOW_COLUMNS,
+        ShowKind::Namespaces { .. } => SHOW_NAMESPACES,
+        ShowKind::CreateTable { .. } => SHOW_CREATE_TABLE,
+        ShowKind::TblProperties { .. } => SHOW_TBLPROPERTIES,
+        ShowKind::Partitions { .. } => SHOW_PARTITIONS,
+        ShowKind::Catalogs { .. } => SHOW_CATALOGS,
+        ShowKind::CurrentNamespace { .. } => SHOW_CURRENT_NAMESPACE,
         // `SHOW FUNCTIONS` (refused by the session, `KRISHIV_UNSUPPORTED_FEATURE`) and kinds added later have no
         // result schema here.
         _ => return None,
     })
 }
 
-/// `DESCRIBE`'s columns and its nullable one: `comment` of a table or query, `info_value` of a namespace (a
-/// column's `info_value` is non-null).
-fn describe_columns(
-    kind: &DescribeKind,
-) -> Option<(&'static [&'static str], Option<&'static str>)> {
+/// `DESCRIBE`'s columns.
+fn describe_columns(kind: &DescribeKind) -> Option<&'static [CommandColumn]> {
     Some(match kind {
         DescribeKind::Table {
             as_json, column, ..
         } => {
             if *as_json {
-                (&["json_metadata"], None)
+                DESCRIBE_JSON
             } else if column.is_empty() {
-                (DESCRIBE, Some("comment"))
+                DESCRIBE_TABLE
             } else {
-                (INFO, None)
+                DESCRIBE_COLUMN
             }
         }
-        DescribeKind::Namespace { .. } => (INFO, Some("info_value")),
-        DescribeKind::Query { .. } => (DESCRIBE, Some("comment")),
+        DescribeKind::Namespace { .. } => DESCRIBE_NAMESPACE,
+        DescribeKind::Query { .. } => DESCRIBE_TABLE,
         // `DESCRIBE FUNCTION` (refused by the session, `KRISHIV_UNSUPPORTED_FEATURE`) and kinds added later.
         _ => return None,
     })

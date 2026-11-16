@@ -44,12 +44,12 @@ use krishiv_sql::ast::{
 };
 use krishiv_types::DataType;
 
+use crate::analyze::command_schema as cols;
 pub(crate) use crate::arrow_values::{arrow_field_value, arrow_value, declared_value};
 use crate::catalog::{CATALOG, NAMESPACE, TempTable};
 use crate::catalog::{is_global_key, is_reserved_view_name, reserved_temp_view_name};
 use crate::column::Column;
 use crate::dataframe::DataFrame;
-use crate::functions::{col, lit, lit_null};
 use crate::session::{QueryEnv, Session};
 use crate::sql_functions::{Entry, one_row_project};
 use crate::store::{CatalogStore, StoredFunction};
@@ -80,7 +80,7 @@ impl Session {
                 // Every explicitly set key (the frame sorts by key).
                 let rows = self.state.conf.explicit_entries();
                 self.string_frame(
-                    &["key", "value"],
+                    cols::SET,
                     rows.into_iter()
                         .map(|(key, value)| vec![Some(key), Some(value)])
                         .collect(),
@@ -107,8 +107,7 @@ impl Session {
                         ]
                     })
                     .collect();
-                self.string_frame(&["key", "value", "meaning", "Since version"], rows)
-                    .await
+                self.string_frame(cols::SET_VERBOSE, rows).await
             }
             SetKind::Show { key, .. } => {
                 let value = self
@@ -116,11 +115,8 @@ impl Session {
                     .conf
                     .value(key)
                     .unwrap_or_else(|| UNDEFINED.to_owned());
-                self.string_frame(
-                    &["key", "value"],
-                    vec![vec![Some(key.clone()), Some(value)]],
-                )
-                .await
+                self.string_frame(cols::SET, vec![vec![Some(key.clone()), Some(value)]])
+                    .await
             }
             SetKind::Assign {
                 key,
@@ -151,7 +147,7 @@ impl Session {
                 // shows the value as written, as in Spark.
                 self.conf().set(key, value)?;
                 self.string_frame(
-                    &["key", "value"],
+                    cols::SET,
                     vec![vec![Some(key.clone()), Some(value.clone())]],
                 )
                 .await
@@ -170,7 +166,7 @@ impl Session {
                 };
                 self.conf().set(TIME_ZONE_KEY, &value)?;
                 self.string_frame(
-                    &["key", "value"],
+                    cols::SET,
                     vec![vec![Some(TIME_ZONE_KEY.to_owned()), Some(value)]],
                 )
                 .await
@@ -1454,7 +1450,8 @@ impl Session {
             let mut env = self.query_env();
             let candidate = Arc::new(
                 env.sql_functions
-                    .over_stored(Arc::new(current.with(stored))),
+                    .over_stored(Arc::new(current.with(stored)))
+                    .defining(namespace, &entry.def.name),
             );
             env.analysis.functions = Arc::clone(&candidate) as _;
             env.sql_functions = Arc::clone(&candidate);
@@ -1551,7 +1548,7 @@ impl Session {
                         Some(self.state.catalog.current_namespace()),
                     ]
                 };
-                self.string_frame(&["catalog", "namespace"], vec![row])
+                self.string_frame(cols::SHOW_CURRENT_NAMESPACE, vec![row])
                     .await
             }
             krishiv_sql::ast::ShowKind::Catalogs { pattern, .. } => {
@@ -1560,65 +1557,10 @@ impl Session {
                     .filter(|n| crate::introspection::keep(pattern.as_ref(), n))
                     .map(|n| vec![Some(n.to_owned())])
                     .collect();
-                self.ordered_frame(&["catalog"], &[], rows).await
+                self.ordered_frame(cols::SHOW_CATALOGS, &[], rows).await
             }
             _ => self.exec_show_catalog(s, original).await,
         }
-    }
-
-    /// A frame of the string columns `columns` with `rows` (`None` is
-    /// NULL), as Spark's `SET` commands return. Rows come out ordered by
-    /// `key`, as in Spark.
-    pub(crate) async fn string_frame(
-        &self,
-        columns: &[&str],
-        rows: Vec<Vec<Option<String>>>,
-    ) -> Result<DataFrame, KrishivError> {
-        let one = || {
-            DataFrame::new(
-                self.clone(),
-                Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
-            )
-        };
-        let row = |values: &[Option<String>]| {
-            one().select(
-                columns
-                    .iter()
-                    .zip(values.iter())
-                    .map(|(&name, value)| match value {
-                        Some(value) => lit(value.as_str()).alias(name),
-                        None => lit_null().cast(DataType::String).alias(name),
-                    }),
-            )
-        };
-        let df = if rows.is_empty() {
-            // No rows: one placeholder row with the schema, limited to
-            // nothing, so the columns read as non-nullable strings.
-            row(&vec![Some(String::new()); columns.len()]).limit(0)
-        } else if rows.len() == 1 {
-            row(&rows[0])
-        } else {
-            let inputs: Vec<Arc<LogicalPlan>> =
-                rows.iter().map(|r| Arc::clone(&row(r).plan)).collect();
-            DataFrame::new(
-                self.clone(),
-                Arc::new(LogicalPlan::new(PlanNode::Union {
-                    inputs,
-                    by_name: false,
-                    allow_missing_columns: false,
-                })),
-            )
-        };
-        // Rows come out ordered by key: unions read in any order, so the
-        // frame sorts.
-        let df = if columns.contains(&"key") {
-            df.order_by([col("key")])
-        } else {
-            df // callers without a `key` column pass at most one row
-        };
-        let env = self.query_env();
-        df.analyzed_in(env).await?;
-        Ok(df)
     }
 }
 
@@ -1953,15 +1895,7 @@ fn default_row_query(query: &Query, inner: &str, stored: &[StoredVariable]) -> O
     Some(text)
 }
 
-pub(crate) fn is_bare_default(e: &Expr) -> bool {
-    match &e.kind {
-        ExprKind::Nested(inner) => is_bare_default(inner),
-        ExprKind::Column(parts) => {
-            matches!(&parts[..], [p] if !p.quoted && p.value.eq_ignore_ascii_case("default"))
-        }
-        _ => false,
-    }
-}
+pub(crate) use krishiv_sql::is_bare_default;
 
 /// Whether any node of the top-level expression tree `e` (windows
 /// included) matches `pred`. Subquery plans are not crossed: a `Query` is
@@ -1995,6 +1929,8 @@ pub(crate) fn contains_subquery(e: &Expr) -> bool {
         )
     })
 }
+
+mod frames;
 
 #[cfg(test)]
 mod tests;
