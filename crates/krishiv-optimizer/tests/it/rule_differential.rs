@@ -21,13 +21,16 @@
 //! applies).
 //!
 //! Rules that run only under a session configuration (`subquery_as_window`,
-//! `share_repeated_subtrees`) are not switched here: `optimize_with_options`
-//! gives none, so they are off in every arm.
+//! `share_repeated_subtrees`) are switched through it: their arms optimize
+//! with `optimize_with_udfs` and a configuration that turns both on, then
+//! one off. Their rows are compared with the same all-on rows as the
+//! `Options` switches'.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 
-use krishiv_optimizer::{Options, optimize_with_options};
+use krishiv_common::config::Config;
+use krishiv_optimizer::{Options, optimize_with_options, optimize_with_udfs};
 use krishiv_plan::Plan;
 
 use crate::qerror::{self, DataStats};
@@ -35,21 +38,64 @@ use crate::support::eval::{self, Db, V};
 use crate::support::{self, data};
 use crate::tpcds;
 
-/// A switched rule: its name and the change that turns it off.
-type Rule = (&'static str, fn(&mut Options));
+/// How a rule is switched off.
+#[derive(Clone, Copy)]
+enum Off {
+    /// An [`Options`] switch (`optimize_with_options`, no session configuration).
+    Option(fn(&mut Options)),
+    /// A session configuration key set to `false` (`optimize_with_udfs`; the
+    /// configuration's all-on arm sets every such key to `true`).
+    Config(&'static str),
+}
+
+/// A switched rule: its name and what turns it off.
+type Rule = (&'static str, Off);
 
 /// A panic hook, as `std::panic::take_hook` returns it.
 type PanicHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'static>;
 
 /// The switched rules.
-const RULES: [Rule; 6] = [
-    ("cse", |o| o.cse = false),
-    ("stats_propagation", |o| o.stats_propagation = false),
-    ("inferred_join_filters", |o| o.inferred_join_filters = false),
-    ("eager_aggregation", |o| o.eager_aggregation = false),
-    ("late_payload_join", |o| o.late_payload_join = false),
-    ("group_key_code", |o| o.group_key_code = false),
+const RULES: [Rule; 8] = [
+    ("cse", Off::Option(|o| o.cse = false)),
+    (
+        "stats_propagation",
+        Off::Option(|o| o.stats_propagation = false),
+    ),
+    (
+        "inferred_join_filters",
+        Off::Option(|o| o.inferred_join_filters = false),
+    ),
+    (
+        "eager_aggregation",
+        Off::Option(|o| o.eager_aggregation = false),
+    ),
+    (
+        "late_payload_join",
+        Off::Option(|o| o.late_payload_join = false),
+    ),
+    ("group_key_code", Off::Option(|o| o.group_key_code = false)),
+    (
+        "subquery_as_window",
+        Off::Config("krishiv.optimizer.subqueryAsWindow"),
+    ),
+    (
+        "share_repeated_subtrees",
+        Off::Config("krishiv.optimizer.shareRepeatedSubtrees"),
+    ),
 ];
+
+/// A session configuration with every [`Off::Config`] rule on, then `off`
+/// set to `false`.
+fn config(off: Option<&str>) -> Config {
+    let mut c = Config::new();
+    for (_, rule) in RULES {
+        if let Off::Config(key) = rule {
+            let on = if Some(key) == off { "false" } else { "true" };
+            c.set(key, on).unwrap();
+        }
+    }
+    c
+}
 
 /// Silences the panic hook while it lives (the interpreter panics on what it
 /// does not run), restoring it on every exit, a panic included.
@@ -102,6 +148,7 @@ fn run_suite(
 ) -> Outcome {
     let stats: DataStats = qerror::stats_of(db);
     let all_on = Options::default();
+    let library = krishiv_udf_sdk::UdfLibrary::new();
     let mut out = Outcome::default();
     let _quiet = QuietPanics::new();
     for (id, sql) in sqls {
@@ -115,10 +162,30 @@ fn run_suite(
         out.compared += 1;
         out.nonempty += usize::from(!want.is_empty());
         let base_text = format!("{:?}", base.root());
+        // The configured all-on arm: its plan is what a configuration rule's
+        // arm differs from; its rows must be the all-on rows too.
+        let configured = |c: &Config| optimize_with_udfs(&plan, &stats, &library, c).unwrap();
+        let base_conf = configured(&config(None));
+        let conf_text = format!("{:?}", base_conf.root());
+        if conf_text != base_text {
+            match rows(db, &base_conf) {
+                Some(got) if got == want => {}
+                got => out.differences.push(format!(
+                    "{suite} {id} configured all on: {}, all on: {} rows",
+                    got.map_or_else(|| "not run".to_owned(), |g| format!("{} rows", g.len())),
+                    want.len()
+                )),
+            }
+        }
         for (i, (rule, off)) in RULES.iter().enumerate() {
-            let options = support::options(off);
-            let other = optimize_with_options(&plan, &stats, &options).unwrap();
-            if format!("{:?}", other.root()) == base_text {
+            let (other, base_text) = match *off {
+                Off::Option(f) => (
+                    optimize_with_options(&plan, &stats, &support::options(f)).unwrap(),
+                    &base_text,
+                ),
+                Off::Config(key) => (configured(&config(Some(key))), &conf_text),
+            };
+            if format!("{:?}", other.root()) == *base_text {
                 continue;
             }
             out.changed[i] += 1;
