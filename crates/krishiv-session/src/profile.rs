@@ -343,7 +343,7 @@ impl DataFrame {
     ) -> Result<(Vec<RecordBatch>, QueryProfile), KrishivError> {
         // Snapshot who runs the query now: `set_trace_context` and `set_tag` apply to the
         // queries started after them, not to this one.
-        let who = crate::telemetry::Who::of(&self.session.state);
+        let who = crate::telemetry::Who::of(&self.session);
         let mut trace = serde_json::json!({ "session_id": who.session_id });
         if let (Some(t), Some(o)) = (&who.trace_id, trace.as_object_mut()) {
             o.insert("trace_id".to_owned(), t.clone().into());

@@ -34,10 +34,10 @@ use krishiv_common::error::{
     InvalidCloneSessionRequestTargetSessionIdAlreadyExists,
     InvalidCloneSessionRequestTargetSessionIdFormat, InvalidHandleSessionClosed, KrishivError,
 };
-use krishiv_common::principal::Principal;
 use krishiv_session::QueryId;
+use krishiv_session::auth::Authenticated;
 
-use super::{Inner, Key, SessionEntry, SessionLimits, SessionManager};
+use super::{Inner, Key, SessionEntry, SessionLimits, SessionManager, audit_foreign};
 use crate::artifacts::ArtifactStore;
 
 /// A clone not yet in the map: closed if dropped (a failure, or the handler
@@ -59,13 +59,14 @@ impl Drop for Unpublished {
 }
 
 impl SessionManager {
-    /// Clones `source` (a live session of `principal`, looked up by the
-    /// caller) as the session `target` of `principal`.
+    /// Clones `source` (a live session of `caller`, looked up by it) as the
+    /// session `target` of `caller`.
     ///
     /// # Errors
     /// `INVALID_CLONE_SESSION_REQUEST.TARGET_SESSION_ID_FORMAT`,
     /// `..._ALREADY_CLOSED` or `..._ALREADY_EXISTS` for the target id;
-    /// `INVALID_HANDLE.SESSION_NOT_FOUND` for an id another principal holds;
+    /// `INVALID_HANDLE.SESSION_NOT_FOUND` for an id another owner holds
+    /// (audited, ADR 0046 §3b);
     /// `KRISHIV_SESSION_LIMIT` past a session cap;
     /// `INVALID_HANDLE.SESSION_CLOSED` when the source is released meanwhile
     /// or the server shuts down; `KRISHIV_ARTIFACT_LIMIT` when its artifacts
@@ -73,7 +74,7 @@ impl SessionManager {
     pub async fn clone_session(
         &self,
         store: &Arc<ArtifactStore>,
-        principal: &Principal,
+        caller: &Authenticated,
         source: &Arc<SessionEntry>,
         target: &str,
     ) -> Result<Arc<SessionEntry>, KrishivError> {
@@ -83,9 +84,10 @@ impl SessionManager {
             }
             .into());
         }
-        let key = Self::key(principal, target);
+        let key = Self::key(caller, target);
         // Checked before anything is built, and again when it is inserted.
-        Self::check_clone_locked(&mut self.lock(), &key, &self.limits)?;
+        Self::check_clone_locked(&mut self.lock(), &key, &self.limits)
+            .map_err(|e| audit_foreign(caller, "session", e))?;
         let source_closed = || -> KrishivError {
             InvalidHandleSessionClosed {
                 handle: source.session().id().to_owned(),
@@ -98,7 +100,7 @@ impl SessionManager {
             let snapshot = source.artifacts().snapshot();
             (session, snapshot)
         };
-        let entry = self.new_entry(session, source.client_user_id());
+        let entry = self.new_entry(caller, session, source.client_user_id());
         let pending = Unpublished(Some(Arc::clone(&entry)));
         let snapshot = snapshot.ok_or_else(source_closed)?;
         if !snapshot.is_empty() {
@@ -116,7 +118,8 @@ impl SessionManager {
         }
         {
             let mut inner = self.lock();
-            Self::check_clone_locked(&mut inner, &key, &self.limits)?;
+            Self::check_clone_locked(&mut inner, &key, &self.limits)
+                .map_err(|e| audit_foreign(caller, "session", e))?;
             // The idle clock starts now, not before the copy (review L3): a
             // copy longer than the idle timeout must not get the clone
             // swept as soon as it is published.
@@ -124,11 +127,8 @@ impl SessionManager {
             inner.live.insert(key.clone(), Arc::clone(&entry));
             inner
                 .owners
-                .insert(key.session_id.clone(), key.principal.clone());
-            *inner
-                .per_principal
-                .entry(key.principal.clone())
-                .or_insert(0) += 1;
+                .insert(key.session_id.clone(), key.owner.clone());
+            *inner.per_principal.entry(key.owner.clone()).or_insert(0) += 1;
         }
         let _published = pending.publish();
         Ok(entry)
@@ -155,7 +155,7 @@ impl SessionManager {
                 .into());
             }
         }
-        // Shut down, another principal's id, the caps.
+        // Shut down, another owner's id, the caps.
         Self::check_create_locked(inner, key, limits)
     }
 }

@@ -14,13 +14,22 @@ use super::{
 };
 
 mod python;
-pub use python::{ARROW_MAX_RECORDS_PER_BATCH, PYTHON_UDF_ARROW_ENABLED, PYTHON_UDF_THREADS};
+pub use python::{
+    ARROW_MAX_RECORDS_PER_BATCH, PYTHON_UDF_ARROW_ENABLED, PYTHON_UDF_THREADS,
+    PYTHON_WORKER_ALLOW_FORK, PYTHON_WORKER_EXECUTABLES, PYTHON_WORKER_IDLE_TIMEOUT,
+    PYTHON_WORKER_MAX_PER_SESSION, PYTHON_WORKER_MAX_TOTAL, PYTHON_WORKER_MEMORY_LIMIT,
+    UDF_SANDBOX,
+};
 mod lakehouse;
 mod optimizer;
 mod result_cache;
 mod server;
-pub use lakehouse::{CATALOG_MAX_COLUMNS, CATALOG_MAX_METADATA_BYTES, DELTA_LOG_THREADS};
-pub use optimizer::{SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW};
+pub use lakehouse::{
+    CATALOG_MAX_COLUMNS, CATALOG_MAX_METADATA_BYTES, CATALOG_REQUEST_TIMEOUT, DELTA_LOG_THREADS,
+};
+pub use optimizer::{
+    EXPERIMENTAL_GROUP_KEY_CODE_FORCE, GROUP_KEY_CODE, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
+};
 pub use result_cache::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
 pub use server::{
     CONNECT_ADDRESS, CONNECT_ARTIFACTS_MAX_ARTIFACT_BYTES, CONNECT_ARTIFACTS_MAX_BYTES,
@@ -77,6 +86,9 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &MEMORY_RESIDENT_GUARD,
     &SESSION_MEMORY_LIMIT,
     &SYSTEM_QUERIES_CAPACITY,
+    &HISTORY_PATH,
+    &HISTORY_LITERALS,
+    &HISTORY_MAX_BYTES,
     &UI_ENABLED,
     &SYSTEM_QUERY_TEXT_MAX_BYTES,
     &SYSTEM_QUERY_TEXT_LITERALS,
@@ -90,8 +102,11 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RESULT_CACHE_TTL,
     &RESULT_CACHE_MAX_BYTES,
     &SUBQUERY_AS_WINDOW,
+    &GROUP_KEY_CODE,
+    &EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
     &SHARE_REPEATED_SUBTREES,
     &SPILL_DIR,
+    &WORKLOAD_RESOURCE_GROUPS_FILE,
     &SPILL_MAX_BYTES,
     &SPILL_COMPRESSION,
     &SPILL_ZSTD_LEVEL,
@@ -112,6 +127,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &DELTA_LOG_THREADS,
     &CATALOG_MAX_METADATA_BYTES,
     &CATALOG_MAX_COLUMNS,
+    &CATALOG_REQUEST_TIMEOUT,
     &IO_COALESCE_BYTES,
     &IO_COALESCE_WASTE_BYTES,
     &IO_COALESCE_WASTE_DIVISOR,
@@ -144,6 +160,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT,
     &RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
     &WINDOW_GROUP_LIMIT_THRESHOLD,
+    &UNION_OUTPUT_PARTITIONING,
     &CONNECT_MAX_PLAN_DEPTH,
     &LATE_FETCH_MAX_ROWS,
     &CTE_RECURSION_LEVEL_LIMIT,
@@ -165,6 +182,13 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &ARROW_MAX_RECORDS_PER_BATCH,
     &PYTHON_UDF_ARROW_ENABLED,
     &PYTHON_UDF_THREADS,
+    &UDF_SANDBOX,
+    &PYTHON_WORKER_EXECUTABLES,
+    &PYTHON_WORKER_IDLE_TIMEOUT,
+    &PYTHON_WORKER_MAX_PER_SESSION,
+    &PYTHON_WORKER_MAX_TOTAL,
+    &PYTHON_WORKER_MEMORY_LIMIT,
+    &PYTHON_WORKER_ALLOW_FORK,
     &JOIN_ENUMERATOR,
     &JOIN_DP_LIMIT,
     &NDV_SAMPLING_ENABLED,
@@ -620,6 +644,54 @@ pub static SYSTEM_QUERIES_CAPACITY: ConfigEntry = ConfigEntry {
     version_added: "0.2.0",
     spark_alias: None,
     settable_by: SettableBy::Startup,
+};
+
+/// Where finished queries' profiles are kept (P3-T051).
+pub static HISTORY_PATH: ConfigEntry = ConfigEntry {
+    key: "krishiv.history.path",
+    value_type: ValueType::String,
+    default: None,
+    doc: "A directory where the engine keeps one compact profile for every finished query, as \
+          Parquet files, so `system.queries` history survives a restart and a stored profile can \
+          be opened later. A profile has the plan, the operators' counters and the query's \
+          identity, and no result data; literals are masked unless `krishiv.history.literals` \
+          is `keep`. Every query that reached execution is stored, as the engine metrics count \
+          them: a statement refused in parsing, analysis or an access check is not. Writing happens after the result stream \
+          ends and never fails the query; a failed write is counted in \
+          `krishiv_history_write_failures`. When unset, nothing is stored.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// Whether the persisted history keeps literals (P3-T051).
+pub static HISTORY_LITERALS: ConfigEntry = ConfigEntry {
+    key: "krishiv.history.literals",
+    value_type: ValueType::Enum(&["keep", "mask"]),
+    default: Some(ConfigValue::String(Cow::Borrowed("mask"))),
+    doc: "`mask` (the default) replaces every string and number literal with `?` in the \
+          statement text and in the plan lines of the profiles stored under \
+          `krishiv.history.path`, so a stored profile carries no data values. `keep` stores \
+          them as `EXPLAIN ANALYZE` prints them. Credentials in a statement are redacted either \
+          way.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// Most bytes the profile history keeps (P3-T051).
+pub static HISTORY_MAX_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.history.maxBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(256 << 20)),
+    doc: "Most bytes the profile history under `krishiv.history.path` keeps. When a new file \
+          takes the store past this, the oldest files go first, so the newest queries stay.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
 };
 
 /// Whether `krishiv server` serves the web UI backend (design T133).
@@ -1459,6 +1531,24 @@ pub static WINDOW_GROUP_LIMIT_THRESHOLD: ConfigEntry = ConfigEntry {
     spark_alias: Some("spark.sql.optimizer.windowGroupLimitThreshold"),
 };
 
+/// `spark.sql.unionOutputPartitioning`.
+pub static UNION_OUTPUT_PARTITIONING: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.unionOutputPartitioning",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "A UNION ALL whose inputs are each one partition (Spark's SinglePartition: a range of \
+          one slice with rows or a global aggregate, through projections, filters, samples, \
+          generators and LIMITs) is one partition, its inputs read in turn, as Spark's UnionExec \
+          reports its output partitioning: partition-indexed functions above it \
+          (spark_partition_id, rand with a seed, monotonically_increasing_id) see index 0 and one \
+          stream. Not applied when the inputs run together (a hash-join probe above the union). \
+          Off: the union's partitions follow one another, one per input partition.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.unionOutputPartitioning"),
+};
+
 /// `krishiv.connect.maxPlanDepth`.
 pub static CONNECT_MAX_PLAN_DEPTH: ConfigEntry = ConfigEntry {
     key: "krishiv.connect.maxPlanDepth",
@@ -1826,3 +1916,19 @@ pub static SHARE_CTE_INSTANCES: ConfigEntry = ConfigEntry {
 
 mod index;
 pub use index::INDEX;
+
+/// `krishiv.workload.resourceGroups.file`.
+pub static WORKLOAD_RESOURCE_GROUPS_FILE: ConfigEntry = ConfigEntry {
+    key: "krishiv.workload.resourceGroups.file",
+    value_type: ValueType::String,
+    default: None,
+    doc: "Path of the resource group file (JSON in the shape of Trino's `resource-groups.json`, \
+          restricted to the subset Krishiv supports): the group tree, its concurrency, queue, \
+          per-query memory and scan limits, and the selectors that route a query to a group. Read when \
+          the engine starts; a malformed file stops the start with \
+          `KRISHIV_RESOURCE_GROUP_CONFIG_INVALID`. When unset, every query is admitted at once.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};

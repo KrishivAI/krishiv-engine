@@ -27,6 +27,7 @@ use krishiv_connect_server::{
     SessionManager,
 };
 use krishiv_session::Session;
+use krishiv_session::auth::{Authenticated, Method};
 use prost::Message;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -243,7 +244,7 @@ async fn execute_response_order() {
     // small engine batches are not merged (design P3-T011a §3.2), so the
     // engine's batch size decides how many come below the limits.
     run.manager
-        .get_or_create(&Principal::local_user(), SESSION, None, "u")
+        .get_or_create(&local_caller(), SESSION, None, "u")
         .expect("session")
         .session()
         .conf()
@@ -293,7 +294,7 @@ async fn execute_response_order() {
     ));
     let entry = run
         .manager
-        .get(&Principal::local_user(), SESSION, None)
+        .get(&local_caller(), SESSION, None)
         .expect("session");
     let ids: HashSet<&str> = responses.iter().map(|r| r.response_id.as_str()).collect();
     assert_eq!(ids.len(), responses.len(), "fresh response ids");
@@ -360,7 +361,7 @@ async fn strings_are_utf8_and_chunks_reassemble() {
     });
     let entry = run
         .manager
-        .get_or_create(&Principal::local_user(), SESSION, None, "u")
+        .get_or_create(&local_caller(), SESSION, None, "u")
         .expect("session");
     entry
         .session()
@@ -403,7 +404,7 @@ async fn compressed_ipc_buffers_follow_the_session_codec() {
     let run = start().await;
     let entry = run
         .manager
-        .get_or_create(&Principal::local_user(), SESSION, None, "u")
+        .get_or_create(&local_caller(), SESSION, None, "u")
         .expect("session");
     for (codec, expected) in [
         ("zstd", arrow_ipc::CompressionType::ZSTD),
@@ -594,7 +595,7 @@ async fn invalid_requests_are_refused_with_sparks_classes() {
     );
     let entry = run
         .manager
-        .get(&Principal::local_user(), SESSION, None)
+        .get(&local_caller(), SESSION, None)
         .expect("session");
     assert!(
         entry.operations().is_empty(),
@@ -687,7 +688,7 @@ async fn live_operations_reattach_release_and_cap() {
     assert_eq!(error_class(&e), "INVALID_HANDLE.OPERATION_NOT_FOUND");
     // Another session never sees the operation (operation_bound_to_session).
     run.manager
-        .get_or_create(&Principal::local_user(), OTHER_SESSION, None, "u")
+        .get_or_create(&local_caller(), OTHER_SESSION, None, "u")
         .expect("other");
     let e = stream(&run.channel, "ReattachExecute", reattach(OTHER_SESSION, OP))
         .await
@@ -759,7 +760,7 @@ async fn live_operations_reattach_release_and_cap() {
     // (Spark's `ExecuteHolder.close` interrupts the attached sender).
     let entry = run
         .manager
-        .get(&Principal::local_user(), SESSION, None)
+        .get(&local_caller(), SESSION, None)
         .expect("session");
     let session = entry.session().clone();
     let _: pb::ReleaseExecuteResponse = unary(
@@ -859,7 +860,7 @@ async fn a_dropped_stream_cancels_the_query_and_frees_its_memory() {
     .await;
     let entry = run
         .manager
-        .get_or_create(&Principal::local_user(), SESSION, None, "u")
+        .get_or_create(&local_caller(), SESSION, None, "u")
         .expect("session");
     let session = entry.session().clone();
     session
@@ -900,7 +901,7 @@ async fn a_dropped_stream_cancels_a_query_that_has_not_produced_yet() {
     let run = start().await;
     let entry = run
         .manager
-        .get_or_create(&Principal::local_user(), SESSION, None, "u")
+        .get_or_create(&local_caller(), SESSION, None, "u")
         .expect("session");
     let session = entry.session().clone();
     // An aggregate sends nothing until it has read its whole input.
@@ -935,7 +936,7 @@ async fn a_released_operation_does_not_wait_for_a_client_that_reads_nothing() {
     .await;
     let entry = run
         .manager
-        .get_or_create(&Principal::local_user(), SESSION, None, "u")
+        .get_or_create(&local_caller(), SESSION, None, "u")
         .expect("session");
     let session = entry.session().clone();
     session
@@ -999,7 +1000,7 @@ async fn large_row_result() {
         assert_eq!(batch.num_chunks_in_batch, None);
     }
     run.manager
-        .get_or_create(&Principal::local_user(), SESSION, None, "u")
+        .get_or_create(&local_caller(), SESSION, None, "u")
         .expect("session")
         .session()
         .conf()
@@ -1060,7 +1061,7 @@ async fn ml_clean_cache_succeeds_with_nothing_to_clean() {
     let run = start().await;
     let entry = run
         .manager
-        .get_or_create(&Principal::local_user(), SESSION, None, "u")
+        .get_or_create(&local_caller(), SESSION, None, "u")
         .expect("session");
     // Not reattachable: no response, the stream ends OK.
     let first = "00112233-4455-6677-8899-aabbccddee02";
@@ -1155,7 +1156,12 @@ async fn other_ml_commands_stay_unsupported() {
     }
     let entry = run
         .manager
-        .get(&Principal::local_user(), SESSION, None)
+        .get(&local_caller(), SESSION, None)
         .expect("session");
     assert!(entry.operations().is_empty());
+}
+
+/// The caller of every request to a server without authentication.
+fn local_caller() -> Authenticated {
+    Authenticated::new(Principal::local_user(), None, Method::None)
 }

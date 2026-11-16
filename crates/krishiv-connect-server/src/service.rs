@@ -4,7 +4,8 @@
 //! implementation of it, [`ConnectService`].
 //!
 //! T001 implements the session RPCs (`ReleaseSession`) and what every RPC
-//! shares (the principal, the draining refusal). T011a (PR-11a) adds
+//! shares (the draining refusal); T002 authenticates every RPC, the
+//! unimplemented ones too (`crate::auth`). T011a (PR-11a) adds
 //! `ExecutePlan` (`crate::execute`), `ReattachExecute` and `ReleaseExecute`
 //! (with the replay buffer, sender caps and detach of PR-15a, design
 //! P3-T011a §3.8). PR-11b adds `AnalyzePlan` (`crate::analyze`), `Config`
@@ -24,14 +25,15 @@ use krishiv_common::error::{
     ConnectInvalidPlanInvalidOneOfFieldNotSet, InvalidCursorNotReattachable,
     InvalidHandleOperationAbandoned, InvalidHandleOperationNotFound, KrishivError,
 };
-use krishiv_common::principal::Principal;
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::release_execute_request::Release;
 use krishiv_connect::wire::Decoded;
+use krishiv_session::auth::Authenticated;
 use tonic::codegen::BoxStream;
 use tonic::{Request, Response, Status, Streaming};
 
 use crate::artifacts::{self, ArtifactLimits, ArtifactStore};
+use crate::auth::{Check, ConnectAuth, Rpc, check_rpc, enforce};
 use crate::codec::WireCodec;
 use crate::execute::ResponseBudget;
 use crate::manager::{SessionEntry, SessionManager};
@@ -53,15 +55,30 @@ mod generated {
 
 pub use generated::{SparkConnectService, SparkConnectServiceServer};
 
-/// The principal a request runs as: set by the authentication layer (T002)
-/// as a request extension; until then the server's local user, on loopback
-/// only (design P3-T001 §3.6).
-fn principal_of<T>(request: &Request<T>, default: &Principal) -> Principal {
-    request
-        .extensions()
-        .get::<Principal>()
-        .cloned()
-        .unwrap_or_else(|| default.clone())
+/// The trace headers of a request, read once before the request body is taken (a non-ASCII
+/// value is no header at all).
+fn inbound_of(metadata: &tonic::metadata::MetadataMap) -> execute::InboundTrace {
+    let text = |name: &str| {
+        metadata
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+    };
+    execute::InboundTrace {
+        traceparent: text("traceparent"),
+        baggage: text("baggage"),
+    }
+}
+
+/// Tells the engine session who is calling (`system.sessions`: transport, client type, user).
+/// Client-asserted: shown, never used as an identity.
+fn observe(entry: &SessionEntry, client_type: Option<&str>) {
+    entry.session().set_client_info(
+        krishiv_session::Transport::Connect,
+        client_type,
+        Some(entry.client_user_id()),
+        Some(entry.server_side_id()),
+    );
 }
 
 /// Krishiv's Spark Connect service over a [`SessionManager`].
@@ -69,21 +86,21 @@ fn principal_of<T>(request: &Request<T>, default: &Principal) -> Principal {
 pub struct ConnectService {
     manager: Arc<SessionManager>,
     draining: Arc<AtomicBool>,
-    local: Principal,
+    auth: Arc<ConnectAuth>,
     limits: ExecuteLimits,
     budget: ResponseBudget,
     artifacts: Arc<ArtifactStore>,
 }
 
 impl ConnectService {
-    /// A service over `manager`; new RPCs are refused with `UNAVAILABLE`
-    /// once `draining` is set (shutdown).
+    /// A service over `manager`, with authentication off; new RPCs are
+    /// refused with `UNAVAILABLE` once `draining` is set (shutdown).
     #[must_use]
     pub fn new(manager: Arc<SessionManager>, draining: Arc<AtomicBool>) -> Self {
         Self {
             manager,
             draining,
-            local: Principal::local_user(),
+            auth: Arc::new(ConnectAuth::off()),
             budget: ResponseBudget::new(ExecuteLimits::default().max_response_bytes),
             limits: ExecuteLimits::default(),
             artifacts: Arc::new(ArtifactStore::new(ArtifactLimits::default())),
@@ -102,6 +119,13 @@ impl ConnectService {
     #[must_use]
     pub fn artifacts(&self) -> &Arc<ArtifactStore> {
         &self.artifacts
+    }
+
+    /// This service authenticating every RPC with `auth`.
+    #[must_use]
+    pub fn with_auth(mut self, auth: Arc<ConnectAuth>) -> Self {
+        self.auth = auth;
+        self
     }
 
     /// This service with the `ExecutePlan` limits `limits` (and a response
@@ -143,19 +167,50 @@ impl ConnectService {
         }
     }
 
-    /// The session `session_id` of `principal`, created if needed, its
-    /// server-side id checked against the client's (the get-or-create RPCs
-    /// of design P3-T011a §2.1).
+    /// Admits `request` and returns its caller (authenticated by
+    /// [`crate::auth::AuthLayer`] before the body was read), after the
+    /// ADR 0046 §3b class of `rpc`. A class that needs more than the
+    /// session lookup or the analyzer (a privilege, the write path, a side
+    /// effect) is refused until the RPC that needs it applies it: fail
+    /// closed, so a newly implemented RPC cannot skip its check.
+    fn caller<T>(&self, request: &Request<T>, rpc: Rpc) -> Result<Authenticated, Status> {
+        match self.caller_checked(request, rpc)? {
+            (caller, Check::OwnSession | Check::Plan) => Ok(caller),
+            (
+                _,
+                Check::Privilege { .. } | Check::Write | Check::SideEffect | Check::Unsupported(_),
+            ) => Err(Status::unimplemented(format!(
+                "{rpc:?} is not supported by this server yet"
+            ))),
+        }
+    }
+
+    /// [`Self::caller`] for an RPC that applies its class itself: the caller
+    /// and the class, which the handler enforces on the session (`enforce`)
+    /// before it reads anything more of the request.
+    fn caller_checked<T>(
+        &self,
+        request: &Request<T>,
+        rpc: Rpc,
+    ) -> Result<(Authenticated, Check), Status> {
+        self.admit()?;
+        let caller = self.auth.caller(request)?;
+        Ok((caller, check_rpc(rpc)))
+    }
+
+    /// The session `session_id` of `caller`, created if needed, its server-side id checked
+    /// against the client's (the get-or-create RPCs of design P3-T011a §2.1). The client's
+    /// `user_id` is recorded, never trusted (ADR 0046 §5).
     fn session(
         &self,
-        principal: &Principal,
+        caller: &Authenticated,
         session_id: &str,
         observed: Option<&str>,
         user: Option<&pb::UserContext>,
     ) -> Result<Arc<SessionEntry>, Status> {
         let user = user.map_or("", |u| u.user_id.as_str());
         self.manager
-            .get_or_create(principal, session_id, observed, user)
+            .get_or_create(caller, session_id, observed, user)
             .map_err(|e| status_of(&e))
     }
 }
@@ -171,22 +226,21 @@ impl SparkConnectService for ConnectService {
         &self,
         request: Request<Decoded<pb::ExecutePlanRequest>>,
     ) -> Result<Response<Self::ExecutePlanStream>, Status> {
-        self.admit()?;
-        let principal = principal_of(&request, &self.local);
+        let caller = self.caller(&request, Rpc::ExecutePlan)?;
+        let inbound = inbound_of(request.metadata());
         let request = request.into_inner();
         let entry = self.session(
-            &principal,
+            &caller,
             &request.session_id,
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
+        observe(&entry, request.client_type.as_deref());
         // An abandoned id is refused (Spark's `createExecuteHolder`, v4.3.0
         // lines 105-120); a live one is attached to by `execute_plan`.
         if let Some(id) = &request.operation_id
             && entry.operations().get(id).is_none()
-            && self
-                .manager
-                .is_abandoned(&principal, &request.session_id, id)
+            && self.manager.is_abandoned(&caller, &request.session_id, id)
         {
             return Err(entry
                 .errors()
@@ -194,7 +248,7 @@ impl SparkConnectService for ConnectService {
         }
         // Until the query is started (the encoder runs without it).
         let gate = entry.shared().await;
-        let stream = execute::execute_plan(&entry, &request, &self.limits, &self.budget)
+        let stream = execute::execute_plan(&entry, &request, &self.limits, &self.budget, &inbound)
             .await
             .map_err(|e| entry.errors().status(&e))?;
         drop(gate);
@@ -207,15 +261,15 @@ impl SparkConnectService for ConnectService {
         &self,
         request: Request<Decoded<pb::AnalyzePlanRequest>>,
     ) -> Result<Response<pb::AnalyzePlanResponse>, Status> {
-        self.admit()?;
-        let principal = principal_of(&request, &self.local);
+        let caller = self.caller(&request, Rpc::AnalyzePlan)?;
         let request = request.into_inner();
         let entry = self.session(
-            &principal,
+            &caller,
             &request.session_id,
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
+        observe(&entry, request.client_type.as_deref());
         let _gate = entry.shared().await;
         analyze::analyze_plan(&entry, &request, &self.limits)
             .await
@@ -229,29 +283,31 @@ impl SparkConnectService for ConnectService {
         &self,
         request: Request<Decoded<pb::ConfigRequest>>,
     ) -> Result<Response<pb::ConfigResponse>, Status> {
-        self.admit()?;
-        let principal = principal_of(&request, &self.local);
+        let caller = self.caller(&request, Rpc::Config)?;
         let request = request.into_inner();
         let entry = self.session(
-            &principal,
+            &caller,
             &request.session_id,
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
+        observe(&entry, request.client_type.as_deref());
         let _gate = entry.shared().await;
-        config::config(&entry, &request, &principal, config::role_of(&principal))
+        config::config(&entry, &request)
+            .await
             .map(Response::new)
             .map_err(|e| entry.errors().status(&e))
     }
 
     /// Spark's `SparkConnectAddArtifactsHandler`: the session is looked up
-    /// or created from the first request (`crate::artifacts`).
+    /// or created from the first request, then the RPC's class is enforced
+    /// on it (client code: `Usage` on `System("udf")`, ADR 0046 §3b) before
+    /// any artifact is staged (`crate::artifacts`).
     async fn add_artifacts(
         &self,
         request: Request<Streaming<Decoded<pb::AddArtifactsRequest>>>,
     ) -> Result<Response<pb::AddArtifactsResponse>, Status> {
-        self.admit()?;
-        let principal = principal_of(&request, &self.local);
+        let (caller, check) = self.caller_checked(&request, Rpc::AddArtifacts)?;
         let mut stream = request.into_inner();
         let Some(first) = stream.message().await? else {
             // Spark fails on an empty stream (no session to answer for).
@@ -264,13 +320,16 @@ impl SparkConnectService for ConnectService {
             ));
         };
         let entry = self.session(
-            &principal,
+            &caller,
             &first.session_id,
             first.client_observed_server_side_session_id.as_deref(),
             first.user_context.as_ref(),
         )?;
-        let role = config::role_of(&principal);
-        artifacts::add_artifacts(&entry, &self.artifacts, principal, role, first, &mut stream)
+        observe(&entry, first.client_type.as_deref());
+        enforce(&check, entry.session())
+            .await
+            .map_err(|e| entry.errors().status(&e))?;
+        artifacts::add_artifacts(&entry, &self.artifacts, first, &mut stream)
             .await
             .map(Response::new)
     }
@@ -281,15 +340,15 @@ impl SparkConnectService for ConnectService {
         &self,
         request: Request<Decoded<pb::ArtifactStatusesRequest>>,
     ) -> Result<Response<pb::ArtifactStatusesResponse>, Status> {
-        self.admit()?;
-        let principal = principal_of(&request, &self.local);
+        let caller = self.caller(&request, Rpc::ArtifactStatus)?;
         let request = request.into_inner();
         let entry = self.session(
-            &principal,
+            &caller,
             &request.session_id,
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
+        observe(&entry, request.client_type.as_deref());
         Ok(Response::new(artifacts::artifact_status(&entry, &request)))
     }
 
@@ -299,18 +358,26 @@ impl SparkConnectService for ConnectService {
         &self,
         request: Request<Decoded<pb::InterruptRequest>>,
     ) -> Result<Response<pb::InterruptResponse>, Status> {
-        self.admit()?;
-        let principal = principal_of(&request, &self.local);
+        let caller = self.caller(&request, Rpc::Interrupt)?;
         let request = request.into_inner();
         let entry = self.session(
-            &principal,
+            &caller,
             &request.session_id,
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
-        interrupt::interrupt(&entry, &request)
-            .map(Response::new)
-            .map_err(|e| entry.errors().status(&e))
+        observe(&entry, request.client_type.as_deref());
+        let response =
+            interrupt::interrupt(&entry, &request).map_err(|e| entry.errors().status(&e))?;
+        // An id it did not interrupt that is no operation of this session may be another
+        // owner's: answered the same (an empty list), recorded (ADR 0046 §3b).
+        if let Some(pb::interrupt_request::Interrupt::OperationId(id)) = &request.interrupt
+            && response.interrupted_ids.is_empty()
+            && entry.operations().get(id).is_none()
+        {
+            self.manager.audit_foreign_operation(&caller, id);
+        }
+        Ok(Response::new(response))
     }
 
     /// Spark's `SparkConnectReattachExecuteHandler` (v4.3.0 lines 30-66)
@@ -326,13 +393,12 @@ impl SparkConnectService for ConnectService {
         &self,
         request: Request<Decoded<pb::ReattachExecuteRequest>>,
     ) -> Result<Response<Self::ReattachExecuteStream>, Status> {
-        self.admit()?;
-        let principal = principal_of(&request, &self.local);
+        let caller = self.caller(&request, Rpc::ReattachExecute)?;
         let request = request.into_inner();
         let entry = self
             .manager
             .get(
-                &principal,
+                &caller,
                 &request.session_id,
                 request.client_observed_server_side_session_id.as_deref(),
             )
@@ -342,10 +408,13 @@ impl SparkConnectService for ConnectService {
             let error: KrishivError =
                 if self
                     .manager
-                    .is_abandoned(&principal, &request.session_id, &request.operation_id)
+                    .is_abandoned(&caller, &request.session_id, &request.operation_id)
                 {
                     InvalidHandleOperationAbandoned { handle }.into()
                 } else {
+                    // Answered as unknown, recorded if another owner's (ADR 0046 §3b).
+                    self.manager
+                        .audit_foreign_operation(&caller, &request.operation_id);
                     InvalidHandleOperationNotFound { handle }.into()
                 };
             return Err(entry.errors().status(&error));
@@ -384,19 +453,25 @@ impl SparkConnectService for ConnectService {
         &self,
         request: Request<Decoded<pb::ReleaseExecuteRequest>>,
     ) -> Result<Response<pb::ReleaseExecuteResponse>, Status> {
-        self.admit()?;
-        let principal = principal_of(&request, &self.local);
+        let caller = self.caller(&request, Rpc::ReleaseExecute)?;
         let request = request.into_inner();
         let entry = self
             .manager
-            .get(&principal, &request.session_id, None)
+            .get(&caller, &request.session_id, None)
             .map_err(|e| status_of(&e))?;
         let mut response = pb::ReleaseExecuteResponse {
             session_id: request.session_id.clone(),
             server_side_session_id: entry.server_side_id().to_owned(),
             operation_id: None,
         };
-        if let Some(op) = entry.operations().get(&request.operation_id) {
+        let found = entry.operations().get(&request.operation_id);
+        if found.is_none() {
+            // Answered as unknown (success, no operation id), recorded if another owner's
+            // (ADR 0046 §3b).
+            self.manager
+                .audit_foreign_operation(&caller, &request.operation_id);
+        }
+        if let Some(op) = found {
             if !op.reattachable() {
                 return Err(entry
                     .errors()
@@ -434,12 +509,11 @@ impl SparkConnectService for ConnectService {
         &self,
         request: Request<Decoded<pb::ReleaseSessionRequest>>,
     ) -> Result<Response<pb::ReleaseSessionResponse>, Status> {
-        self.admit()?;
-        let principal = principal_of(&request, &self.local);
+        let caller = self.caller(&request, Rpc::ReleaseSession)?;
         let request = request.into_inner();
         let server_side =
             self.manager
-                .release(&principal, &request.session_id, request.allow_reconnect);
+                .release(&caller, &request.session_id, request.allow_reconnect);
         Ok(Response::new(pb::ReleaseSessionResponse {
             session_id: request.session_id.clone(),
             server_side_session_id: server_side.unwrap_or_default(),
@@ -454,15 +528,15 @@ impl SparkConnectService for ConnectService {
         &self,
         request: Request<Decoded<pb::FetchErrorDetailsRequest>>,
     ) -> Result<Response<pb::FetchErrorDetailsResponse>, Status> {
-        self.admit()?;
-        let principal = principal_of(&request, &self.local);
+        let caller = self.caller(&request, Rpc::FetchErrorDetails)?;
         let request = request.into_inner();
         let entry = self.session(
-            &principal,
+            &caller,
             &request.session_id,
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
+        observe(&entry, request.client_type.as_deref());
         let response = entry
             .errors()
             .take(&request.error_id)
@@ -485,13 +559,12 @@ impl SparkConnectService for ConnectService {
         &self,
         request: Request<Decoded<pb::CloneSessionRequest>>,
     ) -> Result<Response<pb::CloneSessionResponse>, Status> {
-        self.admit()?;
-        let principal = principal_of(&request, &self.local);
+        let caller = self.caller(&request, Rpc::CloneSession)?;
         let request = request.into_inner();
         let source = self
             .manager
             .get(
-                &principal,
+                &caller,
                 &request.session_id,
                 request.client_observed_server_side_session_id.as_deref(),
             )
@@ -502,7 +575,7 @@ impl SparkConnectService for ConnectService {
         };
         let clone = self
             .manager
-            .clone_session(&self.artifacts, &principal, &source, &target)
+            .clone_session(&self.artifacts, &caller, &source, &target)
             .await
             .map_err(|e| source.errors().status(&e))?;
         Ok(Response::new(pb::CloneSessionResponse {
@@ -521,13 +594,12 @@ impl SparkConnectService for ConnectService {
         &self,
         request: Request<Decoded<pb::GetStatusRequest>>,
     ) -> Result<Response<pb::GetStatusResponse>, Status> {
-        self.admit()?;
-        let principal = principal_of(&request, &self.local);
+        let caller = self.caller(&request, Rpc::GetStatus)?;
         let request = request.into_inner();
         let entry = self
             .manager
             .get(
-                &principal,
+                &caller,
                 &request.session_id,
                 request.client_observed_server_side_session_id.as_deref(),
             )

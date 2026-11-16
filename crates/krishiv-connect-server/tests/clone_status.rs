@@ -37,10 +37,21 @@ use krishiv_connect_server::{
     SessionManager,
 };
 use krishiv_session::Session;
+use krishiv_session::auth::{Authenticated, Method};
 use prost::Message;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tonic::transport::Channel;
+
+/// The caller of every request to a server without authentication.
+fn local_caller() -> Authenticated {
+    caller(Principal::local_user())
+}
+
+/// `principal` as an unauthenticated server's caller.
+fn caller(principal: Principal) -> Authenticated {
+    Authenticated::new(principal, None, Method::None)
+}
 
 const SESSION: &str = "8f0e4c55-5ad0-4d1e-9a3c-3a1b0b2c7d10";
 const TARGET: &str = "1d6a3c1e-77b2-4c55-8d0f-0a6c2e9b4f21";
@@ -58,13 +69,13 @@ struct Running {
 impl Running {
     fn entry(&self) -> Arc<SessionEntry> {
         self.manager
-            .get_or_create(&Principal::local_user(), SESSION, None, "u")
+            .get_or_create(&local_caller(), SESSION, None, "u")
             .expect("session")
     }
 
     fn get(&self, id: &str) -> Arc<SessionEntry> {
         self.manager
-            .get(&Principal::local_user(), id, None)
+            .get(&local_caller(), id, None)
             .expect("session")
     }
 }
@@ -517,7 +528,7 @@ async fn clone_session_target_checks() {
         "INVALID_CLONE_SESSION_REQUEST.TARGET_SESSION_ID_ALREADY_EXISTS"
     );
     // Released (tombstoned).
-    run.manager.release(&Principal::local_user(), TARGET, false);
+    run.manager.release(&local_caller(), TARGET, false);
     let e = clone(&run.channel, clone_request(Some(TARGET)))
         .await
         .unwrap_err();
@@ -527,7 +538,7 @@ async fn clone_session_target_checks() {
     );
     assert_eq!(info(&e)["sqlState"], "42K04");
     // Held by another principal: refused as on every create.
-    let bob = Principal::new("bob", PrincipalKind::User);
+    let bob = caller(Principal::new("bob", PrincipalKind::User));
     run.manager
         .get_or_create(&bob, TARGET2, None, "bob")
         .expect("bob's");
@@ -535,11 +546,7 @@ async fn clone_session_target_checks() {
         .await
         .unwrap_err();
     assert_eq!(error_class(&e), "INVALID_HANDLE.SESSION_NOT_FOUND");
-    assert!(
-        run.manager
-            .get(&Principal::local_user(), TARGET2, None)
-            .is_err()
-    );
+    assert!(run.manager.get(&local_caller(), TARGET2, None).is_err());
     // Nothing was created by the failures: the source and bob's session.
     assert_eq!(run.manager.counts().live, 2);
     assert!(Arc::ptr_eq(&run.entry(), &source));
@@ -562,8 +569,7 @@ async fn clone_session_source_checks() {
     let e = clone(&run.channel, request).await.unwrap_err();
     assert_eq!(error_class(&e), "INVALID_HANDLE.SESSION_CHANGED");
     // Released.
-    run.manager
-        .release(&Principal::local_user(), SESSION, false);
+    run.manager.release(&local_caller(), SESSION, false);
     let e = clone(&run.channel, clone_request(Some(TARGET)))
         .await
         .unwrap_err();
@@ -576,7 +582,7 @@ async fn clone_session_source_checks() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn clone_own_session_only() {
     let run = start().await;
-    let bob = Principal::new("bob", PrincipalKind::User);
+    let bob = caller(Principal::new("bob", PrincipalKind::User));
     run.manager
         .get_or_create(&bob, SESSION, None, "bob")
         .expect("bob's");
@@ -663,11 +669,7 @@ async fn clone_artifacts_past_the_server_cap_leave_nothing_behind() {
     assert_eq!(error_class(&e), "KRISHIV_ARTIFACT_LIMIT");
     assert!(info(&e)["messageParameters"].contains("krishiv.connect.artifacts.maxTotalBytes"));
     assert_eq!(run.manager.counts().live, 1);
-    assert!(
-        run.manager
-            .get(&Principal::local_user(), TARGET, None)
-            .is_err()
-    );
+    assert!(run.manager.get(&local_caller(), TARGET, None).is_err());
     eventually("the clone's directory to go", || {
         std::fs::read_dir(&root).expect("root").count() == dirs_before
     })
@@ -765,8 +767,7 @@ async fn clone_serialises_with_concurrent_statements_on_the_source() {
             conf.get("b"),
             "clone {n} copied half a request"
         );
-        run.manager
-            .release(&Principal::local_user(), &target, false);
+        run.manager.release(&local_caller(), &target, false);
     }
     stop.store(true, std::sync::atomic::Ordering::Release);
     assert!(writer.await.expect("writer") > 0);
@@ -972,7 +973,7 @@ async fn get_status_only_looks_up_and_checks_the_server_side_id() {
         .unwrap_err();
     assert_eq!(error_class(&e), "INVALID_HANDLE.SESSION_CHANGED");
     // Another principal's operations are not seen.
-    let bob = Principal::new("bob", PrincipalKind::User);
+    let bob = caller(Principal::new("bob", PrincipalKind::User));
     let bobs = run
         .manager
         .get_or_create(&bob, TARGET, None, "bob")

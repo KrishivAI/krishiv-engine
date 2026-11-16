@@ -41,6 +41,7 @@ pub(super) const NAMES: &[&str] = &[
     "__locate_lcase",
     "__find_in_set_lcase",
     "__trim_collated",
+    "__icu_case",
     "__replace_lcase",
     "__translate_lcase",
     "__split_part_lcase",
@@ -58,6 +59,13 @@ pub(super) const NAMES: &[&str] = &[
 /// Binds the character function `name`.
 pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyResult {
     let listed = listed(NAMES, name)?;
+    if listed == "reverse"
+        && let Some(binding) = args
+            .first()
+            .and_then(|a| super::array_shape::reverse_binding(&a.data_type()))
+    {
+        return Some((listed, Ok(binding)));
+    }
     let shape = shape(args);
     let ansi = opts.ansi;
     let ctx = opts.kernel;
@@ -178,6 +186,14 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 mode.operand(),
                 s.operand(),
                 chars.operand(),
+            )?))
+        }),
+        ("__icu_case", "IIS") => Binding::new(DataType::Utf8, |x| {
+            let (upper, id, s) = (x.int(0)?, x.int(1)?, x.str(2)?);
+            Ok(utf8(string::icu_case(
+                upper.operand(),
+                id.operand(),
+                s.operand(),
             )?))
         }),
         ("__replace_lcase", "SSS") => Binding::new(DataType::Utf8, |x| {

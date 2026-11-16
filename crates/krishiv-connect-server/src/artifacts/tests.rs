@@ -12,8 +12,13 @@ use krishiv_connect::proto::v4_3::add_artifacts_request::{
 use krishiv_session::Session;
 
 use super::{ArtifactLimits, ArtifactStore, Transfer, crc32};
-use crate::config::ConfigRole;
 use crate::manager::{SessionEntry, SessionLimits, SessionManager};
+use krishiv_session::auth::{Authenticated, Method};
+
+/// The caller of every request to a server without authentication.
+fn local_caller() -> Authenticated {
+    Authenticated::new(Principal::local_user(), None, Method::None)
+}
 
 const S1: &str = "8f0e4c55-5ad0-4d1e-9a3c-3a1b0b2c7d10";
 const S2: &str = "1d6a3c1e-77b2-4c55-8d0f-0a6c2e9b4f21";
@@ -51,8 +56,7 @@ fn sessions() -> SessionManager {
 }
 
 fn entry(m: &SessionManager, id: &str) -> Arc<SessionEntry> {
-    m.get_or_create(&Principal::local_user(), id, None, "u")
-        .unwrap()
+    m.get_or_create(&local_caller(), id, None, "u").unwrap()
 }
 
 fn store(parent: &std::path::Path) -> Arc<ArtifactStore> {
@@ -63,12 +67,7 @@ fn store(parent: &std::path::Path) -> Arc<ArtifactStore> {
 }
 
 fn transfer(store: &Arc<ArtifactStore>, e: &SessionEntry) -> Transfer {
-    Transfer::new(
-        Arc::clone(store),
-        e,
-        Principal::local_user(),
-        ConfigRole::Admin,
-    )
+    Transfer::new(Arc::clone(store), e)
 }
 
 fn request(payload: Option<Payload>) -> pb::AddArtifactsRequest {

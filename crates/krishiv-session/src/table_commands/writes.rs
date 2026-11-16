@@ -18,7 +18,7 @@ impl Session {
                 return Ok(table);
             }
             return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
-                operation: format!("`{operation}`"),
+                operation: operation.to_owned(),
                 view_name: name.quoted(),
             }
             .into());
@@ -32,7 +32,7 @@ impl Session {
             );
         if self.temp_entry_of(name, env) || global {
             return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
-                operation: format!("`{operation}`"),
+                operation: operation.to_owned(),
                 view_name: name.quoted(),
             }
             .into());
@@ -680,6 +680,7 @@ impl Session {
             column_stats: BTreeMap::new(),
             incarnation: 0,
             data_version: 0,
+            stamp: 0,
         };
         let layout = LayoutRequest {
             partition_by: &[],

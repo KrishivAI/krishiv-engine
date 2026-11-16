@@ -79,7 +79,9 @@ impl XorShift {
     }
 
     /// `java.util.Random.nextGaussian` (the polar method): `cached` is the
-    /// spare value (`haveNextNextGaussian` / `nextNextGaussian`).
+    /// spare value (`haveNextNextGaussian` / `nextNextGaussian`). The log is
+    /// `StrictMath.log`'s (fdlibm), as Java's; the platform `ln` differs in
+    /// the last bit for some draws. `sqrt` is correctly rounded on both.
     fn next_gaussian(&mut self, cached: &mut Option<f64>) -> f64 {
         if let Some(v) = cached.take() {
             return v;
@@ -89,7 +91,7 @@ impl XorShift {
             let v2 = 2.0 * self.next_double() - 1.0;
             let s = v1 * v1 + v2 * v2;
             if s < 1.0 && s != 0.0 {
-                let multiplier = (-2.0 * s.ln() / s).sqrt();
+                let multiplier = (-2.0 * krishiv_kernels::math::strict_log(s) / s).sqrt();
                 *cached = Some(v2 * multiplier);
                 return v1 * multiplier;
             }

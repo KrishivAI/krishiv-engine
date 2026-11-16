@@ -32,10 +32,16 @@ use krishiv_connect_server::{
     ArtifactLimits, ConnectServer, ConnectServerConfig, SessionEntry, SessionLimits, SessionManager,
 };
 use krishiv_session::Session;
+use krishiv_session::auth::{Authenticated, Method};
 use prost::Message;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tonic::transport::Channel;
+
+/// The caller of every request to a server without authentication.
+fn local_caller() -> Authenticated {
+    Authenticated::new(Principal::local_user(), None, Method::None)
+}
 
 const SESSION: &str = "8f0e4c55-5ad0-4d1e-9a3c-3a1b0b2c7d10";
 const OTHER_SESSION: &str = "1d6a3c1e-77b2-4c55-8d0f-0a6c2e9b4f21";
@@ -51,7 +57,7 @@ struct Running {
 impl Running {
     fn entry(&self) -> Arc<SessionEntry> {
         self.manager
-            .get_or_create(&Principal::local_user(), SESSION, None, "u")
+            .get_or_create(&local_caller(), SESSION, None, "u")
             .expect("session")
     }
 

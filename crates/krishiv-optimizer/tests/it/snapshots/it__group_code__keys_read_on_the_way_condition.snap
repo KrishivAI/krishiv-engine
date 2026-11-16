@@ -1,0 +1,25 @@
+---
+source: crates/krishiv-optimizer/tests/it/group_code.rs
+expression: text
+---
+Project [g1#32 AS g1#6, g2#33 AS g2#7, n#12]
++- Join Inner, (krishiv_group_code#51 == krishiv_group_code#38)
+   :- Aggregate [krishiv_group_code#51], [krishiv_group_code#51, count(1) AS n#12]
+   :  +- Project [krishiv_group_code#51]
+   :     +- Join Inner, ((fk#0 == dk#5) and (NOT (g2#7 == y#3)))
+   :        :- Filter isnotnull(fk#0)
+   :        :  +- Scan spark_catalog.default.f [fk#0, y#3]
+   :        +- Shift +0
+   :           +- Project [dk#5, g2#7, krishiv_group_code#51]
+   :              +- Join Inner, ((g1#6 <=> g1#45) and (g2#7 <=> g2#46))
+   :                 :- Filter isnotnull(dk#5)
+   :                 :  +- Scan spark_catalog.default.d [dk#5, g1#6, g2#7] (shared #1)
+   :                 +- Shift +26
+   :                    +- Window [row_number() OVER (ORDER BY g1#19 ASC NULLS FIRST, g2#20 ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS krishiv_group_code#25], [], [g1#19 ASC NULLS FIRST, g2#20 ASC NULLS FIRST] (shared #2)
+   :                       +- Aggregate [g1#19, g2#20], [g1#19, g2#20]
+   :                          +- Project [g1#19, g2#20]
+   :                             +- Shift +13
+   :                                +- Filter isnotnull(dk#5)
+   :                                   +- Shared #1, printed above
+   +- Shift +13
+      +- Shared #2, printed above

@@ -28,6 +28,21 @@ both off (the default) nothing differs. See [result cache](../reference/result-c
 what is cached, when entries go, and the one staleness the cache accepts (a change made outside the
 engine, until the entry expires or `REFRESH TABLE`).
 
+## `EXPLAIN FORMAT JSON`, `EXPLAIN ANALYZE`, `EXPLAIN VERBOSE` (Krishiv extensions)
+
+Spark 4.2 has none of these forms, and its parser rejects each with a syntax error. Krishiv accepts them:
+`EXPLAIN FORMAT JSON <statement>` returns the statement's analysis as JSON without running it (see the
+[SQL reference](../reference/sql/index.md)); any other `EXPLAIN FORMAT ...` is a syntax error, as in Spark.
+
+## Writers leave a `_krishiv_log` directory
+
+A write to a plain directory records each commit in `<path>/_krishiv_log/` (one `<version>.json` per commit), so that
+concurrent writers cannot both take a version and Krishiv readers see only committed files. Spark commits by
+writing files under their final names plus `_SUCCESS`. The underscore prefix hides the directory from Krishiv and
+Spark readers, but other tools that list the directory see it. `krishiv.sql.files.commitProtocol=NONE` selects
+Spark's plain commit for a new directory; a directory that already has a log keeps being written through it, so
+do not delete the log from a table you still append to.
+
 ## A malformed value of a Spark config key fails at `SET`
 
 A Spark key that Krishiv maps to a typed setting (for example
@@ -51,6 +66,42 @@ on every row as Spark's shuffle evaluates them. Two things differ:
 
 Pinned by `crates/krishiv-session/tests/distribute_by_goldens.rs` (`DIFFERENT`), against a Spark
 4.2.0 run (3.5, 4.0 and 4.1 not run).
+
+## `TABLESAMPLE` rows follow the input's partitions
+
+`TABLESAMPLE (x PERCENT)` and `(BUCKET x OUT OF y)` sample as Spark's `SampleExec` does: each row of
+input partition `i` takes one draw of `XORShiftRandom(seed + i)`, in input order, and is kept when it
+falls below the fraction. The rows therefore equal Spark's when both engines split the input the same
+way, and are otherwise a different Bernoulli sample at the same fraction:
+
+- A session with one compute thread reads `range(0, n)`, `VALUES` and a small file as one partition, as
+  Spark's `local[1]` does; `range(a, b, step, n)` is the same `n` slices in both engines at any thread
+  count; `UNION ALL` numbers its inputs' partitions one after another, as Spark.
+- An in-memory table (registered batches, a cached relation) is one partition per 128 Ki rows
+  (`morsel_rows`), even at one thread: a larger one draws from several streams where Spark's
+  `local[1]` draws from one.
+- A file scan under a sample reads Spark's file partitions (the same split planning:
+  `maxPartitionBytes`, `openCostInBytes`, the leaf parallelism) each whole, by one driver, in row order.
+  So `REPEATABLE` gives the same rows on every run at any thread count; they equal Spark's when the
+  files hold the same rows in the same order and the same sizes (files Krishiv writes differ in size
+  from Spark's, which can pack them differently).
+- With more threads, `range(0, n)` is cut into one slice per thread (Spark: `defaultParallelism`), so
+  the rows differ from a Spark cluster's of another parallelism; the same session repeats them.
+- After a join, an aggregate or an exchange the input partition is the driver's, and its rows' order
+  depends on scheduling: as in Spark, a sample there is not repeatable.
+- Without `REPEATABLE` the seed is a random value in `0..1000`, drawn when the plan is built. One
+  DataFrame keeps its seeds across actions (`df.collect()` twice gives the same rows, as a Spark
+  Dataset keeps its executed plan); each new statement draws again. Every reference of a `WITH`
+  definition holding one samples with its own seed, as Spark's inlined references do.
+- Inside a recursive CTE a sample draws from the stream of its iteration's input partition, without
+  Spark's per-round partition shift, so its rows there differ from Spark's.
+- `TABLESAMPLE SYSTEM (...)` (Spark 4.2's block sampling) is `KRISHIV_UNSUPPORTED_FEATURE`, and a
+  `REPEATABLE` seed past `BIGINT` is refused as unsupported where Spark raises an unclassified
+  `NumberFormatException`. A sampled plan travels through the plan codec (feature `sample`); a
+  worker without that feature refuses it.
+
+Pinned by `crates/krishiv-session/tests/tablesample_goldens.rs` against a Spark 4.2.0 run
+(`tests/fixtures/spark-4.2.0/tablesample.json`).
 
 ## Filters move below only their deterministic prefix
 
@@ -192,6 +243,9 @@ first job. A checkpoint is not a cache entry: `is_cached`, `CLEAR CACHE`, `REFRE
 do not see it, as in Spark. `system.caches` lists the session's live checkpoints in a `checkpoint` row.
 
 ## `krishiv server` (Spark Connect)
+
+> The Spark Connect server is not part of the 0.2 release; `krishiv server` in 0.2 serves the web UI and admin API
+> only. The behaviour below is what the Spark Connect server is built to do, and it does not apply to 0.2.
 
 - **The Connect listener binds `127.0.0.1` by default.** Spark binds every interface when
   `spark.connect.grpc.binding.address` is unset. A non-loopback address needs authentication, so `krishiv server`

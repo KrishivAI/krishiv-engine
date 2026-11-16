@@ -398,7 +398,7 @@ impl Gen<'_> {
 
     fn plan(&mut self, depth: u8) -> LogicalPlan {
         let origin = self.origin();
-        let kinds = if depth == 0 { 4 } else { 31 };
+        let kinds = if depth == 0 { 4 } else { 32 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => PlanNode::Read(self.source()),
@@ -511,6 +511,14 @@ impl Gen<'_> {
             30 => PlanNode::Repartition {
                 input: self.input(d),
                 exprs: self.exprs(),
+            },
+            31 => PlanNode::Sample {
+                input: self.input(d),
+                bounds: crate::SampleBounds {
+                    lower: f64::from(self.pick(3)) / 10.0,
+                    upper: f64::from(self.pick(11)) / 10.0,
+                },
+                seed: self.flag().then(|| i64::from(self.pick(100))),
             },
             15 => PlanNode::Hint {
                 input: self.input(d),
@@ -1103,6 +1111,55 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
             site!(w, *id += 1);
             false
         }
+        PlanNode::MapPartitions {
+            input,
+            udf,
+            output,
+            barrier,
+        } => {
+            site!(w, udf.version += 1);
+            site!(w, *barrier = !*barrier);
+            m_plan(input, w) || output.iter_mut().any(|c| m_bound(c, w))
+        }
+        PlanNode::GroupMap {
+            input,
+            keys,
+            udf,
+            output,
+        } => {
+            site!(w, udf.version += 1);
+            m_plan(input, w) || m_exprs(keys, w) || output.iter_mut().any(|c| m_bound(c, w))
+        }
+        PlanNode::CoGroupMap {
+            left,
+            right,
+            left_keys,
+            right_keys,
+            udf,
+            output,
+        } => {
+            site!(w, udf.version += 1);
+            m_plan(left, w)
+                || m_plan(right, w)
+                || m_exprs(left_keys, w)
+                || m_exprs(right_keys, w)
+                || output.iter_mut().any(|c| m_bound(c, w))
+        }
+        PlanNode::PythonTableFunction {
+            args,
+            table_arg,
+            udf,
+            output,
+        } => {
+            site!(w, udf.version += 1);
+            site!(w, *table_arg = None);
+            m_exprs(args, w)
+                || output.iter_mut().any(|c| m_bound(c, w))
+                || table_arg.as_mut().is_some_and(|t| {
+                    site!(w, t.single_partition = !t.single_partition);
+                    m_plan(&mut t.input, w) || m_exprs(&mut t.partition_by, w)
+                })
+        }
         PlanNode::UnionLoop {
             id,
             anchor,
@@ -1202,6 +1259,16 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
         | PlanNode::Limit { input, limit: e }
         | PlanNode::Offset { input, offset: e }
         | PlanNode::ReplicateRows { input, count: e } => m_expr(e, w) || m_plan(input, w),
+        PlanNode::Sample {
+            input,
+            bounds,
+            seed,
+        } => {
+            site!(w, bounds.lower += 0.5);
+            site!(w, bounds.upper += 0.5);
+            site!(w, *seed = seed.map_or(Some(0), |s| s.checked_add(1)));
+            m_plan(input, w)
+        }
         PlanNode::Generate {
             input,
             outer,

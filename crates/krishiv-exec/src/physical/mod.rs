@@ -84,7 +84,7 @@ use crate::aggregate::{AggregateExpr, AggregateOutput};
 use crate::error::Result;
 use crate::join::JoinType;
 use crate::operators::{FetchSlot, RowStageSettings, SortKey};
-use crate::planner::ExplainNode;
+use crate::planner::{ExplainNode, RowLevelOperation, RowLevelWrite, WriteMode, WriteRequest};
 use crate::window::{GroupLimitPlan, WindowPlan};
 
 /// A scan of a plan, numbered by the planner.
@@ -421,6 +421,68 @@ pub enum PhysNode {
         /// The calls, in output column order.
         calls: Vec<PythonCallPlan>,
     },
+    /// `mapInPandas` / `mapInArrow` (design P3-T085 §3.1): each partition
+    /// of `input` sent to a Python UDF task; the rows are what it yields.
+    PythonMap {
+        /// The input.
+        input: Box<PhysNode>,
+        /// The UDF and its declared result.
+        udf: PythonRelationPlan,
+    },
+    /// `applyInPandas` / `applyInArrow` over groups: `input` is clustered by
+    /// the key columns and sorted by them (one partition without keys), so
+    /// a driver sees a key's rows together.
+    PythonGroupMap {
+        /// The input.
+        input: Box<PhysNode>,
+        /// The key columns of `input`.
+        keys: Vec<usize>,
+        /// The UDF and its declared result.
+        udf: PythonRelationPlan,
+    },
+    /// A cogrouped `applyInPandas` / `applyInArrow`: `input` is both
+    /// relations in one stream (each row's columns of the other relation
+    /// null), clustered by the key columns and sorted by them then `side`.
+    PythonCoGroupMap {
+        /// The input.
+        input: Box<PhysNode>,
+        /// The key columns of `input`.
+        keys: Vec<usize>,
+        /// The column (`INT`, 0 left, 1 right) naming each row's relation.
+        side: usize,
+        /// The UDF and its declared result; two frame sides.
+        udf: PythonRelationPlan,
+    },
+    /// An aggregate whose calls are all grouped-aggregate Python UDFs, over
+    /// `input` clustered by the key columns and sorted by them: per group,
+    /// the values of `key_values` in its first row, then one value per call.
+    PythonAggregate {
+        /// The input.
+        input: Box<PhysNode>,
+        /// The attribute of each input column.
+        layout: Vec<AttrId>,
+        /// The columns of `input` groups are compared by: the keys, or a
+        /// collated key's comparison key.
+        keys: Vec<usize>,
+        /// The key columns of `input` the output shows, as many as `keys`.
+        key_values: Vec<usize>,
+        /// The calls, in output column order after the keys.
+        calls: Vec<PythonCallPlan>,
+    },
+    /// `TABLESAMPLE`: each row of `input` kept when its draw of input
+    /// partition `i`'s `XORShiftRandom(seed + i)` is in `[lower, upper)`
+    /// (Spark's `SampleExec` without replacement). An unseeded sample's seed
+    /// is drawn when the node is planned.
+    Sample {
+        /// The input.
+        input: Box<PhysNode>,
+        /// Inclusive lower bound of the kept draws.
+        lower: f64,
+        /// Exclusive upper bound of the kept draws.
+        upper: f64,
+        /// The seed of partition 0.
+        seed: i64,
+    },
     /// Each row of `input` `count` times (`INTERSECT ALL`, `EXCEPT ALL`).
     ReplicateRows {
         /// The input.
@@ -550,6 +612,22 @@ pub enum PhysNode {
         /// store, directory, job id and file limits. Plain data; absent
         /// in plans that predate the `write_plan` feature.
         write: Option<WritePlan>,
+    },
+    /// The rows of `input` written into a table provider's sink (design
+    /// `P3-PR-DML-row-level.md` §7): `table` names the provider as a scan
+    /// does, and is resolved when the plan is instantiated, through the
+    /// worker's [`TableProviderResolver`](crate::planner::TableProviderResolver),
+    /// into [`TableProvider::writer`](crate::planner::TableProvider::writer)
+    /// or the [`rewriter`](crate::planner::RowLevelTable::rewriter) of its
+    /// row-level table. The sink commits when it finalizes; the node
+    /// returns no rows.
+    TableWrite {
+        /// The rows to write.
+        input: Box<PhysNode>,
+        /// The table, as the provider resolver names it.
+        table: Scan,
+        /// What the write asks of the table.
+        request: TableWriteRequest,
     },
     /// Moves rows between partitions.
     Exchange(ExchangePlan),
@@ -1014,6 +1092,60 @@ plan_data!(struct ExprEnv {
     legacy_time_parser,
     binary_output_style
 });
+/// What a [`PhysNode::TableWrite`] asks of its table.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TableWriteRequest {
+    /// A write: [`TableProvider::writer`](crate::planner::TableProvider::writer).
+    Write(WriteRequest),
+    /// A copy-on-write rewrite: the [`rewriter`](crate::planner::RowLevelTable::rewriter)
+    /// of the table's row-level table for the statement.
+    RowLevel(RowLevelWrite),
+}
+
+impl TableWriteRequest {
+    /// The schema of the rows the sink receives.
+    #[must_use]
+    pub fn input_schema(&self) -> &SchemaRef {
+        match self {
+            Self::Write(w) => &w.input_schema,
+            Self::RowLevel(r) => &r.input_schema,
+        }
+    }
+
+    /// The target as Spark's errors print it.
+    #[must_use]
+    pub fn table_name(&self) -> &str {
+        match self {
+            Self::Write(w) => &w.table_name,
+            Self::RowLevel(r) => &r.table_name,
+        }
+    }
+}
+
+plan_data!(
+    enum TableWriteRequest {
+        Write(w),
+        RowLevel(r),
+    }
+);
+plan_data!(
+    enum WriteMode {
+        Append,
+        Truncate,
+        OverwriteByFilter(filter),
+        OverwriteDynamic,
+    }
+);
+plan_data!(struct WriteRequest { mode, table_name, input_schema, options, write_id });
+plan_data!(
+    enum RowLevelOperation {
+        Delete,
+        Update,
+        Merge,
+    }
+);
+plan_data!(struct RowLevelWrite { op, table_name, input_schema, touched, read_filter, options, write_id });
+
 plan_data!(enum PhysNode {
     Scan(scan),
     OneRow,
@@ -1022,7 +1154,12 @@ plan_data!(enum PhysNode {
     Project { input, layout, items, nullable, subqueries },
     Limit { input, offset, limit },
     ReplicateRows { input, layout, count, subqueries },
+    Sample { input, lower, upper, seed },
     PythonEval { input, layout, calls },
+    PythonMap { input, udf },
+    PythonGroupMap { input, keys, udf },
+    PythonCoGroupMap { input, keys, side, udf },
+    PythonAggregate { input, layout, keys, key_values, calls },
     Generate { input, layout, kind, outer, arg, subqueries },
     Expand { input, layout, projections, nullable, subqueries },
     Sort { input, keys },
@@ -1036,6 +1173,7 @@ plan_data!(enum PhysNode {
     NestedLoopJoin(join),
     Union { inputs },
     WriteFiles { input, write },
+    TableWrite { input, table, request },
     Exchange(exchange),
     ExchangeSource { id, partitioning, schema },
     SharedRead { id, layout },
@@ -1043,6 +1181,9 @@ plan_data!(enum PhysNode {
     LoopRef { id, layout },
 });
 plan_data!(struct PythonCallPlan { call, output });
+plan_data!(struct PythonRelationPlan { udf, sides, output });
+plan_data!(struct PythonFrameSide { columns, names, types });
+plan_data!(struct PythonOutputColumn { name, data_type, nullable });
 plan_data!(struct LoopLimits { level, rows, pushed_limit });
 plan_data!(struct WritePlan {
     format,
@@ -1120,6 +1261,7 @@ impl PhysNode {
                 .chain(subqueries.iter().map(|s| &s.plan))
                 .collect(),
             Self::Limit { input, .. }
+            | Self::Sample { input, .. }
             | Self::Sort { input, .. }
             | Self::TopN { input, .. }
             | Self::LateFetch { input, .. }
@@ -1127,7 +1269,12 @@ impl PhysNode {
             | Self::WindowGroupLimit { input, .. }
             | Self::Aggregate { input, .. }
             | Self::PythonEval { input, .. }
-            | Self::WriteFiles { input, .. } => vec![input.as_ref()],
+            | Self::PythonMap { input, .. }
+            | Self::PythonGroupMap { input, .. }
+            | Self::PythonCoGroupMap { input, .. }
+            | Self::PythonAggregate { input, .. }
+            | Self::WriteFiles { input, .. }
+            | Self::TableWrite { input, .. } => vec![input.as_ref()],
             Self::Exchange(e) => vec![e.input.as_ref()],
             Self::HashJoin(j) => vec![j.probe.as_ref(), j.build.as_ref()],
             Self::SortMergeJoin(j) => vec![j.probe.as_ref(), j.build.as_ref()],
@@ -1166,6 +1313,7 @@ impl PhysNode {
                 .chain(subqueries.iter_mut().map(|s| &mut s.plan))
                 .collect(),
             Self::Limit { input, .. }
+            | Self::Sample { input, .. }
             | Self::Sort { input, .. }
             | Self::TopN { input, .. }
             | Self::LateFetch { input, .. }
@@ -1173,7 +1321,12 @@ impl PhysNode {
             | Self::WindowGroupLimit { input, .. }
             | Self::Aggregate { input, .. }
             | Self::PythonEval { input, .. }
-            | Self::WriteFiles { input, .. } => vec![input.as_mut()],
+            | Self::PythonMap { input, .. }
+            | Self::PythonGroupMap { input, .. }
+            | Self::PythonCoGroupMap { input, .. }
+            | Self::PythonAggregate { input, .. }
+            | Self::WriteFiles { input, .. }
+            | Self::TableWrite { input, .. } => vec![input.as_mut()],
             Self::Exchange(e) => vec![e.input.as_mut()],
             Self::HashJoin(j) => vec![j.probe.as_mut(), j.build.as_mut()],
             Self::SortMergeJoin(j) => vec![j.probe.as_mut(), j.build.as_mut()],
@@ -1195,6 +1348,43 @@ pub struct PythonCallPlan {
     pub call: Arc<Expr>,
     /// The attribute of its output column.
     pub output: AttrId,
+}
+
+/// The Python UDF of a relation node (design P3-T085 §3.1): a reference by
+/// name and version (never the callable), the columns of its frames and its
+/// declared result.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PythonRelationPlan {
+    /// The UDF.
+    pub udf: krishiv_plan::PythonUdfRef,
+    /// The frame columns of each side: one, two for a cogroup.
+    pub sides: Vec<PythonFrameSide>,
+    /// The declared result columns.
+    pub output: Vec<PythonOutputColumn>,
+}
+
+/// The columns of one side's frames: a grouped kind's key columns first
+/// (computed keys included, as many as the node has keys), then the side's
+/// data columns, as Spark lays them out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PythonFrameSide {
+    /// The input columns, in frame order.
+    pub columns: Vec<usize>,
+    /// Their names, as the UDF sees them.
+    pub names: Vec<String>,
+    /// Their Spark types.
+    pub types: Vec<krishiv_types::DataType>,
+}
+
+/// One declared result column of a Python relation node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PythonOutputColumn {
+    /// The name.
+    pub name: String,
+    /// The Spark type.
+    pub data_type: krishiv_types::DataType,
+    /// Whether it may hold nulls.
+    pub nullable: bool,
 }
 
 /// An executable plan as data: the root node, the schema of its result
@@ -1367,22 +1557,11 @@ impl PhysicalPlan {
         // gather to whoever commits (design P2-T178 §2.5): on several
         // workers each task writes its own files; on one worker the gather
         // lowers into nothing.
-        let mut next = 0_u64;
-        let mut stack: Vec<&PhysNode> = std::iter::once(&root)
-            .chain(self.shared.iter().map(|s| &s.plan))
-            .collect();
-        while let Some(n) = stack.pop() {
-            match n {
-                PhysNode::Exchange(e) => next = next.max(e.id.0.saturating_add(1)),
-                PhysNode::ExchangeSource { id, .. } => next = next.max(id.0.saturating_add(1)),
-                _ => {}
-            }
-            stack.extend(n.children());
-        }
+        let next = next_exchange_id(&root, &self.shared);
         Ok(Self {
             schema: WritePlan::result_schema(),
             root: Arc::new(PhysNode::Exchange(ExchangePlan {
-                id: ExchangeId(next),
+                id: next,
                 input: Box::new(PhysNode::WriteFiles {
                     input: Box::new(root),
                     write: Some(write),
@@ -1396,6 +1575,48 @@ impl PhysicalPlan {
             warnings: self.warnings,
             env: self.env,
         })
+    }
+
+    /// The plan writing this plan's rows into the table `table` names, as `request` asks
+    /// ([`PhysNode::TableWrite`]): its result has no rows and no columns. The rows are gathered
+    /// into one task first, so the table's sink commits once; on one worker the gather lowers
+    /// into nothing. One task therefore writes every row: a table whose writes should spread
+    /// over tasks (each writing files, one commit after) needs a commit step of its own.
+    #[must_use]
+    pub fn into_table_write(self, table: Scan, request: TableWriteRequest) -> Self {
+        let root = Arc::unwrap_or_clone(self.root);
+        let next = next_exchange_id(&root, &self.shared);
+        let explain = ExplainNode::new(
+            "TableWrite",
+            format!(
+                "{} ({})",
+                request.table_name(),
+                match &request {
+                    TableWriteRequest::Write(w) => w.mode.operation().to_owned(),
+                    TableWriteRequest::RowLevel(r) => r.op.name().to_owned(),
+                }
+            ),
+            vec![self.explain],
+        );
+        let input_schema = Arc::clone(&self.schema);
+        Self {
+            schema: Arc::new(Schema::empty()),
+            root: Arc::new(PhysNode::TableWrite {
+                input: Box::new(PhysNode::Exchange(ExchangePlan {
+                    id: next,
+                    input: Box::new(root),
+                    partitioning: Partitioning::Single,
+                    filters: Vec::new(),
+                    schema: Some(input_schema),
+                })),
+                table,
+                request,
+            }),
+            shared: self.shared,
+            explain,
+            warnings: self.warnings,
+            env: self.env,
+        }
     }
 
     /// The same plan with `warnings` added.
@@ -1420,6 +1641,23 @@ impl fmt::Display for PhysicalPlan {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.explain_all().fmt(f)
     }
+}
+
+/// An exchange id no exchange of `root` or `shared` uses.
+fn next_exchange_id(root: &PhysNode, shared: &[SharedPlan]) -> ExchangeId {
+    let mut next = 0_u64;
+    let mut stack: Vec<&PhysNode> = std::iter::once(root)
+        .chain(shared.iter().map(|s| &s.plan))
+        .collect();
+    while let Some(n) = stack.pop() {
+        match n {
+            PhysNode::Exchange(e) => next = next.max(e.id.0.saturating_add(1)),
+            PhysNode::ExchangeSource { id, .. } => next = next.max(id.0.saturating_add(1)),
+            _ => {}
+        }
+        stack.extend(n.children());
+    }
+    ExchangeId(next)
 }
 
 /// The node [`PhysicalPlan::explain_all`] prints above a plan with shared

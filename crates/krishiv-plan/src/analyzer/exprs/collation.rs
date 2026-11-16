@@ -263,13 +263,15 @@ pub(super) fn string_of(c: Collation) -> DataType {
     }
 }
 
-/// Whether every collated leaf of `t` has a key here (`UTF8_LCASE`, `_RTRIM`).
+/// Whether every collated leaf of `t` has a key here (`UTF8_LCASE`, `_RTRIM`, and ICU with the
+/// `collations-icu` feature).
 fn has_key(t: &DataType) -> bool {
     !t.any_type(&|x| {
         matches!(x, DataType::CollatedString(c) if !matches!(
             c.family(),
             CollationFamily::Utf8Binary | CollationFamily::Utf8Lcase
-        ) || c.is_indeterminate())
+        ) && !(cfg!(feature = "collations-icu") && matches!(c.family(), CollationFamily::Icu { .. }))
+            || c.is_indeterminate())
     })
 }
 
@@ -874,6 +876,17 @@ impl Resolver<'_> {
         if let Some(c) = chosen
             && !c.is_utf8_binary()
         {
+            if name == "decode" && n >= 3 {
+                // The CASE-like `decode(expr, search, result, ...)` is not the charset decoder
+                // of the binary-result list: Spark types it by its result positions
+                // (`string collate UTF8_LCASE` for `decode(1, 1, 'a', 'b' COLLATE utf8_lcase)`)
+                // and compares `expr` with each `search` by collation. Until it is lowered to a
+                // CASE here, a collated operand is refused rather than typed and matched as bytes.
+                return Err(unsupported(
+                    "decode over a collated string".to_owned(),
+                    e.origin,
+                ));
+            }
             if DEPENDS.contains(&name.as_str()) {
                 match collated_rewrite(&name, n, c) {
                     Some(rw) => rewrite = rw,
@@ -887,10 +900,28 @@ impl Resolver<'_> {
             } else if ICU_CASE.contains(&name.as_str())
                 && matches!(c.family(), CollationFamily::Icu { .. })
             {
-                return Err(unsupported(
-                    format!("{name} over a collated string"),
-                    e.origin,
-                ));
+                // `upper`/`lower` map in the collation's language (`__icu_case`); `initcap`
+                // needs word segmentation and stays refused.
+                let upper = match name.as_str() {
+                    "upper" | "ucase" => Some(1),
+                    "lower" | "lcase" => Some(0),
+                    _ => None,
+                };
+                match (upper, i32::try_from(c.id())) {
+                    // Without the feature the kernel has no case map: refuse here, as before.
+                    (Some(upper), Ok(id)) if n == 1 && cfg!(feature = "collations-icu") => {
+                        rewrite = Some(Rewrite {
+                            name: "__icu_case",
+                            args: vec![RwArg::Int(upper), RwArg::Int(id), RwArg::Kid(0)],
+                        });
+                    }
+                    _ => {
+                        return Err(unsupported(
+                            format!("{name} over a collated string"),
+                            e.origin,
+                        ));
+                    }
+                }
             }
         }
         // The call runs on plain strings: the carrier is one.
@@ -910,12 +941,13 @@ impl Resolver<'_> {
                     strength_of(&k.shown(), &mut memo),
                     Some((_, Strength::Default))
                 );
-                // `btrim` is Spark's runtime-replaceable call: its own arguments are shown as
-                // written, the replacement is the one that casts.
+                // `btrim` and `nvl2` are Spark's runtime-replaceable calls: their own arguments
+                // are shown as written, the replacement is the one that casts (`nvl2`: Spark
+                // 4.2.0 run, follow-up S3).
                 if let (Some(own), Some(want)) = (own, chosen)
                     && own != want
                     && literal
-                    && name != "btrim"
+                    && !matches!(name.as_str(), "btrim" | "nvl2")
                     && !matches!(
                         name.as_str(),
                         "encode" | "decode" | "to_binary" | "try_to_binary"
@@ -1177,7 +1209,11 @@ impl Resolver<'_> {
         {
             return self.search_lcase(e, kids, name, in_agg, window_fn, cx);
         }
-        let search = KEYED_SEARCH.contains(&name).then_some(c);
+        // Spark's column name shows the implicit cast of a default-strength operand to an ICU
+        // collation (`collate(a, unicode_ci) = 'A' collate UNICODE_CI`, `collations-basic` 46-56).
+        let search = (KEYED_SEARCH.contains(&name)
+            || matches!(c.family(), CollationFamily::Icu { .. }))
+        .then_some(c);
         self.compare_keys(e, kids, n, |_| string_of(c), search, in_agg, window_fn, cx)
             .map(Some)
     }

@@ -22,9 +22,9 @@
 //! failure, or the client going away, discards every artifact of the stream.
 //!
 //! **Names** are checked by `krishiv_connect::artifact` before any file
-//! exists, then by the privilege gate (`config::check_add_artifact`):
-//! `cache/` needs only the session, every other prefix is client code
-//! (`Usage` on `System("udf")`, ADR 0046 §3b).
+//! exists. Who may add any artifact is the RPC's class, applied before the
+//! stream is read (`crate::auth::check_rpc`: client code, `Usage` on
+//! `System("udf")`, ADR 0046 §3b), `cache/` included.
 //!
 //! **Storage** (`dir`): a private directory per session under the server's
 //! artifact root, removed when the session is released, swept or closed at
@@ -66,7 +66,6 @@ use krishiv_common::error::{
     InvalidArtifactPath, InvalidHandleSessionClosed, KrishivArtifactLimit, KrishivError,
     KrishivInvalidArtifactTransfer, KrishivInvalidConfigValue,
 };
-use krishiv_common::principal::Principal;
 use krishiv_connect::artifact::{ArtifactKind, ArtifactName, parse_artifact_name};
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::add_artifacts_request::{ArtifactChunk, Payload};
@@ -76,7 +75,6 @@ use krishiv_memory::{ConsumerHandle, MemoryPool, Reservation};
 use tonic::{Status, Streaming};
 
 use self::dir::{ArtifactRoot, Install, SessionDir};
-use crate::config::{ConfigRole, check_add_artifact};
 use crate::manager::SessionEntry;
 use crate::operation::random_uuid;
 use crate::operation::replay::uuid_text;
@@ -917,8 +915,6 @@ pub(crate) struct Transfer {
     store: Arc<ArtifactStore>,
     owner: Arc<SessionArtifacts>,
     pool: Arc<dyn MemoryPool>,
-    principal: Principal,
-    role: ConfigRole,
     /// Complete artifacts, installed when the stream ends.
     staged: Vec<Staged>,
     /// The chunked artifact still receiving chunks.
@@ -926,18 +922,11 @@ pub(crate) struct Transfer {
 }
 
 impl Transfer {
-    pub(crate) fn new(
-        store: Arc<ArtifactStore>,
-        entry: &SessionEntry,
-        principal: Principal,
-        role: ConfigRole,
-    ) -> Self {
+    pub(crate) fn new(store: Arc<ArtifactStore>, entry: &SessionEntry) -> Self {
         Self {
             store,
             owner: Arc::clone(entry.artifacts()),
             pool: entry.session().runtime().memory(),
-            principal,
-            role,
             staged: Vec::new(),
             open: None,
         }
@@ -947,7 +936,6 @@ impl Transfer {
     /// created.
     fn stage(&self, raw: &str, chunks: Option<Chunks>) -> Result<Staged, KrishivError> {
         let name = parse_artifact_name(raw)?;
-        check_add_artifact(self.role, &self.principal, &name)?;
         let limits = self.store.limits();
         if let Some(c) = chunks {
             if c.expected < 1 || c.total_bytes < 0 {
@@ -1157,13 +1145,11 @@ async fn blocking<T: Send + 'static>(
 pub(crate) async fn add_artifacts(
     entry: &Arc<SessionEntry>,
     store: &Arc<ArtifactStore>,
-    principal: Principal,
-    role: ConfigRole,
     first: Decoded<pb::AddArtifactsRequest>,
     stream: &mut Streaming<Decoded<pb::AddArtifactsRequest>>,
 ) -> Result<pb::AddArtifactsResponse, Status> {
     let errors = Arc::clone(entry.errors());
-    let mut transfer = Transfer::new(Arc::clone(store), entry, principal, role);
+    let mut transfer = Transfer::new(Arc::clone(store), entry);
     let session_id = first.session_id.clone();
     let mut next = Some(first);
     while let Some(request) = next.take() {

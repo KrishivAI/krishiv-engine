@@ -58,9 +58,9 @@ use krishiv_io::split::{
     FilePartition, KeptUnit, MORSELS_PER_DRIVER, MorselSplit, SplitConfig, SplitFile,
 };
 use krishiv_io::{
-    ByteRange, ColumnPath, FileFormat, FileMetadata, FileRef, FormatOptions, IoContext,
-    MetadataCols, PushdownExpr, ROW_INDEX_COLUMN, RowFile, RowLevel, ScanOptions, ScanRequest,
-    ScanStream, ScanUnitMetrics, SchemaMapper, TakeRequest, TakeStream,
+    ByteRange, ColumnPath, FileConstants, FileFormat, FileMetadata, FileRef, FormatOptions,
+    IoContext, MetadataCols, PushdownExpr, ROW_INDEX_COLUMN, RowFile, RowLevel, ScanOptions,
+    ScanRequest, ScanStream, ScanUnitMetrics, SchemaMapper, TakeRequest, TakeStream,
 };
 use krishiv_memory::ConsumerHandle;
 use krishiv_types::batch::Batch;
@@ -103,10 +103,14 @@ pub struct FileScan {
     format_options: FormatOptions,
     scan_options: ScanOptions,
     partitions: Partitions,
-    /// The partition columns (the last columns of `table`): constant per
-    /// file, read from the `name=value` directories above it, never from
-    /// the file.
+    /// The partition columns: constant per file, never read from the file:
+    /// from the `name=value` directories above it (the last columns of
+    /// `table`), or from `constants`.
     partition_columns: Arc<[FieldRef]>,
+    /// Each file's values of the partition columns, when a table format
+    /// gives them (Iceberg identity partitions, Delta partition values);
+    /// `None` reads them from the directories.
+    constants: Option<Arc<FileConstants>>,
     /// The smallest morsel: `spark.sql.files.openCostInBytes`.
     min_morsel_bytes: u64,
 }
@@ -142,6 +146,7 @@ impl FileScan {
             scan_options,
             partitions: Partitions::Plan(splits),
             partition_columns: Arc::from([]),
+            constants: None,
             min_morsel_bytes: splits.open_cost_in_bytes,
         }
     }
@@ -152,6 +157,23 @@ impl FileScan {
     #[must_use]
     pub fn with_partition_columns(mut self, columns: Vec<FieldRef>) -> Self {
         self.partition_columns = columns.into();
+        self.constants = None;
+        self
+    }
+
+    /// The same scan with `columns` (columns of the table, anywhere in it)
+    /// read from `constants` instead of the files: a table format's
+    /// per-file values, which win over a column the file has and fill one
+    /// it lacks. Every file of the scan needs values in `constants`, in
+    /// the order of `columns`.
+    #[must_use]
+    pub fn with_file_constants(
+        mut self,
+        columns: Vec<FieldRef>,
+        constants: Arc<FileConstants>,
+    ) -> Self {
+        self.partition_columns = columns.into();
+        self.constants = Some(constants);
         self
     }
 
@@ -466,6 +488,8 @@ pub struct FileScanSource {
     mapped: SchemaRef,
     /// The partition columns as the table types them.
     partition_fields: Arc<[FieldRef]>,
+    /// Their values per file, when not from the directories.
+    constants: Option<Arc<FileConstants>>,
     /// Where each column of `mapped` comes from; empty without partition
     /// columns (the decoded batch is `mapped`).
     layout: Vec<Slot>,
@@ -476,6 +500,9 @@ pub struct FileScanSource {
     opened_files: Arc<Mutex<std::collections::HashSet<usize>>>,
     /// Whether the row id ends the output.
     row_id: bool,
+    /// One morsel per partition, its batches tagged with the partition's
+    /// index ([`ScanPushdowns::partition_order`]).
+    partition_order: bool,
 }
 
 impl std::fmt::Debug for FileScanSource {
@@ -491,6 +518,9 @@ impl std::fmt::Debug for FileScanSource {
 struct FileScanGlobal {
     /// The morsels, in partition order.
     morsels: Vec<Vec<MorselSplit>>,
+    /// With [`ScanPushdowns::partition_order`], the index of each morsel's
+    /// partition (a morsel is a whole partition); else empty.
+    morsel_partitions: Vec<u32>,
     cursor: MorselCursor,
     /// The table-level request with the runtime filters attached.
     request: ScanRequest,
@@ -548,6 +578,10 @@ struct FileScanLocal {
     /// split's rows, bytes and unit counts are added with them; the decode
     /// over-commit of its last unit is added when the stream drops, later.
     totals: Arc<Mutex<FileScanMetrics>>,
+    /// The first partition id of the driver's pipeline-group member (a
+    /// `UNION ALL` input after the first): added to a partition-ordered
+    /// batch's partition index, as Spark's `UnionRDD` numbers partitions.
+    base: u32,
 }
 
 impl Drop for FileScanLocal {
@@ -816,12 +850,14 @@ impl FileScanSource {
             scan_options: scan.scan_options,
             output,
             partition_fields,
+            constants: scan.constants.clone(),
             layout,
             mapped,
             runtime: p.dynamic,
             metrics: Arc::new(Mutex::new(FileScanMetrics::default())),
             opened_files: Arc::default(),
             row_id: p.row_id,
+            partition_order: p.partition_order,
         })
     }
 
@@ -882,7 +918,10 @@ impl FileScanSource {
                 .is_some_and(|f| caps.is_splittable(f.path.as_ref()))
         };
         let drivers = ctx.layout_parallelism();
-        if self.request.metadata_cols.row_index && caps.random_access.is_none() {
+        // Whole partitions: one driver reads each in its row order.
+        if self.partition_order
+            || (self.request.metadata_cols.row_index && caps.random_access.is_none())
+        {
             return krishiv_io::split::morsels(&self.partitions, u64::MAX, splittable);
         }
         let target =
@@ -1145,7 +1184,11 @@ impl FileScanSource {
                             None => self.append_metadata(b, file, cur.split)?,
                         };
                         g.returned.fetch_add(b.num_rows() as u64, Ordering::Relaxed);
-                        return Ok(Some(Batch::new(b)));
+                        let split = local
+                            .morsel
+                            .and_then(|(m, _)| g.morsel_partitions.get(m))
+                            .map(|p| local.base.saturating_add(*p));
+                        return Ok(Some(Batch::new(b).with_split(split)));
                     }
                     None => {
                         if let Some(done) = local.current.take() {
@@ -1207,6 +1250,28 @@ impl FileScanSource {
     fn partition_values(&self, file: &FileRef) -> Result<Vec<ArrayRef>> {
         if self.layout.is_empty() {
             return Ok(Vec::new());
+        }
+        if let Some(constants) = &self.constants {
+            let values = constants.get(&file.store, &file.path).ok_or_else(|| {
+                internal(format!(
+                    "no constant column values for {}",
+                    file.display_path()
+                ))
+            })?;
+            if values.len() != self.partition_fields.len() {
+                return Err(internal(format!(
+                    "{} constant values for {} columns of {}",
+                    values.len(),
+                    self.partition_fields.len(),
+                    file.display_path()
+                )));
+            }
+            return self
+                .partition_fields
+                .iter()
+                .zip(values)
+                .map(|(field, v)| krishiv_io::scalar_column(field, v, 1))
+                .collect();
         }
         let texts = krishiv_io::file_values(&file.path, self.partition_fields.len())?;
         self.partition_fields
@@ -1505,8 +1570,28 @@ impl Source for FileScanSource {
             partition_filters = self.partition_filters();
         }
         let morsels = self.morsels(ctx, &request, &partition_filters);
+        let morsel_partitions = if self.partition_order {
+            // Partitions without splits give no morsel.
+            let indexes: Vec<u32> = self
+                .partitions
+                .iter()
+                .filter(|p| !p.splits.is_empty())
+                .map(|p| u32::try_from(p.index).unwrap_or(u32::MAX))
+                .collect();
+            if indexes.len() != morsels.len() {
+                return Err(internal(format!(
+                    "a partition-ordered scan cut {} partitions into {} morsels",
+                    indexes.len(),
+                    morsels.len()
+                )));
+            }
+            indexes
+        } else {
+            Vec::new()
+        };
         Ok(Arc::new(FileScanGlobal {
             request,
+            morsel_partitions,
             partition_filters,
             cursor: MorselCursor::new(morsels.len(), ctx.query().config().seed),
             morsels,
@@ -1542,6 +1627,7 @@ impl Source for FileScanSource {
             row_filter: None,
             position: None,
             totals: Arc::clone(&self.metrics),
+            base: ctx.partition_base(),
         }))
     }
 
