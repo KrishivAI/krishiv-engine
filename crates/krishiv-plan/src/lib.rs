@@ -183,6 +183,9 @@ pub use plan::{
     SetOperation, SqlArgs, TABLE_FUNCTION_NAME_SEP, TableArg, TableVersion, UnpivotColumnSet,
     generator_arg, without_generated_marker,
 };
-pub use python::{check_python_aggregates, is_python_udaf, python_relation_is_deterministic};
+pub use python::{
+    check_python_aggregates, check_python_relation_determinism, is_python_udaf,
+    python_relation_is_deterministic,
+};
 pub use raises::{conjuncts, exact_decimal, is_deterministic, may_raise, runs_on_any_row};
 pub use walk::{MAX_DEPTH, check_depth};
