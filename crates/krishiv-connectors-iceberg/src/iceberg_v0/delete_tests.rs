@@ -1080,6 +1080,40 @@ fn position_selections_are_charged_at_their_size() {
     assert_eq!(pool.reserved(), 0);
 }
 
+/// Position deletes become selections one data file at a time (review 25d
+/// CodeRabbit): each file's sort copy and ranges are charged while that file
+/// converts, and a delete file's read charge goes once its data files are
+/// converted. Four files of 5,000 positions each peak near 400 KB that way;
+/// charging every file's conversion up front, on top of every read, needs
+/// 640 KB, more than this 512 KiB pool.
+#[test]
+fn position_selections_convert_one_data_file_at_a_time() {
+    use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+    let names = ["a.parquet", "b.parquet", "c.parquet", "d.parquet"];
+    let rows: Vec<Vec<(&str, i64)>> = names
+        .iter()
+        .map(|n| (0..5_000).map(|i| (*n, i * 2)).collect())
+        .collect();
+    let deletes: Vec<String> = names.iter().map(|n| format!("del-{n}")).collect();
+    let mut files: Vec<File> = names.iter().map(|n| data(n, 0, 1, 0, 3)).collect();
+    for ((n, r), d) in names.iter().zip(&rows).zip(&deletes) {
+        files.push(positions(d, 0, 2, r, Some(n)));
+    }
+    let t = build(&files, false);
+    let p = t.env.provider(&t.table, &VersionSpec::Current).unwrap();
+    let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig {
+        limit: Some(512 << 10),
+        ..MemoryConfig::default()
+    });
+    let state = p.delete_state(&pool).unwrap();
+    t.env.rt.block_on(state.ensure()).unwrap();
+    let ranges = 4 * 5_000 * std::mem::size_of::<std::ops::Range<u64>>();
+    assert!(pool.reserved() >= ranges, "{} < {ranges}", pool.reserved());
+    assert_eq!(state.loaded().unwrap().selections.files(), 4);
+    drop(state);
+    assert_eq!(pool.reserved(), 0);
+}
+
 /// A data file whose partition tuple cannot be read fails the query only
 /// when a scan reads it (review 25d S3a): pruned by its metrics, the other
 /// files read and keep their equality deletes. iceberg-rust's writers cannot

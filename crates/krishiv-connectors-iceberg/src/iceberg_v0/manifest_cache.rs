@@ -12,8 +12,9 @@
 //!   what inheritance reads from the manifest-list entry (sequence number,
 //!   added snapshot id, first row id), so an entry is the same whichever
 //!   snapshot lists the manifest.
-//! - **Size**: an estimate of the decoded entries' heap bytes; the limit
-//!   bounds the sum. A manifest larger than the limit is not kept. The limit
+//! - **Size**: an estimate of the decoded entries' heap bytes plus the
+//!   slot's own (its key and bookkeeping, so a manifest with no live entries
+//!   is charged too); the limit bounds the sum. A manifest larger than the limit is not kept. The limit
 //!   is the inserting table's (`krishiv.iceberg.manifestCache.bytes` is a
 //!   startup key, so in practice one value per process).
 //! - **Parse limit**: a hit is checked against the reading table's
@@ -23,7 +24,9 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use crate::plan::{ContentFile, DataFileEntry, DeleteFileEntry, LiveEntry, ManifestFileEntry};
+use crate::plan::{
+    ContentFile, DataFileEntry, DeleteFileEntry, LiveEntry, ManifestFileEntry, PartitionValue,
+};
 
 /// A live entry of a cached manifest, shared by every plan that reads it.
 #[derive(Debug, Clone)]
@@ -121,7 +124,7 @@ impl ManifestCache {
     /// the cache holds at most `limit` bytes; nothing when they alone exceed
     /// it.
     pub(crate) fn insert(&self, key: ManifestKey, cached: Cached, limit: u64) {
-        let bytes = entries_bytes(&cached.entries);
+        let bytes = slot_bytes(&key, &cached);
         let limit = usize::try_from(limit).unwrap_or(usize::MAX);
         if bytes > limit {
             return;
@@ -161,6 +164,14 @@ impl ManifestCache {
     }
 }
 
+/// What a slot of `cached` under `key` is charged: its entries plus the
+/// key and bookkeeping (twice the key: the slot map's and the order's).
+fn slot_bytes(key: &ManifestKey, cached: &Cached) -> usize {
+    entries_bytes(&cached.entries).saturating_add(
+        std::mem::size_of::<Slot>() + 2 * (std::mem::size_of::<ManifestKey>() + key.path.len()),
+    )
+}
+
 /// The estimated heap bytes of decoded entries.
 pub(crate) fn entries_bytes(entries: &[CachedEntry]) -> usize {
     entries
@@ -181,7 +192,13 @@ fn file_bytes(f: &ContentFile) -> usize {
     const COUNT: usize = 32;
     const BOUND: usize = 48;
     f.path.len()
-        + f.partition.len() * 32
+        + f.partition
+            .iter()
+            .map(|p| match p {
+                PartitionValue::Value(v) => 32 + v.len(),
+                PartitionValue::Null | PartitionValue::Unreadable => 32,
+            })
+            .sum::<usize>()
         + (f.column_sizes.len() + f.value_counts.len() + f.null_counts.len() + f.nan_counts.len())
             * COUNT
         + f.lower_bounds
@@ -196,9 +213,9 @@ fn file_bytes(f: &ContentFile) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cached, ManifestCache, ManifestKey, entries_bytes};
+    use super::{Cached, ManifestCache, ManifestKey, entries_bytes, slot_bytes};
     use crate::plan::tests::file;
-    use crate::plan::{DataFileEntry, EntryStatus, LiveEntry};
+    use crate::plan::{DataFileEntry, EntryStatus, LiveEntry, PartitionValue};
 
     fn key(path: &str) -> ManifestKey {
         ManifestKey {
@@ -233,7 +250,7 @@ mod tests {
     /// a manifest over the limit is not kept; a 0 limit keeps nothing.
     #[test]
     fn evicts_least_recently_used_under_the_limit() {
-        let one = entries_bytes(&entries(1).entries);
+        let one = slot_bytes(&key("a"), &entries(1));
         let cache = ManifestCache::default();
         let limit = u64::try_from(2 * one).unwrap();
         cache.insert(key("a"), entries(1), limit);
@@ -251,5 +268,42 @@ mod tests {
         let off = ManifestCache::default();
         off.insert(key("a"), entries(1), 0);
         assert_eq!(off.usage(), (0, 0));
+    }
+
+    /// A manifest with no live entries is still charged (its key and slot),
+    /// so the byte limit bounds how many are kept.
+    #[test]
+    fn empty_manifests_are_charged_and_evicted() {
+        let cache = ManifestCache::default();
+        let one = slot_bytes(&key("e0"), &entries(0));
+        assert!(one > 0);
+        let limit = u64::try_from(3 * one).unwrap();
+        for i in 0..10 {
+            cache.insert(key(&format!("e{i}")), entries(0), limit);
+        }
+        assert_eq!(cache.usage(), (3 * one, 3));
+        assert!(cache.get(&key("e0")).is_none() && cache.get(&key("e9")).is_some());
+    }
+
+    /// A partition value's payload is charged, not only its slot.
+    #[test]
+    fn partition_payloads_are_charged() {
+        let with = |payload: usize| {
+            let mut f = file(1);
+            f.partition = vec![
+                PartitionValue::Value(vec![0; payload]),
+                PartitionValue::Null,
+            ];
+            let e: super::CachedEntry = LiveEntry::Data(DataFileEntry {
+                file: f,
+                status: EntryStatus::Added,
+                snapshot_id: 1,
+                data_sequence_number: Some(1),
+                file_sequence_number: Some(1),
+            })
+            .into();
+            entries_bytes(&[e])
+        };
+        assert_eq!(with(1000) - with(0), 1000);
     }
 }
