@@ -28,6 +28,21 @@ both off (the default) nothing differs. See [result cache](../reference/result-c
 what is cached, when entries go, and the one staleness the cache accepts (a change made outside the
 engine, until the entry expires or `REFRESH TABLE`).
 
+## `EXPLAIN FORMAT JSON`, `EXPLAIN ANALYZE`, `EXPLAIN VERBOSE` (Krishiv extensions)
+
+Spark 4.2 has none of these forms, and its parser rejects each with a syntax error. Krishiv accepts them:
+`EXPLAIN FORMAT JSON <statement>` returns the statement's analysis as JSON without running it (see the
+[SQL reference](../reference/sql/index.md)); any other `EXPLAIN FORMAT ...` is a syntax error, as in Spark.
+
+## Writers leave a `_krishiv_log` directory
+
+A write to a plain directory records each commit in `<path>/_krishiv_log/` (one `<version>.json` per commit), so that
+concurrent writers cannot both take a version and Krishiv readers see only committed files. Spark commits by
+writing files under their final names plus `_SUCCESS`. The underscore prefix hides the directory from Krishiv and
+Spark readers, but other tools that list the directory see it. `krishiv.sql.files.commitProtocol=NONE` selects
+Spark's plain commit for a new directory; a directory that already has a log keeps being written through it, so
+do not delete the log from a table you still append to.
+
 ## A malformed value of a Spark config key fails at `SET`
 
 A Spark key that Krishiv maps to a typed setting (for example
@@ -226,6 +241,14 @@ the rows in the session's memory whatever it is. With `eager = false` the rows a
 result is first analyzed (its first action, or the first call that needs its schema), not at its
 first job. A checkpoint is not a cache entry: `is_cached`, `CLEAR CACHE`, `REFRESH` and `unpersist`
 do not see it, as in Spark. `system.caches` lists the session's live checkpoints in a `checkpoint` row.
+
+## A declared schema on a Delta read
+
+`spark.read.schema(..).format("delta").load(path)` (and the same read through Spark Connect) is refused with
+`KRISHIV_UNSUPPORTED_FEATURE` when the table is opened, because what delta-spark 4.4.1 does with a declared schema is
+not pinned by the Delta oracle yet. A Delta table's schema always comes from its log. Until then, a call that only
+asks for the schema (`df.schema`, `printSchema`, Connect `AnalyzePlan`) returns the declared schema without opening
+the table, and the first action fails.
 
 ## `krishiv server` (Spark Connect)
 

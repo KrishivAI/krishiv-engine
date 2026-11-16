@@ -103,9 +103,21 @@ impl DeltaReads {
 
     /// The store and root URL of the Delta read `source`.
     pub(super) fn root_of(&self, source: &ReadSource) -> Result<(StoreId, Url), KrishivError> {
-        let ReadSource::Files { paths, options, .. } = source else {
+        let ReadSource::Files {
+            paths,
+            options,
+            schema,
+            ..
+        } = source
+        else {
             return Err(internal("a Delta read that is not a read of files"));
         };
+        // The table's schema comes from its log. What Spark does with a declared one
+        // (`spark.read.schema(..).format("delta")`) is not pinned by the oracle yet, so it is
+        // refused by name rather than ignored.
+        if schema.is_some() {
+            return Err(unsupported("a user-specified schema on a Delta read"));
+        }
         if let Some(key) = options
             .keys()
             .find(|k| REFUSED_OPTIONS.contains(&k.to_ascii_lowercase().as_str()))

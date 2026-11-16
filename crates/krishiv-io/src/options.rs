@@ -167,6 +167,19 @@ pub struct FormatOptions {
     values: BTreeMap<&'static str, Value>,
     ignored: Vec<String>,
     write_seed: Option<String>,
+    /// The per-read `ignoreCorruptFiles` and `ignoreMissingFiles` options,
+    /// when given: they take precedence over the session conf
+    /// ([`crate::ScanOptions::for_read`]), as Spark's `FileSourceOptions`.
+    file_source: FileSourceFlags,
+}
+
+/// The framework options of [`FILE_SOURCE_OPTIONS`] that change how a read
+/// treats a file it cannot read; `None` when the read leaves the session
+/// conf in charge.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct FileSourceFlags {
+    ignore_corrupt_files: Option<bool>,
+    ignore_missing_files: Option<bool>,
 }
 
 impl fmt::Debug for FormatOptions {
@@ -176,6 +189,7 @@ impl fmt::Debug for FormatOptions {
             .field("values", &self.values)
             .field("ignored", &self.ignored)
             .field("write_seed", &self.write_seed)
+            .field("file_source", &self.file_source)
             .finish()
     }
 }
@@ -187,6 +201,7 @@ impl FormatOptions {
         std::ptr::eq(self.schema, other.schema)
             && self.values == other.values
             && self.ignored == other.ignored
+            && self.file_source == other.file_source
     }
 }
 
@@ -217,6 +232,7 @@ impl OptionSchema {
         let mut values = BTreeMap::new();
         let mut ignored = Vec::new();
         let mut warnings = Vec::new();
+        let mut file_source = FileSourceFlags::default();
         for (key, value) in user {
             if let Some(spec) = self.spec(key) {
                 values.insert(spec.name, self.typed(spec, key, value)?);
@@ -228,6 +244,10 @@ impl OptionSchema {
                 // `OptionValue`'s `Display` prints plain values as given
                 // and secrets redacted, so only non-secrets are visible.
                 ignored.push(format!("{key}={value}"));
+            } else if key.eq_ignore_ascii_case("ignoreCorruptFiles") {
+                file_source.ignore_corrupt_files = Some(self.flag(key, value)?);
+            } else if key.eq_ignore_ascii_case("ignoreMissingFiles") {
+                file_source.ignore_missing_files = Some(self.flag(key, value)?);
             } else if !FILE_SOURCE_OPTIONS
                 .iter()
                 .any(|o| o.eq_ignore_ascii_case(key))
@@ -270,6 +290,7 @@ impl OptionSchema {
                 values,
                 ignored,
                 write_seed: None,
+                file_source,
             },
             warnings,
         ))
@@ -358,6 +379,18 @@ impl OptionSchema {
         }
     }
 
+    /// A boolean framework option (`ignoreCorruptFiles`, `ignoreMissingFiles`).
+    fn flag(&self, key: &str, value: &OptionValue) -> Result<bool> {
+        let Some(raw) = value.as_plain() else {
+            return Err(self.invalid(key, "<secret>", "a secret is not allowed here"));
+        };
+        match raw.trim() {
+            s if s.eq_ignore_ascii_case("true") => Ok(true),
+            s if s.eq_ignore_ascii_case("false") => Ok(false),
+            _ => Err(self.invalid(key, raw, "expected `true` or `false`")),
+        }
+    }
+
     fn invalid(&self, key: &str, value: &str, reason: &str) -> krishiv_common::error::KrishivError {
         KrishivInvalidFormatOptionValue {
             value: format!("'{value}'"),
@@ -443,7 +476,20 @@ impl FormatOptions {
             values,
             ignored: Vec::new(),
             write_seed: None,
+            file_source: FileSourceFlags::default(),
         }
+    }
+
+    /// The per-read `ignoreCorruptFiles` option, when given.
+    #[must_use]
+    pub fn ignore_corrupt_files(&self) -> Option<bool> {
+        self.file_source.ignore_corrupt_files
+    }
+
+    /// The per-read `ignoreMissingFiles` option, when given.
+    #[must_use]
+    pub fn ignore_missing_files(&self) -> Option<bool> {
+        self.file_source.ignore_missing_files
     }
 
     /// These options for the write of one file, seeded with `seed`: text
