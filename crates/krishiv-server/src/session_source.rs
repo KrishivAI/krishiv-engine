@@ -17,7 +17,7 @@ use krishiv_common::principal::{Principal, PrincipalKind};
 use krishiv_session::{CancelReason, EngineRuntime, QueryId, Session};
 use serde_json::{Number, Value};
 
-use krishiv_session::auth::Authenticated;
+use krishiv_session::auth::{Authenticated, Role};
 
 use crate::guard::Caller;
 use crate::internal::{Row, SystemTable, UiError, UiFuture, UiSource};
@@ -40,7 +40,7 @@ pub struct SessionSource {
     /// How an identified caller's session is built; without it such a caller's statement is refused.
     caller_sessions: Option<Arc<CallerSessions>>,
     /// One session per caller, so `SET` and `USE` of one user never reach another.
-    sessions: Mutex<std::collections::HashMap<String, Session>>,
+    sessions: Mutex<std::collections::HashMap<String, (Option<Role>, Session)>>,
 }
 
 /// Rows an editor result keeps.
@@ -121,11 +121,15 @@ impl SessionSource {
         };
         let key = self.owner_key(caller).unwrap_or_default();
         let mut sessions = lock(&self.sessions);
-        if let Some(s) = sessions.get(&key) {
+        // A session's policy is fixed for its life: a caller whose role differs from the one its session was built
+        // with (a group claim that moved) gets a new session, as the Connect session manager gives.
+        if let Some((role, s)) = sessions.get(&key)
+            && *role == who.role
+        {
             return Ok((key, s.clone()));
         }
         let session = factory(who).map_err(ui_error)?;
-        sessions.insert(key.clone(), session.clone());
+        sessions.insert(key.clone(), (who.role, session.clone()));
         Ok((key, session))
     }
 }
@@ -502,9 +506,11 @@ impl SessionSource {
 
     fn owner_key(&self, caller: &Caller) -> Option<String> {
         let who = caller.identity::<Authenticated>()?;
+        // What a Connect session is bound to (`SessionOwner`): the method, the principal's kind, tenant and name, so
+        // a static token and an OIDC subject of the same name share neither a session nor a run.
         Some(format!(
-            "{:?}/{:?}/{}",
-            who.principal.kind, who.principal.tenant, who.principal.name
+            "{:?}/{:?}/{:?}/{}",
+            who.method, who.principal.kind, who.principal.tenant, who.principal.name
         ))
     }
 }
