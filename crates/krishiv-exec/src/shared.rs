@@ -359,6 +359,12 @@ impl SharedSink {
         Arc::new(Self { schema, scope })
     }
 
+    /// Whether a part added by [`Self::add_spilled_part`] is written out
+    /// (the sink has a spill scope) rather than waited for.
+    pub(crate) fn spills(&self) -> bool {
+        self.scope.is_some()
+    }
+
     /// Adds `batches`, charged to `reservation`, after the parts combined so
     /// far: what a `PythonEval` finishes once its drivers have combined.
     /// Call before `finalize`.
@@ -379,6 +385,51 @@ impl SharedSink {
             batches,
             reservation,
         });
+        Ok(())
+    }
+
+    /// Adds `batches` as [`Self::add_part`] does when the pool has no
+    /// memory for them: written to a spill file (the writer's working
+    /// memory from the spill scratch reserve); without a spill scope,
+    /// after waiting for the memory. Call before `finalize`.
+    ///
+    /// # Errors
+    /// A failed write, the memory refused, or a cancel.
+    pub(crate) async fn add_spilled_part(
+        &self,
+        global: &GlobalState,
+        batches: Vec<Batch>,
+        ctx: &TaskContext,
+    ) -> Result<()> {
+        let Some(scope) = &self.scope else {
+            let bytes = batches
+                .iter()
+                .map(|b| b.data().get_array_memory_size())
+                .sum();
+            let mut reservation = ctx.consumer().reservation();
+            reservation.grow(bytes).await.map_err(KrishivError::from)?;
+            return self.add_part(global, batches, reservation);
+        };
+        if batches.is_empty() {
+            return Ok(());
+        }
+        let g = global_ref::<SinkGlobal>(global, "SharedSink")?;
+        let scratch = ctx.consumer().reservation().for_spill_scratch();
+        let writer = scope
+            .writer(Arc::clone(&self.schema), scratch)
+            .map_err(KrishivError::from)?;
+        let query = Arc::clone(ctx.query());
+        let file = ctx
+            .run_blocking(move || {
+                let mut writer = writer;
+                for b in &batches {
+                    query.check_cancelled()?;
+                    writer.write(b).map_err(KrishivError::from)?;
+                }
+                writer.finish().map_err(KrishivError::from)
+            })
+            .await?;
+        lock(&g.parts).push(Segment::File(Arc::new(file)));
         Ok(())
     }
 }
@@ -623,8 +674,12 @@ impl Source for SharedSource {
                     internal("a shared plan was read before it was built".to_owned())
                 })?;
                 if !state.is::<SinkGlobal>() {
-                    // A `PythonEval` keeps its rows in a shared plan's list.
-                    state = crate::python_eval::store_state(&state)?;
+                    // A `PythonEval` or a Python relation node keeps its
+                    // rows in a shared plan's list.
+                    state = match crate::python_relation::sink::store_state(&state) {
+                        Some(store) => store,
+                        None => crate::python_eval::store_state(&state)?,
+                    };
                 }
                 let sink = global_ref::<SinkGlobal>(&state, "SharedSource")?;
                 sink.done.get().cloned().ok_or_else(|| {

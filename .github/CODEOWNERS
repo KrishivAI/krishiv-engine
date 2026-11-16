@@ -1,0 +1,6 @@
+# Default owner for everything not matched below. Review requests go to these accounts.
+*                     @techgopal
+
+# Security policy and the release workflows need the same owner who approves releases.
+/SECURITY.md          @techgopal
+/.github/workflows/   @techgopal

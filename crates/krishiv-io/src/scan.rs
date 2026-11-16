@@ -52,7 +52,7 @@ use crate::schema_map::SchemaMapper;
 pub struct ScanOptions {
     /// `krishiv.io.prefetchBytes`.
     pub prefetch_bytes: u64,
-    /// `spark.sql.files.ignoreCorruptFiles` / the `ignoreCorruptFiles`
+    /// `spark.sql.files.ignoreCorruptFiles` / the per-read `ignoreCorruptFiles`
     /// option: a file that cannot be decoded (bad footer, undecodable data)
     /// ends early, keeping the rows already returned. Storage failures
     /// (`KRISHIV_OBJECT_STORE_REQUEST_FAILED`) and changed files are never
@@ -63,6 +63,17 @@ pub struct ScanOptions {
     pub ignore_missing_files: bool,
     /// Metadata beyond the footer (the page index when the predicate can use it).
     pub needs: MetadataNeeds,
+}
+
+impl ScanOptions {
+    /// Whether these options skip a file that failed with `e`: a corrupt file under
+    /// [`ignore_corrupt_files`](Self::ignore_corrupt_files), a missing one under
+    /// [`ignore_missing_files`](Self::ignore_missing_files).
+    #[must_use]
+    pub fn skips(&self, e: &KrishivError) -> bool {
+        (self.ignore_corrupt_files && is_class(e, CORRUPT))
+            || (self.ignore_missing_files && is_class(e, MISSING))
+    }
 }
 
 impl Default for ScanOptions {
@@ -88,6 +99,21 @@ impl ScanOptions {
             ignore_missing_files: flag("spark.sql.files.ignoreMissingFiles"),
             needs: MetadataNeeds::default(),
         }
+    }
+
+    /// The settings of one read: session config `c`, with the read's own
+    /// `ignoreCorruptFiles` / `ignoreMissingFiles` options taking precedence
+    /// over the session conf, as Spark's `FileSourceOptions`.
+    #[must_use]
+    pub fn for_read(c: &Config, options: &FormatOptions) -> Self {
+        let mut o = Self::from_config(c);
+        if let Some(v) = options.ignore_corrupt_files() {
+            o.ignore_corrupt_files = v;
+        }
+        if let Some(v) = options.ignore_missing_files() {
+            o.ignore_missing_files = v;
+        }
+        o
     }
 }
 
@@ -316,8 +342,7 @@ impl ScanStream {
     }
 
     fn ignored(&self, e: &KrishivError) -> bool {
-        let skip = (self.options.ignore_corrupt_files && is_class(e, CORRUPT))
-            || (self.options.ignore_missing_files && is_class(e, MISSING));
+        let skip = self.options.skips(e);
         if skip {
             tracing::warn!(path = self.file.display_path(), error = %e, "skipped the rest of a file");
         }

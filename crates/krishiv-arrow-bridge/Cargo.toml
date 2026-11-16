@@ -1,0 +1,20 @@
+[package]
+name = "krishiv-arrow-bridge"
+description = "Moves Arrow C Data Interface values from iceberg-rust's Arrow major to the workspace's (temporary FFI crate)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+arrow-array = { workspace = true, features = ["ffi"] }
+arrow-data = { workspace = true, features = ["ffi"] }
+arrow-schema = { workspace = true, features = ["ffi"] }
+arrow-array-58 = { workspace = true, features = ["ffi"] }
+arrow-schema-58 = { workspace = true, features = ["ffi"] }
+krishiv-common = { path = "../krishiv-common" }

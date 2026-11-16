@@ -28,7 +28,11 @@ use crate::aggregate::{AggInput, AggregateExpr, AggregateFunction, UdafEnv, accu
 use crate::error::{Result, internal};
 
 /// The most frame rows one chunk of a sliding frame folds at once.
+#[cfg(not(test))]
 const CHUNK: usize = 1 << 16;
+/// Small in tests, so frames wider than a chunk are cheap to test.
+#[cfg(test)]
+const CHUNK: usize = 1 << 10;
 
 /// Whether `a` is an aggregate UDF call.
 pub(super) const fn is_udf(a: &AggregateExpr) -> bool {
@@ -54,54 +58,67 @@ pub(super) fn cost(
 /// The bytes an accumulator's state holds beyond the cost the window
 /// reserved up front, charged to the window's reservation as the state
 /// grows (a UDF reports its size only after folding) and released when the
-/// state is dropped.
+/// state is dropped. A refusal is a memory error, and the charge records the
+/// size it was refused at: the in-memory evaluation asks the driver for that
+/// much and evaluates again (design `P2-window-udaf-charge-retry`); the disk
+/// paths fall back to folding from the file.
 pub(super) struct Charge<'a> {
     pool: Option<&'a mut Reservation>,
     held: usize,
-    /// The state the pool may refuse without failing the query: the whole
-    /// reservation the driver holds when the charge starts (pending batches
-    /// and queued output, not only this evaluation's share; an exception to
-    /// ADR 0045 section 4 that is bounded by the pool limit). A refusal of
-    /// more is a memory error; a refusal of less is the pool being briefly
-    /// full, and the state runs unaccounted, as it did before it was charged.
-    slack: usize,
+    /// What earlier functions of the same evaluation held: kept until the
+    /// charge drops, so a retry's credit is used in the same order and a
+    /// later function never finds it returned to the pool.
+    base: usize,
+    refused: Option<usize>,
 }
 
 impl<'a> Charge<'a> {
-    /// A charge that fails on any refusal: the disk paths, whose callers
-    /// fall back to folding from the file.
-    pub(super) const fn strict(pool: Option<&'a mut Reservation>) -> Self {
+    /// A charge to `pool` (none: nothing is charged).
+    pub(super) const fn new(pool: Option<&'a mut Reservation>) -> Self {
         Self {
             pool,
             held: 0,
-            slack: 0,
+            base: 0,
+            refused: None,
         }
     }
 
-    /// A charge that lets the state of the in-memory evaluation overshoot a
-    /// briefly full pool by the reservation the driver already holds.
-    pub(super) fn with_slack(pool: Option<&'a mut Reservation>) -> Self {
-        let slack = pool.as_deref().map_or(0, Reservation::size);
-        Self {
-            pool,
-            held: 0,
-            slack,
+    /// The next function's state starts on top of what this charge holds.
+    pub(super) const fn next_function(&mut self) {
+        self.base = self.held;
+    }
+
+    /// The whole state the pool refused (what the charge held then plus the
+    /// refused growth), if it refused one.
+    pub(super) const fn refused(&self) -> Option<usize> {
+        self.refused
+    }
+
+    /// Brings the charge to at least `size` (never down).
+    ///
+    /// # Errors
+    /// As [`Self::to`].
+    fn at_least(&mut self, size: usize) -> Result<()> {
+        if self.base.saturating_add(size) > self.held {
+            self.to(size)
+        } else {
+            Ok(())
         }
     }
 
     /// Brings the charge to `size`.
     ///
     /// # Errors
-    /// The memory class when the pool refuses a state larger than the slack.
+    /// The memory class when the pool refuses the growth.
     fn to(&mut self, size: usize) -> Result<()> {
+        let size = self.base.saturating_add(size);
         let Some(pool) = self.pool.as_deref_mut() else {
             return Ok(());
         };
         if size > self.held {
-            match pool.try_grow(size - self.held) {
-                Ok(()) => {}
-                Err(_) if size <= self.slack => return Ok(()),
-                Err(e) => return Err(e.into()),
+            if let Err(e) = pool.try_grow(size - self.held) {
+                self.refused = Some(size);
+                return Err(e.into());
             }
         } else {
             pool.shrink(self.held - size);
@@ -296,10 +313,13 @@ fn sliding(
             }
         }
         flush(&mut acc, &mut members, &mut groups)?;
-        charge.to(acc.size())?;
+        // The charge keeps the largest chunk's state until the evaluation
+        // ends (the chunks' states come and go): a retry's credit is not
+        // handed back to the pool between chunks, and a refusal names what
+        // the largest chunk needs.
+        charge.at_least(acc.size())?;
         let ids: Vec<u32> = (0..last - first).map(id).collect::<Result<_>>()?;
         values.push(acc.evaluate(&ids)?);
-        charge.to(0)?;
         first = last;
     }
     concat(&values)
@@ -393,26 +413,21 @@ mod tests {
     }
 
     #[test]
-    fn a_strict_charge_fails_on_any_refusal() {
-        let (mut window, _hog) = full_pool();
-        let mut c = Charge::strict(Some(&mut window));
-        let e = c.to(1 << 10).unwrap_err();
-        assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory);
-    }
-
-    #[test]
-    fn a_slack_charge_passes_a_state_within_the_reservation_and_fails_a_larger_one() {
-        let (mut window, _hog) = full_pool();
+    fn a_refused_charge_fails_and_records_the_whole_state() {
+        let (mut window, mut hog) = full_pool();
+        hog.shrink(16 << 10);
         let before = window.size();
         {
-            let mut c = Charge::with_slack(Some(&mut window));
-            // Within what the window already holds: runs uncharged.
-            c.to(1 << 10).unwrap();
-            // Larger than that: a memory error.
+            let mut c = Charge::new(Some(&mut window));
+            c.to(8 << 10).unwrap();
+            assert_eq!(c.refused(), None);
+            // The growth past the pool's free bytes is refused; the refusal
+            // names the whole state, not only the growth.
             let e = c.to(1 << 20).unwrap_err();
             assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory);
+            assert_eq!(c.refused(), Some(1 << 20));
         }
-        // Nothing was charged, and nothing is released that was not.
+        // What the charge held goes back on drop.
         assert_eq!(window.size(), before);
     }
 
@@ -431,7 +446,7 @@ mod tests {
         );
         let mut window = Reservation::new(Arc::clone(&pool) as _, pool.register("window", None));
         {
-            let mut c = Charge::strict(Some(&mut window));
+            let mut c = Charge::new(Some(&mut window));
             c.to(40 << 10).unwrap();
             c.to(8 << 10).unwrap();
         }

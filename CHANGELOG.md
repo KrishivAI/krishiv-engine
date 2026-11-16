@@ -56,7 +56,7 @@ The first release is the embedded core: the engine runs in your process, from Py
   bit-identical.
 - Python UDFs: `@udf`, scalar `pandas_udf` and `arrow_udf` run in process on a thread pool.
 - Collations (`UTF8_LCASE`, `_RTRIM`, `COLLATE`, collation-key comparison and operators, Parquet collation metadata).
-- `VARIANT` in Parquet at any depth; `GEOMETRY` and `GEOGRAPHY` types with WKT and SRS functions; `CALENDAR INTERVAL`;
+- `VARIANT` in Parquet at any depth; `GEOMETRY` and `GEOGRAPHY` types with five `st_` functions (`st_asbinary`, `st_geomfromwkb`, `st_geogfromwkb`, `st_setsrid`, `st_srid`: WKB and SRID, no WKT); `CALENDAR INTERVAL`;
   `CHAR(n)`/`VARCHAR(n)`; `MSCK`, partition commands and column statistics; SQL scripting with exit handlers.
 - Deterministic row order (`krishiv.deterministicOrder`), `krishiv.optimizer.joinCost=bytes`, plan-time distinct-value
   samples of Parquet columns, and inferred join filters.
@@ -68,7 +68,5 @@ The first release is the embedded core: the engine runs in your process, from Py
 
 ### Known limits
 
-- Temporary views over in-memory DataFrames and SQL expression strings (`selectExpr`, `expr`) are not supported
-  yet; read data from files for views.
 - Spark Connect, streaming, incremental views and distributed execution are not part of this release.
 - The APIs are not stable.

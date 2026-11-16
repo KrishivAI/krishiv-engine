@@ -1,0 +1,13 @@
+{
+  "adr": "0023",
+  "category": "explain-plan-text",
+  "format_version": 1,
+  "kind": "divergence",
+  "rules": [
+    {
+      "order": 1,
+      "query": "^\\s*(?i:explain)\\b"
+    }
+  ],
+  "summary": "EXPLAIN statements: Spark's expected output is its own plan text (AdaptiveSparkPlan, BroadcastHashJoin, codegen ids, V1Table); Krishiv's EXPLAIN prints its own plan (owner decision 2026-11-07: accepted exclusions)"
+}

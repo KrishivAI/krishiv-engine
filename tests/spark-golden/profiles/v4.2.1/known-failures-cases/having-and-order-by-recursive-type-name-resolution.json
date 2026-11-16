@@ -1,0 +1,17 @@
+{
+  "cases": {
+    "query-features": [
+      0,
+      2,
+      9,
+      11,
+      19,
+      21,
+      30,
+      32,
+      44
+    ]
+  },
+  "file": "having-and-order-by-recursive-type-name-resolution",
+  "format_version": 1
+}

@@ -1,0 +1,14 @@
+{
+  "adr": "0023",
+  "category": "divergence-avro-not-loaded",
+  "format_version": 1,
+  "kind": "divergence",
+  "rules": [
+    {
+      "file": "^to_from_avro$",
+      "order": 471,
+      "query": "avro_schema\\) as result|from_avro\\(result"
+    }
+  ],
+  "summary": "Spark's golden run has the Avro module unloaded, so to_avro/from_avro that pass analysis expect AVRO_NOT_LOADED_SQL_FUNCTIONS_UNUSABLE; Krishiv does not copy a missing-module error (owner decision 2026-11-06). The argument-check statements of the same file wait for the real functions."
+}

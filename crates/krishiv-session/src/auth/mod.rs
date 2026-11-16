@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Server authentication (the role model and the token chain).
 //!
-//! One [`Authenticator`] turns what a transport received (a bearer token today; client
-//! certificates in a later unit) into an [`Authenticated`] principal with a [`Role`]. The Spark
+//! One [`Authenticator`] turns what a transport received (a bearer token, a verified client
+//! certificate) into an [`Authenticated`] principal with a [`Role`]. The Spark
 //! Connect listener, the admin HTTP server, `/metrics` and the UI all call the same
 //! [`ServerAuth`]; none keeps a token of its own.
 //!
@@ -14,16 +14,59 @@
 //! - [`StaticTokens`]: one principal per configured token, held as SHA-256 digests and compared
 //!   in constant time against every entry.
 //! - [`FailureThrottle`]: repeated failures from one peer address are refused for a while.
-//! - [`ServerAuth`]: the chain, its failure log record (target `krishiv::auth`, never the
+//! - [`MtlsConfig`]: client certificates; the one `principalFrom` rule reads the principal out
+//!   of the leaf with a minimal DER walk ([`CertNames`]).
+//! - [`TlsConfig`] and [`check_listener`]: the `krishiv.server.tls.*` settings and the startup
+//!   refusals of an address, authentication and TLS that do not fit together; `ServerTls`
+//!   (feature `tls`) is the rustls configuration the listeners serve, reloadable.
+//! - [`OidcConfig`]: OIDC access tokens (feature `oidc`): JWS compact tokens parsed by a
+//!   strict, fuzzed parser (`jose.rs`), signatures checked on aws-lc-rs with the algorithm pinned
+//!   by construction (no `none`, no HMAC), keys from a cached JWK set fetched on a thread of its
+//!   own, the role from the groups claim through the role lists.
+//! - [`ServerAuth`]: the chain (throttle, client certificate, bearer token), its failure log record (target `krishiv::auth`, never the
 //!   credential) and its failure counters.
 
 mod config;
+mod denials;
+mod der;
+mod impersonation;
+#[cfg_attr(
+    all(not(feature = "oidc"), not(test)),
+    expect(
+        dead_code,
+        reason = "only the router's shape test and `Alg` are used without the `oidc` verifier"
+    )
+)]
+mod jose;
+mod mtls;
+#[cfg(feature = "oidc")]
+mod oidc;
+mod oidc_config;
+mod principals;
 mod roles;
 mod secret_ref;
 mod server;
 mod throttle;
+#[cfg(feature = "tls")]
+mod tls;
+mod tls_config;
 mod tokens;
 
+#[cfg(test)]
+#[cfg(feature = "oidc")]
+mod assertion_tests;
+#[cfg(test)]
+mod impersonation_tests;
+#[cfg(test)]
+mod jose_tests;
+#[cfg(test)]
+mod mtls_tests;
+#[cfg(test)]
+#[cfg(feature = "oidc")]
+mod oidc_http_tests;
+#[cfg(test)]
+#[cfg(feature = "oidc")]
+mod oidc_tests;
 #[cfg(test)]
 mod tests;
 
@@ -33,11 +76,21 @@ use std::net::SocketAddr;
 use futures::future::BoxFuture;
 use krishiv_common::principal::Principal;
 
-pub use config::{AuthConfig, ThrottleConfig, TokenSpec, is_auth_key};
+pub use config::{AuthConfig, RoleLists, ThrottleConfig, TokenSpec, is_auth_key};
+pub use denials::{DeniedCount, DeniedCounts};
+pub use der::{CertNames, DerError};
+pub use impersonation::{ActAs, Denial, ImpersonationConfig};
+pub use jose::Alg;
+pub use mtls::{ClientCertificates, MtlsConfig, PrincipalFrom};
+pub use oidc_config::OidcConfig;
+pub use principals::{ImpersonationTarget, PrincipalPrivilege, PrincipalRights, PrincipalTable};
 pub use roles::RolePolicy;
 pub use secret_ref::SecretRef;
-pub use server::{FailureCount, ServerAuth};
+pub use server::{FailureCount, ImpersonationCount, ServerAuth};
 pub use throttle::FailureThrottle;
+#[cfg(feature = "tls")]
+pub use tls::ServerTls;
+pub use tls_config::{TlsConfig, check_listener};
 pub use tokens::StaticTokens;
 
 /// A server role: a total order, so a check is `role >= required`.
@@ -113,9 +166,9 @@ impl Surface {
 pub enum Method {
     /// A configured static token.
     Token,
-    /// An OIDC access token (a later unit).
+    /// An OIDC access token (a JWT the configured issuer signed).
     Oidc,
-    /// A client certificate (a later unit).
+    /// A client certificate the client CA verified.
     Mtls,
     /// Refused before any method ran (the peer is throttled).
     Throttle,
@@ -152,6 +205,9 @@ impl Method {
 pub struct Credentials<'a> {
     /// The token of an `authorization: Bearer <token>` header or gRPC metadata entry.
     pub bearer: Option<&'a str>,
+    /// The client's leaf certificate (DER), which the TLS layer verified against the client
+    /// CA at the handshake. Only the verified leaf may be passed here.
+    pub peer_leaf: Option<&'a [u8]>,
     /// The peer's address (the throttle's key).
     pub peer: SocketAddr,
     /// The listener.
@@ -167,6 +223,7 @@ impl<'a> Credentials<'a> {
     pub fn new(peer: SocketAddr, surface: Surface) -> Self {
         Self {
             bearer: None,
+            peer_leaf: None,
             peer,
             surface,
             malformed: false,
@@ -224,6 +281,8 @@ pub struct Authenticated {
     pub role: Option<Role>,
     /// How it authenticated.
     pub method: Method,
+    /// The credential's own id (an OIDC token's `jti`), for the audit record; never enforced.
+    pub token_id: Option<String>,
 }
 
 impl Authenticated {
@@ -234,7 +293,15 @@ impl Authenticated {
             principal,
             role,
             method,
+            token_id: None,
         }
+    }
+
+    /// This result with the credential's id `token_id`.
+    #[must_use]
+    pub fn with_token_id(mut self, token_id: Option<String>) -> Self {
+        self.token_id = token_id;
+        self
     }
 }
 

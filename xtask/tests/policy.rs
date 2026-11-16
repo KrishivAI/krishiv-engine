@@ -723,13 +723,25 @@ fn security_workflows_are_wired() {
         .skip(1)
         .filter_map(|l| l.split('"').next())
         .collect();
+    // A third, named category: crates whose license field uses a legacy string GitHub
+    // cannot parse ("A/B") although every license in it is on deny.toml's allow list,
+    // so cargo-deny needs no exception for them. Each must really be in Cargo.lock.
+    const UNPARSABLE_LICENSE_STRING: &[&str] = &["brotli-decompressor"];
+    let lock = read("Cargo.lock");
+    for name in UNPARSABLE_LICENSE_STRING {
+        assert!(
+            lock.contains(&format!("name = \"{name}\"\n")),
+            "{name} is listed as a license-string exception but is not in Cargo.lock"
+        );
+    }
     let cargo: Vec<&str> = purls
         .iter()
         .filter_map(|p| p.strip_prefix("pkg:cargo/"))
+        .filter(|c| !UNPARSABLE_LICENSE_STRING.contains(c))
         .collect();
     assert_eq!(
         cargo, exception_crates,
-        "pkg:cargo purls must be deny.toml's exceptions"
+        "pkg:cargo purls must be deny.toml's exceptions (plus the license-string list)"
     );
     let workflows: String = std::fs::read_dir(root().join(".github/workflows"))
         .unwrap()
@@ -982,7 +994,8 @@ fn release_publishing_is_manual_and_gated() {
         .filter(|l| !l.is_empty())
         .map(String::from)
         .collect();
-    assert_eq!(listed.len(), 22, "the 0.2 release publishes 22 crates");
+    // 0.2 published 22; P3-T014 adds krishiv-udf-sandbox and krishiv-udf-pool.
+    assert_eq!(listed.len(), 24, "the release publishes 24 crates");
     let mut manifests = vec![root().join("xtask/Cargo.toml")];
     for entry in std::fs::read_dir(root().join("crates")).unwrap() {
         manifests.push(entry.unwrap().path().join("Cargo.toml"));

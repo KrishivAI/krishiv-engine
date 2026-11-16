@@ -138,6 +138,9 @@ pub(crate) struct Settings {
     pub(crate) dp_limit: usize,
     /// Whether to describe each planned tree ([`TreeStats`]).
     pub(crate) trace: bool,
+    /// Whether a stack of semi/anti joins over one input runs its most selective join first
+    /// ([`crate::semi_order`]).
+    pub(crate) semi_anti_order: bool,
 }
 
 impl Default for Settings {
@@ -147,6 +150,7 @@ impl Default for Settings {
             cost: JoinCost::Rows,
             dp_limit: DP_LIMIT,
             trace: false,
+            semi_anti_order: true,
         }
     }
 }
@@ -214,6 +218,11 @@ pub(crate) fn reorder(
         notes: Vec::new(),
         reads: Some(reads::Reads::of_query(root)),
     };
+    // Every `WITH` definition is known before a tree reads it: a `CteRef`
+    // inside a tree is estimated from its definition, as a `Shift` instance
+    // of the same body is (`ShareCte` turns the one into the other, and a
+    // second optimization must order the tree the same way).
+    r.est.plan(root);
     let out = r.positional(root);
     (out, r.notes)
 }

@@ -1,0 +1,9 @@
+{
+  "cases": {
+    "test-udfs": [
+      31
+    ]
+  },
+  "file": "udf/postgreSQL/udf-case",
+  "format_version": 1
+}

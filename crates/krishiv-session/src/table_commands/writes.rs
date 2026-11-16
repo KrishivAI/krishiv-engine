@@ -18,7 +18,7 @@ impl Session {
                 return Ok(table);
             }
             return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
-                operation: format!("`{operation}`"),
+                operation: operation.to_owned(),
                 view_name: name.quoted(),
             }
             .into());
@@ -32,7 +32,7 @@ impl Session {
             );
         if self.temp_entry_of(name, env) || global {
             return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
-                operation: format!("`{operation}`"),
+                operation: operation.to_owned(),
                 view_name: name.quoted(),
             }
             .into());
@@ -268,8 +268,15 @@ impl Session {
                 .collect::<Vec<_>>(),
         );
         let mut select = Vec::with_capacity(values.len());
+        // `TableOutputResolver.requiresNullChecks`: no NOT NULL check under `storeAssignmentPolicy=LEGACY`.
+        let null_checks = !env
+            .config
+            .get(&krishiv_common::config::STORE_ASSIGNMENT_POLICY)
+            .and_then(krishiv_common::config::ConfigValue::as_str)
+            .is_some_and(|p| p.eq_ignore_ascii_case("LEGACY"));
         for ((_, column), name) in values.iter().zip(&staged) {
-            let checked = crate::char_write::checked(col(name), column, &env.analysis.conf)?;
+            let checked =
+                crate::char_write::checked(col(name), column, &env.analysis.conf, null_checks)?;
             select.push(checked.alias(&column.name));
         }
         let df = computed.select(select);
@@ -500,9 +507,11 @@ impl Session {
                 // both before the drop.
                 let location =
                     managed_location(&self.warehouse_dir()?, &name.namespace, &name.name);
+                self.authorize_write_options(&spec.options, &BTreeMap::new())
+                    .await?;
                 let at =
                     self.locate_write_path(&location.display().to_string(), &spec.options, &env)?;
-                self.authorize_write_path(&at, &spec.options).await?;
+                self.authorize_write_path(&at).await?;
                 // A managed table's own directory goes with it; any other one in the way stays.
                 let own = self
                     .state
@@ -678,6 +687,7 @@ impl Session {
             column_stats: BTreeMap::new(),
             incarnation: 0,
             data_version: 0,
+            stamp: 0,
         };
         let layout = LayoutRequest {
             partition_by: &[],

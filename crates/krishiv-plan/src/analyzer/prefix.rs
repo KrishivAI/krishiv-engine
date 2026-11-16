@@ -46,6 +46,9 @@ pub(super) struct PrefixEntry {
     /// The tables the root reads: as written, the metadata resolved, and the securable index.
     tables: Vec<(Vec<String>, Arc<TableMeta>, usize)>,
     sql_calls: usize,
+    /// The observation names the root registered (`Dataset.observe`), with the identity key of the
+    /// relation that holds each: a warm run must still refuse a second relation using the name.
+    observed: Vec<(String, u128)>,
 }
 
 impl Resolver<'_> {
@@ -99,6 +102,11 @@ impl Resolver<'_> {
             columns: self.columns.clone(),
             tables,
             sql_calls: self.sql_calls,
+            observed: self
+                .observed
+                .iter()
+                .filter_map(|(name, a)| Some((name.clone(), *self.keys.get(a)?)))
+                .collect(),
         })
     }
 
@@ -155,6 +163,16 @@ impl Resolver<'_> {
             }
             if let Some(r) = entry.closed.get(k) {
                 self.closed.insert((at, env.ctes_id), r.clone());
+            }
+        }
+        for (name, key) in &entry.observed {
+            let holder = self
+                .keys
+                .iter()
+                .filter(|(_, k)| *k == key)
+                .find_map(|(a, _)| self.canon.get(a).map(|rep| addr(&**rep)));
+            if let Some(at) = holder {
+                self.observed.insert(name.clone(), at);
             }
         }
         self.warm_started = true;

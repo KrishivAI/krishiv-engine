@@ -95,6 +95,11 @@ impl Translator<'_> {
             RelType::WithColumns(w) => self.with_columns(w)?,
             RelType::Range(r) => self.range(r)?,
             RelType::SetOp(s) => self.set_op(s, origin_of(rel))?,
+            RelType::CollectMetrics(c) => PlanNode::CollectMetrics {
+                input: self.input("CollectMetrics", c.input.as_deref())?,
+                name: c.name.clone(),
+                metrics: self.expressions(&c.metrics)?,
+            },
             other => {
                 return Err(unsupported_variant(
                     "spark.connect.Relation",
@@ -226,18 +231,16 @@ impl Translator<'_> {
                         "reads with predicates",
                     ));
                 }
-                ReadSource::Files {
-                    format: d
-                        .format
+                ReadSource::files(
+                    d.format
                         .clone()
                         .unwrap_or_else(|| self.conf.default_data_source.clone()),
-                    paths: d
-                        .paths
+                    d.paths
                         .iter()
                         .map(|p| OptionValue::from_user("path", p.as_str()))
                         .collect(),
-                    options: typed(&d.options),
-                }
+                    typed(&d.options),
+                )
             }
         }))
     }
@@ -352,16 +355,29 @@ impl Translator<'_> {
         let input = self.relation(input)?;
         let keys = self.expressions(&a.grouping_expressions)?;
         let aggregates = self.expressions(&a.aggregate_expressions)?;
+        // The output keeps `expr AS name`; the grouping expressions are the
+        // bare `expr`: an alias is not an input column (PY-009).
+        let bare = |k: &Arc<Expr>| match &k.node {
+            ExprNode::Alias { expr, .. } => Arc::clone(expr),
+            _ => Arc::clone(k),
+        };
+        let group_keys: Vec<Arc<Expr>> = keys.iter().map(bare).collect();
         let grouping = match GroupType::try_from(a.group_type) {
-            Ok(GroupType::Groupby) => Grouping::GroupBy(keys.clone()),
-            Ok(GroupType::Rollup) => Grouping::Rollup(keys.clone()),
-            Ok(GroupType::Cube) => Grouping::Cube(keys.clone()),
+            Ok(GroupType::Groupby) => Grouping::GroupBy(group_keys),
+            Ok(GroupType::Rollup) => Grouping::Rollup(group_keys),
+            Ok(GroupType::Cube) => Grouping::Cube(group_keys),
             Ok(GroupType::GroupingSets) => Grouping::GroupingSets {
-                exprs: keys.clone(),
+                exprs: group_keys,
                 sets: a
                     .grouping_sets
                     .iter()
-                    .map(|s| self.expressions(&s.grouping_set))
+                    .map(|s| {
+                        Ok(self
+                            .expressions(&s.grouping_set)?
+                            .iter()
+                            .map(bare)
+                            .collect())
+                    })
                     .collect::<Result<_>>()?,
             },
             Ok(GroupType::Pivot) => {

@@ -417,6 +417,8 @@ impl<'a> Estimator<'a> {
             | PlanNode::SubqueryAlias { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Repartition { input, .. }
+            // Rows pass through unchanged.
+            | PlanNode::CollectMetrics { input, .. }
             // A window adds columns (without statistics), never rows.
             | PlanNode::Window { input, .. }
             // Each distinct row of an `INTERSECT ALL` / `EXCEPT ALL` count:
@@ -458,6 +460,13 @@ impl<'a> Estimator<'a> {
                 let rows = est.rows.min(n);
                 est.with_rows(rows)
             }
+            // Spark's `Sample` statistics: the input's rows times the fraction.
+            PlanNode::Sample { input, bounds, .. } => {
+                let est = RelStats::clone(&self.plan(input));
+                let fraction = (bounds.upper - bounds.lower).clamp(0.0, 1.0);
+                let rows = (est.rows * fraction).ceil();
+                est.with_rows(rows)
+            }
             PlanNode::Offset { input, offset } => {
                 let est = RelStats::clone(&self.plan(input));
                 let skipped = limit_value(offset).map_or(0.0, to_f64);
@@ -494,10 +503,11 @@ impl<'a> Estimator<'a> {
                         .source
                         .iter()
                         .zip(&r.output)
-                        .map(|(s, o)| {
-                            let c = est.cols.get(s).cloned();
-                            (o.id, c.unwrap_or_else(|| AttrStats::guess(est.rows)))
-                        })
+                        // A column the definition's estimate does not hold
+                        // (a window's output) stays unknown, as under a
+                        // `Shift`: `ShareCte` turning one into the other
+                        // must not change the estimate.
+                        .filter_map(|(s, o)| est.cols.get(s).map(|c| (o.id, c.clone())))
                         .collect(),
                     from_statistics: est.from_statistics,
                     unfiltered_rows: est.unfiltered_rows,

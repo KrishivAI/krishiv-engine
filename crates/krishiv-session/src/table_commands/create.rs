@@ -83,6 +83,15 @@ impl Session {
             .into());
         }
         let mut options = options_of(refuse_secret_options(&t.options, original)?, original);
+        // Stored store options redirect every later read of the table: a server-scoped key
+        // (endpoint, region, account, key file) is `Manage` on the cluster, asked before the
+        // table is stored (P3-T067b); readers are not asked again.
+        self.authorize_store_options(
+            krishiv_sql::StatementClass::Ddl,
+            &self.state.conf.snapshot(),
+            options.keys().map(String::as_str),
+        )
+        .await?;
         let properties = options_of(&t.tblproperties, original);
         // A `path` option is the table's location, as in Spark.
         let path_key = options
@@ -123,6 +132,7 @@ impl Session {
             column_stats: BTreeMap::new(),
             incarnation: 0,
             data_version: 0,
+            stamp: 0,
         };
         let layout = LayoutRequest {
             partition_by: &partition_names,
@@ -159,9 +169,54 @@ impl Session {
                         c.comment.clone(),
                     )?);
                 }
-                if table.columns.is_empty() {
-                    return Err(unsupported("CREATE TABLE without columns"));
-                }
+                // `CREATE TABLE t USING fmt LOCATION 'dir'` without columns: Spark reads the schema, and the partition
+                // columns of `key=value` directories, from the files (SQL-19).
+                let discovered: Vec<String> = if table.columns.is_empty() {
+                    // Spark infers the partitioning and the bucketing of a table without a column list; naming them is an error.
+                    if !layout.partition_by.is_empty() {
+                        return Err(krishiv_common::error::SpecifyPartitionIsNotAllowed {}.into());
+                    }
+                    if layout.bucket.is_some() {
+                        return Err(krishiv_common::error::SpecifyBucketingIsNotAllowed {}.into());
+                    }
+                    let unable = || -> KrishivError {
+                        krishiv_common::error::UnableToInferSchema {
+                            format: table.provider_written.clone(),
+                        }
+                        .into()
+                    };
+                    // A managed table has no files to read a schema from.
+                    if !external {
+                        return Err(unable());
+                    }
+                    let location = table.location.to_string_lossy().into_owned();
+                    // Spark ignores a location that does not exist and finds no files to infer from.
+                    table.columns = match self
+                        .infer_file_columns(&table.provider, &[location.as_str()], &table.options)
+                        .await
+                    {
+                        Ok(columns) => columns,
+                        Err(e)
+                            if e.error_class()
+                                == krishiv_common::error::ErrorClass::PathNotFound =>
+                        {
+                            return Err(unable());
+                        }
+                        Err(e) => return Err(e),
+                    };
+                    if table.columns.is_empty() {
+                        return Err(unable());
+                    }
+                    // The partition columns of `key=value` directories (hidden and `_`-prefixed entries are not).
+                    crate::partition_keys::partition_keys(&table.location)?
+                } else {
+                    Vec::new()
+                };
+                let partition_by: &[String] = if discovered.is_empty() {
+                    layout.partition_by
+                } else {
+                    &discovered
+                };
                 krishiv_io::check_declared_schema(
                     &table.provider,
                     &arrow_schema::Schema::new(
@@ -175,7 +230,7 @@ impl Session {
                 table.layout = crate::partitions::table_layout(
                     &name,
                     &mut table.columns,
-                    layout.partition_by,
+                    partition_by,
                     layout.bucket,
                     env.analysis.conf.case_sensitive,
                 )?;
@@ -292,14 +347,21 @@ impl Session {
             }
             .into());
         }
-        let location = table.location.clone();
-        self.authorize_path(&location, &[Privilege::Create], StatementClass::Ddl)
+        let checked = self
+            .authorize_location(&table.location, table.managed)
             .await?;
         // Spark creates the directory of a managed table only; an external table's location is
-        // made by its first write.
-        if table.managed {
-            std::fs::create_dir_all(&location)
-                .map_err(|e| internal(format!("cannot create {}: {e}", location.display())))?;
+        // made by its first write. The directory made is the canonical one checked, verified level by
+        // level, so a link swapped in after the check makes nothing outside it.
+        if table.managed
+            && let Some(checked) = &checked
+        {
+            self.create_checked_dir(
+                &checked.path,
+                &checked.shown,
+                Privilege::Create,
+                StatementClass::Ddl,
+            )?;
         }
         // Tables are never replaced, so nothing comes back from the store to clean up.
         self.state.catalog.store.create_table(table, mode)?;
@@ -383,24 +445,39 @@ impl Session {
         // An external location keeps `errorifexists`: a CTAS never replaces files already there.
         // The policy is asked about the destination first: a denied CTAS must not create the warehouse or
         // the table directory on the way to being refused (the writer asks again for the files it writes).
-        if table.managed {
-            self.authorize_path(
-                &table.location,
-                &[Privilege::Modify, Privilege::Create],
-                StatementClass::Write,
-            )
-            .await?;
-        }
         let owned = if table.managed {
-            Some(
-                OwnedDirectory::create(table.location.clone()).map_err(|e| match e {
-                    OwnedDirectoryError::Exists => KrishivError::from(LocationAlreadyExists {
-                        identifier: quoted(&table.namespace, &table.name),
-                        location: table.location.display().to_string(),
-                    }),
-                    OwnedDirectoryError::Io(message) => internal(message),
-                })?,
-            )
+            let checked = self
+                .authorize_path(
+                    &table.location,
+                    &[Privilege::Modify, Privilege::Create],
+                    StatementClass::Write,
+                )
+                .await?;
+            // The canonical directory checked is the one made: its parents level by level, each verified,
+            // then the directory itself, verified again (a link swapped in after the check makes nothing
+            // that stays outside; the writer re-checks every path it writes).
+            if let Some(parent) = checked.parent() {
+                self.create_checked_dir(
+                    &parent.path,
+                    &parent.shown,
+                    Privilege::Create,
+                    StatementClass::Write,
+                )?;
+            }
+            let owned = OwnedDirectory::create(checked.path.clone()).map_err(|e| match e {
+                OwnedDirectoryError::Exists => KrishivError::from(LocationAlreadyExists {
+                    identifier: quoted(&table.namespace, &table.name),
+                    location: table.location.display().to_string(),
+                }),
+                OwnedDirectoryError::Io(message) => internal(message),
+            })?;
+            self.create_checked_dir(
+                &checked.path,
+                &checked.shown,
+                Privilege::Create,
+                StatementClass::Write,
+            )?;
+            Some(owned)
         } else {
             None
         };
@@ -470,6 +547,7 @@ impl Session {
             let columns = match &*entry {
                 crate::catalog::TempTable::Memory { columns, .. }
                 | crate::catalog::TempTable::Files { columns, .. }
+                | crate::catalog::TempTable::Provider { columns, .. }
                 | crate::catalog::TempTable::View { columns, .. } => columns,
             };
             (
@@ -529,6 +607,7 @@ impl Session {
             column_stats: BTreeMap::new(),
             incarnation: 0,
             data_version: 0,
+            stamp: 0,
         };
         let mode = if t.if_not_exists {
             CreateMode::IfNotExists
@@ -766,6 +845,52 @@ impl Session {
         self.with_locals(Vec::new())
             .analyze_variable_query(&sql)
             .await?;
+        // A table whose provider offers a row-level table runs the statement (PR-DML).
+        let op = match operation {
+            "DELETE" => Some(krishiv_exec::planner::RowLevelOperation::Delete),
+            "UPDATE TABLE" => Some(krishiv_exec::planner::RowLevelOperation::Update),
+            _ => None,
+        };
+        if let Some(op) = op {
+            let alias = alias.map_or_else(|| name.name.clone(), |a| a.value.clone());
+            let assignments: Vec<super::row_level::Assignment> = changes
+                .targets
+                .iter()
+                .zip(changes.values)
+                .map(|(target, value)| {
+                    // `SET t.c = ..`: the qualifier names the target (its alias or table name).
+                    let mut parts: Vec<&str> =
+                        target.parts.iter().map(|p| p.value.as_str()).collect();
+                    if parts.len() > 1
+                        && (parts[0].eq_ignore_ascii_case(&alias)
+                            || parts[0].eq_ignore_ascii_case(&name.name))
+                    {
+                        parts.remove(0);
+                    }
+                    super::row_level::Assignment {
+                        column: parts.join("."),
+                        value: (!crate::command::is_bare_default(value)).then(|| slice(value)),
+                    }
+                })
+                .collect();
+            let condition = changes.condition.map(slice);
+            if let Some(done) = self
+                .run_row_level(
+                    op,
+                    &name.quoted(),
+                    &alias,
+                    condition.as_deref(),
+                    &assignments,
+                )
+                .await?
+            {
+                // The table's data changed: what read it is stale (as after an `INSERT`).
+                self.state.catalog.store.bump();
+                self.forget_column_stats(&name);
+                self.forget_cached(&name);
+                return Ok(done);
+            }
+        }
         Err(UnsupportedFeatureTableOperation {
             table_name: name.quoted(),
             operation: operation.to_owned(),

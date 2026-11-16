@@ -4,31 +4,34 @@
 //! implementation of it, [`ConnectService`].
 //!
 //! T001 implements the session RPCs (`ReleaseSession`) and what every RPC
-//! shares (the principal, the draining refusal). T011a (PR-11a) adds
-//! `ExecutePlan` (`crate::execute`) and the minimal `ReattachExecute` and
-//! `ReleaseExecute` of design P3-T011a §3.4 (no replay buffer: a live
-//! operation cannot be reattached yet). PR-11b adds `AnalyzePlan`
-//! (`crate::analyze`), `Config` (`crate::config`) and `Interrupt`
-//! (`crate::interrupt`); the rest answer `UNIMPLEMENTED` until PR-15.
+//! shares (the draining refusal); T002 authenticates every RPC, the
+//! unimplemented ones too (`crate::auth`). T011a (PR-11a) adds
+//! `ExecutePlan` (`crate::execute`), `ReattachExecute` and `ReleaseExecute`
+//! (with the replay buffer, sender caps and detach of PR-15a, design
+//! P3-T011a §3.8). PR-11b adds `AnalyzePlan` (`crate::analyze`), `Config`
+//! (`crate::config`) and `Interrupt` (`crate::interrupt`); the rest answer
+//! `UNIMPLEMENTED` until PR-15.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use krishiv_common::error::{
-    ConnectInvalidPlanInvalidOneOfFieldNotSet, InvalidCursorDisconnected,
-    InvalidCursorNotReattachable, InvalidCursorPositionNotFound, InvalidHandleOperationNotFound,
-    KrishivError,
+    ConnectInvalidPlanInvalidOneOfFieldNotSet, InvalidCursorNotReattachable,
+    InvalidHandleOperationAbandoned, InvalidHandleOperationNotFound, KrishivError,
 };
-use krishiv_common::principal::Principal;
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::release_execute_request::Release;
 use krishiv_connect::wire::Decoded;
+use krishiv_session::auth::Authenticated;
 use tonic::codegen::BoxStream;
 use tonic::{Request, Response, Status, Streaming};
 
+use crate::auth::{Check, ConnectAuth, Rpc, check_rpc};
 use crate::codec::WireCodec;
+use crate::execute::ResponseBudget;
 use crate::manager::{SessionEntry, SessionManager};
 use crate::operation::ExecuteLimits;
+use crate::sender::{self, SenderCaps};
 use crate::status::status_of;
 use crate::{analyze, config, execute, interrupt};
 
@@ -44,15 +47,30 @@ mod generated {
 
 pub use generated::{SparkConnectService, SparkConnectServiceServer};
 
-/// The principal a request runs as: set by the authentication layer (T002)
-/// as a request extension; until then the server's local user, on loopback
-/// only (design P3-T001 §3.6).
-fn principal_of<T>(request: &Request<T>, default: &Principal) -> Principal {
-    request
-        .extensions()
-        .get::<Principal>()
-        .cloned()
-        .unwrap_or_else(|| default.clone())
+/// The trace headers of a request, read once before the request body is taken (a non-ASCII
+/// value is no header at all).
+fn inbound_of(metadata: &tonic::metadata::MetadataMap) -> execute::InboundTrace {
+    let text = |name: &str| {
+        metadata
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+    };
+    execute::InboundTrace {
+        traceparent: text("traceparent"),
+        baggage: text("baggage"),
+    }
+}
+
+/// Tells the engine session who is calling (`system.sessions`: transport, client type, user).
+/// Client-asserted: shown, never used as an identity.
+fn observe(entry: &SessionEntry, client_type: Option<&str>) {
+    entry.session().set_client_info(
+        krishiv_session::Transport::Connect,
+        client_type,
+        Some(entry.client_user_id()),
+        Some(entry.server_side_id()),
+    );
 }
 
 /// Krishiv's Spark Connect service over a [`SessionManager`].
@@ -60,28 +78,52 @@ fn principal_of<T>(request: &Request<T>, default: &Principal) -> Principal {
 pub struct ConnectService {
     manager: Arc<SessionManager>,
     draining: Arc<AtomicBool>,
-    local: Principal,
+    auth: Arc<ConnectAuth>,
     limits: ExecuteLimits,
+    budget: ResponseBudget,
 }
 
 impl ConnectService {
-    /// A service over `manager`; new RPCs are refused with `UNAVAILABLE`
-    /// once `draining` is set (shutdown).
+    /// A service over `manager`, with authentication off; new RPCs are
+    /// refused with `UNAVAILABLE` once `draining` is set (shutdown).
     #[must_use]
     pub fn new(manager: Arc<SessionManager>, draining: Arc<AtomicBool>) -> Self {
         Self {
             manager,
             draining,
-            local: Principal::local_user(),
+            auth: Arc::new(ConnectAuth::off()),
+            budget: ResponseBudget::new(ExecuteLimits::default().max_response_bytes),
             limits: ExecuteLimits::default(),
         }
     }
 
-    /// This service with the `ExecutePlan` limits `limits`.
+    /// This service authenticating every RPC with `auth`.
+    #[must_use]
+    pub fn with_auth(mut self, auth: Arc<ConnectAuth>) -> Self {
+        self.auth = auth;
+        self
+    }
+
+    /// This service with the `ExecutePlan` limits `limits` (and a response
+    /// budget of `limits.max_response_bytes`).
     #[must_use]
     pub fn with_limits(mut self, limits: ExecuteLimits) -> Self {
+        self.budget = ResponseBudget::new(limits.max_response_bytes);
         self.limits = limits;
         self
+    }
+
+    /// This service sharing the server's response budget `budget`.
+    #[must_use]
+    pub fn with_budget(mut self, budget: ResponseBudget) -> Self {
+        self.budget = budget;
+        self
+    }
+
+    /// The server's response budget (`krishiv.connect.maxResponseBytes`).
+    #[must_use]
+    pub fn response_budget(&self) -> &ResponseBudget {
+        &self.budget
     }
 
     /// The session manager.
@@ -101,26 +143,48 @@ impl ConnectService {
         }
     }
 
-    /// The session `session_id` of `principal`, created if needed, its
-    /// server-side id checked against the client's (the get-or-create RPCs
-    /// of design P3-T011a §2.1).
+    /// Admits `request` and returns its caller (authenticated by
+    /// [`crate::auth::AuthLayer`] before the body was read), after the
+    /// ADR 0046 §3b class of `rpc`. A class that needs more than the
+    /// session lookup or the analyzer (a privilege, the write path, a side
+    /// effect) is refused until the RPC that needs it applies it: fail
+    /// closed, so a newly implemented RPC cannot skip its check.
+    fn caller<T>(&self, request: &Request<T>, rpc: Rpc) -> Result<Authenticated, Status> {
+        self.admit()?;
+        let caller = self.auth.caller(request)?;
+        match check_rpc(rpc) {
+            Check::OwnSession | Check::Plan => Ok(caller),
+            Check::Privilege { .. } | Check::Write | Check::SideEffect | Check::Unsupported(_) => {
+                Err(Status::unimplemented(format!(
+                    "{rpc:?} is not supported by this server yet"
+                )))
+            }
+        }
+    }
+
+    /// The session `session_id` of `caller`, created if needed, its server-side id checked
+    /// against the client's (the get-or-create RPCs of design P3-T011a §2.1). The client's
+    /// `user_id` is recorded, never trusted (ADR 0046 §5).
     fn session(
         &self,
-        principal: &Principal,
+        caller: &Authenticated,
         session_id: &str,
         observed: Option<&str>,
         user: Option<&pb::UserContext>,
     ) -> Result<Arc<SessionEntry>, Status> {
         let user = user.map_or("", |u| u.user_id.as_str());
         self.manager
-            .get_or_create(principal, session_id, observed, user)
+            .get_or_create(caller, session_id, observed, user)
             .map_err(|e| status_of(&e))
     }
 
-    fn unimplemented(&self, rpc: &str) -> Status {
-        match self.admit() {
+    /// `UNIMPLEMENTED`, once `request` is admitted and authenticated: an
+    /// unauthenticated client learns nothing about what the server
+    /// implements.
+    fn unimplemented<T>(&self, request: &Request<T>, rpc: Rpc) -> Status {
+        match self.caller(request, rpc) {
             Err(s) => s,
-            Ok(()) => Status::unimplemented(format!("{rpc} is not supported by this server yet")),
+            Ok(_) => Status::unimplemented(format!("{rpc:?} is not supported by this server yet")),
         }
     }
 }
@@ -136,16 +200,27 @@ impl SparkConnectService for ConnectService {
         &self,
         request: Request<Decoded<pb::ExecutePlanRequest>>,
     ) -> Result<Response<Self::ExecutePlanStream>, Status> {
-        self.admit()?;
-        let principal = principal_of(&request, &self.local);
+        let caller = self.caller(&request, Rpc::ExecutePlan)?;
+        let inbound = inbound_of(request.metadata());
         let request = request.into_inner();
         let entry = self.session(
-            &principal,
+            &caller,
             &request.session_id,
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
-        let stream = execute::execute_plan(&entry, &request, &self.limits)
+        observe(&entry, request.client_type.as_deref());
+        // An abandoned id is refused (Spark's `createExecuteHolder`, v4.3.0
+        // lines 105-120); a live one is attached to by `execute_plan`.
+        if let Some(id) = &request.operation_id
+            && entry.operations().get(id).is_none()
+            && self.manager.is_abandoned(&caller, &request.session_id, id)
+        {
+            return Err(status_of(
+                &InvalidHandleOperationAbandoned { handle: id.clone() }.into(),
+            ));
+        }
+        let stream = execute::execute_plan(&entry, &request, &self.limits, &self.budget, &inbound)
             .await
             .map_err(|e| status_of(&e))?;
         Ok(Response::new(stream))
@@ -157,15 +232,15 @@ impl SparkConnectService for ConnectService {
         &self,
         request: Request<Decoded<pb::AnalyzePlanRequest>>,
     ) -> Result<Response<pb::AnalyzePlanResponse>, Status> {
-        self.admit()?;
-        let principal = principal_of(&request, &self.local);
+        let caller = self.caller(&request, Rpc::AnalyzePlan)?;
         let request = request.into_inner();
         let entry = self.session(
-            &principal,
+            &caller,
             &request.session_id,
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
+        observe(&entry, request.client_type.as_deref());
         analyze::analyze_plan(&entry, &request, &self.limits)
             .await
             .map(Response::new)
@@ -178,32 +253,33 @@ impl SparkConnectService for ConnectService {
         &self,
         request: Request<Decoded<pb::ConfigRequest>>,
     ) -> Result<Response<pb::ConfigResponse>, Status> {
-        self.admit()?;
-        let principal = principal_of(&request, &self.local);
+        let caller = self.caller(&request, Rpc::Config)?;
         let request = request.into_inner();
         let entry = self.session(
-            &principal,
+            &caller,
             &request.session_id,
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
-        config::config(&entry, &request, &principal, config::role_of(&principal))
+        observe(&entry, request.client_type.as_deref());
+        config::config(&entry, &request)
+            .await
             .map(Response::new)
             .map_err(|e| status_of(&e))
     }
 
     async fn add_artifacts(
         &self,
-        _request: Request<Streaming<Decoded<pb::AddArtifactsRequest>>>,
+        request: Request<Streaming<Decoded<pb::AddArtifactsRequest>>>,
     ) -> Result<Response<pb::AddArtifactsResponse>, Status> {
-        Err(self.unimplemented("AddArtifacts"))
+        Err(self.unimplemented(&request, Rpc::AddArtifacts))
     }
 
     async fn artifact_status(
         &self,
-        _request: Request<Decoded<pb::ArtifactStatusesRequest>>,
+        request: Request<Decoded<pb::ArtifactStatusesRequest>>,
     ) -> Result<Response<pb::ArtifactStatusesResponse>, Status> {
-        Err(self.unimplemented("ArtifactStatus"))
+        Err(self.unimplemented(&request, Rpc::ArtifactStatus))
     }
 
     /// Spark's `SparkConnectInterruptHandler`: the session is looked up or
@@ -212,94 +288,126 @@ impl SparkConnectService for ConnectService {
         &self,
         request: Request<Decoded<pb::InterruptRequest>>,
     ) -> Result<Response<pb::InterruptResponse>, Status> {
-        self.admit()?;
-        let principal = principal_of(&request, &self.local);
+        let caller = self.caller(&request, Rpc::Interrupt)?;
         let request = request.into_inner();
         let entry = self.session(
-            &principal,
+            &caller,
             &request.session_id,
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
         )?;
-        interrupt::interrupt(&entry, &request)
-            .map(Response::new)
-            .map_err(|e| status_of(&e))
+        observe(&entry, request.client_type.as_deref());
+        let response = interrupt::interrupt(&entry, &request).map_err(|e| status_of(&e))?;
+        // An id it did not interrupt that is no operation of this session may be another
+        // owner's: answered the same (an empty list), recorded (ADR 0046 §3b).
+        if let Some(pb::interrupt_request::Interrupt::OperationId(id)) = &request.interrupt
+            && response.interrupted_ids.is_empty()
+            && entry.operations().get(id).is_none()
+        {
+            self.manager.audit_foreign_operation(&caller, id);
+        }
+        Ok(Response::new(response))
     }
 
-    /// Spark's `SparkConnectReattachExecuteHandler`, minimal (design
-    /// P3-T011a §3.4): a finished, cancelled or dropped operation has been
-    /// removed (`INVALID_HANDLE.OPERATION_NOT_FOUND`); a live one that is not
-    /// reattachable is `INVALID_CURSOR.NOT_REATTACHABLE`; a live reattachable
-    /// one still streams to its first RPC, and the new stream gets
-    /// `INVALID_CURSOR.DISCONNECTED` (Spark ends the old stream with it
-    /// instead; a recorded PR-11 difference until the replay buffer).
+    /// Spark's `SparkConnectReattachExecuteHandler` (v4.3.0 lines 30-66)
+    /// and `SparkConnectExecutionManager.reattachExecuteHolder` (lines
+    /// 227-252): the session is looked up (its server-side id checked); an
+    /// unknown operation is `INVALID_HANDLE.OPERATION_ABANDONED` when it was
+    /// abandoned, else `OPERATION_NOT_FOUND`; one that is not reattachable
+    /// is `INVALID_CURSOR.NOT_REATTACHABLE`; `last_response_id` must name a
+    /// response it produced (`INVALID_CURSOR.POSITION_NOT_FOUND`). A new
+    /// sender then resumes after it, and the sender attached before ends
+    /// with `INVALID_CURSOR.DISCONNECTED`.
     async fn reattach_execute(
         &self,
         request: Request<Decoded<pb::ReattachExecuteRequest>>,
     ) -> Result<Response<Self::ReattachExecuteStream>, Status> {
-        self.admit()?;
-        let principal = principal_of(&request, &self.local);
+        let caller = self.caller(&request, Rpc::ReattachExecute)?;
         let request = request.into_inner();
         let entry = self
             .manager
             .get(
-                &principal,
+                &caller,
                 &request.session_id,
                 request.client_observed_server_side_session_id.as_deref(),
             )
             .map_err(|e| status_of(&e))?;
-        let error: KrishivError = match entry.operations().get(&request.operation_id) {
-            None => InvalidHandleOperationNotFound {
-                handle: request.operation_id.clone(),
-            }
-            .into(),
-            Some(op) if !op.reattachable() => InvalidCursorNotReattachable {}.into(),
-            Some(_) => InvalidCursorDisconnected {}.into(),
+        let Some(op) = entry.operations().get(&request.operation_id) else {
+            let handle = request.operation_id.clone();
+            let error: KrishivError =
+                if self
+                    .manager
+                    .is_abandoned(&caller, &request.session_id, &request.operation_id)
+                {
+                    InvalidHandleOperationAbandoned { handle }.into()
+                } else {
+                    // Answered as unknown, recorded if another owner's (ADR 0046 §3b).
+                    self.manager
+                        .audit_foreign_operation(&caller, &request.operation_id);
+                    InvalidHandleOperationNotFound { handle }.into()
+                };
+            return Err(status_of(&error));
         };
-        Err(status_of(&error))
+        if !op.reattachable() {
+            return Err(status_of(&InvalidCursorNotReattachable {}.into()));
+        }
+        // Looked up before attaching: an unknown id leaves the attached
+        // sender alone (`ExecuteHolder.runGrpcResponseSender`, lines 192-198).
+        let after = match &request.last_response_id {
+            Some(id) => op.replay().index_of(id).map_err(|e| status_of(&e))?,
+            None => 0,
+        };
+        let caps = SenderCaps::of(&op, &self.limits);
+        Ok(Response::new(sender::attach(
+            op,
+            Arc::clone(entry.operations()),
+            after,
+            caps,
+        )))
     }
 
-    /// Spark's `SparkConnectReleaseExecuteHandler`: the session is looked up
-    /// without the server-side id check; an unknown operation is a success
-    /// without `operation_id`. `release_all` cancels and removes the
-    /// operation; `release_until` succeeds for a response id the operation
-    /// sent (there is no buffer to trim yet) and is
-    /// `INVALID_CURSOR.POSITION_NOT_FOUND` for any other.
+    /// Spark's `SparkConnectReleaseExecuteHandler` (v4.3.0 lines 31-69): the
+    /// session is looked up without the server-side id check; an unknown
+    /// operation is a success without `operation_id`. `release_all` removes
+    /// and closes the operation (no tombstone); `release_until` drops its
+    /// buffered responses up to the id, `INVALID_CURSOR.POSITION_NOT_FOUND`
+    /// for an id it never produced.
     async fn release_execute(
         &self,
         request: Request<Decoded<pb::ReleaseExecuteRequest>>,
     ) -> Result<Response<pb::ReleaseExecuteResponse>, Status> {
-        self.admit()?;
-        let principal = principal_of(&request, &self.local);
+        let caller = self.caller(&request, Rpc::ReleaseExecute)?;
         let request = request.into_inner();
         let entry = self
             .manager
-            .get(&principal, &request.session_id, None)
+            .get(&caller, &request.session_id, None)
             .map_err(|e| status_of(&e))?;
         let mut response = pb::ReleaseExecuteResponse {
             session_id: request.session_id.clone(),
             server_side_session_id: entry.server_side_id().to_owned(),
             operation_id: None,
         };
-        if let Some(op) = entry.operations().get(&request.operation_id) {
+        let found = entry.operations().get(&request.operation_id);
+        if found.is_none() {
+            // Answered as unknown (success, no operation id), recorded if another owner's
+            // (ADR 0046 §3b).
+            self.manager
+                .audit_foreign_operation(&caller, &request.operation_id);
+        }
+        if let Some(op) = found {
             if !op.reattachable() {
                 return Err(status_of(&InvalidCursorNotReattachable {}.into()));
             }
             response.operation_id = Some(op.id().as_str().to_owned());
             match &request.release {
                 Some(Release::ReleaseAll(_)) => {
-                    op.close();
                     entry.operations().remove(&op);
+                    op.close();
                 }
                 Some(Release::ReleaseUntil(until)) => {
-                    if !op.has_sent(&until.response_id) {
-                        return Err(status_of(
-                            &InvalidCursorPositionNotFound {
-                                response_id: until.response_id.clone(),
-                            }
-                            .into(),
-                        ));
-                    }
+                    op.replay()
+                        .release_until(&until.response_id)
+                        .map_err(|e| status_of(&e))?;
                 }
                 // Spark throws a classless UnsupportedOperationException.
                 None => {
@@ -323,12 +431,11 @@ impl SparkConnectService for ConnectService {
         &self,
         request: Request<Decoded<pb::ReleaseSessionRequest>>,
     ) -> Result<Response<pb::ReleaseSessionResponse>, Status> {
-        self.admit()?;
-        let principal = principal_of(&request, &self.local);
+        let caller = self.caller(&request, Rpc::ReleaseSession)?;
         let request = request.into_inner();
         let server_side =
             self.manager
-                .release(&principal, &request.session_id, request.allow_reconnect);
+                .release(&caller, &request.session_id, request.allow_reconnect);
         Ok(Response::new(pb::ReleaseSessionResponse {
             session_id: request.session_id.clone(),
             server_side_session_id: server_side.unwrap_or_default(),
@@ -337,22 +444,22 @@ impl SparkConnectService for ConnectService {
 
     async fn fetch_error_details(
         &self,
-        _request: Request<Decoded<pb::FetchErrorDetailsRequest>>,
+        request: Request<Decoded<pb::FetchErrorDetailsRequest>>,
     ) -> Result<Response<pb::FetchErrorDetailsResponse>, Status> {
-        Err(self.unimplemented("FetchErrorDetails"))
+        Err(self.unimplemented(&request, Rpc::FetchErrorDetails))
     }
 
     async fn clone_session(
         &self,
-        _request: Request<Decoded<pb::CloneSessionRequest>>,
+        request: Request<Decoded<pb::CloneSessionRequest>>,
     ) -> Result<Response<pb::CloneSessionResponse>, Status> {
-        Err(self.unimplemented("CloneSession"))
+        Err(self.unimplemented(&request, Rpc::CloneSession))
     }
 
     async fn get_status(
         &self,
-        _request: Request<Decoded<pb::GetStatusRequest>>,
+        request: Request<Decoded<pb::GetStatusRequest>>,
     ) -> Result<Response<pb::GetStatusResponse>, Status> {
-        Err(self.unimplemented("GetStatus"))
+        Err(self.unimplemented(&request, Rpc::GetStatus))
     }
 }

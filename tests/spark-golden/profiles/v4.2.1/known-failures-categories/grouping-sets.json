@@ -1,0 +1,13 @@
+{
+  "category": "grouping-sets",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "detail": "The feature ROLLUP",
+      "order": 310
+    }
+  ],
+  "summary": "ROLLUP, CUBE, GROUPING SETS, grouping()/grouping_id()",
+  "task": "P2-T053b"
+}

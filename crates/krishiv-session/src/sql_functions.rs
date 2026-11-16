@@ -46,6 +46,11 @@ impl FunctionMap {
         self.entries.get(&name.to_lowercase())
     }
 
+    /// The defined functions' names, sorted (lower case).
+    pub(crate) fn names(&self) -> impl Iterator<Item = &str> {
+        self.entries.keys().map(String::as_str)
+    }
+
     /// This map with `entry` defined (replacing any of its name), at the
     /// next version.
     pub(crate) fn with(&self, entry: Entry) -> Self {
@@ -144,6 +149,9 @@ pub(crate) struct QueryFunctions {
     /// first failure inside a stored view's text (see
     /// [`crate::catalog::Expansion`]).
     reads: Mutex<(Vec<ReadCandidate>, Option<KrishivError>)>,
+    /// The views the bodies expanded so far inlined, for the query's view side table
+    /// (`AnalyzedPlan::views`).
+    views_read: Mutex<Vec<krishiv_plan::analyzer::views::ViewExpansion>>,
 }
 
 /// How a body's permanent views are read: the parser options of the query
@@ -176,6 +184,7 @@ impl QueryFunctions {
             views,
             expanded: Mutex::new(HashMap::new()),
             reads: Mutex::new((Vec::new(), None)),
+            views_read: Mutex::new(Vec::new()),
         }
     }
 
@@ -219,6 +228,15 @@ impl QueryFunctions {
     pub(crate) fn body_reads(&self) -> (Vec<ReadCandidate>, Option<KrishivError>) {
         let reads = self.reads.lock().unwrap_or_else(PoisonError::into_inner);
         (reads.0.clone(), reads.1.clone())
+    }
+
+    /// The views the bodies expanded so far inlined, one entry per expansion (a body is expanded once per
+    /// query, however often it is called).
+    pub(crate) fn body_views(&self) -> Vec<krishiv_plan::analyzer::views::ViewExpansion> {
+        self.views_read
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// The text a function's body spans index, for the source `id`.
@@ -303,6 +321,11 @@ impl QueryFunctions {
                 if let Some(e) = expansion.deferred {
                     seen.1.get_or_insert(e);
                 }
+                drop(seen);
+                self.views_read
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .extend(expansion.views);
                 match &expansion.plan.node {
                     PlanNode::Project { exprs, .. } => exprs.first().cloned(),
                     _ => None,

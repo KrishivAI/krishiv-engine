@@ -535,6 +535,7 @@ impl FileReads {
             }
             .into());
         }
+        let scan_options = krishiv_io::ScanOptions::for_read(&self.session, &options);
         let schema = if merge {
             // Every file's own schema, merged by column name in first-seen order; names match
             // under `spark.sql.caseSensitive` (default false), so `id` and `ID` are one column.
@@ -544,10 +545,26 @@ impl FileReads {
                 .is_some_and(|v| v.trim().eq_ignore_ascii_case("true"));
             let mut merged: Option<SchemaRef> = None;
             for file in &files {
-                let one = format
-                    .infer_schema(&self.io, std::slice::from_ref(file), &options)
-                    .await
-                    .map_err(|e| e.into_error(&file.display_path()))?;
+                let one = match krishiv_io::infer_schema_cached(
+                    format.as_ref(),
+                    &self.io,
+                    std::slice::from_ref(file),
+                    &options,
+                )
+                .await
+                {
+                    Ok(one) => one,
+                    // Spark's `readParquetFootersInParallel`: a footer the
+                    // scan settings skip leaves the file out of the merge.
+                    Err(e) => {
+                        let e = e.into_error(&file.display_path());
+                        if !scan_options.skips(&e) {
+                            return Err(e);
+                        }
+                        tracing::warn!(path = file.display_path(), error = %e, "skipped a file whose schema cannot be read");
+                        continue;
+                    }
+                };
                 merged = Some(match merged {
                     None => one,
                     Some(m) => merge_schemas(&m, &one, case_sensitive)?,
@@ -559,10 +576,26 @@ impl FileReads {
                 })
             })?
         } else {
-            format
-                .infer_schema(&self.io, &files, &options)
-                .await
-                .map_err(|e| e.into_error(&files[0].display_path()))?
+            match krishiv_io::infer_schema_cached(format.as_ref(), &self.io, &files, &options).await
+            {
+                Ok(schema) => schema,
+                Err(e) => {
+                    // Without `mergeSchema` Spark's Parquet inference reads
+                    // the first file alone: when the scan settings skip its
+                    // error, nothing is left to infer from. Other formats
+                    // read every file (CSV, JSON) or keep their own rule,
+                    // so their errors stand.
+                    let e = e.into_error(&files[0].display_path());
+                    if format.name() != "parquet" || !scan_options.skips(&e) {
+                        return Err(e);
+                    }
+                    tracing::warn!(path = files[0].display_path(), error = %e, "skipped a file whose schema cannot be read");
+                    return Err(UnableToInferSchema {
+                        format: display_name(format.name()),
+                    }
+                    .into());
+                }
+            }
         };
         let schema = with_partition_columns(schema, &partition_columns)?;
         Ok(FileListing {

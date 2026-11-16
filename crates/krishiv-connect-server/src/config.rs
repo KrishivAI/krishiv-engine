@@ -5,10 +5,12 @@
 //! - `set(pairs, silent)`: per pair, in order; with `silent` a failure is
 //!   the warning `Failed to set <key> to Some(<value>) due to <message>`
 //!   (Spark prints the Scala `Option`) and the next pair is tried. Who may
-//!   set a key is the registry's `SettableBy` (ADR 0046 §8, threat model
-//!   T-Z3): a `Startup` key is `CANNOT_MODIFY_STATIC_CONFIG` for every role,
-//!   an `Admin` key `KRISHIV_INSUFFICIENT_PERMISSIONS` (42501) for a viewer or
-//!   operator (`check_settable`).
+//!   set or unset a key (ADR 0046 §3, §8, threat model T-Z3): a `Startup`
+//!   key is `CANNOT_MODIFY_STATIC_CONFIG` for everyone (`check_static`);
+//!   any other key is the session's policy, asked as SQL `SET` asks it
+//!   (`Session::authorize_set_key`: an `Admin` key or a server-scoped store
+//!   key needs `Manage` on the cluster, else `KRISHIV_INSUFFICIENT_PERMISSIONS`
+//!   (42501), audited and counted). The listener keeps no role check of its own.
 //! - `get(keys)`: an unset key without a default is `SQL_CONF_NOT_FOUND`
 //!   (Spark's `SQLConf.getConfString`, `SQLConf.scala:9801-9808`).
 //! - `get_with_default`: a set value, else the caller's default (a
@@ -30,12 +32,11 @@
 
 use std::borrow::Cow;
 
-use krishiv_common::config::{SettableBy, lookup};
+use krishiv_common::config::{SettableBy, lookup, resolve_alternative};
 use krishiv_common::error::{
     CannotModifyStaticConfig, ConnectInvalidPlanInvalidOneOfFieldNotSet,
-    InvalidConfValueRequirement, KrishivError, KrishivInsufficientPermissions, SqlConfNotFound,
+    InvalidConfValueRequirement, KrishivError, SqlConfNotFound,
 };
-use krishiv_common::principal::Principal;
 use krishiv_common::redact::redact;
 use krishiv_common::secret::is_sensitive_key;
 use krishiv_connect::proto::v4_3 as pb;
@@ -44,67 +45,24 @@ use krishiv_session::RuntimeConf;
 
 use crate::manager::SessionEntry;
 
-/// What a principal may do with configuration (ADR 0046 §8).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "viewer and operator arrive with authentication (P3-T002)"
-    )
-)]
-pub(crate) enum ConfigRole {
-    /// Reads and sets `User` keys only.
-    Viewer,
-    /// Reads and sets `User` keys only.
-    Operator,
-    /// Sets `Admin` keys too.
-    Admin,
-}
-
-/// The configuration role of `principal`.
-///
-/// TODO(P3-T002): roles arrive with authentication; until then every
-/// principal is the local user on a loopback listener (design P3-T001
-/// §3.6) and is treated as the admin. T002 must also:
-/// - flip this default (an unknown principal is a viewer);
-/// - move [`check_settable`] into the session's `AccessPolicy` path, so
-///   SQL `SET` (`Session::sql`) and Connect's `SqlCommand` (T012) take the
-///   same gate as this RPC (ADR 0046 rejects listener-local checks);
-/// - hide `Startup` and `Admin` keys from `get_all` for viewers and
-///   operators.
-#[must_use]
-pub(crate) fn role_of(_principal: &Principal) -> ConfigRole {
-    ConfigRole::Admin
-}
-
-/// Whether `role` may set or unset `key` (the registry's `SettableBy`).
+/// A `Startup` key cannot change in a running session, for anyone. The key is looked up as
+/// `Session::authorize_set_key` looks it up (its Spark alias or legacy alternative too).
 ///
 /// # Errors
-/// `CANNOT_MODIFY_STATIC_CONFIG` for a `Startup` key (every role);
-/// `KRISHIV_INSUFFICIENT_PERMISSIONS` for an `Admin` key and a role other
-/// than [`ConfigRole::Admin`].
-pub(crate) fn check_settable(
-    role: ConfigRole,
-    principal: &Principal,
-    key: &str,
-) -> Result<(), KrishivError> {
-    match lookup(key).map(|e| e.settable_by) {
-        Some(SettableBy::Startup) => Err(CannotModifyStaticConfig {
+/// `CANNOT_MODIFY_STATIC_CONFIG` for a `Startup` key.
+pub(crate) fn check_static(key: &str) -> Result<(), KrishivError> {
+    let entry = lookup(key).or_else(|| lookup(resolve_alternative(key)));
+    if entry.is_some_and(|e| e.settable_by == SettableBy::Startup) {
+        return Err(CannotModifyStaticConfig {
             key: format!("\"{key}\""),
         }
-        .into()),
-        Some(SettableBy::Admin) if role != ConfigRole::Admin => {
-            Err(KrishivInsufficientPermissions {
-                principal: principal.name.clone(),
-                privilege: "SET".to_owned(),
-                securable: format!("configuration `{key}`"),
-            }
-            .into())
-        }
-        _ => Ok(()),
+        .into());
     }
+    Ok(())
 }
+
+// TODO(P3-T002 follow-up): hide `Startup` and `Admin` keys from `get_all` for callers the
+// session's policy would not let set them.
 
 /// The two SQL configs Spark Connect warns about
 /// (`SparkConnectConfigHandler.unsupportedConfigurations`, line 217-218).
@@ -237,7 +195,7 @@ pub fn is_redacted(key: &str, value: Option<&str>) -> bool {
 
 /// The value `key` was set to, if it was (not a registered default).
 fn explicit(conf: &RuntimeConf, key: &str) -> Option<String> {
-    let canonical = lookup(key).map_or(key, |e| e.key);
+    let canonical = lookup(resolve_alternative(key)).map_or(key, |e| e.key);
     conf.entries()
         .into_iter()
         .find(|(k, _)| k == canonical)
@@ -263,11 +221,9 @@ fn message(e: &KrishivError) -> String {
 /// module docs); `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SET` for a
 /// request without an operation (Spark throws a classless
 /// `UnsupportedOperationException`: a recorded difference).
-pub(crate) fn config(
+pub(crate) async fn config(
     entry: &SessionEntry,
     request: &pb::ConfigRequest,
-    principal: &Principal,
-    role: ConfigRole,
 ) -> Result<pb::ConfigResponse, KrishivError> {
     let conf = entry.session().conf();
     let mut out = pb::ConfigResponse {
@@ -288,7 +244,7 @@ pub(crate) fn config(
         Some(OpType::Set(set)) => {
             let silent = set.silent.unwrap_or(false);
             for kv in &set.pairs {
-                match set_one(&conf, principal, role, &kv.key, kv.value.as_deref()) {
+                match set_one(entry, &kv.key, kv.value.as_deref()).await {
                     Ok(()) => out.warnings.extend(warning(&kv.key)),
                     Err(e) if silent => {
                         let shown = kv
@@ -370,7 +326,7 @@ pub(crate) fn config(
         }
         Some(OpType::Unset(u)) => {
             for key in &u.keys {
-                check_settable(role, principal, key)?;
+                authorize(entry, key).await?;
                 conf.unset(key)?;
                 out.warnings.extend(warning(key));
             }
@@ -386,14 +342,18 @@ pub(crate) fn config(
     Ok(out)
 }
 
-fn set_one(
-    conf: &RuntimeConf,
-    principal: &Principal,
-    role: ConfigRole,
-    key: &str,
-    value: Option<&str>,
-) -> Result<(), KrishivError> {
-    check_settable(role, principal, key)?;
+/// The checks of a `set` or `unset` of `key`: a `Startup` key is refused for everyone first
+/// (no policy call, nothing counted: not an auth denial, ADR 0046 §3), then the session asks
+/// its policy as SQL `SET` does (`Session::authorize_set_key`: an `Admin` key or a
+/// server-scoped store key needs `Manage` on the cluster; a denial is audited and counted).
+async fn authorize(entry: &SessionEntry, key: &str) -> Result<(), KrishivError> {
+    check_static(key)?;
+    entry.session().authorize_set_key(key).await
+}
+
+async fn set_one(entry: &SessionEntry, key: &str, value: Option<&str>) -> Result<(), KrishivError> {
+    authorize(entry, key).await?;
+    let conf = entry.session().conf();
     // Spark's `require(value != null)` is a classless
     // `IllegalArgumentException`: a recorded difference.
     let Some(value) = value else {

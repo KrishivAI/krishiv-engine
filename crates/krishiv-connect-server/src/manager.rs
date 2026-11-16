@@ -6,11 +6,28 @@
 //! admission.
 //!
 //! Spark keys by `(UserContext.user_id, session_id)`. Krishiv keys by the
-//! authenticated principal instead (ADR 0046 §5, threat model T-A8): the
+//! authenticated caller instead (ADR 0046 §5, threat model T-A8): the
 //! client's `user_id` is recorded, unverified, and never decides anything.
-//! A session id another principal holds is refused as unknown
-//! (`INVALID_HANDLE.SESSION_NOT_FOUND`), the answer a lookup of an unknown
-//! id gets.
+//! The key is the caller's [`SessionOwner`] (method, principal kind, tenant
+//! and name, without groups). A session id another owner holds is refused as
+//! unknown (`INVALID_HANDLE.SESSION_NOT_FOUND`), the answer a lookup of an
+//! unknown id gets, and writes a `krishiv::audit` denial record (ADR 0046
+//! §3b: no existence oracle, but the denial is recorded); so does a release
+//! of such an id (a no-op) and, through
+//! [`SessionManager::audit_foreign_operation`], an operation id another
+//! owner's session holds. These records are not counted in
+//! `krishiv_auth_denied_total`, which counts `KRISHIV_INSUFFICIENT_PERMISSIONS`
+//! refusals only (§8).
+//!
+//! A session's policy is fixed when it is built, from the caller's role. A
+//! caller whose role differs from the role its live session was built with
+//! (a role list changed, an OIDC group claim changed) never gets that
+//! session: it is closed, without a tombstone, and the lookup goes on as if
+//! the id were free, so a create builds a new session under the new role and
+//! a client that saw the old one gets `INVALID_HANDLE.SESSION_CHANGED`; an
+//! RPC that creates nothing gets `INVALID_HANDLE.SESSION_NOT_FOUND`. Two
+//! clients of one owner using one session id under different roles at once
+//! replace each other's session on every request (each keeps its own role).
 //!
 //! No lock is held across an `await`, nor while a session is built or
 //! closed: the map lock guards lookups and inserts only.
@@ -21,20 +38,23 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use krishiv_common::config::{
-    CONNECT_MAX_SESSIONS, CONNECT_MAX_SESSIONS_PER_PRINCIPAL, CONNECT_SESSION_IDLE_TIMEOUT,
-    CONNECT_SESSION_TOMBSTONES, Config, ConfigValue,
+    CONNECT_EXECUTE_ABANDONED_TOMBSTONES, CONNECT_MAX_SESSIONS, CONNECT_MAX_SESSIONS_PER_PRINCIPAL,
+    CONNECT_SESSION_IDLE_TIMEOUT, CONNECT_SESSION_TOMBSTONES, Config, ConfigValue,
 };
 use krishiv_common::error::{
     InvalidHandleSessionChanged, InvalidHandleSessionClosed, InvalidHandleSessionNotFound,
     KrishivError, KrishivSessionLimit,
 };
-use krishiv_common::principal::Principal;
+use krishiv_session::auth::{Authenticated, Role, Surface};
 use krishiv_session::{QueryId, Session};
 
-use crate::operation::Operations;
+use crate::auth::SessionOwner;
+use crate::operation::{Operation, Operations};
+use crate::udf::{SessionPython, UdfHost};
 
-/// Builds the session a principal gets for a new session id.
-pub type SessionFactory = dyn Fn(&Principal) -> Result<Session, KrishivError> + Send + Sync;
+/// Builds the session an authenticated caller gets for a new session id:
+/// its principal, and the policy of its role.
+pub type SessionFactory = dyn Fn(&Authenticated) -> Result<Session, KrishivError> + Send + Sync;
 
 /// The manager's limits and timers.
 #[derive(Debug, Clone)]
@@ -52,6 +72,10 @@ pub struct SessionLimits {
     /// `INVALID_HANDLE.SESSION_CLOSED`
     /// (`spark.connect.session.manager.closedSessionsTombstonesSize`).
     pub tombstones: usize,
+    /// How many abandoned operation ids are remembered to answer
+    /// `INVALID_HANDLE.OPERATION_ABANDONED`
+    /// (`spark.connect.execute.manager.abandonedTombstonesSize`, 10,000).
+    pub abandoned_tombstones: usize,
 }
 
 impl Default for SessionLimits {
@@ -61,6 +85,7 @@ impl Default for SessionLimits {
             max_sessions_per_principal: 100,
             idle_timeout: Some(Duration::from_secs(60 * 60)),
             tombstones: 1000,
+            abandoned_tombstones: 10_000,
         }
     }
 }
@@ -92,6 +117,8 @@ impl SessionLimits {
                 .unwrap_or(d.max_sessions_per_principal),
             idle_timeout,
             tombstones: count(&CONNECT_SESSION_TOMBSTONES).unwrap_or(d.tombstones),
+            abandoned_tombstones: count(&CONNECT_EXECUTE_ABANDONED_TOMBSTONES)
+                .unwrap_or(d.abandoned_tombstones),
         }
     }
 }
@@ -100,8 +127,12 @@ impl SessionLimits {
 #[derive(Debug)]
 pub struct SessionEntry {
     session: Session,
+    caller: Authenticated,
     client_user_id: String,
     operations: Arc<Operations>,
+    /// The session's Python UDFs (P3-T014): their runtime exists from the first passed `Usage` check on
+    /// `System("udf")`; its workers stop when the session is closed.
+    python: SessionPython,
     /// Milliseconds since the manager's epoch at the last lookup.
     last_access: AtomicU64,
 }
@@ -121,6 +152,12 @@ impl SessionEntry {
         self.session.id()
     }
 
+    /// The caller the session was built for (its principal and role).
+    #[must_use]
+    pub fn caller(&self) -> &Authenticated {
+        &self.caller
+    }
+
     /// The `UserContext.user_id` the client sent when it created the
     /// session: recorded, never trusted.
     #[must_use]
@@ -134,11 +171,19 @@ impl SessionEntry {
         &self.operations
     }
 
-    /// Cancels the session's operations, then closes the session (its
-    /// queries cancelled).
-    fn close(&self) {
-        self.operations.cancel_all();
+    /// The session's Python UDFs.
+    pub(crate) fn python(&self) -> &SessionPython {
+        &self.python
+    }
+
+    /// Closes the session's operations, then the session (its queries
+    /// cancelled), then stops its Python UDF workers. Returns the operations
+    /// it closed.
+    fn close(&self) -> Vec<Arc<Operation>> {
+        let ops = self.operations.close_all();
         self.session.close();
+        self.python.release();
+        ops
     }
 }
 
@@ -153,32 +198,50 @@ pub struct ManagerCounts {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct Key {
-    principal: Principal,
+    owner: SessionOwner,
     session_id: String,
+}
+
+/// An operation of a session (Spark's `ExecuteKey`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct OpKey {
+    session: Key,
+    operation: QueryId,
 }
 
 #[derive(Default)]
 struct Inner {
     live: HashMap<Key, Arc<SessionEntry>>,
-    /// The principal holding each live session id.
-    owners: HashMap<String, Principal>,
-    per_principal: HashMap<Principal, usize>,
-    closed: Tombstones,
+    /// The owner holding each live session id.
+    owners: HashMap<String, SessionOwner>,
+    per_principal: HashMap<SessionOwner, usize>,
+    closed: Tombstones<Key>,
+    /// Abandoned operations (Spark's `abandonedTombstones`).
+    abandoned: Tombstones<OpKey>,
     /// Set by [`SessionManager::close_all`]: no session is created after it.
     shut: bool,
 }
 
 /// A bounded set of released keys; the least recently used goes first, as
 /// Spark's Guava cache with a maximum size and no expiry.
-#[derive(Default)]
-struct Tombstones {
-    stamp: HashMap<Key, u64>,
-    order: BTreeMap<u64, Key>,
+struct Tombstones<K> {
+    stamp: HashMap<K, u64>,
+    order: BTreeMap<u64, K>,
     next: u64,
 }
 
-impl Tombstones {
-    fn contains(&mut self, key: &Key) -> bool {
+impl<K> Default for Tombstones<K> {
+    fn default() -> Self {
+        Self {
+            stamp: HashMap::new(),
+            order: BTreeMap::new(),
+            next: 0,
+        }
+    }
+}
+
+impl<K: Clone + Eq + std::hash::Hash> Tombstones<K> {
+    fn contains(&mut self, key: &K) -> bool {
         // A lookup is an access: it refreshes the entry.
         let Some(old) = self.stamp.get(key).copied() else {
             return false;
@@ -190,7 +253,7 @@ impl Tombstones {
         true
     }
 
-    fn insert(&mut self, key: Key, capacity: usize) {
+    fn insert(&mut self, key: K, capacity: usize) {
         if let Some(old) = self.stamp.remove(&key) {
             self.order.remove(&old);
         }
@@ -212,6 +275,8 @@ impl Tombstones {
 /// The Connect sessions of one server.
 pub struct SessionManager {
     factory: Box<SessionFactory>,
+    /// The server's Python UDF workers; `None` refuses Python UDFs.
+    udfs: Option<Arc<dyn UdfHost>>,
     limits: SessionLimits,
     inner: Mutex<Inner>,
     epoch: Instant,
@@ -232,6 +297,7 @@ impl SessionManager {
     pub fn new(factory: Box<SessionFactory>, limits: SessionLimits) -> Self {
         Self {
             factory,
+            udfs: None,
             limits,
             inner: Mutex::new(Inner::default()),
             epoch: Instant::now(),
@@ -240,11 +306,22 @@ impl SessionManager {
 
     /// A manager whose sessions are new sessions of `base` (same runtime,
     /// profile and function registry; Spark's `baseSession.newSession()`).
-    /// Every principal gets `base`'s principal until authentication (T002)
-    /// supplies a factory that sets it.
+    /// Every caller gets `base`'s principal and policy: the server without
+    /// authentication (loopback only); with it, [`Self::new`] takes a factory
+    /// that builds each caller's session (`Session::new_session_as`).
     #[must_use]
     pub fn from_base(base: Session, limits: SessionLimits) -> Self {
         Self::new(Box::new(move |_| Ok(base.new_session())), limits)
+    }
+
+    /// Runs the Python UDFs of every session this manager builds on `host`'s workers (the server's one
+    /// pool, `krishiv_udf_pool::Pool` on Linux): each session gets a runtime of its own, keyed by its
+    /// principal and server-side id, once it passes the `Usage` check on `System("udf")`. Without a host,
+    /// Python UDFs are refused (`KRISHIV_UNSUPPORTED_FEATURE`).
+    #[must_use]
+    pub fn with_udf_host(mut self, host: Arc<dyn UdfHost>) -> Self {
+        self.udfs = Some(host);
+        self
     }
 
     /// The limits in force.
@@ -261,53 +338,97 @@ impl SessionManager {
         u64::try_from(self.epoch.elapsed().as_millis()).unwrap_or(u64::MAX)
     }
 
-    fn key(principal: &Principal, session_id: &str) -> Key {
+    fn key(caller: &Authenticated, session_id: &str) -> Key {
         Key {
-            principal: principal.clone(),
+            owner: SessionOwner::of(caller),
             session_id: session_id.to_owned(),
         }
     }
 
-    /// The session `session_id` of `principal`, created when missing (the
+    /// The live entry for `key` if it was built for `caller`'s role, stamped
+    /// as an access (under the lock, so a sweep cannot release it in
+    /// between). One built for another role leaves the map without a
+    /// tombstone and goes to `retired`, to be closed after the lock is
+    /// released (module docs).
+    fn live_locked(
+        &self,
+        inner: &mut Inner,
+        key: &Key,
+        caller: &Authenticated,
+        retired: &mut Option<Arc<SessionEntry>>,
+    ) -> Option<Arc<SessionEntry>> {
+        let entry = inner.live.get(key).map(Arc::clone)?;
+        if entry.caller.role == caller.role {
+            entry.last_access.store(self.now_ms(), Ordering::Relaxed);
+            return Some(entry);
+        }
+        *retired = Self::remove_locked(inner, key);
+        None
+    }
+
+    /// Closes a session [`Self::live_locked`] retired.
+    fn close_retired(retired: Option<Arc<SessionEntry>>) {
+        if let Some(entry) = retired {
+            tracing::info!(
+                target: "krishiv::connect",
+                session = entry.server_side_id(),
+                "closed a Connect session: its caller's role changed"
+            );
+            entry.close();
+        }
+    }
+
+    /// The session `session_id` of `caller`, created when missing (the
     /// `ExecutePlan`, `AnalyzePlan` and `Config` RPCs).
     ///
     /// # Errors
     /// `INVALID_HANDLE.FORMAT` for an id that is not a UUID (on create),
     /// `INVALID_HANDLE.SESSION_CLOSED` for a released id,
-    /// `INVALID_HANDLE.SESSION_NOT_FOUND` for an id another principal
+    /// `INVALID_HANDLE.SESSION_NOT_FOUND` for an id another owner
     /// holds, `INVALID_HANDLE.SESSION_CHANGED` when `observed` is not the
     /// session's server-side id, `KRISHIV_SESSION_LIMIT` past a session
     /// cap, and whatever building the session fails with.
     pub fn get_or_create(
         &self,
-        principal: &Principal,
+        caller: &Authenticated,
         session_id: &str,
         observed: Option<&str>,
         client_user_id: &str,
     ) -> Result<Arc<SessionEntry>, KrishivError> {
-        let key = Self::key(principal, session_id);
-        if let Some(entry) = self.lookup(&key, observed)? {
+        let key = Self::key(caller, session_id);
+        if let Some(entry) = self.lookup(&key, caller, observed)? {
             return Ok(entry);
         }
         // Validate before building: Spark's `validateSessionCreate`.
         QueryId::parse(session_id)?;
-        if let Some(existing) = self.check_create(&key)? {
+        if let Some(existing) = self.check_create(&key, caller)? {
             Self::check_observed(&key, &existing, observed)?;
             return Ok(existing);
         }
         // Built without the lock; a racing create of the same key wins and
         // this one is closed unused.
-        let session = (self.factory)(principal)?;
+        let session = (self.factory)(caller)?;
+        // `system.sessions` shows the client's `user_id` as reported (ADR 0046 §5: recorded,
+        // unverified, never the identity).
+        session.set_client_info(
+            krishiv_session::Transport::Connect,
+            None,
+            Some(client_user_id),
+            Some(session.id()),
+        );
+        let python = SessionPython::new(self.udfs.as_ref(), &caller.principal.name, &session);
         let entry = Arc::new(SessionEntry {
             session,
+            caller: caller.clone(),
             client_user_id: client_user_id.to_owned(),
             operations: Arc::default(),
+            python,
             last_access: AtomicU64::new(self.now_ms()),
         });
+        let mut retired = None;
         let raced = {
             let mut inner = self.lock();
-            if let Some(existing) = inner.live.get(&key).map(Arc::clone) {
-                existing.last_access.store(self.now_ms(), Ordering::Relaxed);
+            if let Some(existing) = self.live_locked(&mut inner, &key, caller, &mut retired) {
                 Ok(Some(existing))
             } else {
                 match Self::check_create_locked(&mut inner, &key, &self.limits) {
@@ -316,24 +437,22 @@ impl SessionManager {
                         inner.live.insert(key.clone(), Arc::clone(&entry));
                         inner
                             .owners
-                            .insert(key.session_id.clone(), key.principal.clone());
-                        *inner
-                            .per_principal
-                            .entry(key.principal.clone())
-                            .or_insert(0) += 1;
+                            .insert(key.session_id.clone(), key.owner.clone());
+                        *inner.per_principal.entry(key.owner.clone()).or_insert(0) += 1;
                         Ok(None)
                     }
                 }
             }
         };
+        Self::close_retired(retired);
         match raced {
             Err(e) => {
                 // Built, then refused by a check that changed meanwhile.
-                entry.session.close();
-                Err(e)
+                entry.close();
+                Err(audit_foreign(caller, "session", e))
             }
             Ok(Some(existing)) => {
-                entry.session.close();
+                entry.close();
                 Self::check_observed(&key, &existing, observed)?;
                 Ok(existing)
             }
@@ -344,22 +463,23 @@ impl SessionManager {
         }
     }
 
-    /// The live session `session_id` of `principal` (every RPC that does not
+    /// The live session `session_id` of `caller` (every RPC that does not
     /// create one).
     ///
     /// # Errors
     /// `INVALID_HANDLE.SESSION_CLOSED` for a released id,
     /// `INVALID_HANDLE.SESSION_NOT_FOUND` for an unknown one (or one another
-    /// principal holds), `INVALID_HANDLE.SESSION_CHANGED` when `observed`
-    /// differs from its server-side id.
+    /// owner holds, or one built for another role of the caller),
+    /// `INVALID_HANDLE.SESSION_CHANGED` when `observed` differs from its
+    /// server-side id.
     pub fn get(
         &self,
-        principal: &Principal,
+        caller: &Authenticated,
         session_id: &str,
         observed: Option<&str>,
     ) -> Result<Arc<SessionEntry>, KrishivError> {
-        let key = Self::key(principal, session_id);
-        if let Some(entry) = self.lookup(&key, observed)? {
+        let key = Self::key(caller, session_id);
+        if let Some(entry) = self.lookup(&key, caller, observed)? {
             return Ok(entry);
         }
         let closed = self.lock().closed.contains(&key);
@@ -381,39 +501,130 @@ impl SessionManager {
     #[must_use]
     pub fn get_if_present(
         &self,
-        principal: &Principal,
+        caller: &Authenticated,
         session_id: &str,
     ) -> Option<Arc<SessionEntry>> {
-        let key = Self::key(principal, session_id);
-        let inner = self.lock();
-        let entry = inner.live.get(&key).map(Arc::clone)?;
-        // Stamped under the lock, so a sweep cannot release it in between.
-        entry.last_access.store(self.now_ms(), Ordering::Relaxed);
-        Some(entry)
+        let key = Self::key(caller, session_id);
+        let mut retired = None;
+        let entry = self.live_locked(&mut self.lock(), &key, caller, &mut retired);
+        Self::close_retired(retired);
+        entry
     }
 
-    /// Releases session `session_id` of `principal` (`ReleaseSession`): it
+    /// Releases session `session_id` of `caller` (`ReleaseSession`): it
     /// leaves the map, its id is tombstoned unless `allow_reconnect`, its
     /// operations are cancelled and it is closed (its queries cancelled). An unknown id is a no-op. Returns
     /// the released session's server-side id.
     pub fn release(
         &self,
-        principal: &Principal,
+        caller: &Authenticated,
         session_id: &str,
         allow_reconnect: bool,
     ) -> Option<String> {
-        let key = Self::key(principal, session_id);
+        // Keyed by the owner alone: releasing ends the session whatever role
+        // it was built with.
+        let key = Self::key(caller, session_id);
         let entry = {
             let mut inner = self.lock();
-            let entry = Self::remove_locked(&mut inner, &key)?;
+            let Some(entry) = Self::remove_locked(&mut inner, &key) else {
+                let foreign = Self::foreign_locked(&inner, &key);
+                drop(inner);
+                if foreign {
+                    write_foreign_record(caller, "session");
+                }
+                return None;
+            };
             if !allow_reconnect {
-                inner.closed.insert(key, self.limits.tombstones);
+                inner.closed.insert(key.clone(), self.limits.tombstones);
             }
             entry
         };
         let id = entry.server_side_id().to_owned();
-        entry.close();
+        // Spark's `removeAllExecutionsForSession` removes them as abandoned.
+        let ops = entry.close();
+        if !ops.is_empty() {
+            let mut inner = self.lock();
+            for op in ops {
+                inner.abandoned.insert(
+                    OpKey {
+                        session: key.clone(),
+                        operation: op.id().clone(),
+                    },
+                    self.limits.abandoned_tombstones,
+                );
+            }
+        }
         Some(id)
+    }
+
+    /// Whether operation `operation_id` of session `session_id` was
+    /// abandoned (a reattach answers `INVALID_HANDLE.OPERATION_ABANDONED`).
+    #[must_use]
+    pub fn is_abandoned(
+        &self,
+        caller: &Authenticated,
+        session_id: &str,
+        operation_id: &str,
+    ) -> bool {
+        let Ok(operation) = QueryId::parse(operation_id) else {
+            return false;
+        };
+        let key = OpKey {
+            session: Self::key(caller, session_id),
+            operation,
+        };
+        self.lock().abandoned.contains(&key)
+    }
+
+    /// Spark's periodic maintenance of executions
+    /// (`SparkConnectExecutionManager.periodicMaintenance`, v4.3.0 lines
+    /// 342-362): a sender past its deadline is detached first (its client
+    /// may have stopped reading, so its stream is never polled again), then
+    /// every reattachable operation with no stream attached for `timeout`
+    /// is tombstoned as abandoned, removed and closed (its query
+    /// interrupted, its responses and budgets returned). Returns how many.
+    pub fn abandon_detached(&self, timeout: Duration) -> usize {
+        let sessions: Vec<(Key, Arc<SessionEntry>)> = self
+            .lock()
+            .live
+            .iter()
+            .map(|(k, e)| (k.clone(), Arc::clone(e)))
+            .collect();
+        let mut abandoned = 0;
+        for (key, entry) in sessions {
+            for op in entry.operations().all() {
+                op.replay().expire_sender(std::time::Instant::now());
+                let expired = op
+                    .replay()
+                    .detached_since()
+                    .is_some_and(|since| since.elapsed() >= timeout);
+                if !expired {
+                    continue;
+                }
+                // Tombstoned before it leaves the map, so a racing reattach
+                // finds it abandoned rather than unknown (lines 158-166).
+                // A reattach between the check above and the close below
+                // is closed with it (its retry sees OPERATION_ABANDONED):
+                // Spark's `periodicMaintenance` has the same window.
+                self.lock().abandoned.insert(
+                    OpKey {
+                        session: key.clone(),
+                        operation: op.id().clone(),
+                    },
+                    self.limits.abandoned_tombstones,
+                );
+                if entry.operations().remove(&op) {
+                    tracing::info!(
+                        target: "krishiv::connect",
+                        operation = op.id().as_str(),
+                        "abandoned a detached Connect operation"
+                    );
+                    abandoned += 1;
+                }
+                op.close();
+            }
+        }
+        abandoned
     }
 
     /// Releases every session idle past the timeout, running no query and
@@ -455,6 +666,7 @@ impl SessionManager {
                 session = entry.server_side_id(),
                 "released an idle Connect session"
             );
+            // It holds no operation (checked above).
             entry.close();
         }
         expired.len()
@@ -477,14 +689,16 @@ impl SessionManager {
         entries.len()
     }
 
-    /// The running queries plus the live operations of all live sessions:
-    /// zero once nothing is left to finish (shutdown waits for it).
+    /// The running queries plus the active operations (still running, or
+    /// read by an attached client) of all live sessions: zero once nothing
+    /// is left to finish (shutdown waits for it). A detached operation that
+    /// has ended does not count; closing its session releases it.
     #[must_use]
     pub fn busy(&self) -> usize {
         let entries: Vec<Arc<SessionEntry>> = self.lock().live.values().map(Arc::clone).collect();
         entries
             .iter()
-            .map(|e| e.session.running_queries() + e.operations.len())
+            .map(|e| e.session.running_queries() + e.operations.active())
             .sum()
     }
 
@@ -505,39 +719,66 @@ impl SessionManager {
         }
     }
 
-    /// The live entry for `key`, checked against `observed`.
+    /// The live entry for `key` built for `caller`'s role, checked against
+    /// `observed`.
     fn lookup(
         &self,
         key: &Key,
+        caller: &Authenticated,
         observed: Option<&str>,
     ) -> Result<Option<Arc<SessionEntry>>, KrishivError> {
-        let entry = {
-            let inner = self.lock();
-            match inner.live.get(key) {
-                Some(e) => {
-                    // Stamped under the lock, so a sweep cannot release it
-                    // in between.
-                    e.last_access.store(self.now_ms(), Ordering::Relaxed);
-                    Arc::clone(e)
+        let mut retired = None;
+        let found = {
+            let mut inner = self.lock();
+            match self.live_locked(&mut inner, key, caller, &mut retired) {
+                Some(e) => Ok(Some(e)),
+                // Held by another owner: refused as unknown.
+                None if Self::foreign_locked(&inner, key) => {
+                    Err(KrishivError::from(InvalidHandleSessionNotFound {
+                        handle: key.session_id.clone(),
+                    }))
                 }
-                None => {
-                    // Held by another principal: refused as unknown.
-                    if inner
-                        .owners
-                        .get(&key.session_id)
-                        .is_some_and(|p| *p != key.principal)
-                    {
-                        return Err(InvalidHandleSessionNotFound {
-                            handle: key.session_id.clone(),
-                        }
-                        .into());
-                    }
-                    return Ok(None);
-                }
+                None => Ok(None),
             }
+        };
+        Self::close_retired(retired);
+        let Some(entry) = found.map_err(|e| audit_foreign(caller, "session", e))? else {
+            return Ok(None);
         };
         Self::check_observed(key, &entry, observed)?;
         Ok(Some(entry))
+    }
+
+    /// Whether another owner holds `key`'s session id.
+    fn foreign_locked(inner: &Inner, key: &Key) -> bool {
+        inner
+            .owners
+            .get(&key.session_id)
+            .is_some_and(|o| *o != key.owner)
+    }
+
+    /// Writes the denial record of ADR 0046 §3b when `operation_id`, unknown in
+    /// `caller`'s session, is a live operation of another owner's session (the
+    /// caller is answered as for an unknown id either way: `ReattachExecute`,
+    /// `ReleaseExecute`, `Interrupt` by id). It looks through every live
+    /// session (at most `krishiv.connect.maxSessions`), and runs on every
+    /// unknown operation id, which includes a normal client's reattach or
+    /// release after its operation finished.
+    pub fn audit_foreign_operation(&self, caller: &Authenticated, operation_id: &str) {
+        let owner = SessionOwner::of(caller);
+        let others: Vec<Arc<SessionEntry>> = self
+            .lock()
+            .live
+            .iter()
+            .filter(|(k, _)| k.owner != owner)
+            .map(|(_, e)| Arc::clone(e))
+            .collect();
+        if others
+            .iter()
+            .any(|e| e.operations().get(operation_id).is_some())
+        {
+            write_foreign_record(caller, "operation");
+        }
     }
 
     fn check_observed(
@@ -557,13 +798,21 @@ impl SessionManager {
     /// The caps, checked before a session is built. A racing create that
     /// inserted the key since the lookup is returned instead: reusing it
     /// takes no slot, so the caps must not refuse it.
-    fn check_create(&self, key: &Key) -> Result<Option<Arc<SessionEntry>>, KrishivError> {
-        let mut inner = self.lock();
-        if let Some(existing) = inner.live.get(key).map(Arc::clone) {
-            existing.last_access.store(self.now_ms(), Ordering::Relaxed);
-            return Ok(Some(existing));
-        }
-        Self::check_create_locked(&mut inner, key, &self.limits).map(|()| None)
+    fn check_create(
+        &self,
+        key: &Key,
+        caller: &Authenticated,
+    ) -> Result<Option<Arc<SessionEntry>>, KrishivError> {
+        let mut retired = None;
+        let checked = {
+            let mut inner = self.lock();
+            match self.live_locked(&mut inner, key, caller, &mut retired) {
+                Some(existing) => Ok(Some(existing)),
+                None => Self::check_create_locked(&mut inner, key, &self.limits).map(|()| None),
+            }
+        };
+        Self::close_retired(retired);
+        checked.map_err(|e| audit_foreign(caller, "session", e))
     }
 
     fn check_create_locked(
@@ -579,11 +828,7 @@ impl SessionManager {
             }
             .into());
         }
-        if inner
-            .owners
-            .get(&key.session_id)
-            .is_some_and(|p| *p != key.principal)
-        {
+        if Self::foreign_locked(inner, key) {
             return Err(InvalidHandleSessionNotFound {
                 handle: key.session_id.clone(),
             }
@@ -596,11 +841,7 @@ impl SessionManager {
             }
             .into());
         }
-        if inner
-            .per_principal
-            .get(&key.principal)
-            .copied()
-            .unwrap_or(0)
+        if inner.per_principal.get(&key.owner).copied().unwrap_or(0)
             >= limits.max_sessions_per_principal
         {
             return Err(KrishivSessionLimit {
@@ -615,14 +856,42 @@ impl SessionManager {
     fn remove_locked(inner: &mut Inner, key: &Key) -> Option<Arc<SessionEntry>> {
         let entry = inner.live.remove(key)?;
         inner.owners.remove(&key.session_id);
-        if let Some(n) = inner.per_principal.get_mut(&key.principal) {
+        if let Some(n) = inner.per_principal.get_mut(&key.owner) {
             *n = n.saturating_sub(1);
             if *n == 0 {
-                inner.per_principal.remove(&key.principal);
+                inner.per_principal.remove(&key.owner);
             }
         }
         Some(entry)
     }
+}
+
+/// `error` unchanged, after the ADR 0046 §3b denial record when it is the
+/// `INVALID_HANDLE.SESSION_NOT_FOUND` of an id another owner holds (the only
+/// `SESSION_NOT_FOUND` [`SessionManager::lookup`] and the create checks give).
+fn audit_foreign(
+    caller: &Authenticated,
+    handle: &'static str,
+    error: KrishivError,
+) -> KrishivError {
+    if error.error_class().name() == "INVALID_HANDLE.SESSION_NOT_FOUND" {
+        write_foreign_record(caller, handle);
+    }
+    error
+}
+
+/// The `krishiv::audit` record of a refused id another principal holds: who
+/// asked and what kind of id, never the id's owner.
+fn write_foreign_record(caller: &Authenticated, handle: &'static str) {
+    tracing::warn!(
+        target: "krishiv::audit",
+        principal = %caller.principal.name,
+        method = caller.method.as_str(),
+        role = caller.role.map_or("none", Role::as_str),
+        surface = Surface::Connect.as_str(),
+        handle,
+        "refused a Connect id another principal holds, answered as unknown"
+    );
 }
 
 #[cfg(test)]

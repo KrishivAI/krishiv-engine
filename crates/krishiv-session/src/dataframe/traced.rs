@@ -22,8 +22,12 @@ impl DataFrame {
         use tracing::Instrument as _;
         let span = self.span();
         async {
-            // A closed session answers nothing, not even from the result cache.
-            self.session.check_open()?;
+            // A closed session answers nothing, not even from the result cache; the frame's own
+            // observations end with the refusal (no later run can complete them).
+            if let Err(e) = self.session.check_open() {
+                super::observe::fail_observations(&self.observers_through(Vec::new()), &e);
+                return Err(e);
+            }
             // Before the query is analyzed, so an invalidation that runs while it executes keeps
             // its rows out of the result cache.
             let generation = self.session.state.runtime.results.generation();
@@ -54,6 +58,7 @@ impl DataFrame {
                     a.env.statement_class,
                     self.session.operation_id(),
                 );
+                self.session.stamp_row(&id);
                 *a.env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
                 let replayed = crate::result_cache::replay(batches);
                 return Ok(if edge {
@@ -99,7 +104,7 @@ impl DataFrame {
 
     /// The span of one action: the statement's, or the engine's alone.
     fn span(&self) -> tracing::Span {
-        let who = crate::telemetry::Who::of(&self.session.state);
+        let who = crate::telemetry::Who::of(&self.session);
         self.trace
             .as_ref()
             .map_or_else(|| crate::telemetry::plain_span(&who), |t| t.span(&who))

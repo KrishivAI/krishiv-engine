@@ -55,6 +55,11 @@ _TEMPLATES = {
     "NOT_NUMERIC_COLUMNS": (
         "Numeric aggregation function can only be applied on numeric columns, got <invalid_columns>."
     ),
+    "NOT_LIST_OF_COLUMN": "Argument `<arg_name>` should be a list[Column], got <arg_type>.",
+    "REUSE_OBSERVATION": "An Observation can be used with a DataFrame only once.",
+    "NO_OBSERVE_BEFORE_GET": "Should observe by calling `DataFrame.observe` before `get`.",
+    "VALUE_NOT_NON_EMPTY_STR": "Value for `<arg_name>` must be a non-empty string, got '<arg_value>'.",
+    "CANNOT_BE_EMPTY": "At least one <item> must be specified.",
     "VALUE_NOT_POSITIVE": "Value for `<arg_name>` must be positive, got '<arg_value>'.",
     "NEGATIVE_VALUE": "Value for `<arg_name>` must be greater than or equal to 0, got '<arg_value>'.",
     "ARGUMENT_REQUIRED": "Argument `<arg_name>` is required when <condition>.",
@@ -425,6 +430,9 @@ _BY_PREFIX: tuple[tuple[str, type[PySparkException]], ...] = (
     ("PARSE_", ParseException),
     ("UNSUPPORTED_DATATYPE", ParseException),
     ("INVALID_SQL_SYNTAX", ParseException),
+    # Spark's unnamed errors: 0xxx come from `QueryParsingErrors`, 1xxx from `QueryCompilationErrors`.
+    ("_LEGACY_ERROR_TEMP_0", ParseException),
+    ("_LEGACY_ERROR_TEMP_1", AnalysisException),
 )
 # By SQLSTATE: the analyzer's class 42 (42601, syntax, is the parser's), arithmetic
 # (22012 division by zero, 22003 overflow), datetime (22007, 22008), 0A000 unsupported.
