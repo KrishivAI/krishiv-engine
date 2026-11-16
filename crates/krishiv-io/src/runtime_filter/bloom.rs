@@ -27,9 +27,12 @@ const SALT: [u32; 8] = [
 pub const BLOCK_BYTES: usize = 32;
 
 /// A filter up to this size probes one hash at a time: it stays in the
-/// caches, where a prefetch only adds instructions (study 18: filters
-/// under 30 KB probe in 2-5 ns a row).
-pub(crate) const PREFETCH_ABOVE_BYTES: usize = 256 * 1024;
+/// L2 cache, where a prefetch only adds instructions (study 18: filters
+/// under 30 KB probe in 2-5 ns a row). Measured on the `runtime_filter`
+/// bench, 262,144 probes: a 320 KB filter was 9% slower with the prefetch
+/// (1.06 vs 0.97 ms), a 1.2 MB one even (1.08 vs 1.10 ms), a 10 MB one
+/// 39% faster (1.39 vs 2.28 ms).
+pub(crate) const PREFETCH_ABOVE_BYTES: usize = 1 << 20;
 
 /// How many hashes ahead [`RuntimeBloom::check_batch`] prefetches a
 /// block: enough loads in flight to cover a memory miss at a few
