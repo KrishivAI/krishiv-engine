@@ -144,7 +144,7 @@ note = "Not provided."
 group = "Not covered"
 name = "`spark-submit` and cluster managers (`master('yarn')`, `spark.executor.*` keys)"
 status = "not yet"
-note = "Not provided; a script runs in-process or against `krishiv server`."
+note = "Not provided; a script runs in-process."
 
 [[surface]]
 group = "Not covered"

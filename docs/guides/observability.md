@@ -26,7 +26,7 @@ krishiv_session::logging::install_json_logs(20)?;
 Each line has `timestamp`, `level`, `fields`, `target` and the span list, with the query and session ids on the
 `krishiv.query` span. Statement text is sanitized, and the planner's warnings (which can quote literals) are never
 written. To send the logs elsewhere or combine them with other layers, use `logging::json_layer(per_second, writer)`
-on your own `tracing_subscriber::registry()`. It returns an error if a global subscriber is already set.
+on your own `tracing_subscriber::registry()`. `install_json_logs` returns an error if a global subscriber is already set.
 
 ## OTLP traces
 
@@ -35,6 +35,7 @@ collector's base URL and `/v1/traces` is appended.
 
 ```toml
 krishiv-session = { version = "0.2", features = ["telemetry-otlp"] }
+tracing-subscriber = "0.3"
 ```
 
 ```rust,ignore

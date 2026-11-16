@@ -60,7 +60,7 @@ Status per surface. Anything not listed here is unknown and not supported.
 | RDD API, `SparkContext`, `SparkConf` and broadcast variables | not yet | The Python package has no `sparkContext`, `rdd` or `SparkConf`; use DataFrames and SQL. |
 | `pyspark.pandas` (pandas API on Spark) | not yet | Not provided. `toPandas()` and scalar `pandas_udf` work. |
 | `pyspark.ml` and MLlib | not yet | Not provided. |
-| `spark-submit` and cluster managers (`master('yarn')`, `spark.executor.*` keys) | not yet | Not provided; a script runs in-process or against `krishiv server`. |
+| `spark-submit` and cluster managers (`master('yarn')`, `spark.executor.*` keys) | not yet | Not provided; a script runs in-process. |
 | Spark Streaming and Structured Streaming APIs in Python | not yet | Not available in 0.2. |
 | XML file source (`format('xml')`) | not yet | Fails with DATA_SOURCE_NOT_FOUND: xml. |
 | JDBC data source and Hive support | not yet | Not provided. |
