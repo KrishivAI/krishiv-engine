@@ -10,7 +10,7 @@ Two kinds of case:
   * `random`: a dimension, a seed and a scale. The vectors are not stored: element `i` of the vector for
     `(seed, role)` is `float32((unit(splitmix64 stream) - 0.5) * 2 * scale)`, the stream seeded with
     `seed * 2 + role` (role 0 = left, 1 = right), one step per element. The Rust test rebuilds them.
-  * `edge`: the vectors are stored, as float bits (`"0x3f800000"`), a NaN is its bit pattern too. `null` is a NULL element.
+  * `edge`: the vectors are stored as float bits (a NaN is its bit pattern too); `null` is a NULL element.
 
 For each case: `ip` (`vector_inner_product`), `l2`, `cos`, `norm1`, `norm2`, `norminf` (`vector_norm(a, d)`),
 `normalize1`, `normalize2`, `normalizeinf` (a list of bits, or null), each either `{"bits": u32}`,
@@ -111,7 +111,7 @@ def run(spark, sql, a, b):
     spark.createDataFrame([(a, b)], schema).createOrReplaceTempView("t")
     try:
         (value,) = spark.sql(sql).collect()[0]
-    except Exception as e:  # noqa: BLE001 - every Spark failure is recorded as a cell
+    except Exception as e:  # every Spark failure is recorded as a cell
         return error_of(e)
     if value is None:
         return {"null": True}
@@ -144,7 +144,10 @@ def main():
         a = None if left is None else [None if x is None else from_bits(x) for x in left]
         b = None if right is None else [None if x is None else from_bits(x) for x in right]
         cases.append({"kind": "edge", "name": name, "a": left, "b": right, "result": cell(spark, a, b)})
-    print(json.dumps({"spark": spark.version, "cases": cases}, indent=1))
+    # One case per line keeps the fixture reviewable.
+    print(f'{{"spark": {json.dumps(spark.version)},\n"cases": [')
+    print(",\n".join(json.dumps(c, separators=(",", ":")) for c in cases))
+    print("]}")
 
 
 if __name__ == "__main__":
