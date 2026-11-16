@@ -71,9 +71,11 @@ class KrishivConnectEngine(SparkConnectEngine):
             return
         if not self.binary.exists():
             raise FileNotFoundError(f"krishiv binary not found: {self.binary} (build it or set KRISHIV_BENCH_SERVER)")
-        out = self._log.open("w")
-        self._proc = subprocess.Popen(self.command(), stdout=subprocess.PIPE, stderr=out, text=True)
-        assert self._proc.stdout is not None
+        self._log.parent.mkdir(parents=True, exist_ok=True)
+        with self._log.open("w") as out:
+            self._proc = subprocess.Popen(self.command(), stdout=subprocess.PIPE, stderr=out, text=True)
+        if self._proc.stdout is None:
+            raise RuntimeError("krishiv server stdout is not piped")
         deadline = time.monotonic() + self.startup_timeout_s
         while (left := deadline - time.monotonic()) > 0:
             # readline() alone would block past the deadline if the server hangs without printing.
@@ -114,11 +116,17 @@ class KrishivConnectEngine(SparkConnectEngine):
         return tree_measure(tree)
 
     def teardown(self) -> None:
-        super().teardown()
+        self.end_measure()
         proc, self._proc = self._proc, None
-        if proc is not None:
-            proc.terminate()
-            with contextlib.suppress(subprocess.TimeoutExpired):
-                proc.wait(timeout=15)
-            if proc.poll() is None:
-                proc.kill()
+        try:
+            super().teardown()
+        finally:
+            if proc is not None:
+                proc.terminate()
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    proc.wait(timeout=15)
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait()
+                if proc.stdout is not None:
+                    proc.stdout.close()

@@ -42,7 +42,7 @@ def _run_memcap(ap: argparse.ArgumentParser, a, engines: list[str]) -> None:
         ap.error(str(e))
 
 
-RUNNER_HELP = "krishiv-bench-runner binary (wins over $KRISHIV_BENCH_RUNNER)"
+RUNNER_HELP = "krishiv-bench-runner binary (wins over $KRISHIV_BENCH_RUNNER); for krishiv-connect, the `krishiv` binary"
 
 
 def _set_runner(path: str | None) -> None:
