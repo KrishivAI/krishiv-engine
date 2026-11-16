@@ -65,8 +65,10 @@ def load_runs(directory: Path) -> dict[tuple[str, str], list[dict[str, Any]]]:
             if not isinstance(when, str) or not when:
                 continue
             geo = summary.get("geomean")
+            geo_ci = _ci(summary.get("geomean_ci95"))
             if not isinstance(geo, int | float) or isinstance(geo, bool) or not (geo > 0 and math.isfinite(geo)):
                 geo = math.exp(sum(math.log(r) for r in good) / len(good))
+                geo_ci = None  # the recorded interval belongs to a geomean this page does not show
             key = (rec["suite"], fmt_sf(rec["dataset"]["scale_factor"]))
             groups[key].append(
                 {
@@ -75,7 +77,7 @@ def load_runs(directory: Path) -> dict[tuple[str, str], list[dict[str, Any]]]:
                     "ratios": ratios,
                     "geomean": geo,
                     "cis": cis,
-                    "geomean_ci": _ci(summary.get("geomean_ci95")),
+                    "geomean_ci": geo_ci,
                 }
             )
         except (OSError, ValueError, KeyError, TypeError, AttributeError):

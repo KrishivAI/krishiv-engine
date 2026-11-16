@@ -184,3 +184,10 @@ def test_render_has_no_ci_when_the_latest_run_lacks_the_query(tmp_path):
     write(tmp_path, "b_abba_x.json", "2026-10-02T00:00:00", {"q1": 1.0})
     rows = query_rows(trend.render(trend.load_runs(tmp_path)))
     assert rows["q2"] == "| q2 | 1.00 |  | ▅  | - |  |"
+
+
+def test_a_computed_geomean_shows_no_recorded_ci(tmp_path):
+    write(tmp_path, "a_abba_x.json", "2026-10-01T00:00:00", {"q1": 2.0}, summary={"geomean_ci95": [1.5, 2.5]})
+    text = trend.render(trend.load_runs(tmp_path))
+    geomean_row = next(line for line in text.splitlines() if line.startswith("| **geomean**"))
+    assert geomean_row.endswith("| - |  |")
