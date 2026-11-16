@@ -36,6 +36,9 @@ with every commit's deletion vector descriptors and the change-data-feed rows Sp
 ``... /out dvs-no-stats`` writes the same for a table whose files carry no statistics, in
 ``dvs-no-stats/NOSTATS.json``.
 
+``... /out options`` writes ``OPTIONS.json`` (``write_options``, PR-37e): delta-spark's handling
+of each Delta write option, and Spark 4.2.0's parse of the ``WITH (...)`` statement options.
+
 ``... /out readback /in`` has Spark read the Krishiv-written tables under ``/in``
 (``tests/fixtures/delta-4.4.1/krishiv-written/``) and records ``READBACK.json`` there.
 
@@ -1980,8 +1983,123 @@ def readback(spark: SparkSession, out: str, src: str) -> None:
         f.write("\n")
 
 
+# Delta write options (PR-37e): (case, options, save mode, partitioned). Each runs on a fresh
+# two-row table written with the defaults, appending two rows with the options.
+OPTION_CASES: list[tuple[str, dict[str, str], str, bool]] = [
+    ("merge_schema_bad", {"mergeSchema": "maybe"}, "append", False),
+    ("merge_schema_true_same", {"mergeSchema": "true"}, "append", False),
+    ("overwrite_schema_bad", {"overwriteSchema": "maybe"}, "overwrite", False),
+    ("data_change_bad", {"dataChange": "maybe"}, "append", False),
+    ("data_change_false_append", {"dataChange": "false"}, "append", False),
+    ("optimize_write_bad", {"optimizeWrite": "maybe"}, "append", False),
+    ("optimize_write_true", {"optimizeWrite": "true"}, "append", False),
+    ("txn_version_only", {"txnVersion": "1"}, "append", False),
+    ("txn_app_only", {"txnAppId": "a"}, "append", False),
+    ("txn_version_negative", {"txnVersion": "-1", "txnAppId": "a"}, "append", False),
+    ("txn_both", {"txnVersion": "1", "txnAppId": "a"}, "append", False),
+    ("pom_bad", {"partitionOverwriteMode": "bogus"}, "overwrite", True),
+    ("pom_bad_append", {"partitionOverwriteMode": "bogus"}, "append", True),
+    ("pom_bad_unpartitioned", {"partitionOverwriteMode": "bogus"}, "overwrite", False),
+    ("pom_bad_append_unpartitioned", {"partitionOverwriteMode": "bogus"}, "append", False),
+    ("unknown_option", {"someUnknownOption": "x"}, "append", False),
+    ("user_metadata", {"userMetadata": "hello"}, "append", False),
+    ("user_metadata_overwrite", {"userMetadata": "hello"}, "overwrite", False),
+    ("replace_using", {"replaceUsing": "id"}, "overwrite", False),
+    ("write_partition_columns", {"writePartitionColumns": "true"}, "append", True),
+    ("max_records_bad", {"maxRecordsPerFile": "abc"}, "append", False),
+]
+
+# Statement-level `WITH (...)` options: INSERT's (Spark 4.2.0 parses them), DELETE's and
+# UPDATE's (Spark 4.3's syntax). `<pt>` is a table partitioned by `p`, `<t>` one that is not.
+OPTION_STATEMENTS: list[tuple[str, str]] = [
+    ("insert_with_user_metadata", "INSERT INTO <t> WITH ('userMetadata' = 'm1') VALUES (5, 1)"),
+    ("insert_with_unknown", "INSERT INTO <t> WITH ('someUnknownOption' = 'x') VALUES (5, 1)"),
+    ("insert_with_merge_schema_bad", "INSERT INTO <t> WITH ('mergeSchema' = 'maybe') VALUES (5, 1)"),
+    ("insert_with_txn_version_only", "INSERT INTO <t> WITH ('txnVersion' = '1') VALUES (5, 1)"),
+    (
+        "insert_overwrite_with_pom_bad",
+        "INSERT OVERWRITE <t> WITH ('partitionOverwriteMode' = 'bogus') VALUES (5, 1)",
+    ),
+    (
+        "insert_overwrite_partitioned_with_pom_bad",
+        "INSERT OVERWRITE <pt> WITH ('partitionOverwriteMode' = 'bogus') VALUES (5, 1)",
+    ),
+    (
+        "insert_partitioned_with_pom_bad",
+        "INSERT INTO <pt> WITH ('partitionOverwriteMode' = 'bogus') VALUES (5, 1)",
+    ),
+    (
+        "insert_overwrite_partitioned_with_pom_dynamic",
+        "INSERT OVERWRITE <pt> WITH ('partitionOverwriteMode' = 'dynamic') VALUES (5, 1)",
+    ),
+    ("delete_with_options", "DELETE FROM <t> WITH ('userMetadata' = 'x') WHERE id = 0"),
+    ("update_with_options", "UPDATE <t> WITH ('userMetadata' = 'x') SET id = 3 WHERE id = 0"),
+]
+
+
+def write_options(spark: SparkSession, out: str) -> None:
+    """``OPTIONS.json``: what delta-spark does with each write option of ``OPTION_CASES`` (the
+    error, or the commit's operation, parameters and ``userMetadata``), and Spark 4.2.0's parse
+    of the statement-level ``WITH (...)`` options."""
+    record: dict = {
+        "format_version": FORMAT_VERSION,
+        "spark": spark.version,
+        "delta_spark": "4.4.1",
+        "generator": "gen_delta_fixtures.py options",
+        "cases": {},
+        "statements": {},
+    }
+    base = "/tmp/krishiv-options"
+
+    def fresh(name: str, partitioned: bool) -> str:
+        path = os.path.join(base, name)
+        shutil.rmtree(path, ignore_errors=True)
+        w = spark.range(2).selectExpr("id", "CAST(id % 2 AS INT) AS p").write.format("delta")
+        (w.partitionBy("p") if partitioned else w).save(path)
+        return path
+
+    def last_commit_info(path: str) -> dict:
+        info = commits(path)[-1]["commitInfo"]
+        return {
+            "operation": info.get("operation"),
+            "operationParameters": info.get("operationParameters"),
+            "userMetadata": info.get("userMetadata"),
+        }
+
+    for name, options, mode, partitioned in OPTION_CASES:
+        path = fresh(name, partitioned)
+        w = spark.range(10, 12).selectExpr("id", "CAST(id % 2 AS INT) AS p").write.format("delta").mode(mode)
+        for k, v in options.items():
+            w = w.option(k, v)
+        case: dict = {"options": options, "mode": mode, "partitioned": partitioned}
+        try:
+            w.save(path)
+            case["error"] = None
+            case["commit"] = last_commit_info(path)
+        except Exception as e:  # the oracle records every failure
+            case["error"] = oracle_error(e, path)
+        case["versions"] = len(commits(path))
+        record["cases"][name] = case
+    for name, sql in OPTION_STATEMENTS:
+        # `<pt>`: a table partitioned by `p`.
+        path = fresh(name, "<pt>" in sql)
+        try:
+            spark.sql(sql.replace("<t>", f"delta.`{path}`").replace("<pt>", f"delta.`{path}`"))
+            record["statements"][name] = {"sql": sql, "error": None, "commit": last_commit_info(path)}
+        except Exception as e:  # the oracle records every failure
+            record["statements"][name] = {"sql": sql, "error": oracle_error(e, path)}
+        record["statements"][name]["versions"] = len(commits(path))
+    with open(os.path.join(out, "OPTIONS.json"), "w") as f:
+        json.dump(record, f, indent=1, sort_keys=True)
+        f.write("\n")
+
+
 def main(out: str, which: str = "checkpoint", src: str = "") -> None:
     spark = session()
+    if which == "options":
+        write_options(spark, out)
+        spark.stop()
+        return
     if which == "readback":
         readback(spark, out, src)
         spark.stop()

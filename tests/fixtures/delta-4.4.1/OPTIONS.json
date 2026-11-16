@@ -1,0 +1,506 @@
+{
+ "cases": {
+  "data_change_bad": {
+   "error": {
+    "condition": "DELTA_ILLEGAL_OPTION",
+    "message": "[DELTA_ILLEGAL_OPTION] Invalid value 'maybe' for option 'dataChange', must be 'true' or 'false'",
+    "parameters": {
+     "explain": "must be 'true' or 'false'",
+     "input": "maybe",
+     "name": "dataChange"
+    },
+    "sqlstate": "42616"
+   },
+   "mode": "append",
+   "options": {
+    "dataChange": "maybe"
+   },
+   "partitioned": false,
+   "versions": 1
+  },
+  "data_change_false_append": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "userMetadata": null
+   },
+   "error": null,
+   "mode": "append",
+   "options": {
+    "dataChange": "false"
+   },
+   "partitioned": false,
+   "versions": 2
+  },
+  "max_records_bad": {
+   "error": {
+    "condition": null,
+    "message": "For input string: \"abc\"",
+    "parameters": {},
+    "sqlstate": null
+   },
+   "mode": "append",
+   "options": {
+    "maxRecordsPerFile": "abc"
+   },
+   "partitioned": false,
+   "versions": 1
+  },
+  "merge_schema_bad": {
+   "error": {
+    "condition": "DELTA_ILLEGAL_OPTION",
+    "message": "[DELTA_ILLEGAL_OPTION] Invalid value 'maybe' for option 'mergeSchema', must be 'true' or 'false'",
+    "parameters": {
+     "explain": "must be 'true' or 'false'",
+     "input": "maybe",
+     "name": "mergeSchema"
+    },
+    "sqlstate": "42616"
+   },
+   "mode": "append",
+   "options": {
+    "mergeSchema": "maybe"
+   },
+   "partitioned": false,
+   "versions": 1
+  },
+  "merge_schema_true_same": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "canMergeSchema": true,
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "userMetadata": null
+   },
+   "error": null,
+   "mode": "append",
+   "options": {
+    "mergeSchema": "true"
+   },
+   "partitioned": false,
+   "versions": 2
+  },
+  "optimize_write_bad": {
+   "error": {
+    "condition": "DELTA_ILLEGAL_OPTION",
+    "message": "[DELTA_ILLEGAL_OPTION] Invalid value 'maybe' for option 'optimizeWrite', must be 'true' or 'false'",
+    "parameters": {
+     "explain": "must be 'true' or 'false'",
+     "input": "maybe",
+     "name": "optimizeWrite"
+    },
+    "sqlstate": "42616"
+   },
+   "mode": "append",
+   "options": {
+    "optimizeWrite": "maybe"
+   },
+   "partitioned": false,
+   "versions": 1
+  },
+  "optimize_write_true": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "userMetadata": null
+   },
+   "error": null,
+   "mode": "append",
+   "options": {
+    "optimizeWrite": "true"
+   },
+   "partitioned": false,
+   "versions": 2
+  },
+  "overwrite_schema_bad": {
+   "error": {
+    "condition": "DELTA_ILLEGAL_OPTION",
+    "message": "[DELTA_ILLEGAL_OPTION] Invalid value 'maybe' for option 'overwriteSchema', must be 'true' or 'false'",
+    "parameters": {
+     "explain": "must be 'true' or 'false'",
+     "input": "maybe",
+     "name": "overwriteSchema"
+    },
+    "sqlstate": "42616"
+   },
+   "mode": "overwrite",
+   "options": {
+    "overwriteSchema": "maybe"
+   },
+   "partitioned": false,
+   "versions": 1
+  },
+  "pom_bad": {
+   "error": {
+    "condition": "DELTA_ILLEGAL_OPTION",
+    "message": "[DELTA_ILLEGAL_OPTION] Invalid value 'bogus' for option 'partitionOverwriteMode', must be 'STATIC' or 'DYNAMIC'",
+    "parameters": {
+     "explain": "must be 'STATIC' or 'DYNAMIC'",
+     "input": "bogus",
+     "name": "partitionOverwriteMode"
+    },
+    "sqlstate": "42616"
+   },
+   "mode": "overwrite",
+   "options": {
+    "partitionOverwriteMode": "bogus"
+   },
+   "partitioned": true,
+   "versions": 1
+  },
+  "pom_bad_append": {
+   "error": {
+    "condition": "DELTA_ILLEGAL_OPTION",
+    "message": "[DELTA_ILLEGAL_OPTION] Invalid value 'bogus' for option 'partitionOverwriteMode', must be 'STATIC' or 'DYNAMIC'",
+    "parameters": {
+     "explain": "must be 'STATIC' or 'DYNAMIC'",
+     "input": "bogus",
+     "name": "partitionOverwriteMode"
+    },
+    "sqlstate": "42616"
+   },
+   "mode": "append",
+   "options": {
+    "partitionOverwriteMode": "bogus"
+   },
+   "partitioned": true,
+   "versions": 1
+  },
+  "pom_bad_append_unpartitioned": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "userMetadata": null
+   },
+   "error": null,
+   "mode": "append",
+   "options": {
+    "partitionOverwriteMode": "bogus"
+   },
+   "partitioned": false,
+   "versions": 2
+  },
+  "pom_bad_unpartitioned": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Overwrite",
+     "partitionBy": "[]"
+    },
+    "userMetadata": null
+   },
+   "error": null,
+   "mode": "overwrite",
+   "options": {
+    "partitionOverwriteMode": "bogus"
+   },
+   "partitioned": false,
+   "versions": 2
+  },
+  "replace_using": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Overwrite",
+     "partitionBy": "[]",
+     "replaceUsingCols": "(id)"
+    },
+    "userMetadata": null
+   },
+   "error": null,
+   "mode": "overwrite",
+   "options": {
+    "replaceUsing": "id"
+   },
+   "partitioned": false,
+   "versions": 2
+  },
+  "txn_app_only": {
+   "error": {
+    "condition": "DELTA_INVALID_IDEMPOTENT_WRITES_OPTIONS",
+    "message": "[DELTA_INVALID_IDEMPOTENT_WRITES_OPTIONS] Invalid options for idempotent Dataframe writes: Both txnVersion and txnAppId must be specified for idempotent data frame writes",
+    "parameters": {
+     "reason": "Both txnVersion and txnAppId must be specified for idempotent data frame writes"
+    },
+    "sqlstate": "42616"
+   },
+   "mode": "append",
+   "options": {
+    "txnAppId": "a"
+   },
+   "partitioned": false,
+   "versions": 1
+  },
+  "txn_both": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "userMetadata": null
+   },
+   "error": null,
+   "mode": "append",
+   "options": {
+    "txnAppId": "a",
+    "txnVersion": "1"
+   },
+   "partitioned": false,
+   "versions": 2
+  },
+  "txn_version_negative": {
+   "error": {
+    "condition": "DELTA_ILLEGAL_OPTION",
+    "message": "[DELTA_ILLEGAL_OPTION] Invalid value '-1' for option 'txnVersion', must be a non-negative integer",
+    "parameters": {
+     "explain": "must be a non-negative integer",
+     "input": "-1",
+     "name": "txnVersion"
+    },
+    "sqlstate": "42616"
+   },
+   "mode": "append",
+   "options": {
+    "txnAppId": "a",
+    "txnVersion": "-1"
+   },
+   "partitioned": false,
+   "versions": 1
+  },
+  "txn_version_only": {
+   "error": {
+    "condition": "DELTA_INVALID_IDEMPOTENT_WRITES_OPTIONS",
+    "message": "[DELTA_INVALID_IDEMPOTENT_WRITES_OPTIONS] Invalid options for idempotent Dataframe writes: Both txnVersion and txnAppId must be specified for idempotent data frame writes",
+    "parameters": {
+     "reason": "Both txnVersion and txnAppId must be specified for idempotent data frame writes"
+    },
+    "sqlstate": "42616"
+   },
+   "mode": "append",
+   "options": {
+    "txnVersion": "1"
+   },
+   "partitioned": false,
+   "versions": 1
+  },
+  "unknown_option": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "userMetadata": null
+   },
+   "error": null,
+   "mode": "append",
+   "options": {
+    "someUnknownOption": "x"
+   },
+   "partitioned": false,
+   "versions": 2
+  },
+  "user_metadata": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "userMetadata": "hello"
+   },
+   "error": null,
+   "mode": "append",
+   "options": {
+    "userMetadata": "hello"
+   },
+   "partitioned": false,
+   "versions": 2
+  },
+  "user_metadata_overwrite": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Overwrite",
+     "partitionBy": "[]"
+    },
+    "userMetadata": "hello"
+   },
+   "error": null,
+   "mode": "overwrite",
+   "options": {
+    "userMetadata": "hello"
+   },
+   "partitioned": false,
+   "versions": 2
+  },
+  "write_partition_columns": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "userMetadata": null
+   },
+   "error": null,
+   "mode": "append",
+   "options": {
+    "writePartitionColumns": "true"
+   },
+   "partitioned": true,
+   "versions": 2
+  }
+ },
+ "delta_spark": "4.4.1",
+ "format_version": 1,
+ "generator": "gen_delta_fixtures.py options",
+ "spark": "4.2.0",
+ "statements": {
+  "delete_with_options": {
+   "error": {
+    "condition": "PARSE_SYNTAX_ERROR",
+    "message": "",
+    "parameters": {
+     "error": "'WITH'",
+     "hint": ""
+    },
+    "sqlstate": "42601"
+   },
+   "sql": "DELETE FROM <t> WITH ('userMetadata' = 'x') WHERE id = 0",
+   "versions": 1
+  },
+  "insert_overwrite_partitioned_with_pom_bad": {
+   "error": {
+    "condition": "DELTA_ILLEGAL_OPTION",
+    "message": "[DELTA_ILLEGAL_OPTION] Invalid value 'bogus' for option 'partitionOverwriteMode', must be 'STATIC' or 'DYNAMIC'",
+    "parameters": {
+     "explain": "must be 'STATIC' or 'DYNAMIC'",
+     "input": "bogus",
+     "name": "partitionOverwriteMode"
+    },
+    "sqlstate": "42616"
+   },
+   "sql": "INSERT OVERWRITE <pt> WITH ('partitionOverwriteMode' = 'bogus') VALUES (5, 1)",
+   "versions": 1
+  },
+  "insert_overwrite_partitioned_with_pom_dynamic": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "isDynamicPartitionOverwrite": true,
+     "mode": "Overwrite",
+     "partitionBy": "[]"
+    },
+    "userMetadata": null
+   },
+   "error": null,
+   "sql": "INSERT OVERWRITE <pt> WITH ('partitionOverwriteMode' = 'dynamic') VALUES (5, 1)",
+   "versions": 2
+  },
+  "insert_overwrite_with_pom_bad": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Overwrite",
+     "partitionBy": "[]"
+    },
+    "userMetadata": null
+   },
+   "error": null,
+   "sql": "INSERT OVERWRITE <t> WITH ('partitionOverwriteMode' = 'bogus') VALUES (5, 1)",
+   "versions": 2
+  },
+  "insert_partitioned_with_pom_bad": {
+   "error": {
+    "condition": "DELTA_ILLEGAL_OPTION",
+    "message": "[DELTA_ILLEGAL_OPTION] Invalid value 'bogus' for option 'partitionOverwriteMode', must be 'STATIC' or 'DYNAMIC'",
+    "parameters": {
+     "explain": "must be 'STATIC' or 'DYNAMIC'",
+     "input": "bogus",
+     "name": "partitionOverwriteMode"
+    },
+    "sqlstate": "42616"
+   },
+   "sql": "INSERT INTO <pt> WITH ('partitionOverwriteMode' = 'bogus') VALUES (5, 1)",
+   "versions": 1
+  },
+  "insert_with_merge_schema_bad": {
+   "error": {
+    "condition": "DELTA_ILLEGAL_OPTION",
+    "message": "[DELTA_ILLEGAL_OPTION] Invalid value 'maybe' for option 'mergeSchema', must be 'true' or 'false'",
+    "parameters": {
+     "explain": "must be 'true' or 'false'",
+     "input": "maybe",
+     "name": "mergeSchema"
+    },
+    "sqlstate": "42616"
+   },
+   "sql": "INSERT INTO <t> WITH ('mergeSchema' = 'maybe') VALUES (5, 1)",
+   "versions": 1
+  },
+  "insert_with_txn_version_only": {
+   "error": {
+    "condition": "DELTA_INVALID_IDEMPOTENT_WRITES_OPTIONS",
+    "message": "[DELTA_INVALID_IDEMPOTENT_WRITES_OPTIONS] Invalid options for idempotent Dataframe writes: Both txnVersion and txnAppId must be specified for idempotent data frame writes",
+    "parameters": {
+     "reason": "Both txnVersion and txnAppId must be specified for idempotent data frame writes"
+    },
+    "sqlstate": "42616"
+   },
+   "sql": "INSERT INTO <t> WITH ('txnVersion' = '1') VALUES (5, 1)",
+   "versions": 1
+  },
+  "insert_with_unknown": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "userMetadata": null
+   },
+   "error": null,
+   "sql": "INSERT INTO <t> WITH ('someUnknownOption' = 'x') VALUES (5, 1)",
+   "versions": 2
+  },
+  "insert_with_user_metadata": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "userMetadata": "m1"
+   },
+   "error": null,
+   "sql": "INSERT INTO <t> WITH ('userMetadata' = 'm1') VALUES (5, 1)",
+   "versions": 2
+  },
+  "update_with_options": {
+   "error": {
+    "condition": "PARSE_SYNTAX_ERROR",
+    "message": "",
+    "parameters": {
+     "error": "'WITH'",
+     "hint": ": missing 'SET'"
+    },
+    "sqlstate": "42601"
+   },
+   "sql": "UPDATE <t> WITH ('userMetadata' = 'x') SET id = 3 WHERE id = 0",
+   "versions": 1
+  }
+ }
+}

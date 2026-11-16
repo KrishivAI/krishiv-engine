@@ -104,3 +104,11 @@ action count, the rows read back and `DESCRIBE HISTORY`'s newest row. Consumer: 
 `KRISHIV_DELTA_READBACK_OUT`) and the `READBACK.json` Spark recorded reading them (`gen_delta_fixtures.py /out
 readback /in`). delta-spark 4.4.1 raises an unresolved name in a `MERGE` as `INTERNAL_ERROR` ("Cannot find main
 error class 'DELTA_MERGE_UNRESOLVED_EXPRESSION'"): recorded as it ran.
+
+Write-option oracle (PR-37e; `gen_delta_fixtures.py /out options`, run as the session probes are): `OPTIONS.json`
+records, for each Delta write option of `OPTION_CASES` (a DataFrame append or overwrite of two rows into a fresh two-row
+table, partitioned by `p` or not), delta-spark's error (`DELTA_ILLEGAL_OPTION`, `DELTA_INVALID_IDEMPOTENT_WRITES_OPTIONS`,
+or a classless `NumberFormatException` for `maxRecordsPerFile`) or the commit's operation, parameters and
+`userMetadata`; and for `INSERT .. WITH (..)` (which Spark 4.2.0 parses and delta-spark reads as write options) and the
+4.3 `DELETE`/`UPDATE .. WITH (..)` (a `PARSE_SYNTAX_ERROR` in Spark 4.2.0) the same. Unknown options are accepted;
+`partitionOverwriteMode` is read only for a partitioned table. Consumer: krishiv-session `tests/delta_gaps.rs`.
