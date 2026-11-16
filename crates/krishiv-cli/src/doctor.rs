@@ -15,6 +15,7 @@
 
 use std::net::{IpAddr, SocketAddr, TcpListener};
 use std::path::Path;
+use std::sync::Arc;
 
 use krishiv_common::config::{
     CHECKPOINT_DIR, CONNECT_PORT, Config, ConfigValue, IO_CACHE_PATH, IO_LOCAL_ALLOWED_ROOTS,
@@ -22,6 +23,7 @@ use krishiv_common::config::{
 };
 use krishiv_connect_server::host;
 use krishiv_session::auth::{ServerAuth, ServerTls};
+use krishiv_session::{AllowAll, PathPrefixPolicy};
 
 use crate::server::{ServerArgs, Settings, check_host, load_settings, resolve_host};
 
@@ -205,7 +207,16 @@ fn authentication(host: IpAddr, settings: &Settings) -> Check {
             )
         };
     }
-    match ServerAuth::new(&settings.auth) {
+    // `ServerAuth::new` starts the OIDC key fetcher, which calls the issuer at once: the doctor
+    // does not use the network, so it builds the authenticator without the OIDC part.
+    let mut offline = settings.auth.clone();
+    let oidc = offline.oidc.is_on();
+    offline.oidc = Default::default();
+    match ServerAuth::new(&offline) {
+        Ok(_) if oidc => Check::ok(
+            "authentication",
+            "configured, secrets resolve; the OIDC issuer and its keys are not contacted",
+        ),
         Ok(_) => Check::ok("authentication", "configured, secrets resolve"),
         Err(e) => Check::fail(
             "authentication",
@@ -245,13 +256,20 @@ fn ports(host: IpAddr, args: &ServerArgs, config: &Config) -> Check {
             "set krishiv.connect.port to 0-65535",
         );
     };
+    if connect != 0 && connect == args.port() {
+        return Check::fail(
+            "ports",
+            format!("the Spark Connect and admin ports are both {connect}"),
+            "give --connect-port and --port different values",
+        );
+    }
     let mut busy = Vec::new();
     for (what, port) in [("Spark Connect", connect), ("admin", args.port())] {
         if port == 0 {
             continue;
         }
         if let Err(e) = TcpListener::bind(SocketAddr::new(host, port)) {
-            busy.push(format!("{what} port {port}: {e}"));
+            busy.push(format!("{what} port {port} cannot be bound: {e}"));
         }
     }
     if busy.is_empty() {
@@ -317,8 +335,20 @@ fn directories(config: &Config) -> Check {
 /// A directory that exists and takes a file, or one whose parent does (it is created at start).
 fn writable_dir(dir: &Path) -> Result<(), String> {
     if dir.is_dir() {
-        let probe = dir.join(format!(".krishiv-doctor-{}", std::process::id()));
-        std::fs::write(&probe, b"").map_err(|e| format!("cannot write: {e}"))?;
+        // `create_new` refuses an existing name, a planted symbolic link included; the name is not
+        // predictable.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.subsec_nanos());
+        let probe = dir.join(format!(
+            ".krishiv-doctor-{}-{nanos:08x}",
+            std::process::id()
+        ));
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&probe)
+            .map_err(|e| format!("cannot write: {e}"))?;
         let _ = std::fs::remove_file(&probe);
         return Ok(());
     }
@@ -347,26 +377,11 @@ fn paths(settings: &Settings) -> Check {
     };
     let roots = list(&IO_LOCAL_ALLOWED_ROOTS);
     let prefixes = list(&IO_OBJECT_STORE_ALLOWED_PREFIXES);
-    let mut problems = Vec::new();
-    for root in &roots {
-        let p = Path::new(root);
-        if !p.is_absolute() {
-            problems.push(format!("{root} is not an absolute path"));
-        } else if !p.is_dir() {
-            problems.push(format!("{root} is not an existing directory"));
-        }
-    }
-    for prefix in &prefixes {
-        if !has_store_scheme(prefix) {
-            problems.push(format!(
-                "{prefix} is not an object-store prefix (s3://, s3a://, gs://, abfss://, http(s)://)"
-            ));
-        }
-    }
-    if !problems.is_empty() {
+    // The server's own parser: what it refuses at startup, the doctor refuses.
+    if let Err(e) = PathPrefixPolicy::from_config(&settings.config, Arc::new(AllowAll)) {
         return Check::fail(
             "paths",
-            problems.join("; "),
+            e.to_string(),
             "fix krishiv.io.local.allowedRoots / krishiv.io.objectStore.allowedPrefixes",
         );
     }
@@ -391,14 +406,6 @@ fn paths(settings: &Settings) -> Check {
             prefixes.len()
         ),
     )
-}
-
-fn has_store_scheme(prefix: &str) -> bool {
-    [
-        "s3://", "s3a://", "gs://", "abfss://", "http://", "https://",
-    ]
-    .iter()
-    .any(|s| prefix.starts_with(s))
 }
 
 /// The report as plain text: one line per check, the fix under a failure or warning.
@@ -551,14 +558,16 @@ mod tests {
 
     #[test]
     fn allow_lists_are_checked() {
-        let checks = diagnose(&args(&[
+        // The server's own parser reports the first list that is wrong.
+        for (key, value) in [
             ("krishiv.io.local.allowedRoots", "relative/dir"),
             ("krishiv.io.objectStore.allowedPrefixes", "ftp://x"),
-        ]));
-        let c = find(&checks, "paths");
-        assert_eq!(c.status, Status::Fail);
-        assert!(c.detail.contains("not an absolute path"));
-        assert!(c.detail.contains("not an object-store prefix"));
+        ] {
+            let checks = diagnose(&args(&[(key, value)]));
+            let c = find(&checks, "paths");
+            assert_eq!(c.status, Status::Fail, "{key}: {}", render_text(&checks));
+            assert!(c.detail.contains(key), "{key}: {}", c.detail);
+        }
     }
 
     #[test]
