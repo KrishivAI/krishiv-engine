@@ -1811,3 +1811,26 @@ fn correlated_count_over_a_collated_equality_compares_keys() {
     .unwrap();
     assert_eq!(got, ["a:2", "b:0"]);
 }
+
+/// `decode` and `if` give their result the collation of their result positions only: a collated
+/// selector or condition never reaches it (review of #493, N6).
+#[test]
+fn decode_and_if_results_ignore_the_selector_collation() {
+    let s = Session::new().unwrap();
+    block_on(
+        block_on(s.sql(
+            "create temporary view tn6 as select * from (values \
+             (cast('1' as string collate utf8_lcase), 1)) v(a, n)",
+        ))
+        .unwrap()
+        .collect(),
+    )
+    .unwrap();
+    for q in [
+        "select collation(upper(decode(n, 1, 'a', 'b'))) from tn6",
+        "select collation(upper(decode(int(a), 1, 'a', 'b'))) from tn6",
+        "select collation(upper(if(a = '1', 'x', 'y'))) from tn6",
+    ] {
+        assert_eq!(value_of(&s, q), "SYSTEM.BUILTIN.UTF8_BINARY", "{q}");
+    }
+}
