@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import atexit
+import contextlib
 from typing import TYPE_CHECKING
 
 from krishiv import _native
@@ -22,7 +23,9 @@ _RUNNING: set[LocalConnect] = set()
 
 def _stop_all() -> None:
     for server in list(_RUNNING):
-        server.stop()
+        # One failing stop must not leave the other servers running.
+        with contextlib.suppress(Exception):
+            server.stop()
 
 
 atexit.register(_stop_all)
@@ -33,7 +36,8 @@ class LocalConnect:
 
     Connect any Spark Connect client to :attr:`url` (``sc://localhost:<port>/;token=<token>``); the
     token is generated for this server and every request must carry it. The server is stopped by
-    :meth:`stop`, by leaving a ``with`` block, or at interpreter exit.
+    :meth:`stop`, by leaving a ``with`` block, or at interpreter exit. Dropping the handle does
+    not stop it: the server stays up until one of those.
     """
 
     def __init__(self, native: _native.LocalConnectServer) -> None:

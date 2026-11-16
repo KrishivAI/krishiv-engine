@@ -164,8 +164,11 @@ fn bind_loopback() -> Result<(StdListener, Option<StdListener>), KrishivError> {
         let v6 = match StdListener::bind((Ipv6Addr::LOCALHOST, port)) {
             Ok(l) => Some(l),
             Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => continue,
-            // No IPv6 loopback: `localhost` cannot reach `::1` either.
-            Err(_) => None,
+            // No IPv6 loopback on this host: `localhost` cannot reach `::1` either.
+            Err(e) if ipv6_unavailable(&e) => None,
+            // Anything else (permissions, exhausted descriptors) must not leave `[::1]` open to
+            // another process: fail closed.
+            Err(e) => return Err(fail("cannot bind the IPv6 loopback", e)),
         };
         v4.set_nonblocking(true)
             .map_err(|e| fail("cannot configure the listener", e))?;
@@ -178,6 +181,15 @@ fn bind_loopback() -> Result<(StdListener, Option<StdListener>), KrishivError> {
     Err(internal(
         "no loopback port is free on both 127.0.0.1 and ::1".to_owned(),
     ))
+}
+
+/// Whether `e` says this host has no IPv6 loopback (as opposed to a real bind failure).
+fn ipv6_unavailable(e: &std::io::Error) -> bool {
+    use std::io::ErrorKind;
+    matches!(
+        e.kind(),
+        ErrorKind::AddrNotAvailable | ErrorKind::Unsupported
+    ) || matches!(e.raw_os_error(), Some(97 /* EAFNOSUPPORT on Linux */))
 }
 
 /// A fresh token: 32 random bytes as 64 hex digits.

@@ -146,6 +146,7 @@ fn has_ipv6_loopback() -> bool {
 #[test]
 fn the_ipv6_loopback_of_the_port_is_ours_too() {
     if !has_ipv6_loopback() {
+        eprintln!("SKIPPED: this host has no IPv6 loopback");
         return;
     }
     let mut server = LocalServer::start(Session::new().expect("session")).expect("start");
@@ -163,6 +164,7 @@ fn the_ipv6_loopback_of_the_port_is_ours_too() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_token_works_over_the_ipv6_loopback() {
     if !has_ipv6_loopback() {
+        eprintln!("SKIPPED: this host has no IPv6 loopback");
         return;
     }
     let mut server = LocalServer::start(Session::new().expect("session")).expect("start");
