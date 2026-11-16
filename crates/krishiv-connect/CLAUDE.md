@@ -12,6 +12,7 @@ the logical-plan IR of `krishiv-plan`. The server (P3-T011, P3-T012) extends thi
   generated layout implements): size, count, depth (`krishiv.connect.maxPlanDepth`) and field-version checks
 - `src/proto/mod.rs` versioned generated protos; `src/proto/v4_3/spark.connect.pb.rs` generated messages (4.2 is kept only for the golden descriptor) (do not edit)
 - `src/translate/mod.rs` `translate_*` entry points, `command_not_supported` (commands are 56K00 until T012); `src/translate/relation.rs` and `expression.rs` (IR building)
+- `src/translate/relation_udf.rs` (P3-T014 PR-26d part 2) `MapPartitions` (28), `GroupMap` (31), `CoGroupMap` (32) with a Python UDF: the eval types Spark's planner accepts, the stateful and Scala fields refused, the UDF's reference from a `RelationUdfHost` (`translate_relation_with_relation_udfs`; refused without one)
 - `src/translate/literal.rs` literals; `src/translate/names.rs` names and plan-id origins
 - `src/translate/errors.rs` `KRISHIV_UNSUPPORTED_FEATURE` and `CONNECT_INVALID_PLAN.*` errors
 - `src/arrow.rs` result columns Spark sends in another Arrow shape than the engine holds (geometry/geography)

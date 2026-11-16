@@ -78,7 +78,10 @@ mod expression;
 mod literal;
 mod names;
 mod relation;
+mod relation_udf;
 mod types;
+
+pub use relation_udf::{RelationUdf, RelationUdfHost};
 
 use krishiv_common::error::{FailedToParseTooComplex, KrishivError};
 use krishiv_plan::{Expr, MAX_DEPTH, Plan};
@@ -185,6 +188,23 @@ pub fn translate_relation(relation: &pb::Relation, conf: &TranslateConf) -> Resu
     Plan::try_new(root)
 }
 
+/// [`translate_relation`] with the Python UDFs of the plan's relations (`MapPartitions`, `GroupMap`,
+/// `CoGroupMap`) sent to `udfs` (a server's session), which names the reference each one runs.
+///
+/// # Errors
+/// As [`translate_relation`], plus what `udfs` refuses and the refusals of the relation arms
+/// (`relation_udf`).
+pub fn translate_relation_with_relation_udfs(
+    relation: &pb::Relation,
+    conf: &TranslateConf,
+    udfs: &mut dyn RelationUdfHost,
+) -> Result<Plan> {
+    let mut t = Translator::new(conf);
+    t.relation_udfs = Some(udfs);
+    let root = t.relation(relation)?;
+    Plan::try_new(root)
+}
+
 /// Translates an expression.
 ///
 /// # Errors
@@ -199,6 +219,8 @@ pub fn translate_expression(
 /// The state of one translation.
 pub(crate) struct Translator<'c> {
     conf: &'c TranslateConf,
+    /// Where the Python UDFs of relations go; `None` refuses them.
+    relation_udfs: Option<&'c mut dyn RelationUdfHost>,
     /// Relations and expressions being translated above the current one.
     depth: usize,
     /// Relations and expressions translated so far.
@@ -218,6 +240,7 @@ impl<'c> Translator<'c> {
     const fn new(conf: &'c TranslateConf) -> Self {
         Self {
             conf,
+            relation_udfs: None,
             depth: 0,
             nodes: 0,
             hops: 0,
