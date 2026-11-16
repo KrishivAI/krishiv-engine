@@ -31,6 +31,9 @@ use crate::session::{QueryEnv, RecordBatchStream, Session, WriteTarget, read_fil
 pub(crate) mod checkpoint;
 mod fill_stream;
 mod geo_gate;
+mod observe;
+pub use observe::ObservedSink;
+pub(crate) use observe::{Observers, PendingObservations, deliver};
 mod metadata;
 mod traced;
 
@@ -1076,6 +1079,13 @@ impl DataFrame {
         if let Some(t) = text {
             env.set_text(t);
         }
+        let through_views = std::mem::take(
+            &mut *env
+                .view_keeps
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+        env.observers = Arc::new(self.observers_through(through_views));
         let analysis = Arc::new(Analysis {
             env: Arc::new(env),
             analyzed: Arc::new(analyzed),
@@ -1819,10 +1829,16 @@ impl DataFrame {
             analysis.analyzed.plan.root(),
             analysis.env.analysis.conf.case_sensitive,
         )?;
-        self.session
-            .state
-            .catalog
-            .put_view(name, expanded, columns, pins, new_pins);
+        self.session.state.catalog.put_view(
+            name,
+            expanded,
+            columns,
+            pins,
+            new_pins,
+            // A query that reads the view runs its observed nodes: it completes the same
+            // observations. Published with the entry, under the same lock.
+            crate::catalog::ViewKeeps(self.observation_handles_with(&analysis.env.observers)),
+        );
         self.session.state.cache.forget_table(name);
         Ok(())
     }

@@ -32,8 +32,8 @@ pub use lakehouse::{
     CATALOG_MAX_COLUMNS, CATALOG_MAX_METADATA_BYTES, CATALOG_REQUEST_TIMEOUT, DELTA_LOG_THREADS,
 };
 pub use optimizer::{
-    EXPERIMENTAL_GROUP_KEY_CODE_FORCE, GROUP_KEY_CODE, LATE_PAYLOAD_JOIN, SHARE_REPEATED_SUBTREES,
-    SUBQUERY_AS_WINDOW,
+    EXPERIMENTAL_GROUP_KEY_CODE_FORCE, GROUP_KEY_CODE, LATE_PAYLOAD_JOIN, SEMI_ANTI_JOIN_ORDER,
+    SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
 };
 pub use result_cache::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
 pub use server::{
@@ -47,7 +47,7 @@ pub use server::{
     CONNECT_MAX_OPERATIONS_PER_SESSION, CONNECT_MAX_RESPONSE_BYTES, CONNECT_MAX_SESSIONS,
     CONNECT_MAX_SESSIONS_PER_PRINCIPAL, CONNECT_PORT, CONNECT_SESSION_IDLE_TIMEOUT,
     CONNECT_SESSION_MAINTENANCE_INTERVAL, CONNECT_SESSION_TOMBSTONES, SERVER_ALLOW_CORE_DUMPS,
-    SERVER_METRICS_PUBLIC, SERVER_SHUTDOWN_TIMEOUT,
+    SERVER_ALLOWED_HOSTS, SERVER_METRICS_PUBLIC, SERVER_SHUTDOWN_TIMEOUT,
 };
 
 const MIB: u64 = 1024 * 1024;
@@ -109,6 +109,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &GROUP_KEY_CODE,
     &EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
     &SHARE_REPEATED_SUBTREES,
+    &SEMI_ANTI_JOIN_ORDER,
     &SPILL_DIR,
     &WORKLOAD_RESOURCE_GROUPS_FILE,
     &SPILL_MAX_BYTES,
@@ -117,6 +118,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &SPILL_DROP_BEHIND_BYTES,
     &EXPERIMENTAL_IVM,
     &EXPERIMENTAL_UNALIGNED_CHECKPOINTS,
+    &RUNTIME_FILTER_BLOOM_AT_SCALE,
     &IO_STRICT_OPTIONS,
     &FILES_MAX_PARTITION_BYTES,
     &FILES_OPEN_COST_IN_BYTES,
@@ -231,6 +233,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &SERVER_SHUTDOWN_TIMEOUT,
     &SERVER_ALLOW_CORE_DUMPS,
     &SERVER_METRICS_PUBLIC,
+    &SERVER_ALLOWED_HOSTS,
 ];
 
 /// ANSI SQL mode (Spark 4 default: on).
@@ -970,6 +973,21 @@ pub static EXPERIMENTAL_UNALIGNED_CHECKPOINTS: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// `krishiv.runtimeFilter.bloom.atScale`: larger runtime Bloom filters for scans far larger than the build.
+pub static RUNTIME_FILTER_BLOOM_AT_SCALE: ConfigEntry = ConfigEntry {
+    key: "krishiv.runtimeFilter.bloom.atScale",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "A join whose probe-side scan is estimated at least 20 times its build plans its runtime Bloom filter with \
+          caps of 20,000,000 keys and 32 MiB instead of `krishiv.runtimeFilter.bloom.maxItems` and \
+          `krishiv.runtimeFilter.bloom.maxBytes`, when those are lower. A cap set explicitly still binds unless \
+          this key is also set explicitly to true. Results do not change.",
+    scope: Scope::Session,
+    settable_by: SettableBy::Admin,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
 /// `krishiv.io.strictOptions`.
 pub static IO_STRICT_OPTIONS: ConfigEntry = ConfigEntry {
     key: "krishiv.io.strictOptions",
@@ -1465,7 +1483,8 @@ pub static RUNTIME_FILTER_BLOOM_MAX_ITEMS: ConfigEntry = ConfigEntry {
     value_type: ValueType::Int,
     default: Some(ConfigValue::Int(4_000_000)),
     doc: "Most build keys a runtime Bloom filter is built for: a build estimated larger plans \
-          none, and one that turns out larger publishes none.",
+          none, and one that turns out larger publishes none. Left at its default, it is raised to \
+          20,000,000 for a scan estimated at least 20 times its build (`krishiv.runtimeFilter.bloom.atScale`).",
     scope: Scope::Session,
     settable_by: SettableBy::Admin,
     version_added: "0.1.0",
@@ -1478,7 +1497,8 @@ pub static RUNTIME_FILTER_BLOOM_MAX_BYTES: ConfigEntry = ConfigEntry {
     value_type: ValueType::Size,
     default: Some(ConfigValue::Size(8 * MIB)),
     doc: "Largest runtime Bloom filter. A filter capped below its 1% false-positive size is still \
-          built unless its expected false-positive rate exceeds 5%.",
+          built unless its expected false-positive rate exceeds 5%. Left at its default, it is raised to 32 MiB \
+          for a scan estimated at least 20 times its build (`krishiv.runtimeFilter.bloom.atScale`).",
     scope: Scope::Session,
     settable_by: SettableBy::Admin,
     version_added: "0.1.0",

@@ -1395,6 +1395,8 @@ impl Session {
             row: Arc::default(),
             identifier_spans: Arc::default(),
             identifier_written: Arc::default(),
+            observers: Arc::default(),
+            view_keeps: Arc::default(),
             cache_generation,
             cache_cap,
             sql_functions,
@@ -1449,6 +1451,9 @@ impl Session {
             }),
         )?;
         let mut inlined = std::mem::take(&mut expansion.views);
+        *env.view_keeps
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = std::mem::take(&mut expansion.keeps);
         // A permanent view is inlined before binding, so the analyzer never asks the
         // policy about it: ask here, before any read and before the text of a stored view
         // can fail, so a principal who may not read it learns nothing from it.
@@ -1768,7 +1773,28 @@ impl Session {
     /// As [`Self::run_on_query`], also returning the id of the `system.queries` row this execution
     /// began, so the caller keeps it for itself: the statement's slot in `env` is shared by every
     /// execution of the same analyzed frame.
+    ///
+    /// Every run completes the frame's observations: a delivered stream as it ends, a run that
+    /// fails before it has one (closed session, refused admission, failed submit) with its
+    /// error, and a caller that drops this future during the setup with `OPERATION_CANCELED`.
     async fn run_on_query_logged(
+        &self,
+        physical: &PhysicalPlan,
+        worker: WorkerContext,
+        env: &QueryEnv,
+        detailed: bool,
+        admitted: Option<Admitted>,
+    ) -> Result<(RecordBatchStream, Arc<QueryContext>, String), KrishivError> {
+        let pending = crate::dataframe::PendingObservations::new(&env.observers);
+        let started = self
+            .start_query(physical, worker, env, detailed, admitted)
+            .await;
+        pending.settle(started.as_ref().err());
+        started
+    }
+
+    /// [`Self::run_on_query_logged`] up to the delivered stream.
+    async fn start_query(
         &self,
         physical: &PhysicalPlan,
         worker: WorkerContext,
@@ -1880,18 +1906,18 @@ impl Session {
                 if let Some(fold) = pending.0.take() {
                     fold.finish(Some(&error));
                 }
+                // No stream completes the observations: the failure does, in the caller.
                 Err(error)
             }
             Ok(stream) => {
-                let stream = MetricStream {
-                    inner: stream,
-                    fold: pending.0.take(),
-                };
-                Ok((
+                let (inner, fold) = (stream, pending.0.take());
+                let stream = MetricStream { inner, fold };
+                let stream = crate::dataframe::deliver(
                     Box::pin(stream.map(|b| b.and_then(into_record_batch))),
-                    query,
-                    row_id,
-                ))
+                    Arc::clone(&query),
+                    &env.observers,
+                );
+                Ok((stream, query, row_id))
             }
         }
     }
