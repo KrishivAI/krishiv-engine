@@ -194,22 +194,16 @@ async fn parallel_merge_tasks_count_their_partitions() {
             HashAggregate::with_row_mode(p, rowtable::Mode::Grow)
         })
         .unwrap();
+        let hooks = Arc::clone(op.hooks());
         let plan = crate::aggregate::distinct::DistinctCountNode::new(scan(&s, b.clone()), op);
         let o = Opts {
             slots: 4,
             ..Opts::default()
         };
-        let before =
-            crate::aggregate::distinct::HOOK_PARTS.load(std::sync::atomic::Ordering::Relaxed);
         let got = rows(&exec_with(plan, o, true).await.unwrap().0);
         assert_eq!(got, want, "plain {plain}");
-        let after =
-            crate::aggregate::distinct::HOOK_PARTS.load(std::sync::atomic::Ordering::Relaxed);
-        assert!(
-            after > before + 1,
-            "the merge tasks counted {} partitions",
-            after - before
-        );
+        let parts = hooks.parts.load(std::sync::atomic::Ordering::Relaxed);
+        assert!(parts > 1, "the merge tasks counted {parts} partitions");
     }
 }
 
@@ -294,15 +288,13 @@ fn covers_only_a_grouped_single_distinct_count() {
 }
 
 /// The counter's reservations refused part-way through the merge tasks
-/// (after `n` grants, while counting a partition or while merging one into
-/// the shared shards, or its chunk scratch): the partition refused is left
-/// to `finalize`, whole, and the rows equal the old plan's; the pool is
-/// empty after each run.
+/// (after `n` grants, while counting a partition, for its chunk scratch or
+/// for its queued rows): the partition refused is left to the output,
+/// whole, and the rows equal the old plan's; the pool is empty after each
+/// run.
 #[tokio::test]
 async fn refused_count_memory_mid_merge_counts_the_same() {
-    use crate::aggregate::distinct::{
-        DistinctCountNode, PENDING_MERGES, REFUSE_AFTER, SCRATCH_REFUSALS,
-    };
+    use crate::aggregate::distinct::DistinctCountNode;
     use std::sync::atomic::Ordering::Relaxed;
     let (s, b) = gen_input(30_000, 3_000, 256);
     let (sp, flags) = shape(&s, true, 1);
@@ -312,22 +304,22 @@ async fn refused_count_memory_mid_merge_counts_the_same() {
         slots: 4,
         ..Opts::default()
     };
+    let (mut scratch, mut queue) = (0, 0);
     for grants in [0, 1, 2, 3, 5, 8, 13, 21, 34, 55] {
-        REFUSE_AFTER.store(grants, Relaxed);
         let op = DistinctCount::with_pairs(&sp, &flags, |p| {
             HashAggregate::with_row_mode(p, rowtable::Mode::Grow)
         })
         .unwrap();
+        let hooks = Arc::clone(op.hooks());
+        hooks.refuse_after.store(grants, Relaxed);
         let plan = DistinctCountNode::new(scan(&s, b.clone()), op);
         let got = rows(&exec_with(plan, o, true).await.unwrap().0);
-        REFUSE_AFTER.store(usize::MAX, Relaxed);
         assert_eq!(got, want, "refused after {grants} grants");
+        scratch += hooks.scratch_refusals.load(Relaxed);
+        queue += hooks.queue_refusals.load(Relaxed);
     }
-    assert!(PENDING_MERGES.load(Relaxed) > 0, "no merge was refused");
-    assert!(
-        SCRATCH_REFUSALS.load(Relaxed) > 0,
-        "no chunk scratch was refused"
-    );
+    assert!(scratch > 0, "no chunk scratch was refused");
+    assert!(queue > 0, "no queued rows were refused");
 }
 
 /// The rows of `batches` in the order they came.
@@ -377,41 +369,6 @@ async fn deterministic_order_keeps_the_two_aggregations_order() {
                     "plain {plain}, {slots} slots, run {run}"
                 );
             }
-        }
-    }
-}
-
-/// Once `finalize` has counted the pairs that reached the output, their
-/// memory is gone: without plain aggregates the query holds only the
-/// counter's kept bytes (one table without duplicates on one slot, the
-/// merge tasks' leftovers on four), within the reservation quanta. Each
-/// output piece leaves the result when its last chunk is claimed
-/// (`sink.rs` `InMemory`), so nothing of the pairs stays reserved.
-#[tokio::test]
-async fn finalize_releases_the_counted_pairs() {
-    use crate::aggregate::distinct::{DistinctCountNode, FINAL_HELD, FINAL_POOL};
-    use std::sync::atomic::Ordering::Relaxed;
-    let (s, b) = gen_input(40_000, 4_000, 512);
-    let (sp, flags) = shape(&s, false, 0);
-    for slots in [1, 4] {
-        let o = Opts {
-            slots,
-            ..Opts::default()
-        };
-        for layout in [false, true] {
-            let plan = DistinctCountNode::new(
-                scan(&s, b.clone()),
-                DistinctCount::new(&sp, &flags).unwrap(),
-            );
-            exec_with(plan, o, layout).await.unwrap();
-            let (pool, held) = (FINAL_POOL.load(Relaxed), FINAL_HELD.load(Relaxed));
-            assert!(held > 0, "{slots} slots, layout {layout}");
-            // Within the consumers' 16 KiB reservation quanta; the pairs
-            // (about 40,000 of them) would be hundreds of KiB.
-            assert!(
-                pool.saturating_sub(held) < 64 << 10,
-                "{slots} slots, layout {layout}: pool {pool}, counter {held}"
-            );
         }
     }
 }
@@ -521,6 +478,7 @@ async fn a_flushed_final_phase_counts_the_same() {
         })
         .unwrap();
         let pairs = Arc::clone(op.pairs());
+        let hooks = Arc::clone(op.hooks());
         let plan = crate::aggregate::distinct::DistinctCountNode::new(scan(&s, b.clone()), op);
         // One slot: the merge runs its tasks one at a time, so the second
         // finds the first finished (its driver table, past the fixed
@@ -529,43 +487,44 @@ async fn a_flushed_final_phase_counts_the_same() {
             slots: 1,
             ..Opts::default()
         };
-        let hooked =
-            crate::aggregate::distinct::HOOK_PARTS.load(std::sync::atomic::Ordering::Relaxed);
         let got = rows(&exec_with(plan, o, true).await.unwrap().0);
         assert_eq!(got, want, "plain {plain}");
         assert_eq!(sink_metric(&pairs, "row_final_flushes"), 1, "plain {plain}");
         assert_eq!(sink_metric(&pairs, "row_final_spills"), 1, "plain {plain}");
         assert!(
-            crate::aggregate::distinct::HOOK_PARTS.load(std::sync::atomic::Ordering::Relaxed)
-                > hooked,
+            hooks.parts.load(std::sync::atomic::Ordering::Relaxed) > 0,
             "plain {plain}: the first task counted nothing"
         );
     }
 }
 
-/// Cancelled while a merge task counts its partitions, or while `finalize`
-/// counts what reached the output: the query fails with the cancellation
-/// and the pool is empty (`exec_with`).
+/// Cancelled while a merge task counts its partitions, or while the count
+/// rows' source reads what reached the output: the query fails with the
+/// cancellation and the pool is empty (`exec_with`).
 #[tokio::test]
 async fn cancelled_while_counting_leaves_the_pool_empty() {
-    use crate::aggregate::distinct::{CANCEL_IN_COUNT, CANCEL_IN_FINALIZE, DistinctCountNode};
+    use crate::aggregate::distinct::DistinctCountNode;
     use std::sync::atomic::Ordering::Relaxed;
     let (s, b) = gen_input(40_000, 4_000, 256);
     for plain in [false, true] {
         let (sp, flags) = shape(&s, plain, 0);
-        for (hook, slots) in [(&CANCEL_IN_FINALIZE, 1), (&CANCEL_IN_COUNT, 4)] {
-            hook.store(true, Relaxed);
+        for (read, slots) in [(true, 1), (false, 4)] {
             let op = DistinctCount::with_pairs(&sp, &flags, |p| {
                 HashAggregate::with_row_mode(p, rowtable::Mode::Grow)
             })
             .unwrap();
+            let hooks = op.hooks();
+            if read {
+                hooks.cancel_in_read.store(true, Relaxed);
+            } else {
+                hooks.cancel_in_count.store(true, Relaxed);
+            }
             let plan = DistinctCountNode::new(scan(&s, b.clone()), op);
             let o = Opts {
                 slots,
                 ..Opts::default()
             };
             let out = exec_with(plan, o, true).await;
-            hook.store(false, Relaxed);
             let e = out
                 .err()
                 .unwrap_or_else(|| panic!("plain {plain}, {slots} slots: not cancelled"));
@@ -574,5 +533,41 @@ async fn cancelled_while_counting_leaves_the_pool_empty() {
                 "plain {plain}, {slots} slots: {e}"
             );
         }
+    }
+}
+
+/// Many distinct keys under a pool far smaller than the keys' table
+/// (design addendum 2026-11-16): the two aggregations in series spill and
+/// succeed, and so does counting at the merge, with the same rows: every
+/// key lives in the spilling key table, nothing else holds one.
+#[tokio::test]
+async fn many_keys_in_a_small_pool_spill_and_count_the_same() {
+    let (s, b) = gen_input(120_000, 120_000, 4_096);
+    for plain in [false, true] {
+        let (sp, flags) = shape(&s, plain, 0);
+        let o = Opts {
+            limit: 3 << 19,
+            ..Opts::default()
+        };
+        let (_m, scope) = spill_dir();
+        let mut spilled = sp.clone();
+        spilled.spill = Some(scope);
+        let two = exec_with(
+            distinct_plan_with(scan(&s, b.clone()), spilled.clone(), &flags, false).unwrap(),
+            o,
+            true,
+        )
+        .await
+        .unwrap();
+        let op = DistinctCount::new(&spilled, &flags).unwrap();
+        let keys = Arc::clone(op.key_table());
+        let plan = crate::aggregate::distinct::DistinctCountNode::new(scan(&s, b.clone()), op)
+            as Arc<dyn ExecNode>;
+        let at = exec_with(plan, o, true).await.unwrap();
+        assert_eq!(rows(&at.0), rows(&two.0), "plain {plain}");
+        assert!(
+            keys.metrics().spill_runs > 0,
+            "plain {plain}: the key table never spilled"
+        );
     }
 }

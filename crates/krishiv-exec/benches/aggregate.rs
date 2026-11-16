@@ -822,18 +822,43 @@ fn bench(c: &mut Criterion) {
     });
     let q10 = distinct_q10_input();
     let q14 = distinct_q14_input();
-    for (name, batches, key, plain) in [
+    for (i, (name, batches, key, plain)) in [
         ("distinct_q10_shape", &q10, DataType::Int64, true),
         ("distinct_q14_shape", &q14, DataType::Utf8View, false),
-    ] {
-        for (suffix, pairs) in [
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mode = Mode { rows: true, seeded };
+        // Both plans give the same number of rows before either is timed.
+        let full = run(
+            &runner,
+            &caller,
+            distinct_shape_plan(batches, key.clone(), plain, Pairs::Full),
+            1 << 30,
+            mode,
+        );
+        let new = run(
+            &runner,
+            &caller,
+            distinct_shape_plan(batches, key.clone(), plain, Pairs::AtMerge),
+            1 << 30,
+            mode,
+        );
+        assert_eq!(full, new, "{name}: the two plans' row counts differ");
+        let mut variants = [
             ("", Pairs::Full),
             ("_new", Pairs::AtMerge),
             ("_pairs", Pairs::States),
             ("_pairs_bare", Pairs::Bare),
-        ] {
+        ];
+        // Alternate which of the two plans runs first, so a drift of the
+        // machine over the run does not favour one of them.
+        if i % 2 == 1 {
+            variants.swap(0, 1);
+        }
+        for (suffix, pairs) in variants {
             g.bench_function(format!("{name}{suffix}"), |b| {
-                let mode = Mode { rows: true, seeded };
                 b.iter(|| {
                     let p = distinct_shape_plan(batches, key.clone(), plain, pairs);
                     black_box(run(&runner, &caller, p, 1 << 30, mode))

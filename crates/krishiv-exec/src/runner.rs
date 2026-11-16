@@ -481,7 +481,14 @@ fn start_group(
         return Err(internal("a pipeline group without pipelines".to_owned()));
     };
     let (sink_id, sink) = &first.sink;
-    let sink_global = sink.global_state(&ctx((*sink_id, sink.name())))?;
+    // A sink sees the breaker its pipeline's source reads, as the source
+    // does: a sink that continues that breaker's state adopts it
+    // (`aggregate/distinct.rs` `KeyFeed`); every other sink ignores it.
+    let mut sink_ctx = ctx((*sink_id, sink.name()));
+    if let Some(input) = &first.input {
+        sink_ctx = sink_ctx.with_dependency(read(input)?);
+    }
+    let sink_global = sink.global_state(&sink_ctx)?;
     let sink = Arc::clone(sink);
     let mut started = Vec::with_capacity(members.len());
     // Scheduler-assigned globally unique partition ids: the drivers of

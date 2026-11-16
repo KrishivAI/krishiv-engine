@@ -36,7 +36,7 @@ use krishiv_memory::{
 };
 use krishiv_types::batch::{Batch, Weights};
 
-use super::distinct::PairCounter;
+use super::distinct::PairCounts;
 use super::rowtable::{Mode, PARTS, RowTable, WIDEN_GROUPS};
 use super::table::{AggCore, AggTable, Table};
 use super::{AggregateSpec, is_order_sensitive, unsupported};
@@ -1112,7 +1112,7 @@ struct Global {
     /// The pairs table of a `count(DISTINCT)` counted at the merge
     /// ([`super::distinct`]): each in-memory final-phase task counts its
     /// finished table here instead of publishing it.
-    counter: OnceLock<Arc<PairCounter>>,
+    counter: OnceLock<Arc<PairCounts>>,
 }
 
 fn downcast<T: 'static>(state: &mut LocalState) -> Result<&mut T> {

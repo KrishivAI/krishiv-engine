@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering as AtomicOrdering;
 
 use super::{GlobalState, HashAggregate, Local, LocalState, global, held, internal, lock};
-use crate::aggregate::distinct::PairCounter;
+use crate::aggregate::distinct::PairCounts;
 use crate::error::Result;
 
 impl HashAggregate {
@@ -36,7 +36,7 @@ impl HashAggregate {
 /// `INTERNAL_ERROR` for another operator's state, or a second counter.
 pub(in crate::aggregate) fn set_pair_counter(
     g: &GlobalState,
-    counter: Arc<PairCounter>,
+    counter: Arc<PairCounts>,
 ) -> Result<()> {
     global(g)?
         .counter
