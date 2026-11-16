@@ -11,6 +11,15 @@
 //! settings: `KRISHIV_QERROR_DIR` (`dbgen`/`dsdgen` files), `KRISHIV_QERROR_SCALE`
 //! (TPC-H orders) and `KRISHIV_QERROR_SUITES`.
 //!
+//! **This is not the design's SF1 run.** The default (the CI run) is TPC-H at
+//! 150 orders and synthetic TPC-DS, where only 17 of the 84 queries the
+//! interpreter runs return rows. SF1 is a `KRISHIV_QERROR_DIR` run, and the
+//! interpreter's nested loops make it slow: at 1,500 orders TPC-H alone took
+//! more than 15 minutes (2026-11-16). The interpreter computes every number,
+//! doubles included, as exact fixed point, so the float rounding a reordered
+//! aggregation can change is not exercised here (the goldens' tolerance never
+//! applies).
+//!
 //! Rules that run only under a session configuration (`subquery_as_window`,
 //! `share_repeated_subtrees`) are not switched here: `optimize_with_options`
 //! gives none, so they are off in every arm.
@@ -114,7 +123,13 @@ fn run_suite(
             }
             out.changed[i] += 1;
             match rows(db, &other) {
-                None => out.not_run[i] += 1,
+                // A changed plan the interpreter cannot run would shrink the coverage unseen.
+                None => {
+                    out.not_run[i] += 1;
+                    out.differences.push(format!(
+                        "{suite} {id} with {rule} off: the interpreter cannot run the plan"
+                    ));
+                }
                 Some(got) if got != want => out.differences.push(format!(
                     "{suite} {id} with {rule} off: {} rows, all on: {} rows",
                     got.len(),
@@ -170,11 +185,14 @@ fn each_rule_off_returns_the_rows_of_all_rules_on() {
             );
             changed[i] += out.with_rows[i];
         }
-        // On the generated data (scale 150) TPC-H runs 22 with 20 returning rows, TPC-DS
+        // On the default data (scale 150) TPC-H runs 22 with 20 returning rows, TPC-DS
         // 84 with 17: most TPC-DS filters name literal values the synthetic data lack.
+        // Other data hold no such floors.
+        let default_data = std::env::var_os("KRISHIV_QERROR_DIR").is_none()
+            && std::env::var_os("KRISHIV_QERROR_SCALE").is_none();
         let (runs, with_rows) = if name == "tpch" { (22, 18) } else { (80, 15) };
         assert!(
-            out.compared >= runs && out.nonempty >= with_rows,
+            !default_data || (out.compared >= runs && out.nonempty >= with_rows),
             "{name}: {} queries ran in the interpreter, {} with rows",
             out.compared,
             out.nonempty
