@@ -99,6 +99,15 @@ fn catalog_declarations_are_checked_at_startup() {
     // default no declaration names stops startup.
     let err = refused(&["SPARK.SQL.DEFAULTCATALOG=nosuch"]);
     assert!(err.contains("names no declared catalog"), "{err}");
+    // One field under two spellings is refused, never merged (review 58a2 N4).
+    let err = refused(&[
+        "krishiv.catalog.lake.type=iceberg-rest",
+        "krishiv.catalog.lake.uri=https://catalog.example.com/api",
+        "krishiv.catalog.lake.tenants=acme",
+        "KRISHIV.CATALOG.lake.tenants=globex",
+    ]);
+    assert!(err.contains("set twice"), "{err}");
+    assert!(!err.contains("globex"), "{err}");
     // A literal secret is refused without being echoed.
     let err = refused(&[
         "krishiv.catalog.lake.type=iceberg-rest",

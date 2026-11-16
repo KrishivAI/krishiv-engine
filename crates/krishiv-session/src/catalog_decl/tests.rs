@@ -634,3 +634,72 @@ fn catalog_key_prefixes_match_in_any_case() {
         assert!(parse(&[(key, "x")], DeclMode::Server).is_err(), "{key}");
     }
 }
+
+#[test]
+fn one_field_under_two_spellings_fails_startup() {
+    // Two spellings of one field would merge, the last one winning silently (review 58a2 N4).
+    for (first, second) in [
+        (
+            "krishiv.catalog.lake.tenants",
+            "KRISHIV.CATALOG.lake.tenants",
+        ),
+        ("krishiv.catalog.lake.uri", "spark.sql.catalog.lake.uri"),
+        ("krishiv.catalog.default", "spark.sql.defaultCatalog"),
+        ("Krishiv.Catalog.Default", "krishiv.catalog.default"),
+    ] {
+        let mut pairs = rest_with(&[]);
+        let value = if first.ends_with(".uri") {
+            // Spark's alias spelling of `uri` needs the class key.
+            pairs.retain(|(k, _)| *k != first);
+            pairs.push((
+                "spark.sql.catalog.lake",
+                "org.apache.iceberg.spark.SparkCatalog",
+            ));
+            "https://catalog.example.com/api"
+        } else if first.ends_with("tenants") {
+            "acme"
+        } else {
+            "lake"
+        };
+        pairs.push((first, value));
+        pairs.push((second, value));
+        let e = parse(&pairs, DeclMode::Server).unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "KRISHIV_INVALID_CONFIG_VALUE",
+            "{first} / {second}: {e}"
+        );
+        assert!(
+            e.to_string().contains("set twice"),
+            "{first} / {second}: {e}"
+        );
+    }
+    // Spark's class key in two spellings.
+    let e = parse(
+        &[
+            (
+                "spark.sql.catalog.lake",
+                "org.apache.iceberg.spark.SparkCatalog",
+            ),
+            (
+                "Spark.Sql.Catalog.lake",
+                "org.apache.iceberg.spark.SparkCatalog",
+            ),
+            ("spark.sql.catalog.lake.type", "rest"),
+            (
+                "spark.sql.catalog.lake.uri",
+                "https://catalog.example.com/api",
+            ),
+        ],
+        DeclMode::Embedded,
+    )
+    .unwrap_err();
+    assert!(e.to_string().contains("set twice"), "{e}");
+    // The same key given twice keeps its meaning: the last value.
+    let mut pairs = rest_with(&[]);
+    pairs.push(("krishiv.catalog.lake.tenants", "globex"));
+    pairs.push(("krishiv.catalog.lake.tenants", "acme"));
+    let decls = parse(&pairs, DeclMode::Server).unwrap();
+    assert!(decls.catalogs[0].visible_to(Some("acme")));
+    assert!(!decls.catalogs[0].visible_to(Some("globex")));
+}

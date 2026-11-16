@@ -332,6 +332,20 @@ fn invalid(key: &str, shown: &str, reason: &str) -> KrishivError {
     .into()
 }
 
+/// Refuses `key` when `earlier`, another spelling of the same field, already set it: the two
+/// would merge with the last one winning silently (review 58a2 N4). The same key given twice
+/// keeps its meaning, the last value.
+fn once(earlier: Option<&str>, key: &str) -> Result<(), KrishivError> {
+    match earlier {
+        Some(earlier) if earlier != key => Err(invalid(
+            key,
+            krishiv_common::secret::REDACTED,
+            &format!("set twice: also as {earlier}"),
+        )),
+        _ => Ok(()),
+    }
+}
+
 fn unsupported(feature: String) -> KrishivError {
     KrishivUnsupportedFeature { feature }.into()
 }
@@ -379,12 +393,13 @@ impl CatalogDeclarations {
         egress: Option<&Arc<EgressPolicy>>,
     ) -> Result<Self, KrishivError> {
         let mut raw: BTreeMap<String, Raw> = BTreeMap::new();
-        let mut default = None;
+        let mut default: Option<(String, String)> = None;
         for (key, value) in settings {
             if key.eq_ignore_ascii_case(DEFAULT_CATALOG_KEY)
                 || key.eq_ignore_ascii_case("spark.sql.defaultCatalog")
             {
-                default = Some(value.trim().to_owned());
+                once(default.as_ref().map(|(k, _)| k.as_str()), key)?;
+                default = Some((key.to_owned(), value.trim().to_owned()));
             } else if !is_declaration_key(key) {
                 // A registered engine setting (`krishiv.catalog.requestTimeout`) or no catalog key.
             } else if let Some(rest) = strip_prefix_ci(key, CATALOG_PREFIX) {
@@ -405,20 +420,24 @@ impl CatalogDeclarations {
                     ));
                 }
                 let entry = raw.entry(name.to_owned()).or_default();
+                once(entry.fields.get(field).map(|(k, _)| k.as_str()), key)?;
                 entry
                     .fields
                     .insert(field.to_owned(), (key.to_owned(), value.to_owned()));
             } else if let Some(rest) = strip_prefix_ci(key, SPARK_CATALOG_PREFIX) {
                 match rest.split_once('.') {
                     None => {
-                        raw.entry(rest.to_owned()).or_default().spark_class =
-                            Some((key.to_owned(), value.trim().to_owned()));
+                        let entry = raw.entry(rest.to_owned()).or_default();
+                        once(entry.spark_class.as_ref().map(|(k, _)| k.as_str()), key)?;
+                        entry.spark_class = Some((key.to_owned(), value.trim().to_owned()));
                     }
                     Some((name, opt)) => {
-                        raw.entry(name.to_owned())
-                            .or_default()
+                        let entry = raw.entry(name.to_owned()).or_default();
+                        let field = format!("spark:{opt}");
+                        once(entry.fields.get(&field).map(|(k, _)| k.as_str()), key)?;
+                        entry
                             .fields
-                            .insert(format!("spark:{opt}"), (key.to_owned(), value.to_owned()));
+                            .insert(field, (key.to_owned(), value.to_owned()));
                     }
                 }
             } else {
@@ -432,7 +451,7 @@ impl CatalogDeclarations {
             }
         }
         let mut out = Self {
-            default,
+            default: default.map(|(_, v)| v),
             ..Self::default()
         };
         for (name, entry) in raw {
@@ -516,7 +535,17 @@ fn map_spark(
         ));
     };
     let mut auth_set = entry.fields.contains_key("auth");
+    // A field a `krishiv.catalog.` key also sets is one field under two spellings (review 58a2
+    // N4); the alias's own options may set one field together (`token` and `rest.auth.type` both
+    // set `auth`).
+    let mut clash = None;
     let mut put = |field: &str, key: &str, value: &str| {
+        if let Some((earlier, _)) = entry.fields.get(field)
+            && strip_prefix_ci(earlier, CATALOG_PREFIX).is_some()
+            && clash.is_none()
+        {
+            clash = Some((key.to_owned(), earlier.clone()));
+        }
         entry
             .fields
             .insert(field.to_owned(), (key.to_owned(), value.to_owned()));
@@ -629,6 +658,13 @@ fn map_spark(
         if !auth_set {
             put("auth", &key, "client-credentials");
         }
+    }
+    if let Some((key, earlier)) = clash {
+        return Err(invalid(
+            &key,
+            krishiv_common::secret::REDACTED,
+            &format!("set twice: also as {earlier}"),
+        ));
     }
     entry.fields.retain(|k, _| !k.starts_with("spark:"));
     Ok(())
