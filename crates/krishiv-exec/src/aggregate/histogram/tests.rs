@@ -110,6 +110,9 @@ fn state_round_trips_and_merges_like_the_original() {
 fn bad_state_is_refused() {
     assert!(NumericHistogram::deserialize(&[0, 0, 0, 2, 0, 0, 0, 1]).is_err());
     assert!(NumericHistogram::deserialize(&[1, 2]).is_err());
+    // nbins 0 or 1: `trim` would index bins[1].
+    assert!(NumericHistogram::deserialize(&[0, 0, 0, 1, 0, 0, 0, 0]).is_err());
+    assert!(NumericHistogram::deserialize(&[0, 0, 0, 0, 0, 0, 0, 0]).is_err());
 }
 
 #[test]

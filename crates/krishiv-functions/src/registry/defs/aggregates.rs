@@ -428,6 +428,12 @@ pub(super) fn percentile_ordered(c: &CallTypes<'_>) -> Result<ArgType, KrishivEr
 /// Spark's `HistogramNumeric.dataType` (with
 /// `spark.sql.legacy.histogramNumericPropagateInputType`, default true):
 /// `array<struct<x: the input's type, y: double>>`, NULL for no value.
+///
+/// Known difference: like Spark's, the bins depend on where partial histograms
+/// merge, and Krishiv merges at its own points (several drivers per partition,
+/// partial flushes, the adaptive bypass, spills; a merge does not combine equal
+/// x values), so results can differ from Spark's for the same data when the
+/// plan is split differently (a local `VALUES` is one partition here).
 pub(super) fn histogram_numeric(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     use krishiv_types::{StructField, StructType};
     let x = c.data_type(0).cloned().unwrap_or(DataType::Double);

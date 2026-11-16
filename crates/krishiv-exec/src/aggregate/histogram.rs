@@ -231,7 +231,8 @@ impl NumericHistogram {
         };
         let nbins = usize::try_from(int(0)?).map_err(|_| bad())?;
         let used = usize::try_from(int(4)?).map_err(|_| bad())?;
-        if bytes.len() != 8 + 16 * used || used > nbins.saturating_add(1) {
+        // `trim` indexes bins[1], so a state with fewer than 2 bins is corrupt.
+        if nbins < 2 || bytes.len() != 8 + 16 * used || used > nbins.saturating_add(1) {
             return Err(bad());
         }
         let mut hist = Self::new(nbins);

@@ -547,7 +547,7 @@ fn single_window(
     }
     if start.unsigned_abs() >= slide.unsigned_abs() {
         return Err(constraint(
-            ("abs(start_time)", start.abs()),
+            ("abs(start_time)", start.saturating_abs()),
             "<",
             ("slide_duration", slide),
         ));
