@@ -133,9 +133,6 @@ pub(crate) struct QueryEnv {
     /// The observations and sinks of the frame the query runs (`Dataset.observe`): every run of
     /// the query, whatever the action, completes them (`run_on_query_logged`).
     pub(crate) observers: Arc<crate::dataframe::Observers>,
-    /// What the temporary view entries the analysis inlined kept (`TempTable::View::keeps`), set by
-    /// `analyze_in`: the handles of the definitions the query runs, whatever replaced them since.
-    pub(crate) view_keeps: Arc<std::sync::Mutex<Vec<crate::catalog::Keep>>>,
     /// A trial analysis (P3 PR-14d): its read denials are answers, not refusals, so they write no
     /// `krishiv::audit` record ([`crate::access::audit_read`]). Only a caller that falls back to
     /// an analysis of its own, which is audited, sets it.

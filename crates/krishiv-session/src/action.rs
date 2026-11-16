@@ -387,6 +387,18 @@ pub(crate) fn current_reason() -> Option<CancelReason> {
         .flatten()
 }
 
+/// The error the current action ends with for the reason it was cancelled with, if it was: the
+/// one its race returns ([`ActionGuard::run`]), for work dropped by that race.
+pub(crate) fn current_error() -> Option<KrishivError> {
+    CURRENT
+        .try_with(|action| {
+            let reason = action.lock().reason?;
+            Some(reason.error(action.operation.as_deref().unwrap_or(NOT_STARTED), None))
+        })
+        .ok()
+        .flatten()
+}
+
 /// Called before a statement's first side effect that a drop would leave half
 /// done (an overwrite dropping a table, or deleting the files it replaces):
 /// from here a cancel no longer drops the action; it reaches the statement at

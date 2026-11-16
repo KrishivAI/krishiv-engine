@@ -1370,7 +1370,6 @@ impl Session {
             identifier_spans: Arc::default(),
             identifier_written: Arc::default(),
             observers: Arc::default(),
-            view_keeps: Arc::default(),
             cache_generation,
             cache_cap,
             sql_functions,
@@ -1385,13 +1384,15 @@ impl Session {
 
     /// Analyzes `plan` (`text` is the redacted query the plan came
     /// from, if it came from SQL text: analysis errors carry its span
-    /// as their query context).
+    /// as their query context). Also returns what the temporary view entries the analysis
+    /// inlined kept (`TempTable::View::keeps`), the query's and its function bodies': the handles
+    /// of the definitions the query runs, whatever replaced them since.
     pub(crate) async fn analyze_in(
         &self,
         plan: &Arc<LogicalPlan>,
         env: &QueryEnv,
         text: Option<&RedactedSql>,
-    ) -> Result<AnalyzedPlan, KrishivError> {
+    ) -> Result<(AnalyzedPlan, Vec<crate::catalog::Keep>), KrishivError> {
         // A store setting this session redirected (endpoint, region, account) could send the
         // server's credentials to another host:
         // asked once per analysis, before any table or file is read (P3-T067b).
@@ -1425,9 +1426,7 @@ impl Session {
             }),
         )?;
         let mut inlined = std::mem::take(&mut expansion.views);
-        *env.view_keeps
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = std::mem::take(&mut expansion.keeps);
+        let mut keeps = std::mem::take(&mut expansion.keeps);
         // A permanent view is inlined before binding, so the analyzer never asks the
         // policy about it: ask here, before any read and before the text of a stored view
         // can fail, so a principal who may not read it learns nothing from it.
@@ -1490,6 +1489,7 @@ impl Session {
         }
         // The view side table: where each view the query and its functions' bodies inlined landed.
         inlined.extend(env.sql_functions.body_views());
+        keeps.extend(env.sql_functions.body_keeps());
         analyzed.views = krishiv_plan::analyzer::views::locate_views(analyzed.plan.root(), inlined);
         for view in views {
             let securable = krishiv_plan::analyzer::Securable::View(view);
@@ -1503,7 +1503,7 @@ impl Session {
                     });
             }
         }
-        Ok(analyzed)
+        Ok((analyzed, keeps))
     }
 
     /// The views the bodies of the functions a query called read, once the

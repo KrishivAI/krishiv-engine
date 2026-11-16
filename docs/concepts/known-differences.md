@@ -334,5 +334,14 @@ observed node has its own, so the count can exceed `n` (P3-T084c).
 - **Cancelled actions:** a dropped result stream completes the observation with `{}` or the rows
   folded before the drivers stopped (Spark: a partial value); a failed finalization of a metric is what `get`
   raises.
+- **Actions that fail before their query starts:** an action refused or dropped before its query
+  runs (a closed session, a full resource group, a plan that cannot be submitted, a caller that gives up
+  or a cancel, timeout or kill while it waits) completes the observation with that error, so `get` raises
+  it. Spark completes an observation only when an execution of the query ends (Spark 4.2:
+  `SQLExecution.withNewExecutionId0` calls `ObservationManager.tryComplete` as it finishes; 3.5 to 4.1:
+  the session's `QueryExecutionListener`, on success and failure alike), with the metrics it collected,
+  or (4.1, 4.2) an empty row when it has none. An action that fails before an execution starts leaves
+  it pending, and a later action can still complete it. In the engine the first action, failed or
+  not, completes it.
 - **`Observation.get` blocks** a thread; do not call it from async code on a runtime thread.
 - **Result cache:** a plan that observes is never served from the result cache (every action runs it).

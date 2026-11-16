@@ -663,3 +663,68 @@ async fn an_action_dropped_while_it_waits_for_admission_completes_the_observatio
     assert_eq!(failed_with(&obs), "OPERATION_CANCELED");
     drop(held);
 }
+
+/// An action an operator kills while it waits for admission completes its observation with the
+/// kill (`KRISHIV_QUERY_KILLED`, as the action fails), not with a client's `OPERATION_CANCELED`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_action_killed_during_its_setup_completes_with_the_kill() {
+    let s = one_slot_session(1);
+    let rows = s
+        .sql("SELECT session_id FROM system.sessions WHERE state = 'active'")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let id = rows[0].column(0).as_string::<i32>().value(0).to_owned();
+    let held = s.range(0, 1, 1, None).execute_stream().await.unwrap();
+    let obs = Observation::new();
+    let df = s
+        .range(0, 10, 1, None)
+        .observe(&obs, [count(lit(1)).alias("n")])
+        .unwrap();
+    let action = tokio::spawn(async move { df.count().await });
+    // Queued behind `held`, so the kill finds the action in its setup.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!action.is_finished(), "admitted past a full slot");
+    let rt = Arc::clone(s.runtime());
+    rt.kill_session(&id, krishiv_session::CancelReason::Admin)
+        .unwrap();
+    let err = action.await.unwrap().unwrap_err();
+    assert_eq!(err.error_class().name(), "KRISHIV_QUERY_KILLED", "{err}");
+    assert_eq!(failed_with(&obs), "KRISHIV_QUERY_KILLED");
+    drop(held);
+}
+
+/// A query whose only read of an observed temporary view is inside a SQL function's body
+/// completes the observation: the body's view keeps reach the query's observers.
+#[test]
+fn a_view_read_only_inside_a_function_body_completes_the_observation() {
+    let s = Session::new().unwrap();
+    let obs = Observation::new();
+    let df = base(&s).observe(&obs, [count(lit(1)).alias("n")]).unwrap();
+    block_on(df.create_or_replace_temp_view("fv")).unwrap();
+    block_on(async {
+        s.sql(
+            "CREATE TEMPORARY FUNCTION from_fv() RETURNS TABLE (k STRING) RETURN SELECT k FROM fv",
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await
+    })
+    .unwrap();
+    let n = block_on(async {
+        s.sql("SELECT * FROM from_fv()")
+            .await
+            .unwrap()
+            .count()
+            .await
+    })
+    .unwrap();
+    assert_eq!(n, 3);
+    assert_eq!(
+        metrics(&obs.get_timeout(Duration::from_secs(10)).unwrap().unwrap())["n"],
+        3
+    );
+}
