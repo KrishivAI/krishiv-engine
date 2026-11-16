@@ -613,7 +613,7 @@ fn registry_is_well_formed() {
 #[test]
 fn docs_markdown_lists_every_entry_deterministically() {
     let md = docs_markdown();
-    assert!(md.starts_with("# Krishiv configuration reference\n"));
+    assert!(md.contains("\n# Krishiv configuration reference\n"));
     assert!(md.contains(
         "| Key | Type | Default | Scope | Settable by | Since | Spark alias | Description |"
     ));
@@ -1327,6 +1327,48 @@ fn fuse_probe_select_defaults_on_and_parses() {
         config.get(&EXEC_JOIN_FUSE_PROBE_SELECT),
         Some(&ConfigValue::Bool(false))
     );
+}
+
+#[test]
+fn late_payload_join_defaults_on_and_parses() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&LATE_PAYLOAD_JOIN).and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+    c.set("krishiv.optimizer.latePayloadJoin", "false").unwrap();
+    assert_eq!(
+        c.get(&LATE_PAYLOAD_JOIN).and_then(ConfigValue::as_bool),
+        Some(false)
+    );
+    assert!(c.set("krishiv.optimizer.latePayloadJoin", "maybe").is_err());
+}
+
+#[test]
+fn history_entries_parse_and_default() {
+    let mut c = Config::new();
+    assert_eq!(c.get(&HISTORY_PATH), None);
+    assert_eq!(
+        c.get(&HISTORY_MAX_BYTES).and_then(ConfigValue::as_size),
+        Some(256 << 20)
+    );
+    c.set("krishiv.history.maxBytes", "50m").unwrap();
+    c.set("krishiv.history.path", "/var/lib/krishiv/history")
+        .unwrap();
+    assert_eq!(
+        c.get(&HISTORY_MAX_BYTES).and_then(ConfigValue::as_size),
+        Some(50 << 20)
+    );
+    assert!(c.set("krishiv.history.maxBytes", "lots").is_err());
+    assert_eq!(
+        c.get(&HISTORY_LITERALS)
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .as_deref(),
+        Some("mask")
+    );
+    c.set("krishiv.history.literals", "keep").unwrap();
+    assert!(c.set("krishiv.history.literals", "some").is_err());
+    assert_eq!(HISTORY_PATH.scope, Scope::Cluster);
 }
 
 #[test]
