@@ -453,6 +453,73 @@ fn catalog_redirect_not_followed() {
     assert!(elsewhere.seen().is_empty());
 }
 
+/// A connector under the server's rule (`deny`), exempting `exempt` by name.
+fn deny_connector(exempt: &[&str]) -> krishiv_store::PolicyConnector {
+    use krishiv_store::egress::{EgressPolicy, PrivateAddresses, ProviderEndpoints};
+    let policy = EgressPolicy::new(
+        PrivateAddresses::Deny,
+        Vec::new(),
+        ProviderEndpoints::default(),
+    );
+    krishiv_store::PolicyConnector::new(
+        policy.scope(exempt.iter().copied()),
+        krishiv_store::Redirects::None,
+        None,
+    )
+    .without_provider_literals()
+}
+
+#[test]
+fn every_request_goes_through_the_egress_policy_client() {
+    let server = serve(|r| match path(r) {
+        "/v1/config" => Reply::Json(200, CONFIG.into()),
+        _ => Reply::Json(200, r#"{"namespaces": [["a"]]}"#.into()),
+    });
+    // Not exempt: the loopback catalog is refused before anything is sent, the address never named.
+    let mut config = config_for(&server);
+    config.egress = Some(deny_connector(&[]));
+    let e = client_with(config).list_namespaces(&[]).unwrap_err();
+    assert_eq!(class(&e), ErrorClass::KrishivCatalogFailure);
+    assert!(!e.to_string().contains("127.0.0.1"), "{e}");
+    assert!(server.seen().is_empty());
+    // The declared host is exempt by name: the same calls pass, token fetch included.
+    let idp = serve(|_| {
+        Reply::Json(
+            200,
+            r#"{"access_token": "t1", "token_type": "bearer"}"#.into(),
+        )
+    });
+    let mut config = config_for(&server);
+    config.egress = Some(deny_connector(&["127.0.0.1"]));
+    config.auth = RestAuth::ClientCredentials {
+        client_id: Some("id".into()),
+        client_secret: SecretString::new("s"),
+        token_endpoint: Some(Url::parse(&format!("{}/token", idp.base)).unwrap()),
+        scope: None,
+        extra: Vec::new(),
+    };
+    let names = client_with(config).list_namespaces(&[]).unwrap().unwrap();
+    assert_eq!(names, vec![ns(&["a"])]);
+    assert_eq!(idp.seen().len(), 1);
+    // A token endpoint at a literal the rule refuses (here 127.0.0.2, not the declared host) is never called.
+    let mut config = config_for(&server);
+    config.egress = Some(deny_connector(&["127.0.0.1"]));
+    config.auth = RestAuth::ClientCredentials {
+        client_id: Some("id".into()),
+        client_secret: SecretString::new("s"),
+        token_endpoint: Some(Url::parse("http://127.0.0.2:9/token").unwrap()),
+        scope: None,
+        extra: Vec::new(),
+    };
+    let before = server.seen().len();
+    assert!(client_with(config).list_namespaces(&[]).is_err());
+    assert_eq!(
+        server.seen().len(),
+        before,
+        "nothing reaches the catalog without a token"
+    );
+}
+
 #[test]
 fn credential_prefixes_in_the_three_forms() {
     for prefix in ["s3://b/t", "s3://b", "s3://b/", "s3", "S3", "abfss", "gs"] {

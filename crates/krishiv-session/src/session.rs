@@ -1315,6 +1315,7 @@ impl Session {
                 metrics: Arc::clone(&self.state.runtime.metrics),
                 sessions: self.state.runtime.session_view(),
                 groups: self.state.runtime.resource_groups.clone(),
+                catalogs: self.declared_catalogs(),
                 monitor: Arc::new(crate::system::Monitor::new(
                     Arc::clone(&self.state.principal),
                     Arc::clone(&self.state.policy),

@@ -40,6 +40,16 @@ impl Session {
             Arc::clone(&runtime.catalog_store),
             Arc::clone(&runtime.warehouse),
         );
+        // `krishiv.catalog.default` (Spark's `spark.sql.defaultCatalog`): a new session starts in
+        // it when its principal sees it (design P3-T067 §2.4), else in `spark_catalog`.
+        if let Some(default) = runtime.catalogs.default_catalog()
+            && runtime
+                .catalogs
+                .catalog(default, parts.principal.tenant.as_deref())
+                .is_some()
+        {
+            catalog.use_catalog(default);
+        }
         let seed = Seed {
             conf: ConfStore::new(config),
             catalog,
@@ -59,7 +69,10 @@ impl Session {
     }
 
     /// A session of `parts` on `runtime` starting from `seed`'s state.
-    fn seeded(runtime: Arc<EngineRuntime>, parts: SessionParts, seed: Seed) -> Self {
+    fn seeded(runtime: Arc<EngineRuntime>, parts: SessionParts, mut seed: Seed) -> Self {
+        // A server runtime's catalogs are declared at startup only (design P3-T067 §2.2).
+        seed.conf.static_catalogs =
+            runtime.catalogs.mode() == crate::catalog_decl::DeclMode::Server;
         let config = seed.conf.snapshot();
         let runtime_admission = runtime.admission.clone();
         let queries = Arc::new(crate::system::QueryLog::new(

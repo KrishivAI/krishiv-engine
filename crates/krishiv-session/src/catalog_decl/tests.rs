@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Declared catalogs (design P3-T067 §8, declarations).
 
+use std::sync::Arc;
+
 use krishiv_io::egress::{EgressPolicy, PrivateAddresses, ProviderEndpoints};
 
 use super::*;
@@ -371,13 +373,20 @@ fn s3_tables_warehouse_refused() {
     assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
 }
 
-#[test]
-fn glue_endpoint_checked_when_set() {
-    let policy = EgressPolicy::new(
+fn deny() -> Arc<EgressPolicy> {
+    EgressPolicy::new(
         PrivateAddresses::Deny,
         Vec::new(),
         ProviderEndpoints::default(),
-    );
+    )
+}
+
+fn checked(pairs: &[(&str, &str)]) -> Result<CatalogDeclarations, KrishivError> {
+    CatalogDeclarations::parse(pairs.iter().copied(), DeclMode::Server, &ALL, Some(&deny()))
+}
+
+#[test]
+fn glue_endpoint_checked_when_set() {
     let pairs = [
         ("krishiv.catalog.g.type", "glue"),
         (
@@ -385,9 +394,8 @@ fn glue_endpoint_checked_when_set() {
             "http://169.254.169.254",
         ),
     ];
-    let decls = parse(&pairs, DeclMode::Server).unwrap();
-    let scope = policy.scope(decls.catalogs[0].declared_hosts());
-    let e = CatalogDeclarations::parse(pairs, DeclMode::Server, &ALL, Some(&scope)).unwrap_err();
+    assert!(parse(&pairs, DeclMode::Server).is_ok());
+    let e = checked(&pairs).unwrap_err();
     assert!(e.to_string().contains("option.endpoint"), "{e}");
     assert!(!e.to_string().contains("169.254"), "{e}");
     // A private on-premises endpoint is exempt by name for the Glue client.
@@ -395,9 +403,62 @@ fn glue_endpoint_checked_when_set() {
         ("krishiv.catalog.g.type", "glue"),
         ("krishiv.catalog.g.option.endpoint", "http://10.0.0.7:4566"),
     ];
+    assert!(checked(&pairs).is_ok());
+}
+
+/// Review 58a1 nit 2: the catalog `uri` and `tokenEndpoint` literals are checked at startup, in
+/// every spelling, by the catalog's own scope (its declared hosts exempt by name, never
+/// link-local), and the error names the key, never the address.
+#[test]
+fn catalog_uri_and_token_endpoint_literals_checked_at_startup() {
+    for uri in [
+        "https://169.254.169.254/api/catalog",
+        "https://2852039166/api/catalog",
+        "https://[::ffff:169.254.169.254]/api",
+        "https://0xa9fea9fe/api",
+    ] {
+        let mut pairs = rest_with(&[]);
+        pairs[1] = ("krishiv.catalog.lake.uri", uri);
+        let e = checked(&pairs).unwrap_err().to_string();
+        assert!(e.contains("krishiv.catalog.lake.uri"), "{uri}: {e}");
+        assert!(!e.contains("169.254") && !e.contains("2852039166"), "{e}");
+    }
+    for endpoint in [
+        "https://169.254.169.254/token",
+        "https://0251.0376.0251.0376/t",
+    ] {
+        let mut pairs = REST.to_vec();
+        pairs.push(("krishiv.catalog.lake.tokenEndpoint", endpoint));
+        let e = checked(&pairs).unwrap_err().to_string();
+        assert!(
+            e.contains("krishiv.catalog.lake.tokenEndpoint"),
+            "{endpoint}: {e}"
+        );
+    }
+    // An on-premises catalog and IdP at private literals are their own declared hosts.
+    let mut pairs = REST.to_vec();
+    pairs[1] = ("krishiv.catalog.lake.uri", "https://10.0.0.5:8181/api");
+    pairs.push((
+        "krishiv.catalog.lake.tokenEndpoint",
+        "https://10.0.0.6/token",
+    ));
+    assert!(checked(&pairs).is_ok());
+    // A name is checked when it resolves, not here.
+    assert!(checked(&rest_with(&[])).is_ok());
+}
+
+#[test]
+fn registered_catalog_settings_are_not_declarations() {
+    let mut pairs = rest_with(&[]);
+    pairs.push(("krishiv.catalog.requestTimeout", "5s"));
+    pairs.push(("krishiv.catalog.maxMetadataBytes", "1g"));
     let decls = parse(&pairs, DeclMode::Server).unwrap();
-    let scope = policy.scope(decls.catalogs[0].declared_hosts());
-    assert!(CatalogDeclarations::parse(pairs, DeclMode::Server, &ALL, Some(&scope)).is_ok());
+    assert_eq!(decls.catalogs.len(), 1);
+    assert!(!is_declaration_key("krishiv.catalog.requestTimeout"));
+    assert!(is_declaration_key("krishiv.catalog.lake.type"));
+    assert!(is_declaration_key("spark.sql.catalog.lake"));
+    assert!(is_declaration_key("krishiv.catalog.default"));
+    assert!(!is_declaration_key("spark.sql.ansi.enabled"));
 }
 
 #[test]

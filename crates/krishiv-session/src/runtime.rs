@@ -106,6 +106,8 @@ pub struct EngineRuntime {
     /// The egress policy fixed at startup (design P3-T067 §5): the store clients apply it, and
     /// catalog clients (HMS, REST) take their own scopes of it.
     egress: Arc<krishiv_io::egress::EgressPolicy>,
+    /// The declared catalogs (design P3-T067 §2.3), shared by every session.
+    pub(crate) catalogs: Arc<crate::catalog_registry::CatalogRegistry>,
     /// Whether the runtime was built for one session that owns it (the
     /// default builder), or supplied by the host.
     private: bool,
@@ -159,6 +161,7 @@ impl fmt::Debug for EngineRuntime {
 pub struct EngineRuntimeBuilder {
     pairs: Vec<(String, String)>,
     executor: Option<Arc<dyn Executor>>,
+    catalogs: Option<crate::catalog_registry::CatalogSetup>,
 }
 
 impl fmt::Debug for EngineRuntimeBuilder {
@@ -194,13 +197,22 @@ impl EngineRuntimeBuilder {
         self
     }
 
+    /// Declares the runtime's catalogs (design P3-T067 §2): parsed, checked and validated when
+    /// the runtime is built, then shared by every session. Without it a runtime has none (an
+    /// embedded runtime; `krishiv server` always passes one, in server mode).
+    pub fn catalogs(mut self, setup: crate::catalog_registry::CatalogSetup) -> Self {
+        self.catalogs = Some(setup);
+        self
+    }
+
     /// The runtime.
     ///
     /// # Errors
     /// Configuration errors; `INTERNAL_ERROR` if the executor's runtimes
-    /// cannot start.
+    /// cannot start; every startup refusal of a catalog declaration
+    /// ([`Self::catalogs`]).
     pub fn build(self) -> Result<Arc<EngineRuntime>, KrishivError> {
-        EngineRuntime::new(self.pairs, self.executor, false)
+        EngineRuntime::new(self.pairs, self.executor, false, self.catalogs)
     }
 }
 
@@ -258,7 +270,14 @@ impl EngineRuntime {
         EngineRuntimeBuilder {
             pairs: Vec::new(),
             executor: None,
+            catalogs: None,
         }
+    }
+
+    /// The declared catalogs (design P3-T067 §2.3): readiness checks read them (T066).
+    #[must_use]
+    pub fn catalogs(&self) -> &Arc<crate::catalog_registry::CatalogRegistry> {
+        &self.catalogs
     }
 
     /// The private runtime of a session built without one.
@@ -266,13 +285,14 @@ impl EngineRuntime {
         pairs: Vec<(String, String)>,
         executor: Option<Arc<dyn Executor>>,
     ) -> Result<Arc<Self>, KrishivError> {
-        Self::new(pairs, executor, true)
+        Self::new(pairs, executor, true, None)
     }
 
     fn new(
         pairs: Vec<(String, String)>,
         executor: Option<Arc<dyn Executor>>,
         private: bool,
+        catalogs: Option<crate::catalog_registry::CatalogSetup>,
     ) -> Result<Arc<Self>, KrishivError> {
         // Diagnostics first: installs the tokio-console subscriber when the
         // feature is on and `KRISHIV_TOKIO_CONSOLE=1`, a no-op otherwise.
@@ -288,6 +308,15 @@ impl EngineRuntime {
         // `krishiv.io.egress.privateAddresses = deny` (the server's default).
         let egress = crate::egress::egress_policy(&config, |k| std::env::var(k).ok())?;
         let io = Self::io_scheduler(&config, &executor, &egress)?;
+        // Startup validation of the declared catalogs (R14): a refusal stops the build.
+        let catalogs = Arc::new(match catalogs {
+            Some(setup) => {
+                crate::catalog_registry::CatalogRegistry::build(setup, &config, &egress)?
+            }
+            None => crate::catalog_registry::CatalogRegistry::empty(
+                crate::catalog_decl::DeclMode::Embedded,
+            ),
+        });
         io.attach_memory(&(Arc::<TreePool>::clone(&memory_tree) as Arc<dyn MemoryPool>));
         // With `krishiv.io.local.allowedRoots` set (server mode), listings never follow a link
         // out of the roots (ADR 0046 §3a): the policy checks the paths as written, the store
@@ -385,6 +414,7 @@ impl EngineRuntime {
             actions: Arc::default(),
             io,
             egress,
+            catalogs,
             private,
         };
         runtime.register_gauges()?;
@@ -428,7 +458,11 @@ impl EngineRuntime {
         &self,
         session_pairs: Vec<(String, String)>,
     ) -> Result<Config, KrishivError> {
-        if let Some((key, _)) = session_pairs.iter().find(|(k, _)| runtime_owned(k)) {
+        // In server mode a session never declares a catalog (decision 7).
+        let server = self.catalogs.mode() == crate::catalog_decl::DeclMode::Server;
+        if let Some((key, _)) = session_pairs.iter().find(|(k, _)| {
+            runtime_owned(k) || (server && crate::catalog_decl::is_declaration_key(k))
+        }) {
             return Err(CannotModifyStaticConfig {
                 key: format!("\"{key}\""),
             }

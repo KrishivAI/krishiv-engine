@@ -1192,7 +1192,7 @@ impl Catalog for QueryCatalog {
     }
 }
 
-/// The resolver of one query: the session catalog only.
+/// The resolver of one query: the session catalog, `system` and the declared catalogs.
 #[derive(Debug)]
 pub(crate) struct QueryCatalogs(pub(crate) Arc<QueryCatalog>);
 
@@ -1213,8 +1213,12 @@ impl CatalogResolver for QueryCatalogs {
         if crate::system::is_system(name) {
             return Some(Arc::new(self.0.system_catalog()));
         }
-        name.eq_ignore_ascii_case(CATALOG)
-            .then(|| Arc::clone(&self.0) as Arc<dyn Catalog>)
+        if name.eq_ignore_ascii_case(CATALOG) {
+            return Some(Arc::clone(&self.0) as Arc<dyn Catalog>);
+        }
+        // A declared catalog the principal sees (design P3-T067 §2.3, §2.4); a hidden one is
+        // absent, exactly as an undeclared name.
+        self.0.system.catalogs.catalog(name)
     }
 
     fn epoch(&self) -> u64 {

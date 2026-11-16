@@ -26,9 +26,10 @@
 //! build, never accepted and ignored.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use krishiv_common::error::{KrishivError, KrishivInvalidConfigValue, KrishivUnsupportedFeature};
-use krishiv_io::egress::EgressScope;
+use krishiv_io::egress::EgressPolicy;
 
 use crate::auth::SecretRef;
 
@@ -45,6 +46,15 @@ pub const DEFAULT_CATALOG_KEY: &str = "krishiv.catalog.default";
 pub fn is_catalog_key(key: &str) -> bool {
     let lower = key.to_ascii_lowercase();
     lower.starts_with(CATALOG_PREFIX) || lower.starts_with(SPARK_CATALOG_PREFIX)
+}
+
+/// Whether `key` is part of a catalog declaration: a catalog key ([`is_catalog_key`]) that is
+/// not a registered engine setting (`krishiv.catalog.requestTimeout`, `maxMetadataBytes`, ...
+/// configure every catalog client and stay engine configuration). The server reads these at
+/// startup and never stores them as configuration; a session in server mode cannot set them.
+#[must_use]
+pub fn is_declaration_key(key: &str) -> bool {
+    is_catalog_key(key) && krishiv_common::config::lookup(key).is_none()
 }
 
 /// Where the declarations come from.
@@ -337,28 +347,33 @@ struct Raw {
 }
 
 impl CatalogDeclarations {
-    /// Parses every catalog key of `settings` (other keys are ignored). `compiled` lists the
-    /// catalog types this build carries; `glue_scope`, when given, checks a Glue `endpoint`
-    /// (N3: Glue's AWS SDK client is not a policy client, so its admin-set endpoint is checked
-    /// here, by the address rule with the by-name exemption).
+    /// Parses every catalog declaration key of `settings` (other keys, registered
+    /// `krishiv.catalog.*` settings included, are ignored). `compiled` lists the catalog types
+    /// this build carries; `egress`, when given, checks every declared endpoint whose host is an
+    /// address literal by the address rule, with the catalog's own by-name exemption: the `uri`,
+    /// the `tokenEndpoint` and a Glue `endpoint` (N3: Glue's AWS SDK client is not a policy
+    /// client, so its endpoint is checked only here). A name is checked when it resolves.
     ///
     /// # Errors
     /// `KRISHIV_INVALID_CONFIG_VALUE` naming the key for every startup refusal of §2.3 (unknown
     /// type, option or class, missing key, literal secret, reserved or malformed name, empty
-    /// `tenants`, an `http://` uri in server mode without `allowInsecure`, a refused endpoint);
+    /// `tenants`, an `http://` uri in server mode without `allowInsecure`, an endpoint the egress
+    /// rule refuses, named by its key and never by its address);
     /// `KRISHIV_UNSUPPORTED_FEATURE` for a type compiled out, `delegated`, an S3 Tables warehouse
     /// or remote signing.
     pub fn parse<'a>(
         settings: impl IntoIterator<Item = (&'a str, &'a str)>,
         mode: DeclMode,
         compiled: &[CatalogType],
-        glue_scope: Option<&EgressScope>,
+        egress: Option<&Arc<EgressPolicy>>,
     ) -> Result<Self, KrishivError> {
         let mut raw: BTreeMap<String, Raw> = BTreeMap::new();
         let mut default = None;
         for (key, value) in settings {
             if key == DEFAULT_CATALOG_KEY || key == "spark.sql.defaultCatalog" {
                 default = Some(value.trim().to_owned());
+            } else if !is_declaration_key(key) {
+                // A registered engine setting (`krishiv.catalog.requestTimeout`) or no catalog key.
             } else if let Some(rest) = key.strip_prefix(CATALOG_PREFIX) {
                 let Some((name, field)) = rest.split_once('.') else {
                     return Err(invalid(
@@ -401,17 +416,8 @@ impl CatalogDeclarations {
         };
         for (name, entry) in raw {
             let decl = decl(&name, entry, mode, compiled, &mut out.warnings)?;
-            if decl.kind == CatalogType::Glue
-                && let (Some(scope), Some(endpoint)) = (glue_scope, decl.options.get("endpoint"))
-            {
-                let exempt = scope.clone();
-                if exempt.check_endpoint(endpoint).is_err() {
-                    return Err(invalid(
-                        &format!("{CATALOG_PREFIX}{name}.option.endpoint"),
-                        "<endpoint>",
-                        "the egress policy refuses this endpoint's address (private address)",
-                    ));
-                }
+            if let Some(policy) = egress {
+                check_endpoints(&decl, policy)?;
             }
             out.catalogs.push(decl);
         }
@@ -423,6 +429,37 @@ impl CatalogDeclarations {
         }
         Ok(out)
     }
+}
+
+/// The declared endpoints of `decl` checked by the address rule under the catalog's own scope
+/// (its declared hosts exempt by name, so an on-premises catalog at a private address passes;
+/// link-local and special-purpose addresses never do, in any spelling).
+fn check_endpoints(decl: &CatalogDecl, policy: &Arc<EgressPolicy>) -> Result<(), KrishivError> {
+    let scope = policy.scope(decl.declared_hosts());
+    let token_endpoint = match &decl.auth {
+        CatalogAuth::ClientCredentials { token_endpoint, .. } => Some(token_endpoint),
+        _ => None,
+    };
+    let glue_endpoint = (decl.kind == CatalogType::Glue)
+        .then(|| decl.options.get("endpoint"))
+        .flatten();
+    for (field, endpoint) in [
+        ("uri", decl.uri.as_ref()),
+        ("tokenEndpoint", token_endpoint),
+        ("option.endpoint", glue_endpoint),
+    ] {
+        if let Some(endpoint) = endpoint
+            && scope.check_endpoint(endpoint).is_err()
+        {
+            return Err(invalid(
+                &format!("{CATALOG_PREFIX}{}.{field}", decl.name),
+                "<endpoint>",
+                "the egress policy refuses this endpoint's address (private address); list its \
+                 network in krishiv.io.egress.allowedCidrs if it is meant",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn valid_name(name: &str) -> bool {

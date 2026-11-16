@@ -42,7 +42,12 @@ input, not a trusted party (design `P3-lakehouse.md` §5.6): everything it retur
   the URL parser rewrites refused; a 404 is "absent" only with a `NoSuch*` error model; credential prefixes as full URL,
   bucket or bare scheme; `load_table` checks every returned location and refuses read restrictions and server-side planning;
   `load_credentials` only when advertised), `test_server.rs` a fake HTTP/1.1 server (tests only).
-- Not here yet: the `Catalog` over the REST client (metadata mapped through `krishiv-connectors-iceberg`; it also decides which
+- `src/declared.rs` (feature `session`, P3-T067 §2.3) `IcebergRestFactory`, the session registry's `iceberg-rest` factory: a
+  `RestClient` per declared catalog (auth none/token/client-credentials with `audience`; `option.prefix` refused at startup), its
+  requests on a `PolicyConnector` scoped to the catalog's declared hosts with no redirects; the `Catalog` resolves names only (a
+  missing table is absent, an existing one `KRISHIV_UNSUPPORTED_FEATURE` until the provider exists). `transport.rs` builds no
+  `reqwest::Client` of its own: `PolicyConnector::catalog_client` (krishiv-store) and a host check before every request.
+- Not here yet: the metadata mapping and table provider of the `Catalog` over the REST client (metadata mapped through `krishiv-connectors-iceberg`; it also decides which
   table `config` keys reach a store: `s3.endpoint`, signer and refresh endpoints, `remote-signing-config`, delegated-token keys,
   with the endpoint-override case of `catalog_location_confined`; a table's vended `token` for later requests is PR-58b), a fuzz
   target for the REST response parsers, the write half of the

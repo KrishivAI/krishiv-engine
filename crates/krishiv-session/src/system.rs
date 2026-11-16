@@ -43,9 +43,10 @@ const SCHEMA_VERSION: &str = "1";
 const LOCAL_WORKER: &str = "local";
 
 /// Every table of the catalog.
-const TABLES: [&str; 8] = [
+const TABLES: [&str; 9] = [
     "capabilities",
     "caches",
+    "catalogs",
     "memory",
     "metrics",
     "operators",
@@ -279,6 +280,7 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("partial", Flag, false),
         ],
         "resource_groups" => crate::system_groups::layout(),
+        "catalogs" => crate::system_catalogs::layout(),
         "sessions" => crate::sessions::layout(),
         _ => return None,
     })
@@ -552,6 +554,9 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
     if table.eq_ignore_ascii_case("resource_groups") {
         return crate::system_groups::columns(sources);
     }
+    if table.eq_ignore_ascii_case("catalogs") {
+        return crate::system_catalogs::columns(sources);
+    }
     if table.eq_ignore_ascii_case("queries") {
         let rows = sources.queries.snapshot(sources.monitor.sees_all());
         let micros = |ms: Option<i64>| ms.map(|m| m.saturating_mul(1000));
@@ -679,6 +684,8 @@ pub(crate) struct Sources {
     pub(crate) sessions: Arc<crate::sessions::SessionView>,
     /// The resource group controller (`krishiv.workload.resourceGroups.file`), when one is set.
     pub(crate) groups: Option<Arc<crate::resource_groups::ResourceGroups>>,
+    /// The declared catalogs the query's principal sees (`system.catalogs`, name resolution).
+    pub(crate) catalogs: crate::catalog_registry::DeclaredView,
 }
 
 pub(crate) use crate::monitor::Monitor;
@@ -1698,6 +1705,7 @@ mod tests {
             )),
             sessions: Arc::default(),
             groups: None,
+            catalogs: Default::default(),
         };
         assert!(provider("capabilities", &sources).unwrap().is_some());
         assert!(provider("nope", &sources).unwrap().is_none());

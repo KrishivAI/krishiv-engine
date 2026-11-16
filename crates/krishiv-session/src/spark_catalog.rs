@@ -255,7 +255,8 @@ impl Catalog<'_> {
     /// The catalogs, sorted.
     #[must_use]
     pub fn list_catalogs(&self) -> Vec<String> {
-        vec![crate::catalog::CATALOG.to_owned(), "system".to_owned()]
+        // With the declared catalogs this principal sees (design P3-T067 §2.4).
+        self.session.catalog_names()
     }
 
     /// The current namespace.

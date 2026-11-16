@@ -30,6 +30,8 @@ krishiv-session = { path = "../krishiv-session", version = "=0.2.0", optional = 
 krishiv-mcp = { path = "../krishiv-mcp", version = "=0.2.0", optional = true }
 krishiv-udf-pool = { path = "../krishiv-udf-pool", version = "=0.2.0", optional = true }
 krishiv-connect-server = { path = "../krishiv-connect-server", version = "=0.2.0", optional = true }
+# Declared `iceberg-rest` catalogs in `krishiv server` (feature `catalog-iceberg-rest`, design P3-T067 §2.3).
+krishiv-catalogs = { path = "../krishiv-catalogs", version = "=0.2.0", optional = true }
 axum = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"], optional = true }
 serde_json = { workspace = true }
@@ -77,6 +79,9 @@ server = [
 ]
 # The web UI on the admin server.
 ui = ["krishiv/ui", "server"]
+# `krishiv server` builds declared `iceberg-rest` catalogs (krishiv.catalog.<name>.type = iceberg-rest);
+# without it such a declaration fails startup naming the type.
+catalog-iceberg-rest = ["server", "dep:krishiv-catalogs", "krishiv-catalogs/session"]
 celeborn = ["krishiv/celeborn"]
 mimalloc = ["krishiv/mimalloc", "dep:mimalloc", "dep:krishiv-alloc", "dep:krishiv-memory"]
 # Live async-task diagnostics over `tokio-console` (P2-T129): off by default;

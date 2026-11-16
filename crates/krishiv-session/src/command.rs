@@ -1541,24 +1541,17 @@ impl Session {
     ) -> Result<DataFrame, KrishivError> {
         match &s.kind {
             krishiv_sql::ast::ShowKind::CurrentNamespace { .. } => {
-                // `system` has no namespace: after `USE system` the row says so rather than
-                // naming the default database of another catalog.
-                let row = if crate::system::is_system(&self.state.catalog.current_catalog()) {
-                    vec![Some(crate::system::SYSTEM.to_owned()), Some(String::new())]
-                } else {
-                    vec![
-                        Some(CATALOG.to_owned()),
-                        Some(self.state.catalog.current_namespace()),
-                    ]
-                };
+                // `system` (and a declared catalog) has no namespace here: after `USE system` the
+                // row says so rather than naming the default database of another catalog.
+                let row = self.current_namespace_row();
                 self.string_frame(&["catalog", "namespace"], vec![row])
                     .await
             }
             krishiv_sql::ast::ShowKind::Catalogs { pattern, .. } => {
-                let rows = [CATALOG, crate::system::SYSTEM]
-                    .into_iter()
+                // The declared catalogs this principal sees join them (design P3-T067 §2.4).
+                let rows = (self.catalog_names().into_iter())
                     .filter(|n| crate::introspection::keep(pattern.as_ref(), n))
-                    .map(|n| vec![Some(n.to_owned())])
+                    .map(|n| vec![Some(n)])
                     .collect();
                 self.ordered_frame(&["catalog"], &[], rows).await
             }

@@ -209,6 +209,42 @@ async fn catalog_clients_follow_no_redirect() {
 }
 
 #[tokio::test]
+async fn catalog_client_follows_no_redirect_and_checks_hosts() {
+    let (port, seen) = server(
+        "HTTP/1.1 302 Found\r\nlocation: http://127.0.0.1:1/\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+            .to_owned(),
+    )
+    .await;
+    // A connector that follows checked redirects for stores still gives catalog clients none.
+    let conn = connector(&["127.0.0.1"]).without_provider_literals();
+    let client = conn
+        .catalog_client(
+            std::time::Duration::from_secs(5),
+            true,
+            "krishiv-catalog-test",
+        )
+        .unwrap();
+    let url = format!("http://127.0.0.1:{port}/v1/config");
+    let response = client.get(&url).send().await.unwrap();
+    assert_eq!(response.status(), 302);
+    let head = seen.lock().unwrap()[0].to_ascii_lowercase();
+    assert!(head.contains("user-agent: krishiv-catalog-test"), "{head}");
+    // https only unless allowed.
+    let strict = conn
+        .catalog_client(std::time::Duration::from_secs(5), false, "ua")
+        .unwrap();
+    assert!(strict.get(&url).send().await.is_err());
+    // The request host check: names pass, the declared literal passes, any other private or
+    // provider literal in any spelling is refused, never named.
+    conn.check_request_host("catalog.example.com").unwrap();
+    conn.check_request_host("127.0.0.1").unwrap();
+    for host in ["10.0.0.9", "2852039166", "169.254.169.254", "0x7f.0.0.2"] {
+        let e = conn.check_request_host(host).unwrap_err();
+        assert_eq!(e.to_string(), "private address", "{host}");
+    }
+}
+
+#[tokio::test]
 async fn literal_request_checked_before_it_is_sent() {
     let conn = connector(&[]);
     let client = conn

@@ -2981,6 +2981,7 @@ version = "0.2.0"
 dependencies = [
  "krishiv-common",
  "krishiv-plan",
+ "krishiv-session",
  "krishiv-store",
  "krishiv-types",
  "reqwest 0.13.5",
@@ -3000,6 +3001,7 @@ dependencies = [
  "futures",
  "krishiv",
  "krishiv-alloc",
+ "krishiv-catalogs",
  "krishiv-common",
  "krishiv-connect-server",
  "krishiv-functions",
