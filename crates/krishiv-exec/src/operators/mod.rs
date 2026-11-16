@@ -39,6 +39,7 @@ mod replicate;
 mod runtime_filter;
 mod sample;
 mod scan;
+mod scan_coalesce;
 pub(crate) mod select;
 mod sort;
 mod spilled_scan;

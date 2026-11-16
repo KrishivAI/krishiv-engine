@@ -71,6 +71,7 @@ use super::scan::{
 use super::{global_ref, local_mut};
 use crate::context::TaskContext;
 use crate::error::{Result, internal};
+use crate::executor::Executor;
 use crate::morsel::MorselCursor;
 use crate::operator::{GlobalState, LocalState, Source};
 
@@ -503,6 +504,9 @@ pub struct FileScanSource {
     /// One morsel per partition, its batches tagged with the partition's
     /// index ([`ScanPushdowns::partition_order`]).
     partition_order: bool,
+    /// The pushed limit hint, also when filters keep it out of the request:
+    /// the coalescer's target stays at or below it.
+    limit_hint: Option<u64>,
 }
 
 impl std::fmt::Debug for FileScanSource {
@@ -573,6 +577,20 @@ struct FileScanLocal {
     /// again.
     row_filter: Option<(usize, bool)>,
     rows: super::ScanRows,
+    /// Small filtered batches joined toward the query's batch size; flushed
+    /// before the driver claims another morsel, at a limit and at the scan's
+    /// end, so a joined batch only holds rows of the claimed morsel and takes
+    /// its split tag.
+    out: super::scan_coalesce::ScanCoalesce,
+    /// How long one `get_data` call reads before it hands the driver an
+    /// empty batch (pushed to no operator; the buffer stays): half the stall
+    /// threshold, so the driver's boundary (cancel, abort, spill requests)
+    /// still runs while a selective scan buffers.
+    slice: std::time::Duration,
+    /// The slice's clock: the executor's, as the driver's stall detector
+    /// reads it (the paused Tokio clock in deterministic mode), so batch
+    /// boundaries replay under simulation.
+    executor: Arc<dyn Executor>,
     /// The scan's totals, to record a split this driver abandons (a limit above
     /// stopped it before the split's end): its reads were made and paid for. The
     /// split's rows, bytes and unit counts are added with them; the decode
@@ -831,6 +849,7 @@ fn row_level(filters: &[PushedFilter]) -> RowLevel {
 impl FileScanSource {
     fn new(scan: &FileScan, p: ScanPushdowns) -> Result<Self> {
         check_capabilities(scan, &p)?;
+        let limit_hint = p.limit;
         let TableRequest {
             request,
             mapped,
@@ -858,6 +877,7 @@ impl FileScanSource {
             opened_files: Arc::default(),
             row_id: p.row_id,
             partition_order: p.partition_order,
+            limit_hint,
         })
     }
 
@@ -1165,13 +1185,28 @@ impl FileScanSource {
     ) -> Result<Option<Batch>> {
         let g = global_ref::<FileScanGlobal>(global, "FileScan")?;
         let local = local_mut::<FileScanLocal>(local, "FileScan")?;
+        let started = local.executor.now();
+        // The slice ends only after this call decoded a batch: every call
+        // makes progress, whatever the threshold.
+        let mut decoded = false;
         loop {
+            if let Some(b) = local.out.pop_ready() {
+                return Ok(Some(Self::tagged(g, local, b)));
+            }
+            if decoded && local.executor.now().saturating_duration_since(started) >= local.slice {
+                // The driver's turn: an empty batch (the driver pushes it to
+                // no operator); the buffer keeps joining rows of this morsel.
+                let empty = RecordBatch::new_empty(Arc::clone(&self.output));
+                return Ok(Some(Self::tagged(g, local, empty)));
+            }
             if self
                 .request
                 .limit
                 .is_some_and(|l| g.returned.load(Ordering::Relaxed) >= l)
             {
-                return Ok(None);
+                // Rows count when they are buffered: what is held goes out.
+                local.out.flush()?;
+                return Ok(local.out.pop_ready().map(|b| Self::tagged(g, local, b)));
             }
             if let Some(cur) = local.current.as_mut() {
                 match cur.stream.next_batch().await? {
@@ -1184,11 +1219,9 @@ impl FileScanSource {
                             None => self.append_metadata(b, file, cur.split)?,
                         };
                         g.returned.fetch_add(b.num_rows() as u64, Ordering::Relaxed);
-                        let split = local
-                            .morsel
-                            .and_then(|(m, _)| g.morsel_partitions.get(m))
-                            .map(|p| local.base.saturating_add(*p));
-                        return Ok(Some(Batch::new(b).with_split(split)));
+                        local.out.push(b)?;
+                        decoded = true;
+                        continue;
                     }
                     None => {
                         if let Some(done) = local.current.take() {
@@ -1210,6 +1243,12 @@ impl FileScanSource {
                     .await?;
                 continue;
             }
+            // The buffered rows belong to the claimed morsel: they go out
+            // (with its split tag) before the position moves on.
+            local.out.flush()?;
+            if let Some(b) = local.out.pop_ready() {
+                return Ok(Some(Self::tagged(g, local, b)));
+            }
             let Some((ordinal, m)) = g.cursor.claim_for(local.lane, &mut local.taken) else {
                 return Ok(None);
             };
@@ -1225,6 +1264,18 @@ impl FileScanSource {
                 local.rows.start_partition();
             }
         }
+    }
+
+    /// A batch of the claimed morsel, tagged with its partition's split
+    /// under [`ScanPushdowns::partition_order`] (untagged otherwise). The
+    /// coalescer flushes before every claim, so whatever it returns holds
+    /// rows of the claimed morsel only.
+    fn tagged(g: &FileScanGlobal, local: &FileScanLocal, b: RecordBatch) -> Batch {
+        let split = local
+            .morsel
+            .and_then(|(m, _)| g.morsel_partitions.get(m))
+            .map(|p| local.base.saturating_add(*p));
+        Batch::new(b).with_split(split)
     }
 
     /// The runtime filters whose target is a partition column.
@@ -1616,6 +1667,15 @@ impl Source for FileScanSource {
             rows: self
                 .runtime
                 .scan_stage(&g.request.dynamic, &self.mapped, ctx.partition()),
+            out: super::scan_coalesce::ScanCoalesce::new(
+                Arc::clone(&self.output),
+                usize::try_from(self.limit_hint.unwrap_or(u64::MAX))
+                    .unwrap_or(usize::MAX)
+                    .min(ctx.query().config().batch_size),
+                ctx.consumer().consumer().reservation(),
+            ),
+            slice: ctx.query().config().stall_threshold / 2,
+            executor: Arc::clone(ctx.executor()),
             consumer: Arc::clone(ctx.consumer().consumer()),
             gate: Arc::clone(ctx.query().scan_gate()),
             morsel: None,

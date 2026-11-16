@@ -620,7 +620,13 @@ fn prefetch_hides_store_latency() {
         ));
         t.rt.block_on(async {
             let start = tokio::time::Instant::now();
-            let out = run(&t.pool, plan, 1).await.unwrap();
+            // A batch per 100-row unit (they pass the coalescer uncopied),
+            // so the work is per unit.
+            let config = ExecConfig {
+                batch_size: 100,
+                ..ExecConfig::default()
+            };
+            let out = run_with(&t.pool, plan, 1, config).await.unwrap();
             assert!(out.is_empty());
             start.elapsed()
         })
@@ -1258,5 +1264,202 @@ fn a_late_fetch_of_a_changed_file_fails_and_frees_its_memory() {
     let (env, out) = late_fetch_of_two_files(true);
     let e = out.unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::KrishivFileChangedDuringRead);
+    assert_eq!(env.root.reserved(), 0);
+}
+
+/// Runs `pushdowns` over three files of 7-row units (each decoded batch is
+/// small) on 4 drivers with `config`.
+fn small_unit_scan(
+    env: &Env,
+    files: &[FileRef],
+    pushdowns: ScanPushdowns,
+    config: ExecConfig,
+) -> Vec<RecordBatch> {
+    let scan = scan_of(
+        env,
+        files.to_vec(),
+        splits(files[0].size / 3),
+        ScanOptions::default(),
+    );
+    let source = scan.build(pushdowns).unwrap();
+    env.block_on(run_with(&env.query, Arc::new(Leaf(source)), 4, config))
+        .unwrap()
+}
+
+/// E7': a file scan joins its small batches toward `batchSize` within one
+/// morsel. Against `batchSize = 1` (every batch passes through, the old
+/// behaviour) the rows, their order across 4 drivers' morsels, the row
+/// index and `_metadata` are the same, in fewer batches; a pushed limit
+/// hint caps the joined batches; a zero stall threshold (every call hands
+/// the driver its turn after one decoded batch) changes nothing either.
+#[test]
+fn a_file_scan_joins_small_batches_without_changing_rows_or_order() {
+    let env = Env::new(None).unwrap();
+    let fx = MockFixture::default();
+    let files: Vec<FileRef> = (0..3)
+        .map(|k| {
+            env.write(
+                &fx,
+                &format!("small/f{k}"),
+                &schema(),
+                &[sorted(1000, k * 1000)],
+                &fx.unit_rows(7),
+            )
+            .unwrap()
+        })
+        .collect();
+    let pushdowns = || ScanPushdowns {
+        metadata: MetadataCols {
+            file_name: true,
+            file_block_start: true,
+            row_index: true,
+            ..MetadataCols::default()
+        },
+        ..ScanPushdowns::default()
+    };
+    let config = |batch_size: usize| ExecConfig {
+        batch_size,
+        ..ExecConfig::default()
+    };
+    let concat =
+        |out: &[RecordBatch]| arrow_select::concat::concat_batches(&out[0].schema(), out).unwrap();
+    let old = small_unit_scan(&env, &files, pushdowns(), config(1));
+    let joined = small_unit_scan(&env, &files, pushdowns(), config(256));
+    assert_eq!(total_rows(&joined), 3000);
+    assert_eq!(concat(&joined), concat(&old));
+    assert!(
+        joined.len() * 10 < old.len(),
+        "{} joined batches, {} before",
+        joined.len(),
+        old.len()
+    );
+    assert!(joined.iter().all(|b| b.num_rows() <= 256));
+    // A limit hint caps the target, with filters too (the Filter above
+    // sees rows as soon as the limit's worth is read).
+    let limited = small_unit_scan(
+        &env,
+        &files,
+        ScanPushdowns {
+            filters: vec![PushedFilter::opaque(keep_all())],
+            limit: Some(10),
+            ..pushdowns()
+        },
+        config(256),
+    );
+    assert_eq!(total_rows(&limited), 3000);
+    assert!(limited.iter().all(|b| b.num_rows() <= 10));
+    // Every call ends after one decoded batch: same rows, same order.
+    let sliced = small_unit_scan(
+        &env,
+        &files,
+        pushdowns(),
+        ExecConfig {
+            stall_threshold: Duration::ZERO,
+            ..config(256)
+        },
+    );
+    let sliced: Vec<RecordBatch> = sliced.into_iter().filter(|b| b.num_rows() > 0).collect();
+    assert_eq!(concat(&sliced), concat(&old));
+    assert_eq!(env.root.reserved(), 0);
+}
+
+/// Runs `plan` as [`run_with`] does, keeping every batch's split tag.
+async fn run_tagged(
+    pool: &Arc<dyn MemoryPool>,
+    plan: Arc<dyn ExecNode>,
+    slots: usize,
+    config: ExecConfig,
+) -> Vec<(RecordBatch, Option<u32>)> {
+    let runner = QueryRunner::new(TokioExecutor::deterministic(slots).unwrap());
+    let query = QueryContext::new(QueryId(8), WorkloadClass::Batch, config, Arc::clone(pool));
+    let mut stream = runner.execute(plan, Arc::clone(&query)).await.unwrap();
+    let mut out = Vec::new();
+    while let Some(b) = stream.next().await {
+        let b = b.unwrap();
+        let split = b.split();
+        out.push((b.into_parts().0, split));
+    }
+    query.finished().await;
+    out
+}
+
+/// E7' under `TABLESAMPLE`'s partition order: a selective scan of small
+/// batches, joined toward `batchSize`, returns the same rows in the same
+/// order with the same split tag per row as when every batch passes
+/// through (`batchSize = 1`); a joined batch never mixes partitions.
+#[test]
+fn a_partition_ordered_scan_keeps_rows_order_and_split_tags_when_joining() {
+    let env = Env::new(None).unwrap();
+    let fx = MockFixture::default();
+    let files: Vec<FileRef> = (0..3)
+        .map(|k| {
+            env.write(
+                &fx,
+                &format!("ordered/f{k}"),
+                &schema(),
+                &[sorted(1000, k * 1000)],
+                &fx.unit_rows(7),
+            )
+            .unwrap()
+        })
+        .collect();
+    let every_third: Arc<dyn krishiv_exec::Predicate> = Arc::new(FnPredicate(|b: &RecordBatch| {
+        let i = b.column(0).as_primitive::<Int32Type>();
+        Ok(i.iter()
+            .map(|v| v.map(|v| v % 3 == 0))
+            .collect::<BooleanArray>())
+    }));
+    let run = |batch_size: usize| {
+        let scan = scan_of(
+            &env,
+            files.clone(),
+            splits(files[0].size / 3),
+            ScanOptions::default(),
+        );
+        let source = scan
+            .build(ScanPushdowns {
+                filters: vec![PushedFilter::opaque(Arc::clone(&every_third))],
+                partition_order: true,
+                ..ScanPushdowns::default()
+            })
+            .unwrap();
+        let config = ExecConfig {
+            batch_size,
+            ..ExecConfig::default()
+        };
+        env.block_on(run_tagged(&env.query, Arc::new(Leaf(source)), 4, config))
+    };
+    // Rows (column `i`) with the split each was tagged with, in output order.
+    let tagged_rows = |out: &[(RecordBatch, Option<u32>)]| -> Vec<(Option<i32>, Option<u32>)> {
+        out.iter()
+            .flat_map(|(b, split)| {
+                b.column(0)
+                    .as_primitive::<Int32Type>()
+                    .iter()
+                    .map(move |v| (v, *split))
+            })
+            .collect()
+    };
+    let old = run(1);
+    let joined = run(256);
+    let (old_rows, joined_rows) = (tagged_rows(&old), tagged_rows(&joined));
+    assert!(!old_rows.is_empty());
+    assert!(old_rows.iter().all(|(_, split)| split.is_some()));
+    assert!(
+        old_rows
+            .iter()
+            .map(|(_, s)| *s)
+            .collect::<BTreeSet<_>>()
+            .len()
+            > 1,
+        "the scan reads several partitions"
+    );
+    assert_eq!(joined_rows, old_rows);
+    assert!(
+        joined.len() < old.len(),
+        "{} joined batches, {} before",
+        joined.len(),
+        old.len()
+    );
     assert_eq!(env.root.reserved(), 0);
 }

@@ -24,7 +24,8 @@ partition bits; for the join too) · `aggregate/` hash aggregate (P2-T053a): `mo
 `spill_global`; `sink/combined.rs` the tables of drivers that combined and ended, on a consumer of their own whose `OutputSpill` hook writes them as runs, so any arbitration round can ask them; a batch whose worst case the pool refuses is applied in slices, `slice_tests.rs`, unless a spill of the driver's tables would free the shortfall (then it spills, ADR 0007 addendum 2026-11-08); `sink/disk.rs` the disk phase's partition tasks in parallel, one output file each), `partial.rs` flushable partial phase with adaptive bypass, `node.rs` plan nodes + DISTINCT/UNION, `udf.rs` session aggregate UDFs (ADR 0045: `UdafCall` plan data, `UdafEnv`, the guarded `UdfAcc` accumulator kind) ·
 (P2-T117b) `file_scan.rs` FileScan/FileScanSource over any `krishiv_io::FileFormat` (Spark partitions cut into
 about four morsels per driver, footer read-ahead, `_metadata` struct column; filters stay `Inexact`; partition
-columns from the directories or, `with_file_constants`, from a table format's per-file `FileConstants`) · `file_write.rs` FileWriteSink
+columns from the directories or, `with_file_constants`, from a table format's per-file `FileConstants`;
+`scan_coalesce.rs` joins filtered batches under half of `krishiv.exec.batchSize` into batches of about that size, flushed before the next morsel's claim, at a pushed limit and at the end, E7'; a joined batch holds one morsel's rows and keeps its split tag) · `file_write.rs` FileWriteSink
 (one writer task per driver behind a bounded channel; nothing visible after a failed or cancelled write) + FileWrite.
 End-to-end tests over the mock format: `krishiv-testkit/tests/file_exec.rs`; the conformance suite through the
 executor: `mock_exec` in `krishiv-testkit/tests/file_format_mock.rs`.
