@@ -27,6 +27,7 @@ pub mod metrics;
 pub mod admin;
 pub mod guard;
 pub mod internal;
+pub mod pages;
 #[cfg(feature = "tls")]
 pub mod tls;
 
