@@ -155,13 +155,15 @@ impl StaticTokens {
         self.entries.is_empty()
     }
 
-    /// The principal and role of `presented`, if it is a configured token. Every entry is
+    /// The principal and role of `presented`, if it is a configured token that has not
+    /// expired now (its `expires`, as login checks it; #785 review N3). Every entry is
     /// compared, whether or not an earlier one matched.
     #[must_use]
     pub fn lookup(&self, presented: &str) -> Option<(&Principal, Role)> {
-        let (found, _) = self.find(presented);
-        let e = self.entries.get(found?)?;
-        Some((&e.principal, e.role))
+        match self.lookup_at(presented, SystemTime::now())? {
+            (principal, role, false) => Some((principal, role)),
+            (_, _, true) => None,
+        }
     }
 
     /// [`Self::lookup`], and whether the token has expired at `now`.

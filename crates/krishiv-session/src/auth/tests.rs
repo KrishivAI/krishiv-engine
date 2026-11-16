@@ -1029,3 +1029,26 @@ fn the_earlier_of_token_and_principal_expiry_applies() {
     let cr = Credentials::new(peer(3), Surface::Connect).with_bearer(TOKEN_B);
     auth.authenticate_at(&cr, Instant::now()).expect("logs in");
 }
+
+/// #785 review N3: the public `StaticTokens::lookup` refuses an expired token, as login does.
+#[test]
+fn lookup_refuses_an_expired_token() {
+    let dir = tempfile::tempdir().unwrap();
+    let b = secret_file(dir.path(), "b", TOKEN_B, 0o400);
+    let c = config(&[
+        ("krishiv.auth.tokens.prom.secret", b.as_str()),
+        ("krishiv.auth.tokens.prom.principal", "prometheus"),
+        ("krishiv.auth.tokens.prom.kind", "service"),
+        ("krishiv.auth.tokens.prom.role", "viewer"),
+        ("krishiv.auth.principals.prometheus.expires", "2001-01-01"),
+    ])
+    .expect("valid");
+    let then = std::time::UNIX_EPOCH + Duration::from_secs(900_000_000);
+    let tokens = StaticTokens::build_at(&c.tokens, then).unwrap();
+    assert!(
+        tokens
+            .lookup_at(TOKEN_B, then)
+            .is_some_and(|(_, _, expired)| !expired)
+    );
+    assert!(tokens.lookup(TOKEN_B).is_none(), "expired now");
+}
