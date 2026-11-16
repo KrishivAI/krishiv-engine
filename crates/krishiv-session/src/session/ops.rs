@@ -88,6 +88,17 @@ impl Session {
         &self,
         class: StatementClass,
         config: &krishiv_common::config::Config,
+        options: impl Iterator<Item = &'a str>,
+    ) -> Result<(), KrishivError> {
+        let r = self.check_store_options(config, options).await;
+        crate::access::audit(self, class, r)
+    }
+
+    /// [`Self::authorize_store_options`] without the audit record, for a caller that logs it
+    /// (an analysis, through [`crate::access::audit_read`], silent in a trial).
+    pub(crate) async fn check_store_options<'a>(
+        &self,
+        config: &krishiv_common::config::Config,
         mut options: impl Iterator<Item = &'a str>,
     ) -> Result<(), KrishivError> {
         if !options.any(krishiv_io::is_server_scoped_option)
@@ -95,14 +106,13 @@ impl Session {
         {
             return Ok(());
         }
-        let r = authorize(
+        authorize(
             &*self.state.policy,
             &self.state.principal,
             &Securable::System("cluster".to_owned()),
             Privilege::Manage,
         )
-        .await;
-        crate::access::audit(self, class, r)
+        .await
     }
 
     /// `RESET key`: the key's `SET` check ([`Self::authorize_set_key`]), then the unset.
@@ -275,6 +285,17 @@ impl Session {
             Some(admitted) => admitted,
             None => self.admit_query(env, false).await?,
         });
+        // The query's profile waits here for the commit below.
+        let hold: Arc<crate::profile_history::HistoryHold> = Arc::default();
+        // Dropped with the future (a cancelled write), it records the held entry as cancelled.
+        let hold_guard = crate::profile_history::HoldGuard::new(
+            Arc::clone(&hold),
+            self.state.runtime.profile_history.clone(),
+        );
+        let held_env = QueryEnv {
+            history_hold: Some(Arc::clone(&hold)),
+            ..env.clone()
+        };
         let written = async {
             let job = job_uuid();
             // Every name of the write is resolved relative to the directory
@@ -328,7 +349,7 @@ impl Session {
             })?;
             let worker = self.worker(env);
             let (rows, _, row_id) = self
-                .run_on_query_logged(&plan, worker, env, false, admitted.take())
+                .run_on_query_logged(&plan, worker, &held_env, false, admitted.take())
                 .await?;
             let mut rows = crate::run_site::resolve_sites(rows, env);
             let mut batches = Vec::new();
@@ -398,15 +419,17 @@ impl Session {
         // A store error after the anchor is open may be a link swapped into
         // the path: the audited denial is what the caller sees then. A denial
         // is already audited (and counted): it is not asked about again.
-        if written
+        let denied = written
             .as_ref()
             .is_err_and(|e| e.error_class().name() != "KRISHIV_INSUFFICIENT_PERMISSIONS")
-            && let Err(denied) = crate::access::still_physical(self, &at)
-            && denied.error_class().name() == "KRISHIV_INSUFFICIENT_PERMISSIONS"
-        {
-            return Err(denied);
+            .then(|| crate::access::still_physical(self, &at).err())
+            .flatten()
+            .filter(|d| d.error_class().name() == "KRISHIV_INSUFFICIENT_PERMISSIONS");
+        hold_guard.settle(denied.as_ref().or(written.as_ref().err()));
+        match denied {
+            Some(denied) => Err(denied),
+            None => written,
         }
-        written
     }
 
     /// The store a directory write at `at` goes through: for a local path

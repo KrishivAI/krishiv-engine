@@ -40,7 +40,10 @@ use std::sync::Arc;
 
 use krishiv_exec::JoinType;
 use krishiv_exec::aggregate::{AggregateExpr, AggregateFunction, AggregateOutput, is_moment};
-use krishiv_exec::physical::{HashScheme, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan};
+use krishiv_exec::physical::{
+    HashScheme, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan, TableWriteRequest,
+};
+use krishiv_exec::planner::WriteMode;
 use krishiv_exec::window::{FrameBound, WindowFrame, WindowFunction};
 use krishiv_plan::{Expr, ExprNode, FunctionId, Literal, ResolvedExpr};
 use krishiv_types::DataType;
@@ -164,6 +167,7 @@ registry! {
     (shared_subplan, SharedSubplan, POST_MIGRATION_READER_VERSION, Semantic, "Subplans run once per query and read by several `SharedRead` nodes (`WITH` bodies computed once)."),
     (sort_merge_join, SortMergeJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `SortMergeJoin` node: a join of its inputs sorted on the keys (a `MERGE` hint or `krishiv.exec.join.strategy`)."),
     (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
+    (table_write, TableWrite, POST_MIGRATION_READER_VERSION, Semantic, "The `TableWrite` node: rows written into a table provider's sink (its writer, or the rewriter of its row-level table), resolved at instantiation; design P3-PR-DML §7."),
     (time_type, TimeType, POST_MIGRATION_READER_VERSION, Semantic, "The `TIME` type, with its precision."),
     (union_loop, UnionLoop, POST_MIGRATION_READER_VERSION, Semantic, "The `UnionLoop` and `LoopRef` nodes (recursive common table expressions run as a loop)."),
     (variant_explode, VariantExplode, POST_MIGRATION_READER_VERSION, Semantic, "The `variant_explode` generator (and `variant_explode_outer`): the fields of a variant object or the elements of a variant array."),
@@ -422,6 +426,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | PhysNode::PythonGroupMap { .. }
             | PhysNode::PythonCoGroupMap { .. }
             | PhysNode::PythonAggregate { .. } => Some(Feature::PythonUdfRelations),
+            PhysNode::TableWrite { .. } => Some(Feature::TableWrite),
             // A partitioned write needs a reader that
             // lays files out by partition (the older fields would be
             // ignored and the rows written flat).
@@ -694,6 +699,12 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
                     .for_each(|field| visit_arrow_field(field, f));
             }
         }
+        // The request's schema is classified by field, as an exchange's is.
+        PhysNode::TableWrite { request, .. } => request
+            .input_schema()
+            .fields()
+            .iter()
+            .for_each(|field| visit_arrow_field(field, f)),
         // A reduce fragment may name a type only in the schema it reads
         // (a sort by column index above it), so the schema is classified
         // by field, as the plan's output schema is.
@@ -822,6 +833,9 @@ fn types_of<'a>(node: &'a PhysNode) -> Vec<&'a DataType> {
     if let PhysNode::Scan(scan) | PhysNode::LateFetch { scan, .. } = node {
         out.extend(scan.scan.output.iter().map(|c| &c.data_type));
     }
+    if let PhysNode::TableWrite { table, .. } = node {
+        out.extend(table.output.iter().map(|c| &c.data_type));
+    }
     if let PhysNode::WriteFiles { write: Some(w), .. } = node {
         out.extend(w.column_types.values());
     }
@@ -869,6 +883,14 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
         }
         PhysNode::SortMergeJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
         PhysNode::NestedLoopJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
+        PhysNode::TableWrite { request, .. } => match request {
+            TableWriteRequest::Write(w) => {
+                if let WriteMode::OverwriteByFilter(filter) = &w.mode {
+                    roots.push(filter);
+                }
+            }
+            TableWriteRequest::RowLevel(r) => roots.extend(r.read_filter.iter()),
+        },
         PhysNode::OneRow
         | PhysNode::SharedRead { .. }
         | PhysNode::LateFetch { .. }

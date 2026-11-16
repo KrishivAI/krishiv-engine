@@ -62,7 +62,7 @@ impl Expand {
 #[derive(Debug, Clone, Copy)]
 struct State {
     next: usize,
-    partition: u32,
+    partition: PartitionState,
 }
 
 impl Operator for Expand {
@@ -81,7 +81,7 @@ impl Operator for Expand {
     fn local_state(&self, ctx: &TaskContext) -> Result<LocalState> {
         Ok(Box::new(State {
             next: 0,
-            partition: ctx.partition(),
+            partition: PartitionState::of(ctx),
         }))
     }
 
@@ -95,9 +95,7 @@ impl Operator for Expand {
             .projects
             .get(state.next)
             .ok_or_else(|| internal("an expansion past its last projection".to_owned()))?;
-        let mut partition: LocalState = Box::new(PartitionState {
-            partition: state.partition,
-        });
+        let mut partition: LocalState = Box::new(state.partition);
         let OperatorOutput::NeedMoreInput(Some(out)) = project.execute(input, &mut partition)?
         else {
             return Err(internal("a projection did not output a batch".to_owned()));

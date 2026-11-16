@@ -89,6 +89,21 @@ impl Session {
     }
 
     async fn statement_info_here(&self, sql: &str) -> Result<StatementInfo, KrishivError> {
+        let parts = self.statement_parts(sql).await?;
+        if parts.partial {
+            return Err(KrishivUnsupportedFeature {
+                feature: "listing the reads of this statement".to_owned(),
+            }
+            .into());
+        }
+        Ok(parts.info)
+    }
+
+    /// The statement `sql` parsed, classified and its reads analyzed (see [`Self::statement_info`]),
+    /// for `statement_info` and the analyze API. When its reads are not whole queries
+    /// (`statement_queries` gives `None`), nothing is analyzed and `partial` is set: the securables
+    /// are then its targets only.
+    pub(crate) async fn statement_parts(&self, sql: &str) -> Result<StatementParts, KrishivError> {
         let env = self.query_env();
         let sql = &*self.substituted(sql);
         let redacted = krishiv_sql::redact_sql(sql);
@@ -96,32 +111,23 @@ impl Session {
             .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
         let class = krishiv_sql::classify(&statement);
         let explain = krishiv_sql::explain_kind(&statement);
-        let queries = krishiv_sql::statement_queries(&statement).ok_or_else(|| {
-            KrishivError::from(KrishivUnsupportedFeature {
-                feature: "listing the reads of this statement".to_owned(),
-            })
-        })?;
+        let queries = krishiv_sql::statement_queries(&statement);
+        let partial = queries.is_none();
         let mut securables: Vec<SecurableUse> = Vec::new();
-        for query in queries {
+        let mut analyzed = Vec::new();
+        for query in queries.unwrap_or_default() {
             let plan = krishiv_sql::lower(query, SourceId(0))
                 .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
             let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
             let analysis = df
                 .analyzed_in_with_text(self.query_env(), Some(&redacted))
                 .await?;
-            for used in &analysis.analyzed.securables {
-                match securables
-                    .iter_mut()
-                    .find(|s| s.securable == used.securable && s.privilege == used.privilege)
-                {
-                    Some(seen) => seen.columns.extend(used.columns.iter().cloned()),
-                    None => securables.push(used.clone()),
-                }
-            }
+            merge_reads(&mut securables, &analysis.analyzed.securables);
+            analyzed.push(Arc::clone(&analysis.analyzed));
         }
         // Then what it writes, creates or drops, as the session would check
-        // it (the name as written).
-        for target in statement_targets(&statement) {
+        // it (the name as written), and `Manage` on the cluster for `ADMIN`.
+        for target in required_targets(&statement, class) {
             if let Some(securable) = self.securables_of(target.object, &env)?.into_iter().next()
                 && !securables
                     .iter()
@@ -134,12 +140,61 @@ impl Session {
                 });
             }
         }
-        Ok(StatementInfo {
-            class,
-            explain,
-            securables,
+        Ok(StatementParts {
+            info: StatementInfo {
+                class,
+                explain,
+                securables,
+            },
+            partial,
+            analyzed,
+            statement,
         })
     }
+}
+
+/// A statement as [`Session::statement_parts`] found it.
+pub(crate) struct StatementParts {
+    /// Its class, explain kind and securables.
+    pub(crate) info: StatementInfo,
+    /// Whether its reads are not whole queries (none were analyzed).
+    pub(crate) partial: bool,
+    /// The analyses of its queries, in order.
+    pub(crate) analyzed: Vec<Arc<krishiv_plan::analyzer::AnalyzedPlan>>,
+    /// The parsed statement.
+    pub(crate) statement: Statement,
+}
+
+/// Adds the reads `used` to `securables`: one entry per (securable, privilege), with the union of
+/// the columns.
+pub(crate) fn merge_reads(securables: &mut Vec<SecurableUse>, used: &[SecurableUse]) {
+    for used in used {
+        match securables
+            .iter_mut()
+            .find(|s| s.securable == used.securable && s.privilege == used.privilege)
+        {
+            Some(seen) => seen.columns.extend(used.columns.iter().cloned()),
+            None => securables.push(used.clone()),
+        }
+    }
+}
+
+/// What `statement` (of `class`) writes, creates or drops and reads without a query
+/// (`statement_targets`), plus `Manage` on the cluster for every `ADMIN` statement (ADR 0046 §4),
+/// whatever else it names: what the session checks before it runs, and what `statement_info` lists.
+fn required_targets(statement: &Statement, class: StatementClass) -> Vec<Target<'_>> {
+    let mut targets = statement_targets(statement);
+    if class == StatementClass::Admin
+        && !targets
+            .iter()
+            .any(|t| t.object == TargetObject::Cluster && t.privilege == Privilege::Manage)
+    {
+        targets.push(Target {
+            object: TargetObject::Cluster,
+            privilege: Privilege::Manage,
+        });
+    }
+    targets
 }
 
 /// The parts of a function name as written.
@@ -161,6 +216,19 @@ pub(crate) fn audit<T>(
         log_denial(session, class, e);
     }
     result
+}
+
+/// [`audit`] of a query's read check, unless `env` is a trial analysis
+/// ([`QueryEnv::quiet_denials`]), whose denials are not logged.
+pub(crate) fn audit_read<T>(
+    session: &Session,
+    env: &QueryEnv,
+    result: Result<T, KrishivError>,
+) -> Result<T, KrishivError> {
+    if env.quiet_denials {
+        return result;
+    }
+    audit(session, StatementClass::Read, result)
 }
 
 /// The audit record of the denial `e` (see [`audit`]): also written when
@@ -216,19 +284,7 @@ impl Session {
             log_denial(self, class, &e);
             return Err(e);
         }
-        let mut targets = statement_targets(statement);
-        // Every cluster-scope statement needs `Manage` on the cluster (ADR 0046 §4), whatever
-        // else it names.
-        if class == StatementClass::Admin
-            && !targets
-                .iter()
-                .any(|t| t.object == TargetObject::Cluster && t.privilege == Privilege::Manage)
-        {
-            targets.push(Target {
-                object: TargetObject::Cluster,
-                privilege: Privilege::Manage,
-            });
-        }
+        let targets = required_targets(statement, class);
         let mut checked: Vec<(Securable, Privilege)> = Vec::new();
         for target in targets {
             let securables = match self.securables_of(target.object, env) {
@@ -267,7 +323,9 @@ impl Session {
     /// them is read: permanent views are inlined before binding, so the analyzer never asks about
     /// them. Each name is asked as the analyzer asks about a table (as written, then folded, whether
     /// or not it exists, so a denial cannot tell a view from a missing name), then a permanent view
-    /// is asked as a view. Returns the views, for the securables the analysis reports.
+    /// is asked as a view. Each is asked the analysis' read privilege (`Select`; `Browse` for a
+    /// metadata analysis, `AnalysisMode::Metadata`). Returns the views, for the securables the
+    /// analysis reports.
     pub(crate) async fn authorize_reads(
         &self,
         reads: &[crate::catalog::ReadCandidate],
@@ -307,14 +365,71 @@ impl Session {
                     &*self.state.policy,
                     &self.state.principal,
                     &securable,
-                    Privilege::Select,
+                    env.analysis.mode.read_privilege(),
                 )
                 .await;
-                audit(self, StatementClass::Read, r)?;
+                audit_read(self, env, r)?;
                 checked.push(securable);
             }
         }
         Ok(views)
+    }
+
+    /// The error `e` of a metadata analysis (P3 PR-14d review B1), raised after the permanent
+    /// `views` it inlined were allowed at `Browse`: a failure inside a view's text names the
+    /// text (`(a = 424242)`, a column name), and a view's text needs `Select`. So the error is
+    /// shown only once `Select` on each of them passes; otherwise the first denial is (logged
+    /// by the caller, through [`audit_read`]). An ordinary analysis asked `Select` already, and
+    /// an access error is shown as it is.
+    pub(crate) async fn view_text_failure(
+        &self,
+        views: &[TableIdent],
+        env: &QueryEnv,
+        e: KrishivError,
+    ) -> KrishivError {
+        if env.analysis.mode != krishiv_plan::analyzer::AnalysisMode::Metadata
+            || e.error_class() == ErrorClass::KrishivInsufficientPermissions
+        {
+            return e;
+        }
+        for view in views {
+            if let Err(denied) = authorize(
+                &*self.state.policy,
+                &self.state.principal,
+                &Securable::View(view.clone()),
+                Privilege::Select,
+            )
+            .await
+            {
+                return denied;
+            }
+        }
+        e
+    }
+
+    /// `Select` on every permanent view a metadata analysis read at `Browse` (a withheld
+    /// explain, design P3 PR-14d D2a): the plan shows a view's inlined body, and a view's text
+    /// is data (ADR 0046, update 2026-11-12). A SQL function's body is shown as
+    /// `DESCRIBE FUNCTION EXTENDED` shows it: metadata (ADR 0046, update 2026-11-15). Asked in
+    /// plan order; a denial is audited.
+    pub(crate) async fn authorize_bodies(
+        &self,
+        analysis: &crate::dataframe::Analysis,
+    ) -> Result<(), KrishivError> {
+        for used in &analysis.analyzed.securables {
+            if !matches!(used.securable, Securable::View(_)) {
+                continue;
+            }
+            let r = authorize(
+                &*self.state.policy,
+                &self.state.principal,
+                &used.securable,
+                Privilege::Select,
+            )
+            .await;
+            audit(self, StatementClass::Read, r)?;
+        }
+        Ok(())
     }
 
     /// Checks that this session's principal holds `privilege` on `securable` under the

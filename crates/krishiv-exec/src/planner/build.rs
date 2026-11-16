@@ -647,7 +647,10 @@ impl<'a> Planner<'a> {
                 keys,
                 udf,
                 output,
-            } => self.group_map(input, keys, udf, output),
+            } => {
+                krishiv_plan::check_python_relation_determinism(&p.node)?;
+                self.group_map(input, keys, udf, output)
+            }
             PlanNode::CoGroupMap {
                 left,
                 right,
@@ -655,7 +658,10 @@ impl<'a> Planner<'a> {
                 right_keys,
                 udf,
                 output,
-            } => self.cogroup_map(left, right, left_keys, right_keys, udf, output),
+            } => {
+                krishiv_plan::check_python_relation_determinism(&p.node)?;
+                self.cogroup_map(left, right, left_keys, right_keys, udf, output)
+            }
             PlanNode::PythonTableFunction { .. } => Err(super::python_relation::later_kind(
                 "a Python table function",
             )),

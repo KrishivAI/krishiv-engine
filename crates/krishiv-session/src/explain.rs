@@ -8,7 +8,7 @@
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
+use krishiv_common::error::{ErrorClass, KrishivError, KrishivUnsupportedFeature};
 use krishiv_exec::planner::{ExplainNode, PhysicalPlan, ProviderStatistics, TableProviderResolver};
 use krishiv_optimizer::PlanStats;
 use krishiv_plan::{LogicalPlan, Plan};
@@ -17,6 +17,8 @@ use krishiv_sql::ast::{Explain, SetKind, Statement, TimeZone};
 use crate::dataframe::{Analysis, DataFrame, ExplainMode};
 use crate::functions::lit;
 use crate::session::{Session, internal};
+
+pub(crate) mod withheld;
 
 impl From<krishiv_sql::ast::ExplainMode> for ExplainMode {
     fn from(mode: krishiv_sql::ast::ExplainMode) -> Self {
@@ -82,7 +84,11 @@ impl Session {
                     .to_text(krishiv_exec::profile::TextOptions::default())
             }
             krishiv_sql::ast::ExplainMode::Verbose => explained.verbose().await?.to_text(),
-            mode => explained.explain_text(mode.into(), true).await?,
+            mode => {
+                explained
+                    .explain_for_metadata_text(mode.into(), true)
+                    .await?
+            }
         };
         self.one_row(&text).await
     }
@@ -419,7 +425,7 @@ impl DataFrame {
         let stats = ProviderStatistics(
             Arc::clone(&planned.analysis.env.catalog) as Arc<dyn TableProviderResolver>
         );
-        let mut text = render(mode, &parsed, &planned, &stats);
+        let mut text = dense_ids(&render(mode, &parsed, &planned, &stats));
         // Which estimates came from distinct-value samples and which stayed
         // the defaults (only when a table was sampled, so a query that
         // samples nothing prints Spark's text).
@@ -437,6 +443,101 @@ impl DataFrame {
         }
         Ok(text)
     }
+}
+
+impl DataFrame {
+    /// The text of `mode` for a caller that may hold only `Browse` on what the plan reads (Connect
+    /// `AnalyzePlan.explain`, SQL `EXPLAIN`; ADR 0046 §3b, design P3 PR-14d D1). A principal whose
+    /// ordinary (`Select`) analysis passes gets [`Self::explain_text`], unchanged. Otherwise the
+    /// plan is shown with the data withheld ([`Self::explain_withheld`]). The trial analysis logs
+    /// no audit record: its denial is an answer, not a refusal. `cost` keeps `Select`: its numbers
+    /// are the data.
+    pub(crate) async fn explain_for_metadata_text(
+        &self,
+        mode: ExplainMode,
+        lenient: bool,
+    ) -> Result<String, KrishivError> {
+        if mode == ExplainMode::Cost {
+            return self.explain_text(mode, lenient).await;
+        }
+        match self.trial_analysis().await {
+            // An access refusal (a denial, a policy error, a row filter or mask on `Select`):
+            // the withheld plan. Any other failure is the ordinary explain's to show.
+            Err(e)
+                if matches!(
+                    e.error_class(),
+                    ErrorClass::KrishivInsufficientPermissions
+                        | ErrorClass::KrishivUnsupportedFeature
+                ) =>
+            {
+                self.explain_withheld(mode, lenient).await
+            }
+            _ => self.explain_text(mode, lenient).await,
+        }
+    }
+
+    /// The plan of a metadata analysis (catalog tables need `Browse`), planned with no table
+    /// statistics, no planning hints and no distinct-value samples, and without the result-cache
+    /// note; a note line says so. A plan that reads a permanent view still needs `Select` on it:
+    /// the plan shows the inlined body, and a view's text is data (ADR 0046, update 2026-11-12).
+    /// A file listing or footer failure is shown without its
+    /// paths, which can carry partition values.
+    async fn explain_withheld(
+        &self,
+        mode: ExplainMode,
+        lenient: bool,
+    ) -> Result<String, KrishivError> {
+        let parsed = self.plan.to_string();
+        let analysis = match self.metadata_analysis().await {
+            Ok(a) => a,
+            Err(e) if lenient => return Ok(failed(mode, &parsed, None, &e)),
+            Err(e) => return Err(e),
+        };
+        if let Err(e) = self.session.authorize_bodies(&analysis).await {
+            return if lenient {
+                Ok(failed(mode, &parsed, None, &e))
+            } else {
+                Err(e)
+            };
+        }
+        let (optimized, physical) = match self
+            .session
+            .physical_withheld(&analysis.analyzed, &analysis.env)
+            .await
+        {
+            Ok((optimized, physical)) => (optimized, physical.explain_all()),
+            Err(e) => {
+                let e = withheld_error(&e);
+                return if lenient {
+                    Ok(failed(mode, &parsed, Some(&analysis), &e))
+                } else {
+                    Err(e)
+                };
+            }
+        };
+        let stats = ProviderStatistics(withheld::resolver(
+            Arc::clone(&analysis.env.catalog) as Arc<dyn TableProviderResolver>
+        ));
+        let planned = Planned {
+            analysis,
+            optimized,
+            physical,
+        };
+        let mut text = render(mode, &parsed, &planned, &stats);
+        let _ = write!(text, "\n{WITHHELD_NOTE}\n");
+        Ok(text)
+    }
+}
+
+/// The last section of a withheld explain.
+pub(crate) const WITHHELD_NOTE: &str =
+    "== Note ==\nStatistics withheld: the plan is the one chosen with no table statistics.";
+
+/// A planning failure of a withheld explain, without its text: listing a table's files or reading
+/// their footers can fail with a path, and a path can carry partition values (`country=US`). Its
+/// class and SQLSTATE stay; every message parameter is redacted.
+fn withheld_error(e: &KrishivError) -> KrishivError {
+    e.redacted()
 }
 
 fn physical_section(physical: &ExplainNode) -> String {
@@ -489,6 +590,60 @@ fn render(mode: ExplainMode, parsed: &str, p: &Planned, stats: &ProviderStatisti
 
 /// Spark's `FORMATTED`: the outline with operator ids (children first),
 /// then `(id) Name` with the node's arguments.
+/// The ids the planner and the common-subexpression pass give their own columns start at 2^62 (the planner) and 2^32 (the common-subexpression pass), far above the
+/// plan's; in the text they follow the plan's largest id in order of first
+/// appearance (`sum(amount#1)#4`, as Spark prints `sum(amount#1)#12L`),
+/// never `#4611686018427387904` (PY-008).
+fn dense_ids(text: &str) -> String {
+    const HIGH: u64 = 1 << 32;
+    let ids = |text: &str| -> Vec<(usize, usize, u64)> {
+        let b = text.as_bytes();
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] == b'#' && b.get(i + 1).is_some_and(u8::is_ascii_digit) {
+                let end = (i + 1..b.len())
+                    .find(|&j| !b[j].is_ascii_digit())
+                    .unwrap_or(b.len());
+                if let Ok(n) = text[i + 1..end].parse::<u64>() {
+                    out.push((i + 1, end, n));
+                }
+                i = end;
+            } else {
+                i += 1;
+            }
+        }
+        out
+    };
+    let found = ids(text);
+    if !found.iter().any(|&(_, _, n)| n >= HIGH) {
+        return text.to_owned();
+    }
+    let base = found
+        .iter()
+        .map(|&(_, _, n)| n)
+        .filter(|&n| n < HIGH)
+        .max()
+        .map_or(0, |m| m.saturating_add(1));
+    let mut mapped: Vec<u64> = Vec::new();
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    for (start, end, n) in found {
+        if n < HIGH {
+            continue;
+        }
+        let rank = mapped.iter().position(|&m| m == n).unwrap_or_else(|| {
+            mapped.push(n);
+            mapped.len() - 1
+        });
+        out.push_str(&text[at..start]);
+        let _ = write!(out, "{}", base.saturating_add(rank as u64));
+        at = end;
+    }
+    out.push_str(&text[at..]);
+    out
+}
+
 fn formatted(root: &ExplainNode) -> String {
     let mut ids = Vec::new();
     number(root, &mut ids);
@@ -601,4 +756,21 @@ fn f64_to_u64(v: f64) -> u64 {
     )]
     let n = v.max(0.0).min(u64::MAX as f64) as u64;
     n
+}
+
+#[cfg(test)]
+mod dense_ids_tests {
+    use super::dense_ids;
+
+    #[test]
+    fn planner_ids_follow_the_plans_own() {
+        let text = "HashAggregate(sum(amount#1)#4611686018427387904 AS revenue#2)\nx#4611686018427387905 y#4611686018427387904 z#7";
+        assert_eq!(
+            dense_ids(text),
+            "HashAggregate(sum(amount#1)#8 AS revenue#2)\nx#9 y#8 z#7"
+        );
+        assert_eq!(dense_ids("a#1 b#22"), "a#1 b#22");
+        // the common-subexpression pass starts at 2^32
+        assert_eq!(dense_ids("a#1 b#4294967296 c#4294967297"), "a#1 b#2 c#3");
+    }
 }

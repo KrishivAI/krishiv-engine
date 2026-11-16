@@ -17,9 +17,11 @@ use krishiv_exec::physical::{
     JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProbeColumn, ProbeFilter,
     ProbeFilterColumn, ProbeRowStage, ProbeSelect, ProjectItemPlan, Residual, ScanFilter, ScanId,
     ScanNode, ScanRuntimeFilter, SortMergeJoinPlan, SubqueryId, SubqueryPlan, SubqueryValueKind,
-    WritePlan,
+    TableWriteRequest, WritePlan,
 };
-use krishiv_exec::planner::ExplainNode;
+use krishiv_exec::planner::{
+    ExplainNode, RowLevelOperation, RowLevelWrite, WriteMode, WriteRequest,
+};
 use krishiv_exec::window::{
     FrameBound, FrameUnits, GroupLimitPlan, RankLike, WindowFrame, WindowFunction,
     WindowFunctionPlan, WindowPlan,
@@ -211,6 +213,14 @@ pub(crate) fn partial_aggregate() -> PhysNode {
             output: AggregateOutput::Partial,
         },
     }
+}
+
+/// The rows a [`PhysNode::TableWrite`] of the inventory sends its table.
+fn written_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("a", ArrowType::Int64, true),
+        Field::new("s", ArrowType::Utf8, false),
+    ]))
 }
 
 pub(crate) fn scan() -> PhysNode {
@@ -1090,6 +1100,46 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                     keys: vec![SortKey::asc(0), SortKey::desc(1)],
                 }),
                 window: window_aggregates(),
+            },
+        ),
+        (
+            "table_write",
+            PhysNode::TableWrite {
+                input: boxed(scan()),
+                table: table_scan().scan,
+                request: TableWriteRequest::Write({
+                    let mut w =
+                        WriteRequest::new(WriteMode::Append, "`c`.`db`.`t`", written_schema());
+                    w.options = BTreeMap::from([("mergeSchema".to_owned(), "true".to_owned())]);
+                    w.write_id = Some("0b7f3a6e-5c1d-4e2a-9f8b-1a2b3c4d5e6f".to_owned());
+                    w
+                }),
+            },
+        ),
+        (
+            "table_write_by_filter",
+            PhysNode::TableWrite {
+                input: boxed(scan()),
+                table: table_scan().scan,
+                request: TableWriteRequest::Write(WriteRequest::new(
+                    WriteMode::OverwriteByFilter(predicate()),
+                    "`t`",
+                    written_schema(),
+                )),
+            },
+        ),
+        (
+            "table_write_row_level",
+            PhysNode::TableWrite {
+                input: boxed(scan()),
+                table: table_scan().scan,
+                request: TableWriteRequest::RowLevel(RowLevelWrite::new(
+                    RowLevelOperation::Delete,
+                    "`t`",
+                    written_schema(),
+                    vec![b"part-0.parquet".to_vec()],
+                    Some(predicate()),
+                )),
             },
         ),
         (

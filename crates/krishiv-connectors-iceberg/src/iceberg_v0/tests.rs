@@ -12,7 +12,7 @@ use super::storage::{KrishivStorageFactory, StorageRegistration, from_iceberg};
 
 /// A scheduler with the local file system registered as `file://` and a
 /// registration whose relative paths resolve under `dir`.
-fn local(dir: &std::path::Path) -> (Arc<IoScheduler>, StorageRegistration) {
+pub(super) fn local(dir: &std::path::Path) -> (Arc<IoScheduler>, StorageRegistration) {
     // The I/O runtime is the test's own (iceberg-rust's `Runtime` needs one).
     let sched = match tokio::runtime::Handle::try_current() {
         Ok(h) => IoScheduler::with_runtime(IoConfig::default(), h),
@@ -444,5 +444,109 @@ fn column_defaults_are_refused() {
     ] {
         let e = super::types::spark_field(&f).unwrap_err();
         assert!(e.to_string().contains("column default values"), "{e}");
+    }
+}
+
+/// The Arrow table schema carries the id of every nested field: struct
+/// children, list elements, map keys and values.
+#[test]
+fn arrow_schema_carries_nested_field_ids() {
+    use arrow_schema::{DataType as A, Field};
+    use iceberg::spec::{ListType, NestedField, PrimitiveType, StructType, Type};
+    let schema = iceberg::spec::Schema::builder()
+        .with_schema_id(1)
+        .with_fields(vec![
+            NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+            NestedField::optional(
+                9,
+                "s",
+                Type::Struct(StructType::new(vec![
+                    NestedField::required(10, "a", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(
+                        11,
+                        "l",
+                        Type::List(ListType::new(
+                            NestedField::list_element(
+                                12,
+                                Type::Primitive(PrimitiveType::Int),
+                                false,
+                            )
+                            .into(),
+                        )),
+                    )
+                    .into(),
+                ])),
+            )
+            .into(),
+        ])
+        .build()
+        .unwrap();
+    let id = |f: &Field| f.metadata().get(krishiv_io::FIELD_ID_KEY).cloned();
+    let arrow = super::types::arrow_schema(&schema).unwrap();
+    assert_eq!(id(arrow.field(0)).as_deref(), Some("1"));
+    let s = arrow.field(1);
+    assert_eq!(id(s).as_deref(), Some("9"));
+    let A::Struct(children) = s.data_type() else {
+        panic!("{s:?}")
+    };
+    assert_eq!(id(&children[0]).as_deref(), Some("10"));
+    assert_eq!(id(&children[1]).as_deref(), Some("11"));
+    let A::List(element) = children[1].data_type() else {
+        panic!("{:?}", children[1])
+    };
+    assert_eq!(id(element).as_deref(), Some("12"));
+
+    let arrow = super::types::arrow_schema(&test_schema()).unwrap();
+    let A::List(element) = arrow.field(2).data_type() else {
+        panic!("{:?}", arrow.field(2))
+    };
+    assert_eq!(id(element).as_deref(), Some("4"));
+    let A::Map(entries, _) = arrow.field(3).data_type() else {
+        panic!("{:?}", arrow.field(3))
+    };
+    let A::Struct(kv) = entries.data_type() else {
+        panic!("{entries:?}")
+    };
+    assert_eq!(
+        (id(&kv[0]).as_deref(), id(&kv[1]).as_deref()),
+        (Some("6"), Some("7"))
+    );
+}
+
+/// A manifest read fetches only its declared length: a file larger than its
+/// manifest list says is refused (never parsed short, never collected whole),
+/// as is one smaller; either size past the cap is refused before any byte is
+/// read.
+#[tokio::test]
+async fn capped_reads_fetch_at_most_the_declared_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_sched, reg) = local(dir.path());
+    let io = reg.file_io();
+    let loc = format!("file://{}/m/big.avro", dir.path().display());
+    io.new_output(&loc)
+        .unwrap()
+        .write(bytes::Bytes::from(vec![7u8; 4096]))
+        .await
+        .unwrap();
+    let read = |declared, max| super::scan::read_capped(&io, "manifest", &loc, declared, max);
+    assert_eq!(read(Some(4096), 8192).await.unwrap().len(), 4096);
+    assert_eq!(read(None, 8192).await.unwrap().len(), 4096);
+    let longer = read(Some(10), 100).await.unwrap_err();
+    assert!(
+        longer.to_string().contains("is not 10 bytes long"),
+        "{longer}"
+    );
+    let shorter = read(Some(5000), 8192).await.unwrap_err();
+    assert_eq!(
+        shorter.error_class(),
+        krishiv_common::error::ErrorClass::FailedReadFileNoHint,
+        "{shorter}"
+    );
+    for (declared, max) in [(Some(200), 100), (None, 100)] {
+        let e = read(declared, max).await.unwrap_err();
+        assert!(
+            e.to_string().contains("KRISHIV_CATALOG_LIMIT_EXCEEDED"),
+            "{e}"
+        );
     }
 }
