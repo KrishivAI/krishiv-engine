@@ -82,7 +82,24 @@ impl RowLevelCapabilities {
             cardinality,
         }
     }
+
+    /// These capabilities with merge-on-read offered or not.
+    #[must_use]
+    pub fn with_merge_on_read(mut self, merge_on_read: bool) -> Self {
+        self.merge_on_read = merge_on_read;
+        self
+    }
 }
+
+/// The rewrite option that marks a merge-on-read rewrite (value `true`; see
+/// [`RowLevelTable::merge_on_read`]).
+pub const MERGE_ON_READ_OPTION: &str = "__krishiv_row_level_merge_on_read";
+
+/// The last column of a merge-on-read rewrite's rows (`BOOLEAN`, never NULL): whether the row's
+/// table columns are written as a new row. It follows [`ROW_FILE_COLUMN`] and
+/// [`ROW_POSITION_COLUMN`], which name the target row the statement deletes or replaces (both
+/// NULL for an inserted row).
+pub const ROW_WRITE_COLUMN: &str = "__krishiv_row_write";
 
 /// The counts of one row-level statement, for its result rows.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -230,6 +247,21 @@ pub trait RowLevelTable: Send + Sync + fmt::Debug {
     /// # Errors
     /// `UNSUPPORTED_FEATURE.TABLE_OPERATION` for an operation the table refuses.
     fn rewriter(&self, request: &RowLevelWrite) -> Result<Arc<dyn Sink>>;
+
+    /// Whether a statement of this table's operation with `condition` (parsed, unresolved;
+    /// `None`: every row) records its changed rows as deletes instead of rewriting their files
+    /// (merge-on-read). `qualifier` is the name the statement reads the table under, which the
+    /// condition's column names may carry. The default follows
+    /// [`capabilities`](Self::capabilities).
+    ///
+    /// A merge-on-read rewrite ([`MERGE_ON_READ_OPTION`] set in its request) receives the rows
+    /// the statement changes or inserts, never the rows it keeps: the table's columns, then
+    /// [`ROW_FILE_COLUMN`] and [`ROW_POSITION_COLUMN`] (the target row deleted or replaced, NULL
+    /// for an insert) and [`ROW_WRITE_COLUMN`] (whether the table columns are written).
+    fn merge_on_read(&self, condition: Option<&Expr>, qualifier: Option<&str>) -> bool {
+        let _ = (condition, qualifier);
+        self.capabilities().merge_on_read
+    }
 
     /// The statement's result rows from its counts; `None` gives an empty result, as Spark does
     /// for a v2 table.
@@ -688,5 +720,34 @@ mod tests {
         assert_eq!(RowLevelOperation::Merge.name(), "MERGE INTO");
         let c = RowLevelCapabilities::copy_on_write(CardinalityRule::SparkMergeCardinality);
         assert!(!c.merge_on_read);
+        assert!(c.with_merge_on_read(true).merge_on_read);
+    }
+
+    #[derive(Debug)]
+    struct Caps(RowLevelCapabilities);
+
+    impl RowLevelTable for Caps {
+        fn capabilities(&self) -> RowLevelCapabilities {
+            self.0
+        }
+        fn scan(&self) -> Result<Arc<dyn ScanPushdown>> {
+            Err(crate::error::internal("no scan".to_owned()))
+        }
+        fn scan_files(&self, _files: &[Vec<u8>]) -> Result<Arc<dyn ScanPushdown>> {
+            Err(crate::error::internal("no scan".to_owned()))
+        }
+        fn rewriter(&self, _request: &RowLevelWrite) -> Result<Arc<dyn Sink>> {
+            Err(crate::error::internal("no sink".to_owned()))
+        }
+    }
+
+    #[test]
+    fn merge_on_read_follows_the_capabilities_by_default() {
+        let cow = RowLevelCapabilities::copy_on_write(CardinalityRule::SparkMergeCardinality);
+        assert!(!Caps(cow).merge_on_read(None, None));
+        assert!(Caps(cow.with_merge_on_read(true)).merge_on_read(None, Some("t")));
+        // The rewrite's marker column follows the row id columns.
+        assert_ne!(ROW_WRITE_COLUMN, ROW_FILE_COLUMN);
+        assert!(MERGE_ON_READ_OPTION.starts_with("__krishiv_"));
     }
 }

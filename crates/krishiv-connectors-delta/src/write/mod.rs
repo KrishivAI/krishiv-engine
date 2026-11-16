@@ -51,6 +51,7 @@
 //!   where delta-spark prints its expression tree.
 
 pub mod dml;
+mod dv;
 mod files;
 pub mod filter;
 pub mod merge;

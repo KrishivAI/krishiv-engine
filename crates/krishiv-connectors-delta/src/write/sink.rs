@@ -377,6 +377,11 @@ struct WriteGlobal {
     failed: std::sync::atomic::AtomicBool,
     /// When the sink started (a row-level change's `rewriteTimeMs`).
     started: std::time::Instant,
+    /// A merge-on-read change: the rows the drivers that ended their input marked.
+    marks: Mutex<Vec<super::dv::Marks>>,
+    /// The deletion vector files written, deleted as the writers' files are until the commit
+    /// is attempted.
+    dv_files: Mutex<Vec<object_store::path::Path>>,
 }
 
 impl WriteGlobal {
@@ -395,8 +400,9 @@ impl WriteGlobal {
     /// [`Drop`]) no longer deletes their files, since the commit may land (review 2, N2).
     /// Until then the writers stay here, so a cancellation anywhere in `finalize` aborts their
     /// uploads and deletes their finished files.
-    fn release_writers(&self) {
+    fn release_writers(&self) -> Vec<object_store::path::Path> {
         drop(self.take_writers());
+        std::mem::take(&mut *self.dv_files.lock().unwrap_or_else(PoisonError::into_inner))
     }
 }
 
@@ -432,6 +438,16 @@ impl Drop for WriteGlobal {
         for w in writers {
             abandon(&self.engine, w);
         }
+        let dv_files =
+            std::mem::take(&mut *self.dv_files.lock().unwrap_or_else(PoisonError::into_inner));
+        if !dv_files.is_empty() {
+            let engine = self.engine.clone();
+            drop(
+                self.engine
+                    .handle()
+                    .spawn(async move { delete_files(&engine, &dv_files).await }),
+            );
+        }
     }
 }
 
@@ -452,6 +468,8 @@ struct WriteLocal {
     writer: Arc<AsyncMutex<DriverWriter>>,
     signal: Arc<SpillSignal>,
     combined: bool,
+    /// A merge-on-read change: the rows this driver marked.
+    marks: Option<super::dv::Marks>,
 }
 
 impl Drop for WriteLocal {
@@ -484,6 +502,8 @@ impl Sink for DeltaWriteSink {
             writers: Mutex::new(Vec::new()),
             failed: std::sync::atomic::AtomicBool::new(false),
             started: std::time::Instant::now(),
+            marks: Mutex::new(Vec::new()),
+            dv_files: Mutex::new(Vec::new()),
         });
         #[cfg(test)]
         super::test_hooks::record(&self.write_id, &global);
@@ -507,6 +527,12 @@ impl Sink for DeltaWriteSink {
             ))),
             signal: Arc::clone(memory.signal()),
             combined: false,
+            marks: match &self.mode {
+                Mode::RowLevel(plan) if plan.merge_on_read => {
+                    Some(super::dv::Marks::new(memory.reservation()))
+                }
+                _ => None,
+            },
         }))
     }
 
@@ -526,6 +552,22 @@ impl Sink for DeltaWriteSink {
         if batch.num_rows() == 0 {
             return Ok(SinkStatus::NeedMoreInput);
         }
+        // A merge-on-read change: the rows marked, and the rows written (if any).
+        let (batch, marked) = match &l.marks {
+            Some(_) => {
+                let split = super::dv::split(&batch)?;
+                (split.data, Some(split.marks))
+            }
+            None => (Some(batch), None),
+        };
+        let Some(batch) = batch else {
+            if let (Some(marks), Some(m)) = (l.marks.as_mut(), marked)
+                && let Some(bytes) = marks.mark(m)
+            {
+                return Ok(SinkStatus::NeedMemory { bytes });
+            }
+            return Ok(SinkStatus::NeedMoreInput);
+        };
         if let Mode::RowLevel(plan) = &self.mode {
             plan.check_rows()?;
         }
@@ -541,6 +583,15 @@ impl Sink for DeltaWriteSink {
             .saturating_add(w.deficit);
         if w.reservation().try_grow(bytes).is_err() {
             return Ok(SinkStatus::NeedMemory { bytes });
+        }
+        if let (Some(marks), Some(m)) = (l.marks.as_mut(), marked)
+            && let Some(more) = marks.mark(m)
+        {
+            // Nothing is marked or written: the batch comes again once memory is granted.
+            w.reservation().shrink(bytes);
+            return Ok(SinkStatus::NeedMemory {
+                bytes: bytes.saturating_add(more),
+            });
         }
         w.deficit = 0;
         let global = Arc::clone(global);
@@ -586,6 +637,12 @@ impl Sink for DeltaWriteSink {
         // (review 2, N3). The writer's bytes stay in its reservation until `finalize`.
         l.signal.set_spillable_bytes(0);
         let g = global_of(global)?;
+        if let Some(marks) = l.marks.take() {
+            g.marks
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(marks);
+        }
         let writer = Arc::clone(&l.writer);
         settle_deficit(&g.engine, &writer);
         if g.failed.load(Ordering::Acquire) {
@@ -704,8 +761,9 @@ impl Sink for DeltaWriteSink {
                 Ok(()) => Ok(()),
                 Err(Failure::NotCommitted(e)) => {
                     // Released first, so `Drop` does not delete them a second time.
-                    g.release_writers();
+                    let dv_files = g.release_writers();
                     delete_files(&g.engine, &paths).await;
+                    delete_files(&g.engine, &dv_files).await;
                     Err(e)
                 }
                 // The commit's outcome is not known: its files may be live.
@@ -962,9 +1020,27 @@ impl DeltaWriteSink {
         written: Written,
     ) -> Result<(), Failure> {
         if let Mode::RowLevel(plan) = &self.mode {
-            let staged =
-                super::dml::stage(&g.engine, g.started, table, plan, written, &self.write_id)
-                    .await?;
+            let dvs = if plan.merge_on_read {
+                let marks =
+                    std::mem::take(&mut *g.marks.lock().unwrap_or_else(PoisonError::into_inner));
+                Some(
+                    super::dv::write(&g.engine, table, marks, &g.dv_files)
+                        .await
+                        .map_err(Failure::NotCommitted)?,
+                )
+            } else {
+                None
+            };
+            let staged = super::dml::stage(
+                &g.engine,
+                g.started,
+                table,
+                plan,
+                written,
+                &self.write_id,
+                dvs,
+            )
+            .await?;
             return match staged {
                 Some(staged) => self.commit_staged(g, table, staged).await,
                 None => {
@@ -1060,6 +1136,8 @@ impl DeltaWriteSink {
             operation_metrics: metrics,
             adds: written.adds,
             removes,
+            dv_updates: Vec::new(),
+            dv_descriptors: HashMap::new(),
             read_set,
         };
         self.commit_staged(g, table, staged).await

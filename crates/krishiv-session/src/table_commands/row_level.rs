@@ -45,8 +45,8 @@ use krishiv_common::error::{
 };
 use krishiv_exec::physical::{PhysNode, TableWriteRequest};
 use krishiv_exec::planner::{
-    RowLevelCounts, RowLevelOperation, RowLevelProblem, RowLevelTable, RowLevelWrite,
-    TableProvider, TableProviderResolver as _,
+    MERGE_ON_READ_OPTION, ROW_WRITE_COLUMN, RowLevelCounts, RowLevelOperation, RowLevelProblem,
+    RowLevelTable, RowLevelWrite, TableProvider, TableProviderResolver as _,
 };
 use krishiv_exec::{ROW_FILE_COLUMN, ROW_POSITION_COLUMN, ScanPushdown};
 use krishiv_plan::analyzer::TableColumn;
@@ -275,6 +275,61 @@ impl Session {
         );
         let column_of =
             |name: &str| crate::functions::expr(&format!("{}.{}", ident(alias), ident(name)));
+        // Merge-on-read (the table records changed rows as deletes, `RowLevelTable::
+        // merge_on_read`): the rewrite reads only the rows the condition holds for, each with
+        // its row id; an `UPDATE` writes their new values, a `DELETE` nothing.
+        let parsed = match condition {
+            Some(c) => Some(crate::functions::expr(c)?.expr),
+            None => None,
+        };
+        let merge_on_read = table.merge_on_read(parsed.as_ref(), Some(alias));
+        if merge_on_read {
+            let mut select = Vec::with_capacity(columns.len() + 3);
+            for c in &columns {
+                let value = match (
+                    op,
+                    assignments
+                        .iter()
+                        .find(|a| a.column.eq_ignore_ascii_case(&c.name)),
+                ) {
+                    (RowLevelOperation::Delete, _) => {
+                        crate::Column::new(krishiv_plan::Expr::literal(
+                            krishiv_plan::Literal::Null(Some(c.data_type.clone())),
+                        ))
+                    }
+                    (_, Some(a)) => crate::functions::expr(a.value.as_deref().unwrap_or("NULL"))?
+                        .cast_ansi(c.data_type.clone()),
+                    (_, None) => column_of(&c.name)?,
+                };
+                select.push(value.alias(&c.name));
+            }
+            select.push(column_of(ROW_FILE_COLUMN)?.alias(ROW_FILE_COLUMN));
+            select.push(column_of(ROW_POSITION_COLUMN)?.alias(ROW_POSITION_COLUMN));
+            select.push(
+                crate::functions::lit(op != RowLevelOperation::Delete).alias(ROW_WRITE_COLUMN),
+            );
+            let rewrite = self
+                .hidden_frame(&part, part_entry, &with_row_id)
+                .alias(alias)
+                .filter(crate::functions::expr(&hit)?)
+                .select(select);
+            return self
+                .finish_row_level(RowLevelRun {
+                    op,
+                    quoted,
+                    alias,
+                    condition,
+                    rewrite,
+                    touched,
+                    affected,
+                    scan_ms,
+                    merge_on_read: true,
+                    table: &table,
+                    columns: &columns,
+                    value_types: &value_types,
+                })
+                .await;
+        }
         let mut select = Vec::with_capacity(columns.len());
         for c in &columns {
             let value = match assignments
@@ -303,6 +358,42 @@ impl Session {
             rewrite = rewrite.filter(crate::functions::expr(&format!("NOT {hit}"))?);
         }
         let rewrite = rewrite.select(select);
+        self.finish_row_level(RowLevelRun {
+            op,
+            quoted,
+            alias,
+            condition,
+            rewrite,
+            touched,
+            affected,
+            scan_ms,
+            merge_on_read: false,
+            table: &table,
+            columns: &columns,
+            value_types: &value_types,
+        })
+        .await
+    }
+
+    /// Runs `run`'s rewrite into the table's rewriter and gives the statement's result.
+    async fn finish_row_level(
+        &self,
+        run: RowLevelRun<'_>,
+    ) -> Result<Option<DataFrame>, KrishivError> {
+        let RowLevelRun {
+            op,
+            quoted,
+            alias,
+            condition,
+            rewrite,
+            touched,
+            affected,
+            scan_ms,
+            merge_on_read,
+            table,
+            columns,
+            value_types,
+        } = run;
         let analysis = rewrite.action_analysis().await?;
         let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
         let target = first_scan(physical.root())
@@ -330,6 +421,11 @@ impl Session {
         request
             .options
             .insert(ALIAS_OPTION.to_owned(), alias.to_owned());
+        if merge_on_read {
+            request
+                .options
+                .insert(MERGE_ON_READ_OPTION.to_owned(), "true".to_owned());
+        }
         if let Some(c) = condition {
             request
                 .options
@@ -345,7 +441,7 @@ impl Session {
         }
         .await;
         if let Err(e) = written {
-            return Err(write_failed(&table, op, e, &columns, &value_types));
+            return Err(write_failed(table, op, e, columns, value_types));
         }
         self.refresh_files();
 
@@ -358,6 +454,22 @@ impl Session {
             None => self.empty_frame().await.map(Some),
         }
     }
+}
+
+/// The rewrite of a `DELETE` or `UPDATE` and what its request and result need.
+struct RowLevelRun<'a> {
+    op: RowLevelOperation,
+    quoted: &'a str,
+    alias: &'a str,
+    condition: Option<&'a str>,
+    rewrite: DataFrame,
+    touched: Vec<Vec<u8>>,
+    affected: u64,
+    scan_ms: u128,
+    merge_on_read: bool,
+    table: &'a Arc<dyn RowLevelTable>,
+    columns: &'a [TableColumn],
+    value_types: &'a [(String, DataType)],
 }
 
 impl Session {
