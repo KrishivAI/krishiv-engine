@@ -114,6 +114,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &SPILL_DROP_BEHIND_BYTES,
     &EXPERIMENTAL_IVM,
     &EXPERIMENTAL_UNALIGNED_CHECKPOINTS,
+    &RUNTIME_FILTER_BLOOM_AT_SCALE,
     &IO_STRICT_OPTIONS,
     &FILES_MAX_PARTITION_BYTES,
     &FILES_OPEN_COST_IN_BYTES,
@@ -964,6 +965,21 @@ pub static EXPERIMENTAL_UNALIGNED_CHECKPOINTS: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// `krishiv.runtimeFilter.bloom.atScale`: larger runtime Bloom filters for scans far larger than the build.
+pub static RUNTIME_FILTER_BLOOM_AT_SCALE: ConfigEntry = ConfigEntry {
+    key: "krishiv.runtimeFilter.bloom.atScale",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "A join whose probe-side scan is estimated at least 20 times its build plans its runtime Bloom filter with \
+          caps of 20,000,000 keys and 32 MiB instead of `krishiv.runtimeFilter.bloom.maxItems` and \
+          `krishiv.runtimeFilter.bloom.maxBytes`, when those are lower. A cap set explicitly still binds unless \
+          this key is also set explicitly to true. Results do not change.",
+    scope: Scope::Session,
+    settable_by: SettableBy::Admin,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
 /// `krishiv.io.strictOptions`.
 pub static IO_STRICT_OPTIONS: ConfigEntry = ConfigEntry {
     key: "krishiv.io.strictOptions",
@@ -1459,7 +1475,8 @@ pub static RUNTIME_FILTER_BLOOM_MAX_ITEMS: ConfigEntry = ConfigEntry {
     value_type: ValueType::Int,
     default: Some(ConfigValue::Int(4_000_000)),
     doc: "Most build keys a runtime Bloom filter is built for: a build estimated larger plans \
-          none, and one that turns out larger publishes none.",
+          none, and one that turns out larger publishes none. Left at its default, it is raised to \
+          20,000,000 for a scan estimated at least 20 times its build (`krishiv.runtimeFilter.bloom.atScale`).",
     scope: Scope::Session,
     settable_by: SettableBy::Admin,
     version_added: "0.1.0",
@@ -1472,7 +1489,8 @@ pub static RUNTIME_FILTER_BLOOM_MAX_BYTES: ConfigEntry = ConfigEntry {
     value_type: ValueType::Size,
     default: Some(ConfigValue::Size(8 * MIB)),
     doc: "Largest runtime Bloom filter. A filter capped below its 1% false-positive size is still \
-          built unless its expected false-positive rate exceeds 5%.",
+          built unless its expected false-positive rate exceeds 5%. Left at its default, it is raised to 32 MiB \
+          for a scan estimated at least 20 times its build (`krishiv.runtimeFilter.bloom.atScale`).",
     scope: Scope::Session,
     settable_by: SettableBy::Admin,
     version_added: "0.1.0",
