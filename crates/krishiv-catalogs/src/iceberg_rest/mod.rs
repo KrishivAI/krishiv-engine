@@ -16,7 +16,7 @@ pub mod error;
 #[cfg(test)]
 mod fixture_tests;
 #[cfg(test)]
-mod test_server;
+use crate::http_test_server as test_server;
 #[cfg(test)]
 mod tests;
 mod transport;
