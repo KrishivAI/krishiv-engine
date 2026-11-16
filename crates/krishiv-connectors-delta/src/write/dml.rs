@@ -79,9 +79,9 @@ use arrow_array::{Array, Int64Array, MapArray, RecordBatch, StructArray};
 use arrow_schema::{DataType as ArrowType, Field, Schema};
 use delta_kernel::expressions::PredicateRef;
 use krishiv_common::error::{
-    DeltaCastOverflowInTableWrite, DeltaNonDeterministicFunctionNotSupported,
-    DeltaUnsupportedSubquery, InternalError, KrishivError, TaskWriteFailed,
-    UnsupportedFeatureTableOperation,
+    DeltaCastOverflowInTableWrite, DeltaConflictSetColumn, DeltaDuplicateColumnsOnInsert,
+    DeltaNonDeterministicFunctionNotSupported, DeltaUnsupportedSubquery, InternalError,
+    KrishivError, TaskWriteFailed, UnsupportedFeatureTableOperation,
 };
 use krishiv_exec::planner::{
     CardinalityRule, RowIdScan, RowLevelCapabilities, RowLevelCounts, RowLevelOperation,
@@ -367,6 +367,23 @@ impl RowLevelTable for DeltaRowLevel {
                 }
                 .into(),
             ),
+            // `PreprocessTableMerge.scala:136-162` and delta-spark's `UPDATE` alignment.
+            RowLevelProblem::DuplicateAssignment { columns } if op == RowLevelOperation::Merge => {
+                Some(
+                    DeltaConflictSetColumn {
+                        column_list: format!(
+                            "[{}]",
+                            columns
+                                .iter()
+                                .map(|c| format!("`{}`", c.replace('`', "``")))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                    }
+                    .into(),
+                )
+            }
+            RowLevelProblem::DuplicateInsertColumn => Some(DeltaDuplicateColumnsOnInsert {}.into()),
             RowLevelProblem::WriteFailed { error, overflow } => {
                 Some(task_write_failed(&self.table, error, *overflow))
             }

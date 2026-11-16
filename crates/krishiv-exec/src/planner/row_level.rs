@@ -175,6 +175,14 @@ pub enum RowLevelProblem<'a> {
         /// The condition as written.
         condition: &'a str,
     },
+    /// A `MERGE` `UPDATE` clause sets a column twice: the repeated keys as written, in order
+    /// (Spark's `DUPLICATE_ASSIGNMENTS` by default).
+    DuplicateAssignment {
+        /// The repeated keys.
+        columns: &'a [String],
+    },
+    /// A `MERGE` `INSERT` clause names a column twice (refused by default).
+    DuplicateInsertColumn,
     /// An error raised while the rewrite ran: `overflow` is the assigned column whose
     /// store-assignment cast can overflow, when the error is arithmetic (SQLSTATE 22003 or
     /// 22012).
