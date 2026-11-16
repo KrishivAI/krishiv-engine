@@ -108,6 +108,46 @@ fn capture(
     Ok(Value::Object(map))
 }
 
+/// Most differing examples listed by a failed check.
+const LISTED: usize = 20;
+
+/// The examples whose recorded answer (`have`, the file's text) is not the fresh one, one per line
+/// as `id: recorded <answer>, now <answer>`, so a failed check names what to look at.
+fn differing(have: &str, fresh: &Value) -> String {
+    let empty = Map::new();
+    let have: Value = serde_json::from_str(have).unwrap_or(Value::Null);
+    let (old, new) = (
+        have.as_object().unwrap_or(&empty),
+        fresh.as_object().unwrap_or(&empty),
+    );
+    let show = |v: Option<&Value>| v.map_or_else(|| "nothing".to_owned(), Value::to_string);
+    let ids: std::collections::BTreeSet<&String> = old.keys().chain(new.keys()).collect();
+    let lines: Vec<String> = ids
+        .into_iter()
+        .filter(|id| old.get(*id) != new.get(*id))
+        .map(|id| {
+            format!(
+                "  {id}: recorded {}, now {}",
+                show(old.get(id)),
+                show(new.get(id))
+            )
+        })
+        .collect();
+    if lines.is_empty() {
+        return "  no answer differs: the file is not in the generator's format".to_owned();
+    }
+    let more = lines.len().saturating_sub(LISTED);
+    let mut out = lines
+        .into_iter()
+        .take(LISTED)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if more > 0 {
+        out.push_str(&format!("\n  and {more} more"));
+    }
+    out
+}
+
 /// Records the answers, or with `check` compares them with the recorded ones.
 ///
 /// # Errors
@@ -128,7 +168,8 @@ fn run_with(
         let have = std::fs::read_to_string(&path).unwrap_or_default();
         if have != text {
             return Err(format!(
-                "{CAPTURED} is stale: an example's result changed; run `cargo xtask docs-examples` then `cargo xtask docs-sql`"
+                "{CAPTURED} is stale: an example's result changed; run `cargo xtask docs-examples` then `cargo xtask docs-sql`\n{}",
+                differing(&have, &fresh)
             ));
         }
         return Ok(());
@@ -229,6 +270,36 @@ mod tests {
             .err()
             .unwrap_or_default();
         assert!(err.contains("stale"), "{err}");
+        assert!(err.contains("abs#1: recorded nothing, now"), "{err}");
+    }
+
+    #[test]
+    fn a_stale_check_names_the_examples_that_differ() {
+        let fresh = json!({
+            "abs#1": {"ok": true, "rows": ["1"]},
+            "new#1": {"ok": true, "rows": ["n"]},
+            "same#1": {"ok": true, "rows": ["s"]},
+        });
+        let have = r#"{"abs#1": {"ok": true, "rows": ["2"]}, "gone#1": {"volatile": true},
+                       "same#1": {"ok": true, "rows": ["s"]}}"#;
+        assert_eq!(
+            differing(have, &fresh),
+            "  abs#1: recorded {\"ok\":true,\"rows\":[\"2\"]}, now {\"ok\":true,\"rows\":[\"1\"]}\n  \
+             gone#1: recorded {\"volatile\":true}, now nothing\n  \
+             new#1: recorded nothing, now {\"ok\":true,\"rows\":[\"n\"]}"
+        );
+        // Same answers in another layout, and a file that is not JSON at all.
+        let same = differing(
+            r#"{"abs#1":{"ok":true,"rows":["1"]},"new#1":{"ok":true,"rows":["n"]},"same#1":{"ok":true,"rows":["s"]}}"#,
+            &fresh,
+        );
+        assert!(same.contains("no answer differs"), "{same}");
+        assert_eq!(differing("nope", &fresh).lines().count(), 3);
+        // A long list is cut.
+        let many: Map<String, Value> = (0..25).map(|i| (format!("f#{i:02}"), json!(i))).collect();
+        let cut = differing("{}", &Value::Object(many));
+        assert_eq!(cut.lines().count(), LISTED + 1);
+        assert!(cut.ends_with("and 5 more"), "{cut}");
     }
 
     #[test]
