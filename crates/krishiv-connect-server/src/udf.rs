@@ -1,28 +1,28 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Python UDFs over Spark Connect (P3-T014, PR-26d part 1; design `P3-T014-connect-udfs-sandbox.md` §3.2,
 //! ADR 0046 §3b and N1): the server's one worker pool ([`UdfHost`], `krishiv_udf_pool::Pool` on Linux) and
-//! each Connect session's Python UDFs ([`SessionPython`]).
+//! each Connect session's Python UDFs (`SessionPython`).
 //!
 //! **Client code runs only after its privilege check.** A registration (`register_function`) is refused
 //! by its command class (`auth::check_command`: `Usage` on `System("udf")`) before it runs (it is parsed, never
 //! registered); a plan with an inline UDF is
 //! checked the same way after translation and before anything is registered or run
-//! ([`InlineUdfs::grant`]). A session gets its UDF runtime only at its first passed check
-//! ([`SessionPython::grant`]): a session that never passed one has no runtime at all, so no plan of it can
+//! (`InlineUdfs::grant`). A session gets its UDF runtime only at its first passed check
+//! (`SessionPython::grant`): a session that never passed one has no runtime at all, so no plan of it can
 //! start a worker, whatever it names (a call then fails with `KRISHIV_UDF_NOT_AVAILABLE`). Workers serve one
-//! owner (the session's principal and server-side id); [`SessionPython::release`] stops them when the
+//! owner (the session's principal and server-side id); `SessionPython::release` stops them when the
 //! session is released, swept or closed.
 //!
 //! **Inline UDFs** (`common_inline_user_defined_function` in a plan) become calls of the session's encoded
 //! name of an unregistered UDF (`krishiv_session::python_udf_call_name`, top-bit versions), as the
 //! embedded `udf(...)` path does. A payload is registered once per session: the same UDF sent again (a
 //! DataFrame re-run) is found by the digest of its definition and keeps its version, so a long session
-//! holds one payload per distinct UDF. `AnalyzePlan` translates them with [`InlineUdfs::analysis`]: the plan
+//! holds one payload per distinct UDF. `AnalyzePlan` translates them with `InlineUdfs::analysis`: the plan
 //! is typed, nothing is registered and no privilege is needed (a scalar UDF runs no code while a plan is
 //! analyzed, ADR 0046 §3b).
 //!
 //! **Clones** (`CloneSession`, PR-15) must not share a runtime: its owner is the source session.
-//! [`SessionPython::copy_for`] builds the clone's own runtime with the payloads the source registered.
+//! `SessionPython::copy_for` builds the clone's own runtime with the payloads the source registered.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
