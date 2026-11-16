@@ -257,3 +257,71 @@ fn a_temp_view_of_a_lazy_file_checkpoint_keeps_the_snapshot() {
         vec![1, 2, 3]
     );
 }
+
+/// The shape an iterative graph algorithm (GraphFrames, label propagation) runs: each round joins
+/// the state with the edges and checkpoints the result. The checkpoint cuts the lineage, so the
+/// plan of round 50 is no bigger than the plan of round 2, and the rows stay right.
+fn iterate(s: &Session, eager: bool, local: bool, rounds: usize) -> (Vec<usize>, Vec<i32>) {
+    use krishiv_session::{ExplainMode, JoinType};
+    run(s, "CREATE TABLE edges (id INT, nxt INT) USING parquet");
+    run(s, "INSERT INTO edges VALUES (1, 2), (2, 3), (3, 1)");
+    let edges = s.table("edges");
+    let mut state = s.table("src");
+    let mut sizes = Vec::new();
+    for _ in 0..rounds {
+        let joined = state
+            .join_using(&edges, ["id"], JoinType::Inner)
+            .select([krishiv_session::functions::col("nxt").alias("id")]);
+        state = if local {
+            block_on(joined.local_checkpoint(eager, None)).unwrap()
+        } else {
+            block_on(joined.checkpoint(eager)).unwrap()
+        };
+        // A lazy checkpoint takes its rows at the first action: run one every round, as a loop
+        // that reads its state (a convergence test, a count) does.
+        assert_eq!(block_on(state.count()).unwrap(), 3);
+        sizes.push(
+            block_on(state.explain(ExplainMode::Extended))
+                .unwrap()
+                .len(),
+        );
+    }
+    (sizes, ids(&state))
+}
+
+/// Runs `iterate` for 50 rounds in `modes` and checks the plan stays bounded and the rows right.
+fn assert_bounded(modes: &[(bool, bool)]) {
+    for &(eager, local) in modes {
+        let dir = tempfile::tempdir().unwrap();
+        let s = session(
+            dir.path(),
+            &[(
+                "spark.checkpoint.dir",
+                dir.path().join("cp").to_str().unwrap(),
+            )],
+        );
+        let (sizes, rows) = within_a_minute(move || iterate(&s, eager, local, 50));
+        let first = sizes[1];
+        let last = sizes[49];
+        assert!(
+            last <= first + first / 10,
+            "eager={eager} local={local}: the plan grew from {first} to {last} characters: {sizes:?}"
+        );
+        assert_eq!(rows, vec![1, 2, 3], "eager={eager} local={local}");
+    }
+}
+
+/// `checkpoint()` and `localCheckpoint()` (eager, the default GraphFrames uses) cut the lineage.
+#[test]
+fn fifty_rounds_of_join_and_eager_checkpoint_keep_the_plan_bounded() {
+    assert_bounded(&[(true, true), (true, false)]);
+}
+
+/// Spark's lazy checkpoint also truncates the plan at once (`LogicalRDD`); here the frame keeps the
+/// lineage in its plan until an action takes the rows, and later frames built on it carry it on
+/// (the plan grows about quadratically over 50 rounds). Open: P3-T083 / PR-47.
+#[test]
+#[ignore = "PR-47: a lazy checkpoint keeps its lineage in the plan"]
+fn fifty_rounds_of_join_and_lazy_checkpoint_keep_the_plan_bounded() {
+    assert_bounded(&[(false, true), (false, false)]);
+}
