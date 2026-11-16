@@ -360,6 +360,19 @@ fn a_file_scan_reports_its_read_costs() {
         "{} > {size}",
         get("scan_read_bytes")
     );
+    // The filter the Parquet scan runs inexactly stays above it; both
+    // carry the planner's estimate (the scan the table's rows).
+    fn scans(n: &krishiv_exec::profile::ProfileNode, out: &mut Vec<bool>) {
+        if n.name == "Scan" {
+            out.push(n.estimate.is_some());
+        }
+        for c in &n.children {
+            scans(c, out);
+        }
+    }
+    let mut found = Vec::new();
+    scans(&profile.plan, &mut found);
+    assert_eq!(found, [true], "{:?}", profile.plan);
 }
 
 /// A limit that stops the scan before a split ends still reports the reads that
@@ -503,6 +516,10 @@ fn profile_nodes_carry_the_planners_row_estimates() {
     };
     assert!(named("HashJoin") >= 1, "{doc}");
     assert!(named("HashAggregate") >= 1, "{doc}");
+    // Nodes the planner adds below a relation's node have none.
+    for name in ["PartialHashAggregate", "Exchange", "BroadcastExchange"] {
+        assert_eq!(named(name), 0, "{name}: {doc}");
+    }
     let back = QueryProfile::from_json(&profile.to_json()).unwrap();
     assert_eq!(back.plan, profile.plan);
 }

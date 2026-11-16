@@ -408,11 +408,13 @@ impl<'a> Planner<'a> {
             let estimate = self.estimate(p);
             // A projection the lowering put on top (an aggregate's output
             // columns) keeps its input's rows: the node under it that has
-            // no estimate of its own makes the same rows.
+            // no estimate of its own makes the same rows. An exchange is
+            // not given one (`DISTRIBUTE BY`: project, exchange, project).
             let mut node = &mut planned.explain;
             while node.name == "Project"
                 && let [only] = node.children.as_mut_slice()
                 && only.estimate.is_none()
+                && !only.name.ends_with("Exchange")
             {
                 node.estimate.clone_from(&estimate);
                 node = only;
@@ -436,10 +438,7 @@ impl<'a> Planner<'a> {
         } else {
             RowEstimate::DEFAULT
         };
-        Some(RowEstimate {
-            rows,
-            source: source.to_owned(),
-        })
+        Some(RowEstimate::new(rows, source))
     }
 
     fn plan_relation(&mut self, p: &Arc<LogicalPlan>) -> Result<Planned> {
@@ -454,7 +453,16 @@ impl<'a> Planner<'a> {
                     // The scan evaluates pushed filters over the table's columns.
                     && scan.metadata_column().is_none()
                 {
-                    return self.scan(p, scan, Some(predicate));
+                    let mut planned = self.scan(p, scan, Some(predicate))?;
+                    // A filter the scan cannot run exactly stays above it: the
+                    // scan makes the table's rows.
+                    if planned.explain.name == "Filter"
+                        && let [scan] = planned.explain.children.as_mut_slice()
+                        && scan.estimate.is_none()
+                    {
+                        scan.estimate = self.estimate(input);
+                    }
+                    return Ok(planned);
                 }
                 if let PlanNode::Window {
                     input: below,
@@ -470,8 +478,9 @@ impl<'a> Planner<'a> {
                         self.window_group_limit_threshold(),
                     );
                     let below = self.plan(below)?;
-                    let window =
+                    let mut window =
                         self.window_relation(below, exprs, partition_by, order_by, limit)?;
+                    window.explain.estimate = self.estimate(input);
                     return self.filter(window, predicate);
                 }
                 let mut input = self.plan(input)?;
