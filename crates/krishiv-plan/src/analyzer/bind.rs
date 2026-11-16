@@ -1127,12 +1127,13 @@ async fn bind_files(
     }
     let columns = if let Some(schema) = schema {
         // A declared schema replaces inference. The nullability rule is the
-        // inferred one (every file column nullable); whether Spark keeps a
-        // declared `NOT NULL` per format is golden-pending (P3-T012a note, 3).
+        // inferred one: every file column nullable, nested elements, values
+        // and fields too (Spark builds the relation over
+        // `dataSchema.asNullable`, declared or inferred).
         schema
             .fields()
             .iter()
-            .map(|f| TableColumn::new(f.name(), f.data_type().clone(), true))
+            .map(|f| TableColumn::new(f.name(), f.data_type().as_nullable(), true))
             .collect()
     } else {
         files

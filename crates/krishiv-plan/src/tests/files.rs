@@ -633,6 +633,46 @@ fn a_declared_schema_skips_inference() {
     assert!(matches!(&scan.source, ReadSource::Files { schema: Some(s), .. } if *s == declared()));
 }
 
+/// A declared schema is nullable at every depth, as an inferred one is: a `NOT NULL` element or
+/// field of the declaration does not survive into the columns.
+#[test]
+fn a_declared_schema_is_nullable_in_nested_types() {
+    use krishiv_types::{ArrayType, StructField, StructType};
+    let nested = StructType::new([
+        StructField::new("a", ArrayType::new(DataType::Integer, false).into(), false),
+        StructField::new(
+            "s",
+            StructType::new([StructField::new("x", DataType::Long, false)]).into(),
+            false,
+        ),
+    ]);
+    let files = Arc::new(Files::default());
+    let plan = LogicalPlan::new(PlanNode::Read(
+        ReadSource::files(
+            "parquet",
+            vec![OptionValue::from_user("path", "/data/nested")],
+            BTreeMap::new(),
+        )
+        .with_schema(nested),
+    ));
+    let r = run(plan, &ctx(&files));
+    assert_eq!(
+        output(&r),
+        vec![
+            (
+                "a".to_owned(),
+                ArrayType::new(DataType::Integer, true).into(),
+                true
+            ),
+            (
+                "s".to_owned(),
+                StructType::new([StructField::new("x", DataType::Long, true)]).into(),
+                true
+            ),
+        ]
+    );
+}
+
 /// Two reads of one path differ by their schema: each is bound once.
 #[test]
 fn a_declared_schema_is_part_of_the_read() {
