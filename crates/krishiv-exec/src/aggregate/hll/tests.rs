@@ -61,8 +61,8 @@ fn count_distinct_merges_identically_and_within_error() {
 }
 
 /// A reserve allocates the group slots before any group exists; the size
-/// counts them, so a reservation shrunk to the size after a presize keeps
-/// them charged (#800 review).
+/// counts them, so a reservation shrunk to the reported size keeps them
+/// charged (#800 review).
 #[test]
 fn reserved_group_slots_are_counted() {
     let mut h = HllAcc::new(9);
