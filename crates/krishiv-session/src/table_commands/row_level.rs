@@ -28,7 +28,11 @@
 //! The conflict check's read set is the table's (the Delta connector reads the condition's
 //! partition conjuncts).
 //!
-//! `MERGE` is `merge.rs` (PR-37c), over the same hidden tables. Not here yet: merge-on-read (PR-37d), `SET c = DEFAULT`, the
+//! `MERGE` is `merge.rs` (PR-37c), over the same hidden tables. Merge-on-read (PR-37d, `RowLevelTable::merge_on_read`): the
+//! rewrite reads only the rows the condition holds for, with their row ids and
+//! `__krishiv_row_write` (an `UPDATE` writes their new values, a `DELETE` none), and the
+//! request carries `MERGE_ON_READ_OPTION`; a `MERGE` writes only the rows a clause fires for.
+//! Not here yet: `SET c = DEFAULT`, the
 //! CHAR/VARCHAR write checks of an `UPDATE`, and a condition that names the table by a
 //! qualified name longer than its own (`db.t.c`: the target is read under its last name part or
 //! the statement's alias).

@@ -18,7 +18,7 @@
 //!   `ClassicMergeExecutor.scala:200-220, 470-490`): the source rows, the target rows inserted,
 //!   updated and deleted (in total and per clause kind), copied (written less updated and
 //!   inserted), `numOutputRows` = inserted + updated + copied, files and bytes added and removed,
-//!   the times; deletion vector counts are 0 (no vector is written).
+//!   the times; the deletion vector counts (0 without vectors).
 //! - The result row (`MergeIntoCommand.scala:78-82, 183-192`): `num_affected_rows`,
 //!   `num_updated_rows`, `num_deleted_rows`, `num_inserted_rows`.
 //! - The read set (`ClassicMergeExecutor.scala:85-92`, `InsertOnlyMergeExecutor.scala:76-82`):
@@ -34,8 +34,10 @@
 //! # Known differences
 //! - The predicates are the conditions as written; delta-spark prints Catalyst's
 //!   `simpleString` of the resolved expressions (expression ids, unquoted strings).
-//! - Deletion vectors are never written (PR-37d): on a table with them on, delta-spark's
-//!   default `merge.deletionVectors.persistent = true` marks rows in vectors; Krishiv rewrites.
+//! - With deletion vectors (PR-37d, [`super::dv`]): only the changed and inserted rows are
+//!   written, the updated and deleted target rows marked in vectors; the removed files and bytes
+//!   are the fully replaced files only, the vector counts delta-spark's
+//!   (`ClassicMergeExecutor.scala:495-573`).
 
 use serde_json::Value;
 

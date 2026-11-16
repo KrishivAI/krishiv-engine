@@ -63,10 +63,15 @@
 //!   removed only when its statistics prove it.
 //! - The read predicates are the conjuncts that translate; delta-spark takes every
 //!   partition-only conjunct, so a conjunct of another form makes Krishiv's read wider (safe).
-//! - Deletion vectors are never written: on a table with `delta.enableDeletionVectors = true`
-//!   delta-spark marks the changed rows in deletion vectors (its default
-//!   `...deletionVectors.persistent = true`); Krishiv rewrites the files (merge-on-read is
-//!   PR-37d). The rewrite drops the old files' vectors with them.
+//! - On a table that takes deletion vectors, a statement whose command's
+//!   `...deletionVectors.persistent` conf is on and whose condition has a data predicate marks
+//!   rows instead of rewriting (merge-on-read, [`super::dv`], PR-37d; `RowLevelTable::
+//!   merge_on_read`): its rewrite receives only the rows it deletes or updates with their row
+//!   ids, the vectors are committed through the kernel's `update_deletion_vectors`, and the
+//!   metrics are delta-spark's vector path's (no bytes removed, no row copied; an `UPDATE`
+//!   counts every file it changed as removed). A vector-only `DELETE` commits on a
+//!   change-data-feed table (no adds). An `UPDATE` without a data predicate on such a table
+//!   rewrites whole files and, as delta-spark's, reports no removed bytes.
 //! - `UPDATE` whose condition names only partition columns rewrites the files that hold a row,
 //!   not every file of the partitions (a file whose rows are all deleted is kept).
 
