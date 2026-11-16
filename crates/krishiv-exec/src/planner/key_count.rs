@@ -487,11 +487,27 @@ impl FileTable {
     /// carries collation or `CHAR` semantics), the format and its parsed
     /// read options (session fallbacks included), and the scan settings
     /// that change which rows are read.
+    ///
+    /// The field mapping is not part of it: a `FileTable`'s scans and its
+    /// count both map file columns by name, case-insensitively
+    /// (`FieldMapping::default()`). If file scans ever follow
+    /// `spark.sql.caseSensitive`, or a `FileTable` gets field-id or column
+    /// mapping, `ScanRequest::mapping` must join this text.
     fn decoding(&self, columns: &[String]) -> String {
         let fields: Vec<String> = columns
             .iter()
             .filter_map(|c| self.table_schema().field_with_name(c).ok())
-            .map(|f| format!("{f:?}"))
+            .map(|f| {
+                // The metadata in a fixed order: equal fields, equal text.
+                let metadata: std::collections::BTreeMap<&String, &String> =
+                    f.metadata().iter().collect();
+                format!(
+                    "{}:{:?}:{}:{metadata:?}",
+                    f.name(),
+                    f.data_type(),
+                    f.is_nullable()
+                )
+            })
             .collect();
         let scan = self.scan_options();
         format!(

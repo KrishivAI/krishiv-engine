@@ -14,6 +14,7 @@ use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use krishiv_exec::planner::{
     FileTable, KeyOptions, KeyOutcome, KeyResult, KeyUnknown, ProviderStatistics, TableProvider,
 };
+use krishiv_io::io::FaultStore;
 use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::{CsvFormat, FileFormat, FileRef, FormatOptions, IoConfig, IoScheduler, StoreId};
 use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
@@ -26,6 +27,8 @@ struct Files {
     rt: tokio::runtime::Runtime,
     sched: Arc<IoScheduler>,
     store: Arc<object_store::local::LocalFileSystem>,
+    /// The store the scheduler reads through (no fault until set).
+    fault: Arc<FaultStore>,
     id: StoreId,
 }
 
@@ -39,11 +42,13 @@ impl Files {
         let store = Arc::new(object_store::local::LocalFileSystem::new_with_prefix(dir).unwrap());
         let sched = IoScheduler::new(IoConfig::default());
         let id = StoreId::new("file://");
-        sched.register_store(id.clone(), Arc::clone(&store) as Arc<dyn ObjectStore>);
+        let fault = FaultStore::new(Arc::clone(&store) as Arc<dyn ObjectStore>);
+        sched.register_store(id.clone(), Arc::clone(&fault) as Arc<dyn ObjectStore>);
         Self {
             rt,
             sched,
             store,
+            fault,
             id,
         }
     }
@@ -433,18 +438,22 @@ fn a_timed_out_or_failed_count_releases_its_consumers() {
     let f = Files::new(dir.path());
     let t = f.open(&names, &keys_schema(), 0);
     let pool = small_pool(256 << 20);
+    // Every read from now on waits an hour (Tokio time): the count is
+    // inside a read when its time runs out, whatever the machine's speed.
+    f.fault.set_latency(Duration::from_secs(3_600));
     let o = f
         .discover_in(
             &t,
             &["k"],
-            Duration::from_millis(1),
+            Duration::from_millis(50),
             Some(Arc::clone(&pool)),
         )
         .unwrap();
+    f.fault.set_latency(Duration::ZERO);
     assert_eq!(
         o.result,
         KeyResult::Unknown(KeyUnknown::TimedOut {
-            after: Duration::from_millis(1)
+            after: Duration::from_millis(50)
         }),
         "{o}"
     );

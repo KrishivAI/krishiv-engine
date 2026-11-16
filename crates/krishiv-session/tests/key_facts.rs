@@ -255,3 +255,27 @@ fn a_count_past_the_session_memory_limit_proves_nothing() {
     );
     assert!(!moved(&s));
 }
+
+/// `REFRESH <path>` forgets the facts as `REFRESH TABLE` does (review N2).
+#[test]
+fn refresh_of_a_path_forgets_the_facts() {
+    let dir = tempfile::tempdir().unwrap();
+    write_tables(dir.path(), false);
+    let on = session(dir.path(), true, true);
+    let note = || {
+        let verbose = text(&on, &format!("EXPLAIN VERBOSE {QUERY}"));
+        verbose
+            .lines()
+            .find(|l| l.contains("discoverKeys: customer"))
+            .unwrap_or_else(|| panic!("no count in\n{verbose}"))
+            .to_owned()
+    };
+    assert!(note().contains("discovered unique"));
+    assert!(note().contains("cached unique"));
+    block_on(on.sql(&format!(
+        "REFRESH '{}'",
+        dir.path().join("customer").display()
+    )))
+    .unwrap();
+    assert!(note().contains("discovered unique"));
+}
