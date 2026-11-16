@@ -118,13 +118,6 @@ fn tpcds_plans() {
     assert!(snapshotted == 99 - UNSUPPORTED.len());
 }
 
-/// Queries that are not yet a fixed point under a session configuration (so
-/// with `ShareCte`), with the reason.
-const NOT_FIXED_UNDER_SESSION: &[(usize, &str)] = &[(
-    59,
-    "an isnotnull inferred above an inner join is pushed through it onto a ShareCte CteRef",
-)];
-
 /// Under a session configuration `ShareCte` runs; a second `optimize` of its
 /// output adds nothing (inferred `isnotnull` stays off its `CteRef`s).
 #[test]
@@ -145,6 +138,5 @@ fn tpcds_plans_are_fixed_points_under_a_session_configuration() {
             not_fixed.push(q);
         }
     }
-    let expected: Vec<usize> = NOT_FIXED_UNDER_SESSION.iter().map(|(q, _)| *q).collect();
-    assert_eq!(not_fixed, expected);
+    assert_eq!(not_fixed, Vec::<usize>::new());
 }
