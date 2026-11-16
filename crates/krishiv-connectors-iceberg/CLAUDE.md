@@ -136,7 +136,7 @@ Fixture: `tests/fixtures/iceberg-1.12.0-spark-types.json` (source-only goldens,
   query context); the manifest cache bounds only what is kept.
 - `statistics()` takes no filter: the row estimate sums every live file, not the files left after pruning.
 - A deletion vector is read at the length its manifest declares (`deletes.rs` `read_dv`) without the
-  `krishiv.catalog.maxMetadataBytes` cap the metadata files get; its memory is charged to the query (review of the
+  `krishiv.catalog.maxMetadataBytes` cap the metadata files get; its memory is charged to the query (the decode's transient copy aside; review of the
   PR-25b+c carry, 2026-11-16).
 
 ## ADRs (in `../krishiv-internal/adr/`)

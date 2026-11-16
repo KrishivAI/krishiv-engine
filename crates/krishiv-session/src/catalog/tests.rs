@@ -53,11 +53,7 @@ fn files(col: &str) -> TempTable {
         known: false,
         permanent: false,
         partitions: Some(Default::default()),
-        source: ReadSource::Files {
-            format: "parquet".to_owned(),
-            paths: vec![],
-            options: Default::default(),
-        },
+        source: ReadSource::files("parquet".to_owned(), vec![], Default::default()),
         columns: vec![TableColumn::new(col.to_owned(), DataType::Integer, false)],
     }
 }
@@ -918,11 +914,11 @@ fn task_specs_rejects_what_it_cannot_split() {
     // A scan of files that were never opened.
     let e = catalog
         .task_specs(
-            &split_scan_plan(ReadSource::Files {
-                format: "parquet".to_owned(),
-                paths: Vec::new(),
-                options: BTreeMap::new(),
-            }),
+            &split_scan_plan(ReadSource::files(
+                "parquet".to_owned(),
+                Vec::new(),
+                BTreeMap::new(),
+            )),
             2,
             2,
         )
@@ -1087,4 +1083,54 @@ fn task_specs_refuse_a_disk_cached_scan_and_accept_a_memory_one() {
         drop(fill);
         rt.block_on(cached.unpersist()).unwrap();
     }
+}
+
+/// A read with a declared schema opens with the declared table, nothing
+/// inferred: a headerless CSV would be named `_c0`, `_c1` by inference. The
+/// declared nullability follows the inferred-read rule (golden-pending).
+#[test]
+fn a_file_read_with_a_declared_schema_uses_it() {
+    use krishiv_common::secret::OptionValue;
+    use krishiv_types::{StructField, StructType};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.csv");
+    std::fs::write(&path, "1,a\n2,b\n").unwrap();
+    let s = Session::new().unwrap();
+    let source = ReadSource::files(
+        "csv",
+        vec![OptionValue::from_user("path", path.to_string_lossy())],
+        Default::default(),
+    )
+    .with_schema(StructType::new([
+        StructField::new("k", DataType::Long, true),
+        StructField::new("v", DataType::String, true),
+    ]));
+    let df = crate::dataframe::DataFrame::new(
+        s,
+        Arc::new(krishiv_plan::LogicalPlan::new(
+            krishiv_plan::PlanNode::Read(source),
+        )),
+    );
+    let batches = block_on(df.collect()).unwrap();
+    let schema = batches[0].schema();
+    let names: Vec<_> = schema.fields().iter().map(|f| f.name().clone()).collect();
+    assert_eq!(names, ["k", "v"]);
+    assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 2);
+    let mut got: Vec<(String, String)> = Vec::new();
+    for b in &batches {
+        for i in 0..b.num_rows() {
+            let cell =
+                |c: usize| arrow_cast::display::array_value_to_string(b.column(c), i).unwrap();
+            got.push((cell(0), cell(1)));
+        }
+    }
+    got.sort();
+    assert_eq!(
+        got,
+        [
+            ("1".to_owned(), "a".to_owned()),
+            ("2".to_owned(), "b".to_owned())
+        ]
+    );
+    assert_eq!(schema.field(0).data_type(), &arrow_schema::DataType::Int64);
 }
