@@ -110,6 +110,7 @@ mod window;
 pub use access::{PathPrefixPolicy, ReadOnlyPolicy, StatementInfo};
 pub use admission::{AdmissionController, Permit, QueryRequest, Unlimited};
 pub use analyze::{Analysis, AnalysisWarning, OutputColumn};
+pub use config_defaults::{ConfigListing, ConfigSource};
 pub use sessions::Transport;
 pub use system::register_build_features;
 
