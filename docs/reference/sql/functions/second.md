@@ -14,6 +14,8 @@ If `expr` is a TIME type (since 4.1.0), it returns the second of the time-of-day
 
 **Applies to:** Krishiv 0.2.0 and above. Spark: 3.5 and later.
 
+**Note.** The `TIME` type is off by default in Spark 4.2.0 and in Krishiv. Examples that use it fail with `UNSUPPORTED_TIME_TYPE` until `spark.sql.timeType.enabled` is set to `true`.
+
 ## Syntax
 
 ```text

@@ -704,9 +704,11 @@ fn fold(ident: &TableIdent, case_sensitive: bool) -> TableIdent {
     }
 }
 
-/// Asks the policy about `securable` once per query; a denial or any policy
-/// error fails closed, without the policy's reason or error text, and row
-/// filters and column masks are rejected until they can be applied.
+/// Asks the policy about the read of `securable` (a catalog table or view) once per query, as the
+/// analysis' [`AnalysisMode::read_privilege`](super::AnalysisMode::read_privilege) (`Select`, or
+/// `Browse` for a metadata analysis; paths always ask `Select`, see [`bind_files`]); a denial or
+/// any policy error fails closed, without the policy's reason or error text, and row filters and
+/// column masks on a `Select` are rejected until they can be applied.
 async fn authorize(
     ctx: &AnalysisContext,
     b: &mut Bindings,
@@ -714,7 +716,15 @@ async fn authorize(
     securable: Securable,
     origin: Origin,
 ) -> Result<usize, AnalysisError> {
-    authorize_as(ctx, b, checked, securable, Privilege::Select, origin).await
+    authorize_as(
+        ctx,
+        b,
+        checked,
+        securable,
+        ctx.mode.read_privilege(),
+        origin,
+    )
+    .await
 }
 
 /// `USAGE` on each secret scope in `scopes` (E12).
@@ -1096,8 +1106,13 @@ async fn bind_files(
         .map(|p| files.qualify(p))
         .collect::<Result<Vec<_>, _>>()
         .map_err(fail)?;
+    // `Select`, even in a metadata analysis: a path has no stored schema, and inferring one reads
+    // the files' contents (with CSV `header=true` the column names are the first line of the file;
+    // JSON keys and inferred types are content too), so `Browse` on a path would show a viewer the
+    // first line of any file under the allowed roots. Only catalog tables and views get `Browse`.
     for path in &qualified {
-        authorize(ctx, b, checked, Securable::Path(path.clone()), origin).await?;
+        let path = Securable::Path(path.clone());
+        authorize_as(ctx, b, checked, path, Privilege::Select, origin).await?;
     }
     // A `secret('scope', 'key')` reference in the options (or a path) is
     // resolved for the principal only with USAGE on its scope (E12), checked
@@ -1125,9 +1140,12 @@ async fn bind_files(
             .await
             .map_err(fail)?
             .into_iter()
-            // Spark reads every file column as nullable.
+            // Spark reads every file column as nullable, nested elements,
+            // values and fields too (`HadoopFsRelation` over
+            // `dataSchema.asNullable`), as the scan's rows are typed.
             .map(|c| TableColumn {
                 nullable: true,
+                data_type: c.data_type.as_nullable(),
                 ..c
             })
             .collect()

@@ -585,4 +585,4 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`\|\|`](op-pipe-pipe.md) | scalar | yes | Returns the concatenation of `expr1` and `expr2`. |
 | [`~`](op-tilde.md) | scalar | yes | Returns the result of bitwise NOT of `expr`. |
 
-480 of 574 functions are implemented.
+480 of 574 functions are implemented. The 94 that are not are listed in [functions not implemented yet](not-implemented.md).

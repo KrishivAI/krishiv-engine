@@ -17,6 +17,7 @@ mod inventory;
 mod json_tuple;
 mod lineage;
 mod local;
+mod metadata_mode;
 mod nested_literals;
 mod nodes;
 mod pivot;

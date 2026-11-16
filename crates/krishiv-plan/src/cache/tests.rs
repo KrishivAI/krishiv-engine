@@ -833,6 +833,7 @@ fn cache_keys_separate_principals_policies_and_pins() {
         policy: PolicyVersion(7),
         files: false,
         variables: 0,
+        mode: crate::analyzer::AnalysisMode::Execute,
     };
     let analyzed = |principal: &str, policy: u64| crate::analyzer::AnalyzedPlan {
         plan: plan.clone(),
