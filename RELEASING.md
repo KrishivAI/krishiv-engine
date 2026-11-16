@@ -138,7 +138,8 @@ Each step is a hard stop for agents; the maintainer runs it and approves its env
 A release commit sometimes needs a fix under `.github/` only (a workflow, a script) after it is tagged. **Never move
 or delete the release tag** (`v0.2.0`): a published tag is permanent.
 
-1. Make one commit that changes only files under `.github/`, directly on the release commit (not on `main`).
+1. Make one commit that changes only files under `.github/`, on the release commit (not on `main`). The script accepts any parent that the green run covers, and counts the old
+   name of a renamed file as a path outside `.github/`.
 2. Tag it `vX.Y.Z-publishN` (for 0.2.0: `v0.2.0-publish`, `-publish2`, `-publish3`) and push the tag.
 3. Dispatch the publish workflows (`publish-pypi.yml`, `publish-crates.yml`, and `publish-testpypi.yml` for a
    rehearsal) on that tag. `.github/scripts/require-green-nightly.sh` (called by `release.yml` and `binaries.yml`, the

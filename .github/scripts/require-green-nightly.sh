@@ -37,7 +37,7 @@ case "$status" in
     # whose parent the green run covers.
     # The fix commit's own parent must be covered by the green run (an ancestor of, or equal to, run_sha), so the fix
     # may sit on the release commit even after main has moved on. The file list is paginated at 300: refuse longer.
-    tag=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" --jq '[(.parents | length), (.parents[0].sha // ""), ([.files[].filename | select(startswith(".github/") | not)] | length), (.files | length)] | @tsv')
+    tag=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" --jq '[(.parents | length), (.parents[0].sha // ""), ([.files[] | (.filename, (.previous_filename // empty)) | select(startswith(".github/") | not)] | length), (.files | length)] | @tsv')
     IFS=$'\t' read -r nparents parent outside nfiles <<<"$tag"
     covered=""
     if [ "$nparents" = 1 ]; then
