@@ -16,7 +16,7 @@ class Denominator:
     oracle_env: int  # fail on the Spark oracle in our environment; inside the cap
     manifest: int  # matched by a manifest entry (and not already removed above)
     denominator: int
-    cap: int  # 20% of (collected - spark_skips)
+    cap: int  # 20% of (collected - spark_skips - conditional skips)
     by_reason: dict[str, int]
     # Skipped on the Spark oracle at run time under the same client (e.g. `skipIf(is_remote_only())`, "Requires JVM
     # access"): the same treatment as `spark_skips`, outside the cap, reported on its own (review pass 2 N9).

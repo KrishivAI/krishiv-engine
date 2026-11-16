@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import os
 import re
+import select
 import subprocess
 import tempfile
 import time
@@ -74,7 +75,10 @@ class KrishivConnectEngine(SparkConnectEngine):
         self._proc = subprocess.Popen(self.command(), stdout=subprocess.PIPE, stderr=out, text=True)
         assert self._proc.stdout is not None
         deadline = time.monotonic() + self.startup_timeout_s
-        while time.monotonic() < deadline:
+        while (left := deadline - time.monotonic()) > 0:
+            # readline() alone would block past the deadline if the server hangs without printing.
+            if not select.select([self._proc.stdout], [], [], left)[0]:
+                break
             line = self._proc.stdout.readline()
             if not line:
                 break
@@ -92,7 +96,12 @@ class KrishivConnectEngine(SparkConnectEngine):
 
     def setup(self, dataset: Dataset) -> None:
         self._start_server()
-        super().setup(dataset)
+        try:
+            super().setup(dataset)
+        except BaseException:
+            # The runner's try/finally starts after setup(), so a failure here would leave the server running.
+            self.teardown()
+            raise
 
     def begin_measure(self) -> None:
         self.end_measure()

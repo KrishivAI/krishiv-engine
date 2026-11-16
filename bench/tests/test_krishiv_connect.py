@@ -44,3 +44,34 @@ def test_missing_binary_is_a_clear_error(tmp_path):
     e = KrishivConnectEngine(binary=tmp_path / "nope")
     with pytest.raises(FileNotFoundError, match="KRISHIV_BENCH_SERVER"):
         e._start_server()
+
+
+def _fake_server(tmp_path, body: str):
+    p = tmp_path / "krishiv"
+    p.write_text("#!/bin/sh\n" + body + "\n")
+    p.chmod(0o755)
+    return p
+
+
+def test_start_server_reads_the_address_and_teardown_stops_it(tmp_path):
+    fake = _fake_server(tmp_path, "echo 'krishiv server: Spark Connect on sc://127.0.0.1:1'; sleep 60")
+    e = KrishivConnectEngine(binary=fake, startup_timeout_s=10)
+    e._start_server()
+    assert e.remote == "sc://127.0.0.1:1"
+    proc = e._proc
+    assert proc is not None and proc.poll() is None
+    e.teardown()
+    assert proc.poll() is not None
+
+
+def test_server_that_exits_before_printing_an_address_is_an_error(tmp_path):
+    e = KrishivConnectEngine(binary=_fake_server(tmp_path, "exit 3"), startup_timeout_s=10)
+    with pytest.raises(RuntimeError, match="did not report"):
+        e._start_server()
+
+
+def test_server_that_hangs_silently_hits_the_startup_timeout(tmp_path):
+    e = KrishivConnectEngine(binary=_fake_server(tmp_path, "sleep 60"), startup_timeout_s=0.5)
+    with pytest.raises(RuntimeError, match="did not report"):
+        e._start_server()
+    assert e._proc is None
