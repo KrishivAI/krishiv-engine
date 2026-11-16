@@ -63,6 +63,41 @@ pub use data::{PlanData, assert_plan_data};
 #[cfg(test)]
 mod shared_tests;
 
+/// Whether the union inputs `a` and `b` carry the same columns: names, types and nullability,
+/// whatever the fields' metadata (a Delta scan's columns carry their column-mapping ids and
+/// physical names, a new table's do not; a CTAS unions the two).
+pub(crate) fn same_columns(a: &Schema, b: &Schema) -> bool {
+    a.fields().len() == b.fields().len()
+        && a.fields().iter().zip(b.fields().iter()).all(|(x, y)| {
+            x.name() == y.name()
+                && x.data_type() == y.data_type()
+                && x.is_nullable() == y.is_nullable()
+        })
+}
+
+#[cfg(test)]
+mod same_columns_tests {
+    use super::*;
+
+    #[test]
+    fn field_metadata_does_not_make_union_inputs_differ() {
+        let tagged = Field::new("a", DataType::Int64, true).with_metadata(
+            [("delta.columnMapping.id".to_owned(), "1".to_owned())]
+                .into_iter()
+                .collect::<std::collections::HashMap<_, _>>(),
+        );
+        let plain = Schema::new(vec![Field::new("a", DataType::Int64, true)]);
+        assert!(same_columns(&Schema::new(vec![tagged]), &plain));
+        for other in [
+            Field::new("b", DataType::Int64, true),
+            Field::new("a", DataType::Int32, true),
+            Field::new("a", DataType::Int64, false),
+        ] {
+            assert!(!same_columns(&Schema::new(vec![other]), &plain));
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) use instantiate::node_ids;
 pub(crate) use instantiate::{

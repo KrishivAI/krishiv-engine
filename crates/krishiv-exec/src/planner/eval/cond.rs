@@ -598,8 +598,10 @@ pub(super) fn when(
 
 /// `v` as a value of the `CASE` result type `out`: branches of one Spark
 /// `STRING`/`BINARY` in different Arrow encodings meet in the canonical
-/// carrier; an untyped `NULL` stays one. Anything else is an engine bug:
-/// the analyzer has cast every branch to the common type.
+/// carrier; an untyped `NULL` stays one; a branch of the same shape whose
+/// nested fields carry other nullability flags or metadata (a Delta scan's
+/// column-mapping ids) is relabelled to `out` ([`Relabeled`]). Anything else
+/// is an engine bug: the analyzer has cast every branch to the common type.
 fn coerce_branch(v: &mut Arc<dyn PhysExpr>, out: &ArrowType, env: &EvalEnv) -> Result<()> {
     let t = v.data_type().clone();
     if &t == out || t == ArrowType::Null {
