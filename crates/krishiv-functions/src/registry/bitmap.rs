@@ -22,7 +22,7 @@ pub(super) fn specs() -> Vec<Spec> {
     );
     out.extend(scalar(
         &["bitmap_count"],
-        &Inputs::Expects(vec![InputType::Exact(DataType::Binary)]),
+        &Inputs::Expects(vec![InputType::Strict(DataType::Binary)]),
         result,
     ));
     out

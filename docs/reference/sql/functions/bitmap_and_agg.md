@@ -9,7 +9,7 @@ description: "Returns a bitmap that is the bitwise AND of all of the bitmaps fro
 Returns a bitmap that is the bitwise AND of all of the bitmaps from the child
 expression. The input should be bitmaps created from bitmap_construct_agg().
 
-**Applies to:** not available in Krishiv yet. Spark: 4.1 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 4.1 and later.
 
 ## Syntax
 
@@ -21,7 +21,7 @@ bitmap_and_agg(child)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `agg_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 4.1.0 |
@@ -46,6 +46,7 @@ Error: KRISHIV_UNSUPPORTED_FEATURE
 ## Version history
 
 - Added in Spark 4.1.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 
