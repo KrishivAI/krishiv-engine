@@ -136,3 +136,25 @@ def test_profiled_calls_from_many_threads_do_not_clash(spark: SparkSession) -> N
     for t in threads:
         t.join()
     assert errors == []
+
+
+def test_two_sessions_profiling_at_once_do_not_clash(spark: SparkSession) -> None:
+    # `cProfile` is one per process: sessions share one lock, so they take turns instead of failing.
+    other = spark.newSession()
+    plus_one = _plus_one()
+    errors: list[BaseException] = []
+
+    def run(session: SparkSession) -> None:
+        try:
+            session.conf.set("spark.sql.pyspark.udf.profiler", "perf")
+            session.range(30).select(plus_one("id")).collect()
+        except BaseException as e:  # collect any failure for the assert
+            errors.append(e)
+
+    threads = [threading.Thread(target=run, args=(s,)) for s in (spark, other, spark, other)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    other.profile.clear()

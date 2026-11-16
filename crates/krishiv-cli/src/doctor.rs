@@ -210,12 +210,13 @@ fn authentication(host: IpAddr, settings: &Settings) -> Check {
     // `ServerAuth::new` starts the OIDC key fetcher, which calls the issuer at once: the doctor
     // does not use the network, so it builds the authenticator without the OIDC part.
     let mut offline = settings.auth.clone();
-    let oidc = offline.oidc.is_on();
+    let oidc = offline.oidc.is_on() || offline.impersonation.signed_assertion;
     offline.oidc = Default::default();
+    offline.impersonation.signed_assertion = false;
     match ServerAuth::new(&offline) {
         Ok(_) if oidc => Check::ok(
             "authentication",
-            "configured, secrets resolve; the OIDC issuer and its keys are not contacted",
+            "configured, secrets resolve; the OIDC and assertion issuers and their keys are not contacted",
         ),
         Ok(_) => Check::ok("authentication", "configured, secrets resolve"),
         Err(e) => Check::fail(
