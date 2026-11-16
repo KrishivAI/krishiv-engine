@@ -35,9 +35,12 @@ use krishiv_connect::proto::v4_3::execute_plan_response::ResponseType;
 use krishiv_connect::proto::v4_3::expression::ExprType;
 use krishiv_connect::proto::v4_3::plan::OpType;
 use krishiv_connect::proto::v4_3::relation::RelType;
+use krishiv_connect::translate::PythonUdf;
 use krishiv_connect_server::{
-    ConnectAuth, ConnectServer, ConnectServerConfig, SessionLimits, SessionManager, role_sessions,
+    ConnectAuth, ConnectServer, ConnectServerConfig, RunnerConf, SessionLimits, SessionManager,
+    SessionUdfRuntime, UdfHost, role_sessions,
 };
+use krishiv_exec::python_eval::{PreparedUdf, UdfCallSpec, UdfRuntime};
 use krishiv_session::Session;
 use krishiv_session::auth::{AuthConfig, ServerAuth};
 use krishiv_udf_pool::{Launcher, Pool, PoolConfig};
@@ -102,6 +105,11 @@ fn secret(dir: &Path, name: &str, token: &str) -> String {
 /// An authenticated server (`carol` viewer, `olga` operator, `dana` admin) whose sessions are built as
 /// `krishiv server` builds them, its UDFs on a pool of `python` (none: a pool that refuses every call).
 async fn start(python: Option<&Path>) -> Running {
+    start_with(python, None).await
+}
+
+/// [`start`], with the sessions' UDFs on `host` instead of the pool when given.
+async fn start_with(python: Option<&Path>, host: Option<Arc<dyn UdfHost>>) -> Running {
     let dir = tempfile::tempdir().expect("tempdir");
     let v = secret(dir.path(), "v", VIEWER);
     let o = secret(dir.path(), "o", OPERATOR);
@@ -140,7 +148,7 @@ async fn start(python: Option<&Path>) -> Running {
     .expect("factory");
     let manager = Arc::new(
         SessionManager::new(factory, SessionLimits::default())
-            .with_udf_host(Arc::new(pool.clone())),
+            .with_udf_host(host.unwrap_or_else(|| Arc::new(pool.clone()))),
     );
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
@@ -292,7 +300,10 @@ fn error_class(status: &tonic::Status) -> String {
 fn pickle(python: Option<&Path>, body: &str, return_type: &str) -> (Vec<u8>, String) {
     let Some(python) = python else {
         // Never unpickled: the tests without an interpreter start no worker.
-        return (b"not a pickle".to_vec(), "3.12".to_owned());
+        return (
+            format!("not a pickle: {body}").into_bytes(),
+            "3.12".to_owned(),
+        );
     };
     let code = format!(
         "import sys\nfrom pyspark import cloudpickle\nfrom pyspark.sql.types import *\n{body}\n\
@@ -628,4 +639,189 @@ async fn releasing_the_session_stops_its_workers() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert_eq!(run.pool.live_workers(), 0);
+}
+
+/// A host that starts nothing and records every payload registered with it.
+#[derive(Default)]
+struct Spy(Arc<std::sync::Mutex<Vec<String>>>);
+
+impl std::fmt::Debug for Spy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Spy")
+    }
+}
+
+#[derive(Debug)]
+struct SpyRuntime(Arc<std::sync::Mutex<Vec<String>>>);
+
+impl UdfRuntime for SpyRuntime {
+    fn prepare(&self, spec: &UdfCallSpec) -> krishiv_exec::Result<Arc<dyn PreparedUdf>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(format!("prepare {}", spec.name));
+        Err(krishiv_common::error::KrishivUdfNotAvailable {
+            name: spec.name.clone(),
+            version: spec.version.to_string(),
+        }
+        .into())
+    }
+}
+
+impl SessionUdfRuntime for SpyRuntime {
+    fn register(&self, name: &str, version: u32, _: &PythonUdf) {
+        self.0
+            .lock()
+            .expect("spy")
+            .push(format!("register {name}@{version}"));
+    }
+    fn release(&self) {}
+}
+
+impl UdfHost for Spy {
+    fn session_runtime(&self, _: &str, _: &str, _: RunnerConf) -> Arc<dyn SessionUdfRuntime> {
+        Arc::new(SpyRuntime(Arc::clone(&self.0)))
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refused_caller_registers_nothing_and_gets_no_runtime() {
+    let spy = Spy::default();
+    let log = Arc::clone(&spy.0);
+    let run = start_with(None, Some(Arc::new(spy))).await;
+    for token in [VIEWER, OPERATOR] {
+        let _ = execute(
+            &run.channel,
+            register(udf(None, "plus_one", PLUS_ONE, long(), Vec::new())),
+            token,
+        )
+        .await
+        .expect_err("refused");
+        let _ = execute(
+            &run.channel,
+            select(3, call(udf(None, "f", PLUS_ONE, long(), vec![id()]))),
+            token,
+        )
+        .await
+        .expect_err("refused");
+        // The refused registration's name resolves to nothing, so nothing reaches the host.
+        let _ = execute(
+            &run.channel,
+            sql("SELECT plus_one(id) FROM range(3)"),
+            token,
+        )
+        .await;
+        release(&run.channel, token).await;
+    }
+    assert!(
+        log.lock().expect("spy").is_empty(),
+        "nothing registered or prepared for a refused caller: {:?}",
+        log.lock().expect("spy")
+    );
+    // The same plans from the admin do reach the host, so the spy sees what it should.
+    execute(
+        &run.channel,
+        register(udf(None, "plus_one", PLUS_ONE, long(), Vec::new())),
+        ADMIN,
+    )
+    .await
+    .expect("admin registers");
+    let _ = execute(
+        &run.channel,
+        select(3, call(udf(None, "f", PLUS_ONE, long(), vec![id()]))),
+        ADMIN,
+    )
+    .await;
+    let seen = log.lock().expect("spy").clone();
+    assert!(seen.iter().any(|e| e == "register plus_one@1"), "{seen:?}");
+    assert!(
+        seen.iter().any(|e| e.starts_with("register f@")),
+        "{seen:?}"
+    );
+}
+
+async fn semantic_hash(channel: &Channel, plan: pb::Plan) -> i32 {
+    let request = pb::AnalyzePlanRequest {
+        session_id: SESSION.to_owned(),
+        analyze: Some(pb::analyze_plan_request::Analyze::SemanticHash(Box::new(
+            pb::analyze_plan_request::SemanticHash { plan: Some(plan) },
+        ))),
+        ..Default::default()
+    };
+    let mut grpc = tonic::client::Grpc::new(channel.clone());
+    grpc.ready().await.expect("ready");
+    let response = grpc
+        .unary(
+            with_token(request, ADMIN),
+            path("AnalyzePlan"),
+            tonic_prost::ProstCodec::<pb::AnalyzePlanRequest, pb::AnalyzePlanResponse>::default(),
+        )
+        .await
+        .expect("semantic hash")
+        .into_inner();
+    match response.result {
+        Some(pb::analyze_plan_response::Result::SemanticHash(h)) => Some(h.result),
+        _ => None,
+    }
+    .expect("a semantic hash")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_semantic_hash_covers_the_udf_body() {
+    let run = start(None).await;
+    let plan = |body| select(3, call(udf(None, "f", body, long(), vec![id()])));
+    let one = semantic_hash(&run.channel, plan(PLUS_ONE)).await;
+    assert_eq!(one, semantic_hash(&run.channel, plan(PLUS_ONE)).await);
+    // Same name, types and determinism, another function: not the same plan, as in Spark.
+    assert_ne!(one, semantic_hash(&run.channel, plan(BOOM)).await);
+}
+
+const TOKYO: &str = "def f(x):\n    from krishiv._udf._host import runner_conf\n    \
+                     return 1 if runner_conf().get('spark.sql.session.timeZone') == 'Asia/Tokyo' else 0";
+
+async fn set_conf(channel: &Channel, key: &str, value: &str) {
+    use pb::config_request::operation::OpType;
+    let request = pb::ConfigRequest {
+        session_id: SESSION.to_owned(),
+        operation: Some(pb::config_request::Operation {
+            op_type: Some(OpType::Set(pb::config_request::Set {
+                pairs: vec![pb::KeyValue {
+                    key: key.to_owned(),
+                    value: Some(value.to_owned()),
+                }],
+                silent: None,
+            })),
+        }),
+        ..Default::default()
+    };
+    let mut grpc = tonic::client::Grpc::new(channel.clone());
+    grpc.ready().await.expect("ready");
+    grpc.unary(
+        with_token(request, ADMIN),
+        path("Config"),
+        tonic_prost::ProstCodec::<pb::ConfigRequest, pb::ConfigResponse>::default(),
+    )
+    .await
+    .expect("config set");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn each_call_sends_the_session_conf_current_when_it_runs() {
+    let Some(py) = python() else { return };
+    let run = start(Some(&py)).await;
+    execute(
+        &run.channel,
+        register(udf(Some(&py), "is_tokyo", TOKYO, long(), Vec::new())),
+        ADMIN,
+    )
+    .await
+    .expect("registered");
+    let query = || sql("SELECT is_tokyo(id) AS r FROM range(1)");
+    set_conf(&run.channel, "spark.sql.session.timeZone", "UTC").await;
+    let r = execute(&run.channel, query(), ADMIN).await.expect("runs");
+    assert_eq!(longs(&r), [Some(0)]);
+    // Changed after the registration: the next call of the registered UDF sees it.
+    set_conf(&run.channel, "spark.sql.session.timeZone", "Asia/Tokyo").await;
+    let r = execute(&run.channel, query(), ADMIN).await.expect("runs");
+    assert_eq!(longs(&r), [Some(1)]);
 }

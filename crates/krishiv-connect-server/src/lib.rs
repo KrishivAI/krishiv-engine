@@ -33,4 +33,4 @@ pub use operation::{ExecuteLimits, Operation, Operations};
 pub use server::{ConnectServer, ConnectServerConfig};
 pub use service::ConnectService;
 pub use status::status_of;
-pub use udf::{SessionUdfRuntime, UdfHost};
+pub use udf::{RunnerConf, SessionUdfRuntime, UdfHost};

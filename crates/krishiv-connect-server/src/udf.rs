@@ -4,7 +4,8 @@
 //! each Connect session's Python UDFs ([`SessionPython`]).
 //!
 //! **Client code runs only after its privilege check.** A registration (`register_function`) is refused
-//! by `auth::check_command` (`Usage` on `System("udf")`) before it is read; a plan with an inline UDF is
+//! by its command class (`auth::check_command`: `Usage` on `System("udf")`) before it runs (it is parsed, never
+//! registered); a plan with an inline UDF is
 //! checked the same way after translation and before anything is registered or run
 //! ([`InlineUdfs::grant`]). A session gets its UDF runtime only at its first passed check
 //! ([`SessionPython::grant`]): a session that never passed one has no runtime at all, so no plan of it can
@@ -34,7 +35,8 @@ use krishiv_session::{ANONYMOUS_VERSION_BIT, PythonUdfDef, Session};
 use sha2::{Digest, Sha256};
 
 /// The session conf a worker gets with each batch (Spark's runner conf; the keys the embedded runtime
-/// sends, `krishiv-python`'s `RUNNER_KEYS`).
+/// sends, `krishiv-python`'s `RUNNER_KEYS`), read from the session's live conf when a query's calls are
+/// prepared, so each query sends the values current when it starts, as Spark sends them per execution.
 const RUNNER_KEYS: [&str; 8] = [
     "spark.sql.legacy.execution.pandas.groupedMap.assignColumnsByName",
     "spark.sql.execution.arrow.useLargeVarTypes",
@@ -46,32 +48,47 @@ const RUNNER_KEYS: [&str; 8] = [
     "spark.sql.execution.pythonUDF.arrow.concurrency.level",
 ];
 
+/// Where a session runtime reads its runner conf when a call is prepared.
+pub type RunnerConf = Arc<dyn Fn() -> BTreeMap<String, String> + Send + Sync>;
+
 /// The server's Python UDF workers: one per server, shared by every Connect session.
 pub trait UdfHost: Send + Sync + fmt::Debug {
-    /// A new, empty runtime for session `session` of `principal`: its workers serve that owner only.
-    fn session_runtime(&self, principal: &str, session: &str) -> Arc<dyn SessionUdfRuntime>;
+    /// A new, empty runtime for session `session` of `principal`: its workers serve that owner only. Each
+    /// prepared call reads its runner conf from `conf`.
+    fn session_runtime(
+        &self,
+        principal: &str,
+        session: &str,
+        conf: RunnerConf,
+    ) -> Arc<dyn SessionUdfRuntime>;
 }
 
 /// One session's UDF runtime on the server's workers: what the engine calls, plus its payload store.
 pub trait SessionUdfRuntime: UdfRuntime {
     /// Registers `udf`'s payload as `(name, version)`, the identity a plan's call names.
     fn register(&self, name: &str, version: u32, udf: &PythonUdf);
-    /// The session conf calls prepared from now on send their workers.
-    fn set_runner_conf(&self, conf: BTreeMap<String, String>);
     /// Stops the session's workers (idle ones now, busy ones when their call ends).
     fn release(&self);
 }
 
 #[cfg(target_os = "linux")]
 impl UdfHost for krishiv_udf_pool::Pool {
-    fn session_runtime(&self, principal: &str, session: &str) -> Arc<dyn SessionUdfRuntime> {
-        Arc::new(krishiv_udf_pool::SessionUdfs::new(
-            self.clone(),
-            krishiv_udf_pool::Owner {
-                principal: principal.to_owned(),
-                session: session.to_owned(),
-            },
-        ))
+    fn session_runtime(
+        &self,
+        principal: &str,
+        session: &str,
+        conf: RunnerConf,
+    ) -> Arc<dyn SessionUdfRuntime> {
+        Arc::new(
+            krishiv_udf_pool::SessionUdfs::new(
+                self.clone(),
+                krishiv_udf_pool::Owner {
+                    principal: principal.to_owned(),
+                    session: session.to_owned(),
+                },
+            )
+            .with_conf_source(conf),
+        )
     }
 }
 
@@ -88,10 +105,6 @@ impl SessionUdfRuntime for krishiv_udf_pool::SessionUdfs {
                 python_ver: udf.python_ver.clone(),
             },
         );
-    }
-
-    fn set_runner_conf(&self, conf: BTreeMap<String, String>) {
-        krishiv_udf_pool::SessionUdfs::set_runner_conf(self, conf);
     }
 
     fn release(&self) {
@@ -132,7 +145,7 @@ impl SessionPython {
     pub(crate) fn new(host: Option<&Arc<dyn UdfHost>>, principal: &str, session: &Session) -> Self {
         Self {
             host: host.map(Arc::clone),
-            runtime: host.map(|h| h.session_runtime(principal, session.id())),
+            runtime: host.map(|h| h.session_runtime(principal, session.id(), runner_conf(session))),
             state: Mutex::default(),
         }
     }
@@ -142,8 +155,7 @@ impl SessionPython {
     }
 
     /// The runtime of `session`, installed on it at the first call. Only after the session's principal
-    /// passed the `Usage` check on `System("udf")`: this is what lets the session run client code. The
-    /// runner conf is the session's at each call.
+    /// passed the `Usage` check on `System("udf")`: this is what lets the session run client code.
     ///
     /// # Errors
     /// `KRISHIV_UNSUPPORTED_FEATURE` when the server runs no UDF worker pool.
@@ -155,13 +167,6 @@ impl SessionPython {
             }
             .into());
         };
-        let conf = session.conf();
-        runtime.set_runner_conf(
-            RUNNER_KEYS
-                .iter()
-                .filter_map(|k| conf.get(k).map(|v| ((*k).to_owned(), v)))
-                .collect(),
-        );
         let mut state = self.lock();
         if !state.installed {
             session.set_python_udf_runtime(Arc::clone(runtime) as Arc<dyn UdfRuntime>);
@@ -216,6 +221,18 @@ impl SessionPython {
         *copy.lock() = state;
         copy
     }
+}
+
+/// The runner conf of `session`, read live: the conf store, not the session (which holds the runtime that
+/// holds this, so a session handle here would never be freed).
+fn runner_conf(session: &Session) -> RunnerConf {
+    let conf = session.conf();
+    Arc::new(move || {
+        RUNNER_KEYS
+            .iter()
+            .filter_map(|k| conf.get(k).map(|v| ((*k).to_owned(), v)))
+            .collect()
+    })
 }
 
 /// The registry definition of `udf`. Calls on pool workers may overlap: each takes a worker of its own.
@@ -312,11 +329,14 @@ impl TranslateHost for InlineUdfs<'_> {
             .into());
         }
         self.seen = true;
+        let key = digest(udf);
         let version = if self.analysis {
-            // Typed, never run: a version no registration has.
-            ANONYMOUS_VERSION_BIT
+            // Typed, never run or registered: a version from the definition's digest, so the plans of two
+            // UDFs that differ only in their function never compare or hash equal (Spark's `PythonUDF`
+            // compares its `command` bytes).
+            let [a, b, c, d, ..] = key;
+            u32::from_le_bytes([a, b, c, d]) | ANONYMOUS_VERSION_BIT
         } else {
-            let key = digest(udf);
             let mut state = self.udfs.lock();
             if let Some(v) = state.anonymous.get(&key) {
                 *v

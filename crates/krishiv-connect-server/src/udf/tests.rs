@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Tests of the sessions' Python UDF state over a recording host (no workers).
 
-use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use krishiv_common::error::{ErrorClass, KrishivError, KrishivUdfNotAvailable};
@@ -11,18 +10,26 @@ use krishiv_plan::PythonEvalType;
 use krishiv_session::{ANONYMOUS_VERSION_BIT, Session};
 use krishiv_types::DataType;
 
-use super::{InlineUdfs, SessionPython, SessionUdfRuntime, UdfHost};
+use super::{InlineUdfs, RunnerConf, SessionPython, SessionUdfRuntime, UdfHost};
 
 /// What the host saw: each runtime's owner, registrations and releases.
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct Log {
     runtimes: Vec<(String, String)>,
+    /// Each runtime's runner conf source.
+    confs: Vec<RunnerConf>,
     registered: Vec<(usize, String, u32)>,
     released: Vec<usize>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct Host(Arc<Mutex<Log>>);
+
+impl std::fmt::Debug for Host {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Host")
+    }
+}
 
 impl Host {
     fn log(&self) -> std::sync::MutexGuard<'_, Log> {
@@ -30,10 +37,15 @@ impl Host {
     }
 }
 
-#[derive(Debug)]
 struct Runtime {
     index: usize,
     log: Arc<Mutex<Log>>,
+}
+
+impl std::fmt::Debug for Runtime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Runtime({})", self.index)
+    }
 }
 
 impl UdfRuntime for Runtime {
@@ -54,7 +66,6 @@ impl SessionUdfRuntime for Runtime {
             .registered
             .push((self.index, name.to_owned(), version));
     }
-    fn set_runner_conf(&self, _: BTreeMap<String, String>) {}
     fn release(&self) {
         self.log
             .lock()
@@ -65,10 +76,16 @@ impl SessionUdfRuntime for Runtime {
 }
 
 impl UdfHost for Host {
-    fn session_runtime(&self, principal: &str, session: &str) -> Arc<dyn SessionUdfRuntime> {
+    fn session_runtime(
+        &self,
+        principal: &str,
+        session: &str,
+        conf: RunnerConf,
+    ) -> Arc<dyn SessionUdfRuntime> {
         let mut log = self.log();
         log.runtimes
             .push((principal.to_owned(), session.to_owned()));
+        log.confs.push(conf);
         Arc::new(Runtime {
             index: log.runtimes.len() - 1,
             log: Arc::clone(&self.0),
@@ -241,4 +258,42 @@ fn a_clone_gets_its_own_runtime_with_the_sources_payloads() {
         [(0, "f".to_owned(), 1), (1, "f".to_owned(), 1)]
     );
     assert_eq!(log.released, [1]);
+}
+
+#[test]
+fn the_runner_conf_is_read_live_for_every_call() {
+    let host = Host::default();
+    let log = Arc::clone(&host.0);
+    let host: Arc<dyn UdfHost> = Arc::new(host);
+    let s = session();
+    let python = SessionPython::new(Some(&host), "alice", &s);
+    python
+        .register(&s, udf("f", b"a"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let conf = Arc::clone(&log.lock().unwrap_or_else(PoisonError::into_inner).confs[0]);
+    let tz = |c: &RunnerConf| c().get("spark.sql.session.timeZone").cloned();
+    s.conf()
+        .set("spark.sql.session.timeZone", "Asia/Tokyo")
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(tz(&conf).as_deref(), Some("Asia/Tokyo"));
+    // A later change, with no new registration or grant, reaches the next call.
+    s.conf()
+        .set("spark.sql.session.timeZone", "America/Lima")
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(tz(&conf).as_deref(), Some("America/Lima"));
+    // Only the runner keys leave the session.
+    s.conf()
+        .set("my.app.secret", "x")
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(!conf().contains_key("my.app.secret"));
+    // A clone's runtime reads the clone's conf, not the source's.
+    let clone = s.clone_session().unwrap_or_else(|e| panic!("{e}"));
+    let _copy = python.copy_for("alice", &clone);
+    clone
+        .conf()
+        .set("spark.sql.session.timeZone", "Europe/Oslo")
+        .unwrap_or_else(|e| panic!("{e}"));
+    let clone_conf = Arc::clone(&log.lock().unwrap_or_else(PoisonError::into_inner).confs[1]);
+    assert_eq!(tz(&clone_conf).as_deref(), Some("Europe/Oslo"));
+    assert_eq!(tz(&conf).as_deref(), Some("America/Lima"));
 }

@@ -320,7 +320,17 @@ impl Pool {
             dropped
         };
         self.inner.freed.notify_all();
-        drop(dropped);
+        // Dropping a worker kills it and waits for its exit: off the caller, which may be an async worker
+        // thread (a session closed by an RPC or the idle sweep). The pool's accounting changed above.
+        if !dropped.is_empty() {
+            // If the thread cannot start, `spawn` drops the closure here, which stops the workers inline.
+            let spawned = std::thread::Builder::new()
+                .name("krishiv-udf-release".to_owned())
+                .spawn(move || drop(dropped));
+            if let Err(e) = spawned {
+                tracing::warn!("Python UDF workers were stopped on the caller's thread: {e}");
+            }
+        }
     }
 
     /// Runs `job`, a call of `owner`, on one of the pool's call threads (now, or when one is free).
