@@ -16,6 +16,10 @@ const SPARK_DEVIATIONS: &[(&str, &str)] = &[
         "`EXPLAIN ANALYZE <query>` is a Krishiv extension (ADR 0023): it runs the query and prints its metrics",
     ),
     (
+        "EXPLAIN VERBOSE SELECT 1",
+        "`EXPLAIN VERBOSE <query>` is accepted (Krishiv's verbose plan output); Spark's grammar has no `VERBOSE`",
+    ),
+    (
         "EXPLAIN ANALYZE TABLE t COMPUTE STATISTICS",
         "`ANALYZE TABLE` is not a supported statement",
     ),
@@ -122,8 +126,14 @@ fn agrees_with_spark_on_the_parse_probe() {
         let agrees = if parses {
             ours.is_ok()
         } else if PARSER_CLASSES.contains(&case["error_class"].as_str().unwrap()) {
+            // A syntax error is also checked at Spark's position (`line`/`pos` when it has no query context).
+            let position = if case["error_class"].as_str() == Some("PARSE_SYNTAX_ERROR") {
+                spark_position(case)
+            } else {
+                case["start"].as_u64()
+            };
             ours.as_ref()
-                .is_err_and(|e| same_error(sql, e, case, case["start"].as_u64()))
+                .is_err_and(|e| same_error(sql, e, case, position))
         } else {
             // Raised by the post-parse checks (P2-T079).
             validated += 1;

@@ -1623,6 +1623,45 @@
    "conf": {}
   },
   {
+   "sql": "EXPLAIN FORMAT XML SELECT 1",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'FORMAT'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 8,
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN FORMAT JSON SELECT 1",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'FORMAT'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 8,
+   "conf": {}
+  },
+  {
+   "sql": "EXPLAIN VERBOSE SELECT 1",
+   "parses": false,
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'VERBOSE'",
+    "hint": ""
+   },
+   "line": 1,
+   "pos": 8,
+   "conf": {}
+  },
+  {
    "sql": "EXPLAIN CODEGEN SELECT 1",
    "parses": true,
    "conf": {}
