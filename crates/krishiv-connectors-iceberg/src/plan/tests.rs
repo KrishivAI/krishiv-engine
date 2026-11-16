@@ -1216,3 +1216,168 @@ fn equality_deletes_with_unreadable_partitions_are_refused() {
             .is_empty()
     );
 }
+
+/// Java's assignment refusals and the path a position delete names through
+/// equal `file_path` bounds (`ContentFileUtil.referencedDataFile`).
+#[test]
+fn delete_index_refusals_and_bound_scoped_position_deletes() {
+    use std::sync::Arc;
+
+    use super::deletes::{DELETE_FILE_PATH_ID, DeleteIndex};
+    use super::entry::{DataFileEntry, DeleteFileEntry};
+    use krishiv_common::error::ErrorClass;
+
+    let specs = unpartitioned();
+    let data = |path: &str, spec_id: i32, p: Vec<PartitionValue>, seq: Option<i64>| {
+        let mut f = file(3);
+        f.path = path.to_owned();
+        f.spec_id = spec_id;
+        f.partition = p;
+        DataFileEntry {
+            file: f,
+            status: EntryStatus::Added,
+            snapshot_id: 1,
+            data_sequence_number: seq,
+            file_sequence_number: seq,
+        }
+    };
+    let del = |kind: DeleteKind, mut e: DataFileEntry| {
+        e.file.content = match kind {
+            DeleteKind::EqualityDelete => ContentKind::EqualityDeletes,
+            _ => ContentKind::PositionDeletes,
+        };
+        Arc::new(DeleteFileEntry { entry: e, kind })
+    };
+    let invalid = |e: krishiv_common::error::KrishivError| {
+        assert_eq!(e.error_class(), ErrorClass::KrishivIcebergInvalidDeletes);
+        e.message().to_owned()
+    };
+
+    // A delete file without a data sequence number.
+    let no_seq = del(
+        DeleteKind::PositionDelete,
+        data("d.parquet", 0, vec![], None),
+    );
+    let m = invalid(DeleteIndex::new(&[no_seq], &specs).unwrap_err());
+    assert_eq!(
+        m,
+        "Delete file d.parquet has no data sequence number: the table metadata is corrupted"
+    );
+    // A DV that names no data file.
+    let dv = del(
+        DeleteKind::DeletionVector,
+        data("v.puffin", 0, vec![], Some(2)),
+    );
+    let m = invalid(DeleteIndex::new(&[dv], &specs).unwrap_err());
+    assert_eq!(m, "Deletion vector v.puffin has no referenced data file");
+    // An equality delete of a spec the table does not have.
+    let eq = del(
+        DeleteKind::EqualityDelete,
+        data("e.parquet", 7, vec![], Some(2)),
+    );
+    let m = invalid(DeleteIndex::new(&[eq], &specs).unwrap_err());
+    assert_eq!(m, "Delete file e.parquet has the unknown partition spec 7");
+
+    // No deletes at all: nothing is assigned, whatever the data file.
+    let none = DeleteIndex::new(&[], &specs).unwrap();
+    assert!(none.is_empty());
+    assert!(
+        none.for_data_file(&data("a", 0, vec![], None))
+            .unwrap()
+            .is_empty()
+    );
+
+    // Equal path bounds scope a position delete file to one data file.
+    let mut scoped = data("pd.parquet", 0, vec![], Some(2));
+    scoped
+        .file
+        .lower_bounds
+        .insert(DELETE_FILE_PATH_ID, b"a".to_vec());
+    scoped
+        .file
+        .upper_bounds
+        .insert(DELETE_FILE_PATH_ID, b"a".to_vec());
+    let scoped = del(DeleteKind::PositionDelete, scoped);
+    let index = DeleteIndex::new(&[Arc::clone(&scoped)], &specs).unwrap();
+    assert_eq!(
+        index
+            .for_data_file(&data("a", 0, vec![], Some(1)))
+            .unwrap()
+            .position_deletes
+            .len(),
+        1
+    );
+    assert!(
+        index
+            .for_data_file(&data("b", 0, vec![], Some(1)))
+            .unwrap()
+            .is_empty()
+    );
+    // Different bounds, or bounds that are not UTF-8, scope nothing.
+    for (lo, hi) in [(b"a".to_vec(), b"b".to_vec()), (vec![0xFF], vec![0xFF])] {
+        let mut e = data("pd2.parquet", 0, vec![], Some(2));
+        e.file.lower_bounds.insert(DELETE_FILE_PATH_ID, lo);
+        e.file.upper_bounds.insert(DELETE_FILE_PATH_ID, hi);
+        let index = DeleteIndex::new(&[del(DeleteKind::PositionDelete, e)], &specs).unwrap();
+        // Partition-wide: it applies to a file of its spec and partition.
+        assert_eq!(
+            index
+                .for_data_file(&data("a", 0, vec![], Some(1)))
+                .unwrap()
+                .position_deletes
+                .len(),
+            1
+        );
+    }
+
+    // A data file without a sequence number in a snapshot with deletes.
+    let m = invalid(
+        DeleteIndex::new(&[Arc::clone(&scoped)], &specs)
+            .unwrap()
+            .for_data_file(&data("a", 0, vec![], None))
+            .unwrap_err(),
+    );
+    assert_eq!(
+        m,
+        "Data file a has no data sequence number: deletes cannot be assigned to it"
+    );
+
+    // A file-scoped delete of another spec or another partition tuple.
+    let mut other_spec = data("pd3.parquet", 1, vec![], Some(2));
+    other_spec.file.referenced_data_file = Some("a".to_owned());
+    let index = DeleteIndex::new(&[del(DeleteKind::PositionDelete, other_spec)], &specs).unwrap();
+    let m = invalid(
+        index
+            .for_data_file(&data("a", 0, vec![], Some(1)))
+            .unwrap_err(),
+    );
+    assert_eq!(
+        m,
+        "Mismatched partition specs (1, 0) for delete file pd3.parquet and data file a: \
+         metadata is corrupted"
+    );
+    let one = value(&ScalarValue::Int32(1), &IcebergType::Int);
+    let two = value(&ScalarValue::Int32(2), &IcebergType::Int);
+    let mut other_tuple = data("pd4.parquet", 1, vec![one.clone()], Some(2));
+    other_tuple.file.referenced_data_file = Some("a".to_owned());
+    let index = DeleteIndex::new(&[del(DeleteKind::PositionDelete, other_tuple)], &specs).unwrap();
+    let m = invalid(
+        index
+            .for_data_file(&data("a", 1, vec![two], Some(1)))
+            .unwrap_err(),
+    );
+    assert!(
+        m.starts_with("Mismatched partition tuples (")
+            && m.ends_with("for delete file pd4.parquet and data file a: metadata is corrupted"),
+        "{m}"
+    );
+    // The same tuple is fine.
+    assert_eq!(
+        index
+            .for_data_file(&data("a", 1, vec![one], Some(1)))
+            .unwrap()
+            .position_deletes
+            .len(),
+        1
+    );
+}

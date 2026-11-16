@@ -71,6 +71,14 @@ fn key(f: &FileRef) -> (String, String) {
     (f.store.key().to_owned(), f.path.as_ref().to_owned())
 }
 
+#[cfg(test)]
+impl DeleteSelections {
+    /// How many data files have a selection.
+    pub(super) fn files(&self) -> usize {
+        self.by_file.len()
+    }
+}
+
 impl FileSelections for DeleteSelections {
     fn selection(&self, file: &FileRef) -> Option<RowSelection> {
         self.by_file.get(&key(file)).cloned()

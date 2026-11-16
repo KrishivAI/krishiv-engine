@@ -198,4 +198,68 @@ mod tests {
         // A field the mapping does not name has no id, whatever it had.
         assert_eq!(id(&f[4]), None);
     }
+
+    #[test]
+    fn every_list_layout_maps_its_element_and_odd_maps_are_left_alone() {
+        let element = || Arc::new(Field::new("item", DataType::Int32, true));
+        let schema = Schema::new(vec![
+            Field::new("ll", DataType::LargeList(element()), true),
+            Field::new("lv", DataType::ListView(element()), true),
+            Field::new("llv", DataType::LargeListView(element()), true),
+            Field::new("fl", DataType::FixedSizeList(element(), 3), true),
+            // A map whose entries are not a key/value pair of fields.
+            Field::new(
+                "odd",
+                DataType::Map(
+                    Arc::new(Field::new(
+                        "entries",
+                        DataType::Struct(Fields::from(vec![Field::new(
+                            "k",
+                            DataType::Utf8,
+                            false,
+                        )])),
+                        false,
+                    )),
+                    true,
+                ),
+                true,
+            ),
+        ]);
+        let list = |id, name: &str| {
+            mapped(
+                Some(id),
+                &[name],
+                vec![mapped(Some(id + 1), &["element"], vec![])],
+            )
+        };
+        let mapping = NameMapping::new(vec![
+            list(10, "ll"),
+            list(20, "lv"),
+            list(30, "llv"),
+            list(40, "fl"),
+            mapped(Some(50), &["odd"], vec![mapped(Some(51), &["key"], vec![])]),
+        ]);
+        assert_eq!(mapping.fields().len(), 5);
+        let out = mapping.apply(&schema);
+        let elem = |f: &Field| match f.data_type() {
+            DataType::LargeList(e)
+            | DataType::ListView(e)
+            | DataType::LargeListView(e)
+            | DataType::FixedSizeList(e, _) => id(e).map(str::to_owned),
+            other => panic!("not a list: {other}"),
+        };
+        let f = out.fields();
+        assert_eq!(
+            [&f[0], &f[1], &f[2], &f[3]].map(|f| (id(f).map(str::to_owned), elem(f))),
+            [
+                (Some("10".to_owned()), Some("11".to_owned())),
+                (Some("20".to_owned()), Some("21".to_owned())),
+                (Some("30".to_owned()), Some("31".to_owned())),
+                (Some("40".to_owned()), Some("41".to_owned())),
+            ]
+        );
+        // The odd map keeps its entries as they were; only the map itself is mapped.
+        assert_eq!(id(&f[4]), Some("50"));
+        assert_eq!(f[4].data_type(), schema.field(4).data_type());
+    }
 }
