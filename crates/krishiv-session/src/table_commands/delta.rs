@@ -119,10 +119,11 @@ fn schema_differences(existing: &[TableColumn], specified: &[StoreColumn]) -> Ve
 }
 
 impl Session {
-    /// Asks `SELECT` on the Delta table root `path` before its log is read, in the form its reads
-    /// take: qualified against the working directory, a local root through [`Self::authorize_path`]
-    /// (canonical, links resolved), an object-store root as its qualified path. Returns the
-    /// qualified text the table is opened with.
+    /// Asks `SELECT` on the Delta table root `path` before its log is read: qualified against the
+    /// working directory, then a local root through [`Self::authorize_path`] (the canonical path,
+    /// links resolved: stricter than a plain read by path, whose text is asked as written) and an
+    /// object-store root as its qualified path, as [`Self::authorize_location`] asks `CREATE`.
+    /// Returns the qualified text the table is opened with.
     async fn authorize_delta_root(&self, path: &str) -> Result<String, KrishivError> {
         let qualified = self.qualify_path(path)?;
         let (select, class) = (&[Privilege::Select], StatementClass::Ddl);
@@ -175,8 +176,16 @@ impl Session {
             return Err(delta_write_refused(quoted, "CREATE TABLE ... CLUSTERED BY"));
         }
         // The location is read before it is registered.
-        self.authorize_delta_root(&table.location.to_string_lossy())
-            .await?;
+        match table.location.to_str() {
+            Some(text) => {
+                self.authorize_delta_root(text).await?;
+            }
+            // Refused there, audited, before the policy is asked.
+            None => {
+                self.authorize_path(&table.location, &[Privilege::Select], StatementClass::Ddl)
+                    .await?;
+            }
+        }
         let env = self.query_env();
         let source = crate::catalog::table_source(&table);
         let shape = env
