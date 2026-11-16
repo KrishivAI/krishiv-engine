@@ -88,9 +88,44 @@ def test_functions(spark: SparkSession) -> None:
         spark.catalog.getFunction("no_such_function")
 
 
-def test_argument_types_are_checked(spark: SparkSession) -> None:
+@pytest.mark.parametrize(
+    ("method", "args"),
+    [
+        ("setCurrentCatalog", (1,)),
+        ("listCatalogs", (1,)),
+        ("setCurrentDatabase", (1,)),
+        ("listDatabases", (1,)),
+        ("getDatabase", (1,)),
+        ("databaseExists", (1,)),
+        ("listTables", (1,)),
+        ("listTables", (None, 1)),
+        ("getTable", (1,)),
+        ("tableExists", (1,)),
+        ("tableExists", ("t", 1)),
+        ("listColumns", (1,)),
+        ("listColumns", ("t", 1)),
+        ("listFunctions", (1,)),
+        ("listFunctions", (None, 1)),
+        ("getFunction", (1,)),
+        ("functionExists", (1,)),
+        ("functionExists", ("f", 1)),
+    ],
+)
+def test_argument_types_are_checked(spark: SparkSession, method: str, args: tuple[object, ...]) -> None:
     with pytest.raises(TypeError):
-        spark.catalog.getTable(1)  # ty: ignore[invalid-argument-type]
+        getattr(spark.catalog, method)(*args)
+
+
+def test_function_and_database_arguments(spark: SparkSession) -> None:
+    assert spark.catalog.listFunctions("default", "abs")[0].name == "abs"
+    assert isinstance(spark.catalog.functionExists("abs", "default"), bool)  # built-ins live in no database
+    assert not spark.catalog.functionExists("no_such_function")
+    for call in (lambda: spark.catalog.listFunctions("nope"), lambda: spark.catalog.getDatabase("nope")):
+        with pytest.raises(AnalysisException) as err:
+            call()
+        assert err.value.getCondition() == "SCHEMA_NOT_FOUND"
+    assert spark.catalog.databaseExists("default")
+    assert not spark.catalog.databaseExists("nope")
 
 
 def test_dataframe_tables_are_not_found_by_name(spark: SparkSession) -> None:
