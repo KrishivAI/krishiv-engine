@@ -55,6 +55,33 @@ pub(crate) struct Finalizer {
     post: Arc<Project>,
 }
 
+#[cfg(test)]
+impl Finalizer {
+    /// A `count(*)` observation named `name` over no columns, for tests of the partials'
+    /// bookkeeping (which never finalize it).
+    pub(crate) fn count_for_tests(name: &str) -> Result<Arc<Self>> {
+        let spec = super::AggregateSpec {
+            input: Arc::new(arrow_schema::Schema::empty()),
+            group_by: Vec::new(),
+            aggregates: vec![super::AggregateExpr::count_star("n")],
+            output: AggregateOutput::Final,
+            ansi: true,
+            spill: None,
+            require_unit_weights: false,
+            legacy_statistical: false,
+            udafs: None,
+        };
+        let core = Arc::new(AggCore::new(spec)?);
+        let post = Project::try_new(&core.output_schema, Vec::new())?;
+        Ok(Arc::new(Self {
+            name: name.to_owned(),
+            instance: 0,
+            core,
+            post,
+        }))
+    }
+}
+
 impl Finalizer {
     /// The observation's name.
     pub(crate) fn name(&self) -> &str {

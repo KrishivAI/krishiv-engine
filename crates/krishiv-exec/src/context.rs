@@ -275,6 +275,79 @@ fn insert_in_order<T>(
 }
 
 #[cfg(test)]
+mod forward_observed_tests {
+    use std::sync::Arc;
+
+    use arrow_array::{Int64Array, RecordBatch};
+    use arrow_schema::{DataType, Field, Schema};
+    use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+
+    use crate::aggregate::Finalizer;
+    use crate::{ExecConfig, QueryContext, QueryId, WorkloadClass};
+
+    fn states(rows: i64) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![Field::new("n", DataType::Int64, false)]));
+        RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int64Array::from_iter_values(0..rows))],
+        )
+        .unwrap()
+    }
+
+    fn query(id: u64, pool: Arc<dyn MemoryPool>) -> Arc<QueryContext> {
+        QueryContext::new(
+            QueryId(id),
+            WorkloadClass::Batch,
+            ExecConfig::default(),
+            pool,
+        )
+    }
+
+    fn root() -> Arc<TreePool> {
+        TreePool::new(&MemoryConfig {
+            limit: None,
+            quantum: 1,
+            spill_scratch_reserve: 0,
+            ..MemoryConfig::default()
+        })
+    }
+
+    /// The partials move from the task's pool to the query's: never counted twice, so a query
+    /// pool that holds them once (but not twice) takes them.
+    #[test]
+    fn forwarded_partials_are_moved_not_charged_twice() {
+        let finalizer = Finalizer::count_for_tests("m").unwrap();
+        let (a, b) = (states(40_000), states(40_000));
+        let once = a.get_array_memory_size() + b.get_array_memory_size();
+        let root = root();
+        let parent = query(1, root.child("q", Some(once + once / 2)));
+        let task = query(2, parent.pool().child("task", None));
+        task.observe_partial(&finalizer, (0, 0), a).unwrap();
+        task.observe_partial(&finalizer, (1, 0), b).unwrap();
+        assert_eq!(parent.pool().reserved(), once);
+        task.forward_observed_to(&parent).unwrap();
+        assert_eq!(task.pool().reserved(), 0);
+        assert_eq!(parent.pool().reserved(), once);
+    }
+
+    /// A parent that cannot hold the partials fails the forward and leaves nothing charged to
+    /// the task.
+    #[test]
+    fn a_failed_forward_releases_the_task_charge() {
+        let finalizer = Finalizer::count_for_tests("m").unwrap();
+        let a = states(40_000);
+        let bytes = a.get_array_memory_size();
+        let parent = query(1, root().child("q", Some(bytes / 2)));
+        let task = query(2, root().child("task", None));
+        task.observe_partial(&finalizer, (0, 0), a).unwrap();
+        assert_eq!(task.pool().reserved(), bytes);
+        let e = task.forward_observed_to(&parent).unwrap_err();
+        assert_eq!(e.error_class().name(), "UNABLE_TO_ACQUIRE_MEMORY", "{e}");
+        assert_eq!(task.pool().reserved(), 0);
+    }
+}
+
+#[cfg(test)]
 mod observe_order_tests {
     use super::insert_in_order;
 
@@ -372,20 +445,26 @@ impl QueryContext {
     }
 
     /// Moves this context's observation partials to `parent`, for a task of a staged run whose
-    /// own context ends before the query's (the parent's `observed` then reports them). The states
-    /// are charged to `parent`'s pool and released from this one's.
+    /// own context ends before the query's (the parent's `observed` then reports them). Each
+    /// partial's bytes move: released from this context's pool before `parent`'s is charged, so
+    /// they are never counted twice (the task's pool is usually a child of the query's).
     ///
     /// # Errors
-    /// `UNABLE_TO_ACQUIRE_MEMORY` when the parent's pool cannot hold them.
+    /// `UNABLE_TO_ACQUIRE_MEMORY` when the parent's pool cannot hold them; this context's charge
+    /// is released all the same.
     #[doc(hidden)]
     pub fn forward_observed_to(&self, parent: &Self) -> Result<()> {
         let taken = std::mem::take(&mut *lock(&self.observed));
+        // Dropped on every exit, an error included: what it still holds goes back.
+        let mut held = lock(&self.observed_memory).take();
         for o in taken.into_values() {
             for (source, states) in o.order.into_iter().zip(o.partials) {
+                if let Some(reservation) = held.as_mut() {
+                    reservation.shrink(states.get_array_memory_size());
+                }
                 parent.observe_partial(&o.finalizer, source, states)?;
             }
         }
-        *lock(&self.observed_memory) = None;
         Ok(())
     }
 
