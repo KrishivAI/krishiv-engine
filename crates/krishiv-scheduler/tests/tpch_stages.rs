@@ -365,6 +365,56 @@ fn stages_under_a_16_mib_pool_match() {
     assert_eq!(small.reserved(), 0);
 }
 
+/// Scopes that can never be made: a spill directory below a regular file.
+#[derive(Debug)]
+struct Unusable(std::path::PathBuf);
+
+impl SpillScopes for Unusable {
+    fn scope(&self) -> Result<SpillScope, KrishivError> {
+        let manager = SpillManager::open(&SpillConfig {
+            dir: self.0.clone(),
+            ..SpillConfig::default()
+        })?;
+        Ok(manager.scope()?)
+    }
+}
+
+/// RS-29: a spill directory that cannot be made does not fail a query that never spills; its
+/// shuffle stays in memory and the rows match the plain runner's.
+#[test]
+fn an_unusable_spill_directory_does_not_fail_a_query_that_never_spills() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let tpch = tpch(&rt);
+    let executor = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
+    let plain = QueryRunner::new(Arc::clone(&executor) as _);
+    let stages = StageRunner::new(Arc::clone(&executor) as _, 4)
+        .unwrap()
+        .with_splits(Arc::new(dealer(&tpch.files)));
+    let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    let dir = tempfile::tempdir().unwrap();
+    let spill = SpillManager::open(&SpillConfig {
+        dir: dir.path().join("spill"),
+        ..SpillConfig::default()
+    })
+    .unwrap();
+    let plan = tpch.plan(3).unwrap();
+    let worker =
+        WorkerContext::new(Arc::clone(&tpch.tables) as _).with_spill(spill.scope().unwrap());
+    let mut want = run(&plain, &plan, &worker, &pool, 1).unwrap();
+    let file = dir.path().join("a_file");
+    std::fs::write(&file, b"x").unwrap();
+    let broken = WorkerContext::new(Arc::clone(&tpch.tables) as _)
+        .with_spill_scopes(Arc::new(Unusable(file.join("spill"))) as _);
+    let mut got = run(&stages, &plan, &broken, &pool, 2).unwrap_or_else(|e| panic!("{e}"));
+    want.sort();
+    got.sort();
+    assert_eq!(got, want);
+    assert_eq!(pool.reserved(), 0);
+}
+
 /// Deals as [`dealer`] does, but task 1 of every dealt stage reads a file
 /// that does not exist.
 #[derive(Debug)]

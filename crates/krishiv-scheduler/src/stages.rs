@@ -396,8 +396,10 @@ impl StageRunner {
         worker: WorkerContext,
         query: Arc<QueryContext>,
     ) -> Result<BoxStream<'static, Result<Batch>>> {
-        // One scope for the query: its shuffle and every task spill there.
-        let (worker, shuffle) = match worker.spill_scope()? {
+        // One scope for the query: its shuffle and every task spill there. A spill directory
+        // that cannot be made (RS-29) leaves the shuffle in memory and the query running; an
+        // operator that then needs to spill fails with its memory error.
+        let (worker, shuffle) = match worker.spill_scope_if_available() {
             Some(scope) => (
                 worker.with_spill(scope.clone()),
                 LocalShuffle::on_disk(scope),
